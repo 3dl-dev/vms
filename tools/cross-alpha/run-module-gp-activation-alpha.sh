@@ -368,6 +368,33 @@ assert_p0heap() {
   return 1
 }
 
+assert_p1stack() {
+  # vms-ce5: the image ran on a P1 user stack (local, 20 MB depth and the
+  # longword invocation handle all in P1; the handle finds the frame); sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE 'OVMX p1stack test: local=0x[4-7][0-9a-f]{7} inP1=1 deep=1 lowest=0x[4-7][0-9a-f]{7} handle=0x[4-7][0-9a-f]{7} handleP1=1 found=1 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) P1 stack                : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -1086,6 +1113,44 @@ EOF
       exit 0
     fi
     echo "FAIL: the heap was not placed in P0. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  p1stack-gate)
+    # vms-ce5: IMGACT runs the image on a user stack in P1. p1stack_test.c
+    # binds LIBVMS$SHR (LIB$GET_INVO_HANDLE/CONTEXT): producer graph + libvms.
+    MILESTONE_MAIN=p1stack_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX p1stack test: local=0x7ffef9a0 inP1=1 deep=1 lowest=0x7e7de9a0 handle=0x7ffef9b0 handleP1=1 found=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX p1stack test: local=0x11f9d5ad0 inP1=0 deep=1 lowest=0x11e5d5ad0 handle=0x1f9d5ae0 handleP1=0 found=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/high.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- p1stack selftest 1/3: stack, depth and handle in P1 must PASS --"
+    if assert_p1stack "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- p1stack selftest 2/3: the substrate stack above 4 GB must FAIL --"
+    if assert_p1stack "$_st/high.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- p1stack selftest 3/3: a crash (stack overflow) must FAIL --"
+    if assert_p1stack "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "p1stack selftest failed -- assert_p1stack cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- the image user stack in P1 on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX p1stack|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_p1stack "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the image ran on its P1 user stack -- locals, 20 MB of depth and the"
+      echo "      longword invocation handle in P1 -- on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the image did not run on a P1 stack. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

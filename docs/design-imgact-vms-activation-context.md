@@ -313,6 +313,26 @@ every EVAX executable at 0x10000 unless told `--base 0` (the relocatable form,
 kept only for the `.vms$rel` unit tests), and every Alpha activation gate
 requires `p0=1`. Host proof: `src/vmslink/test/run_evax_p0base.sh`.
 
+### 3.7 Heap in P0, user stack in P1 (vms-122, vms-ce5)
+
+On OpenVMS Alpha every address a program sees without asking for 64-bit space
+is a 32-bit (sign-extended longword) value: images and the heap grow the P0
+region (below `0x40000000`), the user stack lives in P1 (`0x40000000`-`0x7FFFFFFF`).
+DEC C's default pointer size is 32 bits and the GCC port's own host sources rely
+on it. The Linux/Alpha substrate places neither there, so OVMX does:
+
+- **Heap (vms-122).** The C RTL's `mmap` (musl-arch
+  `src/mman/alpha-dec-vms/`) places every address-less mapping in P0: next-fit
+  from a cursor, each candidate claimed with `MAP_FIXED_NOREPLACE` so an image,
+  a shareable or another mapping is skipped, never clobbered; a full P0 is
+  `ENOMEM`, as on VMS. `mremap` moves into P0 the same way. `decc$malloc` is a
+  heap block.
+- **User stack (vms-ce5).** IMGACT maps a 32 MB stack at the top of P1 (below a
+  64 KB gap at `0x7FFF0000`, over a 64 KB no-access guard) and makes the
+  standard call to the image on it (`imgact_vms_transfer_stack`); IMGACT's own
+  frame stays on the substrate stack and is resumed when the image returns. If
+  the range cannot be claimed the image runs on the substrate stack.
+
 ## 4. Open questions
 
 ### 4a. Need MY (conductor) decision

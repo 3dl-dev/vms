@@ -184,15 +184,17 @@ _Static_assert(SYI$_ACTIVE_CPU_BITMAP == 4724, "SYI$_ACTIVE_CPU_BITMAP != Alpha 
 _Static_assert(SYI$_AVAIL_CPU_BITMAP  == 4725, "SYI$_AVAIL_CPU_BITMAP != Alpha V8.4 oracle 4725");
 _Static_assert(SYI$_MAX_CPUS != SYI$_SCSSYSTEMID, "SYI$_ CPU codes must not collide with existing SYI$_ codes");
 
-/* FAB$L_FOP mask bits (rms/fab.h) — OVMX-private FOP continuation. */
-_Static_assert(FAB$M_ASY == 0x2000, "FAB$M_ASY drifted from OVMX-private 0x2000");
-_Static_assert(FAB$M_RU  == 0x4000, "FAB$M_RU drifted from OVMX-private 0x4000");
-_Static_assert(FAB$M_UFO == 0x8000, "FAB$M_UFO drifted from OVMX-private 0x8000");
+/* FAB$L_FOP mask bits (rms/fab.h) -- ORACLE-PINNED (vms-f811): V7.3 $FABDEF ASY 1,
+ * RU 2 (fab$b_journal), UFO 0x20000. They were an OVMX-private continuation (0x2000 /
+ * 0x4000 / 0x8000) while the rest of the FOP layout was private too. */
+_Static_assert(FAB$M_ASY == 0x00000001, "FAB$M_ASY != V7.3 oracle 1");
+_Static_assert(FAB$M_RU  == 0x00000002, "FAB$M_RU != V7.3 oracle 2");
+_Static_assert(FAB$M_UFO == 0x00020000, "FAB$M_UFO != V7.3 oracle 131072");
 /* Must not collide with the existing FOP bits in the same field. */
 _Static_assert((FAB$M_ASY & (FAB$M_SQO | FAB$M_CTG | FAB$M_CIF)) == 0,
                "FAB$M_ASY collides with an existing FOP bit");
-_Static_assert((FAB$M_RU  & FAB$M_ASY) == 0 && (FAB$M_UFO & FAB$M_RU) == 0,
-               "new FOP bits must be mutually distinct");
+_Static_assert((FAB$M_UFO & (FAB$M_ASY | FAB$M_CTG | FAB$M_CBT | FAB$M_NAM)) == 0,
+               "FAB$M_UFO collides with an existing FOP bit");
 
 /* OSS$M_ security-service flags (ossdef.h) -- ORACLE-PINNED (vms-f811): V7.3 $OSSDEF
  * WLOCK 1, RELCTX 2, LOCAL 4. (Earlier OVMX numbering gave RELCTX 4 because it had

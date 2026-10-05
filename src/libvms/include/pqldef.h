@@ -33,15 +33,15 @@ extern "C" {
 #define PQL$_BYTLM         3   /* Buffered I/O byte count limit */
 #define PQL$_CPULM         4   /* CPU time limit */
 #define PQL$_DIOLM         5   /* Direct I/O limit */
-#define PQL$_ENQLM         6   /* Lock enqueue limit */
-#define PQL$_FILLM         7   /* Open file limit */
-#define PQL$_JTQUOTA       8   /* Job table quota */
-#define PQL$_PGFLQUOTA     9   /* Paging file quota */
-#define PQL$_PRCLM        10   /* Subprocess creation limit */
-#define PQL$_TQELM        11   /* Timer queue entry limit */
-#define PQL$_WSDEFAULT    12   /* Default working set size */
+#define PQL$_ENQLM         12   /* Lock enqueue limit */
+#define PQL$_FILLM         6   /* Open file limit */
+#define PQL$_JTQUOTA       14   /* Job table quota */
+#define PQL$_PGFLQUOTA     7   /* Paging file quota */
+#define PQL$_PRCLM        8   /* Subprocess creation limit */
+#define PQL$_TQELM        9   /* Timer queue entry limit */
+#define PQL$_WSDEFAULT    11   /* Default working set size */
 #define PQL$_WSEXTENT     13   /* Working set extent */
-#define PQL$_WSQUOTA      14   /* Working set quota */
+#define PQL$_WSQUOTA      10   /* Working set quota */
 
 #ifdef __cplusplus
 }

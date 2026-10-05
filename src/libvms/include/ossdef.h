@@ -22,12 +22,12 @@ extern "C" {
  * OSS$_ — Item codes for sys$get_security / sys$set_security
  * ================================================================ */
 
-#define OSS$_OWNER          1   /* Owner UIC (longword) */
-#define OSS$_PROTECTION     2   /* Protection mask (longword) */
-#define OSS$_ACL_LENGTH     3   /* Total ACL length in bytes (longword) */
-#define OSS$_ACL_READ       4   /* Read entire ACL into buffer */
-#define OSS$_ACL_ADD_ENTRY  5   /* Add an ACE to the ACL */
-#define OSS$_ACL_DELETE_ENTRY 6 /* Delete an ACE from the ACL */
+#define OSS$_OWNER          21   /* Owner UIC (longword) */
+#define OSS$_PROTECTION     22   /* Protection mask (longword) */
+#define OSS$_ACL_LENGTH     11   /* Total ACL length in bytes (longword) */
+#define OSS$_ACL_READ       17   /* Read entire ACL into buffer */
+#define OSS$_ACL_ADD_ENTRY  3   /* Add an ACE to the ACL */
+#define OSS$_ACL_DELETE_ENTRY 4 /* Delete an ACE from the ACL */
 #define OSS$_ACL_CLEAR      7   /* Delete all ACEs from the ACL */
 #define OSS$_CLASS_PROT     8   /* Information classification protection */
 #define OSS$_PRIVS          9   /* Privilege requirements */
@@ -36,19 +36,19 @@ extern "C" {
  * OSS$M_ — Flags for sys$get_security / sys$set_security
  * ================================================================ */
 
-#define OSS$M_RELAX_ACCESS  0x00000001  /* Relax normal access restrictions */
-#define OSS$M_WLOCK         0x00000002  /* Write-lock the object */
+#define OSS$M_RELAX_ACCESS  0x80000000  /* [OVMX] relax normal access restrictions (not in V7.3 $OSSDEF) */
+#define OSS$M_WLOCK         0x1  /* Write-lock the object */
 /* OVMX-private bit (vms-f16, Rule 8 design choice).  The 2026-08-13
  * $OSSDEF oracle dump (OpenVMS VAX V7.3, lab-2) shows real VMS uses
  * OSS$M_RELCTX=2 and OSS$M_WLOCK=1 -- but OVMX has already assigned
  * bit 0x02 to OSS$M_WLOCK, so the authentic value would collide.
  * OVMX therefore assigns OSS$M_RELCTX the next free bit and labels it
  * as an OVMX representation, not a VMS-authentic value. */
-#define OSS$M_RELCTX        0x00000004  /* Release object security context */
+#define OSS$M_RELCTX        0x2  /* Release object security context */
 /* OSS$M_LOCAL is 4 on the OpenVMS VAX V7.3 oracle; OVMX already spent 0x04 on
  * OSS$M_RELCTX (above), so, like RELCTX, it takes the next free bit and is an OVMX
  * representation, not a VMS-authentic value (vms-619). */
-#define OSS$M_LOCAL         0x00000008  /* Operate on the local (non-cluster) object */
+#define OSS$M_LOCAL         0x4  /* Operate on the local (non-cluster) object */
 
 /* ================================================================
  * OSS$C_ — Object class codes (for the "objclass" argument)

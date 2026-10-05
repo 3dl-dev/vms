@@ -192,9 +192,12 @@ _Static_assert((FAB$M_ASY & (FAB$M_SQO | FAB$M_CTG | FAB$M_CIF)) == 0,
 _Static_assert((FAB$M_RU  & FAB$M_ASY) == 0 && (FAB$M_UFO & FAB$M_RU) == 0,
                "new FOP bits must be mutually distinct");
 
-/* OSS$M_ security-service flag (ossdef.h) — OVMX-private (real VMS uses 2,
- * which OVMX already assigned to OSS$M_WLOCK). */
-_Static_assert(OSS$M_RELCTX == 0x04, "OSS$M_RELCTX drifted from OVMX-private 0x04");
+/* OSS$M_ security-service flags (ossdef.h) -- ORACLE-PINNED (vms-f811): V7.3 $OSSDEF
+ * WLOCK 1, RELCTX 2, LOCAL 4. (Earlier OVMX numbering gave RELCTX 4 because it had
+ * already given 2 to WLOCK; the migration to the real values removes the collision.) */
+_Static_assert(OSS$M_WLOCK  == 1, "OSS$M_WLOCK != VAX V7.3 oracle 1");
+_Static_assert(OSS$M_RELCTX == 2, "OSS$M_RELCTX != VAX V7.3 oracle 2");
+_Static_assert(OSS$M_LOCAL  == 4, "OSS$M_LOCAL != VAX V7.3 oracle 4");
 _Static_assert((OSS$M_RELCTX & OSS$M_WLOCK) == 0, "OSS$M_RELCTX collides with OSS$M_WLOCK");
 
 int main(void)

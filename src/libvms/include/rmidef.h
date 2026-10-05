@@ -28,7 +28,7 @@ extern "C" {
  * ================================================================ */
 
 #define RMI$_CPUIDLE    0x0001  /* Cumulative CPU idle ticks (Q) */
-#define RMI$_HIB        0x0002  /* Number of processes in HIB state (L) */
+#define RMI$_HIB        0x1011  /* Number of processes in HIB state (L) */
 
 #ifdef __cplusplus
 }

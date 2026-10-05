@@ -8,7 +8,7 @@ trap 'rm -rf "$TMP"' EXIT
 rc=0
 mk() {
     rm -rf "$TMP/t"; mkdir -p "$TMP/t/docs/oracle" "$TMP/t/src"
-    cp -r "$SRC/docs/oracle/vax73-starlet-defs" "$TMP/t/docs/oracle/"
+    cp -r "$SRC/docs/oracle/vax73-starlet-defs" "$SRC/docs/oracle/alpha84-starlet-defs" "$TMP/t/docs/oracle/"
     cp "$SRC/docs/oracle/constants-known-mismatch.txt" "$TMP/t/docs/oracle/"
     mkdir -p "$TMP/t/src/libvms" "$TMP/t/src/vmsrms/include" "$TMP/t/src/vmsprocess/include"
     cp -r "$SRC/src/libvms/include" "$TMP/t/src/libvms/"

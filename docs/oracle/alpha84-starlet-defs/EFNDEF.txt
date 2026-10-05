@@ -1,0 +1,2 @@
+$EQU    EFN$C_ENF	128
+$EQU    EFN$C_CTX	129

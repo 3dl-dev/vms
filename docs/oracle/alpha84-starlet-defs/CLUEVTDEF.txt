@@ -1,0 +1,7 @@
+$EQU    CLUEVTHNDL$K_LENGTH	8
+$EQU    CLUEVTHNDL$C_LENGTH	8
+$EQU    cluevthndl$S_CLUEVTHNDL	8
+$EQU    cluevthndl$l_cluacb_addr	0
+$EQU    cluevthndl$l_seq_num	4
+$EQU    CLUEVT$C_ADD	1
+$EQU    CLUEVT$C_REMOVE	2

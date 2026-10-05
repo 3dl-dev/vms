@@ -192,6 +192,25 @@ items:
       node is still the decline, which the requester's FSM correctly turns into a
       bounded re-resolve. The over-the-wire multi-node redirect rides the
       capture-gated rig with the rest of the retired multi-node DLM proofs (vms-1ee).
+  - id: cluster-dlm$directory-role-vms
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Lock-directory node for real OpenVMS members: a VMS system's directory lookup, entry removal and rebuild registration addressed to this node are served (Davis p. 6-31 outcomes 2/3, p. 6-50)"
+    evidence: src/kernel-core/vms_dlm_dir.c
+    verified_against: "tests/cluster/host/test_dlm_dir.c (R1: OVMX's 0xf9 'you master it' and 0xf8 'the master is X' answers are byte-identical to a REAL V7.3 directory node's answers to the same REAL requests; the identity a lookup/removal/registration carries; table outcomes, removal only by the master, departure, vector change, full table refused not answered; randomized model check); tests/cluster/host/test_dlm_scs_arm.c (the role's wiring and its place above RULE C); lab: tests/lab/captures/vms-8219-dir-role-20261004/ (real V7.3 VAX + two OVMX members: the VAX's lookups to OVMX all answered, a 40-name $ENQ/$DEQ loop completes; without the role the VAX cannot complete an interactive login)."
+    notes: >
+      rd vms-8219. With every member at the V7.3 default LOCKDIRWT 0 (PARAMS
+      body[26:28], rd vms-fcb) p. 6-32 makes every member a directory node, OVMX
+      included, so a real VAX sends OVMX lookups, removals and registrations. OVMX
+      keeps the entries for the root resources it directs (keyed by the wire
+      identity: UIC group, access mode, name) and answers from them. NOT served, and
+      said so on the console: a name this node itself holds locks on (that answer is
+      "I am the master", the master role toward a VMS system, a rung of its own), and
+      a lookup the table cannot record. OVMX-ORIGINATED locks in a mixed cluster are
+      still mastered locally (rd vms-dc2, a Rule 8 scope decision); this row is the
+      directory duty a VMS member asks of OVMX, not cluster-wide locking for OVMX's own
+      resources.
   - id: cluster-dlm$scs-transport
     kind: feature
     status: implemented

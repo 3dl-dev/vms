@@ -178,7 +178,13 @@ uint32_t vms$$call_handler(chf$handler_t h, struct chf$signal_array *sig,
 {
     struct chf_dispatch_rec rec;
     memset(&rec, 0, sizeof rec);
+#if OVMX_ALPHA_VMS_ABI
+    /* This frame's FP register itself (R29) -- the value the invocation walk
+     * holds for this frame; __builtin_frame_address need not equal it. */
+    __asm__ __volatile__("mov $29,%0" : "=r"(rec.fp));
+#else
     rec.fp = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+#endif
     rec.ctx.sigarglst = (uint64_t)(uintptr_t)sig;
     rec.ctx.mcharglst = (uint64_t)(uintptr_t)&rec.vmech;
     rec.vmech.args  = 43;          /* the Alpha mechanism array's arg count */

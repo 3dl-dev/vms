@@ -24,6 +24,8 @@ extern int SYS$GL_CALL_HANDL;
 struct chfctx { uint64_t flink, blink, sigarglst, mcharglst, expt_fp, expt_pc, expt_ps; };
 
 static uint64_t fp_g, fp_f, fp_main;
+/* This frame's FP register (R29), the value the invocation walk reports. */
+#define MY_FP(v) __asm__ __volatile__("mov $29,%0" : "=r"(v))
 static int disp_ok, chfctx_ok, sigpt_ok, f_ok, main_ok, handler_ran, g_resumed;
 static int (*volatile g_pv)(void);
 
@@ -59,7 +61,7 @@ static unsigned int handler(unsigned int *sig, void *mech)
 
 static int g(void)
 {
-    fp_g = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+    MY_FP(fp_g);
     lib$signal(0x2C, 0);
     g_resumed = 1;
     return 5;
@@ -67,14 +69,14 @@ static int g(void)
 
 static int f(void)
 {
-    fp_f = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+    MY_FP(fp_f);
     return g() + 1;
 }
 
 int main(int argc, char **argv, char **envp)
 {
     (void)argv; (void)envp;
-    fp_main = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+    MY_FP(fp_main);
     g_pv = g;
     lib$establish((void *)handler);
     int r = f();

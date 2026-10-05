@@ -84,6 +84,13 @@ EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
 exec_lock_t vms_res_hash_lock;
 
 /*
+ * How many resource blocks are in vms_res_hash right now, under
+ * vms_res_hash_lock. Read by the hash learner's bound (rd vms-4e9) and by
+ * nothing else: a real $ENQ never consults it.
+ */
+static uint32_t vms_res_blocks;
+
+/*
  * THE CSID THIS NODE USED TO HAVE, and why it is kept (rd vms-151; the whole
  * case is at dlm_master_is_us()). `vms_local_csid` is the substrate's insmod
  * placeholder until the connection manager hands over the cluster's real
@@ -387,6 +394,7 @@ void vms_lock_cleanup(void)
         exec_hash_del(&res->hash_node);
         resource_free(res);
     }
+    vms_res_blocks = 0;
     exec_unlock(&vms_res_hash_lock);
 
     /* Tear down the runtime-initialized locks (a no-op on Linux; a real
@@ -612,6 +620,7 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
 
     key = resource_hash_key(name);
     exec_hash_add(vms_res_hash, &new_res->hash_node, key);
+    vms_res_blocks++;
     exec_unlock(&vms_res_hash_lock);
 
     return new_res;
@@ -644,6 +653,7 @@ static void resource_release(struct vms_lock_resource *res)
          */
         if (!has_valblk && !res->hash_known) {
             exec_hash_del(&res->hash_node);
+            vms_res_blocks--;
             resource_free(res);
         }
     }
@@ -728,6 +738,53 @@ uint32_t vms_lock_dlm_dir_hash_conflicts(void)
 }
 
 /*
+ * THE LEARNER'S BOUND (rd vms-4e9). A learned hash is kept in a resource block,
+ * and a block that holds one survives resource_release() -- so every distinct
+ * root name a VMS member puts on the wire to this node used to leave a block
+ * behind for good. A real V7.3 node puts ~1000 distinct root names on the wire
+ * in minutes (the vms-4fb L1 capture: 939, most of them F11B$a allocation
+ * names that never repeat), so a long-lived mixed cluster grew this table
+ * without bound.
+ *
+ * The bound is on the LEARNER only: a hash for a name this node already holds
+ * a block for is always recorded, and a new block is created for a learned
+ * hash only while the table holds fewer than VMS_DLM_LEARN_RES_CAP blocks. A
+ * real $ENQ is never refused by it. Past the bound the hash is simply not kept
+ * -- the honest cost is the one the resolver already states for any unlearned
+ * name -- and the refusal is counted. The value is an OVMX design choice, not
+ * a VMS parameter (Rule 8): it is sized well above the L1 capture's whole
+ * vocabulary.
+ */
+#define VMS_DLM_LEARN_RES_CAP 4096u
+
+static uint32_t vms_dlm_dir_hash_learn_full;
+
+uint32_t vms_lock_dlm_dir_hash_learn_full(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_hash_learn_full;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+/* May the learner keep a hash for `name`? Yes if a block for it already
+ * exists, or if the table is under the bound. Otherwise counted, and no. */
+static int dir_hash_learn_room(const char *name)
+{
+    int room;
+
+    exec_lock(&vms_res_hash_lock);
+    room = resource_find(name) != NULL ||
+           vms_res_blocks < VMS_DLM_LEARN_RES_CAP;
+    if (!room)
+        vms_dlm_dir_hash_learn_full++;
+    exec_unlock(&vms_res_hash_lock);
+    return room;
+}
+
+/*
  * dir_hash_store - record one wire-learned hash on a resource. Caller holds
  * res->lock. Returns SS$_NORMAL when the value is now held, SS$_BADPARAM when a
  * DIFFERENT value was already learned for this name (the caller counts it).
@@ -777,6 +834,8 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
 
     if (resnam == NULL || resnam[0] == '\0')
         return SS__BADPARAM;
+    if (!dir_hash_learn_room(resnam))
+        return SS__INSFMEM;
 
     res = resource_find_or_create(resnam);
     if (res == NULL)

@@ -37,12 +37,13 @@ typedef struct _ieee IEEE;
  * Used as bits in ieee$q_flags to enable or disable IEEE traps.
  * ================================================================ */
 
-#define IEEE$M_TRAP_ENABLE_INV  0x0000000000000001ULL  /* Invalid operation */
-#define IEEE$M_TRAP_ENABLE_DZE  0x0000000000000002ULL  /* Divide by zero */
-#define IEEE$M_TRAP_ENABLE_OVF  0x0000000000000004ULL  /* Overflow */
-#define IEEE$M_TRAP_ENABLE_UNF  0x0000000000000008ULL  /* Underflow */
-#define IEEE$M_TRAP_ENABLE_INE  0x0000000000000010ULL  /* Inexact */
-#define IEEE$M_TRAP_ENABLE_DNO  0x0000000000000020ULL  /* Denormal operand */
+#define IEEE$M_TRAP_ENABLE_INV  0x0000000000000002ULL  /* Invalid operation */
+#define IEEE$M_TRAP_ENABLE_DZE  0x0000000000000004ULL  /* Divide by zero */
+#define IEEE$M_TRAP_ENABLE_OVF  0x0000000000000008ULL  /* Overflow */
+#define IEEE$M_TRAP_ENABLE_UNF  0x0000000000000010ULL  /* Underflow */
+#define IEEE$M_TRAP_ENABLE_INE  0x0000000000000020ULL  /* Inexact */
+#define IEEE$M_TRAP_ENABLE_DNOE 0x0000000000000040ULL  /* Denormal operand (V8.4 $IEEEDEF) */
+#define IEEE$M_TRAP_ENABLE_DNO  IEEE$M_TRAP_ENABLE_DNOE
 
 /* ================================================================
  * IEEE$C_PM_ — Precision mode constants
@@ -50,8 +51,8 @@ typedef struct _ieee IEEE;
  * Used with sys$ieee_set_precision_mode.
  * ================================================================ */
 
-#define IEEE$C_PM_NO_CHANGE     0   /* Do not change precision mode */
-#define IEEE$C_PM_SINGLE        1   /* Single precision (24-bit mantissa) */
+#define IEEE$C_PM_NO_CHANGE     (-1)   /* Do not change precision mode */
+#define IEEE$C_PM_SINGLE        0   /* Single precision (24-bit mantissa) */
 #define IEEE$C_PM_DOUBLE        2   /* Double precision (53-bit mantissa) */
 #define IEEE$C_PM_EXTENDED      3   /* Extended precision (64-bit mantissa) */
 
@@ -61,11 +62,11 @@ typedef struct _ieee IEEE;
  * Used with sys$ieee_set_rounding_mode.
  * ================================================================ */
 
-#define IEEE$C_RM_NO_CHANGE     0   /* Do not change rounding mode */
-#define IEEE$C_RM_NEAREST       1   /* Round to nearest (default) */
-#define IEEE$C_RM_DOWN          2   /* Round toward negative infinity */
-#define IEEE$C_RM_UP            3   /* Round toward positive infinity */
-#define IEEE$C_RM_TRUNCATE      4   /* Round toward zero (truncate) */
+#define IEEE$C_RM_NO_CHANGE     (-1)   /* Do not change rounding mode */
+#define IEEE$C_RM_NEAREST       0   /* Round to nearest (default) */
+#define IEEE$C_RM_DOWN          1   /* Round toward negative infinity */
+#define IEEE$C_RM_UP            2   /* Round toward positive infinity */
+#define IEEE$C_RM_TRUNCATE      3   /* Round toward zero (truncate) */
 
 #ifdef __cplusplus
 }

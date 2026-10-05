@@ -176,10 +176,12 @@ _Static_assert(ISS$C_ID_NATURAL == 1, "ISS$C_ID_NATURAL != VAX V7.3 oracle 1");
  * are drift guards over OVMX's own numbering, not VMS-conformance claims.
  * ====================================================================== */
 
-/* SYI$_ CPU-inventory item codes (prcdef.h) — OVMX-private continuation. */
-_Static_assert(SYI$_MAX_CPUS          == 0x0211, "SYI$_MAX_CPUS drifted from OVMX-private 0x0211");
-_Static_assert(SYI$_ACTIVE_CPU_BITMAP == 0x0212, "SYI$_ACTIVE_CPU_BITMAP drifted from OVMX-private 0x0212");
-_Static_assert(SYI$_AVAIL_CPU_BITMAP  == 0x0213, "SYI$_AVAIL_CPU_BITMAP drifted from OVMX-private 0x0213");
+/* SYI$_ CPU-inventory item codes (prcdef.h) -- ORACLE-PINNED (vms-f811): the V8.4
+ * Alpha $SYIDEF values (docs/oracle/alpha84-starlet-defs/SYIDEF.txt). They were an
+ * OVMX-private continuation (0x211..0x213) before the Alpha lab capture. */
+_Static_assert(SYI$_MAX_CPUS          == 4529, "SYI$_MAX_CPUS != Alpha V8.4 oracle 4529");
+_Static_assert(SYI$_ACTIVE_CPU_BITMAP == 4724, "SYI$_ACTIVE_CPU_BITMAP != Alpha V8.4 oracle 4724");
+_Static_assert(SYI$_AVAIL_CPU_BITMAP  == 4725, "SYI$_AVAIL_CPU_BITMAP != Alpha V8.4 oracle 4725");
 _Static_assert(SYI$_MAX_CPUS != SYI$_SCSSYSTEMID, "SYI$_ CPU codes must not collide with existing SYI$_ codes");
 
 /* FAB$L_FOP mask bits (rms/fab.h) — OVMX-private FOP continuation. */

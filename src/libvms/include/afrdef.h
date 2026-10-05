@@ -21,8 +21,8 @@ extern "C" {
  * AFR$C_ — Mode constants for sys$start_align_fault_report
  * ================================================================ */
 
-#define AFR$C_EXCEPTION     1   /* Report as informational exception */
-#define AFR$C_BUFFERED      2   /* Report into caller-supplied buffer */
+#define AFR$C_EXCEPTION     2   /* Report as informational exception */
+#define AFR$C_BUFFERED      1   /* Report into caller-supplied buffer */
 
 /* ================================================================
  * AFR$K_USER_LENGTH / AFR$C_USER_LENGTH — size of one AFR record

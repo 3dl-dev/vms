@@ -25,14 +25,14 @@ extern "C" {
  * to specify which environment variable to retrieve.
  * ================================================================ */
 
-#define STENV$K_BOOTED_DEV      1   /* Device the system was booted from */
-#define STENV$K_BOOTDEF_DEV     2   /* Default boot device (saved in NVRAM) */
-#define STENV$K_BOOTED_FILE     3   /* Boot file used */
-#define STENV$K_BOOTED_FLAGS    4   /* Boot flags used */
-#define STENV$K_BOOTED_OSFLAGS  5   /* OS-specific boot flags */
-#define STENV$K_BOOT_RESET      6   /* Reset to factory boot defaults */
+#define STENV$K_BOOTED_DEV      4   /* Device the system was booted from */
+#define STENV$K_BOOTDEF_DEV     3   /* Default boot device (saved in NVRAM) */
+#define STENV$K_BOOTED_FILE     6   /* Boot file used */
+#define STENV$K_BOOTED_FLAGS    100 /* [OVMX] boot flags used (not in V8.4 $STENVDEF) */
+#define STENV$K_BOOTED_OSFLAGS  8   /* OS-specific boot flags */
+#define STENV$K_BOOT_RESET      9   /* Reset to factory boot defaults */
 #define STENV$K_RESTART_DEV     7   /* Restart device name */
-#define STENV$K_CONSOLE_TYPE    8   /* Console type (serial, graphic, etc.) */
+#define STENV$K_CONSOLE_TYPE    101 /* [OVMX] console type (not in V8.4 $STENVDEF) */
 
 #ifdef __cplusplus
 }

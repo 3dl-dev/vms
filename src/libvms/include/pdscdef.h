@@ -84,9 +84,17 @@ extern "C" {
  * ================================================================ */
 
 #define PDSC$M_KIND                 0x000F  /* <3:0> procedure kind */
-#define PDSC$V_HANDLER_VALID        0x0010  /* pdsc$q_handler is present */
-#define PDSC$V_HANDLER_REINVOKABLE  0x0020
-#define PDSC$V_BASE_REG_IS_FP       0x0080  /* frame base = FP(R29), else SP(R30) */
+/* Bit NUMBERS (V7.3/V8.4 $PDSCDEF: HANDLER_VALID 4, HANDLER_REINVOKABLE 5, BASE_REG_IS_FP 7)
+ * and the masks built from them. This header used to define the V names as MASKS
+ * (0x10/0x20/0x80); code tests the masks, the V names are the oracle's bit numbers. */
+#define PDSC$V_HANDLER_VALID        4
+#define PDSC$V_HANDLER_REINVOKABLE  5
+#define PDSC$V_BASE_REG_IS_FP       7
+#define PDSC$M_HANDLER_VALID        (1u << PDSC$V_HANDLER_VALID)        /* pdsc$q_handler is present */
+#define PDSC$M_HANDLER_REINVOKABLE  (1u << PDSC$V_HANDLER_REINVOKABLE)
+#ifndef PDSC$M_BASE_REG_IS_FP
+#define PDSC$M_BASE_REG_IS_FP       (1u << PDSC$V_BASE_REG_IS_FP)       /* frame base = FP(R29), else SP(R30) */
+#endif
 
 #define PDSC$KIND(flags)            ((flags) & PDSC$M_KIND)
 

@@ -153,12 +153,14 @@ extern "C" {
  * above every bit V7.3 defines, so no oracle flag is ever aliased. Labelled
  * [OVMX], not a VMS value.
  */
-#define UAI$M_DISLOCAL              0x02000000  /* [OVMX] local interactive login disabled */
-#define UAI$M_DISDIALUP             0x04000000  /* [OVMX] dialup login disabled */
-#define UAI$M_DISNETWORK            0x08000000  /* [OVMX] network login disabled */
-#define UAI$M_DISBATCH              0x10000000  /* [OVMX] batch login disabled */
-#define UAI$M_DISUSER               0x20000000  /* [OVMX] account disabled (as DISACNT) */
-#define UAI$M_PWDMIX                0x40000000  /* [OVMX] mixed-case passwords allowed */
+#define UAI$M_DISLOCAL              0x04000000  /* [OVMX] local interactive login disabled */
+#define UAI$M_DISDIALUP             0x08000000  /* [OVMX] dialup login disabled */
+#define UAI$M_DISNETWORK            0x10000000  /* [OVMX] network login disabled */
+#define UAI$M_DISBATCH              0x20000000  /* [OVMX] batch login disabled */
+#define UAI$M_DISUSER               0x40000000  /* [OVMX] account disabled (as DISACNT) */
+
+/* V8.4 $UAIDEF (Alpha only; V7.3 has no mixed-case-password flag) */
+#define UAI$M_PWDMIX                0x02000000
 
 /* ---- UAI$V_ flag bit numbers (V7.3 $UAIDEF) ---- */
 #define UAI$V_DISCTLY                0
@@ -186,6 +188,7 @@ extern "C" {
 #define UAI$V_MIGRATEPWD             22
 #define UAI$V_VMSAUTH                23
 #define UAI$V_DISPWDSYNCH            24
+#define UAI$V_PWDMIX                 25
 #define UAI$V_MONDAY                 0
 #define UAI$V_TUESDAY                1
 #define UAI$V_WEDNESDAY              2

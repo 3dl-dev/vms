@@ -62,15 +62,15 @@ extern "C" {
  * CAP$K_ — $PROCESS_AFFINITY "state" argument values
  * ================================================================ */
 
-#define CAP$K_ALL_CPU_ADD      1   /* Add CPUs in mask to affinity set */
-#define CAP$K_ALL_CPU_REMOVE   2   /* Remove CPUs in mask from affinity set */
+#define CAP$K_ALL_CPU_ADD      (-1)   /* Add CPUs in mask to affinity set */
+#define CAP$K_ALL_CPU_REMOVE   0   /* Remove CPUs in mask from affinity set */
 
 /* ================================================================
  * CAP$M_ — $SET_IMPLICIT_AFFINITY "state" argument values
  * ================================================================ */
 
-#define CAP$M_IMPLICIT_AFFINITY_SET     0x00000001  /* Set implicit affinity to CPU */
-#define CAP$M_IMPLICIT_AFFINITY_CLEAR   0x00000002  /* Clear implicit affinity */
+#define CAP$M_IMPLICIT_AFFINITY_SET     0x2  /* Set implicit affinity to CPU */
+#define CAP$M_IMPLICIT_AFFINITY_CLEAR   0x1  /* Clear implicit affinity */
 
 #ifdef __cplusplus
 }

@@ -40,7 +40,7 @@ extern "C" {
  * SMG$K_ — terminal key codes returned by SMG$READ_KEYSTROKE
  * ================================================================ */
 
-#define SMG$K_TRM_DELETE    1   /* DELETE/Backspace key */
+#define SMG$K_TRM_DELETE    127   /* DELETE/Backspace key */
 
 #ifdef __cplusplus
 }

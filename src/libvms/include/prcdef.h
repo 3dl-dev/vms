@@ -63,7 +63,7 @@ extern "C" {
  */
 #define PRC$M_LOGINOUT             0x40000000
 #define PRC$M_NOCLISYM             0x20000000
-#define PRC$M_HOME_RAD             0x10000000
+#define PRC$M_HOME_RAD             0x400000
 
 /* Legacy alias (not in $PRCDEF) */
 #define PRC$M_NETWORK              PRC$M_NETWRK
@@ -97,7 +97,7 @@ extern "C" {
 #define PRC$V_LOGIN                6
 #define PRC$V_LOGINOUT             30  /* [OVMX] */
 #define PRC$V_NOCLISYM             29  /* [OVMX] */
-#define PRC$V_HOME_RAD             28  /* [OVMX] */
+#define PRC$V_HOME_RAD             22  /* [OVMX] */
 
 /* $CREPRC item-list codes (V7.3 $PRCDEF) */
 #define PRC$_LISTEND               0
@@ -248,9 +248,9 @@ typedef struct _uic UIC;
  * numbering is already private (SYI$_NODENAME is 0x0200 here vs 4313 on
  * real VMS V7.3), and SYI$_MAX_CPUS / *_CPU_BITMAP are not present in
  * VAX V7.3 $SYIDEF at all.  Labeled OVMX design choices, Rule 8. */
-#define SYI$_MAX_CPUS           0x0211  /* Maximum configurable CPU count (longword); OVMX-private code */
-#define SYI$_ACTIVE_CPU_BITMAP  0x0212  /* Bitmap of active CPUs; OVMX-private code */
-#define SYI$_AVAIL_CPU_BITMAP   0x0213  /* Bitmap of available CPUs; OVMX-private code */
+#define SYI$_MAX_CPUS           0x11B1  /* Maximum configurable CPU count (longword); OVMX-private code */
+#define SYI$_ACTIVE_CPU_BITMAP  0x1274  /* Bitmap of active CPUs; OVMX-private code */
+#define SYI$_AVAIL_CPU_BITMAP   0x1275  /* Bitmap of available CPUs; OVMX-private code */
 
 #ifdef __cplusplus
 }

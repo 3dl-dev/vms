@@ -26,11 +26,11 @@ extern "C" {
  * Passed as the "event" argument to sys$set_system_event.
  * ================================================================ */
 
-#define SYSEVT$C_ADD_ACTIVE_CPU     1   /* CPU added to active set */
-#define SYSEVT$C_DEL_ACTIVE_CPU     2   /* CPU removed from active set */
+#define SYSEVT$C_ADD_ACTIVE_CPU     4   /* CPU added to active set */
+#define SYSEVT$C_DEL_ACTIVE_CPU     5   /* CPU removed from active set */
 #define SYSEVT$C_POWER_RESTORE      3   /* Power restored after outage */
-#define SYSEVT$C_NODE_ADDED         4   /* Cluster node added */
-#define SYSEVT$C_NODE_REMOVED       5   /* Cluster node removed */
+#define SYSEVT$C_NODE_ADDED         100 /* [OVMX] cluster node added (not in V8.4 $SYSEVTDEF) */
+#define SYSEVT$C_NODE_REMOVED       101 /* [OVMX] cluster node removed (not in V8.4 $SYSEVTDEF) */
 #define SYSEVT$C_VOL_MOUNT          6   /* Volume mounted */
 #define SYSEVT$C_VOL_DISMOUNT       7   /* Volume dismounted */
 

@@ -14,7 +14,7 @@
 # Layout ($OVMX_ALPHA_SYSROOT, default: <prefix>/ovmx beside this script):
 #   LINK.EXE  DECC$SHR.EXE  LIBOTS_SHR.EXE  STARLET.a  [LIBVMSRMS$SHR.EXE  LIBVMS$SHR.EXE]
 set -u
-HERE=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)   # <prefix>/alpha-dec-vms/bin
 S=${OVMX_ALPHA_SYSROOT:-$(cd "$HERE/../../ovmx" 2>/dev/null && pwd)}
 [ -n "$S" ] && [ -x "$S/LINK.EXE" ] || { echo "%OVMX-LD-F-NOSYSROOT, no OVMX link environment (LINK.EXE) at ${S:-<unset>}" >&2; exit 1; }
 out=a.out

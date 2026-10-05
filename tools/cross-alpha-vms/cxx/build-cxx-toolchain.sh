@@ -59,6 +59,9 @@ install -m 755 /src/tools/cross-alpha-vms/cxx/ovmx-ld "$X/$TARGET/bin/ld"
 
 echo "== [4/6] stage-2 gcc (C, C++) configured against the OVMX sysroot =="
 mkdir -p build && cd build
+if [ -x "$X/bin/$TARGET-g++" ]; then
+    echo "   (stage-2 gcc already installed in $X -- reusing it)"
+else
 "../gcc-$GCC_VER/configure" --target=$TARGET --prefix="$X" \
     --with-sysroot="$SYSROOT" --with-native-system-header-dir=/usr/include \
     --with-build-time-tools="$X/$TARGET/bin" \
@@ -70,17 +73,28 @@ mkdir -p build && cd build
 mkdir -p gcc/{c,cp,c-family,common,objc,d,rust,go,fortran,ada,lto,jit,m2,analyzer}
 make all-gcc -j"$JOBS" > /tmp/cxx/gcc-make.log 2>&1 || { tail -40 /tmp/cxx/gcc-make.log; exit 1; }
 make install-gcc > /dev/null
+fi
+# The OpenVMS-host configuration of GCC builds its own `ld` driver (vms-ld.c),
+# which writes a VMS LINK options file and spawns the DCL LINK command; collect2
+# finds it first in libexec. Here the linker IS OVMX LINK.EXE through ovmx-ld,
+# so the libexec `ld` points at it.
+LIBEXEC_LD=$("$X/bin/$TARGET-gcc" -print-prog-name=ld)
+case "$LIBEXEC_LD" in
+    "$X"/libexec/*) ln -sf "$X/$TARGET/bin/ld" "$LIBEXEC_LD" ;;
+esac
 
 echo "== [5/6] libgcc: compiler runtime + the EH unwinder + the port's crt0/crtbegin/crtend =="
 # System V `ar` containers (the vms-alpha LBR ar output is not what LINK.EXE
 # reads), built WITHOUT function sections (vms-5f9: the alpha-dec-vms `as`
 # mis-classifies per-function sections).
 LGFLAGS="-g0 -O2 -mpointer-size=64 -fno-function-sections -fno-data-sections"
+LGDIR=$(dirname "$("$X/bin/$TARGET-gcc" -print-libgcc-file-name)")   # (a VMS-style version dir, e.g. 14_2_0)
+if [ ! -f "$LGDIR/libgcc.a" ]; then
 make all-target-libgcc -j"$JOBS" CFLAGS_FOR_TARGET="$LGFLAGS" \
     AR_FOR_TARGET=ar AR_FLAGS=rcS RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc.log 2>&1 \
     || { tail -40 /tmp/cxx/libgcc.log; exit 1; }
 make install-target-libgcc RANLIB_FOR_TARGET=true > /dev/null
-LGDIR="$X/lib/gcc/$TARGET/$GCC_VER"
+fi
 for f in libgcc.a crt0.o crtbegin.o crtend.o vms-dwarf2eh.o; do
     [ -f "$LGDIR/$f" ] || { echo "FAIL: libgcc did not install $f"; exit 1; }
 done

@@ -350,12 +350,12 @@ static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
          * device the slot was assigned by name. A slot this process does not
          * hold is SS$_IVCHAN, as on VMS.
          */
-        uint32_t ec = vms$$chan_exec_chan(chan);
-        const char *dn = ec ? NULL : vms$$chan_devnam(chan);
-        if (ec)
-            status = vms_kif_getdvi_chan(ec, &info);
-        else if (dn)
+        const char *dn = vms$$chan_devnam(chan);
+        uint32_t ec = dn ? 0 : vms$$chan_exec_chan(chan);
+        if (dn)
             status = device_lookup_translated(dn, &info);
+        else if (ec)
+            status = vms_kif_getdvi_chan(ec, &info);
         else
             status = SS$_IVCHAN;
     }

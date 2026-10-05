@@ -1220,7 +1220,8 @@ run_dcl_acceptance_battery() {
     # (VMS_IOCTL_CREPRC_TICKET, SETPRV or a subset of its own) and the detached
     # process claims it as a new job root. PINNED:
     #   1. interactive SYSTEM RUN/DETACHED creates the process (%RUN-S-PROC_ID);
-    #   2. /UIC=[128,129]/PRIVILEGES=TMPMBX (a FOREIGN identity) is granted to a
+    #   2. /UIC=[200,201]/PRIVILEGES=TMPMBX (a FOREIGN identity; DCL UICs are
+    #      OCTAL, so this is group 128 member 129) is granted to a
     #      SETPRV creator -- the exact row readback ($GETJPI UIC + privileges of
     #      the detached process) is test_syssvc_creprc_inherit C on the kmod leg;
     #   3. the same request from a creator WITHOUT SETPRV is REFUSED
@@ -1232,11 +1233,11 @@ run_dcl_acceptance_battery() {
         "RUN/DETACHED [vms-ff75]: the interactive SYSTEM session creates a detached process (no %RUN-F-CREPRC -SYSTEM-F-NOPRIV)"
     must_not_have "$SEG" '%RUN-F-CREPRC' \
         "RUN/DETACHED [vms-ff75]: no process-creation refusal for a SETPRV creator"
-    run_cmd 'RUN/DETACHED/UIC=[128,129]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75C/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    run_cmd 'RUN/DETACHED/UIC=[200,201]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75C/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
     must_have "$SEG" '%RUN-S-PROC_ID' \
-        "RUN/DETACHED [vms-ff75]: a SETPRV creator may create a detached process with a FOREIGN UIC [128,129] + TMPMBX"
+        "RUN/DETACHED [vms-ff75]: a SETPRV creator may create a detached process with a FOREIGN UIC [200,201] (octal: 128,129) + TMPMBX"
     run_cmd 'SET PROCESS/PRIVILEGES=NOSETPRV'
-    run_cmd 'RUN/DETACHED/UIC=[128,129]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75N/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    run_cmd 'RUN/DETACHED/UIC=[200,201]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75N/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
     must_have "$SEG" '%RUN-F-CREPRC' \
         "RUN/DETACHED [vms-ff75]: a creator WITHOUT SETPRV is REFUSED a foreign UIC (the creator's row authorizes the identity)"
     must_have "$SEG" 'NOPRIV' \

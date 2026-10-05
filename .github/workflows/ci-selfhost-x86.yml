@@ -334,6 +334,13 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_p0base.sh
 
+      # vms-4d0: LINK.EXE places a ZERO-length psect contribution (a boundary
+      # marker such as crtbegin's __EH_FRAME_BEGIN__) where it falls in the
+      # psect; it used to resolve to 0, so C++ EH frames were never registered.
+      - name: Prove LINK.EXE places zero-length EVAX psect contributions (vms-4d0)
+        run: |
+          sh src/vmslink/test/run_evax_zeropsect.sh
+
       # vms-c65: LINK.EXE's EVAX/Alpha path emits a SHAREABLE (a .vms$sv producer)
       # from alpha-dec-vms objects — the half a real Alpha DECC$SHR needs (the
       # other half, the Alpha C-RTL archive, is the Alpha lane's). Links the

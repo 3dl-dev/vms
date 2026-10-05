@@ -35,6 +35,7 @@
  * render the authentic %RMS- status text. */
 #include "rmsdef.h"
 #include "ovmx_status.h"
+#include "ssdef.h"
 /* The OpenVMS-faithful post-authentication login-info block (vms-417), and the
  * pre-Username system-identification line (vms-3e9). */
 #include "loginout_display.h"
@@ -276,18 +277,31 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
      * (SS$_DUPLNAM: this exact username is already logged in elsewhere
      * in the same UIC group) is a different, genuinely reachable VMS
      * state -- OpenVMS handles it by uniquifying the name
-     * (SMITH, SMITH_1, ...), which OVMX does not implement here (no
-     * concurrent-same-user login is exercised by any test on this
-     * runtime, and inventing the suffix format without an oracle
-     * transcript to pin it against would be exactly Rule 10's illegal
-     * third answer). So on DUPLNAM the session proceeds unnamed rather
-     * than refused outright: a nameless interactive session is a real,
+     * -- SUPERSEDED by the oracle: VMS names the session after its
+     * terminal ("_RTA1:"), see the DUPLNAM block below. Only when that
+     * too fails does the session proceed unnamed rather than refused: a nameless interactive session is a real,
      * already-disclosed OVMX divergence (vms-d0e) and strictly better
      * than refusing a login the password legitimately authenticated.
      * The failure is still reported, not swallowed silently.
      */
     {
         uint32_t nst = vms_kif_setprn(rec->username);
+        /*
+         * DUPLICATE USERNAME -> NAME THE SESSION AFTER ITS TERMINAL (vms-a70).
+         * The oracle (tests/lab/captures/decnet-sethost-inbound-20261005/
+         * vax-sethost-duplnam.txt): a second SYSTEM login on a real VAX V7.3,
+         * over SET HOST, is named "_RTA1:" -- underscore, terminal device,
+         * colon. The terminal is read from this process's executive row.
+         */
+        if (nst == SS$_DUPLNAM) {
+            struct vms_procinfo tpi;
+            char tname[16];
+
+            memset(&tpi, 0, sizeof(tpi));
+            if ((vms_kif_getjpi_self(&tpi) & 1) &&
+                loginout_terminal_prcnam(tpi.terminal, tname, sizeof(tname)))
+                nst = vms_kif_setprn(tname);
+        }
         if (!(nst & 1))
             printf("%%OVMX-I-NOPRCNAM, the executive did not name this "
                    "session (status %u)\n", (unsigned)nst);

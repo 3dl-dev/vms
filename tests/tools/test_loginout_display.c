@@ -458,6 +458,21 @@ int main(void)
     CHECK(loginout_terminal_is_remote("") == 0 && loginout_terminal_is_remote(NULL) == 0,
           "NEGCTL: no terminal name is not remote");
 
+    /* ---- vms-a70: a duplicate-username session is named after its terminal ---- */
+    {
+        char pn[16];
+        CHECK(loginout_terminal_prcnam("_RTA1:", pn, sizeof pn) == 1 && strcmp(pn, "_RTA1:") == 0,
+              "prcnam: _RTA1: -> \"_RTA1:\" (oracle vax-sethost-duplnam.txt)");
+        CHECK(loginout_terminal_prcnam("OVMXC$RTA12:", pn, sizeof pn) == 1 && strcmp(pn, "_RTA12:") == 0,
+              "prcnam: node prefix stripped -> \"_RTA12:\"");
+        CHECK(loginout_terminal_prcnam("TTA0", pn, sizeof pn) == 1 && strcmp(pn, "_TTA0:") == 0,
+              "prcnam: a bare device name gains the colon");
+        CHECK(loginout_terminal_prcnam("", pn, sizeof pn) == 0,
+              "NEGCTL: no terminal -> no name");
+        CHECK(loginout_terminal_prcnam("ABCDEFGHIJKLMN:", pn, sizeof pn) == 0,
+              "NEGCTL: a name that would exceed 15 characters is refused, not truncated");
+    }
+
     /* ---- Source guard: invented strings stay deleted ---- */
     {
         char *login = slurp(VMS_LOGIN_SRC);

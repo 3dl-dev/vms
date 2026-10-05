@@ -114,3 +114,28 @@ int loginout_terminal_is_remote(const char *term)
         d++;
     return (strncmp(d, "RTA", 3) == 0 || strncmp(d, "NVA", 3) == 0) ? 1 : 0;
 }
+
+int loginout_terminal_prcnam(const char *term, char *out, size_t outsz)
+{
+    const char *d;
+    size_t n;
+
+    if (term == NULL || out == NULL || outsz == 0)
+        return 0;
+    out[0] = '\0';
+    d = strrchr(term, '$');
+    d = d ? d + 1 : term;
+    while (*d == '_')
+        d++;
+    n = strlen(d);
+    while (n > 0 && d[n - 1] == ':')
+        n--;
+    /* "_" + name + ":" must fit the 15-character VMS process name. */
+    if (n == 0 || n + 2 > 15 || n + 3 > outsz)
+        return 0;
+    out[0] = '_';
+    memcpy(out + 1, d, n);
+    out[n + 1] = ':';
+    out[n + 2] = '\0';
+    return 1;
+}

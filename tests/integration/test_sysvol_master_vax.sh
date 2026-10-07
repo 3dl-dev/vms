@@ -75,6 +75,8 @@ make_image STARTUP.EXE      S  9000
 # the VAX sysvol, so a stand-in is required here too or stage_sysvol.sh dies
 # "boot image missing from images dir".
 make_image DECNETD.EXE      N  8000
+# FAL.EXE (rd vms-d85): the FAL network server process, staged beside it.
+make_image FAL.EXE          F  7000
 
 # ---------------------------------------------------------------------------
 # 2. Stage the system tree, then master a 32 MB volume from it.

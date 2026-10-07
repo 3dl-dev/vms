@@ -59,44 +59,44 @@ extern "C" {
 #define TRUE 1
 #endif
 
-/* Success (severity = 1) */
+/* Codes the V7.3 $LIBDEF gives severity SUCCESS (low bits 001) */
 #define LIB$_NORMAL         0x00158001  /* Normal successful completion */
-#define LIB$_STRTRU         0x00158004  /* String truncated (warning, sev=0) */
-#define LIB$_KEYALRINS      0x00158009  /* Key already inserted in tree */
-#define LIB$_ONEENTQUE      0x00158011  /* One entry on queue */
+#define LIB$_STRTRU         0x00158011  /* String truncated (severity SUCCESS on VMS: the copy happened, truncated) */
+#define LIB$_KEYALRINS      0x00158021  /* Key already inserted in tree */
+#define LIB$_ONEENTQUE      0x00158019  /* One entry on queue */
 
-/* Warning (severity = 0) */
-#define LIB$_QUEWASEMP      0x00158000  /* Queue was empty */
-#define LIB$_DEFFORUSE      0x00158020  /* Default format used */
-#define LIB$_ENGLUSED       0x00158028  /* English language used */
-#define LIB$_NOTFOU         0x00158030  /* Not found */
-#define LIB$_NEGTIM         0x00158038  /* Negative time result */
+/* Other LIB$_ codes -- the severity of each is its low three bits (V7.3/V8.4 $LIBDEF), not the grouping below */
+#define LIB$_QUEWASEMP      0x001582EC  /* Queue was empty */
+#define LIB$_DEFFORUSE      0x00159030  /* Default format used */
+#define LIB$_ENGLUSED       0x00159028  /* English language used */
+#define LIB$_NOTFOU         0x00158274  /* Not found */
+#define LIB$_NEGTIM         0x001583EC  /* Negative time result */
 
 /* Error (severity = 2) */
-#define LIB$_INVARG         0x00158012  /* Invalid argument */
-#define LIB$_INVSTRDES      0x0015801A  /* Invalid string descriptor */
-#define LIB$_INSVIRMEM      0x00158022  /* Insufficient virtual memory */
-#define LIB$_FATERRLIB      0x0015802A  /* Fatal error in library */
-#define LIB$_INTLOGERR      0x00158032  /* Internal logic error */
-#define LIB$_NOCLI          0x0015803A  /* No CLI present */
-#define LIB$_UNECLIERR      0x00158042  /* Unexpected CLI error */
-#define LIB$_AMBKEY         0x0015804A  /* Ambiguous keyword */
+#define LIB$_INVARG         0x00158234  /* Invalid argument */
+#define LIB$_INVSTRDES      0x00158224  /* Invalid string descriptor */
+#define LIB$_INSVIRMEM      0x00158214  /* Insufficient virtual memory */
+#define LIB$_FATERRLIB      0x0015820C  /* Fatal error in library */
+#define LIB$_INTLOGERR      0x0015822C  /* Internal logic error */
+#define LIB$_NOCLI          0x0015837C  /* No CLI present */
+#define LIB$_UNECLIERR      0x00158384  /* Unexpected CLI error */
+#define LIB$_AMBKEY         0x0015823C  /* Ambiguous keyword */
 #define LIB$_AMBVAL         0x00158052  /* Ambiguous value */
-#define LIB$_NOSUCHSYM      0x0015805A  /* No such symbol */
-#define LIB$_INSCLIMEM      0x00158062  /* Insufficient CLI memory */
-#define LIB$_BADZONE        0x0015806A  /* Bad zone identifier */
-#define LIB$_KEYNOTFOU      0x00158072  /* Key not found in tree */
-#define LIB$_WRONUMARG      0x0015807A  /* Wrong number of arguments */
+#define LIB$_NOSUCHSYM      0x00158364  /* No such symbol */
+#define LIB$_INSCLIMEM      0x0015836C  /* Insufficient CLI memory */
+#define LIB$_BADZONE        0x001583D4  /* Bad zone identifier */
+#define LIB$_KEYNOTFOU      0x001582FC  /* Key not found in tree */
+#define LIB$_WRONUMARG      0x0015835C  /* Wrong number of arguments */
 #define LIB$_BADSUBSCR      0x00158082  /* Bad subscript */
-#define LIB$_SYNTAXERR      0x0015808A  /* Syntax error */
-#define LIB$_UNRKEY         0x00158092  /* Unrecognized keyword */
-#define LIB$_SECINTFAI      0x0015809A  /* Secondary interlock failure */
+#define LIB$_SYNTAXERR      0x00158284  /* Syntax error */
+#define LIB$_UNRKEY         0x00158244  /* Unrecognized keyword */
+#define LIB$_SECINTFAI      0x001582DC  /* Secondary interlock failure */
 
 /* Event-flag allocator status codes (LIB$GET_EF/FREE_EF/RESERVE_EF). */
-#define LIB$_EF_ALRFRE      0x00801814  /* Event flag already free */
-#define LIB$_EF_RESSYS      0x00801824  /* Event flag reserved to system */
-#define LIB$_INSEF          0x00801834  /* Insufficient event flags */
-#define LIB$_EF_ALRRES      0x0080184C  /* Event flag already reserved */
+#define LIB$_EF_ALRFRE      0x0015829C  /* Event flag already free */
+#define LIB$_EF_RESSYS      0x001582AC  /* Event flag reserved to system */
+#define LIB$_INSEF          0x00158294  /* Insufficient event flags */
+#define LIB$_EF_ALRRES      0x001582A4  /* Event flag already reserved */
 
 /* Severe/fatal (severity = 4) */
 #define LIB$_BUGCHECK       0x00158004  /* Internal consistency failure */

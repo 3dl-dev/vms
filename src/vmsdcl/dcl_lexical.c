@@ -1871,6 +1871,9 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1 --
          * the correct home for NOTALLPRIV, measured on VAX1 2026-07-30. */
         { 1664,  "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges authorized" },
+        /* vms-f811: the symbol's real value is 1665 (severity S, V7.3 $SSDEF); both
+         * ids print on the lab because F$MESSAGE keys on the message id. */
+        { 1665,  "SYSTEM", 'S', "NOTALLPRIV",    "not all requested privileges authorized" },
         { 2096,  "SYSTEM", 'W', "CANCEL",        "I/O operation canceled" },
         { 2160,  "SYSTEM", 'W', "ENDOFFILE",     "end of file" },
         { 2336,  "SYSTEM", 'W', "UNWIND",        "unwind currently in progress" },

@@ -6,8 +6,9 @@
  *     sysuaf_lookup + sysuaf_authenticate (Purdy) + the disabled-account gate,
  *     the SAME path LOGINOUT/SSHD use. A bad password is refused; a fake would
  *     pass it. (oracle docs/oracle/vax-copy-fal-dap.md §1.)
- *   - FILE I/O IS REAL: records move through rms_textfile_* -- RMS over the
- *     ODS-2 executive ACP -- never a raw POSIX file (Rule 9 / INV-6). No
+ *   - FILE I/O IS REAL: records move through RMS $OPEN/$GET and
+ *     $CREATE/$PUT (dnet_fal_search.c) over the ODS-2 executive ACP -- never a
+ *     raw POSIX file (Rule 9 / INV-6). No
  *     fork/exec/openpty/dup2, no raw-termios/raw-fd file mechanics.
  *
  * The DAP message SEQUENCE is the public DAP 5.6 spec's (sec. 5.1 setup,
@@ -25,18 +26,19 @@
  *                                         -> ACCESS COMPLETE(RESPONSE) | STATUS
  * Field framing is dnet_dap.c (clean-room, Rule 8).
  *
- * RECORD SCOPE (INV-6): records move as text lines through rms_textfile_*; a
- * received record carrying an embedded NUL cannot be stored faithfully that
- * way, so the transfer is REFUSED (never silently truncated). Binary/indexed/
+ * RECORD SCOPE (INV-6): received records are $PUT verbatim to one RMS stream
+ * (dnet_fal_wopen/wput/wclose, RMS over the ACP); records SENT are $GET from
+ * the file's own RMS record format (dnet_fal_ropen/rget/rclose) -- a VAR file
+ * an earlier COPY wrote reads back record for record. Binary/indexed/
  * relative files and block mode are not advertised and not served.
  */
 #include "dnet_fal.h"
 #include "dnet_cterm.h"     /* dnet_fal_access_decode (bounded cred decoder) */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "sysuaf.h"         /* the ONE faithful authenticator (Purdy)        */
-#include "rms_textfile.h"   /* RMS over the ACP -- real file I/O             */
 #include "ssdef.h"
 
 #define FAL_BUFSIZ  1459   /* the NSP segment size OVMX negotiates (oracle) */
@@ -110,8 +112,8 @@ static int send_config(struct dnet_dap_transport *t)
 }
 
 /* The attributes OVMX presents for a text file it serves or sends: ASCII,
- * sequential, variable-length records, implied CR carriage control -- what
- * rms_textfile_* reads and writes. */
+ * sequential, variable-length records, implied CR carriage control. An OPEN
+ * overrides rfm/rat with the file's real ones. */
 static void text_attributes(struct dnet_dap_msg *m)
 {
     memset(m, 0, sizeof *m);
@@ -167,134 +169,160 @@ static int config_exchange_client(struct dnet_dap_transport *t)
 
 /* ---- authentication ------------------------------------------------------ */
 
-uint32_t dnet_fal_authenticate(const char *username, const char *password)
+/* Authenticate and, on success, hand back the verified SYSUAF record. */
+static uint32_t fal_authenticate_rec(const char *username, const char *password,
+                                     sysuaf_record_t *rec)
 {
     if (!username || !password || username[0] == '\0')
         return SS$_INVLOGIN;
-
-    sysuaf_record_t rec;
     /* No-such-user and a wrong password both surface as SS$_INVLOGIN so the
      * peer cannot probe which usernames exist -- exactly as a real login does
      * not distinguish them. Fail-honest: no SYSUAF / no /dev/vms -> lookup
      * fails -> refuse (never fabricate a pass). */
-    if (sysuaf_lookup(username, &rec) != 0)
+    if (sysuaf_lookup(username, rec) != 0)
         return SS$_INVLOGIN;
-    if (!sysuaf_authenticate(&rec, password))
+    if (!sysuaf_authenticate(rec, password))
         return SS$_INVLOGIN;
     /* A real account with the right password but DISUSER/DISACNT is refused --
      * the disabled-account gate, same as the interactive/SSH paths. */
-    if (!sysuaf_interactive_login_permitted(&rec))
+    if (!sysuaf_interactive_login_permitted(rec))
         return SS$_NOPRIV;
     return SS$_NORMAL;
 }
 
-/* ---- FAL SERVER ----------------------------------------------------------- */
-
-/* A record is storable as a text line iff it carries no NUL. */
-static int rec_to_line(const struct dnet_dap_msg *m, char *line, size_t cap)
+uint32_t dnet_fal_authenticate(const char *username, const char *password)
 {
-    size_t n = m->u.data.reclen;
-    if (n + 1 > cap) return -1;
-    if (n && memchr(m->u.data.rec, 0, n)) return -1;
-    if (n) memcpy(line, m->u.data.rec, n);
-    line[n] = '\0';
-    return 0;
+    sysuaf_record_t rec;
+    uint32_t st = fal_authenticate_rec(username, password, &rec);
+    memset(&rec, 0, sizeof rec);
+    return st;
 }
 
+
 /* Serve an opened file (GET). Returns SS$_NORMAL after ACCESS COMPLETE. */
+static int send_record_n(struct dnet_dap_transport *t, const uint8_t *rec, size_t n)
+{
+    struct dnet_dap_msg d;
+    memset(&d, 0, sizeof d);
+    d.op = DNET_DAP_DATA;
+    if (n > DNET_DAP_MAX_REC) n = DNET_DAP_MAX_REC;
+    d.u.data.reclen = (uint16_t)n;
+    if (n) memcpy(d.u.data.rec, rec, n);
+    return fal_send(t, &d);
+}
+
+/* Serve an opened file (GET). Two access modes, both spec 5.2: sequential
+ * FILE TRANSFER (RAC 3 -- one CONTROL GET streams every record, then EOF) and
+ * sequential RECORD access (RAC 0 -- one CONTROL GET per record, the mode a
+ * real VMS COPY uses as the reader, rd vms-d85 lab). Returns SS$_NORMAL after
+ * ACCESS COMPLETE. */
 static uint32_t server_open_phase(struct dnet_dap_transport *t, const char *spec)
 {
     struct dnet_dap_msg m;
+    void *rf = NULL;                     /* the open RMS record stream      */
+    int at_eof = 0;
+    uint8_t rec[DNET_DAP_MAX_REC];
+    size_t rlen = 0;
+    uint32_t result = SS$_ABORT;
     for (;;) {
-        if (fal_recv(t, &m) < 0) return SS$_ABORT;
+        if (fal_recv(t, &m) < 0) break;
         if (m.op == DNET_DAP_CONTROL && m.u.control.ctlfunc == DNET_DAP_CTL_CONNECT) {
-            if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) return SS$_ABORT;
+            if (!rf && dnet_fal_ropen(spec, &rf, NULL, NULL) != 0) rf = NULL;
+            at_eof = 0;
+            if (!rf) {
+                if (send_status(t, (DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_FNF, 0) < 0) break;
+                continue;
+            }
+            if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) break;
             continue;
         }
         if (m.op == DNET_DAP_CONTROL && m.u.control.ctlfunc == DNET_DAP_CTL_GET) {
-            if (!(m.u.control.menu & DNET_DAP_CTLM_RAC) ||
-                m.u.control.rac != DNET_DAP_RAC_SEQFILE) {
-                /* Only sequential FILE TRANSFER is advertised and served. */
-                if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) return SS$_ABORT;
+            uint8_t rac = (m.u.control.menu & DNET_DAP_CTLM_RAC) ? m.u.control.rac
+                                                                : DNET_DAP_RAC_SEQ;
+            if (rac != DNET_DAP_RAC_SEQFILE && rac != DNET_DAP_RAC_SEQ) {
+                /* Keyed / RFA / block access are not advertised or served. */
+                if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) break;
                 continue;
             }
-            rms_textfile_t *tf = rms_textfile_open(spec);
-            if (!tf) {
-                if (send_status(t, (DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_FNF, 0) < 0) return SS$_ABORT;
+            if (!rf && dnet_fal_ropen(spec, &rf, NULL, NULL) != 0) rf = NULL;
+            if (!rf) {
+                if (send_status(t, (DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_FNF, 0) < 0) break;
                 continue;
             }
-            char line[DNET_DAP_MAX_REC + 1];
-            int too_long = 0;
-            while (rms_textfile_getline(tf, line, sizeof line, &too_long)) {
-                struct dnet_dap_msg d;
-                memset(&d, 0, sizeof d);
-                d.op = DNET_DAP_DATA;
-                size_t n = strlen(line);
-                if (n > DNET_DAP_MAX_REC) n = DNET_DAP_MAX_REC;
-                d.u.data.reclen = (uint16_t)n;
-                if (n) memcpy(d.u.data.rec, line, n);
-                if (fal_send(t, &d) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+            int g = 0;
+            if (rac == DNET_DAP_RAC_SEQFILE) {
+                int ok = 1;
+                while (!at_eof && (g = dnet_fal_rget(rf, rec, sizeof rec, &rlen)) == 1)
+                    if (send_record_n(t, rec, rlen) < 0) { ok = 0; break; }
+                if (!ok || g < 0) break;      /* a read error ends the access */
+                at_eof = 1;
+                if (send_status(t, DNET_DAP_STS_EOF, 0) < 0) break;
+            } else if (!at_eof && (g = dnet_fal_rget(rf, rec, sizeof rec, &rlen)) == 1) {
+                if (send_record_n(t, rec, rlen) < 0) break;
+            } else {
+                if (g < 0) break;
+                at_eof = 1;
+                if (send_status(t, DNET_DAP_STS_EOF, 0) < 0) break;
             }
-            rms_textfile_close(tf);
-            if (send_status(t, DNET_DAP_STS_EOF, 0) < 0) return SS$_ABORT;
             continue;
         }
         if (m.op == DNET_DAP_ACCESS_COMPLETE) {
-            if (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) return SS$_ABORT;
+            if (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) break;
             if (m.u.complete.cmpfunc == DNET_DAP_CMP_EOS) continue;   /* stream only */
-            return SS$_NORMAL;
+            result = SS$_NORMAL;
+            break;
         }
         (void)send_status(t, (DNET_DAP_MAC_SYNC << 12) | (m.type & 0xfff), 0);
-        return SS$_ABORT;
+        break;
     }
+    if (rf) (void)dnet_fal_rclose(rf);
+    return result;
 }
 
-/* Store a created file (PUT). Records are written as they arrive. */
-static uint32_t server_create_phase(struct dnet_dap_transport *t, const char *spec)
+/* Store a created file (PUT): every DATA record is $PUT, verbatim, to the
+ * stream $CREATEd at ACCESS time; $CLOSE at ACCESS COMPLETE. */
+static uint32_t server_create_phase(struct dnet_dap_transport *t, void *h)
 {
     struct dnet_dap_msg m;
-    int putting = 0, wrote_any = 0;
+    int putting = 0;
     for (;;) {
-        if (fal_recv(t, &m) < 0) return SS$_ABORT;
+        if (fal_recv(t, &m) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
         if (m.op == DNET_DAP_CONTROL && m.u.control.ctlfunc == DNET_DAP_CTL_CONNECT) {
-            if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) return SS$_ABORT;
+            if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
             continue;
         }
         if (m.op == DNET_DAP_CONTROL && m.u.control.ctlfunc == DNET_DAP_CTL_PUT) {
-            if (!(m.u.control.menu & DNET_DAP_CTLM_RAC) ||
-                m.u.control.rac != DNET_DAP_RAC_SEQFILE) {
-                if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) return SS$_ABORT;
+            uint8_t rac = (m.u.control.menu & DNET_DAP_CTLM_RAC) ? m.u.control.rac
+                                                                : DNET_DAP_RAC_SEQ;
+            if (rac != DNET_DAP_RAC_SEQFILE && rac != DNET_DAP_RAC_SEQ) {
+                if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
                 continue;
             }
             putting = 1;
             continue;
         }
         if (m.op == DNET_DAP_DATA) {
-            char line[DNET_DAP_MAX_REC + 1];
-            if (!putting || rec_to_line(&m, line, sizeof line) != 0) {
+            if (!putting || dnet_fal_wput(h, m.u.data.rec, m.u.data.reclen) != 0) {
                 (void)send_status(t, (DNET_DAP_MAC_XFER << 12) | 0, 0);
+                (void)dnet_fal_wclose(h);
                 return SS$_ABORT;
             }
-            int st = wrote_any ? rms_textfile_append_line(spec, line)
-                               : rms_textfile_write_line(spec, line);
-            if (st != 0) {
-                (void)send_status(t, (DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_CRE, 0);
-                return SS$_ABORT;
-            }
-            wrote_any = 1;
             continue;
         }
         if (m.op == DNET_DAP_ACCESS_COMPLETE) {
-            if (!wrote_any && m.u.complete.cmpfunc != DNET_DAP_CMP_PURGE &&
-                rms_textfile_write_line(spec, "") != 0) {
-                (void)send_status(t, (DNET_DAP_MAC_TERM << 12) | DNET_DAP_MIC_CRE, 0);
+            if (m.u.complete.cmpfunc == DNET_DAP_CMP_EOS) {
+                putting = 0;
+                if (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
+                continue;
+            }
+            if (dnet_fal_wclose(h) != 0) {
+                (void)send_status(t, (DNET_DAP_MAC_TERM << 12) | 0, 0);
                 return SS$_ABORT;
             }
-            if (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) return SS$_ABORT;
-            if (m.u.complete.cmpfunc == DNET_DAP_CMP_EOS) { putting = 0; continue; }
-            return SS$_NORMAL;
+            return (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) ? SS$_ABORT : SS$_NORMAL;
         }
         (void)send_status(t, (DNET_DAP_MAC_SYNC << 12) | (m.type & 0xfff), 0);
+        (void)dnet_fal_wclose(h);
         return SS$_ABORT;
     }
 }
@@ -302,7 +330,23 @@ static uint32_t server_create_phase(struct dnet_dap_transport *t, const char *sp
 uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
                                char *authed_user, size_t authed_user_cap)
 {
-    if (authed_user && authed_user_cap) authed_user[0] = '\0';
+    struct dnet_fal_identity id;
+    uint32_t st = dnet_fal_connect_auth_id(conn_data, conn_len, &id);
+    if (authed_user && authed_user_cap) {
+        authed_user[0] = '\0';
+        if (st == SS$_NORMAL) {
+            strncpy(authed_user, id.username, authed_user_cap - 1);
+            authed_user[authed_user_cap - 1] = '\0';
+        }
+    }
+    memset(&id, 0, sizeof id);
+    return st;
+}
+
+uint32_t dnet_fal_connect_auth_id(const uint8_t *conn_data, size_t conn_len,
+                                  struct dnet_fal_identity *id)
+{
+    if (id) memset(id, 0, sizeof *id);
 
     /* Decode the connect-carried credentials (bounded), authenticate, wipe. */
     char user[DNET_FAL_USER_MAX + 1];
@@ -314,22 +358,124 @@ uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
                                      acct, sizeof acct);
     /* A malformed connect never reaches the authenticator -- it is refused as
      * an invalid login, exactly as a wrong password is. */
-    uint32_t auth = (drc != 0) ? SS$_INVLOGIN : dnet_fal_authenticate(user, pass);
+    sysuaf_record_t rec;
+    memset(&rec, 0, sizeof rec);
+    uint32_t auth = (drc != 0) ? SS$_INVLOGIN : fal_authenticate_rec(user, pass, &rec);
 
     /* The password never outlives the check. */
     memset(pass, 0, sizeof pass);
     memset(acct, 0, sizeof acct);
 
-    if (auth != SS$_NORMAL) {
-        memset(user, 0, sizeof user);
-        return auth;   /* caller sends the NSP disconnect; no CC, no DAP, no file */
-    }
-    if (authed_user && authed_user_cap) {
-        strncpy(authed_user, user, authed_user_cap - 1);
-        authed_user[authed_user_cap - 1] = '\0';
+    if (auth == SS$_NORMAL && id) {
+        snprintf(id->username, sizeof id->username, "%s", user);
+        id->uic = (rec.uic_group << 16) | (rec.uic_member & 0xffffu);
+        const uint8_t *dp = rec.raw.uaf$q_def_priv;
+        id->def_privs = (uint64_t)dp[0] | ((uint64_t)dp[1] << 8) |
+                        ((uint64_t)dp[2] << 16) | ((uint64_t)dp[3] << 24) |
+                        ((uint64_t)dp[4] << 32) | ((uint64_t)dp[5] << 40) |
+                        ((uint64_t)dp[6] << 48) | ((uint64_t)dp[7] << 56);
+        snprintf(id->default_dir, sizeof id->default_dir, "%s", rec.default_dir);
     }
     memset(user, 0, sizeof user);
-    return SS$_NORMAL;
+    memset(&rec, 0, sizeof rec);   /* the record carries the password hash */
+    return auth;   /* non-NORMAL: caller sends the NSP disconnect; no CC, no DAP */
+}
+
+/* Send NAME(type, spec). */
+static int send_name(struct dnet_dap_transport *t, unsigned type, const char *spec)
+{
+    struct dnet_dap_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = DNET_DAP_NAME;
+    m.u.name.nametype = type;
+    snprintf(m.u.name.namespec, sizeof m.u.name.namespec, "%s", spec);
+    return fal_send(t, &m);
+}
+
+/* Split a resultant "DEV:[DIR]NAME.TYP;V" after its directory (or device). */
+static size_t name_split(const char *rsa)
+{
+    const char *rb = strrchr(rsa, ']');
+    if (!rb) rb = strrchr(rsa, '>');
+    if (!rb) rb = strrchr(rsa, ':');
+    return rb ? (size_t)(rb - rsa + 1) : 0;
+}
+
+/* DIRECTORY LIST (spec 5.2.11): for every file the spec (wildcards allowed)
+ * resolves to, NAME(directory) when the directory changes, NAME(file), and the
+ * main ATTRIBUTES if DISPLAY asks; then ACCESS COMPLETE(RESPONSE). Names are
+ * the RESULTANT specs RMS $SEARCH returns (dnet_fal_search_*), never composed
+ * here. A real VMS COPY lists its input this way before opening it. */
+static uint32_t server_dirlist(struct dnet_dap_transport *t, const struct dnet_dap_msg *acc)
+{
+    void *ctx = NULL;
+    char rsa[DNET_DAP_MAX_SPEC + 1], lastdir[DNET_DAP_MAX_SPEC + 1] = "";
+    int n = 0;
+    if (dnet_fal_search_begin(acc->u.access.filespec, &ctx) == 0) {
+        while (dnet_fal_search_next(ctx, rsa, sizeof rsa) == 0) {
+            size_t cut = name_split(rsa);
+            char dir[DNET_DAP_MAX_SPEC + 1];
+            snprintf(dir, sizeof dir, "%.*s", (int)cut, rsa);
+            if (strcmp(dir, lastdir) != 0) {
+                if (send_name(t, DNET_DAP_NT_DIRECTORY, dir) < 0) { dnet_fal_search_end(ctx); return SS$_ABORT; }
+                snprintf(lastdir, sizeof lastdir, "%s", dir);
+            }
+            if (send_name(t, DNET_DAP_NT_FILENAME, rsa + cut) < 0) { dnet_fal_search_end(ctx); return SS$_ABORT; }
+            if (acc->u.access.have_display && (acc->u.access.display & DNET_DAP_DSP_MAIN)) {
+                struct dnet_dap_msg a;
+                text_attributes(&a);
+                if (fal_send(t, &a) < 0) { dnet_fal_search_end(ctx); return SS$_ABORT; }
+            }
+            n++;
+        }
+        dnet_fal_search_end(ctx);
+    }
+    if (n == 0)
+        return (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
+                   ? SS$_ABORT : SS$_NOSUCHFILE;
+    return (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) ? SS$_ABORT : SS$_NORMAL;
+}
+
+/* The resultant spec of the file an OPEN names (first $SEARCH match). */
+static int resolve_one(const char *spec, char *rsa, size_t cap)
+{
+    void *ctx = NULL;
+    int rc = -1;
+    if (dnet_fal_search_begin(spec, &ctx) == 0) {
+        rc = dnet_fal_search_next(ctx, rsa, cap);
+        dnet_fal_search_end(ctx);
+    }
+    return rc;
+}
+
+static char g_srv_default[DNET_DAP_MAX_SPEC + 1];
+
+void dnet_fal_server_set_default(const char *default_dir)
+{
+    if (!default_dir || strlen(default_dir) > DNET_DAP_MAX_SPEC) {
+        g_srv_default[0] = '\0';
+        return;
+    }
+    snprintf(g_srv_default, sizeof g_srv_default, "%s", default_dir);
+}
+
+int dnet_fal_apply_default(const char *spec, char *out, size_t cap)
+{
+    if (!spec || !out || cap == 0) return -1;
+    const char *def = g_srv_default;
+    int has_dev = strchr(spec, ':') != NULL;
+    int has_dir = strchr(spec, '[') != NULL || strchr(spec, '<') != NULL;
+    int n;
+    if (!def[0] || has_dev) {
+        n = snprintf(out, cap, "%s", spec);
+    } else if (has_dir) {
+        const char *colon = strchr(def, ':');
+        int dlen = colon ? (int)(colon - def) + 1 : 0;
+        n = snprintf(out, cap, "%.*s%s", dlen, def, spec);
+    } else {
+        n = snprintf(out, cap, "%s%s", def, spec);
+    }
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
 }
 
 uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
@@ -343,25 +489,34 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
     if (fal_recv(t, &m) < 0 || m.op != DNET_DAP_CONFIG) return SS$_ABORT;
     if (send_config(t) < 0) return SS$_ABORT;
 
-    /* Setup: ATTRIBUTES [ext] [NAME] ACCESS. ONE access per link at this rung
-     * (a completed transfer or an honest refusal ends the session): the spec
-     * also allows further accesses on the same link (wildcard copies), which
-     * is a filed follow-on, not served. */
-    uint32_t result;
+    /* Accesses follow one another on the link (spec 5.1: a VMS COPY lists its
+     * input with a DIRECTORY LIST access, then OPENs it, on one link). Serve
+     * until the peer disconnects; the result is the last access's status. */
+    uint32_t result = SS$_ABORT;
     int have_attr = 0;
-    uint8_t peer_org = DNET_DAP_ORG_SEQ;
+    uint8_t peer_org = DNET_DAP_ORG_SEQ, peer_rfm = DNET_DAP_RFM_VAR, peer_rat = DNET_DAP_RAT_CR;
     for (;;) {
-        if (fal_recv(t, &m) < 0) return SS$_ABORT;
+        if (fal_recv(t, &m) < 0) return result;          /* link closed: done */
         switch (m.op) {
         case DNET_DAP_ATTRIBUTES:
             have_attr = 1;
             peer_org = (m.u.attr.menu & (1u << DNET_DAP_ATT_ORG)) ? m.u.attr.org
                                                                   : DNET_DAP_ORG_SEQ;
+            /* Record format / attributes for a CREATE: the accessor's, within
+             * what OVMX RMS writes (FIX/VAR/STM*); otherwise VAR + CR. */
+            peer_rfm = ((m.u.attr.menu & (1u << DNET_DAP_ATT_RFM)) &&
+                        m.u.attr.rfm >= DNET_DAP_RFM_FIX && m.u.attr.rfm <= 6)
+                           ? m.u.attr.rfm : DNET_DAP_RFM_VAR;
+            peer_rat = (m.u.attr.menu & (1u << DNET_DAP_ATT_RAT))
+                           ? (uint8_t)(m.u.attr.rat & 0x0f) : DNET_DAP_RAT_CR;
             continue;
         case DNET_DAP_KEYDEF: case DNET_DAP_ALLOC: case DNET_DAP_SUMMARY:
         case DNET_DAP_DATETIME: case DNET_DAP_PROTECTION: case DNET_DAP_ACL:
         case DNET_DAP_NAME:
             continue;
+        case DNET_DAP_ACCESS_COMPLETE:                   /* closing an access we */
+            if (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) return SS$_ABORT;
+            continue;                                    /* already finished     */
         case DNET_DAP_ACCESS:
             break;
         default:
@@ -369,8 +524,29 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
             return SS$_ABORT;
         }
 
-        /* ACCESS: the spec requires ATTRIBUTES first (a real VMS FAL answers a
-         * bare ACCESS with STATUS sync/ACCESS -- observed, rd vms-a8a). */
+        /* A peer's relative filespec resolves in the accessed user's login
+         * directory, as on a VMS network job (dnet_fal_server_set_default). */
+        {
+            char full[DNET_DAP_MAX_SPEC + 1];
+            if (dnet_fal_apply_default(m.u.access.filespec, full, sizeof full) != 0) {
+                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
+                    return SS$_ABORT;
+                result = SS$_NOSUCHFILE;
+                have_attr = 0;
+                continue;
+            }
+            memcpy(m.u.access.filespec, full, strlen(full) + 1);
+        }
+
+        if (m.u.access.accfunc == DNET_DAP_ACC_DIRLIST) {
+            have_attr = 0;
+            result = server_dirlist(t, &m);
+            if (result == SS$_ABORT) return result;
+            continue;
+        }
+
+        /* OPEN / CREATE: the spec requires ATTRIBUTES first (a real VMS FAL
+         * answers a bare ACCESS with STATUS sync/ACCESS -- observed, rd vms-a8a). */
         if (!have_attr) {
             if (send_status(t, (DNET_DAP_MAC_SYNC << 12) | DNET_DAP_ACCESS, 0) < 0)
                 return SS$_ABORT;
@@ -378,33 +554,76 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
         }
         have_attr = 0;
         const char *spec = m.u.access.filespec;
+        int want_name = m.u.access.have_display && (m.u.access.display & DNET_DAP_DSP_NAME);
         struct dnet_dap_msg a;
         if (m.u.access.accfunc == DNET_DAP_ACC_OPEN) {
-            rms_textfile_t *tf = rms_textfile_open(spec);
-            if (!tf) {
-                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0) return SS$_ABORT;
-                return SS$_NOSUCHFILE;
+            void *rf = NULL;
+            uint8_t frfm = DNET_DAP_RFM_VAR, frat = DNET_DAP_RAT_CR;
+            if (dnet_fal_ropen(spec, &rf, &frfm, &frat) != 0) {
+                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
+                    return SS$_ABORT;
+                result = SS$_NOSUCHFILE;
+                continue;
             }
-            rms_textfile_close(tf);
+            (void)dnet_fal_rclose(rf);
+            char rsa[DNET_DAP_MAX_SPEC + 1];
             text_attributes(&a);
-            if (fal_send(t, &a) < 0 || send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0)
+            /* The file's REAL record format and attributes, as RMS opened it. */
+            if (frfm >= DNET_DAP_RFM_FIX && frfm <= 6) a.u.attr.rfm = frfm;
+            a.u.attr.rat = (uint8_t)(frat & 0x0f);
+            if (fal_send(t, &a) < 0) return SS$_ABORT;
+            if (want_name && resolve_one(spec, rsa, sizeof rsa) == 0 &&
+                send_name(t, DNET_DAP_NT_FILESPEC, rsa) < 0)
                 return SS$_ABORT;
+            if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) return SS$_ABORT;
             result = server_open_phase(t, spec);
         } else if (m.u.access.accfunc == DNET_DAP_ACC_CREATE) {
             if (peer_org != DNET_DAP_ORG_SEQ) {
                 /* Only sequential organisation is advertised (INV-6). */
-                (void)send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0);
-                return SS$_ABORT;
+                if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) return SS$_ABORT;
+                result = SS$_ABORT;
+                continue;
+            }
+            /* $CREATE now, with the accessor's record format, so a requested
+             * NAME is the resultant spec of the file that really exists. */
+            void *h = NULL;
+            char rsa[DNET_DAP_MAX_SPEC + 1] = "";
+            if (dnet_fal_wopen(spec, peer_rfm, peer_rat, &h, rsa, sizeof rsa) != 0) {
+                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_CRE, 0) < 0)
+                    return SS$_ABORT;
+                result = SS$_ABORT;
+                continue;
+            }
+            /* OVMX RMS $CREATE does not yet fill the NAM resultant (rd
+             * vms-98e); when it comes back empty, the resultant is read by a
+             * real $PARSE/$SEARCH of the file just created -- never omitted:
+             * a VMS COPY that asked for NAME rejects an ACK without it
+             * (RMS-F-BUG_DAP, DAP code 0001A006 = MAC 10 sync / MIC ACK,
+             * observed against a booted OVMX 2026-10-05). */
+            if (want_name && !rsa[0] && resolve_one(spec, rsa, sizeof rsa) != 0)
+                rsa[0] = '\0';
+            if (want_name && !rsa[0]) {
+                (void)dnet_fal_wclose(h);
+                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_CRE, 0) < 0)
+                    return SS$_ABORT;
+                result = SS$_ABORT;
+                continue;
             }
             text_attributes(&a);
-            if (fal_send(t, &a) < 0 || send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0)
-                return SS$_ABORT;
-            result = server_create_phase(t, spec);
+            a.u.attr.rfm = peer_rfm;
+            a.u.attr.rat = peer_rat;
+            if (fal_send(t, &a) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
+            if (want_name && rsa[0] && send_name(t, DNET_DAP_NT_FILESPEC, rsa) < 0) {
+                (void)dnet_fal_wclose(h); return SS$_ABORT;
+            }
+            if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
+            result = server_create_phase(t, h);
         } else {
-            (void)send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0);
-            return SS$_ABORT;
+            if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) return SS$_ABORT;
+            result = SS$_ABORT;
+            continue;
         }
-        return result;
+        if (result == SS$_ABORT) return result;
     }
 }
 
@@ -470,27 +689,22 @@ uint32_t dnet_fal_client_put(const char *local_spec, const char *remote_spec,
     if (!t || !t->send || !t->recv || !local_spec || !remote_spec) return SS$_ABORT;
     t->rxlen = t->rxoff = 0;
 
-    rms_textfile_t *tf = rms_textfile_open(local_spec);
-    if (!tf) return SS$_NOSUCHFILE;
+    void *rf = NULL;
+    if (dnet_fal_ropen(local_spec, &rf, NULL, NULL) != 0) return SS$_NOSUCHFILE;
 
-    if (config_exchange_client(t) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+    if (config_exchange_client(t) < 0) { (void)dnet_fal_rclose(rf); return SS$_ABORT; }
     uint32_t st = client_setup(t, DNET_DAP_ACC_CREATE, remote_spec, DNET_DAP_FB_PUT);
-    if (st != SS$_NORMAL) { rms_textfile_close(tf); return st; }
-    if (send_control_xfer(t, DNET_DAP_CTL_PUT) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+    if (st != SS$_NORMAL) { (void)dnet_fal_rclose(rf); return st; }
+    if (send_control_xfer(t, DNET_DAP_CTL_PUT) < 0) { (void)dnet_fal_rclose(rf); return SS$_ABORT; }
 
-    char line[DNET_DAP_MAX_REC + 1];
-    int too_long = 0;
-    while (rms_textfile_getline(tf, line, sizeof line, &too_long)) {
-        struct dnet_dap_msg d;
-        memset(&d, 0, sizeof d);
-        d.op = DNET_DAP_DATA;
-        size_t n = strlen(line);
-        if (n > DNET_DAP_MAX_REC) n = DNET_DAP_MAX_REC;
-        d.u.data.reclen = (uint16_t)n;
-        if (n) memcpy(d.u.data.rec, line, n);
-        if (fal_send(t, &d) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+    uint8_t rec[DNET_DAP_MAX_REC];
+    size_t rlen = 0;
+    int g;
+    while ((g = dnet_fal_rget(rf, rec, sizeof rec, &rlen)) == 1) {
+        if (send_record_n(t, rec, rlen) < 0) { (void)dnet_fal_rclose(rf); return SS$_ABORT; }
     }
-    rms_textfile_close(tf);
+    (void)dnet_fal_rclose(rf);
+    if (g < 0) return SS$_ABORT;      /* a local read error is not a clean EOF */
     return client_close(t);
 }
 
@@ -505,21 +719,21 @@ uint32_t dnet_fal_client_get(const char *remote_spec, const char *local_spec,
     if (st != SS$_NORMAL) return st;
     if (send_control_xfer(t, DNET_DAP_CTL_GET) < 0) return SS$_ABORT;
 
+    /* The local copy: one RMS stream, records verbatim (embedded NULs kept). */
+    void *h = NULL;
+    if (dnet_fal_wopen(local_spec, DNET_DAP_RFM_VAR, DNET_DAP_RAT_CR, &h, NULL, 0) != 0) {
+        (void)client_close(t);
+        return SS$_ABORT;
+    }
     struct dnet_dap_msg m;
-    int wrote_any = 0;
     for (;;) {
-        if (fal_recv(t, &m) < 0) return SS$_ABORT;
+        if (fal_recv(t, &m) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
         if (m.op == DNET_DAP_DATA) {
-            char line[DNET_DAP_MAX_REC + 1];
-            if (rec_to_line(&m, line, sizeof line) != 0) {
-                /* Binary record: not storable as text -- refuse, never truncate. */
-                (void)send_complete(t, DNET_DAP_CMP_CLOSE);
-                return SS$_BADPARAM;
+            if (dnet_fal_wput(h, m.u.data.rec, m.u.data.reclen) != 0) {
+                (void)dnet_fal_wclose(h);
+                (void)client_close(t);
+                return SS$_ABORT;
             }
-            int w = wrote_any ? rms_textfile_append_line(local_spec, line)
-                              : rms_textfile_write_line(local_spec, line);
-            if (w != 0) return SS$_ABORT;
-            wrote_any = 1;
             continue;
         }
         if (m.op == DNET_DAP_STATUS) {
@@ -527,11 +741,13 @@ uint32_t dnet_fal_client_get(const char *remote_spec, const char *local_spec,
             if (DNET_DAP_MAC(sts) == DNET_DAP_MAC_XFER && DNET_DAP_MIC(sts) == DNET_DAP_MIC_EOF)
                 break;
             st = status_to_cond(&m);
+            (void)dnet_fal_wclose(h);
             (void)client_close(t);
             return st;
         }
+        (void)dnet_fal_wclose(h);
         return SS$_ABORT;
     }
-    if (!wrote_any && rms_textfile_write_line(local_spec, "") != 0) return SS$_ABORT;
+    if (dnet_fal_wclose(h) != 0) { (void)client_close(t); return SS$_ABORT; }
     return client_close(t);
 }

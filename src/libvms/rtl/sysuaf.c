@@ -215,12 +215,52 @@ void sysuaf_record_set_username(sysuaf_record_t *rec, const char *username)
     raw_username(&rec->raw, rec->username, sizeof(rec->username));
 }
 
+/* The pre-vms-f811 UAI$M_ bit for each flag (the old tree-invented numbering) and the
+ * current mask. Names only appear here; the current side is the live header. */
+static const struct { uint32_t legacy; uint32_t cur; } legacy_flag_map[] = {
+    { 0x00000001u, UAI$M_DISCTLY },    { 0x00000002u, UAI$M_DEFCLI },
+    { 0x00000004u, UAI$M_LOCKPWD },    { 0x00000010u, UAI$M_DISMAIL },
+    { 0x00000020u, UAI$M_NOMAIL },     { 0x00000080u, UAI$M_CAPTIVE },
+    { 0x00000100u, UAI$M_DISREPORT },  { 0x00000200u, UAI$M_DISRECONNECT },
+    { 0x00000400u, UAI$M_AUTOLOGIN },  { 0x00000800u, UAI$M_DISLOCAL },
+    { 0x00001000u, UAI$M_DISDIALUP },  { 0x00002000u, UAI$M_DISNETWORK },
+    { 0x00004000u, UAI$M_DISACNT },    { 0x00008000u, UAI$M_DISBATCH },
+    { 0x00010000u, UAI$M_DISUSER },    { 0x00020000u, UAI$M_DISWELCOM },
+    { 0x00040000u, UAI$M_EXTAUTH },    { 0x00080000u, UAI$M_MIGRATEPWD },
+    { 0x00100000u, UAI$M_VMSAUTH },    { 0x00200000u, UAI$M_PWDMIX },
+    { 0x00400000u, UAI$M_GENPWD },     { 0x00800000u, UAI$M_DISPWDDIC },
+    { 0x01000000u, UAI$M_DISPWDHIS },  { 0x02000000u, UAI$M_DISPWDSYNCH },
+    { 0x04000000u, UAI$M_RESTRICTED }, { 0x08000000u, UAI$M_DISFORCE_PWD_CHANGE },
+    { 0x10000000u, UAI$M_PWD_EXPIRED },{ 0x20000000u, UAI$M_PWD2_EXPIRED },
+    { 0x40000000u, UAI$M_AUDIT },      { 0x80000000u, UAI$M_DISIMAGE },
+    /* 0x08 (NODISMAIL) and 0x40 (DISNEWMAIL) had no V7.3 meaning: dropped. */
+};
+
+uint32_t sysuaf_legacy_flags_to_current(uint32_t legacy)
+{
+    uint32_t cur = 0;
+    for (size_t i = 0; i < sizeof(legacy_flag_map) / sizeof(legacy_flag_map[0]); i++)
+        if (legacy & legacy_flag_map[i].legacy)
+            cur |= legacy_flag_map[i].cur;
+    return cur;
+}
+
 void sysuaf_raw_to_view(const sysuaf_rms_record_t *raw, sysuaf_record_t *rec)
 {
     if (!raw || !rec)
         return;
     memset(rec, 0, sizeof(*rec));
     rec->raw = *raw;
+
+    /* First access of a record written before the flags-layout marker: its UAF$L_FLAGS
+     * carries the old UAI$M_ numbering. Convert it here (in the view's copy, and the
+     * next write-back persists it with the marker) -- never read old bits as new. */
+    if (rec->raw.uaf$b_flags_layout != UAF$K_FLAGS_LAYOUT_V73) {
+        put_le32(rec->raw.uaf$l_flags,
+                 sysuaf_legacy_flags_to_current(le32(raw->uaf$l_flags)));
+        rec->raw.uaf$b_flags_layout = UAF$K_FLAGS_LAYOUT_V73;
+        raw = &rec->raw;
+    }
 
     raw_username(raw, rec->username, sizeof(rec->username));
 
@@ -247,6 +287,7 @@ void sysuaf_view_to_raw(sysuaf_record_t *rec)
 
     raw->uaf$b_rtype   = 1;
     raw->uaf$b_version = 1;
+    raw->uaf$b_flags_layout = UAF$K_FLAGS_LAYOUT_V73;
 
     sysuaf_record_set_username(rec, rec->username);
 

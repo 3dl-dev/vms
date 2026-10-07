@@ -199,10 +199,20 @@ typedef struct {
      * means "no lifetime -> the password never expires by age". Read at login by
      * sysuaf_password_expired() together with uaf$q_pwd_date. */
     uint8_t  uaf$q_pwd_lifetime[8];/* @0x188 [OVMX] password lifetime (VMS delta)*/
-    uint8_t  uaf$r_reserved4[112];/* @0x190 [OVMX] reserved up to quota block  */
+    /* @0x190 [OVMX] FLAGS-LAYOUT MARKER (u8) then reserved up to the quota block.
+     * UAF$L_FLAGS holds UAI$M_ bits, and those bit values changed when uaidef.h
+     * moved to the V7.3/V8.4 $UAIDEF (vms-f811). Real $UAFDEF's version byte (@0x001,
+     * == 1) says nothing about OVMX's flag encoding, so OVMX keeps its own marker
+     * here: 0 = a record written before the marker existed (the pre-vms-f811
+     * encoding, converted on read), UAF$K_FLAGS_LAYOUT_V73 = current. */
+    uint8_t  uaf$b_flags_layout;  /* @0x190 [OVMX] UAF$K_FLAGS_LAYOUT_*        */
+    uint8_t  uaf$r_reserved4[111];/* @0x191 [OVMX] reserved up to quota block  */
     /* -- quota block ([OVMX]; oracle §4 correlates values, not sub-offsets) --*/
     uint8_t  uaf$r_quota[132];    /* @0x200 [OVMX] quota region -> 0x284       */
 } sysuaf_rms_record_t;            /* total: 644 bytes ($UAFDEF) */
+
+#define UAF$K_FLAGS_LAYOUT_LEGACY 0   /* unmarked: pre-vms-f811 UAI$M_ encoding   */
+#define UAF$K_FLAGS_LAYOUT_V73    2   /* UAI$M_ bits are the V7.3/V8.4 $UAIDEF    */
 
 /* Compile-time layout lock: 644-byte record, NO implicit padding, every [PIN]
    field at the exact oracle offset. */
@@ -230,6 +240,8 @@ _Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd_date) == 0x15C,
                "UAF$Q_PWD_DATE must be at 0x15C ([OVMX])");
 _Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd_lifetime) == 0x188,
                "UAF$Q_PWD_LIFETIME must be at 0x188 ([OVMX])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$b_flags_layout) == 0x190,
+               "[OVMX] flags-layout marker must sit at 0x190 (first reserved byte)");
 _Static_assert(offsetof(sysuaf_rms_record_t, uaf$r_quota) == 0x200,
                "[OVMX] quota region must stay at 0x200 after the pwd_lifetime carve");
 /* The [OVMX] quota region is real estate inside the 644-byte record; the last
@@ -362,6 +374,12 @@ typedef struct {
    are the only conversion between the two representations. */
 uint32_t sysuaf_flags_to_mask(const char *flags);
 void     sysuaf_mask_to_flags(uint32_t mask, char *out, size_t outsz);
+
+/* Convert a UAF$L_FLAGS longword written under the pre-vms-f811 UAI$M_ encoding to
+ * the current one (bit-for-bit by flag name; OVMX-only flags land on their [OVMX]
+ * bits). sysuaf_raw_to_view applies it to every record whose flags-layout marker is
+ * UAF$K_FLAGS_LAYOUT_LEGACY and stamps the marker, so the old bits are never misread. */
+uint32_t sysuaf_legacy_flags_to_current(uint32_t legacy);
 
 /* Privilege mask -> comma-separated NAME string (inverse of
    parse_privilege_string / sysuaf_parse_privileges). Used to render the view's

@@ -111,7 +111,7 @@
 #define SS__BADPARAM   0x00000014  /* SS$_BADPARAM */
 #define SS__NOPRIV     0x00000024  /* SS$_NOPRIV */
 #define SS__EXASTLM    0x00002A04  /* SS$_EXASTLM (AST quota exceeded) */
-#define SS__NOTALLPRIV 1664        /* SS$_NOTALLPRIV (not all requested privs authorized) */
+#define SS__NOTALLPRIV 1665        /* SS$_NOTALLPRIV (not all requested privs authorized; V7.3 $SSDEF, severity S) */
 /* Mailbox subset (P4-A, rd vms-d7a). Values match src/kernel/vms_internal.h. */
 #define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
 #define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */
@@ -662,6 +662,11 @@ struct vms_proc {
 	uint8_t             cli_present;
 	uint16_t            cli_length;
 	char                cli_command[VMS_CLI_CMDLINE_SIZE];
+
+	/* $SETDFPROT (VMS_IOCTL_DFPROT): process default file protection, inherited with
+	 * the identity fields; dfprot_set == 0 reads as VMS_DFPROT_INITIAL. */
+	uint16_t            dfprot;
+	uint8_t             dfprot_set;
 
 	/*
 	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
@@ -1281,6 +1286,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

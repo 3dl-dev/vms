@@ -1771,7 +1771,17 @@ extern unsigned long imgact_sv_call(unsigned long pv,
 static void imgact_fill_import(unsigned long cell, unsigned long PV,
 			       int linkage, int codeaddr)
 {
-	if (linkage) {
+	if (linkage && codeaddr) {
+		/* OVMX_IMP_LONG: a 32-bit-pointer consumer's longword cell holding the
+		 * raw value. It must be a sign-extended longword (P0/P1); anything
+		 * else would be silently truncated, so refuse it. */
+		if ((unsigned long)(long)(int)PV != PV) {
+			vms_fatal("ADDR32", "imported address outside the 32-bit address space",
+				  0);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+		*(unsigned int *)cell = (unsigned int)PV;
+	} else if (linkage) {
 		/* 2-quad linkage pair: quad[0] = code entry, quad[1] = PV = PDSC. */
 		*(unsigned long *)cell       = imgact_sv_code_entry(PV);
 		*(unsigned long *)(cell + 8) = PV;

@@ -176,6 +176,12 @@ struct ovmx_imp_header {
  * (vms-32e1 / vms-e06) */
 #define OVMX_IMP_LINKAGE   0x80000000u   /* bit31: 2-quad linkage pair          */
 #define OVMX_IMP_CODEADDR  0x40000000u   /* bit30: single-cell CODE ENTRY *(PV+8)*/
+/* Both bits together (otherwise mutually exclusive) = a LONGWORD cell: a 32-bit
+ * slot holding the raw resolved value (PV for a procedure, or a data address),
+ * as a 32-bit-pointer (DEC C default) consumer stores an imported procedure
+ * value or data address. IMGACT fills 4 bytes and refuses a value that is not
+ * a sign-extended longword (an image outside P0/P1). */
+#define OVMX_IMP_LONG      (OVMX_IMP_LINKAGE | OVMX_IMP_CODEADDR)
 
 struct ovmx_imp_entry {
     uint32_t producer_off;  /* offset into soname blob: producer image name  */

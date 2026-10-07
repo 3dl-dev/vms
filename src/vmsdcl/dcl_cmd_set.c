@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -542,7 +543,26 @@ static int cmd_set_protection(struct dcl_command *cmd)
 
     /* cmd->raw_tail == everything after "SET", e.g.
      * "PROTECTION=(S:RWED,O:RWED,G:RE,W:) FOO.TXT". */
-    const char *p = cmd->raw_tail;
+    char tailbuf[1024];
+    int is_default = 0;
+    {
+        /* /DEFAULT (any abbreviation of at least /DEF): set the PROCESS default protection
+         * through $SETDFPROT instead of a file's. Strip the qualifier from the tail. */
+        const char *src = cmd->raw_tail;
+        size_t o = 0;
+        while (*src && o < sizeof(tailbuf) - 1) {
+            if (src[0] == '/' && strncasecmp(src + 1, "DEF", 3) == 0) {
+                const char *q = src + 4;
+                while (isalpha((unsigned char)*q)) q++;
+                is_default = 1;
+                src = q;
+                continue;
+            }
+            tailbuf[o++] = *src++;
+        }
+        tailbuf[o] = '\0';
+    }
+    const char *p = tailbuf;
     while (*p == ' ' || *p == '\t') p++;
 
     /* Skip the "PROTECTION" keyword (any legal abbreviation): it ends at the
@@ -566,6 +586,20 @@ static int cmd_set_protection(struct dcl_command *cmd)
             prot_str[n++] = *p++;
     }
     prot_str[n] = '\0';
+
+    if (is_default) {
+        /* SET PROTECTION=(...)/DEFAULT: categories not named keep the CURRENT default;
+         * the value is the executive's (sys$setdfprot), inherited by what this process
+         * runs next. */
+        uint16_t cur = 0;
+        (void)sys$setdfprot(NULL, &cur);
+        if (prot_str[0] == '\0' || vmsfs_parse_protection(prot_str, &cur) != SS$_NORMAL) {
+            dcl_error("DCL", 2, "BADPROT", "invalid protection string - %s", prot_str);
+            return SS$_BADPARAM;
+        }
+        uint16_t old = 0;
+        return (sys$setdfprot(&cur, &old) & 1) ? SS$_NORMAL : SS$_NOPRIV;
+    }
 
     /* The filespec follows. */
     while (*p == ' ' || *p == '\t') p++;
@@ -1323,12 +1357,15 @@ static int cmd_set_process(struct dcl_command *cmd)
          * to surface the message as a bare pass-through rather than a %SET-
          * wrapper was not captured on the oracle and is flagged there).
          */
-        if (st & 1) {
-            /* Success: VMS prints nothing (oracle §3: a successful
-             * SET PROCESS/PRIVILEGE returns %X10000001 and is silent). */
-        } else if (st == SS$_NOTALLPRIV) {
+        if (st == SS$_NOTALLPRIV) {
+            /* A partial-success status (severity SUCCESS, V7.3 value 1665): the
+             * authorized subset was enabled, so it has the success bit set and
+             * must be tested BEFORE the plain-success branch below. */
             dcl_error("SYSTEM", 0 /* W */, "NOTALLPRIV",
                       "not all requested privileges authorized");
+        } else if (st & 1) {
+            /* Success: VMS prints nothing (oracle §3: a successful
+             * SET PROCESS/PRIVILEGE returns %X10000001 and is silent). */
         } else if (st == SS$_NOPRIV) {
             dcl_error("SYSTEM", 4 /* F */, "NOPRIV",
                       "insufficient privilege or object protection violation");

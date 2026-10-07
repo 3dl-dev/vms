@@ -109,7 +109,6 @@ struct dcl_context {
     uint32_t uic_group;
     uint32_t uic_member;
     uint64_t privileges;
-    uint16_t default_protection;
     int logged_in;
 
     /* Open file channels (OPEN command).

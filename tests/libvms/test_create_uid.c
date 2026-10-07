@@ -15,6 +15,7 @@
 
 #include "ssdef.h"
 #include "starlet.h"
+#include "prcdef.h"
 
 static int pass = 0, fail = 0;
 #define CHECK(c, m) do { if (c) { printf("  PASS: %s\n", m); pass++; } \
@@ -73,7 +74,28 @@ int main(void)
     int same_node = 1;
     for (int i = 1; i < N; i++)
         if (memcmp(uids[i] + 10, uids[0] + 10, 6) != 0) same_node = 0;
-    CHECK(same_node && (uids[0][10] & 0x01), "the node field is stable per process with the multicast bit set");
+    CHECK(same_node, "the node field is stable for the process");
+
+    /* The node field is the SCSNODE name, blank-padded to six characters (the lab
+     * OpenVMS Alpha V8.4 node's uids carry "ALPHA1" there). With no readable SCSNODE
+     * the fallback is a random node with the multicast bit set. */
+    {
+        char scs[16];
+        uint16_t sl = 0;
+        struct item_list_3 il[2];
+        memset(scs, 0, sizeof scs);
+        il[0].buflen = 6; il[0].item_code = SYI$_SCSNODE; il[0].bufaddr = scs; il[0].retlen = &sl;
+        il[1].buflen = 0; il[1].item_code = 0; il[1].bufaddr = NULL; il[1].retlen = NULL;
+        if ((sys$getsyiw(0, NULL, NULL, il, NULL, NULL, 0) & 1) && sl > 0) {
+            char want[6];
+            memset(want, ' ', sizeof want);
+            memcpy(want, scs, sl < 6 ? sl : 6);
+            CHECK(memcmp(uids[0] + 10, want, 6) == 0,
+                  "the node field is the blank-padded SCSNODE name");
+        } else {
+            CHECK(uids[0][10] & 0x01, "no SCSNODE readable: the node field is random with the multicast bit");
+        }
+    }
 
     CHECK(sys$create_uid(NULL) == SS$_ACCVIO, "a NULL buffer is refused with SS$_ACCVIO");
 

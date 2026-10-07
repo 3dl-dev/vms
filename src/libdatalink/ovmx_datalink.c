@@ -262,6 +262,14 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
     return 0;
 }
 
+int scs_datalink_set_recv_timeout_ms(int fd, int ms)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    s->timeout_ms = (uint32_t)(ms > 0 ? ms : 1);
+    return 0;
+}
+
 #else  /* !SCS_DATALINK_VIA_EXECUTIVE -- the AF_PACKET PROBE backend */
 
 /* ---- AF_PACKET PROBE backend: a clean-room RE / ORACLE INSTRUMENT ONLY ----
@@ -359,6 +367,15 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
     struct timeval tv;
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+int scs_datalink_set_recv_timeout_ms(int fd, int ms)
+{
+    struct timeval tv;
+    if (ms <= 0) ms = 1;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
     return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
@@ -728,6 +745,15 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
     struct timeval tv;
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
+    return ioctl(fd, BIOCSRTIMEOUT, &tv);
+}
+
+int scs_datalink_set_recv_timeout_ms(int fd, int ms)
+{
+    struct timeval tv;
+    if (ms <= 0) ms = 1;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
     return ioctl(fd, BIOCSRTIMEOUT, &tv);
 }
 

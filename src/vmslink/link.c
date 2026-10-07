@@ -1231,6 +1231,8 @@ struct import {
     uint64_t plt_va;       /* PLT stub address (assigned at layout) */
     uint64_t got_va;       /* GOT cell address (assigned at layout) */
     int      is_data;      /* 1 = DATA import (GOT-read), 0 = call import (PLT) */
+    int      is_long;      /* EVAX/Alpha only: 1 = EVAX_R_REFLONG import (a 32-bit
+                            * cell; OVMX_IMP_LONG). */
     int      is_codeaddr;  /* EVAX/Alpha only: 1 = EVAX_R_CODEADDR import (a
                             * single-cell CODE-ENTRY reference the caller jsr's
                             * through directly). IMGACT must fill the code entry
@@ -1341,7 +1343,8 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
          * vms-32e1 / vms-e06. */
         ie[o].sv_index = imp[i].svidx
                        | ((is_evax && !imp[i].is_data)    ? OVMX_IMP_LINKAGE  : 0u)
-                       | ((is_evax && imp[i].is_codeaddr) ? OVMX_IMP_CODEADDR : 0u);
+                       | ((is_evax && imp[i].is_codeaddr) ? OVMX_IMP_CODEADDR : 0u)
+                       | ((is_evax && imp[i].is_long)     ? OVMX_IMP_LONG     : 0u);
         ie[o].patch_off = imp[i].got_va;
         ie[o].req_major = ps[imp[i].pidx].sv->gsmatch_major;
         ie[o].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
@@ -3818,8 +3821,8 @@ static uint8_t *evax_ensure_content(struct evax_section *sec)
  *     leave R27 = PV = PDSC, so they stay consistent for the port's sequence.
  *   REFQUAD / CODEADDR: a data pointer to the imported symbol; the 8-byte site IS
  *     the slot IMGACT fills. patch_off = site.
- * A cross-image REFLONG (a 32-bit slot) cannot hold a 64-bit run-time address, so
- * it is rejected honestly rather than truncated. */
+ *   REFLONG: a 32-bit-pointer consumer's longword cell (OVMX_IMP_LONG); IMGACT
+ *     fills it and refuses a value outside the 32-bit address space. */
 static void evax_add_ximport(struct evax_input *in, int ii,
                              struct evax_section *sec, const struct evax_reloc *r,
                              struct producer *producers, int pidx, uint32_t svidx,
@@ -3841,9 +3844,12 @@ static void evax_add_ximport(struct evax_input *in, int ii,
         putl64(c + r->address, 0);        /* IMGACT fills = imported symbol address    */
         break;
     case EVAX_R_REFLONG:
-        die("cross-image REFLONG import unsupported (a 32-bit slot cannot hold a "
-            "64-bit run-time address) — the alpha-dec-vms port imports via "
-            "LINKAGE/REFQUAD");
+        /* A 32-bit-pointer (DEC C default) consumer storing an imported
+         * procedure value or data address: a longword cell. Shareables are
+         * activated in P0 (vms-035), so the run-time value is a 32-bit address;
+         * IMGACT fills the longword and refuses one that is not. */
+        if (r->address + 4 > sec->alloc) die("cross-image REFLONG site past psect end");
+        putl32(c + r->address, 0);
         break;
     default:
         die("unexpected relocation type for a cross-image import");
@@ -3868,6 +3874,7 @@ static void evax_add_ximport(struct evax_input *in, int ii,
      * vms_imp_write sets OVMX_IMP_CODEADDR and IMGACT's single-cell branch derefs.
      * (vms-e06: OTS$ZERO/OTS$MOVE arrive as CODEADDR; OTS$HOME_ARGS as REFQUAD.) */
     e->is_codeaddr = (r->type == EVAX_R_CODEADDR);
+    e->is_long     = (r->type == EVAX_R_REFLONG);
     e->is_weak = 0;
     (*n_ximport)++;
     fprintf(stderr, "%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "

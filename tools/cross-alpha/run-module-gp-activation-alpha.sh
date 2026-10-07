@@ -404,7 +404,7 @@ assert_p32() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
-  port_ok=$(grep -qaF 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 ' "$log" && echo 1 || echo 0)
+  port_ok=$(grep -qaF 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 fnptr=1 ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then
@@ -1205,9 +1205,9 @@ EOF
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     _st=$(mktemp -d); _fails=0
-    printf '%s\n%s\n' 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 argc=1' \
+    printf '%s\n%s\n' 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 fnptr=1 argc=1' \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
-    printf '%s\n%s\n' 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=0 tok=0 sort=1 argc=1' \
+    printf '%s\n%s\n' 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=0 tok=0 sort=1 fnptr=1 argc=1' \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/wide.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
       'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"

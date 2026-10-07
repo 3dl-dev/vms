@@ -838,6 +838,9 @@ uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
  * image to inherit and read back. cliflag == 0 means "no CLI". */
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
 
+/* $SETDFPROT -- process default file protection, held by the executive. */
+uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
+
 /* Read this process's own invoking CLI context. *cliflag (optional) is nonzero
  * iff a CLI launched it; command/command_size receive the NUL-terminated line;
  * *length (optional) its true byte length. */

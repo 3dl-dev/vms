@@ -29,6 +29,15 @@ $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
 | `SS$_NOTALLPRIV`   |  1664 | `%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized`   |
 | (`SS$_RESULTOVF`)  |   532 | `%SYSTEM-F-RESULTOVF, resultant string overflow`                  |
 
+**Erratum (vms-f811, 2026-10-05).** The symbol's value is **1665**, not 1664: the lab
+node's own `STARLET.MLB` prints `$EQU SS$_NOTALLPRIV 1665`
+(`docs/oracle/vax73-starlet-defs/SSDEF.txt`) and `F$MESSAGE(1665)` is
+`%SYSTEM-S-NOTALLPRIV, not all requested privileges authorized` -- severity SUCCESS,
+a partial-success condition like `SS$_SUPERSEDE`. The `F$MESSAGE(1664)` line above
+also prints (as `W`) because `F$MESSAGE` keys on the message id and takes the severity
+letter from the low three bits of whatever code it is handed; it does not make 1664 the
+symbol's value. Tree values moved to 1665 under vms-f811.
+
 **Defect this disproves.** `src/libvms/include/ssdef.h` carried
 `SS$_NOTALLPRIV 532`. 532 is `RESULTOVF`. Corrected to 1664 under this item.
 This is the same class of error vms-8019 found on eight other `ssdef.h`

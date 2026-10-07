@@ -104,6 +104,55 @@ uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
                                char *authed_user, size_t authed_user_cap);
 
 /*
+ * The identity a successful connect-time authentication establishes -- what
+ * the FAL server process is created with (rd vms-d85): the account's UIC, its
+ * DEFAULT privileges and its SYS$LOGIN, straight from the SYSUAF record the
+ * password was verified against.
+ */
+struct dnet_fal_identity {
+    char     username[33];
+    uint32_t uic;                 /* (group << 16) | member */
+    uint64_t def_privs;           /* uaf$q_def_priv          */
+    char     default_dir[256];    /* SYSUAF default device:[directory] */
+};
+
+/*
+ * dnet_fal_connect_auth_id - dnet_fal_connect_auth, plus the authenticated
+ * account's identity in *id on SS$_NORMAL (zeroed on any refusal).
+ */
+uint32_t dnet_fal_connect_auth_id(const uint8_t *conn_data, size_t conn_len,
+                                  struct dnet_fal_identity *id);
+
+/*
+ * FILE NAME RESOLUTION for the FAL server (directory list + NAME): begin a
+ * search of `spec` (wildcards allowed), return each RESULTANT spec
+ * ("DEV:[DIR]NAME.TYP;V"), end. The shipped implementation is RMS $PARSE +
+ * $SEARCH over the ACP (dnet_fal_search.c); 0 = ok / a match, -1 = no (more)
+ * files or failure. Never composes a name RMS did not return.
+ */
+int  dnet_fal_search_begin(const char *spec, void **ctx);
+int  dnet_fal_search_next(void *ctx, char *rsa, size_t cap);
+void dnet_fal_search_end(void *ctx);
+
+/* Record output for a FAL CREATE: $CREATE the file (sequential, the given
+ * RMS record format + attributes) returning its RESULTANT spec, $PUT records
+ * verbatim, $CLOSE. RMS over the ACP (dnet_fal_search.c); 0 = ok, -1 = fail. */
+int  dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h,
+                    char *rsa, size_t cap);
+int  dnet_fal_wput(void *h, const uint8_t *rec, size_t len);
+int  dnet_fal_wclose(void *h);
+
+/* Record input for a FAL OPEN (and the COPY client's local source): $OPEN the
+ * file and $GET its records through RMS -- which knows the file's record
+ * format (VAR, STM*, FIX), so a record is exactly what TYPE shows, NULs and
+ * all. *rfm / *rat (may be NULL) receive the file's real record format and
+ * attributes for the ATTRIBUTES reply. rget: 1 = a record (len in *len),
+ * 0 = end of file, -1 = error. 0 = ok / -1 = fail elsewhere. */
+int  dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat);
+int  dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len);
+int  dnet_fal_rclose(void *h);
+
+/*
  * dnet_fal_server_run - serve one AUTHENTICATED, ACCEPTED FAL session to
  * completion. The caller has already run dnet_fal_connect_auth (got SS$_NORMAL)
  * and accepted the link (sent the Connect Confirm), so this runs only the DAP
@@ -117,6 +166,20 @@ uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
  * connect-time gate already ran; this half only moves the file.
  */
 uint32_t dnet_fal_server_run(struct dnet_dap_transport *t);
+
+/*
+ * dnet_fal_server_set_default - the default device:[directory] a peer's
+ * filespec is completed against: the accessed user's login directory, as a VMS
+ * network job resolves a remote "FILE.TXT" in SYS$LOGIN. A spec with no device
+ * and no directory gets both; one with a [directory] but no device gets the
+ * device; one naming a device or logical ("SYS$LOGIN:X") is left as is. NULL
+ * or "" clears it. (FAL.EXE sets it from the link block, rd vms-d85.)
+ */
+void dnet_fal_server_set_default(const char *default_dir);
+
+/* Exposed for the host test: apply the default above to `spec`. 0, or -1 when
+ * the result would not fit `cap` (the spec is then refused, never truncated). */
+int dnet_fal_apply_default(const char *spec, char *out, size_t cap);
 
 /*
  * dnet_fal_client_put - `$ COPY local remote::` : send the local sequential file

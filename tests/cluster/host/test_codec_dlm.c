@@ -4,7 +4,7 @@
  *
  * Four groups:
  *   1. Fixture round trip: ENQ request/grant/deny/CONVERT, and the three
- *      vms-c03 ops ($DEQ 0x03, BLKAST 0x04, value-block CONVERT 0x06) -- parse each
+ *      vms-c03 ops ($DEQ 0x03, BLKAST 0x05, value-block CONVERT 0x06) -- parse each
  *      into the typed struct, build back from ONLY the typed fields (never
  *      the fixture buffer), and assert every CITED byte of the DLM body
  *      span (abs 72-204) is reproduced exactly. The shared header/envelope
@@ -271,7 +271,9 @@ static void test_deq_release(void)
 }
 
 /*
- * op 0x04 = BLKAST, and THE GUARD: the reference frame has a readable
+ * op 0x05 = BLKAST (rd vms-ea1), and THE GUARD: a real BLKAST names its lock
+ * by lock-id only, and the specimen's old 'F11B$aSYSDSK1' came from a
+ * DIFFERENT frame -- an op-0x04 directory removal -- with a readable
  * resource name at body[48] that belongs to a DIFFERENT lock. The codec must
  * have no way to surface it. That is asserted here the only way an absent
  * field can be: the struct has no name member (a compile-time fact a reviewer
@@ -285,8 +287,8 @@ static void test_blkast(void)
 	uint8_t built[256];
 	uint32_t written = 0;
 
-	printf("-- dlm-blkast: op 0x04 is BLKAST (vms-c03, f58 of "
-	       "dlm-blk2-20260911.pcap)\n");
+	printf("-- dlm-blkast: op 0x05 is BLKAST (vms-c03 record 48 of "
+	       "dlm-blk2-20260911.pcap, rd vms-ea1)\n");
 	ct_check(f != NULL, "fixture loads");
 	if (f == NULL)
 		return;
@@ -527,10 +529,39 @@ static void test_grant_valblk(void)
 }
 
 /*
+ * rd vms-ea1: the frame the first vms-c03 reading took for a BLKAST was a NAMED
+ * op 0x04 -- a master removing its directory entry -- whose lock-id span is a
+ * stale copy of the real BLKAST's. A real named op 0x04 (the vms-8219 fixture,
+ * VAX3 removing its entry for a resource it mastered) must therefore be
+ * refused by the BLKAST parser, and still be read as a removal.
+ */
+static void test_named_op04_is_not_a_blkast(void)
+{
+	const struct vms_fixture *rm = fixture("dlm-dir-remove-vax3");
+	struct vms_frame_info fi;
+	struct vms_dlm_blkast b;
+	struct vms_dlm_res_ident id;
+
+	ct_check(rm != NULL, "the real named op-0x04 fixture loads");
+	if (rm == NULL)
+		return;
+	(void)vms_frame_classify(rm->bytes, rm->wire_len, &fi);
+	ct_check(vms_dlm_blkast_parse(rm->bytes, rm->wire_len, &fi, &b) ==
+		 VMS_CODEC_E_CLASS,
+		 "*** a real named op 0x04 is REFUSED by the BLKAST parser ***");
+	ct_check(vms_dlm_res_ident_parse_body(rm->bytes + VMS_OFF_SYSAP_BODY,
+					      rm->wire_len - VMS_OFF_SYSAP_BODY,
+					      &id) == VMS_CODEC_OK &&
+		 id.name_len > 0u,
+		 "  and it still reads as a named directory-entry removal");
+}
+
+/*
  * THE SUPERSESSION, asserted rather than merely documented. The phantom ops
- * are gone as VALUES: 0x03 and 0x04 now mean $DEQ and BLKAST, and a parser for
- * one refuses the other's frame. A tree that quietly kept a "completion 0x04"
- * alive somewhere would show up here as a parse that succeeds when it must
+ * are gone as VALUES: 0x03 means $DEQ and 0x05 means BLKAST (rd vms-ea1), and a
+ * parser for one refuses the other's frame. A tree that quietly kept a
+ * "completion 0x04" -- or the "BLKAST 0x04" the first vms-c03 reading claimed
+ * -- alive somewhere would show up here as a parse that succeeds when it must
  * not.
  */
 static void test_superseded_opcodes_are_one_meaning_each(void)
@@ -543,14 +574,14 @@ static void test_superseded_opcodes_are_one_meaning_each(void)
 	uint8_t op = 0;
 	struct vms_dlm_enq_request req;
 
-	printf("-- one opcode, one meaning: 0x03 is $DEQ and 0x04 is BLKAST, "
+	printf("-- one opcode, one meaning: 0x03 is $DEQ and 0x05 is BLKAST, "
 	       "and neither is anything else\n");
 	if (deq == NULL || blk == NULL) {
 		ct_check(0, "both fixtures load");
 		return;
 	}
 
-	ct_check(VMS_DLM_WIREOP_DEQ == 0x03u && VMS_DLM_WIREOP_BLKAST == 0x04u &&
+	ct_check(VMS_DLM_WIREOP_DEQ == 0x03u && VMS_DLM_WIREOP_BLKAST == 0x05u &&
 		 VMS_DLM_WIREOP_CONVERT_VALBLK == 0x06u,
 		 "the opcode values are the captured ones");
 
@@ -566,6 +597,8 @@ static void test_superseded_opcodes_are_one_meaning_each(void)
 	ct_check(vms_dlm_deq_parse(blk->bytes, blk->wire_len, &fi, &d) ==
 		 VMS_CODEC_E_CLASS,
 		 "the $DEQ parser REFUSES a BLKAST frame");
+
+	test_named_op04_is_not_a_blkast();
 }
 
 static void test_fixture_roundtrips(void)
@@ -723,7 +756,7 @@ static void test_allowlist_rows(void)
 				VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_BLKAST);
 	ct_check(e != NULL && e->action == VMS_WIRE_ACT_CONSUME &&
 		 e->recipe == 0u,
-		 "op 0x04 (BLKAST) resolves to CONSUME with no response recipe");
+		 "op 0x05 (BLKAST) resolves to CONSUME with no response recipe");
 
 	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
 				VMS_DLM_CAT_REQUEST,
@@ -732,12 +765,14 @@ static void test_allowlist_rows(void)
 		 e->recipe == 0u,
 		 "op 0x06 (value-block CONVERT) resolves to CONSUME");
 
-	/* Still ungrounded, still absent: an allowlist row asserts "grounded in
-	 * the reference", and op 0x05 / 0x09 / 0x0a appear in the vms-c03
-	 * captures without any correlation that says what they mean. */
+	/* Still absent: an allowlist row asserts "grounded in the reference" for
+	 * a LOCK-ID op. op 0x05 left this list when rd vms-ea1 grounded it as the
+	 * BLKAST; op 0x04 is not a lock-id op at all (named, it is the directory
+	 * removal the vms-8219 directory role consumes), and op 0x09 / 0x0a
+	 * still appear in the vms-c03 captures without any correlation. */
 	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
-				VMS_DLM_CAT_REQUEST, 0x05u);
-	ct_check(e == NULL, "op 0x05 (seen but ungrounded) is NOT in the table");
+				VMS_DLM_CAT_REQUEST, 0x04u);
+	ct_check(e == NULL, "op 0x04 (the directory removal) has no lock-id row");
 }
 
 /* ---- group 4: THE HARD-LESSON TEST ------------------------------------ */
@@ -768,8 +803,8 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	 * THE PHANTOM IS GONE, THE GUARD IS NOT. The frames this test used to
 	 * cover -- the PROVISIONAL "completion 0x04 / commit 0x03" pair -- do
 	 * not exist on a real wire and no longer exist in this codec. The
-	 * lesson they taught does: the $DEQ and the BLKAST that really do live
-	 * at those opcodes are lock-id-ONLY messages, so a placeholder there is
+	 * lesson they taught does: the $DEQ and the BLKAST (0x03, 0x05) are
+	 * lock-id-ONLY messages, so a placeholder there is
 	 * strictly worse than it was on a completion.
 	 */
 	memset(&d, 0, sizeof(d));
@@ -800,11 +835,11 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 		 "  a BLKAST with two real nonzero lock ids builds");
 	b.master_lkid = VMS_DLM_LKID_UNSET;
 	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
-		 VMS_CODEC_E_INVAL, "  master_lkid==0 REFUSED on BLKAST (0x04)");
+		 VMS_CODEC_E_INVAL, "  master_lkid==0 REFUSED on BLKAST (0x05)");
 	b.master_lkid = 0x00020017u;
 	b.req_lkid = VMS_DLM_LKID_UNSET;
 	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
-		 VMS_CODEC_E_INVAL, "  req_lkid==0 REFUSED on BLKAST (0x04)");
+		 VMS_CODEC_E_INVAL, "  req_lkid==0 REFUSED on BLKAST (0x05)");
 
 	/* A refused build writes NOTHING -- the caller's frame is untouched,
 	 * so a caller that ignored the status cannot transmit a half-built
@@ -842,8 +877,8 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	 * AND THE SAME REFUSAL ON THE PARSE SIDE, which the completion codec
 	 * never had. These three ops name their lock by lock-id and by nothing
 	 * else, so "the peer sent zero" may not be surfaced as "the peer named
-	 * a lock". The vms-c03 blk capture really does contain cat-0x02 op-0x04
-	 * frames with a zero there.
+	 * a lock". The vms-c03 blk capture really does contain cat-0x02 frames
+	 * whose lock-id span is zero or stale.
 	 */
 	f = fixture("dlm-blkast");
 	if (f != NULL) {

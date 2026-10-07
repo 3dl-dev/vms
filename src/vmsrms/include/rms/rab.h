@@ -14,21 +14,21 @@
 #define RAB$C_BLN   sizeof(struct RAB)
 
 /* RAB options (rab$l_rop) */
-#define RAB$M_EOF   0x0001  /* Position to EOF */
-#define RAB$M_FDL   0x0002  /* Fast delete */
-#define RAB$M_UIF   0x0004  /* Update if existent */
+#define RAB$M_EOF   0x0100  /* Position to EOF */
+#define RAB$M_FDL   0x0040  /* Fast delete */
+#define RAB$M_UIF   0x0010  /* Update if existent */
 #define RAB$M_HSH   0x0008  /* Use hash */
-#define RAB$M_LOA   0x0010  /* Follow load */
-#define RAB$M_KGE   0x0020  /* Key >= */
-#define RAB$M_KGT   0x0040  /* Key > */
-#define RAB$M_NLK   0x0080  /* No lock */
-#define RAB$M_RLK   0x0100  /* Read lock */
+#define RAB$M_LOA   0x2000  /* Follow load */
+#define RAB$M_KGE   0x200000  /* Key >= */
+#define RAB$M_KGT   0x400000  /* Key > */
+#define RAB$M_NLK   0x100000  /* No lock */
+#define RAB$M_RLK   0x80000  /* Read lock */
 #define RAB$M_RAH   0x0200  /* Read ahead */
 #define RAB$M_WBH   0x0400  /* Write behind */
-#define RAB$M_LOC   0x0800  /* Locate mode */
-#define RAB$M_PMT   0x1000  /* Prompt */
-#define RAB$M_TPT   0x2000  /* Truncate put */
-#define RAB$M_NXT   0x4000  /* Next record (skip deleted) */
+#define RAB$M_LOC   0x10000  /* Locate mode */
+#define RAB$M_PMT   0x40000000  /* Prompt */
+#define RAB$M_TPT   0x0002  /* Truncate put */
+#define RAB$M_NXT   0x400000  /* Next record (skip deleted) */
 
 /* Record File Address */
 typedef struct {

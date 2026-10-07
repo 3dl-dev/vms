@@ -53,12 +53,14 @@
  *     genuinely not audited (SS$_NORMAL, nothing written). A caller that FORCES
  *     a record (NSA$M_NOEVTCHECK or NSA$M_MANDATORY) is refused SS$_UNSUPPORTED
  *     rather than told a record was written.
- * OVMX-USERSPACE: sys$create_uid (vms-44a) -- generated in this process: the
- *     clock (sys$gettim), a per-process random clock sequence and a random
- *     47-bit node (sys$get_entropy), laid out as an OSF DCE / RFC 4122
- *     version-1 uuid. Uniqueness is the usual uuid argument (time + sequence +
- *     node), not an executive-issued number; the field layout is the DCE uuid's,
- *     not observed from a VMS $CREATE_UID.
+ * OVMX-PARTIAL: sys$create_uid (vms-44a) -- exec: the node field is the system's
+ *     SCSNODE name, read through $GETSYI (the same as the lab OpenVMS Alpha V8.4
+ *     node, whose uids carry "ALPHA1" there).
+ * OVMX-LOCAL: sys$create_uid -- the uid is assembled in this process as an OSF DCE
+ *     uuid version 1: the clock (sys$gettim), a per-process random clock sequence
+ *     (sys$get_entropy) and that node field. Uniqueness is the uuid argument (time +
+ *     sequence + node), not an executive-issued number. A node with no readable
+ *     SCSNODE falls back to a random multicast-bit node (RFC 4122 4.5).
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights
@@ -79,6 +81,7 @@
 #include "vms_kif.h"
 #include "prvdef.h"
 #include "nsadef.h"
+#include "prcdef.h"      /* SYI$_SCSNODE */
 
 /*
  * Protection access type flags and category offsets -- aliased onto the
@@ -393,16 +396,16 @@ uint32_t (sys$audit_eventw)(uint32_t efn, uint32_t flags, const void *itmlst,
 /*
  * sys$create_uid - create a universal identifier (a 128-bit unique value).
  *
- * An OSF DCE uuid, version 1 (RFC 4122 section 4.2): the 60-bit count of 100 ns
- * intervals since 15-OCT-1582 (the VMS system time plus the 1582->1858 offset),
- * a 14-bit clock sequence, and a node field. A faithful IEEE address is not
- * available to a process here, so the node is 47 random bits with the multicast
- * bit set (RFC 4122 section 4.5: such a node can never collide with a real
- * address). The timestamp never repeats within a process: if the clock has not
- * advanced since the last uid, it is bumped by one tick.
- *
- * Layout (bytes): time_low[4] time_mid[2] time_hi_and_version[2]
- *                 clock_seq_hi_and_reserved[1] clock_seq_low[1] node[6]
+ * Observed on the lab OpenVMS Alpha V8.4 node (a MACRO-32 program calling the
+ * service twice and printing the four longwords): an OSF DCE uuid, version 1 --
+ *   time_low[4] time_mid[2] time_hi_and_version[2]  the 100 ns count since
+ *       15-OCT-1582 (the VMS system time + the 1582->1858 offset), version nibble 1;
+ *   clock_seq_hi_and_reserved[1] clock_seq_low[1]   variant 10xx, 14-bit sequence,
+ *       constant between the two calls;
+ *   node[6]  the SCSNODE name ("ALPHA1" there), not an IEEE address;
+ * and the timestamp advances by exactly 1 between back-to-back calls. This does
+ * the same: SCSNODE (blank-padded to 6) for the node, the clock for the time,
+ * bumped by one tick if it has not advanced.
  */
 #include <pthread.h>
 
@@ -415,6 +418,7 @@ uint32_t (sys$create_uid)(void *uid)
     static uint16_t clock_seq;
     static uint8_t  node[6];
     static int      seeded;
+    static int      node_from_scsnode; (void)node_from_scsnode;
     uint64_t now;
     uint8_t out[16];
 
@@ -433,7 +437,22 @@ uint32_t (sys$create_uid)(void *uid)
         }
         clock_seq = (uint16_t)(((r[0] << 8) | r[1]) & 0x3FFF);
         memcpy(node, r + 2, 6);
-        node[0] |= 0x01;             /* multicast bit: not an IEEE address */
+        node[0] |= 0x01;             /* fallback: multicast bit, not an IEEE address */
+        {
+            /* The node field is the SCSNODE name, blank-padded to six characters. */
+            char scs[16];
+            uint16_t sl = 0;
+            struct item_list_3 il[2];
+            memset(scs, 0, sizeof scs);
+            il[0].buflen = 6; il[0].item_code = SYI$_SCSNODE;
+            il[0].bufaddr = scs; il[0].retlen = &sl;
+            il[1].buflen = 0; il[1].item_code = 0; il[1].bufaddr = NULL; il[1].retlen = NULL;
+            if ((sys$getsyiw(0, NULL, NULL, il, NULL, NULL, 0) & 1) && sl > 0) {
+                memset(node, ' ', sizeof node);
+                memcpy(node, scs, sl < 6 ? sl : 6);
+                node_from_scsnode = 1;
+            }
+        }
         seeded = 1;
     }
     uint64_t t = now + UID_VMS_TO_UUID_EPOCH;

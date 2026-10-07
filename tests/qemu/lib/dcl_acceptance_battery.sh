@@ -1121,6 +1121,68 @@ run_dcl_acceptance_battery() {
     wait_for '$ ' 20 "$FAL_OFF"
 
     # =======================================================================
+    # DECnet FAL SERVER PROCESS PERSONA (rd vms-d85, R4 G3). An inbound FAL
+    # access must run with the AUTHENTICATED user's identity, never NETACP's:
+    # NETACP $CREPRCs SYS$SYSTEM:FAL.EXE with the user's UIC + default
+    # privileges and the DAP session moves through its link mailboxes. The
+    # DIFFERENTIAL is the proof -- the SAME SYSTEM-only file through the SAME
+    # path is served to SYSTEM and REFUSED to GUEST, and the server process's
+    # executive row carries the user's UIC. HARD GATE where DECNETD.EXE ships.
+    local FALP_OFF; FALP_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --fal-proc-accept-test'
+    if wait_for 'IVIMAGE' 15 "$FALP_OFF"; then
+        note "FAL persona [vms-d85]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-FAL-PROC-ACCEPT:' 240 "$FALP_OFF" &&
+         tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT: NOIMAGE'; then
+        note "FAL persona [vms-d85]: SYS\$SYSTEM:FAL.EXE is not on THIS runtime's system disk (the VAX/Alpha staging follow-on), so the FAL server-process persona proof DID NOT RUN here"
+    elif tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT:'; then
+        local FALPSEG; FALPSEG=$(tail -c "+$((FALP_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: PASS' \
+            "FAL persona [vms-d85]: the inbound FAL access ran in a FAL.EXE server process with the authenticated user's identity (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$FALPSEG" 'runs with GUEST'"'"'s UIC [128,129], NOT NETACP'"'"'s' \
+            "FAL persona [vms-d85]: the server process for GUEST carries GUEST's UIC in its executive row"
+        must_have "$FALPSEG" 'SYSTEM GETs the file through the FAL server process, records BYTE-MATCH' \
+            "FAL persona [vms-d85]: the path itself works (SYSTEM reads the file through it) -- so GUEST's refusal below is the persona, not a broken path"
+        must_have "$FALPSEG" 'checked against the user, not the daemon' \
+            "FAL persona [vms-d85]: GUEST is REFUSED the SYSTEM-only file SYSTEM just read"
+        must_not_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: FAIL' \
+            "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
+        negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"
+    else
+        bad "FAL persona [vms-d85]: DECNETD.EXE --fal-proc-accept-test produced no verdict line within 240s -- the persona proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung session)"
+    fi
+    wait_for '$ ' 20 "$FALP_OFF"
+
+    # =======================================================================
+    # NETACP INBOUND SESSION POOL (rd vms-6af1, R4 G2). NETACP's REAL dispatch
+    # with this process playing several remote nodes: object-42 sessions are
+    # REAL RTAn: + LOGINOUT; object 17 lands on a FAL.EXE server as the user.
+    # One stalling peer can no longer hold the only SET HOST slot: a second
+    # session is admitted, a node is capped at its share, the pool is bounded,
+    # and a freed slot is reused. HARD GATE where DECNETD.EXE ships.
+    local POOL_OFF; POOL_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --netacp-pool-selftest'
+    if wait_for 'IVIMAGE' 15 "$POOL_OFF"; then
+        note "NETACP pool [vms-6af1]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the session-pool proof DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-POOL-SELFTEST:' 240 "$POOL_OFF"; then
+        local POOLSEG; POOLSEG=$(tail -c "+$((POOL_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: PASS' \
+            "NETACP pool [vms-6af1]: the inbound session pool behaved on the real executive (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$POOLSEG" 'a SECOND inbound SET HOST is accepted while the first is live' \
+            "NETACP pool [vms-6af1]: a second inbound SET HOST is admitted while the first is live (G2: no single slot to monopolise)"
+        must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
+            "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
+        must_have "$POOLSEG" 'running as [128,129]' \
+            "NETACP pool [vms-6af1/vms-d85]: an inbound FAL connect lands on a FAL.EXE server process running as the authenticated user"
+        must_not_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: FAIL' \
+            "NETACP pool [vms-6af1]: no assertion in the session-pool proof failed"
+        negctl "$POOLSEG" 'DECNETD-I-POOL' "DECnet NETACP session pool"
+    else
+        bad "NETACP pool [vms-6af1]: DECNETD.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
+    fi
+    wait_for '$ ' 20 "$POOL_OFF"
+
+    # =======================================================================
     # DECnet _NET: $QIO BROKER — T1 MAILBOX TRANSPORT (vms-22c, a1-2 slice 2b).
     # The exec<->NETACP hop the broker rides: a client $CREMBXs a reply mailbox,
     # marshals a broker request carrying reply_unit, and writes it to NETACP's

@@ -1016,8 +1016,14 @@ static bool creprc_ticket_stale(const struct vms_creprc_ticket *t, uint64_t now)
 
     if (now - t->issued > (uint64_t)VMS_CREPRC_TICKET_TTL_SECS * 10000000ull)
         return true;
-    c = find_by_vms_pid(t->creator_vms_pid);
-    return c == NULL || (uint32_t)c->linux_pid != t->creator_linux_pid;
+    /* The creator is identified by its Linux pid, not its VMS PID: an image
+     * DCL activated through the fork()+execve() fallback is a CONTINUATION
+     * row that shares DCL's VMS PID with its own Linux pid, so
+     * find_by_vms_pid() can return DCL's row and call a live creator stale
+     * (seen: DECNETD.EXE run from DCL could not create a detached FAL.EXE --
+     * every claim NOPRIV -- while RUN/DETACHED from DCL itself worked). */
+    c = find_by_linux_pid(t->creator_linux_pid);
+    return c == NULL || c->vms_pid != t->creator_vms_pid;
 }
 
 /*
@@ -1666,6 +1672,34 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_dfprot - $SETDFPROT: store and/or read the caller's OWN default file
+ * protection. Self-targeted. The executive owns the value (it is not a userspace cache):
+ * a later image or subprocess inherits it at REGISTER_CONTINUE time, so a protection set
+ * by DCL is the one every program it runs sees.
+ */
+long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dfprot_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&vms_proc_hash_lock);
+    args.oldprot = proc->dfprot_set ? proc->dfprot : VMS_DFPROT_INITIAL;
+    if (args.set) {
+        proc->dfprot = (uint16_t)(args.newprot & 0xFFFFu);
+        proc->dfprot_set = 1;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

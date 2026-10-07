@@ -1,0 +1,47 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-7 - OpenVMS-compatible
+     7-OCT-2026 22:37:32.96
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[  148.404567] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[  148.431872] %PEA0, frames addressed to another station reach this port; each is refused and counted
+[  148.570237] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+[  148.694397] %PEA0, channel verified
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  7-OCT-2026 22:38:58.86
+[  148.814267] %PEA0, virtual circuit open
+[  149.609247] %CNXMAN, a connection manager was discovered on the interconnect
+[  149.647307] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  150.464822] %CNXMAN, waiting for the cluster member to send its cluster parameters before asking for admission
+[  151.181567] %PEA0, channel verified
+[  151.310782] %PEA0, virtual circuit open
+[  151.515662] %CNXMAN, waiting for connectivity to every cluster member before asking for admission
+[  151.550577] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[  151.838922] %CNXMAN, a connection manager was discovered on the interconnect
+[  152.092592] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[  154.669807] %CNXMAN, sending VAXcluster membership request to the selected member
+[  155.232742] %CNXMAN, the cluster assigned this node a cluster system id
+[  155.427732] %CNXMAN, the cluster assigned this node a cluster system id
+[  155.578312] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[  161.221627] %CNXMAN, this node is a member of the cluster
+[  161.312827] %CNXMAN, VAXcluster state transition in progress
+[  161.324322] %CNXMAN, this node is now a VAXcluster member
+[  161.337382] %CNXMAN, system 00000000000007c3 was added to the cluster
+[  161.353237] %CNXMAN, system 00000000000007c4 was added to the cluster
+[  161.370402] %CNXMAN, system 00000000000007c5 was added to the cluster
+[  161.506347] %CNXMAN, transaction close not answered: this node holds no value for a required field

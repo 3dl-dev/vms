@@ -310,6 +310,9 @@
  * by the implementer of vms-2b8 (docs/oracle/vax73-privileges.md §1):
  *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
  *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
+ * (vms-f811: the lab's own $SSDEF gives the SYMBOL the value 1665, severity S;
+ * F$MESSAGE prints the message for 1664 too because it keys on the id and takes
+ * the severity letter from the code's low bits. The value below is 1665.)
  *
  * This tree's src/libvms/include/ssdef.h carried 532, which the SAME
  * oracle disproves in the same session:
@@ -320,7 +323,7 @@
  * SS__NOPRIV (36) was verified in the same session and already agreed:
  *   36=%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation
  */
-#define SS__NOTALLPRIV  1664
+#define SS__NOTALLPRIV  1665   /* the V7.3 $SSDEF value (vms-f811; severity SUCCESS, a partial-success condition) */
 
 /*
  * Logical-name statuses (vms-d37). Values are this tree's existing
@@ -924,6 +927,12 @@ struct vms_proc {
     uint16_t            cli_length;       /* length of cli_command in bytes */
     char                cli_command[VMS_CLI_CMDLINE_SIZE];
 
+    /* $SETDFPROT: the process default file protection (VMS_IOCTL_DFPROT); inherited at
+     * REGISTER_CONTINUE like identity. dfprot_set == 0 means "never set": reads report
+     * VMS_DFPROT_INITIAL. Same hash_lock as the identity fields. */
+    uint16_t            dfprot;
+    uint8_t             dfprot_set;
+
     struct rcu_head     rcu;
 };
 
@@ -1422,6 +1431,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the

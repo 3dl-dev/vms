@@ -27,6 +27,8 @@ int main(void)
     const uint8_t *b = (const uint8_t *)&h;
     CHECK(b[1] == (want & 0xFF) && b[2] == ((want >> 8) & 0xFF) && b[3] == ((want >> 16) & 0xFF),
           "the mask occupies header bytes 1..3 (little-endian)");
+    h.opc$b_ms_target = OPC$M_NM_CENTRL;   /* what real programs write (sys_sndopr.c) */
+    CHECK(b[1] == OPC$M_NM_CENTRL, "assigning the opc$b_ms_target member works as in VMS sources");
     CHECK(b[0] == OPC$_RQ_RQST, "the type byte is untouched at +0");
     CHECK(OPC$K_MS_HDRLEN == 8 && offsetof(struct opcdef, opc$l_ms_rqstid) == 4,
           "header length 8, request id at +4, text at +8");

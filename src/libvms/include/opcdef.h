@@ -65,14 +65,16 @@
 /*
  * Layout per the OPCDEF oracle offsets (rd vms-f811 follow-up; docs/oracle/*-starlet-defs/
  * OPCDEF.txt): OPC$B_MS_TYPE @0, OPC$B_MS_TARGET @1 with OPC$S_MS_TARGET_CLASSES == 3 (the
- * target operator classes are a 24-bit mask in bytes 1..3, which is why OPC$M_NM_OPER1..12
+ * target operator classes are a 24-bit mask in bytes 1..3 -- the first byte is the member
+ * programs assign, the rest overlays the reply status word -- which is why OPC$M_NM_OPER1..12
  * run up to bit 23; OPC$W_MS_STATUS overlays bytes 2..3 in a reply), OPC$L_MS_RQSTID @4,
  * OPC$L_MS_TEXT @8. The earlier struct had a one-byte target and an invented length word at +2
  * that nothing read, so every class above bit 7 was silently truncated.
  */
 struct opcdef {
     uint8_t  opc$b_ms_type;      /* @0  Message type (OPC$_RQ_*) */
-    uint8_t  opc$b_ms_target[3]; /* @1  Target operator class mask, little-endian 24 bits */
+    uint8_t  opc$b_ms_target;    /* @1  Target operator classes, bits 7:0 (programs assign this byte) */
+    uint16_t opc$w_ms_target_hi; /* @2  classes bits 23:8 (OVMX name; $OPCDEF overlays OPC$W_MS_STATUS here) */
     uint32_t opc$l_ms_rqstid;    /* @4  Request ID (set by sys$sndopr) */
     /* Message text follows immediately (variable length) */
     char     opc$l_ms_text[1];   /* @8  First byte of message text */
@@ -81,13 +83,11 @@ typedef struct opcdef OPCDEF;
 
 /* Store / fetch the 24-bit target-class mask (OPC$M_NM_*). */
 #define OPC$SET_TARGET(hdr, mask) do { \
-        (hdr).opc$b_ms_target[0] = (uint8_t)((mask));         \
-        (hdr).opc$b_ms_target[1] = (uint8_t)((mask) >> 8);    \
-        (hdr).opc$b_ms_target[2] = (uint8_t)((mask) >> 16);   \
+        (hdr).opc$b_ms_target    = (uint8_t)((mask));          \
+        (hdr).opc$w_ms_target_hi = (uint16_t)((mask) >> 8);    \
     } while (0)
 #define OPC$GET_TARGET(hdr) \
-    ((uint32_t)(hdr).opc$b_ms_target[0] | ((uint32_t)(hdr).opc$b_ms_target[1] << 8) | \
-     ((uint32_t)(hdr).opc$b_ms_target[2] << 16))
+    ((uint32_t)(hdr).opc$b_ms_target | ((uint32_t)(hdr).opc$w_ms_target_hi << 8))
 
 #include <stddef.h>
 _Static_assert(offsetof(struct opcdef, opc$b_ms_target) == 1, "OPC$B_MS_TARGET @1 per the OPCDEF oracle");

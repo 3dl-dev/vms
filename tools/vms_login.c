@@ -1001,6 +1001,7 @@ static int run_network_permit_selftest(void)
      * flag lives in the RAW record read by sysuaf_password_expired(). */
     memset(&r, 0, sizeof(r));
     sysuaf__put_le32(r.raw.uaf$l_flags, UAI$M_PWD_EXPIRED);
+    r.raw.uaf$b_flags_layout = UAF$K_FLAGS_LAYOUT_V73;
     NP_CHECK(loginout_network_permit(&r) == 0,
              "an account with an EXPIRED password is refused (no silent pass)");
 

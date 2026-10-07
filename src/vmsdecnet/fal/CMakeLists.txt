@@ -17,12 +17,12 @@
 # is authenticated before any file is served (INV-6, the no-auth-FAL analogue of
 # the CTERM hole); a bad password is refused by real Purdy. NO
 # fork/exec/openpty/dup2, NO raw-fd/raw-termios file mechanics.
-add_library(vmsdecnet_fal STATIC dnet_fal.c dnet_nodespec.c)
+add_library(vmsdecnet_fal STATIC dnet_fal.c dnet_nodespec.c dnet_fal_search.c)
 target_include_directories(vmsdecnet_fal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(vmsdecnet_fal PUBLIC
-    vmsdecnet_dap vmsdecnet_cterm vms vmsfs vmssys)
+    vmsdecnet_dap vmsdecnet_cterm vms vmsfs vmssys vmslnm)
 
 # rd vms-d85 (R4 G3): the FAL NETWORK SERVER PROCESS. dnet_fal_proc is both
 # halves of the NETACP <-> FAL.EXE mailbox link: NETACP creates the server with
@@ -31,7 +31,8 @@ target_link_libraries(vmsdecnet_fal PUBLIC
 # executive ACP against the user's identity -- never NETACP's.
 target_sources(vmsdecnet_fal PRIVATE dnet_fal_proc.c)
 target_include_directories(vmsdecnet_fal PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/libvmssys)
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include)
 
 add_executable(fal_exe fal_main.c fal_rms_bind.c)
 target_link_libraries(fal_exe PRIVATE vmsdecnet_fal vmsdecnet_dap vmsrms)

@@ -536,11 +536,15 @@ static void drive_relay_acks(uint32_t n_members)
 		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 }
 
+/* The other members answer their commits first, then the subject (rd vms-9484). */
 static void drive_commit_ack(uint32_t n_members)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
 	uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	uint32_t i;
 
+	for (i = 0; i < n_members; i++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
 }
 
@@ -727,17 +731,55 @@ static void test_relay_precedes_commit(void)
 
 		(void)coord_feed(&g.c, f, n, CSB_VAX2);
 	}
-	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 1,
-			"both answered: the subject is committed");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 2,
+			"both answered: the commit goes to the two other "
+			"members first (rd vms-9484)");
+	{
+		uint8_t f[VMS_CM_FRAME_LEN];
+		uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+
+		(void)coord_feed(&g.c, f, n, 1);
+		ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT),
+				2, "one member's answer does not commit the "
+				"subject");
+		(void)coord_feed(&g.c, f, n, CSB_VAX2);
+	}
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 3,
+			"every member answered: NOW the subject is committed");
 	{
 		const struct sent_frame *s =
-			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0);
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 2);
 
 		ct_check_eq_u32(s->dst, JOIN_CSID,
 				"addressed to the CSID we assigned the joiner");
 		ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_ROLE), VMS_CM_ROLE_COMMIT,
 				"role slot 0x20 (spec sec 4(r))");
 	}
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMMIT,
+		 "still committing until the subject answers");
+}
+
+/*
+ * rd vms-9484: an answer to a commit this node never sent -- the subject's,
+ * before its own commit went out -- is not an answer. It neither commits nor
+ * opens anything.
+ */
+static void test_subject_answer_before_its_commit_is_ignored(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n;
+
+	printf("\n-- the subject cannot answer a commit it was never sent --\n");
+	bed_init(2);
+	n = mk_join_request(f);
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMMIT,
+		 "an early 'answer' from the subject opens nothing");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 2,
+			"and commits nobody new");
 }
 
 static void test_two_node_cluster_has_an_empty_relay_set(void)
@@ -2140,6 +2182,7 @@ int main(void)
 	test_already_coordinating_refuses();
 
 	test_relay_precedes_commit();
+	test_subject_answer_before_its_commit_is_ignored();
 	test_two_node_cluster_has_an_empty_relay_set();
 
 	test_csid_assignment_and_the_reference_bitmap();

@@ -4195,6 +4195,9 @@ static void usage(const char *argv0)
         "                      SYSUAF/Purdy auth (bad password REFUSED), then a\n"
         "                      sequential file transferred BOTH directions\n"
         "                      through real DAP + RMS over the ACP, byte-verified\n"
+        "  --netacp-pool-selftest  run NETACP's inbound session-pool proof (booted\n"
+        "                      executive): concurrent SET HOST sessions, per-node\n"
+        "                      cap, bounded pool, FAL dispatch (rd vms-6af1)\n"
         "  --fal-proc-accept-test  run the FAL server-PROCESS persona proof (booted\n"
         "                      executive): FAL.EXE runs with the authenticated\n"
         "                      user's UIC; GUEST is refused a SYSTEM-only file\n"
@@ -4226,6 +4229,462 @@ static void usage(const char *argv0)
         "                      from inherited fd N (never from argv or the env)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
         (unsigned)DNET_ROUTER_PRIORITY_DEFAULT);
+}
+
+/*
+ * ================ NETACP INBOUND SESSION POOL (rd vms-6af1, vms-d85) ================
+ *
+ * WHY A POOL. The first inbound rung served ONE session at a time over the
+ * engine's single logical link: an unauthenticated peer that connected and
+ * stalled at LOGINOUT's "Username:" (then reconnected the moment LOGINOUT's
+ * login read timed out) could hold the only slot continuously and deny every
+ * legitimate inbound SET HOST (docs/security/decnet-networking-r4-sweep.md G2).
+ * Real VMS serves many concurrent network sessions, bounded by the executor's
+ * MAXIMUM LINKS. NETACP now keeps a bounded pool of NETACP_MAX_SESSIONS logical
+ * links (each slot its own NSP link state -- a dnet_engine used ONLY for its
+ * link FSM; routing/HELLO stay on the node's engine) and refuses a peer more
+ * than NETACP_MAX_PER_SOURCE concurrent sessions, so one source cannot fill the
+ * pool. The per-source cap is an OVMX hardening choice (LABELLED), not a VMS
+ * parameter. Each session is still bounded in time by its own server: LOGINOUT's
+ * login-read deadline for SET HOST, the FAL server's idle bound for FAL.
+ *
+ * TWO OBJECTS, BOTH THE VMS WAY. Object 42 (CTERM): an executive-minted RTAn:
+ * with LOGINOUT $CREPRC'd onto it; the remote authenticates fresh. Object 17
+ * (FAL): the connect-carried credentials are authenticated at connect, then a
+ * FAL.EXE network server process runs the access with the USER's UIC and
+ * privileges (dnet_fal_proc.h). NETACP holds no credential beyond the check
+ * and serves no file itself.
+ */
+#define NETACP_MAX_SESSIONS   8
+#define NETACP_MAX_PER_SOURCE 2
+
+struct netacp_slot {
+    int      used;
+    int      object;                    /* 42 = CTERM, 17 = FAL               */
+    struct dnet_engine lk;              /* this session's NSP link state       */
+    uint16_t peer;                      /* remote node (area<<10|node)         */
+    uint8_t  peer_mac[6];
+    struct dnet_cterm_host_session host;/* object 42                          */
+    struct dnet_fal_proc fal;           /* object 17                          */
+};
+
+/* The wire NETACP's sessions transmit on: the datalink, or (the booted pool
+ * selftest only) a capture so the test plays the remote peers itself. */
+static ssize_t (*g_netacp_tx)(int, int, uint16_t, const uint8_t *,
+                              const uint8_t *, size_t) = scs_datalink_send;
+
+static void netacp_send(int sock, unsigned ifindex, const uint8_t mac[6],
+                        const uint8_t *f, size_t n)
+{
+    (void)g_netacp_tx(sock, (int)ifindex, DNET_ETHERTYPE, mac, f, n);
+}
+
+/* End a session: tell the remote (CTERM unbind / NSP disconnect), release the
+ * local side, free the slot. Safe on an unused slot. */
+static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
+                            dnet_tick_t now, const char *why)
+{
+    if (!sl->used) return;
+    uint8_t buf[DNET_FRAME_MAX], fr[DNET_FRAME_MAX];
+    size_t n = 0, fn = 0;
+    if (sl->object == DNET_CTERM_OBJECT && sl->host.active &&
+        dnet_cterm_unbind(&sl->host.cterm, DNET_CTERM_UNBIND_NORMAL, buf, sizeof buf, &n) == 0 &&
+        dnet_engine_link_send(&sl->lk, buf, n, fr, sizeof fr, &fn, now) == 0)
+        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+    if (dnet_link_is_up(&sl->lk.link) &&
+        dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn, now) == 0)
+        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+    if (sl->object == DNET_CTERM_OBJECT) (void)dnet_cterm_host_close(&sl->host);
+    if (sl->object == DNET_FAL_OBJECT)   dnet_fal_proc_close(&sl->fal);
+    log_ts(stdout);
+    printf(" DECNETD-I-SESSEND, inbound %s session %s ended (%s)\n",
+           sl->object == DNET_FAL_OBJECT ? "FAL" : "SET HOST",
+           sl->object == DNET_FAL_OBJECT ? "" : sl->host.devnam, why);
+    fflush(stdout);
+    memset(sl, 0, sizeof *sl);
+}
+
+/* Pump every live session's local side once. Returns the number live. */
+static int netacp_service_sessions(struct netacp_slot *slots, int sock,
+                                   unsigned ifindex, dnet_tick_t now)
+{
+    int live = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
+        struct netacp_slot *sl = &slots[i];
+        if (!sl->used) continue;
+        live++;
+        uint8_t buf[DNET_FAL_SEG_MAX], fr[DNET_FRAME_MAX];
+        size_t fn = 0;
+        if (sl->object == DNET_CTERM_OBJECT) {
+            /* Whatever LOGINOUT/DCL wrote to the session's RTAn: goes to the
+             * remote terminal as CTERM Writes. A PIPE, nothing more. */
+            long got = dnet_cterm_host_read(&sl->host, buf, sizeof buf);
+            if (got > 0 && dnet_cterm_is_bound(&sl->host.cterm)) {
+                uint8_t cpdu[DNET_CTERM_MAX_PDU]; size_t clen = 0;
+                if (dnet_cterm_write(&sl->host.cterm, buf, (size_t)got,
+                                     DNET_CTERM_WR_NOFORMAT, cpdu, sizeof cpdu, &clen) == 0 &&
+                    dnet_engine_link_send(&sl->lk, cpdu, clen, fr, sizeof fr, &fn, now) == 0)
+                    netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+            } else if (got < 0 || !dnet_cterm_host_alive(&sl->host)) {
+                /* Logged out, or LOGINOUT refused / timed out and exited --
+                 * the executive's process table is the authority. */
+                netacp_slot_end(sl, sock, ifindex, now, "the session process exited");
+            }
+        } else {
+            size_t n = 0; uint32_t xst = 0;
+            int r;
+            while ((r = dnet_fal_proc_poll(&sl->fal, buf, sizeof buf, &n, &xst)) == 1) {
+                if (dnet_engine_link_send(&sl->lk, buf, n, fr, sizeof fr, &fn, now) == 0)
+                    netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+            }
+            if (r == 2 || r < 0 || !dnet_fal_proc_alive(&sl->fal))
+                netacp_slot_end(sl, sock, ifindex, now, "the FAL server finished");
+        }
+    }
+    return live;
+}
+
+/* Refuse a Connect Initiate we hold no slot for, with `reason`. */
+static void netacp_refuse(struct dnet_engine *tmp, int sock, unsigned ifindex,
+                          const uint8_t mac[6], uint16_t reason, dnet_tick_t now)
+{
+    uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
+    if (dnet_engine_link_close(tmp, reason, fr, sizeof fr, &fn, now) == 0)
+        netacp_send(sock, ifindex, mac, fr, fn);
+}
+
+static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_engine *node,
+                                  int sock, unsigned ifindex, const uint8_t *rx, size_t n,
+                                  dnet_tick_t now, uint16_t *next_lla)
+{
+    uint8_t src_id[DNET_ADDR_LEN];
+    const uint8_t *pdu = NULL; size_t pdu_len = 0;
+    if (dnet_engine_parse_data_frame(rx, n, src_id, NULL, &pdu, &pdu_len) != DNET_ENGINE_OK)
+        return;
+    struct dnet_nsp_msg in;
+    if (dnet_nsp_decode(pdu, pdu_len, &in, NULL) != DNET_NSP_OK)
+        return;
+    uint16_t peer = dnet_addr_from_id(src_id);
+    const uint8_t *mac = rx + 6;
+    uint8_t reply[DNET_FRAME_MAX]; size_t rlen = 0; int has = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+
+    /* Find this frame's session: by OUR link address, or -- a retransmitted
+     * Connect Initiate -- by the peer's (node, link address). */
+    struct netacp_slot *sl = NULL;
+    for (int i = 0; i < NETACP_MAX_SESSIONS && !sl; i++) {
+        struct netacp_slot *c = &slots[i];
+        if (!c->used || c->peer != peer) continue;
+        if (in.type == DNET_NSP_T_CI ? c->lk.link.remote_addr == in.srcaddr
+                                     : c->lk.link.local_addr == in.dstaddr)
+            sl = c;
+    }
+
+    if (sl) {
+        if (dnet_engine_link_rx(&sl->lk, now, rx, n, reply, sizeof reply, &rlen,
+                                &has, &ev) != 0)
+            return;
+        if (has) netacp_send(sock, ifindex, sl->peer_mac, reply, rlen);
+        if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF) {
+            sl->lk.link_active = 0;
+            netacp_slot_end(sl, sock, ifindex, now, "the remote disconnected");
+            return;
+        }
+        if (ev != DNET_LINK_EV_DATA) return;
+        if (sl->object == DNET_FAL_OBJECT) {
+            if (dnet_fal_proc_put(&sl->fal, sl->lk.rx_data, sl->lk.rx_datalen) != 0)
+                netacp_slot_end(sl, sock, ifindex, now, "FAL server link lost");
+            return;
+        }
+        /* CTERM: the FSM decodes; a Bind is answered, keystrokes go to the
+         * session's terminal -- to LOGINOUT, which decides any login. */
+        enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+        if (dnet_cterm_rx(&sl->host.cterm, sl->lk.rx_data, sl->lk.rx_datalen, &cev)
+                != DNET_CTERM_OK)
+            return;
+        uint8_t cpdu[DNET_CTERM_MAX_PDU], df[DNET_FRAME_MAX]; size_t clen = 0, dlen = 0;
+        if (cev == DNET_CTERM_EV_BIND_IND) {
+            if (dnet_cterm_bind_accept(&sl->host.cterm, node->node_name, cpdu,
+                                       sizeof cpdu, &clen) == 0 &&
+                dnet_engine_link_send(&sl->lk, cpdu, clen, df, sizeof df, &dlen, now) == 0)
+                netacp_send(sock, ifindex, sl->peer_mac, df, dlen);
+        } else if (cev == DNET_CTERM_EV_READ_DATA) {
+            if (sl->host.cterm.last.datalen)
+                (void)dnet_cterm_host_write(&sl->host, sl->host.cterm.last.data,
+                                            sl->host.cterm.last.datalen);
+            if (sl->host.cterm.last.terminator) {
+                uint8_t nl = sl->host.cterm.last.terminator;
+                (void)dnet_cterm_host_write(&sl->host, &nl, 1);
+            }
+        } else if (cev == DNET_CTERM_EV_OOB) {
+            uint8_t ob = sl->host.cterm.last.oob_char;
+            (void)dnet_cterm_host_write(&sl->host, &ob, 1);
+        } else if (cev == DNET_CTERM_EV_UNBOUND) {
+            netacp_slot_end(sl, sock, ifindex, now, "the remote unbound");
+        }
+        return;
+    }
+
+    if (in.type != DNET_NSP_T_CI)
+        return;                                 /* not ours: honestly dropped */
+
+    /* A NEW Connect Initiate. Decode it on a scratch link first. */
+    static struct dnet_engine tmp;
+    tmp = *node;
+    tmp.link_active = 0;
+    if (dnet_engine_link_rx(&tmp, now, rx, n, reply, sizeof reply, &rlen, &has, &ev) != 0 ||
+        ev != DNET_LINK_EV_CONNECT_IND)
+        return;
+    int obj = dnet_cterm_sc_connect_object(tmp.link.conn_data, tmp.link.conn_len);
+
+    int free_i = -1, from_peer = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
+        if (!slots[i].used) { if (free_i < 0) free_i = i; }
+        else if (slots[i].peer == peer) from_peer++;
+    }
+    char pa[8];
+    if (obj != DNET_CTERM_OBJECT && obj != DNET_FAL_OBJECT) {
+        netacp_refuse(&tmp, sock, ifindex, mac, DNET_LINK_REASON_OBJREJ, now);
+        log_ts(stdout);
+        printf(" DECNETD-I-CONNREJ, inbound connect from %s to object %d refused"
+               " (no such object served here)\n", dnet_addr_str(peer, pa, sizeof pa), obj);
+        fflush(stdout);
+        return;
+    }
+    if (free_i < 0 || from_peer >= NETACP_MAX_PER_SOURCE) {
+        netacp_refuse(&tmp, sock, ifindex, mac, DNET_LINK_REASON_RESOURCE, now);
+        log_ts(stdout);
+        printf(" DECNETD-I-CONNREJ, inbound connect from %s to object %d refused"
+               " (%s)\n", dnet_addr_str(peer, pa, sizeof pa), obj,
+               free_i < 0 ? "all inbound sessions are in use"
+                          : "that node already holds its share of sessions");
+        fflush(stdout);
+        return;
+    }
+
+    sl = &slots[free_i];
+    memset(sl, 0, sizeof *sl);
+    sl->lk = tmp;
+    sl->peer = peer;
+    sl->object = obj;
+    memcpy(sl->peer_mac, mac, 6);
+    sl->host.master_fd = -1;
+    uint32_t cst;
+    if (obj == DNET_CTERM_OBJECT) {
+        /* THE ISOLATION SEAM (vms-515 §3.4): low-privilege bounded parse into a
+         * validated descriptor; the privileged path sees only that. */
+        struct dnet_conn_descriptor desc;
+        if (dnet_conn_descriptor_from_wire(sl->lk.link.conn_data, sl->lk.link.conn_len,
+                                           sl->lk.link.remote_node, &desc) != DNET_CTERM_OK)
+            cst = SS$_BADPARAM;
+        else
+            cst = dnet_cterm_host_open_desc(&sl->host, &desc);
+        if (!(cst & 1)) {
+            netacp_refuse(&sl->lk, sock, ifindex, mac, DNET_LINK_REASON_OBJREJ, now);
+            fprintf(stderr, "DECNETD-E-NOSESSION, inbound SET HOST refused: the session"
+                    " could not be created (status %08X); no unauthenticated shell is"
+                    " substituted\n", (unsigned)cst);
+            memset(sl, 0, sizeof *sl);
+            return;
+        }
+    } else {
+        /* FAL: authenticate the connect-carried credentials, then run the
+         * access in a FAL.EXE server process AS THAT USER (rd vms-d85). */
+        struct dnet_fal_identity id;
+        cst = dnet_fal_connect_auth_id(sl->lk.link.conn_data, sl->lk.link.conn_len, &id);
+        if (cst == SS$_NORMAL)
+            cst = dnet_fal_proc_start(&sl->fal, id.uic, id.def_privs, id.username,
+                                      id.default_dir);
+        memset(&id, 0, sizeof id);
+        if (!(cst & 1)) {
+            netacp_refuse(&sl->lk, sock, ifindex, mac,
+                          (cst == SS$_INVLOGIN || cst == SS$_NOPRIV)
+                              ? DNET_LINK_REASON_ACCESS : DNET_LINK_REASON_OBJREJ, now);
+            log_ts(stdout);
+            printf(" DECNETD-I-CONNREJ, inbound FAL connect from %s refused (status"
+                   " %08X) -- no file access without authentication\n",
+                   dnet_addr_str(peer, pa, sizeof pa), (unsigned)cst);
+            fflush(stdout);
+            memset(sl, 0, sizeof *sl);
+            return;
+        }
+    }
+    sl->used = 1;
+    uint16_t lla = (*next_lla)++;
+    if (*next_lla < 0x2100) *next_lla = 0x2100;
+    uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
+    if (dnet_engine_link_accept(&sl->lk, lla, fr, sizeof fr, &fn, now) == 0)
+        netacp_send(sock, ifindex, mac, fr, fn);
+    log_ts(stdout);
+    if (obj == DNET_CTERM_OBJECT)
+        printf(" DECNETD-I-SESSTART, inbound SET HOST accepted on %s -- LOGINOUT is"
+               " authenticating (Remote Port Info: %s)\n", sl->host.devnam,
+               sl->host.remote_port_info);
+    else
+        printf(" DECNETD-I-FALSTART, inbound FAL access from %s accepted -- served by"
+               " FAL.EXE pid %08X as UIC [%o,%o]\n", dnet_addr_str(peer, pa, sizeof pa),
+               (unsigned)sl->fal.pid, (unsigned)(sl->fal.uic >> 16),
+               (unsigned)(sl->fal.uic & 0xffff));
+    fflush(stdout);
+}
+
+
+/*
+ * --netacp-pool-selftest (rd vms-6af1, booted battery). Drives NETACP's REAL
+ * dispatch (netacp_dispatch_frame / netacp_service_sessions) with this process
+ * playing several remote peers: real Connect Initiates in, the replies captured
+ * off NETACP's transmit hook. On the booted executive each accepted object-42
+ * session is a REAL RTAn: + LOGINOUT ($CREPRC), so the proof is that:
+ *   - a SECOND session is accepted while the first is live (no single slot);
+ *   - a node holding its NETACP_MAX_PER_SOURCE sessions is refused another
+ *     (reason 1, resources) while OTHER nodes are still admitted;
+ *   - the pool caps at NETACP_MAX_SESSIONS, and a slot freed by a remote
+ *     disconnect is reusable.
+ * That is the R4 G2 property: one stalling peer can no longer deny SET HOST.
+ */
+static uint8_t g_cap[DNET_FRAME_MAX]; static size_t g_caplen; static int g_capn;
+static ssize_t netacp_tx_capture(int fd, int ifx, uint16_t et, const uint8_t *mac,
+                                 const uint8_t *f, size_t n)
+{
+    (void)fd; (void)ifx; (void)et; (void)mac;
+    if (n <= sizeof g_cap) { memcpy(g_cap, f, n); g_caplen = n; g_capn++; }
+    return (ssize_t)n;
+}
+
+/* Open a CTERM link from peer node `pn` with link address `lla`; returns 1 if
+ * NETACP confirmed it, 0 if it refused (*reason set), -1 on a harness error. */
+static int pool_connect_obj(struct dnet_engine *peer_eng, const struct dnet_engine *node,
+                            struct netacp_slot *slots, uint16_t *next_lla, uint16_t lla,
+                            uint16_t *reason, int obj, const char *user, const char *pw)
+{
+    uint8_t conn[128], f[DNET_FRAME_MAX], rep[DNET_FRAME_MAX];
+    size_t cl = 0, fl = 0, rl = 0; int has = 0; enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    if (dnet_cterm_sc_connect_build(obj, "POOLT", 0x0001, 0x0004,
+                                    user, pw, "", conn, sizeof conn, &cl) != 0 ||
+        dnet_engine_link_open(peer_eng, dnet_area_of(node->addr), dnet_node_of(node->addr),
+                              lla, conn, cl, 1459, 1, DNET_NSP_VER_41, f, sizeof f,
+                              &fl, 10) != 0)
+        return -1;
+    g_capn = 0;
+    netacp_dispatch_frame(slots, node, -1, 0, f, fl, 10, next_lla);
+    if (g_capn == 0) return -1;
+    if (dnet_engine_link_rx(peer_eng, 11, g_cap, g_caplen, rep, sizeof rep, &rl, &has, &ev) != 0)
+        return -1;
+    if (ev == DNET_LINK_EV_CONNECT_CONF) return 1;
+    *reason = peer_eng->link.disc_reason;
+    return 0;
+}
+
+static int pool_connect(struct dnet_engine *peer_eng, const struct dnet_engine *node,
+                        struct netacp_slot *slots, uint16_t *next_lla, uint16_t lla,
+                        uint16_t *reason)
+{
+    return pool_connect_obj(peer_eng, node, slots, next_lla, lla, reason,
+                            DNET_CTERM_OBJECT, "", "");
+}
+
+static int run_netacp_pool_selftest(void)
+{
+    printf("DECNETD-I-POOL, NETACP inbound session pool: %d sessions, %d per node"
+           " (rd vms-6af1, R4 G2)\n", NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
+    int pass = 0, fail = 0;
+#define PL_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+    g_netacp_tx = netacp_tx_capture;
+    static struct netacp_slot slots[NETACP_MAX_SESSIONS];
+    memset(slots, 0, sizeof slots);
+    uint16_t next_lla = 0x2100;
+    const uint8_t hw[6] = { 0x02,0,0,0,0,0x2a };
+    static struct dnet_engine node, peers[NETACP_MAX_SESSIONS + 2];
+    dnet_engine_init(&node, 1, 42, "OVMX", "EWA0", NULL, hw, 0, 0, 0);
+
+    /* Object 17 through the SAME dispatch: a bad password is refused at
+     * connect with reason 34 (what a real VMS FAL answers, rd vms-a8a lab) and
+     * no server is created; GUEST/GUEST is accepted onto a FAL.EXE server
+     * process running as GUEST (rd vms-d85). */
+    {
+        static struct dnet_engine fe;
+        uint8_t fhw[6] = { 0x02,0,0,0,4,0 };
+        dnet_engine_init(&fe, 1, 300, "PEER", "EWA0", NULL, fhw, 0, 0, 0);
+        uint16_t why = 0;
+        int r = pool_connect_obj(&fe, &node, slots, &next_lla, 0x3e00, &why,
+                                 DNET_FAL_OBJECT, "GUEST", "WRONGPW");
+        PL_CHECK(r == 0 && why == DNET_LINK_REASON_ACCESS,
+                 "an inbound FAL connect with a BAD password is refused at connect (reason 34, access control rejected)");
+        dnet_engine_init(&fe, 1, 300, "PEER", "EWA0", NULL, fhw, 0, 0, 0);
+        r = pool_connect_obj(&fe, &node, slots, &next_lla, 0x3e01, &why,
+                             DNET_FAL_OBJECT, "GUEST", "GUEST");
+        int ok = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            if (slots[i].used && slots[i].object == DNET_FAL_OBJECT &&
+                slots[i].fal.uic == ((128u << 16) | 129u) && dnet_fal_proc_alive(&slots[i].fal))
+                ok = 1;
+        PL_CHECK(r == 1 && ok,
+                 "an inbound FAL connect GUEST/GUEST is accepted onto a live FAL.EXE server process running as [128,129]");
+        uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+        if (dnet_engine_link_close(&fe, DNET_LINK_REASON_NORMAL, f, sizeof f, &fl, 12) == 0)
+            netacp_dispatch_frame(slots, &node, -1, 0, f, fl, 12, &next_lla);
+        int used = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++) used += slots[i].used;
+        PL_CHECK(used == 0, "the FAL session ends when the remote disconnects (slot freed)");
+    }
+
+    /* Peer i is node 1.(100 + i/2): two links per peer node. */
+    int confirmed = 0, refused_res = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
+        uint8_t phw[6] = { 0x02,0,0,0,1,(uint8_t)i };
+        dnet_engine_init(&peers[i], 1, (unsigned)(100 + i / 2), "PEER", "EWA0", NULL, phw, 0, 0, 0);
+        uint16_t why = 0;
+        int r = pool_connect(&peers[i], &node, slots, &next_lla, (uint16_t)(0x3000 + i), &why);
+        if (r == 1) confirmed++;
+        else printf("  NOTE: session %d not confirmed (r=%d reason=%u)\n", i, r, why);
+        if (i == 1)
+            PL_CHECK(r == 1 && confirmed == 2,
+                     "a SECOND inbound SET HOST is accepted while the first is live (no single slot)");
+        if (i % 2 == 1) {
+            /* that node now holds its share: a third from it is refused */
+            static struct dnet_engine extra;
+            uint8_t ehw[6] = { 0x02,0,0,0,2,(uint8_t)i };
+            dnet_engine_init(&extra, 1, (unsigned)(100 + i / 2), "PEER", "EWA0", NULL, ehw, 0, 0, 0);
+            uint16_t why2 = 0;
+            int r2 = pool_connect(&extra, &node, slots, &next_lla, (uint16_t)(0x3800 + i), &why2);
+            if (r2 == 0 && why2 == DNET_LINK_REASON_RESOURCE) refused_res++;
+        }
+    }
+    PL_CHECK(confirmed == NETACP_MAX_SESSIONS,
+             "the pool admits NETACP_MAX_SESSIONS concurrent sessions, each a real RTAn: + LOGINOUT");
+    PL_CHECK(refused_res == NETACP_MAX_SESSIONS / 2,
+             "a node already holding its share of sessions is REFUSED another (reason 1) while other nodes are admitted");
+    {
+        uint8_t phw[6] = { 0x02,0,0,0,3,0 };
+        dnet_engine_init(&peers[NETACP_MAX_SESSIONS], 1, 200, "PEER", "EWA0", NULL, phw, 0, 0, 0);
+        uint16_t why = 0;
+        int r = pool_connect(&peers[NETACP_MAX_SESSIONS], &node, slots, &next_lla, 0x3f00, &why);
+        PL_CHECK(r == 0 && why == DNET_LINK_REASON_RESOURCE,
+                 "a fresh node is refused (reason 1) once the pool is full -- bounded, never unbounded");
+    }
+    /* A remote disconnect frees its slot, which is then reusable. */
+    {
+        uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+        if (dnet_engine_link_close(&peers[0], DNET_LINK_REASON_NORMAL, f, sizeof f, &fl, 20) == 0)
+            netacp_dispatch_frame(slots, &node, -1, 0, f, fl, 20, &next_lla);
+        int used = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++) used += slots[i].used;
+        uint16_t why = 0;
+        uint8_t phw[6] = { 0x02,0,0,0,3,1 };
+        dnet_engine_init(&peers[NETACP_MAX_SESSIONS + 1], 1, 201, "PEER", "EWA0", NULL, phw, 0, 0, 0);
+        int r = pool_connect(&peers[NETACP_MAX_SESSIONS + 1], &node, slots, &next_lla, 0x3f01, &why);
+        PL_CHECK(used == NETACP_MAX_SESSIONS - 1 && r == 1,
+                 "a remote disconnect frees its slot and a new session reuses it");
+    }
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        netacp_slot_end(&slots[i], -1, 0, 30, "selftest teardown");
+    g_netacp_tx = scs_datalink_send;
+    printf("DECNETD-I-POOL, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-POOL-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-POOL-SELFTEST: FAIL\n");
+    return 1;
+#undef PL_CHECK
 }
 
 int main(int argc, char **argv)
@@ -4305,6 +4764,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
         else if (!strcmp(argv[i], "--fal-proc-accept-test")) fal_proc_accept_test = 1;
+        else if (!strcmp(argv[i], "--netacp-pool-selftest")) return run_netacp_pool_selftest();
         else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
         else if (!strcmp(argv[i], "--copy-accept-test")) copy_accept_test = 1;
         else if (!strcmp(argv[i], "--copy-transport-selftest")) copy_xport_test = 1;
@@ -4601,11 +5061,13 @@ int main(int argc, char **argv)
     dnet_engine_show_circuit(&eng, stdout);
     /* Say, honestly, whether this NETACP serves inbound $ SET HOST. When it
      * does, an inbound object-42 connect reaches LOGINOUT on an executive-minted
-     * RTAn: (one session at a time); the remote user authenticates fresh. */
+     * RTAn: (a bounded pool of sessions, rd vms-6af1); the remote user authenticates fresh. */
     log_ts(stdout);
     if (cterm_server)
         printf(" DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
-               " Control object 42 -> LOGINOUT on RTAn:); one session at a time\n");
+               " Control object 42 -> LOGINOUT on RTAn:) and file access (object"
+               " 17 -> FAL.EXE as the user); up to %d sessions, %d per node\n",
+               NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
     else
         printf(" DECNETD-I-ROUTEONLY, NOT serving inbound $ SET HOST"
                " (routing only)\n");
@@ -4645,16 +5107,10 @@ int main(int argc, char **argv)
     uint8_t frame[DNET_FRAME_MAX];
     uint8_t rxbuf[DNET_FRAME_MAX];
 
-    /* The inbound-$-SET-HOST session this endnode is currently serving
-     * (--cterm-server). One at a time in this rung; the state is only ever the
-     * executive's device name plus the CTERM FSM -- no credential, no shell. */
-    struct dnet_cterm_host_session host;
-    int host_active = 0;
-    char session_devnam[DNET_CTERM_HOST_DEVNAM] = {0};
-    uint8_t peer_mac[6] = {0};
-
-    memset(&host, 0, sizeof(host));
-    host.master_fd = -1;
+    /* The inbound sessions this node serves: a bounded pool (rd vms-6af1). */
+    static struct netacp_slot slots[NETACP_MAX_SESSIONS];
+    memset(slots, 0, sizeof slots);
+    uint16_t next_lla = 0x2100;
 
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
@@ -4701,89 +5157,13 @@ int main(int argc, char **argv)
             fflush(stdout);
         }
 
-        /*
-         * SERVE THE LIVE SESSION'S TERMINAL (rd vms-f40, --cterm-server).
-         *
-         * Whatever LOGINOUT/DCL has written to the session's RTAn: is carried
-         * to the remote terminal as CTERM Write PDUs inside NSP data segments.
-         * This daemon is a PIPE here and nothing more: it holds no credential,
-         * makes no login decision and spawns nothing -- the process on the
-         * other end of that terminal is the one authenticating, and it was
-         * created by $CREPRC, not by this program.
-         *
-         * poll() rather than the bare 1-second datalink timeout, so an
-         * interactive session is not typed into at one character a second;
-         * the 250 ms cap still lets the T3 cadence and the listen sweep fire.
-         */
-        if (cterm_server && host_active) {
-            struct pollfd pfd[2];
-            int nfds = 1;
-
-            pfd[0].fd = sock;         pfd[0].events = POLLIN; pfd[0].revents = 0;
-            pfd[1].fd = dnet_cterm_host_fd(&host); pfd[1].events = POLLIN; pfd[1].revents = 0;
-            if (pfd[1].fd >= 0)
-                nfds = 2;
-            (void)poll(pfd, (unsigned)nfds, 250);
-
-            if (nfds == 2 && (pfd[1].revents & (POLLIN | POLLHUP | POLLERR))) {
-                uint8_t out[DNET_CTERM_MAX_DATA];
-                long got = dnet_cterm_host_read(&host, out, sizeof(out));
-
-                if (got > 0 && dnet_cterm_is_bound(&host.cterm)) {
-                    uint8_t cpdu[DNET_CTERM_MAX_PDU], dframe[DNET_FRAME_MAX];
-                    size_t clen = 0, dlen = 0;
-                    if (dnet_cterm_write(&host.cterm, out, (size_t)got,
-                                         DNET_CTERM_WR_NOFORMAT, cpdu,
-                                         sizeof(cpdu), &clen) == 0 &&
-                        dnet_engine_link_send(&eng, cpdu, clen, dframe,
-                                              sizeof(dframe), &dlen, now) == 0)
-                        (void)scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
-                                                peer_mac, dframe, dlen);
-                } else if (got < 0 || !dnet_cterm_host_alive(&host)) {
-                    /* The session ended (it logged out, or LOGINOUT refused and
-                     * exited). Release the terminal and tear the link down --
-                     * the same order the oracle's LOGOUT produced.
-                     *
-                     * TWO INDEPENDENT WAYS TO NOTICE, and the executive is the
-                     * authoritative one. `got < 0` is the substrate telling us
-                     * the terminal channel closed; dnet_cterm_host_alive() ASKS
-                     * THE EXECUTIVE whether the session process still has a row
-                     * ($GETJPI on the pid $CREPRC returned). An interactive
-                     * process is ownerless -- the top of its own job -- so this
-                     * daemon has no child to waitpid() for and could not learn
-                     * it any other way; the same reason JOB_CONTROL reads the
-                     * console session's life out of the executive. */
-                    size_t dlen = 0;
-                    if (dnet_cterm_unbind(&host.cterm, DNET_CTERM_UNBIND_NORMAL,
-                                          frame, sizeof(frame), &dlen) == 0) {
-                        uint8_t dframe[DNET_FRAME_MAX];
-                        size_t flen2 = 0;
-                        if (dnet_engine_link_send(&eng, frame, dlen, dframe,
-                                                  sizeof(dframe), &flen2, now) == 0)
-                            (void)scs_datalink_send(sock, (int)ifindex,
-                                                    DNET_ETHERTYPE, peer_mac,
-                                                    dframe, flen2);
-                    }
-                    {
-                        size_t flen2 = 0;
-                        if (dnet_engine_link_close(&eng, DNET_LINK_REASON_NORMAL,
-                                                   frame, sizeof(frame), &flen2,
-                                                   now) == 0)
-                            (void)scs_datalink_send(sock, (int)ifindex,
-                                                    DNET_ETHERTYPE, peer_mac,
-                                                    frame, flen2);
-                    }
-                    (void)dnet_cterm_host_close(&host);
-                    host_active = 0;
-                    log_ts(stdout);
-                    printf(" DECNETD-I-SESSEND, inbound SET HOST session on %s ended\n",
-                           session_devnam);
-                    fflush(stdout);
-                }
-            }
-            if (!(pfd[0].revents & POLLIN))
-                continue;             /* nothing on the wire this round */
-        }
+        /* Serve every live session's local side (never blocks), then wait on
+         * the wire only briefly while sessions are live -- so a session's
+         * output is not held back by an idle wire. */
+        int live = 0;
+        if (cterm_server)
+            live = netacp_service_sessions(slots, sock, ifindex, now);
+        (void)scs_datalink_set_recv_timeout_ms(sock, live ? 20 : 250);
 
         ssize_t n = scs_datalink_recv(sock, rxbuf, sizeof(rxbuf));
         if (n < 0) {
@@ -4797,148 +5177,15 @@ int main(int argc, char **argv)
         enum dnet_adj_state st = DNET_ADJ_DOWN;
         int rc = dnet_engine_rx_frame(&eng, now, rxbuf, (size_t)n, from, &st);
 
-        /*
-         * INBOUND $ SET HOST DISPATCH (rd vms-f40, --cterm-server). A frame the
-         * routing/HELLO path did not claim may be an NSP logical-link frame.
-         * On a CONNECT INDICATION we decode the Session Control connect --
-         * UNTRUSTED, UNAUTHENTICATED bytes, parsed under bounds -- and, if it
-         * names object 42, hand it to dnet_cterm_host_open(), which mints an
-         * RTAn: in the executive and $CREPRCs LOGINOUT.EXE onto it.
-         *
-         * WHAT THIS DAEMON DOES NOT DO, and must never do again: it does not
-         * openpty, does not fork, does not exec, and does not decide that
-         * anyone may log in. The connect-carried username (the oracle's
-         * "Remote Port Info") is accounting information and reaches no
-         * decision. Every refusal below leaves the peer disconnected rather
-         * than admitted (INV-6).
-         */
-        if (cterm_server && rc != 1) {
-            uint8_t reply[DNET_FRAME_MAX];
-            size_t rlen = 0;
-            int has_reply = 0;
-            enum dnet_link_event lev = DNET_LINK_EV_NONE;
-
-            if (dnet_engine_link_rx(&eng, now, rxbuf, (size_t)n, reply,
-                                    sizeof(reply), &rlen, &has_reply, &lev) == 0) {
-                if (has_reply)
-                    (void)scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
-                                            rxbuf + 6, reply, rlen);
-
-                if (lev == DNET_LINK_EV_CONNECT_IND) {
-                    int obj = dnet_cterm_sc_connect_object(eng.link.conn_data,
-                                                           eng.link.conn_len);
-                    uint32_t cst;
-                    size_t flen2 = 0;
-
-                    memcpy(peer_mac, rxbuf + 6, 6);
-                    if (host_active || obj != DNET_CTERM_OBJECT) {
-                        /* One session at a time in this rung, and only object
-                         * 42 is served here. Refuse on the wire; admit nobody. */
-                        if (dnet_engine_link_close(&eng, DNET_LINK_REASON_OBJREJ,
-                                                   frame, sizeof(frame), &flen2,
-                                                   now) == 0)
-                            (void)scs_datalink_send(sock, (int)ifindex,
-                                                    DNET_ETHERTYPE, peer_mac,
-                                                    frame, flen2);
-                        log_ts(stdout);
-                        printf(" DECNETD-I-CONNREJ, inbound connect to object %d"
-                               " refused (%s)\n", obj,
-                               host_active ? "a session is already active"
-                                           : "no such object served here");
-                        fflush(stdout);
-                    } else {
-                        /* THE ISOLATION SEAM (vms-515 §3.4). Parse the untrusted
-                         * connect at low privilege into a validated typed
-                         * descriptor, then hand ONLY that to the privileged
-                         * control path. The privileged path never sees
-                         * eng.link.conn_data. A malformed frame fails the parse
-                         * here and the peer is refused below like any other
-                         * unservable connect. */
-                        struct dnet_conn_descriptor desc;
-                        if (dnet_conn_descriptor_from_wire(eng.link.conn_data,
-                                                           eng.link.conn_len,
-                                                           eng.link.remote_node,
-                                                           &desc) != DNET_CTERM_OK)
-                            cst = SS$_BADPARAM;
-                        else
-                            cst = dnet_cterm_host_open_desc(&host, &desc);
-                        if (!(cst & 1)) {
-                            /* No session, no shell, no fallback. */
-                            if (dnet_engine_link_close(&eng, DNET_LINK_REASON_OBJREJ,
-                                                       frame, sizeof(frame),
-                                                       &flen2, now) == 0)
-                                (void)scs_datalink_send(sock, (int)ifindex,
-                                                        DNET_ETHERTYPE, peer_mac,
-                                                        frame, flen2);
-                            fprintf(stderr, "DECNETD-E-NOSESSION, inbound SET HOST"
-                                    " refused: the session could not be created"
-                                    " (status %08X); no unauthenticated shell is"
-                                    " substituted\n", (unsigned)cst);
-                        } else {
-                            host_active = 1;
-                            snprintf(session_devnam, sizeof(session_devnam), "%s",
-                                     host.devnam);
-                            if (dnet_engine_link_accept(&eng, 0x2002, frame,
-                                                        sizeof(frame), &flen2,
-                                                        now) == 0)
-                                (void)scs_datalink_send(sock, (int)ifindex,
-                                                        DNET_ETHERTYPE, peer_mac,
-                                                        frame, flen2);
-                            log_ts(stdout);
-                            printf(" DECNETD-I-SESSTART, inbound SET HOST accepted"
-                                   " on %s -- LOGINOUT is authenticating"
-                                   " (Remote Port Info: %s)\n",
-                                   host.devnam, host.remote_port_info);
-                            fflush(stdout);
-                        }
-                    }
-                } else if (lev == DNET_LINK_EV_DATA && host_active) {
-                    /* Terminal bytes from the remote. The CTERM FSM decodes
-                     * them; a Bind is answered, keystrokes go to the session's
-                     * terminal -- to LOGINOUT, which is what decides whether
-                     * they are a valid login. */
-                    enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
-
-                    if (dnet_cterm_rx(&host.cterm, eng.rx_data, eng.rx_datalen,
-                                      &cev) == DNET_CTERM_OK) {
-                        uint8_t cpdu[DNET_CTERM_MAX_PDU], dframe[DNET_FRAME_MAX];
-                        size_t clen = 0, dlen = 0;
-
-                        if (cev == DNET_CTERM_EV_BIND_IND &&
-                            dnet_cterm_bind_accept(&host.cterm, eng.node_name, cpdu,
-                                                   sizeof(cpdu), &clen) == 0 &&
-                            dnet_engine_link_send(&eng, cpdu, clen, dframe,
-                                                  sizeof(dframe), &dlen, now) == 0)
-                            (void)scs_datalink_send(sock, (int)ifindex,
-                                                    DNET_ETHERTYPE, peer_mac,
-                                                    dframe, dlen);
-                        else if (cev == DNET_CTERM_EV_READ_DATA) {
-                            if (host.cterm.last.datalen)
-                                (void)dnet_cterm_host_write(&host,
-                                        host.cterm.last.data,
-                                        host.cterm.last.datalen);
-                            if (host.cterm.last.terminator) {
-                                uint8_t nl = host.cterm.last.terminator;
-                                (void)dnet_cterm_host_write(&host, &nl, 1);
-                            }
-                        } else if (cev == DNET_CTERM_EV_OOB) {
-                            uint8_t ob = host.cterm.last.oob_char;
-                            (void)dnet_cterm_host_write(&host, &ob, 1);
-                        } else if (cev == DNET_CTERM_EV_UNBOUND) {
-                            (void)dnet_cterm_host_close(&host);
-                            host_active = 0;
-                        }
-                    }
-                } else if (lev == DNET_LINK_EV_DISCONNECT && host_active) {
-                    (void)dnet_cterm_host_close(&host);
-                    host_active = 0;
-                    log_ts(stdout);
-                    printf(" DECNETD-I-SESSEND, the remote disconnected the"
-                           " SET HOST session on %s\n", session_devnam);
-                    fflush(stdout);
-                }
-            }
-        }
+        /* INBOUND SESSION DISPATCH (rd vms-f40 CTERM 42, rd vms-d85 FAL 17,
+         * rd vms-6af1 pool). A frame the routing/HELLO path did not claim may be
+         * an NSP logical-link frame: it is demultiplexed to its session by our
+         * logical-link address, or -- a Connect Initiate -- offered to a free
+         * slot. UNTRUSTED, UNAUTHENTICATED bytes, parsed under bounds; every
+         * refusal leaves the peer disconnected rather than admitted (INV-6). */
+        if (cterm_server && rc != 1)
+            netacp_dispatch_frame(slots, &eng, sock, ifindex, rxbuf, (size_t)n,
+                                  now, &next_lla);
 
         if (rc == 1) {
             uint16_t na = dnet_addr_from_id(from);
@@ -4956,6 +5203,9 @@ int main(int argc, char **argv)
             fflush(stdout);
         }
     }
+
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        netacp_slot_end(&slots[i], sock, ifindex, monotonic_sec(), "NETACP shutdown");
 
     log_ts(stdout);
     printf(" DECNETD-I-STOPPING, shutting down circuit %s\n", eng.circuit);

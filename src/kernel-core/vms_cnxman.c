@@ -1678,6 +1678,8 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 */
 	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
 	if (csb != NULL && env_ok) {
+		/* rd vms-ba4: a peer continuing a dialogue this node reset. */
+		cnxman_csb_dialogue_adopt(csb, env.send_msg, env.ack_msg);
 		cnxman_csb_dialogue_heard(csb, env.send_msg);
 		/* rd vms-1f40: and where ITS receive stream from us got to. A
 		 * carried dialogue resumes from that, once, so the stream the

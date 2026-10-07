@@ -1569,8 +1569,16 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	 * this peer really sends something on THIS connection -- never a number
 	 * inherited from the dialogue that just died (INV-6).
 	 */
-	if (csb->cm_dialogue_conid != 0u)
+	/* An adoption armed by an earlier unbind (Con.ID 0) survives the bind
+	 * of the connection that replaces it: that is the frame it waits for. */
+	if (csb->cm_dialogue_conid != 0u) {
 		csb->cm_dialogue_resets++;   /* a LIVE dialogue was discarded */
+		/* rd vms-ba4: kept for the peer's first frame to settle. */
+		csb->cm_prev_send  = csb->cm_send_msg;
+		csb->cm_prev_txn   = csb->cm_txn;
+		csb->cm_prev_token = csb->cm_token;
+		csb->cm_adopt_pending = 1u;
+	}
 	csb->cm_dialogue_conid = conid;
 	csb->cm_new_incarnation = 0u;   /* this IS the new conversation */
 	csb->cm_send_msg = 0u;
@@ -1738,6 +1746,42 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
  * it has just re-established, which is the one that tells us where it got to --
  * and taking it disarms it.
  */
+/*
+ * THE PEER'S FIRST FRAME AFTER A RESET SAYS WHETHER IT RESET TOO (rd vms-ba4).
+ *
+ * A fresh conversation opens at send-msg# 1 (E76/E77, spec sec 4(j)), on both
+ * sides. So a first envelope that carries a HIGHER send-msg# is a peer that
+ * kept its block for us and is continuing the conversation this node just
+ * discarded -- the case p. 7-24 calls re-establishment, here reached from a
+ * block the predicate could not prove entitled (a joiner not yet SELECTED).
+ * Then this node continues too, by the vms-1f40 rule: from the position the
+ * peer acknowledges, which must be one this node's previous dialogue really
+ * reached -- never ahead of it -- and with the transaction id and token that
+ * dialogue was using (rd vms-8c54). Every value is either the peer's own or
+ * this block's own saved one.
+ *
+ * Armed for exactly one frame; taken either way. If this node has already
+ * spoken on the new connection, its numbers are on the wire and cannot be
+ * taken back: counted, not hidden.
+ */
+void cnxman_csb_dialogue_adopt(struct vms_csb *csb, uint16_t peer_send_msg,
+			       uint16_t peer_ack_msg)
+{
+	if (csb == NULL || !csb->cm_adopt_pending)
+		return;
+	csb->cm_adopt_pending = 0u;
+	if (peer_send_msg <= 1u || peer_ack_msg > csb->cm_prev_send)
+		return;   /* a fresh conversation, or a position we never reached */
+	if (csb->cm_send_msg != 0u) {
+		csb->cm_adopt_too_late++;
+		return;
+	}
+	csb->cm_send_msg = peer_ack_msg;
+	csb->cm_txn = csb->cm_prev_txn;
+	csb->cm_token = csb->cm_prev_token;
+	csb->cm_dialogues_adopted++;
+}
+
 void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg)
 {
 	if (csb == NULL || !csb->cm_resume_pending)

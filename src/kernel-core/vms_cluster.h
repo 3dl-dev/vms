@@ -571,7 +571,23 @@ struct vms_csb {
 	 * this block recorded; cleared when a fresh dialogue is bound.
 	 */
 	uint8_t  cm_new_incarnation;
-	uint8_t  cm_resume_pad[1];
+	/*
+	 * ...AND WHETHER THE PEER MAY STILL TURN OUT TO BE CONTINUING THE
+	 * DIALOGUE THIS BLOCK JUST RESET (rd vms-ba4). A pre-admission joiner's
+	 * block is not entitled to carry by csb_dialogue_may_continue(), yet a
+	 * real VAX's block for that joiner survives a re-formed circuit and
+	 * continues -- measured: VAX send=3 ack=2 against this node's reset
+	 * send=1 ack=0, and CNXMGRERR within a millisecond. So a reset of a
+	 * LIVE dialogue keeps its three numbers here, armed for one frame:
+	 * the peer's first envelope on the new connection says which it is.
+	 */
+	uint8_t  cm_adopt_pending;
+	uint16_t cm_prev_send;
+	uint16_t cm_prev_txn;
+	uint16_t cm_prev_token;
+	uint16_t cm_adopt_pad;
+	uint32_t cm_dialogues_adopted;  /* peer continued: resumed from it   */
+	uint32_t cm_adopt_too_late;     /* peer continued after we had spoken*/
 	uint32_t cm_resumes;
 
 	/*

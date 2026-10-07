@@ -162,6 +162,7 @@ csb-dead-found-by-sysid
 pe-station-filter-disarmed
 recnx-attempt-supersedes-in-flight
 csb-dropped-spare-reads-as-loss
+csb-continued-dialogue-not-followed
 join-asks-the-last-discovered
 join-connectivity-gate-disarmed
 join-unheard-gate-disarmed
@@ -1008,6 +1009,22 @@ EOF
         ;;
         esac;;
 
+    csb-continued-dialogue-not-followed)
+        case "$_f" in
+        facility)     echo "cnxman_csb_dialogue_adopt() (rd vms-ba4): a peer whose first envelope after this node reset the dialogue carries send-msg# > 1 is continuing it, and this node resumes from the peer's ack";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "the adoption is disarmed, so a pre-admission joiner answers a real VAX that continued the dialogue (send 3, ack 2) with send 1, ack 0 -- the CNXMGRERR measured on stall-rig arms L-3 and L-9.";;
+        require_fail) cat <<'EOF'
+the peer continued: this node resumes from its ack, so the next origination is 3, not the 1 that bugchecked it
+the transaction id carries
+counted
+an unbind does not lose the frame it waits for
+EOF
+                      ;;
+        esac;;
+
     csb-dropped-spare-reads-as-loss)
         case "$_f" in
         facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
@@ -1562,6 +1579,11 @@ apply_edit() {
         # rd vms-eb3: the matched text is unique in its file and the replacement
         # no longer matches, so the mutation is not repeatable.
         sed -i 's|	    go.role != VMS_CM_ROLE_GO \|\| go.epoch == b->epoch) {|	    1) { /* NEGCTL barrier-stalled-ignores-new-go */|' "$_file";;
+
+    csb-continued-dialogue-not-followed)
+        # `csb->cm_send_msg = peer_ack_msg;` occurs TWICE in this file; the
+        # adoption's is the one followed by `csb->cm_txn = csb->cm_prev_txn;`.
+        sed -i '/^\tcsb->cm_send_msg = peer_ack_msg;$/{N;s|^\tcsb->cm_send_msg = peer_ack_msg;\n\tcsb->cm_txn = csb->cm_prev_txn;|\treturn; /* NEGCTL csb-continued-dialogue-not-followed */\n\tcsb->cm_txn = csb->cm_prev_txn;|}' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

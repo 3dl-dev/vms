@@ -1829,6 +1829,82 @@ static void test_a_new_incarnation_retires_the_old_block(void)
 			"and reclaimed on the next sweep");
 }
 
+/*
+ * rd vms-ba4 -- A PRE-ADMISSION JOINER'S BLOCK IS RESET, AND THE VAX'S IS NOT.
+ *
+ * Measured twice on the stall rig (arms L-3, L-9): the joiner's circuit to a
+ * real VAX re-formed, the VAX continued at send=3 ack=2, this node answered
+ * send=1 ack=0, and the VAX bugchecked CNXMGRERR. The block is not SELECTED,
+ * so it takes the fresh-dialogue reset; the peer's first envelope settles it.
+ */
+static void test_a_peer_continuing_a_reset_dialogue_is_followed(void)
+{
+	struct vms_csb *csb;
+	uint16_t txn;
+
+	printf("-- rd vms-ba4: a peer continuing a dialogue this node reset\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer (NOT selected: a joiner's)");
+	if (csb == NULL)
+		return;
+	cnxman_csb_bind_connection(csb, 0x4e620001u);
+	ct_check_eq_u32(csb->cm_adopt_pending, 0u,
+			"a FIRST bind arms nothing: there was no dialogue");
+	cnxman_csb_dialogue_sent(csb);            /* op-0x14, send 1 */
+	cnxman_csb_dialogue_sent(csb);            /* op-0x01, send 2 */
+	cnxman_csb_transaction_opened(csb);
+	txn = csb->cm_txn;
+
+	/* The circuit re-forms; the block is not entitled to carry. */
+	cnxman_csb_bind_reconnect(csb, 0x4e620002u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u, "the joiner's block resets");
+	ct_check_eq_u32(csb->cm_adopt_pending, 1u, "...and waits for the peer");
+
+	/* THE VAX's frame: send=3 ack=2. */
+	cnxman_csb_dialogue_adopt(csb, 3u, 2u);
+	cnxman_csb_dialogue_heard(csb, 3u);
+	ct_check_eq_u32(csb->cm_send_msg, 2u,
+			"the peer continued: this node resumes from its ack, so "
+			"the next origination is 3, not the 1 that bugchecked it");
+	ct_check_eq_u32(csb->cm_ack_msg, 3u, "and acks the peer's 3, not 0");
+	ct_check_eq_u32(csb->cm_txn, txn, "the transaction id carries");
+	ct_check_eq_u32(csb->cm_dialogues_adopted, 1u, "counted");
+	cnxman_csb_dialogue_adopt(csb, 9u, 2u);
+	ct_check_eq_u32(csb->cm_dialogues_adopted, 1u,
+			"armed for ONE frame only");
+
+	/* A FRESH peer opens at 1: nothing is adopted. */
+	cnxman_csb_bind_connection(csb, 0x4e620003u);
+	cnxman_csb_dialogue_adopt(csb, 1u, 0u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u, "a peer at send 1 is a new "
+			"conversation, and so is this node's");
+
+	/* An ack this node's previous dialogue never reached is refused. */
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_bind_connection(csb, 0x4e620004u);
+	cnxman_csb_dialogue_adopt(csb, 5u, 7u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"an ack AHEAD of what this node ever sent adopts nothing");
+
+	/* Too late: this node already spoke on the new connection. */
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_bind_connection(csb, 0x4e620005u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_adopt(csb, 4u, 1u);
+	ct_check_eq_u32(csb->cm_send_msg, 1u, "numbers already on the wire "
+			"are not taken back");
+	ct_check_eq_u32(csb->cm_adopt_too_late, 1u, "...but it is counted");
+
+	/* An unbind (Con.ID 0) and the bind that replaces it keep it armed. */
+	cnxman_csb_bind_connection(csb, 0u);
+	cnxman_csb_bind_connection(csb, 0x4e620006u);
+	cnxman_csb_dialogue_adopt(csb, 2u, 1u);
+	ct_check_eq_u32(csb->cm_send_msg, 1u,
+			"an unbind does not lose the frame it waits for");
+	cnxman_csb_dialogue_adopt(NULL, 2u, 1u);   /* safe */
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -1852,6 +1928,7 @@ int main(void)
 	test_a_system_in_an_answered_transition_carries_its_dialogue();
 	test_a_new_incarnation_is_a_new_conversation();
 	test_a_carried_dialogue_resumes_where_the_peer_got_to();
+	test_a_peer_continuing_a_reset_dialogue_is_followed();
 	test_two_connections_follow_the_one_the_peer_keeps();
 	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();

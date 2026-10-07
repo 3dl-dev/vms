@@ -165,7 +165,7 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
     }
 
     /* Set event flag on completion */
-    if (efn != 0 && efn < 128) {
+    if (efn < 128) {
         sys$setef(efn);
     }
 
@@ -464,7 +464,7 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     }
 
     if (st & 1) {
-        if (efn != 0 && efn < 128) sys$setef(efn);
+        if (efn < 128) sys$setef(efn);
         if (astadr) astadr(astprm);
     }
 
@@ -600,7 +600,7 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     }
 
     if (st & 1) {
-        if (efn != 0 && efn < 128) sys$setef(efn);
+        if (efn < 128) sys$setef(efn);
         if (astadr) astadr(astprm);
     }
 
@@ -658,7 +658,7 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     }
 
     if (st & 1) {
-        if (efn != 0 && efn < 128) sys$setef(efn);
+        if (efn < 128) sys$setef(efn);
         if (astadr) astadr(astprm);
     }
 
@@ -722,7 +722,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
             iosb->iosb$w_bcnt = 0;
             iosb->iosb$l_dev_depend = 0;
         }
-        if (efn != 0 && efn < 128) sys$setef(efn);
+        if (efn < 128) sys$setef(efn);
         if (astadr) astadr(astprm);
         *out_fd = fd;
         return 0xFFFFFFFF;  /* Sentinel: NOP handled, caller should return SS$_NORMAL */
@@ -831,7 +831,7 @@ static uint32_t qio_terminal_setmode(int fd, uint32_t p2, void *iosb_ptr,
         iosb->iosb$l_dev_depend = 0;
     }
     if (st == SS$_NORMAL) {
-        if (efn != 0 && efn < 128) sys$setef(efn);
+        if (efn < 128) sys$setef(efn);
         if (astadr) astadr(astprm);
     }
     return st;

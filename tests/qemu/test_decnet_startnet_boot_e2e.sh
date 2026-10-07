@@ -124,7 +124,7 @@ record "NEGCTL boot 1 (DECnet unconfigured at boot): NO 1.42 endnode hello on th
 # --- Boot 2: STARTNET at LPBETA starts NETACP; prove it runs + talks -----------
 rm -f "$FIFO"; mkfifo "$FIFO"
 # shellcheck disable=SC2086
-timeout -k 15 $((BOOT_TIMEOUT + NETACP_SETTLE + 120)) $QEMU $MACHINE $ACCEL \
+timeout -k 15 $((BOOT_TIMEOUT + NETACP_SETTLE + 420)) $QEMU $MACHINE $ACCEL \
     -kernel "$KERNEL" -initrd "$INITRD" \
     -nographic -append "$CONSOLE loglevel=3 quiet" \
     -m 512M -smp 1 -nodefaults -serial stdio \
@@ -155,6 +155,22 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SHOW SYSTEM lists a RUNNING NETACP ${NETACP_SETTLE}s after boot (it exits on any datalink failure)" "$rc"
     if printf '%s\n' "$seg" | grep -qF 'Process Name'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
+
+    # rd vms-dda: an outbound link from a user process, brokered through the
+    # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has
+    # no NIC, hence no _NET:; this boot has both). COPY 0"SYSTEM MANAGER":: over
+    # NETACP's local loopback to a FAL.EXE server process and back.
+    off=$(wc -c <"$LOG2")
+    send 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'; sleep 1
+    send 'DNETACC --net-loopback-accept-test'
+    waitfor 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$LOG2" || true
+    seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
+    if printf '%s\n' "$seg" | grep -qF 'DECNETD-NET-LOOPBACK-ACCEPT: PASS'; then rc=0; else rc=1; fi
+    record "boot 2: a \$QIO _NET: link is brokered through the RUNNING NETACP -- COPY 0:: to FAL.EXE and back, byte-verified (vms-dda)" "$rc"
+    if printf '%s\n' "$seg" | grep -qF 'completes IO$_ACCESS SS$_INVLOGIN'; then rc=0; else rc=1; fi
+    record "boot 2: a bad password is refused at IO\$_ACCESS (INVLOGIN) through NETACP" "$rc"
+    if printf '%s\n' "$seg" | grep -qF 'DECNETD-I-NETLOOP'; then rc=0; else rc=1; fi
+    record "NEGCTL boot 2: the brokered-link segment is real output (the test's banner is present)" "$rc"
 else
     record "boot 2: SYSTEM logs in" 1
 fi

@@ -1347,7 +1347,10 @@ run_dcl_acceptance_battery() {
     send 'DNETACC --net-loopback-accept-test'
     if wait_for 'IVIMAGE' 15 "$NLB_OFF"; then
         note "NETACP _NET: links [vms-dda]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the brokered-link proof DID NOT RUN here (hard gate on the rails that ship the image)"
-    elif wait_for 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$NLB_OFF"; then
+    elif wait_for 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$NLB_OFF" &&
+         tail -c "+$((NLB_OFF + 1))" "$LOG" | grep -q 'DECNETD-E-NONET'; then
+        note "NETACP _NET: links [vms-dda]: this VM has no NIC, so no _NET: device exists (NIC-gated, INV-6) -- the brokered-link proof is a hard gate in tests/qemu/test_decnet_startnet_boot_e2e.sh, which boots with a NIC and a running NETACP"
+    elif tail -c "+$((NLB_OFF + 1))" "$LOG" | grep -q 'DECNETD-NET-LOOPBACK-ACCEPT:'; then
         local NLBSEG; NLBSEG=$(tail -c "+$((NLB_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$NLBSEG" 'DECNETD-NET-LOOPBACK-ACCEPT: PASS' \
             "NETACP _NET: links [vms-dda]: an outbound link opened by \$QIO on _NET: was brokered through NETACP on the real executive (one PASS/FAIL line per assertion above this verdict)"

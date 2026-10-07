@@ -372,6 +372,8 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 		proc->cli_length  = parent->cli_length;
 		memcpy(proc->cli_command, parent->cli_command,
 		       sizeof(proc->cli_command));
+		proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
+		proc->dfprot_set = parent->dfprot_set;
 
 		/* Privilege masks: read parent under its mode_lock into locals... */
 		exec_lock(&parent->mode_lock);
@@ -1246,6 +1248,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_GETEXIT:
 	case VMS_IOCTL_SETCLI:
 	case VMS_IOCTL_GETCLI:
+	case VMS_IOCTL_DFPROT:
 	case VMS_IOCTL_SPAWN_NOTIFY:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
@@ -1278,6 +1281,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_setcli(proc, (unsigned long)uarg);           break;
 		case VMS_IOCTL_GETCLI:
 			r = vms_ioctl_getcli(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_DFPROT:
+			r = vms_ioctl_dfprot(proc, (unsigned long)uarg);           break;
 		/* /NOWAIT subprocess-exit completion arm (vms-e9a B1) */
 		case VMS_IOCTL_SPAWN_NOTIFY:
 			r = vms_ioctl_spawn_notify(proc, (unsigned long)uarg);     break;

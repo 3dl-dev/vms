@@ -13,6 +13,8 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
+ * OVMX-PARTIAL: sys$setdfprot (vms-44a) -- exec: the default file protection is the executive's per-process attribute (VMS_IOCTL_DFPROT): set in one process, a REGISTER_CONTINUE child inherits it, and nothing in this file holds the value (tests/qemu/test_syssvc_setdfprot.c reads it back across that inheritance).
+ * OVMX-LOCAL: sys$setdfprot -- the RMS$_NORMAL status mapping (the Alpha V8.4 lab's service returns RMS$_NORMAL, not SS$_NORMAL). No facility_defects negative control names this service yet, which is why it is PARTIAL and not EXECUTIVE.
  * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
  *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
@@ -58,6 +60,7 @@
 #include <time.h>
 #include "ovmx_async.h"
 #include "starlet.h"
+#include "rmsdef.h"
 #include "vms/pcb.h"
 #include "ovmx_pcb_ctx.h"
 #include "sysgen_params.h"
@@ -126,6 +129,24 @@ uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
      * pre-call snapshot of the local cache. */
     if (prvprv) *prvprv = prev;
     return st;
+}
+
+/*
+ * sys$setdfprot - read and/or replace the process default file protection.
+ *
+ * Observed on the lab OpenVMS Alpha V8.4 node with a MACRO-32 probe (tools/lab-alpha/probes/
+ * tdfprot.mar): $SETDFPROT(0, &old) returns the current value (FA00 for SYSTEM there);
+ * $SETDFPROT(&0F00, &old) installs it and returns the previous value; a later
+ * $SETDFPROT(0, &old) reads back 0F00; the status of each is RMS$_NORMAL (0x00010001),
+ * not SS$_NORMAL. The value lives in the executive.
+ *
+ * @param newprot  optional 16-bit protection word to install (NULL = just read)
+ * @param oldprot  optional receiver of the protection in force before the call
+ */
+uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot)
+{
+    uint32_t st = vms_kif_dfprot(newprot, oldprot);
+    return (st & 1) ? RMS$_NORMAL : st;
 }
 
 /*

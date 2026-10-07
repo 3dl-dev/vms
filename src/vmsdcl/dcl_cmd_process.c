@@ -2828,7 +2828,7 @@ int cmd_logout(struct dcl_command *cmd)
         } msgbuf;
         memset(&msgbuf, 0, sizeof(msgbuf));
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_RQST;
-        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
         int n = snprintf(msgbuf.hdr.opc$l_ms_text, sizeof(msgbuf.text),
                          "logout: user %s at %02d-%s-%04d %02d:%02d:%02d",
                          upper_user,

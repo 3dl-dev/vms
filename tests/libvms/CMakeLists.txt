@@ -598,3 +598,7 @@ target_link_libraries(test_libvms_sysuaf_flags_upgrade PRIVATE
     vms pthread m)
 add_test(NAME test_libvms_sysuaf_flags_upgrade
     COMMAND test_libvms_sysuaf_flags_upgrade)
+
+# OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
+libvms_add_test(test_libvms_opcdef_layout
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)

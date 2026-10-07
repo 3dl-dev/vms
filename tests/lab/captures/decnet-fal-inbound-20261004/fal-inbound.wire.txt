@@ -1,0 +1,84 @@
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 79: 1.1 > 1.43 63 conn-initiate 8237>0 ver 4.1 segsize 1459 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 32 conn-confirm 18865>8237 ver 4.1 segsize 1459 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 33 link-service 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 68: 1.1 > 1.43 52 data 8237>18865 ack 0 seg 1 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 ils-ack 18865>8237  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8237  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 64: 1.43 > 1.1 48 data 18865>8237 ack 1 seg 1 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 87: 1.1 > 1.43 71 data 8237>18865 ack 1 seg 2 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8237  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 38 data 18865>8237 ack 2 seg 2 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 78: 1.43 > 1.1 62 data 18865>8237 ack 2 seg 3 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 33 data 18865>8237 ack 2 seg 4 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 36 data 8237>18865 ack 4 seg 3 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8237  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 33 data 18865>8237 ack 3 seg 5 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 89: 1.1 > 1.43 73 data 8237>18865 ack 5 seg 4 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8237  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 34 data 18865>8237 ack 4 seg 6 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 35 data 8237>18865 ack 6 seg 5 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8237  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 34 data 18865>8237 ack 5 seg 7 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8237>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 30 disconn-initiate 8237>18865 object rejected connect 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 74: 1.1 > 1.43 58 conn-initiate 8238>0 ver 4.1 segsize 1459 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 32 conn-confirm 18865>8238 ver 4.1 segsize 1459 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 32 conn-confirm 18906>8238 ver 4.1 segsize 1459 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 33 link-service 8238>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 disconn-confirm 8238>18906 no link terminate 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 68: 1.1 > 1.43 52 data 8238>18865 ack 0 seg 1 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 ils-ack 18865>8238  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8238  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 64: 1.43 > 1.1 48 data 18865>8238 ack 1 seg 1 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8238>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 62: 1.1 > 1.43 46 data 8238>18865 ack 1 seg 2 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18865>8238  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 65: 1.43 > 1.1 49 data 18865>8238 ack 2 seg 2 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 62: 1.43 > 1.1 46 data 18865>8238 ack 2 seg 3 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8238>18865  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 34 data 18865>8238 ack 2 seg 4 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8238>18865  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 74: 1.1 > 1.43 58 conn-initiate 8239>0 ver 4.1 segsize 1459 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 32 conn-confirm 18906>8239 ver 4.1 segsize 1459 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 33 link-service 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 68: 1.1 > 1.43 52 data 8239>18906 ack 0 seg 1 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 ils-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 64: 1.43 > 1.1 48 data 18906>8239 ack 1 seg 1 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 95: 1.1 > 1.43 79 data 8239>18906 ack 1 seg 2 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 38 data 18906>8239 ack 2 seg 2 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 76: 1.43 > 1.1 60 data 18906>8239 ack 2 seg 3 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 33 data 18906>8239 ack 2 seg 4 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 36 data 8239>18906 ack 4 seg 3 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 33 data 18906>8239 ack 3 seg 5 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 37 data 8239>18906 ack 5 seg 4 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 84: 1.43 > 1.1 68 data 18906>8239 ack 4 seg 6 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 63: 1.43 > 1.1 47 data 18906>8239 ack 4 seg 7 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 35 data 18906>8239 ack 4 seg 8 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 34 data 8239>18906 ack 8 seg 5 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 34 data 18906>8239 ack 5 seg 9 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 35 data 8239>18906 ack 9 seg 6 
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 29 data-ack 18906>8239  (invalid)
+aa:00:04:00:2b:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.43 > 1.1 34 data 18906>8239 ack 6 seg 10 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 29 data-ack 8239>18906  (invalid)
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 30 disconn-initiate 8239>18906 object rejected connect 
+aa:00:04:00:01:04 > aa:00:04:00:2b:04, ethertype DN (0x6003), length 60: 1.1 > 1.43 30 disconn-initiate 8238>18865 object rejected connect 

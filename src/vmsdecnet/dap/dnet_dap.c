@@ -515,8 +515,12 @@ void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz)
     m->u.config.vernum  = 5;        /* DAP 5.6: the version OVMX implements */
     m->u.config.econum  = 6;
     /* SYSCAP: exactly what OVMX serves (dnet_dap.h VERSION / SCOPE). */
+    /* A real VMS COPY reading a remote file requires DIRECTORY LIST (it
+     * $SEARCHes its input first) and asks for NAME; without bit 25 it refuses
+     * the open "FAL-F-ACCFUNC, unsupported RMS service call" (rd vms-d85 lab). */
     const unsigned caps[] = { DNET_DAP_CAP_SEQ_ORG, DNET_DAP_CAP_SEQ_XFER,
                               DNET_DAP_CAP_BLOCK_TO_RESP, DNET_DAP_CAP_LEN256,
+                              DNET_DAP_CAP_DIRLIST, DNET_DAP_CAP_SEQ_RECORD,
                               DNET_DAP_CAP_NAME_MSG };
     unsigned maxbit = 0;
     for (size_t i = 0; i < sizeof caps / sizeof caps[0]; i++) {

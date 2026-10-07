@@ -1154,6 +1154,35 @@ run_dcl_acceptance_battery() {
     wait_for '$ ' 20 "$FALP_OFF"
 
     # =======================================================================
+    # NETACP INBOUND SESSION POOL (rd vms-6af1, R4 G2). NETACP's REAL dispatch
+    # with this process playing several remote nodes: object-42 sessions are
+    # REAL RTAn: + LOGINOUT; object 17 lands on a FAL.EXE server as the user.
+    # One stalling peer can no longer hold the only SET HOST slot: a second
+    # session is admitted, a node is capped at its share, the pool is bounded,
+    # and a freed slot is reused. HARD GATE where DECNETD.EXE ships.
+    local POOL_OFF; POOL_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --netacp-pool-selftest'
+    if wait_for 'IVIMAGE' 15 "$POOL_OFF"; then
+        note "NETACP pool [vms-6af1]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the session-pool proof DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-POOL-SELFTEST:' 240 "$POOL_OFF"; then
+        local POOLSEG; POOLSEG=$(tail -c "+$((POOL_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: PASS' \
+            "NETACP pool [vms-6af1]: the inbound session pool behaved on the real executive (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$POOLSEG" 'a SECOND inbound SET HOST is accepted while the first is live' \
+            "NETACP pool [vms-6af1]: a second inbound SET HOST is admitted while the first is live (G2: no single slot to monopolise)"
+        must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
+            "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
+        must_have "$POOLSEG" 'running as [128,129]' \
+            "NETACP pool [vms-6af1/vms-d85]: an inbound FAL connect lands on a FAL.EXE server process running as the authenticated user"
+        must_not_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: FAIL' \
+            "NETACP pool [vms-6af1]: no assertion in the session-pool proof failed"
+        negctl "$POOLSEG" 'DECNETD-I-POOL' "DECnet NETACP session pool"
+    else
+        bad "NETACP pool [vms-6af1]: DECNETD.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
+    fi
+    wait_for '$ ' 20 "$POOL_OFF"
+
+    # =======================================================================
     # DECnet _NET: $QIO BROKER — T1 MAILBOX TRANSPORT (vms-22c, a1-2 slice 2b).
     # The exec<->NETACP hop the broker rides: a client $CREMBXs a reply mailbox,
     # marshals a broker request carrying reply_unit, and writes it to NETACP's

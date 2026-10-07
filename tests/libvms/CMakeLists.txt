@@ -593,3 +593,15 @@ libvms_add_test(test_libvms_create_uid
 # $BINUTC/$NUMUTC/$ASCUTC/$TIMCON/$GETUTC against the values the Alpha V8.4 lab returned.
 libvms_add_test(test_libvms_utc
     ${CMAKE_CURRENT_SOURCE_DIR}/test_utc.c)
+||||||| c922d9a4
+
+
+# vms-f811: an installed SYSUAF written under the old UAI$M_ numbering is converted, not misread.
+add_executable(test_libvms_sysuaf_flags_upgrade
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_flags_upgrade.c)
+target_include_directories(test_libvms_sysuaf_flags_upgrade PRIVATE
+    ${VMS_INCLUDE_DIR})
+target_link_libraries(test_libvms_sysuaf_flags_upgrade PRIVATE
+    vms pthread m)
+add_test(NAME test_libvms_sysuaf_flags_upgrade
+    COMMAND test_libvms_sysuaf_flags_upgrade)

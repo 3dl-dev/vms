@@ -41,6 +41,14 @@ while [ $# -gt 0 ]; do
       fi
       args+=(--library "$f") ;;
     -*) ;;                                   # GNU-ld options with no LINK meaning
+    *.a)
+      # A positional archive is SEARCHED, as Unix ld and VMS LINK/LIBRARY do:
+      # only the members the link needs are pulled, in command-line position.
+      # (Passing it to LINK.EXE as a plain input whole-archived it: GCC's
+      # gcc-ar links hash-table.o AND libcommon.a, which also carries
+      # hash-table.o -> %LINK-F-MULDEF.)
+      [ -f "$a" ] || { echo "%OVMX-LD-F-NOFILE, $a not found" >&2; exit 1; }
+      args+=(--library "$a") ;;
     */*.o|*/*.obj|*.o|*.obj)
       [ -f "$a" ] || { echo "%OVMX-LD-F-NOFILE, $a not found" >&2; exit 1; }
       args+=("$a") ;;

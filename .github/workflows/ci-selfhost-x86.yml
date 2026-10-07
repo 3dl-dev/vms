@@ -340,6 +340,12 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_reflong_import.sh
 
+      # vms-fd1: ovmx-ld (collect2's ld -> LINK.EXE) searches positional
+      # archives (--library) instead of whole-archiving them.
+      - name: Prove ovmx-ld maps a GNU ld command line onto LINK.EXE (vms-fd1)
+        run: |
+          bash tools/cross-alpha-vms/cxx/test_ovmx_ld.sh
+
       # vms-122: LINK.EXE resolves a same-TU weak override by the address a
       # section-relative reloc names, not by the section base -- the exported
       # decc$_mmap64/decc$munmap used to enter the strong __vm_wait (a no-op).

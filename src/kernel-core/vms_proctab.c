@@ -1016,8 +1016,14 @@ static bool creprc_ticket_stale(const struct vms_creprc_ticket *t, uint64_t now)
 
     if (now - t->issued > (uint64_t)VMS_CREPRC_TICKET_TTL_SECS * 10000000ull)
         return true;
-    c = find_by_vms_pid(t->creator_vms_pid);
-    return c == NULL || (uint32_t)c->linux_pid != t->creator_linux_pid;
+    /* The creator is identified by its Linux pid, not its VMS PID: an image
+     * DCL activated through the fork()+execve() fallback is a CONTINUATION
+     * row that shares DCL's VMS PID with its own Linux pid, so
+     * find_by_vms_pid() can return DCL's row and call a live creator stale
+     * (seen: DECNETD.EXE run from DCL could not create a detached FAL.EXE --
+     * every claim NOPRIV -- while RUN/DETACHED from DCL itself worked). */
+    c = find_by_linux_pid(t->creator_linux_pid);
+    return c == NULL || c->vms_pid != t->creator_vms_pid;
 }
 
 /*

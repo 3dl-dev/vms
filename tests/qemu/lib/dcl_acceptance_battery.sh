@@ -1121,6 +1121,39 @@ run_dcl_acceptance_battery() {
     wait_for '$ ' 20 "$FAL_OFF"
 
     # =======================================================================
+    # DECnet FAL SERVER PROCESS PERSONA (rd vms-d85, R4 G3). An inbound FAL
+    # access must run with the AUTHENTICATED user's identity, never NETACP's:
+    # NETACP $CREPRCs SYS$SYSTEM:FAL.EXE with the user's UIC + default
+    # privileges and the DAP session moves through its link mailboxes. The
+    # DIFFERENTIAL is the proof -- the SAME SYSTEM-only file through the SAME
+    # path is served to SYSTEM and REFUSED to GUEST, and the server process's
+    # executive row carries the user's UIC. HARD GATE where DECNETD.EXE ships.
+    local FALP_OFF; FALP_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --fal-proc-accept-test'
+    if wait_for 'IVIMAGE' 15 "$FALP_OFF"; then
+        note "FAL persona [vms-d85]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-FAL-PROC-ACCEPT:' 240 "$FALP_OFF" &&
+         tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT: NOIMAGE'; then
+        note "FAL persona [vms-d85]: SYS\$SYSTEM:FAL.EXE is not on THIS runtime's system disk (the VAX/Alpha staging follow-on), so the FAL server-process persona proof DID NOT RUN here"
+    elif tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT:'; then
+        local FALPSEG; FALPSEG=$(tail -c "+$((FALP_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: PASS' \
+            "FAL persona [vms-d85]: the inbound FAL access ran in a FAL.EXE server process with the authenticated user's identity (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$FALPSEG" 'runs with GUEST'"'"'s UIC [128,129], NOT NETACP'"'"'s' \
+            "FAL persona [vms-d85]: the server process for GUEST carries GUEST's UIC in its executive row"
+        must_have "$FALPSEG" 'SYSTEM GETs the file through the FAL server process, records BYTE-MATCH' \
+            "FAL persona [vms-d85]: the path itself works (SYSTEM reads the file through it) -- so GUEST's refusal below is the persona, not a broken path"
+        must_have "$FALPSEG" 'checked against the user, not the daemon' \
+            "FAL persona [vms-d85]: GUEST is REFUSED the SYSTEM-only file SYSTEM just read"
+        must_not_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: FAIL' \
+            "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
+        negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"
+    else
+        bad "FAL persona [vms-d85]: DECNETD.EXE --fal-proc-accept-test produced no verdict line within 240s -- the persona proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung session)"
+    fi
+    wait_for '$ ' 20 "$FALP_OFF"
+
+    # =======================================================================
     # DECnet _NET: $QIO BROKER — T1 MAILBOX TRANSPORT (vms-22c, a1-2 slice 2b).
     # The exec<->NETACP hop the broker rides: a client $CREMBXs a reply mailbox,
     # marshals a broker request carrying reply_unit, and writes it to NETACP's

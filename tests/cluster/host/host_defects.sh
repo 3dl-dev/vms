@@ -1020,6 +1020,7 @@ EOF
 the peer continued: this node resumes from its ack, so the next origination is 3, not the 1 that bugchecked it
 the transaction id carries
 counted
+armed for ONE frame only
 an unbind does not lose the frame it waits for
 EOF
                       ;;

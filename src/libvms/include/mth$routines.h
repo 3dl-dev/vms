@@ -422,14 +422,14 @@ double mth$tand(const double *x);
  * ================================================================ */
 
 #define MTH$_NORMAL      0x00901001  /* Normal completion */
-#define MTH$_FLOOVEMAT   0x00901024  /* Floating overflow in math library */
-#define MTH$_FLOUNDMAT   0x0090102C  /* Floating underflow in math library */
-#define MTH$_INVARGMAT   0x00901034  /* Invalid argument to math library */
-#define MTH$_SIGLOSMAT   0x0090103C  /* Significance loss in math library */
-#define MTH$_LOGZERNEG   0x00901044  /* Log of zero or negative number */
-#define MTH$_SQUROONEG   0x0090104C  /* Square root of negative number */
-#define MTH$_WRONUMARG   0x00901054  /* Wrong number of arguments */
-#define MTH$_UNDEXP      0x0090105C  /* Undefined exponentiation */
+#define MTH$_FLOOVEMAT   0x001682C4  /* Floating overflow in math library */
+#define MTH$_FLOUNDMAT   0x001682CC  /* Floating underflow in math library */
+#define MTH$_INVARGMAT   0x0016828C  /* Invalid argument to math library */
+#define MTH$_SIGLOSMAT   0x001682BC  /* Significance loss in math library */
+#define MTH$_LOGZERNEG   0x0016829C  /* Log of zero or negative number */
+#define MTH$_SQUROONEG   0x001682A4  /* Square root of negative number */
+#define MTH$_WRONUMARG   0x00168284  /* Wrong number of arguments */
+#define MTH$_UNDEXP      0x00168294  /* Undefined exponentiation */
 
 #ifdef __cplusplus
 }

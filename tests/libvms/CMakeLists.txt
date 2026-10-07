@@ -588,3 +588,13 @@ libvms_add_test(test_libvms_lib_get_logical
 # SYS$CREATE_UID -- 128-bit uids: unique, version 1 / RFC 4122 variant, clock-tied.
 libvms_add_test(test_libvms_create_uid
     ${CMAKE_CURRENT_SOURCE_DIR}/test_create_uid.c)
+
+# vms-f811: an installed SYSUAF written under the old UAI$M_ numbering is converted, not misread.
+add_executable(test_libvms_sysuaf_flags_upgrade
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_flags_upgrade.c)
+target_include_directories(test_libvms_sysuaf_flags_upgrade PRIVATE
+    ${VMS_INCLUDE_DIR})
+target_link_libraries(test_libvms_sysuaf_flags_upgrade PRIVATE
+    vms pthread m)
+add_test(NAME test_libvms_sysuaf_flags_upgrade
+    COMMAND test_libvms_sysuaf_flags_upgrade)

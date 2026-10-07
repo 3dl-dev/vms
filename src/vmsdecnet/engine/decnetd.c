@@ -2962,6 +2962,17 @@ static int fal_bringup(struct dnet_engine *L, struct dnet_engine *R,
     return 0;   /* link UP */
 }
 
+/* The client is done: disconnect the link (NSP Disconnect Initiate) so a FAL
+ * server waiting for its next access sees the link close and returns -- the
+ * way a real accessor ends a multi-access FAL session (spec 5.1). */
+static void fal_hangup(struct fal_xport *cxp)
+{
+    uint8_t frame[DNET_FRAME_MAX]; size_t flen = 0;
+    if (dnet_engine_link_close(cxp->eng, DNET_LINK_REASON_NORMAL, frame, sizeof frame,
+                               &flen, (*cxp->tick)++) == 0)
+        (void)write(cxp->wfd, frame, flen);
+}
+
 /* Thread body: the FAL server side of one accepted session. */
 struct fal_server_arg { struct fal_xport xp; uint32_t status; };
 static void *fal_server_thread(void *v)
@@ -3036,6 +3047,7 @@ static int run_fal_selftest(void)
             struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
             uint32_t cst = dnet_fal_client_get("OVMXR::DKA0:[X]NOPE.TXT",
                                                "DKA0:[X]LOCAL.TXT", &ct);
+            fal_hangup(&cxp);
             pthread_join(th, NULL);
             if (cst == SS$_NOSUCHFILE && sarg.status == SS$_NOSUCHFILE) {
                 printf("DECNETD-I-FALSELF, the DAP-over-NSP transport pump round-trips"
@@ -3064,17 +3076,20 @@ static int run_fal_selftest(void)
 
 /* Compare a stored ODS-2 file's records to an expected multi-line body.
  * Returns 1 on an exact match. Reads through RMS over the ACP (real file I/O). */
+/* Byte-verify a file record for record through RMS $OPEN/$GET -- the same
+ * reader the FAL server uses, which frames by the file's own record format (a
+ * GET stores VAR records; rms_textfile_* reads only stream text). */
 static int fal_file_matches(const char *spec, const char *const *lines, int nlines)
 {
-    rms_textfile_t *tf = rms_textfile_open(spec);
-    if (!tf) return 0;
-    char buf[DNET_DAP_MAX_REC]; int too_long = 0, i = 0, ok = 1;
-    while (rms_textfile_getline(tf, buf, sizeof buf, &too_long)) {
-        if (i >= nlines || strcmp(buf, lines[i]) != 0) { ok = 0; break; }
+    void *rf = NULL;
+    if (dnet_fal_ropen(spec, &rf, NULL, NULL) != 0) return 0;
+    uint8_t buf[DNET_DAP_MAX_REC]; size_t n = 0; int i = 0, ok = 1, g;
+    while ((g = dnet_fal_rget(rf, buf, sizeof buf, &n)) == 1) {
+        if (i >= nlines || n != strlen(lines[i]) || memcmp(buf, lines[i], n) != 0) { ok = 0; break; }
         i++;
     }
-    rms_textfile_close(tf);
-    return ok && i == nlines;
+    (void)dnet_fal_rclose(rf);
+    return ok && g == 0 && i == nlines;
 }
 
 static int run_fal_accept_test(void)
@@ -3153,6 +3168,7 @@ static int run_fal_accept_test(void)
             struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
             struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
             uint32_t cst = dnet_fal_client_put(SRC, DEST, &ct);
+            fal_hangup(&cxp);
             pthread_join(th, NULL);
             FA_CHECK(cst == SS$_NORMAL && sarg.status == SS$_NORMAL,
                      "PUT: DAP transfer completed on both peers");
@@ -3176,6 +3192,7 @@ static int run_fal_accept_test(void)
             struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
             struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
             uint32_t cst = dnet_fal_client_get(DEST, BACK, &ct);
+            fal_hangup(&cxp);
             pthread_join(th, NULL);
             FA_CHECK(cst == SS$_NORMAL && sarg.status == SS$_NORMAL,
                      "GET: DAP transfer completed on both peers");

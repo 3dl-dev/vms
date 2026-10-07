@@ -460,3 +460,4 @@ sys$binutc=PROCEDURE
 sys$numutc=PROCEDURE
 sys$ascutc=PROCEDURE
 sys$timcon=PROCEDURE
+sys$setdfprot=PROCEDURE

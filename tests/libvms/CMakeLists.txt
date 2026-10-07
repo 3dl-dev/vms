@@ -602,3 +602,6 @@ add_test(NAME test_libvms_sysuaf_flags_upgrade
 # $BINUTC/$NUMUTC/$ASCUTC/$TIMCON/$GETUTC against the values the Alpha V8.4 lab returned.
 libvms_add_test(test_libvms_utc
     ${CMAKE_CURRENT_SOURCE_DIR}/test_utc.c)
+# OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
+libvms_add_test(test_libvms_opcdef_layout
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)

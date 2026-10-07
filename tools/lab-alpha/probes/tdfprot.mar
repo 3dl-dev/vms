@@ -1,0 +1,52 @@
+        .TITLE  TDFPROT
+        .LIBRARY "SYS$LIBRARY:STARLET.MLB"
+        $DSCDEF
+        .PSECT  DATA,NOEXE,WRT,LONG
+OLD:    .BLKL   1
+OLD2:   .BLKL   1
+NEWP:   .WORD   ^X0F00
+        .WORD   0
+CTL:    .ASCID  "!AS STATUS=!XL OLD=!XW"
+L1:     .ASCID  "get "
+L2:     .ASCID  "set0F00 "
+L3:     .ASCID  "get-again "
+L4:     .ASCID  "bad-null-both "
+STAT:   .BLKL   1
+OUTBUF: .BLKB   120
+OUTLEN: .BLKL   1
+OUTDSC: .WORD   120
+        .BYTE   DSC$K_DTYPE_T
+        .BYTE   DSC$K_CLASS_S
+        .ADDRESS OUTBUF
+        .PSECT  CODE,EXE,NOWRT
+PRINT:  .JSB_ENTRY
+        MOVW    OUTLEN, OUTDSC
+        PUSHAL  OUTDSC
+        CALLS   #1, G^LIB$PUT_OUTPUT
+        MOVW    #120, OUTDSC
+        RSB
+        .ENTRY  START, ^M<>
+        CLRL    OLD
+        PUSHAL  OLD
+        PUSHL   #0
+        CALLS   #2, G^SYS$SETDFPROT
+        MOVL    R0, STAT
+        $FAO_S  CTRSTR=CTL, OUTLEN=OUTLEN, OUTBUF=OUTDSC, P1=#L1, P2=STAT, P3=OLD
+        JSB     PRINT
+        CLRL    OLD
+        PUSHAL  OLD
+        PUSHAL  NEWP
+        CALLS   #2, G^SYS$SETDFPROT
+        MOVL    R0, STAT
+        $FAO_S  CTRSTR=CTL, OUTLEN=OUTLEN, OUTBUF=OUTDSC, P1=#L2, P2=STAT, P3=OLD
+        JSB     PRINT
+        CLRL    OLD
+        PUSHAL  OLD
+        PUSHL   #0
+        CALLS   #2, G^SYS$SETDFPROT
+        MOVL    R0, STAT
+        $FAO_S  CTRSTR=CTL, OUTLEN=OUTLEN, OUTBUF=OUTDSC, P1=#L3, P2=STAT, P3=OLD
+        JSB     PRINT
+        MOVL    #1, R0
+        RET
+        .END    START

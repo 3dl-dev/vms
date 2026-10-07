@@ -1762,9 +1762,10 @@ static int cmd_show_symbol(struct dcl_command *cmd)
 static int cmd_show_protection(struct dcl_command *cmd)
 {
     (void)cmd;
-    struct dcl_context *ctx = dcl_get_context();
     char prot_buf[64];
-    vmsfs_format_protection(ctx->default_protection, prot_buf, sizeof(prot_buf));
+    uint16_t dfprot = 0;
+    (void)sys$setdfprot(NULL, &dfprot);     /* the executive's process default */
+    vmsfs_format_protection(dfprot, prot_buf, sizeof(prot_buf));
     printf("  SYSTEM default protection: %s\n", prot_buf);
     return SS$_NORMAL;
 }

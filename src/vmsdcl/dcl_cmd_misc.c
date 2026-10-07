@@ -780,7 +780,7 @@ int cmd_reply(struct dcl_command *cmd)
                username, detail);
 
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_ENABLE;
-        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
         int n = snprintf(msgbuf.hdr.opc$l_ms_text,
                          sizeof(msgbuf.text),
                          "operator %s enabled (%s)", username, detail);
@@ -791,7 +791,7 @@ int cmd_reply(struct dcl_command *cmd)
         printf("%%OPCOM-I-OPRDIS, operator %s disabled\n", username);
 
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_DISABLE;
-        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
         int n = snprintf(msgbuf.hdr.opc$l_ms_text,
                          sizeof(msgbuf.text),
                          "operator %s disabled", username);
@@ -807,7 +807,7 @@ int cmd_reply(struct dcl_command *cmd)
                to_val ? to_val : "?", reply_text);
 
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_REPLY;
-        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
         int n = snprintf(msgbuf.hdr.opc$l_ms_text,
                          sizeof(msgbuf.text),
                          "reply to rqid %s: %s",
@@ -853,7 +853,7 @@ int cmd_request(struct dcl_command *cmd)
     memset(&msgbuf, 0, sizeof(msgbuf));
 
     msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_RQST;
-    msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+    OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
 
     int n = snprintf(msgbuf.hdr.opc$l_ms_text, sizeof(msgbuf.text),
                      "%s", msg_text);

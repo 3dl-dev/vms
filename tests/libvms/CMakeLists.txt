@@ -588,3 +588,8 @@ libvms_add_test(test_libvms_lib_get_logical
 # SYS$CREATE_UID -- 128-bit uids: unique, version 1 / RFC 4122 variant, clock-tied.
 libvms_add_test(test_libvms_create_uid
     ${CMAKE_CURRENT_SOURCE_DIR}/test_create_uid.c)
+
+
+# $BINUTC/$NUMUTC/$ASCUTC/$TIMCON/$GETUTC against the values the Alpha V8.4 lab returned.
+libvms_add_test(test_libvms_utc
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_utc.c)

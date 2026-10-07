@@ -64,7 +64,7 @@ int main(void)
     for (int i = 1; i < N; i++) if (memcmp(sorted[i], sorted[i - 1], 16) == 0) dup++;
     CHECK(dup == 0, "all 5000 uids are pairwise distinct");
 
-    const uint64_t epoch = 0x01B21DD213814000ull;
+    const uint64_t epoch = 0x0135886AC7960000ull;
     uint64_t first = uid_time(uids[0]), last = uid_time(uids[N - 1]);
     CHECK(first + 0 >= before + epoch && first <= after + epoch + N,
           "the first uid's timestamp is the clock at creation (VMS time + epoch offset)");

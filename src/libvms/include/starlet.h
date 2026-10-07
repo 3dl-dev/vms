@@ -304,7 +304,14 @@ uint32_t sys$gettim(uint64_t *timadr);
  * identical values; the separate entry point is provided for source
  * compatibility with programs that call SYS$GETUTC explicitly.
  */
-uint32_t sys$getutc(uint64_t *timadr);
+uint32_t sys$getutc(void *utcadr);   /* 16-byte $UTCDEF structure, not a quadword */
+
+/** UTC time services on the 16-byte $UTCDEF structure (see sys_time.c). */
+uint32_t sys$binutc(const struct dsc$descriptor_s *timbuf, void *utcadr);
+uint32_t sys$numutc(uint16_t timbuf[7], const void *utcadr);
+uint32_t sys$ascutc(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
+                    const void *utcadr, uint32_t cvtflg);
+uint32_t sys$timcon(uint64_t *timadr, void *utcadr, uint32_t cvtflg);
 
 /**
  * sys$numtim - Convert binary time to numeric components
@@ -350,7 +357,7 @@ uint32_t sys$bintim(
  * @param timlen  Optional pointer to receive string length
  * @param timbuf  Pointer to descriptor of output buffer
  * @param timadr  Optional pointer to time (NULL = current time)
- * @param cvtflg  Conversion flags (0 = full, 1 = date only)
+ * @param cvtflg  Conversion flags (bit 0 set = the time only; 0 = date and time)
  *
  * @return  SS$_NORMAL on success
  */

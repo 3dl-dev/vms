@@ -55,7 +55,7 @@
  * ===========================================================================
  *
  * WHAT THIS FILE NOW EMITS, AND WHERE IT STILL HONESTLY STOPS (rd vms-d7a3):
- *   - THE BLOCKING AST (op 0x04) is GROUNDED by the vms-c03 capture and is
+ *   - THE BLOCKING AST (op 0x05, rd vms-ea1) is GROUNDED by the vms-c03 capture and is
  *     SENT: when the engine names a remote holder that must be told, this file
  *     builds the frame from THAT holder's LKB (its two real lock ids, no
  *     invented mode context, no resource name) and originates it at the
@@ -67,7 +67,7 @@
  *     same two gates (vms_dlm_scs_fsm.h), and is now also CONSUMED: an inbound
  *     op-0x03 from a proven-OVMX peer reaches the engine's master-side door and
  *     really releases the LKB this node holds for that peer (rd vms-c72, "THE
- *     RELEASE'S RECEIVE HALF" below). An inbound op-0x04 likewise reaches the
+ *     RELEASE'S RECEIVE HALF" below). An inbound op-0x05 likewise reaches the
  *     requester FSM and fires the holder's REAL blocking AST. What is still
  *     owed and counted rather than sent is the DEFERRED GRANT a release earns
  *     for a queued waiter -- see dlm_arm_count_deferred_grant.
@@ -152,7 +152,7 @@ struct vms_dlm_scs {
 	uint32_t denies_sent;
 	uint32_t queued_no_reply;     /* genuinely queued: the grant comes later */
 	uint32_t redirects_sent;      /* "the master is X", from a real RSB   */
-	uint32_t blkasts_sent;        /* op-0x04 blocking ASTs really emitted,*/
+	uint32_t blkasts_sent;        /* op-0x05 blocking ASTs really emitted,*/
 				       /* built from the blocking LKB's own two*/
 				       /* lock ids (rd vms-d7a3)              */
 	uint32_t releases_received;   /* op-0x03 $DEQs that really RELEASED a */
@@ -923,7 +923,7 @@ static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
 }
 
 /*
- * THE BLOCKING AST's FRAME (op 0x04, rd vms-d7a3) -- master -> the remote
+ * THE BLOCKING AST's FRAME (op 0x05, rd vms-d7a3/vms-ea1) -- master -> the remote
  * holder whose lock is in the way. GROUNDED by the vms-c03 capture of a real
  * 2-node OpenVMS VAX 7.3 cluster, where the master->holder BLKAST's two lock-id
  * fields correlate byte-for-byte to the holder's own op-0x01 ENQ and to the
@@ -978,7 +978,7 @@ static int dlm_arm_build_blkast(struct vms_dlm_scs *d,
  * BLOCKING AST. It is SENT (rd vms-d7a3), behind gates that are not this
  * function's to relax:
  *
- *   - THE ALL-OVMX GATE. op 0x04 is a shape OVMX has read off a real cluster's
+ *   - THE ALL-OVMX GATE. op 0x05 is a shape OVMX has read off a real cluster's
  *     wire and has never yet been watched to emit AT one, so it goes only where
  *     every member is proven to run this implementation.
  *   - RULE C, per DESTINATION, inside `dlm_arm_send` -> cnxman_dlm_send ->
@@ -1167,7 +1167,7 @@ static int dlm_arm_serve_deq(struct vms_dlm_scs *d,
 
 /*
  * THE BLOCKING AST's RECEIVE HALF (rd vms-c72), holder side -- the other end of
- * this file's own op-0x04 emit.
+ * this file's own op-0x05 emit.
  *
  * Everything below the parse already existed and was already proven: the
  * requester FSM's BLKAST event, and `dlm_arm_blkast_deliver` -> the engine's
@@ -1485,7 +1485,7 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	 *
 	 * BOTH ARE BELOW RULE C, which is the whole reason the gate sits where
 	 * it does: an op-0x03 creates (well, destroys) real lock state and an
-	 * op-0x04 fires a real user-mode AST, and neither may happen for a
+	 * op-0x05 fires a real user-mode AST, and neither may happen for a
 	 * system that has not proved it runs this implementation.
 	 */
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)

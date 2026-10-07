@@ -236,7 +236,7 @@ OVMX's DLM wire codec is `src/kernel-core/vms_cluster_codec_dlm.{c,h}`
 (ENQ/CONVERT, GRANT, DEQ, BLKAST), built over the transport frame established
 in §1 and the body semantics in §§2-4. It carries its own corrected reading of
 the wire (`vms-c03`): the "completion 0x04 + commit 0x03" pair once assumed
-here was a phantom — 0x03 is `$DEQ`, 0x04 is BLKAST, and 0x06 carries the
+here was a phantom — 0x03 is `$DEQ`, 0x05 is BLKAST (rd vms-ea1; first read as 0x04), and 0x06 carries the
 value block.
 
 **This is where the oracle bites:** the codec's per-field entries are OVMX's

@@ -191,7 +191,8 @@ enum cnxman_coord_state {
 				     * to open yet: backing off (p. 7-32)   */
 	CNXMAN_COORD_RELAY     = 2, /* op 0x12 out; awaiting the members'
 				     * connectivity confirmations          */
-	CNXMAN_COORD_COMMIT    = 3, /* op 0x03 out; awaiting the subject    */
+	CNXMAN_COORD_COMMIT    = 3, /* op 0x03 out: the other members first,
+				     * then the subject (rd vms-9484)       */
 	CNXMAN_COORD_OPEN      = 4, /* PHASE 1: opens out; awaiting all acks*/
 	CNXMAN_COORD_BARRIER   = 5, /* PHASE 2 committed; 12 x (M-1) running*/
 	CNXMAN_COORD_COMPLETE  = 6, /* release #12 sent to every member     */
@@ -334,6 +335,8 @@ struct cnxman_coord_rebuild_ops {
 #define CNXMAN_COORD_P_RELAY_ACK   0x02u /* answered our op 0x12              */
 #define CNXMAN_COORD_P_PHASE1_ACK  0x04u /* answered our Phase 1 open         */
 #define CNXMAN_COORD_P_SUBJECT     0x08u /* the node being added or removed   */
+#define CNXMAN_COORD_P_COMMIT_SENT 0x10u /* our op 0x03 went to it (vms-9484) */
+#define CNXMAN_COORD_P_COMMIT_ACK  0x20u /* it answered that op 0x03          */
 
 struct cnxman_coord {
 	struct vms_cluster                    *cl;

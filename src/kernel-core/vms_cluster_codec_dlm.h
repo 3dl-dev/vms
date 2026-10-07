@@ -44,7 +44,10 @@
  * GROUNDING.md) -- and it says the pair was a PHANTOM:
  *
  *     op 0x03 is $DEQ.     It is not a "commit".
- *     op 0x04 is BLKAST.   It is not a "completion".
+ *     op 0x04 is not a "completion" either -- and it is not the BLKAST
+ *                          this note first said it was (rd vms-ea1: a NAMED
+ *                          op 0x04 is the master removing its directory
+ *                          entry, rd vms-8219). The BLKAST is op 0x05.
  *     op 0x06 is the CONVERT that carries the lock VALUE BLOCK.
  *     THERE IS NO SEPARATE COMPLETION OR COMMIT OPCODE AT ALL. A real
  *     requester's grant is simply the op-0x01 cat-0x82 response; nothing
@@ -65,15 +68,16 @@
  *   - op 0x0d lock-resource rebuild record request+response -- GROUNDED,
  *     spec §4(p), the recipe reconstructs 1367/1367 real responses
  *     byte-for-byte with zero residuals.
- *   - op 0x03 $DEQ and op 0x04 BLKAST: the two lock-id fields and the mode
- *     byte -- GROUNDED, vms-c03, each byte correlated to the driving $ENQ.
+ *   - op 0x03 $DEQ and op 0x05 BLKAST: the two lock-id fields and the mode
+ *     byte -- GROUNDED, vms-c03 (re-read by vms-ea1), each byte correlated to
+ *     the driving $ENQ.
  *   - op 0x06 CONVERT-with-VALBLK: the 16-byte value block at body[36:52]
  *     -- GROUNDED, vms-c03 (the driver's own `WROTEBYVAX1XXXXX` pattern
  *     appears there verbatim on the real wire).
  *   - ONE field is OBSERVED-BUT-NOT-PINNED and is labelled so everywhere it
- *     appears: the BLKAST mode-context pair at body[30:32]. Two samples in
- *     one capture read 0x01,0x05 and a third (a different lock) read
- *     0x01,0x00, which is not a one-variable diff. It is therefore carried
+ *     appears: the BLKAST mode-context pair at body[30:32]. The two real
+ *     BLKASTs on record read 0x01,0x05 (vms-c03) and 0x00,0x05 (dlmlab L1,
+ *     rd vms-ea1), which is not a one-variable diff. It is therefore carried
  *     behind an explicit `mode_ctx_valid` opt-in, exactly like the
  *     directory hash: a caller that does not hold real executive values for
  *     it writes NOTHING there. A later capture upgrades the label.
@@ -162,7 +166,23 @@ extern "C" {
  * OpenVMS VAX 7.3 cluster actually puts there.
  */
 #define VMS_DLM_WIREOP_DEQ          0x03u  /* cross-node lock RELEASE ($DEQ)    */
-#define VMS_DLM_WIREOP_BLKAST       0x04u  /* master -> remote holder blocking AST*/
+#define VMS_DLM_WIREOP_BLKAST       0x05u  /* master -> remote holder blocking AST*/
+
+/*
+ * WHY 0x05 AND NOT THE 0x04 THIS TABLE USED TO CARRY (rd vms-ea1). The vms-c03
+ * GROUNDING named a frame op 0x04 = BLKAST because its lock-id bytes matched
+ * the contended lock. They did -- as a STALE COPY. In dlm-blk2-20260911.pcap
+ * the first frame after the contention, and the first anywhere to carry the
+ * OVMXBLK2 lock ids, is pcap record 48, op 0x05, master vax2 -> EX holder
+ * VAX1. Records 59 and 61 are NAMED op 0x04 ('F11B$aSYSDSK1',
+ * 'DTI$SYSTEM$VAX2') with byte-identical lock ids, and record 43's op 0x04
+ * carries record 38's: a named op 0x04 is the master removing its directory
+ * entry (VMS_DLM_WIREOP_DIR_REMOVE below; 4881/4881 op-0x04 frames in the
+ * vms-8219 dlmlab L1 capture are named), and the lock-id span is whatever the
+ * buffer last held. L1 supplies the independent second sample: at its DLMBLK
+ * scenario the master sends the EX holder an op 0x05 in the same millisecond
+ * the contending ENQ arrives, carrying that lock's ids.
+ */
 #define VMS_DLM_WIREOP_CONVERT_VALBLK 0x06u /* CONVERT carrying the value block */
 
 /*
@@ -661,8 +681,8 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 			       uint8_t *frame, uint32_t cap, uint32_t *written);
 
 /* ------------------------------------------------------------------ *
- * op 0x03 $DEQ, op 0x04 BLKAST, op 0x06 CONVERT-with-VALBLK
- * -- GROUNDED, rd vms-fa7 / vms-002 / vms-858, capture set
+ * op 0x03 $DEQ, op 0x05 BLKAST, op 0x06 CONVERT-with-VALBLK
+ * -- GROUNDED, rd vms-fa7 / vms-002 / vms-858 / vms-ea1, capture set
  *    tests/lab/captures/vms-c03-dlm-opcodes-20260911/ (GROUNDING.md).
  *
  * ALL THREE REUSE THE ENQ HEADER POSITIONS. That is not an assumption
@@ -683,21 +703,19 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  *          the second DEQ in the same capture -- which is itself the proof
  *          that it is not a field). A DEQ names its lock by lock-id.
  *
- *   BLKAST (0x04) dlm-blk2-20260911.pcap f58  vax2 -> VAX1 (master->holder)
+ *   BLKAST (0x05) dlm-blk2-20260911.pcap record 48 (GROUNDING's 0-based
+ *          "f47")  vax2 -> VAX1 (master->holder), rd vms-ea1
  *          master_lkid 0x590004e3 == the f18 EX-holder ENQ for 'OVMXBLK2'
  *          req_lkid    0x0a0003af == the holder's own local handle
- *          body[30:32] OBSERVED 0x01,0x05 -- NOT PINNED, see below
- *          NO RESOURCE NAME: body[48] reads 'F11B$aSYSDSK1' and that is a
- *          STALE BUFFER, not a field (the frame's real resource,
- *          'OVMXBLK2', appears in the capture ONLY in the op-0x01 ENQ).
+ *          body[30:32] OBSERVED 0x01,0x05 (the dlmlab L1 sample: 0x00,0x05)
+ *          -- NOT PINNED, see below
+ *          NO RESOURCE NAME. A BLKAST names its lock by lock-id.
  *
- *          WHAT IS *NOT* CLAIMED ABOUT 0x04. The same captures contain
- *          op-0x04 frames in the OTHER direction carrying master_lkid 0
- *          (dlm-lvb3 f8/f11, dlm-blk2 f14/f17). Nothing correlates those
- *          to a lock, so this codec does not say what they are: the
- *          parser REFUSES a zero lock id rather than reporting "a BLKAST
- *          for lock 0", and the BLKAST semantics grounded here are
- *          exactly the master->holder case the capture drove and no more.
+ *          WHAT op 0x04 IS. Named, it is the master removing its directory
+ *          entry (VMS_DLM_WIREOP_DIR_REMOVE); its lock-id span is stale
+ *          buffer -- the frame the GROUNDING first read as this BLKAST
+ *          carries record 48's bytes, two records and 2.6 s later, under
+ *          the name 'F11B$aSYSDSK1'. The BLKAST parser refuses op 0x04.
  *
  *   VALBLK (0x06) dlm-lvb3-20260911.pcap f14  VAX1 -> vax2
  *          master_lkid 0x2b000489 == the f12 ENQ for resource 'OVMXLVB3'
@@ -808,9 +826,11 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * body[30:32] (abs 102): the BLKAST's mode-context pair.
  *
  * OBSERVED, NOT PINNED, and deliberately kept distinct from the GROUNDED
- * lock-mode byte that shares body[30] on an ENQ/CONVERT/DEQ. Two BLKAST
- * frames for the contended lock read 0x01,0x05; a third, for a different
- * (F11B$a) lock, read 0x01,0x00. Three samples across two locks is not a
+ * lock-mode byte that shares body[30] on an ENQ/CONVERT/DEQ. The two real
+ * BLKASTs on record read 0x01,0x05 (vms-c03 record 48) and 0x00,0x05 (the
+ * dlmlab L1 DLMBLK scenario); body[31] is the contender's EX in both. (The
+ * "three samples" this note used to count were op-0x04 directory removals
+ * carrying stale buffer, rd vms-ea1.) Two samples across two locks is not a
  * one-variable diff, so this codec will not claim to know what the pair
  * means. It is carried, labelled, and opt-in on the builder.
  */
@@ -831,7 +851,7 @@ struct vms_dlm_deq {
 };
 
 /*
- * A blocking AST (op 0x04), master -> the remote holder whose lock is in
+ * A blocking AST (op 0x05, rd vms-ea1), master -> the remote holder whose lock is in
  * the way. It identifies its lock by lock-id and by NOTHING else -- there
  * is no name field here, on purpose (see the section comment).
  */
@@ -893,14 +913,14 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 				     uint8_t *frame, uint32_t cap,
 				     uint32_t *written);
 
-/* Parse an op-0x04 BLKAST. Same lock-id refusal as the DEQ parser. */
+/* Parse an op-0x05 BLKAST. Same lock-id refusal as the DEQ parser. */
 vms_codec_status_t vms_dlm_blkast_parse_body(const uint8_t *body, uint32_t len,
 					     struct vms_dlm_blkast *out);
 vms_codec_status_t vms_dlm_blkast_parse(const uint8_t *frame, uint32_t len,
 					const struct vms_frame_info *fi,
 					struct vms_dlm_blkast *out);
 
-/* Build an op-0x04 BLKAST. Same lock-id refusal as the DEQ builder; the
+/* Build an op-0x05 BLKAST. Same lock-id refusal as the DEQ builder; the
  * OBSERVED mode-context pair rides only when `b->mode_ctx_valid` is set. */
 vms_codec_status_t vms_dlm_blkast_build(const struct vms_dlm_blkast *b,
 					uint8_t *frame, uint32_t cap,

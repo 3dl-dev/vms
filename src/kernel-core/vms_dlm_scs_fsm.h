@@ -71,7 +71,7 @@
  *     An earlier revision sent a PROVISIONAL "op 0x04 completion + op 0x03
  *     commit" pair once a grant landed. The vms-c03 capture of a real 2-node
  *     OpenVMS VAX 7.3 cluster showed that pair does not exist: 0x03 is $DEQ,
- *     0x04 is BLKAST, 0x06 carries the value block, and a real requester
+ *     0x05 is BLKAST (rd vms-ea1), 0x06 carries the value block, and a real requester
  *     answers a grant with NO frame whatsoever (vms_cluster_codec_dlm.h's
  *     supersession note). So the pair is gone from this file, which makes
  *     OVMX emit strictly FEWER frame shapes than before -- a divergence
@@ -143,7 +143,7 @@
  *
  *   GROUNDED IN THE CODEC, BUT NOT TRANSMITTED BY THIS ARM:
  *
- *     THE BLOCKING AST, op 0x04. Grounded by vms-c03 and parseable by the
+ *     THE BLOCKING AST, op 0x05 (rd vms-ea1). Grounded by vms-c03 and parseable by the
  *     codec, which identifies its lock by `master_lkid` and by nothing else
  *     (the reference frame's readable body[48] resource name is STALE BUFFER
  *     belonging to another lock, and the codec refuses to read it). This
@@ -463,7 +463,7 @@ struct dlm_req_fsm {
 	uint32_t blkasts_rx;
 	uint32_t blkasts_delivered;   /* a REAL user-mode AST was queued       */
 	uint32_t blkasts_undeliverable;
-	uint32_t blkasts_unparsed;    /* an op-0x04 body the codec refused --  */
+	uint32_t blkasts_unparsed;    /* an op-0x05 body the codec refused --  */
 				       /* wrong cat/op, or a zero lock id       */
 	uint32_t hashes_learned;      /* body[128:132] -> the resource block   */
 
@@ -584,7 +584,7 @@ enum dlm_req_status dlm_req_fsm_decline(struct dlm_req_fsm *f,
  * the object is found by a value this executive minted.
  *
  * This is the HANDLE-taking entry: whatever recognised the event supplies the
- * lock id. The op-0x04 wire shape became grounded with the vms-c03 capture and
+ * lock id. The op-0x05 wire shape became grounded with the vms-c03 capture and
  * the codec now parses it, so the live receive path uses the BODY-taking entry
  * below; this one remains for a caller that already holds the handle (and is
  * what that entry calls once the codec has produced it).
@@ -593,7 +593,7 @@ enum dlm_req_status dlm_req_fsm_blkast(struct dlm_req_fsm *f,
 				       uint32_t req_lkid);
 
 /*
- * THE SAME EVENT AS SCS REALLY DELIVERS IT (rd vms-c72): the cat-0x02 op-0x04
+ * THE SAME EVENT AS SCS REALLY DELIVERS IT (rd vms-c72): the cat-0x02 op-0x05
  * body, 132 bytes, from the master. Parsed through the codec -- which is what
  * applies the category/opcode gate and the fc8540ae refusal of a zero lock id
  * in either field -- and then dispatched by the handle at body[20:24], which is

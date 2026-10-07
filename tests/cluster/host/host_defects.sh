@@ -426,8 +426,8 @@ EOF
   master_lkid==0 REFUSED on $DEQ (0x03)
   req_lkid==0 REFUSED on $DEQ (0x03)
   both lock ids 0 REFUSED (they do not cancel out)
-  master_lkid==0 REFUSED on BLKAST (0x04)
-  req_lkid==0 REFUSED on BLKAST (0x04)
+  master_lkid==0 REFUSED on BLKAST (0x05)
+  req_lkid==0 REFUSED on BLKAST (0x05)
 *** a refused build wrote NO byte at all ***
 EOF
                       ;;

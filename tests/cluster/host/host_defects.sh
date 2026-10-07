@@ -1606,8 +1606,9 @@ apply_edit() {
         sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
 
     csb-resume-ignores-peer-position)
-        # `csb->cm_send_msg = peer_ack_msg;` is unique in this file.
-        sed -i 's|csb->cm_send_msg = peer_ack_msg;|/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
+        # `csb->cm_send_msg = peer_ack_msg;` occurs twice since rd vms-ba4;
+        # the resume's is the one indented two tabs.
+        sed -i 's|^\t\tcsb->cm_send_msg = peer_ack_msg;|\t\t/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
 
     csb-reconnect-never-carries)
         # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.

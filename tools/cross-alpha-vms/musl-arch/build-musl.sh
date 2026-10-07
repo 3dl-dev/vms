@@ -87,6 +87,13 @@ cp -v  "${OVERLAY}/src/mman/${TARGET}/"* "src/mman/${TARGET}/"
 # below — stock musl is pinned + checksum-verified, so exact-text sed is safe and
 # reviewable (same idiom as the configure ARCH sed).
 cp -v  "${OVERLAY}/src/internal/syscall_ret.c" "src/internal/"
+# vms-fb4: fork hands the child its thread pointer explicitly (CLONE_SETTLS).
+# Linux/Alpha's plain-fork inheritance copies the parent's in-memory HWPCB
+# UNIQUE, which PALcode that caches UNIQUE (qemu-palcode) leaves stale until the
+# next context switch -- the child then faults on its first TLS access. See the
+# header of src/process/alpha-dec-vms/_Fork.c.
+mkdir -p "src/process/${TARGET}"
+cp -v  "${OVERLAY}/src/process/${TARGET}/"* "src/process/${TARGET}/"
 
 # ---- teach configure the triplet -> ARCH mapping (idempotent) ----
 if ! grep -q "ARCH=alpha-dec-vms" configure; then

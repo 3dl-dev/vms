@@ -25,10 +25,13 @@
  *                Outside a vfork context the calling process is replaced by the
  *                image (execve of the same IMGACT launcher), the POSIX meaning.
  *
- * ARGUMENT VECTORS are DEC C's: arrays of 32-bit pointers at every client
- * pointer size (libiberty's VMS pex code builds exactly that, to_ptr32). argv[0]
- * is not passed on: the created image's argv[0] is its image spec, as DEC C
- * supplies it.
+ * ARGUMENT VECTORS are arrays of the CLIENT's pointers: 32-bit entry points
+ * (decc$$exec*32) for the DEC C default pointer size, 64-bit ones
+ * (decc$$exec*64) for -mpointer-size=64 callers such as libgcc's gcov exec
+ * wrappers. (DEC C's 64-bit headers take 32-bit vectors -- what libiberty's
+ * __LONG_POINTERS to_ptr32 code builds; OVMX follows the client's own vector
+ * type so a 64-bit caller's array is never misread.) argv[0] is not passed
+ * on: the created image's argv[0] is its image spec, as DEC C supplies it.
  *
  * NOT YET: wait status is the Linux one (the image's VMS condition maps to its
  * POSIX exit code through IMGACT's $EXIT); _exit() in a vfork context (an exec
@@ -178,6 +181,23 @@ static int exec32(const char *spec, const unsigned int *argv32, const unsigned i
     return r;
 }
 
+/* 64-bit-pointer clients: native (64-bit) argument vectors. */
+static int exec64(const char *spec, char *const *argv, char *const *envp)
+{
+    size_t n = 0;
+    if (argv)
+        while (argv[n])
+            n++;
+    return ovmx_exec_image(spec, (char **)(argv ? argv + (n ? 1 : 0) : argv),
+                           n ? n - 1 : 0, (char **)envp);
+}
+int ovmx_execve64(const char *s, char *const *a, char *const *e) __asm__("decc$$execve64");
+int ovmx_execv64(const char *s, char *const *a) __asm__("decc$$execv64");
+int ovmx_execvp64(const char *s, char *const *a) __asm__("decc$$execvp64");
+int ovmx_execve64(const char *s, char *const *a, char *const *e) { return exec64(s, a, e); }
+int ovmx_execv64(const char *s, char *const *a) { return exec64(s, a, 0); }
+int ovmx_execvp64(const char *s, char *const *a) { return exec64(s, a, 0); }
+
 int ovmx_execve32(const char *spec, const unsigned int *argv, const unsigned int *envp)
     __asm__("decc$$execve32");
 int ovmx_execv32(const char *spec, const unsigned int *argv) __asm__("decc$$execv32");
@@ -185,6 +205,7 @@ int ovmx_execvp32(const char *spec, const unsigned int *argv) __asm__("decc$$exe
 int ovmx_execl32(const char *spec, const char *arg0, ...) __asm__("decc$$execl32");
 int ovmx_execlp32(const char *spec, const char *arg0, ...) __asm__("decc$$execlp32");
 int ovmx_execle32(const char *spec, const char *arg0, ...) __asm__("decc$$execle32");
+int ovmx_execle64(const char *spec, const char *arg0, ...) __asm__("decc$$execle64");
 
 int ovmx_execve32(const char *spec, const unsigned int *argv, const unsigned int *envp)
 {
@@ -202,7 +223,7 @@ int ovmx_execvp32(const char *spec, const unsigned int *argv)
     return exec32(spec, argv, 0);
 }
 
-static int execl_common(const char *spec, va_list ap, int with_env)
+static int execl_common(const char *spec, va_list ap, int with_env)  /* with_env: 1 = 32-bit envp, 2 = 64-bit */
 {
     char *args[256];
     size_t n = 0;
@@ -216,6 +237,8 @@ static int execl_common(const char *spec, va_list ap, int with_env)
     }
     if (!with_env)
         return ovmx_exec_image(spec, args, n, 0);
+    if (with_env == 2)
+        return ovmx_exec_image(spec, args, n, va_arg(ap, char **));
     /* execle: the environment is a DEC C (32-bit pointer) vector too. */
     const unsigned int *e32 = va_arg(ap, const unsigned int *);
     size_t ne = v32_len(e32);
@@ -258,6 +281,16 @@ int ovmx_execle32(const char *spec, const char *arg0, ...)
     va_list ap;
     va_start(ap, arg0);
     int r = execl_common(spec, ap, 1);
+    va_end(ap);
+    return r;
+}
+
+int ovmx_execle64(const char *spec, const char *arg0, ...)
+{
+    (void)arg0;
+    va_list ap;
+    va_start(ap, arg0);
+    int r = execl_common(spec, ap, 2);
     va_end(ap);
     return r;
 }

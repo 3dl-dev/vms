@@ -29,47 +29,84 @@ extern "C" {
  * process.  They are specified in the stsflg argument.
  * ================================================================ */
 
-#define PRC$M_DETACH        0x0001  /* Bit 0:  Create a detached process */
-#define PRC$M_NOACNT        0x0002  /* Bit 1:  No accounting */
-#define PRC$M_BATCH         0x0004  /* Bit 2:  Batch process */
-#define PRC$M_HIBER         0x0008  /* Bit 3:  Start in hibernation */
-#define PRC$M_LOGINOUT      0x0010  /* Bit 4:  Image is LOGINOUT */
-#define PRC$M_NETWRK        0x0020  /* Bit 5:  Network process */
-#define PRC$M_PSWAPM        0x0040  /* Bit 6:  Process swap mode (enable/disable) */
-#define PRC$M_INTER         0x0080  /* Bit 7:  Interactive process */
-#define PRC$M_NOPASSWORD    0x0100  /* Bit 8:  No password required */
-#define PRC$M_IMGDMP        0x0200  /* Bit 9:  Image dump on error */
-#define PRC$M_NOUAF         0x0400  /* Bit 10: Do not consult UAF */
-#define PRC$M_SUBSYSTEM     0x0800  /* Bit 11: Subsystem process */
-#define PRC$M_NOCLISYM      0x1000  /* Bit 12: No CLI symbol table */
-#define PRC$M_SSRWAIT       0x2000  /* Bit 13: Wait for resource */
-#define PRC$M_SSFEXCU       0x4000  /* Bit 14: Force exit on unhandled condition */
-#define PRC$M_HOME_RAD      0x8000  /* Bit 15: Use home RAD */
+/* V7.3 $PRCDEF values (rd vms-f811; docs/oracle/vax73-starlet-defs/PRCDEF.txt) */
+#define PRC$M_SSRWAIT              0x00000001
+#define PRC$M_SSFEXCU              0x00000002
+#define PRC$M_PSWAPM               0x00000004
+#define PRC$M_NOACNT               0x00000008
+#define PRC$M_BATCH                0x00000010
+#define PRC$M_HIBER                0x00000020
+#define PRC$M_NOUAF                0x00000040
+#define PRC$M_NETWRK               0x00000080
+#define PRC$M_DISAWS               0x00000100
+#define PRC$M_DETACH               0x00000200
+#define PRC$M_INTER                0x00000400
+#define PRC$M_IMGDMP               0x00000800
+#define PRC$M_CLISPEC              0x00001000
+#define PRC$M_NOPASSWORD           0x00002000
+#define PRC$M_DEBUG                0x00004000
+#define PRC$M_DBGTRU               0x00008000
+#define PRC$M_SUBSYSTEM            0x00010000
+#define PRC$M_TCB                  0x00020000
+#define PRC$M_NO_IMAGE_PRIVS       0x00040000
+#define PRC$M_PERM_SUBSYSTEM       0x00080000
+#define PRC$M_PARSE_EXTENDED       0x00100000
+#define PRC$M_INHERIT_PERSONA      0x00200000
+#define PRC$M_LOGIN                0x00000040
 
-/* Legacy aliases */
-#define PRC$M_LOGIN         PRC$M_LOGINOUT
-#define PRC$M_NETWORK       PRC$M_NETWRK
+/*
+ * [OVMX] creation flags V7.3 does not define. Bits 28..30, above every V7.3 bit,
+ * so no oracle flag is aliased. Labelled [OVMX], not VMS values.
+ *   PRC$M_LOGINOUT   the created image is LOGINOUT (session login path)
+ *   PRC$M_NOCLISYM   no CLI symbol table
+ *   PRC$M_HOME_RAD   use home RAD
+ */
+#define PRC$M_LOGINOUT             0x40000000
+#define PRC$M_NOCLISYM             0x20000000
+#define PRC$M_HOME_RAD             0x400000
+
+/* Legacy alias (not in $PRCDEF) */
+#define PRC$M_NETWORK              PRC$M_NETWRK
 
 /* ================================================================
- * Process status flag bit positions
+ * Process status flag bit positions (V7.3 $PRCDEF)
  * ================================================================ */
 
-#define PRC$V_DETACH        0
-#define PRC$V_NOACNT        1
-#define PRC$V_BATCH         2
-#define PRC$V_HIBER         3
-#define PRC$V_LOGINOUT      4
-#define PRC$V_NETWRK        5
-#define PRC$V_PSWAPM        6
-#define PRC$V_INTER         7
-#define PRC$V_NOPASSWORD    8
-#define PRC$V_IMGDMP        9
-#define PRC$V_NOUAF         10
-#define PRC$V_SUBSYSTEM     11
-#define PRC$V_NOCLISYM      12
-#define PRC$V_SSRWAIT       13
-#define PRC$V_SSFEXCU       14
-#define PRC$V_HOME_RAD      15
+#define PRC$V_SSRWAIT              0
+#define PRC$V_SSFEXCU              1
+#define PRC$V_PSWAPM               2
+#define PRC$V_NOACNT               3
+#define PRC$V_BATCH                4
+#define PRC$V_HIBER                5
+#define PRC$V_NOUAF                6
+#define PRC$V_NETWRK               7
+#define PRC$V_DISAWS               8
+#define PRC$V_DETACH               9
+#define PRC$V_INTER                10
+#define PRC$V_IMGDMP               11
+#define PRC$V_CLISPEC              12
+#define PRC$V_NOPASSWORD           13
+#define PRC$V_DEBUG                14
+#define PRC$V_DBGTRU               15
+#define PRC$V_SUBSYSTEM            16
+#define PRC$V_TCB                  17
+#define PRC$V_NO_IMAGE_PRIVS       18
+#define PRC$V_PERM_SUBSYSTEM       19
+#define PRC$V_PARSE_EXTENDED       20
+#define PRC$V_INHERIT_PERSONA      21
+#define PRC$V_LOGIN                6
+#define PRC$V_LOGINOUT             30  /* [OVMX] */
+#define PRC$V_NOCLISYM             29  /* [OVMX] */
+#define PRC$V_HOME_RAD             22  /* [OVMX] */
+
+/* $CREPRC item-list codes (V7.3 $PRCDEF) */
+#define PRC$_LISTEND               0
+#define PRC$_PGFLCHAR              1
+#define PRC$_PGFLINDEX             2
+#define PRC$_INPUT_ATT             3
+#define PRC$_OUTPUT_ATT            4
+#define PRC$_ERROR_ATT             5
+#define PRC$_CLASS                 6
 
 /* ================================================================
  * Process scheduling classes
@@ -211,9 +248,9 @@ typedef struct _uic UIC;
  * numbering is already private (SYI$_NODENAME is 0x0200 here vs 4313 on
  * real VMS V7.3), and SYI$_MAX_CPUS / *_CPU_BITMAP are not present in
  * VAX V7.3 $SYIDEF at all.  Labeled OVMX design choices, Rule 8. */
-#define SYI$_MAX_CPUS           0x0211  /* Maximum configurable CPU count (longword); OVMX-private code */
-#define SYI$_ACTIVE_CPU_BITMAP  0x0212  /* Bitmap of active CPUs; OVMX-private code */
-#define SYI$_AVAIL_CPU_BITMAP   0x0213  /* Bitmap of available CPUs; OVMX-private code */
+#define SYI$_MAX_CPUS           0x11B1  /* Maximum configurable CPU count (longword); OVMX-private code */
+#define SYI$_ACTIVE_CPU_BITMAP  0x1274  /* Bitmap of active CPUs; OVMX-private code */
+#define SYI$_AVAIL_CPU_BITMAP   0x1275  /* Bitmap of available CPUs; OVMX-private code */
 
 #ifdef __cplusplus
 }

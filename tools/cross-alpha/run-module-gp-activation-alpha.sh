@@ -314,6 +314,117 @@ assert_chf() {
   return 1
 }
 
+assert_cxx() {
+  # vms-4d0: the C++ image ran its static constructor, virtual dispatch,
+  # std::string/vector and a caught exception, and returned sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  local want_ptr=64
+  [ "${CXX_GATE_P32:-0}" = 1 ] && want_ptr=32
+  port_ok=$(grep -qaE "OVMX C\+\+ test: ctor=42 virt=7 vec=OVMX,C\+\+/libstdc\+\+ caught=1 argc=[0-9]+ ptr=$want_ptr" "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) C++ runtime line          : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+assert_p0heap() {
+  # vms-122: every heap path (small, large, calloc, moving realloc, anon mmap)
+  # returned memory inside P0 and held its data; sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x[0-3]?[0-9a-f]{1,7} inP0=1 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) heap in P0              : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+assert_p1stack() {
+  # vms-ce5: the image ran on a P1 user stack (local, 20 MB depth and the
+  # longword invocation handle all in P1; the handle finds the frame); sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE 'OVMX p1stack test: local=0x[4-7][0-9a-f]{7} inP1=1 deep=1 lowest=0x[4-7][0-9a-f]{7} handle=0x[4-7][0-9a-f]{7} handleP1=1 found=1 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) P1 stack                : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+assert_p32() {
+  # vms-5bc9: a DEC C default (32-bit pointer) program ran its string/memory/
+  # allocator/strto*/strsep/strtok_r/qsort checks through the 32-bit DECC$SHR
+  # entry points with every guard word intact; sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) 32-bit program checks   : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -936,6 +1047,191 @@ EOF
       exit 0
     fi
     echo "FAIL: the dispatcher frame / CHF context was not found as required. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  cxx32-gate)
+    # vms-1045: the same C++ program at the DEC C DEFAULT (32-bit) pointer size,
+    # against the toolchain's 32-bit libstdc++ ($TC/cxx/p32). Falls through.
+    CXX_GATE_P32=1
+    ;&
+  cxx-gate)
+    # vms-4d0: a C++ program on OVMX/Alpha. The producer graph comes from a
+    # veneer joint build (DECC$SHR, LIBVMS$SHR for SYS$GL_CALL_HANDL, STARLET);
+    # the stage-2 C/C++ toolchain is built over it (cxx/build-cxx-toolchain.sh,
+    # reused from $OVMX_CXX_TOOLCHAIN or $GATE_ROOT/cxxtc when present); the
+    # test is compiled + linked by that g++ (ld = OVMX LINK.EXE against THIS
+    # build's shareables) and replaces the milestone image before the boot.
+    MILESTONE_MAIN=joint_main.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    _wp=64; [ "${CXX_GATE_P32:-0}" = 1 ] && _wp=32
+    printf '%s\n%s\n' "OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp" \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' "OVMX C++ test: ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp" \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noctor.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 6)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/abort.log"
+    echo "-- cxx selftest 1/3: ctor + virtual + string/vector + caught exception must PASS --"
+    if assert_cxx "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- cxx selftest 2/3: static constructor never ran must FAIL --"
+    if assert_cxx "$_st/noctor.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- cxx selftest 3/3: an uncaught exception (abort) must FAIL --"
+    if assert_cxx "$_st/abort.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "cxx selftest failed -- assert_cxx cannot be trusted"
+    echo ""
+    build_joint_images
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long: GCC + libgcc + libstdc++)"
+      mkdir -p "$_tc"
+      docker run --rm -v "$REPO:/src:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed -- see $GATE_ROOT/cxx-toolchain.log"; }
+    fi
+    log "step 1d: compile + link cxx_test.cc with the stage-2 g++ (ld = OVMX LINK.EXE over this build's shareables)"
+    mkdir -p "$GATE_ROOT/cxximg"
+    if [ "${CXX_GATE_P32:-0}" = 1 ]; then
+      _cxxf="-nostdinc++ -isystem /out/cxx/p32/include/c++/14_2_0 -isystem /out/cxx/p32/include/c++/14_2_0/alpha-dec-vms -L/out/cxx/p32/lib"
+    else
+      _cxxf="-mpointer-size=64"
+    fi
+    # shellcheck disable=SC2086
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$GATE_ROOT/cxximg:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \
+      /out/cxx/bin/alpha-dec-vms-g++ $_cxxf -O1 -o /img/joint_e2e.exe \
+      /src/tools/cross-alpha-vms/joint-e2e/cxx_test.cc > "$GATE_ROOT/cxx-link.log" 2>&1 \
+      || { tail -40 "$GATE_ROOT/cxx-link.log"; die "C++ test did not link"; }
+    grep -E "LINK-I-LIBRARY|LINK-I-LIBINIT|LINK-S-CREATED" "$GATE_ROOT/cxx-link.log" | sed 's/^/  | /'
+    cp "$GATE_ROOT/cxximg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the C++ image on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX C\+\+|OVMX-SEAM:|%IMGACT|%DCL-|terminate" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_cxx "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a C++ program -- static constructor, virtual dispatch, std::string/vector,"
+      echo "      a thrown-and-caught exception -- built by the stage-2 alpha-dec-vms g++"
+      echo "      over the OVMX C RTL ran on the real OVMX/Alpha executive (P0 image)."
+      exit 0
+    fi
+    echo "FAIL: the C++ image did not run as required. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  p0heap-gate)
+    # vms-122: the C RTL heap is placed in the VMS P0 region (< 0x40000000).
+    MILESTONE_MAIN=p0heap_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x9c10000 inP0=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x20006010000 inP0=0 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/high.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- p0heap selftest 1/3: every heap path inside P0 must PASS --"
+    if assert_p0heap "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- p0heap selftest 2/3: a heap above 4 GB (the substrate default) must FAIL --"
+    if assert_p0heap "$_st/high.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- p0heap selftest 3/3: a crash must FAIL --"
+    if assert_p0heap "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "p0heap selftest failed -- assert_p0heap cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- C RTL heap placement on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX p0heap|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_p0heap "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the C RTL heap -- small, large, calloc, a moving realloc, anonymous mmap --"
+      echo "      is placed in the VMS P0 region (< 0x40000000) on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the heap was not placed in P0. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  p1stack-gate)
+    # vms-ce5: IMGACT runs the image on a user stack in P1. p1stack_test.c
+    # binds LIBVMS$SHR (LIB$GET_INVO_HANDLE/CONTEXT): producer graph + libvms.
+    MILESTONE_MAIN=p1stack_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX p1stack test: local=0x7ffef9a0 inP1=1 deep=1 lowest=0x7e7de9a0 handle=0x7ffef9b0 handleP1=1 found=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX p1stack test: local=0x11f9d5ad0 inP1=0 deep=1 lowest=0x11e5d5ad0 handle=0x1f9d5ae0 handleP1=0 found=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/high.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- p1stack selftest 1/3: stack, depth and handle in P1 must PASS --"
+    if assert_p1stack "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- p1stack selftest 2/3: the substrate stack above 4 GB must FAIL --"
+    if assert_p1stack "$_st/high.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- p1stack selftest 3/3: a crash (stack overflow) must FAIL --"
+    if assert_p1stack "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "p1stack selftest failed -- assert_p1stack cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- the image user stack in P1 on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX p1stack|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_p1stack "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the image ran on its P1 user stack -- locals, 20 MB of depth and the"
+      echo "      longword invocation handle in P1 -- on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the image did not run on a P1 stack. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  p32-gate)
+    # vms-5bc9: a DEC C default (32-bit pointer) program -- the main source is
+    # compiled -mpointer-size=no (overriding the harness's 64), so it binds the
+    # 32-bit DECC$SHR entry points.
+    MILESTONE_MAIN=p32_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=0 tok=0 sort=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/wide.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- p32 selftest 1/3: every 32-bit check held must PASS --"
+    if assert_p32 "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- p32 selftest 2/3: a 64-bit store through an out-pointer (guard overwritten) must FAIL --"
+    if assert_p32 "$_st/wide.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- p32 selftest 3/3: a crash must FAIL --"
+    if assert_p32 "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "p32 selftest failed -- assert_p32 cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- a 32-bit-pointer program on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX p32|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_p32 "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a DEC C default (32-bit pointer) program ran through the 32-bit DECC\$SHR"
+      echo "      entry points on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the 32-bit-pointer program did not run as required. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

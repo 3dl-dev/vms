@@ -805,6 +805,24 @@ uint32_t lib$set_logical(
 );
 
 /**
+ * lib$get_logical - Translate a logical name (simplified interface)
+ *
+ * The RTL wrapper over SYS$TRNLNM: returns the equivalence string (the
+ * translation selected by *index), its length, and the highest index.
+ * Default table LNM$FILE_DEV. SS$_NOLOGNAM when the name is not defined.
+ */
+uint32_t lib$get_logical(
+    const struct dsc$descriptor_s *lognam,
+    struct dsc$descriptor_s *resstr,
+    uint16_t *reslen,
+    const struct dsc$descriptor_s *tabnam,
+    int32_t *maxidx,
+    const uint32_t *index,
+    const uint8_t *acmode,
+    const uint32_t *flags
+);
+
+/**
  * lib$delete_logical - Delete a logical name (simplified interface)
  *
  * @param lognam  Pointer to descriptor of the logical name

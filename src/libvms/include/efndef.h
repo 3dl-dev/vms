@@ -9,7 +9,7 @@
  *   Flags  0-63:  Local event flags (private to the process)
  *   Flags 64-127: Common event flags (shared across processes)
  *
- * The special value EFN$C_ENF (0) tells system services not to
+ * The special value EFN$C_ENF (128, the V7.3 $EFNDEF value) tells system services not to
  * set any event flag on completion.  This is the most common
  * value used in synchronous "W" variants (SYS$QIOW, etc.) where
  * the caller blocks on the IOSB status directly.
@@ -39,7 +39,7 @@ extern "C" {
  * service still completes normally; the caller uses the IOSB
  * or return status to determine outcome.
  */
-#define EFN$C_ENF           0       /* No event flag (do not set any EF) */
+#define EFN$C_ENF           128     /* No event flag (do not set any EF); V7.3 $EFNDEF */
 
 /* ================================================================
  * Local event flag cluster boundaries

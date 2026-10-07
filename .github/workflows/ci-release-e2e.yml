@@ -82,7 +82,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Run persistent boot smoke test
         run: |
@@ -510,7 +510,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: install -> UPGRADE -> boot e2e
         id: upgrade_e2e
@@ -586,7 +586,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: install /DESTINATION -> boot installed target -> login
         id: install_boot_e2e
@@ -673,7 +673,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: media -> menu install -> separate container -> login -> PRODUCT SHOW (incl. the no-flush negative control)
         id: release_install
@@ -795,7 +795,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Release-acceptance gate — boot the cut artifact, run the PARTS scenario, verify the shipped version
         id: acceptance
@@ -876,7 +876,7 @@ jobs:
           # differs from the shipped build, so the kernel + build-static layers are
           # cache hits (fast rebuilds), the reason CI beats a cold rail build here.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Daytime cold-boot proof — INETD launches DAYTIME (ACP-stage), :13 answers RFC 867
         run: |
@@ -963,7 +963,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: DCL/SHOW acceptance gate — boot, log in, run the battery, assert VMS-faithful output
         run: |
@@ -973,6 +973,25 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: dcl_acceptance_e2e SKIPPED in CI — this gate must actually boot and run the commands, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      # rd vms-1f69: the booted node is a LIVE DECnet endnode -- NCP SET EXECUTOR
+      # persists SYS$SYSTEM:NETNODE_LOCAL.DAT (boot 1); on reboot the LPBETA
+      # @SYS$MANAGER:STARTNET starts NETACP, SHOW SYSTEM lists it RUNNING, and the
+      # QEMU filter-dump pcap carries endnode hellos sourced from the Phase IV
+      # station AA-00-04-00-2A-04 through the executive datalink. Same image as
+      # the battery above. A SKIP (77) is a hard failure.
+      - name: DECnet boot e2e — NCP configures, boot-time STARTNET runs NETACP, hellos on the wire (vms-1f69)
+        if: ${{ always() }}
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_decnet_startnet_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: decnet_startnet_boot_e2e SKIPPED in CI — it must actually double-boot and check the wire." >&2
             exit 1
           fi
           exit "$rc"
@@ -1014,7 +1033,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Console newline-spam gate — hammer RETURN during boot, assert no echoed blank-line spam
         run: |
@@ -1070,7 +1089,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Alternate-disk boot — system on the second disk reaches login (vms-9f5)
         run: |
@@ -1359,7 +1378,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: PARTS 0.2 demo e2e — boot, install, run, verify
         run: |
@@ -1421,7 +1440,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: SCSNODE -> hostname e2e — boot, SYSGEN, reboot, verify
         run: |
@@ -1485,7 +1504,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: SYSBOOT> cluster-param e2e — author at prompt, boot, verify in-guest
         run: |
@@ -1550,7 +1569,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: CLUSTER_CONFIG_LAN.COM e2e — run the procedure, reboot, verify adoption
         run: |
@@ -1604,7 +1623,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: 2-node cluster e2e — configure both nodes, form/join, verify CN=2
         run: |

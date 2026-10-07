@@ -1193,6 +1193,145 @@ run_dcl_acceptance_battery() {
     fi
     wait_for '$ ' 20 "$COPY_OFF"
 
+    # =======================================================================
+    # DECnet NODE CONFIGURATION + NETACP's DATALINK THROUGH THE EXECUTIVE
+    # (rd vms-1f69). A booted OVMX is made a DECnet Phase IV endnode THE VMS WAY:
+    #   $ NCP :== $SYS$SYSTEM:NCP.EXE
+    #   $ NCP SET EXECUTOR ADDRESS 1.42 / NAME OVMX / STATE ON
+    #   $ @SYS$MANAGER:STARTNET
+    # PROPERTIES PINNED HERE, against the REAL executive + the REAL system disk:
+    #   1. NCP SET EXECUTOR persists THROUGH THE VMS FILE LAYER: it writes
+    #      SYS$SYSTEM:NETNODE_LOCAL.DAT via RMS over the Files-11 ACP (no Linux
+    #      /etc path -- the V0.7-6 %NCP-E-CFGWRERR), a fresh NCP image reads it
+    #      back (SHOW EXECUTOR), and F$SEARCH -- STARTNET's gate -- now finds it.
+    #   2. NETACP (DECNETD.EXE) SELF-SOURCES that address from the same file.
+    #   3. An image activated from a PHY_IO-holding DCL inherits PHY_IO in its
+    #      own executive row and gets PAST the executive's PHY_IO gate (no
+    #      CAP_NET_RAW involved). This VM has no NIC (-nic none), so the
+    #      POSITIVE proof -- NETACP started by boot-time STARTNET, RUNNING, its
+    #      executive datalink on eth0 putting endnode hellos sourced from
+    #      AA-00-04-00-2A-04 on the wire -- is test_decnet_startnet_boot_e2e.sh
+    #      (same CI job); the executive's source stamping is also pinned by
+    #      test_syssvc_l2_datalink section 6 (kmod leg).
+    #   4. NEGATIVES: without PHY_IO the executive REFUSES the datalink
+    #      (SS$_NOPRIV) and no hello is sent; before configuration STARTNET is a
+    #      silent no-op (no NETACP).
+    # HARD GATE where the images ship and DECNETD.EXE is built with the executive
+    # backend (its --show-executor names it); a LOUD note where DECNETD.EXE's
+    # datalink is not executive-resident on this substrate (NetBSD/VAX: bpf, no
+    # executive L2 binding yet) -- never green because nothing ran.
+    local DN_OFF; DN_OFF=$(wc -c <"$LOG")
+    # (The token is concatenated at run time, so the command's own echo can
+    # never satisfy the assertion -- '[DNCFG::]' appears only as OUTPUT.)
+    run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
+    must_have "$SEG" '[DNCFG::]' \
+        "DECnet config [vms-1f69]: a fresh system disk has no SYS\$SYSTEM:NETNODE_LOCAL.DAT (the node is unconfigured)"
+    run_cmd '@SYS$MANAGER:STARTNET'
+    must_not_have "$SEG" '%DECNET-I-STARTNET' \
+        "DECnet config [vms-1f69]: STARTNET on the UNCONFIGURED node launches no NETACP (silent no-op, real-VMS gate)"
+    run_cmd 'NCP :== $SYS$SYSTEM:NCP.EXE'
+    local NCP_OFF; NCP_OFF=$(wc -c <"$LOG")
+    send 'NCP SET EXECUTOR ADDRESS 1.42'
+    if wait_for 'IVIMAGE' 15 "$NCP_OFF"; then
+        note "DECnet config [vms-1f69]: SYS\$SYSTEM:NCP.EXE is not on THIS runtime's system disk, so the NCP-configures-the-executor proof DID NOT RUN here (hard gate on the rails that ship NCP.EXE)"
+        wait_for '$ ' 20 "$NCP_OFF"
+    else
+        wait_for '$ ' 30 "$NCP_OFF"
+        local NCPSEG; NCPSEG=$(tail -c "+$((NCP_OFF + 1))" "$LOG" | tr -d '\r')
+        must_not_have "$NCPSEG" '%NCP-E-' \
+            "DECnet config [vms-1f69]: NCP SET EXECUTOR ADDRESS 1.42 persists (no %NCP-E-CFGWRERR -- written through RMS over the ACP, not a Linux path)"
+        run_cmd 'NCP SET EXECUTOR NAME OVMX'
+        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR NAME OVMX persists"
+        run_cmd 'NCP SET EXECUTOR STATE ON'
+        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
+        run_cmd 'NCP SHOW EXECUTOR'
+        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
+            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
+        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: SHOW EXECUTOR reads back State = on"
+        negctl "$SEG" 'Executor node' "NCP SHOW EXECUTOR"
+        run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
+        must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
+            "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"
+
+        # NETACP self-sources the address + names its datalink backend.
+        run_cmd 'DNETACC --show-executor'
+        must_have "$SEG" 'Executor node = 1.42' \
+            "NETACP [vms-1f69]: DECNETD.EXE self-sources executor 1.42 from SYS\$SYSTEM:NETNODE_LOCAL.DAT (the database NCP wrote)"
+        must_have "$SEG" 'Executor database = SYS$SYSTEM:NETNODE_LOCAL.DAT' \
+            "NETACP [vms-1f69]: the executor database NETACP reads is the VMS file, not a Linux path"
+        if printf '%s\n' "$SEG" | grep -qF 'Datalink backend = executive'; then
+            ok "NETACP [vms-1f69]: this runtime's DECNETD.EXE is built with the EXECUTIVE datalink backend (no AF_PACKET code in the image)"
+            # 3. PRIVILEGE IS INHERITED, NOT THE OBSTACLE. This VM has no NIC
+            # (-nic none), so the POSITIVE live-datalink proof (eth0, NETACP
+            # running, hellos from AA-00-04-00-2A-04 on the wire) is
+            # tests/qemu/test_decnet_startnet_boot_e2e.sh. Here we pin that an
+            # activated image inherits this DCL row's PHY_IO: a foreground
+            # DECNETD on loopback reaches the executive PAST its PHY_IO gate
+            # (any refusal it gets is NOT SS$_NOPRIV), and its own executive row
+            # -- read back on refusal -- holds PHY_IO. (Loopback is not a
+            # DECnet circuit; the executive declining to open a raw L2 socket on
+            # it is an interface fact, reported with its real status.)
+            run_cmd 'SET PROCESS/PRIVILEGES=PHY_IO'
+            run_cmd 'SHOW PROCESS/PRIVILEGES'
+            must_have "$SEG" 'PHY_IO' \
+                "NETACP [vms-1f69]: precondition -- the SYSTEM DCL process's executive row holds PHY_IO"
+            local DL_OFF; DL_OFF=$(wc -c <"$LOG")
+            send 'DNETACC --iface lo --hello-interval 1 --duration 3'
+            if wait_for 'DECNETD-I-COUNTERS' 45 "$DL_OFF" || wait_for 'DECNETD-E-' 5 "$DL_OFF"; then
+                wait_for '$ ' 20 "$DL_OFF"
+                local DLSEG; DLSEG=$(tail -c "+$((DL_OFF + 1))" "$LOG" | tr -d '\r')
+                must_not_have "$DLSEG" 'SS$_NOPRIV' \
+                    "NETACP [vms-1f69]: an image activated from a PHY_IO-holding DCL is NOT refused SS\$_NOPRIV (privilege inherited into its executive row)"
+                if printf '%s\n' "$DLSEG" | grep -qF 'DECNETD-I-PROCPRIV'; then
+                    must_have "$DLSEG" '(PHY_IO held)' \
+                        "NETACP [vms-1f69]: the activated image's OWN executive row holds PHY_IO (read back by \$GETJPI)"
+                else
+                    must_have "$DLSEG" 'DECNETD-I-DATALINK' \
+                        "NETACP [vms-1f69]: the executive datalink opened (no refusal to explain)"
+                fi
+                negctl "$DLSEG" 'DECNETD' "NETACP privilege inheritance"
+            else
+                bad "NETACP [vms-1f69]: DECNETD.EXE --iface lo produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s"
+                wait_for '$ ' 20 "$DL_OFF"
+            fi
+            # 4. negative: no PHY_IO -> the executive refuses, nothing is sent.
+            run_cmd 'SET PROCESS/PRIVILEGES=NOPHY_IO'
+            local NP_OFF; NP_OFF=$(wc -c <"$LOG")
+            send 'DNETACC --iface lo --hello-interval 1 --duration 3'
+            wait_for 'DECNETD-E-NOSOCKET' 30 "$NP_OFF"
+            wait_for '$ ' 20 "$NP_OFF"
+            local NPSEG; NPSEG=$(tail -c "+$((NP_OFF + 1))" "$LOG" | tr -d '\r')
+            must_have "$NPSEG" 'SS$_NOPRIV' \
+                "NETACP [vms-1f69]: WITHOUT PHY_IO the executive REFUSES the datalink (SS\$_NOPRIV) -- the privilege gate is real"
+            must_not_have "$NPSEG" 'DECNETD-I-HELLOSENT' \
+                "NETACP [vms-1f69]: a refused datalink sends no hello (no per-process fake)"
+            run_cmd 'SET PROCESS/PRIVILEGES=PHY_IO'
+        else
+            note "NETACP [vms-1f69]: DECNETD.EXE on this runtime is not built with the executive datalink backend (its --show-executor names another; NetBSD/VAX has no executive L2 binding yet) -- the executive-datalink proof DID NOT RUN here"
+        fi
+        # STARTNET now passes its NETNODE_LOCAL.DAT gate and attempts the
+        # detached NETACP launch -- and REPORTS IT HONESTLY: it may announce
+        # %DECNET-I-STARTNET only if RUN/DETACHED actually created the process.
+        # (From an interactive, non-root DCL session RUN/DETACHED is currently
+        # refused %RUN-F-CREPRC -SYSTEM-F-NOPRIV for ANY image -- rd vms-ff75, a
+        # general $CREPRC defect; then STARTNET must say %DECNET-E-STARTNET.
+        # The NETACP-actually-running proof is the boot-time STARTNET in
+        # tests/qemu/test_decnet_startnet_boot_e2e.sh, which runs it as the
+        # system does at LPBETA, on a VM with a NIC, and checks the wire.)
+        run_cmd '@SYS$MANAGER:STARTNET'
+        if printf '%s\n' "$SEG" | grep -qF '%RUN-F-CREPRC'; then
+            must_not_have "$SEG" '%DECNET-I-STARTNET' \
+                "STARTNET [vms-1f69]: a REFUSED RUN/DETACHED is never announced as a NETACP launch (honest .COM)"
+            must_have "$SEG" '%DECNET-E-STARTNET' \
+                "STARTNET [vms-1f69]: a refused NETACP launch is reported %DECNET-E-STARTNET with its status"
+            note "STARTNET [vms-1f69]: interactive RUN/DETACHED from this non-root session was refused (rd vms-ff75); the running-NETACP proof is the boot-time e2e"
+        else
+            must_have "$SEG" '%DECNET-I-STARTNET' \
+                "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and launches NETACP detached"
+        fi
+    fi
+    wait_for '$ ' 20 "$DN_OFF"
+
     # The DECnet device FACE _NET: is executive-resident and cross-process real
     # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is
     # NOT NETACP -- and it resolves; the deep cross-process assertions (class,
@@ -1210,6 +1349,42 @@ run_dcl_acceptance_battery() {
         note "NETACP device face [vms-9ab]: F\$GETDVI _NET: produced no OVMX-NET-FACE line (older DCL F\$GETDVI EXISTS item, or no /dev/vms) -- the authoritative cross-process proof is test_kmod_devtab on the kmod leg"
     fi
     wait_for '$ ' 20 "$NETDEV_OFF"
+
+    # =======================================================================
+    # DETACHED $CREPRC FROM AN INTERACTIVE (NON-ROOT) SESSION (rd vms-ff75).
+    # RUN/DETACHED used to fail %RUN-F-CREPRC -SYSTEM-F-NOPRIV for EVERY image
+    # from the SYSTEM console: the detached grandchild registered fresh from its
+    # non-root Linux credential and self-declared the identity with SETIDENT,
+    # which the executive refuses. Now the CREATOR's row authorizes the identity
+    # (VMS_IOCTL_CREPRC_TICKET, SETPRV or a subset of its own) and the detached
+    # process claims it as a new job root. PINNED:
+    #   1. interactive SYSTEM RUN/DETACHED creates the process (%RUN-S-PROC_ID);
+    #   2. /UIC=[200,201]/PRIVILEGES=TMPMBX (a FOREIGN identity; DCL UICs are
+    #      OCTAL, so this is group 128 member 129) is granted to a
+    #      SETPRV creator -- the exact row readback ($GETJPI UIC + privileges of
+    #      the detached process) is test_syssvc_creprc_inherit C on the kmod leg;
+    #   3. the same request from a creator WITHOUT SETPRV is REFUSED
+    #      %RUN-F-CREPRC -SYSTEM-F-NOPRIV, and nothing is created.
+    # (The subject image is DECNETD.EXE, shipped on every rail; with no argv it
+    # exits at once -- creation, not the image's work, is what is pinned.)
+    run_cmd 'RUN/DETACHED/PROCESS_NAME=FF75A/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    must_have "$SEG" '%RUN-S-PROC_ID' \
+        "RUN/DETACHED [vms-ff75]: the interactive SYSTEM session creates a detached process (no %RUN-F-CREPRC -SYSTEM-F-NOPRIV)"
+    must_not_have "$SEG" '%RUN-F-CREPRC' \
+        "RUN/DETACHED [vms-ff75]: no process-creation refusal for a SETPRV creator"
+    run_cmd 'RUN/DETACHED/UIC=[200,201]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75C/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    must_have "$SEG" '%RUN-S-PROC_ID' \
+        "RUN/DETACHED [vms-ff75]: a SETPRV creator may create a detached process with a FOREIGN UIC [200,201] (octal: 128,129) + TMPMBX"
+    run_cmd 'SET PROCESS/PRIVILEGES=NOSETPRV'
+    run_cmd 'RUN/DETACHED/UIC=[200,201]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75N/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    must_have "$SEG" '%RUN-F-CREPRC' \
+        "RUN/DETACHED [vms-ff75]: a creator WITHOUT SETPRV is REFUSED a foreign UIC (the creator's row authorizes the identity)"
+    must_have "$SEG" 'NOPRIV' \
+        "RUN/DETACHED [vms-ff75]: the refusal is -SYSTEM-F-NOPRIV"
+    must_not_have "$SEG" '%RUN-S-PROC_ID' \
+        "RUN/DETACHED [vms-ff75]: a refused identity creates NOTHING"
+    negctl "$SEG" 'FF75N' "RUN/DETACHED creator-authorized identity"
+    run_cmd 'SET PROCESS/PRIVILEGES=SETPRV'
 
     # =======================================================================
     # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT

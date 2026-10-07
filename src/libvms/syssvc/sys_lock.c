@@ -266,7 +266,7 @@ uint32_t (sys$enqw)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 1);
 
-    if (efn > 0)
+    if (efn > 0 && efn < 128)
         sys$setef(efn);
 
     return status;
@@ -291,7 +291,7 @@ uint32_t (sys$enq)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 0);
 
-    if (efn > 0 && (status & 1))
+    if (efn > 0 && efn < 128 && (status & 1))
         sys$setef(efn);
 
     return status;

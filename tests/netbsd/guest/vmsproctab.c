@@ -64,7 +64,7 @@ enum { OP_BG, OP_GETJPI_NAME, OP_PROCSCAN_FIND };
 
 /* SS$_NOSUCHDEV, matching vms_eflag_nb.h / vms_internal.h's SS__NOSUCHDEV
  * (2680); named locally since this header set does not carry it. */
-#define VMS_SS_NOSUCHDEV 2680u
+#define VMS_SS_NOSUCHDEV 2312u
 
 static int
 open_or_honest_fail(int *fd_out)

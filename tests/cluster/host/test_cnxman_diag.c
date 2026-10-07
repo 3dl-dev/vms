@@ -625,7 +625,7 @@ static void jbed_member_speaks(void)
 	struct vms_csb *m = cnxman_club_find_sysid(&g_b.cl.club, MEMBER_SYSID);
 
 	memset(&own, 0, sizeof(own));
-	if (vms_cm_params_build(1u, 1u, &own, body, sizeof(body), NULL) !=
+	if (vms_cm_params_build(1u, 1u, 0u, &own, body, sizeof(body), NULL) !=
 	    VMS_CODEC_OK || m == NULL)
 		return;
 	body[VMS_OFB_CM_SEND_MSG] = 2u;
@@ -763,7 +763,7 @@ static void test_a_refused_send_names_its_gate(void)
 	printf("\n-- a message that did NOT go out says why (the E69 case) --\n");
 	jbed_init(1);
 	g_b.fail_send = 1;
-	g_b.fail_send_rc = 2692;   /* what the executive answers for a
+	g_b.fail_send_rc = 132;   /* what the executive answers for a
 				    * connection that cannot carry traffic */
 	jbed_drive();
 
@@ -771,7 +771,7 @@ static void test_a_refused_send_names_its_gate(void)
 		 "the MODEL attempt is recorded even though it never went");
 	ct_check_eq_u32(rec.detail, (uint32_t)CNXMAN_DIAG_G_REFUSED,
 			"... with the gate scs-refused");
-	ct_check(rec.rc == 2692,
+	ct_check(rec.rc == 132,
 		 "... and SCS's OWN return code, VERBATIM -- E70: a flattened "
 		 "-1 here fits five different defects and diagnosed none of "
 		 "them on the live cluster");

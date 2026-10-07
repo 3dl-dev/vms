@@ -45,9 +45,13 @@
  * a software-version token byte-identical to our own (the E80 identity,
  * `csb->peer_is_ours`). The gate has two halves and both are counted: this file
  * refuses to SERVE a request from a system that is not proven ours, and
- * vms_cnxman.c refuses to EMIT to one. The Lock Directory Weight Vector's own
- * FOREIGN refusal (vms_dlm_ldwv.h) already stops the ROUTING upstream of both;
- * these are the emission-side teeth for anything that gets past it.
+ * vms_cnxman.c refuses to EMIT to one. Upstream of both, the ALL-OVMX gate
+ * (vms_ldwv_all_ovmx(), read through `dir_groundable` and `all_ovmx`) keeps the
+ * lock engine from ROUTING anything off this node while any member cannot be
+ * proven ours -- and since rd vms-fcb a mixed cluster's vector BUILDS (a real
+ * VAX's LOCKDIRWT is read off its PARAMS), so that gate, not a refused vector,
+ * is what stops it. These are the emission-side teeth for anything that gets
+ * past it.
  * ===========================================================================
  *
  * WHAT THIS FILE NOW EMITS, AND WHERE IT STILL HONESTLY STOPS (rd vms-d7a3):
@@ -85,6 +89,7 @@
 #include "vms_cnxman.h"
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_master.h"
+#include "vms_dlm_dir.h"      /* rd vms-8219: the lock directory's entries */
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_quorum.h"
 #include "vms_cnxman_quorum.h"
@@ -195,6 +200,29 @@ struct vms_dlm_scs {
 	 * were released. */
 	uint32_t quorum_hangs_entered;
 	uint32_t quorum_resumes;
+
+	/*
+	 * THE DIRECTORY ROLE toward a real VMS system (rd vms-8219). The
+	 * entries for the root resources whose directory node is THIS one, as
+	 * real VMS members registered or looked them up. Touched only on the
+	 * fork thread (every caller below is a connection-manager callback), so
+	 * it needs no lock of its own. `dir_store` is NULL when the allocation
+	 * failed: then no lookup is answered, honestly, and it is counted.
+	 */
+	struct vms_dlm_dir        dir;
+	struct vms_dlm_dir_entry *dir_store;
+	uint32_t dir_answers_sent;    /* 0xf9/0xf8 answers built and staged   */
+	uint32_t dir_self_held;       /* asked for a name THIS node holds:    */
+				       /* not answered (the master role toward */
+				       /* a VMS system is its own rung)        */
+	uint32_t dir_unanswered;      /* no table / full: not answered        */
+	uint32_t dir_misaddressed;    /* the lookup's key is not ours by OUR  */
+				       /* vector (served anyway, as VMS does)  */
+	uint32_t dir_regs_seen;       /* op-0x0d registrations recorded       */
+	uint8_t  dir_said_self_held;
+	uint8_t  dir_said_unanswered;
+	uint8_t  dir_said_misaddressed;
+	uint8_t  dir_pad;
 };
 
 /* ==========================================================================
@@ -202,17 +230,18 @@ struct vms_dlm_scs {
  *    re-derived here.
  * ========================================================================== */
 
-/* THE DIRECTORY. `hash16` is a value some system in this cluster put on the
+/* THE DIRECTORY. `dir_hash` is a value some system in this cluster put on the
  * wire for the name (Davis p. 6-50) and that the engine learned; this resolves
  * it through the connection manager's weight vector and nothing else. 0 in
  * *out means THIS node (p. 6-32). */
-static int dlm_arm_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out_csid)
+static int dlm_arm_dir_resolve(void *ctx, uint32_t dir_hash, vms_csid_t *out_csid)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
 
 	if (d == NULL || d->cl == NULL || out_csid == NULL)
 		return -1;
-	return vms_ldwv_resolve(&d->cl->club.ldwv, hash16, out_csid) ==
+	return vms_ldwv_resolve(&d->cl->club.ldwv, vms_ldwv_key(dir_hash),
+				out_csid) ==
 	       VMS_LDWV_OK ? 0 : -1;
 }
 
@@ -282,10 +311,10 @@ static int dlm_arm_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint16_t hash16)
+static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint32_t dir_hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, hash16) == SS__NORMAL ?
+	return vms_lock_dlm_learn_dir_hash(resnam, dir_hash) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -599,12 +628,12 @@ static void dlm_arm_run_release(struct vms_dlm_scs *d, uint32_t slot,
 
 /* The engine's directory ops are defined below, after their long rationale;
  * forward-declared here because bind_engine_ops takes their addresses. */
-static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
+static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid);
 static uint32_t dlm_arm_eng_dir_generation(void *ctx);
 static int dlm_arm_eng_dir_groundable(void *ctx);
 static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
-				       uint32_t name_len, uint16_t *out_hash16);
+				       uint32_t name_len, uint32_t *out_hash);
 
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
@@ -682,12 +711,12 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
  * mixed cluster the old floor stands: each node may master a novel name locally
  * (not cluster-wide) -- unchanged, and named, not hidden.
  */
-static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
+static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid)
 {
 	vms_csid_t csid = 0;
 
-	if (dlm_arm_dir_resolve(ctx, hash16, &csid) != 0)
+	if (dlm_arm_dir_resolve(ctx, dir_hash, &csid) != 0)
 		return SS__UNSUPPORTED;
 	*out_csid = (uint32_t)csid;
 	return SS__NORMAL;
@@ -699,24 +728,28 @@ static uint32_t dlm_arm_eng_dir_generation(void *ctx)
 }
 
 /*
- * OVMX'S OWN 16-BIT DIRECTORY HASH (rung A", design SS3.6; vms-3e3).
+ * OVMX'S OWN DIRECTORY HASH (rung A", design SS3.6; vms-3e3).
  *
  * This is OVMX's own function, and it is documented as OVMX's own. It is NOT
  * DEC's directory hash -- that function is unpublished and Rule-8-forbidden to
  * reproduce, and it is never needed here because this value NEVER reaches a real
- * VAX (the all-OVMX gate below, plus RULE C on the send side). It reuses the
- * FNV-1a spelling the lock manager already computes over a resource name for its
- * own hash table (vms_lock.c resource_hash_key: offset basis 2166136261,
- * prime 16777619), folded to 16 bits -- a public, well-understood function of
- * the NAME BYTES, chosen precisely because it bears no relationship to DEC's.
+ * VAX (the all-OVMX gate below, plus RULE C on the send side). It is the FNV-1a
+ * spelling the lock manager already computes over a resource name for its own
+ * hash table (vms_lock.c resource_hash_key: offset basis 2166136261, prime
+ * 16777619) -- a public, well-understood function of the NAME BYTES, chosen
+ * precisely because it bears no relationship to DEC's.
+ *
+ * It is a 32-bit value in the WIRE's own shape (body[128:132], rd vms-4fb): the
+ * vector indexes it exactly as it indexes a learned one, by its high 16 bits
+ * (vms_ldwv_key()), so a grounded name and a learned name take one path.
  *
  * The only property that matters for correctness is CONSISTENCY (p. 6-32): every
- * OVMX node must map a given name to the same 16-bit value, so all members agree
- * on the master. That holds by construction -- every node runs this one function
+ * OVMX node must map a given name to the same value, so all members agree on
+ * the master. That holds by construction -- every node runs this one function
  * over the same bytes -- with no dependence on byte order (each byte is folded
  * in on its own).
  */
-static uint16_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
+static uint32_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
 {
 	uint32_t h = 2166136261u;     /* FNV-1a offset basis */
 	uint32_t i;
@@ -727,7 +760,7 @@ static uint16_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
 		h ^= (uint32_t)(unsigned char)name[i];
 		h *= 16777619u;           /* FNV-1a prime */
 	}
-	return (uint16_t)((h >> 16) ^ (h & 0xFFFFu));   /* fold 32 -> 16 */
+	return h;
 }
 
 /*
@@ -752,13 +785,13 @@ static int dlm_arm_eng_dir_groundable(void *ctx)
  * compatibility (that is FC-P3.2, oracle-grounded). INV-6.
  */
 static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
-				       uint32_t name_len, uint16_t *out_hash16)
+				       uint32_t name_len, uint32_t *out_hash)
 {
-	if (out_hash16 == NULL || name == NULL)
+	if (out_hash == NULL || name == NULL)
 		return SS__BADPARAM;
 	if (!dlm_arm_eng_dir_groundable(ctx))
 		return SS__UNSUPPORTED;   /* not all-OVMX: never ground here */
-	*out_hash16 = vms_dlm_ovmx_dir_hash(name, name_len);
+	*out_hash = vms_dlm_ovmx_dir_hash(name, name_len);
 	return SS__NORMAL;
 }
 
@@ -1205,6 +1238,174 @@ static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
 	return st == DLM_REQ_OK ? 0 : -1;
 }
 
+/* ==========================================================================
+ * 5b. THE DIRECTORY ROLE toward a real VMS system (rd vms-8219)
+ *
+ * With every member at the V7.3 default LOCKDIRWT 0 (rd vms-fcb), p. 6-32 makes
+ * EVERY member a directory node, this one included, and a real VAX addresses
+ * three kinds of directory traffic here: a LOOKUP for a root resource (op-0x01),
+ * a master REMOVING its entry (named op-0x04), and a master REGISTERING one at a
+ * transition (op-0x0d). Before this rung, the lookup met RULE C and was never
+ * answered -- a VAX process waits forever on such a lock (measured on the stall
+ * rig: R-15, two F11B$a lookups from the real VAX unanswered).
+ *
+ * WHY THIS IS NOT A RULE C BREACH. RULE C forbids putting a frame shape no real
+ * VAX has been watched to accept in front of one. The directory's answer is the
+ * real directory's answer, byte for byte: the request echoed with the response
+ * bit, the outcome at body[34] and, for a redirect, the master's CSID at
+ * body[28:32] -- 4960/4960 and 36/36 real pairs differ nowhere else
+ * (vms_cluster_codec_dlm.h, test_dlm_dir.c proves OVMX's equals VAX1's). Every
+ * value in it is the directory's own state: the outcome comes from this node's
+ * table, the CSID is a master the cluster registered or this node recorded.
+ *
+ * WHAT IS NOT ANSWERED, and why it stays unanswered rather than guessed:
+ *   - a name THIS node holds locks on: the faithful answer is "I am the
+ *     master", the master role toward a VMS system, which is its own rung --
+ *     answering "you master it" would make a second master;
+ *   - a lookup the table cannot record (full): an unrecorded "you master it"
+ *     lets the next asker become a second master too.
+ * Both are counted and said once on the console.
+ *
+ * Only for a sender that is NOT this implementation: between OVMX nodes the
+ * engine's own all-OVMX routing owns the directory (vms-3e3).
+ * ========================================================================== */
+
+/*
+ * Does THIS node hold locks on the resource? The engine keys resources by a C
+ * string, so a wire name with an embedded NUL (the real VAX's F11B$a<label>
+ * allocation locks carry binary bytes after the label) is asked about by its
+ * prefix -- the same spelling the hash learner files it under. A prefix that
+ * names a resource this node holds locks on is refused (a superset of the
+ * exact collision); anything else cannot be this node's.
+ */
+static int dlm_arm_dir_name_held(const struct vms_dlm_res_ident *id)
+{
+	char nm[VMS_DLM_NAME_MAX + 1u];
+	uint32_t i;
+
+	for (i = 0u; i < id->name_len && id->name[i] != 0u; i++)
+		nm[i] = (char)id->name[i];
+	nm[i] = '\0';
+	if (i == 0u)
+		return 0;          /* a name that starts with NUL is no engine name */
+	return vms_lock_dlm_name_in_use(nm);
+}
+
+static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
+			    const char *msg)
+{
+	if (*said)
+		return;
+	*said = 1u;
+	dlm_arm_log(d, msg);
+}
+
+/* Is `hash` one of THIS node's directory entries by OUR vector? A vector
+ * that is not built answers yes: nothing can be judged against it. */
+static int dlm_arm_dir_is_ours(void *ctx, uint32_t hash)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	const struct vms_ldwv *v = &d->cl->club.ldwv;
+
+	if (!v->valid)
+		return 1;
+	return vms_ldwv_is_ours(v, vms_ldwv_key(hash));
+}
+
+/* op-0x01 from a real VMS system: answer the lookup from the table. 0 when an
+ * answer was staged; -1 when it is not a root lookup or is not answered. */
+static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
+			      const struct dlm_scs_request *req,
+			      const struct vms_dlm_res_ident *id,
+			      struct dlm_scs_reply *reply)
+{
+	enum vms_dlm_dir_outcome o;
+	vms_csid_t master = 0u;
+	uint32_t written = 0u;
+	uint8_t status;
+
+	if (dlm_arm_dir_name_held(id)) {
+		d->dir_self_held++;
+		dlm_arm_dir_say(d, &d->dir_said_self_held,
+			"%DLM, a VMS system asked this node, its lock directory, "
+			"for a resource this node itself holds locks on: not "
+			"answered (this node does not yet act as master for a "
+			"VMS system)");
+		return -1;
+	}
+	if (!dlm_arm_dir_is_ours(d, id->hash)) {
+		d->dir_misaddressed++;
+		dlm_arm_dir_say(d, &d->dir_said_misaddressed,
+			"%DLM, a directory lookup arrived for a resource this "
+			"node's own weight vector does not direct here: answered "
+			"from this node's entries, as the directory node does");
+	}
+	o = vms_dlm_dir_lookup(&d->dir, id, req->from_csid, &master);
+	if (o == VMS_DLM_DIR_ANSWER_NONE) {
+		d->dir_unanswered++;
+		dlm_arm_dir_say(d, &d->dir_said_unanswered,
+			"%DLM, a lock directory lookup could not be recorded "
+			"(no directory table, or it is full): not answered");
+		return -1;
+	}
+	status = (o == VMS_DLM_DIR_ANSWER_REDIRECT) ? VMS_DLM_DIR_REDIRECT :
+						      VMS_DLM_DIR_YOU_MASTER;
+	memset(d->txframe, 0, sizeof(d->txframe));
+	if (vms_dlm_dir_answer_build(req->body, req->len, status,
+				     (uint32_t)master, d->txframe,
+				     (uint32_t)sizeof(d->txframe),
+				     &written) != VMS_CODEC_OK) {
+		d->codec_failures++;
+		return -1;
+	}
+	if (dlm_arm_stage_reply(d, reply) != 0)
+		return -1;
+	d->dir_answers_sent++;
+	return 0;
+}
+
+/*
+ * Directory traffic from a real VMS system. Returns 0 when handled (with or
+ * without an answer staged), -1 when the message is not directory traffic or
+ * is refused -- the caller then falls through to RULE C exactly as before.
+ */
+static int dlm_arm_directory(struct vms_dlm_scs *d,
+			     const struct dlm_scs_request *req,
+			     struct dlm_scs_reply *reply)
+{
+	struct vms_dlm_res_ident id;
+
+	if (req->peer_is_ours || req->from_csid == 0u ||
+	    req->category != (uint8_t)VMS_DLM_CAT_REQUEST)
+		return -1;
+	if (vms_dlm_res_ident_parse_body(req->body, req->len, &id) !=
+	    VMS_CODEC_OK)
+		return -1;
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_ENQ)
+		return dlm_arm_dir_lookup(d, req, &id, reply);
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_REMOVE) {
+		(void)vms_dlm_dir_remove(&d->dir, &id, req->from_csid);
+		return 0;                  /* never answered (L1: 4880/4880) */
+	}
+	return -1;
+}
+
+/* op-0x0d from a real VMS system: the master registers a resource with this
+ * node, its directory. Recorded; the answer stays the barrier's grounded echo. */
+static void dlm_arm_dir_register(struct vms_dlm_scs *d,
+				 const struct dlm_scs_request *req)
+{
+	struct vms_dlm_res_ident id;
+
+	if (req->peer_is_ours || req->from_csid == 0u)
+		return;
+	if (vms_dlm_res_ident_parse_body(req->body, req->len, &id) !=
+	    VMS_CODEC_OK)
+		return;
+	if (vms_dlm_dir_register(&d->dir, &id, req->from_csid) == 0)
+		d->dir_regs_seen++;
+}
+
 /*
  * THE DOOR. One cat-0x02 message arrived on the VMS$VAXcluster connection.
  * Returns 0 when it was handled (with or without a reply) and non-zero when it
@@ -1249,9 +1450,19 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 		 * So: hash learned above, reply->len left at 0, and the answer
 		 * left to the recipe. This is also why the RULE C gate is
 		 * BELOW this branch and not above it.
+		 *
+		 * ...and from a real VMS system it is a REGISTRATION with this
+		 * node as the resource's directory (rd vms-8219): recorded.
 		 */
+		dlm_arm_dir_register(d, req);
 		return 0;
 	}
+
+	/* THE DIRECTORY ROLE toward a real VMS system (rd vms-8219), ABOVE
+	 * RULE C on purpose: see section 5b for why its answer is not a shape
+	 * RULE C forbids. Anything it does not take falls through unchanged. */
+	if (dlm_arm_directory(d, req, reply) == 0)
+		return 0;
 
 	/* RULE C. Everything past this point either creates lock state for the
 	 * sender or emits at it, and neither may happen for a system that has
@@ -1355,6 +1566,10 @@ static void dlm_arm_transition_end(void *ctx,
 	 * node's CSID (the other is genesis); tell the engine at once rather
 	 * than waiting for the next beat. */
 	dlm_arm_sync_local_csid(d);
+	/* The vector may have moved (p. 6-33): entries this node no longer
+	 * directs are the new directory node's now -- their masters register
+	 * them there (op-0x0d) -- so they are dropped here (rd vms-8219). */
+	(void)vms_dlm_dir_drop_unless(&d->dir, dlm_arm_dir_is_ours, d);
 }
 
 static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
@@ -1372,6 +1587,9 @@ static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
 	 * NOT YET the master-side LKBs this node holds FOR it: that is rd
 	 * vms-4d3 (vms-c27 condition 3), a rung of its own. */
 	vms_lock_dlm_member_departed((uint32_t)csid, &found);
+	/* ... and every directory entry it mastered goes with it: the survivors
+	 * holding locks on those resources re-register them (rd vms-8219). */
+	(void)vms_dlm_dir_drop_master(&d->dir, csid);
 }
 
 /* ==========================================================================
@@ -1483,6 +1701,13 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 	if (d == NULL)
 		return (int)SS__INSFMEM;
 	d->cl = cl;
+	/* The directory's entries (rd vms-8219). No table is an honest state:
+	 * lookups are then counted and not answered, never answered unrecorded. */
+	d->dir_store = (struct vms_dlm_dir_entry *)exec_zalloc(
+		(size_t)VMS_DLM_DIR_CAP * sizeof(struct vms_dlm_dir_entry));
+	if (d->dir_store == NULL ||
+	    vms_dlm_dir_init(&d->dir, d->dir_store, VMS_DLM_DIR_CAP) != 0)
+		(void)vms_dlm_dir_init(&d->dir, NULL, 0u);
 
 	dlm_arm_bind_req_ops(d);
 	dlm_arm_bind_engine_ops(d);
@@ -1563,6 +1788,8 @@ void vms_dlm_scs_stop(struct vms_cluster *cl)
 	exec_lock_destroy(&d->relq_lock);
 
 	cl->dlm = NULL;
+	if (d->dir_store != NULL)
+		exec_free(d->dir_store);
 	exec_free(d);
 }
 

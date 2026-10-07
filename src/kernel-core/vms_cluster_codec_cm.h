@@ -202,6 +202,19 @@ extern "C" {
  * field at the same place: on op-0x01 there is no response marker.
  */
 #define VMS_OFF_CM_MEMBERS    (VMS_OFF_SYSAP_BODY + 18)  /* abs 90, LE u16 */
+/*
+ * ...and the sender's LOCKDIRWT, body[26:28] (rd vms-fcb, plan row FC-P3.2):
+ * the SYSGEN lock-directory weight the sender's connection manager feeds into
+ * the Lock Directory Weight Vector (Davis p. 6-32, p. 7-23). GROUNDED by
+ * controlled reconfiguration on a private three-node OpenVMS VAX V7.3 cluster
+ * (tests/lab/captures/vms-fcb-lockdirwt-20261004/): each node was booted
+ * conversationally with SYSBOOT> SET LOCKDIRWT n, its own SYSBOOT> SHOW
+ * LOCKDIRWT read back, and every PARAMS it then sent carried n here -- 3 and 0
+ * in one run, 1 and 2 in the next, the same two systems -- while every other
+ * byte of the record that moved, moved with something else. Only the low byte
+ * has ever been nonzero (the parameter's own range is 0..255).
+ */
+#define VMS_OFF_CM_LOCKDIRWT  (VMS_OFF_SYSAP_BODY + 26)  /* abs 98, LE u16 */
 #define VMS_OFF_CM_PARAM_F1   (VMS_OFF_SYSAP_BODY + 72)  /* abs 144, LE u32,
 							    * observed const 0x10*/
 #define VMS_OFF_CM_PARAM_F2   (VMS_OFF_SYSAP_BODY + 76)  /* abs 148, LE u32,
@@ -285,7 +298,11 @@ extern "C" {
 #define VMS_OFB_CM_MEMBREC_CSID   36u /* body[36:40] LE32 assigned CSID     */
 #define VMS_OFB_CM_MEMBREC_INDEX  40u /* body[40:42] LE16, 0-based CSV index*/
 #define VMS_OFB_CM_MEMBREC_STALE  42u /* body[42:132] uninterpreted         */
-#define VMS_CM_MEMBREC_TAG   0x00000220u  /* 8/8 real frames                */
+#define VMS_CM_MEMBREC_TAG   0x00000220u  /* 8/8 real ADD-class frames      */
+/* ...and in a FORMATION the same record carries the formation's class:
+ * role 0x20, class 0x01 -- both records of the real V7.3 cold formation
+ * (tests/lab/captures/vms-6d3d-coldform-ev2-20260924, rd vms-f29). */
+#define VMS_CM_MEMBREC_TAG_FORM 0x00000120u
 
 /*
  * One membership record, as this codec reads and writes it. Fixed-width and
@@ -472,6 +489,7 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
  * the VOTES word and the model-string pair as well. */
 #define VMS_OFB_CM_VOTES       (VMS_OFF_CM_VOTES       - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MEMBERS     (VMS_OFF_CM_MEMBERS     - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_LOCKDIRWT   (VMS_OFF_CM_LOCKDIRWT   - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MODEL_LEN   (VMS_OFF_CM_MODEL_LEN   - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MODEL_NAME  (VMS_OFF_CM_MODEL_NAME  - VMS_OFF_SYSAP_BODY)
 
@@ -498,6 +516,8 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
  */
 #define VMS_CM_OP_MEMBREC      0x05u /* cat 0x01: MEMBERSHIP RECORD, sec 5c */
 #define VMS_CM_OP_MEMBERSHIP   0x06u /* cat 0x01: post-commit MEMBERSHIP burst*/
+#define VMS_CM_OP_XITION_FORM  0x07u /* cat 0x01: class-0x01 FORMATION open
+				      * (rd vms-f29; coldform-ev2 oracle)    */
 #define VMS_CM_OP_XITION_REM   0x08u /* cat 0x01: class-0x03 transition open*/
 #define VMS_CM_OP_XITION_ADD   0x09u /* cat 0x01: class-0x02 transition open*/
 #define VMS_CM_OP_XITION_GO    0x0au /* cat 0x01: barrier GO, never answered*/
@@ -520,6 +540,9 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
 #define VMS_CM_ROLE_GO      0x60u /* body[16] on op 0x0a                        */
 #define VMS_CM_ROLE_ABORT   0x50u /* body[16] on the cat-0x01 op-0x04 abort     */
 
+#define VMS_CM_CLASS_FORM    0x01u /* body[17]: FORM the cluster: every founding
+				    * member in ONE transition (has the barrier;
+				    * rd vms-f29, coldform-ev2-formation.pcap) */
 #define VMS_CM_CLASS_ADD     0x02u /* body[17]: ADD a member (has the barrier) */
 #define VMS_CM_CLASS_REMOVE  0x03u /* body[17]: REMOVE a failed member         */
 #define VMS_CM_CLASS_DEPART  0x04u /* body[17]: self-departure (NO barrier)    */
@@ -661,6 +684,8 @@ struct vms_cm_params {
 	uint16_t members; /* body[18:20] LE u16: the sender's cluster member
 			   * count, 0 from a system in no cluster (rd vms-e88,
 			   * VMS_OFF_CM_MEMBERS)                             */
+	uint16_t lockdirwt; /* body[26:28] LE u16: the sender's SYSGEN
+			     * LOCKDIRWT (rd vms-fcb, VMS_OFF_CM_LOCKDIRWT)   */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
 	uint32_t param_f2; /* body[76:80], observed constant 0x01             */
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
@@ -1141,17 +1166,18 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  * body[72:76]/[76:80]/[88:96]. Both come from the caller's real SYSGEN and
  * identity state; this builder has no defaults and bakes in no version.
  *
+ * body[26:28] = `lockdirwt`, this node's SYSGEN LOCKDIRWT, at the offset
+ * rd vms-fcb pinned by controlled reconfiguration (VMS_OFF_CM_LOCKDIRWT).
+ *
  * WHAT IS HONESTLY MISSING. EXPECTED_VOTES (sec 4(j) RE gap: held at 1 in
- * every capture, so no contrast exists to locate it) and LOCKDIRWT (plan row
- * FC-P3.2, lab) have no isolated offset and are therefore NOT written. Their
- * bytes go out zero along with the rest of the body. A node whose real
- * LOCKDIRWT is 0 is unharmed by that; a node whose LOCKDIRWT is nonzero
- * CANNOT advertise it and its caller must count and log the fact rather than
- * write the value at a guessed offset.
+ * every capture, so no contrast exists to locate it) has no isolated offset
+ * and is therefore NOT written; its bytes go out zero with the rest of the
+ * ungrounded body.
  *
  * STAMP with is_response=0.
  */
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
+				       uint16_t lockdirwt,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);

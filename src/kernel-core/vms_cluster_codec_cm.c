@@ -108,6 +108,11 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
 
 int vms_cm_open_carries_nodemap(uint8_t opcode)
 {
+	/* The FORMATION open carries it too: body[55] = 0x06 (slots 1 and 2,
+	 * both founding members) in the real V7.3 cold formation (rd vms-f29),
+	 * and the participant's answer zeroes it exactly as the ADD's does. */
+	if (opcode == VMS_CM_OP_XITION_FORM)
+		return 1;
 	return opcode == VMS_CM_OP_XITION_ADD || opcode == VMS_CM_OP_XITION_REM;
 }
 
@@ -201,6 +206,7 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 	vms_wire_view_init(&v, body, len);
 	out->votes    = vms_wire_get_le16(&v, VMS_OFB_CM_VOTES);
 	out->members  = vms_wire_get_le16(&v, VMS_OFB_CM_MEMBERS);
+	out->lockdirwt = vms_wire_get_le16(&v, VMS_OFB_CM_LOCKDIRWT);
 	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
 	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
 	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
@@ -358,7 +364,8 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 	/* body[55] = 0x00 is op-0x09-SPECIFIC (spec sec 4(p): "it is the
 	 * coordinator's MEMBERSHIP BITMAP, and the responder is refusing to
 	 * assert it"). */
-	if (req_env.opcode == VMS_CM_OP_XITION_ADD)
+	if (req_env.opcode == VMS_CM_OP_XITION_ADD ||
+	    req_env.opcode == VMS_CM_OP_XITION_FORM)
 		vms_wire_put_u8(&w, VMS_OFB_CM_BITMAP, 0x00);
 
 	/* op 0x12 takes two EXTRA mutations beyond the shared three (spec
@@ -913,6 +920,7 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
 }
 
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
+				       uint16_t lockdirwt,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written)
@@ -938,14 +946,14 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 	 * its own version and sec 4(L)(6) measured that a real VAX accepts and
 	 * DISPLAYS a non-"VMS" string here).
 	 *
-	 * EXPECTED_VOTES and LOCKDIRWT are ABSENT, and that is an honest
-	 * omission rather than an oversight: sec 4(j)'s own RE-gap list says
-	 * EXPECTED_VOTES "was held at 1 in every captured configuration, so no
-	 * wire contrast exists to locate it", and LOCKDIRWT's offset is plan
-	 * row FC-P3.2 (lab). Every ungrounded byte of this body therefore goes
-	 * out zero; a caller whose real LOCKDIRWT is nonzero cannot advertise
-	 * it and must say so (FC-P3.3 counts and logs exactly that). */
+	 * EXPECTED_VOTES is ABSENT, and that is an honest omission rather than
+	 * an oversight: sec 4(j)'s own RE-gap list says it "was held at 1 in
+	 * every captured configuration, so no wire contrast exists to locate
+	 * it". Every ungrounded byte of this body therefore goes out zero. */
 	vms_wire_put_le16(&w, VMS_OFB_CM_VOTES, votes);
+	/* body[26:28] LOCKDIRWT -- GROUNDED by controlled reconfiguration
+	 * (rd vms-fcb): the caller's SYSGEN value, 0 included. */
+	vms_wire_put_le16(&w, VMS_OFB_CM_LOCKDIRWT, lockdirwt);
 	/* body[18:20] the member count (rd vms-e88): the caller's, and 0 --
 	 * "in no cluster" -- is a real value a joiner sends, not a default. */
 	vms_wire_put_le16(&w, VMS_OFB_CM_MEMBERS, members);
@@ -1068,8 +1076,12 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
 		return VMS_CODEC_E_CLASS;
 
 	vms_wire_view_init(&v, body, len);
-	if (vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_TAG) != VMS_CM_MEMBREC_TAG)
-		return vms_wire_view_ok(&v) ? VMS_CODEC_E_RANGE : v.err;
+	{
+		uint32_t tag = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_TAG);
+
+		if (tag != VMS_CM_MEMBREC_TAG && tag != VMS_CM_MEMBREC_TAG_FORM)
+			return vms_wire_view_ok(&v) ? VMS_CODEC_E_RANGE : v.err;
+	}
 
 	r.pad     = 0u;
 	r.sysid   = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_SYSID);
@@ -1179,6 +1191,10 @@ static const struct vms_wire_allow_entry g_cm_allow_rows[] = {
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_ECHO,
 	  "cluster-protocol-spec.md sec 4(p)/4(r): op 0x05 lock/resource "
 	  "rebuild txn" },
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_FORM,
+	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_ECHO,
+	  "rd vms-f29: op 0x07 class-0x01 FORMATION open (coldform-ev2 oracle: "
+	  "body[18]=01 and body[55] zeroed, as op 0x09)" },
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM,
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_ECHO,
 	  "cluster-protocol-spec.md sec 4(r): op 0x08 class-0x03 REMOVE open" },

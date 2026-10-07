@@ -359,6 +359,9 @@ jobs:
 
       - name: Run netbsd_download.py self-tests (vms-8a8)
         run: python3 tests/netbsd/test_netbsd_download.py
+
+      - name: Run cross-vax fetch_verified.sh self-test (CI health)
+        run: python3 tools/cross-vax/test_fetch_verified.py
   # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #
@@ -405,7 +408,7 @@ jobs:
           load: true
           tags: ovmx-aarch64-boot:latest
           cache-from: type=gha,scope=aarch64-boot
-          cache-to: type=gha,mode=max,scope=aarch64-boot
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=aarch64-boot' || '' }}
 
       - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
         run: |
@@ -784,7 +787,10 @@ jobs:
     needs: changes
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Full-tree clang-tidy (push/dispatch) was MEASURED uncapped at 18.7 min on 2026-10-05 (run 37278516262;
+    # earlier main pushes 13-14 min, and two runs hit the old 20-min cap) -- it grows with the tree and varies
+    # with runner load. 30 = ~1.5x the measured worst case. Tracked to bring it back under 20: rd item (p2).
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -986,7 +992,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Run UAT session on the real runtime (QEMU console)
         timeout-minutes: 10

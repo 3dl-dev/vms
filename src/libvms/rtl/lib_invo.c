@@ -26,12 +26,12 @@
  *     (pdsc$b_save_ra, default R26); the caller shares this frame's stack.
  *     Caller PC = ireg[save_ra]; FP/SP unchanged.
  *   - STACK-frame procedure: locate the RSA at (frame_base + pdsc$w_rsa_offset)
- *     where frame_base is FP(R29) if PDSC$V_BASE_REG_IS_FP else SP(R30). The
+ *     where frame_base is FP(R29) if PDSC$M_BASE_REG_IS_FP else SP(R30). The
  *     caller PC is RSA$Q_SAVED_RETURN; every integer register whose bit is set
  *     in pdsc$l_ireg_mask is restored from the RSA in ascending register order
  *     (this recovers the caller's FP=R29 and any preserved registers); the
  *     caller SP = frame_base + pdsc$l_size.
- *   - libicb$v_handler_present reflects PDSC$V_HANDLER_VALID; the walk stops
+ *   - libicb$v_handler_present reflects PDSC$M_HANDLER_VALID; the walk stops
  *     (libicb$v_bottom_of_stack) when the next-out PC is 0 or unresolvable.
  *
  * WHERE IT RUNS (vms-ed1). On the OpenVMS Alpha ABI (alpha-dec-vms code,
@@ -154,7 +154,7 @@ static int frame_has_caller(uint64_t pc, uint64_t fp, uint64_t sp)
     }
     unsigned kind = PDSC$KIND(pd->pdsc$w_flags);
     if (kind == PDSC$K_KIND_FP_STACK) {
-        uint64_t base = (pd->pdsc$w_flags & PDSC$V_BASE_REG_IS_FP) ? fp : sp;
+        uint64_t base = (pd->pdsc$w_flags & PDSC$M_BASE_REG_IS_FP) ? fp : sp;
         const uint64_t *rsa =
             (const uint64_t *)(uintptr_t)(base + pd->pdsc$w_rsa_offset
                                           + RSA$Q_SAVED_RETURN);
@@ -219,7 +219,7 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
 
     if (kind == PDSC$K_KIND_FP_STACK) {
         /* Stack-frame procedure: recover the caller from the RSA. */
-        uint64_t base = (pd->pdsc$w_flags & PDSC$V_BASE_REG_IS_FP) ? fp : sp;
+        uint64_t base = (pd->pdsc$w_flags & PDSC$M_BASE_REG_IS_FP) ? fp : sp;
         uint64_t rsa  = base + pd->pdsc$w_rsa_offset;
 
         const uint64_t *saved_ret =
@@ -273,7 +273,7 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
     /* Report the caller's established condition handler, if any. */
     const struct pdsc_descriptor *cpd = resolve_pdsc(caller_pc, caller_fp);
     icb->libicb$v_handler_present =
-        (cpd && (cpd->pdsc$w_flags & PDSC$V_HANDLER_VALID)) ? 1 : 0;
+        (cpd && (cpd->pdsc$w_flags & PDSC$M_HANDLER_VALID)) ? 1 : 0;
 
     /* One-level look-ahead: is the caller itself the outermost frame? */
     icb->libicb$v_bottom_of_stack =
@@ -516,4 +516,46 @@ int vms$$invo_transfer(const INVO_CONTEXT_BLK *icb, void *newpc)
      * that precedes this (vms$$invo_reconstruct_target) is host-proven. */
     return 0;
 #endif
+}
+
+/* ================================================================
+ * VMS-convention (uppercase) entry points -- the spellings the GCC port's
+ * libgcc unwinder (libgcc/config/alpha/vms-unwind.h, through vms/libicb.h)
+ * calls. On OpenVMS the RTL exports these names and an invocation handle is a
+ * longword (the stack lives in P1, below 2 GB). The handle here is the
+ * low-order longword of the frame pointer. IMGACT runs an image on a user stack
+ * in P1 (vms-ce5), so for the image's own frames that longword IS the frame
+ * pointer; LIB$GET_INVO_CONTEXT matches a handle against the low longword of
+ * each frame's FP, which also identifies a frame on any other single stack.
+ * (vms-4d0)
+ * ================================================================ */
+
+int LIB$GET_INVO_HANDLE(INVO_CONTEXT_BLK *icb)
+{
+    return (int)(uint32_t)lib$get_invo_handle(icb);
+}
+
+int LIB$GET_INVO_CONTEXT(int invo_handle, INVO_CONTEXT_BLK *icb)
+{
+    if (icb == NULL) {
+        return SS$_BADPARAM;
+    }
+    INVO_CONTEXT_BLK scratch;
+    uint32_t st = lib$get_curr_invo_context(&scratch);   /* this frame */
+    while ($VMS_STATUS_SUCCESS(st)) {
+        if ((uint32_t)lib$get_invo_handle(&scratch) == (uint32_t)invo_handle) {
+            *icb = scratch;
+            return SS$_NORMAL;
+        }
+        if (scratch.libicb$v_bottom_of_stack) {
+            break;
+        }
+        st = lib$get_prev_invo_context(&scratch);
+    }
+    return LIBICB$_NOMOREFRAMES;
+}
+
+int LIB$GET_PREV_INVO_CONTEXT(INVO_CONTEXT_BLK *icb)
+{
+    return (int)lib$get_prev_invo_context(icb);
 }

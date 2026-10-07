@@ -60,7 +60,7 @@
  * src/kernel/vms_internal.h does.
  */
 #define SS_NORMAL       1
-#define SS_IVCHAN       602
+#define SS_IVCHAN       316
 
 /*
  * DISCLOSED, NOT HIDDEN, in the same terms vms_devtab_init() uses for

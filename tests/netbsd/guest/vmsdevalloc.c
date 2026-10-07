@@ -59,7 +59,7 @@
 #include "vms_devtab_nb.h"
 
 /* Honest device-unreachable verdict, mirroring vmsprobe.c. */
-#define OVMX_SS_NOSUCHDEV 2680u
+#define OVMX_SS_NOSUCHDEV 2312u
 
 static int
 alloc_op(int fd, unsigned long req, const char *devnam, const char *what)

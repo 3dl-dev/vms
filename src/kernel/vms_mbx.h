@@ -166,8 +166,25 @@ struct vms_mbx_wrtattn_args {
 
 #define VMS_IOCTL_MBX_CREATE  _IOWR(VMS_IOC_MAGIC, 0x70, struct vms_mbx_create_args)
 #define VMS_IOCTL_MBX_ASSIGN  _IOWR(VMS_IOC_MAGIC, 0x71, struct vms_mbx_assign_args)
+#if defined(__NetBSD__)
+/* NetBSD (the VAX SYSKRNL): the two MESSAGE-TRANSFER ops exceed NetBSD's
+ * one-page IOCPARM_MAX, so the NetBSD driver encodes them IOC_VOID and does
+ * the copyin/copyout itself (src/kernel-netbsd/vms_mbx_nb.h, "Option B").
+ * Userspace built for NetBSD (libvmssys vms_kif.c) must issue THAT command
+ * word -- with the Linux _IOWR word the driver answers ENOTTY, which surfaced
+ * as SS$_ILLIOFUNC on every $QIO mailbox write/read from an OVMX image on VAX
+ * (rd vms-bb7: DECNETD --net-mbx-selftest red on the NetBSD/vax battery). The
+ * NR bytes and the struct are identical; only the size/direction bits differ. */
+#define VMS_IOCTL_MBX_WRITE   _IO(VMS_IOC_MAGIC, 0x72)
+#define VMS_IOCTL_MBX_READ    _IO(VMS_IOC_MAGIC, 0x73)
+#if defined(IOCPARM_LEN)
+_Static_assert(IOCPARM_LEN(VMS_IOCTL_MBX_WRITE) == 0 && IOCPARM_LEN(VMS_IOCTL_MBX_READ) == 0,
+               "NetBSD mailbox WRITE/READ must be IOC_VOID (vms_mbx_nb.h Option B)");
+#endif
+#else
 #define VMS_IOCTL_MBX_WRITE   _IOWR(VMS_IOC_MAGIC, 0x72, struct vms_mbx_write_args)
 #define VMS_IOCTL_MBX_READ    _IOWR(VMS_IOC_MAGIC, 0x73, struct vms_mbx_read_args)
+#endif
 #define VMS_IOCTL_MBX_DELMBX  _IOWR(VMS_IOC_MAGIC, 0x74, struct vms_mbx_delmbx_args)
 #define VMS_IOCTL_MBX_SET_WRTATTN _IOWR(VMS_IOC_MAGIC, 0x75, struct vms_mbx_wrtattn_args)
 

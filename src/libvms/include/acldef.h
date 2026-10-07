@@ -30,7 +30,7 @@ extern "C" {
 
 #define ACL$C_FILE      1   /* File object */
 #define ACL$C_DEVICE     2   /* Device object */
-#define ACL$C_VOLUME     3   /* Volume object */
+#define ACL$C_VOLUME     12   /* Volume object */
 #define ACL$C_QUEUE      4   /* Queue object */
 
 #ifdef __cplusplus

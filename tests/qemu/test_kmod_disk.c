@@ -36,8 +36,8 @@
 #include "vms_kif.h"
 
 #define SS_NORMAL       1
-#define SS_IVDEVNAM     608
-#define SS_NOSUCHDEV    2680
+#define SS_IVDEVNAM     324
+#define SS_NOSUCHDEV    2312
 
 static int pass = 0, fail = 0;
 

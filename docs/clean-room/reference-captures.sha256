@@ -66,3 +66,14 @@ e0b4da5bbbf626b12e08c644524950c180c0de0c3dcef308b69b83d5480e6691  tests/lab/capt
 dd8d94d19c0980fde8b48203eafedb00b06164cd44523de14f71ad098c456599  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4a.pcap
 2f13202da072fc98137eb0f844635e5a62d4b1fbfe5647d9b282d76666ba521a  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4b.pcap
 6e578b6e26e84e1e2a03564836d7bdd2ccccf0c4f0ff12b8f16fe64c97c09a7e  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4d.pcap
+f4c2703c82eb7b8810170a7710e3fa8dc2d5c19efd77b49b5cb4d911bd3d9cea  tests/lab/captures/vms-fcb-lockdirwt-20261004/fcb-L1-params.pcap
+dc5ba1b89fcfcd33bdfbb4e7615247d7012ddbcb6453963e54607f558458872b  tests/lab/captures/vms-fcb-lockdirwt-20261004/fcb-L2-params.pcap
+5083923966d23c01159421bf96229e3b1a828fb362893c92e11415fbf657b1ca  tests/lab/captures/vms-4fb-dir-hash-20261004/dirhash-L1.pcap
+f00cc8a88cb3892d89cbd490cea7bf748c2b22e611b4463bdaee8022779ebf81  tests/lab/captures/vms-8219-dir-role-20261004/dirrole-L1L2.pcap
+||||||| parent of 3282a7ff (vms-f29: OVMX takes its place in a FORMATION-class transition a real VAX coordinates)
+fcd452526c2e55faddd8f496e7c05b422bb4c27f1a4e4119b16a13764aff3876  tests/lab/captures/vms-6d3d-coldform-ev2-20260924/coldform-ev2-formation.pcap
+07d0942bbf8e25db0118f2ea3356091e730989c1e25d44aa6f0144232cf2ebe8  tests/lab/captures/vms-f29-formation-20261005/F29-2-cm.pcap
+c234ecfff984a4cef43426d93bc85e7fd63db32dea24def748a15fb30ffdd2a1  tests/lab/captures/vms-f29-formation-20261005/F29-base-main-cm.pcap
+c7f8c7a7121cff83c4abf5b9376ae9f8cb40defa16807f0ddbfd5fb48a7b0397  tests/lab/captures/vms-ec2-vc-reorder-20261005/R2-rx3.pcap
+c499415795bb6906dd15dcf6cffd473b78831200e1420ca68de7c1cbfc7e15f5  tests/lab/captures/vms-ec2-vc-reorder-20261005/R2.pcap
+d1765c0910291cc8396997a048a20963b32020446ec0f8817c34b071b8356ba7  tests/lab/captures/vms-ec2-vc-reorder-20261005/ovmx-B3-7-s8.pcap

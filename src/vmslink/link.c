@@ -3548,6 +3548,7 @@ struct ovmx_xfer_header {
 struct evax_input {
     struct evax_object obj;
     const char *name;
+    int         lib;    /* vms-4d0: --library index a pulled member came from */
     uint64_t    sec_base[EVAX_MAX_SECTIONS];  /* placed image vaddr per psect */
 };
 
@@ -3763,13 +3764,16 @@ static int evax_build_thunk_redir(struct evax_input *in, int nin,
     return n;
 }
 
-/* If `base` (a defining symbol's code-section base) is an overridden weak proc's
- * code entry, return 1 and set *out to the strong def's descriptor. */
+/* If `code` (a weak defining symbol's own code entry) is an overridden weak
+ * proc's code entry -- the symbol is an alias of that overridden def -- return 1
+ * and set *out to the strong def's descriptor. Keyed on the symbol's own entry,
+ * not its section base: a sibling that merely shares the section is not an
+ * alias (vms-122). */
 static int evax_thunk_redir_find(const struct evax_thunk_redir *tr, int ntr,
-                                 uint64_t base, uint64_t *out)
+                                 uint64_t code, uint64_t *out)
 {
     for (int i = 0; i < ntr; i++)
-        if (tr[i].from_code == base) { *out = tr[i].to_desc; return 1; }
+        if (tr[i].from_code == code) { *out = tr[i].to_desc; return 1; }
     return 0;
 }
 
@@ -4086,64 +4090,26 @@ store_target:;
     /* vms-430: strong-over-weak override for a SECTION-RELATIVE self-bind. The
      * alpha-dec-vms back end binds a same-TU reference to a WEAK definition as a
      * section-relative reloc that never names the symbol, so evax_find_sym's
-     * strong preference cannot reach it. If this resolved target (procedure
-     * descriptor S or code entry code_S) lands on a weak def that a strong def
-     * overrides, retarget it to the strong def — the only layer that can see a
-     * section-relative linkage-pair quad pointing at the overridden weak def
-     * (e.g. default_malloc's self-bind to __simple_malloc, redirected to
-     * mallocng). No-op for a symbol target (already strong via evax_find_sym) and
-     * for any address not naming an overridden weak def.
+     * strong preference cannot reach it. If the ADDRESS this reloc names --
+     * section base + addend -- is an overridden weak def's descriptor or code
+     * entry, retarget it to the strong def (e.g. calloc's self-bind to the weak
+     * __malloc_allzerop, redirected to mallocng's).
      *
-     * vms-b14 — CALLOC-FAMILY EXCEPTION (bounded, pending the root fix): a
-     * section-relative PDSC entry-field whose $CODE$ base is the overridden weak
-     * __malloc_allzerop (offset 0 of musl's calloc.o/__libc_calloc.o) is a REAL
-     * allocator (decc$_calloc64 / __libc_calloc at a small nonzero offset), NOT a
-     * weak_alias forwarder. The base-redirect sends it to strong __malloc_allzerop
-     * + its own addend, which lands back INSIDE the strong __malloc_allzerop code
-     * (the zero-helper) rather than the real calloc, so calling calloc jumps into
-     * the wrong routine and a_crash()es on the CRTL->RMS veneer path (the ONLY
-     * base-coincident relocs in the whole DECC$SHR link whose redirect lands in
-     * __malloc_allzerop are exactly these two — every other sibling forwards to
-     * its correct strong target, so redirecting them is right and the crtl_rms N=7
-     * heap/free path stays green). Detect precisely that case and LEAVE the reloc
-     * (store base + addend = the sibling's own real code). The structural
-     * discriminant is "base-only's redirect would land inside strong
-     * __malloc_allzerop"; a general fix (weak_alias-aware descriptor export) is
-     * tracked separately. */
-    {
-        uint64_t base_rt = evax_wredir_apply(redir, nredir, S);
-        int calloc_family = 0;
-        if (r->to_section >= 0 && base_rt != S) {
-            uint64_t store = base_rt + (uint64_t)r->addend;   /* base-only's value */
-            const struct evax_symbol *rown = NULL; uint64_t rown_off = 0;
-            for (int i5 = 0; i5 < nin; i5++)
-                for (int s5 = 0; s5 < in[i5].obj.nsym; s5++) {
-                    const struct evax_symbol *y = &in[i5].obj.sym[s5];
-                    if (!y->defined || !y->is_proc) continue;
-                    uint64_t ca = evax_sym_code_addr(in, i5, y);
-                    if (ca <= store && (!rown || ca >= rown_off)) { rown = y; rown_off = ca; }
-                }
-            /* target-owner: the sibling this section-relative reloc actually names
-             * (greatest defined offset <= addend in the reloc's own to_section). */
-            const struct evax_symbol *town = NULL; uint64_t town_off = 0;
-            for (int s2 = 0; s2 < o->nsym; s2++) {
-                const struct evax_symbol *y = &o->sym[s2];
-                if (!y->defined) continue;
-                if (y->psindx == (uint32_t)r->to_section && y->value <= (uint64_t)r->addend &&
-                    (!town || y->value >= town_off)) { town = y; town_off = y->value; }
-                if (y->is_proc && y->code_psindx == (uint32_t)r->to_section &&
-                    y->code_value <= (uint64_t)r->addend && (!town || y->code_value >= town_off)) { town = y; town_off = y->code_value; }
-            }
-            /* LEAVE only a DISTINCT sibling (not __malloc_allzerop's own self-bind)
-             * whose base-only redirect lands back inside strong __malloc_allzerop. */
-            calloc_family = (rown && strcmp(rown->name, "__malloc_allzerop") == 0 &&
-                             town && strcmp(town->name, "__malloc_allzerop") != 0);
-        }
-        if (!calloc_family) {
-            S      = base_rt;                                  /* base-only redirect */
-            if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
-        }
-        /* calloc-family: leave S (and code_S) unredirected -> store base + addend */
+     * The match is on the named address, never on the section base alone
+     * (vms-122). A weak def at offset 0 of a $CODE$ psect makes that BASE equal
+     * its code entry, and redirecting the base moved every sibling's
+     * section-relative descriptor entry-field into the strong def's code +
+     * sibling offset: musl's mmap.c/munmap.c/mremap.c start with the weak
+     * __vm_wait dummy, so the exported decc$_mmap64/decc$munmap entered strong
+     * __vm_wait instead of mmap/munmap (a silent no-op returning stale R0), and
+     * calloc entered the zero-helper (the old vms-b14 calloc-family exception,
+     * now subsumed: an exact match never touches a sibling). A symbol-named
+     * reloc is already strong via evax_find_sym; this is a no-op for it. */
+    if (r->to_section >= 0) {
+        uint64_t named = S + (uint64_t)r->addend;
+        uint64_t rt = evax_wredir_apply(redir, nredir, named);
+        if (rt != named)
+            S = rt - (uint64_t)r->addend;
     }
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
@@ -4471,7 +4437,13 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             for (int i = 0; i < nin; i++)
                 for (int s = 0; s < in[i].obj.nsec; s++) {
                     struct evax_section *sec = &in[i].obj.sec[s];
-                    if (strcmp(sec->name, osec[k].name) != 0 || sec->alloc == 0) continue;
+                    /* A ZERO-length contribution is placed too (vms-4d0): it holds
+                     * a position, and a reference to it is a boundary marker --
+                     * crtbegin's empty eh_frame contribution is __EH_FRAME_BEGIN__,
+                     * the start crtbegin registers with __register_frame_info. As
+                     * VMS LINK does, it lands where it falls among the psect's
+                     * contributions; leaving it unplaced resolved it to 0. */
+                    if (strcmp(sec->name, osec[k].name) != 0) continue;
                     if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect */
                     uint64_t al = (uint64_t)1 << sec->align;
                     if (al < 1) al = 1;
@@ -4483,6 +4455,14 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             if (begset) { osec[k].addr = g_evax_vbase + beg; osec[k].size = cur - beg; }
         }
     }
+    /* A psect name with ONLY zero-length contributions has no output section;
+     * its contributions still get a real (empty) position, never vaddr 0. */
+    for (int i = 0; i < nin; i++)
+        for (int s = 0; s < in[i].obj.nsec; s++) {
+            struct evax_section *sec = &in[i].obj.sec[s];
+            if (sec->alloc != 0 || evax_is_debug(sec->name) || in[i].sec_base[s] != 0) continue;
+            in[i].sec_base[s] = g_evax_vbase + cur;
+        }
 
     /* ---- Synthesize the linker-defined section-boundary / _DYNAMIC symbols
      * (vms-838a) now that every psect is placed. Point each init/fini/preinit
@@ -4624,7 +4604,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             uint64_t redirected_desc;
             if (ds->is_proc && (ds->flags & EGSY__V_WEAK) &&
                 evax_thunk_redir_find(thunkr, n_thunkr,
-                                      in[di].sec_base[ds->code_psindx],
+                                      evax_sym_code_addr(in, di, ds),
                                       &redirected_desc))
                 uv[i].value = redirected_desc;
             else
@@ -5175,9 +5155,11 @@ static void evax_ns_free(struct evax_nameset *ns) { free(ns->slot); ns->slot = N
 
 static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
                                   const char **libs, int nlibs,
+                                  const int *lib_at,
                                   struct producer *producers, int np)
 {
     if (nlibs == 0) return;
+    const int n_orig = *nein;   /* inputs before any library member is pulled */
     /* Load every library member into a candidate pool (parsed, not yet linked). */
     struct evax_input *pool = NULL;
     int npool = 0, cappool = 0;
@@ -5216,6 +5198,7 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
                     continue;   /* a --use'd shareable provides it: not needed */
                 struct evax_input *slot = push_evax(ein, nein, cap);
                 *slot = pool[m];
+                slot->lib = lib_of[m];   /* remembered for link-order placement */
                 pulled[m] = 1; npulled[lib_of[m]]++; changed = 1;
                 /* Its definitions satisfy later candidates in this same pass. */
                 for (int t = 0; t < o->nsym; t++)
@@ -5235,6 +5218,31 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
     }
     free(pulled); free(npulled); free(lib_of);
     /* pool storage (member buffers, parsed objects) stays live like every input. */
+
+    /* Link order: a pulled member takes the place of its --library argument
+     * among the inputs, as VMS LINK and every Unix linker place a library's
+     * members where the library appears. It matters for psects whose
+     * concatenation order is meaningful -- the C++ constructor list (crtbegin's
+     * ctors head ... members ... crtend's terminator), eh_frame, LIB$INITIALIZE:
+     * a library member must land BEFORE crtend.o, which follows -l on the line.
+     * lib_at[k] is the number of loaded input objects that precede library k. */
+    int n_pulled = *nein - n_orig;
+    if (n_pulled > 0 && lib_at) {
+        struct evax_input *re = malloc((size_t)*nein * sizeof *re);
+        if (!re) die("oom ordering library members");
+        int o = 0;
+        for (int at = 0; at <= n_orig; at++) {
+            for (int l = 0; l < nlibs; l++) {
+                if (lib_at[l] != at) continue;
+                for (int m = n_orig; m < *nein; m++)
+                    if ((*ein)[m].lib == l) re[o++] = (*ein)[m];
+            }
+            if (at < n_orig) re[o++] = (*ein)[at];
+        }
+        if (o != *nein) die("library member ordering lost an input");
+        memcpy(*ein, re, (size_t)*nein * sizeof *re);
+        free(re);
+    }
 }
 
 
@@ -5251,9 +5259,10 @@ int main(int argc, char **argv)
     int np = 0;
     const char *transfer = NULL;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
     const char **libs = calloc((size_t)argc, sizeof *libs);  /* --library FILE (vms-4d0) */
+    int *lib_pos = calloc((size_t)argc, sizeof *lib_pos);
     int nlibs = 0;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
-    if (!ins || !producers || !libs) die("oom parsing arguments");
+    if (!ins || !producers || !libs || !lib_pos) die("oom parsing arguments");
     memset(uv, 0, sizeof uv);
 
     for (int i = 1; i < argc; i++) {
@@ -5280,6 +5289,7 @@ int main(int argc, char **argv)
             g_evax_vbase = b;
             g_evax_base_set = 1;
         } else if (strcmp(argv[i], "--library") == 0 && i + 1 < argc) {
+            lib_pos[nlibs] = nin;        /* plain inputs before it (link order) */
             libs[nlibs++] = argv[++i];   /* EVAX object library: searched (vms-4d0) */
         } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
             transfer = argv[++i];   /* EVAX/Alpha main transfer address (vms-cbe) */
@@ -5312,7 +5322,10 @@ int main(int argc, char **argv)
          * (or, for an archive, a first-member peek), not a counted slurp (vms-cbe). */
         struct evax_input *ein = NULL;
         int nein = 0, cap_ein = 0;
+        int *ein_after = calloc((size_t)nin + 1, sizeof *ein_after);  /* objects loaded before input i */
+        if (!ein_after) die("oom tracking input order");
         for (int i = 0; i < nin; i++) {
+            ein_after[i] = nein;
             if (file_is_olb(ins[i]))
                 die("the EVAX/Alpha link does not take .OLB libraries "
                     "(use a .a archive or plain EVAX objects)");
@@ -5335,9 +5348,18 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
+        ein_after[nin] = nein;
         if (nein == 0) die("no EVAX object members found in inputs");
-        /* --library: pull only the members the link still needs (vms-4d0). */
-        evax_search_libraries(&ein, &nein, &cap_ein, libs, nlibs, producers, np);
+        /* --library: pull only the members the link still needs (vms-4d0),
+         * placed where each --library appeared among the inputs. */
+        int *lib_at = calloc((size_t)(nlibs ? nlibs : 1), sizeof *lib_at);
+        if (!lib_at) die("oom placing libraries");
+        for (int l = 0; l < nlibs; l++) lib_at[l] = ein_after[lib_pos[l]];
+        evax_search_libraries(&ein, &nein, &cap_ein, libs, nlibs, lib_at, producers, np);
+        free(lib_at); free(ein_after);
+        if (getenv("OVMX_LINK_INPUT_ORDER"))   /* the final link order (tests) */
+            for (int i = 0; i < nein; i++)
+                fprintf(stderr, "%%LINK-I-INPUT, #%d %s\n", i, ein[i].name);
         /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
          * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
          * build the symbol vector from, then stop before any emit. Runs after the

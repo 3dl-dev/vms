@@ -110,14 +110,14 @@
  * oracle-pinned 1664, vms-2b8). */
 #define SS__BADPARAM   0x00000014  /* SS$_BADPARAM */
 #define SS__NOPRIV     0x00000024  /* SS$_NOPRIV */
-#define SS__EXASTLM    0x00000038  /* SS$_EXASTLM (AST quota exceeded) */
+#define SS__EXASTLM    0x00002A04  /* SS$_EXASTLM (AST quota exceeded) */
 #define SS__NOTALLPRIV 1664        /* SS$_NOTALLPRIV (not all requested privs authorized) */
 /* Mailbox subset (P4-A, rd vms-d7a). Values match src/kernel/vms_internal.h. */
 #define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
 #define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */
-#define SS__IVCHAN    602          /* SS$_IVCHAN -- invalid I/O channel */
-#define SS__IVDEVNAM  608          /* SS$_IVDEVNAM -- invalid device name */
-#define SS__NOSUCHDEV 2680         /* SS$_NOSUCHDEV -- no such device available */
+#define SS__IVCHAN    316          /* SS$_IVCHAN -- invalid I/O channel */
+#define SS__IVDEVNAM  324          /* SS$_IVDEVNAM -- invalid device name */
+#define SS__NOSUCHDEV 2312         /* SS$_NOSUCHDEV -- no such device available */
 /*
  * Cluster port/SCS subset (FC-P2.4). Values match src/kernel/vms_internal.h
  * exactly and are the ones src/libvms/include/ssdef.h already ships for those
@@ -134,7 +134,7 @@
  *   SS__ABORT       the frame did not leave the node (the interface refused
  *                   it, or the codec would not build it).
  */
-#define SS__DEVOFFLINE 2692        /* SS$_DEVOFFLINE (device offline) */
+#define SS__DEVOFFLINE 132        /* SS$_DEVOFFLINE (device offline) */
 #define SS__ABORT      44          /* SS$_ABORT (I/O aborted) */
 /* Lock-manager subset (P4-A, rd vms-ff7). Values match src/kernel/vms_internal.h
  * exactly -- each is the value src/libvms/include/ssdef.h already ships for that
@@ -145,13 +145,13 @@
 #define SS__DEADLOCK    3594       /* SS$_DEADLOCK (wait-for cycle detected) */
 #define SS__IVLOCKID    8484       /* SS$_IVLOCKID (invalid lock ID) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
-#define SS__UNSUPPORTED 2296       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
+#define SS__UNSUPPORTED 3658       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
 /* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h
  * exactly. SS__IVLOGNAM (340) comes from vms_proctab_nb.h. SUPERSEDE/NOLOGNAM
  * are public $SSDEF; SS__EXLNMQUOTA is the ONE value not yet in ssdef.h --
  * ORACLE-PINNED (lab-1 F$MESSAGE, design docs/design-logical-name-placement.md
  * §4.2, vms-556) exactly as src/kernel/vms_internal.h pins it. */
-#define SS__SUPERSEDE   844        /* SS$_SUPERSEDE (a name was superseded) */
+#define SS__SUPERSEDE   1585        /* SS$_SUPERSEDE (a name was superseded) */
 #define SS__NOLOGNAM    444        /* SS$_NOLOGNAM (no such logical name) */
 #define SS__EXLNMQUOTA  8780       /* oracle-pinned lab-1 F$MESSAGE (arena full) */
 /*
@@ -169,10 +169,10 @@
  * reconciliation is open, rather than picking a value neither side used.
  */
 #define SS__ACCVIO      0x0000000C /* SS$_ACCVIO (access violation) */
-#define SS__DEVNOTMOUNT 2688       /* SS$_DEVNOTMOUNT (device not mounted / not ODS-2) */
-#define SS__NOSUCHFILE  2696       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
-#define SS__FILNOTACC   2744       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
-#define SS__DEVICEFULL  2664       /* SS$_DEVICEFULL (extend cannot allocate) */
+#define SS__DEVNOTMOUNT 124       /* SS$_DEVNOTMOUNT (device not mounted / not ODS-2) */
+#define SS__NOSUCHFILE  2320       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
+#define SS__FILNOTACC   172       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
+#define SS__DEVICEFULL  2128       /* SS$_DEVICEFULL (extend cannot allocate) */
 #define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
 /*
  * Device-table subset (rd vms-618). Values copied VERBATIM from
@@ -486,7 +486,8 @@ struct vms_lock_resource {
 	/*
 	 * THE DIRECTORY (FC-P4.3, src/kernel-core/vms_dlm_ldwv.h).
 	 *
-	 * hash16 is the resource name's 16-bit directory hash AS THE CLUSTER
+	 * dir_hash is the resource's directory hash value (32 bits, cat-0x02 op-0x01
+	 * body[128:132], rd vms-4fb) AS THE CLUSTER
 	 * PUTS IT ON THE WIRE (Davis p. 6-50). It is LEARNED -- by
 	 * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame -- and
 	 * never computed: the hash function is not published at the bit level,
@@ -502,7 +503,7 @@ struct vms_lock_resource {
 	 *
 	 * master_csid is the node that masters the resource; 0 = unmastered.
 	 */
-	uint16_t            hash16;
+	uint32_t            dir_hash;
 	uint8_t             hash_known;
 	uint8_t             dir_valid;
 	uint32_t            dir_gen;
@@ -1264,6 +1265,13 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+/* rd vms-ff75: creator-authorized detached-process identity (vms_proctab.c) */
+long vms_ioctl_creprc_ticket(struct vms_proc *proc, unsigned long arg);
+int  vms_proc_creprc_ticket_claim(uint64_t id, const uint32_t *ancestors, int n,
+                                  char *username /* VMS_USERNAME_SIZE bytes */,
+                                  uint32_t *uic, uint64_t *privs);
+void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
+                                    uint32_t uic, uint64_t privs);
 long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);

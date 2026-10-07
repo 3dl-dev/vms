@@ -29,16 +29,35 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 HEADER_DIRS = ["src/libvms/include", "src/vmsrms/include/rms", "src/vmsprocess/include/vms"]
 
 
-def oracle(root):
+# Structure-field offsets and sizes ($S_ $L_ $W_ $B_ $Q_ $T_ $R_ $PS_ ... ) describe a
+# structure's LAYOUT, which OVMX's own headers deliberately do not mirror (struct FAB is
+# not the VMS FAB). Only VALUE constants are compared: $_ item/function codes, $C_ $K_
+# constants, $M_ masks and $V_ bit numbers.
+_FIELD_KIND = re.compile(r"\$(S|L|W|B|Q|T|R|A|O|F|D|G|H|U|Z|P[SQHBLW]|I[HSBLWQ])_")
+
+
+def _value_kind(name):
+    return _FIELD_KIND.search(name) is None
+
+
+def _load_dir(root, rel):
     d = {}
-    for f in sorted(glob.glob(os.path.join(root, "docs/oracle/vax73-starlet-defs/*.txt"))):
+    for f in sorted(glob.glob(os.path.join(root, rel, "*.txt"))):
         for ln in open(f, errors="ignore"):
             m = re.match(r"\$EQU\s+(\S+)\s+(-?(?:0x)?[0-9A-Fa-f]+)\s*$", ln)
-            if m:
+            if m and _value_kind(m.group(1)):
                 try:
-                    d[m.group(1)] = int(m.group(2), 0) if m.group(2).lower().startswith(("0x", "-0x")) else int(m.group(2), 10)
+                    d.setdefault(m.group(1), int(m.group(2), 0) if m.group(2).lower().startswith(("0x", "-0x")) else int(m.group(2), 10))
                 except ValueError:
                     pass
+    return d
+
+
+def oracle(root):
+    """The VAX V7.3 oracle; names it does not define fall back to the Alpha V8.4
+    oracle (docs/oracle/alpha84-starlet-defs). A name present on both uses the VAX value."""
+    d = _load_dir(root, "docs/oracle/alpha84-starlet-defs")
+    d.update(_load_dir(root, "docs/oracle/vax73-starlet-defs"))
     return d
 
 
@@ -55,7 +74,8 @@ def tree(root):
 
 def mismatches(root):
     o, t = oracle(root), tree(root)
-    return {k: (t[k], o[k]) for k in t if k in o and t[k] != o[k]}, len(o), len(t)
+    return {k: (t[k], o[k]) for k in t if k in o and t[k] != o[k]
+            and (t[k] & 0xFFFFFFFF) != (o[k] & 0xFFFFFFFF)}, len(o), len(t)
 
 
 def known(root):

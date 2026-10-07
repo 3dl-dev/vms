@@ -24,7 +24,7 @@ extern "C" {
  * ================================================================ */
 
 #define PPROP$C_PARSE_STYLE_PERM    1   /* Permanent filename parse style */
-#define PPROP$C_PARSE_STYLE_TEMP    2   /* Temporary filename parse style */
+#define PPROP$C_PARSE_STYLE_TEMP    0   /* Temporary filename parse style */
 
 /* ================================================================
  * PPROP$K_ — Process property value codes

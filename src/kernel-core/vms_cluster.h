@@ -265,8 +265,9 @@ enum vms_cluster_state {
  *
  * INV-6 THROUGHOUT. Every value a PEER advertises carries a `_valid` companion
  * and is honestly absent until a real record supplies it. A zero CSID is "not
- * yet learned", never "node zero"; a zero LOCKDIRWT is not asserted until
- * FC-P3.2 pins which byte carries it. Nothing here has a default.
+ * yet learned", never "node zero"; a peer's LOCKDIRWT is absent until its
+ * PARAMS record carries it (body[26:28], rd vms-fcb). Nothing here has a
+ * default.
  * ========================================================================== */
 
 /*
@@ -358,7 +359,7 @@ struct vms_csb {
 	uint16_t qdskvotes;         /* QDSKVOTES */
 	uint8_t  params_valid;      /* 0 until the peer's PARAMS record arrived */
 	uint8_t  lockdirwt;         /* LOCKDIRWT: the CM rebuilds the weight vector */
-	uint8_t  lockdirwt_valid;   /* 0 until FC-P3.2 pins the wire byte */
+	uint8_t  lockdirwt_valid;   /* 0 until the peer's PARAMS carried it */
 	uint8_t  pad2[3];
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
@@ -666,8 +667,8 @@ struct vms_ldwv {
 	uint32_t generation;   /* bumped on EVERY change, incl. invalidation  */
 	uint8_t  valid;        /* 0 = not authoritative; resolve nothing      */
 	uint8_t  weights_learned; /* 0 = built on the all-zero reading, because
-				   * no member has advertised a LOCKDIRWT yet
-				   * (FC-P3.2 pins the wire field). Recorded so a
+				   * no member had advertised a LOCKDIRWT yet
+				   * (PARAMS body[26:28], rd vms-fcb). Recorded so a
 				   * diagnostic can say which reading it rests on,
 				   * rather than the fact being invisible. */
 	uint8_t  n_members;    /* systems represented, for the diagnostics    */

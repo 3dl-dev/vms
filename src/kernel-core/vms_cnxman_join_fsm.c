@@ -608,25 +608,32 @@ static void join_send_model(struct cnxman_join *j)
 }
 
 /*
- * LOCKDIRWT, said out loud on every PARAMS this node sends.
+ * LOCKDIRWT, said on every PARAMS this node sends (rd vms-fcb).
  *
- * Book D-DLM-1 has OVMX advertise 0. vms_cm_params_build() writes only
- * grounded placements, so a 0 and "not written" are the same bytes -- which
- * is a coincidence and not the field being placed (plan row FC-P3.2 owns the
- * offset). A node configured with a NONZERO LOCKDIRWT genuinely cannot
- * advertise it, and this says so loudly: silently understating a directory
- * weight would make the cluster route directory duty away from a node that
- * asked for it.
+ * The SYSGEN value this node booted with, at body[26:28] -- the offset pinned
+ * by controlled reconfiguration on real V7.3 (VMS_OFF_CM_LOCKDIRWT). It is the
+ * one input every member's connection manager needs from this node to build
+ * the SAME Lock Directory Weight Vector (Davis p. 6-32, p. 7-23), and 0 is a
+ * real value: "never a directory node, unless every member says 0".
  */
-static void join_note_lockdirwt(struct cnxman_join *j)
+static uint16_t join_own_lockdirwt(const struct cnxman_join *j)
 {
-	j->lockdirwt_unpinned++;
-	if (j->cl != NULL && j->cl->params.lockdirwt != 0u &&
-	    !j->lockdirwt_unrepresentable) {
-		j->lockdirwt_unrepresentable = 1u;
-		join_log(j, "%CNXMAN, LOCKDIRWT is nonzero but its wire offset "
-			    "is not pinned: it is NOT being advertised");
-	}
+	return (j->cl != NULL) ? (uint16_t)j->cl->params.lockdirwt : 0u;
+}
+
+/*
+ * A peer's advertised LOCKDIRWT, into its CSB. Nothing is rebuilt here: the
+ * vector is the connection manager's to rebuild at Phase 2 of a transition
+ * (p. 7-23, cnxman_phase2.c), and LOCKDIRWT is not a dynamic parameter, so a
+ * system's weight is fixed for its incarnation and is on the wire in the
+ * PARAMS that precede its admission (rd vms-e88) -- before the transition
+ * that counts it.
+ */
+static void join_learn_lockdirwt(struct vms_csb *csb, uint16_t lockdirwt)
+{
+	if (lockdirwt > 0xffu)
+		return;
+	cnxman_csb_set_lockdirwt(csb, (uint8_t)lockdirwt);
 }
 
 static int join_node_already_member(const struct cnxman_join *j);
@@ -698,8 +705,8 @@ static vms_codec_status_t join_build_params(struct cnxman_join *j,
 		votes = j->cl->params.votes;
 
 	join_own_params(j, &own);
-	join_note_lockdirwt(j);
-	return vms_cm_params_build(votes, join_members_for(j, csb), &own,
+	return vms_cm_params_build(votes, join_members_for(j, csb),
+				   join_own_lockdirwt(j), &own,
 				   j->scratch, (uint32_t)sizeof(j->scratch),
 				   NULL);
 }
@@ -2123,6 +2130,17 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	cnxman_csb_set_advert(csb, p.members);
 
 	/*
+	 * ...AND ITS LOCK-DIRECTORY WEIGHT (rd vms-fcb): body[26:28], the
+	 * sender's own SYSGEN LOCKDIRWT. Learned for EVERY peer -- a real VAX
+	 * included -- because the weight vector is a SHARED table: every member
+	 * builds it from every member's weight, and a node that guessed one
+	 * would route directory work somewhere the rest of the cluster does not.
+	 * The parameter's range is 0..255; a value outside it is not a weight
+	 * any system sends and is left unlearned rather than truncated.
+	 */
+	join_learn_lockdirwt(csb, p.lockdirwt);
+
+	/*
 	 * AND THE ARITHMETIC RUNS ON WHAT WAS JUST LEARNED (rd vms-d0d).
 	 *
 	 * Filing the peer's VOTES and stopping there is what left node B of the
@@ -2298,6 +2316,60 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 	if (join_emit_cm(j, 1) == 0)
 		j->echoes_sent++;
 	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * A FORMATION THIS NODE DID NOT ASK FOR (rd vms-f29).
+ *
+ * A real VMS system whose own vote is short of quorum forms the cluster the
+ * moment the votes it can SEE reach it -- and the systems supplying those votes
+ * become FOUNDING MEMBERS in that same transition, without ever asking to be
+ * admitted (tests/lab/captures/vms-6d3d-coldform-ev2-20260924: VAX2 sent no
+ * membership request and was handed CSID 00010002 by the formation). The first
+ * frame of it this node sees is the coordinator's op-0x03 COMMIT of class 0x01,
+ * and it can arrive in ANY pre-admission state -- measured on the rig, during
+ * this node's own back-off after "no system this node can reach belongs to a
+ * cluster", where no cell answered it and the real VAX's formation stalled.
+ *
+ * So: a class-0x01 commit on an OPEN VMS$VAXcluster connection makes its sender
+ * the system this join drives through, puts the join in ADMIT -- from where
+ * the records, the FORMATION open, the GO and the barrier are already handled
+ * exactly as an admission's -- and is answered by the grounded echo with this
+ * node's class now 0x01 (the real founding member's own answer carries 0x01 at
+ * body[17]). Any other commit outside ADMIT is not this node's to answer and is
+ * counted, as before.
+ */
+static void join_retarget(struct cnxman_join *j, struct vms_csb *c,
+			  int32_t slot);
+
+static enum cnxman_join_rx join_h_commit_any(struct cnxman_join *j,
+					     const struct join_ev *e)
+{
+	struct vms_csb *c;
+
+	if (j->state == (uint8_t)CNXMAN_JOIN_ADMIT)
+		return join_h_echo(j, e);
+	if (e->env.opcode != VMS_CM_OP_COMMIT || e->len <= VMS_OFB_CM_CLASS ||
+	    e->body[VMS_OFB_CM_CLASS] != VMS_CM_CLASS_FORM || e->from_csb < 0 ||
+	    j->cl == NULL) {
+		if (j->state == (uint8_t)CNXMAN_JOIN_ADVERTISE)
+			return join_h_echo(j, e);
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	c = cnxman_club_csb_at(&j->cl->club, (uint32_t)e->from_csb);
+	if (c == NULL || !c->in_use || !c->sysid_valid ||
+	    !join_csb_connected(c) || c->cdt_conid == 0u) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	join_retarget(j, c, e->from_csb);
+	j->tr_class = (uint8_t)VMS_CM_CLASS_FORM;
+	j->formations_joined++;
+	join_log(j, "%CNXMAN, a cluster member proposed forming a cluster with "
+		    "this node as a founding member");
+	join_goto(j, CNXMAN_JOIN_ADMIT);
+	return join_h_echo(j, e);
 }
 
 /*
@@ -3881,6 +3953,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	 */
 	[CNXMAN_JOIN_IDLE] = {
 		[CNXMAN_EV_START]        = join_h_start,
+		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		/*
 		 * E73: and a member's own op-0x14/op-0x01, whenever it comes.
@@ -3901,6 +3974,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	/* [DIR ROUND] spec sec 4(L)(a)+(b): our OWN SCS$DIRECTORY client
 	 * round, resolving every name before connecting to it. */
 	[CNXMAN_JOIN_DIR_ROUND] = {
+		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_DIR_RESULT]   = join_h_dir_result,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
@@ -3909,6 +3983,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 
 	/* [MSCP CONNECT] spec sec 4(L)(c). */
 	[CNXMAN_JOIN_MSCP_CONNECT] = {
+		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_CDT_OPEN]     = join_h_mscp_opened,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
@@ -3924,6 +3999,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	 * connect is adopted here (p. 7-24 REACCEPT); the bound is the CSB's.
 	 */
 	[CNXMAN_JOIN_VC_CONNECT] = {
+		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_CDT_OPEN]     = join_h_cm_opened,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
@@ -3941,7 +4017,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_MSCP_END]     = join_h_mscp_end,
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
-		[CNXMAN_EV_RX_COMMIT]    = join_h_echo,
+		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
@@ -4144,6 +4220,7 @@ static int join_is_barrier_frame(const struct vms_cm_envelope *env)
 	if (env->category != VMS_CM_CAT_CONFIG)
 		return 0;
 	switch (env->opcode) {
+	case VMS_CM_OP_XITION_FORM:
 	case VMS_CM_OP_XITION_REM:
 	case VMS_CM_OP_XITION_ADD:
 	case VMS_CM_OP_XITION_GO:

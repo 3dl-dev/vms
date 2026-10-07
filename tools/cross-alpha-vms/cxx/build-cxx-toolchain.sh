@@ -1,0 +1,203 @@
+#!/bin/bash
+# build-cxx-toolchain.sh -- the stage-2 alpha-dec-vms C/C++ toolchain over the
+# OVMX C RTL (vms-4d0). Runs INSIDE the ovmx-cross-alpha-vms toolchain image:
+#
+#   docker run -v <repo>:/src:ro -v <joint-out>:/joint:ro -v <out>:/out \
+#       ovmx-cross-alpha-vms bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh
+#
+# <joint-out> is a build-joint-image.sh OUT dir: LINK.EXE, DECC$SHR.EXE,
+# LIBOTS_SHR.EXE, STARLET.a (+ LIBVMSRMS$SHR/LIBVMS$SHR on a veneer build).
+#
+# Stage 1 (the image) is the C-only, header-less cross compiler that builds the
+# C RTL itself. Stage 2, built here into /out/cxx, is configured against an OVMX
+# sysroot -- the alpha-dec-vms musl CRTL headers (build-musl.sh, every OVMX
+# overlay/patch applied) plus the OVMX STARLET include surface
+# (src/libvms/include) -- with C and C++. Because it has C RTL headers it also
+# builds libgcc's EH unwinder (unwind-dw2 + the port's vms-unwind.h) and the
+# port's own crt0/crtbegin/crtend; its `ld` is OVMX LINK.EXE (cxx/ovmx-ld), so
+# libstdc++-v3's configure link tests are answered by the real OVMX surface.
+# Output: /out/cxx (prefix: bin/alpha-dec-vms-{gcc,g++}, lib/gcc/...,
+# alpha-dec-vms/lib/libstdc++.a + include/c++, ovmx/ link environment, sysroot/).
+set -euo pipefail
+GCC_VER=14.2.0
+GCC_SHA256=a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9
+TARGET=alpha-dec-vms
+STAGE1=/opt/cross-alpha-vms
+X=/out/cxx
+SYSROOT=$X/sysroot
+JOBS=$(nproc)
+export PATH="$STAGE1/bin:$PATH"
+mkdir -p "$X" /tmp/cxx && cd /tmp/cxx
+
+echo "== [1/6] OVMX sysroot: alpha-dec-vms CRTL headers + STARLET include surface =="
+OVERLAY=/src/tools/cross-alpha-vms/musl-arch MUSL_HEADERS_ONLY="$SYSROOT" WORK=/tmp/cxx/musl \
+    bash /src/tools/cross-alpha-vms/musl-arch/build-musl.sh > /tmp/cxx/musl.log 2>&1 \
+    || { tail -40 /tmp/cxx/musl.log; exit 1; }
+cp -r /src/src/libvms/include/. "$SYSROOT/usr/include/"
+
+echo "== [2/6] GCC $GCC_VER source + the OVMX port patches =="
+if [ -f "/src/tools/cross-alpha-vms/gcc-$GCC_VER.tar.xz" ]; then
+    cp "/src/tools/cross-alpha-vms/gcc-$GCC_VER.tar.xz" .
+else
+    wget --tries=3 --timeout=30 -q "https://ftpmirror.gnu.org/gnu/gcc/gcc-$GCC_VER/gcc-$GCC_VER.tar.xz" \
+      || wget --tries=3 --timeout=30 -q "https://ftp.gnu.org/gnu/gcc/gcc-$GCC_VER/gcc-$GCC_VER.tar.xz"
+fi
+echo "$GCC_SHA256  gcc-$GCC_VER.tar.xz" | sha256sum -c -
+tar xf "gcc-$GCC_VER.tar.xz"
+for p in /src/tools/cross-alpha-vms/patches/*.patch; do
+    grep -qE '^(---|\+\+\+) [ab]/(bfd|gas|ld|opcodes|binutils|libctf|gprof)/' "$p" && continue
+    patch -p1 -d "gcc-$GCC_VER" < "$p"
+done
+
+echo "== [3/6] the OVMX link environment + ld (OVMX LINK.EXE) for the stage-2 target tools =="
+mkdir -p "$X/ovmx" "$X/$TARGET/bin"
+for f in LINK.EXE 'DECC$SHR.EXE' LIBOTS_SHR.EXE STARLET.a 'LIBVMSRMS$SHR.EXE' 'LIBVMS$SHR.EXE'; do
+    [ -f "/joint/$f" ] && cp "/joint/$f" "$X/ovmx/"
+done
+for t in as ar nm ranlib objdump strip; do ln -sf "$STAGE1/bin/$TARGET-$t" "$X/$TARGET/bin/$t"; done
+install -m 755 /src/tools/cross-alpha-vms/cxx/ovmx-ld "$X/$TARGET/bin/ld"
+
+echo "== [4/6] stage-2 gcc (C, C++) configured against the OVMX sysroot =="
+mkdir -p build && cd build
+if [ -x "$X/bin/$TARGET-g++" ]; then
+    echo "   (stage-2 gcc already installed in $X -- reusing it)"
+else
+"../gcc-$GCC_VER/configure" --target=$TARGET --prefix="$X" \
+    --with-sysroot="$SYSROOT" --with-native-system-header-dir=/usr/include \
+    --with-build-time-tools="$X/$TARGET/bin" \
+    --enable-languages=c,c++ --disable-bootstrap --disable-multilib \
+    --disable-libssp --disable-shared --disable-nls --disable-fixincludes \
+    --disable-libstdcxx-pch --disable-libgomp --disable-libquadmath \
+    --disable-libatomic --disable-libsanitizer --disable-libvtv \
+    --with-gnu-as > /tmp/cxx/gcc-configure.log 2>&1 || { tail -40 /tmp/cxx/gcc-configure.log; exit 1; }
+mkdir -p gcc/{c,cp,c-family,common,objc,d,rust,go,fortran,ada,lto,jit,m2,analyzer}
+make all-gcc -j"$JOBS" > /tmp/cxx/gcc-make.log 2>&1 || { tail -40 /tmp/cxx/gcc-make.log; exit 1; }
+make install-gcc > /dev/null
+fi
+# The OpenVMS-host configuration of GCC builds its own `ld` driver (vms-ld.c),
+# which writes a VMS LINK options file and spawns the DCL LINK command; collect2
+# finds it first in libexec. Here the linker IS OVMX LINK.EXE through ovmx-ld,
+# so the libexec `ld` points at it.
+# GCC's VMS configuration names the driver's version directory the VMS way
+# (14_2_0) while the target libraries (libgcc's install) land under the dotted
+# version: after libgcc is installed, the driver's directory gets them too.
+VERDIR=$(basename "$(dirname "$("$X/bin/$TARGET-gcc" -print-prog-name=cc1)")")
+LIBEXEC_LD=$("$X/bin/$TARGET-gcc" -print-prog-name=ld)
+case "$LIBEXEC_LD" in
+    "$X"/libexec/*) ln -sf "$X/$TARGET/bin/ld" "$LIBEXEC_LD" ;;
+esac
+
+echo "== [5/6] libgcc: compiler runtime + the EH unwinder + the port's crt0/crtbegin/crtend =="
+# System V `ar` containers (the vms-alpha LBR ar output is not what LINK.EXE
+# reads), built WITHOUT function sections (vms-5f9: the alpha-dec-vms `as`
+# mis-classifies per-function sections).
+LGFLAGS="-g0 -O2 -mpointer-size=64 -fno-function-sections -fno-data-sections"
+LGDIR="$X/lib/gcc/$TARGET/$VERDIR"
+if [ ! -f "$LGDIR/include/unwind.h" ] || [ ! -f "$LGDIR/libgcc.a" ]; then
+    if [ ! -f "$X/lib/gcc/$TARGET/$GCC_VER/libgcc.a" ]; then
+        make all-target-libgcc -j"$JOBS" CFLAGS_FOR_TARGET="$LGFLAGS" \
+            AR_FOR_TARGET=ar AR_FLAGS=rcS RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc.log 2>&1 \
+            || { tail -40 /tmp/cxx/libgcc.log; exit 1; }
+        make install-target-libgcc RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc-install.log 2>&1 || true
+    fi
+    if [ "$VERDIR" != "$GCC_VER" ]; then
+        mkdir -p "$LGDIR"
+        for f in "$X/lib/gcc/$TARGET/$GCC_VER"/*; do
+            b=$(basename "$f")
+            if [ ! -e "$LGDIR/$b" ]; then
+                ln -s "$f" "$LGDIR/"
+            elif [ -d "$f" ] && [ -d "$LGDIR/$b" ]; then   # e.g. include/unwind.h
+                for g in "$f"/*; do
+                    [ -e "$LGDIR/$b/$(basename "$g")" ] || ln -s "$g" "$LGDIR/$b/"
+                done
+            fi
+        done
+    fi
+fi
+for f in libgcc.a crt0.o crtbegin.o crtend.o vms-dwarf2eh.o; do
+    [ -f "$LGDIR/$f" ] || { echo "FAIL: libgcc did not install $f"; exit 1; }
+done
+ar t "$LGDIR/libgcc.a" | grep -q '^unwind-dw2.o$' || { echo "FAIL: libgcc.a has no EH unwinder"; exit 1; }
+cd /tmp/cxx
+
+echo "== [6/6] libstdc++-v3 over the OVMX C RTL (configure link tests via OVMX LINK.EXE) =="
+CXXF="-mpointer-size=64 -fno-function-sections -fno-data-sections"
+mkdir -p lsc && cd lsc
+CC="$X/bin/$TARGET-gcc $CXXF" CXX="$X/bin/$TARGET-g++ $CXXF" \
+AR=ar AR_FLAGS=crS RANLIB=true \
+"../gcc-$GCC_VER/libstdc++-v3/configure" --host=$TARGET --build=x86_64-pc-linux-gnu \
+    --prefix="$X" --with-cross-host=x86_64-pc-linux-gnu \
+    --disable-shared --disable-nls --disable-libstdcxx-pch --disable-multilib \
+    --with-gxx-include-dir="$X/$TARGET/include/c++/$VERDIR" \
+    > /tmp/cxx/lsc-configure.log 2>&1 || { tail -40 /tmp/cxx/lsc-configure.log; exit 1; }
+# A few of libstdc++'s HAVE_<function> results come from compile-only checks
+# against the CRTL headers, which declare more than DECC$SHR provides. For the
+# ones libstdc++ treats as OPTIONAL (it has a fallback when they are absent),
+# re-check with a real link through OVMX LINK.EXE and drop the ones the OVMX C
+# RTL does not provide. (Functions libstdc++ uses unconditionally are left as
+# detected: a program that needs one the RTL lacks fails its link honestly.)
+for m in HAVE_STRERROR_R HAVE_STRERROR_L HAVE_STRXFRM_L HAVE_USLEEP HAVE_SLEEP HAVE_GETS; do
+    grep -qE "^#define $m 1\$" config.h || continue
+    fn=$(echo "${m#HAVE_}" | tr 'A-Z' 'a-z')
+    printf 'char %s(void);\nint main(void){return %s();}\n' "$fn" "$fn" > /tmp/cxx/probe.c
+    if ! "$X/bin/$TARGET-gcc" -mpointer-size=64 -fno-builtin /tmp/cxx/probe.c -o /tmp/cxx/probe.exe >/dev/null 2>&1; then
+        sed -i "s|^#define $m 1\$|/* #undef $m -- $fn is not provided by the OVMX C RTL (DECC\$SHR) */|" config.h
+        echo "   $fn: not in the OVMX C RTL -> $m undefined"
+    fi
+done
+# libstdc++ adds -ffunction-sections/-fdata-sections itself (SECTION_FLAGS);
+# strip them (vms-5f9, as above).
+grep -rl -e '-ffunction-sections -fdata-sections' --include=Makefile . | xargs -r sed -i 's/-ffunction-sections -fdata-sections//g'
+# libtool names a -S output after the object suffix, which on this target is
+# .obj, not .o; the ios_failure typeinfo-rewrite rule only renames the .o form.
+perl -pi -e 's/^(\t-test -f tmp-cxx11-ios_failure-lt)\.o( && mv -f tmp-cxx11-ios_failure-lt)\.o (.*)$/$1.o$2.o $3\n$1.obj$2.obj $3/' src/c++11/Makefile
+grep -q 'tmp-cxx11-ios_failure-lt.obj' src/c++11/Makefile || { echo "FAIL: ios_failure rule patch"; exit 1; }
+make -C include > /tmp/cxx/lsc-make.log 2>&1
+# src/c++11/debug.cc casts a pointer to std::size_t for a hash bucket; under the
+# DEC C data model size_t is 32-bit (vms-537), so that cast needs -fpermissive.
+make -C src/c++11 debug.lo CXXFLAGS="-g -O2 -fpermissive" >> /tmp/cxx/lsc-make.log 2>&1
+make -j"$JOBS" >> /tmp/cxx/lsc-make.log 2>&1 || { grep -E 'error' /tmp/cxx/lsc-make.log | head -20; exit 1; }
+make install > /dev/null
+[ -f "$X/$TARGET/lib/libstdc++.a" ] || { echo "FAIL: libstdc++.a not installed"; exit 1; }
+
+# vms-1045: the same library at the DEC C DEFAULT pointer size (32-bit). A
+# program compiled without -mpointer-size=64 -- the GCC port's own host build
+# among them -- has 4-byte pointers in every class layout (std::string,
+# containers, exception objects), so it needs a libstdc++ built that way.
+# Installed beside the 64-bit one under $X/p32: its own target headers
+# (bits/c++config.h is configure-generated) and libraries; select it with
+#   -isystem $X/p32/include/c++/$VERDIR -isystem $X/p32/include/c++/$VERDIR/$TARGET
+#   -L$X/p32/lib (ahead of the default libstdc++ search).
+echo "== [7/7] libstdc++-v3 at the DEC C default (32-bit) pointer size -> $X/p32 =="
+CXXF32="-fno-function-sections -fno-data-sections"
+mkdir -p /tmp/cxx/lsc32 && cd /tmp/cxx/lsc32
+CC="$X/bin/$TARGET-gcc $CXXF32" CXX="$X/bin/$TARGET-g++ $CXXF32" \
+AR=ar AR_FLAGS=crS RANLIB=true \
+"../gcc-$GCC_VER/libstdc++-v3/configure" --host=$TARGET --build=x86_64-pc-linux-gnu \
+    --prefix="$X/p32" --with-cross-host=x86_64-pc-linux-gnu \
+    --disable-shared --disable-nls --disable-libstdcxx-pch --disable-multilib \
+    --with-gxx-include-dir="$X/p32/include/c++/$VERDIR" \
+    > /tmp/cxx/lsc32-configure.log 2>&1 || { tail -40 /tmp/cxx/lsc32-configure.log; exit 1; }
+for m in HAVE_STRERROR_R HAVE_STRERROR_L HAVE_STRXFRM_L HAVE_USLEEP HAVE_SLEEP HAVE_GETS; do
+    grep -qE "^#define $m 1\$" config.h || continue
+    fn=$(echo "${m#HAVE_}" | tr 'A-Z' 'a-z')
+    printf 'char %s(void);\nint main(void){return %s();}\n' "$fn" "$fn" > /tmp/cxx/probe.c
+    if ! "$X/bin/$TARGET-gcc" -fno-builtin /tmp/cxx/probe.c -o /tmp/cxx/probe.exe >/dev/null 2>&1; then
+        sed -i "s|^#define $m 1\$|/* #undef $m -- $fn is not provided by the OVMX C RTL (DECC\$SHR) */|" config.h
+        echo "   $fn: not in the OVMX C RTL (32-bit entry) -> $m undefined"
+    fi
+done
+grep -rl -e '-ffunction-sections -fdata-sections' --include=Makefile . | xargs -r sed -i 's/-ffunction-sections -fdata-sections//g'
+perl -pi -e 's/^(\t-test -f tmp-cxx11-ios_failure-lt)\.o( && mv -f tmp-cxx11-ios_failure-lt)\.o (.*)$/$1.o$2.o $3\n$1.obj$2.obj $3/' src/c++11/Makefile
+grep -q 'tmp-cxx11-ios_failure-lt.obj' src/c++11/Makefile || { echo "FAIL: ios_failure rule patch (p32)"; exit 1; }
+make -j"$JOBS" > /tmp/cxx/lsc32-make.log 2>&1 || { grep -E 'error' /tmp/cxx/lsc32-make.log | head -20; exit 1; }
+make install > /dev/null
+P32LIB=""
+for d in "$X/p32/lib" "$X/p32/$TARGET/lib"; do
+    [ -f "$d/libstdc++.a" ] && { P32LIB=$d; break; }
+done
+[ -n "$P32LIB" ] || { echo "FAIL: 32-bit libstdc++.a not installed under $X/p32"; exit 1; }
+[ "$P32LIB" = "$X/p32/lib" ] || { mkdir -p "$X/p32/lib"; cp "$P32LIB"/lib*.a "$X/p32/lib/"; }
+cd /tmp/cxx
+echo "== C/C++ toolchain ready in $X =="
+"$X/bin/$TARGET-g++" --version | head -1

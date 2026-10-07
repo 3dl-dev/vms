@@ -97,10 +97,10 @@ struct vms_ping_args {
  * hierarchy) -- not invented here:
  *   SS$_NORMAL     1     (odd = success)
  *   SS$_BADPARAM  20     bad request cookie
- *   SS$_NOSUCHDEV 2680   the honest "no /dev/vms" verdict the probe reports
+ *   SS$_NOSUCHDEV 2312   the honest "no /dev/vms" verdict the probe reports
  */
 #define VMS_SS_NORMAL     1u
 #define VMS_SS_BADPARAM   20u
-#define VMS_SS_NOSUCHDEV  2680u
+#define VMS_SS_NOSUCHDEV  2312u
 
 #endif /* _VMS_PING_H */

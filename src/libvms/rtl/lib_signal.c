@@ -626,6 +626,11 @@ uint32_t lib$signal(uint32_t condition, ...) {
 
 uint32_t lib$stop(uint32_t condition, ...) {
     va_list ap;
+
+    /* LIB$STOP signals the condition with its severity forced to SEVERE (RTL
+     * Library manual: "converts any condition to a fatal one"), so a warning
+     * stops the image: the exit status carries severity 4. */
+    condition = (condition & ~(uint32_t)7) | STS$K_SEVERE;
     uint32_t sigarray_buf[32];
     struct chf$signal_array *sigarray = (struct chf$signal_array *)sigarray_buf;
 

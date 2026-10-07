@@ -83,8 +83,8 @@ extern "C" {
 #define DSC$K_DTYPE_NRO  19  /* Numeric string, right overpunched sign */
 #define DSC$K_DTYPE_NZ   20  /* Numeric string, zoned sign */
 #define DSC$K_DTYPE_P    21  /* Packed decimal string */
-#define DSC$K_DTYPE_V    22  /* Aligned bit string */
-#define DSC$K_DTYPE_VU   23  /* Unaligned bit string */
+#define DSC$K_DTYPE_V    1  /* Aligned bit string */
+#define DSC$K_DTYPE_VU   34  /* Unaligned bit string */
 #define DSC$K_DTYPE_OU   25  /* Octaword unsigned */
 #define DSC$K_DTYPE_O    26  /* Octaword signed */
 #define DSC$K_DTYPE_G    27  /* G-floating (double precision, VAX) */

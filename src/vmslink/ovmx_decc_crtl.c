@@ -23,6 +23,7 @@
 
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -147,6 +148,20 @@ int _malloc32(int size)
 {
     if (size <= 0)
         return 0;
+#if defined(__alpha) && defined(__VMS)
+    /* vms-122: on OVMX/Alpha the C RTL heap lives in the VMS P0 region (the
+     * musl-arch mmap places it below 0x40000000), so a 32-bit-addressable
+     * block is simply a heap block -- a real one, freeable with free(), not a
+     * carve from the first-light bump arena. Any block that is not in P0
+     * (impossible while the placement holds) is refused, never truncated. */
+    {
+        void *h = malloc((size_t)size);
+        if (h && (unsigned long)h + (unsigned long)size <= 0x40000000UL)
+            return (int)(unsigned long)h;
+        free(h);
+        return 0;
+    }
+#endif
 #if defined(__x86_64__) && MAP_32BIT
     void *p = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
@@ -344,10 +359,45 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
                     unsigned int cliflag, int *argc, int *argv, int *envp)
                     __asm__("decc$main");
 
+#if defined(__alpha) && defined(__VMS)
+/* vms-5bc9: the C RTL's environment in P0. The process environment strings the
+ * substrate kernel hands over live on its initial stack, far above 4 GB, so
+ * getenv() returned pointers a 32-bit (DEC C default) caller truncates. As on
+ * VMS, where every RTL-returned pointer is a P0/P1 address, the environment is
+ * copied once into the heap (P0, vms-122) before the image runs. An allocation
+ * failure leaves the original environment in place (never a partial one). */
+extern char **__environ;
+static void ovmx_environ_to_p0(void)
+{
+    char **old = __environ;
+    if (!old) return;
+    size_t n = 0;
+    while (old[n]) n++;
+    char **nev = malloc((n + 1) * sizeof *nev);
+    if (!nev) return;
+    for (size_t i = 0; i < n; i++) {
+        size_t l = strlen(old[i]) + 1;
+        char *c = malloc(l);
+        if (!c) {
+            while (i--) free(nev[i]);
+            free(nev);
+            return;
+        }
+        memcpy(c, old[i], l);
+        nev[i] = c;
+    }
+    nev[n] = 0;
+    __environ = nev;
+}
+#endif
+
 void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
                     void *image_file_desc, unsigned int linkflag,
                     unsigned int cliflag, int *argc, int *argv, int *envp)
 {
+#if defined(__alpha) && defined(__VMS)
+    ovmx_environ_to_p0();
+#endif
     (void)progxfer;   /* the transfer address — not consumed here      */
     (void)imghdr;     /* {version,flags,image_base}; flags unused first-light */
     (void)linkflag;   /* passed 0; decc$main does not branch on it (§4b.8) */

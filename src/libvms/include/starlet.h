@@ -1648,6 +1648,18 @@ uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t
 uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
                      uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
 
+/** sys$check_privilegew - Check the caller's privileges (auditing disabled: nothing logged) */
+uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum,
+                              uint32_t flags, const void *itmlst, uint32_t *audsts,
+                              void *astadr, uint64_t astprm);
+
+/** sys$audit_eventw - Request a security audit event (needs AUDIT; no audit server: unforced events are not audited, forced ones SS$_UNSUPPORTED) */
+uint32_t sys$audit_eventw(uint32_t efn, uint32_t flags, const void *itmlst,
+                          void *audsts, void *astadr, uint64_t astprm);
+
+/** sys$create_uid - Create a universal identifier (128 bits; DCE/RFC 4122 version-1 uuid) */
+uint32_t sys$create_uid(void *uid);
+
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

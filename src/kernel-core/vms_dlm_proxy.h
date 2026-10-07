@@ -119,17 +119,17 @@ struct vms_dlm_proxy_post {
 	/*
 	 * THE ROOT NAME'S DIRECTORY HASH, read off the RESOURCE BLOCK (FC-P4.6).
 	 *
-	 * `res->hash16` / `res->hash_known` -- the value some system in this
+	 * `res->dir_hash` / `res->hash_known` -- the value some system in this
 	 * cluster put on the wire for this exact name and that
 	 * vms_lock_dlm_learn_dir_hash() recorded here. It rides in this struct
 	 * for the same reason every other field does: the wire arm must be able
-	 * to place it on a directory lookup (cat-0x02 body[10:12]) WITHOUT
+	 * to place it on a directory lookup (cat-0x02 body[128:132]) WITHOUT
 	 * deriving it, and the only non-deriving source is an executive read at
 	 * post time. `dir_hash_known` 0 means this executive holds none, and
 	 * then a directory LOOKUP must not be sent at all -- SS$_UNSUPPORTED,
 	 * the honest floor (design §3.6 rung A').
 	 */
-	uint16_t dir_hash;
+	uint32_t dir_hash;     /* the WIRE value; vms_ldwv_key() indexes */
 	uint8_t  dir_hash_known;
 
 	/*
@@ -172,9 +172,11 @@ struct vms_dlm_requester_ops {
 
 	/*
 	 * DIRECTORY RESOLUTION (FC-P4.3). "Which member is the directory node
-	 * for the root resource whose 16-bit hash is `hash16`?" -- the
+	 * for the root resource whose wire hash is `dir_hash`?" -- the
 	 * connection manager's Lock Directory Weight Vector, indexed by
-	 * `hash16 mod n` (Davis p. 6-31; vms_dlm_ldwv.h). Returns SS$_NORMAL
+	 * vms_ldwv_key(dir_hash) mod n (the high 16 bits, rd vms-4fb; Davis
+	 * p. 6-31; vms_dlm_ldwv.h). The engine passes the value it learned and
+	 * never interprets it; the key is the vector's business. Returns SS$_NORMAL
 	 * and writes `*out_csid` only when the answer is REAL; 0 there means
 	 * THIS NODE is the directory (p. 6-32: a system's own entries read 0 in
 	 * its own copy). Any other return means "not resolved", and the engine
@@ -203,7 +205,7 @@ struct vms_dlm_requester_ops {
 	 * wait for the cluster to answer would be implementing rung B (probing),
 	 * which this design does not take.
 	 */
-	uint32_t (*dir_resolve)(void *ctx, uint16_t hash16, uint32_t *out_csid);
+	uint32_t (*dir_resolve)(void *ctx, uint32_t dir_hash, uint32_t *out_csid);
 
 	/*
 	 * The directory vector's GENERATION. It changes whenever the vector
@@ -252,7 +254,7 @@ struct vms_dlm_requester_ops {
 	 *     cluster -- never with a real VAX present. 90b3bbbd broke a REAL
 	 *     cluster by mis-mastering against a VAX's directory; with no VAX in the
 	 *     membership that failure mode cannot occur.
-	 *   - The value returned is OVMX's OWN 16-bit directory hash (documented as
+	 *   - The value returned is OVMX's OWN directory hash (documented as
 	 *     OVMX's own, not DEC's, in docs/research-dlm-directory-algorithm.md and
 	 *     design SS3.6). It is deterministic and identical on every OVMX node
 	 *     because every node runs this one function, so all OVMX members agree
@@ -264,11 +266,12 @@ struct vms_dlm_requester_ops {
 	 *     all-OVMX cluster that is a member's own private volumes/files.
 	 *
 	 * Same non-block/no-re-enter contract as dir_resolve. SS$_NORMAL + a written
-	 * *out_hash16 on success; any other return means "not grounded", and the
+	 * *out_hash (a 32-bit value in the wire's own shape, indexed by its high
+	 * half exactly like a learned one) on success; any other return means "not grounded", and the
 	 * engine then masters the name locally (the honest floor), never guesses.
 	 */
 	uint32_t (*dir_ground)(void *ctx, const char *name, uint32_t name_len,
-			       uint16_t *out_hash16);
+			       uint32_t *out_hash);
 
 	void *ctx;
 };
@@ -276,10 +279,10 @@ struct vms_dlm_requester_ops {
 /*
  * LEARN A ROOT NAME'S DIRECTORY HASH FROM THE WIRE (FC-P4.3).
  *
- * Called by the DLM's wire arm for EVERY inbound cat-0x02 frame that carries
- * the field (body[10:12], vms_cluster_codec_dlm.h): lookups received, requests
- * received as master, and rebuild registrations. `hash16` is the value the
- * SENDING system put there; it is stored on the resource block with
+ * Called by the DLM's wire arm for every inbound cat-0x02 op-0x01 request (or
+ * its echo) for a ROOT resource -- the frames the field is grounded on
+ * (body[128:132], vms_cluster_codec_dlm.h, rd vms-4fb). `dir_hash` is the value
+ * the SENDING system put there; it is stored on the resource block with
  * `hash_known` set, and it is the only thing a directory lookup for that name
  * may ever be sent with.
  *
@@ -299,12 +302,17 @@ struct vms_dlm_requester_ops {
  * offset or the "one hash per name, cluster-wide" property the whole scheme
  * rests on.
  */
-uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t hash16);
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash);
 
 /* How many learned hashes disagreed with a value already held for that name
  * (see above). Instrumentation for the FC-P4.2 offset check; a diagnostic
  * reads it, nothing acts on it. */
 uint32_t vms_lock_dlm_dir_hash_conflicts(void);
+
+/* How many learned hashes were NOT kept because the resource table was at the
+ * learner's bound and held no block for that name (rd vms-4e9). A real $ENQ is
+ * never refused by the bound; this counts only what the learner declined. */
+uint32_t vms_lock_dlm_dir_hash_learn_full(void);
 
 /*
  * WHERE `post` COMES FROM. The DLM's wire arm implements it (FC-P4.6): it

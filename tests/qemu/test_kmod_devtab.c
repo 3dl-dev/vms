@@ -44,10 +44,10 @@
 
 #define SS_NORMAL       1
 #define SS_BADPARAM     20
-#define SS_IVCHAN       602
-#define SS_IVDEVNAM     608
+#define SS_IVCHAN       316
+#define SS_IVDEVNAM     324
 #define SS_NOMOREDEV    2648
-#define SS_NOSUCHDEV    2680
+#define SS_NOSUCHDEV    2312
 #define SS_DEVALLOC     2112    /* oracle-measured; see ssdef.h provenance */
 #define SS_DEVNOTALLOC  2136
 

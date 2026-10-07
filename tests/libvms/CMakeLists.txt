@@ -579,3 +579,12 @@ target_compile_definitions(test_libvms_ctrl_t_status PRIVATE
 target_link_libraries(test_libvms_ctrl_t_status PRIVATE vms pthread m)
 add_test(NAME test_libvms_ctrl_t_status
          COMMAND test_libvms_ctrl_t_status)
+
+# LIB$GET_LOGICAL -- the RTL wrapper over SYS$TRNLNM, read back against real
+# SYS$CRELNM definitions in LNM$PROCESS_TABLE (host, no executive).
+libvms_add_test(test_libvms_lib_get_logical
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_get_logical.c)
+
+# SYS$CREATE_UID -- 128-bit uids: unique, version 1 / RFC 4122 variant, clock-tied.
+libvms_add_test(test_libvms_create_uid
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_create_uid.c)

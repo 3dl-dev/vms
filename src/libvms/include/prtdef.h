@@ -33,8 +33,8 @@ extern "C" {
  * ================================================================ */
 
 #define PRT$C_NA    0   /* No access */
-#define PRT$C_ER    1   /* Executive-and-more read access */
-#define PRT$C_EW    2   /* Executive-and-more read/write access */
+#define PRT$C_ER    7   /* Executive-and-more read access */
+#define PRT$C_EW    5   /* Executive-and-more read/write access */
 
 #ifdef __cplusplus
 }

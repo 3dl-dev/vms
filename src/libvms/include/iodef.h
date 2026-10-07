@@ -30,17 +30,17 @@ extern "C" {
 
 #define IO$_NOP             0   /* No operation */
 #define IO$_UNLOAD          1   /* Unload volume */
-#define IO$_LOADMCODE       2   /* Load microcode */
-#define IO$_DELETE          3   /* Delete file (mark for deletion) */
-#define IO$_ACCESS          4   /* Access file (open) */
-#define IO$_DEACCESS        5   /* Deaccess file (close) */
-#define IO$_MODIFY          6   /* Modify file attributes */
-#define IO$_ACPCONTROL      7   /* ACP control function */
-#define IO$_MOUNT           8   /* Mount volume */
-#define IO$_CREATE          9   /* Create file */
-#define IO$_NETCONTROL      10  /* Network control function */
-#define IO$_RDSTATS         12  /* Read statistics */
-#define IO$_DIAGNOSE        14  /* Diagnose */
+#define IO$_LOADMCODE       1   /* Load microcode */
+#define IO$_DELETE          53   /* Delete file (mark for deletion) */
+#define IO$_ACCESS          50   /* Access file (open) */
+#define IO$_DEACCESS        52   /* Deaccess file (close) */
+#define IO$_MODIFY          54   /* Modify file attributes */
+#define IO$_ACPCONTROL      56   /* ACP control function */
+#define IO$_MOUNT           57   /* Mount volume */
+#define IO$_CREATE          51   /* Create file */
+#define IO$_NETCONTROL      54  /* Network control function */
+#define IO$_RDSTATS         13  /* Read statistics */
+#define IO$_DIAGNOSE        29  /* Diagnose */
 
 /* Sense/Set mode and characteristics */
 #define IO$_SETCHAR         26  /* Set device characteristics */
@@ -51,24 +51,24 @@ extern "C" {
 #define IO$_SKIPRECORD      38  /* Skip record */
 #define IO$_SENSEMODE       39  /* Sense device mode */
 #define IO$_WRITEOF         40  /* Write end-of-file */
-#define IO$_SPACEFILE       41  /* Space file */
-#define IO$_FORMAT          44  /* Format */
-#define IO$_SETPRFPATH      46  /* Set preferred path */
-#define IO$_DISPLAY         47  /* Display */
+#define IO$_SPACEFILE       2  /* Space file */
+#define IO$_FORMAT          30  /* Format */
+#define IO$_SETPRFPATH      18  /* Set preferred path */
+#define IO$_DISPLAY         19  /* Display */
 
 /* Physical, logical, and virtual block I/O */
 #define IO$_WRITEVBLK       48  /* Write virtual block */
 #define IO$_READVBLK        49  /* Read virtual block */
-#define IO$_READLBLK        50  /* Read logical block */
-#define IO$_WRITELBLK       51  /* Write logical block */
-#define IO$_READPBLK        52  /* Read physical block */
-#define IO$_WRITEPBLK       53  /* Write physical block */
+#define IO$_READLBLK        33  /* Read logical block */
+#define IO$_WRITELBLK       32  /* Write logical block */
+#define IO$_READPBLK        12  /* Read physical block */
+#define IO$_WRITEPBLK       11  /* Write physical block */
 
 /* Terminal-specific I/O functions */
 #define IO$_READPROMPT      55  /* Read with prompt (terminal) */
 #define IO$_TTYREADALL      58  /* Read all characters (terminal) */
 #define IO$_TTYREADPALL     59  /* Read passall (terminal) */
-#define IO$_FLUSH           60  /* Flush buffers */
+#define IO$_FLUSH           42  /* Flush buffers */
 
 /* ================================================================
  * I/O function modifier bits (bits 6-15)
@@ -76,13 +76,13 @@ extern "C" {
 
 /* Terminal modifiers */
 #define IO$M_NOECHO         0x0040  /* Bit 6: suppress echo */
-#define IO$M_TRMNOECHO      0x0040  /* Bit 6: terminal no echo (alias) */
-#define IO$M_PURGE          0x0080  /* Bit 7: purge type-ahead buffer */
-#define IO$M_NOFILTR        0x0100  /* Bit 8: no filter (pass all characters) */
-#define IO$M_TIMED          0x0200  /* Bit 9: timed I/O */
-#define IO$M_CVTLOW         0x0400  /* Bit 10: convert lowercase to uppercase */
-#define IO$M_ESCAPE         0x0800  /* Bit 11: escape processing enabled */
-#define IO$M_EXTEND         0x1000  /* Bit 12: extended read */
+#define IO$M_TRMNOECHO      0x1000  /*  terminal no echo (alias) */
+#define IO$M_PURGE          0x0800  /*  purge type-ahead buffer */
+#define IO$M_NOFILTR        0x0200  /*  no filter (pass all characters) */
+#define IO$M_TIMED          0x0080  /*  timed I/O */
+#define IO$M_CVTLOW         0x0100  /*  convert lowercase to uppercase */
+#define IO$M_ESCAPE         0x4000  /*  escape processing enabled */
+#define IO$M_EXTEND         0x8000  /*  extended read */
 
 /* File system modifiers */
 #define IO$M_ACCESS         0x0040  /* Bit 6: access mode */
@@ -91,9 +91,9 @@ extern "C" {
 #define IO$M_FMODIFIERS     0xFFC0  /* Bits 6-15: modifier mask */
 
 /* Disk modifiers */
-#define IO$M_INHRETRY       0x2000  /* Bit 13: inhibit retry */
+#define IO$M_INHRETRY       0x8000  /*  inhibit retry */
 #define IO$M_DATACHECK      0x4000  /* Bit 14: data check (verify) */
-#define IO$M_SYNCSTS        0x8000  /* Bit 15: synchronous status */
+#define IO$M_SYNCSTS        0x10000  /*  synchronous status */
 
 /*
  * BGn: (INET pseudo-device) IO$_SETMODE socket-kind selector, passed in P2 when
@@ -136,10 +136,10 @@ extern "C" {
 
 /* Network modifiers */
 #define IO$M_NOW            0x0040  /* Bit 6: immediate (no wait) */
-#define IO$M_INTERRUPT      0x0080  /* Bit 7: interrupt message */
-#define IO$M_MULTIPLE       0x0100  /* Bit 8: multiple */
-#define IO$M_ACCEPT         0x0200  /* Bit 9: accept */
-#define IO$M_ABORT          0x0400  /* Bit 10: abort */
+#define IO$M_INTERRUPT      0x0040  /*  interrupt message */
+#define IO$M_MULTIPLE       0x0080  /*  multiple */
+#define IO$M_ACCEPT         0x0080  /*  accept */
+#define IO$M_ABORT          0x0100  /*  abort */
 
 /*
  * Mailbox modifiers (IO$_SETMODE / IO$_SETCHAR).
@@ -160,14 +160,14 @@ extern "C" {
  * (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_compat.h).
  */
 #define IO$M_WRTATTN        0x0100  /* Bit 8: enable write-attention AST */
-#define IO$M_READATTN       0x0200  /* Bit 9: enable read-attention AST */
+#define IO$M_READATTN       0x0080  /*  enable read-attention AST */
 
 /* Miscellaneous modifiers */
-#define IO$M_INHSEEK        0x0200  /* Bit 9: inhibit seek */
-#define IO$M_ERASE          0x0100  /* Bit 8: erase */
-#define IO$M_ALLOWFAST      0x8000  /* Bit 15: allow fast path */
+#define IO$M_INHSEEK        0x1000  /*  inhibit seek */
+#define IO$M_ERASE          0x0400  /*  erase */
+#define IO$M_ALLOWFAST      0x4000  /*  allow fast path */
 #define IO$M_DELETE         0x0100  /* Bit 8: delete on close */
-#define IO$M_DMOUNT         0x0200  /* Bit 9: dismount */
+#define IO$M_DMOUNT         0x0400  /*  dismount */
 
 /* ================================================================
  * I/O Status Block (IOSB) structures

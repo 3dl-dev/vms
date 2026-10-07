@@ -48,7 +48,7 @@
 #include "vms_kif.h"
 
 #define SS_NORMAL       1
-#define SS_DEVNOTMOUNT  2688    /* SS$_DEVNOTMOUNT -- not a mountable ODS-2 volume */
+#define SS_DEVNOTMOUNT  124    /* SS$_DEVNOTMOUNT -- not a mountable ODS-2 volume */
 #define SS_NOMOREDEV    2648    /* SS$_NOMOREDEV -- $DEVICE_SCAN exhausted */
 
 #define TARGET_DEV      "VDA100:"   /* vdb: the blank, non-ODS-2 unit */

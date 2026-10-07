@@ -176,10 +176,12 @@ _Static_assert(ISS$C_ID_NATURAL == 1, "ISS$C_ID_NATURAL != VAX V7.3 oracle 1");
  * are drift guards over OVMX's own numbering, not VMS-conformance claims.
  * ====================================================================== */
 
-/* SYI$_ CPU-inventory item codes (prcdef.h) — OVMX-private continuation. */
-_Static_assert(SYI$_MAX_CPUS          == 0x0211, "SYI$_MAX_CPUS drifted from OVMX-private 0x0211");
-_Static_assert(SYI$_ACTIVE_CPU_BITMAP == 0x0212, "SYI$_ACTIVE_CPU_BITMAP drifted from OVMX-private 0x0212");
-_Static_assert(SYI$_AVAIL_CPU_BITMAP  == 0x0213, "SYI$_AVAIL_CPU_BITMAP drifted from OVMX-private 0x0213");
+/* SYI$_ CPU-inventory item codes (prcdef.h) -- ORACLE-PINNED (vms-f811): the V8.4
+ * Alpha $SYIDEF values (docs/oracle/alpha84-starlet-defs/SYIDEF.txt). They were an
+ * OVMX-private continuation (0x211..0x213) before the Alpha lab capture. */
+_Static_assert(SYI$_MAX_CPUS          == 4529, "SYI$_MAX_CPUS != Alpha V8.4 oracle 4529");
+_Static_assert(SYI$_ACTIVE_CPU_BITMAP == 4724, "SYI$_ACTIVE_CPU_BITMAP != Alpha V8.4 oracle 4724");
+_Static_assert(SYI$_AVAIL_CPU_BITMAP  == 4725, "SYI$_AVAIL_CPU_BITMAP != Alpha V8.4 oracle 4725");
 _Static_assert(SYI$_MAX_CPUS != SYI$_SCSSYSTEMID, "SYI$_ CPU codes must not collide with existing SYI$_ codes");
 
 /* FAB$L_FOP mask bits (rms/fab.h) — OVMX-private FOP continuation. */
@@ -192,9 +194,12 @@ _Static_assert((FAB$M_ASY & (FAB$M_SQO | FAB$M_CTG | FAB$M_CIF)) == 0,
 _Static_assert((FAB$M_RU  & FAB$M_ASY) == 0 && (FAB$M_UFO & FAB$M_RU) == 0,
                "new FOP bits must be mutually distinct");
 
-/* OSS$M_ security-service flag (ossdef.h) — OVMX-private (real VMS uses 2,
- * which OVMX already assigned to OSS$M_WLOCK). */
-_Static_assert(OSS$M_RELCTX == 0x04, "OSS$M_RELCTX drifted from OVMX-private 0x04");
+/* OSS$M_ security-service flags (ossdef.h) -- ORACLE-PINNED (vms-f811): V7.3 $OSSDEF
+ * WLOCK 1, RELCTX 2, LOCAL 4. (Earlier OVMX numbering gave RELCTX 4 because it had
+ * already given 2 to WLOCK; the migration to the real values removes the collision.) */
+_Static_assert(OSS$M_WLOCK  == 1, "OSS$M_WLOCK != VAX V7.3 oracle 1");
+_Static_assert(OSS$M_RELCTX == 2, "OSS$M_RELCTX != VAX V7.3 oracle 2");
+_Static_assert(OSS$M_LOCAL  == 4, "OSS$M_LOCAL != VAX V7.3 oracle 4");
 _Static_assert((OSS$M_RELCTX & OSS$M_WLOCK) == 0, "OSS$M_RELCTX collides with OSS$M_WLOCK");
 
 int main(void)

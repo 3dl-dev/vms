@@ -28,8 +28,8 @@ extern "C" {
  * PRX$M_ — proxy-service flag bits
  * ================================================================ */
 
-#define PRX$M_DEFAULT    0x00000001  /* Mark/select the default proxy */
-#define PRX$M_EXACT      0x00000002  /* Require an exact node/user match */
+#define PRX$M_DEFAULT    0x100  /* Mark/select the default proxy */
+#define PRX$M_EXACT      0x200  /* Require an exact node/user match */
 
 #ifdef __cplusplus
 }

@@ -1285,31 +1285,123 @@ static void test_csid_learned_edge_exists(void)
 	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u, "... with the value");
 }
 
-static void test_lockdirwt_is_not_advertised(void)
+/* A peer PARAMS carrying a LOCKDIRWT at the offset rd vms-fcb pinned. */
+static uint32_t mk_peer_params_lockdirwt(uint16_t votes, uint16_t lockdirwt,
+					 uint16_t send_msg)
 {
-	printf("\n-- FC-P3.2: LOCKDIRWT has no pinned offset, and we say so --\n");
+	vms_wire_buf_t w;
+	uint32_t n = mk_peer_params(votes, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_CM_LOCKDIRWT, lockdirwt);
+	return n;
+}
+
+/* Every PARAMS this node put on the CM connection carries `want` at
+ * body[26:28]; returns how many PARAMS were checked (0 = vacuous). */
+static uint32_t params_sent_with_lockdirwt(uint16_t want, int *all_match)
+{
+	uint32_t i, n = 0;
+
+	*all_match = 1;
+	for (i = 0; i < n_cm_sent(); i++) {
+		if (!sent_is(i, VMS_CM_CAT_CONFIG, VMS_CM_OP_PARAMS))
+			continue;
+		n++;
+		if (sent_le16(i, VMS_OFB_CM_LOCKDIRWT) != want)
+			*all_match = 0;
+	}
+	return n;
+}
+
+static void test_lockdirwt_on_the_wire(void)
+{
+	int all = 0;
+
+	printf("\n-- rd vms-fcb: LOCKDIRWT is advertised at body[26:28] and "
+	       "learned from a peer --\n");
 	bed_init();
 	bed_set_identity();
-	g.cl.params.lockdirwt = 1;    /* a node that WANTS directory duty */
+	g.cl.params.lockdirwt = 3;    /* SYSGEN LOCKDIRWT 3 */
 	drive_to_admit();
+	ct_check(params_sent_with_lockdirwt(3u, &all) >= 1u,
+		 "at least one PARAMS went out");
+	ct_check(all, "  every one carries this node's SYSGEN LOCKDIRWT 3");
 
-	ct_check(g.j.lockdirwt_unpinned >= 1u,
-		 "every PARAMS counts the unpinned LOCKDIRWT field");
-	ct_check_eq_u32(g.j.lockdirwt_unrepresentable, 1u,
-			"a NONZERO LOCKDIRWT is reported as unrepresentable");
-	ct_check(strstr(g.fake.last_log, "LOCKDIRWT") != NULL ||
-		 g.fake.logs > 0u,
-		 "... and logged on the console");
+	bed_init();
+	bed_set_identity();           /* SYSGEN LOCKDIRWT 0, the default */
+	drive_to_admit();
+	ct_check(params_sent_with_lockdirwt(0u, &all) >= 1u && all,
+		 "LOCKDIRWT 0 goes out as the value 0");
 
-	/* And the zero case: honest, but still counted, because the bytes
-	 * agreeing with the truth is a coincidence and not a placement. */
+	ct_check_eq_u32(g.member_csb->lockdirwt_valid, 0u,
+			"the member's weight is unknown before its PARAMS");
+	(void)join_feed(mk_peer_params_lockdirwt(1u, 2u, 0x0087));
+	ct_check_eq_u32(g.member_csb->lockdirwt_valid, 1u,
+			"a peer's PARAMS teaches its LOCKDIRWT");
+	ct_check_eq_u32(g.member_csb->lockdirwt, 2u, "  ... the value 2");
+	(void)join_feed(mk_peer_params_lockdirwt(1u, 0u, 0x0088));
+	ct_check_eq_u32(g.member_csb->lockdirwt, 0u,
+			"  ... and a 0 is learned as 0, not as 'unknown'");
+	ct_check_eq_u32(g.member_csb->lockdirwt_valid, 1u, "  (still valid)");
+	(void)join_feed(mk_peer_params_lockdirwt(1u, 0x0100u, 0x0089));
+	ct_check_eq_u32(g.member_csb->lockdirwt, 0u,
+			"a value outside 0..255 is not a weight: not learned");
+}
+
+/* rd vms-f29: a class-0x01 FORMATION commit, arriving before this node ever
+ * asked to be admitted, makes it a founding member: answered with the echo
+ * (class 0x01), and the join moves to ADMIT where the rest of the formation
+ * is handled. A commit of any other class in that state is not answered. */
+static uint32_t mk_class_commit(uint8_t cls, uint16_t send_msg)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, 3u);
+	vms_wire_put_u8(&w, VMS_OFF_CM_ROLE, VMS_CM_ROLE_COMMIT);
+	vms_wire_put_u8(&w, VMS_OFF_CM_CLASS, cls);
+	return n;
+}
+
+static void test_formation_commit_makes_a_founding_member(void)
+{
+	uint32_t before;
+
+	printf("\n-- rd vms-f29: a FORMATION commit before any request --\n");
 	bed_init();
 	bed_set_identity();
-	drive_to_admit();
-	ct_check_eq_u32(g.j.lockdirwt_unrepresentable, 0u,
-			"LOCKDIRWT 0 is representable (as an omitted field)");
-	ct_check(g.j.lockdirwt_unpinned >= 1u,
-		 "... and the omission is STILL counted");
+	(void)cnxman_join_start(&g.j);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND, "the join is in its directory round");
+	/* The member dialled this node: the glue binds its connection into the
+	 * CSB (as cnxman_jop_connect/accept do), and the ladder says OPEN. */
+	cnxman_csb_bind_connection(g.member_csb, CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+
+	before = g.n_sent;
+	(void)join_feed(mk_class_commit(VMS_CM_CLASS_ADD, 0x0040));
+	ct_check_eq_u32(g.n_sent, before,
+			"an ADD-class commit before admission is NOT answered");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND, "  and moves nothing");
+
+	(void)join_feed(mk_class_commit(VMS_CM_CLASS_FORM, 0x0041));
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"a FORMATION commit makes this node a founding member: ADMIT");
+	ct_check_eq_u32(g.j.formations_joined, 1u, "  counted");
+	if (g.n_sent != before + 1u) {
+		ct_check(0, "  and the commit is answered (0x81/0x03)");
+		return;
+	}
+	ct_check(g.sent[g.n_sent - 1u].body[VMS_OFB_CM_CATEGORY] == 0x81u &&
+		 g.sent[g.n_sent - 1u].body[VMS_OFB_CM_OPCODE] == VMS_CM_OP_COMMIT,
+		 "  and the commit is answered (0x81/0x03)");
+	ct_check_eq_u32(g.sent[g.n_sent - 1u].body[VMS_OFB_CM_CLASS],
+			VMS_CM_CLASS_FORM,
+			"  carrying this node's own class, 0x01 (the real founding "
+			"member's answer)");
+	ct_check_eq_u32(g.sent[g.n_sent - 1u].conid, CM_CONID,
+			"  on the coordinator's own connection");
 }
 
 static void test_no_invented_connect_data_or_descriptor(void)
@@ -6204,7 +6296,8 @@ int main(void)
 	test_membrec_readopted_on_a_new_assignment();
 	test_membrec_unusable_is_answered_not_adopted();
 	test_csid_learned_edge_exists();
-	test_lockdirwt_is_not_advertised();
+	test_lockdirwt_on_the_wire();
+	test_formation_commit_makes_a_founding_member();
 	test_no_invented_connect_data_or_descriptor();
 	test_identity_omissions_are_counted();
 	test_envelope_is_csb_state();

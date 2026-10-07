@@ -85,7 +85,7 @@
 #define SS_NORMAL       1u
 #define SS_BADPARAM     0x14u
 #define SS_NOTQUEUED    2488u
-#define SS_UNSUPPORTED  2296u
+#define SS_UNSUPPORTED  3658u
 #define SS_IVLOCKID     8484u
 #define EXIT_SKIP       77
 

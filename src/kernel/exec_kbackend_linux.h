@@ -1037,21 +1037,16 @@ static inline int exec_l2_hwaddr(const char *ifname, uint8_t mac[6])
 	return 0;
 }
 
-/* Send one frame's payload out `s` to `dst_mac` on `ifindex`, tagged with
- * `ethertype` (host order). Every send names its destination (sendto-style,
- * via msg_name) -- an L2 socket carries no connect step.
- *
- * SOCK_RAW (unlike SOCK_DGRAM) does NOT synthesize a link-layer header from
- * sll_addr/sll_protocol on send -- the caller's buffer IS the wire frame, so
- * this function builds the 14-byte Ethernet header (dst_mac, this interface's
- * OWN hardware address as src, ethertype) itself and sends it as a SEPARATE
- * leading kvec ahead of the caller's payload -- one kernel_sendmsg call, no
- * extra copy of the (possibly large) payload. sll_addr/sll_halen/sll_protocol
- * are still filled (some drivers' xmit path reads them; harmless either way).
- * Returns the PAYLOAD byte count sent (i.e. `len`'s counterpart, not
- * including the 14-byte header this function added), or negative on error.
- * MAY SLEEP (dev_get_by_index). Linux: kernel_sendmsg with a sockaddr_ll
- * msg_name, the datalink twin of exec_socket_send. */
+/* Send one COMPLETE Ethernet frame (dst | src | ethertype | payload) out `s`
+ * on `ifindex`. SOCK_RAW (unlike SOCK_DGRAM) does NOT synthesize a link-layer
+ * header -- the caller's buffer IS the wire frame and goes out VERBATIM (see
+ * the vms-a84d note in the body); sll only names the egress interface. The
+ * frame's source field is the CALLER's: in-kernel callers (vms_pe.c) build
+ * their own SCA source, and the /dev/vms path (vms_l2.c VMS_IOCTL_L2_SEND)
+ * stamps the handle's validated station address there before calling in
+ * (rd vms-1f69). Returns the full frame byte count sent, or negative errno.
+ * Linux: kernel_sendmsg with a sockaddr_ll msg_name, the datalink twin of
+ * exec_socket_send. */
 static inline long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
 				 const uint8_t dst_mac[6], const void *frame, size_t len)
 {

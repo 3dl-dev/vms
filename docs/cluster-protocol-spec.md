@@ -2599,6 +2599,33 @@ here for VOTES — reboot the joiner with `SET EXPECTED_VOTES` varied (e.g. 1 vs
 3) via `MC SYSGEN`, byte-diff the op-`0x01` bodies. (Disk-mutating: snapshot
 `d0.dsk` first, restore golden after — same runbook as `vms-cd0`.)
 
+#### LOCKDIRWT — GROUNDED by controlled reconfiguration (`vms-fcb`, plan row FC-P3.2)
+
+In the same category-`0x01` opcode-`0x01` cluster-parameters message the
+sender's **LOCKDIRWT** is an LE `uint16` at **`body[26:28]`** (**abs frame
+offset 98**). Method: a private three-node OpenVMS VAX V7.3 cluster on its own
+bridge (`tests/lab/captures/vms-fcb-lockdirwt-20261004/`); each node booted
+conversationally with `SYSBOOT> SET LOCKDIRWT n`, the value read back with
+`SYSBOOT> SHOW LOCKDIRWT` on the node's own console, and every op-`0x01` it then
+sent captured:
+
+| run | node | SYSBOOT LOCKDIRWT | `body[26:28]` |
+|---|---|---|---|
+| L1 | VAX1 1025 (founder) | 3 | `0x0003` |
+| L1 | VAX2 1026 (joiner) | 0 | `0x0000` |
+| L2 | VAX1 1025 (founder) | 1 | `0x0001` |
+| L2 | VAX2 1026 (joiner) | 2 | `0x0002` |
+
+**GROUNDED**: the same two systems, two runs, four values, and `body[26:28]`
+tracks the configured weight in both directions (VAX1 3→1, VAX2 0→2). The V7.3
+default is **0** (`SHOW LOCKDIRWT`: Default 0, range 0..255, not dynamic). The
+neighbouring `body[20:22]` and `body[24:26]` read `0x0001` on every record of
+both runs whatever the weight and are not it. **The OVMX takeaway:** a node
+advertises its own SYSGEN LOCKDIRWT here and learns every peer's from here; with
+it, every member builds the same Lock Directory Weight Vector (Davis p. 6-32 —
+including the all-zero rule that makes every member a directory node when every
+member says 0, which is the V7.3 default).
+
 #### CSID assignment — GROUNDED that it rides this VC (field not fully isolated)
 
 The connection manager assigns each admitted member a **CSID** (VAX1

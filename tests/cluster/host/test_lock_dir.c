@@ -72,7 +72,7 @@ struct fake_cm {
 	uint32_t dir_csid;        /* what the vector's entry reads; 0 = us   */
 	uint32_t generation;
 	uint32_t resolve_calls;
-	uint16_t last_hash;
+	uint32_t last_hash;
 	uint32_t refuse;          /* nonzero => the vector is not usable     */
 	int      posts;
 	struct vms_dlm_proxy_post last_post;
@@ -80,7 +80,7 @@ struct fake_cm {
 
 static struct fake_cm cm;
 
-static uint32_t cm_dir_resolve(void *ctx, uint16_t hash16, uint32_t *out_csid)
+static uint32_t cm_dir_resolve(void *ctx, uint32_t hash16, uint32_t *out_csid)
 {
 	struct fake_cm *c = ctx;
 
@@ -142,13 +142,13 @@ static int cm_dir_groundable(void *ctx)
 }
 
 static uint32_t cm_dir_ground(void *ctx, const char *name, uint32_t len,
-			      uint16_t *out_hash16)
+			      uint32_t *out_hash16)
 {
 	(void)ctx; (void)name; (void)len;
 	cm_ground_calls++;
 	if (!cm_groundable_flag)
 		return (uint32_t)SS__UNSUPPORTED;   /* never ground off-gate */
-	*out_hash16 = (uint16_t)CM_GROUND_HASH;
+	*out_hash16 = (uint32_t)CM_GROUND_HASH;
 	return (uint32_t)SS__NORMAL;
 }
 
@@ -305,7 +305,7 @@ static void wire_hash_routes_the_lookup(void)
 	/* Two values chosen so that neither is derivable from its name by any
 	 * plausible function -- and so the two names SHARE one, which no
 	 * name-derived hash would ever produce. */
-	const uint16_t WIRE_HASH = 0xBEEFu;
+	const uint32_t WIRE_HASH = 0xBEEFu;
 	struct vms_proc proc;
 	struct vms_resmaster_args rm;
 	uint32_t lkid = 0, st;
@@ -395,6 +395,65 @@ static void conflicting_learn_is_counted(void)
 			"a null name is refused");
 	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("", 1u), SS__BADPARAM,
 			"an empty name is refused");
+	vms_lock_cleanup();
+}
+
+/* ================================================================
+ * 4b. The learner is bounded (rd vms-4e9); a real $ENQ is not.
+ *
+ * Every distinct root name a VMS member put on the wire used to leave a
+ * preserved resource block behind for good. The learner now keeps a hash in
+ * a NEW block only while the table is under its bound, always keeps one for
+ * a name that already has a block, and never refuses a real $ENQ.
+ * ================================================================ */
+#define LEARN_BOUND 4096u   /* VMS_DLM_LEARN_RES_CAP, vms_lock.c */
+
+static uint32_t learn_n(const char *prefix, uint32_t n)
+{
+	char name[32];
+	uint32_t i, kept = 0;
+
+	for (i = 0; i < n; i++) {
+		snprintf(name, sizeof(name), "%s%05u", prefix, (unsigned)i);
+		if (vms_lock_dlm_learn_dir_hash(name, (i << 16) | 1u) ==
+		    SS__NORMAL)
+			kept++;
+	}
+	return kept;
+}
+
+static void learner_is_bounded(void)
+{
+	struct vms_proc proc;
+	uint32_t lkid = 0, full0;
+
+	printf("--- the hash learner keeps at most its bound; $ENQ is never refused (rd vms-4e9) ---\n");
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	vms_lock_dlm_set_requester_ops(NULL);   /* a node with no cluster arm */
+	full0 = vms_lock_dlm_dir_hash_learn_full();
+
+	ct_check_eq_u32(learn_n("LRN", LEARN_BOUND + 100u), LEARN_BOUND,
+			"the learner keeps exactly its bound of new names");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_learn_full(), full0 + 100u,
+			"and counts every name it declined");
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("LRN00000", 1u), SS__NORMAL,
+			"a name that already has a block is still recorded at the bound");
+
+	proc_init(&proc);
+	ct_check_eq_u32(do_enq(&proc, "PASTTHEBOUND", LCK_K_EXMODE, &lkid),
+			SS__NORMAL, "a real $ENQ on a new name is granted at the bound");
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "and releases");
+
+	vms_lock_cleanup();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init again");
+		return;
+	}
+	ct_check_eq_u32(learn_n("AGAIN", 10u), 10u,
+			"cleanup empties the table, so the learner has room again");
 	vms_lock_cleanup();
 }
 
@@ -666,6 +725,7 @@ int main(void)
 	no_wire_hash_refuses_and_sends_nothing();
 	wire_hash_routes_the_lookup();
 	conflicting_learn_is_counted();
+	learner_is_bounded();
 	generation_invalidates_the_cache();
 	learned_hash_survives_reclaim();
 	all_ovmx_grounds_a_novel_root();

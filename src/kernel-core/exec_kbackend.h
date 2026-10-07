@@ -584,14 +584,13 @@
  *        NetBSD: contract-only twin (-1).
  *   long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
  *                     const uint8_t dst_mac[6], const void *frame, size_t len)
- *        send one frame's payload to dst_mac on ifindex, tagged ethertype
- *        (host order); every send names its destination (sendto-style) --
- *        an L2 socket carries no connect step. SOCK_RAW builds no header of
- *        its own on send, so the backend synthesizes the 14-byte Ethernet
- *        header (dst_mac / this interface's own hwaddr / ethertype) ahead of
- *        the caller's payload. Returns the PAYLOAD byte count sent (not
- *        counting that header), or negative on error. MAY SLEEP. Linux:
- *        kernel_sendmsg with a leading header kvec + a sockaddr_ll msg_name.
+ *        send one COMPLETE Ethernet frame (dst | src | ethertype | payload)
+ *        out ifindex VERBATIM (vms-a84d: SOCK_RAW adds no header and the
+ *        backend no longer prepends one). The source field is the caller's:
+ *        vms_l2.c stamps the handle's validated station address there before
+ *        calling in (rd vms-1f69, vms_l2_station.h). Returns the frame byte
+ *        count sent, or negative on error. MAY SLEEP. Linux: kernel_sendmsg
+ *        with a sockaddr_ll msg_name naming the egress interface.
  *        NetBSD: contract-only twin (-1).
  *   int  exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
  *                     uint32_t timeout_ms, size_t *out_len)
@@ -671,7 +670,7 @@
  * Every int-returning op below returns 0 on success. A NONZERO return is the
  * VMS condition value (an SS$_ code) the executive will report to the
  * personality -- so a binding that has no such interface returns
- * EXEC_SS_NOSUCHDEV (SS$_NOSUCHDEV, 2680) and VMS_IOCTL_CLUSTER_START fails
+ * EXEC_SS_NOSUCHDEV (SS$_NOSUCHDEV, 2312) and VMS_IOCTL_CLUSTER_START fails
  * honestly with it (Rule 9: fail-honest, never a simulated port). This is the
  * same 0 == success / nonzero == failure shape families 8, 11, 12 and 13 use;
  * families 14..18 additionally fix WHICH nonzero value, because their failure
@@ -993,7 +992,7 @@ struct exec_proc_acct {
  * src/kernel-core/vms_pe.c carries the _Static_assert that ties the two
  * spellings together (single lineage -- one value, asserted, not two constants
  * that happen to match today). */
-#define EXEC_SS_NOSUCHDEV 2680u
+#define EXEC_SS_NOSUCHDEV 2312u
 
 /*
  * A receive buffer the CORE owns. The port driver pre-allocates a pool of these

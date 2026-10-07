@@ -10,12 +10,12 @@ including the programs that do not run and why.
 
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
-| host (gcc container, no executive) | 109 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 140 | 142 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| host (gcc container, no executive) | 110 | 229 | `tests/conformance/run_corpus.sh` |
+| **runtime (guest, live /dev/vms)** | 142 | 144 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **139 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **141 of 229**.
 
-Host column detail: compile-fail 38, link-fail 49, run-fail 8, run-crash 25; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
+Host column detail: compile-fail 38, link-fail 47, run-fail 8, run-crash 26; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
 Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
@@ -26,11 +26,11 @@ These demonstrations exist to end an image with a failing status; they are run-p
 |---|---:|---|
 | `lib_establish` | 12 | handler is established, then removed, then lib$signal(SS$_ACCVIO) "crashes the program" by design |
 | `lib_signal` | 12 | lib$signal(SS$_ACCVIO=12): "Demonstrate how to signal an error" -- fatal, unhandled -> exit(12) |
-| `lib_stop` | 76 | lib$stop(SS$_NOMORENODE=588) "converts a warning to a fatal": exit(588 & 0xFF) |
+| `lib_stop` | 4 | lib$stop(SS$_NOMORENODE=2560, a warning) is forced to severe: exit((2560/4) & 0xFF) |
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (90)
+### Not running (88)
 
 | program | host | runtime | reason |
 |---|---|---|---|
@@ -44,7 +44,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `lib_do_command` | link-fail | - | link: undefined lib$do_command |
 | `lib_emodg` | compile-fail | - | link: undefined lib$emodg |
 | `lib_fid_to_name` | link-fail | - | link: undefined lib$fid_to_name |
-| `lib_file_scan` | link-fail | - | link: undefined lib$file_scan, lib$file_scan_end |
 | `lib_find_image_symbol` | link-fail | - | link: undefined lib$callg, lib$find_image_symbol |
 | `lib_get_logical` | link-fail | - | link: undefined lib$get_logical |
 | `lib_getqui` | link-fail | - | link: undefined lib$format_sogw_prot, lib$get_accnam, lib$getqui |
@@ -66,7 +65,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_bio` | compile-fail | - | link: undefined sys$enter, sys$read, sys$remove, sys$wait, sys$write |
 | `sys_capabilities` | compile-fail | - | link: undefined sys$cpu_capabilities, sys$free_user_capability, sys$get_user_capability, sys$process_capabilities |
 | `sys_check_access` | link-fail | - | link: undefined sys$check_access |
-| `sys_check_privilege` | link-fail | - | link: undefined sys$check_privilegew |
 | `sys_chkpro` | compile-fail | - | link: undefined sys$create_user_profile, sys$get_security |
 | `sys_clrast` | link-fail | - | link: undefined SYS$CLRAST |
 | `sys_cluevt` | link-fail | - | link: undefined sys$tstcluevt |

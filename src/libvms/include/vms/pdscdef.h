@@ -34,10 +34,12 @@ extern "C" {
 
 /* pdsc$w_flags bit PDSC$V_BASE_REG_IS_FP (0x0080): frame base = FP(R29) vs
  * SP(R30). libgcc/config/alpha/vms-unwind.h spells the mask PDSC$M_BASE_REG_IS_FP
- * ("M" = mask); the internal src/libvms/include/pdscdef.h spells the identical
- * 0x0080 bit PDSC$V_BASE_REG_IS_FP. This shim provides the "M" alias the port
+ * ("M" = mask); the internal src/libvms/include/pdscdef.h defines the same
+ * 0x0080 mask (PDSC$V_BASE_REG_IS_FP is the bit NUMBER, 7). This shim provides the "M" alias the port
  * source references. */
+#ifndef PDSC$M_BASE_REG_IS_FP
 #define PDSC$M_BASE_REG_IS_FP    0x0080
+#endif
 
 /* Procedure Descriptor (PDSC$). The field-for-field layout MIRRORS the internal
  * src/libvms/include/pdscdef.h `struct pdsc_descriptor` exactly (same offsets):

@@ -84,6 +84,13 @@ EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
 exec_lock_t vms_res_hash_lock;
 
 /*
+ * How many resource blocks are in vms_res_hash right now, under
+ * vms_res_hash_lock. Read by the hash learner's bound (rd vms-4e9) and by
+ * nothing else: a real $ENQ never consults it.
+ */
+static uint32_t vms_res_blocks;
+
+/*
  * THE CSID THIS NODE USED TO HAVE, and why it is kept (rd vms-151; the whole
  * case is at dlm_master_is_us()). `vms_local_csid` is the substrate's insmod
  * placeholder until the connection manager hands over the cluster's real
@@ -284,7 +291,7 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * vms_lock_dlm_learn_dir_hash(). The wire arm needs it to address a
      * directory lookup at all, and this is the only non-deriving source.
      */
-    p->dir_hash       = res->hash16;
+    p->dir_hash       = res->dir_hash;
     p->dir_hash_known = res->hash_known ? 1u : 0u;
     /*
      * Which of the two things this transmission IS. `dst_csid` is the master
@@ -387,6 +394,7 @@ void vms_lock_cleanup(void)
         exec_hash_del(&res->hash_node);
         resource_free(res);
     }
+    vms_res_blocks = 0;
     exec_unlock(&vms_res_hash_lock);
 
     /* Tear down the runtime-initialized locks (a no-op on Linux; a real
@@ -612,6 +620,7 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
 
     key = resource_hash_key(name);
     exec_hash_add(vms_res_hash, &new_res->hash_node, key);
+    vms_res_blocks++;
     exec_unlock(&vms_res_hash_lock);
 
     return new_res;
@@ -644,6 +653,7 @@ static void resource_release(struct vms_lock_resource *res)
          */
         if (!has_valblk && !res->hash_known) {
             exec_hash_del(&res->hash_node);
+            vms_res_blocks--;
             resource_free(res);
         }
     }
@@ -664,7 +674,8 @@ static void resource_release(struct vms_lock_resource *res)
  *       And if THIS node is the directory, absence of the root in its own
  *       database means nobody masters it and it assumes mastery (p. 6-31).
  *
- * WHICH NODE IS THE DIRECTORY is `ldwv[hash16 mod n]` -- the Lock Directory
+ * WHICH NODE IS THE DIRECTORY is `ldwv[key mod n]`, key = the high 16 bits of
+ * the resource's 32-bit wire hash (rd vms-4fb) -- the Lock Directory
  * Weight Vector the connection manager rebuilds at every state transition
  * (vms_dlm_ldwv.h), indexed by the resource name's 16-bit hash. The engine
  * reaches the vector through the injected `dir_resolve` op (vms_dlm_proxy.h),
@@ -684,7 +695,7 @@ static void resource_release(struct vms_lock_resource *res)
  *
  * So the hash is taken off the wire and only off the wire (p. 6-50: every
  * directory lookup carries the sender's own 16-bit hash, and the directory node
- * uses the received value). `res->hash16`/`res->hash_known` are written by
+ * uses the received value). `res->dir_hash`/`res->hash_known` are written by
  * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame, and a resource
  * with no learned hash is NOT looked up: the enqueue returns SS$_UNSUPPORTED,
  * an honest refusal that costs this node locking on root names it is the first
@@ -710,7 +721,7 @@ static void resource_release(struct vms_lock_resource *res)
  * How many learned directory hashes disagreed with a value already held for
  * the same resource name. See vms_lock_dlm_learn_dir_hash(): the first value
  * stands and the disagreement is counted, because a rising count falsifies
- * either the body[10:12] offset (INFERRED until FC-P4.2) or the "one hash per
+ * either the body[128:132] offset (rd vms-4fb) or the "one hash per
  * name, cluster-wide" property the whole scheme rests on. Written under
  * vms_res_hash_lock.
  */
@@ -727,21 +738,68 @@ uint32_t vms_lock_dlm_dir_hash_conflicts(void)
 }
 
 /*
+ * THE LEARNER'S BOUND (rd vms-4e9). A learned hash is kept in a resource block,
+ * and a block that holds one survives resource_release() -- so every distinct
+ * root name a VMS member puts on the wire to this node used to leave a block
+ * behind for good. A real V7.3 node puts ~1000 distinct root names on the wire
+ * in minutes (the vms-4fb L1 capture: 939, most of them F11B$a allocation
+ * names that never repeat), so a long-lived mixed cluster grew this table
+ * without bound.
+ *
+ * The bound is on the LEARNER only: a hash for a name this node already holds
+ * a block for is always recorded, and a new block is created for a learned
+ * hash only while the table holds fewer than VMS_DLM_LEARN_RES_CAP blocks. A
+ * real $ENQ is never refused by it. Past the bound the hash is simply not kept
+ * -- the honest cost is the one the resolver already states for any unlearned
+ * name -- and the refusal is counted. The value is an OVMX design choice, not
+ * a VMS parameter (Rule 8): it is sized well above the L1 capture's whole
+ * vocabulary.
+ */
+#define VMS_DLM_LEARN_RES_CAP 4096u
+
+static uint32_t vms_dlm_dir_hash_learn_full;
+
+uint32_t vms_lock_dlm_dir_hash_learn_full(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_hash_learn_full;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+/* May the learner keep a hash for `name`? Yes if a block for it already
+ * exists, or if the table is under the bound. Otherwise counted, and no. */
+static int dir_hash_learn_room(const char *name)
+{
+    int room;
+
+    exec_lock(&vms_res_hash_lock);
+    room = resource_find(name) != NULL ||
+           vms_res_blocks < VMS_DLM_LEARN_RES_CAP;
+    if (!room)
+        vms_dlm_dir_hash_learn_full++;
+    exec_unlock(&vms_res_hash_lock);
+    return room;
+}
+
+/*
  * dir_hash_store - record one wire-learned hash on a resource. Caller holds
  * res->lock. Returns SS$_NORMAL when the value is now held, SS$_BADPARAM when a
  * DIFFERENT value was already learned for this name (the caller counts it).
  */
-static uint32_t dir_hash_store(struct vms_lock_resource *res, uint16_t hash16)
+static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash)
 {
     if (res->hash_known) {
-        if (res->hash16 == hash16)
+        if (res->dir_hash == dir_hash)
             return SS__NORMAL;
         /* The HELD value stands -- routing must not churn on a disagreement.
          * SS$_BADPARAM says "that is not the value this executive holds for
          * that name"; the caller's own counter is what makes it evidence. */
         return SS__BADPARAM;
     }
-    res->hash16 = hash16;
+    res->dir_hash = dir_hash;
     res->hash_known = 1;
     /* A hash learned against the OLD vector says nothing about the new one;
      * the generation check in dir_resolve() re-runs the lookup anyway, but
@@ -750,20 +808,41 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint16_t hash16)
     return SS__NORMAL;
 }
 
-uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t hash16)
+int vms_lock_dlm_name_in_use(const char *resnam)
+{
+    struct vms_lock_resource *res;
+    int busy = 0;
+
+    if (resnam == NULL || resnam[0] == '\0')
+        return 1;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find(resnam);
+    /* The same reads resource_release() makes under the same lock to decide
+     * whether a resource is still in use. */
+    if (res != NULL && (!exec_list_empty(&res->granted) ||
+                        !exec_list_empty(&res->waiting) ||
+                        !exec_list_empty(&res->proxies)))
+        busy = 1;
+    exec_unlock(&vms_res_hash_lock);
+    return busy;
+}
+
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
 {
     struct vms_lock_resource *res;
     uint32_t st;
 
     if (resnam == NULL || resnam[0] == '\0')
         return SS__BADPARAM;
+    if (!dir_hash_learn_room(resnam))
+        return SS__INSFMEM;
 
     res = resource_find_or_create(resnam);
     if (res == NULL)
         return SS__INSFMEM;
 
     exec_lock(&res->lock);
-    st = dir_hash_store(res, hash16);
+    st = dir_hash_store(res, dir_hash);
     exec_unlock(&res->lock);
 
     if (st != SS__NORMAL) {
@@ -850,7 +929,7 @@ static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
         return SS__NORMAL;                 /* not all-OVMX: this node masters it */
 
     if (!res->hash_known) {
-        uint16_t h = 0u;
+        uint32_t h = 0u;
         /*
          * No wire-learned hash for this root name (a name OVMX is the first in
          * the cluster to touch: its own volume/file locks). We are all-OVMX, so
@@ -866,7 +945,7 @@ static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
                            (uint32_t)strnlen(res->name, sizeof(res->name)),
                            &h) != SS__NORMAL)
             return SS__UNSUPPORTED;        /* INV-6: wire-learned, OVMX-grounded, or nothing */
-        (void)dir_hash_store(res, h);      /* sets res->hash16 + hash_known */
+        (void)dir_hash_store(res, h);      /* sets res->dir_hash + hash_known */
     }
 
     gen = (ops.dir_generation != NULL) ? ops.dir_generation(ops.ctx) : 0u;
@@ -875,7 +954,7 @@ static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
         return SS__NORMAL;
     }
 
-    if (ops.dir_resolve(ops.ctx, res->hash16, &csid) != SS__NORMAL)
+    if (ops.dir_resolve(ops.ctx, res->dir_hash, &csid) != SS__NORMAL)
         return SS__UNSUPPORTED;
 
     res->dir_csid = csid;                  /* 0 == this node (p. 6-32) */

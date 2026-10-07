@@ -9,7 +9,11 @@
  * (design-decnet-ovmx.md Phase 3; rd vms-1e9, epic vms-30e) -- the layer that
  * gives node NAMES the SET HOST / NODE:: paths resolve to addresses.
  *
- * Invoked one command per call, as DCL drives it: `MCR NCP <command...>`.
+ * Invoked one command per call, as DCL drives it through a foreign command:
+ * `$ NCP :== $SYS$SYSTEM:NCP.EXE` then `$ NCP <command...>` (the command words
+ * arrive as argv). The databases live at SYS$SYSTEM:NETNODE_LOCAL.DAT /
+ * NETNODE_REMOTE.DAT / NETOBJECT.DAT through the VMS file layer (rd vms-1f69,
+ * dnet_ncpstore.h).
  *
  * PROVENANCE (Rule 8): the NCP command grammar + SHOW layout are public (DECnet
  * for OpenVMS Networking Manual, NCP chapter). It also manages the OBJECT
@@ -28,69 +32,57 @@
 
 #include "dnet_nodedb.h"
 #include "dnet_objectdb.h"
+#include "dnet_ncpstore.h"
 
-/* --- executor configuration (SET/SHOW EXECUTOR) -------------------------- */
-struct ncp_executor {
-    int      have_addr;
-    uint16_t addr;
-    char     name[DNET_NODEDB_NAMEMAX + 1];
-    int      state_on;
-};
+/* --- the databases (rd vms-1f69) ------------------------------------------
+ * Executor, node and object databases live at SYS$SYSTEM:NETNODE_LOCAL.DAT /
+ * NETNODE_REMOTE.DAT / NETOBJECT.DAT and are read/written THROUGH THE VMS FILE
+ * LAYER (RMS over the ODS-2 ACP) by dnet_ncpstore -- the same store NETACP
+ * (DECNETD.EXE) reads at startup, so what NCP DEFINEs is what the network
+ * starts with, and STARTNET.COM's F$SEARCH gate on NETNODE_LOCAL.DAT sees it.
+ * The record layout is OVMX's documented text (labelled in each file's header
+ * comment), not the VMS binary indexed format. A write that cannot reach the
+ * VMS file fails honestly, naming the file -- never redirected to a Linux path
+ * (the pre-vms-1f69 /etc/ovmx/decnet default is gone). OVMX_DECNET_EXECUTOR /
+ * _NODEDB / _OBJECTDB remain as the HOST-TEST hook only. */
 
-static const char *nodedb_path(void)
+static void exec_load(struct dnet_executor *x)
 {
-    const char *p = getenv("OVMX_DECNET_NODEDB");
-    return (p && p[0]) ? p : "/etc/ovmx/decnet/netnode_remote.dat";
-}
-static const char *executor_path(void)
-{
-    const char *p = getenv("OVMX_DECNET_EXECUTOR");
-    return (p && p[0]) ? p : "/etc/ovmx/decnet/executor.dat";
-}
-static const char *objectdb_path(void)
-{
-    const char *p = getenv("OVMX_DECNET_OBJECTDB");
-    return (p && p[0]) ? p : "/etc/ovmx/decnet/object.dat";
-}
-
-static void exec_load(struct ncp_executor *x)
-{
-    memset(x, 0, sizeof(*x));
-    FILE *f = fopen(executor_path(), "r");
-    if (!f)
-        return;
-    char astr[32] = "", name[64] = "", st[16] = "";
-    /* Format: "EXECUTOR <a.n|-> NAME <name|-> STATE <on|off>" */
-    if (fscanf(f, "EXECUTOR %31s NAME %63s STATE %15s", astr, name, st) == 3) {
-        uint16_t a = 0;
-        if (dnet_nodedb_parse_addr(astr, &a) == DNET_NODEDB_OK) {
-            x->have_addr = 1;
-            x->addr = a;
-        }
-        if (strcmp(name, "-") != 0)
-            snprintf(x->name, sizeof(x->name), "%.*s", DNET_NODEDB_NAMEMAX, name);
-        x->state_on = (strcasecmp(st, "on") == 0);
-    }
-    fclose(f);
+    /* A corrupt executor database is reported, never silently replaced by a
+     * guessed address; SHOW/SET then proceed from an empty record. */
+    if (dnet_store_load_executor(x) == DNET_STORE_ECORRUPT)
+        fprintf(stderr, "%%NCP-W-DBRDERR, executor database %s is corrupt;"
+                        " treating the executor as unconfigured\n",
+                dnet_store_location(DNET_STORE_EXECUTOR));
 }
 
-static int exec_save(const struct ncp_executor *x)
+static int exec_save(const struct dnet_executor *x)
 {
-    FILE *f = fopen(executor_path(), "w");
-    if (!f)
-        return DNET_NODEDB_EIO;
-    char astr[16] = "-";
-    if (x->have_addr)
-        snprintf(astr, sizeof(astr), "%u.%u", dnet_area_of(x->addr), dnet_node_of(x->addr));
-    fprintf(f, "EXECUTOR %s NAME %s STATE %s\n",
-            astr, x->name[0] ? x->name : "-", x->state_on ? "on" : "off");
-    int ok = (fflush(f) == 0 && !ferror(f));
-    fclose(f);
-    return ok ? DNET_NODEDB_OK : DNET_NODEDB_EIO;
+    return dnet_store_save_executor(x) == DNET_STORE_OK ? DNET_NODEDB_OK
+                                                        : DNET_NODEDB_EIO;
+}
+
+/* Load/save shims so the command dispatch below keeps its shape: every node /
+ * object database access goes through the store (VMS file, or the host hook). */
+static int nodes_load(struct dnet_nodedb *db)
+{
+    return dnet_store_load_nodes(db) == DNET_STORE_OK ? DNET_NODEDB_OK : DNET_NODEDB_EIO;
+}
+static int nodes_save(const struct dnet_nodedb *db)
+{
+    return dnet_store_save_nodes(db) == DNET_STORE_OK ? DNET_NODEDB_OK : DNET_NODEDB_EIO;
+}
+static int objects_load(struct dnet_objectdb *db)
+{
+    return dnet_store_load_objects(db) == DNET_STORE_OK ? DNET_OBJECTDB_OK : DNET_OBJECTDB_EIO;
+}
+static int objects_save(const struct dnet_objectdb *db)
+{
+    return dnet_store_save_objects(db) == DNET_STORE_OK ? DNET_OBJECTDB_OK : DNET_OBJECTDB_EIO;
 }
 
 /* --- SHOW output (VMS-faithful shape) ------------------------------------ */
-static void show_executor(const struct ncp_executor *x, int characteristics)
+static void show_executor(const struct dnet_executor *x, int characteristics)
 {
     char astr[16] = "not configured";
     if (x->have_addr)
@@ -150,6 +142,18 @@ static int fail(const char *msg)
     return 1;
 }
 
+/* A database write that did not land: name the file it was going to, so the
+ * operator sees WHERE (on the runtime, the VMS file through RMS over the ACP --
+ * an absent executive or system volume is the only way this fails there). */
+static int fail_db(const char *msg, enum dnet_store_db which)
+{
+    fprintf(stderr, "%%NCP-E-%s %s\n", msg, dnet_store_location(which));
+    if (!dnet_store_host_override(which))
+        fprintf(stderr, "-NCP-I-VMSFILE, written through RMS over the Files-11"
+                        " ACP; no executive or system volume reachable\n");
+    return 1;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -179,21 +183,21 @@ int main(int argc, char **argv)
     if (ieq(verb, "SHOW")) {
         if (ieq(ent, "KNOWN") && argc >= 4 && ieq(argv[3], "NODES")) {
             struct dnet_nodedb db;
-            if (dnet_nodedb_load(&db, nodedb_path()) != DNET_NODEDB_OK)
+            if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
             show_known_nodes(&db);
             return 0;
         }
         if (ieq(ent, "KNOWN") && argc >= 4 && ieq(argv[3], "OBJECTS")) {
             struct dnet_objectdb db;
-            if (dnet_objectdb_load(&db, objectdb_path()) != DNET_OBJECTDB_OK)
+            if (objects_load(&db) != DNET_OBJECTDB_OK)
                 return fail("DBRDERR, object database is corrupt");
             show_known_objects(&db);
             return 0;
         }
         if (ieq(ent, "OBJECT") && argc >= 4) {
             struct dnet_objectdb db;
-            if (dnet_objectdb_load(&db, objectdb_path()) != DNET_OBJECTDB_OK)
+            if (objects_load(&db) != DNET_OBJECTDB_OK)
                 return fail("DBRDERR, object database is corrupt");
             const struct dnet_object_entry *e = NULL;
             char *end = NULL;
@@ -210,7 +214,7 @@ int main(int argc, char **argv)
         }
         if (ieq(ent, "NODE") && argc >= 4) {
             struct dnet_nodedb db;
-            if (dnet_nodedb_load(&db, nodedb_path()) != DNET_NODEDB_OK)
+            if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
             const struct dnet_node_entry *e = NULL;
             uint16_t a = 0;
@@ -225,7 +229,7 @@ int main(int argc, char **argv)
             return 0;
         }
         if (ieq(ent, "EXECUTOR")) {
-            struct ncp_executor x;
+            struct dnet_executor x;
             exec_load(&x);
             show_executor(&x, argc >= 4 && ieq(argv[3], "CHARACTERISTICS"));
             return 0;
@@ -244,15 +248,16 @@ int main(int argc, char **argv)
             if (argc >= 6 && ieq(argv[4], "NAME"))
                 name = argv[5];
             struct dnet_nodedb db;
-            if (dnet_nodedb_load(&db, nodedb_path()) != DNET_NODEDB_OK)
+            if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
             int rc = dnet_nodedb_set(&db, a, name);
             if (rc == DNET_NODEDB_EFULL)
                 return fail("DBFULL, node database is full");
             if (rc != DNET_NODEDB_OK)
                 return fail("INVNAME, bad node name or name already in use");
-            if (dnet_nodedb_save(&db, nodedb_path()) != DNET_NODEDB_OK)
-                return fail("DBWRERR, could not write the node database");
+            if (nodes_save(&db) != DNET_NODEDB_OK)
+                return fail_db("DBWRERR, could not write the node database",
+                               DNET_STORE_NODES);
             return 0;
         }
         if (ieq(ent, "OBJECT") && argc >= 4) {
@@ -276,19 +281,20 @@ int main(int argc, char **argv)
             if (num < 0)
                 return fail("MISSOBJNUM, SET OBJECT requires NUMBER <1..255>");
             struct dnet_objectdb db;
-            if (dnet_objectdb_load(&db, objectdb_path()) != DNET_OBJECTDB_OK)
+            if (objects_load(&db) != DNET_OBJECTDB_OK)
                 return fail("DBRDERR, object database is corrupt");
             int rc = dnet_objectdb_set(&db, (uint8_t)num, oname, file);
             if (rc == DNET_OBJECTDB_EFULL)
                 return fail("DBFULL, object database is full");
             if (rc != DNET_OBJECTDB_OK)
                 return fail("INVOBJ, bad object name/file or name already in use");
-            if (dnet_objectdb_save(&db, objectdb_path()) != DNET_OBJECTDB_OK)
-                return fail("DBWRERR, could not write the object database");
+            if (objects_save(&db) != DNET_OBJECTDB_OK)
+                return fail_db("DBWRERR, could not write the object database",
+                               DNET_STORE_OBJECTS);
             return 0;
         }
         if (ieq(ent, "EXECUTOR") && argc >= 4) {
-            struct ncp_executor x;
+            struct dnet_executor x;
             exec_load(&x);
             if (ieq(argv[3], "ADDRESS") && argc >= 5) {
                 uint16_t a = 0;
@@ -305,7 +311,8 @@ int main(int argc, char **argv)
                 return 1;
             }
             if (exec_save(&x) != DNET_NODEDB_OK)
-                return fail("CFGWRERR, could not write executor config");
+                return fail_db("CFGWRERR, could not write the executor database",
+                               DNET_STORE_EXECUTOR);
             return 0;
         }
         usage();
@@ -316,7 +323,7 @@ int main(int argc, char **argv)
     if (ieq(verb, "CLEAR") || ieq(verb, "PURGE")) {
         if (ieq(ent, "NODE") && argc >= 4) {
             struct dnet_nodedb db;
-            if (dnet_nodedb_load(&db, nodedb_path()) != DNET_NODEDB_OK)
+            if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
             uint16_t a = 0;
             int rc;
@@ -328,13 +335,14 @@ int main(int argc, char **argv)
                 return fail("UNRNODE, no such node in the database");
             if (rc != DNET_NODEDB_OK)
                 return fail("INVNODE, bad node name or address");
-            if (dnet_nodedb_save(&db, nodedb_path()) != DNET_NODEDB_OK)
-                return fail("DBWRERR, could not write the node database");
+            if (nodes_save(&db) != DNET_NODEDB_OK)
+                return fail_db("DBWRERR, could not write the node database",
+                               DNET_STORE_NODES);
             return 0;
         }
         if (ieq(ent, "OBJECT") && argc >= 4) {
             struct dnet_objectdb db;
-            if (dnet_objectdb_load(&db, objectdb_path()) != DNET_OBJECTDB_OK)
+            if (objects_load(&db) != DNET_OBJECTDB_OK)
                 return fail("DBRDERR, object database is corrupt");
             int rc;
             char *end = NULL;
@@ -347,8 +355,9 @@ int main(int argc, char **argv)
                 return fail("UNROBJ, no such object in the database");
             if (rc != DNET_OBJECTDB_OK)
                 return fail("INVOBJ, bad object name or number");
-            if (dnet_objectdb_save(&db, objectdb_path()) != DNET_OBJECTDB_OK)
-                return fail("DBWRERR, could not write the object database");
+            if (objects_save(&db) != DNET_OBJECTDB_OK)
+                return fail_db("DBWRERR, could not write the object database",
+                               DNET_STORE_OBJECTS);
             return 0;
         }
         usage();

@@ -23,8 +23,8 @@ extern "C" {
  * Passed as the "function" argument to sys$cvt_filename.
  * ================================================================ */
 
-#define CVTFNM$C_ACPQIO_TO_RMS  1   /* Convert ACP/QIO format to RMS format */
-#define CVTFNM$C_RMS_TO_ACPQIO  2   /* Convert RMS format to ACP/QIO format */
+#define CVTFNM$C_ACPQIO_TO_RMS  2   /* Convert ACP/QIO format to RMS format */
+#define CVTFNM$C_RMS_TO_ACPQIO  1   /* Convert RMS format to ACP/QIO format */
 
 /* ================================================================
  * CVTFNM$M_ — Output flags returned by sys$cvt_filename

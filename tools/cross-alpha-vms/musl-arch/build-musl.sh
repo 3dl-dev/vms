@@ -38,6 +38,9 @@ CC_FLAGS="-mpointer-size=64 -fno-function-sections -fno-data-sections"
 # and objcopy/strip cannot remove it. The resulting DECC$SHR is byte-identical
 # either way: LINK.EXE skips EDBG/ETBT, so no DST reaches the linked image.
 CC_FLAGS="${CC_FLAGS} ${MUSL_EXTRA_CFLAGS:-}"
+# vms-28d: the C RTL's own build sees the plain POSIX declarations; the DEC C
+# forms patched into the public headers below are for client code only.
+CC_FLAGS="${CC_FLAGS} -D__OVMX_LIBC_BUILD"
 
 mkdir -p "$WORK" && cd "$WORK"
 
@@ -72,6 +75,12 @@ cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
 # header of src/malloc/alpha-dec-vms/lite_malloc.c.
 mkdir -p "src/malloc/${TARGET}"
 cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
+# vms-122: VMS P0 placement. An address-less mmap (the heap's, and mremap's
+# moves) is placed in the P0 region below 0x40000000, as the VMS heap grows P0,
+# so every malloc result is a valid 32-bit pointer. See
+# src/mman/alpha-dec-vms/p0_region.h.
+mkdir -p "src/mman/${TARGET}"
+cp -v  "${OVERLAY}/src/mman/${TARGET}/"* "src/mman/${TARGET}/"
 # vms-430: LLP64 syscall RETURN-leg width fix. syscall_ret.c is a full overlay
 # (widened __syscall_ret to long long / unsigned long long). Its declaration in
 # syscall.h and the one truncating local in mmap.c are one-line widenings patched
@@ -136,6 +145,11 @@ grep -q '^TYPEDEF unsigned int size_t;$' include/alltypes.h.in \
  && grep -q '^TYPEDEF int ssize_t;$' include/alltypes.h.in \
  && grep -q '^STRUCT iovec { void \*iov_base; unsigned long long iov_len; };$' include/alltypes.h.in \
  || { echo "vms-537 PATCH FAIL: size_t/ssize_t/iovec in include/alltypes.h.in" >&2; exit 7; }
+# vms-ce6: ptrdiff_t follows the client's pointer size (_Ptrdiff, arch
+# bits/alltypes.h.in), as the port compiler's __PTRDIFF_TYPE__ does.
+sed -i 's/^TYPEDEF _Addr ptrdiff_t;$/TYPEDEF _Ptrdiff ptrdiff_t;/' include/alltypes.h.in
+grep -q '^TYPEDEF _Ptrdiff ptrdiff_t;$' include/alltypes.h.in \
+ || { echo "vms-ce6 PATCH FAIL: ptrdiff_t in include/alltypes.h.in" >&2; exit 7; }
 # mprotect() rounds the ADDRESS through size_t; with a 32-bit size_t that
 # truncates a 64-bit pointer. Round through uintptr_t instead.
 grep -q '^#include <stdint.h>$' src/mman/mprotect.c || sed -i 's/^#include <sys\/mman.h>$/#include <sys\/mman.h>\n#include <stdint.h>/' src/mman/mprotect.c
@@ -181,6 +195,42 @@ fail_abi() { echo "PREFLIGHT ABI MISMATCH: $1" >&2; exit 3; }
 [ "${BORDER}" = "__ORDER_LITTLE_ENDIAN__" ] || fail_abi "not little-endian (byte_order=${BORDER})"
 echo "== PREFLIGHT OK: alpha-dec-vms is LLP64 (int=4,long=4,ll=8,ptr=8) little-endian, as the overlay assumes =="
 
+# ==========================================================================
+# vms-28d: DEC C header forms the GCC port's own host sources use under
+# `#ifdef VMS` (measured: libiberty/xstrerror.c, getpwd.c, strsignal.c), for
+# client code compiled for alpha-dec-vms (__VMS) -- never for the C RTL's own
+# build (__OVMX_LIBC_BUILD, set in CC_FLAGS above).
+#   <errno.h>  vaxc$errno: DEC C's second per-thread error cell (the VMS
+#              condition value), reached through get_vms_errno_addr(), which
+#              DECC$SHR exports (src/vmslink/ovmx_decc_crtl.c).
+#   <unistd.h> getcwd(buf, size, ...): DEC C's optional third argument selects
+#              the result format; OVMX returns the UNIX format (0, what the GCC
+#              port passes) for every call -- the VMS-format result is not
+#              implemented (tracked on vms-28d).
+#   <signal.h> psignal/psiginfo are not part of the DEC C RTL and DECC$SHR does
+#              not export them; a client that declares its own (libiberty
+#              strsignal.c, after configure finds none) must not collide.
+# Exact-text, guarded, idempotent; a drift in the pinned musl text hard-fails.
+if ! grep -q 'vaxc\$errno' include/errno.h; then
+	perl -0pi -e 's/(#define errno \(\*__errno_location\(\)\)\n)/$1\n#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD)\nint *get_vms_errno_addr(void);\n#define vaxc\$errno (*get_vms_errno_addr())\n#endif\n/' include/errno.h
+fi
+grep -q 'define vaxc\$errno' include/errno.h || { echo "vms-28d PATCH FAIL: vaxc\$errno in include/errno.h" >&2; exit 7; }
+if ! grep -q 'getcwd(char \*, size_t, \.\.\.)' include/unistd.h; then
+	perl -0pi -e 's/^char \*getcwd\(char \*, size_t\);\n/#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD)\nchar *getcwd(char *, size_t, ...);\n#else\nchar *getcwd(char *, size_t);\n#endif\n/m' include/unistd.h
+fi
+grep -q 'getcwd(char \*, size_t, \.\.\.)' include/unistd.h || { echo "vms-28d PATCH FAIL: getcwd in include/unistd.h" >&2; exit 7; }
+if ! grep -q 'vms-28d: psignal' include/signal.h; then
+	perl -0pi -e 's/^void psiginfo\(const siginfo_t \*, const char \*\);\nvoid psignal\(int, const char \*\);\n/#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD) \/* vms-28d: psignal not in the DEC C RTL *\/\nvoid psiginfo(const siginfo_t *, const char *);\nvoid psignal(int, const char *);\n#endif\n/m' include/signal.h
+fi
+grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
+echo "== vms-28d DEC C header forms applied (vaxc\$errno, getcwd 3-arg, psignal) =="
+# vms-fe03: the headers declare, for alpha-dec-vms clients, only what DECC$SHR
+# exports -- every function the port's CRTL name map covers (decc-crtl-names.txt);
+# the rest bind bare names no link can reach, so a configure probe would find a
+# declaration without a definition (GCC's strsignal cascade). See the script.
+perl "${OVERLAY}/filter-headers.pl" "${OVERLAY}/decc-crtl-names.txt" include \
+	|| { echo "vms-fe03 FAIL: header filter" >&2; exit 7; }
+
 # ---- configure + build libc.a ----
 ./configure \
 	--target="${TARGET}" \
@@ -189,6 +239,17 @@ echo "== PREFLIGHT OK: alpha-dec-vms is LLP64 (int=4,long=4,ll=8,ptr=8) little-e
 	CFLAGS="${CC_FLAGS}" \
 	--disable-shared \
 	2>&1 | tee /tmp/musl-configure.log
+
+# vms-4d0: MUSL_HEADERS_ONLY=<dir> installs this alpha-dec-vms CRTL header set
+# (every overlay + patch above applied: the DEC C size_t model, kernel-shaped
+# iovec, ...) under <dir>/usr/include and stops -- the C RTL headers of the
+# OVMX sysroot the stage-2 C/C++ toolchain is configured against.
+if [ -n "${MUSL_HEADERS_ONLY:-}" ]; then
+	make install-headers DESTDIR="${MUSL_HEADERS_ONLY}" prefix=/usr includedir=/usr/include >/tmp/musl-headers.log 2>&1 \
+		|| { cat /tmp/musl-headers.log >&2; exit 1; }
+	echo "== musl alpha-dec-vms headers installed in ${MUSL_HEADERS_ONLY}/usr/include =="
+	exit 0
+fi
 
 # lib/libc.a is the rung-1 deliverable. Try the full archive first; if the
 # alpha-dec-vms toolchain (cc1 + EVAX binutils) cannot yet compile every member
@@ -396,6 +457,65 @@ echo "  OK      ${NM} read DST member '${MEMBER}' (DST on): ${NSYMS} symbol(s) e
 # fix. Uses the target compiler with musl's own include set (-nostdinc, mirroring
 # CFLAGS_ALL) in -fsyntax-only mode (no codegen -> no DST/EVAX emission).
 # ==========================================================================
+# ==========================================================================
+# DEC C HEADER-FORMS GATE (vms-28d). A client TU in the shape of the GCC port's
+# host sources (libiberty strsignal.c defines its own psignal; getpwd.c calls
+# getcwd(buf, len, 0); xstrerror.c reads vaxc$errno) must compile against the
+# installed public headers at BOTH pointer sizes, with ptrdiff_t/intptr_t/
+# uintptr_t (vms-ce6) equal to the compiler's own types at each size. Control: the SAME TU compiled
+# as the C RTL's own build (__OVMX_LIBC_BUILD: plain POSIX forms) must FAIL, so
+# the forms demonstrably come from the patched __VMS client declarations.
+# ==========================================================================
+echo "== DEC C header-forms gate (vms-28d) =="
+cat > /tmp/decc_forms.c <<'EOF'
+#include <errno.h>
+#include <unistd.h>
+#include <signal.h>
+#include <stddef.h>
+void psignal(int signo, char *message) { (void)signo; (void)message; }
+/* vms-fe03: strsignal is not in the DEC C RTL; GCC's system.h declares its own
+ * when configure finds none -- that must not conflict with <string.h>. */
+#include <string.h>
+const char *strsignal(int);
+size_t forms_len(const char *s) { return strlen(s); }   /* DEC C surface stays declared */
+char *forms_pwd(char *b, size_t n) { return getcwd(b, n, 0); }
+int forms_vms_status(void) { return vaxc$errno; }
+/* vms-ce6: the pointer-width types match the compiler's at this pointer size */
+#include <stdint.h>
+_Static_assert(__builtin_types_compatible_p(ptrdiff_t, __PTRDIFF_TYPE__), "ptrdiff_t is the compiler's");
+_Static_assert(__builtin_types_compatible_p(intptr_t, __INTPTR_TYPE__), "intptr_t is the compiler's");
+_Static_assert(__builtin_types_compatible_p(uintptr_t, __UINTPTR_TYPE__), "uintptr_t is the compiler's");
+_Static_assert(INTPTR_MAX == __INTPTR_MAX__ && PTRDIFF_MAX == __PTRDIFF_MAX__, "pointer-width limits");
+EOF
+for ps in "" "-mpointer-size=64"; do
+	if "${TARGET}-gcc" ${ps} -Werror=implicit-function-declaration -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+		-fsyntax-only /tmp/decc_forms.c 2>/tmp/decc_forms.err; then
+		echo "  OK      client TU compiles (pointer size: ${ps:-default 32})"
+	else
+		echo "VERIFY FAIL (vms-28d): DEC C client forms do not compile (pointer size: ${ps:-default 32}):" >&2
+		cat /tmp/decc_forms.err >&2; exit 7
+	fi
+done
+if "${TARGET}-gcc" -mpointer-size=64 -D__OVMX_LIBC_BUILD -nostdinc -Iarch/${TARGET} -Iarch/generic \
+	-Iobj/include -Iinclude -fsyntax-only /tmp/decc_forms.c 2>/dev/null; then
+	echo "VERIFY FAIL (vms-28d): control -- the client TU compiled under __OVMX_LIBC_BUILD, so the gate proves nothing" >&2
+	exit 7
+fi
+echo "  OK      control: the same TU is rejected under the C RTL's own POSIX forms"
+
+# vms-fe03: a header with no DEC C RTL function (sys/prctl.h) is refused whole
+# for a client, and still compiles for the C RTL's own build.
+printf '#include <sys/prctl.h>\nint fe03_x;\n' > /tmp/fe03_prctl.c
+if "${TARGET}-gcc" -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+	-fsyntax-only /tmp/fe03_prctl.c 2>/dev/null; then
+	echo "VERIFY FAIL (vms-fe03): <sys/prctl.h> (no DECC\$SHR entry point) was accepted for an alpha-dec-vms client" >&2
+	exit 7
+fi
+"${TARGET}-gcc" -mpointer-size=64 -D__OVMX_LIBC_BUILD -nostdinc -Iarch/${TARGET} -Iarch/generic \
+	-Iobj/include -Iinclude -fsyntax-only /tmp/fe03_prctl.c \
+	|| { echo "VERIFY FAIL (vms-fe03): <sys/prctl.h> rejected for the C RTL's own build" >&2; exit 7; }
+echo "  OK      a header with no DEC C RTL function is refused for clients, kept for the RTL build"
+
 echo "== page-size gate (vms-c5d): PAGE_SIZE must be a compile-time 8192 on alpha-dec-vms =="
 PGSZ_HDR="arch/${TARGET}/bits/limits.h"
 if ! grep -qE '^[[:space:]]*#[[:space:]]*define[[:space:]]+PAGESIZE[[:space:]]+8192' "${PGSZ_HDR}"; then

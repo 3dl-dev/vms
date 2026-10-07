@@ -155,5 +155,10 @@ void *imgact_get_tp(void);         /* call_pal 0x9e (rduniq)                  */
 #define IMGACT_HAVE_VMS_STD 1
 unsigned long imgact_vms_transfer(void *pv, unsigned long ai,
 				  const unsigned long args[6]);
+/* The same standard call, run on the stack whose top is sp (0 = this one):
+ * the image's P1 user stack (vms-ce5). */
+unsigned long imgact_vms_transfer_stack(void *pv, unsigned long ai,
+					const unsigned long args[6],
+					unsigned long sp);
 
 #endif /* OVMX_IMGACT_ARCH_ALPHA_H */

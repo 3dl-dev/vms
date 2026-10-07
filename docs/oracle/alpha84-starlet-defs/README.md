@@ -19,4 +19,4 @@ PSCAN$, ...). A name on both uses the VAX value; the places the two architecture
 are structure sizes/offsets and `$_MAX_*` sentinels (not compared), the PSL$ layout (the
 processor status word differs by architecture) and a handful of high SS$/SYI$ codes.
 
-Modules not in STARLET.MLB (e.g. `$UAFDEF`, in LIB.MLB) are not captured here yet.
+UAFDEF, UTCDEF and FPDEF come from `SYS$LIBRARY:LIB.MLB` (same command, other library).

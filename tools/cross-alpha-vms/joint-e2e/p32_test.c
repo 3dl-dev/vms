@@ -32,6 +32,10 @@ extern char *strsep(char **, const char *);
 extern char *strtok_r(char *, const char *, char **);
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 
+/* A statically initialised procedure value of an IMPORTED routine: a 32-bit
+ * cross-image (REFLONG) import cell IMGACT fills at activation (vms-reflong). */
+static size_t (*len_fn)(const char *) = strlen;
+
 static int cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
 
 struct outp { char *p; unsigned int guard; };
@@ -97,8 +101,9 @@ int main(int argc, char **argv)
 
     free(big);
     free(z);
-    int ok = p32 && ok_str && ok_mem && ok_alloc && ok_strto && ok_tok && ok_sort;
-    printf("OVMX p32 test: ptr32=%d str=%d mem=%d alloc=%d strto=%d tok=%d sort=%d argc=%d\n",
-           p32, ok_str, ok_mem, ok_alloc, ok_strto, ok_tok, ok_sort, argc);
+    int ok_fnptr = len_fn("OVMX!") == 5;
+    int ok = ok_fnptr && p32 && ok_str && ok_mem && ok_alloc && ok_strto && ok_tok && ok_sort;
+    printf("OVMX p32 test: ptr32=%d str=%d mem=%d alloc=%d strto=%d tok=%d sort=%d fnptr=%d argc=%d\n",
+           p32, ok_str, ok_mem, ok_alloc, ok_strto, ok_tok, ok_sort, ok_fnptr, argc);
     return ok ? 7 : 3;
 }

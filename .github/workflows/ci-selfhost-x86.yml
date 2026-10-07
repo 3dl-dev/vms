@@ -334,6 +334,12 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_p0base.sh
 
+      # vms-reflong: a 32-bit-pointer consumer's statically initialised imported
+      # procedure value binds as a longword cross-image import (OVMX_IMP_LONG).
+      - name: Prove LINK.EXE binds cross-image REFLONG imports (vms-reflong)
+        run: |
+          sh src/vmslink/test/run_evax_reflong_import.sh
+
       # vms-122: LINK.EXE resolves a same-TU weak override by the address a
       # section-relative reloc names, not by the section base -- the exported
       # decc$_mmap64/decc$munmap used to enter the strong __vm_wait (a no-op).

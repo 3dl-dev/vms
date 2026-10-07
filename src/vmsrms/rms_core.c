@@ -181,7 +181,11 @@ extern uint32_t rms_idx_cleanup(struct FAB *fab);
  * so that subsequent opens can restore the correct behavior.
  */
 #define RMS_META_MAGIC  0x524D5331  /* "RMS1" */
-#define RMS_META_VERSION 1
+/* Version 2: `org` is the V7.3 $FABDEF value (FAB$C_REL 16, FAB$C_IDX 32; vms-f811).
+ * Version 1 sidecars (written when the tree used REL 1 / IDX 2) are still read and
+ * their org converted on load -- the encodings do not overlap except SEQ == 0. */
+#define RMS_META_VERSION 2
+#define RMS_META_VERSION_LEGACY_ORG 1
 
 /* Forward decl: rms_impl_open falls through to rms_impl_create on FAB$M_CIF,
  * which is defined later in this file. */
@@ -1581,7 +1585,13 @@ static void load_metadata(struct FAB *fab)
 
     struct rms_metadata meta;
     if (fread(&meta, sizeof(meta), 1, f) == 1) {
-        if (meta.magic == RMS_META_MAGIC && meta.version == RMS_META_VERSION) {
+        if (meta.magic == RMS_META_MAGIC &&
+            (meta.version == RMS_META_VERSION || meta.version == RMS_META_VERSION_LEGACY_ORG)) {
+            if (meta.version == RMS_META_VERSION_LEGACY_ORG) {
+                /* convert the pre-oracle org encoding in place (REL 1 -> 16, IDX 2 -> 32) */
+                if (meta.org == 1)      meta.org = FAB$C_REL;
+                else if (meta.org == 2) meta.org = FAB$C_IDX;
+            }
             fab->fab$b_org = meta.org;
             fab->fab$b_rfm = meta.rfm;
             fab->fab$w_mrs = meta.mrs;

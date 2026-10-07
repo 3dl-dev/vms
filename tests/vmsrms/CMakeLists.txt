@@ -370,3 +370,19 @@ set_tests_properties(vmsrms_lib_filectl PROPERTIES
     LABELS "unit;rms"
     TIMEOUT 30
 )
+
+# vms-f811: the RMS metadata sidecar holds FAB$B_ORG in the V7.3 encoding (REL 16,
+# IDX 32); a version-1 sidecar (REL 1 / IDX 2) is converted on load. Host-only.
+add_executable(test_rms_meta_org test_rms_meta_org.c)
+target_include_directories(test_rms_meta_org PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_rms_meta_org PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_meta_org COMMAND test_rms_meta_org)
+set_tests_properties(vmsrms_meta_org PROPERTIES
+    LABELS "unit;rms"
+    TIMEOUT 30
+)

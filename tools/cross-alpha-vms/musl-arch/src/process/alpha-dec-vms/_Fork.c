@@ -31,6 +31,7 @@
  * Linux/Alpha clone() argument order is the generic one:
  *   clone(flags, newsp, parent_tidptr, child_tidptr, tls).
  */
+#define _GNU_SOURCE             /* CLONE_SETTLS from <sched.h> */
 #include <unistd.h>
 #include <signal.h>
 #include <sched.h>

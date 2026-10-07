@@ -663,6 +663,11 @@ struct vms_proc {
 	uint16_t            cli_length;
 	char                cli_command[VMS_CLI_CMDLINE_SIZE];
 
+	/* $SETDFPROT (VMS_IOCTL_DFPROT): process default file protection, inherited with
+	 * the identity fields; dfprot_set == 0 reads as VMS_DFPROT_INITIAL. */
+	uint16_t            dfprot;
+	uint8_t             dfprot_set;
+
 	/*
 	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
 	 * the CHILD's PCB; vms_ioctl_setexit() delivers it (parent EF + AST) when
@@ -1281,6 +1286,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

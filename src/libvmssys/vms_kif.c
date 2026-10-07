@@ -2002,6 +2002,28 @@ uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
  * PCB at REGISTER_CONTINUE time). cliflag == 0 means "no CLI" and the command
  * is ignored. The command travels by length (it is not necessarily NUL-clean),
  * clipped to the executive's window. */
+/*
+ * $SETDFPROT: read and optionally replace this process's default file protection, held by
+ * the executive (VMS_IOCTL_DFPROT). Returns the SS$ status; *oldprot receives the value in
+ * force before the call.
+ */
+uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot)
+{
+    struct vms_dfprot_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    if (newprot) {
+        args.set = 1;
+        args.newprot = *newprot;
+    }
+
+    KIF_CALL(VMS_IOCTL_DFPROT, &args);
+
+    if (oldprot)
+        *oldprot = (uint16_t)args.oldprot;
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;

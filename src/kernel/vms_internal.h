@@ -927,6 +927,12 @@ struct vms_proc {
     uint16_t            cli_length;       /* length of cli_command in bytes */
     char                cli_command[VMS_CLI_CMDLINE_SIZE];
 
+    /* $SETDFPROT: the process default file protection (VMS_IOCTL_DFPROT); inherited at
+     * REGISTER_CONTINUE like identity. dfprot_set == 0 means "never set": reads report
+     * VMS_DFPROT_INITIAL. Same hash_lock as the identity fields. */
+    uint16_t            dfprot;
+    uint8_t             dfprot_set;
+
     struct rcu_head     rcu;
 };
 
@@ -1425,6 +1431,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the

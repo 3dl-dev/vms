@@ -12,7 +12,11 @@
  * (the joint harness compiles with the bare cross cc1, no RTL headers).
  */
 typedef unsigned int size_t;
-typedef char *cp32 __attribute__((__mode__(__SI__)));
+#if defined(__VMS)
+typedef char *cp32 __attribute__((__mode__(__SI__)));   /* a DEC C 32-bit pointer */
+#else
+typedef char *cp32;     /* host source scans compile every product file */
+#endif
 extern int printf(const char *, ...);
 extern int strcmp(const char *, const char *);
 extern size_t strlen(const char *);

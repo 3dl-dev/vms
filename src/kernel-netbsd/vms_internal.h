@@ -111,7 +111,7 @@
 #define SS__BADPARAM   0x00000014  /* SS$_BADPARAM */
 #define SS__NOPRIV     0x00000024  /* SS$_NOPRIV */
 #define SS__EXASTLM    0x00002A04  /* SS$_EXASTLM (AST quota exceeded) */
-#define SS__NOTALLPRIV 1664        /* SS$_NOTALLPRIV (not all requested privs authorized) */
+#define SS__NOTALLPRIV 1665        /* SS$_NOTALLPRIV (not all requested privs authorized; V7.3 $SSDEF, severity S) */
 /* Mailbox subset (P4-A, rd vms-d7a). Values match src/kernel/vms_internal.h. */
 #define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
 #define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */

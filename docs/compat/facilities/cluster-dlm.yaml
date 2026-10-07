@@ -64,7 +64,7 @@ items:
       the vms-1ee caveat for the acquire/grant path. NOW FULLY DISCHARGED for the
       acquire/grant/notify/release lifecycle (vms-c72 receive arm #1181 + round-trip
       lab proof #1183, tests/lab/captures/xnode-dlm-2node-resmaster-clean-20260911.log):
-      the receive arm routes inbound op-03 ($DEQ) -> master-side release and op-04
+      the receive arm routes inbound op-03 ($DEQ) -> master-side release and op-05
       (BLKAST) -> a real user-mode AST on the remote holder, and a live 2-node run
       proves the FULL emit->receive->deliver round-trip: blkasts_received>0 +
       blkasts_delivered>0 (BLKAST really delivered, not just emitted, superseding the
@@ -106,7 +106,7 @@ items:
       (grants_received=1 on both nodes, NL->EX read back on the real 2-node cluster)
       — partially discharging vms-1ee for the grant-reply path. NOW FULLY DISCHARGED:
       the receive arm (vms-c72, #1181) routes the inbound op-03 $DEQ (emit reachable
-      since #1178) to the master-side release and the op-04 BLKAST to a real user-mode
+      since #1178) to the master-side release and the op-05 BLKAST to a real user-mode
       AST, and the live 2-node round-trip (#1183) shows the async replies delivered
       end-to-end — blkasts_delivered>0 and the inbound $DEQ empties the master's
       granted queue n_granted 1->0 (direct resmaster readback, counter_rose=1 gated).

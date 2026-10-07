@@ -4,8 +4,8 @@
  *
  * Read vms_cluster_codec_dlm.h first: it draws the GROUNDED/OBSERVED line
  * field by field, records the vms-c03 supersession (the "completion 0x04 +
- * commit 0x03" pair was a phantom; 0x03 is $DEQ, 0x04 is BLKAST, 0x06
- * carries the value block), and carries the fc8540ae hard-lesson doc
+ * commit 0x03" pair was a phantom; 0x03 is $DEQ, 0x05 is BLKAST -- rd
+ * vms-ea1 -- and 0x06 carries the value block), and carries the fc8540ae hard-lesson doc
  * comment that motivates the lock-id refusals below.
  *
  * Pure, like the parent TU and the HELLO family file: no state, no
@@ -621,8 +621,8 @@ vms_dlm_rebuild_request_build(const struct vms_dlm_rebuild_record *rec,
 }
 
 /* ------------------------------------------------------------------ *
- * op 0x03 $DEQ / op 0x04 BLKAST / op 0x06 CONVERT-with-VALBLK
- * -- GROUNDED, vms-c03 capture set. Read the header's section comment
+ * op 0x03 $DEQ / op 0x05 BLKAST / op 0x06 CONVERT-with-VALBLK
+ * -- GROUNDED, vms-c03 capture set (BLKAST re-read by rd vms-ea1). Read the header's section comment
  *    first: it names the pcap, the frame and the correlating $ENQ for
  *    every offset below, and it says which ONE field is only OBSERVED.
  * ------------------------------------------------------------------ */
@@ -636,8 +636,9 @@ vms_dlm_rebuild_request_build(const struct vms_dlm_rebuild_record *rec,
  * THE PARSE-SIDE LOCK-ID REFUSAL. These three messages identify their lock
  * by lock-id and by nothing else, so a zero in either field leaves the
  * message meaning nothing at all. The vms-c03 captures contain real cat-0x02
- * op-0x04 frames with master_lkid == 0; handing one up as "a BLKAST for lock
- * 0" would be manufacturing a referent. Refused instead.
+ * frames whose lock-id span is zero or stale (the op-0x04 directory removals
+ * among them); handing one up as "a release of lock 0" would be manufacturing
+ * a referent. Refused instead.
  */
 static vms_codec_status_t dlm_lkid_pair_get(vms_wire_view_t *v, uint8_t want_op,
 					    uint32_t *req_lkid,
@@ -920,7 +921,7 @@ const struct vms_wire_allow_entry vms_dlm_allow_rows[] = {
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_DEQ,
 	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-deq-20260911.pcap f14" },
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_BLKAST,
-	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-blk2-20260911.pcap f58" },
+	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-blk2-20260911.pcap rec 48 (vms-ea1)" },
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST,
 	  VMS_DLM_WIREOP_CONVERT_VALBLK,
 	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-lvb3-20260911.pcap f14" },

@@ -475,7 +475,7 @@ static enum dlm_req_status dq_refill_transmit(struct dlm_req_fsm *f,
  * THE GRANT IS THE ANSWER AND NOTHING FOLLOWS IT. An earlier build sent a
  * "completion + commit" pair here, built from a PROVISIONAL op-0x04/0x03
  * table. The vms-c03 capture of a real 2-node OpenVMS VAX 7.3 cluster showed
- * that pair was a phantom: 0x03 is $DEQ, 0x04 is BLKAST, and a real requester
+ * that pair was a phantom: 0x03 is $DEQ, 0x05 is BLKAST (rd vms-ea1), and a real requester
  * answers a grant with NO frame at all (vms_cluster_codec_dlm.h's supersession
  * note). So the frames are gone, and with them the only post-grant state this
  * FSM ever had to wait on.
@@ -1481,7 +1481,7 @@ enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
 
 /*
  * THE BLOCKING AST's RECEIVE HALF (rd vms-c72), as SCS delivers it: 132 bytes,
- * category 0x02, opcode 0x04. It is the body twin of dlm_req_fsm_blkast() and
+ * category 0x02, opcode 0x05 (rd vms-ea1). It is the body twin of dlm_req_fsm_blkast() and
  * exists for the same reason dlm_req_fsm_reply_body() does -- the frame-taking
  * entry cannot be reached from the live receive path (integration note E73).
  *

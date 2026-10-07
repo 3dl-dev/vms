@@ -1678,6 +1678,34 @@ out:
 }
 
 /*
+ * vms_ioctl_dfprot - $SETDFPROT: store and/or read the caller's OWN default file
+ * protection. Self-targeted. The executive owns the value (it is not a userspace cache):
+ * a later image or subprocess inherits it at REGISTER_CONTINUE time, so a protection set
+ * by DCL is the one every program it runs sees.
+ */
+long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dfprot_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    exec_lock(&vms_proc_hash_lock);
+    args.oldprot = proc->dfprot_set ? proc->dfprot : VMS_DFPROT_INITIAL;
+    if (args.set) {
+        proc->dfprot = (uint16_t)(args.newprot & 0xFFFFu);
+        proc->dfprot_set = 1;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_getcli - read the caller's OWN CLI invocation context. This is
  * the source behind IMGACT's imgact_query_cli_context() (cliflag) and
  * imgact_cli_get_command_line() (the command line): an image asks the

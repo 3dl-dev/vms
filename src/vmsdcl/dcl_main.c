@@ -208,8 +208,7 @@ void dcl_context_init(struct dcl_context *ctx)
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     }
 
-    /* Default protection: S:RWED,O:RWED,G:RE,W: = 0xFF00 */
-    ctx->default_protection = 0xFF00;
+    /* The default protection is the EXECUTIVE's ($SETDFPROT), not a DCL-private field. */
 
     /*
      * The userspace PCB is seeded from the executive's row -- it is a

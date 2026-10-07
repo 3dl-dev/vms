@@ -3073,6 +3073,24 @@ struct vms_getsyi_mem_args {
 #define VMS_IOCTL_GETEXIT   _IOWR(VMS_IOC_MAGIC, 0x4A, struct vms_getexit_args)
 #define VMS_IOCTL_SETCLI    _IOWR(VMS_IOC_MAGIC, 0x4B, struct vms_setcli_args)
 #define VMS_IOCTL_GETCLI    _IOWR(VMS_IOC_MAGIC, 0x4C, struct vms_getcli_args)
+
+/*
+ * $SETDFPROT -- the process DEFAULT FILE PROTECTION (rd vms-44a). A per-process attribute
+ * of the executive's PCB, like the privilege masks: set/read through VMS_IOCTL_DFPROT,
+ * inherited by an image/subprocess at REGISTER_CONTINUE time. `set` != 0 stores newprot
+ * (a 16-bit protection word: bits 0-3 System, 4-7 Owner, 8-11 Group, 12-15 World, a SET
+ * bit DENIES read/write/execute/delete in that order); oldprot always returns the
+ * value that was in force. A process that never set one reports VMS_DFPROT_INITIAL.
+ * OVMX design choice (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_DFPROT_INITIAL 0xFF00u   /* S:RWED,O:RWED,G:,W: -- OVMX's long-standing default */
+struct vms_dfprot_args {
+    uint32_t set;       /* in:  nonzero = store newprot */
+    uint32_t newprot;   /* in:  16-bit protection word (low half) */
+    uint32_t oldprot;   /* out: protection word in force before this call */
+    uint32_t status;    /* return: SS$_ status */
+};
+#define VMS_IOCTL_DFPROT    _IOWR(VMS_IOC_MAGIC, 0x5E, struct vms_dfprot_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -3143,6 +3161,10 @@ _Static_assert(sizeof(struct vms_setcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
                "vms_setcli_args layout changed: VMS_IOCTL_SETCLI ABI break");
 _Static_assert(sizeof(struct vms_getcli_args) == 8 + VMS_CLI_CMDLINE_SIZE,
                "vms_getcli_args layout changed: VMS_IOCTL_GETCLI ABI break");
+_Static_assert(sizeof(struct vms_dfprot_args) == 16,
+               "vms_dfprot_args layout changed: VMS_IOCTL_DFPROT ABI break");
+_Static_assert(VMS_IOCTL_DFPROT == 0xC010565Eu,
+               "VMS_IOCTL_DFPROT encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*

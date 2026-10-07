@@ -1386,6 +1386,8 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, bool share_pid,
         proc->cli_present = parent->cli_present;
         proc->cli_length  = parent->cli_length;
         memcpy(proc->cli_command, parent->cli_command, sizeof(proc->cli_command));
+        proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
+        proc->dfprot_set = parent->dfprot_set;
 
         spin_lock(&parent->mode_lock);
         proc->perm_privs = parent->perm_privs;
@@ -2319,6 +2321,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_setcli(proc, arg);
     case VMS_IOCTL_GETCLI:
         return vms_ioctl_getcli(proc, arg);
+    case VMS_IOCTL_DFPROT:
+        return vms_ioctl_dfprot(proc, arg);
 
     /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
     case VMS_IOCTL_SPAWN_NOTIFY:

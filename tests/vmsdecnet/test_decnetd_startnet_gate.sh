@@ -92,15 +92,15 @@ fi
 # compiler or an ineffective shim is a FAIL, never a skip.
 SHIM="$TMP/fake_getifaddrs.so"
 SHIM_SRC="$(dirname "$0")/fake_getifaddrs.c"
-if cc -shared -fPIC -o "$SHIM" "$SHIM_SRC" 2>"$TMP/shim.err"; then
+if cc -shared -fPIC -o "$SHIM" "$SHIM_SRC" -ldl 2>"$TMP/shim.err"; then
     shim_iface() { FAKE_IFS="$1" LD_PRELOAD="$SHIM" "$BIN" --show-executor 2>&1 | grep "Datalink interface"; }
-    got="$(shim_iface 'lo:lo,dummy0:down,eth9:up,eth10:up')"
+    got="$(shim_iface 'lo:lo,tun0:other,eth9:eth,eth10:eth')"
     if [ "$got" = "Datalink interface = eth9 (auto-detected primary NIC)" ]; then
-        ok "no --iface: skips lo and down NICs, auto-detects the first up non-loopback NIC (eth9)"
+        ok "no --iface: skips loopback and non-Ethernet netdevs, auto-detects the first Ethernet NIC (eth9)"
     else
-        bad "auto-detect should pick eth9 from lo,dummy0(down),eth9,eth10 (got: $got)"
+        bad "auto-detect should pick eth9 from lo,tun0(non-ether),eth9,eth10 (got: $got)"
     fi
-    got="$(shim_iface 'lo:lo,dummy0:down')"
+    got="$(shim_iface 'lo:lo,tun0:other')"
     if echo "$got" | grep -q "no usable NIC detected" && ! echo "$got" | grep -q "auto-detected primary NIC"; then
         ok "no usable NIC: reports the compiled default honestly, not as auto-detected (INV-6)"
     else

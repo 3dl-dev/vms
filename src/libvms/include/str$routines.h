@@ -443,19 +443,19 @@ uint32_t str$analyze_sdesc(
  * STR$ condition value definitions
  * ================================================================ */
 
-#define STR$_NORMAL     0x00801001  /* Normal completion */
-#define STR$_TRU        0x00801008  /* String truncated (warning) */
-#define STR$_MATCH      0x00801011  /* String matched */
-#define STR$_NOMATCH    0x00801018  /* No match */
-#define STR$_NOELEM     0x00801020  /* No such element */
-#define STR$_INVDELIM   0x00801028  /* Invalid delimiter */
+#define STR$_NORMAL     0x00000001  /* Normal completion */
+#define STR$_TRU        0x00248200  /* String truncated (warning) */
+#define STR$_MATCH      0x00248419  /* String matched */
+#define STR$_NOMATCH    0x00248208  /* No match */
+#define STR$_NOELEM     0x00248218  /* No such element */
+#define STR$_INVDELIM   0x00248210  /* Invalid delimiter */
 #define STR$_STRTRU     0x00801030  /* String truncated */
-#define STR$_FATINTERR  0x0080103C  /* Fatal internal error */
-#define STR$_ILLSTRCLA  0x00801044  /* Illegal string class */
-#define STR$_INSVIRMEM  0x0080104C  /* Insufficient virtual memory */
-#define STR$_NEGSTRLEN  0x00801054  /* Negative string length */
-#define STR$_WRONUMARG  0x0080105C  /* Wrong number of arguments */
-#define STR$_STRTOOLON  0x00801064  /* String too long */
+#define STR$_FATINTERR  0x00248044  /* Fatal internal error */
+#define STR$_ILLSTRCLA  0x00248054  /* Illegal string class */
+#define STR$_INSVIRMEM  0x0024806C  /* Insufficient virtual memory */
+#define STR$_NEGSTRLEN  0x00248401  /* Negative string length */
+#define STR$_WRONUMARG  0x00248064  /* Wrong number of arguments */
+#define STR$_STRTOOLON  0x00248074  /* String too long */
 
 #ifdef __cplusplus
 }

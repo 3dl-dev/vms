@@ -207,6 +207,11 @@ jobs:
           docker run --rm -v "${{ github.workspace }}/tools/cross-alpha-vms/test":/t:ro \
             ovmx-cross-alpha-vms:latest bash /t/run_p32_eh_encoding.sh
 
+      # vms-fd1 (patches/0008): GCC's VMS-host xm-vms.h DELETE_IF_ORDINARY uses
+      # the GCC 14 driver's error ("%s: %m") (unpatched: perror_with_name).
+      - name: Port compiler -- VMS-host xm-vms.h builds against the GCC 14 driver (vms-fd1)
+        run: bash tools/cross-alpha-vms/test/run_xm_vms_delete.sh tools/cross-alpha-vms
+
       # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
       # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
       # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they

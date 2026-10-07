@@ -1,0 +1,20 @@
+vms-fd1: VMS host -- DELETE_IF_ORDINARY uses error ("%s: %m"), as gcc.cc does
+
+gcc/config/vms/xm-vms.h overrides DELETE_IF_ORDINARY (the VMS form loops,
+deleting every version of the file).  Its failure report still calls
+perror_with_name, which gcc.cc no longer defines: the driver's own default
+DELETE_IF_ORDINARY reports the same failure with error ("%s: %m", (NAME)).
+A VMS-hosted build of gcc.cc therefore fails ("'perror_with_name' was not
+declared in this scope").  Use the driver's current reporting call.
+
+--- a/gcc/config/vms/xm-vms.h
++++ b/gcc/config/vms/xm-vms.h
+@@ -47,7 +47,7 @@
+       if (unlink (NAME) < 0)                               \
+ 	{                                                  \
+ 	  if (VERBOSE_FLAG)                                \
+-	    perror_with_name (NAME);                       \
++	    error ("%s: %m", (NAME));                    \
+ 	  break;                                           \
+ 	}                                                  \
+   } while (0)

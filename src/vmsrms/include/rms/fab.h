@@ -7,8 +7,8 @@
 
 /* File organization */
 #define FAB$C_SEQ   0   /* Sequential */
-#define FAB$C_REL   1   /* Relative */
-#define FAB$C_IDX   2   /* Indexed */
+#define FAB$C_REL   16   /* Relative */
+#define FAB$C_IDX   32   /* Indexed */
 
 /* Record format */
 #define FAB$C_UDF   0   /* Undefined */
@@ -26,8 +26,8 @@
 #define FAB$M_BLK   0x08  /* Block-mode I/O */
 
 /* File access (fab$b_fac) */
-#define FAB$M_GET   0x01  /* Read access */
-#define FAB$M_PUT   0x02  /* Write access */
+#define FAB$M_GET   0x02  /* Read access */
+#define FAB$M_PUT   0x01  /* Write access */
 #define FAB$M_DEL   0x04  /* Delete access */
 #define FAB$M_UPD   0x08  /* Update access */
 #define FAB$M_TRN   0x10  /* Truncate access */
@@ -35,36 +35,35 @@
 #define FAB$M_BRO   0x40  /* Block+record I/O */
 
 /* File share options (fab$b_shr) */
-#define FAB$M_SHRGET 0x01
-#define FAB$M_SHRPUT 0x02
+#define FAB$M_SHRGET 0x02
+#define FAB$M_SHRPUT 0x01
 #define FAB$M_SHRDEL 0x04
 #define FAB$M_SHRUPD 0x08
 #define FAB$M_MSE    0x10
 #define FAB$M_NIL    0x20
 
 /* File options (fab$l_fop) */
-#define FAB$M_CIF   0x00000001  /* Create if non-existent */
-#define FAB$M_DFW   0x00000002  /* Deferred write */
-#define FAB$M_MXV   0x00000004  /* Maximize version */
-#define FAB$M_SUP   0x00000008  /* Supersede */
-#define FAB$M_TMP   0x00000010  /* Temporary file */
-#define FAB$M_TMD   0x00000020  /* Temporary, delete on close */
-#define FAB$M_DLT   0x00000040  /* Delete on close */
-#define FAB$M_SCF   0x00000080  /* Submit as command file */
-#define FAB$M_SPL   0x00000100  /* Spool on close */
-#define FAB$M_NAM   0x00000200  /* Use NAM block */
-#define FAB$M_CBT   0x00000400  /* Contiguous best try */
-#define FAB$M_CTG   0x00000800  /* Contiguous */
-#define FAB$M_SQO   0x00001000  /* Sequential only */
-/* FOP options added for vms-f16.  OVMX-private FOP bits: the 2026-08-13
- * $FABDEF oracle dump (OpenVMS VAX V7.3, lab-2) shows OVMX's whole FOP
- * layout is already private (e.g. FAB$M_DFW is 0x20 and FAB$M_CTG is
- * 0x100000 on real VMS, vs 0x02 / 0x800 here), so the authentic ASY=1 /
- * RU=2 / UFO=0x20000 values would collide with existing OVMX FOP bits.
- * OVMX assigns the next free bits and labels them as design choices. */
-#define FAB$M_ASY   0x00002000  /* Asynchronous RMS operations; OVMX-private bit */
-#define FAB$M_RU    0x00004000  /* Recovery-unit journaling; OVMX-private bit */
-#define FAB$M_UFO   0x00008000  /* User file open (open, no RMS I/O); OVMX-private bit */
+#define FAB$M_CIF   0x02000000  /* Create if non-existent */
+#define FAB$M_DFW   0x00000020  /* Deferred write */
+#define FAB$M_MXV   0x00000002  /* Maximize version */
+#define FAB$M_SUP   0x00000004  /* Supersede */
+#define FAB$M_TMP   0x00000008  /* Temporary file */
+#define FAB$M_TMD   0x00000010  /* Temporary, delete on close */
+#define FAB$M_DLT   0x00008000  /* Delete on close */
+#define FAB$M_SCF   0x00004000  /* Submit as command file */
+#define FAB$M_SPL   0x00002000  /* Spool on close */
+#define FAB$M_NAM   0x01000000  /* Use NAM block */
+#define FAB$M_CBT   0x00200000  /* Contiguous best try */
+#define FAB$M_CTG   0x00100000  /* Contiguous */
+#define FAB$M_SQO   0x00000040  /* Sequential only */
+/* FOP options added for vms-f16, now at their authentic values: the whole FOP / FAC /
+ * SHR / ORG layout is the V7.3 / V8.4 $FABDEF one (rd vms-f811), so the earlier
+ * "OVMX-private bit" workaround (ASY 0x2000, RU 0x4000, UFO 0x8000 -- chosen because
+ * the authentic values collided with OVMX's own private FOP bits) is gone. RU lives
+ * in fab$b_journal on VMS, MXV (also 2) in fab$l_fop: different fields. */
+#define FAB$M_ASY   0x00000001  /* Asynchronous RMS operations */
+#define FAB$M_RU    0x00000002  /* Recovery-unit journaling (fab$b_journal) */
+#define FAB$M_UFO   0x00020000  /* User file open (open, no RMS I/O) */
 
 /* Block ID for FAB */
 #define FAB$C_BID   3

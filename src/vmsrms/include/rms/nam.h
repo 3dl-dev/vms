@@ -9,7 +9,7 @@
  * Used with $PARSE and $SEARCH to analyze and resolve filespecs.
  */
 
-#define NAM$C_BID      4
+#define NAM$C_BID      2
 #define NAM$C_BLN      sizeof(struct NAM)
 #define NAM$C_MAXRSS   255   /* Max resultant string size */
 #define NAM$C_MAXESS   255   /* Max expanded string size */
@@ -55,20 +55,20 @@ struct NAM {
 };
 
 /* NAM flags (nam$l_fnb) */
-#define NAM$M_WILDCARD    0x0001  /* Filespec contains wildcards */
-#define NAM$M_EXP_DEV     0x0002  /* Device was explicitly specified */
-#define NAM$M_EXP_DIR     0x0004  /* Directory was explicitly specified */
-#define NAM$M_EXP_NAME    0x0008  /* Name was explicitly specified */
-#define NAM$M_EXP_TYPE    0x0010  /* Type was explicitly specified */
-#define NAM$M_EXP_VER     0x0020  /* Version was explicitly specified */
-#define NAM$M_NODE        0x0040  /* Node was specified */
-#define NAM$M_CNCL_DEV    0x0080  /* Device is concealed */
-#define NAM$M_ROOT_DIR    0x0100  /* Rooted directory */
-#define NAM$M_SEARCH_LIST 0x0200  /* Device uses search list */
-#define NAM$M_WILD_NAME   0x0400  /* Wildcard in name field */
-#define NAM$M_WILD_TYPE   0x0800  /* Wildcard in type field */
-#define NAM$M_WILD_VER    0x1000  /* Wildcard in version field */
-#define NAM$M_WILD_DIR    0x2000  /* Wildcard in directory field */
+#define NAM$M_WILDCARD    0x0100  /* Filespec contains wildcards */
+#define NAM$M_EXP_DEV     0x0080  /* Device was explicitly specified */
+#define NAM$M_EXP_DIR     0x0040  /* Directory was explicitly specified */
+#define NAM$M_EXP_NAME    0x0004  /* Name was explicitly specified */
+#define NAM$M_EXP_TYPE    0x0002  /* Type was explicitly specified */
+#define NAM$M_EXP_VER     0x0001  /* Version was explicitly specified */
+#define NAM$M_NODE        0x20000  /* Node was specified */
+#define NAM$M_CNCL_DEV    0x1000  /* Device is concealed */
+#define NAM$M_ROOT_DIR    0x2000  /* Rooted directory */
+#define NAM$M_SEARCH_LIST 0x0800  /* Device uses search list */
+#define NAM$M_WILD_NAME   0x0020  /* Wildcard in name field */
+#define NAM$M_WILD_TYPE   0x0010  /* Wildcard in type field */
+#define NAM$M_WILD_VER    0x0008  /* Wildcard in version field */
+#define NAM$M_WILD_DIR    0x100000  /* Wildcard in directory field */
 
 /* NAM initialization macro */
 #define cc$rms_nam (struct NAM){ \
@@ -78,6 +78,6 @@ struct NAM {
 
 /* nam$b_nop $PARSE option flags */
 #define NAM$M_SYNCHK      0x08    /* Syntax-only parse (no device/dir check) */
-#define NAM$M_PWD         0x10    /* Parse-with-directory (search list) */
+#define NAM$M_PWD         0x01    /* Parse-with-directory (search list) */
 
 #endif /* __RMS_NAM_H */

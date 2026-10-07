@@ -588,3 +588,7 @@ libvms_add_test(test_libvms_lib_get_logical
 # SYS$CREATE_UID -- 128-bit uids: unique, version 1 / RFC 4122 variant, clock-tied.
 libvms_add_test(test_libvms_create_uid
     ${CMAKE_CURRENT_SOURCE_DIR}/test_create_uid.c)
+
+# OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
+libvms_add_test(test_libvms_opcdef_layout
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)

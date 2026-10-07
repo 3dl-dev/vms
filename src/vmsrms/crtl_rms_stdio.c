@@ -22,7 +22,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <fcntl.h>
-#include <unistd.h>          /* close(): the C RTL-owned descriptors */          /* vms-3320: O_CREAT/O_WRONLY/O_RDWR/O_TRUNC (target ABI) */
+#include <unistd.h>          /* close(): the C RTL-owned descriptors (vms-fb4) */
 
 #include "rms/rms.h"          /* sys$create/$open/$erase/$parse/$search/$rename */
 #include "rms/crtl_stdio.h"

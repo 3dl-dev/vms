@@ -1078,6 +1078,54 @@ jobs:
       - name: "SYS$GL_CALL_HANDL dispatcher-frame gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh chf-gate
   # -----------------------------------------------------------------------
+  # alpha-vfork (vms-fb4): DEC C vfork()/exec*() over the IMGACT launcher --
+  # the image is activated off the ODS-2 volume in a new process.
+  # -----------------------------------------------------------------------
+  alpha-vfork:
+    name: "OVMX/Alpha DEC C vfork()/exec*() — a 32-bit program creates a subprocess running an ODS-2 image with arguments, pipes its output back and reaps it (vms-fb4)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "vfork gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh vfork-gate
+  # -----------------------------------------------------------------------
   # alpha-p0heap (vms-122): the C RTL heap lives in the VMS P0 region, so every
   # malloc result is a valid 32-bit pointer (DEC C default pointer size).
   # -----------------------------------------------------------------------

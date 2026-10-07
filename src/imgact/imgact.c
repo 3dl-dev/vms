@@ -3080,8 +3080,20 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 		}
 	}
 
-	/* ---- Self-relocate IMGACT.EXE, then globals become usable. ---- */
-	self_relocate(at_base);
+	/* ---- Self-relocate IMGACT.EXE, then globals become usable. ----
+	 * As the PT_INTERP, AT_BASE is IMGACT's load base. Run as the process's
+	 * own program (the vms-fb4 launcher) there is no AT_BASE: AT_PHDR then
+	 * points at IMGACT's own program headers, and its PT_PHDR gives the
+	 * base. (No globals before self_relocate: locals only.) */
+	unsigned long self_base = at_base;
+	if (at_base == 0 && at_phdr) {
+		ElfW(Phdr) *sp_ph = (ElfW(Phdr) *)at_phdr;
+		self_base = at_phdr - sizeof(ElfW(Ehdr));
+		for (long i = 0; i < at_phnum; i++)
+			if (sp_ph[i].p_type == PT_PHDR)
+				self_base = at_phdr - sp_ph[i].p_vaddr;
+	}
+	self_relocate(self_base);
 	g_auxv  = auxv;
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;

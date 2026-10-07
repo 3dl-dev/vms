@@ -589,12 +589,6 @@ libvms_add_test(test_libvms_lib_get_logical
 libvms_add_test(test_libvms_create_uid
     ${CMAKE_CURRENT_SOURCE_DIR}/test_create_uid.c)
 
-# OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
-libvms_add_test(test_libvms_opcdef_layout
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)
-||||||| 3d56f2a1
-
-
 # vms-f811: an installed SYSUAF written under the old UAI$M_ numbering is converted, not misread.
 add_executable(test_libvms_sysuaf_flags_upgrade
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_flags_upgrade.c)
@@ -604,3 +598,7 @@ target_link_libraries(test_libvms_sysuaf_flags_upgrade PRIVATE
     vms pthread m)
 add_test(NAME test_libvms_sysuaf_flags_upgrade
     COMMAND test_libvms_sysuaf_flags_upgrade)
+
+# OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
+libvms_add_test(test_libvms_opcdef_layout
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)

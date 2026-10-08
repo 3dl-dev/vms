@@ -331,12 +331,24 @@ uint32_t lib$get_symbol(
         if (full_len > 0)
             memcpy(dyn->dsc$a_pointer, rsp.value, full_len);
     } else {
-        uint16_t copy_len = full_len;
-        if (copy_len > value->dsc$w_length)
-            copy_len = value->dsc$w_length;
-        if (copy_len > 0 && value->dsc$a_pointer)
-            memcpy(value->dsc$a_pointer, rsp.value, copy_len);
-        value->dsc$w_length = copy_len;
+        /* A fixed-length string keeps its length: the value is copied,
+         * truncated or blank-filled to it, and *value_len says how much is
+         * the value (LIB$ Manual, string semantics of a CLASS_S output). */
+        uint16_t room = value->dsc$w_length;
+        uint16_t copy_len = full_len < room ? full_len : room;
+        if (value->dsc$a_pointer) {
+            if (copy_len > 0)
+                memcpy(value->dsc$a_pointer, rsp.value, copy_len);
+            if (room > copy_len)
+                memset(value->dsc$a_pointer + copy_len, ' ', room - copy_len);
+        }
+        if (full_len > room) {
+            if (value_len)
+                *value_len = full_len;
+            if (table_type)
+                *table_type = rsp.table;
+            return LIB$_STRTRU;
+        }
     }
 
     if (value_len)

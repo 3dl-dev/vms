@@ -2844,6 +2844,25 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
 	bind_imports(exe_base, ih, "IMAGE.EXE");
 
+	/* RMS is part of every VMS process (it lives in system space; an image
+	 * never "links" it). The OVMX RTL reaches RMS through weak-by-name imports
+	 * in LIBVMS$SHR (LIB$FIND_FILE, the RMS text-file seam), which bind only if
+	 * LIBVMSRMS$SHR is in the producer closure -- and it is there only when the
+	 * image itself calls an RMS service. So an image that called LIB$FIND_FILE
+	 * but no $PARSE got SS$_NOSUCHDEV (rd vms-214). Load it whenever LIBVMS$SHR
+	 * is loaded, as VMS always has RMS present; an absent LIBVMSRMS$SHR is not
+	 * an error here (the seam then fails honestly, as before). */
+	for (int i = 0; i < g_nprods; i++) {
+		const char *n = g_prods[i].name, *want = "LIBVMS$SHR";
+		int k = 0;
+		while (want[k] && (n[k] == want[k] || n[k] == want[k] + 32))
+			k++;
+		if (!want[k] && (n[k] == '\0' || n[k] == '.')) {
+			(void)load_ovmx_producer("LIBVMSRMS$SHR.EXE");
+			break;
+		}
+	}
+
 	/* Now that the ENTIRE producer closure is loaded, resolve every producer's
 	 * weak-by-name imports against it (LIBVMS$SHR's sys$open/$get/$connect/$close
 	 * -> LIBVMSRMS$SHR). Must follow bind_imports so all producers are present;

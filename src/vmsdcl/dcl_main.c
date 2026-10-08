@@ -539,12 +539,14 @@ static void setup_session(struct dcl_context *ctx)
         }
 
         /*
-         * Override SYS$DISK with the process default device.
-         * On a VMS system this would be set from the process PCB;
-         * here we default to the system device.
+         * SYS$DISK, the process default device: a supervisor-mode process
+         * name carrying LNM$M_CRELOG, as VMS creates it at login and SET
+         * DEFAULT re-creates it (observed attributes %X404, supervisor mode,
+         * docs/oracle/semantics/lnm/; rd vms-ef21). Supervisor, not user: a
+         * user-mode SYS$DISK would be deleted at the first image rundown.
          */
         lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK",
-                   "SYS$SYSDEVICE", 0, LNM_MODE_USER);
+                   "SYS$SYSDEVICE", LNM_ATTR_CRELOG, LNM_MODE_SUPER);
     }
 
     /* Register built-in commands */

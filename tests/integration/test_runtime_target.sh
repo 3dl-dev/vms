@@ -756,19 +756,21 @@ else
 fi
 
 # (d) LNM\$SYSTEM -- the public logical-name services must route the SYSTEM
-# table through the executive (vms_kif_lnm_define/_translate), so a name one
+# table through the executive (vms_kif_lnm_define/_lookup -- _lookup is the
+# mode- and case-aware arena read $TRNLNM uses since rd vms-ef21), so a name one
 # process defines is visible node-wide. The deleted fake served LNM\$SYSTEM from
 # a process-private array (logical_table[]). PRESENCE check: a reintroduction
 # replaces the executive call with local storage, removing the token.
-# (LNM\$PROCESS staying local is VMS-correct and is deliberately not touched.)
+# (Since rd vms-ef21 LNM\$PROCESS is executive-resident too, keyed by the VMS
+# PID; it stays process-local only with no /dev/vms at all.)
 log_c="$syssvc/sys_logical.c"
 if [ -f "$log_c" ]; then
     have_def=$(not_in_code "$log_c" 'vms_kif_lnm_define')
-    have_trn=$(not_in_code "$log_c" 'vms_kif_lnm_translate')
+    have_trn=$(not_in_code "$log_c" 'vms_kif_lnm_lookup')
     if [ -z "$have_def" ] || [ -z "$have_trn" ]; then
         echo "FAIL: sys_logical.c no longer routes LNM\$SYSTEM through the executive"
         [ -z "$have_def" ] && echo "  -> no vms_kif_lnm_define call (SYSTEM create went local?)"
-        [ -z "$have_trn" ] && echo "  -> no vms_kif_lnm_translate call (SYSTEM read went local?)"
+        [ -z "$have_trn" ] && echo "  -> no vms_kif_lnm_lookup call (SYSTEM read went local?)"
         echo "     LNM\$SYSTEM is executive-resident (vms-d37); a process-private"
         echo "     SYSTEM table is exactly the fake this closed."
         status=1

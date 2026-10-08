@@ -488,6 +488,27 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * vms_lnm_proc_gone - LNM$PROCESS housekeeping for a PCB being torn down
+ * (rd vms-ef21). Called by each substrate's vms_proc_free_claimed() AFTER the
+ * row is unhashed and WITHOUT vms_proc_hash_lock held. If another row still
+ * carries the same VMS PID, the departing task was an image DCL activated
+ * through the fork()+execve() path (REGISTER_CONTINUE): that is image rundown,
+ * so only the user-mode process names go. If none does, the VMS process itself
+ * is gone and its whole process table goes with it.
+ */
+void vms_lnm_proc_gone(struct vms_proc *proc)
+{
+    bool shared;
+
+    if (!proc || proc->vms_pid == 0)
+        return;
+    exec_lock(&vms_proc_hash_lock);
+    shared = find_by_vms_pid(proc->vms_pid) != NULL;
+    exec_unlock(&vms_proc_hash_lock);
+    vms_lnm_rundown(proc->vms_pid, shared ? PSL_C_USER : PSL_C_KERNEL);
+}
+
+/*
  * find_by_linux_pid - locate a process by the Linux pid (thread-group id)
  * backing its PCB. Unlike find_by_vms_pid(), this is unambiguous even when
  * several rows SHARE one VMS PID: an image DCL activated through the

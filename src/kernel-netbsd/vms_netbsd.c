@@ -440,6 +440,9 @@ vms_proc_free_claimed(struct vms_proc *proc)
 {
 	int m;
 
+	/* LNM$PROCESS: image rundown or process deletion (rd vms-ef21). */
+	vms_lnm_proc_gone(proc);
+
 	/*
 	 * Release every DEVICE channel this process still held -- which ends any
 	 * ownership resting on those channels -- and give back any device it had

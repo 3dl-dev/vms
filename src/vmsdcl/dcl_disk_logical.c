@@ -71,11 +71,13 @@ uint32_t dcl_mount_define_disk(lnm_manager_t *mgr, const char *table,
     if (!(st & 1))
         return st;
 
-    /* Same lnm_create() path DEFINE uses. LNM_ATTR_TERMINAL: DISK$<label>
+    /* Same lnm_create() path DEFINE uses, at executive mode as MOUNT creates
+     * it (maximized to supervisor without SYSNAM) -- never user mode, which
+     * would vanish at the next image rundown (rd vms-ef21). LNM_ATTR_TERMINAL: DISK$<label>
      * names the device and iteration stops there (the equivalence is the
      * concrete "DKA100:" device, not a further logical to chase). */
     return lnm_create(mgr, table, logical, dev_name,
-                      LNM_ATTR_TERMINAL, LNM_MODE_USER);
+                      LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
 }
 
 uint32_t dcl_mount_remove_disk(lnm_manager_t *mgr, const char *table,
@@ -89,5 +91,5 @@ uint32_t dcl_mount_remove_disk(lnm_manager_t *mgr, const char *table,
     if (!(st & 1))
         return st;
 
-    return lnm_delete(mgr, table, logical, LNM_MODE_USER);
+    return lnm_delete(mgr, table, logical, LNM_MODE_EXEC);
 }

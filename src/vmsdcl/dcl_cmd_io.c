@@ -119,6 +119,21 @@ static int dcl_logical_is_terminal(const char *equiv)
         return 1;
     if (strncasecmp(equiv, "/dev/tty", 8) == 0)
         return 1;
+    /* A mailbox device (MBAn:) is a stream too: when SYS$INPUT/SYS$OUTPUT
+     * name a mailbox, DCL bound its stdin/stdout to it at startup
+     * (dcl_mbx_bind_std_streams, vms-786), so writing the stream IS writing
+     * the mailbox. Since the process table became visible to every
+     * translation (rd vms-ef21) a mailbox-driven DCL translates its own
+     * SYS$OUTPUT to the mailbox rather than to a seeded TT:. */
+    if (strncasecmp(t, "MBA", 3) == 0 || strncasecmp(t, "_MBA", 4) == 0) {
+        const char *d = t + (t[0] == '_' ? 4 : 3);
+        if (*d) {
+            while (*d >= '0' && *d <= '9')
+                d++;
+            if (*d == '\0')
+                return 1;
+        }
+    }
     return 0;
 }
 
@@ -127,6 +142,22 @@ static int dcl_logical_is_terminal(const char *equiv)
  * (vms-f89). Keyed by resolved path; re-opened when the redirection changes. */
 static FILE *g_sysinput_fp;
 static char  g_sysinput_key[1024];
+
+/*
+ * The access mode a DEFINE / ASSIGN / DEASSIGN acts at (DCL Dictionary,
+ * DEFINE): supervisor by default -- DCL's own mode, so the name outlives the
+ * images the process runs -- /USER_MODE (deleted when the next image exits),
+ * /EXECUTIVE_MODE (needs SYSNAM; the executive maximizes it to supervisor
+ * otherwise). rd vms-ef21.
+ */
+static uint8_t dcl_lnm_mode(const struct dcl_command *cmd)
+{
+    if (dcl_has_qualifier(cmd, "USER_MODE"))
+        return LNM_MODE_USER;
+    if (dcl_has_qualifier(cmd, "EXECUTIVE_MODE"))
+        return LNM_MODE_EXEC;
+    return LNM_MODE_SUPER;
+}
 
 /*
  * ASSIGN - Assign a logical name.
@@ -204,7 +235,7 @@ int cmd_assign(struct dcl_command *cmd)
     if (mgr) {
         uint32_t status = lnm_create(mgr, table, upper_name, equiv,
                                      lnm_attrs_from_qualifier(cmd),
-                                     LNM_MODE_USER);
+                                     dcl_lnm_mode(cmd));
         if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
             dcl_error("DCL", 2, "LNMFAIL",
                       "failed to create logical name \\%s\\", upper_name);
@@ -281,7 +312,7 @@ int cmd_define(struct dcl_command *cmd)
         uint32_t status = lnm_create_multi(mgr, table, upper_name, equivs,
                                            num_equiv,
                                            lnm_attrs_from_qualifier(cmd),
-                                           LNM_MODE_USER);
+                                           dcl_lnm_mode(cmd));
         if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
             dcl_error("DCL", 2, "LNMFAIL",
                       "failed to create logical name \\%s\\", upper_name);
@@ -339,12 +370,12 @@ int cmd_deassign(struct dcl_command *cmd)
     if (mgr) {
         if (all_tables) {
             /* Try all tables; ignore "not found" errors */
-            lnm_delete(mgr, LNM_PROCESS_TABLE, upper_name, LNM_MODE_USER);
-            lnm_delete(mgr, LNM_JOB_TABLE,     upper_name, LNM_MODE_USER);
-            lnm_delete(mgr, LNM_GROUP_TABLE,   upper_name, LNM_MODE_USER);
-            lnm_delete(mgr, LNM_SYSTEM_TABLE,  upper_name, LNM_MODE_USER);
+            lnm_delete(mgr, LNM_PROCESS_TABLE, upper_name, dcl_lnm_mode(cmd));
+            lnm_delete(mgr, LNM_JOB_TABLE,     upper_name, dcl_lnm_mode(cmd));
+            lnm_delete(mgr, LNM_GROUP_TABLE,   upper_name, dcl_lnm_mode(cmd));
+            lnm_delete(mgr, LNM_SYSTEM_TABLE,  upper_name, dcl_lnm_mode(cmd));
         } else {
-            uint32_t status = lnm_delete(mgr, table, upper_name, LNM_MODE_USER);
+            uint32_t status = lnm_delete(mgr, table, upper_name, dcl_lnm_mode(cmd));
             if (status == SS$_NOLOGNAM) {
                 /* Not an error on VMS — deassigning a non-existent name is silent */
                 return SS$_NORMAL;

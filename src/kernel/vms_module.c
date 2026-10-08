@@ -1473,6 +1473,42 @@ static uint32_t vms_proc_parent_job_id(void)
 }
 
 /*
+ * vms_proc_parent_vms_pid - the VMS PID of the registering task's VMS parent
+ * (its real_parent's PCB), or 0. Same unforgeable lookup as
+ * vms_proc_parent_job_id(). Used to give a FORKED child its parent's
+ * process logical names (rd vms-ef21, vms_lnm_copy_process).
+ */
+static uint32_t vms_proc_parent_vms_pid(void)
+{
+    struct task_struct *rp;
+    struct pid *parent_pid = NULL;
+    pid_t parent_tgid = 0;
+    struct vms_proc *parent;
+    uint32_t vpid = 0;
+
+    rcu_read_lock();
+    rp = rcu_dereference(current->real_parent);
+    if (rp) {
+        parent_pid  = task_tgid(rp);
+        parent_tgid = task_tgid_nr(rp);
+    }
+    if (!parent_pid) {
+        rcu_read_unlock();
+        return 0;
+    }
+    spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
+        if (parent->linux_pid != parent_tgid || parent->pid_ref != parent_pid)
+            continue;
+        vpid = parent->vms_pid;
+        break;
+    }
+    spin_unlock(&vms_proc_hash_lock);
+    rcu_read_unlock();
+    return vpid;
+}
+
+/*
  * vms_proc_inherit_channels - copy the registering task's VMS parent's open
  * BGn: channels into this fresh child PCB (vms-3bf, executive fork/exec
  * inheritance of BG channels).
@@ -1816,6 +1852,19 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
     spin_unlock(&vms_proc_hash_lock);
 
     /*
+     * A FORKED child (a fresh identity, neither continuing its parent's VMS
+     * process nor created by $CREPRC) starts with its parent's process logical
+     * names, as it started with the parent's memory (rd vms-ef21). A continued
+     * image shares the parent's table outright; a $CREPRC'd subprocess gets
+     * none, as on VMS.
+     */
+    if (!inherited) {
+        uint32_t ppid = vms_proc_parent_vms_pid();
+        if (ppid)
+            vms_lnm_copy_process(ppid, proc->vms_pid);
+    }
+
+    /*
      * ROUTINE PER-PROCESS TRACE -- pr_debug, NOT pr_info (vms-2213). Every
      * process registration emitted this at pr_info, so a single interactive
      * login (LOGINOUT -> DCL -> each spawned image) sprayed several
@@ -1846,6 +1895,9 @@ void vms_proc_free_claimed(struct vms_proc *proc)
 {
     int i;
     struct vms_ast_entry *ast, *tmp;
+
+    /* LNM$PROCESS: image rundown or process deletion (rd vms-ef21). */
+    vms_lnm_proc_gone(proc);
 
     /* Free AST queues */
     for (i = 0; i < 4; i++) {

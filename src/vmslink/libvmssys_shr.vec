@@ -283,3 +283,7 @@ vms_kif_terminal_getrpi=PROCEDURE
 # Mailbox end-of-file and sender PID (rd vms-262a / vms-4a69). APPENDED.
 vms_kif_mbx_read_ex=PROCEDURE
 vms_kif_mbx_write_eof=PROCEDURE
+# Executive-resident LNM$PROCESS + $TRNLNM-shaped lookup (rd vms-ef21). APPENDED.
+vms_kif_lnm_present=PROCEDURE
+vms_kif_lnm_lookup=PROCEDURE
+vms_kif_lnm_scope_key=PROCEDURE

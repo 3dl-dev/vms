@@ -24,6 +24,7 @@ extern lnm_entry_t *lnm_table_lookup(lnm_table_t *table, const char *name);
 
 /* From lnm_client.c */
 extern lnm_table_t *lnm_find_table(lnm_manager_t *mgr, const char *table_name);
+extern uint32_t lnm_exec_table_id(const char *table_name);
 
 /* Copy an equivalence value + attributes into the caller's result buffers. */
 static uint32_t fill_result(const char *value, uint32_t attr,
@@ -155,32 +156,22 @@ uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
     int is_searchlist = (!table_name ||
                          strcasecmp(table_name, LNM_FILE_DEV) == 0 ||
                          strcasecmp(table_name, LNM_DCL_LOGICAL) == 0);
-    int is_system = (table_name &&
-                     (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
-                      strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
-                      strcasecmp(table_name, "SYSTEM") == 0));
-    int is_group = (table_name &&
-                    (strcasecmp(table_name, LNM_GROUP_TABLE) == 0 ||
-                     strcasecmp(table_name, "GROUP") == 0));
-    int is_job = (table_name &&
-                 (strcasecmp(table_name, LNM_JOB_TABLE) == 0 ||
-                  strcasecmp(table_name, "JOB") == 0));
-
-    if (is_system)
-        return translate_system(mgr, logical_name, result, result_size,
-                                result_length, attributes);
-    if (is_group)
-        return translate_group(logical_name, result, result_size,
-                               result_length, attributes);
-    if (is_job)
-        return translate_job(logical_name, result, result_size,
-                             result_length, attributes);
+    uint32_t exec_tbl = is_searchlist ? 0 : lnm_exec_table_id(table_name);
+    if (exec_tbl)
+        return translate_executive(exec_tbl, logical_name, result, result_size,
+                                   result_length, attributes);
 
     if (is_searchlist) {
         uint32_t st;
 
-        /* LNM$PROCESS first -- process-private, unchanged. */
-        if (mgr->process_table) {
+        /* LNM$PROCESS first: executive-resident when /dev/vms is present
+         * (rd vms-ef21), else this process's own table. */
+        if (lnm_exec_table_id(LNM_PROCESS_TABLE)) {
+            st = translate_executive(VMS_LNM_TBL_PROCESS, logical_name, result,
+                                     result_size, result_length, attributes);
+            if (st != SS$_NOLOGNAM)
+                return st;
+        } else if (mgr->process_table) {
             lnm_entry_t *entry = lnm_table_lookup(mgr->process_table, logical_name);
             if (entry && entry->num_translations > 0)
                 return fill_from_entry(entry, result, result_size,
@@ -434,21 +425,8 @@ uint32_t lnm_translate_values(lnm_manager_t *mgr, const char *table_name,
     if (namelen == 0 || namelen > LNM_MAX_NAME)
         return SS$_IVLOGNAM;
 
-    int is_system = (table_name &&
-                     (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
-                      strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
-                      strcasecmp(table_name, "SYSTEM") == 0));
-    int is_group = (table_name &&
-                    (strcasecmp(table_name, LNM_GROUP_TABLE) == 0 ||
-                     strcasecmp(table_name, "GROUP") == 0));
-    int is_job = (table_name &&
-                 (strcasecmp(table_name, LNM_JOB_TABLE) == 0 ||
-                  strcasecmp(table_name, "JOB") == 0));
-
-    if (is_system || is_group || is_job) {
-        uint32_t exec_tbl = is_system ? VMS_LNM_TBL_SYSTEM
-                          : is_group  ? VMS_LNM_TBL_GROUP
-                                      : VMS_LNM_TBL_JOB;
+    uint32_t exec_tbl = lnm_exec_table_id(table_name);
+    if (exec_tbl) {
         uint8_t idx, nequiv = 0, filled = 0;
         uint32_t attr = 0;
 

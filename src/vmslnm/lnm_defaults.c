@@ -346,7 +346,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
 
     /* SYS$DISK -> system device (process default device) */
     lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK", "SYS$SYSDEVICE",
-               0, LNM_MODE_EXEC);
+               LNM_ATTR_CRELOG, LNM_MODE_SUPER);
 
     /*
      * Terminal device — the ONE Linux path for I/O.
@@ -365,17 +365,23 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * jobs get SYS$INPUT pointing at a command file).  For now
      * they all resolve through TT: → /dev/tty.
      */
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$INPUT", "TT:",
-               0, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$OUTPUT", "TT:",
-               0, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$ERROR", "TT:",
-               0, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$COMMAND", "TT:",
-               0, LNM_MODE_EXEC);
+    /* ... unless whoever created this process already said where its I/O
+     * goes: a parent that drives this DCL over mailboxes publishes SYS$INPUT /
+     * SYS$OUTPUT before starting it (MMK's spawned DCL, vms-786), as a VMS
+     * creator names the new process's SYS$INPUT/SYS$OUTPUT. Since the process
+     * table became executive-resident and visible to $TRNLNM (rd vms-ef21), a
+     * "TT:" seeded here would shadow that published name. */
+    static const char *const io_names[] = {
+        "SYS$INPUT", "SYS$OUTPUT", "SYS$ERROR", "SYS$COMMAND"
+    };
+    for (size_t k = 0; k < sizeof io_names / sizeof io_names[0]; k++) {
+        char cur[LNM_MAX_VALUE + 1];
+        uint16_t cl = 0;
+        if (lnm_translate(mgr, LNM_FILE_DEV, io_names[k], cur, sizeof cur,
+                          &cl, NULL) == SS$_NORMAL)
+            continue;
+        lnm_create(mgr, LNM_PROCESS_TABLE, io_names[k], "TT:", 0, LNM_MODE_EXEC);
+    }
 }
 
 /*
@@ -408,7 +414,7 @@ uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *table_name,
      * (PROCESS -> JOB -> GROUP -> SYSTEM) reaches this table before the SYSTEM
      * default. */
     uint32_t st = lnm_create(mgr, table_name, "SYS$LOGIN",
-                             default_dir, 0, LNM_MODE_SUPER);
+                             default_dir, 0, LNM_MODE_EXEC);
     if (!LNM_LOGIN_OK(st))
         return st;
 
@@ -424,7 +430,7 @@ uint32_t lnm_define_login_logicals(lnm_manager_t *mgr, const char *table_name,
         memcpy(device, default_dir, devlen);
         device[devlen] = '\0';
         st = lnm_create(mgr, table_name, "SYS$LOGIN_DEVICE",
-                        device, 0, LNM_MODE_SUPER);
+                        device, 0, LNM_MODE_EXEC);
         if (!LNM_LOGIN_OK(st))
             return st;
     }

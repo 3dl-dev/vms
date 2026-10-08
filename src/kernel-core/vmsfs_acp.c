@@ -3683,16 +3683,20 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             size_t acl_len = 0;
 
             /* Naming ANOTHER owner for the new file takes privilege, as on
-             * VMS (rd vms-47fd): SYSPRV or BYPASS, or GRPPRV for an owner in
-             * the creator's own group. The creator's own UIC is always fine.
-             * Refused before anything is allocated. */
+             * VMS (rd vms-47fd): a SYSTEM user (SYSPRV, or a UIC group <=
+             * MAXSYSGROUP -- the same test acp_check_access applies) or
+             * BYPASS, or GRPPRV for an owner in the creator's own group. The
+             * creator's own UIC is always fine. Refused before anything is
+             * allocated. */
             if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
                 uint32_t want = ((uint32_t)args.attr.uic_group << 16) |
                                 args.attr.uic_member;
-                int same_grp = args.attr.uic_group == (uint16_t)(proc->uic >> 16);
-                if (want != proc->uic &&
-                    !(proc->cur_privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS)) &&
-                    !(same_grp && (proc->cur_privs & VMS_PRV_M_GRPPRV))) {
+                uint32_t my_grp = (proc->uic >> 16) & 0xFFFFu;
+                int sys_user = my_grp <= ACP_MAXSYSGROUP ||
+                               (proc->cur_privs & (ACP_PRV_M_SYSPRV | ACP_PRV_M_BYPASS));
+                int grp_ok = args.attr.uic_group == my_grp &&
+                             (proc->cur_privs & VMS_PRV_M_GRPPRV);
+                if (want != proc->uic && !sys_user && !grp_ok) {
                     args.status = SS__NOPRIV;
                     goto free_sc;
                 }

@@ -105,6 +105,7 @@
 #include <sys/stat.h>
 #include "ovmx_secparam.h"
 #include "ovmx_fileprot.h"
+#include "../../src/kernel/vms_ioctl.h"   /* VMS_DFPROT_INITIAL */
 
 extern uint32_t sys$chkpro(void *objpro);
 extern uint32_t vms$get_uic(void);
@@ -405,8 +406,9 @@ int main(void)
     /* S:RWED,O:RWED,G:,W: = nothing for group or world. 0xFF00 under the
      * pinned encoding (ovmx_fileprot.h): System@bits3-0=0x0 (full grant),
      * Owner@bits7-4=0x0 (full grant), Group@bits11-8=0xF (all denied),
-     * World@bits15-12=0xF (all denied) -- the same 0xFF00 literal
-     * src/vmsrms/rms_core.c's rms_get_default_protection() returns. */
+     * World@bits15-12=0xF (all denied). A fixture for the SYSTEM/OWNER
+     * category checks below; the process default for new files is
+     * VMS_DFPROT_INITIAL (0xFA00, pinned at the end of this test). */
     uint16_t prot_s_o_only = 0xFF00u;
     uint32_t st;
     int ok;
@@ -616,6 +618,18 @@ int main(void)
     ok = run_chkpro_as(7, 7001, owner_uic_ex, prot640, PROT_READ, &st);
     check(ok && (st & 1) != 0,
           "mode 640: SYSTEM-category caller reads -- GRANTED");
+
+    /* The process default file protection (Baron 2026-10-08): VMS's SYSGEN
+     * RMS_FILEPROT default %XFA00 = S:RWED,O:RWED,G:RE,W: -- the group reads,
+     * the world does not, the owner writes. */
+    check(VMS_DFPROT_INITIAL == 0xFA00u,
+          "VMS_DFPROT_INITIAL is RMS_FILEPROT's default %XFA00 (S:RWED,O:RWED,G:RE,W:)");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, (uint16_t)VMS_DFPROT_INITIAL, PROT_READ, &st);
+    check(ok && (st & 1) != 0, "default protection: GROUP reads -- GRANTED");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, (uint16_t)VMS_DFPROT_INITIAL, PROT_WRITE, &st);
+    check(ok && (st & 1) == 0, "default protection: GROUP writes -- DENIED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, (uint16_t)VMS_DFPROT_INITIAL, PROT_READ, &st);
+    check(ok && (st & 1) == 0, "default protection: WORLD reads -- DENIED");
 
     printf("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
     return failures == 0 ? 0 : 1;

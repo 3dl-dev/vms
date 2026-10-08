@@ -307,7 +307,7 @@ uint32_t lib$create_dir(const struct dsc$descriptor_s *spec_d, const uint32_t *o
             strncpy(fop.name, nm, VMS_ACP_NAME_SIZE - 1);
             if (leaf) {                         /* the arguments describe the directory asked for */
                 if (prot_ena && prot_val) {
-                    uint16_t dfl = 0xFF00;      /* S:RWED,O:RWED,G:,W: without a $SETDFPROT value */
+                    uint16_t dfl = VMS_DFPROT_INITIAL;  /* RMS_FILEPROT default without the executive */
                     (void)vms_kif_dfprot(NULL, &dfl);
                     fop.attr_ctl |= VMS_ACP_ATTR_PROT;
                     fop.attr.fileprot = (uint16_t)((dfl & ~(*prot_ena & 0xFFFFu)) | (*prot_val & *prot_ena & 0xFFFFu));

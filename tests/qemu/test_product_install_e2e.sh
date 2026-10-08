@@ -290,7 +290,9 @@ fi
 #        by distro/Dockerfile.bootable) authors an ORDINARY filename whose
 #        per-file CLASS default would be 0xAA00 (G:RE,W:RE); if the installer
 #        took that create-time default instead of the kit's ke_protection the
-#        header would read World:RE. It must read the kit's 0xFF00 (G:,W: empty)
+#        header would read World:RE; had it taken the creating process's default
+#        file protection it would read 0xFA00 (G:RE -- VMS_DFPROT_INITIAL, the
+#        RMS_FILEPROT default). It must read the kit's 0xFF00 (G:,W: empty)
 #        -- proof the file's protection came from the kit metadata and was
 #        stamped into the ODS-2 header over the ACP, NOT a chmod / class default.
 OFF=$(wc -c <"$LOG")

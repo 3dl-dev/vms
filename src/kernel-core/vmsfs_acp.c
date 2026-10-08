@@ -3676,6 +3676,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             }
             if (args.attr_ctl & VMS_ACP_ATTR_PROT)
                 fileprot = args.attr.fileprot;
+            else if (!is_dir && ods2_class_fileprot(args.name, 0, new_fidnum) == 0xAA00u)
+                /* An ordinary file created with no protection of its own gets the
+                 * creating process's default file protection ($SETDFPROT, else
+                 * RMS_FILEPROT's default), as the VMS file system gives it. The
+                 * named system files (SYSUAF.DAT, RIGHTSLIST.DAT) and directories
+                 * keep their class protection. NEGCTL-ANCHORED (acp-create-ignores-dfprot). */
+                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;
 
             memset(&backlink, 0, sizeof(backlink));
             backlink.fid_num = (uint16_t)(did_num & 0xFFFF);

@@ -84,6 +84,21 @@ grep -q "OVMX layout, not VMS NETNODE_REMOTE.DAT" "$OVMX_DECNET_NODEDB" \
     && ok "the node database labels its layout as OVMX's" \
     || bad "node database lacks the OVMX-layout label"
 
+# --- MAXIMUM LINKS (rd vms-f91): VMS default, SET, persistence, refusal --------
+out="$(ncp SHOW EXECUTOR CHARACTERISTICS)"
+echo "$out" | grep -qE "^Maximum links +=  *32$" \
+    && ok "SHOW EXECUTOR CHARACTERISTICS shows the VMS default 'Maximum links = 32' when none is set" \
+    || bad "default Maximum links: $out"
+ncp SET EXECUTOR MAXIMUM LINKS 12 >/dev/null; rc=$?
+out="$(ncp SHOW EXECUTOR CHARACTERISTICS)"
+[ "$rc" -eq 0 ] && echo "$out" | grep -qE "^Maximum links +=  *12$" && echo "$out" | grep -q "1.42 (OVMX)" \
+    && ok "SET EXECUTOR MAXIMUM LINKS 12 persists (new invocation shows 12, address/name kept)" \
+    || bad "SET EXECUTOR MAXIMUM LINKS 12: rc=$rc $out"
+out="$(ncp SET EXECUTOR MAXIMUM LINKS 0)"; rc=$?
+[ "$rc" -ne 0 ] && echo "$out" | grep -q "%NCP-E-INVPVA" && ncp SHOW EXECUTOR CHARACTERISTICS | grep -qE "^Maximum links +=  *12$" \
+    && ok "SET EXECUTOR MAXIMUM LINKS 0 is refused (INVPVA) and changes nothing" \
+    || bad "MAXIMUM LINKS 0 not refused: rc=$rc $out"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

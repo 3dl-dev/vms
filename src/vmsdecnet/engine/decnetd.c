@@ -4486,8 +4486,25 @@ static void usage(const char *argv0)
  * tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/); with a
  * share of 2 the third connect was refused reason 1 and the VAX printed
  * RMS-E-MKD / SYSTEM-F-REMRSRC (live bracket 2026-10-08). */
-#define NETACP_MAX_SESSIONS   9
 #define NETACP_MAX_PER_SOURCE 3
+/* rd vms-f91: the pool's SIZE is the executor's MAXIMUM LINKS (NCP SET EXECUTOR
+ * MAXIMUM LINKS; unset = the VMS default 32, dnet_ncpstore.h), read when NETACP
+ * starts, as VMS bounds a node's logical links. NETACP_POOL_CAP is only this
+ * image's slot-table capacity: a larger MAXIMUM LINKS is served up to it and
+ * said so. The per-source share above stays an OVMX hardening choice. */
+#define NETACP_POOL_CAP       64
+static int g_netacp_max_links = DNET_EXECUTOR_DEFAULT_MAXLINKS;
+#define NETACP_MAX_SESSIONS   g_netacp_max_links
+
+/* The pool size an executor record gives (rd vms-f91): its MAXIMUM LINKS
+ * (unset = the VMS default 32), served up to this image's slot table;
+ * *clamped is set when the executor asked for more than the table holds. */
+static int netacp_pool_size(const struct dnet_executor *x, int *clamped)
+{
+    unsigned want = dnet_executor_max_links(x);
+    if (clamped) *clamped = (want > NETACP_POOL_CAP);
+    return (int)(want > NETACP_POOL_CAP ? NETACP_POOL_CAP : want);
+}
 
 struct netacp_slot {
     int      used;
@@ -4882,17 +4899,36 @@ static int pool_connect(struct dnet_engine *peer_eng, const struct dnet_engine *
 
 static int run_netacp_pool_selftest(void)
 {
-    printf("DECNETD-I-POOL, NETACP inbound session pool: %d sessions, %d per node"
-           " (rd vms-6af1, R4 G2)\n", NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
     int pass = 0, fail = 0;
 #define PL_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
     else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+    /* The pool is sized from the executor record (rd vms-f91). Proven on the
+     * sizing rule, then the run below uses a pool of 9, as after
+     * NCP SET EXECUTOR MAXIMUM LINKS 9 (never touching this node's database). */
+    {
+        struct dnet_executor ex;
+        memset(&ex, 0, sizeof ex);
+        int cl = 0;
+        PL_CHECK(netacp_pool_size(&ex, &cl) == 32 && !cl,
+                 "an executor with no MAXIMUM LINKS set gets the VMS default pool of 32 (what a real VMS VAX node shows as Maximum links = 32)");
+        ex.max_links = 9;
+        PL_CHECK(netacp_pool_size(&ex, &cl) == 9 && !cl,
+                 "executor MAXIMUM LINKS 9 sizes the inbound pool at 9");
+        ex.max_links = 500;
+        PL_CHECK(netacp_pool_size(&ex, &cl) == NETACP_POOL_CAP && cl,
+                 "a MAXIMUM LINKS above the slot table is served up to the table and flagged, never overrun");
+        ex.max_links = 9;
+        g_netacp_max_links = netacp_pool_size(&ex, NULL);
+    }
+    printf("DECNETD-I-POOL, NETACP inbound session pool: %d sessions, %d per node"
+           " (rd vms-6af1, R4 G2; size from executor MAXIMUM LINKS, rd vms-f91)\n",
+           NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
     g_netacp_tx = netacp_tx_capture;
-    static struct netacp_slot slots[NETACP_MAX_SESSIONS];
+    static struct netacp_slot slots[NETACP_POOL_CAP];
     memset(slots, 0, sizeof slots);
     uint16_t next_lla = 0x2100;
     const uint8_t hw[6] = { 0x02,0,0,0,0,0x2a };
-    static struct dnet_engine node, peers[NETACP_MAX_SESSIONS + 2];
+    static struct dnet_engine node, peers[NETACP_POOL_CAP + 2];
     dnet_engine_init(&node, 1, 42, "OVMX", "EWA0", NULL, hw, 0, 0, 0);
 
     /* Object 17 through the SAME dispatch: a bad password is refused at
@@ -5367,6 +5403,20 @@ int main(int argc, char **argv)
     /* Say, honestly, whether this NETACP serves inbound $ SET HOST. When it
      * does, an inbound object-42 connect reaches LOGINOUT on an executive-minted
      * RTAn: (a bounded pool of sessions, rd vms-6af1); the remote user authenticates fresh. */
+    if (cterm_server) {
+        /* The pool is the executor's MAXIMUM LINKS (rd vms-f91). An
+         * unreadable executor database leaves the VMS default. */
+        struct dnet_executor ex;
+        int clamped = 0;
+        if (dnet_store_load_executor(&ex) != DNET_STORE_OK) memset(&ex, 0, sizeof ex);
+        g_netacp_max_links = netacp_pool_size(&ex, &clamped);
+        if (clamped) {
+            log_ts(stdout);
+            printf(" DECNETD-W-MAXLINKS, executor MAXIMUM LINKS %u exceeds this NETACP's"
+                   " %d session slots; serving %d\n", dnet_executor_max_links(&ex),
+                   NETACP_POOL_CAP, NETACP_POOL_CAP);
+        }
+    }
     log_ts(stdout);
     if (cterm_server)
         printf(" DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
@@ -5412,8 +5462,9 @@ int main(int argc, char **argv)
     uint8_t frame[DNET_FRAME_MAX];
     uint8_t rxbuf[DNET_FRAME_MAX];
 
-    /* The inbound sessions this node serves: a bounded pool (rd vms-6af1). */
-    static struct netacp_slot slots[NETACP_MAX_SESSIONS];
+    /* The inbound sessions this node serves: a bounded pool (rd vms-6af1)
+     * of the executor's MAXIMUM LINKS (rd vms-f91). */
+    static struct netacp_slot slots[NETACP_POOL_CAP];
     memset(slots, 0, sizeof slots);
     uint16_t next_lla = 0x2100;
 

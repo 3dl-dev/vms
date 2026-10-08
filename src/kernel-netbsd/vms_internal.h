@@ -247,6 +247,7 @@
 #ifndef VMS_PRV_M_ENFORCED
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
+                             VMS_PRV_M_NETMBX | \
                              VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching

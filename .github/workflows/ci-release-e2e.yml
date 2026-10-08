@@ -92,6 +92,24 @@ jobs:
             ovmx-boot:latest \
             /test.sh
 
+      # rd vms-8d1. THE SEMANTIC ORACLE. Reuses the image built above. Boots the
+      # probe disk (ovmx-distrib.img + SYS$SYSTEM:SP_*.EXE), runs every probe on
+      # the real executive, and diffs each transcript against the transcript the
+      # SAME probe printed on a real OpenVMS node (docs/oracle/semantics/). A
+      # ratchet like the constants gate: a difference not in
+      # docs/oracle/semantics/known-diff.txt fails, and so does a listed
+      # difference that now matches -- the list only shrinks.
+      - name: Semantic oracle — OVMX services vs real OpenVMS (vms-8d1)
+        run: |
+          mkdir -p semantic-out
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_semantic_oracle.sh:/test.sh:ro \
+            -v ${{ github.workspace }}/semantic-out:/out \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+          python3 tools/oracle/semantic/semantic_diff.py semantic-out --report
+
       # vms-9b7. THE RELEASE PATH: boot -> provision -> boot. The operator's
       # "%OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT" happened
       # on exactly this path and NO COMMITTED TEST COVERED IT -- the persistent

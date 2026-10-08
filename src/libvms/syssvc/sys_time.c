@@ -58,18 +58,25 @@
  *     from the compiled-in months[] table in this file.
  * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
- * OVMX-USERSPACE: sys$schdwk (vms-44a) -- the schedule is this process's own
- *     POSIX timer (the sys$setimr table below): a scheduled wakeup dies with the
- *     image that requested it and no executive timer queue holds it. At expiry
- *     the timer's AST issues $WAKE (the wake state IS the executive's -- reached
- *     through an AST function pointer, which this register's static call graph
- *     cannot see). A repeat interval, or a target named by process name, is
- *     refused.
+ * OVMX-PARTIAL: sys$schdwk (vms-44a) -- exec: the wake state, which the timer's
+ *     expiry AST sets with $WAKE (an AST function pointer this register's static
+ *     call graph cannot follow); the request goes through sys$setimr with
+ *     EFN$C_ENF, so no event flag is cleared or set (rd vms-8d1).
+ * OVMX-LOCAL: sys$schdwk -- the schedule is this process's own POSIX timer (the
+ *     sys$setimr table below): a scheduled wakeup dies with the image that
+ *     requested it and no executive timer queue holds it. A repeat interval, or
+ *     a target named by process name, is refused.
  * OVMX-USERSPACE: sys$canwak (vms-44a) -- cancels the timers sys$schdwk armed in
  *     that same process-local table.
- * OVMX-USERSPACE: sys$setimr (vms-642) -- arms a POSIX timer recorded in the
- *     process-local timer_table[] in this file. There is no executive timer
- *     queue, so the request dies with the process and nothing else can see it.
+ * OVMX-PARTIAL: sys$setimr (vms-d08) -- exec: the event flag. It is cleared
+ *     when the request is queued, through $CLREF, whose executive answer also
+ *     validates the efn (SS$_UNASEFC / SS$_ILLEFC fail the request), and set by
+ *     $SETEF at expiry -- as the semantic oracle observed on real VAX V7.3 and
+ *     Alpha V8.4 (docs/oracle/semantics/ef/, EF.SETIMR.*).
+ * OVMX-LOCAL: sys$setimr -- (vms-642) the timer itself is a POSIX timer recorded
+ *     in the process-local timer_table[] in this file. There is no executive
+ *     timer queue, so the request dies with the process and nothing else can
+ *     see it.
  * OVMX-USERSPACE: sys$cantim (vms-642) -- cancels entries in that same
  *     process-local table, so the timers it cancels are this process's.
  */
@@ -85,6 +92,7 @@
 #include <pthread.h>
 #include "starlet.h"
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
+#include "efndef.h"     /* EFN$C_ENF */
 
 /* Offset between VMS epoch (Nov 17 1858) and Unix epoch (Jan 1 1970) in 100ns units */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -355,6 +363,19 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     if (!daytim) return SS$_BADPARAM;
 
+    /* The flag is CLEARED when the request is queued, and an efn that is not
+     * one of this process's flags fails the request (SS$_UNASEFC for an
+     * unassociated common cluster, SS$_ILLEFC) -- observed on OpenVMS VAX V7.3
+     * and Alpha V8.4 by the semantic oracle (docs/oracle/semantics/ef/, cases
+     * EF.SETIMR.*, rd vms-d08). The executive answers through $CLREF. Without
+     * the clear, a $WAITFR on the timer's flag returns at once if the flag was
+     * already set, before the timer has fired. EFN$C_ENF names no flag. */
+    if (efn != EFN$C_ENF) {
+        uint32_t cst = sys$clref(efn);
+        if (!(cst & 1))
+            return cst;
+    }
+
     init_timer_signals();
 
     pthread_mutex_lock(&timer_mutex);
@@ -508,7 +529,10 @@ uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcna
     wake_slot[slot].has_pid = (pidadr && *pidadr != 0);
     wake_slot[slot].pid = wake_slot[slot].has_pid ? *pidadr : 0;
 
-    uint32_t st = sys$setimr(0, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
+    /* EFN$C_ENF: a scheduled wakeup touches no event flag ($SCHDWK has no efn
+     * argument; EF 0 belongs to the caller, and $SETIMR clears and sets the
+     * flag it is given). */
+    uint32_t st = sys$setimr(EFN$C_ENF, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
     if (!(st & 1))
         wake_slot[slot].in_use = 0;
     return st;

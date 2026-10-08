@@ -479,4 +479,5 @@
 # libcreatedir-rooted-default-unresolved).
 # Raised to 173 by spawn-arm-gone-subprocess-not-completed (vms-f45: the /NOWAIT
 # lib$spawn completion is delivered even when the subprocess is already gone).
-173
+# Raised to 174 by spawn-input-via-linux-path (vms-ccc: lib$spawn INPUT is read through RMS).
+174

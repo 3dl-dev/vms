@@ -435,6 +435,7 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
+spawn-input-via-linux-path
 spawn-arm-gone-subprocess-not-completed
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
@@ -2449,6 +2450,25 @@ EOF
         why)          echo "lib\$spawn no longer completes the caller's request when the completion arm finds the subprocess already gone and reclaimed (SS\$_NONEXPR): the event flag is never set, so a \$WAITFR on it hangs. The race is the subprocess finishing before the arm runs; the suite spawns an instantly-finishing command repeatedly so the lost flag shows.";;
         require_fail) cat <<'EOF'
 every /NOWAIT lib$spawn of an instantly-finishing command set its completion event flag
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    spawn-input-via-linux-path)
+        case "$_f" in
+        facility)     echo "LIB\$SPAWN INPUT=<filespec>: the spawned DCL's SYS\$INPUT is read through RMS over the ACP (vms-ccc)";;
+        targets)      echo "libvms/rtl/lib_misc.c";;
+        suites_red)   echo "test_syssvc_spawn_input";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$spawn stops reading the INPUT file through RMS (rms_textfile_open forced to fail) and falls back to translating the spec to a Linux path -- the retired /vms passthrough. For a command file on the ODS-2 volume that path does not exist, so the spawn is refused (or, before the honest-FNF change, the DCL read /dev/null and exited at once): the command file never runs.";;
+        require_fail) cat <<'EOF'
+lib$spawn accepts an ODS-2 INPUT filespec and creates the subprocess
+the subprocess completed
+the DCL executed the ODS-2 command file (its output reached the output file)
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -7431,6 +7451,10 @@ apply_edit() {
         # handling. Forcing it never-true restores the pre-fix behaviour (the NONEXPR from
         # the arm is ignored). Gone after apply (no-op re-apply).
         sed -i 's|if (ast == SS\$_NONEXPR) {|if (0 \&\& ast == SS$_NONEXPR) { /* NEGCTL spawn-arm-gone-subprocess-not-completed */|' "$_file";;
+    spawn-input-via-linux-path)
+        # UNIQUE TEXT: "rms_textfile_t *tf = rms_textfile_open(raw_in);" occurs once, in lib$spawn's
+        # INPUT handling. NULL sends every INPUT spec down the Linux-path fallback. Gone after apply.
+        sed -i 's|rms_textfile_t \*tf = rms_textfile_open(raw_in);|rms_textfile_t *tf = (rms_textfile_open(raw_in), NULL); /* NEGCTL spawn-input-via-linux-path */|' "$_file";;
     dlm-xnode-redirect-target-dropped)
         # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
         # occurs once in the file -- enq_inbound_not_master()'s sole report of

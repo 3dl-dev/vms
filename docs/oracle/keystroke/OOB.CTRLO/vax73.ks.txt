@@ -1,0 +1,25 @@
+# keystroke oracle transcript (unmasked) -- case OOB.CTRLO (OpenVMS VAX V7.3 OPA0:)
+# ^O discards output in flight (and says so); a second ^O turns it back on
+# case-sha256 2f42f245a33588ab2d4a91e409b099256d9cdd7cbb6f90542b0894c1d0629596
+@start loggedin OK
+=== STEP G quiet
+=== STEP W quiet
+=== STEP O (merged into next)
+=== STEP OW
+| <LF>
+| *OUTPUT OFF*<CR><LF>
+=== STEP O2 (merged into next)
+=== STEP OW2
+| *OUTPUT ON*<CR><LF>
+| LINE 17<CR><LF>
+| LINE 18<CR><LF>
+| LINE 19<CR><LF>
+| LINE 20<CR><LF>
+| LINE 21<CR>
+=== STEP Y (from *INTERRUPT*)
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP S
+| STOP<CR><LF>
+| <CR><NUL>$ 

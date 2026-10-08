@@ -1,0 +1,22 @@
+# keystroke oracle transcript (unmasked) -- case BC.READ (OpenVMS VAX V7.3 OPA0:)
+# a broadcast that arrives while a line is half typed: shown, then the prompt and the partial line are redisplayed
+# case-sha256 e6eb89cf0b66f0bff681653ae24803efdb93ecb9b87880fc14fcfaeb7b7a80ca
+@start loggedin OK
+=== STEP S
+| SPAWN/NOWAIT/OUTPUT=NL: @KSBC<CR><LF>
+| <CR>%DCL-S-SPAWNED, process SYSTEM_1 spawned<CR><LF>
+| <CR><NUL>$ 
+=== STEP T (merged into next)
+=== STEP W
+| WRITE SYS$OUTPUT 7<CR><LF>
+| <CR><LF>
+| Reply received on VAX1 from user SYSTEM at _VAX1$OPA0:   19:38:01<CR><LF>
+| KSBC BROADCAST<CR><LF>
+| <CR><LF>
+| <CR><NUL>$ WRITE SYS$OUTPUT 7<CR><LF>
+| User SYSTEM has been notified on VAX1.<CR><LF>
+| <CR><NUL>$ WRITE SYS$OUTPUT 7
+=== STEP R
+| <CR><LF>
+| <CR>7<CR><LF>
+| <CR><NUL>$ 

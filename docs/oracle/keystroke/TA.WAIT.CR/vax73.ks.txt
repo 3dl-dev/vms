@@ -1,0 +1,12 @@
+# keystroke oracle transcript (unmasked) -- case TA.WAIT.CR (OpenVMS VAX V7.3 OPA0:)
+# type-ahead: a whole command line (with RETURN) typed during WAIT runs after it, echoed only then
+# case-sha256 dc48e4f2ae3805189d361b88976cb0d500cccec9978c655fed1fb7e1efc24967
+@start loggedin OK
+=== STEP C
+| WAIT 0:0:4<CR><LF>
+=== STEP T
+=== STEP Q
+=== STEP D
+| <CR><NUL>$ WRITE SYS$OUTPUT 4713<CR><LF>
+| <CR>4713<CR><LF>
+| <CR><NUL>$ 

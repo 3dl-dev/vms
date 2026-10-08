@@ -1,0 +1,19 @@
+# keystroke oracle transcript (unmasked) -- case A0.SETUP (OpenVMS VAX V7.3 OPA0:)
+# setup -- KSLOOP.COM (slow steady output) and KSBC.COM (delayed broadcast)
+# case-sha256 2038be08af450d389488e94fc25f686834673b632a448b202db37c541f9d2d43
+@start loggedin OK
+=== STEP S0 quiet
+=== STEP S1 quiet
+=== STEP S2 quiet
+=== STEP S3 quiet
+=== STEP S4 quiet
+=== STEP S5 quiet
+=== STEP S6 quiet
+=== STEP S7 quiet
+=== STEP S8 quiet
+=== STEP S9 quiet
+=== STEP S10 quiet
+=== STEP S11 quiet
+=== STEP S12 quiet
+=== STEP S13 quiet
+=== STEP S14 quiet

@@ -1,0 +1,19 @@
+# keystroke oracle transcript (unmasked) -- case OOB.CTRLY (OpenVMS VAX V7.3 OPA0:)
+# ^Y interrupts a running procedure; CONTINUE resumes it; ^C does the same with no ON CONTROL_C; STOP ends it
+# case-sha256 caa1d63a6adcd6eb8f77e67f9053760ee5e8a06b93a8d72ffda2103d66c0b88c
+@start loggedin OK
+=== STEP G quiet
+=== STEP W quiet
+=== STEP Y (from *INTERRUPT*)
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP K quiet
+=== STEP W2 quiet
+=== STEP C (from *INTERRUPT*)
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP S
+| STOP<CR><LF>
+| <CR><NUL>$ 

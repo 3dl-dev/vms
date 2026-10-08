@@ -1576,6 +1576,20 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             }
         }
 
+        /*
+         * PRC$M_HIBER: the new process hibernates before it activates its
+         * image, until a $WAKE (OpenVMS System Services, $CREPRC stsflg;
+         * observed in docs/oracle/semantics/prc/: the process is there to be
+         * $GETJPI'd, $SUSPND'd and $DELPRC'd). An image that is not there is
+         * found missing first, and the process runs down (observed
+         * PRC.NOIMAGE.STATE: gone before any $WAKE).
+         */
+        if (stsflg & PRC$M_HIBER) {
+            if (access(img_path, X_OK) != 0)
+                _exit(1);
+            (void)sys$hiber();
+        }
+
         execl(img_path, img_path, (char *)NULL);
         _exit(1);  /* exec failed */
     }

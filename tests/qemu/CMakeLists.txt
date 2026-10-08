@@ -166,6 +166,7 @@ foreach(_anchored
         test_syssvc_rightslist
         test_syssvc_setuai
         test_syssvc_loginout_acp
+        test_syssvc_spawn_input   # vms-ccc: rms_textfile (RMS write + lib$spawn INPUT read) is weak-linked
         test_syssvc_tcpip_host_acp
         test_syssvc_tcpip_config_acp
         # test_syssvc_tcpip_service_db (#878, vms-71b): reaches the persistent

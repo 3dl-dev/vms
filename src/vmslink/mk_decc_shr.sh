@@ -402,6 +402,28 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         # exactly the sv# skew that mis-bound LIBVMSFS's decc$strlen to
         # decc$strspn at runtime.
         ALPHA_VENEER_OBJ="$VENEER_OBJ"
+
+        # vms-32ae: the DEC C file-specification translators decc$to_vms /
+        # decc$from_vms / decc$translate_vms (src/vmsrms/crtl_filespec.c). They
+        # live in this RMS-backed pass because wildcard expansion is an RMS
+        # directory search ($PARSE/$SEARCH, LIBVMSRMS$SHR). The three names are
+        # NEW to this pass (the bootstrap pass never had them), so they are
+        # APPENDED at the very END of the vector (PASS2_TAIL, added after the
+        # plain-name universals below) -- every sv# a pass-1-linked producer
+        # imports stays put (vms-b14: LIBVMSRMS$SHR binds pthread_mutex_lock et
+        # al. by index; appending ahead of them moved each one by 3).
+        FSPEC_OBJ="$VENEER_DIR/crtl_filespec.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -o "$FSPEC_OBJ" "$RMS_SRC_DIR/crtl_filespec.c"
+        for want in 'decc$to_vms' 'decc$from_vms' 'decc$translate_vms'; do
+            "$NM" --defined-only "$FSPEC_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$want" \
+                || { echo "mk_decc_shr: FAIL crtl_filespec.c did not define $want" >&2; exit 2; }
+            PASS2_TAIL="${PASS2_TAIL:-},$want=PROCEDURE"
+        done
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FSPEC_OBJ"
+        echo "mk_decc_shr: DEC C file-spec translators wired (vms-32ae): decc\$to_vms/decc\$from_vms/decc\$translate_vms (tail-appended)"
         echo "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\$fopen/fwrite/fread/fclose -> ovmx_crtl_* (--use $ALPHA_CRTL_RMS_USE)"
         echo "mk_decc_shr: CRTL->RMS file-op veneer wired (vms-3320): decc\$open/creat/unlink/remove/rename/opendir/readdir/closedir -> ovmx_crtl_*, decc\$close -> ovmx_crtl_fdclose (--use $ALPHA_CRTL_RMS_USE)"
     fi
@@ -514,6 +536,8 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # DECC_ALLOW_UNDEF=1 still records any remaining first-light residual (e.g.
     # the setjmp/cancellation surface — decc$longjmp, __cp_*, __syscall_cp_asm —
     # and the linker-defined _DYNAMIC/__init_array bounds) as deferred imports.
+    # Pass-2-only universals go after EVERYTHING the bootstrap pass also has.
+    VEC="$VEC${PASS2_TAIL:-}"
     ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
     for p in ${DECC_USE:-}; do ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $p"; done
     # vms-ed1e: the CRTL->RMS stdio veneer's own --use edge, kept separate

@@ -147,7 +147,18 @@ uint32_t sys$getmsg(uint32_t msgid, uint16_t *msglen,
     char text[300], ident[40], facbuf[40];
     uint32_t status = SS$_NORMAL;
     uint8_t faocnt = 0;
-    if (m) {
+    /* Not in the observed catalog: an OVMX-defined condition (STS$V_CUST_DEF,
+     * the OVMX facility -- ovmx_status.h), or a facility whose catalog was not
+     * captured (MTH, OTS, STR, ...), answers from OVMX's own status table
+     * (src/libvms/status.c) when that table knows the exact code. A facility
+     * the catalog DOES cover never falls back: there, no message is NOMSG. */
+    if (!m && msgid != 0 &&
+        ($VMS_STATUS_CUST_DEF(msgid) || !facname) &&
+        strcmp(vms$status_ident(msgid), "UNKNOWN") != 0) {
+        snprintf(ident, sizeof ident, "%s", vms$status_ident(msgid));
+        snprintf(text, sizeof text, "%s", vms$status_message(msgid));
+        snprintf(facbuf, sizeof facbuf, "%s", facility_name(msgid));
+    } else if (m) {
         snprintf(ident, sizeof ident, "%s", m->ident);
         snprintf(text, sizeof text, "%s", m->text);
         snprintf(facbuf, sizeof facbuf, "%s", facname ? facname : "NONAME");

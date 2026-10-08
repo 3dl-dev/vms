@@ -843,6 +843,10 @@ E77: the kept connection's dialogue opens at 1
 on the kept connection, after this node's identity there
 one request in the world
 the join moves to the connection the executive records
+... numbered from THAT connection's own dialogue: send-msg# 1 (INV-6)
+... the answer goes out once, on the member's new connection
+nothing was refused
+the relay is answered, on the member's new connection
 EOF
         ;;
         esac;;

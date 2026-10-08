@@ -256,7 +256,9 @@ uint32_t dnet_fal_proc_serve(void)
     lb.default_dir[sizeof lb.default_dir - 1] = '\0';
 
     /* A relative filespec from the peer resolves in the USER's login
-     * directory, as a VMS network job's does. */
+     * directory, as a VMS network job's does: $SETDDIR sets the executive's
+     * default directory, which RMS completes every relative spec from
+     * (rd vms-872). */
     if (lb.default_dir[0]) {
         struct dsc$descriptor_s d = dsc$init(lb.default_dir);
         (void)sys$setddir(&d, NULL, NULL);
@@ -268,7 +270,6 @@ uint32_t dnet_fal_proc_serve(void)
         lnm_manager_t *mgr = lnm_get_manager();
         if (mgr)
             (void)lnm_define_login_logicals(mgr, LNM_JOB_TABLE, lb.default_dir);
-        dnet_fal_server_set_default(lb.default_dir);
     }
 
     /* 3. The DAP session, every file open checked against THIS process's

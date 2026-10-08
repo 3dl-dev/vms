@@ -14,7 +14,7 @@
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
  * OVMX-PARTIAL: sys$setdfprot (vms-44a) -- exec: the default file protection is the executive's per-process attribute (VMS_IOCTL_DFPROT): set in one process, a REGISTER_CONTINUE child inherits it, and nothing in this file holds the value (tests/qemu/test_syssvc_setdfprot.c reads it back across that inheritance).
- * OVMX-LOCAL: sys$setdfprot -- the RMS$_NORMAL status mapping (the Alpha V8.4 lab's service returns RMS$_NORMAL, not SS$_NORMAL). No facility_defects negative control names this service yet, which is why it is PARTIAL and not EXECUTIVE.
+ * OVMX-LOCAL: sys$setdfprot -- the RMS$_NORMAL status mapping (the Alpha V8.4 lab's service returns RMS$_NORMAL, not SS$_NORMAL). The setdfprot-not-stored negative control now anchors the executive half; the status mapping is the local half, so it stays PARTIAL.
  * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
  *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
@@ -38,13 +38,16 @@
  *     above (this is the wait form of the same service).
  * OVMX-LOCAL: sys$getsyiw -- the remaining items answer from uname()/host
  *     sysconf(), as sys$getsyi's local half.
- * OVMX-USERSPACE: sys$setddir (vms-947) -- the process default directory is a
- *     per-process construct on real VMS too (the RMS default-directory string
- *     held in P1 process space), not a shared executive resource. OVMX keeps it
- *     in the PCB (pcb->default_dir via vms_pcb_get / vms_pcb_set_default_dir) --
- *     the same store sys$assign reads to resolve SYS$DISK and relative file
- *     specs -- so answering from and mutating the PCB fakes nothing: there is no
- *     executive-owned copy this could diverge from.
+ * OVMX-PARTIAL: sys$setddir (vms-872) -- exec: the process default directory
+ *     is the executive's per-process attribute (VMS_IOCTL_DDIR), like
+ *     $SETDFPROT's protection: set here, inherited by every image/subprocess at
+ *     REGISTER_CONTINUE, and read back by RMS to complete a relative file
+ *     specification (rms_core.c rms_apply_default_dir). On real VMS it lives in
+ *     the process's P1 space, which every image of the process shares; the
+ *     executive row is OVMX's equivalent across fork()+execve() image activation.
+ * OVMX-LOCAL: sys$setddir -- the PCB copy (pcb->default_dir) is still kept for
+ *     sys$assign's SYS$DISK resolution and as the answer when no executive is
+ *     reachable.
  */
 
 #include <stdint.h>
@@ -449,10 +452,14 @@ uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
     if (!pcb)
         return SS$_BADPARAM;
 
-    /* Snapshot the current (about-to-be-previous) default directory string. */
+    /* Snapshot the current (about-to-be-previous) default directory string:
+     * the executive's (inherited across image activation, rd vms-872), else
+     * this process's PCB copy. */
     char prev[256];
-    strncpy(prev, pcb->default_dir, sizeof(prev) - 1);
-    prev[sizeof(prev) - 1] = '\0';
+    if (!((vms_kif_ddir(NULL, prev, sizeof(prev)) & 1) && prev[0])) {
+        strncpy(prev, pcb->default_dir, sizeof(prev) - 1);
+        prev[sizeof(prev) - 1] = '\0';
+    }
     size_t prev_len = strlen(prev);
 
     /* Return the previous directory to the caller, if requested. */
@@ -506,6 +513,9 @@ uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
         return SS$_BADPARAM;
 
     vms_pcb_set_default_dir(merged);
+    /* The executive's copy is the one images inherit and RMS reads (rd
+     * vms-872). With no executive the PCB copy still serves this process. */
+    (void)vms_kif_ddir(merged, NULL, 0);
     return SS$_NORMAL;
 }
 

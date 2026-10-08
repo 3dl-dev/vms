@@ -167,19 +167,6 @@ int  dnet_fal_rclose(void *h);
  */
 uint32_t dnet_fal_server_run(struct dnet_dap_transport *t);
 
-/*
- * dnet_fal_server_set_default - the default device:[directory] a peer's
- * filespec is completed against: the accessed user's login directory, as a VMS
- * network job resolves a remote "FILE.TXT" in SYS$LOGIN. A spec with no device
- * and no directory gets both; one with a [directory] but no device gets the
- * device; one naming a device or logical ("SYS$LOGIN:X") is left as is. NULL
- * or "" clears it. (FAL.EXE sets it from the link block, rd vms-d85.)
- */
-void dnet_fal_server_set_default(const char *default_dir);
-
-/* Exposed for the host test: apply the default above to `spec`. 0, or -1 when
- * the result would not fit `cap` (the spec is then refused, never truncated). */
-int dnet_fal_apply_default(const char *spec, char *out, size_t cap);
 
 /*
  * dnet_fal_client_put - `$ COPY local remote::` : send the local sequential file

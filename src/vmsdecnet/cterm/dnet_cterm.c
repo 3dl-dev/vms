@@ -620,6 +620,22 @@ int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
         return DNET_CTERM_OK;
     }
 
+    /* 07 32 -> a raw pass-through WRITE (FLAGS 0x0032: lock/unlock, BOM+EOM,
+     * no prefix/postfix): the 5-byte header (MSGTYPE, FLAGS(2), PREFIX-VALUE,
+     * POSTFIX-VALUE; AA-DY88A-TK 4.16.8) then the data verbatim. A VAX host
+     * sends it (oracle `07 32 00 00 00 1b 3e`) and OVMX's own CTERM host sends
+     * all terminal output this way (rd vms-a70 direction B). */
+    if (body[0] == 0x07 && body[1] == 0x32) {
+        if (kind) *kind = DNET_CTERM_TK_WRITE;
+        if (text && textcap && body_len > 5) {
+            size_t n = body_len - 5;
+            if (n > textcap) n = textcap;
+            memcpy(text, body + 5, n);
+            if (textlen) *textlen = n;
+        }
+        return DNET_CTERM_OK;
+    }
+
     /* 0f 00 -> read-characteristics solicit; handle is at body offset 2-3. */
     if (body[0] == 0x0f && body[1] == 0x00) {
         if (kind) *kind = DNET_CTERM_TK_READ_ATTR;

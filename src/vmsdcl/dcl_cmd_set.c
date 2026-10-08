@@ -245,6 +245,9 @@ static int cmd_set_default(struct dcl_command *cmd)
      * PCB is reachable this is a no-op, matching the rest of the executive
      * surface. */
     vms_pcb_set_default_dir(ctx->default_dir);
+    /* ...and in the EXECUTIVE (rd vms-872), which every image this DCL runs
+     * inherits: RMS there completes a relative file specification in it. */
+    (void)vms_kif_ddir(ctx->default_dir, NULL, 0);
 
     /* vms-481: the DCL default is now purely a VMS "DEV:[DIR]" spec resolved by
      * the executive/ACP -- no Linux chdir() into a /vms passthrough (that host

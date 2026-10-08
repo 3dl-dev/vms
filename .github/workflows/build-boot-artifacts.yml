@@ -87,3 +87,24 @@ jobs:
           path: dist/boot/
           retention-days: 14
           if-no-files-found: error
+
+      # rd vms-8d1: the semantic-oracle probe disk (ovmx-distrib.img + the
+      # SYS$SYSTEM:SP_*.EXE probes) as its OWN artifact, so the
+      # three-file lab contract above is unchanged. Boot it in place of
+      # ovmx-distrib.img to run tests/qemu/test_semantic_oracle.sh off-CI.
+      - name: Extract the semantic-oracle probe disk
+        run: |
+          set -euo pipefail
+          cid="$(docker create ovmx-boot:latest)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          mkdir -p dist/semprobe
+          docker cp "$cid:/boot/ovmx-distrib-semprobe.img" dist/semprobe/ovmx-distrib-semprobe.img
+          git rev-parse HEAD > dist/semprobe/SOURCE_COMMIT
+
+      - name: Upload the semantic-oracle probe disk
+        uses: actions/upload-artifact@v4
+        with:
+          name: ovmx-semprobe-disk
+          path: dist/semprobe/
+          retention-days: 14
+          if-no-files-found: error

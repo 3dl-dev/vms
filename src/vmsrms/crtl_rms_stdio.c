@@ -21,7 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <fcntl.h>          /* vms-3320: O_CREAT/O_WRONLY/O_RDWR/O_TRUNC (target ABI) */
+#include <fcntl.h>
+#include <unistd.h>          /* close(): the C RTL-owned descriptors (vms-fb4) */
 
 #include "rms/rms.h"          /* sys$create/$open/$erase/$parse/$search/$rename */
 #include "rms/crtl_stdio.h"
@@ -294,9 +295,13 @@ int ovmx_crtl_fdclose(int fd)
 {
     int i = fd - OVMX_CRTL_FD_BASE;
     if (i < 0 || i >= OVMX_CRTL_FD_MAX || !ovmx_crtl_fd_tbl[i]) {
-        fprintf(stderr, "OVMX-CRTL-RMS: fdclose(%d): not a veneer fd "
-                        "(fail-honest)\n", fd);
-        return -1;
+        /* Not an RMS file: a descriptor the C RTL itself owns (a pipe, a
+         * terminal, a socket pair) -- close it there. decc$close is bound to
+         * this function, so refusing these left every pipe a client closed
+         * open (vms-fb4: a reader never saw EOF). Per-fd dispatch, the first
+         * piece of the unified descriptor table (vms-254); an fd value that is
+         * neither fails EBADF honestly in close() itself. */
+        return close(fd);
     }
     OVMX_CRTL_FILE *fh = ovmx_crtl_fd_tbl[i];
     ovmx_crtl_fd_tbl[i] = NULL;

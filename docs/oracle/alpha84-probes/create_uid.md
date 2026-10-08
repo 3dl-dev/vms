@@ -12,3 +12,8 @@ time_mid = C09C, time_hi_and_version = 11F1 (version nibble 1, so the 60-bit tim
 clock_seq_low = 05, node = 41 4C 50 48 41 31 = "ALPHA1" (the node's SCSNODE name). Captured
 2026-10-05 on lab pod corpusalpha-1 (ALPHA1). Nothing disassembled (Rule 8): this is the
 service's observable output.
+
+Correction (2026-10-07): the VMS-time -> uid-timestamp offset is 100840 days (0x0135886AC7960000
+ticks), not the 141427-day 1582 -> 1970 constant of the usual uuid-from-Unix formula: the same
+probe's `$GETTIM` (00BC3A35 31519C8C at capture) plus 0x0135886AC7960000 is 01F1C29F..., the abstime
+`$GETUTC` returned.

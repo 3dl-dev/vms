@@ -57,6 +57,7 @@ int main(void)
     sys$dclast(ast_one, 0, 3);
     sys$setast(1);
     CHECK(ran_two == 1, "with $CLRAST the second AST ran");
+    /* negctl: clrast-no-delivery */
     CHECK(two_ran_before_one_returned_mark == 1,
           "with $CLRAST it ran before the first AST returned (delivered by $CLRAST)");
     CHECK(in_prog_after_clr == 0, "LIB$AST_IN_PROG reports 0 after $CLRAST");

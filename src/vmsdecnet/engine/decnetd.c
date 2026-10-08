@@ -63,6 +63,7 @@
 #include "dnet_engine.h"
 #include "dnet_cterm.h"     /* CTERM terminal-service protocol (--set-host-selftest) */
 #include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
+#include "dnet_cterm_hostfsm.h" /* CTERM HOST wire role, as a VMS host speaks it */
 #include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
 #include "dnet_fal.h"
 #include "dnet_fal_proc.h"  /* FAL network server process (rd vms-d85) */       /* FAL server + COPY client (object 17, rd vms-8c2) */
@@ -145,6 +146,14 @@ static dnet_tick_t monotonic_sec(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (dnet_tick_t)ts.tv_sec;
+}
+
+/* A monotonic millisecond clock: the CTERM host's output-quiet timer. */
+static uint64_t monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
 static void log_ts(FILE *out)
@@ -4281,9 +4290,15 @@ struct netacp_slot {
     struct dnet_engine lk;              /* this session's NSP link state       */
     uint16_t peer;                      /* remote node (area<<10|node)         */
     uint8_t  peer_mac[6];
-    struct dnet_cterm_host_session host;/* object 42                          */
+    struct dnet_cterm_host_session host;/* object 42: RTAn: + LOGINOUT        */
+    struct dnet_cth cth;                /* object 42: the CTERM host wire role */
     struct dnet_fal_proc fal;           /* object 17                          */
 };
+
+/* How long a session's terminal output must be quiet before the CTERM host
+ * ships it -- and, with no read outstanding, solicits input with the trailing
+ * prompt riding in the Start Read (rd vms-a70). */
+#define NETACP_CTERM_IDLE_MS 60
 
 /* The wire NETACP's sessions transmit on: the datalink, or (the booted pool
  * selftest only) a capture so the test plays the remote peers itself. */
@@ -4296,6 +4311,28 @@ static void netacp_send(int sock, unsigned ifindex, const uint8_t mac[6],
     (void)g_netacp_tx(sock, (int)ifindex, DNET_ETHERTYPE, mac, f, n);
 }
 
+/* Ship every CTERM segment the host FSM has queued, in order, over the link. */
+static void netacp_cterm_drain(struct netacp_slot *sl, int sock, unsigned ifindex,
+                               dnet_tick_t now)
+{
+    uint8_t seg[DNET_CTH_SEG_MAX], fr[DNET_FRAME_MAX];
+    size_t n = 0, fn = 0;
+    while (dnet_cth_tx_pop(&sl->cth, seg, sizeof seg, &n))
+        if (dnet_engine_link_send(&sl->lk, seg, n, fr, sizeof fr, &fn, now) == 0)
+            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+}
+
+/* Typed input the remote server delivered goes to the session's terminal --
+ * to LOGINOUT, which decides any login. */
+static void netacp_cterm_feed_terminal(struct netacp_slot *sl)
+{
+    uint8_t in[256];
+    size_t k;
+    while ((k = dnet_cth_term_input(&sl->cth, in, sizeof in,
+                                    dnet_cterm_host_echo(&sl->host))) > 0)
+        (void)dnet_cterm_host_write(&sl->host, in, k);
+}
+
 /* End a session: tell the remote (CTERM unbind / NSP disconnect), release the
  * local side, free the slot. Safe on an unused slot. */
 static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
@@ -4304,10 +4341,18 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
     if (!sl->used) return;
     uint8_t buf[DNET_FRAME_MAX], fr[DNET_FRAME_MAX];
     size_t n = 0, fn = 0;
-    if (sl->object == DNET_CTERM_OBJECT && sl->host.active &&
-        dnet_cterm_unbind(&sl->host.cterm, DNET_CTERM_UNBIND_NORMAL, buf, sizeof buf, &n) == 0 &&
-        dnet_engine_link_send(&sl->lk, buf, n, fr, sizeof fr, &fn, now) == 0)
-        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+    (void)buf; (void)n;
+    /* CTERM: the session's last output, then foundation Unbind (02 03 00,
+     * "user unbind request") -- what a VMS host sends at logout. */
+    if (sl->object == DNET_CTERM_OBJECT && sl->host.active && dnet_link_is_up(&sl->lk.link)) {
+        uint8_t tail[1024];
+        long got;
+        while ((got = dnet_cterm_host_read(&sl->host, tail, sizeof tail)) > 0)
+            (void)dnet_cth_term_output(&sl->cth, tail, (size_t)got, monotonic_ms());
+        if (!dnet_cth_is_over(&sl->cth))
+            (void)dnet_cth_close(&sl->cth);
+        netacp_cterm_drain(sl, sock, ifindex, now);
+    }
     if (dnet_link_is_up(&sl->lk.link) &&
         dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn, now) == 0)
         netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
@@ -4333,20 +4378,28 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
         uint8_t buf[DNET_FAL_SEG_MAX], fr[DNET_FRAME_MAX];
         size_t fn = 0;
         if (sl->object == DNET_CTERM_OBJECT) {
-            /* Whatever LOGINOUT/DCL wrote to the session's RTAn: goes to the
-             * remote terminal as CTERM Writes. A PIPE, nothing more. */
-            long got = dnet_cterm_host_read(&sl->host, buf, sizeof buf);
-            if (got > 0 && dnet_cterm_is_bound(&sl->host.cterm)) {
-                uint8_t cpdu[DNET_CTERM_MAX_PDU]; size_t clen = 0;
-                if (dnet_cterm_write(&sl->host.cterm, buf, (size_t)got,
-                                     DNET_CTERM_WR_NOFORMAT, cpdu, sizeof cpdu, &clen) == 0 &&
-                    dnet_engine_link_send(&sl->lk, cpdu, clen, fr, sizeof fr, &fn, now) == 0)
-                    netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
-            } else if (got < 0 || !dnet_cterm_host_alive(&sl->host)) {
+            /* The CTERM HOST speaks first (rd vms-a70): a real VMS SET HOST
+             * client waits for the host's Bind Request. */
+            uint64_t ms = monotonic_ms();
+            if (sl->cth.state == DNET_CTH_S_IDLE)
+                (void)dnet_cth_open(&sl->cth);
+            /* Whatever LOGINOUT/DCL wrote to the session's RTAn: becomes CTERM
+             * Writes, and its trailing prompt the Start Read that solicits the
+             * next line -- the way a VMS host does it. */
+            long got;
+            int ended = 0;
+            while ((got = dnet_cterm_host_read(&sl->host, buf, sizeof buf)) > 0)
+                (void)dnet_cth_term_output(&sl->cth, buf, (size_t)got, ms);
+            if (got < 0 || !dnet_cterm_host_alive(&sl->host))
+                ended = 1;
+            netacp_cterm_feed_terminal(sl);
+            (void)dnet_cth_tick(&sl->cth, ms, dnet_cterm_host_echo(&sl->host));
+            netacp_cterm_drain(sl, sock, ifindex, now);
+            if (ended)
                 /* Logged out, or LOGINOUT refused / timed out and exited --
                  * the executive's process table is the authority. */
                 netacp_slot_end(sl, sock, ifindex, now, "the session process exited");
-            }
+            (void)fr; (void)fn;
         } else {
             size_t n = 0; uint32_t xst = 0;
             int r;
@@ -4413,32 +4466,16 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
                 netacp_slot_end(sl, sock, ifindex, now, "FAL server link lost");
             return;
         }
-        /* CTERM: the FSM decodes; a Bind is answered, keystrokes go to the
-         * session's terminal -- to LOGINOUT, which decides any login. */
-        enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
-        if (dnet_cterm_rx(&sl->host.cterm, sl->lk.rx_data, sl->lk.rx_datalen, &cev)
-                != DNET_CTERM_OK)
-            return;
-        uint8_t cpdu[DNET_CTERM_MAX_PDU], df[DNET_FRAME_MAX]; size_t clen = 0, dlen = 0;
-        if (cev == DNET_CTERM_EV_BIND_IND) {
-            if (dnet_cterm_bind_accept(&sl->host.cterm, node->node_name, cpdu,
-                                       sizeof cpdu, &clen) == 0 &&
-                dnet_engine_link_send(&sl->lk, cpdu, clen, df, sizeof df, &dlen, now) == 0)
-                netacp_send(sock, ifindex, sl->peer_mac, df, dlen);
-        } else if (cev == DNET_CTERM_EV_READ_DATA) {
-            if (sl->host.cterm.last.datalen)
-                (void)dnet_cterm_host_write(&sl->host, sl->host.cterm.last.data,
-                                            sl->host.cterm.last.datalen);
-            if (sl->host.cterm.last.terminator) {
-                uint8_t nl = sl->host.cterm.last.terminator;
-                (void)dnet_cterm_host_write(&sl->host, &nl, 1);
-            }
-        } else if (cev == DNET_CTERM_EV_OOB) {
-            uint8_t ob = sl->host.cterm.last.oob_char;
-            (void)dnet_cterm_host_write(&sl->host, &ob, 1);
-        } else if (cev == DNET_CTERM_EV_UNBOUND) {
+        /* CTERM: the host FSM decodes the server's segment (bounded --
+         * these bytes arrive before anyone authenticated); typed lines go to
+         * the session's terminal, to LOGINOUT, which decides any login. */
+        int crc = dnet_cth_rx(&sl->cth, sl->lk.rx_data, sl->lk.rx_datalen, monotonic_ms());
+        netacp_cterm_feed_terminal(sl);
+        netacp_cterm_drain(sl, sock, ifindex, now);
+        if (sl->cth.peer_unbound)
             netacp_slot_end(sl, sock, ifindex, now, "the remote unbound");
-        }
+        else if (crc == DNET_CTH_EPROTO)
+            netacp_slot_end(sl, sock, ifindex, now, "CTERM protocol error from the remote");
         return;
     }
 
@@ -4486,6 +4523,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     sl->object = obj;
     memcpy(sl->peer_mac, mac, 6);
     sl->host.master_fd = -1;
+    dnet_cth_init(&sl->cth, NETACP_CTERM_IDLE_MS);
     uint32_t cst;
     if (obj == DNET_CTERM_OBJECT) {
         /* THE ISOLATION SEAM (vms-515 §3.4): low-privilege bounded parse into a

@@ -199,5 +199,8 @@ done
 [ -n "$P32LIB" ] || { echo "FAIL: 32-bit libstdc++.a not installed under $X/p32"; exit 1; }
 [ "$P32LIB" = "$X/p32/lib" ] || { mkdir -p "$X/p32/lib"; cp "$P32LIB"/lib*.a "$X/p32/lib/"; }
 cd /tmp/cxx
+# vms-fb4: autoconf facts for packages configured to run on OVMX/Alpha.
+mkdir -p "$X/$TARGET/share"
+install -m 644 /src/tools/cross-alpha-vms/cxx/config.site "$X/$TARGET/share/config.site"
 echo "== C/C++ toolchain ready in $X =="
 "$X/bin/$TARGET-g++" --version | head -1

@@ -399,7 +399,6 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
     ovmx_environ_to_p0();
 #endif
     (void)progxfer;   /* the transfer address — not consumed here      */
-    (void)imghdr;     /* {version,flags,image_base}; flags unused first-light */
     (void)linkflag;   /* passed 0; decc$main does not branch on it (§4b.8) */
     (void)cli_util;   /* CLI path is a separate grounded rung (see header) */
     (void)cliflag;
@@ -422,12 +421,36 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
         ns[nlen] = '\0';
     }
 
-    /* argv: [ name32, 0 ] as 32-bit pointers. */
-    int  av32 = _malloc32((int)(sizeof(int) * 2));
+    /* argv: [ name32, args..., 0 ] as 32-bit pointers. The arguments are the
+     * ones the process was created with (vms-fb4: imghdr v2 carries the
+     * execve argument vector -- how an image another process creates with
+     * arguments, the DEC C exec* path, receives them); argv[0] stays the
+     * image file spec, as DEC C supplies it. Without them: [ name32, 0 ]. */
+    unsigned int nargs = 0;
+    char **kargv = 0;
+    {
+        const struct ovmx_imghdr *ih = imghdr;
+        if (ih && ih->version >= 2 && ih->argc > 1 && ih->argv) {
+            nargs = ih->argc - 1;
+            kargv = ih->argv + 1;
+        }
+    }
+    int  av32 = _malloc32((int)(sizeof(int) * (nargs + 2)));
     if (av32) {
         int *av = p32_to_ptr(av32);
         av[0] = name32;
-        av[1] = 0;
+        unsigned int k = 0;
+        for (unsigned int i = 0; i < nargs; i++) {
+            const char *a = kargv[i] ? kargv[i] : "";
+            size_t l = strlen(a) + 1;
+            int a32 = _malloc32((int)l);
+            if (!a32)
+                break;                      /* out of memory: shorter argv, never a truncated pointer */
+            memcpy(p32_to_ptr(a32), a, l);
+            av[1 + k++] = a32;
+        }
+        av[1 + k] = 0;
+        nargs = k;
     }
 
     /* envp: empty (single NULL terminator). */
@@ -437,7 +460,7 @@ void ovmx_decc_main(void *progxfer, void *cli_util, void *imghdr,
         ev[0] = 0;
     }
 
-    if (argc) *argc = 1;
+    if (argc) *argc = (int)(1 + (av32 ? nargs : 0));
     if (argv) *argv = av32;
     if (envp) *envp = ev32;
 }

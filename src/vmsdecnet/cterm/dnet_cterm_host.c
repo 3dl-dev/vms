@@ -43,6 +43,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <termios.h>
 
 #include "dnet_cterm_host.h"
 
@@ -237,6 +238,18 @@ long dnet_cterm_host_write(struct dnet_cterm_host_session *hs,
         return -1;
     }
     return (long)done;
+}
+
+/* Does the session's terminal echo right now? Read from the terminal's own
+ * mode (the RTAn:'s substrate pair), so the CTERM host can issue the no-echo
+ * read VMS issues for a Password: prompt (rd vms-a70). Unknown -> echo. */
+int dnet_cterm_host_echo(const struct dnet_cterm_host_session *hs)
+{
+    struct termios t;
+
+    if (!hs || hs->master_fd < 0 || tcgetattr(hs->master_fd, &t) != 0)
+        return 1;
+    return (t.c_lflag & ECHO) ? 1 : 0;
 }
 
 int dnet_cterm_host_fd(const struct dnet_cterm_host_session *hs)

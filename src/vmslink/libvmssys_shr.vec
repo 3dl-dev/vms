@@ -275,3 +275,5 @@ vms_kif_creprc_ticket=PROCEDURE
 vms_kif_register_detached=PROCEDURE
 # $SETDFPROT (rd vms-44a): the executive-resident process default file protection. APPENDED.
 vms_kif_dfprot=PROCEDURE
+# $SETDDIR (rd vms-872): the executive-resident process default directory. APPENDED.
+vms_kif_ddir=PROCEDURE

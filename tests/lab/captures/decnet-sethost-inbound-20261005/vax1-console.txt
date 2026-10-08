@@ -1,0 +1,17 @@
+$ SET HOST 1.44
+
+  OVMX CTERM host (lab stand-in session, node 1.44)
+
+Username: SYSTEM
+Password: 
+
+  Lab stand-in: user SYSTEM, password of 7 characters received (not checked)
+
+$ SHOW TIME from VAX1
+  OVMX host received 19 characters: "SHOW TIME from VAX1"
+
+$ LOGOUT
+  SYSTEM  logged out at 05-OCT-2026 01:15:00
+
+%REM-S-END, control returned to node VAX1::
+$ 

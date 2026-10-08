@@ -77,3 +77,4 @@ c234ecfff984a4cef43426d93bc85e7fd63db32dea24def748a15fb30ffdd2a1  tests/lab/capt
 c7f8c7a7121cff83c4abf5b9376ae9f8cb40defa16807f0ddbfd5fb48a7b0397  tests/lab/captures/vms-ec2-vc-reorder-20261005/R2-rx3.pcap
 c499415795bb6906dd15dcf6cffd473b78831200e1420ca68de7c1cbfc7e15f5  tests/lab/captures/vms-ec2-vc-reorder-20261005/R2.pcap
 d1765c0910291cc8396997a048a20963b32020446ec0f8817c34b071b8356ba7  tests/lab/captures/vms-ec2-vc-reorder-20261005/ovmx-B3-7-s8.pcap
+a6ed6ed890c0ae34294d28da6585fffafdd591769e52b0c00d873ac99eaaaaf1  tests/lab/captures/vms-629-op08-20261005/cf1-op08.pcap

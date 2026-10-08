@@ -57,6 +57,7 @@ for my $f (@all) {
     my ($n, $kept) = (0, 0);
     for my $l (@in) {
         if ($l =~ /^[A-Za-z_]/ && $l !~ /^(typedef|struct|union|enum|static|extern\s+"C"|#)/
+            && $l !~ /decc\$/                     # the DEC C RTL's own entry points
             && $l =~ /\)\s*;\s*$/ && $l !~ /\(\s*\*/
             && $l =~ /^[^(]*?\b([A-Za-z_]\w*)\s*\(/) {
             my $name = $1;

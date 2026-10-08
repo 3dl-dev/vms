@@ -7,48 +7,7 @@ ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on
 ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on VAX V7.3, writes 1 on Alpha V8.4; OVMX leaves it
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
-fao FAO.AC  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.AF  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.AS.WIDTH.PAD  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.AS.WIDTH.TRUNC  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.XL  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.OL  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.ZL  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.WIDTH  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.WIDTH.ZERO  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.REPEAT.DIR  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.REPEAT.WIDTH  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.FIELD  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.FIELD.OVER  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.REUSE  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.SKIP  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.UIC  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.UIC.ID  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.DATE  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.TIME  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.DATE.WIDTH  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.CTLCHARS  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.UNKNOWN  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.BUFFEROVF  # vms-318: overflow returns the full length, writes nothing
-fao FAO.BUFFEROVF.AS  # vms-318: overflow returns the full length, writes nothing
-fao MSG.NORMAL.ALL  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.ALL  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.TEXT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.IDENT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.SEV  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.FAC  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.FLAGS0  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.SEV_TEXT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.RMS_FNF  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.BADPARAM  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.WASSET  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.SEV_CHANGED  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.UNKNOWN  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.UNKNOWN.TEXT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ZERO  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.UNKNOWN.NONZERO  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.EXQUOTA  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.FAO_INTO  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
+fao FAO.UIC.ID  # vms-7d5a: $IDTOASC does not name a UIC identifier, so !%I falls back to [g,m]
 info JPI.SELF.W  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
 info JPI.SELF.PIDADR0  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
 info JPI.SHORTBUF  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled

@@ -2,7 +2,5 @@
 # st=ABSENT for a case that calls one (spgen.py gen_c), and the gate tracks it
 # like any other difference. Implementing a routine = delete its line here; the
 # real-VMS goldens are unaffected (this list is not part of any spec).
-SYS$GRANTID
-SYS$REVOKID
 SYS$MOD_IDENT
 SYS$MOD_HOLDER

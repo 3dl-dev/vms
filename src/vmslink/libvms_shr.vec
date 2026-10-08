@@ -471,3 +471,5 @@ str$find_first_in_set=PROCEDURE
 str$find_first_not_in_set=PROCEDURE
 sys$parse_acl=PROCEDURE
 sys$format_acl=PROCEDURE
+sys$grantid=PROCEDURE
+sys$revokid=PROCEDURE

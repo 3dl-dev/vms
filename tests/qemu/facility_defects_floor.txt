@@ -490,4 +490,5 @@
 # crtl-unlink-fabricates-erase, crtl-feature-file-sharing-ignored (the last
 # mutated the veneer's DECC$FILE_SHARING test; the file layer's honouring of
 # that feature is now asserted by the alpha crtl-fd gate, crtl_fd_test.c 41).
-176
+# Raised to 178 by the two vms-7d5a rights-list defects (test_syssvc_rights_acl).
+178

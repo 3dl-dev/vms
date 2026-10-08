@@ -32,6 +32,12 @@
  * OVMX-LOCAL: sys$asctoid -- the name-to-value lookup in the rights-database
  *     reader (rtl/rightslist.c) runs in this process; the identifier's ATTRIBUTE
  *     flags come from the identifier's record when LIBVMSRMS is bound.
+ * OVMX-PARTIAL: sys$grantid (vms-7d5a) -- exec: the process rights list is the
+ *     executive's (VMS_IOCTL_RIGHTS); it checks CMKRNL and answers WASCLR/WASSET.
+ * OVMX-LOCAL: sys$grantid -- a name is resolved here through $ASCTOID; a target
+ *     named by process name is refused SS$_UNSUPPORTED.
+ * OVMX-PARTIAL: sys$revokid (vms-7d5a) -- exec: the same executive rights list.
+ * OVMX-LOCAL: sys$revokid -- as sys$grantid.
  * OVMX-PARTIAL: sys$parse_acl (vms-d404) -- exec: identifier names are
  *     looked up in RIGHTSLIST.DAT read over the executive ACP ($ASCTOID).
  * OVMX-LOCAL: sys$parse_acl -- the ACE text is parsed into the binary ACE
@@ -883,4 +889,61 @@ uint32_t sys$format_acl(const struct dsc$descriptor_s *aclent, uint16_t *acllen,
     memcpy(aclstr->dsc$a_pointer, buf, n);
     if (acllen) *acllen = (uint16_t)n;
     return SS$_NORMAL;
+}
+
+/* ======================================================================
+ * $GRANTID / $REVOKID -- the process rights list (vms-7d5a). The list is
+ * executive state (vms_kif_rights, VMS_IOCTL_RIGHTS); the Files-11 ACP's ACL
+ * check matches an identifier ACE against it, so granting an identifier
+ * changes what the process may open.
+ *
+ *   sys$grantid(pidadr, prcnam, id, name, prvatr, segment)
+ *     id      address of a quadword {identifier, attributes}, or
+ *     name    the identifier's name (looked up with $ASCTOID) when id is 0
+ *     prvatr  receives the attributes the identifier had (0 if newly granted)
+ *   SS$_WASCLR newly granted / SS$_WASSET already held (the OpenVMS V7.3 /
+ *   Alpha V8.4 probe, docs/oracle/semantics/rights); $REVOKID the reverse.
+ *   SS$_NOPRIV without CMKRNL, SS$_NOSUCHID for an unknown name.
+ * ====================================================================== */
+static uint32_t rights_op(uint32_t op, const uint32_t *pidadr,
+                          const struct dsc$descriptor_s *prcnam, const uint32_t *id,
+                          const struct dsc$descriptor_s *name, uint32_t *prvatr)
+{
+    uint32_t value, attrib = 0, st, pid = 0;
+
+    if (prcnam && prcnam->dsc$w_length)
+        return SS$_UNSUPPORTED;                 /* by process name: not this service yet */
+    if (pidadr)
+        pid = *pidadr;
+    if (id) {
+        value = id[0];
+        attrib = id[1];
+    } else if (name && name->dsc$a_pointer && name->dsc$w_length) {
+        uint32_t a = 0;
+        st = sys$asctoid(name, &value, &a);
+        if (!(st & 1))
+            return st;
+    } else {
+        return SS$_BADPARAM;
+    }
+    st = vms_kif_rights(op, pid, value, &attrib);
+    if ((st & 1) && prvatr)
+        *prvatr = attrib;
+    return st;
+}
+
+uint32_t sys$grantid(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                     const uint32_t *id, const struct dsc$descriptor_s *name,
+                     uint32_t *prvatr, uint32_t segment)
+{
+    (void)segment;
+    return rights_op(VMS_RIGHTS_OP_GRANT, pidadr, prcnam, id, name, prvatr);
+}
+
+uint32_t sys$revokid(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                     const uint32_t *id, const struct dsc$descriptor_s *name,
+                     uint32_t *prvatr, uint32_t segment)
+{
+    (void)segment;
+    return rights_op(VMS_RIGHTS_OP_REVOKE, pidadr, prcnam, id, name, prvatr);
 }

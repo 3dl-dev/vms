@@ -2133,6 +2133,26 @@ uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap)
     return args.status;
 }
 
+/* The process rights list (vms-7d5a): op GRANT/REVOKE one identifier of process
+ * `pid` (0 = the caller); *attrib in = the attributes to grant, out = the previous.
+ * The executive answers SS$_WASCLR / SS$_WASSET / SS$_NOPRIV / SS$_NONEXPR. */
+uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib)
+{
+    struct vms_rights_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.pid = pid;
+    args.id = id;
+    args.attrib = attrib ? *attrib : 0;
+
+    KIF_CALL(VMS_IOCTL_RIGHTS, &args);
+
+    if (attrib)
+        *attrib = args.attrib;
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;

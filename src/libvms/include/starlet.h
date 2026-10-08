@@ -1661,6 +1661,16 @@ uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t
 uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
                      uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
 
+/** sys$grantid - Add an identifier to a process rights list (executive state) */
+uint32_t sys$grantid(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                     const uint32_t *id, const struct dsc$descriptor_s *name,
+                     uint32_t *prvatr, uint32_t segment);
+
+/** sys$revokid - Remove an identifier from a process rights list */
+uint32_t sys$revokid(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                     const uint32_t *id, const struct dsc$descriptor_s *name,
+                     uint32_t *prvatr, uint32_t segment);
+
 /** sys$parse_acl - Text form of an access control entry to its binary form */
 uint32_t sys$parse_acl(const struct dsc$descriptor_s *aclstr, struct dsc$descriptor_s *aclent,
                        uint16_t *errpos, void *accnam, uint32_t acmode);

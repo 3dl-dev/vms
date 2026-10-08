@@ -571,6 +571,8 @@ acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
 acp-dir-used-blocks-ignore-eof
+acp-rights-list-not-consulted
+rights-grant-cmkrnl-not-checked
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
 acp-acl-control-not-checked
@@ -1160,6 +1162,45 @@ EOF
 30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
 every one of them is found again by name
 BIGD.DIR grew past its first block
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-rights-list-not-consulted)
+        case "$_f" in
+        facility)     echo "the ACP ACL check matches a general-identifier ACE against the executive process rights list (vms-7d5a)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_proc_holds() finds a general identifier in proc->rights_id. The mutation never finds it, so a process granted %X80012345 by \$GRANTID is still refused a file whose ACE grants that identifier read. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+holding %X80012345 the child opens RGTF.DAT: the grant changed the ACL decision
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    rights-grant-cmkrnl-not-checked)
+        case "$_f" in
+        facility)     echo "\$GRANTID / \$REVOKID need CMKRNL in the executive (vms-7d5a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_rights() refuses GRANT/REVOKE SS\$_NOPRIV without CMKRNL. The mutation drops the check, so an unprivileged process grants itself an identifier and then opens the file the ACE protects. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV
+...and changes nothing: still refused
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7270,6 +7311,10 @@ apply_edit() {
         sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file";;
     libcreatedir-rooted-default-unresolved)
         sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file";;
+    acp-rights-list-not-consulted)
+        sed -i 's|^            if (proc->rights_id\[i\] == id)$|            if (0) /* NEGCTL acp-rights-list-not-consulted */|' "$_file";;
+    rights-grant-cmkrnl-not-checked)
+        sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file";;
     acp-acl-not-consulted)
         sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)

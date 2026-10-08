@@ -1082,8 +1082,8 @@ out:
 /* Does the process hold identifier `id`? `*` (0xFFFFFFFF) is held by every
  * process. A UIC identifier (bit 31 clear) is held
  * when it names the process UIC, either half possibly the wildcard. A general
- * identifier is held through the process rights list, which no process carries
- * yet (rd vms-7d5a): none is held. */
+ * identifier is held when the process rights list carries it ($GRANTID,
+ * vms_ioctl_rights). */
 static int acp_proc_holds(const struct vms_proc *proc, uint32_t id)
 {
     if (id == 0xFFFFFFFFu)
@@ -1094,6 +1094,12 @@ static int acp_proc_holds(const struct vms_proc *proc, uint32_t id)
 
         return (g == ACP_UIC_WILD_GROUP || g == pg) &&
                (m == ACP_UIC_WILD_MEMBER || m == pm);
+    }
+    {
+        uint32_t i;
+        for (i = 0; i < proc->rights_n && i < VMS_RIGHTS_MAX; i++)
+            if (proc->rights_id[i] == id)
+                return 1;               /* held through the process rights list */
     }
     return 0;
 }

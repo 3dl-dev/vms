@@ -33,14 +33,6 @@ prc PRC.RESUME.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vm
 prc PRC.SELF.COUNT2  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 prc PRC.NOIMAGE.STATE  # vms-ea42: a hibernating process with a missing image is run down at once (OpenVMS keeps it until $WAKE fails activation), and JPI$_STATE
 prc PRC.SELF.COUNT3  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
-rights RDB.GRANTID.BY_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GRANTID.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REVOKID.BY_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REVOKID.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GRANTID.BY_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REVOKID.BY_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GRANTID.NONAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.GRANTID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
 rms RMS.OPEN  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
 rms RMS.PARSE.SYNTAX2  # vms-576: arch-divergent -- Alpha V8.4 parses ODS-5 ^-escapes ("A^.B^.C"), VAX V7.3 says RMS$_SYN (OVMX: SYN, as VAX)

@@ -1,7 +1,7 @@
 {
-  "total": 148,
+  "total": 149,
   "summary": {
-    "run-pass": 147,
+    "run-pass": 148,
     "run-fail": 0,
     "run-crash": 1,
     "vm-crash": 0,
@@ -746,6 +746,11 @@
     },
     {
       "name": "ipc_pipe",
+      "status": "run-pass",
+      "signaled": false
+    },
+    {
+      "name": "sys_find_held",
       "status": "run-pass",
       "signaled": false
     }

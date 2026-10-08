@@ -3572,20 +3572,20 @@ A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programma
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
-A: the authorized-privileges AND process-privileges blocks are both EMPTY -- none of A's granted mask (TMPMBX|NETMBX|OPER) is in VMS_PRV_M_ENFORCED
+A: the authorized-privileges grid shows ONLY TMPMBX -- the one bit of A's granted mask (TMPMBX|NETMBX|OPER) that is in VMS_PRV_M_ENFORCED (NETMBX and OPER are not)
 A: the executive accepted the identity a privileged writer established
 B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC
 B: SHOW PROCESS reports B's user name
 B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the process-privileges block too
-B: the authorized-privileges grid shows EXACTLY WORLD -- the one bit of B's mask that is in VMS_PRV_M_ENFORCED -- not the whole mask and not nothing
+B: the authorized-privileges grid shows EXACTLY TMPMBX and WORLD -- the bits of B's mask that are in VMS_PRV_M_ENFORCED -- not the whole mask and not nothing
 C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
 C: SHOW PROCESS reports the UIC the executive derived from real credentials
 C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$_NOPRIV)
-C: the privilege display is EMPTY -- the two privileges the executive granted an unprivileged process (TMPMBX, NETMBX) are both outside VMS_PRV_M_ENFORCED
+C: the privilege display shows ONLY TMPMBX -- of the two privileges the executive granted an unprivileged process (TMPMBX, NETMBX) only TMPMBX is in VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)

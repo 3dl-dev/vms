@@ -183,7 +183,7 @@ vms_proc_get(pid_t pid)
 	 *     default-privilege $CREMBX of a temporary mailbox succeed (rd vms-f8a:
 	 *     omitting DEFAULT here made the P4-A mbx proof's $CREMBX return
 	 *     SS$_NOPRIV once proctab stopped masking it). A privileged caller ALSO
-	 *     gets VMS_PRV_M_ENFORCED -- the access-mode privileges vms_access.c/
+	 *     gets VMS_PRV_M_ROOT_GRANT -- the access-mode privileges vms_access.c/
 	 *     vms_ast.c enforce (CMKRNL/CMEXEC/SETPRV) AND SYSNAM/GRPNAM/WORLD/MOUNT --
 	 *     so both the access-mode allow/deny paths and LNM$SYSTEM DEFINE at boot
 	 *     work (rd vms-72da). Broader SYSUAF privileges arrive later via $SETIDENT
@@ -195,7 +195,7 @@ vms_proc_get(pid_t pid)
 	 */
 	np->current_mode = PSL_C_USER;
 	/*
-	 * A privileged (root/kauth) caller gets VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS,
+	 * A privileged (root/kauth) caller gets VMS_PRV_M_ROOT_GRANT | VMS_DEFAULT_PRIVS,
 	 * BYTE-IDENTICAL to src/kernel/vms_module.c (capable(CAP_SYS_ADMIN) path). This
 	 * previously hand-listed a SUBSET (CMKRNL|CMEXEC|SETPRV) that omitted SYSNAM,
 	 * so PID 1's lnm_setup_defaults could not DEFINE the system logicals
@@ -206,7 +206,7 @@ vms_proc_get(pid_t pid)
 	 * $SETIDENT (proctab, P4-B), never conjured here.
 	 */
 	np->perm_privs = exec_current_is_privileged()
-	               ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
+	               ? (VMS_PRV_M_ROOT_GRANT | VMS_DEFAULT_PRIVS)
 	               : VMS_DEFAULT_PRIVS;
 	np->cur_privs = np->perm_privs;
 	exec_lock_init(&np->mode_lock);

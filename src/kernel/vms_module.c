@@ -1675,7 +1675,7 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
 
     if (!inherited) {
         proc->perm_privs = capable(CAP_SYS_ADMIN)
-                         ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
+                         ? (VMS_PRV_M_ROOT_GRANT | VMS_DEFAULT_PRIVS)
                          : VMS_DEFAULT_PRIVS;
         proc->cur_privs = proc->perm_privs;
     }

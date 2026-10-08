@@ -6792,11 +6792,13 @@ struct netreq_probe {
     uint32_t honest;        /* own-PID request with NETMBX: reply status        */
 };
 
-/* Wait (~3 s) for the reply with correlation id `corr` on `rep`; 0 = none came.
- * Any reply to a DROPPED request seen meanwhile is recorded in *late. */
-static uint32_t net_req_probe_wait(uint32_t rep, uint32_t corr, uint32_t *late)
+/* Wait up to `ticks` x 10 ms for the reply with correlation id `corr` on `rep`;
+ * 0 = none came. Any OTHER reply seen meanwhile (to a request that must have
+ * been dropped) is recorded in *late. */
+static uint32_t net_req_probe_wait(uint32_t rep, uint32_t corr, uint32_t *late,
+                                   int ticks)
 {
-    for (int k = 0; k < 300; k++) {
+    for (int k = 0; k < ticks; k++) {
         uint8_t buf[DNET_BROKER_RSP_MAX + 16];
         uint32_t got = 0;
         uint32_t st = vms_kif_mbx_read(rep, buf, sizeof buf, &got, 1);
@@ -6845,6 +6847,11 @@ static void net_req_probe(int wfd)
 
     memset(&v, 0, sizeof v);
     memset(&self, 0, sizeof self);
+    /* A NEW VMS process carrying its creator's identity (the SYSTEM session,
+     * which holds SETPRV) -- the $CREPRC/SPAWN registration -- so the SETIDENT
+     * below may drop it to [100,100]. A bare re-register would derive the
+     * identity from the host credentials of the logged-in session instead. */
+    (void)vms_kif_register_subprocess();
     (void)vms_kif_getjpi_self(&self);
     v.setident = vms_kif_setident("NETPROBE", (100u << 16) | 100u, PRV$M_SETPRV);
     (void)vms_kif_setprv(PRV$M_TMPMBX, 1, 0, &prev);
@@ -6860,16 +6867,20 @@ static void net_req_probe(int wfd)
                                       (DNET_BROKER_RSP_MAX + 16) * 8, 0xFF00u,
                                       &rep, &unit, rdev, sizeof rdev);
     }
-    /* 1: our own PID, but no NETMBX -> dropped, no reply */
+    /* 1: our own PID, but no NETMBX -> dropped, no reply. NETACP reads the
+     * writer's privileges when it serves the request, so NETMBX stays off until
+     * this one has had its chance to be (wrongly) answered. */
     (void)net_req_probe_send(req, 1, self.vms_pid, unit);
-    v.nonetmbx = net_req_probe_wait(rep, 1, &late);
+    v.nonetmbx = net_req_probe_wait(rep, 1, &late, 150);
     (void)vms_kif_setprv(PRV$M_NETMBX, 1, 0, &prev);
-    /* 2: NETMBX, but claiming to be ANOTHER process -> dropped, no reply */
+    /* 2: NETMBX, but claiming to be ANOTHER process -> dropped; 3: the truth ->
+     * served (FILNOTACC: no such link). NETACP serves its request mailbox in
+     * order, so once 3 is answered, 2 has been decided: any reply to it would
+     * already be here. */
     (void)net_req_probe_send(req, 2, self.vms_pid + 1u, unit);
-    v.forged = net_req_probe_wait(rep, 2, &late);
-    /* 3: NETMBX and the truth -> served (FILNOTACC: no such link) */
     (void)net_req_probe_send(req, 3, self.vms_pid, unit);
-    v.honest = net_req_probe_wait(rep, 3, &late);
+    v.honest = net_req_probe_wait(rep, 3, &late, 1000);
+    v.forged = 0;
     if (late == 1) v.nonetmbx = 0xFFFFFFFFu;     /* a dropped request was answered after all */
     if (late == 2) v.forged = 0xFFFFFFFFu;
     (void)vms_kif_setprv(PRV$M_READALL, 1, 0, &prev);

@@ -5246,6 +5246,17 @@ static int netacp_reply_mbx(struct netacp_slot *sl, uint32_t reply_unit,
      * mailbox gets SS$_MBFULL for its reply -- NETACP's serve loop never
      * waits on a client. */
     uint32_t st = vms_kif_mbx_write_ex(ch, rec, (uint32_t)n, 1);
+    if (st == SS$_MBFULL) {
+        /* Dropped, not waited for: say so once per mailbox unit run. */
+        static uint32_t last_full_unit;
+        if (last_full_unit != reply_unit) {
+            last_full_unit = reply_unit;
+            log_ts(stdout);
+            printf(" DECNETD-W-REPLYFULL, reply mailbox MBA%u: is full -- an answer"
+                   " was dropped (the client is not reading it)\n", (unsigned)reply_unit);
+            fflush(stdout);
+        }
+    }
     if (transient)
         (void)vms_kif_dassgn(ch);
     return (st & 1) ? 0 : -1;

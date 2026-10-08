@@ -765,6 +765,17 @@ static pthread_mutex_t g_netchan_lock = PTHREAD_MUTEX_INITIALIZER;
 static int net_io_put(void *ctx, const uint8_t *rec, size_t len)
 {
     struct net_chan_state *ns = ctx;
+    /* Empty this channel's reply mailbox before asking (rd vms-c6d1): NETACP
+     * answers with IO$M_NORSWAIT, so a mailbox still holding answers nobody is
+     * waiting for any more (a completion that arrived after its waiter gave
+     * up) would cost the NEXT request its answer (SS$_MBFULL at NETACP). None
+     * of them can be for the request about to go: its correlation id is new. */
+    for (int k = 0; k < 64; k++) {
+        uint8_t junk[DNET_BROKER_RSP_MAX + 16];
+        uint32_t got = 0;
+        if (!(vms_kif_mbx_read(ns->rep_chan, junk, sizeof junk, &got, 1) & 1))
+            break;
+    }
     return (vms_kif_mbx_write(ns->req_chan, rec, (uint32_t)len) & 1) ? 0 : -1;
 }
 static int net_io_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)

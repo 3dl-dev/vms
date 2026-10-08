@@ -393,6 +393,11 @@ RUN cd /src/repo && \
     echo "--- DECC\$SHR.EXE (C run-time shareable; --use producer + IMGACT resolves it, vms-725) ---" && \
     ls -la 'build-static/bin/DECC$SHR.EXE'
 
+# Corpus programs built VMS-NATIVELY (vms-db7): TCC.EXE + LINK.EXE --use DECC$SHR, run
+# in the corpus guest through IMGACT.EXE (tests/qemu/corpus_runtime_native.txt). They
+# land in build-static/bin/corpus_rt_* and are staged with the other corpus programs.
+RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
+
 # (The SSH transport-proof harness build + /ovmxssh|/ovmxsshsrv staging was
 # RETIRED with the SSH scaffold, vms-d916: it built the --wrap veneer over a
 # musl-static cross ELF, which Baron ruled LARP. The faithful SSH is the real

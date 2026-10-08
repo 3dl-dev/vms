@@ -847,6 +847,18 @@ struct vms_cm_config {
 vms_codec_status_t vms_cm_config_parse(const uint8_t *body, uint32_t len,
 				       struct vms_cm_config *out);
 
+/*
+ * vms_cm_response_accepted - did this 0x81 answer ACCEPT the request (rd
+ * vms-f297)? body[18] is 0x01 in every accepting answer a real V7.3 system has
+ * sent in the capture library (1100+ across op 03/05/07/08/09/0b/12), and 0x00
+ * in the two a real VAX sent to an OVMX coordinator's membership record about
+ * a system it had not yet heard from -- each followed, when the coordinator
+ * went on to its open, by a CNXMGRERR bugcheck (lab arms PF-3, PK-1). Book
+ * p. 7-41: a coordinator ABANDONS on a rejection. 1 = accepted, 0 = not (or
+ * the body is not a response at all).
+ */
+int vms_cm_response_accepted(const uint8_t *body, uint32_t len);
+
 /* cat-0x01 op-0x14 node CPU/model advertisement. */
 struct vms_cm_model {
 	struct vms_cm_envelope env;

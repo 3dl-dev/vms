@@ -3800,6 +3800,45 @@ static int join_target_in_no_cluster(struct cnxman_join *j,
 	return 1;
 }
 
+/*
+ * EVERY MEMBER HAS HEARD WHO THIS NODE IS BEFORE ANY OF THEM IS ASKED (rd
+ * vms-f297). A real V7.3 joiner sends its op-0x14/op-0x01 to EACH member it is
+ * connected to and only then its op 0x02 (lab run XF: VAX3 advertised to both
+ * members 1.3 s before asking). OVMX advertised to non-target members on the
+ * once-a-second beat and could ask in between: lab arm PK-1, OVMXB asked 20 ms
+ * after the real VAX member's connection opened, the coordinator told that VAX
+ * about a system whose PARAMS it had never received, the VAX answered the
+ * record with status 00 and bugchecked CNXMGRERR on the open that followed.
+ *
+ * Owed identity records go out NOW, and the request waits for a later beat --
+ * the same "not in the same breath" rule the target's own records follow.
+ * Nonzero while any connected peer is still owed them.
+ */
+static int join_peer_ident_owed(struct cnxman_join *j)
+{
+	struct vms_club *club = &j->cl->club;
+	const struct vms_csb *local = cnxman_club_local(club);
+	const struct vms_csb *target = join_target_csb(j);
+	uint32_t i, owed = 0u;
+
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
+
+		/* The member being asked is told by the join's own ordered
+		 * burst (MODEL, PARAMS, then CONFIG); this is about the rest. */
+		if (c == target || !join_peer_advertisable(c, local))
+			continue;
+		if (join_advert_due(c, c->cdt_conid, CNXMAN_JOIN_B_MODEL) ||
+		    join_params_due(j, c, c->cdt_conid))
+			owed++;
+	}
+	if (owed == 0u)
+		return 0;
+	j->ident_owed_holds++;
+	cnxman_join_advertise_peers(j);
+	return 1;
+}
+
 static int join_admission_held(struct cnxman_join *j)
 {
 	struct join_view v;
@@ -3820,6 +3859,8 @@ static int join_admission_held(struct cnxman_join *j)
 	if (csb->adv_valid && !join_says_member(csb))
 		return join_target_in_no_cluster(j, &v);
 	if (join_ident_fresh(j))
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
+	if (join_peer_ident_owed(j))
 		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
 	if ((uint32_t)v.max_advertised > v.members_connected)
 		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY);
@@ -3938,9 +3979,13 @@ static enum cnxman_join_rx join_h_watch_burst(struct cnxman_join *j,
 					      const struct join_ev *e)
 {
 	uint8_t before = j->state;
+	uint32_t asked = j->config_sent;
 
 	join_reoffer_burst(j);
-	if (j->state == (uint8_t)CNXMAN_JOIN_ADMIT)
+	/* A beat that itself put the request on the wire (one held a beat
+	 * while every member was told who this node is, rd vms-f297) is not
+	 * a beat of silence after it. */
+	if (j->state == (uint8_t)CNXMAN_JOIN_ADMIT && j->config_sent == asked)
 		join_admit_beat(j);
 	if (j->state != before)
 		return CNXMAN_JOIN_RX_CONSUMED;   /* the beat moved the drive */

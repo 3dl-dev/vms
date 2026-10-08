@@ -129,6 +129,8 @@
 #   join-swallows-step-reports            vms_cnxman_join_fsm.c
 #   coord-step-ack-unmarked               vms_cluster_codec_cm.c
 #   coord-open-skips-records-wait         vms_cnxman_coord_fsm.c
+#   coord-ignores-rejection               vms_cnxman_coord_fsm.c
+#   join-asks-before-telling-members      vms_cnxman_join_fsm.c
 #
 SELF="$0"
 
@@ -140,6 +142,8 @@ removal-pair-not-rederived
 join-swallows-step-reports
 coord-step-ack-unmarked
 coord-open-skips-records-wait
+coord-ignores-rejection
+join-asks-before-telling-members
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1351,6 +1355,36 @@ EOF
                       ;;
         esac;;
 
+    coord-ignores-rejection)
+        case "$_f" in
+        facility)     echo "a 0x81 answer without the accepting 0x01 is a rejection, and the coordinator abandons the transition (book p. 7-41; rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "a member's status-00 answer to a membership record is taken as an acknowledgement and the open follows it -- the exact sequence after which a real OpenVMS VAX V7.3 bugchecked CNXMGRERR on lab arms PF-3 and PK-1.";;
+        require_fail) cat <<'EOF'
+no open goes out after a rejection
+the rejection is counted
+and the transition is abandoned
+and said
+EOF
+                      ;;
+        esac;;
+
+    join-asks-before-telling-members)
+        case "$_f" in
+        facility)     echo "a joiner tells every connected member who it is before it asks for admission, as a real V7.3 joiner does (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out while a connected member has not been sent this node's MODEL/PARAMS: on lab arm PK-1 the coordinator's record about OVMXB reached a real VAX holding no PARAMS for it, which answered status 00 and bugchecked CNXMGRERR on the open.";;
+        require_fail) cat <<'EOF'
+the request is held while the other member is owed this node's identity
+and the hold is counted
+EOF
+                      ;;
+        esac;;
+
     coord-open-skips-records-wait)
         case "$_f" in
         facility)     echo "the coordinator's Phase 1 open waits for every op-0x05 membership record's 0x81/0x05 answer, as a real V7.3 coordinator's does (rd vms-f297)";;
@@ -1665,6 +1699,12 @@ apply_edit() {
 
     club-open-facts-unlearned)
         sed -i 's|^\tcnxman_club_learn_open(\&b->cl->club,$|\tif (0) /* NEGCTL club-open-facts-unlearned */ cnxman_club_learn_open(\&b->cl->club,|' "$_file";;
+
+    coord-ignores-rejection)
+        sed -i 's|^\tif (vms_cm_response_accepted(m->body, m->len))$|\tif (1 \|\| vms_cm_response_accepted(m->body, m->len)) /* NEGCTL coord-ignores-rejection */|' "$_file";;
+
+    join-asks-before-telling-members)
+        sed -i 's|^\tif (join_peer_ident_owed(j))$|\tif (0 \&\& join_peer_ident_owed(j)) /* NEGCTL join-asks-before-telling-members */|' "$_file";;
 
     coord-open-skips-records-wait)
         sed -i 's|^\tif (coord_records_outstanding(c) != 0u) {$|\tif (0 \&\& coord_records_outstanding(c) != 0u) { /* NEGCTL coord-open-skips-records-wait */|' "$_file";;

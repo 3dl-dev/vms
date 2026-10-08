@@ -2326,6 +2326,40 @@ static void test_f297_open_waits_for_the_records(void)
 			"each 0x81/0x05 consumed and counted, none unrouted");
 }
 
+/* rd vms-f297: a member that answers a membership record WITHOUT the
+ * accepting 0x01 has rejected it; the transition is abandoned and NO open is
+ * sent (book p. 7-41). A real VAX that answered 00 bugchecked CNXMGRERR on the
+ * open an OVMX coordinator sent anyway (lab arms PF-3, PK-1). */
+static void test_f297_a_rejected_record_abandons(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n, k, total;
+	vms_wire_buf_t w;
+
+	printf("\n-- rd vms-f297: a rejected membership record abandons the "
+	       "transition, and no open follows --\n");
+	(void)f297_bed();
+	n = mk_join_request(f);
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	for (k = 0; k < 2u; k++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(k + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
+	vms_wire_put_u8(&w, VMS_OFF_CM_RESP_MARK, 0x00);   /* status 00 */
+	(void)coord_feed(&g.c, f, n, 2);                    /* VAX2 */
+	total = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD);
+	ct_check_eq_u32(total, 0u, "no open goes out after a rejection");
+	ct_check_eq_u32(g.c.rejections, 1u, "the rejection is counted");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_ABANDONED,
+		 "and the transition is abandoned");
+	ct_check(strstr(g.fake.last_log, "rejected the proposed state") != NULL,
+		 "and said");
+}
+
 static void test_f297_each_missing_fact_refuses(void)
 {
 	static const struct { const char *what; int gap; } k[] = {
@@ -2474,6 +2508,7 @@ int main(void)
 	test_1ac_no_open_for_a_system_that_is_not_ours();
 	test_f297_foreign_member_gets_every_cell();
 	test_f297_each_missing_fact_refuses();
+	test_f297_a_rejected_record_abandons();
 	test_f297_open_waits_for_the_records();
 	test_f297_zero_weight_joiner_merges();
 	test_f297_lost_fact_withholds_the_open();

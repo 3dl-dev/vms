@@ -1892,6 +1892,8 @@ static void coord_h_request(struct cnxman_coord *c, const struct coord_msg *m)
 	coord_begin_add(c, m->from_csb);
 }
 
+static int coord_rejected(struct cnxman_coord *c, const struct coord_msg *m);
+
 /* Which participant slot did this frame come from? -1 when we cannot tell, and
  * then nothing is credited to anybody. */
 static int32_t coord_participant_of(struct cnxman_coord *c,
@@ -1913,7 +1915,7 @@ static void coord_h_relay_ack(struct cnxman_coord *c, const struct coord_msg *m)
 		c->ignored_events++;
 		return;
 	}
-	if (i < 0)
+	if (i < 0 || coord_rejected(c, m))
 		return;
 	c->part_flags[i] |= CNXMAN_COORD_P_RELAY_ACK;
 	c->relay_acks++;
@@ -1943,6 +1945,8 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 		c->ignored_events++;
 		return;
 	}
+	if (coord_rejected(c, m))
+		return;
 	if (m->from_csb >= 0 && m->from_csb != c->subject_csb &&
 	    coord_is_participant(c, (uint32_t)m->from_csb)) {
 		coord_member_commit_ack(c, (uint32_t)m->from_csb);
@@ -1975,6 +1979,25 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 }
 
 /*
+ * A PARTICIPANT REJECTED A REQUEST OF OURS (rd vms-f297): its 0x81 answer does
+ * not carry the accepting 0x01 (vms_cm_response_accepted). Book p. 7-41: the
+ * coordinator abandons the transition on any rejection -- and in particular
+ * sends NO open after it: a real V7.3 member that answered our membership
+ * record with 00 bugchecked CNXMGRERR on the op 0x09 that followed (PF-3,
+ * PK-1). Nonzero when it was a rejection and the transition is abandoned.
+ */
+static int coord_rejected(struct cnxman_coord *c, const struct coord_msg *m)
+{
+	if (vms_cm_response_accepted(m->body, m->len))
+		return 0;
+	c->rejections++;
+	coord_abandon_internal(c,
+		"%CNXMAN, a system rejected the proposed state transition; "
+		"abandoning it");
+	return 1;
+}
+
+/*
  * [RECORDS][RX_TR_ACK] -- a 0x81/0x05 answer to one of our membership records.
  * The open goes out once every record a participant was sent is answered.
  */
@@ -1988,7 +2011,7 @@ static void coord_h_membrec_ack(struct cnxman_coord *c,
 		return;
 	}
 	i = coord_participant_of(c, m);
-	if (i < 0)
+	if (i < 0 || coord_rejected(c, m))
 		return;
 	c->membrec_acks++;
 	if (c->part_recs[i] == 0u) {
@@ -2015,7 +2038,7 @@ static void coord_h_open_ack(struct cnxman_coord *c, const struct coord_msg *m)
 		return;
 	}
 	i = coord_participant_of(c, m);
-	if (i < 0)
+	if (i < 0 || coord_rejected(c, m))
 		return;
 	c->part_flags[i] |= CNXMAN_COORD_P_PHASE1_ACK;
 	c->open_acks++;

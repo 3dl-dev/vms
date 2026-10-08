@@ -476,6 +476,8 @@ struct cnxman_coord {
 	uint32_t open_withheld;        /* opens NOT sent: a cell went missing
 					* between the gate and the send      */
 	uint32_t membrec_acks;         /* 0x81/0x05 answers to our records   */
+	uint32_t rejections;           /* 0x81 answers WITHOUT the accepting
+					* 0x01: the transition was abandoned */
 	/*
 	 * THE DEPARTURE GATE (rd vms-b36). Removals this node did NOT propose
 	 * because the subject was never a committed member (p. 7-49's SELECTED

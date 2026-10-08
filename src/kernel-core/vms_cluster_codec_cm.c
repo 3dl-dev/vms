@@ -294,6 +294,20 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+int vms_cm_response_accepted(const uint8_t *body, uint32_t len)
+{
+	struct vms_cm_envelope env;
+	vms_wire_view_t v;
+	uint8_t mark;
+
+	if (vms_cm_envelope_parse(body, len, &env) != VMS_CODEC_OK ||
+	    !vms_wire_is_response(env.category))
+		return 0;
+	vms_wire_view_init(&v, body, len);
+	mark = vms_wire_get_u8(&v, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY);
+	return vms_wire_view_ok(&v) && mark == 0x01u;
+}
+
 vms_codec_status_t vms_cm_config_parse(const uint8_t *body, uint32_t len,
 				       struct vms_cm_config *out)
 {

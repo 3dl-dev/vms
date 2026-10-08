@@ -25,6 +25,7 @@
 
 #include "dnet_cterm.h"
 #include "dnet_cterm_hostfsm.h"
+#include "../../src/kernel/vms_ioctl.h"   /* VMS_TTC_* */
 
 struct cth_oracle_seg { int host; const uint8_t *b; size_t n; };
 #include "cterm_host_oracle.inc"
@@ -313,6 +314,153 @@ static void test_fsm_replay(void)
 }
 
 /* ---- 4. fuzz --------------------------------------------------------------- */
+/* ---- 5. the originating terminal (rd vms-14b) ------------------------------
+ * The real VAX1 SET HOST into OVMX (tests/lab/captures/decnet-sethost-inbound-
+ * 20261005/sethost-inbound.wire.txt, 1.1->1.44): its Bind Accept (seg 1) and
+ * its Initiate (seg 2), from the LA36-typed console whose RTAn: the oracle
+ * shows as Device_Type LA36, Width 132, Page 0 (vax-rta-show-terminal.txt). */
+static const uint8_t k_inb_bind_accept[17] = {
+    0x04, 0x02, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t k_inb_initiate[57] = {
+    0x09, 0x00, 0x35, 0x00, 0x01, 0x00, 0x01, 0x04, 0x00, 0x07, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0,
+    0x03, 0x03, 0x04, 0xfe, 0xff, 0xef, 0x00, 0x04, 0x18, 0x42, 0x20, 0x84,
+    0x00, 0xa0, 0x02, 0x02, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+static void test_origin_terminal(void)
+{
+    struct dnet_cth_peer_init pi;
+    struct dnet_cth_termchar tc;
+    const uint8_t *m; size_t ml = 0;
+
+    /* The 2026-10-05 capture: LA36 console, Page 0. */
+    m = carried(k_inb_initiate, sizeof k_inb_initiate, 0, &ml);
+    check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK && pi.term.valid,
+          "origin: the real VAX Initiate's parameter 4 decodes");
+    check(pi.term.devclass == 66 && pi.term.devtype == 32 && pi.term.width == 132 &&
+          pi.term.page == 0,
+          "origin: DC$_TERM, DT$_LA36 (32), width 132, page 0 -- the oracle RTAn:'s"
+          " Device_Type LA36 / Width 132 / Page 0");
+    check(pi.term.have_tt2 && pi.term.ttchar == 0x0202a0u && pi.term.tt2char == 0x3000u,
+          "origin: the raw TT$/TT2$ words are carried through untouched");
+    check(pi.max_msg == 1010 && pi.input_buf == 960 && pi.have_bitmap,
+          "origin: parameters 1-3 still decode beside parameter 4");
+
+    /* The VAX<->VAX oracle, session 1: the LA36 console at Page 24 -- byte 7
+     * of the value differs, and the decode follows it. */
+    m = carried(k_oracle_o[4].b, k_oracle_o[4].n, 0, &ml);
+    check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK && pi.term.valid &&
+          pi.term.devtype == 32 && pi.term.width == 132 && pi.term.page == 24 &&
+          pi.term.ttchar == 0x0002a0u,
+          "origin: the VAX<->VAX oracle's session-1 client Initiate decodes LA36 / 132 / page 24");
+    /* Session 2 of the same oracle came from a terminal set to another type
+     * and width: 0x60 = DT$_VT100 96 (DCDEF), width 0x50 = 80. Type and width
+     * are therefore per-session values at these offsets, not constants. */
+    m = carried(k_oracle_o[19].b, k_oracle_o[19].n, 0, &ml);
+    check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK && pi.term.valid &&
+          pi.term.devtype == 96 && pi.term.width == 80 && pi.term.page == 24,
+          "origin: the oracle's session-2 client Initiate decodes DT$_VT100 (96) / 80 / page 24");
+
+    /* THE CHARACTERISTICS. The RTAn: is minted wearing the console set
+     * (src/kernel-core/vms_devtab.c VMS_CONSOLE_DEVCHAR, reproduced here);
+     * applying the masks the real Initiate's TT$/TT2$ words produce must give
+     * EXACTLY the set the oracle RTAn: shows (vax-rta-show-terminal.txt): set =
+     * Interactive Echo Type_ahead TTsync Lowercase Wrap Hardcopy Fulldup
+     * Set_speed Line Editing Insert editing Numeric Keypad VMS Style Input,
+     * every other name "No ...". */
+    {
+        const uint64_t minted = VMS_TTC_INTERACTIVE | VMS_TTC_ECHO | VMS_TTC_TYPEAHEAD |
+            VMS_TTC_TTSYNC | VMS_TTC_LOWERCASE | VMS_TTC_WRAP | VMS_TTC_BROADCAST |
+            VMS_TTC_FULLDUP | VMS_TTC_SET_SPEED | VMS_TTC_INSERT_EDITING |
+            VMS_TTC_NUMERIC_KEYPAD | VMS_TTC_VMS_STYLE_INPUT;
+        const uint64_t oracle = VMS_TTC_INTERACTIVE | VMS_TTC_ECHO | VMS_TTC_TYPEAHEAD |
+            VMS_TTC_TTSYNC | VMS_TTC_LOWERCASE | VMS_TTC_WRAP | VMS_TTC_HARDCOPY |
+            VMS_TTC_FULLDUP | VMS_TTC_SET_SPEED | VMS_TTC_LINE_EDITING |
+            VMS_TTC_INSERT_EDITING | VMS_TTC_NUMERIC_KEYPAD | VMS_TTC_VMS_STYLE_INPUT;
+        const uint64_t not_carried = VMS_TTC_INTERACTIVE | VMS_TTC_VMS_STYLE_INPUT |
+            VMS_TTC_DEC_CRT5 | VMS_TTC_ANSI_COLOR | VMS_TTC_SET_SPEED;
+        uint64_t setc = 0, clrc = 0, setc19 = 0, clrc19 = 0;
+        struct dnet_cth_termchar t19;
+
+        m = carried(k_inb_initiate, sizeof k_inb_initiate, 0, &ml);
+        check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK &&
+              dnet_cth_termchar_to_ttc(&pi.term, &setc, &clrc) == DNET_CTH_OK,
+              "chars: the real Initiate's TT$/TT2$ words map");
+        check((setc & clrc) == 0, "chars: no characteristic is both set and cleared");
+        check(((minted & ~clrc) | setc) == oracle,
+              "chars: minted RTAn: + the conveyed words = EXACTLY the oracle RTAn:'s"
+              " characteristic set (No Broadcast, Hardcopy, Line Editing come off the wire)");
+        check(((setc | clrc) & not_carried) == 0,
+              "chars: Interactive, VMS Style Input, DEC_CRT5, Ansi_Color and Set_speed"
+              " are not claimed from the wire");
+        check((setc | clrc) == (((VMS_TTC_VMS_STYLE_INPUT << 1) - 1) & ~not_carried),
+              "chars: every other displayed characteristic IS decided by the wire");
+
+        /* VMS message 19 of the same session repeats the blob with TT2$
+         * 0x3200 (the extra bit is TT2$V_DCL_MAILBX, no display name): the
+         * displayed characteristics come out identical. */
+        {
+            static const uint8_t blob19[12] = { 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x02,
+                                                0x00, 0x00, 0x32, 0x00, 0x00 };
+            check(dnet_cth_vms_termchar_parse(blob19, sizeof blob19, &t19) == DNET_CTH_OK &&
+                  dnet_cth_termchar_to_ttc(&t19, &setc19, &clrc19) == DNET_CTH_OK &&
+                  setc19 == setc && clrc19 == clrc,
+                  "chars: message 19's copy (TT2$ 0x3200) yields the same characteristics");
+        }
+
+        /* NEGCTL: an 8-byte value has no TT2$, so no TT2$ characteristic is
+         * claimed; an invalid decode maps nothing. */
+        check(dnet_cth_vms_termchar_parse(k_inb_initiate + 33, 8, &tc) == DNET_CTH_OK &&
+              dnet_cth_termchar_to_ttc(&tc, &setc, &clrc) == DNET_CTH_OK &&
+              ((setc | clrc) & (VMS_TTC_LINE_EDITING | VMS_TTC_NUMERIC_KEYPAD)) == 0 &&
+              (clrc & VMS_TTC_BROADCAST) != 0,
+              "chars NEGCTL: without TT2$ only the TT$ characteristics are decided");
+        memset(&tc, 0, sizeof tc);
+        check(dnet_cth_termchar_to_ttc(&tc, &setc, &clrc) == DNET_CTH_EINVAL,
+              "chars NEGCTL: an invalid decode maps nothing");
+    }
+
+    /* NEGCTL: a host Initiate (no parameter 4) conveys no terminal. */
+    m = carried(k_oracle_o[17].b, k_oracle_o[17].n, 0, &ml);
+    check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK && !pi.term.valid,
+          "origin NEGCTL: an Initiate without parameter 4 leaves the terminal unknown");
+    {
+        static const uint8_t not_term[8] = { 0x01, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x02, 0x00 };
+        static const uint8_t short_v[7]  = { 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x02 };
+        check(dnet_cth_vms_termchar_parse(not_term, sizeof not_term, &tc) == DNET_CTH_EINVAL &&
+              !tc.valid, "origin NEGCTL: a value whose class is not DC$_TERM is refused");
+        check(dnet_cth_vms_termchar_parse(short_v, sizeof short_v, &tc) == DNET_CTH_ETRUNC &&
+              !tc.valid, "origin NEGCTL: a value too short to hold the page length is refused");
+        check(dnet_cth_vms_termchar_parse(k_inb_initiate + 33, 8, &tc) == DNET_CTH_OK &&
+              tc.valid && !tc.have_tt2 && tc.page == 0,
+              "origin: an 8-byte value carries type/width/page and no TT2$");
+    }
+
+    /* THE FSM: the real Bind Accept + Initiate drive the host; the decode lands
+     * in peer.term, and the host still answers with message 23 ALONE -- no
+     * solicitation is added to the wire. */
+    {
+        uint8_t b[DNET_CTH_SEG_MAX]; size_t n = 0;
+        dnet_cth_init(&H, 50);
+        (void)dnet_cth_open(&H);
+        while (pop(b, &n)) {}
+        check(dnet_cth_rx(&H, k_inb_bind_accept, sizeof k_inb_bind_accept, 1) == DNET_CTH_OK,
+              "origin FSM: the real Bind Accept is accepted");
+        while (pop(b, &n)) {}
+        check(!H.peer.term.valid, "origin FSM: no terminal is known before the Initiate");
+        check(dnet_cth_rx(&H, k_inb_initiate, sizeof k_inb_initiate, 2) == DNET_CTH_OK &&
+              dnet_cth_is_bound(&H) && H.peer.term.valid && H.peer.term.devtype == 32 &&
+              H.peer.term.width == 132 && H.peer.term.page == 0,
+              "origin FSM: the real Initiate binds and yields LA36 / 132 / 0");
+        check(pop(b, &n) && same(b, n, k_oracle_o[21].b, k_oracle_o[21].n) && !pop(b, &n),
+              "origin FSM: the host's only answer is message 23 (nothing solicited)");
+    }
+}
+
 static unsigned fz(unsigned *st) { *st = *st * 1103515245u + 12345u; return *st >> 16; }
 
 static void test_fuzz(void)
@@ -377,6 +525,7 @@ int main(void)
     decode_all(k_oracle_o, NSEG(k_oracle_o), "VAX<->VAX oracle");
     decode_all(k_oracle_l, NSEG(k_oracle_l), "VAX host <-> OVMX client");
     test_fsm_replay();
+    test_origin_terminal();
     test_fuzz();
     if (failures) { printf("test_dnet_cterm_host: %d FAILED, %d passed\n", failures, passes); return 1; }
     printf("test_dnet_cterm_host: all %d checks passed\n", passes);

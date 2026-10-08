@@ -2694,6 +2694,12 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
          * genuinely records for OVMX's console and disks (it does not model a
          * VT-model or an RA-model), NOT the old fabricated DT$_VT100/DT$_RA92. */
         snprintf(result, result_size, "%u", info.devtype);
+    } else if (strcmp(item, "TT_PAGE") == 0) {
+        /* Terminal page length (DCL Dictionary F$GETDVI TT_PAGE), from the
+         * executive's row -- on an RTAn:, the originating terminal's, as the
+         * CTERM host recorded it (rd vms-14b). Empty for a non-terminal. */
+        if (info.devclass == 66 /* DC$_TERM */)
+            snprintf(result, result_size, "%u", info.page);
     } else if (strcmp(item, "DEVCHAR") == 0) {
         uint32_t chars = GETDVI_DEVCHAR_AVL;      /* present in the I/O DB */
         if (info.allocated) chars |= GETDVI_DEVCHAR_ALL;

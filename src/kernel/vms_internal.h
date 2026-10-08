@@ -1380,6 +1380,7 @@ long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
 /*
  * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
  * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its

@@ -7422,7 +7422,7 @@ apply_edit() {
     acp-bypass-ignored)
         sed -i 's|^    if (privs \& ACP_PRV_M_BYPASS)$|    if (0 \&\& (privs \& ACP_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
     acp-sysprv-ignored)
-        sed -i 's|^                (privs \& ACP_PRV_M_SYSPRV) != 0;$|                0; /* NEGCTL acp-sysprv-ignored */|' "$_file";;
+        sed -i 's#^                (privs \& ACP_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
     acp-dir-exsz-ignored)
         sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
     acp-fat-versions-not-applied)

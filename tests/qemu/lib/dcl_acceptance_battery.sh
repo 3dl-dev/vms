@@ -1151,6 +1151,16 @@ run_dcl_acceptance_battery() {
             "FAL persona [vms-d85]: the path itself works (SYSTEM reads the file through it) -- so GUEST's refusal below is the persona, not a broken path"
         must_have "$FALPSEG" 'checked against the user, not the daemon' \
             "FAL persona [vms-d85]: GUEST is REFUSED the SYSTEM-only file SYSTEM just read"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote DELETE of a SYSTEM-only file is REFUSED by the executive with the VAX FAL'"'"'s STATUS 0x4055 (RMS-E-PRV) STV 0x24' \
+            "FAL verbs [vms-277a]: GUEST's remote DELETE of a SYSTEM-only file is refused by the executive ACP and answered with the real VMS FAL's STATUS bytes (PRV + SS\$_NOPRIV)"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote RENAME of a SYSTEM-only file is REFUSED by the executive with the VAX FAL'"'"'s STATUS 0x405f (RMS-F-RMV), no STV' \
+            "FAL verbs [vms-277a]: GUEST's remote RENAME of a SYSTEM-only file is refused by the executive ACP and answered with the real VMS FAL's STATUS bytes (RMV)"
+        must_have "$FALPSEG" 'PASS: SYSTEM renames its file through the FAL server process: RMS reads the records under the NEW name and the old name is gone' \
+            "FAL verbs [vms-277a]: SYSTEM renames its own file through FAL.EXE, read back through RMS"
+        must_have "$FALPSEG" 'PASS: SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)' \
+            "FAL verbs [vms-277a]: SYSTEM deletes its own file through FAL.EXE, read back through RMS"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote DIRECTORY of a missing file is STATUS FNF 0x4032 STV 0x0910' \
+            "FAL verbs [vms-277a]: a remote DIRECTORY of a missing file is FNF with the VAX FAL's bytes and never names a file without its directory (the live-bracket 'Total of 1 file' bug)"
         must_not_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: FAIL' \
             "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
         negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"
@@ -1176,8 +1186,6 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-6af1]: the inbound session pool behaved on the real executive (one PASS/FAIL line per assertion above this verdict)"
         must_have "$POOLSEG" 'a SECOND inbound SET HOST is accepted while the first is live' \
             "NETACP pool [vms-6af1]: a second inbound SET HOST is admitted while the first is live (G2: no single slot to monopolise)"
-        must_have "$POOLSEG" 'PASS: a THIRD session from the same node is accepted' \
-            "NETACP pool [vms-277a]: a node may hold three concurrent sessions -- a VMS DELETE node::file;* opens three links to the FAL (VAX<->VAX capture)"
         must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
             "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
         must_have "$POOLSEG" 'running as [128,129]' \

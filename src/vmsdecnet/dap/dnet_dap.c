@@ -245,6 +245,36 @@ static void enc_operand(const struct dnet_dap_msg *m, struct wr *w)
         wr_img(w, m->u.name.namespec, n, DNET_DAP_MAX_SPEC);
         break;
     }
+    case DNET_DAP_SUMMARY:
+        break;                         /* empty operand (see dnet_dap.h)      */
+    case DNET_DAP_DATETIME: {
+        uint64_t mn = m->u.datetime.menu;
+        if (mn >> 4) { w->err = DNET_DAP_EUNSUP; return; }
+        wr_ex(w, mn, 6);
+        const char *d[3] = { m->u.datetime.cdt, m->u.datetime.rdt, m->u.datetime.edt };
+        for (int i = 0; i < 3; i++) {
+            if (!BIT(mn, i)) continue;
+            /* A-18: exactly 18 characters, never a counted field. */
+            if (strnlen(d[i], DNET_DAP_DATE_LEN + 1) != DNET_DAP_DATE_LEN) {
+                w->err = DNET_DAP_EINVAL; return;
+            }
+            wr_bytes(w, d[i], DNET_DAP_DATE_LEN);
+        }
+        if (BIT(mn, 3)) wr_b(w, m->u.datetime.rvn, 2);
+        break;
+    }
+    case DNET_DAP_PROTECTION: {
+        uint64_t mn = m->u.prot.menu;
+        if (mn >> 5) { w->err = DNET_DAP_EUNSUP; return; }
+        wr_ex(w, mn, 6);
+        if (BIT(mn, 0))
+            wr_img(w, m->u.prot.owner, strnlen(m->u.prot.owner, sizeof m->u.prot.owner), 40);
+        if (BIT(mn, 1)) wr_ex(w, m->u.prot.psys, 3);
+        if (BIT(mn, 2)) wr_ex(w, m->u.prot.pown, 3);
+        if (BIT(mn, 3)) wr_ex(w, m->u.prot.pgrp, 3);
+        if (BIT(mn, 4)) wr_ex(w, m->u.prot.pwld, 3);
+        break;
+    }
     default:
         w->err = DNET_DAP_EINVAL;   /* never encode a type OVMX does not serve */
         break;
@@ -426,8 +456,44 @@ static int dec_operand(struct dnet_dap_msg *m, struct rd *r)
         m->op = DNET_DAP_NAME;
         if ((rc = rd_ex(r, 3, &m->u.name.nametype, NULL, NULL))) return rc;
         return rd_str(r, DNET_DAP_MAX_SPEC, m->u.name.namespec, sizeof m->u.name.namespec);
+    case DNET_DAP_DATETIME: {
+        /* DAP 5.6 fields (CDT/RDT/EDT A-18, RVN B-2). Menu bits a later DAP
+         * version adds (a VMS V7.3 FAL talking DAP 7 to its own kind sets
+         * bits 7-8 with binary times) follow RVN; they are bounded by the
+         * operand and not decoded. */
+        m->op = DNET_DAP_DATETIME;
+        uint64_t mn;
+        if (!rd_more(r)) return DNET_DAP_OK;
+        if ((rc = rd_ex(r, 6, &mn, NULL, NULL))) return rc;
+        m->u.datetime.menu = mn;
+        char *d[3] = { m->u.datetime.cdt, m->u.datetime.rdt, m->u.datetime.edt };
+        for (int i = 0; i < 3; i++) {
+            if (!BIT(mn, i)) continue;
+            if (r->off + DNET_DAP_DATE_LEN > r->len) return DNET_DAP_ETRUNC;
+            memcpy(d[i], r->b + r->off, DNET_DAP_DATE_LEN);
+            d[i][DNET_DAP_DATE_LEN] = '\0';
+            r->off += DNET_DAP_DATE_LEN;
+        }
+        if (BIT(mn, 3) && (rc = rd_b16(r, &m->u.datetime.rvn))) return rc;
+        r->off = r->len;
+        return DNET_DAP_OK;
+    }
+    case DNET_DAP_PROTECTION: {
+        m->op = DNET_DAP_PROTECTION;
+        uint64_t mn;
+        if (!rd_more(r)) return DNET_DAP_OK;
+        if ((rc = rd_ex(r, 6, &mn, NULL, NULL))) return rc;
+        m->u.prot.menu = mn;
+        if (BIT(mn, 0) && (rc = rd_str(r, 40, m->u.prot.owner, sizeof m->u.prot.owner))) return rc;
+        if (BIT(mn, 1) && (rc = rd_ex(r, 3, &m->u.prot.psys, NULL, NULL))) return rc;
+        if (BIT(mn, 2) && (rc = rd_ex(r, 3, &m->u.prot.pown, NULL, NULL))) return rc;
+        if (BIT(mn, 3) && (rc = rd_ex(r, 3, &m->u.prot.pgrp, NULL, NULL))) return rc;
+        if (BIT(mn, 4) && (rc = rd_ex(r, 3, &m->u.prot.pwld, NULL, NULL))) return rc;
+        r->off = r->len;
+        return DNET_DAP_OK;
+    }
     case DNET_DAP_KEYDEF: case DNET_DAP_ALLOC: case DNET_DAP_SUMMARY:
-    case DNET_DAP_DATETIME: case DNET_DAP_PROTECTION: case DNET_DAP_ACL:
+    case DNET_DAP_ACL:
         /* Extended-attribute messages: a known type OVMX does not serve. The
          * operand is bounded (by LENGTH or the segment end) and skipped. */
         m->op = (enum dnet_dap_op)m->type;
@@ -518,10 +584,21 @@ void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz)
     /* A real VMS COPY reading a remote file requires DIRECTORY LIST (it
      * $SEARCHes its input first) and asks for NAME; without bit 25 it refuses
      * the open "FAL-F-ACCFUNC, unsupported RMS service call" (rd vms-d85 lab). */
+    /* rd vms-277a live bracket: a VMS client asks DIRECTORY/FULL for only the
+     * main ATTRIBUTES unless SUMMARY / DATE AND TIME / PROTECTION are
+     * advertised (bits 24, 26, 27 -- all served from the file header), and
+     * refuses a remote RENAME "RMS-F-SUPPORT" without bit 37 and a DELETE ;*
+     * "RMS-F-WLD" without bit 38. A VMS client resolves the wildcard itself
+     * by a DIRECTORY LIST and then names each file explicitly (VAX<->VAX
+     * capture, tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-
+     * sys-login/); OVMX serves a wildcard ERASE and refuses a wildcard OPEN
+     * or RENAME with an honest STATUS (unsupported). */
     const unsigned caps[] = { DNET_DAP_CAP_SEQ_ORG, DNET_DAP_CAP_SEQ_XFER,
                               DNET_DAP_CAP_BLOCK_TO_RESP, DNET_DAP_CAP_LEN256,
-                              DNET_DAP_CAP_DIRLIST, DNET_DAP_CAP_SEQ_RECORD,
-                              DNET_DAP_CAP_NAME_MSG };
+                              DNET_DAP_CAP_SUMMARY, DNET_DAP_CAP_DIRLIST,
+                              DNET_DAP_CAP_DATETIME, DNET_DAP_CAP_PROTECTION,
+                              DNET_DAP_CAP_SEQ_RECORD, DNET_DAP_CAP_RENAME,
+                              DNET_DAP_CAP_WILDCARD, DNET_DAP_CAP_NAME_MSG };
     unsigned maxbit = 0;
     for (size_t i = 0; i < sizeof caps / sizeof caps[0]; i++) {
         m->u.config.syscap[caps[i] / 7] |= (uint8_t)(1u << (caps[i] % 7));

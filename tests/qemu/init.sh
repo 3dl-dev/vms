@@ -289,7 +289,7 @@ if [ "$CORPUS_RT" = "1" ]; then
         sig=0
         grep -qE '^%[A-Z0-9_$]+-[EF]-' /tmp/corpus_out.$$ 2>/dev/null && sig=1
         echo "CORPUS-RT $name rc=$rc signaled=$sig" >&4
-        if [ "$rc" -ne 0 ]; then
+        if true; then   # DEBUG always log
             # the last lines the program printed, for the CI log (diagnostic only)
             tail -n 150 /tmp/corpus_out.$$ 2>/dev/null | while IFS= read -r _l; do
                 echo "CORPUS-RT-LOG $name| $_l" >&4

@@ -5,10 +5,10 @@
     "compile-pass": 0,
     "compile-fail": 38,
     "link-fail": 40,
-    "run-pass": 118,
-    "run-fail": 7,
-    "run-crash": 26,
-    "run-pass-signaled": 8
+    "run-pass": 115,
+    "run-fail": 8,
+    "run-crash": 28,
+    "run-pass-signaled": 6
   },
   "programs": [
     {
@@ -257,7 +257,7 @@
     {
       "name": "lib_delete_file",
       "file": "tier1-examples/lib_delete_file.c",
-      "status": "run-pass",
+      "status": "run-crash",
       "signaled_error": true,
       "errors": [],
       "missing_symbols": [],
@@ -383,7 +383,7 @@
     {
       "name": "lib_file_scan",
       "file": "tier1-examples/lib_file_scan.c",
-      "status": "run-pass",
+      "status": "run-fail",
       "signaled_error": false,
       "errors": [],
       "missing_symbols": [],
@@ -743,7 +743,7 @@
     {
       "name": "lib_rename_file",
       "file": "tier1-examples/lib_rename_file.c",
-      "status": "run-pass",
+      "status": "run-crash",
       "signaled_error": true,
       "errors": [],
       "missing_symbols": [],

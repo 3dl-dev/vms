@@ -10,12 +10,12 @@ including the programs that do not run and why.
 
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
-| host (gcc container, no executive) | 118 | 229 | `tests/conformance/run_corpus.sh` |
+| host (gcc container, no executive) | 115 | 229 | `tests/conformance/run_corpus.sh` |
 | **runtime (guest, live /dev/vms)** | 144 | 146 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
 **Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **148 of 229**.
 
-Host column detail: compile-fail 38, link-fail 40, run-fail 7, run-crash 26; 8 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
+Host column detail: compile-fail 38, link-fail 40, run-fail 8, run-crash 28; 6 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
 Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits

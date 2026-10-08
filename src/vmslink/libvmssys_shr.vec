@@ -289,3 +289,5 @@ vms_kif_lnm_lookup=PROCEDURE
 vms_kif_lnm_scope_key=PROCEDURE
 # RTAn: originating-terminal type/width/page (rd vms-14b). APPENDED.
 vms_kif_terminal_setchar=PROCEDURE
+# Terminal $QIO IO$_SETMODE / IO$_SETCHAR (rd vms-d900). APPENDED.
+vms_kif_ttsetmode=PROCEDURE

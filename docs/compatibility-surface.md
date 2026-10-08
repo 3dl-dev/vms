@@ -5,14 +5,14 @@
 
 ## Inventory
 
-**477 surfaces catalogued** across 9 domains, each with a per-surface status.
+**478 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 332 |
-| 🟢 implemented | 286 | | n/a | 93 |
+| ✅ verified | 24 | | real | 333 |
+| 🟢 implemented | 287 | | n/a | 93 |
 | 🟡 partial | 60 | | advisory | 46 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **431 committed** — **310 met** (implemented/verified), 58 in progress (partial), 63 not started (absent/stub/designed).
+- **432 committed** — **311 met** (implemented/verified), 58 in progress (partial), 63 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
@@ -726,7 +726,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 
 _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  44 surfaces catalogued (26 met · 9 in progress · 9 not started) · V1: 39 committed, 26 met
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  45 surfaces catalogued (27 met · 9 in progress · 9 not started) · V1: 40 committed, 27 met
 
 ### accounting — Accounting
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING) · reviewed 2026-09-14</sub>
@@ -792,16 +792,17 @@ PRODUCT INSTALL/SHOW and the [SYS0.SYSCOMMON]-rooted install target are real. Th
 ### privileges — Privileges (Definition + Enforcement)
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security ch. 3 (Privileges) · reviewed 2026-09-14</sub>
 
-All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in the kernel executive are real and verified — including a bit-position bug (SETPRV mismapped to DETACH) caught and fixed against lab-VAX SDA. File-access privilege overrides are PARTLY real: the Files-11 ACP honors BYPASS, READALL, and SYSPRV in its access check (vms-165); GRPPRV is the one override still not consulted.
+All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in the kernel executive are real and verified — including a bit-position bug (SETPRV mismapped to DETACH) caught and fixed against lab-VAX SDA. File-access privilege overrides are PARTLY real: the Files-11 ACP honors BYPASS, READALL, and SYSPRV in its access check (vms-165) and GRPPRV (vms-768). ALTPRI, SYSLCK and OPER are checked in the executive (vms-768).
 
 
-<sub>4 items · 3 met · 1 in progress · 0 not started</sub>
+<sub>5 items · 4 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟢 | `prvdef$bits` | struct | 39 VMS privilege bit definitions | implemented | n/a | in | `src/libvms/include/prvdef.h` |
 | ✅ | `sys$mode_transition` | feature | Privilege-checked access-mode escalation gate ($SETMODE) | verified | real | in | `src/kernel-core/vms_access.c:93` — vms_ioctl_setmode. Re-census 2026-09-14: line ref stable (:93). |
 | ✅ | `sys$setprv` | routine | $SETPRV — enable/disable process privileges within the authorized mask | verified | real | in | `src/kernel-core/vms_access.c:320` — vms_ioctl_setprv; SETPRV can only narrow within the authorized mask, never exceed it. Re-census 2026-09-14: line ref stable (:320). |
+| 🟢 | `privs$altpri_syslck_oper` | feature | ALTPRI ($SETPRI above the authorized priority), SYSLCK (LCK$M_SYSTEM), OPER ($BRKTHRU to every terminal / user) | implemented | real | in | `src/kernel-core/vms_proctab.c` — vms-768: without ALTPRI a raise above the authorized priority succeeds at the authorized priority; SS$_NOSYSLCK without SYSLCK; SS$_NOOPER without OPER. Not done: the authorized priority is the DEFPRI default 4 for every process (UAF PRIOR is not read yet); a non-system lock resource is not yet qualified by UIC group, so an LCK$M_SYSTEM lock and a group lock of the same name are one resource. |
 | 🟡 | `privs$file_access_override` | feature | SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks | partial | real | in | `src/kernel-core/vmsfs_acp.c:1053` — vms-165 retired the old vmsfs_blkdev_permission() (uid==0/gid only); the Files-11 ACP's acp_check_access (vmsfs_acp.c:1022) applies privilege overrides (defines vmsfs_acp.c:999-1001, apply :1053-1056): BYPASS (bit 29) lifts all access control, READALL (bit 35) grants read, SYSPRV (bit 28) confers the SYSTEM protection category. GRPPRV is NOT handled — hence partial, not implemented. Real (does the real thing for the three it honors), not facade-risk. Tracked vms-f15/vms-36d. Cross-listed to protection-acl. Re-census 2026-09-14: unchanged, line refs refreshed (was :861). |
 
 ### protection-acl — File Protection (SOGW/UIC) + ACLs

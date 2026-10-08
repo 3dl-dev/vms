@@ -127,3 +127,18 @@ ACE; with the system field empty (G4) neither helps; BYPASS grants regardless.
   `%SYSTEM-W-ACLEMPTY` (`$STATUS` %X100009D0).
 - An ACL longer than the primary header holds (25 twelve-byte ACEs on a header
   with an empty map) continues in an extension header.
+
+## GRPPRV (`privilege-grpprv.txt`, `PROBE4.COM`)
+
+CORPGRP [200,5] holds GRPPRV; CORPTST [200,201] does not.
+
+| file | owner | protection | ACL | CORPGRP (GRPPRV) | CORPTST |
+|---|---|---|---|---|---|
+| P1 | [200,1] | S:RWED,O,G,W | - | granted | denied |
+| P2 | [300,1] | S:RWED,O,G,W | - | denied | denied |
+| P3 | [200,1] | S,O:RWED,G,W | - | denied | denied |
+| P4 | [200,1] | S:RWED,O,G,W | [200,5] NONE | granted | denied |
+
+GRPPRV puts a process in the system category for files whose owner is in its
+own group (P1 vs P2), through the system field only (P3), and that survives a
+denying ACE as the system category does (P4).

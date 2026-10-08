@@ -1,0 +1,83 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08
+#   by the corpus lane (tools/oracle/semantic/capture.py Lab class, commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$SYSTEM
+
+
+$ MCR AUTHORIZE ADD CORPGRP/PASSWORD=CORPGRPPW1/UIC=[200,5]/DEVICE=SYS$SYSDEVICE:/DIRECTORY=[ACLT]/PRIVILEGES=(TMPMBX,NETMBX,GRPPRV)/DEFPRIVILEGES=(TMPMBX,NETMBX,GRPPRV)/FLAGS=NODISUSER
+%UAF-I-ADDMSG, user record successfully added
+%UAF-I-RDBADDMSGU, identifier CORPGRP value [000200,000005] added to rights database
+
+$ SET DEFAULT SYS$SYSDEVICE:[ACLT]
+
+
+$ COPY NL: P1.DAT
+
+
+$ COPY NL: P2.DAT
+
+
+$ COPY NL: P3.DAT
+
+
+$ COPY NL: P4.DAT
+
+
+$ SET SECURITY/OWNER=[200,1]/PROTECTION=(S:RWED,O,G,W) P1.DAT
+
+
+$ SET SECURITY/OWNER=[300,1]/PROTECTION=(S:RWED,O,G,W) P2.DAT
+
+
+$ SET SECURITY/OWNER=[200,1]/PROTECTION=(S,O:RWED,G,W) P3.DAT
+
+
+$ SET SECURITY/OWNER=[200,1]/PROTECTION=(S:RWED,O,G,W) P4.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[200,5],ACCESS=NONE) P4.DAT
+
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G:RE,W:RE) PROBE4.COM
+
+
+$ SUBMIT/USER=CORPGRP/NOPRINTER/LOG_FILE=SYS$SYSDEVICE:[ACLT]P4G.LOG PROBE4.COM
+Job PROBE4 (queue SYS$BATCH, entry 5) started on SYS$BATCH
+
+$ SUBMIT/USER=CORPTST/NOPRINTER/LOG_FILE=SYS$SYSDEVICE:[ACLT]P4T.LOG PROBE4.COM
+Job PROBE4 (queue SYS$BATCH, entry 6) started on SYS$BATCH
+
+$ TYPE SYS$SYSDEVICE:[ACLT]P4G.LOG
+$ Set NoOn
+$ VERIFY = F$VERIFY(F$TRNLNM("SYLOGIN_VERIFY"))
+%SET-W-NOTSET, error modifying VAX1$DUA0:
+-CLI-E-IVDEVTYPE, invalid device type - specify a mailbox device
+PRVPROBE CORPGRP      P1.DAT READ granted
+PRVPROBE CORPGRP      P2.DAT READ status=%X1001829A
+PRVPROBE CORPGRP      P3.DAT READ status=%X1001829A
+PRVPROBE CORPGRP      P4.DAT READ granted
+  CORPGRP      job terminated at  8-OCT-2026 09:07:12.88
+
+  Accounting information:
+  Buffered I/O count:              99         Peak working set size:     662
+  Direct I/O count:                16         Peak page file size:      5320
+  Page faults:                   5175         Mounted volumes:             0
+  Charged CPU time:           0 00:00:00.33   Elapsed time:     0 00:00:00.35
+
+$ TYPE SYS$SYSDEVICE:[ACLT]P4T.LOG
+$ Set NoOn
+$ VERIFY = F$VERIFY(F$TRNLNM("SYLOGIN_VERIFY"))
+%SET-W-NOTSET, error modifying VAX1$DUA0:
+-CLI-E-IVDEVTYPE, invalid device type - specify a mailbox device
+PRVPROBE CORPTST      P1.DAT READ status=%X1001829A
+PRVPROBE CORPTST      P2.DAT READ status=%X1001829A
+PRVPROBE CORPTST      P3.DAT READ status=%X1001829A
+PRVPROBE CORPTST      P4.DAT READ status=%X1001829A
+  CORPTST      job terminated at  8-OCT-2026 09:07:13.71
+
+  Accounting information:
+  Buffered I/O count:              97         Peak working set size:     662
+  Direct I/O count:                 7         Peak page file size:      5320
+  Page faults:                   5165         Mounted volumes:             0
+  Charged CPU time:           0 00:00:00.32   Elapsed time:     0 00:00:00.33

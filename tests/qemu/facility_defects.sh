@@ -1183,6 +1183,10 @@ EOF
         why)          echo "acp_check_access() asks acp_acl_match() for the first identifier ACE the process matches. The mutation sets ace_matched to 0, so the ACL is never consulted and only the protection code decides: [100,100] is refused ACLF1 although an ACE grants it read. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 F1: the ACE grants [100,100] read the protection code denies
+F2: the matching NONE ACE denies the read world allows
+F4: [100,100] READ, ahead of [100,*] NONE, grants
+F5: IDENTIFIER=* denies [100,100] the world read
+...and the ACE set by name grants [100,100] read
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1202,6 +1206,7 @@ EOF
         why)          echo "After a matching ACE that does not grant the wanted access, acp_check_access() lets only the system and owner fields grant ('if (!ace_matched) {' guards group and world). The mutation makes that guard always true, so world RE grants what the NONE ACE denied. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 F2: the matching NONE ACE denies the read world allows
+F5: IDENTIFIER=* denies [100,100] the world read
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1259,6 +1264,8 @@ EOF
         why)          echo "ace_parse_bits() sets one bit per access keyword. The mutation sets none, so (identifier=[1,4], access=r+w) parses to an ACE granting nothing. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 $PARSE_ACL (identifier=[1,4], access=r+w) is the oracle's bytes
+$FORMAT_ACL prints (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)
+DCL SET ACL then SHOW ACL prints the ACE as VMS does
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'

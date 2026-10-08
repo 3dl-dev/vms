@@ -134,10 +134,16 @@ static void tr_fault(int sig, siginfo_t *si, void *ctx)
 }
 static void tr_install(void)
 {
+    static char altstk[65536];
+    stack_t ss;
+    memset(&ss, 0, sizeof ss);
+    ss.ss_sp = altstk;
+    ss.ss_size = sizeof altstk;
+    TR("crtlfd: sigaltstack", sigaltstack(&ss, 0));
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = tr_fault;
-    sa.sa_flags = SA_SIGINFO;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigaction(SIGSEGV, &sa, 0);
     sigaction(SIGBUS, &sa, 0);
     sigaction(SIGILL, &sa, 0);
@@ -483,10 +489,13 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     int acc = (int)(flags & O_ACCMODE);
     int writing = acc != O_RDONLY;
 
+    TR("crtlfd: sp", (uintptr_t)&dir);
     struct rfile *rf = calloc(1, sizeof *rf);
+    TR("crtlfd: rf", (uintptr_t)rf);
     if (!rf)
         return -ENOMEM;
     rf->io = malloc(IOBUF);
+    TR("crtlfd: io", (uintptr_t)rf->io);
     if (!rf->io) {
         rfile_free(rf);
         return -ENOMEM;
@@ -543,6 +552,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
         rf->fab.fab$b_rfm = FAB$C_STMLF;
         rf->fab.fab$b_rat = FAB$M_CR;
         rf->fab.fab$b_fac = FAB$M_GET | FAB$M_PUT | FAB$M_BIO;
+        TR("crtlfd: $create ...", (uintptr_t)&rf->fab);
         st = sys$create(&rf->fab, 0, 0);
         TR("crtlfd: $create", st);
         if (!(st & 1)) {

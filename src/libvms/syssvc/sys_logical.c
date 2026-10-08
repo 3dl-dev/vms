@@ -378,7 +378,14 @@ uint32_t sys$trnlnm(const uint32_t *attr,
     if (!have)
         return SS$_NOLOGNAM;
 
-    /* Fill in item list results from the resolved value. */
+    /* Fill in item list results from the resolved value. A string longer
+     * than its buffer is truncated and the service returns SS$_BUFFEROVF; an
+     * existing equivalence at the requested index carries LNM$M_EXISTS, and an
+     * index past the end of the list reports no attributes at all -- both as
+     * the semantic oracle observed on real VAX V7.3 and Alpha V8.4
+     * (docs/oracle/semantics/lnm/, LNM.TRN.SHORTBUF / ZEROBUF; rd vms-3c4). */
+    int truncated = 0;
+    uint32_t result_attr = (req_index < nequiv) ? (found_attr | LNM$M_EXISTS) : 0;
     if (itmlst) {
         for (const struct item_list_3 *item = itmlst;
              item->buflen != 0 || item->item_code != 0; item++) {
@@ -386,7 +393,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
                 case LNM$_STRING:
                     if (item->bufaddr) {
                         uint16_t len = (uint16_t)strlen(equiv);
-                        if (len > item->buflen) len = item->buflen;
+                        if (len > item->buflen) { len = item->buflen; truncated = 1; }
                         memcpy(item->bufaddr, equiv, len);
                         if (item->retlen) *item->retlen = len;
                     }
@@ -401,7 +408,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
 
                 case LNM$_ATTRIBUTES:
                     if (item->bufaddr && item->buflen >= sizeof(uint32_t)) {
-                        *(uint32_t *)item->bufaddr = found_attr;
+                        *(uint32_t *)item->bufaddr = result_attr;
                     }
                     if (item->retlen) *item->retlen = sizeof(uint32_t);
                     break;
@@ -422,5 +429,5 @@ uint32_t sys$trnlnm(const uint32_t *attr,
         }
     }
 
-    return SS$_NORMAL;
+    return truncated ? SS$_BUFFEROVF : SS$_NORMAL;
 }

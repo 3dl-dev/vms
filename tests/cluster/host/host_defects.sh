@@ -1381,6 +1381,15 @@ EOF
         require_fail) cat <<'EOF'
 the request is held while the other member is owed this node's identity
 and the hold is counted
+...which goes out to it at once
+... and nothing was re-issued
+every beat inside the window is counted, and none of them asks the cluster anything
+five beats after the abort is not yet a decline
+five beats of silence is not yet a decline
+nor one second before it elapses
+the back-off is not re-armed by a start that ran
+the other member hears only who this node is, never a request
+the other member is never asked: ONE op-0x02 per attempt, and it was answered -- it heard only who this node is
 EOF
                       ;;
         esac;;

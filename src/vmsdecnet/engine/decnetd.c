@@ -3564,6 +3564,13 @@ static int run_fal_proc_accept_test(void)
                (unsigned)st, (unsigned)sc, (unsigned long long)sv);
         FP_CHECK(st != SS$_NORMAL && sc == 0x4055 && sv == 0x24,
                  "GUEST's remote DELETE of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x4055 (RMS-E-PRV) STV 0x24 (SS$_NOPRIV)");
+        {
+            uint32_t rs = 0; void *rh = NULL;
+            int ro = dnet_fal_ropen_st(DEL, &rh, NULL, NULL, &rs);
+            if (ro == 0) (void)dnet_fal_rclose(rh);
+            printf("  NOTE: after GUEST DELETE, $OPEN %s -> %s (RMS %08X)\n", DEL,
+                   ro == 0 ? "opens" : "refused", (unsigned)rs);
+        }
         FP_CHECK(fal_file_matches(DEL, dl, 1), "the file GUEST tried to delete is still there, intact");
 
         st = falp_session_op("GUEST", "GUEST", FALP_RENAME, REN, STOLEN, &auth, &uic, &xst, &sc, &sv);
@@ -3597,6 +3604,9 @@ static int run_fal_proc_accept_test(void)
         uint32_t ost = 0;
         int del_gone = (dnet_fal_ropen_st(DEL, &rf, NULL, NULL, &ost) != 0);
         if (!del_gone) (void)dnet_fal_rclose(rf);
+        printf("  NOTE: SYSTEM DELETE -> client %08X, STATUS %04X STV %llX, server exit %08X;"
+               " then $OPEN RMS %08X\n", (unsigned)st, (unsigned)sc, (unsigned long long)sv,
+               (unsigned)xst, (unsigned)ost);
         FP_CHECK(st == SS$_NORMAL && del_gone && ost == RMS$_FNF,
                  "SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)");
         (void)dnet_fal_erase(RENAMED, &s1, &s2);

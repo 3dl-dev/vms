@@ -1116,21 +1116,62 @@ EOF
         esac;;
 
     acp-dir-exsz-ignored)
+        case "$_f" in
         facility)     echo "IO\$_CREATE of a directory honours the requested initial allocation (FIB\$L_EXSZ)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
         suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
         why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
 the new directory holds the requested 3 blocks
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     acp-fat-versions-not-applied)
+        case "$_f" in
         facility)     echo "IO\$_CREATE of a directory records the requested default version limit (FAT\$W_VERSIONS)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
         suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
         why)          echo "The ACP stamps attr.recattr[30..31] into the new header's FAT version-limit field when VMS_ACP_ATTR_VERSIONS is set. The mutation makes that branch unreachable ('0 &&'), so the directory keeps the default limit. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
 the directory's version limit is 7
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     libcreatedir-protection-ignored)
+        case "$_f" in
         facility)     echo "LIB\$CREATE_DIR passes the requested protection to the ACP";;
         targets)      echo "libvms/rtl/lib_dir.c";;
         suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
         why)          echo "lib\$create_dir() sends the leaf directory's protection word to the ACP when the caller supplied prot_enable/prot_value. The mutation makes that branch unreachable ('0 &&'), so the directory is created with the ACP default protection. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
 the directory carries the requested protection bits
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     crtl-fwrite-bypasses-rms)
         case "$_f" in
         facility)     echo "C RTL stdio->RMS veneer \$PUT (ovmx_crtl_fwrite over sys\$put, vms-47e)";;

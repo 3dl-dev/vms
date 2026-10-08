@@ -104,7 +104,7 @@ COPY src/kernel-core/vms_eflag.c src/kernel-core/exec_kbackend.h src/kernel-core
 # P4-A: the remaining five shared facility sources (rd vms-f8a) -- SAME sources
 # the Linux vms.ko and the per-PR crosscompile.sh gate build; no NetBSD copy of
 # any facility's logic exists.
-COPY src/kernel-core/vms_ast.c src/kernel-core/vms_access.c src/kernel-core/vms_mbx.c src/kernel-core/vms_proctab.c src/kernel-core/vms_lock.c /netbsd/guest-src/kernel-core/
+COPY src/kernel-core/vms_ast.c src/kernel-core/vms_access.c src/kernel-core/vms_mbx.c src/kernel-core/vms_prot.h src/kernel-core/vms_proctab.c src/kernel-core/vms_lock.c /netbsd/guest-src/kernel-core/
 # Logical-name facility source (rd vms-72da) -- the SAME shared source the Linux
 # vms.ko and the per-PR crosscompile.sh gate build; listed in the Makefile SRCS.
 COPY src/kernel-core/vms_lnm.c /netbsd/guest-src/kernel-core/vms_lnm.c

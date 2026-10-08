@@ -393,6 +393,13 @@ int dnet_engine_link_accept(struct dnet_engine *e, uint16_t local_lla,
                             uint8_t *frame_out, size_t cap, size_t *len_out,
                             dnet_tick_t now);
 
+/* As dnet_engine_link_accept, carrying Session Control accept data in the
+ * Connect Confirm (rd vms-47fd: MAIL-11 confirms with user data). */
+int dnet_engine_link_accept_data(struct dnet_engine *e, uint16_t local_lla,
+                                 const uint8_t *data, size_t dlen,
+                                 uint8_t *frame_out, size_t cap, size_t *len_out,
+                                 dnet_tick_t now);
+
 /* Send a data segment on the running link: builds the data frame. */
 int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len,
                           uint8_t *frame_out, size_t cap, size_t *len_out,

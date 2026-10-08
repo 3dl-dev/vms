@@ -44,6 +44,11 @@ add_subdirectory(dap)
 # (real SYSUAF/Purdy) and moves the file through RMS over the ODS-2 ACP.
 add_subdirectory(fal)
 
+# MAIL layer (rd vms-47fd): inbound DECnet MAIL-11 (object 27) -- the pure
+# receiver FSM, NETACP's MAIL server-process start, and MAIL_SERVER.EXE, which
+# delivers into the same RMS mail file OVMX MAIL reads.
+add_subdirectory(mail)
+
 # Engine rung 1 (rd vms-449d): the userspace routing ENGINE that MOVES FRAMES
 # using the engine-agnostic codecs above -- AF_PACKET SOCK_RAW over the shared
 # src/libdatalink raw-L2 datalink (operator ruling vms-a1c, Option B), with the

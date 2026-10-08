@@ -1,0 +1,33 @@
+Real OpenVMS VAX V7.3, dnlab-1, 2026-10-08. VAX1 (1.1) sends DECnet MAIL-11
+(object 27) to VAX2 (1.2). VAX2's MAIL object has no user; its executor
+NONPRIVILEGED USER was set to an unprivileged lab account so MAIL_SERVER
+could start (before that, VAX1 got -SYSTEM-F-INVLOGIN: sessions 1-2).
+
+VAX1:
+$ MAIL
+MAIL> SEND
+To:     VAX2::SYSTEM
+Subj:   DECnet MAIL-11 oracle
+Enter your message below. Press CTRL/Z when complete, or CTRL/C to quit:
+Line one of a MAIL-11 message from VAX1.
+Line two.
+^Z
+MAIL> SEND
+To:     VAX2::NOSUCHUSER
+%MAIL-E-NOSUCHUSR, no such user NOSUCHUSER at node VAX2
+
+VAX2 (recipient), afterwards:
+MAIL> DIRECTORY
+                                                                     NEWMAIL
+    # From                 Date         Subject
+
+    1 VAX1::SYSTEM          8-OCT-2026  DECnet MAIL-11 oracle
+MAIL> READ
+    #1           8-OCT-2026 06:37:49.01                                  NEWMAIL
+From:   VAX1::SYSTEM
+To:     VAX2::SYSTEM
+CC:
+Subj:   DECnet MAIL-11 oracle
+
+Line one of a MAIL-11 message from VAX1.
+Line two.

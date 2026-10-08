@@ -304,6 +304,10 @@
  * observed a 41-byte write to a 40-byte-maxmsg mailbox return it on real VAX
  * V7.3 and Alpha V8.4 (docs/oracle/semantics/io/, IO.MBX.WRITE.TOOBIG). */
 #define SS__MBTOOSML    412
+/* SS__MBFULL -- SS$_MBFULL (2264): a mailbox write that asked not to wait
+ * (IO$M_NORSWAIT) found no room for its message (rd vms-c6d1). Value from the
+ * V7.3 and V8.4 STARLET dumps (docs/oracle/{vax73,alpha84}-starlet-defs/SSDEF.txt). */
+#define SS__MBFULL      2264
 
 /*
  * SS__ENDOFFILE -- this tree's existing src/libvms/include/ssdef.h value
@@ -1022,6 +1026,8 @@ struct vms_device {
     uint32_t            devbufsiz;      /* DVI$_DEVBUFSIZ */
     uint32_t            width;
     uint32_t            page;
+    uint32_t            perm_width;     /* PERMANENT width / page (rd vms-d900) */
+    uint32_t            perm_page;
 
     /*
      * Disk backing (devclass == DC$_DISK, vms-3e8). The Linux block device

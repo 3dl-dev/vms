@@ -88,6 +88,10 @@ struct vms_mbx_create_args {
     uint32_t unit;          /* out: MBAn: unit number */
     uint32_t status;        /* out: SS$_ status */
     char     devnam[VMS_DEVNAM_SIZE]; /* out: "MBAn:" */
+    uint32_t promsk;        /* in: $CREMBX promsk, the SOGW protection mask (a SET
+                             * bit DENIES; 0 = every category, every access). The
+                             * mailbox's owner is the creator's UIC (rd vms-c6d1). */
+    uint32_t pad;
 };
 
 /* $ASSIGN to an EXISTING mailbox by device name ("MBAn:"), the rendezvous
@@ -120,6 +124,10 @@ struct vms_mbx_write_args {
 /* IO$_WRITEOF: queue an END-OF-FILE message (len 0); the read that dequeues it
  * completes with SS$_ENDOFFILE (rd vms-262a). */
 #define VMS_MBX_WRITE_EOF  0x00000001u
+/* IO$M_NORSWAIT: a write to a mailbox without room for it completes at once with
+ * SS$_MBFULL instead of waiting for a reader to make room (VSI OpenVMS I/O User's
+ * Reference, Mailbox Driver; rd vms-c6d1). */
+#define VMS_MBX_WRITE_NORSWAIT 0x00000002u
 
 /* Read modifiers carried in vms_mbx_read_args.flags (in).
  *
@@ -208,7 +216,7 @@ _Static_assert(IOCPARM_LEN(VMS_IOCTL_MBX_WRITE) == 0 && IOCPARM_LEN(VMS_IOCTL_MB
  * matters: both sides of /dev/vms compile these structs separately and
  * pass them across the boundary by raw address.
  */
-_Static_assert(sizeof(struct vms_mbx_create_args) == 40,
+_Static_assert(sizeof(struct vms_mbx_create_args) == 48,
                "vms_mbx_create_args changed size -- VMS_IOCTL_MBX_CREATE ABI break");
 _Static_assert(sizeof(struct vms_mbx_assign_args) == 24,
                "vms_mbx_assign_args changed size -- VMS_IOCTL_MBX_ASSIGN ABI break");

@@ -962,6 +962,11 @@ static void stage_boot_images(void)
          * the authenticated user's UIC for each inbound file access, and
          * $CREPRC execve()s -- the same SYSEXE-utility class as above. */
         "FAL.EXE",
+        /* The DECnet MAIL-11 network server (rd vms-47fd): NETACP $CREPRCs it
+         * under the MAIL object account for each inbound NODE::USER mail --
+         * the same server-image class as FAL.EXE. Without it on the exec
+         * stage, a booted node refuses every inbound mail (NOIMAGE). */
+        "MAIL_SERVER.EXE",
         /* OVMX-native toolchain (vms-104). The MMK self-host path defines
          * TCC :== $SYS$SYSTEM:TCC.EXE and LNK :== $SYS$SYSTEM:LINK.EXE (the
          * descrip.mms toolchain verbs) and fork()+execve()s each (a plain

@@ -96,7 +96,14 @@
                             VMS_TTC_INSERT_EDITING | \
                             VMS_TTC_NUMERIC_KEYPAD | \
                             VMS_TTC_VMS_STYLE_INPUT)
+/* The console's width is the oracle's per architecture: 132 on VAX (the
+ * V7.3 console is an LA36), 80 on 64-bit (the Alpha V8.4 console's
+ * permanent width, semantic oracle TT.SENSECHAR; rd vms-d900). */
+#if defined(__vax__) || defined(__vax)
 #define OPA0_SHAPE_WIDTH   132
+#else
+#define OPA0_SHAPE_WIDTH   80
+#endif
 #define OPA0_SHAPE_PAGE    24
 
 static int pass = 0, fail = 0;
@@ -371,7 +378,7 @@ int main(int argc, char **argv)
     CHECK(info.devchar == OPA0_SHAPE_DEVCHAR,
           "RTA0: carries the exact OPA0:-shape VMS_TTC_* characteristic set");
     CHECK(info.width == OPA0_SHAPE_WIDTH && info.page == OPA0_SHAPE_PAGE,
-          "RTA0: carries OPA0:'s width/page (132x24)");
+          "RTA0: carries OPA0:'s width/page");
     CHECK(info.owner_pid == 0, "RTA0: starts unowned -- ownership is not stamped at creation");
 
     /* --------------------------------------------------------------

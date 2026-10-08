@@ -584,6 +584,21 @@ int dnet_engine_link_accept(struct dnet_engine *e, uint16_t local_lla,
     return engine_wrap_pdu(e, &cc, frame_out, cap, len_out);
 }
 
+int dnet_engine_link_accept_data(struct dnet_engine *e, uint16_t local_lla,
+                                 const uint8_t *data, size_t dlen,
+                                 uint8_t *frame_out, size_t cap, size_t *len_out,
+                                 dnet_tick_t now)
+{
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    if (e->link.local_addr == 0)
+        e->link.local_addr = local_lla;
+    struct dnet_nsp_msg cc;
+    if (dnet_link_accept_data(&e->link, data, dlen, &cc, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    return engine_wrap_pdu(e, &cc, frame_out, cap, len_out);
+}
+
 int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len,
                           uint8_t *frame_out, size_t cap, size_t *len_out,
                           dnet_tick_t now)

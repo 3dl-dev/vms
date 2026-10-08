@@ -40,6 +40,7 @@
 #include "exec_kbackend.h"
 #include "exec_list.h"
 #include "vms_acp_serve.h"   /* FC-P6.3: the MSCP server's read-only view */
+#include "vms_prot.h"        /* vms_prot_check: the executive's one protection decision */
 
 /* The served-volume projection restates the unit-name width so it can compile
  * in the host rung too (vms_acp_serve.h's own note). THIS file sees both, so
@@ -1047,28 +1048,6 @@ out:
 #if defined(OVMX_ODS2_KERNEL)
 
 /*
- * Privilege overrides on a protection check (public $PRVDEF bit numbers, Rule 8
- * clean-room -- src/libvms/include/prvdef.h carries the same values): BYPASS
- * (29) lifts all object access control; READALL (35) grants read to any object;
- * SYSPRV (28) makes the accessor qualify for the SYSTEM protection category.
- */
-#define ACP_PRV_M_SYSPRV   (1ULL << 28)
-#define ACP_PRV_M_GRPPRV   (1ULL << 34)   /* VMS_PRV_V_GRPPRV */
-#define ACP_PRV_M_BYPASS   (1ULL << 29)
-#define ACP_PRV_M_READALL  (1ULL << 35)
-
-/*
- * The SYSTEM protection category covers a UIC whose GROUP number is <=
- * MAXSYSGROUP -- a SYSGEN parameter whose documented default is 8 (public
- * OpenVMS System Management / SYSGEN documentation); OVMX uses that default.
- * OVMX maps a Linux uid/gid to UIC [gid,uid] (vms_module.c), so root is group 0,
- * which the standard `group <= MAXSYSGROUP` test includes -- root reads system
- * files through the SYSTEM protection field, exactly as a VMS [1,x] system
- * process does. SYSPRV also confers the SYSTEM category.
- */
-#define ACP_MAXSYSGROUP    8u
-
-/*
  * ACCESS CONTROL LISTS (vms-d404). Grounded on OpenVMS VAX V7.3, see
  * docs/oracle/vax73-acl.md: an ACE is ACE$B_SIZE, ACE$B_TYPE, ACE$W_FLAGS,
  * ACE$L_ACCESS, then (identifier ACE, ACE$C_KEYID) one longword per identifier.
@@ -1148,28 +1127,24 @@ static int acp_acl_match(const struct vms_proc *proc, const ods2_fh2_t *fh,
 
 /*
  * acp_check_access - the Files-11 protection gate (INV-6). Grant the requested
- * access (read always; write additionally when `want_write`) iff SOME category
- * the accessor belongs to allows it, or a privilege overrides. Within each
- * 4-bit protection field a SET bit DENIES (bit0=Read, bit1=Write); the four
- * fields are System, Owner, Group, World (low to high nibble). Returns
- * SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
+ * access (read always; write additionally when `want_write`) through the
+ * executive's ONE protection decision, vms_prot_check() (src/kernel-core/
+ * vms_prot.h): the accessor's UIC and enabled privileges against the file
+ * header's owner UIC (FH2$L_FILEOWNER) and SOGW protection (FH2$W_FILEPROT).
+ * BYPASS, READALL and SYSPRV are applied there, for every object class alike.
+ * Returns SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
  */
 static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
                                  int want_write)
 {
-    uint16_t prot = fh->fh2_fileprot;
-    uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu;
-    uint32_t acc_member = proc->uic & 0xFFFFu;
-    uint32_t own_group = fh->fh2_fileowner.uic_group;
-    uint32_t own_member = fh->fh2_fileowner.uic_member;
-    uint64_t privs = proc->cur_privs;
-    unsigned want = 0x1u;               /* read */
-    unsigned denied;
-    int is_system, is_owner, is_group, ace_matched;
+    uint32_t owner_uic = ((uint32_t)fh->fh2_fileowner.uic_group << 16) |
+                         (uint32_t)fh->fh2_fileowner.uic_member;
+    unsigned want = VMS_PROT_ACC_READ;
+    int ace_matched;
     uint32_t ace_access = 0;
 
     if (want_write)
-        want |= 0x2u;                   /* write */
+        want |= VMS_PROT_ACC_WRITE;
 
     /*
      * DIRECTORY TRAVERSAL vs READ (vms-548b). The ACP opens a directory only to
@@ -1184,48 +1159,18 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
      * needs write and is unaffected.
      */
     if (!want_write && (fh->fh2_filechar & ODS2_FH2_M_DIRECTORY))
-        want = 0x4u;                    /* execute (traversal) */
-
-    /* BYPASS lifts every access control. READALL grants the read bit. */
-    if (privs & ACP_PRV_M_BYPASS)
-        return SS__NORMAL;
-    if ((privs & ACP_PRV_M_READALL) && !want_write)
-        return SS__NORMAL;
-
-    is_owner  = (acc_group == own_group && acc_member == own_member);
-    is_group  = (acc_group == own_group);
-    /* GRPPRV: the system category for an object of the accessor's own group
-     * (OpenVMS VAX V7.3, docs/oracle/vax73-acl.md "GRPPRV": [200,5] with GRPPRV
-     * reads a S:RWED file owned by [200,1], not one owned by [300,1], nor a
-     * group-owned file whose system field is empty; a denying ACE leaves it
-     * the system field, as for any system-category accessor). */
-    is_system = (acc_group <= ACP_MAXSYSGROUP) ||
-                (privs & ACP_PRV_M_SYSPRV) != 0 ||
-                ((privs & ACP_PRV_M_GRPPRV) != 0 && acc_group == own_group);
+        want = VMS_PROT_ACC_EXECUTE;    /* execute (traversal) */
 
     /*
-     * The ACL first (vms-d404, docs/oracle/vax73-acl.md). The first identifier
-     * ACE the process matches decides: if it grants every wanted bit, access is
-     * granted. If it does not, its denial is final for the group and world
-     * categories -- only the system and owner fields of the protection code
-     * can still grant. With no matching ACE the protection code alone decides.
+     * The ACL first (vms-d404, docs/oracle/vax73-acl.md): the first identifier
+     * ACE the process matches. vms_prot_check_acl() then decides with it -- the
+     * privilege overrides, a granting ACE, and otherwise the protection code with
+     * group/world closed by a matching ACE that denied.
      */
     ace_matched = acp_acl_match(proc, fh, &ace_access);
-    if (ace_matched && (ace_access & want) == want)
-        return SS__NORMAL;
 
-    /* Access is granted if ANY applicable category leaves the wanted bits
-     * un-denied. Start denied; clear a want bit as soon as a category allows
-     * it. World applies unless a matching ACE denied. */
-    denied = want;
-    if (is_system) denied &= ~(~(unsigned)(prot & 0xFu) & want);
-    if (is_owner)  denied &= ~(~(unsigned)((prot >> 4) & 0xFu) & want);
-    if (!ace_matched) {
-        if (is_group)  denied &= ~(~(unsigned)((prot >> 8) & 0xFu) & want);
-        /* World: */    denied &= ~(~(unsigned)((prot >> 12) & 0xFu) & want);
-    }
-
-    return denied ? SS__NOPRIV : SS__NORMAL;
+    return vms_prot_check_acl(proc->uic, proc->cur_privs, owner_uic,
+                              fh->fh2_fileprot, want, ace_matched, ace_access);
 }
 
 /*
@@ -3421,9 +3366,9 @@ static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
     uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu, acc_member = proc->uic & 0xFFFFu;
     uint32_t access = 0;
 
-    if (proc->cur_privs & (ACP_PRV_M_BYPASS | ACP_PRV_M_SYSPRV))
+    if (proc->cur_privs & (VMS_PRV_M_BYPASS | VMS_PRV_M_SYSPRV))
         return 1;
-    if (acc_group <= ACP_MAXSYSGROUP)
+    if (acc_group <= VMS_PROT_MAXSYSGROUP)
         return 1;
     if (acc_group == fh->fh2_fileowner.uic_group && acc_member == fh->fh2_fileowner.uic_member)
         return 1;
@@ -3682,6 +3627,26 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             uint16_t dprot = 0;
             size_t acl_len = 0;
 
+            /* Naming ANOTHER owner for the new file takes privilege, as on
+             * VMS (rd vms-47fd): a SYSTEM user (SYSPRV, or a UIC group <=
+             * MAXSYSGROUP -- the same test acp_check_access applies) or
+             * BYPASS, or GRPPRV for an owner in the creator's own group. The
+             * creator's own UIC is always fine. Refused before anything is
+             * allocated. */
+            if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                uint32_t want = ((uint32_t)args.attr.uic_group << 16) |
+                                args.attr.uic_member;
+                uint32_t my_grp = (proc->uic >> 16) & 0xFFFFu;
+                int sys_user = my_grp <= ACP_MAXSYSGROUP ||
+                               (proc->cur_privs & (ACP_PRV_M_SYSPRV | ACP_PRV_M_BYPASS));
+                int grp_ok = args.attr.uic_group == my_grp &&
+                             (proc->cur_privs & VMS_PRV_M_GRPPRV);
+                if (want != proc->uic && !sys_user && !grp_ok) {
+                    args.status = SS__NOPRIV;
+                    goto free_sc;
+                }
+            }
+
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
             did.fid_num = args.did_num;
@@ -3781,6 +3746,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             owner.uic_group  = (uint16_t)((proc->uic >> 16) & 0xFFFFu);
             owner.uic_member = (uint16_t)(proc->uic & 0xFFFFu);
             if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                /* (privilege to name this owner checked at the top of CREATE) */
                 owner.uic_group  = args.attr.uic_group;
                 owner.uic_member = args.attr.uic_member;
             }

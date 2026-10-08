@@ -132,6 +132,8 @@ struct vms_mbx_create_args {
 	uint32_t unit;          /* out: MBAn: unit number */
 	uint32_t status;        /* out: SS$_ status */
 	char     devnam[VMS_DEVNAM_SIZE]; /* out: "MBAn:" */
+	uint32_t promsk;        /* in: $CREMBX SOGW protection mask (rd vms-c6d1) */
+	uint32_t pad;
 };
 
 struct vms_mbx_assign_args {
@@ -156,6 +158,8 @@ struct vms_mbx_write_args {
 /* IO$_WRITEOF: queue an END-OF-FILE message (len 0); the read that dequeues it
  * completes with SS$_ENDOFFILE (rd vms-262a). */
 #define VMS_MBX_WRITE_EOF  0x00000001u
+/* IO$M_NORSWAIT: no room -> SS$_MBFULL at once, never a resource wait (rd vms-c6d1). */
+#define VMS_MBX_WRITE_NORSWAIT 0x00000002u
 
 struct vms_mbx_read_args {
 	uint32_t chan;      /* in */
@@ -201,7 +205,7 @@ struct vms_mbx_wrtattn_args {
  * both sides of /dev/vms compile these structs separately and pass them by raw
  * address, so a size drift is an ABI break. These MUST match vms_mbx.h exactly.
  */
-_Static_assert(sizeof(struct vms_mbx_create_args) == 40,
+_Static_assert(sizeof(struct vms_mbx_create_args) == 48,
                "vms_mbx_create_args changed size -- VMS_IOCTL_MBX_CREATE ABI break");
 _Static_assert(sizeof(struct vms_mbx_assign_args) == 24,
                "vms_mbx_assign_args changed size -- VMS_IOCTL_MBX_ASSIGN ABI break");

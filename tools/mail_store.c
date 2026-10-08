@@ -63,12 +63,14 @@ static uint32_t ms_open(struct mstore *m, const char *user)
          * so the recipient's own MAIL can later mark and delete. XABPRO's
          * owner UIC carries it; the ACP checks the creator may (SYSPRV). */
         sysuaf_record_t urec;
-        if (sysuaf_lookup(user, &urec) == 0) {
-            m->pro = cc$rms_xabpro;
-            m->pro.xab$l_uic = ((uint32_t)urec.uic_group << 16) |
-                               (urec.uic_member & 0xFFFFu);
-            m->fab.fab$l_xab = (struct XABKEY *)&m->pro;  /* the FAB types its XAB chain head as XABKEY */
+        if (sysuaf_lookup(user, &urec) != 0) {
+            memset(&urec, 0, sizeof urec);
+            return RMS$_FNF;           /* no owner to give it: never a mis-owned file */
         }
+        m->pro = cc$rms_xabpro;
+        m->pro.xab$l_uic = ((uint32_t)urec.uic_group << 16) |
+                           (urec.uic_member & 0xFFFFu);
+        m->fab.fab$l_xab = (struct XABKEY *)&m->pro;  /* the FAB types its XAB chain head as XABKEY */
         memset(&urec, 0, sizeof urec);     /* the record carries the hash */
         st = sys$create(&m->fab, 0, 0);
         m->fab.fab$l_xab = NULL;

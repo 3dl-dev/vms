@@ -188,6 +188,14 @@ int main(void)
     st = access_hello(chan, 0, &a);
     check($VMS_STATUS_SUCCESS(st) && a.attr.efblk == HELLO_EFBLK,
           "IO$_ACCESS HELLO.TXT for read (efblk 34)");
+    /* vms-263e: a mastered file carries its creation and revision dates and
+     * revision count 1, as a created-and-written file on a real VMS volume. */
+    uint64_t cre0, revd0;
+    uint16_t rev0 = a.attr.revision;
+    memcpy(&cre0, a.attr.credate, 8);
+    memcpy(&revd0, a.attr.revdate, 8);
+    check($VMS_STATUS_SUCCESS(st) && cre0 != 0 && revd0 == cre0 && rev0 == 1,
+          "HELLO.TXT's header has a creation date, revision date == creation date, revision count 1");
     rw_init(&r, chan, 1, 0, HELLO_VALID, rdbuf);
     st = vms_kif_acp_readvb(&r);
     check($VMS_STATUS_SUCCESS(st) && r.xferred == HELLO_VALID,
@@ -221,6 +229,12 @@ int main(void)
     /* --- (2) WRITEVBLK in place, byte-exact round-trip -------------------- */
     st = access_hello(chan, 1, &a);
     check($VMS_STATUS_SUCCESS(st), "IO$_ACCESS HELLO.TXT for WRITE");
+    {
+        uint64_t rd;
+        memcpy(&rd, a.attr.revdate, 8);
+        check($VMS_STATUS_SUCCESS(st) && a.attr.revision == rev0 && rd == revd0,
+              "two READ-ONLY accesses left the revision count and date alone");
+    }
     rw_init(&r, chan, 1, 0, 512, pat1);
     st = vms_kif_acp_writevb(&r);
     check($VMS_STATUS_SUCCESS(st) && r.xferred == 512 && r.extended == 0,
@@ -238,6 +252,14 @@ int main(void)
     st = vms_kif_acp_readvb(&r);
     check($VMS_STATUS_SUCCESS(st) && memcmp(rdbuf, pat1, 512) == 0,
           "after DEACCESS + re-ACCESS, VBN 1 STILL reads the pattern -- it hit the platter (INV-6)");
+    {
+        uint64_t c1, r1;
+        memcpy(&c1, a.attr.credate, 8);
+        memcpy(&r1, a.attr.revdate, 8);
+        /* negctl: acp-deaccess-revision-not-recorded */
+        check(a.attr.revision == rev0 + 1 && c1 == cre0 && r1 != 0 && r1 != revd0,
+              "DEACCESS after write access: revision count +1, new revision date, creation date kept");
+    }
     (void)vms_kif_acp_deaccess(chan);
 
     /* --- (3) WRITEVBLK past EOF implicitly extends ------------------------ */

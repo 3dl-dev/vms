@@ -2025,17 +2025,23 @@ out:
 
 /*
  * IO$_DEACCESS: release the file accessed on the channel -- tear down its
- * window, mark it not-accessed. Attribute write-back is a no-op for a read-mode
- * open (which modifies nothing); the write path is a later rung, stated rather
- * than silently omitted (CLAUDE.md Rule 10). SS$_FILNOTACC if no file is
+ * window, mark it not-accessed. A file accessed for write gets its revision
+ * count and revision date updated in its header (vms-263e); a read-mode access
+ * modifies nothing. SS$_FILNOTACC if no file is
  * accessed on the channel; SS$_IVCHAN if the channel is invalid. Needs no
  * codec, so it is unconditional.
  */
+#if defined(OVMX_ODS2_KERNEL)
+static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr);
+#endif
+
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_acp_deaccess_args args;
     struct vms_acp_chan *ch;
     uint32_t status;
+    int was_write = 0;
+    uint32_t fid_num = 0, hdr_lbn = 0, bmaj = 0, bmin = 0;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -2048,12 +2054,46 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
     } else if (!ch->file_accessed) {
         status = SS__FILNOTACC;
     } else {
+        if (ch->acc_write) {
+            was_write = 1;
+            fid_num = (uint32_t)ch->acc_fid_num | ((uint32_t)ch->acc_fid_nmx << 16);
+            hdr_lbn = acp_hdr_lbn(ch->vol, fid_num);
+            bmaj = ch->vol->backing_major;
+            bmin = ch->vol->backing_minor;
+        }
         ch->file_accessed = 0;
         ch->acc_write = 0;
         ch->win_n = 0;
         status = SS__NORMAL;
     }
     exec_unlock(&proc->chan_lock);
+
+#if defined(OVMX_ODS2_KERNEL)
+    /* A file accessed for write was modified: its header's revision count goes
+     * up by one and its revision date becomes now (vms-263e; the real VAX
+     * volume's created-and-written files show revision 1 and a revision date
+     * at the close). The block I/O runs without the channel lock. */
+    if (was_write && hdr_lbn != 0) {
+        uint8_t *hdr = exec_zalloc(ACP_BLOCK_SIZE);
+
+        if (!hdr) {
+            status = SS__INSFMEM;
+        } else {
+            if (acp_bdev_read(bmaj, bmin, hdr_lbn, hdr, ACP_BLOCK_SIZE) != 0 ||
+                acp_fh2_self_fidnum(hdr) != fid_num ||
+                ods2_fh2_touch_revision(hdr, exec_time_now_vms()) != ODS2_OK) {
+                status = SS__DEVNOTMOUNT;   /* torn/wrong header: refuse, never reseal garbage */
+            } else {
+                ods2_fh2_reseal(hdr);
+                if (acp_bdev_write(bmaj, bmin, hdr_lbn, hdr, ACP_BLOCK_SIZE) != 0)
+                    status = SS__DEVNOTMOUNT;
+            }
+            exec_free(hdr);
+        }
+    }
+#else
+    (void)was_write; (void)fid_num; (void)hdr_lbn; (void)bmaj; (void)bmin;
+#endif
 
     args.status = status;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -3774,6 +3814,15 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__BADPARAM;
                 goto free_sc;
+            }
+            /* Creation and revision dates: the system time now (vms-263e). A real
+             * VMS file header always carries both (tests/ods2/real_vax_ods2.dsk);
+             * the revision count starts at 0 and the first deaccess after write
+             * access makes it 1 (ods2_fh2_touch_revision). */
+            {
+                uint64_t now = exec_time_now_vms();
+                (void)ods2_fh2_set_dates(sc->filehdr, now, now);
+                ods2_fh2_reseal(sc->filehdr);
             }
             /* NEGCTL-ANCHORED (acp-acl-default-not-propagated): the inherited ACEs
              * go into the new header's access control area. */

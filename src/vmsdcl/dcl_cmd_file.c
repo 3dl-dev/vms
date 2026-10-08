@@ -59,6 +59,7 @@ struct dir_entry {
     uint8_t  credate[8];    /* VMS 64-bit creation time (0 => not recorded) */
     uint8_t  revdate[8];    /* VMS 64-bit revision time */
     int      has_cre, has_rev;
+    uint16_t revision;      /* the header's revision count (vms-263e) */
     /* vms-b447: the header's record attributes (FAT). */
     uint8_t  rfm, rat;       /* FAB$C_* record format, FAB$M_* attributes */
     uint16_t mrs, lrl;       /* FAT$W_MAXREC (maximum), FAT$W_RSIZE (longest) */
@@ -545,6 +546,7 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
             memcpy(e->revdate, at.revdate, 8);
             e->has_cre = (memcmp(at.credate, "\0\0\0\0\0\0\0\0", 8) != 0);
             e->has_rev = (memcmp(at.revdate, "\0\0\0\0\0\0\0\0", 8) != 0);
+            e->revision = at.revision;
             e->rfm = at.rfm; e->rat = at.rat;
             e->mrs = at.mrs; e->lrl = at.lrl;
         } else {
@@ -761,9 +763,12 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                     printf("Created:  %s\n", datebuf);
                 else
                     printf("Created:  <not recorded>\n");
+                /* VMS follows the revision date with the revision count:
+                 * "Revised:    8-OCT-2026 07:28:08.49 (2)" (tests/lab/captures/
+                 * decnet-live-brackets-20261008/vax73-dirfull-recfmt.txt). */
                 if (e->has_rev && dir_format_vmsbintime(e->revdate, datebuf,
                                                         sizeof(datebuf)))
-                    printf("Revised:  %s\n", datebuf);
+                    printf("Revised:  %s (%u)\n", datebuf, (unsigned)e->revision);
                 else
                     printf("Revised:  <not recorded>\n");
             } else {

@@ -1308,7 +1308,7 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS Record Management Services Reference Manual",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
         "count": 37,
         "by_status": {
@@ -6529,7 +6529,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/include/rms/xab.h",
       "verified_against": null,
-      "notes": "vms-5dd2: on the ACP path $DISPLAY fills it from the FH2 ident-area dates IO$_ACCESS returns (previously left untouched there). The ACP does not stamp dates at create yet, so OVMX-created files read zero dates (vms-ab49)",
+      "notes": "vms-5dd2: on the ACP path $DISPLAY fills it from the FH2 ident-area dates IO$_ACCESS returns (previously left untouched there). The ACP stamps creation = revision date at create and, when a file accessed for write is deaccessed, bumps the revision count and date; the boot-image master stamps its mastering time (vms-263e). Expiration/backup dates stay zero, as on a VMS volume without retention.",
       "plan_ref": "vms-801"
     },
     {

@@ -77,6 +77,16 @@ static inline void *ods2_kalloc(size_t n)        { return kern_malloc((unsigned 
 static inline void *ods2_kzalloc(size_t n)       { return kern_malloc((unsigned long)n, M_WAITOK | M_ZERO); }
 static inline void  ods2_kfree(void *p)          { kern_free(p); }
 
+/* The wall clock in ns since the Unix epoch, for the file dates the writer
+ * stamps (vms-263e). */
+#include <sys/time.h>
+static inline uint64_t ods2_wall_ns(void)
+{
+    struct timespec ts;
+    nanotime(&ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 #else  /* !OVMX_KBACKEND_NETBSD -- Linux (default kernel realization) */
 
 /* ---- kernel-resident vocabulary: Linux ---- */
@@ -97,6 +107,16 @@ static inline void *ods2_kalloc(size_t n)        { return kvmalloc(n, GFP_KERNEL
 static inline void *ods2_kzalloc(size_t n)       { return kvzalloc(n, GFP_KERNEL); }
 static inline void  ods2_kfree(void *p)          { kvfree(p); }
 
+/* The wall clock in ns since the Unix epoch, for the file dates the writer
+ * stamps (vms-263e). */
+#include <linux/timekeeping.h>
+static inline uint64_t ods2_wall_ns(void)
+{
+    struct timespec64 ts;
+    ktime_get_real_ts64(&ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 #endif /* OVMX_KBACKEND_NETBSD */
 
 #else  /* !OVMX_ODS2_KERNEL -- userspace */
@@ -111,6 +131,25 @@ static inline void  ods2_kfree(void *p)          { kvfree(p); }
 static inline void *ods2_kalloc(size_t n)        { return malloc(n); }
 static inline void *ods2_kzalloc(size_t n)       { return calloc(1, n); }
 static inline void  ods2_kfree(void *p)          { free(p); }
+
+/* The wall clock in ns since the Unix epoch, for the file dates the writer
+ * stamps (vms-263e). SOURCE_DATE_EPOCH (seconds), when set, fixes it, so a
+ * mastered image is reproducible byte for byte. */
+#include <time.h>
+static inline uint64_t ods2_wall_ns(void)
+{
+    const char *sde = getenv("SOURCE_DATE_EPOCH");
+    struct timespec ts;
+
+    if (sde && *sde) {
+        char *end = NULL;
+        unsigned long long sec = strtoull(sde, &end, 10);
+        if (end && *end == '\0')
+            return (uint64_t)sec * 1000000000ULL;
+    }
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
 
 #endif /* OVMX_ODS2_KERNEL */
 

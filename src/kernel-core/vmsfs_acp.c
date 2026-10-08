@@ -1053,6 +1053,7 @@ out:
  * SYSPRV (28) makes the accessor qualify for the SYSTEM protection category.
  */
 #define ACP_PRV_M_SYSPRV   (1ULL << 28)
+#define ACP_PRV_M_GRPPRV   (1ULL << 34)   /* VMS_PRV_V_GRPPRV */
 #define ACP_PRV_M_BYPASS   (1ULL << 29)
 #define ACP_PRV_M_READALL  (1ULL << 35)
 
@@ -1193,8 +1194,14 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
 
     is_owner  = (acc_group == own_group && acc_member == own_member);
     is_group  = (acc_group == own_group);
+    /* GRPPRV: the system category for an object of the accessor's own group
+     * (OpenVMS VAX V7.3, docs/oracle/vax73-acl.md "GRPPRV": [200,5] with GRPPRV
+     * reads a S:RWED file owned by [200,1], not one owned by [300,1], nor a
+     * group-owned file whose system field is empty; a denying ACE leaves it
+     * the system field, as for any system-category accessor). */
     is_system = (acc_group <= ACP_MAXSYSGROUP) ||
-                (privs & ACP_PRV_M_SYSPRV) != 0;
+                (privs & ACP_PRV_M_SYSPRV) != 0 ||
+                ((privs & ACP_PRV_M_GRPPRV) != 0 && acc_group == own_group);
 
     /*
      * The ACL first (vms-d404, docs/oracle/vax73-acl.md). The first identifier

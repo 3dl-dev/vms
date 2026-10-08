@@ -575,6 +575,7 @@ acp-dir-exsz-ignored
 acp-dir-used-blocks-ignore-eof
 acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
+acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
 acp-acl-control-not-checked
@@ -1227,6 +1228,25 @@ EOF
         require_fail) cat <<'EOF'
 the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV
 ...and changes nothing: still refused
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-grpprv-ignored)
+        case "$_f" in
+        facility)     echo "GRPPRV puts the accessor in the system category for files of its own UIC group (Files-11 ACP protection gate)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() counts a GRPPRV holder as system category when its group owns the file. The mutation drops that term, so [100,100] with GRPPRV is refused its own group's S:RWED file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+GRPPRV reads its own group's GRPT1.DAT through the system field
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -3984,7 +4004,7 @@ C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$
 C: the privilege display shows NETMBX and TMPMBX -- the two privileges the executive granted an unprivileged process, both in VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,READALL), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
@@ -7447,7 +7467,7 @@ apply_edit() {
     acp-bypass-ignored)
         sed -i 's|^    if (privs \& ACP_PRV_M_BYPASS)$|    if (0 \&\& (privs \& ACP_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
     acp-sysprv-ignored)
-        sed -i 's|^                (privs \& ACP_PRV_M_SYSPRV) != 0;$|                0; /* NEGCTL acp-sysprv-ignored */|' "$_file";;
+        sed -i 's#^                (privs \& ACP_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
     acp-dir-exsz-ignored)
         sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
     acp-fat-versions-not-applied)
@@ -7462,6 +7482,8 @@ apply_edit() {
         sed -i 's|^            if (proc->rights_id\[i\] == id)$|            if (0) /* NEGCTL acp-rights-list-not-consulted */|' "$_file";;
     rights-grant-cmkrnl-not-checked)
         sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file";;
+    acp-grpprv-ignored)
+        sed -i 's|^                ((privs \& ACP_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
         sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)

@@ -15,6 +15,7 @@
  *    process logical name table; so does this (a program that writes to
  *    SYS$SCRATCH:, as sys_set_security does, then finds it).
  * 3. The RMS force-bind anchor below.
+ * 4. With the C RTL file layer linked (OVMX_CRTLFD_STATIC), turn it on.
  *
  * The process control block is NOT made here any more: libvms establishes it from
  * the executive's row on the first PCB-backed service (ovmx_pcb_ctx.h), as VMS gives
@@ -25,6 +26,10 @@
 #include "vms_kif.h"
 #include "descrip.h"
 #include "uaidef.h"
+
+#if defined(OVMX_CRTLFD_STATIC)
+void ovmx_crtl_fd_install(void);   /* src/vmsrms/crtl_rms_fd.c */
+#endif
 
 /*
  * RMS FORCE-BIND ANCHOR. libvms reaches SYSUAF.DAT/RIGHTSLIST.DAT through RMS
@@ -108,6 +113,12 @@ static void corpus_rt_run_as_system(void)
     };
 
     (void)vms_kif_establish_system();
+#if defined(OVMX_CRTLFD_STATIC)
+    /* 4. The C RTL's file system is RMS (vms-003b), as decc$main makes it for a
+     *    DECC$SHR image: from here fopen()/open()/stat()/unlink() of an RMS file
+     *    reach the Files-11 volume. */
+    ovmx_crtl_fd_install();
+#endif
     if (!(sys$getuai(0, 0, &ud, il, 0, 0, 0) & 1))
         return;
     append_uai_text(ddir, sizeof(ddir), dev, dl);

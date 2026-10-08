@@ -575,6 +575,7 @@ setdfprot-not-stored
 enq-syslck-not-checked
 pri-altpri-not-checked
 brk-oper-not-checked
+crtlfd-open-falls-to-posix
 acp-create-ignores-dfprot
 acp-deaccess-revision-not-recorded
 clrast-no-delivery
@@ -1131,6 +1132,28 @@ EOF
         require_fail) cat <<'EOF'
 $BRKTHRUW to every terminal without OPER is SS$_NOOPER
 the executive refuses every-user scope without OPER
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    crtlfd-open-falls-to-posix)
+        case "$_f" in
+        facility)     echo "a static C image's open() of an RMS file goes to RMS through the C RTL file layer (vms-003b)";;
+        targets)      echo "vmsrms/crtl_rms_fd.c";;
+        suites_red)   echo "test_syssvc_crtl_static";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The file layer serves openat() of an RMS file specification. The mutation leaves it to the kernel, so fopen() makes a POSIX file named after the spec in the current directory and nothing reaches the Files-11 volume. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the ACP finds CRTLFD.TXT in [OVMXDIR] on the volume
+stat() reports the byte count written
+unlink() deletes it
+no POSIX file of that name was ever made in the cwd
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7980,6 +8003,8 @@ apply_edit() {
         sed -i 's#^        if (pri > args.authpri \&\& !(proc->cur_privs \& VMS_PRV_M_ALTPRI))$#        if (0) /* NEGCTL pri-altpri-not-checked */#' "$_file";;
     brk-oper-not-checked)
         sed -i 's#^    if ((args.sndtyp == 3u || args.sndtyp == 4u) \&\& !(proc->cur_privs \& VMS_PRV_M_OPER))$#    if (0) /* NEGCTL brk-oper-not-checked */#' "$_file";;
+    crtlfd-open-falls-to-posix)
+        sed -i 's#^        return do_openat(a1, (const char \*)(uintptr_t)a2, a3, handled);$#        return 0; /* NEGCTL crtlfd-open-falls-to-posix */#' "$_file";;
     setdfprot-not-stored)
         sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)

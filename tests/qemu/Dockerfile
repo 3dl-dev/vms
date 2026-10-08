@@ -234,6 +234,12 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 # tests/qemu/test_syssvc_event.c would have built and ctest-SKIPped fine
 # locally while never entering the initramfs and never running in QEMU,
 # with the job staying green.
+# The C RTL base (vms-003b): the container's musl rebuilt with the OVMX
+# system-call funnel (src/crtl-musl-x86_64), so a static C image can turn on the
+# C RTL file layer over RMS (src/vmsrms/crtl_rms_fd.c, -DOVMX_CRTL_FD_STATIC=ON
+# below). With no layer installed every system call traps exactly as before.
+COPY src/crtl-musl-x86_64/ /src/crtl-musl-x86_64/
+RUN sh /src/crtl-musl-x86_64/build-musl.sh /usr/lib/x86_64-linux-musl
 COPY . /src/repo/
 #
 # `vmsdcl` is built alongside them (vms-fb9). tests/qemu/test_syssvc_showdev.c
@@ -260,6 +266,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
+        -DOVMX_CRTL_FD_STATIC=ON \
     && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \

@@ -154,7 +154,7 @@ static int cmd_show_acl(struct dcl_command *cmd)
     const char *spec = (cmd->param_count > 1) ? cmd->params[1] : NULL;
     struct dcl_rms_dir *d;
     char match[1024];
-    uint16_t fn, fs;
+    uint32_t fn; uint16_t fs;
     uint8_t fr;
     int n = 0;
     uint32_t worst = SS$_NORMAL;

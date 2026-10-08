@@ -704,7 +704,7 @@ static int cmd_set_acl(struct dcl_command *cmd)
     {
         struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, filespec);
         char match[1024];
-        uint16_t fn, fs;
+        uint32_t fn; uint16_t fs;
         uint8_t fr;
         if (!d) {
             dcl_error("SET", 2, "SEARCHFAIL", "error searching for %s", filespec);

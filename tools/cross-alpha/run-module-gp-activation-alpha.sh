@@ -946,9 +946,12 @@ run_boot_a() {
   # for an executable, or JOINT_LINK_BASE) and must have activated with itself
   # AND every shareable in P0 -- IMGACT's seam reports it. JOINT_LINK_BASE=0
   # (the relocatable form) is the only opt-out.
+  # P0_SEAM_IMAGE: the image whose seam line carries the claim (JOINT_E2E by
+  # default; the native-image gate's SYSTARTUP runs HELLO instead).
+  local p0img="${P0_SEAM_IMAGE:-JOINT_E2E}"
   if [ "${JOINT_LINK_BASE:-0x10000}" != "0" ]; then
-    if grep -aqE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]* p0=1" "$WORK/modgpA.log"; then
-      log "P0 layout confirmed: JOINT_E2E.EXE and its shareables activated in P0 (base ${JOINT_LINK_BASE:-0x10000})"
+    if grep -aqE "OVMX-SEAM: image=${p0img}\.EXE[^\"]* p0=1" "$WORK/modgpA.log"; then
+      log "P0 layout confirmed: ${p0img}.EXE and its shareables activated in P0 (base ${JOINT_LINK_BASE:-0x10000})"
     else
       grep -aE "OVMX-SEAM:" "$WORK/modgpA.log" | sed 's/^/  /' || true
       die "P0 image (base ${JOINT_LINK_BASE:-0x10000}) but the activation seam does not report p0=1 (an image or shareable landed outside P0)"
@@ -2026,6 +2029,7 @@ EOF
     # The joint milestone/control images are built only because the producer
     # graph and the vector images come from the same veneer build.
     export JOINT_NATIVE_PROOF=1
+    export P0_SEAM_IMAGE=HELLO          # HELLO and its shareables land in P0
     JOINT_CRTL_RMS_VENEER=1
     export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
     _st=$(mktemp -d); _fails=0

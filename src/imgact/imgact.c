@@ -2567,6 +2567,11 @@ static void imgact_u32_hex8(char *out, uint32_t v)
  * the executive $EXIT over /dev/vms; if the executive is UNREACHABLE, FAIL
  * HONEST -- NEVER a userspace exit_group(cond & 1 ? 0 : 1), which would
  * fabricate the VMS-observable completion status. Does not return. */
+/* Set when an activation failed before any transfer address ran (an OpenVMS
+ * Alpha native image the activator refused, vms-3b3f): the seam line then says
+ * stdcall_returned=0. */
+static int g_seam_no_transfer;
+
 static void imgact_vms_exit(unsigned long cond)
 {
 	int fd = imgact_acp_dev_open();
@@ -2630,7 +2635,8 @@ static void imgact_vms_exit(unsigned long cond)
 		line[0] = '\0';
 		xstrcat(line, "OVMX-SEAM: image=");
 		xstrcat(line, base);
-		xstrcat(line, " stdcall_returned=1 has_exited=");
+		xstrcat(line, g_seam_no_transfer ? " stdcall_returned=0 has_exited="
+						 : " stdcall_returned=1 has_exited=");
 		xstrcat(line, he);
 		xstrcat(line, " $STATUS=0x");
 		xstrcat(line, hex);
@@ -3116,6 +3122,7 @@ static void eihd_fail(const char *image, const char *line2, const char *detail2,
 		xstrcat(line, "\n");
 	}
 	eputs(line);
+	g_seam_no_transfer = 1;
 	imgact_vms_exit(EIHD_STS_INHIB_MSG | cond);
 	sys_exit(IMGACT_EXIT_FAIL);
 }
@@ -3261,6 +3268,10 @@ static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
 	if (imgsrc_pread(src, blk, EIHD_BLOCK, 0) != (long)EIHD_BLOCK)
 		eihd_fail_file(m->name, m->spec,
 			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	if (eihd_l(blk + 0x00) != EIHD_MAJORID || eihd_l(blk + 0x04) != EIHD_MINORID)
+		eihd_fail_file(m->name, m->spec,
+			       "-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image",
+			       EIHD_IMGACT_NOTNATIVE);
 	unsigned long nblk = eihd_l(blk + 0x4C);
 	if (nblk < 1 || nblk > EIHD_MAX_HDRBLKS)
 		eihd_fail_file(m->name, m->spec,

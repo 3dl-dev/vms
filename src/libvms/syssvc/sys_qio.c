@@ -223,6 +223,14 @@ static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
     void (*ast)(uint32_t) = r->astadr;
     uint32_t prm = r->astprm, efn = r->efn;
     r->in_use = 0;
+    /* A message longer than the request: the caller gets the bytes it asked
+     * for, the IOSB counts THOSE, and the status is SS$_BUFFEROVF (the rest of
+     * the message is gone) -- rd vms-542, observed on real VAX V7.3 / Alpha
+     * V8.4 (docs/oracle/semantics/io/, IO.MBX.READ.SHORT). */
+    if ((st & 1) && actlen > r->bufsz) {
+        actlen = r->bufsz;
+        st = SS$_BUFFEROVF;
+    }
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
@@ -416,6 +424,13 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
              */
             st = vms_kif_mbx_read(exec_chan, p1, p2, &actlen,
                                   (func & IO$M_NOW) != 0);
+            /* the vms_kif layer reports the WHOLE message length; a request
+             * shorter than the message gets its bytes, that count, and
+             * SS$_BUFFEROVF (rd vms-542) */
+            if ((st & 1) && actlen > p2) {
+                actlen = p2;
+                st = SS$_BUFFEROVF;
+            }
             break;
 
         case IO$_WRITEVBLK:

@@ -1492,7 +1492,9 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             }
         }
 
+        { char dbgb[200]; int dl = snprintf(dbgb, sizeof dbgb, "F45DBG child pid=%d about to exec %s\n", (int)getpid(), img_path); (void)!write(2, dbgb, (size_t)dl); }
         execl(img_path, img_path, (char *)NULL);
+        { char dbgb[200]; int dl = snprintf(dbgb, sizeof dbgb, "F45DBG child pid=%d EXEC FAILED errno=%d\n", (int)getpid(), errno); (void)!write(2, dbgb, (size_t)dl); }
         _exit(1);  /* exec failed */
     }
 

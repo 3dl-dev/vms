@@ -5,12 +5,15 @@
 //   - virtual dispatch + new/delete (libsupc++),
 //   - std::string / std::vector (libstdc++),
 //   - a C++ exception thrown and caught across a frame (libgcc's DWARF unwinder,
-//     EH frames registered by crtbegin's frame_dummy).
+//     EH frames registered by crtbegin's frame_dummy),
+//   - a C++17 inline variable defined in two translation units is ONE object
+//     (cxx_test_iv.h / cxx_test_tu2.cc).
 // Sentinel 7 = all of it held.
 #include <cstdio>
 #include <string>
 #include <vector>
 #include <stdexcept>
+#include "cxx_test_iv.h"
 
 struct B { virtual int f() const { return 1; } virtual ~B() {} };
 struct D : B { int f() const override { return 7; } };
@@ -40,10 +43,11 @@ int main(int argc, char **argv)
         caught = (std::string(e.what()) == "ovmx");
     }
     int virt = b->f();
-    std::printf("OVMX C++ test: ctor=%d virt=%d vec=%s,%s caught=%d argc=%d ptr=%u\n",
+    int iv = ovmx_iv_tu2() == ovmx_iv && ovmx_iv_tu2()[1] == 22;
+    std::printf("OVMX C++ test: ctor=%d virt=%d vec=%s,%s caught=%d argc=%d ptr=%u iv=%d\n",
                 ctor_ran, virt, v[0].c_str(), v[1].c_str(), caught, argc,
-                (unsigned)(sizeof(void *) * 8));
-    int ok = ctor_ran == 42 && virt == 7 && v[1] == "C++/libstdc++" && caught;
+                (unsigned)(sizeof(void *) * 8), iv);
+    int ok = ctor_ran == 42 && virt == 7 && v[1] == "C++/libstdc++" && caught && iv;
     delete b;
     return ok ? 7 : 3;
 }

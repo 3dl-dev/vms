@@ -324,7 +324,7 @@ assert_cxx() {
   local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
   local want_ptr=64
   [ "${CXX_GATE_P32:-0}" = 1 ] && want_ptr=32
-  port_ok=$(grep -qaE "OVMX C\+\+ test: ctor=42 virt=7 vec=OVMX,C\+\+/libstdc\+\+ caught=1 argc=[0-9]+ ptr=$want_ptr" "$log" && echo 1 || echo 0)
+  port_ok=$(grep -qaE "OVMX C\+\+ test: ctor=42 virt=7 vec=OVMX,C\+\+/libstdc\+\+ caught=1 argc=[0-9]+ ptr=$want_ptr iv=1" "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then
@@ -1164,18 +1164,21 @@ EOF
     export JOINT_USE_LIBVMS=1
     _st=$(mktemp -d); _fails=0
     _wp=64; [ "${CXX_GATE_P32:-0}" = 1 ] && _wp=32
-    printf '%s\n%s\n' "OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp" \
+    printf '%s\n%s\n' "OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp iv=1" \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
-    printf '%s\n%s\n' "OVMX C++ test: ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp" \
+    printf '%s\n%s\n' "OVMX C++ test: ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp iv=1" \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noctor.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 6)' \
       'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/abort.log"
-    echo "-- cxx selftest 1/3: ctor + virtual + string/vector + caught exception must PASS --"
+    echo "-- cxx selftest 1/4: ctor + virtual + string/vector + caught exception + one inline variable must PASS --"
     if assert_cxx "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
-    echo "-- cxx selftest 2/3: static constructor never ran must FAIL --"
+    echo "-- cxx selftest 2/4: static constructor never ran must FAIL --"
     if assert_cxx "$_st/noctor.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
-    echo "-- cxx selftest 3/3: an uncaught exception (abort) must FAIL --"
+    echo "-- cxx selftest 3/4: an uncaught exception (abort) must FAIL --"
     if assert_cxx "$_st/abort.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- cxx selftest 4/4: an inline variable with two copies (iv=0) must FAIL --"
+    sed 's/ iv=1$/ iv=0/; s/0x0035a039/0x0035a019/' "$_st/pass.log" > "$_st/noiv.log"
+    if assert_cxx "$_st/noiv.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
     rm -rf "$_st"
     [ "$_fails" -eq 0 ] || die "cxx selftest failed -- assert_cxx cannot be trusted"
     echo ""
@@ -1195,11 +1198,17 @@ EOF
     else
       _cxxf="-mpointer-size=64"
     fi
+    log "step 1c': GCC's VMS-host vms_file_stats_name compiles as C++ with this g++ (vms-fd1, patches/0012)"
+    # shellcheck disable=SC2086
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -e OVMX_ALPHA_SYSROOT=/joint -v "$GATE_ROOT/joint-n3:/joint:ro" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/test/run_vmsdbgout_vms_host_cxx.sh /src/tools/cross-alpha-vms \
+      /out/cxx/bin/alpha-dec-vms-g++ $_cxxf || die "vmsdbgout VMS-host C++ check failed"
     # shellcheck disable=SC2086
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$GATE_ROOT/cxximg:/img" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \
       /out/cxx/bin/alpha-dec-vms-g++ $_cxxf -O1 -o /img/joint_e2e.exe \
-      /src/tools/cross-alpha-vms/joint-e2e/cxx_test.cc > "$GATE_ROOT/cxx-link.log" 2>&1 \
+      /src/tools/cross-alpha-vms/joint-e2e/cxx_test.cc /src/tools/cross-alpha-vms/joint-e2e/cxx_test_tu2.cc \
+      > "$GATE_ROOT/cxx-link.log" 2>&1 \
       || { tail -40 "$GATE_ROOT/cxx-link.log"; die "C++ test did not link"; }
     grep -E "LINK-I-LIBRARY|LINK-I-LIBINIT|LINK-S-CREATED" "$GATE_ROOT/cxx-link.log" | sed 's/^/  | /'
     cp "$GATE_ROOT/cxximg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"

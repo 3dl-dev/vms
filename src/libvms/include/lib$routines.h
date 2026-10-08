@@ -823,6 +823,24 @@ uint32_t lib$get_logical(
 );
 
 /**
+ * lib$create_dir - Create an ODS-2 directory (and any missing parents)
+ *
+ * Returns SS$_CREATED if the directory was made, SS$_NORMAL if it already existed.
+ * owner is a UIC longword, prot_enable/prot_value select protection bits (the rest come
+ * from the process default protection), max_versions is the directory's version limit,
+ * initial_alloc is the block allocation (1..64). rvn must be absent or 0.
+ */
+uint32_t lib$create_dir(
+    const struct dsc$descriptor_s *spec,
+    const uint32_t *owner,
+    const uint32_t *prot_enable,
+    const uint32_t *prot_value,
+    const uint32_t *max_versions,
+    const uint32_t *rvn,
+    const uint32_t *initial_alloc
+);
+
+/**
  * lib$delete_logical - Delete a logical name (simplified interface)
  *
  * @param lognam  Pointer to descriptor of the logical name

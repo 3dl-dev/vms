@@ -221,6 +221,7 @@ struct vms_acp_acpcontrol_args {
 #define VMS_ACP_M_MOVE       0x0008u  /* IO$M_MOVE: MODIFY renames/moves the file */
 #define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
 #define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
+#define VMS_ACP_ATTR_VERSIONS 0x04u   /* apply the FAT default version limit (attr.recattr[30..31]) */
 struct vms_acp_fileop_args {
 	uint32_t chan;
 	uint32_t func;

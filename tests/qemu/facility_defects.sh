@@ -567,6 +567,9 @@ mbx-prmmbx-check-removed
 acp-readall-ignored
 acp-bypass-ignored
 acp-sysprv-ignored
+acp-dir-exsz-ignored
+acp-fat-versions-not-applied
+libcreatedir-protection-ignored
 crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
@@ -1112,6 +1115,22 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    acp-dir-exsz-ignored)
+        facility)     echo "IO\$_CREATE of a directory honours the requested initial allocation (FIB\$L_EXSZ)";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
+the new directory holds the requested 3 blocks
+    acp-fat-versions-not-applied)
+        facility)     echo "IO\$_CREATE of a directory records the requested default version limit (FAT\$W_VERSIONS)";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        why)          echo "The ACP stamps attr.recattr[30..31] into the new header's FAT version-limit field when VMS_ACP_ATTR_VERSIONS is set. The mutation makes that branch unreachable ('0 &&'), so the directory keeps the default limit. Gone after substitution (no-op re-apply).";;
+the directory's version limit is 7
+    libcreatedir-protection-ignored)
+        facility)     echo "LIB\$CREATE_DIR passes the requested protection to the ACP";;
+        targets)      echo "libvms/rtl/lib_dir.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        why)          echo "lib\$create_dir() sends the leaf directory's protection word to the ACP when the caller supplied prot_enable/prot_value. The mutation makes that branch unreachable ('0 &&'), so the directory is created with the ACP default protection. Gone after substitution (no-op re-apply).";;
+the directory carries the requested protection bits
     crtl-fwrite-bypasses-rms)
         case "$_f" in
         facility)     echo "C RTL stdio->RMS veneer \$PUT (ovmx_crtl_fwrite over sys\$put, vms-47e)";;
@@ -6970,6 +6989,12 @@ apply_edit() {
         sed -i 's|^    if (privs \& ACP_PRV_M_BYPASS)$|    if (0 \&\& (privs \& ACP_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
     acp-sysprv-ignored)
         sed -i 's|^                (privs \& ACP_PRV_M_SYSPRV) != 0;$|                0; /* NEGCTL acp-sysprv-ignored */|' "$_file";;
+    acp-dir-exsz-ignored)
+        sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
+    acp-fat-versions-not-applied)
+        sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
+    libcreatedir-protection-ignored)
+        sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     clrast-no-delivery)
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)

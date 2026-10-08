@@ -570,6 +570,7 @@ acp-sysprv-ignored
 acp-dir-exsz-ignored
 acp-fat-versions-not-applied
 libcreatedir-protection-ignored
+net-assign-netmbx-check-removed
 crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
@@ -1164,6 +1165,25 @@ EOF
         why)          echo "lib\$create_dir() sends the leaf directory's protection word to the ACP when the caller supplied prot_enable/prot_value. The mutation makes that branch unreachable ('0 &&'), so the directory is created with the ACP default protection. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the directory carries the requested protection bits
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    net-assign-netmbx-check-removed)
+        case "$_f" in
+        facility)     echo "\$ASSIGN of the DECnet network device requires NETMBX";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_assign() refuses a channel to NET: (the DECnet device face) with SS\$_NOPRIV unless the caller's enabled mask holds NETMBX. The mutation ANDs the privilege test with 0, so any process may assign the network device. The device lookup that precedes it is untouched, so a system with no NIC still answers SS\$_NOSUCHDEV. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$ASSIGN _NET: without NETMBX is SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7036,6 +7056,8 @@ apply_edit() {
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
+    net-assign-netmbx-check-removed)
+        sed -i 's|^        !(proc->cur_privs \& VMS_PRV_M_NETMBX)) {$|        !(proc->cur_privs \& VMS_PRV_M_NETMBX) \&\& 0) { /* NEGCTL net-assign-netmbx-check-removed */|' "$_file";;
     clrast-no-delivery)
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)

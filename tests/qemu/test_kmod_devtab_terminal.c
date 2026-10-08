@@ -583,10 +583,10 @@ int main(int argc, char **argv)
 
             /* The daemon withdraws the unit while the session still holds it. */
             status = vms_kif_terminal_delete(unit);
-            snprintf(msg, sizeof(msg),
-                     "[%s] withdrawing the unit while a channel is assigned is accepted",
-                     paths[k]);
-            CHECK(status == SS_NORMAL, msg);
+            /* literal texts (not a "[%s]" format): the negctl manifest names them */
+            CHECK(status == SS_NORMAL, k == 0
+                  ? "[$DASSGN] withdrawing the unit while a channel is assigned is accepted"
+                  : "[process exit] withdrawing the unit while a channel is assigned is accepted");
 
             /* NOT freed out from under the channel: the row is still the
              * executive's, still referenced once, visible by name. */
@@ -622,10 +622,9 @@ int main(int argc, char **argv)
 
             memset(&info, 0, sizeof(info));
             status = vms_kif_getdvi_devnam(unit, &info);
-            snprintf(msg, sizeof(msg),
-                     "[%s] releasing the last channel deletes the withdrawn unit (SS$_NOSUCHDEV)",
-                     paths[k]);
-            CHECK(status == SS_NOSUCHDEV, msg);
+            CHECK(status == SS_NOSUCHDEV, k == 0
+                  ? "[$DASSGN] releasing the last channel deletes the withdrawn unit (SS$_NOSUCHDEV)"
+                  : "[process exit] releasing the last channel deletes the withdrawn unit (SS$_NOSUCHDEV)");
         }
     }
 

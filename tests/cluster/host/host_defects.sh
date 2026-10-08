@@ -1400,7 +1400,6 @@ EOF
         why)          echo "h_rx_accept() drops the accept's connect data, so the VMS\$VAXcluster SYSAP cannot see that a real VAX accepting a re-dialled connection CONTINUED the conversation -- the CNXMGRERR of stall-rig arms GM-14, TG-3 and HM-11.";;
         require_fail) cat <<'EOF'
 A's CDT holds the ACCEPT's connect data
-byte-exact, as the peer sent it
 EOF
                       ;;
         esac;;

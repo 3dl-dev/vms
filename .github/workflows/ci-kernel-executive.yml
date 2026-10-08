@@ -1700,3 +1700,11 @@ jobs:
           echo "$DEFECTS" | sed 's/^/  /'
           # shellcheck disable=SC2086
           tests/qemu/run_facility_negctl.sh $DEFECTS
+      - name: Keep the guest console of any total guest death (vms-898a)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: negctl-guest-deaths-${{ matrix.shard }}
+          path: ${{ runner.temp }}/negctl-deaths
+          if-no-files-found: ignore
+          retention-days: 14

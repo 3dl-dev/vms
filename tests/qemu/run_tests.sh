@@ -331,14 +331,29 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
 # aarch64 branch above), $OUTPUT already carries everything inline exactly
 # as round 1 left it, and this is a no-op.
 ASSERT_BANNER='--- assertion channel: /dev/ttyS1 (separate from console) ---'
+# vms-898a: the splice used to require the banner at column 0 (index($0,banner)
+# == 1). ttyS0 is shared with kernel printk, so a printk landing on the same line
+# as the banner ("[ 4.7] vms: ...--- assertion channel ...") made the splice
+# silently skip and the ENTIRE per-suite transcript vanished from $OUTPUT: every
+# suite then looked "missing" and the negctl harness reported a TOTAL GUEST DEATH
+# that was really a lost transcript. Match the banner anywhere on the line, and if
+# it is not on the console at all but the transcript file has content, append the
+# transcript rather than drop it. Either way say what happened, so a lost
+# transcript is never silent.
+ASSERT_BYTES=$(wc -c < "$ASSERT_TRANSCRIPT" 2>/dev/null || echo 0)
 if printf '%s\n' "$OUTPUT" | grep -qF -- "$ASSERT_BANNER"; then
     OUTPUT=$(printf '%s\n' "$OUTPUT" | awk -v bannerfile="$ASSERT_TRANSCRIPT" -v banner="$ASSERT_BANNER" '
         { print }
-        index($0, banner) == 1 {
+        index($0, banner) > 0 && !done {
             while ((getline line < bannerfile) > 0) print line
             close(bannerfile)
+            done = 1
         }
     ')
+    echo "run_tests.sh: assertion transcript spliced at the console banner (${ASSERT_BYTES} bytes)" >&2
+elif [ "${ASSERT_BYTES:-0}" -gt 0 ]; then
+    OUTPUT=$(printf '%s\n%s\n' "$OUTPUT" "$(cat "$ASSERT_TRANSCRIPT")")
+    echo "run_tests.sh: console banner LOST but the ttyS1 transcript has ${ASSERT_BYTES} bytes -- appended, not dropped (vms-898a)" >&2
 fi
 
 # Print full output

@@ -627,6 +627,20 @@ for defect in $DEFECT_LIST; do
        [ "$(fnd_all_suites_missing "$OUTFILE" $EXEC_ORDER)" = "1" ]; then
         bad "TOTAL GUEST DEATH: not ONE of the $N_EXPECTED expected suites produced a verdict -- not even ones unrelated to '$facility' (e.g. the first test_kmod_* probe). An isolated defect cannot reach that; this is a boot/infrastructure failure (crash before any suite ran, QEMU never came up, or the whole-VM wall fired before FINAL RESULTS), NOT a verdict about '$defect'. Re-run. Last 40 lines:"
         tail -40 "$OUTFILE" | sed 's/^/  | /'
+        # vms-898a: the LAST 40 lines are only the post-mortem dmesg dump and name
+        # no cause. Keep the WHOLE guest console of the death (uploaded by the
+        # workflow) and show what ran just BEFORE the dump, where the reason is.
+        _ddir="${NEGCTL_DEATH_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/negctl-deaths}"
+        mkdir -p "$_ddir" 2>/dev/null && {
+            cp "$OUTFILE" "$_ddir/$defect.console.txt" 2>/dev/null || true
+            [ -f "$OUTFILE.raw" ] && cp "$OUTFILE.raw" "$_ddir/$defect.console.raw.txt" 2>/dev/null || true
+            echo "  guest console of the death kept in $_ddir/$defect.console.txt"
+        }
+        _dm=$(grep -n -m1 -e '--- dmesg' -e 'KERNEL MODULE TESTS FAILED' "$OUTFILE" | cut -d: -f1)
+        if [ -n "$_dm" ] && [ "$_dm" -gt 1 ]; then
+            echo "  --- the 80 console lines BEFORE the failure dump (line $_dm of $(wc -l < "$OUTFILE")) ---"
+            head -n "$((_dm - 1))" "$OUTFILE" | tail -n 80 | sed 's/^/  | /'
+        fi
         fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
     fi
 

@@ -4,7 +4,7 @@
 set -u
 PAR=${PAR:-3}; ROUNDS=${ROUNDS:-3}
 for try in 1 2 3; do
-  docker build -f distro/Dockerfile.bootable -t ovmx-boot:latest . > /tmp/build.log 2>&1 && break
+  DOCKER_BUILDKIT=1 docker build --progress=plain -f distro/Dockerfile.bootable -t ovmx-boot:latest . > /tmp/build.log 2>&1 && break
   echo "build attempt $try failed"; tail -n 15 /tmp/build.log; [ "$try" -lt 3 ] || exit 2; sleep 30
 done
 pass=0; fail=0

@@ -37,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  packages: read   # GHCR mirror of the pinned base images (vms-9a6, .github/actions/setup-buildx)
 
 jobs:
   build:

@@ -1697,5 +1697,6 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
 void vms_lnm_proc_gone(struct vms_proc *proc);
+void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 
 #endif /* _VMS_INTERNAL_H */

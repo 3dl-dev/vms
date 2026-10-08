@@ -268,7 +268,43 @@ static struct vms_lnm_entry *lnm_alloc_slot(void)
         if (!lnm_arena->entries[i].in_use)
             return &lnm_arena->entries[i];
     }
+
     return NULL;
+}
+
+/*
+ * vms_lnm_copy_process - give VMS process `to_pid` a copy of `from_pid`'s
+ * LNM$PROCESS names (rd vms-ef21), except the CONFINE ones (LNM$M_CONFINE:
+ * "not copied into a subprocess"). The executive analogue of fork() copying a
+ * process's memory: before the process table moved into the executive, a
+ * forked child inherited it with the rest of its address space, and that is
+ * still what a forked (not continued, not $CREPRC'd) child gets -- the same
+ * fork-inheritance the executive gives BG channels (vms-3bf). A full arena
+ * stops the copy where it is (EXLNMQUOTA has nobody to be reported to here).
+ */
+void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid)
+{
+    uint32_t i;
+
+    if (!lnm_arena || !from_pid || !to_pid || from_pid == to_pid)
+        return;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *src = &lnm_arena->entries[i], *dst;
+
+        if (!src->in_use || src->table != VMS_LNM_TBL_PROCESS ||
+            src->scope_key != from_pid || (src->attributes & 0x02u))
+            continue;
+        dst = lnm_alloc_slot();
+        if (!dst)
+            break;
+        memcpy(dst, src, sizeof(*dst));
+        dst->scope_key = to_pid;
+        lnm_arena->entry_count++;
+    }
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
 }
 
 /*

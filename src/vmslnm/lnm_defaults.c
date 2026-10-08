@@ -365,17 +365,23 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * jobs get SYS$INPUT pointing at a command file).  For now
      * they all resolve through TT: → /dev/tty.
      */
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$INPUT", "TT:",
-               0, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$OUTPUT", "TT:",
-               0, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$ERROR", "TT:",
-               0, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$COMMAND", "TT:",
-               0, LNM_MODE_EXEC);
+    /* ... unless whoever created this process already said where its I/O
+     * goes: a parent that drives this DCL over mailboxes publishes SYS$INPUT /
+     * SYS$OUTPUT before starting it (MMK's spawned DCL, vms-786), as a VMS
+     * creator names the new process's SYS$INPUT/SYS$OUTPUT. Since the process
+     * table became executive-resident and visible to $TRNLNM (rd vms-ef21), a
+     * "TT:" seeded here would shadow that published name. */
+    static const char *const io_names[] = {
+        "SYS$INPUT", "SYS$OUTPUT", "SYS$ERROR", "SYS$COMMAND"
+    };
+    for (size_t k = 0; k < sizeof io_names / sizeof io_names[0]; k++) {
+        char cur[LNM_MAX_VALUE + 1];
+        uint16_t cl = 0;
+        if (lnm_translate(mgr, LNM_FILE_DEV, io_names[k], cur, sizeof cur,
+                          &cl, NULL) == SS$_NORMAL)
+            continue;
+        lnm_create(mgr, LNM_PROCESS_TABLE, io_names[k], "TT:", 0, LNM_MODE_EXEC);
+    }
 }
 
 /*

@@ -20,5 +20,5 @@ DIRECTORY/FULL, DIRECTORY, TYPE of a wildcard, the GUEST TYPE of SYSUAF.DAT (RMS
 
 | VAX symptom | wire cause | status |
 |---|---|---|
-| GUEST `DELETE ...SYSUAF.DAT;*` gets `RMS-E-MKD` / `SYSTEM-F-REMRSRC` | VMS holds two DIRLIST links open and then connects a third for the ERASE. NETACP refused the third link immediately with Disconnect reason 1 (resource), because its per-node share was 2. The VAX-to-VAX capture shows three concurrent links. | Not changed here. Raising the per-node share is a security-posture decision, tracked in its own rd item and PR until Baron decides. Until then a remote wildcard DELETE fails REMRSRC honestly. |
+| GUEST `DELETE ...SYSUAF.DAT;*` gets `RMS-E-MKD` / `SYSTEM-F-REMRSRC` | VMS holds two DIRLIST links open and then connects a third for the ERASE. NETACP refused the third link immediately with Disconnect reason 1 (resource), because its per-node share was 2. The VAX-to-VAX capture shows three concurrent links. | Fixed outside this PR: Baron's rd vms-9cd decision allows 3 links per node (pool 9), merged as #1522. |
 | `RENAME` gets `RMS-F-SUPPORT` | After OVMX's CONFIGURATION, VAX1 disconnects without sending an ACCESS. Some property of the CONFIGURATION (version or SYSCAP) makes the client refuse. | Open. `config_probe_drv.py` lets the lab try candidate CONFIGURATIONs against the same RENAME. |

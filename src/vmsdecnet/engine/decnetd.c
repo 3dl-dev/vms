@@ -3598,8 +3598,11 @@ static int run_fal_proc_accept_test(void)
         st = falp_session_op("SYSTEM", "MANAGER", FALP_RENAME, REN, RENAMED, &auth, &uic, &xst, &sc, &sv);
         printf("  NOTE: SYSTEM RENAME -> client %08X, STATUS %04X STV %llX\n",
                (unsigned)st, (unsigned)sc, (unsigned long long)sv);
-        int old_gone = (dnet_fal_ropen(REN, &rf, NULL, NULL) != 0);
+        uint32_t ors = 0;
+        int old_gone = (dnet_fal_ropen_st(REN, &rf, NULL, NULL, &ors) != 0);
         if (!old_gone) (void)dnet_fal_rclose(rf);
+        printf("  NOTE: after SYSTEM RENAME, $OPEN old -> RMS %08X; new name byte-match %d\n",
+               (unsigned)ors, fal_file_matches(RENAMED, rl, 1));
         FP_CHECK(st == SS$_NORMAL && old_gone && fal_file_matches(RENAMED, rl, 1),
                  "SYSTEM renames its file through the FAL server process: RMS reads the records under the NEW name and the old name is gone");
 

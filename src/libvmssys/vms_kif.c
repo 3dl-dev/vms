@@ -2133,6 +2133,54 @@ uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap)
     return args.status;
 }
 
+/* The process rights list (vms-7d5a): op GRANT/REVOKE one identifier of process
+ * `pid` (0 = the caller); *attrib in = the attributes to grant, out = the previous.
+ * The executive answers SS$_WASCLR / SS$_WASSET / SS$_NOPRIV / SS$_NONEXPR. */
+uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib)
+{
+    struct vms_rights_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.pid = pid;
+    args.id = id;
+    args.attrib = attrib ? *attrib : 0;
+
+    KIF_CALL(VMS_IOCTL_RIGHTS, &args);
+
+    if (attrib)
+        *attrib = args.attrib;
+    return args.status;
+}
+
+/* The rights list of process `pid` (0 = the caller), vms-d404 ($CHKPRO's
+ * subject): up to `cap` identifiers and their attributes; *count = how many
+ * the process holds (may exceed cap). */
+uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
+                             uint32_t cap, uint32_t *count)
+{
+    struct vms_rights_args args;
+    uint32_t i;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = VMS_RIGHTS_OP_LIST;
+    args.pid = pid;
+
+    KIF_CALL(VMS_IOCTL_RIGHTS, &args);
+
+    if (args.status & 1) {
+        for (i = 0; i < args.count && i < cap && i < VMS_RIGHTS_MAX; i++) {
+            if (ids)
+                ids[i] = args.ids[i];
+            if (attrs)
+                attrs[i] = args.attrs[i];
+        }
+        if (count)
+            *count = args.count;
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;

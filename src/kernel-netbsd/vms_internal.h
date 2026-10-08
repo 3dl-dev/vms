@@ -145,6 +145,8 @@
 #define SS__NOTQUEUED   2488       /* SS$_NOTQUEUED (LCK_M_NOQUEUE, not granted) */
 #define SS__DEADLOCK    3594       /* SS$_DEADLOCK (wait-for cycle detected) */
 #define SS__IVLOCKID    8484       /* SS$_IVLOCKID (invalid lock ID) */
+#define SS__SUBLOCKS    8492       /* SS$_SUBLOCKS (sublocks still held) */
+#define SS__SYNCH       1673       /* SS$_SYNCH (granted synchronously) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
 #define SS__UNSUPPORTED 3658       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
 /* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h
@@ -254,7 +256,8 @@
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
-                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
+                             VMS_PRV_M_GRPPRV)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be
@@ -689,6 +692,13 @@ struct vms_proc {
 	/* $SETDDIR (VMS_IOCTL_DDIR): the process default directory, inherited
 	 * with dfprot; "" = never set. */
 	char                ddir[VMS_DDIR_SIZE];
+
+	/* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
+	 * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
+	 * privilege mask. Same hash_lock as the identity fields. */
+	uint32_t            rights_id[VMS_RIGHTS_MAX];
+	uint32_t            rights_attr[VMS_RIGHTS_MAX];
+	uint32_t            rights_n;
 
 	/*
 	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
@@ -1327,6 +1337,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

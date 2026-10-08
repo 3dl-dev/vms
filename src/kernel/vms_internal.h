@@ -157,6 +157,7 @@
 #define SS__DEADLOCK    3594        /* deadlock detected (ssdef.h SS$_DEADLOCK) */
 #define SS__IVLOCKID    8484        /* invalid lock ID (ssdef.h SS$_IVLOCKID) */
 #define SS__SUBLOCKS    8492        /* sublocks still held (ssdef.h SS$_SUBLOCKS) */
+#define SS__SYNCH       1673        /* granted synchronously (ssdef.h SS$_SYNCH) */
 #define SS__CANCELGRANT 8508        /* conversion cancelled (ssdef.h SS$_CVTUNGRANT) */
 #define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
 
@@ -949,6 +950,13 @@ struct vms_proc {
      * REGISTER_CONTINUE like dfprot. "" = never set. Same hash_lock. */
     char                ddir[VMS_DDIR_SIZE];
 
+    /* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
+     * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
+     * privilege mask. Same hash_lock as the identity fields. */
+    uint32_t            rights_id[VMS_RIGHTS_MAX];
+    uint32_t            rights_attr[VMS_RIGHTS_MAX];
+    uint32_t            rights_n;
+
     struct rcu_head     rcu;
 };
 
@@ -1455,6 +1463,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the

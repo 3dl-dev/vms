@@ -255,6 +255,13 @@ target_link_libraries(test_libvms_protection PRIVATE
 )
 add_test(NAME test_libvms_protection COMMAND test_libvms_protection)
 
+# $CHKPRO decisions against the VAX V7.3 oracle (vms-d404): the subject in the
+# item list, so it needs no executive.
+add_executable(test_libvms_chkpro ${CMAKE_CURRENT_SOURCE_DIR}/test_chkpro.c)
+target_include_directories(test_libvms_chkpro PRIVATE ${VMS_INCLUDE_DIR})
+target_link_libraries(test_libvms_chkpro PRIVATE vms pthread m)
+add_test(NAME test_libvms_chkpro COMMAND test_libvms_chkpro)
+
 # ...and the fixture that lets it run honestly on a host whose distro policy
 # blocks unprivileged user namespaces (rd vms-bd7). test_protection.c
 # synthesizes a caller UIC either with setgid()+setuid() (needs CAP_SETGID +

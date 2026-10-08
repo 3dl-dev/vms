@@ -771,7 +771,9 @@ static uint32_t rms_file_lock_acquire(rms_file_t *h, uint8_t fac, uint8_t shr)
 static void rms_file_lock_release(rms_file_t *h)
 {
     if (h && h->access_lkid) {
-        vms_kif_deq(h->access_lkid, NULL, 0);
+        /* LCK$M_DEQALL: the record locks held UNDER the file-access lock go
+         * with it -- a lock with sublocks is otherwise SS$_SUBLOCKS. */
+        vms_kif_deq(h->access_lkid, NULL, LCK_M_DEQALL);
         h->access_lkid = 0;
     }
 }

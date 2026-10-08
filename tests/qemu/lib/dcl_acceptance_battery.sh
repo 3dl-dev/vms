@@ -1193,6 +1193,8 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-6af1]: the inbound session pool behaved on the real executive (one PASS/FAIL line per assertion above this verdict)"
         must_have "$POOLSEG" 'a SECOND inbound SET HOST is accepted while the first is live' \
             "NETACP pool [vms-6af1]: a second inbound SET HOST is admitted while the first is live (G2: no single slot to monopolise)"
+        must_have "$POOLSEG" 'PASS: executor MAXIMUM LINKS 9 sizes the inbound pool at 9' \
+            "NETACP pool [vms-f91]: the inbound pool is sized from the NCP executor's MAXIMUM LINKS (default 32, as a real VAX shows; Baron 2026-10-08), not a compile-time constant"
         must_have "$POOLSEG" 'PASS: a THIRD session from the same node is accepted' \
             "NETACP pool [vms-277a]: a node may hold three concurrent sessions -- a VMS DELETE node::file;* opens three links to the FAL (VAX<->VAX capture)"
         must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \

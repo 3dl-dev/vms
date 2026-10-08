@@ -270,16 +270,11 @@ struct vms_mode_args {
  * a privilege here without adding the check it names is the defect this
  * constant exists to prevent.
  *
- * SYSPRV AND GRPPRV ARE DELIBERATELY ABSENT even though vms_lnm.c's new
- * check also accepts either as an alternate to SYSNAM/GRPNAM (real,
- * documented VMS behaviour -- OpenVMS DCL Dictionary, DEFINE: SYSPRV
- * substitutes for SYSNAM on LNM$SYSTEM, and SYSPRV or GRPPRV substitutes
- * for GRPNAM on LNM$GROUP). Adding them here would tell every OTHER
- * reader of this mask (dcl_cmd_set.c's enforced_privs_held(), SHOW
- * PROCESS/PRIVILEGES, F$PRIVILEGE) that OVMX enforces SYSPRV/GRPPRV in
- * the general VMS sense -- bypass system/group object protection
- * everywhere -- which remains false pending vms-pv1. They are consulted
- * by exactly one narrow code path, not enforced as their own control.
+ * GRPPRV is enforced by the Files-11 ACP's protection gate: it puts the accessor in
+ * the SYSTEM category for a file owned by its own UIC group (vmsfs_acp.c
+ * acp_check_access, observed on OpenVMS VAX V7.3 -- docs/oracle/vax73-acl.md
+ * "GRPPRV"; test_syssvc_privilege_enforce, acp-grpprv-ignored), and vms_lnm.c
+ * accepts it for LNM$GROUP.
  *
  * GROUP IS DELIBERATELY ABSENT, and that is a measurement rather than an
  * oversight. The obvious guess -- GROUP to read another process in your
@@ -323,7 +318,8 @@ struct vms_mode_args {
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
-                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
+                             VMS_PRV_M_GRPPRV)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
@@ -444,6 +440,8 @@ struct vms_ef_common_args {
  * the public $ENQ flag contract (see src/libvms/syssvc/sys_lock.c).
  */
 #define LCK_M_SYNC      0x10   /* Block in-kernel until granted (sync ENQ) */
+#define LCK_M_SYNCSTS   0x20   /* $ENQ LCK$M_SYNCSTS: an at-once grant is SS$_SYNCH, no AST */
+#define LCK_M_DEQALL    0x40   /* $DEQ LCK$M_DEQALL: the lock and its sublocks, or (lkid 0) all */
 
 /* Lock value block size */
 #define LCK_VALBLK_SIZE 16
@@ -3217,6 +3215,34 @@ struct vms_ddir_args {
     char     olddir[VMS_DDIR_SIZE];  /* out: the directory in force before    */
 };
 #define VMS_IOCTL_DDIR      _IOWR(VMS_IOC_MAGIC, 0x5F, struct vms_ddir_args)
+
+/*
+ * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
+ * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
+ * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
+ * identifier ACE against it. op GRANT/REVOKE target the process whose VMS pid is
+ * `pid` (0 = the caller) and need CMKRNL (the OpenVMS V7.3 / Alpha V8.4 probe:
+ * $GRANTID with every privilege disabled is SS$_NOPRIV, docs/oracle/semantics/
+ * rights). GRANT answers SS$_WASCLR when the identifier was not held and
+ * SS$_WASSET when it was (its attributes are then replaced); REVOKE the reverse
+ * (the same probe). LIST returns the list. Inherited at REGISTER_CONTINUE like the
+ * privilege mask. OVMX design choice (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_RIGHTS_MAX        32
+#define VMS_RIGHTS_OP_GRANT   1u
+#define VMS_RIGHTS_OP_REVOKE  2u
+#define VMS_RIGHTS_OP_LIST    3u
+struct vms_rights_args {
+    uint32_t op;                     /* in:  VMS_RIGHTS_OP_*                   */
+    uint32_t status;                 /* out: SS$_ status                       */
+    uint32_t pid;                    /* in:  target VMS pid, 0 = the caller    */
+    uint32_t id;                     /* in:  identifier (GRANT/REVOKE)         */
+    uint32_t attrib;                 /* in:  attributes (GRANT); out: previous */
+    uint32_t count;                  /* out: identifiers held (LIST)           */
+    uint32_t ids[VMS_RIGHTS_MAX];    /* out: LIST                              */
+    uint32_t attrs[VMS_RIGHTS_MAX];  /* out: LIST                              */
+};
+#define VMS_IOCTL_RIGHTS    _IOWR(VMS_IOC_MAGIC, 0x96, struct vms_rights_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -3295,6 +3321,8 @@ _Static_assert(sizeof(struct vms_ddir_args) == 8 + 2 * VMS_DDIR_SIZE,
                "vms_ddir_args layout changed: VMS_IOCTL_DDIR ABI break");
 _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
+               "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*

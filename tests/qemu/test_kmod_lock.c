@@ -136,6 +136,19 @@ int main(void) {
     ioctl(fd, VMS_IOCTL_ENQ, &enq_v);
     CHECK(enq_v.status == SS_NORMAL, "ENQ EX with value block");
 
+    /* A NEW lock only READS the value block (OpenVMS; semantic oracle
+     * LOCK.VAL.NEWLOCK, rd vms-a3d). The block is WRITTEN by a lock held in
+     * PW/EX converting to the same or a lower mode -- here EX -> EX. */
+    {
+        struct vms_enq_args cvt_v = {0};
+        cvt_v.lkid = enq_v.lkid;
+        cvt_v.lkmode = LCK_K_EXMODE;
+        cvt_v.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+        memcpy(cvt_v.valblk, "HELLO_VMS_LOCK!", 16);
+        ioctl(fd, VMS_IOCTL_CONVERT, &cvt_v);
+        CHECK(cvt_v.status == SS_NORMAL, "CONVERT EX->EX writes the value block");
+    }
+
     /* DEQ with value block readback */
     struct vms_deq_args deq_v = {0};
     deq_v.lkid = enq_v.lkid;

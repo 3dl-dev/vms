@@ -75,10 +75,21 @@ struct dnet_executor {
     uint16_t addr;                          /* area<<10 | node */
     char     name[DNET_NODEDB_NAMEMAX + 1]; /* "" if unnamed   */
     int      state_on;
+    uint16_t max_links;                     /* MAXIMUM LINKS; 0 = not set   */
 };
 
+/* The executor's MAXIMUM LINKS when none was set (rd vms-f91): the VMS
+ * default a real OpenVMS VAX shows (docs/oracle/vax-ncp-show/
+ * MCR_NCP_SHOW_EXECUTOR_CHARACTERISTICS.txt: "Maximum links = 32") -- Baron's
+ * ruling 2026-10-08 (the per-node share stays 3, rd vms-9cd). An operator sets
+ * any value with NCP SET EXECUTOR MAXIMUM LINKS n. */
+#define DNET_EXECUTOR_DEFAULT_MAXLINKS 32
+#define DNET_EXECUTOR_MAXLINKS_MAX     65535
+/* The executor's effective MAXIMUM LINKS (the set value, else the default). */
+unsigned dnet_executor_max_links(const struct dnet_executor *x);
+
 /* Parse one executor record line "EXECUTOR <a.n|-> NAME <name|-> STATE
- * <on|off>" (the OVMX layout). Returns 1 if the line is that record, 0 if it is
+ * <on|off> [MAXLINKS <n>]" (the OVMX layout; MAXLINKS only when set). Returns 1 if the line is that record, 0 if it is
  * a blank/comment line, -1 if it is malformed. Pure. */
 int dnet_executor_parse_line(const char *line, struct dnet_executor *x);
 /* Format the executor record (no trailing newline). Pure. */

@@ -10,19 +10,6 @@ lnm LNM.TRN.SYSIN  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT
 lnm LNM.TRN.SYSOUT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
 lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job in LNM$JOB
 lnm LNM.TRN.TT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
-lock LOCK.VAL.READ  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.VAL.NEWLOCK  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.SUB.UNDER.OTHER  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.X2  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.PARENT.WITH.SUB  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.SUB  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.PARENT  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.SYNCSTS  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.SYNCSTS.EF  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.ASYNC.DONE  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQALL  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.AFTER.DEQALL.A  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.AFTER.DEQALL.B  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
 prc PRC.SELF.COUNT0  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 prc PRC.JPI.SUB  # vms-ea42: JPI$_STATE (no executive scheduler state, the vms-8019 §5.1 ruling), JPI$_OWNER / MASTER_PID (owner and job root not in the executive row), JPI$_PRIB (no OVMX priority)
 prc PRC.SELF.COUNT1  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
@@ -31,17 +18,8 @@ prc PRC.RESUME.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vm
 prc PRC.SELF.COUNT2  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 prc PRC.NOIMAGE.STATE  # vms-ea42: a hibernating process with a missing image is run down at once (OpenVMS keeps it until $WAKE fails activation), and JPI$_STATE
 prc PRC.SELF.COUNT3  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
-rights RDB.GRANTID.BY_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GRANTID.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REVOKID.BY_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REVOKID.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GRANTID.BY_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REVOKID.BY_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GRANTID.NONAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.GRANTID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
 rms RMS.OPEN  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
-rms RMS.PARSE.SYNTAX2  # vms-576: arch-divergent -- Alpha V8.4 parses ODS-5 ^-escapes ("A^.B^.C"), VAX V7.3 says RMS$_SYN (OVMX: SYN, as VAX)
 tt TT.SENSECHAR  # vms-d900: IO$_SENSECHAR answers the PERMANENT characteristics (80/24 on the Alpha console) -- the executive device row holds only the current set
 tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count and where the text lands relative to the next record differ
 tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT -- the written text shares the case line on OVMX (no record boundary), so the line is not read back

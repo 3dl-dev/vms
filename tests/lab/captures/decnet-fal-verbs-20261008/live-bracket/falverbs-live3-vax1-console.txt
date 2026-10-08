@@ -1,0 +1,70 @@
+$ RENAME 1.43"SYSTEM x"::X.TXT 1.43"SYSTEM x"::Y.TXT
+%RENAME-E-SEARCHFAIL, error searching for 1.43"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]X.TXT;1
+-RMS-F-BUG_DAP, Data Access Protocol error detected; DAP code = 0001A007
+$ RENAME 1.43"SYSTEM x"::X.TXT 1.43"SYSTEM x"::Y.TXT
+$ DIRECTORY/FULL 1.43"SYSTEM x"::BRK*.TXT
+
+Directory 1.43"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1                    File ID:  None
+Size:            1/1          Owner:    [1,4]
+Created:   <None specified>
+Revised:   <None specified>
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      (remote)
+Caching attribute:  (remote)
+File attributes:    Allocation: 1, Extend: 0, Global buffer count: 0, Version limit: 0
+Record format:      Variable length, maximum 0 bytes, longest 80 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BRK2.TXT;1                    File ID:  None
+Size:            1/1          Owner:    [1,4]
+Created:   <None specified>
+Revised:   <None specified>
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      (remote)
+Caching attribute:  (remote)
+File attributes:    Allocation: 1, Extend: 0, Global buffer count: 0, Version limit: 0
+Record format:      Variable length, maximum 0 bytes, longest 80 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 2 files, 2/2 blocks.
+$ TYPE 1.43"SYSTEM x"::BRK*.TXT
+ 
+1.43"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1
+ 
+bracket file one
+second record
+ 
+1.43"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]BRK2.TXT;1
+ 
+bracket file two
+$ DELETE 1.43"SYSTEM x"::BRK2.TXT;*
+$ DELETE 1.43"SYSTEM x"::PRIVP.TXT;*
+%DELETE-W-FILNOTDEL, error deleting 1.43"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]PRIVP.TXT;1
+-RMS-E-PRV, insufficient privilege or file protection violation
+$ RENAME 1.43"SYSTEM x"::PRIVP.TXT 1.43"SYSTEM x"::Z.TXT
+%RENAME-E-OPENIN, error opening 1.43"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]PRIVP.TXT;1 as input
+-RMS-F-RMV, ACP remove function failed
+-NONAME-W-NOMSG, Message number 00000000
+$ DIRECTORY 1.43"SYSTEM x"::NOSUCH.TXT
+%DIRECT-W-NOFILES, no files found
+$ 

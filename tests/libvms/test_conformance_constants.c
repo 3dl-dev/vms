@@ -169,6 +169,17 @@ _Static_assert(CHP$M_OBSERVE == CHP$M_READ,  "CHP$M_OBSERVE must alias CHP$M_REA
 _Static_assert(CHP$M_ALTER   == CHP$M_WRITE, "CHP$M_ALTER must alias CHP$M_WRITE");
 _Static_assert(CHP$M_OBSERVE == 0x01, "CHP$M_OBSERVE != VAX V7.3 oracle 0x01");
 _Static_assert(CHP$M_ALTER   == 0x02, "CHP$M_ALTER != VAX V7.3 oracle 0x02");
+_Static_assert(CHP$M_USEREADALL == 0x04, "CHP$M_USEREADALL != VAX V7.3 oracle 0x04");
+_Static_assert(CHP$M_DEFPRIV  == 0x10, "CHP$M_DEFPRIV != VAX V7.3 oracle 0x10");
+/* CHP$_ item codes (vms-d404: $CHKPRO's item list) */
+_Static_assert(CHP$_ACCESS == 1,  "CHP$_ACCESS != VAX V7.3 oracle 1");
+_Static_assert(CHP$_FLAGS  == 2,  "CHP$_FLAGS != VAX V7.3 oracle 2");
+_Static_assert(CHP$_PRIV   == 3,  "CHP$_PRIV != VAX V7.3 oracle 3");
+_Static_assert(CHP$_RIGHTS == 6,  "CHP$_RIGHTS != VAX V7.3 oracle 6");
+_Static_assert(CHP$_OWNER  == 12, "CHP$_OWNER != VAX V7.3 oracle 12");
+_Static_assert(CHP$_PROT   == 13, "CHP$_PROT != VAX V7.3 oracle 13");
+_Static_assert(CHP$_ACL    == 14, "CHP$_ACL != VAX V7.3 oracle 14");
+_Static_assert(CHP$_UIC    == 22, "CHP$_UIC != VAX V7.3 oracle 22");
 
 /* ---- Persona id constant (issdef.h) — ORACLE-PINNED ---- */
 _Static_assert(ISS$C_ID_NATURAL == 1, "ISS$C_ID_NATURAL != VAX V7.3 oracle 1");

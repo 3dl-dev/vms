@@ -21,6 +21,7 @@
 #include "vms/logical.h"
 #include "ovmx_layout.h"
 #include "ssdef.h"
+#include "vms_kif.h"      /* vms_kif_chkpriv, VMS_PRV_M_SYSNAM */
 
 /*
  * lnm_seed_system_locating - Define a SYSTEM logical, with a host-tooling
@@ -53,9 +54,36 @@
  * sysadmin's system-wide DEFINE/SYSTEM taking effect for every OTHER
  * process) are completely unaffected.
  */
+/*
+ * lnm_seed_system_allowed - may THIS process seed an executive-mode LNM$SYSTEM
+ * name (rd vms-ec7e)?
+ *
+ * The system-locating names are executive-mode names in LNM$SYSTEM, and only
+ * a process holding SYSNAM can create an executive-mode name: $CRELNM from a
+ * process without it is maximized to the caller's own mode (VMS, and the
+ * executive since rd vms-ef21, vms_lnm.c lnm_effective_mode). Logical names
+ * exist once PER MODE and a translation returns the OUTERMOST, so a SYSPRV
+ * process lacking SYSNAM that "re-seeded" SYS$SYSDEVICE left a supervisor-mode
+ * duplicate that shadowed the node's executive-mode name for every process
+ * from then on -- measured: a VDA0: left by an earlier session shadowed the
+ * VDA300: a later SYSNAM DCL seeded, and SYS$SYSTEM:TCC.EXE was looked up on
+ * the wrong volume (%DCL-E-IVIMAGE, test_syssvc_mmk_build). On VMS only the
+ * boot (SYSINIT / STARTUP, with SYSNAM) defines these names; a login without
+ * SYSNAM never writes LNM$SYSTEM. So without SYSNAM the seed is skipped and
+ * the process sees the node's names. With no executive (host build/test
+ * tooling) chkpriv cannot answer (SS$_NOSUCHDEV, not SS$_NOPRIV) and the
+ * seed goes on to its disclosed LNM$PROCESS fallback below.
+ */
+static int lnm_seed_system_allowed(void)
+{
+    return vms_kif_chkpriv(VMS_PRV_M_SYSNAM) != SS$_NOPRIV;
+}
+
 static void lnm_seed_system_locating(lnm_manager_t *mgr, const char *name,
                                      const char *value, uint32_t attr)
 {
+    if (!lnm_seed_system_allowed())
+        return;
     uint32_t st = lnm_create(mgr, LNM_SYSTEM_TABLE, name, value,
                              attr, LNM_MODE_EXEC);
     if (st == SS$_NOSUCHDEV)
@@ -77,6 +105,8 @@ static void lnm_seed_system_locating_multi(lnm_manager_t *mgr, const char *name,
                                            const char **values, int nvalues,
                                            uint32_t attr)
 {
+    if (!lnm_seed_system_allowed())
+        return;
     uint32_t st = lnm_create_multi(mgr, LNM_SYSTEM_TABLE, name, values,
                                    nvalues, attr, LNM_MODE_EXEC);
     if (st == SS$_NOSUCHDEV)

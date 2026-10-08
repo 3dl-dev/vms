@@ -488,6 +488,7 @@ register-continue-identity-dropped
 rms-create-filespec-not-translated
 scratch-dir-owner-not-system
 lnm-manager-delete-noop
+lnm-seed-without-sysnam
 lnm-group-scope-collapsed
 lnm-privilege-check-bypassed
 mbx-not-shared
@@ -5273,6 +5274,24 @@ EOF
                       ;;
         esac;;
 
+    lnm-seed-without-sysnam)
+        case "$_f" in
+        facility)     echo "vmslnm system-name seeding (src/vmslnm/lnm_defaults.c lnm_setup_defaults), which every DCL start runs against the executive-resident LNM\$SYSTEM";;
+        targets)      echo "vmslnm/lnm_defaults.c";;
+        suites_red)   echo "test_syssvc_lnm_system";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lnm_seed_system_allowed() stops asking the executive for SYSNAM and always says yes, so a process holding SYSPRV but not SYSNAM seeds LNM\$SYSTEM again: the executive maximizes its executive-mode \$CRELNM to supervisor mode (rd vms-ef21) and the duplicate, outermost-mode-wins, shadows the node's SYS\$SYSDEVICE for every later process (rd vms-ec7e: test_syssvc_mmk_build's SYS\$SYSTEM:TCC.EXE looked up on the wrong volume). test_syssvc_lnm_system seeds with SYSNAM disabled and a marker device, and the marker lands in LNM\$SYSTEM.";;
+        require_fail) cat <<'EOF'
+seed: a process without SYSNAM left NO name in LNM$SYSTEM (no supervisor-mode duplicate to shadow the node's)
+seed: SYS$SYSDEVICE still translates to the node's system device, not the unprivileged process's
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     lnm-manager-delete-noop)
         case "$_f" in
         facility)     echo "vmslnm-manager LNM\$SYSTEM path (src/vmslnm/lnm_client.c + lnm_translate.c), the DCL/vmsfs-facing client vms-96e2 built on top of vms-d37's executive-resident LNM\$SYSTEM, hardened by vms-48ab (removal of its host-tooling fallback)";;
@@ -7805,6 +7824,14 @@ apply_edit() {
         # over a name it did not remove. A second apply finds no
         # `e->in_use = 0;` left and is the no-op selftest requires.
         sed -i 's|^    e->in_use = 0;$|    /* NEGCTL lnm-delete-noop: entry not freed */|' "$_file";;
+
+    lnm-seed-without-sysnam)
+        # UNIQUE TEXT: this exact return occurs once in lnm_defaults.c, the
+        # body of lnm_seed_system_allowed(). Replacing it with `return 1;`
+        # lets a process without SYSNAM seed LNM$SYSTEM again (the pre-vms-ec7e
+        # shape). A second apply finds no such line and is the no-op selftest
+        # requires.
+        sed -i 's|^    return vms_kif_chkpriv(VMS_PRV_M_SYSNAM) != SS\$_NOPRIV;$|    return 1; /* NEGCTL lnm-seed-without-sysnam */|' "$_file";;
 
     lnm-manager-delete-noop)
         # UNIQUE TEXT: this exact call+argument list occurs once in

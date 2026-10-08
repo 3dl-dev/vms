@@ -5681,7 +5681,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "rms_textfile_open() -- the sequential reader EVERY ODS-2 text read-back rides -- opens the file declaring the wrong record format (FAB\$C_VAR instead of FAB\$C_STMLF). Those files are stream-LF (one LF-terminated text record); read as VARIABLE, RMS takes the first two data bytes of each record as a binary record-length count, so every \$GET reframes the record into garbage and no record reads back byte-exact. This one reader misframe reddens BOTH facilities that depend on it: (1) LOGINOUT -- the OPERATOR.LOG and LASTLOGIN per-boot writer read-backs fail, tripping the whole-suite gate (\"auth + boot writers are sourced from the ODS-2 volume via the ACP\"); and (2) the TCP/IP config stores -- test_syssvc_tcpip_host_acp's host_store_has() and test_syssvc_tcpip_config_acp's count_records_with() both call rms_textfile_open()+getline(), so every SET HOST/ROUTE/INTERFACE/NAME_SERVICE read-back garbles and their record-presence/append-vs-supersede assertions fail. This is the exact property the reroute exists to provide (INV-6: a record is read byte-faithful from the ODS-2 platter through RMS-over-ACP, not a POSIX copy). RE-ANCHOR note (vms-387/FINDING-2): the tcpip pair has NO tcpip-distinct product code -- both tests call the shared rms_textfile primitive directly -- so their only honest can-fail anchor IS this shared reader; a dedicated append-side defect was rejected because it would also redden test_syssvc_ident's OPCOM writer path (a name/scope lie). The binary SYSUAF read rides the indexed \$UAFDEF engine (read_binary_sysuaf_system), NOT rms_textfile_open, so it is untouched; so are the \$CREATE/\$PUT that built the fixtures, the OPERATOR.LOG/LASTLOGIN and SET-verb WRITERS (their own \$PUT path -- the 'appended over the ACP' rc==0 checks stay green), and the mount/dismount edges (a dismounted volume returns a NULL handle, not garbage, so the fail-honest checks stay green). test_syssvc_tcpip_service_db ALSO rides this reader and reddens under it (reported as a non-gating lint line per vms-49f); it carries its own dedicated anchor, so it is not claimed here.";;
+        why)          echo "rms_textfile_open() -- the sequential reader EVERY ODS-2 text read-back rides -- reads the file in the wrong record format (FAB\$C_VAR forced after \$OPEN instead of the file's own STMLF). Those files are stream-LF (one LF-terminated text record); read as VARIABLE, RMS takes the first two data bytes of each record as a binary record-length count, so every \$GET reframes the record into garbage and no record reads back byte-exact. This one reader misframe reddens BOTH facilities that depend on it: (1) LOGINOUT -- the OPERATOR.LOG and LASTLOGIN per-boot writer read-backs fail, tripping the whole-suite gate (\"auth + boot writers are sourced from the ODS-2 volume via the ACP\"); and (2) the TCP/IP config stores -- test_syssvc_tcpip_host_acp's host_store_has() and test_syssvc_tcpip_config_acp's count_records_with() both call rms_textfile_open()+getline(), so every SET HOST/ROUTE/INTERFACE/NAME_SERVICE read-back garbles and their record-presence/append-vs-supersede assertions fail. This is the exact property the reroute exists to provide (INV-6: a record is read byte-faithful from the ODS-2 platter through RMS-over-ACP, not a POSIX copy). RE-ANCHOR note (vms-387/FINDING-2): the tcpip pair has NO tcpip-distinct product code -- both tests call the shared rms_textfile primitive directly -- so their only honest can-fail anchor IS this shared reader; a dedicated append-side defect was rejected because it would also redden test_syssvc_ident's OPCOM writer path (a name/scope lie). The binary SYSUAF read rides the indexed \$UAFDEF engine (read_binary_sysuaf_system), NOT rms_textfile_open, so it is untouched; so are the \$CREATE/\$PUT that built the fixtures, the OPERATOR.LOG/LASTLOGIN and SET-verb WRITERS (their own \$PUT path -- the 'appended over the ACP' rc==0 checks stay green), and the mount/dismount edges (a dismounted volume returns a NULL handle, not garbage, so the fail-honest checks stay green). test_syssvc_tcpip_service_db ALSO rides this reader and reddens under it (reported as a non-gating lint line per vms-49f); it carries its own dedicated anchor, so it is not claimed here.";;
         require_fail) cat <<'EOF'
 LOGINOUT auth + boot writers are sourced from the ODS-2 volume via the ACP
 both host records survive -- SET HOST adds, it does not supersede
@@ -8147,16 +8147,18 @@ apply_edit() {
         sed -i 's|ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;|ctx->fid_num = a.fid_num + 1; ctx->fid_seq = a.fid_seq; /* NEGCTL dcl-acp-search-fid-fabricated */|' "$_file";;
 
     loginout-acp-auth-from-ods2)
-        # `fab$b_rfm = FAB$C_STMLF;` appears in rms_textfile_open, _append_line
-        # and _write_line; scope the mutation to the READER (rms_textfile_open,
-        # /^rms_textfile_t \*rms_textfile_open/,/^}$/) so ONLY the read path
-        # misframes -- the writers must keep writing stream-LF or the record they
-        # store would not be the one a correct reader reads back. STMLF -> VAR
-        # makes RMS take each row's first two bytes as a length count, so the
-        # SYSUAF/LASTLOGIN read-backs reframe into garbage while the $PUT/$CREATE
-        # writers are untouched. After substitution no `FAB$C_STMLF` is left in
-        # the reader's range -- the no-op the idempotency selftest requires.
-        sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->fab.fab$b_rfm = FAB$C_STMLF;|    tf->fab.fab$b_rfm = FAB$C_VAR; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file";;
+        # Scoped to the READER (rms_textfile_open, /^rms_textfile_t
+        # \*rms_textfile_open/,/^}$/) so ONLY the read path misframes -- the
+        # writers keep writing stream-LF. The record format is forced to VAR
+        # AFTER $OPEN: since rd vms-158 $OPEN loads the file's own format from
+        # the header (as VMS does), so a wrong format declared BEFORE $OPEN is
+        # (correctly) overwritten and no longer misframes anything. VAR makes
+        # RMS take each row's first two bytes as a length count, so the
+        # SYSUAF/LASTLOGIN read-backs reframe into garbage while the
+        # $PUT/$CREATE writers are untouched. After substitution the 4-space
+        # `    tf->rab = cc$rms_rab;` no longer occurs in the reader's range --
+        # the no-op the idempotency selftest requires.
+        sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->rab = cc$rms_rab;|    tf->fab.fab$b_rfm = FAB$C_VAR; tf->rab = cc$rms_rab; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file";;
 
     multiuser-stage-shared-not-peruser)
         # UNIQUE TEXT: `rms_stage_over_acp(IMG_SPEC, user_dest)` occurs once (the

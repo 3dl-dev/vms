@@ -802,6 +802,9 @@ and said on the console
 and still nothing was asked of anybody
 held as UNHEARD
 the silence window later it is given up on, like an unanswered member
+... and the request acks exactly the one message it then really sent there
+... but not yet a request: it has not said what it is (rd vms-e88)
+the new member hears this node's identity on ITS OWN connection at once
 EOF
         ;;
         esac;;
@@ -875,6 +878,7 @@ the join is back in IDLE to ask again, not parked
 while nobody is a member, the start waits out RECNXINTERVAL
 ... counted as a back-off cut short
 a member that stayed silent is waited out in full (E80's rate bound), though it says it is a member
+the joining system is never asked
 EOF
         ;;
         esac;;
@@ -1405,6 +1409,10 @@ EOF
 and NO open yet: their answers come first
 the coordinator waits in RECORDS
 each 0x81/0x05 consumed and counted, none unrouted
+no open goes out after a rejection
+the rejection is counted
+and the transition is abandoned
+and said
 EOF
                       ;;
         esac;;

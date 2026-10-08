@@ -1748,6 +1748,22 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
+    /*
+     * NETMBX (PRV$V_NETMBX, "create network device"): assigning a channel to the DECnet
+     * network device (NET:/_NET:) is how a process creates a network connection, and VMS
+     * refuses it without NETMBX. Checked against cur_privs, the ENABLED mask, after the
+     * lookup so a system with no NIC still answers SS$_NOSUCHDEV for a device that does
+     * not exist (negctl: net-assign-netmbx-check-removed).
+     */
+    if (strcmp(dev->devnam, VMS_DECNET_DEVNAM) == 0 &&
+        !(proc->cur_privs & VMS_PRV_M_NETMBX)) {
+        exec_unlock(&vms_device_list_lock);
+        exec_free(ch);
+        args.chan = 0;
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
     ch->dev = dev;
     ch->owner_linux_pid = proc->linux_pid;
 

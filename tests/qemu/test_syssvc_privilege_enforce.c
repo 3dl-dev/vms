@@ -8,6 +8,7 @@
  *
  *   TMPMBX  $CREMBX (temporary) is SS$_NOPRIV without it, succeeds with it.
  *   PRMMBX  $CREMBX (permanent) is SS$_NOPRIV without it, succeeds with it.
+ *   NETMBX  $ASSIGN of the DECnet device _NET: is SS$_NOPRIV without it, a channel with it.
  *   READALL IO$_ACCESS (read) of SYSUAF.DAT (S:RWE,O:RWE,G:none,W:none) is
  *           SS$_NOPRIV for [100,100] and granted with READALL alone.
  *   BYPASS  the same open is granted with BYPASS alone.
@@ -129,6 +130,24 @@ int main(void)
     priv(PRV$M_PRMMBX, 1);
     check($VMS_STATUS_SUCCESS(crembx(1)), "$CREMBX (permanent) with PRMMBX succeeds");
     priv(PRV$M_PRMMBX, 0);
+
+    /* --- NETMBX: a channel to the DECnet network device -------------------------- */
+    priv(PRV$M_NETMBX, 1);
+    {
+        uint32_t nchan = 0;
+        uint32_t on = vms_kif_assign("_NET:", &nchan);
+        check($VMS_STATUS_SUCCESS(on) && nchan != 0,
+              "$ASSIGN _NET: with NETMBX yields a channel (the harness has a NIC)");
+        if ($VMS_STATUS_SUCCESS(on))
+            (void)vms_kif_dassgn(nchan);
+    }
+    priv(PRV$M_NETMBX, 0);
+    {
+        uint32_t nchan = 0;
+        /* negctl: net-assign-netmbx-check-removed */
+        check(vms_kif_assign("_NET:", &nchan) == SS$_NOPRIV,
+              "$ASSIGN _NET: without NETMBX is SS$_NOPRIV");
+    }
 
     /* --- READALL / BYPASS / SYSPRV on a file the UIC has no category for ----- */
     check(open_sysuaf(chan, sysexe) == SS$_NOPRIV,

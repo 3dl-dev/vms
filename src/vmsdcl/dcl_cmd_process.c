@@ -42,6 +42,9 @@
 #include "clidef.h"        /* CLI$M_NOWAIT — lib$spawn flags */
 #include "imgact_activate.h"
 #include "dcl/dcl_rms.h"    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
+#include <poll.h>
+#include <sys/socket.h>
+#include "ovmx_cli.h"       /* the CLI callback channel (vms-cded) */
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -1841,6 +1844,103 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
     return rc;
 }
 
+/*
+ * THE CLI CALLBACK (rd vms-cded). LIB$SET_SYMBOL / LIB$GET_SYMBOL /
+ * LIB$DELETE_SYMBOL in an image run from DCL act on DCL's own tables, as on
+ * VMS. dcl_cli_handler answers one request; an in-process image reaches it
+ * through lib$$set_cli_handler (registered at session start), a fork()+execve()
+ * image over the OVMX$CLI_FD socketpair DCL serves while it waits. The image's
+ * local symbols land at DCL's current command level (LIB$ Manual,
+ * LIB$SET_SYMBOL).
+ */
+void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
+{
+    char name[OVMX_CLI_NAME_MAX + 1];
+    char value[OVMX_CLI_VALUE_MAX + 1];
+    uint16_t nl = rq->name_len > OVMX_CLI_NAME_MAX ? OVMX_CLI_NAME_MAX : rq->name_len;
+    uint16_t vl = rq->value_len >= OVMX_CLI_VALUE_MAX ? OVMX_CLI_VALUE_MAX - 1
+                                                      : rq->value_len;
+    int scope = (rq->table == LIB$K_CLI_GLOBAL_SYM) ? DCL_SYM_GLOBAL : DCL_SYM_LOCAL;
+    const char *v;
+
+    memset(rs, 0, sizeof *rs);
+    memcpy(name, rq->name, nl);
+    name[nl] = '\0';
+    switch (rq->op) {
+    case OVMX_CLI_OP_SET:
+        memcpy(value, rq->value, vl);
+        value[vl] = '\0';
+        rs->status = dcl_sym_set(name, value, scope) == 0 ? SS$_NORMAL
+                                                          : LIB$_INSCLIMEM;
+        break;
+    case OVMX_CLI_OP_GET:
+        v = dcl_sym_get_which(name, &scope);
+        if (!v) {
+            rs->status = LIB$_NOSUCHSYM;
+            break;
+        }
+        rs->value_len = (uint16_t)strnlen(v, OVMX_CLI_VALUE_MAX);
+        memcpy(rs->value, v, rs->value_len);
+        rs->table = scope == DCL_SYM_GLOBAL ? LIB$K_CLI_GLOBAL_SYM
+                                            : LIB$K_CLI_LOCAL_SYM;
+        rs->status = SS$_NORMAL;
+        break;
+    case OVMX_CLI_OP_DELETE:
+        rs->status = dcl_sym_delete(name, scope) == 0 ? SS$_NORMAL
+                                                      : LIB$_NOSUCHSYM;
+        break;
+    default:
+        rs->status = SS$_BADPARAM;
+        break;
+    }
+}
+
+/*
+ * Wait for the fork()ed image to exit or stop -- the same waitid(WNOWAIT)
+ * outcome the caller reads -- answering its CLI callbacks on `fd` meanwhile.
+ * The image's end of the socketpair closes when it exits, so poll() wakes at
+ * once; a stop (Ctrl-Y) is seen within the poll interval.
+ */
+static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
+{
+    for (;;) {
+        if (fd >= 0) {
+            struct pollfd p = { fd, POLLIN, 0 };
+            int r = poll(&p, 1, 100);
+            if (r > 0 && (p.revents & POLLIN)) {
+                struct ovmx_cli_req rq;
+                ssize_t n = read(fd, &rq, sizeof rq);
+                if (n == (ssize_t)sizeof rq) {
+                    struct ovmx_cli_rsp rs;
+                    struct sigaction ign, old;
+                    dcl_cli_handler(&rq, &rs);
+                    /* An image killed mid-call must not take DCL with it:
+                     * a SIGPIPE raised by this write is discarded. */
+                    memset(&ign, 0, sizeof ign);
+                    ign.sa_handler = SIG_IGN;
+                    sigaction(SIGPIPE, &ign, &old);
+                    (void)write(fd, &rs, sizeof rs);
+                    sigaction(SIGPIPE, &old, NULL);
+                    continue;
+                }
+                if (n == 0)
+                    fd = -1;              /* the image's end is closed */
+            } else if (r > 0) {
+                fd = -1;                  /* POLLHUP / POLLERR */
+            }
+        }
+        memset(si, 0, sizeof *si);
+        int opts = WEXITED | WSTOPPED | WNOWAIT | (fd >= 0 ? WNOHANG : 0);
+        if (waitid(P_PID, (id_t)pid, si, opts) < 0) {
+            if (errno == EINTR)
+                continue;
+            return;
+        }
+        if (si->si_pid == pid)
+            return;
+    }
+}
+
 static int dcl_activate_image_inner(struct dcl_context *ctx,
                                     const char *display_name,
                                     const char *linux_path, char *argv[])
@@ -1924,9 +2024,23 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         }
     }
 
+    /* The CLI callback channel the image's LIB$*_SYMBOL calls reach DCL by
+     * (vms-cded). No channel (socketpair failed) only means no callback. */
+    int cli_sv[2] = { -1, -1 };
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, cli_sv) != 0)
+        cli_sv[0] = cli_sv[1] = -1;
+
     pid_t pid = fork();
     if (pid == 0) {
         /* Child */
+        if (cli_sv[1] >= 0) {
+            int cfd = dup(cli_sv[1]);          /* dup: no FD_CLOEXEC */
+            if (cfd >= 0) {
+                char nb[16];
+                snprintf(nb, sizeof nb, "%d", cfd);
+                setenv(OVMX_CLI_FD_ENV, nb, 1);
+            }
+        }
         /*
          * IMAGE ACTIVATION CONTINUES THIS PROCESS'S IDENTITY (vms-4d7,
          * Option B). On OpenVMS, RUN / a foreign command / a DCL utility
@@ -1968,10 +2082,11 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         dcl_running_child = (sig_atomic_t)pid;
 
         siginfo_t si;
-        memset(&si, 0, sizeof(si));
-        while (waitid(P_PID, (id_t)pid, &si, WEXITED | WSTOPPED | WNOWAIT) < 0 &&
-               errno == EINTR)
-            ;
+        if (cli_sv[1] >= 0)
+            close(cli_sv[1]);
+        dcl_cli_wait(cli_sv[0], pid, &si);
+        if (cli_sv[0] >= 0)
+            close(cli_sv[0]);
 
         if (si.si_code == CLD_STOPPED || si.si_code == CLD_TRAPPED) {
             /* Child stopped by Ctrl-Y — save for CONTINUE (do NOT reap it). */
@@ -2034,6 +2149,8 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             return SS$_ABORT;
         }
     } else {
+        if (cli_sv[0] >= 0) close(cli_sv[0]);
+        if (cli_sv[1] >= 0) close(cli_sv[1]);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }

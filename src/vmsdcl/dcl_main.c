@@ -30,6 +30,7 @@
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_mbx.h"
+#include "ovmx_cli.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
@@ -547,6 +548,14 @@ static void setup_session(struct dcl_context *ctx)
          */
         lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK",
                    "SYS$SYSDEVICE", LNM_ATTR_CRELOG, LNM_MODE_SUPER);
+    }
+
+    /* The CLI callback: an image activated in this process reaches DCL's
+     * symbol tables through LIB$SET/GET/DELETE_SYMBOL (rd vms-cded). */
+    {
+        extern void dcl_cli_handler(const struct ovmx_cli_req *,
+                                    struct ovmx_cli_rsp *);
+        lib$$set_cli_handler(dcl_cli_handler);
     }
 
     /* Register built-in commands */

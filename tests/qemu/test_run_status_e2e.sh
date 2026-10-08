@@ -178,6 +178,35 @@ else
     bad "RUN RC3LOGIN from SYS\$LOGIN: did not run the image (vms-73e)"
 fi
 
+# 4. THE CLI CALLBACK (rd vms-cded). An image's LIB$GET_SYMBOL reads DCL's
+#    symbol and its LIB$SET_SYMBOL leaves a global and a local symbol in DCL's
+#    own tables -- visible from DCL after the image has exited, as on VMS.
+run_cmd 'OVMX_CLI_IN = "from dcl"'
+run_cmd 'RUN SYS$SYSTEM:SYMSET.EXE'
+CLI_SEG="$SEG"
+echo "----- verbatim: RUN SYS\$SYSTEM:SYMSET.EXE -----"
+printf '%s\n' "$CLI_SEG"
+echo "-----------------------------------------------"
+if printf '%s\n' "$CLI_SEG" | grep -qF 'SYMSET: OVMX_CLI_IN="from dcl" table=1'; then
+    ok "LIB\$GET_SYMBOL in an image reads DCL's local symbol (vms-cded)"
+else
+    bad "LIB\$GET_SYMBOL in an image did not see DCL's OVMX_CLI_IN (vms-cded)"
+fi
+# (SHOW SYMBOL's "=" vs "==" for a global is DCL's own display, tracked apart;
+#  what this asserts is that the image's symbol reached DCL's table.)
+run_cmd 'SHOW SYMBOL OVMX_CLI_GLOBAL'
+if printf '%s\n' "$SEG" | grep -qE 'OVMX_CLI_GLOBAL ==? "set by image"'; then
+    ok "LIB\$SET_SYMBOL from an image left a GLOBAL symbol in DCL (vms-cded)"
+else
+    bad "the image's global symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"
+fi
+run_cmd 'SHOW SYMBOL OVMX_CLI_LOCAL'
+if printf '%s\n' "$SEG" | grep -qF 'OVMX_CLI_LOCAL = "local from image"'; then
+    ok "LIB\$SET_SYMBOL from an image left a LOCAL symbol in DCL (vms-cded)"
+else
+    bad "the image's local symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"
+fi
+
 echo ""
 echo "=== RUN \$STATUS e2e: $PASS passed, $FAIL failed ==="
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null

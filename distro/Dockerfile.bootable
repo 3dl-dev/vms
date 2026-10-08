@@ -93,6 +93,15 @@ RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -m
         /tmp/build/link-native/RC3.EXE \
         "/tmp/build/link-native/SYSLIB/DECC\$SHR.EXE"
 
+# SYMSET.EXE (vms-cded): the CLI-callback RUN target -- LIB$GET_SYMBOL reads a
+# DCL symbol, LIB$SET_SYMBOL leaves a global and a local one in DCL's tables;
+# tests/qemu/test_run_status_e2e.sh RUNs it and shows them from DCL.
+RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+    sh src/apps/rctest/mk_symset.sh \
+        /tmp/build/bin/LINK.EXE \
+        /tmp/build/link-native/SYMSET.EXE \
+        /tmp/build/link-native/SYSLIB
+
 # SEMANTIC-ORACLE PROBES (rd vms-8d1): tools/oracle/semantic/specs/*.py -> C
 # (spgen.py) -> cc -> LINK.EXE, one SP_<FAMILY>.EXE per service family, against
 # the same producer graph + flags as RC3.EXE above. They are NOT shipped: the
@@ -450,6 +459,7 @@ COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
 COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
 COPY --from=link-native /tmp/build/link-native/PARTS.EXE /link-native/PARTS.EXE
 COPY --from=link-native /tmp/build/link-native/RC3.EXE /link-native/RC3.EXE
+COPY --from=link-native /tmp/build/link-native/SYMSET.EXE /link-native/SYMSET.EXE
 COPY --from=link-native /tmp/build/semprobe /link-native/semprobe
 
 # KVER is the from-source kernel's kernelrelease (copied from kernel-build as
@@ -596,6 +606,7 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     cp build-static/bin/STARTUP.EXE    /system-stage/init && \
     cp /link-native/IMGACT.EXE         /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp /link-native/RC3.EXE            /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp /link-native/SYMSET.EXE         /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp "/link-native/SYSEXE/DCL.EXE"      /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp "/link-native/SYSEXE/LOGINOUT.EXE" /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp /link-native/SYSLIB/*.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSLIB/ && \

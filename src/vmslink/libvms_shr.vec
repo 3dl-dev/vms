@@ -462,3 +462,5 @@ sys$ascutc=PROCEDURE
 sys$timcon=PROCEDURE
 sys$clrast=PROCEDURE
 sys$setdfprot=PROCEDURE
+# CLI callback registration -- DCL hands LIBVMS its symbol handler (rd vms-cded). APPENDED.
+lib$$set_cli_handler=PROCEDURE

@@ -24,9 +24,9 @@
     },
     {
       "group": "imgact-run-status-fixture-x86_64",
-      "names": ["RC3.EXE"],
+      "names": ["RC3.EXE", "SYMSET.EXE"],
       "missing_on": "vax",
-      "reason": "Decision A (vms-42d), vms-707/vms-431: RC3.EXE is the minimal RUN target for the x86_64 DCL $STATUS-propagation acceptance gate (tests/qemu/test_run_status_e2e.sh). It is a LINK.EXE-built VMS-native image (zero DT_NEEDED/DT_HASH, PT_INTERP=IMGACT.EXE) staged into SYS$SYSTEM: so `RUN SYS$SYSTEM:RC3.EXE` exercises the reworked IMGACT.EXE-over-ACP RUN fork/waitid-peek/getexit path -- the SAME custom symbol-vector activation model as IMGACT.EXE itself (already allowlisted just above). VAX activates images through NetBSD's own ld.elf_so, so a VAX build of RC3.EXE would be a different artifact testing a different activation path, and no VAX test references it (RC3 appears only under tests/qemu/). RC3.EXE therefore has no VAX role by design, exactly like its activator -- not an unbuilt gap."
+      "reason": "Decision A (vms-42d), vms-707/vms-431: RC3.EXE is the minimal RUN target for the x86_64 DCL $STATUS-propagation acceptance gate (tests/qemu/test_run_status_e2e.sh). It is a LINK.EXE-built VMS-native image (zero DT_NEEDED/DT_HASH, PT_INTERP=IMGACT.EXE) staged into SYS$SYSTEM: so `RUN SYS$SYSTEM:RC3.EXE` exercises the reworked IMGACT.EXE-over-ACP RUN fork/waitid-peek/getexit path -- the SAME custom symbol-vector activation model as IMGACT.EXE itself (already allowlisted just above). VAX activates images through NetBSD's own ld.elf_so, so a VAX build of RC3.EXE would be a different artifact testing a different activation path, and no VAX test references it (RC3 appears only under tests/qemu/). RC3.EXE therefore has no VAX role by design, exactly like its activator -- not an unbuilt gap. SYMSET.EXE (vms-cded) is the same kind of fixture for the same gate: the RUN target whose LIB$SET/GET_SYMBOL calls prove the CLI callback into DCL, built by the same mk_* + LINK.EXE recipe and staged the same way."
     },
     {
       "group": "self-host-linker-x86_64",

@@ -18,6 +18,8 @@ struct fal_search {
     char spec[DNET_DAP_MAX_SPEC + 1];
     char esa[NAM$C_MAXESS + 1];
     char rsa[NAM$C_MAXRSS + 1];
+    int parse_failed;
+    uint32_t last_sts, last_stv;
 };
 
 int dnet_fal_search_begin(const char *spec, void **ctx)
@@ -35,11 +37,11 @@ int dnet_fal_search_begin(const char *spec, void **ctx)
     s->nam.nam$l_rsa = s->rsa;
     s->nam.nam$b_rss = NAM$C_MAXRSS;
     s->fab.fab$l_nam = &s->nam;
-    if (sys$parse(&s->fab, 0, 0) != RMS$_NORMAL) {
-        rms_search_end(&s->nam);
-        free(s);
-        return -1;
-    }
+    /* A failed $PARSE keeps the context: the first next() then reports no
+     * file and dnet_fal_search_status() says why (rd vms-277a). */
+    s->parse_failed = (sys$parse(&s->fab, 0, 0) != RMS$_NORMAL);
+    s->last_sts = s->fab.fab$l_sts;
+    s->last_stv = s->fab.fab$l_stv;
     *ctx = s;
     return 0;
 }
@@ -47,13 +49,28 @@ int dnet_fal_search_begin(const char *spec, void **ctx)
 int dnet_fal_search_next(void *ctx, char *rsa, size_t cap)
 {
     struct fal_search *s = ctx;
-    if (!s || !rsa || cap == 0) return -1;
-    if (sys$search(&s->fab, 0, 0) != RMS$_NORMAL) return -1;   /* RMS$_NMF / error */
+    if (!s || !rsa || cap == 0 || s->parse_failed) return -1;
+    uint32_t st = sys$search(&s->fab, 0, 0);
+    s->last_sts = st;
+    s->last_stv = s->fab.fab$l_stv;
+    if (st != RMS$_NORMAL) return -1;   /* RMS$_NMF / FNF / error */
     size_t n = s->nam.nam$b_rsl;
     if (n >= cap) return -1;
     memcpy(rsa, s->rsa, n);
     rsa[n] = '\0';
     return 0;
+}
+
+uint32_t dnet_fal_search_status(void *ctx, uint32_t *stv, char *esa, size_t cap)
+{
+    struct fal_search *s = ctx;
+    if (stv) *stv = s ? s->last_stv : 0;
+    if (esa && cap) {
+        esa[0] = '\0';
+        size_t n = s ? s->nam.nam$b_esl : 0;
+        if (n && n < cap) { memcpy(esa, s->esa, n); esa[n] = '\0'; }
+    }
+    return s ? s->last_sts : RMS$_FNF;
 }
 
 void dnet_fal_search_end(void *ctx)
@@ -138,8 +155,10 @@ struct fal_rfile {
     char spec[DNET_DAP_MAX_SPEC + 1];
 };
 
-int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
+int dnet_fal_ropen_st(const char *spec, void **h, uint8_t *rfm, uint8_t *rat,
+                      uint32_t *sts)
 {
+    if (sts) *sts = RMS$_FNF;
     if (!spec || !h || strlen(spec) > DNET_DAP_MAX_SPEC) return -1;
     struct fal_rfile *r = calloc(1, sizeof *r);
     if (!r) return -1;
@@ -151,14 +170,22 @@ int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
     r->fab.fab$b_shr = FAB$M_SHRGET;
     /* $OPEN loads the file's own record format into the FAB (rd vms-158),
      * and $GET frames by it: a VAR file reads back record for record. */
-    if (!(sys$open(&r->fab, 0, 0) & 1)) { free(r); return -1; }
+    uint32_t st = sys$open(&r->fab, 0, 0);
+    if (sts) *sts = st;
+    if (!(st & 1)) { free(r); return -1; }
     r->rab = cc$rms_rab;
     r->rab.rab$l_fab = &r->fab;
-    if (!(sys$connect(&r->rab, 0, 0) & 1)) { sys$close(&r->fab, 0, 0); free(r); return -1; }
+    st = sys$connect(&r->rab, 0, 0);
+    if (!(st & 1)) { if (sts) *sts = st; sys$close(&r->fab, 0, 0); free(r); return -1; }
     if (rfm) *rfm = r->fab.fab$b_rfm;
     if (rat) *rat = r->fab.fab$b_rat;
     *h = r;
     return 0;
+}
+
+int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
+{
+    return dnet_fal_ropen_st(spec, h, rfm, rat, NULL);
 }
 
 int dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len)
@@ -180,5 +207,71 @@ int dnet_fal_rclose(void *h)
     if (!r) return -1;
     uint32_t st = sys$close(&r->fab, 0, 0);
     free(r);
+    return (st & 1) ? 0 : -1;
+}
+
+/* ---- DIRECTORY LIST attributes, $ERASE, $RENAME (rd vms-277a) -------------
+ * Each runs as THIS process -- the FAL server process holds the authenticated
+ * user's UIC and privileges -- so the executive ACP makes every protection
+ * decision. Nothing here inspects a protection mask. */
+int dnet_fal_fileattr(const char *spec, struct dnet_fal_fattr *out, uint32_t *sts)
+{
+    struct rms_fileattr a;
+    if (sts) *sts = RMS$_FNF;
+    if (!spec || !out) return -1;
+    memset(out, 0, sizeof *out);
+    uint32_t st = rms_file_attr(spec, &a);
+    if (sts) *sts = st;
+    if (!(st & 1)) return -1;
+    out->org = a.org;                          /* 0x00 SEQ, 0x10 REL, 0x20 IDX = DAP ORG */
+    out->rfm = (uint8_t)(a.rfm & 0x0f);
+    out->rat = a.rat;
+    out->mrs = a.mrs;                          /* FAT maxrec                    */
+    out->lrl = a.lrl;                          /* FAT rsize: the longest record */
+    out->deq = a.defext;
+    out->alq = a.hiblk;
+    out->ebk = a.efblk;
+    out->ffb = a.ffbyte;
+    out->fileprot = a.fileprot;
+    out->uic_group = a.uic_group;
+    out->uic_member = a.uic_member;
+    out->revision = a.revision;
+    out->fsz = a.vfcsize;
+    memcpy(out->credate, a.credate, 8);
+    memcpy(out->revdate, a.revdate, 8);
+    memcpy(out->expdate, a.expdate, 8);
+    return 0;
+}
+
+int dnet_fal_erase(const char *spec, uint32_t *sts, uint32_t *stv)
+{
+    if (sts) *sts = RMS$_FNF;
+    if (stv) *stv = 0;
+    if (!spec || strlen(spec) > DNET_DAP_MAX_SPEC) return -1;
+    char buf[DNET_DAP_MAX_SPEC + 1];
+    strcpy(buf, spec);
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = buf;
+    fab.fab$b_fns = (uint8_t)strlen(buf);
+    uint32_t st = sys$erase(&fab, 0, 0);
+    if (sts) *sts = st;
+    if (stv) *stv = fab.fab$l_stv;
+    return (st & 1) ? 0 : -1;
+}
+
+int dnet_fal_rename(const char *oldspec, const char *newspec, uint32_t *sts, uint32_t *stv)
+{
+    if (sts) *sts = RMS$_FNF;
+    if (stv) *stv = 0;
+    if (!oldspec || !newspec || strlen(oldspec) > DNET_DAP_MAX_SPEC ||
+        strlen(newspec) > DNET_DAP_MAX_SPEC) return -1;
+    char ob[DNET_DAP_MAX_SPEC + 1], nb[DNET_DAP_MAX_SPEC + 1];
+    strcpy(ob, oldspec); strcpy(nb, newspec);
+    struct FAB ofab = cc$rms_fab, nfab = cc$rms_fab;
+    ofab.fab$l_fna = ob; ofab.fab$b_fns = (uint8_t)strlen(ob);
+    nfab.fab$l_fna = nb; nfab.fab$b_fns = (uint8_t)strlen(nb);
+    uint32_t st = sys$rename(&ofab, 0, 0, &nfab);
+    if (sts) *sts = st;
+    if (stv) *stv = ofab.fab$l_stv;
     return (st & 1) ? 0 : -1;
 }

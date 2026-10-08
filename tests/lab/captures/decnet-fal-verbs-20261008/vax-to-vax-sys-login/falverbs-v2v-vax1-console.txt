@@ -1,0 +1,96 @@
+DIRECTORY/FULL VAX2::SYS$LOGIN:BRK*.TXT
+
+Directory VAX2::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1                    File ID:  None
+Size:            1/9          Owner:    [200,201]
+Created:    8-OCT-2026 11:22:12.72
+Revised:    8-OCT-2026 11:22:23.72 (2)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      (remote)
+Caching attribute:  (remote)
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, Version limit: 0
+Record format:      VFC, 2 byte header, maximum 0 bytes, longest 16 bytes
+Record attributes:  Print file carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BRK2.TXT;1                    File ID:  None
+Size:            1/9          Owner:    [200,201]
+Created:    8-OCT-2026 11:22:17.10
+Revised:    8-OCT-2026 11:22:23.72 (2)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      (remote)
+Caching attribute:  (remote)
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, Version limit: 0
+Record format:      VFC, 2 byte header, maximum 0 bytes, longest 16 bytes
+Record attributes:  Print file carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BRKP.TXT;1          insufficient privilege or object protection violation
+
+Total of 3 files, 2/18 blocks.
+$ 
+DIRECTORY VAX2::SYS$LOGIN:BRK*.TXT
+
+Directory VAX2::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1          BRK2.TXT;1          BRKP.TXT;1          
+
+Total of 3 files.
+$ 
+TYPE VAX2::SYS$LOGIN:BRK*.TXT
+ 
+VAX2::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1
+ 
+bracket file one
+second record
+ 
+VAX2::SYS$SYSDEVICE:[SYSMGR]BRK2.TXT;1
+ 
+bracket file two
+%TYPE-W-OPENIN, error opening VAX2::SYS$SYSDEVICE:[SYSMGR]BRKP.TXT;1 as input
+-RMS-E-PRV, insufficient privilege or file protection violation
+$ 
+RENAME VAX2::SYS$LOGIN:BRK2.TXT VAX2::SYS$LOGIN:BRK3.TXT
+$ 
+DIRECTORY VAX2::SYS$LOGIN:BRK*.TXT
+
+Directory VAX2::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1          BRK3.TXT;1          BRKP.TXT;1          
+
+Total of 3 files.
+$ 
+DELETE VAX2::SYS$LOGIN:BRK3.TXT;*
+$ 
+DELETE VAX2::SYS$LOGIN:BRKP.TXT;*
+%DELETE-W-FILNOTDEL, error deleting VAX2::SYS$SYSDEVICE:[SYSMGR]BRKP.TXT;1
+-RMS-E-PRV, insufficient privilege or file protection violation
+$ 
+DIRECTORY VAX2::SYS$LOGIN:NOSUCH.TXT
+%DIRECT-W-NOFILES, no files found
+$ 
+DIRECTORY VAX2::SYS$LOGIN:BRK*.TXT
+
+Directory VAX2::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1          BRKP.TXT;1          
+
+Total of 2 files.
+$ 

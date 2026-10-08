@@ -14,6 +14,7 @@
 #include <vms/iodef.h>
 #include <vms/fatdef.h>
 #include <vms/descrip.h>
+#include <vms/atrdef.h>
 
 struct vstring { short length; char string[NAM$C_MAXRSS + 1]; };
 
@@ -48,5 +49,15 @@ int vms_abi_shapes(const char *spec, unsigned short *did_out, FAT *recattr)
     did_out[0] = fib.fib$w_did[0];
     (void)filedsc;
     (void)status;
+    /* The attribute list vms_file_stats_name hands IO$_ACCESS (P5). */
+    long long create = 0;
+    char ascnamebuff[256];
+    ATRDEF atrlst[] = {
+        { ATR$S_CREDATE, ATR$C_CREDATE, &create },
+        { ATR$S_RECATTR, ATR$C_RECATTR, recattr },
+        { ATR$S_ASCNAME, ATR$C_ASCNAME, &ascnamebuff },
+        { 0, 0, 0 }
+    };
+    did_out[2] = atrlst[1].atr$w_type;
     return (int)(recattr->fat$w_efblkl + recattr->fat$v_rtype + recattr->fat$w_ffbyte);
 }

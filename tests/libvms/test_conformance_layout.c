@@ -6,7 +6,7 @@
  * 2026-07-25, pre-ODS-2-flip), and it is a FALSE premise for today's
  * architecture: the VMS ABI structs below (FAB/RAB/NAM, the dsc$descriptor_*
  * family, ILE3/ILE2) never cross a binary boundary.  Their producer
- * (src/vmsrms/crtl_rms_stdio.c, the DECC$SHR veneer) and their consumer
+ * (src/vmsrms/crtl_rms_fd.c, the DECC$SHR C RTL file layer) and their consumer
  * (sys$create/$open/$connect/... in LIBVMSRMS$SHR) are BOTH OVMX code, compiled
  * by the same toolchain from these same headers.  The alpha-dec-vms GCC port's
  * produced code touches ZERO of these structs — it uses only the C stdio ABI

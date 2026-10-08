@@ -68,7 +68,7 @@
  * OVMX-LOCAL: sys$extend -- validates the caller's own FAB before the request.
  * OVMX-PARTIAL: sys$rename (vms-de7) -- exec: ONE IO$_MODIFY!IO$M_MOVE atomically
  *     re-links the directory entry to the new name, keeping the same File ID
- *     (not erase+create), proof=tests/qemu/test_syssvc_crtl_rms_veneer.c.
+ *     (not erase+create), proof=the alpha crtl-fd/crtl-rms-fileop gates.
  * OVMX-LOCAL: sys$rename -- resolves the old/new filespecs and validates both
  *     FABs in this process; the executive-absent path defers to rename(2) (vms-5f0).
  * OVMX-PARTIAL: sys$connect (vms-407) -- exec: $DEQs the RAB's
@@ -1190,7 +1190,11 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
         out->rat = fat->fat_rattrib;
         out->mrs = fat->fat_maxrec;
         out->lrl = fat->fat_rsize;
+        out->defext = fat->fat_defext;
+        out->vfcsize = fat->fat_vfcsize;
     }
+    out->revision = a.attr.revision;
+    memcpy(out->expdate, a.attr.expdate, 8);
 
     vms_kif_acp_deaccess(chan);
     vms_kif_dassgn(chan);
@@ -2252,8 +2256,9 @@ static uint32_t rms_idx_author_p3(struct FAB *fab, rms_file_t *h, p3_ctx_t **out
  * the maximum record size; FAT$W_RSIZE is the longest record, which for a FIX
  * file is its record size and otherwise grows as records are written ($CLOSE,
  * rms_close_record_lrl). Returns 0 -- leave the ACP's kind preset -- for a FIX
- * file with no record size: VMS refuses that $CREATE, but OVMX's byte-exact C
- * RTL veneer (crtl_rms_stdio.c) relies on it, so its header keeps the preset
+ * file with no record size: VMS refuses that $CREATE; OVMX accepted it for the
+ * byte-exact FIX-record C RTL veneer, retired in vms-cbd, and still does (whether
+ * to refuse it as VMS does is tracked separately), so its header keeps the preset
  * 512-byte record the reader then frames by.
  */
 static int rms_fat_from_fab(const struct FAB *fab, uint8_t ra[32])
@@ -2963,10 +2968,25 @@ static uint32_t rms_impl_rename(void *old_ptr, void *new_ptr)
 
         /* Rename has a SINGLE target (not a search-list op): use the first new
          * candidate. Try each source candidate in order; the first that
-         * resolves + moves wins (mirrors sys$erase's candidate walk). */
+         * resolves + moves wins (mirrors sys$erase's candidate walk).
+         *
+         * Except when the new name names the SAME device:[directory] as the
+         * old -- the same search list, member for member (SYS$SYSROOT:[SYSMGR]
+         * on both sides): then the file is renamed IN the directory it was
+         * found in, so source member i pairs with target member i. Observed:
+         * a VAX FAL renamed SYS$SYSROOT:[SYSMGR]RENME.TXT;1 to
+         * SYS$SYSROOT:[SYSMGR]RENAMED.TXT;1 in place
+         * (tests/lab/captures/decnet-fal-verbs-20261008/). Pairing with
+         * member 0 instead looked for the target directory in the node member
+         * and refused a file found in SYSCOMMON with SS$_NOSUCHFILE. */
+        int pair = (onc == nnc);
+        for (int k = 0; pair && k < onc; k++)
+            if (strcmp(ospecs[k].devnam, nspecs[k].devnam) != 0 ||
+                strcmp(ospecs[k].dirpath, nspecs[k].dirpath) != 0)
+                pair = 0;
         for (int i = 0; i < onc && !done; i++) {
             struct rms_acp_spec *os = &ospecs[i];
-            struct rms_acp_spec *ns = &nspecs[0];
+            struct rms_acp_spec *ns = &nspecs[pair ? i : 0];
 
             chan = 0;
             st = vms_kif_acp_assign(os->devnam, &chan);

@@ -196,61 +196,10 @@ if(TARGET test_syssvc_tcpip_inetd)
         ${CMAKE_SOURCE_DIR}/src/libvms/include)
 endif()
 
-# test_syssvc_crtl_rms_veneer (vms-47e): the C RTL stdio->RMS veneer proof.
-# The suite drives src/vmsrms/crtl_rms_stdio.c (ovmx_crtl_fopen/fwrite/fread/
-# fclose -> sys$create/$put/$get/$close), so compile that veneer TU into this
-# ONE target -- it is the same reusable source the alpha DECC$SHR re-point will
-# whole-archive (the vms-47e child), kept out of the shipped vmsrms archive /
-# LIBVMSRMS$SHR vector here so this proof adds zero blast radius to producers.
-# Its strong sys$create reference pulls the vmsrms archive with no extra anchor.
-if(TARGET test_syssvc_crtl_rms_veneer)
-    target_sources(test_syssvc_crtl_rms_veneer PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
-endif()
-
-# test_syssvc_crtl_features (vms-db7): the DEC C feature table (crtl_features.c) plus the veneer that reads it.
+# test_syssvc_crtl_features (vms-db7): the DEC C feature table (crtl_features.c).
 if(TARGET test_syssvc_crtl_features)
     target_sources(test_syssvc_crtl_features PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c)
-endif()
-
-# test_syssvc_crtl_rms_bigwrite (vms-126): the veneer-completeness proof (large
-# >64 KiB chunked writes + FAB$M_TMD delete-on-close temps). Same reusable veneer
-# TU as the base veneer proof; its strong sys$create/$search references pull the
-# vmsrms archive with no extra anchor.
-if(TARGET test_syssvc_crtl_rms_bigwrite)
-    target_sources(test_syssvc_crtl_rms_bigwrite PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
-endif()
-
-# test_syssvc_crtl_rms_fileops (vms-3c1): the x86_64 arch-discriminator for the
-# crtl_rms3 alpha-dec-vms SIGSEGV -- drives crtl_rms3's exact file-op sequence
-# (creat/close, open/close, unlink, rename, opendir/readdir/closedir) through
-# the SAME reusable veneer TU as the stdio + bigwrite proofs above, so a
-# heap-buffer-overflow/use-after-free/double-free reachable from the veneer,
-# the RMS engine, or the kernel ACP handler on x86_64 aborts under ASan with a
-# named file:line. Its strong sys$create reference pulls the vmsrms archive
-# with no extra anchor.
-if(TARGET test_syssvc_crtl_rms_fileops)
-    target_sources(test_syssvc_crtl_rms_fileops PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
-    # ASan/UBSan: a decisive signal for vms-3c1 needs a NAMED fault line, not
-    # just a bare SIGSEGV. Probe-gated exactly like tests/vmsdecnet/
-    # CMakeLists.txt's OVMX_DAP_SANITIZE_OK (a musl-static cross may lack the
-    # sanitizer runtime; this target links the same -static musl toolchain as
-    # every other qemu_syssvc_add_test target, so probe with -static too).
-    include(CheckCSourceCompiles)
-    set(_fileops_san_save "${CMAKE_REQUIRED_FLAGS}")
-    set(CMAKE_REQUIRED_FLAGS "-static -fsanitize=address,undefined")
-    check_c_source_compiles("int main(void){return 0;}" OVMX_FILEOPS_SANITIZE_OK)
-    set(CMAKE_REQUIRED_FLAGS "${_fileops_san_save}")
-    if(OVMX_FILEOPS_SANITIZE_OK)
-        target_compile_options(test_syssvc_crtl_rms_fileops PRIVATE
-            -fsanitize=address,undefined -g)
-        target_link_options(test_syssvc_crtl_rms_fileops PRIVATE
-            -fsanitize=address,undefined)
-    endif()
 endif()
 
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH

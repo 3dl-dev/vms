@@ -7,9 +7,9 @@ $! ONLY when the VENEER proof artifacts are present (LIBVMSRMS$SHR.EXE alongside
 $! the joint image); the product rootfs-alpha file is never modified.
 $!
 $! WHAT THIS PROVES (the anti-fabrication payoff, INV-6). SYS$SYSTEM:JOINT_E2E is
-$! the alpha-dec-vms GCC-port image built with the CRTL->RMS stdio veneer wired
-$! in (JOINT_CRTL_RMS_VENEER=1): its decc$fopen/fwrite/fclose bind to the
-$! crtl_rms_stdio.c veneer (ovmx_crtl_* -> sys$create/$put/$close ->
+$! the alpha-dec-vms GCC-port image built against the RMS-backed DECC$SHR
+$! (JOINT_CRTL_RMS_VENEER=1): its fopen/fwrite/fclose are served by the C RTL
+$! file layer (crtl_rms_fd.c, vms-9f8e: sys$create/$write/$close ->
 $! LIBVMSRMS$SHR -> ioctl(/dev/vms) -> the Files-11 ACP), NOT to musl-POSIX. It
 $! writes PORTTEST.DAT through that path on the live OVMX/Alpha executive.
 $!

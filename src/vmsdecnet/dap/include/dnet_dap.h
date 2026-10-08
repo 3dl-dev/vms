@@ -37,8 +37,10 @@
  * segment), the 2-byte LENGTH, sequential RECORD access (RAC 0), the DIRECTORY
  * LIST access and the NAME message (resultants from RMS $SEARCH). Messages and fields
  * beyond that are decoded (and bounded) but never served or faked:
- * the extended-attribute messages (KEY DEFINITION, ALLOCATION, SUMMARY,
- * DATE/TIME, PROTECTION, ACL) decode as "known type, body skipped";
+ * DATE AND TIME and PROTECTION are encoded and decoded (DAP 5.6 fields;
+ * rd vms-277a, DIRECTORY/FULL) and SUMMARY is sent empty; the other
+ * extended-attribute messages (KEY DEFINITION, ALLOCATION, ACL) decode as
+ * "known type, body skipped";
  * segmented messages (FLAGS bit 6) are refused DNET_DAP_EUNSUP.
  *
  * PURITY / SECURITY. A PURE byte library: no socket, no fd, no clock, no
@@ -97,7 +99,12 @@ enum dnet_dap_op {
 #define DNET_DAP_CAP_SEQ_XFER       5
 #define DNET_DAP_CAP_BLOCK_TO_RESP  18
 #define DNET_DAP_CAP_LEN256         20
+#define DNET_DAP_CAP_SUMMARY        24
 #define DNET_DAP_CAP_DIRLIST        25
+#define DNET_DAP_CAP_DATETIME       26
+#define DNET_DAP_CAP_PROTECTION     27
+#define DNET_DAP_CAP_RENAME         37
+#define DNET_DAP_CAP_WILDCARD       38
 #define DNET_DAP_CAP_SEQ_RECORD     33
 #define DNET_DAP_CAP_NAME_MSG       40
 
@@ -147,7 +154,26 @@ enum {
 
 /* DISPLAY bits (spec sec. 3.5 / 3.6). */
 #define DNET_DAP_DSP_MAIN     0x0001
+#define DNET_DAP_DSP_KEYDEF   0x0002
+#define DNET_DAP_DSP_ALLOC    0x0004
+#define DNET_DAP_DSP_SUMMARY  0x0008
+#define DNET_DAP_DSP_DATETIME 0x0010
+#define DNET_DAP_DSP_PROT     0x0020
 #define DNET_DAP_DSP_NAME     0x0100
+
+/* DATMENU bits (spec sec. 3.15). CDT/RDT/EDT are A-18 "dd-MON-yy hh:mm:ss". */
+#define DNET_DAP_DAT_CDT      0x01
+#define DNET_DAP_DAT_RDT      0x02
+#define DNET_DAP_DAT_EDT      0x04
+#define DNET_DAP_DAT_RVN      0x08
+#define DNET_DAP_DATE_LEN     18
+/* PROTMENU bits (spec sec. 3.16); PROTSYS..PROTWLD are DENY bitmaps (bit 0
+ * read, 1 write, 2 execute, 3 delete -- the ODS-2 protection nibble). */
+#define DNET_DAP_PRM_OWNER    0x01
+#define DNET_DAP_PRM_SYS      0x02
+#define DNET_DAP_PRM_OWN      0x04
+#define DNET_DAP_PRM_GRP      0x08
+#define DNET_DAP_PRM_WLD      0x10
 
 /* CONTROL CTLFUNC (spec sec. 3.6). */
 #define DNET_DAP_CTL_GET      1
@@ -195,6 +221,11 @@ enum {
 #define DNET_DAP_MIC_FNF      062   /* file not found                           */
 #define DNET_DAP_MIC_PRV      0125  /* privilege violation                      */
 #define DNET_DAP_MIC_CRE      030   /* ACP could not create file (STV = sys code) */
+#define DNET_DAP_MIC_ACC      02    /* ACP could not access file                */
+#define DNET_DAP_MIC_DNF      040   /* directory not found                      */
+#define DNET_DAP_MIC_ENT      045   /* ACP enter function failed                */
+#define DNET_DAP_MIC_FEX      055   /* file already exists                      */
+#define DNET_DAP_MIC_RMV      0137  /* ACP remove function failed               */
 #define DNET_DAP_STS_EOF      ((DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_EOF)
 
 /* Caps. A field longer than these is REFUSED (never clipped). */
@@ -299,6 +330,23 @@ struct dnet_dap_msg {
             uint64_t nametype;         /* 1 = file spec, 2 = file name, ...    */
             char     namespec[DNET_DAP_MAX_SPEC + 1];
         } name;
+
+        struct {                       /* DATE AND TIME (sec. 3.15)            */
+            uint64_t menu;             /* DNET_DAP_DAT_*                       */
+            char     cdt[DNET_DAP_DATE_LEN + 1], rdt[DNET_DAP_DATE_LEN + 1],
+                     edt[DNET_DAP_DATE_LEN + 1];
+            uint16_t rvn;
+        } datetime;
+
+        struct {                       /* PROTECTION (sec. 3.16)               */
+            uint64_t menu;             /* DNET_DAP_PRM_*                       */
+            char     owner[41];        /* I-40, e.g. "[000001,000004]"        */
+            uint64_t psys, pown, pgrp, pwld;
+        } prot;
+
+        /* SUMMARY (sec. 3.14) is encoded with an EMPTY operand -- what a real
+         * VMS FAL returns for a sequential file (no keys, areas or records
+         * to summarise); no field is held, so none is sent. */
     } u;
 };
 

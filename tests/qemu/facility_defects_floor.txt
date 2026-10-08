@@ -481,5 +481,14 @@
 # lib$spawn completion is delivered even when the subprocess is already gone).
 # Raised to 174 by lnm-seed-without-sysnam (rd vms-ec7e; anchors test_syssvc_lnm_system).
 # Raised to 180 by the six vms-d404 ACL defects (test_syssvc_acl).
-# Raised to 181 by spawn-input-via-linux-path (vms-ccc: lib$spawn INPUT is read through RMS).
-181
+# Lowered to 176 by vms-cbd (Baron decision 2026-10-08): the FIX-record stdio
+# veneer src/vmsrms/crtl_rms_stdio.c was retired with its host suites
+# (test_syssvc_crtl_rms_veneer/_bigwrite/_fileops) once no DECC$SHR linked it
+# (vms-9f8e: the C RTL file layer, crtl_rms_fd.c, serves every RMS-backed
+# DECC$SHR). Its four defects targeted the deleted veneer:
+# crtl-fwrite-bypasses-rms, crtl-fwrite-chunk-loop-stops-early,
+# crtl-unlink-fabricates-erase, crtl-feature-file-sharing-ignored (the last
+# mutated the veneer's DECC$FILE_SHARING test; the file layer's honouring of
+# that feature is now asserted by the alpha crtl-fd gate, crtl_fd_test.c 41).
+# Raised by spawn-input-via-linux-path (vms-ccc: lib$spawn INPUT is read through RMS).
+177

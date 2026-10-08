@@ -58,6 +58,21 @@ case is deterministic before committing.
 Clean-room (AGENTS.md Rule 8): goldens are the observed output of real systems
 running these probes. Nothing is disassembled and no VSI/HPE source is used.
 
+## Routines OVMX does not have yet
+
+A spec calls a routine the real system provides even when OVMX does not. List it in
+`tools/oracle/semantic/ovmx_absent.txt`: the C probe then prints `st=ABSENT` for
+those cases instead of failing to link, and the gate tracks them like any other
+difference. Implementing the routine means deleting its line. The list is kept
+outside the specs, so the real-VMS goldens stay valid.
+
+## Observations that are not a probe
+
+`capture.py --dcl <vax|alpha> <pod> <outfile> 'DCL' ...` runs DCL commands on the
+node and keeps their output verbatim, with a provenance header. Use it for things
+like an `ANALYZE/RMS_FILE/FDL` report or a `DUMP/RECORDS` of a system file. These
+files are reference evidence, not gate input.
+
 ## Adding a family
 
 Write `specs/<family>.py`, generate and assemble it on both nodes (`capture.py`),

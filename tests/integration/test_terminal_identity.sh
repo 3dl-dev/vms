@@ -82,7 +82,7 @@ echo "  the no-fabricated-rows PROPERTY is enforced by test_show_device_rows.sh)
 # Measured on this tree afterwards: 51 s -> a few seconds, with byte-identical
 # stripped output (the negative controls below still fire).
 STRIP_CACHE=$(mktemp -d)
-trap 'rm -rf "$STRIP_CACHE"' EXIT INT TERM HUP
+trap 'rm -rf "$STRIP_CACHE" "$STRIP_CACHE.list"' EXIT INT TERM HUP
 
 strip_comments_raw() {
     awk '
@@ -111,24 +111,64 @@ strip_comments_raw() {
     }' "$1"
 }
 
+strip_key() { printf '%s' "$1" | tr '/.' '__'; }
+
 strip_comments() {
-    _sc_key=$(printf '%s' "$1" | tr '/.' '__')
-    _sc_out="$STRIP_CACHE/$_sc_key"
+    _sc_out="$STRIP_CACHE/$(strip_key "$1")"
     [ -f "$_sc_out" ] || strip_comments_raw "$1" > "$_sc_out"
     cat "$_sc_out"
 }
 
+# strip_all <file...> -- the whole tree's stripped forms in ONE awk process
+# (rd vms-946). The per-file cache above still forked an awk per file, and each
+# tree-wide scan then forked a cat AND a grep per file: ~13,000 processes, 20 s
+# on an idle host and 57 s against the 60 s TIMEOUT under a parallel ctest. Same
+# state machine as strip_comments_raw, reset at each file's first line, writing
+# each file's stripped text to the same cache path strip_comments() reads.
+strip_all() {
+    awk -v dir="$STRIP_CACHE" '
+    FNR == 1 {
+        if (out != "") close(out)
+        key = FILENAME; gsub(/[\/.]/, "_", key)
+        out = dir "/" key; inc = 0; printf "" > out
+    }
+    {
+        line = $0; o = ""
+        while (length(line) > 0) {
+            if (inc) {
+                p = index(line, "*/")
+                if (p == 0) { line = "" }
+                else { line = substr(line, p + 2); inc = 0 }
+            } else {
+                pc = index(line, "/*")
+                pl = index(line, "//")
+                if (pl > 0 && (pc == 0 || pl < pc)) {
+                    o = o substr(line, 1, pl - 1); line = ""
+                } else if (pc > 0) {
+                    o = o substr(line, 1, pc - 1)
+                    line = substr(line, pc + 2); inc = 1
+                } else {
+                    o = o line; line = ""
+                }
+            }
+        }
+        print o > out
+    }' "$@"
+}
+
 # scan_absent <label> <fixed-token> <file...>
-# Fails if the token appears in any file's CODE.
+# Fails if the token appears in any file's CODE. One grep over the cached
+# stripped forms, not a grep per file (rd vms-946).
 scan_absent() {
     label="$1"; token="$2"; shift 2
-    hit=""
-    for f in "$@"; do
-        [ -f "$f" ] || continue
-        if strip_comments "$f" | grep -qF "$token"; then
-            hit="$hit $f"
-        fi
-    done
+    _list="$STRIP_CACHE.list"
+    for f in "$@"; do [ -f "$f" ] && printf '%s\n' "$f"; done |
+        awk -v dir="$STRIP_CACHE" '{ k = $0; gsub(/[\/.]/, "_", k); print dir "/" k "\t" $0 }' > "$_list"
+    _missing=$(awk -F'\t' '{ if ((getline _ < $1) < 0) print $2; else close($1) }' "$_list")
+    # shellcheck disable=SC2086
+    [ -z "$_missing" ] || strip_all $_missing
+    hit=$(cut -f1 "$_list" | xargs -r grep -lF -- "$token" 2>/dev/null |
+          awk -F'\t' 'NR == FNR { m[$1] = $2; next } { printf " %s", m[$0] }' "$_list" -)
     if [ -n "$hit" ]; then
         echo "FAIL: $label"
         echo "  -> found '$token' in code:$hit"
@@ -139,6 +179,8 @@ scan_absent() {
 }
 
 SRC_FILES=$(find "$SRC_ROOT/src" -name '*.c' -o -name '*.h' | sort)
+# shellcheck disable=SC2086
+strip_all $SRC_FILES
 
 # --- 1. The terminal identity is never read out of the environment ------
 scan_absent "no code reads VMS_TERMINAL from the environment" \

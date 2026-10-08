@@ -304,6 +304,8 @@ build_boot_image_set() {
      && [ -f "${SYSVOL_IMAGES_DIR}/STARTUP.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/MAIL_SERVER.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ]; then
     log "boot image set present -- NOT rebuilding (set FORCE_SYSVOL_BUILD=1 to force)"; return 0; fi
   mkdir -p "${SYSVOL_IMAGES_DIR}"
@@ -327,14 +329,21 @@ build_boot_image_set() {
       cmake -S /src -B /tmp/build-decnetd-vax \
         -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
         -DCMAKE_BUILD_TYPE=Release >/tmp/build-decnetd-vax-configure.log 2>&1
-      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe ncp_exe -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
+      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe mail_server_exe vms_mail ncp_exe -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
       cp /tmp/build-decnetd-vax/bin/DECNETD.EXE /out/DECNETD.EXE
       cp /tmp/build-decnetd-vax/bin/FAL.EXE /out/FAL.EXE
+      cp /tmp/build-decnetd-vax/bin/MAIL_SERVER.EXE /out/MAIL_SERVER.EXE
+      cp /tmp/build-decnetd-vax/bin/MAIL.EXE /out/MAIL.EXE
       cp /tmp/build-decnetd-vax/bin/NCP.EXE /out/NCP.EXE'
   [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] || die "DECNETD.EXE cross-build did not produce an elf32-vax image (rd vms-c1f)"
   # FAL.EXE (rd vms-d85): the FAL network server process NETACP $CREPRCs for
   # every inbound file access, running as the authenticated user.
   [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ] || die "FAL.EXE cross-build did not produce an elf32-vax image (rd vms-d85)"
+  # MAIL_SERVER.EXE (rd vms-47fd): the MAIL-11 (object 27) network server process.
+  [ -f "${SYSVOL_IMAGES_DIR}/MAIL_SERVER.EXE" ] || die "MAIL_SERVER.EXE cross-build did not produce an elf32-vax image (rd vms-47fd)"
+  # MAIL.EXE (rd vms-47fd): the user's MAIL utility -- what reads a delivered
+  # message back; a rail that accepts inbound mail ships the reader too.
+  [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] || die "MAIL.EXE cross-build did not produce an elf32-vax image (rd vms-47fd)"
   # NCP.EXE (rd vms-5bb5): configures the DECnet executor database the VMS way.
   [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ] || die "NCP.EXE cross-build did not produce an elf32-vax image (rd vms-5bb5)"
 }

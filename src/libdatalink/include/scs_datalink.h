@@ -118,6 +118,13 @@ const char *scs_datalink_backend(void);
 uint32_t scs_datalink_last_status(void);
 
 /*
+ * scs_datalink_last_stv - the secondary status of that refused open: the host
+ * errno the executive's datalink backend returned behind an SS$_ABORT (rd
+ * vms-b72), 0 if none.
+ */
+uint32_t scs_datalink_last_stv(void);
+
+/*
  * scs_datalink_close - release a datalink fd opened by scs_datalink_open().
  *
  *   Linux:  close(2).

@@ -1,0 +1,13 @@
+# keystroke oracle transcript (unmasked) -- case TA.USERNAME (OpenVMS VAX V7.3 OPA0:)
+# type-ahead: the user name typed in the same burst as the RETURN that wakes the line, before Username: is shown
+# case-sha256 15e337877e7f337b49054274bd334353e5a15f799467733220d34406024de0db
+@start loggedout OK
+=== STEP U
+| <BEL><BEL><LF>
+| <CR><LF>
+| VAX/VMS V7.3      node VAX1<CR><LF>
+| <CR><LF>
+| <CR>Username: <CR><LF>
+| Error reading command input<CR><LF>
+| Timeout period expired<CR>
+=== STEP P quiet

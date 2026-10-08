@@ -1,0 +1,26 @@
+# keystroke oracle transcript (unmasked) -- case LE.CURSOR (OpenVMS VAX V7.3 OPA0:)
+# line editing: ^H (start of line), ^E (end), ^D / ^F and the arrow keys move within the line; insert mode is the default
+# case-sha256 80928dc6ce89551e0704a0f0fdb858b1ea385864dd2d9920801e304a5e97556b
+@start loggedin OK
+=== STEP T
+| RITE SYS$OUTPUT 13
+=== STEP H
+| <CR><NUL>$ 
+=== STEP W
+| WRITE SYS$OUTPUT 13<BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
+=== STEP E
+| RITE SYS$OUTPUT 13
+=== STEP D
+| <BS>
+=== STEP I
+| 23<BS>
+=== STEP L
+| <BS>
+=== STEP G
+| 2
+=== STEP F
+| 3
+=== STEP R
+| <CR><LF>
+| <CR>123<CR><LF>
+| <CR><NUL>$ 

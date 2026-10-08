@@ -545,6 +545,13 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
     uint32_t status = SS$_NORMAL;
     pid_t pid = fork();
     if (pid == 0) {
+        /* A SYS$SYSTEM utility (MAIL, SYSGEN, INSTALL, ...) is an image the
+         * CLI runs IN ITS OWN PROCESS on VMS: share DCL's VMS PID, UIC, user
+         * name and privileges onto this task before the execve, exactly as
+         * RUN's fork path does (dcl_activate_image). Without it the image
+         * auto-registers a fresh PCB with no user name, and MAIL -- which
+         * asks the executive whose mailbox to open -- exits at once. */
+        (void)vms_kif_register_continue();
         if (bin)
             execv(bin, argv);
         execvp(exe_name, argv);

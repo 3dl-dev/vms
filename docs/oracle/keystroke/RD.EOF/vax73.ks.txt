@@ -1,0 +1,11 @@
+# keystroke oracle transcript (unmasked) -- case RD.EOF (OpenVMS VAX V7.3 OPA0:)
+# ^Z at a READ: end of file
+# case-sha256 37e00ab61a7d958ad2a83df614baad4b33d660b3b4eb39ab12c54b9ce0c5666c
+@start loggedin OK
+=== STEP R
+| READ/PROMPT="Z: " SYS$COMMAND X<CR><LF>
+| Z: 
+=== STEP Z
+| *EXIT*<CR><LF>
+| <CR>%RMS-E-EOF, end of file detected<CR><LF>
+| <CR><NUL>$ 

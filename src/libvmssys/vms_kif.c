@@ -2487,6 +2487,14 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
                             const char *const *values, uint8_t num_values,
                             uint32_t attributes, uint8_t acmode)
 {
+    return vms_kif_lnm_define_n(table, name, values, NULL, num_values,
+                                attributes, acmode);
+}
+
+uint32_t vms_kif_lnm_define_n(uint32_t table, const char *name,
+                              const char *const *values, const uint16_t *lengths,
+                              uint8_t num_values, uint32_t attributes, uint8_t acmode)
+{
     struct vms_lnm_def_args args;
     unsigned i;
 
@@ -2515,9 +2523,12 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
 
     for (i = 0; i < num_values; i++) {
         const char *v = values[i] ? values[i] : "";
-        vms_strncpy(args.equiv[i].value, v, VMS_LNM_MAX_VALUE);
-        args.equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
-        args.equiv[i].length = (uint16_t)vms_strlen(args.equiv[i].value);
+        uint32_t vl = lengths ? lengths[i] : (uint32_t)vms_strlen(v);
+        if (vl > VMS_LNM_MAX_VALUE)
+            vl = VMS_LNM_MAX_VALUE;
+        vms_memcpy(args.equiv[i].value, v, vl);
+        args.equiv[i].value[vl] = '\0';
+        args.equiv[i].length = (uint16_t)vl;
         args.equiv[i].index = (uint8_t)i;
     }
 
@@ -2727,6 +2738,7 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
                     vlen = VMS_LNM_MAX_VALUE;
                 vms_memcpy(out->values[k], best->equiv[k].value, vlen);
                 out->values[k][vlen] = '\0';
+                out->value_len[k] = vlen;
             }
             out->num_values = nv;
             out->attributes = best->attributes;
@@ -2766,11 +2778,23 @@ int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
         *num_equiv = rec.num_values;
     if (index >= rec.num_values)
         return 0;
-    vlen = (uint16_t)vms_strlen(rec.values[index]);
-    if (vlen >= valsz)
-        vlen = (uint16_t)(valsz - 1);
-    vms_memcpy(value, rec.values[index], vlen);
-    value[vlen] = '\0';
+    {
+        /* The OVMX-internal C-string view. A process-permanent file's
+         * equivalence (ESC NUL IFI device, rd vms-b14e) reads as its DEVICE
+         * -- what $ASSIGN, RMS and SHOW LOGICAL use of it on OpenVMS -- since
+         * a C string cannot carry its NUL. sys$trnlnm returns the raw bytes. */
+        const char *src = rec.values[index];
+        uint16_t sl = rec.value_len[index];
+        if (vms_lnm_is_ppf(src, sl)) {
+            src += VMS_LNM_PPF_HDR;
+            sl = (uint16_t)(sl - VMS_LNM_PPF_HDR);
+        }
+        vlen = sl;
+        if (vlen >= valsz)
+            vlen = (uint16_t)(valsz - 1);
+        vms_memcpy(value, src, vlen);
+        value[vlen] = '\0';
+    }
     if (vallen)
         *vallen = vlen;
     if (attrs)
@@ -2859,6 +2883,7 @@ int vms_kif_lnm_enumerate(uint32_t table,
                     vlen = VMS_LNM_MAX_VALUE;
                 vms_memcpy(out[n].values[k], e->equiv[k].value, vlen);
                 out[n].values[k][vlen] = '\0';
+                out[n].value_len[k] = vlen;
             }
             out[n].num_values = nv;
 

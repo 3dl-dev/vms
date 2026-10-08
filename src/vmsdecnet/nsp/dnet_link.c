@@ -116,6 +116,19 @@ int dnet_link_accept(struct dnet_link *lk, struct dnet_nsp_msg *out,
     return DNET_LINK_OK;
 }
 
+int dnet_link_accept_data(struct dnet_link *lk, const uint8_t *data, size_t len,
+                          struct dnet_nsp_msg *out, dnet_tick_t now)
+{
+    if (!lk || !out || (len && !data) || len > DNET_NSP_MAX_DATA)
+        return DNET_LINK_EINVAL;
+    int rc = dnet_link_accept(lk, out, now);
+    if (rc != DNET_LINK_OK)
+        return rc;
+    if (len) memcpy(out->data, data, len);
+    out->datalen = (uint16_t)len;
+    return DNET_LINK_OK;
+}
+
 int dnet_link_send_data(struct dnet_link *lk, const uint8_t *data, size_t len,
                         struct dnet_nsp_msg *out, dnet_tick_t now)
 {

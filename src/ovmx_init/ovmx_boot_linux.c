@@ -77,6 +77,13 @@ int ovmx_boot_mount_kernel_filesystems(void)
     /* Byte-for-byte the sequence bare_metal_init() ran inline before the
      * seam: proc, sysfs, devtmpfs, tmpfs, devpts (mkdir first), tmpfs on
      * /dev/shm (mkdir first). Best-effort -- returns are ignored today. */
+    /* vms-432: Ctrl-Alt-Del (a console BREAK chord, QEMU `sendkey ctrl-alt-delete`) must reach
+     * us as SIGINT, which sigterm_handler turns into the orderly shutdown. The kernel's default
+     * is to restart the machine on the spot, so the chord HARD-REBOOTED the guest without PID 1
+     * ever running its shutdown -- a clean departure could not be triggered or observed. Only
+     * PID 1 may change this; best-effort like the mounts below. */
+    if (getpid() == 1)
+        (void)reboot(RB_DISABLE_CAD);
     mount("proc", "/proc", "proc", 0, NULL);
     mount("sysfs", "/sys", "sysfs", 0, NULL);
     mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);

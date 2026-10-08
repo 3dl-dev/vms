@@ -1,0 +1,14 @@
+# keystroke oracle transcript (unmasked) -- case TA.WAIT (OpenVMS VAX V7.3 OPA0:)
+# type-ahead: a command typed while DCL is busy (WAIT) is not echoed until DCL reads it
+# case-sha256 98e3621fa5b8478f29cb2031b367ec9833c171454711a251fdf877ff3b295939
+@start loggedin OK
+=== STEP C
+| WAIT 0:0:4<CR><LF>
+=== STEP T
+=== STEP Q
+=== STEP D
+| <CR><NUL>$ WRITE SYS$OUTPUT 4712
+=== STEP R
+| <CR><LF>
+| <CR>4712<CR><LF>
+| <CR><NUL>$ 

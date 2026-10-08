@@ -1,0 +1,52 @@
+# keystroke oracle transcript (unmasked) -- case ERR.DCL (OpenVMS VAX V7.3 OPA0:)
+# common DCL error messages
+# case-sha256 6307e551c3250dabe939e2bc08863b2d6241678813f78d99de191845c87f8747
+@start loggedin OK
+=== STEP E1
+| FOO<CR><LF>
+| <CR>%DCL-W-IVVERB, unrecognized command verb - check validity and spelling<CR><LF>
+|  \FOO\<CR><LF>
+| <CR><NUL>$ 
+=== STEP E2
+| SHOW FOO<CR><LF>
+| <CR>%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling<CR><LF>
+|  \FOO\<CR><LF>
+| <CR><NUL>$ 
+=== STEP E3
+| SHOW TIME/BAD<CR><LF>
+| <CR>%DCL-W-NOQUAL, qualifiers not allowed - supply only verb and parameters<CR><LF>
+|  \BAD\<CR><LF>
+| <CR><NUL>$ 
+=== STEP E4
+| TYPE NOSUCH.TXT<CR><LF>
+| <CR>%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH.TXT;<CR><LF>
+| -RMS-E-FNF, file not found<CR><LF>
+| <CR><NUL>$ 
+=== STEP E5
+| DIRECTORY NOSUCH.TXT<CR><LF>
+| <CR>%DIRECT-W-NOFILES, no files found<CR><LF>
+| <CR><NUL>$ 
+=== STEP E6
+| WRITE SYS$OUTPUT<CR><LF>
+| <CR>_Expression: 
+=== STEP E6Z
+| *EXIT*<CR><LF>
+| <CR><NUL>$ 
+=== STEP E7
+| @NOSUCH<CR><LF>
+| <CR>%DCL-E-OPENIN, error opening SYS$SYSROOT:[SYSMGR]NOSUCH.COM; as input<CR><LF>
+| -RMS-E-FNF, file not found<CR><LF>
+| <CR><NUL>$ 
+=== STEP E8
+| SET DEFAULT NOSUCHDEV:[X]<CR><LF>
+| <CR><NUL>$ 
+=== STEP E8R quiet
+=== STEP E9
+| X = 1 +<CR><LF>
+| <CR>%DCL-W-EXPSYN, invalid expression syntax - check operators and operands<CR><LF>
+| <CR><NUL>$ 
+=== STEP E10
+| WRITE SYS$OUTPUT F$NOSUCH()<CR><LF>
+| <CR>%DCL-W-IVFNAM, invalid lexical function name - check validity and spelling<CR><LF>
+|  \F$NOSUCH(\<CR><LF>
+| <CR><NUL>$ 

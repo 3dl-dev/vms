@@ -1,0 +1,17 @@
+# keystroke oracle transcript (unmasked) -- case LOGOUT (OpenVMS VAX V7.3 OPA0:)
+# LOGOUT from the console: the logout line and the idle line after it
+# case-sha256 2ac8db678ade0e62d905db6ed91b698254d4da883dbba9722ec7bedb8e0578a7
+@start loggedin OK
+=== STEP L
+| LOGOUT<CR><LF>
+| <CR>  SYSTEM       logged out at  8-OCT-2026 19:40:10.50<CR>
+=== STEP R
+| <BEL><LF>
+| <CR><LF>
+| VAX/VMS V7.3      node VAX1<CR><LF>
+| <CR><LF>
+| <CR>Username: 
+=== STEP X
+| *EXIT*<CR><LF>
+| <CR>Error reading command input<CR><LF>
+| End of file detected<CR>

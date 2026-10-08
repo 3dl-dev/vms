@@ -568,9 +568,11 @@ acp-readall-ignored
 acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
+acp-dir-used-blocks-ignore-eof
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
+libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
 crtl-feature-unknown-accepted
 crtl-feature-set-ignored
@@ -1139,6 +1141,25 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    acp-dir-used-blocks-ignore-eof)
+        case "$_f" in
+        facility)     echo "a directory insert works on the blocks in use (VBN 1 to end of file) and grows into the directory's preallocated blocks";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_dir_used_blocks() returns the directory's used blocks from its FAT end of file. The mutation returns the whole allocation, so a directory created with 200 blocks is treated as 200 blocks in use, beyond the 64-block working bound, and every insert into it fails SS\$_DEVICEFULL. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+50 directories are entered in BIGD.DIR
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     acp-fat-versions-not-applied)
         case "$_f" in
         facility)     echo "IO\$_CREATE of a directory records the requested default version limit (FAT\$W_VERSIONS)";;
@@ -1171,6 +1192,25 @@ EOF
 vms-b447: FIX mrs 20 -- a default-FAB $OPEN reads FIX/mrs 20 from the header and $GETs the 20-byte records byte-exact
 vms-b447: F$FILE_ATTRIBUTES: FIX MRS 20, RFM FIX; VAR LRL 27, ORG SEQ
 RMS-over-ACP: all records round-tripped byte-exact through the ACP window
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    libcreatedir-rooted-default-unresolved)
+        case "$_f" in
+        facility)     echo "LIB\$CREATE_DIR composes a logical (concealed rooted search-list) device to the on-volume member the directory is made in";;
+        targets)      echo "libvms/rtl/lib_dir.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$create_dir() calls pick_candidate() to compose the device through LNM\$FILE_DEV. The mutation drops the call, so a relative spec under the default CDIR\$ROOT:[RSUB] is \$ASSIGNed on the logical name itself and fails. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+LIB$CREATE_DIR [.LEAF] under a rooted default is SS$_CREATED
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7141,6 +7181,10 @@ apply_edit() {
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
     acp-fat-recattr-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file";;
+    acp-dir-used-blocks-ignore-eof)
+        sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file";;
+    libcreatedir-rooted-default-unresolved)
+        sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)

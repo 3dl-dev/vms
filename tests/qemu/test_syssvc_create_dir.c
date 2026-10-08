@@ -12,8 +12,13 @@
  *     from the process default), the requested owner UIC, a FAT version limit of 7
  *     and 3 allocated blocks;
  *   - a deeper spec creates the missing parents too ([.PARENT.CHILD]);
- *   - an initial allocation a directory cannot hold, or a non-zero relative volume,
- *     is refused SS$_BADPARAM and creates nothing.
+ *   - an initial allocation of 200 blocks (the corpus program's value) is honoured:
+ *     the directory holds 200 blocks, uses one, and grows into the preallocated ones
+ *     as entries are added -- its allocation does not change;
+ *   - a default directory on a concealed rooted SEARCH LIST (SYSTEM's is
+ *     SYS$SYSROOT:[SYSMGR]) completes a relative spec in the member that exists;
+ *   - a zero initial allocation or a non-zero relative volume is refused
+ *     SS$_BADPARAM.
  *
  * Every directory it creates is deleted again. No /dev/vms -> honest SKIP (77).
  */
@@ -28,10 +33,14 @@
 #include "lib$routines.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
+#include "vms/logical.h"
 
 #define EXIT_SKIP 77
 #define ODS2_UNIT "VDA0:"
 #define OVMXDIR_FID_NUM 11u
+#define MFD_FID_NUM 4u
+#define BIG_ALLOC 200u
+#define BIG_ENTRIES 50
 #define DIRFLAG 0x2000u
 
 static int pass, fail;
@@ -81,8 +90,9 @@ int main(void)
     uint32_t st, chan = 0;
     struct vms_acp_access_args a, b;
     uint32_t pe = 0xFF00u, pv = 0xAA00u, mv = 7, ia = 3, owner = (5u << 16) | 6u;
-    uint32_t big = 65, rvn1 = 1;
-    uint16_t newd = 0, parent = 0;
+    uint32_t big = BIG_ALLOC, zero = 0, rvn1 = 1;
+    uint16_t newd = 0, parent = 0, bigd = 0, rsub = 0;
+    int i, made = 0, found = 0;
 
     printf("=== test_syssvc_create_dir: LIB$CREATE_DIR over the ACP ===\n");
     if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
@@ -133,10 +143,70 @@ int main(void)
     parent = b.fid_num;
     (void)vms_kif_acp_deaccess(chan);
 
+    /* -- a large initial allocation, then growth into it ----------------------- */
+    st = cdir("[.BIGD]", NULL, NULL, NULL, NULL, NULL, &big);
+    check(st == SS$_CREATED, "an initial allocation of 200 blocks is SS$_CREATED");
+    st = access_in(chan, OVMXDIR_FID_NUM, "BIGD.DIR", &b);
+    check($VMS_STATUS_SUCCESS(st) && b.attr.hiblk == BIG_ALLOC,
+          "BIGD.DIR holds the 200 blocks asked for");
+    check(b.attr.efblk == 2, "BIGD.DIR uses one of them (end of file at VBN 2)");
+    bigd = b.fid_num;
+    (void)vms_kif_acp_deaccess(chan);
+    for (i = 0; i < BIG_ENTRIES; i++) {
+        char sp[32];
+        snprintf(sp, sizeof(sp), "[.BIGD.D%02d]", i);
+        if (cdir(sp, NULL, NULL, NULL, NULL, NULL, NULL) == SS$_CREATED)
+            made++;
+    }
+    /* negctl: acp-dir-used-blocks-ignore-eof */
+    check(made == BIG_ENTRIES, "50 directories are entered in BIGD.DIR");
+    for (i = 0; i < BIG_ENTRIES; i++) {
+        char nm[16];
+        snprintf(nm, sizeof(nm), "D%02d.DIR", i);
+        if ($VMS_STATUS_SUCCESS(access_in(chan, bigd, nm, &b))) {
+            found++;
+            (void)vms_kif_acp_deaccess(chan);
+        }
+    }
+    check(found == BIG_ENTRIES, "every one of them is found again by name");
+    st = access_in(chan, OVMXDIR_FID_NUM, "BIGD.DIR", &b);
+    check($VMS_STATUS_SUCCESS(st) && b.attr.efblk > 2,
+          "BIGD.DIR grew past its first block");
+    check(b.attr.hiblk == BIG_ALLOC,
+          "it grew into its preallocated blocks: the allocation is still 200");
+    (void)vms_kif_acp_deaccess(chan);
+
+    /* -- a default directory on a concealed rooted search list ------------------ */
+    st = cdir("VDA0:[OVMXDIR.RSUB]", NULL, NULL, NULL, NULL, NULL, NULL);
+    check(st == SS$_CREATED, "VDA0:[OVMXDIR.RSUB] is created by an absolute spec");
+    st = access_in(chan, OVMXDIR_FID_NUM, "RSUB.DIR", &b);
+    rsub = b.fid_num;
+    (void)vms_kif_acp_deaccess(chan);
+    {
+        static const char *roots[] = { "VDA0:[NOROOT.]", "VDA0:[OVMXDIR.]" };
+        lnm_manager_t *mgr = lnm_get_manager();
+        if (mgr)
+            lnm_create_multi(mgr, LNM_PROCESS_TABLE, "CDIR$ROOT", roots, 2,
+                             LNM_ATTR_CONCEALED, LNM_MODE_EXEC);
+        check(mgr != NULL, "CDIR$ROOT = VDA0:[NOROOT.],VDA0:[OVMXDIR.] (concealed, rooted)");
+    }
+    st = vms_kif_ddir("CDIR$ROOT:[RSUB]", NULL, 0);
+    check($VMS_STATUS_SUCCESS(st), "the default directory is CDIR$ROOT:[RSUB]");
+    st = cdir("[.LEAF]", NULL, NULL, NULL, NULL, NULL, NULL);
+    /* negctl: libcreatedir-rooted-default-unresolved */
+    check(st == SS$_CREATED, "LIB$CREATE_DIR [.LEAF] under a rooted default is SS$_CREATED");
+    st = access_in(chan, rsub, "LEAF.DIR", &b);
+    check($VMS_STATUS_SUCCESS(st), "LEAF.DIR is in [OVMXDIR.RSUB], the member that exists");
+    if ($VMS_STATUS_SUCCESS(st))
+        (void)vms_kif_acp_deaccess(chan);
+    st = access_in(chan, MFD_FID_NUM, "NOROOT.DIR", &b);
+    check(st == SS$_NOSUCHFILE, "nothing was made under the missing first member");
+    (void)vms_kif_ddir("VDA0:[OVMXDIR]", NULL, 0);
+
     /* -- refusals --------------------------------------------------------------- */
-    st = cdir("[.TOOBIG]", NULL, NULL, NULL, NULL, NULL, &big);
-    check(st == SS$_BADPARAM, "an initial allocation of 65 blocks is SS$_BADPARAM");
-    st = access_in(chan, OVMXDIR_FID_NUM, "TOOBIG.DIR", &b);
+    st = cdir("[.ZERO]", NULL, NULL, NULL, NULL, NULL, &zero);
+    check(st == SS$_BADPARAM, "an initial allocation of 0 blocks is SS$_BADPARAM");
+    st = access_in(chan, OVMXDIR_FID_NUM, "ZERO.DIR", &b);
     check(st == SS$_NOSUCHFILE, "the refused call created nothing");
     st = cdir("[.RVN1]", NULL, NULL, NULL, NULL, &rvn1, NULL);
     check(st == SS$_BADPARAM, "a non-zero relative volume is SS$_BADPARAM");
@@ -146,6 +216,14 @@ int main(void)
     check($VMS_STATUS_SUCCESS(delete_in(chan, OVMXDIR_FID_NUM, "NEWD.DIR")), "delete NEWD.DIR (restore)");
     (void)delete_in(chan, parent, "CHILD.DIR");
     check($VMS_STATUS_SUCCESS(delete_in(chan, OVMXDIR_FID_NUM, "PARENT.DIR")), "delete PARENT.DIR (restore)");
+    for (i = 0; i < BIG_ENTRIES; i++) {
+        char nm[16];
+        snprintf(nm, sizeof(nm), "D%02d.DIR", i);
+        (void)delete_in(chan, bigd, nm);
+    }
+    check($VMS_STATUS_SUCCESS(delete_in(chan, OVMXDIR_FID_NUM, "BIGD.DIR")), "delete BIGD.DIR (restore)");
+    (void)delete_in(chan, rsub, "LEAF.DIR");
+    check($VMS_STATUS_SUCCESS(delete_in(chan, OVMXDIR_FID_NUM, "RSUB.DIR")), "delete RSUB.DIR (restore)");
 
     (void)vms_kif_dassgn(chan);
     (void)vms_kif_acp_dmount(ODS2_UNIT);

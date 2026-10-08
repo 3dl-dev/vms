@@ -1020,10 +1020,6 @@ out:
  * fields are System, Owner, Group, World (low to high nibble). Returns
  * SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
  */
-/* Largest initial allocation (blocks) a new directory may be created with: the
- * same ceiling acp_dir_mutate enforces on a directory's size (ACP_DIR_MAX_BLOCKS). */
-#define ACP_DIR_MAX_INIT_ALLOC 64u
-
 static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
                                  int want_write)
 {
@@ -2920,21 +2916,40 @@ static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
     return SS__NORMAL;
 }
 
-/* Ordered LBN list of a directory's data blocks, collected VBN-order. */
+/* Ordered LBN list of a directory's data blocks, collected VBN-order: the first
+ * ACP_DIR_MAX_BLOCKS of them in lbn[], and the count of ALL allocated blocks in
+ * `alloc` (a preallocated directory can hold many more than it uses). */
 struct acp_dir_lbns {
     uint32_t lbn[ACP_DIR_MAX_BLOCKS];
     unsigned n;
-    int      overflow;
+    uint32_t alloc;
 };
 static int acp_dir_lbn_cb(const ods2_extent_t *ext, void *ctx)
 {
     struct acp_dir_lbns *d = (struct acp_dir_lbns *)ctx;
     uint32_t k;
     for (k = 0; k < ext->count; k++) {
-        if (d->n >= ACP_DIR_MAX_BLOCKS) { d->overflow = 1; return 1; }
-        d->lbn[d->n++] = ext->lbn + k;
+        if (d->n < ACP_DIR_MAX_BLOCKS)
+            d->lbn[d->n++] = ext->lbn + k;
+        d->alloc++;
     }
     return 0;
+}
+
+/* Blocks a directory USES: VBN 1 up to its end of file (FAT efblk/ffbyte), the
+ * rest of its allocation being preallocated space past the end. A header whose
+ * end of file says nothing usable (zero, or past the allocation) uses all of it. */
+static uint32_t acp_dir_used_blocks(const uint8_t *dirhdr, uint32_t alloc)
+{
+    ods2_recattr_t ra;
+    uint32_t efblk, used;
+
+    memcpy(&ra, dirhdr + offsetof(ods2_fh2_t, fh2_recattr), sizeof(ra));
+    efblk = ods2_recattr_efblk(&ra);
+    if (efblk == 0)
+        return alloc;
+    used = ra.fat_ffbyte ? efblk : efblk - 1u;
+    return (used == 0 || used > alloc) ? alloc : used;
 }
 
 /*
@@ -2991,11 +3006,12 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     uint32_t status = SS__NORMAL;
     ods2_status_t st;
 
-    dl.n = 0; dl.overflow = 0;
-    if (ods2_fh2_map_walk(dirhdr, acp_dir_lbn_cb, &dl, NULL) != ODS2_OK || dl.overflow ||
-        dl.n == 0)
+    dl.n = 0; dl.alloc = 0;
+    if (ods2_fh2_map_walk(dirhdr, acp_dir_lbn_cb, &dl, NULL) != ODS2_OK || dl.n == 0)
         return SS__DEVICEFULL;
-    nblk = dl.n;
+    nblk = acp_dir_used_blocks(dirhdr, dl.alloc);   /* only the blocks in use */
+    if (nblk > ACP_DIR_MAX_BLOCKS)
+        return SS__DEVICEFULL;
 
     inbuf  = exec_zalloc((size_t)nblk * ACP_BLOCK_SIZE);
     outbuf = exec_zalloc((size_t)(nblk + 1u) * ACP_BLOCK_SIZE);
@@ -3038,9 +3054,15 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
         goto done;
     }
 
-    /* Grow the directory file if the repack needs more blocks (insert only). */
-    if (out_nblk > nblk) {
-        uint32_t run_lbn = 0, extra = out_nblk - nblk, k;
+    /* Grow the directory file if the repack needs more blocks (insert only):
+     * into its own preallocated blocks past the end of file first, and only
+     * beyond its allocation from BITMAP.SYS. */
+    if (out_nblk > nblk && out_nblk > ACP_DIR_MAX_BLOCKS) {
+        status = SS__DEVICEFULL;
+        goto done;
+    }
+    if (out_nblk > nblk && out_nblk > dl.alloc) {
+        uint32_t run_lbn = 0, extra = out_nblk - dl.alloc, k;
         acp_snap_from_vol(&sc->snap, vol);
         status = acp_bitmap_alloc(&sc->snap, &sc->rw, extra, &run_lbn);
         if (status != SS__NORMAL)
@@ -3061,11 +3083,20 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
         }
     }
 
-    /* Rewrite the directory's own FH2 map + EOF only when it grew. */
-    if (out_nblk > nblk)
+    /* When it grew: past its allocation, rewrite the directory's own FH2 map +
+     * EOF; within it, only the end of file moves (the map already holds the
+     * blocks). */
+    if (out_nblk > nblk && out_nblk > dl.alloc) {
         status = acp_dir_write_grown_map(vol, dirhdr,
                                          vol->idx_lbn + (dir_fidnum - 1u),
                                          dl.lbn, out_nblk);
+    } else if (out_nblk > nblk) {
+        (void)ods2_fh2_set_eof(dirhdr, dl.alloc, out_nblk + 1u, 0);
+        ods2_fh2_reseal(dirhdr);
+        if (acp_bdev_write(vol->backing_major, vol->backing_minor,
+                           vol->idx_lbn + (dir_fidnum - 1u), dirhdr, ACP_BLOCK_SIZE) != 0)
+            status = SS__DEVNOTMOUNT;
+    }
 
 done:
     if (inbuf)  exec_free(inbuf);
@@ -3249,12 +3280,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * at least one mapped data block (dl.n != 0) to insert into. Without
              * this a directory created over the ACP had zero blocks and every
              * create inside it failed SS$_DEVICEFULL. */
+            /* A directory's initial allocation may exceed the one block it
+             * starts out using (LIB$CREATE_DIR's initial-allocation, CREATE/
+             * DIRECTORY/ALLOCATION): the rest stays allocated past its end of
+             * file, and acp_dir_mutate grows the directory into it before it
+             * takes another block from BITMAP.SYS. Too large for the volume ->
+             * acp_bitmap_alloc's SS$_DEVICEFULL. */
             alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;
-            if (is_dir && alloc_count > ACP_DIR_MAX_INIT_ALLOC) {
-                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);   /* roll back the FID */
-                args.status = SS__BADPARAM;   /* more than a directory can hold: honest, not clamped */
-                goto free_sc;
-            }
             if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
                 status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);

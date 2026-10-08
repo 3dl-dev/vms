@@ -569,7 +569,6 @@ acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
 acp-dir-used-blocks-ignore-eof
-acp-indexf-not-extended
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
@@ -1134,6 +1133,8 @@ EOF
         why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new directory holds the requested 3 blocks
+BIGD.DIR holds the 200 blocks asked for
+it grew into its preallocated blocks: the allocation is still 200
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1153,25 +1154,8 @@ EOF
         why)          echo "acp_dir_used_blocks() returns the directory's used blocks from its FAT end of file. The mutation returns the whole allocation, so a directory created with 200 blocks is treated as 200 blocks in use, beyond the 64-block working bound, and every insert into it fails SS\$_DEVICEFULL. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-EOF
-                      ;;
-        knock_on_why)  echo "";;
-        esac;;
-
-    acp-indexf-not-extended)
-        case "$_f" in
-        facility)     echo "IO\$_CREATE extends INDEXF.SYS (a new extent through its map) when the free file number's header lies past the headers the index file holds";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
-        suites_red)   echo "test_syssvc_create_dir";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "acp_idx_extend() returns early when the header is already inside the index file. The mutation always returns early, so on the real-VAX fixture (16 headers allocated by INIT) the 17th file number has no header slot and IO\$_CREATE refuses it SS\$_DEVICEFULL. Gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
+every one of them is found again by name
+BIGD.DIR grew past its first block
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1231,6 +1215,7 @@ EOF
         why)          echo "lib\$create_dir() calls pick_candidate() to compose the device through LNM\$FILE_DEV. The mutation drops the call, so a relative spec under the default CDIR\$ROOT:[RSUB] is \$ASSIGNed on the logical name itself and fails. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 LIB$CREATE_DIR [.LEAF] under a rooted default is SS$_CREATED
+LEAF.DIR is in [OVMXDIR.RSUB], the member that exists
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7205,8 +7190,6 @@ apply_edit() {
         sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file";;
     libcreatedir-rooted-default-unresolved)
         sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file";;
-    acp-indexf-not-extended)
-        sed -i 's|^    if (want <= vol->idx_alloc)$|    if (1) /* NEGCTL acp-indexf-not-extended */|' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)

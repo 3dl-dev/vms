@@ -161,7 +161,6 @@ int main(void)
             made++;
     }
     /* negctl: acp-dir-used-blocks-ignore-eof */
-    /* negctl: acp-indexf-not-extended */
     check(made == BIG_ENTRIES, "30 directories are entered in BIGD.DIR (the index file grows to hold their headers)");
     for (i = 0; i < BIG_ENTRIES; i++) {
         char nm[16];

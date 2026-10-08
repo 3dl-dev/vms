@@ -436,6 +436,10 @@ void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
  * around: vms_kif_mbx_read() already retries on EINTR the same way
  * sys$waitfr's kif_wait_call() does (see vms_kif.c).
  */
+/* Set by an op whose refusal came before VMS would touch the IOSB (a mailbox
+ * protection check); consumed and cleared by qio_service_status. */
+static __thread int qio_refused_before_iosb;
+
 static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                                 void *p1, uint32_t p2, uint32_t efn,
                                 void (*astadr)(uint32_t), uint32_t astprm) {
@@ -493,7 +497,10 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_WRITELBLK:
         case IO$_WRITEPBLK:
             if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_mbx_write(exec_chan, p1, p2);
+            /* IO$M_NORSWAIT (rd vms-c6d1): no room in the mailbox completes the
+             * write with SS$_MBFULL instead of waiting for a reader. */
+            st = vms_kif_mbx_write_ex(exec_chan, p1, p2,
+                                      (func & IO$M_NORSWAIT) != 0);
             if (st & 1) actlen = p2;
             break;
 
@@ -526,6 +533,18 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         default:
             st = SS$_ILLIOFUNC;
             break;
+    }
+
+    /*
+     * A protection refusal (SS$_NOPRIV from the executive's check of the mailbox
+     * mask, rd vms-c6d1) happens before VMS touches the IOSB: on real VAX V7.3
+     * and Alpha V8.4 the IOSB is left exactly as it was
+     * (docs/oracle/semantics/mbxprot/, e.g. MBXP.NOR.READ). Say so to
+     * qio_service_status, which would otherwise zero it.
+     */
+    if (st == SS$_NOPRIV) {
+        qio_refused_before_iosb = 1;
+        return st;
     }
 
     if (iosb) {
@@ -1264,7 +1283,7 @@ static int qio_refused(uint32_t st)
     case SS$_BADPARAM:
     case SS$_ACCVIO: case SS$_EXQUOTA: case SS$_ILLEFC: case SS$_UNASEFC:
     case SS$_NOPRIV: case SS$_INSFMEM: case SS$_IVBUFLEN: case SS$_NOSUCHDEV:
-    case SS$_DEVOFFLINE: case SS$_UNSUPPORTED:
+    case SS$_DEVOFFLINE: case SS$_UNSUPPORTED: case SS$_MBFULL:
         return 1;
     default:
         return 0;
@@ -1273,8 +1292,13 @@ static int qio_refused(uint32_t st)
 
 static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
 {
+    int before_iosb = qio_refused_before_iosb;
+
+    qio_refused_before_iosb = 0;
     if (st == SS$_NORMAL)
         return st;
+    if (before_iosb)
+        return st;              /* refused before the IOSB: left as it was */
     if (qio_refused(st)) {
         /* VMS clears the IOSB once the channel is validated, before the
          * driver's checks: a bad channel leaves it as it was (IO.CHAN0,

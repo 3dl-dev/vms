@@ -1137,6 +1137,18 @@ uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan);
  * `len` exceeds the mailbox's MAXMSG or its remaining BUFQUO. */
 uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len);
 
+/* $CREMBX with a promsk: the SOGW protection mask (a SET bit DENIES) the
+ * executive checks every $ASSIGN, read and write against; owner = caller's UIC.
+ * vms_kif_mbx_create() is this with promsk 0 (rd vms-c6d1). */
+uint32_t vms_kif_mbx_create_prot(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                                 uint32_t promsk, uint32_t *exec_chan,
+                                 uint32_t *unit, char *devnam, uint32_t devnam_sz);
+
+/* IO$_WRITEVBLK with IO$M_NORSWAIT when norswait != 0: no room for the message
+ * -> SS$_MBFULL at once, never a wait for a reader (rd vms-c6d1). */
+uint32_t vms_kif_mbx_write_ex(uint32_t exec_chan, const void *buf, uint32_t len,
+                              int norswait);
+
 /* $QIO IO$_READVBLK-equivalent. Copies up to `bufsz` bytes of the next
  * message into `buf` and reports the message's true length in *actlen (which
  * may exceed bufsz if the caller's buffer was smaller than the message -- the

@@ -375,7 +375,7 @@ The 3 SYS$ logical-name entry points (CRELNM/DELLNM/TRNLNM) are all implemented.
 | 🟡 | `sys$trnlnm` | routine | Translate a logical name (walks PROCESS -> JOB -> GROUP -> SYSTEM search order) | partial | real | in | `src/libvms/syssvc/sys_logical.c` — SYSTEM step reads the executive's read-only mmap arena; PROCESS/JOB/GROUP steps read process-private logical_table[] |
 
 ### sys-mailbox — SYS$ Mailboxes
-<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Mailbox Services · reviewed 2026-09-14</sub>
+<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Mailbox Services · reviewed 2026-10-08</sub>
 
 VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resident. Replaced an earlier AF_UNIX facade.
 
@@ -384,7 +384,7 @@ VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resid
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| 🟢 | `sys$crembx` | routine | Create a mailbox device | implemented | real | in | `src/libvms/syssvc/sys_mailbox.c` — vms.ko-resident; replaced an earlier AF_UNIX facade |
+| 🟢 | `sys$crembx` | routine | Create a mailbox device | implemented | real | in | `src/libvms/syssvc/sys_mailbox.c` — vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at each read/write (not at $ASSIGN, as on real VMS), with BYPASS/SYSPRV (READALL does not open a mailbox, oracle mbxprot) (rd vms-c6d1); acmode and flags are not yet honoured |
 | 🟢 | `sys$delmbx` | routine | Delete a mailbox device | implemented | real | in | `src/libvms/syssvc/sys_mailbox.c` |
 
 ### sys-memory — SYS$ Memory Management

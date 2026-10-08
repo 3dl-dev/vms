@@ -491,4 +491,7 @@
 # mutated the veneer's DECC$FILE_SHARING test; the file layer's honouring of
 # that feature is now asserted by the alpha crtl-fd gate, crtl_fd_test.c 41).
 # Raised by spawn-input-via-linux-path (vms-ccc: lib$spawn INPUT is read through RMS).
-177
+# Raised to 183 by the six vms-c6d1 mailbox-protection defects (mbx-prot-read-
+# unchecked, mbx-prot-write-unchecked, mbx-readall-grants-read, crembx-promsk-
+# dropped, mbx-sender-pid-not-stamped, mbx-norswait-ignored; test_syssvc_mbx_prot).
+183

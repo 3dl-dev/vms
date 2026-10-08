@@ -3,7 +3,6 @@
 # differ from real OpenVMS (docs/oracle/semantics/<family>/). Read by
 # tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
 # and so does a listed case that now matches. Fix the bug, delete the line.
-brk BRK.NOUSER  # vms-eb46: a user with no terminal -- OpenVMS ends the IOSB SS$_DEVOFFLINE (132), OVMX SS$_NORMAL with a count of 0
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS
 info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive row; PRIB has no OVMX priority; AUTHPRIV is the enforced set
 lnm LNM.TRN.SYSCMD  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device

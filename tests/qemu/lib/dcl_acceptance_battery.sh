@@ -307,8 +307,15 @@ console_login_acceptance() {
     # waits for its own RETURN.
     local IDLE_WAIT="${LOGIN_IDLE_WAIT:-45}"
     local IDLE_OFF; IDLE_OFF=$(wc -c <"$LOG")
-    echo "  (idle-timeout probe: leaving the login prompt untouched for ${IDLE_WAIT}s)"
-    sleep "$IDLE_WAIT"
+    echo "  (idle-timeout probe: leaving the login prompt untouched; the deadline is 20s of GUEST time)"
+    # vms-330: the guest's 20s deadline runs on the GUEST clock, which lags wall time when the
+    # runner (or a CPU-limited rail pod) is loaded -- a fixed `sleep 45` looked at the console
+    # before a slow guest had counted its 20s, and failed with the text simply not there yet
+    # (reproduced under parallel guests on the k3s rail: round 3, 1 of 8 gates). Wait for the
+    # expiry text itself, bounded generously; the assertions below still require it, so a guest
+    # with NO idle deadline still fails (the wait runs out and the text is absent).
+    wait_for 'Timeout period expired' "${LOGIN_IDLE_CAP:-240}" "$IDLE_OFF" >/dev/null 2>&1 || true
+    sleep 2        # let the lines that follow the reason land before the segment is cut
     local IDLE_SEG; IDLE_SEG=$(_batt_seg_since "$IDLE_OFF")
     # NOT silent, and not invented either: the two lines the V7.3 oracle prints
     # (rd vms-29e). A silent timeout is what let an idle console pass for a
@@ -1186,6 +1193,8 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-6af1]: the inbound session pool behaved on the real executive (one PASS/FAIL line per assertion above this verdict)"
         must_have "$POOLSEG" 'a SECOND inbound SET HOST is accepted while the first is live' \
             "NETACP pool [vms-6af1]: a second inbound SET HOST is admitted while the first is live (G2: no single slot to monopolise)"
+        must_have "$POOLSEG" 'PASS: a THIRD session from the same node is accepted' \
+            "NETACP pool [vms-277a]: a node may hold three concurrent sessions -- a VMS DELETE node::file;* opens three links to the FAL (VAX<->VAX capture)"
         must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
             "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
         must_have "$POOLSEG" 'running as [128,129]' \

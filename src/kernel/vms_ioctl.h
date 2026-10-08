@@ -3186,7 +3186,11 @@ struct vms_getsyi_mem_args {
  * value that was in force. A process that never set one reports VMS_DFPROT_INITIAL.
  * OVMX design choice (Rule 8): the byte layout of this ioctl.
  */
-#define VMS_DFPROT_INITIAL 0xFF00u   /* S:RWED,O:RWED,G:,W: -- OVMX's long-standing default */
+/* VMS's process default: the SYSGEN parameter RMS_FILEPROT, whose documented default
+ * is 64000 = %XFA00, S:RWED,O:RWED,G:RE,W: (Baron 2026-10-08). The Alpha V8.4 lab's
+ * $SETDFPROT(0,&old) returns FA00 for SYSTEM (src/libvms/syssvc/sys_misc.c). OVMX has
+ * no SYSGEN RMS_FILEPROT yet; this is that parameter's default. */
+#define VMS_DFPROT_INITIAL 0xFA00u   /* S:RWED,O:RWED,G:RE,W: -- RMS_FILEPROT default */
 struct vms_dfprot_args {
     uint32_t set;       /* in:  nonzero = store newprot */
     uint32_t newprot;   /* in:  16-bit protection word (low half) */

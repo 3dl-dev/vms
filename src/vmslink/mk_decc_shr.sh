@@ -184,7 +184,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # a foreign fd (socket/pipe) returns -1 fail-honest. Sound for a file-only
     # compiler port; a socket-using port image would need the fd-close design
     # extended (INV-6: no silent POSIX fallback) -- flagged for that future case.
-    if [ -n "${ALPHA_CRTL_RMS_USE:-}" ]; then
+    if [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && [ "${ALPHA_CRTL_RMS_FD:-0}" != 1 ]; then
         sed -E \
             -e 's,^decc\$(fopen|fwrite|fread|fclose|open|creat|unlink|remove|rename|opendir|readdir|closedir)=PROCEDURE$,decc$\1/ovmx_crtl_\1=PROCEDURE,' \
             -e 's,^decc\$close=PROCEDURE$,decc$close/ovmx_crtl_fdclose=PROCEDURE,' \
@@ -366,42 +366,67 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         RMS_INC="$RMS_SRC_DIR/include"
         LIBVMS_INC_VENEER="$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)"
         VENEER_DIR=$(mktemp -d)
-        VENEER_OBJ="$VENEER_DIR/crtl_rms_stdio.o"
-        # shellcheck disable=SC2086
-        "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
-            -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
-            -o "$VENEER_OBJ" "$RMS_SRC_DIR/crtl_rms_stdio.c"
+        if [ "${ALPHA_CRTL_RMS_FD:-0}" = 1 ]; then
+            # vms-b90: THE C RTL FILE LAYER OVER RMS. Instead of re-pointing
+            # individual decc$ file entries at a FIX-record veneer, the C RTL's
+            # own (musl) file calls stay as they are and their system calls are
+            # served by RMS: src/vmsrms/crtl_rms_fd.c installs a hook in the
+            # musl-arch syscall funnel (__vms_alpha_syscall) from decc$main.
+            # decc$main is rebound IN PLACE (same sv#, vms-b14) to the layer's
+            # ovmx_crtl_fd_main, which installs the hook and then runs the C
+            # RTL's own decc$main. The FIX-record veneer is not linked.
+            FD_OBJ="$VENEER_DIR/crtl_rms_fd.o"
+            # shellcheck disable=SC2086
+            "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+                -I"$RMS_SRC_DIR" -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+                -o "$FD_OBJ" "$RMS_SRC_DIR/crtl_rms_fd.c"
+            "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_fd_main \
+                || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_fd_main" >&2; exit 2; }
+            case ",$VEC," in
+                *',decc$main=PROCEDURE,'*) ;;
+                *) echo "mk_decc_shr: FAIL decc\$main is not a PROCEDURE universal to rebind" >&2; exit 2;;
+            esac
+            VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$main=PROCEDURE,/,decc$main\/ovmx_crtl_fd_main=PROCEDURE,/; s/^,//; s/,$//')
+            ALPHA_VENEER_OBJ="$FD_OBJ"
+            echo "mk_decc_shr: C RTL file layer over RMS wired (vms-b90): decc\$main -> ovmx_crtl_fd_main installs the syscall-funnel hook (--use $ALPHA_CRTL_RMS_USE)"
+        else
+            VENEER_OBJ="$VENEER_DIR/crtl_rms_stdio.o"
+            # shellcheck disable=SC2086
+            "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+                -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+                -o "$VENEER_OBJ" "$RMS_SRC_DIR/crtl_rms_stdio.c"
 
-        # Ground-truth the veneer's own universals (never hand-listed): its 4
-        # OVMX-original entry points, plain (non-decc$) defined text symbols.
-        VENEER_VEC=$(mktemp)
-        "$NM" --defined-only "$VENEER_OBJ" 2>/dev/null \
-          | awk '$NF ~ /^ovmx_crtl_/ { t=$(NF-1); if (t=="T"||t=="t"||t=="W"||t=="w") print $NF }' \
-          | sort -u > "$VENEER_VEC"
-        NVENEER=$(wc -l < "$VENEER_VEC")
-        # vms-3320: the veneer defines the 4 stdio + 8 file-op entry points plus
-        # ovmx_crtl_fdclose (the 13th, the target of decc$close so a decc$open/
-        # creat fd closes via RMS and its ODS-2 File ID finalizes). Require the
-        # 13 SUBSTITUTED names by presence (never a hand-list drift) and a floor
-        # of 13 universals; any further internal ovmx_crtl_ helper is harmless
-        # dead weight (never exported), as musl's own fopen.o stays whole-archived.
-        [ "$NVENEER" -ge 13 ] || { echo "mk_decc_shr: FAIL expected >=13 ovmx_crtl_ universals from crtl_rms_stdio.c, got $NVENEER: $(tr '\n' ' ' < "$VENEER_VEC")" >&2; exit 2; }
-        for want in ovmx_crtl_fopen ovmx_crtl_fwrite ovmx_crtl_fread ovmx_crtl_fclose \
-                    ovmx_crtl_open ovmx_crtl_creat ovmx_crtl_unlink ovmx_crtl_remove \
-                    ovmx_crtl_rename ovmx_crtl_opendir ovmx_crtl_readdir ovmx_crtl_closedir \
-                    ovmx_crtl_fdclose; do
-            grep -qx "$want" "$VENEER_VEC" || { echo "mk_decc_shr: FAIL crtl_rms_stdio.c did not define $want" >&2; exit 2; }
-        done
-        rm -f "$VENEER_VEC"
+            # Ground-truth the veneer's own universals (never hand-listed): its 4
+            # OVMX-original entry points, plain (non-decc$) defined text symbols.
+            VENEER_VEC=$(mktemp)
+            "$NM" --defined-only "$VENEER_OBJ" 2>/dev/null \
+              | awk '$NF ~ /^ovmx_crtl_/ { t=$(NF-1); if (t=="T"||t=="t"||t=="W"||t=="w") print $NF }' \
+              | sort -u > "$VENEER_VEC"
+            NVENEER=$(wc -l < "$VENEER_VEC")
+            # vms-3320: the veneer defines the 4 stdio + 8 file-op entry points plus
+            # ovmx_crtl_fdclose (the 13th, the target of decc$close so a decc$open/
+            # creat fd closes via RMS and its ODS-2 File ID finalizes). Require the
+            # 13 SUBSTITUTED names by presence (never a hand-list drift) and a floor
+            # of 13 universals; any further internal ovmx_crtl_ helper is harmless
+            # dead weight (never exported), as musl's own fopen.o stays whole-archived.
+            [ "$NVENEER" -ge 13 ] || { echo "mk_decc_shr: FAIL expected >=13 ovmx_crtl_ universals from crtl_rms_stdio.c, got $NVENEER: $(tr '\n' ' ' < "$VENEER_VEC")" >&2; exit 2; }
+            for want in ovmx_crtl_fopen ovmx_crtl_fwrite ovmx_crtl_fread ovmx_crtl_fclose \
+                        ovmx_crtl_open ovmx_crtl_creat ovmx_crtl_unlink ovmx_crtl_remove \
+                        ovmx_crtl_rename ovmx_crtl_opendir ovmx_crtl_readdir ovmx_crtl_closedir \
+                        ovmx_crtl_fdclose; do
+                grep -qx "$want" "$VENEER_VEC" || { echo "mk_decc_shr: FAIL crtl_rms_stdio.c did not define $want" >&2; exit 2; }
+            done
+            rm -f "$VENEER_VEC"
 
-        # NOTE: the decc$fopen/fwrite/fread/fclose -> ovmx_crtl_* alias entries
-        # are ALREADY in $VEC, rewritten in place at their enumerated sorted
-        # slot by the ALPHA_CRTL_RMS_USE block above — so the symbol-vector
-        # index of every OTHER universal is byte-stable vs the bootstrap pass
-        # (vms-b14). Do NOT re-append them at the tail here: that renumbering is
-        # exactly the sv# skew that mis-bound LIBVMSFS's decc$strlen to
-        # decc$strspn at runtime.
-        ALPHA_VENEER_OBJ="$VENEER_OBJ"
+            # NOTE: the decc$fopen/fwrite/fread/fclose -> ovmx_crtl_* alias entries
+            # are ALREADY in $VEC, rewritten in place at their enumerated sorted
+            # slot by the ALPHA_CRTL_RMS_USE block above — so the symbol-vector
+            # index of every OTHER universal is byte-stable vs the bootstrap pass
+            # (vms-b14). Do NOT re-append them at the tail here: that renumbering is
+            # exactly the sv# skew that mis-bound LIBVMSFS's decc$strlen to
+            # decc$strspn at runtime.
+            ALPHA_VENEER_OBJ="$VENEER_OBJ"
+        fi
 
         # vms-32ae: the DEC C file-specification translators decc$to_vms /
         # decc$from_vms / decc$translate_vms (src/vmsrms/crtl_filespec.c). They
@@ -424,8 +449,10 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         done
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FSPEC_OBJ"
         echo "mk_decc_shr: DEC C file-spec translators wired (vms-32ae): decc\$to_vms/decc\$from_vms/decc\$translate_vms (tail-appended)"
-        echo "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\$fopen/fwrite/fread/fclose -> ovmx_crtl_* (--use $ALPHA_CRTL_RMS_USE)"
-        echo "mk_decc_shr: CRTL->RMS file-op veneer wired (vms-3320): decc\$open/creat/unlink/remove/rename/opendir/readdir/closedir -> ovmx_crtl_*, decc\$close -> ovmx_crtl_fdclose (--use $ALPHA_CRTL_RMS_USE)"
+        if [ "${ALPHA_CRTL_RMS_FD:-0}" != 1 ]; then
+            echo "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\$fopen/fwrite/fread/fclose -> ovmx_crtl_* (--use $ALPHA_CRTL_RMS_USE)"
+            echo "mk_decc_shr: CRTL->RMS file-op veneer wired (vms-3320): decc\$open/creat/unlink/remove/rename/opendir/readdir/closedir -> ovmx_crtl_*, decc\$close -> ovmx_crtl_fdclose (--use $ALPHA_CRTL_RMS_USE)"
+        fi
     fi
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,

@@ -39,9 +39,37 @@
  * 64-bit __scc / syscall_arg_t in syscall_arch.h exists to prevent; the register
  * variables here must be equally wide so no truncation reappears in the trap.
  */
+/*
+ * vms-b90: the C RTL file-layer hook. When the RMS-backed DECC$SHR runs an
+ * image, decc$main installs src/vmsrms/crtl_rms_fd.c's hook here; it serves the
+ * file system calls that name an RMS file (or an RMS file's descriptor) through
+ * RMS and sets *handled, and leaves every other call to the kernel. NULL (the
+ * bootstrap DECC$SHR, and before decc$main) means every call is the kernel's.
+ * The hook reaches the kernel itself through __vms_alpha_syscall_raw.
+ */
+long long (*__ovmx_sys_hook)(long long, long long, long long, long long,
+			     long long, long long, long long, int *) = 0;
+
+long long __vms_alpha_syscall_raw(long long n, long long a1, long long a2,
+				  long long a3, long long a4, long long a5,
+				  long long a6);
+
 long long __vms_alpha_syscall(long long n, long long a1, long long a2,
 			      long long a3, long long a4, long long a5,
 			      long long a6)
+{
+	if (__ovmx_sys_hook) {
+		int handled = 0;
+		long long r = __ovmx_sys_hook(n, a1, a2, a3, a4, a5, a6, &handled);
+		if (handled)
+			return r;
+	}
+	return __vms_alpha_syscall_raw(n, a1, a2, a3, a4, a5, a6);
+}
+
+long long __vms_alpha_syscall_raw(long long n, long long a1, long long a2,
+				  long long a3, long long a4, long long a5,
+				  long long a6)
 {
 	register long long r0  __asm__("$0")  = n;   /* syscall number -> result/errno */
 	register long long r16 __asm__("$16") = a1;  /* a0 */

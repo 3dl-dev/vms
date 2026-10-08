@@ -869,6 +869,54 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate
 
   # -----------------------------------------------------------------------
+  # alpha-crtl-fd (vms-b90): the C RTL file layer over RMS -- the file half of
+  # vms-254 the native GCC (cc1 reading sources, writing .s) needs.
+  alpha-crtl-fd:
+    name: "OVMX/Alpha C RTL file layer over RMS — a 32-bit DEC C program's stdio and descriptor calls (fopen/fputs/fgets/open/read/lseek/fstat/stat/dup2/rename/unlink) run over RMS on the ODS-2 volume; DCL writes the record file it reads and DCL TYPE reads back what it wrote (vms-b90, blocks vms-fd1)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+
+      - name: "C RTL file-layer gate — DCL writer + DCL TYPE independent reader; 4-case can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate
+
+  # -----------------------------------------------------------------------
   # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --
   # the rung above alpha-crtl-rms-n7 (which is single-object). The milestone
   # image is a genuine multi-object program: mf_main.obj calls ACROSS the .o

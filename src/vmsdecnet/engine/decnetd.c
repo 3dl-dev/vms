@@ -5207,7 +5207,7 @@ static int run_mail11_accept_test(void)
     int named = dnet_store_save_nodes(&db) == DNET_STORE_OK;
 
     g_netacp_tx = m11_tx_capture;
-    static struct netacp_slot slots[NETACP_MAX_SESSIONS];
+    static struct netacp_slot slots[NETACP_POOL_CAP];
     memset(slots, 0, sizeof slots);
     uint16_t next_lla = 0x2100;
     static struct dnet_engine node, peer;

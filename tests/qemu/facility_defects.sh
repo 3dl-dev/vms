@@ -4900,10 +4900,10 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "lex_user() goes back to answering the literal \"SYSTEM\" when the executive holds no name -- the vms-cb5 defect verbatim, found because SHOW PROCESS (a display) and F\$GETJPI (a lexical function) read the SAME field of the SAME row and disagreed: the display printed nothing and the programmatic path invented the most privileged name on the system for the one process that had just been REFUSED it.";;
+        why)          echo "lex_user() renders SYSTEM's UIC instead of this process's own -- the vms-cb5 defect in its F\$USER-is-a-UIC form, found because SHOW PROCESS (a display) and F\$GETJPI (a lexical function) read the SAME field of the SAME row and disagreed: the display printed nothing and the programmatic path invented the most privileged name on the system for the one process that had just been REFUSED it.";;
         require_fail) cat <<'EOF'
-G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
-G/F$USER: does not answer with the literal SYSTEM
+G/F$USER: answers this process's own UIC in named form -- not the host Linux login name, not SYSTEM's
+G/F$USER: does not answer with SYSTEM
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -4934,9 +4934,9 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "lex_user() goes back to answering with the HOST Linux account name for getuid(), upcased -- the vms-f39 defect verbatim, where F\$USER() answered \"BARON\" because that was the developer's login. A Linux account name is not a VMS user name, and this is the branch that would be taken on any system that HAS an /etc/passwd. It is a SEPARATE control from dcl-fuser-system-fabricated because it is a separate branch that was reachable in a separate population of systems: restoring only the SYSTEM half leaves this one deleted and vice versa.";;
+        why)          echo "lex_user() answers with the HOST Linux account name for getuid(), upcased, in place of the UIC it rendered -- the vms-f39 defect verbatim, where F\$USER() answered \"BARON\" because that was the developer's login. A Linux account name is not a VMS user name, and this is the branch that would be taken on any system that HAS an /etc/passwd. It is a SEPARATE control from dcl-fuser-system-fabricated because it is a separate branch that was reachable in a separate population of systems: restoring only the SYSTEM half leaves this one deleted and vice versa.";;
         require_fail) cat <<'EOF'
-G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
+G/F$USER: answers this process's own UIC in named form -- not the host Linux login name, not SYSTEM's
 G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
 EOF
                       ;;
@@ -7777,9 +7777,9 @@ apply_edit() {
     dcl-accounting-user-fabricated)
         sed -i '/^int cmd_accounting(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-accounting-user-fabricated */|' "$_file";;
     dcl-fuser-system-fabricated)
-        sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        strncpy(result, "SYSTEM", result_size - 1); /* NEGCTL dcl-fuser-system-fabricated */|' "$_file";;
+        sed -i '/^static int lex_user(/,/^}$/ s|^    uint32_t uic = info.uic;$|    uint32_t uic = 0x00010004u; /* NEGCTL dcl-fuser-system-fabricated */|' "$_file";;
     dcl-fuser-host-login-name)
-        sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
+        sed -i '/^static int lex_user(/,/^}$/ s|^    result\[ulen\] = .\\0.;$|    { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
     dcl-fident-num2name-host-passwd)
         sed -i '/^static int lex_identifier(/,/^}$/ s|^            result\[0\] = .\\0.;$|            { struct passwd *pw_ = getpwuid((uid_t)member); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fident-num2name-host-passwd */|' "$_file";;
     dcl-fident-num2name-bracketed-uic)

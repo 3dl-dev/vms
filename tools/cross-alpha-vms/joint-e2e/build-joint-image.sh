@@ -24,12 +24,13 @@
 #   JOINT_MAIN=crtl_rms_test.c IMG=ovmx-cross-alpha-vms \
 #       tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
 #
-# JOINT_CRTL_RMS_VENEER=1 (vms-2655, rung 3 of vms-b4f; default 0, so every
-# existing caller/gate is byte-identical) opts DECC$SHR into the rung-2
-# CRTL->RMS stdio veneer (two-pass bootstrap — see the JOINT_CRTL_RMS_VENEER
-# block below) and adds --use LIBVMSRMS$SHR to the final link, so
-# decc$fopen/fwrite/fread/fclose in whatever JOINT_MAIN builds bind to the
-# veneer (ovmx_crtl_* -> real RMS system services) instead of musl-POSIX:
+# JOINT_CRTL_RMS_VENEER=1 (vms-2655; default 0, so every other caller/gate is
+# byte-identical) builds the RMS-backed DECC$SHR (two-pass bootstrap -- see the
+# JOINT_CRTL_RMS_VENEER block below): the C RTL file layer over RMS
+# (src/vmsrms/crtl_rms_fd.c, vms-b90) serves the C RTL's file system calls with
+# real RMS services instead of the kernel VFS, and the final link adds --use
+# LIBVMSRMS$SHR. (The name is historical: the FIX-record stdio veneer it first
+# selected was retired in vms-9f8e.)
 #
 #   JOINT_MAIN=crtl_rms_test.c JOINT_CRTL_RMS_VENEER=1 IMG=ovmx-cross-alpha-vms \
 #       tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
@@ -84,20 +85,15 @@ for _e in $JOINT_EXTRA; do
     test -f "$HERE/$_e" || { echo "FAIL: JOINT_EXTRA source '$_e' not found in $HERE" >&2; exit 1; }
 done
 
-# JOINT_CRTL_RMS_VENEER (vms-2655, rung 3 of vms-b4f). Opt-in (default 0, so
-# every existing gate/caller builds byte-identically to before). When set to
-# 1, this recipe builds the port image's DECC$SHR via the SAME two-pass
-# CRTL->RMS stdio-veneer bootstrap rung 2's build-decc-veneer.sh introduced
-# (tools/cross-alpha-vms/decc-veneer/build-decc-veneer.sh -- read that script
-# first, this composes it verbatim into this recipe's producer graph):
-#   pass 1 (bootstrap): DECC$SHR WITHOUT the veneer, used only to build the
+# JOINT_CRTL_RMS_VENEER (vms-2655). Opt-in (default 0, so every other
+# gate/caller builds byte-identically). When set to 1, this recipe builds the
+# port image's DECC$SHR in two passes:
+#   pass 1 (bootstrap): DECC$SHR without RMS, used only to build the
 #     producer graph (LIBVMSSYS/PROCESS/LNM/FS/LIBVMS$SHR -> LIBVMSRMS$SHR).
 #   pass 2 (final):     DECC$SHR WITH ALPHA_CRTL_RMS_USE=<pass-1 LIBVMSRMS$SHR>,
-#     so decc$fopen/fwrite/fread/fclose alias to the crtl_rms_stdio.c veneer
-#     (ovmx_crtl_*) instead of musl's own POSIX defs. The final joint_e2e.exe
-#     link then ADDS --use LIBVMSRMS$SHR (the veneer's own cross-image sys$*
-#     imports need a producer at THIS link too, exactly as build-decc-veneer.sh's
-#     step-12 test image does), and LIBVMSRMS$SHR is staged into OUTDIR
+#     carrying the C RTL file layer over RMS (crtl_rms_fd.c). The final
+#     joint_e2e.exe link then ADDS --use LIBVMSRMS$SHR (the layer's cross-image
+#     sys$* imports need a producer at THIS link too), and LIBVMSRMS$SHR is staged into OUTDIR
 #     alongside DECC$SHR/LIBOTS_SHR (the SYS$SHARE search-path set a bootable
 #     runtime would load all three from). This is a build-ORCHESTRATION
 #     opt-in confined to this recipe -- with the var unset/0, every existing
@@ -154,7 +150,6 @@ docker run --rm \
     -e JOINT_MAIN \
     -e JOINT_EXTRA \
     -e JOINT_CRTL_RMS_VENEER \
-    -e JOINT_CRTL_RMS_FD \
     -e JOINT_USE_LIBVMS \
     -e JOINT_MAIN_CFLAGS \
     -e JOINT_MAIN_MUSL_HEADERS \
@@ -272,10 +267,10 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     # the first unstaged producer). A non-veneer run never enters this block.
     cp "$SYS" "$PROC" "$LNM" "$FS" "$VMS" "$OUT/"
 
-    echo "-- [vms-2655] DECC\$SHR pass 2 (final, CRTL->RMS stdio veneer wired, vms-ed1e) --"
+    echo "-- [vms-9f8e] DECC\$SHR pass 2 (final, the C RTL file layer over RMS, vms-b90) --"
     OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
         ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
-        ALPHA_CRTL_RMS_USE="$RMS" ALPHA_CRTL_RMS_FD="${JOINT_CRTL_RMS_FD:-0}" \
+        ALPHA_CRTL_RMS_USE="$RMS" \
         sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
 else
     echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"

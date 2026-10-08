@@ -5,7 +5,7 @@
  * calls, on files of the Files-11 ODS-2 volume.
  *
  * Built by the crtl-fd gate (run-module-gp-activation-alpha.sh) against the
- * RMS-backed DECC$SHR (JOINT_CRTL_RMS_FD=1). The boot's SYSTARTUP first writes
+ * RMS-backed DECC$SHR (JOINT_CRTL_RMS_VENEER=1). The boot's SYSTARTUP first writes
  * VDA0:[SYSTMP]CFDIN.TXT with DCL OPEN/WRITE (a record file DCL owns), runs this
  * image, then an independent reader -- DCL TYPE over RMS -- shows the file this
  * image wrote. Every check prints; the first failure picks the exit value, and

@@ -443,9 +443,10 @@ jobs:
           JOINT_MAIN=crtl_rms_test.c JOINT_CRTL_RMS_VENEER=1 IMG=ovmx-cross-alpha-vms \
             tools/cross-alpha-vms/joint-e2e/build-joint-image.sh "$OUT"
           LOG="$OUT/build.log"
-          # (1) the pass-2 DECC$SHR build (inside this same recipe run) wired the veneer
-          grep -qE "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\\\$fopen/fwrite/fread/fclose -> ovmx_crtl_\* \(--use .*LIBVMSRMS\\\$SHR\.EXE\)" "$LOG" \
-            || { echo "GATE FAIL (vms-2655): veneer-wired log line not seen"; exit 1; }
+          # (1) the pass-2 DECC$SHR build (inside this same recipe run) wired the
+          #     C RTL file layer over RMS (vms-b90; the FIX-record veneer is retired, vms-9f8e)
+          grep -qE "mk_decc_shr: C RTL file layer over RMS wired \(vms-b90\): decc\\\$main -> ovmx_crtl_fd_main installs the syscall-funnel hook \(--use .*LIBVMSRMS\\\$SHR\.EXE\)" "$LOG" \
+            || { echo "GATE FAIL (vms-2655): RMS file-layer wiring log line not seen"; exit 1; }
           # (2) DECC$SHR's own pass-2 build resolved sys$create/open/connect/put/get/close
           #     against --use LIBVMSRMS$SHR (the real RMS substrate, not a stub)
           for s in create open connect put get close; do
@@ -466,7 +467,7 @@ jobs:
             || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_EXEC (P0)"; exit 1; }
           # (4) the port image's OWN decc$fopen import binds to the pass-2 (veneer)
           #     DECC$SHR.EXE producer -- the chain from (1)+(2) above proves THAT
-          #     producer's decc$fopen is the crtl_rms_stdio.c veneer, not musl-POSIX.
+          #     producer serves its file system calls through RMS, not the kernel VFS.
           echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to --use producer DECC\\\$SHR.EXE" \
             || { echo "GATE FAIL (vms-2655): port image decc\$fopen did not bind to the veneer-wired DECC\$SHR producer"; exit 1; }
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not EM_ALPHA"; exit 1; }

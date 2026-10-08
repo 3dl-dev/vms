@@ -714,7 +714,7 @@ build_joint_images() {
   # byte-identical.
   log "step 1a: build the milestone image ($MILESTONE_MAIN${MILESTONE_EXTRA:+ + $MILESTONE_EXTRA}, sentinel $WANT_SENTINEL${JOINT_CRTL_RMS_VENEER:+ veneer=$JOINT_CRTL_RMS_VENEER}) with the merged toolchain"
   JOINT_MAIN="$MILESTONE_MAIN" JOINT_EXTRA="${MILESTONE_EXTRA:-}" \
-    JOINT_CRTL_RMS_VENEER="$JOINT_CRTL_RMS_VENEER" JOINT_CRTL_RMS_FD="${JOINT_CRTL_RMS_FD:-0}" \
+    JOINT_CRTL_RMS_VENEER="$JOINT_CRTL_RMS_VENEER" \
     IMG="$VMS_IMG" bash "$bji" "$out_n3" \
     || die "build-joint-image.sh (milestone $MILESTONE_MAIN) failed -- see $out_n3/build.log"
   grep -q 'LINK-S-CREATED' "$out_n3/build.log" \
@@ -1579,6 +1579,8 @@ EOF
     # (DCL DIRECTORY over the ACP, a different accessor) seeing FOPCRE.DAT +
     # FOPDST.DAT with genuine ODS-2 File IDs and FOPDEL.DAT/FOPSRC.DAT gone.
     MILESTONE_MAIN=crtl_rms3_test.c
+    export JOINT_MAIN_CFLAGS="-I/src/src/libvms/include"   # <unixlib.h>: decc$to_vms
+    export JOINT_MAIN_MUSL_HEADERS=1
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     # Fault-capture: print the user PC of any fatal signal so a crash (e.g. the
@@ -1698,7 +1700,7 @@ EOF
     # vms-b90 (the file half of vms-254, blocks vms-fd1): the C RTL file layer
     # over RMS. MILESTONE image crtl_fd_test.c is an ordinary 32-bit DEC C
     # program (standard headers, default pointer size) built against the
-    # RMS-backed DECC$SHR (JOINT_CRTL_RMS_FD=1: decc$main installs the
+    # RMS-backed DECC$SHR (JOINT_CRTL_RMS_VENEER=1: decc$main installs the
     # syscall-funnel hook, src/vmsrms/crtl_rms_fd.c). Its SYSTARTUP has DCL
     # write the record file the image reads, and DCL TYPE read back the stream
     # file the image wrote -- both directions through a different accessor.
@@ -1707,7 +1709,6 @@ EOF
     export JOINT_MAIN_MUSL_HEADERS=1
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
-    JOINT_CRTL_RMS_FD=1
     export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
     _st=$(mktemp -d); _fails=0
     {

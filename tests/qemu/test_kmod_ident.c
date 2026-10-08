@@ -669,7 +669,7 @@ int main(void)
      * the 0xFFFFFFFFFFFFFFFF that src/ovmx_init/ovmx_init.c used to
      * hand itself.
      * ---------------------------------------------------------------- */
-    expect_reg_privs = VMS_PRV_M_ENFORCED | VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX;
+    expect_reg_privs = VMS_PRV_M_ROOT_GRANT | VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX;
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_self(&info);
@@ -802,7 +802,7 @@ int main(void)
           "unprivileged process reads its own executive row");
     CHECK(r1.perm_privs == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX),
           "unprivileged registration grants only TMPMBX|NETMBX");
-    CHECK((r1.perm_privs & VMS_PRV_M_ENFORCED) == 0,
+    CHECK((r1.perm_privs & VMS_PRV_M_ROOT_GRANT) == 0,
           "unprivileged process gets NO enforced privilege (no CMKRNL/CMEXEC/SETPRV)");
     CHECK(r1.uic == B_UIC,
           "UIC comes from the task's real credentials, not VMS_UIC_GROUP/MEMBER");

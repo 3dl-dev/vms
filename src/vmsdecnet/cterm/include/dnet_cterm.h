@@ -354,6 +354,12 @@ int dnet_cterm_found_envelope_parse(const uint8_t *buf, size_t len,
  * with anything OVMX would plausibly choose. Returns DNET_CTERM_OK or
  * DNET_CTERM_ENOSPACE.
  */
+/* RESOLVED (rd vms-a70 direction B): the host seg-2 "length field does not
+ * match the body" is not a discrepancy -- the body is TWO carried Common Data
+ * messages (AA-DY89A-TK 4.4.8): a 23-byte CTERM Initiate and a 6-byte
+ * Characteristics. dnet_cterm_hostfsm.h decodes them field by field, and
+ * tests/vmsdecnet/test_dnet_cterm_host.c proves the literal below equals that
+ * spec-built encoding. */
 int dnet_cterm_found_host_start_build(uint8_t *buf, size_t cap, size_t *outlen);
 int dnet_cterm_found_client_start_build(uint8_t *buf, size_t cap, size_t *outlen);
 int dnet_cterm_found_host_seg2_build(uint8_t *buf, size_t cap, size_t *outlen);

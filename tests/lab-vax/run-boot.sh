@@ -303,7 +303,8 @@ build_boot_image_set() {
      && [ -f "${SYSVOL_IMAGES_DIR}/JOB_CONTROL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/STARTUP.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] \
-     && [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ]; then
+     && [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ]; then
     log "boot image set present -- NOT rebuilding (set FORCE_SYSVOL_BUILD=1 to force)"; return 0; fi
   mkdir -p "${SYSVOL_IMAGES_DIR}"
   log "cross-building the full boot image set (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT) for elf32-vax"
@@ -326,13 +327,16 @@ build_boot_image_set() {
       cmake -S /src -B /tmp/build-decnetd-vax \
         -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
         -DCMAKE_BUILD_TYPE=Release >/tmp/build-decnetd-vax-configure.log 2>&1
-      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
+      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe ncp_exe -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
       cp /tmp/build-decnetd-vax/bin/DECNETD.EXE /out/DECNETD.EXE
-      cp /tmp/build-decnetd-vax/bin/FAL.EXE /out/FAL.EXE'
+      cp /tmp/build-decnetd-vax/bin/FAL.EXE /out/FAL.EXE
+      cp /tmp/build-decnetd-vax/bin/NCP.EXE /out/NCP.EXE'
   [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] || die "DECNETD.EXE cross-build did not produce an elf32-vax image (rd vms-c1f)"
   # FAL.EXE (rd vms-d85): the FAL network server process NETACP $CREPRCs for
   # every inbound file access, running as the authenticated user.
   [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ] || die "FAL.EXE cross-build did not produce an elf32-vax image (rd vms-d85)"
+  # NCP.EXE (rd vms-5bb5): configures the DECnet executor database the VMS way.
+  [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ] || die "NCP.EXE cross-build did not produce an elf32-vax image (rd vms-5bb5)"
 }
 
 # 3c (sysboot). Master the OVMX SYSTEM volume: build the host vmsfs_master, stage

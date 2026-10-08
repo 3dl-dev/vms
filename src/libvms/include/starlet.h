@@ -304,7 +304,14 @@ uint32_t sys$gettim(uint64_t *timadr);
  * identical values; the separate entry point is provided for source
  * compatibility with programs that call SYS$GETUTC explicitly.
  */
-uint32_t sys$getutc(uint64_t *timadr);
+uint32_t sys$getutc(void *utcadr);   /* 16-byte $UTCDEF structure, not a quadword */
+
+/** UTC time services on the 16-byte $UTCDEF structure (see sys_time.c). */
+uint32_t sys$binutc(const struct dsc$descriptor_s *timbuf, void *utcadr);
+uint32_t sys$numutc(uint16_t timbuf[7], const void *utcadr);
+uint32_t sys$ascutc(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
+                    const void *utcadr, uint32_t cvtflg);
+uint32_t sys$timcon(uint64_t *timadr, void *utcadr, uint32_t cvtflg);
 
 /**
  * sys$numtim - Convert binary time to numeric components
@@ -350,7 +357,7 @@ uint32_t sys$bintim(
  * @param timlen  Optional pointer to receive string length
  * @param timbuf  Pointer to descriptor of output buffer
  * @param timadr  Optional pointer to time (NULL = current time)
- * @param cvtflg  Conversion flags (0 = full, 1 = date only)
+ * @param cvtflg  Conversion flags (bit 0 set = the time only; 0 = date and time)
  *
  * @return  SS$_NORMAL on success
  */
@@ -1113,6 +1120,12 @@ uint32_t sys$delete(void *rab, void (*err)(void *), void (*suc)(void *));
 /** sys$find - Find record, position without reading (cb=RAB) */
 uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *));
 
+/** sys$read - Block I/O: read virtual blocks starting at rab$l_bkt (cb=RAB, FAC BIO+GET) */
+uint32_t sys$read(void *rab, void (*err)(void *), void (*suc)(void *));
+
+/** sys$write - Block I/O: write virtual blocks starting at rab$l_bkt (cb=RAB, FAC BIO+PUT) */
+uint32_t sys$write(void *rab, void (*err)(void *), void (*suc)(void *));
+
 /** sys$rewind - Rewind record stream to beginning (cb=RAB) */
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));
 
@@ -1660,9 +1673,12 @@ uint32_t sys$audit_eventw(uint32_t efn, uint32_t flags, const void *itmlst,
 /** sys$create_uid - Create a universal identifier (128 bits; DCE/RFC 4122 version-1 uuid) */
 uint32_t sys$create_uid(void *uid);
 
+/** sys$clrast - Clear the AST-in-progress state so a queued AST is delivered at once */
+uint32_t sys$clrast(void);
+#define sys$clrast sys$clrast   /* programs guard their own prototype with #ifndef sys$clrast */
+
 /** sys$setdfprot - Set/read the process default file protection (executive-resident); returns RMS$_NORMAL */
 uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot);
-
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

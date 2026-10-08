@@ -1097,6 +1097,22 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 static void cnxman_refresh_conndata_for(struct vms_cnxman *cn,
 					const struct vms_csb *csb);
 
+/* rd vms-ba4: what the peer's connect data and our accept's say each side has
+ * taken -- the two numbers a re-established dialogue continues from. */
+static void cnxman_note_peer_conndata(struct vms_cnxman *cn,
+				      struct vms_csb *csb,
+				      const uint8_t *conndata,
+				      uint32_t conndata_len)
+{
+	uint16_t taken = 0u;
+
+	if (csb == NULL ||
+	    vms_cm_conndata_peer_taken(conndata, conndata_len, &taken) !=
+		    VMS_CODEC_OK)
+		return;
+	cnxman_csb_note_peer_conndata(csb, taken, cn->conndata_peer_ack);
+}
+
 static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 				 vms_scs_sysid_t peer, vms_conid_t peer_conid,
 				 const uint8_t *conndata, uint32_t conndata_len)
@@ -1170,6 +1186,7 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 	 * ACCEPT_RSP (rig arms N-6 and V-1).
 	 */
 	cnxman_refresh_conndata_for(cn, csb);
+	cnxman_note_peer_conndata(cn, csb, conndata, conndata_len);
 	return 0;
 }
 
@@ -1678,6 +1695,8 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 */
 	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
 	if (csb != NULL && env_ok) {
+		/* rd vms-ba4: a peer continuing a dialogue this node reset. */
+		cnxman_csb_dialogue_adopt(csb, env.send_msg, env.ack_msg);
 		cnxman_csb_dialogue_heard(csb, env.send_msg);
 		/* rd vms-1f40: and where ITS receive stream from us got to. A
 		 * carried dialogue resumes from that, once, so the stream the

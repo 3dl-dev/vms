@@ -2,7 +2,7 @@
  * test_vmsrms.c - Unit tests for vmsrms (Record Management Services)
  *
  * Tests: sys$parse, sys$create, sys$open, sys$close, sys$connect,
- *        sys$get, sys$put, sys$rewind, sys$disconnect
+ *        sys$get, sys$put, sys$rewind, sys$disconnect, sys$read, sys$write
  *
  * Uses temporary files in /tmp. Cleans up on exit.
  */
@@ -534,6 +534,108 @@ static void test_xab_dates(void)
     unlink(datemeta);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Test: block I/O -- sys$read / sys$write (vms-254)                    */
+/* ------------------------------------------------------------------ */
+static void test_block_io(void)
+{
+    printf("\n--- block I/O: sys$read / sys$write ---\n");
+
+    char bfile[256];
+    char bmeta[280];
+    snprintf(bfile, sizeof(bfile), "/tmp/test_vmsrms_bio_%d", (int)getpid());
+    snprintf(bmeta, sizeof(bmeta), "%s.rms_meta", bfile);
+
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = bfile;
+    fab.fab$b_fns = (uint8_t)strlen(bfile);
+    fab.fab$b_fac = FAB$M_PUT | FAB$M_GET | FAB$M_BIO;
+    fab.fab$b_rfm = FAB$C_UDF;
+    fab.fab$b_org = FAB$C_SEQ;
+    uint32_t st = sys$create(&fab, 0, 0);
+    check(st == RMS$_NORMAL, "create file for block I/O");
+
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    check(sys$connect(&rab, 0, 0) == RMS$_NORMAL, "connect block-I/O stream");
+
+    /* 700 bytes at VBN 1: spans blocks 1-2. */
+    char w1[700];
+    for (int i = 0; i < 700; i++) w1[i] = (char)('A' + i % 26);
+    rab.rab$l_bkt = 1;
+    rab.rab$l_rbf = w1;
+    rab.rab$w_rsz = sizeof w1;
+    st = sys$write(&rab, 0, 0);
+    check(st == RMS$_NORMAL, "sys$write 700 bytes at VBN 1");
+    check(rab.rab$w_rfa.rfa$w_area == 1 && rab.rab$w_rfa.rfa$w_page == 0,
+          "sys$write RFA = starting VBN 1");
+
+    /* bkt=0: the block after the last one transferred -> VBN 3. */
+    char w2[100];
+    memset(w2, 'z', sizeof w2);
+    rab.rab$l_bkt = 0;
+    rab.rab$l_rbf = w2;
+    rab.rab$w_rsz = sizeof w2;
+    st = sys$write(&rab, 0, 0);
+    check(st == RMS$_NORMAL, "sys$write next block (bkt=0)");
+    check(rab.rab$w_rfa.rfa$w_area == 3, "next-block write landed at VBN 3");
+
+    /* Read from VBN 1, asking for more than the file holds: the transfer
+     * stops at the end of file (1024 + 100 bytes). */
+    static char r[2048];
+    rab.rab$l_bkt = 1;
+    rab.rab$l_ubf = r;
+    rab.rab$w_usz = sizeof r;
+    st = sys$read(&rab, 0, 0);
+    check(st == RMS$_NORMAL, "sys$read from VBN 1");
+    check(rab.rab$w_rsz == 1124, "sys$read stops at end of file (RSZ 1124)");
+    check(rab.rab$l_rbf == r, "sys$read sets RBF = UBF");
+    check(memcmp(r, w1, 700) == 0, "blocks 1-2 hold the first write");
+    check(memcmp(r + 1024, w2, 100) == 0, "block 3 holds the second write");
+
+    /* The next block after that transfer is past the end of file. */
+    rab.rab$l_bkt = 0;
+    st = sys$read(&rab, 0, 0);
+    check(st == RMS$_EOF, "sys$read past end of file -> RMS$_EOF");
+
+    /* A single block read of the partial last block. */
+    rab.rab$l_bkt = 3;
+    rab.rab$w_usz = 512;
+    st = sys$read(&rab, 0, 0);
+    check(st == RMS$_NORMAL && rab.rab$w_rsz == 100,
+          "sys$read of the last block returns its 100 valid bytes");
+
+    rab.rab$w_usz = 0;
+    check(sys$read(&rab, 0, 0) == RMS$_USZ, "sys$read with USZ 0 -> RMS$_USZ");
+
+    sys$disconnect(&rab, 0, 0);
+    sys$close(&fab, 0, 0);
+
+    /* Without BIO in FAC the block services are refused. */
+    struct FAB fab2 = cc$rms_fab;
+    fab2.fab$l_fna = bfile;
+    fab2.fab$b_fns = (uint8_t)strlen(bfile);
+    fab2.fab$b_fac = FAB$M_GET;
+    st = sys$open(&fab2, 0, 0);
+    check(st == RMS$_NORMAL, "reopen without BIO");
+    struct RAB rab2 = cc$rms_rab;
+    rab2.rab$l_fab = &fab2;
+    sys$connect(&rab2, 0, 0);
+    rab2.rab$l_bkt = 1;
+    rab2.rab$l_ubf = r;
+    rab2.rab$w_usz = 512;
+    check(sys$read(&rab2, 0, 0) == RMS$_FAC, "sys$read without FAC BIO -> RMS$_FAC");
+    rab2.rab$l_rbf = w2;
+    rab2.rab$w_rsz = 10;
+    check(sys$write(&rab2, 0, 0) == RMS$_FAC, "sys$write without FAC BIO+PUT -> RMS$_FAC");
+    sys$disconnect(&rab2, 0, 0);
+    sys$close(&fab2, 0, 0);
+
+    unlink(bfile);
+    unlink(bmeta);
+}
+
 int main(void)
 {
     printf("=== vmsrms unit tests ===\n");
@@ -543,6 +645,7 @@ int main(void)
     test_open_close();
     test_record_io();
     test_fixed_records();
+    test_block_io();
     test_xab_dates();
 
     /* Clean up main temp files */

@@ -42,6 +42,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -50,6 +52,12 @@
 #include "rms/rms.h"
 
 #define EXIT_SKIP  77
+
+/* $SETDDIR (src/libvms/syssvc/sys_misc.c): starlet.h carries no prototype
+ * (a corpus program declares its own, conflicting one). */
+extern uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
+                            unsigned short *old_len,
+                            struct dsc$descriptor_s *old_dir);
 #define ODS2_UNIT  "VDA0:"
 
 static int pass = 0;
@@ -265,6 +273,64 @@ int main(void)
     rfm_roundtrip("RMSSTM.DAT",  FAB$C_STMLF, 0);
     rfm_roundtrip("RMSFIX.DAT",  FAB$C_FIX,   20);
 
+    /* ---- vms-254: block I/O ($WRITE/$READ, FAC BIO) over the ACP window.
+     * 1300 bytes written at VBN 1 span three blocks; after $CLOSE + re-$OPEN
+     * a $READ from VBN 1 returns exactly those 1300 bytes (the end of file is
+     * byte-exact on the ODS-2 header, EBK/FFB), and the next-block $READ is
+     * RMS$_EOF. This is the byte-stream substrate the C RTL's read()/write()
+     * on a stream file rides. ---- */
+    {
+        char spec[128];
+        snprintf(spec, sizeof(spec), "%s[OVMXDIR]BLKIO.DAT", ODS2_UNIT);
+        static char wbuf[1300], rbuf[2048];
+        for (int i = 0; i < (int)sizeof wbuf; i++)
+            wbuf[i] = (char)(' ' + (i * 7) % 95);
+
+        struct FAB fab = cc$rms_fab;
+        fab.fab$l_fna = spec;
+        fab.fab$b_fns = (uint8_t)strlen(spec);
+        fab.fab$b_org = FAB$C_SEQ;
+        fab.fab$b_rfm = FAB$C_UDF;
+        fab.fab$b_fac = FAB$M_PUT | FAB$M_GET | FAB$M_BIO;
+        uint32_t bst = sys$create(&fab, 0, 0);
+        check(bst == RMS$_NORMAL, "vms-254: sys$create BLKIO.DAT (FAC BIO) over the ACP");
+        if (bst == RMS$_NORMAL) {
+            struct RAB rab = cc$rms_rab;
+            rab.rab$l_fab = &fab;
+            sys$connect(&rab, 0, 0);
+            rab.rab$l_bkt = 1;
+            rab.rab$l_rbf = wbuf;
+            rab.rab$w_rsz = sizeof wbuf;
+            check(sys$write(&rab, 0, 0) == RMS$_NORMAL,
+                  "vms-254: sys$write 1300 bytes at VBN 1 -> IO$_WRITEVBLK");
+            sys$close(&fab, 0, 0);
+
+            fab.fab$b_fac = FAB$M_GET | FAB$M_BIO;
+            bst = sys$open(&fab, 0, 0);
+            check(bst == RMS$_NORMAL, "vms-254: re-$OPEN BLKIO.DAT for block reads");
+            if (bst == RMS$_NORMAL) {
+                rab = cc$rms_rab;
+                rab.rab$l_fab = &fab;
+                sys$connect(&rab, 0, 0);
+                rab.rab$l_bkt = 1;
+                rab.rab$l_ubf = rbuf;
+                rab.rab$w_usz = sizeof rbuf;
+                bst = sys$read(&rab, 0, 0);
+                check(bst == RMS$_NORMAL && rab.rab$w_rsz == sizeof wbuf &&
+                      memcmp(rbuf, wbuf, sizeof wbuf) == 0,
+                      "vms-254: sys$read from VBN 1 returns the 1300 bytes byte-exact (EOF from the header)");
+                rab.rab$l_bkt = 0;
+                check(sys$read(&rab, 0, 0) == RMS$_EOF,
+                      "vms-254: next-block sys$read past the end of file -> RMS$_EOF");
+                sys$close(&fab, 0, 0);
+            }
+            fab = cc$rms_fab;
+            fab.fab$l_fna = spec;
+            fab.fab$b_fns = (uint8_t)strlen(spec);
+            check(sys$erase(&fab, 0, 0) == RMS$_NORMAL, "vms-254: sys$erase BLKIO.DAT");
+        }
+    }
+
     /* If rms_io_write() ($PUT) writes a record one VBN too high while
      * rms_io_read() ($GET) still reads the true VBN, every byte-exact readback
      * above misses on re-$OPEN -- so this whole-suite gate reddens exactly when
@@ -272,6 +338,69 @@ int main(void)
     /* negctl: rms-put-wrong-vbn */
     check(fail == 0,
           "RMS-over-ACP: all records round-tripped byte-exact through the ACP window");
+
+    /* ---- vms-872: the process DEFAULT DIRECTORY is the executive's, and RMS
+     * completes a relative file specification in it -- in this process and
+     * in an image activated from it (REGISTER_CONTINUE inherits it). Before,
+     * an image given "X.DAT" created VDA0:[000000]X.DAT whatever the user had
+     * SET DEFAULT to. ---- */
+    {
+        const char *dd = ODS2_UNIT "[OVMXDIR]";
+        struct dsc$descriptor_s d = { (unsigned short)strlen(dd), DSC$K_DTYPE_T,
+                                      DSC$K_CLASS_S, (char *)dd };
+        check(sys$setddir(&d, NULL, NULL) == SS$_NORMAL,
+              "vms-872: $SETDDIR " ODS2_UNIT "[OVMXDIR]");
+        char got[256] = "";
+        check((vms_kif_ddir(NULL, got, sizeof got) & 1) && strcmp(got, dd) == 0,
+              "vms-872: the executive holds the default directory $SETDDIR set");
+
+        struct FAB fab = cc$rms_fab;
+        fab.fab$l_fna = (char *)"DDIRREL.DAT"; fab.fab$b_fns = 11;
+        fab.fab$b_fac = FAB$M_PUT;
+        st = sys$create(&fab, 0, 0);
+        if (st == RMS$_NORMAL) (void)sys$close(&fab, 0, 0);
+        struct rms_fileattr fa;
+        check(st == RMS$_NORMAL &&
+              (rms_file_attr(ODS2_UNIT "[OVMXDIR]DDIRREL.DAT", &fa) & 1),
+              "vms-872: $CREATE \"DDIRREL.DAT\" lands in the default directory [OVMXDIR]");
+        check(!(rms_file_attr(ODS2_UNIT "[000000]DDIRREL.DAT", &fa) & 1),
+              "vms-872: ...not in the volume root [000000]");
+
+        /* An activated image (REGISTER_CONTINUE child) sees the same default
+         * and its relative $OPEN finds the file. */
+        int pp[2];
+        uint32_t rep[2] = { 0, 0 };
+        if (pipe(pp) == 0) {
+            pid_t k = fork();
+            if (k == 0) {
+                close(pp[0]);
+                uint32_t r[2] = { 0, 0 };
+                vms_kif_close();
+                if (vms_kif_open() >= 0 && (vms_kif_register_continue() & 1)) {
+                    char cd[256] = "";
+                    r[0] = ((vms_kif_ddir(NULL, cd, sizeof cd) & 1) && strcmp(cd, dd) == 0);
+                    struct FAB f2 = cc$rms_fab;
+                    f2.fab$l_fna = (char *)"DDIRREL.DAT"; f2.fab$b_fns = 11;
+                    uint32_t os = sys$open(&f2, 0, 0);
+                    r[1] = (os == RMS$_NORMAL);
+                    if (os == RMS$_NORMAL) (void)sys$close(&f2, 0, 0);
+                }
+                (void)!write(pp[1], r, sizeof r);
+                _exit(0);
+            }
+            close(pp[1]);
+            (void)!read(pp[0], rep, sizeof rep);
+            close(pp[0]);
+            int ws; waitpid(k, &ws, 0);
+        }
+        check(rep[0] == 1, "vms-872: an activated image (REGISTER_CONTINUE) inherits the default directory");
+        check(rep[1] == 1, "vms-872: ...and its relative $OPEN \"DDIRREL.DAT\" finds the file there");
+
+        struct FAB fe = cc$rms_fab;
+        fe.fab$l_fna = (char *)(ODS2_UNIT "[OVMXDIR]DDIRREL.DAT");
+        fe.fab$b_fns = (uint8_t)strlen(fe.fab$l_fna);
+        (void)sys$erase(&fe, 0, 0);
+    }
 
     /* ---- vms-dfa: $DISPLAY fills XABFHC (file-header characteristics) and
      * XABALL (allocation) from the REAL ODS-2 FAT over the ACP -- previously an
@@ -311,7 +440,16 @@ int main(void)
             /* Reopen with XABFHC + XABALL chained; $DISPLAY fills them. */
             struct XABFHC fhc = cc$rms_xabfhc;
             struct XABALL all = cc$rms_xaball;
+            /* vms-5dd2: XABDAT + XABPRO ride the same chain, seeded with
+             * values no real header carries, so an unfilled XAB is caught. */
+            struct XABDAT dat = cc$rms_xabdat;
+            struct XABPRO pro = cc$rms_xabpro;
+            dat.xab$q_cdt = dat.xab$q_rdt = 0x1234567812345678ULL;
+            pro.xab$w_pro = 0xABCD;
+            pro.xab$l_uic = 0xDEADBEEFu;
             fhc.xab$l_nxt = &all;
+            all.xab$l_nxt = &dat;
+            dat.xab$l_nxt = &pro;
             fab.fab$l_xab = (struct XABKEY *)&fhc;
             fab.fab$b_fac = FAB$M_GET;
 
@@ -329,6 +467,16 @@ int main(void)
                       "vms-dfa: XABFHC xab$l_hbk (allocated) >= xab$l_ebk (EOF)");
                 check(all.xab$l_alq >= 1 && all.xab$l_alq == fhc.xab$l_hbk,
                       "vms-dfa: XABALL xab$l_alq == the file's realized allocation (hiblk)");
+                /* vms-5dd2: the header's dates/protection/owner over the ACP.
+                 * The XABs were seeded with values no header holds; $DISPLAY
+                 * must replace them with the FH2's (the ACP does not stamp
+                 * dates at IO$_CREATE yet -- vms-ab49 -- so they read back as
+                 * the header's zero, which is still the header's value). */
+                check(dat.xab$q_cdt != 0x1234567812345678ULL &&
+                          dat.xab$q_rdt != 0x1234567812345678ULL,
+                      "vms-5dd2: XABDAT creation/revision dates come from the ODS-2 header (not left untouched)");
+                check(pro.xab$w_pro != 0xABCD && pro.xab$l_uic != 0xDEADBEEFu,
+                      "vms-5dd2: XABPRO protection + owner UIC come from the ODS-2 header (not left untouched)");
                 sys$close(&fab, 0, 0);
             }
             sys$erase(&fab, 0, 0);

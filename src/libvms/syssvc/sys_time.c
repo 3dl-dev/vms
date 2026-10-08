@@ -30,7 +30,25 @@
  * OVMX-USERSPACE: sys$gettim (vms-642) -- clock_gettime(CLOCK_REALTIME)
  *     converted to VMS 100ns ticks; the host clock, not an executive EXE$GQ_
  *     system time cell, so no system-time base can be set or observed.
- * OVMX-USERSPACE: sys$getutc (vms-642) -- the same host clock read.
+ * OVMX-PARTIAL: sys$getutc (vms-44a) -- exec: the system TDF is the executive's
+ *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
+ * OVMX-LOCAL: sys$getutc -- the same host clock read, laid out as the
+ *     16-byte $UTCDEF structure (abstime, unspecified inaccuracy, TDF word).
+ * OVMX-PARTIAL: sys$binutc (vms-44a) -- exec: the system TDF is the executive's
+ *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
+ * OVMX-LOCAL: sys$binutc -- sys$bintim on the caller's string, then the
+ *     local -> UTC step with the system TDF; the TDF is the SYS$TIMEZONE_DIFFERENTIAL
+ *     logical read through $TRNLNM. Observed on the Alpha V8.4 lab at TDF 0 only.
+ * OVMX-PARTIAL: sys$numutc (vms-44a) -- exec: the system TDF is the executive's
+ *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
+ * OVMX-LOCAL: sys$numutc -- $TIMCON then $NUMTIM on the caller's structure.
+ * OVMX-PARTIAL: sys$ascutc (vms-44a) -- exec: the system TDF is the executive's
+ *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
+ * OVMX-LOCAL: sys$ascutc -- $TIMCON then $ASCTIM; cvtflg bit 0 = time only.
+ * OVMX-PARTIAL: sys$timcon (vms-44a) -- exec: the system TDF is the executive's
+ *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
+ * OVMX-LOCAL: sys$timcon -- UTC <-> system quadword arithmetic on the
+ *     caller's structure; the system TDF is the logical above.
  * OVMX-USERSPACE: sys$gettim_prec (vms-642) -- the same host clock read; the
  *     host clock already has sub-tick resolution, so it never reports
  *     reduced precision.
@@ -40,18 +58,25 @@
  *     from the compiled-in months[] table in this file.
  * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
- * OVMX-USERSPACE: sys$schdwk (vms-44a) -- the schedule is this process's own
- *     POSIX timer (the sys$setimr table below): a scheduled wakeup dies with the
- *     image that requested it and no executive timer queue holds it. At expiry
- *     the timer's AST issues $WAKE (the wake state IS the executive's -- reached
- *     through an AST function pointer, which this register's static call graph
- *     cannot see). A repeat interval, or a target named by process name, is
- *     refused.
+ * OVMX-PARTIAL: sys$schdwk (vms-44a) -- exec: the wake state, which the timer's
+ *     expiry AST sets with $WAKE (an AST function pointer this register's static
+ *     call graph cannot follow); the request goes through sys$setimr with
+ *     EFN$C_ENF, so no event flag is cleared or set (rd vms-8d1).
+ * OVMX-LOCAL: sys$schdwk -- the schedule is this process's own POSIX timer (the
+ *     sys$setimr table below): a scheduled wakeup dies with the image that
+ *     requested it and no executive timer queue holds it. A repeat interval, or
+ *     a target named by process name, is refused.
  * OVMX-USERSPACE: sys$canwak (vms-44a) -- cancels the timers sys$schdwk armed in
  *     that same process-local table.
- * OVMX-USERSPACE: sys$setimr (vms-642) -- arms a POSIX timer recorded in the
- *     process-local timer_table[] in this file. There is no executive timer
- *     queue, so the request dies with the process and nothing else can see it.
+ * OVMX-PARTIAL: sys$setimr (vms-d08) -- exec: the event flag. It is cleared
+ *     when the request is queued, through $CLREF, whose executive answer also
+ *     validates the efn (SS$_UNASEFC / SS$_ILLEFC fail the request), and set by
+ *     $SETEF at expiry -- as the semantic oracle observed on real VAX V7.3 and
+ *     Alpha V8.4 (docs/oracle/semantics/ef/, EF.SETIMR.*).
+ * OVMX-LOCAL: sys$setimr -- (vms-642) the timer itself is a POSIX timer recorded
+ *     in the process-local timer_table[] in this file. There is no executive
+ *     timer queue, so the request dies with the process and nothing else can
+ *     see it.
  * OVMX-USERSPACE: sys$cantim (vms-642) -- cancels entries in that same
  *     process-local table, so the timers it cancels are this process's.
  */
@@ -67,6 +92,7 @@
 #include <pthread.h>
 #include "starlet.h"
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
+#include "efndef.h"     /* EFN$C_ENF */
 
 /* Offset between VMS epoch (Nov 17 1858) and Unix epoch (Jan 1 1970) in 100ns units */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -103,24 +129,6 @@ static int vms_to_unix_time(uint64_t vmstime, struct timespec *ts) {
  * then converts to VMS 100-nanosecond ticks.
  */
 uint32_t sys$gettim(uint64_t *timadr) {
-    if (!timadr) return SS$_BADPARAM;
-
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    *timadr = unix_to_vms_time(&ts);
-
-    return SS$_NORMAL;
-}
-
-/*
- * sys$getutc - Get current system time in UTC.
- *
- * CLOCK_REALTIME is already UTC-based with no local-time offset
- * applied, so this is functionally identical to sys$gettim above;
- * it exists as a separate entry point for source compatibility with
- * programs that call SYS$GETUTC explicitly (see starlet.h).
- */
-uint32_t sys$getutc(uint64_t *timadr) {
     if (!timadr) return SS$_BADPARAM;
 
     struct timespec ts;
@@ -175,7 +183,6 @@ uint32_t sys$numtim(uint16_t timbuf[7], const uint64_t *timadr) {
  */
 uint32_t sys$asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
                     const uint64_t *timadr, uint32_t cvtflg) {
-    (void)cvtflg;
     if (!timbuf || !timbuf->dsc$a_pointer) return SS$_BADPARAM;
 
     static const char *months[] = {
@@ -190,7 +197,12 @@ uint32_t sys$asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
     if (numtim[1] < 1 || numtim[1] > 12) return SS$_BADPARAM;
 
     char buf[24];
-    int len = snprintf(buf, sizeof(buf), "%2d-%s-%04d %02d:%02d:%02d.%02d",
+    int len;
+    if (cvtflg & 1)   /* bit 0: the time only (observed on OpenVMS Alpha V8.4 for $ASCUTC) */
+        len = snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%02d",
+                       numtim[3], numtim[4], numtim[5], numtim[6]);
+    else
+        len = snprintf(buf, sizeof(buf), "%2d-%s-%04d %02d:%02d:%02d.%02d",
                        numtim[2], months[numtim[1] - 1], numtim[0],
                        numtim[3], numtim[4], numtim[5], numtim[6]);
 
@@ -351,6 +363,19 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     if (!daytim) return SS$_BADPARAM;
 
+    /* The flag is CLEARED when the request is queued, and an efn that is not
+     * one of this process's flags fails the request (SS$_UNASEFC for an
+     * unassociated common cluster, SS$_ILLEFC) -- observed on OpenVMS VAX V7.3
+     * and Alpha V8.4 by the semantic oracle (docs/oracle/semantics/ef/, cases
+     * EF.SETIMR.*, rd vms-d08). The executive answers through $CLREF. Without
+     * the clear, a $WAITFR on the timer's flag returns at once if the flag was
+     * already set, before the timer has fired. EFN$C_ENF names no flag. */
+    if (efn != EFN$C_ENF) {
+        uint32_t cst = sys$clref(efn);
+        if (!(cst & 1))
+            return cst;
+    }
+
     init_timer_signals();
 
     pthread_mutex_lock(&timer_mutex);
@@ -504,7 +529,10 @@ uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcna
     wake_slot[slot].has_pid = (pidadr && *pidadr != 0);
     wake_slot[slot].pid = wake_slot[slot].has_pid ? *pidadr : 0;
 
-    uint32_t st = sys$setimr(0, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
+    /* EFN$C_ENF: a scheduled wakeup touches no event flag ($SCHDWK has no efn
+     * argument; EF 0 belongs to the caller, and $SETIMR clears and sets the
+     * flag it is given). */
+    uint32_t st = sys$setimr(EFN$C_ENF, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
     if (!(st & 1))
         wake_slot[slot].in_use = 0;
     return st;
@@ -524,4 +552,134 @@ uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcna
         wake_slot[slot].in_use = 0;
     }
     return SS$_NORMAL;
+}
+
+
+/* =========================================================================
+ * UTC services -- $GETUTC / $BINUTC / $NUMUTC / $ASCUTC / $TIMCON
+ *
+ * The UTC time structure is the 16 bytes of $UTCDEF (OpenVMS Alpha V8.4, LIB.MLB):
+ *   +0  UTC$Q_ABSTIME  8   100 ns ticks since 15-OCT-1582 (the VMS system time + the
+ *                          1582 -> 1858 offset)
+ *   +8  UTC$A_INACCUR  6   inaccuracy; all ones = unspecified
+ *   +14 UTC$W_TDFWRD   2   TDF in minutes east of UTC (12 bits, two's complement,
+ *                          mask 0xFFF) and the structure VERSION (4 bits, <15:12>)
+ *
+ * Observed on the lab Alpha V8.4 node (MACRO-32 probes, tools/lab-alpha/probes,
+ * SYS$TIMEZONE_DIFFERENTIAL = 0): $BINUTC("29-FEB-2000 12:23:45.67") ->
+ * 11081A60 01D3EEA3 FFFFFFFF 1000FFFF; $NUMUTC of that -> 2000 2 29 12 23 45 67;
+ * $ASCUTC -> "29-FEB-2000 12:23:45.67", cvtflg bit 0 -> "12:23:45.67" (time only);
+ * $TIMCON(utc, 0) -> the system quadword 009E6638 49721A60, $TIMCON(quad, 1) the same
+ * UTC back; $GETUTC returns the same structure for "now" (inaccuracy ffff..., TDF
+ * word 0x1000). The system TDF comes from the SYS$TIMEZONE_DIFFERENTIAL logical
+ * (seconds east of UTC); non-zero TDFs were NOT observable on the lab (the logical
+ * does not move the kernel TDF there), so the TDF arithmetic below follows the
+ * documented model (local = UTC + TDF) and is unverified against an oracle.
+ * ========================================================================= */
+#define UTC_EPOCH_OFFSET 0x0135886AC7960000ULL   /* 100 ns: 15-OCT-1582 -> 17-NOV-1858 = 100840 days */
+#define UTC_TICKS_PER_MIN 600000000LL
+#define UTC_VERSION 1
+
+static void utc_put(uint8_t *u, uint64_t abstime, int tdf_min)
+{
+    for (int i = 0; i < 8; i++) u[i] = (uint8_t)(abstime >> (8 * i));
+    memset(u + 8, 0xFF, 6);                          /* inaccuracy: unspecified */
+    uint16_t w = (uint16_t)(((unsigned)UTC_VERSION << 12) | ((unsigned)tdf_min & 0xFFF));
+    u[14] = (uint8_t)w; u[15] = (uint8_t)(w >> 8);
+}
+
+static uint64_t utc_abs(const uint8_t *u)
+{
+    uint64_t t = 0;
+    for (int i = 0; i < 8; i++) t |= (uint64_t)u[i] << (8 * i);
+    return t;
+}
+
+/* TDF word -> signed minutes (12-bit two's complement) */
+static int utc_tdf(const uint8_t *u)
+{
+    int v = (u[14] | (u[15] << 8)) & 0xFFF;
+    return v >= 0x800 ? v - 0x1000 : v;
+}
+
+/* The system TDF in minutes east of UTC: the SYS$TIMEZONE_DIFFERENTIAL logical (seconds). */
+static int utc_system_tdf(void)
+{
+    static const struct dsc$descriptor_s tab = { 12, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"LNM$FILE_DEV" };
+    static const struct dsc$descriptor_s nam = { 25, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"SYS$TIMEZONE_DIFFERENTIAL" };
+    char val[32];
+    uint16_t len = 0;
+    struct item_list_3 il[2];
+    memset(val, 0, sizeof val);
+    il[0].buflen = sizeof(val) - 1; il[0].item_code = 2 /* LNM$_STRING */;
+    il[0].bufaddr = val; il[0].retlen = &len;
+    il[1].buflen = 0; il[1].item_code = 0; il[1].bufaddr = NULL; il[1].retlen = NULL;
+    if (!(sys$trnlnm(NULL, &tab, &nam, NULL, il) & 1) || len == 0)
+        return 0;
+    long secs = strtol(val, NULL, 10);
+    long m = secs / 60;
+    return (m < -2047 || m > 2047) ? 0 : (int)m;
+}
+
+uint32_t (sys$getutc)(void *utcadr)
+{
+    if (!utcadr) return SS$_BADPARAM;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    utc_put(utcadr, unix_to_vms_time(&ts) + UTC_EPOCH_OFFSET, utc_system_tdf());
+    return SS$_NORMAL;
+}
+
+/* $TIMCON(timadr, utcadr, cvtflg): cvtflg 0 = UTC -> the system-time quadword (local, at
+ * the structure's TDF); 1 = quadword -> UTC (at the system TDF). */
+uint32_t (sys$timcon)(uint64_t *timadr, void *utcadr, uint32_t cvtflg)
+{
+    if (!timadr || !utcadr) return SS$_ACCVIO;
+    if (cvtflg == 0) {
+        int tdf = utc_tdf(utcadr);
+        *timadr = (uint64_t)((int64_t)(utc_abs(utcadr) - UTC_EPOCH_OFFSET)
+                             + (int64_t)tdf * UTC_TICKS_PER_MIN);
+        return SS$_NORMAL;
+    }
+    if (cvtflg == 1) {
+        int tdf = utc_system_tdf();
+        utc_put(utcadr, (uint64_t)((int64_t)*timadr - (int64_t)tdf * UTC_TICKS_PER_MIN)
+                        + UTC_EPOCH_OFFSET, tdf);
+        return SS$_NORMAL;
+    }
+    return SS$_BADPARAM;
+}
+
+uint32_t (sys$binutc)(const struct dsc$descriptor_s *timbuf, void *utcadr)
+{
+    struct _generic_64 q;
+    uint64_t now;
+    if (!utcadr) return SS$_ACCVIO;
+    if (!timbuf || !timbuf->dsc$a_pointer || timbuf->dsc$w_length == 0) {
+        sys$gettim(&now);                 /* no string: the current time */
+        uint32_t st = SS$_NORMAL;
+        (void)st;
+        return sys$timcon(&now, utcadr, 1);
+    }
+    uint32_t st = sys$bintim(timbuf, &q);
+    if (!(st & 1)) return st;
+    memcpy(&now, &q, sizeof now);
+    return sys$timcon(&now, utcadr, 1);
+}
+
+uint32_t (sys$numutc)(uint16_t *timbuf, const void *utcadr)
+{
+    uint64_t q;
+    if (!timbuf || !utcadr) return SS$_ACCVIO;
+    sys$timcon(&q, (void *)(uintptr_t)utcadr, 0);
+    return sys$numtim(timbuf, &q);
+}
+
+uint32_t (sys$ascutc)(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
+                      const void *utcadr, uint32_t cvtflg)
+{
+    uint64_t q;
+    if (!utcadr) return SS$_ACCVIO;
+    sys$timcon(&q, (void *)(uintptr_t)utcadr, 0);
+    return sys$asctim(timlen, timbuf, &q, cvtflg);
 }

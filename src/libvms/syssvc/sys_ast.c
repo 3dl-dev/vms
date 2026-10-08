@@ -81,6 +81,11 @@
  * OVMX-PARTIAL: sys$setast (vms-as1) -- exec: the per-mode enable flag is the
  *     executive's; delivery drains the executive's queue through vms_kif_setast
  *     and vms_kif_deliverast, dispatching each AST the executive returns.
+ * OVMX-PARTIAL: sys$clrast (vms-44a) -- exec: the AST queue it drains and whose delivery
+ *     order it changes is the executive's (vms_kif_deliverast).
+ * OVMX-LOCAL: sys$clrast -- the "AST in progress" marker it clears is this layer's own
+ *     (the same one lib$ast_in_prog reads); self-directed, so full residency is UNPROVEN
+ *     by A-writes/B-reads (tests/qemu/test_syssvc_clrast.c is the cross-layer proof).
  * OVMX-LOCAL: sys$setast -- same self-directed limit: no A-writes/B-reads test
  *     names it, so full residency is UNPROVEN by that method.
  */
@@ -124,7 +129,9 @@ void vms$$deliver_pending_asts(void) {
             void (*fn)(uint32_t) = (void (*)(uint32_t))(uintptr_t)astadr;
             ast_in_progress++;
             fn((uint32_t)astprm);
-            ast_in_progress--;
+            /* $CLRAST inside the routine already cleared the in-progress state. */
+            if (ast_in_progress > 0)
+                ast_in_progress--;
         }
     }
 }
@@ -178,6 +185,26 @@ uint32_t sys$setast(uint32_t enbflg) {
         vms$$deliver_pending_asts();
 
     return prev;
+}
+
+/*
+ * sys$clrast - Cancel the "AST in progress" state of the running AST routine.
+ *
+ * On VMS an AST of one access mode is not delivered while another of that mode is
+ * still running; $CLRAST removes that block, so an AST queued from inside the routine
+ * is delivered at once instead of after the routine returns. Here delivery is the
+ * drain of the executive's queue (vms$$deliver_pending_asts): clearing the in-progress
+ * marker and draining immediately gives the same ordering -- the newly queued AST runs
+ * before $CLRAST returns -- and lib$ast_in_prog reports 0 for the rest of the routine.
+ * Outside an AST routine it does nothing but succeed.
+ */
+uint32_t sys$clrast(void)
+{
+    if (ast_in_progress > 0) {
+        ast_in_progress = 0;
+        vms$$deliver_pending_asts();
+    }
+    return SS$_NORMAL;
 }
 
 /* sys$dclexh is implemented in sys_process.c */

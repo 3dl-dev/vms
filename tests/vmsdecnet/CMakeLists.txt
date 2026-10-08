@@ -143,6 +143,21 @@ if(OVMX_NODESPEC_SANITIZE_OK)
 endif()
 add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
 
+# rd vms-a70 direction B: the CTERM HOST role (dnet_cterm_hostfsm) against the
+# two real-VAX-host captures -- exact bytes where a VMS host's content is
+# deterministic, every real client/host message decoded, the FSM replaying a
+# real VAX client's session, and 200k mutated client segments fuzzed through
+# every FSM state. Attacker-facing decoder: built WITH ASan/UBSan.
+add_executable(test_dnet_cterm_host test_dnet_cterm_host.c)
+target_link_libraries(test_dnet_cterm_host PRIVATE vmsdecnet_cterm)
+target_include_directories(test_dnet_cterm_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(test_dnet_cterm_host PRIVATE -Werror)
+if(OVMX_NODESPEC_SANITIZE_OK)
+    target_compile_options(test_dnet_cterm_host PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_cterm_host PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_cterm_host_unit COMMAND test_dnet_cterm_host)
+
 # rd vms-8c2: the DAP (Data Access Protocol) message codec + the FAL access-
 # control credential decoder behind $ COPY node::file. Proves (1) every served
 # DAP message round-trips encode->decode, (2) blocked messages walk in a single

@@ -1706,6 +1706,45 @@ long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
+ * vms_ioctl_ddir - $SETDDIR: store and/or read the caller's OWN default
+ * directory (rd vms-872). Self-targeted; the executive owns the value, so an
+ * image or subprocess inherits it at REGISTER_CONTINUE and RMS in that image
+ * completes a relative file specification in the directory DCL set. An
+ * over-long or unterminated newdir is refused (SS$_BADPARAM), never clipped.
+ */
+long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_ddir_args args;
+    size_t n;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.set) {
+        n = strnlen(args.newdir, sizeof(args.newdir));
+        if (n == 0 || n >= sizeof(args.newdir)) {
+            memset(args.olddir, 0, sizeof(args.olddir));
+            args.status = SS__BADPARAM;
+            goto out;
+        }
+    }
+    exec_lock(&vms_proc_hash_lock);
+    memcpy(args.olddir, proc->ddir, sizeof(args.olddir));
+    args.olddir[sizeof(args.olddir) - 1] = '\0';
+    if (args.set) {
+        memset(proc->ddir, 0, sizeof(proc->ddir));
+        memcpy(proc->ddir, args.newdir, strnlen(args.newdir, sizeof(proc->ddir) - 1));
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_getcli - read the caller's OWN CLI invocation context. This is
  * the source behind IMGACT's imgact_query_cli_context() (cliflag) and
  * imgact_cli_get_command_line() (the command line): an image asks the

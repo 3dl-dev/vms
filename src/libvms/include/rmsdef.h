@@ -101,6 +101,7 @@ extern "C" {
 #define RMS$_ORG            99852   /* Invalid file organization */
 #define RMS$_PLG            99868   /* File prologue error */
 #define RMS$_RAB            99900   /* Not a valid RAB */
+#define RMS$_RBF            99924   /* Invalid record buffer address */
 #define RMS$_RAT            99916   /* Invalid record attributes */
 #define RMS$_RFM            99940   /* Invalid record format */
 #define RMS$_RSS            99988   /* Invalid resultant string size */
@@ -108,6 +109,7 @@ extern "C" {
 #define RMS$_SEQ            100012  /* Record not sequential */
 #define RMS$_SIZ            100028  /* Invalid size value */
 #define RMS$_SYN            100052  /* Syntax error in filespec */
+#define RMS$_USZ            100084  /* Invalid user buffer size */
 #define RMS$_TNS            98744   /* Terminator not seen (partial record) */
 #define RMS$_TRE            100060  /* Index tree error */
 #define RMS$_TYP            100068  /* Invalid file type */

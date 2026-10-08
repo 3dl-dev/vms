@@ -1613,15 +1613,22 @@ static int rms_resolve_spec(const char *spec, const char *default_spec,
  */
 
 /*
- * rms_get_default_protection - Get default protection for new files.
- * Reads VMS_DEFAULT_PROTECTION env var, or returns S:RWED,O:RWED (0xFF00).
+ * rms_get_default_protection - the default protection of a new file: the
+ * process default file protection the executive holds ($SETDFPROT), else the
+ * VMS default of SYSGEN RMS_FILEPROT (VMS_DFPROT_INITIAL, %XFA00 =
+ * S:RWED,O:RWED,G:RE,W:). On the ACP path the executive applies it itself.
  */
+#ifndef VMS_DFPROT_INITIAL
+#define VMS_DFPROT_INITIAL 0xFA00u          /* src/kernel/vms_ioctl.h */
+#endif
 static uint16_t rms_get_default_protection(void)
 {
-    /* Default: S:RWED,O:RWED,G:,W: = system and owner full, group and world none
-     * In VMS bit encoding: S=0x00 (all allowed), O=0x00, G=0x0F (all denied), W=0x0F
-     * = 0xFF00 */
-    return 0xFF00;
+    uint16_t prot = VMS_DFPROT_INITIAL;
+
+#if defined(OVMX_HAVE_ACP)
+    (void)vms_kif_dfprot(NULL, &prot);
+#endif
+    return prot;
 }
 
 /*

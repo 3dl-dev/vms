@@ -564,6 +564,7 @@ register-subprocess-identity-self-declared
 libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
+acp-create-ignores-dfprot
 clrast-no-delivery
 mbx-tmpmbx-check-removed
 mbx-prmmbx-check-removed
@@ -984,6 +985,25 @@ EOF
         why)          echo "the lock services set the caller's event flag through vms\$\$lock_complete_efn() (src/libvms/syssvc/sys_efn.c), whose body is 'if (efn < 128) sys\$setef(efn);' -- flag 0 is a real flag on VMS and only EFN\$C_ENF (128) means no flag. The mutation changes the guard to 'efn != 0 && efn < 128', the pre-fix behaviour that treated 0 as no-flag, so a synchronous enqueue naming EF 0 completes without setting it. The guard line is unique in that one-function file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 $ENQW (efn 0) set EF 0
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-create-ignores-dfprot)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE gives an ordinary file that names no protection the creating process's default file protection (\$SETDFPROT / RMS_FILEPROT)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_setdfprot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The ACP's CREATE takes proc->dfprot for an ordinary file with no protection of its own. The mutation leaves it 0, so the file gets the class default (RWED,RWED,RE,RE) whatever the process set. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the new file's protection is the process default (0x0F00), not a class default
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7314,6 +7334,8 @@ apply_edit() {
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)
         sed -i 's|^    if (efn < 128)$|    if (efn != 0 \&\& efn < 128) /* NEGCTL efn0-enqw-not-set */|' "$_file";;
+    acp-create-ignores-dfprot)
+        sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file";;
     setdfprot-not-stored)
         sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)

@@ -14,7 +14,9 @@
  *   - a deeper spec creates the missing parents too ([.PARENT.CHILD]);
  *   - an initial allocation of 200 blocks (the corpus program's value) is honoured:
  *     the directory holds 200 blocks, uses one, and grows into the preallocated ones
- *     as entries are added -- its allocation does not change;
+ *     as entries are added -- its allocation does not change -- and the 30 new
+ *     headers land in INDEXF.SYS, which the ACP extends past the headers the
+ *     real-VAX INIT allocated (16) through the index file's own map;
  *   - a default directory on a concealed rooted SEARCH LIST (SYSTEM's is
  *     SYS$SYSROOT:[SYSMGR]) completes a relative spec in the member that exists;
  *   - a zero initial allocation or a non-zero relative volume is refused
@@ -40,7 +42,7 @@
 #define OVMXDIR_FID_NUM 11u
 #define MFD_FID_NUM 4u
 #define BIG_ALLOC 200u
-#define BIG_ENTRIES 50
+#define BIG_ENTRIES 30
 #define DIRFLAG 0x2000u
 
 static int pass, fail;
@@ -159,7 +161,8 @@ int main(void)
             made++;
     }
     /* negctl: acp-dir-used-blocks-ignore-eof */
-    check(made == BIG_ENTRIES, "50 directories are entered in BIGD.DIR");
+    /* negctl: acp-indexf-not-extended */
+    check(made == BIG_ENTRIES, "30 directories are entered in BIGD.DIR (the index file grows to hold their headers)");
     for (i = 0; i < BIG_ENTRIES; i++) {
         char nm[16];
         snprintf(nm, sizeof(nm), "D%02d.DIR", i);

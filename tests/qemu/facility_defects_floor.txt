@@ -477,4 +477,5 @@
 # default-FAB $OPEN header-attribute assertions).
 # Raised to 172 by the two vms-47f7 defects (acp-dir-used-blocks-ignore-eof,
 # libcreatedir-rooted-default-unresolved).
-172
+# Raised to 173 by acp-indexf-not-extended (vms-47f7).
+173

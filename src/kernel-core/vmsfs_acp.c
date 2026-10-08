@@ -84,6 +84,27 @@ _Static_assert(VMS_ACP_SERVE_DEVNAM_MAX == VMS_DEVNAM_SIZE,
  * block/SCB at $MOUNT time. Executive-global: every process that $ASSIGNs the
  * unit reaches this SAME row, so the identity is the volume's, never a process's.
  */
+/*
+ * One retrieval-pointer run of an accessed file's window: VBNs [start_vbn ..
+ * start_vbn+count) map to LBNs [lbn .. lbn+count). Plain fixed-width fields (no
+ * codec type) so the channel struct compiles in the codec-free bootable build
+ * too.
+ */
+struct acp_win_ext {
+    uint32_t start_vbn;
+    uint32_t lbn;
+    uint32_t count;
+};
+
+/*
+ * The window cache size. A file with more than this many extents cannot be
+ * fully mapped by one IO$_ACCESS on this rung -- refused fail-honest
+ * (SS$_NOSUCHFILE is wrong; see the handler: it returns the honest "window
+ * did not fit" rather than a partial map). Generous for the boot corpus (the
+ * real-VAX fixture's files are 1-3 extents; INDEXF.SYS itself is 3).
+ */
+#define ACP_WINDOW_MAX 24
+
 struct vms_acp_volume {
     exec_list_node_t list;              /* in vms_acp_vol_list */
     char             devnam[VMS_DEVNAM_SIZE]; /* canonical unit name, e.g. "DKA0:" */
@@ -102,6 +123,19 @@ struct vms_acp_volume {
      * block so IO$_ACCESS need not re-read + re-parse the home block per open.
      */
     uint32_t         idx_lbn;           /* LBN of INDEXF.SYS file-1 header */
+    /*
+     * INDEXF.SYS's own retrieval map. File number N's header is INDEXF VBN
+     * hdr_vbn0 + (N - 1) (hdr_vbn0 = hm2_ibmapvbn + hm2_ibmapsize), mapped
+     * through the index file's extents: a volume INITIALIZEd by VMS holds only
+     * the first headers in the extent that follows the index bitmap and adds
+     * the rest as the index file is extended, elsewhere on the volume. idx_lbn
+     * + (N - 1) is right only inside that first extent. idx_alloc = blocks the
+     * index file has allocated (its window covers VBN 1..idx_alloc).
+     */
+    uint32_t         hdr_vbn0;
+    uint32_t         idx_alloc;
+    uint32_t         idxwin_n;
+    struct acp_win_ext idxwin[ACP_WINDOW_MAX];
     /*
      * Index-file bitmap base + capacity (vms-5303): hm2_ibmaplbn is the LBN of
      * the index bitmap (which precedes the headers -- idx_lbn = ibmap_lbn +
@@ -123,26 +157,6 @@ struct vms_acp_volume {
     uint32_t         vol_lkid;          /* standing F11B$v<label> lock handle, 0 if unheld */
 };
 
-/*
- * One retrieval-pointer run of an accessed file's window: VBNs [start_vbn ..
- * start_vbn+count) map to LBNs [lbn .. lbn+count). Plain fixed-width fields (no
- * codec type) so the channel struct compiles in the codec-free bootable build
- * too.
- */
-struct acp_win_ext {
-    uint32_t start_vbn;
-    uint32_t lbn;
-    uint32_t count;
-};
-
-/*
- * The window cache size. A file with more than this many extents cannot be
- * fully mapped by one IO$_ACCESS on this rung -- refused fail-honest
- * (SS$_NOSUCHFILE is wrong; see the handler: it returns the honest "window
- * did not fit" rather than a partial map). Generous for the boot corpus (the
- * real-VAX fixture's files are 1-3 extents; INDEXF.SYS itself is 3).
- */
-#define ACP_WINDOW_MAX 24
 
 /*
  * One process's file-class channel to a mounted volume. After IO$_ACCESS the
@@ -377,6 +391,16 @@ static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
     return 0;
 }
 
+/* The LBN of file number `fidnum`'s primary header: its INDEXF.SYS VBN mapped
+ * through the index file's extents. 0 when the index file does not (yet) hold
+ * that header. */
+static uint32_t acp_hdr_lbn(const struct vms_acp_volume *vol, uint32_t fidnum)
+{
+    if (fidnum == 0 || vol->idxwin_n == 0)
+        return 0;
+    return acp_window_map_vbn(vol->idxwin, vol->idxwin_n, vol->hdr_vbn0 + fidnum - 1u);
+}
+
 /* ================================================================
  * ODS-2 volume validation (vms-127) -- reads the home block + SCB off the
  * backing block device and confirms the media is genuine Files-11 ODS-2.
@@ -536,6 +560,26 @@ struct acp_val_scratch {
     ods2_scb_t  scb;
 };
 
+/* ods2_map_cb: collect INDEXF.SYS's extents into the volume's index window. An
+ * index file with more extents than the window holds is refused at $MOUNT. */
+static int acp_idxwin_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct vms_acp_volume *v = (struct vms_acp_volume *)ctx;
+
+    if (!ext || ext->count == 0)
+        return 0;
+    if (v->idxwin_n >= ACP_WINDOW_MAX) {
+        v->idxwin_n = 0;                /* cannot map it all: refuse the mount */
+        return 1;
+    }
+    v->idxwin[v->idxwin_n].start_vbn = v->idx_alloc + 1u;
+    v->idxwin[v->idxwin_n].lbn       = ext->lbn;
+    v->idxwin[v->idxwin_n].count     = ext->count;
+    v->idxwin_n++;
+    v->idx_alloc += ext->count;
+    return 0;
+}
+
 static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
                                   struct vms_acp_volume *out)
 {
@@ -583,6 +627,17 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
     out->volsize  = s->scb.scb_volsize;
     out->cluster  = s->scb.scb_cluster; /* storage-bitmap cluster factor (vms-e6f) */
     out->idx_lbn  = idx_lbn;            /* INDEXF.SYS file-1 header base (vms-204) */
+    /* INDEXF.SYS's map (its own header is file 1, inside the first extent). */
+    if (acp_bdev_read(major, minor, idx_lbn, s->blk, sizeof(s->blk)) != 0)
+        goto done;
+    if (ods2_fh2_parse(s->blk, sizeof(s->blk), &s->bmhdr) != ODS2_OK)
+        goto done;
+    out->idxwin_n = 0;
+    out->idx_alloc = 0;
+    if (ods2_fh2_map_walk(s->blk, acp_idxwin_cb, out, NULL) != ODS2_OK ||
+        out->idxwin_n == 0)
+        goto done;
+    out->hdr_vbn0 = (uint32_t)s->home.hm2_ibmapvbn + s->home.hm2_ibmapsize;
     out->ibmap_lbn = s->home.hm2_ibmaplbn;   /* index-bitmap base (vms-5303) */
     out->maxfiles  = s->home.hm2_maxfiles;   /* index-file capacity (vms-5303) */
     memcpy(out->volname, s->home.hm2_volname, 12);
@@ -1077,7 +1132,7 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
 /*
  * acp_read_header - read + validate file number `fid_num`'s primary FH2 into
  * `raw` (>= 512 bytes) and its parsed form into `*parsed`. Header N is at
- * vol->idx_lbn + (N-1), the INDEXF.SYS arithmetic the codec's reader uses.
+ * INDEXF.SYS VBN hdr_vbn0 + (N-1), mapped through the index file's extents.
  * A bad FID / unreadable or non-validating header is SS__NOSUCHFILE.
  */
 static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
@@ -1087,7 +1142,9 @@ static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
 
     if (fid_num == 0)
         return SS__NOSUCHFILE;
-    lbn = vol->idx_lbn + (fid_num - 1u);
+    lbn = acp_hdr_lbn(vol, fid_num);
+    if (lbn == 0)
+        return SS__NOSUCHFILE;
     if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                  lbn, raw, ACP_BLOCK_SIZE) != 0)
         return SS__NOSUCHFILE;
@@ -2158,6 +2215,7 @@ struct acp_chan_snap {
     uint32_t           backing_major;
     uint32_t           backing_minor;
     uint32_t           idx_lbn;         /* INDEXF.SYS file-1 header base */
+    uint32_t           hdr_lbn;         /* this file's primary header (INDEXF-mapped) */
     uint32_t           volsize;
     uint32_t           win_n;
     struct acp_win_ext win[ACP_WINDOW_MAX];
@@ -2189,6 +2247,7 @@ static uint32_t acp_chan_snapshot(struct vms_proc *proc, uint32_t chan,
         snap->backing_major = ch->vol->backing_major;
         snap->backing_minor = ch->vol->backing_minor;
         snap->idx_lbn       = ch->vol->idx_lbn;
+        snap->hdr_lbn       = acp_hdr_lbn(ch->vol, snap->fid_num);
         snap->volsize       = ch->vol->volsize;
         snap->win_n         = ch->win_n;
         memcpy(snap->win, ch->win, ch->win_n * sizeof(ch->win[0]));
@@ -2660,7 +2719,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
      * advertises valid bytes that were not written ---- */
 #if defined(OVMX_ODS2_KERNEL)
     if (extended || new_valid != old_valid) {
-        uint32_t hdr_lbn = snap->idx_lbn + (snap->fid_num - 1u);
+        uint32_t hdr_lbn = snap->hdr_lbn;
 
         if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                      hdr_lbn, s->hdr, ACP_BLOCK_SIZE) != 0 ||
@@ -2916,6 +2975,87 @@ static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
     return SS__NORMAL;
 }
 
+/*
+ * acp_idx_extend - make INDEXF.SYS hold file number `fidnum`'s header, as the
+ * Files-11 ACP extends the index file when a free file number lies past the
+ * headers it has allocated. A VMS-initialized volume allocates only its first
+ * headers after the index bitmap; the rest of the index file grows elsewhere on
+ * the volume. The new run (zero-filled by acp_bitmap_alloc: an unused header) is
+ * appended to the index file's map, its end of file moves with it, and the
+ * volume's index window learns the extent. Never past hm2_maxfiles headers.
+ */
+#define ACP_IDX_EXTEND 16u
+static uint32_t acp_idx_extend(struct vms_acp_volume *vol, struct acp_fileop_scratch *sc,
+                               uint32_t fidnum)
+{
+    uint32_t want = vol->hdr_vbn0 + fidnum - 1u;
+    uint32_t cap = vol->hdr_vbn0 + vol->maxfiles - 1u;
+    uint32_t n, lbn = 0, hib, efb, st;
+    unsigned mpoff, inuse, limit;
+    uint8_t *hdr;
+    ods2_recattr_t ra;
+
+    if (want <= vol->idx_alloc)
+        return SS__NORMAL;
+    if (vol->idxwin_n >= ACP_WINDOW_MAX || want > cap)
+        return SS__DEVICEFULL;
+    n = want - vol->idx_alloc;
+    if (n < ACP_IDX_EXTEND)
+        n = ACP_IDX_EXTEND;
+    if (vol->idx_alloc + n > cap)
+        n = cap - vol->idx_alloc;
+    if (n > 256u)
+        return SS__DEVICEFULL;
+
+    hdr = exec_zalloc(ACP_BLOCK_SIZE);
+    if (!hdr)
+        return SS__INSFMEM;
+    if (acp_bdev_read(vol->backing_major, vol->backing_minor, vol->idx_lbn, hdr,
+                      ACP_BLOCK_SIZE) != 0 || acp_fh2_self_fidnum(hdr) != ODS2_FID_INDEXF) {
+        exec_free(hdr);
+        return SS__DEVNOTMOUNT;
+    }
+    /* room for one more retrieval pointer, checked before any block is taken */
+    mpoff = hdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    inuse = hdr[offsetof(ods2_fh2_t, fh2_map_inuse)];
+    limit = hdr[offsetof(ods2_fh2_t, fh2_acoffset)];
+    if (hdr[offsetof(ods2_fh2_t, fh2_rsoffset)] < limit)
+        limit = hdr[offsetof(ods2_fh2_t, fh2_rsoffset)];
+    if (mpoff + inuse + 3u > limit) {
+        exec_free(hdr);
+        return SS__DEVICEFULL;
+    }
+    acp_snap_from_vol(&sc->snap, vol);
+    st = acp_bitmap_alloc(&sc->snap, &sc->rw, n, &lbn);
+    if (st != SS__NORMAL) {
+        exec_free(hdr);
+        return st;
+    }
+    if (ods2_fh2_map_append(hdr, lbn, n) != ODS2_OK) {
+        exec_free(hdr);
+        return SS__DEVICEFULL;
+    }
+    memcpy(&ra, hdr + offsetof(ods2_fh2_t, fh2_recattr), sizeof(ra));
+    hib = vol->idx_alloc + n;
+    efb = ods2_recattr_efblk(&ra);
+    if (efb > vol->idx_alloc)
+        efb = hib + 1u;                 /* the end of file was at the end: it moves */
+    (void)ods2_fh2_set_eof(hdr, hib, efb, ra.fat_ffbyte);
+    ods2_fh2_reseal(hdr);
+    if (acp_bdev_write(vol->backing_major, vol->backing_minor, vol->idx_lbn, hdr,
+                       ACP_BLOCK_SIZE) != 0) {
+        exec_free(hdr);
+        return SS__DEVNOTMOUNT;
+    }
+    exec_free(hdr);
+    vol->idxwin[vol->idxwin_n].start_vbn = vol->idx_alloc + 1u;
+    vol->idxwin[vol->idxwin_n].lbn = lbn;
+    vol->idxwin[vol->idxwin_n].count = n;
+    vol->idxwin_n++;
+    vol->idx_alloc = hib;
+    return SS__NORMAL;
+}
+
 /* Ordered LBN list of a directory's data blocks, collected VBN-order: the first
  * ACP_DIR_MAX_BLOCKS of them in lbn[], and the count of ALL allocated blocks in
  * `alloc` (a preallocated directory can hold many more than it uses). */
@@ -3088,13 +3228,13 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
      * blocks). */
     if (out_nblk > nblk && out_nblk > dl.alloc) {
         status = acp_dir_write_grown_map(vol, dirhdr,
-                                         vol->idx_lbn + (dir_fidnum - 1u),
+                                         acp_hdr_lbn(vol, dir_fidnum),
                                          dl.lbn, out_nblk);
     } else if (out_nblk > nblk) {
         (void)ods2_fh2_set_eof(dirhdr, dl.alloc, out_nblk + 1u, 0);
         ods2_fh2_reseal(dirhdr);
         if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                           vol->idx_lbn + (dir_fidnum - 1u), dirhdr, ACP_BLOCK_SIZE) != 0)
+                           acp_hdr_lbn(vol, dir_fidnum), dirhdr, ACP_BLOCK_SIZE) != 0)
             status = SS__DEVNOTMOUNT;
     }
 
@@ -3272,6 +3412,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             /* Allocate a real FID from the index bitmap. */
             status = acp_fid_alloc(vol, sc->ibblk, &new_fidnum);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            /* The index file must hold the new file's header. */
+            status = acp_idx_extend(vol, sc, new_fidnum);
+            if (status != SS__NORMAL) {
+                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                args.status = status;
+                goto free_sc;
+            }
 
             /* Optional initial allocation (FIB$L_EXSZ). A NEW DIRECTORY is
              * always born as exactly one block (vms-3a8): the ODS-2 writer's
@@ -3381,11 +3528,12 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             }
 
             /* Write the header at the FID's INDEXF slot. NEGCTL-ANCHORED: the
-             * slot LBN is idx_lbn + (new_fidnum - 1u); an off-by-one writes the
+             * slot LBN is acp_hdr_lbn(vol, new_fidnum); an off-by-one writes the
              * header one slot too high, so the created file is unreadable by its
              * own FID. */
-            hdr_lbn = vol->idx_lbn + (new_fidnum - 1u);
-            if (acp_bdev_write(vol->backing_major, vol->backing_minor,
+            hdr_lbn = acp_hdr_lbn(vol, new_fidnum);
+            if (hdr_lbn == 0 ||
+                acp_bdev_write(vol->backing_major, vol->backing_minor,
                                           hdr_lbn, sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__DEVNOTMOUNT;
@@ -3497,7 +3645,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     /* Invalidate the header so a later ACCESS is SS$_NOSUCHFILE. */
                     memset(sc->filehdr, 0, ACP_BLOCK_SIZE);
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                                  vol->idx_lbn + (file_fidnum - 1u),
+                                                  acp_hdr_lbn(vol, file_fidnum),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                         args.status = SS__DEVNOTMOUNT;
                         goto free_sc;
@@ -3595,7 +3743,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 }
                 ods2_fh2_reseal(sc->filehdr);
                 if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                              vol->idx_lbn + (file_fidnum - 1u),
+                                              acp_hdr_lbn(vol, file_fidnum),
                                               sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                     args.status = SS__DEVNOTMOUNT;
                     goto free_sc;
@@ -3715,7 +3863,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     (void)ods2_fh2_set_eof(sc->filehdr, new_hiblk, new_efblk, new_ffbyte);
                     ods2_fh2_reseal(sc->filehdr);
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                                  vol->idx_lbn + (file_fidnum - 1u),
+                                                  acp_hdr_lbn(vol, file_fidnum),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                         args.status = SS__DEVNOTMOUNT;
                         goto free_sc;

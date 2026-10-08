@@ -1943,9 +1943,9 @@ int main(void)
          * belongs in the enforced set F$GETJPI CURPRIV walks. PHY_IO (22)
          * renders after MOUNT (17) in the ascending bit walk. */
         /* negctl-knockon: bind-client-no-register */
-        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,READALL\"") != NULL,
+        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
-              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,READALL), "
+              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL), "
               "not merely completes without rendering anything");
     }
 

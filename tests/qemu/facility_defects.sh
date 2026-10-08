@@ -956,12 +956,12 @@ EOF
     efn0-enqw-not-set)
         case "$_f" in
         facility)     echo "\$ENQW completion sets the named event flag, flag 0 included (vms-f811 efn0)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        targets)      echo "libvms/syssvc/sys_efn.c";;
         suites_red)   echo "test_syssvc_efn0";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sys\$enqw() sets the caller's event flag with 'if (efn < 128) sys\$setef(efn);' -- flag 0 is a real flag on VMS and only EFN\$C_ENF (128) means no flag. The mutation changes the guard to 'efn != 0 && efn < 128', the pre-fix behaviour that treated 0 as no-flag, so a synchronous enqueue naming EF 0 completes without setting it. The guard line (4-space indent, no && tail) is unique to sys\$enqw; sys\$enq's has an '&& (status & 1)' tail. Gone after substitution (no-op re-apply).";;
+        why)          echo "the lock services set the caller's event flag through vms\$\$lock_complete_efn() (src/libvms/syssvc/sys_efn.c), whose body is 'if (efn < 128) sys\$setef(efn);' -- flag 0 is a real flag on VMS and only EFN\$C_ENF (128) means no flag. The mutation changes the guard to 'efn != 0 && efn < 128', the pre-fix behaviour that treated 0 as no-flag, so a synchronous enqueue naming EF 0 completes without setting it. The guard line is unique in that one-function file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 $ENQW (efn 0) set EF 0
 EOF

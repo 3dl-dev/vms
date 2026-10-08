@@ -54,6 +54,7 @@ unsigned int corpus_rt_rms_bind_never(void)
 
 extern unsigned int sys$getuai(unsigned int, void *, void *, void *, void *, void *, void *);
 extern unsigned int sys$setddir(void *, unsigned short *, void *);
+extern unsigned int sys$crelnm(void *, void *, void *, void *, void *);
 
 /* A UAI$_DEFDEV/UAI$_DEFDIR value, either a counted string (length byte first) or
  * the bare text, appended to out. */
@@ -95,5 +96,18 @@ static void corpus_rt_run_as_system(void)
         struct dsc$descriptor_s nd = { (unsigned short)strlen(ddir), DSC$K_DTYPE_T,
                                        DSC$K_CLASS_S, ddir };
         (void)sys$setddir(&nd, 0, 0);
+
+        /* SYS$SCRATCH: LOGINOUT defines it as the process's scratch directory, which for a
+         * fresh login is SYS$LOGIN, i.e. the default directory just set. A program that
+         * names SYS$SCRATCH:<file> (sys_forcex writes SYS$SCRATCH:DEMO_FORCEX.COM and hands
+         * it to LIB$SPAWN) needs the logical to exist, as it does after any real login. */
+        static char tab[] = "LNM$PROCESS", nm[] = "SYS$SCRATCH";
+        struct dsc$descriptor_s td = { sizeof(tab) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, tab };
+        struct dsc$descriptor_s nmd = { sizeof(nm) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, nm };
+        struct { unsigned short buflen, code; void *buf; unsigned short *ret; } li[2] = {
+            { (unsigned short)strlen(ddir), 2 /* LNM$_STRING */, ddir, 0 },
+            { 0, 0, 0, 0 },
+        };
+        (void)sys$crelnm(0, &td, &nmd, 0, li);
     }
 }

@@ -138,6 +138,7 @@ prc PRC.DELPRC  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, dup
 prc PRC.SELF.COUNT2  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
 prc PRC.NOIMAGE.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
 prc PRC.SELF.COUNT3  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
+prc PRC.FORCEX  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
 rights RDB.ADD_IDENT.UIC1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.UIC2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds

@@ -96,7 +96,7 @@ static void show_executor(const struct dnet_executor *x, int characteristics)
     if (characteristics) {
         printf("Identification           = OVMX DECnet-compatible networking\n");
         /* The bound NETACP sizes its inbound logical-link pool from (vms-f91);
-         * unset, the VMS default a real V7.3 shows. */
+         * unset, OVMX's seeded default (dnet_ncpstore.h). */
         printf("Maximum links            = %u\n", dnet_executor_max_links(x));
     }
 }

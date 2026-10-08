@@ -110,9 +110,9 @@ int main(void)
         CHECK(file_has(pe, "EXECUTOR 1.42 NAME OVMX STATE on"),
               "the executor record is the documented text layout");
 
-        /* rd vms-f91: MAXIMUM LINKS persists; unset is the VMS default 32. */
-        CHECK(y.max_links == 0 && dnet_executor_max_links(&y) == 32,
-              "an executor with no MAXIMUM LINKS reads as the VMS default 32 (real V7.3 SHOW EXECUTOR)");
+        /* rd vms-f91: MAXIMUM LINKS persists; unset is the seeded 9 (vms-9cd). */
+        CHECK(y.max_links == 0 && dnet_executor_max_links(&y) == 9,
+              "an executor with no MAXIMUM LINKS reads as the seeded 9 (rd vms-9cd; VMS defaults to 32)");
         x.max_links = 12;
         CHECK(dnet_store_save_executor(&x) == DNET_STORE_OK &&
               file_has(pe, "EXECUTOR 1.42 NAME OVMX STATE on MAXLINKS 12") &&

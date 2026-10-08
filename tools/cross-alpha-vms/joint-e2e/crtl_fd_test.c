@@ -15,6 +15,7 @@
  * the File ID and st_fab_rfm/rat/mrs the file's RMS record attributes -- what
  * GCC's libcpp (STAT_SIZE_RELIABLE) and incpath (INO_T_EQ) read under VMS.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -22,9 +23,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define DIR   "VDA0:[SYSTMP]"
-#define OUTF  DIR "CFDOUT.TXT"
-#define INF   DIR "CFDIN.TXT"
+#define DIRSPEC   "VDA0:[SYSTMP]"
+#define OUTF  DIRSPEC "CFDOUT.TXT"
+#define INF   DIRSPEC "CFDIN.TXT"
 #define NLINE 120
 #define FAB_C_VAR   2       /* libcpp files.cc spells these out the same way */
 #define FAB_C_STMLF 5
@@ -76,6 +77,7 @@ int main(int argc, char **argv)
            (long)st.st_size, total, (unsigned)st.st_mode,
            (unsigned)st.st_ino[0], (unsigned)st.st_ino[1], (unsigned)st.st_ino[2],
            st.st_fab_rfm, st.st_fab_rat);
+    unsigned long out_fid = sr == 0 ? (unsigned long)st.st_ino[0] : 0;
     check(sr == 0 && st.st_size == total && S_ISREG(st.st_mode) && st.st_ino[0] != 0 &&
               st.st_ino[1] != 0,
           12, "stat: size == bytes written, S_IFREG, st_ino[3] is the File ID");
@@ -142,7 +144,7 @@ int main(int argc, char **argv)
     /* 7. A descriptor dup2()ed onto stdout: write(1) lands in an RMS file. */
     fflush(stdout);
     int save = dup(1);
-    int wfd = open(DIR "CFDDUP.TXT", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int wfd = open(DIRSPEC "CFDDUP.TXT", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     int dok = save >= 0 && wfd >= 0 && dup2(wfd, 1) == 1;
     if (dok) {
         write(1, "WRITTEN THROUGH FD 1\n", 21);
@@ -150,7 +152,7 @@ int main(int argc, char **argv)
         close(wfd);
         close(save);
     }
-    check(dok && stat(DIR "CFDDUP.TXT", &st) == 0 && st.st_size == 21, 20,
+    check(dok && stat(DIRSPEC "CFDDUP.TXT", &st) == 0 && st.st_size == 21, 20,
           "dup2(rms_fd, 1): write(1) goes to the RMS file; stdout restored");
 
     /* 8. A record file DCL wrote (OPEN/WRITE) reads as lines. */
@@ -204,15 +206,15 @@ int main(int argc, char **argv)
 
     /* 10. Missing file: NULL and ENOENT, never a silent success. */
     errno = 0;
-    f = fopen(DIR "NO_SUCH_FILE.TXT", "r");
+    f = fopen(DIRSPEC "NO_SUCH_FILE.TXT", "r");
     check(f == NULL && errno == ENOENT, 23, "a missing file fails with ENOENT");
 
     /* 11. rename + unlink are RMS $RENAME / $ERASE. */
-    check(rename(DIR "CFDDUP.TXT", DIR "CFDREN.TXT") == 0 &&
-              access(DIR "CFDREN.TXT", F_OK) == 0 &&
-              access(DIR "CFDDUP.TXT", F_OK) != 0,
+    check(rename(DIRSPEC "CFDDUP.TXT", DIRSPEC "CFDREN.TXT") == 0 &&
+              access(DIRSPEC "CFDREN.TXT", F_OK) == 0 &&
+              access(DIRSPEC "CFDDUP.TXT", F_OK) != 0,
           24, "rename moves the directory entry");
-    check(unlink(DIR "CFDREN.TXT") == 0 && access(DIR "CFDREN.TXT", F_OK) != 0, 25,
+    check(unlink(DIRSPEC "CFDREN.TXT") == 0 && access(DIRSPEC "CFDREN.TXT", F_OK) != 0, 25,
           "unlink erases it");
 
     /* 12. The kernel's namespaces stay the kernel's. */
@@ -220,6 +222,50 @@ int main(int argc, char **argv)
     check(nfd >= 0 && write(nfd, "x", 1) == 1, 26, "/dev/null is still the kernel device");
     if (nfd >= 0)
         close(nfd);
+
+    /* 13. A directory reads as its entries (a $PARSE/$SEARCH wildcard
+     *     context): readdir lists CFDOUT.TXT;n with the File ID stat gave it,
+     *     not the erased name; rewinddir starts over; a missing directory
+     *     fails honestly; the UNIX name of the directory is the same one. */
+    struct stat ds;
+    check(stat(DIRSPEC, &ds) == 0 && S_ISDIR(ds.st_mode), 33,
+          "stat(\"" DIRSPEC "\") reports a directory");
+    DIR *d = opendir(DIRSPEC);
+    check(d != NULL, 34, "opendir(\"" DIRSPEC "\") opens the directory over RMS");
+    if (d) {
+        struct dirent *e;
+        char first[256] = "";
+        int n = 0, saw_out = 0, saw_ren = 0;
+        unsigned long out_ino = 0;
+        while ((e = readdir(d)) != NULL) {
+            if (n++ == 0)
+                snprintf(first, sizeof first, "%s", e->d_name);
+            if (strncmp(e->d_name, "CFDOUT.TXT;", 11) == 0) {
+                saw_out = 1;
+                out_ino = (unsigned long)e->d_ino;
+            }
+            if (strncmp(e->d_name, "CFDREN.TXT;", 11) == 0)
+                saw_ren = 1;
+        }
+        printf("CFD: readdir -> %d entries, first \"%s\", CFDOUT.TXT d_ino=%lu (stat %lu)\n",
+               n, first, out_ino, out_fid);
+        check(saw_out && out_ino == out_fid, 35,
+              "readdir lists CFDOUT.TXT;n with its File ID as d_ino");
+        check(!saw_ren, 36, "readdir does not list the erased CFDREN.TXT");
+        rewinddir(d);
+        e = readdir(d);
+        check(e != NULL && strcmp(e->d_name, first) == 0, 37, "rewinddir starts the search over");
+        closedir(d);
+    }
+    errno = 0;
+    d = opendir("VDA0:[NO_SUCH_DIR]");
+    check(d == NULL && errno == ENOENT, 38, "opendir of a missing directory fails with ENOENT");
+    if (d)
+        closedir(d);
+    d = opendir("/vda0/systmp");
+    check(d != NULL && readdir(d) != NULL, 39, "opendir(\"/vda0/systmp\") is the same directory");
+    if (d)
+        closedir(d);
 
     if (fails) {
         printf("OVMX CRTL-FD test: %d check(s) FAILED (first %d)\n", fails, first_fail);

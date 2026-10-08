@@ -51,6 +51,7 @@
 
 #include <errno.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -121,7 +122,7 @@ static void tr(const char *m, long long v)
 #define IOBUF      (126u * BLK)     /* largest block-multiple a RAB word holds */
 #define RFD_MAX    1024
 
-enum { RF_STREAM = 1, RF_RECORD = 2 };
+enum { RF_STREAM = 1, RF_RECORD = 2, RF_DIR = 3 };
 
 /* An open file description: shared by every descriptor dup()ed from it. */
 struct rfile {
@@ -141,6 +142,11 @@ struct rfile {
     size_t    reclen, recoff;
     int       rec_eof;
     char     *io;                   /* IOBUF bytes, block-I/O staging          */
+    /* directory stream (RF_DIR): a $PARSE/$SEARCH wildcard context over spec */
+    char      pat[264];             /* "<dirspec>*.*;*", fab$l_fna's backing   */
+    int       dir_live;             /* $PARSE succeeded: the context is open   */
+    int       dir_pending;          /* rsa holds a found entry not yet served  */
+    uint64_t  dir_off;              /* entries served (d_off)                  */
 };
 
 static struct rfile *rfd[RFD_MAX];
@@ -440,6 +446,156 @@ static long long rfd_bind(struct rfile *rf, int cloexec)
     return k;
 }
 
+/* ------------------------------------------------------ directories ------ */
+
+/* (Re)start the directory's wildcard search: $PARSE "<dirspec>*.*;*". */
+static int dir_parse(struct rfile *rf)
+{
+    if (rf->dir_live)
+        rms_search_end(&rf->nam);
+    rf->dir_live = rf->dir_pending = 0;
+    rf->dir_off = 0;
+    rf->fab = cc$rms_fab;
+    rf->nam = cc$rms_nam;
+    rf->fab.fab$l_fna = rf->pat;
+    rf->fab.fab$b_fns = (uint8_t)strlen(rf->pat);
+    rf->fab.fab$l_nam = &rf->nam;
+    rf->nam.nam$l_esa = rf->esa;
+    rf->nam.nam$b_ess = sizeof rf->esa - 1;
+    rf->nam.nam$l_rsa = rf->rsa;
+    rf->nam.nam$b_rss = sizeof rf->rsa - 1;
+    uint32_t st = sys$parse(&rf->fab, 0, 0);
+    TR("crtlfd: dir $parse", st);
+    if (!(st & 1)) {
+        rms_search_end(&rf->nam);
+        int e = rms_errno(st);
+        return -(e ? e : EIO);
+    }
+    rf->dir_live = 1;
+    return 0;
+}
+
+/* opendir: a directory opened for reading is a wildcard search over its
+ * entries -- every file, type and version, as the directory itself lists them
+ * (no "." / ".." entries: an ODS-2 directory has none). */
+static long long dir_open(const char *path, const char *spec, int dir, long long flags)
+{
+    char dspec[256];
+    if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_CREAT))
+        return -EISDIR;
+    if (!dir) {
+        /* O_DIRECTORY on a name written as a file: read it as a directory. */
+        if (ovmx_crtl_is_vms_syntax(path))
+            return -ENOTDIR;
+        if (ovmx_crtl_unix_to_vms(path, dspec, sizeof dspec, OVMX_FS_DIR) < 0)
+            return -errno;
+        spec = dspec;
+    }
+    struct rattr a;
+    int r = stat_path(spec, 1, &a);
+    if (r < 0)
+        return r;
+    struct rfile *rf = calloc(1, sizeof *rf);
+    if (!rf)
+        return -ENOMEM;
+    rf->kind = RF_DIR;
+    rf->oflags = O_RDONLY;
+    strncpy(rf->spec, spec, sizeof rf->spec - 1);
+    if ((size_t)snprintf(rf->pat, sizeof rf->pat, "%s*.*;*", rf->spec) >= sizeof rf->pat) {
+        rfile_free(rf);
+        return -ENAMETOOLONG;
+    }
+    r = dir_parse(rf);
+    if (r < 0) {
+        rfile_free(rf);
+        return r;
+    }
+    long long fd = rfd_bind(rf, (flags & O_CLOEXEC) != 0);
+    if (fd < 0) {
+        rms_search_end(&rf->nam);
+        rfile_free(rf);
+    }
+    return fd;
+}
+
+/* A directory offset is the number of entries already served (d_off):
+ * rewinddir is offset 0; seekdir to k searches afresh and passes k entries. */
+static long long dir_seek(struct rfile *rf, long long off, int whence)
+{
+    if (whence == SEEK_CUR && off == 0)
+        return (long long)rf->dir_off;
+    if (whence != SEEK_SET || off < 0)
+        return -EINVAL;
+    int r = dir_parse(rf);
+    if (r < 0)
+        return r;
+    while (rf->dir_off < (uint64_t)off) {
+        uint32_t st = sys$search(&rf->fab, 0, 0);
+        if (!(st & 1)) {
+            rms_search_end(&rf->nam);
+            rf->dir_live = 0;
+            break;
+        }
+        rf->dir_off++;
+    }
+    return (long long)rf->dir_off;
+}
+
+/* The Linux dirent64 record getdents64 returns. */
+struct ldirent64 {
+    uint64_t d_ino;
+    int64_t  d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[];
+};
+
+/* getdents64: each $SEARCH hit is one entry, named by the resultant spec's
+ * file component (NAME.TYP;VER), its inode the genuine File ID. An entry that
+ * does not fit the caller's buffer is kept for the next call. */
+static long long dir_getdents(struct rfile *rf, char *buf, uint64_t len)
+{
+    uint64_t used = 0;
+    while (rf->dir_live) {
+        if (!rf->dir_pending) {
+            uint32_t st = sys$search(&rf->fab, 0, 0);
+            if (!(st & 1)) {
+                rms_search_end(&rf->nam);       /* RMS$_NMF, or an honest error */
+                rf->dir_live = 0;
+                if (st != RMS$_NMF && st != RMS$_FNF && used == 0) {
+                    int e = rms_errno(st);
+                    return -(e ? e : EIO);
+                }
+                break;
+            }
+            rf->rsa[rf->nam.nam$b_rsl] = '\0';
+            rf->dir_pending = 1;
+        }
+        const char *nm = strrchr(rf->rsa, ']');
+        if (!nm)
+            nm = strrchr(rf->rsa, '>');
+        if (!nm)
+            nm = strrchr(rf->rsa, ':');
+        nm = nm ? nm + 1 : rf->rsa;
+        size_t nl = strlen(nm);
+        size_t reclen = (offsetof(struct ldirent64, d_name) + nl + 1 + 7) & ~(size_t)7;
+        if (used + reclen > len)
+            return used ? (long long)used : -EINVAL;
+        struct ldirent64 *d = (struct ldirent64 *)(buf + used);
+        uint16_t num = 0, seq = 0;
+        uint8_t rvn = 0, nmx = 0;
+        rms_search_fid(&rf->nam, &num, &seq, &rvn, &nmx);
+        d->d_ino = (uint64_t)num | ((uint64_t)nmx << 16);
+        d->d_off = (int64_t)++rf->dir_off;
+        d->d_reclen = (uint16_t)reclen;
+        d->d_type = 0;                          /* DT_UNKNOWN: stat() says */
+        memcpy(d->d_name, nm, nl + 1);
+        used += reclen;
+        rf->dir_pending = 0;
+    }
+    return (long long)used;
+}
+
 static long long do_openat(long long dirfd, const char *path, long long flags,
                            int *handled)
 {
@@ -453,7 +609,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     if (r == -2)
         return -errno;
     if (dir || (flags & O_DIRECTORY))
-        return -EOPNOTSUPP;                     /* directory streams: not yet */
+        return dir_open(path, spec, dir, flags);
 
     int acc = (int)(flags & O_ACCMODE);
     int writing = acc != O_RDONLY;
@@ -579,6 +735,12 @@ static void rfile_release(struct rfile *rf)
 {
     if (--rf->refs > 0)
         return;
+    if (rf->kind == RF_DIR) {
+        if (rf->dir_live)
+            rms_search_end(&rf->nam);           /* release the wildcard context */
+        rfile_free(rf);
+        return;
+    }
     sys$disconnect(&rf->rab, 0, 0);
     sys$close(&rf->fab, 0, 0);
     rfile_free(rf);
@@ -732,6 +894,8 @@ static long long record_read(struct rfile *rf, char *buf, uint64_t n)
 
 static long long r_read(struct rfile *rf, void *buf, uint64_t n)
 {
+    if (rf->kind == RF_DIR)
+        return -EISDIR;
     if ((rf->oflags & O_ACCMODE) == O_WRONLY)
         return -EBADF;
     return rf->kind == RF_STREAM ? stream_read(rf, buf, n) : record_read(rf, buf, n);
@@ -748,6 +912,8 @@ static long long r_write(struct rfile *rf, const void *buf, uint64_t n)
 
 static long long r_lseek(struct rfile *rf, long long off, int whence)
 {
+    if (rf->kind == RF_DIR)                     /* rewinddir / seekdir / telldir */
+        return dir_seek(rf, off, whence);
     if (rf->kind == RF_RECORD) {
         if (whence == SEEK_CUR && off == 0)
             return (long long)rf->pos;
@@ -795,6 +961,8 @@ static long long r_iov(struct rfile *rf, const struct iovec *iov, long long cnt,
 static long long r_pio(struct rfile *rf, void *buf, uint64_t n, long long off,
                        int writing)
 {
+    if (rf->kind == RF_DIR)
+        return -EISDIR;
     if (rf->kind != RF_STREAM)
         return -ESPIPE;
     uint64_t save = rf->pos;
@@ -804,6 +972,17 @@ static long long r_pio(struct rfile *rf, void *buf, uint64_t n, long long off,
     long long r = writing ? r_write(rf, buf, n) : r_read(rf, buf, n);
     rf->pos = save;
     rf->oflags |= app;
+    return r;
+}
+
+/* The attributes of an open file description (fstat). */
+static int rf_attr(struct rfile *rf, struct rattr *a)
+{
+    if (rf->kind == RF_DIR)
+        return stat_path(rf->spec, 1, a);
+    int r = fill_attr(&rf->fab, &rf->nam, rf->rsa, a);
+    if (r == 0 && rf->kind == RF_STREAM)
+        a->size = rf->eof;
     return r;
 }
 
@@ -937,15 +1116,22 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
     case SYS_fdatasync:
         if (!(rf = rget(a1))) return 0;
         *handled = 1;
+        if (rf->kind == RF_DIR)
+            return 0;
         return (sys$flush(&rf->rab, 0, 0) & 1) ? 0 : -EIO;
-    case SYS_ftruncate:
     case SYS_getdents64:
+        if (!(rf = rget(a1))) return 0;
+        *handled = 1;
+        if (rf->kind != RF_DIR)
+            return -ENOTDIR;
+        return dir_getdents(rf, (char *)(uintptr_t)a2, (uint64_t)a3);
+    case SYS_ftruncate:
     case SYS_fchmod:
     case SYS_flock:
     case SYS_fallocate:
         if (!rget(a1)) return 0;
         *handled = 1;
-        return n == SYS_getdents64 ? -ENOTDIR : -EOPNOTSUPP;
+        return -EOPNOTSUPP;
 
     case SYS_statx: {
         struct rattr a;
@@ -954,9 +1140,7 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         if ((a3 & AT_EMPTY_PATH) && path && !*path) {
             if (!(rf = rget(a1))) return 0;
             *handled = 1;
-            r = fill_attr(&rf->fab, &rf->nam, rf->rsa, &a);
-            if (r == 0 && rf->kind == RF_STREAM)
-                a.size = rf->eof;
+            r = rf_attr(rf, &a);
         } else {
             char spec[256];
             int dir = 0;
@@ -975,10 +1159,8 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         if (!(rf = rget(a1))) return 0;
         *handled = 1;
         struct rattr a;
-        int r = fill_attr(&rf->fab, &rf->nam, rf->rsa, &a);
+        int r = rf_attr(rf, &a);
         if (r < 0) return r;
-        if (rf->kind == RF_STREAM)
-            a.size = rf->eof;
         attr_to_kstat(&a, (struct kstat *)(uintptr_t)a2);
         return 0;
     }
@@ -989,9 +1171,7 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         if ((a4 & AT_EMPTY_PATH) && path && !*path) {
             if (!(rf = rget(a1))) return 0;
             *handled = 1;
-            r = fill_attr(&rf->fab, &rf->nam, rf->rsa, &a);
-            if (r == 0 && rf->kind == RF_STREAM)
-                a.size = rf->eof;
+            r = rf_attr(rf, &a);
         } else {
             char spec[256];
             int dir = 0;
@@ -1112,7 +1292,16 @@ static int fab_query(int fd, int dirfd, const char *path,
     in_rms = 1;                                 /* RMS's own calls -> kernel */
     if (!path) {
         struct rfile *rf = rget(fd);
-        if (rf) {
+        struct rattr a;
+        if (rf && rf->kind == RF_DIR) {
+            if (stat_path(rf->spec, 1, &a) == 0) {
+                out->rfm = a.rfm;
+                out->rat = a.rat;
+                out->fsz = 0;
+                out->mrs = a.mrs;
+                r = 0;
+            }
+        } else if (rf) {
             out->rfm = rf->fab.fab$b_rfm;
             out->rat = rf->fab.fab$b_rat;
             out->fsz = rf->fab.fab$b_fsz;

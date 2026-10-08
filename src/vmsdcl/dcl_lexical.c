@@ -447,6 +447,13 @@ static int lex_trnlnm(struct dcl_context *ctx, const char *args,
     if (!(st & 1))
         return 0;                                  /* no translation: "" */
     eq[eql < sizeof eq ? eql : sizeof eq - 1] = '\0';
+    /* A process-permanent file's equivalence carries an ESC NUL IFI header a
+     * DCL string cannot hold; F$TRNLNM gives its device ("_OPA0:", rd
+     * vms-b14e). */
+    if (vms_lnm_is_ppf(eq, eql)) {
+        memmove(eq, eq + VMS_LNM_PPF_HDR, (size_t)eql - VMS_LNM_PPF_HDR);
+        eq[eql - VMS_LNM_PPF_HDR] = '\0';
+    }
     tab[tabl < sizeof tab ? tabl : sizeof tab - 1] = '\0';
     static const char *const modes[4] = { "KERNEL", "EXECUTIVE", "SUPERVISOR", "USER" };
 #define TF(c) snprintf(result, result_size, "%s", (c) ? "TRUE" : "FALSE")

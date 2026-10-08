@@ -159,6 +159,7 @@ struct lnm_hit {
     uint8_t  acmode;
     uint8_t  nvals;
     char     vals[LNM_MAXVAL][LNM$C_NAMLENGTH + 1];
+    uint16_t vlen[LNM_MAXVAL];    /* byte lengths: a value may hold NUL */
 };
 
 /*
@@ -212,6 +213,8 @@ static int dir_lookup(int dir, const char *name, int case_blind,
         } else
             return 0;
     }
+    for (int k = 0; k < h->nvals; k++)
+        h->vlen[k] = (uint16_t)strlen(h->vals[k]);
     return h->acmode <= maxmode;
 }
 
@@ -225,7 +228,7 @@ static pthread_mutex_t local_mx = PTHREAD_MUTEX_INITIALIZER;
 static int local_mode(uint8_t m) { return m > PSL$C_USER ? PSL$C_USER : m; }
 
 static uint32_t local_define(const char *name, const char *const *vals,
-                             uint8_t n, uint32_t attr, uint8_t mode)
+                             const uint16_t *lens, uint8_t n, uint32_t attr, uint8_t mode)
 {
     int i, freei = -1;
     uint32_t st = SS$_NORMAL;
@@ -241,9 +244,14 @@ static uint32_t local_define(const char *name, const char *const *vals,
     if (freei < 0) { pthread_mutex_unlock(&local_mx); return SS$_EXQUOTA; }
     memset(&local_tab[freei], 0, sizeof local_tab[freei]);
     snprintf(local_tab[freei].name, sizeof local_tab[freei].name, "%s", name);
-    for (i = 0; i < n; i++)
-        snprintf(local_tab[freei].values[i], sizeof local_tab[freei].values[i],
-                 "%s", vals[i]);
+    for (i = 0; i < n; i++) {
+        size_t vl = lens[i];
+        if (vl >= sizeof local_tab[freei].values[i])
+            vl = sizeof local_tab[freei].values[i] - 1;
+        memcpy(local_tab[freei].values[i], vals[i], vl);
+        local_tab[freei].values[i][vl] = '\0';
+        local_tab[freei].value_len[i] = (uint16_t)vl;
+    }
     local_tab[freei].num_values = n;
     local_tab[freei].attributes = attr;
     local_tab[freei].acmode = mode;
@@ -293,13 +301,13 @@ static int local_lookup(const char *name, int case_blind, uint8_t maxmode,
 static int proc_is_local(void) { return !vms_kif_lnm_present(); }
 
 static uint32_t tab_define(int t, const char *name, const char *const *vals,
-                           uint8_t n, uint32_t attr, uint8_t mode)
+                           const uint16_t *lens, uint8_t n, uint32_t attr, uint8_t mode)
 {
     if (t == TAB_PROC && proc_is_local())
-        return local_define(name, vals, n, attr, mode);
+        return local_define(name, vals, lens, n, attr, mode);
     if (!tab_exec_id(t))
         return SS$_IVLOGTAB;              /* a directory: no $CRELNT here */
-    return vms_kif_lnm_define(tab_exec_id(t), name, vals, n, attr, mode);
+    return vms_kif_lnm_define_n(tab_exec_id(t), name, vals, lens, n, attr, mode);
 }
 
 static uint32_t tab_delete(int t, const char *name, uint8_t mode)
@@ -333,8 +341,14 @@ static uint32_t tab_lookup(int t, const char *name, int case_blind,
     h->attributes = rec.attributes;
     h->acmode = rec.acmode;
     h->nvals = rec.num_values > LNM_MAXVAL ? LNM_MAXVAL : rec.num_values;
-    for (k = 0; k < h->nvals; k++)
-        snprintf(h->vals[k], sizeof h->vals[k], "%s", rec.values[k]);
+    for (k = 0; k < h->nvals; k++) {
+        size_t vl = rec.value_len[k];
+        if (vl >= sizeof h->vals[k])
+            vl = sizeof h->vals[k] - 1;
+        memcpy(h->vals[k], rec.values[k], vl);
+        h->vals[k][vl] = '\0';
+        h->vlen[k] = (uint16_t)vl;
+    }
     return 1;
 }
 
@@ -372,6 +386,7 @@ uint32_t sys$crelnm(const uint32_t *attr,
     char table[LNM$C_TABNAMLEN + 1], name[LNM$C_NAMLENGTH + 1];
     char vbuf[LNM_MAXVAL][LNM$C_NAMLENGTH + 1];
     const char *vals[LNM_MAXVAL];
+    uint16_t vlens[LNM_MAXVAL];
     uint32_t eattr = 0, cattr = 0;
     int tabs[4], nt, nl;
     uint8_t nv = 0;
@@ -401,6 +416,7 @@ uint32_t sys$crelnm(const uint32_t *attr,
             memcpy(vbuf[nv], it->bufaddr, it->buflen);
             vbuf[nv][it->buflen] = '\0';
             vals[nv] = vbuf[nv];
+            vlens[nv] = it->buflen;     /* the bytes as given, NUL and all */
             if (nv == 0)
                 eattr = cattr;
             nv++;
@@ -419,7 +435,7 @@ uint32_t sys$crelnm(const uint32_t *attr,
             return SS$_NORMAL;
     }
     /* A search list (LNM$FILE_DEV): the name goes into its first table. */
-    return tab_define(tabs[0], name, vals, nv, eattr, req_mode(acmode));
+    return tab_define(tabs[0], name, vals, vlens, nv, eattr, req_mode(acmode));
 }
 
 uint32_t sys$dellnm(const struct dsc$descriptor_s *tabnam,
@@ -492,6 +508,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
      * reports an empty string and no attributes (observed, rd vms-3c4). */
     {
         const char *val = req_index < h.nvals ? h.vals[req_index] : "";
+        uint16_t vlen = req_index < h.nvals ? h.vlen[req_index] : 0;
         uint32_t ra = req_index < h.nvals
                           ? (h.attributes | LNM$M_EXISTS | tab_attr(h.tab))
                           : (h.nvals == 0 ? h.attributes : 0);
@@ -504,7 +521,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
             switch (it->item_code) {
             case LNM$_STRING:
                 if (it->bufaddr) {
-                    uint16_t len = (uint16_t)strlen(val);
+                    uint16_t len = vlen;
                     if (len > it->buflen) { len = it->buflen; truncated = 1; }
                     memcpy(it->bufaddr, val, len);
                     if (it->retlen) *it->retlen = len;
@@ -512,7 +529,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
                 break;
             case LNM$_LENGTH:
                 if (it->bufaddr && it->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)it->bufaddr = (uint32_t)strlen(val);
+                    *(uint32_t *)it->bufaddr = (uint32_t)vlen;
                 if (it->retlen) *it->retlen = sizeof(uint32_t);
                 break;
             case LNM$_ATTRIBUTES:

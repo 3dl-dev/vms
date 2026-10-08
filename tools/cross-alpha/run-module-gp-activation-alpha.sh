@@ -687,10 +687,11 @@ assert_crtlfd() {
   printf '%s\n' "$region" | grep -aq "APPENDED BY THE C RTL" || { echo "  assert_crtlfd: TYPE did not show the appended line" >&2; return 1; }
   printf '%s\n' "$region" | grep -aqE "TYPE-STATUS=%X[0-9A-F]*[13579BDF]( |$)" || { echo "  assert_crtlfd: TYPE did not succeed" >&2; return 1; }
   # vms-45f: the RMS keywords given to fopen/creat/open are the attributes DCL
-  # reads back from the file headers.
-  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF\r?$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDUDF.DAT RFM=UDF" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20\r?$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDFIX.DAT RFM=FIX MRS=20" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=\.\r?$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDSLF.DAT RFM=STMLF with no record attributes" >&2; return 1; }
+  # reads back from the file headers (console lines end in CR LF: strip the CR).
+  region=$(printf '%s\n' "$region" | tr -d '\r')
+  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDUDF.DAT RFM=UDF" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDFIX.DAT RFM=FIX MRS=20" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=\.$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDSLF.DAT RFM=STMLF with no record attributes" >&2; return 1; }
   return 0
 }
 

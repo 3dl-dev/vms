@@ -287,10 +287,27 @@ struct vms_mode_args {
  * transcript is docs/oracle/vax73-privileges.md §5. OVMX does not
  * enforce GROUP anywhere, so it is not listed here.
  */
-#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
-                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
-                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
-                             VMS_PRV_M_MOUNT  | VMS_PRV_M_PHY_IO)
+/*
+ * VMS_PRV_M_ROOT_GRANT -- the privileges the executive SEEDS a CAP_SYS_ADMIN process
+ * with at registration (before any SETIDENT). It is the set that existed before the
+ * mailbox-creation privileges joined VMS_PRV_M_ENFORCED, kept as its own constant so
+ * that widening what is ENFORCED (what some vms.ko path refuses an operation over, and
+ * so what the DCL reporting surfaces may show) never silently widens what root is
+ * handed: a root process still cannot create a PERMANENT mailbox unless an identity
+ * (SYSUAF) says so.
+ */
+#define VMS_PRV_M_ROOT_GRANT (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
+                              VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
+                              VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
+                              VMS_PRV_M_MOUNT  | VMS_PRV_M_PHY_IO)
+
+/*
+ * TMPMBX and PRMMBX are enforced: vms_mbx.c mbx_priv_check() refuses $CREMBX (temporary /
+ * permanent) with SS$_NOPRIV without them, proved by test_syssvc_privilege_enforce and
+ * anchored by the mbx-tmpmbx-check-removed / mbx-prmmbx-check-removed negative controls.
+ */
+#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
+                             VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */

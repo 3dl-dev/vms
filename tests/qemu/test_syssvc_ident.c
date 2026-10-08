@@ -1619,10 +1619,10 @@ int main(void)
      * exactly this reason.
      */
     /* negctl-knockon: bind-client-no-register */
-    CHECK(strstr(outa, "\nAuthorized privileges:\n \nProcess privileges:\n") != NULL,
-          "A: the authorized-privileges AND process-privileges blocks are both "
-          "EMPTY -- none of A's granted mask (TMPMBX|NETMBX|OPER) is in "
-          "VMS_PRV_M_ENFORCED");
+    CHECK(strstr(outa, "\nAuthorized privileges:\n TMPMBX\n \nProcess privileges:\n") != NULL,
+          "A: the authorized-privileges grid shows ONLY TMPMBX -- the one bit of "
+          "A's granted mask (TMPMBX|NETMBX|OPER) that is in VMS_PRV_M_ENFORCED "
+          "(NETMBX and OPER are not)");
     CHECK(strstr(outa, "may perform operator functions") == NULL,
           "A: SHOW PROCESS/PRIVILEGES does NOT list OPER, though A's SYSUAF-style "
           "mask holds it -- OPER is stored and reported by the executive but "
@@ -1690,9 +1690,9 @@ int main(void)
      * empty grid alone could not distinguish from this).
      */
     /* negctl-knockon: bind-client-no-register */
-    CHECK(strstr(outb, "\nAuthorized privileges:\n WORLD\n \nProcess privileges:\n") != NULL,
-          "B: the authorized-privileges grid shows EXACTLY WORLD -- the one "
-          "bit of B's mask that is in VMS_PRV_M_ENFORCED -- not the whole "
+    CHECK(strstr(outb, "\nAuthorized privileges:\n TMPMBX    WORLD\n \nProcess privileges:\n") != NULL,
+          "B: the authorized-privileges grid shows EXACTLY TMPMBX and WORLD -- "
+          "the bits of B's mask that are in VMS_PRV_M_ENFORCED -- not the whole "
           "mask and not nothing");
     /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outb, "may affect other processes in the world") != NULL,
@@ -1775,10 +1775,10 @@ int main(void)
      * reasoning as identity A above.
      */
     /* negctl-knockon: bind-client-no-register */
-    CHECK(strstr(outc, "\nAuthorized privileges:\n \nProcess privileges:\n") != NULL,
-          "C: the privilege display is EMPTY -- the two privileges the "
-          "executive granted an unprivileged process (TMPMBX, NETMBX) are "
-          "both outside VMS_PRV_M_ENFORCED");
+    CHECK(strstr(outc, "\nAuthorized privileges:\n TMPMBX\n \nProcess privileges:\n") != NULL,
+          "C: the privilege display shows ONLY TMPMBX -- of the two privileges "
+          "the executive granted an unprivileged process (TMPMBX, NETMBX) only "
+          "TMPMBX is in VMS_PRV_M_ENFORCED");
     CHECK(strstr(outc, "may perform operator functions") == NULL &&
           strstr(outc, "may set any privilege bit") == NULL &&
           strstr(outc, "may bypass all object access controls") == NULL &&
@@ -1836,10 +1836,10 @@ int main(void)
         /* NARROWED TO "EMPTY", same reasoning as identity C above
          * (vms-2b8, operator ruling 2026-07-31): TMPMBX|NETMBX are both
          * outside VMS_PRV_M_ENFORCED. */
-        CHECK(strstr(outd, "\nAuthorized privileges:\n \nProcess privileges:\n") != NULL,
+        CHECK(strstr(outd, "\nAuthorized privileges:\n TMPMBX\n \nProcess privileges:\n") != NULL,
               "D: the subprocess holds exactly the unprivileged default mask, "
-              "which is empty in the display because neither of its bits "
-              "(TMPMBX, NETMBX) is in VMS_PRV_M_ENFORCED");
+              "which shows only TMPMBX because NETMBX is not in "
+              "VMS_PRV_M_ENFORCED");
         CHECK(strstr(outd, "may set any privilege bit") == NULL &&
               strstr(outd, "may change mode to kernel") == NULL &&
               strstr(outd, "may affect other processes in the world") == NULL,
@@ -1934,9 +1934,9 @@ int main(void)
          * belongs in the enforced set F$GETJPI CURPRIV walks. PHY_IO (22)
          * renders after MOUNT (17) in the ascending bit walk. */
         /* negctl-knockon: bind-client-no-register */
-        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO\"") != NULL,
+        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
-              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO), "
+              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO), "
               "not merely completes without rendering anything");
     }
 

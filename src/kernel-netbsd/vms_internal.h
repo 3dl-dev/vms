@@ -232,11 +232,15 @@
  * (vms_proctab_nb.h), SYSNAM/GRPNAM (vms_lnm_nb.h), MOUNT (above) -- all in scope
  * here, since vms_internal.h includes those twins above.
  */
+#ifndef VMS_PRV_M_ROOT_GRANT
+#define VMS_PRV_M_ROOT_GRANT (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
+                              VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
+                              VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
+                              VMS_PRV_M_MOUNT)
+#endif
 #ifndef VMS_PRV_M_ENFORCED
-#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
-                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | \
-                             VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
-                             VMS_PRV_M_MOUNT)
+#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
+                             VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be

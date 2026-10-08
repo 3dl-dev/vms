@@ -14,8 +14,8 @@
 # compiler + the 32-bit libstdc++ in cxx/p32); <joint> the shareables the
 # programs link against (DECC$SHR, LIBOTS_SHR, LIBVMS*$SHR, STARLET.a). The
 # host GCC is built at the DEC C default pointer size (32-bit), as DEC C and
-# the port's host configuration assume. Output: /w/host-gcc/{cc1,xgcc,cpp}.exe
-# and /w/host-gcc/build.log.
+# the port's host configuration assume. Output: /w/host-gcc/{cc1,xgcc,cpp}.exe;
+# progress and any failure go to stdout.
 set -euo pipefail
 T=alpha-dec-vms; B=x86_64-pc-linux-gnu
 X=/out/cxx
@@ -24,12 +24,22 @@ export OVMX_ALPHA_SYSROOT=/joint
 JOBS=${JOBS:-$(nproc)}
 P32="-nostdinc++ -isystem $X/p32/include/c++/14_2_0 -isystem $X/p32/include/c++/14_2_0/$T -L$X/p32/lib"
 O=/w/host-gcc; mkdir -p $O/src
-exec > >(tee $O/build.log) 2>&1
+trap 'echo "build-host-gcc: FAIL at line $LINENO: $BASH_COMMAND"' ERR
 cd $O/src
-fetch() { [ -f "$1" ] || wget -q --tries=3 --timeout=60 "$2/$1"; }
-fetch gmp-6.3.0.tar.xz https://ftp.gnu.org/gnu/gmp
-fetch mpfr-4.2.1.tar.xz https://ftp.gnu.org/gnu/mpfr
-fetch mpc-1.3.1.tar.gz https://ftp.gnu.org/gnu/mpc
+# The GNU mirror network first, then the master site (as build-cxx-toolchain.sh
+# fetches GCC); the checksums below pin the bytes whichever answers.
+fetch() {   # fetch <file> <gnu-subdir>
+    [ -f "$1" ] && return 0
+    local u
+    for u in "https://ftpmirror.gnu.org/gnu/$2/$1" "https://ftp.gnu.org/gnu/$2/$1"; do
+        wget -q --tries=3 --timeout=60 -O "$1.part" "$u" && mv "$1.part" "$1" && return 0
+        echo "build-host-gcc: fetch failed: $u"
+    done
+    echo "build-host-gcc: FAIL could not fetch $1"; exit 1
+}
+fetch gmp-6.3.0.tar.xz gmp
+fetch mpfr-4.2.1.tar.xz mpfr
+fetch mpc-1.3.1.tar.gz mpc
 echo "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898  gmp-6.3.0.tar.xz" | sha256sum -c -
 echo "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2  mpfr-4.2.1.tar.xz" | sha256sum -c -
 echo "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8  mpc-1.3.1.tar.gz" | sha256sum -c -

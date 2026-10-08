@@ -542,6 +542,7 @@ uint32_t (sys$brkthruw)(uint32_t efn,
     if (tl && target[tl - 1] == ':') target[--tl] = '\0';
 
     uint16_t sent = 0;
+    unsigned user_terms = 0;      /* terminals the USERNAME target is on */
     if (sndtyp == BRK$C_DEVICE) {
         if (brk_is_own_terminal(target)) {
             sent += (uint16_t)brk_write("OPA0:", text, len, carcon);
@@ -567,6 +568,7 @@ uint32_t (sys$brkthruw)(uint32_t efn,
                 size_t wl = strlen(who);
                 while (wl && who[wl - 1] == ' ') who[--wl] = '\0';
                 if (strcasecmp(who, target) != 0) continue;
+                user_terms++;
             } else if (sndtyp == BRK$C_ALLUSERS) {
                 char who[VMS_USERNAME_SIZE] = "";
                 if (!(vms_kif_terminal_getlogin(di.devnam, who, sizeof who) & 1) || !who[0])
@@ -578,7 +580,11 @@ uint32_t (sys$brkthruw)(uint32_t efn,
 
     if (iosb) {
         uint16_t *w = (uint16_t *)iosb;
-        w[0] = (uint16_t)SS$_NORMAL;
+        /* a user logged in on no terminal: the request completes with
+         * SS$_DEVOFFLINE in the IOSB, nothing sent (OpenVMS, observed
+         * BRK.NOUSER on VAX V7.3 and Alpha V8.4; vms-eb46) */
+        w[0] = (uint16_t)((sndtyp == BRK$C_USERNAME && user_terms == 0)
+                          ? SS$_DEVOFFLINE : SS$_NORMAL);
         w[1] = sent;
         w[2] = 0;
         w[3] = 0;

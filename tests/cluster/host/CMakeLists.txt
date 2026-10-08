@@ -21,6 +21,11 @@ add_library(cluster_host_codec STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_hello.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_vc.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_dlm.c
+    # rd vms-66fe: the DLM resource-name hash, determined black-box from the
+    # values real VMS puts on the wire (Baron's ruling on rd vms-dc2). Pure
+    # arithmetic over fields a caller has already parsed -- no wire offsets, no
+    # seam, no allocation -- so it builds on exactly the codec TUs' terms.
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_hash.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_mscp.c
@@ -52,6 +57,10 @@ target_include_directories(cluster_host_fixture PUBLIC
 set(OVMX_CLUSTER_FIXTURE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set(OVMX_CLUSTER_CLEANROOM_MANIFEST
     "${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+# rd vms-9c95: the DLM name-hash corpus is a TSV of real-VAX wire values and
+# lives with the other cluster fixtures one level up, not in this directory's
+# frame-specimen set.
+set(OVMX_DLM_HASH_DIR "${CMAKE_SOURCE_DIR}/tests/cluster/fixtures")
 
 function(cluster_host_test name)
     add_executable(${name} ${ARGN})
@@ -62,6 +71,7 @@ function(cluster_host_test name)
     target_compile_definitions(${name} PRIVATE
         OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
         OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+        OVMX_DLM_HASH_DIR="${OVMX_DLM_HASH_DIR}"
     )
     add_test(NAME cluster_host_${name} COMMAND ${name})
     set_tests_properties(cluster_host_${name} PROPERTIES
@@ -79,6 +89,10 @@ cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
 cluster_host_test(test_codec_hello      test_codec_hello.c)
 cluster_host_test(test_codec_vc         test_codec_vc.c)
 cluster_host_test(test_codec_dlm        test_codec_dlm.c)
+# rd vms-66fe / vms-c6e: the derived resource-name hash against 1216 values
+# real OpenVMS VAX nodes put on the wire -- derivation split AND the held-out
+# split frozen before the derivation began.
+cluster_host_test(test_dlm_hash         test_dlm_hash.c)
 
 # rd vms-5339: never-crash-a-peer fuzz of the DLM (+ CM PARAMS) wire decoders.
 # To catch an over-read INSIDE the codec, the codec itself must be sanitizer-
@@ -721,6 +735,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_dlm_scs.c
     hdr_alone_vms_dlm_ldwv.c          # FC-P4.3
     hdr_alone_vms_dlm_dir.c           # rd vms-8219
+    hdr_alone_vms_dlm_hash.c          # rd vms-66fe
     hdr_alone_vms_cnxman_csb.c        # FC-P3.6
     hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
     hdr_alone_vms_cluster_fork.c

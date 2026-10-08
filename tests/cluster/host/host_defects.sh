@@ -136,6 +136,7 @@ dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
+dlm-hash-empty-name-not-refused
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -226,6 +227,7 @@ kernel-core/vms_cnxman_phase2.c
 kernel-core/vms_cnxman_quorum.c
 kernel-core/vms_cnxman_recnx_fsm.c
 kernel-core/vms_dlm_dir.c
+kernel-core/vms_dlm_hash.c
 kernel-core/vms_dlm_ldwv.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
@@ -447,6 +449,20 @@ EOF
         require_fail) cat <<'EOF'
 counted
 every refused attempt was counted
+EOF
+                      ;;
+        esac;;
+
+    dlm-hash-empty-name-not-refused)
+        case "$_f" in
+        facility)     echo "vms_dlm_name_hash()'s honest refusal of a name the wire cannot carry (rd vms-66fe: a value nobody can compute is never invented, INV-6)";;
+        targets)      echo "kernel-core/vms_dlm_hash.c";;
+        suites_red)   echo "test_dlm_hash";;
+        isolation)    echo "isolated";;
+        why)          echo "the 'name_len == 0u' half of vms_dlm_name_hash()'s range check is dropped, so a ZERO-LENGTH resource name is hashed -- the identity block's own length byte says 1..31 -- and *out is written for an identity the caller never had. The hash itself is untouched: the 1216 captured-value rows stay green, which is the point. A hash that answers for an empty name is exactly the shape of defect that puts a confident number on the wire for a resource that does not exist, and the directory node then masters it to the sender (memory cluster-promotion-gap).";;
+        require_fail) cat <<'EOF'
+a zero-length name is refused
+a refusal writes nothing (INV-6)
 EOF
                       ;;
         esac;;
@@ -1322,6 +1338,13 @@ apply_edit() {
         # 1) -- no line anchor needed. The refusal three lines below is left
         # completely alone.
         sed -i 's|c->genesis_refused_noquorum++;|/* NEGCTL coord-genesis-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    dlm-hash-empty-name-not-refused)
+        # `name_len == 0u || ` is unique in this file; dropping just that
+        # disjunct leaves the upper bound armed, so the mutated build cannot
+        # read past the test's name buffer -- the red set stays the two
+        # assertions the manifest declares and nothing else.
+        sed -i 's|if (name_len == 0u \|\| name_len > VMS_DLM_HASH_NAME_MAX)|if (name_len > VMS_DLM_HASH_NAME_MAX) /* NEGCTL dlm-hash-empty-name-not-refused */|' "$_file";;
 
     codec-vc-zero-incarnation-not-refused)
         # `if (incarnation == 0u)` is unique in this file (the credit-return

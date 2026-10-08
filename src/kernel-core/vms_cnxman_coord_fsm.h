@@ -198,6 +198,15 @@ enum cnxman_coord_state {
 	CNXMAN_COORD_COMPLETE  = 6, /* release #12 sent to every member     */
 	CNXMAN_COORD_ABANDONED = 7, /* p. 7-41: a rejection, a lost member,
 				     * or another coordinator won the race  */
+	/*
+	 * Between the subject's commit and Phase 1 (rd vms-f297): the op-0x05
+	 * membership records are out and each one's 0x81/0x05 is awaited
+	 * before the open. A real V7.3 coordinator does exactly this -- to an
+	 * existing member op 05, its answer, THEN op 09 (lab run XF); OVMX sent
+	 * the open in the same millisecond, and a real member bugchecked
+	 * CNXMGRERR on it (lab arm PF-3).
+	 */
+	CNXMAN_COORD_RECORDS   = 8,
 	CNXMAN_COORD_STATE__COUNT
 };
 
@@ -236,6 +245,24 @@ enum cnxman_coord_verdict {
 };
 
 /* Why a REFUSE was returned -- recorded, logged and counted, never swallowed. */
+/*
+ * WHICH PHASE 1 CELL AN ADD OPEN COULD NOT FILL (rd vms-f297) -- the fact this
+ * node does not hold, named so the refusal says which one. See
+ * vms_cnxman_coord_fsm.c SS "THE PHASE 1 CELLS".
+ */
+enum cnxman_open_gap {
+	CNXMAN_OPEN_GAP_NONE     = 0,
+	CNXMAN_OPEN_GAP_SUBJECT  = 1, /* the subject's PARAMS never arrived     */
+	CNXMAN_OPEN_GAP_FOUNDER  = 2, /* founder unknown, or above 16 bits     */
+	CNXMAN_OPEN_GAP_FTIME    = 3, /* formation time unknown                */
+	CNXMAN_OPEN_GAP_SLOT     = 4, /* the cluster's slot counter unknown     */
+	CNXMAN_OPEN_GAP_RECONFIG = 5, /* a removal committed with no pair      */
+	CNXMAN_OPEN_GAP_QUORUM   = 6, /* a counted member's PARAMS missing      */
+	CNXMAN_OPEN_GAP_CLOCK    = 7, /* no VMS time source                     */
+	CNXMAN_OPEN_GAP_REBUILD  = 8, /* a weight unknown, or a MERGE (no code) */
+	CNXMAN_OPEN_GAP_CSV      = 9  /* the vector is outside what is grounded */
+};
+
 enum cnxman_coord_refusal {
 	CNXMAN_COORD_REF_NONE       = 0,
 	CNXMAN_COORD_REF_NOT_MEMBER = 1, /* this node has no learned CSID yet */
@@ -360,6 +387,8 @@ struct cnxman_coord {
 	/* ---- the census, one cell per CLUB slot ---- */
 	uint8_t part_flags[VMS_CLUB_MAX_CSB];
 	uint8_t part_step[VMS_CLUB_MAX_CSB];  /* highest step each reported   */
+	uint8_t part_recs[VMS_CLUB_MAX_CSB];  /* op-0x05 records out to each,
+					       * not yet answered (vms-f297)  */
 
 	/* ---- the CSV knowledge a coordinator needs to assign a CSID ----
 	 * Book p. 7-25: slots are handed out round-robin, slot 0 is never used,
@@ -441,6 +470,14 @@ struct cnxman_coord {
 	 */
 	uint32_t not_selected;
 	uint32_t open_ungrounded;
+	uint8_t  open_gap_last;        /* enum cnxman_open_gap of the last one */
+	uint8_t  subject_rejoined;     /* the ADD's subject held a CSID before */
+	uint8_t  open_gap_pad[2];
+	uint32_t open_withheld;        /* opens NOT sent: a cell went missing
+					* between the gate and the send      */
+	uint32_t membrec_acks;         /* 0x81/0x05 answers to our records   */
+	uint32_t rejections;           /* 0x81 answers WITHOUT the accepting
+					* 0x01: the transition was abandoned */
 	/*
 	 * THE DEPARTURE GATE (rd vms-b36). Removals this node did NOT propose
 	 * because the subject was never a committed member (p. 7-49's SELECTED

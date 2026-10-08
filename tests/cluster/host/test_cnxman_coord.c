@@ -536,7 +536,28 @@ static void drive_relay_acks(uint32_t n_members)
 		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 }
 
-/* The other members answer their commits first, then the subject (rd vms-9484). */
+/* Every op-0x05 membership record the coordinator sent is answered by its
+ * recipient with the 0x81/0x05 echo (rd vms-f297: the open waits for them). */
+static void drive_membrec_acks(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	uint32_t k, total = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+
+	for (k = 0; k < total; k++) {
+		const struct sent_frame *sf =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, k);
+		struct vms_csb *to = cnxman_club_find_csid(&g.cl.club,
+							   (vms_csid_t)sf->dst);
+
+		if (to != NULL)
+			(void)coord_feed(&g.c, f, n,
+				(int32_t)cnxman_club_csb_index(&g.cl.club, to));
+	}
+}
+
+/* The other members answer their commits first, then the subject (rd vms-9484),
+ * and then every membership record is answered. */
 static void drive_commit_ack(uint32_t n_members)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
@@ -546,6 +567,7 @@ static void drive_commit_ack(uint32_t n_members)
 	for (i = 0; i < n_members; i++)
 		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
+	drive_membrec_acks();
 }
 
 /* Every frozen participant acknowledges Phase 1 (p. 7-41). */
@@ -2116,6 +2138,273 @@ static void test_1ac_an_outranked_member_discards_silently(void)
 		 "and no transition was opened");
 }
 
+/* ==========================================================================
+ * rd vms-f297: OVMX COORDINATES AN ADMISSION A REAL VAX MEMBER TAKES PART IN
+ *
+ * The bed: this node (1027, slot 3) coordinates; VAX1 (1025, slot 1, the
+ * founder) and VAX2 (1026, slot 2) are members, and VAX2 does NOT run this
+ * implementation; the joiner (1028) asks with an op 0x02 carrying count 3.
+ * Every fact the open carries is put where the executive really keeps it --
+ * PARAMS on each CSB, the cluster facts in the CLUB as a received open left
+ * them -- and the open the foreign member receives is read back cell by cell.
+ * ========================================================================== */
+
+#define F297_FTIME  0x00bc3a8233500ee0ull
+#define F297_NOW    0x00bc3a8300000000ull
+
+static void f297_params(struct vms_csb *csb, uint16_t votes, uint16_t ev,
+			uint16_t qdsk, uint8_t ldw)
+{
+	cnxman_csb_set_params(csb, votes, ev, qdsk);
+	cnxman_csb_set_lockdirwt(csb, ldw);
+}
+
+static struct vms_csb *f297_csb(int32_t i)
+{
+	return cnxman_club_csb_at(&g.cl.club, (uint32_t)i);
+}
+
+/* Everything held; VAX2 foreign. Returns the joiner. */
+static struct vms_csb *f297_bed(void)
+{
+	struct vms_cm_open_cells learned = { 0 };
+	struct vms_csb *local, *vax2, *joiner;
+
+	bed_init(2);
+	local = cnxman_club_local(&g.cl.club);
+	f297_params(local, 1u, 1u, 1u, 1u);
+	f297_params(f297_csb(1), 1u, 1u, 1u, 1u);
+	vax2 = f297_csb(2);
+	f297_params(vax2, 1u, 3u, 1u, 1u);
+	cnxman_csb_set_swver(vax2, (const uint8_t *)"VAXVMS73", 8,
+			     g.cl.params.sw_version, g.cl.params.sw_version_len);
+	joiner = f297_csb(bed_join_csb(2));
+	f297_params(joiner, 1u, 6u, 2u, 1u);
+
+	learned.fsysid = 1025u;
+	learned.ftime = F297_FTIME;
+	learned.slot_next = 4u;
+	cnxman_club_learn_open(&g.cl.club, 0, &learned);
+	g.fake.now_vms = F297_NOW;
+	return joiner;
+}
+
+static void f297_ask(uint32_t count)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_join_request(f);
+	vms_wire_buf_t w;
+
+	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_CONFIG_COUNT, count);
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	drive_relay_acks(2);
+	drive_commit_ack(2);
+}
+
+/* The op 0x09 this node sent to `dst`, parsed; 0 when there is none. */
+static int f297_open_to(vms_csid_t dst, struct vms_cm_open *o)
+{
+	uint32_t k;
+
+	for (k = 0; k < count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD); k++) {
+		const struct sent_frame *sf =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD, k);
+
+		if (sf->dst != dst)
+			continue;
+		return vms_cm_open_parse(sf->bytes + VMS_OFF_SYSAP_BODY,
+					 VMS_CM_BODY_LEN, o) == VMS_CODEC_OK;
+	}
+	return 0;
+}
+
+static void test_f297_foreign_member_gets_every_cell(void)
+{
+	struct vms_cm_open o;
+
+	printf("\n-- rd vms-f297: the open a real VAX member receives carries "
+	       "every Phase 1 cell, from executive state --\n");
+	(void)f297_bed();
+	f297_ask(3u);
+
+	ct_check_eq_u32(g.c.open_ungrounded, 0u,
+			"the admission is driven: every fact is held");
+	ct_check(f297_open_to(VAX2_CSID, &o), "the foreign member got its op 0x09");
+	ct_check_eq_u32(o.cells.slot_next, JOIN_SLOT + 1u,
+			"[20:22] the slot after the joiner's (4 -> 5)");
+	ct_check_eq_u32(o.cells.quorum, 4u,
+			"[22:24] quorum: (CEVOTES + 2) / 2 = (6 + 2) / 2");
+	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_DIRECTORY,
+			"[24] directory rebuild: the joiner weighs 1");
+	ct_check_eq_u32(o.cells.subj_qdsk, 2u, "[26:28] the JOINER's QDSKVOTES");
+	ct_check_eq_u32(o.cells.rc_members, 0u,
+			"[28:30] no formation or removal seen: 0 0, as a real "
+			"later-joining coordinator sends");
+	ct_check(o.cells.ftime == F297_FTIME, "[32:40] the formation time held");
+	ct_check(o.cells.stamp == F297_NOW, "[40:48] this node's clock");
+	ct_check_eq_u32(o.cells.fsysid, 1025u, "[49:51] the founder, not us");
+	ct_check_eq_u32(o.cells.subj_cfg, 3u,
+			"[87:89] the count the joiner's own op 0x02 carried");
+	ct_check_eq_u32(o.cells.cevotes, 6u,
+			"[96:98] CEVOTES: the joiner's EXPECTED_VOTES 6 beats four votes");
+	ct_check_eq_u32(o.cells.csv_low, 1u, "[98:100] lowest slot");
+	ct_check_eq_u32(o.cells.csv_hwm, JOIN_SLOT - 1u,
+			"[100:102] a first admission: one below its slot");
+	ct_check_eq_u32(o.cells.csv_top, JOIN_SLOT, "[104:106] highest slot");
+	ct_check(o.cells.hold == VMS_CM_OPEN_HOLD_DELTA, "[106:114] the -900 s delta");
+	ct_check_eq_u32(g.cl.club.slot_next, JOIN_SLOT + 1u,
+			"and the CLUB's counter moved with the assignment");
+}
+
+/* rd vms-f297: a fact that goes missing BETWEEN the gate and the send (here
+ * the clock) withholds the open: the foreign member never receives one with
+ * zeros where its own coordinator writes facts. */
+static void test_f297_lost_fact_withholds_the_open(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_join_request(f);
+	struct vms_cm_open o;
+
+	printf("\n-- rd vms-f297: a fact lost after the gate withholds the open --\n");
+	(void)f297_bed();
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	g.fake.now_vms = 0u;
+	drive_relay_acks(2);
+	drive_commit_ack(2);
+	ct_check(!f297_open_to(VAX2_CSID, &o),
+		 "the foreign member is sent no open at all");
+	ct_check_eq_u32(g.c.open_withheld, 3u,
+			"withheld from every participant alike, and counted");
+}
+
+/* rd vms-f297: a zero-LOCKDIRWT joiner among nonzero members is a MERGE (book
+ * p. 7-40; the code a real coordinator writes, lab run XI). */
+static void test_f297_zero_weight_joiner_merges(void)
+{
+	struct vms_csb *joiner;
+	struct vms_cm_open o;
+
+	printf("\n-- rd vms-f297: a zero-weight joiner is a MERGE rebuild --\n");
+	joiner = f297_bed();
+	cnxman_csb_set_lockdirwt(joiner, 0u);
+	f297_ask(3u);
+	ct_check(f297_open_to(VAX2_CSID, &o), "the admission is proposed");
+	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_MERGE,
+			"[24] = 1, the merge rebuild");
+}
+
+/* rd vms-f297: the open waits for every membership record's answer, as a real
+ * V7.3 coordinator does (op 05, its 0x81/0x05, THEN op 09 -- lab run XF); sent
+ * in the same instant, a real member bugchecked CNXMGRERR (lab arm PF-3). */
+static void test_f297_open_waits_for_the_records(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	uint32_t i;
+
+	printf("\n-- rd vms-f297: no open until every membership record is "
+	       "answered --\n");
+	bed_init(2);
+	(void)coord_feed(&g.c, f, mk_join_request(f), bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	for (i = 0; i < 2u; i++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC) > 0u,
+		 "the membership records went out");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD), 0u,
+			"and NO open yet: their answers come first");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_RECORDS,
+		 "the coordinator waits in RECORDS");
+	drive_membrec_acks();
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD) > 0u,
+		 "every record answered: the open goes out");
+	ct_check_eq_u32(g.c.membrec_acks,
+			count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC),
+			"each 0x81/0x05 consumed and counted, none unrouted");
+}
+
+/* rd vms-f297: a member that answers a membership record WITHOUT the
+ * accepting 0x01 has rejected it; the transition is abandoned and NO open is
+ * sent (book p. 7-41). A real VAX that answered 00 bugchecked CNXMGRERR on the
+ * open an OVMX coordinator sent anyway (lab arms PF-3, PK-1). */
+static void test_f297_a_rejected_record_abandons(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n, k, total;
+	vms_wire_buf_t w;
+
+	printf("\n-- rd vms-f297: a rejected membership record abandons the "
+	       "transition, and no open follows --\n");
+	(void)f297_bed();
+	n = mk_join_request(f);
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	for (k = 0; k < 2u; k++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(k + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+
+	/* Every other record is accepted; VAX2's -- the last one -- is not. */
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	total = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	for (k = 0; k < total; k++) {
+		const struct sent_frame *sf =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, k);
+
+		if (sf->dst != VAX2_CSID)
+			(void)coord_feed(&g.c, f, n,
+				(int32_t)cnxman_club_csb_index(&g.cl.club,
+					cnxman_club_find_csid(&g.cl.club,
+						(vms_csid_t)sf->dst)));
+	}
+	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
+	vms_wire_put_u8(&w, VMS_OFF_CM_RESP_MARK, 0x00);   /* status 00 */
+	(void)coord_feed(&g.c, f, n, 2);                    /* VAX2 */
+	total = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD);
+	ct_check_eq_u32(total, 0u, "no open goes out after a rejection");
+	ct_check_eq_u32(g.c.rejections, 1u, "the rejection is counted");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_ABANDONED,
+		 "and the transition is abandoned");
+	ct_check(strstr(g.fake.last_log, "rejected the proposed state") != NULL,
+		 "and said");
+}
+
+static void test_f297_each_missing_fact_refuses(void)
+{
+	static const struct { const char *what; int gap; } k[] = {
+		{ "no founder learned",          CNXMAN_OPEN_GAP_FOUNDER },
+		{ "no formation time",           CNXMAN_OPEN_GAP_FTIME },
+		{ "no clock",                    CNXMAN_OPEN_GAP_CLOCK },
+		{ "a joiner's weight never learned", CNXMAN_OPEN_GAP_REBUILD },
+		{ "the joiner's PARAMS missing", CNXMAN_OPEN_GAP_SUBJECT },
+	};
+	uint32_t i;
+
+	printf("\n-- rd vms-f297: a fact the open needs and this node lacks "
+	       "refuses the admission, naming the fact --\n");
+	for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+		struct vms_csb *joiner = f297_bed();
+
+		switch (k[i].gap) {
+		case CNXMAN_OPEN_GAP_FOUNDER: g.cl.club.fsysid_valid = 0u; break;
+		case CNXMAN_OPEN_GAP_FTIME:   g.cl.club.ftime_valid = 0u; break;
+		case CNXMAN_OPEN_GAP_CLOCK:   g.fake.now_vms = 0u; break;
+		case CNXMAN_OPEN_GAP_REBUILD: joiner->lockdirwt_valid = 0u; break;
+		default:                      joiner->params_valid = 0u; break;
+		}
+		f297_ask(3u);
+		printf("   %s\n", k[i].what);
+		ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD),
+				0u, "  no open toward the foreign member");
+		ct_check_eq_u32(g.c.open_ungrounded, 1u, "  the refusal is counted");
+		ct_check_eq_u32(g.c.open_gap_last, (uint32_t)k[i].gap,
+				"  and names the missing fact");
+	}
+}
+
 /*
  * GATE 2 -- THIS NODE DOES NOT OPEN A TRANSITION IT CANNOT BUILD.
  *
@@ -2165,7 +2454,7 @@ static void test_1ac_no_open_for_a_system_that_is_not_ours(void)
 	ct_check_eq_u32(g.c.last_refusal,
 			(uint32_t)CNXMAN_COORD_REF_OPEN_UNGROUNDED,
 			"...and named");
-	ct_check(strstr(g.fake.last_log, "not grounded for it") != NULL,
+	ct_check(strstr(g.fake.last_log, "does not hold every fact") != NULL,
 		 "...and SAID, because a stranded admission is a gap to close");
 	ct_check(!coord_is_active_for_test(&g.c),
 		 "and no transition was opened");
@@ -2229,6 +2518,12 @@ int main(void)
 	test_1ac_membership_records_carry_the_epoch();
 	test_1ac_an_outranked_member_discards_silently();
 	test_1ac_no_open_for_a_system_that_is_not_ours();
+	test_f297_foreign_member_gets_every_cell();
+	test_f297_each_missing_fact_refuses();
+	test_f297_a_rejected_record_abandons();
+	test_f297_open_waits_for_the_records();
+	test_f297_zero_weight_joiner_merges();
+	test_f297_lost_fact_withholds_the_open();
 
 	return ct_summary("test_cnxman_coord");
 }

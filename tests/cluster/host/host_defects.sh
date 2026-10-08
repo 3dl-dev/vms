@@ -119,9 +119,31 @@
 #   coord-admission-not-selected-disarmed vms_cnxman_coord_fsm.c
 #   coord-admission-open-gate-disarmed    vms_cnxman_coord_fsm.c
 #
+# GROWN (vms-f297) with the Phase 1 cells an OVMX coordinator now carries to a
+# real VAX member, and the cluster facts behind them:
+#
+#   coord-open-cells-not-attached         vms_cnxman_coord_fsm.c
+#   coord-open-withhold-disarmed          vms_cnxman_coord_fsm.c
+#   club-open-facts-unlearned             vms_cnxman_barrier_fsm.c
+#   removal-pair-not-rederived            vms_cnxman_phase2.c
+#   join-swallows-step-reports            vms_cnxman_join_fsm.c
+#   coord-step-ack-unmarked               vms_cluster_codec_cm.c
+#   coord-open-skips-records-wait         vms_cnxman_coord_fsm.c
+#   coord-ignores-rejection               vms_cnxman_coord_fsm.c
+#   join-asks-before-telling-members      vms_cnxman_join_fsm.c
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+coord-open-cells-not-attached
+coord-open-withhold-disarmed
+club-open-facts-unlearned
+removal-pair-not-rederived
+join-swallows-step-reports
+coord-step-ack-unmarked
+coord-open-skips-records-wait
+coord-ignores-rejection
+join-asks-before-telling-members
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1277,18 +1299,173 @@ EOF
         ;;
         esac;;
 
-    coord-admission-open-gate-disarmed)
+    coord-open-cells-not-attached)
         case "$_f" in
-        facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager this executive cannot build one for (rd vms-1ac: a real op-0x09 carries 28 bytes OVMX has no derivation for)";;
+        facility)     echo "the Phase 1 cells of an ADD open (rd vms-f297): founder, formation time, slot counter, quorum, rebuild type, the subject's QDSKVOTES and op-0x02 count, the CSV block -- every one from executive state";;
         targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
-        why)          echo "cnxman_coord_select()'s coord_open_is_grounded_for() call is disarmed with '0 &&', so this node opens a class-0x02 transition toward a system that has NOT proved it runs this implementation -- putting an op-0x09 with 28 zero bytes where a real coordinator writes times and identities in front of a foreign connection manager. The measured consequence is a fatal CNXMGRERR on a real OpenVMS VAX V7.3 1.3 ms later.";;
+        why)          echo "coord_send_open() never attaches the cells it filled, so the open a real VAX member would receive is the zero-celled one that bugchecked a real V7.3 (rd vms-1ac) -- and the send-time withhold then keeps it off the wire, so an admission a real VAX takes part in never completes.";;
+        require_fail) cat <<'EOF'
+the foreign member got its op 0x09
+[20:22] the slot after the joiner's (4 -> 5)
+[22:24] quorum: (CEVOTES + 2) / 2 = (6 + 2) / 2
+[24] directory rebuild: the joiner weighs 1
+[26:28] the JOINER's QDSKVOTES
+[32:40] the formation time held
+[40:48] this node's clock
+[49:51] the founder, not us
+[87:89] the count the joiner's own op 0x02 carried
+[96:98] CEVOTES: the joiner's EXPECTED_VOTES 6 beats four votes
+[100:102] a first admission: one below its slot
+[104:106] highest slot
+[106:114] the -900 s delta
+the admission is proposed
+[24] = 1, the merge rebuild
+EOF
+                      ;;
+        esac;;
+
+    coord-open-withhold-disarmed)
+        case "$_f" in
+        facility)     echo "the send-time withhold (rd vms-f297): an open whose cells cannot be filled is never sent to a cluster with a foreign member";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "a fact lost between the gate and the send (the clock, here) no longer withholds the open: a real VAX member receives an op 0x09 with zeros where its own coordinator writes facts -- the frame after which a real V7.3 bugchecked CNXMGRERR (rd vms-1ac).";;
+        require_fail) cat <<'EOF'
+the foreign member is sent no open at all
+withheld from every participant alike, and counted
+EOF
+                      ;;
+        esac;;
+
+    club-open-facts-unlearned)
+        case "$_f" in
+        facility)     echo "a participant keeps the cluster facts a received open carries (rd vms-f297): founder, formation time, slot counter";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_open() no longer records them, so an OVMX member admitted by a real VAX holds no founder or formation time and can never coordinate the next admission -- the vms-f297 stall (the VAX defers to the higher-numbered OVMX member, which refuses) comes back for good.";;
+        require_fail) cat <<'EOF'
+the founder's SCSSYSTEMID is kept
+and the formation time
+and the slot counter
+EOF
+                      ;;
+        esac;;
+
+    coord-ignores-rejection)
+        case "$_f" in
+        facility)     echo "a 0x81 answer without the accepting 0x01 is a rejection, and the coordinator abandons the transition (book p. 7-41; rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "a member's status-00 answer to a membership record is taken as an acknowledgement and the open follows it -- the exact sequence after which a real OpenVMS VAX V7.3 bugchecked CNXMGRERR on lab arms PF-3 and PK-1.";;
+        require_fail) cat <<'EOF'
+no open goes out after a rejection
+the rejection is counted
+and the transition is abandoned
+and said
+EOF
+                      ;;
+        esac;;
+
+    join-asks-before-telling-members)
+        case "$_f" in
+        facility)     echo "a joiner tells every connected member who it is before it asks for admission, as a real V7.3 joiner does (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out while a connected member has not been sent this node's MODEL/PARAMS: on lab arm PK-1 the coordinator's record about OVMXB reached a real VAX holding no PARAMS for it, which answered status 00 and bugchecked CNXMGRERR on the open.";;
+        require_fail) cat <<'EOF'
+the request is held while the other member is owed this node's identity
+and the hold is counted
+...which goes out to it at once
+... and nothing was re-issued
+every beat inside the window is counted, and none of them asks the cluster anything
+five beats after the abort is not yet a decline
+five beats of silence is not yet a decline
+nor one second before it elapses
+the back-off is not re-armed by a start that ran
+the other member hears only who this node is, never a request
+the other member is never asked: ONE op-0x02 per attempt, and it was answered -- it heard only who this node is
+EOF
+                      ;;
+        esac;;
+
+    coord-open-skips-records-wait)
+        case "$_f" in
+        facility)     echo "the coordinator's Phase 1 open waits for every op-0x05 membership record's 0x81/0x05 answer, as a real V7.3 coordinator's does (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_enter_open() sends the open in the same instant as the records: a real OpenVMS VAX V7.3 member, sent op 05 and op 09 together by an OVMX coordinator, bugchecked CNXMGRERR (lab arm PF-3), where its own coordinator always sends op 05, takes the answer, then op 09 (lab run XF).";;
+        require_fail) cat <<'EOF'
+and NO open yet: their answers come first
+the coordinator waits in RECORDS
+each 0x81/0x05 consumed and counted, none unrouted
+EOF
+                      ;;
+        esac;;
+
+    coord-step-ack-unmarked)
+        case "$_f" in
+        facility)     echo "the coordinator's 0x81/0x0b step acknowledgement carries 10 <class> 01 at body[16:19], as every real one does (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_step_ack_build() drops the response marker at body[18]: the ack goes out 10 02 00, which OVMX's own participant never reads -- and a real OpenVMS VAX V7.3 member, sent such an ack by an OVMX coordinator, re-sent its step and bugchecked CNXMGRERR (lab arm PF-2).";;
+        require_fail) cat <<'EOF'
+  byte-identical to the real ack after the stamp
+  body[18] = the response marker
+EOF
+                      ;;
+        esac;;
+
+    join-swallows-step-reports)
+        case "$_f" in
+        facility)     echo "join_forward() hands a member's op-0x0b step report on to this node's coordinator (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the join FSM swallows every op-0x0b in [MEMBER], so a node that was itself admitted and then coordinates never sees its participants' step reports: the real VAX member of lab arm PF-1 reported step 1 and was never released.";;
+        require_fail) cat <<'EOF'
+a step REPORT is not the join's or the participant's: it is handed on
+and is not counted as delivered to the participant
+EOF
+                      ;;
+        esac;;
+
+    removal-pair-not-rederived)
+        case "$_f" in
+        facility)     echo "a committed removal re-derives the last-reconfiguration (members, votes) pair every later open carries (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_phase2.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_phase2_commit() skips cnxman_club_note_reconfig(), so after a removal this node's next ADD open still carries the pair from before it -- a different number from the one a real V7.3 member puts there (KR-1: 01 01 before the removal, 02 02 after).";;
+        require_fail) cat <<'EOF'
+the pair is held
+its members: the two the removal keeps
+its votes: theirs, 2 + 1
+EOF
+                      ;;
+        esac;;
+
+    coord-admission-open-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager while this executive lacks a fact the open carries (rd vms-1ac, vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_admit_foreign()'s gap test is disarmed with '1 ||', so this node opens a class-0x02 transition toward a system that does not run this implementation even when it holds no founder, formation time or clock -- the relay and commit go out, and only the send-time withhold stands between a real VAX and the zero-celled op 0x09 after which a real OpenVMS VAX V7.3 bugchecked CNXMGRERR 1.3 ms later.";;
         require_fail) cat <<'EOF'
 nothing is originated: no relay, no commit, and above all no op-0x09 this node cannot build faithfully
 the refusal is COUNTED
 ...and named
 ...and SAID, because a stranded admission is a gap to close
+  the refusal is counted
+  and names the missing fact
 and no transition was opened
 EOF
                       ;;
@@ -1520,7 +1697,35 @@ apply_edit() {
         sed -i 's|if (coord_outranked_for_admission(c, subject_csb)) {|if (0 \&\& coord_outranked_for_admission(c, subject_csb)) { /* NEGCTL coord-admission-not-selected-disarmed */|' "$_file";;
 
     coord-admission-open-gate-disarmed)
-        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+        # `if (gap == CNXMAN_OPEN_GAP_NONE)` is unique: coord_admit_foreign().
+        sed -i 's|if (gap == CNXMAN_OPEN_GAP_NONE)$|if (1 \|\| gap == CNXMAN_OPEN_GAP_NONE) /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    coord-open-cells-not-attached)
+        sed -i 's|^\t\tcp = \&cells;$|\t\tcp = NULL; /* NEGCTL coord-open-cells-not-attached */|' "$_file";;
+
+    coord-open-withhold-disarmed)
+        sed -i 's|if (cp == NULL \&\& c->tr_class == VMS_CM_CLASS_ADD \&\&|if (0 \&\& cp == NULL \&\& c->tr_class == VMS_CM_CLASS_ADD \&\& /* NEGCTL coord-open-withhold-disarmed */|' "$_file";;
+
+    club-open-facts-unlearned)
+        sed -i 's|^\tcnxman_club_learn_open(\&b->cl->club,$|\tif (0) /* NEGCTL club-open-facts-unlearned */ cnxman_club_learn_open(\&b->cl->club,|' "$_file";;
+
+    coord-ignores-rejection)
+        sed -i 's|^\tif (vms_cm_response_accepted(m->body, m->len))$|\tif (1 \|\| vms_cm_response_accepted(m->body, m->len)) /* NEGCTL coord-ignores-rejection */|' "$_file";;
+
+    join-asks-before-telling-members)
+        sed -i 's|^\tif (join_peer_ident_owed(j))$|\tif (0 \&\& join_peer_ident_owed(j)) /* NEGCTL join-asks-before-telling-members */|' "$_file";;
+
+    coord-open-skips-records-wait)
+        sed -i 's|^\tif (coord_records_outstanding(c) != 0u) {$|\tif (0 \&\& coord_records_outstanding(c) != 0u) { /* NEGCTL coord-open-skips-records-wait */|' "$_file";;
+
+    coord-step-ack-unmarked)
+        sed -i 's|^\tvms_wire_put_u8(\&w, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY, 0x01u);$|\t/* NEGCTL coord-step-ack-unmarked */|' "$_file";;
+
+    join-swallows-step-reports)
+        sed -i 's|^\t    CNXMAN_BARRIER_RX_NOT_MINE)$|\t    CNXMAN_BARRIER_RX_NOT_MINE \&\& 0) /* NEGCTL join-swallows-step-reports */|' "$_file";;
+
+    removal-pair-not-rederived)
+        sed -i 's|^\tif (in->reconfig)$|\tif (0 \&\& in->reconfig) /* NEGCTL removal-pair-not-rederived */|' "$_file";;
 
     pe-receive-hold-disarmed)
         # `if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||` is unique.

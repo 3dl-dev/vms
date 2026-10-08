@@ -312,6 +312,10 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 	 * own membership task 4 did NOT establish: the callee refuses outright.
 	 */
 	(void)cnxman_quorum_member_recompute(cl);
+	/* A removal re-derives the last-reconfiguration pair every later open
+	 * carries (rd vms-f297): from the membership just committed. */
+	if (in->reconfig)
+		cnxman_club_note_reconfig(club);
 
 	phase2_commit_ldwv(club, ops);
 

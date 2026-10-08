@@ -116,6 +116,73 @@ int vms_cm_open_carries_nodemap(uint8_t opcode)
 	return opcode == VMS_CM_OP_XITION_ADD || opcode == VMS_CM_OP_XITION_REM;
 }
 
+/* The wire's two halves of a VMS quadword, low longword first. */
+static uint64_t cm_get_le64(vms_wire_view_t *v, uint32_t off)
+{
+	uint64_t lo = vms_wire_get_le32(v, off);
+	uint64_t hi = vms_wire_get_le32(v, off + 4u);
+
+	return lo | (hi << 32);
+}
+
+static void cm_put_le64(vms_wire_buf_t *w, uint32_t off, uint64_t val)
+{
+	vms_wire_put_le32(w, off, (uint32_t)(val & 0xffffffffu));
+	vms_wire_put_le32(w, off + 4u, (uint32_t)(val >> 32));
+}
+
+/* The open cells (VMS_OFB_CM_OPEN_*, rd vms-f297) -- read only from an open
+ * that carries a nodemap, whose fixed body reaches past all of them. */
+static void cm_open_cells_get(vms_wire_view_t *v, struct vms_cm_open_cells *c)
+{
+	c->slot_next  = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_SLOT_NEXT);
+	c->quorum     = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_QUORUM);
+	c->rebuild    = vms_wire_get_u8(v, VMS_OFB_CM_OPEN_REBUILD);
+	c->subj_qdsk  = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_SUBJ_QDSK);
+	c->rc_members = vms_wire_get_u8(v, VMS_OFB_CM_OPEN_RC_MEMBERS);
+	c->rc_votes   = vms_wire_get_u8(v, VMS_OFB_CM_OPEN_RC_VOTES);
+	c->pad        = 0u;
+	c->ftime      = cm_get_le64(v, VMS_OFB_CM_OPEN_FTIME);
+	c->stamp      = cm_get_le64(v, VMS_OFB_CM_OPEN_STAMP);
+	c->fsysid     = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_FSYSID);
+	c->subj_cfg   = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_SUBJ_CFG);
+	c->cevotes    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CEVOTES);
+	c->csv_low    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CSV_LOW);
+	c->csv_hwm    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CSV_HWM2);
+	c->csv_top    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CSV_TOP);
+	c->pad2       = 0u;
+	c->hold       = cm_get_le64(v, VMS_OFB_CM_OPEN_HOLD);
+}
+
+/* The CSV block (VMS_OFB_CM_OPEN_SUBJ_CFG .. _HOLD): the high-water slot is
+ * written in all three places a real open carries it. */
+static void cm_open_csv_put(vms_wire_buf_t *w, const struct vms_cm_open_cells *c)
+{
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_SUBJ_CFG, c->subj_cfg);
+	vms_wire_put_u8(w, VMS_OFB_CM_OPEN_CSV_HWM1, (uint8_t)c->csv_hwm);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CEVOTES, c->cevotes);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_LOW, c->csv_low);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_HWM2, c->csv_hwm);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_HWM3, c->csv_hwm);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_TOP, c->csv_top);
+	cm_put_le64(w, VMS_OFB_CM_OPEN_HOLD, c->hold);
+}
+
+static void cm_open_cells_put(vms_wire_buf_t *w,
+			      const struct vms_cm_open_cells *c)
+{
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_SLOT_NEXT, c->slot_next);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_QUORUM, c->quorum);
+	vms_wire_put_u8(w, VMS_OFB_CM_OPEN_REBUILD, c->rebuild);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_SUBJ_QDSK, c->subj_qdsk);
+	vms_wire_put_u8(w, VMS_OFB_CM_OPEN_RC_MEMBERS, c->rc_members);
+	vms_wire_put_u8(w, VMS_OFB_CM_OPEN_RC_VOTES, c->rc_votes);
+	cm_put_le64(w, VMS_OFB_CM_OPEN_FTIME, c->ftime);
+	cm_put_le64(w, VMS_OFB_CM_OPEN_STAMP, c->stamp);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_FSYSID, c->fsysid);
+	cm_open_csv_put(w, c);
+}
+
 vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out)
 {
@@ -136,6 +203,13 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 	out->bitmap = out->has_bitmap
 			      ? vms_wire_get_u8(&v, VMS_OFB_CM_BITMAP)
 			      : 0;
+	if (out->has_bitmap) {
+		cm_open_cells_get(&v, &out->cells);
+	} else {
+		struct vms_cm_open_cells none = { 0 };
+
+		out->cells = none;
+	}
 
 	if (!vms_wire_view_ok(&v))
 		return v.err;
@@ -207,11 +281,50 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 	out->votes    = vms_wire_get_le16(&v, VMS_OFB_CM_VOTES);
 	out->members  = vms_wire_get_le16(&v, VMS_OFB_CM_MEMBERS);
 	out->lockdirwt = vms_wire_get_le16(&v, VMS_OFB_CM_LOCKDIRWT);
+	out->quorum   = vms_wire_get_le16(&v, VMS_OFB_CM_PQUORUM);
+	out->qdskvotes = vms_wire_get_le16(&v, VMS_OFB_CM_QDSKVOTES);
+	out->expected_votes = vms_wire_get_le16(&v, VMS_OFB_CM_PEXPVOTES);
 	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
 	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
 	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
 			   out->version);
 
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	return VMS_CODEC_OK;
+}
+
+int vms_cm_response_accepted(const uint8_t *body, uint32_t len)
+{
+	struct vms_cm_envelope env;
+	vms_wire_view_t v;
+	uint8_t mark;
+
+	if (vms_cm_envelope_parse(body, len, &env) != VMS_CODEC_OK ||
+	    !vms_wire_is_response(env.category))
+		return 0;
+	vms_wire_view_init(&v, body, len);
+	mark = vms_wire_get_u8(&v, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY);
+	return vms_wire_view_ok(&v) && mark == 0x01u;
+}
+
+vms_codec_status_t vms_cm_config_parse(const uint8_t *body, uint32_t len,
+				       struct vms_cm_config *out)
+{
+	vms_wire_view_t v;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_cm_config *)0)
+		return VMS_CODEC_E_INVAL;
+	st = vms_cm_envelope_parse(body, len, &out->env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (out->env.category != VMS_CM_CAT_CONFIG ||
+	    out->env.opcode != VMS_CM_OP_CONFIG)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	out->count = vms_wire_get_le32(&v, VMS_OFB_CM_CONFIG_COUNT);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	return VMS_CODEC_OK;
@@ -678,6 +791,7 @@ static uint8_t cm_open_opcode_of_class(uint8_t cls)
 
 vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 					    uint8_t bitmap, int has_bitmap,
+					    const struct vms_cm_open_cells *cells,
 					    uint8_t *out_body, uint32_t cap,
 					    uint32_t *written)
 {
@@ -693,6 +807,11 @@ vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 	 * cannot believe it published a membership map that never went out. */
 	if (has_bitmap && !vms_cm_open_carries_nodemap(opcode))
 		return VMS_CODEC_E_INVAL;
+	/* The cells ride only in an open that carries a nodemap, and the
+	 * founder's id has no grounded byte above the low 16 bits. */
+	if (cells != (const struct vms_cm_open_cells *)0 &&
+	    !vms_cm_open_carries_nodemap(opcode))
+		return VMS_CODEC_E_INVAL;
 
 	st = cm_originate_begin(opcode, out_body, cap, &w);
 	if (st != VMS_CODEC_OK)
@@ -702,6 +821,8 @@ vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 	cm_put_tag(&w, VMS_CM_ROLE_XITION, tr_class);
 	if (has_bitmap)
 		vms_wire_put_u8(&w, VMS_OFB_CM_BITMAP, bitmap);
+	if (cells != (const struct vms_cm_open_cells *)0)
+		cm_open_cells_put(&w, cells);
 
 	return cm_originate_end(&w, written);
 }
@@ -810,7 +931,7 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
 }
 
 vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
-					 uint32_t req_len,
+					 uint32_t req_len, uint8_t tr_class,
 					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written)
 {
@@ -821,6 +942,9 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 
 	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
+	if (cm_open_opcode_of_class(tr_class) == 0u &&
+	    tr_class != VMS_CM_CLASS_FORM)
+		return VMS_CODEC_E_CLASS;
 
 	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
@@ -847,6 +971,10 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 	 * follows sec 4(r)'s 26-capture census rather than the step-index
 	 * reading of the same offset, and why it is safe either way. */
 	vms_wire_put_u8(&w, VMS_OFB_CM_ROLE, VMS_CM_ROLE_RELAY);
+	/* ...and the transition class and the response marker (rd vms-f297):
+	 * every real 0x81/0x0b in the library carries 10 <class> 01 here. */
+	vms_wire_put_u8(&w, VMS_OFB_CM_CLASS, tr_class);
+	vms_wire_put_u8(&w, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY, 0x01u);
 
 	return cm_originate_end(&w, written);
 }

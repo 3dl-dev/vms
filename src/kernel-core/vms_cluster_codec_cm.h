@@ -178,6 +178,114 @@ extern "C" {
 #define VMS_OFF_CM_BITMAP_SPAN  (VMS_OFF_SYSAP_BODY + 52) /* abs 124..131      */
 #define VMS_CM_BITMAP_SPAN_LEN  8u   /* body[52:60]                            */
 #define VMS_CM_BITMAP_SPAN_IDX  3u   /* index of body[55] WITHIN the span      */
+
+/*
+ * THE TRANSITION-OPEN CELLS (rd vms-f297) -- Davis p. 7-40's "proposed quorum
+ * ... quorum-disk votes, foundation timestamp, founder's SCSSYSTEMID", placed
+ * by ONE-VARIABLE controlled reconfiguration on a private three-node OpenVMS
+ * VAX V7.3 cluster and checked against every op-0x07/0x08/0x09 in the capture
+ * library (tests/lab/captures/vms-f297-open-cells-20261008/README.md). Each
+ * offset is a field this executive HOLDS; none is copied from a received open.
+ *
+ *   [20:22] SLOT_NEXT  the CSV slot the cluster will assign NEXT: the subject's
+ *                      own new slot + 1 on an ADD, unchanged by a REMOVE (KR-1:
+ *                      slots 2,3 -> 3,4; removal 4; readmission at slot 4 -> 5)
+ *   [22:24] QUORUM     the post-transition quorum, (max(EV, votes) + 2) / 2 --
+ *                      the decisive run put 4 votes against EXPECTED_VOTES 3 and
+ *                      read 3, not 2 (7/7 runs)
+ *   [24]    REBUILD    the book's rebuild type (p. 7-40): 4 = full, on every
+ *                      FORMATION open (p. 7-35: FORM rebuilds in full); 3 =
+ *                      directory, on every ADD and REMOVE with a nonzero-
+ *                      LOCKDIRWT joiner/leaver or all-zero weights; 1 = merge,
+ *                      the zero-weight joiner among nonzero ones (XI)
+ *   [26:28] SUBJ_QDSK  the SUBJECT's QDSKVOTES as its own PARAMS advertised it
+ *                      (SET QDSKVOTES 2 -> 2, 0 -> 0, default -> 1; and an
+ *                      OVMX joiner advertising 1 at PARAMS body[24:26] flipped a
+ *                      real coordinator's 0000 to 0100, lab arm FX3)
+ *   [28]    RC_MEMBERS the member count the LAST formation or removal left --
+ *                      popcount(body[55]) of every op 07/08 in the library --
+ *   [29]    RC_VOTES   ...and its total votes. An ADD carries the pair, never
+ *                      sets it; a coordinator that has seen neither sends 0 0
+ *                      (a later joiner coordinating: XA/XE/XF ep4)
+ *   [32:40] FTIME      when the cluster was formed (equal to the founder's own
+ *                      PARAMS body[28:36] in every capture holding both)
+ *   [40:48] STAMP      the coordinator's VMS time as it opens
+ *   [49:51] FSYSID     the FOUNDING system's SCSSYSTEMID, low 16 bits: a later
+ *                      joiner coordinating carries the founder's (XA/XE/XF ep4),
+ *                      never its own. The bytes above it run into the nodemap
+ *                      span; no specimen has an SCSSYSTEMID above 0xffff, so a
+ *                      founder that needs them is REFUSED, never truncated.
+ *
+ * ...and the CSV block further down the same body (Davis p. 7-39/7-40: the
+ * proposal also describes the cluster system vector the transition leaves):
+ *
+ *   [87:89] SUBJ_CFG   the count the SUBJECT's own op-0x02 carried at its
+ *                      body[36:40] (2, 3, 4 from real joiners -- XA/XG 2, XA
+ *                      ep4 3; 0 from every OVMX joiner, whose op 0x02 is zero)
+ *   [92]    CSV_HWM    == [100:102] == [102:104]: the highest CSV slot already
+ *                      in the vector -- the subject's new slot when it is a
+ *                      system the cluster has held before (KR-1, fault-f1,
+ *                      oracle-return, XG), one below it on a first admission
+ *   [96:98] CEVOTES    the proposed CEVOTES, max(EXPECTED_VOTES, votes): two
+ *                      votes against an EXPECTED_VOTES of 3 read 3 (XI); four
+ *                      against 3 read 4 (XD)
+ *   [98:100] CSV_LOW   the lowest slot in the post-transition vector (1 in
+ *                      every specimen: the founder's)
+ *   [104:106] CSV_TOP  the highest slot in the post-transition nodemap
+ *   [106:114] HOLD     a VMS DELTA time, -900 s, identical in every op 07/08/09
+ *                      from every VAX installation in the library
+ *
+ * body[25], [91] and [114:132] are NOT cells: each differs between two
+ * recipients of the SAME transition (25: 00/3a; 91: 00/7f; 114+: OPCOM text
+ * in one) -- another implementation's uninitialised memory (spec sec 4(p):
+ * send zeros).
+ */
+#define VMS_OFB_CM_OPEN_SLOT_NEXT   20u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_QUORUM      22u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_REBUILD     24u   /* u8     */
+#define VMS_OFB_CM_OPEN_SUBJ_QDSK   26u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_RC_MEMBERS  28u   /* u8     */
+#define VMS_OFB_CM_OPEN_RC_VOTES    29u   /* u8     */
+#define VMS_OFB_CM_OPEN_FTIME       32u   /* LE u64 */
+#define VMS_OFB_CM_OPEN_STAMP       40u   /* LE u64 */
+#define VMS_OFB_CM_OPEN_FSYSID      49u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_SUBJ_CFG    87u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_CSV_HWM1    92u   /* u8     */
+#define VMS_OFB_CM_OPEN_CEVOTES     96u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_CSV_LOW     98u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_CSV_HWM2   100u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_CSV_HWM3   102u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_CSV_TOP    104u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_HOLD       106u   /* LE u64 */
+#define VMS_CM_OPEN_FSYSID_MAX      0xffffu
+/* -900 s as a VMS delta time (100 ns units, negative) */
+#define VMS_CM_OPEN_HOLD_DELTA      0xffffffde78ee6000ull
+/* Book p. 7-40 rebuild types, as the open's byte carries them. Only the codes
+ * a capture holds are named; a transition that would need another is not
+ * proposed until a capture grounds its code. */
+#define VMS_CM_REBUILD_FULL         4u    /* every op 0x07 (FORM)          */
+#define VMS_CM_REBUILD_DIRECTORY    3u    /* every op 0x09 / op 0x08       */
+#define VMS_CM_REBUILD_MERGE        1u    /* a zero-LOCKDIRWT joiner among
+					   * nonzero ones (lab run XI)     */
+
+/*
+ * PARAMS (cat 0x01 op 0x01) body[20:22] and body[24:26] (rd vms-f297), placed
+ * by the same controlled reconfiguration: [20:22] is the quorum the sender's
+ * own EXPECTED_VOTES gives, (EV + 2) / 2 (EV 2 -> 2, EV 3 -> 2, EV 1 -> 1), and
+ * [24:26] is the sender's SYSGEN QDSKVOTES.
+ */
+#define VMS_OFF_CM_PQUORUM    (VMS_OFF_SYSAP_BODY + 20)  /* abs 92, LE u16 */
+#define VMS_OFF_CM_QDSKVOTES  (VMS_OFF_SYSAP_BODY + 24)  /* abs 96, LE u16 */
+#define VMS_OFB_CM_PQUORUM    (VMS_OFF_CM_PQUORUM    - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_QDSKVOTES  (VMS_OFF_CM_QDSKVOTES  - VMS_OFF_SYSAP_BODY)
+/*
+ * ...and body[76:80], the word earlier captures could only call "param_f2,
+ * observed constant 0x01": it is the sender's SYSGEN EXPECTED_VOTES (rd
+ * vms-f297). Every capture before the one-variable runs held EV 1; booted with
+ * SYSBOOT> SET EXPECTED_VOTES 1/2/3, 21 of 21 PARAMS from six runs carry 1/2/3
+ * here (XA: three systems at EV 1, 2, 3 -> 01, 02, 03).
+ */
+#define VMS_OFB_CM_PEXPVOTES  VMS_OFB_CM_PARAM_F2
 #define VMS_OFF_CM_RESP_MARK  (VMS_OFF_SYSAP_BODY + 18)  /* abs 90, 0x81
 							    * response marker  */
 #define VMS_OFF_CM_RELAY_EPOCH (VMS_OFF_SYSAP_BODY + 20) /* abs 92, LE u32 --
@@ -615,6 +723,27 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
 /* Transition-open family: op 0x08 (class-0x03 REMOVE), op 0x09
  * (class-0x02 ADD), op 0x0d-in-cat-0x01 (class-0x04 self-departure). The ADD
  * and the REMOVE open both carry the post-transition nodemap at body[55]. */
+/* The transition-open cells (VMS_OFB_CM_OPEN_*), as built or as parsed. */
+struct vms_cm_open_cells {
+	uint16_t slot_next;    /* [20:22]  */
+	uint16_t quorum;       /* [22:24]  */
+	uint16_t subj_qdsk;    /* [26:28]  */
+	uint8_t  rebuild;      /* [24]     */
+	uint8_t  rc_members;   /* [28]     */
+	uint8_t  rc_votes;     /* [29]     */
+	uint8_t  pad;
+	uint16_t fsysid;       /* [49:51]  */
+	uint64_t ftime;        /* [32:40]  */
+	uint64_t stamp;        /* [40:48]  */
+	uint16_t subj_cfg;     /* [87:89]  */
+	uint16_t cevotes;      /* [96:98]  */
+	uint16_t csv_low;      /* [98:100] */
+	uint16_t csv_hwm;      /* [92], [100:102], [102:104] */
+	uint16_t csv_top;      /* [104:106] */
+	uint16_t pad2;
+	uint64_t hold;         /* [106:114] */
+};
+
 struct vms_cm_open {
 	struct vms_cm_envelope env;
 	uint32_t epoch;  /* body[12:16] LE u32, GROUNDED sec 4(j)/(p)         */
@@ -627,6 +756,7 @@ struct vms_cm_open {
 			  * WIDTH is undetermined beyond this one byte -- do
 			  * not assume 8 slots is the ceiling */
 	int      has_bitmap; /* vms_cm_open_carries_nodemap(opcode)           */
+	struct vms_cm_open_cells cells; /* body[20:51], rd vms-f297           */
 };
 
 /*
@@ -686,13 +816,48 @@ struct vms_cm_params {
 			   * VMS_OFF_CM_MEMBERS)                             */
 	uint16_t lockdirwt; /* body[26:28] LE u16: the sender's SYSGEN
 			     * LOCKDIRWT (rd vms-fcb, VMS_OFF_CM_LOCKDIRWT)   */
+	uint16_t quorum;    /* body[20:22] LE u16: (EXPECTED_VOTES + 2) / 2 as
+			     * the sender computes it (VMS_OFF_CM_PQUORUM)    */
+	uint16_t expected_votes; /* body[76:78] LE u16: the sender's SYSGEN
+				  * EXPECTED_VOTES (VMS_OFB_CM_PEXPVOTES)    */
+	uint16_t qdskvotes; /* body[24:26] LE u16: the sender's SYSGEN
+			     * QDSKVOTES (rd vms-f297, VMS_OFF_CM_QDSKVOTES)  */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
-	uint32_t param_f2; /* body[76:80], observed constant 0x01             */
+	uint32_t param_f2; /* body[76:80] -- the EXPECTED_VOTES word, raw    */
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
 };
 
 vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 				       struct vms_cm_params *out);
+
+/*
+ * cat-0x01 op-0x02, the joiner's admission request (rd vms-f297): the one field
+ * a coordinator carries forward. body[36:40] is a count the joiner states about
+ * itself -- 2, 3 and 4 from real V7.3 joiners, 0 from OVMX's zero body
+ * (vms_cm_config_build) -- and a real coordinator's ADD open repeats it at
+ * VMS_OFB_CM_OPEN_SUBJ_CFG for that subject (every specimen). Its meaning is
+ * not interpreted here; it is the subject's own statement, kept on its CSB.
+ */
+#define VMS_OFB_CM_CONFIG_COUNT 36u   /* LE u32 */
+struct vms_cm_config {
+	struct vms_cm_envelope env;
+	uint32_t count;   /* body[36:40] */
+};
+
+vms_codec_status_t vms_cm_config_parse(const uint8_t *body, uint32_t len,
+				       struct vms_cm_config *out);
+
+/*
+ * vms_cm_response_accepted - did this 0x81 answer ACCEPT the request (rd
+ * vms-f297)? body[18] is 0x01 in every accepting answer a real V7.3 system has
+ * sent in the capture library (1100+ across op 03/05/07/08/09/0b/12), and 0x00
+ * in the two a real VAX sent to an OVMX coordinator's membership record about
+ * a system it had not yet heard from -- each followed, when the coordinator
+ * went on to its open, by a CNXMGRERR bugcheck (lab arms PF-3, PK-1). Book
+ * p. 7-41: a coordinator ABANDONS on a rejection. 1 = accepted, 0 = not (or
+ * the body is not a response at all).
+ */
+int vms_cm_response_accepted(const uint8_t *body, uint32_t len);
 
 /* cat-0x01 op-0x14 node CPU/model advertisement. */
 struct vms_cm_model {
@@ -935,15 +1100,16 @@ vms_codec_status_t vms_cm_barrier_build(uint32_t epoch, uint32_t step,
  * cnxman_envelope_stamp() after the builder returns (design sec 3.2.4 ruling
  * E1). See each builder's own STAMP note for is_response.
  *
- * WHAT IS THEREFORE HONESTLY MISSING, AND SAID OUT LOUD. Davis p. 7-40 says a
- * Phase 1 proposal also carries the proposed quorum / computed expected votes /
- * quorum-disk votes / foundation timestamp / founder's SCSSYSTEMID / rebuild
- * type. NOT ONE of those has been isolated to an offset in any capture (spec
- * sec 4(j) "RE gaps left in sec 4j"), so this codec cannot place them and does
- * not pretend to: their bytes go out zero and FC-P3.12 counts the omission.
- * Filling them at a guessed offset is the failure that bugchecked two real
- * VAXes; omitting them is honest and recoverable. The offsets are a LAB item,
- * and when a capture pins one it is a field added here -- not a redesign.
+ * THE PHASE 1 CELLS ARE NOW PLACED (rd vms-f297). Davis p. 7-40 says a Phase 1
+ * proposal also carries the proposed quorum / CEVOTES / quorum-disk votes /
+ * foundation timestamp / founder's SCSSYSTEMID / rebuild type. Until the
+ * one-variable lab runs pinned them (VMS_OFB_CM_OPEN_*, sec "THE TRANSITION-
+ * OPEN CELLS" above) they went out zero, and filling them at a guessed offset
+ * is the failure that bugchecked two real VAXes. An ADD open now carries every
+ * one of them, from the coordinator's own CLUB; the REMOVE open (op 0x08) does
+ * not yet -- its cells are another implementation's until a capture pins them,
+ * so its bytes stay zero and the coordinator still refuses to send it to a
+ * foreign member.
  *
  * WHAT IS NOT HERE AT ALL. The op-0x05 lock/resource-rebuild burst, the op-0x06
  * MEMBERSHIP burst and the ORIGINATING form of the cat-0x02 op-0x0d rebuild
@@ -972,10 +1138,16 @@ vms_codec_status_t vms_cm_barrier_build(uint32_t epoch, uint32_t step,
  * check that and does not try -- FC-P3.12 owns it. Passing has_bitmap on
  * class 0x04 is VMS_CODEC_E_INVAL rather than a silently-dropped field.
  *
+ * `cells` (rd vms-f297) are the Phase 1 data at VMS_OFB_CM_OPEN_*, every one
+ * the caller's own executive state; NULL leaves them zero, which only a system
+ * running this implementation may be sent. Passing cells on class 0x04 is
+ * VMS_CODEC_E_INVAL, like the nodemap.
+ *
  * STAMP with is_response=0: a genuine origination.
  */
 vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 					    uint8_t bitmap, int has_bitmap,
+					    const struct vms_cm_open_cells *cells,
 					    uint8_t *out_body, uint32_t cap,
 					    uint32_t *written);
 
@@ -1099,15 +1271,21 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
  * this builder follows the MEASUREMENT rather than the inference. It is safe to
  * do so: the ack is correlated by its transaction and token, and neither a real
  * member (sec 4(p): it is "not the release") nor OVMX's own participant FSM
- * reads a step index out of it. Sec 4(r) does NOT list op 0x0b in its response-
- * recipe table, so body[18] is left ECHOED, not forced -- the same treatment
- * op 0x0f gets there.
+ * reads a step index out of it.
+ *
+ * AND THE CLASS AND THE MARKER (rd vms-f297). body[17] = the transition class
+ * and body[18] = 0x01, the response marker: 10 02 01 on 784 real acks of an
+ * addition, 10 03 01 on 84 of a removal, 10 01 01 on 24 of a formation (one
+ * outlier of 893). This builder used to leave both ECHOED -- 00 00, the high
+ * bytes of the step index -- which OVMX's own participant never reads; a real
+ * OpenVMS VAX V7.3 member receiving that ack from an OVMX coordinator
+ * re-sent its step and bugchecked CNXMGRERR (lab arm PF-2).
  *
  * STAMP with is_response=1: the verbatim body copy already carries the
  * member's own txn/token to echo.
  */
 vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
-					 uint32_t req_len,
+					 uint32_t req_len, uint8_t tr_class,
 					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written);
 

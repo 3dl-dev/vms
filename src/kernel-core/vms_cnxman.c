@@ -646,6 +646,12 @@ static uint32_t cnxman_ops_now_ms(void *ctx)
 	return (uint32_t)exec_ticks_ms();
 }
 
+static uint64_t cnxman_ops_now_vms(void *ctx)
+{
+	(void)ctx;
+	return exec_time_now_vms();
+}
+
 /* The %CNXMAN / %VAXcluster OPA0: lines. Every join/barrier/coordinator/
  * recnx/CSB-ladder call site already composes the whole "%CNXMAN, ..." string
  * (grepped across all five .c files at review time); this is the one place
@@ -665,6 +671,7 @@ static void cnxman_ops_bind(struct vms_cnxman *cn)
 	cn->ops.arm_timer = cnxman_ops_arm_timer;
 	cn->ops.cancel_timer = cnxman_ops_cancel_timer;
 	cn->ops.now_ms = cnxman_ops_now_ms;
+	cn->ops.now_vms = cnxman_ops_now_vms;
 	cn->ops.log = cnxman_ops_log;
 	cn->ops.alloc = NULL;   /* no FSM here allocates (design SS3.9 rule 3) */
 	cn->ops.free = NULL;

@@ -618,6 +618,7 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[9]: the opcode, echoed
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
+the relay is answered, on the member's new connection
 EOF
                       ;;
         esac;;
@@ -1802,7 +1803,10 @@ apply_edit() {
     join-follow-csb-conn-disarmed)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
-        sed -i 's|	if (csb != NULL \&\& join_follow_csb_conn(j, csb))|	if (0 \&\& csb != NULL \&\& join_follow_csb_conn(j, csb)) /* NEGCTL join-follow-csb-conn-disarmed */|' "$_file";;
+        # rd vms-f297: the follow now runs at every emit as well, so the
+        # mutation disarms the follow ITSELF -- every path that rides the
+        # executive's connection loses it at once.
+        sed -i 's|^\tif (!join_csb_connected(csb) \|\| csb->cdt_conid == 0u \|\|$|\tif (1 \|\| !join_csb_connected(csb) \|\| csb->cdt_conid == 0u \|\| /* NEGCTL join-follow-csb-conn-disarmed */|' "$_file";;
 
     join-member-count-to-foreign)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the

@@ -7810,7 +7810,17 @@ apply_edit() {
         # single-writer suites are identical with or without the lock. After
         # substitution the original text is gone, so a second apply matches
         # nothing (the no-op selftest requires).
-        sed -i 's|vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid)|SS__NORMAL /* NEGCTL acp-fileop-no-dlm-lock */|' "$_file";;
+        sed -i 's|vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid)|SS__NORMAL /* NEGCTL acp-fileop-no-dlm-lock */|' "$_file"
+        # vms-8b4d: dropping the lock only makes a collision POSSIBLE; whether two
+        # writers actually overlap inside acp_fid_alloc's read-modify-write window
+        # depended on host scheduling, and on a fast runner the suite sometimes saw
+        # no collision (harness exited 0 -- a decorative gate). So the MUTATION also
+        # widens that window: it sleeps between the bitmap READ and the in-memory
+        # alloc+WRITE. Any two writers that overlap at all then read the SAME free
+        # bit, deterministically. The delay lives only in the injected defect, never
+        # in the product. The widened spelling `ods2_ifbm_block_alloc (` (space) no
+        # longer matches the anchor, so a second apply is still a no-op.
+        sed -i 's|^\( *\)ods2_ifbm_block_alloc(ibblk, bit % ODS2_SBM_BITS_PER_BLOCK);|\1{ extern void msleep(unsigned int); msleep(40); } /* NEGCTL acp-fileop-no-dlm-lock: widen the RMW window */\n\1ods2_ifbm_block_alloc (ibblk, bit % ODS2_SBM_BITS_PER_BLOCK);|' "$_file";;
     dirlogical-compose-drops-common-member)
         # ANCHORED to the concealed-rooted search-list fan-out loop in
         # compose_ods2_r(): `for (uint8_t i = 0; i < n && *count < max_out; i++)`

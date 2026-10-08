@@ -1654,7 +1654,7 @@ uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
 /** sys$dalloc - Deallocate a device */
 uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode);
 
-/** sys$asctoid - Convert identifier name to binary value (attrib is reported 0) */
+/** sys$asctoid - Convert identifier name to binary value (and its attributes) */
 uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t *attrib);
 
 /** sys$idtoasc - Convert binary identifier to name (no wildcard context) */
@@ -1682,6 +1682,23 @@ uint32_t sys$get_security(const struct dsc$descriptor_s *clsnam,
 uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
                           const struct dsc$descriptor_s *objnam, uint32_t *objhan,
                           uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode);
+
+/* The rights-database services (vms-7d5a; LIBVMSRMS, over SYS$SYSTEM:RIGHTSLIST.DAT). */
+/** sys$add_ident - Add an identifier (id 0 = the next general identifier) */
+uint32_t sys$add_ident(const struct dsc$descriptor_s *name, uint32_t id, uint32_t attrib,
+                       uint32_t *resid);
+/** sys$rem_ident - Remove an identifier and its holder records */
+uint32_t sys$rem_ident(uint32_t id);
+/** sys$add_holder - Grant an identifier to a holder (quadword {uic, 0}) */
+uint32_t sys$add_holder(uint32_t id, const uint32_t *holder, uint32_t attrib);
+/** sys$rem_holder - Revoke an identifier from a holder */
+uint32_t sys$rem_holder(uint32_t id, const uint32_t *holder);
+/** sys$find_holder - The holders of an identifier, one per call (context) */
+uint32_t sys$find_holder(uint32_t id, uint32_t *holder, uint32_t *attrib, uint32_t *contxt);
+/** sys$find_held - The identifiers a holder holds, one per call (context) */
+uint32_t sys$find_held(const uint32_t *holder, uint32_t *id, uint32_t *attrib, uint32_t *contxt);
+/** sys$finish_rdb - End a $FIND_HOLDER / $FIND_HELD stream */
+uint32_t sys$finish_rdb(uint32_t *contxt);
 
 /** sys$check_privilegew - Check the caller's privileges (auditing disabled: nothing logged) */
 uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum,

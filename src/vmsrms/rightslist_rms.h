@@ -211,14 +211,56 @@ void rdb_ident_name(const rdb_identifier_record_t *r, char *out);
 /* Key of reference in the RIGHTSLIST indexed file (see the numbering note at
  * the top of this header re: the deferred HOLDER key). */
 #define RIGHTSLIST_KRF_VALUE  0u   /* primary: identifier value @0x00 (oracle key 0) */
-#define RIGHTSLIST_KRF_NAME   1u   /* secondary: identifier name @0x10 (oracle key 2) */
+#define RIGHTSLIST_KRF_HOLDER 1u   /* secondary: holder @0x08 (oracle key 1, vms-7d5a) */
+#define RIGHTSLIST_KRF_NAME   2u   /* secondary: identifier name @0x10 (oracle key 2) */
+#define RIGHTSLIST_KRF_NONE   0xFFu
 
 /* Bound RIGHTSLIST indexed file: a borrowed rms_file_t handle plus the
- * Prolog-3 context authored/bound over it. */
+ * Prolog-3 context authored/bound over it. The NAME / HOLDER keys of reference
+ * are found by their key position when an existing file is bound: a file written
+ * before the HOLDER key existed (vms-7d5a) carries NAME as key 1 and no HOLDER
+ * key -- rightslist_rms_is_current() says which. */
 typedef struct rightslist_rms_file {
     rms_file_t *f;     /* borrowed handle (ACP window or POSIX wrap) -- NOT owned */
     p3_ctx_t   *ctx;   /* bound/created Prolog-3 context (owned; freed on close)  */
+    uint8_t     krf_name;    /* key of reference of NAME (2, or 1 in an old file) */
+    uint8_t     krf_holder;  /* key of reference of HOLDER, RIGHTSLIST_KRF_NONE if absent */
 } rightslist_rms_file_t;
+
+/* 1 when the bound file has the three oracle keys (VALUE 0, HOLDER 1, NAME 2). */
+int rightslist_rms_is_current(const rightslist_rms_file_t *rf);
+
+/* Holder record accessors. The holder is a quadword; a UIC holder is
+ * {uic, 0} (oracle: "00010004 00000000" for [1,4]). */
+static inline void rdb_holder_set(rdb_holder_record_t *r, uint32_t id, uint32_t attr,
+                                  uint32_t holder_lo, uint32_t holder_hi)
+{
+    p3_put_le32(r->rdb$l_identifier, id);
+    p3_put_le32(r->rdb$l_attributes, attr);
+    p3_put_le32(r->rdb$q_holder, holder_lo);
+    p3_put_le32(r->rdb$q_holder + 4, holder_hi);
+}
+
+/* $PUT one 16-byte holder record {id, attributes, holder}. The identifier's
+ * definition record must already be there (it then precedes its holders in key-0
+ * order). Returns RMS$_NORMAL, RMS$_KEY (the file has no HOLDER key), RMS$_FAB. */
+uint32_t rightslist_put_holder(rightslist_rms_file_t *rf, const rdb_holder_record_t *rec);
+
+/* Delete the holder record {id, holder}. RMS$_RNF if there is none. */
+uint32_t rightslist_delete_holder(rightslist_rms_file_t *rf, uint32_t id,
+                                  uint32_t holder_lo, uint32_t holder_hi);
+
+/* Delete the identifier `value`: its definition record and every holder record
+ * of it. RMS$_RNF if there is no definition record. */
+uint32_t rightslist_delete_identifier(rightslist_rms_file_t *rf, uint32_t value);
+
+/* Every record in key-0 (identifier) order, a definition record (48 bytes)
+ * before its holder records (16 bytes). `cb` returns nonzero to stop. */
+uint32_t rightslist_enum(rightslist_rms_file_t *rf, p3_enum_cb cb, void *arg);
+
+/* Every record of `from` $PUT into the freshly created `to`, in key-0 order (the
+ * upgrade of a RIGHTSLIST written before the HOLDER key, vms-7d5a). */
+uint32_t rightslist_copy(rightslist_rms_file_t *from, rightslist_rms_file_t *to);
 
 /* Author a fresh, EMPTY RIGHTSLIST indexed file over the (writable) handle `f`:
  * a Prolog-3 image with the primary identifier-VALUE key (unique) and the
@@ -229,7 +271,8 @@ typedef struct rightslist_rms_file {
 uint32_t rightslist_rms_create(rms_file_t *f, rightslist_rms_file_t *rf);
 
 /* Bind an EXISTING RIGHTSLIST indexed file on the handle `f` (parses the
- * prologue; expects the 2-key VALUE+NAME image rightslist_rms_create authors).
+ * prologue; the three-key image rightslist_rms_create authors, or a two-key
+ * VALUE+NAME file written before the HOLDER key, which reads the same).
  * Returns RMS$_NORMAL, RMS$_FAB (NULL arg), or RMS$_PLG on a bad/foreign
  * prologue. */
 uint32_t rightslist_rms_open(rms_file_t *f, rightslist_rms_file_t *rf);

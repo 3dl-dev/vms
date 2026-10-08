@@ -33,38 +33,6 @@ prc PRC.RESUME.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vm
 prc PRC.SELF.COUNT2  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 prc PRC.NOIMAGE.STATE  # vms-ea42: a hibernating process with a missing image is run down at once (OpenVMS keeps it until $WAKE fails activation), and JPI$_STATE
 prc PRC.SELF.COUNT3  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
-rights RDB.ADD_IDENT.UIC1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.UIC2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.DUP_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.DUP_VALUE  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.DUP_UIC  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.BADNAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.EMPTYNAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.LONGNAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_IDENT.GENERAL2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.GENERAL.NEXT_VALUE  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ASCTOID.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ASCTOID.UIC  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.IDTOASC.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.IDTOASC.UIC  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_HOLDER.1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_HOLDER.2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_HOLDER.DUP  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_HOLDER.NOSUCH_HOLDER  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_HOLDER.NOSUCH_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.ADD_HOLDER.ID2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HOLDER.1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HOLDER.2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HOLDER.3  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FINISH_RDB.HOLDER  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HELD.1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HELD.2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HELD.3  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FINISH_RDB.HELD  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HELD.H2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HOLDER.NOSUCH_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FINISH_RDB.ZERO  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.GRANTID.BY_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.GRANTID.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.REVOKID.BY_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
@@ -72,20 +40,7 @@ rights RDB.REVOKID.AGAIN  # vms-7d5a: rights-database services not provided yet 
 rights RDB.GRANTID.BY_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.REVOKID.BY_NAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.GRANTID.NONAME  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REM_HOLDER  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REM_HOLDER.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REM_HOLDER.NOSUCH_ID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REM_IDENT  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.REM_IDENT.AGAIN  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HOLDER.AFTER_REM  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.FIND_HELD.AFTER_REM  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.GRANTID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.ADD_IDENT  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.ADD_HOLDER  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.REM_HOLDER  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.REM_IDENT  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.ASCTOID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rights RDB.NOPRIV.FIND_HELD  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
 rms RMS.OPEN  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
 rms RMS.PARSE.SYNTAX2  # vms-576: arch-divergent -- Alpha V8.4 parses ODS-5 ^-escapes ("A^.B^.C"), VAX V7.3 says RMS$_SYN (OVMX: SYN, as VAX)

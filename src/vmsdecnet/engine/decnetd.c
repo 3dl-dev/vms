@@ -6246,8 +6246,8 @@ static int run_mail11_accept_test(void)
 /*
  * The request mailbox's protection (rd vms-c6d1): S:RWLP,O:RWLP,G:,W:W. Every
  * process may WRITE a request into it; only NETACP itself (its owner, a SYSTEM-
- * category UIC) -- or a holder of SYSPRV/READALL/BYPASS, exactly as for any VMS
- * object -- may READ it, so no client can dequeue another client's request and
+ * category UIC) -- or a holder of SYSPRV or BYPASS, exactly as real VMS rules a
+ * mailbox (READALL does not open one: oracle mbxprot) -- may READ it, so no client can dequeue another client's request and
  * the NCB access-control password in it. Enforced by the executive's one
  * protection decision (src/kernel-core/vms_prot.h), the same one a file gets.
  */
@@ -6785,7 +6785,8 @@ struct netreq_probe {
     uint32_t setident;      /* SETIDENT to [100,100]                          */
     uint32_t assign;        /* $ASSIGN DNET$NETACP_REQ: a channel (W access)  */
     uint32_t read_unpriv;   /* IO$M_NOW read with no privilege: SS$_NOPRIV    */
-    uint32_t read_readall;  /* the same read with READALL: allowed            */
+    uint32_t read_readall;  /* the same read with READALL: still SS$_NOPRIV   */
+    uint32_t read_bypass;   /* the same read with BYPASS: allowed             */
     uint32_t nonetmbx;      /* own-PID request without NETMBX: reply status    */
     uint32_t forged;        /* request claiming ANOTHER owner_pid: reply status */
     uint32_t honest;        /* own-PID request with NETMBX: reply status        */
@@ -6874,6 +6875,9 @@ static void net_req_probe(int wfd)
     (void)vms_kif_setprv(PRV$M_READALL, 1, 0, &prev);
     v.read_readall = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
     (void)vms_kif_setprv(PRV$M_READALL, 0, 0, &prev);
+    (void)vms_kif_setprv(PRV$M_BYPASS, 1, 0, &prev);
+    v.read_bypass = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
+    (void)vms_kif_setprv(PRV$M_BYPASS, 0, 0, &prev);
     if (rep) (void)vms_kif_dassgn((uint16_t)rep);
     if (req) (void)vms_kif_dassgn((uint16_t)req);
     (void)!write(wfd, &v, sizeof v);
@@ -6948,8 +6952,10 @@ static int run_net_loopback_accept_test(void)
         NL_CHECK(v.read_unpriv == SS$_NOPRIV,
                  "the unprivileged process may NOT read DNET$NETACP_REQ (SS$_NOPRIV) -- no other"
                  " client's request, NCB password included, is readable");
-        NL_CHECK(v.read_readall != SS$_NOPRIV && v.read_readall != 0,
-                 "with READALL the same read is permitted -- the VMS privilege override, not a"
+        NL_CHECK(v.read_readall == SS$_NOPRIV,
+                 "READALL does not open it either (as on real VMS: oracle mbxprot MBXP.READALL.READ)");
+        NL_CHECK(v.read_bypass != SS$_NOPRIV && v.read_bypass != 0,
+                 "with BYPASS the same read is permitted -- the VMS privilege override, not a"
                  " special case");
         NL_CHECK(v.nonetmbx == 0, "a request from a process without NETMBX is dropped unanswered");
         NL_CHECK(v.forged == 0,

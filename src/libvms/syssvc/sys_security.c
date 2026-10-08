@@ -75,14 +75,21 @@
  *     (sys$get_entropy) and that node field. Uniqueness is the uuid argument (time +
  *     sequence + node), not an executive-issued number. A node with no readable
  *     SCSNODE falls back to a random multicast-bit node (RFC 4122 4.5).
- * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
- *     caller's own getuid()/getgid() and the protection word the caller
- *     itself passed in. There is no executive reference monitor, no rights
- *     list and no ACL evaluation, so the checker and the checked are the same
- *     process and the answer binds nothing.
+ * OVMX-PARTIAL: sys$chkpro (vms-d404) -- exec: with no user profile the subject
+ *     is the calling process as the executive holds it (UIC, current
+ *     privileges, the rights list $GRANTID changes).
+ * OVMX-LOCAL: sys$chkpro -- the decision (protection code, ACL, privileges) is
+ *     computed in this process from the item list, as $CHKPRO computes it for
+ *     its caller; it enforces nothing by itself. Object profiles (objpro) are
+ *     refused SS$_UNSUPPORTED; output items are not filled.
+ * OVMX-PARTIAL: sys$create_user_profile (vms-d404) -- exec: SYSUAF.DAT and
+ *     RIGHTSLIST.DAT are read over the executive ACP ($GETUAI, $FIND_HELD).
+ * OVMX-LOCAL: sys$create_user_profile -- the profile is assembled in this
+ *     process; its layout is this implementation's own (opaque to callers).
  */
 
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -95,6 +102,11 @@
 #include "ovmx_fileprot.h"
 #include "vms_kif.h"
 #include "prvdef.h"
+#include "chpdef.h"
+#include "iledef.h"
+#include "uaidef.h"
+#include "rmsdef.h"
+#include "descrip.h"
 #include "nsadef.h"
 #include "prcdef.h"      /* SYI$_SCSNODE */
 
@@ -157,15 +169,8 @@
  * category). Group 0 is not a valid VMS UIC group at all, so root's [0,0]
  * is covered incidentally by 0 <= 8 rather than by a rule of its own.
  *
- * NOT IMPLEMENTED HERE, AND DELIBERATELY: VMS also grants the SYSTEM
- * category to a process holding SYSPRV, grants everything to BYPASS, and
- * grants read to READALL. Those are privilege terms, and on OVMX the
- * decision this function feeds is re-taken immediately afterwards by the
- * Linux kernel's own DAC check on the same inode -- which has no notion of
- * a VMS privilege and denies what this function would have granted. Adding
- * them would produce a function that reports enforcement it does not have,
- * which this item's own text calls out as worse than an absent one. The gap
- * is reported (vms-2b8 round 7), not papered over.
+ * The privilege terms (SYSPRV, GRPPRV, BYPASS, READALL) are $CHKPRO's, in
+ * chk_decide() below; this is only the UIC-group rule.
  */
 static int uic_is_system(uint32_t uic)
 {
@@ -189,57 +194,285 @@ static uint32_t get_uic(void) {
 uint32_t vms$get_uic(void) {
     return get_uic();
 }
-
-/*
- * sys$chkpro - Check protection.
+/* ======================================================================
+ * $CHKPRO / $CREATE_USER_PROFILE (vms-d404).
  *
- * Compares the current process UIC against a protection mask to
- * determine if the requested access is allowed.
+ *   sys$chkpro(itmlst, objpro, subjpro)
+ *   sys$create_user_profile(usrnam, itmlst, flags, usrpro, usrprolen, contxt)
  *
- * The objpro parameter points to a structure containing:
- *   uint32_t owner_uic    - UIC of the object owner
- *   uint16_t protection   - SOGW protection mask
- *   uint16_t access_type  - Requested access (PROT$M_xxx)
+ * Grounded on OpenVMS VAX V7.3 (docs/oracle/semantics/chkpro/vax73.txt, the
+ * spec tools/oracle/semantic/specs/chkpro.py); the ACL rules are those of
+ * docs/oracle/vax73-acl.md, which the executive ACP applies to files. The
+ * decision, in order:
  *
- * Returns:
- *   SS$_NORMAL  - Access is granted
- *   SS$_NOPRIV  - Access is denied
- */
-uint32_t sys$chkpro(void *objpro) {
-    if (!objpro) return SS$_BADPARAM;
+ *   1. BYPASS grants.
+ *   2. The first identifier ACE (not DEFAULT) whose identifiers the subject all
+ *      holds decides; if it grants every wanted bit, access is granted.
+ *   3. READALL grants, but only with CHP$M_USEREADALL and no matching ACE.
+ *   4. Otherwise access is granted when every wanted bit is left un-denied by
+ *      some category the subject is in: system (UIC group <= MAXSYSGROUP,
+ *      SYSPRV, or GRPPRV for an object of its own group), owner, and -- only
+ *      when no ACE matched -- group and world. The protection code denies only
+ *      READ/WRITE/EXECUTE/DELETE; CONTROL and the higher bits are left to the
+ *      ACL (no ACE matching: granted).
+ *
+ * The subject is the user profile `subjpro` describes, or else the calling
+ * process (its UIC, current privileges and rights list are the executive's);
+ * CHP$_UIC, CHP$_PRIV and CHP$_RIGHTS replace the corresponding part. A
+ * profile is this implementation's own opaque block: UIC, privileges and the
+ * identifiers the user holds in RIGHTSLIST.DAT.
+ * ====================================================================== */
+#define CHKPRO_RIGHTS_MAX 64
+#define USRPRO_MAGIC      0x5055564Fu      /* "OVUP" */
 
-    struct {
-        uint32_t owner_uic;
-        uint16_t protection;
-        uint16_t access_type;
-    } *pro = objpro;
+struct ovmx_usrpro {
+    uint32_t magic;
+    uint32_t uic;
+    uint64_t privs;
+    uint32_t nrights;
+    uint32_t rights[CHKPRO_RIGHTS_MAX];
+};
+#define USRPRO_LEN(n) ((uint32_t)(offsetof(struct ovmx_usrpro, rights) + 4u * (n)))
 
-    uint32_t my_uic = get_uic();
-    uint16_t prot = pro->protection;
-    uint16_t access = pro->access_type;
+struct chk_subject {
+    uint32_t uic;
+    uint64_t privs;
+    uint32_t nrights;
+    uint32_t rights[CHKPRO_RIGHTS_MAX];
+};
 
-    /* Determine the relevant category */
-    uint16_t category_mask;
+static uint32_t chk_rd32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
 
-    if (uic_is_system(my_uic)) {
-        /* UIC group <= MAXSYSGROUP -- see uic_is_system() */
-        category_mask = (uint16_t)((prot >> PROT$V_SYSTEM) & 0x0F);
-    } else if (my_uic == pro->owner_uic) {
-        /* Owner access */
-        category_mask = (uint16_t)((prot >> PROT$V_OWNER) & 0x0F);
-    } else if ((my_uic >> 16) == (pro->owner_uic >> 16)) {
-        /* Same group */
-        category_mask = (uint16_t)((prot >> PROT$V_GROUP) & 0x0F);
-    } else {
-        /* World */
-        category_mask = (uint16_t)((prot >> PROT$V_WORLD) & 0x0F);
+/* Does the subject hold identifier `id`? `*` is held by all; a UIC identifier
+ * names the subject's UIC, either half possibly the wildcard ([*,m] group
+ * 0x3FFF, [g,*] member 0xFFFF); a general identifier is in its rights list. */
+static int chk_holds(const struct chk_subject *s, uint32_t id)
+{
+    uint32_t i;
+
+    if (id == 0xFFFFFFFFu)
+        return 1;
+    if (!(id & 0x80000000u)) {
+        uint32_t g = (id >> 16) & 0x3FFFu, m = id & 0xFFFFu;
+        return (g == 0x3FFFu || g == ((s->uic >> 16) & 0xFFFFu)) &&
+               (m == 0xFFFFu || m == (s->uic & 0xFFFFu));
     }
+    for (i = 0; i < s->nrights && i < CHKPRO_RIGHTS_MAX; i++)
+        if (s->rights[i] == id)
+            return 1;
+    return 0;
+}
 
-    /* In VMS, a SET bit means access is DENIED */
-    if (category_mask & access) {
-        return SS$_NOPRIV;
+/* The first matching identifier ACE: 1 and its access mask, or 0. */
+static int chk_acl_match(const struct chk_subject *s, const uint8_t *acl, size_t len,
+                         uint32_t *access)
+{
+    size_t pos = 0;
+
+    while (acl && pos + 4u <= len) {
+        const uint8_t *ace = acl + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+
+        if (sz < 4u || pos + sz > len)
+            break;
+        if (ace[1] == 1u /* ACE$C_KEYID */ && sz >= 12u && !(flags & 0x0100u /* DEFAULT */)) {
+            unsigned k, nid = (sz - 8u) / 4u;
+            int all = 1;
+
+            for (k = 0; k < nid && all; k++)
+                all = chk_holds(s, chk_rd32(ace + 8u + 4u * k));
+            if (all) {
+                *access = chk_rd32(ace + 4u);
+                return 1;
+            }
+        }
+        pos += sz;
     }
+    return 0;
+}
 
+static int chk_decide(const struct chk_subject *s, uint32_t want, uint32_t flags,
+                      uint32_t owner, uint16_t prot, const uint8_t *acl, size_t acl_len)
+{
+    uint32_t ace_access = 0, denied, acc_group = (s->uic >> 16) & 0xFFFFu;
+    int matched, is_system;
+
+    if (s->privs & PRV$M_BYPASS)
+        return 1;
+    matched = chk_acl_match(s, acl, acl_len, &ace_access);
+    if (matched && (ace_access & want) == want)
+        return 1;
+    if (!matched && (s->privs & PRV$M_READALL) && (flags & CHP$M_USEREADALL))
+        return 1;
+    is_system = uic_is_system(s->uic) || (s->privs & PRV$M_SYSPRV) ||
+                ((s->privs & PRV$M_GRPPRV) && acc_group == ((owner >> 16) & 0xFFFFu));
+    denied = want;
+#define CHK_ALLOW(nib) (denied &= ~(want & ~((uint32_t)(nib) & 0xFu)))
+    if (is_system)
+        CHK_ALLOW(prot >> PROT$V_SYSTEM);
+    if (s->uic == owner)
+        CHK_ALLOW(prot >> PROT$V_OWNER);
+    if (!matched) {
+        if (acc_group == ((owner >> 16) & 0xFFFFu))
+            CHK_ALLOW(prot >> PROT$V_GROUP);
+        CHK_ALLOW(prot >> PROT$V_WORLD);
+    }
+#undef CHK_ALLOW
+    return denied == 0;
+}
+
+/* The calling process as subject: the executive's UIC, current privileges and
+ * rights list. No executive -> SS$_NOSUCHDEV (never a guessed identity). */
+static uint32_t chk_self(struct chk_subject *s, int need_uic, int need_priv, int need_rights)
+{
+    if (need_uic || need_priv) {
+        struct vms_procinfo info;
+        uint32_t st;
+
+        memset(&info, 0, sizeof(info));
+        st = vms_kif_getjpi_self(&info);
+        if (!(st & 1))
+            return st;
+        if (need_uic)
+            s->uic = info.uic;
+        if (need_priv)
+            s->privs = info.cur_privs;
+    }
+    if (need_rights) {
+        uint32_t n = 0, st = vms_kif_rights_list(0, s->rights, NULL, CHKPRO_RIGHTS_MAX, &n);
+        if (!(st & 1))
+            return st;
+        s->nrights = n < CHKPRO_RIGHTS_MAX ? n : CHKPRO_RIGHTS_MAX;
+    }
+    return SS$_NORMAL;
+}
+
+uint32_t sys$chkpro(void *itmlst, void *objpro, void *subjpro)
+{
+    const ILE3 *it = (const ILE3 *)itmlst;
+    struct chk_subject s;
+    uint32_t want = 0, flags = 0, owner = 0, st;
+    uint16_t prot = 0;
+    const uint8_t *acl = NULL;
+    size_t acl_len = 0;
+    int have_uic = 0, have_priv = 0, have_rights = 0;
+
+    if (!itmlst)
+        return SS$_ACCVIO;
+    if (objpro)
+        return SS$_UNSUPPORTED;             /* object profiles: not provided */
+    memset(&s, 0, sizeof(s));
+    if (subjpro) {
+        const struct dsc$descriptor_s *d = (const struct dsc$descriptor_s *)subjpro;
+        const struct ovmx_usrpro *up = (const struct ovmx_usrpro *)d->dsc$a_pointer;
+
+        if (!up || d->dsc$w_length < USRPRO_LEN(0) || up->magic != USRPRO_MAGIC ||
+            up->nrights > CHKPRO_RIGHTS_MAX || d->dsc$w_length < USRPRO_LEN(up->nrights))
+            return SS$_BADPARAM;
+        s.uic = up->uic;
+        s.privs = up->privs;
+        s.nrights = up->nrights;
+        memcpy(s.rights, up->rights, 4u * up->nrights);
+        have_uic = have_priv = have_rights = 1;
+    }
+    for (; it->ile3$w_length != 0 || it->ile3$w_code != 0; it++) {
+        const uint8_t *b = (const uint8_t *)it->ile3$ps_bufaddr;
+        unsigned len = it->ile3$w_length;
+
+        switch (it->ile3$w_code) {
+        case CHP$_ACCESS: if (b && len >= 4) want = chk_rd32(b); break;
+        case CHP$_FLAGS:  if (b && len >= 4) flags = chk_rd32(b); break;
+        case CHP$_OWNER:  if (b && len >= 4) owner = chk_rd32(b); break;
+        case CHP$_PROT:   if (b && len >= 2) prot = (uint16_t)(b[0] | (b[1] << 8)); break;
+        case CHP$_ACL:    acl = b; acl_len = b ? len : 0; break;
+        case CHP$_UIC:
+            if (b && len >= 4) { s.uic = chk_rd32(b); have_uic = 1; }
+            break;
+        case CHP$_PRIV:
+            if (b && len >= 8) {
+                s.privs = (uint64_t)chk_rd32(b) | ((uint64_t)chk_rd32(b + 4) << 32);
+                have_priv = 1;
+            }
+            break;
+        case CHP$_RIGHTS: {
+            unsigned k;
+            s.nrights = 0;
+            for (k = 0; b && k + 8u <= len && s.nrights < CHKPRO_RIGHTS_MAX; k += 8u)
+                s.rights[s.nrights++] = chk_rd32(b + k);
+            have_rights = 1;
+            break;
+        }
+        default:
+            break;                          /* output and audit items: not filled */
+        }
+    }
+    if (!have_uic || !have_priv || !have_rights) {
+        st = chk_self(&s, !have_uic, !have_priv, !have_rights);
+        if (!(st & 1))
+            return st;
+    }
+    return chk_decide(&s, want, flags, owner, prot, acl, acl_len) ? SS$_NORMAL : SS$_NOPRIV;
+}
+
+/* The rights database's holder walk (LIBVMSRMS, weak like the name lookups). */
+uint32_t sys$find_held(const uint32_t *holder, uint32_t *id, uint32_t *attrib, uint32_t *contxt);
+uint32_t sys$finish_rdb(uint32_t *contxt);
+#pragma weak sys$find_held
+#pragma weak sys$finish_rdb
+
+uint32_t sys$create_user_profile(const struct dsc$descriptor_s *usrnam, void *itmlst,
+                                 uint32_t flags, void *usrpro, uint32_t *usrprolen,
+                                 uint32_t *contxt)
+{
+    struct ovmx_usrpro up;
+    uint32_t uic = 0, st, need;
+    uint64_t privs = 0;
+    uint16_t uiclen = 0, prvlen = 0;
+    ILE3 uai[3];
+
+    (void)itmlst; (void)contxt;
+    if (!usrprolen)
+        return SS$_ACCVIO;
+    if (!usrnam || !usrnam->dsc$a_pointer || usrnam->dsc$w_length == 0)
+        return RMS$_RNF;                    /* oracle CUP.EMPTYNAME */
+    memset(uai, 0, sizeof(uai));
+    uai[0].ile3$w_length = 4; uai[0].ile3$w_code = UAI$_UIC;
+    uai[0].ile3$ps_bufaddr = &uic; uai[0].ile3$ps_retlen_addr = &uiclen;
+    uai[1].ile3$w_length = 8;
+    uai[1].ile3$w_code = (flags & CHP$M_DEFPRIV) ? UAI$_DEF_PRIV : UAI$_PRIV;
+    uai[1].ile3$ps_bufaddr = &privs; uai[1].ile3$ps_retlen_addr = &prvlen;
+    st = sys$getuai(0, NULL, (struct dsc$descriptor_s *)usrnam, uai, NULL, NULL, 0);
+    if (!(st & 1))
+        return (st == SS$_NOSUCHID) ? RMS$_RNF : st;   /* no such user: CUP.NOSUCH */
+
+    memset(&up, 0, sizeof(up));
+    up.magic = USRPRO_MAGIC;
+    up.uic = uic;
+    up.privs = privs;
+    if (!sys$find_held || !sys$finish_rdb)
+        return SS$_UNSUPPORTED;             /* no rights-database reader in this image */
+    {
+        uint32_t holder[2] = { uic, 0 }, ctx = 0, id, at;
+
+        while (up.nrights < CHKPRO_RIGHTS_MAX &&
+               (sys$find_held(holder, &id, &at, &ctx) & 1))
+            up.rights[up.nrights++] = id;
+        (void)sys$finish_rdb(&ctx);
+    }
+    need = USRPRO_LEN(up.nrights);
+    if (!usrpro) {
+        *usrprolen = need;                  /* the length the caller must provide */
+        return SS$_NORMAL;
+    }
+    if (*usrprolen < need)
+        return SS$_BUFFEROVF;
+    memcpy(usrpro, &up, need);
+    *usrprolen = need;
     return SS$_NORMAL;
 }
 

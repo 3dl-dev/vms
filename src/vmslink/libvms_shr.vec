@@ -473,3 +473,4 @@ sys$parse_acl=PROCEDURE
 sys$format_acl=PROCEDURE
 sys$grantid=PROCEDURE
 sys$revokid=PROCEDURE
+sys$create_user_profile=PROCEDURE

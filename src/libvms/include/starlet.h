@@ -1040,13 +1040,21 @@ uint32_t sys$setprv(
 );
 
 /**
- * sys$chkpro - Check protection
+ * sys$chkpro - Check whether a subject may access an object (vms-d404)
  *
- * @param objpro  Pointer to object protection block
+ * @param itmlst   CHP$_ item list (ACCESS, FLAGS, OWNER, PROT, ACL, UIC, PRIV, RIGHTS)
+ * @param objpro   object security profile (not provided: SS$_UNSUPPORTED)
+ * @param subjpro  descriptor of a $CREATE_USER_PROFILE profile; 0 = the caller
  *
- * @return  SS$_NORMAL if access allowed
+ * @return  SS$_NORMAL if access is granted, SS$_NOPRIV if not
  */
-uint32_t sys$chkpro(void *objpro);
+uint32_t sys$chkpro(void *itmlst, void *objpro, void *subjpro);
+
+/** sys$create_user_profile - A user's security profile (UIC, privileges,
+ *  rights) for $CHKPRO; usrpro 0 returns the length in *usrprolen */
+uint32_t sys$create_user_profile(const struct dsc$descriptor_s *usrnam, void *itmlst,
+                                 uint32_t flags, void *usrpro, uint32_t *usrprolen,
+                                 uint32_t *contxt);
 
 /* ================================================================
  * RMS (Record Management Services) System Service Interface

@@ -37,6 +37,18 @@
 #include <stdint.h>
 
 #include "rightslist.h"
+#include "starlet.h"
+#include "descrip.h"
+#include "chpdef.h"
+#include "armdef.h"
+#include "iledef.h"
+#include "rmsdef.h"
+
+/* $CREATE_USER_PROFILE walks the holder records with $FIND_HELD (LIBVMSRMS);
+ * a strong reference links the reader into this static suite. */
+uint32_t sys$find_held(const uint32_t *holder, uint32_t *id, uint32_t *attrib, uint32_t *contxt);
+static uint32_t (*volatile const keep_find_held)(const uint32_t *, uint32_t *, uint32_t *,
+                                                 uint32_t *) = sys$find_held;
 #include "ssdef.h"
 #include "ovmx_layout.h"
 #include "vmsfs/device.h"
@@ -254,6 +266,55 @@ int main(void)
               "LOCAL is NOT 4 (the value the shipped file invented for it)");
     } else {
         check(0, "LOCAL resolves, for the regression check");
+    }
+
+    /* --- $CREATE_USER_PROFILE + $CHKPRO (vms-d404) ------------------- *
+     * The DEFAULT account's profile ([200,200] from the shipped SYSUAF.DAT)
+     * as $CHKPRO's subject. Statuses as OpenVMS VAX V7.3 answers the same
+     * calls (docs/oracle/semantics/chkpro/vax73.txt, UP.* / CUP.*). */
+    printf("\n $CREATE_USER_PROFILE / $CHKPRO\n");
+    {
+        static char dn[] = "DEFAULT", nn[] = "SP_NO_SUCH_USER";
+        struct dsc$descriptor_s dd = { sizeof(dn) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, dn };
+        struct dsc$descriptor_s nd = { sizeof(nn) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, nn };
+        static uint8_t pro[4096];
+        uint32_t plen = 0, st;
+        struct dsc$descriptor_s pd;
+        uint32_t acc = ARM$M_READ, own = 0, prot = 0;
+        uint8_t ace[12] = { 12, 1, 0, 0, ARM$M_READ, 0, 0, 0, 0x80, 0, 0x80, 0 };  /* [200,200] READ */
+        ILE3 it[5], ia[6];
+
+        (void)keep_find_held;
+        st = sys$create_user_profile(&dd, NULL, 0, NULL, &plen, NULL);
+        check(st == SS$_NORMAL && plen > 0 && plen <= sizeof(pro),
+              "$CREATE_USER_PROFILE DEFAULT, no buffer: SS$_NORMAL and the length (CUP.LENGTH)");
+        st = sys$create_user_profile(&dd, NULL, 0, pro, &plen, NULL);
+        check(st == SS$_NORMAL, "$CREATE_USER_PROFILE DEFAULT: SS$_NORMAL (CUP.DEFAULT)");
+        check(sys$create_user_profile(&nd, NULL, 0, pro, &plen, NULL) == RMS$_RNF,
+              "$CREATE_USER_PROFILE of an unknown user is RMS$_RNF (CUP.NOSUCH)");
+
+        memset(&pd, 0, sizeof(pd));
+        pd.dsc$w_length = (uint16_t)plen;
+        pd.dsc$a_pointer = (char *)pro;
+        memset(it, 0, sizeof(it));
+        it[0].ile3$w_length = 4; it[0].ile3$w_code = CHP$_ACCESS; it[0].ile3$ps_bufaddr = &acc;
+        it[1].ile3$w_length = 4; it[1].ile3$w_code = CHP$_OWNER;  it[1].ile3$ps_bufaddr = &own;
+        it[2].ile3$w_length = 4; it[2].ile3$w_code = CHP$_PROT;   it[2].ile3$ps_bufaddr = &prot;
+        memcpy(ia, it, sizeof(it));
+        ia[3].ile3$w_length = 12; ia[3].ile3$w_code = CHP$_ACL; ia[3].ile3$ps_bufaddr = ace;
+        memset(&ia[4], 0, 2 * sizeof(ILE3));
+
+        own = (1u << 16) | 4u; prot = 0xFF00;            /* [1,4] S:RWED,O:RWED,G,W */
+        /* negctl: create-user-profile-uic-dropped */
+        check(sys$chkpro(it, NULL, &pd) == SS$_NOPRIV,
+              "$CHKPRO: DEFAULT is world to a [1,4] S:RWED,O:RWED,G,W object -- read refused (UP.WORLD.NONE.READ)");
+        /* negctl: chkpro-acl-ignored */
+        check(sys$chkpro(ia, NULL, &pd) == SS$_NORMAL,
+              "$CHKPRO: an ACE (IDENTIFIER=[200,200],ACCESS=READ) grants DEFAULT read (UP.ACL.GRANT)");
+        own = (0200u << 16) | 0200u; prot = 0xFF0F;      /* [200,200] S,O:RWED,G,W */
+        /* negctl: create-user-profile-uic-dropped */
+        check(sys$chkpro(it, NULL, &pd) == SS$_NORMAL,
+              "$CHKPRO: DEFAULT owns a [200,200] S,O:RWED,G,W object -- read granted (UP.OWNER.RWED.READ)");
     }
 
     vms_kif_acp_dmount(ODS2_UNIT);

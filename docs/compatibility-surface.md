@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**474 surfaces catalogued** across 9 domains, each with a per-surface status.
+**475 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 327 |
-| 🟢 implemented | 284 | | n/a | 93 |
-| 🟡 partial | 59 | | advisory | 48 |
+| ✅ verified | 24 | | real | 330 |
+| 🟢 implemented | 285 | | n/a | 93 |
+| 🟡 partial | 59 | | advisory | 46 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 92 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **429 committed** — **308 met** (implemented/verified), 58 in progress (partial), 63 not started (absent/stub/designed).
+- **430 committed** — **309 met** (implemented/verified), 58 in progress (partial), 63 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -460,7 +460,7 @@ SYS$SETPRV is now executive-authoritative (vms-pv1): the mask change routes thro
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟢 | `sys$setprv` | routine | Enable/disable process privileges | implemented | real | in | `src/libvms/syssvc/sys_misc.c` — executive-authoritative via vms_kif_setprv: authorizes against the permanent/authorized mask (SS$_NOTALLPRIV / SS$_NOPRIV), owns the state, fails honestly if /dev/vms unreachable (INV-6); PCB is a cache, not the authority |
-| 🟢≈ | `sys$chkpro` | routine | Check protection (system/owner/group/world) against an access mask | implemented | advisory | in | `src/libvms/syssvc/sys_security.c:151` — correct SOGW compute logic; zero OVMX callers currently invoke it |
+| 🟢 | `sys$chkpro` | routine | Check whether a subject may access an object (protection code, ACL, privileges) | implemented | real | in | `src/libvms/syssvc/sys_security.c` — vms-d404: see protection-acl sys$chkpro. |
 | ⬜ | `sys$check_access` | routine | Secondary/legacy access-check opinion | absent | n/a | out | deliberately removed by design (vms-2b8) — anti-facade precedent, not a gap to fill |
 
 ### sys-time — SYS$ Time & Timers
@@ -726,7 +726,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 
 _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  43 surfaces catalogued (24 met · 10 in progress · 9 not started) · V1: 38 committed, 24 met
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  44 surfaces catalogued (25 met · 10 in progress · 9 not started) · V1: 39 committed, 25 met
 
 ### accounting — Accounting
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING) · reviewed 2026-09-14</sub>
@@ -810,13 +810,14 @@ All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in
 SOGW/UIC protection is kernel-enforced by the Files-11 ACP and VERIFIED against a real /dev/vms over a real-VAX ODS-2 fixture (test_syssvc_acp_access): a genuinely unprivileged non-owner is refused SS$_NOPRIV where a system-group process succeeds — same code, opposite verdict. The Delete bit is not enforced in the ACP check (advisory). $CHKPRO computes correctly but nothing calls it. The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed (vms-2b8) rather than left as a facade. ACLs on files are stored and enforced by the executive ACP (vms-d404, docs/oracle/vax73-acl.md). Privilege overrides (BYPASS/READALL/SYSPRV) are honored in the ACP; GRPPRV is not (cross-ref privileges).
 
 
-<sub>11 items · 5 met · 4 in progress · 2 not started</sub>
+<sub>12 items · 6 met · 4 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | ✅ | `fileprot$sogw_uic` | feature | SOGW protection mask, UIC-based, executive-enforced (denies on category miss) | verified | real | in | `src/kernel-core/vmsfs_acp.c:1022` — vms-165 moved SOGW/UIC enforcement into acp_check_access (nibble-per-category System/Owner/Group/World, set-bit-denies; directory read maps to EXECUTE traversal, vms-548b). Re-census 2026-09-14: unchanged, line ref refreshed (was :861). |
 | 🟠≈ | `fileprot$delete_bit` | feature | Delete (D) protection bit | stub | advisory | in | `src/kernel-core/vmsfs_acp.c:1022` — acp_check_access wants only Read/Write (and Execute for directory traversal); the Delete bit is never a wanted right in the check, so it is not enforced — advisory. Re-census 2026-09-14: unchanged, line ref refreshed (was :861). |
-| 🟢≈ | `sys$chkpro` | routine | $CHKPRO — compute-only SOGW protection check helper | implemented | advisory | in | `src/libvms/syssvc/sys_security.c:151` — Correct logic, still ZERO OVMX production callers (only starlet.h decl + shr.vec export) — computed but unused, honestly inert. The ACP enforces access directly (fileprot$sogw_uic), not via $CHKPRO. Re-census 2026-09-14: unchanged. |
+| 🟢 | `sys$chkpro` | routine | $CHKPRO - may a subject access an object (protection code, ACL, privileges) | implemented | real | in | `src/libvms/syssvc/sys_security.c` — vms-d404: CHP$_ACCESS/FLAGS/OWNER/PROT/ACL/UIC/PRIV/RIGHTS; the subject is a user profile or the caller as the executive holds it. The protection code denies only RWED (CONTROL is the ACL's); a matching ACE that does not grant is final for group and world; BYPASS grants, READALL only with CHP$M_USEREADALL and no matching ACE, SYSPRV and GRPPRV give the system category. A compute service: it decides, the ACP enforces. Object profiles (objpro) SS$_UNSUPPORTED; output items not filled. |
+| 🟢 | `sys$create_user_profile` | routine | $CREATE_USER_PROFILE - a user's security profile for $CHKPRO | implemented | real | in | `src/libvms/syssvc/sys_security.c` — vms-d404: UIC and authorized (CHP$M_DEFPRIV: default) privileges from SYSUAF.DAT, the identifiers the user holds from RIGHTSLIST.DAT; RMS$_RNF for an unknown or empty name as V7.3 answers. The profile's layout is OVMX's own (opaque to callers). |
 | ⬜ | `sys$check_access` | routine | $CHECK_ACCESS legacy 2nd-opinion access check | absent | n/a | in | Deliberately removed (vms-2b8) rather than kept as a redundant/driftable facade — represented as absent by design, a positive anti-facade precedent, not a gap to close |
 | 🟡 | `acldef$acls` | feature | Access Control List entries (ACEs) on files/objects | partial | real | in | `src/kernel-core/vmsfs_acp.c (acp_acl_match, acp_acl_op)` — vms-d404: identifier ACEs stored in the FH2 access control area (top of the header, acoffset..rsoffset) as V7.3 stores them; the ACP access check takes the first matching identifier ACE (DEFAULT ACEs skipped); a denying ACE leaves only the system and owner fields; CONTROL required to change an ACL; ADD replaces an ACE for the same identifiers, DELETE keeps PROTECTED ACEs. Not done: an ACL longer than the primary header (VMS continues it in an extension header) is SS$_ACLFULL; DEFAULT ACEs and DEFAULT_PROTECTION are not propagated to files created in a directory; general identifiers match only once the process rights list exists (vms-7d5a), UIC identifiers and * match now. |
 | 🟢 | `sys$parse_acl` | routine | $PARSE_ACL - ACE text to binary | implemented | real | in | `src/libvms/syssvc/sys_security.c` — vms-d404: IDENTIFIER (UIC, wildcard, *, names via RIGHTSLIST), OPTIONS, ACCESS and DEFAULT_PROTECTION ACEs; SS$_IVACL / SS$_NOSUCHID with the error position at the failing clause, as SET ACL reports it on V7.3. |

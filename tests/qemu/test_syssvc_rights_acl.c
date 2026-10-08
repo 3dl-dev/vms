@@ -30,6 +30,9 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
+#include "chpdef.h"
+#include "armdef.h"
+#include "iledef.h"
 
 #define EXIT_SKIP 77
 #define ODS2_UNIT "VDA0:"
@@ -189,6 +192,37 @@ int main(int argc, char **argv)
         struct dsc$descriptor_s nd = { sizeof(nm) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, nm };
         check(sys$grantid(&child_pid, NULL, NULL, &nd, NULL, 0) == SS$_NOSUCHID,
               "$GRANTID by an unknown name is SS$_NOSUCHID");
+    }
+
+    /* $CHKPRO with the calling process as subject (vms-d404): its UIC and rights
+     * list are the executive's; CHP$_PRIV 0 sets its privileges aside. The object
+     * is [1,4] with no access for any category and the ACE
+     * (IDENTIFIER=%X80012345,ACCESS=READ): only holding the identifier grants. */
+    {
+        uint32_t acc = ARM$M_READ, own = (1u << 16) | 4u, prot = 0xFFFF, nopriv[2] = { 0, 0 };
+        uint32_t idq[2] = { TEST_ID, 0 };
+        uint8_t ace[12] = { 12, 1, 0, 0, ARM$M_READ, 0, 0, 0,
+                            (uint8_t)TEST_ID, (uint8_t)(TEST_ID >> 8),
+                            (uint8_t)(TEST_ID >> 16), (uint8_t)(TEST_ID >> 24) };
+        ILE3 it[6];
+
+        memset(it, 0, sizeof(it));
+        it[0].ile3$w_length = 4;  it[0].ile3$w_code = CHP$_ACCESS; it[0].ile3$ps_bufaddr = &acc;
+        it[1].ile3$w_length = 4;  it[1].ile3$w_code = CHP$_OWNER;  it[1].ile3$ps_bufaddr = &own;
+        it[2].ile3$w_length = 4;  it[2].ile3$w_code = CHP$_PROT;   it[2].ile3$ps_bufaddr = &prot;
+        it[3].ile3$w_length = 8;  it[3].ile3$w_code = CHP$_PRIV;   it[3].ile3$ps_bufaddr = nopriv;
+        it[4].ile3$w_length = 12; it[4].ile3$w_code = CHP$_ACL;    it[4].ile3$ps_bufaddr = ace;
+        (void)sys$revokid(NULL, NULL, idq, NULL, NULL, 0);
+        check(sys$chkpro(it, NULL, NULL) == SS$_NOPRIV,
+              "$CHKPRO: the caller, not holding %X80012345, is refused the object");
+        check(sys$grantid(NULL, NULL, idq, NULL, NULL, 0) == SS$_WASCLR,
+              "$GRANTID %X80012345 to the caller itself");
+        /* negctl: chkpro-acl-ignored */
+        /* negctl: chkpro-self-rights-ignored */
+        check(sys$chkpro(it, NULL, NULL) == SS$_NORMAL,
+              "$CHKPRO: holding %X80012345 the caller is granted read by the ACE");
+        check(sys$revokid(NULL, NULL, idq, NULL, NULL, 0) == SS$_WASSET,
+              "$REVOKID %X80012345 from the caller (restore)");
     }
 
     (void)!write(to_child, "q", 1);

@@ -852,6 +852,8 @@ uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
 uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap);
 /* The process rights list (vms-7d5a, VMS_IOCTL_RIGHTS): $GRANTID / $REVOKID. op = VMS_RIGHTS_OP_GRANT / _REVOKE; pid 0 = the caller. */
 uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib);
+uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
+                             uint32_t cap, uint32_t *count);
 
 /* Read this process's own invoking CLI context. *cliflag (optional) is nonzero
  * iff a CLI launched it; command/command_size receive the NUL-terminated line;

@@ -581,6 +581,9 @@ acp-acl-control-not-checked
 acp-acl-deleteall-drops-protected
 sys-parse-acl-drops-access
 rms-set-security-local-applied-early
+chkpro-acl-ignored
+chkpro-self-rights-ignored
+create-user-profile-uic-dropped
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
@@ -1303,6 +1306,65 @@ EOF
         why)          echo "acp_acl_op()'s DELETEALL drops an ACE only when it is not PROTECTED. The mutation drops every ACE. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the PROTECTED ACE survives deleting the ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    chkpro-acl-ignored)
+        case "$_f" in
+        facility)     echo "\$CHKPRO applies the object's ACL (CHP\$_ACL) to the subject (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rightslist test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "chk_decide() looks for the first identifier ACE the subject holds. The mutation never finds one, so an ACE granting read to [200,200] or to a general identifier the caller holds changes nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: an ACE (IDENTIFIER=[200,200],ACCESS=READ) grants DEFAULT read (UP.ACL.GRANT)
+$CHKPRO: holding %X80012345 the caller is granted read by the ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    chkpro-self-rights-ignored)
+        case "$_f" in
+        facility)     echo "\$CHKPRO with no profile takes the caller's rights list from the executive (vms-d404 over vms-7d5a)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "chk_self() reads the calling process's rights list with vms_kif_rights_list(). The mutation leaves it empty, so an identifier the caller was granted by \$GRANTID never satisfies an ACE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: holding %X80012345 the caller is granted read by the ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    create-user-profile-uic-dropped)
+        case "$_f" in
+        facility)     echo "\$CREATE_USER_PROFILE carries the user's UIC from SYSUAF.DAT into the profile (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rightslist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$create_user_profile() stores the UIC \$GETUAI returned. The mutation stores [0,0], a system-category UIC, so DEFAULT's profile reads a world-denied object and is refused the one it owns. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: DEFAULT is world to a [1,4] S:RWED,O:RWED,G,W object -- read refused (UP.WORLD.NONE.READ)
+$CHKPRO: DEFAULT owns a [200,200] S,O:RWED,G,W object -- read granted (UP.OWNER.RWED.READ)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7363,6 +7425,12 @@ apply_edit() {
         sed -i 's|^    if (!acp_has_control(proc, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
     acp-acl-deleteall-drops-protected)
         sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file";;
+    chkpro-acl-ignored)
+        sed -i 's#^    matched = chk_acl_match(s, acl, acl_len, \&ace_access);$#    matched = 0 \&\& chk_acl_match(s, acl, acl_len, \&ace_access); /* NEGCTL chkpro-acl-ignored */#' "$_file";;
+    chkpro-self-rights-ignored)
+        sed -i 's#^        uint32_t n = 0, st = vms_kif_rights_list(0, s->rights, NULL, CHKPRO_RIGHTS_MAX, \&n);$#        uint32_t n = 0, st = SS$_NORMAL; /* NEGCTL chkpro-self-rights-ignored */#' "$_file";;
+    create-user-profile-uic-dropped)
+        sed -i 's#^    up.uic = uic;$#    up.uic = 0; /* NEGCTL create-user-profile-uic-dropped */#' "$_file";;
     sys-parse-acl-drops-access)
         sed -i 's#^            if (ace_abbrev(w, names\[k\])) { \*mask |= 1u << k; hit = 1; }$#            if (ace_abbrev(w, names[k])) { hit = 1; } /* NEGCTL sys-parse-acl-drops-access */#' "$_file";;
     rms-set-security-local-applied-early)

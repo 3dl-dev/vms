@@ -1,0 +1,14 @@
+# keystroke oracle transcript (unmasked) -- case RD.NOECHO (OpenVMS VAX V7.3 OPA0:)
+# SET TERMINAL/NOECHO: typed characters are not echoed; /ECHO restores
+# case-sha256 0a5fe666d39b617ea900669e026d05846f29e7e5895b9cbd78017337ecd2a3fc
+@start loggedin OK
+=== STEP N
+| SET TERMINAL/NOECHO<CR><LF>
+| <CR><NUL>$ 
+=== STEP T
+| <CR><LF>
+| 8<CR><LF>
+| <NUL>$ 
+=== STEP E
+| <CR><LF>
+| <NUL>$ 

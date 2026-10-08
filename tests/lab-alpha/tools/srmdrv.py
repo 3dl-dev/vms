@@ -13,6 +13,7 @@ whatever the console produces, which is what you want for a first power-on.
 """
 import argparse
 import os
+import select
 import socket
 import sys
 import time
@@ -67,6 +68,11 @@ def main() -> int:
                          "AXPBOX EXITS WHEN THE CONSOLE CLIENT DISCONNECTS, so "
                          "a node that must outlive one command needs a pump "
                          "that stays attached and takes work through this.")
+    ap.add_argument("-R", "--raw-fifo", default=None,
+                    help="path to a second FIFO whose bytes go to the console "
+                         "VERBATIM and at once -- no line splitting, no CR "
+                         "added. The keystroke oracle (vms-370) types single "
+                         "keys (^U, DEL, ^J, escape sequences) through it.")
     ap.add_argument("-l", "--log", default=None)
     ap.add_argument("-w", "--wait-for", default=None,
                     help="gate: hold commands until this string appears, and "
@@ -111,6 +117,12 @@ def main() -> int:
         # does not have to reopen between every command.
         fifo_fd = os.open(args.fifo, os.O_RDWR | os.O_NONBLOCK)
 
+    raw_fd = None
+    if args.raw_fifo:
+        if not os.path.exists(args.raw_fifo):
+            os.mkfifo(args.raw_fifo, 0o600)
+        raw_fd = os.open(args.raw_fifo, os.O_RDWR | os.O_NONBLOCK)
+
     log = open(args.log, "ab") if args.log else None
     seen = bytearray()
     deadline = float("inf") if args.timeout == 0 else time.time() + args.timeout
@@ -120,7 +132,28 @@ def main() -> int:
 
     try:
         while time.time() < deadline:
+            if raw_fd is not None:
+                # Wake on console output OR a keystroke, so a raw key is not
+                # held for the 0.5s socket timeout.
+                try:
+                    rd, _, _ = select.select([sock, raw_fd], [], [], 0.5)
+                except (OSError, ValueError):
+                    rd = [sock]
+                if raw_fd in rd:
+                    try:
+                        keys = os.read(raw_fd, 4096)
+                    except BlockingIOError:
+                        keys = b""
+                    if keys:
+                        # telnet: a data byte 0xFF must be doubled
+                        sock.sendall(keys.replace(bytes([IAC]), bytes([IAC, IAC])))
+                if sock not in rd:
+                    rd = None
+            else:
+                rd = [sock]
             try:
+                if rd is None:
+                    raise socket.timeout
                 chunk = sock.recv(4096)
                 if not chunk:
                     break
@@ -173,6 +206,8 @@ def main() -> int:
         sock.close()
         if fifo_fd is not None:
             os.close(fifo_fd)
+        if raw_fd is not None:
+            os.close(raw_fd)
         if log:
             log.close()
 

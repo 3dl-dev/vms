@@ -1,0 +1,23 @@
+# keystroke oracle transcript (unmasked) -- case RD.TIMED (OpenVMS VAX V7.3 OPA0:)
+# IO$M_TIMED: READ/TIME_OUT expiring with nothing typed and with a partial line typed
+# case-sha256 b960010514bdbe69491d287b04469bb9f1a9ab2f8f9a64e97329830f1bd0d23a
+@start loggedin OK
+=== STEP Z quiet
+=== STEP R (merged into next)
+=== STEP W
+| READ/TIME_OUT=3/PROMPT="T: " SYS$COMMAND KST1<CR><LF>
+| T: <CR><LF>
+| %RMS-W-TMO, timeout period expired<CR><LF>
+| <CR><NUL>$ 
+=== STEP R2
+| READ/TIME_OUT=4/PROMPT="T: " SYS$COMMAND KST2<CR><LF>
+| T: 
+=== STEP P (merged into next)
+=== STEP W2
+| ab<CR><LF>
+| %RMS-W-TMO, timeout period expired<CR><LF>
+| <CR><NUL>$ 
+=== STEP S
+| SHOW SYMBOL KST2<CR><LF>
+| <CR>%DCL-W-UNDSYM, undefined symbol - check validity and spelling<CR><LF>
+| <CR><NUL>$ 

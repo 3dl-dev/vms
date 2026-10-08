@@ -1,0 +1,13 @@
+# keystroke oracle transcript (unmasked) -- case TA.CTRLX (OpenVMS VAX V7.3 OPA0:)
+# ^X purges the type-ahead buffer: a line typed during WAIT then ^X never runs
+# case-sha256 7ac129b860606e45dde824dfd31e99e392e95951696672cf048a1b1ced31cf31
+@start loggedin OK
+=== STEP C
+| WAIT 0:0:4<CR><LF>
+=== STEP T
+=== STEP X
+=== STEP D
+| <CR><NUL>$ 
+=== STEP R
+| <CR><LF>
+| <CR><NUL>$ 

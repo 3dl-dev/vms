@@ -1,0 +1,24 @@
+# keystroke oracle transcript (unmasked) -- case RD.PROMPT (OpenVMS VAX V7.3 OPA0:)
+# IO$_READPROMPT: DCL READ/PROMPT and INQUIRE (prompt, echo, upcasing), then the value
+# case-sha256 457de7d2f665764b616a519afd624e78db21ea422c07d2a3bf69a2563c43612d
+@start loggedin OK
+=== STEP R
+| READ/PROMPT="Name: " SYS$COMMAND X<CR><LF>
+| Name: 
+=== STEP T
+| abc def<CR><LF>
+| <CR><NUL>$ 
+=== STEP S
+| SHOW SYMBOL X<CR><LF>
+| <CR>  X = "abc def"<CR><LF>
+| <CR><NUL>$ 
+=== STEP I
+| INQUIRE Y "Your name"<CR><LF>
+| <CR>Your name: 
+=== STEP J
+| abc def<CR><LF>
+| <CR><NUL>$ 
+=== STEP K
+| SHOW SYMBOL Y<CR><LF>
+| <CR>  Y = "ABC DEF"<CR><LF>
+| <CR><NUL>$ 

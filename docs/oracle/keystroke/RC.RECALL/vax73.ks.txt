@@ -1,0 +1,32 @@
+# keystroke oracle transcript (unmasked) -- case RC.RECALL (OpenVMS VAX V7.3 OPA0:)
+# command recall: up-arrow and ^B recall the previous command; down-arrow walks forward
+# case-sha256 91bd8c49f6c6b95e3893bffc7479a2e19d7541a7eeab4df486415779d991db43
+@start loggedin OK
+=== STEP C1
+| WRITE SYS$OUTPUT 5<CR><LF>
+| <CR>5<CR><LF>
+| <CR><NUL>$ 
+=== STEP C2
+| WRITE SYS$OUTPUT 6<CR><LF>
+| <CR>6<CR><LF>
+| <CR><NUL>$ 
+=== STEP U1
+| <02><CR><LF>
+| <NUL>$ WRITE SYS$OUTPUT 6
+=== STEP U2
+| <02><CR><LF>
+| <NUL>$ WRITE SYS$OUTPUT 5
+=== STEP DN
+| <CR><LF>
+| <NUL>$ WRITE SYS$OUTPUT 6
+=== STEP R1
+| <CR><LF>
+| <CR>6<CR><LF>
+| <CR><NUL>$ 
+=== STEP B
+| <02><CR><LF>
+| <NUL>$ WRITE SYS$OUTPUT 6
+=== STEP R2
+| <CR><LF>
+| <CR>6<CR><LF>
+| <CR><NUL>$ 

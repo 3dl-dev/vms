@@ -60,7 +60,9 @@ jobs:
     # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
     # vms-46c) adds a three-boot expect-driven step to this job; the extra
     # margin keeps a congested runner from tripping the ceiling as a flake.
-    timeout-minutes: 40
+    # 60 (was 40): the keystroke oracle (vms-370) plays ~30 timed interactive
+    # cases into one booted console (~10-20 min, longer while OVMX wedges).
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -110,6 +112,18 @@ jobs:
             ovmx-boot:latest \
             /test.sh
           python3 tools/oracle/semantic/semantic_diff.py semantic-out --report
+
+      # rd vms-370. THE KEYSTROKE ORACLE. Reuses the image built above. Plays
+      # every scripted keystroke case (tools/oracle/keystroke/cases/) into the
+      # booted OVMX console with the timing it was played into the console of a
+      # real OpenVMS VAX V7.3 / Alpha V8.4 node, and diffs what the terminal
+      # showed, step by step, against those goldens (docs/oracle/keystroke/).
+      # A ratchet like the semantic oracle: a difference not in
+      # docs/oracle/keystroke/known-diff.txt fails, and so does a listed
+      # difference that now matches -- the list only shrinks.
+      - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
+        run: |
+          KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
 
       # vms-9b7. THE RELEASE PATH: boot -> provision -> boot. The operator's
       # "%OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT" happened

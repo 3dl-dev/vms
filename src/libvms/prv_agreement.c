@@ -64,6 +64,7 @@ _Static_assert(PRV$V_NETMBX == VMS_PRV_V_NETMBX, "PRV$V_NETMBX disagrees with th
 _Static_assert(PRV$V_PHY_IO == VMS_PRV_V_PHY_IO, "PRV$V_PHY_IO disagrees with the executive");
 _Static_assert(PRV$V_SYSPRV == VMS_PRV_V_SYSPRV, "PRV$V_SYSPRV disagrees with the executive");
 _Static_assert(PRV$V_BYPASS == VMS_PRV_V_BYPASS, "PRV$V_BYPASS disagrees with the executive");
+_Static_assert(PRV$V_READALL == VMS_PRV_V_READALL, "PRV$V_READALL disagrees with the executive");
 _Static_assert(PRV$V_GRPPRV == VMS_PRV_V_GRPPRV, "PRV$V_GRPPRV disagrees with the executive");
 
 /*
@@ -83,6 +84,8 @@ _Static_assert(PRV$M_MOUNT  == VMS_PRV_M_MOUNT,  "PRV$M_MOUNT disagrees with the
 _Static_assert(PRV$M_NETMBX == VMS_PRV_M_NETMBX, "PRV$M_NETMBX disagrees with the executive");
 _Static_assert(PRV$M_PHY_IO == VMS_PRV_M_PHY_IO, "PRV$M_PHY_IO disagrees with the executive");
 _Static_assert(PRV$M_SYSPRV == VMS_PRV_M_SYSPRV, "PRV$M_SYSPRV disagrees with the executive");
+_Static_assert(PRV$M_BYPASS == VMS_PRV_M_BYPASS, "PRV$M_BYPASS disagrees with the executive");
+_Static_assert(PRV$M_READALL == VMS_PRV_M_READALL, "PRV$M_READALL disagrees with the executive");
 _Static_assert(PRV$M_GRPPRV == VMS_PRV_M_GRPPRV, "PRV$M_GRPPRV disagrees with the executive");
 
 /*

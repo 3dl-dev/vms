@@ -183,6 +183,7 @@ struct vms_mode_args {
 #define VMS_PRV_V_SYSPRV    28
 #define VMS_PRV_V_BYPASS    29
 #define VMS_PRV_V_GRPPRV    34
+#define VMS_PRV_V_READALL   35  /* PRV$V_READALL: read any object (vmsfs_acp.c acp_check_access) */
 
 /*
  * SYSNAM (2) / GRPNAM (3) / GRPPRV (34) -- ORACLE-PIN NOTE (vms-5b7).
@@ -233,6 +234,8 @@ struct vms_mode_args {
 #define VMS_PRV_M_PHY_IO    (1ULL << VMS_PRV_V_PHY_IO)
 #define VMS_PRV_M_SYSPRV    (1ULL << VMS_PRV_V_SYSPRV)
 #define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
+#define VMS_PRV_M_BYPASS    (1ULL << VMS_PRV_V_BYPASS)
+#define VMS_PRV_M_READALL   (1ULL << VMS_PRV_V_READALL)
 
 /*
  * The privileges the OVMX executive actually ENFORCES today.
@@ -302,12 +305,21 @@ struct vms_mode_args {
                               VMS_PRV_M_MOUNT  | VMS_PRV_M_PHY_IO)
 
 /*
+ * SYSPRV, BYPASS and READALL are enforced by the Files-11 ACP's protection gate
+ * (vmsfs_acp.c acp_check_access: BYPASS lifts every control, READALL grants read,
+ * SYSPRV qualifies the accessor for the SYSTEM category -- test_syssvc_privilege_enforce,
+ * acp-bypass-ignored / acp-readall-ignored / acp-sysprv-ignored); SYSPRV also gates the
+ * LNM$SYSTEM table (vms_lnm.c). DCL gates that used to accept SYSPRV/BYPASS as stand-ins
+ * for a privilege VMS does not substitute them for (SET UIC, SET PROCESS/PRIORITY, SET TIME)
+ * name the privilege VMS names, so widening this mask grants nothing there.
+ *
  * TMPMBX and PRMMBX are enforced: vms_mbx.c mbx_priv_check() refuses $CREMBX (temporary /
  * permanent) with SS$_NOPRIV without them, proved by test_syssvc_privilege_enforce and
  * anchored by the mbx-tmpmbx-check-removed / mbx-prmmbx-check-removed negative controls.
  */
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
-                             VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX)
+                             VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */

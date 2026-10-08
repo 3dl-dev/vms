@@ -1264,7 +1264,7 @@ EOF
         why)          echo "ace_parse_bits() sets one bit per access keyword. The mutation sets none, so (identifier=[1,4], access=r+w) parses to an ACE granting nothing. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 $PARSE_ACL (identifier=[1,4], access=r+w) is the oracle's bytes
-$FORMAT_ACL prints (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)
+$FORMAT_ACL prints (IDENTIFIER=<[1,4]>,ACCESS=READ+WRITE)
 DCL SET ACL then SHOW ACL prints the ACE as VMS does
 EOF
                       ;;

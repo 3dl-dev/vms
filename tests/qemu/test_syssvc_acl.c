@@ -51,6 +51,23 @@
 #define DCL_PATH "/bin/DCL.EXE"
 
 static int pass, fail;
+
+/* How [1,4] prints: [SYSTEM] where the rights database names it (a system disk
+ * with RIGHTSLIST.DAT), else [1,4] -- $FORMAT_ACL names what $IDTOASC names. */
+static char sys_uic_txt[48];
+static void init_sys_uic_txt(void)
+{
+    char name[40];
+    uint16_t nl = 0;
+    uint32_t resid = 0, attr = 0;
+    struct dsc$descriptor_s nd = { sizeof(name) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, name };
+    if ((sys$idtoasc(0x00010004u, &nl, &nd, &resid, &attr, NULL) & 1) && nl) {
+        name[nl] = '\0';
+        snprintf(sys_uic_txt, sizeof(sys_uic_txt), "[%s]", name);
+    } else {
+        snprintf(sys_uic_txt, sizeof(sys_uic_txt), "[1,4]");
+    }
+}
 static void check(int c, const char *m)
 {
     if (c) { printf("  PASS: %s\n", m); pass++; }
@@ -250,6 +267,8 @@ int main(int argc, char **argv)
         printf("=== test_syssvc_acl: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
     }
+    init_sys_uic_txt();
+    printf("  (identifier [1,4] prints as %s here)\n", sys_uic_txt);
     st = vms_kif_acp_mount(ODS2_UNIT);
     check(st & 1, "$MOUNT of the writable ODS-2 " ODS2_UNIT);
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);
@@ -352,9 +371,12 @@ int main(int argc, char **argv)
         check((st & 1) && memcmp(bin, ace, 12) == 0, "$PARSE_ACL (identifier=[1,4], access=r+w) is the oracle's bytes");
         bd.dsc$w_length = bin[0];
         st = sys$format_acl(&bd, &ol, &od, NULL, NULL, NULL, NULL, NULL);
-        check((st & 1) && ol == strlen("(IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)") &&
-              memcmp(out, "(IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)", ol) == 0,
-              "$FORMAT_ACL prints (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)");
+        {
+            char want[96];
+            snprintf(want, sizeof(want), "(IDENTIFIER=%s,ACCESS=READ+WRITE)", sys_uic_txt);
+            check((st & 1) && ol == strlen(want) && memcmp(out, want, ol) == 0,
+                  "$FORMAT_ACL prints (IDENTIFIER=<[1,4]>,ACCESS=READ+WRITE)");
+        }
         bd.dsc$w_length = sizeof(bin);
         st = sys$parse_acl(&bd2, &bd, &ep, NULL, 0);
         check(st == SS$_IVACL && strncmp(bad + ep, "ACCESS=BOGUS)", 13) == 0,
@@ -407,8 +429,10 @@ int main(int argc, char **argv)
                 "$ DIRECTORY/ACL VDA0:[OVMXDIR]ACLF7.DAT\n"
                 "$ EXIT\n", out, sizeof(out));
         printf("%s", out);
+        char want[96];
+        snprintf(want, sizeof(want), "          (IDENTIFIER=%s,ACCESS=READ+WRITE)", sys_uic_txt);
         check(strstr(out, "Object type: FILE,  Object name: ") != NULL &&
-              strstr(out, "          (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)") != NULL,
+              strstr(out, want) != NULL,
               "DCL SET ACL then SHOW ACL prints the ACE as VMS does");
         check(strstr(out, "%SYSTEM-W-ACLEMPTY, access control list is empty") != NULL,
               "after SET ACL/DELETE, SHOW ACL is %SYSTEM-W-ACLEMPTY");

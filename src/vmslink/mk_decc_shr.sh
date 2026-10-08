@@ -400,7 +400,10 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         # live in this RMS-backed pass because wildcard expansion is an RMS
         # directory search ($PARSE/$SEARCH, LIBVMSRMS$SHR). The three names are
         # NEW to this pass (the bootstrap pass never had them), so they are
-        # APPENDED at the vector tail -- every existing sv# stays put (vms-b14).
+        # APPENDED at the very END of the vector (PASS2_TAIL, added after the
+        # plain-name universals below) -- every sv# a pass-1-linked producer
+        # imports stays put (vms-b14: LIBVMSRMS$SHR binds pthread_mutex_lock et
+        # al. by index; appending ahead of them moved each one by 3).
         FSPEC_OBJ="$VENEER_DIR/crtl_filespec.o"
         # shellcheck disable=SC2086
         "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
@@ -409,7 +412,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         for want in 'decc$to_vms' 'decc$from_vms' 'decc$translate_vms'; do
             "$NM" --defined-only "$FSPEC_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$want" \
                 || { echo "mk_decc_shr: FAIL crtl_filespec.c did not define $want" >&2; exit 2; }
-            VEC="$VEC,$want=PROCEDURE"
+            PASS2_TAIL="${PASS2_TAIL:-},$want=PROCEDURE"
         done
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FSPEC_OBJ"
         echo "mk_decc_shr: DEC C file-spec translators wired (vms-32ae): decc\$to_vms/decc\$from_vms/decc\$translate_vms (tail-appended)"
@@ -521,6 +524,8 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # DECC_ALLOW_UNDEF=1 still records any remaining first-light residual (e.g.
     # the setjmp/cancellation surface — decc$longjmp, __cp_*, __syscall_cp_asm —
     # and the linker-defined _DYNAMIC/__init_array bounds) as deferred imports.
+    # Pass-2-only universals go after EVERYTHING the bootstrap pass also has.
+    VEC="$VEC${PASS2_TAIL:-}"
     ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
     for p in ${DECC_USE:-}; do ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $p"; done
     # vms-ed1e: the CRTL->RMS stdio veneer's own --use edge, kept separate

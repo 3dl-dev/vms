@@ -428,6 +428,9 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     struct dsc$descriptor_s in_d  = spawn_dsc(in_str);
     struct dsc$descriptor_s out_d = spawn_dsc(out_str);
 
+    { /* F45DBG */ struct stat dsb; int dr = in_str ? stat(in_str, &dsb) : -2; char db[400];
+      int dl = snprintf(db, sizeof db, "F45DBG lib$spawn in_str=%s stat=%d size=%ld errno=%d\n", in_str ? in_str : "(null)", dr, dr == 0 ? (long)dsb.st_size : -1L, errno);
+      (void)!write(2, db, (size_t)dl); }
     uint32_t vms_pid = 0;
     uint32_t cst = sys$creprc(&vms_pid, &img_d,
                               in_d.dsc$a_pointer  ? &in_d  : NULL,

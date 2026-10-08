@@ -868,6 +868,12 @@ static int lex_search(struct dcl_context *ctx, const char *args,
         result[0] = '\0';
         return 0;
     }
+    /* A spec with no wildcard keeps no search context: every call answers
+     * the file again (observed on OpenVMS Alpha V8.4, F$SEARCH of
+     * SYS$SYSTEM:LOGINOUT.EXE three times running, the same file each time:
+     * docs/oracle/alpha84-fsearch-nonwild.txt). */
+    if (!dcl_rms_dir_wild(fsc->dir))
+        fsearch_slot_clear(fsc);
     return 0;
 }
 

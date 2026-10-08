@@ -70,6 +70,17 @@ uint32_t vmsfs_device_concealed_rooted(const char *device,
                                        int *is_concealed, int *is_rooted);
 
 /*
+ * vmsfs_device_translate_step - ONE step of LNM$FILE_DEV for a device name
+ * (no trailing colon), for the RMS $PARSE name engine: the index-0
+ * equivalence into eq (NUL-terminated), *attr = the translation attributes as
+ * LNM$M_* bits (CONCEALED 0x100, TERMINAL 0x200), *maxidx = the highest
+ * equivalence index (a search list has maxidx > 0). Returns SS$_NORMAL, or
+ * SS$_NOLOGNAM when the name is not a logical name (outputs zeroed).
+ */
+uint32_t vmsfs_device_translate_step(const char *name, char *eq, size_t eqsz,
+                                     uint32_t *attr, int32_t *maxidx);
+
+/*
  * vmsfs_resolve_filespec_device - resolve the DEVICE field of `filespec` by
  * iterative logical-name translation through LNM$FILE_DEV, writing the
  * substituted spec to `result`. Wraps the one filespec-aware,

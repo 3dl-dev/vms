@@ -335,9 +335,12 @@ int main(void)
           "-- enumeration and versioning agree");
 
     nm = enumerate(DIRSPEC "WKNONE.XYZ;*", names, fids, 16, &endst);
-    check(nm == 0 && endst == (uint32_t)RMS$_NMF,
+    /* A search that finds nothing at all ends RMS$_FNF, not RMS$_NMF -- NMF
+     * is the end of a search that found something (observed on OpenVMS:
+     * RMS.SEARCH.NONE / RMS.SEARCH.4, docs/oracle/semantics/rms/; rd vms-42f8). */
+    check(nm == 0 && endst == (uint32_t)RMS$_FNF,
           "B6: sys$search of a name that matches nothing returns ZERO hits and "
-          "terminates RMS$_NMF (fail-honest, no fabricated match)");
+          "terminates RMS$_FNF (fail-honest, no fabricated match)");
 
     /* ==================================================================== *
      * C. STAT-CLASS ATTRIBUTE READ (rms_file_attr).                        *

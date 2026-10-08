@@ -515,6 +515,37 @@ uint32_t vmsfs_resolve_filespec_device(const char *filespec, char *result,
     return SS$_NORMAL;
 }
 
+/* vmsfs_device_translate_step - see vmsfs/device.h. */
+uint32_t vmsfs_device_translate_step(const char *name, char *eq, size_t eqsz,
+                                     uint32_t *attr, int32_t *maxidx)
+{
+    if (attr)
+        *attr = 0;
+    if (maxidx)
+        *maxidx = 0;
+    if (!name || !name[0] || !eq || eqsz == 0)
+        return SS$_BADPARAM;
+    eq[0] = '\0';
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr)
+        return SS$_NOLOGNAM;
+    char up[256];
+    snprintf(up, sizeof up, "%s", name);
+    str_upcase(up);
+    char vals[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+    uint8_t n = 0;
+    uint32_t a = 0;
+    uint32_t st = lnm_translate_searchlist(mgr, up, vals, LNM_MAX_SEARCHLIST, &n, &a);
+    if (!$VMS_STATUS_SUCCESS(st) || n == 0)
+        return SS$_NOLOGNAM;
+    snprintf(eq, eqsz, "%s", vals[0]);
+    if (attr)
+        *attr = ((a & LNM_ATTR_CONCEALED) ? 0x100u : 0) | ((a & LNM_ATTR_TERMINAL) ? 0x200u : 0);
+    if (maxidx)
+        *maxidx = (int32_t)n - 1;
+    return SS$_NORMAL;
+}
+
 /*
  * equiv_is_rooted - Does an equivalence string name a rooted directory?
  *

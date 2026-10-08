@@ -372,18 +372,49 @@ static int assign_resolve_mailbox_by_name(const char *name,
         if (!(st & 1)) return 0;                 /* not a logical name */
         if (rl >= sizeof(equiv)) rl = (uint16_t)(sizeof(equiv) - 1);
         equiv[rl] = '\0';
+        /* A device logical's equivalence may carry a directory (a concealed
+         * root "SYS$SYSDEVICE:[SYS0.]", the first member of SYS$SYSROOT's
+         * search list): $ASSIGN wants the device, so everything after the
+         * device's colon goes (rd vms-42f8: $SEARCH now hands back the
+         * concealed "SYS$SYSROOT:" a caller then assigns). */
+        {
+            char *colon = strchr(equiv, ':');
+            if (colon && colon[1] != '\0') {
+                colon[1] = '\0';
+                rl = (uint16_t)strlen(equiv);
+            }
+        }
         if (rl == 0 || strcmp(equiv, cur) == 0) return 0;  /* no progress */
 
+        /* Adopt a mailbox, or a disk UNIT -- not the generic SYS$SYSDEVICE /
+         * default-disk alias, which is itself a logical to follow one more
+         * level (SYS$SYSROOT: -> SYS$SYSDEVICE: -> the mounted unit). */
+        char ubare[256];
+        {
+            size_t ul = strlen(equiv);
+            if (ul >= sizeof(ubare)) ul = sizeof(ubare) - 1;
+            for (size_t k = 0; k < ul; k++) ubare[k] = (char)toupper((unsigned char)equiv[k]);
+            ubare[ul] = '\0';
+            if (ul > 0 && ubare[ul - 1] == ':') ubare[ul - 1] = '\0';
+        }
         if (resolve_vms_device(equiv, devres) &&
-            (devres->is_mailbox || devres->is_file)) {
+            (devres->is_mailbox ||
+             (devres->is_file && (assign_is_disk_unit(ubare) ||
+                                  strcmp(ubare, "SYS$SYSDEVICE") != 0)))) {
             strncpy(out, equiv, outsz - 1);
             out[outsz - 1] = '\0';
             return 1;
         }
 
-        /* Not a mailbox yet -- follow another level of indirection. */
+        /* Not a mailbox yet -- follow another level of indirection (the
+         * next name is looked up without its device colon). */
         strncpy(cur, equiv, sizeof(cur) - 1);
         cur[sizeof(cur) - 1] = '\0';
+        {
+            size_t cl = strlen(cur);
+            if (cl > 0 && cur[cl - 1] == ':') cur[cl - 1] = '\0';
+            if (cur[0] == '\0') return 0;
+        }
     }
     return 0;
 }

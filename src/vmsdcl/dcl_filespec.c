@@ -816,6 +816,15 @@ int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
     return 1;
 }
 
+int dcl_rms_dir_wild(const struct dcl_rms_dir *d)
+{
+    /* $PARSE's FNB: any wildcard in the directory, name, type or version
+     * (or, for a host POSIX path $PARSE passes through, a '*' / '%') */
+    if (!d) return 0;
+    if (d->nam.nam$l_fnb & NAM$M_WILDCARD) return 1;
+    return d->pattern[0] == '/' && strpbrk(d->pattern, "*%") != NULL;
+}
+
 uint32_t dcl_rms_dir_status(const struct dcl_rms_dir *d)
 {
     /* $SEARCH records its status on the FAB (rms_acp_search / the passthrough

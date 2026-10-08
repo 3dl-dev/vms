@@ -64,6 +64,7 @@ extern "C" {
 #define RMS$_DUP            99564   /* Duplicate key value, not allowed */
 #define RMS$_DEL            98914   /* Error deleting record */
 #define RMS$_DIR            99532   /* Error in directory name */
+#define RMS$_DNA            99548   /* Invalid default file name string (oracle: alpha84 RMSDEF) */
 #define RMS$_FAC            99604   /* File access (FAC) violation */
 #define RMS$_IMX            99692   /* Index not initialized */
 #define RMS$_IOP            99700   /* Illegal operation */

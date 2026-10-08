@@ -148,18 +148,20 @@ static $DESCRIPTOR (process_d, "FORCEX_SUB");
         /*
         ** Give the subprocess some image activation time ;-)
         */
-        (void)sleep (5);
-        { /* vms-f45 DEBUG PROBE (branch only): what exists 5s after the spawn */
-            char dbg[160];
+        { /* vms-f45 DEBUG PROBE v3 (branch only): watch the subprocess second by second */
+            int t;
             (void)fflush (stdout); (void)setvbuf (stdout, NULL, _IONBF, 0);
-            unsigned int pitem = JPI$_PRCNAM;
-            char pnm[40];
-            struct dsc$descriptor_s pnd = { sizeof pnm, DSC$K_DTYPE_T, DSC$K_CLASS_S, pnm };
-            unsigned short pnl = 0;
-            unsigned int pst = lib$getjpi (&pitem, &sub_pid, 0, 0, &pnd, &pnl);
-            (void)printf ("PROBE getjpi(sub_pid) status=%08x name=%.*s\n", pst, (int)pnl, pnm);
-            (void)snprintf (dbg, sizeof dbg, "echo PROBE spawn_status=%08x sub_pid=%08x; ps 2>&1 | grep -v '\\['", r0_status, sub_pid);
-            (void)system (dbg);
+            for (t = 0; t < 5; t++) {
+                unsigned int pitem = JPI$_PRCNAM;
+                char pnm[40];
+                struct dsc$descriptor_s pnd = { sizeof pnm, DSC$K_DTYPE_T, DSC$K_CLASS_S, pnm };
+                unsigned short pnl = 0;
+                unsigned int pst = lib$getjpi (&pitem, &sub_pid, 0, 0, &pnd, &pnl);
+                (void)printf ("PROBE t=%d getjpi(sub_pid=%08x) status=%08x name=%.*s\n", t, sub_pid, pst, (int)pnl, pnm);
+                (void)system ("ps 2>&1 | grep -v '\\[' | grep -v 'PID'");
+                (void)sleep (1);
+            }
+            (void)system ("dmesg 2>&1 | tail -n 40");
         }
 
         /*

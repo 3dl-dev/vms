@@ -46,6 +46,7 @@ int main(int argc, char **argv)
     char want[128], got[256];
     long total = 0;
     (void)argv;
+    setvbuf(stdout, NULL, _IONBF, 0);   /* every line reaches the console */
 
     /* 1. stdio writes a multi-block file of unaligned lines. */
     FILE *f = fopen(OUTF, "w");

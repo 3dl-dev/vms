@@ -92,6 +92,30 @@ static long long rawsys(long long n, long long a1, long long a2, long long a3,
     return __vms_alpha_syscall_raw(n, a1, a2, a3, a4, a5, 0);
 }
 
+/* OVMX_CRTLFD_TRACE: a debugging build writes each step to fd 2 with the raw
+ * trap (never through the hook). Off in every shipped build. */
+#ifdef OVMX_CRTLFD_TRACE
+static void tr(const char *m, long long v)
+{
+    char b[96];
+    int n = 0;
+    while (*m && n < 60)
+        b[n++] = *m++;
+    b[n++] = ' ';
+    unsigned long long u = (unsigned long long)v;
+    char h[17];
+    int i = 16;
+    h[16] = 0;
+    do { h[--i] = "0123456789abcdef"[u & 15]; u >>= 4; } while (u && i);
+    while (h[i]) b[n++] = h[i++];
+    b[n++] = '\n';
+    __vms_alpha_syscall_raw(SYS_write, 2, (long long)(uintptr_t)b, n, 0, 0, 0);
+}
+#define TR(m, v) tr(m, (long long)(v))
+#else
+#define TR(m, v) ((void)0)
+#endif
+
 #define BLK        512u
 #define IOBUF      (126u * BLK)     /* largest block-multiple a RAB word holds */
 #define RFD_MAX    1024
@@ -418,6 +442,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     if (r == -1)
         return 0;                               /* kernel namespace */
     *handled = 1;
+    TR("crtlfd: openat rms flags", flags);
     if (r == -2)
         return -errno;
     if (dir || (flags & O_DIRECTORY))
@@ -521,7 +546,10 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     if (flags & O_APPEND)
         rf->pos = rf->eof;
 
+    TR("crtlfd: opened kind", rf->kind);
+    TR("crtlfd: eof", rf->eof);
     long long fd = rfd_bind(rf, (flags & O_CLOEXEC) != 0);
+    TR("crtlfd: fd", fd);
     if (fd < 0) {
         sys$close(&rf->fab, 0, 0);
         rfile_free(rf);
@@ -782,6 +810,8 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
                                int *handled)
 {
     struct rfile *rf;
+    if (rget(a1) || n == SYS_openat)
+        TR("crtlfd: sys", n);
     switch (n) {
     case SYS_openat:
         return do_openat(a1, (const char *)(uintptr_t)a2, a3, handled);
@@ -1057,7 +1087,10 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
                        void *image_file_desc, unsigned int linkflag,
                        unsigned int cliflag, int *argc, int *argv, int *envp)
 {
+    TR("crtlfd: main enter", 0);
     __ovmx_sys_hook = rms_hook;
+    TR("crtlfd: hook installed", (uintptr_t)rms_hook);
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,
                         cliflag, argc, argv, envp);
+    TR("crtlfd: decc$main returned", 0);
 }

@@ -3,18 +3,8 @@
 # differ from real OpenVMS (docs/oracle/semantics/<family>/). Read by
 # tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
 # and so does a listed case that now matches. Fix the bug, delete the line.
-brk BRK.TT  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.TT.USERCLASS  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.TT.BADCLASS  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.TT.EMPTY  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.TT.HUGE  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.NODEV  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.NOUSER  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.BADTYPE  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.TYPE0  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk BRK.DEVICE.NOSENDTO  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk OPR.SHORT  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
-brk OPR.BADCHAN  # vms-eb46: $BRKTHRUW delivers nothing to TT: and accepts bad arguments; $SNDOPR argument checks
+brk BRK.NOUSER  # vms-eb46: a user with no terminal -- OpenVMS ends the IOSB SS$_DEVOFFLINE (132), OVMX SS$_NORMAL with a count of 0
+brk OPR.BADCHAN  # vms-4a69: arch-divergent -- an unassigned reply channel is SS$_IVIDENT on Alpha V8.4, SS$_IVCHAN on VAX V7.3 (OVMX: IVCHAN)
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS
 ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on VAX V7.3, writes 1 on Alpha V8.4; OVMX leaves it
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user

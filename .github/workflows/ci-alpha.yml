@@ -447,9 +447,11 @@ jobs:
           #     C RTL file layer over RMS (vms-b90; the FIX-record veneer is retired, vms-9f8e)
           grep -qE "mk_decc_shr: C RTL file layer over RMS wired \(vms-b90\): decc\\\$main -> ovmx_crtl_fd_main installs the syscall-funnel hook \(--use .*LIBVMSRMS\\\$SHR\.EXE\)" "$LOG" \
             || { echo "GATE FAIL (vms-2655): RMS file-layer wiring log line not seen"; exit 1; }
-          # (2) DECC$SHR's own pass-2 build resolved sys$create/open/connect/put/get/close
-          #     against --use LIBVMSRMS$SHR (the real RMS substrate, not a stub)
-          for s in create open connect put get close; do
+          # (2) DECC$SHR's own pass-2 build resolved the RMS services the C RTL file
+          #     layer drives against --use LIBVMSRMS$SHR (the real RMS substrate, not a
+          #     stub): stream files by block I/O ($READ/$WRITE), record files by $GET,
+          #     names by $PARSE/$SEARCH/$ERASE/$RENAME
+          for s in create open connect get read write close parse search erase rename; do
             grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
               || { echo "GATE FAIL (vms-2655): sys\$${s} not bound to LIBVMSRMS\$SHR inside DECC\$SHR pass 2"; exit 1; }
           done
@@ -474,7 +476,7 @@ jobs:
           readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*EXEC'    || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_EXEC (P0, vms-035)"; exit 1; }
           test -f "$OUT/LIBVMSRMS\$SHR.EXE" || { echo "GATE FAIL (vms-2655): LIBVMSRMS\$SHR.EXE not staged in OUTDIR"; exit 1; }
           echo "GATE PASS (vms-2655): port image STRICT-links --use veneer-wired DECC\$SHR + LIBVMSRMS\$SHR + LIBOTS zero-deferred;"
-          echo "  decc\$fopen binds to the veneer producer, whose own build resolved sys\$create/open/connect/put/get/close"
+          echo "  decc\$fopen binds to the RMS-backed producer, whose own build resolved sys\$create/open/connect/get/read/write/close/parse/search/erase/rename"
           echo "  against LIBVMSRMS\$SHR (real RMS substrate, not musl-POSIX); EM_ALPHA/ET_DYN; LIBVMSRMS\$SHR.EXE staged."
 
       # vms-f1a: the EVAX/Alpha mirror of the ELF STRONG-vs-STRONG MULDEF gate

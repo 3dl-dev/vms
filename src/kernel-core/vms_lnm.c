@@ -247,12 +247,57 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode)
     if (!lnm_arena || vms_pid == 0)
         return;
     exec_lock(&lnm_write_lock);
-    lnm_write_begin();
+    /*
+     * Open a write section (bump the seqlock generation readers retry on)
+     * only when there is a name to delete (rd vms-ec7e). This runs at EVERY
+     * process teardown, most of which own no such name; bumping the generation
+     * for nothing made every concurrent translation retry. The pre-scan is
+     * stable: lnm_write_lock excludes every other writer.
+     */
     for (i = 0; i < lnm_arena->max_entries; i++) {
+        const struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_PROCESS &&
+            e->scope_key == vms_pid && e->acmode >= min_acmode)
+            break;
+    }
+    if (i == lnm_arena->max_entries) {
+        exec_unlock(&lnm_write_lock);
+        return;
+    }
+    lnm_write_begin();
+    for (; i < lnm_arena->max_entries; i++) {
         struct vms_lnm_entry *e = &lnm_arena->entries[i];
 
         if (e->in_use && e->table == VMS_LNM_TBL_PROCESS &&
             e->scope_key == vms_pid && e->acmode >= min_acmode)
+            lnm_free_entry(e);
+    }
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+}
+
+/*
+ * vms_lnm_forget_device - delete the LNM$SYSTEM names whose single equivalence
+ * is the device `devnam` ("MBA12:"). A named mailbox's logical name is the
+ * mailbox's: when the executive deletes the mailbox the name goes with it, so
+ * a later $ASSIGN of the name finds neither (OpenVMS: SS$_IVDEVNAM, observed
+ * IO.ASSIGN.MBX.GONE on VAX V7.3 and Alpha V8.4; vms-4a69). Called by the
+ * mailbox driver after it has freed the unit, holding none of its own locks.
+ */
+void vms_lnm_forget_device(const char *devnam)
+{
+    uint32_t i;
+
+    if (!lnm_arena || !devnam || devnam[0] == '\0')
+        return;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_SYSTEM && e->num_equiv == 1 &&
+            strcmp(e->equiv[0].value, devnam) == 0)
             lnm_free_entry(e);
     }
     lnm_write_end();
@@ -289,6 +334,19 @@ void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid)
     if (!lnm_arena || !from_pid || !to_pid || from_pid == to_pid)
         return;
     exec_lock(&lnm_write_lock);
+    /* No write section when the parent has nothing to copy (rd vms-ec7e, as
+     * vms_lnm_rundown): this runs at every forked registration. */
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        const struct vms_lnm_entry *src = &lnm_arena->entries[i];
+
+        if (src->in_use && src->table == VMS_LNM_TBL_PROCESS &&
+            src->scope_key == from_pid && !(src->attributes & 0x02u))
+            break;
+    }
+    if (i == lnm_arena->max_entries) {
+        exec_unlock(&lnm_write_lock);
+        return;
+    }
     lnm_write_begin();
     for (i = 0; i < lnm_arena->max_entries; i++) {
         struct vms_lnm_entry *src = &lnm_arena->entries[i], *dst;
@@ -390,8 +448,14 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
         a->status = SS__BADPARAM;
         goto out_copy;
     }
-    for (i = 0; i < a->num_equiv; i++)
+    /* An equivalence is LENGTH-delimited, not NUL-delimited: it may hold any
+     * byte (a process-permanent file's begins ESC NUL, rd vms-b14e). Only the
+     * length is bounded here. */
+    for (i = 0; i < a->num_equiv; i++) {
         a->equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
+        if (a->equiv[i].length > VMS_LNM_MAX_VALUE)
+            a->equiv[i].length = VMS_LNM_MAX_VALUE;
+    }
 
     /* PRIVILEGE ENFORCEMENT (vms-5b7) -- see lnm_priv_check()'s header for
      * the full rationale and oracle citation. On refusal the arena is

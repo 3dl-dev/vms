@@ -22,6 +22,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unixlib.h>
 
 #define DIRSPEC   "VDA0:[SYSTMP]"
 #define OUTF  DIRSPEC "CFDOUT.TXT"
@@ -209,11 +210,22 @@ int main(int argc, char **argv)
     f = fopen(DIRSPEC "NO_SUCH_FILE.TXT", "r");
     check(f == NULL && errno == ENOENT, 23, "a missing file fails with ENOENT");
 
-    /* 11. rename + unlink are RMS $RENAME / $ERASE. */
+    /* 11. rename + unlink are RMS $RENAME / $ERASE. $RENAME re-links the
+     *     directory entry (ACP MODIFY!M_MOVE), so the file keeps its File ID --
+     *     not an erase plus a create of a new file. */
+    struct stat rb, ra;
+    int rbs = stat(DIRSPEC "CFDDUP.TXT", &rb);
     check(rename(DIRSPEC "CFDDUP.TXT", DIRSPEC "CFDREN.TXT") == 0 &&
               access(DIRSPEC "CFDREN.TXT", F_OK) == 0 &&
               access(DIRSPEC "CFDDUP.TXT", F_OK) != 0,
           24, "rename moves the directory entry");
+    int ras = stat(DIRSPEC "CFDREN.TXT", &ra);
+    printf("CFD: rename fid (%u,%u,%u) -> (%u,%u,%u)\n",
+           (unsigned)rb.st_ino[0], (unsigned)rb.st_ino[1], (unsigned)rb.st_ino[2],
+           (unsigned)ra.st_ino[0], (unsigned)ra.st_ino[1], (unsigned)ra.st_ino[2]);
+    check(rbs == 0 && ras == 0 && rb.st_ino[0] != 0 && rb.st_ino[0] == ra.st_ino[0] &&
+              rb.st_ino[1] == ra.st_ino[1] && rb.st_ino[2] == ra.st_ino[2],
+          42, "the renamed file keeps its File ID");
     check(unlink(DIRSPEC "CFDREN.TXT") == 0 && access(DIRSPEC "CFDREN.TXT", F_OK) != 0, 25,
           "unlink erases it");
 
@@ -277,6 +289,76 @@ int main(int argc, char **argv)
     check(d != NULL && readdir(d) != NULL, 39, "opendir(\"/vda0/systmp\") is the same directory");
     if (d)
         closedir(d);
+
+    /* 13b. A write far past one block-I/O transfer (126 blocks) lands whole:
+     *      200000 bytes in uneven pieces, then size and content read back. */
+    {
+        static unsigned char big[200000], back[4096];
+        for (int i = 0; i < (int)sizeof big; i++)
+            big[i] = (unsigned char)(i * 7 + (i >> 9));
+        int bfd = open(DIRSPEC "CFDBIG.DAT", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        long put = 0;
+        if (bfd >= 0) {
+            static const int piece[] = { 1, 511, 70000, 3, 65536, 64000 };
+            for (int k = 0; put < (long)sizeof big; k = (k + 1) % 6) {
+                long n = piece[k];
+                if (put + n > (long)sizeof big)
+                    n = (long)sizeof big - put;
+                long w = write(bfd, big + put, (size_t)n);
+                if (w != n)
+                    break;
+                put += w;
+            }
+            close(bfd);
+        }
+        struct stat bs;
+        int bsr = stat(DIRSPEC "CFDBIG.DAT", &bs);
+        long same = 0;
+        int rfd = open(DIRSPEC "CFDBIG.DAT", O_RDONLY);
+        if (rfd >= 0) {
+            long got;
+            while ((got = read(rfd, back, sizeof back)) > 0) {
+                if (same + got > (long)sizeof big || memcmp(back, big + same, (size_t)got) != 0)
+                    break;
+                same += got;
+            }
+            close(rfd);
+        }
+        printf("CFD: big write put=%ld size=%ld readback=%ld\n", put,
+               bsr == 0 ? (long)bs.st_size : -1L, same);
+        check(put == (long)sizeof big && bsr == 0 && bs.st_size == (long)sizeof big &&
+                  same == (long)sizeof big,
+              43, "a 200000-byte write lands whole and reads back byte-exact");
+        unlink(DIRSPEC "CFDBIG.DAT");
+    }
+
+    /* 14. DECC$FILE_SHARING changes how the C RTL opens a file: off (the
+     *     default), a second open for write of a file already open for write
+     *     meets the Files-11 file-access lock and is refused; on, the file is
+     *     opened shared and the second open succeeds. */
+    {
+        const char *shf = DIRSPEC "CFDSHR.TXT";
+        FILE *sf = fopen(shf, "w");
+        if (sf)
+            fclose(sf);
+        int fi = decc$feature_get_index("DECC$FILE_SHARING");
+        int a = open(shf, O_WRONLY), b = open(shf, O_WRONLY);
+        int off_ok = sf != NULL && fi > 0 && decc$feature_get_value(fi, 1) == 0 && a >= 0 && b < 0;
+        if (a >= 0) close(a);
+        if (b >= 0) close(b);
+        int set = fi > 0 ? decc$feature_set_value(fi, 1, 1) : -1;
+        a = open(shf, O_WRONLY);
+        b = open(shf, O_WRONLY);
+        int on_ok = set == 0 && a >= 0 && b >= 0;
+        if (a >= 0) close(a);
+        if (b >= 0) close(b);
+        if (fi > 0)
+            decc$feature_set_value(fi, 1, 0);
+        unlink(shf);
+        printf("CFD: DECC$FILE_SHARING index=%d off_ok=%d on_ok=%d\n", fi, off_ok, on_ok);
+        check(off_ok && on_ok, 41,
+              "DECC$FILE_SHARING: refused second open for write when off, shared when on");
+    }
 
     if (fails) {
         printf("OVMX CRTL-FD test: %d check(s) FAILED (first %d)\n", fails, first_fail);

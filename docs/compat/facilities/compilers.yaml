@@ -12,11 +12,18 @@ summary: >
   scope is an operator call (vms-082); the "run corpus software" goal (R2) leans
   on Fortran/COBOL/BASIC, so this is not automatically out-of-scope. Absent
   languages fail at compile time — the correct failure mode, never a facade.
-last_reviewed: 2026-09-14
+  The real OpenVMS GCC port (alpha-dec-vms) is the production-compiler path:
+  its compiler proper, built for the alpha-dec-vms host, compiles C on
+  OVMX/Alpha (row gcc_vms_host).
+last_reviewed: 2026-10-08
 items:
   - {id: c, kind: subsystem, status: implemented, authenticity: real, scope_1_0: in,
      vms: "DEC C / VSI C compiler", evidence: third-party/tcc,
      notes: "tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target. Not 'verified' — no DEC C conformance oracle is gated."}
+  - {id: gcc_vms_host, kind: subsystem, status: partial, authenticity: real, scope_1_0: undecided,
+     vms: "GNU C for OpenVMS Alpha (the alpha-dec-vms GCC port), run on VMS",
+     evidence: tools/cross-alpha-vms/selfhost/build-host-gcc.sh,
+     notes: "GCC 14.2 with the port's patches (tools/cross-alpha-vms/patches), built --host=alpha-dec-vms over OVMX's C RTL; cc1.exe compiles a C file on OVMX/Alpha and DCL TYPE of its assembly equals the cross compiler's (cc1-gate, vms-9a63). Not yet: the driver running cc1/as/LINK itself, native as, and the standard include directories (stat of a missing device path fails EIO, vms-9c0) -- the gate runs cc1 -nostdinc."}
   - {id: macro32, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: out,
      vms: "MACRO-32 assembler", evidence: docs/compat/facilities/macro.yaml,
      notes: "Explicitly out of scope (compatibility-contract.md); tcc's integrated assembler is GAS-syntax only. Cross-listed as the toolchain-domain MACRO-32 assembler row (facilities/macro.yaml)."}

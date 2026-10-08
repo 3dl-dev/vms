@@ -372,18 +372,56 @@ static int assign_resolve_mailbox_by_name(const char *name,
         if (!(st & 1)) return 0;                 /* not a logical name */
         if (rl >= sizeof(equiv)) rl = (uint16_t)(sizeof(equiv) - 1);
         equiv[rl] = '\0';
+        /* A process-permanent file: $ASSIGN uses the device after the
+         * ESC NUL IFI header (rd vms-b14e). */
+        if (vms_lnm_is_ppf(equiv, rl)) {
+            memmove(equiv, equiv + VMS_LNM_PPF_HDR, (size_t)rl - VMS_LNM_PPF_HDR);
+            rl = (uint16_t)(rl - VMS_LNM_PPF_HDR);
+            equiv[rl] = '\0';
+        }
+        /* A device logical's equivalence may carry a directory (a concealed
+         * root "SYS$SYSDEVICE:[SYS0.]", the first member of SYS$SYSROOT's
+         * search list): $ASSIGN wants the device, so everything after the
+         * device's colon goes (rd vms-42f8: $SEARCH now hands back the
+         * concealed "SYS$SYSROOT:" a caller then assigns). */
+        {
+            char *colon = strchr(equiv, ':');
+            if (colon && colon[1] != '\0') {
+                colon[1] = '\0';
+                rl = (uint16_t)strlen(equiv);
+            }
+        }
         if (rl == 0 || strcmp(equiv, cur) == 0) return 0;  /* no progress */
 
+        /* Adopt a mailbox, or a disk UNIT -- not the generic SYS$SYSDEVICE /
+         * default-disk alias, which is itself a logical to follow one more
+         * level (SYS$SYSROOT: -> SYS$SYSDEVICE: -> the mounted unit). */
+        char ubare[256];
+        {
+            size_t ul = strlen(equiv);
+            if (ul >= sizeof(ubare)) ul = sizeof(ubare) - 1;
+            for (size_t k = 0; k < ul; k++) ubare[k] = (char)toupper((unsigned char)equiv[k]);
+            ubare[ul] = '\0';
+            if (ul > 0 && ubare[ul - 1] == ':') ubare[ul - 1] = '\0';
+        }
         if (resolve_vms_device(equiv, devres) &&
-            (devres->is_mailbox || devres->is_file)) {
+            (devres->is_mailbox ||
+             (devres->is_file && (assign_is_disk_unit(ubare) ||
+                                  strcmp(ubare, "SYS$SYSDEVICE") != 0)))) {
             strncpy(out, equiv, outsz - 1);
             out[outsz - 1] = '\0';
             return 1;
         }
 
-        /* Not a mailbox yet -- follow another level of indirection. */
+        /* Not a mailbox yet -- follow another level of indirection (the
+         * next name is looked up without its device colon). */
         strncpy(cur, equiv, sizeof(cur) - 1);
         cur[sizeof(cur) - 1] = '\0';
+        {
+            size_t cl = strlen(cur);
+            if (cl > 0 && cur[cl - 1] == ':') cur[cl - 1] = '\0';
+            if (cur[0] == '\0') return 0;
+        }
     }
     return 0;
 }
@@ -680,8 +718,33 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             if (fd < 0) {
                 fd = open(devres.resolved_path, O_RDONLY);
             }
+            /*
+             * TT: is THIS process's terminal (rd vms-d900). A process that
+             * may not open the console node itself (it is not the substrate's
+             * superuser) still holds its terminal on its standard input --
+             * the console line its login session runs on, OPA0:, the one
+             * terminal the executive's device table carries -- so the
+             * channel's byte path is that descriptor, not a refusal.
+             */
+            if (fd < 0 && devres.is_terminal && isatty(STDIN_FILENO))
+                fd = dup(STDIN_FILENO);
         }
     } else {
+        /* A name that is neither a device nor a logical name for one is parsed
+         * as a device name: [_]ddcu, letters, digits and '$' (node / allocation
+         * class). Anything else -- "SP_PROBE_MBX" once its mailbox is gone --
+         * is SS$_IVDEVNAM on VAX V7.3 and Alpha V8.4, not SS$_NOSUCHDEV
+         * (semantic oracle IO.ASSIGN.MBX.GONE, BRK.NODEV; vms-4a69). A host
+         * path ('/...') is OVMX's own spelling, left alone. */
+        if (name[0] != '/') {
+            const char *d = name + (name[0] == '_');
+            for (; *d && *d != ':' && *d != '[' && *d != '<' && *d != '.' && *d != ';'; d++) {
+                if (!isalnum((unsigned char)*d) && *d != '$') {
+                    pthread_mutex_unlock(&pcb->chan_lock);
+                    return SS$_IVDEVNAM;
+                }
+            }
+        }
         /* Not a VMS device -- try to open as a plain file */
         fd = open(name, O_RDWR);
         if (fd < 0) {
@@ -730,7 +793,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
  *   SS$_IVCHAN - Invalid or unassigned channel number
  */
 uint32_t sys$dassgn(uint16_t chan) {
-    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return SS$_IVCHAN;
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return pcb_chan_unheld_status(chan);
 
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_IVCHAN;

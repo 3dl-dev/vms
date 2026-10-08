@@ -1040,13 +1040,21 @@ uint32_t sys$setprv(
 );
 
 /**
- * sys$chkpro - Check protection
+ * sys$chkpro - Check whether a subject may access an object (vms-d404)
  *
- * @param objpro  Pointer to object protection block
+ * @param itmlst   CHP$_ item list (ACCESS, FLAGS, OWNER, PROT, ACL, UIC, PRIV, RIGHTS)
+ * @param objpro   object security profile (not provided: SS$_UNSUPPORTED)
+ * @param subjpro  descriptor of a $CREATE_USER_PROFILE profile; 0 = the caller
  *
- * @return  SS$_NORMAL if access allowed
+ * @return  SS$_NORMAL if access is granted, SS$_NOPRIV if not
  */
-uint32_t sys$chkpro(void *objpro);
+uint32_t sys$chkpro(void *itmlst, void *objpro, void *subjpro);
+
+/** sys$create_user_profile - A user's security profile (UIC, privileges,
+ *  rights) for $CHKPRO; usrpro 0 returns the length in *usrprolen */
+uint32_t sys$create_user_profile(const struct dsc$descriptor_s *usrnam, void *itmlst,
+                                 uint32_t flags, void *usrpro, uint32_t *usrprolen,
+                                 uint32_t *contxt);
 
 /* ================================================================
  * RMS (Record Management Services) System Service Interface
@@ -1654,12 +1662,61 @@ uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
 /** sys$dalloc - Deallocate a device */
 uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode);
 
-/** sys$asctoid - Convert identifier name to binary value (attrib is reported 0) */
+/** sys$asctoid - Convert identifier name to binary value (and its attributes) */
 uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t *attrib);
 
 /** sys$idtoasc - Convert binary identifier to name (no wildcard context) */
 uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
                      uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
+
+/** sys$grantid - Add an identifier to a process rights list (executive state) */
+uint32_t sys$grantid(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                     const uint32_t *id, const struct dsc$descriptor_s *name,
+                     uint32_t *prvatr, uint32_t segment);
+
+/** sys$revokid - Remove an identifier from a process rights list */
+uint32_t sys$revokid(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                     const uint32_t *id, const struct dsc$descriptor_s *name,
+                     uint32_t *prvatr, uint32_t segment);
+
+/** sys$parse_acl - Text form of an access control entry to its binary form */
+uint32_t sys$parse_acl(const struct dsc$descriptor_s *aclstr, struct dsc$descriptor_s *aclent,
+                       uint16_t *errpos, void *accnam, uint32_t acmode);
+
+/** sys$format_acl - Binary access control entry to the text SHOW ACL prints */
+uint32_t sys$format_acl(const struct dsc$descriptor_s *aclent, uint16_t *acllen,
+                        struct dsc$descriptor_s *aclstr, uint16_t *width,
+                        struct dsc$descriptor_s *trmdsc, uint16_t *indent, void *accnam,
+                        void *nullarg);
+
+/** sys$get_security - Read an object's security profile (class FILE: owner,
+ *  protection, ACL) */
+uint32_t sys$get_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode);
+
+/** sys$set_security - Change an object's security profile (class FILE: owner,
+ *  protection, ACL entries) */
+uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode);
+
+/* The rights-database services (vms-7d5a; LIBVMSRMS, over SYS$SYSTEM:RIGHTSLIST.DAT). */
+/** sys$add_ident - Add an identifier (id 0 = the next general identifier) */
+uint32_t sys$add_ident(const struct dsc$descriptor_s *name, uint32_t id, uint32_t attrib,
+                       uint32_t *resid);
+/** sys$rem_ident - Remove an identifier and its holder records */
+uint32_t sys$rem_ident(uint32_t id);
+/** sys$add_holder - Grant an identifier to a holder (quadword {uic, 0}) */
+uint32_t sys$add_holder(uint32_t id, const uint32_t *holder, uint32_t attrib);
+/** sys$rem_holder - Revoke an identifier from a holder */
+uint32_t sys$rem_holder(uint32_t id, const uint32_t *holder);
+/** sys$find_holder - The holders of an identifier, one per call (context) */
+uint32_t sys$find_holder(uint32_t id, uint32_t *holder, uint32_t *attrib, uint32_t *contxt);
+/** sys$find_held - The identifiers a holder holds, one per call (context) */
+uint32_t sys$find_held(const uint32_t *holder, uint32_t *id, uint32_t *attrib, uint32_t *contxt);
+/** sys$finish_rdb - End a $FIND_HOLDER / $FIND_HELD stream */
+uint32_t sys$finish_rdb(uint32_t *contxt);
 
 /** sys$check_privilegew - Check the caller's privileges (auditing disabled: nothing logged) */
 uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum,

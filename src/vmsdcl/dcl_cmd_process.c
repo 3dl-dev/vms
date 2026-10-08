@@ -1495,6 +1495,14 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
         return 0;
     }
 
+    /* An absolute POSIX path (RUN /bin/sh, a substrate tool a harness runs)
+     * names no file on the ODS-2 volume -- the legacy resolver's case, not an
+     * ACP miss (rd vms-670: $PARSE now refuses such a spec as a VMS name). */
+    if (vms_spec && vms_spec[0] == '/') {
+        *acp_usable = 0;
+        return 0;
+    }
+
     const char *exts[2] = { "", ".EXE" };
     int nexts = dcl_spec_has_type(vms_spec) ? 1 : 2;
 

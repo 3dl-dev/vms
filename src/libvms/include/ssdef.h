@@ -81,6 +81,7 @@ extern "C" {
 #define SS$_ACCVIO          12      /* Access violation */
 #define SS$_BADPARAM        20      /* Bad parameter value */
 #define SS$_EXQUOTA         28      /* Exceeded quota */
+#define SS$_BADATTRIB       52      /* Bad attribute code (STARLET SSDEF, VAX V7.3 + Alpha V8.4 oracle) */
 #define SS$_NOPRIV          36      /* No privilege for attempted operation */
 /* ORACLE-PINNED (vms-73c4, Rule 8): SHOW QUOTA on a quotas-off volume, triggered
  * verbatim on live OpenVMS VAX V7.3 (lab-2 vaxlab-2). %SYSTEM-F-QFNOTACT, "disk
@@ -142,7 +143,15 @@ extern "C" {
  * ($EQU SS$_BUGCHECK 676; F$MESSAGE(676) -> %SYSTEM-F-BUGCHECK, internal
  * consistency failure). */
 #define SS$_ILLIOFUNC       244     /* Illegal I/O function (%SYSTEM-F-ILLIOFUNC) */
+/* ORACLE-PINNED: docs/oracle/alpha84-starlet-defs/SSDEF.txt ($EQU SS$_MBTOOSML 412,
+ * $EQU SS$_IVBUFLEN 844). MBTOOSML: a mailbox write larger than the mailbox's
+ * maximum message (rd vms-4a69); IVBUFLEN: an invalid buffer length. */
+#define SS$_MBTOOSML        412     /* Mailbox is too small for request */
+#define SS$_IVBUFLEN        844     /* Invalid buffer length */
 #define SS$_NOMORENODE      2560     /* No more cluster nodes (VMS: 0x24C) */
+/* ORACLE-PINNED: docs/oracle/alpha84-starlet-defs/SSDEF.txt ($EQU SS$_NOSUCHNODE 652):
+ * $GETSYI of a node this system has no information for (rd vms-74a). */
+#define SS$_NOSUCHNODE      652      /* Remote node is unknown */
 /* ================================================================
  * ORACLE-PINNED VALUES (vms-8019, 2026-07-30)
  *
@@ -201,6 +210,9 @@ extern "C" {
 #define SS$_RESULTOVF       532     /* Resultant string overflow (%SYSTEM-F-RESULTOVF) */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
+/* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt + alpha84 ($EQU SS$_MBFULL 2264).
+ * A mailbox write with IO$M_NORSWAIT that finds no room (rd vms-c6d1). */
+#define SS$_MBFULL          2264    /* Mailbox is full */
 #define SS$_NOSUCHDEV       2312    /* No such device */
 /* SS$_NOMOREDEV: needed as the sys$device_scan wildcard-scan-exhausted
  * terminator (see starlet.h). PROVENANCE: 0x0A58/2648, sourced this
@@ -342,6 +354,12 @@ extern "C" {
 #define SS$_NOMOREITEMS     1777    /* No more items */
 #define SS$_WRONGSTATE      9076    /* Object is in the wrong state for the request */
 #define SS$_CPUCAP          9236    /* Operation not permitted by CPU capabilities */
+#define SS$_ACLEMPTY        2512    /* Access control list is empty */
+#define SS$_NOENTRY         2520    /* Access control entry not found */
+#define SS$_NOMOREACE       2528    /* No more access control entries */
+#define SS$_ACLFULL         2552    /* No room in access control list for entry */
+#define SS$_IVACL           8676    /* Invalid access control list entry */
+#define SS$_NOCLASS         9436    /* No such object class */
 #define SS$_NONETMBX        10404   /* Network mailbox privilege required (NETMBX) */
 #define SS$_NOSYSPRV        10468   /* SYSPRV privilege required */
 #define SS$_NOAUDIT         10540   /* Event is not audited */

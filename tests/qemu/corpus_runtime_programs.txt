@@ -17,6 +17,7 @@ lib_bbssi
 lib_char
 lib_convert_date_string
 lib_crc
+lib_create_dir
 lib_currency
 lib_cvt_dtb
 lib_cvt_dx_dx
@@ -122,6 +123,7 @@ sys_delprc
 sys_device_scan
 sys_exit
 sys_filescan
+sys_find_held
 sys_forcex
 sys_get_entropy
 sys_getdvi
@@ -132,6 +134,7 @@ sys_getsyi
 sys_gettim_prec
 sys_getuai
 sys_getutc
+sys_ident
 sys_lckpag
 sys_numtim
 sys_purge_ws

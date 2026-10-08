@@ -395,6 +395,30 @@ uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
  *
  * Returns SS$_NORMAL or SS$_SUPERSEDE on success, or an error code.
  */
+/*
+ * lnm_create_bytes - create a name whose one equivalence is `len` raw bytes
+ * (it may hold NUL: a process-permanent file's is ESC NUL IFI device, rd
+ * vms-b14e). Executive-resident tables only -- the process-private store
+ * keeps C strings -- so with no executive this is SS$_NOSUCHDEV.
+ */
+uint32_t lnm_create_bytes(lnm_manager_t *mgr, const char *table_name,
+                          const char *logical_name, const char *value,
+                          uint16_t len, uint32_t attributes, uint8_t acmode)
+{
+    if (!mgr || !table_name || !logical_name || !value)
+        return SS$_BADPARAM;
+    uint32_t st = validate_logical_name(logical_name);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+    uint32_t exec_tbl = lnm_exec_table_id(table_name);
+    if (!exec_tbl)
+        return SS$_NOSUCHDEV;
+    const char *vals[1] = { value };
+    uint16_t lens[1] = { len };
+    return vms_kif_lnm_define_n(exec_tbl, logical_name, vals, lens, 1,
+                                attributes, acmode);
+}
+
 uint32_t lnm_create_multi(lnm_manager_t *mgr, const char *table_name,
                            const char *logical_name,
                            const char **equivalences, int num_equiv,
@@ -594,9 +618,16 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
             nv = recs[i].num_values;
             if (nv > LNM_MAX_INDEX) nv = LNM_MAX_INDEX;
             for (uint8_t k = 0; k < nv; k++) {
-                size_t vl = strlen(recs[i].values[k]);
+                const char *src = recs[i].values[k];
+                size_t vl = recs[i].value_len[k];
+                /* A process-permanent file lists as its device ("_OPA0:"),
+                 * as SHOW LOGICAL shows it on OpenVMS (rd vms-b14e). */
+                if (vms_lnm_is_ppf(src, (uint32_t)vl)) {
+                    src += VMS_LNM_PPF_HDR;
+                    vl -= VMS_LNM_PPF_HDR;
+                }
                 if (vl > LNM_MAX_VALUE) vl = LNM_MAX_VALUE;
-                memcpy(entry.translations[k].value, recs[i].values[k], vl);
+                memcpy(entry.translations[k].value, src, vl);
                 entry.translations[k].value[vl] = '\0';
                 entry.translations[k].length = (uint16_t)vl;
                 entry.translations[k].index = k;

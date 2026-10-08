@@ -11,12 +11,12 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 115 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 144 | 146 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 149 | 150 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **148 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **152 of 229**.
 
 Host column detail: compile-fail 38, link-fail 39, run-fail 9, run-crash 28; 6 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
-Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
+Runtime column detail: run-fail 0, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
 
@@ -27,17 +27,17 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `lib_establish` | 12 | handler is established, then removed, then lib$signal(SS$_ACCVIO) "crashes the program" by design |
 | `lib_signal` | 12 | lib$signal(SS$_ACCVIO=12): "Demonstrate how to signal an error" -- fatal, unhandled -> exit(12) |
 | `lib_stop` | 4 | lib$stop(SS$_NOMORENODE=2560, a warning) is forced to severe: exit((2560/4) & 0xFF) |
+| `sys_brkthruw` | 132 | BRK$C_USERNAME to its own user, run with that user on no terminal (the guest corpus has no login): OpenVMS ends the IOSB SS$_DEVOFFLINE=132 (semantic oracle BRK.NOUSER, docs/oracle/semantics/brk/alpha84.txt + vax73.txt) and errchk_sig signals it -- fatal, unhandled -> exit(132) |
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (81)
+### Not running (77)
 
 | program | host | runtime | reason |
 |---|---|---|---|
 | `lib_asn_wth_mbx` | link-fail | - | link: undefined lib$asn_wth_mbx |
 | `lib_attach` | link-fail | - | link: undefined lib$attach |
 | `lib_callg` | run-crash | - | ptr32: LIB$CALLG takes an argument list of 32-bit longwords holding pointers; the program asserts sizeof(unsigned)==sizeof(void*) (vms-95b) |
-| `lib_create_dir` | run-fail | - | product-gap: the corpus guest has no mounted writable volume or default directory for the relative [.LOG] spec; lib$create_dir itself is proven by tests/qemu/test_syssvc_create_dir.c (vms-47f7) |
 | `lib_ctrl` | compile-fail | - | compile: error: ‘LIB$M_CLI_CTRLT’ undeclared (first use in this function) |
 | `lib_cvtf_from_internal_time` | compile-fail | - | compile: 20 / #  error "Compile with CC/FLOAT=G_FLOAT (which is the default on alpha) |
 | `lib_cvtf_to_internal_time` | compile-fail | - | compile: error: #error "Please compile with CC/FLOAT=G_FLOAT (which is the default on alpha)" |
@@ -77,8 +77,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_erapat` | compile-fail | - | compile: missing header eradef.h |
 | `sys_fao` | compile-fail | - | compile: error: initializer element is not constant |
 | `sys_fastio` | compile-fail | - | compile: missing header iosadef.h |
-| `sys_find_held` | link-fail | - | link: undefined sys$find_held, sys$find_holder, sys$finish_rdb |
-| `sys_forcex` | run-crash | run-fail | flaky: timing-dependent: a spawned DCL subprocess plus two 5s sleeps; passes on a local KVM guest, hangs to the 40s budget on the CI runner; held at its CI verdict until the race is root-caused (vms-f45) |
 | `sys_format_audit` | link-fail | - | link: undefined sys$format_audit |
 | `sys_get_arith` | compile-fail | - | compile: error: #error "Alpha specific code" |
 | `sys_get_region_info` | link-fail | - | link: undefined sys$get_region_info |
@@ -88,7 +86,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_gs64` | compile-fail | - | compile: error: conflicting types for ‘SECID’; have ‘struct _seciddef’ |
 | `sys_hash_pwd` | compile-fail | - | compile: missing header smg$routines.h |
 | `sys_icc` | compile-fail | - | compile: missing header iccdef.h |
-| `sys_ident` | link-fail | - | link: undefined sys$add_holder, sys$add_ident, sys$grantid, sys$rem_holder, sys$rem_ident, sys$revokid |
 | `sys_ieee` | link-fail | - | link: undefined sys$ieee_set_fp_control, sys$ieee_set_precision_mode, sys$ieee_set_rounding_mode |
 | `sys_init_vol` | link-fail | - | link: undefined sys$init_vol |
 | `sys_io_fastpath` | compile-fail | - | compile: error: ‘SYI$_FAST_PATH’ undeclared (first use in this function) |
@@ -124,6 +121,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `tier3-netlib` | not-running | VAX C era source: includes <varargs.h> (removed from GCC) and uses variant_union; needs an old-style varargs shim and UCX/QIO socket glue (vms-801.7) |
 | `tier4-mx` | not-running | MX is BLISS/MACRO-32 plus C over NETLIB; no BLISS or MACRO-32 compiler exists in the toolchain and NETLIB (tier3-netlib) does not build yet |
 | `tier6-cmatrix` | not-running | needs a terminal-screen library (curses/SMG$) OVMX does not provide, and an autoconf config.h |
-| `tier6-ipc-benchmark` | not-running | the IPC bodies compile; the VMS shims need the DEC C RTL feature switches (unixlib.h decc$feature_*, LIB$INITIALIZE psect) which DECC$SHR does not carry |
+| `tier6-ipc-benchmark` | running | ipc-benchmark's pipe benchmark (pipe.c + the vms_crtl shims, args "4096 100") is compiled by TCC.EXE and linked by LINK.EXE against DECC$SHR, mastered onto the system disk and run in the guest under a live /dev/vms (tests/qemu/corpus_runtime_native.txt); counted in the runtime column |
 | `tier6-laxdriver` | not-running | a VMS device driver (DPT/DDT, driver prologue tables), not an application; needs a VMS driver loading environment OVMX does not have (vms-df4) |
 | `tier6-memtester` | running | memtester (3 sources, args "1 1") runs to completion in the guest under a live /dev/vms (tests/qemu/corpus_runtime_apps.txt); counted in the runtime column |

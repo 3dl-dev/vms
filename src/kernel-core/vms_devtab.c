@@ -157,7 +157,15 @@ static void device_reap(exec_list_head_t *reap);
                              VMS_TTC_NUMERIC_KEYPAD | \
                              VMS_TTC_VMS_STYLE_INPUT)
 
+/* The console's width is the oracle's per architecture: the VAX V7.3 console
+ * is an LA36 (132 columns); the Alpha V8.4 console senses 80 permanent
+ * columns (semantic oracle TT.SENSECHAR), and the 64-bit OVMX console
+ * follows the Alpha (rd vms-d900). */
+#if defined(__vax__) || defined(__vax)
 #define VMS_CONSOLE_WIDTH   132
+#else
+#define VMS_CONSOLE_WIDTH   80
+#endif
 #define VMS_CONSOLE_PAGE    24
 
 /*
@@ -243,6 +251,8 @@ static struct vms_device *vms_devtab_create(const char *devnam,
     dev->devchar   = devchar;
     dev->width     = width;
     dev->page      = page;
+    dev->perm_width = width;     /* a unit starts at its permanent set */
+    dev->perm_page  = page;
     exec_list_head_init(&dev->chanlist);
     exec_lock_init(&dev->lock);
 
@@ -1051,6 +1061,79 @@ long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg)
 long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg)
 {
     return term_rpi(proc, arg, 0);
+}
+
+/*
+ * vms_ioctl_term_setchar - record the ORIGINATING terminal's device type,
+ * width, page length and conveyed characteristics on an RTAn: (rd vms-14b). The CTERM host that minted
+ * the unit calls it with what the remote VAX conveyed in its CTERM Initiate;
+ * $GETDVI (vms_devinfo devtype/width/page), SHOW TERMINAL and F$GETDVI read the
+ * row back. Same gate as TERM_SETRPI: substrate superuser or SETPRV, and only
+ * a dynamically-minted RTAn: (a local terminal is never redefined here). Each
+ * field applies only under its flag; out-of-range values (or a characteristic
+ * bit outside VMS_TTC_*) are SS$_BADPARAM.
+ */
+long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_termchar_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    if (!exec_current_is_privileged() &&
+        !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    if ((args.flags & ~(VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
+                        VMS_TERMCHAR_M_PAGE | VMS_TERMCHAR_M_CHAR)) != 0 ||
+        args.devtype > 0xff || args.width > 0xffff || args.page > 0xff ||
+        ((args.setchar | args.clrchar) & ~((VMS_TTC_VMS_STYLE_INPUT << 1) - 1)) != 0) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    if (args.flags & VMS_TERMCHAR_M_TYPE)
+        dev->devtype = args.devtype;
+    /* What the remote terminal conveys is its own geometry: the permanent
+     * set as well as the current one (rd vms-d900). */
+    if (args.flags & VMS_TERMCHAR_M_WIDTH)
+        dev->width = dev->perm_width = args.width;
+    if (args.flags & VMS_TERMCHAR_M_PAGE)
+        dev->page = dev->perm_page = args.page;
+    if (args.flags & VMS_TERMCHAR_M_CHAR) {
+        dev->devchar &= ~args.clrchar;
+        dev->devchar |= args.setchar;
+    }
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
 }
 
 int vms_devtab_remove_terminal(const char *devnam)
@@ -2224,6 +2307,8 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
     info->devchar   = dev->devchar;
     info->width     = dev->width;
     info->page      = dev->page;
+    info->perm_width = dev->perm_width;
+    info->perm_page  = dev->perm_page;
     /* DVI$_MSCP_SERVED (dvidef.h 0x0073). A projection of the row, never a
      * composed answer: 1 only for a unit vms_devtab_add_served_disk() entered
      * from a REAL discovery walk on a REAL served node (FC-P7.1). */
@@ -2491,6 +2576,13 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
         dev->width = args.width;
     if (args.flags & VMS_TTSET_PAGE)
         dev->page = args.page;
+    /* SET TERMINAL/PERMANENT: the permanent set too (rd vms-d900). */
+    if (args.flags & VMS_TTSET_PERM) {
+        if (args.flags & VMS_TTSET_WIDTH)
+            dev->perm_width = args.width;
+        if (args.flags & VMS_TTSET_PAGE)
+            dev->perm_page = args.page;
+    }
     dev->opcnt++;
     exec_unlock(&dev->lock);
 

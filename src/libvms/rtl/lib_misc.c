@@ -17,11 +17,13 @@
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
+#include "str$routines.h"
 #include "prcdef.h"
 #include "lnmdef.h"
 #include "clidef.h"          /* CLI$M_NOWAIT — lib$spawn "flags" bits        */
 #include "ovmx_layout.h"     /* VMS_DCL_PATH — the DCL CLI image filespec    */
 #include "rmsdef.h"
+#include "rms_textfile.h"   /* rms_textfile_open/getline -- SYS$INPUT read through RMS (vms-ccc) */
 #include "vmsfs/filespec.h"  /* vmsfs_to_linux_path — VMS filespec resolver  */
 #include "starlet.h"         /* sys$creprc — the one executive-registered create (B0) */
 #include "vms_kif.h"         /* vms_kif_getjpi_pid, struct vms_procinfo — the wait handle */
@@ -84,42 +86,83 @@ static void find_file_release(uint32_t handle) {
  *   result_str - Receives string result (or NULL)
  *   result_len - Receives actual length of result (or NULL)
  */
+/*
+ * LIB$GETJPI / LIB$GETSYI deliver an item as TEXT when the caller gives a
+ * result-string descriptor (OpenVMS RTL Library (LIB$) Manual): a string item
+ * as it is, a numeric item as its decimal value, a UIC in the named [g,m]
+ * form $FAO's !%I gives (observed LIB.GETJPI.UIC.STRING "[SYSTEM]",
+ * LIB.GETSYI.DEFPRI.STRING "4"; docs/oracle/semantics/rtl/).
+ */
+static int lib_item_is_string(int jpi, uint32_t code)
+{
+    static const uint32_t jstr[] = { JPI$_USERNAME, JPI$_PRCNAM, JPI$_TERMINAL,
+        JPI$_ACCOUNT, JPI$_IMAGNAME, JPI$_NODENAME, JPI$_CLINAME,
+        JPI$_TABLENAME, JPI$_DFDEV, JPI$_DFDIR };
+    static const uint32_t sstr[] = { SYI$_NODENAME, SYI$_VERSION, SYI$_HW_NAME,
+        SYI$_ARCH_NAME, SYI$_SCSNODE };
+    const uint32_t *t = jpi ? jstr : sstr;
+    size_t n = jpi ? sizeof jstr / sizeof jstr[0] : sizeof sstr / sizeof sstr[0];
+    for (size_t i = 0; i < n; i++)
+        if (t[i] == code) return 1;
+    return 0;
+}
+
+static uint32_t lib_item_text(int jpi, uint32_t code, const char *raw, uint16_t rawlen,
+                              struct dsc$descriptor_s *out, uint16_t *outlen)
+{
+    char txt[256];
+    uint16_t tl;
+    if (lib_item_is_string(jpi, code)) {
+        tl = rawlen < sizeof txt ? rawlen : (uint16_t)(sizeof txt - 1);
+        memcpy(txt, raw, tl);
+    } else if (jpi && code == JPI$_UIC) {
+        uint32_t uic = 0;
+        memcpy(&uic, raw, rawlen < 4 ? rawlen : 4);
+        struct dsc$descriptor_s cd = { 3, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"!%I" };
+        struct dsc$descriptor_s od = { (uint16_t)(sizeof txt - 1), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
+        tl = 0;
+        if (!(sys$fao(&cd, &tl, &od, uic) & 1)) tl = 0;
+    } else {
+        uint64_t v = 0;
+        memcpy(&v, raw, rawlen < 8 ? rawlen : 8);
+        tl = (uint16_t)snprintf(txt, sizeof txt, "%llu", (unsigned long long)v);
+    }
+    txt[tl] = '\0';
+    struct dsc$descriptor_s src = { tl, DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
+    uint32_t st = str$copy_dx(out, &src);
+    if (outlen) *outlen = tl < out->dsc$w_length || out->dsc$b_class == DSC$K_CLASS_D
+                          ? tl : out->dsc$w_length;
+    return (st & 1) ? SS$_NORMAL : st;
+}
+
 uint32_t lib$getjpi(const uint32_t *item_code, const uint32_t *pid,
                     const struct dsc$descriptor_s *prcnam,
                     void *result, struct dsc$descriptor_s *result_str,
                     uint16_t *result_len) {
     if (!item_code) return SS$_BADPARAM;
 
+    char raw[256];
+    uint16_t rawlen = 0;
     struct item_list_3 items[2];
     memset(items, 0, sizeof(items));
-
-    items[0].buflen = result_str ? result_str->dsc$w_length : sizeof(uint32_t);
     items[0].item_code = (uint16_t)*item_code;
-    items[0].bufaddr = result_str ? (void *)result_str->dsc$a_pointer
-                                  : (void *)result;
-    items[0].retlen = result_len;
-    /* Terminator */
-    items[1].buflen = 0;
-    items[1].item_code = 0;
-    items[1].bufaddr = NULL;
-    items[1].retlen = NULL;
-
-    return sys$getjpiw(0, pid, (void *)prcnam, items, NULL, NULL, 0);
+    if (result_str) {
+        items[0].buflen = sizeof raw;
+        items[0].bufaddr = raw;
+        items[0].retlen = &rawlen;
+    } else {
+        items[0].buflen = sizeof(uint32_t);
+        items[0].bufaddr = result;
+        items[0].retlen = result_len;
+    }
+    uint32_t st = sys$getjpiw(0, pid, (void *)prcnam, items, NULL, NULL, 0);
+    if (!(st & 1) || !result_str)
+        return st;
+    return lib_item_text(1, *item_code, raw, rawlen, result_str, result_len);
 }
 
 /*
- * lib$getsyi - Get System Information (simplified wrapper).
- *
- * Provides a simpler calling interface to sys$getsyi for retrieving
- * a single item.
- *
- * Parameters:
- *   item_code  - SYI$_ item code
- *   result     - Receives numeric result (or NULL)
- *   result_str - Receives string result (or NULL)
- *   result_len - Receives actual length (or NULL)
- *   csid       - Cluster system ID (or NULL)
- *   node       - Node name descriptor (or NULL)
+ * lib$getsyi - Get System Information (simplified wrapper): as lib$getjpi.
  */
 uint32_t lib$getsyi(const uint32_t *item_code,
                     void *result, struct dsc$descriptor_s *result_str,
@@ -127,21 +170,24 @@ uint32_t lib$getsyi(const uint32_t *item_code,
                     const struct dsc$descriptor_s *node) {
     if (!item_code) return SS$_BADPARAM;
 
+    char raw[256];
+    uint16_t rawlen = 0;
     struct item_list_3 items[2];
     memset(items, 0, sizeof(items));
-
-    items[0].buflen = result_str ? result_str->dsc$w_length : sizeof(uint32_t);
     items[0].item_code = (uint16_t)*item_code;
-    items[0].bufaddr = result_str ? (void *)result_str->dsc$a_pointer
-                                  : (void *)result;
-    items[0].retlen = result_len;
-    /* Terminator */
-    items[1].buflen = 0;
-    items[1].item_code = 0;
-    items[1].bufaddr = NULL;
-    items[1].retlen = NULL;
-
-    return sys$getsyiw(0, csid, node, items, NULL, NULL, 0);
+    if (result_str) {
+        items[0].buflen = sizeof raw;
+        items[0].bufaddr = raw;
+        items[0].retlen = &rawlen;
+    } else {
+        items[0].buflen = sizeof(uint32_t);
+        items[0].bufaddr = result;
+        items[0].retlen = result_len;
+    }
+    uint32_t st = sys$getsyiw(0, csid, node, items, NULL, NULL, 0);
+    if (!(st & 1) || !result_str)
+        return st;
+    return lib_item_text(0, *item_code, raw, rawlen, result_str, result_len);
 }
 
 /*
@@ -413,8 +459,51 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         close(tfd);
         in_str = cmd_tmp;
     } else if (have_in) {
-        spawn_resolve_spec(input_file, in_resv, sizeof(in_resv));
-        in_str = in_resv;
+        /*
+         * SYS$INPUT FROM A FILE (vms-ccc). The file is read through RMS over the
+         * ACP -- the same view the caller's own $CREATE/fopen wrote it through.
+         * The old code translated the spec to a Linux path (leftover of the retired
+         * /vms passthrough, e.g. /vms/SYSTMP/demo_forcex.com;0), which does not
+         * exist for an ODS-2 file; $CREPRC's child then failed the open() silently,
+         * left the subprocess on the creator's /dev/null, and DCL read EOF and
+         * exited at once. Materialise the records into the scratch file $CREPRC
+         * can open (the mechanism the command-string case already uses). A file
+         * RMS cannot reach is an honest RMS$_FNF here, before anything is created --
+         * never a silent substitute input.
+         */
+        char raw_in[1024];
+        dsc$strncpy(raw_in, input_file, sizeof(raw_in));
+        rms_textfile_t *tf = rms_textfile_open(raw_in);
+        if (tf) {
+            int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
+            if (tfd < 0) { rms_textfile_close(tf); return SS$_INSFMEM; }
+            have_tmp = 1;
+            char rec[4096];
+            int too_long = 0, werr = 0;
+            while (rms_textfile_getline(tf, rec, sizeof(rec), &too_long)) {
+                size_t rl = strlen(rec);
+                rec[rl++] = '\n';
+                for (size_t off = 0; off < rl; ) {
+                    ssize_t w = write(tfd, rec + off, rl - off);
+                    if (w < 0) { if (errno == EINTR) continue; werr = 1; break; }
+                    off += (size_t)w;
+                }
+                if (werr) break;
+            }
+            rms_textfile_close(tf);
+            close(tfd);
+            if (werr) { unlink(cmd_tmp); return SS$_INSFMEM; }
+            in_str = cmd_tmp;
+        } else {
+            /* Not reachable through RMS. A caller handing a plain Linux path (host-side
+             * tooling) still works when that path is a real regular file; anything
+             * else is a file-not-found, reported before a process exists. */
+            spawn_resolve_spec(input_file, in_resv, sizeof(in_resv));
+            struct stat ist;
+            if (stat(in_resv, &ist) != 0 || !S_ISREG(ist.st_mode))
+                return RMS$_FNF;
+            in_str = in_resv;
+        }
     }
 
     char out_resv[1024] = "";
@@ -471,10 +560,34 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
          */
         const uint32_t efn_val = efn ? *efn : VMS_EF_NONE;
         if (efn_val != VMS_EF_NONE || astadr != NULL) {
-            (void)vms_kif_spawn_notify(vms_pid, efn_val,
+            const uint32_t ast = vms_kif_spawn_notify(vms_pid, efn_val,
                                        (uint64_t)(uintptr_t)astadr,
                                        (uint64_t)(uintptr_t)astprm,
                                        NULL);
+            if (ast == SS$_NONEXPR) {
+                /*
+                 * The subprocess we JUST created is already gone AND already
+                 * reclaimed by the executive's reaper (a command file that ends at
+                 * once -- e.g. an empty SYS$INPUT -- finishes before this arm runs;
+                 * observed as the vms-f45 lost completion: the subprocess exited
+                 * ~immediately, the arm found no process, and the caller's
+                 * $WAITFR on the completion event flag hung to the harness
+                 * budget). The executive only keeps a completion for a subprocess
+                 * that still has a process-table row, so with no row there is
+                 * nothing left to deliver it. VMS notifies the creator whenever the
+                 * subprocess is deleted; "no such process" for a pid this very call
+                 * returned means exactly that, so complete the caller's request
+                 * here: set ITS event flag and queue ITS AST, both through the
+                 * public services acting on the caller itself. The completion
+                 * $STATUS of a subprocess that was reclaimed unobserved is
+                 * unknown, so *status is left as the caller initialised it.
+                 */
+                if (efn_val != VMS_EF_NONE)
+                    (void)sys$setef(efn_val);
+                if (astadr != NULL)
+                    (void)sys$dclast((void (*)(uint32_t))astadr,
+                                     (uint32_t)(uintptr_t)astprm, 0);
+            }
         }
 
         /*
@@ -644,6 +757,14 @@ uint32_t (lib$find_file)(const struct dsc$descriptor_s *filespec,
     uint32_t st = sys$search(&c->fab, 0, 0);
     if (!(st & 1)) {
         if (status_value) *status_value = c->fab.fab$l_stv;
+        /* At the end of the search the result is the expanded (wildcard)
+         * spec the search walked (observed LIB.FIND_FILE.WILD.2:
+         * "...]LOGINOU*.EXE;*" with RMS$_NMF; docs/oracle/semantics/rtl/). */
+        if ((st == RMS$_NMF || st == RMS$_FNF) && c->nam.nam$b_esl &&
+            resultspec->dsc$b_class != DSC$K_CLASS_VS) {
+            uint16_t el = c->nam.nam$b_esl;
+            (void)lib$scopy_r_dx(&el, c->esa, resultspec);
+        }
         ff_close(c);
         find_file_release(*context);
         free(c);

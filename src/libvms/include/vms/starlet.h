@@ -15,6 +15,11 @@ int SYS$ASSIGN(void *devnam, unsigned short *chan, ...);
 int SYS$DASSGN(unsigned short chan);
 int SYS$TRNLNM(unsigned int *attr, void *tabnam, void *lognam, unsigned char *acmode, void *itmlst);
 int SYS$CRELNM(unsigned int *attr, void *tabnam, void *lognam, unsigned char *acmode, void *itmlst);
+/* $QIO(W): efn, chan, func, iosb, then astadr, astprm, P1..P6 (quadword argument
+ * slots). On the VMS ABI so far: the ACP functions IO$_ACCESS / IO$_DEACCESS on a
+ * file-class channel; any other function is SS$_ILLIOFUNC. */
+int SYS$QIO(unsigned int efn, unsigned short chan, unsigned int func, void *iosb, ...);
+int SYS$QIOW(unsigned int efn, unsigned short chan, unsigned int func, void *iosb, ...);
 __VMS_ABI_EXTERN_C_END
 
 #endif /* __VMS_STARLET_H */

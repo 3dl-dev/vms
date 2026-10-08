@@ -80,6 +80,8 @@
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
+extern int vms$$chan_to_fd(uint16_t chan);   /* sys_assign.c */
+extern int vms$$chan_is_mailbox(uint16_t chan);
 
 /* Operator log file path */
 #include "ovmx_layout.h"
@@ -350,7 +352,6 @@ static void get_current_username(char *buf, size_t bufsz)
  */
 uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
 {
-    (void)chan;
 
     if (!msgbuf || !msgbuf->dsc$a_pointer)
         return SS$_BADPARAM;
@@ -383,8 +384,14 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
      * print correctly while leaving the two halves free to disagree again,
      * which is why rd vms-2d37 rules it out explicitly.
      */
+    /* a channel to reply on must be one this process holds (OpenVMS: an
+     * unassigned channel number is refused -- observed OPR.BADCHAN) */
+    if (chan != 0 && vms$$chan_to_fd(chan) < 0 && !vms$$chan_is_mailbox(chan))
+        return pcb_chan_unheld_status(chan);
+    /* a buffer shorter than the request header carries no request; OpenVMS
+     * accepts it all the same (observed OPR.SHORT) and there is nothing to log */
     if (msgbuf->dsc$w_length < OPC$K_MS_HDRLEN)
-        return SS$_BADPARAM;
+        return SS$_NORMAL;
 
     const char *blk = (const char *)msgbuf->dsc$a_pointer;
     size_t textlen = (size_t)msgbuf->dsc$w_length - OPC$K_MS_HDRLEN;
@@ -448,77 +455,58 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
 }
 
 /*
- * Resolve a VMS terminal device name to a Linux /dev path.
- *
- * Mappings:
- *   TT:, _TTA0:    -> /dev/tty  (current terminal)
- *   _FTA<n>:       -> /dev/pts/<n>
- *   _TTA<n>:       -> /dev/tty<n>
- *
- * Returns 1 if resolved, 0 if unmappable.
+ * $BRKTHRU / $BRKTHRUW (rd vms-eb46), as observed on OpenVMS
+ * (docs/oracle/semantics/brk/):
+ *   - the IOSB is cleared first; its second word counts the terminals the
+ *     message reached, the third those that timed out, the fourth those that
+ *     refused it;
+ *   - a send type outside BRK$C_DEVICE..BRK$C_ALLTERMS, or a message class
+ *     outside BRK$C_GENERAL..BRK$C_OPCOM and BRK$C_USER1..USER16, is
+ *     SS$_BADPARAM; a DEVICE or USERNAME broadcast with no sendto is
+ *     SS$_ACCVIO; a device that does not exist is SS$_IVDEVNAM;
+ *   - the message goes to the terminals themselves -- this process's own
+ *     (TT:), a device the executive's device table names, every terminal a
+ *     user is logged in on, or every terminal -- with the carriage control
+ *     carcon asks for (0x20: on a line of its own).
+ * Which terminals exist and who is logged in on each is the executive's device
+ * table (vms_kif_devscan / vms_kif_terminal_getlogin), never a host lookup.
  */
-static int resolve_terminal(const char *devnam,
-                             char *linux_dev, size_t devsz)
+#include "ovmx_console.h"
+#include "brkdef.h"
+#include "dcdef.h"
+
+static int brk_write(const char *devnam, const char *text, size_t len, uint32_t carcon)
 {
-    if (!devnam || !devnam[0]) {
-        strncpy(linux_dev, "/dev/tty", devsz);
-        linux_dev[devsz - 1] = '\0';
-        return 1;
+    char path[256] = "";
+    int fd = -1;
+    if (ovmx_console_terminal_path(devnam, path, sizeof path)) {
+        fd = open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK);
+        if (fd < 0 && isatty(STDOUT_FILENO))
+            fd = dup(STDOUT_FILENO);          /* the console line this process runs on */
+    } else {
+        char backing[128] = "";
+        if (vms_kif_terminal_resolve(devnam, backing, sizeof backing) & 1) {
+            snprintf(path, sizeof path, "%s", backing);
+            fd = open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK);
+        }
     }
-
-    /* Uppercase copy, strip colon */
-    char upper[64];
-    strncpy(upper, devnam, sizeof(upper) - 1);
-    upper[sizeof(upper) - 1] = '\0';
-    for (size_t i = 0; upper[i]; i++)
-        if (upper[i] >= 'a' && upper[i] <= 'z')
-            upper[i] = (char)(upper[i] - 'a' + 'A');
-    size_t ulen = strlen(upper);
-    if (ulen > 0 && upper[ulen - 1] == ':')
-        upper[ulen - 1] = '\0';
-
-    /* TT or _TTA0 = current terminal */
-    if (strcmp(upper, "TT") == 0 ||
-        strcmp(upper, "_TTA0") == 0) {
-        strncpy(linux_dev, "/dev/tty", devsz);
-        linux_dev[devsz - 1] = '\0';
-        return 1;
-    }
-
-    /* _FTA<n> -> /dev/pts/<n> */
-    if (strncmp(upper, "_FTA", 4) == 0) {
-        int n = atoi(upper + 4);
-        snprintf(linux_dev, devsz, "/dev/pts/%d", n);
-        return 1;
-    }
-
-    /* _TTA<n> -> /dev/tty<n> */
-    if (strncmp(upper, "_TTA", 4) == 0) {
-        int n = atoi(upper + 4);
-        snprintf(linux_dev, devsz, "/dev/tty%d", n);
-        return 1;
-    }
-
-    return 0;
+    if (fd < 0)
+        return 0;
+    /* carcon 0x20: the message on a line of its own -- it ends with a new
+     * line too, so whatever the process writes next starts a line */
+    if (carcon == 0x20) (void)!write(fd, "\r\n", 2);
+    if (len) (void)!write(fd, text, len);
+    if (carcon == 0x20) (void)!write(fd, "\r\n", 2);
+    close(fd);
+    return 1;
 }
 
-/*
- * sys$brkthruw - Broadcast message to terminal(s).
- *
- * Writes msgbuf to the terminal identified by sendto.
- * If sendto is NULL or empty, broadcasts to the current terminal.
- *
- * The message is written with a leading bell character (^G) and a
- * VMS-style header line to match OpenVMS OPCOM broadcast format.
- *
- * @param efn      Event flag (ignored — synchronous)
- * @param msgbuf   Descriptor of message to broadcast
- * @param sendto   Descriptor of target terminal device name (NULL = TT:)
- * @param sndtyp   Send type flags (ignored)
- * @param iosb     Optional I/O status block
- * @param astadr   AST completion routine (ignored)
- * @param astprm   AST parameter (ignored)
- */
+static int brk_is_own_terminal(const char *upper)
+{
+    return !strcmp(upper, "TT") || !strcmp(upper, "TT0") ||
+           !strcmp(upper, "OPA0") || !strcmp(upper, "_OPA0");
+}
+
 uint32_t (sys$brkthruw)(uint32_t efn,
                          struct dsc$descriptor_s *msgbuf,
                          struct dsc$descriptor_s *sendto,
@@ -531,90 +519,77 @@ uint32_t (sys$brkthruw)(uint32_t efn,
                          void (*astadr)(uint32_t),
                          uint32_t astprm)
 {
-    (void)efn; (void)sndtyp; (void)astadr; (void)astprm;
-    (void)carcon; (void)flags; (void)reqid; (void)timout;
+    (void)flags; (void)timout;
 
-    if (!msgbuf || !msgbuf->dsc$a_pointer)
+    if (iosb) memset(iosb, 0, 8);
+    if (sndtyp < BRK$C_DEVICE || sndtyp > BRK$C_ALLTERMS)
         return SS$_BADPARAM;
+    if (!(reqid <= 7 || (reqid >= 32 && reqid <= 47)))
+        return SS$_BADPARAM;
+    if (!msgbuf)
+        return SS$_ACCVIO;
+    if ((sndtyp == BRK$C_DEVICE || sndtyp == BRK$C_USERNAME) && !sendto)
+        return SS$_ACCVIO;
 
-    /* Resolve target terminal */
-    char target_devnam[64] = "";
+    const char *text = msgbuf->dsc$a_pointer ? msgbuf->dsc$a_pointer : "";
+    size_t len = msgbuf->dsc$a_pointer ? msgbuf->dsc$w_length : 0;
+    char target[64] = "";
     if (sendto && sendto->dsc$a_pointer)
-        dsc$strncpy(target_devnam, sendto, sizeof(target_devnam));
+        dsc$strncpy(target, sendto, sizeof target);
+    for (char *c = target; *c; c++) *c = (char)toupper((unsigned char)*c);
+    size_t tl = strlen(target);
+    while (tl && target[tl - 1] == ' ') target[--tl] = '\0';
+    if (tl && target[tl - 1] == ':') target[--tl] = '\0';
 
-    char linux_dev[64];
-    int resolved = resolve_terminal(target_devnam, linux_dev, sizeof(linux_dev));
-
-    uint32_t status = SS$_NORMAL;
-
-    if (resolved) {
-        /* Extract message */
-        char msgtext[512];
-        dsc$strncpy(msgtext, msgbuf, sizeof(msgtext));
-
-        /* Format timestamp for the broadcast header */
-        char timestamp[32];
-        format_vms_timestamp(timestamp, sizeof(timestamp));
-
-        /* Build broadcast string */
-        char broadcast[640];
-        int blen = snprintf(broadcast, sizeof(broadcast),
-                            "\r\n\007\007\007"
-                            "%%OPCOM-%s, %s\r\n%s\r\n",
-                            target_devnam[0] ? target_devnam : "TT",
-                            timestamp,
-                            msgtext);
-
-        /* Write to terminal device */
-        int fd = open(linux_dev, O_WRONLY | O_NOCTTY | O_NONBLOCK);
-        if (fd >= 0) {
-            /* write() may return short — best effort */
-            (void)write(fd, broadcast, (size_t)(blen > 0 ? blen : 0));
-            close(fd);
+    uint16_t sent = 0;
+    unsigned user_terms = 0;      /* terminals the USERNAME target is on */
+    if (sndtyp == BRK$C_DEVICE) {
+        if (brk_is_own_terminal(target)) {
+            sent += (uint16_t)brk_write("OPA0:", text, len, carcon);
         } else {
-            /* Fall back: write to stdout if we can't open the terminal */
-            (void)write(STDOUT_FILENO, broadcast,
-                        (size_t)(blen > 0 ? blen : 0));
+            char dn[72];
+            struct vms_devinfo di;
+            snprintf(dn, sizeof dn, "%s:", target);
+            if (!(vms_kif_getdvi_devnam(dn, &di) & 1) || di.devclass != DC$_TERM)
+                return SS$_IVDEVNAM;
+            sent += (uint16_t)brk_write(di.devnam, text, len, carcon);
         }
-
-        /*
-         * Also log to OPERATOR.LOG, in the SAME oracle-exact shape
-         * sys$sndopr writes (rd vms-32a) -- one file, one OPCOM record
-         * format, not two competing ones. A broadcast carries no request
-         * number (it is not a repliable request), so this uses the plain
-         * "Message from user U on N" body-line-2 variant rather than
-         * sndopr's "Request N, ..." form -- the caller's identity comes
-         * from the same executive-row read sndopr uses, not from the
-         * target terminal (which the OLD line here wrote into the user
-         * field by mistake).
-         */
-        char btimestamp[32];
-        char buser[VMS_USERNAME_SIZE];
-        char bnode[OVMX_IDENTITY_MAXLEN];
-        char bbanner[64];
-        char bmsgline[128];
-
-        format_vms_timestamp(btimestamp, sizeof(btimestamp));
-        get_current_username(buser, sizeof(buser));
-        ovmx_node_name(bnode, sizeof(bnode));
-        format_opcom_banner(bbanner, sizeof(bbanner), btimestamp);
-        snprintf(bmsgline, sizeof(bmsgline), "Message from user %s on %s",
-                 buser, bnode);
-
-        /* Same one-file, one-OPCOM-record path sys$sndopr uses (vms-aac): the
-         * ACP $PUT-at-EOF writer when the on-volume log is writable, the legacy
-         * host/console writer otherwise -- see operator_log_put_record() for the
-         * on-volume-first / console-fallback contract. Best-effort: a broadcast
-         * that reached its terminal is not failed because the log is
-         * unreachable, so the record's status is discarded here. */
-        (void)operator_log_put_record(bbanner, bmsgline, msgtext);
     } else {
-        status = SS$_NOSUCHDEV;
+        /* every terminal (ALLTERMS / ALLUSERS), or every one the user is
+         * logged in on (USERNAME) */
+        uint32_t idx = 0;
+        struct vms_devinfo di;
+        while (vms_kif_devscan(&idx, &di) & 1) {
+            if (di.devclass != DC$_TERM) continue;
+            if (sndtyp == BRK$C_USERNAME) {
+                char who[VMS_USERNAME_SIZE] = "";
+                if (!(vms_kif_terminal_getlogin(di.devnam, who, sizeof who) & 1))
+                    continue;
+                size_t wl = strlen(who);
+                while (wl && who[wl - 1] == ' ') who[--wl] = '\0';
+                if (strcasecmp(who, target) != 0) continue;
+                user_terms++;
+            } else if (sndtyp == BRK$C_ALLUSERS) {
+                char who[VMS_USERNAME_SIZE] = "";
+                if (!(vms_kif_terminal_getlogin(di.devnam, who, sizeof who) & 1) || !who[0])
+                    continue;
+            }
+            sent += (uint16_t)brk_write(di.devnam, text, len, carcon);
+        }
     }
 
     if (iosb) {
-        iosb->iosb$w_status = (uint16_t)status;
-        iosb->iosb$w_bcnt   = 0;
+        uint16_t *w = (uint16_t *)iosb;
+        /* a user logged in on no terminal: the request completes with
+         * SS$_DEVOFFLINE in the IOSB, nothing sent (OpenVMS, observed
+         * BRK.NOUSER on VAX V7.3 and Alpha V8.4; vms-eb46) */
+        w[0] = (uint16_t)((sndtyp == BRK$C_USERNAME && user_terms == 0)
+                          ? SS$_DEVOFFLINE : SS$_NORMAL);
+        w[1] = sent;
+        w[2] = 0;
+        w[3] = 0;
     }
-    return status;
+    if ((efn & 0xFFu) < 128) sys$setef(efn);
+    if (astadr) astadr(astprm);
+    return SS$_NORMAL;
 }

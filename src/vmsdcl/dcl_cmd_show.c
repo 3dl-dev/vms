@@ -32,6 +32,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
@@ -136,6 +137,70 @@ const struct dcl_priv_name vms_priv_names[] = {
     VMS_PRIV_NAME_LIST(VMS_PRIV_ROW_ENTRY)
     { NULL, 0, NULL }
 };
+
+/*
+ * SHOW ACL file (vms-d404): the file's access control list, read from its
+ * header through $GET_SECURITY, laid out as OpenVMS VAX V7.3 prints it
+ * (docs/oracle/vax73-acl.md): an "Object type: FILE,  Object name: ...,  on
+ * <time>" line, then one ACE per line; a file with no ACL is
+ * %SYSTEM-W-ACLEMPTY.
+ */
+extern uint32_t dcl_read_file_acl(const char *spec, uint8_t *buf, uint32_t cap, uint32_t *len);
+extern void dcl_print_acl(const uint8_t *acl, uint32_t len);
+
+static int cmd_show_acl(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    const char *spec = (cmd->param_count > 1) ? cmd->params[1] : NULL;
+    struct dcl_rms_dir *d;
+    char match[1024];
+    uint32_t fn; uint16_t fs;
+    uint8_t fr;
+    int n = 0;
+    uint32_t worst = SS$_NORMAL;
+
+    if (!spec || !spec[0]) {
+        dcl_error("DCL", 2, "INSFPRM", "missing command parameters - supply all required parameters");
+        return SS$_BADPARAM;
+    }
+    d = dcl_rms_dir_open(ctx, spec);
+    if (!d) {
+        dcl_error("RMS", 2, "FNF", "file not found");
+        return RMS$_FNF;
+    }
+    while (dcl_rms_dir_next(d, match, sizeof(match), &fn, &fs, &fr)) {
+        uint8_t acl[512];
+        uint32_t len = 0, st;
+        n++;
+        st = dcl_read_file_acl(match, acl, sizeof(acl), &len);
+        if (!(st & 1)) {
+            dcl_error("SHOW", 2, "OPENIN", "error opening %s as input", match);
+            worst = st;
+            continue;
+        }
+        if (len == 0) {
+            dcl_error("SYSTEM", 0, "ACLEMPTY", "access control list is empty");
+            worst = SS$_ACLEMPTY;
+            continue;
+        }
+        {
+            struct timespec ts;
+            struct tm tm;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            localtime_r(&ts.tv_sec, &tm);
+            printf("Object type: FILE,  Object name: %s,  on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+                   match, tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+                   tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
+        }
+        dcl_print_acl(acl, len);
+    }
+    dcl_rms_dir_close(d);
+    if (!n) {
+        dcl_error("RMS", 2, "FNF", "file not found");
+        return RMS$_FNF;
+    }
+    return (int)(worst == SS$_ACLEMPTY ? (SS$_ACLEMPTY | 0x10000000u) : worst);
+}
 
 static int cmd_show_time(struct dcl_command *cmd)
 {
@@ -1934,6 +1999,33 @@ static void show_device_disk_full(const struct vms_devinfo *info,
 static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz);
 
 /*
+ * A terminal's device type, as VMS spells it -- ONLY the spellings an oracle
+ * pins (rd vms-14b). The executive row carries a DT$_ code: 0 (DT$_TTYUNKN)
+ * on a terminal nobody identified, or, on an RTAn:, the type of the terminal
+ * a SET HOST came from (recorded by the CTERM host). Codes are the V7.3 node's
+ * own DCDEF (docs/oracle/vax73-starlet-defs/DCDEF.txt: DT$_TTYUNKN 0,
+ * DT$_LA36 32). Spellings:
+ *   - SHOW TERMINAL "Unknown" and SHOW DEVICE/FULL "unknown":
+ *     docs/oracle/vax73-terminal-device.md sec 3 and sec 7.4;
+ *   - "LA36" in both: sec 1, sec 5, and the RTAn: of a real SET HOST from an
+ *     LA36 console (tests/lab/captures/decnet-sethost-inbound-20261005/
+ *     vax-rta-show-terminal.txt).
+ * Any other code returns NULL: no oracle has shown its spelling, so none is
+ * written down (Rule 10) -- the caller prints the field empty rather than a
+ * plausible name.
+ */
+#define SHOW_DT_TTYUNKN  0
+#define SHOW_DT_LA36     32
+static const char *terminal_type_name(uint32_t devtype, int show_device)
+{
+    switch (devtype) {
+    case SHOW_DT_TTYUNKN: return show_device ? "unknown" : "Unknown";
+    case SHOW_DT_LA36:    return "LA36";
+    default:              return NULL;
+    }
+}
+
+/*
  * SHOW DEVICE/FULL for a terminal -- the deferred "section 5" rung (vms-bed),
  * oracle docs/oracle/vax73-terminal-device.md sec 5. Renders ONLY fields OVMX
  * can source honestly from vms_devinfo; any oracle-listed field with no real
@@ -1949,13 +2041,22 @@ static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz);
  * Owner lines print only for an owned device (owner_pid != 0); ownership is not
  * allocation (oracle sec 4). owner_uic is the owner's real caller_uic(), shown
  * [g,m] octal (the numeric UIC VMS accepts; a name form would need a lookup OVMX
- * lacks here). Device type is "unknown" -- OVMX's console type is genuinely
- * unidentified (oracle sec 3).
+ * lacks here). Device type is the executive row's, spelled by
+ * terminal_type_name(): "unknown" for OVMX's console (genuinely unidentified,
+ * oracle sec 3), "LA36" for an RTAn: whose SET HOST came from an LA36 (oracle
+ * sec 5's spelling). A type no oracle has spelled drops the "device type"
+ * clause rather than inventing a name for it.
  */
 static void show_device_terminal_full(const struct vms_devinfo *info)
 {
-    printf("\nTerminal %s, device type unknown, is online, record-oriented device.\n\n",
-           info->devnam);
+    const char *tname = terminal_type_name(info->devtype, 1);
+
+    if (tname)
+        printf("\nTerminal %s, device type %s, is online, record-oriented device.\n\n",
+               info->devnam, tname);
+    else
+        printf("\nTerminal %s, is online, record-oriented device.\n\n",
+               info->devnam);
 
     printf("    Error count            %10u    Operations completed   %10llu\n",
            info->errcnt, (unsigned long long)info->opcnt);
@@ -2815,12 +2916,11 @@ static void show_terminal_render(const struct vms_devinfo *info)
     /*
      * Header. The leading underscore is the physical-name form the
      * oracle prints (section 1); the executive keys its table on the
-     * form without it. "Unknown" is the oracle's spelling for a
-     * terminal whose type is not identified (section 3), and it is the
-     * only device type the executive's table can report -- vms.ko
-     * creates the console with type 0 and has no operation that sets
-     * another, so no other spelling is reachable and none is written
-     * down here.
+     * form without it. The device type is the executive row's DT$_
+     * code, spelled by terminal_type_name(): "Unknown" (section 3) for
+     * the console, which vms.ko creates with type 0; on an RTAn:, the
+     * originating terminal's type the CTERM host recorded (rd vms-14b),
+     * e.g. "LA36" for a SET HOST from an LA36 console.
      */
     /*
      * FIELD WIDTHS MEASURED OFF THE CAPTURE, NOT COPIED FROM THE OLD
@@ -2834,13 +2934,9 @@ static void show_terminal_render(const struct vms_devinfo *info)
      */
     printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n",
            phys,
-           /* "Unknown" is pinned (section 3) and 0 is the only device
-            * type the executive's table can hold: vms.ko creates the
-            * console with type 0 and implements no operation that sets
-            * another. A type the oracle has not shown us gets NO
-            * spelling rather than a plausible one -- the first device
-            * with a real type owes this line its pin. */
-           info->devtype == 0 ? "Unknown" : "",
+           /* A type the oracle has not shown us gets NO spelling rather
+            * than a plausible one. */
+           terminal_type_name(info->devtype, 0) ? terminal_type_name(info->devtype, 0) : "",
            owner);
     /* Remote Port Info (rd vms-2166): a remote terminal's node::user, read
      * from the executive's device row (DVI$_TT_ACCPORNAM) -- oracle
@@ -4150,6 +4246,8 @@ int cmd_show(struct dcl_command *cmd)
      * VAX V7.3 and Alpha V8.4, vms-050). They fall through to IVKEYW below --
      * which also makes the abbreviation SH VER unrecognized on real VMS,
      * rather than resolving to a (non-existent) SHOW VERIFY. */
+    if (dcl_match_command(subcmd, "ACL", 3))
+        return cmd_show_acl(cmd);
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_show_protection(cmd);
     /* DEVICES is a VMS synonym for DEVICE (vms-9344a): both the singular and

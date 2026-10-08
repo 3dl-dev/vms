@@ -74,6 +74,7 @@ find_package(Threads REQUIRED)
 # same way. Ordered after vmsdecnet_fal so its members satisfy the anchors.
 target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
                                           vmsdecnet_cterm_host vmsdecnet_fal
+                                          vmsdecnet_mail
                                           vmsdecnet_dap vmsdecnet_broker
                                           vmsdecnet_ncpstore
                                           ${OVMX_DECNETD_DATALINK_LIB}

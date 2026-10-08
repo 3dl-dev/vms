@@ -129,6 +129,20 @@ static int fail = 0;
 /* Authenticated user names stamped on the executive's rows (vms-2b8's
  * vms_kif_setident). Two distinct names, one per process, so a reader
  * that answers about the wrong row is caught by the name it returns. */
+/* JPI$_USERNAME is the 12-character, blank-filled SYSUAF name, as OpenVMS
+ * returns it (JPI.SELF.W userlen=12 "SYSTEM      ", docs/oracle/semantics/
+ * info/; rd vms-bd30): `got' (len bytes) is `name' followed by blanks to 12. */
+static int jpi_username_is(const char *got, size_t len, const char *name)
+{
+    size_t n = strlen(name);
+    if (len != 12 || strncmp(got, name, n) != 0)
+        return 0;
+    for (size_t i = n; i < len; i++)
+        if (got[i] != ' ')
+            return 0;
+    return 1;
+}
+
 #define CALLER_USERNAME "OVMXCALLER"
 #define HELPER_USERNAME "OVMXHELPER"
 
@@ -1669,8 +1683,7 @@ int main(void)
     item = JPI$_USERNAME;
     st = lib$getjpi(&item, NULL, NULL, NULL, &udesc, &ulen);
     CHECK(st == SS$_NORMAL, "lib$getjpi(JPI$_USERNAME) returns SS$_NORMAL");
-    CHECK(ulen == strlen(CALLER_USERNAME) &&
-          strncmp(ubuf, CALLER_USERNAME, ulen) == 0,
+    CHECK(jpi_username_is(ubuf, ulen, CALLER_USERNAME),
           "lib$getjpi(JPI$_USERNAME) returns the name the EXECUTIVE holds");
 
     char pnbuf[32];
@@ -1823,11 +1836,11 @@ int main(void)
             char huser[64], suser[64];
             st = getjpi_str_of(rep.vms_pid, JPI$_USERNAME, huser, sizeof(huser));
             CHECK(st & 1, "sys$getjpi read JPI$_USERNAME for another process");
-            CHECK(strcmp(huser, HELPER_USERNAME) == 0,
+            CHECK(jpi_username_is(huser, strlen(huser), HELPER_USERNAME),
                   "JPI$_USERNAME returns the name the HELPER stamped on its own row");
 
             st = getjpi_str_of(selfpid, JPI$_USERNAME, suser, sizeof(suser));
-            CHECK((st & 1) && strcmp(suser, CALLER_USERNAME) == 0,
+            CHECK((st & 1) && jpi_username_is(suser, strlen(suser), CALLER_USERNAME),
                   "JPI$_USERNAME for the caller returns the caller's own stamped name");
         }
 

@@ -24,12 +24,20 @@
  * $NUMTIM/$ASCTIM/$BINTIM, $CHECK_FEN and $UNWIND. "Reads no system state" is a
  * reason to check, not a reason not to.
  *
- * OVMX-USERSPACE: sys$fao (vms-f90) -- formats into the caller's outbuf from
- *     the caller's varargs; reads no process, system or device state.
- * OVMX-USERSPACE: sys$faol (vms-f90) -- same, from a caller-supplied
+ * OVMX-PARTIAL: sys$fao (vms-939) -- exec: a !%I directive names its UIC
+ *     through $IDTOASC, which reads the rights database over the executive's
+ *     ACP; !%D / !%T convert through $ASCTIM.
+ * OVMX-LOCAL: sys$fao -- the directive language itself formats the caller's
+ *     varargs into the caller's outbuf in-process; it reads no process, system
+ *     or device state.
+ * OVMX-PARTIAL: sys$faol (vms-939) -- exec: as sys$fao (!%I via $IDTOASC).
+ * OVMX-LOCAL: sys$faol -- same in-process formatting, from a caller-supplied
  *     parameter list rather than varargs.
- * OVMX-USERSPACE: sys$fao_count_args (vms-f90) -- counts directives in the
- *     caller's control string. An OVMX-internal helper that took a sys$ name;
+ * OVMX-PARTIAL: sys$fao_count_args (vms-939) -- exec: none when counting (the
+ *     engine runs with no parameters and converts nothing), but it IS the
+ *     engine whose !%I reaches $IDTOASC, so it is declared with it.
+ * OVMX-LOCAL: sys$fao_count_args -- counts the parameters the caller's
+ *     control string consumes. An OVMX-internal helper that took a sys$ name;
  *     the gate prints a "proto" column saying whether a header declares it.
  */
 
@@ -41,257 +49,363 @@
 #include <ctype.h>
 #include "starlet.h"
 
-/* Maximum FAO output buffer size for internal operations */
-#define FAO_MAX_INTERNAL_BUF 65536
+/*
+ * THE DIRECTIVE ENGINE (rd vms-546). Every directive the OpenVMS System
+ * Services Reference documents for $FAO, with the field-width rules observed on
+ * VAX V7.3 and Alpha V8.4 (docs/oracle/semantics/fao/):
+ *
+ *   !AS !AD !AC !AF   strings; a width left-justifies and blank-pads or
+ *                     truncates; !AF shows a non-printable byte as '.'
+ *   !UB/W/L !SB/W/L   decimal, right-justified in a width; too wide -> '*'s
+ *   !ZB/W/L           decimal zero-filled to the width; minimal without one
+ *   !XB/W/L !OB/W/L   hex / octal, zero-filled to the width (default 2/4/8,
+ *                     3/6/11 digits); a value wider than the field keeps its
+ *                     low-order digits
+ *   !UQ !SQ !XQ !OQ !ZQ  the same for a quadword passed by reference
+ *   !/ !_ !^ !!       CR LF, TAB, FF, '!'
+ *   !n*c              c repeated n times (n from a parameter with no count)
+ *   !n(DD)            the directive repeated n times
+ *   !n<...!>          an output field of n characters for the text inside
+ *   !- !+             reuse the previous parameter / skip the next one
+ *   !%S               an 's' ('S' after an upper-case letter) unless the
+ *                     last number converted was 1
+ *   !%U !%I           a UIC [g,m] in octal / as its identifier name
+ *   !%D !%T           date-time / time from a quadword ($ASCTIM)
+ * An unknown directive, or a '!' that ends the string, stops the
+ * conversion with SS$_BADPARAM; output that does not fit stops it with
+ * SS$_BUFFEROVF. Either way the characters produced so far are kept and
+ * counted in outlen.
+ */
 
-/* Helper: append character to output buffer */
-static inline int append_char(char **out, char **out_end, char c) {
-    if (*out >= *out_end) return -1;
-    *(*out)++ = c;
-    return 0;
-}
+struct fao {
+    char       *out;          /* the caller's buffer */
+    size_t      cap, len;     /* its size and what has been written */
+    const uint64_t *prm;      /* the parameter list (NULL: counting only) */
+    int         idx, maxidx;  /* next parameter / one past the furthest used */
+    uint64_t    lastnum;      /* the last number converted (!%S) */
+    int         ovf;
+};
 
-/* Helper: append string to output buffer */
-static inline int append_string(char **out, char **out_end, const char *str, size_t len) {
-    size_t available = *out_end - *out;
-    if (available < len) return -1;
-    memcpy(*out, str, len);
-    *out += len;
-    return 0;
-}
-
-/* Helper: parse numeric prefix from control string */
-static int parse_number(const char **ctrl, const char *ctrl_end, int *value) {
-    *value = 0;
-    if (*ctrl >= ctrl_end || !isdigit((unsigned char)**ctrl))
-        return 0;
-
-    while (*ctrl < ctrl_end && isdigit((unsigned char)**ctrl)) {
-        *value = (*value * 10) + ((**ctrl) - '0');
-        (*ctrl)++;
-    }
-    return 1;
-}
-
-/* Helper: format integer to string */
-static int format_integer(char *buf, size_t bufsz, int64_t value, int base, int width, char pad) {
-    char tmp[128];
-    int len = 0;
-    int neg = 0;
-    uint64_t uval;
-
-    if (base == 10 && value < 0) {
-        neg = 1;
-        uval = (uint64_t)-(value + 1) + 1;  /* safe negation for INT64_MIN */
-    } else {
-        uval = (uint64_t)value;
-    }
-
-    /* Convert to string (reversed) */
-    if (uval == 0) {
-        tmp[len++] = '0';
-    } else {
-        while (uval > 0 && len < (int)sizeof(tmp) - 1) {
-            int digit = uval % base;
-            tmp[len++] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
-            uval /= base;
-        }
-    }
-
-    /* Add sign if needed */
-    if (neg && pad != '0') {
-        tmp[len++] = '-';
-    }
-
-    /* Pad if needed */
-    while (len < width && len < (int)sizeof(tmp) - 1) {
-        tmp[len++] = pad;
-    }
-
-    /* Add sign after padding for zero-padded negative numbers */
-    if (neg && pad == '0' && len < (int)sizeof(tmp) - 1) {
-        tmp[len++] = '-';
-    }
-
-    /* Reverse into output buffer */
-    if ((size_t)len >= bufsz) return -1;
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
-    buf[len] = '\0';
-
-    return len;
-}
-
-/* Helper: process a single FAO directive */
-static uint32_t process_directive(
-    const char **ctrl,
-    const char *ctrl_end,
-    char **out,
-    char **out_end,
-    const uint64_t **args,
-    int64_t *last_numeric_arg)
+static uint64_t fao_arg(struct fao *f)
 {
-    char directive[4] = {0};
-    int dir_len = 0;
-    int repeat_count = 0;
-    int has_repeat = 0;
+    int i = f->idx++;
+    if (f->idx > f->maxidx)
+        f->maxidx = f->idx;
+    return f->prm ? f->prm[i] : 0;
+}
 
-    /* Skip the '!' */
-    (*ctrl)++;
-    if (*ctrl >= ctrl_end) return SS$_BADPARAM;
+static void fao_putc(struct fao *f, char c)
+{
+    if (f->len >= f->cap) {
+        f->ovf = 1;
+        return;
+    }
+    if (f->out)
+        f->out[f->len] = c;
+    f->len++;
+}
 
-    /* Check for numeric prefix */
-    has_repeat = parse_number(ctrl, ctrl_end, &repeat_count);
-    if (*ctrl >= ctrl_end) return SS$_BADPARAM;
+static void fao_putn(struct fao *f, const char *p, size_t n)
+{
+    for (size_t i = 0; i < n && !f->ovf; i++)
+        fao_putc(f, p[i]);
+}
 
-    /* Handle special single-character directives first */
-    char first = **ctrl;
-    if (first == '/' || first == '_' || first == '!' ||
-        first == '*' || first == '%') {
-        directive[0] = first;
-        dir_len = 1;
-        (*ctrl)++;
-        /* %S is a two-character directive starting with % */
-        if (first == '%' && *ctrl < ctrl_end && toupper((unsigned char)**ctrl) == 'S') {
-            directive[1] = 'S';
-            dir_len = 2;
-            (*ctrl)++;
-        }
+/* Put `s` (n chars) into a field of `width` (-1 = no field): left-justified,
+ * blank-padded, truncated to the field. */
+static void fao_field_str(struct fao *f, const char *s, size_t n, int width)
+{
+    if (width >= 0 && n > (size_t)width)
+        n = (size_t)width;
+    fao_putn(f, s, n);
+    for (int i = (int)n; width >= 0 && i < width && !f->ovf; i++)
+        fao_putc(f, ' ');
+}
+
+static int fao_utoa(uint64_t v, int base, char *buf)
+{
+    char tmp[32];
+    int n = 0;
+    do {
+        int d = (int)(v % base);
+        tmp[n++] = (char)(d < 10 ? '0' + d : 'A' + d - 10);
+        v /= base;
+    } while (v);
+    for (int i = 0; i < n; i++)
+        buf[i] = tmp[n - 1 - i];
+    return n;
+}
+
+/* A numeric conversion. kind: 'U','S','Z','X','O'; bytes: 1, 2, 4 or 8. */
+static void fao_number(struct fao *f, char kind, int bytes, uint64_t raw, int width)
+{
+    char digits[40];
+    int n, neg = 0;
+    uint64_t v = bytes == 8 ? raw : raw & ((1ULL << (bytes * 8)) - 1);
+
+    if (kind == 'S') {
+        int64_t sv = bytes == 1 ? (int8_t)v : bytes == 2 ? (int16_t)v
+                   : bytes == 4 ? (int32_t)v : (int64_t)v;
+        neg = sv < 0;
+        v = neg ? (uint64_t)0 - (uint64_t)sv : (uint64_t)sv;
+        f->lastnum = (uint64_t)sv;
     } else {
-        /* Parse alphabetic directive (AS, SL, UL, etc.) */
-        while (*ctrl < ctrl_end && dir_len < 3 && isalpha((unsigned char)**ctrl)) {
-            directive[dir_len++] = toupper((unsigned char)**ctrl);
-            (*ctrl)++;
-        }
+        f->lastnum = v;
     }
 
-    if (dir_len == 0) {
+    if (kind == 'X' || kind == 'O') {
+        int base = kind == 'X' ? 16 : 8;
+        int deflt = kind == 'X' ? bytes * 2
+                  : bytes == 1 ? 3 : bytes == 2 ? 6 : bytes == 4 ? 11 : 22;
+        int w = width >= 0 ? width : deflt;
+        n = fao_utoa(v, base, digits);
+        for (int i = n; i < w && !f->ovf; i++)
+            fao_putc(f, '0');
+        fao_putn(f, digits + (n > w ? n - w : 0), (size_t)(n > w ? w : n));
+        return;
+    }
+
+    n = fao_utoa(v, 10, digits);
+    if (width < 0) {
+        if (neg)
+            fao_putc(f, '-');
+        fao_putn(f, digits, (size_t)n);
+        return;
+    }
+    if (n + neg > width) {                         /* does not fit: asterisks */
+        for (int i = 0; i < width && !f->ovf; i++)
+            fao_putc(f, '*');
+        return;
+    }
+    if (kind == 'Z') {
+        if (neg)
+            fao_putc(f, '-');
+        for (int i = n + neg; i < width && !f->ovf; i++)
+            fao_putc(f, '0');
+    } else {
+        for (int i = n + neg; i < width && !f->ovf; i++)
+            fao_putc(f, ' ');
+        if (neg)
+            fao_putc(f, '-');
+    }
+    fao_putn(f, digits, (size_t)n);
+}
+
+static uint32_t fao_run(struct fao *f, const char *c, const char *end);
+
+/* One directive at *pc (just past the '!'). */
+static uint32_t fao_directive(struct fao *f, const char **pc, const char *end)
+{
+    const char *c = *pc;
+    int count = -1;
+
+    if (c >= end)
+        return SS$_BADPARAM;                       /* a trailing '!' */
+    if (*c == '#') {                               /* count from a parameter */
+        count = (int)(uint32_t)fao_arg(f);
+        c++;
+    } else if (isdigit((unsigned char)*c)) {
+        count = 0;
+        while (c < end && isdigit((unsigned char)*c))
+            count = count * 10 + (*c++ - '0');
+    }
+    if (c >= end)
+        return SS$_BADPARAM;
+
+    switch (*c) {
+    case '/': *pc = c + 1; fao_putc(f, '\r'); fao_putc(f, '\n'); return SS$_NORMAL;
+    case '_': *pc = c + 1; fao_putc(f, '\t'); return SS$_NORMAL;
+    case '^': *pc = c + 1; fao_putc(f, '\f'); return SS$_NORMAL;
+    case '!': *pc = c + 1; fao_putc(f, '!'); return SS$_NORMAL;
+    case '-':
+        *pc = c + 1;
+        if (f->idx > 0)
+            f->idx--;
+        return SS$_NORMAL;
+    case '+':
+        *pc = c + 1;
+        (void)fao_arg(f);
+        return SS$_NORMAL;
+    case '*': {
+        if (c + 1 >= end)
+            return SS$_BADPARAM;
+        int n = count >= 0 ? count : (int)(uint32_t)fao_arg(f);
+        for (int i = 0; i < n && !f->ovf; i++)
+            fao_putc(f, c[1]);
+        *pc = c + 2;
+        return SS$_NORMAL;
+    }
+    case '(': {                                    /* !n(DD): repeat a directive */
+        /* The directive is followed by ONE terminating character, which is
+         * consumed whatever it is: "!2(UL )" repeats UL and leaves ")" as
+         * text (observed on OpenVMS through F$FAO: "--- 45)",
+         * docs/oracle/semantics/lex/ LEX.FAO.REPEAT). */
+        int n = count >= 0 ? count : 1;
+        const char *after = NULL;
+        for (int i = 0; i < n && !f->ovf; i++) {
+            const char *inner = c + 1;
+            uint32_t st = fao_directive(f, &inner, end);
+            if (!(st & 1))
+                return st;
+            if (inner >= end)
+                return SS$_BADPARAM;
+            after = inner + 1;
+        }
+        if (!after) {                               /* a zero count: skip it */
+            const char *close = memchr(c, ')', (size_t)(end - c));
+            if (!close)
+                return SS$_BADPARAM;
+            after = close + 1;
+        }
+        *pc = after;
+        return SS$_NORMAL;
+    }
+    case '<': {                                    /* !n<...!>: an output field */
+        const char *p = c + 1, *close = NULL;
+        int depth = 0;
+        for (; p + 1 < end; p++) {
+            if (p[0] == '!' && p[1] == '<') depth++;
+            if (p[0] == '!' && p[1] == '>') {
+                if (depth == 0) { close = p; break; }
+                depth--;
+            }
+        }
+        if (!close || count < 0)
+            return SS$_BADPARAM;
+        size_t start = f->len;
+        uint32_t st = fao_run(f, c + 1, close);
+        if (!(st & 1))
+            return st;
+        if (f->len > start + (size_t)count) {
+            f->len = start + (size_t)count;        /* truncate to the field */
+            f->ovf = 0;
+        }
+        while (f->len < start + (size_t)count && !f->ovf)
+            fao_putc(f, ' ');
+        *pc = close + 2;
+        return SS$_NORMAL;
+    }
+    case '%': {
+        if (c + 1 >= end)
+            return SS$_BADPARAM;
+        char k = (char)toupper((unsigned char)c[1]);
+        *pc = c + 2;
+        if (k == 'S') {
+            if (f->lastnum != 1) {
+                char prev = (f->out && f->len) ? f->out[f->len - 1] : 'a';
+                fao_putc(f, isupper((unsigned char)prev) ? 'S' : 's');
+            }
+            return SS$_NORMAL;
+        }
+        if (k == 'U' || k == 'I') {
+            uint32_t uic = (uint32_t)fao_arg(f);
+            char buf[64];
+            int n = -1;
+            if (k == 'I' && f->prm) {
+                char nm[32];
+                uint16_t nl = 0;
+                struct dsc$descriptor_s nd = { sizeof nm - 1, DSC$K_DTYPE_T,
+                                               DSC$K_CLASS_S, nm };
+                if ((sys$idtoasc(uic, &nl, &nd, NULL, NULL, NULL) & 1) && nl)
+                    n = snprintf(buf, sizeof buf, "[%.*s]", (int)nl, nm);
+            }
+            if (n < 0)
+                n = snprintf(buf, sizeof buf, "[%o,%o]", (unsigned)(uic >> 16),
+                             (unsigned)(uic & 0xFFFF));
+            fao_field_str(f, buf, (size_t)n, count);
+            return SS$_NORMAL;
+        }
+        if (k == 'D' || k == 'T') {
+            const uint64_t *t = (const uint64_t *)(uintptr_t)fao_arg(f);
+            char buf[32];
+            uint16_t tl = 0;
+            struct dsc$descriptor_s td = { sizeof buf, DSC$K_DTYPE_T,
+                                           DSC$K_CLASS_S, buf };
+            if (f->prm && (sys$asctim(&tl, &td, t, k == 'T') & 1))
+                fao_field_str(f, buf, tl, count);
+            return SS$_NORMAL;
+        }
         return SS$_BADPARAM;
     }
-
-    /* Process directives */
-
-    /* Single character directives with no args */
-    if (strcmp(directive, "/") == 0) {
-        return append_char(out, out_end, '\n') ? SS$_BUFFEROVF : SS$_NORMAL;
-    }
-    if (strcmp(directive, "_") == 0) {
-        return append_char(out, out_end, '\t') ? SS$_BUFFEROVF : SS$_NORMAL;
-    }
-    if (strcmp(directive, "!") == 0) {
-        return append_char(out, out_end, '!') ? SS$_BUFFEROVF : SS$_NORMAL;
+    default:
+        break;
     }
 
-    /* Character repeat: !n*c */
-    if (strcmp(directive, "*") == 0) {
-        if (!has_repeat) {
-            repeat_count = (int)(**args);
-            (*args)++;
+    /* Two-letter directives: a class letter and a size letter. */
+    if (c + 1 >= end)
+        return SS$_BADPARAM;
+    char k = (char)toupper((unsigned char)c[0]);
+    char z = (char)toupper((unsigned char)c[1]);
+    *pc = c + 2;
+
+    if (k == 'A') {
+        const char *str = NULL;
+        size_t n = 0;
+        int af = 0;
+        if (z == 'S') {
+            const struct dsc$descriptor_s *d =
+                (const struct dsc$descriptor_s *)(uintptr_t)fao_arg(f);
+            if (d && f->prm) { str = d->dsc$a_pointer; n = d->dsc$w_length; }
+        } else if (z == 'D' || z == 'F') {
+            n = (size_t)(uint32_t)fao_arg(f);
+            str = (const char *)(uintptr_t)fao_arg(f);
+            af = z == 'F';
+        } else if (z == 'C') {
+            const unsigned char *cs = (const unsigned char *)(uintptr_t)fao_arg(f);
+            if (cs && f->prm) { n = cs[0]; str = (const char *)cs + 1; }
+        } else {
+            return SS$_BADPARAM;
         }
-        if (*ctrl >= ctrl_end) return SS$_BADPARAM;
-        char ch = **ctrl;
-        (*ctrl)++;
-        for (int i = 0; i < repeat_count; i++) {
-            if (append_char(out, out_end, ch)) return SS$_BUFFEROVF;
-        }
-        return SS$_NORMAL;
-    }
-
-    /* Plural 's' - !%S */
-    if (strcmp(directive, "%S") == 0) {
-        if (*last_numeric_arg != 1) {
-            if (append_char(out, out_end, 's')) return SS$_BUFFEROVF;
-        }
-        return SS$_NORMAL;
-    }
-
-    /* ASCII string from descriptor - !AS */
-    if (strcmp(directive, "AS") == 0) {
-        struct dsc$descriptor_s *desc = (struct dsc$descriptor_s *)(uintptr_t)(**args);
-        (*args)++;
-        if (desc && desc->dsc$a_pointer && desc->dsc$w_length > 0) {
-            if (append_string(out, out_end, desc->dsc$a_pointer, desc->dsc$w_length))
-                return SS$_BUFFEROVF;
+        if (!f->prm || !str)
+            n = 0;
+        if (af) {
+            char tmp[1024];
+            size_t m = n < sizeof tmp ? n : sizeof tmp;
+            for (size_t i = 0; i < m; i++) {
+                unsigned char ch = (unsigned char)str[i];
+                tmp[i] = (ch < 0x20 || ch >= 0x7F) ? '.' : (char)ch;
+            }
+            fao_field_str(f, tmp, m, count);
+        } else {
+            fao_field_str(f, str ? str : "", n, count);
         }
         return SS$_NORMAL;
     }
 
-    /* ASCII counted string - !AD */
-    if (strcmp(directive, "AD") == 0) {
-        uint32_t len = (uint32_t)(**args);
-        (*args)++;
-        char *str = (char *)(uintptr_t)(**args);
-        (*args)++;
-        if (str && len > 0) {
-            if (append_string(out, out_end, str, len))
-                return SS$_BUFFEROVF;
+    if (k == 'U' || k == 'S' || k == 'Z' || k == 'X' || k == 'O') {
+        int bytes = z == 'B' ? 1 : z == 'W' ? 2 : z == 'L' ? 4 : z == 'Q' ? 8 : 0;
+        if (!bytes)
+            return SS$_BADPARAM;
+        uint64_t v = fao_arg(f);
+        if (bytes == 8)                            /* a quadword by reference */
+            v = (f->prm && v) ? *(const uint64_t *)(uintptr_t)v : 0;
+        if (count == 0) {                          /* a zero-width field: nothing */
+            f->lastnum = v;
+            return SS$_NORMAL;
         }
+        fao_number(f, k, bytes, v, count);
         return SS$_NORMAL;
     }
+    return SS$_BADPARAM;
+}
 
-    /* Numeric formats */
-    char format_buf[128];
-    int64_t val = 0;
-    int is_numeric = 1;
-    int base = 10;
-    int width = 0;
-    char pad = ' ';
-    int is_signed = 0;
-
-    if (strcmp(directive, "SL") == 0) {
-        val = (int32_t)(**args); (*args)++; is_signed = 1;
-    } else if (strcmp(directive, "UL") == 0) {
-        val = (uint32_t)(**args); (*args)++;
-    } else if (strcmp(directive, "SW") == 0) {
-        val = (int16_t)(uint16_t)(**args); (*args)++; is_signed = 1;
-    } else if (strcmp(directive, "UW") == 0) {
-        val = (uint16_t)(**args); (*args)++;
-    } else if (strcmp(directive, "SB") == 0) {
-        val = (int8_t)(uint8_t)(**args); (*args)++; is_signed = 1;
-    } else if (strcmp(directive, "UB") == 0) {
-        val = (uint8_t)(**args); (*args)++;
-    } else if (strcmp(directive, "XL") == 0) {
-        val = (uint32_t)(**args); (*args)++; base = 16;
-    } else if (strcmp(directive, "XW") == 0) {
-        val = (uint16_t)(**args); (*args)++; base = 16;
-    } else if (strcmp(directive, "XB") == 0) {
-        val = (uint8_t)(**args); (*args)++; base = 16;
-    } else if (strcmp(directive, "OL") == 0) {
-        val = (uint32_t)(**args); (*args)++; base = 8;
-    } else if (strcmp(directive, "OW") == 0) {
-        val = (uint16_t)(**args); (*args)++; base = 8;
-    } else if (strcmp(directive, "OB") == 0) {
-        val = (uint8_t)(**args); (*args)++; base = 8;
-    } else if (strcmp(directive, "ZL") == 0) {
-        val = (uint32_t)(**args); (*args)++; width = 8; pad = '0';
-    } else if (strcmp(directive, "ZW") == 0) {
-        val = (uint16_t)(**args); (*args)++; width = 4; pad = '0';
-    } else if (strcmp(directive, "ZB") == 0) {
-        val = (uint8_t)(**args); (*args)++; width = 3; pad = '0';
-    } else {
-        is_numeric = 0;
+static uint32_t fao_run(struct fao *f, const char *c, const char *end)
+{
+    while (c < end && !f->ovf) {
+        if (*c != '!') {
+            fao_putc(f, *c++);
+            continue;
+        }
+        c++;
+        uint32_t st = fao_directive(f, &c, end);
+        if (!(st & 1))
+            return st;
     }
-
-    if (is_numeric) {
-        *last_numeric_arg = val;
-        /* For signed formats, pass the value directly as it's already sign-extended */
-        int len = format_integer(format_buf, sizeof(format_buf), val, base, width, pad);
-        if (len < 0 || append_string(out, out_end, format_buf, len))
-            return SS$_BUFFEROVF;
-        return SS$_NORMAL;
-    }
-
-    /* Unsupported or unrecognized directive - skip it */
-    return SS$_NORMAL;
+    return f->ovf ? SS$_BUFFEROVF : SS$_NORMAL;
 }
 
 /*
  * sys$faol - Formatted ASCII output with argument list
- *
- * Implementation of the VMS SYS$FAOL system service.
- * Processes a FAO control string and argument list, producing
- * formatted output into the specified buffer.
  */
 uint32_t sys$faol(
     const struct dsc$descriptor_s *ctrstr,
@@ -299,142 +413,55 @@ uint32_t sys$faol(
     struct dsc$descriptor_s *outbuf,
     const uint64_t *prmlst)
 {
+    static const uint64_t noprm[1] = { 0 };
+
     if (!ctrstr || !outbuf) return SS$_BADPARAM;
-    if (!ctrstr->dsc$a_pointer || ctrstr->dsc$w_length == 0) return SS$_BADPARAM;
+    if (!ctrstr->dsc$a_pointer && ctrstr->dsc$w_length) return SS$_BADPARAM;
     if (!outbuf->dsc$a_pointer) return SS$_BADPARAM;
 
-    /* Working buffer for output — heap-allocated to avoid 64KB stack frame */
-    char *temp_buf = (char *)malloc(FAO_MAX_INTERNAL_BUF);
-    if (!temp_buf) return SS$_INSFMEM;
-    char *out = temp_buf;
-    char *out_end = temp_buf + FAO_MAX_INTERNAL_BUF;
+    struct fao f;
+    memset(&f, 0, sizeof f);
+    f.prm = prmlst ? prmlst : noprm;
 
-    const char *ctrl = ctrstr->dsc$a_pointer;
-    const char *ctrl_end = ctrl + ctrstr->dsc$w_length;
-    const uint64_t *args = prmlst;
-
-    uint32_t status = SS$_NORMAL;
-    int64_t last_numeric_arg = 0;
-
-    /* Process control string */
-    while (ctrl < ctrl_end) {
-        if (*ctrl == '!') {
-            /* FAO directive */
-            uint32_t dir_status = process_directive(&ctrl, ctrl_end, &out, &out_end, &args, &last_numeric_arg);
-            if (dir_status != SS$_NORMAL) {
-                status = dir_status;
-                break;  /* Stop on any error */
-            }
-        } else {
-            /* Literal character */
-            if (append_char(&out, &out_end, *ctrl)) {
-                status = SS$_BUFFEROVF;
-                break;
-            }
-            ctrl++;
-        }
-    }
-
-    /* Calculate output length */
-    size_t output_len = out - temp_buf;
-    if (outlen) {
-        *outlen = (uint16_t)(output_len > 65535 ? 65535 : output_len);
-    }
-
-    /* Copy to output descriptor */
+    /* A dynamic output string (LIB$SYS_FAO's use) is sized to the result. */
     if (outbuf->dsc$b_class == DSC$K_CLASS_D) {
-        /* Dynamic descriptor - reallocate if needed */
-        if (outbuf->dsc$w_length < output_len) {
-            /* Pass pointer directly: if realloc fails, it returns NULL and does
-             * NOT free the original buffer.  outbuf->dsc$a_pointer still holds
-             * the old (valid) pointer, so the descriptor remains consistent on
-             * the SS$_INSFMEM return path. */
-            char *new_buf = (char *)realloc(outbuf->dsc$a_pointer, output_len);
-            if (!new_buf) { free(temp_buf); return SS$_INSFMEM; }
-            outbuf->dsc$a_pointer = new_buf;
-            outbuf->dsc$w_length = (uint16_t)(output_len > 65535 ? 65535 : output_len);
+        char *tmp = malloc(65535);
+        if (!tmp) return SS$_INSFMEM;
+        f.out = tmp;
+        f.cap = 65535;
+        uint32_t st = fao_run(&f, ctrstr->dsc$a_pointer,
+                              ctrstr->dsc$a_pointer + ctrstr->dsc$w_length);
+        if (outbuf->dsc$w_length < f.len) {
+            char *nb = realloc(outbuf->dsc$a_pointer, f.len);
+            if (!nb) { free(tmp); return SS$_INSFMEM; }
+            outbuf->dsc$a_pointer = nb;
         }
-        memcpy(outbuf->dsc$a_pointer, temp_buf,
-               output_len < outbuf->dsc$w_length ? output_len : outbuf->dsc$w_length);
-    } else {
-        /* Static descriptor - truncate if needed */
-        size_t copy_len = output_len;
-        if (copy_len > outbuf->dsc$w_length) {
-            copy_len = outbuf->dsc$w_length;
-            status = SS$_BUFFEROVF;
-        }
-        memcpy(outbuf->dsc$a_pointer, temp_buf, copy_len);
+        memcpy(outbuf->dsc$a_pointer, tmp, f.len);
+        outbuf->dsc$w_length = (uint16_t)f.len;
+        free(tmp);
+        if (outlen)
+            *outlen = (uint16_t)f.len;
+        return st;
     }
 
-    free(temp_buf);
-    return status;
+    f.out = outbuf->dsc$a_pointer;
+    f.cap = outbuf->dsc$w_length;
+    uint32_t st = fao_run(&f, ctrstr->dsc$a_pointer,
+                          ctrstr->dsc$a_pointer + ctrstr->dsc$w_length);
+    if (outlen)
+        *outlen = (uint16_t)f.len;
+    return st;
 }
 
-/*
- * count_fao_args - Count the number of arguments consumed by FAO directives
- *
- * Scans the control string for FAO directives and returns how many
- * uint64_t arguments they will consume from the parameter list.
- */
-/*
- * Also exported as sys$fao_count_args for use by lib$sys_fao.
- */
+/* How many parameters a control string consumes (the furthest one a
+ * directive, a repeat or !+ reaches). Also exported as sys$fao_count_args
+ * for lib$sys_fao. */
 int count_fao_args(const char *ctrl, uint16_t len) {
-    const char *end = ctrl + len;
-    int count = 0;
-
-    while (ctrl < end) {
-        if (*ctrl != '!') { ctrl++; continue; }
-        ctrl++;  /* skip '!' */
-        if (ctrl >= end) break;
-
-        /* Skip numeric prefix */
-        int has_repeat = 0;
-        while (ctrl < end && *ctrl >= '0' && *ctrl <= '9') {
-            has_repeat = 1;
-            ctrl++;
-        }
-        if (ctrl >= end) break;
-
-        char first = *ctrl;
-
-        /* Single-char directives with no args */
-        if (first == '/' || first == '_' || first == '!') {
-            ctrl++;
-            continue;
-        }
-
-        /* !n*c or !*c — consumes 1 arg if no numeric prefix */
-        if (first == '*') {
-            ctrl++;
-            if (ctrl < end) ctrl++;  /* skip the fill char */
-            if (!has_repeat) count++;
-            continue;
-        }
-
-        /* %S — no args */
-        if (first == '%') {
-            ctrl++;
-            if (ctrl < end && (*ctrl == 'S' || *ctrl == 's')) ctrl++;
-            continue;
-        }
-
-        /* Parse alphabetic directive */
-        char dir[4] = {0};
-        int dlen = 0;
-        while (ctrl < end && dlen < 3 && ((*ctrl >= 'A' && *ctrl <= 'Z') ||
-               (*ctrl >= 'a' && *ctrl <= 'z'))) {
-            dir[dlen++] = (*ctrl >= 'a') ? (*ctrl - 32) : *ctrl;
-            ctrl++;
-        }
-
-        /* AD consumes 2 args (length + pointer), all others consume 1 */
-        if (dlen == 2 && dir[0] == 'A' && dir[1] == 'D')
-            count += 2;
-        else if (dlen > 0)
-            count += 1;
-    }
-    return count;
+    struct fao f;
+    memset(&f, 0, sizeof f);
+    f.cap = (size_t)-1;                            /* never overflows */
+    (void)fao_run(&f, ctrl, ctrl + len);
+    return f.maxidx;
 }
 
 /*

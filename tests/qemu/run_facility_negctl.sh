@@ -684,9 +684,21 @@ for defect in $DEFECT_LIST; do
     #    binary from the initramfs. For a `fatal` defect that is every suite
     #    init.sh runs (EXEC_ORDER) up to the one that kills the guest.
     reached=0
+    _kept=0
     for s in $EXEC_ORDER; do
         if [ "$isolation" = "fatal" ] && [ "$s" = "$stop_at" ]; then break; fi
         if [ "$(suite_rc "$s")" = "MISSING" ]; then
+            # vms-898a: a PARTIAL run (some suites ran, the rest never did) is the second
+            # shape of a guest that stopped early (seen on lock-enq-immediate-grant-status-wrong:
+            # the guest sat ~30 min, i.e. the whole-VM wall, after the ACL suite). Keep the
+            # whole console once per defect and say which suite was the last to report.
+            if [ "$_kept" -eq 0 ] && [ "$reached" -gt 0 ]; then
+                _kept=1
+                _ddir="${NEGCTL_DEATH_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/negctl-deaths}"
+                mkdir -p "$_ddir" 2>/dev/null && cp "$OUTFILE" "$_ddir/$defect.partial.console.txt" 2>/dev/null \
+                    && echo "  guest stopped after $reached suite(s); first missing: $s; full console kept in $_ddir/$defect.partial.console.txt"
+                grep -qE 'KE VM WALL BUDGET' "$OUTFILE" && echo "  (the whole-VM wall budget fired: this is a hang, not a crash)"
+            fi
             bad "$s NEVER RAN (no verdict line) -- dropped from the initramfs by the defect rebuild, or the guest died before reaching it"
         else
             reached=$((reached + 1))

@@ -1,0 +1,349 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ REPLY/DISABLE
+%%%%%%%%%%%  OPCOM   8-OCT-2026 08:08:17.68  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+$ SET DEFAULT SYS$LOGIN
+
+
+$ CREATE/DIRECTORY [.ACLPRB]
+
+
+$ SET DEFAULT [.ACLPRB]
+
+
+$ COPY NL: A.TXT
+
+
+$ COPY NL: B.TXT
+
+
+$ COPY NL: C.TXT
+
+
+$ COPY NL: D.TXT
+
+
+$ CREATE/DIRECTORY [.SUBD]
+
+
+$ MCR AUTHORIZE ADD/IDENTIFIER CORPUSID/VALUE=IDENTIFIER=%X80012345/ATTRIBUTES=RESOURCE
+%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+
+$ MCR AUTHORIZE ADD/IDENTIFIER CORPUS2/VALUE=IDENTIFIER=%X80012346
+%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+
+$ SHOW SECURITY A.TXT
+
+SYS$SYSROOT:[SYSMGR.ACLPRB]A.TXT;1 object of class FILE
+     Owner: [SYSTEM]
+     Protection: (System: RWED, Owner: RWED, Group: RE, World)
+     Access Control List: <empty>
+
+$ DUMP/HEADER/BLOCK=COUNT=0 A.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]A.TXT;1 on  8-OCT-2026 08:08:27.92
+File ID (5784,31790,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           255
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (5784,31790,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4013,42450,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name:                            A.TXT;1
+    Revision number:                      1
+    Creation date:                         8-OCT-2026 08:08:21.05
+    Revision date:                         8-OCT-2026 08:08:21.06
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+
+Checksum:                                 3348
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=READ+WRITE) A.TXT
+
+
+$ SHOW ACL A.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]A.TXT;1,  on  8-OCT-2026 08:08:29.71
+          (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)
+
+$ DUMP/HEADER/BLOCK=COUNT=0 A.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]A.TXT;1 on  8-OCT-2026 08:08:30.58
+File ID (5784,31790,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           249
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (5784,31790,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4013,42450,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name:                            A.TXT;1
+    Revision number:                      2
+    Creation date:                         8-OCT-2026 08:08:21.05
+    Revision date:                         8-OCT-2026 08:08:28.82
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+
+Access Control List
+    (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)
+
+Checksum:                                 10179
+
+$ DUMP/HEADER/BLOCK=COUNT=0/NOFORMATTED A.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]A.TXT;1 on  8-OCT-2026 08:08:31.47
+File ID (5784,31790,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+ 00010000 00000000 00000202 00000000 00000000 7C2E1698 02010000 FFF96428 (dù........|.................... 000000
+ 00010004 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000020
+ 20202020 20202020 20313B54 58542E41 00000001 00000000 0000A5D2 0FADFA00 .ú­.Ò¥..........A.TXT;1          000040
+ 00000000 00000000 000000BC 3A84AA42 C54000BC 3A84A5A1 29A00002 20202020     ...)¡¥.:¼.@ÅBª.:¼........... 000060
+ 20202020 20202020 20202020 20202020 20202020 20202020 20200000 00000000 ......                           000080
+ 20202020 20202020 20202020 20202020 20202020 20202020 20202020 20202020                                  0000A0
+ 00000000 00000000 00000000 00000000 00000000 00000000 20202020 20202020         ........................ 0000C0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0000E0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000100
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000120
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000140
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000160
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000180
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001A0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001C0
+ 27C30001 00040000 00030000 010C0000 00000000 00000000 00000000 00000000 ..............................Ã' 0001E0
+
+$ SET ACL/ACL=(IDENTIFIER=CORPUSID,OPTIONS=DEFAULT+PROTECTED+NOPROPAGATE,ACCESS=READ+EXECUTE+DELETE+CONTROL) B.TXT
+%SET-F-SYNTAX, error parsing 'CORPUSID,OPTIONS=DEFAULT+PROTECTED+NOPROPAGATE,ACCESS=READ+EXECUTE+DELETE+CONTROL)'
+-SYSTEM-F-NOSUCHID, unknown rights identifier
+
+$ SET ACL/ACL=(IDENTIFIER=CORPUSID+CORPUS2,ACCESS=NONE) B.TXT
+%SET-F-SYNTAX, error parsing 'CORPUSID+CORPUS2,ACCESS=NONE)'
+-SYSTEM-F-NOSUCHID, unknown rights identifier
+
+$ SHOW ACL B.TXT
+%SYSTEM-W-ACLEMPTY, access control list is empty
+
+$ DUMP/HEADER/BLOCK=COUNT=0/NOFORMATTED B.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]B.TXT;1 on  8-OCT-2026 08:08:34.96
+File ID (5785,31790,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+ 00010000 00000000 00000202 00000000 00000000 7C2E1699 02010000 FFFF6428 (d.........|.................... 000000
+ 00010004 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000020
+ 20202020 20202020 20313B54 58542E42 00000001 00000000 0000A5D2 0FADFA00 .ú­.Ò¥..........B.TXT;1          000040
+ 00000000 00000000 000000BC 3A84A625 EA0000BC 3A84A624 63600001 20202020     ..`c$¦.:¼..ê%¦.:¼........... 000060
+ 20202020 20202020 20202020 20202020 20202020 20202020 20200000 00000000 ......                           000080
+ 20202020 20202020 20202020 20202020 20202020 20202020 20202020 20202020                                  0000A0
+ 00000000 00000000 00000000 00000000 00000000 00000000 20202020 20202020         ........................ 0000C0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0000E0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000100
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000120
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000140
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000160
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000180
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001A0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001C0
+ 819C0000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001E0
+
+$ SET ACL/ACL=(IDENTIFIER=[200,*],ACCESS=READ) C.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[*,*],ACCESS=EXECUTE) C.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=SYSTEM,ACCESS=WRITE) C.TXT
+
+
+$ SHOW ACL C.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1,  on  8-OCT-2026 08:08:38.41
+          (IDENTIFIER=[SYSTEM],ACCESS=WRITE)
+          (IDENTIFIER=[*,*],ACCESS=EXECUTE)
+          (IDENTIFIER=[200,*],ACCESS=READ)
+
+$ DUMP/HEADER/BLOCK=COUNT=0/NOFORMATTED C.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1 on  8-OCT-2026 08:08:39.31
+File ID (5786,31790,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+ 00010000 00000000 00000202 00000000 00000000 7C2E169A 02010000 FFED6428 (dí........|.................... 000000
+ 00010004 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000020
+ 20202020 20202020 20313B54 58542E43 00000001 00000000 0000A5D2 0FADFA00 .ú­.Ò¥..........C.TXT;1          000040
+ 00000000 00000000 000000BC 3A84AF7C F76000BC 3A84A6A6 16800004 20202020     ....¦¦.:¼.`÷|¯.:¼........... 000060
+ 20202020 20202020 20202020 20202020 20202020 20202020 20200000 00000000 ......                           000080
+ 20202020 20202020 20202020 20202020 20202020 20202020 20202020 20202020                                  0000A0
+ 00000000 00000000 00000000 00000000 00000000 00000000 20202020 20202020         ........................ 0000C0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0000E0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000100
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000120
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000140
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000160
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000180
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001A0
+ 00020000 010C0000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001C0
+ 8F950080 FFFF0000 00010000 010C3FFF FFFF0000 00040000 010C0001 00040000 .................?.............. 0001E0
+
+$ SET ACL/ACL=(DEFAULT_PROTECTION,S:RWED,O:RWED,G:RE,W:) SUBD.DIR
+
+
+$ SET ACL/ACL=(IDENTIFIER=CORPUSID,OPTIONS=DEFAULT,ACCESS=READ) SUBD.DIR
+%SET-F-SYNTAX, error parsing 'CORPUSID,OPTIONS=DEFAULT,ACCESS=READ)'
+-SYSTEM-F-NOSUCHID, unknown rights identifier
+
+$ SHOW ACL SUBD.DIR
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]SUBD.DIR;1,  on  8-OCT-2026 08:08:41.89
+          (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+$ DUMP/HEADER/BLOCK=COUNT=0/NOFORMATTED SUBD.DIR
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]SUBD.DIR;1 on  8-OCT-2026 08:08:42.81
+File ID (5788,31790,0)   End of file block 1 / Allocated 9
+
+                             File Header
+
+ 00020000 00090000 02000802 00000000 00000000 7C2E169C 02010000 FFF36428 (dó........|.................... 000000
+ 00010004 00020000 00202080 00000000 00000000 00000000 00000200 00000000 .....................  ......... 000020
+ 20202020 2020313B 5249442E 44425553 0000000A 00000000 0000A5D2 0FADAA88 .ª­.Ò¥..........SUBD.DIR;1       000040
+ 00000000 00000000 000000BC 3A84B109 B1E000BC 3A84A7AF 97400001 20202020     ..@.¯§.:¼.à±.±.:¼........... 000060
+ 20202020 20202020 20202020 20202020 20202020 20202020 20200000 00000000 ......                           000080
+ 20202020 20202020 20202020 20202020 20202020 20202020 20202020 20202020                                  0000A0
+ 00000000 00000000 00000000 00000000 00000000 C3C64308 20202020 20202020         .CÆÃ.................... 0000C0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0000E0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000100
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000120
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000140
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000160
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 000180
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001A0
+ 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 ................................ 0001C0
+ D44A0000 001F0000 001A0000 00100000 00100000 00000000 09180000 00000000 ..............................JÔ 0001E0
+
+$ DIRECTORY/ACL
+
+Directory SYS$SYSROOT:[SYSMGR.ACLPRB]
+
+A.TXT;1            
+          (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)
+B.TXT;1            
+C.TXT;1            
+          (IDENTIFIER=[SYSTEM],ACCESS=WRITE)
+          (IDENTIFIER=[*,*],ACCESS=EXECUTE)
+          (IDENTIFIER=[200,*],ACCESS=READ)
+D.TXT;1            
+SUBD.DIR;1         
+          (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+Total of 5 files.
+
+$ DIRECTORY/SECURITY
+
+Directory SYS$SYSROOT:[SYSMGR.ACLPRB]
+
+A.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+          (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE)
+B.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+C.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+          (IDENTIFIER=[SYSTEM],ACCESS=WRITE)
+          (IDENTIFIER=[*,*],ACCESS=EXECUTE)
+          (IDENTIFIER=[200,*],ACCESS=READ)
+D.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+SUBD.DIR;1           [SYSTEM]                         (RWE,RWE,RE,RE)
+          (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+Total of 5 files.
+
+$ COPY NL: [.SUBD]E.TXT
+
+
+$ SHOW ACL [.SUBD]E.TXT
+%SYSTEM-W-ACLEMPTY, access control list is empty
+
+$ DIRECTORY/SECURITY [.SUBD]
+
+Directory SYS$SYSROOT:[SYSMGR.ACLPRB.SUBD]
+
+E.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+
+Total of 1 file.

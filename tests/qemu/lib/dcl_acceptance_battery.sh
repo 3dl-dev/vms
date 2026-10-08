@@ -307,8 +307,15 @@ console_login_acceptance() {
     # waits for its own RETURN.
     local IDLE_WAIT="${LOGIN_IDLE_WAIT:-45}"
     local IDLE_OFF; IDLE_OFF=$(wc -c <"$LOG")
-    echo "  (idle-timeout probe: leaving the login prompt untouched for ${IDLE_WAIT}s)"
-    sleep "$IDLE_WAIT"
+    echo "  (idle-timeout probe: leaving the login prompt untouched; the deadline is 20s of GUEST time)"
+    # vms-330: the guest's 20s deadline runs on the GUEST clock, which lags wall time when the
+    # runner (or a CPU-limited rail pod) is loaded -- a fixed `sleep 45` looked at the console
+    # before a slow guest had counted its 20s, and failed with the text simply not there yet
+    # (reproduced under parallel guests on the k3s rail: round 3, 1 of 8 gates). Wait for the
+    # expiry text itself, bounded generously; the assertions below still require it, so a guest
+    # with NO idle deadline still fails (the wait runs out and the text is absent).
+    wait_for 'Timeout period expired' "${LOGIN_IDLE_CAP:-240}" "$IDLE_OFF" >/dev/null 2>&1 || true
+    sleep 2        # let the lines that follow the reason land before the segment is cut
     local IDLE_SEG; IDLE_SEG=$(_batt_seg_since "$IDLE_OFF")
     # NOT silent, and not invented either: the two lines the V7.3 oracle prints
     # (rd vms-29e). A silent timeout is what let an idle console pass for a
@@ -1027,6 +1034,12 @@ run_dcl_acceptance_battery() {
             "CTERM [vms-f40]: the DISABLED account is refused over CTERM with the CORRECT password -- the SYSUAF login-flag rule applies to a network login"
         must_have "$CTSEG" 'a real DC$_TERM device row' \
             "CTERM [vms-f40]: \$GETDVI on the session's RTAn: from a DIFFERENT process returns a real device row (§7.5 tell)"
+        must_have "$CTSEG" 'PASS: the RTAn:'"'"'s EXECUTIVE device row carries the originating terminal' \
+            "CTERM [vms-14b]: the real VAX Initiate's terminal (LA36, width 132, page 0) is recorded on the RTAn:'s executive row and read back by \$GETDVI"
+        must_have "$CTSEG" 'PASS: the RTAn:'"'"'s EXECUTIVE characteristics are the oracle' \
+            "CTERM [vms-14b]: the VAX's conveyed TT\$/TT2\$ characteristics are on the RTAn:'s executive row, matching the oracle RTAn:'s set"
+        must_have "$CTSEG" 'PASS: NEGCTL: OPA0: refuses the RTAn: setter' \
+            "CTERM [vms-14b]: the local console OPA0: keeps device type Unknown and its own geometry"
         must_not_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: FAIL' \
             "CTERM [vms-f40]: no assertion in the inbound-SET-HOST acceptance failed"
         negctl "$CTSEG" 'DECNETD-I-CTERMACCEPT' "DECnet CTERM acceptance"
@@ -1145,6 +1158,16 @@ run_dcl_acceptance_battery() {
             "FAL persona [vms-d85]: the path itself works (SYSTEM reads the file through it) -- so GUEST's refusal below is the persona, not a broken path"
         must_have "$FALPSEG" 'checked against the user, not the daemon' \
             "FAL persona [vms-d85]: GUEST is REFUSED the SYSTEM-only file SYSTEM just read"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote DELETE of a SYSTEM-only file is REFUSED by the executive with the VAX FAL'"'"'s STATUS 0x4055 (RMS-E-PRV) STV 0x24' \
+            "FAL verbs [vms-277a]: GUEST's remote DELETE of a SYSTEM-only file is refused by the executive ACP and answered with the real VMS FAL's STATUS bytes (PRV + SS\$_NOPRIV)"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote RENAME of a SYSTEM-only file is REFUSED by the executive with the VAX FAL'"'"'s STATUS 0x405f (RMS-F-RMV), no STV' \
+            "FAL verbs [vms-277a]: GUEST's remote RENAME of a SYSTEM-only file is refused by the executive ACP and answered with the real VMS FAL's STATUS bytes (RMV)"
+        must_have "$FALPSEG" 'PASS: SYSTEM renames its file through the FAL server process: RMS reads the records under the NEW name and the old name is gone' \
+            "FAL verbs [vms-277a]: SYSTEM renames its own file through FAL.EXE, read back through RMS"
+        must_have "$FALPSEG" 'PASS: SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)' \
+            "FAL verbs [vms-277a]: SYSTEM deletes its own file through FAL.EXE, read back through RMS"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote DIRECTORY of a missing file is STATUS FNF 0x4032 STV 0x0910' \
+            "FAL verbs [vms-277a]: a remote DIRECTORY of a missing file is FNF with the VAX FAL's bytes and never names a file without its directory (the live-bracket 'Total of 1 file' bug)"
         must_not_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: FAIL' \
             "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
         negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"
@@ -1170,6 +1193,10 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-6af1]: the inbound session pool behaved on the real executive (one PASS/FAIL line per assertion above this verdict)"
         must_have "$POOLSEG" 'a SECOND inbound SET HOST is accepted while the first is live' \
             "NETACP pool [vms-6af1]: a second inbound SET HOST is admitted while the first is live (G2: no single slot to monopolise)"
+        must_have "$POOLSEG" 'PASS: executor MAXIMUM LINKS 9 sizes the inbound pool at 9' \
+            "NETACP pool [vms-f91]: the inbound pool is sized from the NCP executor's MAXIMUM LINKS (default 32, as a real VAX shows; Baron 2026-10-08), not a compile-time constant"
+        must_have "$POOLSEG" 'PASS: a THIRD session from the same node is accepted' \
+            "NETACP pool [vms-277a]: a node may hold three concurrent sessions -- a VMS DELETE node::file;* opens three links to the FAL (VAX<->VAX capture)"
         must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
             "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
         must_have "$POOLSEG" 'running as [128,129]' \
@@ -1181,6 +1208,88 @@ run_dcl_acceptance_battery() {
         bad "NETACP pool [vms-6af1]: DECNETD.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
     fi
     wait_for '$ ' 20 "$POOL_OFF"
+
+    # =======================================================================
+    # DECnet MAIL-11 INBOUND (rd vms-47fd). A real VAX's `MAIL> SEND` to
+    # NODE::USER, replayed from the real VAX V7.3 capture
+    # (tests/lab/captures/decnet-mail11-20261008/) through NETACP's REAL
+    # dispatch: object 27 lands on a SYS$SYSTEM:MAIL_SERVER.EXE process, every
+    # reply is byte-compared with what the real VAX2 sent (01 00 00 00 for
+    # SYSTEM; 12 81 7E 00 + %MAIL-E-NOSUCHUSR text + 00 for NOSUCHUSER), and the
+    # accepted message is STORED in SYSTEM's mail file. Then OVMX MAIL reads it
+    # back -- DIRECTORY and READ show From VAX1::SYSTEM, To, CC, Subj and the
+    # body, as the VAX2 console did -- and DELETEs it so later logins are
+    # unchanged. HARD GATE where DECNETD.EXE + MAIL_SERVER.EXE ship.
+    local M11_OFF; M11_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --mail11-accept-test'
+    if wait_for 'IVIMAGE' 15 "$M11_OFF"; then
+        note "MAIL-11 [vms-47fd]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound MAIL-11 proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        wait_for '$ ' 20 "$M11_OFF"
+    elif wait_for 'DECNETD-MAIL11-ACCEPT:' 240 "$M11_OFF" &&
+         tail -c "+$((M11_OFF + 1))" "$LOG" | grep -q 'DECNETD-MAIL11-ACCEPT: NOIMAGE'; then
+        # DECNETD.EXE ships here, and every rail that ships it ships
+        # MAIL_SERVER.EXE beside it -- a NOIMAGE verdict is a staging bug (the
+        # image is on the disk but not exec-staged), never an absent optional.
+        bad "MAIL-11 [vms-47fd]: DECNETD.EXE ships but NETACP cannot run SYS\$SYSTEM:MAIL_SERVER.EXE (NOIMAGE) -- every inbound mail would be refused"
+        wait_for '$ ' 20 "$M11_OFF"
+    elif tail -c "+$((M11_OFF + 1))" "$LOG" | grep -q 'DECNETD-MAIL11-ACCEPT:'; then
+        wait_for '$ ' 20 "$M11_OFF"
+        local M11SEG; M11SEG=$(tail -c "+$((M11_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$M11SEG" 'DECNETD-MAIL11-ACCEPT: PASS' \
+            "MAIL-11 [vms-47fd]: the real VAX MAIL-11 session replayed through NETACP to MAIL_SERVER.EXE behaved like the VAX (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$M11SEG" 'lands on a MAIL_SERVER.EXE process' \
+            "MAIL-11 [vms-47fd]: an inbound object-27 connect is confirmed onto a MAIL_SERVER.EXE network server process"
+        must_have "$M11SEG" 'STORED in SYSTEM'"'"'s mail file and acknowledged 01 00 00 00' \
+            "MAIL-11 [vms-47fd]: the message is acknowledged only after it is stored"
+        must_have "$M11SEG" 'REFUSED with the VAX'"'"'s exact bytes' \
+            "MAIL-11 [vms-47fd]: an unknown recipient is refused exactly as the VAX refuses it"
+        must_not_have "$M11SEG" 'DECNETD-MAIL11-ACCEPT: FAIL' \
+            "MAIL-11 [vms-47fd]: no assertion in the inbound MAIL-11 proof failed"
+        negctl "$M11SEG" 'DECNETD-I-MAIL11' "DECnet MAIL-11 inbound"
+
+        # The stored message, read back with OVMX MAIL itself.
+        local MAIL_OFF; MAIL_OFF=$(wc -c <"$LOG")
+        send 'MAIL'
+        if wait_for 'MAIL> ' 30 "$MAIL_OFF"; then
+            local D_OFF; D_OFF=$(wc -c <"$LOG")
+            send 'DIRECTORY'
+            wait_for 'MAIL> ' 30 "$D_OFF"
+            local DIRSEG; DIRSEG=$(tail -c "+$((D_OFF + 1))" "$LOG" | tr -d '\r')
+            local R_OFF; R_OFF=$(wc -c <"$LOG")
+            send 'READ'
+            wait_for 'MAIL> ' 30 "$R_OFF"
+            local READSEG; READSEG=$(tail -c "+$((R_OFF + 1))" "$LOG" | tr -d '\r')
+            local X_OFF; X_OFF=$(wc -c <"$LOG")
+            send 'DELETE'
+            wait_for 'MAIL> ' 30 "$X_OFF"
+            send 'EXIT'
+            wait_for '$ ' 30 "$X_OFF"
+            must_match "$DIRSEG" '^ +1 VAX1::SYSTEM +[ 0-9]?[0-9]-[A-Z]{3}-[0-9]{4}  DECnet MAIL-11 oracle' \
+                "MAIL-11 [vms-47fd]: OVMX MAIL DIRECTORY lists the delivered message as the VAX2 did (#, From VAX1::SYSTEM, date, Subject)"
+            must_have "$DIRSEG" 'NEWMAIL' \
+                "MAIL-11 [vms-47fd]: the unread delivered message is in NEWMAIL"
+            must_have "$READSEG" 'From:   VAX1::SYSTEM' \
+                "MAIL-11 [vms-47fd]: MAIL READ shows From: VAX1::SYSTEM (the remote node + sender)"
+            must_have "$READSEG" 'To:     VAX2::SYSTEM' \
+                "MAIL-11 [vms-47fd]: MAIL READ shows the To: line the VAX sent"
+            must_match "$READSEG" '^CC:' \
+                "MAIL-11 [vms-47fd]: MAIL READ shows the (empty) CC: line"
+            must_have "$READSEG" 'Subj:   DECnet MAIL-11 oracle' \
+                "MAIL-11 [vms-47fd]: MAIL READ shows the Subj: line"
+            must_have "$READSEG" 'Line one of a MAIL-11 message from VAX1.' \
+                "MAIL-11 [vms-47fd]: MAIL READ shows the first body line"
+            must_have "$READSEG" 'Line two.' \
+                "MAIL-11 [vms-47fd]: MAIL READ shows the second body line"
+            negctl "$READSEG" 'READ' "MAIL-11 MAIL READ readback"
+        else
+            bad "MAIL-11 [vms-47fd]: \$ MAIL never reached its MAIL> prompt -- the stored message could not be read back"
+            send 'EXIT'
+            wait_for '$ ' 20 "$MAIL_OFF"
+        fi
+    else
+        bad "MAIL-11 [vms-47fd]: DECNETD.EXE --mail11-accept-test produced no verdict line within 240s -- the inbound MAIL-11 proof did not run"
+        wait_for '$ ' 20 "$M11_OFF"
+    fi
 
     # =======================================================================
     # DECnet _NET: $QIO BROKER — T1 MAILBOX TRANSPORT (vms-22c, a1-2 slice 2b).
@@ -1326,36 +1435,37 @@ run_dcl_acceptance_battery() {
             # 3. PRIVILEGE IS INHERITED, NOT THE OBSTACLE. This VM has no NIC
             # (-nic none), so the POSITIVE live-datalink proof (eth0, NETACP
             # running, hellos from AA-00-04-00-2A-04 on the wire) is
-            # tests/qemu/test_decnet_startnet_boot_e2e.sh. Here we pin that an
-            # activated image inherits this DCL row's PHY_IO: a foreground
-            # DECNETD on loopback reaches the executive PAST its PHY_IO gate
-            # (any refusal it gets is NOT SS$_NOPRIV), and its own executive row
-            # -- read back on refusal -- holds PHY_IO. (Loopback is not a
-            # DECnet circuit; the executive declining to open a raw L2 socket on
-            # it is an interface fact, reported with its real status.)
+            # tests/qemu/test_decnet_startnet_boot_e2e.sh. Here an image
+            # activated from this interactive (non-root) DCL session inherits
+            # its PHY_IO and the EXECUTIVE opens the datalink on loopback for
+            # it -- and again for a second image, with no reboot in between
+            # (rd vms-b72: the executive created its AF_PACKET socket under the
+            # caller's own Linux identity, so every interactive open was
+            # refused SS$_ABORT / host errno 1 and only a root-started boot
+            # NETACP got a datalink).
             run_cmd 'SET PROCESS/PRIVILEGES=PHY_IO'
             run_cmd 'SHOW PROCESS/PRIVILEGES'
             must_have "$SEG" 'PHY_IO' \
                 "NETACP [vms-1f69]: precondition -- the SYSTEM DCL process's executive row holds PHY_IO"
-            local DL_OFF; DL_OFF=$(wc -c <"$LOG")
-            send 'DNETACC --iface lo --hello-interval 1 --duration 3'
-            if wait_for 'DECNETD-I-COUNTERS' 45 "$DL_OFF" || wait_for 'DECNETD-E-' 5 "$DL_OFF"; then
-                wait_for '$ ' 20 "$DL_OFF"
-                local DLSEG; DLSEG=$(tail -c "+$((DL_OFF + 1))" "$LOG" | tr -d '\r')
-                must_not_have "$DLSEG" 'SS$_NOPRIV' \
-                    "NETACP [vms-1f69]: an image activated from a PHY_IO-holding DCL is NOT refused SS\$_NOPRIV (privilege inherited into its executive row)"
-                if printf '%s\n' "$DLSEG" | grep -qF 'DECNETD-I-PROCPRIV'; then
-                    must_have "$DLSEG" '(PHY_IO held)' \
-                        "NETACP [vms-1f69]: the activated image's OWN executive row holds PHY_IO (read back by \$GETJPI)"
-                else
+            local pass_n
+            for pass_n in 1 2; do
+                local DL_OFF; DL_OFF=$(wc -c <"$LOG")
+                send 'DNETACC --iface lo --hello-interval 1 --duration 3'
+                if wait_for 'DECNETD-I-COUNTERS' 45 "$DL_OFF" || wait_for 'DECNETD-E-' 5 "$DL_OFF"; then
+                    wait_for '$ ' 20 "$DL_OFF"
+                    local DLSEG; DLSEG=$(tail -c "+$((DL_OFF + 1))" "$LOG" | tr -d '\r')
+                    must_not_have "$DLSEG" 'SS$_NOPRIV' \
+                        "NETACP [vms-1f69]: an image activated from a PHY_IO-holding DCL is NOT refused SS\$_NOPRIV (open $pass_n)"
+                    must_not_have "$DLSEG" 'DECNETD-E-NOSOCKET' \
+                        "NETACP [vms-b72]: the executive datalink open from an interactive session is NOT refused (open $pass_n of 2, no reboot between)"
                     must_have "$DLSEG" 'DECNETD-I-DATALINK' \
-                        "NETACP [vms-1f69]: the executive datalink opened (no refusal to explain)"
+                        "NETACP [vms-b72]: the executive opened the datalink for an image of this interactive session (open $pass_n of 2, no reboot between)"
+                    negctl "$DLSEG" 'DECNETD' "NETACP executive datalink open $pass_n"
+                else
+                    bad "NETACP [vms-b72]: DECNETD.EXE --iface lo produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s (open $pass_n)"
+                    wait_for '$ ' 20 "$DL_OFF"
                 fi
-                negctl "$DLSEG" 'DECNETD' "NETACP privilege inheritance"
-            else
-                bad "NETACP [vms-1f69]: DECNETD.EXE --iface lo produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s"
-                wait_for '$ ' 20 "$DL_OFF"
-            fi
+            done
             # 4. negative: no PHY_IO -> the executive refuses, nothing is sent.
             run_cmd 'SET PROCESS/PRIVILEGES=NOPHY_IO'
             local NP_OFF; NP_OFF=$(wc -c <"$LOG")

@@ -26,7 +26,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-HEADER_DIRS = ["src/libvms/include", "src/vmsrms/include/rms", "src/vmsprocess/include/vms"]
+HEADER_DIRS = ["src/libvms/include", "src/libvms/include/vms", "src/vmsrms/include/rms", "src/vmsprocess/include/vms"]
 
 
 # Structure-field offsets and sizes ($S_ $L_ $W_ $B_ $Q_ $T_ $R_ $PS_ ... ) describe a

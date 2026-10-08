@@ -304,6 +304,14 @@ static inline int login_read_line_timed(int fd, char *buf, size_t bufsiz,
         if (!have_term)                /* the prompt line is still open */
             (void)!write(echo_fd, "\n", 1);
         (void)!write(echo_fd, report, sizeof(report) - 1);
+        /* vms-330: the process exits right after this and JOB_CONTROL replaces the session
+         * on the same terminal; make sure the report has left the line discipline first, or
+         * a loaded guest can drop the VMS text the oracle expects. */
+        if (isatty(echo_fd)) {          /* tcdrain() is not in DECC$SHR's vector; TCSADRAIN drains too */
+            struct termios dt;
+            if (tcgetattr(echo_fd, &dt) == 0)
+                (void)tcsetattr(echo_fd, TCSADRAIN, &dt);
+        }
     }
 
     return rc;

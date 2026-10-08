@@ -217,7 +217,18 @@ $sc"
     else
         joined=0   # not a full member this sample; only a SUSTAINED member at the end counts
     fi
-    kill -0 "$NODEP" 2>/dev/null || { log "OVMX node driver exited"; break; }
+    if ! kill -0 "$NODEP" 2>/dev/null; then
+        # vms-a666: the exec SESSION ending is not the NODE ending -- kubectl-exec can drop the
+        # held-open session (stream reset / apiserver hiccup) while qemu in the pod keeps running.
+        # Breaking here undercounted the sustained-CN window and left the VAX console
+        # mid-command. Only a node whose qemu is really gone ends the poll early.
+        if kx pgrep -f qemu-system >/dev/null 2>&1; then
+            log "  exec session for the node ended but its qemu is still running -- continuing the poll"
+            NODEP_GONE_SESSION=1
+        else
+            log "OVMX node driver exited"; break
+        fi
+    fi
 done
 
 # --- 8. Final authoritative snapshot: SDA CSB (oracle) + DCL, grade the FINAL state --

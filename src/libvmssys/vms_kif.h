@@ -730,15 +730,19 @@ uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
  * privileged (the network daemon that minted the RTAn:); GET reads "" when none. */
 uint32_t vms_kif_terminal_setrpi(const char *devnam, const char *rpi);
 uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_size);
+/* RTAn: the ORIGINATING terminal's device type, width, page length and
+ * characteristics, as the remote conveyed them over CTERM (rd vms-14b). Privileged, RTAn: only; each
+ * field applies only under its VMS_TERMCHAR_M_* flag. Read back via $GETDVI. */
+uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
+                                  uint32_t devtype, uint32_t width, uint32_t page,
+                                  uint64_t setchar, uint64_t clrchar);
 
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.
- * OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36) -- SET TERMINAL is the writer, and
- * what it writes is ctx->terminal, a per-process DCL-local model no other
- * process (and no later image in this one) can observe. Re-pointed from
- * vms-fb9, which is CLOSED: an item that is done tracks nothing, and the whole
- * price of this declaration is that a LIVE item owns the gap. */
+ * Wired (rd vms-d900): $QIO IO$_SETMODE / IO$_SETCHAR with a characteristics
+ * buffer on a terminal channel (sys_qio.c qio_terminal_op), which DCL's SET
+ * TERMINAL /WIDTH /PAGE now goes through. */
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);
@@ -846,6 +850,10 @@ uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
 uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
 /* $SETDDIR: the executive-held process default directory (rd vms-872). */
 uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap);
+/* The process rights list (vms-7d5a, VMS_IOCTL_RIGHTS): $GRANTID / $REVOKID. op = VMS_RIGHTS_OP_GRANT / _REVOKE; pid 0 = the caller. */
+uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib);
+uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
+                             uint32_t cap, uint32_t *count);
 
 /* Read this process's own invoking CLI context. *cliflag (optional) is nonzero
  * iff a CLI launched it; command/command_size receive the NUL-terminated line;
@@ -1006,6 +1014,22 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
                             const char *const *values, uint8_t num_values,
                             uint32_t attributes, uint8_t acmode);
 
+/* As vms_kif_lnm_define, with each equivalence string's LENGTH given
+ * (`lengths[i]`, or NULL for NUL-terminated strings): an equivalence may hold
+ * any byte, NUL included -- a process-permanent file's equivalence begins
+ * ESC NUL and its IFI (rd vms-b14e). */
+uint32_t vms_kif_lnm_define_n(uint32_t table, const char *name,
+                              const char *const *values, const uint16_t *lengths,
+                              uint8_t num_values, uint32_t attributes, uint8_t acmode);
+
+/* A process-permanent file's equivalence string: ESC, NUL, the 2-byte IFI,
+ * then the device (OpenVMS: "\x1B\x00" + IFI + "_OPA0:"). */
+#define VMS_LNM_PPF_HDR 4
+static inline int vms_lnm_is_ppf(const char *v, uint32_t len)
+{
+    return v && len >= VMS_LNM_PPF_HDR && v[0] == 0x1B && v[1] == 0;
+}
+
 /* Delete a name from an executive-resident table at `acmode` and every outer
  * mode (rd vms-ef21); a NULL name deletes every name in the table at those
  * modes. SS$_NOLOGNAM if nothing matched, SS$_NOSUCHDEV if the executive is
@@ -1052,6 +1076,9 @@ struct vms_kif_lnm_enum_rec {
     char     values[VMS_LNM_MAX_EQUIV][VMS_LNM_MAX_VALUE + 1];
     uint32_t attributes;
     uint8_t  acmode;                              /* LNM_MODE_* */
+    uint16_t value_len[VMS_LNM_MAX_EQUIV];        /* byte length of each value
+                                                   * (a value may hold NUL, rd
+                                                   * vms-b14e) */
 };
 
 /* Enumerate every name in an executive-resident table (VMS_LNM_TBL_SYSTEM,
@@ -1128,6 +1155,18 @@ uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan);
 /* $QIO IO$_WRITEVBLK-equivalent: one message, moved whole. SS$_EXQUOTA if
  * `len` exceeds the mailbox's MAXMSG or its remaining BUFQUO. */
 uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len);
+
+/* $CREMBX with a promsk: the SOGW protection mask (a SET bit DENIES) the
+ * executive checks every $ASSIGN, read and write against; owner = caller's UIC.
+ * vms_kif_mbx_create() is this with promsk 0 (rd vms-c6d1). */
+uint32_t vms_kif_mbx_create_prot(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                                 uint32_t promsk, uint32_t *exec_chan,
+                                 uint32_t *unit, char *devnam, uint32_t devnam_sz);
+
+/* IO$_WRITEVBLK with IO$M_NORSWAIT when norswait != 0: no room for the message
+ * -> SS$_MBFULL at once, never a wait for a reader (rd vms-c6d1). */
+uint32_t vms_kif_mbx_write_ex(uint32_t exec_chan, const void *buf, uint32_t len,
+                              int norswait);
 
 /* $QIO IO$_READVBLK-equivalent. Copies up to `bufsz` bytes of the next
  * message into `buf` and reports the message's true length in *actlen (which

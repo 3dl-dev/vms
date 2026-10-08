@@ -255,6 +255,13 @@ target_link_libraries(test_libvms_protection PRIVATE
 )
 add_test(NAME test_libvms_protection COMMAND test_libvms_protection)
 
+# $CHKPRO decisions against the VAX V7.3 oracle (vms-d404): the subject in the
+# item list, so it needs no executive.
+add_executable(test_libvms_chkpro ${CMAKE_CURRENT_SOURCE_DIR}/test_chkpro.c)
+target_include_directories(test_libvms_chkpro PRIVATE ${VMS_INCLUDE_DIR})
+target_link_libraries(test_libvms_chkpro PRIVATE vms pthread m)
+add_test(NAME test_libvms_chkpro COMMAND test_libvms_chkpro)
+
 # ...and the fixture that lets it run honestly on a host whose distro policy
 # blocks unprivileged user namespaces (rd vms-bd7). test_protection.c
 # synthesizes a caller UIC either with setgid()+setuid() (needs CAP_SETGID +
@@ -532,7 +539,7 @@ add_test(NAME test_libvms_conformance_constants
 # DERIVED from the documented VMS field order under the LP64 C-ABI (not read back
 # from the header), plus public-prefix stability and the LP64-divergence tripwire.
 # It is NOT a real-VMS binary-compat audit (there is no binary boundary: producer
-# crtl_rms_stdio.c and consumer sys$create are both OVMX code from these headers;
+# the C RTL file layer and consumer sys$create are both OVMX code from these headers;
 # LP64 8-byte pointers are deliberate). It is a regression lock protecting the
 # exact structs vms-801.6's RTL (CLI$/LIB$TPARSE/SYS$FILESCAN) will build on.
 # Pure header test -- needs the libvms and vmsrms include dirs (rms/fab.h etc.),

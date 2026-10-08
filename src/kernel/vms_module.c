@@ -1389,6 +1389,9 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, bool share_pid,
         proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
         proc->dfprot_set = parent->dfprot_set;
         memcpy(proc->ddir, parent->ddir, sizeof(proc->ddir)); /* $SETDDIR too */
+        memcpy(proc->rights_id, parent->rights_id, sizeof(proc->rights_id));
+        memcpy(proc->rights_attr, parent->rights_attr, sizeof(proc->rights_attr));
+        proc->rights_n = parent->rights_n;          /* the process rights list (vms-7d5a) */
 
         spin_lock(&parent->mode_lock);
         proc->perm_privs = parent->perm_privs;
@@ -2345,6 +2348,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_term_setrpi(proc, arg);
     case VMS_IOCTL_TERM_GETRPI:
         return vms_ioctl_term_getrpi(proc, arg);
+    case VMS_IOCTL_TERM_SETCHAR:
+        return vms_ioctl_term_setchar(proc, arg);
     case VMS_IOCTL_SETTERM:
         return vms_ioctl_setterm(proc, arg);
 
@@ -2382,6 +2387,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_dfprot(proc, arg);
     case VMS_IOCTL_DDIR:
         return vms_ioctl_ddir(proc, arg);
+    case VMS_IOCTL_RIGHTS:
+        return vms_ioctl_rights(proc, arg);
 
     /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
     case VMS_IOCTL_SPAWN_NOTIFY:

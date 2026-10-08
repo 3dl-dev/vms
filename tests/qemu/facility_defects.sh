@@ -435,6 +435,8 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
+spawn-input-via-linux-path
+spawn-arm-gone-subprocess-not-completed
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -487,6 +489,7 @@ register-continue-identity-dropped
 rms-create-filespec-not-translated
 scratch-dir-owner-not-system
 lnm-manager-delete-noop
+lnm-seed-without-sysnam
 lnm-group-scope-collapsed
 lnm-privilege-check-bypassed
 mbx-not-shared
@@ -561,6 +564,7 @@ register-subprocess-identity-self-declared
 libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
+acp-create-ignores-dfprot
 clrast-no-delivery
 mbx-tmpmbx-check-removed
 mbx-prmmbx-check-removed
@@ -568,18 +572,36 @@ acp-readall-ignored
 acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
+acp-dir-used-blocks-ignore-eof
+acp-rights-list-not-consulted
+rights-grant-cmkrnl-not-checked
+acp-grpprv-ignored
+acp-acl-not-consulted
+acp-acl-deny-falls-to-world
+acp-acl-control-not-checked
+acp-acl-deleteall-drops-protected
+sys-parse-acl-drops-access
+rms-set-security-local-applied-early
+chkpro-acl-ignored
+chkpro-self-rights-ignored
+create-user-profile-uic-dropped
+acp-acl-default-not-propagated
+acp-default-protection-ignored
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
+libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
+mbx-prot-read-unchecked
+mbx-readall-grants-read
+mbx-prot-write-unchecked
+crembx-promsk-dropped
+mbx-sender-pid-not-stamped
+mbx-norswait-ignored
 crtl-feature-unknown-accepted
 crtl-feature-set-ignored
-crtl-feature-file-sharing-ignored
-crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
-crtl-fwrite-chunk-loop-stops-early
-crtl-unlink-fabricates-erase
 rms-dirfind-exact-version-ignored"
 
 # ---------------------------------------------------------------------------
@@ -985,6 +1007,25 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    acp-create-ignores-dfprot)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE gives an ordinary file that names no protection the creating process's default file protection (\$SETDFPROT / RMS_FILEPROT)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_setdfprot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The ACP's CREATE takes proc->dfprot for an ordinary file with no protection of its own. The mutation leaves it 0, so the file gets the class default (RWED,RWED,RE,RE) whatever the process set. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the new file's protection is the process default (0x0F00), not a class default
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     setdfprot-not-stored)
         case "$_f" in
         facility)     echo "\$SETDFPROT default-protection attribute is held per process in the executive (vms-44a)";;
@@ -1065,13 +1106,13 @@ EOF
 
     acp-readall-ignored)
         case "$_f" in
-        facility)     echo "READALL grants read of any file (acp_check_access)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
+        facility)     echo "READALL grants read of any file (vms_prot_check)";;
+        targets)      echo "kernel-core/vms_prot.h";;
         suites_red)   echo "test_syssvc_privilege_enforce";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() grants a read-only request when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used by the Files-11 ACP for a file (the mailbox driver withholds READALL, as real VMS does: rd vms-c6d1) -- grants a request for only read/execute bits when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check on a file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 READALL alone grants the read
 EOF
@@ -1084,15 +1125,57 @@ EOF
 
     acp-bypass-ignored)
         case "$_f" in
-        facility)     echo "BYPASS lifts every file access control (acp_check_access)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
-        suites_red)   echo "test_syssvc_privilege_enforce";;
+        facility)     echo "BYPASS lifts every object access control -- file or mailbox (vms_prot_check)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() returns SS__NORMAL at once when BYPASS is held. The mutation makes that branch unreachable ('0 &&'), so BYPASS no longer lifts the protection check. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used for files (ACP) and mailboxes (rd vms-c6d1) -- returns SS__NORMAL at once when BYPASS is held. The mutation makes that branch unreachable ('0 &&'), so BYPASS no longer lifts the protection check on either object class. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 BYPASS alone grants the read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+BYPASS alone grants the read of the W:W request mailbox
+BYPASS alone grants a write to the no-world-access mailbox
+EOF
+                      ;;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to let BYPASS read and write mailboxes whose mask denies the world; it is the one BYPASS property observed on a second object class.";;
+        esac;;
+
+    acp-sysprv-ignored)
+        case "$_f" in
+        facility)     echo "SYSPRV confers the SYSTEM protection category on any protected object (vms_prot_check)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used for files (ACP) and mailboxes (rd vms-c6d1) -- sets is_system when the accessor's group is a system group OR SYSPRV is held. The mutation replaces the SYSPRV term with 0, so SYSPRV no longer qualifies the accessor for the SYSTEM category of either object class. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+SYSPRV alone grants the read (SYSTEM protection category)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+SYSPRV alone grants the read of the W:W request mailbox (SYSTEM protection category)
+SYSPRV alone grants a write to the no-world-access mailbox (SYSTEM protection category)
+EOF
+                      ;;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to put a SYSPRV holder in a mailbox's SYSTEM category, for the read and for the write; it is the one SYSPRV property observed on a second object class.";;
+        esac;;
+
+    mbx-readall-grants-read)
+        case "$_f" in
+        facility)     echo "READALL does not open a read-denied mailbox (rd vms-c6d1, oracle mbxprot MBXP.READALL.READ)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "mbx_access() withholds READALL from the privileges it hands vms_prot_check(), because real VAX V7.3 and Alpha V8.4 refuse a READALL-only process the read of a read-denied mailbox. The mutation passes cur_privs whole, so READALL opens the mailbox as it would a file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1101,17 +1184,99 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    acp-sysprv-ignored)
+    mbx-prot-read-unchecked)
         case "$_f" in
-        facility)     echo "SYSPRV confers the SYSTEM protection category (acp_check_access)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
-        suites_red)   echo "test_syssvc_privilege_enforce";;
+        facility)     echo "a mailbox read needs read access under the mailbox protection (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() sets is_system when the accessor's group is a system group OR SYSPRV is held. The mutation replaces the SYSPRV term with 0, so SYSPRV no longer qualifies the accessor for the SYSTEM category. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_ioctl_mbx_read() refuses SS\$_NOPRIV before dequeuing when vms_prot_check() denies the caller read access. The mutation makes that refusal unreachable ('0 &&'), so any client holding a channel to NETACP's W:W request mailbox could dequeue another client's request. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-SYSPRV alone grants the read (SYSTEM protection category)
+an unprivileged client may NOT READ the W:W request mailbox (SS$_NOPRIV) -- no other client's request is readable
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+an unprivileged READ of a no-world-access mailbox is SS$_NOPRIV
+READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)
+BYPASS off again: the read is refused
+EOF
+                      ;;
+        knock_on_why)  echo "the same missing read refusal observed on the no-world-access mailbox, under READALL (which must not open it) and after BYPASS is switched back off.";;
+        esac;;
+
+    mbx-prot-write-unchecked)
+        case "$_f" in
+        facility)     echo "a mailbox write needs write access under the mailbox protection (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() refuses SS\$_NOPRIV when vms_prot_check() denies the caller write access. The mutation makes that refusal unreachable ('0 &&'), so a process may write into a mailbox whose protection grants it read only. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unprivileged WRITE to the W:R mailbox is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+an unprivileged WRITE to a no-world-access mailbox is SS$_NOPRIV
+the promsk given to sys$crembx is enforced: an unprivileged $QIOW write through sys$assign is SS$_NOPRIV
+SYSPRV off again: the write is refused
+EOF
+                      ;;
+        knock_on_why)  echo "the same missing write refusal observed on the no-world-access mailbox, through the public sys\$qiow path, and after SYSPRV is switched back off.";;
+        esac;;
+
+    crembx-promsk-dropped)
+        case "$_f" in
+        facility)     echo "sys\$crembx carries its promsk argument to the executive (rd vms-c6d1)";;
+        targets)      echo "libvms/syssvc/sys_mailbox.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$crembx passes promsk to vms_kif_mbx_create_prot(). The mutation passes 0 (all access to all categories) instead -- what the service did before rd vms-c6d1 -- so a mailbox created through the public service is unprotected while one created directly through the executive interface still is. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the promsk given to sys$crembx is enforced: an unprivileged $QIOW write through sys$assign is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    mbx-sender-pid-not-stamped)
+        case "$_f" in
+        facility)     echo "every mailbox message carries the writer's VMS PID, stamped by the executive (rd vms-c6d1 / vms-4a69)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() stamps each queued message with the writing process's VMS PID (the reader's IOSB second longword). The mutation stamps 0, so a reader can no longer tell -- from the executive -- who wrote a message. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the request carries the WRITER's VMS PID, stamped by the executive (IOSB second longword)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    mbx-norswait-ignored)
+        case "$_f" in
+        facility)     echo "IO\$M_NORSWAIT: a write to a full mailbox completes at once with SS\$_MBFULL (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() returns SS\$_MBFULL instead of waiting for room when the write carries VMS_MBX_WRITE_NORSWAIT. The mutation makes that branch unreachable ('0 &&'), so the write waits for a reader; the suite's 10 s alarm turns the wait into this named FAIL and ends the suite. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an IO$M_NORSWAIT write to a full mailbox completes at once (SS$_MBFULL), never waits for a reader
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1131,6 +1296,310 @@ EOF
         why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new directory holds the requested 3 blocks
+BIGD.DIR holds the 200 blocks asked for
+it grew into its preallocated blocks: the allocation is still 200
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-dir-used-blocks-ignore-eof)
+        case "$_f" in
+        facility)     echo "a directory insert works on the blocks in use (VBN 1 to end of file) and grows into the directory's preallocated blocks";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_dir_used_blocks() returns the directory's used blocks from its FAT end of file. The mutation returns the whole allocation, so a directory created with 200 blocks is treated as 200 blocks in use, beyond the 64-block working bound, and every insert into it fails SS\$_DEVICEFULL. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
+every one of them is found again by name
+BIGD.DIR grew past its first block
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-rights-list-not-consulted)
+        case "$_f" in
+        facility)     echo "the ACP ACL check matches a general-identifier ACE against the executive process rights list (vms-7d5a)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_proc_holds() finds a general identifier in proc->rights_id. The mutation never finds it, so a process granted %X80012345 by \$GRANTID is still refused a file whose ACE grants that identifier read. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+holding %X80012345 the child opens RGTF.DAT: the grant changed the ACL decision
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    rights-grant-cmkrnl-not-checked)
+        case "$_f" in
+        facility)     echo "\$GRANTID / \$REVOKID need CMKRNL in the executive (vms-7d5a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_rights() refuses GRANT/REVOKE SS\$_NOPRIV without CMKRNL. The mutation drops the check, so an unprivileged process grants itself an identifier and then opens the file the ACE protects. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV
+...and changes nothing: still refused
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-grpprv-ignored)
+        case "$_f" in
+        facility)     echo "GRPPRV puts the accessor in the system category for files of its own UIC group (Files-11 ACP protection gate)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_prot_check_acl() -- the executive's shared protection decision (vms_prot.h) acp_check_access() calls -- counts a GRPPRV holder as system category when its group owns the file. The mutation drops that term, so [100,100] with GRPPRV is refused its own group's S:RWED file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+GRPPRV reads its own group's GRPT1.DAT through the system field
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-not-consulted)
+        case "$_f" in
+        facility)     echo "the Files-11 ACP access check consults the file's access control list (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() asks acp_acl_match() for the first identifier ACE the process matches. The mutation sets ace_matched to 0, so the ACL is never consulted and only the protection code decides: [100,100] is refused ACLF1 although an ACE grants it read. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+F1: the ACE grants [100,100] read the protection code denies
+F2: the matching NONE ACE denies the read world allows
+F4: [100,100] READ, ahead of [100,*] NONE, grants
+F5: IDENTIFIER=* denies [100,100] the world read
+...and the ACE set by name grants [100,100] read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-deny-falls-to-world)
+        case "$_f" in
+        facility)     echo "a matching ACE that does not grant the access is final for the group and world categories (vms-d404)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "After a matching ACE that does not grant the wanted access, vms_prot_check_acl() -- the executive's shared protection decision acp_check_access() hands the ACL verdict to (vms_prot.h) -- lets only the system and owner fields grant ('if (!ace_matched) {' guards group and world). The mutation makes that guard always true, so world RE grants what the NONE ACE denied. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+F2: the matching NONE ACE denies the read world allows
+F5: IDENTIFIER=* denies [100,100] the world read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-control-not-checked)
+        case "$_f" in
+        facility)     echo "changing a file's ACL requires CONTROL access (owner, system, BYPASS/SYSPRV, or an ACE granting CONTROL) (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_op() refuses an ACL change SS\$_NOPRIV unless acp_has_control(). The mutation removes the check, so a world user changes the ACL of a file it does not own. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a non-owner without CONTROL may not change ACLF1's ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-deleteall-drops-protected)
+        case "$_f" in
+        facility)     echo "deleting a file's ACL keeps the ACEs marked OPTIONS=PROTECTED (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_op()'s DELETEALL drops an ACE only when it is not PROTECTED. The mutation drops every ACE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the PROTECTED ACE survives deleting the ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    chkpro-acl-ignored)
+        case "$_f" in
+        facility)     echo "\$CHKPRO applies the object's ACL (CHP\$_ACL) to the subject (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rightslist test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "chk_decide() looks for the first identifier ACE the subject holds. The mutation never finds one, so an ACE granting read to [200,200] or to a general identifier the caller holds changes nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: an ACE (IDENTIFIER=[200,200],ACCESS=READ) grants DEFAULT read (UP.ACL.GRANT)
+$CHKPRO: holding %X80012345 the caller is granted read by the ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    chkpro-self-rights-ignored)
+        case "$_f" in
+        facility)     echo "\$CHKPRO with no profile takes the caller's rights list from the executive (vms-d404 over vms-7d5a)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "chk_self() reads the calling process's rights list with vms_kif_rights_list(). The mutation leaves it empty, so an identifier the caller was granted by \$GRANTID never satisfies an ACE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: holding %X80012345 the caller is granted read by the ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    create-user-profile-uic-dropped)
+        case "$_f" in
+        facility)     echo "\$CREATE_USER_PROFILE carries the user's UIC from SYSUAF.DAT into the profile (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rightslist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$create_user_profile() stores the UIC \$GETUAI returned. The mutation stores [0,0], a system-category UIC, so DEFAULT's profile reads a world-denied object and is refused the one it owns. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: DEFAULT is world to a [1,4] S:RWED,O:RWED,G,W object -- read refused (UP.WORLD.NONE.READ)
+$CHKPRO: DEFAULT owns a [200,200] S,O:RWED,G,W object -- read granted (UP.OWNER.RWED.READ)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-default-not-propagated)
+        case "$_f" in
+        facility)     echo "the ACP gives a new file its directory's DEFAULT ACEs, a new directory its parent's ACL, a new version the previous version's ACL (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_CREATE composes the inherited ACEs (acp_acl_inherit) and writes them into the new header. The mutation never writes them, so files and directories are born with no ACL whatever their directory or previous version carries. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A.TXT inherits the DEFAULT ACEs, DEFAULT cleared, NOPROPAGATE kept; not the plain ACE
+SUB.DIR inherits PROPD.DIR's ACL as it is, except the NOPROPAGATE ACE
+B.TXT inherits SUB.DIR's DEFAULT ACE, DEFAULT cleared
+B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
+A.TXT;2 inherits A.TXT;1's ACL less its NOPROPAGATE ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-default-protection-ignored)
+        case "$_f" in
+        facility)     echo "a directory's DEFAULT_PROTECTION ACE gives a file created in it its protection (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_CREATE with no protection of its own takes the directory's DEFAULT_PROTECTION. The mutation ignores it, so the file gets the process default (RWED,RWED,RE,) instead of the directory's (RWED,RWED,R,R). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,R,R)
+B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    sys-parse-acl-drops-access)
+        case "$_f" in
+        facility)     echo "\$PARSE_ACL encodes the ACCESS= keywords into ACE\$L_ACCESS (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ace_parse_bits() sets one bit per access keyword. The mutation sets none, so (identifier=[1,4], access=r+w) parses to an ACE granting nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$PARSE_ACL (identifier=[1,4], access=r+w) is the oracle's bytes
+$FORMAT_ACL prints (IDENTIFIER=<[1,4]>,ACCESS=READ+WRITE)
+DCL SET ACL then SHOW ACL prints the ACE as VMS does
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    rms-set-security-local-applied-early)
+        case "$_f" in
+        facility)     echo "\$SET_SECURITY holds OSS\$M_LOCAL edits in the context until OSS\$M_RELCTX (vms-d404)";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$set_security() applies its held ACL edits only without OSS\$M_LOCAL, on OSS\$M_RELCTX, or with no context. The mutation applies them at once, so a LOCAL edit is visible in the file before the context is released. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the file's ACL is unchanged until the context is released
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1171,6 +1640,26 @@ EOF
 vms-b447: FIX mrs 20 -- a default-FAB $OPEN reads FIX/mrs 20 from the header and $GETs the 20-byte records byte-exact
 vms-b447: F$FILE_ATTRIBUTES: FIX MRS 20, RFM FIX; VAR LRL 27, ORG SEQ
 RMS-over-ACP: all records round-tripped byte-exact through the ACP window
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    libcreatedir-rooted-default-unresolved)
+        case "$_f" in
+        facility)     echo "LIB\$CREATE_DIR composes a logical (concealed rooted search-list) device to the on-volume member the directory is made in";;
+        targets)      echo "libvms/rtl/lib_dir.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$create_dir() calls pick_candidate() to compose the device through LNM\$FILE_DEV. The mutation drops the call, so a relative spec under the default CDIR\$ROOT:[RSUB] is \$ASSIGNed on the logical name itself and fails. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+LIB$CREATE_DIR [.LEAF] under a rooted default is SS$_CREATED
+LEAF.DIR is in [OVMXDIR.RSUB], the member that exists
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1251,49 +1740,9 @@ get_value reads back what set_value stored, default untouched
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-with DECC$FILE_SHARING on a second open for write succeeds
-EOF
-                      ;;
-        knock_on_why)  echo "the same single mutation also changes what the dependent assertion reads.";;
-        esac;;
-
-    crtl-feature-file-sharing-ignored)
-        case "$_f" in
-        facility)     echo "DECC\$FILE_SHARING changes how the veneer opens a file";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_features";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "The veneer opens its FAB with SHRGET|SHRPUT when the current DECC\$FILE_SHARING value is 1. The mutation makes that test unreachable ('0 &&') in both open helpers, so the feature is stored and read back but changes nothing -- exactly what the honest rule forbids. Gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-with DECC$FILE_SHARING on a second open for write succeeds
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
 EOF
                       ;;
         knock_on_why)  echo "";;
-        esac;;
-
-    crtl-fwrite-bypasses-rms)
-        case "$_f" in
-        facility)     echo "C RTL stdio->RMS veneer \$PUT (ovmx_crtl_fwrite over sys\$put, vms-47e)";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_rms_veneer";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ovmx_crtl_fwrite()'s chunk loop replaces 'uint32_t st = sys\$put(&fh->rab, 0, 0);' with a hardcoded RMS\$_NORMAL, so the veneer reports every byte written without ever issuing the real \$PUT. sys\$create (fopen) still genuinely creates the file and its real directory entry (untouched), so the independent ACP directory search and on-disk header proofs (sections 2 and 3 of the suite) still find a real, correctly-versioned, zero-length file -- only its CONTENT is fabricated. The write call's own reported count is the fabricated success too, so fwrite's immediate return value coincidentally still matches the requested count; the lie surfaces only when something reads the bytes back. Unique call; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-4c: the RMS round-trip is byte-exact (FIX mrs=0 put / mrs=1 get)
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-4b: ovmx_crtl_fread reads all 8192 bytes back (sys$get)
-EOF
-                      ;;
-        knock_on_why)  echo "with the real \$PUT never issued the file is genuinely zero-length on disk, so the read-back \$GET loop hits RMS\$_EOF immediately (0 bytes, not 8192) -- the SAME never-written content, observed first as a short read (knock_on_fail) and then as a byte-exact-comparison failure against the deterministic payload (require_fail). The creation, directory-search, and on-disk-header assertions (sections 1-3) never touch the CONTENT and stay green.";;
         esac;;
 
     rms-open-no-file-access-enq)
@@ -1374,46 +1823,6 @@ later retry (which real VMS's release would have let through) still conflicts.
 Six symptoms, one dropped assignment.
 EOF
                       ;;
-        esac;;
-
-    crtl-fwrite-chunk-loop-stops-early)
-        case "$_f" in
-        facility)     echo "C RTL stdio->RMS veneer chunked large-write completion (ovmx_crtl_fwrite's >64KiB multi-\$PUT loop, vms-126)";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_rms_bigwrite";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ovmx_crtl_fwrite()'s chunk loop condition 'while (remaining)' is narrowed to 'while (remaining == nbytes)', which is true only on the very FIRST iteration (before any bytes are subtracted) -- so the loop always exits after exactly one real \$PUT (one FIX record, up to 0xFFFF bytes) regardless of how much was requested, yet the function's own unconditional trailing 'return nmemb;' still reports the FULL requested count. A request of nbytes <= 0xFFFF (test_syssvc_crtl_rms_veneer's 8192-byte write) needs only one iteration under the CORRECT condition too, so it is completely unaffected; only a write that genuinely needs a SECOND \$PUT (this suite's 200000-byte write, > 3 FIX records) silently loses every byte past the first chunk. Unique loop header; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-1h: the chunked round-trip is byte-exact across record boundaries
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-1g: ovmx_crtl_fread reads all 200000 bytes back ($GET loop over N records)
-EOF
-                      ;;
-        knock_on_why)  echo "with only the first 0xFFFF-byte chunk genuinely \$PUT, the file's real on-disk length is far short of 200000 bytes, so the read-back \$GET loop runs out of real records early (a short read, the knock-on) and the subsequent byte-for-byte comparison against the full deterministic payload fails (require_fail) -- the same truncated write, observed first as a short count and then as a content mismatch. The write call's OWN reported count (1b), the creation, and the independent-reader/on-disk-header proofs (1a, 1c-1f) never inspect the actual byte length and stay green.";;
-        esac;;
-
-    crtl-unlink-fabricates-erase)
-        case "$_f" in
-        facility)     echo "C RTL stdio->RMS veneer unlink/remove (ovmx_crtl_unlink over sys\$erase, vms-3c1/vms-3320)";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_rms_fileops";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ovmx_crtl_unlink() replaces 'uint32_t st = sys\$erase(&fab, 0, 0);' with a hardcoded RMS\$_NORMAL, so the veneer reports every unlink/remove as successful without ever asking the ACP to delete the directory entry -- the file survives, unerased, on the real volume. Because the caller-visible return value is the SAME fabricated success the real erase would also have reported here (the file genuinely exists and a real erase WOULD succeed), the immediate call-site check cannot tell the difference; only an INDEPENDENT reader that looks for the file afterward can. Unique call; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-3d: independent sys$search sees the unlinked file GONE
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-5f: readdir agrees the op-3 unlink and op-4 rename-source are GONE (same self-check crtl_rms3 performs before its sentinel-7 return)
-EOF
-                      ;;
-        knock_on_why)  echo "the SAME never-erased FOPDEL.DAT is invisible to the immediate call-site check (which only reads the fabricated return code, unaffected) but visible to BOTH independent readers that later look for it by name: the direct sys\$search right after the unlink (require_fail) and the later opendir/readdir enumeration pass that re-checks the same file is gone (knock_on_fail) -- one un-erased file, found twice.";;
         esac;;
 
     rms-dirfind-exact-version-ignored)
@@ -2386,6 +2795,42 @@ EOF
         why)          echo "vms_enq_core_ex() stops bounds-checking the decoded request's lock mode: its 'args.lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM -- it falls through into the resource lookup and grant/queue logic with an out-of-range mode. For the cross-node \$ENQ that test_syssvc_dlm_xnode drives (VMS_IOCTL_DLM_XNODE marshals req->lkmode into this same core), that is now the SOLE guard, so the suite's own 'bad lock mode -> SS\$_BADPARAM' assertion reddens. The local \$ENQ ioctl and vms_ioctl_convert's \$CVT path share this core but no suite drives a bad mode through either, so nothing else reddens.";;
         require_fail) cat <<'EOF'
 bad lock mode -> SS$_BADPARAM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    spawn-arm-gone-subprocess-not-completed)
+        case "$_f" in
+        facility)     echo "LIB\$SPAWN /NOWAIT completion notification (the subprocess-exit event flag, vms-e9a B1 / vms-f45)";;
+        targets)      echo "libvms/rtl/lib_misc.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$spawn no longer completes the caller's request when the completion arm finds the subprocess already gone and reclaimed (SS\$_NONEXPR): the event flag is never set, so a \$WAITFR on it hangs. The race is the subprocess finishing before the arm runs; the suite spawns an instantly-finishing command repeatedly so the lost flag shows.";;
+        require_fail) cat <<'EOF'
+every /NOWAIT lib$spawn of an instantly-finishing command set its completion event flag
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    spawn-input-via-linux-path)
+        case "$_f" in
+        facility)     echo "LIB\$SPAWN INPUT=<filespec>: the spawned DCL's SYS\$INPUT is read through RMS over the ACP (vms-ccc)";;
+        targets)      echo "libvms/rtl/lib_misc.c";;
+        suites_red)   echo "test_syssvc_spawn_input";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$spawn stops reading the INPUT file through RMS (rms_textfile_open forced to fail) and falls back to translating the spec to a Linux path -- the retired /vms passthrough. For a command file on the ODS-2 volume that path does not exist, so the spawn is refused (or, before the honest-FNF change, the DCL read /dev/null and exited at once): the command file never runs.";;
+        require_fail) cat <<'EOF'
+lib$spawn accepts an ODS-2 INPUT filespec and creates the subprocess
+the subprocess completed
+the DCL executed the ODS-2 command file (its output reached the output file)
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -3689,7 +4134,7 @@ C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$
 C: the privilege display shows NETMBX and TMPMBX -- the two privileges the executive granted an unprivileged process, both in VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,READALL), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
@@ -4773,10 +5218,10 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "lex_user() goes back to answering the literal \"SYSTEM\" when the executive holds no name -- the vms-cb5 defect verbatim, found because SHOW PROCESS (a display) and F\$GETJPI (a lexical function) read the SAME field of the SAME row and disagreed: the display printed nothing and the programmatic path invented the most privileged name on the system for the one process that had just been REFUSED it.";;
+        why)          echo "lex_user() renders SYSTEM's UIC instead of this process's own -- the vms-cb5 defect in its F\$USER-is-a-UIC form, found because SHOW PROCESS (a display) and F\$GETJPI (a lexical function) read the SAME field of the SAME row and disagreed: the display printed nothing and the programmatic path invented the most privileged name on the system for the one process that had just been REFUSED it.";;
         require_fail) cat <<'EOF'
-G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
-G/F$USER: does not answer with the literal SYSTEM
+G/F$USER: answers this process's own UIC in named form -- not the host Linux login name, not SYSTEM's
+G/F$USER: does not answer with SYSTEM
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -4807,9 +5252,9 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "lex_user() goes back to answering with the HOST Linux account name for getuid(), upcased -- the vms-f39 defect verbatim, where F\$USER() answered \"BARON\" because that was the developer's login. A Linux account name is not a VMS user name, and this is the branch that would be taken on any system that HAS an /etc/passwd. It is a SEPARATE control from dcl-fuser-system-fabricated because it is a separate branch that was reachable in a separate population of systems: restoring only the SYSTEM half leaves this one deleted and vice versa.";;
+        why)          echo "lex_user() answers with the HOST Linux account name for getuid(), upcased, in place of the UIC it rendered -- the vms-f39 defect verbatim, where F\$USER() answered \"BARON\" because that was the developer's login. A Linux account name is not a VMS user name, and this is the branch that would be taken on any system that HAS an /etc/passwd. It is a SEPARATE control from dcl-fuser-system-fabricated because it is a separate branch that was reachable in a separate population of systems: restoring only the SYSTEM half leaves this one deleted and vice versa.";;
         require_fail) cat <<'EOF'
-G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
+G/F$USER: answers this process's own UIC in named form -- not the host Linux login name, not SYSTEM's
 G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
 EOF
                       ;;
@@ -5208,6 +5653,24 @@ name that was never stored) -- the blunderbuss this manifest's method rule
 forbids -- so the delete path was chosen deliberately for its surgical scope.
 EOF
                       ;;
+        esac;;
+
+    lnm-seed-without-sysnam)
+        case "$_f" in
+        facility)     echo "vmslnm system-name seeding (src/vmslnm/lnm_defaults.c lnm_setup_defaults), which every DCL start runs against the executive-resident LNM\$SYSTEM";;
+        targets)      echo "vmslnm/lnm_defaults.c";;
+        suites_red)   echo "test_syssvc_lnm_system";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lnm_seed_system_allowed() stops asking the executive for SYSNAM and always says yes, so a process holding SYSPRV but not SYSNAM seeds LNM\$SYSTEM again: the executive maximizes its executive-mode \$CRELNM to supervisor mode (rd vms-ef21) and the duplicate, outermost-mode-wins, shadows the node's SYS\$SYSDEVICE for every later process (rd vms-ec7e: test_syssvc_mmk_build's SYS\$SYSTEM:TCC.EXE looked up on the wrong volume). test_syssvc_lnm_system seeds with SYSNAM disabled and a marker device, and the marker lands in LNM\$SYSTEM.";;
+        require_fail) cat <<'EOF'
+seed: a process without SYSNAM left NO name in LNM$SYSTEM (no supervisor-mode duplicate to shadow the node's)
+seed: SYS$SYSDEVICE still translates to the node's system device, not the unprivileged process's
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     lnm-manager-delete-noop)
@@ -5835,13 +6298,13 @@ EOF
 
     acp-create-header-slot-offbyone)
         case "$_f" in
-        facility)     echo "Files-11 (ODS-2) ACP IO\$_CREATE file-header allocation (VMS_IOCTL_ACP_FILEOP allocates a real FID from INDEXF.SYS's index bitmap and writes the new FH2 at that FID's header slot, idx_lbn + (FID - 1)), vms-5303, epic vms-208";;
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_CREATE file-header allocation (VMS_IOCTL_ACP_FILEOP allocates a real FID from INDEXF.SYS's index bitmap and writes the new FH2 at that FID's header slot, INDEXF VBN hdr_vbn0 + (FID - 1) through the index file's map), vms-5303, epic vms-208";;
         targets)      echo "kernel-core/vmsfs_acp.c";;
         suites_red)   echo "test_syssvc_acp_create";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "The IO\$_CREATE handler writes the freshly built file header at its INDEXF slot -- vol->idx_lbn + (new_fidnum - 1u) -- the same header-number arithmetic acp_read_header uses to READ a header (header N at idx_lbn + (N-1)). Dropping the -1 writes the header ONE SLOT TOO HIGH (at FID new_fidnum+1's slot). The CREATE still marks new_fidnum's index-bitmap bit used, still returns new_fidnum, and still enters the directory record pointing at new_fidnum -- so the create reports success -- but the FID the directory now resolves to (new_fidnum) has no valid header at its own slot: acp_read_header(new_fidnum) reads the wrong (unwritten/stale) block, fails to parse, and returns SS\$_NOSUCHFILE. The file therefore cannot be re-opened by name. Only an assertion that re-ACCESSes the created file BY NAME (resolving the directory record to the FID and reading the header at its slot) can tell; the CREATE call's own status, the assigned FID, and the fail-honest edge checks (bad func, non-directory DID, delete-nonexistent) never re-read the header at its slot and stay green.";;
+        why)          echo "The IO\$_CREATE handler writes the freshly built file header at its INDEXF slot -- acp_hdr_lbn(vol, new_fidnum) -- the same header-number mapping acp_read_header uses to READ a header. Asking for new_fidnum + 1 writes the header ONE SLOT TOO HIGH (at FID new_fidnum+1's slot). The CREATE still marks new_fidnum's index-bitmap bit used, still returns new_fidnum, and still enters the directory record pointing at new_fidnum -- so the create reports success -- but the FID the directory now resolves to (new_fidnum) has no valid header at its own slot: acp_read_header(new_fidnum) reads the wrong (unwritten/stale) block, fails to parse, and returns SS\$_NOSUCHFILE. The file therefore cannot be re-opened by name. Only an assertion that re-ACCESSes the created file BY NAME (resolving the directory record to the FID and reading the header at its slot) can tell; the CREATE call's own status, the assigned FID, and the fail-honest edge checks (bad func, non-directory DID, delete-nonexistent) never re-read the header at its slot and stay green.";;
         require_fail) cat <<'EOF'
 IO$_ACCESS CREAT.TST by name resolves the created FID at version 1 (header at its INDEXF slot)
 EOF
@@ -7130,17 +7593,61 @@ apply_edit() {
     mbx-prmmbx-check-removed)
         sed -i 's|^    bool ok = permanent ? (cur_privs \& VMS_PRV_M_PRMMBX) != 0$|    bool ok = permanent ? true /* NEGCTL mbx-prmmbx-check-removed */|' "$_file";;
     acp-readall-ignored)
-        sed -i 's|^    if ((privs \& ACP_PRV_M_READALL) \&\& !want_write)$|    if (0 \&\& (privs \& ACP_PRV_M_READALL) \&\& !want_write) /* NEGCTL acp-readall-ignored */|' "$_file";;
+        sed -i 's|^    if ((privs \& VMS_PRV_M_READALL) \&\& !(want \& ~VMS_PROT_READALL_GRANTS))$|    if (0 \&\& (privs \& VMS_PRV_M_READALL) \&\& !(want \& ~VMS_PROT_READALL_GRANTS)) /* NEGCTL acp-readall-ignored */|' "$_file";;
     acp-bypass-ignored)
-        sed -i 's|^    if (privs \& ACP_PRV_M_BYPASS)$|    if (0 \&\& (privs \& ACP_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
+        sed -i 's|^    if (privs \& VMS_PRV_M_BYPASS)$|    if (0 \&\& (privs \& VMS_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
     acp-sysprv-ignored)
-        sed -i 's|^                (privs \& ACP_PRV_M_SYSPRV) != 0;$|                0; /* NEGCTL acp-sysprv-ignored */|' "$_file";;
+        sed -i 's#^                (privs \& VMS_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
+    mbx-readall-grants-read)
+        sed -i 's|^    uint64_t privs = proc->cur_privs \& ~VMS_PRV_M_READALL;$|    uint64_t privs = proc->cur_privs; /* NEGCTL mbx-readall-grants-read */|' "$_file";;
+    mbx-prot-read-unchecked)
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) { /* NEGCTL mbx-prot-read-unchecked */|' "$_file";;
+    mbx-prot-write-unchecked)
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) { /* NEGCTL mbx-prot-write-unchecked */|' "$_file";;
+    crembx-promsk-dropped)
+        sed -i 's|^    uint32_t st = vms_kif_mbx_create_prot(prmflg, maxmsg, bufquo, promsk,$|    uint32_t st = vms_kif_mbx_create_prot(prmflg, maxmsg, bufquo, 0u /* NEGCTL crembx-promsk-dropped */,|' "$_file";;
+    mbx-sender-pid-not-stamped)
+        sed -i 's|^    m->sender_pid = proc->vms_pid;$|    m->sender_pid = 0; /* NEGCTL mbx-sender-pid-not-stamped */|' "$_file";;
+    mbx-norswait-ignored)
+        sed -i 's|^        if (a->flags \& VMS_MBX_WRITE_NORSWAIT) {$|        if (0 \&\& (a->flags \& VMS_MBX_WRITE_NORSWAIT)) { /* NEGCTL mbx-norswait-ignored */|' "$_file";;
     acp-dir-exsz-ignored)
         sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
     acp-fat-versions-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
     acp-fat-recattr-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file";;
+    acp-dir-used-blocks-ignore-eof)
+        sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file";;
+    libcreatedir-rooted-default-unresolved)
+        sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file";;
+    acp-rights-list-not-consulted)
+        sed -i 's|^            if (proc->rights_id\[i\] == id)$|            if (0) /* NEGCTL acp-rights-list-not-consulted */|' "$_file";;
+    rights-grant-cmkrnl-not-checked)
+        sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file";;
+    acp-grpprv-ignored)
+        sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
+    acp-acl-not-consulted)
+        sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
+    acp-acl-deny-falls-to-world)
+        sed -i 's|^    if (!ace_matched) {$|    if (1) { /* NEGCTL acp-acl-deny-falls-to-world */|' "$_file";;
+    acp-acl-control-not-checked)
+        sed -i 's|^    if (!acp_has_control(proc, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+    acp-acl-deleteall-drops-protected)
+        sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file";;
+    chkpro-acl-ignored)
+        sed -i 's#^    matched = chk_acl_match(s, acl, acl_len, \&ace_access);$#    matched = 0 \&\& chk_acl_match(s, acl, acl_len, \&ace_access); /* NEGCTL chkpro-acl-ignored */#' "$_file";;
+    chkpro-self-rights-ignored)
+        sed -i 's#^        uint32_t n = 0, st = vms_kif_rights_list(0, s->rights, NULL, CHKPRO_RIGHTS_MAX, \&n);$#        uint32_t n = 0, st = SS$_NORMAL; /* NEGCTL chkpro-self-rights-ignored */#' "$_file";;
+    create-user-profile-uic-dropped)
+        sed -i 's#^    up.uic = uic;$#    up.uic = 0; /* NEGCTL create-user-profile-uic-dropped */#' "$_file";;
+    acp-acl-default-not-propagated)
+        sed -i 's#^            if (acl_len > 0) {$#            if (0 \&\& acl_len > 0) { /* NEGCTL acp-acl-default-not-propagated */#' "$_file";;
+    acp-default-protection-ignored)
+        sed -i 's#^            else if (have_dprot)$#            else if (0 \&\& have_dprot) /* NEGCTL acp-default-protection-ignored */#' "$_file";;
+    sys-parse-acl-drops-access)
+        sed -i 's#^            if (ace_abbrev(w, names\[k\])) { \*mask |= 1u << k; hit = 1; }$#            if (ace_abbrev(w, names[k])) { hit = 1; } /* NEGCTL sys-parse-acl-drops-access */#' "$_file";;
+    rms-set-security-local-applied-early)
+        sed -i 's#^    if (!(flags \& RMS_OSS_M_LOCAL) || (flags \& RMS_OSS_M_RELCTX) || !contxt) {$#    if (1) { /* NEGCTL rms-set-security-local-applied-early */#' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)
@@ -7149,12 +7656,12 @@ apply_edit() {
         sed -i 's|^        if (features\[i\].name \&\& strcmp(features\[i\].name, name) == 0)$|        if (features[i].name) /* NEGCTL crtl-feature-unknown-accepted */|' "$_file";;
     crtl-feature-set-ignored)
         sed -i 's|^        f->cur = value;$|        f->cur = f->cur; /* NEGCTL crtl-feature-set-ignored */|' "$_file";;
-    crtl-feature-file-sharing-ignored)
-        sed -i 's|^    if (crtl_file_sharing())$|    if (0 \&\& crtl_file_sharing()) /* NEGCTL crtl-feature-file-sharing-ignored */|' "$_file";;
     clrast-no-delivery)
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)
         sed -i 's|^    if (efn < 128)$|    if (efn != 0 \&\& efn < 128) /* NEGCTL efn0-enqw-not-set */|' "$_file";;
+    acp-create-ignores-dfprot)
+        sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file";;
     setdfprot-not-stored)
         sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)
@@ -7162,11 +7669,6 @@ apply_edit() {
         # structurally unreachable so the created subprocess never gets named.
         # Gone after apply (no-op re-apply).
         sed -i 's|if ((rep.status \& 1) \&\& child_prcnam\[0\])|if (0 \&\& (rep.status \& 1) \&\& child_prcnam[0]) /* NEGCTL libspawn-prcnam-dropped */|' "$_file";;
-    crtl-fwrite-bypasses-rms)
-        # Unique call (ovmx_crtl_fwrite's own $PUT); the real call is replaced
-        # with a hardcoded NORMAL, so no bytes are ever really written. Gone
-        # after apply (no-op re-apply).
-        sed -i 's|uint32_t st = sys\$put(&fh->rab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-fwrite-bypasses-rms: sys$put skipped */|' "$_file";;
     rms-open-no-file-access-enq)
         # Braceless-if success arm: empty {} (not a bare comment) avoids
         # -Werror=empty-body. Unique text; gone after apply (no-op re-apply).
@@ -7175,16 +7677,6 @@ apply_edit() {
         # Braceless-if success arm, same idiom as rms-open-no-file-access-enq.
         # Unique text; gone after apply (no-op re-apply).
         sed -i 's|        rab->_rec_lock_lkid = lkid;|        { } /* NEGCTL rms-record-lock-not-enqueued: lkid not stashed */|' "$_file";;
-    crtl-fwrite-chunk-loop-stops-early)
-        # Unique loop header (ovmx_crtl_fwrite's chunk loop); narrowed so the
-        # loop body runs exactly once regardless of how many chunks remain.
-        # Gone after apply (no-op re-apply).
-        sed -i 's|    while (remaining) {|    while (remaining == nbytes) { /* NEGCTL crtl-fwrite-chunk-loop-stops-early */|' "$_file";;
-    crtl-unlink-fabricates-erase)
-        # Unique call (ovmx_crtl_unlink's own $ERASE); the real call is
-        # replaced with a hardcoded NORMAL, so the file is never really erased.
-        # Gone after apply (no-op re-apply).
-        sed -i 's|uint32_t st = sys\$erase(&fab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-unlink-fabricates-erase: sys$erase skipped */|' "$_file";;
     rms-dirfind-exact-version-ignored)
         # UNIQUE TEXT, no range anchor needed: `if (version == c->want_ver) {`
         # occurs once, in acp_dirfind_scan_cb's exact-version branch. Forcing it
@@ -7359,6 +7851,15 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    spawn-arm-gone-subprocess-not-completed)
+        # UNIQUE TEXT: "if (ast == SS$_NONEXPR) {" occurs once, in lib$spawn's NOWAIT arm
+        # handling. Forcing it never-true restores the pre-fix behaviour (the NONEXPR from
+        # the arm is ignored). Gone after apply (no-op re-apply).
+        sed -i 's|if (ast == SS\$_NONEXPR) {|if (0 \&\& ast == SS$_NONEXPR) { /* NEGCTL spawn-arm-gone-subprocess-not-completed */|' "$_file";;
+    spawn-input-via-linux-path)
+        # UNIQUE TEXT: "rms_textfile_t *tf = rms_textfile_open(raw_in);" occurs once, in lib$spawn's
+        # INPUT handling. NULL sends every INPUT spec down the Linux-path fallback. Gone after apply.
+        sed -i 's|rms_textfile_t \*tf = rms_textfile_open(raw_in);|rms_textfile_t *tf = (rms_textfile_open(raw_in), NULL); /* NEGCTL spawn-input-via-linux-path */|' "$_file";;
     dlm-xnode-redirect-target-dropped)
         # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
         # occurs once in the file -- enq_inbound_not_master()'s sole report of
@@ -7624,9 +8125,9 @@ apply_edit() {
     dcl-accounting-user-fabricated)
         sed -i '/^int cmd_accounting(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-accounting-user-fabricated */|' "$_file";;
     dcl-fuser-system-fabricated)
-        sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        strncpy(result, "SYSTEM", result_size - 1); /* NEGCTL dcl-fuser-system-fabricated */|' "$_file";;
+        sed -i '/^static int lex_user(/,/^}$/ s|^    uint32_t uic = info.uic;$|    uint32_t uic = 0x00010004u; /* NEGCTL dcl-fuser-system-fabricated */|' "$_file";;
     dcl-fuser-host-login-name)
-        sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
+        sed -i '/^static int lex_user(/,/^}$/ s|^    result\[ulen\] = .\\0.;$|    { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
     dcl-fident-num2name-host-passwd)
         sed -i '/^static int lex_identifier(/,/^}$/ s|^            result\[0\] = .\\0.;$|            { struct passwd *pw_ = getpwuid((uid_t)member); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fident-num2name-host-passwd */|' "$_file";;
     dcl-fident-num2name-bracketed-uic)
@@ -7734,6 +8235,14 @@ apply_edit() {
         # `e->in_use = 0;` left and is the no-op selftest requires.
         sed -i 's|^    e->in_use = 0;$|    /* NEGCTL lnm-delete-noop: entry not freed */|' "$_file";;
 
+    lnm-seed-without-sysnam)
+        # UNIQUE TEXT: this exact return occurs once in lnm_defaults.c, the
+        # body of lnm_seed_system_allowed(). Replacing it with `return 1;`
+        # lets a process without SYSNAM seed LNM$SYSTEM again (the pre-vms-ec7e
+        # shape). A second apply finds no such line and is the no-op selftest
+        # requires.
+        sed -i 's|^    return vms_kif_chkpriv(VMS_PRV_M_SYSNAM) != SS\$_NOPRIV;$|    return 1; /* NEGCTL lnm-seed-without-sysnam */|' "$_file";;
+
     lnm-manager-delete-noop)
         # UNIQUE TEXT: this exact call+argument list occurs once in
         # lnm_client.c, inside lnm_delete()'s LNM$SYSTEM branch (the
@@ -7745,7 +8254,7 @@ apply_edit() {
         # lnm-delete-noop's kernel-layer no-op. A second apply finds no
         # `vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, ...)` call left inside this
         # file and is the no-op selftest requires.
-        sed -i 's|        return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);|        return SS$_NORMAL; /* NEGCTL lnm-manager-delete-noop: never reaches vms.ko */|' "$_file";;
+        sed -i 's|            return vms_kif_lnm_delete(exec_tbl, logical_name, acmode);|            return SS$_NORMAL; /* NEGCTL lnm-manager-delete-noop: never reaches vms.ko */|' "$_file";;
 
     lnm-group-scope-collapsed)
         # UNIQUE TEXT: this exact line occurs once in vms_lnm.c's
@@ -7903,15 +8412,15 @@ apply_edit() {
 
     acp-create-header-slot-offbyone)
         # ANCHORED to the single IO$_CREATE header-slot write in
-        # vms_ioctl_acp_fileop: `vol->idx_lbn + (new_fidnum - 1u)` occurs exactly
-        # once in the file (the variable `new_fidnum` is unique to the CREATE
-        # path; acp_read_header/DELETE/MODIFY use `fid_num`/`file_fidnum`).
-        # Dropping the `- 1u` writes the new header one slot too high, so the
+        # vms_ioctl_acp_fileop: `hdr_lbn = acp_hdr_lbn(vol, new_fidnum);` occurs
+        # exactly once in the file (the variable `new_fidnum` is unique to the
+        # CREATE path; acp_read_header/DELETE/MODIFY use `fid_num`/`file_fidnum`).
+        # Asking for new_fidnum + 1 writes the new header one slot too high, so the
         # created file cannot be re-opened by name -- only the negctl-anchored
         # re-ACCESS-by-name assertions redden. After substitution the original
         # text is gone, so a second apply matches nothing (the no-op selftest
         # requires).
-        sed -i 's|vol->idx_lbn + (new_fidnum - 1u)|vol->idx_lbn + (new_fidnum) /* NEGCTL acp-create-header-slot-offbyone */|' "$_file";;
+        sed -i 's|hdr_lbn = acp_hdr_lbn(vol, new_fidnum);|hdr_lbn = acp_hdr_lbn(vol, new_fidnum + 1u); /* NEGCTL acp-create-header-slot-offbyone */|' "$_file";;
 
     acp-fileop-no-dlm-lock)
         # ANCHORED to the single per-volume DLM write-lock acquisition in

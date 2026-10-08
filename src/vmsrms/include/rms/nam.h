@@ -90,5 +90,6 @@ struct NAM {
 /* nam$b_nop $PARSE option flags */
 #define NAM$M_SYNCHK      0x08    /* Syntax-only parse (no device/dir check) */
 #define NAM$M_PWD         0x01    /* Parse-with-directory (search list) */
+#define NAM$M_NOCONCEAL   0x10    /* Do not conceal a concealed device (STARLET dump) */
 
 #endif /* __RMS_NAM_H */

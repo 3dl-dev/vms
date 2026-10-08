@@ -110,6 +110,23 @@ int main(void)
         CHECK(file_has(pe, "EXECUTOR 1.42 NAME OVMX STATE on"),
               "the executor record is the documented text layout");
 
+        /* rd vms-f91: MAXIMUM LINKS persists; unset is the VMS default 32. */
+        CHECK(y.max_links == 0 && dnet_executor_max_links(&y) == 32,
+              "an executor with no MAXIMUM LINKS reads as the VMS default 32 (real VAX SHOW EXECUTOR)");
+        x.max_links = 12;
+        CHECK(dnet_store_save_executor(&x) == DNET_STORE_OK &&
+              file_has(pe, "EXECUTOR 1.42 NAME OVMX STATE on MAXLINKS 12") &&
+              dnet_store_load_executor(&y) == DNET_STORE_OK && y.max_links == 12 &&
+              dnet_executor_max_links(&y) == 12,
+              "executor MAXIMUM LINKS 12 round-trips through the record (MAXLINKS 12)");
+        {
+            struct dnet_executor z;
+            CHECK(dnet_executor_parse_line("EXECUTOR 1.42 NAME OVMX STATE on MAXLINKS 0", &z) < 0 &&
+                  dnet_executor_parse_line("EXECUTOR 1.42 NAME OVMX STATE on MAXLINKS x", &z) < 0 &&
+                  dnet_executor_parse_line("EXECUTOR 1.42 NAME OVMX STATE on MAXIMUM 9", &z) < 0,
+                  "a malformed MAXLINKS field makes the record CORRUPT, never a guessed bound");
+        }
+
         FILE *f = fopen(pe, "w");
         fputs("EXECUTOR 1.42 NAME OVMX\n", f);   /* truncated record */
         fclose(f);

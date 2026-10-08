@@ -1,0 +1,39 @@
+vms-fd1: an initialized C++ inline variable is weak on a target with weak
+symbols but no COMDAT groups (alpha-dec-vms)
+
+cp_finish_decl calls maybe_commonize_var before the initializer is stored.
+For a public inline variable (C++17) with -fweak, maybe_commonize_var ->
+comdat_linkage -> make_decl_one_only, and on a target where
+SUPPORTS_ONE_ONLY is 0 but weak symbols exist (alpha-dec-vms: EVAX objects
+have no COMDAT groups) make_decl_one_only sees DECL_INITIAL == 0 and picks
+DECL_COMMON instead of DECL_WEAK.  The initializer is attached afterwards,
+so the variable is emitted as an ordinary strong global in every
+translation unit that uses it: `constexpr inline int t[] = {1,2,3};` gives
+`.globl t`, where the same variable as a template static data member gives
+`.weak`.  Two such objects cannot be linked (GCC 14's own tree_code_type in
+tree-core.h: %LINK-F-MULDEF linking cc1).  The re-check already done for
+!flag_weak is done here too: an initialized vague-linkage variable left
+COMMON becomes WEAK.  Targets with COMDAT groups never reach it.
+
+--- a/gcc/cp/decl.cc
++++ b/gcc/cp/decl.cc
+@@ -8924,6 +8924,19 @@
+ 	  if (!flag_weak)
+ 	    /* Check again now that we have an initializer.  */
+ 	    maybe_commonize_var (decl);
++	  else if (!SUPPORTS_ONE_ONLY
++		   && DECL_COMDAT (decl) && DECL_COMMON (decl)
++		   && DECL_INITIAL (decl)
++		   && DECL_INITIAL (decl) != error_mark_node)
++	    {
++	      /* maybe_commonize_var ran before the initializer was known, so
++		 on a target with weak symbols but no COMDAT groups
++		 make_decl_one_only chose COMMON.  An initialized variable
++		 cannot be common; make it weak, as it would have been had
++		 the initializer been seen.  */
++	      DECL_COMMON (decl) = 0;
++	      DECL_WEAK (decl) = 1;
++	    }
+ 	  /* A class-scope constexpr variable with an out-of-class declaration.
+ 	     C++17 makes them implicitly inline, but still force it out.  */
+ 	  if (DECL_INLINE_VAR_P (decl)

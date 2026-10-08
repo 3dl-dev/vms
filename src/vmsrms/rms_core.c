@@ -36,6 +36,16 @@
  * the IFI/ISI counters. So these are PARTIAL. (The netbsd-vax standalone cross
  * keeps a POSIX backend until VAX's own ACP re-target, vms-d5d.)
  *
+ * OVMX-PARTIAL: sys$get_security (vms-d404) -- exec: the file's owner,
+ *     protection and access control list are read from its header by the
+ *     executive ACP (IO$_ACCESS, IO$_MODIFY's ACL read).
+ * OVMX-LOCAL: sys$get_security -- the object name is resolved and the
+ *     security context is kept in this process; class FILE only.
+ * OVMX-PARTIAL: sys$set_security (vms-d404) -- exec: ACL entries are added and
+ *     deleted in the file header by the executive ACP, which grants the change
+ *     only to a process with CONTROL access.
+ * OVMX-LOCAL: sys$set_security -- OSS$M_LOCAL edits are held in this process's
+ *     context until OSS$M_RELCTX; owner and protection are not changed here.
  * OVMX-PARTIAL: sys$open (vms-bc7) -- exec: $ASSIGN the volume + IO$_ACCESS
  *     resolves the filespec by name to a FID and builds the file's VBN->LBN
  *     window (rms_acp_open_file).
@@ -58,7 +68,7 @@
  * OVMX-LOCAL: sys$extend -- validates the caller's own FAB before the request.
  * OVMX-PARTIAL: sys$rename (vms-de7) -- exec: ONE IO$_MODIFY!IO$M_MOVE atomically
  *     re-links the directory entry to the new name, keeping the same File ID
- *     (not erase+create), proof=tests/qemu/test_syssvc_crtl_rms_veneer.c.
+ *     (not erase+create), proof=the alpha crtl-fd/crtl-rms-fileop gates.
  * OVMX-LOCAL: sys$rename -- resolves the old/new filespecs and validates both
  *     FABs in this process; the executive-absent path defers to rename(2) (vms-5f0).
  * OVMX-PARTIAL: sys$connect (vms-407) -- exec: $DEQs the RAB's
@@ -375,32 +385,38 @@ void rms_apply_default_dir(char *spec, size_t speclen)
     memcpy(spec, out, n + 1);
 }
 
+/*
+ * The last name the engine parsed for the RMS call in progress (rd vms-576):
+ * $OPEN / $CREATE / $ERASE fill the NAM from it (rms_nam_fill) and report its
+ * status when the name itself is bad (RMS$_SYN, RMS$_DIR, ...). Process
+ * static, not __thread: LIBVMSRMS$SHR carries no TLS segment (the vmsrms
+ * VMS-native migration gate), and an RMS call parses and fills in one go.
+ */
+static struct rms_pname rms_cur_pname;
+static uint32_t rms_cur_pname_st;
+
 static int rms_acp_effective_spec(struct FAB *fab, char *spec, size_t speclen)
 {
-    if (!fab->fab$l_fna || fab->fab$b_fns == 0)
+    /* The primary name, the default name and the process default, merged by
+     * the same engine $PARSE uses: the device and directory a logical name
+     * gives, the default's type, "." and ";" always present. (The default
+     * name used to be ignored here: "SP_X" with DNA ".DAT" created SP_X.) */
+    rms_cur_pname_st = rms_name_parse(fab->fab$l_fna, fab->fab$b_fns,
+                                      fab->fab$l_dna, fab->fab$b_dns,
+                                      &rms_cur_pname);
+    if (rms_cur_pname_st != RMS$_NORMAL)
         return -1;
-
-    {
-        size_t len = fab->fab$b_fns;
-        if (len >= speclen) len = speclen - 1;
-        memcpy(spec, fab->fab$l_fna, len);
-        spec[len] = '\0';
-    }
-    /* Apply a default filespec (fab$l_dna) for any missing name/type. */
-    if (fab->fab$l_dna && fab->fab$b_dns > 0) {
-        char dflt[1024] = "";
-        char combined[1024];
-        size_t dlen = fab->fab$b_dns;
-        if (dlen >= sizeof(dflt)) dlen = sizeof(dflt) - 1;
-        memcpy(dflt, fab->fab$l_dna, dlen);
-        dflt[dlen] = '\0';
-        if (rms_resolve_spec(spec, dflt, combined, sizeof(combined)) == 0) {
-            strncpy(spec, combined, speclen - 1);
-            spec[speclen - 1] = '\0';
-        }
-    }
-    rms_apply_default_dir(spec, speclen);
+    if ((size_t)rms_cur_pname.esl >= speclen)
+        return -1;
+    memcpy(spec, rms_cur_pname.esa, rms_cur_pname.esl);
+    spec[rms_cur_pname.esl] = '\0';
     return 0;
+}
+
+/* The status a bad name earns: the engine's (RMS$_SYN, RMS$_DIR, ...). */
+static uint32_t rms_name_status(void)
+{
+    return rms_cur_pname_st != RMS$_NORMAL ? rms_cur_pname_st : RMS$_SYN;
 }
 
 /* Split a fully-composed VMS filespec string into device / directory /
@@ -755,7 +771,9 @@ static uint32_t rms_file_lock_acquire(rms_file_t *h, uint8_t fac, uint8_t shr)
 static void rms_file_lock_release(rms_file_t *h)
 {
     if (h && h->access_lkid) {
-        vms_kif_deq(h->access_lkid, NULL, 0);
+        /* LCK$M_DEQALL: the record locks held UNDER the file-access lock go
+         * with it -- a lock with sublocks is otherwise SS$_SUBLOCKS. */
+        vms_kif_deq(h->access_lkid, NULL, LCK_M_DEQALL);
         h->access_lkid = 0;
     }
 }
@@ -1174,7 +1192,11 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
         out->rat = fat->fat_rattrib;
         out->mrs = fat->fat_maxrec;
         out->lrl = fat->fat_rsize;
+        out->defext = fat->fat_defext;
+        out->vfcsize = fat->fat_vfcsize;
     }
+    out->revision = a.attr.revision;
+    memcpy(out->expdate, a.attr.expdate, 8);
 
     vms_kif_acp_deaccess(chan);
     vms_kif_dassgn(chan);
@@ -1593,15 +1615,22 @@ static int rms_resolve_spec(const char *spec, const char *default_spec,
  */
 
 /*
- * rms_get_default_protection - Get default protection for new files.
- * Reads VMS_DEFAULT_PROTECTION env var, or returns S:RWED,O:RWED (0xFF00).
+ * rms_get_default_protection - the default protection of a new file: the
+ * process default file protection the executive holds ($SETDFPROT), else the
+ * VMS default of SYSGEN RMS_FILEPROT (VMS_DFPROT_INITIAL, %XFA00 =
+ * S:RWED,O:RWED,G:RE,W:). On the ACP path the executive applies it itself.
  */
+#ifndef VMS_DFPROT_INITIAL
+#define VMS_DFPROT_INITIAL 0xFA00u          /* src/kernel/vms_ioctl.h */
+#endif
 static uint16_t rms_get_default_protection(void)
 {
-    /* Default: S:RWED,O:RWED,G:,W: = system and owner full, group and world none
-     * In VMS bit encoding: S=0x00 (all allowed), O=0x00, G=0x0F (all denied), W=0x0F
-     * = 0xFF00 */
-    return 0xFF00;
+    uint16_t prot = VMS_DFPROT_INITIAL;
+
+#if defined(OVMX_HAVE_ACP)
+    (void)vms_kif_dfprot(NULL, &prot);
+#endif
+    return prot;
 }
 
 /*
@@ -1894,38 +1923,39 @@ static void save_metadata(struct FAB *fab)
  * the caller's nam$b_rss / nam$b_ess; a short buffer truncates, as on VMS.
  */
 static void rms_nam_fill(struct FAB *fab, const struct rms_acp_spec *s,
-                         uint16_t version, const rms_file_t *h)
+                         uint16_t version, const rms_file_t *h, uint32_t xfnb)
 {
     struct NAM *nam = (struct NAM *)fab->fab$l_nam;
-    char buf[512];
-    int n;
+    struct rms_pname pn = rms_cur_pname;
 
-    if (!nam || nam->nam$b_bid != NAM$C_BID || !s)
+    if (!nam || nam->nam$b_bid != NAM$C_BID)
         return;
-    if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
-        n = snprintf(buf, sizeof(buf), "%s[%s]%s;%u", s->devnam,
-                     s->dirpath[0] ? s->dirpath : "000000", s->name,
-                     (unsigned)version);
-        if (n < 0) n = 0;
-        size_t l = strlen(buf);
-        if (l > nam->nam$b_rss) l = nam->nam$b_rss;
-        memcpy(nam->nam$l_rsa, buf, l);
-        nam->nam$b_rsl = (uint8_t)l;
+    (void)s;
+    /* The EXPANDED string: the name as the engine resolved it, the version
+     * as asked (";" when none). */
+    nam->nam$b_esl = 0;
+    if (nam->nam$l_esa && pn.esl <= nam->nam$b_ess) {
+        memcpy(nam->nam$l_esa, pn.esa, pn.esl);
+        nam->nam$b_esl = pn.esl;
+        rms_nam_set_parts(nam, nam->nam$l_esa, &pn);
     }
-    if (nam->nam$l_esa && nam->nam$b_ess > 0) {
-        if (s->version)
-            n = snprintf(buf, sizeof(buf), "%s[%s]%s;%u", s->devnam,
-                         s->dirpath[0] ? s->dirpath : "000000", s->name,
-                         (unsigned)s->version);
-        else
-            n = snprintf(buf, sizeof(buf), "%s[%s]%s;", s->devnam,
-                         s->dirpath[0] ? s->dirpath : "000000", s->name);
-        if (n < 0) n = 0;
-        size_t l = strlen(buf);
-        if (l > nam->nam$b_ess) l = nam->nam$b_ess;
-        memcpy(nam->nam$l_esa, buf, l);
-        nam->nam$b_esl = (uint8_t)l;
+    /* The RESULTANT: the file itself, at its real version -- the expanded
+     * string's device, directory, name and type (a concealed device stays
+     * concealed), and the NAM's parts then describe it (observed RMS.CREATE,
+     * RMS.OPEN, RMS.ERASE.*, docs/oracle/semantics/rms/). */
+    nam->nam$b_rsl = 0;
+    if (version && nam->nam$l_rsa) {
+        char rs[300];
+        int k = snprintf(rs, sizeof rs, "%.*s;%u", (int)pn.ver_off, pn.esa,
+                         (unsigned)version);
+        if (k > 0 && (size_t)k <= nam->nam$b_rss) {
+            memcpy(nam->nam$l_rsa, rs, (size_t)k);
+            nam->nam$b_rsl = (uint8_t)k;
+            pn.ver_len = (uint8_t)(k - pn.ver_off);
+            rms_nam_set_parts(nam, nam->nam$l_rsa, &pn);
+        }
     }
+    nam->nam$l_fnb = pn.fnb | xfnb;
     /* nam$w_fid / nam$w_did (vms-6e28): the file's own ID and its
      * directory's, as the ACP returned them on IO$_ACCESS / IO$_CREATE. */
     if (h) {
@@ -1994,9 +2024,9 @@ static uint32_t rms_impl_open(void *fab_ptr)
          * to on-volume ODS-2 candidates and try each in search-list order. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
-            fab->fab$l_sts = RMS$_SYN;
+            fab->fab$l_sts = rms_name_status();
             fab->fab$l_stv = 0;
-            return RMS$_SYN;
+            return fab->fab$l_sts;
         }
         strncpy(fab->_resolved_path, specs[0].name,
                 sizeof(fab->_resolved_path) - 1);
@@ -2010,6 +2040,8 @@ static uint32_t rms_impl_open(void *fab_ptr)
         if (!$VMS_STATUS_SUCCESS(st)) {
             if (st == SS$_NOSUCHFILE && (fab->fab$l_fop & FAB$M_CIF))
                 return rms_impl_create(fab_ptr);
+            /* not found: the NAM still gets the expanded name (RMS.OPEN.FNF) */
+            rms_nam_fill(fab, NULL, 0, NULL, 0);
             fab->fab$l_stv = st;
             fab->fab$l_sts = rms_acp_open_status(st);
             return fab->fab$l_sts;
@@ -2017,7 +2049,7 @@ static uint32_t rms_impl_open(void *fab_ptr)
         fab->_rms_file = h;
         rms_fab_from_header(fab, h);
         if (hit >= 0)
-            rms_nam_fill(fab, &specs[hit], h->version, h);
+            rms_nam_fill(fab, &specs[hit], h->version, h, 0);
 
         /* vms-50e (docs/design-rms-file-lock.md): the file-access $ENQ, right
          * after IO$_ACCESS -- the FID is now in hand (h->fid_*). A real DLM
@@ -2233,8 +2265,9 @@ static uint32_t rms_idx_author_p3(struct FAB *fab, rms_file_t *h, p3_ctx_t **out
  * the maximum record size; FAT$W_RSIZE is the longest record, which for a FIX
  * file is its record size and otherwise grows as records are written ($CLOSE,
  * rms_close_record_lrl). Returns 0 -- leave the ACP's kind preset -- for a FIX
- * file with no record size: VMS refuses that $CREATE, but OVMX's byte-exact C
- * RTL veneer (crtl_rms_stdio.c) relies on it, so its header keeps the preset
+ * file with no record size: VMS refuses that $CREATE; OVMX accepted it for the
+ * byte-exact FIX-record C RTL veneer, retired in vms-cbd, and still does (whether
+ * to refuse it as VMS does is tracked separately), so its header keeps the preset
  * 512-byte record the reader then frames by.
  */
 static int rms_fat_from_fab(const struct FAB *fab, uint8_t ra[32])
@@ -2344,8 +2377,8 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * single candidate, so its behaviour is unchanged. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
-            fab->fab$l_sts = RMS$_SYN;
-            return RMS$_SYN;
+            fab->fab$l_sts = rms_name_status();
+            return fab->fab$l_sts;
         }
 
         /* vms-4ac: try EACH ODS-2 candidate directory, exactly as the $OPEN read
@@ -2419,7 +2452,58 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * asked for rather than the kind preset. */
         if (rms_fat_from_fab(fab, fop.attr.recattr))
             fop.attr_ctl |= VMS_ACP_ATTR_RECATTR;
-        fop.version = 0;                     /* highest existing + 1 */
+        /* XABPRO on $CREATE (rd vms-47fd): the new file's owner UIC and
+         * protection, as VMS RMS applies them (RMS Reference, XABPRO: "on
+         * $CREATE ... XAB$L_UIC specifies the owner, XAB$W_PRO the
+         * protection"). The ACP decides whether this process may name another
+         * owner (privilege), never RMS. */
+        {
+            const struct XABPRO *xp = NULL;
+            int guard = 0;
+            for (void *x = fab->fab$l_xab; x && guard < 32; guard++) {
+                const struct XABPRO *xh = (const struct XABPRO *)x;
+                if (xh->xab$b_cod == XAB$C_PRO) { xp = xh; break; }
+                x = xh->xab$l_nxt;
+            }
+            if (xp && xp->xab$l_uic) {
+                fop.attr_ctl       |= VMS_ACP_ATTR_OWNER;
+                fop.attr.uic_group  = (uint16_t)((xp->xab$l_uic >> 16) & 0xFFFFu);
+                fop.attr.uic_member = (uint16_t)(xp->xab$l_uic & 0xFFFFu);
+            }
+            if (xp && xp->xab$w_pro) {
+                fop.attr_ctl     |= VMS_ACP_ATTR_PROT;
+                fop.attr.fileprot = xp->xab$w_pro;
+            }
+        }
+        /*
+         * The version (rd vms-670): none asked for is the highest existing + 1;
+         * an explicit one that already exists is RMS$_FEX unless FOP SUP asks
+         * to supersede it, which deletes the old file first (observed
+         * RMS.CREATE.EXPLICIT_V1, docs/oracle/semantics/rms/).
+         */
+        if (sp.version != 0) {
+            rms_file_t *hx = NULL;
+            if ($VMS_STATUS_SUCCESS(rms_acp_open_file(&sp, 0, &hx)) && hx) {
+                struct vms_acp_fileop_args dop;
+                memset(&dop, 0, sizeof dop);
+                dop.fid_num = hx->fid_num; dop.fid_seq = hx->fid_seq;
+                dop.fid_rvn = hx->fid_rvn; dop.fid_nmx = hx->fid_nmx;
+                rms_acp_close_handle(hx);
+                if (!(fab->fab$l_fop & FAB$M_SUP)) {
+                    free(h); vms_kif_dassgn(chan);
+                    rms_nam_fill(fab, NULL, 0, NULL, 0);
+                    fab->fab$l_stv = 0;
+                    fab->fab$l_sts = RMS$_FEX;
+                    return RMS$_FEX;
+                }
+                dop.chan = chan;
+                dop.func = VMS_ACP_FOP_DELETE;
+                dop.modifiers = VMS_ACP_M_DELETE;
+                dop.fidmode = 1;
+                (void)vms_kif_acp_fileop(&dop);
+            }
+        }
+        fop.version = sp.version;            /* 0: highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 
         st = vms_kif_acp_fileop(&fop);
@@ -2513,8 +2597,12 @@ static uint32_t rms_impl_create(void *fab_ptr)
         pthread_mutex_unlock(&rms_id_lock);
         /* The resultant: the file this $CREATE really made, at the version
          * the ACP assigned (rd vms-98e). */
-        rms_nam_fill(fab, &sp, fop.out_version, h);
-        fab->fab$l_sts = RMS$_CREATED;
+        /* NAM$M_LOWVER: lower versions of the name already exist (observed
+         * RMS.CREATE.V2 / SUP, %X4000). */
+        rms_nam_fill(fab, &sp, fop.out_version, h, fop.out_version > 1 ? 0x4000u : 0);
+        /* RMS$_CREATED belongs to a create-if ($OPEN with FAB$M_CIF that had to
+         * create); a plain $CREATE reports RMS$_NORMAL (RMS.CREATE). */
+        fab->fab$l_sts = (fab->fab$l_fop & FAB$M_CIF) ? RMS$_CREATED : RMS$_NORMAL;
         fab->fab$l_stv = 0;
         return RMS$_NORMAL;
     }
@@ -2770,8 +2858,8 @@ static uint32_t rms_impl_erase(void *fab_ptr)
          * list candidate in order; the first that resolves + deletes wins. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
-            fab->fab$l_sts = RMS$_SYN;
-            return RMS$_SYN;
+            fab->fab$l_sts = rms_name_status();
+            return fab->fab$l_sts;
         }
         for (int i = 0; i < ncand && !done; i++) {
             struct rms_acp_spec *sp = &specs[i];
@@ -2798,12 +2886,16 @@ static uint32_t rms_impl_erase(void *fab_ptr)
                 done = 1;
         }
         if (!done) {
+            rms_nam_fill(fab, NULL, 0, NULL, 0);
             fab->fab$l_stv = st;
             fab->fab$l_sts = (st == SS$_NOSUCHFILE) ? RMS$_FNF
                            : (st == SS$_NOPRIV)     ? RMS$_PRV
                                                     : RMS$_ACC;
             return fab->fab$l_sts;
         }
+        /* the NAM names the file erased (RMS.ERASE.*, rd vms-670) */
+        rms_nam_fill(fab, NULL, fop.out_version ? fop.out_version : specs[0].version,
+                     NULL, 0);
         fab->fab$l_sts = RMS$_NORMAL;
         fab->fab$l_stv = 0;
         return RMS$_NORMAL;
@@ -2908,10 +3000,25 @@ static uint32_t rms_impl_rename(void *old_ptr, void *new_ptr)
 
         /* Rename has a SINGLE target (not a search-list op): use the first new
          * candidate. Try each source candidate in order; the first that
-         * resolves + moves wins (mirrors sys$erase's candidate walk). */
+         * resolves + moves wins (mirrors sys$erase's candidate walk).
+         *
+         * Except when the new name names the SAME device:[directory] as the
+         * old -- the same search list, member for member (SYS$SYSROOT:[SYSMGR]
+         * on both sides): then the file is renamed IN the directory it was
+         * found in, so source member i pairs with target member i. Observed:
+         * a VAX FAL renamed SYS$SYSROOT:[SYSMGR]RENME.TXT;1 to
+         * SYS$SYSROOT:[SYSMGR]RENAMED.TXT;1 in place
+         * (tests/lab/captures/decnet-fal-verbs-20261008/). Pairing with
+         * member 0 instead looked for the target directory in the node member
+         * and refused a file found in SYSCOMMON with SS$_NOSUCHFILE. */
+        int pair = (onc == nnc);
+        for (int k = 0; pair && k < onc; k++)
+            if (strcmp(ospecs[k].devnam, nspecs[k].devnam) != 0 ||
+                strcmp(ospecs[k].dirpath, nspecs[k].dirpath) != 0)
+                pair = 0;
         for (int i = 0; i < onc && !done; i++) {
             struct rms_acp_spec *os = &ospecs[i];
-            struct rms_acp_spec *ns = &nspecs[0];
+            struct rms_acp_spec *ns = &nspecs[pair ? i : 0];
 
             chan = 0;
             st = vms_kif_acp_assign(os->devnam, &chan);
@@ -3394,4 +3501,329 @@ uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *))
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *))
 {
     return rms_complete(rms_impl_flush(rab), rab, err, suc);
+}
+
+/* ======================================================================
+ * $GET_SECURITY / $SET_SECURITY for the FILE class (vms-d404). The object
+ * is a Files-11 file resolved the way $OPEN resolves its name (the RMS
+ * candidate walk over logicals, rooted and search-list devices); its owner,
+ * protection and access control list are the executive ACP's: read with
+ * IO$_ACCESS and IO$_MODIFY's ACL read, changed with IO$_MODIFY's ACL
+ * operations, which the ACP grants only to a process with CONTROL access.
+ * A security context (contxt) holds the located object between calls;
+ * OSS$M_LOCAL edits are held in it and applied when OSS$M_RELCTX releases
+ * it. Owner and protection are read here but changed only through the ACP's
+ * attribute path ($MODIFY), not by this service (SS$_UNSUPPORTED).
+ * ====================================================================== */
+
+#ifndef VMS_ACP_ACL_ADD              /* vms_acp.h's, when the ACP is not built in */
+#define VMS_ACP_ACL_ADD        1u
+#define VMS_ACP_ACL_DEL        2u
+#define VMS_ACP_ACL_DELETEALL  6u
+#define VMS_ACP_ACL_READ       7u
+#define VMS_ACP_ACL_PURGE     15u
+#endif
+#define RMS_OSS_ACL_ADD_ENTRY     3
+#define RMS_OSS_ACL_DELETE_ENTRY  4
+#define RMS_OSS_ACL_DELETE        5
+#define RMS_OSS_ACL_DELETE_ALL    6
+#define RMS_OSS_ACL_LENGTH       11
+#define RMS_OSS_ACL_READ         17
+#define RMS_OSS_OWNER            21
+#define RMS_OSS_PROTECTION       22
+#define RMS_OSS_M_RELCTX        0x2u
+#define RMS_OSS_M_LOCAL         0x4u
+
+struct rms_sec_item { uint16_t len, code; void *buf; uint16_t *ret; };
+
+#define RMS_SEC_CTX_MAX  8
+#define RMS_SEC_OPS_MAX  16
+struct rms_sec_ctx {
+    int      used;
+    uint32_t chan;
+    uint16_t fid_num, fid_seq;
+    uint8_t  fid_rvn, fid_nmx;
+    uint16_t owner_group, owner_member, prot;
+    int      nops;
+    struct { uint32_t op; uint32_t len; uint8_t ace[256]; } ops[RMS_SEC_OPS_MAX];
+};
+static struct rms_sec_ctx rms_sec_ctxs[RMS_SEC_CTX_MAX];
+static pthread_mutex_t rms_sec_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int rms_sec_class_is_file(const struct dsc$descriptor_s *c)
+{
+    static const char f[] = "FILE";
+    size_t i;
+    if (!c || !c->dsc$a_pointer || c->dsc$w_length != 4)
+        return 0;
+    for (i = 0; i < 4; i++) {
+        char ch = c->dsc$a_pointer[i];
+        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+        if (ch != f[i]) return 0;
+    }
+    return 1;
+}
+
+#if defined(OVMX_HAVE_ACP)
+/* Locate the file named `objnam` and fill the context (channel left assigned). */
+static uint32_t rms_sec_locate(const struct dsc$descriptor_s *objnam, struct rms_sec_ctx *c)
+{
+    struct FAB fab = cc$rms_fab;
+    struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
+    char name[256];
+    uint32_t last = RMS$_FNF;
+    int n, i;
+
+    if (!objnam || !objnam->dsc$a_pointer || objnam->dsc$w_length == 0 ||
+        objnam->dsc$w_length >= sizeof(name))
+        return SS$_BADPARAM;
+    memcpy(name, objnam->dsc$a_pointer, objnam->dsc$w_length);
+    name[objnam->dsc$w_length] = '\0';
+    fab.fab$l_fna = name;
+    fab.fab$b_fns = (uint8_t)strlen(name);
+    n = rms_acp_specs_from_fab(&fab, specs, RMS_ACP_MAX_CANDS);
+    if (n <= 0)
+        return RMS$_SYN;
+    for (i = 0; i < n; i++) {
+        struct vms_acp_access_args a;
+        uint32_t chan = 0, st;
+        uint16_t dn = 0, ds = 0;
+        uint8_t dr = 0, dx = 0;
+
+        st = vms_kif_acp_assign(specs[i].devnam, &chan);
+        if (!(st & 1)) { last = st; continue; }
+        st = rms_acp_resolve_did(chan, specs[i].dirpath, &dn, &ds, &dr, &dx);
+        if (!(st & 1)) { vms_kif_dassgn(chan); last = RMS$_DNF; continue; }
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.did_num = dn; a.did_seq = ds; a.did_rvn = dr; a.did_nmx = dx;
+        a.version = specs[i].version;
+        strncpy(a.name, specs[i].name, VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&a);
+        if (!(st & 1)) {
+            vms_kif_dassgn(chan);
+            last = (st == SS$_NOSUCHFILE) ? RMS$_FNF : st;
+            continue;
+        }
+        (void)vms_kif_acp_deaccess(chan);
+        c->chan = chan;
+        c->fid_num = a.fid_num; c->fid_seq = a.fid_seq;
+        c->fid_rvn = a.fid_rvn; c->fid_nmx = a.fid_nmx;
+        c->owner_group = a.attr.uic_group; c->owner_member = a.attr.uic_member;
+        c->prot = a.attr.fileprot;
+        return SS$_NORMAL;
+    }
+    return last;
+}
+
+/* One ACL operation on the located file through IO$_MODIFY (by file ID). */
+static uint32_t rms_sec_aclop(struct rms_sec_ctx *c, uint32_t op, void *buf, uint32_t *len)
+{
+    struct vms_acp_fileop_args f;
+    uint32_t st;
+
+    memset(&f, 0, sizeof(f));
+    f.chan = c->chan;
+    f.func = VMS_ACP_FOP_MODIFY;
+    f.fidmode = 1;
+    f.fid_num = c->fid_num; f.fid_seq = c->fid_seq;
+    f.fid_rvn = c->fid_rvn; f.fid_nmx = c->fid_nmx;
+    f.acl_op = op;
+    f.acl_len = len ? *len : 0;
+    f.acl_buf = (uint64_t)(uintptr_t)buf;
+    st = vms_kif_acp_fileop(&f);
+    if (len)
+        *len = f.acl_len;
+    return st;
+}
+#endif /* OVMX_HAVE_ACP */
+
+static struct rms_sec_ctx *rms_sec_ctx_get(uint32_t *contxt, int create)
+{
+    struct rms_sec_ctx *c = NULL;
+    pthread_mutex_lock(&rms_sec_lock);
+    if (contxt && *contxt >= 1 && *contxt <= RMS_SEC_CTX_MAX &&
+        rms_sec_ctxs[*contxt - 1].used) {
+        c = &rms_sec_ctxs[*contxt - 1];
+    } else if (create) {
+        int i;
+        for (i = 0; i < RMS_SEC_CTX_MAX; i++)
+            if (!rms_sec_ctxs[i].used) {
+                c = &rms_sec_ctxs[i];
+                memset(c, 0, sizeof(*c));
+                c->used = 1;
+                if (contxt)
+                    *contxt = (uint32_t)(i + 1);
+                break;
+            }
+    }
+    pthread_mutex_unlock(&rms_sec_lock);
+    return c;
+}
+
+static void rms_sec_ctx_release(struct rms_sec_ctx *c, uint32_t *contxt)
+{
+#if defined(OVMX_HAVE_ACP)
+    if (c->chan)
+        vms_kif_dassgn(c->chan);
+#endif
+    pthread_mutex_lock(&rms_sec_lock);
+    c->used = 0;
+    pthread_mutex_unlock(&rms_sec_lock);
+    if (contxt)
+        *contxt = 0;
+}
+
+/* Get (or start) the context for a call: a new object when objnam is given. */
+static uint32_t rms_sec_begin(const struct dsc$descriptor_s *clsnam,
+                              const struct dsc$descriptor_s *objnam, uint32_t *contxt,
+                              struct rms_sec_ctx **out)
+{
+    struct rms_sec_ctx *c = rms_sec_ctx_get(contxt, 0);
+
+    *out = NULL;
+    if (c && !objnam) {
+        *out = c;
+        return SS$_NORMAL;
+    }
+    if (!objnam)
+        return SS$_BADPARAM;                    /* no object and no context */
+    if (!rms_sec_class_is_file(clsnam))
+        return SS$_NOCLASS;
+    if (c)
+        rms_sec_ctx_release(c, contxt);
+    c = rms_sec_ctx_get(contxt, 1);
+    if (!c)
+        return SS$_INSFMEM;
+#if defined(OVMX_HAVE_ACP)
+    {
+        uint32_t st = rms_sec_locate(objnam, c);
+        if (!(st & 1)) {
+            rms_sec_ctx_release(c, contxt);
+            return st;
+        }
+    }
+    *out = c;
+    return SS$_NORMAL;
+#else
+    rms_sec_ctx_release(c, contxt);
+    return SS$_NOSUCHDEV;
+#endif
+}
+
+uint32_t sys$get_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode)
+{
+    struct rms_sec_ctx *c;
+    struct rms_sec_item *it;
+    uint32_t local_ctx = 0, st;
+    uint32_t *cx = contxt ? contxt : &local_ctx;
+
+    (void)objhan; (void)acmode;
+    st = rms_sec_begin(clsnam, objnam, cx, &c);
+    if (!(st & 1))
+        return st;
+    for (it = (struct rms_sec_item *)itmlst; it && (it->len || it->code); it++) {
+        switch (it->code) {
+        case RMS_OSS_OWNER:
+            if (it->buf && it->len >= 4)
+                *(uint32_t *)it->buf = ((uint32_t)c->owner_group << 16) | c->owner_member;
+            if (it->ret) *it->ret = 4;
+            break;
+        case RMS_OSS_PROTECTION:
+            if (it->buf && it->len >= 4)
+                *(uint32_t *)it->buf = c->prot;
+            if (it->ret) *it->ret = 4;
+            break;
+#if defined(OVMX_HAVE_ACP)
+        case RMS_OSS_ACL_LENGTH:
+        case RMS_OSS_ACL_READ: {
+            uint8_t acl[512];
+            uint32_t n = sizeof(acl);
+            st = rms_sec_aclop(c, VMS_ACP_ACL_READ, acl, &n);
+            if (st == SS$_ACLEMPTY) { n = 0; st = SS$_NORMAL; }
+            if (!(st & 1))
+                goto done;
+            if (it->code == RMS_OSS_ACL_LENGTH) {
+                if (it->buf && it->len >= 4)
+                    *(uint32_t *)it->buf = n;
+                if (it->ret) *it->ret = 4;
+            } else {
+                if (n > it->len) { st = SS$_BUFFEROVF; goto done; }
+                if (n && it->buf)
+                    memcpy(it->buf, acl, n);
+                if (it->ret) *it->ret = (uint16_t)n;
+            }
+            break;
+        }
+#endif
+        default:
+            st = SS$_BADPARAM;                  /* an item this service does not return */
+            goto done;
+        }
+    }
+    st = SS$_NORMAL;
+done:
+    if ((flags & RMS_OSS_M_RELCTX) || !contxt)
+        rms_sec_ctx_release(c, cx);
+    return st;
+}
+
+uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode)
+{
+    struct rms_sec_ctx *c;
+    struct rms_sec_item *it;
+    uint32_t local_ctx = 0, st;
+    uint32_t *cx = contxt ? contxt : &local_ctx;
+    int i;
+
+    (void)objhan; (void)acmode;
+    st = rms_sec_begin(clsnam, objnam, cx, &c);
+    if (!(st & 1))
+        return st;
+    for (it = (struct rms_sec_item *)itmlst; it && (it->len || it->code); it++) {
+        uint32_t op;
+        switch (it->code) {
+        case RMS_OSS_ACL_ADD_ENTRY:    op = VMS_ACP_ACL_ADD; break;
+        case RMS_OSS_ACL_DELETE_ENTRY: op = VMS_ACP_ACL_DEL; break;
+        case RMS_OSS_ACL_DELETE:       op = VMS_ACP_ACL_DELETEALL; break;
+        case RMS_OSS_ACL_DELETE_ALL:   op = VMS_ACP_ACL_PURGE; break;
+        default:
+            st = SS$_UNSUPPORTED;               /* owner/protection: not this service */
+            goto done;
+        }
+        if (c->nops >= RMS_SEC_OPS_MAX || it->len > sizeof(c->ops[0].ace) ||
+            ((op == VMS_ACP_ACL_ADD || op == VMS_ACP_ACL_DEL) && (!it->buf || it->len < 8))) {
+            st = SS$_BADPARAM;
+            goto done;
+        }
+        c->ops[c->nops].op = op;
+        c->ops[c->nops].len = (op == VMS_ACP_ACL_ADD || op == VMS_ACP_ACL_DEL) ? it->len : 0;
+        if (c->ops[c->nops].len)
+            memcpy(c->ops[c->nops].ace, it->buf, it->len);
+        c->nops++;
+    }
+    st = SS$_NORMAL;
+    /* Held edits are applied now unless the caller keeps them local to the
+     * context; releasing the context applies whatever is held. */
+    if (!(flags & RMS_OSS_M_LOCAL) || (flags & RMS_OSS_M_RELCTX) || !contxt) {
+#if defined(OVMX_HAVE_ACP)
+        for (i = 0; i < c->nops && (st & 1); i++) {
+            uint32_t len = c->ops[i].len;
+            st = rms_sec_aclop(c, c->ops[i].op, len ? c->ops[i].ace : NULL, &len);
+        }
+#else
+        if (c->nops)
+            st = SS$_NOSUCHDEV;
+        (void)i;
+#endif
+        c->nops = 0;
+    }
+done:
+    if ((flags & RMS_OSS_M_RELCTX) || !contxt)
+        rms_sec_ctx_release(c, cx);
+    return st;
 }

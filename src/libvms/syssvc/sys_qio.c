@@ -37,6 +37,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <termios.h>
+#include <poll.h>
 #include <signal.h>
 #include <time.h>
 #include <sys/stat.h>
@@ -46,6 +47,7 @@
 #include "vms/pcb.h"
 #include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
+#include "dcdef.h"
 
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
@@ -434,6 +436,10 @@ void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
  * around: vms_kif_mbx_read() already retries on EINTR the same way
  * sys$waitfr's kif_wait_call() does (see vms_kif.c).
  */
+/* Set by an op whose refusal came before VMS would touch the IOSB (a mailbox
+ * protection check); consumed and cleared by qio_service_status. */
+static __thread int qio_refused_before_iosb;
+
 static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                                 void *p1, uint32_t p2, uint32_t efn,
                                 void (*astadr)(uint32_t), uint32_t astprm) {
@@ -491,7 +497,10 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_WRITELBLK:
         case IO$_WRITEPBLK:
             if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_mbx_write(exec_chan, p1, p2);
+            /* IO$M_NORSWAIT (rd vms-c6d1): no room in the mailbox completes the
+             * write with SS$_MBFULL instead of waiting for a reader. */
+            st = vms_kif_mbx_write_ex(exec_chan, p1, p2,
+                                      (func & IO$M_NORSWAIT) != 0);
             if (st & 1) actlen = p2;
             break;
 
@@ -524,6 +533,18 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         default:
             st = SS$_ILLIOFUNC;
             break;
+    }
+
+    /*
+     * A protection refusal (SS$_NOPRIV from the executive's check of the mailbox
+     * mask, rd vms-c6d1) happens before VMS touches the IOSB: on real VAX V7.3
+     * and Alpha V8.4 the IOSB is left exactly as it was
+     * (docs/oracle/semantics/mbxprot/, e.g. MBXP.NOR.READ). Say so to
+     * qio_service_status, which would otherwise zero it.
+     */
+    if (st == SS$_NOPRIV) {
+        qio_refused_before_iosb = 1;
+        return st;
     }
 
     if (iosb) {
@@ -752,7 +773,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
                                            uint32_t astprm,
                                            int *out_fd, int *out_is_read) {
     int fd = vms$$chan_to_fd(chan);
-    if (fd < 0) return SS$_IVCHAN;
+    if (fd < 0) return pcb_chan_unheld_status(chan);
 
     /*
      * vms-1c57: THE CHANNEL IS THE IDENTITY. If this channel was bound to a
@@ -948,7 +969,141 @@ static int qio_completes_at_once(int fd)
     return qio_is_null_device(fd);
 }
 
-uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
+
+/*
+ * TERMINAL $QIO (rd vms-d900). A channel to a terminal (a DC$_TERM row in the
+ * executive's device table: OPA0:, an RTAn:) answers the terminal driver's
+ * functions -- observed on OpenVMS through TT: (docs/oracle/semantics/tt/):
+ *   IO$_SENSEMODE / IO$_SENSECHAR  the characteristics buffer: class (DC$_TERM),
+ *       type, page width (word), characteristics (3 bytes), page length, and
+ *       the extended characteristics longword when the buffer has room; the
+ *       IOSB's second word is the line speed (TT$C_BAUD_9600 = 15, the
+ *       console line).
+ *   IO$_SETMODE / IO$_SETCHAR with a characteristics buffer  set the width,
+ *       page length and characteristics in the executive's row.
+ *   IO$_READVBLK / IO$_READLBLK / IO$_READPROMPT with IO$M_TIMED  a zero (or
+ *       elapsed) timeout with nothing typed ends SS$_TIMEOUT in the IOSB; a
+ *       zero-length read is SS$_NORMAL at once; IO$M_PURGE discards typeahead;
+ *       READPROMPT writes its prompt (P5/P6) first. The IOSB carries the offset
+ *       to the terminator, the terminator and its size.
+ *   IO$_ACCESS  SS$_DEVOFFLINE, as the terminal driver refuses it.
+ * Every value read or set is the executive device row's (vms_kif_getdvi_chan
+ * / vms_kif_ttsetmode) -- never a process-local model (INV-6).
+ */
+#define TT_SPEED_9600 15
+static int qio_chan_is_terminal(uint16_t chan, uint32_t *exec_chan_out,
+                                struct vms_devinfo *info)
+{
+    uint32_t ec = vms$$chan_exec_chan(chan);
+    if (ec == 0) return 0;
+    if (!(vms_kif_getdvi_chan(ec, info) & 1)) return 0;
+    if (info->devclass != DC$_TERM) return 0;
+    *exec_chan_out = ec;
+    return 1;
+}
+
+static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint16_t w3)
+{
+    if (!iosb_ptr) return;
+    uint16_t *w = (uint16_t *)iosb_ptr;
+    w[0] = (uint16_t)st; w[1] = w1; w[2] = w2; w[3] = w3;
+}
+
+static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
+                                const struct vms_devinfo *info, uint32_t func,
+                                void *iosb_ptr, void *p1, uint32_t p2, uint32_t p3,
+                                uint32_t p4, uint32_t p5, uint32_t p6,
+                                uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm,
+                                int *handled)
+{
+    (void)chan; (void)p4;
+    uint32_t base = func & IO$M_FCODE;
+    *handled = 1;
+    switch (base) {
+    case IO$_SENSEMODE:
+    case IO$_SENSECHAR: {
+        if (p1 && p2 > 0) {
+            uint8_t b[12];
+            /* IO$_SENSECHAR answers the PERMANENT width and page, SENSEMODE
+             * the current ones (observed TT.SENSECHAR 80/24 vs TT.SENSEMODE
+             * 511/0 on Alpha V8.4; rd vms-d900). */
+            uint32_t w = base == IO$_SENSECHAR ? info->perm_width : info->width;
+            uint32_t pg = base == IO$_SENSECHAR ? info->perm_page : info->page;
+            memset(b, 0, sizeof b);
+            b[0] = (uint8_t)info->devclass;
+            b[1] = (uint8_t)info->devtype;
+            b[2] = (uint8_t)(w & 0xFF);
+            b[3] = (uint8_t)((w >> 8) & 0xFF);
+            b[4] = (uint8_t)(info->devchar & 0xFF);
+            b[5] = (uint8_t)((info->devchar >> 8) & 0xFF);
+            b[6] = (uint8_t)((info->devchar >> 16) & 0xFF);
+            b[7] = (uint8_t)(pg & 0xFF);
+            uint32_t ext = (uint32_t)(info->devchar >> 32);
+            memcpy(b + 8, &ext, 4);
+            memcpy(p1, b, p2 < sizeof b ? p2 : sizeof b);
+        }
+        tt_iosb(iosb_ptr, SS$_NORMAL, TT_SPEED_9600, 0, 0);
+        break;
+    }
+    case IO$_SETMODE:
+    case IO$_SETCHAR: {
+        if (!p1 || p2 < 8) { *handled = 0; return SS$_NORMAL; }  /* the P2-selector form */
+        const uint8_t *b = (const uint8_t *)p1;
+        uint32_t width = (uint32_t)b[2] | ((uint32_t)b[3] << 8);
+        uint32_t page = b[7];
+        uint64_t chars = (uint64_t)b[4] | ((uint64_t)b[5] << 8) | ((uint64_t)b[6] << 16);
+        if (p2 >= 12) {
+            uint32_t ext; memcpy(&ext, b + 8, 4);
+            chars |= (uint64_t)ext << 32;
+        }
+        /* the buffer carries characteristic bits 0-23 and (with room) the
+         * extended longword; bits 24-31 are not in it and are left alone */
+        uint64_t covered = 0x0000000000FFFFFFULL | (p2 >= 12 ? 0xFFFFFFFF00000000ULL : 0);
+        /* IO$_SETCHAR sets the permanent characteristics as well as the
+         * current ones; IO$_SETMODE only the current (rd vms-d900). */
+        uint32_t st = vms_kif_ttsetmode(ec, VMS_TTSET_CHAR | VMS_TTSET_WIDTH | VMS_TTSET_PAGE |
+                                            (base == IO$_SETCHAR ? VMS_TTSET_PERM : 0),
+                                        chars & covered, (~chars) & covered, width, page);
+        if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+        tt_iosb(iosb_ptr, SS$_NORMAL, TT_SPEED_9600, 0, 0);
+        break;
+    }
+    case IO$_READVBLK:
+    case IO$_READLBLK:
+    case IO$_READPROMPT: {
+        if (func & IO$M_PURGE)
+            (void)tcflush(fd, TCIFLUSH);
+        if (base == IO$_READPROMPT && p5 && p6)
+            (void)!write(fd, (const void *)(uintptr_t)p5, p6);
+        if (!p1 || p2 == 0) { tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0); break; }
+        if (func & IO$M_TIMED) {
+            struct pollfd pf = { fd, POLLIN, 0 };
+            int pr = poll(&pf, 1, (int)(p3 > 2000000 ? 2000000000 : p3 * 1000));
+            if (pr <= 0) { tt_iosb(iosb_ptr, SS$_TIMEOUT, 0, 0, 0); break; }
+        }
+        ssize_t r = read(fd, p1, p2);
+        if (r <= 0) { tt_iosb(iosb_ptr, r == 0 ? SS$_ENDOFFILE : SS$_ABORT, 0, 0, 0); break; }
+        /* the terminator: a CR/LF/^Z ends the line and is not counted */
+        uint8_t *c = (uint8_t *)p1;
+        uint16_t off = (uint16_t)r, term = 0, tsz = 0;
+        for (ssize_t i = 0; i < r; i++)
+            if (c[i] == '\r' || c[i] == '\n' || c[i] == 26) { off = (uint16_t)i; term = c[i]; tsz = 1; break; }
+        tt_iosb(iosb_ptr, SS$_NORMAL, off, term, tsz);
+        break;
+    }
+    case IO$_ACCESS:
+        tt_iosb(iosb_ptr, 0, 0, 0, 0);
+        return SS$_DEVOFFLINE;
+    default:
+        *handled = 0;
+        return SS$_NORMAL;
+    }
+    if ((efn & 0xFFu) < 128) sys$setef(efn);
+    if (astadr) astadr(astprm);
+    return SS$_NORMAL;
+}
+
+static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
                   uint32_t p4, uint32_t p5, uint32_t p6) {
@@ -988,12 +1143,26 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
     if (vms$$chan_is_net(chan))
         return qio_net_op(chan, func, iosb_ptr, efn, astadr, astprm);
 
+    {
+        uint32_t tec = 0;
+        struct vms_devinfo tinfo;
+        if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+            int tfd = vms$$chan_to_fd(chan);
+            if (tfd < 0) return pcb_chan_unheld_status(chan);
+            int handled = 0;
+            uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
+                                           p1, p2, p3, p4, p5, p6, efn, astadr,
+                                           astprm, &handled);
+            if (handled) return tst;
+        }
+    }
+
     /* IO$_SETMODE line discipline on a terminal channel (vms-f54): the terminal
      * driver's home, dispatched before the read/write classifier (which rejects
      * SETMODE as SS$_ILLIOFUNC). Off a real tty it is a graceful no-op. */
     if ((func & IO$M_FCODE) == IO$_SETMODE) {
         int fd = vms$$chan_to_fd(chan);
-        if (fd < 0) return SS$_IVCHAN;
+        if (fd < 0) return pcb_chan_unheld_status(chan);
         return qio_terminal_setmode(fd, p2, iosb_ptr, efn, astadr, astprm);
     }
 
@@ -1025,7 +1194,7 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
  * Submits via io_uring and blocks until the I/O completes.
  * Falls back to synchronous I/O if io_uring is not available.
  */
-uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
+static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
                    void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                    void *p1, uint32_t p2, uint32_t p3,
                    uint32_t p4, uint32_t p5, uint32_t p6) {
@@ -1049,10 +1218,24 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
     if (vms$$chan_is_net(chan))
         return qio_net_op(chan, func, iosb_ptr, efn, astadr, astprm);
 
+    {
+        uint32_t tec = 0;
+        struct vms_devinfo tinfo;
+        if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+            int tfd = vms$$chan_to_fd(chan);
+            if (tfd < 0) return pcb_chan_unheld_status(chan);
+            int handled = 0;
+            uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
+                                           p1, p2, p3, p4, p5, p6, efn, astadr,
+                                           astprm, &handled);
+            if (handled) return tst;
+        }
+    }
+
     /* IO$_SETMODE line discipline on a terminal channel (vms-f54): see sys$qio. */
     if ((func & IO$M_FCODE) == IO$_SETMODE) {
         int fd = vms$$chan_to_fd(chan);
-        if (fd < 0) return SS$_IVCHAN;
+        if (fd < 0) return pcb_chan_unheld_status(chan);
         return qio_terminal_setmode(fd, p2, iosb_ptr, efn, astadr, astprm);
     }
 
@@ -1086,4 +1269,81 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
 
     /* Synchronous fallback */
     return qio_sync(fd, base_func, iosb_ptr, p1, p2, efn, astadr, astprm);
+}
+
+/*
+ * THE SERVICE STATUS IS NOT THE I/O STATUS (rd vms-d01). $QIO and $QIOW return
+ * the status of QUEUING the request; how the I/O itself ended is in the IOSB
+ * (and, for $QIO, signalled by the event flag and AST). Observed on OpenVMS
+ * VAX V7.3 and Alpha V8.4 (docs/oracle/semantics/io/): a $QIOW read of NLA0:
+ * or of an empty mailbox with IO$M_NOW is SS$_NORMAL with SS$_ENDOFFILE in the
+ * IOSB; a short mailbox read is SS$_NORMAL with SS$_BUFFEROVF in the IOSB.
+ * Only a request REFUSED before it was queued -- an illegal function, a write
+ * too big for the mailbox, a bad channel or buffer, an exceeded quota --
+ * returns its error as the service status, and then the IOSB is not an I/O
+ * result: Alpha V8.4 zeroes it (VAX leaves it), and OVMX follows the Alpha --
+ * except for a bad channel, refused before the IOSB is touched on both.
+ */
+static int qio_refused(uint32_t st)
+{
+    switch (st) {
+    case SS$_ILLIOFUNC: case SS$_MBTOOSML: case SS$_IVCHAN: case SS$_IVIDENT:
+    case SS$_BADPARAM:
+    case SS$_ACCVIO: case SS$_EXQUOTA: case SS$_ILLEFC: case SS$_UNASEFC:
+    case SS$_NOPRIV: case SS$_INSFMEM: case SS$_IVBUFLEN: case SS$_NOSUCHDEV:
+    case SS$_DEVOFFLINE: case SS$_UNSUPPORTED: case SS$_MBFULL:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
+{
+    int before_iosb = qio_refused_before_iosb;
+
+    qio_refused_before_iosb = 0;
+    if (st == SS$_NORMAL)
+        return st;
+    if (before_iosb)
+        return st;              /* refused before the IOSB: left as it was */
+    if (qio_refused(st)) {
+        /* VMS clears the IOSB once the channel is validated, before the
+         * driver's checks: a bad channel leaves it as it was (IO.CHAN0,
+         * IO.AFTER_DASSGN), a refusal after that leaves it zeroed. */
+        if (iosb_ptr && st != SS$_IVCHAN && st != SS$_IVIDENT)
+            memset(iosb_ptr, 0, sizeof(struct _iosb));
+        return st;
+    }
+    /* Completed (with whatever I/O status): the IOSB carries it. */
+    if (iosb_ptr) {
+        struct _iosb *b = (struct _iosb *)iosb_ptr;
+        if (b->iosb$w_status == 0)
+            b->iosb$w_status = (uint16_t)st;
+    }
+    return SS$_NORMAL;
+}
+
+uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
+                 void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
+                 void *p1, uint32_t p2, uint32_t p3,
+                 uint32_t p4, uint32_t p5, uint32_t p6)
+{
+    uint32_t cst = qio_efn_request(efn);   /* refused before anything: IOSB as is */
+    if (cst != SS$_NORMAL)
+        return cst;
+    return qio_service_status(qio_body(efn, chan, func, iosb_ptr, astadr, astprm,
+                                       p1, p2, p3, p4, p5, p6), iosb_ptr);
+}
+
+uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
+                  void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
+                  void *p1, uint32_t p2, uint32_t p3,
+                  uint32_t p4, uint32_t p5, uint32_t p6)
+{
+    uint32_t cst = qio_efn_request(efn);
+    if (cst != SS$_NORMAL)
+        return cst;
+    return qio_service_status(qiow_body(efn, chan, func, iosb_ptr, astadr, astprm,
+                                        p1, p2, p3, p4, p5, p6), iosb_ptr);
 }

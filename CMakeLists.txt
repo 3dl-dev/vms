@@ -603,6 +603,13 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(oracle_constants_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+    # rd vms-bd30: $GETJPI/$GETSYI refuse an item code OpenVMS does not define
+    # with SS$_BADPARAM; the table of defined codes is GENERATED from the
+    # STARLET dumps (docs/oracle/alpha84-starlet-defs/) -- this fails when stale.
+    add_test(NAME itemcodes_generated_current
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/gen_itemcodes.py --check)
+    set_tests_properties(itemcodes_generated_current PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
     # rd vms-8d1: semantic oracle -- the buildless half (ratchet selftest, goldens
     # well formed + captured from the current spec, specs generate + compile).
     # The OVMX-vs-real-VMS diff itself runs on the booted runtime in CI's
@@ -612,6 +619,13 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(semantic_oracle_static PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+    # rd vms-546: $GETMSG answers from the message catalog observed on OpenVMS
+    # Alpha V8.4 (docs/oracle/messages/); the C table is GENERATED from it and
+    # this fails when the committed table is not what the generator writes.
+    add_test(NAME msgcat_generated_current
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/messages/gen_msgcat.py --check)
+    set_tests_properties(msgcat_generated_current PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
 
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
@@ -1226,6 +1240,7 @@ if(BUILD_TOOLS)
         vms_cnxtrace         # CNXTRACE.EXE
         decnetd_exe          # DECNETD.EXE
         fal_exe              # FAL.EXE
+        mail_server_exe      # MAIL_SERVER.EXE
         PARTS                # PARTS.EXE
         ncp_exe              # NCP.EXE
     )

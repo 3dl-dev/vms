@@ -116,6 +116,7 @@
 #define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
 #define SS__MBTOOSML  412          /* SS$_MBTOOSML (message > maxmsg; semantic oracle io) */
 #define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */
+#define SS__MBFULL    2264         /* SS$_MBFULL (IO$M_NORSWAIT write, no room; rd vms-c6d1) */
 #define SS__IVCHAN    316          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  324          /* SS$_IVDEVNAM -- invalid device name */
 #define SS__NOSUCHDEV 2312         /* SS$_NOSUCHDEV -- no such device available */
@@ -145,6 +146,8 @@
 #define SS__NOTQUEUED   2488       /* SS$_NOTQUEUED (LCK_M_NOQUEUE, not granted) */
 #define SS__DEADLOCK    3594       /* SS$_DEADLOCK (wait-for cycle detected) */
 #define SS__IVLOCKID    8484       /* SS$_IVLOCKID (invalid lock ID) */
+#define SS__SUBLOCKS    8492       /* SS$_SUBLOCKS (sublocks still held) */
+#define SS__SYNCH       1673       /* SS$_SYNCH (granted synchronously) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
 #define SS__UNSUPPORTED 3658       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
 /* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h
@@ -174,6 +177,11 @@
 #define SS__NOSUCHFILE  2320       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
 #define SS__FILNOTACC   172       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
 #define SS__DEVICEFULL  2128       /* SS$_DEVICEFULL (extend cannot allocate) */
+/* Access control list statuses (vms-d404), STARLET oracle values. */
+#define SS__ACLEMPTY    2512       /* SS$_ACLEMPTY */
+#define SS__NOENTRY     2520       /* SS$_NOENTRY */
+#define SS__ACLFULL     2552       /* SS$_ACLFULL */
+#define SS__IVACL       8676       /* SS$_IVACL */
 #define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
 /*
  * Device-table subset (rd vms-618). Values copied VERBATIM from
@@ -249,7 +257,8 @@
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
-                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
+                             VMS_PRV_M_GRPPRV)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be
@@ -685,6 +694,13 @@ struct vms_proc {
 	 * with dfprot; "" = never set. */
 	char                ddir[VMS_DDIR_SIZE];
 
+	/* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
+	 * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
+	 * privilege mask. Same hash_lock as the identity fields. */
+	uint32_t            rights_id[VMS_RIGHTS_MAX];
+	uint32_t            rights_attr[VMS_RIGHTS_MAX];
+	uint32_t            rights_n;
+
 	/*
 	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
 	 * the CHILD's PCB; vms_ioctl_setexit() delivers it (parent EF + AST) when
@@ -795,6 +811,8 @@ struct vms_device {
 	uint32_t            devbufsiz;      /* DVI$_DEVBUFSIZ */
 	uint32_t            width;
 	uint32_t            page;
+	uint32_t            perm_width;     /* PERMANENT width / page (rd vms-d900) */
+	uint32_t            perm_page;
 
 	/*
 	 * Disk backing (devclass == DC$_DISK). The NATIVE block device this unit
@@ -919,6 +937,9 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * every outer mode; vms_lnm_proc_gone applies image rundown (user mode) or
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
+/* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
+ * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
+void vms_lnm_forget_device(const char *devnam);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);
@@ -1137,6 +1158,7 @@ long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*
@@ -1318,6 +1340,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

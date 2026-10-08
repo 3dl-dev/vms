@@ -1735,6 +1735,19 @@ done:
     return st;
 }
 
+/* A secondary key declared NULL_KEY (null value 0) does not index a record whose
+ * key bytes are all zero (vms-7d5a: a RIGHTSLIST identifier record's HOLDER is 0). */
+static int p3_key_is_null(const p3_keydesc_t *sk, const uint8_t *kv)
+{
+    uint16_t i;
+    if (!(sk->flags & (1u << P3_KEYV_NULKEYS)))
+        return 0;
+    for (i = 0; i < sk->seg0_siz; i++)
+        if (kv[i] != 0)
+            return 0;
+    return 1;
+}
+
 /* Insert a SIDR pointer into EVERY secondary key for a freshly $PUT primary
  * record. A record too short to carry a secondary key is skipped for that key
  * (no SIDR entry -- VMS treats a missing key as a null-key case). */
@@ -1759,6 +1772,8 @@ static uint32_t p3_maintain_secondaries_put(p3_ctx_t *ctx, const uint8_t *rec,
             return RMS$_PLG;
         memset(kv, 0, sk->key_size);
         memcpy(kv, rec + sk->seg0_pos, sk->seg0_siz); /* zero-padded to key_size */
+        if (p3_key_is_null(sk, kv))
+            continue;                                /* null key: not indexed */
         st = p3_sidr_put(ctx, sk, kv, rfa);
         if (!$VMS_STATUS_SUCCESS(st))
             return st;
@@ -1831,7 +1846,8 @@ uint32_t rms_p3_add_secondary_key(p3_ctx_t *ctx, const p3_create_params_t *p)
         k[P3_KD_OFF_REF]        = (uint8_t)ctx->num_keys;
         k[P3_KD_OFF_DTP]        = p->dtp;
         p3_put_le16(k + P3_KD_OFF_FLAGS,
-                    p->allow_dup ? (uint16_t)(1u << P3_KEYV_DUPKEYS) : 0u);
+                    (uint16_t)((p->allow_dup ? (1u << P3_KEYV_DUPKEYS) : 0u) |
+                               (p->null_key ? (1u << P3_KEYV_NULKEYS) : 0u)));
         k[P3_KD_OFF_ROOT_LEVEL] = 1;
         k[P3_KD_OFF_IBS]        = B;
         k[P3_KD_OFF_DBS]        = B;
@@ -1879,7 +1895,8 @@ uint32_t rms_p3_add_secondary_key(p3_ctx_t *ctx, const p3_create_params_t *p)
     memset(sk, 0, sizeof(*sk));
     sk->ref            = (uint8_t)ctx->num_keys;
     sk->dtp            = p->dtp;
-    sk->flags          = p->allow_dup ? (uint16_t)(1u << P3_KEYV_DUPKEYS) : 0u;
+    sk->flags          = (uint16_t)((p->allow_dup ? (1u << P3_KEYV_DUPKEYS) : 0u) |
+                                    (p->null_key ? (1u << P3_KEYV_NULKEYS) : 0u));
     sk->root_level     = 1;
     sk->ibs            = B;
     sk->dbs            = B;
@@ -1957,20 +1974,32 @@ uint32_t rms_p3_sidr_lookup(p3_ctx_t *ctx, uint8_t krf,
     return RMS$_RNF;
 }
 
+static int p3_match_any(const uint8_t *rec, uint16_t rec_len, void *arg)
+{
+    (void)rec; (void)rec_len; (void)arg;
+    return 1;
+}
+
 uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
                        const uint8_t *key, uint16_t key_len)
+{
+    if (krf != 0)
+        return RMS$_KEY;                              /* delete by primary key */
+    return rms_p3_delete_match(ctx, key, key_len, p3_match_any, NULL);
+}
+
+uint32_t rms_p3_delete_match(p3_ctx_t *ctx, const uint8_t *key, uint16_t key_len,
+                             p3_match_cb match, void *arg)
 {
     const p3_keydesc_t *pk;
     uint8_t *root = NULL, *data = NULL;
     uint32_t cap, st = RMS$_NORMAL;
     uint16_t dfree, off, rec_off = 0xFFFF, dlen = 0, i, mb;
-    uint32_t data_vbn = 0;
+    uint32_t data_vbn = 0, guard;
     p3_rfa_t rfa;
 
-    if (!ctx || ctx->magic != P3_CTX_MAGIC || !ctx->writable || !key)
+    if (!ctx || ctx->magic != P3_CTX_MAGIC || !ctx->writable || !key || !match)
         return RMS$_PLG;
-    if (krf != 0)
-        return RMS$_KEY;                              /* delete by primary key */
     pk = p3_find_key(ctx, 0);
     if (!pk)
         return RMS$_KEY;
@@ -1984,26 +2013,45 @@ uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
     data = (uint8_t *)malloc((size_t)cap);
     if (!root || !data) { st = RMS$_DME; goto done; }
 
-    /* multi-level descent to the primary data bucket (vms-5a3). */
+    /* multi-level descent to the primary data bucket (vms-5a3), then along the
+     * horizontal chain while the records still carry the key: duplicates of one
+     * key may continue into the next bucket. */
     st = p3_descend(ctx, pk, key, key_len, root, &data_vbn);
     if (!$VMS_STATUS_SUCCESS(st)) goto done;
-    if (p3_read_blocks(ctx->f, data_vbn, pk->dbs ? pk->dbs : 1u, data) != 0) {
-        st = RMS$_RER; goto done;
-    }
-    dfree = p3_le16(data + P3_BH_OFF_FREESPACE);
-    if (dfree < P3_BKT_HDR_SIZE || dfree > cap) { st = RMS$_PLG; goto done; }
+    for (guard = 0; guard < (1u << 20) && data_vbn != 0 && rec_off == 0xFFFF; guard++) {
+        int past = 0;
+        uint32_t next_vbn;
 
-    for (off = P3_BKT_HDR_SIZE; (uint16_t)(off + P3_DR_HDR_SIZE) <= dfree; ) {
-        uint8_t  ctrl = data[off + P3_DR_OFF_CTRL];
-        uint16_t rn   = (uint16_t)(off + p3_rec_size(data, off));
-        if (rn > dfree) break;
-        if (!((ctrl >> P3_IRCV_RRV) & 1u) && !((ctrl >> P3_IRCV_DELETED) & 1u) &&
-            p3_keycmp(data + off + P3_DR_HDR_SIZE + pk->seg0_pos, pk->seg0_siz,
-                      key, key_len) == 0) {
-            rec_off = off;
-            break;
+        if (p3_read_blocks(ctx->f, data_vbn, pk->dbs ? pk->dbs : 1u, data) != 0) {
+            st = RMS$_RER; goto done;
         }
-        off = rn;
+        dfree = p3_le16(data + P3_BH_OFF_FREESPACE);
+        if (dfree < P3_BKT_HDR_SIZE || dfree > cap) { st = RMS$_PLG; goto done; }
+
+        for (off = P3_BKT_HDR_SIZE; (uint16_t)(off + P3_DR_HDR_SIZE) <= dfree; ) {
+            uint8_t  ctrl = data[off + P3_DR_OFF_CTRL];
+            uint16_t rn   = (uint16_t)(off + p3_rec_size(data, off));
+            int cmp;
+            if (rn > dfree) break;
+            if (!((ctrl >> P3_IRCV_RRV) & 1u) && !((ctrl >> P3_IRCV_DELETED) & 1u)) {
+                cmp = p3_keycmp(data + off + P3_DR_HDR_SIZE + pk->seg0_pos, pk->seg0_siz,
+                                key, key_len);
+                if (cmp > 0) { past = 1; break; }
+                if (cmp == 0 &&
+                    match(data + off + P3_DR_HDR_SIZE,
+                          p3_le16(data + off + P3_DR_OFF_DATALEN), arg)) {
+                    rec_off = off;
+                    break;
+                }
+            }
+            off = rn;
+        }
+        if (rec_off != 0xFFFF || past)
+            break;
+        next_vbn = p3_le32(data + P3_BH_OFF_NEXT_VBN);
+        if ((data[P3_BH_OFF_FLAGS] >> P3_BKTV_LASTBKT) & 1u || next_vbn == data_vbn)
+            break;
+        data_vbn = next_vbn;
     }
     if (rec_off == 0xFFFF) { st = RMS$_RNF; goto done; }
 
@@ -2025,6 +2073,8 @@ uint32_t rms_p3_delete(p3_ctx_t *ctx, uint8_t krf,
             continue;                                /* record had no such key */
         memset(kv, 0, sk->key_size);
         memcpy(kv, data + rec_off + P3_DR_HDR_SIZE + sk->seg0_pos, sk->seg0_siz);
+        if (p3_key_is_null(sk, kv))
+            continue;                                /* never indexed */
         ds = p3_sidr_remove(ctx, sk, kv, rfa);
         if (!$VMS_STATUS_SUCCESS(ds) && ds != RMS$_RNF) { st = ds; goto done; }
     }

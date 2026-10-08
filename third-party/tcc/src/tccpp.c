@@ -1719,6 +1719,62 @@ static int pragma_parse(TCCState *s1)
     } else if (tok == TOK_once) {
         search_cached_include(s1, file->true_filename, 1)->once = 1;
 
+    } else if (tok >= TOK_IDENT &&
+               (!strcmp(get_tok_str(tok, NULL), "extern_model") ||
+                !strcmp(get_tok_str(tok, NULL), "__extern_model"))) {
+        /* OVMX (vms-db7): DEC C's #pragma [__]extern_model, so a VMS C source
+           that places data in a named psect compiles unchanged:
+             save / restore             push / pop the model
+             strict_refdef ["NAME"] [attr,...]
+                                        definitions go to psect NAME (an ELF
+                                        section of that name); attr nowrt makes
+                                        it read-only, otherwise it is writable
+             relaxed_refdef, common_block, globalvalue, strict_refdef without a
+             name                       the default placement
+           The psect name and attributes are DEC C's (OpenVMS C User's Guide,
+           "#pragma extern_model"); LIB$INITIALIZE is the psect VMS image
+           activation reads. Remaining tokens on the line are ignored. */
+        const char *w;
+        next_nomacro();
+        w = tok >= TOK_IDENT ? get_tok_str(tok, NULL) : "";
+        if (!strcmp(w, "save") || !strcmp(w, "__save")) {
+            if (s1->extern_model_sp < 8)
+                s1->extern_model_stack[s1->extern_model_sp++] = s1->extern_model_sec;
+        } else if (!strcmp(w, "restore") || !strcmp(w, "__restore")) {
+            if (s1->extern_model_sp > 0)
+                s1->extern_model_sec = s1->extern_model_stack[--s1->extern_model_sp];
+        } else if (!strcmp(w, "strict_refdef") || !strcmp(w, "__strict_refdef")) {
+            next_nomacro();
+            if (tok == TOK_STR || (tok == TOK_PPSTR && tokc.str.size >= 3 &&
+                                   tokc.str.data[0] == '"')) {
+                char nm[64];
+                const char *d = (const char *)tokc.str.data;
+                int n = tokc.str.size - 1;           /* size counts the NUL */
+                Section *sec;
+                int wrt = 1;
+                if (tok == TOK_PPSTR) { d++; n -= 2; }  /* the quotes */
+                if (n < 1 || n >= (int)sizeof(nm))
+                    goto pragma_err;
+                memcpy(nm, d, n);
+                nm[n] = '\0';
+                sec = find_section(s1, nm);
+                next_nomacro();
+                while (tok != TOK_LINEFEED && tok != TOK_EOF) {
+                    if (tok >= TOK_IDENT && (!strcmp(get_tok_str(tok, NULL), "nowrt") ||
+                                             !strcmp(get_tok_str(tok, NULL), "__nowrt")))
+                        wrt = 0;
+                    next_nomacro();
+                }
+                sec->sh_flags = SHF_ALLOC | (wrt ? SHF_WRITE : 0);
+                s1->extern_model_sec = sec;
+            } else {
+                s1->extern_model_sec = NULL;
+            }
+        } else {
+            s1->extern_model_sec = NULL;   /* relaxed_refdef / common_block / globalvalue */
+        }
+        return 0;                          /* the rest of the line is skipped */
+
     } else if (s1->output_type == TCC_OUTPUT_PREPROCESS) {
         /* tcc -E: keep pragmas below unchanged */
         unget_tok(' ');

@@ -105,8 +105,9 @@
 #include <sys/stat.h>
 #include "ovmx_secparam.h"
 #include "ovmx_fileprot.h"
+#include "../../src/kernel/vms_ioctl.h"   /* VMS_DFPROT_INITIAL */
 
-extern uint32_t sys$chkpro(void *objpro);
+extern uint32_t sys$chkpro(void *itmlst, void *objpro, void *subjpro);
 extern uint32_t vms$get_uic(void);
 extern uint16_t vmsfs_mode_to_protection(mode_t mode);
 
@@ -177,14 +178,20 @@ static void check(int cond, const char *name)
     }
 }
 
+/* $CHKPRO with the VMS item list (vms-d404): the object is (owner, prot); the
+ * subject is this process's own [gid,uid] UIC -- the mapping the executive
+ * makes -- with no privileges and no rights, all three given as CHP$_UIC,
+ * CHP$_PRIV and CHP$_RIGHTS so that no executive is needed on the host. */
 static uint32_t chkpro(uint32_t owner_uic, uint16_t prot, uint16_t access)
 {
-    struct {
-        uint32_t owner_uic;
-        uint16_t protection;
-        uint16_t access_type;
-    } pro = { owner_uic, prot, access };
-    return sys$chkpro(&pro);
+    uint32_t acc = access, own = owner_uic, prt = prot, uic = vms$get_uic();
+    uint32_t priv[2] = { 0, 0 };
+    struct { uint16_t len, code; void *buf; uint16_t *ret; } it[] = {
+        { 4, 1 /* CHP$_ACCESS */, &acc, 0 }, { 4, 12 /* CHP$_OWNER */, &own, 0 },
+        { 4, 13 /* CHP$_PROT */, &prt, 0 },  { 4, 22 /* CHP$_UIC */, &uic, 0 },
+        { 8, 3 /* CHP$_PRIV */, priv, 0 },   { 0, 6 /* CHP$_RIGHTS */, 0, 0 },
+        { 0, 0, 0, 0 } };
+    return sys$chkpro(it, 0, 0);
 }
 
 /*
@@ -405,8 +412,9 @@ int main(void)
     /* S:RWED,O:RWED,G:,W: = nothing for group or world. 0xFF00 under the
      * pinned encoding (ovmx_fileprot.h): System@bits3-0=0x0 (full grant),
      * Owner@bits7-4=0x0 (full grant), Group@bits11-8=0xF (all denied),
-     * World@bits15-12=0xF (all denied) -- the same 0xFF00 literal
-     * src/vmsrms/rms_core.c's rms_get_default_protection() returns. */
+     * World@bits15-12=0xF (all denied). A fixture for the SYSTEM/OWNER
+     * category checks below; the process default for new files is
+     * VMS_DFPROT_INITIAL (0xFA00, pinned at the end of this test). */
     uint16_t prot_s_o_only = 0xFF00u;
     uint32_t st;
     int ok;
@@ -616,6 +624,18 @@ int main(void)
     ok = run_chkpro_as(7, 7001, owner_uic_ex, prot640, PROT_READ, &st);
     check(ok && (st & 1) != 0,
           "mode 640: SYSTEM-category caller reads -- GRANTED");
+
+    /* The process default file protection (Baron 2026-10-08): VMS's SYSGEN
+     * RMS_FILEPROT default %XFA00 = S:RWED,O:RWED,G:RE,W: -- the group reads,
+     * the world does not, the owner writes. */
+    check(VMS_DFPROT_INITIAL == 0xFA00u,
+          "VMS_DFPROT_INITIAL is RMS_FILEPROT's default %XFA00 (S:RWED,O:RWED,G:RE,W:)");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, (uint16_t)VMS_DFPROT_INITIAL, PROT_READ, &st);
+    check(ok && (st & 1) != 0, "default protection: GROUP reads -- GRANTED");
+    ok = run_chkpro_as(300, 999, owner_uic_ex, (uint16_t)VMS_DFPROT_INITIAL, PROT_WRITE, &st);
+    check(ok && (st & 1) == 0, "default protection: GROUP writes -- DENIED");
+    ok = run_chkpro_as(400, 401, owner_uic_ex, (uint16_t)VMS_DFPROT_INITIAL, PROT_READ, &st);
+    check(ok && (st & 1) == 0, "default protection: WORLD reads -- DENIED");
 
     printf("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
     return failures == 0 ? 0 : 1;

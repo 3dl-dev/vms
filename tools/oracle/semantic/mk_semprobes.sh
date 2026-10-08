@@ -39,5 +39,13 @@ for spec in "$HERE"/specs/*.py; do
     "$LINK_EXE" --executable $USES -o "$OUT/SP_$FAM.EXE" "$WORK/sp_$fam.o"
     n=$((n + 1))
 done
+# DCL families (specs-dcl/*.py, comgen.py): a command procedure, no compile/link
+for spec in "$HERE"/specs-dcl/*.py; do
+    [ -f "$spec" ] || continue
+    fam=$(basename "$spec" .py)
+    FAM=$(echo "$fam" | tr '[:lower:]' '[:upper:]')
+    echo "mk_semprobes: $fam -> SP_$FAM.COM"
+    "$PYTHON" "$HERE/comgen.py" "$spec" > "$OUT/SP_$FAM.COM"
+done
 [ "$n" -gt 0 ] || { echo "mk_semprobes: no specs found"; exit 1; }
 echo "mk_semprobes: built $n probe image(s) in $OUT"

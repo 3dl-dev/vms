@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "vms_kif.h"
 #include <strings.h>
 #include <ctype.h>
 #include <unistd.h>
@@ -119,6 +120,21 @@ static int dcl_logical_is_terminal(const char *equiv)
         return 1;
     if (strncasecmp(equiv, "/dev/tty", 8) == 0)
         return 1;
+    /* This process's own terminal device, as a process-permanent file names it
+     * ("_OPA0:", rd vms-b14e) -- read from the executive row, not assumed. */
+    {
+        struct vms_procinfo pi;
+        memset(&pi, 0, sizeof pi);
+        if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0]) {
+            char tn[sizeof pi.terminal];
+            snprintf(tn, sizeof tn, "%s", pi.terminal);
+            size_t tl = strlen(tn);
+            if (tl && tn[tl - 1] == ':')
+                tn[tl - 1] = '\0';
+            if (strcasecmp(t + (t[0] == '_'), tn) == 0)
+                return 1;
+        }
+    }
     /* A mailbox device (MBAn:) is a stream too: when SYS$INPUT/SYS$OUTPUT
      * name a mailbox, DCL bound its stdin/stdout to it at startup
      * (dcl_mbx_bind_std_streams, vms-786), so writing the stream IS writing

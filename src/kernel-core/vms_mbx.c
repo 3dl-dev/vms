@@ -76,6 +76,7 @@
 #include "vms_internal.h"
 #include "exec_kbackend.h"
 #include "exec_list.h"
+#include "vms_prot.h"     /* vms_prot_check: the executive's one protection decision */
 
 /* One queued message. Allocated exec_alloc(sizeof(*m) + len) with `data` as a
  * flexible array member -- a mailbox message has no fixed size below the
@@ -107,10 +108,23 @@ struct vms_mailbox {
      * would not be the shared IPC object $CREMBX documents; the negative
      * control this item's suite carries (mbx-not-shared,
      * tests/qemu/facility_defects.sh) is exactly the mutation that adds
-     * that check back in.
+     * that check back in. WHO may reach a mailbox is decided by its owner
+     * UIC and protection mask below (rd vms-c6d1) -- the VMS rule -- never
+     * by which process happened to create it.
      */
     pid_t    owner_linux_pid;
     uint32_t owner_vms_pid;
+    /*
+     * PROTECTION (rd vms-c6d1). The mailbox's owner UIC -- the creating
+     * process's UIC -- and the SOGW protection mask $CREMBX's promsk set
+     * (OpenVMS System Services Reference, $CREMBX: "promsk ... a set bit denies
+     * access"; 0, the default, allows every category everything). Fixed at
+     * creation and never changed, so they are read without mbx->lock. Every
+     * access decision against them goes through vms_prot_check()
+     * (vms_prot.h), the same decision the Files-11 ACP makes for a file.
+     */
+    uint32_t owner_uic;
+    uint16_t prot;
     exec_list_head_t msgq;      /* struct vms_mbx_msg, FIFO */
     exec_list_head_t wrtattn;   /* struct vms_mbx_wrtattn_reg, write-attention ASTs */
     exec_cv_t read_wq;
@@ -342,6 +356,7 @@ static bool mbx_priv_check(uint32_t permanent, uint64_t cur_privs, uint32_t *sta
 static void mbx_put(struct vms_mailbox *mbx)
 {
     int free_it = 0;
+    char devnam[VMS_DEVNAM_SIZE];
 
     exec_lock(&vms_mbx_list_lock);
     exec_lock(&mbx->lock);
@@ -349,13 +364,40 @@ static void mbx_put(struct vms_mailbox *mbx)
         mbx->refcnt--;
     if (mbx->refcnt == 0 && (!mbx->permanent || mbx->delete_pending)) {
         exec_list_del(&mbx->list);
+        memcpy(devnam, mbx->devnam, sizeof(devnam));
+        devnam[sizeof(devnam) - 1] = '\0';
         free_it = 1;
     }
     exec_unlock(&mbx->lock);
     exec_unlock(&vms_mbx_list_lock);
 
-    if (free_it)
+    if (free_it) {
         mbx_free(mbx);
+        /* The unit's logical name goes with it (vms-4a69). */
+        vms_lnm_forget_device(devnam);
+    }
+}
+
+/*
+ * mbx_access - may `proc` perform `want` (VMS_PROT_ACC_READ / _WRITE) on `mbx`?
+ * The mailbox's owner UIC and protection mask against the caller's UIC and
+ * ENABLED privileges, through the executive's one protection decision
+ * (vms_prot.h) -- BYPASS, READALL and SYSPRV act here exactly as they do on a
+ * file. SS__NORMAL or SS__NOPRIV.
+ */
+static uint32_t mbx_access(const struct vms_proc *proc,
+                           const struct vms_mailbox *mbx, unsigned want)
+{
+    /*
+     * READALL does not open a mailbox: on real VAX V7.3 and Alpha V8.4 an
+     * unprivileged process holding READALL alone is still refused SS$_NOPRIV
+     * reading a read-denied mailbox (docs/oracle/semantics/mbxprot/,
+     * MBXP.READALL.READ), while BYPASS opens it (MBXP.BYPASS.READ). READALL is
+     * a file privilege; a mailbox is a device. So the override is withheld here.
+     */
+    uint64_t privs = proc->cur_privs & ~VMS_PRV_M_READALL;
+
+    return vms_prot_check(proc->uic, privs, mbx->owner_uic, mbx->prot, want);
 }
 
 /* ================================================================
@@ -401,6 +443,8 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
     mbx->refcnt = 1;
     mbx->owner_linux_pid = proc->linux_pid;
     mbx->owner_vms_pid = proc->vms_pid;
+    mbx->owner_uic = proc->uic;
+    mbx->prot = (uint16_t)(args.promsk & 0xFFFFu);
 
     exec_lock(&vms_mbx_list_lock);
     unit = vms_mbx_next_unit++;
@@ -430,10 +474,11 @@ out_copy:
  * $ASSIGN to an existing mailbox by device name -- the rendezvous path an
  * UNRELATED process uses to reach a mailbox it did not create (having
  * learned MBAn: from a logical name, see sys_mailbox.c). The lookup is by
- * device name ALONE: no ownership or creator check gates it, because a
- * mailbox anyone but its creator can never open is not the IPC object VMS
- * documents (see mbx-not-shared in tests/qemu/facility_defects.sh, this
- * item's negative control for exactly that regression).
+ * device name; no CREATOR check gates it, because a mailbox anyone but its
+ * creator can never open is not the IPC object VMS documents (see
+ * mbx-not-shared in tests/qemu/facility_defects.sh). What does gate it is the
+ * mailbox's PROTECTION (rd vms-c6d1): its owner UIC and SOGW mask, through the
+ * executive's one protection decision (vms_prot.h).
  */
 long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg)
 {
@@ -466,6 +511,13 @@ long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NOSUCHDEV;
         goto out;
     }
+    /*
+     * PROTECTION (rd vms-c6d1) is NOT checked here. Measured on real VAX V7.3
+     * and Alpha V8.4 (docs/oracle/semantics/mbxprot/, MBXP.ALL.ASSIGN): an
+     * unprivileged $ASSIGN of a mailbox whose mask denies every access to every
+     * category SUCCEEDS; it is each read and write that is refused SS$_NOPRIV
+     * (vms_ioctl_mbx_read/_write), with the privileges enabled at that I/O.
+     */
     exec_lock(&mbx->lock);
     mbx->refcnt++;
     exec_unlock(&mbx->lock);
@@ -556,6 +608,13 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
+    /* PROTECTION (rd vms-c6d1): a write needs write access to the mailbox --
+     * an end-of-file message is a write too. */
+    if (mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) {
+        a->status = SS__NOPRIV;
+        goto out_copy;
+    }
+
     if (a->flags & VMS_MBX_WRITE_EOF)
         a->len = 0;             /* IO$_WRITEOF: an end-of-file message, no data */
     if (a->len > VMS_MBX_IOCTL_MAXLEN) {
@@ -594,6 +653,20 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
      * "pristine run" flake, vms-d26f), not a timing flake in the test.
      */
     while (mbx->bufquo_used + a->len > mbx->bufquo) {
+        /*
+         * IO$M_NORSWAIT (VMS_MBX_WRITE_NORSWAIT, rd vms-c6d1): the writer asked
+         * not to be put in resource wait for room. Per the VSI OpenVMS I/O
+         * User's Reference (Mailbox Driver) such a write to a mailbox without
+         * room completes at once with SS$_MBFULL. This is what lets a server
+         * (NETACP) answer into a client-named mailbox without a client that
+         * never reads being able to stall it. Re-tested under mbx->lock on
+         * every pass, so a write that DOES fit is never refused.
+         */
+        if (a->flags & VMS_MBX_WRITE_NORSWAIT) {
+            exec_unlock(&mbx->lock);
+            a->status = SS__MBFULL;
+            goto out_copy;
+        }
         if (exec_cv_wait(&mbx->write_wq, &mbx->lock)) {
             /* Interrupted with the mailbox still full: no status written,
              * same WAIT-facility contract vms_ioctl_mbx_read documents above
@@ -747,6 +820,14 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
 
     if (!mbx) {
         a->status = SS__IVCHAN;
+        goto out_copy;
+    }
+
+    /* PROTECTION (rd vms-c6d1): a read -- which DEQUEUES the message, so it is
+     * the one access that can take another process's data -- needs read access
+     * to the mailbox. Refused before the queue is touched. */
+    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) {
+        a->status = SS__NOPRIV;
         goto out_copy;
     }
 

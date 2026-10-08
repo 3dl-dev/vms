@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  packages: read   # GHCR mirror of the pinned base images (vms-9a6, .github/actions/setup-buildx)
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -1132,6 +1133,37 @@ jobs:
               apk add --no-cache gcc musl-dev binutils make >/dev/null
               export CC=gcc WORK=/tmp/multiobj-exec-x86_64
               sh /src/src/imgact/test/run_multiobj_exec_x86_64.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job: LIB$INITIALIZE through tcc -> LINK.EXE -> IMGACT — x86_64 (vms-db7)
+  #
+  # A C program places init-routine addresses in the LIB$INITIALIZE psect with
+  # DEC C's #pragma extern_model (honoured by OVMX's tcc); LINK.EXE collects
+  # both objects' contributions in link order into one LIB$INITIALIZE section;
+  # IMGACT.EXE calls them before main. Root container: IMGACT is staged at its
+  # PT_INTERP path, as for multiobj-exec-x86_64.
+  # -----------------------------------------------------------------------
+  lib-initialize-x86_64:
+    name: LIB$INITIALIZE psect — tcc pragma, LINK.EXE collection, IMGACT calls before main (x86_64, vms-db7)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile with tcc, link with LINK.EXE, run under IMGACT.EXE
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/lib-initialize-x86_64
+              sh /src/src/imgact/test/run_lib_initialize_x86_64.sh
             '
 
   # -----------------------------------------------------------------------

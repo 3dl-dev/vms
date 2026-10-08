@@ -78,7 +78,10 @@
  *   chan    - Receives the assigned channel number
  *   maxmsg - Maximum message size in bytes (0 = executive default)
  *   bufquo - Buffer quota in bytes (0 = executive default)
- *   promsk - Protection mask (not yet enforced by the executive)
+ *   promsk - SOGW protection mask (a SET bit DENIES; 0 = all access to all
+ *            categories). The executive records it with the creator's UIC as
+ *            the mailbox owner and checks $ASSIGN, read and write against it
+ *            (vms_prot.h, rd vms-c6d1)
  *   acmode - Access mode (not yet enforced by the executive)
  *   lognam - Optional logical name; if given, defined in LNM$SYSTEM
  *            pointing at the mailbox's device name (see file header)
@@ -99,7 +102,6 @@ uint32_t (sys$crembx)(int prmflg,
                       const struct dsc$descriptor_s *lognam,
                       uint32_t flags,
                       void *nullarg) {
-    (void)promsk;
     (void)acmode;
     (void)flags;     /* reserved option bits */
     (void)nullarg;   /* documented reserved argument, must be 0 */
@@ -111,9 +113,9 @@ uint32_t (sys$crembx)(int prmflg,
 
     uint32_t exec_chan = 0, unit = 0;
     char devnam[32];
-    uint32_t st = vms_kif_mbx_create(prmflg, maxmsg, bufquo,
-                                      &exec_chan, &unit,
-                                      devnam, sizeof(devnam));
+    uint32_t st = vms_kif_mbx_create_prot(prmflg, maxmsg, bufquo, promsk,
+                                           &exec_chan, &unit,
+                                           devnam, sizeof(devnam));
     if (!(st & 1)) return st;
 
     pthread_mutex_lock(&pcb->chan_lock);

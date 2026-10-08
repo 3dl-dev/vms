@@ -157,6 +157,7 @@
 #define SS__DEADLOCK    3594        /* deadlock detected (ssdef.h SS$_DEADLOCK) */
 #define SS__IVLOCKID    8484        /* invalid lock ID (ssdef.h SS$_IVLOCKID) */
 #define SS__SUBLOCKS    8492        /* sublocks still held (ssdef.h SS$_SUBLOCKS) */
+#define SS__SYNCH       1673        /* granted synchronously (ssdef.h SS$_SYNCH) */
 #define SS__CANCELGRANT 8508        /* conversion cancelled (ssdef.h SS$_CVTUNGRANT) */
 #define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
 
@@ -268,6 +269,12 @@
  * follow-up, the same footing #633 used for its SS__DEVALLOC "busy" choice).
  */
 #define SS__DEVICEFULL  2128        /* device full (extend cannot allocate) */
+/* Access control list statuses (vms-d404), values from the STARLET oracle
+ * (docs/oracle/alpha84-starlet-defs/SSDEF.txt). */
+#define SS__ACLEMPTY    2512        /* access control list is empty */
+#define SS__NOENTRY     2520        /* no such ACE */
+#define SS__ACLFULL     2552        /* no room in the ACL */
+#define SS__IVACL       8676        /* invalid access control list entry */
 /*
  * SS__NOMOREFILES (SS$_NOMOREFILES == 2352, %X0930) -- ORACLE-PINNED (vms-a0b,
  * 2026-08-17). MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1 by
@@ -297,6 +304,10 @@
  * observed a 41-byte write to a 40-byte-maxmsg mailbox return it on real VAX
  * V7.3 and Alpha V8.4 (docs/oracle/semantics/io/, IO.MBX.WRITE.TOOBIG). */
 #define SS__MBTOOSML    412
+/* SS__MBFULL -- SS$_MBFULL (2264): a mailbox write that asked not to wait
+ * (IO$M_NORSWAIT) found no room for its message (rd vms-c6d1). Value from the
+ * V7.3 and V8.4 STARLET dumps (docs/oracle/{vax73,alpha84}-starlet-defs/SSDEF.txt). */
+#define SS__MBFULL      2264
 
 /*
  * SS__ENDOFFILE -- this tree's existing src/libvms/include/ssdef.h value
@@ -943,6 +954,13 @@ struct vms_proc {
      * REGISTER_CONTINUE like dfprot. "" = never set. Same hash_lock. */
     char                ddir[VMS_DDIR_SIZE];
 
+    /* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
+     * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
+     * privilege mask. Same hash_lock as the identity fields. */
+    uint32_t            rights_id[VMS_RIGHTS_MAX];
+    uint32_t            rights_attr[VMS_RIGHTS_MAX];
+    uint32_t            rights_n;
+
     struct rcu_head     rcu;
 };
 
@@ -1008,6 +1026,8 @@ struct vms_device {
     uint32_t            devbufsiz;      /* DVI$_DEVBUFSIZ */
     uint32_t            width;
     uint32_t            page;
+    uint32_t            perm_width;     /* PERMANENT width / page (rd vms-d900) */
+    uint32_t            perm_page;
 
     /*
      * Disk backing (devclass == DC$_DISK, vms-3e8). The Linux block device
@@ -1380,6 +1400,7 @@ long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
 /*
  * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
  * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its
@@ -1448,6 +1469,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the
@@ -1696,6 +1718,9 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * every outer mode; vms_lnm_proc_gone applies image rundown (user mode) or
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
+/* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
+ * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
+void vms_lnm_forget_device(const char *devnam);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 

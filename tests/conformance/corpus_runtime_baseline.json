@@ -1,12 +1,12 @@
 {
-  "total": 146,
+  "total": 150,
   "summary": {
-    "run-pass": 144,
-    "run-fail": 1,
+    "run-pass": 149,
+    "run-fail": 0,
     "run-crash": 1,
     "vm-crash": 0,
     "not-run": 0,
-    "run-pass-signaled": 9
+    "run-pass-signaled": 10
   },
   "programs": [
     {
@@ -61,6 +61,11 @@
     },
     {
       "name": "lib_crc",
+      "status": "run-pass",
+      "signaled": false
+    },
+    {
+      "name": "lib_create_dir",
       "status": "run-pass",
       "signaled": false
     },
@@ -601,8 +606,8 @@
     },
     {
       "name": "sys_forcex",
-      "status": "run-fail",
-      "signaled": false
+      "status": "run-pass",
+      "signaled": true
     },
     {
       "name": "sys_get_entropy",
@@ -738,8 +743,23 @@
       "name": "sys_trnlnm",
       "status": "run-pass",
       "signaled": false
+    },
+    {
+      "name": "ipc_pipe",
+      "status": "run-pass",
+      "signaled": false
+    },
+    {
+      "name": "sys_find_held",
+      "status": "run-pass",
+      "signaled": false
+    },
+    {
+      "name": "sys_ident",
+      "status": "run-pass",
+      "signaled": false
     }
   ],
   "timestamp": "2026-10-05T01:49:07Z",
-  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Taken from the CI runner (the reference environment); re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run. sys_forcex is timing-dependent (5s sleeps around a subprocess) and passed on a local KVM guest but not on the CI runner: it is held at its CI verdict until rd vms-f45 (test-flaky) is fixed."
+  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Taken from the CI runner (the reference environment); re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run. sys_forcex (rd vms-f45) was held at a CI run-fail until the lost /NOWAIT lib$spawn completion was fixed; it then passed 20 of 20 consecutive guest boots on the k3s rail (it failed 10 of 20 before), so it is floored as run-pass. sys_forcex now runs its spawned command file (LIB$SPAWN reads SYS$INPUT through RMS, vms-ccc) and prints the DCL's %DCL-E-NOFILE for `RUN <empty image name>` (JPI$_IMAGNAME is not sourced yet), hence signaled."
 }

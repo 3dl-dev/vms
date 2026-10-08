@@ -31,4 +31,31 @@ uint32_t ovmx_vmsabi_lnm(int create, const uint32_t *attr,
                          const uint8_t *acmode,
                          const struct ovmx_abi_item *items, unsigned n);
 
+/* $QIO IO$_ACCESS on a file-class channel (vms-38b): the file's attributes as
+ * the executive ACP reports them, in native form. */
+struct ovmx_abi_fileattr {
+    uint32_t uchar;            /* ATR$C_UCHAR */
+    uint16_t fpro;             /* ATR$C_FPRO */
+    uint16_t uic_member;       /* ATR$C_UIC: member, then group */
+    uint16_t uic_group;
+    uint8_t  recattr[32];      /* ATR$C_RECATTR: the FAT, verbatim */
+    uint8_t  credate[8], revdate[8], expdate[8], bakdate[8];
+    uint16_t fid[3];           /* the resolved File ID (FIB$W_FID) */
+    char     name[96];         /* resultant NAME.TYP;VER */
+    unsigned namelen;
+};
+
+/* IO$_ACCESS: resolve `name` (NAME.TYP[;VER]) in directory `did`, or open by
+ * `fid` when did is 0/0/0 and fid is not; acctl is FIB$L_ACCTL. keep != 0
+ * leaves the file accessed on the channel (IO$M_ACCESS) until IO$_DEACCESS.
+ * Returns the I/O status (SS$_ILLIOFUNC on a channel that is not a file-class
+ * channel). */
+uint32_t ovmx_vmsabi_acp_access(uint16_t chan, uint32_t acctl, const uint16_t did[3],
+                                const uint16_t fid[3], const char *name, unsigned namelen,
+                                int keep, struct ovmx_abi_fileattr *out);
+/* IO$_DEACCESS on a file-class channel. */
+uint32_t ovmx_vmsabi_acp_deaccess(uint16_t chan);
+/* Complete a $QIO: set the event flag and deliver the AST, if one was given. */
+void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), unsigned long long astprm);
+
 #endif /* SYS_VMSABI_CORE_H */

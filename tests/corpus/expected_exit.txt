@@ -18,3 +18,4 @@ sys_exit         1    # sys$exit(SS$_POWERFAIL): "the call's sole purpose is to 
 lib_signal       12   # lib$signal(SS$_ACCVIO=12): "Demonstrate how to signal an error" -- fatal, unhandled -> exit(12)
 lib_establish    12   # handler is established, then removed, then lib$signal(SS$_ACCVIO) "crashes the program" by design
 sys_delprc       143  # "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15)
+sys_brkthruw     132  # BRK$C_USERNAME to its own user, run with that user on no terminal (the guest corpus has no login): OpenVMS ends the IOSB SS$_DEVOFFLINE=132 (semantic oracle BRK.NOUSER, docs/oracle/semantics/brk/alpha84.txt + vax73.txt) and errchk_sig signals it -- fatal, unhandled -> exit(132)

@@ -644,8 +644,16 @@ uint32_t vms_kif_readef(uint32_t efn, uint32_t *state)
      * oracle (docs/oracle/semantics/ef/, cases EF.READ.64 .. EF.READ.M1, rd
      * vms-837). Only a success reports the cluster. */
     /* EFN$C_ENF (128 in the low byte, rd vms-3e9e) names no flag: $READEF
-     * answers WASSET and reports no cluster either. */
-    if (state && (args.status & 1) && (efn & 0xFFu) != 128u) *state = args.state;
+     * answers WASSET. What it leaves in the state longword is arch-divergent:
+     * VAX V7.3 leaves it, Alpha V8.4 writes 1 (semantic oracle EF.READ.128). */
+    if (state && (args.status & 1)) {
+        if ((efn & 0xFFu) != 128u)
+            *state = args.state;
+#if !defined(__vax__) && !defined(__vax)
+        else
+            *state = 1u;
+#endif
+    }
     return args.status;
 }
 
@@ -1640,6 +1648,31 @@ uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_siz
     return args.status;
 }
 
+/* RTAn: originating-terminal type/width/page/characteristics (rd vms-14b).
+ * Privileged; only the fields named in `flags` (VMS_TERMCHAR_M_*) apply. */
+uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
+                                  uint32_t devtype, uint32_t width, uint32_t page,
+                                  uint64_t setchar, uint64_t clrchar)
+{
+    struct vms_termchar_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    args.flags   = flags;
+    args.devtype = devtype;
+    args.width   = width;
+    args.page    = page;
+    args.setchar = setchar;
+    args.clrchar = clrchar;
+
+    KIF_CALL(VMS_IOCTL_TERM_SETCHAR, &args);
+    return args.status;
+}
+
 uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
 {
     struct vms_getvol_args args;
@@ -2100,6 +2133,54 @@ uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap)
     return args.status;
 }
 
+/* The process rights list (vms-7d5a): op GRANT/REVOKE one identifier of process
+ * `pid` (0 = the caller); *attrib in = the attributes to grant, out = the previous.
+ * The executive answers SS$_WASCLR / SS$_WASSET / SS$_NOPRIV / SS$_NONEXPR. */
+uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib)
+{
+    struct vms_rights_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.pid = pid;
+    args.id = id;
+    args.attrib = attrib ? *attrib : 0;
+
+    KIF_CALL(VMS_IOCTL_RIGHTS, &args);
+
+    if (attrib)
+        *attrib = args.attrib;
+    return args.status;
+}
+
+/* The rights list of process `pid` (0 = the caller), vms-d404 ($CHKPRO's
+ * subject): up to `cap` identifiers and their attributes; *count = how many
+ * the process holds (may exceed cap). */
+uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
+                             uint32_t cap, uint32_t *count)
+{
+    struct vms_rights_args args;
+    uint32_t i;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = VMS_RIGHTS_OP_LIST;
+    args.pid = pid;
+
+    KIF_CALL(VMS_IOCTL_RIGHTS, &args);
+
+    if (args.status & 1) {
+        for (i = 0; i < args.count && i < cap && i < VMS_RIGHTS_MAX; i++) {
+            if (ids)
+                ids[i] = args.ids[i];
+            if (attrs)
+                attrs[i] = args.attrs[i];
+        }
+        if (count)
+            *count = args.count;
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;
@@ -2406,6 +2487,14 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
                             const char *const *values, uint8_t num_values,
                             uint32_t attributes, uint8_t acmode)
 {
+    return vms_kif_lnm_define_n(table, name, values, NULL, num_values,
+                                attributes, acmode);
+}
+
+uint32_t vms_kif_lnm_define_n(uint32_t table, const char *name,
+                              const char *const *values, const uint16_t *lengths,
+                              uint8_t num_values, uint32_t attributes, uint8_t acmode)
+{
     struct vms_lnm_def_args args;
     unsigned i;
 
@@ -2434,9 +2523,12 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
 
     for (i = 0; i < num_values; i++) {
         const char *v = values[i] ? values[i] : "";
-        vms_strncpy(args.equiv[i].value, v, VMS_LNM_MAX_VALUE);
-        args.equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
-        args.equiv[i].length = (uint16_t)vms_strlen(args.equiv[i].value);
+        uint32_t vl = lengths ? lengths[i] : (uint32_t)vms_strlen(v);
+        if (vl > VMS_LNM_MAX_VALUE)
+            vl = VMS_LNM_MAX_VALUE;
+        vms_memcpy(args.equiv[i].value, v, vl);
+        args.equiv[i].value[vl] = '\0';
+        args.equiv[i].length = (uint16_t)vl;
         args.equiv[i].index = (uint8_t)i;
     }
 
@@ -2571,6 +2663,29 @@ static int lnm_name_eq(const char *a, const char *b, int case_blind)
     return case_blind ? vms_strcasecmp(a, b) == 0 : vms_strcmp(a, b) == 0;
 }
 
+/*
+ * Seqlock reader retry policy (rd vms-ec7e). A reader that samples an odd
+ * generation, or sees it move under its walk, retries. It used to spin 1024
+ * times flat out and then give up with -1 -- which every caller reads as "no
+ * such name": under TCG, with every process registration and teardown now
+ * opening a write section (LNM$PROCESS, rd vms-ef21), the budget ran out
+ * while a writer on another vCPU finished, and a SYS$SYSROOT / SYS$SYSTEM
+ * translation intermittently "failed" (measured: DECNETD's FAL persona proof
+ * lost SYS$SYSROOT mid-test). A name that exists never translates as absent
+ * because a writer was busy: spin briefly (a write section is a short bounded
+ * loop), then yield the CPU each retry so the writer can finish. The bound
+ * stays, so a wedged executive still surfaces as an error, not a hang.
+ */
+#define LNM_READ_SPINS 64
+#define LNM_READ_TRIES 65536
+static void lnm_read_backoff(int tries)
+{
+    if (tries >= LNM_READ_SPINS) {
+        struct vms_timespec ts = { 0, 1000 };
+        (void)vms_sys_nanosleep(&ts, 0);
+    }
+}
+
 int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
                        uint8_t max_acmode, struct vms_kif_lnm_enum_rec *out)
 {
@@ -2586,8 +2701,12 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
     if (!vms_kif_lnm_scope_of(table, &scope_key))
         return -1;
 
-    for (tries = 0; tries < 1024; tries++) {
-        uint64_t g0 = lnm_gen_load(a);
+    for (tries = 0; tries < LNM_READ_TRIES; tries++) {
+        uint64_t g0;
+
+        if (tries)
+            lnm_read_backoff(tries);
+        g0 = lnm_gen_load(a);
         uint32_t i, max;
         const struct vms_lnm_entry *best = 0;
 
@@ -2619,6 +2738,7 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
                     vlen = VMS_LNM_MAX_VALUE;
                 vms_memcpy(out->values[k], best->equiv[k].value, vlen);
                 out->values[k][vlen] = '\0';
+                out->value_len[k] = vlen;
             }
             out->num_values = nv;
             out->attributes = best->attributes;
@@ -2658,11 +2778,23 @@ int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
         *num_equiv = rec.num_values;
     if (index >= rec.num_values)
         return 0;
-    vlen = (uint16_t)vms_strlen(rec.values[index]);
-    if (vlen >= valsz)
-        vlen = (uint16_t)(valsz - 1);
-    vms_memcpy(value, rec.values[index], vlen);
-    value[vlen] = '\0';
+    {
+        /* The OVMX-internal C-string view. A process-permanent file's
+         * equivalence (ESC NUL IFI device, rd vms-b14e) reads as its DEVICE
+         * -- what $ASSIGN, RMS and SHOW LOGICAL use of it on OpenVMS -- since
+         * a C string cannot carry its NUL. sys$trnlnm returns the raw bytes. */
+        const char *src = rec.values[index];
+        uint16_t sl = rec.value_len[index];
+        if (vms_lnm_is_ppf(src, sl)) {
+            src += VMS_LNM_PPF_HDR;
+            sl = (uint16_t)(sl - VMS_LNM_PPF_HDR);
+        }
+        vlen = sl;
+        if (vlen >= valsz)
+            vlen = (uint16_t)(valsz - 1);
+        vms_memcpy(value, src, vlen);
+        value[vlen] = '\0';
+    }
     if (vallen)
         *vallen = vlen;
     if (attrs)
@@ -2714,8 +2846,12 @@ int vms_kif_lnm_enumerate(uint32_t table,
      * returns a stable snapshot -- never mid-walk, so a retry cannot
      * double-deliver an entry.
      */
-    for (tries = 0; tries < 1024; tries++) {
-        uint64_t g0 = lnm_gen_load(a);
+    for (tries = 0; tries < LNM_READ_TRIES; tries++) {
+        uint64_t g0;
+
+        if (tries)
+            lnm_read_backoff(tries);
+        g0 = lnm_gen_load(a);
         uint32_t i, max;
         uint32_t n = 0;
 
@@ -2747,6 +2883,7 @@ int vms_kif_lnm_enumerate(uint32_t table,
                     vlen = VMS_LNM_MAX_VALUE;
                 vms_memcpy(out[n].values[k], e->equiv[k].value, vlen);
                 out[n].values[k][vlen] = '\0';
+                out[n].value_len[k] = vlen;
             }
             out[n].num_values = nv;
 
@@ -2787,9 +2924,14 @@ static int mbx_bind_ok(void)
     return vms_dev_fd >= 0;
 }
 
-uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
-                            uint32_t *exec_chan, uint32_t *unit,
-                            char *devnam, uint32_t devnam_sz)
+/*
+ * vms_kif_mbx_create_prot - $CREMBX with its promsk (rd vms-c6d1): the SOGW
+ * protection mask the executive records with the mailbox (owner = the caller's
+ * UIC) and checks every $ASSIGN, read and write against.
+ */
+uint32_t vms_kif_mbx_create_prot(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                                 uint32_t promsk, uint32_t *exec_chan,
+                                 uint32_t *unit, char *devnam, uint32_t devnam_sz)
 {
     struct vms_mbx_create_args args;
 
@@ -2800,6 +2942,7 @@ uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
     args.permanent = permanent ? 1 : 0;
     args.maxmsg = maxmsg;
     args.bufquo = bufquo;
+    args.promsk = promsk & 0xFFFFu;
 
     KIF_CALL(VMS_IOCTL_MBX_CREATE, &args);
 
@@ -2812,6 +2955,14 @@ uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
         }
     }
     return args.status;
+}
+
+uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                            uint32_t *exec_chan, uint32_t *unit,
+                            char *devnam, uint32_t devnam_sz)
+{
+    return vms_kif_mbx_create_prot(permanent, maxmsg, bufquo, 0u, exec_chan,
+                                   unit, devnam, devnam_sz);
 }
 
 uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan)
@@ -2877,6 +3028,35 @@ uint32_t vms_kif_mbx_write_eof(uint32_t exec_chan)
     args.len = 0;
     args.flags = VMS_MBX_WRITE_EOF;
     KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
+    return args.status;
+}
+
+/*
+ * vms_kif_mbx_write_ex - vms_kif_mbx_write with the IO$M_NORSWAIT modifier
+ * (rd vms-c6d1): when `norswait` is set, a mailbox without room for the message
+ * completes the write at once with SS$_MBFULL instead of waiting for a reader --
+ * so a server answering into a client's mailbox can never be stalled by it.
+ */
+uint32_t vms_kif_mbx_write_ex(uint32_t exec_chan, const void *buf, uint32_t len,
+                              int norswait)
+{
+    struct vms_mbx_write_args args;
+
+    if (!buf)
+        return SS$_BADPARAM;
+    if (len > VMS_MBX_IOCTL_MAXLEN)
+        return SS$_EXQUOTA;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.len = len;
+    args.flags = norswait ? VMS_MBX_WRITE_NORSWAIT : 0u;
+    vms_memcpy(args.data, buf, len);
+
+    KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
+
     return args.status;
 }
 

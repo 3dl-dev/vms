@@ -464,3 +464,13 @@ sys$clrast=PROCEDURE
 sys$setdfprot=PROCEDURE
 # CLI callback registration -- DCL hands LIBVMS its symbol handler (rd vms-cded). APPENDED.
 lib$$set_cli_handler=PROCEDURE
+# STR$ routines the semantic oracle found missing (rd vms-afcd). APPENDED.
+str$pos_extr=PROCEDURE
+str$dupl_char=PROCEDURE
+str$find_first_in_set=PROCEDURE
+str$find_first_not_in_set=PROCEDURE
+sys$parse_acl=PROCEDURE
+sys$format_acl=PROCEDURE
+sys$grantid=PROCEDURE
+sys$revokid=PROCEDURE
+sys$create_user_profile=PROCEDURE

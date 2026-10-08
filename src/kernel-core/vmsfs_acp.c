@@ -40,6 +40,7 @@
 #include "exec_kbackend.h"
 #include "exec_list.h"
 #include "vms_acp_serve.h"   /* FC-P6.3: the MSCP server's read-only view */
+#include "vms_prot.h"        /* vms_prot_check: the executive's one protection decision */
 
 /* The served-volume projection restates the unit-name width so it can compile
  * in the host rung too (vms_acp_serve.h's own note). THIS file sees both, so
@@ -84,6 +85,27 @@ _Static_assert(VMS_ACP_SERVE_DEVNAM_MAX == VMS_DEVNAM_SIZE,
  * block/SCB at $MOUNT time. Executive-global: every process that $ASSIGNs the
  * unit reaches this SAME row, so the identity is the volume's, never a process's.
  */
+/*
+ * One retrieval-pointer run of an accessed file's window: VBNs [start_vbn ..
+ * start_vbn+count) map to LBNs [lbn .. lbn+count). Plain fixed-width fields (no
+ * codec type) so the channel struct compiles in the codec-free bootable build
+ * too.
+ */
+struct acp_win_ext {
+    uint32_t start_vbn;
+    uint32_t lbn;
+    uint32_t count;
+};
+
+/*
+ * The window cache size. A file with more than this many extents cannot be
+ * fully mapped by one IO$_ACCESS on this rung -- refused fail-honest
+ * (SS$_NOSUCHFILE is wrong; see the handler: it returns the honest "window
+ * did not fit" rather than a partial map). Generous for the boot corpus (the
+ * real-VAX fixture's files are 1-3 extents; INDEXF.SYS itself is 3).
+ */
+#define ACP_WINDOW_MAX 24
+
 struct vms_acp_volume {
     exec_list_node_t list;              /* in vms_acp_vol_list */
     char             devnam[VMS_DEVNAM_SIZE]; /* canonical unit name, e.g. "DKA0:" */
@@ -102,6 +124,19 @@ struct vms_acp_volume {
      * block so IO$_ACCESS need not re-read + re-parse the home block per open.
      */
     uint32_t         idx_lbn;           /* LBN of INDEXF.SYS file-1 header */
+    /*
+     * INDEXF.SYS's own retrieval map. File number N's header is INDEXF VBN
+     * hdr_vbn0 + (N - 1) (hdr_vbn0 = hm2_ibmapvbn + hm2_ibmapsize), mapped
+     * through the index file's extents: a volume INITIALIZEd by VMS holds only
+     * the first headers in the extent that follows the index bitmap and adds
+     * the rest as the index file is extended, elsewhere on the volume. idx_lbn
+     * + (N - 1) is right only inside that first extent. idx_alloc = blocks the
+     * index file has allocated (its window covers VBN 1..idx_alloc).
+     */
+    uint32_t         hdr_vbn0;
+    uint32_t         idx_alloc;
+    uint32_t         idxwin_n;
+    struct acp_win_ext idxwin[ACP_WINDOW_MAX];
     /*
      * Index-file bitmap base + capacity (vms-5303): hm2_ibmaplbn is the LBN of
      * the index bitmap (which precedes the headers -- idx_lbn = ibmap_lbn +
@@ -123,26 +158,6 @@ struct vms_acp_volume {
     uint32_t         vol_lkid;          /* standing F11B$v<label> lock handle, 0 if unheld */
 };
 
-/*
- * One retrieval-pointer run of an accessed file's window: VBNs [start_vbn ..
- * start_vbn+count) map to LBNs [lbn .. lbn+count). Plain fixed-width fields (no
- * codec type) so the channel struct compiles in the codec-free bootable build
- * too.
- */
-struct acp_win_ext {
-    uint32_t start_vbn;
-    uint32_t lbn;
-    uint32_t count;
-};
-
-/*
- * The window cache size. A file with more than this many extents cannot be
- * fully mapped by one IO$_ACCESS on this rung -- refused fail-honest
- * (SS$_NOSUCHFILE is wrong; see the handler: it returns the honest "window
- * did not fit" rather than a partial map). Generous for the boot corpus (the
- * real-VAX fixture's files are 1-3 extents; INDEXF.SYS itself is 3).
- */
-#define ACP_WINDOW_MAX 24
 
 /*
  * One process's file-class channel to a mounted volume. After IO$_ACCESS the
@@ -377,6 +392,16 @@ static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
     return 0;
 }
 
+/* The LBN of file number `fidnum`'s primary header: its INDEXF.SYS VBN mapped
+ * through the index file's extents. 0 when the index file does not (yet) hold
+ * that header. */
+static uint32_t acp_hdr_lbn(const struct vms_acp_volume *vol, uint32_t fidnum)
+{
+    if (fidnum == 0 || vol->idxwin_n == 0)
+        return 0;
+    return acp_window_map_vbn(vol->idxwin, vol->idxwin_n, vol->hdr_vbn0 + fidnum - 1u);
+}
+
 /* ================================================================
  * ODS-2 volume validation (vms-127) -- reads the home block + SCB off the
  * backing block device and confirms the media is genuine Files-11 ODS-2.
@@ -536,6 +561,26 @@ struct acp_val_scratch {
     ods2_scb_t  scb;
 };
 
+/* ods2_map_cb: collect INDEXF.SYS's extents into the volume's index window. An
+ * index file with more extents than the window holds is refused at $MOUNT. */
+static int acp_idxwin_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct vms_acp_volume *v = (struct vms_acp_volume *)ctx;
+
+    if (!ext || ext->count == 0)
+        return 0;
+    if (v->idxwin_n >= ACP_WINDOW_MAX) {
+        v->idxwin_n = 0;                /* cannot map it all: refuse the mount */
+        return 1;
+    }
+    v->idxwin[v->idxwin_n].start_vbn = v->idx_alloc + 1u;
+    v->idxwin[v->idxwin_n].lbn       = ext->lbn;
+    v->idxwin[v->idxwin_n].count     = ext->count;
+    v->idxwin_n++;
+    v->idx_alloc += ext->count;
+    return 0;
+}
+
 static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
                                   struct vms_acp_volume *out)
 {
@@ -583,6 +628,17 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
     out->volsize  = s->scb.scb_volsize;
     out->cluster  = s->scb.scb_cluster; /* storage-bitmap cluster factor (vms-e6f) */
     out->idx_lbn  = idx_lbn;            /* INDEXF.SYS file-1 header base (vms-204) */
+    /* INDEXF.SYS's map (its own header is file 1, inside the first extent). */
+    if (acp_bdev_read(major, minor, idx_lbn, s->blk, sizeof(s->blk)) != 0)
+        goto done;
+    if (ods2_fh2_parse(s->blk, sizeof(s->blk), &s->bmhdr) != ODS2_OK)
+        goto done;
+    out->idxwin_n = 0;
+    out->idx_alloc = 0;
+    if (ods2_fh2_map_walk(s->blk, acp_idxwin_cb, out, NULL) != ODS2_OK ||
+        out->idxwin_n == 0)
+        goto done;
+    out->hdr_vbn0 = (uint32_t)s->home.hm2_ibmapvbn + s->home.hm2_ibmapsize;
     out->ibmap_lbn = s->home.hm2_ibmaplbn;   /* index-bitmap base (vms-5303) */
     out->maxfiles  = s->home.hm2_maxfiles;   /* index-file capacity (vms-5303) */
     memcpy(out->volname, s->home.hm2_volname, 12);
@@ -992,53 +1048,103 @@ out:
 #if defined(OVMX_ODS2_KERNEL)
 
 /*
- * Privilege overrides on a protection check (public $PRVDEF bit numbers, Rule 8
- * clean-room -- src/libvms/include/prvdef.h carries the same values): BYPASS
- * (29) lifts all object access control; READALL (35) grants read to any object;
- * SYSPRV (28) makes the accessor qualify for the SYSTEM protection category.
+ * ACCESS CONTROL LISTS (vms-d404). Grounded on OpenVMS VAX V7.3, see
+ * docs/oracle/vax73-acl.md: an ACE is ACE$B_SIZE, ACE$B_TYPE, ACE$W_FLAGS,
+ * ACE$L_ACCESS, then (identifier ACE, ACE$C_KEYID) one longword per identifier.
  */
-#define ACP_PRV_M_SYSPRV   (1ULL << 28)
-#define ACP_PRV_M_BYPASS   (1ULL << 29)
-#define ACP_PRV_M_READALL  (1ULL << 35)
+#define ACP_ACE_KEYID       1u        /* ACE$C_KEYID */
+#define ACP_ACE_M_DEFAULT   0x0100u   /* ACE$M_DEFAULT: propagated, not used for this file */
+#define ACP_ACE_M_PROTECTED 0x0200u   /* ACE$M_PROTECTED: survives a delete-all */
+#define ACP_ACE_M_CONTROL   0x10u     /* ACE$M_CONTROL */
+#define ACP_UIC_WILD_GROUP  0x3FFFu   /* [*,m]: an identifier's wildcard group */
+#define ACP_UIC_WILD_MEMBER 0xFFFFu   /* [g,*]: its wildcard member */
 
-/*
- * The SYSTEM protection category covers a UIC whose GROUP number is <=
- * MAXSYSGROUP -- a SYSGEN parameter whose documented default is 8 (public
- * OpenVMS System Management / SYSGEN documentation); OVMX uses that default.
- * OVMX maps a Linux uid/gid to UIC [gid,uid] (vms_module.c), so root is group 0,
- * which the standard `group <= MAXSYSGROUP` test includes -- root reads system
- * files through the SYSTEM protection field, exactly as a VMS [1,x] system
- * process does. SYSPRV also confers the SYSTEM category.
- */
-#define ACP_MAXSYSGROUP    8u
+/* Does the process hold identifier `id`? `*` (0xFFFFFFFF) is held by every
+ * process. A UIC identifier (bit 31 clear) is held
+ * when it names the process UIC, either half possibly the wildcard. A general
+ * identifier is held when the process rights list carries it ($GRANTID,
+ * vms_ioctl_rights). */
+static int acp_proc_holds(const struct vms_proc *proc, uint32_t id)
+{
+    if (id == 0xFFFFFFFFu)
+        return 1;                               /* IDENTIFIER=*: everyone */
+    if (!(id & 0x80000000u)) {
+        uint32_t g = (id >> 16) & 0x3FFFu, m = id & 0xFFFFu;
+        uint32_t pg = (proc->uic >> 16) & 0xFFFFu, pm = proc->uic & 0xFFFFu;
+
+        return (g == ACP_UIC_WILD_GROUP || g == pg) &&
+               (m == ACP_UIC_WILD_MEMBER || m == pm);
+    }
+    {
+        uint32_t i;
+        for (i = 0; i < proc->rights_n && i < VMS_RIGHTS_MAX; i++)
+            if (proc->rights_id[i] == id)
+                return 1;               /* held through the process rights list */
+    }
+    return 0;
+}
+
+static uint32_t acp_rd32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+/* The first identifier ACE of the file's ACL whose identifiers the process ALL
+ * holds; DEFAULT ACEs are skipped (they are for files created in a directory,
+ * not for the directory itself). Returns 1 and its ACE$L_ACCESS in *access, or
+ * 0 when no ACE applies (then the protection code alone decides). */
+static int acp_acl_match(const struct vms_proc *proc, const ods2_fh2_t *fh,
+                         uint32_t *access)
+{
+    const uint8_t *h = (const uint8_t *)fh;
+    size_t off, len, pos = 0;
+
+    if (!ods2_fh2_acl_area(h, &off, &len))
+        return 0;
+    while (pos + 4u <= len) {
+        const uint8_t *ace = h + off + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+
+        if (sz < 4u || pos + sz > len)
+            break;                              /* end of list / malformed tail */
+        if (ace[1] == ACP_ACE_KEYID && sz >= 12u && !(flags & ACP_ACE_M_DEFAULT)) {
+            unsigned k, nid = (sz - 8u) / 4u;
+            int all = 1;
+
+            for (k = 0; k < nid && all; k++)
+                all = acp_proc_holds(proc, acp_rd32(ace + 8u + 4u * k));
+            if (all) {
+                *access = acp_rd32(ace + 4u);
+                return 1;
+            }
+        }
+        pos += sz;
+    }
+    return 0;
+}
 
 /*
  * acp_check_access - the Files-11 protection gate (INV-6). Grant the requested
- * access (read always; write additionally when `want_write`) iff SOME category
- * the accessor belongs to allows it, or a privilege overrides. Within each
- * 4-bit protection field a SET bit DENIES (bit0=Read, bit1=Write); the four
- * fields are System, Owner, Group, World (low to high nibble). Returns
- * SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
+ * access (read always; write additionally when `want_write`) through the
+ * executive's ONE protection decision, vms_prot_check() (src/kernel-core/
+ * vms_prot.h): the accessor's UIC and enabled privileges against the file
+ * header's owner UIC (FH2$L_FILEOWNER) and SOGW protection (FH2$W_FILEPROT).
+ * BYPASS, READALL and SYSPRV are applied there, for every object class alike.
+ * Returns SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
  */
-/* Largest initial allocation (blocks) a new directory may be created with: the
- * same ceiling acp_dir_mutate enforces on a directory's size (ACP_DIR_MAX_BLOCKS). */
-#define ACP_DIR_MAX_INIT_ALLOC 64u
-
 static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
                                  int want_write)
 {
-    uint16_t prot = fh->fh2_fileprot;
-    uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu;
-    uint32_t acc_member = proc->uic & 0xFFFFu;
-    uint32_t own_group = fh->fh2_fileowner.uic_group;
-    uint32_t own_member = fh->fh2_fileowner.uic_member;
-    uint64_t privs = proc->cur_privs;
-    unsigned want = 0x1u;               /* read */
-    unsigned denied;
-    int is_system, is_owner, is_group;
+    uint32_t owner_uic = ((uint32_t)fh->fh2_fileowner.uic_group << 16) |
+                         (uint32_t)fh->fh2_fileowner.uic_member;
+    unsigned want = VMS_PROT_ACC_READ;
+    int ace_matched;
+    uint32_t ace_access = 0;
 
     if (want_write)
-        want |= 0x2u;                   /* write */
+        want |= VMS_PROT_ACC_WRITE;
 
     /*
      * DIRECTORY TRAVERSAL vs READ (vms-548b). The ACP opens a directory only to
@@ -1053,35 +1159,24 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
      * needs write and is unaffected.
      */
     if (!want_write && (fh->fh2_filechar & ODS2_FH2_M_DIRECTORY))
-        want = 0x4u;                    /* execute (traversal) */
+        want = VMS_PROT_ACC_EXECUTE;    /* execute (traversal) */
 
-    /* BYPASS lifts every access control. READALL grants the read bit. */
-    if (privs & ACP_PRV_M_BYPASS)
-        return SS__NORMAL;
-    if ((privs & ACP_PRV_M_READALL) && !want_write)
-        return SS__NORMAL;
+    /*
+     * The ACL first (vms-d404, docs/oracle/vax73-acl.md): the first identifier
+     * ACE the process matches. vms_prot_check_acl() then decides with it -- the
+     * privilege overrides, a granting ACE, and otherwise the protection code with
+     * group/world closed by a matching ACE that denied.
+     */
+    ace_matched = acp_acl_match(proc, fh, &ace_access);
 
-    is_owner  = (acc_group == own_group && acc_member == own_member);
-    is_group  = (acc_group == own_group);
-    is_system = (acc_group <= ACP_MAXSYSGROUP) ||
-                (privs & ACP_PRV_M_SYSPRV) != 0;
-
-    /* Access is granted if ANY applicable category leaves the wanted bits
-     * un-denied. Start denied; clear a want bit as soon as a category allows
-     * it. World always applies. */
-    denied = want;
-    if (is_system) denied &= ~(~(unsigned)(prot & 0xFu) & want);
-    if (is_owner)  denied &= ~(~(unsigned)((prot >> 4) & 0xFu) & want);
-    if (is_group)  denied &= ~(~(unsigned)((prot >> 8) & 0xFu) & want);
-    /* World: */    denied &= ~(~(unsigned)((prot >> 12) & 0xFu) & want);
-
-    return denied ? SS__NOPRIV : SS__NORMAL;
+    return vms_prot_check_acl(proc->uic, proc->cur_privs, owner_uic,
+                              fh->fh2_fileprot, want, ace_matched, ace_access);
 }
 
 /*
  * acp_read_header - read + validate file number `fid_num`'s primary FH2 into
  * `raw` (>= 512 bytes) and its parsed form into `*parsed`. Header N is at
- * vol->idx_lbn + (N-1), the INDEXF.SYS arithmetic the codec's reader uses.
+ * INDEXF.SYS VBN hdr_vbn0 + (N-1), mapped through the index file's extents.
  * A bad FID / unreadable or non-validating header is SS__NOSUCHFILE.
  */
 static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
@@ -1091,7 +1186,9 @@ static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
 
     if (fid_num == 0)
         return SS__NOSUCHFILE;
-    lbn = vol->idx_lbn + (fid_num - 1u);
+    lbn = acp_hdr_lbn(vol, fid_num);
+    if (lbn == 0)
+        return SS__NOSUCHFILE;
     if (acp_bdev_read(vol->backing_major, vol->backing_minor,
                                  lbn, raw, ACP_BLOCK_SIZE) != 0)
         return SS__NOSUCHFILE;
@@ -2162,6 +2259,7 @@ struct acp_chan_snap {
     uint32_t           backing_major;
     uint32_t           backing_minor;
     uint32_t           idx_lbn;         /* INDEXF.SYS file-1 header base */
+    uint32_t           hdr_lbn;         /* this file's primary header (INDEXF-mapped) */
     uint32_t           volsize;
     uint32_t           win_n;
     struct acp_win_ext win[ACP_WINDOW_MAX];
@@ -2193,6 +2291,7 @@ static uint32_t acp_chan_snapshot(struct vms_proc *proc, uint32_t chan,
         snap->backing_major = ch->vol->backing_major;
         snap->backing_minor = ch->vol->backing_minor;
         snap->idx_lbn       = ch->vol->idx_lbn;
+        snap->hdr_lbn       = acp_hdr_lbn(ch->vol, snap->fid_num);
         snap->volsize       = ch->vol->volsize;
         snap->win_n         = ch->win_n;
         memcpy(snap->win, ch->win, ch->win_n * sizeof(ch->win[0]));
@@ -2664,7 +2763,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
      * advertises valid bytes that were not written ---- */
 #if defined(OVMX_ODS2_KERNEL)
     if (extended || new_valid != old_valid) {
-        uint32_t hdr_lbn = snap->idx_lbn + (snap->fid_num - 1u);
+        uint32_t hdr_lbn = snap->hdr_lbn;
 
         if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                      hdr_lbn, s->hdr, ACP_BLOCK_SIZE) != 0 ||
@@ -2920,21 +3019,121 @@ static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
     return SS__NORMAL;
 }
 
-/* Ordered LBN list of a directory's data blocks, collected VBN-order. */
+/*
+ * acp_idx_extend - make INDEXF.SYS hold file number `fidnum`'s header, as the
+ * Files-11 ACP extends the index file when a free file number lies past the
+ * headers it has allocated. A VMS-initialized volume allocates only its first
+ * headers after the index bitmap; the rest of the index file grows elsewhere on
+ * the volume. The new run (zero-filled by acp_bitmap_alloc: an unused header) is
+ * appended to the index file's map, its end of file moves with it, and the
+ * volume's index window learns the extent. Never past hm2_maxfiles headers.
+ */
+#define ACP_IDX_EXTEND 16u
+static uint32_t acp_idx_extend(struct vms_acp_volume *vol, struct acp_fileop_scratch *sc,
+                               uint32_t fidnum)
+{
+    uint32_t want = vol->hdr_vbn0 + fidnum - 1u;
+    uint32_t cap = vol->hdr_vbn0 + vol->maxfiles - 1u;
+    uint32_t n, lbn = 0, hib, efb, st;
+    unsigned mpoff, inuse, limit;
+    uint8_t *hdr;
+    ods2_recattr_t ra;
+
+    if (want <= vol->idx_alloc)
+        return SS__NORMAL;
+    if (vol->idxwin_n >= ACP_WINDOW_MAX || want > cap)
+        return SS__DEVICEFULL;
+    n = want - vol->idx_alloc;
+    if (n < ACP_IDX_EXTEND)
+        n = ACP_IDX_EXTEND;
+    if (vol->idx_alloc + n > cap)
+        n = cap - vol->idx_alloc;
+    if (n > 256u)
+        return SS__DEVICEFULL;
+
+    hdr = exec_zalloc(ACP_BLOCK_SIZE);
+    if (!hdr)
+        return SS__INSFMEM;
+    if (acp_bdev_read(vol->backing_major, vol->backing_minor, vol->idx_lbn, hdr,
+                      ACP_BLOCK_SIZE) != 0 || acp_fh2_self_fidnum(hdr) != ODS2_FID_INDEXF) {
+        exec_free(hdr);
+        return SS__DEVNOTMOUNT;
+    }
+    /* room for one more retrieval pointer, checked before any block is taken */
+    mpoff = hdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    inuse = hdr[offsetof(ods2_fh2_t, fh2_map_inuse)];
+    limit = hdr[offsetof(ods2_fh2_t, fh2_acoffset)];
+    if (hdr[offsetof(ods2_fh2_t, fh2_rsoffset)] < limit)
+        limit = hdr[offsetof(ods2_fh2_t, fh2_rsoffset)];
+    if (mpoff + inuse + 3u > limit) {
+        exec_free(hdr);
+        return SS__DEVICEFULL;
+    }
+    acp_snap_from_vol(&sc->snap, vol);
+    st = acp_bitmap_alloc(&sc->snap, &sc->rw, n, &lbn);
+    if (st != SS__NORMAL) {
+        exec_free(hdr);
+        return st;
+    }
+    if (ods2_fh2_map_append(hdr, lbn, n) != ODS2_OK) {
+        exec_free(hdr);
+        return SS__DEVICEFULL;
+    }
+    memcpy(&ra, hdr + offsetof(ods2_fh2_t, fh2_recattr), sizeof(ra));
+    hib = vol->idx_alloc + n;
+    efb = ods2_recattr_efblk(&ra);
+    if (efb > vol->idx_alloc)
+        efb = hib + 1u;                 /* the end of file was at the end: it moves */
+    (void)ods2_fh2_set_eof(hdr, hib, efb, ra.fat_ffbyte);
+    ods2_fh2_reseal(hdr);
+    if (acp_bdev_write(vol->backing_major, vol->backing_minor, vol->idx_lbn, hdr,
+                       ACP_BLOCK_SIZE) != 0) {
+        exec_free(hdr);
+        return SS__DEVNOTMOUNT;
+    }
+    exec_free(hdr);
+    vol->idxwin[vol->idxwin_n].start_vbn = vol->idx_alloc + 1u;
+    vol->idxwin[vol->idxwin_n].lbn = lbn;
+    vol->idxwin[vol->idxwin_n].count = n;
+    vol->idxwin_n++;
+    vol->idx_alloc = hib;
+    return SS__NORMAL;
+}
+
+/* Ordered LBN list of a directory's data blocks, collected VBN-order: the first
+ * ACP_DIR_MAX_BLOCKS of them in lbn[], and the count of ALL allocated blocks in
+ * `alloc` (a preallocated directory can hold many more than it uses). */
 struct acp_dir_lbns {
     uint32_t lbn[ACP_DIR_MAX_BLOCKS];
     unsigned n;
-    int      overflow;
+    uint32_t alloc;
 };
 static int acp_dir_lbn_cb(const ods2_extent_t *ext, void *ctx)
 {
     struct acp_dir_lbns *d = (struct acp_dir_lbns *)ctx;
     uint32_t k;
     for (k = 0; k < ext->count; k++) {
-        if (d->n >= ACP_DIR_MAX_BLOCKS) { d->overflow = 1; return 1; }
-        d->lbn[d->n++] = ext->lbn + k;
+        if (d->n < ACP_DIR_MAX_BLOCKS)
+            d->lbn[d->n++] = ext->lbn + k;
+        d->alloc++;
     }
     return 0;
+}
+
+/* Blocks a directory USES: VBN 1 up to its end of file (FAT efblk/ffbyte), the
+ * rest of its allocation being preallocated space past the end. A header whose
+ * end of file says nothing usable (zero, or past the allocation) uses all of it. */
+static uint32_t acp_dir_used_blocks(const uint8_t *dirhdr, uint32_t alloc)
+{
+    ods2_recattr_t ra;
+    uint32_t efblk, used;
+
+    memcpy(&ra, dirhdr + offsetof(ods2_fh2_t, fh2_recattr), sizeof(ra));
+    efblk = ods2_recattr_efblk(&ra);
+    if (efblk == 0)
+        return alloc;
+    used = ra.fat_ffbyte ? efblk : efblk - 1u;
+    return (used == 0 || used > alloc) ? alloc : used;
 }
 
 /*
@@ -2949,7 +3148,7 @@ static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
 {
     unsigned mpoff = dirhdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
     uint8_t *mp = dirhdr + (size_t)mpoff * 2u;
-    size_t mapcap = ACP_BLOCK_SIZE - (size_t)mpoff * 2u - 2u;
+    size_t mapcap = ods2_fh2_map_end(dirhdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
     unsigned b = 0;
 
     memset(mp, 0, mapcap);
@@ -2991,11 +3190,12 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     uint32_t status = SS__NORMAL;
     ods2_status_t st;
 
-    dl.n = 0; dl.overflow = 0;
-    if (ods2_fh2_map_walk(dirhdr, acp_dir_lbn_cb, &dl, NULL) != ODS2_OK || dl.overflow ||
-        dl.n == 0)
+    dl.n = 0; dl.alloc = 0;
+    if (ods2_fh2_map_walk(dirhdr, acp_dir_lbn_cb, &dl, NULL) != ODS2_OK || dl.n == 0)
         return SS__DEVICEFULL;
-    nblk = dl.n;
+    nblk = acp_dir_used_blocks(dirhdr, dl.alloc);   /* only the blocks in use */
+    if (nblk > ACP_DIR_MAX_BLOCKS)
+        return SS__DEVICEFULL;
 
     inbuf  = exec_zalloc((size_t)nblk * ACP_BLOCK_SIZE);
     outbuf = exec_zalloc((size_t)(nblk + 1u) * ACP_BLOCK_SIZE);
@@ -3038,9 +3238,15 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
         goto done;
     }
 
-    /* Grow the directory file if the repack needs more blocks (insert only). */
-    if (out_nblk > nblk) {
-        uint32_t run_lbn = 0, extra = out_nblk - nblk, k;
+    /* Grow the directory file if the repack needs more blocks (insert only):
+     * into its own preallocated blocks past the end of file first, and only
+     * beyond its allocation from BITMAP.SYS. */
+    if (out_nblk > nblk && out_nblk > ACP_DIR_MAX_BLOCKS) {
+        status = SS__DEVICEFULL;
+        goto done;
+    }
+    if (out_nblk > nblk && out_nblk > dl.alloc) {
+        uint32_t run_lbn = 0, extra = out_nblk - dl.alloc, k;
         acp_snap_from_vol(&sc->snap, vol);
         status = acp_bitmap_alloc(&sc->snap, &sc->rw, extra, &run_lbn);
         if (status != SS__NORMAL)
@@ -3061,11 +3267,20 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
         }
     }
 
-    /* Rewrite the directory's own FH2 map + EOF only when it grew. */
-    if (out_nblk > nblk)
+    /* When it grew: past its allocation, rewrite the directory's own FH2 map +
+     * EOF; within it, only the end of file moves (the map already holds the
+     * blocks). */
+    if (out_nblk > nblk && out_nblk > dl.alloc) {
         status = acp_dir_write_grown_map(vol, dirhdr,
-                                         vol->idx_lbn + (dir_fidnum - 1u),
+                                         acp_hdr_lbn(vol, dir_fidnum),
                                          dl.lbn, out_nblk);
+    } else if (out_nblk > nblk) {
+        (void)ods2_fh2_set_eof(dirhdr, dl.alloc, out_nblk + 1u, 0);
+        ods2_fh2_reseal(dirhdr);
+        if (acp_bdev_write(vol->backing_major, vol->backing_minor,
+                           acp_hdr_lbn(vol, dir_fidnum), dirhdr, ACP_BLOCK_SIZE) != 0)
+            status = SS__DEVNOTMOUNT;
+    }
 
 done:
     if (inbuf)  exec_free(inbuf);
@@ -3141,6 +3356,203 @@ static void acp_apply_recattr(uint8_t *filehdr, const uint8_t *ra)
         memcpy(fat + f[i].off, ra + f[i].off, f[i].len);
 }
 
+/*
+ * CONTROL access over a file (vms-d404): what changing its ACL requires. The
+ * system and owner categories hold it implicitly; anyone else needs an ACE that
+ * grants CONTROL; BYPASS overrides.
+ */
+static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
+{
+    uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu, acc_member = proc->uic & 0xFFFFu;
+    uint32_t access = 0;
+
+    if (proc->cur_privs & (VMS_PRV_M_BYPASS | VMS_PRV_M_SYSPRV))
+        return 1;
+    if (acc_group <= VMS_PROT_MAXSYSGROUP)
+        return 1;
+    if (acc_group == fh->fh2_fileowner.uic_group && acc_member == fh->fh2_fileowner.uic_member)
+        return 1;
+    return acp_acl_match(proc, fh, &access) && (access & ACP_ACE_M_CONTROL);
+}
+
+/* Two ACEs name the same thing (an add replaces it, a delete removes it): same
+ * type and, for an identifier ACE, the same identifiers; a DEFAULT_PROTECTION ACE
+ * by type alone; anything else byte for byte. */
+/*
+ * ACL INHERITANCE ON CREATE (vms-d404, docs/oracle/vax73-acl/default-propagation.txt,
+ * OpenVMS VAX V7.3). `src` is the header the new file inherits from:
+ *
+ *   ACP_INHERIT_FILE  a new file from its directory: each ACE carrying
+ *                     OPTIONS=DEFAULT, with DEFAULT cleared (NOPROPAGATE stays);
+ *                     a DEFAULT_PROTECTION ACE is not copied, it gives the
+ *                     file's protection (*dprot, *have_dprot).
+ *   ACP_INHERIT_DIR   a new directory from its parent: the parent's whole ACL,
+ *                     flags as they are, except NOPROPAGATE ACEs.
+ *   ACP_INHERIT_VER   a new version from the previous one: its ACL except
+ *                     NOPROPAGATE ACEs.
+ *
+ * Writes the inherited ACEs back to back into out[0..cap) and their length into
+ * *outlen; SS__ACLFULL when they do not fit.
+ */
+#define ACP_ACE_DIRDEF        9u        /* ACE$C_DIRDEF: DEFAULT_PROTECTION */
+#define ACP_ACE_M_NOPROPAGATE 0x0800u   /* ACE$M_NOPROPAGATE */
+enum { ACP_INHERIT_FILE, ACP_INHERIT_DIR, ACP_INHERIT_VER };
+
+static uint32_t acp_acl_inherit(const uint8_t *src, int mode, uint8_t *out, size_t cap,
+                                size_t *outlen, int *have_dprot, uint16_t *dprot)
+{
+    size_t off, len, pos = 0, n = 0;
+
+    *outlen = 0;
+    if (!ods2_fh2_acl_area(src, &off, &len))
+        return SS__NORMAL;
+    while (pos + 4u <= len) {
+        const uint8_t *ace = src + off + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+        int copy;
+
+        if (sz < 4u || pos + sz > len)
+            break;
+        if (mode == ACP_INHERIT_FILE) {
+            if (ace[1] == ACP_ACE_DIRDEF && sz >= 24u) {
+                /* S/O/G/W deny longwords at +8/+12/+16/+20 -> one protection word */
+                if (have_dprot && dprot) {
+                    *dprot = (uint16_t)((ace[8] & 0xFu) | ((ace[12] & 0xFu) << 4) |
+                                        ((ace[16] & 0xFu) << 8) | ((ace[20] & 0xFu) << 12));
+                    *have_dprot = 1;
+                }
+                copy = 0;
+            } else {
+                copy = (flags & ACP_ACE_M_DEFAULT) != 0;
+            }
+        } else {
+            copy = !(flags & ACP_ACE_M_NOPROPAGATE);
+        }
+        if (copy) {
+            if (n + sz > cap)
+                return SS__ACLFULL;
+            memcpy(out + n, ace, sz);
+            if (mode == ACP_INHERIT_FILE) {
+                flags &= (uint16_t)~ACP_ACE_M_DEFAULT;
+                out[n + 2] = (uint8_t)flags;
+                out[n + 3] = (uint8_t)(flags >> 8);
+            }
+            n += sz;
+        }
+        pos += sz;
+    }
+    *outlen = n;
+    return SS__NORMAL;
+}
+
+static int acp_ace_same(const uint8_t *a, const uint8_t *b)
+{
+    if (a[1] != b[1])
+        return 0;
+    if (a[1] == ACP_ACE_KEYID)
+        return a[0] == b[0] && a[0] >= 12u && memcmp(a + 8, b + 8, a[0] - 8u) == 0;
+    if (a[1] == 9u)                             /* ACE$C_DIRDEF */
+        return 1;
+    return a[0] == b[0] && memcmp(a + 4, b + 4, a[0] - 4u) == 0;
+}
+
+/*
+ * acp_acl_op - IO$_MODIFY's access control list operations on the file whose
+ * header is in sc->filehdr (number file_fidnum): READ returns the ACL; ADD puts
+ * one ACE first, replacing an ACE for the same identifiers wherever it was; DEL
+ * removes the ACE for the given identifiers (SS$_NOENTRY if there is none);
+ * DELETEALL removes every ACE but the PROTECTED ones. Observed behaviour:
+ * docs/oracle/vax73-acl.md. An ACL that does not fit in the primary header is
+ * SS$_ACLFULL (VMS continues it in an extension header; not done here).
+ */
+static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
+                           struct acp_fileop_scratch *sc, uint32_t file_fidnum,
+                           struct vms_acp_fileop_args *a)
+{
+    const uint8_t *h = sc->filehdr;
+    uint8_t *out = sc->tdirhdr;                 /* MOVE scratch, free on this path */
+    uint8_t *ace_in = sc->ibblk;                /* index-bitmap scratch, free on this path */
+    size_t off = 0, len = 0, pos, n = 0;
+    int have = ods2_fh2_acl_area(h, &off, &len);
+    int found = 0;
+    uint32_t status, hdr_lbn;
+
+    if (!have)
+        len = 0;
+    if (a->acl_op == VMS_ACP_ACL_READ) {
+        status = acp_check_access(proc, &sc->fh, 0);
+        if (status != SS__NORMAL)
+            return status;
+        /* the list ends at the first zero-size ACE (an area may carry slack) */
+        for (pos = 0; pos + 4u <= len && h[off + pos] >= 4u && pos + h[off + pos] <= len;
+             pos += h[off + pos])
+            ;
+        if (pos == 0)
+            return SS__ACLEMPTY;
+        if (pos > a->acl_len || !a->acl_buf)
+            return SS__BADPARAM;            /* no room for the whole ACL */
+        if (exec_copyout((void *)(unsigned long)a->acl_buf, h + off, pos))
+            return SS__ACCVIO;
+        a->acl_len = (uint32_t)pos;
+        return SS__NORMAL;
+    }
+    if (a->acl_op != VMS_ACP_ACL_ADD && a->acl_op != VMS_ACP_ACL_DEL &&
+        a->acl_op != VMS_ACP_ACL_DELETEALL && a->acl_op != VMS_ACP_ACL_PURGE)
+        return SS__BADPARAM;
+    if (!acp_has_control(proc, &sc->fh))
+        return SS__NOPRIV;
+    if (a->acl_op == VMS_ACP_ACL_PURGE)
+        len = 0;                                /* every ACE, protected ones too */
+    else if (a->acl_op != VMS_ACP_ACL_DELETEALL) {
+        unsigned sz;
+        if (a->acl_len < 8u || a->acl_len > 255u || !a->acl_buf)
+            return SS__IVACL;
+        if (exec_copyin(ace_in, (const void *)(unsigned long)a->acl_buf, a->acl_len))
+            return SS__ACCVIO;
+        sz = ace_in[0];
+        if (sz != a->acl_len || (sz & 1u) ||
+            (ace_in[1] == ACP_ACE_KEYID && (sz < 12u || (sz - 8u) % 4u)))
+            return SS__IVACL;
+    }
+    if (a->acl_op == VMS_ACP_ACL_ADD) {
+        memcpy(out, ace_in, a->acl_len);
+        n = a->acl_len;
+    }
+    for (pos = 0; pos + 4u <= len; ) {
+        const uint8_t *ace = h + off + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+        int drop = 0;
+
+        if (sz < 4u || pos + sz > len)
+            break;
+        if (a->acl_op == VMS_ACP_ACL_DELETEALL)
+            drop = !(flags & ACP_ACE_M_PROTECTED);
+        else if (!found && acp_ace_same(ace, ace_in))
+            drop = found = 1;
+        if (!drop) {
+            if (n + sz > ACP_BLOCK_SIZE)
+                return SS__ACLFULL;
+            memcpy(out + n, ace, sz);
+            n += sz;
+        }
+        pos += sz;
+    }
+    if (a->acl_op == VMS_ACP_ACL_DEL && !found)
+        return SS__NOENTRY;
+    if (ods2_fh2_acl_set(sc->filehdr, out, n) != ODS2_OK)
+        return SS__ACLFULL;
+    ods2_fh2_reseal(sc->filehdr);
+    hdr_lbn = acp_hdr_lbn(vol, file_fidnum);
+    if (hdr_lbn == 0 ||
+        acp_bdev_write(vol->backing_major, vol->backing_minor, hdr_lbn,
+                       sc->filehdr, ACP_BLOCK_SIZE) != 0)
+        return SS__DEVNOTMOUNT;
+    a->acl_len = (uint32_t)n;
+    return SS__NORMAL;
+}
+
 #endif /* OVMX_ODS2_KERNEL */
 
 long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
@@ -3209,6 +3621,31 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             uint16_t fileprot = 0;
             int is_dir = (args.attr.filechar & ODS2_FH2_M_DIRECTORY) != 0;
             uint32_t alloc_count;
+            ods2_fid_t prev;
+            const uint8_t *inherit_from;
+            int inherit_mode, have_dprot = 0;
+            uint16_t dprot = 0;
+            size_t acl_len = 0;
+
+            /* Naming ANOTHER owner for the new file takes privilege, as on
+             * VMS (rd vms-47fd): a SYSTEM user (SYSPRV, or a UIC group <=
+             * MAXSYSGROUP -- the same test acp_check_access applies) or
+             * BYPASS, or GRPPRV for an owner in the creator's own group. The
+             * creator's own UIC is always fine. Refused before anything is
+             * allocated. */
+            if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                uint32_t want = ((uint32_t)args.attr.uic_group << 16) |
+                                args.attr.uic_member;
+                uint32_t my_grp = (proc->uic >> 16) & 0xFFFFu;
+                int sys_user = my_grp <= ACP_MAXSYSGROUP ||
+                               (proc->cur_privs & (ACP_PRV_M_SYSPRV | ACP_PRV_M_BYPASS));
+                int grp_ok = args.attr.uic_group == my_grp &&
+                             (proc->cur_privs & VMS_PRV_M_GRPPRV);
+                if (want != proc->uic && !sys_user && !grp_ok) {
+                    args.status = SS__NOPRIV;
+                    goto free_sc;
+                }
+            }
 
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
@@ -3229,6 +3666,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
             /* New highest version (VMS $CREATE default): highest existing + 1. */
+            memset(&prev, 0, sizeof(prev));
             if (args.version != 0) {
                 new_version = args.version;
             } else {
@@ -3236,11 +3674,41 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 uint32_t fst = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, args.name,
                                             0, &cur, &curver);
                 new_version = (fst == SS__NORMAL) ? (uint16_t)(curver + 1u) : 1u;
+                if (fst == SS__NORMAL)
+                    prev = cur;
+            }
+            /* What the new file inherits (vms-d404): a new version takes the
+             * previous version's ACL and protection, anything else its
+             * directory's DEFAULT ACEs (DEFAULT_PROTECTION giving a file's
+             * protection). sc->tdirhdr holds the previous header until the
+             * header is built; a new directory's block init reuses it after. */
+            inherit_from = sc->dirhdr;
+            inherit_mode = is_dir ? ACP_INHERIT_DIR : ACP_INHERIT_FILE;
+            if (ods2_fid_number(&prev) != 0 && !is_dir &&
+                acp_read_header(vol, ods2_fid_number(&prev), sc->tdirhdr, &sc->tfh) == SS__NORMAL) {
+                inherit_from = sc->tdirhdr;
+                inherit_mode = ACP_INHERIT_VER;
             }
 
             /* Allocate a real FID from the index bitmap. */
             status = acp_fid_alloc(vol, sc->ibblk, &new_fidnum);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            /* The index file must hold the new file's header. */
+            status = acp_idx_extend(vol, sc, new_fidnum);
+            if (status != SS__NORMAL) {
+                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                args.status = status;
+                goto free_sc;
+            }
+            /* The inherited ACL, composed in sc->ibblk (free from here until the
+             * header is built; acp_bitmap_alloc works in sc->rw). */
+            status = acp_acl_inherit(inherit_from, inherit_mode, sc->ibblk, ACP_BLOCK_SIZE,
+                                     &acl_len, &have_dprot, &dprot);
+            if (status != SS__NORMAL) {
+                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                args.status = status;
+                goto free_sc;
+            }
 
             /* Optional initial allocation (FIB$L_EXSZ). A NEW DIRECTORY is
              * always born as exactly one block (vms-3a8): the ODS-2 writer's
@@ -3249,12 +3717,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * at least one mapped data block (dl.n != 0) to insert into. Without
              * this a directory created over the ACP had zero blocks and every
              * create inside it failed SS$_DEVICEFULL. */
+            /* A directory's initial allocation may exceed the one block it
+             * starts out using (LIB$CREATE_DIR's initial-allocation, CREATE/
+             * DIRECTORY/ALLOCATION): the rest stays allocated past its end of
+             * file, and acp_dir_mutate grows the directory into it before it
+             * takes another block from BITMAP.SYS. Too large for the volume ->
+             * acp_bitmap_alloc's SS$_DEVICEFULL. */
             alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;
-            if (is_dir && alloc_count > ACP_DIR_MAX_INIT_ALLOC) {
-                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);   /* roll back the FID */
-                args.status = SS__BADPARAM;   /* more than a directory can hold: honest, not clamped */
-                goto free_sc;
-            }
             if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
                 status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
@@ -3277,11 +3746,23 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             owner.uic_group  = (uint16_t)((proc->uic >> 16) & 0xFFFFu);
             owner.uic_member = (uint16_t)(proc->uic & 0xFFFFu);
             if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                /* (privilege to name this owner checked at the top of CREATE) */
                 owner.uic_group  = args.attr.uic_group;
                 owner.uic_member = args.attr.uic_member;
             }
             if (args.attr_ctl & VMS_ACP_ATTR_PROT)
                 fileprot = args.attr.fileprot;
+            else if (inherit_mode == ACP_INHERIT_VER)
+                fileprot = sc->tfh.fh2_fileprot;    /* the previous version's */
+            else if (have_dprot)
+                fileprot = dprot;                   /* the directory's DEFAULT_PROTECTION */
+            else if (!is_dir && ods2_class_fileprot(args.name, 0, new_fidnum) == 0xAA00u)
+                /* An ordinary file created with no protection of its own gets the
+                 * creating process's default file protection ($SETDFPROT, else
+                 * RMS_FILEPROT's default), as the VMS file system gives it. The
+                 * named system files (SYSUAF.DAT, RIGHTSLIST.DAT) and directories
+                 * keep their class protection. NEGCTL-ANCHORED (acp-create-ignores-dfprot). */
+                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;
 
             memset(&backlink, 0, sizeof(backlink));
             backlink.fid_num = (uint16_t)(did_num & 0xFFFF);
@@ -3293,6 +3774,18 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__BADPARAM;
                 goto free_sc;
+            }
+            /* NEGCTL-ANCHORED (acp-acl-default-not-propagated): the inherited ACEs
+             * go into the new header's access control area. */
+            if (acl_len > 0) {
+                if (ods2_fh2_acl_set(sc->filehdr, sc->ibblk, acl_len) != ODS2_OK) {
+                    if (n_ext > 0)
+                        (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
+                    (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                    args.status = SS__ACLFULL;
+                    goto free_sc;
+                }
+                ods2_fh2_reseal(sc->filehdr);
             }
             /* Default version limit (FAT$W_VERSIONS, carried in attr.recattr[30..31]):
              * LIB$CREATE_DIR's max-versions and CREATE/DIRECTORY/VERSION_LIMIT. */
@@ -3349,11 +3842,12 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             }
 
             /* Write the header at the FID's INDEXF slot. NEGCTL-ANCHORED: the
-             * slot LBN is idx_lbn + (new_fidnum - 1u); an off-by-one writes the
+             * slot LBN is acp_hdr_lbn(vol, new_fidnum); an off-by-one writes the
              * header one slot too high, so the created file is unreadable by its
              * own FID. */
-            hdr_lbn = vol->idx_lbn + (new_fidnum - 1u);
-            if (acp_bdev_write(vol->backing_major, vol->backing_minor,
+            hdr_lbn = acp_hdr_lbn(vol, new_fidnum);
+            if (hdr_lbn == 0 ||
+                acp_bdev_write(vol->backing_major, vol->backing_minor,
                                           hdr_lbn, sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__DEVNOTMOUNT;
@@ -3442,6 +3936,14 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
 
             status = acp_read_header(vol, file_fidnum, sc->filehdr, &sc->fh);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            /* IO$_MODIFY of the access control list (vms-d404): its own
+             * access rule (CONTROL to change it, READ to read it). */
+            if (args.func == VMS_ACP_FOP_MODIFY && args.acl_op != 0) {
+                args.status = acp_acl_op(proc, vol, sc, file_fidnum, &args);
+                args.fid_num = file_fid.fid_num;
+                args.fid_nmx = file_fid.fid_nmx;
+                goto free_sc;
+            }
             /* Write access is required to delete or modify a file. */
             status = acp_check_access(proc, &sc->fh, 1);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
@@ -3465,7 +3967,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     /* Invalidate the header so a later ACCESS is SS$_NOSUCHFILE. */
                     memset(sc->filehdr, 0, ACP_BLOCK_SIZE);
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                                  vol->idx_lbn + (file_fidnum - 1u),
+                                                  acp_hdr_lbn(vol, file_fidnum),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                         args.status = SS__DEVNOTMOUNT;
                         goto free_sc;
@@ -3563,7 +4065,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 }
                 ods2_fh2_reseal(sc->filehdr);
                 if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                              vol->idx_lbn + (file_fidnum - 1u),
+                                              acp_hdr_lbn(vol, file_fidnum),
                                               sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                     args.status = SS__DEVNOTMOUNT;
                     goto free_sc;
@@ -3611,7 +4113,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                             struct acp_winbuild wb;
                             unsigned mpoff = sc->filehdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
                             uint8_t *mp = sc->filehdr + (size_t)mpoff * 2u;
-                            size_t mapcap = ACP_BLOCK_SIZE - (size_t)mpoff * 2u - 2u;
+                            size_t mapcap = ods2_fh2_map_end(sc->filehdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
                             uint32_t want = args.trunc_efblk, e;
 
                             wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0;
@@ -3683,7 +4185,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     (void)ods2_fh2_set_eof(sc->filehdr, new_hiblk, new_efblk, new_ffbyte);
                     ods2_fh2_reseal(sc->filehdr);
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                                  vol->idx_lbn + (file_fidnum - 1u),
+                                                  acp_hdr_lbn(vol, file_fidnum),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                         args.status = SS__DEVNOTMOUNT;
                         goto free_sc;

@@ -186,7 +186,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     for e in PROVISION.EXE JOB_CONTROL.EXE LOGINOUT.EXE DCL.EXE HELP.EXE \
              AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE \
              SYSGEN.EXE PRODUCT.EXE LIBRARIAN.EXE ANALYZE.EXE \
-             SYSMAN.EXE DECNETD.EXE FAL.EXE NCP.EXE; do
+             SYSMAN.EXE DECNETD.EXE FAL.EXE MAIL_SERVER.EXE NCP.EXE; do
         [ -f "$BIN/$e" ] && cp "$BIN/$e" "$SYSEXE/" || echo "   (no $e)"
     done
     # IMGACT.EXE (alpha) is the FIRST of the five mandatory first-hop images the
@@ -264,7 +264,15 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
             # so it stages its OWN independent-reader SYSTARTUP (DIRECTORY of the
             # FOP*.DAT set) instead of the stdio VENEER one (PORTTEST.DAT). The
             # producer graph staged just above is identical for both.
-            if [ -f "$JOINT/VMSABI_PROOF" ]; then
+            if [ -f "$JOINT/CC1_PROOF" ]; then
+                # vms-9a63: the VMS-hosted GCC compiler proper, run by the
+                # launcher JOINT_E2E (vfork+execv) on a DCL-written source.
+                [ -f "$JOINT/cc1.exe" ] || { echo "FAIL: CC1_PROOF without $JOINT/cc1.exe"; exit 1; }
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_CC1_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (CC1): cc1.exe -> SYS\$SYSEXE:CC1.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; CC1-proof SYSTARTUP (DCL writer + DCL TYPE reader) staged"
+            elif [ -f "$JOINT/VMSABI_PROOF" ]; then
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VMSABI_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (VMS-ABI RMS): joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; VMSABI-proof SYSTARTUP (DIRECTORY/FULL File ID cross-check) staged"

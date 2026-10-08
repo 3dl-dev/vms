@@ -68,6 +68,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -455,6 +456,47 @@ assert_vfork() {
   return 1
 }
 
+# assert_cc1 <console-log> <reference.s> -- THE TEETH for the vms-9a63 VMS-hosted
+# cc1 proof (`cc1-gate'). PASS iff (a) the launcher reports the cc1 subprocess
+# was created, exited and returned success, (b) the launcher's executive seam
+# decodes to sentinel 7, (c) DCL TYPE -- not the image -- shows an assembly file
+# identical, line for line, to what the same GCC built as a cross compiler writes
+# for the same source, and (d) no activation error or abnormal termination.
+assert_cc1() {
+  local log="$1" ref="$2"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  [ -s "$ref" ] || { echo "  FAIL: no reference assembly at $ref"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 nref ngot
+  port_ok=$(grep -qaE 'OVMX cc1 run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local got
+  got=$(mktemp)
+  awk '/CC1-PROOF: === INDEPENDENT READER: DCL TYPE HELLO.S ===/{f=1; next} /CC1-PROOF: TYPE-STATUS=/{f=0} f' "$log" \
+    | tr -d '\r' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$got"
+  nref=$(wc -l < "$ref"); ngot=$(wc -l < "$got")
+  if [ "$ngot" -gt 0 ] && diff -q <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" >/dev/null; then same=1; fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) cc1 subprocess ran + exit 0 : port_ok=$port_ok (want 1)"
+  echo "  (b) launcher seam               : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) DCL TYPE HELLO.S == cross cc1 output : same=$same ($ngot lines typed, $nref in the reference)"
+  [ "$same" -eq 1 ] || diff <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" | head -20 | sed 's/^/      /'
+  echo "  (d) no activation err           : ok=$err_ok"
+  rm -f "$got"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -601,6 +643,28 @@ assert_vmsabi() {
     || { echo "  assert_vmsabi: DIRECTORY/FULL does not show File ID $fid" >&2; return 1; }
   printf '%s\n' "$region" | grep -a "VMSABI_GATE" | grep -aq "PROVED_BY_CRELNM" \
     || { echo "  assert_vmsabi: SHOW LOGICAL does not see the name SYS\$CRELNM defined" >&2; return 1; }
+  # vms-38b: the File ID SYS$QIOW IO$_ACCESS put in the FIB is the one the
+  # independent reader shows.
+  local qfid
+  qfid=$(grep -aoE "VMSABI-QIOFID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-QIOFID: //')
+  [ -n "$qfid" ] || { echo "  assert_vmsabi: no File ID from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
+  printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$qfid" \
+    || { echo "  assert_vmsabi: DIRECTORY/FULL does not show the IO\$_ACCESS File ID $qfid" >&2; return 1; }
+  # ATR$C_CREDATE agrees with the creation date the independent reader shows:
+  # "<not recorded>" is a zero quadword in the header, so IO$_ACCESS must read 0;
+  # a recorded date must read back non-zero.
+  local qcre
+  qcre=$(grep -aoE "VMSABI-QIOCRE: %X[0-9A-F]{16}" "$log" | head -1 | sed 's/VMSABI-QIOCRE: %X//')
+  [ -n "$qcre" ] || { echo "  assert_vmsabi: no ATR\$C_CREDATE from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
+  if printf '%s\n' "$region" | grep -aq "Created:  <not recorded>"; then
+    [ "$qcre" = "0000000000000000" ] \
+      || { echo "  assert_vmsabi: DIRECTORY/FULL shows no creation date but ATR\$C_CREDATE read %X$qcre" >&2; return 1; }
+  else
+    printf '%s\n' "$region" | grep -aq "Created:" \
+      || { echo "  assert_vmsabi: DIRECTORY/FULL shows no Created: line" >&2; return 1; }
+    [ "$qcre" != "0000000000000000" ] \
+      || { echo "  assert_vmsabi: DIRECTORY/FULL shows a creation date but ATR\$C_CREDATE read 0" >&2; return 1; }
+  fi
   return 0
 }
 
@@ -1173,6 +1237,16 @@ EOF
     else
       _cxxf="-mpointer-size=64"
     fi
+    # (at the DEC C default pointer size, as the VMS host GCC is built: the
+    # VMS-layout FAB/NAM headers assert their 32-bit layout)
+    log "step 1c': GCC's VMS-host vms_file_stats_name compiles as C++ with this g++ (vms-fd1, patches/0012)"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -e OVMX_ALPHA_SYSROOT=/joint -v "$GATE_ROOT/joint-n3:/joint:ro" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/test/run_vmsdbgout_vms_host_cxx.sh /src/tools/cross-alpha-vms \
+      /out/cxx/bin/alpha-dec-vms-g++ || die "vmsdbgout VMS-host C++ check failed"
+    log "step 1c'': an initialized C++17 inline variable is emitted weak, as a template static member is (patches/0013)"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/test/run_inline_variable_weak.sh /out/cxx/bin/alpha-dec-vms-g++ \
+      || die "inline-variable emission check failed"
     # shellcheck disable=SC2086
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$GATE_ROOT/cxximg:/img" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \
@@ -1307,6 +1381,92 @@ EOF
     fi
     echo "FAIL: the 32-bit-pointer program did not run as required. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  cc1-gate)
+    # vms-9a63: GCC 14.2's compiler proper built FOR the alpha-dec-vms host
+    # (selfhost/build-host-gcc.sh: a 32-bit DEC C program over OVMX's C RTL)
+    # runs on OVMX/Alpha. The launcher (cc1run_test.c) vfork+execv's
+    # SYS$SYSTEM:CC1.EXE as the GCC driver does on a source DCL wrote; DCL TYPE
+    # shows the assembly it wrote, which must equal the cross compiler's output.
+    # cc1.exe, the launcher and the staged shareables all come from THIS
+    # build, so the C RTL and RMS they bind match the executive that boots.
+    MILESTONE_MAIN=cc1run_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    BOOT_TIMEOUT="${CC1_BOOT_TIMEOUT:-1500}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    _st=$(mktemp -d); _fails=0
+    printf '\t.set noat\n\t.text\nmain:\n\tret $31,($26),1\n' > "$_st/ref.s"
+    { printf '%s\n' 'OVMX cc1 run: pid_ok=1 exited=1 code=0 status=%X00000000'
+      printf '%s\n' 'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1'
+      printf '%s\n' 'CC1-PROOF: === INDEPENDENT READER: DCL TYPE HELLO.S ==='
+      sed 's/$/\r/' "$_st/ref.s"
+      printf '%s\n' 'CC1-PROOF: TYPE-STATUS=%X00000001 SEVERITY=1'; } > "$_st/pass.log"
+    sed 's/ret \$31/ret $30/' "$_st/pass.log" > "$_st/diffasm.log"
+    sed 's/code=0 /code=1 /; s/0x0035a039/0x0035a019/' "$_st/pass.log" > "$_st/fail.log"
+    grep -v 'main:' "$_st/pass.log" > "$_st/short.log"
+    awk '/INDEPENDENT READER/{print; exit} {print}' "$_st/pass.log" > "$_st/notyped.log"
+    printf '%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:CC1 terminated abnormally (signal 11)' >> "$_st/pass.log.crash"
+    cat "$_st/pass.log" "$_st/pass.log.crash" > "$_st/crash.log"
+    for _c in "pass:0" "diffasm:1" "fail:1" "short:1" "notyped:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_cc1 "$_st/$_n.log" "$_st/ref.s" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  cc1 selftest $_n: PASS"; else echo "  cc1 selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "cc1 selftest failed -- assert_cc1 cannot be trusted"
+    echo ""
+    build_joint_images
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+      mkdir -p "$_tc"
+      docker run --rm -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
+    fi
+    log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc)"
+    mkdir -p "$GATE_ROOT/hostgcc"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+    _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"
+    # The reference is the same GCC built as a cross compiler, given a file named
+    # exactly as cc1 sees it on OVMX: the module name it records (the .vmsdebug
+    # traceback section VMS compilers always emit) comes from the input name.
+    log "step 1d: link the launcher with the stage-2 gcc against the shareables cc1.exe was linked against"
+    mkdir -p "$GATE_ROOT/cc1img"
+    printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \
+      '  printf ("hello from cc1 on OVMX %d\n", sq (7));' '  return 0;' '}' > "$GATE_ROOT/cc1img/hello.c"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/cc1img:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
+        set -e
+        /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/cc1run_test.c
+        cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C" \
+          && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -nostdinc -dumpbase hello.c "VDA0:[SYSTMP]HELLO.C" -o ref.s' \
+      > "$GATE_ROOT/cc1-link.log" 2>&1 || { tail -40 "$GATE_ROOT/cc1-link.log"; die "launcher link / reference compile failed"; }
+    [ -s "$GATE_ROOT/cc1img/ref.s" ] || die "the cross cc1 wrote no reference assembly"
+    # Stage what boots: the launcher, cc1.exe and the shareables both were linked against.
+    cp "$GATE_ROOT/cc1img/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    cp "$_cc1" "$WORK/joint/cc1.exe"
+    for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
+      [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
+      cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
+    done
+    : > "$WORK/joint/CC1_PROOF"
+    assemble_boot_image
+    log "step 3: BOOT A -- the VMS-hosted cc1 compiles a C file on the REAL executive (up to ${BOOT_TIMEOUT}s)"
+    run_boot_a
+    grep -aE "OVMX cc1|CC1-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|cc1:" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_cc1 "$WORK/modgpA.log" "$GATE_ROOT/cc1img/ref.s"; then
+      echo ""
+      echo "PASS: GCC 14.2's cc1, built for the alpha-dec-vms host, compiled a C file on"
+      echo "      OVMX/Alpha; DCL TYPE shows the same assembly the cross compiler writes."
+      exit 0
+    fi
+    echo "FAIL: the VMS-hosted cc1 proof did not pass. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;
   vfork-gate)
@@ -1573,8 +1733,8 @@ EOF
     # closedir beyond the stdio family. Same VENEER path as crtl-rms-veneer-gate
     # (JOINT_CRTL_RMS_VENEER=1) but the MILESTONE image is crtl_rms3_test.c: it
     # creats FOPCRE.DAT, creats+unlinks FOPDEL.DAT, creats+renames FOPSRC.DAT->
-    # FOPDST.DAT via the VECTOR-SUBSTITUTED decc$* file-ops (bound by sv# index
-    # to the crtl_rms_stdio.c veneer -> sys$create/$erase/$rename -> the ACP),
+    # FOPDST.DAT via the C RTL's own file calls (served by the C RTL file layer
+    # over RMS, crtl_rms_fd.c -> sys$create/$erase/$rename -> the ACP),
     # leaving FOPCRE.DAT + FOPDST.DAT behind. The proof is an INDEPENDENT reader
     # (DCL DIRECTORY over the ACP, a different accessor) seeing FOPCRE.DAT +
     # FOPDST.DAT with genuine ODS-2 File IDs and FOPDEL.DAT/FOPSRC.DAT gone.
@@ -1705,7 +1865,7 @@ EOF
     # write the record file the image reads, and DCL TYPE read back the stream
     # file the image wrote -- both directions through a different accessor.
     MILESTONE_MAIN=crtl_fd_test.c
-    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no -I/src/src/libvms/include"   # <unixlib.h>: decc$feature_*
     export JOINT_MAIN_MUSL_HEADERS=1
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
@@ -1761,16 +1921,25 @@ EOF
     _st=$(mktemp -d); _fails=0
     {
       echo "VMSABI-FID: (34,1,0)"
+      echo "VMSABI-QIOFID: (34,1,0)"
       echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
       echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
+      echo "VMSABI-QIOCRE: %X0000000000000000"
       echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
+      echo "Created:  <not recorded>"
       echo '   "VMSABI_GATE" = "PROVED_BY_CRELNM" (LNM$SYSTEM_TABLE)'
       echo "VMSABI-PROOF: === END INDEPENDENT READER ==="
     } > "$_st/pass.log"
     sed 's/File ID:  (34,1,0)/File ID:  (35,1,0)/' "$_st/pass.log" > "$_st/mismatch.log"
     grep -v "test: OK" "$_st/pass.log" > "$_st/notok.log"
     grep -v "PROVED_BY_CRELNM" "$_st/pass.log" > "$_st/nolnm.log"
-    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1"; do
+    sed 's/VMSABI-QIOFID: (34,1,0)/VMSABI-QIOFID: (36,1,0)/' "$_st/pass.log" > "$_st/qiofid.log"
+    grep -v "VMSABI-QIOFID" "$_st/pass.log" > "$_st/noqio.log"
+    grep -v "VMSABI-QIOCRE" "$_st/pass.log" > "$_st/nocre.log"
+    sed 's/VMSABI-QIOCRE: %X0000000000000000/VMSABI-QIOCRE: %X00A1B2C3D4E5F607/' "$_st/pass.log" > "$_st/crelie.log"
+    sed 's/Created:  <not recorded>/Created:   8-OCT-2026 14:00:00.00/' "$_st/pass.log" > "$_st/crezero.log"
+    sed 's/VMSABI-QIOCRE: %X0000000000000000/VMSABI-QIOCRE: %X00A1B2C3D4E5F607/' "$_st/crezero.log" > "$_st/credated.log"
+    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "credated:0"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -1785,8 +1954,8 @@ EOF
     grep -aE "VMSABI|File ID|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_vmsabi "$WORK/modgpA.log"; then
       echo ""
-      echo "PASS: SYS\$PARSE/SYS\$SEARCH served a VMS-layout FAB/NAM from a 32-bit DEC C"
-      echo "      program; DIRECTORY/FULL shows the same File ID."
+      echo "PASS: SYS\$PARSE/SYS\$SEARCH and SYS\$QIOW IO\$_ACCESS (attribute list) served a"
+      echo "      32-bit DEC C program; DIRECTORY/FULL shows the same File ID."
       exit 0
     fi
     echo "FAIL: the VMS-ABI RMS gate did not pass. Full log: $WORK/modgpA.log"

@@ -74,44 +74,44 @@
     }
   ],
   "overall": {
-    "count": 470,
+    "count": 476,
     "by_status": {
       "verified": 24,
-      "implemented": 282,
-      "partial": 56,
+      "implemented": 285,
+      "partial": 60,
       "stub": 14,
       "designed": 1,
-      "absent": 93
+      "absent": 92
     },
     "by_authenticity": {
-      "real": 322,
-      "n/a": 94,
-      "advisory": 48,
+      "real": 331,
+      "n/a": 93,
+      "advisory": 46,
       "facade-risk": 6
     },
-    "met": 306,
-    "in_progress": 56,
-    "not_started": 108,
+    "met": 309,
+    "in_progress": 60,
+    "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 424,
+    "count": 431,
     "by_status": {
       "verified": 24,
-      "implemented": 282,
-      "partial": 55,
+      "implemented": 285,
+      "partial": 59,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 321,
+      "real": 330,
       "n/a": 53,
-      "advisory": 46,
+      "advisory": 44,
       "facade-risk": 4
     },
-    "met": 306,
-    "in_progress": 55,
+    "met": 309,
+    "in_progress": 59,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -325,23 +325,23 @@
       "tier": null,
       "plan_ref": "vms-082",
       "vms_ref": "VSI OpenVMS language reference manuals (Fortran/COBOL/BASIC/Pascal/MACRO/\u2026)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
-        "count": 12,
+        "count": 13,
         "by_status": {
           "verified": 0,
           "implemented": 1,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
           "absent": 11
         },
         "by_authenticity": {
-          "real": 1,
+          "real": 2,
           "n/a": 11
         },
         "met": 1,
-        "in_progress": 0,
+        "in_progress": 1,
         "not_started": 11,
         "facade_risk": 0
       }
@@ -473,21 +473,21 @@
       "vms_ref": "DECnet for OpenVMS Networking Manual; DNA Phase IV Routing + NSP specs",
       "last_reviewed": "2026-10-05",
       "rollup": {
-        "count": 17,
+        "count": 18,
         "by_status": {
           "verified": 3,
           "implemented": 9,
-          "partial": 4,
+          "partial": 5,
           "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 16,
+          "real": 17,
           "n/a": 1
         },
         "met": 12,
-        "in_progress": 4,
+        "in_progress": 5,
         "not_started": 1,
         "facade_risk": 0
       }
@@ -1219,25 +1219,25 @@
       "tier": null,
       "plan_ref": "vms-8ad",
       "vms_ref": "OpenVMS Guide to System Security ch. 5 (Protecting Data)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
-        "count": 6,
+        "count": 12,
         "by_status": {
           "verified": 1,
-          "implemented": 1,
-          "partial": 1,
+          "implemented": 5,
+          "partial": 4,
           "stub": 1,
           "designed": 0,
-          "absent": 2
+          "absent": 1
         },
         "by_authenticity": {
-          "real": 2,
-          "advisory": 2,
-          "n/a": 2
+          "real": 10,
+          "advisory": 1,
+          "n/a": 1
         },
-        "met": 2,
-        "in_progress": 1,
-        "not_started": 3,
+        "met": 6,
+        "in_progress": 4,
+        "not_started": 2,
         "facade_risk": 0
       }
     },
@@ -1310,20 +1310,20 @@
       "vms_ref": "OpenVMS Record Management Services Reference Manual",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 38,
+        "count": 37,
         "by_status": {
           "verified": 0,
-          "implemented": 33,
+          "implemented": 32,
           "partial": 4,
           "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 37,
+          "real": 36,
           "n/a": 1
         },
-        "met": 33,
+        "met": 32,
         "in_progress": 4,
         "not_started": 1,
         "facade_risk": 0
@@ -1713,7 +1713,7 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS System Services Reference Manual \u2014 Mailbox Services",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
         "count": 2,
         "by_status": {
@@ -1843,8 +1843,7 @@
           "absent": 1
         },
         "by_authenticity": {
-          "real": 1,
-          "advisory": 1,
+          "real": 2,
           "n/a": 1
         },
         "met": 2,
@@ -2616,6 +2615,21 @@
       "evidence": "third-party/tcc",
       "verified_against": null,
       "notes": "tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target. Not 'verified' \u2014 no DEC C conformance oracle is gated.",
+      "plan_ref": "vms-082"
+    },
+    {
+      "domain": "languages",
+      "facility": "compilers",
+      "facility_name": "Compilers (language front-ends)",
+      "id": "gcc_vms_host",
+      "kind": "subsystem",
+      "vms": "GNU C for OpenVMS Alpha (the alpha-dec-vms GCC port), run on VMS",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "undecided",
+      "evidence": "tools/cross-alpha-vms/selfhost/build-host-gcc.sh",
+      "verified_against": null,
+      "notes": "GCC 14.2 with the port's patches (tools/cross-alpha-vms/patches), built --host=alpha-dec-vms over OVMX's C RTL; cc1.exe compiles a C file on OVMX/Alpha and DCL TYPE of its assembly equals the cross compiler's (cc1-gate, vms-9a63). Not yet: the driver running cc1/as/LINK itself, native as, and the standard include directories (stat of a missing device path fails EIO, vms-9c0) -- the gate runs cc1 -nostdinc.",
       "plan_ref": "vms-082"
     },
     {
@@ -3440,7 +3454,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsdecnet/ncp/ncp.c",
       "verified_against": null,
-      "notes": "Real NCP.EXE driving a persisted database: SET/DEFINE NODE, CLEAR/PURGE NODE, SHOW KNOWN NODES, SHOW NODE, SET/SHOW EXECUTOR (ADDRESS/NAME/STATE), and SET/DEFINE/SHOW/CLEAR/PURGE OBJECT (the Session Control object registry \u2014 number/name/file, e.g. 42=CTERM, 17=FAL; rd vms-f52, dnet_objectdb), with VMS-faithful SHOW layout and honest errors. Grammar/layout from the public NCP manual (Rule 8). NOT yet: circuits, lines, counters, LOOP, and the SET(volatile)/DEFINE(permanent) split \u2014 OVMX keeps one persisted DB per entity today (counters/circuit/reachability state must be read from the live executive, never invented \u2014 INV-6). Config-only; it does not itself start the network (@SYS$MANAGER:STARTNET does, gated on the executor database NCP writes). STORAGE (rd vms-1f69, subsumes vms-20e): the executor, node and object databases persist at SYS$SYSTEM:NETNODE_LOCAL.DAT / NETNODE_REMOTE.DAT / NETOBJECT.DAT THROUGH THE VMS FILE LAYER (RMS over the Files-11 ODS-2 ACP, src/vmsdecnet/ncp/dnet_ncpstore.c), the same store NETACP reads; a write that cannot reach the file fails honestly (%NCP-E-CFGWRERR/DBWRERR naming the VMS file) \u2014 the old /etc/ovmx/decnet Linux default is gone (OVMX_DECNET_* env vars remain only as the host-test hook). The record LAYOUT inside those files is OVMX's documented text (labelled in each file's header), NOT the VMS binary indexed format (Rule 8). Booted proof: NCP SET EXECUTOR ADDRESS/NAME/STATE then SHOW EXECUTOR + F$SEARCH of NETNODE_LOCAL.DAT in the shared acceptance battery; host: tests/vmsdecnet/test_dnet_ncp_executor.sh + test_dnet_ncpstore.c.",
+      "notes": "Real NCP.EXE driving a persisted database: SET/DEFINE NODE, CLEAR/PURGE NODE, SHOW KNOWN NODES, SHOW NODE, SET/SHOW EXECUTOR (ADDRESS/NAME/STATE, and MAXIMUM LINKS -- the bound NETACP sizes its inbound logical-link pool from, rd vms-f91; unset it is the VMS default 32 a real VAX shows (Baron 2026-10-08; per-node share 3, rd vms-9cd)), and SET/DEFINE/SHOW/CLEAR/PURGE OBJECT (the Session Control object registry \u2014 number/name/file, e.g. 42=CTERM, 17=FAL; rd vms-f52, dnet_objectdb), with VMS-faithful SHOW layout and honest errors. Grammar/layout from the public NCP manual (Rule 8). NOT yet: circuits, lines, counters, LOOP, and the SET(volatile)/DEFINE(permanent) split \u2014 OVMX keeps one persisted DB per entity today (counters/circuit/reachability state must be read from the live executive, never invented \u2014 INV-6). Config-only; it does not itself start the network (@SYS$MANAGER:STARTNET does, gated on the executor database NCP writes). STORAGE (rd vms-1f69, subsumes vms-20e): the executor, node and object databases persist at SYS$SYSTEM:NETNODE_LOCAL.DAT / NETNODE_REMOTE.DAT / NETOBJECT.DAT THROUGH THE VMS FILE LAYER (RMS over the Files-11 ODS-2 ACP, src/vmsdecnet/ncp/dnet_ncpstore.c), the same store NETACP reads; a write that cannot reach the file fails honestly (%NCP-E-CFGWRERR/DBWRERR naming the VMS file) \u2014 the old /etc/ovmx/decnet Linux default is gone (OVMX_DECNET_* env vars remain only as the host-test hook). The record LAYOUT inside those files is OVMX's documented text (labelled in each file's header), NOT the VMS binary indexed format (Rule 8). Booted proof: NCP SET EXECUTOR ADDRESS/NAME/STATE then SHOW EXECUTOR + F$SEARCH of NETNODE_LOCAL.DAT in the shared acceptance battery; host: tests/vmsdecnet/test_dnet_ncp_executor.sh + test_dnet_ncpstore.c.",
       "plan_ref": "vms-30e"
     },
     {
@@ -3500,7 +3514,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsdecnet/cterm/dnet_cterm_hostfsm.c",
       "verified_against": "WIRE PROTOCOL, live (rd vms-a70 direction B, tests/lab/captures/decnet-sethost-inbound-20261005/): a real OpenVMS VAX V7.3 typed SET HOST 1.44 into OVMX's COMPILED CTERM host FSM (lab harness: NSP carried by ctermprobe.py, the session a pty stand-in script, NOT LOGINOUT) -- the VAX displayed the host's prompt, sent Username and a no-echo Password, sent a command line the host received, displayed the host's output, and on logout printed %REM-S-END. Byte-level: tests/vmsdecnet/test_dnet_cterm_host.c pins the Bind Request, Characteristics, message 23, Start Read and Write encodings to the bytes real VAX hosts sent (docs/oracle/vax-sethost-cterm.pcap, tests/lab/captures/decnet-sethost-dcl-20260911/), replays a real VAX client session through the FSM, and fuzzes 200k mutated client segments under ASan/UBSan.",
-      "notes": "SESSION: an inbound object-42 connect mints an RTAn: THROUGH THE EXECUTIVE (VMS_IOCTL_TERM_CREATE -> vms_devtab_add_terminal; the executive picks the unit) and creates a process running the real SYS$SYSTEM:LOGINOUT.EXE on it via $CREPRC PRC$M_INTER|PRC$M_LOGINOUT -- the SAME primitive the console login uses (vms-3e9/vms-f881). The daemon holds no credential, spawns nothing, and the carried username reaches no decision; there is no fork/execvp/openpty anywhere above the VMS layer (standing gate tests/integration/test_creprc_session_primitive.sh check 5, both directions + negctl). The authentication proof (challenged, bad credentials REFUSED, $GETDVI RTAn: cross-process) is DECNETD.EXE --cterm-accept-test against the real /dev/vms + real LOGINOUT in the booted acceptance battery; it FAILS honestly where the executive is absent (INV-6). WIRE (rd vms-a70 direction B): NETACP's object-42 sessions no longer speak the OVMX-invented flat CTERM PDUs (which a real VMS client cannot parse, and which waited for the client to speak first). They run dnet_cterm_hostfsm, the host role as a VMS host speaks it: on link-up the HOST sends the foundation Bind Request; on Bind Accept it sends Common Data {CTERM Initiate, Characteristics INPUT-COUNT-STATE} and {CHARACTER-ATTRIBUTES ^C}; on the server's Initiate it answers with VMS message 23 and caps its segments at the server's max message; RTAn: output goes as CTERM Writes; input is SOLICITED with Start Read, the unterminated tail of the output (Username: / $ ) riding in the read as its prompt, a no-echo read when the RTAn: has echo off (the Password: read); Read Data and out-of-band characters go to the RTAn:; the session process exiting sends its last output then Unbind 02 03 00. Every decoder is bounded. Two deliberate differences from a VAX host, both honest: the Initiate advertises OVMX's real max message (1020, one NSP segment) where VAX sends 7696; and OVMX sends no VMS-private QIO-passthrough message 15 (its session reaches the host as a byte stream, so there is nothing to pass through). OVMX's own SET HOST client also reads this host (raw Write + prompt-carrying Start Read). NOT yet: a real VAX SET HOST into a BOOTED OVMX node, i.e. this wire FSM and the executive RTAn:/LOGINOUT session proven together live (the booted OVMX<->OVMX leg is tests/integration/decnet_set_host_live.sh on the executive CI runner); the RTAn: terminal's echo is a substrate pty echo the host discards (the server echoes, as on VMS); no CTERM-level out-of-band character set (^Y/^C arrive as read terminators).",
+      "notes": "SESSION: an inbound object-42 connect mints an RTAn: THROUGH THE EXECUTIVE (VMS_IOCTL_TERM_CREATE -> vms_devtab_add_terminal; the executive picks the unit) and creates a process running the real SYS$SYSTEM:LOGINOUT.EXE on it via $CREPRC PRC$M_INTER|PRC$M_LOGINOUT -- the SAME primitive the console login uses (vms-3e9/vms-f881). The daemon holds no credential, spawns nothing, and the carried username reaches no decision; there is no fork/execvp/openpty anywhere above the VMS layer (standing gate tests/integration/test_creprc_session_primitive.sh check 5, both directions + negctl). The authentication proof (challenged, bad credentials REFUSED, $GETDVI RTAn: cross-process) is DECNETD.EXE --cterm-accept-test against the real /dev/vms + real LOGINOUT in the booted acceptance battery; it FAILS honestly where the executive is absent (INV-6). WIRE (rd vms-a70 direction B): NETACP's object-42 sessions no longer speak the OVMX-invented flat CTERM PDUs (which a real VMS client cannot parse, and which waited for the client to speak first). They run dnet_cterm_hostfsm, the host role as a VMS host speaks it: on link-up the HOST sends the foundation Bind Request; on Bind Accept it sends Common Data {CTERM Initiate, Characteristics INPUT-COUNT-STATE} and {CHARACTER-ATTRIBUTES ^C}; on the server's Initiate it answers with VMS message 23 and caps its segments at the server's max message; RTAn: output goes as CTERM Writes; input is SOLICITED with Start Read, the unterminated tail of the output (Username: / $ ) riding in the read as its prompt, a no-echo read when the RTAn: has echo off (the Password: read); Read Data and out-of-band characters go to the RTAn:; the session process exiting sends its last output then Unbind 02 03 00. Every decoder is bounded. Two deliberate differences from a VAX host, both honest: the Initiate advertises OVMX's real max message (1020, one NSP segment) where VAX sends 7696; and OVMX sends no VMS-private QIO-passthrough message 15 (its session reaches the host as a byte stream, so there is nothing to pass through). OVMX's own SET HOST client also reads this host (raw Write + prompt-carrying Start Read). ORIGINATING TERMINAL (rd vms-14b): a VMS server's Initiate carries its terminal in parameter 4 (beyond the spec's 1-3; the value is the documented IO$_SENSEMODE characteristics-buffer layout -- class, DT$ type, width, TT$ with page in its high byte, TT2$); the host FSM decodes it (pinned on three real VAX client Initiates: LA36/132/page 0, LA36/132/24, VT100/80/24 -- tests/vmsdecnet/test_dnet_cterm_host.c) and NETACP records type, width, page and the conveyed characteristics on the RTAn:'s executive row (VMS_IOCTL_TERM_SETCHAR, privileged, RTAn: only; TT$/TT2$ bit positions from the V7.3 node's own TTDEF/TT2DEF, docs/oracle/vax73-starlet-defs/), so SHOW TERMINAL prints Device_Type: LA36 as the oracle (vax-rta-show-terminal.txt), SHOW DEVICE/FULL 'device type LA36', and $GETDVI/F$GETDVI DEVTYPE/TT_PAGE read it back; booted proof in --cterm-accept-test and tests/qemu/test_syssvc_showterm.c. The RTAn:'s SHOW TERMINAL characteristic grid then matches the oracle RTAn:'s byte for byte (test_syssvc_showterm). Not from the wire: Interactive, VMS Style Input, DEC_CRT5, Ansi_Color (no V7.3 TT$/TT2$ bit) and Set_speed (the oracle shows it while the conveyed TT2$V_SETSPEED is 0, so its display sense is unestablished) keep their minted values; a DT$ code no oracle has spelled prints no name. NOT yet: a real VAX SET HOST into a BOOTED OVMX node, i.e. this wire FSM and the executive RTAn:/LOGINOUT session proven together live (the booted OVMX<->OVMX leg is tests/integration/decnet_set_host_live.sh on the executive CI runner); the RTAn: terminal's echo is a substrate pty echo the host discards (the server echoes, as on VMS); no CTERM-level out-of-band character set (^Y/^C arrive as read terminators).",
       "plan_ref": "vms-30e"
     },
     {
@@ -3575,7 +3589,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsdecnet/dap/dnet_dap.c",
       "verified_against": "rd vms-a8a: every real OpenVMS VAX V7.3 DAP buffer in docs/oracle/vax-copy-fal-dap.* and tests/lab/captures/decnet-fal-dap-20261004/ decodes field by field to the values VMS put there (tests/vmsdecnet/test_dnet_dap.c), and OVMX's encoder output was accepted by a real VMS FAL through a full GET and PUT (fal-ovmxclient.pcap)",
-      "notes": "Re-grounded (rd vms-a8a) on the PUBLIC DAP 5.6 spec AA-K177A-TK field types (B / EX-n / I-n) and message layouts; the vms-8c2 cut's frame was invented (FLAGS always LENGTH, fixed widths, NAME=10, OSTYPE 1) and could not talk to real VMS. OVMX speaks DAP 5.6 and advertises in SYSCAP only sequential org + sequential FILE TRANSFER + blocking-to-response + 2-byte length. Decoder fully bounded (200k random + oracle-seeded mutation/truncation walks, ASan/UBSan): unknown trailing operand bytes from later DAP versions are ignored, segmented messages refused. NOT served (honest): block mode, record-at-a-time access, file checksum, indexed/relative, wildcards, extended-attribute content.",
+      "notes": "Re-grounded (rd vms-a8a) on the PUBLIC DAP 5.6 spec AA-K177A-TK field types (B / EX-n / I-n) and message layouts; the vms-8c2 cut's frame was invented (FLAGS always LENGTH, fixed widths, NAME=10, OSTYPE 1) and could not talk to real VMS. OVMX advertises DAP 7.2 (rd vms-b2f: a VMS V7.3 client issues a remote RENAME only to a DAP 7+ FAL; two-link lab probe 2026-10-08) with the DAP 5.6 field layout its SYSCAP selects, and advertises in SYSCAP only sequential org + sequential FILE TRANSFER + blocking-to-response + 2-byte length. Decoder fully bounded (200k random + oracle-seeded mutation/truncation walks, ASan/UBSan): unknown trailing operand bytes from later DAP versions are ignored, segmented messages refused. DATE AND TIME (A-18 dates + RVN), PROTECTION and an empty SUMMARY are encoded and decoded (rd vms-277a, DIRECTORY/FULL). NOT served (honest): block mode, file checksum, indexed/relative, KEY DEFINITION / ALLOCATION / ACL content.",
       "plan_ref": "vms-30e"
     },
     {
@@ -3590,7 +3604,22 @@
       "scope_1_0": "in",
       "evidence": "src/vmsdecnet/fal/dnet_fal.c",
       "verified_against": "INBOUND SERVER vs a real VMS COPY client (rd vms-d85 inbound, tests/lab/captures/decnet-fal-inbound-20261004/): OVMX's compiled dnet_fal_server_run served a real OpenVMS VAX V7.3 COPY in BOTH directions (VMS->OVMX PUT stored verbatim; OVMX->VMS GET through the DIRECTORY LIST + OPEN sequence VMS uses), pinned in CI by the replay test tests/vmsdecnet/test_dnet_fal_server.c. OUTBOUND CLIENT vs a real VMS FAL (rd vms-a8a, tests/lab/captures/decnet-fal-dap-20261004/fal-ovmxclient.pcap): OVMX's compiled dnet_fal_client_get/put, with the object-17 connect from dnet_cterm_sc_connect_build, completed a GET (records byte-identical) and a PUT (TYPE on the VAX prints them verbatim) against OpenVMS VAX V7.3, and mapped the remote file-not-found STATUS to SS$_NOSUCHFILE. INBOUND SERVER: DECNETD.EXE --fal-accept-test in the booted acceptance battery (real SYSUAF/Purdy auth, both directions over a real NSP link + RMS over the ACP, byte-verified, OVMX<->OVMX).",
-      "notes": "SECURITY SURFACE. An inbound object-17 connect CARRIES username+password in cleartext (oracle s1, protocol-mandated); FAL authenticates them through THE ONE authenticator (sysuaf_lookup + Purdy + disabled-account gate) BEFORE accepting, refuses with an NSP Disconnect on a bad password, wipes the password after the check. The connect carries FOUR counted access-control fields (user, password, account, usrdata) exactly as the real oracle frame (rd vms-a8a corrected an earlier three-field reading). DAP sequence per spec 5.1/5.2.1/5.2.2: ATTRIBUTES+ACCESS -> ATTRIBUTES..ACK; CONTROL CONNECT -> ACK; CONTROL GET/PUT RAC=sequential-file-transfer; DATA; ACCESS COMPLETE CLOSE -> RESPONSE. File I/O is rms_textfile_* (RMS over the ACP), fail-honest with no /dev/vms (Rule 9). Received records are $PUT verbatim to one RMS stream created at ACCESS time (so the NAME a VMS client requires is the real resultant spec); records sent are read as text lines. The server answers DIRECTORY LIST from RMS $PARSE/$SEARCH resultants (wildcards via RMS) and serves sequential file transfer (RAC 3) and sequential record access (RAC 0). Server omits DAP STV until ssdef values match real VMS (rd vms-ef2). PERSONA (rd vms-d85, R4 G3): an inbound access is served by a SYS$SYSTEM:FAL.EXE network server process NETACP $CREPRCs with the AUTHENTICATED user's UIC + default privileges (dnet_fal_proc.c), DAP moving through two executive link mailboxes, so the executive ACP checks every file it opens against the USER -- proven by DECNETD.EXE --fal-proc-accept-test in the booted battery (the SAME SYSTEM-only file through the SAME path is served to SYSTEM and refused to GUEST; the server's executive row carries GUEST's UIC [128,129]; a GUEST PUT into SYS$SYSROOT:[SYSMGR] is refused). The process-name + mailbox link is an OVMX-labelled channel (real VMS uses SYS$NET + _NET:; the _NET: server seam is rd vms-dda). NOT yet (filed, never faked): the outbound client running from a BOOTED OVMX over the live datalink (needs rd vms-1f69, booted DECnet node); the INBOUND server reached live from a real VMS COPY (live object-17 dispatch in NETACP onto the FAL server process); block mode.",
+      "notes": "SECURITY SURFACE. An inbound object-17 connect CARRIES username+password in cleartext (oracle s1, protocol-mandated); FAL authenticates them through THE ONE authenticator (sysuaf_lookup + Purdy + disabled-account gate) BEFORE accepting, refuses with an NSP Disconnect on a bad password, wipes the password after the check. The connect carries FOUR counted access-control fields (user, password, account, usrdata) exactly as the real oracle frame (rd vms-a8a corrected an earlier three-field reading). DAP sequence per spec 5.1/5.2.1/5.2.2: ATTRIBUTES+ACCESS -> ATTRIBUTES..ACK; CONTROL CONNECT -> ACK; CONTROL GET/PUT RAC=sequential-file-transfer; DATA; ACCESS COMPLETE CLOSE -> RESPONSE. File I/O is rms_textfile_* (RMS over the ACP), fail-honest with no /dev/vms (Rule 9). Received records are $PUT verbatim to one RMS stream created at ACCESS time (so the NAME a VMS client requires is the real resultant spec); records sent are read as text lines. The server answers DIRECTORY LIST from RMS $PARSE/$SEARCH resultants (wildcards via RMS) and serves sequential file transfer (RAC 3) and sequential record access (RAC 0). REMOTE DIRECTORY/FULL, TYPE, DELETE, RENAME (rd vms-277a, tests/lab/captures/decnet-fal-verbs-20261008/): DIRECTORY LIST answers in the VAX FAL's shape -- one blocked segment of NAME(volume) NAME(directory) NAME(file), the ATTRIBUTES / SUMMARY / DATE AND TIME / PROTECTION messages DISPLAY asks for (filled from the real ODS-2 header via rms_file_attr; FOP/DEV/SBN and every DAP 7-only field omitted, INV-6), ACK, ACCESS COMPLETE; ACCESS ERASE ($ERASE) and ACCESS RENAME + NAME ($RENAME, the ACP's atomic MOVE) run as the FAL server process so the executive ACP decides protection. STATUS bytes for not-found (0x4032 + STV 0x0910), a protection-refused DELETE (0x4055 + STV 0x24), a protection-refused RENAME (0x405f) and a protection-refused OPEN/TYPE (answered FNF, as the VAX FAL does) are the real VAX FAL's, byte for byte; the STV values are real-VMS condition values, not OVMX ssdef numbers (rd vms-ef2). Pinned in CI by replaying all 17 captured links through the server (test_dnet_fal_server.c), and on the booted executive by --fal-proc-accept-test (GUEST refused DELETE/RENAME of a SYSTEM-only file with those bytes; SYSTEM deletes/renames its own, read back via RMS). SYSCAP advertises SUMMARY, DATE AND TIME, PROTECTION, RENAME and WILDCARD (bits 24/26/27/37/38), and DIRECTORY LIST ACKs each file only when both peers speak DAP 7+ (byte-identical to the VAX<->VAX captures; a DAP 5.6 client rejects it) -- from the live real-VAX bracket (tests/lab/captures/decnet-fal-verbs-20261008/live-bracket/, BUG_DAP 0001A006 / RMS-F-SUPPORT / RMS-F-WLD). DAP 7.2 (rd vms-b2f): a VMS V7.3 client sends a remote RENAME only to a FAL at DAP 7+, so OVMX advertises 7.2; in the 2026-10-08 live bracket at 7.2 (live-bracket/falverbs-live3-*, OVMX's compiled server under the lab driver) VAX1's RENAME, DIRECTORY/FULL, wildcard TYPE, DELETE ;*, the refused DELETE (RMS-E-PRV) and RENAME (RMS-F-RMV), and NOFILES all completed as against a VAX FAL, and a 7.2 client rejects a DIRECTORY LIST without the per-file ACK (BUG_DAP 0001A007); six of its links are replayed byte for byte in test_dnet_fal_server.c. Grounded on a second VAX-to-VAX capture (vax-to-vax-sys-login/): a VMS client resolves wildcards itself by DIRECTORY LIST and names each file (TYPE re-exchanges CONFIGURATION per file on one link, served), a DIRECTORY/FULL file whose header the user may not read is NAME + STATUS PRV then CONTINUE TRANSFER, a protection-refused OPEN is PRV 0x4055 STV 0x24, VFC files carry FSZ, and a DIRECTORY miss is named only with its directory (else STATUS alone). NOT served: wildcard OPEN/RENAME sent to the server (honest STATUS unsupported; no VMS client sends one), the VFC fixed-control bytes in DATA records, DAP 7 extras (type-18 File ID, binary dates). PERSONA (rd vms-d85, R4 G3): an inbound access is served by a SYS$SYSTEM:FAL.EXE network server process NETACP $CREPRCs with the AUTHENTICATED user's UIC + default privileges (dnet_fal_proc.c), DAP moving through two executive link mailboxes, so the executive ACP checks every file it opens against the USER -- proven by DECNETD.EXE --fal-proc-accept-test in the booted battery (the SAME SYSTEM-only file through the SAME path is served to SYSTEM and refused to GUEST; the server's executive row carries GUEST's UIC [128,129]; a GUEST PUT into SYS$SYSROOT:[SYSMGR] is refused). The process-name + mailbox link is an OVMX-labelled channel (real VMS uses SYS$NET + _NET:; the _NET: server seam is rd vms-dda). NOT yet (filed, never faked): the outbound client running from a BOOTED OVMX over the live datalink (needs rd vms-1f69, booted DECnet node); the INBOUND server reached live from a real VMS COPY (live object-17 dispatch in NETACP onto the FAL server process); block mode.",
+      "plan_ref": "vms-30e"
+    },
+    {
+      "domain": "networking",
+      "facility": "decnet",
+      "facility_name": "DECnet Phase IV (Routing, NSP, Task-to-Task, SET HOST)",
+      "id": "decnet$mail11",
+      "kind": "feature",
+      "vms": "MAIL-11 -- inbound DECnet mail (Session Control object 27): a remote MAIL SEND to NODE::USER is received by a MAIL_SERVER.EXE network server process and stored in the recipient's mail file, read by OVMX MAIL",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsdecnet/mail/dnet_mail11.c",
+      "verified_against": "rd vms-47fd: LIVE -- a real OpenVMS VAX V7.3 MAIL SEND to OVMX::SYSTEM delivered to a booted OVMX and read back with OVMX MAIL (tests/lab/captures/decnet-live-brackets-20261008/); the real OpenVMS VAX V7.3 VAX1->VAX2 capture tests/lab/captures/decnet-mail11-20261008/ replayed through the compiled receiver by tests/vmsdecnet/test_dnet_mail11.c (replies byte-identical: 01 00 00 00 acceptance, %MAIL-E-NOSUCHUSR status + text + 00, final status) and, booted, through NETACP to a real MAIL_SERVER.EXE by DECNETD --mail11-accept-test with OVMX MAIL reading the stored message back (dcl_acceptance_battery).",
+      "notes": "Partial: inbound only (no outbound SEND to NODE::USER), one observed connect-option set (other MAIL-11 dialects refused honestly), MAIL_SERVER runs as the MAIL object account with SYSPRV and creates a recipient's mail file owned by the recipient (XABPRO owner on $CREATE; the ACP refuses a foreign owner without SYSPRV/BYPASS, a system-group UIC, or GRPPRV within the group). Store = OVMX-original id-tagged sequential file SYS$LOGIN-dir OVMX_MAIL.MAI over RMS, not the VMS MAIL.MAI ISAM layout.",
       "plan_ref": "vms-30e"
     },
     {
@@ -3815,7 +3844,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_vmsabi.c",
       "verified_against": null,
-      "notes": "vms-38b: SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM, SYS$CRELNM by their upper-case names (src/libvms/include/vms/starlet.h, vms/descrip.h) run the same executive paths as OVMX's lower-case services. Proven by the alpha vmsabi-rms gate (32-bit program; SHOW LOGICAL/SYSTEM sees the name SYS$CRELNM defined). Partial: SYS$QIO/SYS$QIOW (disk ACP IO$_ACCESS with an ATR list) waits on the ATR$C_ code oracle capture",
+      "notes": "vms-38b: SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM, SYS$CRELNM by their upper-case names (src/libvms/include/vms/starlet.h, vms/descrip.h) run the same executive paths as OVMX's lower-case services. Proven by the alpha vmsabi-rms gate (32-bit program; SHOW LOGICAL/SYSTEM sees the name SYS$CRELNM defined). SYS$QIO/SYS$QIOW serve the ACP functions IO$_ACCESS (FIB descriptor, name, resultant name, ATR list: UCHAR/RECATTR/ASCNAME/CREDATE/REVDATE/EXPDATE/BAKDATE/UIC/FPRO, codes from the ATRDEF capture, ASCNAME space-padded as observed) and IO$_DEACCESS on a file-class channel through the executive ACP; proven by the vmsabi-rms gate. Partial: other $QIO functions on the VMS ABI are SS$_ILLIOFUNC; IO$M_CREATE/IO$M_DELETE and attribute write-back on IO$_DEACCESS are refused, not emulated",
       "plan_ref": "vms-801"
     },
     {
@@ -5804,13 +5833,28 @@
       "facility_name": "File Protection (SOGW/UIC) + ACLs",
       "id": "sys$chkpro",
       "kind": "routine",
-      "vms": "$CHKPRO \u2014 compute-only SOGW protection check helper",
+      "vms": "$CHKPRO - may a subject access an object (protection code, ACL, privileges)",
       "status": "implemented",
-      "authenticity": "advisory",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/libvms/syssvc/sys_security.c:151",
-      "verified_against": null,
-      "notes": "Correct logic, still ZERO OVMX production callers (only starlet.h decl + shr.vec export) \u2014 computed but unused, honestly inert. The ACP enforces access directly (fileprot$sogw_uic), not via $CHKPRO. Re-census 2026-09-14: unchanged.",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "docs/oracle/semantics/chkpro/vax73.txt (69 cases, OpenVMS VAX V7.3) through the semantic-oracle gate and tests/libvms/test_chkpro.c; tests/qemu/test_syssvc_rights_acl.c (the caller's executive rights list after $GRANTID) and test_syssvc_rightslist.c (a $CREATE_USER_PROFILE subject)",
+      "notes": "vms-d404: CHP$_ACCESS/FLAGS/OWNER/PROT/ACL/UIC/PRIV/RIGHTS; the subject is a user profile or the caller as the executive holds it. The protection code denies only RWED (CONTROL is the ACL's); a matching ACE that does not grant is final for group and world; BYPASS grants, READALL only with CHP$M_USEREADALL and no matching ACE, SYSPRV and GRPPRV give the system category. A compute service: it decides, the ACP enforces. Object profiles (objpro) SS$_UNSUPPORTED; output items not filled.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$create_user_profile",
+      "kind": "routine",
+      "vms": "$CREATE_USER_PROFILE - a user's security profile for $CHKPRO",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "tests/qemu/test_syssvc_rightslist.c over the shipped SYSUAF.DAT/RIGHTSLIST.DAT on a mounted ODS-2 volume; docs/oracle/semantics/chkpro/vax73.txt CUP.*",
+      "notes": "vms-d404: UIC and authorized (CHP$M_DEFPRIV: default) privileges from SYSUAF.DAT, the identifiers the user holds from RIGHTSLIST.DAT; RMS$_RNF for an unknown or empty name as V7.3 answers. The profile's layout is OVMX's own (opaque to callers).",
       "plan_ref": "vms-8ad"
     },
     {
@@ -5835,12 +5879,87 @@
       "id": "acldef$acls",
       "kind": "feature",
       "vms": "Access Control List entries (ACEs) on files/objects",
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "stretch",
-      "evidence": "src/libvms/include/acldef.h",
-      "verified_against": null,
-      "notes": "Constants only; no ACE machinery on origin/main (grep for acl_entry/ace_apply/check_acl: zero hits). Re-census 2026-09-14: unchanged.",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vmsfs_acp.c (acp_acl_match, acp_acl_op)",
+      "verified_against": "tests/qemu/test_syssvc_acl.c against a real /dev/vms over the real-VAX ODS-2 fixture; behaviour and on-disk layout from docs/oracle/vax73-acl.md (OpenVMS VAX V7.3)",
+      "notes": "vms-d404: identifier ACEs stored in the FH2 access control area (top of the header, acoffset..rsoffset) as V7.3 stores them; the ACP access check takes the first matching identifier ACE (DEFAULT ACEs skipped); a denying ACE leaves only the system and owner fields; CONTROL required to change an ACL; ADD replaces an ACE for the same identifiers, DELETE keeps PROTECTED ACEs. On create a file inherits its directory's DEFAULT ACEs (DEFAULT cleared) and DEFAULT_PROTECTION, a directory its parent's ACL less NOPROPAGATE ACEs, a new version the previous version's ACL and protection (docs/oracle/vax73-acl.md, Inheritance). Not done: an ACL longer than the primary header (VMS continues it in an extension header) is SS$_ACLFULL; general identifiers match only once the process rights list exists (vms-7d5a), UIC identifiers and * match now.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$parse_acl",
+      "kind": "routine",
+      "vms": "$PARSE_ACL - ACE text to binary",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: IDENTIFIER (UIC, wildcard, *, names via RIGHTSLIST), OPTIONS, ACCESS and DEFAULT_PROTECTION ACEs; SS$_IVACL / SS$_NOSUCHID with the error position at the failing clause, as SET ACL reports it on V7.3.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$format_acl",
+      "kind": "routine",
+      "vms": "$FORMAT_ACL - binary ACE to text",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: SHOW ACL's text for identifier and DEFAULT_PROTECTION ACEs; width/terminator/indent arguments are not applied.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$get_security",
+      "kind": "routine",
+      "vms": "$GET_SECURITY - read an object's security profile",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_core.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: class FILE only: OSS$_OWNER, OSS$_PROTECTION, OSS$_ACL_LENGTH, OSS$_ACL_READ from the executive ACP; other classes SS$_NOCLASS.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$set_security",
+      "kind": "routine",
+      "vms": "$SET_SECURITY - change an object's security profile",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_core.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: class FILE ACL edits (OSS$_ACL_ADD_ENTRY/DELETE_ENTRY/DELETE/DELETE_ALL), OSS$M_LOCAL held until OSS$M_RELCTX; owner/protection items SS$_UNSUPPORTED.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "dcl$set_acl",
+      "kind": "command",
+      "vms": "SET ACL / SHOW ACL / DIRECTORY/ACL, DIRECTORY/SECURITY",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsdcl/dcl_cmd_set.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: output and messages as V7.3 prints them (docs/oracle/vax73-acl.md).",
       "plan_ref": "vms-8ad"
     },
     {
@@ -6276,21 +6395,6 @@
       "evidence": "src/vmsrms/rms_search.c",
       "verified_against": null,
       "notes": "ACP $SEARCH; distinguishes RMS$_DNF (no such dir) from RMS$_NMF (no match)",
-      "plan_ref": "vms-801"
-    },
-    {
-      "domain": "programming-interfaces",
-      "facility": "rms-api",
-      "facility_name": "RMS programmatic API \u2014 entry points, control blocks, file organizations",
-      "id": "crtl$rms_stdio_veneer",
-      "kind": "feature",
-      "vms": "C RTL stdio FILE* (fopen/fwrite/fread/fclose) as a thin veneer over RMS",
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in",
-      "evidence": "src/vmsrms/crtl_rms_stdio.c",
-      "verified_against": null,
-      "notes": "vms-47e/126/3c1: fopen/fwrite/fread/fclose drive sys$create/$open/$connect/$put/$get/$close against the real ODS-2 volume over the ACP (do-it-like-VMS: CRTL is a thin RMS veneer, not musl POSIX). Byte-exact FIX put/read + fail-honest no-POSIX-fallback; chunked >64KiB writes + delete-on-close temps (vms-126). Proven by tests/qemu/test_syssvc_crtl_rms_veneer.c (host ctest, not a real-VMS oracle -> implemented, not verified). vms-9f8e: no longer linked into the alpha DECC$SHR -- the C RTL file layer (crtl$rms_file_layer) serves every RMS-backed DECC$SHR; the source and its host suites remain until their retirement is decided",
       "plan_ref": "vms-801"
     },
     {
@@ -7730,7 +7834,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_mailbox.c",
       "verified_against": null,
-      "notes": "vms.ko-resident; replaced an earlier AF_UNIX facade",
+      "notes": "vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at each read/write (not at $ASSIGN, as on real VMS), with BYPASS/SYSPRV (READALL does not open a mailbox, oracle mbxprot) (rd vms-c6d1); acmode and flags are not yet honoured",
       "plan_ref": "vms-801"
     },
     {
@@ -8204,13 +8308,13 @@
       "facility_name": "SYS$ Security Services ($SETPRV/$CHKPRO/$CHECK_ACCESS)",
       "id": "sys$chkpro",
       "kind": "routine",
-      "vms": "Check protection (system/owner/group/world) against an access mask",
+      "vms": "Check whether a subject may access an object (protection code, ACL, privileges)",
       "status": "implemented",
-      "authenticity": "advisory",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/libvms/syssvc/sys_security.c:151",
-      "verified_against": null,
-      "notes": "correct SOGW compute logic; zero OVMX callers currently invoke it",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "docs/oracle/semantics/chkpro/vax73.txt via the semantic-oracle gate; tests/libvms/test_chkpro.c",
+      "notes": "vms-d404: see protection-acl sys$chkpro.",
       "plan_ref": "vms-801"
     },
     {

@@ -217,6 +217,15 @@ typedef struct _uic UIC;
 #define JPI$_CLINAME        0x020A  /* CLI name (string) */
 #define JPI$_TABLENAME      0x020B  /* CLI table name (string) */
 #define JPI$_JOBTYPE        0x0323  /* Job type (longword) */
+/* JPI$_MODE / JPI$_JOBTYPE values -- oracle-pinned, docs/oracle/alpha84-starlet-
+ * defs/JPIDEF.txt ($EQU JPI$K_OTHER 0, NETWORK 1, BATCH 2, INTERACTIVE 3;
+ * JPI$K_DETACHED 0, LOCAL 3). */
+#define JPI$K_OTHER         0
+#define JPI$K_NETWORK       1
+#define JPI$K_BATCH         2
+#define JPI$K_INTERACTIVE   3
+#define JPI$K_DETACHED      0
+#define JPI$K_LOCAL         3
 
 /* ================================================================
  * SYI$_ item codes for SYS$GETSYI
@@ -242,6 +251,7 @@ typedef struct _uic UIC;
 #define SYI$_CLUSTER_MEMBER 0x10CF  /* Cluster member flag (longword) */
 #define SYI$_CLUSTER_NODES  0x10CA  /* Number of cluster nodes (longword) */
 #define SYI$_SCSNODE        0x1067  /* Node's SCS system name (string); OVMX-private code; see vms-3ab */
+#define SYI$_DEFPRI         4279    /* Default base priority (SYSGEN DEFPRI); STARLET dump */
 #define SYI$_SCSSYSTEMID    0x1065  /* Node's cluster system ID (longword); OVMX-private code; see vms-3ab */
 /* CPU-inventory item codes (vms-f16).  OVMX-private codes continuing the
  * scheme above: the 2026-08-13 oracle dump confirms OVMX's whole SYI$_

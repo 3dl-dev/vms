@@ -26,6 +26,7 @@ extern "C" {
 
 #define BRK$C_DEVICE        1   /* Send to a specific device */
 #define BRK$C_USERNAME      2   /* Send to all terminals of a username */
+#define BRK$C_ALLUSERS      3   /* Send to every terminal a user is logged in on */
 #define BRK$C_ALLTERMS      4   /* Send to all terminals */
 #define BRK$C_USER1         32   /* Send to user terminals (type 1) */
 #define BRK$C_USER2         33   /* Send to user terminals (type 2) */

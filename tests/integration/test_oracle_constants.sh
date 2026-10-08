@@ -6,4 +6,6 @@
 # tools/compat/check_oracle_constants.py. Negative control: test_oracle_constants_negctl.sh.
 set -eu
 SRC=${1:-$(cd "$(dirname "$0")/../.." && pwd)}
+# vms/atrdef.h is generated from the ATRDEF capture; it must be the generator's output.
+python3 "$SRC/tools/cross-alpha-vms/include-surface/gen_atrdef.py" --check
 exec python3 "$SRC/tools/compat/check_oracle_constants.py" --root="$SRC"

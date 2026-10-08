@@ -102,6 +102,7 @@
 #include <time.h>
 
 #include "starlet.h"
+#include "lnmdef.h"
 #include "descrip.h"
 #include "ssdef.h"
 #include "rmsdef.h"
@@ -1074,6 +1075,35 @@ int main(int argc, char **argv)
      * clean-room VDA0: fixture. Every fork+exec below inherits this env; only the
      * IMGACT-activated OVMXRT.EXE reads it (the static toolchain images do not). */
     setenv("OVMX_SYSDEVICE", SYSVOL_UNIT, 1);
+
+    /*
+     * SYS$SYSDEVICE for THIS JOB, not only the system-wide seed (rd vms-ef21
+     * follow-on). LNM$SYSTEM is executive-resident and outlives every suite in
+     * the guest, and a suite that defined LNM$SYSTEM SYS$SYSDEVICE in an outer
+     * mode (sys$crelnm with no acmode is the caller's USER mode, as on VMS)
+     * leaves a translation that shadows the EXECUTIVE-mode seed this suite's
+     * processes write -- the drive's DCL then resolves SYS$SYSTEM:TCC.EXE onto
+     * the wrong volume (%DCL-E-IVIMAGE, only when such a suite ran first). The
+     * job table is searched before LNM$SYSTEM, so the drive (MMK, the DCL it
+     * spawns, every tool -- one job) resolves onto SYSVOL_UNIT whatever an
+     * earlier suite left system-wide, exactly as test_syssvc_authorize does.
+     */
+    {
+        uint32_t vpid = 0;
+        (void)vms_kif_register(&vpid);               /* this suite is the job root */
+        static const char tab[] = "LNM$JOB", nam[] = "SYS$SYSDEVICE", val[] = SYSVOL_UNIT;
+        struct dsc$descriptor_s td = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)tab };
+        struct dsc$descriptor_s nd = { sizeof nam - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)nam };
+        uint32_t attr = LNM$M_CONCEALED | LNM$M_TERMINAL;
+        uint8_t mode = 1;                            /* PSL$C_EXEC, as STARTUP defines it */
+        struct item_list_3 il[3];
+        memset(il, 0, sizeof il);
+        il[0].buflen = 4; il[0].item_code = LNM$_ATTRIBUTES; il[0].bufaddr = &attr;
+        il[1].buflen = (uint16_t)(sizeof val - 1); il[1].item_code = LNM$_STRING; il[1].bufaddr = (void *)val;
+        uint32_t lst = sys$crelnm(NULL, &td, &nd, &mode, il);
+        CHECK((lst & 1) || lst == SS$_SUPERSEDE,
+              "LNM$JOB SYS$SYSDEVICE = " SYSVOL_UNIT " for the drive's job (precondition)");
+    }
 
     /* Mount SYSVOL_UNIT and resolve its [SYS0.SYSCOMMON.SYSEXE] DID once, so the
      * do_link drive can write the produced image there over the ACP and IMGACT

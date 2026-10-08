@@ -8395,6 +8395,10 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     } else {
         /* allocate symbol in corresponding section */
         sec = ad->section;
+        /* OVMX (vms-db7): an external definition under #pragma extern_model
+           strict_refdef "NAME" goes to that psect. */
+        if (!sec && tcc_state->extern_model_sec && v && !(type->t & VT_STATIC))
+            sec = tcc_state->extern_model_sec;
         if (!sec) {
             CType *tp = type;
             while ((tp->t & (VT_BTYPE|VT_ARRAY)) == (VT_PTR|VT_ARRAY))

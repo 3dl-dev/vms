@@ -141,6 +141,13 @@ extern "C" {
 #define IO$M_ACCEPT         0x0080  /*  accept */
 #define IO$M_ABORT          0x0100  /*  abort */
 
+/* IO$M_NORSWAIT (bit 10, $IODEF 1024 in docs/oracle/vax73-starlet-defs/IODEF.txt):
+ * a mailbox write that finds no room completes with SS$_MBFULL instead of waiting
+ * (rd vms-c6d1). Guarded: vms/iodef.h carries the same value. */
+#ifndef IO$M_NORSWAIT
+#define IO$M_NORSWAIT                1024
+#endif
+
 /*
  * Mailbox modifiers (IO$_SETMODE / IO$_SETCHAR).
  *

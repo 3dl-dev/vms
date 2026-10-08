@@ -287,3 +287,15 @@ vms_kif_mbx_write_eof=PROCEDURE
 vms_kif_lnm_present=PROCEDURE
 vms_kif_lnm_lookup=PROCEDURE
 vms_kif_lnm_scope_key=PROCEDURE
+# RTAn: originating-terminal type/width/page (rd vms-14b). APPENDED.
+vms_kif_terminal_setchar=PROCEDURE
+# Terminal $QIO IO$_SETMODE / IO$_SETCHAR (rd vms-d900). APPENDED.
+vms_kif_ttsetmode=PROCEDURE
+# Process rights list (rd vms-7d5a). APPENDED.
+vms_kif_rights=PROCEDURE
+vms_kif_rights_list=PROCEDURE
+# Mailbox protection mask + IO$M_NORSWAIT write (rd vms-c6d1). APPENDED.
+vms_kif_mbx_create_prot=PROCEDURE
+vms_kif_mbx_write_ex=PROCEDURE
+# Length-carrying logical-name equivalences (rd vms-b14e, process-permanent files). APPENDED.
+vms_kif_lnm_define_n=PROCEDURE

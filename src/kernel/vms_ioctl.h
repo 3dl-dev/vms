@@ -270,16 +270,11 @@ struct vms_mode_args {
  * a privilege here without adding the check it names is the defect this
  * constant exists to prevent.
  *
- * SYSPRV AND GRPPRV ARE DELIBERATELY ABSENT even though vms_lnm.c's new
- * check also accepts either as an alternate to SYSNAM/GRPNAM (real,
- * documented VMS behaviour -- OpenVMS DCL Dictionary, DEFINE: SYSPRV
- * substitutes for SYSNAM on LNM$SYSTEM, and SYSPRV or GRPPRV substitutes
- * for GRPNAM on LNM$GROUP). Adding them here would tell every OTHER
- * reader of this mask (dcl_cmd_set.c's enforced_privs_held(), SHOW
- * PROCESS/PRIVILEGES, F$PRIVILEGE) that OVMX enforces SYSPRV/GRPPRV in
- * the general VMS sense -- bypass system/group object protection
- * everywhere -- which remains false pending vms-pv1. They are consulted
- * by exactly one narrow code path, not enforced as their own control.
+ * GRPPRV is enforced by the Files-11 ACP's protection gate: it puts the accessor in
+ * the SYSTEM category for a file owned by its own UIC group (vmsfs_acp.c
+ * acp_check_access, observed on OpenVMS VAX V7.3 -- docs/oracle/vax73-acl.md
+ * "GRPPRV"; test_syssvc_privilege_enforce, acp-grpprv-ignored), and vms_lnm.c
+ * accepts it for LNM$GROUP.
  *
  * GROUP IS DELIBERATELY ABSENT, and that is a measurement rather than an
  * oversight. The obvious guess -- GROUP to read another process in your
@@ -323,7 +318,8 @@ struct vms_mode_args {
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
-                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
+                             VMS_PRV_M_GRPPRV)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
@@ -444,6 +440,8 @@ struct vms_ef_common_args {
  * the public $ENQ flag contract (see src/libvms/syssvc/sys_lock.c).
  */
 #define LCK_M_SYNC      0x10   /* Block in-kernel until granted (sync ENQ) */
+#define LCK_M_SYNCSTS   0x20   /* $ENQ LCK$M_SYNCSTS: an at-once grant is SS$_SYNCH, no AST */
+#define LCK_M_DEQALL    0x40   /* $DEQ LCK$M_DEQALL: the lock and its sublocks, or (lkid 0) all */
 
 /* Lock value block size */
 #define LCK_VALBLK_SIZE 16
@@ -1943,6 +1941,9 @@ struct vms_devinfo {
     uint32_t devchar_dev;   /* DVI$_DEVCHAR: the DEV$M_* characteristics the
                             * driver gave the unit (0 = not recorded); rd vms-de3a */
     uint32_t devbufsiz;    /* DVI$_DEVBUFSIZ (0 = not recorded) */
+    uint32_t perm_width;   /* PERMANENT terminal width -- IO$_SENSECHAR's answer
+                            * (SET TERMINAL/PERMANENT); rd vms-d900 */
+    uint32_t perm_page;    /* PERMANENT terminal page length */
 };
 
 /*
@@ -2014,6 +2015,8 @@ struct vms_devscan_args {
 #define VMS_TTSET_CHAR      0x1     /* apply setchar/clrchar */
 #define VMS_TTSET_WIDTH     0x2     /* apply width */
 #define VMS_TTSET_PAGE      0x4     /* apply page */
+#define VMS_TTSET_PERM      0x8     /* also the PERMANENT width/page/characteristics
+                                     * (SET TERMINAL/PERMANENT; rd vms-d900) */
 
 struct vms_setmode_args {
     uint32_t chan;              /* channel assigned to the terminal */
@@ -2173,15 +2176,15 @@ struct vms_terminal_args {
  * These values are measured, not chosen: aarch64 and x86_64 agree,
  * because every field is a fixed-width type.
  */
-_Static_assert(sizeof(struct vms_devinfo) == 80,
+_Static_assert(sizeof(struct vms_devinfo) == 88,
                "struct vms_devinfo changed size -- kernel and userspace would disagree on device attribute offsets");
 _Static_assert(sizeof(struct vms_assign_args) == 24,
                "struct vms_assign_args changed size -- $ASSIGN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_dassgn_args) == 8,
                "struct vms_dassgn_args changed size -- $DASSGN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_getdvi_args) == 96,
+_Static_assert(sizeof(struct vms_getdvi_args) == 104,
                "struct vms_getdvi_args changed size -- $GETDVI would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_devscan_args) == 88,
+_Static_assert(sizeof(struct vms_devscan_args) == 96,
                "struct vms_devscan_args changed size -- $DEVICE_SCAN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_setmode_args) == 40,
                "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
@@ -2198,9 +2201,9 @@ _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
                "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETDVI == 0xC0605652u,
+_Static_assert(VMS_IOCTL_GETDVI == 0xC0685652u,
                "VMS_IOCTL_GETDVI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0585653u,
+_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0605653u,
                "VMS_IOCTL_DEVSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TTSETMODE == 0xC0285654u,
                "VMS_IOCTL_TTSETMODE encodes differently here than on the reference build");
@@ -2356,6 +2359,48 @@ _Static_assert(VMS_IOCTL_TERM_SETRPI == 0xC058567Au,
                "VMS_IOCTL_TERM_SETRPI encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TERM_GETRPI == 0xC058567Bu,
                "VMS_IOCTL_TERM_GETRPI encodes differently here than on the reference build");
+
+/*
+ * RTAn: ORIGINATING-TERMINAL TYPE AND GEOMETRY (rd vms-14b). On VMS a remote
+ * terminal takes its device type and characteristics from the terminal the
+ * SET HOST came from: a real VAX SET HOST from an LA36-typed console shows
+ * "Device_Type: LA36", Width 132, Page 0 on the RTAn: (oracle tests/lab/
+ * captures/decnet-sethost-inbound-20261005/vax-rta-show-terminal.txt). The
+ * CTERM host that minted the RTAn: decodes what the VAX conveyed (its CTERM
+ * Initiate, src/vmsdecnet/cterm/dnet_cterm_hostfsm.c) and records ONLY those
+ * values here; $GETDVI (struct vms_devinfo devtype/width/page) reads them back.
+ *
+ * SET is privileged exactly as TERM_SETRPI (substrate superuser or SETPRV):
+ * only the network ACP that minted the terminal may say what is at its far
+ * end. Only a dynamically-minted RTAn: accepts it (SS$_IVDEVNAM otherwise --
+ * a local terminal such as OPA0: is never redefined through this door). Each
+ * field applies only when its VMS_TERMCHAR_M_* flag is set, so a value the
+ * wire did not carry is never written. Under VMS_TERMCHAR_M_CHAR the
+ * characteristic vector is cleared by `clrchar`, then set by `setchar`
+ * (VMS_TTC_* bits only); bits named in neither keep their minted value. Bounds are the wire's own field sizes
+ * (DT$ code and page length are bytes, width a word); a larger value is
+ * SS$_BADPARAM, never clipped. OVMX design choice (Rule 8): the byte layout.
+ */
+#define VMS_TERMCHAR_M_TYPE   0x1u   /* apply devtype (a DT$_ code)        */
+#define VMS_TERMCHAR_M_WIDTH  0x2u   /* apply width                        */
+#define VMS_TERMCHAR_M_PAGE   0x4u   /* apply page length                  */
+#define VMS_TERMCHAR_M_CHAR   0x8u   /* apply setchar/clrchar (VMS_TTC_*)  */
+struct vms_termchar_args {
+    char     devnam[VMS_DEVNAM_SIZE];        /* the RTAn: terminal (in)        */
+    uint32_t flags;                          /* VMS_TERMCHAR_M_*               */
+    uint32_t devtype;                        /* DT$_ code, 0..255              */
+    uint32_t width;                          /* 0..65535                       */
+    uint32_t page;                           /* 0..255                         */
+    uint64_t setchar;                        /* VMS_TTC_* bits to set          */
+    uint64_t clrchar;                        /* VMS_TTC_* bits to clear        */
+    uint32_t status;                         /* return: SS$_ status            */
+    uint32_t pad;
+};
+#define VMS_IOCTL_TERM_SETCHAR  _IOWR(VMS_IOC_MAGIC, 0x7c, struct vms_termchar_args)
+_Static_assert(sizeof(struct vms_termchar_args) == 56,
+               "struct vms_termchar_args changed size -- RTAn: terminal type would decode at the wrong offsets");
+_Static_assert(VMS_IOCTL_TERM_SETCHAR == 0xC038567Cu,
+               "VMS_IOCTL_TERM_SETCHAR encodes differently here than on the reference build");
 
 _Static_assert(sizeof(struct vms_termlogin_args) == 56,
                "struct vms_termlogin_args changed size -- RTAn: netlogin note would decode at the wrong offsets");
@@ -3144,7 +3189,11 @@ struct vms_getsyi_mem_args {
  * value that was in force. A process that never set one reports VMS_DFPROT_INITIAL.
  * OVMX design choice (Rule 8): the byte layout of this ioctl.
  */
-#define VMS_DFPROT_INITIAL 0xFF00u   /* S:RWED,O:RWED,G:,W: -- OVMX's long-standing default */
+/* VMS's process default: the SYSGEN parameter RMS_FILEPROT, whose documented default
+ * is 64000 = %XFA00, S:RWED,O:RWED,G:RE,W: (Baron 2026-10-08). The Alpha V8.4 lab's
+ * $SETDFPROT(0,&old) returns FA00 for SYSTEM (src/libvms/syssvc/sys_misc.c). OVMX has
+ * no SYSGEN RMS_FILEPROT yet; this is that parameter's default. */
+#define VMS_DFPROT_INITIAL 0xFA00u   /* S:RWED,O:RWED,G:RE,W: -- RMS_FILEPROT default */
 struct vms_dfprot_args {
     uint32_t set;       /* in:  nonzero = store newprot */
     uint32_t newprot;   /* in:  16-bit protection word (low half) */
@@ -3171,6 +3220,34 @@ struct vms_ddir_args {
     char     olddir[VMS_DDIR_SIZE];  /* out: the directory in force before    */
 };
 #define VMS_IOCTL_DDIR      _IOWR(VMS_IOC_MAGIC, 0x5F, struct vms_ddir_args)
+
+/*
+ * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
+ * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
+ * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
+ * identifier ACE against it. op GRANT/REVOKE target the process whose VMS pid is
+ * `pid` (0 = the caller) and need CMKRNL (the OpenVMS V7.3 / Alpha V8.4 probe:
+ * $GRANTID with every privilege disabled is SS$_NOPRIV, docs/oracle/semantics/
+ * rights). GRANT answers SS$_WASCLR when the identifier was not held and
+ * SS$_WASSET when it was (its attributes are then replaced); REVOKE the reverse
+ * (the same probe). LIST returns the list. Inherited at REGISTER_CONTINUE like the
+ * privilege mask. OVMX design choice (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_RIGHTS_MAX        32
+#define VMS_RIGHTS_OP_GRANT   1u
+#define VMS_RIGHTS_OP_REVOKE  2u
+#define VMS_RIGHTS_OP_LIST    3u
+struct vms_rights_args {
+    uint32_t op;                     /* in:  VMS_RIGHTS_OP_*                   */
+    uint32_t status;                 /* out: SS$_ status                       */
+    uint32_t pid;                    /* in:  target VMS pid, 0 = the caller    */
+    uint32_t id;                     /* in:  identifier (GRANT/REVOKE)         */
+    uint32_t attrib;                 /* in:  attributes (GRANT); out: previous */
+    uint32_t count;                  /* out: identifiers held (LIST)           */
+    uint32_t ids[VMS_RIGHTS_MAX];    /* out: LIST                              */
+    uint32_t attrs[VMS_RIGHTS_MAX];  /* out: LIST                              */
+};
+#define VMS_IOCTL_RIGHTS    _IOWR(VMS_IOC_MAGIC, 0x96, struct vms_rights_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -3249,6 +3326,8 @@ _Static_assert(sizeof(struct vms_ddir_args) == 8 + 2 * VMS_DDIR_SIZE,
                "vms_ddir_args layout changed: VMS_IOCTL_DDIR ABI break");
 _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
+               "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*

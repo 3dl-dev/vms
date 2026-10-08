@@ -1,0 +1,226 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$SYSROOT:[SYSMGR]
+
+
+$ SHOW ACL [.DPROP]A.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.DPROP]A.TXT;1,  on  8-OCT-2026 11:07:31.86
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+          (IDENTIFIER=[200,*],OPTIONS=NOPROPAGATE,ACCESS=EXECUTE)
+
+$ DIRECTORY/SECURITY [.DPROP]A.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.DPROP]
+
+A.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+          (IDENTIFIER=[200,*],OPTIONS=NOPROPAGATE,ACCESS=EXECUTE)
+
+Total of 1 file.
+
+$ DUMP/HEADER/BLOCKS=COUNT=0 [.DPROP]A.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.DPROP]A.TXT;1 on  8-OCT-2026 11:07:33.58
+File ID (5835,31798,0)   End of file block 1 / Allocated 9
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           243
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (5835,31798,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      35
+        Highest block:                    9
+        End of file block:                1
+        End of file byte:                 38
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                2
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (5834,31798,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                1
+    Client attributes:                    None
+
+Identification area
+    File name:                            A.TXT;1
+    Revision number:                      1
+    Creation date:                         8-OCT-2026 10:51:54.93
+    Revision date:                         8-OCT-2026 11:07:18.25
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+        Count:          9        LBN:     247077
+
+Access Control List
+    (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+    (IDENTIFIER=[200,*],OPTIONS=NOPROPAGATE,ACCESS=EXECUTE)
+
+Checksum:                                 17497
+
+$ CREATE/DIRECTORY [.DPROP.SUB]
+
+
+$ SHOW ACL [.DPROP]SUB.DIR
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.DPROP]SUB.DIR;1,  on  8-OCT-2026 11:07:35.58
+          (IDENTIFIER=[CORPTST],OPTIONS=DEFAULT,ACCESS=READ+WRITE)
+          (IDENTIFIER=[300,*],ACCESS=READ)
+          (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+$ DIRECTORY/SECURITY [.DPROP]SUB.DIR
+
+Directory SYS$SYSROOT:[SYSMGR.DPROP]
+
+SUB.DIR;1            [SYSTEM]                         (RWE,RWE,RE,RE)
+          (IDENTIFIER=[CORPTST],OPTIONS=DEFAULT,ACCESS=READ+WRITE)
+          (IDENTIFIER=[300,*],ACCESS=READ)
+          (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+Total of 1 file.
+
+$ OPEN/WRITE F [.DPROP.SUB]B.TXT
+
+
+$ CLOSE F
+
+
+$ SHOW ACL [.DPROP.SUB]B.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.DPROP.SUB]B.TXT;1,  on  8-OCT-2026 11:07:39.18
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+
+$ DIRECTORY/SECURITY [.DPROP.SUB]B.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.DPROP.SUB]
+
+B.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+
+Total of 1 file.
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=CONTROL) [.DPROP]A.TXT
+
+
+$ SET PROTECTION=(S:RWED,O:RWED,G:RWED,W:R) [.DPROP]A.TXT
+
+
+$ OPEN/WRITE F [.DPROP]A.TXT
+
+
+$ CLOSE F
+
+
+$ DIRECTORY/SECURITY [.DPROP]A.TXT;*
+
+Directory SYS$SYSROOT:[SYSMGR.DPROP]
+
+A.TXT;2              [SYSTEM]                         (RWED,RWED,RWED,R)
+          (IDENTIFIER=[SYSTEM],ACCESS=CONTROL)
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+A.TXT;1              [SYSTEM]                         (RWED,RWED,RWED,R)
+          (IDENTIFIER=[SYSTEM],ACCESS=CONTROL)
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+          (IDENTIFIER=[200,*],OPTIONS=NOPROPAGATE,ACCESS=EXECUTE)
+
+Total of 2 files.
+
+$ COPY [.DPROP]A.TXT;1 [.DPROP]C.TXT
+
+
+$ DIRECTORY/SECURITY [.DPROP]C.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.DPROP]
+
+C.TXT;1              [SYSTEM]                         (RWED,RWED,RE,)
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+          (IDENTIFIER=[200,*],OPTIONS=NOPROPAGATE,ACCESS=EXECUTE)
+
+Total of 1 file.
+
+$ OPEN/WRITE F [.DPROP]D.TXT
+
+
+$ CLOSE F
+
+
+$ DUMP/HEADER/BLOCKS=COUNT=0 [.DPROP]SUB.DIR
+
+Dump of file SYS$SYSROOT:[SYSMGR.DPROP]SUB.DIR;1 on  8-OCT-2026 11:07:49.12
+File ID (5836,31799,0)   End of file block 1 / Allocated 9
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           231
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (5836,31799,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Non-spanned
+        Record size:                      512
+        Highest block:                    9
+        End of file block:                2
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              512
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 Contiguous, Directory, MoveFile disabled
+    Caching attribute:                    Writethrough
+    Map area words in use:                2
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWE, O:RWE, G:RE, W:RE
+    Back link file identification:        (5834,31798,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                9
+    Client attributes:                    None
+
+Identification area
+    File name:                            SUB.DIR;1
+    Revision number:                      0
+    Creation date:                         8-OCT-2026 11:07:34.49
+    Revision date:                         8-OCT-2026 11:07:34.49
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+        Count:          9        LBN:     247086
+
+Access Control List
+    (IDENTIFIER=[CORPTST],OPTIONS=DEFAULT,ACCESS=READ+WRITE)
+    (IDENTIFIER=[300,*],ACCESS=READ)
+    (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+Checksum:                                 836

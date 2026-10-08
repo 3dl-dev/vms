@@ -11,6 +11,8 @@
  *   NETMBX  $ASSIGN of the DECnet device _NET: is SS$_NOPRIV without it, a channel with it.
  *   READALL IO$_ACCESS (read) of SYSUAF.DAT (S:RWE,O:RWE,G:none,W:none) is
  *           SS$_NOPRIV for [100,100] and granted with READALL alone.
+ *   GRPPRV  [100,100] reads a S:RWED file owned by [100,1] (its own group) with
+ *           GRPPRV, not one owned by [200,1], nor a [100,1] file with S none.
  *   BYPASS  the same open is granted with BYPASS alone.
  *   SYSPRV  the same open is granted with SYSPRV alone (the accessor qualifies for
  *           the SYSTEM protection category).
@@ -72,6 +74,52 @@ static uint32_t open_sysuaf(uint32_t chan, uint16_t sysexe)
     return st;
 }
 
+/* A file in [SYS0.SYSCOMMON.SYSEXE] with the given owner and protection. */
+static uint32_t mkfile(uint32_t chan, uint16_t dir, const char *name, uint16_t g, uint16_t m,
+                       uint16_t prot)
+{
+    struct vms_acp_fileop_args f;
+    memset(&f, 0, sizeof(f));
+    f.chan = chan;
+    f.func = VMS_ACP_FOP_CREATE;
+    f.modifiers = VMS_ACP_M_CREATE;
+    f.did_num = dir; f.did_seq = 1;
+    f.version = 1;
+    f.attr_ctl = VMS_ACP_ATTR_PROT | VMS_ACP_ATTR_OWNER;
+    f.attr.fileprot = prot;
+    f.attr.uic_group = g; f.attr.uic_member = m;
+    strncpy(f.name, name, VMS_ACP_NAME_SIZE - 1);
+    return vms_kif_acp_fileop(&f);
+}
+
+static uint32_t rmfile(uint32_t chan, uint16_t dir, const char *name)
+{
+    struct vms_acp_fileop_args f;
+    memset(&f, 0, sizeof(f));
+    f.chan = chan;
+    f.func = VMS_ACP_FOP_DELETE;
+    f.modifiers = VMS_ACP_M_DELETE;
+    f.did_num = dir; f.did_seq = 1;
+    f.version = 1;
+    strncpy(f.name, name, VMS_ACP_NAME_SIZE - 1);
+    return vms_kif_acp_fileop(&f);
+}
+
+static uint32_t openf(uint32_t chan, uint16_t dir, const char *name)
+{
+    struct vms_acp_access_args a;
+    uint32_t st;
+    memset(&a, 0, sizeof(a));
+    a.chan = chan;
+    a.did_num = dir;
+    a.did_seq = 1;
+    strncpy(a.name, name, VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_access(&a);
+    if (st & 1)
+        (void)vms_kif_acp_deaccess(chan);
+    return st;
+}
+
 static void priv(uint64_t bit, int on)
 {
     uint64_t prev = 0;
@@ -112,6 +160,13 @@ int main(void)
     syscommon = (uint16_t)resolve_did(chan, sys0, "SYSCOMMON.DIR");
     sysexe = (uint16_t)resolve_did(chan, syscommon, "SYSEXE.DIR");
     check(sys0 && syscommon && sysexe, "walk to [SYS0.SYSCOMMON.SYSEXE] as the privileged parent");
+
+    /* GRPPRV fixtures, made while still privileged: S:RWED only (0xFFF0) owned by
+     * [100,1] (decimal group 100: the dropped identity's own group) and by [200,1]; and O:RWED only
+     * (0xFF0F) owned by [100,1]. */
+    check(mkfile(chan, sysexe, "GRPT1.DAT", 100, 1, 0xFFF0) & 1, "create GRPT1.DAT [100,1] (S:RWED,O,G,W)");
+    check(mkfile(chan, sysexe, "GRPT2.DAT", 200, 1, 0xFFF0) & 1, "create GRPT2.DAT [200,1] (S:RWED,O,G,W)");
+    check(mkfile(chan, sysexe, "GRPT3.DAT", 100, 1, 0xFF0F) & 1, "create GRPT3.DAT [100,1] (S,O:RWED,G,W)");
 
     /* Drop to an unprivileged UIC; keep only SETPRV so single bits can be toggled. */
     st = vms_kif_setident("PRIVT", (100u << 16) | 100u, base);
@@ -175,6 +230,23 @@ int main(void)
           "SYSPRV alone grants the read (SYSTEM protection category)");
     priv(PRV$M_SYSPRV, 0);
     check(open_sysuaf(chan, sysexe) == SS$_NOPRIV, "SYSPRV off again: refused");
+
+    /* --- GRPPRV: the system category for its own group's files (V7.3 oracle) --- */
+    check(openf(chan, sysexe, "GRPT1.DAT") == SS$_NOPRIV,
+          "[100,100] without GRPPRV is refused GRPT1.DAT (control)");
+    priv(PRV$M_GRPPRV, 1);
+    /* negctl: acp-grpprv-ignored */
+    check(openf(chan, sysexe, "GRPT1.DAT") & 1,
+          "GRPPRV reads its own group's GRPT1.DAT through the system field");
+    check(openf(chan, sysexe, "GRPT2.DAT") == SS$_NOPRIV,
+          "GRPPRV does not reach GRPT2.DAT, owned by another group");
+    check(openf(chan, sysexe, "GRPT3.DAT") == SS$_NOPRIV,
+          "GRPPRV grants only what the system field allows (GRPT3.DAT: S none)");
+    priv(PRV$M_GRPPRV, 0);
+    priv(PRV$M_BYPASS, 1);
+    check((rmfile(chan, sysexe, "GRPT1.DAT") & 1) && (rmfile(chan, sysexe, "GRPT2.DAT") & 1) &&
+          (rmfile(chan, sysexe, "GRPT3.DAT") & 1), "delete the GRPPRV fixtures (restore)");
+    priv(PRV$M_BYPASS, 0);
 
     (void)vms_kif_dassgn((uint16_t)chan);
     printf("=== test_syssvc_privilege_enforce: %d passed, %d failed ===\n", pass, fail);

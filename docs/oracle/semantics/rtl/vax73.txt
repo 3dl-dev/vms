@@ -1,7 +1,7 @@
 # provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod semvax-1 node VAX1, captured 2026-10-08 by
 #   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
 #   Observed output of the real system (clean-room Rule 8); nothing disassembled.
-# spec: tools/oracle/semantic/specs/rtl.py sha256=883b4d9cf0b7832059cb43381b0a2a29098f424b34e1108797e62cb0148fb4e7
+# spec: tools/oracle/semantic/specs/rtl.py sha256=f39cd05de1e76476638a9c49b66ee6bf43b20d05488d1b1745fbabda9393d349
 === SEMPROBE rtl BEGIN ===
 STR.COPY_DX st=00000001 d1="abc" len=3
 STR.COPY_DX.EMPTY st=00000001 d1="" len=0

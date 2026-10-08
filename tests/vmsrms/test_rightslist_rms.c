@@ -114,19 +114,19 @@ int main(void)
     check(sizeof(rdb_identifier_record_t) == 48, "identifier record is 48 bytes");
     check(sizeof(rdb_holder_record_t) == 16, "holder record is 16 bytes");
 
-    char path[] = "/tmp/ovmx_rdb_XXXXXX";
+    char path[64] = "/tmp/ovmx_rdb_XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) { printf("mkstemp failed\n"); return 1; }
     rms_file_t *f = rms_io_posix_wrap(fd);
     check(f != NULL, "wrap fd");
     if (!f) { close(fd); unlink(path); return 1; }
 
-    /* ---- $CREATE the 2-key RIGHTSLIST ---- */
+    /* ---- $CREATE the 3-key RIGHTSLIST (VALUE, HOLDER, NAME: the oracle's keys) ---- */
     rightslist_rms_file_t rf;
     uint32_t st = rightslist_rms_create(f, &rf);
-    check(st == RMS$_CREATED && rf.ctx, "rightslist_rms_create (VALUE + NAME keys)");
+    check(st == RMS$_CREATED && rf.ctx, "rightslist_rms_create (VALUE + HOLDER + NAME keys)");
     if (!rf.ctx) { rms_io_posix_unwrap(f); unlink(path); return 1; }
-    check(rf.ctx->num_keys == 2, "two keys: VALUE (primary) + NAME (secondary)");
+    check(rf.ctx->num_keys == 3, "three keys: VALUE (primary) + HOLDER + NAME (secondaries)");
 
     /* ---- $PUT every oracle identifier ---- */
     for (int i = 0; i < NIDS; i++) {
@@ -142,14 +142,22 @@ int main(void)
     /* ---- re-bind: prove the on-disk 2-key Prolog-3 image ---- */
     st = rightslist_rms_open(f, &rf);
     check($VMS_STATUS_SUCCESS(st) && rf.ctx, "rightslist_rms_open re-binds prologue");
-    check(rf.ctx && rf.ctx->num_keys == 2 &&
+    check(rf.ctx && rf.ctx->num_keys == 3 &&
           rf.ctx->keys[0].ref == RIGHTSLIST_KRF_VALUE &&
           rf.ctx->keys[0].key_size == 4 &&
           rf.ctx->keys[0].seg0_pos == RDB$K_IDENTIFIER_OFF &&
-          rf.ctx->keys[1].ref == RIGHTSLIST_KRF_NAME &&
-          rf.ctx->keys[1].key_size == RDB$K_NAME_LEN &&
-          rf.ctx->keys[1].seg0_pos == RDB$K_NAME_OFF,
-          "prologue: key0=VALUE@0x00/4, key1=NAME@0x10/32");
+          (rf.ctx->keys[0].flags & (1u << P3_KEYV_DUPKEYS)) &&
+          rf.ctx->keys[1].ref == RIGHTSLIST_KRF_HOLDER &&
+          rf.ctx->keys[1].key_size == 8 &&
+          rf.ctx->keys[1].seg0_pos == RDB$K_HOLDER_OFF &&
+          (rf.ctx->keys[1].flags & (1u << P3_KEYV_NULKEYS)) &&
+          rf.ctx->keys[2].ref == RIGHTSLIST_KRF_NAME &&
+          rf.ctx->keys[2].key_size == RDB$K_NAME_LEN &&
+          rf.ctx->keys[2].seg0_pos == RDB$K_NAME_OFF,
+          "prologue: key0=VALUE@0x00/4 dup, key1=HOLDER@0x08/8 null, key2=NAME@0x10/32");
+    check(rightslist_rms_is_current(&rf), "the bound file is the current (three-key) layout");
+    if (rf.ctx)
+        rf.ctx->writable = 1;          /* re-bound read-only; the writes below need it */
 
     /* ---- read BY NAME (secondary key) + assert oracle offsets ---- */
     for (int i = 0; i < NIDS; i++) {
@@ -213,6 +221,104 @@ int main(void)
         check(rightslist_get_by_name(&rf, "system", &out) == RMS$_NORMAL &&
               rdb_ident_value(&out) == 0x00010004u,
               "case-insensitive name lookup (system -> SYSTEM)");
+    }
+
+    /* ---- holder records (vms-7d5a) ---- */
+    {
+        rdb_holder_record_t hr;
+        rdb_identifier_record_t out;
+        p3_rfa_t rfa[8];
+        uint16_t n = 0;
+        uint8_t hk[8];
+        uint32_t ovmxres = 0x80010003u;
+
+        rdb_holder_set(&hr, ovmxres, 0, 0x00010004u, 0);
+        check(rightslist_put_holder(&rf, &hr) == RMS$_NORMAL, "put holder OVMXRES <- [1,4]");
+        rdb_holder_set(&hr, ovmxres, 1, 0x00010007u, 0);
+        check(rightslist_put_holder(&rf, &hr) == RMS$_NORMAL, "put holder OVMXRES <- [1,7] (attr 1)");
+        rdb_holder_set(&hr, 0x80000003u, 0, 0x00010004u, 0);
+        check(rightslist_put_holder(&rf, &hr) == RMS$_NORMAL, "put holder INTERACTIVE <- [1,4]");
+
+        check(rightslist_get_by_value(&rf, ovmxres, &out) == RMS$_NORMAL &&
+              rdb_ident_value(&out) == ovmxres,
+              "by value the identifier's DEFINITION record comes first, ahead of its holders");
+        check(rightslist_get_by_name(&rf, "OVMXRES", &out) == RMS$_NORMAL,
+              "the name key still finds it (holder records carry no name)");
+
+        p3_put_le32(hk, 0x00010004u); p3_put_le32(hk + 4, 0);
+        check(rms_p3_sidr_lookup(rf.ctx, RIGHTSLIST_KRF_HOLDER, hk, 8, rfa, 8, &n) == RMS$_NORMAL &&
+              n == 2, "HOLDER key: [1,4] holds two identifiers");
+        p3_put_le32(hk, 0);
+        check(rms_p3_sidr_lookup(rf.ctx, RIGHTSLIST_KRF_HOLDER, hk, 8, rfa, 8, &n) == RMS$_RNF,
+              "HOLDER key: definition records (holder 0) are not indexed (null key)");
+
+        check(rightslist_delete_holder(&rf, ovmxres, 0x00010007u, 0) == RMS$_NORMAL,
+              "delete holder OVMXRES <- [1,7]");
+        check(rightslist_delete_holder(&rf, ovmxres, 0x00010007u, 0) == RMS$_RNF,
+              "deleting it again is RMS$_RNF");
+        check(rightslist_get_by_value(&rf, ovmxres, &out) == RMS$_NORMAL,
+              "the identifier record survives a holder delete");
+
+        check(rightslist_delete_identifier(&rf, ovmxres) == RMS$_NORMAL,
+              "delete identifier OVMXRES (and its holder records)");
+        check(rightslist_get_by_value(&rf, ovmxres, &out) == RMS$_RNF &&
+              rightslist_get_by_name(&rf, "OVMXRES", &out) == RMS$_RNF,
+              "OVMXRES is gone by value and by name");
+        p3_put_le32(hk, 0x00010004u); p3_put_le32(hk + 4, 0);
+        check(rms_p3_sidr_lookup(rf.ctx, RIGHTSLIST_KRF_HOLDER, hk, 8, rfa, 8, &n) == RMS$_NORMAL &&
+              n == 1, "[1,4] now holds only INTERACTIVE (its OVMXRES holder record went too)");
+        check(rightslist_delete_identifier(&rf, ovmxres) == RMS$_RNF,
+              "deleting it again is RMS$_RNF");
+        {
+            rdb_identifier_record_t dup;
+            build_record(&g_ids[0], &dup);
+            check(rightslist_put_identifier(&rf, &dup) == RMS$_DUP,
+                  "a second definition record for a value is RMS$_DUP");
+        }
+    }
+
+    /* ---- upgrade: a two-key file (written before the HOLDER key) copies over ---- */
+    {
+        char opath[] = "/tmp/ovmx_rdb_old_XXXXXX";
+        int ofd = mkstemp(opath);
+        rms_file_t *of = ofd >= 0 ? rms_io_posix_wrap(ofd) : NULL;
+        rightslist_rms_file_t orf, crf;
+        p3_create_params_t vp, np;
+        rdb_identifier_record_t r, out;
+
+        memset(&vp, 0, sizeof(vp));
+        vp.key_size = 4; vp.seg0_pos = 0; vp.seg0_siz = 4; vp.bkt_blocks = 2;
+        memset(&np, 0, sizeof(np));
+        np.key_size = 32; np.seg0_pos = 16; np.seg0_siz = 32; np.bkt_blocks = 2;
+        memset(&orf, 0, sizeof(orf));
+        check(of && rms_p3_create(of, &vp, &orf.ctx) == RMS$_CREATED &&
+              rms_p3_add_secondary_key(orf.ctx, &np) == RMS$_NORMAL,
+              "author a two-key VALUE+NAME file (the old layout)");
+        build_record(&g_ids[0], &r);
+        check(orf.ctx && rms_p3_put(orf.ctx, 0, (const uint8_t *)&r, 48) == RMS$_NORMAL,
+              "put one identifier into it");
+        if (orf.ctx) rms_p3_free(orf.ctx);
+        check(of && rightslist_rms_open(of, &orf) == RMS$_NORMAL && !rightslist_rms_is_current(&orf) &&
+              orf.krf_name == 1 && orf.krf_holder == RIGHTSLIST_KRF_NONE,
+              "bound: NAME is key 1, no HOLDER key -- not current");
+        check(rightslist_get_by_name(&orf, g_ids[0].name, &out) == RMS$_NORMAL,
+              "the old file still reads by name");
+        rightslist_rms_close(&rf);
+        rms_io_posix_unwrap(f);
+        unlink(path);
+        strcpy(path, "/tmp/ovmx_rdb_new_XXXXXX");
+        fd = mkstemp(path);
+        f = rms_io_posix_wrap(fd);
+        check(rightslist_rms_create(f, &crf) == RMS$_CREATED &&
+              rightslist_copy(&orf, &crf) == RMS$_NORMAL,
+              "upgrade: every record copied into a new three-key file");
+        check(rightslist_get_by_name(&crf, g_ids[0].name, &out) == RMS$_NORMAL &&
+              rdb_ident_value(&out) == g_ids[0].value && rightslist_rms_is_current(&crf),
+              "the upgraded file reads by name, and is current");
+        rightslist_rms_close(&orf);
+        rf = crf;
+        if (of) rms_io_posix_unwrap(of);
+        unlink(opath);
     }
 
     rightslist_rms_close(&rf);

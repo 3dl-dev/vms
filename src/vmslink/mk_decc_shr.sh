@@ -1108,6 +1108,19 @@ VEC="$VEC,waitid=PROCEDURE"
 # sys$get_entropy (syssvc/sys_misc.c) reads the kernel CSPRNG; all three are plain
 # musl entry points, so DECC$SHR is the producer, same as nanosleep above.
 VEC="$VEC,mlock=PROCEDURE,munlock=PROCEDURE,getrandom=PROCEDURE"
+# vms-db7: the DEC C feature-switch API and reentrancy level (src/vmsrms/crtl_features.c),
+# so a VMS C program that sets its switches (the ipc_benchmark corpus' LIB$INITIALIZE
+# routine) links and runs unchanged. Built -DOVMX_CRTL_NO_RMS_VENEER: this C RTL does
+# not open files through RMS, so it honours no feature and every name is -1/EINVAL.
+# Appended at the end of the vector (append-only).
+FEAT_SRC="$(CDPATH= cd "$(dirname "$0")/../vmsrms" && pwd)/crtl_features.c"
+FEAT_INC="$(CDPATH= cd "$(dirname "$0")/../vmsrms/include" && pwd)"
+FEAT_OBJ="$(mktemp -d)/crtl_features.o"
+"${CC:-cc}" -c -fPIC -ffreestanding -DOVMX_CRTL_NO_RMS_VENEER -I"$FEAT_INC" -o "$FEAT_OBJ" "$FEAT_SRC"
+for pair in get_index get_name get_value set_value; do
+    VEC="$VEC,decc\$feature_$pair/ovmx_crtl_feature_$pair=PROCEDURE"
+done
+VEC="$VEC,decc\$set_reentrancy/ovmx_crtl_set_reentrancy=PROCEDURE,decc\$get_reentrancy/ovmx_crtl_get_reentrancy=PROCEDURE"
 
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
@@ -1115,6 +1128,6 @@ VEC="$VEC,mlock=PROCEDURE,munlock=PROCEDURE,getrandom=PROCEDURE"
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ"
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ"
 
 echo "mk_decc_shr: created $OUT"

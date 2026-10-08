@@ -2347,7 +2347,19 @@ static void test_f297_a_rejected_record_abandons(void)
 		(void)coord_feed(&g.c, f, n, (int32_t)(k + 1u));
 	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
 
+	/* Every other record is accepted; VAX2's -- the last one -- is not. */
 	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	total = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	for (k = 0; k < total; k++) {
+		const struct sent_frame *sf =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, k);
+
+		if (sf->dst != VAX2_CSID)
+			(void)coord_feed(&g.c, f, n,
+				(int32_t)cnxman_club_csb_index(&g.cl.club,
+					cnxman_club_find_csid(&g.cl.club,
+						(vms_csid_t)sf->dst)));
+	}
 	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
 	vms_wire_put_u8(&w, VMS_OFF_CM_RESP_MARK, 0x00);   /* status 00 */
 	(void)coord_feed(&g.c, f, n, 2);                    /* VAX2 */

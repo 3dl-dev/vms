@@ -6305,7 +6305,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/crtl_rms_fd.c",
       "verified_against": null,
-      "notes": "vms-b90: a hook in the musl syscall funnel serves every file system call that names an RMS file through $OPEN/$CREATE/$READ/$WRITE/$GET/$DISPLAY/$ERASE/$RENAME; /dev /proc /sys /run stay the kernel's; stream files are byte streams over block I/O, record files read as lines. Proven by the alpha crtl-fd gate (32-bit DEC C program; DCL writer + DCL TYPE reader). Partial: carried by the RMS-backed DECC$SHR the gates build, not yet the boot DECC$SHR (vms-9f8e); writing record files, directories as descriptors and mkdir/rmdir fail honestly (EOPNOTSUPP)",
+      "notes": "vms-b90: a hook in the musl syscall funnel serves every file system call that names an RMS file through $OPEN/$CREATE/$READ/$WRITE/$GET/$DISPLAY/$ERASE/$RENAME; /dev /proc /sys /run stay the kernel's; stream files are byte streams over block I/O, record files read as lines; a directory opens as a $PARSE/$SEARCH wildcard context, so opendir/readdir/rewinddir/telldir/seekdir list its entries (NAME.TYP;VER, d_ino = the File ID) (vms-9f8e). Proven by the alpha crtl-fd gate (32-bit DEC C program; DCL writer + DCL TYPE reader). Partial: carried by the RMS-backed DECC$SHR the gates build, not yet the boot DECC$SHR (vms-9f8e); writing record files and mkdir/rmdir fail honestly (EOPNOTSUPP)",
       "plan_ref": "vms-801"
     },
     {

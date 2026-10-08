@@ -42,6 +42,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -50,6 +52,12 @@
 #include "rms/rms.h"
 
 #define EXIT_SKIP  77
+
+/* $SETDDIR (src/libvms/syssvc/sys_misc.c): starlet.h carries no prototype
+ * (a corpus program declares its own, conflicting one). */
+extern uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
+                            unsigned short *old_len,
+                            struct dsc$descriptor_s *old_dir);
 #define ODS2_UNIT  "VDA0:"
 
 static int pass = 0;
@@ -330,6 +338,69 @@ int main(void)
     /* negctl: rms-put-wrong-vbn */
     check(fail == 0,
           "RMS-over-ACP: all records round-tripped byte-exact through the ACP window");
+
+    /* ---- vms-872: the process DEFAULT DIRECTORY is the executive's, and RMS
+     * completes a relative file specification in it -- in this process and
+     * in an image activated from it (REGISTER_CONTINUE inherits it). Before,
+     * an image given "X.DAT" created VDA0:[000000]X.DAT whatever the user had
+     * SET DEFAULT to. ---- */
+    {
+        const char *dd = ODS2_UNIT "[OVMXDIR]";
+        struct dsc$descriptor_s d = { (unsigned short)strlen(dd), DSC$K_DTYPE_T,
+                                      DSC$K_CLASS_S, (char *)dd };
+        check(sys$setddir(&d, NULL, NULL) == SS$_NORMAL,
+              "vms-872: $SETDDIR " ODS2_UNIT "[OVMXDIR]");
+        char got[256] = "";
+        check((vms_kif_ddir(NULL, got, sizeof got) & 1) && strcmp(got, dd) == 0,
+              "vms-872: the executive holds the default directory $SETDDIR set");
+
+        struct FAB fab = cc$rms_fab;
+        fab.fab$l_fna = (char *)"DDIRREL.DAT"; fab.fab$b_fns = 11;
+        fab.fab$b_fac = FAB$M_PUT;
+        st = sys$create(&fab, 0, 0);
+        if (st == RMS$_NORMAL) (void)sys$close(&fab, 0, 0);
+        struct rms_fileattr fa;
+        check(st == RMS$_NORMAL &&
+              (rms_file_attr(ODS2_UNIT "[OVMXDIR]DDIRREL.DAT", &fa) & 1),
+              "vms-872: $CREATE \"DDIRREL.DAT\" lands in the default directory [OVMXDIR]");
+        check(!(rms_file_attr(ODS2_UNIT "[000000]DDIRREL.DAT", &fa) & 1),
+              "vms-872: ...not in the volume root [000000]");
+
+        /* An activated image (REGISTER_CONTINUE child) sees the same default
+         * and its relative $OPEN finds the file. */
+        int pp[2];
+        uint32_t rep[2] = { 0, 0 };
+        if (pipe(pp) == 0) {
+            pid_t k = fork();
+            if (k == 0) {
+                close(pp[0]);
+                uint32_t r[2] = { 0, 0 };
+                vms_kif_close();
+                if (vms_kif_open() >= 0 && (vms_kif_register_continue() & 1)) {
+                    char cd[256] = "";
+                    r[0] = ((vms_kif_ddir(NULL, cd, sizeof cd) & 1) && strcmp(cd, dd) == 0);
+                    struct FAB f2 = cc$rms_fab;
+                    f2.fab$l_fna = (char *)"DDIRREL.DAT"; f2.fab$b_fns = 11;
+                    uint32_t os = sys$open(&f2, 0, 0);
+                    r[1] = (os == RMS$_NORMAL);
+                    if (os == RMS$_NORMAL) (void)sys$close(&f2, 0, 0);
+                }
+                (void)!write(pp[1], r, sizeof r);
+                _exit(0);
+            }
+            close(pp[1]);
+            (void)!read(pp[0], rep, sizeof rep);
+            close(pp[0]);
+            int ws; waitpid(k, &ws, 0);
+        }
+        check(rep[0] == 1, "vms-872: an activated image (REGISTER_CONTINUE) inherits the default directory");
+        check(rep[1] == 1, "vms-872: ...and its relative $OPEN \"DDIRREL.DAT\" finds the file there");
+
+        struct FAB fe = cc$rms_fab;
+        fe.fab$l_fna = (char *)(ODS2_UNIT "[OVMXDIR]DDIRREL.DAT");
+        fe.fab$b_fns = (uint8_t)strlen(fe.fab$l_fna);
+        (void)sys$erase(&fe, 0, 0);
+    }
 
     /* ---- vms-dfa: $DISPLAY fills XABFHC (file-header characteristics) and
      * XABALL (allocation) from the REAL ODS-2 FAT over the ACP -- previously an

@@ -933,6 +933,10 @@ struct vms_proc {
     uint16_t            dfprot;
     uint8_t             dfprot_set;
 
+    /* $SETDDIR: the process default directory (VMS_IOCTL_DDIR); inherited at
+     * REGISTER_CONTINUE like dfprot. "" = never set. Same hash_lock. */
+    char                ddir[VMS_DDIR_SIZE];
+
     struct rcu_head     rcu;
 };
 
@@ -1432,6 +1436,7 @@ long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the

@@ -178,6 +178,15 @@ static uint32_t rms_impl_parse(void *fab_ptr)
         combined[sizeof(combined) - 1] = '\0';
     }
 
+#if defined(OVMX_HAVE_ACP)
+    /* The last defaulting step: the process default directory, held by the
+     * executive (rd vms-872; rms_core.c rms_apply_default_dir). */
+    {
+        extern void rms_apply_default_dir(char *spec, size_t speclen);
+        rms_apply_default_dir(combined, sizeof(combined));
+    }
+#endif
+
     /*
      * vms-240: REAL iterative logical-name resolution of the device field.
      * $PARSE used to leave the device logical untranslated in the expanded

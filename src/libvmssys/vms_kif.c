@@ -2028,6 +2028,37 @@ uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot)
     return args.status;
 }
 
+/*
+ * $SETDDIR: read and optionally replace this process's default directory, held
+ * by the executive (VMS_IOCTL_DDIR, rd vms-872). newdir NULL = read only.
+ * olddir (may be NULL) receives the directory in force before the call ("" if
+ * none was ever set), NUL-terminated within oldcap.
+ */
+uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap)
+{
+    struct vms_ddir_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    if (newdir) {
+        uint32_t n = 0;
+        while (newdir[n] && n < sizeof(args.newdir)) n++;
+        if (n == 0 || n >= sizeof(args.newdir))
+            return 0x00000014; /* SS$_BADPARAM: never clipped */
+        args.set = 1;
+        vms_memcpy(args.newdir, newdir, n);
+    }
+
+    KIF_CALL(VMS_IOCTL_DDIR, &args);
+
+    if (olddir && oldcap) {
+        uint32_t i = 0;
+        for (; i + 1 < oldcap && i < sizeof(args.olddir) && args.olddir[i]; i++)
+            olddir[i] = args.olddir[i];
+        olddir[i] = '\0';
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;

@@ -966,6 +966,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_TERM_RESOLVE:
 	case VMS_IOCTL_TERM_SETLOGIN:
 	case VMS_IOCTL_TERM_GETLOGIN:
+	case VMS_IOCTL_TERM_SETRPI:
+	case VMS_IOCTL_TERM_GETRPI:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1000,6 +1002,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_term_setlogin(proc, (unsigned long)uarg);  break;
 		case VMS_IOCTL_TERM_GETLOGIN:
 			r = vms_ioctl_term_getlogin(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_TERM_SETRPI:
+			r = vms_ioctl_term_setrpi(proc, (unsigned long)uarg);    break;
+		case VMS_IOCTL_TERM_GETRPI:
+			r = vms_ioctl_term_getrpi(proc, (unsigned long)uarg);    break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

@@ -799,9 +799,21 @@ int main(void)
      *     printed by plain SHOW PROCESS on the oracle (Sections 2.2,
      *     3.1, and vax73-privileges.md Section 6 (1)).
      * --------------------------------------------------------------- */
-    CHECK(strstr(out, "Terminal:") == NULL,
-          "SHOW PROCESS prints no Terminal: line (VMS's value is not "
-          "sourceable, and the env-var one is a facade)");
+    /* Terminal: IS printed now that the executive records each process's
+     * terminal (vms-3e9 SETTERM; rd vms-2166): VMS prints the label for every
+     * process, with an EMPTY value for one that has none (oracle Section 2:
+     * AUDIT_SERVER's "Terminal:           "). The subject has no terminal, so
+     * the value after the 20-column label must be empty -- never the
+     * caller's terminal, never an environment variable. */
+    {
+        const char *tl = line_starting(out, "Terminal:");
+        const char *ul = line_starting(out, "User Identifier:");
+        CHECK(tl != NULL && label_value_at(tl, "Terminal:", PROC_LABEL_WIDTH, "") &&
+              (tl[PROC_LABEL_WIDTH] == '\n' || tl[PROC_LABEL_WIDTH] == '\r' ||
+               tl[PROC_LABEL_WIDTH] == '\0'),
+              "SHOW PROCESS prints Terminal: with an EMPTY value for a process with no terminal (oracle Section 2)");
+        CHECK(tl && ul && tl < ul, "Terminal: precedes User Identifier: (oracle order)");
+    }
     CHECK(strstr(out, "Base priority:") == NULL,
           "SHOW PROCESS prints no invented Base priority:");
     CHECK(strstr(out, "Privileges:") == NULL,

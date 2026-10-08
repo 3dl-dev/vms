@@ -39,6 +39,24 @@
 
 /* Maximum values */
 #define PCB_MAX_CHANNELS    256
+
+/*
+ * The status for a channel number this process does not hold (vms-4a69).
+ * Observed on real systems: a number inside the channel table that is not
+ * assigned is SS$_IVCHAN on both VAX V7.3 and Alpha V8.4; a number beyond the
+ * table (12345, 0xFFF0) is SS$_IVIDENT on Alpha V8.4 and SS$_IVCHAN on VAX
+ * V7.3 (semantic oracle IO.BADCHAN, IO.CANCEL.BADCHAN, OPR.BADCHAN).
+ */
+static inline uint32_t pcb_chan_unheld_status(uint32_t chan)
+{
+#if defined(__vax__) || defined(__vax)
+    (void)chan;
+    return 316u;                                    /* SS$_IVCHAN */
+#else
+    return chan >= PCB_MAX_CHANNELS ? 8740u          /* SS$_IVIDENT */
+                                    : 316u;          /* SS$_IVCHAN */
+#endif
+}
 #define PCB_MAX_AST_QUEUE   64
 #define PCB_MAX_EXIT_HANDLERS 32
 

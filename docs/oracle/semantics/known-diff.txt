@@ -4,13 +4,8 @@
 # tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
 # and so does a listed case that now matches. Fix the bug, delete the line.
 brk BRK.NOUSER  # vms-eb46: a user with no terminal -- OpenVMS ends the IOSB SS$_DEVOFFLINE (132), OVMX SS$_NORMAL with a count of 0
-brk OPR.BADCHAN  # vms-4a69: arch-divergent -- an unassigned reply channel is SS$_IVIDENT on Alpha V8.4, SS$_IVCHAN on VAX V7.3 (OVMX: IVCHAN)
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS
-ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on VAX V7.3, writes 1 on Alpha V8.4; OVMX leaves it
 info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive row; PRIB has no OVMX priority; AUTHPRIV is the enforced set
-io IO.BADCHAN  # vms-4a69: arch-divergent -- an unassigned channel number is SS$_IVIDENT on Alpha V8.4, SS$_IVCHAN on VAX V7.3 (OVMX: IVCHAN)
-io IO.CANCEL.BADCHAN  # vms-4a69: $CANCEL of a channel this process does not hold returns NORMAL (Alpha IVIDENT, VAX IVCHAN)
-io IO.ASSIGN.MBX.GONE  # vms-4a69: $ASSIGN of a deleted mailbox's logical name gives NOSUCHDEV (VMS IVDEVNAM: the name is gone)
 lex LEX.USER  # vms-86f: F$USER returns the user name; OpenVMS returns the UIC in named form ("[SYSTEM]")
 lnm LNM.TRN.SYSCMD  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
 lnm LNM.TRN.SYSIN  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device

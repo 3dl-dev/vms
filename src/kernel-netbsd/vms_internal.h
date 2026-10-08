@@ -238,9 +238,16 @@
                               VMS_PRV_M_SYSNAM | VMS_PRV_M_GRPNAM | \
                               VMS_PRV_M_MOUNT)
 #endif
+#ifndef VMS_PRV_M_BYPASS
+#define VMS_PRV_M_BYPASS  (1ULL << 29)   /* PRV$V_BYPASS  */
+#endif
+#ifndef VMS_PRV_M_READALL
+#define VMS_PRV_M_READALL (1ULL << 35)   /* PRV$V_READALL */
+#endif
 #ifndef VMS_PRV_M_ENFORCED
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
-                             VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX)
+                             VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be

@@ -124,7 +124,7 @@ static char *const poison_env[] = {
 #define B_NAME  "OPERATOR"
 #define B_GRP   1u
 #define B_MEM   6u
-#define B_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_SYSPRV | PRV$M_WORLD)
+#define B_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_ALTPRI | PRV$M_WORLD)
 
 /* Identity C: no identity at all. A real credential change, not a flag --
  * setgid() before setuid(), because setuid() away from root is what drops
@@ -1698,13 +1698,11 @@ int main(void)
     CHECK(strstr(outb, "may affect other processes in the world") != NULL,
           "B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the "
           "process-privileges block too");
-    CHECK(strstr(outb, "may access objects via system protection") == NULL,
-          "B: SHOW PROCESS/PRIVILEGES does NOT list SYSPRV, though B's "
-          "SYSUAF-style mask holds it -- this is the ruling's own worked "
-          "example: SYSPRV is stored and reported but enforced nowhere in "
-          "OVMX (the override belongs in vmsfs.ko, tracked separately as "
-          "vms-f15/vms-36d), so showing it would be the illegal third "
-          "answer (Rule 10)");
+    CHECK(strstr(outb, "may set any priority value") == NULL,
+          "B: SHOW PROCESS/PRIVILEGES does NOT list ALTPRI, though B's "
+          "SYSUAF-style mask holds it -- ALTPRI is stored and reported but "
+          "enforced nowhere in OVMX, so showing it would be the illegal "
+          "third answer (Rule 10)");
     CHECK(strstr(outb, "may perform operator functions") == NULL,
           "B: the privilege display is B's mask, not A's -- two processes running "
           "the same image with the same environment report differently, and "
@@ -1934,9 +1932,9 @@ int main(void)
          * belongs in the enforced set F$GETJPI CURPRIV walks. PHY_IO (22)
          * renders after MOUNT (17) in the ascending bit walk. */
         /* negctl-knockon: bind-client-no-register */
-        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO\"") != NULL,
+        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO,SYSPRV,BYPASS,READALL\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
-              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO), "
+              "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,PHY_IO,SYSPRV,BYPASS,READALL), "
               "not merely completes without rendering anything");
     }
 

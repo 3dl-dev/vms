@@ -1243,9 +1243,7 @@ static int cmd_set_process(struct dcl_command *cmd)
     const char *pri_val = dcl_qualifier_value(cmd, "PRIORITY");
     if (pri_val && *pri_val) {
         uint64_t held = enforced_privs_held();
-        if (!(held & PRV$M_ALTPRI) &&
-            !(held & PRV$M_SYSPRV) &&
-            !(held & PRV$M_BYPASS)) {
+        if (!(held & PRV$M_ALTPRI)) {
             /* Same HIDE wording as SET TIME's gate below, for the same
              * reason (vms-2b8 round 7): this is true for every caller
              * regardless of what its SYSUAF record authorizes, because
@@ -1537,9 +1535,7 @@ static int cmd_set_uic(struct dcl_command *cmd)
      * enforced, so this still passes for a SETPRV-holding identity. */
     {
         uint64_t held = enforced_privs_held();
-        if (!(held & PRV$M_SETPRV) &&
-            !(held & PRV$M_SYSPRV) &&
-            !(held & PRV$M_BYPASS)) {
+        if (!(held & PRV$M_SETPRV)) {
             dcl_error("SET", 2, "NOPRIV",
                       "no privilege for SET UIC");
             return SS$_NOPRIV;
@@ -1687,9 +1683,7 @@ static int cmd_set_time(struct dcl_command *cmd)
      * does not enforce this privilege yet, for anyone.
      */
     uint64_t held = enforced_privs_held();
-    if (!(held & PRV$M_OPER) &&
-        !(held & PRV$M_SYSPRV) &&
-        !(held & PRV$M_BYPASS)) {
+    if (!(held & PRV$M_OPER)) {
         dcl_error("SET", 2, "NOPRIV",
                   "no privilege for SET TIME -- this privilege is not "
                   "enforced on this system (vms-pv1); no identity can "

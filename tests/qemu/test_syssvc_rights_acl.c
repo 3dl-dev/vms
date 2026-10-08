@@ -24,6 +24,8 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <poll.h>
+#include <signal.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -84,10 +86,24 @@ static int run_child(int rfd, int wfd, uint16_t fid)
 }
 
 static int to_child = -1, from_child = -1;
+
+/* Reads from the child are BOUNDED (60 s): a broken executive (a leaked volume
+ * lock, an ACP request that never completes) fails this suite instead of hanging
+ * the guest and starving every suite after it. */
+static int read_bounded(int fd, void *buf, size_t len)
+{
+    struct pollfd pf = { fd, POLLIN, 0 };
+    if (poll(&pf, 1, 60000) <= 0) {
+        printf("  (the child did not answer in 60 s)\n");
+        return -1;
+    }
+    return (int)read(fd, buf, len);
+}
+
 static uint32_t ask(char cmd)
 {
     uint32_t st = 0;
-    if (write(to_child, &cmd, 1) != 1 || read(from_child, &st, sizeof(st)) != (ssize_t)sizeof(st))
+    if (write(to_child, &cmd, 1) != 1 || read_bounded(from_child, &st, sizeof(st)) != (int)sizeof(st))
         return 0;
     return st;
 }
@@ -163,7 +179,7 @@ int main(int argc, char **argv)
     }
     close(p2c[0]); close(c2p[1]);
     to_child = p2c[1]; from_child = c2p[0];
-    check(read(from_child, &child_pid, sizeof(child_pid)) == (ssize_t)sizeof(child_pid) && child_pid,
+    check(read_bounded(from_child, &child_pid, sizeof(child_pid)) == (int)sizeof(child_pid) && child_pid,
           "the [100,100] child is registered and reports its VMS pid");
 
     check(ask('o') == SS$_NOPRIV, "before any grant the child is refused RGTF.DAT");
@@ -226,7 +242,15 @@ int main(int argc, char **argv)
     }
 
     (void)!write(to_child, "q", 1);
-    waitpid(pid, NULL, 0);
+    {
+        int t;
+        for (t = 0; t < 60 && waitpid(pid, NULL, WNOHANG) == 0; t++)
+            sleep(1);
+        if (t == 60) {
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+        }
+    }
     {
         struct vms_acp_fileop_args f;
         memset(&f, 0, sizeof(f));

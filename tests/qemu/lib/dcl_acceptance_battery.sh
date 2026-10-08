@@ -307,8 +307,15 @@ console_login_acceptance() {
     # waits for its own RETURN.
     local IDLE_WAIT="${LOGIN_IDLE_WAIT:-45}"
     local IDLE_OFF; IDLE_OFF=$(wc -c <"$LOG")
-    echo "  (idle-timeout probe: leaving the login prompt untouched for ${IDLE_WAIT}s)"
-    sleep "$IDLE_WAIT"
+    echo "  (idle-timeout probe: leaving the login prompt untouched; the deadline is 20s of GUEST time)"
+    # vms-330: the guest's 20s deadline runs on the GUEST clock, which lags wall time when the
+    # runner (or a CPU-limited rail pod) is loaded -- a fixed `sleep 45` looked at the console
+    # before a slow guest had counted its 20s, and failed with the text simply not there yet
+    # (reproduced under parallel guests on the k3s rail: round 3, 1 of 8 gates). Wait for the
+    # expiry text itself, bounded generously; the assertions below still require it, so a guest
+    # with NO idle deadline still fails (the wait runs out and the text is absent).
+    wait_for 'Timeout period expired' "${LOGIN_IDLE_CAP:-240}" "$IDLE_OFF" >/dev/null 2>&1 || true
+    sleep 2        # let the lines that follow the reason land before the segment is cut
     local IDLE_SEG; IDLE_SEG=$(_batt_seg_since "$IDLE_OFF")
     # NOT silent, and not invented either: the two lines the V7.3 oracle prints
     # (rd vms-29e). A silent timeout is what let an idle console pass for a

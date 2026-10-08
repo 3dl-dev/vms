@@ -435,7 +435,7 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
-efn0-completion-skipped
+efn0-timer-completion-skipped
 setdfprot-value-not-retained
 clrast-does-not-deliver
 setcluevt-registers-without-cnxman
@@ -2069,17 +2069,17 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    efn0-completion-skipped)
+    efn0-timer-completion-skipped)
         case "$_f" in
-        facility)     echo "event flag 0 as a real completion flag (\$ENQW sets the flag it was given -- only EFN\$C_ENF means none; vms-f811 follow-up)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        facility)     echo "event flag 0 as a real completion flag (the \$SETIMR timer sets the flag it was given -- only EFN\$C_ENF means none; vms-f811 follow-up)";;
+        targets)      echo "libvms/syssvc/sys_time.c";;
         suites_red)   echo "test_syssvc_efn0";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sys\$enqw completion guard goes back to efn > 0 && efn < 128 -- the pre-fix spelling that treated flag 0 as no flag (a leftover from EFN\$C_ENF == 0). A caller that names event flag 0 gets its lock granted but flag 0 is never set, so a wait on it never wakes. Only a suite that clears EF 0, requests with efn 0 and reads EF 0 back from the executive can tell; the grant itself is unchanged.";;
+        why)          echo "the \$SETIMR expiry path goes back to efn > 0 && efn < 128 -- the pre-fix spelling that treated flag 0 as no flag (a leftover from EFN\$C_ENF == 0). A timer that names event flag 0 expires but flag 0 is never set, so a wait on it never wakes. Only a suite that clears EF 0, arms a timer with efn 0 and reads EF 0 back from the executive can tell.";;
         require_fail) cat <<'EOF'
-$ENQW (efn 0) set EF 0
+$SETIMR (efn 0) set EF 0 on expiry
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -7055,11 +7055,13 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
-    efn0-completion-skipped)
-        # UNIQUE TEXT: the line "    if (efn < 128)" occurs once in sys_lock.c, in
-        # sys$enqw's completion guard. Restoring the pre-fix "efn > 0 &&" makes
-        # flag 0 mean "none" again. Gone after apply (no-op re-apply).
-        sed -i 's|^    if (efn < 128)$|    if (efn > 0 \&\& efn < 128) /* NEGCTL efn0-completion-skipped */|' "$_file";;
+    efn0-timer-completion-skipped)
+        # UNIQUE TEXT: "    if (te->efn < 128) {" occurs once in sys_time.c (the $SETIMR
+        # expiry completion). Restoring the pre-fix "te->efn > 0 &&" makes flag 0 mean
+        # "none" again. Gone after apply (no-op re-apply). Not sys_lock.c: the register
+        # gate (userspace_service_register) reads a mutation of the executive-resident
+        # sys$enq/enqw/deq file as refuting their OVMX-EXECUTIVE claims.
+        sed -i 's|^    if (te->efn < 128) {$|    if (te->efn > 0 \&\& te->efn < 128) { /* NEGCTL efn0-timer-completion-skipped */|' "$_file";;
     setdfprot-value-not-retained)
         # UNIQUE TEXT: "proc->dfprot_set = 1;" occurs once, in vms_ioctl_dfprot's
         # store. Writing 0 leaves the value stored but never "set", so reads and

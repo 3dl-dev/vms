@@ -6,7 +6,7 @@
  * layout: every "l_" address field is a 32-bit (P0/P1) address whatever the
  * client's default pointer size, as in the DEC C STARLET headers. Every field
  * offset and structure size is asserted against the observed OpenVMS Alpha
- * V8.4 definitions (docs/oracle/alpha84-starlet-defs/*DEF.txt).
+ * V8.4 definitions (docs/oracle/alpha84-starlet-defs/<NAME>DEF.txt).
  *
  * The services they declare are the VMS-ABI entry points by their upper-case
  * names (SYS$PARSE, SYS$ASSIGN, ...), which accept these layouts. OVMX's own

@@ -40,6 +40,7 @@ int vms_abi_shapes(const char *spec, unsigned short *did_out, FAT *recattr)
         return status;
     status = SYS$SEARCH(&fab, 0, 0);
     devicedsc.dsc$w_length = nam.nam$b_dev;
+    did_out[1] = devicedsc.dsc$w_length;
     (void)chan;
     fib.fib$w_did[0] = nam.nam$w_did[0];
     fib.fib$w_did[1] = nam.nam$w_did[1];

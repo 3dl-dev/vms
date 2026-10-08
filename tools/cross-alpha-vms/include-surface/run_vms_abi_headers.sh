@@ -16,7 +16,7 @@ set -e
 export PATH=/opt/cross-alpha-vms/bin:$PATH
 rc=0
 for ps in "" "-mpointer-size=64"; do
-    if alpha-dec-vms-gcc $ps -std=gnu11 -Werror -fsyntax-only -I/inc /t/vms_abi_headers.c 2>/tmp/e; then
+    if alpha-dec-vms-gcc $ps -std=gnu11 -Wall -Werror -fsyntax-only -I/inc /t/vms_abi_headers.c 2>/tmp/e; then
         echo "  PASS vms/ headers: every VMS-layout assertion holds (pointer size: ${ps:-default 32})"
     else
         echo "  FAIL vms/ headers (pointer size: ${ps:-default 32}):"; sed "s/^/      /" /tmp/e | head -20; rc=1

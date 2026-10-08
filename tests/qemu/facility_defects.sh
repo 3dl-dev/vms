@@ -435,6 +435,9 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
+efn0-completion-skipped
+setdfprot-value-not-retained
+clrast-does-not-deliver
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -2060,6 +2063,58 @@ EOF
         why)          echo "vms_enq_core_ex() stops bounds-checking the decoded request's lock mode: its 'args.lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM -- it falls through into the resource lookup and grant/queue logic with an out-of-range mode. For the cross-node \$ENQ that test_syssvc_dlm_xnode drives (VMS_IOCTL_DLM_XNODE marshals req->lkmode into this same core), that is now the SOLE guard, so the suite's own 'bad lock mode -> SS\$_BADPARAM' assertion reddens. The local \$ENQ ioctl and vms_ioctl_convert's \$CVT path share this core but no suite drives a bad mode through either, so nothing else reddens.";;
         require_fail) cat <<'EOF'
 bad lock mode -> SS$_BADPARAM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    efn0-completion-skipped)
+        case "$_f" in
+        facility)     echo "event flag 0 as a real completion flag (\$ENQW sets the flag it was given -- only EFN\$C_ENF means none; vms-f811 follow-up)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_efn0";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$enqw completion guard goes back to efn > 0 && efn < 128 -- the pre-fix spelling that treated flag 0 as no flag (a leftover from EFN\$C_ENF == 0). A caller that names event flag 0 gets its lock granted but flag 0 is never set, so a wait on it never wakes. Only a suite that clears EF 0, requests with efn 0 and reads EF 0 back from the executive can tell; the grant itself is unchanged.";;
+        require_fail) cat <<'EOF'
+$ENQW (efn 0) set EF 0
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    setdfprot-value-not-retained)
+        case "$_f" in
+        facility)     echo "\$SETDFPROT: the executive per-process default file protection (VMS_IOCTL_DFPROT, vms_ioctl_dfprot; inherited at REGISTER_CONTINUE), rd vms-44a";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_setdfprot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_dfprot() stores the new value but never marks it SET (dfprot_set stays 0), so every read reports the initial default 0xFF00 instead of what the process set. \$SETDFPROT still returns success and the old value correctly (the previous value really was the default), but a later read, and the copy a REGISTER_CONTINUE child inherits from the executive, show the default: the service reports success for a value it did not retain (INV-6 facade shape).";;
+        require_fail) cat <<'EOF'
+a later read returns what was set
+a REGISTER_CONTINUE child (activated image) inherits it from the executive
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    clrast-does-not-deliver)
+        case "$_f" in
+        facility)     echo "\$CLRAST: cancel the AST-in-progress state so an AST queued from inside an AST routine is delivered at once (vms-44a)";;
+        targets)      echo "libvms/syssvc/sys_ast.c";;
+        suites_red)   echo "test_syssvc_clrast";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$clrast clears the in-progress marker but no longer drains the executive AST queue, so an AST queued from inside the running AST routine is NOT delivered before \$CLRAST returns -- it waits for the routine to return, exactly as with no \$CLRAST at all. The service reports SS\$_NORMAL and lib\$ast_in_prog reads 0, but the one behaviour that defines it (delivery now) is gone; only the ordering assertion can tell.";;
+        require_fail) cat <<'EOF'
+with $CLRAST it ran before the first AST returned (delivered by $CLRAST)
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -7000,6 +7055,20 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    efn0-completion-skipped)
+        # UNIQUE TEXT: the line "    if (efn < 128)" occurs once in sys_lock.c, in
+        # sys$enqw's completion guard. Restoring the pre-fix "efn > 0 &&" makes
+        # flag 0 mean "none" again. Gone after apply (no-op re-apply).
+        sed -i 's|^    if (efn < 128)$|    if (efn > 0 \&\& efn < 128) /* NEGCTL efn0-completion-skipped */|' "$_file";;
+    setdfprot-value-not-retained)
+        # UNIQUE TEXT: "proc->dfprot_set = 1;" occurs once, in vms_ioctl_dfprot's
+        # store. Writing 0 leaves the value stored but never "set", so reads and
+        # the REGISTER_CONTINUE inheritance both report the initial default.
+        sed -i 's|proc->dfprot_set = 1;|proc->dfprot_set = 0; /* NEGCTL setdfprot-value-not-retained */|' "$_file";;
+    clrast-does-not-deliver)
+        # RANGE-ANCHORED to sys$clrast: the drain call `vms$$deliver_pending_asts();`
+        # (8-space indent) also appears elsewhere in sys_ast.c. Gone after apply.
+        sed -i '/^uint32_t sys\$clrast(void)/,/^}/ s|^        vms\$\$deliver_pending_asts();|        /* NEGCTL clrast-does-not-deliver: no drain */|' "$_file";;
     dlm-xnode-redirect-target-dropped)
         # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
         # occurs once in the file -- enq_inbound_not_master()'s sole report of

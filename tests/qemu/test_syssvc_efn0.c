@@ -49,6 +49,7 @@ int main(void)
     CHECK(ef0() == 0, "EF 0 is clear before the request");
     uint32_t st = sys$enqw(0, LCK$K_EXMODE, &lksb, 0, &res, 0, NULL, 0, NULL, 0, 0, NULL);
     CHECK((st & 1) && lksb.lkid != 0, "$ENQW (efn 0) grants the lock");
+    /* negctl: efn0-completion-skipped */
     CHECK(ef0() == 1, "$ENQW (efn 0) set EF 0");
     if (lksb.lkid) sys$deq(lksb.lkid, NULL, 0, 0);
 

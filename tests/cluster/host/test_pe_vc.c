@@ -1158,7 +1158,18 @@ static void test_recv_ack_never_freezes(void)
 		printf("--   ... and the hole filling delivers both, in order\n");
 		fake_pe_clear_frames(&g_env.fake);
 		rx_seqmsg(&g_env, 6, 0);
-		check_never_frozen(&g_env, 7, "6 filled the hole");
+		{
+			/* Spelled out rather than through check_never_frozen():
+			 * a negative control names these two checks, and its
+			 * selftest needs their text literally in this file. */
+			uint16_t wire = 0;
+
+			ct_check(the_vc(&g_env)->state == VMS_PE_VC_OPEN &&
+				 the_vc(&g_env)->recv_seq == 7,
+				 "6 filled the hole: OPEN circuit acknowledges 7 (highest contiguous)");
+			ct_check(last_wire_ack(&g_env, &wire) && wire == 7,
+				 "6 filled the hole: and the WIRE carries 7");
+		}
 		ct_check_eq_u32(g_env.upper_rec.messages, before + 2u,
 				"6 and the held 7 were both delivered");
 		ct_check_eq_u32(the_vc(&g_env)->rx_held_delivered, 1,

@@ -10,6 +10,7 @@
 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
 -- Found Threads: TRUE
 -- libvmssys: building for x86_64 (freestanding)
+-- DECNETD datalink backend: ovmx_datalink
 -- Performing Test OVMX_CLUSTER_FUZZ_SANITIZE_OK
 -- Performing Test OVMX_CLUSTER_FUZZ_SANITIZE_OK - Success
 -- Performing Test OVMX_NODESPEC_SANITIZE_OK
@@ -21,6 +22,6 @@
 -- Performing Test OVMX_FILEOPS_SANITIZE_OK
 -- Performing Test OVMX_FILEOPS_SANITIZE_OK - Failed
 -- OVMX_LINK_NATIVE off (compiler target 'x86_64-linux-gnu' is not aarch64-musl or x86_64-musl) -- the VMS-native LINK.EXE shareable graph is not built for this configuration. Build inside an aarch64 or x86_64 musl toolchain to produce it (see above).
--- Configuring done (1.0s)
--- Generating done (1.3s)
--- Build files have been written to: /tmp/w-8219/build
+-- Configuring done (0.8s)
+-- Generating done (1.1s)
+-- Build files have been written to: /tmp/w-main/build

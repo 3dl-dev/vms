@@ -1,4 +1,6 @@
-[  0%] Built target cluster_host_codec
-[ 50%] Built target cluster_host_fixture
-[100%] Built target cluster_host_cnxman
-[100%] Built target test_dlm_dir
+Built target cluster_host_fixture
+Built target cluster_host_codec
+Built target cluster_host_pe
+Building C object tests/cluster/host/CMakeFiles/test_pe_vc.dir/test_pe_vc.c.o
+Linking C executable ../../../bin/test_pe_vc
+Built target test_pe_vc

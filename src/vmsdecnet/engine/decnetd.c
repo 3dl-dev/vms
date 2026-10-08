@@ -3493,6 +3493,9 @@ static int run_fal_proc_accept_test(void)
      * executive ACP refuses the file it cannot see. */
     st = falp_session("GUEST", "GUEST", 1, PRIV, LOCAL, &auth, &uic, &xst);
     FP_CHECK(auth == SS$_NORMAL, "GUEST/GUEST authenticates at connect");
+    if (auth != SS$_NORMAL)       /* vms-330: say WHY (this proof fails intermittently in CI) */
+        printf("  NOTE: GUEST connect auth status %08X, session status %08X\n",
+               (unsigned)auth, (unsigned)st);
     FP_CHECK(uic == ((128u << 16) | 129u),
              "the FAL server process for GUEST runs with GUEST's UIC [128,129], NOT NETACP's");
     FP_CHECK(st != SS$_NORMAL,
@@ -3502,7 +3505,10 @@ static int run_fal_proc_accept_test(void)
 
     /* (3) GUEST cannot write into a SYSTEM directory either. */
     static const char *evil[] = { "written by GUEST over FAL" };
-    FP_CHECK(rms_textfile_write_line(LOCAL, evil[0]) == 0, "a local source for the PUT exists");
+    int wl = rms_textfile_write_line(LOCAL, evil[0]);
+    if (wl != 0)
+        printf("  NOTE: rms_textfile_write_line(%s) = %d, errno %d (%s)\n", LOCAL, wl, errno, strerror(errno));
+    FP_CHECK(wl == 0, "a local source for the PUT exists");
     st = falp_session("GUEST", "GUEST", 0, EVIL, LOCAL, &auth, &uic, &xst);
     rms_textfile_t *chk = rms_textfile_open(EVIL);
     FP_CHECK(st != SS$_NORMAL && chk == NULL,

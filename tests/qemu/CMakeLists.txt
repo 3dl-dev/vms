@@ -446,6 +446,16 @@ foreach(_n ${_corpus_rt_lines})
     target_compile_options(corpus_rt_${_n} PRIVATE -w)
     list(APPEND _corpus_rt_targets corpus_rt_${_n})
 endforeach()
+
+# vms-ccc: sys_forcex writes its command procedure with fopen("sys$scratch:demo_forcex.com;")
+# and hands the same spec to LIB$SPAWN. On OpenVMS that fopen is RMS; here it is musl's. Give THIS
+# program the DEC C mapping (fclose lays the stream down through RMS) so the spawned DCL really
+# reads and runs the file and $FORCEX hits a live subprocess. See corpus_rt_forcex_stdio.c.
+if(TARGET corpus_rt_sys_forcex)
+    target_sources(corpus_rt_sys_forcex PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/corpus_rt_forcex_stdio.c)
+    target_include_directories(corpus_rt_sys_forcex PRIVATE ${CMAKE_SOURCE_DIR}/src/libvms/include)
+    target_link_options(corpus_rt_sys_forcex PRIVATE -Wl,--wrap=fopen -Wl,--wrap=fclose)
+endif()
 # Non-tier-1 corpus applications (tests/qemu/corpus_runtime_apps.txt): multi-file
 # programs the guest also runs. Line format (pipe separated):
 #   name|corpus-dir|compile-definitions (,-list)|sources (,-list)|arguments

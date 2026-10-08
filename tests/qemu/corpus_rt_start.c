@@ -15,7 +15,8 @@
  *    process logical name table; so does this (a program that writes to
  *    SYS$SCRATCH:, as sys_set_security does, then finds it).
  * 3. The RMS force-bind anchor below.
- * 4. With the C RTL file layer linked (OVMX_CRTLFD_STATIC), turn it on.
+ * 4. With the OVMX C RTL base linked (OVMX_CRTLFD_STATIC): the heap in P0, as
+ *    DEC C's 32-bit pointers expect, and the C RTL file layer over RMS on.
  *
  * The process control block is NOT made here any more: libvms establishes it from
  * the executive's row on the first PCB-backed service (ovmx_pcb_ctx.h), as VMS gives
@@ -29,6 +30,7 @@
 
 #if defined(OVMX_CRTLFD_STATIC)
 void ovmx_crtl_fd_install(void);   /* src/vmsrms/crtl_rms_fd.c */
+extern int __ovmx_p0_heap;         /* src/crtl-musl-x86_64 ovmx_syscall.c */
 #endif
 
 /*
@@ -112,6 +114,11 @@ static void corpus_rt_run_as_system(void)
         { 0, 0, 0, 0 },
     };
 
+#if defined(OVMX_CRTLFD_STATIC)
+    /* 0. DEC C's default pointer size is 32: the heap lives in P0 (below
+     *    0x40000000), as on OpenVMS (vms-95b). */
+    __ovmx_p0_heap = 1;
+#endif
     (void)vms_kif_establish_system();
 #if defined(OVMX_CRTLFD_STATIC)
     /* 4. The C RTL's file system is RMS (vms-003b), as decc$main makes it for a

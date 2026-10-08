@@ -477,4 +477,6 @@
 # default-FAB $OPEN header-attribute assertions).
 # Raised to 172 by the two vms-47f7 defects (acp-dir-used-blocks-ignore-eof,
 # libcreatedir-rooted-default-unresolved).
-172
+# Raised to 173 by spawn-arm-gone-subprocess-not-completed (vms-f45: the /NOWAIT
+# lib$spawn completion is delivered even when the subprocess is already gone).
+173

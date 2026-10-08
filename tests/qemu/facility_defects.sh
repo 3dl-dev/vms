@@ -435,6 +435,7 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
+spawn-arm-gone-subprocess-not-completed
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -2431,6 +2432,23 @@ EOF
         why)          echo "vms_enq_core_ex() stops bounds-checking the decoded request's lock mode: its 'args.lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM -- it falls through into the resource lookup and grant/queue logic with an out-of-range mode. For the cross-node \$ENQ that test_syssvc_dlm_xnode drives (VMS_IOCTL_DLM_XNODE marshals req->lkmode into this same core), that is now the SOLE guard, so the suite's own 'bad lock mode -> SS\$_BADPARAM' assertion reddens. The local \$ENQ ioctl and vms_ioctl_convert's \$CVT path share this core but no suite drives a bad mode through either, so nothing else reddens.";;
         require_fail) cat <<'EOF'
 bad lock mode -> SS$_BADPARAM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    spawn-arm-gone-subprocess-not-completed)
+        case "$_f" in
+        facility)     echo "LIB\$SPAWN /NOWAIT completion notification (the subprocess-exit event flag, vms-e9a B1 / vms-f45)";;
+        targets)      echo "libvms/rtl/lib_misc.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$spawn no longer completes the caller's request when the completion arm finds the subprocess already gone and reclaimed (SS\$_NONEXPR): the event flag is never set, so a \$WAITFR on it hangs. The race is the subprocess finishing before the arm runs; the suite spawns an instantly-finishing command repeatedly so the lost flag shows.";;
+        require_fail) cat <<'EOF'
+every /NOWAIT lib$spawn of an instantly-finishing command set its completion event flag
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -7408,6 +7426,11 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    spawn-arm-gone-subprocess-not-completed)
+        # UNIQUE TEXT: "if (ast == SS$_NONEXPR) {" occurs once, in lib$spawn's NOWAIT arm
+        # handling. Forcing it never-true restores the pre-fix behaviour (the NONEXPR from
+        # the arm is ignored). Gone after apply (no-op re-apply).
+        sed -i 's|if (ast == SS\$_NONEXPR) {|if (0 \&\& ast == SS$_NONEXPR) { /* NEGCTL spawn-arm-gone-subprocess-not-completed */|' "$_file";;
     dlm-xnode-redirect-target-dropped)
         # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
         # occurs once in the file -- enq_inbound_not_master()'s sole report of

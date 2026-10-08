@@ -123,6 +123,7 @@ case "$verb" in
       sh)     : ;;                                # ip/link/printf-to-fifo no-ops
       timeout) : ;;                               # tcpdump no-op
       pkill)  : ;;
+      pgrep)  exit "${FAKE_QEMU_RUNNING:-1}" ;;      # 0 = the node's qemu is still up (default: gone)
       *) : ;;
     esac; exit 0 ;;
   *) exit 0 ;;
@@ -167,6 +168,25 @@ if printf '%s' "$OUT" | grep -qF 'precheck OK: pod is CN_1'; then
 else
     bad "genesis mode rejected a CN_1 pod (rc=$rc)"; printf '%s\n' "$OUT" | sed 's/^/    /'
 fi
+# --- 6c. vms-a666: a dropped exec SESSION is not the node ending ------------------
+# The mock `kubectl exec ... labjoin_pod_boot.sh` returns at once (the session "dropped")
+# while pgrep says the node's qemu is STILL running: the poll must carry on, not break.
+mkdir -p "$TMP/fastbin"; printf '#!/bin/sh\nexit 0\n' >"$TMP/fastbin/sleep"; chmod +x "$TMP/fastbin/sleep"   # poll waits are not under test
+printf 'CN_1\r\n' >"$TMP/hostl/vax1.log"
+OUT="$(PATH="$TMP/fastbin:$PATH" DUR_POLL=2 FAKE_QEMU_RUNNING=0 LJ_CN_BASE=1 LJ_CN_JOINED=2 run_harness vaxlab-0 tagSESS "$TMP/art" 1 OVMXJ0 1813)"
+if printf '%s' "$OUT" | grep -qF 'its qemu is still running -- continuing the poll' \
+   && ! printf '%s' "$OUT" | grep -qF 'OVMX node driver exited'; then
+    ok "a dropped kubectl-exec session with the node's qemu still up does not end the poll (vms-a666)"
+else
+    bad "poll ended on a dropped exec session although qemu was still running"; printf '%s\n' "$OUT" | sed 's/^/    /'
+fi
+OUT="$(PATH="$TMP/fastbin:$PATH" DUR_POLL=2 FAKE_QEMU_RUNNING=1 LJ_CN_BASE=1 LJ_CN_JOINED=2 run_harness vaxlab-0 tagGONE "$TMP/art" 1 OVMXJ0 1813)"
+if printf '%s' "$OUT" | grep -qF 'OVMX node driver exited'; then
+    ok "with the node's qemu really gone the poll still ends early (vms-a666 control)"
+else
+    bad "poll did not end when the node's qemu was gone"; printf '%s\n' "$OUT" | sed 's/^/    /'
+fi
+
 printf 'CN_2\r\n' >"$TMP/hostl/vax1.log"
 OUT="$(LJ_CN_BASE=1 LJ_CN_JOINED=2 run_harness vaxlab-0 tagGEN2 "$TMP/art" 60 OVMXJ0 1813)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$OUT" | grep -qF 'not the declared reference cluster'; then

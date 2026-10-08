@@ -313,20 +313,22 @@ def _mac_str(s):
     raise ValueError("no delimiter for " + s)
 
 
-def _mac_text(label, text):
-    """MACRO data lines for <text>: printable runs as .ASCII, anything else as
-    .BYTE -- a raw control character in the source would never survive being
-    typed into the node's console"""
-    out, run = [], ""
-    first = True
+def _mac_text(label, text, chunk=60):
+    """MACRO data lines for <text>: printable runs as .ASCII (at most <chunk>
+    characters a line -- a long typed line does not survive a VMS console), and
+    anything else as .BYTE (a raw control character would not survive either)"""
+    out = []
+    first = [True]
 
     def emit(line):
-        nonlocal first
-        out.append(("%s: " % label if first and label else "        ") + line)
-        first = False
+        out.append(("%s: " % label if first[0] and label else "        ") + line)
+        first[0] = False
+    run = ""
     for ch in text:
         if 0x20 <= ord(ch) < 0x7F:
             run += ch
+            if len(run) == chunk:
+                emit(".ASCII  %s" % _mac_str(run)); run = ""
         else:
             if run:
                 emit(".ASCII  %s" % _mac_str(run)); run = ""
@@ -334,6 +336,15 @@ def _mac_text(label, text):
     if run:
         emit(".ASCII  %s" % _mac_str(run))
     return out
+
+
+def _mac_ascid(label, text):
+    """a string descriptor of <text> at <label>: .ASCID when short, else an
+    explicit CLASS_S descriptor over chunked .ASCII lines"""
+    if len(text) <= 60 and all(0x20 <= ord(c) < 0x7F for c in text):
+        return ["%s: .ASCID  %s" % (label, _mac_str(text))]
+    return (["%s: .WORD   %d" % (label, len(text)), "        .BYTE   14,1",
+             "        .ADDRESS %s_X" % label] + _mac_text(label + "_X", text))
 
 
 def _sig(fields):
@@ -633,11 +644,11 @@ def gen_mar(p):
         subs.append("        RET")
 
     for i, cid in enumerate(cids):
-        w("CID%d: .ASCID  %s" % (i, _mac_str(cid)))
+        o.extend(_mac_ascid("CID%d" % i, cid))
     for lbl, ctl, body in printers.values():
-        w("%s_F: .ASCID  %s" % (lbl, _mac_str(ctl)))
+        o.extend(_mac_ascid("%s_F" % lbl, ctl))
     for cid, i in hung.items():
-        w("GH%d: .ASCID  %s" % (i, _mac_str(cid + " HUNG")))
+        o.extend(_mac_ascid("GH%d" % i, cid + " HUNG"))
     w("        .PSECT  SP_CODE,EXE,NOWRT,LONG")
     for lbl, ctl, body in printers.values():
         w("        .ENTRY  %s, ^M<R2,R3,R4,R5,R6,R7,R8,R9,R10,R11>" % lbl)
@@ -701,6 +712,7 @@ def gen_c(p):
     w("#include <stdio.h>")
     w("#include <stdlib.h>")
     w("#include <string.h>")
+    w("#include <signal.h>")
     w("#include <descrip.h>")
     w("#include <iledef.h>")
     if any(k == "cb" for k, _, _ in p.data):
@@ -741,6 +753,12 @@ def gen_c(p):
     w("}")
     w("static const char *GCASE;")
     w("static unsigned int GDELTA[2];")
+    w("static void crash_handler(int sig)")
+    w("{   /* a service that faults the image: name the case it was running */")
+    w('    printf("%s CRASHED signal=%d\\n=== SEMPROBE aborted END ===\\n", GCASE ? GCASE : "?", sig);')
+    w("    fflush(stdout);")
+    w("    exit(1);")
+    w("}")
     w("static void guard_ast(int p)")
     w("{")
     w("    (void)p;")
@@ -854,6 +872,8 @@ def gen_c(p):
                     out.append('    fflush(stdout); GCASE = "%s";' % cid)
                     out.append("    sys$setimr(30, GDELTA, guard_ast, 0x5E3A, 0);")
                 absent = routine in p.ovmx_absent
+                if t == "do":
+                    out.append('    GCASE = "(setup %s)";' % routine)
                 call = "%s(%s)" % (routine.lower(), ", ".join(carg(a) for a in args))
                 if absent:
                     out.append("    /* %s: not provided by OVMX (spec: absent_on_ovmx) */" % routine)
@@ -918,6 +938,7 @@ def gen_c(p):
     w("    gd.dsc$b_class = DSC$K_CLASS_S; gd.dsc$a_pointer = gdt;")
     w("    sys$bintim(&gd, GDELTA);")
     w("    (void)sp_text; (void)guard_ast;")
+    w("    signal(SIGSEGV, crash_handler); signal(SIGBUS, crash_handler); signal(SIGILL, crash_handler);")
     for kind, n, a in p.data:
         if kind == "buf":
             w("    memset(%s, %d, sizeof %s);" % (n, a[1], n))

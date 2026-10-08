@@ -23,3 +23,59 @@ ef EF.WAITFR.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLE
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.SETIMR.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
+lnm LNM.TRN.NEW  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.NEW.PROCTAB  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.NEW.PROCLOG  # vms-f3c: LNM$PROCESS / search-list create / directory tables
+lnm LNM.TRN.SUPERSEDED  # vms-2b3: access modes not kept
+lnm LNM.TRN.LOWERCASE  # vms-aede: names match case-insensitively
+lnm LNM.TRN.CASE_BLIND  # vms-aede: names match case-insensitively
+lnm LNM.TRN.EXEC_MODE  # vms-2b3: access modes not kept
+lnm LNM.TRN.USER_MODE  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.LOWERNAME  # vms-aede: names match case-insensitively
+lnm LNM.TRN.SPACE  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.MULTI.0  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
+lnm LNM.TRN.MULTI.1  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
+lnm LNM.TRN.MULTI.2  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
+lnm LNM.TRN.MULTI.3  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
+lnm LNM.TRN.MULTI.127  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
+lnm LNM.TRN.MULTI.128  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
+lnm LNM.TRN.CONCEALED  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.CRE.256  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.CRE.EMPTYEQ  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.TRN.EMPTYEQ  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.CRE.NOITEMS  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.TRN.NOITEMS  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.TRN.NAME256  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.TRN.NAME0  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.CRE.NOSUCHTABLE  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.TRN.NOSUCHTABLE  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.CRE.SEARCHLIST  # vms-f3c: LNM$PROCESS / search-list create / directory tables
+lnm LNM.TRN.SEARCHLIST  # vms-f3c: LNM$PROCESS / search-list create / directory tables
+lnm LNM.TRN.JOB.VIA_FILEDEV  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.PROC_OVER_JOB  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.JOB.AGAIN  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.SYSTEM  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.KERNEL_ASKED  # vms-2b3: access modes not kept
+lnm LNM.CRE.SUPER  # vms-2b3: access modes not kept
+lnm LNM.TRN.TWO_MODES  # vms-2b3: access modes not kept
+lnm LNM.TRN.TWO_MODES.SUPERQ  # vms-2b3: access modes not kept
+lnm LNM.DEL.USERMODE_ONLY  # vms-2b3: access modes not kept
+lnm LNM.TRN.AFTER_USERDEL  # vms-2b3: access modes not kept
+lnm LNM.DEL.SUPER  # vms-2b3: access modes not kept
+lnm LNM.TRN.AFTER_SUPERDEL  # vms-2b3: access modes not kept
+lnm LNM.TRN.SYSCMD  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.SYSIN  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.SYSOUT  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.SYSD  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.SYSLOGIN  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.SYSSYS  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.SYSSCR  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
+lnm LNM.TRN.TT  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.FILEDEV.IN_SDIR  # vms-f3c: LNM$PROCESS / search-list create / directory tables
+lnm LNM.TRN.PROCTAB.IN_PDIR  # vms-f3c: LNM$PROCESS / search-list create / directory tables
+lnm LNM.DEL.NOSUCHTABLE  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.DEL.NAME0  # vms-e04: bad name/equivalence/table accepted
+lnm LNM.DEL.ALL_IN_TABLE.NONAME  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.AFTER_DELALL  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.TRN.LOGIN_SURVIVES  # vms-ef21: process-permanent names not visible to an image
+lnm LNM.DEL.KERNEL_NAME  # vms-2b3: access modes not kept

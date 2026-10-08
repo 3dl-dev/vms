@@ -4,7 +4,12 @@
 # Build/test tooling for the k3s rail (run it through tools/k3s/run-on-rail.sh --dind).
 set -u
 N=${N:-20}; PROG=${PROG:-sys_forcex}
-docker build -q -f tests/qemu/Dockerfile -t ovmx-ktest:latest . >/dev/null || { echo "image build failed"; exit 2; }
+for try in 1 2 3; do
+  docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest . > /tmp/build.log 2>&1 && break
+  echo "image build attempt $try failed; last lines:"; tail -n 15 /tmp/build.log
+  [ "$try" -lt 3 ] || { echo "image build failed"; exit 2; }
+  sleep 30
+done
 ALL=$(docker run --rm --entrypoint sh ovmx-ktest:latest -c 'ls /tests/corpus_rt 2>/dev/null | grep -v "\.args$"')
 SKIP=$(printf '%s\n' $ALL | grep -vx "$PROG" | paste -sd, -)
 echo "programs in image: $(printf '%s\n' $ALL | wc -l); running only: $PROG"

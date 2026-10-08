@@ -464,6 +464,28 @@ enum pe_channel_action {
 #define PE_VC_UNACKED_MAX 16u
 
 /*
+ * THE RECEIVE HOLD (rd vms-ec2, ruled by the architect 2026-10-08). A real
+ * V7.3 port KEEPS a sequenced frame that arrives ahead of the next expected
+ * one and acknowledges cumulatively once the hole fills -- measured behind the
+ * stall rig's netem jitter: 67 out-of-order arrivals at a real VAX3, 0 of 163
+ * back-to-back second frames retransmitted, arrival order 17,16,15 acked as 17
+ * (tests/lab/captures/vms-ec2-vc-reorder-20261005). The WINDOW is the receive
+ * credit this circuit granted (`recv_credit_max`): the peer can never have
+ * more outstanding than that, so a frame further ahead is not one this port
+ * promised to buffer and is discarded exactly as before. This constant is only
+ * the storage behind that bound, and never raises it.
+ */
+#define PE_VC_HOLD_MAX PE_VC_UNACKED_MAX
+
+struct pe_vc_held {
+	uint8_t  in_use;
+	uint8_t  pad;
+	uint16_t seq;             /* the peer's send_seq of the held frame  */
+	uint32_t len;
+	uint8_t  bytes[PE_VC_FRAME_MAX];
+};
+
+/*
  * TIMVCFAIL: "the time required for an SCS virtual circuit failure to be
  * detected". A SYSGEN parameter; the glue converts it out of its 10 ms SYSGEN
  * unit (cluster_sysgen_timvcfail_ms) and puts milliseconds in pe_identity, so
@@ -639,6 +661,11 @@ struct pe_vc {
 	struct pe_vc_unacked ring[PE_VC_UNACKED_MAX];
 	uint8_t  unacked;          /* entries in use                         */
 	uint8_t  form_tries;       /* START/STACK attempts at this round     */
+
+	/* ---- the receive hold (rd vms-ec2), keyed by the peer's seq ---- */
+	struct pe_vc_held held[PE_VC_HOLD_MAX];
+	uint32_t rx_held;          /* frames kept ahead of a hole            */
+	uint32_t rx_held_delivered;/* ...and delivered in order once filled  */
 	uint8_t  pad2[2];
 
 	/* ---- deadlines, injected clock, wrap-safe ---- */
@@ -665,8 +692,10 @@ struct pe_vc {
 	uint32_t retransmits;             /* same seq re-sent                */
 	uint32_t rx_dups;                 /* peer retransmits we absorbed    */
 	/*
-	 * Frames DISCARDED for arriving ahead of recv_seq + 1, each answered
-	 * with an immediate duplicate cumulative ack (design §3.2.5). A gap is
+	 * Frames that arrived ahead of recv_seq + 1, each answered with an
+	 * immediate duplicate cumulative ack (design §3.2.5); since rd vms-ec2
+	 * one inside the granted window is KEPT (rx_held) rather than
+	 * discarded, and is still counted here as the gap it was. A gap is
 	 * a COUNTER, never a reason to break: this number is how much loss the
 	 * go-back-N receiver absorbed, and it is expected to be non-zero on a
 	 * lossy LAN and zero on a clean one.

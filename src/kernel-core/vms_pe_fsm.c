@@ -2732,9 +2732,18 @@ static void vc_credit_reserve_for(struct pe_fsm *f, struct pe_vc *vc)
  * sequenced message this circuit may take is 1. See vc_score_seq() for why
  * this file does not instead anchor on whatever frame arrives first.
  */
+static void vc_hold_clear(struct pe_vc *vc)
+{
+	uint32_t i;
+
+	for (i = 0; i < PE_VC_HOLD_MAX; i++)
+		vc->held[i].in_use = 0u;
+}
+
 static void vc_reset_sequence(struct pe_fsm *f, struct pe_vc *vc)
 {
 	vc_ring_clear(vc);
+	vc_hold_clear(vc);   /* a new sequence space holds nothing old */
 	vc->send_seq = 1u;
 	vc->recv_seq = 0u;
 	vc->peer_recv_ack = 0u;
@@ -2748,6 +2757,7 @@ static void vc_reset_sequence(struct pe_fsm *f, struct pe_vc *vc)
 static void vc_close(struct pe_fsm *f, struct pe_vc *vc)
 {
 	vc_ring_clear(vc);
+	vc_hold_clear(vc);
 	vc_disarm_vcfail(f, vc);
 	vc_cancel(f, vc, PE_TIMER_RETRANSMIT);
 	/* A closed circuit promises nothing, so it holds no buffers: the share
@@ -3197,6 +3207,106 @@ static void h_vc_rx_gap(struct pe_fsm *f, struct pe_vc *vc)
  *   4. ACKNOWLEDGE, before any delivery and with no upper layer required;
  *   5. deliver -- and a duplicate is never delivered twice.
  */
+static int vc_parse(const uint8_t *frame, uint32_t len,
+		    const struct vms_frame_info *fi, struct pe_vc_rx *rx);
+
+/* The hold window: what this circuit granted, never more (rd vms-ec2). */
+static uint32_t vc_hold_window(const struct pe_vc *vc)
+{
+	uint32_t w = vc->recv_credit_max;
+
+	return w < PE_VC_HOLD_MAX ? w : PE_VC_HOLD_MAX;
+}
+
+/*
+ * KEEP A FRAME THAT ARRIVED AHEAD OF THE HOLE, if it lies inside the window
+ * this circuit granted and fits the slot. Returns 1 when it is held (or was
+ * already), 0 when it must be discarded as before.
+ */
+static int vc_hold(struct pe_vc *vc, const struct pe_vc_rx *rx)
+{
+	uint16_t ahead = (uint16_t)(rx->send_seq - vc->recv_seq);
+	struct pe_vc_held *free_slot = NULL;
+	uint32_t i;
+
+	if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||
+	    (uint32_t)ahead > vc_hold_window(vc))
+		return 0;
+	for (i = 0; i < PE_VC_HOLD_MAX; i++) {
+		if (vc->held[i].in_use && vc->held[i].seq == rx->send_seq)
+			return 1;
+		if (!vc->held[i].in_use && free_slot == NULL)
+			free_slot = &vc->held[i];
+	}
+	if (free_slot == NULL)
+		return 0;
+	pe_copy(free_slot->bytes, rx->frame, rx->len);
+	free_slot->len = rx->len;
+	free_slot->seq = rx->send_seq;
+	free_slot->in_use = 1u;
+	vc->rx_held++;
+	return 1;
+}
+
+static struct pe_vc_held *vc_held_seq(struct pe_vc *vc, uint16_t seq)
+{
+	uint32_t i;
+
+	for (i = 0; i < PE_VC_HOLD_MAX; i++) {
+		if (vc->held[i].in_use && vc->held[i].seq == seq)
+			return &vc->held[i];
+	}
+	return NULL;
+}
+
+/* Deliver one held frame exactly as it would have been on arrival. */
+static void vc_deliver_held(struct pe_fsm *f, struct pe_vc *vc,
+			    struct pe_vc_held *h)
+{
+	struct vms_frame_info fi;
+	struct pe_vc_rx rx = pe_vc_rx_none;
+
+	if (vms_frame_classify(h->bytes, h->len, &fi) == VMS_CODEC_OK &&
+	    vc_parse(h->bytes, h->len, &fi, &rx) == 0) {
+		vc->rx_held_delivered++;
+		vc_deliver(f, vc, &rx);
+	}
+	h->in_use = 0u;
+}
+
+/*
+ * THE HOLE IS FILLED: take every held frame now contiguous with recv_seq,
+ * acknowledge them all at once (cumulatively, before any delivery, the same
+ * order h_vc_rx_seqmsg keeps), then deliver them in sequence. A held copy the
+ * peer has meanwhile delivered in order is stale and is dropped.
+ */
+static void vc_drain_held(struct pe_fsm *f, struct pe_vc *vc)
+{
+	uint16_t first = (uint16_t)(vc->recv_seq + 1u), seq;
+	uint32_t i, n = 0u;
+
+	for (i = 0; i < PE_VC_HOLD_MAX; i++) {
+		if (vc->held[i].in_use &&
+		    !seq_after(vc->held[i].seq, vc->recv_seq))
+			vc->held[i].in_use = 0u;
+	}
+	while (vc_held_seq(vc, (uint16_t)(vc->recv_seq + 1u)) != NULL) {
+		vc->recv_seq = (uint16_t)(vc->recv_seq + 1u);
+		if (vc->recv_credit < 0xffu)
+			vc->recv_credit++;
+		n++;
+	}
+	if (n == 0u)
+		return;
+	vc_send_ack(f, vc);
+	for (seq = first, i = 0; i < n; i++, seq++) {
+		struct pe_vc_held *h = vc_held_seq(vc, seq);
+
+		if (h != NULL)
+			vc_deliver_held(f, vc, h);
+	}
+}
+
 static void h_vc_rx_seqmsg(struct pe_fsm *f, struct pe_vc *vc,
 			   const struct pe_vc_rx *rx)
 {
@@ -3207,6 +3317,13 @@ static void h_vc_rx_seqmsg(struct pe_fsm *f, struct pe_vc *vc,
 
 	kind = vc_score_seq(vc, rx->send_seq);          /* 2 */
 	if (kind == PE_VC_SEQ_GAP) {                    /* 3 */
+		/* rd vms-ec2: kept, inside the window this circuit granted,
+		 * and the hole is still announced by the re-ack. */
+		if (vc_hold(vc, rx)) {
+			vc->rx_gaps++;      /* a gap arrived; it was kept */
+			vc_send_ack(f, vc);
+			return;
+		}
 		h_vc_rx_gap(f, vc);
 		return;
 	}
@@ -3223,6 +3340,7 @@ static void h_vc_rx_seqmsg(struct pe_fsm *f, struct pe_vc *vc,
 		return;
 	}
 	vc_deliver(f, vc, rx);                          /* 5 */
+	vc_drain_held(f, vc);    /* rd vms-ec2: whatever this filled */
 }
 
 /*

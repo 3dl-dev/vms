@@ -664,6 +664,15 @@ void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg);
  */
 void cnxman_csb_dialogue_adopt(struct vms_csb *csb, uint16_t peer_send_msg,
 			       uint16_t peer_ack_msg);
+
+/*
+ * rd vms-ba4: record what the peer's CONNECT_REQ connect data said it has
+ * taken from this node, and what this node's ACCEPT_REQ advertised it has
+ * taken from the peer. The next bind of a new connection on this block resumes
+ * from those two numbers instead of resetting when the peer's is non-zero.
+ */
+void cnxman_csb_note_peer_conndata(struct vms_csb *csb, uint16_t peer_taken,
+				   uint16_t advertised_ack);
 int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
 
 /*

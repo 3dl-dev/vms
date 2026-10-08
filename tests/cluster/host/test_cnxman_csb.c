@@ -1905,6 +1905,64 @@ static void test_a_peer_continuing_a_reset_dialogue_is_followed(void)
 	cnxman_csb_dialogue_adopt(NULL, 2u, 1u);   /* safe */
 }
 
+/* rd vms-ba4, arm N2-2: the VAX restarted ITS count (send=1) but kept what it
+ * had taken (ack=2) -- the ack, not the send, says it is continuing. */
+static void test_a_peer_that_restarted_its_send_but_kept_its_ack(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-ba4: send=1 ack=2 is still a continuing peer\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	if (csb == NULL) { ct_check(0, "a CSB"); return; }
+	cnxman_csb_bind_connection(csb, 0x4e620011u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_bind_connection(csb, 0u);          /* the circuit dies */
+	cnxman_csb_bind_connection(csb, 0x4e620012u); /* and re-forms   */
+	cnxman_csb_dialogue_adopt(csb, 1u, 2u);
+	cnxman_csb_dialogue_heard(csb, 1u);
+	ct_check_eq_u32(csb->cm_send_msg, 2u,
+			"its ack of 2 makes this node's next send 3, not 1");
+}
+
+/* rd vms-ba4, arm N2-4: THIS node speaks first on the accepted connection,
+ * so only the connect data can settle it -- and it does, before any frame. */
+static void test_the_connect_data_settles_it_before_anyone_speaks(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-ba4: the peer's CONNECT_REQ count resumes the dialogue\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	if (csb == NULL) { ct_check(0, "a CSB"); return; }
+	cnxman_csb_bind_connection(csb, 0x4e620021u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);                 /* sent 1..3 */
+	cnxman_csb_dialogue_heard(csb, 3u);            /* took the VAX's 1..3 */
+
+	/* The VAX dials with cd[12:14] = 3; this node's ACCEPT says 3. */
+	cnxman_csb_note_peer_conndata(csb, 3u, 3u);
+	cnxman_csb_bind_reconnect(csb, 0x4e620022u);
+	ct_check_eq_u32(csb->cm_send_msg, 3u,
+			"the next origination is 4 -- what the VAX waits for");
+	ct_check_eq_u32(csb->cm_ack_msg, 3u,
+			"and it acks the 3 this node advertised, not 0");
+	ct_check_eq_u32(csb->cm_peer_taken_valid, 0u, "taken once");
+
+	/* A peer that took nothing (the short form) is a fresh conversation. */
+	cnxman_csb_note_peer_conndata(csb, 0u, 0u);
+	cnxman_csb_bind_connection(csb, 0x4e620023u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u, "short form: 1/0, as before");
+
+	/* A count ahead of anything this node ever sent is refused. */
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_note_peer_conndata(csb, 9u, 0u);
+	cnxman_csb_bind_connection(csb, 0x4e620024u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u, "an impossible count resumes nothing");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -1929,6 +1987,8 @@ int main(void)
 	test_a_new_incarnation_is_a_new_conversation();
 	test_a_carried_dialogue_resumes_where_the_peer_got_to();
 	test_a_peer_continuing_a_reset_dialogue_is_followed();
+	test_a_peer_that_restarted_its_send_but_kept_its_ack();
+	test_the_connect_data_settles_it_before_anyone_speaks();
 	test_two_connections_follow_the_one_the_peer_keeps();
 	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();

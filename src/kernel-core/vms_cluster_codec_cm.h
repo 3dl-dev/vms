@@ -1455,6 +1455,15 @@ vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
 					 const uint8_t *tail, uint32_t tail_len,
 					 uint8_t *out, uint32_t cap);
 
+/*
+ * Read a PEER's [12:14] (rd vms-ba4): the highest CM send-msg# that peer has
+ * taken from THIS node, as it advertised it in its own CONNECT_REQ/ACCEPT_REQ.
+ * Zero is the short form (it has taken nothing). VMS_CODEC_E_SHORT for fewer
+ * than VMS_CM_CONNDATA_LEN bytes; *out written only on VMS_CODEC_OK.
+ */
+vms_codec_status_t vms_cm_conndata_peer_taken(const uint8_t *cd, uint32_t len,
+					      uint16_t *out);
+
 /* The grounded rows, exposed as a table the caller (a later FSM item, or
  * a test) looks up through vms_wire_allow_find() -- never a bespoke
  * per-layer switch. */

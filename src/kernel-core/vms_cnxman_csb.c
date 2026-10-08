@@ -1508,6 +1508,7 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 		return;
 	csb->cm_dialogue_conid = conid;
 	csb->cm_dialogues_carried++;
+	csb->cm_peer_taken_valid = 0u;   /* rd vms-ba4: carried, nothing to settle */
 	/* rd vms-1f40: the next frame this peer sends tells us where its
 	 * receive stream from us really got to, and a carried dialogue resumes
 	 * from there. Armed for that one frame only. */
@@ -1552,6 +1553,8 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 	csb->cm_advert_conid = conid;
 }
 
+static void csb_resume_from_conndata(struct vms_csb *csb);
+
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 {
 	if (csb == NULL)
@@ -1594,6 +1597,8 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	 */
 	csb->cm_txn = csb_next_nonzero(csb->cm_txn);
 	csb->cm_token = 0u;
+	if (conid != 0u && csb->cm_peer_taken_valid)
+		csb_resume_from_conndata(csb);
 }
 
 /* ==========================================================================
@@ -1749,10 +1754,11 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
 /*
  * THE PEER'S FIRST FRAME AFTER A RESET SAYS WHETHER IT RESET TOO (rd vms-ba4).
  *
- * A fresh conversation opens at send-msg# 1 (E76/E77, spec sec 4(j)), on both
- * sides. So a first envelope that carries a HIGHER send-msg# is a peer that
- * kept its block for us and is continuing the conversation this node just
- * discarded -- the case p. 7-24 calls re-establishment, here reached from a
+ * A peer that has started a fresh conversation acknowledges nothing of it yet
+ * (E76/E77, spec sec 4(j)). So a first envelope that ACKNOWLEDGES messages of
+ * ours -- measured: send=3 ack=2, and send=1 ack=2 from a VAX that restarted
+ * its own count but not what it had taken -- is a peer that kept its block for
+ * us and is continuing the conversation this node just discarded -- the case p. 7-24 calls re-establishment, here reached from a
  * block the predicate could not prove entitled (a joiner not yet SELECTED).
  * Then this node continues too, by the vms-1f40 rule: from the position the
  * peer acknowledges, which must be one this node's previous dialogue really
@@ -1764,14 +1770,51 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
  * spoken on the new connection, its numbers are on the wire and cannot be
  * taken back: counted, not hidden.
  */
+/*
+ * THE CONNECT DATA SETTLES IT BEFORE ANYONE SPEAKS (rd vms-ba4). The peer's
+ * CONNECT_REQ said how much of this node's stream it has taken; this node's
+ * ACCEPT_REQ said how much of the peer's it has. A real pair continues from
+ * exactly those two numbers (rd vms-8c54 oracle: VAX1 dialled 14811, VAX2
+ * accepted 10249, and the first frames on the new pair were 10250/14811 and
+ * 14812/10249). So when the peer advertised a non-zero count, the dialogue
+ * this bind would reset is resumed instead: send from what the peer took --
+ * never ahead of what this node's previous dialogue sent -- and ack exactly
+ * what this node advertised. Every number is one of the two on the wire.
+ */
+static void csb_resume_from_conndata(struct vms_csb *csb)
+{
+	uint16_t taken = csb->cm_peer_taken;
+
+	csb->cm_peer_taken_valid = 0u;
+	if (taken == 0u || taken > csb->cm_prev_send)
+		return;
+	csb->cm_send_msg = taken;
+	csb->cm_ack_msg = csb->cm_advertised_ack;
+	csb->cm_txn = csb->cm_prev_txn;
+	csb->cm_token = csb->cm_prev_token;
+	csb->cm_adopt_pending = 0u;
+	csb->cm_dialogues_adopted++;
+}
+
+void cnxman_csb_note_peer_conndata(struct vms_csb *csb, uint16_t peer_taken,
+				   uint16_t advertised_ack)
+{
+	if (csb == NULL)
+		return;
+	csb->cm_peer_taken = peer_taken;
+	csb->cm_advertised_ack = advertised_ack;
+	csb->cm_peer_taken_valid = 1u;
+}
+
 void cnxman_csb_dialogue_adopt(struct vms_csb *csb, uint16_t peer_send_msg,
 			       uint16_t peer_ack_msg)
 {
+	(void)peer_send_msg;   /* the ack decides; the send is the peer's own */
 	if (csb == NULL || !csb->cm_adopt_pending)
 		return;
 	csb->cm_adopt_pending = 0u;
-	if (peer_send_msg <= 1u || peer_ack_msg > csb->cm_prev_send)
-		return;   /* a fresh conversation, or a position we never reached */
+	if (peer_ack_msg == 0u || peer_ack_msg > csb->cm_prev_send)
+		return;   /* it took nothing, or a position we never reached */
 	if (csb->cm_send_msg != 0u) {
 		csb->cm_adopt_too_late++;
 		return;

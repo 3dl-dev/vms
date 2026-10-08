@@ -259,7 +259,9 @@ static int fill_attr(struct FAB *fab, struct NAM *nam, const char *rsa, struct r
     dat.xab$l_nxt = &pro;
     void *save = fab->fab$l_xab;
     fab->fab$l_xab = (struct XABKEY *)&fhc;
+    TR("crtlfd: $display ...", 0);
     uint32_t st = sys$display(fab, 0, 0);
+    TR("crtlfd: $display", st);
     fab->fab$l_xab = save;
     (void)nam;
     if (!(st & 1))
@@ -479,6 +481,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
                                       (writing ? FAB$M_PUT | FAB$M_UPD : 0));
         rf->fab.fab$b_shr = writing ? 0 : FAB$M_SHRGET;
         st = sys$open(&rf->fab, 0, 0);
+        TR("crtlfd: $open", st);
         if ((st & 1) && (flags & O_CREAT) && (flags & O_EXCL)) {
             sys$close(&rf->fab, 0, 0);
             rfile_free(rf);
@@ -511,6 +514,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
         rf->fab.fab$b_rat = FAB$M_CR;
         rf->fab.fab$b_fac = FAB$M_GET | FAB$M_PUT | FAB$M_BIO;
         st = sys$create(&rf->fab, 0, 0);
+        TR("crtlfd: $create", st);
         if (!(st & 1)) {
             int e = rms_errno(st);
             rfile_free(rf);
@@ -538,6 +542,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     rf->rab = cc$rms_rab;
     rf->rab.rab$l_fab = &rf->fab;
     st = sys$connect(&rf->rab, 0, 0);
+    TR("crtlfd: $connect", st);
     if (!(st & 1)) {
         sys$close(&rf->fab, 0, 0);
         rfile_free(rf);

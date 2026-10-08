@@ -255,6 +255,9 @@ long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg)
     vms_proc_rundown_locks(proc, rundown_mode);
     vms_proc_rundown_channels(proc, rundown_mode);
     vms_proc_rundown_asts(proc, rundown_mode);
+    /* VMS deletes the process's user-mode logical names at image rundown
+     * (rd vms-ef21); supervisor and inner-mode names outlive the image. */
+    vms_lnm_rundown(proc->vms_pid, rundown_mode);
 
     args.status = SS__NORMAL;
 

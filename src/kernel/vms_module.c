@@ -1847,6 +1847,9 @@ void vms_proc_free_claimed(struct vms_proc *proc)
     int i;
     struct vms_ast_entry *ast, *tmp;
 
+    /* LNM$PROCESS: image rundown or process deletion (rd vms-ef21). */
+    vms_lnm_proc_gone(proc);
+
     /* Free AST queues */
     for (i = 0; i < 4; i++) {
         spin_lock(&proc->ast[i].lock);

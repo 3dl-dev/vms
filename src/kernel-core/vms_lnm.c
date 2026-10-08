@@ -164,23 +164,33 @@ static uint32_t derive_scope_key(uint32_t table, const struct vms_proc *proc)
         return proc->uic >> 16;   /* UIC group */
     case VMS_LNM_TBL_JOB:
         return proc->job_id;
+    case VMS_LNM_TBL_PROCESS:
+        /* The VMS PID: DCL and the image it activated share it (rd vms-ef21). */
+        return proc->vms_pid;
     default:
         return 0;
     }
 }
 
-/* Is `table` one of the three executive-resident LNM tables? LNM$PROCESS
- * is deliberately excluded -- it never reaches vms.ko (design §3.1). */
+/* Is `table` one of the executive-resident LNM tables? */
 static bool lnm_table_is_valid(uint32_t table)
 {
     return table == VMS_LNM_TBL_SYSTEM ||
            table == VMS_LNM_TBL_GROUP ||
-           table == VMS_LNM_TBL_JOB;
+           table == VMS_LNM_TBL_JOB ||
+           table == VMS_LNM_TBL_PROCESS;
 }
 
-/* Find an in-use entry matching (table, scope_key, upcased name). */
+/*
+ * Find the in-use entry for (table, scope_key, name, acmode). A logical name is
+ * case-SENSITIVE ($CRELNM stores the name exactly as given; only
+ * LNM$M_CASE_BLIND on a translation folds case), and one name may exist once
+ * per access mode in the same table -- $CRELNM supersedes only the name at the
+ * same mode (rd vms-ef21; observed on VAX V7.3 and Alpha V8.4,
+ * docs/oracle/semantics/lnm/).
+ */
 static struct vms_lnm_entry *lnm_find(uint32_t table, uint32_t scope_key,
-                                      const char *name)
+                                      const char *name, uint8_t acmode)
 {
     uint32_t i;
 
@@ -189,12 +199,64 @@ static struct vms_lnm_entry *lnm_find(uint32_t table, uint32_t scope_key,
 
         if (!e->in_use)
             continue;
-        if (e->table != table || e->scope_key != scope_key)
+        if (e->table != table || e->scope_key != scope_key ||
+            e->acmode != acmode)
             continue;
-        if (strcasecmp(e->name, name) == 0)
+        if (strcmp(e->name, name) == 0)
             return e;
     }
     return NULL;
+}
+
+/*
+ * The access mode a request may act at. A name at an inner mode (kernel or
+ * executive) needs SYSNAM; without it the request is maximized to supervisor,
+ * the mode DCL's own names live at. (OVMX's CLI does not run in a separately
+ * tracked supervisor mode -- every task is at user mode as far as
+ * proc->current_mode goes -- so supervisor is the outermost mode a request can
+ * be pinned to without breaking DCL; an image's own names arrive at the user
+ * mode $CRELNM defaults to.)
+ */
+static uint8_t lnm_effective_mode(uint8_t acmode, const struct vms_proc *proc)
+{
+    if (acmode > PSL_C_USER)
+        acmode = PSL_C_USER;
+    if (acmode < PSL_C_SUPER && !(proc->cur_privs & VMS_PRV_M_SYSNAM))
+        acmode = PSL_C_SUPER;
+    return acmode;
+}
+
+/* Free one entry (caller holds lnm_write_lock inside a write section). */
+static void lnm_free_entry(struct vms_lnm_entry *e)
+{
+    e->in_use = 0;
+    if (lnm_arena->entry_count)
+        lnm_arena->entry_count--;
+}
+
+/*
+ * vms_lnm_rundown - delete the LNM$PROCESS names of VMS process `vms_pid` at
+ * `min_acmode` and every outer mode. Image rundown passes PSL_C_USER (VMS
+ * deletes a process's user-mode names when its image exits); process deletion
+ * passes PSL_C_KERNEL (the whole table goes with the process).
+ */
+void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode)
+{
+    uint32_t i;
+
+    if (!lnm_arena || vms_pid == 0)
+        return;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_PROCESS &&
+            e->scope_key == vms_pid && e->acmode >= min_acmode)
+            lnm_free_entry(e);
+    }
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
 }
 
 /* First free slot, or NULL when the arena is full. */
@@ -207,13 +269,6 @@ static struct vms_lnm_entry *lnm_alloc_slot(void)
             return &lnm_arena->entries[i];
     }
     return NULL;
-}
-
-/* Upcase a NUL-terminated name in place (VMS logical names are upcased). */
-static void upcase(char *s)
-{
-    for (; *s; s++)
-        *s = (char)toupper((unsigned char)*s);
 }
 
 /*
@@ -293,14 +348,14 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
         a->status = SS__IVLOGNAM;
         goto out_copy;
     }
-    if (a->num_equiv == 0 || a->num_equiv > VMS_LNM_MAX_EQUIV) {
+    /* A name with NO equivalence string is legal: $CRELNM with an empty item
+     * list creates one (LNM.CRE.NOITEMS, rd vms-ef21). */
+    if (a->num_equiv > VMS_LNM_MAX_EQUIV) {
         a->status = SS__BADPARAM;
         goto out_copy;
     }
     for (i = 0; i < a->num_equiv; i++)
         a->equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
-
-    upcase(a->name);
 
     /* PRIVILEGE ENFORCEMENT (vms-5b7) -- see lnm_priv_check()'s header for
      * the full rationale and oracle citation. On refusal the arena is
@@ -310,10 +365,11 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
 
     scope_key = derive_scope_key(a->table, proc);
+    a->acmode = lnm_effective_mode(a->acmode, proc);
 
     exec_lock(&lnm_write_lock);
 
-    e = lnm_find(a->table, scope_key, a->name);
+    e = lnm_find(a->table, scope_key, a->name, a->acmode);
     if (e) {
         /* Supersede in place. */
         lnm_write_begin();
@@ -359,11 +415,20 @@ out_free:
     return ret;
 }
 
+/*
+ * $DELLNM (rd vms-ef21). A named delete removes the name at the request's
+ * access mode AND every outer mode, and is SS$_NOLOGNAM only when there was
+ * nothing at those modes (a user-mode delete of a supervisor-mode name is
+ * NOLOGNAM; a supervisor delete leaves the kernel-mode name standing). With
+ * VMS_LNM_DEL_ALL (no name given) every name in the table at those modes goes.
+ * Observed on VAX V7.3 and Alpha V8.4, docs/oracle/semantics/lnm/.
+ */
 long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_lnm_del_args *a;
-    struct vms_lnm_entry *e;
-    uint32_t scope_key;
+    uint32_t scope_key, i, n = 0;
+    uint8_t mode;
+    bool all;
     long ret = 0;
 
     a = exec_zalloc(sizeof(*a));
@@ -380,35 +445,37 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
+    all = (a->flags & VMS_LNM_DEL_ALL) != 0;
     a->name[VMS_LNM_MAX_NAME] = '\0';
-    if (a->name[0] == '\0') {
+    if (!all && a->name[0] == '\0') {
         a->status = SS__IVLOGNAM;
         goto out_copy;
     }
-    upcase(a->name);
 
     /* Same gate as create (vms-5b7) -- see lnm_priv_check()'s header. */
     if (!lnm_priv_check(a->table, proc->cur_privs, &a->status))
         goto out_copy;
 
     scope_key = derive_scope_key(a->table, proc);
+    mode = lnm_effective_mode(a->acmode, proc);
 
     exec_lock(&lnm_write_lock);
-    e = lnm_find(a->table, scope_key, a->name);
-    if (!e) {
-        exec_unlock(&lnm_write_lock);
-        a->status = SS__NOLOGNAM;
-        goto out_copy;
-    }
-
     lnm_write_begin();
-    e->in_use = 0;
-    if (lnm_arena->entry_count)
-        lnm_arena->entry_count--;
-    lnm_write_end();
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *e = &lnm_arena->entries[i];
 
-    a->status = SS__NORMAL;
+        if (!e->in_use || e->table != a->table || e->scope_key != scope_key ||
+            e->acmode < mode)
+            continue;
+        if (!all && strcmp(e->name, a->name) != 0)
+            continue;
+        lnm_free_entry(e);
+        n++;
+    }
+    lnm_write_end();
     exec_unlock(&lnm_write_lock);
+
+    a->status = (n || all) ? SS__NORMAL : SS__NOLOGNAM;
 
 out_copy:
     if (exec_copyout((void *)arg, a, sizeof(*a)))
@@ -438,6 +505,7 @@ long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     args.group_key = derive_scope_key(VMS_LNM_TBL_GROUP, proc);
     args.job_key   = derive_scope_key(VMS_LNM_TBL_JOB, proc);
+    args.process_key = derive_scope_key(VMS_LNM_TBL_PROCESS, proc);
     args.status    = SS__NORMAL;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))

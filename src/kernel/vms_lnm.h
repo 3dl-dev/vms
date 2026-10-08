@@ -48,12 +48,24 @@
  */
 
 /*
- * Executive-resident tables. LNM$PROCESS is deliberately NOT here: it is
- * per-process and never leaves the process (design §3.1).
+ * Executive-resident tables. LNM$PROCESS joined them in rd vms-ef21 (the
+ * per-PID scope below); design §3.1 kept it in-process before images had to
+ * see it.
  */
 #define VMS_LNM_TBL_SYSTEM  1
 #define VMS_LNM_TBL_GROUP   2
 #define VMS_LNM_TBL_JOB     3
+/*
+ * LNM$PROCESS_TABLE (rd vms-ef21). Executive-resident too, scoped by the VMS
+ * PID: DCL and every image it activates are ONE VMS process (an image either
+ * runs in DCL's own task or in a REGISTER_CONTINUE child that shares DCL's VMS
+ * PID), so keying the table on the PID is what makes a process-permanent name
+ * (SYS$DISK, TT, a DEFINE at DCL) visible to the image and survive its
+ * rundown -- the P1-resident, image-outliving table of VMS. User-mode names are
+ * deleted at image rundown (vms_lnm_rundown) and the whole table goes with the
+ * process.
+ */
+#define VMS_LNM_TBL_PROCESS 4
 
 /*
  * Sizing. OVMX design choices (Rule 8) -- these are OVMX limits, not VMS
@@ -144,10 +156,17 @@ struct vms_lnm_del_args {
     uint32_t table;                     /* VMS_LNM_TBL_* */
     uint32_t status;                    /* return: SS$_ status */
     uint8_t  acmode;
-    uint8_t  pad1;
+    uint8_t  flags;                     /* VMS_LNM_DEL_* */
     uint16_t name_length;
     char     name[VMS_LNM_MAX_NAME + 1];
 };
+
+/* vms_lnm_del_args.flags (rd vms-ef21). VMS_LNM_DEL_ALL: $DELLNM with no
+ * logical name -- delete EVERY name in the table at the request's access mode
+ * and every outer mode (name ignored). Without it, the named name is deleted at
+ * that mode and every outer mode. */
+#define VMS_LNM_DEL_ALL     0x01u
+
 
 #define VMS_IOCTL_LNM_DEFINE  _IOWR(VMS_IOC_MAGIC, 0x60, struct vms_lnm_def_args)
 #define VMS_IOCTL_LNM_DELETE  _IOWR(VMS_IOC_MAGIC, 0x61, struct vms_lnm_del_args)
@@ -168,6 +187,7 @@ struct vms_lnm_del_args {
 struct vms_lnm_scope_args {
     uint32_t group_key;                 /* this caller's LNM$GROUP scope key */
     uint32_t job_key;                   /* this caller's LNM$JOB scope key */
+    uint32_t process_key;               /* this caller's LNM$PROCESS key (its VMS PID) */
     uint32_t status;                    /* return: SS$_ status */
 };
 
@@ -187,7 +207,7 @@ _Static_assert(sizeof(struct vms_lnm_def_args) == 2352,
                "vms_lnm_def_args changed size -- VMS_IOCTL_LNM_DEFINE ABI break");
 _Static_assert(sizeof(struct vms_lnm_del_args) == 268,
                "vms_lnm_del_args changed size -- VMS_IOCTL_LNM_DELETE ABI break");
-_Static_assert(sizeof(struct vms_lnm_scope_args) == 12,
+_Static_assert(sizeof(struct vms_lnm_scope_args) == 16,
                "vms_lnm_scope_args changed size -- VMS_IOCTL_LNM_GETSCOPE ABI break");
 
 #endif /* _VMS_LNM_H */

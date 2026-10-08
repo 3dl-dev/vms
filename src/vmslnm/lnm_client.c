@@ -96,6 +96,37 @@ static int is_job_table(const char *table_name)
             strcasecmp(table_name, "JOB") == 0);
 }
 
+static int is_process_table(const char *table_name)
+{
+    return table_name &&
+           (strcasecmp(table_name, LNM_PROCESS_TABLE) == 0 ||
+            strcasecmp(table_name, "LNM$PROCESS") == 0 ||
+            strcasecmp(table_name, "PROCESS") == 0);
+}
+
+/*
+ * lnm_exec_table_id - the executive table a table name lives in, or 0 for a
+ * process-local table. LNM$SYSTEM / LNM$GROUP / LNM$JOB always (vms-d37,
+ * vms-aba); LNM$PROCESS_TABLE whenever the executive is present (rd vms-ef21):
+ * it is keyed there by the VMS PID, which DCL shares with every image it
+ * activates, so a process-permanent name is visible to the image and outlives
+ * it, exactly as VMS's P1-resident process table does. With no /dev/vms (host
+ * build/test tooling, where there is no other process to share with) the
+ * process table stays this process's own lnm_table_t, as it always was.
+ */
+uint32_t lnm_exec_table_id(const char *table_name)
+{
+    if (is_system_table(table_name))
+        return VMS_LNM_TBL_SYSTEM;
+    if (is_group_table(table_name))
+        return VMS_LNM_TBL_GROUP;
+    if (is_job_table(table_name))
+        return VMS_LNM_TBL_JOB;
+    if (is_process_table(table_name) && vms_kif_lnm_present())
+        return VMS_LNM_TBL_PROCESS;
+    return 0;
+}
+
 /* Internal table functions from lnm_table.c */
 extern lnm_table_t *lnm_table_create(const char *name, uint32_t num_buckets);
 extern void          lnm_table_destroy(lnm_table_t *table);
@@ -331,26 +362,13 @@ uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
      * tests/qemu/test_syssvc_lnm_system.c, which proves this path against a
      * real /dev/vms (docs/design-lnm-executive-surface.md).
      */
-    if (is_system_table(table_name)) {
-        const char *vals[1] = { equivalence };
-        return vms_kif_lnm_define(VMS_LNM_TBL_SYSTEM, logical_name,
-                                  vals, 1, attributes, acmode);
-    }
-
-    /*
-     * LNM$GROUP / LNM$JOB are executive-resident too (vms-aba, the same
-     * shape as SYSTEM above, one scope level down): the scope key is
-     * derived by the executive from the caller's PCB, never supplied here.
-     */
-    if (is_group_table(table_name)) {
-        const char *vals[1] = { equivalence };
-        return vms_kif_lnm_define(VMS_LNM_TBL_GROUP, logical_name,
-                                  vals, 1, attributes, acmode);
-    }
-    if (is_job_table(table_name)) {
-        const char *vals[1] = { equivalence };
-        return vms_kif_lnm_define(VMS_LNM_TBL_JOB, logical_name,
-                                  vals, 1, attributes, acmode);
+    {
+        uint32_t exec_tbl = lnm_exec_table_id(table_name);
+        if (exec_tbl) {
+            const char *vals[1] = { equivalence };
+            return vms_kif_lnm_define(exec_tbl, logical_name,
+                                      vals, 1, attributes, acmode);
+        }
     }
 
     lnm_table_t *table = lnm_find_table(mgr, table_name);
@@ -407,11 +425,8 @@ uint32_t lnm_create_multi(lnm_manager_t *mgr, const char *table_name,
      * these three tables gets only the first 8, same as calling
      * vms_kif_lnm_define directly.
      */
-    if (is_system_table(table_name) || is_group_table(table_name) ||
-        is_job_table(table_name)) {
-        uint32_t exec_tbl = is_system_table(table_name) ? VMS_LNM_TBL_SYSTEM
-                          : is_group_table(table_name)  ? VMS_LNM_TBL_GROUP
-                                                        : VMS_LNM_TBL_JOB;
+    uint32_t exec_tbl = lnm_exec_table_id(table_name);
+    if (exec_tbl) {
         uint8_t nv = (num_equiv > VMS_LNM_MAX_EQUIV)
                    ? VMS_LNM_MAX_EQUIV : (uint8_t)num_equiv;
         return vms_kif_lnm_define(exec_tbl, logical_name, equivalences, nv,
@@ -482,14 +497,11 @@ uint32_t lnm_delete(lnm_manager_t *mgr, const char *table_name,
      * (vms-48ab, INV-6): SS$_NOSUCHDEV means the executive is unreachable
      * (host tooling only) and is returned honestly, never masked by a
      * process-local delete (see is_system_table / lnm_create). */
-    if (is_system_table(table_name))
-        return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);
-
-    /* LNM$GROUP / LNM$JOB, same shape, one scope level down (vms-aba). */
-    if (is_group_table(table_name))
-        return vms_kif_lnm_delete(VMS_LNM_TBL_GROUP, logical_name, acmode);
-    if (is_job_table(table_name))
-        return vms_kif_lnm_delete(VMS_LNM_TBL_JOB, logical_name, acmode);
+    {
+        uint32_t exec_tbl = lnm_exec_table_id(table_name);
+        if (exec_tbl)
+            return vms_kif_lnm_delete(exec_tbl, logical_name, acmode);
+    }
 
     lnm_table_t *table = lnm_find_table(mgr, table_name);
     if (!table)
@@ -539,11 +551,8 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
      * runtime, since the seeded defaults live in the executive), so a listing
      * can never fabricate a system-wide name that is not actually shared.
      */
-    if (is_system_table(table_name) || is_group_table(table_name) ||
-        is_job_table(table_name)) {
-        uint32_t exec_tbl = is_system_table(table_name) ? VMS_LNM_TBL_SYSTEM
-                          : is_group_table(table_name)  ? VMS_LNM_TBL_GROUP
-                                                        : VMS_LNM_TBL_JOB;
+    uint32_t exec_tbl = lnm_exec_table_id(table_name);
+    if (exec_tbl) {
         struct vms_kif_lnm_enum_rec *recs =
             calloc(VMS_LNM_MAX_ENTRIES, sizeof(*recs));
         if (!recs)

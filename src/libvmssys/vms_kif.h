@@ -1006,8 +1006,10 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
                             const char *const *values, uint8_t num_values,
                             uint32_t attributes, uint8_t acmode);
 
-/* Delete a name from an executive-resident table. SS$_NOLOGNAM if the
- * name is not present, SS$_NOSUCHDEV if the executive is absent.
+/* Delete a name from an executive-resident table at `acmode` and every outer
+ * mode (rd vms-ef21); a NULL name deletes every name in the table at those
+ * modes. SS$_NOLOGNAM if nothing matched, SS$_NOSUCHDEV if the executive is
+ * absent.
  * Wired: sys$dellnm (src/libvms/syssvc/sys_logical.c). */
 uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode);
 
@@ -1067,6 +1069,24 @@ struct vms_kif_lnm_enum_rec {
  * walks so a DEFINE/SYSTEM by one process is listed by another. */
 int vms_kif_lnm_enumerate(uint32_t table,
                           struct vms_kif_lnm_enum_rec *out, uint32_t max_out);
+
+/* 1 when the executive's logical-name arena is mapped (i.e. /dev/vms is
+ * present), else 0. */
+int vms_kif_lnm_present(void);
+
+/* This caller's scope key for an executive table (SYSTEM 0; GROUP = UIC
+ * group; JOB = job id; PROCESS = VMS PID), as the executive derives it.
+ * Returns 1 and fills *key, or 0 when the executive is unavailable. */
+int vms_kif_lnm_scope_key(uint32_t table, uint32_t *key);
+
+/* Look up `name` in an executive-resident table (VMS_LNM_TBL_SYSTEM, _GROUP,
+ * _JOB or _PROCESS) the way $TRNLNM does (rd vms-ef21): an exact-case match
+ * unless case_blind, ignoring entries at modes outer than max_acmode (3 =
+ * any), and returning the outermost remaining one. Fills *out (name, every
+ * equivalence string, attributes, acmode) and returns 1; 0 when no such name;
+ * -1 when the executive is unavailable. */
+int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
+                       uint8_t max_acmode, struct vms_kif_lnm_enum_rec *out);
 
 /* ================================================================
  * Mailboxes (executive-resident MBAn:, vms-d44)

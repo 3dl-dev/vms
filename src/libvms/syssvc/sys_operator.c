@@ -30,6 +30,8 @@
  *     spec is resolved through the executive-resident LNM$SYSTEM table (vmsfs
  *     path translation -> lnm_translate -> vms_kif_lnm_translate) for system
  *     logical names before the device is opened.
+ *     The OPER check for BRK$C_ALLTERMS / ALLUSERS is the executive's
+ *     (VMS_IOCTL_BRKAUTH, vms-768).
  * OVMX-LOCAL: sys$brkthruw -- open()s the resolved terminal device and write()s
  *     to it directly, falling back to the caller's own stdout when that open
  *     fails. No executive mediates the broadcast, so it reaches a terminal this
@@ -530,6 +532,13 @@ uint32_t (sys$brkthruw)(uint32_t efn,
         return SS$_ACCVIO;
     if ((sndtyp == BRK$C_DEVICE || sndtyp == BRK$C_USERNAME) && !sendto)
         return SS$_ACCVIO;
+    /* Every terminal / every user needs OPER: the executive decides from the
+     * caller's current privileges (SS$_NOOPER, vms-768). */
+    if (sndtyp == BRK$C_ALLTERMS || sndtyp == BRK$C_ALLUSERS) {
+        uint32_t ast = vms_kif_brkauth(sndtyp);
+        if (!(ast & 1))
+            return ast;
+    }
 
     const char *text = msgbuf->dsc$a_pointer ? msgbuf->dsc$a_pointer : "";
     size_t len = msgbuf->dsc$a_pointer ? msgbuf->dsc$w_length : 0;

@@ -2181,6 +2181,42 @@ uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
     return args.status;
 }
 
+/* A process's base priority (vms-768): op VMS_PRI_OP_GET / SET of process pid
+ * (0 = the caller). *pri in = the requested priority (SET), out = the one in
+ * force; *prev the one before; *authpri the authorized one. */
+uint32_t vms_kif_pri(uint32_t op, uint32_t pid, uint32_t *pri, uint32_t *prev,
+                     uint32_t *authpri)
+{
+    struct vms_pri_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.pid = pid;
+    args.pri = pri ? *pri : 0;
+
+    KIF_CALL(VMS_IOCTL_PRI, &args);
+
+    if (args.status & 1) {
+        if (pri) *pri = args.pri;
+        if (prev) *prev = args.prev;
+        if (authpri) *authpri = args.authpri;
+    }
+    return args.status;
+}
+
+/* May the caller broadcast with this $BRKTHRU send type (OPER, vms-768)? */
+uint32_t vms_kif_brkauth(uint32_t sndtyp)
+{
+    struct vms_brkauth_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.sndtyp = sndtyp;
+
+    KIF_CALL(VMS_IOCTL_BRKAUTH, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;

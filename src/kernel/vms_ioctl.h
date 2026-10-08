@@ -184,6 +184,9 @@ struct vms_mode_args {
 #define VMS_PRV_V_BYPASS    29
 #define VMS_PRV_V_GRPPRV    34
 #define VMS_PRV_V_READALL   35  /* PRV$V_READALL: read any object (vmsfs_acp.c acp_check_access) */
+#define VMS_PRV_V_ALTPRI    13  /* PRV$V_ALTPRI: base priority above the authorized one (vms_ioctl_pri) */
+#define VMS_PRV_V_OPER      18  /* PRV$V_OPER: broadcast to every terminal (vms_ioctl_brkauth) */
+#define VMS_PRV_V_SYSLCK    30  /* PRV$V_SYSLCK: a system-wide lock resource (vms_ioctl_enq) */
 
 /*
  * SYSNAM (2) / GRPNAM (3) / GRPPRV (34) -- ORACLE-PIN NOTE (vms-5b7).
@@ -236,6 +239,9 @@ struct vms_mode_args {
 #define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
 #define VMS_PRV_M_BYPASS    (1ULL << VMS_PRV_V_BYPASS)
 #define VMS_PRV_M_READALL   (1ULL << VMS_PRV_V_READALL)
+#define VMS_PRV_M_ALTPRI    (1ULL << VMS_PRV_V_ALTPRI)
+#define VMS_PRV_M_OPER      (1ULL << VMS_PRV_V_OPER)
+#define VMS_PRV_M_SYSLCK    (1ULL << VMS_PRV_V_SYSLCK)
 
 /*
  * The privileges the OVMX executive actually ENFORCES today.
@@ -319,7 +325,8 @@ struct vms_mode_args {
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
                              VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
-                             VMS_PRV_M_GRPPRV)
+                             VMS_PRV_M_GRPPRV | \
+                             VMS_PRV_M_ALTPRI | VMS_PRV_M_SYSLCK | VMS_PRV_M_OPER)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
@@ -3248,6 +3255,37 @@ struct vms_rights_args {
     uint32_t attrs[VMS_RIGHTS_MAX];  /* out: LIST                              */
 };
 #define VMS_IOCTL_RIGHTS    _IOWR(VMS_IOC_MAGIC, 0x96, struct vms_rights_args)
+/*
+ * PROCESS PRIORITY (rd vms-768, ALTPRI). The executive holds each process's base
+ * priority; $SETPRI sets it and $GETJPI reads it. Raising it above the process's
+ * authorized priority needs ALTPRI: without it the request succeeds at the
+ * authorized priority (OpenVMS VAX V7.3, docs/oracle/semantics/privchk). The
+ * authorized priority is the SYSGEN DEFPRI / SYSUAF PRIOR default, 4, for every
+ * process: OVMX does not read UAF PRIOR yet.
+ */
+#define VMS_PRI_DEFAULT    4u
+#define VMS_PRI_OP_GET     1u
+#define VMS_PRI_OP_SET     2u
+struct vms_pri_args {
+    uint32_t op;        /* in:  VMS_PRI_OP_*                                  */
+    uint32_t pid;       /* in:  target VMS pid, 0 = the caller                */
+    uint32_t pri;       /* in:  SET: requested base priority; out: in force   */
+    uint32_t prev;      /* out: base priority before this call                */
+    uint32_t authpri;   /* out: authorized base priority                      */
+    uint32_t status;    /* out: SS$_ status                                   */
+};
+#define VMS_IOCTL_PRI       _IOWR(VMS_IOC_MAGIC, 0x97, struct vms_pri_args)
+/*
+ * BROADCAST SCOPE (rd vms-768, OPER). $BRKTHRU to every terminal or every user
+ * (BRK$C_ALLTERMS 4, BRK$C_ALLUSERS 3) needs OPER: SS$_NOOPER without it
+ * (docs/oracle/semantics/privchk). The executive decides from the caller's
+ * current privileges.
+ */
+struct vms_brkauth_args {
+    uint32_t sndtyp;    /* in:  BRK$C_ send type                              */
+    uint32_t status;    /* out: SS$_NORMAL / SS$_NOOPER                       */
+};
+#define VMS_IOCTL_BRKAUTH   _IOWR(VMS_IOC_MAGIC, 0x98, struct vms_brkauth_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -3328,6 +3366,10 @@ _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
+_Static_assert(sizeof(struct vms_pri_args) == 24,
+               "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
+_Static_assert(sizeof(struct vms_brkauth_args) == 8,
+               "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*

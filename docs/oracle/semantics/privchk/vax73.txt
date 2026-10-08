@@ -1,0 +1,30 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/privchk.py sha256=f0cea37525fb1625a0f3194a9ff854cb861077fb480738b22d64079562bc5dd0
+=== SEMPROBE privchk BEGIN ===
+PRV.OFF st=00000001
+PRI.START st=00000001 prib=4 authpri=4
+PRI.LOWER st=00000001 prev=4
+PRI.AFTER.LOWER st=00000001 prib=2 authpri=4
+PRI.RAISE.TO.AUTH st=00000001 prev=2
+PRI.RAISE.ABOVE st=00000001 prev=4
+PRI.AFTER.RAISE st=00000001 prib=4 authpri=4
+PRV.ALTPRI.ON st=00000001
+PRI.ALTPRI.RAISE st=00000001 prev=4
+PRI.AFTER.ALTPRI st=00000001 prib=10 authpri=4
+PRI.RESTORE st=00000001 prev=10
+PRV.ALTPRI.OFF st=00000001
+LCK.GROUP.EX st=00000001 lksb=1 lkid0=0
+LCK.SYSTEM.NOPRIV st=000028F4 lksb=0 lkid0=1
+PRV.SYSLCK.ON st=00000001
+LCK.SYSTEM.SYSLCK st=00000001 lksb=1 lkid0=0
+LCK.GROUP.AGAIN.NOQUEUE st=000009B8 lksb=0 lkid0=1
+PRV.SYSLCK.OFF st=00000001
+BRK.OWN.NOPRIV st=00000001 iosb=1
+BRK.ALLTERMS.NOPRIV st=00002894 iosb=0
+BRK.ALLUSERS.NOPRIV st=00002894 iosb=0
+PRV.OPER.ON st=00000001
+BRK.ALLTERMS.OPER st=00000001 iosb=1
+PRV.OPER.OFF st=00000001
+=== SEMPROBE privchk END ===

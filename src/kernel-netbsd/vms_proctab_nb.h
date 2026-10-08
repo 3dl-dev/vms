@@ -550,6 +550,37 @@ struct vms_rights_args {
     uint32_t attrs[VMS_RIGHTS_MAX];  /* out: LIST                              */
 };
 #define VMS_IOCTL_RIGHTS    _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x96, struct vms_rights_args)
+/*
+ * PROCESS PRIORITY (rd vms-768, ALTPRI). The executive holds each process's base
+ * priority; $SETPRI sets it and $GETJPI reads it. Raising it above the process's
+ * authorized priority needs ALTPRI: without it the request succeeds at the
+ * authorized priority (OpenVMS VAX V7.3, docs/oracle/semantics/privchk). The
+ * authorized priority is the SYSGEN DEFPRI / SYSUAF PRIOR default, 4, for every
+ * process: OVMX does not read UAF PRIOR yet.
+ */
+#define VMS_PRI_DEFAULT    4u
+#define VMS_PRI_OP_GET     1u
+#define VMS_PRI_OP_SET     2u
+struct vms_pri_args {
+    uint32_t op;        /* in:  VMS_PRI_OP_*                                  */
+    uint32_t pid;       /* in:  target VMS pid, 0 = the caller                */
+    uint32_t pri;       /* in:  SET: requested base priority; out: in force   */
+    uint32_t prev;      /* out: base priority before this call                */
+    uint32_t authpri;   /* out: authorized base priority                      */
+    uint32_t status;    /* out: SS$_ status                                   */
+};
+#define VMS_IOCTL_PRI       _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x97, struct vms_pri_args)
+/*
+ * BROADCAST SCOPE (rd vms-768, OPER). $BRKTHRU to every terminal or every user
+ * (BRK$C_ALLTERMS 4, BRK$C_ALLUSERS 3) needs OPER: SS$_NOOPER without it
+ * (docs/oracle/semantics/privchk). The executive decides from the caller's
+ * current privileges.
+ */
+struct vms_brkauth_args {
+    uint32_t sndtyp;    /* in:  BRK$C_ send type                              */
+    uint32_t status;    /* out: SS$_NORMAL / SS$_NOOPER                       */
+};
+#define VMS_IOCTL_BRKAUTH   _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x98, struct vms_brkauth_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY      _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -596,6 +627,10 @@ _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
+_Static_assert(sizeof(struct vms_pri_args) == 24,
+               "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
+_Static_assert(sizeof(struct vms_brkauth_args) == 8,
+               "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,

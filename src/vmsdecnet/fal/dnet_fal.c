@@ -828,16 +828,36 @@ static uint32_t server_rename(struct fal_batch *b, struct dnet_dap_transport *t,
         return SS$_BADPARAM;
     }
     char orsa[DNET_DAP_MAX_SPEC + 1] = "", nrsa[DNET_DAP_MAX_SPEC + 1] = "";
+    char target[DNET_DAP_MAX_SPEC + 1];
     uint32_t sts = 0, stv = 0;
     if (resolve_one(oldspec, orsa, sizeof orsa) != 0) orsa[0] = '\0';
-    if (dnet_fal_rename(orsa[0] ? orsa : oldspec, newspec, &sts, &stv) != 0)
+    snprintf(target, sizeof target, "%s", newspec);
+    if (orsa[0]) {
+        /* The new name's device and directory default from the old file's
+         * (VMS $RENAME), and a new spec naming the SAME device:[directory]
+         * the accessor named the old file by -- a search list such as
+         * SYS$SYSROOT:[SYSMGR] -- means the directory the old file was FOUND
+         * in: the VAX FAL renamed SYS$SYSROOT:[SYSMGR]RENME.TXT;1 to
+         * SYS$SYSROOT:[SYSMGR]RENAMED.TXT;1 in place. Both are taken from the
+         * RMS resultant, never composed from a guess. */
+        char ov[DNET_DAP_MAX_SPEC + 1], od[DNET_DAP_MAX_SPEC + 1], of[DNET_DAP_MAX_SPEC + 1];
+        char nv[DNET_DAP_MAX_SPEC + 1], nd[DNET_DAP_MAX_SPEC + 1], nf[DNET_DAP_MAX_SPEC + 1];
+        char rv[DNET_DAP_MAX_SPEC + 1], rd[DNET_DAP_MAX_SPEC + 1], rf[DNET_DAP_MAX_SPEC + 1];
+        spec_split(oldspec, ov, od, of, sizeof ov);
+        spec_split(newspec, nv, nd, nf, sizeof nv);
+        spec_split(orsa, rv, rd, rf, sizeof rv);
+        int same = (!nv[0] && !nd[0]) || (!strcmp(nv, ov) && !strcmp(nd, od));
+        if (same && strlen(rv) + strlen(rd) + strlen(nf) <= DNET_DAP_MAX_SPEC)
+            snprintf(target, sizeof target, "%s%s%s", rv, rd, nf);
+    }
+    if (dnet_fal_rename(orsa[0] ? orsa : oldspec, target, &sts, &stv) != 0)
         return fb_refuse(b, FV_RENAME, sts);
     if (want_name) {
         if (orsa[0] && (fb_name(b, DNET_DAP_NT_FILESPEC, orsa) < 0 ||
                         fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0))
             return SS$_ABORT;
         /* The new resultant is what RMS now finds under the new name. */
-        if (resolve_one(newspec, nrsa, sizeof nrsa) == 0 &&
+        if (resolve_one(target, nrsa, sizeof nrsa) == 0 &&
             (fb_name(b, DNET_DAP_NT_FILESPEC, nrsa) < 0 ||
              fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0))
             return SS$_ABORT;

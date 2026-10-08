@@ -3577,7 +3577,17 @@ static int run_fal_proc_accept_test(void)
         FP_CHECK(!stolen && fal_file_matches(REN, rl, 1),
                  "the refused RENAME moved nothing: the old name still holds the file, the new name does not exist");
 
+        {   /* diagnostic: the resultant the server will rename by */
+            void *sx = NULL; char r[256] = "";
+            if (dnet_fal_search_begin(REN, &sx) == 0) {
+                if (dnet_fal_search_next(sx, r, sizeof r) != 0) r[0] = '\0';
+                dnet_fal_search_end(sx);
+            }
+            printf("  NOTE: %s resolves to '%s'\n", REN, r);
+        }
         st = falp_session_op("SYSTEM", "MANAGER", FALP_RENAME, REN, RENAMED, &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: SYSTEM RENAME -> client %08X, STATUS %04X STV %llX\n",
+               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
         int old_gone = (dnet_fal_ropen(REN, &rf, NULL, NULL) != 0);
         if (!old_gone) (void)dnet_fal_rclose(rf);
         FP_CHECK(st == SS$_NORMAL && old_gone && fal_file_matches(RENAMED, rl, 1),

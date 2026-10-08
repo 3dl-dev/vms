@@ -1,7 +1,7 @@
 # provenance: OpenVMS Alpha V8.4 (AXPbox ES40), ovmx-lab pod semalpha-1 node ALPHA1, captured 2026-10-08 by
 #   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
 #   Observed output of the real system (clean-room Rule 8); nothing disassembled.
-# spec: tools/oracle/semantic/specs/prc.py sha256=db716b5a296616ba01b86d0c00c01cea8eb1b46ecfc6e79c5dcde0e67f4df7df
+# spec: tools/oracle/semantic/specs/prc.py sha256=904318acd474d8415ec8282f5ffbe898a50ab39d9a93b437a75c38373ad8d308
 === SEMPROBE prc BEGIN ===
 PRC.SELF.COUNT0 st=00000001 iosb=1 prccnt=0
 PRC.CREATE.HIBER st=00000001 pid0=0

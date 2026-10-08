@@ -142,6 +142,11 @@ extern "C" {
  * ($EQU SS$_BUGCHECK 676; F$MESSAGE(676) -> %SYSTEM-F-BUGCHECK, internal
  * consistency failure). */
 #define SS$_ILLIOFUNC       244     /* Illegal I/O function (%SYSTEM-F-ILLIOFUNC) */
+/* ORACLE-PINNED: docs/oracle/alpha84-starlet-defs/SSDEF.txt ($EQU SS$_MBTOOSML 412,
+ * $EQU SS$_IVBUFLEN 844). MBTOOSML: a mailbox write larger than the mailbox's
+ * maximum message (rd vms-4a69); IVBUFLEN: an invalid buffer length. */
+#define SS$_MBTOOSML        412     /* Mailbox is too small for request */
+#define SS$_IVBUFLEN        844     /* Invalid buffer length */
 #define SS$_NOMORENODE      2560     /* No more cluster nodes (VMS: 0x24C) */
 /* ORACLE-PINNED: docs/oracle/alpha84-starlet-defs/SSDEF.txt ($EQU SS$_NOSUCHNODE 652):
  * $GETSYI of a node this system has no information for (rd vms-74a). */

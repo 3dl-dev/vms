@@ -948,7 +948,7 @@ static int qio_completes_at_once(int fd)
     return qio_is_null_device(fd);
 }
 
-uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
+static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
                   uint32_t p4, uint32_t p5, uint32_t p6) {
@@ -1025,7 +1025,7 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
  * Submits via io_uring and blocks until the I/O completes.
  * Falls back to synchronous I/O if io_uring is not available.
  */
-uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
+static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
                    void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                    void *p1, uint32_t p2, uint32_t p3,
                    uint32_t p4, uint32_t p5, uint32_t p6) {
@@ -1086,4 +1086,75 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
 
     /* Synchronous fallback */
     return qio_sync(fd, base_func, iosb_ptr, p1, p2, efn, astadr, astprm);
+}
+
+/*
+ * THE SERVICE STATUS IS NOT THE I/O STATUS (rd vms-d01). $QIO and $QIOW return
+ * the status of QUEUING the request; how the I/O itself ended is in the IOSB
+ * (and, for $QIO, signalled by the event flag and AST). Observed on OpenVMS
+ * VAX V7.3 and Alpha V8.4 (docs/oracle/semantics/io/): a $QIOW read of NLA0:
+ * or of an empty mailbox with IO$M_NOW is SS$_NORMAL with SS$_ENDOFFILE in the
+ * IOSB; a short mailbox read is SS$_NORMAL with SS$_BUFFEROVF in the IOSB.
+ * Only a request REFUSED before it was queued -- an illegal function, a write
+ * too big for the mailbox, a bad channel or buffer, an exceeded quota --
+ * returns its error as the service status, and then the IOSB is not an I/O
+ * result: Alpha V8.4 zeroes it (VAX leaves it), and OVMX follows the Alpha --
+ * except for a bad channel, refused before the IOSB is touched on both.
+ */
+static int qio_refused(uint32_t st)
+{
+    switch (st) {
+    case SS$_ILLIOFUNC: case SS$_MBTOOSML: case SS$_IVCHAN: case SS$_BADPARAM:
+    case SS$_ACCVIO: case SS$_EXQUOTA: case SS$_ILLEFC: case SS$_UNASEFC:
+    case SS$_NOPRIV: case SS$_INSFMEM: case SS$_IVBUFLEN: case SS$_NOSUCHDEV:
+    case SS$_DEVOFFLINE: case SS$_UNSUPPORTED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
+{
+    if (st == SS$_NORMAL)
+        return st;
+    if (qio_refused(st)) {
+        /* VMS clears the IOSB once the channel is validated, before the
+         * driver's checks: a bad channel leaves it as it was (IO.CHAN0,
+         * IO.AFTER_DASSGN), a refusal after that leaves it zeroed. */
+        if (iosb_ptr && st != SS$_IVCHAN)
+            memset(iosb_ptr, 0, sizeof(struct _iosb));
+        return st;
+    }
+    /* Completed (with whatever I/O status): the IOSB carries it. */
+    if (iosb_ptr) {
+        struct _iosb *b = (struct _iosb *)iosb_ptr;
+        if (b->iosb$w_status == 0)
+            b->iosb$w_status = (uint16_t)st;
+    }
+    return SS$_NORMAL;
+}
+
+uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
+                 void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
+                 void *p1, uint32_t p2, uint32_t p3,
+                 uint32_t p4, uint32_t p5, uint32_t p6)
+{
+    uint32_t cst = qio_efn_request(efn);   /* refused before anything: IOSB as is */
+    if (cst != SS$_NORMAL)
+        return cst;
+    return qio_service_status(qio_body(efn, chan, func, iosb_ptr, astadr, astprm,
+                                       p1, p2, p3, p4, p5, p6), iosb_ptr);
+}
+
+uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
+                  void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
+                  void *p1, uint32_t p2, uint32_t p3,
+                  uint32_t p4, uint32_t p5, uint32_t p6)
+{
+    uint32_t cst = qio_efn_request(efn);
+    if (cst != SS$_NORMAL)
+        return cst;
+    return qio_service_status(qiow_body(efn, chan, func, iosb_ptr, astadr, astprm,
+                                        p1, p2, p3, p4, p5, p6), iosb_ptr);
 }

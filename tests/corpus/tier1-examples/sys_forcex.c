@@ -152,7 +152,13 @@ static $DESCRIPTOR (process_d, "FORCEX_SUB");
         { /* vms-f45 DEBUG PROBE (branch only): what exists 5s after the spawn */
             char dbg[160];
             (void)fflush (stdout); (void)setvbuf (stdout, NULL, _IONBF, 0);
-            (void)snprintf (dbg, sizeof dbg, "echo PROBE spawn_status=%08x sub_pid=%08x; ps 2>&1 | head -40", r0_status, sub_pid);
+            unsigned int pitem = JPI$_PRCNAM;
+            char pnm[40];
+            struct dsc$descriptor_s pnd = { sizeof pnm, DSC$K_DTYPE_T, DSC$K_CLASS_S, pnm };
+            unsigned short pnl = 0;
+            unsigned int pst = lib$getjpi (&pitem, &sub_pid, 0, 0, &pnd, &pnl);
+            (void)printf ("PROBE getjpi(sub_pid) status=%08x name=%.*s\n", pst, (int)pnl, pnm);
+            (void)snprintf (dbg, sizeof dbg, "echo PROBE spawn_status=%08x sub_pid=%08x; ps 2>&1 | grep -v '\\['", r0_status, sub_pid);
             (void)system (dbg);
         }
 

@@ -42,7 +42,7 @@ def gen(spec):
         out.append("$ SET NOON")          # a command: $STATUS is its success
         out.append("$ SP_V = %s" % expr)
         out.append("$ SP_ST = $STATUS")
-        out.append('$ WRITE SYS$OUTPUT "%s st=", F$FAO("!XL", SP_ST), " t=", F$TYPE(SP_V), " v=""", SP_V, """"'
+        out.append('$ WRITE SYS$OUTPUT "%s st=", F$FAO("!XL", F$INTEGER(SP_ST)), " t=", F$TYPE(SP_V), " v=""", SP_V, """"'
                    % cid)
     out.append('$ WRITE SYS$OUTPUT "=== SEMPROBE %s END ==="' % fam)
     out.append("$ EXIT")

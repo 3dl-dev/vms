@@ -76,6 +76,38 @@ struct portdirent {
 };
 extern struct portdirent *readdir(void *);
 
+/* vms-32ae: the DEC C file-spec translator, as GCC's VMS-host code calls it. */
+extern int decc$to_vms(const char *, int (*)(char *, int), int, int);
+
+static int  nwild, wild_cre, wild_dst, last_type;
+static char tovms_buf[128];
+
+static int has_sub(const char *s, const char *sub)
+{
+    return strstr(s, sub) != 0;
+}
+
+static int wild_each(char *name, int type)   /* every match: keep going */
+{
+    nwild++;
+    if (has_sub(name, "FOPCRE.DAT")) wild_cre = 1;
+    if (has_sub(name, "FOPDST.DAT")) wild_dst = 1;
+    (void)type;
+    return 1;
+}
+
+static int tovms_first(char *name, int type)  /* GCC's translate_unix shape */
+{
+    int i = 0;
+    while (name[i] && i < (int)sizeof tovms_buf - 1) {
+        tovms_buf[i] = name[i];
+        i++;
+    }
+    tovms_buf[i] = 0;
+    last_type = type;
+    return 0;
+}
+
 #define DIRSPEC   "VDA0:[SYSTMP]"
 #define FOPCRE    DIRSPEC "FOPCRE.DAT"     /* created, LEFT for the reader     */
 #define FOPDEL    DIRSPEC "FOPDEL.DAT"     /* created then unlinked (gone)     */
@@ -143,6 +175,19 @@ int main(int argc, char **argv, char **envp)
 
     if (!saw_cre || !saw_dst || saw_del || saw_src)
         return 8;
+
+    /* 6. vms-32ae: decc$to_vms. A UNIX spec translates to VMS syntax (one
+     *    action call, DECC$K_FILE == 1); a wildcard VMS spec with allow_wild
+     *    expands through RMS $PARSE/$SEARCH over the real directory: exactly
+     *    the two files steps 1 and 4 left behind. */
+    int ntr = decc$to_vms("/VDA0/SYSTMP/FOPCRE.DAT", tovms_first, 1, 1);
+    int nw = decc$to_vms(DIRSPEC "FOP*.DAT", wild_each, 1, 0);
+    fprintf(stderr, "OVMX CRTL/RMS3 decc$to_vms: unix=%d \"%s\" type=%d; wild=%d calls=%d cre=%d dst=%d\n",
+            ntr, tovms_buf, last_type, nw, nwild, wild_cre, wild_dst);
+    if (ntr != 1 || !has_sub(tovms_buf, "VDA0:[SYSTMP]FOPCRE.DAT") || last_type != 1)
+        return 9;
+    if (nw != 2 || nwild != 2 || !wild_cre || !wild_dst)
+        return 10;
 
     printf("OVMX CRTL/RMS3 file-op test: OK "
            "(open+creat+unlink+rename+opendir+readdir+closedir over RMS) argc=%d\n", argc);

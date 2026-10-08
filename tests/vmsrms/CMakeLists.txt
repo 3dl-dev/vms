@@ -386,3 +386,24 @@ set_tests_properties(vmsrms_meta_org PROPERTIES
     LABELS "unit;rms"
     TIMEOUT 30
 )
+
+# vms-32ae: the DEC C file-specification translators (decc$to_vms /
+# decc$from_vms / decc$translate_vms) and the Unix<->VMS translator the C RTL
+# file layer shares. crtl_filespec.c is a pass-2 DECC$SHR TU (it calls RMS only
+# for wildcard expansion), compiled straight in here against libvmsrms.
+add_executable(test_crtl_filespec
+    test_crtl_filespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
+)
+target_include_directories(test_crtl_filespec PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_crtl_filespec PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_crtl_filespec COMMAND test_crtl_filespec)
+set_tests_properties(vmsrms_crtl_filespec PROPERTIES
+    LABELS "unit;rms;crtl"
+    TIMEOUT 30
+)

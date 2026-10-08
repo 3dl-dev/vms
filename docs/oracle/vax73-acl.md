@@ -142,3 +142,20 @@ CORPGRP [200,5] holds GRPPRV; CORPTST [200,201] does not.
 GRPPRV puts a process in the system category for files whose owner is in its
 own group (P1 vs P2), through the system field only (P3), and that survives a
 denying ACE as the system category does (P4).
+
+## Inheritance on create (`default-propagation.txt`, `default-propagation-setup.txt`)
+
+`DPROP.DIR` carried, in this order, `(IDENTIFIER=[CORPTST],OPTIONS=DEFAULT,ACCESS=READ+WRITE)`,
+`(IDENTIFIER=[300,*],ACCESS=READ)`, `(IDENTIFIER=[200,*],OPTIONS=DEFAULT+NOPROPAGATE,ACCESS=EXECUTE)`
+and `(DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)`.
+
+- A file created in it (`CREATE`, `OPEN/WRITE`, the target of `COPY`) gets each `DEFAULT`
+  ACE with `DEFAULT` cleared (`NOPROPAGATE` stays): `[CORPTST]` READ+WRITE and `[200,*]`
+  `OPTIONS=NOPROPAGATE` EXECUTE. The plain `[300,*]` ACE is not inherited. The
+  `DEFAULT_PROTECTION` ACE is not copied; it is the file's protection,
+  `S:RWED, O:RWED, G:RE, W:`. `COPY` does not carry the source file's ACL.
+- A directory created in it gets the parent's whole ACL with the flags as they are,
+  less the `NOPROPAGATE` ACE: `[CORPTST]` `OPTIONS=DEFAULT`, `[300,*]`, and the
+  `DEFAULT_PROTECTION` ACE. A file created in that subdirectory inherits from it in turn.
+- A new version (`OPEN/WRITE` of an existing name) takes the previous version's ACL,
+  less its `NOPROPAGATE` ACEs, and the previous version's protection.

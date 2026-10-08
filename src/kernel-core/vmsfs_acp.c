@@ -3426,6 +3426,74 @@ static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
 /* Two ACEs name the same thing (an add replaces it, a delete removes it): same
  * type and, for an identifier ACE, the same identifiers; a DEFAULT_PROTECTION ACE
  * by type alone; anything else byte for byte. */
+/*
+ * ACL INHERITANCE ON CREATE (vms-d404, docs/oracle/vax73-acl/default-propagation.txt,
+ * OpenVMS VAX V7.3). `src` is the header the new file inherits from:
+ *
+ *   ACP_INHERIT_FILE  a new file from its directory: each ACE carrying
+ *                     OPTIONS=DEFAULT, with DEFAULT cleared (NOPROPAGATE stays);
+ *                     a DEFAULT_PROTECTION ACE is not copied, it gives the
+ *                     file's protection (*dprot, *have_dprot).
+ *   ACP_INHERIT_DIR   a new directory from its parent: the parent's whole ACL,
+ *                     flags as they are, except NOPROPAGATE ACEs.
+ *   ACP_INHERIT_VER   a new version from the previous one: its ACL except
+ *                     NOPROPAGATE ACEs.
+ *
+ * Writes the inherited ACEs back to back into out[0..cap) and their length into
+ * *outlen; SS__ACLFULL when they do not fit.
+ */
+#define ACP_ACE_DIRDEF        9u        /* ACE$C_DIRDEF: DEFAULT_PROTECTION */
+#define ACP_ACE_M_NOPROPAGATE 0x0800u   /* ACE$M_NOPROPAGATE */
+enum { ACP_INHERIT_FILE, ACP_INHERIT_DIR, ACP_INHERIT_VER };
+
+static uint32_t acp_acl_inherit(const uint8_t *src, int mode, uint8_t *out, size_t cap,
+                                size_t *outlen, int *have_dprot, uint16_t *dprot)
+{
+    size_t off, len, pos = 0, n = 0;
+
+    *outlen = 0;
+    if (!ods2_fh2_acl_area(src, &off, &len))
+        return SS__NORMAL;
+    while (pos + 4u <= len) {
+        const uint8_t *ace = src + off + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+        int copy;
+
+        if (sz < 4u || pos + sz > len)
+            break;
+        if (mode == ACP_INHERIT_FILE) {
+            if (ace[1] == ACP_ACE_DIRDEF && sz >= 24u) {
+                /* S/O/G/W deny longwords at +8/+12/+16/+20 -> one protection word */
+                if (have_dprot && dprot) {
+                    *dprot = (uint16_t)((ace[8] & 0xFu) | ((ace[12] & 0xFu) << 4) |
+                                        ((ace[16] & 0xFu) << 8) | ((ace[20] & 0xFu) << 12));
+                    *have_dprot = 1;
+                }
+                copy = 0;
+            } else {
+                copy = (flags & ACP_ACE_M_DEFAULT) != 0;
+            }
+        } else {
+            copy = !(flags & ACP_ACE_M_NOPROPAGATE);
+        }
+        if (copy) {
+            if (n + sz > cap)
+                return SS__ACLFULL;
+            memcpy(out + n, ace, sz);
+            if (mode == ACP_INHERIT_FILE) {
+                flags &= (uint16_t)~ACP_ACE_M_DEFAULT;
+                out[n + 2] = (uint8_t)flags;
+                out[n + 3] = (uint8_t)(flags >> 8);
+            }
+            n += sz;
+        }
+        pos += sz;
+    }
+    *outlen = n;
+    return SS__NORMAL;
+}
+
 static int acp_ace_same(const uint8_t *a, const uint8_t *b)
 {
     if (a[1] != b[1])
@@ -3601,6 +3669,11 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             uint16_t fileprot = 0;
             int is_dir = (args.attr.filechar & ODS2_FH2_M_DIRECTORY) != 0;
             uint32_t alloc_count;
+            ods2_fid_t prev;
+            const uint8_t *inherit_from;
+            int inherit_mode, have_dprot = 0;
+            uint16_t dprot = 0;
+            size_t acl_len = 0;
 
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
@@ -3621,6 +3694,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
             /* New highest version (VMS $CREATE default): highest existing + 1. */
+            memset(&prev, 0, sizeof(prev));
             if (args.version != 0) {
                 new_version = args.version;
             } else {
@@ -3628,6 +3702,20 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 uint32_t fst = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, args.name,
                                             0, &cur, &curver);
                 new_version = (fst == SS__NORMAL) ? (uint16_t)(curver + 1u) : 1u;
+                if (fst == SS__NORMAL)
+                    prev = cur;
+            }
+            /* What the new file inherits (vms-d404): a new version takes the
+             * previous version's ACL and protection, anything else its
+             * directory's DEFAULT ACEs (DEFAULT_PROTECTION giving a file's
+             * protection). sc->tdirhdr holds the previous header until the
+             * header is built; a new directory's block init reuses it after. */
+            inherit_from = sc->dirhdr;
+            inherit_mode = is_dir ? ACP_INHERIT_DIR : ACP_INHERIT_FILE;
+            if (ods2_fid_number(&prev) != 0 && !is_dir &&
+                acp_read_header(vol, ods2_fid_number(&prev), sc->tdirhdr, &sc->tfh) == SS__NORMAL) {
+                inherit_from = sc->tdirhdr;
+                inherit_mode = ACP_INHERIT_VER;
             }
 
             /* Allocate a real FID from the index bitmap. */
@@ -3635,6 +3723,15 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
             /* The index file must hold the new file's header. */
             status = acp_idx_extend(vol, sc, new_fidnum);
+            if (status != SS__NORMAL) {
+                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                args.status = status;
+                goto free_sc;
+            }
+            /* The inherited ACL, composed in sc->ibblk (free from here until the
+             * header is built; acp_bitmap_alloc works in sc->rw). */
+            status = acp_acl_inherit(inherit_from, inherit_mode, sc->ibblk, ACP_BLOCK_SIZE,
+                                     &acl_len, &have_dprot, &dprot);
             if (status != SS__NORMAL) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = status;
@@ -3682,6 +3779,10 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             }
             if (args.attr_ctl & VMS_ACP_ATTR_PROT)
                 fileprot = args.attr.fileprot;
+            else if (inherit_mode == ACP_INHERIT_VER)
+                fileprot = sc->tfh.fh2_fileprot;    /* the previous version's */
+            else if (have_dprot)
+                fileprot = dprot;                   /* the directory's DEFAULT_PROTECTION */
             else if (!is_dir && ods2_class_fileprot(args.name, 0, new_fidnum) == 0xAA00u)
                 /* An ordinary file created with no protection of its own gets the
                  * creating process's default file protection ($SETDFPROT, else
@@ -3700,6 +3801,18 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__BADPARAM;
                 goto free_sc;
+            }
+            /* NEGCTL-ANCHORED (acp-acl-default-not-propagated): the inherited ACEs
+             * go into the new header's access control area. */
+            if (acl_len > 0) {
+                if (ods2_fh2_acl_set(sc->filehdr, sc->ibblk, acl_len) != ODS2_OK) {
+                    if (n_ext > 0)
+                        (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
+                    (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                    args.status = SS__ACLFULL;
+                    goto free_sc;
+                }
+                ods2_fh2_reseal(sc->filehdr);
             }
             /* Default version limit (FAT$W_VERSIONS, carried in attr.recattr[30..31]):
              * LIB$CREATE_DIR's max-versions and CREATE/DIRECTORY/VERSION_LIMIT. */

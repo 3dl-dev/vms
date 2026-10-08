@@ -37,8 +37,10 @@ BSHOW = [UW("IOSB", "iosb"), UW("IOSB", "sent", off=2), UW("IOSB", "timedout", o
 def brk(cid, msg, to, typ, cls=GENERAL, timout=0, show=None):
     # efn msgbuf sendto sndtyp iosb carcon flags reqid timout astadr astprm
     P.setl("IOSB", 0xA5A5A5A5, 0); P.setl("IOSB", 0xA5A5A5A5, 4)
+    # carcon 0x20: the message on a line of its own (LF before, CR after), so
+    # it never lands inside a case line of the transcript
     P.call(cid, "SYS$BRKTHRUW", 0, R(msg), None if to is None else R(to), typ, R("IOSB"),
-           0, 0, cls, timout, None, 0, show=BSHOW if show is None else show)
+           0x20, 0, cls, timout, None, 0, show=BSHOW if show is None else show)
 
 
 brk("BRK.TT", "MSG", "TT", DEV)

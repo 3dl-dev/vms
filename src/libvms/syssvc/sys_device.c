@@ -352,6 +352,12 @@ static uint32_t device_lookup_translated(const char *devnam_in,
             if (!(sys$trnlnm(NULL, &td, &nd, NULL, it) & 1) || el == 0)
                 return SS$_NOSUCHDEV;   /* no such logical, or executive absent */
             equiv[el < sizeof equiv ? el : sizeof equiv - 1] = '\0';
+            /* A process-permanent file names its device after the ESC NUL IFI
+             * header ($GETDVI of SYS$COMMAND is the terminal, rd vms-b14e). */
+            if (vms_lnm_is_ppf(equiv, el)) {
+                memmove(equiv, equiv + VMS_LNM_PPF_HDR, (size_t)el - VMS_LNM_PPF_HDR);
+                equiv[el - VMS_LNM_PPF_HDR] = '\0';
+            }
         }
 
         strncpy(cur, equiv, sizeof(cur) - 1);

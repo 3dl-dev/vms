@@ -372,6 +372,13 @@ static int assign_resolve_mailbox_by_name(const char *name,
         if (!(st & 1)) return 0;                 /* not a logical name */
         if (rl >= sizeof(equiv)) rl = (uint16_t)(sizeof(equiv) - 1);
         equiv[rl] = '\0';
+        /* A process-permanent file: $ASSIGN uses the device after the
+         * ESC NUL IFI header (rd vms-b14e). */
+        if (vms_lnm_is_ppf(equiv, rl)) {
+            memmove(equiv, equiv + VMS_LNM_PPF_HDR, (size_t)rl - VMS_LNM_PPF_HDR);
+            rl = (uint16_t)(rl - VMS_LNM_PPF_HDR);
+            equiv[rl] = '\0';
+        }
         /* A device logical's equivalence may carry a directory (a concealed
          * root "SYS$SYSDEVICE:[SYS0.]", the first member of SYS$SYSROOT's
          * search list): $ASSIGN wants the device, so everything after the

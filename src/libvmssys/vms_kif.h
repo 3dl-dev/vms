@@ -1014,6 +1014,22 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
                             const char *const *values, uint8_t num_values,
                             uint32_t attributes, uint8_t acmode);
 
+/* As vms_kif_lnm_define, with each equivalence string's LENGTH given
+ * (`lengths[i]`, or NULL for NUL-terminated strings): an equivalence may hold
+ * any byte, NUL included -- a process-permanent file's equivalence begins
+ * ESC NUL and its IFI (rd vms-b14e). */
+uint32_t vms_kif_lnm_define_n(uint32_t table, const char *name,
+                              const char *const *values, const uint16_t *lengths,
+                              uint8_t num_values, uint32_t attributes, uint8_t acmode);
+
+/* A process-permanent file's equivalence string: ESC, NUL, the 2-byte IFI,
+ * then the device (OpenVMS: "\x1B\x00" + IFI + "_OPA0:"). */
+#define VMS_LNM_PPF_HDR 4
+static inline int vms_lnm_is_ppf(const char *v, uint32_t len)
+{
+    return v && len >= VMS_LNM_PPF_HDR && v[0] == 0x1B && v[1] == 0;
+}
+
 /* Delete a name from an executive-resident table at `acmode` and every outer
  * mode (rd vms-ef21); a NULL name deletes every name in the table at those
  * modes. SS$_NOLOGNAM if nothing matched, SS$_NOSUCHDEV if the executive is
@@ -1060,6 +1076,9 @@ struct vms_kif_lnm_enum_rec {
     char     values[VMS_LNM_MAX_EQUIV][VMS_LNM_MAX_VALUE + 1];
     uint32_t attributes;
     uint8_t  acmode;                              /* LNM_MODE_* */
+    uint16_t value_len[VMS_LNM_MAX_EQUIV];        /* byte length of each value
+                                                   * (a value may hold NUL, rd
+                                                   * vms-b14e) */
 };
 
 /* Enumerate every name in an executive-resident table (VMS_LNM_TBL_SYSTEM,

@@ -94,6 +94,12 @@ lnm_manager_t *lnm_get_manager(void);
 lnm_table_t *lnm_find_table(lnm_manager_t *mgr, const char *table_name);
 
 /* Core operations */
+/* Create a name whose one equivalence is `len` raw bytes, NUL allowed (a
+ * process-permanent file's equivalence, rd vms-b14e). Executive tables only. */
+uint32_t lnm_create_bytes(lnm_manager_t *mgr, const char *table_name,
+                          const char *logical_name, const char *value,
+                          uint16_t len, uint32_t attributes, uint8_t acmode);
+
 uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
                      const char *logical_name, const char *equivalence,
                      uint32_t attributes, uint8_t acmode);

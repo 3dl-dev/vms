@@ -448,8 +448,14 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
         a->status = SS__BADPARAM;
         goto out_copy;
     }
-    for (i = 0; i < a->num_equiv; i++)
+    /* An equivalence is LENGTH-delimited, not NUL-delimited: it may hold any
+     * byte (a process-permanent file's begins ESC NUL, rd vms-b14e). Only the
+     * length is bounded here. */
+    for (i = 0; i < a->num_equiv; i++) {
         a->equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
+        if (a->equiv[i].length > VMS_LNM_MAX_VALUE)
+            a->equiv[i].length = VMS_LNM_MAX_VALUE;
+    }
 
     /* PRIVILEGE ENFORCEMENT (vms-5b7) -- see lnm_priv_check()'s header for
      * the full rationale and oracle citation. On refusal the arena is

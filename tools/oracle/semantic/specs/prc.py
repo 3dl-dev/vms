@@ -101,6 +101,7 @@ P.call("PRC.SELF.COUNT2", "SYS$GETJPIW", 0, None, None, R("JPI_CNT"), R("IOSB"),
 
 # 5. the name is free again once its owner is gone
 creprc("PRC.CREATE.REUSE", "SUB3", "IMG_HIB", "NAME1", HIBER)
+wait1()                     # the process has settled (hibernating) before $FORCEX
 P.call("PRC.FORCEX", "SYS$FORCEX", R("SUB3"), None, 0x2C)
 wait1()
 P.call("PRC.DELPRC.REUSE", "SYS$DELPRC", R("SUB3"), None)

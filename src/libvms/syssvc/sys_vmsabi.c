@@ -1,7 +1,8 @@
 /*
  * sys_vmsabi.c - system services by their upper-case (VMS-ABI) names, taking
  * the VMS argument forms (vms-38b): SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM,
- * SYS$CRELNM.
+ * SYS$CRELNM, and SYS$QIO(W) for the ACP functions IO$_ACCESS / IO$_DEACCESS
+ * on a file-class channel.
  *
  * A string argument is a VMS descriptor: the 8-byte 32-bit form
  * (vms/descrip.h), or the 64-bit form, recognised as VMS services recognise
@@ -18,7 +19,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <vms/atrdef.h>
 #include <vms/descrip.h>
+#include <vms/iodef.h>
 #include <vms/ssdef.h>
 #include <vms/starlet.h>
 #include "sys_vmsabi_core.h"
@@ -154,4 +157,186 @@ int SYS$CRELNM(unsigned int *attr, void *tabnam, void *lognam,
                unsigned char *acmode, void *itmlst)
 {
     return lnm(1, attr, tabnam, lognam, acmode, itmlst);
+}
+
+/* ------------------------------------------------ $QIO: ACP functions ------ */
+
+/* The attribute-list item (vms/atrdef.h, 32-bit address) and the IOSB. */
+struct abi_iosb { unsigned short status, count; unsigned int devdep; };
+
+#define ABI_MAXCHAN 256
+static unsigned char chan_write[ABI_MAXCHAN];   /* accessed for write (IO$M_ACCESS) */
+
+/* Is every attribute code in the list one this service fills? */
+static int atr_known(unsigned short type)
+{
+    switch (type) {
+    case ATR$C_UCHAR: case ATR$C_RECATTR: case ATR$C_ASCNAME:
+    case ATR$C_CREDATE: case ATR$C_REVDATE: case ATR$C_EXPDATE: case ATR$C_BAKDATE:
+    case ATR$C_UIC: case ATR$C_FPRO:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void put_le(unsigned char *dst, unsigned size, const unsigned char *src, unsigned have)
+{
+    unsigned n = size < have ? size : have;
+    memcpy(dst, src, n);
+    if (size > n)
+        memset(dst + n, 0, size - n);
+}
+
+/* Fill one attribute item from the file's attributes. ASCNAME is the file's
+ * NAME.TYP;VER padded with spaces to the item size, as the OpenVMS ACP returns
+ * it (docs/oracle/alpha84-probes/acp_access_attributes.md). */
+static void atr_fill(const ATRDEF *e, const struct ovmx_abi_fileattr *a)
+{
+    unsigned char *d = (unsigned char *)e->atr$l_addr;
+    unsigned size = e->atr$w_size;
+    unsigned char tmp[4];
+    switch (e->atr$w_type) {
+    case ATR$C_UCHAR:
+        memcpy(tmp, &a->uchar, 4);
+        put_le(d, size, tmp, 4);
+        break;
+    case ATR$C_RECATTR: put_le(d, size, a->recattr, 32); break;
+    case ATR$C_CREDATE: put_le(d, size, a->credate, 8); break;
+    case ATR$C_REVDATE: put_le(d, size, a->revdate, 8); break;
+    case ATR$C_EXPDATE: put_le(d, size, a->expdate, 8); break;
+    case ATR$C_BAKDATE: put_le(d, size, a->bakdate, 8); break;
+    case ATR$C_UIC:
+        memcpy(tmp, &a->uic_member, 2);
+        memcpy(tmp + 2, &a->uic_group, 2);
+        put_le(d, size, tmp, 4);
+        break;
+    case ATR$C_FPRO:
+        put_le(d, size, (const unsigned char *)&a->fpro, 2);
+        break;
+    case ATR$C_ASCNAME: {
+        unsigned n = a->namelen < size ? a->namelen : size;
+        memcpy(d, a->name, n);
+        memset(d + n, ' ', size - n);
+        break;
+    }
+    }
+}
+
+static unsigned atr_count(const ATRDEF *l)
+{
+    unsigned n = 0;
+    while (l && (l[n].atr$w_size || l[n].atr$w_type))
+        n++;
+    return n;
+}
+
+static void io_done(struct abi_iosb *iosb, unsigned short st)
+{
+    if (iosb) {
+        iosb->status = st;
+        iosb->count = 0;
+        iosb->devdep = 0;
+    }
+}
+
+/* SYS$QIO(W) for IO$_ACCESS and IO$_DEACCESS on a file-class channel, with the
+ * VMS ACP-QIO arguments: P1 = the FIB descriptor, P2 = the file name
+ * descriptor (NAME.TYP;VER), P3 = the resultant length word, P4 = the
+ * resultant name descriptor, P5 = the attribute list. The service returns
+ * whether the request was accepted; the I/O status is in the IOSB. */
+static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
+                   void *iosbp, va_list ap)
+{
+    struct abi_iosb *iosb = iosbp;
+    void (*astadr)(unsigned long long) = va_arg(ap, void (*)(unsigned long long));
+    unsigned long long astprm = va_arg(ap, unsigned long long);
+    void *p1 = (void *)(uintptr_t)va_arg(ap, unsigned long long);
+    void *p2 = (void *)(uintptr_t)va_arg(ap, unsigned long long);
+    unsigned short *p3 = (unsigned short *)(uintptr_t)va_arg(ap, unsigned long long);
+    void *p4 = (void *)(uintptr_t)va_arg(ap, unsigned long long);
+    const ATRDEF *atr = (const ATRDEF *)(uintptr_t)va_arg(ap, unsigned long long);
+    unsigned fcode = func & IO$M_FCODE;
+    if ((fcode != IO$_ACCESS && fcode != IO$_DEACCESS) ||
+        (func & (IO$M_CREATE | IO$M_DELETE)))
+        return SS$_ILLIOFUNC;
+    unsigned n_atr = atr_count(atr);
+    unsigned short st;
+    if (fcode == IO$_DEACCESS) {
+        /* Writing attributes back on IO$_DEACCESS is not implemented: an
+         * attribute list is refused for a file accessed for write, never
+         * accepted and dropped. */
+        if (n_atr && chan < ABI_MAXCHAN && chan_write[chan])
+            st = SS$_BADATTRIB;
+        else
+            st = (unsigned short)ovmx_vmsabi_acp_deaccess(chan);
+        if (chan < ABI_MAXCHAN)
+            chan_write[chan] = 0;
+    } else {
+        const char *fibp, *name = "";
+        unsigned fiblen, namelen = 0;
+        unsigned char fib[16];
+        if (!p1 || !dsc_string(p1, &fibp, &fiblen) || !fibp)
+            return SS$_BADPARAM;
+        memset(fib, 0, sizeof fib);
+        memcpy(fib, fibp, fiblen < sizeof fib ? fiblen : sizeof fib);
+        if (p2 && !dsc_string(p2, &name, &namelen))
+            return SS$_BADPARAM;
+        unsigned i;
+        for (i = 0; i < n_atr; i++)
+            if (!atr_known(atr[i].atr$w_type))
+                break;
+        if (i < n_atr) {
+            st = SS$_BADATTRIB;
+        } else {
+            unsigned acctl;
+            unsigned short fid[3], did[3];
+            memcpy(&acctl, fib, 4);
+            memcpy(fid, fib + 4, 6);
+            memcpy(did, fib + 10, 6);
+            struct ovmx_abi_fileattr a;
+            int keep = (func & IO$M_ACCESS) != 0;
+            st = (unsigned short)ovmx_vmsabi_acp_access(chan, acctl, did, fid, name, namelen,
+                                                        keep, &a);
+            if (st & 1) {
+                if (fiblen >= 10)
+                    memcpy((char *)fibp + 4, a.fid, 6);
+                for (i = 0; i < n_atr; i++)
+                    atr_fill(&atr[i], &a);
+                if (p4) {
+                    const char *rp;
+                    unsigned rl;
+                    if (dsc_string(p4, &rp, &rl) && rp) {
+                        unsigned n = a.namelen < rl ? a.namelen : rl;
+                        memcpy((char *)rp, a.name, n);
+                        if (p3)
+                            *p3 = (unsigned short)n;
+                    }
+                }
+                if (keep && chan < ABI_MAXCHAN)
+                    chan_write[chan] = (acctl & 256u) != 0;   /* FIB$M_WRITE */
+            }
+        }
+    }
+    io_done(iosb, st);
+    ovmx_vmsabi_io_complete(efn, (void (*)(unsigned long long))astadr, astprm);
+    return SS$_NORMAL;
+}
+
+int SYS$QIOW(unsigned int efn, unsigned short chan, unsigned int func, void *iosb, ...)
+{
+    va_list ap;
+    va_start(ap, iosb);
+    int st = acp_qio(efn, chan, func, iosb, ap);
+    va_end(ap);
+    return st;
+}
+
+int SYS$QIO(unsigned int efn, unsigned short chan, unsigned int func, void *iosb, ...)
+{
+    va_list ap;
+    va_start(ap, iosb);
+    int st = acp_qio(efn, chan, func, iosb, ap);
+    va_end(ap);
+    return st;
 }

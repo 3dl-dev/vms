@@ -601,6 +601,28 @@ assert_vmsabi() {
     || { echo "  assert_vmsabi: DIRECTORY/FULL does not show File ID $fid" >&2; return 1; }
   printf '%s\n' "$region" | grep -a "VMSABI_GATE" | grep -aq "PROVED_BY_CRELNM" \
     || { echo "  assert_vmsabi: SHOW LOGICAL does not see the name SYS\$CRELNM defined" >&2; return 1; }
+  # vms-38b: the File ID SYS$QIOW IO$_ACCESS put in the FIB is the one the
+  # independent reader shows.
+  local qfid
+  qfid=$(grep -aoE "VMSABI-QIOFID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-QIOFID: //')
+  [ -n "$qfid" ] || { echo "  assert_vmsabi: no File ID from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
+  printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$qfid" \
+    || { echo "  assert_vmsabi: DIRECTORY/FULL does not show the IO\$_ACCESS File ID $qfid" >&2; return 1; }
+  # ATR$C_CREDATE agrees with the creation date the independent reader shows:
+  # "<not recorded>" is a zero quadword in the header, so IO$_ACCESS must read 0;
+  # a recorded date must read back non-zero.
+  local qcre
+  qcre=$(grep -aoE "VMSABI-QIOCRE: %X[0-9A-F]{16}" "$log" | head -1 | sed 's/VMSABI-QIOCRE: %X//')
+  [ -n "$qcre" ] || { echo "  assert_vmsabi: no ATR\$C_CREDATE from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
+  if printf '%s\n' "$region" | grep -aq "Created:  <not recorded>"; then
+    [ "$qcre" = "0000000000000000" ] \
+      || { echo "  assert_vmsabi: DIRECTORY/FULL shows no creation date but ATR\$C_CREDATE read %X$qcre" >&2; return 1; }
+  else
+    printf '%s\n' "$region" | grep -aq "Created:" \
+      || { echo "  assert_vmsabi: DIRECTORY/FULL shows no Created: line" >&2; return 1; }
+    [ "$qcre" != "0000000000000000" ] \
+      || { echo "  assert_vmsabi: DIRECTORY/FULL shows a creation date but ATR\$C_CREDATE read 0" >&2; return 1; }
+  fi
   return 0
 }
 
@@ -1761,16 +1783,25 @@ EOF
     _st=$(mktemp -d); _fails=0
     {
       echo "VMSABI-FID: (34,1,0)"
+      echo "VMSABI-QIOFID: (34,1,0)"
       echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
       echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
+      echo "VMSABI-QIOCRE: %X0000000000000000"
       echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
+      echo "Created:  <not recorded>"
       echo '   "VMSABI_GATE" = "PROVED_BY_CRELNM" (LNM$SYSTEM_TABLE)'
       echo "VMSABI-PROOF: === END INDEPENDENT READER ==="
     } > "$_st/pass.log"
     sed 's/File ID:  (34,1,0)/File ID:  (35,1,0)/' "$_st/pass.log" > "$_st/mismatch.log"
     grep -v "test: OK" "$_st/pass.log" > "$_st/notok.log"
     grep -v "PROVED_BY_CRELNM" "$_st/pass.log" > "$_st/nolnm.log"
-    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1"; do
+    sed 's/VMSABI-QIOFID: (34,1,0)/VMSABI-QIOFID: (36,1,0)/' "$_st/pass.log" > "$_st/qiofid.log"
+    grep -v "VMSABI-QIOFID" "$_st/pass.log" > "$_st/noqio.log"
+    grep -v "VMSABI-QIOCRE" "$_st/pass.log" > "$_st/nocre.log"
+    sed 's/VMSABI-QIOCRE: %X0000000000000000/VMSABI-QIOCRE: %X00A1B2C3D4E5F607/' "$_st/pass.log" > "$_st/crelie.log"
+    sed 's/Created:  <not recorded>/Created:   8-OCT-2026 14:00:00.00/' "$_st/pass.log" > "$_st/crezero.log"
+    sed 's/VMSABI-QIOCRE: %X0000000000000000/VMSABI-QIOCRE: %X00A1B2C3D4E5F607/' "$_st/crezero.log" > "$_st/credated.log"
+    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "credated:0"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -1785,8 +1816,8 @@ EOF
     grep -aE "VMSABI|File ID|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_vmsabi "$WORK/modgpA.log"; then
       echo ""
-      echo "PASS: SYS\$PARSE/SYS\$SEARCH served a VMS-layout FAB/NAM from a 32-bit DEC C"
-      echo "      program; DIRECTORY/FULL shows the same File ID."
+      echo "PASS: SYS\$PARSE/SYS\$SEARCH and SYS\$QIOW IO\$_ACCESS (attribute list) served a"
+      echo "      32-bit DEC C program; DIRECTORY/FULL shows the same File ID."
       exit 0
     fi
     echo "FAIL: the VMS-ABI RMS gate did not pass. Full log: $WORK/modgpA.log"

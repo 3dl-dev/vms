@@ -3815,7 +3815,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_vmsabi.c",
       "verified_against": null,
-      "notes": "vms-38b: SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM, SYS$CRELNM by their upper-case names (src/libvms/include/vms/starlet.h, vms/descrip.h) run the same executive paths as OVMX's lower-case services. Proven by the alpha vmsabi-rms gate (32-bit program; SHOW LOGICAL/SYSTEM sees the name SYS$CRELNM defined). Partial: SYS$QIO/SYS$QIOW (disk ACP IO$_ACCESS with an ATR list) waits on the ATR$C_ code oracle capture",
+      "notes": "vms-38b: SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM, SYS$CRELNM by their upper-case names (src/libvms/include/vms/starlet.h, vms/descrip.h) run the same executive paths as OVMX's lower-case services. Proven by the alpha vmsabi-rms gate (32-bit program; SHOW LOGICAL/SYSTEM sees the name SYS$CRELNM defined). SYS$QIO/SYS$QIOW serve the ACP functions IO$_ACCESS (FIB descriptor, name, resultant name, ATR list: UCHAR/RECATTR/ASCNAME/CREDATE/REVDATE/EXPDATE/BAKDATE/UIC/FPRO, codes from the ATRDEF capture, ASCNAME space-padded as observed) and IO$_DEACCESS on a file-class channel through the executive ACP; proven by the vmsabi-rms gate. Partial: other $QIO functions on the VMS ABI are SS$_ILLIOFUNC; IO$M_CREATE/IO$M_DELETE and attribute write-back on IO$_DEACCESS are refused, not emulated",
       "plan_ref": "vms-801"
     },
     {

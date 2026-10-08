@@ -2,8 +2,10 @@
  * sys_vmsabi_core.c - the OVMX-service half of the VMS-ABI system services
  * (vms-38b): rebuild OVMX's native descriptors and item lists from the plain
  * values sys_vmsabi.c extracted from the caller's VMS forms, and run the same
- * services OVMX's own code calls ($ASSIGN, $DASSGN, $TRNLNM, $CRELNM).
+ * services OVMX's own code calls ($ASSIGN, $DASSGN, $TRNLNM, $CRELNM, and the
+ * executive ACP's IO$_ACCESS / IO$_DEACCESS for $QIO on a file channel).
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,6 +14,7 @@
 #include "ssdef.h"
 #include "starlet.h"
 #include "sys_vmsabi_core.h"
+#include "vms_kif.h"
 
 static void mkdsc(struct dsc$descriptor_s *d, const char *p, unsigned len)
 {
@@ -59,4 +62,88 @@ uint32_t ovmx_vmsabi_lnm(int create, const uint32_t *attr,
                          : sys$trnlnm(attr, &t, &l, acmode, il);
     free(il);
     return st;
+}
+
+/* ---------------------------------------------- $QIO on a file channel ---- */
+
+extern int vms$$chan_is_file(uint16_t chan);
+extern uint32_t vms$$chan_exec_chan(uint16_t chan);
+
+#define FIB_M_WRITE 256u           /* FIB$M_WRITE (FIBDEF) */
+
+uint32_t ovmx_vmsabi_acp_access(uint16_t chan, uint32_t acctl, const uint16_t did[3],
+                                const uint16_t fid[3], const char *name, unsigned namelen,
+                                int keep, struct ovmx_abi_fileattr *out)
+{
+    if (!vms$$chan_is_file(chan))
+        return SS$_ILLIOFUNC;
+    struct vms_acp_access_args a;
+    memset(&a, 0, sizeof a);
+    a.chan = vms$$chan_exec_chan(chan);
+    if (acctl & FIB_M_WRITE)
+        a.acctl = VMS_ACP_ACCTL_WRITE;
+    if (did[0] == 0 && did[1] == 0 && did[2] == 0 && (fid[0] || fid[1])) {
+        a.fidmode = 1;
+        a.fid_num = fid[0];
+        a.fid_seq = fid[1];
+        a.fid_rvn = (uint8_t)(fid[2] & 0xFF);
+        a.fid_nmx = (uint8_t)(fid[2] >> 8);
+    } else {
+        /* FIB$W_DID: number, sequence, then RVN (low byte) + NMX (high byte). */
+        a.did_num = did[0];
+        a.did_seq = did[1];
+        a.did_rvn = (uint8_t)(did[2] & 0xFF);
+        a.did_nmx = (uint8_t)(did[2] >> 8);
+        unsigned n = 0, v = 0;
+        while (n < namelen && name[n] != ';')
+            n++;
+        if (n == 0 || n >= sizeof a.name)
+            return SS$_BADPARAM;
+        for (unsigned i = n + 1; i < namelen && name[i] >= '0' && name[i] <= '9'; i++)
+            v = v * 10 + (unsigned)(name[i] - '0');
+        if (v > 32767)
+            return SS$_BADPARAM;
+        for (unsigned i = 0; i < n; i++) {
+            char c = name[i];
+            a.name[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+        }
+        a.version = (uint16_t)v;
+    }
+    uint32_t st = vms_kif_acp_access(&a);
+    if (!(st & 1))
+        return st;
+    memset(out, 0, sizeof *out);
+    out->uchar = a.attr.filechar;
+    out->fpro = a.attr.fileprot;
+    out->uic_member = a.attr.uic_member;
+    out->uic_group = a.attr.uic_group;
+    memcpy(out->recattr, a.attr.recattr, sizeof out->recattr);
+    memcpy(out->credate, a.attr.credate, 8);
+    memcpy(out->revdate, a.attr.revdate, 8);
+    memcpy(out->expdate, a.attr.expdate, 8);
+    memcpy(out->bakdate, a.attr.bakdate, 8);
+    out->fid[0] = a.fid_num;
+    out->fid[1] = a.fid_seq;
+    out->fid[2] = (uint16_t)(a.fid_rvn | (a.fid_nmx << 8));
+    a.name[sizeof a.name - 1] = '\0';
+    int k = snprintf(out->name, sizeof out->name, "%s;%u", a.name, (unsigned)a.out_version);
+    out->namelen = k > 0 && (unsigned)k < sizeof out->name ? (unsigned)k : 0;
+    if (!keep)
+        vms_kif_acp_deaccess(a.chan);
+    return SS$_NORMAL;
+}
+
+uint32_t ovmx_vmsabi_acp_deaccess(uint16_t chan)
+{
+    if (!vms$$chan_is_file(chan))
+        return SS$_ILLIOFUNC;
+    return vms_kif_acp_deaccess(vms$$chan_exec_chan(chan));
+}
+
+void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), unsigned long long astprm)
+{
+    if ((efn & 0xFFu) < 128)
+        sys$setef(efn);
+    if (astadr)
+        astadr(astprm);
 }

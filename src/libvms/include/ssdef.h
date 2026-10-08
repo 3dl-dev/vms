@@ -81,6 +81,7 @@ extern "C" {
 #define SS$_ACCVIO          12      /* Access violation */
 #define SS$_BADPARAM        20      /* Bad parameter value */
 #define SS$_EXQUOTA         28      /* Exceeded quota */
+#define SS$_BADATTRIB       52      /* Bad attribute code (STARLET SSDEF, VAX V7.3 + Alpha V8.4 oracle) */
 #define SS$_NOPRIV          36      /* No privilege for attempted operation */
 /* ORACLE-PINNED (vms-73c4, Rule 8): SHOW QUOTA on a quotas-off volume, triggered
  * verbatim on live OpenVMS VAX V7.3 (lab-2 vaxlab-2). %SYSTEM-F-QFNOTACT, "disk

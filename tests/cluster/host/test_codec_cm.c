@@ -529,6 +529,38 @@ static void test_f297_open_cells(void)
 		f297_check_open(&k[i]);
 }
 
+/*
+ * rd vms-f297: THE COORDINATOR'S STEP ACK, rebuilt from a REAL member's step
+ * report and compared with the REAL coordinator's ack of it. body[0:4] is the
+ * caller's stamp; everything after it -- the echoed txn/token and body, and the
+ * 10 <class> 01 at body[16:19] -- must match byte for byte. The ack OVMX built
+ * before (10 00 00) is what a real V7.3 member re-sent its step after and then
+ * bugchecked on (lab arm PF-2).
+ */
+static void test_f297_step_ack_matches_the_real_one(void)
+{
+	const struct vms_fixture *rq = fixture("cm-step1-req-oracle");
+	const struct vms_fixture *ak = fixture("cm-step1-ack-oracle");
+	uint8_t built[VMS_CM_BODY_LEN];
+	uint32_t written = 0, i, diff = 0;
+
+	printf("-- rd vms-f297: 0x81/0x0b rebuilt from a real step report\n");
+	ct_check(rq != NULL && ak != NULL, "  the real report and ack are present");
+	if (rq == NULL || ak == NULL)
+		return;
+	ct_check(vms_cm_step_ack_build(fx_body(rq), fx_body_len(rq),
+				       VMS_CM_CLASS_ADD, built, sizeof(built),
+				       &written) == VMS_CODEC_OK,
+		 "  OVMX builds the ack");
+	for (i = 4u; i < VMS_CM_BODY_LEN; i++)
+		if (built[i] != fx_body(ak)[i])
+			diff++;
+	ct_check_eq_u32(diff, 0u,
+			"  byte-identical to the real ack after the stamp");
+	ct_check_eq_u32(built[17], VMS_CM_CLASS_ADD, "  body[17] = the class");
+	ct_check_eq_u32(built[18], 0x01u, "  body[18] = the response marker");
+}
+
 /* rd vms-f297: PARAMS body[20:22] = (EXPECTED_VOTES+2)/2, body[24:26] =
  * QDSKVOTES, and op 0x02 body[36:40] -- read off the real records. */
 static void test_f297_params_and_request(void)
@@ -1517,6 +1549,7 @@ int main(void)
 	test_open_parse();
 	test_f297_open_cells();
 	test_f297_params_and_request();
+	test_f297_step_ack_matches_the_real_one();
 	test_barrier_parse();
 	test_params_parse();
 	test_fcb_params_lockdirwt();

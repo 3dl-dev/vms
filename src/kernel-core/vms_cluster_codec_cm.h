@@ -1258,15 +1258,21 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
  * this builder follows the MEASUREMENT rather than the inference. It is safe to
  * do so: the ack is correlated by its transaction and token, and neither a real
  * member (sec 4(p): it is "not the release") nor OVMX's own participant FSM
- * reads a step index out of it. Sec 4(r) does NOT list op 0x0b in its response-
- * recipe table, so body[18] is left ECHOED, not forced -- the same treatment
- * op 0x0f gets there.
+ * reads a step index out of it.
+ *
+ * AND THE CLASS AND THE MARKER (rd vms-f297). body[17] = the transition class
+ * and body[18] = 0x01, the response marker: 10 02 01 on 784 real acks of an
+ * addition, 10 03 01 on 84 of a removal, 10 01 01 on 24 of a formation (one
+ * outlier of 893). This builder used to leave both ECHOED -- 00 00, the high
+ * bytes of the step index -- which OVMX's own participant never reads; a real
+ * OpenVMS VAX V7.3 member receiving that ack from an OVMX coordinator
+ * re-sent its step and bugchecked CNXMGRERR (lab arm PF-2).
  *
  * STAMP with is_response=1: the verbatim body copy already carries the
  * member's own txn/token to echo.
  */
 vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
-					 uint32_t req_len,
+					 uint32_t req_len, uint8_t tr_class,
 					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written);
 

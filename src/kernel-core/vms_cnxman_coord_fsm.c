@@ -1988,7 +1988,7 @@ static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 
 	if (csb == NULL || !csb->csid_valid)
 		return;
-	if (vms_cm_step_ack_build(m->body, m->len, c->scratch,
+	if (vms_cm_step_ack_build(m->body, m->len, c->tr_class, c->scratch,
 				  (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,

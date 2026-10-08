@@ -917,7 +917,7 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
 }
 
 vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
-					 uint32_t req_len,
+					 uint32_t req_len, uint8_t tr_class,
 					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written)
 {
@@ -928,6 +928,9 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 
 	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
+	if (cm_open_opcode_of_class(tr_class) == 0u &&
+	    tr_class != VMS_CM_CLASS_FORM)
+		return VMS_CODEC_E_CLASS;
 
 	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
@@ -954,6 +957,10 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 	 * follows sec 4(r)'s 26-capture census rather than the step-index
 	 * reading of the same offset, and why it is safe either way. */
 	vms_wire_put_u8(&w, VMS_OFB_CM_ROLE, VMS_CM_ROLE_RELAY);
+	/* ...and the transition class and the response marker (rd vms-f297):
+	 * every real 0x81/0x0b in the library carries 10 <class> 01 here. */
+	vms_wire_put_u8(&w, VMS_OFB_CM_CLASS, tr_class);
+	vms_wire_put_u8(&w, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY, 0x01u);
 
 	return cm_originate_end(&w, written);
 }

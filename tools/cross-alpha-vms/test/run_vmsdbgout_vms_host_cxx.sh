@@ -43,6 +43,22 @@ if "$GXX" "$@" -DVMS -fsyntax-only -x c++ "$W/b.cc" 2>"$W/b.err"; then
 else
     echo "  FAIL patched vms_file_stats_name:"; sed 's/^/      /' "$W/b.err" | head -20; rc=1
 fi
+# The STARLET/DEC C RTL declarations it calls have C linkage under C++ (as the
+# DEC C headers declare them): the references are the plain names, never a
+# mangled _Z...decc$to_vms that no shareable exports.
+if "$GXX" "$@" -DVMS -O1 -S -x c++ -o "$W/b.s" "$W/b.cc" 2>/dev/null; then
+    for sym in 'decc\$to_vms' 'SYS\$PARSE' 'SYS\$SEARCH' 'SYS\$ASSIGN' 'SYS\$QIOW' 'SYS\$DASSGN'; do
+        if grep -qE "_Z[0-9]+${sym}" "$W/b.s"; then
+            echo "  FAIL ${sym//\\/} is referenced with C++ linkage (mangled)"; rc=1
+        elif grep -qE "(^|[^A-Za-z0-9_\$])${sym}([^A-Za-z0-9_\$]|$)" "$W/b.s"; then
+            echo "  PASS ${sym//\\/} referenced by its C name"
+        else
+            echo "  FAIL ${sym//\\/} not referenced at all"; rc=1
+        fi
+    done
+else
+    echo "  FAIL patched vms_file_stats_name did not compile to assembly"; rc=1
+fi
 if "$GXX" "$@" -DVMS -fsyntax-only -x c++ "$W/a.cc" 2>/dev/null; then
     echo "  FAIL control: unpatched vms_file_stats_name compiled, so this test proves nothing"; rc=1
 else

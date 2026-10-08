@@ -1,0 +1,34 @@
+# keystroke oracle transcript (unmasked) -- case OOB.PROMPT (OpenVMS VAX V7.3 OPA0:)
+# out-of-band characters at an idle prompt: ^Y ^C ^T (default and SET CONTROL=T) ^O
+# case-sha256 2bbc19fe7c210b2d7ebb145a80397bb657c05d22d1bec2dd9ffe8af722e19297
+@start loggedin OK
+=== STEP Y
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP C
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP T
+| <CR><LF>
+| VAX1::SYSTEM 19:41:04   (DCL)   CPU=00:00:01.92 PF=5068 IO=206 MEM=530<CR><LF>
+| <CR><NUL>$ 
+=== STEP S
+| SET CONTROL=T<CR><LF>
+| <CR><NUL>$ 
+=== STEP T2
+| <CR><LF>
+| VAX1::SYSTEM 19:41:08   (DCL)   CPU=00:00:01.92 PF=5071 IO=209 MEM=531<CR><LF>
+| <CR><NUL>$ 
+=== STEP O
+=== STEP O2
+=== STEP P
+| WRITE SYS$OUTPUT 3
+=== STEP Y2
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 

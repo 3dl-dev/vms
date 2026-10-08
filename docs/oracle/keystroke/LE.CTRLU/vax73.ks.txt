@@ -1,0 +1,15 @@
+# keystroke oracle transcript (unmasked) -- case LE.CTRLU (OpenVMS VAX V7.3 OPA0:)
+# line editing: ^U deletes back to the start of the line
+# case-sha256 075521e9d544ac5db38f1acbeb29e968aa6027cbb44abe015238aef48afe5b80
+@start loggedin OK
+=== STEP T
+| WRITE SYS$OUTPUT 99
+=== STEP U
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP F
+| WRITE SYS$OUTPUT 1
+=== STEP R
+| <CR><LF>
+| <CR>1<CR><LF>
+| <CR><NUL>$ 

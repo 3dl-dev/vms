@@ -182,7 +182,7 @@ for n in ${NODES}; do
   # connect internally (-C), so the first connection ever made is the pump's.
   #
   # The pump must NEVER exit: dropping it powers the machine off.
-  python3 /usr/local/bin/srmdrv.py -t 0 -C 90 -p "${port}" -f "${fifo}" -l "${clog}" \
+  python3 /usr/local/bin/srmdrv.py -t 0 -C 90 -p "${port}" -f "${fifo}" -R "${clog}.raw" -l "${clog}" \
       > "${nd}/logs/pump.log" 2>&1 &
   PIDS+=($!)
 

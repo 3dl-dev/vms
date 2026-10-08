@@ -166,6 +166,36 @@ jobs:
       - name: NEGATIVE CONTROL -- the gate must reject an injected substrate include
         run: sh tools/ci/cluster_core_includes_gate.sh --self-test
   # -----------------------------------------------------------------------
+  # Job: keystroke oracle self-test (vms-370)
+  #
+  # The keystroke oracle (tools/oracle/keystroke/, docs/oracle/keystroke/)
+  # plays scripted keystrokes into a terminal and diffs what the screen showed
+  # against real OpenVMS VAX V7.3 / Alpha V8.4 consoles; the booted-OVMX run is
+  # the heavy persistent-boot leg in ci-release-e2e.yml. This per-PR job is the
+  # cheap half: every case script parses, every golden was captured from the
+  # case script as it is now (sha256), the known-diff ratchet names only real
+  # steps, and the gate's own negative controls go red when they must.
+  # -----------------------------------------------------------------------
+  keystroke-oracle-selftest:
+    name: Keystroke Oracle Self-Test (vms-370)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Case scripts parse
+        run: python3 tools/oracle/keystroke/ksplay.py check
+
+      - name: Goldens are well formed and match their case scripts
+        run: python3 tools/oracle/keystroke/ksdiff.py --goldens
+
+      - name: Known-diff ratchet names only real steps
+        run: python3 tools/oracle/keystroke/ksdiff.py --known
+
+      - name: NEGATIVE CONTROL -- the gate must go red on a new or stale difference
+        run: python3 tools/oracle/keystroke/ksdiff.py --selftest
+  # -----------------------------------------------------------------------
   # Job: vmslink shell-portability lint (vms-200)
   #
   # Fail-fast gate for the #773 class: a #!/bin/sh script (e.g.

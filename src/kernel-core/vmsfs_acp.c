@@ -3637,8 +3637,8 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 uint32_t want = ((uint32_t)args.attr.uic_group << 16) |
                                 args.attr.uic_member;
                 uint32_t my_grp = (proc->uic >> 16) & 0xFFFFu;
-                int sys_user = my_grp <= ACP_MAXSYSGROUP ||
-                               (proc->cur_privs & (ACP_PRV_M_SYSPRV | ACP_PRV_M_BYPASS));
+                int sys_user = my_grp <= VMS_PROT_MAXSYSGROUP ||
+                               (proc->cur_privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS));
                 int grp_ok = args.attr.uic_group == my_grp &&
                              (proc->cur_privs & VMS_PRV_M_GRPPRV);
                 if (want != proc->uic && !sys_user && !grp_ok) {

@@ -1,0 +1,15 @@
+# keystroke oracle transcript (unmasked) -- case TA.LOGIN (OpenVMS VAX V7.3 OPA0:)
+# type-ahead: a command typed while LOGINOUT is still logging in, before the first $ -- held unechoed, echoed after the prompt
+# case-sha256 8a8316b1d444ead44644285b1dc1b3ca3084662ea60a42e2be062aedb92afc0d
+@start loggedout OK
+=== STEP U quiet
+=== STEP N quiet
+=== STEP P (merged into next)
+=== STEP T (merged into next)
+=== STEP W
+| <CR><LF>
+|  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1<CR><LF>
+|     Last interactive login on Thursday,  8-OCT-2026 19:40<CR><ESC>[c<ESC>\<ESC>Z<ESC>[0c<CR><LF>
+| %SET-W-NOTSET, error modifying OPA0:<CR><LF>
+| -SET-I-UNKTERM, unknown terminal type<CR><LF>
+| <CR><NUL>$ 

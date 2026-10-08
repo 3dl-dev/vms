@@ -78,13 +78,12 @@ struct dnet_executor {
     uint16_t max_links;                     /* MAXIMUM LINKS; 0 = not set   */
 };
 
-/* The executor's MAXIMUM LINKS when none was set (rd vms-f91). A real
- * OpenVMS VAX defaults to 32 (docs/oracle/vax-ncp-show/
- * MCR_NCP_SHOW_EXECUTOR_CHARACTERISTICS.txt: "Maximum links = 32"); OVMX seeds
- * 9 -- the inbound pool Baron set as security posture (rd vms-9cd). Moving the
- * default to the VMS 32 is his call, raised and pending; an operator sets any
- * value with NCP SET EXECUTOR MAXIMUM LINKS n. */
-#define DNET_EXECUTOR_DEFAULT_MAXLINKS 9
+/* The executor's MAXIMUM LINKS when none was set (rd vms-f91): the VMS
+ * default a real OpenVMS VAX shows (docs/oracle/vax-ncp-show/
+ * MCR_NCP_SHOW_EXECUTOR_CHARACTERISTICS.txt: "Maximum links = 32") -- Baron's
+ * ruling 2026-10-08 (the per-node share stays 3, rd vms-9cd). An operator sets
+ * any value with NCP SET EXECUTOR MAXIMUM LINKS n. */
+#define DNET_EXECUTOR_DEFAULT_MAXLINKS 32
 #define DNET_EXECUTOR_MAXLINKS_MAX     65535
 /* The executor's effective MAXIMUM LINKS (the set value, else the default). */
 unsigned dnet_executor_max_links(const struct dnet_executor *x);

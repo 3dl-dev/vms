@@ -86,8 +86,8 @@ grep -q "OVMX layout, not VMS NETNODE_REMOTE.DAT" "$OVMX_DECNET_NODEDB" \
 
 # --- MAXIMUM LINKS (rd vms-f91): VMS default, SET, persistence, refusal --------
 out="$(ncp SHOW EXECUTOR CHARACTERISTICS)"
-echo "$out" | grep -qE "^Maximum links +=  *9$" \
-    && ok "SHOW EXECUTOR CHARACTERISTICS shows the seeded 'Maximum links = 9' when none is set (rd vms-9cd)" \
+echo "$out" | grep -qE "^Maximum links +=  *32$" \
+    && ok "SHOW EXECUTOR CHARACTERISTICS shows the VMS default 'Maximum links = 32' when none is set" \
     || bad "default Maximum links: $out"
 ncp SET EXECUTOR MAXIMUM LINKS 12 >/dev/null; rc=$?
 out="$(ncp SHOW EXECUTOR CHARACTERISTICS)"

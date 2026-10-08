@@ -4488,7 +4488,7 @@ static void usage(const char *argv0)
  * RMS-E-MKD / SYSTEM-F-REMRSRC (live bracket 2026-10-08). */
 #define NETACP_MAX_PER_SOURCE 3
 /* rd vms-f91: the pool's SIZE is the executor's MAXIMUM LINKS (NCP SET EXECUTOR
- * MAXIMUM LINKS; unset = OVMX's seeded 9, dnet_ncpstore.h), read when NETACP
+ * MAXIMUM LINKS; unset = the VMS default 32, dnet_ncpstore.h), read when NETACP
  * starts, as VMS bounds a node's logical links. NETACP_POOL_CAP is only this
  * image's slot-table capacity: a larger MAXIMUM LINKS is served up to it and
  * said so. The per-source share above stays an OVMX hardening choice. */
@@ -4909,11 +4909,8 @@ static int run_netacp_pool_selftest(void)
         struct dnet_executor ex;
         memset(&ex, 0, sizeof ex);
         int cl = 0;
-        PL_CHECK(netacp_pool_size(&ex, &cl) == 9 && !cl,
-                 "an executor with no MAXIMUM LINKS set gets the seeded pool of 9 (rd vms-9cd; the VMS default 32 is pending a decision)");
-        ex.max_links = 32;
         PL_CHECK(netacp_pool_size(&ex, &cl) == 32 && !cl,
-                 "executor MAXIMUM LINKS 32 sizes the inbound pool at 32");
+                 "an executor with no MAXIMUM LINKS set gets the VMS default pool of 32 (what a real VMS VAX node shows as Maximum links = 32)");
         ex.max_links = 9;
         PL_CHECK(netacp_pool_size(&ex, &cl) == 9 && !cl,
                  "executor MAXIMUM LINKS 9 sizes the inbound pool at 9");
@@ -5408,7 +5405,7 @@ int main(int argc, char **argv)
      * RTAn: (a bounded pool of sessions, rd vms-6af1); the remote user authenticates fresh. */
     if (cterm_server) {
         /* The pool is the executor's MAXIMUM LINKS (rd vms-f91). An
-         * unreadable executor database leaves the seeded default. */
+         * unreadable executor database leaves the VMS default. */
         struct dnet_executor ex;
         int clamped = 0;
         if (dnet_store_load_executor(&ex) != DNET_STORE_OK) memset(&ex, 0, sizeof ex);

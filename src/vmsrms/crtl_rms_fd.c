@@ -50,6 +50,7 @@
  */
 
 #include <errno.h>
+#include <stdarg.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1133,6 +1134,60 @@ static int fab_query(int fd, int dirfd, const char *path,
     }
     in_rms = was;
     return r;
+}
+
+/* ------------------------------------------------------------ fgetname --- */
+
+/* DEC C fgetname(file, buffer [, format]) (vms-4ba3): the file specification of
+ * an open stream -- the full resultant spec RMS gives for the file
+ * (DEV:[DIR]NAME.TYPE;VERSION), or its UNIX form when the optional format
+ * argument is 0. The buffer must hold NAM$C_MAXRSS+1 (256) bytes, as on VMS.
+ * A stream that is not an RMS file (a pipe, a terminal, /dev/null) has no
+ * file specification here: a null pointer, errno EINVAL. */
+char *ovmx_decc_fgetname(FILE *fp, char *buf, ...) __asm__("decc$fgetname");
+
+char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
+{
+    va_list ap;
+    va_start(ap, buf);
+    int vms_format = va_arg(ap, int) != 0;
+    va_end(ap);
+    if (!fp || !buf) {
+        errno = EINVAL;
+        return NULL;
+    }
+    struct rfile *rf = rget(fileno(fp));
+    if (!rf) {
+        errno = EINVAL;
+        return NULL;
+    }
+    int was = in_rms;
+    in_rms = 1;
+    struct FAB fab = cc$rms_fab;
+    struct NAM nam = cc$rms_nam;
+    char esa[256], rsa[256];
+    fab.fab$l_fna = rf->spec;
+    fab.fab$b_fns = (uint8_t)strlen(rf->spec);
+    fab.fab$l_nam = &nam;
+    nam.nam$l_esa = esa;
+    nam.nam$b_ess = sizeof esa - 1;
+    nam.nam$l_rsa = rsa;
+    nam.nam$b_rss = sizeof rsa - 1;
+    uint32_t st = sys$parse(&fab, 0, 0);
+    if (st & 1)
+        st = sys$search(&fab, 0, 0);
+    rms_search_end(&nam);
+    in_rms = was;
+    if (!(st & 1)) {
+        errno = EIO;
+        return NULL;
+    }
+    rsa[nam.nam$b_rsl] = '\0';
+    if (vms_format) {
+        memcpy(buf, rsa, (size_t)nam.nam$b_rsl + 1);
+        return buf;
+    }
+    return ovmx_crtl_vms_to_unix(rsa, buf, 256) == 0 ? buf : NULL;
 }
 
 /* ------------------------------------------------------------ install ----- */

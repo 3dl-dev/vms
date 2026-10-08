@@ -396,6 +396,11 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             esac
             VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$main=PROCEDURE,/,decc$main\/ovmx_crtl_fd_main=PROCEDURE,/; s/^,//; s/,$//')
             ALPHA_VENEER_OBJ="$FD_OBJ"
+            # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
+            # resultant spec); new to this pass, so it goes at the vector tail.
+            "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF 'decc$fgetname' \
+                || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define decc\$fgetname" >&2; exit 2; }
+            PASS2_TAIL="${PASS2_TAIL:-},decc\$fgetname=PROCEDURE"
             echo "mk_decc_shr: C RTL file layer over RMS wired (vms-b90): decc\$main -> ovmx_crtl_fd_main installs the syscall-funnel hook (--use $ALPHA_CRTL_RMS_USE)"
         else
             VENEER_OBJ="$VENEER_DIR/crtl_rms_stdio.o"

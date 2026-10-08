@@ -173,6 +173,21 @@ int main(int argc, char **argv)
               strcmp(l2, "SECOND RECORD\n") == 0,
           21, "a DCL OPEN/WRITE record file reads back as newline-terminated lines");
 
+    /* 8b. fgetname (vms-4ba3): the stream's full file specification, in VMS
+     *     form and, with format 0, UNIX form -- what GCC's vmsdbgout.cc asks. */
+    f = fopen(OUTF, "r");
+    char spec[256] = "", uspec[256] = "";
+    char *gs = f ? fgetname(f, spec, 1) : NULL;
+    char *gu = f ? fgetname(f, uspec, 0) : NULL;
+    if (f)
+        fclose(f);
+    printf("CFD: fgetname -> \"%s\" / \"%s\"\n", gs ? spec : "(null)", gu ? uspec : "(null)");
+    check(gs == spec && strstr(spec, "[SYSTMP]CFDOUT.TXT;") != NULL && strchr(spec, ':') != NULL,
+          29, "fgetname(f, buf, 1) returns the full VMS file specification");
+    check(gu == uspec && strstr(uspec, "/SYSTMP/CFDOUT.TXT") != NULL && uspec[0] == '/', 30,
+          "fgetname(f, buf, 0) returns its UNIX form");
+    check(fgetname(stdout, spec, 1) == NULL, 31, "fgetname of a non-RMS stream is a null pointer");
+
     /* 9. UNIX syntax names the same file. */
     f = fopen("/vda0/systmp/cfdout.txt", "r");
     check(f != NULL && fgets(got, sizeof got, f) && strncmp(got, "line 001", 8) == 0,

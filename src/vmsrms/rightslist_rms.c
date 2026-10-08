@@ -61,8 +61,9 @@ uint32_t rightslist_rms_create(rms_file_t *f, rightslist_rms_file_t *rf)
     memset(rf, 0, sizeof(*rf));
     rf->f = f;
 
-    /* primary key: 4-byte identifier VALUE at record offset 0x00, unique
-     * (oracle §1 key 0: bin4, SEG0_POSITION 0, DUPLICATES no). */
+    /* primary key: 4-byte identifier VALUE at record offset 0x00. DUPLICATES
+     * (oracle key 0: bin4, SEG0_POSITION 0, DUPLICATES yes): an identifier's
+     * holder records share its value and follow its definition record. */
     p3_create_params_t vp;
     memset(&vp, 0, sizeof(vp));
     vp.key_size   = 4;
@@ -70,7 +71,7 @@ uint32_t rightslist_rms_create(rms_file_t *f, rightslist_rms_file_t *rf)
     vp.seg0_siz   = 4;
     vp.dtp        = 0;                       /* stored, not decoded (memcmp key) */
     vp.bkt_blocks = RIGHTSLIST_BKT_BLOCKS;
-    vp.allow_dup  = 0;                       /* one definition record per value  */
+    vp.allow_dup  = 1;
 
     uint32_t st = rms_p3_create(f, &vp, &rf->ctx);
     if (!$VMS_STATUS_SUCCESS(st)) {
@@ -79,26 +80,43 @@ uint32_t rightslist_rms_create(rms_file_t *f, rightslist_rms_file_t *rf)
         return st;
     }
 
-    /* secondary key: 32-byte identifier NAME at record offset 0x10, unique
-     * (oracle §1 key 2: string, SEG0_POSITION 16, DUPLICATES no). On real VMS
-     * this is key of reference 2 (HOLDER is key 1); the HOLDER key is the
-     * deferred seam, so NAME is added here as key of reference 1. */
-    p3_create_params_t np;
-    memset(&np, 0, sizeof(np));
-    np.key_size   = RDB$K_NAME_LEN;          /* 32 */
-    np.seg0_pos   = RDB$K_NAME_OFF;          /* 0x10 */
-    np.seg0_siz   = RDB$K_NAME_LEN;
-    np.dtp        = 0;
-    np.bkt_blocks = RIGHTSLIST_BKT_BLOCKS;
-    np.allow_dup  = 0;                        /* identifier names are unique      */
+    /* key 1 HOLDER: 8 bytes at 0x08 (oracle key 1: string, SEG0_POSITION 8,
+     * DUPLICATES yes, NULL_KEY yes with null value 0 -- a definition record's
+     * holder is 0, so only holder records are in this index). */
+    p3_create_params_t hp;
+    memset(&hp, 0, sizeof(hp));
+    hp.key_size   = 8;
+    hp.seg0_pos   = RDB$K_HOLDER_OFF;        /* 0x08 */
+    hp.seg0_siz   = 8;
+    hp.dtp        = 0;
+    hp.bkt_blocks = RIGHTSLIST_BKT_BLOCKS;
+    hp.allow_dup  = 1;
+    hp.null_key   = 1;
+    st = rms_p3_add_secondary_key(rf->ctx, &hp);
 
-    st = rms_p3_add_secondary_key(rf->ctx, &np);
+    /* key 2 NAME: 32 bytes at 0x10, unique (oracle key 2: string, SEG0_POSITION
+     * 16, DUPLICATES no, NULL_KEY yes). A 16-byte holder record has no name and
+     * is not in this index. */
+    if ($VMS_STATUS_SUCCESS(st)) {
+        p3_create_params_t np;
+        memset(&np, 0, sizeof(np));
+        np.key_size   = RDB$K_NAME_LEN;          /* 32 */
+        np.seg0_pos   = RDB$K_NAME_OFF;          /* 0x10 */
+        np.seg0_siz   = RDB$K_NAME_LEN;
+        np.dtp        = 0;
+        np.bkt_blocks = RIGHTSLIST_BKT_BLOCKS;
+        np.allow_dup  = 0;
+        np.null_key   = 1;
+        st = rms_p3_add_secondary_key(rf->ctx, &np);
+    }
     if (!$VMS_STATUS_SUCCESS(st)) {
         rms_p3_free(rf->ctx);
         rf->ctx = NULL;
         rf->f = NULL;
         return st;
     }
+    rf->krf_holder = RIGHTSLIST_KRF_HOLDER;
+    rf->krf_name   = RIGHTSLIST_KRF_NAME;
     return RMS$_CREATED;
 }
 
@@ -112,8 +130,97 @@ uint32_t rightslist_rms_open(rms_file_t *f, rightslist_rms_file_t *rf)
     if (!$VMS_STATUS_SUCCESS(st)) {
         rf->ctx = NULL;
         rf->f = NULL;
+        return st;
+    }
+    /* NAME / HOLDER by position: an older two-key file has NAME at key 1. */
+    rf->krf_name = RIGHTSLIST_KRF_NONE;
+    rf->krf_holder = RIGHTSLIST_KRF_NONE;
+    for (uint16_t i = 0; i < rf->ctx->num_keys; i++) {
+        const p3_keydesc_t *k = &rf->ctx->keys[i];
+        if (k->ref != 0 && k->seg0_pos == RDB$K_NAME_OFF)
+            rf->krf_name = k->ref;
+        else if (k->ref != 0 && k->seg0_pos == RDB$K_HOLDER_OFF)
+            rf->krf_holder = k->ref;
+    }
+    if (rf->krf_name == RIGHTSLIST_KRF_NONE) {
+        rms_p3_free(rf->ctx);
+        rf->ctx = NULL;
+        rf->f = NULL;
+        return RMS$_PLG;                           /* not a RIGHTSLIST image */
     }
     return st;
+}
+
+int rightslist_rms_is_current(const rightslist_rms_file_t *rf)
+{
+    return rf && rf->ctx && rf->krf_holder == RIGHTSLIST_KRF_HOLDER &&
+           rf->krf_name == RIGHTSLIST_KRF_NAME;
+}
+
+uint32_t rightslist_put_holder(rightslist_rms_file_t *rf, const rdb_holder_record_t *rec)
+{
+    if (!rf || !rf->ctx || !rec)
+        return RMS$_FAB;
+    if (rf->krf_holder == RIGHTSLIST_KRF_NONE)
+        return RMS$_KEY;
+    return rms_p3_put(rf->ctx, RIGHTSLIST_KRF_VALUE,
+                      (const uint8_t *)rec, RDB$K_HOLDER_RECORD_SIZE);
+}
+
+struct holder_match { uint32_t lo, hi; int any_holder; };
+
+/* A holder record of the key's identifier, for this holder (or any). */
+static int match_holder(const uint8_t *rec, uint16_t rec_len, void *arg)
+{
+    const struct holder_match *m = (const struct holder_match *)arg;
+    if (rec_len < RDB$K_HOLDER_RECORD_SIZE || rec_len >= RDB$K_IDENT_RECORD_SIZE)
+        return 0;
+    if (m->any_holder)
+        return 1;
+    return p3_le32(rec + RDB$K_HOLDER_OFF) == m->lo &&
+           p3_le32(rec + RDB$K_HOLDER_OFF + 4) == m->hi;
+}
+
+/* The identifier's definition record (48 bytes). */
+static int match_definition(const uint8_t *rec, uint16_t rec_len, void *arg)
+{
+    (void)rec; (void)arg;
+    return rec_len >= RDB$K_IDENT_RECORD_SIZE;
+}
+
+uint32_t rightslist_delete_holder(rightslist_rms_file_t *rf, uint32_t id,
+                                  uint32_t holder_lo, uint32_t holder_hi)
+{
+    struct holder_match m = { holder_lo, holder_hi, 0 };
+    uint8_t key[4];
+    if (!rf || !rf->ctx)
+        return RMS$_FAB;
+    p3_put_le32(key, id);
+    return rms_p3_delete_match(rf->ctx, key, 4, match_holder, &m);
+}
+
+uint32_t rightslist_delete_identifier(rightslist_rms_file_t *rf, uint32_t value)
+{
+    struct holder_match m = { 0, 0, 1 };
+    uint8_t key[4];
+    uint32_t st;
+    if (!rf || !rf->ctx)
+        return RMS$_FAB;
+    p3_put_le32(key, value);
+    st = rms_p3_delete_match(rf->ctx, key, 4, match_definition, NULL);
+    if (st != RMS$_NORMAL)
+        return st;
+    do
+        st = rms_p3_delete_match(rf->ctx, key, 4, match_holder, &m);
+    while (st == RMS$_NORMAL);
+    return st == RMS$_RNF ? RMS$_NORMAL : st;
+}
+
+uint32_t rightslist_enum(rightslist_rms_file_t *rf, p3_enum_cb cb, void *arg)
+{
+    if (!rf || !rf->ctx || !cb)
+        return RMS$_FAB;
+    return rms_p3_enum_primary(rf->ctx, cb, arg);
 }
 
 uint32_t rightslist_put_identifier(rightslist_rms_file_t *rf,
@@ -121,6 +228,13 @@ uint32_t rightslist_put_identifier(rightslist_rms_file_t *rf,
 {
     if (!rf || !rf->ctx || !rec)
         return RMS$_FAB;
+    {
+        /* one definition record per value (key 0 allows duplicates for the
+         * holder records, not for a second definition) */
+        rdb_identifier_record_t cur;
+        if (rightslist_get_by_value(rf, rdb_ident_value(rec), &cur) == RMS$_NORMAL)
+            return RMS$_DUP;
+    }
     return rms_p3_put(rf->ctx, RIGHTSLIST_KRF_VALUE,
                       (const uint8_t *)rec, RDB$K_IDENT_RECORD_SIZE);
 }
@@ -133,7 +247,7 @@ uint32_t rightslist_get_by_name(rightslist_rms_file_t *rf, const char *name,
     uint8_t key[RDB$K_NAME_LEN];
     name_field(name, key);
     uint16_t rl = 0;
-    return rms_p3_get_by_key(rf->ctx, RIGHTSLIST_KRF_NAME,
+    return rms_p3_get_by_key(rf->ctx, rf->krf_name,
                              key, RDB$K_NAME_LEN, 0, 0,
                              (uint8_t *)out, RDB$K_IDENT_RECORD_SIZE, &rl);
 }
@@ -146,9 +260,14 @@ uint32_t rightslist_get_by_value(rightslist_rms_file_t *rf, uint32_t value,
     uint8_t key[4];
     p3_put_le32(key, value);
     uint16_t rl = 0;
-    return rms_p3_get_by_key(rf->ctx, RIGHTSLIST_KRF_VALUE,
-                             key, 4, 0, 0,
-                             (uint8_t *)out, RDB$K_IDENT_RECORD_SIZE, &rl);
+    uint32_t st = rms_p3_get_by_key(rf->ctx, RIGHTSLIST_KRF_VALUE,
+                                    key, 4, 0, 0,
+                                    (uint8_t *)out, RDB$K_IDENT_RECORD_SIZE, &rl);
+    /* the first record of a value is its definition; a holder record alone
+     * (16 bytes) is not an identifier */
+    if (st == RMS$_NORMAL && rl < RDB$K_IDENT_RECORD_SIZE)
+        return RMS$_RNF;
+    return st;
 }
 
 void rightslist_rms_close(rightslist_rms_file_t *rf)
@@ -163,29 +282,30 @@ void rightslist_rms_close(rightslist_rms_file_t *rf)
 }
 
 /* =========================================================================
- * DEFERRED SEAM (labelled) -- holder records + the HOLDER key + the
- * $$MAINTENANCE_RECORD.
- *
- * This rung stores and queries identifier-DEFINITION records only, indexed by
- * VALUE (primary) and NAME (secondary). NOT built here, by design (kept honest
- * per the anti-cheat -- no stub that reports success):
- *
- *   1. HOLDER records (rdb_holder_record_t, 16 bytes) -- the identifier<->UIC
- *      GRANT rows a real VMS GRANT/IDENTIFIER creates (oracle §2b). The struct
- *      + offsets are pinned in rightslist_rms.h, but no record of this kind is
- *      $PUT here.
- *   2. The HOLDER key (oracle key of reference 1: string @0x08, DUPLICATES
- *      yes). Adding it -- and shifting NAME to key of reference 2 to match a
- *      real RIGHTSLIST -- is what lets a real VMS AUTHORIZE mount an
- *      OVMX-written file, and is the prerequisite for the holder-relationship
- *      queries ("what does this UIC hold?" via the HOLDER key; "who holds this
- *      identifier?" by scanning holder records of a value).
- *   3. The $$MAINTENANCE_RECORD (oracle §4: a 64-byte metadata record, value
- *      0x80010004, carrying a VMS quadword date + a 0x0101 version pair). Its
- *      date/flag sub-fields are explicitly NOT pinned by the oracle; emitting
- *      an OVMX-generated one so real AUTHORIZE accepts the file is follow-on.
- *
- * A holder-relationship query attempted against THIS rung has no faked answer:
- * the API surface above simply does not expose it, so a caller cannot receive a
- * false success. Closing the seam is tracked follow-on work under epic vms-d0c.
+ * The $$MAINTENANCE_RECORD (oracle: a 64-byte metadata record carrying a VMS
+ * date and a 0x0101 version pair) is not written: its date/flag sub-fields are
+ * not pinned by the oracle. Holder records and the HOLDER key are (vms-7d5a).
  * ========================================================================= */
+
+struct copy_arg { rightslist_rms_file_t *to; uint32_t st; };
+static int copy_cb(const uint8_t *rec, uint16_t rec_len, void *arg)
+{
+    struct copy_arg *c = (struct copy_arg *)arg;
+    if (rec_len >= RDB$K_IDENT_RECORD_SIZE)
+        c->st = rightslist_put_identifier(c->to, (const rdb_identifier_record_t *)rec);
+    else if (rec_len >= RDB$K_HOLDER_RECORD_SIZE)
+        c->st = rightslist_put_holder(c->to, (const rdb_holder_record_t *)rec);
+    else
+        c->st = RMS$_NORMAL;                       /* nothing of ours */
+    return !$VMS_STATUS_SUCCESS(c->st);
+}
+
+uint32_t rightslist_copy(rightslist_rms_file_t *from, rightslist_rms_file_t *to)
+{
+    struct copy_arg c = { to, RMS$_NORMAL };
+    uint32_t st;
+    if (!from || !from->ctx || !to || !to->ctx)
+        return RMS$_FAB;
+    st = rightslist_enum(from, copy_cb, &c);
+    return $VMS_STATUS_SUCCESS(st) ? c.st : st;
+}

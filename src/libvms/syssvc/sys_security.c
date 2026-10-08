@@ -31,7 +31,7 @@
  *     locate it are the executive's.
  * OVMX-LOCAL: sys$asctoid -- the name-to-value lookup in the rights-database
  *     reader (rtl/rightslist.c) runs in this process; the identifier's ATTRIBUTE
- *     flags are not read back: attrib is reported 0.
+ *     flags come from the identifier's record when LIBVMSRMS is bound.
  * OVMX-PARTIAL: sys$parse_acl (vms-d404) -- exec: identifier names are
  *     looked up in RIGHTSLIST.DAT read over the executive ACP ($ASCTOID).
  * OVMX-LOCAL: sys$parse_acl -- the ACE text is parsed into the binary ACE
@@ -282,6 +282,11 @@ uint32_t sys$chkpro(void *objpro) {
  * SS$_NOSUCHID when the rights database has no such identifier (or cannot be
  * read -- never a built-in table, rtl/rightslist.c).
  */
+/* An identifier's attributes from its RIGHTSLIST definition record (LIBVMSRMS,
+ * weak like the name lookups, vms-7d5a). */
+uint32_t ovmx_rightslist_attributes(uint32_t value, uint32_t *attrib);
+#pragma weak ovmx_rightslist_attributes
+
 uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id,
                      uint32_t *attrib)
 {
@@ -299,8 +304,11 @@ uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id,
     if (rightslist_name_to_value(buf, &v) != 0)
         return SS$_NOSUCHID;
     *id = v;
-    if (attrib)
+    if (attrib) {
         *attrib = 0;
+        if (ovmx_rightslist_attributes)
+            (void)ovmx_rightslist_attributes(v, attrib);   /* the identifier's own */
+    }
     return SS$_NORMAL;
 }
 
@@ -326,8 +334,11 @@ uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nam
         *namlen = (uint16_t)n;
     if (resid)
         *resid = id;
-    if (attrib)
+    if (attrib) {
         *attrib = 0;
+        if (ovmx_rightslist_attributes)
+            (void)ovmx_rightslist_attributes(id, attrib);
+    }
     return SS$_NORMAL;
 }
 

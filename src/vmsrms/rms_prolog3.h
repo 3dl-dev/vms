@@ -328,6 +328,9 @@ typedef struct p3_create_params {
     uint8_t  dtp;           /* data type (0 == string; stored, not decoded)  */
     uint8_t  bkt_blocks;    /* index/data bucket size in 512-byte blocks, >=1 */
     uint8_t  allow_dup;     /* 1 permits duplicate keys, 0 -> RMS$_DUP        */
+    uint8_t  null_key;      /* secondary only: 1 = NULL_KEY with NULL_VALUE 0 -- a
+                             * record whose key bytes are all 0 is not indexed by
+                             * this key (KEY$V_NULKEYS, vms-7d5a)                */
 } p3_create_params_t;
 
 /* Author a fresh, EMPTY Prolog-3 indexed file over the ACP window of the
@@ -401,6 +404,17 @@ uint32_t rms_p3_sidr_lookup(p3_ctx_t *ctx, uint8_t krf,
  * RMS$_RER, RMS$_PLG. This is how a secondary lookup reaches the data record. */
 uint32_t rms_p3_get_by_rfa(p3_ctx_t *ctx, uint32_t home_vbn, uint16_t home_recid,
                            uint8_t *buf, uint16_t buf_sz, uint16_t *rec_len);
+
+/* Delete ONE primary record whose primary key matches `key` and for which
+ * `match(rec, rec_len, arg)` returns nonzero (rd vms-7d5a: with duplicate
+ * primary keys -- a RIGHTSLIST identifier and its holder records share the
+ * identifier value -- the record is chosen by its contents). Walks the matching
+ * records across the horizontal bucket chain; secondary SIDR pointers are purged
+ * as rms_p3_delete does. Returns RMS$_NORMAL, RMS$_RNF (no matching record), or
+ * the codes of rms_p3_delete. */
+typedef int (*p3_match_cb)(const uint8_t *rec, uint16_t rec_len, void *arg);
+uint32_t rms_p3_delete_match(p3_ctx_t *ctx, const uint8_t *key, uint16_t key_len,
+                             p3_match_cb match, void *arg);
 
 /* Delete the primary record whose primary key matches `key` (krf must be 0):
  * removes the record from its data bucket AND purges its pointer from every

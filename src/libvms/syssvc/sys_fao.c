@@ -24,12 +24,20 @@
  * $NUMTIM/$ASCTIM/$BINTIM, $CHECK_FEN and $UNWIND. "Reads no system state" is a
  * reason to check, not a reason not to.
  *
- * OVMX-USERSPACE: sys$fao (vms-f90) -- formats into the caller's outbuf from
- *     the caller's varargs; reads no process, system or device state.
- * OVMX-USERSPACE: sys$faol (vms-f90) -- same, from a caller-supplied
+ * OVMX-PARTIAL: sys$fao (vms-939) -- exec: a !%I directive names its UIC
+ *     through $IDTOASC, which reads the rights database over the executive's
+ *     ACP; !%D / !%T convert through $ASCTIM.
+ * OVMX-LOCAL: sys$fao -- the directive language itself formats the caller's
+ *     varargs into the caller's outbuf in-process; it reads no process, system
+ *     or device state.
+ * OVMX-PARTIAL: sys$faol (vms-939) -- exec: as sys$fao (!%I via $IDTOASC).
+ * OVMX-LOCAL: sys$faol -- same in-process formatting, from a caller-supplied
  *     parameter list rather than varargs.
- * OVMX-USERSPACE: sys$fao_count_args (vms-f90) -- counts directives in the
- *     caller's control string. An OVMX-internal helper that took a sys$ name;
+ * OVMX-PARTIAL: sys$fao_count_args (vms-939) -- exec: none when counting (the
+ *     engine runs with no parameters and converts nothing), but it IS the
+ *     engine whose !%I reaches $IDTOASC, so it is declared with it.
+ * OVMX-LOCAL: sys$fao_count_args -- counts the parameters the caller's
+ *     control string consumes. An OVMX-internal helper that took a sys$ name;
  *     the gate prints a "proto" column saying whether a header declares it.
  */
 

@@ -612,6 +612,13 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(semantic_oracle_static PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+    # rd vms-546: $GETMSG answers from the message catalog observed on OpenVMS
+    # Alpha V8.4 (docs/oracle/messages/); the C table is GENERATED from it and
+    # this fails when the committed table is not what the generator writes.
+    add_test(NAME msgcat_generated_current
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/messages/gen_msgcat.py --check)
+    set_tests_properties(msgcat_generated_current PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
 
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;

@@ -1,0 +1,2337 @@
+# provenance: OpenVMS Alpha V8.4 (AXPbox ES40), ovmx-lab pod semalpha-1 node ALPHA1, captured 2026-10-08 by
+#   tools/oracle/messages/capture_msgcat.py running tools/oracle/messages/SP_MSGCAT.MAR (MACRO-32, the node's
+#   own MACRO + LINK, RUN as SYSTEM): $GETMSG flags 15 at severity 0 for every message number 0..8191 of the
+#   SYSTEM (0) and RMS (1) facilities; each line is condition value, $GETMSG outadr longword, message.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled. NOMSG lines dropped.
+MC 00000008 00000400 %SYSTEM-W-ACCVIO, access violation, reason mask=!XB, virtual address=!XH, PC=!XH, PS=!XL
+MC 00000010 00000000 %SYSTEM-W-BADPARAM, bad parameter value
+MC 00000018 00000000 %SYSTEM-W-EXQUOTA, process quota exceeded
+MC 00000020 00000000 %SYSTEM-W-NOPRIV, insufficient privilege or object protection violation
+MC 00000028 00000000 %SYSTEM-W-ABORT, abort
+MC 00000030 00000000 %SYSTEM-W-BADATTRIB, bad attribute control list
+MC 00000038 00000000 %SYSTEM-W-BADESCAPE, syntax error in escape sequence
+MC 00000040 00000000 %SYSTEM-W-BADIMGHDR, bad image header
+MC 00000048 00000000 %SYSTEM-W-CHANINTLK, channel usage interlocked
+MC 00000050 00000000 %SYSTEM-W-CTRLERR, fatal controller error
+MC 00000058 00000000 %SYSTEM-W-DATACHECK, write check error
+MC 00000060 00000000 %SYSTEM-W-DEVFOREIGN, device is mounted foreign
+MC 00000068 00000000 %SYSTEM-W-DEVMOUNT, device is already mounted
+MC 00000070 00000000 %SYSTEM-W-DEVNOTMBX, device is not a mailbox
+MC 00000078 00000000 %SYSTEM-W-DEVNOTMOUNT, device is not mounted
+MC 00000080 00000000 %SYSTEM-W-DEVOFFLINE, device is not in configuration or not available
+MC 00000088 00000000 %SYSTEM-W-DRVERR, fatal drive error
+MC 00000090 00000000 %SYSTEM-W-DUPLNAM, duplicate name
+MC 00000098 00000000 %SYSTEM-W-FILACCERR, magnetic tape file access is nonblank
+MC 000000A0 00000000 %SYSTEM-W-FILALRACC, file already accessed on channel
+MC 000000A8 00000000 %SYSTEM-W-FILNOTACC, file not accessed on channel
+MC 000000B0 00000000 %SYSTEM-W-FILNOTEXP, file is not expired
+MC 000000B8 00000000 %SYSTEM-W-FORMAT, invalid media format
+MC 000000C0 00000000 %SYSTEM-W-GPTFULL, global page table is full
+MC 000000C8 00000000 %SYSTEM-W-GSDFULL, global section descriptor table is full
+MC 000000D0 00000000 %SYSTEM-W-LCKPAGFUL, no more pages may be locked in memory
+MC 000000D8 00000000 %SYSTEM-W-ILLBLKNUM, illegal logical block number
+MC 000000E0 00000000 %SYSTEM-W-ILLCNTRFUNC, illegal ACP control function
+MC 000000E8 00000000 %SYSTEM-W-ILLEFC, illegal event flag cluster
+MC 000000F0 00000000 %SYSTEM-W-ILLIOFUNC, illegal I/O function code
+MC 000000F8 00000000 %SYSTEM-W-ILLPAGCNT, illegal page count parameter
+MC 00000100 00000000 %SYSTEM-W-ILLSER, illegal service call number
+MC 00000108 00000000 %SYSTEM-W-INCVOLLABEL, incorrect volume label
+MC 00000110 00000000 %SYSTEM-W-INSFARG, insufficient call arguments
+MC 00000118 00000000 %SYSTEM-W-INSFWSL, insufficient working set limit
+MC 00000120 00000000 %SYSTEM-W-INSFMEM, insufficient dynamic memory
+MC 00000128 00000000 %SYSTEM-W-INSFRAME, insufficient call frames to unwind
+MC 00000130 00000000 %SYSTEM-W-IVADDR, invalid media address
+MC 00000138 00000000 %SYSTEM-W-IVCHAN, invalid I/O channel
+MC 00000140 00000000 %SYSTEM-W-IVDEVNAM, invalid device name
+MC 00000148 00000000 %SYSTEM-W-IVGSDNAM, invalid global section name
+MC 00000150 00000000 %SYSTEM-W-IVLOGNAM, invalid logical name
+MC 00000158 00000000 %SYSTEM-W-IVLOGTAB, invalid logical name table
+MC 00000160 00000000 %SYSTEM-W-IVQUOTAL, invalid quota list
+MC 00000168 00000000 %SYSTEM-W-IVSECFLG, invalid process or global section flags
+MC 00000170 00000000 %SYSTEM-W-IVSSRQ, invalid system service request
+MC 00000178 00000000 %SYSTEM-W-IVSTSFLG, invalid status flag
+MC 00000180 00000000 %SYSTEM-W-IVTIME, invalid time
+MC 00000188 00000000 %SYSTEM-W-LENVIO, address space length violation
+MC 00000190 00000000 %SYSTEM-W-LKWSETFUL, locked portion of working set is full
+MC 00000198 00000000 %SYSTEM-W-MBTOOSML, mailbox is too small for request
+MC 000001A0 00000000 %SYSTEM-W-MEDOFL, medium is offline
+MC 000001A8 00000000 %SYSTEM-W-NODATA, mailbox is empty
+MC 000001B0 00000000 %SYSTEM-W-NOIOCHAN, no I/O channel available
+MC 000001B8 00000000 %SYSTEM-W-NOLOGNAM, no logical name match
+MC 000001C0 00000000 %SYSTEM-W-NONEXDRV, nonexistent drive
+MC 000001C8 00000000 %SYSTEM-W-NOTFILEDEV, device is not file structured
+MC 000001D0 00000000 %SYSTEM-W-NOTINTBLSZ, block size is greater than 2048
+MC 000001D8 00000000 %SYSTEM-W-NOTLABELMT, tape is not labeled
+MC 000001E0 00000000 %SYSTEM-W-NOTSQDEV, not a sequential device
+MC 000001E8 00000000 %SYSTEM-W-PAGOWNVIO, page owner violation
+MC 000001F0 00000000 %SYSTEM-W-PARITY, parity error
+MC 000001F8 00000000 %SYSTEM-W-PARTESCAPE, partial escape
+MC 00000200 00000000 %SYSTEM-W-PFMBSY, page fault monitor is in use
+MC 00000208 00000000 %SYSTEM-W-PSTFULL, process section table is full
+MC 00000210 00000000 %SYSTEM-W-RESULTOVF, resultant string overflow
+MC 00000218 00000000 %SYSTEM-W-SECTBLFUL, process or global section table is full
+MC 00000220 00000000 %SYSTEM-W-TAPEPOSLOST, magnetic tape position lost
+MC 00000228 00000000 %SYSTEM-W-TIMEOUT, device timeout
+MC 00000230 00000000 %SYSTEM-W-UNASEFC, unassociated event flag cluster
+MC 00000238 00000000 %SYSTEM-W-UNSAFE, drive unsafe
+MC 00000240 00000000 %SYSTEM-W-VASFULL, virtual address space is full
+MC 00000248 00000000 %SYSTEM-W-VECINUSE, AST vector already enabled
+MC 00000250 00000000 %SYSTEM-W-VOLINV, volume is not software enabled
+MC 00000258 00000000 %SYSTEM-W-WRITLCK, write lock error
+MC 00000260 00000000 %SYSTEM-W-NOTAPEOP, no tape operator
+MC 00000268 00000000 %SYSTEM-W-IVCHNLSEC, invalid channel for create and map section
+MC 00000270 00000000 %SYSTEM-W-NOMBX, no associated mailbox for inbound connects
+MC 00000278 00000000 %SYSTEM-W-NOLINKS, maximum network logical links exceeded
+MC 00000280 00000000 %SYSTEM-W-NOSOLICIT, interrupt message not solicited
+MC 00000288 00000000 %SYSTEM-W-NOSUCHNODE, remote node is unknown
+MC 00000290 00000000 %SYSTEM-W-REJECT, connect to network object rejected
+MC 00000298 00000000 %SYSTEM-W-TOOMUCHDATA, too much optional or interrupt data specified
+MC 000002A0 00000000 %SYSTEM-W-BUGCHECK, internal consistency failure
+MC 000002A8 00000000 %SYSTEM-W-FILNOTCNTG, file is not contiguous as required
+MC 000002B0 00000000 %SYSTEM-W-BADSTACK, bad stack encountered during exception dispatch
+MC 000002B8 00000200 %SYSTEM-W-MCHECK, detected hardware error, PC=!XH, PS=!XL
+MC 000002C0 00000000 %SYSTEM-W-DEVACTIVE, device is active
+MC 000002C8 00000000 %SYSTEM-W-HANGUP, data set hang-up
+MC 000002D0 00000000 %SYSTEM-W-OPINCOMPL, operation is incomplete
+MC 000002D8 00000000 %SYSTEM-W-ILLSEQOP, illegal sequential operation
+MC 000002E0 00000000 %SYSTEM-W-IVSECIDCTL, invalid section identification match control
+MC 000002E8 00000000 %SYSTEM-W-NOTNETDEV, not a network communication device
+MC 000002F0 00000000 %SYSTEM-W-IVPROTECT, invalid page or global section protection specified code
+MC 000002F8 00000000 %SYSTEM-W-ACPVAFUL, MTAACP's virtual address space is full
+MC 00000300 00000000 %SYSTEM-W-MTLBLLONG, magnetic tape volume label can be no more than six characters
+MC 00000308 00000000 %SYSTEM-W-BUFBYTALI, device does not support byte-aligned transfers
+MC 00000310 00000000 %SYSTEM-W-NOAQB, ACP queue header not found
+MC 00000318 00000000 %SYSTEM-W-WRONGACP, wrong ACP for device
+MC 00000320 00000000 %SYSTEM-W-BUFNOTALIGN, buffer incorrectly aligned
+MC 00000328 00000000 %SYSTEM-W-DEVCMDERR, device command error
+MC 00000330 00000000 %SYSTEM-W-DEVREQERR, device request error
+MC 00000338 00000000 %SYSTEM-W-INSFBUFDP, unable to allocate a buffered datapath
+MC 00000340 00000000 %SYSTEM-W-INSFMAPREG, insufficient map registers
+MC 00000348 00000000 %SYSTEM-W-IVBUFLEN, invalid buffer length
+MC 00000350 00000000 %SYSTEM-W-IVMODE, invalid mode for requested function
+MC 00000358 00000000 %SYSTEM-W-MCNOTVALID, device microcode is not valid
+MC 00000360 00000000 %SYSTEM-W-POWERFAIL, power failure occurred
+MC 00000368 00000000 %SYSTEM-W-SHMGSNOTMAP, shared memory global section not mapped during creation
+MC 00000370 00000000 %SYSTEM-W-TOOMANYLNAM, logical name translations exceeded
+MC 00000378 00000000 %SYSTEM-W-SHMNOTCNCT, shared memory not connected
+MC 00000380 00000000 %SYSTEM-W-NOTCREATOR, request denied; user is not on creator port
+MC 00000388 00000000 %SYSTEM-W-INTERLOCK, unable to acquire system data structure interlock
+MC 00000390 00000000 %SYSTEM-W-BADQUEUEHDR, interlocked queue corrupted
+MC 00000398 00000000 %SYSTEM-W-NOSLOT, no PCB available
+MC 000003A0 00000000 %SYSTEM-W-SUSPENDED, process is suspended
+MC 000003A8 00000000 %SYSTEM-W-EXPORTQUOTA, port's quota exceeded
+MC 000003B0 00000000 %SYSTEM-W-NOSHMBLOCK, no free shared memory block available for creation
+MC 000003B8 00000000 %SYSTEM-W-BADQFILE, invalid disk quota file format
+MC 000003C0 00000000 %SYSTEM-W-NOQFILE, no disk quota file available
+MC 000003C8 00000000 %SYSTEM-W-QFACTIVE, disk quota file is already active
+MC 000003D0 00000000 %SYSTEM-W-QFNOTACT, disk quotas not enabled on this volume
+MC 000003D8 00000000 %SYSTEM-W-DUPDSKQUOTA, duplicate disk quota file entry
+MC 000003E0 00000000 %SYSTEM-W-NODISKQUOTA, no disk quota entry for this UIC
+MC 000003E8 00000000 %SYSTEM-W-EXDISKQUOTA, disk quota exceeded
+MC 000003F0 00000000 %SYSTEM-W-IDMISMATCH, ident mismatch with existing global section
+MC 000003F8 00000000 %SYSTEM-W-NOWRT, cannot create writable section to read-only file
+MC 00000400 00000000 %SYSTEM-W-PLHLDR, reserved for future use
+MC 00000408 00000600 %SYSTEM-W-ASTFLT, AST fault, SP=!XL, param=!XL, PC=!XH, PS=!XL, target PC or FV=!XH, PS=!XL
+MC 00000410 00000200 %SYSTEM-W-BREAK, breakpoint fault at PC=!XH, PS=!XL
+MC 00000418 00000300 %SYSTEM-W-CMODSUPR, change mode to supervisor trap, code=!XL, PC=!XH, PS=!XL
+MC 00000420 00000300 %SYSTEM-W-CMODUSER, change mode to user trap, code=!XL, PC=!XH, PS=!XL
+MC 00000428 00000300 %SYSTEM-W-COMPAT, compatibility mode fault (code !UB) at PC=!XH, PS=!XL
+MC 00000430 00000200 %SYSTEM-W-OPCCUS, opcode reserved to customer fault at PC=!XH, PS=!XL
+MC 00000438 00000200 %SYSTEM-W-OPCDEC, opcode reserved to OpenVMS fault at PC=!XH, PS=!XL
+MC 00000440 00000400 %SYSTEM-W-PAGRDERR, page read error, I/O status=!XL, virtual address=!XH, PC=!XH, PS=!XL
+MC 00000448 00000200 %SYSTEM-W-RADRMOD, reserved addressing fault at PC=!XH, PS=!XL
+MC 00000450 00000200 %SYSTEM-W-ROPRAND, reserved operand fault at PC=!XH, PS=!XL
+MC 00000458 00000300 %SYSTEM-W-SSFAIL, system service failure exception, status=!XL, PC=!XH, PS=!XL
+MC 00000460 00000200 %SYSTEM-W-TBIT, T-bit pending trap at PC=!XH, PS=!XL
+MC 00000468 00000200 %SYSTEM-W-DEBUG, command interpreter debugger signal at PC=!XH, PS=!XL
+MC 00000470 00000200 %SYSTEM-W-ARTRES, reserved arithmetic trap at PC=!XH, PS=!XL
+MC 00000478 00000200 %SYSTEM-W-INTOVF, arithmetic trap, integer overflow at PC=!XH, PS=!XL
+MC 00000480 00000200 %SYSTEM-W-INTDIV, arithmetic trap, integer divide by zero at PC=!XH, PS=!XL
+MC 00000488 00000200 %SYSTEM-W-FLTOVF, arithmetic trap, floating overflow at PC=!XH, PS=!XL
+MC 00000490 00000200 %SYSTEM-W-FLTDIV, arithmetic trap, floating/decimal divide by zero at PC=!XH, PS=!XL
+MC 00000498 00000200 %SYSTEM-W-FLTUND, arithmetic trap, floating underflow at PC=!XH, PS=!XL
+MC 000004A0 00000200 %SYSTEM-W-DECOVF, arithmetic trap, decimal overflow at PC=!XH, PS=!XL
+MC 000004A8 00000200 %SYSTEM-W-SUBRNG, arithmetic trap, subscript out of range at PC=!XH, PS=!XL
+MC 000004B0 00000200 %SYSTEM-W-FLTOVF_F, arithmetic fault, floating overflow at PC=!XH, PS=!XL
+MC 000004B8 00000200 %SYSTEM-W-FLTDIV_F, arithmetic fault, floating divide by zero at PC=!XH, PS=!XL
+MC 000004C0 00000200 %SYSTEM-W-FLTUND_F, arithmetic fault, floating underflow at PC=!XH, PS=!XL
+MC 000004C8 00000300 %SYSTEM-W-INHCHMK, inhibited CHMKernel trap, code=!XL, PC=!XH, PS=!XL
+MC 000004D0 00000300 %SYSTEM-W-INHCHME, inhibited CHMExecutive trap, code=!XL, PC=!XH, PS=!XL
+MC 000004D8 00000300 %SYSTEM-W-VECDIS, vector disabled fault, code=!XL ,PC=!XH, PS=!XL
+MC 000004E0 00000400 %SYSTEM-W-VARITH, vector arithmetic fault, summary=!XL, mask=!XL, PC=!XH, PS=!XL
+MC 000004E8 00000300 %SYSTEM-W-ILLVECOP, illegal vector opcode fault, opcode=!XW, PC=!XH, PS=!XL
+MC 000004F0 00000400 %SYSTEM-W-VECALIGN, vector alignment exception, reason mask=!XB, virtual address=!XH, PC=!XH, PS=!XL
+MC 000004F8 00000200 %SYSTEM-W-IMGDMP, dynamic image dump signal at PC=!XH, PS=!XL
+MC 00000500 00000500 %SYSTEM-W-HPARITH, high performance arithmetic trap, Imask=!XL, Fmask=!XL, summary=!XB, PC=!XH, PS=!XL
+MC 00000508 00000400 %SYSTEM-W-ALIGN, data alignment trap, virtual address=!XH, function=!XL, PC=!XH, PS=!XL
+MC 00000510 00000300 %SYSTEM-W-UNALIGN_SP_LOAD, unaligned load of SP, virtual address=!XH, PC=!XH, PS=!XL
+MC 00000518 00000300 %SYSTEM-W-GENTRAP, software trap, code=!XL, PC=!XH, PS=!XL
+MC 00000520 00000200 %SYSTEM-W-FLTINV, floating invalid operation, PC=!XH, PS=!XL
+MC 00000528 00000200 %SYSTEM-W-FLTINE, floating inexact result, PC=!XH, PS=!XL
+MC 00000530 00000200 %SYSTEM-W-DECDIV, decimal divide by zero, PC=!XH, PS=!XL
+MC 00000538 00000200 %SYSTEM-W-DECINV, decimal invalid operand, PC=!XH, PS=!XL
+MC 00000540 00000200 %SYSTEM-W-ASSERTERR, assertion error, PC=!XH, PS=!XL
+MC 00000548 00000200 %SYSTEM-W-NULPTRERR, null pointer error, PC=!XH, PS=!XL
+MC 00000550 00000200 %SYSTEM-W-STKOVF, stack overflow, PC=!XH, PS=!XL
+MC 00000558 00000200 %SYSTEM-W-STRLENERR, string length error, PC=!XH, PS=!XL
+MC 00000560 00000200 %SYSTEM-W-SUBSTRERR, substring error, PC=!XH, PS=!XL
+MC 00000568 00000200 %SYSTEM-W-RANGEERR, range error, PC=!XH, PS=!XL
+MC 00000570 00000200 %SYSTEM-W-SUBRNG1, subscript 1 range error, PC=!XH, PS=!XL
+MC 00000578 00000200 %SYSTEM-W-SUBRNG2, subscript 2 range error, PC=!XH, PS=!XL
+MC 00000580 00000200 %SYSTEM-W-SUBRNG3, subscript 3 range error, PC=!XH, PS=!XL
+MC 00000588 00000200 %SYSTEM-W-SUBRNG4, subscript 4 range error, PC=!XH, PS=!XL
+MC 00000590 00000200 %SYSTEM-W-SUBRNG5, subscript 5 range error, PC=!XH, PS=!XL
+MC 00000598 00000200 %SYSTEM-W-SUBRNG6, subscript 6 range error, PC=!XH, PS=!XL
+MC 000005A0 00000200 %SYSTEM-W-SUBRNG7, subscript 7 range error, PC=!XH, PS=!XL
+MC 000005A8 00000400 %SYSTEM-W-PAGRDERRXM, page read error across access modes, I/O status=!XL, virtual address=!XH, PC=!XH, PSL=!XL
+MC 000005B0 00000500 %SYSTEM-W-ILLEGAL_SHADOW, illegal formed trap shadow, Imask=!XL, Fmask=!XL, summary=!XB, PC=!XH, PS=!XL
+MC 000005B8 00000200 %SYSTEM-W-FLTINV_F, floating invalid fault, PC=!XH, PS=!XL
+MC 000005C0 00000200 %SYSTEM-W-FLTINE_F, floating inexact fault, PC=!XH, PS=!XL
+MC 000005C8 00000200 %SYSTEM-W-INTOVF_F, integer overflow fault, PC=!XH, PS=!XL
+MC 000005D0 00000300 %SYSTEM-W-NATFAULT, register NaT Consumption fault, reason mask=!XB, PC=!XH, PS=!XL
+MC 000005D8 00000200 %SYSTEM-W-FLTDENORMAL, denormal/unnormal operand exception, PC=!XH, PS=!XL
+MC 000005E0 00000300 %SYSTEM-W-BREAK_SYS, unknown system break instruction fault, break code=!XQ, PC=!XH, PS=!XL
+MC 000005E8 00000300 %SYSTEM-W-BREAK_ARCH, unknown architected break instruction fault, break code=!XQ, PC=!XH, PS=!XL
+MC 00000600 00000000 %SYSTEM-W-BUFFEROVF, output buffer overflow
+MC 00000608 00000000 %SYSTEM-W-CONTROLO, output completed under CTRL/O
+MC 00000610 00000000 %SYSTEM-W-CONTROLY, operation completed under CTRL/Y
+MC 00000618 00000000 %SYSTEM-W-CREATED, file or section did not exist; has been created
+MC 00000620 00000000 %SYSTEM-W-MSGNOTFND, message not in system message file
+MC 00000628 00000000 %SYSTEM-W-NOTRAN, no string translation performed
+MC 00000630 00000000 %SYSTEM-W-SUPERSEDE, logical name superseded
+MC 00000638 00000000 %SYSTEM-W-WASECC, successful transfer; no data check
+MC 00000640 00000000 %SYSTEM-W-DEVALRALLOC, device already allocated to this job
+MC 00000648 00000000 %SYSTEM-W-REMOTE, assignment completed on remote node
+MC 00000650 00000000 %SYSTEM-W-CONTROLC, operation completed under CTRL/C
+MC 00000658 00000000 %SYSTEM-W-NOTMODIFIED, no pages in the section were modified
+MC 00000660 00000000 %SYSTEM-W-RDDELDATA, read deleted data address mark
+MC 00000668 00000000 %SYSTEM-W-OVRDSKQUOTA, disk usage exceeds disk quota
+MC 00000670 00000000 %SYSTEM-W-OBSOLETE_1, system version mismatch - privilege removed - please relink
+MC 00000678 00000000 %SYSTEM-W-FILEPURGED, oldest file version purged
+MC 00000680 00000000 %SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
+MC 00000688 00000000 %SYSTEM-W-SYNCH, synchronous successful completion
+MC 00000690 00000000 %SYSTEM-W-CONCEALED, logical device name concealed physical device name
+MC 00000698 00000000 %SYSTEM-W-INCOMPAT, feature incompatible with previous system version or architecture
+MC 000006A0 00000200 %SYSTEM-W-DBGOPCREQ, debugger opcode request for PC !XL !+
+MC 000006A8 00000000 %SYSTEM-W-ALRDYCLOSED, connection already closed
+MC 000006B0 00000000 %SYSTEM-W-LNMCREATED, logical name table did not exist; has been created
+MC 000006B8 00000000 %SYSTEM-W-ACEIDMATCH, ACE identifier match
+MC 000006C0 00000000 %SYSTEM-W-DBGEVENT, debugger event
+MC 000006C8 00000000 %SYSTEM-W-REMOVED, directory entry removed
+MC 000006D0 00000000 %SYSTEM-W-QUEUED, OOB AST has been queued, but will not be delivered
+MC 000006D8 00000000 %SYSTEM-W-SUBDISABLED, protected subsystems disabled on volume
+MC 000006E0 00000000 %SYSTEM-W-FORGET, participant has no further need for this transaction state
+MC 000006E8 00000000 %SYSTEM-W-PREPARED, only phase one commit processing completed
+MC 000006F0 00000000 %SYSTEM-W-NOMOREITEMS, no more items to be returned
+MC 000006F8 00000000 %SYSTEM-W-VOLATILE, participant has no recoverable transaction state
+MC 00000700 00000000 %SYSTEM-W-CLASSUPER, object class support routines superseded
+MC 00000708 00000000 %SYSTEM-W-CONTINUE_64, continue from exception
+MC 00000710 00000000 %SYSTEM-W-THREAD_UPCALL, Upcall routine should be called
+MC 00000718 00000000 %SYSTEM-W-CREATED_SHPT, section did not exist; has been created with shared page tables
+MC 00000720 00000000 %SYSTEM-W-PERSONADELPEND, persona marked for delete; references still outstanding
+MC 00000728 00000000 %SYSTEM-W-DEVAVAIL, device is available; not allocated or mounted
+MC 00000730 00000000 %SYSTEM-W-LONGGAP, a long tape gap was encountered
+MC 00000738 00000000 %SYSTEM-W-BROKEN, lock acquired after lock ownership was broken
+MC 00000740 00000000 %SYSTEM-W-QPOOL_DEL_INIT, a QIOServer pool block delete has been initiated
+MC 00000748 00000000 %SYSTEM-W-UNUSED_1, unused message code - may be reused
+MC 00000750 00000000 %SYSTEM-W-LOWPREC, time returned is low-precision
+MC 00000800 00000000 %SYSTEM-W-ACCONFLICT, file access conflict
+MC 00000808 00000000 %SYSTEM-W-BADCHKSUM, bad file header checksum
+MC 00000810 00000000 %SYSTEM-W-BADFILEHDR, bad file header
+MC 00000818 00000000 %SYSTEM-W-BADFILENAME, bad file name syntax
+MC 00000820 00000000 %SYSTEM-W-BADFILEVER, bad file version number
+MC 00000828 00000000 %SYSTEM-W-BADIRECTORY, bad directory file format
+MC 00000830 00000000 %SYSTEM-W-CANCEL, operation canceled
+MC 00000838 00000000 %SYSTEM-W-DATAOVERUN, data overrun
+MC 00000840 00000000 %SYSTEM-W-DEVALLOC, device already allocated to another user
+MC 00000848 00000000 %SYSTEM-W-DEVASSIGN, device has channels assigned
+MC 00000850 00000000 %SYSTEM-W-DEVICEFULL, device full; allocation failure
+MC 00000858 00000000 %SYSTEM-W-DEVNOTALLOC, device not allocated
+MC 00000860 00000000 %SYSTEM-W-DIRFULL, directory is full
+MC 00000868 00000000 %SYSTEM-W-DUPFILENAME, duplicate file name
+MC 00000870 00000000 %SYSTEM-W-ENDOFFILE, end of file
+MC 00000878 00000000 %SYSTEM-W-ENDOFTAPE, end of tape
+MC 00000880 00000000 %SYSTEM-W-TMACTIVE, thread manager context is active
+MC 00000888 00000000 %SYSTEM-W-FCPREADERR, file processor read error
+MC 00000890 00000000 %SYSTEM-W-FCPREWNDERR, file processor rewind error
+MC 00000898 00000000 %SYSTEM-W-FCPSPACERR, file processor space error
+MC 000008A0 00000000 %SYSTEM-W-FCPWRITERR, file processor write error
+MC 000008A8 00000000 %SYSTEM-W-FILELOCKED, file is deaccess locked
+MC 000008B0 00000000 %SYSTEM-W-FILENUMCHK, file identification number check
+MC 000008B8 00000000 %SYSTEM-W-FILESEQCHK, file identification sequence number check
+MC 000008C0 00000000 %SYSTEM-W-FILESTRUCT, unsupported file structure level
+MC 000008C8 00000000 %SYSTEM-W-HEADERFULL, file header is full
+MC 000008D0 00000000 %SYSTEM-W-IDXFILEFULL, index file is full
+MC 000008D8 00000000 %SYSTEM-W-MBFULL, mailbox is full
+MC 000008E0 00000000 %SYSTEM-W-NOHOMEBLK, Files-11 home block not found on volume
+MC 000008E8 00000000 %SYSTEM-W-NONEXPR, nonexistent process
+MC 000008F0 00000000 %SYSTEM-W-NONLOCAL, device is not a local device
+MC 000008F8 00000000 %SYSTEM-W-NOHANDLER, no condition handler found
+MC 00000900 00000000 %SYSTEM-W-NOSIGNAL, no signal currently active
+MC 00000908 00000000 %SYSTEM-W-NOSUCHDEV, no such device available
+MC 00000910 00000000 %SYSTEM-W-NOSUCHFILE, no such file
+MC 00000918 00000000 %SYSTEM-W-RESIGNAL, resignal condition to next handler
+MC 00000920 00000000 %SYSTEM-W-UNWIND, unwind currently in progress
+MC 00000928 00000000 %SYSTEM-W-UNWINDING, unwind already in progress
+MC 00000930 00000000 %SYSTEM-W-NOMOREFILES, no more files
+MC 00000938 00000000 %SYSTEM-W-BEGOFFILE, beginning of file
+MC 00000940 00000000 %SYSTEM-W-BLOCKCNTERR, block count error
+MC 00000948 00000000 %SYSTEM-W-MUSTCLOSEFL, must close file
+MC 00000950 00000000 %SYSTEM-W-WAITUSRLBL, waiting for user labels
+MC 00000958 00000000 %SYSTEM-W-ILLUSRLBLRD, illegal read of user labels
+MC 00000960 00000000 %SYSTEM-W-ILLUSRLBLWT, illegal write of user labels
+MC 00000968 00000000 %SYSTEM-W-ILLLBLAST, illegal user label AST control block address
+MC 00000970 00000000 %SYSTEM-W-ENDOFUSRLBL, end of user labels
+MC 00000978 00000000 %SYSTEM-W-NOSUCHSEC, no such (global) section
+MC 00000980 00000000 %SYSTEM-W-CLIFRCEXT, CLI forced exit
+MC 00000988 00000000 %SYSTEM-W-FCPREPSTN, file processor reposition error
+MC 00000990 00000000 %SYSTEM-W-TOOMANYVER, too many file versions
+MC 00000998 00000000 %SYSTEM-W-NOTVOLSET, volume is not part of a volume set
+MC 000009A0 00000000 %SYSTEM-W-ENDOFVOLUME, end of volume
+MC 000009A8 00000000 %SYSTEM-W-NOMOREPROC, no more processes
+MC 000009B0 00000000 %SYSTEM-W-NODEVAVL, no device available
+MC 000009B8 00000000 %SYSTEM-W-NOTQUEUED, request not queued
+MC 000009C0 00000000 %SYSTEM-W-DGQINCOMP, datagram queue operation incomplete
+MC 000009C8 00000000 %SYSTEM-W-DIRALLOC, allocation failure on directory file
+MC 000009D0 00000000 %SYSTEM-W-ACLEMPTY, access control list is empty
+MC 000009D8 00000000 %SYSTEM-W-NOENTRY, access control entry not found
+MC 000009E0 00000000 %SYSTEM-W-NOMOREACE, access control list is exhausted
+MC 000009E8 00000000 %SYSTEM-W-RIGHTSFULL, rights list is full
+MC 000009F0 00000000 %SYSTEM-W-VALNOTVALID, value block is not valid
+MC 000009F8 00000000 %SYSTEM-W-ACLFULL, ACL is full
+MC 00000A00 00000000 %SYSTEM-W-NOMORENODE, no more nodes
+MC 00000A08 00000000 %SYSTEM-W-NOMORELOCK, no more locks
+MC 00000A10 00000000 %SYSTEM-W-BEGOFTAPE, beginning of tape encountered
+MC 00000A18 00000000 %SYSTEM-W-OBJLOCKHELD, object's lock already held
+MC 00000A20 00000100 %SYSTEM-W-CPUSTARTIP, CPU !UL startup in progress; cannot stop
+MC 00000A28 00000000 %SYSTEM-W-ALLSTARTED, all configured processors are already started
+MC 00000A30 00000100 %SYSTEM-W-ALRDYSTRT, CPU !UL is already started, or startup in progress
+MC 00000A38 00000100 %SYSTEM-W-ALRDYSTPPD, CPU !UL is already stopped
+MC 00000A40 00000100 %SYSTEM-W-NSTPPD, CPU !UL is not stopped
+MC 00000A48 00000000 %SYSTEM-W-UNKRESULT, transaction result is unknown
+MC 00000A50 00000000 %SYSTEM-W-ITEMNOTFOUND, requested item cannot be returned
+MC 00000A58 00000000 %SYSTEM-W-NOMOREDEV, no more devices
+MC 00000A60 00000000 %SYSTEM-W-EFNOTSET, specified EFN is common; not set
+MC 00000A68 00000000 %SYSTEM-W-PRIMNOSTP, PRIMARY CPU cannot be stopped
+MC 00000A70 00000100 %SYSTEM-W-BOOTREJECT, CPU !UL is in the BOOT_REJECTED state and cannot be started
+MC 00000A78 00000000 %SYSTEM-W-RMTPATH, description of path between two remote nodes
+MC 00000A80 00000000 %SYSTEM-W-OBJECT_EXISTS, object already exists
+MC 00000A88 00000000 %SYSTEM-W-NOSUCHOBJECT, specified object does not exist
+MC 00000A90 00000000 %SYSTEM-W-NOVOLDESC, no CD-ROM volume descriptor found
+MC 00000A98 00000000 %SYSTEM-W-NOPTBLDIR, no path table or directory records found
+MC 00000AA0 00000000 %SYSTEM-W-DRVEXISTS, device driver already loaded; not superseded
+MC 00000AA8 00000000 %SYSTEM-W-DEVEXISTS, device unit already exists
+MC 00000AB0 00000000 %SYSTEM-W-GOTO_UNWIND, goto unwind currently in progress
+MC 00000AB8 00000000 %SYSTEM-W-EXIT_UNWIND, exit unwind currently in progress
+MC 00000AC0 00000000 %SYSTEM-W-SMALLHEADER, classification not changed; insufficient space in file header
+MC 00000AC8 00000000 %SYSTEM-W-FDT_COMPL, FDT processing complete
+MC 00000AD0 00000000 %SYSTEM-W-TARGET_UNWIND, target invocation for $UNWIND
+MC 00000AD8 00000000 %SYSTEM-W-TARGET_GOTO_UNW, target invocation for $GOTO_UNWIND
+MC 00000AE0 00000000 %SYSTEM-W-RESIGNAL_64, resignal condition to next handler
+MC 00000AE8 00000000 %SYSTEM-W-NOMOREREG, no more regions found
+MC 00000AF0 00000000 %SYSTEM-W-PAGNOTINREG, page in the specified range is not within the specified region
+MC 00000AF8 00000000 %SYSTEM-W-REGISFULL, specified region is full
+MC 00000B00 00000000 %SYSTEM-W-PAGTYPVIO, operation not supported on specified page type
+MC 00000B08 00000000 %SYSTEM-W-NOSUCHPAG, specified page does not exist
+MC 00000B10 00000000 %SYSTEM-W-PAGNOTWRITE, specified page cannot be written
+MC 00000B18 00000000 %SYSTEM-W-NOMORETHREAD, no more threads in this process
+MC 00000B20 00000000 %SYSTEM-W-NOTF11ODS5, this operation is allowed only on Files-11 ODS-5 volumes
+MC 00000B28 00000000 %SYSTEM-W-NOCONVJNL, journaling enabled; cannot extend file header
+MC 00000B30 00000000 %SYSTEM-W-MPDEVBUSY, this path to multipath device is busy
+MC 00000B38 00000000 %SYSTEM-W-MPDEVUSERDISABL, this path to a multipath device is user disabled
+MC 00000B40 00000000 %SYSTEM-W-NOCPUMATCH, no CPU met the requirements of the requested operation
+MC 00000B48 00000000 %SYSTEM-W-NOMORECLIENTS, no more QIOServer clients exist in the cluster
+MC 00000B50 00000000 %SYSTEM-W-NOMOREDEVICES, no more QIOServer devices exist for specified path
+MC 00000B58 00000000 %SYSTEM-W-NOMOREFILTERS, no more QIOServer logging filters exist for message events
+MC 00000B60 00000000 %SYSTEM-W-NOMOREPATHS, no more paths exist for this device
+MC 00000B68 00000000 %SYSTEM-W-NOMORESERVERS, no more QIOServer servers exist in the cluster
+MC 00000B70 00000000 %SYSTEM-W-FISH, my hovercraft is full of eels
+MC 00000B78 00000000 %SYSTEM-W-FILENOTCACHED, file not in extended file cache
+MC 00000B80 00000000 %SYSTEM-W-INSF_SHM_REG, insufficient shared memory region structures available
+MC 00000B88 00000000 %SYSTEM-W-HBMMNOTENABLED, HBMM not enabled on specified device
+MC 00000B90 00000000 %SYSTEM-W-HBMMALREADYON, HBMM already enabled on specified device
+MC 00000B98 00000000 %SYSTEM-W-NODEVPOL, no HBMM policy for specified device
+MC 00000BA0 00000000 %SYSTEM-W-NONAMPOL, specified HBMM named policy does not exist
+MC 00000BA8 00000000 %SYSTEM-W-XVALNOTVALID, extended value block is not valid
+MC 00000BB0 00000000 %SYSTEM-W-FILEFULL, file full; allocation failure
+MC 00000BB8 00000000 %SYSTEM-W-REMINDER, Andy, remember to turn off the lights when you leave...
+MC 00000C00 00000000 %SYSTEM-W-EOTIN, EOT response to text
+MC 00000C08 00000000 %SYSTEM-W-CHAINW, chained write received
+MC 00000C10 00000000 %SYSTEM-W-NOTINSEC, virtual address not in global section
+MC 00000C18 00000000 %SYSTEM-W-NONXPAG, non-existent page
+MC 00000C20 00000100 %SYSTEM-W-LOGNAME, transaction log name is !AD
+MC 00000C28 00000100 %SYSTEM-W-CPUSTARTD, CPU !UL started
+MC 00000C30 00000100 %SYSTEM-W-CPUSTOPPING, trying to stop CPU !UL after it reaches quiescent state
+MC 00000C38 00000000 %SYSTEM-W-NOTALLCANCELED, at least one of the requested operation(s) cannot be canceled
+MC 00000C40 00000000 %SYSTEM-W-NOTHINGDONE, all the operations are not queued and not in progress
+MC 00000C48 00000000 %SYSTEM-W-EVTNOTENAB, security auditing event not enabled
+MC 00000C50 00000000 %SYSTEM-W-NOPATHTBL, invalid or nonexistent path table; built from directories
+MC 00000C58 00000000 %SYSTEM-W-RESELECTION, SCSI target reselected initiator
+MC 00000C60 00000200 %SYSTEM-W-EMULATED, an instruction not implemented on this processor was emulated at PC=!XH, PS=!XL
+MC 00000C68 00000000 %SYSTEM-W-REMDONE, removal of node from sharing set already done
+MC 00000C70 00000000 %SYSTEM-W-REMINPROG, removal of node from sharing set already in progress
+MC 00000C78 00000000 %SYSTEM-W-DEVCON, device is connected on path
+MC 00000C80 00000000 %SYSTEM-W-DEVNOTCON, device is not connected on path
+MC 00000C88 00000000 %SYSTEM-W-CPUSELECTED, a selected CPU is attempting the requested transition
+MC 00000C90 00000000 %SYSTEM-W-QPOOL_DEL_INPRG, a QIOServer pool block deletion request is still in progress
+MC 00000C98 00000000 %SYSTEM-W-PRESTO, interrupt or exception context was not saved by called routine
+MC 00000CA0 00000200 %SYSTEM-W-TAKEN_BRANCH, taken branch trap, PC=!XH, PS=!XL
+MC 00000CA8 00000500 %SYSTEM-W-IA32_TRAP, IA-32 trap, reason_mask=!XW, vector=!XB, code=!XW, PC=!XH, PS=!XL
+MC 00000CB0 00000400 %SYSTEM-W-DEBUG_FAULT, debug fault, reason mask=!XB, virtual address=!XH, PC=!XH, PS=!XL
+MC 00000CB8 00000400 %SYSTEM-W-BREAK_APPL, application break instruction fault, break code=!XQ, break arg=!XQ, PC=!XH, PS=!XL
+MC 00000CC0 00000000 %SYSTEM-W-TIE_GET_FRAMES, request for frame count from TIE condition handler
+MC 00000CC8 00000000 %SYSTEM-W-TIE_PRE_UNWIND, determine if unwind target is within TIE frame
+MC 00000CD0 00000000 %SYSTEM-W-TIE_UNWIND, unwind to encapsulated TIE frame in progress
+MC 00000CD8 00000000 %SYSTEM-W-TIE_GOTO_UNWIND, goto unwind to encapsulated TIE frame in progress
+MC 00000CE0 00000000 %SYSTEM-W-HBMMCREPOSTMRG, HBMM master bitmaps will be created after shadow set merge completes
+MC 00000CE8 00000200 %SYSTEM-W-FPMODECTL, floating-point control settings (!AZ) do not match the value specified during compilation (!AZ)
+MC 00000CF0 00000200 %SYSTEM-W-FPMODEPC, floating-point precision setting (!AZ) does not match the value specified during compilation (!AZ)
+MC 00000CF8 00000200 %SYSTEM-W-FPMODERC, floating-point rounding setting (!AZ) does not match the value specified during compilation (!AZ)
+MC 00000D00 00000000 %SYSTEM-W-ARGTYP1, argument info type for argument 1 does not match expected type
+MC 00000D08 00000000 %SYSTEM-W-ARGTYP2, argument info type for argument 2 does not match expected type
+MC 00000D10 00000000 %SYSTEM-W-ARGTYP3, argument info type for argument 3 does not match expected type
+MC 00000D18 00000000 %SYSTEM-W-ARGTYP4, argument info type for argument 4 does not match expected type
+MC 00000D20 00000000 %SYSTEM-W-ARGTYP5, argument info type for argument 5 does not match expected type
+MC 00000D28 00000000 %SYSTEM-W-ARGTYP6, argument info type for argument 6 does not match expected type
+MC 00000D30 00000000 %SYSTEM-W-ARGTYP7, argument info type for argument 7 does not match expected type
+MC 00000D38 00000000 %SYSTEM-W-ARGTYP8, argument info type for argument 8 does not match expected type
+MC 00000D40 00000000 %SYSTEM-W-DEFER_ASTS, successful return, but ast delivery deferral requested
+MC 00000E00 00000000 %SYSTEM-W-LINEABRT, host aborted transmission or failed to respond
+MC 00000E08 00000000 %SYSTEM-W-DEADLOCK, deadlock detected
+MC 00000E10 00000000 %SYSTEM-W-NOLOCKID, no lock ID available
+MC 00000E18 00000000 %SYSTEM-W-EXDEPTH, exceeded allowed depth
+MC 00000E20 00000000 %SYSTEM-W-PARTMAPPED, some file map pointers not permanently resident
+MC 00000E28 00000000 %SYSTEM-W-CANCELGRANT, cannot cancel a granted lock
+MC 00000E30 00000000 %SYSTEM-W-RETRY, retry operation
+MC 00000E38 00000000 %SYSTEM-W-BADACL, ACL is corrupt
+MC 00000E40 00000000 %SYSTEM-W-ACEEXISTS, ACE already exists in ACL
+MC 00000E48 00000000 %SYSTEM-W-UNSUPPORTED, unsupported operation or function
+MC 00000E50 00000000 %SYSTEM-W-NORIGHTSDB, rights database file not found
+MC 00000E58 00000000 %SYSTEM-W-LOGSTALL, transaction logging activity is stalled
+MC 00000E60 00000000 %SYSTEM-W-LOGFULL, transaction log file is full
+MC 00000E68 00000000 %SYSTEM-W-PWDINDIC, password found in system dictionary; please choose another string
+MC 00000E70 00000000 %SYSTEM-W-PWDINHIS, password found in history list; please choose a new password
+MC 00000E78 00000000 %SYSTEM-W-PWDWEAK, password is too easy to guess; please choose another string
+MC 00000E80 00000000 %SYSTEM-W-USEGENPWD, password history list is full; please use generated passwords
+MC 00000E88 00000000 %SYSTEM-W-INVBUSNAM, invalid local area VMScluster BUS name
+MC 00000E90 00000000 %SYSTEM-W-INVCOMPTYPE, invalid component type
+MC 00000E98 00000000 %SYSTEM-W-INVCOMPID, invalid component ID
+MC 00000EA0 00000000 %SYSTEM-W-INVCOMPLIST, invalid component list
+MC 00000EA8 00000000 %SYSTEM-W-NOCOMPLSTS, no component lists are defined
+MC 00000EB0 00000000 %SYSTEM-W-INVSECDOMAIN, request originated outside of local security domain
+MC 00000EB8 00000000 %SYSTEM-W-BADCHECKSUM, message checksum failure
+MC 00000EC0 00000000 %SYSTEM-W-ARBTOOBIG, access rights block too big
+MC 00000EC8 00000000 %SYSTEM-W-ORBTOOBIG, object rights block too big
+MC 00000ED0 00000000 %SYSTEM-W-INVAJLNAM, invalid security audit journal name
+MC 00000ED8 00000000 %SYSTEM-W-TOOMANYAJL, too many security audit journals encountered
+MC 00000EE0 00000000 %SYSTEM-W-RSDMINUSE, resource domain in use
+MC 00000EE8 00000000 %SYSTEM-W-RSDMNOTFOU, resource domain not found
+MC 00000EF0 00000000 %SYSTEM-W-INVUICGRP, invalid UIC group
+MC 00000EF8 00000000 %SYSTEM-W-RSDM_ACTIVE, resource domain active
+MC 00000F00 00000000 %SYSTEM-W-OBJLOCKED, security object is locked by another user
+MC 00000F08 00000000 %SYSTEM-W-NOTMPNAM, template profile not found
+MC 00000F10 00000000 %SYSTEM-W-INVCLSITM, invalid item code for selected class
+MC 00000F18 00000000 %SYSTEM-W-NOTSHRTBL, selected logical name table is not shared
+MC 00000F20 00000000 %SYSTEM-W-MMATORB, selected security object mismatch
+MC 00000F28 00000000 %SYSTEM-W-NOSUCHVOL, no such volume
+MC 00000F30 00000000 %SYSTEM-W-OBJNOTLOCKED, security object context is not write-locked
+MC 00000F38 00000000 %SYSTEM-W-ILLRSDM, operation not allowed on resource domain
+MC 00000F40 00000000 %SYSTEM-W-NOCLASSSUPPORT, classification not supported on the selected object
+MC 00000F48 00000000 %SYSTEM-W-INVSECOPER, invalid security classification for this operation
+MC 00000F50 00000000 %SYSTEM-W-NODELJNLACT, cannot delete file while journaling active
+MC 00000F58 00000000 %SYSTEM-W-INVFILFOROP, invalid file specification for operation
+MC 00000F60 00000000 %SYSTEM-W-NOOBJSRV, object server not available
+MC 00000F68 00000000 %SYSTEM-W-NOFILEACCESS, unable to obtain file access lock
+MC 00000F70 00000000 %SYSTEM-W-BADFILESIZE, file size mismatch
+MC 00000F78 00000000 %SYSTEM-W-NOTFULLYMAPPED, file is no longer fully mapped
+MC 00000F80 00000000 %SYSTEM-W-BADWINCNT, bad window pointer count
+MC 00000F88 00000000 %SYSTEM-W-BADWINLBN, bad window pointer logical block number
+MC 00000F90 00000000 %SYSTEM-W-BADWINRVN, bad window pointer relative volume number
+MC 00000F98 00000000 %SYSTEM-W-EXTRAWINDOW, window pointer exists without a file header pointer
+MC 00000FA0 00000000 %SYSTEM-W-REVISED, file was revised
+MC 00000FA8 00000000 %SYSTEM-W-TIMENOTSET, time service enabled; enter a time service command to update the time
+MC 00000FB0 00000000 %SYSTEM-W-WAIT_CALLERS_MO, system service dispatcher will wait in callers mode
+MC 00000FB8 00000000 %SYSTEM-W-NOT_LOADED, system service or exec routine is not loaded
+MC 00000FC0 00000000 %SYSTEM-W-DRV_NOUNLOAD, device driver is not unloadable
+MC 00000FC8 00000000 %SYSTEM-W-INVARG, invalid argument
+MC 00000FD0 00000000 %SYSTEM-W-QIO_CROCK, system service dispatcher will fault address @R1
+MC 00000FD8 00000000 %SYSTEM-W-ALTER, alter stack frames
+MC 00000FE0 00000000 %SYSTEM-W-AFR_ENABLED, alignment fault reporting already enabled
+MC 00000FE8 00000000 %SYSTEM-W-AFR_NOT_ENABLED, alignment fault reporting not yet enabled
+MC 00000FF0 00000000 %SYSTEM-W-SHELFERROR, access to shelved file failed
+MC 00000FF8 00000000 %SYSTEM-W-PERSONANONGRATA, invalid persona argument
+MC 00001000 00000300 %SYSTEM-W-APPENDED, !AS appended to !AS (!UL block!%S)
+MC 00001008 00000300 %SYSTEM-W-APPENDED, !AS appended to !AS (!UL record!%S)
+MC 00001010 00000200 %SYSTEM-W-BADDATA, invalid data (!XB) at !XL
+MC 00001018 00000200 %SYSTEM-W-BADFIELD, !AS field invalid at !XL
+MC 00001020 00000200 %SYSTEM-W-BADDATA, invalid data (!XL) at !XL
+MC 00001028 00000200 %SYSTEM-W-BADDATA, invalid data (!XW) at !XL
+MC 00001030 00000100 %SYSTEM-W-BEGIN, !AS beginning
+MC 00001038 00000200 %SYSTEM-W-BEGIN, !AS beginning at !%D
+MC 00001040 00000200 %SYSTEM-W-BEGIN, !AS beginning at !%T
+MC 00001048 00000100 %SYSTEM-W-CLICB, CLI control block at !XL
+MC 00001050 00000100 %SYSTEM-W-CLOSEIN, error closing !AS as input
+MC 00001058 00000100 %SYSTEM-W-CLOSEOUT, error closing !AS as output
+MC 00001060 00000300 %SYSTEM-W-COPIED, !AS copied to !AS (!UL block!%S)
+MC 00001068 00000300 %SYSTEM-W-COPIED, !AS copied to !AS (!UL record!%S)
+MC 00001070 00000100 %SYSTEM-W-CREATED, !AS created
+MC 00001078 00000100 %SYSTEM-W-ENDED, !AS ended
+MC 00001080 00000200 %SYSTEM-W-ENDED, !AS ended at !%D
+MC 00001088 00000200 %SYSTEM-W-ENDED, !AS ended at !%T
+MC 00001090 00000100 %SYSTEM-W-NEWFILES, !UL file!%S created
+MC 00001098 00000100 %SYSTEM-W-OPENIN, error opening !AS as input
+MC 000010A0 00000100 %SYSTEM-W-OPENOUT, error opening !AS as output
+MC 000010A8 00000100 %SYSTEM-W-OVERLAY, !AS being overwritten
+MC 000010B0 00000100 %SYSTEM-W-READERR, error reading !AS
+MC 000010B8 00000100 %SYSTEM-W-REPLACED, !AS being replaced
+MC 000010C0 00000000 %SYSTEM-W-CONCAT, wildcard specification cannot be concatenated
+MC 000010C8 00000000 %SYSTEM-W-WILDOUTVER, wildcard version required for output file
+MC 000010D0 00000100 %SYSTEM-W-WRITEERR, error writing !AS
+MC 000010D8 00000100 %SYSTEM-W-ABORT, !AS aborted
+MC 000010E0 00000200 %SYSTEM-W-ABORT, !AS aborted at !%D
+MC 000010E8 00000200 %SYSTEM-W-ABORT, !AS aborted at !%T
+MC 000010F0 00000200 %SYSTEM-W-SYSERROR, !AS system service error at PC !XL
+MC 000010F8 00000100 %SYSTEM-W-SYNTAX, error parsing '!AS'
+MC 00001100 00000100 %SYSTEM-W-NOVALUE, '!AS' keyword requires a value
+MC 00001108 00000100 %SYSTEM-W-BADKEY, '!AS' is an invalid keyword
+MC 00001110 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid keyword value
+MC 00001118 00000100 %SYSTEM-W-BADDELIM, invalid delimiter following '!AS'
+MC 00001120 00000000 %SYSTEM-W-BADLOGIC, internal logic error detected
+MC 00001128 00000000 %SYSTEM-W-NOWILD, no wildcard permitted
+MC 00001130 00000100 %SYSTEM-W-TEXT, !AS
+MC 00001138 00000000 %SYSTEM-W-CONCAT, indexed file cannot be concatenated
+MC 00001140 00000000 %SYSTEM-W-CONCAT, relative file cannot be concatenated
+MC 00001148 00000100 %SYSTEM-W-HIGHVER, higher version of !AS already exists
+MC 00001150 00000100 %SYSTEM-W-BADLOGIC, internal logic error detected at PC !XL
+MC 00001158 00000100 %SYSTEM-W-ATPC, at PC !XL
+MC 00001160 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid number of copies
+MC 00001168 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid form type
+MC 00001170 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid job identifier
+MC 00001178 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid job name
+MC 00001180 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid priority
+MC 00001188 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid queue name
+MC 00001190 00000100 %SYSTEM-W-BADVALUE, '!AS' is an invalid time specification
+MC 00001198 00000100 %SYSTEM-W-NOQUEUE, !AS queue does not exist
+MC 000011A0 00000100 %SYSTEM-W-NOJOB, job !UW not found in !AS queue
+MC 000011A8 00000100 %SYSTEM-W-NOJOB, job !AS not found in !AS queue
+MC 000011B0 00000000 %SYSTEM-W-SYSERROR, system service error
+MC 000011B8 00000100 %SYSTEM-W-NOTCOPIED, !AS not copied
+MC 000011C0 00000100 %SYSTEM-W-NOTCMPLT, !AS not completely copied
+MC 000011C8 00000000 %SYSTEM-W-RMSERROR, RMS service error
+MC 000011D0 00000100 %SYSTEM-W-UNXPCTSTS, unexpected status detected. Expected '!AS'. Found:
+MC 000011D8 00000000 %SYSTEM-W-CONCAT, hashed file cannot be concatenated
+MC 000011E0 00000200 %SYSTEM-W-INCOMPAT, !AS (input) and !AS (output) have incompatible attributes
+MC 000011E8 00000000 %SYSTEM-W-VALERR, specified value is out of legal range
+MC 000011F0 00000100 %SYSTEM-W-FILNOTDEL, error deleting !AS
+MC 000011F8 00000100 %SYSTEM-W-CONFDEL, !/!AS, delete? (Y or N): 
+MC 00001200 00000100 %SYSTEM-W-DELETED, !AS deleted
+MC 00001208 00000000 %SYSTEM-W-DELVER, explicit version number or wild card required
+MC 00001210 00000000 %SYSTEM-W-PURGEVER, version numbers not permitted
+MC 00001218 00000100 %SYSTEM-W-CLOSEDEL, error closing !AS
+MC 00001220 00000000 %SYSTEM-W-DIRTOOBUS, obsolete
+MC 00001228 00000000 %SYSTEM-W-NOFILPURG, no files purged
+MC 00001230 00000100 %SYSTEM-W-FILNOTPUR, error deleting !AS
+MC 00001238 00000100 %SYSTEM-W-SEARCHFAIL, error searching for !AS
+MC 00001240 00000000 %SYSTEM-W-DELINTERR, obsolete
+MC 00001248 00000100 %SYSTEM-W-PARSEFAIL, error parsing !AS
+MC 00001250 00000100 %SYSTEM-W-FILPURGED, !AS deleted
+MC 00001258 00000100 %SYSTEM-W-ENDABORT, !AS compilation aborted
+MC 00001260 00000200 %SYSTEM-W-ENDDIAGS, !AS completed with !UL diagnostic!%S
+MC 00001268 00000200 %SYSTEM-W-ENDNOOBJ, !AS completed with !UL diagnostic!%S - object deleted
+MC 00001270 00000000 %SYSTEM-W-HALTED, transfer has been halted
+MC 00001278 00000000 %SYSTEM-W-NOCMDMEM, no command memory has been allocated
+MC 00001280 00000000 %SYSTEM-W-QEMPTY, queue empty
+MC 00001288 00000000 %SYSTEM-W-CBT, insufficient contiguous space, file copied non-contiguously
+MC 00001290 00000100 %SYSTEM-W-EXISTS, !AS already exists
+MC 00001298 00000100 %SYSTEM-W-UNLOCKED, !AS unlocked
+MC 000012A0 00000200 %SYSTEM-W-RENAMED, !AS renamed to !AS
+MC 000012A8 00000200 %SYSTEM-W-PROTECTED, protection on !AS changed to !AS
+MC 000012B0 00000100 %SYSTEM-W-NOTLOCKED, !AS was not locked
+MC 000012B8 00000100 %SYSTEM-W-ACTIMAGE, error activating image !AS
+MC 000012C0 00000100 %SYSTEM-W-DIRNOTCRE, !AS directory file not created
+MC 000012C8 00000100 %SYSTEM-W-NODESTQUE, no such destination queue !AS
+MC 000012D0 00000100 %SYSTEM-W-ILLDESQUE, illegal destination queue name !AS
+MC 000012D8 00000000 %SYSTEM-W-NOTTERM, input device is not a terminal
+MC 000012E0 00000000 %SYSTEM-W-CONFQUAL, conflicting qualifiers
+MC 000012E8 00000100 %SYSTEM-W-ILLDIRCOPY, illegal directory copy of !AS attempted
+MC 000012F0 00000000 %SYSTEM-W-INSVIRMEM, insufficient virtual memory
+MC 000012F8 00000100 %SYSTEM-W-CREATEDSTM, !AS has been created in stream format
+MC 00001300 00000000 %SYSTEM-W-NOTRUNC, truncation not allowed for this file organization
+MC 00001308 00000100 %SYSTEM-W-PRODNOTINS, optional software product !AS not installed
+MC 00001310 00000200 %SYSTEM-W-TOTAL, !UL file!%S deleted (!UL block!%S)
+MC 00001318 00000200 %SYSTEM-W-FILPURG, !AS deleted (!UL block!%S)
+MC 00001320 00000200 %SYSTEM-W-FILDEL, !AS deleted (!UL block!%S)
+MC 00001328 00000200 %SYSTEM-W-INVQUAVAL, value '!AS' invalid for /!AS qualifier
+MC 00001330 00000000 %SYSTEM-W-NOFILES, no files selected
+MC 00001338 00000100 %SYSTEM-W-FILNOTACC, file not accessible !AS
+MC 00001340 00000100 %SYSTEM-W-QUALMISS, qualifier, !AS, missing from command line
+MC 00001348 00000100 %SYSTEM-W-FILSPCSRCH, file specification !AS contains a search list
+MC 00001350 00000000 %SYSTEM-W-NOSRCHLST, this command does not support search lists
+MC 00001358 00000000 %SYSTEM-W-NOSUCHID, unknown rights identifier
+MC 00001360 00000100 %SYSTEM-W-AMBIGANS, !AS is an ambiguous answer - supply more characters
+MC 00001368 00000100 %SYSTEM-W-INVALANS, !AS is an invalid answer
+MC 00001370 00000000 %SYSTEM-W-PRDCONT, Product execution continuing
+MC 00001378 00000100 %SYSTEM-W-NOTDELETED, error deleting !AS
+MC 00001380 00000200 %SYSTEM-W-NOMEANING, qualifiers !AS are no longer meaningful for the !AS command
+MC 00001388 00000100 %SYSTEM-W-OPENERR, error opening !AS
+MC 00001390 00000100 %SYSTEM-W-CLOSEERR, error closing !AS
+MC 00001398 00000100 %SYSTEM-W-BADFORMAT, format version mismatch in file !AS
+MC 000013A0 00000000 %SYSTEM-W-FILDID, unable to process file specification containing DID
+MC 000013A8 00000000 %SYSTEM-W-FILFID, unable to process file specification containing FID
+MC 000013B0 00000000 %SYSTEM-W-FILDIDFID, unable to process file specification containing DID and/or FID
+MC 000013B8 00000000 %SYSTEM-W-NOFIDS, FIDs not permitted
+MC 000013C0 00000500 %SYSTEM-W-FILPURG, !AS deleted (!UL!#<.!2ZL!>!2AC)
+MC 000013C8 00000500 %SYSTEM-W-FILDEL, !AS deleted (!UL!#<.!2ZL!>!2AC)
+MC 000013D0 00000500 %SYSTEM-W-TOTAL, !UL file!%S deleted (!UL!#<.!2ZL!>!2AC)
+MC 000013D8 00000600 %SYSTEM-W-COPIED, !AS copied to !AS (!UL!#<.!2ZL!>!2AC)
+MC 000013E0 00000600 %SYSTEM-W-APPENDED, !AS appended to !AS (!UL!#<.!2ZL!>!2AC)
+MC 000013E8 00000100 %SYSTEM-W-MBXDEL, Mailbox !AS has been marked for deletion
+MC 000013F0 00000100 %SYSTEM-W-SYMLINKERR, error creating symbolic link !AS
+MC 00002000 00000000 %SYSTEM-W-BADISD, illegal image section descriptor
+MC 00002008 00000000 %SYSTEM-W-RELINK, obsolete executable image; please relink
+MC 00002010 00000000 %SYSTEM-W-NOTINSTALL, writable shareable images must be installed
+MC 00002018 00000000 %SYSTEM-W-SHARTOOBIG, new version of shareable image too big; relink all images
+MC 00002020 00000000 %SYSTEM-W-NOP1VA, P1 space not supported in shareable images
+MC 00002028 00000000 %SYSTEM-W-MULTRMS, multiple RMS vectors specified
+MC 00002030 00000000 %SYSTEM-W-VECFULL, privileged vector limit exceeded
+MC 00002038 00000000 %SYSTEM-W-IVLVEC, section not installed with privilege
+MC 00002040 00000000 %SYSTEM-W-INSFSPTS, insufficient SPTEs available
+MC 00002048 00000000 %SYSTEM-W-DISCONNECT, process is disconnected from requested interrupt vector
+MC 00002050 00000000 %SYSTEM-W-PRIVINSTALL, shareable images must be installed to run privileged image
+MC 00002058 00000000 %SYSTEM-W-PROTINSTALL, protected images must be installed
+MC 00002060 00000000 %SYSTEM-W-BADVEC, invalid change mode or message vector
+MC 00002068 00000000 %SYSTEM-W-REMRSRC, insufficient system resources at remote node
+MC 00002070 00000000 %SYSTEM-W-PROTOCOL, network protocol error
+MC 00002078 00000000 %SYSTEM-W-THIRDPARTY, network logical link disconnected by a third party
+MC 00002080 00000000 %SYSTEM-W-NOSUCHUSER, login information not recognized at remote node
+MC 00002088 00000000 %SYSTEM-W-SHUT, remote node no longer accepting connects
+MC 00002090 00000000 %SYSTEM-W-UNREACHABLE, remote node is not currently reachable
+MC 00002098 00000000 %SYSTEM-W-INVLOGIN, login information invalid at remote node
+MC 000020A0 00000000 %SYSTEM-W-NOSUCHOBJ, network object is unknown at remote node
+MC 000020A8 00000000 %SYSTEM-W-EXCPUTIM, CPU time limit expired
+MC 000020B0 00000000 %SYSTEM-W-OPRABORT, aborted by operator
+MC 000020B8 00000000 %SYSTEM-W-SHRIDMISMAT, ident mismatch with shareable image
+MC 000020C0 00000000 %SYSTEM-W-COMMHARD, communications hardware error detected
+MC 000020C8 00000000 %SYSTEM-W-IVCHAR, invalid character
+MC 000020D0 00000000 %SYSTEM-W-DEVINACT, device inactive
+MC 000020D8 00000000 %SYSTEM-W-CONNECFAIL, connect to network object timed-out or failed
+MC 000020E0 00000000 %SYSTEM-W-LINKABORT, network partner aborted logical link
+MC 000020E8 00000000 %SYSTEM-W-LINKDISCON, network partner disconnected logical link
+MC 000020F0 00000000 %SYSTEM-W-LINKEXIT, network partner exited
+MC 000020F8 00000000 %SYSTEM-W-PATHLOST, path to network partner node lost
+MC 00002100 00000000 %SYSTEM-W-CLEARED, virtual call was cleared
+MC 00002108 00000000 %SYSTEM-W-RESET, circuit was reset
+MC 00002110 00000000 %SYSTEM-W-UNSOLICIT, response not solicited
+MC 00002118 00000000 %SYSTEM-W-TOOMANYREDS, too many redirects
+MC 00002120 00000000 %SYSTEM-W-IVLOCKID, invalid lock ID
+MC 00002128 00000000 %SYSTEM-W-SUBLOCKS, cannot dequeue a lock with sublocks
+MC 00002130 00000000 %SYSTEM-W-PARNOTGRANT, parent lock must be granted
+MC 00002138 00000000 %SYSTEM-W-CVTUNGRANT, cannot convert an ungranted lock
+MC 00002140 00000000 %SYSTEM-W-FORCEDERROR, forced error flagged in last sector read
+MC 00002148 00000000 %SYSTEM-W-ILLSELF, illegal self reference
+MC 00002150 00000000 %SYSTEM-W-ILLCDTST, illegal connection descriptor table state
+MC 00002158 00000000 %SYSTEM-W-NOLISTENER, specified remote system process not listening
+MC 00002160 00000000 %SYSTEM-W-EXGBLPAGFIL, exceeded global page file limit
+MC 00002168 00000000 %SYSTEM-W-BADRCT, replacement and caching table unrecoverable I/O error
+MC 00002170 00000000 %SYSTEM-W-DIRNOTEMPTY, directory file is not empty
+MC 00002178 00000000 %SYSTEM-W-FORCEDEXIT, forced exit of image or process by job controller
+MC 00002180 00000000 %SYSTEM-W-NOTPRINTED, failed to queue spool file for print
+MC 00002188 00000000 %SYSTEM-W-JBCERROR, error communicating with job controller
+MC 00002190 00000000 %SYSTEM-W-NOLICENSE, operation requires software license
+MC 00002198 00000000 %SYSTEM-W-VCBROKEN, virtual circuit broken
+MC 000021A0 00000000 %SYSTEM-W-VCCLOSED, virtual circuit closed
+MC 000021A8 00000000 %SYSTEM-W-INSFCDT, insufficient CDT entries
+MC 000021B0 00000000 %SYSTEM-W-DEVNOTDISM, device not dismounted
+MC 000021B8 00000000 %SYSTEM-W-NOSHRIMG, privileged shareable image cannot have outbound calls
+MC 000021C0 00000000 %SYSTEM-W-DUPUNIT, duplicate unit number detected by MSCP controller
+MC 000021C8 00000000 %SYSTEM-W-BADACLCTX, ACL context has been corrupted
+MC 000021D0 00000000 %SYSTEM-W-SERIOUSEXCP, serious exception detected by TMSCP controller
+MC 000021D8 00000000 %SYSTEM-W-TEMPLATEDEV, template device cannot be allocated
+MC 000021E0 00000000 %SYSTEM-W-IVACL, invalid access control list entry syntax
+MC 000021E8 00000000 %SYSTEM-W-NOSUCHID, unknown rights identifier
+MC 000021F0 00000000 %SYSTEM-W-NOLCLMEDA, no local program storage media available
+MC 000021F8 00000000 %SYSTEM-W-NOREGAVIL, no region available to execute program
+MC 00002200 00000000 %SYSTEM-W-NOREGSUIT, no region suited to executing program
+MC 00002208 00000000 %SYSTEM-W-NOSUCHPGM, no such program found
+MC 00002210 00000000 %SYSTEM-W-PGMLDFAIL, program load failure
+MC 00002218 00000000 %SYSTEM-W-PGMSTDALN, program must be run standalone
+MC 00002220 00000000 %SYSTEM-W-IVIDENT, invalid identifier format
+MC 00002228 00000000 %SYSTEM-W-DUPIDENT, duplicate identifier
+MC 00002230 00000000 %SYSTEM-W-INCSEGTRA, incomplete segmented transfer request posted
+MC 00002238 00000000 %SYSTEM-W-NODELEAVE, node leaving the cluster
+MC 00002240 00000000 %SYSTEM-W-KERNELINV, kernel mode execution invalid
+MC 00002248 00000000 %SYSTEM-W-EXLNMQUOTA, logical name table is full
+MC 00002250 00000000 %SYSTEM-W-PARENT_DEL, illegal attempt to delete parent logical name table
+MC 00002258 00000000 %SYSTEM-W-PARNOTSYS, parent not system owned lock
+MC 00002260 00000000 %SYSTEM-W-INSSWAPSPACE, insufficient swap file space available
+MC 00002268 00000000 %SYSTEM-W-VOLOERR, must override owner identifier field in VOL1 label
+MC 00002270 00000000 %SYSTEM-W-DATALATE, data late error detected by mass storage subsystem
+MC 00002278 00000000 %SYSTEM-W-OVRMAXARG, maximum parameter count exceeded
+MC 00002280 00000000 %SYSTEM-W-SHACHASTA, shadow set has changed state
+MC 00002288 00000000 %SYSTEM-W-TERMNETDEV, terminal is a network communications device
+MC 00002290 00000000 %SYSTEM-W-NOLOGTAB, no logical name table name match
+MC 00002298 00000000 %SYSTEM-W-WRONGNAME, local node name must match SCSNODE
+MC 000022A0 00000000 %SYSTEM-W-NOVOLACC, user has no access to magnetic tape volume
+MC 000022A8 00000000 %SYSTEM-W-NOFILACC, user has no access to magnetic tape file
+MC 000022B0 00000000 %SYSTEM-W-INVEXHLIST, termination handler control block list is corrupted
+MC 000022B8 00000000 %SYSTEM-W-NOACLSUPPORT, ACLs not supported on selected object
+MC 000022C0 00000000 %SYSTEM-W-INVSECLASS, invalid security classification block
+MC 000022C8 00000000 %SYSTEM-W-INCSHAMEM, incompatible shadow set member
+MC 000022D0 00000000 %SYSTEM-W-DEVNOTSHR, device not currently shareable
+MC 000022D8 00000000 %SYSTEM-W-RUCONFLICT, another facility has active recovery units on file
+MC 000022E0 00000000 %SYSTEM-W-DATALOST, data lost
+MC 000022E8 00000000 %SYSTEM-W-REMOTE_PROC, operation not allowed; process is on remote node
+MC 000022F0 00000000 %SYSTEM-W-CPUNOTACT, requested CPU not active
+MC 000022F8 00000000 %SYSTEM-W-SRVMMAT, cryptographic service mismatch
+MC 00002300 00000000 %SYSTEM-W-EXLICENSE, licensed product has exceeded current license limits
+MC 00002308 00000000 %SYSTEM-W-INVLICENSE, licensed product is not authorized for this operating mode
+MC 00002310 00000000 %SYSTEM-W-LICENSE_LEVEL, license level does not match product version
+MC 00002318 00000000 %SYSTEM-W-INV_HW_ID, invalid hardware identifier (reserved for future use)
+MC 00002320 00000000 %SYSTEM-W-BADCONTEXT, invalid or corrupted context encountered
+MC 00002328 00000000 %SYSTEM-W-TOOMUCHCTX, too many concurrent context streams requested
+MC 00002330 00000000 %SYSTEM-W-VA_IN_USE, virtual address already in use
+MC 00002338 00000000 %SYSTEM-W-NODELETE, object cannot be deleted
+MC 00002340 00000000 %SYSTEM-W-NOSUCHCPU, CPU does not exist, system is not a multiprocessor, or multiprocessing disabled
+MC 00002348 00000000 %SYSTEM-W-IMGVEXC, image exiting with pending vector exceptions
+MC 00002350 00000000 %SYSTEM-W-NOSAVPEXC, no saved vector exception for the exception-id
+MC 00002358 00000000 %SYSTEM-W-NOSUCHTID, specified transaction not found
+MC 00002360 00000000 %SYSTEM-W-NOSUCHRM, specified resource manager not found
+MC 00002368 00000000 %SYSTEM-W-NOCURTID, no process default transaction currently defined
+MC 00002370 00000000 %SYSTEM-W-WRONGSTATE, invalid transaction state for requested event
+MC 00002378 00000000 %SYSTEM-W-VETO, resource manager refuses request to commit
+MC 00002380 00000000 %SYSTEM-W-PWDSYNTAX, illegal password syntax
+MC 00002388 00000000 %SYSTEM-W-PWDNOTDIF, new password must be different from current password
+MC 00002390 00000100 %SYSTEM-W-INVPWDLEN, password length must be between !UB and 32 characters
+MC 00002398 00000000 %SYSTEM-W-SYSVERDIF, system version mismatch; please relink
+MC 000023A0 00000000 %SYSTEM-W-HWM_STALL, internal I/O stalled by highwater mark activity
+MC 000023A8 00000000 %SYSTEM-W-NOSUSPEND, process cannot be suspended
+MC 000023B0 00000000 %SYSTEM-W-NOSUCHPART, specified participant not found
+MC 000023B8 00000000 %SYSTEM-W-RMALRDCL, resource manager name has already been declared
+MC 000023C0 00000000 %SYSTEM-W-ALRCURTID, a default transaction is currently defined
+MC 000023C8 00000000 %SYSTEM-W-INVLOG, transaction log file format is invalid
+MC 000023D0 00000000 %SYSTEM-W-BADLOGVER, transaction log file format version is unsupported
+MC 000023D8 00000000 %SYSTEM-W-OPINPROG, previously requested operation is incomplete
+MC 000023E0 00000000 %SYSTEM-W-WRONGACMODE, operation attempted from insufficiently privileged access mode
+MC 000023E8 00000000 %SYSTEM-W-SUBTRACED, protected subsystem image cannot be linked /TRACE or /DEBUG
+MC 000023F0 00000000 %SYSTEM-W-ARCHIVING, archive in progress
+MC 000023F8 00000000 %SYSTEM-W-ARCHIVED, file contents archived
+MC 00002400 00000000 %SYSTEM-W-SITEPWDFAIL, failure to load site-specific password policy
+MC 00002408 00000000 %SYSTEM-W-NOSUCHCPB, capability does not exist
+MC 00002410 00000000 %SYSTEM-W-CPUCAP, requested CPU unable to run process due to lack of capabilities
+MC 00002418 00000000 %SYSTEM-W-LOADER, loader cycle error
+MC 00002420 00000000 %SYSTEM-W-HSTBUFACC, host buffer access error
+MC 00002428 00000000 %SYSTEM-W-INCONOLCK, inconsistent ORB lock database
+MC 00002430 00000000 %SYSTEM-W-INVEVENT, invalid event notification request
+MC 00002438 00000000 %SYSTEM-W-NOSUCHFAC, event facility object does not exist
+MC 00002440 00000000 %SYSTEM-W-NOCALLPRIV, third-party lacks privilege for attempted operation
+MC 00002448 00000000 %SYSTEM-W-INSFLPGS, insufficient Fluid Pages available
+MC 00002450 00000000 %SYSTEM-W-INSFRPGS, insufficient Free Pages available
+MC 00002458 00000000 %SYSTEM-W-BADREASON, invalid abort reason code
+MC 00002460 00000000 %SYSTEM-W-NOSUCHBID, specified transaction branch not found
+MC 00002468 00000000 %SYSTEM-W-NOTORIGIN, the origin transaction branch is not in this process
+MC 00002470 00000000 %SYSTEM-W-NOLOG, transaction log not found
+MC 00002478 00000000 %SYSTEM-W-TPDISABLED, the TP_SERVER process is not running on this node
+MC 00002480 00000000 %SYSTEM-W-BRANCHENDED, specified transaction branch has already been ended
+MC 00002488 00000000 %SYSTEM-W-BRANCHSTARTED, specified transaction branch has already been started
+MC 00002490 00000000 %SYSTEM-W-NOSUCHREPORT, specified transaction event report not found
+MC 00002498 00000000 %SYSTEM-W-BADTIME, invalid timestamp range
+MC 000024A0 00000000 %SYSTEM-W-PARTJOINED, participant of the same name already joined to this transaction
+MC 000024A8 00000000 %SYSTEM-W-NOPRESUME, not all transaction event reports have been given
+MC 000024B0 00000000 %SYSTEM-W-RECOVERCANCEL, transaction recovery canceled by explicit request
+MC 000024B8 00000000 %SYSTEM-W-CURTIDCHANGE, already a change to the process default transaction in progress
+MC 000024C0 00000000 %SYSTEM-W-NOREADER, no read channel is assigned to the device
+MC 000024C8 00000000 %SYSTEM-W-NOWRITER, no write channel is assigned to the device
+MC 000024D0 00000000 %SYSTEM-W-DEVNOTWS, device is not a workstation device
+MC 000024D8 00000000 %SYSTEM-W-NOCLASS, no matching object class was located
+MC 000024E0 00000000 %SYSTEM-W-CONTEXTSKEW, context skew detected in security object services
+MC 000024E8 00000000 %SYSTEM-W-BADFORGEDB, failure to load password generator database
+MC 000024F0 00000000 %SYSTEM-W-NODOMAIN, resource domain not found
+MC 000024F8 00000000 %SYSTEM-W-OVRMAXAUD, maximum security audit message size exceeded
+MC 00002500 00000000 %SYSTEM-W-BADCHAIN, chained item list is inaccessible or else chain is circular
+MC 00002508 00000000 %SYSTEM-W-BADBUFLEN, specified buffer length is invalid or out-of-range
+MC 00002510 00000000 %SYSTEM-W-BADITMCOD, specified item code is invalid or out-of-range
+MC 00002518 00000000 %SYSTEM-W-BADBUFADR, buffer address is invalid or inaccessible
+MC 00002520 00000000 %SYSTEM-W-BADRETLEN, return length buffer address is invalid or inaccessible
+MC 00002528 00000000 %SYSTEM-W-SSINOTHELD, protected subsystem identifier not held; ACL not modified
+MC 00002530 00000000 %SYSTEM-W-SSAMISSING, protected subsystem identifier missing subsystem attribute; ACL not modified
+MC 00002538 00000000 %SYSTEM-W-SSANOTAUTH, protected subsystem identifier attribute(s) not authorized; ACL not modified
+MC 00002540 00000000 %SYSTEM-W-BADOWNER, owner UIC is invalid; object ownership not changed
+MC 00002548 00000000 %SYSTEM-W-NAMESERVCOMMERR, name service communications error
+MC 00002550 00000000 %SYSTEM-W-IVNODNAM, invalid node name
+MC 00002558 00000000 %SYSTEM-W-CONFIG_SYNTAX, foreign device configuration description invalid
+MC 00002560 00000000 %SYSTEM-W-SHELVED, file contents shelved
+MC 00002568 00000000 %SYSTEM-W-DRVNOTVALID, device driver failed DPT consistency checks
+MC 00002570 00000000 %SYSTEM-W-SLICING_DISABLE, image slicing is disabled
+MC 00002578 00000100 %SYSTEM-W-NOCALLTRANS, code at !XL cannot call translated code
+MC 00002580 00000100 %SYSTEM-W-TRANSCALLER, routine at !XL cannot be called by translated code
+MC 00002588 00000000 %SYSTEM-W-ILLPRIPOL, illegal combination of scheduling priority and policy
+MC 00002590 00000000 %SYSTEM-W-ILLPOLICY, illegal scheduling policy
+MC 00002598 00000000 %SYSTEM-W-INSFRSPID, insufficient response IDs
+MC 000025A0 00000000 %SYSTEM-W-INSFCREDITL, insufficient connection message buffer credits, low priority request
+MC 000025A8 00000000 %SYSTEM-W-INSFCREDITH, insufficient connection message buffer credits, high priority request
+MC 000025B0 00000000 %SYSTEM-W-INSFMAP, insufficient data mapping resources
+MC 000025B8 00000100 %SYSTEM-W-SIG_INVARGTYPE, signature block specifies an invalid argument type; PC/PDA: !XL
+MC 000025C0 00000100 %SYSTEM-W-SIG_INVFLTARG, signature block specifies an invalid floating argument type; PC/PDA: !XL
+MC 000025C8 00000100 %SYSTEM-W-SIG_INVARGLIST, signature block will generate more than 255 OpenVMS arguments; PC/PDA: !XL
+MC 000025D0 00000100 %SYSTEM-W-SIG_INVFUNCTYPE, signature block specifies an invalid function value type; PC/PDA: !XL
+MC 000025D8 00000100 %SYSTEM-W-SIG_ARGMISMATCH, signature block & OpenVMS arglist have mismatched argument datatypes; PDA: !XL
+MC 000025E0 00000000 %SYSTEM-W-NOTRANQUIL, classification not changed; object currently accessed
+MC 000025E8 00000100 %SYSTEM-W-NOCALLTRANS_SUP, code at !XL called translated code in supervisor mode
+MC 000025F0 00000000 %SYSTEM-W-DEVLISTFULL, device unit limit reached; no unit added
+MC 000025F8 00000000 %SYSTEM-W-INSFP1POOL, insufficient process dynamic memory
+MC 00002600 00000000 %SYSTEM-W-SIGNAL64, 64-bit signal array received
+MC 00002608 00000000 %SYSTEM-W-ZEROALLOCLS, unit has a zero allocation class
+MC 00002610 00000000 %SYSTEM-W-QUEUE_FULL, SCSI tagged command queue is full
+MC 00002618 00000000 %SYSTEM-W-DEVICE_RESET, SCSI bus or device was reset
+MC 00002620 00000000 %SYSTEM-W-ACA_ACTIVE, SCSI ACA operations are active
+MC 00002628 00000000 %SYSTEM-W-BUS_PHASE_ERROR, SCSI bus phase error
+MC 00002630 00000000 %SYSTEM-W-NOMULTITHREAD, multithread is either disabled or not initialized
+MC 00002638 00000000 %SYSTEM-W-MTHREADACTIVE, multithread is already active
+MC 00002640 00000000 %SYSTEM-W-MAXKTHREADS, maximum kernel thread count exceeded
+MC 00002648 00000000 %SYSTEM-W-NOSUCHTHREAD, specified kernel thread does not exist
+MC 00002650 00000000 %SYSTEM-W-NOTHREADMAN, no thread manager is registered
+MC 00002658 00000000 %SYSTEM-W-NOSUCHUPCALL, specified upcall does not exist
+MC 00002660 00000000 %SYSTEM-W-BADFANDLE, invalid fandle
+MC 00002668 00000000 %SYSTEM-W-FANDLEBUSY, fandle is already in use
+MC 00002670 00000000 %SYSTEM-W-UNALIGNED, IOSA or data buffer not aligned
+MC 00002678 00000000 %SYSTEM-W-BADIOSADR, IOSA is not within buffer object
+MC 00002680 00000000 %SYSTEM-W-ILLBUFOBJ, buffer object handle is not valid
+MC 00002688 00000000 %SYSTEM-W-ILLMODIFIER, I/O function modifier is not permitted
+MC 00002690 00000000 %SYSTEM-W-NOCCBBUFFOBJ, unable to lock down CCB into buffer object
+MC 00002698 00000000 %SYSTEM-W-NORDACC, read access denied
+MC 000026A0 00000000 %SYSTEM-W-NOWRTACC, write access denied
+MC 000026A8 00000000 %SYSTEM-W-NOTNOCNVRT, device does not do LBN addressing
+MC 000026B0 00000000 %SYSTEM-W-UNSUPVOLSET, volume sets not supported for Fast-IO
+MC 000026B8 00000000 %SYSTEM-W-ARG_GTR_32_BITS, argument is not 32-bit sign-extended value
+MC 000026C0 00000000 %SYSTEM-W-NOT64DEVFUNC, 64-bit address not supported by device for this function
+MC 000026C8 00000000 %SYSTEM-W-CHANVIO, the specified channel was assigned from a more privileged access mode
+MC 000026D0 00000000 %SYSTEM-W-GBLSEC_MISMATCH, global section type does not match service called
+MC 000026D8 00000000 %SYSTEM-W-ILLRELPAG, invalid relative page argument specified
+MC 000026E0 00000000 %SYSTEM-W-IVACMODE, invalid access mode specified
+MC 000026E8 00000000 %SYSTEM-W-IVREGFLG, invalid region flag specified
+MC 000026F0 00000000 %SYSTEM-W-IVREGID, invalid region id specified
+MC 000026F8 00000000 %SYSTEM-W-IVREGPROT, invalid region protection specified
+MC 00002700 00000000 %SYSTEM-W-IVVAFLG, invalid virtual address flag specified
+MC 00002708 00000000 %SYSTEM-W-LEN_NOTBLKMULT, specified length is not a multiple of virtual disk blocks
+MC 00002710 00000000 %SYSTEM-W-LEN_NOTPAGMULT, specified length is not a multiple of CPU-specific pages
+MC 00002718 00000000 %SYSTEM-W-NOT_PROCESS_VA, specified virtual address is not a process space address
+MC 00002720 00000000 %SYSTEM-W-OFF_NOTBLKALGN, specified offset is not virtual disk block aligned
+MC 00002728 00000000 %SYSTEM-W-OFF_NOTPAGALGN, specified offset is not CPU-specific page aligned
+MC 00002730 00000000 %SYSTEM-W-OFFSET_TOO_BIG, specified offset is too large for global section being mapped
+MC 00002738 00000000 %SYSTEM-W-REGOWNVIO, region is owned by a more privileged access mode
+MC 00002740 00000000 %SYSTEM-W-PROTVIO, file protection prohibits the type of access requested
+MC 00002748 00000000 %SYSTEM-W-TOO_MANY_ARGS, routine called with too many arguments
+MC 00002750 00000000 %SYSTEM-W-VA_NOTPAGALGN, specified virtual address is not CPU-specific page aligned
+MC 00002758 00000000 %SYSTEM-W-NOEXTAUTH, external authentication is not available
+MC 00002760 00000000 %SYSTEM-W-AUTHFAIL, authorization failure
+MC 00002768 00000000 %SYSTEM-W-INVUSER, no such user
+MC 00002770 00000000 %SYSTEM-W-ERRMAPAUTH, error mapping or authenticating user
+MC 00002778 00000000 %SYSTEM-W-NORAD50, radix 50 name not supported
+MC 00002780 00000000 %SYSTEM-W-BADMEDIA, disk or tape media is not useable
+MC 00002788 00000000 %SYSTEM-W-UNRECOVRDER, unable to read data from media
+MC 00002790 00000000 %SYSTEM-W-IVFORMAT, invalid media format for this device
+MC 00002798 00000000 %SYSTEM-W-IVUNITFLAG, invalid unit flag encountered
+MC 000027A0 00000000 %SYSTEM-W-IVPARAM, invalid parameter specified
+MC 000027A8 00000000 %SYSTEM-W-NOSUCHENTRY, specified entry not located
+MC 000027B0 00000000 %SYSTEM-W-ALLOCFAILED, unsuccessful attempt to allocate device
+MC 000027B8 00000000 %SYSTEM-W-SHMEM_INCON, inconsistent shared memory state encountered
+MC 000027C0 00000000 %SYSTEM-W-IVLOCKOP, invalid lock operation
+MC 000027C8 00000000 %SYSTEM-W-IVLOCKTBL, invalid lock table
+MC 000027D0 00000000 %SYSTEM-W-LOCKINUSE, invalid operation; lock is in use
+MC 000027D8 00000000 %SYSTEM-W-LOCK_TIMEOUT, failed to acquire lock; request has timed out
+MC 000027E0 00000000 %SYSTEM-W-BADLCKTBL, galaxy lock table is corrupt
+MC 000027E8 00000000 %SYSTEM-W-NOBREAK, failed to acquire lock; lock ownership is broken
+MC 000027F0 00000000 %SYSTEM-W-IVPROTOCOL, MSCP command protocol violation
+MC 000027F8 00000000 %SYSTEM-W-NOWAIT, failed to acquire lock; NOWAIT was specified
+MC 00002800 00000000 %SYSTEM-W-NOCMKRNL, operation requires CMKRNL privilege
+MC 00002808 00000000 %SYSTEM-W-NOCMEXEC, operation requires CMEXEC privilege
+MC 00002810 00000000 %SYSTEM-W-NOSYSNAM, operation requires SYSNAM privilege
+MC 00002818 00000000 %SYSTEM-W-NOGRPNAM, operation requires GRPNAM privilege
+MC 00002820 00000000 %SYSTEM-W-NOALLSPOOL, operation requires ALLSPOOL privilege
+MC 00002828 00000000 %SYSTEM-W-NOIMPERSONATE, operation requires IMPERSONATE privilege
+MC 00002830 00000000 %SYSTEM-W-NODIAGNOSE, operation requires DIAGNOSE privilege
+MC 00002838 00000000 %SYSTEM-W-NOLOG_IO, operation requires LOG_IO privilege
+MC 00002840 00000000 %SYSTEM-W-NOGROUP, operation requires GROUP privilege
+MC 00002848 00000000 %SYSTEM-W-NOACNT, operation requires ACNT privilege
+MC 00002850 00000000 %SYSTEM-W-NOPRMCEB, operation requires PRMCEB privilege
+MC 00002858 00000000 %SYSTEM-W-NOPRMMBX, operation requires PRMMBX privilege
+MC 00002860 00000000 %SYSTEM-W-NOPSWAPM, operation requires PSWAPM privilege
+MC 00002868 00000000 %SYSTEM-W-NOALTPRI, operation requires ALTPRI privilege
+MC 00002870 00000000 %SYSTEM-W-NOSETPRV, operation requires SETPRV privilege
+MC 00002878 00000000 %SYSTEM-W-NOTMPMBX, operation requires TMPMBX privilege
+MC 00002880 00000000 %SYSTEM-W-NOWORLD, operation requires WORLD privilege
+MC 00002888 00000000 %SYSTEM-W-NOMOUNT, operation requires MOUNT privilege
+MC 00002890 00000000 %SYSTEM-W-NOOPER, operation requires OPER privilege
+MC 00002898 00000000 %SYSTEM-W-NOEXQUOTA, operation requires EXQUOTA privilege
+MC 000028A0 00000000 %SYSTEM-W-NONETMBX, operation requires NETMBX privilege
+MC 000028A8 00000000 %SYSTEM-W-NOVOLPRO, operation requires VOLPRO privilege
+MC 000028B0 00000000 %SYSTEM-W-NOPHY_IO, operation requires PHY_IO privilege
+MC 000028B8 00000000 %SYSTEM-W-NOBUGCHK, operation requires BUGCHK privilege
+MC 000028C0 00000000 %SYSTEM-W-NOPRMGBL, operation requires PRMGBL privilege
+MC 000028C8 00000000 %SYSTEM-W-NOSYSGBL, operation requires SYSGBL privilege
+MC 000028D0 00000000 %SYSTEM-W-NOPFNMAP, operation requires PFNMAP privilege
+MC 000028D8 00000000 %SYSTEM-W-NOSHMEM, operation requires SHMEM privilege
+MC 000028E0 00000000 %SYSTEM-W-NOSYSPRV, operation requires SYSPRV privilege
+MC 000028E8 00000000 %SYSTEM-W-NOBYPASS, operation requires BYPASS privilege
+MC 000028F0 00000000 %SYSTEM-W-NOSYSLCK, operation requires SYSLCK privilege
+MC 000028F8 00000000 %SYSTEM-W-NOSHARE, operation requires SHARE privilege
+MC 00002900 00000000 %SYSTEM-W-NOUPGRADE, operation requires UPGRADE privilege
+MC 00002908 00000000 %SYSTEM-W-NODOWNGRADE, operation requires DOWNGRADE privilege
+MC 00002910 00000000 %SYSTEM-W-NOGRPPRV, operation requires GRPPRV privilege
+MC 00002918 00000000 %SYSTEM-W-NOREADALL, operation requires READALL privilege
+MC 00002920 00000000 %SYSTEM-W-NOIMPORT, operation requires IMPORT privilege
+MC 00002928 00000000 %SYSTEM-W-NOAUDIT, operation requires AUDIT privilege
+MC 00002930 00000000 %SYSTEM-W-NOSECURITY, operation requires SECURITY privilege
+MC 00002A00 00000000 %SYSTEM-W-EXASTLM, exceeded AST quota
+MC 00002A08 00000000 %SYSTEM-W-EXBIOLM, exceeded buffered I/O quota
+MC 00002A10 00000000 %SYSTEM-W-EXBYTLM, exceeded byte count quota
+MC 00002A18 00000000 %SYSTEM-W-EXDIOLM, exceeded direct I/O quota
+MC 00002A20 00000000 %SYSTEM-W-EXFILLM, exceeded open file quota
+MC 00002A28 00000000 %SYSTEM-W-EXPGFLQUOTA, exceeded pagefile quota
+MC 00002A30 00000000 %SYSTEM-W-EXPRCLM, exceeded process limit
+MC 00002A38 00000000 %SYSTEM-W-EXTQELM, exceeded timer queue entry quota
+MC 00002A40 00000000 %SYSTEM-W-EXENQLM, exceeded enqueue quota
+MC 00002AF8 00000000 %SYSTEM-W-EXBUFOBJLM, exceeded systemwide buffer object page limit (MAXBOBMEM)
+MC 00002B00 00000000 %SYSTEM-W-MMSFAILED, media management process failed; operation disallowed
+MC 00002B08 00000000 %SYSTEM-W-QPOOL_DEL_BUSY, a QIOServer pool block deletion request failed, delete thread busy
+MC 00002B18 00000000 %SYSTEM-W-TOOFEWDEV, too few devices specified by media management system
+MC 00002B20 00000000 %SYSTEM-W-AVRWAIT, cannot perform AVR with /NOASSIST; specify /ASSIST or device name
+MC 00002B40 00000000 %SYSTEM-W-NO_MMS, no media management system is running
+MC 00002B48 00000000 %SYSTEM-W-MMSREADY, the media management system is ready to continue
+MC 00002B50 00000000 %SYSTEM-W-MMSNOTREADY, the media management system is not ready to continue
+MC 00002B58 00000000 %SYSTEM-W-SKIP_CHECKS, protection checks should be skipped by the OpenVMS utility
+MC 00002B60 00000000 %SYSTEM-W-NO_NOTIFY, the operator should not be notified
+MC 00002B68 00000000 %SYSTEM-W-SKIP_EXPIRATION, expiration checks should be skipped by the OpenVMS utility
+MC 00002B70 00000000 %SYSTEM-W-NOTATBOT, tape is not at BOT
+MC 00002B78 00000000 %SYSTEM-W-PREVDENS, tape is set to previous density
+MC 00002B80 00000000 %SYSTEM-W-RDBERR, unexpected Rdb error; see SMFS log file for more information
+MC 00002B88 00000000 %SYSTEM-W-MDMSERR, unexpected MDMS error; see SMFS log file for more information
+MC 00002B90 00000000 %SYSTEM-W-IVMEDTYP, invalid media type
+MC 00002B98 00000000 %SYSTEM-W-IVDENS, invalid density
+MC 00002BA0 00000000 %SYSTEM-W-IVPOOL, invalid scratch pool name
+MC 00002BA8 00000000 %SYSTEM-W-IVEXPDAT, invalid file expiration date
+MC 00002BB0 00000000 %SYSTEM-W-NOCONFMEDIA, no free volumes conform to the requested attributes
+MC 00002BB8 00000000 %SYSTEM-W-PTE_NOT_EMPTY, attempt to release a non-zero system PTE
+MC 00002BC0 00000000 %SYSTEM-W-CPUNOTAVAIL, cpu is not active or not enabled as a preferred CPU
+MC 00002BC8 00000000 %SYSTEM-W-NOFASTPATH, fastpath is disabled
+MC 00002BD0 00000000 %SYSTEM-W-EXITFORCED, forced exit of image or process by SYS$DELPRC
+MC 00002BD8 00000000 %SYSTEM-W-FORCEX, forced exit of image from DCL STOP/IMAGE by another process
+MC 00002C00 00000000 %SYSTEM-W-NOTASSUMING, no persona to discard
+MC 00002C08 00000000 %SYSTEM-W-ALREADYASSUMING, current persona must be discarded before assuming another
+MC 00002C10 00000000 %SYSTEM-W-INUSE, persona cannot be deleted as it is currently in use
+MC 00002C18 00000000 %SYSTEM-W-USERDISABLED, account is disabled
+MC 00002C20 00000000 %SYSTEM-W-NOCHJIB, more than one process in job; JIB not changed
+MC 00002C28 00000000 %SYSTEM-W-NOTSUPFS, operation not supported by current file system
+MC 00002C30 00000000 %SYSTEM-W-INSFTHREADS, insufficient threads available
+MC 00002C38 00000000 %SYSTEM-W-NOBUFOBJID, requires rights identifier VMS$BUFFER_OBJECT_USER
+MC 00002C40 00000000 %SYSTEM-W-NODELPERMANENT, permanent persona cannot be deleted
+MC 00002C48 00000000 %SYSTEM-W-NOMEMRESID, requires rights identifier VMS$MEM_RESIDENT_USER
+MC 00002C50 00000000 %SYSTEM-W-MRES_PFNSMALL, specified length is larger than reserved pre-allocated memory
+MC 00002C58 00000000 %SYSTEM-W-MRES_INCON, inconsistent data for memory resident section creation
+MC 00002C60 00000000 %SYSTEM-W-NORESERVEDMEM, specified memory is not reserved
+MC 00002C68 00000000 %SYSTEM-W-RESERVEDMEMUSED, specified reserved memory is in use
+MC 00002C70 00000000 %SYSTEM-W-RES_MEM_INCON, inconsistent reserved memory data
+MC 00002C78 00000000 %SYSTEM-W-NOSHPTS, service cannot accept a shared page table region
+MC 00002C80 00000000 %SYSTEM-W-FLUSHFAIL, flush could not be completed; some updates lost
+MC 00002C88 00000000 %SYSTEM-W-NOTINSTALLED, required product is not installed
+MC 00002C90 00000000 %SYSTEM-W-POOLDEVEXISTS, the specified DW device already exists on this node
+MC 00002C98 00000000 %SYSTEM-W-NOUNITS, you cannot remove all the storage units from the pool
+MC 00002CA0 00000000 %SYSTEM-W-NOTAPOOL, the storage units are not part of the same pool
+MC 00002CA8 00000000 %SYSTEM-W-MISSINGUNITS, you did not list all of the storage units in the pool
+MC 00002CB0 00000000 %SYSTEM-W-DISKDEVEXISTS, the specified DW device already exists on this node
+MC 00002CB8 00000000 %SYSTEM-W-TOOMANYUNITS, too many storage units for a pool
+MC 00002CC0 00000000 %SYSTEM-W-NOTINPOOL, storage unit is not in pool
+MC 00002CC8 00000000 %SYSTEM-W-WRONGPOOL, the pool does not contain the specified parent disk
+MC 00002CD0 00000000 %SYSTEM-W-ALRBOUND, the disk is already bound
+MC 00002CD8 00000000 %SYSTEM-W-NOTPOOLMOUNTED, storage unit is not pool mounted
+MC 00002CE0 00000000 %SYSTEM-W-POOLINUSE, a disk in the pool is bound to a DW device
+MC 00002CE8 00000000 %SYSTEM-W-DISKINUSE, the disk is mounted or has an open I/O channel
+MC 00002CF0 00000000 %SYSTEM-W-SDDISABLED, Snapshot Services are disabled on this node
+MC 00002CF8 00000000 %SYSTEM-W-UNITINPOOL, storage unit is already in bound pool
+MC 00002D00 00000000 %SYSTEM-W-FAMILYTOOBIG, too many snapshots in the parent disk's family
+MC 00002D08 00000000 %SYSTEM-W-NODISKNAME, the pool does not contain a disk with the specified name
+MC 00002D10 00000000 %SYSTEM-W-DISKNAMEEXISTS, the pool already contains a disk with the specified name
+MC 00002D18 00000000 %SYSTEM-W-INSUFFREESEGS, not enough free segments in the pool
+MC 00002D20 00000000 %SYSTEM-W-NOTBOUND, the DW device is not bound to a disk or pool
+MC 00002D28 00000000 %SYSTEM-W-TOOMANYFRAGS, free segments not sufficiently contiguous
+MC 00002D30 00000000 %SYSTEM-W-TOOMANYFAMILIES, too many disks in the pool
+MC 00002D38 00000000 %SYSTEM-W-DISKISBOUND, the disk is bound to a DW device
+MC 00002D40 00000000 %SYSTEM-W-SNAPINFAM, the disk you are trying to delete has a snapshot in its family
+MC 00002D48 00000000 %SYSTEM-W-CHKSNAPVER, Snapshot Services is checking version compatibility
+MC 00002D50 00000000 %SYSTEM-W-BADSNAPVER, cluster is running incompatible versions of Snapshot Services
+MC 00002D58 00000000 %SYSTEM-W-SD_RESERVED4, reserved for Snapshot Services
+MC 00002D60 00000000 %SYSTEM-W-SD_RESERVED5, reserved for Snapshot Services
+MC 00002D68 00000000 %SYSTEM-W-SECREFOVF, too many section references
+MC 00002D70 00000000 %SYSTEM-W-DATAERR, unreliable data; CRC or parity error encountered
+MC 00002D78 00000000 %SYSTEM-W-INVPFN, invalid PFN specified
+MC 00002D80 00000000 %SYSTEM-W-INV_SHMEM, shared memory is not valid
+MC 00002D88 00000000 %SYSTEM-W-INV_SHM_CPP, shared memory CPP is not valid
+MC 00002D90 00000000 %SYSTEM-W-INV_SHM_REG, shared memory region is not valid
+MC 00002D98 00000000 %SYSTEM-W-ONEMAPPER, only one mapper allowed
+MC 00002DA0 00000000 %SYSTEM-W-NOSUCHEXT, no such extension found
+MC 00002DA8 00000000 %SYSTEM-W-CBKEXISTS, membership callback is already registered
+MC 00002DB0 00000000 %SYSTEM-W-NOSUCHCBK, no such membership callback is registered
+MC 00002DB8 00000000 %SYSTEM-W-NOTAMEMBER, this node is not a Galaxy member
+MC 00002DC0 00000000 %SYSTEM-W-GLXSPIUNAVAIL, the Galaxy SPI is currently unavailable
+MC 00002DC8 00000000 %SYSTEM-W-MPDEVILLCURPATH, operation is illegal for current path for multipath set
+MC 00002DD0 00000000 %SYSTEM-W-MPDEVINCOMPAT, paths are incompatible for multipath set formation
+MC 00002DD8 00000000 %SYSTEM-W-MPDEVNOT, not a multipath device or path
+MC 00002DE0 00000000 %SYSTEM-W-MPDEVNOTCONF, multipath is not configured for this operation
+MC 00002DE8 00000000 %SYSTEM-W-PERSONARESERVED, persona index is marked RESERVE
+MC 00002DF0 00000000 %SYSTEM-W-WRONGDRV, different device driver already loaded for this device type name
+MC 00002DF8 00000000 %SYSTEM-W-BADRAD, bad RAD specified
+MC 00002E00 00000000 %SYSTEM-W-INVQSRFNC, invalid SYS$QIOSERVER function code
+MC 00002E08 00000000 %SYSTEM-W-NOQIOSERVER, the QIO$CONFIGURE process is unavailable to handle SYS$QIOSERVER requests
+MC 00002E10 00000000 %SYSTEM-W-INCLASS, cannot add process to scheduling class; it is in a permanent one
+MC 00002E18 00000000 %SYSTEM-W-INVBOOTDEV, SET function invalid for a boot device
+MC 00002E20 00000000 %SYSTEM-W-CLIENT_UNAVAILA, specified client is known but unavailable
+MC 00002E28 00000000 %SYSTEM-W-CONFIGFILE_ERRO, an error occurred while accessing the permanent configuration file
+MC 00002E30 00000000 %SYSTEM-W-INVDEVALLOC, SET function invalid for an allocated device
+MC 00002E38 00000000 %SYSTEM-W-DEVICE_UNAVAILA, specified device is known but unavailable
+MC 00002E40 00000000 %SYSTEM-W-INVDEVMOUNT, SET function invalid for a mounted device
+MC 00002E48 00000000 %SYSTEM-W-LOGGING_DISABLE, logging functions are disabled
+MC 00002E50 00000000 %SYSTEM-W-NOSUCHCLIENT, specified client does not exist
+MC 00002E58 00000000 %SYSTEM-W-NOSUCHDEVICE, specified device does not exist
+MC 00002E60 00000000 %SYSTEM-W-NOSUCHFILTER, specified logging filter does not exist
+MC 00002E68 00000000 %SYSTEM-W-NOSUCHPATH, specified path does not exist
+MC 00002E70 00000000 %SYSTEM-W-NOSUCHSERVER, specified server does not exist
+MC 00002E78 00000000 %SYSTEM-W-RQSTIMOUT, the execution node response timed out
+MC 00002E80 00000000 %SYSTEM-W-SERVER_UNAVAILA, specified server is known but unavailable
+MC 00002E88 00000000 %SYSTEM-W-QSRVINTERR, QIOServer internal error
+MC 00002E90 00000000 %SYSTEM-W-NOADD, cannot add to scheduling class; process scheduled by $SCHED service
+MC 00002E98 00000000 %SYSTEM-W-SYSTEMUIC, users with system UICs cannot be class scheduled
+MC 00002EA0 00000000 %SYSTEM-W-NOSUCHQPOOLID, specified pool block id does not exist
+MC 00002EA8 00000000 %SYSTEM-W-PATHAMBIG, path is ambiguous
+MC 00002EB0 00000000 %SYSTEM-W-INVMVIP, path switch invalid while device is in mount verification
+MC 00002EB8 00000000 %SYSTEM-W-NOPATHAVAIL, no selectable path for device
+MC 00002EC0 00000000 %SYSTEM-W-NOENACURINV, not permitted to enable/disable current path
+MC 00002EC8 00000000 %SYSTEM-W-TRUSTCONF, trust conflict for privileged image execution
+MC 00002ED0 00000000 %SYSTEM-W-QIO_FAULT, QIO requires the page @R1 faulted in callers mode
+MC 00002ED8 00000000 %SYSTEM-W-HBVS_REDO_IO, Shadowing driver must resend this I/O
+MC 00002EE0 00000000 %SYSTEM-W-TOOMANYPERSONA, process persona array expansion limit reached
+MC 00002EE8 00000000 %SYSTEM-W-INVKTLIM, invalid kernel thread limit specified
+MC 00003400 00000000 %SYSTEM-W-MAXNAMPOL, maximum number of HBMM named policies already exists
+MC 00003408 00000000 %SYSTEM-W-HBMMENABLED, HBMM is enabled on specified device; cannot define or delete policy
+MC 00003410 00000000 %SYSTEM-W-NOMODNONEPOL, HBMM policy NODEFAULT cannot be redefined or deleted
+MC 00003418 00000000 %SYSTEM-W-SHADFEATNOMNT, device not mounted on system that supports requested shadowing feature
+MC 00003420 00000000 %SYSTEM-W-NOTSUPALLNODES, feature is not supported on all nodes where the volume is mounted
+MC 00003428 00000000 %SYSTEM-W-WLGCANTHBMM, devices capable of MSCP-based minimerge (HSC/HSD/HSJ) cannot use HBMM
+MC 00003430 00000000 %SYSTEM-W-CALLUNDEFSYM, Call using undefined function symbol
+MC 00003438 00000000 %SYSTEM-W-NOADDMCPYMBR, cannot add device as a mini copy member due to device error
+MC 00003440 00000000 %SYSTEM-W-CANTDODDS, dissimilar device shadowing is not supported on all systems where shadow set is already mounted
+MC 00003448 00000000 %SYSTEM-W-TOOMANYMBRS, maximum number of supported shadow members already exists for this shadow set
+MC 00003450 00000000 %SYSTEM-W-SCBREADFAIL, cannot add member due to failed SCB read
+MC 00003458 00000000 %SYSTEM-W-SCBWRITEFAIL, cannot add member due to failed SCB write
+MC 00003460 00000000 %SYSTEM-W-NOMEMFORWBM, cannot add member due to WBM memory allocation failure
+MC 00003468 00000000 %SYSTEM-W-MUSTDMTVU, shadow set can only be dismounted by dismounting the shadow set
+MC 00003470 00000000 %SYSTEM-W-ONLYSRCMUSTSTAY, only existing source member cannot be removed during a copy operation
+MC 00003478 00000000 %SYSTEM-W-NOWBMDURINGCOPY, mini copy bitmap cannot be created whilst a copy operation is in progress
+MC 00003480 00000000 %SYSTEM-W-WBMERR, WBM error during dismount
+MC 00003488 00000000 %SYSTEM-W-BADPOLCHAR, HBMM policy name contains invalid characters -- please check documentation
+MC 00003490 00000000 %SYSTEM-W-HBMMVERSIONBAD, HBMM policy version mismatch; cannot modify specified policy
+MC 00003498 00000000 %SYSTEM-W-ANADSKSHDBBLK, Syntax error in specification of starting/ending blocks
+MC 000034A0 00000000 %SYSTEM-W-HBMMBADPOLSPEC, HBMM policy specification syntax error -- please check documentation
+MC 000034A8 00000000 %SYSTEM-W-NOSHADOWSERVER, SHADOW_SERVER process is required to mount a shadow set
+MC 000034B0 00000000 %SYSTEM-W-GAMEOVER, all your base are belong to us
+MC 00010000 00000000 %RMS-W-NORMAL, normal successful completion
+MC 00010008 00000400 %RMS-W-ACCVIO, access violation, reason mask=!XB, virtual address=!XH, PC=!XH, PS=!XL
+MC 00010010 00000000 %RMS-W-BADPARAM, bad parameter value
+MC 00010018 00000000 %RMS-W-EXQUOTA, process quota exceeded
+MC 00010020 00000000 %RMS-W-NOPRIV, insufficient privilege or object protection violation
+MC 00010028 00000000 %RMS-W-ABORT, abort
+MC 00010030 00000000 %RMS-W-BADATTRIB, bad attribute control list
+MC 00010038 00000000 %RMS-W-BADESCAPE, syntax error in escape sequence
+MC 00010040 00000000 %RMS-W-BADIMGHDR, bad image header
+MC 00010048 00000000 %RMS-W-CHANINTLK, channel usage interlocked
+MC 00010050 00000000 %RMS-W-CTRLERR, fatal controller error
+MC 00010058 00000000 %RMS-W-DATACHECK, write check error
+MC 00010060 00000000 %RMS-W-DEVFOREIGN, device is mounted foreign
+MC 00010068 00000000 %RMS-W-DEVMOUNT, device is already mounted
+MC 00010070 00000000 %RMS-W-DEVNOTMBX, device is not a mailbox
+MC 00010078 00000000 %RMS-W-DEVNOTMOUNT, device is not mounted
+MC 00010080 00000000 %RMS-W-DEVOFFLINE, device is not in configuration or not available
+MC 00010088 00000000 %RMS-W-DRVERR, fatal drive error
+MC 00010090 00000000 %RMS-W-DUPLNAM, duplicate name
+MC 00010098 00000000 %RMS-W-FILACCERR, magnetic tape file access is nonblank
+MC 000100A0 00000000 %RMS-W-FILALRACC, file already accessed on channel
+MC 000100A8 00000000 %RMS-W-FILNOTACC, file not accessed on channel
+MC 000100B0 00000000 %RMS-W-FILNOTEXP, file is not expired
+MC 000100B8 00000000 %RMS-W-FORMAT, invalid media format
+MC 000100C0 00000000 %RMS-W-GPTFULL, global page table is full
+MC 000100C8 00000000 %RMS-W-GSDFULL, global section descriptor table is full
+MC 000100D0 00000000 %RMS-W-LCKPAGFUL, no more pages may be locked in memory
+MC 000100D8 00000000 %RMS-W-ILLBLKNUM, illegal logical block number
+MC 000100E0 00000000 %RMS-W-ILLCNTRFUNC, illegal ACP control function
+MC 000100E8 00000000 %RMS-W-ILLEFC, illegal event flag cluster
+MC 000100F0 00000000 %RMS-W-ILLIOFUNC, illegal I/O function code
+MC 000100F8 00000000 %RMS-W-ILLPAGCNT, illegal page count parameter
+MC 00010100 00000000 %RMS-W-ILLSER, illegal service call number
+MC 00010108 00000000 %RMS-W-INCVOLLABEL, incorrect volume label
+MC 00010110 00000000 %RMS-W-INSFARG, insufficient call arguments
+MC 00010118 00000000 %RMS-W-INSFWSL, insufficient working set limit
+MC 00010120 00000000 %RMS-W-INSFMEM, insufficient dynamic memory
+MC 00010128 00000000 %RMS-W-INSFRAME, insufficient call frames to unwind
+MC 00010130 00000000 %RMS-W-IVADDR, invalid media address
+MC 00010138 00000000 %RMS-W-IVCHAN, invalid I/O channel
+MC 00010140 00000000 %RMS-W-IVDEVNAM, invalid device name
+MC 00010148 00000000 %RMS-W-IVGSDNAM, invalid global section name
+MC 00010150 00000000 %RMS-W-IVLOGNAM, invalid logical name
+MC 00010158 00000000 %RMS-W-IVLOGTAB, invalid logical name table
+MC 00010160 00000000 %RMS-W-IVQUOTAL, invalid quota list
+MC 00010168 00000000 %RMS-W-IVSECFLG, invalid process or global section flags
+MC 00010170 00000000 %RMS-W-IVSSRQ, invalid system service request
+MC 00010178 00000000 %RMS-W-IVSTSFLG, invalid status flag
+MC 00010180 00000000 %RMS-W-IVTIME, invalid time
+MC 00010188 00000000 %RMS-W-LENVIO, address space length violation
+MC 00010190 00000000 %RMS-W-LKWSETFUL, locked portion of working set is full
+MC 00010198 00000000 %RMS-W-MBTOOSML, mailbox is too small for request
+MC 000101A0 00000000 %RMS-W-MEDOFL, medium is offline
+MC 000101A8 00000000 %RMS-W-NODATA, mailbox is empty
+MC 000101B0 00000000 %RMS-W-NOIOCHAN, no I/O channel available
+MC 000101B8 00000000 %RMS-W-NOLOGNAM, no logical name match
+MC 000101C0 00000000 %RMS-W-NONEXDRV, nonexistent drive
+MC 000101C8 00000000 %RMS-W-NOTFILEDEV, device is not file structured
+MC 000101D0 00000000 %RMS-W-NOTINTBLSZ, block size is greater than 2048
+MC 000101D8 00000000 %RMS-W-NOTLABELMT, tape is not labeled
+MC 000101E0 00000000 %RMS-W-NOTSQDEV, not a sequential device
+MC 000101E8 00000000 %RMS-W-PAGOWNVIO, page owner violation
+MC 000101F0 00000000 %RMS-W-PARITY, parity error
+MC 000101F8 00000000 %RMS-W-PARTESCAPE, partial escape
+MC 00010200 00000000 %RMS-W-PFMBSY, page fault monitor is in use
+MC 00010208 00000000 %RMS-W-PSTFULL, process section table is full
+MC 00010210 00000000 %RMS-W-RESULTOVF, resultant string overflow
+MC 00010218 00000000 %RMS-W-SECTBLFUL, process or global section table is full
+MC 00010220 00000000 %RMS-W-TAPEPOSLOST, magnetic tape position lost
+MC 00010228 00000000 %RMS-W-TIMEOUT, device timeout
+MC 00010230 00000000 %RMS-W-UNASEFC, unassociated event flag cluster
+MC 00010238 00000000 %RMS-W-UNSAFE, drive unsafe
+MC 00010240 00000000 %RMS-W-VASFULL, virtual address space is full
+MC 00010248 00000000 %RMS-W-VECINUSE, AST vector already enabled
+MC 00010250 00000000 %RMS-W-VOLINV, volume is not software enabled
+MC 00010258 00000000 %RMS-W-WRITLCK, write lock error
+MC 00010260 00000000 %RMS-W-NOTAPEOP, no tape operator
+MC 00010268 00000000 %RMS-W-IVCHNLSEC, invalid channel for create and map section
+MC 00010270 00000000 %RMS-W-NOMBX, no associated mailbox for inbound connects
+MC 00010278 00000000 %RMS-W-NOLINKS, maximum network logical links exceeded
+MC 00010280 00000000 %RMS-W-NOSOLICIT, interrupt message not solicited
+MC 00010288 00000000 %RMS-W-NOSUCHNODE, remote node is unknown
+MC 00010290 00000000 %RMS-W-REJECT, connect to network object rejected
+MC 00010298 00000000 %RMS-W-TOOMUCHDATA, too much optional or interrupt data specified
+MC 000102A0 00000000 %RMS-W-BUGCHECK, internal consistency failure
+MC 000102A8 00000000 %RMS-W-FILNOTCNTG, file is not contiguous as required
+MC 000102B0 00000000 %RMS-W-BADSTACK, bad stack encountered during exception dispatch
+MC 000102B8 00000200 %RMS-W-MCHECK, detected hardware error, PC=!XH, PS=!XL
+MC 000102C0 00000000 %RMS-W-DEVACTIVE, device is active
+MC 000102C8 00000000 %RMS-W-HANGUP, data set hang-up
+MC 000102D0 00000000 %RMS-W-OPINCOMPL, operation is incomplete
+MC 000102D8 00000000 %RMS-W-ILLSEQOP, illegal sequential operation
+MC 000102E0 00000000 %RMS-W-IVSECIDCTL, invalid section identification match control
+MC 000102E8 00000000 %RMS-W-NOTNETDEV, not a network communication device
+MC 000102F0 00000000 %RMS-W-IVPROTECT, invalid page or global section protection specified code
+MC 000102F8 00000000 %RMS-W-ACPVAFUL, MTAACP's virtual address space is full
+MC 00010300 00000000 %RMS-W-MTLBLLONG, magnetic tape volume label can be no more than six characters
+MC 00010308 00000000 %RMS-W-BUFBYTALI, device does not support byte-aligned transfers
+MC 00010310 00000000 %RMS-W-NOAQB, ACP queue header not found
+MC 00010318 00000000 %RMS-W-WRONGACP, wrong ACP for device
+MC 00010320 00000000 %RMS-W-BUFNOTALIGN, buffer incorrectly aligned
+MC 00010328 00000000 %RMS-W-DEVCMDERR, device command error
+MC 00010330 00000000 %RMS-W-DEVREQERR, device request error
+MC 00010338 00000000 %RMS-W-INSFBUFDP, unable to allocate a buffered datapath
+MC 00010340 00000000 %RMS-W-INSFMAPREG, insufficient map registers
+MC 00010348 00000000 %RMS-W-IVBUFLEN, invalid buffer length
+MC 00010350 00000000 %RMS-W-IVMODE, invalid mode for requested function
+MC 00010358 00000000 %RMS-W-MCNOTVALID, device microcode is not valid
+MC 00010360 00000000 %RMS-W-POWERFAIL, power failure occurred
+MC 00010368 00000000 %RMS-W-SHMGSNOTMAP, shared memory global section not mapped during creation
+MC 00010370 00000000 %RMS-W-TOOMANYLNAM, logical name translations exceeded
+MC 00010378 00000000 %RMS-W-SHMNOTCNCT, shared memory not connected
+MC 00010380 00000000 %RMS-W-NOTCREATOR, request denied; user is not on creator port
+MC 00010388 00000000 %RMS-W-INTERLOCK, unable to acquire system data structure interlock
+MC 00010390 00000000 %RMS-W-BADQUEUEHDR, interlocked queue corrupted
+MC 00010398 00000000 %RMS-W-NOSLOT, no PCB available
+MC 000103A0 00000000 %RMS-W-SUSPENDED, process is suspended
+MC 000103A8 00000000 %RMS-W-EXPORTQUOTA, port's quota exceeded
+MC 000103B0 00000000 %RMS-W-NOSHMBLOCK, no free shared memory block available for creation
+MC 000103B8 00000000 %RMS-W-BADQFILE, invalid disk quota file format
+MC 000103C0 00000000 %RMS-W-NOQFILE, no disk quota file available
+MC 000103C8 00000000 %RMS-W-QFACTIVE, disk quota file is already active
+MC 000103D0 00000000 %RMS-W-QFNOTACT, disk quotas not enabled on this volume
+MC 000103D8 00000000 %RMS-W-DUPDSKQUOTA, duplicate disk quota file entry
+MC 000103E0 00000000 %RMS-W-NODISKQUOTA, no disk quota entry for this UIC
+MC 000103E8 00000000 %RMS-W-EXDISKQUOTA, disk quota exceeded
+MC 000103F0 00000000 %RMS-W-IDMISMATCH, ident mismatch with existing global section
+MC 000103F8 00000000 %RMS-W-NOWRT, cannot create writable section to read-only file
+MC 00010400 00000000 %RMS-W-PLHLDR, reserved for future use
+MC 00010408 00000600 %RMS-W-ASTFLT, AST fault, SP=!XL, param=!XL, PC=!XH, PS=!XL, target PC or FV=!XH, PS=!XL
+MC 00010410 00000200 %RMS-W-BREAK, breakpoint fault at PC=!XH, PS=!XL
+MC 00010418 00000300 %RMS-W-CMODSUPR, change mode to supervisor trap, code=!XL, PC=!XH, PS=!XL
+MC 00010420 00000300 %RMS-W-CMODUSER, change mode to user trap, code=!XL, PC=!XH, PS=!XL
+MC 00010428 00000300 %RMS-W-COMPAT, compatibility mode fault (code !UB) at PC=!XH, PS=!XL
+MC 00010430 00000200 %RMS-W-OPCCUS, opcode reserved to customer fault at PC=!XH, PS=!XL
+MC 00010438 00000200 %RMS-W-OPCDEC, opcode reserved to OpenVMS fault at PC=!XH, PS=!XL
+MC 00010440 00000400 %RMS-W-PAGRDERR, page read error, I/O status=!XL, virtual address=!XH, PC=!XH, PS=!XL
+MC 00010448 00000200 %RMS-W-RADRMOD, reserved addressing fault at PC=!XH, PS=!XL
+MC 00010450 00000200 %RMS-W-ROPRAND, reserved operand fault at PC=!XH, PS=!XL
+MC 00010458 00000300 %RMS-W-SSFAIL, system service failure exception, status=!XL, PC=!XH, PS=!XL
+MC 00010460 00000200 %RMS-W-TBIT, T-bit pending trap at PC=!XH, PS=!XL
+MC 00010468 00000200 %RMS-W-DEBUG, command interpreter debugger signal at PC=!XH, PS=!XL
+MC 00010470 00000200 %RMS-W-ARTRES, reserved arithmetic trap at PC=!XH, PS=!XL
+MC 00010478 00000200 %RMS-W-INTOVF, arithmetic trap, integer overflow at PC=!XH, PS=!XL
+MC 00010480 00000200 %RMS-W-INTDIV, arithmetic trap, integer divide by zero at PC=!XH, PS=!XL
+MC 00010488 00000200 %RMS-W-FLTOVF, arithmetic trap, floating overflow at PC=!XH, PS=!XL
+MC 00010490 00000200 %RMS-W-FLTDIV, arithmetic trap, floating/decimal divide by zero at PC=!XH, PS=!XL
+MC 00010498 00000200 %RMS-W-FLTUND, arithmetic trap, floating underflow at PC=!XH, PS=!XL
+MC 000104A0 00000200 %RMS-W-DECOVF, arithmetic trap, decimal overflow at PC=!XH, PS=!XL
+MC 000104A8 00000200 %RMS-W-SUBRNG, arithmetic trap, subscript out of range at PC=!XH, PS=!XL
+MC 000104B0 00000200 %RMS-W-FLTOVF_F, arithmetic fault, floating overflow at PC=!XH, PS=!XL
+MC 000104B8 00000200 %RMS-W-FLTDIV_F, arithmetic fault, floating divide by zero at PC=!XH, PS=!XL
+MC 000104C0 00000200 %RMS-W-FLTUND_F, arithmetic fault, floating underflow at PC=!XH, PS=!XL
+MC 000104C8 00000300 %RMS-W-INHCHMK, inhibited CHMKernel trap, code=!XL, PC=!XH, PS=!XL
+MC 000104D0 00000300 %RMS-W-INHCHME, inhibited CHMExecutive trap, code=!XL, PC=!XH, PS=!XL
+MC 000104D8 00000300 %RMS-W-VECDIS, vector disabled fault, code=!XL ,PC=!XH, PS=!XL
+MC 000104E0 00000400 %RMS-W-VARITH, vector arithmetic fault, summary=!XL, mask=!XL, PC=!XH, PS=!XL
+MC 000104E8 00000300 %RMS-W-ILLVECOP, illegal vector opcode fault, opcode=!XW, PC=!XH, PS=!XL
+MC 000104F0 00000400 %RMS-W-VECALIGN, vector alignment exception, reason mask=!XB, virtual address=!XH, PC=!XH, PS=!XL
+MC 000104F8 00000200 %RMS-W-IMGDMP, dynamic image dump signal at PC=!XH, PS=!XL
+MC 00010500 00000500 %RMS-W-HPARITH, high performance arithmetic trap, Imask=!XL, Fmask=!XL, summary=!XB, PC=!XH, PS=!XL
+MC 00010508 00000400 %RMS-W-ALIGN, data alignment trap, virtual address=!XH, function=!XL, PC=!XH, PS=!XL
+MC 00010510 00000300 %RMS-W-UNALIGN_SP_LOAD, unaligned load of SP, virtual address=!XH, PC=!XH, PS=!XL
+MC 00010518 00000300 %RMS-W-GENTRAP, software trap, code=!XL, PC=!XH, PS=!XL
+MC 00010520 00000200 %RMS-W-FLTINV, floating invalid operation, PC=!XH, PS=!XL
+MC 00010528 00000200 %RMS-W-FLTINE, floating inexact result, PC=!XH, PS=!XL
+MC 00010530 00000200 %RMS-W-DECDIV, decimal divide by zero, PC=!XH, PS=!XL
+MC 00010538 00000200 %RMS-W-DECINV, decimal invalid operand, PC=!XH, PS=!XL
+MC 00010540 00000200 %RMS-W-ASSERTERR, assertion error, PC=!XH, PS=!XL
+MC 00010548 00000200 %RMS-W-NULPTRERR, null pointer error, PC=!XH, PS=!XL
+MC 00010550 00000200 %RMS-W-STKOVF, stack overflow, PC=!XH, PS=!XL
+MC 00010558 00000200 %RMS-W-STRLENERR, string length error, PC=!XH, PS=!XL
+MC 00010560 00000200 %RMS-W-SUBSTRERR, substring error, PC=!XH, PS=!XL
+MC 00010568 00000200 %RMS-W-RANGEERR, range error, PC=!XH, PS=!XL
+MC 00010570 00000200 %RMS-W-SUBRNG1, subscript 1 range error, PC=!XH, PS=!XL
+MC 00010578 00000200 %RMS-W-SUBRNG2, subscript 2 range error, PC=!XH, PS=!XL
+MC 00010580 00000200 %RMS-W-SUBRNG3, subscript 3 range error, PC=!XH, PS=!XL
+MC 00010588 00000200 %RMS-W-SUBRNG4, subscript 4 range error, PC=!XH, PS=!XL
+MC 00010590 00000200 %RMS-W-SUBRNG5, subscript 5 range error, PC=!XH, PS=!XL
+MC 00010598 00000200 %RMS-W-SUBRNG6, subscript 6 range error, PC=!XH, PS=!XL
+MC 000105A0 00000200 %RMS-W-SUBRNG7, subscript 7 range error, PC=!XH, PS=!XL
+MC 000105A8 00000400 %RMS-W-PAGRDERRXM, page read error across access modes, I/O status=!XL, virtual address=!XH, PC=!XH, PSL=!XL
+MC 000105B0 00000500 %RMS-W-ILLEGAL_SHADOW, illegal formed trap shadow, Imask=!XL, Fmask=!XL, summary=!XB, PC=!XH, PS=!XL
+MC 000105B8 00000200 %RMS-W-FLTINV_F, floating invalid fault, PC=!XH, PS=!XL
+MC 000105C0 00000200 %RMS-W-FLTINE_F, floating inexact fault, PC=!XH, PS=!XL
+MC 000105C8 00000200 %RMS-W-INTOVF_F, integer overflow fault, PC=!XH, PS=!XL
+MC 000105D0 00000300 %RMS-W-NATFAULT, register NaT Consumption fault, reason mask=!XB, PC=!XH, PS=!XL
+MC 000105D8 00000200 %RMS-W-FLTDENORMAL, denormal/unnormal operand exception, PC=!XH, PS=!XL
+MC 000105E0 00000300 %RMS-W-BREAK_SYS, unknown system break instruction fault, break code=!XQ, PC=!XH, PS=!XL
+MC 000105E8 00000300 %RMS-W-BREAK_ARCH, unknown architected break instruction fault, break code=!XQ, PC=!XH, PS=!XL
+MC 00010600 00000000 %RMS-W-BUFFEROVF, output buffer overflow
+MC 00010608 00000000 %RMS-W-CONTROLO, output completed under CTRL/O
+MC 00010610 00000000 %RMS-W-CONTROLY, operation completed under CTRL/Y
+MC 00010618 00000000 %RMS-W-CREATED, file or section did not exist; has been created
+MC 00010620 00000000 %RMS-W-MSGNOTFND, message not in system message file
+MC 00010628 00000000 %RMS-W-NOTRAN, no string translation performed
+MC 00010630 00000000 %RMS-W-SUPERSEDE, logical name superseded
+MC 00010638 00000000 %RMS-W-WASECC, successful transfer; no data check
+MC 00010640 00000000 %RMS-W-DEVALRALLOC, device already allocated to this job
+MC 00010648 00000000 %RMS-W-REMOTE, assignment completed on remote node
+MC 00010650 00000000 %RMS-W-CONTROLC, operation completed under CTRL/C
+MC 00010658 00000000 %RMS-W-NOTMODIFIED, no pages in the section were modified
+MC 00010660 00000000 %RMS-W-RDDELDATA, read deleted data address mark
+MC 00010668 00000000 %RMS-W-OVRDSKQUOTA, disk usage exceeds disk quota
+MC 00010670 00000000 %RMS-W-OBSOLETE_1, system version mismatch - privilege removed - please relink
+MC 00010678 00000000 %RMS-W-FILEPURGED, oldest file version purged
+MC 00010680 00000000 %RMS-W-NOTALLPRIV, not all requested privileges authorized
+MC 00010688 00000000 %RMS-W-SYNCH, synchronous successful completion
+MC 00010690 00000000 %RMS-W-CONCEALED, logical device name concealed physical device name
+MC 00010698 00000000 %RMS-W-INCOMPAT, feature incompatible with previous system version or architecture
+MC 000106A0 00000200 %RMS-W-DBGOPCREQ, debugger opcode request for PC !XL !+
+MC 000106A8 00000000 %RMS-W-ALRDYCLOSED, connection already closed
+MC 000106B0 00000000 %RMS-W-LNMCREATED, logical name table did not exist; has been created
+MC 000106B8 00000000 %RMS-W-ACEIDMATCH, ACE identifier match
+MC 000106C0 00000000 %RMS-W-DBGEVENT, debugger event
+MC 000106C8 00000000 %RMS-W-REMOVED, directory entry removed
+MC 000106D0 00000000 %RMS-W-QUEUED, OOB AST has been queued, but will not be delivered
+MC 000106D8 00000000 %RMS-W-SUBDISABLED, protected subsystems disabled on volume
+MC 000106E0 00000000 %RMS-W-FORGET, participant has no further need for this transaction state
+MC 000106E8 00000000 %RMS-W-PREPARED, only phase one commit processing completed
+MC 000106F0 00000000 %RMS-W-NOMOREITEMS, no more items to be returned
+MC 000106F8 00000000 %RMS-W-VOLATILE, participant has no recoverable transaction state
+MC 00010700 00000000 %RMS-W-CLASSUPER, object class support routines superseded
+MC 00010708 00000000 %RMS-W-CONTINUE_64, continue from exception
+MC 00010710 00000000 %RMS-W-THREAD_UPCALL, Upcall routine should be called
+MC 00010718 00000000 %RMS-W-CREATED_SHPT, section did not exist; has been created with shared page tables
+MC 00010720 00000000 %RMS-W-PERSONADELPEND, persona marked for delete; references still outstanding
+MC 00010728 00000000 %RMS-W-DEVAVAIL, device is available; not allocated or mounted
+MC 00010730 00000000 %RMS-W-LONGGAP, a long tape gap was encountered
+MC 00010738 00000000 %RMS-W-BROKEN, lock acquired after lock ownership was broken
+MC 00010740 00000000 %RMS-W-QPOOL_DEL_INIT, a QIOServer pool block delete has been initiated
+MC 00010748 00000000 %RMS-W-UNUSED_1, unused message code - may be reused
+MC 00010750 00000000 %RMS-W-LOWPREC, time returned is low-precision
+MC 00010800 00000000 %RMS-W-ACCONFLICT, file access conflict
+MC 00010808 00000000 %RMS-W-BADCHKSUM, bad file header checksum
+MC 00010810 00000000 %RMS-W-BADFILEHDR, bad file header
+MC 00010818 00000000 %RMS-W-BADFILENAME, bad file name syntax
+MC 00010820 00000000 %RMS-W-BADFILEVER, bad file version number
+MC 00010828 00000000 %RMS-W-BADIRECTORY, bad directory file format
+MC 00010830 00000000 %RMS-W-CANCEL, operation canceled
+MC 00010838 00000000 %RMS-W-DATAOVERUN, data overrun
+MC 00010840 00000000 %RMS-W-DEVALLOC, device already allocated to another user
+MC 00010848 00000000 %RMS-W-DEVASSIGN, device has channels assigned
+MC 00010850 00000000 %RMS-W-DEVICEFULL, device full; allocation failure
+MC 00010858 00000000 %RMS-W-DEVNOTALLOC, device not allocated
+MC 00010860 00000000 %RMS-W-DIRFULL, directory is full
+MC 00010868 00000000 %RMS-W-DUPFILENAME, duplicate file name
+MC 00010870 00000000 %RMS-W-ENDOFFILE, end of file
+MC 00010878 00000000 %RMS-W-ENDOFTAPE, end of tape
+MC 00010880 00000000 %RMS-W-TMACTIVE, thread manager context is active
+MC 00010888 00000000 %RMS-W-FCPREADERR, file processor read error
+MC 00010890 00000000 %RMS-W-FCPREWNDERR, file processor rewind error
+MC 00010898 00000000 %RMS-W-FCPSPACERR, file processor space error
+MC 000108A0 00000000 %RMS-W-FCPWRITERR, file processor write error
+MC 000108A8 00000000 %RMS-W-FILELOCKED, file is deaccess locked
+MC 000108B0 00000000 %RMS-W-FILENUMCHK, file identification number check
+MC 000108B8 00000000 %RMS-W-FILESEQCHK, file identification sequence number check
+MC 000108C0 00000000 %RMS-W-FILESTRUCT, unsupported file structure level
+MC 000108C8 00000000 %RMS-W-HEADERFULL, file header is full
+MC 000108D0 00000000 %RMS-W-IDXFILEFULL, index file is full
+MC 000108D8 00000000 %RMS-W-MBFULL, mailbox is full
+MC 000108E0 00000000 %RMS-W-NOHOMEBLK, Files-11 home block not found on volume
+MC 000108E8 00000000 %RMS-W-NONEXPR, nonexistent process
+MC 000108F0 00000000 %RMS-W-NONLOCAL, device is not a local device
+MC 000108F8 00000000 %RMS-W-NOHANDLER, no condition handler found
+MC 00010900 00000000 %RMS-W-NOSIGNAL, no signal currently active
+MC 00010908 00000000 %RMS-W-NOSUCHDEV, no such device available
+MC 00010910 00000000 %RMS-W-NOSUCHFILE, no such file
+MC 00010918 00000000 %RMS-W-RESIGNAL, resignal condition to next handler
+MC 00010920 00000000 %RMS-W-UNWIND, unwind currently in progress
+MC 00010928 00000000 %RMS-W-UNWINDING, unwind already in progress
+MC 00010930 00000000 %RMS-W-NOMOREFILES, no more files
+MC 00010938 00000000 %RMS-W-BEGOFFILE, beginning of file
+MC 00010940 00000000 %RMS-W-BLOCKCNTERR, block count error
+MC 00010948 00000000 %RMS-W-MUSTCLOSEFL, must close file
+MC 00010950 00000000 %RMS-W-WAITUSRLBL, waiting for user labels
+MC 00010958 00000000 %RMS-W-ILLUSRLBLRD, illegal read of user labels
+MC 00010960 00000000 %RMS-W-ILLUSRLBLWT, illegal write of user labels
+MC 00010968 00000000 %RMS-W-ILLLBLAST, illegal user label AST control block address
+MC 00010970 00000000 %RMS-W-ENDOFUSRLBL, end of user labels
+MC 00010978 00000000 %RMS-W-NOSUCHSEC, no such (global) section
+MC 00010980 00000000 %RMS-W-CLIFRCEXT, CLI forced exit
+MC 00010988 00000000 %RMS-W-FCPREPSTN, file processor reposition error
+MC 00010990 00000000 %RMS-W-TOOMANYVER, too many file versions
+MC 00010998 00000000 %RMS-W-NOTVOLSET, volume is not part of a volume set
+MC 000109A0 00000000 %RMS-W-ENDOFVOLUME, end of volume
+MC 000109A8 00000000 %RMS-W-NOMOREPROC, no more processes
+MC 000109B0 00000000 %RMS-W-NODEVAVL, no device available
+MC 000109B8 00000000 %RMS-W-NOTQUEUED, request not queued
+MC 000109C0 00000000 %RMS-W-DGQINCOMP, datagram queue operation incomplete
+MC 000109C8 00000000 %RMS-W-DIRALLOC, allocation failure on directory file
+MC 000109D0 00000000 %RMS-W-ACLEMPTY, access control list is empty
+MC 000109D8 00000000 %RMS-W-NOENTRY, access control entry not found
+MC 000109E0 00000000 %RMS-W-NOMOREACE, access control list is exhausted
+MC 000109E8 00000000 %RMS-W-RIGHTSFULL, rights list is full
+MC 000109F0 00000000 %RMS-W-VALNOTVALID, value block is not valid
+MC 000109F8 00000000 %RMS-W-ACLFULL, ACL is full
+MC 00010A00 00000000 %RMS-W-NOMORENODE, no more nodes
+MC 00010A08 00000000 %RMS-W-NOMORELOCK, no more locks
+MC 00010A10 00000000 %RMS-W-BEGOFTAPE, beginning of tape encountered
+MC 00010A18 00000000 %RMS-W-OBJLOCKHELD, object's lock already held
+MC 00010A20 00000100 %RMS-W-CPUSTARTIP, CPU !UL startup in progress; cannot stop
+MC 00010A28 00000000 %RMS-W-ALLSTARTED, all configured processors are already started
+MC 00010A30 00000100 %RMS-W-ALRDYSTRT, CPU !UL is already started, or startup in progress
+MC 00010A38 00000100 %RMS-W-ALRDYSTPPD, CPU !UL is already stopped
+MC 00010A40 00000100 %RMS-W-NSTPPD, CPU !UL is not stopped
+MC 00010A48 00000000 %RMS-W-UNKRESULT, transaction result is unknown
+MC 00010A50 00000000 %RMS-W-ITEMNOTFOUND, requested item cannot be returned
+MC 00010A58 00000000 %RMS-W-NOMOREDEV, no more devices
+MC 00010A60 00000000 %RMS-W-EFNOTSET, specified EFN is common; not set
+MC 00010A68 00000000 %RMS-W-PRIMNOSTP, PRIMARY CPU cannot be stopped
+MC 00010A70 00000100 %RMS-W-BOOTREJECT, CPU !UL is in the BOOT_REJECTED state and cannot be started
+MC 00010A78 00000000 %RMS-W-RMTPATH, description of path between two remote nodes
+MC 00010A80 00000000 %RMS-W-OBJECT_EXISTS, object already exists
+MC 00010A88 00000000 %RMS-W-NOSUCHOBJECT, specified object does not exist
+MC 00010A90 00000000 %RMS-W-NOVOLDESC, no CD-ROM volume descriptor found
+MC 00010A98 00000000 %RMS-W-NOPTBLDIR, no path table or directory records found
+MC 00010AA0 00000000 %RMS-W-DRVEXISTS, device driver already loaded; not superseded
+MC 00010AA8 00000000 %RMS-W-DEVEXISTS, device unit already exists
+MC 00010AB0 00000000 %RMS-W-GOTO_UNWIND, goto unwind currently in progress
+MC 00010AB8 00000000 %RMS-W-EXIT_UNWIND, exit unwind currently in progress
+MC 00010AC0 00000000 %RMS-W-SMALLHEADER, classification not changed; insufficient space in file header
+MC 00010AC8 00000000 %RMS-W-FDT_COMPL, FDT processing complete
+MC 00010AD0 00000000 %RMS-W-TARGET_UNWIND, target invocation for $UNWIND
+MC 00010AD8 00000000 %RMS-W-TARGET_GOTO_UNW, target invocation for $GOTO_UNWIND
+MC 00010AE0 00000000 %RMS-W-RESIGNAL_64, resignal condition to next handler
+MC 00010AE8 00000000 %RMS-W-NOMOREREG, no more regions found
+MC 00010AF0 00000000 %RMS-W-PAGNOTINREG, page in the specified range is not within the specified region
+MC 00010AF8 00000000 %RMS-W-REGISFULL, specified region is full
+MC 00010B00 00000000 %RMS-W-PAGTYPVIO, operation not supported on specified page type
+MC 00010B08 00000000 %RMS-W-NOSUCHPAG, specified page does not exist
+MC 00010B10 00000000 %RMS-W-PAGNOTWRITE, specified page cannot be written
+MC 00010B18 00000000 %RMS-W-NOMORETHREAD, no more threads in this process
+MC 00010B20 00000000 %RMS-W-NOTF11ODS5, this operation is allowed only on Files-11 ODS-5 volumes
+MC 00010B28 00000000 %RMS-W-NOCONVJNL, journaling enabled; cannot extend file header
+MC 00010B30 00000000 %RMS-W-MPDEVBUSY, this path to multipath device is busy
+MC 00010B38 00000000 %RMS-W-MPDEVUSERDISABL, this path to a multipath device is user disabled
+MC 00010B40 00000000 %RMS-W-NOCPUMATCH, no CPU met the requirements of the requested operation
+MC 00010B48 00000000 %RMS-W-NOMORECLIENTS, no more QIOServer clients exist in the cluster
+MC 00010B50 00000000 %RMS-W-NOMOREDEVICES, no more QIOServer devices exist for specified path
+MC 00010B58 00000000 %RMS-W-NOMOREFILTERS, no more QIOServer logging filters exist for message events
+MC 00010B60 00000000 %RMS-W-NOMOREPATHS, no more paths exist for this device
+MC 00010B68 00000000 %RMS-W-NOMORESERVERS, no more QIOServer servers exist in the cluster
+MC 00010B70 00000000 %RMS-W-FISH, my hovercraft is full of eels
+MC 00010B78 00000000 %RMS-W-FILENOTCACHED, file not in extended file cache
+MC 00010B80 00000000 %RMS-W-INSF_SHM_REG, insufficient shared memory region structures available
+MC 00010B88 00000000 %RMS-W-HBMMNOTENABLED, HBMM not enabled on specified device
+MC 00010B90 00000000 %RMS-W-HBMMALREADYON, HBMM already enabled on specified device
+MC 00010B98 00000000 %RMS-W-NODEVPOL, no HBMM policy for specified device
+MC 00010BA0 00000000 %RMS-W-NONAMPOL, specified HBMM named policy does not exist
+MC 00010BA8 00000000 %RMS-W-XVALNOTVALID, extended value block is not valid
+MC 00010BB0 00000000 %RMS-W-FILEFULL, file full; allocation failure
+MC 00010BB8 00000000 %RMS-W-REMINDER, Andy, remember to turn off the lights when you leave...
+MC 00010C00 00000000 %RMS-W-EOTIN, EOT response to text
+MC 00010C08 00000000 %RMS-W-CHAINW, chained write received
+MC 00010C10 00000000 %RMS-W-NOTINSEC, virtual address not in global section
+MC 00010C18 00000000 %RMS-W-NONXPAG, non-existent page
+MC 00010C20 00000100 %RMS-W-LOGNAME, transaction log name is !AD
+MC 00010C28 00000100 %RMS-W-CPUSTARTD, CPU !UL started
+MC 00010C30 00000100 %RMS-W-CPUSTOPPING, trying to stop CPU !UL after it reaches quiescent state
+MC 00010C38 00000000 %RMS-W-NOTALLCANCELED, at least one of the requested operation(s) cannot be canceled
+MC 00010C40 00000000 %RMS-W-NOTHINGDONE, all the operations are not queued and not in progress
+MC 00010C48 00000000 %RMS-W-EVTNOTENAB, security auditing event not enabled
+MC 00010C50 00000000 %RMS-W-NOPATHTBL, invalid or nonexistent path table; built from directories
+MC 00010C58 00000000 %RMS-W-RESELECTION, SCSI target reselected initiator
+MC 00010C60 00000200 %RMS-W-EMULATED, an instruction not implemented on this processor was emulated at PC=!XH, PS=!XL
+MC 00010C68 00000000 %RMS-W-REMDONE, removal of node from sharing set already done
+MC 00010C70 00000000 %RMS-W-REMINPROG, removal of node from sharing set already in progress
+MC 00010C78 00000000 %RMS-W-DEVCON, device is connected on path
+MC 00010C80 00000000 %RMS-W-DEVNOTCON, device is not connected on path
+MC 00010C88 00000000 %RMS-W-CPUSELECTED, a selected CPU is attempting the requested transition
+MC 00010C90 00000000 %RMS-W-QPOOL_DEL_INPRG, a QIOServer pool block deletion request is still in progress
+MC 00010C98 00000000 %RMS-W-PRESTO, interrupt or exception context was not saved by called routine
+MC 00010CA0 00000200 %RMS-W-TAKEN_BRANCH, taken branch trap, PC=!XH, PS=!XL
+MC 00010CA8 00000500 %RMS-W-IA32_TRAP, IA-32 trap, reason_mask=!XW, vector=!XB, code=!XW, PC=!XH, PS=!XL
+MC 00010CB0 00000400 %RMS-W-DEBUG_FAULT, debug fault, reason mask=!XB, virtual address=!XH, PC=!XH, PS=!XL
+MC 00010CB8 00000400 %RMS-W-BREAK_APPL, application break instruction fault, break code=!XQ, break arg=!XQ, PC=!XH, PS=!XL
+MC 00010CC0 00000000 %RMS-W-TIE_GET_FRAMES, request for frame count from TIE condition handler
+MC 00010CC8 00000000 %RMS-W-TIE_PRE_UNWIND, determine if unwind target is within TIE frame
+MC 00010CD0 00000000 %RMS-W-TIE_UNWIND, unwind to encapsulated TIE frame in progress
+MC 00010CD8 00000000 %RMS-W-TIE_GOTO_UNWIND, goto unwind to encapsulated TIE frame in progress
+MC 00010CE0 00000000 %RMS-W-HBMMCREPOSTMRG, HBMM master bitmaps will be created after shadow set merge completes
+MC 00010CE8 00000200 %RMS-W-FPMODECTL, floating-point control settings (!AZ) do not match the value specified during compilation (!AZ)
+MC 00010CF0 00000200 %RMS-W-FPMODEPC, floating-point precision setting (!AZ) does not match the value specified during compilation (!AZ)
+MC 00010CF8 00000200 %RMS-W-FPMODERC, floating-point rounding setting (!AZ) does not match the value specified during compilation (!AZ)
+MC 00010D00 00000000 %RMS-W-ARGTYP1, argument info type for argument 1 does not match expected type
+MC 00010D08 00000000 %RMS-W-ARGTYP2, argument info type for argument 2 does not match expected type
+MC 00010D10 00000000 %RMS-W-ARGTYP3, argument info type for argument 3 does not match expected type
+MC 00010D18 00000000 %RMS-W-ARGTYP4, argument info type for argument 4 does not match expected type
+MC 00010D20 00000000 %RMS-W-ARGTYP5, argument info type for argument 5 does not match expected type
+MC 00010D28 00000000 %RMS-W-ARGTYP6, argument info type for argument 6 does not match expected type
+MC 00010D30 00000000 %RMS-W-ARGTYP7, argument info type for argument 7 does not match expected type
+MC 00010D38 00000000 %RMS-W-ARGTYP8, argument info type for argument 8 does not match expected type
+MC 00010D40 00000000 %RMS-W-DEFER_ASTS, successful return, but ast delivery deferral requested
+MC 00010E00 00000000 %RMS-W-LINEABRT, host aborted transmission or failed to respond
+MC 00010E08 00000000 %RMS-W-DEADLOCK, deadlock detected
+MC 00010E10 00000000 %RMS-W-NOLOCKID, no lock ID available
+MC 00010E18 00000000 %RMS-W-EXDEPTH, exceeded allowed depth
+MC 00010E20 00000000 %RMS-W-PARTMAPPED, some file map pointers not permanently resident
+MC 00010E28 00000000 %RMS-W-CANCELGRANT, cannot cancel a granted lock
+MC 00010E30 00000000 %RMS-W-RETRY, retry operation
+MC 00010E38 00000000 %RMS-W-BADACL, ACL is corrupt
+MC 00010E40 00000000 %RMS-W-ACEEXISTS, ACE already exists in ACL
+MC 00010E48 00000000 %RMS-W-UNSUPPORTED, unsupported operation or function
+MC 00010E50 00000000 %RMS-W-NORIGHTSDB, rights database file not found
+MC 00010E58 00000000 %RMS-W-LOGSTALL, transaction logging activity is stalled
+MC 00010E60 00000000 %RMS-W-LOGFULL, transaction log file is full
+MC 00010E68 00000000 %RMS-W-PWDINDIC, password found in system dictionary; please choose another string
+MC 00010E70 00000000 %RMS-W-PWDINHIS, password found in history list; please choose a new password
+MC 00010E78 00000000 %RMS-W-PWDWEAK, password is too easy to guess; please choose another string
+MC 00010E80 00000000 %RMS-W-USEGENPWD, password history list is full; please use generated passwords
+MC 00010E88 00000000 %RMS-W-INVBUSNAM, invalid local area VMScluster BUS name
+MC 00010E90 00000000 %RMS-W-INVCOMPTYPE, invalid component type
+MC 00010E98 00000000 %RMS-W-INVCOMPID, invalid component ID
+MC 00010EA0 00000000 %RMS-W-INVCOMPLIST, invalid component list
+MC 00010EA8 00000000 %RMS-W-NOCOMPLSTS, no component lists are defined
+MC 00010EB0 00000000 %RMS-W-INVSECDOMAIN, request originated outside of local security domain
+MC 00010EB8 00000000 %RMS-W-BADCHECKSUM, message checksum failure
+MC 00010EC0 00000000 %RMS-W-ARBTOOBIG, access rights block too big
+MC 00010EC8 00000000 %RMS-W-ORBTOOBIG, object rights block too big
+MC 00010ED0 00000000 %RMS-W-INVAJLNAM, invalid security audit journal name
+MC 00010ED8 00000000 %RMS-W-TOOMANYAJL, too many security audit journals encountered
+MC 00010EE0 00000000 %RMS-W-RSDMINUSE, resource domain in use
+MC 00010EE8 00000000 %RMS-W-RSDMNOTFOU, resource domain not found
+MC 00010EF0 00000000 %RMS-W-INVUICGRP, invalid UIC group
+MC 00010EF8 00000000 %RMS-W-RSDM_ACTIVE, resource domain active
+MC 00010F00 00000000 %RMS-W-OBJLOCKED, security object is locked by another user
+MC 00010F08 00000000 %RMS-W-NOTMPNAM, template profile not found
+MC 00010F10 00000000 %RMS-W-INVCLSITM, invalid item code for selected class
+MC 00010F18 00000000 %RMS-W-NOTSHRTBL, selected logical name table is not shared
+MC 00010F20 00000000 %RMS-W-MMATORB, selected security object mismatch
+MC 00010F28 00000000 %RMS-W-NOSUCHVOL, no such volume
+MC 00010F30 00000000 %RMS-W-OBJNOTLOCKED, security object context is not write-locked
+MC 00010F38 00000000 %RMS-W-ILLRSDM, operation not allowed on resource domain
+MC 00010F40 00000000 %RMS-W-NOCLASSSUPPORT, classification not supported on the selected object
+MC 00010F48 00000000 %RMS-W-INVSECOPER, invalid security classification for this operation
+MC 00010F50 00000000 %RMS-W-NODELJNLACT, cannot delete file while journaling active
+MC 00010F58 00000000 %RMS-W-INVFILFOROP, invalid file specification for operation
+MC 00010F60 00000000 %RMS-W-NOOBJSRV, object server not available
+MC 00010F68 00000000 %RMS-W-NOFILEACCESS, unable to obtain file access lock
+MC 00010F70 00000000 %RMS-W-BADFILESIZE, file size mismatch
+MC 00010F78 00000000 %RMS-W-NOTFULLYMAPPED, file is no longer fully mapped
+MC 00010F80 00000000 %RMS-W-BADWINCNT, bad window pointer count
+MC 00010F88 00000000 %RMS-W-BADWINLBN, bad window pointer logical block number
+MC 00010F90 00000000 %RMS-W-BADWINRVN, bad window pointer relative volume number
+MC 00010F98 00000000 %RMS-W-EXTRAWINDOW, window pointer exists without a file header pointer
+MC 00010FA0 00000000 %RMS-W-REVISED, file was revised
+MC 00010FA8 00000000 %RMS-W-TIMENOTSET, time service enabled; enter a time service command to update the time
+MC 00010FB0 00000000 %RMS-W-WAIT_CALLERS_MO, system service dispatcher will wait in callers mode
+MC 00010FB8 00000000 %RMS-W-NOT_LOADED, system service or exec routine is not loaded
+MC 00010FC0 00000000 %RMS-W-DRV_NOUNLOAD, device driver is not unloadable
+MC 00010FC8 00000000 %RMS-W-INVARG, invalid argument
+MC 00010FD0 00000000 %RMS-W-QIO_CROCK, system service dispatcher will fault address @R1
+MC 00010FD8 00000000 %RMS-W-ALTER, alter stack frames
+MC 00010FE0 00000000 %RMS-W-AFR_ENABLED, alignment fault reporting already enabled
+MC 00010FE8 00000000 %RMS-W-AFR_NOT_ENABLED, alignment fault reporting not yet enabled
+MC 00010FF0 00000000 %RMS-W-SHELFERROR, access to shelved file failed
+MC 00010FF8 00000000 %RMS-W-PERSONANONGRATA, invalid persona argument
+MC 00011000 00000300 %RMS-W-APPENDED, !AS appended to !AS (!UL block!%S)
+MC 00011008 00000300 %RMS-W-APPENDED, !AS appended to !AS (!UL record!%S)
+MC 00011010 00000200 %RMS-W-BADDATA, invalid data (!XB) at !XL
+MC 00011018 00000200 %RMS-W-BADFIELD, !AS field invalid at !XL
+MC 00011020 00000200 %RMS-W-BADDATA, invalid data (!XL) at !XL
+MC 00011028 00000200 %RMS-W-BADDATA, invalid data (!XW) at !XL
+MC 00011030 00000100 %RMS-W-BEGIN, !AS beginning
+MC 00011038 00000200 %RMS-W-BEGIN, !AS beginning at !%D
+MC 00011040 00000200 %RMS-W-BEGIN, !AS beginning at !%T
+MC 00011048 00000100 %RMS-W-CLICB, CLI control block at !XL
+MC 00011050 00000100 %RMS-W-CLOSEIN, error closing !AS as input
+MC 00011058 00000100 %RMS-W-CLOSEOUT, error closing !AS as output
+MC 00011060 00000300 %RMS-W-COPIED, !AS copied to !AS (!UL block!%S)
+MC 00011068 00000300 %RMS-W-COPIED, !AS copied to !AS (!UL record!%S)
+MC 00011070 00000100 %RMS-W-CREATED, !AS created
+MC 00011078 00000100 %RMS-W-ENDED, !AS ended
+MC 00011080 00000200 %RMS-W-ENDED, !AS ended at !%D
+MC 00011088 00000200 %RMS-W-ENDED, !AS ended at !%T
+MC 00011090 00000100 %RMS-W-NEWFILES, !UL file!%S created
+MC 00011098 00000100 %RMS-W-OPENIN, error opening !AS as input
+MC 000110A0 00000100 %RMS-W-OPENOUT, error opening !AS as output
+MC 000110A8 00000100 %RMS-W-OVERLAY, !AS being overwritten
+MC 000110B0 00000100 %RMS-W-READERR, error reading !AS
+MC 000110B8 00000100 %RMS-W-REPLACED, !AS being replaced
+MC 000110C0 00000000 %RMS-W-CONCAT, wildcard specification cannot be concatenated
+MC 000110C8 00000000 %RMS-W-WILDOUTVER, wildcard version required for output file
+MC 000110D0 00000100 %RMS-W-WRITEERR, error writing !AS
+MC 000110D8 00000100 %RMS-W-ABORT, !AS aborted
+MC 000110E0 00000200 %RMS-W-ABORT, !AS aborted at !%D
+MC 000110E8 00000200 %RMS-W-ABORT, !AS aborted at !%T
+MC 000110F0 00000200 %RMS-W-SYSERROR, !AS system service error at PC !XL
+MC 000110F8 00000100 %RMS-W-SYNTAX, error parsing '!AS'
+MC 00011100 00000100 %RMS-W-NOVALUE, '!AS' keyword requires a value
+MC 00011108 00000100 %RMS-W-BADKEY, '!AS' is an invalid keyword
+MC 00011110 00000100 %RMS-W-BADVALUE, '!AS' is an invalid keyword value
+MC 00011118 00000100 %RMS-W-BADDELIM, invalid delimiter following '!AS'
+MC 00011120 00000000 %RMS-W-BADLOGIC, internal logic error detected
+MC 00011128 00000000 %RMS-W-NOWILD, no wildcard permitted
+MC 00011130 00000100 %RMS-W-TEXT, !AS
+MC 00011138 00000000 %RMS-W-CONCAT, indexed file cannot be concatenated
+MC 00011140 00000000 %RMS-W-CONCAT, relative file cannot be concatenated
+MC 00011148 00000100 %RMS-W-HIGHVER, higher version of !AS already exists
+MC 00011150 00000100 %RMS-W-BADLOGIC, internal logic error detected at PC !XL
+MC 00011158 00000100 %RMS-W-ATPC, at PC !XL
+MC 00011160 00000100 %RMS-W-BADVALUE, '!AS' is an invalid number of copies
+MC 00011168 00000100 %RMS-W-BADVALUE, '!AS' is an invalid form type
+MC 00011170 00000100 %RMS-W-BADVALUE, '!AS' is an invalid job identifier
+MC 00011178 00000100 %RMS-W-BADVALUE, '!AS' is an invalid job name
+MC 00011180 00000100 %RMS-W-BADVALUE, '!AS' is an invalid priority
+MC 00011188 00000100 %RMS-W-BADVALUE, '!AS' is an invalid queue name
+MC 00011190 00000100 %RMS-W-BADVALUE, '!AS' is an invalid time specification
+MC 00011198 00000100 %RMS-W-NOQUEUE, !AS queue does not exist
+MC 000111A0 00000100 %RMS-W-NOJOB, job !UW not found in !AS queue
+MC 000111A8 00000100 %RMS-W-NOJOB, job !AS not found in !AS queue
+MC 000111B0 00000000 %RMS-W-SYSERROR, system service error
+MC 000111B8 00000100 %RMS-W-NOTCOPIED, !AS not copied
+MC 000111C0 00000100 %RMS-W-NOTCMPLT, !AS not completely copied
+MC 000111C8 00000000 %RMS-W-RMSERROR, RMS service error
+MC 000111D0 00000100 %RMS-W-UNXPCTSTS, unexpected status detected. Expected '!AS'. Found:
+MC 000111D8 00000000 %RMS-W-CONCAT, hashed file cannot be concatenated
+MC 000111E0 00000200 %RMS-W-INCOMPAT, !AS (input) and !AS (output) have incompatible attributes
+MC 000111E8 00000000 %RMS-W-VALERR, specified value is out of legal range
+MC 000111F0 00000100 %RMS-W-FILNOTDEL, error deleting !AS
+MC 000111F8 00000100 %RMS-W-CONFDEL, !/!AS, delete? (Y or N): 
+MC 00011200 00000100 %RMS-W-DELETED, !AS deleted
+MC 00011208 00000000 %RMS-W-DELVER, explicit version number or wild card required
+MC 00011210 00000000 %RMS-W-PURGEVER, version numbers not permitted
+MC 00011218 00000100 %RMS-W-CLOSEDEL, error closing !AS
+MC 00011220 00000000 %RMS-W-DIRTOOBUS, obsolete
+MC 00011228 00000000 %RMS-W-NOFILPURG, no files purged
+MC 00011230 00000100 %RMS-W-FILNOTPUR, error deleting !AS
+MC 00011238 00000100 %RMS-W-SEARCHFAIL, error searching for !AS
+MC 00011240 00000000 %RMS-W-DELINTERR, obsolete
+MC 00011248 00000100 %RMS-W-PARSEFAIL, error parsing !AS
+MC 00011250 00000100 %RMS-W-FILPURGED, !AS deleted
+MC 00011258 00000100 %RMS-W-ENDABORT, !AS compilation aborted
+MC 00011260 00000200 %RMS-W-ENDDIAGS, !AS completed with !UL diagnostic!%S
+MC 00011268 00000200 %RMS-W-ENDNOOBJ, !AS completed with !UL diagnostic!%S - object deleted
+MC 00011270 00000000 %RMS-W-HALTED, transfer has been halted
+MC 00011278 00000000 %RMS-W-NOCMDMEM, no command memory has been allocated
+MC 00011280 00000000 %RMS-W-QEMPTY, queue empty
+MC 00011288 00000000 %RMS-W-CBT, insufficient contiguous space, file copied non-contiguously
+MC 00011290 00000100 %RMS-W-EXISTS, !AS already exists
+MC 00011298 00000100 %RMS-W-UNLOCKED, !AS unlocked
+MC 000112A0 00000200 %RMS-W-RENAMED, !AS renamed to !AS
+MC 000112A8 00000200 %RMS-W-PROTECTED, protection on !AS changed to !AS
+MC 000112B0 00000100 %RMS-W-NOTLOCKED, !AS was not locked
+MC 000112B8 00000100 %RMS-W-ACTIMAGE, error activating image !AS
+MC 000112C0 00000100 %RMS-W-DIRNOTCRE, !AS directory file not created
+MC 000112C8 00000100 %RMS-W-NODESTQUE, no such destination queue !AS
+MC 000112D0 00000100 %RMS-W-ILLDESQUE, illegal destination queue name !AS
+MC 000112D8 00000000 %RMS-W-NOTTERM, input device is not a terminal
+MC 000112E0 00000000 %RMS-W-CONFQUAL, conflicting qualifiers
+MC 000112E8 00000100 %RMS-W-ILLDIRCOPY, illegal directory copy of !AS attempted
+MC 000112F0 00000000 %RMS-W-INSVIRMEM, insufficient virtual memory
+MC 000112F8 00000100 %RMS-W-CREATEDSTM, !AS has been created in stream format
+MC 00011300 00000000 %RMS-W-NOTRUNC, truncation not allowed for this file organization
+MC 00011308 00000100 %RMS-W-PRODNOTINS, optional software product !AS not installed
+MC 00011310 00000200 %RMS-W-TOTAL, !UL file!%S deleted (!UL block!%S)
+MC 00011318 00000200 %RMS-W-FILPURG, !AS deleted (!UL block!%S)
+MC 00011320 00000200 %RMS-W-FILDEL, !AS deleted (!UL block!%S)
+MC 00011328 00000200 %RMS-W-INVQUAVAL, value '!AS' invalid for /!AS qualifier
+MC 00011330 00000000 %RMS-W-NOFILES, no files selected
+MC 00011338 00000100 %RMS-W-FILNOTACC, file not accessible !AS
+MC 00011340 00000100 %RMS-W-QUALMISS, qualifier, !AS, missing from command line
+MC 00011348 00000100 %RMS-W-FILSPCSRCH, file specification !AS contains a search list
+MC 00011350 00000000 %RMS-W-NOSRCHLST, this command does not support search lists
+MC 00011358 00000000 %RMS-W-NOSUCHID, unknown rights identifier
+MC 00011360 00000100 %RMS-W-AMBIGANS, !AS is an ambiguous answer - supply more characters
+MC 00011368 00000100 %RMS-W-INVALANS, !AS is an invalid answer
+MC 00011370 00000000 %RMS-W-PRDCONT, Product execution continuing
+MC 00011378 00000100 %RMS-W-NOTDELETED, error deleting !AS
+MC 00011380 00000200 %RMS-W-NOMEANING, qualifiers !AS are no longer meaningful for the !AS command
+MC 00011388 00000100 %RMS-W-OPENERR, error opening !AS
+MC 00011390 00000100 %RMS-W-CLOSEERR, error closing !AS
+MC 00011398 00000100 %RMS-W-BADFORMAT, format version mismatch in file !AS
+MC 000113A0 00000000 %RMS-W-FILDID, unable to process file specification containing DID
+MC 000113A8 00000000 %RMS-W-FILFID, unable to process file specification containing FID
+MC 000113B0 00000000 %RMS-W-FILDIDFID, unable to process file specification containing DID and/or FID
+MC 000113B8 00000000 %RMS-W-NOFIDS, FIDs not permitted
+MC 000113C0 00000500 %RMS-W-FILPURG, !AS deleted (!UL!#<.!2ZL!>!2AC)
+MC 000113C8 00000500 %RMS-W-FILDEL, !AS deleted (!UL!#<.!2ZL!>!2AC)
+MC 000113D0 00000500 %RMS-W-TOTAL, !UL file!%S deleted (!UL!#<.!2ZL!>!2AC)
+MC 000113D8 00000600 %RMS-W-COPIED, !AS copied to !AS (!UL!#<.!2ZL!>!2AC)
+MC 000113E0 00000600 %RMS-W-APPENDED, !AS appended to !AS (!UL!#<.!2ZL!>!2AC)
+MC 000113E8 00000100 %RMS-W-MBXDEL, Mailbox !AS has been marked for deletion
+MC 000113F0 00000100 %RMS-W-SYMLINKERR, error creating symbolic link !AS
+MC 00012000 00000000 %RMS-W-BADISD, illegal image section descriptor
+MC 00012008 00000000 %RMS-W-RELINK, obsolete executable image; please relink
+MC 00012010 00000000 %RMS-W-NOTINSTALL, writable shareable images must be installed
+MC 00012018 00000000 %RMS-W-SHARTOOBIG, new version of shareable image too big; relink all images
+MC 00012020 00000000 %RMS-W-NOP1VA, P1 space not supported in shareable images
+MC 00012028 00000000 %RMS-W-MULTRMS, multiple RMS vectors specified
+MC 00012030 00000000 %RMS-W-VECFULL, privileged vector limit exceeded
+MC 00012038 00000000 %RMS-W-IVLVEC, section not installed with privilege
+MC 00012040 00000000 %RMS-W-INSFSPTS, insufficient SPTEs available
+MC 00012048 00000000 %RMS-W-DISCONNECT, process is disconnected from requested interrupt vector
+MC 00012050 00000000 %RMS-W-PRIVINSTALL, shareable images must be installed to run privileged image
+MC 00012058 00000000 %RMS-W-PROTINSTALL, protected images must be installed
+MC 00012060 00000000 %RMS-W-BADVEC, invalid change mode or message vector
+MC 00012068 00000000 %RMS-W-REMRSRC, insufficient system resources at remote node
+MC 00012070 00000000 %RMS-W-PROTOCOL, network protocol error
+MC 00012078 00000000 %RMS-W-THIRDPARTY, network logical link disconnected by a third party
+MC 00012080 00000000 %RMS-W-NOSUCHUSER, login information not recognized at remote node
+MC 00012088 00000000 %RMS-W-SHUT, remote node no longer accepting connects
+MC 00012090 00000000 %RMS-W-UNREACHABLE, remote node is not currently reachable
+MC 00012098 00000000 %RMS-W-INVLOGIN, login information invalid at remote node
+MC 000120A0 00000000 %RMS-W-NOSUCHOBJ, network object is unknown at remote node
+MC 000120A8 00000000 %RMS-W-EXCPUTIM, CPU time limit expired
+MC 000120B0 00000000 %RMS-W-OPRABORT, aborted by operator
+MC 000120B8 00000000 %RMS-W-SHRIDMISMAT, ident mismatch with shareable image
+MC 000120C0 00000000 %RMS-W-COMMHARD, communications hardware error detected
+MC 000120C8 00000000 %RMS-W-IVCHAR, invalid character
+MC 000120D0 00000000 %RMS-W-DEVINACT, device inactive
+MC 000120D8 00000000 %RMS-W-CONNECFAIL, connect to network object timed-out or failed
+MC 000120E0 00000000 %RMS-W-LINKABORT, network partner aborted logical link
+MC 000120E8 00000000 %RMS-W-LINKDISCON, network partner disconnected logical link
+MC 000120F0 00000000 %RMS-W-LINKEXIT, network partner exited
+MC 000120F8 00000000 %RMS-W-PATHLOST, path to network partner node lost
+MC 00012100 00000000 %RMS-W-CLEARED, virtual call was cleared
+MC 00012108 00000000 %RMS-W-RESET, circuit was reset
+MC 00012110 00000000 %RMS-W-UNSOLICIT, response not solicited
+MC 00012118 00000000 %RMS-W-TOOMANYREDS, too many redirects
+MC 00012120 00000000 %RMS-W-IVLOCKID, invalid lock ID
+MC 00012128 00000000 %RMS-W-SUBLOCKS, cannot dequeue a lock with sublocks
+MC 00012130 00000000 %RMS-W-PARNOTGRANT, parent lock must be granted
+MC 00012138 00000000 %RMS-W-CVTUNGRANT, cannot convert an ungranted lock
+MC 00012140 00000000 %RMS-W-FORCEDERROR, forced error flagged in last sector read
+MC 00012148 00000000 %RMS-W-ILLSELF, illegal self reference
+MC 00012150 00000000 %RMS-W-ILLCDTST, illegal connection descriptor table state
+MC 00012158 00000000 %RMS-W-NOLISTENER, specified remote system process not listening
+MC 00012160 00000000 %RMS-W-EXGBLPAGFIL, exceeded global page file limit
+MC 00012168 00000000 %RMS-W-BADRCT, replacement and caching table unrecoverable I/O error
+MC 00012170 00000000 %RMS-W-DIRNOTEMPTY, directory file is not empty
+MC 00012178 00000000 %RMS-W-FORCEDEXIT, forced exit of image or process by job controller
+MC 00012180 00000000 %RMS-W-NOTPRINTED, failed to queue spool file for print
+MC 00012188 00000000 %RMS-W-JBCERROR, error communicating with job controller
+MC 00012190 00000000 %RMS-W-NOLICENSE, operation requires software license
+MC 00012198 00000000 %RMS-W-VCBROKEN, virtual circuit broken
+MC 000121A0 00000000 %RMS-W-VCCLOSED, virtual circuit closed
+MC 000121A8 00000000 %RMS-W-INSFCDT, insufficient CDT entries
+MC 000121B0 00000000 %RMS-W-DEVNOTDISM, device not dismounted
+MC 000121B8 00000000 %RMS-W-NOSHRIMG, privileged shareable image cannot have outbound calls
+MC 000121C0 00000000 %RMS-W-DUPUNIT, duplicate unit number detected by MSCP controller
+MC 000121C8 00000000 %RMS-W-BADACLCTX, ACL context has been corrupted
+MC 000121D0 00000000 %RMS-W-SERIOUSEXCP, serious exception detected by TMSCP controller
+MC 000121D8 00000000 %RMS-W-TEMPLATEDEV, template device cannot be allocated
+MC 000121E0 00000000 %RMS-W-IVACL, invalid access control list entry syntax
+MC 000121E8 00000000 %RMS-W-NOSUCHID, unknown rights identifier
+MC 000121F0 00000000 %RMS-W-NOLCLMEDA, no local program storage media available
+MC 000121F8 00000000 %RMS-W-NOREGAVIL, no region available to execute program
+MC 00012200 00000000 %RMS-W-NOREGSUIT, no region suited to executing program
+MC 00012208 00000000 %RMS-W-NOSUCHPGM, no such program found
+MC 00012210 00000000 %RMS-W-PGMLDFAIL, program load failure
+MC 00012218 00000000 %RMS-W-PGMSTDALN, program must be run standalone
+MC 00012220 00000000 %RMS-W-IVIDENT, invalid identifier format
+MC 00012228 00000000 %RMS-W-DUPIDENT, duplicate identifier
+MC 00012230 00000000 %RMS-W-INCSEGTRA, incomplete segmented transfer request posted
+MC 00012238 00000000 %RMS-W-NODELEAVE, node leaving the cluster
+MC 00012240 00000000 %RMS-W-KERNELINV, kernel mode execution invalid
+MC 00012248 00000000 %RMS-W-EXLNMQUOTA, logical name table is full
+MC 00012250 00000000 %RMS-W-PARENT_DEL, illegal attempt to delete parent logical name table
+MC 00012258 00000000 %RMS-W-PARNOTSYS, parent not system owned lock
+MC 00012260 00000000 %RMS-W-INSSWAPSPACE, insufficient swap file space available
+MC 00012268 00000000 %RMS-W-VOLOERR, must override owner identifier field in VOL1 label
+MC 00012270 00000000 %RMS-W-DATALATE, data late error detected by mass storage subsystem
+MC 00012278 00000000 %RMS-W-OVRMAXARG, maximum parameter count exceeded
+MC 00012280 00000000 %RMS-W-SHACHASTA, shadow set has changed state
+MC 00012288 00000000 %RMS-W-TERMNETDEV, terminal is a network communications device
+MC 00012290 00000000 %RMS-W-NOLOGTAB, no logical name table name match
+MC 00012298 00000000 %RMS-W-WRONGNAME, local node name must match SCSNODE
+MC 000122A0 00000000 %RMS-W-NOVOLACC, user has no access to magnetic tape volume
+MC 000122A8 00000000 %RMS-W-NOFILACC, user has no access to magnetic tape file
+MC 000122B0 00000000 %RMS-W-INVEXHLIST, termination handler control block list is corrupted
+MC 000122B8 00000000 %RMS-W-NOACLSUPPORT, ACLs not supported on selected object
+MC 000122C0 00000000 %RMS-W-INVSECLASS, invalid security classification block
+MC 000122C8 00000000 %RMS-W-INCSHAMEM, incompatible shadow set member
+MC 000122D0 00000000 %RMS-W-DEVNOTSHR, device not currently shareable
+MC 000122D8 00000000 %RMS-W-RUCONFLICT, another facility has active recovery units on file
+MC 000122E0 00000000 %RMS-W-DATALOST, data lost
+MC 000122E8 00000000 %RMS-W-REMOTE_PROC, operation not allowed; process is on remote node
+MC 000122F0 00000000 %RMS-W-CPUNOTACT, requested CPU not active
+MC 000122F8 00000000 %RMS-W-SRVMMAT, cryptographic service mismatch
+MC 00012300 00000000 %RMS-W-EXLICENSE, licensed product has exceeded current license limits
+MC 00012308 00000000 %RMS-W-INVLICENSE, licensed product is not authorized for this operating mode
+MC 00012310 00000000 %RMS-W-LICENSE_LEVEL, license level does not match product version
+MC 00012318 00000000 %RMS-W-INV_HW_ID, invalid hardware identifier (reserved for future use)
+MC 00012320 00000000 %RMS-W-BADCONTEXT, invalid or corrupted context encountered
+MC 00012328 00000000 %RMS-W-TOOMUCHCTX, too many concurrent context streams requested
+MC 00012330 00000000 %RMS-W-VA_IN_USE, virtual address already in use
+MC 00012338 00000000 %RMS-W-NODELETE, object cannot be deleted
+MC 00012340 00000000 %RMS-W-NOSUCHCPU, CPU does not exist, system is not a multiprocessor, or multiprocessing disabled
+MC 00012348 00000000 %RMS-W-IMGVEXC, image exiting with pending vector exceptions
+MC 00012350 00000000 %RMS-W-NOSAVPEXC, no saved vector exception for the exception-id
+MC 00012358 00000000 %RMS-W-NOSUCHTID, specified transaction not found
+MC 00012360 00000000 %RMS-W-NOSUCHRM, specified resource manager not found
+MC 00012368 00000000 %RMS-W-NOCURTID, no process default transaction currently defined
+MC 00012370 00000000 %RMS-W-WRONGSTATE, invalid transaction state for requested event
+MC 00012378 00000000 %RMS-W-VETO, resource manager refuses request to commit
+MC 00012380 00000000 %RMS-W-PWDSYNTAX, illegal password syntax
+MC 00012388 00000000 %RMS-W-PWDNOTDIF, new password must be different from current password
+MC 00012390 00000100 %RMS-W-INVPWDLEN, password length must be between !UB and 32 characters
+MC 00012398 00000000 %RMS-W-SYSVERDIF, system version mismatch; please relink
+MC 000123A0 00000000 %RMS-W-HWM_STALL, internal I/O stalled by highwater mark activity
+MC 000123A8 00000000 %RMS-W-NOSUSPEND, process cannot be suspended
+MC 000123B0 00000000 %RMS-W-NOSUCHPART, specified participant not found
+MC 000123B8 00000000 %RMS-W-RMALRDCL, resource manager name has already been declared
+MC 000123C0 00000000 %RMS-W-ALRCURTID, a default transaction is currently defined
+MC 000123C8 00000000 %RMS-W-INVLOG, transaction log file format is invalid
+MC 000123D0 00000000 %RMS-W-BADLOGVER, transaction log file format version is unsupported
+MC 000123D8 00000000 %RMS-W-OPINPROG, previously requested operation is incomplete
+MC 000123E0 00000000 %RMS-W-WRONGACMODE, operation attempted from insufficiently privileged access mode
+MC 000123E8 00000000 %RMS-W-SUBTRACED, protected subsystem image cannot be linked /TRACE or /DEBUG
+MC 000123F0 00000000 %RMS-W-ARCHIVING, archive in progress
+MC 000123F8 00000000 %RMS-W-ARCHIVED, file contents archived
+MC 00012400 00000000 %RMS-W-SITEPWDFAIL, failure to load site-specific password policy
+MC 00012408 00000000 %RMS-W-NOSUCHCPB, capability does not exist
+MC 00012410 00000000 %RMS-W-CPUCAP, requested CPU unable to run process due to lack of capabilities
+MC 00012418 00000000 %RMS-W-LOADER, loader cycle error
+MC 00012420 00000000 %RMS-W-HSTBUFACC, host buffer access error
+MC 00012428 00000000 %RMS-W-INCONOLCK, inconsistent ORB lock database
+MC 00012430 00000000 %RMS-W-INVEVENT, invalid event notification request
+MC 00012438 00000000 %RMS-W-NOSUCHFAC, event facility object does not exist
+MC 00012440 00000000 %RMS-W-NOCALLPRIV, third-party lacks privilege for attempted operation
+MC 00012448 00000000 %RMS-W-INSFLPGS, insufficient Fluid Pages available
+MC 00012450 00000000 %RMS-W-INSFRPGS, insufficient Free Pages available
+MC 00012458 00000000 %RMS-W-BADREASON, invalid abort reason code
+MC 00012460 00000000 %RMS-W-NOSUCHBID, specified transaction branch not found
+MC 00012468 00000000 %RMS-W-NOTORIGIN, the origin transaction branch is not in this process
+MC 00012470 00000000 %RMS-W-NOLOG, transaction log not found
+MC 00012478 00000000 %RMS-W-TPDISABLED, the TP_SERVER process is not running on this node
+MC 00012480 00000000 %RMS-W-BRANCHENDED, specified transaction branch has already been ended
+MC 00012488 00000000 %RMS-W-BRANCHSTARTED, specified transaction branch has already been started
+MC 00012490 00000000 %RMS-W-NOSUCHREPORT, specified transaction event report not found
+MC 00012498 00000000 %RMS-W-BADTIME, invalid timestamp range
+MC 000124A0 00000000 %RMS-W-PARTJOINED, participant of the same name already joined to this transaction
+MC 000124A8 00000000 %RMS-W-NOPRESUME, not all transaction event reports have been given
+MC 000124B0 00000000 %RMS-W-RECOVERCANCEL, transaction recovery canceled by explicit request
+MC 000124B8 00000000 %RMS-W-CURTIDCHANGE, already a change to the process default transaction in progress
+MC 000124C0 00000000 %RMS-W-NOREADER, no read channel is assigned to the device
+MC 000124C8 00000000 %RMS-W-NOWRITER, no write channel is assigned to the device
+MC 000124D0 00000000 %RMS-W-DEVNOTWS, device is not a workstation device
+MC 000124D8 00000000 %RMS-W-NOCLASS, no matching object class was located
+MC 000124E0 00000000 %RMS-W-CONTEXTSKEW, context skew detected in security object services
+MC 000124E8 00000000 %RMS-W-BADFORGEDB, failure to load password generator database
+MC 000124F0 00000000 %RMS-W-NODOMAIN, resource domain not found
+MC 000124F8 00000000 %RMS-W-OVRMAXAUD, maximum security audit message size exceeded
+MC 00012500 00000000 %RMS-W-BADCHAIN, chained item list is inaccessible or else chain is circular
+MC 00012508 00000000 %RMS-W-BADBUFLEN, specified buffer length is invalid or out-of-range
+MC 00012510 00000000 %RMS-W-BADITMCOD, specified item code is invalid or out-of-range
+MC 00012518 00000000 %RMS-W-BADBUFADR, buffer address is invalid or inaccessible
+MC 00012520 00000000 %RMS-W-BADRETLEN, return length buffer address is invalid or inaccessible
+MC 00012528 00000000 %RMS-W-SSINOTHELD, protected subsystem identifier not held; ACL not modified
+MC 00012530 00000000 %RMS-W-SSAMISSING, protected subsystem identifier missing subsystem attribute; ACL not modified
+MC 00012538 00000000 %RMS-W-SSANOTAUTH, protected subsystem identifier attribute(s) not authorized; ACL not modified
+MC 00012540 00000000 %RMS-W-BADOWNER, owner UIC is invalid; object ownership not changed
+MC 00012548 00000000 %RMS-W-NAMESERVCOMMERR, name service communications error
+MC 00012550 00000000 %RMS-W-IVNODNAM, invalid node name
+MC 00012558 00000000 %RMS-W-CONFIG_SYNTAX, foreign device configuration description invalid
+MC 00012560 00000000 %RMS-W-SHELVED, file contents shelved
+MC 00012568 00000000 %RMS-W-DRVNOTVALID, device driver failed DPT consistency checks
+MC 00012570 00000000 %RMS-W-SLICING_DISABLE, image slicing is disabled
+MC 00012578 00000100 %RMS-W-NOCALLTRANS, code at !XL cannot call translated code
+MC 00012580 00000100 %RMS-W-TRANSCALLER, routine at !XL cannot be called by translated code
+MC 00012588 00000000 %RMS-W-ILLPRIPOL, illegal combination of scheduling priority and policy
+MC 00012590 00000000 %RMS-W-ILLPOLICY, illegal scheduling policy
+MC 00012598 00000000 %RMS-W-INSFRSPID, insufficient response IDs
+MC 000125A0 00000000 %RMS-W-INSFCREDITL, insufficient connection message buffer credits, low priority request
+MC 000125A8 00000000 %RMS-W-INSFCREDITH, insufficient connection message buffer credits, high priority request
+MC 000125B0 00000000 %RMS-W-INSFMAP, insufficient data mapping resources
+MC 000125B8 00000100 %RMS-W-SIG_INVARGTYPE, signature block specifies an invalid argument type; PC/PDA: !XL
+MC 000125C0 00000100 %RMS-W-SIG_INVFLTARG, signature block specifies an invalid floating argument type; PC/PDA: !XL
+MC 000125C8 00000100 %RMS-W-SIG_INVARGLIST, signature block will generate more than 255 OpenVMS arguments; PC/PDA: !XL
+MC 000125D0 00000100 %RMS-W-SIG_INVFUNCTYPE, signature block specifies an invalid function value type; PC/PDA: !XL
+MC 000125D8 00000100 %RMS-W-SIG_ARGMISMATCH, signature block & OpenVMS arglist have mismatched argument datatypes; PDA: !XL
+MC 000125E0 00000000 %RMS-W-NOTRANQUIL, classification not changed; object currently accessed
+MC 000125E8 00000100 %RMS-W-NOCALLTRANS_SUP, code at !XL called translated code in supervisor mode
+MC 000125F0 00000000 %RMS-W-DEVLISTFULL, device unit limit reached; no unit added
+MC 000125F8 00000000 %RMS-W-INSFP1POOL, insufficient process dynamic memory
+MC 00012600 00000000 %RMS-W-SIGNAL64, 64-bit signal array received
+MC 00012608 00000000 %RMS-W-ZEROALLOCLS, unit has a zero allocation class
+MC 00012610 00000000 %RMS-W-QUEUE_FULL, SCSI tagged command queue is full
+MC 00012618 00000000 %RMS-W-DEVICE_RESET, SCSI bus or device was reset
+MC 00012620 00000000 %RMS-W-ACA_ACTIVE, SCSI ACA operations are active
+MC 00012628 00000000 %RMS-W-BUS_PHASE_ERROR, SCSI bus phase error
+MC 00012630 00000000 %RMS-W-NOMULTITHREAD, multithread is either disabled or not initialized
+MC 00012638 00000000 %RMS-W-MTHREADACTIVE, multithread is already active
+MC 00012640 00000000 %RMS-W-MAXKTHREADS, maximum kernel thread count exceeded
+MC 00012648 00000000 %RMS-W-NOSUCHTHREAD, specified kernel thread does not exist
+MC 00012650 00000000 %RMS-W-NOTHREADMAN, no thread manager is registered
+MC 00012658 00000000 %RMS-W-NOSUCHUPCALL, specified upcall does not exist
+MC 00012660 00000000 %RMS-W-BADFANDLE, invalid fandle
+MC 00012668 00000000 %RMS-W-FANDLEBUSY, fandle is already in use
+MC 00012670 00000000 %RMS-W-UNALIGNED, IOSA or data buffer not aligned
+MC 00012678 00000000 %RMS-W-BADIOSADR, IOSA is not within buffer object
+MC 00012680 00000000 %RMS-W-ILLBUFOBJ, buffer object handle is not valid
+MC 00012688 00000000 %RMS-W-ILLMODIFIER, I/O function modifier is not permitted
+MC 00012690 00000000 %RMS-W-NOCCBBUFFOBJ, unable to lock down CCB into buffer object
+MC 00012698 00000000 %RMS-W-NORDACC, read access denied
+MC 000126A0 00000000 %RMS-W-NOWRTACC, write access denied
+MC 000126A8 00000000 %RMS-W-NOTNOCNVRT, device does not do LBN addressing
+MC 000126B0 00000000 %RMS-W-UNSUPVOLSET, volume sets not supported for Fast-IO
+MC 000126B8 00000000 %RMS-W-ARG_GTR_32_BITS, argument is not 32-bit sign-extended value
+MC 000126C0 00000000 %RMS-W-NOT64DEVFUNC, 64-bit address not supported by device for this function
+MC 000126C8 00000000 %RMS-W-CHANVIO, the specified channel was assigned from a more privileged access mode
+MC 000126D0 00000000 %RMS-W-GBLSEC_MISMATCH, global section type does not match service called
+MC 000126D8 00000000 %RMS-W-ILLRELPAG, invalid relative page argument specified
+MC 000126E0 00000000 %RMS-W-IVACMODE, invalid access mode specified
+MC 000126E8 00000000 %RMS-W-IVREGFLG, invalid region flag specified
+MC 000126F0 00000000 %RMS-W-IVREGID, invalid region id specified
+MC 000126F8 00000000 %RMS-W-IVREGPROT, invalid region protection specified
+MC 00012700 00000000 %RMS-W-IVVAFLG, invalid virtual address flag specified
+MC 00012708 00000000 %RMS-W-LEN_NOTBLKMULT, specified length is not a multiple of virtual disk blocks
+MC 00012710 00000000 %RMS-W-LEN_NOTPAGMULT, specified length is not a multiple of CPU-specific pages
+MC 00012718 00000000 %RMS-W-NOT_PROCESS_VA, specified virtual address is not a process space address
+MC 00012720 00000000 %RMS-W-OFF_NOTBLKALGN, specified offset is not virtual disk block aligned
+MC 00012728 00000000 %RMS-W-OFF_NOTPAGALGN, specified offset is not CPU-specific page aligned
+MC 00012730 00000000 %RMS-W-OFFSET_TOO_BIG, specified offset is too large for global section being mapped
+MC 00012738 00000000 %RMS-W-REGOWNVIO, region is owned by a more privileged access mode
+MC 00012740 00000000 %RMS-W-PROTVIO, file protection prohibits the type of access requested
+MC 00012748 00000000 %RMS-W-TOO_MANY_ARGS, routine called with too many arguments
+MC 00012750 00000000 %RMS-W-VA_NOTPAGALGN, specified virtual address is not CPU-specific page aligned
+MC 00012758 00000000 %RMS-W-NOEXTAUTH, external authentication is not available
+MC 00012760 00000000 %RMS-W-AUTHFAIL, authorization failure
+MC 00012768 00000000 %RMS-W-INVUSER, no such user
+MC 00012770 00000000 %RMS-W-ERRMAPAUTH, error mapping or authenticating user
+MC 00012778 00000000 %RMS-W-NORAD50, radix 50 name not supported
+MC 00012780 00000000 %RMS-W-BADMEDIA, disk or tape media is not useable
+MC 00012788 00000000 %RMS-W-UNRECOVRDER, unable to read data from media
+MC 00012790 00000000 %RMS-W-IVFORMAT, invalid media format for this device
+MC 00012798 00000000 %RMS-W-IVUNITFLAG, invalid unit flag encountered
+MC 000127A0 00000000 %RMS-W-IVPARAM, invalid parameter specified
+MC 000127A8 00000000 %RMS-W-NOSUCHENTRY, specified entry not located
+MC 000127B0 00000000 %RMS-W-ALLOCFAILED, unsuccessful attempt to allocate device
+MC 000127B8 00000000 %RMS-W-SHMEM_INCON, inconsistent shared memory state encountered
+MC 000127C0 00000000 %RMS-W-IVLOCKOP, invalid lock operation
+MC 000127C8 00000000 %RMS-W-IVLOCKTBL, invalid lock table
+MC 000127D0 00000000 %RMS-W-LOCKINUSE, invalid operation; lock is in use
+MC 000127D8 00000000 %RMS-W-LOCK_TIMEOUT, failed to acquire lock; request has timed out
+MC 000127E0 00000000 %RMS-W-BADLCKTBL, galaxy lock table is corrupt
+MC 000127E8 00000000 %RMS-W-NOBREAK, failed to acquire lock; lock ownership is broken
+MC 000127F0 00000000 %RMS-W-IVPROTOCOL, MSCP command protocol violation
+MC 000127F8 00000000 %RMS-W-NOWAIT, failed to acquire lock; NOWAIT was specified
+MC 00012800 00000000 %RMS-W-NOCMKRNL, operation requires CMKRNL privilege
+MC 00012808 00000000 %RMS-W-NOCMEXEC, operation requires CMEXEC privilege
+MC 00012810 00000000 %RMS-W-NOSYSNAM, operation requires SYSNAM privilege
+MC 00012818 00000000 %RMS-W-NOGRPNAM, operation requires GRPNAM privilege
+MC 00012820 00000000 %RMS-W-NOALLSPOOL, operation requires ALLSPOOL privilege
+MC 00012828 00000000 %RMS-W-NOIMPERSONATE, operation requires IMPERSONATE privilege
+MC 00012830 00000000 %RMS-W-NODIAGNOSE, operation requires DIAGNOSE privilege
+MC 00012838 00000000 %RMS-W-NOLOG_IO, operation requires LOG_IO privilege
+MC 00012840 00000000 %RMS-W-NOGROUP, operation requires GROUP privilege
+MC 00012848 00000000 %RMS-W-NOACNT, operation requires ACNT privilege
+MC 00012850 00000000 %RMS-W-NOPRMCEB, operation requires PRMCEB privilege
+MC 00012858 00000000 %RMS-W-NOPRMMBX, operation requires PRMMBX privilege
+MC 00012860 00000000 %RMS-W-NOPSWAPM, operation requires PSWAPM privilege
+MC 00012868 00000000 %RMS-W-NOALTPRI, operation requires ALTPRI privilege
+MC 00012870 00000000 %RMS-W-NOSETPRV, operation requires SETPRV privilege
+MC 00012878 00000000 %RMS-W-NOTMPMBX, operation requires TMPMBX privilege
+MC 00012880 00000000 %RMS-W-NOWORLD, operation requires WORLD privilege
+MC 00012888 00000000 %RMS-W-NOMOUNT, operation requires MOUNT privilege
+MC 00012890 00000000 %RMS-W-NOOPER, operation requires OPER privilege
+MC 00012898 00000000 %RMS-W-NOEXQUOTA, operation requires EXQUOTA privilege
+MC 000128A0 00000000 %RMS-W-NONETMBX, operation requires NETMBX privilege
+MC 000128A8 00000000 %RMS-W-NOVOLPRO, operation requires VOLPRO privilege
+MC 000128B0 00000000 %RMS-W-NOPHY_IO, operation requires PHY_IO privilege
+MC 000128B8 00000000 %RMS-W-NOBUGCHK, operation requires BUGCHK privilege
+MC 000128C0 00000000 %RMS-W-NOPRMGBL, operation requires PRMGBL privilege
+MC 000128C8 00000000 %RMS-W-NOSYSGBL, operation requires SYSGBL privilege
+MC 000128D0 00000000 %RMS-W-NOPFNMAP, operation requires PFNMAP privilege
+MC 000128D8 00000000 %RMS-W-NOSHMEM, operation requires SHMEM privilege
+MC 000128E0 00000000 %RMS-W-NOSYSPRV, operation requires SYSPRV privilege
+MC 000128E8 00000000 %RMS-W-NOBYPASS, operation requires BYPASS privilege
+MC 000128F0 00000000 %RMS-W-NOSYSLCK, operation requires SYSLCK privilege
+MC 000128F8 00000000 %RMS-W-NOSHARE, operation requires SHARE privilege
+MC 00012900 00000000 %RMS-W-NOUPGRADE, operation requires UPGRADE privilege
+MC 00012908 00000000 %RMS-W-NODOWNGRADE, operation requires DOWNGRADE privilege
+MC 00012910 00000000 %RMS-W-NOGRPPRV, operation requires GRPPRV privilege
+MC 00012918 00000000 %RMS-W-NOREADALL, operation requires READALL privilege
+MC 00012920 00000000 %RMS-W-NOIMPORT, operation requires IMPORT privilege
+MC 00012928 00000000 %RMS-W-NOAUDIT, operation requires AUDIT privilege
+MC 00012930 00000000 %RMS-W-NOSECURITY, operation requires SECURITY privilege
+MC 00012A00 00000000 %RMS-W-EXASTLM, exceeded AST quota
+MC 00012A08 00000000 %RMS-W-EXBIOLM, exceeded buffered I/O quota
+MC 00012A10 00000000 %RMS-W-EXBYTLM, exceeded byte count quota
+MC 00012A18 00000000 %RMS-W-EXDIOLM, exceeded direct I/O quota
+MC 00012A20 00000000 %RMS-W-EXFILLM, exceeded open file quota
+MC 00012A28 00000000 %RMS-W-EXPGFLQUOTA, exceeded pagefile quota
+MC 00012A30 00000000 %RMS-W-EXPRCLM, exceeded process limit
+MC 00012A38 00000000 %RMS-W-EXTQELM, exceeded timer queue entry quota
+MC 00012A40 00000000 %RMS-W-EXENQLM, exceeded enqueue quota
+MC 00012AF8 00000000 %RMS-W-EXBUFOBJLM, exceeded systemwide buffer object page limit (MAXBOBMEM)
+MC 00012B00 00000000 %RMS-W-MMSFAILED, media management process failed; operation disallowed
+MC 00012B08 00000000 %RMS-W-QPOOL_DEL_BUSY, a QIOServer pool block deletion request failed, delete thread busy
+MC 00012B18 00000000 %RMS-W-TOOFEWDEV, too few devices specified by media management system
+MC 00012B20 00000000 %RMS-W-AVRWAIT, cannot perform AVR with /NOASSIST; specify /ASSIST or device name
+MC 00012B40 00000000 %RMS-W-NO_MMS, no media management system is running
+MC 00012B48 00000000 %RMS-W-MMSREADY, the media management system is ready to continue
+MC 00012B50 00000000 %RMS-W-MMSNOTREADY, the media management system is not ready to continue
+MC 00012B58 00000000 %RMS-W-SKIP_CHECKS, protection checks should be skipped by the OpenVMS utility
+MC 00012B60 00000000 %RMS-W-NO_NOTIFY, the operator should not be notified
+MC 00012B68 00000000 %RMS-W-SKIP_EXPIRATION, expiration checks should be skipped by the OpenVMS utility
+MC 00012B70 00000000 %RMS-W-NOTATBOT, tape is not at BOT
+MC 00012B78 00000000 %RMS-W-PREVDENS, tape is set to previous density
+MC 00012B80 00000000 %RMS-W-RDBERR, unexpected Rdb error; see SMFS log file for more information
+MC 00012B88 00000000 %RMS-W-MDMSERR, unexpected MDMS error; see SMFS log file for more information
+MC 00012B90 00000000 %RMS-W-IVMEDTYP, invalid media type
+MC 00012B98 00000000 %RMS-W-IVDENS, invalid density
+MC 00012BA0 00000000 %RMS-W-IVPOOL, invalid scratch pool name
+MC 00012BA8 00000000 %RMS-W-IVEXPDAT, invalid file expiration date
+MC 00012BB0 00000000 %RMS-W-NOCONFMEDIA, no free volumes conform to the requested attributes
+MC 00012BB8 00000000 %RMS-W-PTE_NOT_EMPTY, attempt to release a non-zero system PTE
+MC 00012BC0 00000000 %RMS-W-CPUNOTAVAIL, cpu is not active or not enabled as a preferred CPU
+MC 00012BC8 00000000 %RMS-W-NOFASTPATH, fastpath is disabled
+MC 00012BD0 00000000 %RMS-W-EXITFORCED, forced exit of image or process by SYS$DELPRC
+MC 00012BD8 00000000 %RMS-W-FORCEX, forced exit of image from DCL STOP/IMAGE by another process
+MC 00012C00 00000000 %RMS-W-NOTASSUMING, no persona to discard
+MC 00012C08 00000000 %RMS-W-ALREADYASSUMING, current persona must be discarded before assuming another
+MC 00012C10 00000000 %RMS-W-INUSE, persona cannot be deleted as it is currently in use
+MC 00012C18 00000000 %RMS-W-USERDISABLED, account is disabled
+MC 00012C20 00000000 %RMS-W-NOCHJIB, more than one process in job; JIB not changed
+MC 00012C28 00000000 %RMS-W-NOTSUPFS, operation not supported by current file system
+MC 00012C30 00000000 %RMS-W-INSFTHREADS, insufficient threads available
+MC 00012C38 00000000 %RMS-W-NOBUFOBJID, requires rights identifier VMS$BUFFER_OBJECT_USER
+MC 00012C40 00000000 %RMS-W-NODELPERMANENT, permanent persona cannot be deleted
+MC 00012C48 00000000 %RMS-W-NOMEMRESID, requires rights identifier VMS$MEM_RESIDENT_USER
+MC 00012C50 00000000 %RMS-W-MRES_PFNSMALL, specified length is larger than reserved pre-allocated memory
+MC 00012C58 00000000 %RMS-W-MRES_INCON, inconsistent data for memory resident section creation
+MC 00012C60 00000000 %RMS-W-NORESERVEDMEM, specified memory is not reserved
+MC 00012C68 00000000 %RMS-W-RESERVEDMEMUSED, specified reserved memory is in use
+MC 00012C70 00000000 %RMS-W-RES_MEM_INCON, inconsistent reserved memory data
+MC 00012C78 00000000 %RMS-W-NOSHPTS, service cannot accept a shared page table region
+MC 00012C80 00000000 %RMS-W-FLUSHFAIL, flush could not be completed; some updates lost
+MC 00012C88 00000000 %RMS-W-NOTINSTALLED, required product is not installed
+MC 00012C90 00000000 %RMS-W-POOLDEVEXISTS, the specified DW device already exists on this node
+MC 00012C98 00000000 %RMS-W-NOUNITS, you cannot remove all the storage units from the pool
+MC 00012CA0 00000000 %RMS-W-NOTAPOOL, the storage units are not part of the same pool
+MC 00012CA8 00000000 %RMS-W-MISSINGUNITS, you did not list all of the storage units in the pool
+MC 00012CB0 00000000 %RMS-W-DISKDEVEXISTS, the specified DW device already exists on this node
+MC 00012CB8 00000000 %RMS-W-TOOMANYUNITS, too many storage units for a pool
+MC 00012CC0 00000000 %RMS-W-NOTINPOOL, storage unit is not in pool
+MC 00012CC8 00000000 %RMS-W-WRONGPOOL, the pool does not contain the specified parent disk
+MC 00012CD0 00000000 %RMS-W-ALRBOUND, the disk is already bound
+MC 00012CD8 00000000 %RMS-W-NOTPOOLMOUNTED, storage unit is not pool mounted
+MC 00012CE0 00000000 %RMS-W-POOLINUSE, a disk in the pool is bound to a DW device
+MC 00012CE8 00000000 %RMS-W-DISKINUSE, the disk is mounted or has an open I/O channel
+MC 00012CF0 00000000 %RMS-W-SDDISABLED, Snapshot Services are disabled on this node
+MC 00012CF8 00000000 %RMS-W-UNITINPOOL, storage unit is already in bound pool
+MC 00012D00 00000000 %RMS-W-FAMILYTOOBIG, too many snapshots in the parent disk's family
+MC 00012D08 00000000 %RMS-W-NODISKNAME, the pool does not contain a disk with the specified name
+MC 00012D10 00000000 %RMS-W-DISKNAMEEXISTS, the pool already contains a disk with the specified name
+MC 00012D18 00000000 %RMS-W-INSUFFREESEGS, not enough free segments in the pool
+MC 00012D20 00000000 %RMS-W-NOTBOUND, the DW device is not bound to a disk or pool
+MC 00012D28 00000000 %RMS-W-TOOMANYFRAGS, free segments not sufficiently contiguous
+MC 00012D30 00000000 %RMS-W-TOOMANYFAMILIES, too many disks in the pool
+MC 00012D38 00000000 %RMS-W-DISKISBOUND, the disk is bound to a DW device
+MC 00012D40 00000000 %RMS-W-SNAPINFAM, the disk you are trying to delete has a snapshot in its family
+MC 00012D48 00000000 %RMS-W-CHKSNAPVER, Snapshot Services is checking version compatibility
+MC 00012D50 00000000 %RMS-W-BADSNAPVER, cluster is running incompatible versions of Snapshot Services
+MC 00012D58 00000000 %RMS-W-SD_RESERVED4, reserved for Snapshot Services
+MC 00012D60 00000000 %RMS-W-SD_RESERVED5, reserved for Snapshot Services
+MC 00012D68 00000000 %RMS-W-SECREFOVF, too many section references
+MC 00012D70 00000000 %RMS-W-DATAERR, unreliable data; CRC or parity error encountered
+MC 00012D78 00000000 %RMS-W-INVPFN, invalid PFN specified
+MC 00012D80 00000000 %RMS-W-INV_SHMEM, shared memory is not valid
+MC 00012D88 00000000 %RMS-W-INV_SHM_CPP, shared memory CPP is not valid
+MC 00012D90 00000000 %RMS-W-INV_SHM_REG, shared memory region is not valid
+MC 00012D98 00000000 %RMS-W-ONEMAPPER, only one mapper allowed
+MC 00012DA0 00000000 %RMS-W-NOSUCHEXT, no such extension found
+MC 00012DA8 00000000 %RMS-W-CBKEXISTS, membership callback is already registered
+MC 00012DB0 00000000 %RMS-W-NOSUCHCBK, no such membership callback is registered
+MC 00012DB8 00000000 %RMS-W-NOTAMEMBER, this node is not a Galaxy member
+MC 00012DC0 00000000 %RMS-W-GLXSPIUNAVAIL, the Galaxy SPI is currently unavailable
+MC 00012DC8 00000000 %RMS-W-MPDEVILLCURPATH, operation is illegal for current path for multipath set
+MC 00012DD0 00000000 %RMS-W-MPDEVINCOMPAT, paths are incompatible for multipath set formation
+MC 00012DD8 00000000 %RMS-W-MPDEVNOT, not a multipath device or path
+MC 00012DE0 00000000 %RMS-W-MPDEVNOTCONF, multipath is not configured for this operation
+MC 00012DE8 00000000 %RMS-W-PERSONARESERVED, persona index is marked RESERVE
+MC 00012DF0 00000000 %RMS-W-WRONGDRV, different device driver already loaded for this device type name
+MC 00012DF8 00000000 %RMS-W-BADRAD, bad RAD specified
+MC 00012E00 00000000 %RMS-W-INVQSRFNC, invalid SYS$QIOSERVER function code
+MC 00012E08 00000000 %RMS-W-NOQIOSERVER, the QIO$CONFIGURE process is unavailable to handle SYS$QIOSERVER requests
+MC 00012E10 00000000 %RMS-W-INCLASS, cannot add process to scheduling class; it is in a permanent one
+MC 00012E18 00000000 %RMS-W-INVBOOTDEV, SET function invalid for a boot device
+MC 00012E20 00000000 %RMS-W-CLIENT_UNAVAILA, specified client is known but unavailable
+MC 00012E28 00000000 %RMS-W-CONFIGFILE_ERRO, an error occurred while accessing the permanent configuration file
+MC 00012E30 00000000 %RMS-W-INVDEVALLOC, SET function invalid for an allocated device
+MC 00012E38 00000000 %RMS-W-DEVICE_UNAVAILA, specified device is known but unavailable
+MC 00012E40 00000000 %RMS-W-INVDEVMOUNT, SET function invalid for a mounted device
+MC 00012E48 00000000 %RMS-W-LOGGING_DISABLE, logging functions are disabled
+MC 00012E50 00000000 %RMS-W-NOSUCHCLIENT, specified client does not exist
+MC 00012E58 00000000 %RMS-W-NOSUCHDEVICE, specified device does not exist
+MC 00012E60 00000000 %RMS-W-NOSUCHFILTER, specified logging filter does not exist
+MC 00012E68 00000000 %RMS-W-NOSUCHPATH, specified path does not exist
+MC 00012E70 00000000 %RMS-W-NOSUCHSERVER, specified server does not exist
+MC 00012E78 00000000 %RMS-W-RQSTIMOUT, the execution node response timed out
+MC 00012E80 00000000 %RMS-W-SERVER_UNAVAILA, specified server is known but unavailable
+MC 00012E88 00000000 %RMS-W-QSRVINTERR, QIOServer internal error
+MC 00012E90 00000000 %RMS-W-NOADD, cannot add to scheduling class; process scheduled by $SCHED service
+MC 00012E98 00000000 %RMS-W-SYSTEMUIC, users with system UICs cannot be class scheduled
+MC 00012EA0 00000000 %RMS-W-NOSUCHQPOOLID, specified pool block id does not exist
+MC 00012EA8 00000000 %RMS-W-PATHAMBIG, path is ambiguous
+MC 00012EB0 00000000 %RMS-W-INVMVIP, path switch invalid while device is in mount verification
+MC 00012EB8 00000000 %RMS-W-NOPATHAVAIL, no selectable path for device
+MC 00012EC0 00000000 %RMS-W-NOENACURINV, not permitted to enable/disable current path
+MC 00012EC8 00000000 %RMS-W-TRUSTCONF, trust conflict for privileged image execution
+MC 00012ED0 00000000 %RMS-W-QIO_FAULT, QIO requires the page @R1 faulted in callers mode
+MC 00012ED8 00000000 %RMS-W-HBVS_REDO_IO, Shadowing driver must resend this I/O
+MC 00012EE0 00000000 %RMS-W-TOOMANYPERSONA, process persona array expansion limit reached
+MC 00012EE8 00000000 %RMS-W-INVKTLIM, invalid kernel thread limit specified
+MC 00013400 00000000 %RMS-W-MAXNAMPOL, maximum number of HBMM named policies already exists
+MC 00013408 00000000 %RMS-W-HBMMENABLED, HBMM is enabled on specified device; cannot define or delete policy
+MC 00013410 00000000 %RMS-W-NOMODNONEPOL, HBMM policy NODEFAULT cannot be redefined or deleted
+MC 00013418 00000000 %RMS-W-SHADFEATNOMNT, device not mounted on system that supports requested shadowing feature
+MC 00013420 00000000 %RMS-W-NOTSUPALLNODES, feature is not supported on all nodes where the volume is mounted
+MC 00013428 00000000 %RMS-W-WLGCANTHBMM, devices capable of MSCP-based minimerge (HSC/HSD/HSJ) cannot use HBMM
+MC 00013430 00000000 %RMS-W-CALLUNDEFSYM, Call using undefined function symbol
+MC 00013438 00000000 %RMS-W-NOADDMCPYMBR, cannot add device as a mini copy member due to device error
+MC 00013440 00000000 %RMS-W-CANTDODDS, dissimilar device shadowing is not supported on all systems where shadow set is already mounted
+MC 00013448 00000000 %RMS-W-TOOMANYMBRS, maximum number of supported shadow members already exists for this shadow set
+MC 00013450 00000000 %RMS-W-SCBREADFAIL, cannot add member due to failed SCB read
+MC 00013458 00000000 %RMS-W-SCBWRITEFAIL, cannot add member due to failed SCB write
+MC 00013460 00000000 %RMS-W-NOMEMFORWBM, cannot add member due to WBM memory allocation failure
+MC 00013468 00000000 %RMS-W-MUSTDMTVU, shadow set can only be dismounted by dismounting the shadow set
+MC 00013470 00000000 %RMS-W-ONLYSRCMUSTSTAY, only existing source member cannot be removed during a copy operation
+MC 00013478 00000000 %RMS-W-NOWBMDURINGCOPY, mini copy bitmap cannot be created whilst a copy operation is in progress
+MC 00013480 00000000 %RMS-W-WBMERR, WBM error during dismount
+MC 00013488 00000000 %RMS-W-BADPOLCHAR, HBMM policy name contains invalid characters -- please check documentation
+MC 00013490 00000000 %RMS-W-HBMMVERSIONBAD, HBMM policy version mismatch; cannot modify specified policy
+MC 00013498 00000000 %RMS-W-ANADSKSHDBBLK, Syntax error in specification of starting/ending blocks
+MC 000134A0 00000000 %RMS-W-HBMMBADPOLSPEC, HBMM policy specification syntax error -- please check documentation
+MC 000134A8 00000000 %RMS-W-NOSHADOWSERVER, SHADOW_SERVER process is required to mount a shadow set
+MC 000134B0 00000000 %RMS-W-GAMEOVER, all your base are belong to us
+MC 00018000 00000000 %RMS-W-STALL, synchronize with operation completion
+MC 00018008 00000000 %RMS-W-PENDING, asynchronous operation not yet completed
+MC 00018010 00000000 %RMS-W-OK_DUP, record had duplicate key
+MC 00018018 00000000 %RMS-W-OK_IDX, index update error occurred
+MC 00018020 00000000 %RMS-W-OK_RLK, record locked but read anyway
+MC 00018028 00000000 %RMS-W-OK_RRL, record locked against read but read anyway
+MC 00018030 00000000 %RMS-W-KFF, known file found
+MC 00018038 00000000 %RMS-W-OK_ALK, record is already locked
+MC 00018040 00000000 %RMS-W-OK_DEL, deleted record successfully accessed
+MC 00018048 00000000 %RMS-W-OK_RNF, nonexistent record successfully accessed
+MC 00018050 00000000 %RMS-W-OK_LIM, retrieved record exceeds specified key value
+MC 00018058 00000000 %RMS-W-OK_NOP, XAB not filled in for block I/O
+MC 00018060 00000000 %RMS-W-OK_WAT, record locked after wait
+MC 00018068 00000000 %RMS-W-CRE_STM, file was created in stream format
+MC 00018070 00000000 %RMS-W-OK_RULK, record relocked in recovery unit
+MC 00018078 00000000 %RMS-W-SYNCH, synchronous completion
+MC 00018080 00000000 %RMS-W-OK_ACT, operation successfully completed on active file or stream
+MC 00018088 00000000 %RMS-W-OK_NOCURTID, no default TID is defined
+MC 00018198 00000000 %RMS-W-BOF, beginning of file detected
+MC 000181A0 00000000 %RMS-W-RNL, record not locked
+MC 000181A8 00000100 %RMS-W-RTB, !UL byte record too large for user's buffer
+MC 000181B0 00000000 %RMS-W-TMO, timeout period expired
+MC 000181B8 00000000 %RMS-W-TNS, terminator not seen
+MC 000181C0 00000000 %RMS-W-BES, bad escape sequence
+MC 000181C8 00000000 %RMS-W-PES, partial escape sequence
+MC 00018258 00000000 %RMS-W-ACT, file activity precludes operation
+MC 00018260 00000000 %RMS-W-DEL, RFA-accessed record was deleted
+MC 00018268 00000000 %RMS-W-INCOMPSHR, incompatible file sharing requested
+MC 00018270 00000000 %RMS-W-DNR, device not ready, not mounted, or unavailable
+MC 00018278 00000000 %RMS-W-EOF, end of file detected
+MC 00018280 00000000 %RMS-W-FEX, file already exists, not superseded
+MC 00018288 00000000 %RMS-W-FLK, file currently locked by another user
+MC 00018290 00000000 %RMS-W-FNF, file not found
+MC 00018298 00000000 %RMS-W-PRV, insufficient privilege or file protection violation
+MC 000182A0 00000000 %RMS-W-REX, record already exists
+MC 000182A8 00000000 %RMS-W-RLK, target record currently locked by another stream
+MC 000182B0 00000000 %RMS-W-RNF, record not found
+MC 000182B8 00000000 %RMS-W-WLK, device currently write locked
+MC 000182C0 00000000 %RMS-W-EXP, file expiration date not yet reached
+MC 000182C8 00000000 %RMS-W-NMF, no more files found
+MC 000182D0 00000100 %RMS-W-SUP, network operation not supported; DAP code = !XL
+MC 000182D8 00000000 %RMS-W-RSA, record stream currently active
+MC 000182E0 00000000 %RMS-W-CRC, network DAP level CRC check failed
+MC 000182E8 00000000 %RMS-W-WCC, invalid wild card context (WCC) value
+MC 000182F0 00000000 %RMS-W-IDR, invalid directory rename operation
+MC 000182F8 00000000 %RMS-W-LWC, lock wait canceled
+MC 00018300 00000000 %RMS-W-UNUSED1, unused error message 1
+MC 00018308 00000000 %RMS-W-NOVALPRS, $SEARCH operation not preceded by valid $PARSE
+MC 00018310 00000000 %RMS-W-KEY_MISMATCH, record found, but key doesn't match
+MC 00018318 00000100 %RMS-W-RUH, error encountered by RMS transaction event handler, PID = !XL
+MC 00018320 00000000 %RMS-W-JND, journaling disabled on this file
+MC 00018328 00000000 %RMS-W-BADPHASE, recovery unit phase invalid for this operation
+MC 00018330 00000000 %RMS-W-TOWDR, timed out waiting for detached RU recovery to complete
+MC 00018338 00000000 %RMS-W-NEXDR, non-existent detached RU recovery process
+MC 00018340 00000000 %RMS-W-INVDRMSG, invalid detached RU recovery mailbox message
+MC 00018348 00000000 %RMS-W-RU_ACTIVE, operation prohibited while recovery unit active
+MC 00018350 00000000 %RMS-W-UNKRUFAC, file has active/incomplete non-RMS recovery units
+MC 00018358 00000000 %RMS-W-LIMBO, recovery unit is in limbo
+MC 00018360 00000000 %RMS-W-IVATRACE, invalid RMS attributes ACE encountered
+MC 00018368 00000000 %RMS-W-OPNOTSUP, operation not supported by RMS Extension
+MC 00018370 00000000 %RMS-W-EXTNOTFOU, RMS Extension not found
+MC 00018378 00000100 %RMS-W-EXT_ERR, error in RMS Extension; reason code %X!XL
+MC 00018380 00000000 %RMS-W-SEMANTICS, inconsistent usage of RMS Semantics
+MC 00018388 00000000 %RMS-W-LSCAN, internal KLT/KLE status - do left scan to replenish data level VBN downpointers
+MC 00018390 00000000 %RMS-W-ROOTSRCH, internal KLT/KLE status - restart search at root
+MC 00018398 00000000 %RMS-W-IDXSEARCH, key search encountered index structure inconsistency - convert file
+MC 000183A0 00000100 %RMS-W-NETBTS, network buffer too small for !UL byte record
+MC 000183A8 00000000 %RMS-W-NXR, nonexistent record
+MC 000183B0 00000000 %RMS-W-EOFASY_SYNCH, internal status - EOF on ASY $READ that completed synchronously
+MC 000183B8 00000000 %RMS-W-ELOOP, more than SYMLOOP_MAX symbolic links were encountered during resolution of the file_name
+MC 000183E8 00000100 %RMS-W-DTFCDDREC, error accessing CDD record; reason code %X!XL
+MC 000183F0 00000100 %RMS-W-AID, invalid area ID = !UL
+MC 000183F8 00000100 %RMS-W-ALN, alignment options error for area id = !UL
+MC 00018400 00000000 %RMS-W-ALQ, invalid allocation quantity (negative, or 0 on $EXTEND)
+MC 00018408 00000000 %RMS-W-ANI, not ANSI "D" format
+MC 00018410 00000100 %RMS-W-AOP, allocation options error for area id = !UL
+MC 00018418 00000000 %RMS-W-BKS, bucket size too large (FAB)
+MC 00018420 00000100 %RMS-W-BKZ, inconsistent bucket size for area id = !UL
+MC 00018428 00000000 %RMS-W-BLN, invalid block length for control block (RAB/FAB)
+MC 00018430 00000000 %RMS-W-BUG, fatal RMS condition (!XL), process deleted
+MC 00018438 00000000 %RMS-W-BUG_DDI, invalid default directory
+MC 00018440 00000100 %RMS-W-BUG_DAP, Data Access Protocol error detected; DAP code = !XL
+MC 00018448 00000000 %RMS-W-BUG_RU_ACTIVE, active recovery units on $CLOSE during RMS rundown
+MC 00018450 00000000 %RMS-W-BUG_RURECERR, error during detached RU recovery
+MC 00018458 00000000 %RMS-W-BUG_FLUSH_JNL_F, flush of journal failed
+MC 00018460 00000000 %RMS-W-BUG_RU_ABORT_FA, recovery unit abort failed
+MC 00018468 00000000 %RMS-W-BUG_RU_COMMIT_F, recovery unit commit failed
+MC 00018470 00000000 %RMS-W-BUG_XX6, reserved bug code
+MC 00018478 00000000 %RMS-W-BUG_XX7, reserved bug code
+MC 00018480 00000000 %RMS-W-BUG_XX8, reserved bug code
+MC 00018488 00000000 %RMS-W-BUSY, user structure (FAB/RAB) still in use
+MC 00018490 00000000 %RMS-W-CCR, cannot connect RAB
+MC 00018498 00000000 %RMS-W-CHG, invalid key change in $UPDATE (CHG not set)
+MC 000184A0 00000100 %RMS-W-CHK, bucket format check failed for VBN = !UL
+MC 000184A8 00000100 %RMS-W-COD, invalid or unsupported type field in XAB at !XL
+MC 000184B0 00000000 %RMS-W-CUR, no current record (operation not preceded by $GET/$FIND)
+MC 000184B8 00000100 %RMS-W-DAN, invalid data area number for key = !UL
+MC 000184C0 00000000 %RMS-W-DEV, error in device name or inappropriate device type for operation
+MC 000184C8 00000000 %RMS-W-DIR, error in directory name
+MC 000184D0 00000000 %RMS-W-DME, dynamic memory exhausted
+MC 000184D8 00000000 %RMS-W-DNA, invalid default file name string address
+MC 000184E0 00000100 %RMS-W-DTP, invalid key data type for key = !UL
+MC 000184E8 00000000 %RMS-W-DUP, duplicate key detected (DUP not set)
+MC 000184F0 00000000 %RMS-W-DVI, invalid device ID value in NAM block
+MC 000184F8 00000000 %RMS-W-ESA, invalid expanded string address
+MC 00018500 00000000 %RMS-W-ESS, expanded string area too small
+MC 00018508 00000000 %RMS-W-FAB, invalid FAB or FAB not accessible
+MC 00018510 00000000 %RMS-W-FAC, record operation not permitted by specified file access (FAC)
+MC 00018518 00000100 %RMS-W-FLG, invalid key definition flags for key = !UL
+MC 00018520 00000000 %RMS-W-FNA, invalid file name string address
+MC 00018528 00000000 %RMS-W-FNM, error in file name
+MC 00018530 00000000 %RMS-W-FSZ, invalid fixed control header size
+MC 00018538 00000000 %RMS-W-FOP, invalid file options
+MC 00018540 00000000 %RMS-W-FUL, device full (insufficient space for allocation)
+MC 00018548 00000000 %RMS-W-IAL, invalid argument list
+MC 00018550 00000100 %RMS-W-IAN, invalid index area number for key = !UL
+MC 00018558 00000000 %RMS-W-IDX, index not initialized
+MC 00018560 00000000 %RMS-W-IFI, invalid internal file identifier (IFI) value
+MC 00018568 00000100 %RMS-W-IMX, invalid duplicate XAB or non-dense XAB at !XL
+MC 00018570 00000000 %RMS-W-IOP, operation invalid for file organization or device
+MC 00018578 00000100 %RMS-W-IRC, illegal record encountered; VBN or record number = !UL
+MC 00018580 00000000 %RMS-W-ISI, invalid internal stream identifier (ISI) value
+MC 00018588 00000000 %RMS-W-KBF, invalid key buffer
+MC 00018590 00000000 %RMS-W-KEY, invalid record number key or key value
+MC 00018598 00000000 %RMS-W-KRF, invalid key-of-reference
+MC 000185A0 00000000 %RMS-W-KSZ, invalid key size for $GET/$FIND
+MC 000185A8 00000100 %RMS-W-LAN, invalid lowest-level-index area number for key = !UL
+MC 000185B0 00000000 %RMS-W-RUNDOWN, operation invalid during RMS rundown
+MC 000185B8 00000000 %RMS-W-LNE, logical name translation error
+MC 000185C0 00000100 %RMS-W-DTFCVT, error converting data in record; reason code %X!XL
+MC 000185C8 00000000 %RMS-W-MRN, invalid maximum record number or record number exceeds MRN
+MC 000185D0 00000000 %RMS-W-MRS, invalid maximum record size
+MC 000185D8 00000000 %RMS-W-NAM, invalid NAM block or NAM block not accessible
+MC 000185E0 00000000 %RMS-W-NEF, not positioned to EOF on $PUT (sequential organization only)
+MC 000185E8 00000100 %RMS-W-DTFQUASYN, syntax error in foreign file specification; reason code %X!XL
+MC 000185F0 00000000 %RMS-W-NOD, error in node name
+MC 000185F8 00000000 %RMS-W-NPK, no primary key defined for indexed file
+MC 00018600 00000100 %RMS-W-ORD, XABs not in correct order at !XL
+MC 00018608 00000000 %RMS-W-ORG, invalid file organization value
+MC 00018610 00000000 %RMS-W-PBF, invalid prompt buffer
+MC 00018618 00000000 %RMS-W-PLG, error detected in file's prolog (reconstruct file)
+MC 00018620 00000100 %RMS-W-POS, invalid key position (greater than MRS) for key = !UL
+MC 00018628 00000100 %RMS-W-DTFQUAVAL, invalid file name qualifier value specified; reason code %X!XL
+MC 00018630 00000000 %RMS-W-QUO, error in quoted string
+MC 00018638 00000000 %RMS-W-RAB, invalid RAB or RAB not accessible
+MC 00018640 00000000 %RMS-W-RAC, invalid record access mode
+MC 00018648 00000000 %RMS-W-RAT, invalid record attributes
+MC 00018650 00000000 %RMS-W-RBF, invalid record buffer
+MC 00018658 00000000 %RMS-W-RFA, invalid record's file address (RFA)
+MC 00018660 00000000 %RMS-W-RFM, invalid record format
+MC 00018668 00000000 %RMS-W-RHB, invalid record header buffer
+MC 00018670 00000000 %RMS-W-RLF, invalid related NAM block
+MC 00018678 00000000 %RMS-W-ROP, invalid record options
+MC 00018680 00000000 %RMS-W-RRV, invalid RRV record encountered
+MC 00018688 00000000 %RMS-W-RVU, error updating RRV's, some paths to data may be lost
+MC 00018690 00000000 %RMS-W-RSS, invalid resultant string size
+MC 00018698 00000000 %RMS-W-RST, invalid resultant string address
+MC 000186A0 00000000 %RMS-W-RSZ, invalid record size
+MC 000186A8 00000000 %RMS-W-SEQ, primary key out of sequence (SEQ access)
+MC 000186B0 00000000 %RMS-W-SHR, invalid file sharing (SHR) options
+MC 000186B8 00000100 %RMS-W-SIZ, invalid key size for key = !UL
+MC 000186C0 00000000 %RMS-W-SQO, operation not sequential (SQO set)
+MC 000186C8 00000100 %RMS-W-DTFSESEST, error establishing SNA session; reason code %X!XL
+MC 000186D0 00000000 %RMS-W-SYN, file specification syntax error
+MC 000186D8 00000000 %RMS-W-TRE, error in index tree
+MC 000186E0 00000000 %RMS-W-TYP, error in file type
+MC 000186E8 00000000 %RMS-W-UBF, invalid user buffer
+MC 000186F0 00000000 %RMS-W-USZ, invalid user buffer size
+MC 000186F8 00000000 %RMS-W-VER, error in version number
+MC 00018700 00000000 %RMS-W-XNF, required XAB not found
+MC 00018708 00000100 %RMS-W-XAB, invalid XAB or XAB not accessible at !XL
+MC 00018710 00000000 %RMS-W-ESL, invalid expanded string length
+MC 00018718 00000100 %RMS-W-DTFSESTER, SNA session terminated unexpectedly; reason code %X!XL
+MC 00018720 00000000 %RMS-W-ENV, support for RMS service call or feature not present
+MC 00018728 00000000 %RMS-W-PLV, unsupported prolog version
+MC 00018730 00000000 %RMS-W-MBC, invalid multi-block count
+MC 00018738 00000000 %RMS-W-RSL, invalid resultant string length
+MC 00018740 00000000 %RMS-W-WLD, invalid wildcard operation
+MC 00018748 00000100 %RMS-W-NET, network operation failed at remote node; DAP code = !XL
+MC 00018750 00000100 %RMS-W-IBF, illegal bucket format in VBN = !UL
+MC 00018758 00000100 %RMS-W-REF, invalid key-of-reference = !UL
+MC 00018760 00000100 %RMS-W-IFL, index bucket fill size larger than bucket size for key = !UL
+MC 00018768 00000100 %RMS-W-DFL, data bucket fill size larger than bucket size for key = !UL
+MC 00018770 00000100 %RMS-W-KNM, key name buffer not accessible for key = !UL
+MC 00018778 00000100 %RMS-W-IBK, LAN bucket size not equal to IAN bucket size for key = !UL
+MC 00018780 00000100 %RMS-W-KSI, index bucket will not hold two keys for key-of-reference = !UL
+MC 00018788 00000100 %RMS-W-LEX, invalid $EXTEND for area !UL containing an unused extent
+MC 00018790 00000100 %RMS-W-SEG, overlapping segments or segmented key must be string for key = !UL
+MC 00018798 00000000 %RMS-W-SNE, file sharing not enabled
+MC 000187A0 00000000 %RMS-W-SPE, file sharing pagecount exceeded
+MC 000187A8 00000000 %RMS-W-UPI, UPI not set when sharing and BIO or BRO set
+MC 000187B0 00000000 %RMS-W-ACS, error in access control string
+MC 000187B8 00000000 %RMS-W-STR, user structure (FAB/RAB) became invalid during operation
+MC 000187C0 00000000 %RMS-W-FTM, network file transfer mode precludes operation (SQO set)
+MC 000187C8 00000000 %RMS-W-GBC, invalid global buffer count
+MC 000187D0 00000000 %RMS-W-DEADLOCK, deadlock detected
+MC 000187D8 00000000 %RMS-W-EXENQLM, exceeded enqueue quota
+MC 000187E0 00000000 %RMS-W-JOP, journaling options not supported on device
+MC 000187E8 00000000 %RMS-W-RUM, recovery-unit handler called from incorrect access mode
+MC 000187F0 00000000 %RMS-W-JNS, operation not supported by RMS journaling
+MC 000187F8 00000000 %RMS-W-NRU, operation prohibited outside recovery-unit
+MC 00018800 00000000 %RMS-W-IFF, invalid file attributes for requested file access
+MC 00018808 00000100 %RMS-W-DTFTRATBL, error loading translation table; reason code %X!XL
+MC 00018810 00000100 %RMS-W-DTFUNSTYP, unsupported data type in record; reason code %X!XL
+MC 00018818 00000100 %RMS-W-DTFVERMIS, incompatible version of control file; reason code %X!XL
+MC 00018820 00000100 %RMS-W-DTFACC, error accessing file; reason code %X!XL
+MC 00018828 00000000 %RMS-W-BOGUSCOL, invalid or inaccessible collate table
+MC 00018830 00000000 %RMS-W-ERRREADCOL, error encountered while reading collate table
+MC 00018838 00000000 %RMS-W-ERRWRITECOL, error encountered while writing collate table
+MC 00018840 00000000 %RMS-W-SNS, statistics monitoring not supported for non-disk devices
+MC 00018848 00000000 %RMS-W-NOEXTEND, previous $EXTEND operation failed - further $EXTENDs prohibited
+MC 00018850 00000100 %RMS-W-DTFCRE, error creating file; reason code %X!XL
+MC 00018858 00000000 %RMS-W-DELJNS, deleting a file marked for journaling not yet supported (unmark file for journaling first)
+MC 00018860 00000000 %RMS-W-NOTSAMEJNL, files in a recovery unit must use same RMS journal
+MC 00018868 00000000 %RMS-W-SNPPF, statistics monitoring not supported for process permanent files
+MC 00018870 00000000 %RMS-W-NAML, invalid NAML block or NAML block not accessible
+MC 00018878 00000000 %RMS-W-NAMLESS, NAML expanded string area too small
+MC 00018880 00000000 %RMS-W-NAMLRSS, NAML resultant string area too small
+MC 00018888 00000000 %RMS-W-NAMLFSSIZ, NAML file system string area too small
+MC 00018890 00000000 %RMS-W-NAMLFSINV, NAML file system string address invalid
+MC 00018898 00000000 %RMS-W-BADGBH, Bad GBH
+MC 000188A0 00000000 %RMS-W-BADGBD, Bad GBD
+MC 000188A8 00000000 %RMS-W-FOPEXTMBZ, reserved fields asociated with FAB$V_EXTEND_FOP must be zero
+MC 000188B0 00000000 %RMS-W-INVOP_SSIO, invalid operation for SSIO access
+MC 000188B8 00000000 %RMS-W-IVSF, invalid special file format
+MC 0001C000 00000000 %RMS-W-ACC, ACP file access failed
+MC 0001C008 00000000 %RMS-W-CRE, ACP file create failed
+MC 0001C010 00000000 %RMS-W-DAC, ACP file deaccess failed during $CLOSE
+MC 0001C018 00000000 %RMS-W-ENT, ACP enter function failed
+MC 0001C020 00000000 %RMS-W-EXT, ACP file extend failed
+MC 0001C028 00000000 %RMS-W-FND, ACP file or directory lookup failed
+MC 0001C030 00000000 %RMS-W-MKD, ACP could not mark file for deletion
+MC 0001C038 00000000 %RMS-W-DPE, device positioning error
+MC 0001C040 00000000 %RMS-W-SPL, spool or submit of command file failed on $CLOSE
+MC 0001C048 00000000 %RMS-W-DNF, directory not found
+MC 0001C050 00000000 %RMS-W-RUF, recovery unit facility request failed
+MC 0001C058 00000000 %RMS-W-WRTJNL_AIJ, error writing to after image journal file
+MC 0001C060 00000000 %RMS-W-WRTJNL_BIJ, error writing to before image journal file
+MC 0001C068 00000000 %RMS-W-WRTJNL_ATJ, error writing to audit trail journal file
+MC 0001C070 00000000 %RMS-W-WRTJNL_RUJ, error writing to recovery unit journal file
+MC 0001C078 00000000 %RMS-W-RRF, recovery unit recovery failed
+MC 0001C080 00000000 %RMS-W-DDTM_ERR, error returned by DECdtm transaction manager 
+MC 0001C0C8 00000000 %RMS-W-ATR, file attributes read error
+MC 0001C0D0 00000000 %RMS-W-ATW, file attributes write error
+MC 0001C0D8 00000000 %RMS-W-CCF, cannot close file
+MC 0001C0E0 00000000 %RMS-W-CDA, cannot deliver AST
+MC 0001C0E8 00000000 %RMS-W-CHN, assign channel system service request failed
+MC 0001C0F0 00000000 %RMS-W-RER, file read error
+MC 0001C0F8 00000000 %RMS-W-RMV, ACP remove function failed
+MC 0001C100 00000000 %RMS-W-RPL, error detected while reading prolog
+MC 0001C108 00000000 %RMS-W-SYS, QIO system service request failed
+MC 0001C110 00000000 %RMS-W-WER, file write error
+MC 0001C118 00000000 %RMS-W-WPL, error detected while writing prolog
+MC 0001C120 00000000 %RMS-W-IFA, illegal file attributes detected (file header corrupted)
+MC 0001C128 00000000 %RMS-W-WBE, error on write behind
+MC 0001C130 00000000 %RMS-W-ENQ, ENQ system service request failed
+MC 0001C138 00000000 %RMS-W-NETFAIL, network operation failed at remote node
+MC 0001C140 00000000 %RMS-W-SUPPORT, network operation not supported
+MC 0001C148 00000000 %RMS-W-CRMP, CRMPSC system service failed to map global buffers
+MC 0001C150 00000000 %RMS-W-DTFCFGFIL, error accessing configuration file
+MC 0001C158 00000000 %RMS-W-REENT, file could not be renamed and recovery failed; file has been lost
+MC 0001C160 00000000 %RMS-W-ACC_RUJ, recovery unit journal can not be accessed
+MC 0001C168 00000000 %RMS-W-TMR, SETIMR system service request failed
+MC 0001C170 00000000 %RMS-W-ACC_AIJ, after image journal can not be accessed
+MC 0001C178 00000000 %RMS-W-ACC_BIJ, before image journal can not be accessed
+MC 0001C180 00000000 %RMS-W-ACC_ATJ, audit trail journal can not be accessed
+MC 0001C188 00000000 %RMS-W-DTFDEFFIL, error accessing file definition file
+MC 0001C190 00000000 %RMS-W-DTFREGFIL, error accessing registration file
+MC 0001C198 00000000 %RMS-W-JNLNOTAUTH, RMS Journaling not authorized; operation not performed
+MC 0001C1A0 00000000 %RMS-W-CRBUFOBJ, CREATE_BUFOBJ system service failed to create buffer object
+MC 0001C1A8 00000000 %RMS-W-RSESTK_ALLOC, allocation of KP RSE stack failed

@@ -15,11 +15,12 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$getmsg (vms-916) -- looks the condition value up in the
- *     compiled-in known_codes[] table in src/libvms/status.c via
- *     vms$status_message(); there is no message-file section to map, so a code
- *     absent from that array yields "unknown status code" rather than a
- *     lookup failure the caller can act on.
+ * OVMX-USERSPACE: sys$getmsg (vms-546) -- answers from the message catalog
+ *     observed on OpenVMS Alpha V8.4 (docs/oracle/messages/, the generated
+ *     src/libvms/include/ovmx_msgcat.inc): every SYSTEM message and the
+ *     facility-specific messages of the facilities captured. A real VMS maps
+ *     message sections; this is the same catalog compiled in, so a message of
+ *     a facility not captured is SS$_MSGNOTFND (NOMSG), never invented text.
  * OVMX-USERSPACE: sys$putmsg (vms-916) -- formats from the same compiled-in
  *     table and writes to the caller's own output; the facnam facility-name
  *     override is honored by rewriting the %FACILITY token of the formatted
@@ -79,93 +80,107 @@ static const char *facility_name(uint32_t msgid) {
     }
 }
 
+/* ---- the message catalog (rd vms-546) ------------------------------------
+ * GENERATED from the catalog observed on OpenVMS Alpha V8.4
+ * (tools/oracle/messages/gen_msgcat.py, docs/oracle/messages/): every SYSTEM
+ * message, every facility-specific message of the facilities captured, and the
+ * facility names. */
+struct ovmx_msgdef { uint32_t code; uint8_t faocnt; const char *ident; const char *text; };
+struct ovmx_msgfac { uint16_t fac; const char *name; };
+#include "ovmx_msgcat.inc"
+
+static const struct ovmx_msgdef *msgcat_find(uint32_t code)
+{
+    size_t lo = 0, hi = sizeof ovmx_msgcat / sizeof ovmx_msgcat[0];
+    code &= ~7u;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (ovmx_msgcat[mid].code == code) return &ovmx_msgcat[mid];
+        if (ovmx_msgcat[mid].code < code) lo = mid + 1; else hi = mid;
+    }
+    return NULL;
+}
+
+static const char *msgcat_facility(uint32_t fac)
+{
+    for (size_t i = 0; i < sizeof ovmx_msgfacs / sizeof ovmx_msgfacs[0]; i++)
+        if (ovmx_msgfacs[i].fac == fac)
+            return ovmx_msgfacs[i].name;
+    return NULL;
+}
+
 /*
- * sys$getmsg - Get message text for a condition value.
+ * sys$getmsg - the message text for a condition value, as OpenVMS's $GETMSG
+ * returns it (observed on VAX V7.3 and Alpha V8.4, docs/oracle/semantics/fao/):
  *
- * Retrieves the formatted message for msgid and writes it into
- * the bufadr descriptor. The flags parameter controls which
- * components are included:
- *   MSG$M_TEXT     (0x01) - message text
- *   MSG$M_IDENT   (0x02) - message ident (FACILITY-S-IDENT)
- *   MSG$M_SEVERITY(0x04) - severity prefix
- *   MSG$M_FACILITY(0x08) - facility name prefix
- *
- * If flags is 0x0F (all), produces: %FACILITY-S-IDENT, text
- * If flags is 0x01 (text only), produces: text
- *
- * Parameters:
- *   msgid  - Condition value
- *   msglen - Receives output length
- *   bufadr - Output buffer descriptor
- *   flags  - Component flags (MSG$M_ bits, 0x0F = all)
- *   outadr - Optional result vector (unused, may be NULL)
+ *   - a facility-specific message number (bit 12 of the message number) is the
+ *     facility's own message; any other number is the SHARED message of that
+ *     number, which every facility uses (the RMS facility's ACCVIO is
+ *     "%RMS-F-ACCVIO, access violation, ..."), named with the condition's
+ *     facility -- "NONAME" when the facility is not one this system knows;
+ *   - the severity letter is the CONDITION's (W S E I F, '?' for 5-7), not the
+ *     message's: SS$_WASSET's message number is ACCVIO's;
+ *   - the text is returned unformatted, FAO directives and all, and outadr
+ *     receives { 0, the message's FAO argument count, 0, 0 };
+ *   - a condition with no message (0, or an unknown facility-specific number)
+ *     is "%NONAME-<sev>-NOMSG, Message number <hex>" with SS$_MSGNOTFND;
+ *   - flags pick the parts: text 1, ident 2, severity 4, facility 8 (0 = all);
+ *     the prefix parts are joined by '-' after one '%', and the text follows
+ *     ", " when there is a prefix;
+ *   - a buffer too small for the message is filled and SS$_BUFFEROVF returned.
  */
 uint32_t sys$getmsg(uint32_t msgid, uint16_t *msglen,
                     struct dsc$descriptor_s *bufadr,
-                    uint32_t flags, uint32_t *outadr) {
-    (void)outadr;
+                    uint32_t flags, uint32_t *outadr_l) {
+    uint8_t *outadr = (uint8_t *)outadr_l;
+    static const char sevch[8] = { 'W', 'S', 'E', 'I', 'F', '?', '?', '?' };
 
     if (!bufadr || !bufadr->dsc$a_pointer) return SS$_BADPARAM;
+    if ((flags & 15) == 0) flags = 15;
 
-    /* Default flags: include everything */
-    if (flags == 0) flags = MSG$M_ALL;
+    uint32_t fac = (msgid >> 16) & 0xFFF, num = (msgid >> 3) & 0x1FFF;
+    const struct ovmx_msgdef *m = NULL;
+    if (msgid != 0)
+        m = msgcat_find((num & 0x1000) ? msgid : (num << 3));
+    const char *facname = msgcat_facility(fac);
 
-    const char *text = vms$status_message(msgid);
-    const char *ident = vms$status_ident(msgid);
-    const char *fac = facility_name(msgid);
-    uint32_t sev = $VMS_STATUS_SEVERITY(msgid);
-    char sev_c = severity_char(sev);
-
-    char buf[512];
-    int pos = 0;
-
-    /* Build the message according to flags */
-    if ((flags & MSG$M_FACILITY) && (flags & MSG$M_SEVERITY) && (flags & MSG$M_IDENT)) {
-        /* Full prefix: %FACILITY-S-IDENT, */
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                        "%%%s-%c-%s", fac, sev_c, ident);
-        if (flags & MSG$M_TEXT) {
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ", %s", text);
-        }
+    char text[300], ident[40], facbuf[40];
+    uint32_t status = SS$_NORMAL;
+    uint8_t faocnt = 0;
+    if (m) {
+        snprintf(ident, sizeof ident, "%s", m->ident);
+        snprintf(text, sizeof text, "%s", m->text);
+        snprintf(facbuf, sizeof facbuf, "%s", facname ? facname : "NONAME");
+        faocnt = m->faocnt;
     } else {
-        /* Partial prefix combinations */
-        if (flags & MSG$M_FACILITY) {
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%%%s", fac);
-        }
-        if (flags & MSG$M_SEVERITY) {
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                            "%s%c", pos > 0 ? "-" : "%", sev_c);
-        }
-        if (flags & MSG$M_IDENT) {
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                            "%s%s", pos > 0 ? "-" : "", ident);
-        }
-        if (flags & MSG$M_TEXT) {
-            if (pos > 0) {
-                pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ", %s", text);
-            } else {
-                pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "%s", text);
-            }
-        }
+        snprintf(ident, sizeof ident, "NOMSG");
+        snprintf(text, sizeof text, "Message number %08X", (unsigned)msgid);
+        snprintf(facbuf, sizeof facbuf, "NONAME");
+        status = SS$_MSGNOTFND;
     }
 
-    /* Copy to output descriptor */
-    uint16_t outlen = (uint16_t)pos;
-    uint32_t status = SS$_NORMAL;
+    char buf[400];
+    int pos = 0;
+    const char *sep = "%";
+    if (flags & 8) { pos += snprintf(buf + pos, sizeof buf - pos, "%s%s", sep, facbuf); sep = "-"; }
+    if (flags & 4) { pos += snprintf(buf + pos, sizeof buf - pos, "%s%c", sep, sevch[msgid & 7]); sep = "-"; }
+    if (flags & 2) { pos += snprintf(buf + pos, sizeof buf - pos, "%s%s", sep, ident); sep = "-"; }
+    if (flags & 1)
+        pos += snprintf(buf + pos, sizeof buf - pos, "%s%s", pos ? ", " : "", text);
 
+    uint16_t outlen = (uint16_t)pos;
     if (outlen > bufadr->dsc$w_length) {
         outlen = bufadr->dsc$w_length;
         status = SS$_BUFFEROVF;
     }
     memcpy(bufadr->dsc$a_pointer, buf, outlen);
-
-    /* Pad with spaces if CLASS_S */
-    if (bufadr->dsc$b_class == DSC$K_CLASS_S && outlen < bufadr->dsc$w_length) {
-        memset(bufadr->dsc$a_pointer + outlen, ' ',
-               bufadr->dsc$w_length - outlen);
-    }
-
     if (msglen) *msglen = outlen;
+    if (outadr) {
+        outadr[0] = 0;
+        outadr[1] = m ? faocnt : 0;
+        outadr[2] = 0;
+        outadr[3] = 0;
+    }
     return status;
 }
 

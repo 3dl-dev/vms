@@ -2899,9 +2899,14 @@ static int mbx_bind_ok(void)
     return vms_dev_fd >= 0;
 }
 
-uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
-                            uint32_t *exec_chan, uint32_t *unit,
-                            char *devnam, uint32_t devnam_sz)
+/*
+ * vms_kif_mbx_create_prot - $CREMBX with its promsk (rd vms-c6d1): the SOGW
+ * protection mask the executive records with the mailbox (owner = the caller's
+ * UIC) and checks every $ASSIGN, read and write against.
+ */
+uint32_t vms_kif_mbx_create_prot(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                                 uint32_t promsk, uint32_t *exec_chan,
+                                 uint32_t *unit, char *devnam, uint32_t devnam_sz)
 {
     struct vms_mbx_create_args args;
 
@@ -2912,6 +2917,7 @@ uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
     args.permanent = permanent ? 1 : 0;
     args.maxmsg = maxmsg;
     args.bufquo = bufquo;
+    args.promsk = promsk & 0xFFFFu;
 
     KIF_CALL(VMS_IOCTL_MBX_CREATE, &args);
 
@@ -2924,6 +2930,14 @@ uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
         }
     }
     return args.status;
+}
+
+uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
+                            uint32_t *exec_chan, uint32_t *unit,
+                            char *devnam, uint32_t devnam_sz)
+{
+    return vms_kif_mbx_create_prot(permanent, maxmsg, bufquo, 0u, exec_chan,
+                                   unit, devnam, devnam_sz);
 }
 
 uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan)
@@ -2989,6 +3003,35 @@ uint32_t vms_kif_mbx_write_eof(uint32_t exec_chan)
     args.len = 0;
     args.flags = VMS_MBX_WRITE_EOF;
     KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
+    return args.status;
+}
+
+/*
+ * vms_kif_mbx_write_ex - vms_kif_mbx_write with the IO$M_NORSWAIT modifier
+ * (rd vms-c6d1): when `norswait` is set, a mailbox without room for the message
+ * completes the write at once with SS$_MBFULL instead of waiting for a reader --
+ * so a server answering into a client's mailbox can never be stalled by it.
+ */
+uint32_t vms_kif_mbx_write_ex(uint32_t exec_chan, const void *buf, uint32_t len,
+                              int norswait)
+{
+    struct vms_mbx_write_args args;
+
+    if (!buf)
+        return SS$_BADPARAM;
+    if (len > VMS_MBX_IOCTL_MAXLEN)
+        return SS$_EXQUOTA;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.len = len;
+    args.flags = norswait ? VMS_MBX_WRITE_NORSWAIT : 0u;
+    vms_memcpy(args.data, buf, len);
+
+    KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
+
     return args.status;
 }
 

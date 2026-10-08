@@ -210,6 +210,9 @@ extern "C" {
 #define SS$_RESULTOVF       532     /* Resultant string overflow (%SYSTEM-F-RESULTOVF) */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
+/* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt + alpha84 ($EQU SS$_MBFULL 2264).
+ * A mailbox write with IO$M_NORSWAIT that finds no room (rd vms-c6d1). */
+#define SS$_MBFULL          2264    /* Mailbox is full */
 #define SS$_NOSUCHDEV       2312    /* No such device */
 /* SS$_NOMOREDEV: needed as the sys$device_scan wildcard-scan-exhausted
  * terminator (see starlet.h). PROVENANCE: 0x0A58/2648, sourced this

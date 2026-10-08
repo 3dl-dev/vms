@@ -116,6 +116,7 @@
 #define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
 #define SS__MBTOOSML  412          /* SS$_MBTOOSML (message > maxmsg; semantic oracle io) */
 #define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */
+#define SS__MBFULL    2264         /* SS$_MBFULL (IO$M_NORSWAIT write, no room; rd vms-c6d1) */
 #define SS__IVCHAN    316          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  324          /* SS$_IVDEVNAM -- invalid device name */
 #define SS__NOSUCHDEV 2312         /* SS$_NOSUCHDEV -- no such device available */

@@ -493,7 +493,10 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_WRITELBLK:
         case IO$_WRITEPBLK:
             if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_mbx_write(exec_chan, p1, p2);
+            /* IO$M_NORSWAIT (rd vms-c6d1): no room in the mailbox completes the
+             * write with SS$_MBFULL instead of waiting for a reader. */
+            st = vms_kif_mbx_write_ex(exec_chan, p1, p2,
+                                      (func & IO$M_NORSWAIT) != 0);
             if (st & 1) actlen = p2;
             break;
 

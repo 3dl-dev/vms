@@ -592,6 +592,12 @@ acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
+mbx-prot-assign-unchecked
+mbx-prot-read-unchecked
+mbx-prot-write-unchecked
+crembx-promsk-dropped
+mbx-sender-pid-not-stamped
+mbx-norswait-ignored
 crtl-feature-unknown-accepted
 crtl-feature-set-ignored
 rms-open-no-file-access-enq
@@ -1100,34 +1106,118 @@ EOF
 
     acp-readall-ignored)
         case "$_f" in
-        facility)     echo "READALL grants read of any file (acp_check_access)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
-        suites_red)   echo "test_syssvc_privilege_enforce";;
+        facility)     echo "READALL grants read of any protected object -- file or mailbox (vms_prot_check)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() grants a read-only request when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used by the Files-11 ACP for a file and by the mailbox driver for a mailbox (rd vms-c6d1) -- grants a request for only read/execute bits when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check on either object class. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 READALL alone grants the read
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+READALL alone grants the read of the W:W request mailbox
 EOF
                       ;;
-        knock_on_why)  echo "";;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to grant READALL a mailbox read; it is the one READALL property observed on a second object class, not a second property.";;
         esac;;
 
     acp-bypass-ignored)
         case "$_f" in
-        facility)     echo "BYPASS lifts every file access control (acp_check_access)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
-        suites_red)   echo "test_syssvc_privilege_enforce";;
+        facility)     echo "BYPASS lifts every object access control -- file or mailbox (vms_prot_check)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() returns SS__NORMAL at once when BYPASS is held. The mutation makes that branch unreachable ('0 &&'), so BYPASS no longer lifts the protection check. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used for files (ACP) and mailboxes (rd vms-c6d1) -- returns SS__NORMAL at once when BYPASS is held. The mutation makes that branch unreachable ('0 &&'), so BYPASS no longer lifts the protection check on either object class. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 BYPASS alone grants the read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+BYPASS alone grants $ASSIGN of the no-world-access mailbox
+EOF
+                      ;;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to let BYPASS assign a mailbox the world has no access to; it is the one BYPASS property observed on a second object class.";;
+        esac;;
+
+    acp-sysprv-ignored)
+        case "$_f" in
+        facility)     echo "SYSPRV confers the SYSTEM protection category on any protected object (vms_prot_check)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used for files (ACP) and mailboxes (rd vms-c6d1) -- sets is_system when the accessor's group is a system group OR SYSPRV is held. The mutation replaces the SYSPRV term with 0, so SYSPRV no longer qualifies the accessor for the SYSTEM category of either object class. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+SYSPRV alone grants the read (SYSTEM protection category)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+SYSPRV alone grants $ASSIGN of the no-world-access mailbox (SYSTEM protection category)
+SYSPRV alone grants the read of the W:W request mailbox (SYSTEM protection category)
+EOF
+                      ;;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to put a SYSPRV holder in a mailbox's SYSTEM category, for the assign and for the read; it is the one SYSPRV property observed on a second object class.";;
+        esac;;
+
+    mbx-prot-assign-unchecked)
+        case "$_f" in
+        facility)     echo "\$ASSIGN of a mailbox is refused to a process its protection grants neither read nor write (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_assign() refuses SS\$_NOPRIV when vms_prot_check() grants the caller neither read nor write on the mailbox. The mutation makes that refusal unreachable ('0 &&'), so an unprivileged process gets a channel to a mailbox the world has no access to. The read/write checks are untouched. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+unprivileged $ASSIGN of a mailbox whose protection grants it neither read nor write is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the promsk given to sys$crembx is enforced: unprivileged sys$assign by logical name is SS$_NOPRIV
+BYPASS off again: $ASSIGN is refused
+SYSPRV off again: $ASSIGN is refused
+EOF
+                      ;;
+        knock_on_why)  echo "the same missing \$ASSIGN refusal observed through sys\$assign (the public service reaches the same executive check) and after each privilege is switched back off -- every unprivileged \$ASSIGN of a no-world-access mailbox now succeeds.";;
+        esac;;
+
+    mbx-prot-read-unchecked)
+        case "$_f" in
+        facility)     echo "a mailbox read needs read access under the mailbox protection (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_read() refuses SS\$_NOPRIV before dequeuing when vms_prot_check() denies the caller read access. The mutation makes that refusal unreachable ('0 &&'), so any client holding a channel to NETACP's W:W request mailbox could dequeue another client's request. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unprivileged client may NOT READ the W:W request mailbox (SS$_NOPRIV) -- no other client's request is readable
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+READALL off again: the read is refused
+EOF
+                      ;;
+        knock_on_why)  echo "the same missing read refusal observed again once READALL is switched back off.";;
+        esac;;
+
+    mbx-prot-write-unchecked)
+        case "$_f" in
+        facility)     echo "a mailbox write needs write access under the mailbox protection (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() refuses SS\$_NOPRIV when vms_prot_check() denies the caller write access. The mutation makes that refusal unreachable ('0 &&'), so a process may write into a mailbox whose protection grants it read only. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unprivileged WRITE to the W:R mailbox is SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1136,17 +1226,55 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    acp-sysprv-ignored)
+    crembx-promsk-dropped)
         case "$_f" in
-        facility)     echo "SYSPRV confers the SYSTEM protection category (acp_check_access)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
-        suites_red)   echo "test_syssvc_privilege_enforce";;
+        facility)     echo "sys\$crembx carries its promsk argument to the executive (rd vms-c6d1)";;
+        targets)      echo "libvms/syssvc/sys_mailbox.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() sets is_system when the accessor's group is a system group OR SYSPRV is held. The mutation replaces the SYSPRV term with 0, so SYSPRV no longer qualifies the accessor for the SYSTEM category. Gone after substitution (no-op re-apply).";;
+        why)          echo "sys\$crembx passes promsk to vms_kif_mbx_create_prot(). The mutation passes 0 (all access to all categories) instead -- what the service did before rd vms-c6d1 -- so a mailbox created through the public service is unprotected while one created directly through the executive interface still is. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-SYSPRV alone grants the read (SYSTEM protection category)
+the promsk given to sys$crembx is enforced: unprivileged sys$assign by logical name is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    mbx-sender-pid-not-stamped)
+        case "$_f" in
+        facility)     echo "every mailbox message carries the writer's VMS PID, stamped by the executive (rd vms-c6d1 / vms-4a69)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() stamps each queued message with the writing process's VMS PID (the reader's IOSB second longword). The mutation stamps 0, so a reader can no longer tell -- from the executive -- who wrote a message. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the request carries the WRITER's VMS PID, stamped by the executive (IOSB second longword)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    mbx-norswait-ignored)
+        case "$_f" in
+        facility)     echo "IO\$M_NORSWAIT: a write to a full mailbox completes at once with SS\$_MBFULL (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() returns SS\$_MBFULL instead of waiting for room when the write carries VMS_MBX_WRITE_NORSWAIT. The mutation makes that branch unreachable ('0 &&'), so the write waits for a reader; the suite's 10 s alarm turns the wait into this named FAIL and ends the suite. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an IO$M_NORSWAIT write to a full mailbox completes at once (SS$_MBFULL), never waits for a reader
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1239,12 +1367,12 @@ EOF
     acp-grpprv-ignored)
         case "$_f" in
         facility)     echo "GRPPRV puts the accessor in the system category for files of its own UIC group (Files-11 ACP protection gate)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
+        targets)      echo "kernel-core/vms_prot.h";;
         suites_red)   echo "test_syssvc_privilege_enforce";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "acp_check_access() counts a GRPPRV holder as system category when its group owns the file. The mutation drops that term, so [100,100] with GRPPRV is refused its own group's S:RWED file. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_prot_check_acl() -- the executive's shared protection decision (vms_prot.h) acp_check_access() calls -- counts a GRPPRV holder as system category when its group owns the file. The mutation drops that term, so [100,100] with GRPPRV is refused its own group's S:RWED file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 GRPPRV reads its own group's GRPT1.DAT through the system field
 EOF
@@ -1281,12 +1409,12 @@ EOF
     acp-acl-deny-falls-to-world)
         case "$_f" in
         facility)     echo "a matching ACE that does not grant the access is final for the group and world categories (vms-d404)";;
-        targets)      echo "kernel-core/vmsfs_acp.c";;
+        targets)      echo "kernel-core/vms_prot.h";;
         suites_red)   echo "test_syssvc_acl";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "After a matching ACE that does not grant the wanted access, acp_check_access() lets only the system and owner fields grant ('if (!ace_matched) {' guards group and world). The mutation makes that guard always true, so world RE grants what the NONE ACE denied. Gone after substitution (no-op re-apply).";;
+        why)          echo "After a matching ACE that does not grant the wanted access, vms_prot_check_acl() -- the executive's shared protection decision acp_check_access() hands the ACL verdict to (vms_prot.h) -- lets only the system and owner fields grant ('if (!ace_matched) {' guards group and world). The mutation makes that guard always true, so world RE grants what the NONE ACE denied. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 F2: the matching NONE ACE denies the read world allows
 F5: IDENTIFIER=* denies [100,100] the world read
@@ -7463,11 +7591,23 @@ apply_edit() {
     mbx-prmmbx-check-removed)
         sed -i 's|^    bool ok = permanent ? (cur_privs \& VMS_PRV_M_PRMMBX) != 0$|    bool ok = permanent ? true /* NEGCTL mbx-prmmbx-check-removed */|' "$_file";;
     acp-readall-ignored)
-        sed -i 's|^    if ((privs \& ACP_PRV_M_READALL) \&\& !want_write)$|    if (0 \&\& (privs \& ACP_PRV_M_READALL) \&\& !want_write) /* NEGCTL acp-readall-ignored */|' "$_file";;
+        sed -i 's|^    if ((privs \& VMS_PRV_M_READALL) \&\& !(want \& ~VMS_PROT_READALL_GRANTS))$|    if (0 \&\& (privs \& VMS_PRV_M_READALL) \&\& !(want \& ~VMS_PROT_READALL_GRANTS)) /* NEGCTL acp-readall-ignored */|' "$_file";;
     acp-bypass-ignored)
-        sed -i 's|^    if (privs \& ACP_PRV_M_BYPASS)$|    if (0 \&\& (privs \& ACP_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
+        sed -i 's|^    if (privs \& VMS_PRV_M_BYPASS)$|    if (0 \&\& (privs \& VMS_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
     acp-sysprv-ignored)
-        sed -i 's#^                (privs \& ACP_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
+        sed -i 's#^                (privs \& VMS_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
+    mbx-prot-assign-unchecked)
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL \&\&$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL \&\& /* NEGCTL mbx-prot-assign-unchecked */|' "$_file";;
+    mbx-prot-read-unchecked)
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) { /* NEGCTL mbx-prot-read-unchecked */|' "$_file";;
+    mbx-prot-write-unchecked)
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) { /* NEGCTL mbx-prot-write-unchecked */|' "$_file";;
+    crembx-promsk-dropped)
+        sed -i 's|^    uint32_t st = vms_kif_mbx_create_prot(prmflg, maxmsg, bufquo, promsk,$|    uint32_t st = vms_kif_mbx_create_prot(prmflg, maxmsg, bufquo, 0u /* NEGCTL crembx-promsk-dropped */,|' "$_file";;
+    mbx-sender-pid-not-stamped)
+        sed -i 's|^    m->sender_pid = proc->vms_pid;$|    m->sender_pid = 0; /* NEGCTL mbx-sender-pid-not-stamped */|' "$_file";;
+    mbx-norswait-ignored)
+        sed -i 's|^        if (a->flags \& VMS_MBX_WRITE_NORSWAIT) {$|        if (0 \&\& (a->flags \& VMS_MBX_WRITE_NORSWAIT)) { /* NEGCTL mbx-norswait-ignored */|' "$_file";;
     acp-dir-exsz-ignored)
         sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
     acp-fat-versions-not-applied)
@@ -7483,7 +7623,7 @@ apply_edit() {
     rights-grant-cmkrnl-not-checked)
         sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file";;
     acp-grpprv-ignored)
-        sed -i 's|^                ((privs \& ACP_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
+        sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
         sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)

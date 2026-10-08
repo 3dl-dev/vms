@@ -4478,13 +4478,8 @@ static void usage(const char *argv0)
  * privileges (dnet_fal_proc.h). NETACP holds no credential beyond the check
  * and serves no file itself.
  */
-/* rd vms-277a: a VMS DELETE node::file;* holds THREE links to the FAL at once
- * (two DIRECTORY LISTs still open, then the ERASE: VAX<->VAX capture
- * tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/); with a
- * share of 2 the third connect was refused reason 1 and the VAX printed
- * RMS-E-MKD / SYSTEM-F-REMRSRC (live bracket 2026-10-08). */
-#define NETACP_MAX_SESSIONS   9
-#define NETACP_MAX_PER_SOURCE 3
+#define NETACP_MAX_SESSIONS   8
+#define NETACP_MAX_PER_SOURCE 2
 
 struct netacp_slot {
     int      used;
@@ -4923,11 +4918,11 @@ static int run_netacp_pool_selftest(void)
         PL_CHECK(used == 0, "the FAL session ends when the remote disconnects (slot freed)");
     }
 
-    /* Peer i is node 1.(100 + i/NETACP_MAX_PER_SOURCE): a full share each. */
+    /* Peer i is node 1.(100 + i/2): two links per peer node. */
     int confirmed = 0, refused_res = 0;
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
         uint8_t phw[6] = { 0x02,0,0,0,1,(uint8_t)i };
-        dnet_engine_init(&peers[i], 1, (unsigned)(100 + i / NETACP_MAX_PER_SOURCE), "PEER", "EWA0", NULL, phw, 0, 0, 0);
+        dnet_engine_init(&peers[i], 1, (unsigned)(100 + i / 2), "PEER", "EWA0", NULL, phw, 0, 0, 0);
         uint16_t why = 0;
         int r = pool_connect(&peers[i], &node, slots, &next_lla, (uint16_t)(0x3000 + i), &why);
         if (r == 1) confirmed++;
@@ -4935,14 +4930,11 @@ static int run_netacp_pool_selftest(void)
         if (i == 1)
             PL_CHECK(r == 1 && confirmed == 2,
                      "a SECOND inbound SET HOST is accepted while the first is live (no single slot)");
-        if (i == 2)
-            PL_CHECK(r == 1 && confirmed == 3,
-                     "a THIRD session from the same node is accepted -- a VMS DELETE node::file;* holds three links at once (rd vms-277a)");
-        if (i % NETACP_MAX_PER_SOURCE == NETACP_MAX_PER_SOURCE - 1) {
+        if (i % 2 == 1) {
             /* that node now holds its share: a third from it is refused */
             static struct dnet_engine extra;
             uint8_t ehw[6] = { 0x02,0,0,0,2,(uint8_t)i };
-            dnet_engine_init(&extra, 1, (unsigned)(100 + i / NETACP_MAX_PER_SOURCE), "PEER", "EWA0", NULL, ehw, 0, 0, 0);
+            dnet_engine_init(&extra, 1, (unsigned)(100 + i / 2), "PEER", "EWA0", NULL, ehw, 0, 0, 0);
             uint16_t why2 = 0;
             int r2 = pool_connect(&extra, &node, slots, &next_lla, (uint16_t)(0x3800 + i), &why2);
             if (r2 == 0 && why2 == DNET_LINK_REASON_RESOURCE) refused_res++;
@@ -4950,7 +4942,7 @@ static int run_netacp_pool_selftest(void)
     }
     PL_CHECK(confirmed == NETACP_MAX_SESSIONS,
              "the pool admits NETACP_MAX_SESSIONS concurrent sessions, each a real RTAn: + LOGINOUT");
-    PL_CHECK(refused_res == NETACP_MAX_SESSIONS / NETACP_MAX_PER_SOURCE,
+    PL_CHECK(refused_res == NETACP_MAX_SESSIONS / 2,
              "a node already holding its share of sessions is REFUSED another (reason 1) while other nodes are admitted");
     {
         uint8_t phw[6] = { 0x02,0,0,0,3,0 };

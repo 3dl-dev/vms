@@ -27,6 +27,15 @@
 #include "rms/rms.h"          /* sys$create/$open/$erase/$parse/$search/$rename */
 #include "rms/crtl_stdio.h"
 
+/* DECC$FILE_SHARING (crtl_features.c, vms-db7). WEAK: an image that links the veneer without
+ * the feature table simply has no such feature, and files open unshared as before. */
+extern int ovmx_crtl_feature_current(int index) __attribute__((__weak__));
+static int crtl_file_sharing(void)
+{
+    return ovmx_crtl_feature_current &&
+           ovmx_crtl_feature_current(OVMX_CRTL_FEAT_FILE_SHARING) != 0;
+}
+
 /* The RMS-backed stream. The FAB/RAB live for the life of the handle (the
  * record context stays connected between fwrite/fread calls and is torn down at
  * fclose), exactly as a DEC C FILE keeps its RMS internals. */
@@ -60,6 +69,9 @@ static OVMX_CRTL_FILE *crtl_open_common(const char *path, int writing)
     fh->fab.fab$b_rfm = FAB$C_FIX;          /* byte-exact (see crtl_stdio.h) */
     fh->fab.fab$w_mrs = writing ? 0 : 1;    /* w: per-put rsz; r: 1 byte/get   */
     fh->fab.fab$b_fac = writing ? FAB$M_PUT : FAB$M_GET;
+    /* DECC$FILE_SHARING (crtl_features.c): share the file with other accessors. */
+    if (crtl_file_sharing())
+        fh->fab.fab$b_shr = FAB$M_SHRGET | FAB$M_SHRPUT;
 
     uint32_t st = writing ? sys$create(&fh->fab, 0, 0)
                           : sys$open(&fh->fab, 0, 0);
@@ -214,6 +226,9 @@ static OVMX_CRTL_FILE *crtl_rms_open_handle(const char *path, int writing,
     fh->fab.fab$b_rfm = FAB$C_FIX;
     fh->fab.fab$w_mrs = writing ? 0 : 1;
     fh->fab.fab$b_fac = writing ? FAB$M_PUT : FAB$M_GET;
+    /* DECC$FILE_SHARING (crtl_features.c): share the file with other accessors. */
+    if (crtl_file_sharing())
+        fh->fab.fab$b_shr = FAB$M_SHRGET | FAB$M_SHRPUT;
 
     uint32_t st = create ? sys$create(&fh->fab, 0, 0)
                          : sys$open(&fh->fab, 0, 0);

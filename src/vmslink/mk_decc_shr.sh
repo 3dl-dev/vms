@@ -351,6 +351,28 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         done
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FSPEC_OBJ"
         echo "mk_decc_shr: DEC C file-spec translators wired (vms-32ae): decc\$to_vms/decc\$from_vms/decc\$translate_vms (tail-appended)"
+        # vms-db7: the DEC C feature-switch API and reentrancy level (crtl_features.c). A
+        # separate TU, compiled in BOTH modes (the stdio veneer and the vms-b90 fd layer
+        # each read its DECC$FILE_SHARING value). Each DEC C name is an alias onto its
+        # ovmx_crtl_* function, APPENDED at the end of the vector like the file-spec
+        # translators (IMGACT binds by sv# index).
+        FEAT_OBJ="$VENEER_DIR/crtl_features.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -o "$FEAT_OBJ" "$RMS_SRC_DIR/crtl_features.c"
+        for pair in get_index get_name get_value set_value; do
+            "$NM" --defined-only "$FEAT_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qx "ovmx_crtl_feature_$pair" \
+                || { echo "mk_decc_shr: FAIL crtl_features.c did not define ovmx_crtl_feature_$pair" >&2; exit 2; }
+            PASS2_TAIL="${PASS2_TAIL:-},decc\$feature_$pair/ovmx_crtl_feature_$pair=PROCEDURE"
+        done
+        for pair in set_reentrancy get_reentrancy; do
+            "$NM" --defined-only "$FEAT_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qx "ovmx_crtl_$pair" \
+                || { echo "mk_decc_shr: FAIL crtl_features.c did not define ovmx_crtl_$pair" >&2; exit 2; }
+            PASS2_TAIL="${PASS2_TAIL:-},decc\$$pair/ovmx_crtl_$pair=PROCEDURE"
+        done
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FEAT_OBJ"
+        echo "mk_decc_shr: DEC C feature-switch API wired (vms-db7): decc\$feature_{get_index,get_name,get_value,set_value}, decc\$set_reentrancy/get_reentrancy (tail-appended)"
     fi
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,

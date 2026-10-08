@@ -39,4 +39,14 @@ int decc$from_vms(const char *__vms_spec,
  * null pointer for an invalid specification. */
 char *decc$translate_vms(const char *__vms_spec);
 
+
+/* DEC C feature switches (vms-db7; carried by the RMS-backed DECC$SHR). Only the
+ * features OVMX honours exist: an unknown name is -1 with errno EINVAL, never
+ * accepted and ignored. mode 0 = the default value, 1 = the current value.
+ * Index 0 is never valid. */
+int decc$feature_get_index(const char *__name);
+char *decc$feature_get_name(int __index);
+int decc$feature_get_value(int __index, int __mode);
+int decc$feature_set_value(int __index, int __mode, int __value);
+
 #endif /* __UNIXLIB_H */

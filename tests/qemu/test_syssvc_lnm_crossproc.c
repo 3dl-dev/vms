@@ -114,22 +114,6 @@ static uint32_t def(const char *table, const char *name, const char *val)
     return sys$crelnm(NULL, &td, &nd, NULL, il);
 }
 
-/* def() at EXECUTIVE mode (PSL$C_EXEC): the mode STARTUP.COM's system
- * logicals live in. */
-static uint32_t def_exec(const char *table, const char *name, const char *val)
-{
-    struct dsc$descriptor_s td = mkdsc(table);
-    struct dsc$descriptor_s nd = mkdsc(name);
-    uint8_t mode = 1;
-    struct item_list_3 il[2];
-    memset(il, 0, sizeof(il));
-    il[0].buflen    = (uint16_t)strlen(val);
-    il[0].item_code = LNM$_STRING;
-    il[0].bufaddr   = (void *)val;
-    il[0].retlen    = NULL;
-    return sys$crelnm(NULL, &td, &nd, &mode, il);
-}
-
 /* TRANSLATE a name via the public sys$trnlnm; out receives the value. */
 static uint32_t trn(const char *table, const char *name, char *out, size_t outsz)
 {
@@ -364,12 +348,8 @@ int main(void)
      * resolve and open it without ever defining the name.
      */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
-    /* At EXECUTIVE mode, as STARTUP.COM's DEFINE/SYSTEM/EXECUTIVE_MODE does: a
-     * USER-mode system logical (sys$crelnm's default, the caller's mode) would
-     * outlive this suite in the executive-resident LNM$SYSTEM and shadow every
-     * later process's EXECUTIVE-mode seed of the system device. */
-    (void)def_exec("LNM$SYSTEM", "SYS$SYSDEVICE", SYSDISK_DEVICE ":");
-    uint32_t su = def_exec("LNM$SYSTEM", "SYS$UPDATE", SYSUPD_VMS_DIR);
+    (void)def("LNM$SYSTEM", "SYS$SYSDEVICE", SYSDISK_DEVICE ":");
+    uint32_t su = def("LNM$SYSTEM", "SYS$UPDATE", SYSUPD_VMS_DIR);
     /* SS$_NORMAL for a fresh name, SS$_SUPERSEDE if a prior suite in this same
      * booted guest already seeded SYS$UPDATE via lnm_setup_defaults (the
      * executive's LNM$SYSTEM persists across suites) -- both are a successful

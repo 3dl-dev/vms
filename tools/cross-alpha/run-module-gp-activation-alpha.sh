@@ -1683,6 +1683,7 @@ EOF
     # file the image wrote -- both directions through a different accessor.
     MILESTONE_MAIN=crtl_fd_test.c
     export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    export JOINT_MAIN_MUSL_HEADERS=1
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     JOINT_CRTL_RMS_FD=1

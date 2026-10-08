@@ -157,6 +157,7 @@ docker run --rm \
     -e JOINT_CRTL_RMS_FD \
     -e JOINT_USE_LIBVMS \
     -e JOINT_MAIN_CFLAGS \
+    -e JOINT_MAIN_MUSL_HEADERS \
     -e JOINT_LINK_BASE \
     "$IMG" bash -c '
 set -euxo pipefail
@@ -298,7 +299,13 @@ JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
 echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64) --"
 # vms-bfd03: JOINT_MAIN_CFLAGS adds flags for the main source only (e.g. the
 # OVMX LIB$/STARLET include surface for a program that uses INVO_CONTEXT_BLK).
-"$ALPHA_CC" -mpointer-size=64 -g0 ${JOINT_MAIN_CFLAGS:-} -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
+# vms-b90: JOINT_MAIN_MUSL_HEADERS=1 compiles the main source against the
+# installed C RTL headers (the alpha-dec-vms musl tree built above, with its
+# DEC C client forms): the stdio.h, fcntl.h, sys/stat.h of an ordinary program.
+MAIN_INC=""
+[ "${JOINT_MAIN_MUSL_HEADERS:-0}" = 1 ] && \
+    MAIN_INC="-nostdinc -I$MUSL_SRC/arch/alpha-dec-vms -I$MUSL_SRC/arch/generic -I$MUSL_SRC/obj/include -I$MUSL_SRC/include"
+"$ALPHA_CC" -mpointer-size=64 -g0 ${JOINT_MAIN_CFLAGS:-} $MAIN_INC -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
 
 # vms-bdd: JOINT_EXTRA additional objects — each compiled by the SAME cross cc1
 # into its OWN .obj, added to the STRICT link below. This is the multi-.o rung:

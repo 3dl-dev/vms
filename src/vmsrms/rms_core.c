@@ -244,40 +244,135 @@ struct rms_acp_spec {
 /* Compose the effective VMS filespec from fab$l_fna (+ fab$l_dna defaults)
  * WITHOUT resolving logical names. Returns 0 on success, -1 on empty. */
 /*
+ * rms_merge_default_dir - the pure half of rms_apply_default_dir (vms-0ae):
+ * complete `spec` from the default directory `ddir` ("DEV:[A.B]") into out.
+ *
+ *   NAME.TYP          -> DEV:[A.B]NAME.TYP        (no device, no directory)
+ *   [X.Y]NAME.TYP     -> DEV:[X.Y]NAME.TYP        (absolute directory: device)
+ *   [.X]NAME.TYP      -> DEV:[A.B.X]NAME.TYP      (relative: below the default)
+ *   [-]NAME.TYP       -> DEV:[A]NAME.TYP          (each '-' is one level up)
+ *   [-.X]NAME.TYP     -> DEV:[A.X]NAME.TYP
+ *   []NAME.TYP        -> DEV:[A.B]NAME.TYP        (the default itself)
+ *
+ * as VMS RMS merges a relative directory with the default directory. A spec
+ * naming a device or logical, or a node, is copied unchanged. Returns 0, or
+ * -1 when the result would not fit or a '-' climbs above the top level (the
+ * spec is then left for RMS to reject as it stands).
+ */
+int rms_merge_default_dir(const char *ddir, const char *spec, char *out, size_t outsz)
+{
+    const char *colon, *lb, *rb, *dev_end, *dlb, *drb;
+    int n;
+
+    if (!spec || !ddir || !ddir[0] || strstr(spec, "::"))
+        return -1;
+    lb = strpbrk(spec, "[<");
+    colon = strchr(spec, ':');
+    if (colon && (!lb || colon < lb))
+        return -1;                               /* has a device / logical   */
+    dev_end = strchr(ddir, ':');
+    dlb = strpbrk(ddir, "[<");
+    drb = dlb ? strpbrk(dlb, "]>") : NULL;
+
+    if (!lb) {                                   /* NAME.TYP: whole default   */
+        n = snprintf(out, outsz, "%s%s", ddir, spec);
+        return (n < 0 || (size_t)n >= outsz) ? -1 : 0;
+    }
+    rb = strpbrk(lb, "]>");
+    if (!rb)
+        return -1;
+    const char *in = lb + 1;                     /* the directory text        */
+    size_t inlen = (size_t)(rb - in);
+    int relative = inlen == 0 || in[0] == '.' || in[0] == '-';
+    if (!relative) {                             /* absolute: device only     */
+        n = dev_end ? snprintf(out, outsz, "%.*s%s", (int)(dev_end - ddir + 1), ddir, spec)
+                    : snprintf(out, outsz, "%s", spec);
+        return (n < 0 || (size_t)n >= outsz) ? -1 : 0;
+    }
+    if (!dlb || !drb)
+        return -1;                               /* default has no directory  */
+
+    /* The default directory's levels, then the relative path applied. */
+    char lv[16][40];
+    int nl = 0;
+    const char *p = dlb + 1;
+    while (p < drb && nl < 16) {
+        const char *q = p;
+        while (q < drb && *q != '.') q++;
+        size_t l = (size_t)(q - p);
+        if (l >= sizeof lv[0]) return -1;
+        if (!(l == 6 && memcmp(p, "000000", 6) == 0)) {
+            memcpy(lv[nl], p, l);
+            lv[nl][l] = 0;
+            nl++;
+        }
+        p = q < drb ? q + 1 : q;
+    }
+    p = in;
+    const char *e = in + inlen;
+    if (p < e && *p == '.') p++;
+    while (p < e) {
+        const char *q = p;
+        while (q < e && *q != '.') q++;
+        size_t l = (size_t)(q - p);
+        size_t k = 0;
+        while (k < l && p[k] == '-') k++;
+        if (l > 0 && k == l) {                   /* "-", "--": up that many  */
+            if ((int)l > nl) return -1;
+            nl -= (int)l;
+        } else if (l > 0) {
+            if (nl == 16 || l >= sizeof lv[0]) return -1;
+            memcpy(lv[nl], p, l);
+            lv[nl][l] = 0;
+            nl++;
+        }
+        p = q < e ? q + 1 : q;
+    }
+    size_t len = 0;
+    n = snprintf(out, outsz, "%.*s[", dev_end ? (int)(dev_end - ddir + 1) : 0, ddir);
+    if (n < 0 || (size_t)n >= outsz) return -1;
+    len = (size_t)n;
+    if (nl == 0) {
+        n = snprintf(out + len, outsz - len, "000000");
+        if (n < 0 || (size_t)n >= outsz - len) return -1;
+        len += (size_t)n;
+    }
+    for (int i = 0; i < nl; i++) {
+        n = snprintf(out + len, outsz - len, "%s%s", i ? "." : "", lv[i]);
+        if (n < 0 || (size_t)n >= outsz - len) return -1;
+        len += (size_t)n;
+    }
+    n = snprintf(out + len, outsz - len, "]%s", rb + 1);
+    return (n < 0 || (size_t)n >= outsz - len) ? -1 : 0;
+}
+
+/*
  * rms_apply_default_dir - complete a file specification with no device and/or
- * no directory from the PROCESS DEFAULT DIRECTORY (rd vms-872), the last step
- * of VMS RMS defaulting (after the default name, fab$l_dna). The value is the
+ * no directory, or with a relative directory, from the PROCESS DEFAULT
+ * DIRECTORY (rd vms-872; relative directories vms-0ae), the last step of VMS
+ * RMS defaulting (after the default name, fab$l_dna). The value is the
  * executive's ($SETDDIR / SET DEFAULT), inherited by every image the CLI runs,
  * so a program given "FILE.TXT" opens it where the user SET DEFAULT -- not in
  * the volume's root. A process that never set one is left unchanged. A spec
- * naming a device or logical ("SYS$LOGIN:X", "DKA0:[A]X") is never touched;
- * one with a [directory] but no device gets only the default's device.
+ * naming a device or logical ("SYS$LOGIN:X", "DKA0:[A]X") is never touched; an
+ * absolute [directory] with no device gets only the default's device; a
+ * relative one ([.X], [-], []) is merged with the default directory.
  */
 void rms_apply_default_dir(char *spec, size_t speclen)
 {
     char ddir[256] = "";
     char out[1024];
-    const char *colon, *lb, *dev_end;
-    int n;
 
-    if (!spec || strstr(spec, "::"))
+    if (!spec)
         return;
-    lb = strpbrk(spec, "[<");
-    colon = strchr(spec, ':');
-    if (colon && (!lb || colon < lb))
-        return;                                  /* has a device / logical   */
     if (!((vms_kif_ddir(NULL, ddir, sizeof(ddir)) & 1) && ddir[0]))
         return;                                  /* no default set: as before */
-    dev_end = strchr(ddir, ':');
-    if (lb)
-        n = dev_end ? snprintf(out, sizeof(out), "%.*s%s",
-                               (int)(dev_end - ddir + 1), ddir, spec)
-                    : snprintf(out, sizeof(out), "%s", spec);
-    else
-        n = snprintf(out, sizeof(out), "%s%s", ddir, spec);
-    if (n < 0 || (size_t)n >= sizeof(out) || (size_t)n >= speclen)
+    if (rms_merge_default_dir(ddir, spec, out, sizeof out) != 0)
+        return;
+    size_t n = strlen(out);
+    if (n >= speclen)
         return;                                  /* would not fit: unchanged  */
-    memcpy(spec, out, (size_t)n + 1);
+    memcpy(spec, out, n + 1);
 }
 
 static int rms_acp_effective_spec(struct FAB *fab, char *spec, size_t speclen)

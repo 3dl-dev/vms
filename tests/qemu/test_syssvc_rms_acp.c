@@ -396,6 +396,24 @@ int main(void)
         check(rep[0] == 1, "vms-872: an activated image (REGISTER_CONTINUE) inherits the default directory");
         check(rep[1] == 1, "vms-872: ...and its relative $OPEN \"DDIRREL.DAT\" finds the file there");
 
+        /* vms-0ae: relative directory syntax merges with the default directory
+         * [OVMXDIR]: "[-.OVMXDIR]" is up to the MFD and back down; "[]" is the
+         * default itself. Both $OPEN the file the default-relative create made. */
+        {
+            static const char *rel[] = { "[-.OVMXDIR]DDIRREL.DAT", "[]DDIRREL.DAT" };
+            for (int i = 0; i < 2; i++) {
+                struct FAB f3 = cc$rms_fab;
+                f3.fab$l_fna = (char *)rel[i];
+                f3.fab$b_fns = (uint8_t)strlen(rel[i]);
+                uint32_t os = sys$open(&f3, 0, 0);
+                if (os == RMS$_NORMAL) (void)sys$close(&f3, 0, 0);
+                char lbl[128];
+                snprintf(lbl, sizeof lbl,
+                         "vms-0ae: $OPEN \"%s\" resolves against the default directory", rel[i]);
+                check(os == RMS$_NORMAL, lbl);
+            }
+        }
+
         struct FAB fe = cc$rms_fab;
         fe.fab$l_fna = (char *)(ODS2_UNIT "[OVMXDIR]DDIRREL.DAT");
         fe.fab$b_fns = (uint8_t)strlen(fe.fab$l_fna);

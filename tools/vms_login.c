@@ -35,6 +35,7 @@
  * render the authentic %RMS- status text. */
 #include "rmsdef.h"
 #include "ovmx_status.h"
+#include "ssdef.h"
 /* The OpenVMS-faithful post-authentication login-info block (vms-417), and the
  * pre-Username system-identification line (vms-3e9). */
 #include "loginout_display.h"
@@ -276,18 +277,31 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
      * (SS$_DUPLNAM: this exact username is already logged in elsewhere
      * in the same UIC group) is a different, genuinely reachable VMS
      * state -- OpenVMS handles it by uniquifying the name
-     * (SMITH, SMITH_1, ...), which OVMX does not implement here (no
-     * concurrent-same-user login is exercised by any test on this
-     * runtime, and inventing the suffix format without an oracle
-     * transcript to pin it against would be exactly Rule 10's illegal
-     * third answer). So on DUPLNAM the session proceeds unnamed rather
-     * than refused outright: a nameless interactive session is a real,
+     * -- SUPERSEDED by the oracle: VMS names the session after its
+     * terminal ("_RTA1:"), see the DUPLNAM block below. Only when that
+     * too fails does the session proceed unnamed rather than refused: a nameless interactive session is a real,
      * already-disclosed OVMX divergence (vms-d0e) and strictly better
      * than refusing a login the password legitimately authenticated.
      * The failure is still reported, not swallowed silently.
      */
     {
         uint32_t nst = vms_kif_setprn(rec->username);
+        /*
+         * DUPLICATE USERNAME -> NAME THE SESSION AFTER ITS TERMINAL (vms-a70).
+         * The oracle (tests/lab/captures/decnet-sethost-inbound-20261005/
+         * vax-sethost-duplnam.txt): a second SYSTEM login on a real VAX V7.3,
+         * over SET HOST, is named "_RTA1:" -- underscore, terminal device,
+         * colon. The terminal is read from this process's executive row.
+         */
+        if (nst == SS$_DUPLNAM) {
+            struct vms_procinfo tpi;
+            char tname[16];
+
+            memset(&tpi, 0, sizeof(tpi));
+            if ((vms_kif_getjpi_self(&tpi) & 1) &&
+                loginout_terminal_prcnam(tpi.terminal, tname, sizeof(tname)))
+                nst = vms_kif_setprn(tname);
+        }
         if (!(nst & 1))
             printf("%%OVMX-I-NOPRCNAM, the executive did not name this "
                    "session (status %u)\n", (unsigned)nst);
@@ -559,13 +573,24 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
  * file on stdin -- has NEITHER, so it still skips the wake and does not lose
  * its first input line to it, exactly as before.
  */
+/*
+ * REMOTE TERMINALS GET NO WAKE (vms-a70). A session on a network virtual
+ * terminal -- RTAn: (DECnet CTERM, SET HOST) or NVAn: -- was created BECAUSE a
+ * remote user connected: the peer's SET HOST is the unsolicited input that
+ * started it, so VMS LOGINOUT displays the announcement and "Username:" at
+ * once (oracle: tests/lab/captures/decnet-sethost-inbound-20261005/
+ * vax-sethost-noreturn.txt -- a real VAX V7.3 SET HOST 0 prompts with no
+ * RETURN struck). Holding it for a RETURN made a real VAX SET HOST to a booted
+ * OVMX sit silent until the user struck a key. The predicate is
+ * loginout_terminal_is_remote() (tools/loginout_display.c, unit-tested).
+ */
 static int loginout_at_operator_terminal(void)
 {
     struct vms_procinfo pi;
 
     memset(&pi, 0, sizeof(pi));
     if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0] != '\0')
-        return 1;
+        return loginout_terminal_is_remote(pi.terminal) ? 0 : 1;
 
     return isatty(STDIN_FILENO) ? 1 : 0;
 }

@@ -275,7 +275,10 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     ALPHA_VFORK_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_vfork.o"
     LIBVMS_INC_VF="$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)"
     # shellcheck disable=SC2086
-    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+    # -O2 (vms-e839): at -O0 the port compiler leaves a varargs function's
+    # second named argument in the stack word OTS$HOME_ARGS writes the argument
+    # count to, so decc$$execl32 & co. would read their arg0 as the count.
+    "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
         $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
     # vms-28d part 2: the DEC C struct stat entries (decc$$stat/fstat/lstat/
@@ -385,7 +388,8 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             # RTL's own decc$main. The FIX-record veneer is not linked.
             FD_OBJ="$VENEER_DIR/crtl_rms_fd.o"
             # shellcheck disable=SC2086
-            "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            # -O2: decc$fgetname is varargs with two named arguments (vms-e839).
+            "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
                 -I"$RMS_SRC_DIR" -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
                 -o "$FD_OBJ" "$RMS_SRC_DIR/crtl_rms_fd.c"
             "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_fd_main \

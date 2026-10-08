@@ -67,6 +67,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -586,6 +587,21 @@ assert_veneer() {
   return 1
 }
 
+# assert_vmsabi <console-log> -- THE TEETH for the vms-692 VMS-ABI RMS proof
+# (`vmsabi-rms-gate'). PASS iff the 32-bit image reported every check OK and
+# the File ID it got from SYS$SEARCH (VMSABI-FID line) is the File ID DCL
+# DIRECTORY/FULL -- DCL's own RMS, another accessor -- prints for the file.
+assert_vmsabi() {
+  local log="$1" fid region
+  grep -aq "OVMX VMSABI RMS test: OK" "$log" || { echo "  assert_vmsabi: the image did not report every check OK" >&2; return 1; }
+  fid=$(grep -aoE "VMSABI-FID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-FID: //')
+  [ -n "$fid" ] || { echo "  assert_vmsabi: no File ID from SYS\$SEARCH" >&2; return 1; }
+  region=$(awk '/VMSABI-PROOF: === INDEPENDENT READER/{f=1} f{print} /VMSABI-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
+  printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$fid" \
+    || { echo "  assert_vmsabi: DIRECTORY/FULL does not show File ID $fid" >&2; return 1; }
+  return 0
+}
+
 # assert_crtlfd <console-log> -- THE TEETH for the vms-b90 C RTL file-layer
 # proof (`crtl-fd-gate' mode). PASS iff (a) the image ran every check and said
 # so ("OVMX CRTL-FD test: OK", which it prints only with zero failed checks:
@@ -741,6 +757,7 @@ build_joint_images() {
     [ -f "$out_n3/FILEOP_PROOF" ] && cp "$out_n3/FILEOP_PROOF" "$WORK/joint/FILEOP_PROOF"
     # vms-b90: likewise the C RTL file-layer gate's marker.
     [ -f "$out_n3/CRTLFD_PROOF" ] && cp "$out_n3/CRTLFD_PROOF" "$WORK/joint/CRTLFD_PROOF"
+    [ -f "$out_n3/VMSABI_PROOF" ] && cp "$out_n3/VMSABI_PROOF" "$WORK/joint/VMSABI_PROOF"
     log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS + full RMS producer graph LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR)"
   else
     log "step 1: joint images staged into $WORK/joint (milestone N=$WANT_SENTINEL + SS\$_NORMAL control + producers)"
@@ -1723,6 +1740,50 @@ EOF
       exit 0
     fi
     echo "FAIL: the C RTL file layer did not work end to end. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  vmsabi-rms-gate)
+    # vms-692: the VMS-ABI RMS entry points. vmsabi_rms_test.c is a 32-bit DEC
+    # C program built against <vms/rms.h> (VMS-layout FAB/NAM) that calls
+    # SYS$PARSE/SYS$SEARCH as GCC's vmsdbgout.cc does; its SYSTARTUP then runs
+    # DIRECTORY/FULL on the same file, whose File ID must match.
+    MILESTONE_MAIN=vmsabi_rms_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no -I/src/src/libvms/include"
+    export JOINT_MAIN_MUSL_HEADERS=1
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    _st=$(mktemp -d); _fails=0
+    {
+      echo "VMSABI-FID: (34,1,0)"
+      echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
+      echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
+      echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
+      echo "VMSABI-PROOF: === END INDEPENDENT READER ==="
+    } > "$_st/pass.log"
+    sed 's/File ID:  (34,1,0)/File ID:  (35,1,0)/' "$_st/pass.log" > "$_st/mismatch.log"
+    grep -v "test: OK" "$_st/pass.log" > "$_st/notok.log"
+    for _c in "pass:0" "mismatch:1" "notok:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "vmsabi selftest failed -- assert_vmsabi cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- VMS-ABI SYS\$PARSE/SYS\$SEARCH on the REAL executive"
+    run_boot_a
+    grep -aE "VMSABI|File ID|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_vmsabi "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: SYS\$PARSE/SYS\$SEARCH served a VMS-layout FAB/NAM from a 32-bit DEC C"
+      echo "      program; DIRECTORY/FULL shows the same File ID."
+      exit 0
+    fi
+    echo "FAIL: the VMS-ABI RMS gate did not pass. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

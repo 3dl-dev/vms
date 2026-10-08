@@ -378,6 +378,8 @@ echo "== joint-e2e image built (genuine alpha path, vms-864) =="
 # vms-b90: the C RTL file-layer gate stages its own SYSTARTUP (DCL writes the
 # record file the image reads; DCL TYPE reads back the file the image wrote).
 [ "$JOINT_MAIN" = crtl_fd_test.c ] && { : > "$OUT/CRTLFD_PROOF"; echo "== CRTLFD_PROOF marker staged (vms-b90 C RTL file-layer gate) =="; }
+# vms-692: the VMS-ABI RMS gate stages its DIRECTORY/FULL cross-check.
+[ "$JOINT_MAIN" = vmsabi_rms_test.c ] && { : > "$OUT/VMSABI_PROOF"; echo "== VMSABI_PROOF marker staged (vms-692 VMS-ABI RMS gate) =="; }
 ls -la "$OUT/"
 readelf -h "$OUT/joint_e2e.exe" | grep -E "Type|Machine|Entry"
 readelf -SW "$OUT/joint_e2e.exe" | grep -E "vms\\\$xfer|vms\\\$imp|CODE|DATA" || true

@@ -1834,11 +1834,17 @@ static void rms_nam_fill(struct FAB *fab, const struct rms_acp_spec *s,
  */
 static void rms_fab_from_header(struct FAB *fab, const rms_file_t *h)
 {
-    if (!h || h->fhc_rfm < FAB$C_FIX || h->fhc_rfm > FAB$C_STMCR)
+    /* Sequential files only: relative/indexed opens bind their own on-disk
+     * structure (cell size, Prolog-3) from the caller's FAB today. */
+    if (!h || fab->fab$b_org != FAB$C_SEQ ||
+        h->fhc_rfm < FAB$C_FIX || h->fhc_rfm > FAB$C_STMCR)
         return;
     fab->fab$b_rfm = h->fhc_rfm;
     fab->fab$b_rat = h->fhc_rat;
-    fab->fab$w_mrs = h->fhc_lrl;     /* FAT rsize = the maximum record size */
+    /* FAT rsize is the maximum record size; OVMX's $CREATE does not record it
+     * for every format yet, so an unrecorded (0) size keeps the caller's. */
+    if (h->fhc_lrl)
+        fab->fab$w_mrs = h->fhc_lrl;
 }
 #endif /* OVMX_HAVE_ACP */
 
@@ -1893,8 +1899,7 @@ static uint32_t rms_impl_open(void *fab_ptr)
             return fab->fab$l_sts;
         }
         fab->_rms_file = h;
-        if (fab->fab$b_org != FAB$C_IDX)
-            rms_fab_from_header(fab, h);
+        rms_fab_from_header(fab, h);
         if (hit >= 0)
             rms_nam_fill(fab, &specs[hit], h->version, h);
 

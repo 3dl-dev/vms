@@ -1,0 +1,963 @@
+$ TYPE ORDS.MAP
+
+NL:                                                              8-OCT-2026 20:33        Linker A13-04                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+%LINK-W-NUDFSYMS, 27 undefined symbols:
+%LINK-I-UDFSYM, 	CLI$COMPILE_CLD 
+%LINK-I-UDFSYM, 	CLI$FREE_CLD 
+%LINK-I-UDFSYM, 	LIB$$SET_CLI_HANDLER 
+%LINK-I-UDFSYM, 	LIB$ESTABLISH 
+%LINK-I-UDFSYM, 	LIB$REVERT 
+%LINK-I-UDFSYM, 	MTH$ABSF 
+%LINK-I-UDFSYM, 	MTH$ACOSF 
+%LINK-I-UDFSYM, 	MTH$ALOG10F 
+%LINK-I-UDFSYM, 	MTH$ALOGF 
+%LINK-I-UDFSYM, 	MTH$ASINF 
+%LINK-I-UDFSYM, 	MTH$ATAN2F 
+%LINK-I-UDFSYM, 	MTH$ATANF 
+%LINK-I-UDFSYM, 	MTH$COSF 
+%LINK-I-UDFSYM, 	MTH$EXPF 
+%LINK-I-UDFSYM, 	MTH$MAX 
+%LINK-I-UDFSYM, 	MTH$MIN 
+%LINK-I-UDFSYM, 	MTH$MOD 
+%LINK-I-UDFSYM, 	MTH$NINT 
+%LINK-I-UDFSYM, 	MTH$POWER 
+%LINK-I-UDFSYM, 	MTH$POWER_JI 
+%LINK-I-UDFSYM, 	MTH$SINF 
+%LINK-I-UDFSYM, 	MTH$SQRTF 
+%LINK-I-UDFSYM, 	MTH$TANF 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_D 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_F 
+%LINK-I-UDFSYM, 	SYS$FAO_COUNT_ARGS 
+%LINK-I-UDFSYM, 	SYS$SUSPEND 
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+ORDS            V1                   1272 SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1        8-OCT-2026 20:33  AMAC V5.0-120-5
+%LINK-W-USEUNDEF, undefined symbol CLI$COMPILE_CLD referenced
+	in psect ODATA offset %X00000000
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol CLI$FREE_CLD referenced
+	in psect ODATA offset %X00000008
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$$SET_CLI_HANDLER referenced
+	in psect ODATA offset %X00000014
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$ESTABLISH referenced
+	in psect ODATA offset %X00000094
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$REVERT referenced
+	in psect ODATA offset %X00000170
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ABSF referenced
+	in psect ODATA offset %X000001F8
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ACOSF referenced
+	in psect ODATA offset %X00000200
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+
+NL:                                                              8-OCT-2026 20:33        Linker A13-04                    Page    2
+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOG10F referenced
+	in psect ODATA offset %X0000020C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOGF referenced
+	in psect ODATA offset %X00000214
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ASINF referenced
+	in psect ODATA offset %X0000021C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATAN2F referenced
+	in psect ODATA offset %X00000228
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATANF referenced
+	in psect ODATA offset %X0000022C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$COSF referenced
+	in psect ODATA offset %X0000023C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$EXPF referenced
+	in psect ODATA offset %X00000248
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MAX referenced
+	in psect ODATA offset %X00000250
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MIN referenced
+	in psect ODATA offset %X00000254
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MOD referenced
+	in psect ODATA offset %X00000258
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$NINT referenced
+	in psect ODATA offset %X0000025C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER referenced
+	in psect ODATA offset %X00000260
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER_JI referenced
+	in psect ODATA offset %X00000264
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SINF referenced
+	in psect ODATA offset %X0000027C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SQRTF referenced
+	in psect ODATA offset %X00000288
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$TANF referenced
+	in psect ODATA offset %X00000294
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_D referenced
+	in psect ODATA offset %X0000029C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_F referenced
+
+NL:                                                              8-OCT-2026 20:33        Linker A13-04                    Page    3
+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+	in psect ODATA offset %X000002A0
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$FAO_COUNT_ARGS referenced
+	in psect ODATA offset %X00000430
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$SUSPEND referenced
+	in psect ODATA offset %X000004CC
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+CLI$INTERFACE   X-4                  1628 SYS$COMMON:[SYSLIB]STARLET.OLB;1     30-MAR-2010 19:29  BLISS-32E V1.11-009
+CLI$GLOBALS     X-1K2                   0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     30-MAR-2010 18:38  AMAC V5.0-120-4
+OTS$HOME_ARGS   014                   664 SYS$COMMON:[SYSLIB]STARLET.OLB;1     30-MAR-2010 19:32  MACRO-64 V1.2-108
+STR$MSGDEF      X-3                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     30-MAR-2010 17:40  Message A01-12
+LIBRTL          X01-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      31-MAR-2010 02:04  Linker A13-04
+LIBRTL_TV       V05-001                 0 [SYSLIB]LIBRTL_D56_TV.EXE;1          01-JAN-1900 12:00  VEST V1.1
+DPML$SHR        A01-005                 0 SYS$COMMON:[SYSLIB]DPML$SHR.EXE;1    31-MAR-2010 02:06  Linker A13-04
+SECURESHRP      X-8                     0 SYS$COMMON:[SYSLIB]SECURESHRP.EXE;1  31-MAR-2010 02:06  Linker A13-04
+SECURESHR       X-13                    0 SYS$COMMON:[SYSLIB]SECURESHR.EXE;1   31-MAR-2010 02:06  Linker A13-04
+SYS$PUBLIC_VECTORS             
+                X-125                   0 [SYSLIB]SYS$PUBLIC_VECTORS.EXE;1     31-MAR-2010 02:03  Linker A13-04
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page    4
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pglts   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    2     1    00000000-R        3   0 READ WRITE   NON-SHAREABLE ADDRESS DATA
+                   2     3    00010000-R        4   0 READ WRITE   COPY ON REF
+                   3     4    00020000-R        7   0 READ ONLY    EXECUTABLE
+                   2     6    00030000-R       11   0 READ WRITE   FIXUP VECTORS
+
+LIBRTL             3  1787    00000000-R        0   0 READ ONLY    EXECUTABLE    LIBRTL_001       LESS/EQUAL        1         1
+                   2   123    000E0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_002       LESS/EQUAL        1         1
+                   2    26    000F0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1         1
+                   3   103    00100000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_004       LESS/EQUAL        1         1
+                   4     1  P-00110000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_005       LESS/EQUAL        1         1
+                   2    20    00120000-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_006       LESS/EQUAL        1         1
+                   2    14    00130000-R        0   0 READ WRITE   FIXUP VECTORS LIBRTL_007       LESS/EQUAL        1         1
+
+LIBRTL_TV          2    42    00000000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_TV_001    LESS/EQUAL        1        14
+                   0   228    00010000-R        0   0 READ ONLY                  LIBRTL_TV_002    LESS/EQUAL        1        14
+                   0    63    00030000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_TV_003    LESS/EQUAL        1        14
+                   0     8    00040000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_TV_004    LESS/EQUAL        1        14
+                   0    12    00050000-R        0   0 READ WRITE   FIXUP VECTORS LIBRTL_TV_005    LESS/EQUAL        1        14
+
+DPML$SHR           1   240    00000000-R        0   0 READ ONLY    EXECUTABLE    DPML$SHR_001     LESS/EQUAL        1         0
+                   2   151    00020000-R        0   0 READ WRITE   COPY ON REF   DPML$SHR_002     LESS/EQUAL        1         0
+                   2     1    00040000-R        0   0 READ WRITE   COPY ON REF   DPML$SHR_003     LESS/EQUAL        1         0
+                   3   111    00050000-R        0   0 READ ONLY                  DPML$SHR_004     LESS/EQUAL        1         0
+                   3   876    00060000-R        0   0 READ ONLY    EXECUTABLE    DPML$SHR_005     LESS/EQUAL        1         0
+                   2     2    000D0000-R        0   0 READ WRITE   DEMAND ZERO   DPML$SHR_006     LESS/EQUAL        1         0
+                   2     5    000E0000-R        0   0 READ WRITE   FIXUP VECTORS DPML$SHR_007     LESS/EQUAL        1         0
+
+SECURESHRP         2    52  P-00000000-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_001   LESS/EQUAL        1         4
+                   2    13  P-00010000-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_002   LESS/EQUAL        1         4
+                   3     4  P-00020000-R        0   0 READ ONLY                  SECURESHRP_003   LESS/EQUAL        1         4
+                   3   369  P-00030000-R        0   0 READ ONLY    EXECUTABLE    SECURESHRP_004   LESS/EQUAL        1         4
+                   2     1  P-00060000-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_005   LESS/EQUAL        1         4
+                   2     1  P-00070000-R        0   0 READ WRITE   DEMAND ZERO   SECURESHRP_006   LESS/EQUAL        1         4
+                   2    15  P-00080000-R        0   0 READ WRITE   FIXUP VECTORS SECURESHRP_007   LESS/EQUAL        1         4
+
+SECURESHR          2    39    00000000-R        0   0 READ WRITE   COPY ON REF   SECURESHR_001    LESS/EQUAL        1         4
+                   2     6    00010000-R        0   0 READ WRITE   COPY ON REF   SECURESHR_002    LESS/EQUAL        1         4
+                   3     2    00020000-R        0   0 READ ONLY                  SECURESHR_003    LESS/EQUAL        1         4
+                   3   208    00030000-R        0   0 READ ONLY    EXECUTABLE    SECURESHR_004    LESS/EQUAL        1         4
+                   2     1    00050000-R        0   0 READ WRITE   COPY ON REF   SECURESHR_005    LESS/EQUAL        1         4
+                   3     1    00060000-R        0   0 READ ONLY    EXECUTABLE    SECURESHR_006    LESS/EQUAL        1         4
+                   2     9    00070000-R        0   0 READ WRITE   FIXUP VECTORS SECURESHR_007    LESS/EQUAL        1         4
+
+SYS$PUBLIC_VECTORS             
+                   2    20    00000000-R        0   0 READ ONLY    EXECUTABLE    SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   1    64    00004000-R        0   0 READ WRITE   COPY ON REF   SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   2     2    0000C000-R        0   0 READ WRITE   FIXUP VECTORS SYS$PUBLIC_VECTO EQUAL            51  16699012
+
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page    5
+
+
+   Cluster      Type Pglts   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! R  - Relocatable   !
+		! P  - Protected     !
+		+--------------------+
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page    6
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+$LINK$                          00000000 0000010F 00000110 (        272.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,  MOD 
+                CLI$INTERFACE   00000000 0000010F 00000110 (        272.) OCTA  4
+
+OTS$LINK                        00000110 0000011F 00000010 (         16.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,  MOD 
+                OTS$HOME_ARGS   00000110 0000011F 00000010 (         16.) OCTA  4
+
+ODATA                           00010000 000104F7 000004F8 (       1272.) QUAD  3 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,  MOD 
+                ORDS            00010000 000104F7 000004F8 (       1272.) QUAD  3
+
+. BLANK .                       00020000 00020000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,  EXE,  WRT,NOVEC,  MOD 
+                ORDS            00020000 00020000 00000000 (          0.) OCTA  4
+                CLI$GLOBALS     00020000 00020000 00000000 (          0.) OCTA  4
+
+$CODE$                          00020000 0002054B 0000054C (       1356.) OCTA  4   PIC,CON,REL,LCL,  SHR,  EXE,NOWRT,NOVEC,  MOD 
+                CLI$INTERFACE   00020000 0002054B 0000054C (       1356.) OCTA  4
+
+OTS$CODE                        00020550 000207D7 00000288 (        648.) OCTA  4   PIC,CON,REL,LCL,  SHR,  EXE,NOWRT,NOVEC,  MOD 
+                OTS$HOME_ARGS   00020550 000207D7 00000288 (        648.) OCTA  4
+
+$GLOBAL$                        00030000 00030000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,NOMOD 
+                CLI$INTERFACE   00030000 00030000 00000000 (          0.) OCTA  4
+
+$INITIAL$                       00030000 00030000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,NOMOD 
+                CLI$INTERFACE   00030000 00030000 00000000 (          0.) OCTA  4
+
+$LITERAL$                       00030000 00030000 00000000 (          0.) OCTA  4   PIC,CON,REL,LCL,  SHR,NOEXE,NOWRT,NOVEC,NOMOD 
+                CLI$INTERFACE   00030000 00030000 00000000 (          0.) OCTA  4
+
+$OWN$                           00030000 00030000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,NOMOD 
+                CLI$INTERFACE   00030000 00030000 00000000 (          0.) OCTA  4
+
+$PLIT$                          00030000 00030000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,NOMOD 
+                CLI$INTERFACE   00030000 00030000 00000000 (          0.) OCTA  4
+
+OTS$LIT                         00030000 00030000 00000000 (          0.) OCTA  4   PIC,CON,REL,LCL,  SHR,NOEXE,NOWRT,NOVEC,NOMOD 
+                OTS$HOME_ARGS   00030000 00030000 00000000 (          0.) OCTA  4
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page    7
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+CLI$COMPILE_CLD             00000000-*                                 ORDS               
+CLI$DCL_PARSE               00000078-R        CLI$INTERFACE            ORDS               
+CLI$DISPATCH                00000050-R        CLI$INTERFACE      
+CLI$FREE_CLD                00000000-*                                 ORDS               
+CLI$GET_VALUE               00000098-R        CLI$INTERFACE            ORDS               
+CLI$NEXT_QUAL               00000000-R        CLI$INTERFACE      
+CLI$PRESENT                 000000F0-R        CLI$INTERFACE            ORDS               
+CLI$_ABSENT                 000381F0          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_COMMA                  0003FD39          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_CONCAT                 0003FD29          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_DEFAULTED              0003FD21          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_LOCNEG                 00038230          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_LOCPRES                0003FD31          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_NEGATED                000381F8          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_NOCOMD                 000380B0          CLI$GLOBALS              CLI$INTERFACE      
+CLI$_PRESENT                0003FD19          CLI$GLOBALS              CLI$INTERFACE      
+LIB$$SET_CLI_HANDLER        00000000-*                                 ORDS               
+LIB$AB_ASC_EBC              00000000-RX       LIBRTL                   ORDS               
+LIB$AB_EBC_ASC              00000010-RX       LIBRTL                   ORDS               
+LIB$AB_UPCASE               00000020-RX       LIBRTL                   ORDS               
+LIB$ADAWI                   00000FE0-RX       LIBRTL                   ORDS               
+LIB$ADDX                    00000A20-RX       LIBRTL                   ORDS               
+LIB$ADD_TIMES               00001010-RX       LIBRTL                   ORDS               
+LIB$ANALYZE_SDESC           00000030-RX       LIBRTL                   ORDS               
+LIB$ANALYZE_SDESC_64        000017F0-RX       LIBRTL                   ORDS               
+LIB$BBCCI                   00000A50-RX       LIBRTL                   ORDS               
+LIB$BBSSI                   00000A60-RX       LIBRTL                   ORDS               
+LIB$CHAR                    00000AB0-RX       LIBRTL                   ORDS               
+LIB$CONVERT_DATE_STRING     00001110-RX       LIBRTL                   ORDS               
+LIB$CRC                     000000E0-RX       LIBRTL                   ORDS               
+LIB$CRC_TABLE               000000F0-RX       LIBRTL                   ORDS               
+LIB$CREATE_VM_ZONE          00000F60-RX       LIBRTL                   ORDS               
+LIB$CURRENCY                00000100-RX       LIBRTL                   ORDS               
+LIB$CVT_DTB                 00000120-RX       LIBRTL                   ORDS               
+LIB$CVT_DX_DX               000011F0-RX       LIBRTL                   ORDS               
+LIB$CVT_FROM_INTERNAL_TIME  000010E0-RX       LIBRTL                   ORDS               
+LIB$CVT_HTB                 00000130-RX       LIBRTL                   ORDS               
+LIB$CVT_OTB                 00000140-RX       LIBRTL                   ORDS               
+LIB$CVT_VECTIM              000010C0-RX       LIBRTL                   ORDS               
+LIB$DATE_TIME               00000AE0-RX       LIBRTL                   ORDS               
+LIB$DAY                     00000AF0-RX       LIBRTL                   ORDS               
+LIB$DAY_OF_WEEK             00000EE0-RX       LIBRTL                   ORDS               
+LIB$DELETE_LOGICAL          00000070-RX       LIBRTL                   ORDS               
+LIB$DELETE_SYMBOL           00000080-RX       LIBRTL                   ORDS               
+LIB$DELETE_VM_ZONE          00000F90-RX       LIBRTL                   ORDS               
+LIB$DIGIT_SEP               00000170-RX       LIBRTL                   ORDS               
+LIB$EDIV                    00000B10-RX       LIBRTL                   ORDS               
+LIB$EMUL                    00000B60-RX       LIBRTL                   ORDS               
+LIB$ESTABLISH               00000000-*                                 ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page    8
+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+LIB$EXTV                    000001C0-RX       LIBRTL                   ORDS               
+LIB$EXTZV                   000001D0-RX       LIBRTL                   ORDS               
+LIB$FFC                     000001E0-RX       LIBRTL                   ORDS               
+LIB$FFS                     000001F0-RX       LIBRTL                   ORDS               
+LIB$FIND_FILE               00000210-RX       LIBRTL                   ORDS               
+LIB$FIND_FILE_END           00000EF0-RX       LIBRTL                   ORDS               
+LIB$FIND_VM_ZONE            00001220-RX       LIBRTL                   ORDS               
+LIB$FORMAT_DATE_TIME        00001070-RX       LIBRTL                   ORDS               
+LIB$FREE_EF                 00000180-RX       LIBRTL                   ORDS               
+LIB$FREE_TIMER              00000CB0-RX       LIBRTL                   ORDS               
+LIB$FREE_VM                 000004C0-RX       LIBRTL                   CLI$INTERFACE            ORDS               
+LIB$FREE_VM_PAGE            00000FB0-RX       LIBRTL                   ORDS               
+LIB$GETDVI                  000009C0-RX       LIBRTL                   ORDS               
+LIB$GETJPI                  000009D0-RX       LIBRTL                   ORDS               
+LIB$GETSYI                  000009E0-RX       LIBRTL                   ORDS               
+LIB$GET_COMMAND             00000240-RX       LIBRTL                   ORDS               
+LIB$GET_COMMON              00000AC0-RX       LIBRTL                   ORDS               
+LIB$GET_CURR_INVO_CONTEXT   00001680-RX       LIBRTL                   ORDS               
+LIB$GET_DATE_FORMAT         00001120-RX       LIBRTL                   ORDS               
+LIB$GET_EF                  00000190-RX       LIBRTL                   ORDS               
+LIB$GET_FOREIGN             00000B70-RX       LIBRTL                   ORDS               
+LIB$GET_INPUT               00000250-RX       LIBRTL                   ORDS               
+LIB$GET_INVO_CONTEXT        00001480-RX       LIBRTL                   ORDS               
+LIB$GET_INVO_HANDLE         00001490-RX       LIBRTL                   ORDS               
+LIB$GET_MAXIMUM_DATE_LENGTH 00001130-RX       LIBRTL                   ORDS               
+LIB$GET_PREV_INVO_CONTEXT   000016A0-RX       LIBRTL                   ORDS               
+LIB$GET_PREV_INVO_HANDLE    000016B0-RX       LIBRTL                   ORDS               
+LIB$GET_SYMBOL              000000B0-RX       LIBRTL                   ORDS               
+LIB$GET_USERS_LANGUAGE      00001060-RX       LIBRTL                   ORDS               
+LIB$GET_VM                  000004D0-RX       LIBRTL                   CLI$INTERFACE            ORDS               
+LIB$GET_VM_PAGE             00000FA0-RX       LIBRTL                   ORDS               
+LIB$ICHAR                   00000B80-RX       LIBRTL                   ORDS               
+LIB$INDEX                   00000270-RX       LIBRTL                   ORDS               
+LIB$INIT_TIMER              00000CC0-RX       LIBRTL                   ORDS               
+LIB$INSERT_TREE             00000A70-RX       LIBRTL                   ORDS               
+LIB$INSQHI                  00000B90-RX       LIBRTL                   ORDS               
+LIB$INSQTI                  00000BA0-RX       LIBRTL                   ORDS               
+LIB$INSV                    00000280-RX       LIBRTL                   ORDS               
+LIB$LEN                     00000BB0-RX       LIBRTL                   ORDS               
+LIB$LOCC                    000002A0-RX       LIBRTL                   ORDS               
+LIB$LOOKUP_KEY              00000BC0-RX       LIBRTL                   ORDS               
+LIB$LOOKUP_TREE             00000A80-RX       LIBRTL                   ORDS               
+LIB$LP_LINES                000002B0-RX       LIBRTL                   ORDS               
+LIB$MATCHC                  000002E0-RX       LIBRTL                   ORDS               
+LIB$MATCH_COND              000002F0-RX       LIBRTL                   CLI$INTERFACE      
+LIB$MOVC3                   00000BD0-RX       LIBRTL                   ORDS               
+LIB$MOVC5                   00000BE0-RX       LIBRTL                   ORDS               
+LIB$MOVTC                   00000300-RX       LIBRTL                   ORDS               
+LIB$PUT_COMMON              00000AD0-RX       LIBRTL                   ORDS               
+LIB$PUT_OUTPUT              00000320-RX       LIBRTL                   ORDS               
+LIB$RADIX_POINT             00000330-RX       LIBRTL                   ORDS               
+LIB$REMQHI                  00000C30-RX       LIBRTL                   ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page    9
+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+LIB$REMQTI                  00000C40-RX       LIBRTL                   ORDS               
+LIB$RESERVE_EF              000001A0-RX       LIBRTL                   ORDS               
+LIB$RESET_VM_ZONE           00000F80-RX       LIBRTL                   ORDS               
+LIB$REVERT                  00000000-*                                 ORDS               
+LIB$SCANC                   00000360-RX       LIBRTL                   ORDS               
+LIB$SCOPY_DXDX              00000370-RX       LIBRTL                   ORDS               
+LIB$SCOPY_R_DX              00000390-RX       LIBRTL                   ORDS               
+LIB$SET_LOGICAL             000000C0-RX       LIBRTL                   ORDS               
+LIB$SET_SYMBOL              000000D0-RX       LIBRTL                   ORDS               
+LIB$SFREE1_DD               000003B0-RX       LIBRTL                   ORDS               
+LIB$SFREEN_DD               000003D0-RX       LIBRTL                   ORDS               
+LIB$SGET1_DD                000003F0-RX       LIBRTL                   ORDS               
+LIB$SHOW_TIMER              00000CD0-RX       LIBRTL                   ORDS               
+LIB$SHOW_VM                 00000470-RX       LIBRTL                   ORDS               
+LIB$SHOW_VM_ZONE            00001230-RX       LIBRTL                   ORDS               
+LIB$SIGNAL                  00000410-RX       LIBRTL                   ORDS               
+LIB$SIG_TO_RET              00000430-RX       LIBRTL                   ORDS               
+LIB$SKPC                    00000440-RX       LIBRTL                   ORDS               
+LIB$SPANC                   00000450-RX       LIBRTL                   ORDS               
+LIB$SPAWN                   00000460-RX       LIBRTL                   ORDS               
+LIB$STAT_TIMER              00000CE0-RX       LIBRTL                   ORDS               
+LIB$STAT_VM                 00000480-RX       LIBRTL                   ORDS               
+LIB$STOP                    00000420-RX       LIBRTL                   ORDS               
+LIB$SUBX                    00000A30-RX       LIBRTL                   ORDS               
+LIB$SUB_TIMES               00001020-RX       LIBRTL                   ORDS               
+LIB$SYS_ASCTIM              00000C60-RX       LIBRTL                   ORDS               
+LIB$SYS_FAO                 00000C70-RX       LIBRTL                   ORDS               
+LIB$SYS_FAOL                00000C80-RX       LIBRTL                   ORDS               
+LIB$SYS_GETMSG              00000C90-RX       LIBRTL                   ORDS               
+LIB$TABLE_PARSE             000011E0-RX       LIBRTL                   ORDS               
+LIB$TPARSE                  00000440-RX       LIBRTL_TV                ORDS               
+LIB$TRAVERSE_TREE           00000A90-RX       LIBRTL                   ORDS               
+LIB$TRA_ASC_EBC             000004A0-RX       LIBRTL                   ORDS               
+LIB$TRA_EBC_ASC             000004B0-RX       LIBRTL                   ORDS               
+LIB$VERIFY_VM_ZONE          00001240-RX       LIBRTL                   ORDS               
+LIB$WAIT                    000004E0-RX       LIBRTL                   ORDS               
+MTH$ABS                     00000FD0-RX       DPML$SHR                 ORDS               
+MTH$ABSF                    00000000-*                                 ORDS               
+MTH$ACOS                    00000280-RX       DPML$SHR                 ORDS               
+MTH$ACOSF                   00000000-*                                 ORDS               
+MTH$ALOG                    000009C0-RX       DPML$SHR                 ORDS               
+MTH$ALOG10                  000005A0-RX       DPML$SHR                 ORDS               
+MTH$ALOG10F                 00000000-*                                 ORDS               
+MTH$ALOG2                   00000550-RX       DPML$SHR                 ORDS               
+MTH$ALOGF                   00000000-*                                 ORDS               
+MTH$ASIN                    00000320-RX       DPML$SHR                 ORDS               
+MTH$ASINF                   00000000-*                                 ORDS               
+MTH$ATAN                    000003C0-RX       DPML$SHR                 ORDS               
+MTH$ATAN2                   00000460-RX       DPML$SHR                 ORDS               
+MTH$ATAN2F                  00000000-*                                 ORDS               
+MTH$ATANF                   00000000-*                                 ORDS               
+MTH$CEIL                    00000870-RX       DPML$SHR                 ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   10
+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+MTH$COS                     00000050-RX       DPML$SHR                 ORDS               
+MTH$COSD                    00000190-RX       DPML$SHR                 ORDS               
+MTH$COSF                    00000000-*                                 ORDS               
+MTH$COSH                    000005F0-RX       DPML$SHR                 ORDS               
+MTH$EXP                     00000500-RX       DPML$SHR                 ORDS               
+MTH$EXPF                    00000000-*                                 ORDS               
+MTH$FLOOR                   000008C0-RX       DPML$SHR                 ORDS               
+MTH$MAX                     00000000-*                                 ORDS               
+MTH$MIN                     00000000-*                                 ORDS               
+MTH$MOD                     00000000-*                                 ORDS               
+MTH$NINT                    00000000-*                                 ORDS               
+MTH$POWER                   00000000-*                                 ORDS               
+MTH$POWER_JI                00000000-*                                 ORDS               
+MTH$RANDOM                  00000BB0-RX       DPML$SHR                 ORDS               
+MTH$SIGN                    00000B60-RX       DPML$SHR                 ORDS               
+MTH$SIN                     000000A0-RX       DPML$SHR                 ORDS               
+MTH$SINCOS                  00000000-RX       DPML$SHR                 ORDS               
+MTH$SIND                    000001E0-RX       DPML$SHR                 ORDS               
+MTH$SINF                    00000000-*                                 ORDS               
+MTH$SINH                    00000640-RX       DPML$SHR                 ORDS               
+MTH$SQRT                    000007D0-RX       DPML$SHR                 ORDS               
+MTH$SQRTF                   00000000-*                                 ORDS               
+MTH$TAN                     000000F0-RX       DPML$SHR                 ORDS               
+MTH$TAND                    00000230-RX       DPML$SHR                 ORDS               
+MTH$TANF                    00000000-*                                 ORDS               
+MTH$TANH                    00000690-RX       DPML$SHR                 ORDS               
+OTS$CNVOUT_D                00000000-*                                 ORDS               
+OTS$CNVOUT_F                00000000-*                                 ORDS               
+OTS$CNVOUT_G                00000D20-RX       LIBRTL                   ORDS               
+OTS$CNVOUT_T                00001CE0-RX       LIBRTL                   ORDS               
+OTS$CVT_L_TB                00000530-RX       LIBRTL                   ORDS               
+OTS$CVT_L_TI                00000540-RX       LIBRTL                   ORDS               
+OTS$CVT_L_TL                00000550-RX       LIBRTL                   ORDS               
+OTS$CVT_L_TO                00000560-RX       LIBRTL                   ORDS               
+OTS$CVT_L_TU                00000EB0-RX       LIBRTL                   ORDS               
+OTS$CVT_L_TZ                00000570-RX       LIBRTL                   ORDS               
+OTS$CVT_TB_L                000005D0-RX       LIBRTL                   ORDS               
+OTS$CVT_TI_L                000005A0-RX       LIBRTL                   ORDS               
+OTS$CVT_TL_L                000005C0-RX       LIBRTL                   ORDS               
+OTS$CVT_TO_L                000005F0-RX       LIBRTL                   ORDS               
+OTS$CVT_TU_L                00000EC0-RX       LIBRTL                   ORDS               
+OTS$CVT_TZ_L                00000610-RX       LIBRTL                   ORDS               
+OTS$CVT_T_D                 00000630-RX       LIBRTL                   ORDS               
+OTS$CVT_T_F                 00000580-RX       LIBRTL                   ORDS               
+OTS$CVT_T_G                 00000640-RX       LIBRTL                   ORDS               
+OTS$CVT_T_S                 00001D40-RX       LIBRTL                   ORDS               
+OTS$CVT_T_T                 00001D50-RX       LIBRTL                   ORDS               
+OTS$DIVCG_R3                00001410-RX       DPML$SHR                 ORDS               
+OTS$DIVCT_R3                000042C0-RX       DPML$SHR                 ORDS               
+OTS$HOME_ARGS               00000110-R        OTS$HOME_ARGS            CLI$INTERFACE      
+OTS$MOVE3                   00000660-RX       LIBRTL                   ORDS               
+OTS$MOVE5                   00000680-RX       LIBRTL                   ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   11
+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+OTS$MULCG_R3                00000ED0-RX       DPML$SHR                 ORDS               
+OTS$MULCT_R3                000042E0-RX       DPML$SHR                 ORDS               
+OTS$POWCGCG_R3              00000EA0-RX       DPML$SHR                 ORDS               
+OTS$POWCGJ_R3               000042A0-RX       DPML$SHR                 ORDS               
+OTS$POWCTCT_R3              00004300-RX       DPML$SHR                 ORDS               
+OTS$POWCTJ_R3               00004320-RX       DPML$SHR                 ORDS               
+OTS$POWJJ                   00000970-RX       DPML$SHR                 ORDS               
+STR$ANALYZE_SDESC           00000740-RX       LIBRTL                   CLI$INTERFACE            ORDS               
+STR$APPEND                  00000760-RX       LIBRTL                   ORDS               
+STR$CASE_BLIND_COMPARE      00000780-RX       LIBRTL                   ORDS               
+STR$COMPARE                 00000770-RX       LIBRTL                   ORDS               
+STR$COMPARE_EQL             00000790-RX       LIBRTL                   ORDS               
+STR$COMPARE_MULTI           00000FC0-RX       LIBRTL                   ORDS               
+STR$CONCAT                  000007A0-RX       LIBRTL                   ORDS               
+STR$COPY_DX                 000007B0-RX       LIBRTL                   CLI$INTERFACE            ORDS               
+STR$COPY_R                  000007D0-RX       LIBRTL                   ORDS               
+STR$DUPL_CHAR               000007F0-RX       LIBRTL                   ORDS               
+STR$ELEMENT                 000010A0-RX       LIBRTL                   ORDS               
+STR$FIND_FIRST_IN_SET       00000810-RX       LIBRTL                   ORDS               
+STR$FIND_FIRST_NOT_IN_SET   00000820-RX       LIBRTL                   ORDS               
+STR$FIND_FIRST_SUBSTRING    00000830-RX       LIBRTL                   ORDS               
+STR$FREE1_DX                00000840-RX       LIBRTL                   ORDS               
+STR$GET1_DX                 00000860-RX       LIBRTL                   ORDS               
+STR$LEFT                    00000880-RX       LIBRTL                   ORDS               
+STR$LEN_EXTR                000008A0-RX       LIBRTL                   ORDS               
+STR$MATCH_WILD              00000ED0-RX       LIBRTL                   ORDS               
+STR$POSITION                000008C0-RX       LIBRTL                   ORDS               
+STR$POS_EXTR                000008E0-RX       LIBRTL                   ORDS               
+STR$PREFIX                  00000900-RX       LIBRTL                   ORDS               
+STR$REPLACE                 00000910-RX       LIBRTL                   ORDS               
+STR$RIGHT                   00000930-RX       LIBRTL                   ORDS               
+STR$TRANSLATE               00000950-RX       LIBRTL                   ORDS               
+STR$TRIM                    00000960-RX       LIBRTL                   ORDS               
+STR$UPCASE                  00000970-RX       LIBRTL                   ORDS               
+STR$_TRU                    00248200          STR$MSGDEF               CLI$INTERFACE      
+SYS$ASCEFC                  000000E0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$ASCTIM                  000000F0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$ASCUTC                  00000BF0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$ASSIGN                  00000100-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$AUDIT_EVENTW            00001450-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$BINTIM                  00000120-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$BINUTC                  00000BE0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$BRKTHRUW                00000AC0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CANCEL                  00000130-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CANTIM                  00000140-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CHECK_FEN               00000F30-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CHECK_PRIVILEGEW        00001470-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CHKPRO                  00000AB0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CLI                     00000090-RX       SYS$PUBLIC_VECTORS       CLI$INTERFACE      
+SYS$CLRAST                  00000670-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CLRCLUEVT               00001560-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CLREF                   000001A0-RX       SYS$PUBLIC_VECTORS       ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   12
+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+SYS$CREATE_UID              00000EC0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CREATE_USER_PROFILE     000000E0-RX       SECURESHRP               ORDS               
+SYS$CRELNM                  00000A00-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CREMBX                  000001E0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CREPRC                  000001F0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CRETVA                  00000200-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$CRMPSC                  00000160-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DACEFC                  00000210-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DASSGN                  00000230-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DCLAST                  00000240-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DCLEXH                  00000250-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DELLNM                  00000A10-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DELMBX                  00000270-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DELPRC                  00000280-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DELTVA                  00000290-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DELTVA_64               00001750-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DEQ                     00000920-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DEVICE_SCAN             00000B00-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DGBLSC                  000002A0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$DLCEFC                  000002C0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$ENQ                     00000910-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$ENQW                    00000930-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$EXIT                    000002F0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$EXPREG                  00000300-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$FAO                     00000310-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$FAOL                    00000320-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$FAO_COUNT_ARGS          00000000-*                                 ORDS               
+SYS$FILESCAN                000008B0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$FORCEX                  00000330-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$FORMAT_ACL              00000000-RX       SECURESHR                ORDS               
+SYS$GETDVI                  00000980-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETDVIW                 00000990-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETJPI                  00000610-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETJPIW                 000009A0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETMSG                  000005C0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETSYI                  00000960-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETSYIW                 000009B0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETTIM                  00000360-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GETUAI                  000000C0-RX       SECURESHRP               ORDS               
+SYS$GETUTC                  00000BC0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GL_CALL_HANDL           00000030-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$GRANTID                 00000A90-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$HIBER                   00000380-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$IMGSTA                  00000340-RX       SYS$PUBLIC_VECTORS 
+SYS$LKWSET                  000003B0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$NUMTIM                  000003E0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$NUMUTC                  00000BD0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$PARSE_ACL               00000010-RX       SECURESHR                ORDS               
+SYS$PURGWS                  000003D0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$PUTMSG                  00000620-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$QIO                     00000400-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$QIOW                    00000080-RX       SYS$PUBLIC_VECTORS       ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   13
+
+
+Symbol                      Value             Defined By               Referenced By ...
+------                      -----             ----------               -----------------
+SYS$READEF                  00000410-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$RESUME                  00000420-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$REVOKID                 00000AA0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETAST                  00000450-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETCLUEVT               00001550-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETDDIR                 00000870-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETDFPROT               00000880-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETEF                   00000460-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETEXV                  00000470-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETIMR                  000004A0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETPRI                  000004B0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETPRV                  00000660-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SETUAI                  000000D0-RX       SECURESHRP               ORDS               
+SYS$SNDOPR                  000003F0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SUSPEND                 00000000-*                                 ORDS               
+SYS$SUSPND                  00000500-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$SYNCH                   000009D0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$TIMCON                  00000BB0-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$TRNLNM                  00000A20-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$ULWSET                  00000530-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$UNWIND                  00000540-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$WAITFR                  00000550-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$WAKE                    00000560-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$WFLAND                  00000570-RX       SYS$PUBLIC_VECTORS       ORDS               
+SYS$WFLOR                   00000580-RX       SYS$PUBLIC_VECTORS       ORDS               
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   14
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000000      R-CLI$NEXT_QUAL                RX-LIB$AB_ASC_EBC               RX-MTH$SINCOS                 
+             RX-SYS$FORMAT_ACL             
+00000010     RX-LIB$AB_EBC_ASC               RX-SYS$PARSE_ACL              
+00000020     RX-LIB$AB_UPCASE              
+00000030     RX-LIB$ANALYZE_SDESC            RX-SYS$GL_CALL_HANDL          
+00000050      R-CLI$DISPATCH                 RX-MTH$COS                    
+00000070     RX-LIB$DELETE_LOGICAL         
+00000078      R-CLI$DCL_PARSE              
+00000080     RX-LIB$DELETE_SYMBOL            RX-SYS$QIOW                   
+00000090     RX-SYS$CLI                    
+00000098      R-CLI$GET_VALUE              
+000000A0     RX-MTH$SIN                    
+000000B0     RX-LIB$GET_SYMBOL             
+000000C0     RX-LIB$SET_LOGICAL              RX-SYS$GETUAI                 
+000000D0     RX-LIB$SET_SYMBOL               RX-SYS$SETUAI                 
+000000E0     RX-LIB$CRC                      RX-SYS$ASCEFC                   RX-SYS$CREATE_USER_PROFILE    
+000000F0      R-CLI$PRESENT                  RX-LIB$CRC_TABLE                RX-MTH$TAN                    
+             RX-SYS$ASCTIM                 
+00000100     RX-LIB$CURRENCY                 RX-SYS$ASSIGN                 
+00000110      R-OTS$HOME_ARGS              
+00000120     RX-LIB$CVT_DTB                  RX-SYS$BINTIM                 
+00000130     RX-LIB$CVT_HTB                  RX-SYS$CANCEL                 
+00000140     RX-LIB$CVT_OTB                  RX-SYS$CANTIM                 
+00000160     RX-SYS$CRMPSC                 
+00000170     RX-LIB$DIGIT_SEP              
+00000180     RX-LIB$FREE_EF                
+00000190     RX-LIB$GET_EF                   RX-MTH$COSD                   
+000001A0     RX-LIB$RESERVE_EF               RX-SYS$CLREF                  
+000001C0     RX-LIB$EXTV                   
+000001D0     RX-LIB$EXTZV                  
+000001E0     RX-LIB$FFC                      RX-MTH$SIND                     RX-SYS$CREMBX                 
+000001F0     RX-LIB$FFS                      RX-SYS$CREPRC                 
+00000200     RX-SYS$CRETVA                 
+00000210     RX-LIB$FIND_FILE                RX-SYS$DACEFC                 
+00000230     RX-MTH$TAND                     RX-SYS$DASSGN                 
+00000240     RX-LIB$GET_COMMAND              RX-SYS$DCLAST                 
+00000250     RX-LIB$GET_INPUT                RX-SYS$DCLEXH                 
+00000270     RX-LIB$INDEX                    RX-SYS$DELMBX                 
+00000280     RX-LIB$INSV                     RX-MTH$ACOS                     RX-SYS$DELPRC                 
+00000290     RX-SYS$DELTVA                 
+000002A0     RX-LIB$LOCC                     RX-SYS$DGBLSC                 
+000002B0     RX-LIB$LP_LINES               
+000002C0     RX-SYS$DLCEFC                 
+000002E0     RX-LIB$MATCHC                 
+000002F0     RX-LIB$MATCH_COND               RX-SYS$EXIT                   
+00000300     RX-LIB$MOVTC                    RX-SYS$EXPREG                 
+00000310     RX-SYS$FAO                    
+00000320     RX-LIB$PUT_OUTPUT               RX-MTH$ASIN                     RX-SYS$FAOL                   
+00000330     RX-LIB$RADIX_POINT              RX-SYS$FORCEX                 
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   15
+
+
+Value                                   Symbols...
+-----                                   ----------
+00000340     RX-SYS$IMGSTA                 
+00000360     RX-LIB$SCANC                    RX-SYS$GETTIM                 
+00000370     RX-LIB$SCOPY_DXDX             
+00000380     RX-SYS$HIBER                  
+00000390     RX-LIB$SCOPY_R_DX             
+000003B0     RX-LIB$SFREE1_DD                RX-SYS$LKWSET                 
+000003C0     RX-MTH$ATAN                   
+000003D0     RX-LIB$SFREEN_DD                RX-SYS$PURGWS                 
+000003E0     RX-SYS$NUMTIM                 
+000003F0     RX-LIB$SGET1_DD                 RX-SYS$SNDOPR                 
+00000400     RX-SYS$QIO                    
+00000410     RX-LIB$SIGNAL                   RX-SYS$READEF                 
+00000420     RX-LIB$STOP                     RX-SYS$RESUME                 
+00000430     RX-LIB$SIG_TO_RET             
+00000440     RX-LIB$SKPC                     RX-LIB$TPARSE                 
+00000450     RX-LIB$SPANC                    RX-SYS$SETAST                 
+00000460     RX-LIB$SPAWN                    RX-MTH$ATAN2                    RX-SYS$SETEF                  
+00000470     RX-LIB$SHOW_VM                  RX-SYS$SETEXV                 
+00000480     RX-LIB$STAT_VM                
+000004A0     RX-LIB$TRA_ASC_EBC              RX-SYS$SETIMR                 
+000004B0     RX-LIB$TRA_EBC_ASC              RX-SYS$SETPRI                 
+000004C0     RX-LIB$FREE_VM                
+000004D0     RX-LIB$GET_VM                 
+000004E0     RX-LIB$WAIT                   
+00000500     RX-MTH$EXP                      RX-SYS$SUSPND                 
+00000530     RX-OTS$CVT_L_TB                 RX-SYS$ULWSET                 
+00000540     RX-OTS$CVT_L_TI                 RX-SYS$UNWIND                 
+00000550     RX-MTH$ALOG2                    RX-OTS$CVT_L_TL                 RX-SYS$WAITFR                 
+00000560     RX-OTS$CVT_L_TO                 RX-SYS$WAKE                   
+00000570     RX-OTS$CVT_L_TZ                 RX-SYS$WFLAND                 
+00000580     RX-OTS$CVT_T_F                  RX-SYS$WFLOR                  
+000005A0     RX-MTH$ALOG10                   RX-OTS$CVT_TI_L               
+000005C0     RX-OTS$CVT_TL_L                 RX-SYS$GETMSG                 
+000005D0     RX-OTS$CVT_TB_L               
+000005F0     RX-MTH$COSH                     RX-OTS$CVT_TO_L               
+00000610     RX-OTS$CVT_TZ_L                 RX-SYS$GETJPI                 
+00000620     RX-SYS$PUTMSG                 
+00000630     RX-OTS$CVT_T_D                
+00000640     RX-MTH$SINH                     RX-OTS$CVT_T_G                
+00000660     RX-OTS$MOVE3                    RX-SYS$SETPRV                 
+00000670     RX-SYS$CLRAST                 
+00000680     RX-OTS$MOVE5                  
+00000690     RX-MTH$TANH                   
+00000740     RX-STR$ANALYZE_SDESC          
+00000760     RX-STR$APPEND                 
+00000770     RX-STR$COMPARE                
+00000780     RX-STR$CASE_BLIND_COMPARE     
+00000790     RX-STR$COMPARE_EQL            
+000007A0     RX-STR$CONCAT                 
+000007B0     RX-STR$COPY_DX                
+000007D0     RX-MTH$SQRT                     RX-STR$COPY_R                 
+000007F0     RX-STR$DUPL_CHAR              
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   16
+
+
+Value                                   Symbols...
+-----                                   ----------
+00000810     RX-STR$FIND_FIRST_IN_SET      
+00000820     RX-STR$FIND_FIRST_NOT_IN_SET  
+00000830     RX-STR$FIND_FIRST_SUBSTRING   
+00000840     RX-STR$FREE1_DX               
+00000860     RX-STR$GET1_DX                
+00000870     RX-MTH$CEIL                     RX-SYS$SETDDIR                
+00000880     RX-STR$LEFT                     RX-SYS$SETDFPROT              
+000008A0     RX-STR$LEN_EXTR               
+000008B0     RX-SYS$FILESCAN               
+000008C0     RX-MTH$FLOOR                    RX-STR$POSITION               
+000008E0     RX-STR$POS_EXTR               
+00000900     RX-STR$PREFIX                 
+00000910     RX-STR$REPLACE                  RX-SYS$ENQ                    
+00000920     RX-SYS$DEQ                    
+00000930     RX-STR$RIGHT                    RX-SYS$ENQW                   
+00000950     RX-STR$TRANSLATE              
+00000960     RX-STR$TRIM                     RX-SYS$GETSYI                 
+00000970     RX-OTS$POWJJ                    RX-STR$UPCASE                 
+00000980     RX-SYS$GETDVI                 
+00000990     RX-SYS$GETDVIW                
+000009A0     RX-SYS$GETJPIW                
+000009B0     RX-SYS$GETSYIW                
+000009C0     RX-LIB$GETDVI                   RX-MTH$ALOG                   
+000009D0     RX-LIB$GETJPI                   RX-SYS$SYNCH                  
+000009E0     RX-LIB$GETSYI                 
+00000A00     RX-SYS$CRELNM                 
+00000A10     RX-SYS$DELLNM                 
+00000A20     RX-LIB$ADDX                     RX-SYS$TRNLNM                 
+00000A30     RX-LIB$SUBX                   
+00000A50     RX-LIB$BBCCI                  
+00000A60     RX-LIB$BBSSI                  
+00000A70     RX-LIB$INSERT_TREE            
+00000A80     RX-LIB$LOOKUP_TREE            
+00000A90     RX-LIB$TRAVERSE_TREE            RX-SYS$GRANTID                
+00000AA0     RX-SYS$REVOKID                
+00000AB0     RX-LIB$CHAR                     RX-SYS$CHKPRO                 
+00000AC0     RX-LIB$GET_COMMON               RX-SYS$BRKTHRUW               
+00000AD0     RX-LIB$PUT_COMMON             
+00000AE0     RX-LIB$DATE_TIME              
+00000AF0     RX-LIB$DAY                    
+00000B00     RX-SYS$DEVICE_SCAN            
+00000B10     RX-LIB$EDIV                   
+00000B60     RX-LIB$EMUL                     RX-MTH$SIGN                   
+00000B70     RX-LIB$GET_FOREIGN            
+00000B80     RX-LIB$ICHAR                  
+00000B90     RX-LIB$INSQHI                 
+00000BA0     RX-LIB$INSQTI                 
+00000BB0     RX-LIB$LEN                      RX-MTH$RANDOM                   RX-SYS$TIMCON                 
+00000BC0     RX-LIB$LOOKUP_KEY               RX-SYS$GETUTC                 
+00000BD0     RX-LIB$MOVC3                    RX-SYS$NUMUTC                 
+00000BE0     RX-LIB$MOVC5                    RX-SYS$BINUTC                 
+00000BF0     RX-SYS$ASCUTC                 
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   17
+
+
+Value                                   Symbols...
+-----                                   ----------
+00000C30     RX-LIB$REMQHI                 
+00000C40     RX-LIB$REMQTI                 
+00000C60     RX-LIB$SYS_ASCTIM             
+00000C70     RX-LIB$SYS_FAO                
+00000C80     RX-LIB$SYS_FAOL               
+00000C90     RX-LIB$SYS_GETMSG             
+00000CB0     RX-LIB$FREE_TIMER             
+00000CC0     RX-LIB$INIT_TIMER             
+00000CD0     RX-LIB$SHOW_TIMER             
+00000CE0     RX-LIB$STAT_TIMER             
+00000D20     RX-OTS$CNVOUT_G               
+00000EA0     RX-OTS$POWCGCG_R3             
+00000EB0     RX-OTS$CVT_L_TU               
+00000EC0     RX-OTS$CVT_TU_L                 RX-SYS$CREATE_UID             
+00000ED0     RX-OTS$MULCG_R3                 RX-STR$MATCH_WILD             
+00000EE0     RX-LIB$DAY_OF_WEEK            
+00000EF0     RX-LIB$FIND_FILE_END          
+00000F30     RX-SYS$CHECK_FEN              
+00000F60     RX-LIB$CREATE_VM_ZONE         
+00000F80     RX-LIB$RESET_VM_ZONE          
+00000F90     RX-LIB$DELETE_VM_ZONE         
+00000FA0     RX-LIB$GET_VM_PAGE            
+00000FB0     RX-LIB$FREE_VM_PAGE           
+00000FC0     RX-STR$COMPARE_MULTI          
+00000FD0     RX-MTH$ABS                    
+00000FE0     RX-LIB$ADAWI                  
+00001010     RX-LIB$ADD_TIMES              
+00001020     RX-LIB$SUB_TIMES              
+00001060     RX-LIB$GET_USERS_LANGUAGE     
+00001070     RX-LIB$FORMAT_DATE_TIME       
+000010A0     RX-STR$ELEMENT                
+000010C0     RX-LIB$CVT_VECTIM             
+000010E0     RX-LIB$CVT_FROM_INTERNAL_TIME 
+00001110     RX-LIB$CONVERT_DATE_STRING    
+00001120     RX-LIB$GET_DATE_FORMAT        
+00001130     RX-LIB$GET_MAXIMUM_DATE_LENGTH
+000011E0     RX-LIB$TABLE_PARSE            
+000011F0     RX-LIB$CVT_DX_DX              
+00001220     RX-LIB$FIND_VM_ZONE           
+00001230     RX-LIB$SHOW_VM_ZONE           
+00001240     RX-LIB$VERIFY_VM_ZONE         
+00001410     RX-OTS$DIVCG_R3               
+00001450     RX-SYS$AUDIT_EVENTW           
+00001470     RX-SYS$CHECK_PRIVILEGEW       
+00001480     RX-LIB$GET_INVO_CONTEXT       
+00001490     RX-LIB$GET_INVO_HANDLE        
+00001550     RX-SYS$SETCLUEVT              
+00001560     RX-SYS$CLRCLUEVT              
+00001680     RX-LIB$GET_CURR_INVO_CONTEXT  
+000016A0     RX-LIB$GET_PREV_INVO_CONTEXT  
+000016B0     RX-LIB$GET_PREV_INVO_HANDLE   
+00001750     RX-SYS$DELTVA_64              
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   18
+
+
+Value                                   Symbols...
+-----                                   ----------
+000017F0     RX-LIB$ANALYZE_SDESC_64       
+00001CE0     RX-OTS$CNVOUT_T               
+00001D40     RX-OTS$CVT_T_S                
+00001D50     RX-OTS$CVT_T_T                
+000042A0     RX-OTS$POWCGJ_R3              
+000042C0     RX-OTS$DIVCT_R3               
+000042E0     RX-OTS$MULCT_R3               
+00004300     RX-OTS$POWCTCT_R3             
+00004320     RX-OTS$POWCTJ_R3              
+000380B0        CLI$_NOCOMD                
+000381F0        CLI$_ABSENT                
+000381F8        CLI$_NEGATED               
+00038230        CLI$_LOCNEG                
+0003FD19        CLI$_PRESENT               
+0003FD21        CLI$_DEFAULTED             
+0003FD29        CLI$_CONCAT                
+0003FD31        CLI$_LOCPRES               
+0003FD39        CLI$_COMMA                 
+00248200        STR$_TRU                   
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! *  - Undefined     !
+		! A  - Alias Name    !
+		! I  - Internal Name !
+		! U  - Universal     !
+		! R  - Relocatable   !
+		! X  - External      !
+		! WK - Weak          !
+		+--------------------+
+
+NL:[].EXE;                                                       8-OCT-2026 20:33        Linker A13-04                    Page   19
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000000 0003FFFF 00040000 (262144. bytes, 512. pages)
+Stack size:                                              0. pages
+Image header virtual block limits:                       1.        2. (    2. blocks)
+Image binary virtual block limits:                       3.       16. (   14. blocks)
+Image name and identification:                     V1
+Number of files:                                         9.
+Number of modules:                                      11.
+Number of program sections:                             21.
+Number of global symbols:                             1666.
+Including undefined count of:                           27.
+Number of cross references:                            642.
+Number of image sections:                               40.
+Debugger transfer address:                        00000340
+Number of code references to shareable images:         291.
+Image type:                                         PIC, SHAREABLE. Global Section Match=EQUAL, Ident, Major=58, Minor=15517435
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]ORDS.MAP;1
+Estimated map length:                             291. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults	CPU Time	Elapsed Time
+----------------------                            -----------	--------	------------
+    Command processing:                                    27	00:00:00.01	00:00:00.01
+    Pass 1:                                               170	00:00:00.26	00:00:00.29
+    Allocation/Relocation:                                 20	00:00:00.01	00:00:00.00
+    Pass 2:                                                17	00:00:00.07	00:00:00.15
+    Map data after object module synopsis:                  4	00:00:00.07	00:00:00.06
+    Symbol table output:                                    1	00:00:00.00	00:00:00.00
+Total run values:                                         239	00:00:00.42	00:00:00.53
+
+Using a working set limited to 8896 pages and 2729 pages of data storage (excluding image)
+
+Total number object records read (both passes):   350
+    of which 33 were in libraries and 6 were DEBUG data records containing 375 bytes
+187 bytes of DEBUG data were written,starting at VBN 17 with 2 blocks allocated
+
+Number of modules extracted explicitly             = 0
+    with 4 extracted to resolve undefined symbols
+
+114 library searches were for symbols not in the library searched
+
+A total of 4 global symbol table records was written
+
+LINK/SHAREABLE/MAP/FULL/CROSS/NOEXECUTABLE ORDS

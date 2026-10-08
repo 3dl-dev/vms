@@ -154,6 +154,7 @@ docker run --rm \
     -e JOINT_MAIN_CFLAGS \
     -e JOINT_MAIN_MUSL_HEADERS \
     -e JOINT_LINK_BASE \
+    -e JOINT_NATIVE_PROOF \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -265,6 +266,17 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     # LIBVMSRMS$SHR, which is why the rung-4 activation drew %IMGACT-F-IMGNOTFND on
     # the first unstaged producer). A non-veneer run never enters this block.
     cp "$SYS" "$PROC" "$LNM" "$FS" "$VMS" "$OUT/"
+
+    # vms-3b3f: the vector images through which an image LINKed on real
+    # OpenVMS Alpha reaches OVMX (SYS$PUBLIC_VECTORS, LIBRTL), each symbol
+    # vector in the VMS ordinal layout of its manifest (src/vmslink/vms_vectors/),
+    # forwarding into LIBVMS$SHR. Built beside the producer graph they use.
+    echo "-- [vms-3b3f] the VMS vector images (SYS\$PUBLIC_VECTORS, LIBRTL) --"
+    for _vec in SYS\$PUBLIC_VECTORS LIBRTL; do
+        ALPHA_CC="$ALPHA_CC" sh "$MK/vms_vectors/mk_vms_vector_shr.sh" "$WORK/LINK.EXE" \
+            "$MK/vms_vectors/$_vec.vec" "$OUT/$_vec.EXE" "$WORK"
+    done
+    [ "${JOINT_NATIVE_PROOF:-0}" = 1 ] && { : > "$OUT/NATIVE_PROOF"; echo "== NATIVE_PROOF marker staged (vms-3b3f native-image gate) =="; }
 
     echo "-- [vms-9f8e] DECC\$SHR pass 2 (final, the C RTL file layer over RMS, vms-b90) --"
     OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \

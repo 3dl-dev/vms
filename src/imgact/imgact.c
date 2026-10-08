@@ -47,6 +47,7 @@
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
 #include "imgact_xfer.h"  /* .vms$xfer parse: SysV vs. VMS-standard (vms-f60d) */
+#include "imgact_eihd.h"  /* OpenVMS Alpha native image reader (vms-3b3f) */
 #include "ovmx_activation.h" /* VMS image-activation context contract (vms-f60d) */
 #include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
@@ -2767,6 +2768,70 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 }
 #endif
 
+/* Complete the producer closure once every image import is bound: RMS,
+ * deferred weak imports, C-RTL/TLS ownership, and the resident-producer
+ * registry. Shared by the ELF symbol-vector path and the OpenVMS Alpha
+ * native-image path (vms-3b3f). */
+static void imgact_finish_producers(void)
+{
+	/* RMS is part of every VMS process (it lives in system space; an image
+	 * never "links" it). The OVMX RTL reaches RMS through weak-by-name imports
+	 * in LIBVMS$SHR (LIB$FIND_FILE, the RMS text-file seam), which bind only if
+	 * LIBVMSRMS$SHR is in the producer closure -- and it is there only when the
+	 * image itself calls an RMS service. So an image that called LIB$FIND_FILE
+	 * but no $PARSE got SS$_NOSUCHDEV (rd vms-214). Load it whenever LIBVMS$SHR
+	 * is loaded, as VMS always has RMS present; an absent LIBVMSRMS$SHR is not
+	 * an error here (the seam then fails honestly, as before). */
+	for (int i = 0; i < g_nprods; i++) {
+		const char *n = g_prods[i].name, *want = "LIBVMS$SHR";
+		int k = 0;
+		while (want[k] && (n[k] == want[k] || n[k] == want[k] + 32))
+			k++;
+		if (!want[k] && (n[k] == '\0' || n[k] == '.')) {
+			(void)load_ovmx_producer("LIBVMSRMS$SHR.EXE");
+			break;
+		}
+	}
+
+	/* Now that the ENTIRE producer closure is loaded, resolve every producer's
+	 * weak-by-name imports against it (LIBVMS$SHR's sys$open/$get/$connect/$close
+	 * -> LIBVMSRMS$SHR). Must follow bind_imports so all producers are present;
+	 * the bound cells are read only later, at login time. (vms-5f0) */
+	resolve_weak_imports();
+
+	/* TLS ownership. There is exactly one thread pointer (TPIDR_EL0) per
+	 * process, so whoever programs it defines the TLS coordinate system:
+	 *  - C-RTL present -> musl owns TP + its own TCB/TLS (drive_crtl_init).
+	 *    A TLS-bearing lib producer (its own .tdata/.tbss + TLSDESC) that also
+	 *    imports from DECC$SHR then has its TLS module ABSORBED into that view:
+	 *    IMGACT gives the module its own block and biases its static TLSDESC
+	 *    entries relative to musl's TP (setup_producer_tls_over_crtl, vms-616).
+	 *    The executable module's OWN TLS (e.g. DCL's dcl_messages.o) is absorbed
+	 *    the same way in that pass (g_exe, vms-c86).
+	 *  - no C-RTL      -> IMGACT owns TP for any TLSDESC producer AND the
+	 *    executable's own TLS (setup_symvec_tls includes g_exe, vms-c86).
+	 * (The truly-conflicting "two things both want to BE the TP owner" case does
+	 * not arise: DECC$SHR carries no PT_TLS — musl's own TLS comes from the main
+	 * program's PT_TLS, which OVMX consumers do not have.) */
+	struct ovmx_prod *crtl = find_crtl_producer();
+	if (crtl) {
+		drive_crtl_init(crtl);            /* musl owns TP + its TCB/TLS  */
+		reserve_exe_main_tls_over_crtl(crtl); /* exe's own LE/IE TLS below TP (vms-c07) */
+		setup_producer_tls_over_crtl(crtl);  /* absorb producer TLSDESC modules */
+	} else {
+		/* Set up TLS for any producer that has thread-local storage, before the
+		 * consumer (which may call into that producer's TLS-using code) runs. */
+		setup_symvec_tls();
+	}
+
+	/* Hand the resident producer bases across to LIBVMS$SHR's registry so a
+	 * later in-process RUN can bind to them (vms-db2, §A.8 gap 1). AFTER the
+	 * C-RTL init above: imgact_publish_producers -> imgact_register_producer
+	 * calls strlen/strncmp/strncpy, DECC$SHR universals that are only usable once
+	 * musl (drive_crtl_init) has run and LIBVMS$SHR's own imports are bound. */
+	publish_resident_producers();
+}
+
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 				   ElfW(Phdr) *ephdr, int ephnum)
 {
@@ -2876,62 +2941,7 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
 	bind_imports(exe_base, ih, "IMAGE.EXE");
 
-	/* RMS is part of every VMS process (it lives in system space; an image
-	 * never "links" it). The OVMX RTL reaches RMS through weak-by-name imports
-	 * in LIBVMS$SHR (LIB$FIND_FILE, the RMS text-file seam), which bind only if
-	 * LIBVMSRMS$SHR is in the producer closure -- and it is there only when the
-	 * image itself calls an RMS service. So an image that called LIB$FIND_FILE
-	 * but no $PARSE got SS$_NOSUCHDEV (rd vms-214). Load it whenever LIBVMS$SHR
-	 * is loaded, as VMS always has RMS present; an absent LIBVMSRMS$SHR is not
-	 * an error here (the seam then fails honestly, as before). */
-	for (int i = 0; i < g_nprods; i++) {
-		const char *n = g_prods[i].name, *want = "LIBVMS$SHR";
-		int k = 0;
-		while (want[k] && (n[k] == want[k] || n[k] == want[k] + 32))
-			k++;
-		if (!want[k] && (n[k] == '\0' || n[k] == '.')) {
-			(void)load_ovmx_producer("LIBVMSRMS$SHR.EXE");
-			break;
-		}
-	}
-
-	/* Now that the ENTIRE producer closure is loaded, resolve every producer's
-	 * weak-by-name imports against it (LIBVMS$SHR's sys$open/$get/$connect/$close
-	 * -> LIBVMSRMS$SHR). Must follow bind_imports so all producers are present;
-	 * the bound cells are read only later, at login time. (vms-5f0) */
-	resolve_weak_imports();
-
-	/* TLS ownership. There is exactly one thread pointer (TPIDR_EL0) per
-	 * process, so whoever programs it defines the TLS coordinate system:
-	 *  - C-RTL present -> musl owns TP + its own TCB/TLS (drive_crtl_init).
-	 *    A TLS-bearing lib producer (its own .tdata/.tbss + TLSDESC) that also
-	 *    imports from DECC$SHR then has its TLS module ABSORBED into that view:
-	 *    IMGACT gives the module its own block and biases its static TLSDESC
-	 *    entries relative to musl's TP (setup_producer_tls_over_crtl, vms-616).
-	 *    The executable module's OWN TLS (e.g. DCL's dcl_messages.o) is absorbed
-	 *    the same way in that pass (g_exe, vms-c86).
-	 *  - no C-RTL      -> IMGACT owns TP for any TLSDESC producer AND the
-	 *    executable's own TLS (setup_symvec_tls includes g_exe, vms-c86).
-	 * (The truly-conflicting "two things both want to BE the TP owner" case does
-	 * not arise: DECC$SHR carries no PT_TLS — musl's own TLS comes from the main
-	 * program's PT_TLS, which OVMX consumers do not have.) */
-	struct ovmx_prod *crtl = find_crtl_producer();
-	if (crtl) {
-		drive_crtl_init(crtl);            /* musl owns TP + its TCB/TLS  */
-		reserve_exe_main_tls_over_crtl(crtl); /* exe's own LE/IE TLS below TP (vms-c07) */
-		setup_producer_tls_over_crtl(crtl);  /* absorb producer TLSDESC modules */
-	} else {
-		/* Set up TLS for any producer that has thread-local storage, before the
-		 * consumer (which may call into that producer's TLS-using code) runs. */
-		setup_symvec_tls();
-	}
-
-	/* Hand the resident producer bases across to LIBVMS$SHR's registry so a
-	 * later in-process RUN can bind to them (vms-db2, §A.8 gap 1). AFTER the
-	 * C-RTL init above: imgact_publish_producers -> imgact_register_producer
-	 * calls strlen/strncmp/strncpy, DECC$SHR universals that are only usable once
-	 * musl (drive_crtl_init) has run and LIBVMS$SHR's own imports are bound. */
-	publish_resident_producers();
+	imgact_finish_producers();
 
 	/* Register this executable's DWARF .eh_frame with libgcc's unwinder BEFORE
 	 * its .init_array runs (vms-70d): libstdc++'s eh_alloc emergency-pool ctor
@@ -3019,6 +3029,573 @@ static void imgact_maybe_boundary_audit(char **envp, const char *image)
 	imgact_boundary_audit_install(image ? image : "IMAGE.EXE", log);
 }
 
+#if defined(__alpha__)
+/* --------------------------------------------------------------------------
+ * vms-3b3f: activating an OpenVMS Alpha native image (EIHD format) -- an .EXE
+ * LINKed on real OpenVMS Alpha, unchanged.
+ *
+ * Reached from the vms-fb4 launch mode when the file is not ELF: DCL hands a
+ * file the substrate kernel cannot load (ENOEXEC) to IMGACT.EXE, as VMS hands
+ * every image to its activator. The format reader is imgact_eihd.h (derived
+ * from images we LINKed on the lab Alpha V8.4 node and that node's own
+ * ANALYZE/IMAGE output; see its header). This half does what the image
+ * activator does with it:
+ *   - map each image section at its virtual address (a shareable at a P0 base
+ *     the activator picks, then its quadword/longword relocations);
+ *   - activate every shareable in the image's shareable list -- an OVMX
+ *     producer (ELF, its symbol vector in the VMS ordinal layout: OVMX's
+ *     SYS$PUBLIC_VECTORS / LIBRTL, src/vmslink/vms_vectors/) or another
+ *     native shareable -- with its GSMATCH checked against the ident the
+ *     image was linked with;
+ *   - fill every linkage pair from the target's symbol vector entry by byte
+ *     offset: {code address, procedure value};
+ *   - apply the protection-change fixups, then call the transfer vector with
+ *     the six-argument activation list and route the returned condition value
+ *     to the executive $EXIT.
+ * Anything the reader or this activator does not implement fails the
+ * activation with the VMS status a real activator gives (or SS$_UNSUPPORTED
+ * plus an %IMGACT-I-NOTIMPL line naming what OVMX lacks), never a pretend
+ * success.
+ * -------------------------------------------------------------------------- */
+#define EIHD_PG          8192UL                       /* Alpha page */
+#define EIHD_PG_DOWN(x)  ((x) & ~(EIHD_PG - 1))
+#define EIHD_PG_UP(x)    EIHD_PG_DOWN((x) + EIHD_PG - 1)
+
+/* Condition values a real activator returns (observed: RUN of a missing
+ * shareable, of a shareable relinked with a new GSMATCH, and of a text file on
+ * the lab Alpha V8.4 node -- tests/lab/captures/native-image-alpha-20261008/),
+ * plus SYSTEM message numbers from that node's message catalog
+ * (docs/oracle/messages/alpha84-msgcat.txt). */
+#define EIHD_STS_INHIB_MSG     0x10000000u
+#define EIHD_CLI_IMAGEFNF      0x000388B2u   /* -CLI-E-IMAGEFNF           */
+#define EIHD_SS_SHRIDMISMAT    0x000020BCu   /* -SYSTEM-F-SHRIDMISMAT     */
+#define EIHD_IMGACT_NOTNATIVE  0x004D8CFCu   /* -IMGACT-F-NOTNATIVE       */
+#define EIHD_SS_BADIMGHDR      0x00000044u   /* -SYSTEM-F-BADIMGHDR       */
+#define EIHD_SS_UNSUPPORTED    0x00000E4Cu   /* -SYSTEM-F-UNSUPPORTED     */
+
+static void imgact_vms_exit(unsigned long cond);
+
+/* The image name as DCL's %DCL-W-ACTIMAGE reports it: the file name, without
+ * directory, type or version. */
+static void eihd_image_name(const char *spec, char *out, unsigned long sz)
+{
+	const char *b = spec;
+	for (const char *q = spec; *q; q++)
+		if (*q == '/' || *q == ']' || *q == ':')
+			b = q + 1;
+	unsigned long n = 0;
+	while (b[n] && b[n] != '.' && b[n] != ';' && n + 1 < sz) {
+		char c = b[n];
+		out[n] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+		n++;
+	}
+	out[n] = '\0';
+}
+
+/* Fail the activation the way the VMS activator reports it under DCL, record
+ * the condition value (message-inhibited: it has been displayed) as the
+ * process completion status through the executive, and exit. */
+static void eihd_fail(const char *image, const char *line2, const char *detail2,
+		      const char *line3, const char *detail3, uint32_t cond)
+{
+	char line[600];
+	line[0] = '\0';
+	xstrcat(line, "%DCL-W-ACTIMAGE, error activating image ");
+	xstrcat(line, image);
+	xstrcat(line, "\n");
+	if (line2) {
+		xstrcat(line, line2);
+		if (detail2)
+			xstrcat(line, detail2);
+		xstrcat(line, "\n");
+	}
+	if (line3) {
+		xstrcat(line, line3);
+		if (detail3)
+			xstrcat(line, detail3);
+		xstrcat(line, "\n");
+	}
+	eputs(line);
+	imgact_vms_exit(EIHD_STS_INHIB_MSG | cond);
+	sys_exit(IMGACT_EXIT_FAIL);
+}
+
+static void eihd_fail_file(const char *image, const char *spec, const char *what,
+			   uint32_t cond)
+{
+	eihd_fail(image, "-CLI-E-IMGNAME, image file ", spec, what, 0, cond);
+}
+
+static void eihd_fail_notimpl(const char *image, const char *spec, const char *what)
+{
+	char l3[200];
+	l3[0] = '\0';
+	xstrcat(l3, "-SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
+	xstrcat(l3, "-IMGACT-I-NOTIMPL, not implemented by OVMX: ");
+	eihd_fail(image, "-CLI-E-IMGNAME, image file ", spec, l3, what,
+		  EIHD_SS_UNSUPPORTED);
+}
+
+/* One activated native image (the main image or a native shareable). */
+struct eihd_img {
+	char             name[40];
+	char             spec[160];
+	uint8_t         *hdr;          /* header blocks, P0 (passed as imghdr)   */
+	struct eihd_info info;
+	unsigned long    delta;        /* run-time minus linked address          */
+	unsigned long    lo, hi;       /* linked extent of its local sections    */
+	unsigned long    iaf;          /* run-time address of the fixup section  */
+	unsigned long    iaflen;
+	int              active;       /* activation in progress (cycle guard)   */
+};
+
+/* One entry of the activation's shareable set, by name. */
+struct eihd_shr {
+	char             name[40];
+	struct ovmx_prod *prod;        /* an OVMX producer (ELF symbol vector)   */
+	struct eihd_img  *img;         /* or a native shareable                   */
+	uint32_t         ident;        /* its GSMATCH ident                       */
+};
+static struct eihd_img g_eimg[8];
+static int             g_neimg;
+static struct eihd_shr g_eshr[16];
+static int             g_neshr;
+
+/* A P0 scratch area for the activation context the image reads through
+ * 32-bit addresses (its image header copy, the image-file descriptor). */
+static unsigned long eihd_p0_alloc(unsigned long n)
+{
+	void *m = imgact_map_span(EIHD_PG_UP(n));
+	if (m == MAP_FAILED || (unsigned long)m >= 0x80000000UL)
+		return 0;
+	return (unsigned long)m;
+}
+
+static struct eihd_shr *eihd_activate_shl(const char *name, const char *by);
+static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main);
+
+/* The run-time address of a cell named by a fixup offset, bounds-checked
+ * against the image's mapped extent. */
+static unsigned long eihd_cell(struct eihd_img *m, unsigned long off, unsigned w)
+{
+	unsigned long a = m->lo + off;
+	if (a < m->lo || a + w > m->hi)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	return a + m->delta;
+}
+
+static struct eihd_img *g_rel_img;
+static void eihd_qrel(void *arg, uint32_t off)
+{
+	(void)arg;
+	unsigned long c = eihd_cell(g_rel_img, off, 8);
+	*(unsigned long *)c += g_rel_img->delta;
+}
+static void eihd_lrel(void *arg, uint32_t off)
+{
+	(void)arg;
+	unsigned long c = eihd_cell(g_rel_img, off, 4);
+	*(unsigned int *)c = (unsigned int)(*(unsigned int *)c + g_rel_img->delta);
+}
+
+/* Resolve symbol vector byte offset `voff` of shareable `s` to a procedure
+ * value and code address. */
+static void eihd_vector_entry(struct eihd_shr *s, unsigned long voff,
+			      const char *by, unsigned long *code, unsigned long *pv)
+{
+	char what[96];
+	if (s->img) {
+		struct eihd_img *t = s->img;
+		if (voff % 16 || voff + 16 > t->info.symvec_size)
+			goto missing;
+		unsigned long e = t->info.symvva + t->delta + voff;
+		*code = *(unsigned long *)e;
+		*pv   = *(unsigned long *)(e + 8);
+		return;
+	}
+	if (voff % 16)
+		goto missing;
+	{
+		const struct ovmx_sv_entry *e = ovmx_sv_at(s->prod->sv, (uint32_t)(voff / 16));
+		if (!e || e->kind != OVMX_SV_PROCEDURE)
+			goto missing;
+		*pv   = s->prod->base + e->value;
+		*code = imgact_sv_code_entry(*pv);
+		return;
+	}
+missing:
+	what[0] = '\0';
+	xstrcat(what, "symbol vector entry of ");
+	xstrcat(what, s->name);
+	xstrcat(what, " at offset %X'");
+	{
+		char hex[9];
+		imgact_u32_hex8(hex, (uint32_t)voff);
+		xstrcat(what, hex);
+	}
+	xstrcat(what, "'");
+	eihd_fail_notimpl(by, s->name, what);
+}
+
+static struct eihd_img *g_lp_img;
+static struct eihd_shr *g_lp_shl[64];
+static int eihd_lp(void *arg, uint32_t shl, uint32_t off)
+{
+	(void)arg;
+	unsigned long lp = eihd_cell(g_lp_img, off, 16);
+	unsigned long code, pv;
+	/* Before activation the pair holds the target's symbol-vector offset. */
+	eihd_vector_entry(g_lp_shl[shl], *(unsigned long *)lp, g_lp_img->name, &code, &pv);
+	*(unsigned long *)lp       = code;
+	*(unsigned long *)(lp + 8) = pv;
+	return 0;
+}
+
+static struct eihd_img *g_cp_img;
+static void eihd_chgprt(void *arg, uint64_t off, uint32_t len, uint32_t prt)
+{
+	(void)arg;
+	unsigned long a = eihd_cell(g_cp_img, off, len ? len : 1);
+	/* User-mode access only: of the PRT$C codes, UW (4) leaves the section
+	 * writable to the image; every read-only-to-user code (UR, UREW, ...)
+	 * makes it read-only. */
+	int prot = PROT_READ;
+	if (prt == 4)
+		prot |= PROT_WRITE;
+	sys_mprotect((void *)EIHD_PG_DOWN(a), EIHD_PG_UP(a + len) - EIHD_PG_DOWN(a), prot);
+}
+
+/* Read, map, relocate and fix up one native image. Does not return on error. */
+static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
+{
+	uint8_t blk[EIHD_BLOCK];
+	if (imgsrc_pread(src, blk, EIHD_BLOCK, 0) != (long)EIHD_BLOCK)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	unsigned long nblk = eihd_l(blk + 0x4C);
+	if (nblk < 1 || nblk > EIHD_MAX_HDRBLKS)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	unsigned long hlen = nblk * EIHD_BLOCK;
+	/* Read the header blocks into a scratch buffer first: the main image's
+	 * P0 copy (the header the image is passed) can only be placed once the
+	 * image itself is mapped and the P0 allocator knows where it ends. */
+	static uint8_t hdrbuf[EIHD_MAX_HDRBLKS * EIHD_BLOCK];
+	m->hdr = hdrbuf;
+	if (imgsrc_pread(src, m->hdr, hlen, 0) != (long)hlen)
+		die_mapfail(m->spec);
+	int rc = eihd_parse_header(m->hdr, hlen, &m->info);
+	if (rc == -1)
+		eihd_fail_file(m->name, m->spec,
+			       "-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image",
+			       EIHD_IMGACT_NOTNATIVE);
+	if (rc < 0 || m->info.imgtype != (is_main ? EIHD_K_EXE : EIHD_K_LIM))
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	if (m->info.inishr)
+		eihd_fail_notimpl(m->name, m->spec, "shareable image initialization");
+
+	/* Extent of the image's own sections (not the shareables' global
+	 * sections, not the user stack: IMGACT provides the P1 stack). */
+	struct eihd_isd d;
+	unsigned long off = m->info.isdoff;
+	m->lo = ~0UL;
+	m->hi = 0;
+	while ((rc = eihd_next_isd(m->hdr, &m->info, &off, &d)) == 1) {
+		if ((d.flags & EISD_M_GBL) || d.type == EISD_K_USRSTACK)
+			continue;
+		if (d.va % EIHD_PG || d.va >= 0x80000000UL || !d.secsize)
+			eihd_fail_file(m->name, m->spec,
+				       "-SYSTEM-F-BADISD, illegal image section descriptor",
+				       0x00002004u);
+		if (d.va < m->lo) m->lo = d.va;
+		if (d.va + d.secsize > m->hi) m->hi = d.va + d.secsize;
+	}
+	if (rc < 0 || m->lo == ~0UL)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADISD, illegal image section descriptor", 0x00002004u);
+	m->hi = EIHD_PG_UP(m->hi);
+	unsigned long span = m->hi - m->lo;
+	void *map;
+	if (is_main) {
+		/* An executable is linked at fixed P0 addresses: exactly there. */
+		map = sys_mmap((void *)m->lo, span, PROT_READ | PROT_WRITE,
+			       MAP_PRIVATE | MAP_ANONYMOUS | IMGACT_MAP_FIXED_NOREPLACE, -1, 0);
+		if (map != (void *)m->lo)
+			die_mapfail(m->spec);
+		m->delta = 0;
+		g_p0_next = (m->hi + OVMX_P0_GRAIN - 1) & ~(OVMX_P0_GRAIN - 1);
+		g_p0_all = 1;
+	} else {
+		map = imgact_map_span(span);
+		if (map == MAP_FAILED || (unsigned long)map + span > 0x80000000UL)
+			die_mapfail(m->spec);
+		m->delta = (unsigned long)map - m->lo;
+	}
+
+	/* The header's P0 copy (kept for the image's lifetime; the scratch buffer
+	 * is reused by the shareables activated below). */
+	{
+		uint8_t *h = (uint8_t *)eihd_p0_alloc(hlen);
+		if (!h)
+			die_mapfail(m->spec);
+		memcpy(h, hdrbuf, hlen);
+		m->hdr = h;
+	}
+
+	/* Section contents: file-backed sections from their VBN, demand-zero
+	 * sections already zero. */
+	off = m->info.isdoff;
+	m->iaf = 0;
+	while (eihd_next_isd(m->hdr, &m->info, &off, &d) == 1) {
+		if ((d.flags & EISD_M_GBL) || d.type == EISD_K_USRSTACK)
+			continue;
+		if (!(d.flags & EISD_M_DZRO)) {
+			if (d.vbn <= nblk ||
+			    imgsrc_pread(src, (void *)(d.va + m->delta), d.secsize,
+					 (long)(d.vbn - 1) * EIHD_BLOCK) != (long)d.secsize)
+				eihd_fail_file(m->name, m->spec,
+					       "-SYSTEM-F-BADISD, illegal image section descriptor",
+					       0x00002004u);
+		}
+		if (m->info.iafva >= d.va && m->info.iafva < d.va + d.secsize) {
+			m->iaf = m->info.iafva + m->delta;
+			m->iaflen = d.va + d.secsize - m->info.iafva;
+		}
+	}
+	if (!m->iaf)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	const uint8_t *iaf = (const uint8_t *)m->iaf;
+	struct eiaf_info a;
+	if (eiaf_parse(iaf, m->iaflen, &a) < 0)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	if (eiaf_has_unsupported(&a))
+		eihd_fail_notimpl(m->name, m->spec,
+				  "fixup kind (.ADDRESS/code-address/PSB) in this image");
+
+	/* Relocations (a shareable placed away from its link address). */
+	g_rel_img = m;
+	if (m->delta) {
+		if (eiaf_walk_rel(iaf, m->iaflen, a.qrelfixoff, 8, eihd_qrel, 0) < 0 ||
+		    eiaf_walk_rel(iaf, m->iaflen, a.lrelfixoff, 4, eihd_lrel, 0) < 0)
+			eihd_fail_file(m->name, m->spec,
+				       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+	}
+
+	/* The shareables this image calls, GSMATCH-checked against the ident it
+	 * was linked with (its global-section descriptor for that image). */
+	struct eihd_shr *shl[64];
+	for (unsigned i = 0; i < a.shrimgcnt; i++) {
+		char nm[40];
+		if (eiaf_shl_name(iaf, m->iaflen, &a, i, nm, sizeof nm) < 0)
+			eihd_fail_file(m->name, m->spec,
+				       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+		struct eihd_shr *s = eihd_activate_shl(nm, m->name);
+		shl[i] = s;
+		off = m->info.isdoff;
+		while (eihd_next_isd(m->hdr, &m->info, &off, &d) == 1) {
+			if (!(d.flags & EISD_M_GBL) || !eihd_gblnam_is(d.gblnam, nm))
+				continue;
+			if (!eihd_gsmatch_ok(d.matchctl, d.ident, s->ident)) {
+				char sp[64];
+				sp[0] = '\0';
+				xstrcat(sp, "SYS$SHARE:");
+				xstrcat(sp, nm);
+				xstrcat(sp, ".EXE");
+				eihd_fail(nm, "-CLI-E-IMGNAME, image file ", sp,
+					  "-SYSTEM-F-SHRIDMISMAT, ident mismatch with shareable image",
+					  0, EIHD_SS_SHRIDMISMAT);
+			}
+		}
+	}
+
+	/* Linkage pairs: {code address, procedure value} of the target entry. */
+	g_lp_img = m;
+	for (unsigned i = 0; i < a.shrimgcnt; i++)
+		g_lp_shl[i] = shl[i];
+	if (eiaf_walk_lp(iaf, m->iaflen, &a, eihd_lp, 0) < 0)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+
+	/* Final protections: each section as its descriptor says, then the
+	 * linker's protection-change fixups (linkage read-only, ...). */
+	off = m->info.isdoff;
+	while (eihd_next_isd(m->hdr, &m->info, &off, &d) == 1) {
+		if ((d.flags & EISD_M_GBL) || d.type == EISD_K_USRSTACK)
+			continue;
+		int prot = PROT_READ;
+		if (d.flags & EISD_M_WRT) prot |= PROT_WRITE;
+		if (d.flags & EISD_M_EXE) prot |= PROT_EXEC;
+		unsigned long s0 = d.va + m->delta;
+		sys_mprotect((void *)EIHD_PG_DOWN(s0),
+			     EIHD_PG_UP(s0 + d.secsize) - EIHD_PG_DOWN(s0), prot);
+	}
+	g_cp_img = m;
+	if (eiaf_walk_chgprt(iaf, m->iaflen, &a, eihd_chgprt, 0) < 0)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+}
+
+/* Activate (once) the shareable `name` an image calls: SYS$SHARE:<name>.EXE,
+ * an OVMX producer or a native shareable. */
+static struct eihd_shr *eihd_activate_shl(const char *name, const char *by)
+{
+	for (int i = 0; i < g_neshr; i++)
+		if (xstrcmp(g_eshr[i].name, name) == 0) {
+			if (g_eshr[i].img && g_eshr[i].img->active)
+				eihd_fail_notimpl(by, name, "circular shareable image references");
+			return &g_eshr[i];
+		}
+	if (g_neshr >= (int)(sizeof g_eshr / sizeof g_eshr[0]) ||
+	    xstrlen(name) > 31)
+		eihd_fail_notimpl(by, name, "this many shareable images");
+	char file[48], path[256], spec[64];
+	file[0] = '\0';
+	xstrcat(file, name);
+	xstrcat(file, ".EXE");
+	path[0] = '\0';
+	xstrcat(path, IMGACT_FALLBACK_SYSLIB "/");
+	xstrcat(path, file);
+	spec[0] = '\0';
+	xstrcat(spec, "SYS$SHARE:");
+	xstrcat(spec, file);
+	struct imgsrc src;
+	if (imgsrc_open(&src, path) < 0)
+		eihd_fail(name, "-CLI-E-IMAGEFNF, image file not found ", spec,
+			  0, 0, EIHD_CLI_IMAGEFNF);
+	unsigned char mag[4];
+	if (imgsrc_pread(&src, mag, 4, 0) != 4) {
+		imgsrc_close(&src);
+		eihd_fail_file(name, spec, "-SYSTEM-F-BADIMGHDR, bad image header",
+			       EIHD_SS_BADIMGHDR);
+	}
+	struct eihd_shr *s = &g_eshr[g_neshr++];
+	xstrcpy(s->name, name);
+	s->prod = 0;
+	s->img = 0;
+	if (mag[0] == 0x7f && mag[1] == 'E' && mag[2] == 'L' && mag[3] == 'F') {
+		/* An OVMX shareable: its symbol vector carries the VMS ordinal
+		 * layout of the image it stands for (src/vmslink/vms_vectors/). */
+		imgsrc_close(&src);
+		s->prod = load_ovmx_producer(file);
+		if (!s->prod)
+			eihd_fail(name, "-CLI-E-IMAGEFNF, image file not found ", spec,
+				  0, 0, EIHD_CLI_IMAGEFNF);
+		const struct ovmx_sv_header *h = s->prod->sv;
+		s->ident = (h->gsmatch_major < 256 && h->gsmatch_minor < 0x1000000u)
+			? (h->gsmatch_major << 24) | h->gsmatch_minor : 0xFFFFFFFFu;
+		return s;
+	}
+	if (g_neimg >= (int)(sizeof g_eimg / sizeof g_eimg[0]))
+		eihd_fail_notimpl(by, name, "this many native shareable images");
+	struct eihd_img *m = &g_eimg[g_neimg++];
+	xstrcpy(m->name, name);
+	xstrcpy(m->spec, spec);
+	m->active = 1;
+	s->img = m;
+	eihd_load(m, &src, 0);
+	imgsrc_close(&src);
+	m->active = 0;
+	s->ident = m->info.ident;
+	return s;
+}
+
+/* Activate the OpenVMS Alpha image `spec` (volume path `volpath`) as this
+ * process's image and run it. Does not return. */
+static void eihd_activate_main(const char *spec, const char *volpath)
+{
+	struct eihd_img *m = &g_eimg[g_neimg++];
+	eihd_image_name(spec, m->name, sizeof m->name);
+	/* Messages name the image the way VMS would: an image read from the
+	 * system image directory as SYS$SYSTEM:NAME.EXE, not by its staged copy. */
+	{
+		const char *vp = IMGACT_SYSEXE_VOLPATH;
+		unsigned long k = 0;
+		while (vp[k] && volpath[k] == vp[k])
+			k++;
+		if (!vp[k] && xstrlen(volpath + k) < sizeof m->spec - 12) {
+			xstrcpy(m->spec, "SYS$SYSTEM:");
+			xstrcat(m->spec, volpath + k);
+		} else {
+			unsigned long n = xstrlen(spec);
+			if (n >= sizeof m->spec)
+				n = sizeof m->spec - 1;
+			memcpy(m->spec, spec, n);
+			m->spec[n] = '\0';
+		}
+	}
+	struct imgsrc src;
+	if (imgsrc_open(&src, volpath) < 0)
+		eihd_fail(m->name, "-CLI-E-IMAGEFNF, image file not found ", spec,
+			  0, 0, EIHD_CLI_IMAGEFNF);
+	m->active = 1;
+	eihd_load(m, &src, 1);
+	imgsrc_close(&src);
+	m->active = 0;
+
+	/* Every OVMX producer the shareables pulled in: RMS, weak imports,
+	 * C-RTL/TLS, the resident registry -- as for an ELF image. */
+	imgact_finish_producers();
+
+	/* The transfer vector: each transfer address is a procedure value; one
+	 * whose high longword is all ones names a SYS$PUBLIC_VECTORS entry by
+	 * offset (SYS$IMGSTA, which then calls the next one). */
+	static unsigned long xvec[4];
+	unsigned n = 0;
+	for (unsigned k = 0; k < 3 && m->info.tfr[k]; k++) {
+		uint64_t t = m->info.tfr[k];
+		if ((uint32_t)(t >> 32) == EIHD_TFR_SYSVEC_HI) {
+			struct eihd_shr *spv = eihd_activate_shl("SYS$PUBLIC_VECTORS", m->name);
+			unsigned long code, pv;
+			eihd_vector_entry(spv, (uint32_t)t, m->name, &code, &pv);
+			xvec[n++] = pv;
+		} else {
+			xvec[n++] = (unsigned long)t + m->delta;
+		}
+	}
+	xvec[n] = 0;
+	if (!n)
+		eihd_fail_file(m->name, spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
+
+	/* The image file descriptor, VMS 32-bit form, in P0. */
+	unsigned long slen = xstrlen(spec);
+	if (slen > 255)
+		slen = 255;
+	unsigned long ctx = eihd_p0_alloc(8 + slen + 1);
+	if (!ctx)
+		die_mapfail(spec);
+	uint8_t *dsc = (uint8_t *)ctx;
+	dsc[0] = (uint8_t)slen;
+	dsc[1] = 0;
+	dsc[2] = DSC$K_DTYPE_T;
+	dsc[3] = DSC$K_CLASS_S;
+	unsigned int sp = (unsigned int)(ctx + 8);
+	memcpy(dsc + 4, &sp, 4);
+	memcpy((void *)(ctx + 8), spec, slen);
+
+	/* The six-argument activation list. The CLI callback (argument 2) is
+	 * OVMX's DEC C-port protocol, not the VMS one, so a native image gets
+	 * none; it reaches DCL through OVMX's own LIB$ routines. */
+	unsigned long args[6];
+	args[0] = n > 1 ? (unsigned long)xvec : xvec[0];
+	args[1] = 0;
+	args[2] = (unsigned long)m->hdr;
+	args[3] = ctx;
+	args[4] = m->info.lnkflags;
+	args[5] = (unsigned long)imgact_query_cli_context();
+
+	unsigned long cond = imgact_vms_transfer_stack((void *)xvec[0],
+						       OVMX_AI_VMS_ACTIVATION, args,
+						       imgact_p1_stack());
+	imgact_vms_exit(cond);
+	sys_exit(IMGACT_EXIT_NOEXEC);
+}
+#endif /* __alpha__ */
+
 /* --------------------------------------------------------------------------
  * vms-fb4: IMGACT as a process's MAIN program -- activating an image from the
  * ODS-2 volume in a new process.
@@ -3089,6 +3666,18 @@ static void imgact_launch_main(const char *spec, char *volpath, unsigned long vs
 	if (imgsrc_open(&src, volpath) < 0)
 		die_imgnotfnd(spec);
 	ElfW(Ehdr) eh;
+#if defined(__alpha__)
+	/* Not ELF: an OpenVMS Alpha native image (vms-3b3f), or not an image at
+	 * all -- either way the native activator gives the VMS answer. */
+	{
+		unsigned char mag[4];
+		if (imgsrc_pread(&src, mag, 4, 0) != 4 || mag[0] != 0x7f ||
+		    mag[1] != 'E' || mag[2] != 'L' || mag[3] != 'F') {
+			imgsrc_close(&src);
+			eihd_activate_main(spec, volpath);   /* does not return */
+		}
+	}
+#endif
 	if (imgsrc_pread(&src, &eh, sizeof eh, 0) != (long)sizeof eh ||
 	    eh.e_ident[0] != 0x7f || eh.e_ident[1] != 'E' ||
 	    eh.e_ident[2] != 'L'  || eh.e_ident[3] != 'F' ||
@@ -3224,14 +3813,16 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 			vms_fatal("NOIMAGE", "IMGACT run without an image to activate", 0);
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
+		/* The image sees argv from argv[1] on (set before the launch:
+		 * an OpenVMS Alpha native image is run from inside it). */
+		g_argv0 = argv[1];
+		g_argc  = argc - 1;
+		g_argv  = argv + 1;
 		imgact_launch_main(argv[1], launch_volpath, sizeof launch_volpath,
 				   &at_phdr, &at_phnum, &at_entry);
 		at_execfn = launch_volpath;
 		argc -= 1;
 		argv += 1;
-		g_argv0 = argv[0];
-		g_argc  = argc;
-		g_argv  = argv;
 	}
 
 	/* INV-6 HEDGE (vms-f60d): the kernel-supplied AT_PHDR must point at MAPPED

@@ -1,0 +1,9 @@
+        .TITLE  MAIN3B  OVMX vms-3b3f rung-3 second module
+        .PSECT  BDATA,WRT,NOEXE,QUAD
+BMSG:   .ASCID  /OVMX-NATIVE MAIN3B: second module of the image/
+        .PSECT  BCODE,EXE,NOWRT,QUAD
+        .ENTRY  MAIN3B_SAY,^M<>
+        PUSHAQ  BMSG
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        RET
+        .END

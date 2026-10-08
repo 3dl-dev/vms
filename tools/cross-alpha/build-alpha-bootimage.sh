@@ -264,7 +264,25 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
             # so it stages its OWN independent-reader SYSTARTUP (DIRECTORY of the
             # FOP*.DAT set) instead of the stdio VENEER one (PORTTEST.DAT). The
             # producer graph staged just above is identical for both.
-            if [ -f "$JOINT/CC1_PROOF" ]; then
+            if [ -f "$JOINT/NATIVE_PROOF" ]; then
+                # vms-3b3f: images LINKed on real OpenVMS Alpha (our own MACRO-32
+                # sources, tests/native-images/alpha/) into SYS$SYSTEM, and the
+                # vector images they call through into SYS$SHARE. NOTIMG.EXE is
+                # a text file named .EXE (the not-an-image refusal); MAIN3.EXE
+                # calls a shareable (MYSHR) deliberately NOT staged (the
+                # missing-shareable refusal).
+                for _v in SYS\$PUBLIC_VECTORS LIBRTL; do
+                    [ -f "$JOINT/$_v.EXE" ] || { echo "FAIL: NATIVE_PROOF without $JOINT/$_v.EXE"; exit 1; }
+                    cp "$JOINT/$_v.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/$_v.EXE"
+                done
+                for _n in HELLO RETST MAIN3; do
+                    cp "/repo/tests/native-images/alpha/$_n.EXE" "$SYSEXE/$_n.EXE"
+                done
+                cp /repo/tests/native-images/alpha/HELLO.MAR "$SYSEXE/NOTIMG.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   NATIVE (vms-3b3f): HELLO/RETST/MAIN3/NOTIMG -> SYS\$SYSTEM; SYS\$PUBLIC_VECTORS + LIBRTL + full producer graph -> SYS\$SHARE; NATIVE-proof SYSTARTUP staged"
+            elif [ -f "$JOINT/CC1_PROOF" ]; then
                 # vms-9a63: the VMS-hosted GCC compiler proper, run by the
                 # launcher JOINT_E2E (vfork+execv) on a DCL-written source.
                 [ -f "$JOINT/cc1.exe" ] || { echo "FAIL: CC1_PROOF without $JOINT/cc1.exe"; exit 1; }

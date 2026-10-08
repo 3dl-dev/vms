@@ -67,6 +67,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate     # vms-3b3f: .EXE LINKed on real OpenVMS Alpha runs unchanged (SYS$QIOW/LIB$PUT_OUTPUT via SYS$PUBLIC_VECTORS/LIBRTL)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
@@ -763,6 +764,41 @@ assert_fileop() {
 }
 
 # ---------------------------------------------------------------------------
+# assert_native <console-log> -- THE TEETH for the vms-3b3f native-image gate
+# (`native-gate'). Every expectation is what the same RUN printed on the lab
+# OpenVMS Alpha V8.4 node (tests/lab/captures/native-image-alpha-20261008/):
+#   HELLO  -- both lines (SYS$QIOW, then LIB$PUT_OUTPUT) and $STATUS %X00000001,
+#             recorded by the executive (the OVMX-SEAM readback for HELLO.EXE);
+#   RETST  -- $STATUS %X0FEDC0A9 (the condition value its main returned);
+#   MAIN3  -- MYSHR is absent: -CLI-E-IMAGEFNF and $STATUS %X100388B2;
+#   NOTIMG -- a text file: -IMGACT-F-NOTNATIVE and $STATUS %X104D8CFC.
+# ---------------------------------------------------------------------------
+assert_native() {
+  local log="$1" ok=1
+  grep -aq "^OVMX-NATIVE QIOW: hello from a VMS-linked image" "$log" \
+    || { echo "  assert_native: no SYS\$QIOW line from HELLO" >&2; ok=0; }
+  grep -aq "^OVMX-NATIVE LIB\$PUT_OUTPUT: hello" "$log" \
+    || { echo "  assert_native: no LIB\$PUT_OUTPUT line from HELLO" >&2; ok=0; }
+  grep -aq "NATIVE-PROOF: HELLO-STATUS=%X00000001" "$log" \
+    || { echo "  assert_native: HELLO \$STATUS is not %X00000001" >&2; ok=0; }
+  grep -aE "OVMX-SEAM: image=HELLO.EXE " "$log" | grep -aq '\$STATUS=0x00000001' \
+    || { echo "  assert_native: the executive did not record HELLO's completion status" >&2; ok=0; }
+  grep -aq "NATIVE-PROOF: RETST-STATUS=%X0FEDC0A9" "$log" \
+    || { echo "  assert_native: RETST \$STATUS is not %X0FEDC0A9" >&2; ok=0; }
+  grep -aq "^-CLI-E-IMAGEFNF, image file not found .*MYSHR.EXE" "$log" \
+    || { echo "  assert_native: MAIN3 without MYSHR did not fail -CLI-E-IMAGEFNF" >&2; ok=0; }
+  grep -aq "NATIVE-PROOF: MAIN3-STATUS=%X100388B2" "$log" \
+    || { echo "  assert_native: MAIN3 \$STATUS is not %X100388B2" >&2; ok=0; }
+  grep -aq "^-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image" "$log" \
+    || { echo "  assert_native: NOTIMG did not fail -IMGACT-F-NOTNATIVE" >&2; ok=0; }
+  grep -aq "NATIVE-PROOF: NOTIMG-STATUS=%X104D8CFC" "$log" \
+    || { echo "  assert_native: NOTIMG \$STATUS is not %X104D8CFC" >&2; ok=0; }
+  grep -aq "NATIVE-PROOF: === END ===" "$log" \
+    || { echo "  assert_native: the proof SYSTARTUP did not run to its end" >&2; ok=0; }
+  [ "$ok" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
 # build_joint_images -- build the N=3 milestone image (joint_main.c -> return 3)
 # and the SS$_NORMAL control (joint_main_ok.c -> return 0) with the SAME merged
 # $15 toolchain, then lay them + their producers into $WORK/joint where
@@ -833,6 +869,12 @@ build_joint_images() {
     # vms-b90: likewise the C RTL file-layer gate's marker.
     [ -f "$out_n3/CRTLFD_PROOF" ] && cp "$out_n3/CRTLFD_PROOF" "$WORK/joint/CRTLFD_PROOF"
     [ -f "$out_n3/VMSABI_PROOF" ] && cp "$out_n3/VMSABI_PROOF" "$WORK/joint/VMSABI_PROOF"
+    # vms-3b3f: the VMS vector images (built on every veneer build) and the
+    # native-image gate marker.
+    for _v in "SYS\$PUBLIC_VECTORS" LIBRTL; do
+      [ -s "$out_n3/$_v.EXE" ] && cp "$out_n3/$_v.EXE" "$WORK/joint/$_v.EXE"
+    done
+    [ -f "$out_n3/NATIVE_PROOF" ] && cp "$out_n3/NATIVE_PROOF" "$WORK/joint/NATIVE_PROOF"
     log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS + full RMS producer graph LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR)"
   else
     log "step 1: joint images staged into $WORK/joint (milestone N=$WANT_SENTINEL + SS\$_NORMAL control + producers)"
@@ -1976,6 +2018,72 @@ EOF
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;
+  native-gate)
+    # vms-3b3f: .EXE files LINKed on real OpenVMS Alpha (tests/native-images/
+    # alpha/) run unchanged: IMGACT reads the EIHD image, binds its linkage
+    # pairs to OVMX's SYS$PUBLIC_VECTORS / LIBRTL by symbol-vector offset, and
+    # their SYS$QIOW / LIB$PUT_OUTPUT calls reach LIBVMS$SHR and the executive.
+    # The joint milestone/control images are built only because the producer
+    # graph and the vector images come from the same veneer build.
+    export JOINT_NATIVE_PROOF=1
+    JOINT_CRTL_RMS_VENEER=1
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    _st=$(mktemp -d); _fails=0
+    {
+      echo "NATIVE-PROOF: === RUN HELLO ==="
+      echo "OVMX-NATIVE QIOW: hello from a VMS-linked image"
+      echo ""
+      echo "OVMX-NATIVE LIB\$PUT_OUTPUT: hello"
+      echo "OVMX-SEAM: image=HELLO.EXE stdcall_returned=1 has_exited=1 \$STATUS=0x00000001 p0=1"
+      echo "NATIVE-PROOF: HELLO-STATUS=%X00000001"
+      echo "OVMX-SEAM: image=RETST.EXE stdcall_returned=1 has_exited=1 \$STATUS=0x0FEDC0A9 p0=1"
+      echo "NATIVE-PROOF: RETST-STATUS=%X0FEDC0A9"
+      echo "%DCL-W-ACTIMAGE, error activating image MYSHR"
+      echo "-CLI-E-IMAGEFNF, image file not found SYS\$SHARE:MYSHR.EXE"
+      echo "NATIVE-PROOF: MAIN3-STATUS=%X100388B2"
+      echo "%DCL-W-ACTIMAGE, error activating image NOTIMG"
+      echo "-CLI-E-IMGNAME, image file SYS\$SYSTEM:NOTIMG.EXE"
+      echo "-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image"
+      echo "NATIVE-PROOF: NOTIMG-STATUS=%X104D8CFC"
+      echo "NATIVE-PROOF: === END ==="
+    } > "$_st/pass.log"
+    grep -v "^OVMX-NATIVE QIOW" "$_st/pass.log" > "$_st/noqiow.log"
+    grep -v "^OVMX-NATIVE LIB" "$_st/pass.log" > "$_st/noput.log"
+    sed 's/HELLO-STATUS=%X00000001/HELLO-STATUS=%X00000002/' "$_st/pass.log" > "$_st/hellofail.log"
+    grep -v "OVMX-SEAM: image=HELLO" "$_st/pass.log" > "$_st/noseam.log"
+    sed 's/RETST-STATUS=%X0FEDC0A9/RETST-STATUS=%X00000001/' "$_st/pass.log" > "$_st/retst.log"
+    sed 's/MAIN3-STATUS=%X100388B2/MAIN3-STATUS=%X00000001/' "$_st/pass.log" > "$_st/main3ran.log"
+    grep -v "IMAGEFNF" "$_st/pass.log" > "$_st/nofnf.log"
+    grep -v "NOTNATIVE" "$_st/pass.log" > "$_st/nonat.log"
+    sed 's/NOTIMG-STATUS=%X104D8CFC/NOTIMG-STATUS=%X00000001/' "$_st/pass.log" > "$_st/notimgran.log"
+    grep -v "=== END ===" "$_st/pass.log" > "$_st/noend.log"
+    for _c in "pass:0" "noqiow:1" "noput:1" "hellofail:1" "noseam:1" "retst:1" "main3ran:1" "nofnf:1" "nonat:1" "notimgran:1" "noend:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_native "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  native selftest $_n: PASS"; else echo "  native selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "native selftest failed -- assert_native cannot be trusted"
+    [ "${NATIVE_SELFTEST_ONLY:-0}" = 1 ] && { echo "PASS: native selftest only"; exit 0; }
+    echo ""
+    build_joint_images
+    [ -s "$WORK/joint/NATIVE_PROOF" ] || [ -f "$WORK/joint/NATIVE_PROOF" ] \
+      || die "the veneer build did not drop the NATIVE_PROOF marker"
+    assemble_boot_image
+    log "step 3: BOOT A -- images LINKed on real OpenVMS Alpha, unchanged, on the REAL executive"
+    run_boot_a
+    grep -aE "NATIVE-PROOF:|OVMX-NATIVE|OVMX-SEAM:|%DCL-|-CLI-|%IMGACT|-IMGACT|-SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_native "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: HELLO.EXE, LINKed on real OpenVMS Alpha V8.4, ran unchanged; its SYS\$QIOW"
+      echo "      and LIB\$PUT_OUTPUT calls reached OVMX through SYS\$PUBLIC_VECTORS/LIBRTL, and"
+      echo "      the activation failures matched the real activator's statuses."
+      exit 0
+    fi
+    echo "FAIL: the native-image gate did not pass. Full log: $WORK/modgpA.log"
+    tail -80 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
   shipped-gate)
     # vms-410: proves the Alpha shareable graph ships as part of the ORDINARY
     # build-alpha-bootimage.sh packaging path, not as something only THIS
@@ -2029,6 +2137,6 @@ EOF
     exit 1
     ;;
   *)
-    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | crtl-rms-veneer-gate | mf-gate | libinit-gate | shipped-gate | selftest)"
+    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | crtl-rms-veneer-gate | mf-gate | libinit-gate | shipped-gate | native-gate | selftest)"
     ;;
 esac

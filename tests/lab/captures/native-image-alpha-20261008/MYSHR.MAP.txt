@@ -1,0 +1,165 @@
+$ TYPE MYSHR.MAP
+
+                                                                 8-OCT-2026 20:18        Linker A13-04                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+MYSHR           V1                    266 SYS$SYSROOT:[SYSMGR]MYSHR.OBJ;2       8-OCT-2026 20:18  AMAC V5.0-120-5
+LIBRTL          X01-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      31-MAR-2010 02:04  Linker A13-04
+SYS$PUBLIC_VECTORS             
+                X-125                   0 [SYSLIB]SYS$PUBLIC_VECTORS.EXE;1     31-MAR-2010 02:03  Linker A13-04
+
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;2                                  8-OCT-2026 20:18        Linker A13-04                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pglts   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    2     1    00000000-R        3   0 READ WRITE   NON-SHAREABLE ADDRESS DATA
+                   2     1    00010000-R        4   0 READ WRITE   COPY ON REF
+                   2     1    00020000-R        5   0 READ ONLY    EXECUTABLE
+                   2     1    00030000-R        6   0 READ WRITE   FIXUP VECTORS
+
+LIBRTL             3  1787    00000000-R        0   0 READ ONLY    EXECUTABLE    LIBRTL_001       LESS/EQUAL        1         1
+                   2   123    000E0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_002       LESS/EQUAL        1         1
+                   2    26    000F0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1         1
+                   3   103    00100000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_004       LESS/EQUAL        1         1
+                   4     1  P-00110000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_005       LESS/EQUAL        1         1
+                   2    20    00120000-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_006       LESS/EQUAL        1         1
+                   2    14    00130000-R        0   0 READ WRITE   FIXUP VECTORS LIBRTL_007       LESS/EQUAL        1         1
+
+SYS$PUBLIC_VECTORS             
+                   2    20    00000000-R        0   0 READ ONLY    EXECUTABLE    SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   1    64    00004000-R        0   0 READ WRITE   COPY ON REF   SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   2     2    0000C000-R        0   0 READ WRITE   FIXUP VECTORS SYS$PUBLIC_VECTO EQUAL            51  16699012
+
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! R  - Relocatable   !
+		! P  - Protected     !
+		+--------------------+
+
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;2                                  8-OCT-2026 20:18        Linker A13-04                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+$LINKAGE                        00000000 00000057 00000058 (         88.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,  MOD 
+                MYSHR           00000000 00000057 00000058 (         88.) OCTA  4
+
+$SYMVECT                        00000060 0000007F 00000020 (         32.) OCTA  4 NOPIC,CON,REL,GBL,NOSHR,NOEXE,NOWRT,NOVEC,  MOD 
+                OPTIONS FILE    00000060 0000007F 00000020 (         32.) OCTA  4
+
+SDATA                           00010000 00010035 00000036 (         54.) QUAD  3 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,  MOD 
+                MYSHR           00010000 00010035 00000036 (         54.) QUAD  3
+
+SCODE                           00020000 0002007B 0000007C (        124.) QUAD  3 NOPIC,CON,REL,LCL,NOSHR,  EXE,NOWRT,NOVEC,  MOD 
+                MYSHR           00020000 0002007B 0000007C (        124.) QUAD  3
+
+. BLANK .                       00030000 00030000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,  EXE,  WRT,NOVEC,  MOD 
+                MYSHR           00030000 00030000 00000000 (          0.) OCTA  4
+
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;2                                  8-OCT-2026 20:18        Linker A13-04                    Page    4
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol         Value             Defined By               Referenced By ...
+------         -----             ----------               -----------------
+LIB$PUT_OUTPUT 00000320-RX       LIBRTL                   MYSHR              
+MYSHR_ADD      00000000-RU       MYSHR              
+MYSHR_GREET    00000020-RU       MYSHR              
+SYS$IMGSTA     00000340-RX       SYS$PUBLIC_VECTORS 
+
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;2                                  8-OCT-2026 20:18        Linker A13-04                    Page    5
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000000     RU-MYSHR_ADD     
+00000020     RU-MYSHR_GREET   
+00000320     RX-LIB$PUT_OUTPUT
+00000340     RX-SYS$IMGSTA    
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! *  - Undefined     !
+		! A  - Alias Name    !
+		! I  - Internal Name !
+		! U  - Universal     !
+		! R  - Relocatable   !
+		! X  - External      !
+		! WK - Weak          !
+		+--------------------+
+
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;2                                  8-OCT-2026 20:18        Linker A13-04                    Page    6
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000000 0003FFFF 00040000 (262144. bytes, 512. pages)
+Stack size:                                              0. pages
+Image header virtual block limits:                       1.        2. (    2. blocks)
+Image binary virtual block limits:                       3.        6. (    4. blocks)
+Image name and identification:                    MYSHR V1
+Number of files:                                         5.
+Number of modules:                                       3.
+Number of program sections:                              8.
+Number of global symbols:                              413.
+Number of cross references:                              5.
+Number of image sections:                               14.
+Debugger transfer address:                        00000340
+Number of code references to shareable images:           2.
+Image type:                                         PIC, SHAREABLE. Global Section Match=LESS/EQUAL, Ident, Major=1, Minor=0
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]MYSHR.MAP;2
+Estimated map length:                             73. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults	CPU Time	Elapsed Time
+----------------------                            -----------	--------	------------
+    Command processing:                                    37	00:00:00.01	00:00:00.01
+    Pass 1:                                                95	00:00:00.06	00:00:00.05
+    Allocation/Relocation:                                 12	00:00:00.01	00:00:00.00
+    Pass 2:                                                 8	00:00:00.00	00:00:00.01
+    Map data after object module synopsis:                  3	00:00:00.01	00:00:00.00
+    Symbol table output:                                    1	00:00:00.00	00:00:00.00
+Total run values:                                         156	00:00:00.09	00:00:00.10
+
+Using a working set limited to 6496 pages and 606 pages of data storage (excluding image)
+
+Total number object records read (both passes):   149
+    of which 0 were in libraries and 0 were DEBUG data records containing 0 bytes
+
+Number of modules extracted explicitly             = 0
+    with 0 extracted to resolve undefined symbols
+
+1 library searches were for symbols not in the library searched
+
+A total of 5 global symbol table records was written
+
+LINK/SHAREABLE/MAP/FULL/CROSS MYSHR,MYSHR.OPT/OPTIONS
+GSMATCH=LEQUAL,1,0
+SYMBOL_VECTOR=(MYSHR_ADD=PROCEDURE,MYSHR_GREET=PROCEDURE)

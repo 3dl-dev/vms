@@ -55,6 +55,7 @@ on:
 # Creating a GitHub Release needs write access to repository contents.
 permissions:
   contents: write
+  packages: read   # GHCR mirror of the pinned base images (vms-9a6, .github/actions/setup-buildx)
 
 jobs:
   cut-and-publish:

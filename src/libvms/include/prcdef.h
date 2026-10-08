@@ -217,6 +217,15 @@ typedef struct _uic UIC;
 #define JPI$_CLINAME        0x020A  /* CLI name (string) */
 #define JPI$_TABLENAME      0x020B  /* CLI table name (string) */
 #define JPI$_JOBTYPE        0x0323  /* Job type (longword) */
+/* JPI$_MODE / JPI$_JOBTYPE values -- oracle-pinned, docs/oracle/alpha84-starlet-
+ * defs/JPIDEF.txt ($EQU JPI$K_OTHER 0, NETWORK 1, BATCH 2, INTERACTIVE 3;
+ * JPI$K_DETACHED 0, LOCAL 3). */
+#define JPI$K_OTHER         0
+#define JPI$K_NETWORK       1
+#define JPI$K_BATCH         2
+#define JPI$K_INTERACTIVE   3
+#define JPI$K_DETACHED      0
+#define JPI$K_LOCAL         3
 
 /* ================================================================
  * SYI$_ item codes for SYS$GETSYI

@@ -53,6 +53,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/utsname.h>
@@ -171,6 +172,29 @@ uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot)
 /* Wildcard-walk context value meaning "the node just returned was the last". */
 #define SYI_WILD_DONE 0xFFFFFFFEu
 
+#include "ovmx_itemcodes.inc"
+
+static int syi_item_defined(uint32_t code)
+{
+    size_t lo = 0, hi = sizeof ovmx_syi_items / sizeof ovmx_syi_items[0];
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (ovmx_syi_items[mid] == code) return 1;
+        if (ovmx_syi_items[mid] < code) lo = mid + 1; else hi = mid;
+    }
+    return 0;
+}
+
+/* A longword item: as many bytes as the buffer holds, that many returned
+ * (SYI.SHORTBUF: a 2-byte PAGE_SIZE buffer, docs/oracle/semantics/info/). */
+static void syi_put_long(const struct item_list_3 *item, uint32_t v)
+{
+    uint16_t n = item->buflen < 4 ? item->buflen : 4;
+    if (item->bufaddr && n)
+        memcpy(item->bufaddr, &v, n);
+    if (item->retlen) *item->retlen = n;
+}
+
 static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
                     const struct dsc$descriptor_s *nodename,
                     const struct item_list_3 *itmlst,
@@ -180,6 +204,36 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
     (void)astadr; (void)astprm;
 
     if (!itmlst) return SS$_BADPARAM;
+
+    /* An item code OpenVMS does not define is SS$_BADPARAM (SYI.BADITEM,
+     * docs/oracle/semantics/info/; rd vms-74a). */
+    for (const struct item_list_3 *it = itmlst; it->buflen || it->item_code; it++)
+        if (!syi_item_defined(it->item_code))
+            return SS$_BADPARAM;
+
+    /*
+     * A NAMED node or a specific CSID: this service answers only for its own
+     * node, so another node's name is SS$_NOSUCHNODE and another CSID is
+     * SS$_NOMORENODE, the statuses OpenVMS gives a node it has no information
+     * for (SYI.NOSUCHNODE / SYI.NOSUCHCSID, docs/oracle/semantics/info/). The
+     * node's own SCSNODE (or its node name) still answers.
+     */
+    if (nodename && nodename->dsc$a_pointer && nodename->dsc$w_length) {
+        char want[64], own[SYSGEN_STRVAL_LEN];
+        size_t wl = nodename->dsc$w_length < sizeof want - 1 ? nodename->dsc$w_length
+                                                             : sizeof want - 1;
+        memcpy(want, nodename->dsc$a_pointer, wl);
+        want[wl] = '\0';
+        if (wl && want[wl - 1] == ':') want[--wl] = '\0';
+        if (wl && want[wl - 1] == ':') want[--wl] = '\0';
+        if (sysgen_read_string("SCSNODE", own, sizeof own) != 0)
+            strcpy(own, "OVMX");
+        if (strcasecmp(want, own) != 0)
+            return SS$_NOSUCHNODE;
+    }
+    if (csidadr && *csidadr != 0 && *csidadr != 0xFFFFFFFFu &&
+        *csidadr != SYI_WILD_DONE)
+        return SS$_NOMORENODE;
 
     /*
      * csidadr as a WILDCARD CONTEXT (OpenVMS System Services Reference Manual,
@@ -255,6 +309,12 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
                 if (len > item->buflen) len = item->buflen;
                 if (item->bufaddr) memcpy(item->bufaddr, arch, len);
                 if (item->retlen) *item->retlen = len;
+                break;
+            }
+
+            case SYI$_PAGE_SIZE: {
+                long ps = sysconf(_SC_PAGE_SIZE);
+                syi_put_long(item, ps > 0 ? (uint32_t)ps : 0);
                 break;
             }
 

@@ -603,6 +603,13 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(oracle_constants_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+    # rd vms-bd30: $GETJPI/$GETSYI refuse an item code OpenVMS does not define
+    # with SS$_BADPARAM; the table of defined codes is GENERATED from the
+    # STARLET dumps (docs/oracle/alpha84-starlet-defs/) -- this fails when stale.
+    add_test(NAME itemcodes_generated_current
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/gen_itemcodes.py --check)
+    set_tests_properties(itemcodes_generated_current PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
     # rd vms-8d1: semantic oracle -- the buildless half (ratchet selftest, goldens
     # well formed + captured from the current spec, specs generate + compile).
     # The OVMX-vs-real-VMS diff itself runs on the booted runtime in CI's

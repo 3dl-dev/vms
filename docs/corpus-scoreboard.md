@@ -11,12 +11,12 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 110 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 142 | 144 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 143 | 144 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **141 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **142 of 229**.
 
 Host column detail: compile-fail 38, link-fail 47, run-fail 8, run-crash 26; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
-Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
+Runtime column detail: run-fail 0, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
 
@@ -30,7 +30,7 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (88)
+### Not running (87)
 
 | program | host | runtime | reason |
 |---|---|---|---|
@@ -83,7 +83,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_fao` | compile-fail | - | compile: error: initializer element is not constant |
 | `sys_fastio` | compile-fail | - | compile: missing header iosadef.h |
 | `sys_find_held` | link-fail | - | link: undefined sys$find_held, sys$find_holder, sys$finish_rdb |
-| `sys_forcex` | run-crash | run-fail | flaky: timing-dependent: a spawned DCL subprocess plus two 5s sleeps; passes on a local KVM guest, hangs to the 40s budget on the CI runner; held at its CI verdict until the race is root-caused (vms-f45) |
 | `sys_format_audit` | link-fail | - | link: undefined sys$format_audit |
 | `sys_get_arith` | compile-fail | - | link: undefined sys$get_arith_exception |
 | `sys_get_region_info` | link-fail | - | link: undefined sys$get_region_info |

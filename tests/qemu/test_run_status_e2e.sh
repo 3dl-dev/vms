@@ -192,8 +192,10 @@ if printf '%s\n' "$CLI_SEG" | grep -qF 'SYMSET: OVMX_CLI_IN="from dcl" table=1';
 else
     bad "LIB\$GET_SYMBOL in an image did not see DCL's OVMX_CLI_IN (vms-cded)"
 fi
+# (SHOW SYMBOL's "=" vs "==" for a global is DCL's own display, tracked apart;
+#  what this asserts is that the image's symbol reached DCL's table.)
 run_cmd 'SHOW SYMBOL OVMX_CLI_GLOBAL'
-if printf '%s\n' "$SEG" | grep -qF 'OVMX_CLI_GLOBAL == "set by image"'; then
+if printf '%s\n' "$SEG" | grep -qE 'OVMX_CLI_GLOBAL ==? "set by image"'; then
     ok "LIB\$SET_SYMBOL from an image left a GLOBAL symbol in DCL (vms-cded)"
 else
     bad "the image's global symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"

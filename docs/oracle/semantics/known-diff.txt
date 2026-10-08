@@ -248,11 +248,6 @@ rtl STR.COMPARE.PAD  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
 rtl STR.FIND_FIRST_IN_SET  # vms-afcd: routine not provided by OVMX
 rtl STR.FIND_FIRST_NOT_IN_SET  # vms-afcd: routine not provided by OVMX
 rtl LIB.MATCHC  # vms-0ff7: STR$POSITION default start / empty substring; LIB$MATCHC
-rtl LIB.GET_SYMBOL  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.GET_SYMBOL.LOCAL_WINS  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.GET_SYMBOL.GLOBAL_LEFT  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.SET_SYMBOL.BADNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.SET_SYMBOL.EMPTYNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
 rtl LIB.FIND_FILE.WILD.2  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
 rtl LIB.FIND_FILE.NONE  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
 rtl LIB.FIND_FILE.SYNTAX  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)

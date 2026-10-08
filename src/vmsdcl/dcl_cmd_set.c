@@ -404,6 +404,10 @@ static int cmd_set_terminal(struct dcl_command *cmd)
                 strcasecmp(qname, quals[k].off) == 0)
                 known = 1;
         }
+        /* /PERMANENT: the change goes to the permanent characteristics too
+         * (IO$_SETCHAR; rd vms-d900). */
+        if (!known && strcasecmp(qname, "PERMANENT") == 0)
+            known = 1;
         if (!known) {
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
@@ -539,7 +543,15 @@ static int cmd_set_terminal(struct dcl_command *cmd)
                 }
                 if (page_val && *page_val)
                     cb[7] = (uint8_t)term->page;
-                (void)sys$qiow(0, tch, IO$_SETMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
+                /* SET TERMINAL/PERMANENT sets the permanent characteristics
+                 * too -- IO$_SETCHAR (rd vms-d900). */
+                int perm = 0;
+                for (int qi = 0; qi < cmd->qualifier_count; qi++)
+                    if (!cmd->qualifiers[qi].negated &&
+                        strcasecmp(cmd->qualifiers[qi].name, "PERMANENT") == 0)
+                        perm = 1;
+                (void)sys$qiow(0, tch, perm ? IO$_SETCHAR : IO$_SETMODE, iosb, NULL, 0,
+                               cb, sizeof cb, 0, 0, 0, 0);
             }
             (void)sys$dassgn(tch);
         }

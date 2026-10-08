@@ -1923,6 +1923,19 @@ static int run_cterm_accept_test(void)
     CT_CHECK(strstr(c.hs.remote_port_info, "::SYSTEM") != NULL,
              "the connect-carried node::user is surfaced as Remote Port Info"
              " (proxy/accounting), exactly as the oracle's SHOW TERMINAL does");
+    {
+        /* rd vms-2166: the port is recorded ON THE DEVICE in the executive,
+         * where SHOW TERMINAL / SHOW PROCESS / F$GETDVI TT_ACCPORNAM read it --
+         * not just in this process's memory. */
+        char rpi[64] = "";
+        uint32_t rst = vms_kif_terminal_getrpi(c.hs.devnam, rpi, sizeof rpi);
+        CT_CHECK((rst & 1) && strcmp(rpi, c.hs.remote_port_info) == 0,
+                 "the RTAn:'s executive device row carries the same Remote Port"
+                 " Info (DVI$_TT_ACCPORNAM, read back by device name)");
+        rst = vms_kif_terminal_getrpi("OPA0:", rpi, sizeof rpi);
+        CT_CHECK(!(rst & 1) || rpi[0] == '\0',
+                 "NEGCTL: the local console OPA0: carries no remote port info");
+    }
 
     /* ---- 3. sec-7.5 TELL: $GETDVI the device FROM THIS PROCESS ------------ */
     {
@@ -4415,6 +4428,27 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
 }
 
 /* Refuse a Connect Initiate we hold no slot for, with `reason`. */
+/* VMS names the remote port by NODE NAME when the local node database knows
+ * the address ("VAX1::SYSTEM"; oracle tests/lab/captures/decnet-sethost-
+ * inbound-20261005/vax-rta-show-terminal.txt), else by the numeric address
+ * ("1025::SYSTEM"). Re-records the RTAn:'s remote port info with the name. */
+static void netacp_rpi_by_name(struct dnet_cterm_host_session *hs, uint16_t peer)
+{
+    static struct dnet_nodedb db;
+    const char *user = strstr(hs->remote_port_info, "::");
+    if (!user || !hs->devnam[0] || dnet_store_load_nodes(&db) != DNET_STORE_OK)
+        return;
+    const struct dnet_node_entry *e = dnet_nodedb_by_addr(&db, peer);
+    if (!e || !e->name[0])
+        return;
+    char named[sizeof hs->remote_port_info];
+    int n = snprintf(named, sizeof named, "%s%s", e->name, user);
+    if (n <= 0 || (size_t)n >= sizeof named)
+        return;
+    memcpy(hs->remote_port_info, named, (size_t)n + 1);
+    (void)vms_kif_terminal_setrpi(hs->devnam, hs->remote_port_info);
+}
+
 static void netacp_refuse(struct dnet_engine *tmp, int sock, unsigned ifindex,
                           const uint8_t mac[6], uint16_t reason, dnet_tick_t now)
 {
@@ -4570,6 +4604,8 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
     if (dnet_engine_link_accept(&sl->lk, lla, fr, sizeof fr, &fn, now) == 0)
         netacp_send(sock, ifindex, mac, fr, fn);
+    if (obj == DNET_CTERM_OBJECT)
+        netacp_rpi_by_name(&sl->host, peer);
     log_ts(stdout);
     if (obj == DNET_CTERM_OBJECT)
         printf(" DECNETD-I-SESSTART, inbound SET HOST accepted on %s -- LOGINOUT is"

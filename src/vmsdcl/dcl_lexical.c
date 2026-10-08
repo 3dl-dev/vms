@@ -2674,6 +2674,14 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
          * executive does not store one, and F$DEVICE deliberately does not add
          * one either -- see populate_device_list). */
         snprintf(result, result_size, "%s", info.devnam);
+    } else if (strcmp(item, "TT_ACCPORNAM") == 0) {
+        /* A remote terminal's access port name, node::user (rd vms-2166),
+         * from the executive's device row; "" for a local terminal or a
+         * non-terminal, as VMS returns. */
+        char rpi[64] = "";
+        if (!(vms_kif_terminal_getrpi(info.devnam, rpi, sizeof(rpi)) & 1))
+            rpi[0] = '\0';
+        snprintf(result, result_size, "%s", rpi);
     } else if (strcmp(item, "DEVCLASS") == 0) {
         snprintf(result, result_size, "%u", info.devclass);
     } else if (strcmp(item, "DEVTYPE") == 0) {

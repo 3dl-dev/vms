@@ -126,6 +126,13 @@ uint32_t dnet_cterm_host_open_desc(struct dnet_cterm_host_session *hs,
         return st;
     }
 
+    /* Record where the terminal comes from ON THE DEVICE (rd vms-2166): SHOW
+     * TERMINAL's "Remote Port Info", SHOW PROCESS's "Terminal: RTAn: (node::
+     * user)", F$GETDVI TT_ACCPORNAM. Best effort: a refusal leaves the honest
+     * empty value, never a session failure. */
+    if (hs->remote_port_info[0])
+        (void)vms_kif_terminal_setrpi(hs->devnam, hs->remote_port_info);
+
     /* The daemon multiplexes many things on one loop; it must never block on
      * one session's terminal. */
     {

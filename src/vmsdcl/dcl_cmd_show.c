@@ -883,14 +883,10 @@ static const char *show_process_target_qual(const struct dcl_command *cmd)
  * WHAT IS DELIBERATELY NOT PRINTED, AND WHY (Rule 10 -- match VMS, or do
  * not expose it; never invent a plausible handler):
  *
- *   Terminal:          VMS prints it. The executive holds no terminal
- *                      for a process; OVMX's terminal is still a
- *                      per-process VMS_TERMINAL environment variable,
- *                      which is a facade with its own item (vms-d0b),
- *                      not a facility to read. Printing the caller's own
- *                      environment under a VMS label -- for a row that
- *                      may belong to another process entirely -- is the
- *                      defect, not the fix.
+ *   (Terminal: IS printed since rd vms-2166 -- from the executive's row
+ *    for the target, which records the terminal $CREPRC bound; see the
+ *    body below. The former VMS_TERMINAL environment-variable facade is
+ *    not read.)
  *   Base priority:     VMS prints it. The executive holds no VMS
  *                      priority; the old code printed the literal 4 for
  *                      every process. Same answer as SHOW SYSTEM's Pri
@@ -1178,6 +1174,33 @@ static int cmd_show_process(struct dcl_command *cmd)
         snprintf(uicbuf, sizeof(uicbuf), "[%03o,%03o]",
                  (unsigned)((tgt_uic >> 16) & 0xFFFFu),
                  (unsigned)(tgt_uic & 0xFFFFu));
+    }
+    /*
+     * Terminal: (rd vms-2166), from the EXECUTIVE's row for the target -- the
+     * terminal $CREPRC/SETTERM recorded -- never this process's environment.
+     * VMS prints the label for every process, empty when it has none (oracle
+     * docs/oracle/vax73-show-system-process.md Section 2), and for a remote
+     * terminal appends its port, "RTA1:  (VAX1::SYSTEM)" (oracle
+     * tests/lab/captures/decnet-sethost-inbound-20261005/vax-sethost-duplnam.txt).
+     */
+    {
+        struct vms_procinfo tpi;
+        char tdev[VMS_DEVNAM_SIZE + 2] = "";
+        char rpi[64] = "";
+        memset(&tpi, 0, sizeof(tpi));
+        if ((vms_kif_getjpi_pid(tgt_pid, &tpi) & 1) && tpi.terminal[0]) {
+            const char *d = strrchr(tpi.terminal, '$');
+            d = d ? d + 1 : tpi.terminal;
+            while (*d == '_') d++;
+            snprintf(tdev, sizeof(tdev), "%s", d);
+            if (tdev[0] && tdev[strlen(tdev) - 1] != ':')
+                strncat(tdev, ":", sizeof(tdev) - strlen(tdev) - 1);
+            (void)vms_kif_terminal_getrpi(tdev, rpi, sizeof(rpi));
+        }
+        if (rpi[0])
+            printf("%-20s%s  (%s)\n", "Terminal:", tdev, rpi);
+        else
+            printf("%-20s%s\n", "Terminal:", tdev);
     }
     printf("%-20s%s\n", "User Identifier:", uicbuf);
 
@@ -2809,7 +2832,7 @@ static void show_terminal_render(const struct vms_devinfo *info)
      * padding IS the separator here; there is no literal space after
      * either field.
      */
-    printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n\n",
+    printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n",
            phys,
            /* "Unknown" is pinned (section 3) and 0 is the only device
             * type the executive's table can hold: vms.ko creates the
@@ -2819,6 +2842,16 @@ static void show_terminal_render(const struct vms_devinfo *info)
             * with a real type owes this line its pin. */
            info->devtype == 0 ? "Unknown" : "",
            owner);
+    /* Remote Port Info (rd vms-2166): a remote terminal's node::user, read
+     * from the executive's device row (DVI$_TT_ACCPORNAM) -- oracle
+     * tests/lab/captures/decnet-sethost-inbound-20261005/vax-rta-show-terminal.txt.
+     * Absent for a local terminal, as on VMS. */
+    {
+        char rpi[64] = "";
+        if ((vms_kif_terminal_getrpi(info->devnam, rpi, sizeof(rpi)) & 1) && rpi[0])
+            printf("Remote Port Info: %s\n", rpi);
+    }
+    printf("\n");
 
     /*
      * WIDTH AND PAGE ARE NOT PRINTED (vms-d0b), CORRECTING THE SAME

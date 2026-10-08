@@ -346,6 +346,31 @@ struct vms_termlogin_args {
 #define VMS_IOCTL_TERM_GETLOGIN  _IOWR(VMS_ACP_IOC_MAGIC, 0x5d, struct vms_termlogin_args)
 
 /*
+ * RTAn: REMOTE PORT INFORMATION (rd vms-2166). On VMS a remote terminal's UCB
+ * carries the access port name -- SHOW TERMINAL's "Remote Port Info: VAX1::
+ * SYSTEM", SHOW PROCESS's "Terminal: RTA1:  (VAX1::SYSTEM)", $GETDVI
+ * DVI$_TT_ACCPORNAM. The CTERM host that mints the RTAn: records the
+ * connect-carried node::user here (privileged, like SETLOGIN); any process
+ * reads it back. Empty = no remote port (the honest omission). OVMX design
+ * choice (Rule 8): the byte layout of these ioctls.
+ */
+#define VMS_TT_ACCPORNAM_SIZE 64
+struct vms_termrpi_args {
+    char     devnam[VMS_DEVNAM_SIZE];        /* the RTAn: terminal (in)        */
+    char     rpi[VMS_TT_ACCPORNAM_SIZE];     /* SETRPI: in. GETRPI: out.       */
+    uint32_t status;                         /* return: SS$_ status            */
+    uint32_t pad;
+};
+#define VMS_IOCTL_TERM_SETRPI    _IOWR(VMS_ACP_IOC_MAGIC, 0x7a, struct vms_termrpi_args)
+#define VMS_IOCTL_TERM_GETRPI    _IOWR(VMS_ACP_IOC_MAGIC, 0x7b, struct vms_termrpi_args)
+_Static_assert(sizeof(struct vms_termrpi_args) == 88,
+               "struct vms_termrpi_args changed size -- RTAn: remote port info would decode at the wrong offsets");
+_Static_assert(VMS_IOCTL_TERM_SETRPI == 0xC058567Au,
+               "VMS_IOCTL_TERM_SETRPI encodes differently here than on the Linux reference build");
+_Static_assert(VMS_IOCTL_TERM_GETRPI == 0xC058567Bu,
+               "VMS_IOCTL_TERM_GETRPI encodes differently here than on the Linux reference build");
+
+/*
  * Freeze the shared layouts -- see src/kernel/vms_acp.h's identical asserts:
  * both sides of /dev/vms compile these structs separately and pass them by raw
  * address, so a size drift is an ABI break. These MUST match vms_acp.h exactly.

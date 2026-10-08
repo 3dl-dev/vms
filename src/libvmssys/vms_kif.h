@@ -726,6 +726,10 @@ uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
 uint32_t vms_kif_terminal_setlogin(const char *devnam, const char *username);
 uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
                                    uint32_t username_size);
+/* RTAn: remote port information -- DVI$_TT_ACCPORNAM (rd vms-2166). SET is
+ * privileged (the network daemon that minted the RTAn:); GET reads "" when none. */
+uint32_t vms_kif_terminal_setrpi(const char *devnam, const char *rpi);
+uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_size);
 
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN

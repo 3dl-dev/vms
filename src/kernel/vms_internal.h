@@ -1077,6 +1077,7 @@ struct vms_device {
      * unless a privileged daemon stamped it. Written/read under `lock`.
      */
     char                netlogin_user[VMS_USERNAME_SIZE];
+    char                tt_accpornam[VMS_TT_ACCPORNAM_SIZE]; /* RTAn: remote port info (vms-2166) */
 
     /*
      * Every channel currently assigned to this device, by any process.
@@ -1369,6 +1370,8 @@ long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
 /*
  * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
  * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its

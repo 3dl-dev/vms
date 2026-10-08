@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**476 surfaces catalogued** across 9 domains, each with a per-surface status.
+**477 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 331 |
+| ✅ verified | 24 | | real | 332 |
 | 🟢 implemented | 285 | | n/a | 93 |
-| 🟡 partial | 60 | | advisory | 46 |
+| 🟡 partial | 61 | | advisory | 46 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 92 | |  |  |

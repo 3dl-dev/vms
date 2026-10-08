@@ -74,23 +74,23 @@
     }
   ],
   "overall": {
-    "count": 476,
+    "count": 477,
     "by_status": {
       "verified": 24,
       "implemented": 285,
-      "partial": 60,
+      "partial": 61,
       "stub": 14,
       "designed": 1,
       "absent": 92
     },
     "by_authenticity": {
-      "real": 331,
+      "real": 332,
       "n/a": 93,
       "advisory": 46,
       "facade-risk": 6
     },
     "met": 309,
-    "in_progress": 60,
+    "in_progress": 61,
     "not_started": 107,
     "facade_risk": 6
   },

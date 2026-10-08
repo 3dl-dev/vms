@@ -3217,6 +3217,34 @@ struct vms_ddir_args {
     char     olddir[VMS_DDIR_SIZE];  /* out: the directory in force before    */
 };
 #define VMS_IOCTL_DDIR      _IOWR(VMS_IOC_MAGIC, 0x5F, struct vms_ddir_args)
+
+/*
+ * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
+ * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
+ * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
+ * identifier ACE against it. op GRANT/REVOKE target the process whose VMS pid is
+ * `pid` (0 = the caller) and need CMKRNL (the OpenVMS V7.3 / Alpha V8.4 probe:
+ * $GRANTID with every privilege disabled is SS$_NOPRIV, docs/oracle/semantics/
+ * rights). GRANT answers SS$_WASCLR when the identifier was not held and
+ * SS$_WASSET when it was (its attributes are then replaced); REVOKE the reverse
+ * (the same probe). LIST returns the list. Inherited at REGISTER_CONTINUE like the
+ * privilege mask. OVMX design choice (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_RIGHTS_MAX        32
+#define VMS_RIGHTS_OP_GRANT   1u
+#define VMS_RIGHTS_OP_REVOKE  2u
+#define VMS_RIGHTS_OP_LIST    3u
+struct vms_rights_args {
+    uint32_t op;                     /* in:  VMS_RIGHTS_OP_*                   */
+    uint32_t status;                 /* out: SS$_ status                       */
+    uint32_t pid;                    /* in:  target VMS pid, 0 = the caller    */
+    uint32_t id;                     /* in:  identifier (GRANT/REVOKE)         */
+    uint32_t attrib;                 /* in:  attributes (GRANT); out: previous */
+    uint32_t count;                  /* out: identifiers held (LIST)           */
+    uint32_t ids[VMS_RIGHTS_MAX];    /* out: LIST                              */
+    uint32_t attrs[VMS_RIGHTS_MAX];  /* out: LIST                              */
+};
+#define VMS_IOCTL_RIGHTS    _IOWR(VMS_IOC_MAGIC, 0x96, struct vms_rights_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -3295,6 +3323,8 @@ _Static_assert(sizeof(struct vms_ddir_args) == 8 + 2 * VMS_DDIR_SIZE,
                "vms_ddir_args layout changed: VMS_IOCTL_DDIR ABI break");
 _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
+               "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*

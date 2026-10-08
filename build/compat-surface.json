@@ -74,43 +74,43 @@
     }
   ],
   "overall": {
-    "count": 474,
+    "count": 475,
     "by_status": {
       "verified": 24,
-      "implemented": 284,
+      "implemented": 285,
       "partial": 59,
       "stub": 14,
       "designed": 1,
       "absent": 92
     },
     "by_authenticity": {
-      "real": 327,
+      "real": 330,
       "n/a": 93,
-      "advisory": 48,
+      "advisory": 46,
       "facade-risk": 6
     },
-    "met": 308,
+    "met": 309,
     "in_progress": 59,
     "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 429,
+    "count": 430,
     "by_status": {
       "verified": 24,
-      "implemented": 284,
+      "implemented": 285,
       "partial": 58,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 326,
+      "real": 329,
       "n/a": 53,
-      "advisory": 46,
+      "advisory": 44,
       "facade-risk": 4
     },
-    "met": 308,
+    "met": 309,
     "in_progress": 58,
     "not_started": 63,
     "facade_risk": 4
@@ -1221,21 +1221,21 @@
       "vms_ref": "OpenVMS Guide to System Security ch. 5 (Protecting Data)",
       "last_reviewed": "2026-10-08",
       "rollup": {
-        "count": 11,
+        "count": 12,
         "by_status": {
           "verified": 1,
-          "implemented": 4,
+          "implemented": 5,
           "partial": 4,
           "stub": 1,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 8,
-          "advisory": 2,
+          "real": 10,
+          "advisory": 1,
           "n/a": 1
         },
-        "met": 5,
+        "met": 6,
         "in_progress": 4,
         "not_started": 2,
         "facade_risk": 0
@@ -1843,8 +1843,7 @@
           "absent": 1
         },
         "by_authenticity": {
-          "real": 1,
-          "advisory": 1,
+          "real": 2,
           "n/a": 1
         },
         "met": 2,
@@ -5804,13 +5803,28 @@
       "facility_name": "File Protection (SOGW/UIC) + ACLs",
       "id": "sys$chkpro",
       "kind": "routine",
-      "vms": "$CHKPRO \u2014 compute-only SOGW protection check helper",
+      "vms": "$CHKPRO - may a subject access an object (protection code, ACL, privileges)",
       "status": "implemented",
-      "authenticity": "advisory",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/libvms/syssvc/sys_security.c:151",
-      "verified_against": null,
-      "notes": "Correct logic, still ZERO OVMX production callers (only starlet.h decl + shr.vec export) \u2014 computed but unused, honestly inert. The ACP enforces access directly (fileprot$sogw_uic), not via $CHKPRO. Re-census 2026-09-14: unchanged.",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "docs/oracle/semantics/chkpro/vax73.txt (69 cases, OpenVMS VAX V7.3) through the semantic-oracle gate and tests/libvms/test_chkpro.c; tests/qemu/test_syssvc_rights_acl.c (the caller's executive rights list after $GRANTID) and test_syssvc_rightslist.c (a $CREATE_USER_PROFILE subject)",
+      "notes": "vms-d404: CHP$_ACCESS/FLAGS/OWNER/PROT/ACL/UIC/PRIV/RIGHTS; the subject is a user profile or the caller as the executive holds it. The protection code denies only RWED (CONTROL is the ACL's); a matching ACE that does not grant is final for group and world; BYPASS grants, READALL only with CHP$M_USEREADALL and no matching ACE, SYSPRV and GRPPRV give the system category. A compute service: it decides, the ACP enforces. Object profiles (objpro) SS$_UNSUPPORTED; output items not filled.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$create_user_profile",
+      "kind": "routine",
+      "vms": "$CREATE_USER_PROFILE - a user's security profile for $CHKPRO",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "tests/qemu/test_syssvc_rightslist.c over the shipped SYSUAF.DAT/RIGHTSLIST.DAT on a mounted ODS-2 volume; docs/oracle/semantics/chkpro/vax73.txt CUP.*",
+      "notes": "vms-d404: UIC and authorized (CHP$M_DEFPRIV: default) privileges from SYSUAF.DAT, the identifiers the user holds from RIGHTSLIST.DAT; RMS$_RNF for an unknown or empty name as V7.3 answers. The profile's layout is OVMX's own (opaque to callers).",
       "plan_ref": "vms-8ad"
     },
     {
@@ -8264,13 +8278,13 @@
       "facility_name": "SYS$ Security Services ($SETPRV/$CHKPRO/$CHECK_ACCESS)",
       "id": "sys$chkpro",
       "kind": "routine",
-      "vms": "Check protection (system/owner/group/world) against an access mask",
+      "vms": "Check whether a subject may access an object (protection code, ACL, privileges)",
       "status": "implemented",
-      "authenticity": "advisory",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/libvms/syssvc/sys_security.c:151",
-      "verified_against": null,
-      "notes": "correct SOGW compute logic; zero OVMX callers currently invoke it",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "docs/oracle/semantics/chkpro/vax73.txt via the semantic-oracle gate; tests/libvms/test_chkpro.c",
+      "notes": "vms-d404: see protection-acl sys$chkpro.",
       "plan_ref": "vms-801"
     },
     {

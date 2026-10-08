@@ -690,6 +690,13 @@ struct vms_proc {
 	 * with dfprot; "" = never set. */
 	char                ddir[VMS_DDIR_SIZE];
 
+	/* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
+	 * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
+	 * privilege mask. Same hash_lock as the identity fields. */
+	uint32_t            rights_id[VMS_RIGHTS_MAX];
+	uint32_t            rights_attr[VMS_RIGHTS_MAX];
+	uint32_t            rights_n;
+
 	/*
 	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
 	 * the CHILD's PCB; vms_ioctl_setexit() delivers it (parent EF + AST) when
@@ -1327,6 +1334,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

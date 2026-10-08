@@ -291,3 +291,6 @@ vms_kif_lnm_scope_key=PROCEDURE
 vms_kif_terminal_setchar=PROCEDURE
 # Terminal $QIO IO$_SETMODE / IO$_SETCHAR (rd vms-d900). APPENDED.
 vms_kif_ttsetmode=PROCEDURE
+# Process rights list (rd vms-7d5a). APPENDED.
+vms_kif_rights=PROCEDURE
+vms_kif_rights_list=PROCEDURE

@@ -218,10 +218,10 @@ static void test_encoder_lab_bytes(void)
     uint8_t b[64]; size_t l = 0, used = 0; struct dnet_dap_msg d;
     CHECK(dnet_dap_encode(&m, 0, b, sizeof b, &l) == DNET_DAP_OK &&
           dnet_dap_decode(b, l, &d, &used) == DNET_DAP_OK && used == l &&
-          d.u.config.vernum == 5 && d.u.config.econum == 6 &&
+          d.u.config.vernum == 7 && d.u.config.econum == 2 &&
           dnet_dap_syscap_has(&d, DNET_DAP_CAP_SEQ_XFER) && dnet_dap_syscap_has(&d, DNET_DAP_CAP_SEQ_ORG) &&
           !dnet_dap_syscap_has(&d, 7) && !dnet_dap_syscap_has(&d, 21),
-          "OVMX CONFIG: DAP 5.6, advertises seq org + seq file transfer, NOT VBN/block or checksum");
+          "OVMX CONFIG: DAP 7.2 (rd vms-b2f), advertises seq org + seq file transfer, NOT VBN/block or checksum");
     CHECK(dnet_dap_syscap_has(&d, DNET_DAP_CAP_SUMMARY) && dnet_dap_syscap_has(&d, DNET_DAP_CAP_DATETIME) &&
           dnet_dap_syscap_has(&d, DNET_DAP_CAP_PROTECTION) && dnet_dap_syscap_has(&d, DNET_DAP_CAP_RENAME) &&
           dnet_dap_syscap_has(&d, DNET_DAP_CAP_WILDCARD) && !dnet_dap_syscap_has(&d, 22) &&

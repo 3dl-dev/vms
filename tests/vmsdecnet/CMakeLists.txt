@@ -179,7 +179,8 @@ target_compile_options(test_dnet_fal_server PRIVATE -Werror)
 add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/falverbs-wire.txt
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket/falverbs-live-wire.txt
-         ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/falverbs-v2v-wire.txt)
+         ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/falverbs-v2v-wire.txt
+         ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket)
 
 add_executable(test_dnet_dap test_dnet_dap.c)
 target_link_libraries(test_dnet_dap PRIVATE vmsdecnet_dap vmsdecnet_cterm)

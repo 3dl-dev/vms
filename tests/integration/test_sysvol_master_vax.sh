@@ -79,6 +79,8 @@ make_image DECNETD.EXE      N  8000
 make_image FAL.EXE          F  7000
 # MAIL_SERVER.EXE (rd vms-47fd): the MAIL-11 network server process, likewise.
 make_image MAIL_SERVER.EXE  M  6500
+# MAIL.EXE (rd vms-47fd): the MAIL utility that reads delivered mail back.
+make_image MAIL.EXE         R  6200
 # NCP.EXE (rd vms-5bb5): the DECnet network control program, staged beside it.
 make_image NCP.EXE          C  6000
 

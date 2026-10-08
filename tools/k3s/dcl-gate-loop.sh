@@ -21,7 +21,9 @@ for r in $(seq 1 "$ROUNDS"); do
   for p in $(seq 1 "$PAR"); do
     rc=$(cat /tmp/gate-$r-$p.rc)
     if [ "$rc" = 0 ]; then pass=$((pass+1)); echo "round $r #$p: PASS"
-    else fail=$((fail+1)); echo "round $r #$p: rc=$rc"; grep -E "^  FAIL:|NOTE:" /tmp/gate-$r-$p.log | head -12; fi
+    else fail=$((fail+1)); echo "round $r #$p: rc=$rc"; grep -E "^  FAIL:|NOTE:" /tmp/gate-$r-$p.log | head -12
+      n=$(grep -an '^  FAIL:' /tmp/gate-$r-$p.log | head -1 | cut -d: -f1)
+      echo "--- console around the first FAIL (line $n) ---"; sed -n "$((n>45?n-45:1)),$((n+4))p" /tmp/gate-$r-$p.log | cut -c1-200; echo "--- end ---"; fi
   done
 done
 echo "RESULT dcl-gate: pass=$pass fail=$fail"

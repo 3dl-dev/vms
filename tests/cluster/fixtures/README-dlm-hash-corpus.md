@@ -43,6 +43,7 @@ Contributing senders: `VAX1`, `VAX2`, `VAX3` (OpenVMS VAX **V7.3**, the
 | `dlm_hash_derivation.tsv` | 963 | the only rows the derivation (rd vms-66fe) may look at |
 | `dlm_hash_heldout.tsv` | 253 | **do not look at these while deriving.** The generalisation test (rd vms-c6e leg 1) |
 | `dlm_hash_prestudy_names.tsv` | 25 | keys printed on screen during the pre-split reconnaissance; forced into the derivation split |
+| `dlm_hash_predicted_m3soledir.tsv` | 533 | **not part of the split.** A FORWARD PREDICTION set: cut from `run-evac/runs/m3-soledir/wire.pcap`, a capture written at 2026-10-08T20:57:15Z — *sixteen minutes after* the function was committed (`99ce6ad6e`, 20:41:38Z) — on a different rig and a different cluster group, from op-0x01 lookups **and** op-0x0d directory registrations. 84 of its keys appear in no other file here; all 533 reproduce. `sha256 af9437c0c5a21e51827ab9af08b03a776dac9ab6e3316511bc7386d31770c165` |
 
 16102 op-0x01 ROOT requests from identified real-VAX senders collapsed to 1216
 unique keys with **zero conflicts**: every `(name, mode, group)` carries exactly
@@ -92,6 +93,24 @@ tools/cluster/dlm_hash/split.py tests/cluster/fixtures/dlm_hash_corpus.tsv \
 
 `--dedupe` exits 2 if any `(name, mode, group)` ever carried two different
 values. It exited 0.
+
+The forward-prediction fixture adds `--ops 01,0d`, which also trusts the
+op-0x0d directory-registration record's identity block (grounded by 479/479
+reproductions in that run). The default stays `--ops 01`, so the corpus above
+re-extracts byte-for-byte:
+
+```sh
+tools/cluster/dlm_hash/extract.py --dedupe --ops 01,0d \
+    /lab/run-evac/runs/m3-soledir/wire.pcap \
+  > tests/cluster/fixtures/dlm_hash_predicted_m3soledir.tsv
+```
+
+**Only op-0x01 and op-0x0d are trusted as name carriers**, and that is measured,
+not assumed: in the same capture an op-0x06 body and two op-0x07 bodies carry a
+visibly half-overwritten name span next to a hash field that is a correct hash
+of a *different, real* resource — the "a wire field that looks like data and is
+not" hazard `src/kernel-core/vms_cluster_codec_dlm.h` warns about.
+See `docs/design-dlm-name-hash.md` SS4a.
 
 ## The split, and why it is frozen here
 

@@ -17,6 +17,13 @@
  * result here that distinguishes "determined the function" from "memorised a
  * table". If a future change makes the held-out split red, the function is
  * wrong; do not re-split the corpus (check_corpus.py gates that too).
+ *
+ * The THIRD set is a FORWARD PREDICTION. dlm_hash_predicted_m3soledir.tsv was
+ * extracted from a lab capture that did not exist when the function was frozen
+ * -- the function was committed at 2026-10-08T20:41:38Z and that pcap was
+ * written at 20:57:15Z -- from a different rig, a different cluster group, and
+ * two frame shapes rather than one (op-0x01 lookups AND op-0x0d directory
+ * registrations). 84 of its 533 keys appear in no other fixture here.
  */
 #include "cluster_test.h"
 #include "vms_dlm_hash.h"
@@ -211,5 +218,7 @@ int main(void)
 	       963);
 	report("HELD-OUT split", OVMX_DLM_HASH_DIR "/dlm_hash_heldout.tsv",
 	       253);
+	report("FORWARD PREDICTION (m3-soledir, captured after the function was frozen)",
+	       OVMX_DLM_HASH_DIR "/dlm_hash_predicted_m3soledir.tsv", 533);
 	return ct_summary("test_dlm_hash");
 }

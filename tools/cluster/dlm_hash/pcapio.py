@@ -44,6 +44,7 @@ NAME_MAX = 31
 
 DLM_CAT_REQUEST = 0x02
 DLM_WIREOP_ENQ = 0x01
+DLM_WIREOP_REBUILD = 0x0d
 
 # Discovery-family node name (vms_cluster_codec_hello.h), frame-absolute.
 OFF_DISC_NAMELEN = 40
@@ -111,13 +112,21 @@ def disc_node_name(frame):
     return name.decode("ascii").strip()
 
 
-def root_enq_request(body):
-    """(name, mode, group, value) for a cat-02 op-01 ROOT lookup, else None.
+def root_named_request(body, ops=(DLM_WIREOP_ENQ,)):
+    """(name, mode, group, value) for a cat-02 ROOT request, else None.
+
+    `ops` selects which opcodes are trusted to carry a COHERENT identity block.
+    Only two are: op-0x01 (the ENQ/lookup, grounded rd vms-4fb) and op-0x0d
+    (the rebuild/registration record, grounded spec SS4(p) and accepted by
+    vms_dlm_res_ident_parse_body). An op-0x06/op-0x07 body also has readable
+    bytes at body[48] and they are NOT the resource -- see the
+    vms_cluster_codec_dlm.h warning about a wire field that looks like data and
+    is not, and the measurement in docs/design-dlm-name-hash.md SS6.
 
     A sub-resource (nonzero parent span) is rejected: its value is a property
     of the parent too, so it teaches nothing about the name (vms-4fb finding 3).
     """
-    if body[OFB_CAT] != DLM_CAT_REQUEST or body[OFB_OP] != DLM_WIREOP_ENQ:
+    if body[OFB_CAT] != DLM_CAT_REQUEST or body[OFB_OP] not in ops:
         return None
     if body[OFB_PARENT:OFB_PARENT + 8] != b"\0" * 8:
         return None

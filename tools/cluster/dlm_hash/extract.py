@@ -82,8 +82,8 @@ def source_label(path):
     return os.path.join(os.path.basename(head), base)
 
 
-def scan(paths, macs, exclude_prefix, stats):
-    """Yield one Row per kept cat-02 op-01 ROOT lookup request."""
+def scan(paths, macs, exclude_prefix, stats, ops):
+    """Yield one Row per kept cat-02 ROOT request in `ops`."""
     for path in paths:
         label = source_label(path)
         for idx, frame in pcapio.frames(path):
@@ -92,10 +92,10 @@ def scan(paths, macs, exclude_prefix, stats):
             body = pcapio.sysap_body(frame)
             if body is None:
                 continue
-            hit = pcapio.root_enq_request(body)
+            hit = pcapio.root_named_request(body, ops)
             if hit is None:
                 continue
-            stats["op01_root"] += 1
+            stats["root_named"] += 1
             mac = pcapio.src_mac(frame)
             sender, reason = sender_verdict(macs, mac, exclude_prefix)
             if reason:
@@ -133,11 +133,15 @@ def main(argv=None):
                     help="one row per unique (name, mode, group); conflicts are fatal")
     ap.add_argument("--exclude-prefix", default="OVMX",
                     help="drop senders whose SCSNODE starts with this (default OVMX)")
+    ap.add_argument("--ops", default="01",
+                    help="comma-separated cat-02 opcodes whose identity block is "
+                         "trusted; only 01 and 0d are grounded (default 01)")
     args = ap.parse_args(argv)
+    ops = tuple(int(o, 16) for o in args.ops.split(","))
 
     macs = identify_senders(args.pcaps)
     stats = collections.Counter()
-    rows = list(scan(args.pcaps, macs, args.exclude_prefix, stats))
+    rows = list(scan(args.pcaps, macs, args.exclude_prefix, stats, ops))
 
     print("\t".join(COLUMNS))
     if args.dedupe:

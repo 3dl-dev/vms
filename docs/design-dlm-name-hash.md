@@ -190,6 +190,7 @@ residue of `L mod 4` — reproduce exactly with zeros.
 | derivation split (the only evidence used) | 963 | **963 (100%)** |
 | **held-out split** (frozen before derivation, unseen until the function was final) | 253 | **253 (100%)** |
 | whole corpus | 1216 | **1216 (100%)** |
+| **forward prediction** — `m3-soledir`, a capture that did not exist when the function was frozen | 533 | **533 (100%)** |
 
 The corpus spans **two independent OpenVMS VAX versions** — `VAX1`/`VAX2`/`VAX3`
 at **V7.3** and `VAXC` at **V5.5-2H4** — and all 242 `VAXC` rows reproduce, so
@@ -200,14 +201,53 @@ The split's integrity is itself gated: `ctest -R dlm_hash_corpus_split_frozen`
 (`tools/cluster/dlm_hash/check_corpus.py`) fails if the corpus is re-split,
 de-duplicated differently, or an OVMX-sourced row appears in it.
 
+## 4a. The forward prediction, and what it independently confirms
+
+The function was committed at **2026-10-08T20:41:38Z** (`99ce6ad6e`). The lab
+rig then wrote `/lab/run-evac/runs/m3-soledir/wire.pcap` at **20:57:15Z** —
+sixteen minutes later, on a different rig, a different cluster group, with
+`VAX1`/`VAX2` at `LOCKDIRWT 0` and the OVMX node (`OVMXE`) at `LOCKDIRWT 1`, so
+the VAX masters registered their roots *to* OVMX. Nothing was re-fitted; the
+committed constants were simply run against it.
+
+```
+sha256 af9437c0c5a21e51827ab9af08b03a776dac9ab6e3316511bc7386d31770c165
+       run-evac/runs/m3-soledir/wire.pcap
+```
+
+**533 unique keys, 533 reproduced, zero conflicts — and 84 of those keys appear
+in no other fixture here.** Fixture: `dlm_hash_predicted_m3soledir.tsv`.
+
+Two things this run establishes that the corpus could not:
+
+* **op-0x0d carries the same identity block and the same value.** 479 of 479
+  VAX-originated op-0x0d directory-registration records reproduce exactly, so
+  the `body[44:48]` descriptor + name + `body[128:132]` reading is grounded on
+  the registration shape as well as the lookup shape. `extract.py --ops 01,0d`
+  is how the fixture was cut; the default stays `01` so the original corpus
+  re-extracts byte-for-byte.
+* **Where the identity block is NOT coherent, measured rather than assumed.**
+  Taken over *every* cat-0x02 root-named VAX frame in that capture, the
+  predictions are: op-0x01 261/261, op-0x03 1/1, op-0x04 25/25, op-0x0d
+  479/479, op-0x0e 4/4, op-0x0f 5/5, op-0x10 4/4, op-0x12 1/1 — and op-0x07
+  6/8, op-0x06 0/1. The three misses are not the function failing; they are the
+  hazard `vms_cluster_codec_dlm.h` warns about. Their name spans are visibly
+  half-overwritten (`F11B\x00\x00…1␣␣␣␣␣*\x00\x00\x00`), while the hash field
+  is a correct hash of a REAL resource: frame 5514's `0x48501b6d` is exactly the
+  value of `F11B$aSYSDSK1␣␣␣␣␣*\x00\x00\x00`, and frame 8258's `0xfccdecd3` is
+  exactly `DMT$_$2$DUA1:` — both already in the corpus from other captures. So
+  an op-0x06/op-0x07 body's `body[48]` is stale buffer, exactly as the codec
+  header says, and only op-0x01 and op-0x0d are trusted as name carriers.
+
 ## 5. What is still NOT proven, and what does not change yet
 
-* **No fresh-lab prediction run yet.** rd vms-c6e leg 2 writes down predicted
-  values for brand-new names (1 character, 31 characters, non-alpha, each
-  access mode, nonzero group), timestamps them, then has a real V7.3 VAX `$ENQ`
-  them with `LOCKDIRWT` set so the lookups cross the wire, and compares. Until
-  that runs, the claim is "reproduces 1216 captured values including 253 held
-  out", not "predicts".
+* **The EDGE CASES are still unexercised.** The `m3-soledir` run above is a
+  genuine forward prediction, but it is VMS's own traffic, so it exercises only
+  the names VMS happens to lock. rd vms-c6e leg 2 still owes a *driven* run:
+  predicted values written down for brand-new names (1 character, 31
+  characters, non-alpha, each access mode, nonzero group), timestamped, then
+  `$ENQ`ed by a real V7.3 VAX with `LOCKDIRWT` set so the lookups cross the
+  wire. That is what would exercise the mode and group bits below.
 * **Coverage limits of the corpus, stated honestly.** Observed access modes are
   0, 1 and 3 (bits 0-1 of the mode byte); observed groups are 0 and 1 (bit 0 of
   the group word). Lengths 1, 2, 4, 6, 9, 19, 20, 23, 28, 29 and 31 do not

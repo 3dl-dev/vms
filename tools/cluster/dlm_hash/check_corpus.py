@@ -108,6 +108,16 @@ def main(argv=None):
         raw[name] = rows
     check_no_conflicts(raw["corpus"], paths["corpus"], fail)
 
+    # The forward-prediction fixture is not part of the split (it was captured
+    # AFTER the function was frozen), but it is held to the same hygiene: well
+    # formed, deduped, conflict-free, and no OVMX sender.
+    pred_path = os.path.join(args.fixtures, "dlm_hash_predicted_m3soledir.tsv")
+    pred_header, pred_rows = read_tsv(pred_path)
+    check_header(pred_header, pred_path, fail)
+    for i, row in enumerate(pred_rows, start=2):
+        check_row(row, i, pred_path, fail)
+    check_no_conflicts(pred_rows, pred_path, fail)
+
     lines = {}
     for name, path in paths.items():
         with open(path) as fh:
@@ -119,9 +129,10 @@ def main(argv=None):
 
     for msg in failures:
         sys.stderr.write("FAIL %s\n" % msg)
-    print("corpus %d rows, derivation %d, held-out %d, prestudy %d: %s"
+    print("corpus %d rows, derivation %d, held-out %d, prediction %d, "
+          "prestudy %d: %s"
           % (len(raw["corpus"]), len(raw["derivation"]), len(raw["heldout"]),
-             len(prestudy), "FAILED" if failures else "OK"))
+             len(pred_rows), len(prestudy), "FAILED" if failures else "OK"))
     return 1 if failures else 0
 
 

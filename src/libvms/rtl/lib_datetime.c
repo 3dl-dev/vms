@@ -222,25 +222,33 @@ uint32_t lib$day_of_week(const void *time_value, int32_t *day) {
  * Parses ndigits characters of signed decimal text and converts to int32_t.
  */
 uint32_t lib$cvt_dtb(int32_t ndigits, const char *text, int32_t *value) {
-    if (!text || !value || ndigits <= 0) return SS$_BADPARAM;
+    /*
+     * The LIB$CVT_xTB routines answer SS$_NORMAL or 0 -- not a condition
+     * value -- for text that is not a number of that radix or does not fit a
+     * longword, leaving *value alone; a zero-length string is 0 and success
+     * (observed LIB.CVT_DTB.BAD / .OVERFLOW / .ZEROLEN, docs/oracle/
+     * semantics/rtl/; LIB$ Manual, LIB$CVT_DTB).
+     */
+    if (!value) return 0;
+    if (ndigits <= 0) { *value = 0; return SS$_NORMAL; }
+    if (!text) return 0;
 
-    /* A signed decimal integer: an optional leading '+' or '-' (LIB$ Manual,
-     * LIB$CVT_DTB: "Convert Decimal Text to Binary"), then at least one digit. */
+    /* A signed decimal integer: an optional leading '+' or '-', then digits. */
     int32_t i = 0;
     int neg = 0;
     if (text[0] == '-' || text[0] == '+') {
         neg = (text[0] == '-');
         i = 1;
-        if (ndigits == 1) return SS$_BADPARAM;
+        if (ndigits == 1) return 0;
     }
     int64_t result = 0;
     for (; i < ndigits; i++) {
-        if (!isdigit((unsigned char)text[i])) return SS$_BADPARAM;
+        if (!isdigit((unsigned char)text[i])) return 0;
         result = result * 10 + (text[i] - '0');
-        if (result > 2147483648LL) return SS$_BADPARAM;   /* does not fit a longword */
+        if (result > 2147483648LL) return 0;   /* does not fit a longword */
     }
     if (neg) result = -result;
-    if (result > 2147483647LL) return SS$_BADPARAM;
+    if (result > 2147483647LL) return 0;
     *value = (int32_t)result;
 
     return SS$_NORMAL;
@@ -250,14 +258,17 @@ uint32_t lib$cvt_dtb(int32_t ndigits, const char *text, int32_t *value) {
  * lib$cvt_htb - Convert hexadecimal text to binary integer.
  */
 uint32_t lib$cvt_htb(int32_t ndigits, const char *text, int32_t *value) {
-    if (!text || !value || ndigits <= 0) return SS$_BADPARAM;
+    /* SS$_NORMAL or 0, as LIB$CVT_DTB */
+    if (!value) return 0;
+    if (ndigits <= 0) { *value = 0; return SS$_NORMAL; }
+    if (!text) return 0;
 
     int32_t result = 0;
     for (int32_t i = 0; i < ndigits; i++) {
         char c = (char)toupper((unsigned char)text[i]);
         if (c >= '0' && c <= '9') result = result * 16 + (c - '0');
         else if (c >= 'A' && c <= 'F') result = result * 16 + (c - 'A' + 10);
-        else return SS$_BADPARAM;
+        else return 0;
     }
     *value = result;
 
@@ -268,11 +279,14 @@ uint32_t lib$cvt_htb(int32_t ndigits, const char *text, int32_t *value) {
  * lib$cvt_otb - Convert octal text to binary integer.
  */
 uint32_t lib$cvt_otb(int32_t ndigits, const char *text, int32_t *value) {
-    if (!text || !value || ndigits <= 0) return SS$_BADPARAM;
+    /* SS$_NORMAL or 0, as LIB$CVT_DTB */
+    if (!value) return 0;
+    if (ndigits <= 0) { *value = 0; return SS$_NORMAL; }
+    if (!text) return 0;
 
     int32_t result = 0;
     for (int32_t i = 0; i < ndigits; i++) {
-        if (text[i] < '0' || text[i] > '7') return SS$_BADPARAM;
+        if (text[i] < '0' || text[i] > '7') return 0;
         result = result * 8 + (text[i] - '0');
     }
     *value = result;

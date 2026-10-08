@@ -486,7 +486,9 @@ static void test_len_extr(void)
 
     sp = 5; len = 100;
     st = str$len_extr((struct dsc$descriptor_s *)&dst, &src, &sp, &len);
-    check(st == SS$_NORMAL, "len_extr clamp at end returns SS$_NORMAL");
+    /* clamped at the end, with the STR$_ILLSTRSPE warning OpenVMS returns
+     * (observed STR.LEN_EXTR.PAST_END, docs/oracle/semantics/rtl/) */
+    check(st == STR$_ILLSTRSPE, "len_extr clamp at end returns STR$_ILLSTRSPE");
     check(dst.dsc$w_length == 2, "len_extr clamp: length = 2");
     check(memcmp(dst.dsc$a_pointer, "EF", 2) == 0, "len_extr clamp: content = EF");
     str$free1_dx(&dst);
@@ -543,14 +545,15 @@ static void test_element(void)
     check(memcmp(dst.dsc$a_pointer, "three", 5) == 0, "element 2: content = 'three'");
     str$free1_dx(&dst);
 
-    /* Element beyond range returns delimiter */
+    /* Element beyond range: STR$_NOELEM, the destination left as it was
+     * (observed STR.ELEMENT.5, docs/oracle/semantics/rtl/) */
     dst.dsc$w_length = 0; dst.dsc$b_dtype = DSC$K_DTYPE_T;
     dst.dsc$b_class = DSC$K_CLASS_D; dst.dsc$a_pointer = NULL;
     elem = 10;
     st = str$element((struct dsc$descriptor_s *)&dst, &elem, &delim, &src);
-    check(st == SS$_NORMAL, "element beyond range returns SS$_NORMAL");
-    check(dst.dsc$w_length == 1 && dst.dsc$a_pointer[0] == ',',
-          "element beyond range: returns delimiter");
+    check(st == STR$_NOELEM, "element beyond range returns STR$_NOELEM");
+    check(dst.dsc$w_length == 0 && dst.dsc$a_pointer == NULL,
+          "element beyond range: the destination is left as it was");
     str$free1_dx(&dst);
 }
 

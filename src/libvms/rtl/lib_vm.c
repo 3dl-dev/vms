@@ -51,13 +51,22 @@ static const uint32_t bin_sizes[LOOKASIDE_CLASSES] = {
  * Internal structures
  * ================================================================ */
 
-/* Header prepended to every allocation (8 bytes) */
+/* Header prepended to every allocation (16 bytes). `magic' tells a block
+ * LIB$GET_VM handed out from one already freed (or never allocated): freeing
+ * either is LIB$_BADBLOADR, as on OpenVMS (observed LIB.FREE_VM.AGAIN). */
+#define VM_MAGIC_LIVE  0x564D4C56u   /* "VLMV" */
+#define VM_MAGIC_FREE  0x564D4C46u
 struct alloc_hdr {
     uint32_t size;          /* usable size (not including header) */
     uint32_t zone_id;       /* owning zone (for validation) */
+    uint32_t magic;         /* VM_MAGIC_LIVE while allocated */
+    uint32_t pad;
 };
 
-/* Free block in a lookaside list */
+
+
+/* Free block in a lookaside list -- the link lives in the USER area, just
+ * past the header, so a freed block keeps its header (and its FREE magic). */
 struct free_block {
     struct free_block *next;
 };
@@ -223,7 +232,7 @@ static void *zone_large_alloc(struct vm_zone *zone, uint32_t total_size)
  * lib$get_vm - Allocate virtual memory from a zone.
  *
  * If zone_id is NULL or points to 0, uses the default zone (zone 0).
- * Prepends an 8-byte alloc_hdr for tracking.
+ * Prepends a 16-byte alloc_hdr for tracking.
  */
 uint32_t lib$get_vm(const uint32_t *num_bytes, void **base_adr, ...)
 {
@@ -232,8 +241,10 @@ uint32_t lib$get_vm(const uint32_t *num_bytes, void **base_adr, ...)
 
     if (!num_bytes || !base_adr)
         return SS$_BADPARAM;
-    if (*num_bytes == 0)
-        return SS$_BADPARAM;
+    /* a block size of 0, or one no address space holds (a negative longword
+     * read as unsigned) */
+    if (*num_bytes == 0 || *num_bytes > 0x7FFFFFF0u)
+        return LIB$_BADBLOSIZ;
 
     ensure_init();
 
@@ -266,7 +277,7 @@ uint32_t lib$get_vm(const uint32_t *num_bytes, void **base_adr, ...)
         if (zone->lookaside[bin]) {
             struct free_block *fb = zone->lookaside[bin];
             zone->lookaside[bin] = fb->next;
-            raw = (void *)fb;
+            raw = (char *)fb - sizeof(struct alloc_hdr);
         } else {
             /* Bump-allocate from extent with bin-sized total */
             uint32_t bin_total = bin_sizes[bin] + sizeof(struct alloc_hdr);
@@ -292,6 +303,7 @@ uint32_t lib$get_vm(const uint32_t *num_bytes, void **base_adr, ...)
     struct alloc_hdr *hdr = (struct alloc_hdr *)raw;
     hdr->size = (bin >= 0) ? bin_sizes[bin] : user_size;
     hdr->zone_id = zid;
+    hdr->magic = VM_MAGIC_LIVE;
 
     *base_adr = (char *)raw + sizeof(struct alloc_hdr);
     /* Zero the returned block.  VMS callers routinely create zones with
@@ -317,8 +329,10 @@ uint32_t lib$free_vm(const uint32_t *num_bytes, void **base_adr, ...)
 
     (void)num_bytes;
 
-    if (!base_adr || !*base_adr)
+    if (!base_adr)
         return SS$_BADPARAM;
+    if (!*base_adr || ((uintptr_t)*base_adr & (BLOCK_ALIGN - 1)))
+        return LIB$_BADBLOADR;
 
     ensure_init();
 
@@ -328,6 +342,8 @@ uint32_t lib$free_vm(const uint32_t *num_bytes, void **base_adr, ...)
 
     /* Find the header */
     struct alloc_hdr *hdr = (struct alloc_hdr *)((char *)*base_adr - sizeof(struct alloc_hdr));
+    if (hdr->magic != VM_MAGIC_LIVE)
+        return LIB$_BADBLOADR;      /* freed already, or never LIB$GET_VM's */
     uint32_t zid = hdr->zone_id;
 
     /* Validate zone_id if caller provided one */
@@ -346,10 +362,11 @@ uint32_t lib$free_vm(const uint32_t *num_bytes, void **base_adr, ...)
     int bin = size_to_bin(hdr->size);
     if (bin >= 0) {
         /* Return to lookaside list */
-        struct free_block *fb = (struct free_block *)hdr;
+        struct free_block *fb = (struct free_block *)(hdr + 1);
         fb->next = zone->lookaside[bin];
         zone->lookaside[bin] = fb;
     }
+    hdr->magic = VM_MAGIC_FREE;
     /* Large blocks: no individual free, reclaimed on zone delete.
      * The memory stays mapped until lib$delete_vm_zone. */
 

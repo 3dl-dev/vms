@@ -6,6 +6,7 @@
  * (Class D) descriptors transparently.
  */
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,8 +30,15 @@ extern uint32_t dsc$copy(struct dsc$descriptor *dst,
 uint32_t str$copy_dx(struct dsc$descriptor_s *dest,
                      const struct dsc$descriptor_s *src) {
     if (!dest || !src) return SS$_BADPARAM;
-    return dsc$copy((struct dsc$descriptor *)dest,
-                    (const struct dsc$descriptor *)src);
+    uint32_t st = dsc$copy((struct dsc$descriptor *)dest,
+                           (const struct dsc$descriptor *)src);
+    /* A fixed-length destination shorter than the source: the copy is
+     * truncated and STR$_TRU (a warning) says so (observed
+     * STR.COPY_DX.FIXED.TRUNC, docs/oracle/semantics/rtl/). */
+    if ((st & 1) && dest->dsc$b_class != DSC$K_CLASS_D &&
+        src->dsc$w_length > dest->dsc$w_length)
+        return STR$_TRU;
+    return st;
 }
 
 /*
@@ -62,57 +70,47 @@ uint32_t str$copy_r(struct dsc$descriptor_s *dest,
 }
 
 /*
- * str$concat - Concatenate two descriptors into a dynamic descriptor.
+ * str$concat - Concatenate two or more source strings into dest.
  *
- * Allocates dest to hold the combined contents of src1 and src2.
+ * OpenVMS passes a counted argument list (up to 254 sources); OVMX's C
+ * calling convention ends the list with a NULL pointer (str$routines.h).
+ * Every source is used (observed STR.CONCAT, three sources -> "abcdef").
  */
-uint32_t str$concat(struct dsc$descriptor_s *dest,
+uint32_t (str$concat)(struct dsc$descriptor_s *dest,
                     const struct dsc$descriptor_s *src1,
                     const struct dsc$descriptor_s *src2, ...) {
-    if (!dest || !src1 || !src2) return SS$_BADPARAM;
+    if (!dest || !src1) return SS$_BADPARAM;
 
-    uint32_t total32 = (uint32_t)src1->dsc$w_length + (uint32_t)src2->dsc$w_length;
-    if (total32 > UINT16_MAX) return STR$_STRTOOLON;
-    uint16_t total = (uint16_t)total32;
-
-    if (dest->dsc$b_class == DSC$K_CLASS_D) {
-        struct dsc$descriptor_d *ddest = (struct dsc$descriptor_d *)dest;
-        uint32_t status = dsc$alloc_d(ddest, total);
-        if (!(status & 1)) return status;
-
-        if (src1->dsc$a_pointer && src1->dsc$w_length > 0) {
-            memcpy(ddest->dsc$a_pointer, src1->dsc$a_pointer, src1->dsc$w_length);
-        }
-        if (src2->dsc$a_pointer && src2->dsc$w_length > 0) {
-            memcpy(ddest->dsc$a_pointer + src1->dsc$w_length,
-                   src2->dsc$a_pointer, src2->dsc$w_length);
-        }
-    } else {
-        /* Static destination - concatenate and truncate/pad */
-        if (!dest->dsc$a_pointer) return SS$_BADPARAM;
-        uint16_t pos = 0;
-
-        uint16_t len1 = src1->dsc$w_length;
-        if (len1 > dest->dsc$w_length) len1 = dest->dsc$w_length;
-        if (src1->dsc$a_pointer && len1 > 0) {
-            memcpy(dest->dsc$a_pointer, src1->dsc$a_pointer, len1);
-            pos = len1;
-        }
-
-        uint16_t remaining = dest->dsc$w_length - pos;
-        uint16_t len2 = src2->dsc$w_length;
-        if (len2 > remaining) len2 = remaining;
-        if (src2->dsc$a_pointer && len2 > 0) {
-            memcpy(dest->dsc$a_pointer + pos, src2->dsc$a_pointer, len2);
-            pos += len2;
-        }
-
-        if (pos < dest->dsc$w_length) {
-            memset(dest->dsc$a_pointer + pos, ' ', dest->dsc$w_length - pos);
-        }
+    const struct dsc$descriptor_s *srcs[254];
+    int n = 0;
+    srcs[n++] = src1;
+    if (src2) {
+        srcs[n++] = src2;
+        va_list ap;
+        va_start(ap, src2);
+        const struct dsc$descriptor_s *d;
+        while (n < 254 && (d = va_arg(ap, const struct dsc$descriptor_s *)) != NULL)
+            srcs[n++] = d;
+        va_end(ap);
     }
 
-    return SS$_NORMAL;
+    uint32_t total = 0;
+    for (int i = 0; i < n; i++)
+        total += srcs[i]->dsc$w_length;
+    if (total > UINT16_MAX) return STR$_STRTOOLON;
+
+    char *buf = malloc(total ? total : 1);
+    if (!buf) return STR$_INSVIRMEM;
+    uint32_t pos = 0;
+    for (int i = 0; i < n; i++) {
+        if (srcs[i]->dsc$a_pointer && srcs[i]->dsc$w_length)
+            memcpy(buf + pos, srcs[i]->dsc$a_pointer, srcs[i]->dsc$w_length);
+        pos += srcs[i]->dsc$w_length;
+    }
+    struct dsc$descriptor_s all = { (uint16_t)total, DSC$K_DTYPE_T, DSC$K_CLASS_S, buf };
+    uint32_t st = str$copy_dx(dest, &all);
+    free(buf);
+    return st;
 }
 
 /*
@@ -126,13 +124,15 @@ int32_t str$compare(const struct dsc$descriptor_s *str1,
                     const struct dsc$descriptor_s *str2) {
     if (!str1 || !str2) return 0;
 
-    uint16_t len = str1->dsc$w_length < str2->dsc$w_length ?
-                   str1->dsc$w_length : str2->dsc$w_length;
-
-    int result = memcmp(str1->dsc$a_pointer, str2->dsc$a_pointer, len);
-    if (result != 0) return result < 0 ? -1 : 1;
-    if (str1->dsc$w_length < str2->dsc$w_length) return -1;
-    if (str1->dsc$w_length > str2->dsc$w_length) return 1;
+    /* The shorter string compares as if blank-filled to the longer one's
+     * length (observed STR.COMPARE.PAD: "abc" = "abc  "). */
+    uint16_t l1 = str1->dsc$w_length, l2 = str2->dsc$w_length;
+    uint16_t len = l1 > l2 ? l1 : l2;
+    for (uint16_t i = 0; i < len; i++) {
+        unsigned char c1 = i < l1 ? (unsigned char)str1->dsc$a_pointer[i] : ' ';
+        unsigned char c2 = i < l2 ? (unsigned char)str2->dsc$a_pointer[i] : ' ';
+        if (c1 != c2) return c1 < c2 ? -1 : 1;
+    }
     return 0;
 }
 
@@ -159,16 +159,14 @@ int32_t str$case_blind_compare(const struct dsc$descriptor_s *str1,
                                 const struct dsc$descriptor_s *str2) {
     if (!str1 || !str2) return 0;
 
-    uint16_t len = str1->dsc$w_length < str2->dsc$w_length ?
-                   str1->dsc$w_length : str2->dsc$w_length;
-
+    /* blank-filled like STR$COMPARE */
+    uint16_t l1 = str1->dsc$w_length, l2 = str2->dsc$w_length;
+    uint16_t len = l1 > l2 ? l1 : l2;
     for (uint16_t i = 0; i < len; i++) {
-        int c1 = toupper((unsigned char)str1->dsc$a_pointer[i]);
-        int c2 = toupper((unsigned char)str2->dsc$a_pointer[i]);
+        int c1 = toupper(i < l1 ? (unsigned char)str1->dsc$a_pointer[i] : ' ');
+        int c2 = toupper(i < l2 ? (unsigned char)str2->dsc$a_pointer[i] : ' ');
         if (c1 != c2) return c1 < c2 ? -1 : 1;
     }
-    if (str1->dsc$w_length < str2->dsc$w_length) return -1;
-    if (str1->dsc$w_length > str2->dsc$w_length) return 1;
     return 0;
 }
 
@@ -203,9 +201,10 @@ uint32_t str$trim(struct dsc$descriptor_s *dest,
     if (!dest || !src) return SS$_BADPARAM;
     if (!src->dsc$a_pointer) return SS$_BADPARAM;
 
-    /* Find the last non-space character */
+    /* Trailing blanks AND tabs go (observed STR.TRIM: "  ab  <TAB> " -> "  ab") */
     int len = src->dsc$w_length;
-    while (len > 0 && src->dsc$a_pointer[len - 1] == ' ') len--;
+    while (len > 0 && (src->dsc$a_pointer[len - 1] == ' ' || src->dsc$a_pointer[len - 1] == '\t'))
+        len--;
 
     struct dsc$descriptor_s trimmed = {
         .dsc$w_length = (uint16_t)len,
@@ -226,7 +225,7 @@ uint32_t str$upcase(struct dsc$descriptor_s *dest,
     if (!dest || !src) return SS$_BADPARAM;
 
     uint32_t status = str$copy_dx(dest, src);
-    if (!(status & 1)) return status;
+    if (!(status & 1) && status != STR$_TRU) return status;
 
     uint16_t len = dest->dsc$w_length;
     for (uint16_t i = 0; i < len; i++) {
@@ -234,7 +233,7 @@ uint32_t str$upcase(struct dsc$descriptor_s *dest,
             (char)toupper((unsigned char)dest->dsc$a_pointer[i]);
     }
 
-    return SS$_NORMAL;
+    return status;
 }
 
 /*
@@ -279,9 +278,12 @@ uint32_t str$position(const struct dsc$descriptor_s *src,
                       const struct dsc$descriptor_s *sub,
                       const uint32_t *start) {
     if (!src || !sub) return 0;
-    if (!sub->dsc$a_pointer || sub->dsc$w_length == 0) return 0;
 
     int32_t s = (start && *start > 0) ? (int32_t)(*start - 1) : 0;
+    /* An empty substring is found where the search starts (observed
+     * STR.POSITION.EMPTYSUB -> 1). */
+    if (!sub->dsc$a_pointer || sub->dsc$w_length == 0)
+        return (uint32_t)(s + 1);
     if (s >= src->dsc$w_length) return 0;
     if (sub->dsc$w_length > (uint16_t)(src->dsc$w_length - s)) return 0;
 
@@ -356,14 +358,22 @@ uint32_t str$len_extr(struct dsc$descriptor_s *dest,
 
     int32_t start = (int32_t)*start_pos - 1;  /* Convert to 0-based */
     int32_t len = (int32_t)*length;
-    if (start < 0) start = 0;
+    /* Out-of-range positions are clamped and reported with a warning-level
+     * status, the substring still delivered (observed STR.LEN_EXTR.NEGSTART:
+     * STR$_ILLSTRPOS "abc"; STR.LEN_EXTR.PAST_END: STR$_ILLSTRSPE "ef"). */
+    uint32_t warn = SS$_NORMAL;
+    if (start < 0) { start = 0; warn = STR$_ILLSTRPOS; }
     if (start >= src->dsc$w_length || len <= 0) {
         struct dsc$descriptor_s empty = {
             0, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)""
         };
-        return str$copy_dx(dest, &empty);
+        uint32_t st = str$copy_dx(dest, &empty);
+        return (st & 1) && warn != SS$_NORMAL ? warn : st;
     }
-    if (start + len > src->dsc$w_length) len = src->dsc$w_length - start;
+    if (start + len > src->dsc$w_length) {
+        len = src->dsc$w_length - start;
+        if (warn == SS$_NORMAL) warn = STR$_ILLSTRSPE;
+    }
 
     struct dsc$descriptor_s sub = {
         .dsc$w_length = (uint16_t)len,
@@ -371,7 +381,8 @@ uint32_t str$len_extr(struct dsc$descriptor_s *dest,
         .dsc$b_class = DSC$K_CLASS_S,
         .dsc$a_pointer = src->dsc$a_pointer + start
     };
-    return str$copy_dx(dest, &sub);
+    uint32_t st = str$copy_dx(dest, &sub);
+    return (st & 1) && warn != SS$_NORMAL ? warn : st;
 }
 
 /*
@@ -406,19 +417,39 @@ uint32_t str$element(struct dsc$descriptor_s *dest,
         }
     }
 
-    /* Element not found - return the delimiter string */
-    return str$copy_dx(dest, delimiter);
+    /* No such element: STR$_NOELEM, and the destination is left as it was
+     * (observed STR.ELEMENT.5). */
+    return STR$_NOELEM;
 }
 
 /*
- * str$translate - Translate characters using a translation table (stub).
+ * str$translate - Copy src to dest, replacing each character found in the
+ * match string by the character at the same position of the translation
+ * string (a translation string shorter than the match string translates the
+ * rest to blanks). Observed STR.TRANSLATE: "abcabc", "XY", "ab" -> "XYcXYc".
  */
 uint32_t str$translate(struct dsc$descriptor_s *dest,
                        const struct dsc$descriptor_s *src,
                        const struct dsc$descriptor_s *trans_table,
                        const struct dsc$descriptor_s *match) {
-    (void)dest; (void)src; (void)trans_table; (void)match;
-    return SS$_UNSUPPORTED;
+    if (!dest || !src || !trans_table || !match) return SS$_BADPARAM;
+    uint16_t n = src->dsc$w_length;
+    char *buf = malloc(n ? n : 1);
+    if (!buf) return STR$_INSVIRMEM;
+    for (uint16_t i = 0; i < n; i++) {
+        char c = src->dsc$a_pointer[i];
+        for (uint16_t k = 0; k < match->dsc$w_length; k++) {
+            if (match->dsc$a_pointer[k] == c) {
+                c = k < trans_table->dsc$w_length ? trans_table->dsc$a_pointer[k] : ' ';
+                break;
+            }
+        }
+        buf[i] = c;
+    }
+    struct dsc$descriptor_s out = { n, DSC$K_DTYPE_T, DSC$K_CLASS_S, buf };
+    uint32_t st = str$copy_dx(dest, &out);
+    free(buf);
+    return st;
 }
 
 /*
@@ -706,4 +737,64 @@ uint32_t str$replace(struct dsc$descriptor_s *dest,
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * str$pos_extr - Extract the substring from start_pos through end_pos
+ * (1-based, inclusive). Observed STR.POS_EXTR: "abcdef", 2, 4 -> "bcd".
+ */
+uint32_t str$pos_extr(struct dsc$descriptor_s *dest, const struct dsc$descriptor_s *src,
+                      const int32_t *start_pos, const int32_t *end_pos) {
+    if (!dest || !src || !start_pos || !end_pos) return SS$_BADPARAM;
+    int32_t s = *start_pos, e = *end_pos;
+    uint32_t warn = SS$_NORMAL;
+    if (s < 1) { s = 1; warn = STR$_ILLSTRPOS; }
+    if (e > src->dsc$w_length) { e = src->dsc$w_length; if (warn == SS$_NORMAL) warn = STR$_ILLSTRSPE; }
+    int32_t len = e - s + 1;
+    if (len < 0) len = 0;
+    struct dsc$descriptor_s sub = { (uint16_t)len, DSC$K_DTYPE_T, DSC$K_CLASS_S,
+                                    src->dsc$a_pointer + (len ? s - 1 : 0) };
+    uint32_t st = str$copy_dx(dest, &sub);
+    return (st & 1) && warn != SS$_NORMAL ? warn : st;
+}
+
+/*
+ * str$dupl_char - dest = <length> copies of one character (default 1 blank).
+ * Observed STR.DUPL_CHAR: 5, "x" -> "xxxxx".
+ */
+uint32_t str$dupl_char(struct dsc$descriptor_s *dest, const int32_t *length, const char *character) {
+    if (!dest) return SS$_BADPARAM;
+    int32_t n = length ? *length : 1;
+    if (n < 0) return STR$_NEGSTRLEN;
+    if (n > UINT16_MAX) return STR$_STRTOOLON;
+    char *buf = malloc(n ? (size_t)n : 1);
+    if (!buf) return STR$_INSVIRMEM;
+    memset(buf, character ? *character : ' ', (size_t)n);
+    struct dsc$descriptor_s out = { (uint16_t)n, DSC$K_DTYPE_T, DSC$K_CLASS_S, buf };
+    uint32_t st = str$copy_dx(dest, &out);
+    free(buf);
+    return st;
+}
+
+/*
+ * str$find_first_in_set / str$find_first_not_in_set - the 1-based position of
+ * the first character of src that is (is not) in set, 0 when there is none.
+ * Observed: "hello" in "xyl" -> 3; "hello" not in "h" -> 2.
+ */
+static int32_t str_first_set(const struct dsc$descriptor_s *src, const struct dsc$descriptor_s *set, int want)
+{
+    if (!src || !set) return 0;
+    for (uint16_t i = 0; i < src->dsc$w_length; i++) {
+        int in = set->dsc$w_length && memchr(set->dsc$a_pointer, src->dsc$a_pointer[i], set->dsc$w_length) != NULL;
+        if (in == want) return (int32_t)i + 1;
+    }
+    return 0;
+}
+
+int32_t str$find_first_in_set(const struct dsc$descriptor_s *src, const struct dsc$descriptor_s *set) {
+    return str_first_set(src, set, 1);
+}
+
+int32_t str$find_first_not_in_set(const struct dsc$descriptor_s *src, const struct dsc$descriptor_s *set) {
+    return str_first_set(src, set, 0);
 }

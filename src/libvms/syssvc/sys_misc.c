@@ -371,6 +371,19 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
                 break;
             }
 
+            case SYI$_DEFPRI: {
+                /* SYSGEN DEFPRI, the base priority a process is created
+                 * with -- 4 (SYSGEN's default) when the parameter file
+                 * does not set it, as SCSSYSTEMID below defaults
+                 * (observed LIB.GETSYI.DEFPRI = 4). */
+                uint32_t defpri = 4;
+                (void)sysgen_read_param("DEFPRI", &defpri);
+                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                    *(uint32_t *)item->bufaddr = defpri;
+                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                break;
+            }
+
             case SYI$_SCSSYSTEMID: {
                 uint32_t sysid = 0;   /* OVMX default when unconfigured */
                 (void)sysgen_read_param("SCSSYSTEMID", &sysid);

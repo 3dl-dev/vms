@@ -443,11 +443,21 @@ uint32_t str$analyze_sdesc(
  * STR$ condition value definitions
  * ================================================================ */
 
+/* STR$POS_EXTR / STR$DUPL_CHAR / STR$FIND_FIRST_IN_SET / STR$FIND_FIRST_NOT_IN_SET
+ * (OpenVMS RTL String Manipulation (STR$) Manual; rd vms-afcd) */
+uint32_t str$pos_extr(struct dsc$descriptor_s *dest, const struct dsc$descriptor_s *src,
+                      const int32_t *start_pos, const int32_t *end_pos);
+uint32_t str$dupl_char(struct dsc$descriptor_s *dest, const int32_t *length, const char *character);
+int32_t str$find_first_in_set(const struct dsc$descriptor_s *src, const struct dsc$descriptor_s *set);
+int32_t str$find_first_not_in_set(const struct dsc$descriptor_s *src, const struct dsc$descriptor_s *set);
+
 #define STR$_NORMAL     0x00000001  /* Normal completion */
 #define STR$_TRU        0x00248200  /* String truncated (warning) */
 #define STR$_MATCH      0x00248419  /* String matched */
 #define STR$_NOMATCH    0x00248208  /* No match */
 #define STR$_NOELEM     0x00248218  /* No such element */
+#define STR$_ILLSTRPOS  0x00248409  /* Illegal string position (observed STR$LEN_EXTR start < 1) */
+#define STR$_ILLSTRSPE  0x00248411  /* Illegal string specification (observed STR$LEN_EXTR past the end) */
 #define STR$_INVDELIM   0x00248210  /* Invalid delimiter */
 #define STR$_STRTRU     0x00801030  /* String truncated */
 #define STR$_FATINTERR  0x00248044  /* Fatal internal error */
@@ -460,5 +470,11 @@ uint32_t str$analyze_sdesc(
 #ifdef __cplusplus
 }
 #endif
+
+/* STR$CONCAT takes up to 254 sources; OVMX ends the list with a NULL
+ * pointer. A C call with fewer arguments is padded with zeros so the list is
+ * always terminated, whatever the caller wrote (ovmx_optargs.h). */
+#include "ovmx_optargs.h"
+#define str$concat(...) OVMX_PAD_16(str$concat, __VA_ARGS__)
 
 #endif /* __STR_ROUTINES_H */

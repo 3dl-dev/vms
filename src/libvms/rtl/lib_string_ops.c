@@ -135,19 +135,15 @@ uint32_t lib$locc(const struct dsc$descriptor_s *char_to_find,
 /*
  * lib$matchc - Match characters (substring search).
  *
- * Searches str for the first occurrence of sub. Returns the 1-based
- * position immediately after the end of the match (i.e., position of
- * the character after the match), or 0 if not found.
- *
- * Note: lib$matchc returns the position of the character AFTER the
- * match, unlike lib$index which returns the start. If sub is found
- * at position p with length n, lib$matchc returns p + n.
+ * Searches str for the first occurrence of sub and returns the 1-based
+ * position where it starts, or 0 if it is not there (LIB$ Manual,
+ * LIB$MATCHC; observed "ll" in "hello" -> 3).
  *
  * Parameters:
  *   sub - Descriptor of substring to search for
  *   str - Descriptor of string to search
  *
- * Returns: 1-based position after match end, or 0 if not found
+ * Returns: 1-based position of the match, or 0 if not found
  */
 uint32_t lib$matchc(const struct dsc$descriptor_s *sub,
                     const struct dsc$descriptor_s *str)
@@ -162,8 +158,9 @@ uint32_t lib$matchc(const struct dsc$descriptor_s *sub,
     for (uint16_t i = 0; i <= limit; i++) {
         if (memcmp(str->dsc$a_pointer + i, sub->dsc$a_pointer,
                    sub->dsc$w_length) == 0) {
-            /* Return position after the match */
-            return (uint32_t)(i + sub->dsc$w_length + 1);
+            /* the position where the match STARTS (observed LIB.MATCHC:
+             * "ll" in "hello" -> 3, docs/oracle/semantics/rtl/) */
+            return (uint32_t)(i + 1);
         }
     }
 

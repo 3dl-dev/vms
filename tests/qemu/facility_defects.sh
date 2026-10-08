@@ -7817,7 +7817,7 @@ apply_edit() {
         # lnm-delete-noop's kernel-layer no-op. A second apply finds no
         # `vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, ...)` call left inside this
         # file and is the no-op selftest requires.
-        sed -i 's|        return vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, logical_name, acmode);|        return SS$_NORMAL; /* NEGCTL lnm-manager-delete-noop: never reaches vms.ko */|' "$_file";;
+        sed -i 's|            return vms_kif_lnm_delete(exec_tbl, logical_name, acmode);|            return SS$_NORMAL; /* NEGCTL lnm-manager-delete-noop: never reaches vms.ko */|' "$_file";;
 
     lnm-group-scope-collapsed)
         # UNIQUE TEXT: this exact line occurs once in vms_lnm.c's

@@ -21,6 +21,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* decc$to_vms action-routine file types. */
 #define DECC$K_FOREIGN   0
 #define DECC$K_FILE      1
@@ -48,5 +52,9 @@ int decc$feature_get_index(const char *__name);
 char *decc$feature_get_name(int __index);
 int decc$feature_get_value(int __index, int __mode);
 int decc$feature_set_value(int __index, int __mode, int __value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __UNIXLIB_H */

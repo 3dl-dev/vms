@@ -74,23 +74,23 @@
     }
   ],
   "overall": {
-    "count": 475,
+    "count": 476,
     "by_status": {
       "verified": 24,
       "implemented": 285,
-      "partial": 59,
+      "partial": 60,
       "stub": 14,
       "designed": 1,
       "absent": 92
     },
     "by_authenticity": {
-      "real": 330,
+      "real": 331,
       "n/a": 93,
       "advisory": 46,
       "facade-risk": 6
     },
     "met": 309,
-    "in_progress": 59,
+    "in_progress": 60,
     "not_started": 107,
     "facade_risk": 6
   },
@@ -325,23 +325,23 @@
       "tier": null,
       "plan_ref": "vms-082",
       "vms_ref": "VSI OpenVMS language reference manuals (Fortran/COBOL/BASIC/Pascal/MACRO/\u2026)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
-        "count": 12,
+        "count": 13,
         "by_status": {
           "verified": 0,
           "implemented": 1,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
           "absent": 11
         },
         "by_authenticity": {
-          "real": 1,
+          "real": 2,
           "n/a": 11
         },
         "met": 1,
-        "in_progress": 0,
+        "in_progress": 1,
         "not_started": 11,
         "facade_risk": 0
       }
@@ -2615,6 +2615,21 @@
       "evidence": "third-party/tcc",
       "verified_against": null,
       "notes": "tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target. Not 'verified' \u2014 no DEC C conformance oracle is gated.",
+      "plan_ref": "vms-082"
+    },
+    {
+      "domain": "languages",
+      "facility": "compilers",
+      "facility_name": "Compilers (language front-ends)",
+      "id": "gcc_vms_host",
+      "kind": "subsystem",
+      "vms": "GNU C for OpenVMS Alpha (the alpha-dec-vms GCC port), run on VMS",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "undecided",
+      "evidence": "tools/cross-alpha-vms/selfhost/build-host-gcc.sh",
+      "verified_against": null,
+      "notes": "GCC 14.2 with the port's patches (tools/cross-alpha-vms/patches), built --host=alpha-dec-vms over OVMX's C RTL; cc1.exe compiles a C file on OVMX/Alpha and DCL TYPE of its assembly equals the cross compiler's (cc1-gate, vms-9a63). Not yet: the driver running cc1/as/LINK itself, native as, and the standard include directories (stat of a missing device path fails EIO, vms-9c0) -- the gate runs cc1 -nostdinc.",
       "plan_ref": "vms-082"
     },
     {

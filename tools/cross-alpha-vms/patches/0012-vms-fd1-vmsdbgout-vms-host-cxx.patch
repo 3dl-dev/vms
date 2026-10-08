@@ -1,0 +1,49 @@
+vms-fd1: VMS host -- vms_file_stats_name compiles as C++
+
+gcc/vmsdbgout.cc's VMS-host vms_file_stats_name (the #ifdef VMS block) was
+written as C: it initializes the FIB descriptor's address and three string
+descriptors' dsc$a_pointer from `(void *)` casts, and passes its
+`const char *filename` to to_vms_file_spec (char *).  GCC has been compiled
+as C++ since 4.8, and C++ rejects both conversions (void * to fibdef * /
+char *, const char * to char *), so a VMS-hosted build of cc1 stops in
+vmsdbgout.cc.  Initialize the descriptors from the typed addresses and take
+the file spec as `const char *` -- decc$to_vms, which it is passed to, takes
+`const char *`.  No change in behaviour.
+
+--- a/gcc/vmsdbgout.cc
++++ b/gcc/vmsdbgout.cc
+@@ -1683,7 +1683,7 @@
+    to VMS style filespec.  */
+ 
+ static char *
+-to_vms_file_spec (char *filespec)
++to_vms_file_spec (const char *filespec)
+ {
+   strncpy (vms_filespec, "", MAXPATH);
+   decc$to_vms (filespec, translate_unix, 1, 1);
+@@ -1722,7 +1722,7 @@
+     };
+ 
+   FIBDEF fib;
+-  struct dsc$descriptor_fib fibdsc = {sizeof (fib), (void *) &fib};
++  struct dsc$descriptor_fib fibdsc = {sizeof (fib), &fib};
+ 
+   struct IOSB iosb;
+ 
+@@ -1731,13 +1731,13 @@
+ 
+   struct vstring file;
+   struct dsc$descriptor_s filedsc
+-    = {NAM$C_MAXRSS, DSC$K_DTYPE_T, DSC$K_CLASS_S, (void *) file.string};
++    = {NAM$C_MAXRSS, DSC$K_DTYPE_T, DSC$K_CLASS_S, file.string};
+   struct vstring device;
+   struct dsc$descriptor_s devicedsc
+-    = {NAM$C_MAXRSS, DSC$K_DTYPE_T, DSC$K_CLASS_S, (void *) device.string};
++    = {NAM$C_MAXRSS, DSC$K_DTYPE_T, DSC$K_CLASS_S, device.string};
+   struct vstring result;
+   struct dsc$descriptor_s resultdsc
+-    = {NAM$C_MAXRSS, DSC$K_DTYPE_VT, DSC$K_CLASS_VS, (void *) result.string};
++    = {NAM$C_MAXRSS, DSC$K_DTYPE_VT, DSC$K_CLASS_VS, result.string};
+ 
+   if (strcmp (filename, "<internal>") == 0
+       || strcmp (filename, "<built-in>") == 0)

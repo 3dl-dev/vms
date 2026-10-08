@@ -236,6 +236,24 @@ enum cnxman_coord_verdict {
 };
 
 /* Why a REFUSE was returned -- recorded, logged and counted, never swallowed. */
+/*
+ * WHICH PHASE 1 CELL AN ADD OPEN COULD NOT FILL (rd vms-f297) -- the fact this
+ * node does not hold, named so the refusal says which one. See
+ * vms_cnxman_coord_fsm.c SS "THE PHASE 1 CELLS".
+ */
+enum cnxman_open_gap {
+	CNXMAN_OPEN_GAP_NONE     = 0,
+	CNXMAN_OPEN_GAP_SUBJECT  = 1, /* the subject's PARAMS never arrived     */
+	CNXMAN_OPEN_GAP_FOUNDER  = 2, /* founder unknown, or above 16 bits     */
+	CNXMAN_OPEN_GAP_FTIME    = 3, /* formation time unknown                */
+	CNXMAN_OPEN_GAP_SLOT     = 4, /* the cluster's slot counter unknown     */
+	CNXMAN_OPEN_GAP_RECONFIG = 5, /* a removal committed with no pair      */
+	CNXMAN_OPEN_GAP_QUORUM   = 6, /* a counted member's PARAMS missing      */
+	CNXMAN_OPEN_GAP_CLOCK    = 7, /* no VMS time source                     */
+	CNXMAN_OPEN_GAP_REBUILD  = 8, /* a weight unknown, or a MERGE (no code) */
+	CNXMAN_OPEN_GAP_CSV      = 9  /* the vector is outside what is grounded */
+};
+
 enum cnxman_coord_refusal {
 	CNXMAN_COORD_REF_NONE       = 0,
 	CNXMAN_COORD_REF_NOT_MEMBER = 1, /* this node has no learned CSID yet */
@@ -441,6 +459,11 @@ struct cnxman_coord {
 	 */
 	uint32_t not_selected;
 	uint32_t open_ungrounded;
+	uint8_t  open_gap_last;        /* enum cnxman_open_gap of the last one */
+	uint8_t  subject_rejoined;     /* the ADD's subject held a CSID before */
+	uint8_t  open_gap_pad[2];
+	uint32_t open_withheld;        /* opens NOT sent: a cell went missing
+					* between the gate and the send      */
 	/*
 	 * THE DEPARTURE GATE (rd vms-b36). Removals this node did NOT propose
 	 * because the subject was never a committed member (p. 7-49's SELECTED

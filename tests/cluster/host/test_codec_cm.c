@@ -450,6 +450,119 @@ static void test_remove_open_carries_the_kept_nodemap(void)
 		 "the class-0x04 departure open is not read as carrying one");
 }
 
+/*
+ * rd vms-f297: THE PHASE 1 CELLS, against five real ADD opens from the
+ * one-variable oracle (tests/lab/captures/vms-f297-open-cells-20261008/). Each
+ * parses to exactly the cells the controlled reconfiguration pinned, and an
+ * open BUILT from those cells -- with the same epoch and nodemap -- is
+ * byte-identical to the real body everywhere except the three spans a real
+ * coordinator fills with its own stale memory (body[25], [91], [114:132]),
+ * which this builder leaves zero by rule (spec sec 4(p)).
+ */
+struct f297_open_case {
+	const char *name;
+	uint16_t slot_next, quorum, subj_qdsk, fsysid, subj_cfg, cevotes;
+	uint16_t csv_hwm, csv_top;
+	uint8_t  rc_members, rc_votes;
+};
+
+static int f297_stale(uint32_t off)
+{
+	return off == 25u || off == 91u || off >= 114u || off < 12u;
+}
+
+static void f297_check_open(const struct f297_open_case *k)
+{
+	const struct vms_fixture *f = fixture(k->name);
+	uint8_t built[VMS_CM_BODY_LEN];
+	struct vms_cm_open o;
+	uint32_t i, written = 0, diff = 0;
+
+	printf("-- %s\n", k->name);
+	ct_check(f != NULL, "  the real open is in the corpus");
+	if (f == NULL)
+		return;
+	ct_check(vms_cm_open_parse(fx_body(f), fx_body_len(f), &o)
+		 == VMS_CODEC_OK, "  it parses");
+	ct_check_eq_u32(o.cells.slot_next, k->slot_next, "  [20:22] next CSV slot");
+	ct_check_eq_u32(o.cells.quorum, k->quorum, "  [22:24] post-transition quorum");
+	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_DIRECTORY,
+			"  [24] rebuild type: directory");
+	ct_check_eq_u32(o.cells.subj_qdsk, k->subj_qdsk, "  [26:28] the subject's QDSKVOTES");
+	ct_check_eq_u32(o.cells.rc_members, k->rc_members, "  [28] last reconfiguration's members");
+	ct_check_eq_u32(o.cells.rc_votes, k->rc_votes, "  [29] ...and its votes");
+	ct_check_eq_u32(o.cells.fsysid, k->fsysid, "  [49:51] the founder's SCSSYSTEMID");
+	ct_check_eq_u32(o.cells.subj_cfg, k->subj_cfg, "  [87:89] the subject's own op-0x02 count");
+	ct_check_eq_u32(o.cells.cevotes, k->cevotes, "  [96:98] post-transition votes");
+	ct_check_eq_u32(o.cells.csv_low, 1u, "  [98:100] lowest slot");
+	ct_check_eq_u32(o.cells.csv_hwm, k->csv_hwm, "  [100:102] CSV high-water");
+	ct_check_eq_u32(o.cells.csv_top, k->csv_top, "  [104:106] highest slot");
+	ct_check(o.cells.hold == VMS_CM_OPEN_HOLD_DELTA, "  [106:114] the -900 s delta");
+	ct_check(o.cells.ftime != 0u && o.cells.stamp > o.cells.ftime,
+		 "  [32:40] formation time, [40:48] a later stamp");
+
+	ct_check(vms_cm_xition_open_build(VMS_CM_CLASS_ADD, o.epoch, o.bitmap, 1,
+					  &o.cells, built, sizeof(built),
+					  &written) == VMS_CODEC_OK,
+		 "  OVMX builds an open from the same cells");
+	for (i = 0; i < VMS_CM_BODY_LEN; i++)
+		if (!f297_stale(i) && built[i] != fx_body(f)[i])
+			diff++;
+	ct_check_eq_u32(diff, 0u,
+			"  byte-identical to the real body outside its stale spans");
+}
+
+static void test_f297_open_cells(void)
+{
+	static const struct f297_open_case k[] = {
+		/* name                          next q  qd  fsys  cfg cev hwm top rc */
+		{ "cm-open09-founder-oracle",     3, 2, 1, 1025, 2, 2, 1, 2, 1, 1 },
+		{ "cm-open09-subjqdsk2-oracle",   3, 2, 2, 1025, 2, 2, 1, 2, 1, 1 },
+		{ "cm-open09-nonfounder-oracle",  4, 2, 0, 1025, 3, 3, 2, 3, 0, 0 },
+		{ "cm-open09-rejoin-oracle",      4, 2, 1, 1025, 2, 2, 3, 3, 1, 1 },
+		{ "cm-open09-ovmx-qdsk1-oracle",  3, 2, 1, 1989, 0, 2, 1, 2, 1, 1 },
+	};
+	uint32_t i;
+
+	printf("-- rd vms-f297: the transition-open cells, five real opens\n");
+	for (i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+		f297_check_open(&k[i]);
+}
+
+/* rd vms-f297: PARAMS body[20:22] = (EXPECTED_VOTES+2)/2, body[24:26] =
+ * QDSKVOTES, and op 0x02 body[36:40] -- read off the real records. */
+static void test_f297_params_and_request(void)
+{
+	static const struct { const char *name; uint16_t q, qdsk; } k[] = {
+		{ "cm-params-qdsk2-oracle", 2u, 2u },   /* EV 2, QDSKVOTES 2 */
+		{ "cm-params-qdsk0-oracle", 2u, 0u },   /* EV 3, QDSKVOTES 0 */
+	};
+	const struct vms_fixture *r = fixture("cm-config-count2-oracle");
+	struct vms_cm_params p;
+	struct vms_cm_config cfg;
+	uint32_t i;
+
+	printf("-- rd vms-f297: PARAMS quorum + QDSKVOTES, op-0x02 count\n");
+	for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+		const struct vms_fixture *f = fixture(k[i].name);
+
+		ct_check(f != NULL, k[i].name);
+		if (f == NULL)
+			continue;
+		ct_check(vms_cm_params_parse(fx_body(f), fx_body_len(f), &p)
+			 == VMS_CODEC_OK, "  the real record parses");
+		ct_check_eq_u32(p.quorum, k[i].q, "  body[20:22] = (EV + 2) / 2");
+		ct_check_eq_u32(p.qdskvotes, k[i].qdsk,
+				"  body[24:26] = the SYSBOOT-set QDSKVOTES");
+	}
+	ct_check(r != NULL, "cm-config-count2-oracle");
+	if (r == NULL)
+		return;
+	ct_check(vms_cm_config_parse(fx_body(r), fx_body_len(r), &cfg)
+		 == VMS_CODEC_OK, "  the real request parses");
+	ct_check_eq_u32(cfg.count, 2u, "  body[36:40] = 2");
+}
+
 static void test_barrier_parse(void)
 {
 	const struct vms_fixture *f = fixture("cm-barrier-step");
@@ -1399,6 +1512,8 @@ int main(void)
 	test_conndata_against_real_nodes();
 
 	test_open_parse();
+	test_f297_open_cells();
+	test_f297_params_and_request();
 	test_barrier_parse();
 	test_params_parse();
 	test_fcb_params_lockdirwt();

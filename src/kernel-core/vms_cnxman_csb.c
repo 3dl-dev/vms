@@ -25,6 +25,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_recnx_fsm.h"   /* the p. 7-30 period arithmetic + constants */
+#include "vms_cluster_codec_cm.h"   /* struct vms_cm_open_cells (rd vms-f297) */
 
 /* ==========================================================================
  * Small shared helpers
@@ -1882,6 +1883,110 @@ void cnxman_club_phase1_clear(struct vms_club *club)
 		return;
 	for (i = 0; i < club->n_csb; i++)
 		club->csb[i].cm_phase1_named = 0u;
+}
+
+/* ---- the cluster facts a transition open carries (rd vms-f297) ---- */
+
+void cnxman_club_note_slot(struct vms_club *club, uint32_t slot)
+{
+	uint32_t next = slot + 1u;
+
+	if (club == NULL || slot == 0u || next > 0xffffu)
+		return;
+	if (club->slot_next_valid && (uint32_t)club->slot_next >= next)
+		return;
+	club->slot_next = (uint16_t)next;
+	club->slot_next_valid = 1u;
+}
+
+void cnxman_club_learn_open(struct vms_club *club, int reconfig,
+			    const struct vms_cm_open_cells *cells)
+{
+	if (club == NULL || cells == NULL)
+		return;
+	if (cells->fsysid != 0u) {
+		club->fsysid = (uint64_t)cells->fsysid;
+		club->fsysid_valid = 1u;
+	}
+	if (cells->ftime != 0u) {
+		club->ftime = cells->ftime;
+		club->ftime_valid = 1u;
+	}
+	if (cells->slot_next > 1u)
+		cnxman_club_note_slot(club, (uint32_t)cells->slot_next - 1u);
+	if (reconfig && cells->rc_members != 0u) {
+		club->rc_members = cells->rc_members;
+		club->rc_votes = cells->rc_votes;
+		club->rc_valid = 1u;
+		club->rc_lost = 0u;
+	}
+}
+
+/* The committed members and their votes, or -1 when one member's VOTES were
+ * never learned and the sum would be a guess. */
+static int club_member_votes(const struct vms_club *club, uint32_t *members,
+			     uint32_t *votes)
+{
+	uint32_t i;
+
+	*members = 0u;
+	*votes = 0u;
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *csb = &club->csb[i];
+
+		if (!csb->in_use || !cnxman_csb_is_member(csb))
+			continue;
+		if (!csb->params_valid)
+			return -1;
+		(*members)++;
+		*votes += csb->votes;
+	}
+	return 0;
+}
+
+void cnxman_club_note_reconfig(struct vms_club *club)
+{
+	uint32_t members, votes;
+
+	if (club == NULL)
+		return;
+	if (club_member_votes(club, &members, &votes) != 0 || members == 0u ||
+	    members > 0xffu || votes > 0xffu) {
+		club->rc_valid = 0u;
+		club->rc_lost = 1u;
+		return;
+	}
+	club->rc_members = (uint8_t)members;
+	club->rc_votes = (uint8_t)votes;
+	club->rc_valid = 1u;
+	club->rc_lost = 0u;
+}
+
+void cnxman_club_found(struct vms_club *club, uint64_t ftime,
+		       vms_scs_sysid_t fsysid, uint16_t votes, uint32_t slot)
+{
+	if (club == NULL)
+		return;
+	if (ftime != 0u) {
+		club->ftime = ftime;
+		club->ftime_valid = 1u;
+	}
+	club->fsysid = (uint64_t)fsysid;
+	club->fsysid_valid = 1u;
+	/* The pair is one byte each on the wire; a sum it cannot hold is left
+	 * unrecorded rather than clipped into a different number. */
+	if (votes <= 0xffu) {
+		club->rc_members = 1u;
+		club->rc_votes = (uint8_t)votes;
+		club->rc_valid = 1u;
+	}
+	cnxman_club_note_slot(club, slot);
+}
+
+void cnxman_csb_set_adv_quorum(struct vms_csb *csb, uint16_t quorum)
+{
+	if (csb != NULL)
+		csb->adv_quorum = quorum;
 }
 
 /* Is `csb` named by the proposal's nodemap? Only a block whose CSID this node

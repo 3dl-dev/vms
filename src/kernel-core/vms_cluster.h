@@ -360,7 +360,17 @@ struct vms_csb {
 	uint8_t  params_valid;      /* 0 until the peer's PARAMS record arrived */
 	uint8_t  lockdirwt;         /* LOCKDIRWT: the CM rebuilds the weight vector */
 	uint8_t  lockdirwt_valid;   /* 0 until the peer's PARAMS carried it */
-	uint8_t  pad2[3];
+	uint8_t  pad2;
+	/* The quorum the system's own EXPECTED_VOTES gives, (EV + 2) / 2, as
+	 * its PARAMS advertised it (rd vms-f297, VMS_OFF_CM_PQUORUM). Learned
+	 * with params_valid; the local block computes its own. */
+	uint16_t adv_quorum;
+	/* The count the system's own op-0x02 carried at body[36:40] (rd
+	 * vms-f297, VMS_OFB_CM_CONFIG_COUNT) -- its statement, repeated in the
+	 * open that admits it. Valid once an op 0x02 from it was read. */
+	uint32_t cfg_count;
+	uint8_t  cfg_count_valid;
+	uint8_t  pad_cfg[3];
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
 	uint32_t sw_version;        /* software version as advertised, 0 if unknown */
@@ -769,7 +779,30 @@ struct vms_club {
 	uint64_t fsysid;             /* the founding member's SCSSYSTEMID */
 	uint8_t  ftime_valid;
 	uint8_t  fsysid_valid;
-	uint8_t  pad2[2];
+	/*
+	 * THE LAST RECONFIGURATION (rd vms-f297): the member count and total
+	 * votes the last FORMATION or REMOVAL left, as that transition's own
+	 * open carried them (VMS_OFB_CM_OPEN_RC_*) or as this node founded the
+	 * cluster. Every ADD open carries the pair; no ADD changes it. A node
+	 * that has seen neither holds rc_valid 0, and its open carries 0 0 --
+	 * what a real V7.3 member that joined later sends (XA/XE/XF ep4).
+	 */
+	uint8_t  rc_members;
+	uint8_t  rc_votes;
+	uint8_t  rc_valid;
+	/*
+	 * THE NEXT CSV SLOT the cluster will assign (rd vms-f297,
+	 * VMS_OFB_CM_OPEN_SLOT_NEXT): slots are handed out round-robin and never
+	 * reused within the cluster's life (p. 7-25), so this is one more than
+	 * the highest slot ever assigned -- including a departed member's, which
+	 * no CSB still shows. Learned from every open, advanced by every
+	 * assignment this node makes.
+	 */
+	uint8_t  slot_next_valid;
+	uint16_t slot_next;
+	uint8_t  rc_lost;   /* a removal committed whose pair this node could
+			     * not derive: no open of ours may carry one */
+	uint8_t  pad2;
 	uint32_t last_transition_ms; /* when the last state transition occurred */
 
 	/* ---- the transition in progress (p. 7-26: coordinator identity, the

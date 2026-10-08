@@ -119,9 +119,21 @@
 #   coord-admission-not-selected-disarmed vms_cnxman_coord_fsm.c
 #   coord-admission-open-gate-disarmed    vms_cnxman_coord_fsm.c
 #
+# GROWN (vms-f297) with the Phase 1 cells an OVMX coordinator now carries to a
+# real VAX member, and the cluster facts behind them:
+#
+#   coord-open-cells-not-attached         vms_cnxman_coord_fsm.c
+#   coord-open-withhold-disarmed          vms_cnxman_coord_fsm.c
+#   club-open-facts-unlearned             vms_cnxman_barrier_fsm.c
+#   removal-pair-not-rederived            vms_cnxman_phase2.c
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+coord-open-cells-not-attached
+coord-open-withhold-disarmed
+club-open-facts-unlearned
+removal-pair-not-rederived
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1277,18 +1289,89 @@ EOF
         ;;
         esac;;
 
-    coord-admission-open-gate-disarmed)
+    coord-open-cells-not-attached)
         case "$_f" in
-        facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager this executive cannot build one for (rd vms-1ac: a real op-0x09 carries 28 bytes OVMX has no derivation for)";;
+        facility)     echo "the Phase 1 cells of an ADD open (rd vms-f297): founder, formation time, slot counter, quorum, rebuild type, the subject's QDSKVOTES and op-0x02 count, the CSV block -- every one from executive state";;
         targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
-        why)          echo "cnxman_coord_select()'s coord_open_is_grounded_for() call is disarmed with '0 &&', so this node opens a class-0x02 transition toward a system that has NOT proved it runs this implementation -- putting an op-0x09 with 28 zero bytes where a real coordinator writes times and identities in front of a foreign connection manager. The measured consequence is a fatal CNXMGRERR on a real OpenVMS VAX V7.3 1.3 ms later.";;
+        why)          echo "coord_send_open() never attaches the cells it filled, so the open a real VAX member would receive is the zero-celled one that bugchecked a real V7.3 (rd vms-1ac) -- and the send-time withhold then keeps it off the wire, so an admission a real VAX takes part in never completes.";;
+        require_fail) cat <<'EOF'
+the foreign member got its op 0x09
+[20:22] the slot after the joiner's (4 -> 5)
+[22:24] quorum: four votes after the admission -> (4 + 2) / 2, above every advertised one
+[24] directory rebuild: the joiner weighs 1
+[26:28] the JOINER's QDSKVOTES
+[32:40] the formation time held
+[40:48] this node's clock
+[49:51] the founder, not us
+[87:89] the count the joiner's own op 0x02 carried
+[96:98] four voting systems
+[100:102] a first admission: one below its slot
+[104:106] highest slot
+[106:114] the -900 s delta
+EOF
+                      ;;
+        esac;;
+
+    coord-open-withhold-disarmed)
+        case "$_f" in
+        facility)     echo "the send-time withhold (rd vms-f297): an open whose cells cannot be filled is never sent to a cluster with a foreign member";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "a fact lost between the gate and the send (the clock, here) no longer withholds the open: a real VAX member receives an op 0x09 with zeros where its own coordinator writes facts -- the frame after which a real V7.3 bugchecked CNXMGRERR (rd vms-1ac).";;
+        require_fail) cat <<'EOF'
+the foreign member is sent no open at all
+withheld from every participant alike, and counted
+EOF
+                      ;;
+        esac;;
+
+    club-open-facts-unlearned)
+        case "$_f" in
+        facility)     echo "a participant keeps the cluster facts a received open carries (rd vms-f297): founder, formation time, slot counter";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_open() no longer records them, so an OVMX member admitted by a real VAX holds no founder or formation time and can never coordinate the next admission -- the vms-f297 stall (the VAX defers to the higher-numbered OVMX member, which refuses) comes back for good.";;
+        require_fail) cat <<'EOF'
+the founder's SCSSYSTEMID is kept
+and the formation time
+and the slot counter
+EOF
+                      ;;
+        esac;;
+
+    removal-pair-not-rederived)
+        case "$_f" in
+        facility)     echo "a committed removal re-derives the last-reconfiguration (members, votes) pair every later open carries (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_phase2.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_phase2_commit() skips cnxman_club_note_reconfig(), so after a removal this node's next ADD open still carries the pair from before it -- a different number from the one a real V7.3 member puts there (KR-1: 01 01 before the removal, 02 02 after).";;
+        require_fail) cat <<'EOF'
+the pair is held
+its members: the two the removal keeps
+its votes: theirs, 2 + 1
+EOF
+                      ;;
+        esac;;
+
+    coord-admission-open-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager while this executive lacks a fact the open carries (rd vms-1ac, vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_admit_foreign()'s gap test is disarmed with '1 ||', so this node opens a class-0x02 transition toward a system that does not run this implementation even when it holds no founder, formation time or clock -- the relay and commit go out, and only the send-time withhold stands between a real VAX and the zero-celled op 0x09 after which a real OpenVMS VAX V7.3 bugchecked CNXMGRERR 1.3 ms later.";;
         require_fail) cat <<'EOF'
 nothing is originated: no relay, no commit, and above all no op-0x09 this node cannot build faithfully
 the refusal is COUNTED
 ...and named
 ...and SAID, because a stranded admission is a gap to close
+  the refusal is counted
+  and names the missing fact
 and no transition was opened
 EOF
                       ;;
@@ -1520,7 +1603,20 @@ apply_edit() {
         sed -i 's|if (coord_outranked_for_admission(c, subject_csb)) {|if (0 \&\& coord_outranked_for_admission(c, subject_csb)) { /* NEGCTL coord-admission-not-selected-disarmed */|' "$_file";;
 
     coord-admission-open-gate-disarmed)
-        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+        # `if (gap == CNXMAN_OPEN_GAP_NONE)` is unique: coord_admit_foreign().
+        sed -i 's|if (gap == CNXMAN_OPEN_GAP_NONE)$|if (1 \|\| gap == CNXMAN_OPEN_GAP_NONE) /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    coord-open-cells-not-attached)
+        sed -i 's|^\t\tcp = \&cells;$|\t\tcp = NULL; /* NEGCTL coord-open-cells-not-attached */|' "$_file";;
+
+    coord-open-withhold-disarmed)
+        sed -i 's|if (cp == NULL \&\& c->tr_class == VMS_CM_CLASS_ADD \&\&|if (0 \&\& cp == NULL \&\& c->tr_class == VMS_CM_CLASS_ADD \&\& /* NEGCTL coord-open-withhold-disarmed */|' "$_file";;
+
+    club-open-facts-unlearned)
+        sed -i 's|^\tcnxman_club_learn_open(\&b->cl->club,$|\tif (0) /* NEGCTL club-open-facts-unlearned */ cnxman_club_learn_open(\&b->cl->club,|' "$_file";;
+
+    removal-pair-not-rederived)
+        sed -i 's|^\tif (in->reconfig)$|\tif (0 \&\& in->reconfig) /* NEGCTL removal-pair-not-rederived */|' "$_file";;
 
     pe-receive-hold-disarmed)
         # `if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||` is unique.

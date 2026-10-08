@@ -1585,8 +1585,12 @@ int main(void)
      * OWN name to be printed is the assertion that cannot be satisfied by
      * silence. SHOW SYMBOL's format is dcl_cmd_show.c's own: `  %s = "%s"`.
      */
+    /* JPI$_USERNAME is the 12-character blank-filled SYSUAF name (observed
+     * LEX.GETJPI.USERNAME "SYSTEM      ", docs/oracle/semantics/lex/). */
+    char want_a[64];
+    snprintf(want_a, sizeof want_a, "IDENT_U = \"%-12s\"", A_NAME);
     /* negctl-knockon: bind-client-no-register */
-    CHECK(strstr(outa, "IDENT_U = \"" A_NAME "\"") != NULL,
+    CHECK(strstr(outa, want_a) != NULL,
           "A: F$GETJPI(\"\",\"USERNAME\") returns the name the EXECUTIVE holds "
           "-- the programmatic path reads the same source the display does");
     /*
@@ -1675,8 +1679,10 @@ int main(void)
      * that returned a constant, or that read the environment both processes
      * share, could not print two different names here.
      */
+    char want_b[64];
+    snprintf(want_b, sizeof want_b, "IDENT_U = \"%-12s\"", B_NAME);
     /* negctl-knockon: bind-client-no-register */
-    CHECK(strstr(outb, "IDENT_U = \"" B_NAME "\"") != NULL,
+    CHECK(strstr(outb, want_b) != NULL,
           "B: F$GETJPI returns B's name -- two processes with an IDENTICAL "
           "environment get DIFFERENT answers, so the answer is not the "
           "environment");

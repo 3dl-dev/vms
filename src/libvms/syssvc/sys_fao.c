@@ -236,19 +236,28 @@ static uint32_t fao_directive(struct fao *f, const char **pc, const char *end)
         return SS$_NORMAL;
     }
     case '(': {                                    /* !n(DD): repeat a directive */
-        const char *close = memchr(c, ')', (size_t)(end - c));
-        if (!close)
-            return SS$_BADPARAM;
+        /* The directive is followed by ONE terminating character, which is
+         * consumed whatever it is: "!2(UL )" repeats UL and leaves ")" as
+         * text (observed on OpenVMS through F$FAO: "--- 45)",
+         * docs/oracle/semantics/lex/ LEX.FAO.REPEAT). */
         int n = count >= 0 ? count : 1;
+        const char *after = NULL;
         for (int i = 0; i < n && !f->ovf; i++) {
             const char *inner = c + 1;
-            uint32_t st = fao_directive(f, &inner, close);
+            uint32_t st = fao_directive(f, &inner, end);
             if (!(st & 1))
                 return st;
-            if (inner != close)
+            if (inner >= end)
                 return SS$_BADPARAM;
+            after = inner + 1;
         }
-        *pc = close + 1;
+        if (!after) {                               /* a zero count: skip it */
+            const char *close = memchr(c, ')', (size_t)(end - c));
+            if (!close)
+                return SS$_BADPARAM;
+            after = close + 1;
+        }
+        *pc = after;
         return SS$_NORMAL;
     }
     case '<': {                                    /* !n<...!>: an output field */

@@ -74,45 +74,45 @@
     }
   ],
   "overall": {
-    "count": 478,
+    "count": 481,
     "by_status": {
       "verified": 24,
-      "implemented": 287,
-      "partial": 60,
+      "implemented": 288,
+      "partial": 61,
       "stub": 14,
       "designed": 1,
-      "absent": 92
+      "absent": 93
     },
     "by_authenticity": {
-      "real": 333,
-      "n/a": 93,
+      "real": 335,
+      "n/a": 94,
       "advisory": 46,
       "facade-risk": 6
     },
-    "met": 311,
-    "in_progress": 60,
-    "not_started": 107,
+    "met": 312,
+    "in_progress": 61,
+    "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 432,
+    "count": 435,
     "by_status": {
       "verified": 24,
-      "implemented": 287,
-      "partial": 58,
+      "implemented": 288,
+      "partial": 59,
       "stub": 10,
       "designed": 1,
-      "absent": 52
+      "absent": 53
     },
     "by_authenticity": {
-      "real": 331,
-      "n/a": 53,
+      "real": 333,
+      "n/a": 54,
       "advisory": 44,
       "facade-risk": 4
     },
-    "met": 311,
-    "in_progress": 58,
-    "not_started": 63,
+    "met": 312,
+    "in_progress": 59,
+    "not_started": 64,
     "facade_risk": 4
   },
   "facilities": [
@@ -645,23 +645,24 @@
       "tier": null,
       "plan_ref": "vms-ade",
       "vms_ref": "OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
-        "count": 4,
+        "count": 6,
         "by_status": {
           "verified": 2,
           "implemented": 2,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 0
+          "absent": 1
         },
         "by_authenticity": {
-          "real": 4
+          "real": 5,
+          "n/a": 1
         },
         "met": 4,
-        "in_progress": 0,
-        "not_started": 0,
+        "in_progress": 1,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -4145,6 +4146,36 @@
       "evidence": "src/imgact/test/run_exec_tls.sh",
       "verified_against": null,
       "notes": ".vms$tls section; run_exec_tls.sh, run_tls_producer_over_crtl.sh.",
+      "plan_ref": "vms-ade"
+    },
+    {
+      "domain": "toolchain",
+      "facility": "image-activation",
+      "facility_name": "Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)",
+      "id": "image-activation$native-alpha-eihd",
+      "kind": "feature",
+      "vms": "Activation of an OpenVMS Alpha native image (EIHD/EISD/EIAF .EXE LINKed on real VMS), unchanged, with its SYS$/LIB$ calls bound by symbol-vector offset",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "tools/cross-alpha/run-module-gp-activation-alpha.sh",
+      "verified_against": null,
+      "notes": "rd vms-3b3f. CI alpha-native-image (native-gate) runs HELLO.EXE and RETST.EXE, which were LINKed on the lab Alpha V8.4 node from our own MACRO-32 sources (tests/native-images/alpha/), on the booted executive. The output and $STATUS must match the node's, and the missing-shareable and not-an-image refusals must give the real statuses (%X100388B2, %X104D8CFC). The reader (src/imgact/imgact_eihd.h) is checked field by field against the node's ANALYZE/IMAGE reports (imgact_eihd_parse_unit). Partial: SYS$PUBLIC_VECTORS and LIBRTL provide only the entries that have VMS-ABI implementations (src/vmslink/vms_vectors/*.vec); any other entry fails activation with SS$_UNSUPPORTED. Shareables are found only as SYS$SHARE:name.EXE, because logical-name translation of a shareable name is not implemented. .ADDRESS, code-address and PSB fixups, and shareable initialization, are refused. SYS$IMGSTA does not establish a traceback handler. The CLI callback argument is not passed.",
+      "plan_ref": "vms-ade"
+    },
+    {
+      "domain": "toolchain",
+      "facility": "image-activation",
+      "facility_name": "Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)",
+      "id": "image-activation$native-vax-isd",
+      "kind": "feature",
+      "vms": "Activation of an OpenVMS VAX native image (IHD/ISD .EXE LINKed on real VMS) on OVMX/VAX",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in",
+      "evidence": "src/imgact/imgact_eihd.h",
+      "verified_against": null,
+      "notes": "rd vms-3b3f. Not started: Alpha came first, because OVMX/Alpha already runs the Alpha calling standard and its page size matches. A VAX image calls system services at fixed S0 addresses, and these collide with the NetBSD-VAX kernel's own S0 mapping.",
       "plan_ref": "vms-ade"
     },
     {

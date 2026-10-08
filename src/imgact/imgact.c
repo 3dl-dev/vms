@@ -3185,20 +3185,6 @@ static unsigned long eihd_cell(struct eihd_img *m, unsigned long off, unsigned w
 	return a + m->delta;
 }
 
-static struct eihd_img *g_rel_img;
-static void eihd_qrel(void *arg, uint32_t off)
-{
-	(void)arg;
-	unsigned long c = eihd_cell(g_rel_img, off, 8);
-	*(unsigned long *)c += g_rel_img->delta;
-}
-static void eihd_lrel(void *arg, uint32_t off)
-{
-	(void)arg;
-	unsigned long c = eihd_cell(g_rel_img, off, 4);
-	*(unsigned int *)c = (unsigned int)(*(unsigned int *)c + g_rel_img->delta);
-}
-
 /* Resolve symbol vector byte offset `voff` of shareable `s` to a procedure
  * value and code address. */
 static void eihd_vector_entry(struct eihd_shr *s, unsigned long voff,
@@ -3207,11 +3193,12 @@ static void eihd_vector_entry(struct eihd_shr *s, unsigned long voff,
 	char what[96];
 	if (s->img) {
 		struct eihd_img *t = s->img;
-		if (voff % 16 || voff + 16 > t->info.symvec_size)
+		uint64_t c, p;
+		if (eihd_symvec_entry((const uint8_t *)(t->lo + t->delta), t->lo,
+				      t->hi - t->lo, &t->info, voff, &c, &p) < 0)
 			goto missing;
-		unsigned long e = t->info.symvva + t->delta + voff;
-		*code = *(unsigned long *)e;
-		*pv   = *(unsigned long *)(e + 8);
+		*code = c;
+		*pv   = p;
 		return;
 	}
 	if (voff % 16)
@@ -3238,17 +3225,18 @@ missing:
 	eihd_fail_notimpl(by, s->name, what);
 }
 
-static struct eihd_img *g_lp_img;
-static struct eihd_shr *g_lp_shl[64];
-static int eihd_lp(void *arg, uint32_t shl, uint32_t off)
+/* The resolver eihd_fixup_lp() calls for each linkage pair: the image's own
+ * shareable list, by index. An entry the target lacks fails the activation
+ * here (eihd_vector_entry does not return). */
+static const char *g_lp_by;
+static int eihd_resolve(void *arg, uint32_t shl, uint64_t voff, uint64_t *code,
+			uint64_t *pv)
 {
-	(void)arg;
-	unsigned long lp = eihd_cell(g_lp_img, off, 16);
-	unsigned long code, pv;
-	/* Before activation the pair holds the target's symbol-vector offset. */
-	eihd_vector_entry(g_lp_shl[shl], *(unsigned long *)lp, g_lp_img->name, &code, &pv);
-	*(unsigned long *)lp       = code;
-	*(unsigned long *)(lp + 8) = pv;
+	struct eihd_shr **shls = (struct eihd_shr **)arg;
+	unsigned long c, p;
+	eihd_vector_entry(shls[shl], (unsigned long)voff, g_lp_by, &c, &p);
+	*code = c;
+	*pv   = p;
 	return 0;
 }
 
@@ -3377,13 +3365,11 @@ static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
 				  "fixup kind (.ADDRESS/code-address/PSB) in this image");
 
 	/* Relocations (a shareable placed away from its link address). */
-	g_rel_img = m;
-	if (m->delta) {
-		if (eiaf_walk_rel(iaf, m->iaflen, a.qrelfixoff, 8, eihd_qrel, 0) < 0 ||
-		    eiaf_walk_rel(iaf, m->iaflen, a.lrelfixoff, 4, eihd_lrel, 0) < 0)
-			eihd_fail_file(m->name, m->spec,
-				       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
-	}
+	uint8_t *rt = (uint8_t *)(m->lo + m->delta);
+	if (m->delta &&
+	    eihd_relocate(iaf, m->iaflen, &a, rt, m->hi - m->lo, m->delta) < 0)
+		eihd_fail_file(m->name, m->spec,
+			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
 
 	/* The shareables this image calls, GSMATCH-checked against the ident it
 	 * was linked with (its global-section descriptor for that image). */
@@ -3413,10 +3399,8 @@ static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
 	}
 
 	/* Linkage pairs: {code address, procedure value} of the target entry. */
-	g_lp_img = m;
-	for (unsigned i = 0; i < a.shrimgcnt; i++)
-		g_lp_shl[i] = shl[i];
-	if (eiaf_walk_lp(iaf, m->iaflen, &a, eihd_lp, 0) < 0)
+	g_lp_by = m->name;
+	if (eihd_fixup_lp(iaf, m->iaflen, &a, rt, m->hi - m->lo, eihd_resolve, shl) < 0)
 		eihd_fail_file(m->name, m->spec,
 			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
 

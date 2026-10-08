@@ -512,6 +512,7 @@ rms-put-wrong-vbn
 p3-index-child-pointer-offbyone
 imgact-acp-valid-bytes-offbyone
 imgact-acp-read-unchunked
+eihd-lp-pair-swapped
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -6688,6 +6689,24 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    eihd-lp-pair-swapped)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, the LINKAGE-PAIR fixup (rd vms-3b3f): an image LINKed on real OpenVMS Alpha calls a shareable routine through a linkage pair that, on disk, holds the routine's symbol-vector byte offset; the activator replaces it with the target entry's {code address, procedure value} (src/imgact/imgact_eihd.h eihd_fixup_lp, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_lp_one() stores the resolved PROCEDURE VALUE into the linkage pair's code-address half as well (its first eihd_put_q writes pv instead of code), so every pair still names the right target and the fixup still reports success -- but the caller's ldq/jsr through quad 0 would jump to the procedure descriptor, not the code. Parsing, relocation, GSMATCH and the refusal of an unresolvable entry run before or apart from that store and stay green, so only the two assertions that read a filled pair back can tell -- one per kind of target (a native shareable's own vector, an OVMX vector image's), the same single store.";;
+        require_fail) cat <<'EOF'
+MAIN3's linkage pairs to MYSHR hold MYSHR's relocated {code address, procedure value}
+MAIN3's linkage pairs to LIBRTL hold the {code address, procedure value} of entry %X320
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -8667,6 +8686,14 @@ apply_edit() {
         # untouched). After substitution the `(1u << 20)` text is gone, so a
         # second apply matches nothing (the no-op selftest requires).
         sed -i 's|#define IMGACT_ACP_RW_MAX_XFER (1u << 20)|#define IMGACT_ACP_RW_MAX_XFER (1u << 30) /* NEGCTL imgact-acp-read-unchunked: cap raised so the whole >1 MiB segment goes in ONE over-cap QIO */|' "$_file";;
+
+    eihd-lp-pair-swapped)
+        # UNIQUE TEXT: `eihd_put_q(lp, code);` is the one store of a linkage
+        # pair's code-address half (eihd_lp_one, imgact_eihd.h). Writing pv
+        # there leaves the pair naming the right target but pointing quad 0 at
+        # the procedure descriptor. After substitution the text is gone, so a
+        # second apply matches nothing (the no-op selftest requires).
+        sed -i 's|	eihd_put_q(lp, code);|	eihd_put_q(lp, pv); /* NEGCTL eihd-lp-pair-swapped: the code-address half gets the procedure value */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

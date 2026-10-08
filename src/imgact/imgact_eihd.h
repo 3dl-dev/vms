@@ -413,4 +413,120 @@ static inline int eihd_gblnam_is(const char *gblnam, const char *shl)
 	return gblnam[i + 4] == '\0';
 }
 
+/* --------------------------------------------------------------------------
+ * The activation steps shared by IMGACT.EXE and the userspace suite
+ * tests/qemu/test_imgact_eihd.c. `rt` is the run-time address of an image's
+ * lowest linked section (linked address `lo`), `span` the byte extent of its
+ * sections; fixup offsets are relative to `lo`.
+ * -------------------------------------------------------------------------- */
+static inline void eihd_put_q(uint8_t *p, uint64_t v)
+{
+	for (int i = 0; i < 8; i++)
+		p[i] = (uint8_t)(v >> (8 * i));
+}
+
+static inline void eihd_put_l(uint8_t *p, uint32_t v)
+{
+	for (int i = 0; i < 4; i++)
+		p[i] = (uint8_t)(v >> (8 * i));
+}
+
+struct eihd_relctx {
+	uint8_t      *rt;
+	unsigned long span;
+	uint64_t      delta;
+	int           bad;
+};
+
+static inline void eihd_rel_q(void *arg, uint32_t off)
+{
+	struct eihd_relctx *c = (struct eihd_relctx *)arg;
+	if ((unsigned long)off + 8 > c->span) {
+		c->bad = 1;
+		return;
+	}
+	eihd_put_q(c->rt + off, eihd_q(c->rt + off) + c->delta);
+}
+
+static inline void eihd_rel_l(void *arg, uint32_t off)
+{
+	struct eihd_relctx *c = (struct eihd_relctx *)arg;
+	if ((unsigned long)off + 4 > c->span) {
+		c->bad = 1;
+		return;
+	}
+	eihd_put_l(c->rt + off, (uint32_t)(eihd_l(c->rt + off) + c->delta));
+}
+
+/* Apply the quadword and longword relocations of an image placed `delta`
+ * bytes away from its link address. A longword cell can only hold a P0/P1
+ * address, so the caller must have placed the image there. Returns the number
+ * of cells relocated, or -1 when a table is malformed or names a cell
+ * outside the image. */
+static inline long eihd_relocate(const uint8_t *iaf, unsigned long len,
+				 const struct eiaf_info *a, uint8_t *rt,
+				 unsigned long span, uint64_t delta)
+{
+	struct eihd_relctx c = { rt, span, delta, 0 };
+	long nq = eiaf_walk_rel(iaf, len, a->qrelfixoff, 8, eihd_rel_q, &c);
+	long nl = eiaf_walk_rel(iaf, len, a->lrelfixoff, 4, eihd_rel_l, &c);
+	if (nq < 0 || nl < 0 || c.bad)
+		return -1;
+	return nq + nl;
+}
+
+/* Resolve symbol-vector byte offset `voff` of shareable-list entry `shl` to
+ * the {code address, procedure value} a linkage pair holds. Returns 0, or -1
+ * when the target has no such entry. */
+typedef int (*eihd_resolve_fn)(void *arg, uint32_t shl, uint64_t voff,
+			       uint64_t *code, uint64_t *pv);
+
+struct eihd_lpctx {
+	uint8_t        *rt;
+	unsigned long   span;
+	eihd_resolve_fn fn;
+	void           *arg;
+};
+
+static inline int eihd_lp_one(void *arg, uint32_t shl, uint32_t off)
+{
+	struct eihd_lpctx *c = (struct eihd_lpctx *)arg;
+	if ((unsigned long)off + 16 > c->span)
+		return -1;
+	uint8_t *lp = c->rt + off;
+	uint64_t code, pv;
+	/* Before activation the pair holds the target's symbol-vector offset. */
+	if (c->fn(c->arg, shl, eihd_q(lp), &code, &pv) < 0)
+		return -1;
+	eihd_put_q(lp, code);
+	eihd_put_q(lp + 8, pv);
+	return 0;
+}
+
+/* Fill every linkage pair of an image. Returns the number filled, or -1 when
+ * the table is malformed, names a cell outside the image, or a target entry
+ * does not resolve. */
+static inline long eihd_fixup_lp(const uint8_t *iaf, unsigned long len,
+				 const struct eiaf_info *a, uint8_t *rt,
+				 unsigned long span, eihd_resolve_fn fn, void *arg)
+{
+	struct eihd_lpctx c = { rt, span, fn, arg };
+	return eiaf_walk_lp(iaf, len, a, eihd_lp_one, &c);
+}
+
+/* A native shareable's own symbol vector entry at byte offset `voff`
+ * ({code address, procedure value}, already relocated). */
+static inline int eihd_symvec_entry(const uint8_t *rt, unsigned long lo,
+				    unsigned long span, const struct eihd_info *h,
+				    uint64_t voff, uint64_t *code, uint64_t *pv)
+{
+	if (voff % 16 || voff + 16 > h->symvec_size || h->symvva < lo ||
+	    h->symvva - lo + voff + 16 > span)
+		return -1;
+	const uint8_t *e = rt + (h->symvva - lo) + voff;
+	*code = eihd_q(e);
+	*pv   = eihd_q(e + 8);
+	return 0;
+}
+
 #endif /* OVMX_IMGACT_EIHD_H */

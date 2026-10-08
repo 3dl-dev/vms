@@ -101,6 +101,17 @@ static void append_uai_text(char *out, size_t cap, const char *v, unsigned short
     out[have + len] = '\0';
 }
 
+/* 4. The C RTL's file system is RMS (vms-003b), as decc$main makes it for a
+ *    DECC$SHR image: from here the program's fopen()/open()/stat()/unlink() of
+ *    an RMS file reach the Files-11 volume. Turned on after the start-up above,
+ *    which is the image activator's work, not the program's. */
+static void crtl_on(void)
+{
+#if defined(OVMX_CRTLFD_STATIC)
+    ovmx_crtl_fd_install();
+#endif
+}
+
 __attribute__((constructor))
 static void corpus_rt_run_as_system(void)
 {
@@ -120,14 +131,10 @@ static void corpus_rt_run_as_system(void)
     __ovmx_p0_heap = 1;
 #endif
     (void)vms_kif_establish_system();
-#if defined(OVMX_CRTLFD_STATIC)
-    /* 4. The C RTL's file system is RMS (vms-003b), as decc$main makes it for a
-     *    DECC$SHR image: from here fopen()/open()/stat()/unlink() of an RMS file
-     *    reach the Files-11 volume. */
-    ovmx_crtl_fd_install();
-#endif
-    if (!(sys$getuai(0, 0, &ud, il, 0, 0, 0) & 1))
+    if (!(sys$getuai(0, 0, &ud, il, 0, 0, 0) & 1)) {
+        crtl_on();
         return;
+    }
     append_uai_text(ddir, sizeof(ddir), dev, dl);
     append_uai_text(ddir, sizeof(ddir), dir, rl);
     if (ddir[0]) {
@@ -137,4 +144,5 @@ static void corpus_rt_run_as_system(void)
         define_process_logical("SYS$LOGIN", ddir);
         define_process_logical("SYS$SCRATCH", ddir);
     }
+    crtl_on();
 }

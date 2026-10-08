@@ -13,3 +13,12 @@ This is the bracket's evidence for the fixes in rd vms-277a:
 | DIRECTORY of a missing file prints `Total of 1 file` | OVMX sent NAMEs, then STATUS FNF. | Open: needs a VAX-to-VAX capture of the same command. |
 
 `tests/vmsdecnet/test_dnet_fal_server.c` (test 5) replays the VAX's DIRLIST from this capture. It checks that the reply now lists both files with no ACK and that the CONFIGURATION advertises the new bits.
+
+## Second run (#1487 at 937b34bf, with #1490): `falverbs-live2-*`
+
+DIRECTORY/FULL, DIRECTORY, TYPE of a wildcard, the GUEST TYPE of SYSUAF.DAT (RMS-E-PRV), and NOFILES now behave as on the VAX. Two failures were left:
+
+| VAX symptom | wire cause | status |
+|---|---|---|
+| GUEST `DELETE ...SYSUAF.DAT;*` gets `RMS-E-MKD` / `SYSTEM-F-REMRSRC` | VMS holds two DIRLIST links open and then connects a third for the ERASE. NETACP refused the third link immediately with Disconnect reason 1 (resource), because its per-node share was 2. The VAX-to-VAX capture shows three concurrent links. | The share is raised to 3 and the pool to 9 (decnetd `NETACP_MAX_PER_SOURCE`). |
+| `RENAME` gets `RMS-F-SUPPORT` | After OVMX's CONFIGURATION, VAX1 disconnects without sending an ACCESS. Some property of the CONFIGURATION (version or SYSCAP) makes the client refuse. | Open. `config_probe_drv.py` lets the lab try candidate CONFIGURATIONs against the same RENAME. |

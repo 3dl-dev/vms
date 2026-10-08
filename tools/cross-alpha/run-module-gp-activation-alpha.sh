@@ -1418,7 +1418,7 @@ EOF
     [ "$_fails" -eq 0 ] || die "cc1 selftest failed -- assert_cc1 cannot be trusted"
     echo ""
     build_joint_images
-    _tc="$GATE_ROOT/cxxtc"; _jr="$GATE_ROOT/joint-n3"
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
     if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
       log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
       mkdir -p "$_tc"

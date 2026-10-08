@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**475 surfaces catalogued** across 9 domains, each with a per-surface status.
+**476 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 330 |
+| ✅ verified | 24 | | real | 331 |
 | 🟢 implemented | 285 | | n/a | 93 |
-| 🟡 partial | 59 | | advisory | 46 |
+| 🟡 partial | 60 | | advisory | 46 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 92 | |  |  |
@@ -26,7 +26,7 @@ Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a 
 
 - **430 committed** — **309 met** (implemented/verified), 58 in progress (partial), 63 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
-- Not in the V1 commitment set: 10 out · 26 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
+- Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
 
@@ -1247,7 +1247,7 @@ The kernel-mediated substrate SYS$ system services are built on: event flags, lo
 
 _The VMS language story: compilers (Fortran/COBOL/BASIC/Pascal/MACRO/Ada/PL/I/…), their language RTLs (FOR$/COB$/BAS$/PAS$), and the OpenVMS Calling Standard that makes cross-language calls work. OVMX today has one language — C, via tcc._
 
-`🟢🟡🟡🟡🟡🟡⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  22 surfaces catalogued (1 met · 5 in progress · 16 not started) · V1: 6 committed, 1 met
+`🟢🟡🟡🟡🟡🟡🟡⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜`  —  23 surfaces catalogued (1 met · 6 in progress · 16 not started) · V1: 6 committed, 1 met
 
 ### calling-standard — OpenVMS Calling Standard
 <sub>scope: in · plan: vms-801 · ref: VSI OpenVMS Calling Standard · reviewed 2026-09-14</sub>
@@ -1265,16 +1265,17 @@ The convention that lets any VMS language call any other: argument-list layout, 
 | 🟡≈ | `cs$register-usage` | feature | Register/stack usage conventions (VAX/Alpha/I64 calling standard) | partial | advisory | in | OVMX uses the host (x86_64/aarch64 SysV) ABI, honestly — not the VAX/Alpha VMS register convention; fine for recompiled C, wrong for binary/MACRO interop. Advisory, not a facade. |
 
 ### compilers — Compilers (language front-ends)
-<sub>scope: undecided · plan: vms-082 · ref: VSI OpenVMS language reference manuals (Fortran/COBOL/BASIC/Pascal/MACRO/…) · reviewed 2026-09-14</sub>
+<sub>scope: undecided · plan: vms-082 · ref: VSI OpenVMS language reference manuals (Fortran/COBOL/BASIC/Pascal/MACRO/…) · reviewed 2026-10-08</sub>
 
-VMS ships a large family of DEC/VSI compilers. OVMX has exactly one language — C, via tcc (the self-hosting beachhead; 549 files under third-party/tcc on origin/main). Every other VMS language is absent — grep on origin/main finds no FOR$/COB$/BAS$/PAS$ RTL and no MACRO-32 front-end. Which of them are in 1.0 scope is an operator call (vms-082); the "run corpus software" goal (R2) leans on Fortran/COBOL/BASIC, so this is not automatically out-of-scope. Absent languages fail at compile time — the correct failure mode, never a facade.
+VMS ships a large family of DEC/VSI compilers. OVMX has exactly one language — C, via tcc (the self-hosting beachhead; 549 files under third-party/tcc on origin/main). Every other VMS language is absent — grep on origin/main finds no FOR$/COB$/BAS$/PAS$ RTL and no MACRO-32 front-end. Which of them are in 1.0 scope is an operator call (vms-082); the "run corpus software" goal (R2) leans on Fortran/COBOL/BASIC, so this is not automatically out-of-scope. Absent languages fail at compile time — the correct failure mode, never a facade. The real OpenVMS GCC port (alpha-dec-vms) is the production-compiler path: its compiler proper, built for the alpha-dec-vms host, compiles C on OVMX/Alpha (row gcc_vms_host).
 
 
-<sub>12 items · 1 met · 0 in progress · 11 not started</sub>
+<sub>13 items · 1 met · 1 in progress · 11 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟢 | `c` | subsystem | DEC C / VSI C compiler | implemented | real | in | `third-party/tcc` — tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target. Not 'verified' — no DEC C conformance oracle is gated. |
+| 🟡 | `gcc_vms_host` | subsystem | GNU C for OpenVMS Alpha (the alpha-dec-vms GCC port), run on VMS | partial | real | undecided | `tools/cross-alpha-vms/selfhost/build-host-gcc.sh` — GCC 14.2 with the port's patches (tools/cross-alpha-vms/patches), built --host=alpha-dec-vms over OVMX's C RTL; cc1.exe compiles a C file on OVMX/Alpha and DCL TYPE of its assembly equals the cross compiler's (cc1-gate, vms-9a63). Not yet: the driver running cc1/as/LINK itself, native as, and the standard include directories (stat of a missing device path fails EIO, vms-9c0) -- the gate runs cc1 -nostdinc. |
 | ⬜ | `macro32` | subsystem | MACRO-32 assembler | absent | n/a | out | `docs/compat/facilities/macro.yaml` — Explicitly out of scope (compatibility-contract.md); tcc's integrated assembler is GAS-syntax only. Cross-listed as the toolchain-domain MACRO-32 assembler row (facilities/macro.yaml). |
 | ⬜ | `macro64` | subsystem | MACRO-64 (Alpha) assembler | absent | n/a | stretch | No native Alpha backend on origin/main either; the Alpha object toolchain reads GAS-produced EVAX objects (object-format), not MACRO-64 source. |
 | ⬜ | `fortran` | subsystem | VAX/DEC/VSI Fortran (77/90/95) | absent | n/a | undecided | Central to the scientific corpus. Needs FOR$ RTL + array descriptors (DSC$K_CLASS_A now DECLARED in descrip.h but unmarshalled) + VAX-float support — all absent. Operator scope call (vms-082). |

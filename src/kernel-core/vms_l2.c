@@ -191,6 +191,10 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
 
     rc = exec_l2_open(args.ifname, args.ethertype, &ifindex, &sock);
     if (rc) {
+        /* rd vms-b72: SS$_ABORT carries no reason; log the host errno the
+         * backend returned so an open that fails is diagnosable. */
+        pr_warn("vms: L2 open of %s ethertype 0x%04x failed, errno %d\n",
+                args.ifname, (unsigned)args.ethertype, rc);
         args.status = (rc == -ENODEV) ? SS__NOSUCHDEV : SS__ABORT;
         goto out;
     }

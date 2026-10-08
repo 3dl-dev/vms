@@ -1220,7 +1220,10 @@ run_dcl_acceptance_battery() {
         wait_for '$ ' 20 "$M11_OFF"
     elif wait_for 'DECNETD-MAIL11-ACCEPT:' 240 "$M11_OFF" &&
          tail -c "+$((M11_OFF + 1))" "$LOG" | grep -q 'DECNETD-MAIL11-ACCEPT: NOIMAGE'; then
-        note "MAIL-11 [vms-47fd]: SYS\$SYSTEM:MAIL_SERVER.EXE is not on THIS runtime's system disk, so the inbound MAIL-11 proof DID NOT RUN here"
+        # DECNETD.EXE ships here, and every rail that ships it ships
+        # MAIL_SERVER.EXE beside it -- a NOIMAGE verdict is a staging bug (the
+        # image is on the disk but not exec-staged), never an absent optional.
+        bad "MAIL-11 [vms-47fd]: DECNETD.EXE ships but NETACP cannot run SYS\$SYSTEM:MAIL_SERVER.EXE (NOIMAGE) -- every inbound mail would be refused"
         wait_for '$ ' 20 "$M11_OFF"
     elif tail -c "+$((M11_OFF + 1))" "$LOG" | grep -q 'DECNETD-MAIL11-ACCEPT:'; then
         wait_for '$ ' 20 "$M11_OFF"

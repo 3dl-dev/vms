@@ -67,7 +67,7 @@ static uint32_t ms_open(struct mstore *m, const char *user)
             m->pro = cc$rms_xabpro;
             m->pro.xab$l_uic = ((uint32_t)urec.uic_group << 16) |
                                (urec.uic_member & 0xFFFFu);
-            m->fab.fab$l_xab = &m->pro;
+            m->fab.fab$l_xab = (struct XABKEY *)&m->pro;  /* the FAB types its XAB chain head as XABKEY */
         }
         memset(&urec, 0, sizeof urec);     /* the record carries the hash */
         st = sys$create(&m->fab, 0, 0);

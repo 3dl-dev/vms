@@ -350,6 +350,11 @@ extern "C" {
 #define SS$_NOMOREITEMS     1777    /* No more items */
 #define SS$_WRONGSTATE      9076    /* Object is in the wrong state for the request */
 #define SS$_CPUCAP          9236    /* Operation not permitted by CPU capabilities */
+#define SS$_ACLEMPTY        2512    /* Access control list is empty */
+#define SS$_NOENTRY         2520    /* Access control entry not found */
+#define SS$_NOMOREACE       2528    /* No more access control entries */
+#define SS$_ACLFULL         2552    /* No room in access control list for entry */
+#define SS$_IVACL           8676    /* Invalid access control list entry */
 #define SS$_NONETMBX        10404   /* Network mailbox privilege required (NETMBX) */
 #define SS$_NOSYSPRV        10468   /* SYSPRV privilege required */
 #define SS$_NOAUDIT         10540   /* Event is not audited */

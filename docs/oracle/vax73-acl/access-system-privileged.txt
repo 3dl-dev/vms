@@ -1,0 +1,117 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08
+#   by the corpus lane (tools/oracle/semantic/capture.py Lab class, commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$SYSTEM
+
+
+$ MCR AUTHORIZE ADD CORPSYS/PASSWORD=CORPSYSPW1/UIC=[7,7]/DEVICE=SYS$SYSDEVICE:/DIRECTORY=[ACLT]/PRIVILEGES=(TMPMBX,NETMBX)/DEFPRIVILEGES=(TMPMBX,NETMBX)/FLAGS=NODISUSER
+%UAF-I-ADDMSG, user record successfully added
+%UAF-I-RDBADDMSGU, identifier CORPSYS value [000007,000007] added to rights database
+
+$ MCR AUTHORIZE ADD CORPPRV/PASSWORD=CORPPRVPW1/UIC=[300,1]/DEVICE=SYS$SYSDEVICE:/DIRECTORY=[ACLT]/PRIVILEGES=(TMPMBX,NETMBX,SYSPRV)/DEFPRIVILEGES=(TMPMBX,NETMBX,SYSPRV)/FLAGS=NODISUSER
+%UAF-I-ADDMSG, user record successfully added
+%UAF-I-RDBADDMSGU, identifier CORPPRV value [000300,000001] added to rights database
+
+$ SET DEFAULT SYS$SYSDEVICE:[ACLT]
+
+
+$ COPY NL: G1.DAT
+
+
+$ COPY NL: G2.DAT
+
+
+$ COPY NL: G3.DAT
+
+
+$ COPY NL: G4.DAT
+
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G,W) G1.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[7,7],ACCESS=NONE) G1.DAT
+
+
+$ SET SECURITY/PROTECTION=(S,O:RWED,G,W:RE) G2.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[7,7],ACCESS=READ) G2.DAT
+
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G,W) G3.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[300,1],ACCESS=NONE) G3.DAT
+
+
+$ SET SECURITY/PROTECTION=(S,O,G,W) G4.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[*,*],ACCESS=NONE) G4.DAT
+
+
+$ DIRECTORY/SECURITY G*.DAT
+
+Directory SYS$SYSDEVICE:[ACLT]
+
+G1.DAT;1             [SYSTEM]                         (RWED,RWED,,)
+          (IDENTIFIER=[CORPSYS],ACCESS=NONE)
+G2.DAT;1             [SYSTEM]                         (,RWED,,RE)
+          (IDENTIFIER=[CORPSYS],ACCESS=READ)
+G3.DAT;1             [SYSTEM]                         (RWED,RWED,,)
+          (IDENTIFIER=[CORPPRV],ACCESS=NONE)
+G4.DAT;1             [SYSTEM]                         (,,,)
+          (IDENTIFIER=[*,*],ACCESS=NONE)
+
+Total of 4 files.
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G:RE,W:RE) PROBE2.COM
+
+
+$ SUBMIT/USER=CORPSYS/NOPRINTER/LOG_FILE=SYS$SYSDEVICE:[ACLT]P2SYS.LOG PROBE2.COM
+Job PROBE2 (queue SYS$BATCH, entry 2) started on SYS$BATCH
+
+$ SUBMIT/USER=CORPPRV/NOPRINTER/LOG_FILE=SYS$SYSDEVICE:[ACLT]P2PRV.LOG PROBE2.COM
+Job PROBE2 (queue SYS$BATCH, entry 3) started on SYS$BATCH
+
+$ @PROBE2.COM
+ACLPROBE SYSTEM       G1.DAT READ granted
+ACLPROBE SYSTEM       G2.DAT READ granted
+ACLPROBE SYSTEM       G3.DAT READ granted
+ACLPROBE SYSTEM       G4.DAT READ granted
+
+$ TYPE SYS$SYSDEVICE:[ACLT]P2SYS.LOG
+$ Set NoOn
+$ VERIFY = F$VERIFY(F$TRNLNM("SYLOGIN_VERIFY"))
+%SET-W-NOTSET, error modifying VAX1$DUA0:
+-CLI-E-IVDEVTYPE, invalid device type - specify a mailbox device
+ACLPROBE CORPSYS      G1.DAT READ granted
+ACLPROBE CORPSYS      G2.DAT READ granted
+ACLPROBE CORPSYS      G3.DAT READ granted
+ACLPROBE CORPSYS      G4.DAT READ status=%X1001829A
+  CORPSYS      job terminated at  8-OCT-2026 08:24:17.87
+
+  Accounting information:
+  Buffered I/O count:             100         Peak working set size:     512
+  Direct I/O count:                 9         Peak page file size:      5320
+  Page faults:                   5323         Mounted volumes:             0
+  Charged CPU time:           0 00:00:00.22   Elapsed time:     0 00:00:00.33
+
+$ TYPE SYS$SYSDEVICE:[ACLT]P2PRV.LOG
+$ Set NoOn
+$ VERIFY = F$VERIFY(F$TRNLNM("SYLOGIN_VERIFY"))
+%SET-W-NOTSET, error modifying VAX1$DUA0:
+-CLI-E-IVDEVTYPE, invalid device type - specify a mailbox device
+ACLPROBE CORPPRV      G1.DAT READ granted
+ACLPROBE CORPPRV      G2.DAT READ granted
+ACLPROBE CORPPRV      G3.DAT READ granted
+ACLPROBE CORPPRV      G4.DAT READ status=%X1001829A
+  CORPPRV      job terminated at  8-OCT-2026 08:24:18.64
+
+  Accounting information:
+  Buffered I/O count:             100         Peak working set size:     662
+  Direct I/O count:                 7         Peak page file size:      5320
+  Page faults:                   5261         Mounted volumes:             0
+  Charged CPU time:           0 00:00:00.22   Elapsed time:     0 00:00:00.31

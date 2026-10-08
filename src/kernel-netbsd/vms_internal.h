@@ -174,6 +174,11 @@
 #define SS__NOSUCHFILE  2320       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
 #define SS__FILNOTACC   172       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
 #define SS__DEVICEFULL  2128       /* SS$_DEVICEFULL (extend cannot allocate) */
+/* Access control list statuses (vms-d404), STARLET oracle values. */
+#define SS__ACLEMPTY    2512       /* SS$_ACLEMPTY */
+#define SS__NOENTRY     2520       /* SS$_NOENTRY */
+#define SS__ACLFULL     2552       /* SS$_ACLFULL */
+#define SS__IVACL       8676       /* SS$_IVACL */
 #define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
 /*
  * Device-table subset (rd vms-618). Values copied VERBATIM from

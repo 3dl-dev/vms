@@ -387,7 +387,7 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     /* a channel to reply on must be one this process holds (OpenVMS: an
      * unassigned channel number is refused -- observed OPR.BADCHAN) */
     if (chan != 0 && vms$$chan_to_fd(chan) < 0 && !vms$$chan_is_mailbox(chan))
-        return SS$_IVCHAN;
+        return pcb_chan_unheld_status(chan);
     /* a buffer shorter than the request header carries no request; OpenVMS
      * accepts it all the same (observed OPR.SHORT) and there is nothing to log */
     if (msgbuf->dsc$w_length < OPC$K_MS_HDRLEN)

@@ -277,6 +277,33 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode)
     exec_unlock(&lnm_write_lock);
 }
 
+/*
+ * vms_lnm_forget_device - delete the LNM$SYSTEM names whose single equivalence
+ * is the device `devnam` ("MBA12:"). A named mailbox's logical name is the
+ * mailbox's: when the executive deletes the mailbox the name goes with it, so
+ * a later $ASSIGN of the name finds neither (OpenVMS: SS$_IVDEVNAM, observed
+ * IO.ASSIGN.MBX.GONE on VAX V7.3 and Alpha V8.4; vms-4a69). Called by the
+ * mailbox driver after it has freed the unit, holding none of its own locks.
+ */
+void vms_lnm_forget_device(const char *devnam)
+{
+    uint32_t i;
+
+    if (!lnm_arena || !devnam || devnam[0] == '\0')
+        return;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_SYSTEM && e->num_equiv == 1 &&
+            strcmp(e->equiv[0].value, devnam) == 0)
+            lnm_free_entry(e);
+    }
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+}
+
 /* First free slot, or NULL when the arena is full. */
 static struct vms_lnm_entry *lnm_alloc_slot(void)
 {

@@ -2088,6 +2088,11 @@ uint32_t (sys$setpri)(const uint32_t *pidadr,
 extern void vms$$qio_cancel_chan(uint16_t chan);
 
 uint32_t sys$cancel(uint16_t chan) {
+    /* A channel this process does not hold is refused, as on OpenVMS (vms-4a69,
+     * observed IO.CANCEL.BADCHAN) -- never a success that cancelled nothing. */
+    struct vms_pcb *cpcb = (chan != 0 && chan < PCB_MAX_CHANNELS) ? vms_pcb_get() : NULL;
+    if (!cpcb || !cpcb->channels[chan].in_use)
+        return pcb_chan_unheld_status(chan);
     /* Pending asynchronous MAILBOX reads on the channel complete with SS$_ABORT
      * (vms-003). KNOWN GAP (vms-c8c): io_uring-submitted file I/O in flight on
      * the channel is still not cancelled. */

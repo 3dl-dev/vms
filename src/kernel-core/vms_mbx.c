@@ -342,6 +342,7 @@ static bool mbx_priv_check(uint32_t permanent, uint64_t cur_privs, uint32_t *sta
 static void mbx_put(struct vms_mailbox *mbx)
 {
     int free_it = 0;
+    char devnam[VMS_DEVNAM_SIZE];
 
     exec_lock(&vms_mbx_list_lock);
     exec_lock(&mbx->lock);
@@ -349,13 +350,18 @@ static void mbx_put(struct vms_mailbox *mbx)
         mbx->refcnt--;
     if (mbx->refcnt == 0 && (!mbx->permanent || mbx->delete_pending)) {
         exec_list_del(&mbx->list);
+        memcpy(devnam, mbx->devnam, sizeof(devnam));
+        devnam[sizeof(devnam) - 1] = '\0';
         free_it = 1;
     }
     exec_unlock(&mbx->lock);
     exec_unlock(&vms_mbx_list_lock);
 
-    if (free_it)
+    if (free_it) {
         mbx_free(mbx);
+        /* The unit's logical name goes with it (vms-4a69). */
+        vms_lnm_forget_device(devnam);
+    }
 }
 
 /* ================================================================

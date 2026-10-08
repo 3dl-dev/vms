@@ -723,6 +723,21 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
                 fd = dup(STDIN_FILENO);
         }
     } else {
+        /* A name that is neither a device nor a logical name for one is parsed
+         * as a device name: [_]ddcu, letters, digits and '$' (node / allocation
+         * class). Anything else -- "SP_PROBE_MBX" once its mailbox is gone --
+         * is SS$_IVDEVNAM on VAX V7.3 and Alpha V8.4, not SS$_NOSUCHDEV
+         * (semantic oracle IO.ASSIGN.MBX.GONE, BRK.NODEV; vms-4a69). A host
+         * path ('/...') is OVMX's own spelling, left alone. */
+        if (name[0] != '/') {
+            const char *d = name + (name[0] == '_');
+            for (; *d && *d != ':' && *d != '[' && *d != '<' && *d != '.' && *d != ';'; d++) {
+                if (!isalnum((unsigned char)*d) && *d != '$') {
+                    pthread_mutex_unlock(&pcb->chan_lock);
+                    return SS$_IVDEVNAM;
+                }
+            }
+        }
         /* Not a VMS device -- try to open as a plain file */
         fd = open(name, O_RDWR);
         if (fd < 0) {
@@ -771,7 +786,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
  *   SS$_IVCHAN - Invalid or unassigned channel number
  */
 uint32_t sys$dassgn(uint16_t chan) {
-    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return SS$_IVCHAN;
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return pcb_chan_unheld_status(chan);
 
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_IVCHAN;

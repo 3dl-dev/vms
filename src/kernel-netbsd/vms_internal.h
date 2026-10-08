@@ -919,6 +919,9 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * every outer mode; vms_lnm_proc_gone applies image rundown (user mode) or
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
+/* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
+ * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
+void vms_lnm_forget_device(const char *devnam);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);

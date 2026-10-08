@@ -471,10 +471,34 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
          */
         const uint32_t efn_val = efn ? *efn : VMS_EF_NONE;
         if (efn_val != VMS_EF_NONE || astadr != NULL) {
-            (void)vms_kif_spawn_notify(vms_pid, efn_val,
+            const uint32_t ast = vms_kif_spawn_notify(vms_pid, efn_val,
                                        (uint64_t)(uintptr_t)astadr,
                                        (uint64_t)(uintptr_t)astprm,
                                        NULL);
+            if (ast == SS$_NONEXPR) {
+                /*
+                 * The subprocess we JUST created is already gone AND already
+                 * reclaimed by the executive's reaper (a command file that ends at
+                 * once -- e.g. an empty SYS$INPUT -- finishes before this arm runs;
+                 * observed as the vms-f45 lost completion: the subprocess exited
+                 * ~immediately, the arm found no process, and the caller's
+                 * $WAITFR on the completion event flag hung to the harness
+                 * budget). The executive only keeps a completion for a subprocess
+                 * that still has a process-table row, so with no row there is
+                 * nothing left to deliver it. VMS notifies the creator whenever the
+                 * subprocess is deleted; "no such process" for a pid this very call
+                 * returned means exactly that, so complete the caller's request
+                 * here: set ITS event flag and queue ITS AST, both through the
+                 * public services acting on the caller itself. The completion
+                 * $STATUS of a subprocess that was reclaimed unobserved is
+                 * unknown, so *status is left as the caller initialised it.
+                 */
+                if (efn_val != VMS_EF_NONE)
+                    (void)sys$setef(efn_val);
+                if (astadr != NULL)
+                    (void)sys$dclast((void (*)(uint32_t))astadr,
+                                     (uint32_t)(uintptr_t)astprm, 0);
+            }
         }
 
         /*

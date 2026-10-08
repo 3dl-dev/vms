@@ -472,4 +472,4 @@
 # Raised to 152 by bg-fork-channels-not-captured (vms-387: anchors the previously
 # DEFERRED test_syssvc_bg_fork_inherit at the shared vms_bg_capture_channels
 # primitive, the option the fork-inherit-disabled entry's own note proposed).
-169
+170

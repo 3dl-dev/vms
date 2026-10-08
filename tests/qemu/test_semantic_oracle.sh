@@ -118,7 +118,7 @@ run_cmd() {  # cmd [timeout] -> SEG; PROMPT=1 if DCL came back
 }
 
 boot_login
-run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$COMMON:[SYSTEST]SP_*.EXE,SP_*.COM' 60
+run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$COMMON:[SYSTEST]SP_*.*' 60
 # an image probe (SP_x.EXE) is RUN; a DCL-family probe (SP_x.COM, comgen.py) is
 # run with @ -- each prints the same BEGIN/END-marked transcript
 PROBES=$(printf '%s\n' "$SEG" | grep -o 'SP_[A-Z0-9_]*\.\(EXE\|COM\)' | sort -u)

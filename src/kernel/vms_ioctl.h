@@ -270,16 +270,11 @@ struct vms_mode_args {
  * a privilege here without adding the check it names is the defect this
  * constant exists to prevent.
  *
- * SYSPRV AND GRPPRV ARE DELIBERATELY ABSENT even though vms_lnm.c's new
- * check also accepts either as an alternate to SYSNAM/GRPNAM (real,
- * documented VMS behaviour -- OpenVMS DCL Dictionary, DEFINE: SYSPRV
- * substitutes for SYSNAM on LNM$SYSTEM, and SYSPRV or GRPPRV substitutes
- * for GRPNAM on LNM$GROUP). Adding them here would tell every OTHER
- * reader of this mask (dcl_cmd_set.c's enforced_privs_held(), SHOW
- * PROCESS/PRIVILEGES, F$PRIVILEGE) that OVMX enforces SYSPRV/GRPPRV in
- * the general VMS sense -- bypass system/group object protection
- * everywhere -- which remains false pending vms-pv1. They are consulted
- * by exactly one narrow code path, not enforced as their own control.
+ * GRPPRV is enforced by the Files-11 ACP's protection gate: it puts the accessor in
+ * the SYSTEM category for a file owned by its own UIC group (vmsfs_acp.c
+ * acp_check_access, observed on OpenVMS VAX V7.3 -- docs/oracle/vax73-acl.md
+ * "GRPPRV"; test_syssvc_privilege_enforce, acp-grpprv-ignored), and vms_lnm.c
+ * accepts it for LNM$GROUP.
  *
  * GROUP IS DELIBERATELY ABSENT, and that is a measurement rather than an
  * oversight. The obvious guess -- GROUP to read another process in your
@@ -323,7 +318,8 @@ struct vms_mode_args {
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
-                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
+                             VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
+                             VMS_PRV_M_GRPPRV)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */

@@ -575,6 +575,7 @@ acp-dir-exsz-ignored
 acp-dir-used-blocks-ignore-eof
 acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
+acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
 acp-acl-control-not-checked
@@ -1225,6 +1226,25 @@ EOF
         require_fail) cat <<'EOF'
 the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV
 ...and changes nothing: still refused
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-grpprv-ignored)
+        case "$_f" in
+        facility)     echo "GRPPRV puts the accessor in the system category for files of its own UIC group (Files-11 ACP protection gate)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() counts a GRPPRV holder as system category when its group owns the file. The mutation drops that term, so [100,100] with GRPPRV is refused its own group's S:RWED file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+GRPPRV reads its own group's GRPT1.DAT through the system field
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7417,6 +7437,8 @@ apply_edit() {
         sed -i 's|^            if (proc->rights_id\[i\] == id)$|            if (0) /* NEGCTL acp-rights-list-not-consulted */|' "$_file";;
     rights-grant-cmkrnl-not-checked)
         sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file";;
+    acp-grpprv-ignored)
+        sed -i 's|^                ((privs \& ACP_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
         sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)

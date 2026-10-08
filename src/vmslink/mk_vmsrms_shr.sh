@@ -14,7 +14,7 @@
 #   (a) carries a `.vms$sv` symbol vector exposing ALL its universals — every
 #       non-static function defined by the 8 translation units: the RMS system
 #       services (sys$open/sys$create/sys$close/sys$connect/sys$get/sys$put/
-#       sys$update/sys$delete/sys$find/sys$parse/sys$search/sys$rewind/sys$flush/
+#       sys$update/sys$delete/sys$find/sys$read/sys$write/sys$parse/sys$search/sys$rewind/sys$flush/
 #       sys$disconnect/sys$erase/sys$display) plus the org-specific record engines
 #       (rms_seq_*/rms_rel_*/rms_idx_*) and the shared I/O helpers
 #       (rms_read_exact/rms_write_exact). Enumerated from `nm` of the compiled

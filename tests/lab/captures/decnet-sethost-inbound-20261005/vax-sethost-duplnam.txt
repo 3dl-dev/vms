@@ -1,0 +1,20 @@
+Real OpenVMS VAX V7.3 (VAX1, dnlab-1, 2026-10-05): SYSTEM already logged in on
+OPA0:, then SET HOST 0 and log in as SYSTEM again. LOGINOUT cannot name the
+second process "SYSTEM" (duplicate in the UIC group), so it names it after its
+terminal: underscore + device name + colon.
+
+$ SHOW PROCESS
+
+ 5-OCT-2026 03:33:21.22   User: SYSTEM           Process ID:   20200226
+                          Node: VAX1             Process name: "_RTA1:"
+
+Terminal:           RTA1:  (VAX1::SYSTEM)
+User Identifier:    [SYSTEM]
+Base priority:      4
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+
+Devices allocated:  VAX1$RTA1:
+$ SHOW SYSTEM
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20200225 SYSTEM          HIB      7      215   0 00:00:00.09      5411    450
+20200226 _RTA1:          CUR      4      150   0 00:00:00.10      5279    483

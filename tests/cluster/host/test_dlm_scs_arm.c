@@ -220,6 +220,14 @@ static void arm_bindings(void)
 	    "a name THIS node holds locks on is never answered 'you master it'");
 	has("o = vms_dlm_dir_lookup(&d->dir, id, req->from_csid, &master);",
 	    "the outcome comes from this node's own directory entries");
+	/* rd vms-629: a VAX's barrier lookup (op 0x08) is answered like an
+	 * op-0x01 one -- unanswered, the VAX's barrier never releases. */
+	has("req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)\n\t\treturn dlm_arm_dir_lookup(d, req, &id, reply);",
+	    "an op-0x08 barrier lookup is routed to the directory's lookup");
+	before("if (dlm_arm_dir_tr_redirect(d, req, o))",
+	       "if (vms_dlm_dir_answer_build(req->body, req->len, status,",
+	       "... and a redirect answer to one, never observed, is held back "
+	       "before anything is built");
 
 	/*
 	 * THE HASH BOOTSTRAP DEADLOCK IS RESOLVED behind the all-OVMX gate (rung

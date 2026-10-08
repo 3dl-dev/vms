@@ -112,6 +112,18 @@ typedef struct rms_file {
     uint64_t rbuf_base;   /* file byte offset of rbuf[0] */
     uint32_t rbuf_len;    /* valid bytes in rbuf (0 == invalid) */
     uint8_t  rbuf[RMS_IO_RAHEAD_BYTES];
+    /* vms-5dd2: the header's dates, protection and owner, from the ODS-2 FH2
+     * via the IO$_ACCESS / IO$_CREATE attribute block, so $DISPLAY fills an
+     * XABDAT/XABPRO from the real header. hdr_valid == 0 on the POSIX backend
+     * and on a handle that never reached the ACP. */
+    int      hdr_valid;
+    uint64_t hdr_cdt;       /* ATR$C_CREDATE (VMS binary time) */
+    uint64_t hdr_rdt;       /* ATR$C_REVDATE */
+    uint64_t hdr_edt;       /* ATR$C_EXPDATE */
+    uint64_t hdr_bdt;       /* ATR$C_BAKDATE */
+    uint16_t hdr_rvn;       /* revision count */
+    uint16_t hdr_fileprot;  /* ATR$C_FPRO: S/O/G/W nibbles, set bit = denied */
+    uint32_t hdr_uic;       /* ATR$C_UIC: group << 16 | member */
 } rms_file_t;
 
 /*

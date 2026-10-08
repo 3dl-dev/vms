@@ -449,6 +449,30 @@ int main(void)
         close(pfd[0]); close(pfd[1]);
     }
 
+    /* ---- vms-a70: a remote (SET HOST) terminal gets no console wake ---- */
+    CHECK(loginout_terminal_is_remote("_RTA0:") == 1, "remote: _RTA0: is a network terminal");
+    CHECK(loginout_terminal_is_remote("OVMXC$RTA1:") == 1, "remote: node-prefixed OVMXC$RTA1: is a network terminal");
+    CHECK(loginout_terminal_is_remote("NVA3:") == 1, "remote: NVA3: is a network terminal");
+    CHECK(loginout_terminal_is_remote("_OPA0:") == 0, "NEGCTL: the operator console _OPA0: keeps the wake");
+    CHECK(loginout_terminal_is_remote("TTA0:") == 0, "NEGCTL: a hardwired TTA0: keeps the wake");
+    CHECK(loginout_terminal_is_remote("") == 0 && loginout_terminal_is_remote(NULL) == 0,
+          "NEGCTL: no terminal name is not remote");
+
+    /* ---- vms-a70: a duplicate-username session is named after its terminal ---- */
+    {
+        char pn[16];
+        CHECK(loginout_terminal_prcnam("_RTA1:", pn, sizeof pn) == 1 && strcmp(pn, "_RTA1:") == 0,
+              "prcnam: _RTA1: -> \"_RTA1:\" (oracle vax-sethost-duplnam.txt)");
+        CHECK(loginout_terminal_prcnam("OVMXC$RTA12:", pn, sizeof pn) == 1 && strcmp(pn, "_RTA12:") == 0,
+              "prcnam: node prefix stripped -> \"_RTA12:\"");
+        CHECK(loginout_terminal_prcnam("TTA0", pn, sizeof pn) == 1 && strcmp(pn, "_TTA0:") == 0,
+              "prcnam: a bare device name gains the colon");
+        CHECK(loginout_terminal_prcnam("", pn, sizeof pn) == 0,
+              "NEGCTL: no terminal -> no name");
+        CHECK(loginout_terminal_prcnam("ABCDEFGHIJKLMN:", pn, sizeof pn) == 0,
+              "NEGCTL: a name that would exceed 15 characters is refused, not truncated");
+    }
+
     /* ---- Source guard: invented strings stay deleted ---- */
     {
         char *login = slurp(VMS_LOGIN_SRC);
@@ -481,6 +505,8 @@ int main(void)
              * so what must not come back is the bare `if (isatty(...))' wake. */
             CHECK(strstr(login, "loginout_at_operator_terminal()") != NULL,
                   "vms_login.c: the OPA0: wake asks the executive whether this session is on a terminal (vms-3e9 b)");
+            CHECK(strstr(login, "loginout_terminal_is_remote(pi.terminal) ? 0 : 1") != NULL,
+                  "vms_login.c: the executive-terminal wake is skipped on RTAn:/NVAn: (vms-a70)");
             CHECK(strstr(login, "if (isatty(STDIN_FILENO)) {") == NULL,
                   "vms_login.c: the bare isatty()-gated wake (x86_64-true, VAX-false) is gone");
             CHECK(strstr(login, "login_drain_typeahead(STDIN_FILENO") != NULL,

@@ -93,6 +93,18 @@ RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -m
         /tmp/build/link-native/RC3.EXE \
         "/tmp/build/link-native/SYSLIB/DECC\$SHR.EXE"
 
+# SEMANTIC-ORACLE PROBES (rd vms-8d1): tools/oracle/semantic/specs/*.py -> C
+# (spgen.py) -> cc -> LINK.EXE, one SP_<FAMILY>.EXE per service family, against
+# the same producer graph + flags as RC3.EXE above. They are NOT shipped: the
+# builder stage masters them onto a SEPARATE test disk
+# (/boot/ovmx-distrib-semprobe.img, below) that tests/qemu/test_semantic_oracle.sh
+# boots to diff each probe's transcript against the real-VMS goldens in
+# docs/oracle/semantics/. python3 is build tooling only (the generator).
+RUN apk add --no-cache python3 && \
+    CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+    sh tools/oracle/semantic/mk_semprobes.sh \
+        /tmp/build/bin/LINK.EXE /tmp/build/link-native/SYSLIB /tmp/build/semprobe
+
 # Ground-source gate, baked into the build itself (not just asserted by a
 # separate CI job elsewhere): every artifact this stage ships must be a real
 # LINK.EXE-built x86_64 image with NO DT_NEEDED/DT_HASH (LINK.EXE emits no
@@ -438,6 +450,7 @@ COPY --from=link-native /tmp/build/link-native/SYSEXE /link-native/SYSEXE
 COPY --from=link-native /src/src/imgact/IMGACT.EXE /link-native/IMGACT.EXE
 COPY --from=link-native /tmp/build/link-native/PARTS.EXE /link-native/PARTS.EXE
 COPY --from=link-native /tmp/build/link-native/RC3.EXE /link-native/RC3.EXE
+COPY --from=link-native /tmp/build/semprobe /link-native/semprobe
 
 # KVER is the from-source kernel's kernelrelease (copied from kernel-build as
 # /tmp/kver above, e.g. 6.18.44-ovmx). The build tree lives at
@@ -1074,6 +1087,23 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
     rm -rf /system-stage-negctl-vms && \
     echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
 
+# -- Semantic-oracle probe disk (rd vms-8d1) -----------------------------------
+# A SEPARATE mastered disk, built from the SAME staged system tree as
+# ovmx-distrib.img with exactly one addition: the semantic-oracle probe images
+# SP_<FAMILY>.EXE in SYS$SYSTEM:. (Not SYS$COMMON:[SYSTEST], where VMS keeps its
+# own test programs: DCL RUN of an image outside SYS$SYSTEM: is not yet possible
+# on OVMX -- rd vms-73e -- and the probes test services, not RUN.)
+# Same copy-the-tree pattern as the negctl / install-media disks: the shipped
+# /system-stage/vms and ovmx-distrib.img are never touched, so no probe ships.
+# Consumed only by tests/qemu/test_semantic_oracle.sh.
+RUN cp -r /system-stage/vms /system-stage-semprobe-vms && \
+    cp /link-native/semprobe/SP_*.EXE /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    /src/build-static/bin/vmsfs_master --ods2 master \
+        /boot/ovmx-distrib-semprobe.img OVMXSYS /system-stage-semprobe-vms 128 && \
+    /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-semprobe.img | grep -i '\]SP_' && \
+    rm -rf /system-stage-semprobe-vms && \
+    echo "SEMPROBE DISTRIB image: $(ls -lh /boot/ovmx-distrib-semprobe.img | awk '{print $5}')"
+
 # -- Install-media distribution disk (vms-dcf) ----------------------------------
 # A SEPARATE THIRD mastered disk, built from the SAME staged system tree
 # (/system-stage/vms) as ovmx-distrib.img above, with exactly one file
@@ -1298,6 +1328,9 @@ COPY --from=builder /boot/ovmx-distrib-negctl.img /boot/ovmx-distrib-negctl.img
 # Consumed only by tests/qemu/test_install_menu.sh -- ovmx-distrib.img
 # itself is untouched and keeps booting straight to login as before.
 COPY --from=builder /boot/ovmx-install-media.img /boot/ovmx-install-media.img
+# Semantic-oracle probe disk (rd vms-8d1): same tree + SYS$SYSTEM:SP_*.EXE.
+# Consumed only by tests/qemu/test_semantic_oracle.sh.
+COPY --from=builder /boot/ovmx-distrib-semprobe.img /boot/ovmx-distrib-semprobe.img
 # OVMX OS kit (vms-0b6, docs/design-ovmx-kit-format.md). Not consumed by
 # anything that boots today -- vms-df9's PRODUCT INSTALL is the consumer --
 # carried here so the build's kit artifact is retrievable like the other

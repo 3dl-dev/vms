@@ -162,6 +162,8 @@ csb-dead-found-by-sysid
 pe-station-filter-disarmed
 recnx-attempt-supersedes-in-flight
 csb-dropped-spare-reads-as-loss
+csb-continued-dialogue-not-followed
+csb-conndata-count-ignored
 join-asks-the-last-discovered
 join-connectivity-gate-disarmed
 join-unheard-gate-disarmed
@@ -1008,6 +1010,38 @@ EOF
         ;;
         esac;;
 
+    csb-conndata-count-ignored)
+        case "$_f" in
+        facility)     echo "csb_resume_from_conndata() (rd vms-ba4): the count a peer's CONNECT_REQ advertises it has taken resumes the dialogue on the accepted connection, before anyone speaks";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "the resume from the connect data is disarmed, so a node that accepts a real VAX's re-establishing connect (cd[12:14] = 3) opens at send 1 / ack 0 -- the CNXMGRERR of stall-rig arm N2-4.";;
+        require_fail) cat <<'EOF'
+the next origination is 4 -- what the VAX waits for
+and it acks the 3 this node advertised, not 0
+EOF
+                      ;;
+        esac;;
+
+    csb-continued-dialogue-not-followed)
+        case "$_f" in
+        facility)     echo "cnxman_csb_dialogue_adopt() (rd vms-ba4): a peer whose first envelope after this node reset the dialogue carries send-msg# > 1 is continuing it, and this node resumes from the peer's ack";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "the adoption is disarmed, so a pre-admission joiner answers a real VAX that continued the dialogue (send 3, ack 2) with send 1, ack 0 -- the CNXMGRERR measured on stall-rig arms L-3 and L-9.";;
+        require_fail) cat <<'EOF'
+the peer continued: this node resumes from its ack, so the next origination is 3, not the 1 that bugchecked it
+the transaction id carries
+counted
+armed for ONE frame only
+an unbind does not lose the frame it waits for
+its ack of 2 makes this node's next send 3, not 1
+EOF
+                      ;;
+        esac;;
+
     csb-dropped-spare-reads-as-loss)
         case "$_f" in
         facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
@@ -1563,6 +1597,15 @@ apply_edit() {
         # no longer matches, so the mutation is not repeatable.
         sed -i 's|	    go.role != VMS_CM_ROLE_GO \|\| go.epoch == b->epoch) {|	    1) { /* NEGCTL barrier-stalled-ignores-new-go */|' "$_file";;
 
+    csb-conndata-count-ignored)
+        # `	csb->cm_send_msg = taken;` is unique in this file.
+        sed -i 's|^\tcsb->cm_send_msg = taken;|\treturn; /* NEGCTL csb-conndata-count-ignored */|' "$_file";;
+
+    csb-continued-dialogue-not-followed)
+        # `csb->cm_send_msg = peer_ack_msg;` occurs TWICE in this file; the
+        # adoption's is the one followed by `csb->cm_txn = csb->cm_prev_txn;`.
+        sed -i '/^\tcsb->cm_send_msg = peer_ack_msg;$/{N;s|^\tcsb->cm_send_msg = peer_ack_msg;\n\tcsb->cm_txn = csb->cm_prev_txn;|\treturn; /* NEGCTL csb-continued-dialogue-not-followed */\n\tcsb->cm_txn = csb->cm_prev_txn;|}' "$_file";;
+
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.
         sed -i 's|	if (csb->alt_conid == conid) {|	if (0 \&\& csb->alt_conid == conid) { /* NEGCTL csb-dropped-spare-reads-as-loss */|' "$_file";;
@@ -1583,8 +1626,9 @@ apply_edit() {
         sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
 
     csb-resume-ignores-peer-position)
-        # `csb->cm_send_msg = peer_ack_msg;` is unique in this file.
-        sed -i 's|csb->cm_send_msg = peer_ack_msg;|/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
+        # `csb->cm_send_msg = peer_ack_msg;` occurs twice since rd vms-ba4;
+        # the resume's is the one indented two tabs.
+        sed -i 's|^\t\tcsb->cm_send_msg = peer_ack_msg;|\t\t/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
 
     csb-reconnect-never-carries)
         # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.

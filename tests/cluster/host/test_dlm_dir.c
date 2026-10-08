@@ -202,6 +202,59 @@ static void test_answers_match_the_real_directory(void)
 	}
 }
 
+/*
+ * rd vms-629: the op-0x08 lookup a real VAX sends its directory node from
+ * inside a barrier. Two independent real samples; OVMX's answer to each is the
+ * real directory's, opcode 0x01 included.
+ */
+static void op08_pair(const char *req_name, const char *ans_name)
+{
+	const struct vms_fixture *q = fixture(req_name);
+	const struct vms_fixture *a = fixture(ans_name);
+	uint8_t built[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	struct vms_dlm_res_ident id;
+	uint32_t written = 0;
+
+	ct_check(q && a, "both specimens load");
+	if (!q || !a)
+		return;
+	ct_check(vms_dlm_res_ident_parse_body(body_of(q), blen_of(q), &id) ==
+		 VMS_CODEC_OK && id.name_len == 16u &&
+		 memcmp(id.name, "SYS$SYS_ID", 10) == 0,
+		 "  the op-0x08 names a ROOT: SYS$SYS_ID + the sender's id");
+	ct_check_eq_u32(body_of(a)[9], VMS_DLM_WIREOP_ENQ,
+			"  the real answer's opcode byte is 0x01, not 0x08");
+	ct_check_eq_u32(body_of(a)[34], VMS_DLM_DIR_YOU_MASTER,
+			"  and it says 'you master it'");
+	memset(built, 0xa5, sizeof(built));
+	ct_check(vms_dlm_dir_answer_build(body_of(q), blen_of(q),
+					  VMS_DLM_DIR_YOU_MASTER, 0u, built,
+					  sizeof(built), &written) == VMS_CODEC_OK,
+		 "  OVMX builds the directory's answer to it");
+	ct_check(answer_matches(built, a, 0),
+		 "  *** byte-identical to the real VAX's answer, opcode 0x01 "
+		 "included ***");
+}
+
+static void test_op08_barrier_lookup(void)
+{
+	uint8_t sub[VMS_CM_BODY_LEN];
+	const struct vms_fixture *q = fixture("dlm-op08-req-cf1");
+	struct vms_dlm_res_ident id;
+
+	printf("-- rd vms-629: a VAX's barrier lookup (op 0x08) gets the real "
+	       "directory's answer\n");
+	op08_pair("dlm-op08-req-coldform", "dlm-op08-answer-coldform");
+	op08_pair("dlm-op08-req-cf1", "dlm-op08-answer-cf1");
+	if (q == NULL)
+		return;
+	memcpy(sub, body_of(q), sizeof(sub));
+	sub[36] = 0x01u;   /* a non-zero parent span: not a ROOT */
+	ct_check(vms_dlm_res_ident_parse_body(sub, sizeof(sub), &id) ==
+		 VMS_CODEC_E_CLASS,
+		 "a sub-resource op 0x08 is not a directory lookup");
+}
+
 /* ==========================================================================
  * 3. The table
  * ========================================================================== */
@@ -356,6 +409,7 @@ int main(void)
 	}
 	test_identity_from_real_frames();
 	test_answers_match_the_real_directory();
+	test_op08_barrier_lookup();
 	test_table_outcomes();
 	test_table_full_is_refused();
 	test_table_model();

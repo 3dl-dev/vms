@@ -399,7 +399,7 @@ uint32_t (sys$audit_eventw)(uint32_t efn, uint32_t flags, const void *itmlst,
  * Observed on the lab OpenVMS Alpha V8.4 node (a MACRO-32 program calling the
  * service twice and printing the four longwords): an OSF DCE uuid, version 1 --
  *   time_low[4] time_mid[2] time_hi_and_version[2]  the 100 ns count since
- *       15-OCT-1582 (the VMS system time + the 1582->1858 offset), version nibble 1;
+ *       15-OCT-1582 (the VMS system time + 100840 days), version nibble 1;
  *   clock_seq_hi_and_reserved[1] clock_seq_low[1]   variant 10xx, 14-bit sequence,
  *       constant between the two calls;
  *   node[6]  the SCSNODE name ("ALPHA1" there), not an IEEE address;
@@ -409,7 +409,7 @@ uint32_t (sys$audit_eventw)(uint32_t efn, uint32_t flags, const void *itmlst,
  */
 #include <pthread.h>
 
-#define UID_VMS_TO_UUID_EPOCH 0x01B21DD213814000ull  /* 100ns: 1582-10-15 -> 1858-11-17 */
+#define UID_VMS_TO_UUID_EPOCH 0x0135886AC7960000ull  /* 100ns: 15-OCT-1582 -> 17-NOV-1858 = 100840 days */
 
 uint32_t (sys$create_uid)(void *uid)
 {

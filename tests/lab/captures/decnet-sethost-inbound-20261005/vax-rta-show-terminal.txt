@@ -1,0 +1,27 @@
+Real OpenVMS VAX V7.3 (VAX1, dnlab-1, 2026-10-05): SHOW TERMINAL inside a
+SET HOST 0 session, originated from the LA36-typed operator console OPA0:.
+The RTA takes its type and characteristics from the originating terminal
+(CTERM characteristics exchange); "Remote Port Info" names node::user.
+
+$ SHOW TERMINAL
+Terminal: _RTA1:      Device_Type: LA36          Owner: _RTA1:
+                                              Username: SYSTEM
+Remote Port Info: VAX1::SYSTEM
+
+   Input:     300     LFfill:  0      Width: 132      Parity: None
+   Output:    300     CRfill:  0      Page:    0      
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               Hardcopy           No Remote          No Eightbit
+   No Broadcast       No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing       Insert editing     No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input

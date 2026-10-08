@@ -1202,6 +1202,16 @@ static void cd_case_ack(const char *what, uint16_t votes, uint16_t quorum,
 				   (uint32_t)sizeof(out));
 	ct_check_eq_u32((uint32_t)st, (uint32_t)VMS_CODEC_OK, what);
 	ct_check(memcmp(out, want, sizeof(out)) == 0, what);
+	{
+		/* rd vms-ba4: the reader takes back exactly the cell built. */
+		uint16_t taken = 0xffffu;
+
+		ct_check(vms_cm_conndata_peer_taken(want, VMS_CM_CONNDATA_LEN,
+						    &taken) == VMS_CODEC_OK &&
+			 taken == peer_ack, "  [12:14] reads back as the count");
+		ct_check(vms_cm_conndata_peer_taken(want, 12u, &taken) ==
+			 VMS_CODEC_E_SHORT, "  and a short field is refused");
+	}
 }
 
 /* The four rd vms-b87 rows are all nodes that had taken NOTHING from the peer

@@ -1508,6 +1508,7 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 		return;
 	csb->cm_dialogue_conid = conid;
 	csb->cm_dialogues_carried++;
+	csb->cm_peer_taken_valid = 0u;   /* rd vms-ba4: carried, nothing to settle */
 	/* rd vms-1f40: the next frame this peer sends tells us where its
 	 * receive stream from us really got to, and a carried dialogue resumes
 	 * from there. Armed for that one frame only. */
@@ -1552,6 +1553,8 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 	csb->cm_advert_conid = conid;
 }
 
+static void csb_resume_from_conndata(struct vms_csb *csb);
+
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 {
 	if (csb == NULL)
@@ -1569,8 +1572,16 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	 * this peer really sends something on THIS connection -- never a number
 	 * inherited from the dialogue that just died (INV-6).
 	 */
-	if (csb->cm_dialogue_conid != 0u)
+	/* An adoption armed by an earlier unbind (Con.ID 0) survives the bind
+	 * of the connection that replaces it: that is the frame it waits for. */
+	if (csb->cm_dialogue_conid != 0u) {
 		csb->cm_dialogue_resets++;   /* a LIVE dialogue was discarded */
+		/* rd vms-ba4: kept for the peer's first frame to settle. */
+		csb->cm_prev_send  = csb->cm_send_msg;
+		csb->cm_prev_txn   = csb->cm_txn;
+		csb->cm_prev_token = csb->cm_token;
+		csb->cm_adopt_pending = 1u;
+	}
 	csb->cm_dialogue_conid = conid;
 	csb->cm_new_incarnation = 0u;   /* this IS the new conversation */
 	csb->cm_send_msg = 0u;
@@ -1586,6 +1597,8 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	 */
 	csb->cm_txn = csb_next_nonzero(csb->cm_txn);
 	csb->cm_token = 0u;
+	if (conid != 0u && csb->cm_peer_taken_valid)
+		csb_resume_from_conndata(csb);
 }
 
 /* ==========================================================================
@@ -1738,6 +1751,80 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
  * it has just re-established, which is the one that tells us where it got to --
  * and taking it disarms it.
  */
+/*
+ * THE PEER'S FIRST FRAME AFTER A RESET SAYS WHETHER IT RESET TOO (rd vms-ba4).
+ *
+ * A peer that has started a fresh conversation acknowledges nothing of it yet
+ * (E76/E77, spec sec 4(j)). So a first envelope that ACKNOWLEDGES messages of
+ * ours -- measured: send=3 ack=2, and send=1 ack=2 from a VAX that restarted
+ * its own count but not what it had taken -- is a peer that kept its block for
+ * us and is continuing the conversation this node just discarded -- the case p. 7-24 calls re-establishment, here reached from a
+ * block the predicate could not prove entitled (a joiner not yet SELECTED).
+ * Then this node continues too, by the vms-1f40 rule: from the position the
+ * peer acknowledges, which must be one this node's previous dialogue really
+ * reached -- never ahead of it -- and with the transaction id and token that
+ * dialogue was using (rd vms-8c54). Every value is either the peer's own or
+ * this block's own saved one.
+ *
+ * Armed for exactly one frame; taken either way. If this node has already
+ * spoken on the new connection, its numbers are on the wire and cannot be
+ * taken back: counted, not hidden.
+ */
+/*
+ * THE CONNECT DATA SETTLES IT BEFORE ANYONE SPEAKS (rd vms-ba4). The peer's
+ * CONNECT_REQ said how much of this node's stream it has taken; this node's
+ * ACCEPT_REQ said how much of the peer's it has. A real pair continues from
+ * exactly those two numbers (rd vms-8c54 oracle: VAX1 dialled 14811, VAX2
+ * accepted 10249, and the first frames on the new pair were 10250/14811 and
+ * 14812/10249). So when the peer advertised a non-zero count, the dialogue
+ * this bind would reset is resumed instead: send from what the peer took --
+ * never ahead of what this node's previous dialogue sent -- and ack exactly
+ * what this node advertised. Every number is one of the two on the wire.
+ */
+static void csb_resume_from_conndata(struct vms_csb *csb)
+{
+	uint16_t taken = csb->cm_peer_taken;
+
+	csb->cm_peer_taken_valid = 0u;
+	if (taken == 0u || taken > csb->cm_prev_send)
+		return;
+	csb->cm_send_msg = taken;
+	csb->cm_ack_msg = csb->cm_advertised_ack;
+	csb->cm_txn = csb->cm_prev_txn;
+	csb->cm_token = csb->cm_prev_token;
+	csb->cm_adopt_pending = 0u;
+	csb->cm_dialogues_adopted++;
+}
+
+void cnxman_csb_note_peer_conndata(struct vms_csb *csb, uint16_t peer_taken,
+				   uint16_t advertised_ack)
+{
+	if (csb == NULL)
+		return;
+	csb->cm_peer_taken = peer_taken;
+	csb->cm_advertised_ack = advertised_ack;
+	csb->cm_peer_taken_valid = 1u;
+}
+
+void cnxman_csb_dialogue_adopt(struct vms_csb *csb, uint16_t peer_send_msg,
+			       uint16_t peer_ack_msg)
+{
+	(void)peer_send_msg;   /* the ack decides; the send is the peer's own */
+	if (csb == NULL || !csb->cm_adopt_pending)
+		return;
+	csb->cm_adopt_pending = 0u;
+	if (peer_ack_msg == 0u || peer_ack_msg > csb->cm_prev_send)
+		return;   /* it took nothing, or a position we never reached */
+	if (csb->cm_send_msg != 0u) {
+		csb->cm_adopt_too_late++;
+		return;
+	}
+	csb->cm_send_msg = peer_ack_msg;
+	csb->cm_txn = csb->cm_prev_txn;
+	csb->cm_token = csb->cm_prev_token;
+	csb->cm_dialogues_adopted++;
+}
+
 void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg)
 {
 	if (csb == NULL || !csb->cm_resume_pending)

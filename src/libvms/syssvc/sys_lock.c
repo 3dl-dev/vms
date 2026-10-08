@@ -31,13 +31,16 @@
  * OVMX service register (rd vms-d89) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-EXECUTIVE: sys$enq (vms-042) proof=tests/qemu/test_syssvc_lock_status.c -- the
- *     grant decision, the lock id, the value block AND THE VMS CONDITION VALUE all
- *     come back from the kernel lock manager. There is no userspace lock table, no
+ * OVMX-PARTIAL: sys$enq (vms-042) -- exec: the grant decision, the lock id, the value block AND
+ *     THE VMS CONDITION VALUE all come back from the kernel lock manager
+ *     (tests/qemu/test_syssvc_lock_status.c). There is no userspace lock table, no
  *     flock() fallback, and since kstat_to_ss() was deleted no status mapping either.
- * OVMX-EXECUTIVE: sys$enqw (vms-042) proof=tests/qemu/test_syssvc_lock_status.c -- the
- *     same request as $ENQ with the wait taken in the executive, reporting the same
- *     executive-supplied condition value.
+ * OVMX-LOCAL: sys$enq -- naming the caller's event flag on a successful request
+ *     (vms$$lock_complete_efn, sys_efn.c; flag 0 is a real flag, only 128+ means none):
+ *     the efn0-enqw-not-set negative control proves it with test_syssvc_efn0.
+ * OVMX-PARTIAL: sys$enqw (vms-042) -- exec: the same request as $ENQ with the wait taken
+ *     in the executive, reporting the same executive-supplied condition value.
+ * OVMX-LOCAL: sys$enqw -- the same event-flag completion step as $ENQ (sys_efn.c).
  * OVMX-EXECUTIVE: sys$deq (vms-042) proof=tests/qemu/test_syssvc_lock_status.c -- a
  *     pass-through to vms_kif_deq; the release decision and the returned condition
  *     value are both the kernel lock manager's.
@@ -95,6 +98,8 @@
 #include <unistd.h>
 #include "starlet.h"
 #include "vms_kif.h"
+
+void vms$$lock_complete_efn(uint32_t efn);   /* sys_efn.c */
 
 /* Lock Status Block (VMS-compatible layout) */
 struct lksb {
@@ -266,8 +271,7 @@ uint32_t (sys$enqw)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 1);
 
-    if (efn < 128)
-        sys$setef(efn);
+    vms$$lock_complete_efn(efn);
 
     return status;
 }
@@ -291,8 +295,8 @@ uint32_t (sys$enq)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 0);
 
-    if (efn < 128 && (status & 1))
-        sys$setef(efn);
+    if (status & 1)
+        vms$$lock_complete_efn(efn);
 
     return status;
 }

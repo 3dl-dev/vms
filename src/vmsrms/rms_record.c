@@ -2,7 +2,8 @@
  * rms_record.c - RMS Record Operation Dispatch
  *
  * Implements the sys$get, sys$put, sys$update, sys$delete, and
- * sys$find system services. Each operation validates the RAB/FAB
+ * sys$find system services, and the block-I/O services sys$read and
+ * sys$write (vms-254). Each operation validates the RAB/FAB
  * linkage, then dispatches to the appropriate organization-specific
  * handler (sequential, relative, or indexed).
  */
@@ -49,6 +50,16 @@
  *     status through the ACP window to position without transferring a record;
  *     takes the same real per-record $ENQ a $get does.
  * OVMX-LOCAL: sys$find -- the RAB positioning arithmetic is this process's.
+ * OVMX-PARTIAL: sys$read (vms-254) -- exec: IO$_READVBLK transfers the
+ *     requested virtual blocks through the ACP window (rms_io_read), clamped at
+ *     the end of file the ODS-2 header records.
+ * OVMX-LOCAL: sys$read -- the FAC check, the next-block (RAB$L_BKT=0) context
+ *     and the RSZ/RFA bookkeeping are this process's.
+ * OVMX-PARTIAL: sys$write (vms-254) -- exec: IO$_WRITEVBLK writes the virtual
+ *     blocks through the ACP window (rms_io_write), extending the file and
+ *     moving its end of file to the end of the transfer.
+ * OVMX-LOCAL: sys$write -- the FAC check and the next-block context are this
+ *     process's.
  */
 
 #include <stdio.h>
@@ -59,9 +70,9 @@
 #include <errno.h>
 #include "rms/rms.h"
 
+#include "rms_io.h"     /* rms_file_t; rms_io_* for block I/O (vms-254)       */
 #if defined(OVMX_HAVE_ACP)
 #include "vms_kif.h"    /* vms_kif_enq/deq -- the record $ENQ (vms-0dd)      */
-#include "rms_io.h"     /* rms_file_t + ->access_lkid, the record's parent   */
 #endif
 
 /* Forward declarations: sequential file operations */
@@ -535,6 +546,146 @@ static uint32_t rms_impl_find(void *rab_ptr)
 
 
 /* ============================================================
+ * Block I/O: $READ / $WRITE (vms-254)
+ *
+ * OpenVMS RMS Reference Manual, $READ and $WRITE: transfer whole virtual
+ * blocks of a file opened for block I/O (FAB$V_BIO or FAB$V_BRO in FAC), with
+ * no record interpretation. Inputs: RAB$L_BKT = starting VBN (0 = the block
+ * after the last one transferred on this stream), RAB$L_UBF/RAB$W_USZ for
+ * $READ, RAB$L_RBF/RAB$W_RSZ for $WRITE. Outputs: RAB$W_RSZ = bytes
+ * transferred (and RAB$L_RBF = RAB$L_UBF) for $READ; RAB$W_RFA = the starting
+ * VBN for both. FAC GET grants $READ, FAC PUT/UPD grants $WRITE.
+ *
+ * End of file: a $READ that starts at or beyond the end of file returns
+ * RMS$_EOF; one that runs into it transfers only the bytes up to the end of
+ * file (RSZ < USZ). A $WRITE that ends beyond the end of file moves the end of
+ * file to the end of the transfer -- byte-exact here (the ODS-2 FFB lands at
+ * RSZ mod 512 of the last block), which is what a byte-stream client (the C
+ * RTL's read()/write() on a stream file) needs to round-trip a file's length.
+ *
+ * The transfer runs through the file's rms_file_t: the ACP window
+ * (IO$_READVBLK / IO$_WRITEVBLK) when the executive is present, the
+ * executive-absent POSIX defer otherwise -- the same backend $GET/$PUT use.
+ * The stream's next-block context is rab->_current_offset (a block-aligned
+ * byte offset), which $CONNECT and $REWIND zero.
+ * ============================================================ */
+#define RMS_BIO_BLK 512u
+
+static void rms_bio_set_rfa(struct RAB *rab, uint32_t vbn)
+{
+    /* RFA0 (longword) = VBN, RFA4 (word) = 0: the block-I/O RFA. */
+    rab->rab$w_rfa.rfa$w_area   = (uint16_t)(vbn & 0xFFFFu);
+    rab->rab$w_rfa.rfa$w_page   = (uint16_t)(vbn >> 16);
+    rab->rab$w_rfa.rfa$w_offset = 0;
+}
+
+/* Common prologue: validate the RAB/FAB, check FAC, resolve the start VBN.
+ * Returns RMS$_NORMAL and *start_out = the transfer's byte offset, or an
+ * error status (also stored in rab$l_sts). */
+static uint32_t rms_bio_begin(struct RAB *rab, struct FAB **fab_out,
+                              int writing, uint64_t *start_out)
+{
+    if (!rab || rab->rab$b_bid != RAB$C_BID)
+        return RMS$_RAB;
+    struct FAB *fab = validate_rab(rab);
+    if (!fab)
+        return rab->rab$l_sts;
+
+    uint8_t need = writing ? (uint8_t)(FAB$M_PUT | FAB$M_UPD) : (uint8_t)FAB$M_GET;
+    if (!(fab->fab$b_fac & (FAB$M_BIO | FAB$M_BRO)) || !(fab->fab$b_fac & need)) {
+        rab->rab$l_sts = RMS$_FAC;
+        return RMS$_FAC;
+    }
+
+    uint64_t start;
+    if (rab->rab$l_bkt != 0)
+        start = (uint64_t)(rab->rab$l_bkt - 1u) * RMS_BIO_BLK;
+    else
+        start = rab->_current_offset < 0 ? 0 : (uint64_t)rab->_current_offset;
+
+    *fab_out = fab;
+    *start_out = start;
+    return RMS$_NORMAL;
+}
+
+static uint32_t rms_impl_read(void *rab_ptr)
+{
+    struct RAB *rab = (struct RAB *)rab_ptr;
+    struct FAB *fab = NULL;
+    uint64_t start = 0;
+    uint32_t st = rms_bio_begin(rab, &fab, 0, &start);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+
+    if (rab->rab$w_usz == 0 || !rab->rab$l_ubf) {
+        rab->rab$l_sts = RMS$_USZ;
+        return RMS$_USZ;
+    }
+
+    rms_file_t *f = fab->_rms_file;
+    off_t eof = rms_io_lseek(f, 0, SEEK_END);
+    if (eof < 0) {
+        rab->rab$l_sts = RMS$_RER;
+        return RMS$_RER;
+    }
+    rms_bio_set_rfa(rab, (uint32_t)(start / RMS_BIO_BLK) + 1u);
+    if (start >= (uint64_t)eof) {
+        rab->rab$w_rsz = 0;
+        rab->rab$l_sts = RMS$_EOF;
+        return RMS$_EOF;
+    }
+    if (rms_io_lseek(f, (off_t)start, SEEK_SET) < 0) {
+        rab->rab$l_sts = RMS$_RER;
+        return RMS$_RER;
+    }
+    ssize_t n = rms_io_read(f, rab->rab$l_ubf, rab->rab$w_usz);
+    if (n < 0) {
+        rab->rab$l_sts = RMS$_RER;
+        return RMS$_RER;
+    }
+    rab->rab$l_rbf = rab->rab$l_ubf;
+    rab->rab$w_rsz = (uint16_t)n;
+    rab->_current_offset =
+        (off_t)(start + (((uint64_t)n + RMS_BIO_BLK - 1u) / RMS_BIO_BLK) * RMS_BIO_BLK);
+    rab->rab$l_sts = RMS$_NORMAL;
+    return RMS$_NORMAL;
+}
+
+static uint32_t rms_impl_write(void *rab_ptr)
+{
+    struct RAB *rab = (struct RAB *)rab_ptr;
+    struct FAB *fab = NULL;
+    uint64_t start = 0;
+    uint32_t st = rms_bio_begin(rab, &fab, 1, &start);
+    if (!$VMS_STATUS_SUCCESS(st))
+        return st;
+
+    if (rab->rab$w_rsz != 0 && !rab->rab$l_rbf) {
+        rab->rab$l_sts = RMS$_RBF;
+        return RMS$_RBF;
+    }
+
+    rms_file_t *f = fab->_rms_file;
+    rms_bio_set_rfa(rab, (uint32_t)(start / RMS_BIO_BLK) + 1u);
+    if (rms_io_lseek(f, (off_t)start, SEEK_SET) < 0) {
+        rab->rab$l_sts = RMS$_WER;
+        return RMS$_WER;
+    }
+    if (rab->rab$w_rsz != 0) {
+        ssize_t n = rms_io_write(f, rab->rab$l_rbf, rab->rab$w_rsz);
+        if (n != (ssize_t)rab->rab$w_rsz) {
+            rab->rab$l_sts = RMS$_WER;
+            return RMS$_WER;
+        }
+    }
+    rab->_current_offset =
+        (off_t)(start + (((uint64_t)rab->rab$w_rsz + RMS_BIO_BLK - 1u) / RMS_BIO_BLK) * RMS_BIO_BLK);
+    rab->rab$l_sts = RMS$_NORMAL;
+    return RMS$_NORMAL;
+}
+
+
+/* ============================================================
  * Public RMS entry points: VMS three-argument form
  *   SYS$xxx cb ,[err] ,[suc]   (VSI OpenVMS RMS Reference, Part III)
  * Thin wrappers over the synchronous rms_impl_* bodies above that
@@ -563,4 +714,14 @@ uint32_t sys$delete(void *rab, void (*err)(void *), void (*suc)(void *))
 uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *))
 {
     return rms_complete(rms_impl_find(rab), rab, err, suc);
+}
+
+uint32_t sys$read(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_read(rab), rab, err, suc);
+}
+
+uint32_t sys$write(void *rab, void (*err)(void *), void (*suc)(void *))
+{
+    return rms_complete(rms_impl_write(rab), rab, err, suc);
 }

@@ -270,6 +270,14 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # 32-bit names (strtol -> decc$strtol), and an EXPLICIT pointer size is what
     # enables #pragma __pointer_size for the 64-bit locals it needs (the port
     # ignores the pragma when no -mpointer-size is given, as DEC C does).
+    # vms-fb4: DEC C vfork()/exec*() (subprocess creation through the IMGACT
+    # launcher); 64-bit, against the musl headers like ovmx_decc_crtl.c.
+    ALPHA_VFORK_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_vfork.o"
+    LIBVMS_INC_VF="$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -o "$ALPHA_VFORK_OBJ" \
+        "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
     ALPHA_P32_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_p32.o"
     "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=32 -g0 \
         -o "$ALPHA_P32_OBJ" "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_p32.c"
@@ -277,7 +285,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # Ground-truth the decc$ universals these two objects ACTUALLY define —
     # same enumeration as libc.a/libgcc.a above, never a hardcoded name list.
     ALPHA_BOOT_VEC=$(mktemp)
-    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" 2>/dev/null \
+    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" 2>/dev/null \
       | awk '
           $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
               t=$(NF-1); n=$NF;
@@ -438,6 +446,10 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     #     does NOT match it. Defined in musl-alpha libc.a
     #     (src/errno/__errno_location.c), resolved by the strict whole-archive
     #     link below.
+    # vms-fb4: the C RTL's setjmp under the name the DEC C vfork() expansion
+    # calls (decc$$vfork_setjmp, client <unistd.h>): it must run in the
+    # CALLER's frame so exec*() can return to the vfork() point a second time.
+    VEC="$VEC,decc\$\$vfork_setjmp/setjmp=PROCEDURE"
     VEC="$VEC,__init_libc=PROCEDURE,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE,___errno_location=PROCEDURE"
 
     # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names
@@ -511,7 +523,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" ${ALPHA_VENEER_OBJ:-}
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
     [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"

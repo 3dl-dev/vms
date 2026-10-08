@@ -14,7 +14,13 @@
 # a logical link), so the message codes/layouts are OVMX-assigned from the public
 # DNA CTERM functional description and proven only by round-trip. See
 # docs/decnet-provenance-register.md sec 4.7.
-add_library(vmsdecnet_cterm STATIC dnet_cterm.c)
+#
+# dnet_cterm_hostfsm (rd vms-a70 direction B): the CTERM HOST role as a VMS host
+# speaks it -- Bind Request first, the Initiate/Characteristics negotiation,
+# Writes, prompt-carrying Start Reads, Read Data, Unbind. Decoded field by field
+# from AA-DY88A-TK / AA-DY89A-TK and pinned to two real-VAX-host captures
+# (tests/vmsdecnet/test_dnet_cterm_host.c). Equally pure: NETACP runs it.
+add_library(vmsdecnet_cterm STATIC dnet_cterm.c dnet_cterm_hostfsm.c)
 target_include_directories(vmsdecnet_cterm PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

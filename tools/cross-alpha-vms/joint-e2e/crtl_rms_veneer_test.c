@@ -6,7 +6,7 @@
  * sys$create/RMS, which resolves a device+directory. A bare name (crtl_rms_test.c
  * default) has no default device/dir in the RUN-context process, so RMS/Files-11
  * cannot resolve it (the resolution path returns no device -> a downstream NULL).
- * The host-arch proof (tests/qemu/test_syssvc_crtl_rms_veneer.c) likewise writes
+ * The retired host-arch veneer proof likewise wrote
  * a qualified VDA0:[OVMXDIR]VENEER.DAT; this is the faithful shape (the proof
  * asserts the veneer WRITE lands on the real ODS-2 volume, not default-directory
  * resolution). VDA0:[SYSTMP] is the volume's scratch directory (FID (64,1,0),

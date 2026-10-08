@@ -89,17 +89,17 @@ executive to sentinel 5 (`$STATUS = C$_EXIT1 + (5-1)*8 = 0x0035A029`). Leaving
 `JOINT_EXTRA` empty builds the N=3 (`joint_main.c`) and N=7 (`crtl_rms_test.c`)
 gates byte-identically to before.
 
-## CRTL->RMS stdio veneer variant (vms-2655, rung 3) — `JOINT_CRTL_RMS_VENEER`
+## RMS-backed DECC$SHR variant (vms-2655) — `JOINT_CRTL_RMS_VENEER`
 
-`JOINT_CRTL_RMS_VENEER=1` opts the port image's DECC$SHR into rung 2's
-CRTL->RMS stdio veneer (`tools/cross-alpha-vms/decc-veneer/build-decc-veneer.sh`'s
-two-pass bootstrap, composed into this recipe): pass 1 builds a bootstrap
-DECC$SHR to build the OVMX producer graph through `LIBVMSRMS$SHR`; pass 2
-rebuilds DECC$SHR with `ALPHA_CRTL_RMS_USE=<pass-1 LIBVMSRMS$SHR>`, so
-`decc$fopen/fwrite/fread/fclose` alias to the `crtl_rms_stdio.c` veneer
-(`ovmx_crtl_*`, real `sys$create/open/connect/put/get/close` against RMS)
+`JOINT_CRTL_RMS_VENEER=1` builds the port image's DECC$SHR in two passes: pass 1
+builds a bootstrap DECC$SHR to build the OVMX producer graph through
+`LIBVMSRMS$SHR`; pass 2 rebuilds DECC$SHR with `ALPHA_CRTL_RMS_USE=<pass-1
+LIBVMSRMS$SHR>`, carrying the C RTL file layer over RMS (`src/vmsrms/crtl_rms_fd.c`,
+vms-b90; the name is historical -- the FIX-record veneer it first selected was
+retired in vms-9f8e/vms-cbd), so the C RTL's file system calls reach real
+`sys$open/create/read/write/...` against RMS
 instead of musl's own POSIX defs. The final link adds `--use LIBVMSRMS$SHR`
-(the veneer's own cross-image `sys$*` imports need a producer here too), and
+(the layer's cross-image `sys$*` imports need a producer here too), and
 `LIBVMSRMS$SHR.EXE` is staged into OUTDIR alongside `DECC$SHR.EXE`/
 `LIBOTS_SHR.EXE`:
 

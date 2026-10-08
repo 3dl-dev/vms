@@ -210,7 +210,7 @@ vms-050c forbids.
 | `test_syssvc_creprc_inherit` | N `register-subprocess-identity-self-declared` | `kernel/vms_module.c` (`VMS_IOCTL_REGISTER_SUBPROCESS`, `:1954`) | `A: the subprocess INHERITED the creator's user name (SYSTEM) -- a readback, not a self-declaration` |
 | `test_syssvc_libspawn_reg` | N `libspawn-prcnam-dropped` | `libvms/syssvc/sys_process.c` | `the lib$spawn'd subprocess is EXECUTIVE-REGISTERED (resolvable BY prcnam)` |
 | `test_syssvc_spawn_pipeline` | **E** `setexit-status-not-recorded` (widen) | as above | `the failing stage's actual $STATUS (SS$_ABORT) is surfaced` |
-| `test_syssvc_crtl_rms_veneer` | N `crtl-fwrite-bypasses-rms` | `vmsrms/crtl_rms_stdio.c` | `2a: sys$search VENEER.DAT;* finds exactly the veneer-written file (independent ACP reader -- ramfs cannot produce this)` |
+| `test_syssvc_crtl_rms_veneer` | retired (vms-cbd, Baron 2026-10-08): the veneer and this suite were deleted once no DECC$SHR linked it | -- | -- |
 | `test_syssvc_rms_filelock` | N `rms-open-no-file-access-enq` | `vmsrms/rms_core.c` | `open#1 holds a real file-access lkid` |
 | `test_syssvc_rms_reclock` | N `rms-record-lock-not-enqueued` | `vmsrms/rms_core.c` (record arm) | `rab1 stashed a real record lkid` (+ `knock_on` `rab2 stashed NO lock on the RMS$_RLK conflict`) |
 | `test_syssvc_rms_workload` | N `rms-create-supersedes-version` | `vmsrms/rms_core.c` (`sys$create` versioning) | `A4: sys$open WKOBJ.OBJ;1 still reads the ;1 payload 'V1' -- both versions COEXIST (the VMS-versioning teeth a POSIX overwrite cannot fake)` |

@@ -68,7 +68,7 @@
  * OVMX-LOCAL: sys$extend -- validates the caller's own FAB before the request.
  * OVMX-PARTIAL: sys$rename (vms-de7) -- exec: ONE IO$_MODIFY!IO$M_MOVE atomically
  *     re-links the directory entry to the new name, keeping the same File ID
- *     (not erase+create), proof=tests/qemu/test_syssvc_crtl_rms_veneer.c.
+ *     (not erase+create), proof=the alpha crtl-fd/crtl-rms-fileop gates.
  * OVMX-LOCAL: sys$rename -- resolves the old/new filespecs and validates both
  *     FABs in this process; the executive-absent path defers to rename(2) (vms-5f0).
  * OVMX-PARTIAL: sys$connect (vms-407) -- exec: $DEQs the RAB's
@@ -2252,8 +2252,9 @@ static uint32_t rms_idx_author_p3(struct FAB *fab, rms_file_t *h, p3_ctx_t **out
  * the maximum record size; FAT$W_RSIZE is the longest record, which for a FIX
  * file is its record size and otherwise grows as records are written ($CLOSE,
  * rms_close_record_lrl). Returns 0 -- leave the ACP's kind preset -- for a FIX
- * file with no record size: VMS refuses that $CREATE, but OVMX's byte-exact C
- * RTL veneer (crtl_rms_stdio.c) relies on it, so its header keeps the preset
+ * file with no record size: VMS refuses that $CREATE; OVMX accepted it for the
+ * byte-exact FIX-record C RTL veneer, retired in vms-cbd, and still does (whether
+ * to refuse it as VMS does is tracked separately), so its header keeps the preset
  * 512-byte record the reader then frames by.
  */
 static int rms_fat_from_fab(const struct FAB *fab, uint8_t ra[32])

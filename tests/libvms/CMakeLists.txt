@@ -532,7 +532,7 @@ add_test(NAME test_libvms_conformance_constants
 # DERIVED from the documented VMS field order under the LP64 C-ABI (not read back
 # from the header), plus public-prefix stability and the LP64-divergence tripwire.
 # It is NOT a real-VMS binary-compat audit (there is no binary boundary: producer
-# crtl_rms_stdio.c and consumer sys$create are both OVMX code from these headers;
+# the C RTL file layer and consumer sys$create are both OVMX code from these headers;
 # LP64 8-byte pointers are deliberate). It is a regression lock protecting the
 # exact structs vms-801.6's RTL (CLI$/LIB$TPARSE/SYS$FILESCAN) will build on.
 # Pure header test -- needs the libvms and vmsrms include dirs (rms/fab.h etc.),

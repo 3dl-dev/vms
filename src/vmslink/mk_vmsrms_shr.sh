@@ -136,7 +136,7 @@ LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live
 # Delegates the alpha mechanics (cross-compile with the port cc1, enumerate the
 # symbol vector from LINK.EXE's own view, link the EVAX shareable) to the shared
 # mk_alpha_shr.sh helper — the OVMX-C analogue of mk_decc_shr.sh's ALPHA branch.
-# The alpha LIST adds crtl_rms_stdio (the CRTL->RMS stdio veneer, #1010) so the
+# The alpha LIST adds crtl_rms_stdio (the CRTL->RMS stdio veneer, #1010) and crtl_features (the DEC C feature table it reads, vms-db7) so the
 # port image's file ops route onto the executive ACP; and adds --use LIBOTS$SHR
 # (the port compiler lowers RMS integer divides to OTS$DIV_*/OTS$REM_*). Env:
 # ALPHA_CC, ALPHA_MUSL_SRC (see mk_alpha_shr.sh), ALPHA_OTS_USE=<LIBOTS_SHR.EXE>.
@@ -145,7 +145,7 @@ if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
     # vms-692: the VMS-ABI RMS entry points (SYS$PARSE/SYS$SEARCH over the
     # VMS-layout FAB/NAM, src/vmsrms/rms_vmsabi.c) and their engine half; the
     # 32-bit address fields need the port compiler, so Alpha only.
-    ALPHA_LIST="$LIST crtl_rms_stdio rms_vmsabi_core rms_vmsabi"
+    ALPHA_LIST="$LIST crtl_rms_stdio crtl_features rms_vmsabi_core rms_vmsabi"
     ALPHA_INCS="$INCS" ALPHA_DEFS="$DEFS" \
         exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" "$ALPHA_LIST" \
             --use "$DECC_SHR" --use "$VMS_SHR" --use "$FS_SHR" --use "$SYS_SHR" --use "$ALPHA_OTS_USE"

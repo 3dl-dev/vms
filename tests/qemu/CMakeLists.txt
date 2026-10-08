@@ -207,6 +207,13 @@ if(TARGET test_syssvc_crtl_rms_veneer)
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
 endif()
 
+# test_syssvc_crtl_features (vms-db7): the DEC C feature table (crtl_features.c) plus the veneer that reads it.
+if(TARGET test_syssvc_crtl_features)
+    target_sources(test_syssvc_crtl_features PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c)
+endif()
+
 # test_syssvc_crtl_rms_bigwrite (vms-126): the veneer-completeness proof (large
 # >64 KiB chunked writes + FAB$M_TMD delete-on-close temps). Same reusable veneer
 # TU as the base veneer proof; its strong sys$create/$search references pull the

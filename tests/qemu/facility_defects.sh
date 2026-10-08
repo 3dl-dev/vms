@@ -571,6 +571,9 @@ acp-dir-exsz-ignored
 acp-fat-versions-not-applied
 libcreatedir-protection-ignored
 net-assign-netmbx-check-removed
+crtl-feature-unknown-accepted
+crtl-feature-set-ignored
+crtl-feature-file-sharing-ignored
 crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
@@ -1184,6 +1187,65 @@ EOF
         why)          echo "vms_ioctl_assign() refuses a channel to NET: (the DECnet device face) with SS\$_NOPRIV unless the caller's enabled mask holds NETMBX. The mutation ANDs the privilege test with 0, so any process may assign the network device. The device lookup that precedes it is untouched, so a system with no NIC still answers SS\$_NOSUCHDEV. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 $ASSIGN _NET: without NETMBX is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    crtl-feature-unknown-accepted)
+        case "$_f" in
+        facility)     echo "DEC C feature lookup refuses a name the table does not carry";;
+        targets)      echo "vmsrms/crtl_features.c";;
+        suites_red)   echo "test_syssvc_crtl_features";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "decc\$feature_get_index matches a name against the table with strcmp. The mutation drops the comparison, so any name is accepted and answers the first feature -- the accept-and-ignore the honest rule forbids. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unknown feature name is -1/EINVAL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a real DEC C feature OVMX does not implement is -1/EINVAL (never accepted and ignored)
+EOF
+                      ;;
+        knock_on_why)  echo "the same single mutation also changes what the dependent assertion reads.";;
+        esac;;
+
+    crtl-feature-set-ignored)
+        case "$_f" in
+        facility)     echo "DEC C decc\$feature_set_value stores the value";;
+        targets)      echo "vmsrms/crtl_features.c";;
+        suites_red)   echo "test_syssvc_crtl_features";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "decc\$feature_set_value stores a current value with 'f->cur = value;'. The mutation turns the store into a self-assignment, so the set is accepted and lost. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+get_value reads back what set_value stored, default untouched
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with DECC$FILE_SHARING on a second open for write succeeds
+EOF
+                      ;;
+        knock_on_why)  echo "the same single mutation also changes what the dependent assertion reads.";;
+        esac;;
+
+    crtl-feature-file-sharing-ignored)
+        case "$_f" in
+        facility)     echo "DECC\$FILE_SHARING changes how the veneer opens a file";;
+        targets)      echo "vmsrms/crtl_rms_stdio.c";;
+        suites_red)   echo "test_syssvc_crtl_features";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The veneer opens its FAB with SHRGET|SHRPUT when the current DECC\$FILE_SHARING value is 1. The mutation makes that test unreachable ('0 &&') in both open helpers, so the feature is stored and read back but changes nothing -- exactly what the honest rule forbids. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+with DECC$FILE_SHARING on a second open for write succeeds
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7058,6 +7120,12 @@ apply_edit() {
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)
         sed -i 's|^        !(proc->cur_privs \& VMS_PRV_M_NETMBX)) {$|        !(proc->cur_privs \& VMS_PRV_M_NETMBX) \&\& 0) { /* NEGCTL net-assign-netmbx-check-removed */|' "$_file";;
+    crtl-feature-unknown-accepted)
+        sed -i 's|^        if (features\[i\].name \&\& strcmp(features\[i\].name, name) == 0)$|        if (features[i].name) /* NEGCTL crtl-feature-unknown-accepted */|' "$_file";;
+    crtl-feature-set-ignored)
+        sed -i 's|^        f->cur = value;$|        f->cur = f->cur; /* NEGCTL crtl-feature-set-ignored */|' "$_file";;
+    crtl-feature-file-sharing-ignored)
+        sed -i 's|^    if (crtl_file_sharing())$|    if (0 \&\& crtl_file_sharing()) /* NEGCTL crtl-feature-file-sharing-ignored */|' "$_file";;
     clrast-no-delivery)
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)

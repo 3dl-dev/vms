@@ -67,6 +67,15 @@
 #include "rms_io.h"                 /* the open file's File ID (vms-692 adds NAM$W_FID) */
 #include "kstat.h"                  /* musl-arch: the fstat system-call buffer */
 
+/* DECC$FILE_SHARING (crtl_features.c, vms-db7): 1 = share the file with other accessors.
+ * WEAK: an image without the feature table has no such feature. */
+extern int ovmx_crtl_feature_current(int index) __attribute__((__weak__));
+#define OVMX_FD_FEAT_FILE_SHARING 1
+static int fd_file_sharing(void)
+{
+    return ovmx_crtl_feature_current && ovmx_crtl_feature_current(OVMX_FD_FEAT_FILE_SHARING) != 0;
+}
+
 #ifndef AT_FDCWD
 #define AT_FDCWD (-100)
 #endif
@@ -641,6 +650,8 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
         rf->fab.fab$b_fac = (uint8_t)(FAB$M_GET | FAB$M_BRO |
                                       (writing ? FAB$M_PUT | FAB$M_UPD : 0));
         rf->fab.fab$b_shr = writing ? 0 : FAB$M_SHRGET;
+        if (fd_file_sharing())
+            rf->fab.fab$b_shr = FAB$M_SHRGET | FAB$M_SHRPUT;
         st = sys$open(&rf->fab, 0, 0);
         TR("crtlfd: $open", st);
         if ((st & 1) && (flags & O_CREAT) && (flags & O_EXCL)) {
@@ -674,6 +685,8 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
         rf->fab.fab$b_rfm = FAB$C_STMLF;
         rf->fab.fab$b_rat = FAB$M_CR;
         rf->fab.fab$b_fac = FAB$M_GET | FAB$M_PUT | FAB$M_BIO;
+        if (fd_file_sharing())
+            rf->fab.fab$b_shr = FAB$M_SHRGET | FAB$M_SHRPUT;
         st = sys$create(&rf->fab, 0, 0);
         TR("crtlfd: $create", st);
         if (!(st & 1)) {

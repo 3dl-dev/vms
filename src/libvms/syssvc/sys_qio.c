@@ -40,7 +40,6 @@
 #include <signal.h>
 #include <time.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 #include "ovmx_async.h"
 #include "starlet.h"
 #include "efndef.h"
@@ -78,12 +77,15 @@ static int uring_available(void) {
  * Performs read/write and fills the IOSB directly.
  */
 
-/* the null device NLA0: is /dev/null underneath (character major 1, minor 3) */
+/* the null device NLA0: is /dev/null underneath. Compare device numbers with
+ * the substrate's own /dev/null rather than hard-coding Linux's 1:3 (NetBSD
+ * numbers it differently). */
 static int qio_is_null_device(int fd)
 {
-    struct stat sb;
+    struct stat sb, nb;
     return fstat(fd, &sb) == 0 && S_ISCHR(sb.st_mode) &&
-           major(sb.st_rdev) == 1 && minor(sb.st_rdev) == 3;
+           stat("/dev/null", &nb) == 0 && S_ISCHR(nb.st_mode) &&
+           sb.st_rdev == nb.st_rdev;
 }
 
 /*
@@ -942,8 +944,8 @@ static int qio_completes_at_once(int fd)
         return 0;
     if (S_ISREG(sb.st_mode) || S_ISBLK(sb.st_mode))
         return 1;
-    /* character major 1 = mem devices: /dev/null, /dev/zero, ... */
-    return S_ISCHR(sb.st_mode) && major(sb.st_rdev) == 1;
+    /* the null device completes at once (it never blocks) */
+    return qio_is_null_device(fd);
 }
 
 uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,

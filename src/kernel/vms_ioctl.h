@@ -313,12 +313,16 @@ struct vms_mode_args {
  * for a privilege VMS does not substitute them for (SET UIC, SET PROCESS/PRIORITY, SET TIME)
  * name the privilege VMS names, so widening this mask grants nothing there.
  *
+ * NETMBX is enforced: vms_ioctl_assign() refuses a channel to the DECnet device NET:
+ * without it (test_syssvc_privilege_enforce, net-assign-netmbx-check-removed).
+ *
  * TMPMBX and PRMMBX are enforced: vms_mbx.c mbx_priv_check() refuses $CREMBX (temporary /
  * permanent) with SS$_NOPRIV without them, proved by test_syssvc_privilege_enforce and
  * anchored by the mbx-tmpmbx-check-removed / mbx-prmmbx-check-removed negative controls.
  */
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
+                             VMS_PRV_M_NETMBX | \
                              VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL)
 
 struct vms_priv_args {

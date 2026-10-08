@@ -315,12 +315,35 @@ static struct dsc$descriptor_s spawn_dsc(const char *s)
  * O_CREAT|O_EXCL (retrying on a name clash), using only exported universals --
  * the same collision-safe guarantee mkstemp gave, with no unexported symbol.
  */
+/*
+ * The scratch file is a substrate mechanism (a literal path $CREPRC opens), not
+ * a C RTL file: it lives under /run, the kernel namespace the C RTL file layer
+ * over RMS leaves alone (src/vmsrms/crtl_rms_fd.c kernel_path), so an image with
+ * that layer on still hands its subprocess a file the kernel can open. /tmp is
+ * the fallback where /run/ovmx-spawn cannot be made (a host test process).
+ */
+static const char *spawn_scratch_dir(void)
+{
+    static const char *dir = NULL;
+    struct stat sd;
+
+    if (dir)
+        return dir;
+    if ((mkdir("/run/ovmx-spawn", 01777) == 0 || errno == EEXIST) &&
+        stat("/run/ovmx-spawn", &sd) == 0 && S_ISDIR(sd.st_mode) &&
+        access("/run/ovmx-spawn", W_OK) == 0)
+        dir = "/run/ovmx-spawn";
+    else
+        dir = "/tmp";
+    return dir;
+}
+
 static int spawn_open_scratch(char *buf, size_t bufsz)
 {
     static unsigned seq = 0;
     for (int tries = 0; tries < 4096; tries++) {
-        snprintf(buf, bufsz, "/tmp/ovmx_spawn_cmd_%d_%u",
-                 (int)getpid(), seq++);
+        snprintf(buf, bufsz, "%s/ovmx_spawn_cmd_%d_%u",
+                 spawn_scratch_dir(), (int)getpid(), seq++);
         int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
         if (fd >= 0)
             return fd;

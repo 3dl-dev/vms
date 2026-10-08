@@ -1766,6 +1766,89 @@ out:
 }
 
 /*
+ * vms_ioctl_rights - the process rights list (rd vms-7d5a): $GRANTID / $REVOKID
+ * add / remove an identifier, LIST reads it. GRANT and REVOKE need CMKRNL, as on
+ * OpenVMS ($GRANTID with every privilege disabled is SS$_NOPRIV, the V7.3 / V8.4
+ * probe docs/oracle/semantics/rights); the target is the caller (pid 0 or its own)
+ * or another process by VMS pid. GRANT: SS$_WASCLR if the identifier was not held
+ * (added), SS$_WASSET if it was (attributes replaced); REVOKE the reverse. A full
+ * list refuses a new identifier with SS$_INSFMEM rather than dropping one.
+ */
+long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_rights_args args;
+    struct vms_proc *t;
+    uint32_t i;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    if (args.op != VMS_RIGHTS_OP_GRANT && args.op != VMS_RIGHTS_OP_REVOKE &&
+        args.op != VMS_RIGHTS_OP_LIST) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    if (args.op != VMS_RIGHTS_OP_LIST && !(proc->cur_privs & VMS_PRV_M_CMKRNL)) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    t = (args.pid == 0 || args.pid == proc->vms_pid) ? proc : find_by_vms_pid(args.pid);
+    if (!t) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+    for (i = 0; i < t->rights_n && i < VMS_RIGHTS_MAX; i++)
+        if (t->rights_id[i] == args.id)
+            break;
+    switch (args.op) {
+    case VMS_RIGHTS_OP_GRANT:
+        if (i < t->rights_n) {
+            uint32_t old = t->rights_attr[i];
+            t->rights_attr[i] = args.attrib;
+            args.attrib = old;
+            args.status = SS__WASSET;
+        } else if (t->rights_n >= VMS_RIGHTS_MAX) {
+            args.status = SS__INSFMEM;
+        } else {
+            t->rights_id[t->rights_n] = args.id;
+            t->rights_attr[t->rights_n] = args.attrib;
+            t->rights_n++;
+            args.attrib = 0;
+            args.status = SS__WASCLR;
+        }
+        break;
+    case VMS_RIGHTS_OP_REVOKE:
+        if (i < t->rights_n) {
+            args.attrib = t->rights_attr[i];
+            for (; i + 1 < t->rights_n; i++) {
+                t->rights_id[i] = t->rights_id[i + 1];
+                t->rights_attr[i] = t->rights_attr[i + 1];
+            }
+            t->rights_n--;
+            args.status = SS__WASSET;
+        } else {
+            args.status = SS__WASCLR;
+        }
+        break;
+    default:
+        args.count = t->rights_n;
+        for (i = 0; i < t->rights_n && i < VMS_RIGHTS_MAX; i++) {
+            args.ids[i] = t->rights_id[i];
+            args.attrs[i] = t->rights_attr[i];
+        }
+        args.status = SS__NORMAL;
+        break;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_getcli - read the caller's OWN CLI invocation context. This is
  * the source behind IMGACT's imgact_query_cli_context() (cliflag) and
  * imgact_cli_get_command_line() (the command line): an image asks the

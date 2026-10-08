@@ -957,7 +957,23 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 	int rc;
 
 	*out = NULL;
-	rc = sock_create_kern(&init_net, AF_PACKET, SOCK_RAW, htons(ethertype), &sock);
+	/* rd vms-b72: the socket is the EXECUTIVE's, opened after its own PHY_IO
+	 * gate, so it is created with the kernel's credentials. AF_PACKET's
+	 * create checks CAP_NET_RAW against the CURRENT task's credentials even
+	 * for sock_create_kern, so under the calling process's own (non-root)
+	 * Linux identity every interactive open was refused EPERM; only a NETACP
+	 * started by root at boot got through. Override for the create only. */
+	{
+		struct cred *kcred = prepare_kernel_cred(&init_task);
+		const struct cred *old;
+
+		if (!kcred)
+			return -ENOMEM;
+		old = override_creds(kcred);
+		rc = sock_create_kern(&init_net, AF_PACKET, SOCK_RAW, htons(ethertype), &sock);
+		revert_creds(old);
+		put_cred(kcred);
+	}
 	if (rc)
 		return rc;
 

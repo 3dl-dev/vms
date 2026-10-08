@@ -5671,6 +5671,10 @@ int main(int argc, char **argv)
                     "DECNETD-E-NOSOCKET, executive datalink open on '%s'"
                     " (ethertype 0x%04x) failed: %s (status %%X%08X)\n",
                     ifname, (unsigned)DNET_ETHERTYPE, why, (unsigned)vst);
+            if (scs_datalink_last_stv())
+                fprintf(stderr, "-DECNETD-I-HOSTERR, the executive's datalink"
+                        " backend returned host errno %u\n",
+                        (unsigned)scs_datalink_last_stv());
             /* Say WHOSE privileges the executive judged: this process's own
              * executive row (pid, user, current privilege mask, PHY_IO bit),
              * read back from the executive -- so a refusal is diagnosable

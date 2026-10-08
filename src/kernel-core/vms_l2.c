@@ -160,6 +160,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
         return -EFAULT;
+    args.stv = 0;
 
     if (!l2_priv_check(proc->cur_privs, &args.status))
         goto out;
@@ -191,7 +192,9 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
 
     rc = exec_l2_open(args.ifname, args.ethertype, &ifindex, &sock);
     if (rc) {
+        /* rd vms-b72: the host errno behind it is the STV. */
         args.status = (rc == -ENODEV) ? SS__NOSUCHDEV : SS__ABORT;
+        args.stv = (uint16_t)(rc < 0 ? -rc : rc);
         goto out;
     }
 

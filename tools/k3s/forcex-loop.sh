@@ -27,6 +27,7 @@ for i in $(seq 1 "$N"); do
   out=$(docker run --rm --device /dev/kvm -e KE_WALL_TIMEOUT=900 -e OVMX_CORPUS_RT=1 -e OVMX_CORPUS_SKIP="$SKIP" ovmx-ktest:latest 2>&1 | tr -d '\r')
   line=$(printf '%s\n' "$out" | grep "^CORPUS-RT $PROG rc=")
   echo "run $i: ${line:-NO-VERDICT}"
+  [ "$i" -le 2 ] && printf '%s\n' "$out" | grep "CORPUS-RT-LOG $PROG" | head -80
   case "$line" in *"rc=0 "*) pass=$((pass+1));; *) fail=$((fail+1)); printf '%s\n' "$out" | grep -n "CORPUS-RT-LOG $PROG\|vms: .*$PROG" | head -200; printf '%s\n' "$out" > "/tmp/forcex-fail-$i.log";; esac
 done
 echo "RESULT $PROG: pass=$pass fail=$fail of $N"

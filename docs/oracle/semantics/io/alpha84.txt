@@ -1,0 +1,48 @@
+# provenance: OpenVMS Alpha V8.4 (AXPbox ES40), ovmx-lab pod semalpha-1 node ALPHA1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/io.py sha256=9437fb7f90b25e974eff00cf05f7ef7b966574c212f6c6ee88adfffa218ab3ab
+=== SEMPROBE io BEGIN ===
+IO.ASSIGN.NL st=00000001
+IO.NL.WRITE st=00000001 iosb=1 count=0
+IO.NL.READ st=00000001 iosb=2160 count=0 buf=5A5A
+IO.NL.WRITEOF st=00000001 iosb=1 count=0
+IO.NL.ILLFUNC st=000000F4 iosb=0 count=0
+IO.NL.SENSEMODE st=000000F4 iosb=0 count=0
+IO.NL.WRITE.ZERO st=00000001 iosb=1 count=0
+IO.BADCHAN st=00002224 iosb=42405 count=42405
+IO.CHAN0 st=0000013C iosb=42405 count=42405
+IO.QIO.EFN0 st=00000001
+IO.QIO.EFN0.WAIT st=00000001
+IO.QIO.EFN0.DONE st=00000009 iosb=1 count=0 asts=1 astprm=00007700
+IO.QIO.EFN5 st=00000001
+IO.QIO.EFN5.WAIT st=00000001
+IO.QIO.EFN5.DONE st=00000009 iosb=1 count=0 asts=1 astprm=00007705
+IO.QIO.EFN255 st=000000EC
+IO.QIO.EFN64.UNASSOC st=00000234
+IO.QIOW.EFN128 st=00000001 iosb=1 count=0
+IO.DASSGN.NL st=00000001
+IO.AFTER_DASSGN st=0000013C iosb=42405 count=42405
+IO.CREMBX st=00000001
+IO.ASSIGN.MBX.BYNAME st=00000001
+IO.MBX.READ.EMPTY.NOW st=00000001 iosb=2160 count=0
+IO.MBX.WRITE.NOW st=00000001 iosb=1 count=14
+IO.MBX.READ st=00000001 iosb=1 count=14 sender=self=1 data="HELLO, MAILBOX"
+IO.MBX.WRITE.TOOBIG st=0000019C iosb=0 count=0
+IO.MBX.WRITE.MAX st=00000001 iosb=1 count=40
+IO.MBX.READ.SHORT st=00000001 iosb=1537 count=10 data="BBBBBBBBBB"
+IO.MBX.READ.AFTER_SHORT st=00000001 iosb=2160 count=0
+IO.MBX.WRITEOF st=00000001 iosb=1 count=0
+IO.MBX.READ.EOF st=00000001 iosb=2160 count=0
+IO.MBX.WRITE.ZERO st=00000001 iosb=1 count=0
+IO.MBX.READ.ZERO st=00000001 iosb=1 count=0
+IO.MBX.READ.PEND st=00000001 iosb=0
+IO.CANCEL st=00000001
+IO.CANCEL.WAIT st=00000001
+IO.CANCEL.DONE iosb=44 count=0 asts=1 astprm=00006666
+IO.CANCEL.BADCHAN st=00002224
+IO.DASSGN.MBX2 st=00000001
+IO.DELMBX st=00000001
+IO.DASSGN.MBX st=00000001
+IO.ASSIGN.MBX.GONE st=00000144
+=== SEMPROBE io END ===

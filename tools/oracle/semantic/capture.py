@@ -133,6 +133,9 @@ class Lab:
             subprocess.run(["kubectl", "-n", "ovmx-lab", "cp", a, "%s:%s" % (self.pod, b)], check=True)
         os.unlink(src); os.unlink(pusher)
         n = len(text.splitlines())
+        # a typist left running by an interrupted earlier capture would
+        # interleave its lines with these ('[s]' keeps pkill off its own shell)
+        self.kx("pkill -f '[s]p_push.py'; true")
         off = self.size()
         r = subprocess.run(["kubectl", "-n", "ovmx-lab", "exec", self.pod, "--", "python3", "/tmp/sp_push.py",
                             self.fifo, self.log, "/tmp/sp_src.txt", spec, "cr" if self.arch == "vax" else "lf"],

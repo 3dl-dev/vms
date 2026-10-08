@@ -207,6 +207,14 @@ jobs:
           docker run --rm -v "${{ github.workspace }}/tools/cross-alpha-vms/test":/t:ro \
             ovmx-cross-alpha-vms:latest bash /t/run_p32_eh_encoding.sh
 
+      # vms-e839 (patches/0010): a stack procedure's locals stay below the
+      # argument-home area OTS$HOME_ARGS fills (unpatched, -O0 varargs code
+      # read its second named argument back as the argument count).
+      - name: Port compiler -- VMS frame locals do not overlap the argument-home area (vms-e839)
+        run: |
+          docker run --rm -v "${{ github.workspace }}/tools/cross-alpha-vms/test":/t:ro \
+            ovmx-cross-alpha-vms:latest bash /t/run_vms_frame_layout.sh
+
       # vms-fd1 (patches/0008): GCC's VMS-host xm-vms.h DELETE_IF_ORDINARY uses
       # the GCC 14 driver's error ("%s: %m") (unpatched: perror_with_name).
       - name: Port compiler -- VMS-host xm-vms.h builds against the GCC 14 driver (vms-fd1)

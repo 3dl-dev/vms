@@ -1871,6 +1871,80 @@ static void save_metadata(struct FAB *fab)
  * On success: fab$l_sts = RMS$_NORMAL, returns RMS$_NORMAL
  * On failure: fab$l_sts set to appropriate error code.
  */
+
+#if defined(OVMX_HAVE_ACP)
+/*
+ * rms_nam_fill - what VMS $OPEN and $CREATE leave in an attached NAM block
+ * (rd vms-98e): the RESULTANT string "DEV:[DIR]NAME.TYP;VER" -- the file
+ * actually opened or created, with its real version -- in nam$l_rsa /
+ * nam$b_rsl, the EXPANDED string (the spec as RMS resolved it, version as
+ * asked: ";" when none) in nam$l_esa / nam$b_esl. Built
+ * from the ODS-2 candidate the ACP resolved and the version it reported --
+ * the same composition $SEARCH uses (rms_search.c). Buffers are bounded by
+ * the caller's nam$b_rss / nam$b_ess; a short buffer truncates, as on VMS.
+ */
+static void rms_nam_fill(struct FAB *fab, const struct rms_acp_spec *s,
+                         uint16_t version, const rms_file_t *h)
+{
+    struct NAM *nam = (struct NAM *)fab->fab$l_nam;
+    char buf[512];
+    int n;
+
+    if (!nam || nam->nam$b_bid != NAM$C_BID || !s)
+        return;
+    if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
+        n = snprintf(buf, sizeof(buf), "%s[%s]%s;%u", s->devnam,
+                     s->dirpath[0] ? s->dirpath : "000000", s->name,
+                     (unsigned)version);
+        if (n < 0) n = 0;
+        size_t l = strlen(buf);
+        if (l > nam->nam$b_rss) l = nam->nam$b_rss;
+        memcpy(nam->nam$l_rsa, buf, l);
+        nam->nam$b_rsl = (uint8_t)l;
+    }
+    if (nam->nam$l_esa && nam->nam$b_ess > 0) {
+        if (s->version)
+            n = snprintf(buf, sizeof(buf), "%s[%s]%s;%u", s->devnam,
+                         s->dirpath[0] ? s->dirpath : "000000", s->name,
+                         (unsigned)s->version);
+        else
+            n = snprintf(buf, sizeof(buf), "%s[%s]%s;", s->devnam,
+                         s->dirpath[0] ? s->dirpath : "000000", s->name);
+        if (n < 0) n = 0;
+        size_t l = strlen(buf);
+        if (l > nam->nam$b_ess) l = nam->nam$b_ess;
+        memcpy(nam->nam$l_esa, buf, l);
+        nam->nam$b_esl = (uint8_t)l;
+    }
+    (void)h;    /* OVMX's NAM carries no nam$w_fid field yet */
+}
+
+/*
+ * rms_fab_from_header - $OPEN fills the FAB's record format, attributes and
+ * maximum record size from the file header (rd vms-158; System Services /
+ * RMS Reference, $OPEN "output fields"). $GET frames records by fab$b_rfm,
+ * so a file opened with a default FAB must be read in ITS format -- a VAR
+ * file read as stream came back as one record of raw length-prefixed bytes.
+ * A header with no defined format (rtype 0, UDF) leaves the caller's values.
+ */
+static void rms_fab_from_header(struct FAB *fab, const rms_file_t *h)
+{
+    /* Sequential files only: relative/indexed opens bind their own on-disk
+     * structure (cell size, Prolog-3) from the caller's FAB today. */
+    if (!h || fab->fab$b_org != FAB$C_SEQ ||
+        h->fhc_rfm < FAB$C_FIX || h->fhc_rfm > FAB$C_STMCR)
+        return;
+    fab->fab$b_rfm = h->fhc_rfm;
+    fab->fab$b_rat = h->fhc_rat;
+    /* FAT rsize is the maximum record size, but OVMX's $CREATE does not yet
+     * record the caller's size in it for every format (a FIX file created with
+     * mrs 20 reads back a different rsize), so a caller-supplied size stands;
+     * only a default FAB (mrs 0) takes the header's. */
+    if (fab->fab$w_mrs == 0 && h->fhc_lrl)
+        fab->fab$w_mrs = h->fhc_lrl;
+}
+#endif /* OVMX_HAVE_ACP */
+
 static uint32_t rms_impl_open(void *fab_ptr)
 {
     struct FAB *fab = (struct FAB *)fab_ptr;
@@ -1909,10 +1983,10 @@ static uint32_t rms_impl_open(void *fab_ptr)
                 sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
+        int hit = -1;
         for (int i = 0; i < ncand; i++) {
             st = rms_acp_open_file(&specs[i], need_write, &h);
-            if ($VMS_STATUS_SUCCESS(st))
-                break;
+            if ($VMS_STATUS_SUCCESS(st)) { hit = i; break; }
         }
         if (!$VMS_STATUS_SUCCESS(st)) {
             if (st == SS$_NOSUCHFILE && (fab->fab$l_fop & FAB$M_CIF))
@@ -1922,6 +1996,9 @@ static uint32_t rms_impl_open(void *fab_ptr)
             return fab->fab$l_sts;
         }
         fab->_rms_file = h;
+        rms_fab_from_header(fab, h);
+        if (hit >= 0)
+            rms_nam_fill(fab, &specs[hit], h->version, h);
 
         /* vms-50e (docs/design-rms-file-lock.md): the file-access $ENQ, right
          * after IO$_ACCESS -- the FID is now in hand (h->fid_*). A real DLM
@@ -2317,6 +2394,9 @@ static uint32_t rms_impl_create(void *fab_ptr)
         fab->fab$w_ifi = next_ifi++;
         if (next_ifi == 0) next_ifi = 1;
         pthread_mutex_unlock(&rms_id_lock);
+        /* The resultant: the file this $CREATE really made, at the version
+         * the ACP assigned (rd vms-98e). */
+        rms_nam_fill(fab, &sp, fop.out_version, h);
         fab->fab$l_sts = RMS$_CREATED;
         fab->fab$l_stv = 0;
         return RMS$_NORMAL;

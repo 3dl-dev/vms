@@ -50,6 +50,8 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "rms/rms.h"
+#include "rms/nam.h"
+#include "rms/rab.h"
 
 #define EXIT_SKIP  77
 
@@ -417,6 +419,80 @@ int main(void)
         struct FAB fe = cc$rms_fab;
         fe.fab$l_fna = (char *)(ODS2_UNIT "[OVMXDIR]DDIRREL.DAT");
         fe.fab$b_fns = (uint8_t)strlen(fe.fab$l_fna);
+        (void)sys$erase(&fe, 0, 0);
+    }
+
+
+    /* ---- vms-158 + vms-98e: $CREATE and $OPEN fill an attached NAM with the
+     * RESULTANT spec, and $OPEN loads the file's own record format into the
+     * FAB -- so a VAR file opened with a default (cc$rms_fab = STMLF) FAB reads
+     * back record for record, not as one blob of length-prefixed bytes. ---- */
+    {
+        const char *spec = ODS2_UNIT "[OVMXDIR]NAMRFM.DAT";
+        static const char *rr[] = { "first VAR record", "second, longer VAR record" };
+        char rsa[NAM$C_MAXRSS + 1], esa[NAM$C_MAXESS + 1];
+        struct NAM nam = cc$rms_nam;
+        struct FAB fab = cc$rms_fab;
+        struct RAB rab;
+        nam.nam$l_rsa = rsa; nam.nam$b_rss = NAM$C_MAXRSS;
+        nam.nam$l_esa = esa; nam.nam$b_ess = NAM$C_MAXESS;
+        fab.fab$l_fna = (char *)spec; fab.fab$b_fns = (uint8_t)strlen(spec);
+        fab.fab$b_rfm = FAB$C_VAR; fab.fab$b_rat = FAB$M_CR;
+        fab.fab$b_fac = FAB$M_PUT; fab.fab$l_nam = &nam;
+        st = sys$create(&fab, 0, 0);
+        check(st == RMS$_NORMAL, "vms-98e: $CREATE VAR file with a NAM attached");
+        rsa[nam.nam$b_rsl] = '\0'; esa[nam.nam$b_esl] = '\0';
+        check(nam.nam$b_rsl > 0 && strstr(rsa, "[OVMXDIR]NAMRFM.DAT;") != NULL &&
+              rsa[nam.nam$b_rsl - 1] >= '1' && rsa[nam.nam$b_rsl - 1] <= '9',
+              "vms-98e: $CREATE returns the RESULTANT spec with the real version in nam$l_rsa");
+        check(nam.nam$b_esl > 0 && strstr(esa, "[OVMXDIR]NAMRFM.DAT;") != NULL,
+              "vms-98e: $CREATE returns the EXPANDED spec in nam$l_esa");
+        printf("  (resultant %s, expanded %s)\n", rsa, esa);
+        char created[NAM$C_MAXRSS + 1];
+        snprintf(created, sizeof created, "%s", rsa);
+        if (st == RMS$_NORMAL) {
+            rab = cc$rms_rab; rab.rab$l_fab = &fab;
+            (void)sys$connect(&rab, 0, 0);
+            for (int i = 0; i < 2; i++) {
+                rab.rab$l_rbf = (char *)rr[i]; rab.rab$w_rsz = (uint16_t)strlen(rr[i]);
+                (void)sys$put(&rab, 0, 0);
+            }
+            (void)sys$close(&fab, 0, 0);
+        }
+
+        /* Re-open with a DEFAULT FAB (STMLF) and a fresh NAM. */
+        struct NAM nam2 = cc$rms_nam;
+        char rsa2[NAM$C_MAXRSS + 1];
+        nam2.nam$l_rsa = rsa2; nam2.nam$b_rss = NAM$C_MAXRSS;
+        struct FAB f2 = cc$rms_fab;
+        f2.fab$l_fna = (char *)spec; f2.fab$b_fns = (uint8_t)strlen(spec);
+        f2.fab$l_nam = &nam2;
+        st = sys$open(&f2, 0, 0);
+        check(st == RMS$_NORMAL, "vms-158: $OPEN the VAR file with a default (STMLF) FAB");
+        check(f2.fab$b_rfm == FAB$C_VAR,
+              "vms-158: $OPEN loads the file's record format (VAR) into fab$b_rfm");
+        check((f2.fab$b_rat & FAB$M_CR) != 0,
+              "vms-158: $OPEN loads the file's record attributes (CR) into fab$b_rat");
+        rsa2[nam2.nam$b_rsl] = '\0';
+        check(nam2.nam$b_rsl > 0 && strcmp(rsa2, created) == 0,
+              "vms-98e: $OPEN returns the same resultant spec $CREATE did");
+        int recs_ok = 1, nr = 0;
+        if (st == RMS$_NORMAL) {
+            char buf[128];
+            rab = cc$rms_rab; rab.rab$l_fab = &f2;
+            (void)sys$connect(&rab, 0, 0);
+            rab.rab$l_ubf = buf; rab.rab$w_usz = sizeof buf;
+            while (sys$get(&rab, 0, 0) == RMS$_NORMAL) {
+                if (nr >= 2 || rab.rab$w_rsz != strlen(rr[nr]) ||
+                    memcmp(buf, rr[nr], rab.rab$w_rsz) != 0) recs_ok = 0;
+                nr++;
+            }
+            (void)sys$close(&f2, 0, 0);
+        }
+        check(recs_ok && nr == 2,
+              "vms-158: $GET after a default-FAB $OPEN returns each VAR record whole (2 records, byte-exact)");
+        struct FAB fe = cc$rms_fab;
+        fe.fab$l_fna = (char *)spec; fe.fab$b_fns = (uint8_t)strlen(spec);
         (void)sys$erase(&fe, 0, 0);
     }
 

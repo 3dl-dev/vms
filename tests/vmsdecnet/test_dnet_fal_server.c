@@ -96,19 +96,15 @@ int main(void)
           "both blocked DATA records stored verbatim and the file closed");
     CHECK(saw(&ps, "070002") >= 0, "END-OF-STREAM and CLOSE answered ACCESS COMPLETE(RESPONSE)");
 
-    /* 1b. Same PUT when RMS $CREATE leaves the NAM resultant empty (the booted
-     * OVMX today, rd vms-98e): NAME must still precede ACK, read by a real
-     * search of the created file. NEGCTL: without the search the reply was
-     * ATTRIBUTES, ACK and the real VAX failed RMS-F-BUG_DAP 0001A006. */
+    /* 1b. If $CREATE ever returned no resultant (rd vms-98e), the server
+     * must REFUSE the access honestly -- an ACK without the NAME the VMS COPY
+     * asked for is a DAP sync error at the peer (RMS-F-BUG_DAP 0001A006). */
     g_wopen_no_rsa = 1; g_put_spec[0] = '\0';
     static struct script ps2; memset(&ps2, 0, sizeof ps2); ps2.in = put_in; ps2.nin = 5;
     t.ctx = &ps2; t.rxlen = t.rxoff = 0;
     st = dnet_fal_server_run(&t);
-    i_att = saw(&ps2, "0200"); i_name = saw(&ps2, "0f0001"); i_ack = saw(&ps2, "0600");
-    CHECK(st == 1 && i_att >= 0 && i_name > i_att && i_ack > i_name,
-          "empty $CREATE resultant: NAME (from $SEARCH) still precedes ACK");
-    CHECK(i_name >= 0 && strstr(ps2.out[i_name], "5055544e414d452e5458543b31") != NULL,
-          "the NAME carries the searched resultant PUTNAME.TXT;1");
+    CHECK(saw(&ps2, "0600") < 0 && saw(&ps2, "0f0001") < 0 && saw(&ps2, "0900") >= 0,
+          "no $CREATE resultant: STATUS refusal, never ACK without the NAME asked for");
     g_wopen_no_rsa = 0;
 
     /* 2. VMS COPY OVMX -> local: link 1 = DIRECTORY LIST, link 2 = OPEN + GET. */

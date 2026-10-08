@@ -3098,6 +3098,26 @@ static void eihd_image_name(const char *spec, char *out, unsigned long sz)
 	out[n] = '\0';
 }
 
+/* Image files open while an activation is in progress. Each holds an
+ * executive ACP channel; a /dev/vms descriptor still open when the process
+ * exits makes the executive free the PCB at exit -- and with it the completion
+ * status the invoking CLI is about to read back -- so a refused activation
+ * closes them all before recording that status. */
+static struct imgsrc *g_eihd_src[8];
+static int            g_eihd_nsrc;
+
+static void eihd_src_push(struct imgsrc *s)
+{
+	if (g_eihd_nsrc < (int)(sizeof g_eihd_src / sizeof g_eihd_src[0]))
+		g_eihd_src[g_eihd_nsrc++] = s;
+}
+
+static void eihd_src_pop(struct imgsrc *s)
+{
+	if (g_eihd_nsrc > 0 && g_eihd_src[g_eihd_nsrc - 1] == s)
+		g_eihd_nsrc--;
+}
+
 /* Fail the activation the way the VMS activator reports it under DCL, record
  * the condition value (message-inhibited: it has been displayed) as the
  * process completion status through the executive, and exit. */
@@ -3122,6 +3142,8 @@ static void eihd_fail(const char *image, const char *line2, const char *detail2,
 		xstrcat(line, "\n");
 	}
 	eputs(line);
+	while (g_eihd_nsrc > 0)
+		imgsrc_close(g_eihd_src[--g_eihd_nsrc]);
 	g_seam_no_transfer = 1;
 	imgact_vms_exit(EIHD_STS_INHIB_MSG | cond);
 	sys_exit(IMGACT_EXIT_FAIL);
@@ -3491,7 +3513,9 @@ static struct eihd_shr *eihd_activate_shl(const char *name, const char *by)
 	xstrcpy(m->spec, spec);
 	m->active = 1;
 	s->img = m;
+	eihd_src_push(&src);
 	eihd_load(m, &src, 0);
+	eihd_src_pop(&src);
 	imgsrc_close(&src);
 	m->active = 0;
 	s->ident = m->info.ident;
@@ -3527,7 +3551,9 @@ static void eihd_activate_main(const char *spec, const char *volpath)
 		eihd_fail(m->name, "-CLI-E-IMAGEFNF, image file not found ", spec,
 			  0, 0, EIHD_CLI_IMAGEFNF);
 	m->active = 1;
+	eihd_src_push(&src);
 	eihd_load(m, &src, 1);
+	eihd_src_pop(&src);
 	imgsrc_close(&src);
 	m->active = 0;
 

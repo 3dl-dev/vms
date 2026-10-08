@@ -1020,6 +1020,10 @@ out:
  * fields are System, Owner, Group, World (low to high nibble). Returns
  * SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
  */
+/* Largest initial allocation (blocks) a new directory may be created with: the
+ * same ceiling acp_dir_mutate enforces on a directory's size (ACP_DIR_MAX_BLOCKS). */
+#define ACP_DIR_MAX_INIT_ALLOC 64u
+
 static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
                                  int want_write)
 {
@@ -3216,7 +3220,12 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * at least one mapped data block (dl.n != 0) to insert into. Without
              * this a directory created over the ACP had zero blocks and every
              * create inside it failed SS$_DEVICEFULL. */
-            alloc_count = is_dir ? 1u : args.exsz;
+            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;
+            if (is_dir && alloc_count > ACP_DIR_MAX_INIT_ALLOC) {
+                (void)acp_fid_free(vol, new_fidnum, sc->ibblk);   /* roll back the FID */
+                args.status = SS__BADPARAM;   /* more than a directory can hold: honest, not clamped */
+                goto free_sc;
+            }
             if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
                 status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
@@ -3256,6 +3265,16 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 args.status = SS__BADPARAM;
                 goto free_sc;
             }
+            /* Default version limit (FAT$W_VERSIONS, carried in attr.recattr[30..31]):
+             * LIB$CREATE_DIR's max-versions and CREATE/DIRECTORY/VERSION_LIMIT. */
+            if ((args.attr_ctl & VMS_ACP_ATTR_VERSIONS) &&
+                (args.attr.recattr[30] | args.attr.recattr[31])) {
+                uint8_t *fat = (uint8_t *)sc->filehdr + offsetof(ods2_fh2_t, fh2_recattr)
+                               + offsetof(ods2_recattr_t, fat_versions);
+                fat[0] = args.attr.recattr[30];
+                fat[1] = args.attr.recattr[31];
+                ods2_fh2_reseal(sc->filehdr);
+            }
             /* A preallocated data file is allocated-but-EMPTY: keep hiblk but set
              * EOF to the empty position so a later $PUT/WRITEVBLK extends from 0. */
             if (n_ext > 0 && !is_dir) {
@@ -3270,15 +3289,24 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                  * (vms-3a8; sc->tdirhdr is the MODIFY!M_MOVE scratch, unused on
                  * the CREATE path, so borrowing it here clobbers nothing.) */
                 memset(sc->tdirhdr, 0xFF, ACP_BLOCK_SIZE);
-                if (acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                              alloc_lbn, sc->tdirhdr, ACP_BLOCK_SIZE) != 0) {
-                    (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                    if (n_ext > 0)
-                        (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
-                    args.status = SS__DEVNOTMOUNT;
-                    goto free_sc;
+                {
+                    uint32_t db, dfail = 0;
+                    /* Every allocated block (FIB$L_EXSZ may ask for more than the
+                     * one a directory needs) is an empty directory block. */
+                    for (db = 0; db < alloc_count && !dfail; db++)
+                        dfail = acp_bdev_write(vol->backing_major, vol->backing_minor,
+                                               alloc_lbn + db, sc->tdirhdr,
+                                               ACP_BLOCK_SIZE) != 0;
+                    if (dfail) {
+                        (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
+                        if (n_ext > 0)
+                            (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
+                        args.status = SS__DEVNOTMOUNT;
+                        goto free_sc;
+                    }
                 }
-                (void)ods2_fh2_set_eof(sc->filehdr, 1, 2, 0);
+                /* hiblk = blocks allocated; efblk 2 = only the first is in use. */
+                (void)ods2_fh2_set_eof(sc->filehdr, alloc_count, 2, 0);
                 ods2_fh2_reseal(sc->filehdr);
             }
 

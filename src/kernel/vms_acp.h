@@ -476,6 +476,7 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
 /* `attr_ctl` bits: which ATR fields to apply (CREATE/MODIFY write-attributes). */
 #define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
 #define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
+#define VMS_ACP_ATTR_VERSIONS 0x04u   /* apply the FAT default version limit (attr.recattr[30..31]) */
 
 /*
  * IO$_CREATE / IO$_DELETE / IO$_MODIFY. `func` selects the operation.

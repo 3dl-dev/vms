@@ -1152,6 +1152,8 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
     va_start(ap, buf);
     int vms_format = va_arg(ap, int) != 0;
     va_end(ap);
+    TR("crtlfd: fgetname fp", (uintptr_t)fp);
+    TR("crtlfd: fgetname buf", (uintptr_t)buf);
     if (!fp || !buf) {
         errno = EINVAL;
         return NULL;
@@ -1183,6 +1185,7 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
         return NULL;
     }
     rsa[nam.nam$b_rsl] = '\0';
+    TR("crtlfd: fgetname rsl", nam.nam$b_rsl);
     if (vms_format) {
         memcpy(buf, rsa, (size_t)nam.nam$b_rsl + 1);
         return buf;

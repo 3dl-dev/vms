@@ -1,7 +1,7 @@
 {
-  "total": 147,
+  "total": 146,
   "summary": {
-    "run-pass": 145,
+    "run-pass": 144,
     "run-fail": 1,
     "run-crash": 1,
     "vm-crash": 0,
@@ -61,11 +61,6 @@
     },
     {
       "name": "lib_crc",
-      "status": "run-pass",
-      "signaled": false
-    },
-    {
-      "name": "lib_create_dir",
       "status": "run-pass",
       "signaled": false
     },

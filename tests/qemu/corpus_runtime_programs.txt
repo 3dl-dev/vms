@@ -151,4 +151,3 @@ sys_sndopr
 sys_trnlnm
 sys_clrast
 sys_setdfprot
-lib_create_dir

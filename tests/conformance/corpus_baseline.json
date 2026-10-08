@@ -4,9 +4,9 @@
   "summary": {
     "compile-pass": 0,
     "compile-fail": 38,
-    "link-fail": 40,
+    "link-fail": 39,
     "run-pass": 115,
-    "run-fail": 8,
+    "run-fail": 9,
     "run-crash": 28,
     "run-pass-signaled": 6
   },
@@ -140,7 +140,7 @@
     {
       "name": "lib_create_dir",
       "file": "tier1-examples/lib_create_dir.c",
-      "status": "link-fail",
+      "status": "run-fail",
       "signaled_error": false,
       "errors": ["/tmp/w2/tests/corpus/tier1-examples/lib_create_dir.c: In function ‘main’:","/tmp/w2/tests/corpus/tier1-examples/lib_create_dir.c:56:17: warning: implicit declaration of function ‘lib$create_dir’ [-Wimplicit-function-declaration]","   56 |     r0_status = lib$create_dir (&dir_spec_d,","      |                 ^~~~~~~~~~~~~~","/tmp/w2/tests/corpus/tier1-examples/lib_create_dir.c:80:17: warning: implicit declaration of function ‘sys$setddir’; did you mean ‘sys$getdviw’? [-Wimplicit-function-declaration]","   80 |     r0_status = sys$setddir (&dir_spec_d,","      |                 ^~~~~~~~~~~","      |                 sys$getdviw","/usr/bin/ld: /tmp/cc1vJ5gD.o: in function `main':","lib_create_dir.c:(.text.startup+0xc9): undefined reference to `lib$create_dir'","collect2: error: ld returned 1 exit status"],
       "missing_symbols": ["lib$create_dir'"],

@@ -11,11 +11,11 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 115 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 145 | 147 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 144 | 146 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **149 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **148 of 229**.
 
-Host column detail: compile-fail 38, link-fail 40, run-fail 8, run-crash 28; 6 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
+Host column detail: compile-fail 38, link-fail 39, run-fail 9, run-crash 28; 6 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
 Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
@@ -30,13 +30,14 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (80)
+### Not running (81)
 
 | program | host | runtime | reason |
 |---|---|---|---|
 | `lib_asn_wth_mbx` | link-fail | - | link: undefined lib$asn_wth_mbx |
 | `lib_attach` | link-fail | - | link: undefined lib$attach |
 | `lib_callg` | run-crash | - | ptr32: LIB$CALLG takes an argument list of 32-bit longwords holding pointers; the program asserts sizeof(unsigned)==sizeof(void*) (vms-95b) |
+| `lib_create_dir` | run-fail | - | product-gap: the corpus guest has no mounted writable volume or default directory for the relative [.LOG] spec; lib$create_dir itself is proven by tests/qemu/test_syssvc_create_dir.c (vms-47f7) |
 | `lib_ctrl` | compile-fail | - | compile: error: ‘LIB$M_CLI_CTRLT’ undeclared (first use in this function) |
 | `lib_cvtf_from_internal_time` | compile-fail | - | compile: 20 / #  error "Compile with CC/FLOAT=G_FLOAT (which is the default on alpha) |
 | `lib_cvtf_to_internal_time` | compile-fail | - | compile: error: #error "Please compile with CC/FLOAT=G_FLOAT (which is the default on alpha)" |

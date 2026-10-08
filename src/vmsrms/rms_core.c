@@ -1841,9 +1841,11 @@ static void rms_fab_from_header(struct FAB *fab, const rms_file_t *h)
         return;
     fab->fab$b_rfm = h->fhc_rfm;
     fab->fab$b_rat = h->fhc_rat;
-    /* FAT rsize is the maximum record size; OVMX's $CREATE does not record it
-     * for every format yet, so an unrecorded (0) size keeps the caller's. */
-    if (h->fhc_lrl)
+    /* FAT rsize is the maximum record size, but OVMX's $CREATE does not yet
+     * record the caller's size in it for every format (a FIX file created with
+     * mrs 20 reads back a different rsize), so a caller-supplied size stands;
+     * only a default FAB (mrs 0) takes the header's. */
+    if (fab->fab$w_mrs == 0 && h->fhc_lrl)
         fab->fab$w_mrs = h->fhc_lrl;
 }
 #endif /* OVMX_HAVE_ACP */

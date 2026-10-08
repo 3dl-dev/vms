@@ -159,6 +159,9 @@ const char *scs_datalink_backend(void) { return "executive"; }
  * (rd vms-1f69: every non-NOSUCHDEV status used to read as "NOPRIV"). */
 static uint32_t g_l2_last_status;
 uint32_t scs_datalink_last_status(void) { return g_l2_last_status; }
+/* Its secondary status: the host errno behind an SS$_ABORT (rd vms-b72). */
+static uint32_t g_l2_last_stv;
+uint32_t scs_datalink_last_stv(void) { return g_l2_last_stv; }
 
 int scs_datalink_open(const char *ifname, uint16_t ethertype)
 {
@@ -194,6 +197,7 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
                                     * SS$_BADPARAM 20 for a refused station). */
         close(fd);
         g_l2_last_status = a.status;
+        g_l2_last_stv = a.stv;
         errno = (a.status == 2312u) ? ENODEV
               : (a.status == 20u)   ? EINVAL
               : (a.status == 36u)   ? EACCES : EIO;
@@ -284,6 +288,7 @@ int scs_datalink_set_recv_timeout_ms(int fd, int ms)
 
 const char *scs_datalink_backend(void) { return "AF_PACKET probe"; }
 uint32_t scs_datalink_last_status(void) { return 0; }
+uint32_t scs_datalink_last_stv(void) { return 0; }
 
 int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
                               const uint8_t station[6])
@@ -463,6 +468,7 @@ static void bpfbuf_free(int fd)
 
 const char *scs_datalink_backend(void) { return "bpf"; }
 uint32_t scs_datalink_last_status(void) { return 0; }
+uint32_t scs_datalink_last_stv(void) { return 0; }
 
 int scs_datalink_open(const char *ifname, uint16_t ethertype);
 

@@ -88,7 +88,11 @@
 struct vms_l2_open_args {
     char     ifname[16];    /* in: interface name (e.g. "eth0"), NUL-padded */
     uint16_t ethertype;     /* in: L2 ethertype to bind, host order (e.g. 0x6007) */
-    uint16_t pad0;          /* zero */
+    uint16_t stv;           /* out: secondary status of a refused open -- the
+                             * host errno the executive's backend returned
+                             * (positive; 0 when the open succeeded or was
+                             * refused before reaching the backend), rd vms-b72.
+                             * in: ignored (zeroed by the caller). */
     uint32_t handle;        /* out: this process's L2 handle */
     uint32_t ifindex;       /* out: resolved interface index */
     uint8_t  hwaddr[6];     /* out: the bound interface's MAC */

@@ -446,32 +446,32 @@ int ovmx_decc_to_vms(const char *spec, to_vms_action action, int allow_wild,
     int mode = no_directory == 1 ? OVMX_FS_FILE
              : no_directory == 2 ? OVMX_FS_DIR : OVMX_FS_AUTO;
     size_t cap = strlen(spec) * 2 + 32;
-    char *vms = malloc(cap);
-    if (!vms) {
+    char *vspec = malloc(cap);
+    if (!vspec) {
         errno = ENOMEM;
         return 0;
     }
-    int kind = ovmx_crtl_unix_to_vms(spec, vms, cap, mode);
+    int kind = ovmx_crtl_unix_to_vms(spec, vspec, cap, mode);
     if (kind < 0) {
-        free(vms);
+        free(vspec);
         return 0;
     }
     int count;
-    if (allow_wild && has_wild(vms)) {
+    if (allow_wild && has_wild(vspec)) {
         struct to_vms_ctx c = { action };
-        count = fs_search(vms, to_vms_each, &c);
+        count = fs_search(vspec, to_vms_each, &c);
         if (count < 0)
             count = 0;
     } else {
-        char last = vms[strlen(vms) - 1];
+        char last = vspec[strlen(vspec) - 1];
         int type = (kind == OVMX_FS_DIR ||
                     (kind == OVMX_FS_PASSTHRU &&
                      (last == ']' || last == '>' || last == ':')))
                        ? DECC$K_DIRECTORY : DECC$K_FILE;
-        action(vms, type);
+        action(vspec, type);
         count = 1;
     }
-    free(vms);
+    free(vspec);
     return count;
 }
 

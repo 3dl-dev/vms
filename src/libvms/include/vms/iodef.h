@@ -1,8 +1,9 @@
 /*
  * vms/iodef.h - I/O function codes and modifiers (vms-022).
  *
- * Generated from docs/oracle/alpha84-starlet-defs/IODEF.txt (the values an
- * OpenVMS Alpha V8.4 node defines); constants only.
+ * The values an OpenVMS Alpha V8.4 node defines (docs/oracle/alpha84-starlet-defs/IODEF.txt),
+ * every one; tests/integration/test_oracle_constants.sh checks them. Constants
+ * only -- no structures, so a DEC C client sees nothing OVMX-specific.
  */
 #ifndef __VMS_IODEF_H
 #define __VMS_IODEF_H

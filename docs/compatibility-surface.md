@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**468 surfaces catalogued** across 9 domains, each with a per-surface status.
+**469 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 320 |
+| ✅ verified | 24 | | real | 321 |
 | 🟢 implemented | 282 | | n/a | 94 |
-| 🟡 partial | 54 | | advisory | 48 |
+| 🟡 partial | 55 | | advisory | 48 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 93 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **422 committed** — **306 met** (implemented/verified), 53 in progress (partial), 63 not started (absent/stub/designed).
+- **423 committed** — **306 met** (implemented/verified), 54 in progress (partial), 63 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜`  —  215 surfaces catalogued (153 met · 15 in progress · 47 not started) · V1: 206 committed, 153 met · ⚠ 4 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜`  —  216 surfaces catalogued (153 met · 16 in progress · 47 not started) · V1: 207 committed, 153 met · ⚠ 4 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-09-14</sub>
@@ -165,7 +165,7 @@ The OVMX ots$routines.h declares 44 OTS$ routines; 32 are implemented in rtl/ots
 Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the three file organizations. On the executive-present path every $OPEN/$CREATE/$ERASE drives the Files-11 ODS-2 ACP ($ASSIGN + IO$_ACCESS/IO$_CREATE/IO$_DELETE), with the pre-flip POSIX open()/creat() body kept only as the honest executive-absent fallback (rms_acp_absent -> rms_posix_*, vms-5f0). Sequential and Relative are real end to end. Cross-process locking, formerly the facility-wide gap (vms-407), is now real on the ACP path: file-level share arbitration (vms-50e) and per-record locking (vms-0dd) both run through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). Indexed (ISAM) is multi-key over the ACP path: alternate keys are authored from the XABKEY chain and read by key-of-reference via SIDR descent (honest narrower gap: index key compression is rejected fail-honest, RMS$_PLG). The stdio CRTL veneer (fopen/fread/fwrite) is a thin binding over these same $ entry points, not raw POSIX (vms-47e/126/3c1). (Non-ACP/ POSIX-defer handles hold no lock, honestly documented.)
 
 
-<sub>37 items · 33 met · 3 in progress · 1 not started</sub>
+<sub>38 items · 33 met · 4 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -190,6 +190,7 @@ Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the
 | 🟢 | `sys$search` | routine | Wildcard directory search | implemented | real | in | `src/vmsrms/rms_search.c` — ACP $SEARCH; distinguishes RMS$_DNF (no such dir) from RMS$_NMF (no match) |
 | 🟢 | `crtl$rms_stdio_veneer` | feature | C RTL stdio FILE* (fopen/fwrite/fread/fclose) as a thin veneer over RMS | implemented | real | in | `src/vmsrms/crtl_rms_stdio.c` — vms-47e/126/3c1: fopen/fwrite/fread/fclose drive sys$create/$open/$connect/$put/$get/$close against the real ODS-2 volume over the ACP (do-it-like-VMS: CRTL is a thin RMS veneer, not musl POSIX). Byte-exact FIX put/read + fail-honest no-POSIX-fallback; chunked >64KiB writes + delete-on-close temps (vms-126). Proven by tests/qemu/test_syssvc_crtl_rms_veneer.c (host ctest, not a real-VMS oracle -> implemented, not verified) |
 | 🟡 | `crtl$rms_file_layer` | feature | C RTL file descriptors and stdio as RMS clients (open/read/write/lseek/fstat/close, all of stdio) | partial | real | in | `src/vmsrms/crtl_rms_fd.c` — vms-b90: a hook in the musl syscall funnel serves every file system call that names an RMS file through $OPEN/$CREATE/$READ/$WRITE/$GET/$DISPLAY/$ERASE/$RENAME; /dev /proc /sys /run stay the kernel's; stream files are byte streams over block I/O, record files read as lines. Proven by the alpha crtl-fd gate (32-bit DEC C program; DCL writer + DCL TYPE reader). Partial: carried by the RMS-backed DECC$SHR the gates build, not yet the boot DECC$SHR (vms-9f8e); writing record files, directories as descriptors and mkdir/rmdir fail honestly (EOPNOTSUPP) |
+| 🟡 | `rms$vms_abi_entry_points` | feature | RMS services by their upper-case names over FAB/RAB/NAM in the VMS byte layout (32-bit address fields), as DEC C clients pass them | partial | real | in | `src/vmsrms/rms_vmsabi.c` — vms-692: SYS$PARSE and SYS$SEARCH take a VMS-layout FAB/NAM (src/libvms/include/vms/rms.h, offsets asserted against the Alpha V8.4 oracle), run on the RMS engine through internal blocks keyed by NAM$L_WCC, and return the expanded/resultant strings, component addresses, NAM$L_FNB, NAM$T_DVI, NAM$W_FID and NAM$W_DID. Proven by the alpha vmsabi-rms gate (32-bit DEC C program; DIRECTORY/FULL File ID cross-check). Partial: the other RMS services ($OPEN/$CREATE/$CONNECT/$GET/$PUT/...) are not yet on the VMS ABI; $PARSE does not fill NAM$W_DID until $SEARCH |
 | 🟢 | `rms$file_share_locking` | feature | File-level share/access arbitration (FAB fac/shr flags) | implemented | real | in | `src/vmsrms/rms_core.c` — vms-50e: sys$open/create map fab$b_fac/fab$b_shr to a DLM lock mode (NL/CR/CW/PR/PW/EX) $ENQ'd on the file's FID with NOQUEUE; RMS$_FLK on a real conflict, $DEQ'd at sys$close |
 | 🟢 | `rms$record_locking` | feature | Cross-process record locking (RAB rop modifiers) | implemented | real | in | `src/vmsrms/rms_record.c` — vms-0dd: per-record $ENQ, a child of the FAB file-access lock, arbitrated by the executive DLM; the one honest degradation is the non-ACP/POSIX-defer handle (access_lkid==0), which holds nothing and passes status through |
 | 🟢 | `fab` | struct | File Access Block | implemented | real | in | `src/vmsrms/include/rms/fab.h` — all 3 orgs SEQ/REL/IDX, all 7 record formats UDF/FIX/VAR/VFC/STM/STMLF/STMCR |

@@ -294,6 +294,12 @@ jobs:
       - name: Include-surface proof (unpatched port source builds against src/libvms/include/vms/)
         run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/include-surface/run_include_surface_proof.sh
 
+      # vms-022: the VMS-layout STARLET headers (src/libvms/include/vms/) hold
+      # every Alpha V8.4 offset/size assertion under the real cross compiler at
+      # both pointer sizes; a 64-bit address field fails them (control).
+      - name: "VMS-layout STARLET headers (vms/rms.h, fibdef, fatdef, descrip, ...) -- oracle offsets at both pointer sizes (vms-022)"
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/include-surface/run_vms_abi_headers.sh
+
   # Standing gate for vms-864: the genuine alpha DECC$SHR (musl-alpha universals
   # + the OVMX bootstrap surface from mk_decc_shr.sh's ALPHA branch) must link a
   # REAL alpha-dec-vms port crt0 (tools/cross-alpha-vms/joint-e2e/) with ZERO
@@ -915,6 +921,54 @@ jobs:
 
       - name: "C RTL file-layer gate — DCL writer + DCL TYPE independent reader; 4-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate
+
+  # -----------------------------------------------------------------------
+  # alpha-vmsabi-rms (vms-692): the VMS-ABI RMS entry points over the VMS-layout
+  # control blocks -- what GCC's VMS-host code calls.
+  alpha-vmsabi-rms:
+    name: "OVMX/Alpha VMS-ABI RMS — a 32-bit DEC C program calls SYS$PARSE/SYS$SEARCH with a VMS-layout FAB/NAM (vms/rms.h) as GCC vmsdbgout.cc does; NAM$W_FID/DID filled, DIRECTORY/FULL shows the same File ID (vms-692, blocks vms-fd1)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+
+      - name: "VMS-ABI RMS gate — DIRECTORY/FULL File ID cross-check; 3-case can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate
 
   # -----------------------------------------------------------------------
   # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --

@@ -1,8 +1,9 @@
 /*
  * vms/stsdef.h - condition value fields (vms-022).
  *
- * Generated from docs/oracle/alpha84-starlet-defs/STSDEF.txt (the values an
- * OpenVMS Alpha V8.4 node defines); constants only.
+ * The values an OpenVMS Alpha V8.4 node defines (docs/oracle/alpha84-starlet-defs/STSDEF.txt),
+ * every one; tests/integration/test_oracle_constants.sh checks them. Constants
+ * only -- no structures, so a DEC C client sees nothing OVMX-specific.
  */
 #ifndef __VMS_STSDEF_H
 #define __VMS_STSDEF_H

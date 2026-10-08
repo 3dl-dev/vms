@@ -74,44 +74,44 @@
     }
   ],
   "overall": {
-    "count": 468,
+    "count": 469,
     "by_status": {
       "verified": 24,
       "implemented": 282,
-      "partial": 54,
+      "partial": 55,
       "stub": 14,
       "designed": 1,
       "absent": 93
     },
     "by_authenticity": {
-      "real": 320,
+      "real": 321,
       "n/a": 94,
       "advisory": 48,
       "facade-risk": 6
     },
     "met": 306,
-    "in_progress": 54,
+    "in_progress": 55,
     "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 422,
+    "count": 423,
     "by_status": {
       "verified": 24,
       "implemented": 282,
-      "partial": 53,
+      "partial": 54,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 319,
+      "real": 320,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
     "met": 306,
-    "in_progress": 53,
+    "in_progress": 54,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -1310,21 +1310,21 @@
       "vms_ref": "OpenVMS Record Management Services Reference Manual",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 37,
+        "count": 38,
         "by_status": {
           "verified": 0,
           "implemented": 33,
-          "partial": 3,
+          "partial": 4,
           "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 36,
+          "real": 37,
           "n/a": 1
         },
         "met": 33,
-        "in_progress": 3,
+        "in_progress": 4,
         "not_started": 1,
         "facade_risk": 0
       }
@@ -6291,6 +6291,21 @@
       "evidence": "src/vmsrms/crtl_rms_fd.c",
       "verified_against": null,
       "notes": "vms-b90: a hook in the musl syscall funnel serves every file system call that names an RMS file through $OPEN/$CREATE/$READ/$WRITE/$GET/$DISPLAY/$ERASE/$RENAME; /dev /proc /sys /run stay the kernel's; stream files are byte streams over block I/O, record files read as lines. Proven by the alpha crtl-fd gate (32-bit DEC C program; DCL writer + DCL TYPE reader). Partial: carried by the RMS-backed DECC$SHR the gates build, not yet the boot DECC$SHR (vms-9f8e); writing record files, directories as descriptors and mkdir/rmdir fail honestly (EOPNOTSUPP)",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "rms-api",
+      "facility_name": "RMS programmatic API \u2014 entry points, control blocks, file organizations",
+      "id": "rms$vms_abi_entry_points",
+      "kind": "feature",
+      "vms": "RMS services by their upper-case names over FAB/RAB/NAM in the VMS byte layout (32-bit address fields), as DEC C clients pass them",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_vmsabi.c",
+      "verified_against": null,
+      "notes": "vms-692: SYS$PARSE and SYS$SEARCH take a VMS-layout FAB/NAM (src/libvms/include/vms/rms.h, offsets asserted against the Alpha V8.4 oracle), run on the RMS engine through internal blocks keyed by NAM$L_WCC, and return the expanded/resultant strings, component addresses, NAM$L_FNB, NAM$T_DVI, NAM$W_FID and NAM$W_DID. Proven by the alpha vmsabi-rms gate (32-bit DEC C program; DIRECTORY/FULL File ID cross-check). Partial: the other RMS services ($OPEN/$CREATE/$CONNECT/$GET/$PUT/...) are not yet on the VMS ABI; $PARSE does not fill NAM$W_DID until $SEARCH",
       "plan_ref": "vms-801"
     },
     {

@@ -111,8 +111,11 @@ static struct FAB *validate_rab(struct RAB *rab)
         return NULL;
     }
 
-    if (!fab->_rms_file) {
-        rab->rab$l_sts = RMS$_ACC;
+    /* No stream: never $CONNECTed, $DISCONNECTed, or its file was $CLOSEd
+     * (which runs down every stream on it) -- RMS$_ISI (observed on VAX V7.3
+     * and Alpha V8.4, docs/oracle/semantics/rms/, rd vms-3b5). */
+    if (rab->rab$w_isi == 0 || !fab->_rms_file) {
+        rab->rab$l_sts = RMS$_ISI;
         return NULL;
     }
 
@@ -294,6 +297,14 @@ static uint32_t rms_impl_get(void *rab_ptr)
     struct FAB *fab = validate_rab(rab);
     if (!fab) return rab->rab$l_sts;
 
+    /* $GET needs read access: FAC GET (implied when FAC is 0, and by UPD or
+     * DEL) -- else RMS$_FAC (rd vms-3b5). */
+    if (fab->fab$b_fac &&
+        !(fab->fab$b_fac & (FAB$M_GET | FAB$M_UPD | FAB$M_DEL))) {
+        rab->rab$l_sts = RMS$_FAC;
+        return RMS$_FAC;
+    }
+
 #if defined(OVMX_HAVE_ACP)
     /* vms-0dd: a new locate drops whatever "current record" lock this
      * stream held before -- the DLM release, not a silent clear. */
@@ -342,10 +353,11 @@ static uint32_t rms_impl_put(void *rab_ptr)
     struct FAB *fab = validate_rab(rab);
     if (!fab) return rab->rab$l_sts;
 
-    /* Verify write access */
+    /* Verify write access: RMS$_FAC, the access-violation status VMS
+     * returns for a $PUT on a stream opened without FAC PUT (rd vms-3b5). */
     if (!(fab->fab$b_fac & FAB$M_PUT)) {
-        rab->rab$l_sts = RMS$_IOP;
-        return RMS$_IOP;
+        rab->rab$l_sts = RMS$_FAC;
+        return RMS$_FAC;
     }
 
     uint32_t status;

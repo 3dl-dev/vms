@@ -111,6 +111,17 @@ static uint32_t rms_seq_get_record(struct FAB *fab, struct RAB *rab)
             if (recsize == 0) recsize = 512;
 
             if (recsize > rab->rab$w_usz) {
+                /* Record too big: VMS moves the first USZ bytes, sets RSZ to
+                 * USZ and STV to the record's size, and the stream moves past
+                 * the record (observed, rd vms-3b5). */
+                ssize_t got = rms_io_read_exact(fd, rab->rab$l_ubf, rab->rab$w_usz);
+                if (got <= 0) {
+                    rab->_eof = 1;
+                    return RMS$_EOF;
+                }
+                rms_io_lseek(fd, (off_t)recsize - got, SEEK_CUR);
+                rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
+                rab->rab$w_rsz = rab->rab$w_usz;
                 rab->rab$l_stv = recsize;
                 return RMS$_RTB;
             }
@@ -146,9 +157,16 @@ static uint32_t rms_seq_get_record(struct FAB *fab, struct RAB *rab)
             if (n < 2) return RMS$_RER;
 
             if (reclen > rab->rab$w_usz) {
+                /* Record too big: the first USZ bytes are moved, RSZ = USZ,
+                 * STV = the record's size (observed on VAX V7.3 and Alpha
+                 * V8.4, docs/oracle/semantics/rms/, rd vms-3b5); then skip
+                 * the rest of the record so the stream stays aligned. */
+                uint16_t usz = rab->rab$w_usz;
+                if (rms_io_read_exact(fd, rab->rab$l_ubf, usz) < usz)
+                    return RMS$_RER;
                 rab->rab$l_stv = reclen;
-                /* Skip past the record data so we don't corrupt the stream */
-                rms_io_lseek(fd, reclen + (reclen & 1), SEEK_CUR);
+                rab->rab$w_rsz = usz;
+                rms_io_lseek(fd, (reclen - usz) + (reclen & 1), SEEK_CUR);
                 rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
                 return RMS$_RTB;
             }
@@ -306,9 +324,12 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             uint16_t recsize = fab->fab$w_mrs;
             if (recsize == 0) recsize = len;
 
-            if (len > recsize && fab->fab$w_mrs > 0) {
+            /* A fixed-length record is exactly MRS bytes: a $PUT of any
+             * other size is RMS$_RSZ (observed, rd vms-3b5), never padded
+             * or truncated into the file. */
+            if (fab->fab$w_mrs > 0 && len != recsize) {
                 rab->rab$l_stv = len;
-                return RMS$_RTB;
+                return RMS$_RSZ;
             }
 
             char *padded = calloc(1, recsize);

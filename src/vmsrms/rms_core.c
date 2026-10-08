@@ -2547,6 +2547,13 @@ static uint32_t rms_impl_close(void *fab_ptr)
     uint32_t close_sts = RMS$_NORMAL;
     int deleting = (fab->fab$l_fop & FAB$M_DLT) || (fab->fab$l_fop & FAB$M_TMD);
 
+    /* $CLOSE of a FAB with no open file -- never opened, or already closed --
+     * is RMS$_IFI (observed, rd vms-3b5), not a second silent success. */
+    if (!fab->_rms_file && !fab->_rms_state) {
+        fab->fab$l_sts = RMS$_IFI;
+        return RMS$_IFI;
+    }
+
 #if defined(OVMX_HAVE_ACP)
     if (fab->_rms_file && ((rms_file_t *)fab->_rms_file)->fd >= 0) {
         /* vms-5f0 legacy-defer handle: POSIX teardown (fd close + sidecar

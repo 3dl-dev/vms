@@ -238,10 +238,11 @@ static OVMX_CRTL_FILE *crtl_rms_open_handle(const char *path, int writing,
         free(fh);
         return NULL;                            /* fail-honest */
     }
-    if (!writing) {
-        fh->fab.fab$b_rfm = FAB$C_FIX;
-        fh->fab.fab$w_mrs = 1;
-    }
+    /* Byte-exact either way: reading one byte per get, writing whatever each
+     * put carries (mrs 0). A FIX file's stored MRS would otherwise make every
+     * short put RMS$_RSZ, as RMS rightly refuses a short fixed record. */
+    fh->fab.fab$b_rfm = FAB$C_FIX;
+    fh->fab.fab$w_mrs = writing ? 0 : 1;
 
     fh->rab = cc$rms_rab;
     fh->rab.rab$l_fab = &fh->fab;

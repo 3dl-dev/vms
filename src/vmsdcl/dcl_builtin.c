@@ -257,6 +257,9 @@ static const struct dcl_qual_def q_assign[] = {
     { "JOB",                     CDU_VT_NONE,  0,            NULL, NULL },
     { "TABLE",                   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     { "TRANSLATION_ATTRIBUTES",  CDU_VT_LIST,  0,            NULL, NULL },
+    { "USER_MODE",               CDU_VT_NONE, 0, NULL, NULL },
+    { "SUPERVISOR_MODE",         CDU_VT_NONE, 0, NULL, NULL },
+    { "EXECUTIVE_MODE",          CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_define[] = {
@@ -265,6 +268,9 @@ static const struct dcl_qual_def q_define[] = {
     { "GROUP",                   CDU_VT_NONE, 0, NULL, NULL },
     { "JOB",                     CDU_VT_NONE, 0, NULL, NULL },
     { "TRANSLATION_ATTRIBUTES",  CDU_VT_LIST, 0, NULL, NULL },
+    { "USER_MODE",               CDU_VT_NONE, 0, NULL, NULL },
+    { "SUPERVISOR_MODE",         CDU_VT_NONE, 0, NULL, NULL },
+    { "EXECUTIVE_MODE",          CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_deassign[] = {
@@ -273,6 +279,9 @@ static const struct dcl_qual_def q_deassign[] = {
     { "GROUP",   CDU_VT_NONE, 0, NULL, NULL },
     { "JOB",     CDU_VT_NONE, 0, NULL, NULL },
     { "ALL",     CDU_VT_NONE, 0, NULL, NULL },
+    { "USER_MODE",               CDU_VT_NONE, 0, NULL, NULL },
+    { "SUPERVISOR_MODE",         CDU_VT_NONE, 0, NULL, NULL },
+    { "EXECUTIVE_MODE",          CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_open[] = {

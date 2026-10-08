@@ -4,67 +4,10 @@
 # tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
 # and so does a listed case that now matches. Fix the bug, delete the line.
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS
-ef EF.SETEF.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.SETEF2.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.CLREF.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.CLREF2.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.SETEF.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.SETEF2.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF2.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.SETEF.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.SETEF2.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF2.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.READ.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.READ.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.READ.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.WAITFR.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
+ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on VAX V7.3, writes 1 on Alpha V8.4; OVMX leaves it
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
-ef EF.SETIMR.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-fao FAO.AC  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.AF  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.AS.WIDTH.PAD  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.AS.WIDTH.TRUNC  # vms-4947: !AC/!AF empty, !AS width ignored
-fao FAO.XL  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.OL  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.ZL  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.WIDTH  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.WIDTH.ZERO  # vms-e78: numeric zero-fill / width / overflow asterisks
-fao FAO.REPEAT.DIR  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.REPEAT.WIDTH  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.FIELD  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.FIELD.OVER  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.REUSE  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.SKIP  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.UIC  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.UIC.ID  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.DATE  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.TIME  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.DATE.WIDTH  # vms-939: !%U !%I !%D !%T unsupported
-fao FAO.CTLCHARS  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.UNKNOWN  # vms-6194: repeat/field/reuse/skip/control directives
-fao FAO.BUFFEROVF  # vms-318: overflow returns the full length, writes nothing
-fao FAO.BUFFEROVF.AS  # vms-318: overflow returns the full length, writes nothing
-fao MSG.NORMAL.ALL  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.ALL  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.TEXT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.IDENT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.SEV  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.FAC  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.FLAGS0  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ACCVIO.SEV_TEXT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.RMS_FNF  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.BADPARAM  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.WASSET  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.SEV_CHANGED  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.UNKNOWN  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.UNKNOWN.TEXT  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.ZERO  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.UNKNOWN.NONZERO  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.EXQUOTA  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
-fao MSG.FAO_INTO  # vms-546: $GETMSG texts / ident / severity / unknown-message format / outadr
+fao FAO.UIC.ID  # vms-7d5a: $IDTOASC does not name a UIC identifier, so !%I falls back to [g,m]
 info JPI.SELF.W  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
 info JPI.SELF.PIDADR0  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
 info JPI.SHORTBUF  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
@@ -90,62 +33,11 @@ io IO.MBX.READ.AFTER_SHORT  # vms-d01: $QIOW returns the I/O status as the servi
 io IO.MBX.READ.EOF  # vms-d01: EOF now delivered (vms-262a); $QIOW returns the IOSB status as its own
 io IO.CANCEL.BADCHAN  # vms-4a69: $CANCEL of a channel this process does not hold returns NORMAL (Alpha IVIDENT, VAX IVCHAN)
 io IO.ASSIGN.MBX.GONE  # vms-4a69: $ASSIGN of a deleted mailbox's logical name gives NOSUCHDEV (VMS IVDEVNAM: the name is gone)
-lnm LNM.TRN.NEW  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.NEW.PROCTAB  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.NEW.PROCLOG  # vms-f3c: LNM$PROCESS / search-list create / directory tables
-lnm LNM.TRN.SUPERSEDED  # vms-2b3: access modes not kept
-lnm LNM.TRN.LOWERCASE  # vms-aede: names match case-insensitively
-lnm LNM.TRN.CASE_BLIND  # vms-aede: names match case-insensitively
-lnm LNM.TRN.EXEC_MODE  # vms-2b3: access modes not kept
-lnm LNM.TRN.USER_MODE  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.LOWERNAME  # vms-aede: names match case-insensitively
-lnm LNM.TRN.SPACE  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.MULTI.0  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
-lnm LNM.TRN.MULTI.1  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
-lnm LNM.TRN.MULTI.2  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
-lnm LNM.TRN.MULTI.3  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
-lnm LNM.TRN.MULTI.127  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
-lnm LNM.TRN.MULTI.128  # vms-ff9: only the first equivalence is kept; LNM$_INDEX ignored
-lnm LNM.TRN.CONCEALED  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.CRE.256  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.CRE.EMPTYEQ  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.TRN.EMPTYEQ  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.CRE.NOITEMS  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.TRN.NOITEMS  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.TRN.NAME256  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.TRN.NAME0  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.CRE.NOSUCHTABLE  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.TRN.NOSUCHTABLE  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.CRE.SEARCHLIST  # vms-f3c: LNM$PROCESS / search-list create / directory tables
-lnm LNM.TRN.SEARCHLIST  # vms-f3c: LNM$PROCESS / search-list create / directory tables
-lnm LNM.TRN.JOB.VIA_FILEDEV  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.PROC_OVER_JOB  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.JOB.AGAIN  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.SYSTEM  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.KERNEL_ASKED  # vms-2b3: access modes not kept
-lnm LNM.CRE.SUPER  # vms-2b3: access modes not kept
-lnm LNM.TRN.TWO_MODES  # vms-2b3: access modes not kept
-lnm LNM.TRN.TWO_MODES.SUPERQ  # vms-2b3: access modes not kept
-lnm LNM.DEL.USERMODE_ONLY  # vms-2b3: access modes not kept
-lnm LNM.TRN.AFTER_USERDEL  # vms-2b3: access modes not kept
-lnm LNM.DEL.SUPER  # vms-2b3: access modes not kept
-lnm LNM.TRN.AFTER_SUPERDEL  # vms-2b3: access modes not kept
-lnm LNM.TRN.SYSCMD  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.SYSIN  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.SYSOUT  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.SYSD  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.SYSLOGIN  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.SYSSYS  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.SYSSCR  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
-lnm LNM.TRN.TT  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.FILEDEV.IN_SDIR  # vms-f3c: LNM$PROCESS / search-list create / directory tables
-lnm LNM.TRN.PROCTAB.IN_PDIR  # vms-f3c: LNM$PROCESS / search-list create / directory tables
-lnm LNM.DEL.NOSUCHTABLE  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.DEL.NAME0  # vms-e04: bad name/equivalence/table accepted
-lnm LNM.DEL.ALL_IN_TABLE.NONAME  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.AFTER_DELALL  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.TRN.LOGIN_SURVIVES  # vms-ef21: process-permanent names not visible to an image
-lnm LNM.DEL.KERNEL_NAME  # vms-2b3: access modes not kept
+lnm LNM.TRN.SYSCMD  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
+lnm LNM.TRN.SYSIN  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
+lnm LNM.TRN.SYSOUT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
+lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job in LNM$JOB
+lnm LNM.TRN.TT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
 rights RDB.ADD_IDENT.UIC1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.UIC2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
@@ -200,19 +92,11 @@ rights RDB.NOPRIV.REM_IDENT  # vms-7d5a: rights-database services not provided y
 rights RDB.NOPRIV.ASCTOID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.FIND_HELD  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rms RMS.CREATE  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.GET.WRITEONLY  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.PUT.AFTER_CLOSE  # vms-3b5: $GET/$PUT record semantics and stream errors
 rms RMS.OPEN  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.PUT.READONLY  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.GET.SMALLBUF  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.GET.DISCONNECTED  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.CLOSE.AGAIN  # vms-3b5: $GET/$PUT record semantics and stream errors
 rms RMS.CREATE.V2  # vms-670: file versions
 rms RMS.CREATE.SUP  # vms-670: file versions
 rms RMS.CREATE.EXPLICIT_V1  # vms-670: file versions
 rms RMS.CREATE.FIX  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.PUT.FIX.SHORT  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.GET.FIX  # vms-3b5: $GET/$PUT record semantics and stream errors
 rms RMS.OPEN.FNF  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
 rms RMS.OPEN.DNF  # vms-137: $OPEN error codes
 rms RMS.OPEN.SYNTAX  # vms-137: $OPEN error codes
@@ -256,17 +140,9 @@ rtl STR.COMPARE.PAD  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
 rtl STR.FIND_FIRST_IN_SET  # vms-afcd: routine not provided by OVMX
 rtl STR.FIND_FIRST_NOT_IN_SET  # vms-afcd: routine not provided by OVMX
 rtl LIB.MATCHC  # vms-0ff7: STR$POSITION default start / empty substring; LIB$MATCHC
-rtl LIB.GET_SYMBOL  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.GET_SYMBOL.LOCAL_WINS  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.GET_SYMBOL.GLOBAL_LEFT  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.SET_SYMBOL.BADNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.SET_SYMBOL.EMPTYNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.FIND_FILE.DEFAULT  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.SAME_CTX_AGAIN  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.WILD.1  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.WILD.2  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.NONE  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.SYNTAX  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.WILD.2  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
+rtl LIB.FIND_FILE.NONE  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
+rtl LIB.FIND_FILE.SYNTAX  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
 rtl LIB.CVT_DTB.BAD  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
 rtl LIB.CVT_DTB.OVERFLOW  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
 rtl LIB.CVT_DTB.ZEROLEN  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length

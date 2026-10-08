@@ -1,0 +1,391 @@
+# provenance: OpenVMS Alpha V8.4 (AXPbox ES40), ovmx-lab pod semalpha-1 node ALPHA1, captured 2026-10-08 by
+#   tools/oracle/messages/capture_msgcat.py running tools/oracle/messages/SP_MSGCAT2.MAR (the node's own
+#   MACRO + LINK, RUN as SYSTEM): $GETMSG flags 15 at severity 0 for the facility-specific message numbers
+#   4096..8191 of CLI (3), SMG (18) and LIB (21). (MTH, OTS and STR were in the same run, which the node
+#   stopped answering part-way into MTH; they are NOT in this file.) Each line is condition value, $GETMSG
+#   outadr longword, message. Observed output (clean-room Rule 8); nothing disassembled. NOMSG lines dropped.
+MC 00038008 00000000 %CLI-W-ABVERB, ambiguous command verb - supply more characters
+MC 00038010 00000000 %CLI-W-ABKEYW, ambiguous qualifier or keyword - supply more characters
+MC 00038018 00000000 %CLI-W-BUFOVF, command buffer overflow - shorten expression or command line
+MC 00038020 00000000 %CLI-W-COMPLX, expression too complex - simplify
+MC 00038028 00000000 %CLI-W-DEFOVF, too many command procedure parameters - limit to eight
+MC 00038030 00000000 %CLI-W-DIRECT, invalid directory syntax - check brackets and other delimiters
+MC 00038038 00000000 %CLI-W-EXPSYN, invalid expression syntax - check operators and operands
+MC 00038040 00000000 %CLI-W-IMCHNG, two images requested in one command
+MC 00038048 00000000 %CLI-W-INSFPRM, missing command parameters - supply all required parameters
+MC 00038050 00000000 %CLI-W-IVCHAR, invalid numeric value - check for invalid digits
+MC 00038058 00000000 %CLI-W-DEFOVF16, too many command procedure parameters - limit to sixteen
+MC 00038060 00000000 %CLI-W-IVKEYW, unrecognized keyword - check validity and spelling
+MC 00038068 00000000 %CLI-W-IVOPER, unrecognized operator in expression - check spelling and syntax
+MC 00038070 00000000 %CLI-W-IVPROT, invalid protection code
+MC 00038078 00000000 %CLI-W-IVQLOC, invalid qualifier location - place after a parameter
+MC 00038080 00000000 %CLI-W-IVSYMB, invalid symbol name - start name with an alphabetic character
+MC 00038088 00000000 %CLI-W-IVVALU, invalid value syntax - see command documentation
+MC 00038090 00000000 %CLI-W-IVVERB, unrecognized command verb - check validity and spelling
+MC 00038098 00000000 %CLI-W-MAXPARM, too many parameters - reenter command with fewer parameters
+MC 000380A0 00000000 %CLI-W-NOATFIL, no file name for command procedure
+MC 000380A8 00000000 %CLI-W-NOCCAT, parameter concatenation not allowed - check use of plus (+)
+MC 000380B0 00000000 %CLI-W-NOCOMD, no command on line - reenter with alphabetic first character
+MC 000380B8 00000000 %CLI-W-NOKEYW, qualifier name is missing - append the name to the slash
+MC 000380C0 00000000 %CLI-W-NOLIST, list of parameter values not allowed - check use of comma (,)
+MC 000380C8 00000000 %CLI-W-NOQUAL, qualifiers not allowed - supply only verb and parameters
+MC 000380D0 00000000 %CLI-W-NOVALU, value not allowed - remove value specification
+MC 000380D8 00000000 %CLI-W-NOTNEG, qualifier or keyword not negatable - remove "NO" or omit
+MC 000380E0 00000000 %CLI-W-NULFIL, missing or invalid file specification - respecify
+MC 000380E8 00000000 %CLI-W-NUMBER, invalid numeric value - supply an integer
+MC 000380F0 00000000 %CLI-W-ONCOMD, ON command too large - decrease the length of the THEN clause
+MC 000380F8 00000000 %CLI-W-ONERR, invalid ON condition - use WARNING, SEVERE, ERROR, or CONTROL_Y
+MC 00038100 00000000 %CLI-W-ONLEVL, invalid ON context - use only within command procedures
+MC 00038108 00000000 %CLI-W-ONOVF, no room for ON command - symbol overflow, delete some symbols
+MC 00038110 00000000 %CLI-W-PARMDEL, invalid parameter delimiter - check use of special characters
+MC 00038118 00000000 %CLI-W-RSLOVF, buffer overflow - specify fewer command elements
+MC 00038120 00000000 %CLI-W-SKPDAT, image data (records not beginning with "$") ignored
+MC 00038128 00000000 %CLI-W-STKOVF, command procedures too deeply nested - limit to 32 levels
+MC 00038130 00000000 %CLI-W-SYMDEL, invalid symbol or value delimiter - check command syntax
+MC 00038138 00000000 %CLI-W-SYMOVF, no room for symbol definitions - delete some symbols
+MC 00038140 00000000 %CLI-W-UNDSYM, undefined symbol - check validity and spelling
+MC 00038148 00000000 %CLI-W-USGOTO, target of GOTO not found - check spelling and presence of label
+MC 00038150 00000000 %CLI-W-VALREQ, missing qualifier or keyword value - supply all required values
+MC 00038158 00000000 %CLI-W-ONEVAL, list of values not allowed - check use of comma (,)
+MC 00038160 00000000 %CLI-W-OVRFLW, too much data - modify size of field or size of data
+MC 00038168 00000000 %CLI-W-UNPROQUAL, unprocessed qualifiers
+MC 00038170 00000000 %CLI-W-UNPROPARM, unprocessed parameters
+MC 00038178 00000000 %CLI-W-INVKEY, invalid keyword
+MC 00038180 00000000 %CLI-W-INVRSP, invalid response
+MC 00038188 00000000 %CLI-W-UNDFIL, file has not been opened by DCL - check logical name
+MC 00038190 00000000 %CLI-W-FILOPN, file is already open
+MC 00038198 00000000 %CLI-W-BADRET, RETURN was issued without a subroutine
+MC 000381A0 00000000 %CLI-W-ABSYMD, abbreviated symbol definition conflict - rename symbol
+MC 000381A8 00000000 %CLI-W-INVUIC, invalid UIC - must be of the form [group,member]
+MC 000381B0 00000200 %CLI-W-BADTEXT,   \!AS\!AS
+MC 000381B8 00000000 %CLI-W-ABFNAM, ambiguous lexical function name - supply more characters
+MC 000381C0 00000000 %CLI-W-IVFNAM, invalid lexical function name - check validity and spelling
+MC 000381C8 00000000 %CLI-W-BLKOVRFLOW, block overflow
+MC 000381D0 00000000 %CLI-W-BLKUNDFLOW, block underflow
+MC 000381D8 00000000 %CLI-W-BADBLK, END issued without corresponding BEGIN
+MC 000381E0 00000000 %CLI-W-NOLBLS, label ignored - use only within command procedures
+MC 000381E8 00000000 %CLI-W-NOCHANGE, neither directory nor UIC could be changed - see documentation
+MC 000381F0 00000000 %CLI-W-ABSENT, entity or value absent from command string
+MC 000381F8 00000000 %CLI-W-NEGATED, entity explicitly negated in command string
+MC 00038200 00000000 %CLI-W-INVFILSPE, input or output file specification too long - shorten
+MC 00038208 00000000 %CLI-W-INVLOGFIL, invalid log file specification
+MC 00038210 00000000 %CLI-W-NOTHEN, IF or ON statement syntax error - check placement of THEN keyword
+MC 00038218 00000100 %CLI-W-SYMTOOLNG, symbol !AS is too long to copy to subprocess
+MC 00038220 00000000 %CLI-W-ASTDCL, out-of-band or ctrl/c AST's will also be delivered to parent
+MC 00038228 00000000 %CLI-W-INVRANGE, field specification is out of bounds - check sign and size
+MC 00038230 00000000 %CLI-W-LOCNEG, entity explicitly and locally negated in command string
+MC 00038238 00000000 %CLI-W-CMDNOTFND, command not found - use RECALL/ALL to display saved commands
+MC 00038240 00000000 %CLI-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+MC 00038248 00000100 %CLI-W-CMDSEG,  \!AS\
+MC 00038250 00000000 %CLI-W-NOTIFY, /NOTIFY not allowed - do not use with /WAIT or in batch jobs
+MC 00038258 00000000 %CLI-W-CONFLICT, illegal combination of command elements - check documentation
+MC 00038260 00000200 %CLI-W-UNDKEY, !AC key !AS is undefined
+MC 00038268 00000000 %CLI-W-ARGREQ, missing argument - supply all required arguments
+MC 00038270 00000000 %CLI-W-SYMLNG, symbol name is too long - shorten the name
+MC 00038278 00000000 %CLI-W-SYMABR, abbreviated symbols not allowed - remove "*" from symbol name
+MC 00038280 00000000 %CLI-W-IVKEYNAM, unrecognized key name - check validity and spelling
+MC 00038288 00000000 %CLI-W-NOPAREN, value improperly delimited - supply parenthesis
+MC 00038290 00000000 %CLI-W-IVATIME, invalid absolute time - use DD-MMM-YYYY:HH:MM:SS.CC format
+MC 00038298 00000000 %CLI-W-IVDTIME, invalid delta time - use DDDD-HH:MM:SS.CC format
+MC 000382A0 00000000 %CLI-W-TKNOVF, command element is too long - shorten
+MC 000382A8 00000000 %CLI-W-CMDFILERR, login command file initialization error
+MC 000382B0 00000000 %CLI-W-INVOUTSPE, invalid output file assignment
+MC 000382B8 00000000 %CLI-W-PERMSYM, deletion of permanent symbols not allowed
+MC 000382C0 00000000 %CLI-W-GBLNDF, cannot define symbol - symbol scope set to NOGLOBAL
+MC 000382C8 00000000 %CLI-W-INVGOSUB, invalid use of the GOSUB command
+MC 000382D0 00000000 %CLI-W-GOSUBMAX, GOSUB procedures too deeply nested - limit to 16 levels
+MC 000382D8 00000000 %CLI-W-USCALL, CALL target !AC either missing, misspelled, or inaccessible
+MC 000382E0 00000000 %CLI-W-USGOSUB, target of GOSUB not found - check spelling and presence of label
+MC 000382E8 00000000 %CLI-W-FRZNCTX, context is frozen - either cancel this context or use alternate
+MC 000382F0 00000000 %CLI-W-NOTCTX, symbol specified is not a valid context symbol
+MC 000382F8 00000000 %CLI-W-INVCTXTYP, symbol specified is defined for a different context type
+MC 00038300 00000100 %CLI-W-CMDSEG2,  \!AD\
+MC 00038308 00000000 %CLI-W-INVNOD, invalid node name specification; respecify
+MC 00038310 00000000 %CLI-W-NULLPIPE, null pipe segment found; please specify the missing pipe segment
+MC 00038318 00000000 %CLI-W-INVNULLCMD, null command sequence found; please specify the missing command sequence
+MC 00038320 00000000 %CLI-W-WRGSUBSHSYN, empty subshell or subshell is not separated from other command sequences by proper separators
+MC 00038328 00000000 %CLI-W-UNTERMSUBSH, subshell syntax not delimited with matching parentheses; add missing parenthesis
+MC 00038330 00000000 %CLI-W-DUPREDSYN, cannot specify the same type of redirection syntax more than once in a command sequence
+MC 00038338 00000000 %CLI-W-INCREDSYN, incomplete redirection syntax; supply missing file parameter
+MC 00038340 00000000 %CLI-W-INVREDSYN, invalid redirection type specified in a pipe segment
+MC 00038348 00000000 %CLI-W-INVCONCHAR, invalid continuation character; a command sequence cannot be terminated by a continuation character
+MC 00038350 00000000 %CLI-W-CMDNOTALLINPIP, the specified command sequence is not allowed in a PIPE command
+MC 00038358 00000000 %CLI-W-LBLNOTALLINPIP, labels are not allowed in a PIPE command
+MC 00038360 00000000 %CLI-W-TOOMANYPIPCMD, too many pipe segment commands specified
+MC 00038368 00000000 %CLI-W-UNSUPITEM, item not supported by lexical function
+MC 00038800 00000000 %CLI-W-CONFQUAL, conflicting qualifiers
+MC 00038808 00000000 %CLI-W-INVQUAL, invalid qualifier
+MC 00038810 00000000 %CLI-W-REQPRMABS, required parameter is absent
+MC 00038818 00000000 %CLI-W-INVQUALNUM, invalid qualifier number
+MC 00038820 00000000 %CLI-W-INVREQTYP, invalid request type
+MC 00038828 00000000 %CLI-W-NOVALUE, value not present
+MC 00038830 00000000 %CLI-W-VALCNVERR, error converting value
+MC 00038838 00000000 %CLI-W-ILLVAL, illegal value is present
+MC 00038840 00000000 %CLI-W-NOOPTPRS, no option present on command
+MC 00038848 00000100 %CLI-W-CREQUEJOB, error creating job on queue !AS
+MC 00038850 00000100 %CLI-W-SUBMITERR, error submitting file to queue !AS
+MC 00038858 00000000 %CLI-W-DEVALSPL, device already spooled
+MC 00038860 00000000 %CLI-W-DEVNOTSPL, device not spooled
+MC 00038868 00000000 %CLI-W-IVDEVTYPE, invalid device type - specify a mailbox device
+MC 00038870 00000000 %CLI-W-IMGFNF, image file not found
+MC 00038878 00000000 %CLI-W-DEVNOTFOR, device not mounted foreign
+MC 00038880 00000000 %CLI-W-PWDNOTVAL, old password validation error - password unchanged
+MC 00038888 00000000 %CLI-W-PWDNOTVER, new password verification error - password unchanged
+MC 00038890 00000000 %CLI-W-PWDLOCKED, password was locked to prevent change
+MC 00038898 00000000 %CLI-W-NOTFR, no transfer address
+MC 000388A0 00000000 %CLI-W-PWDSYNTAX, illegal password syntax
+MC 000388A8 00000100 %CLI-W-IMGNAME, image file !AS
+MC 000388B0 00000100 %CLI-W-IMAGEFNF, image file not found !AS
+MC 000388B8 00000000 %CLI-W-BADSTRLVL, unrecognized structure level for command tables
+MC 000388C0 00000000 %CLI-W-REFUSED, you cannot attach to that process
+MC 000388C8 00000000 %CLI-W-BADCTLMSK, bad control character enable/disable mask
+MC 000388D0 00000000 %CLI-W-INVRFM, invalid record format for record I/O - file not opened
+MC 000388D8 00000000 %CLI-W-NOCLINT, image requested CLI interface routine that does not exist
+MC 000388E0 00000000 %CLI-W-NOSPAWN, DCL cannot spawn an MCR subprocess - subprocess aborted
+MC 000388E8 00000000 %CLI-W-SPWNIO, shared input or output files are not allowed - respecify
+MC 000388F0 00000000 %CLI-W-TRMMBX, terminal has associated mailbox - terminate image and then SPAWN
+MC 000388F8 00000000 %CLI-W-STRTOOLNG, string argument is too long - shorten
+MC 00038900 00000000 %CLI-W-CMDGONE, this is no longer a valid command - see documentation
+MC 00038908 00000000 %CLI-W-NOCMDPROC, error opening captive command procedure - access denied
+MC 00038910 00000000 %CLI-W-INVROUT, invalid routine specified in command tables - check .CLD file
+MC 00038918 00000000 %CLI-W-OLDTAB, command tables have obsolete format - use SET COMMAND to recreate
+MC 00038920 00000000 %CLI-W-INVTAB, command tables have invalid format - see documentation
+MC 00038928 00000000 %CLI-W-NOTDISCON, terminal is not disconnectable - explicitly specify LOGOUT
+MC 00038930 00000000 %CLI-W-ENTNF, specified entity not found in command tables
+MC 00038938 00000000 %CLI-W-ATTRMBX, cannot attach to that process - terminal has associated mailbox
+MC 00038940 00000000 %CLI-W-INVCALL, invalid CALL nesting structure or data inconsistency detected
+MC 00038948 00000000 %CLI-W-INVIFNEST, invalid IF-THEN-ELSE nesting structure or data inconsistency
+MC 00038950 00000000 %CLI-W-CAPTINT, captive account - interactive access denied
+MC 00038958 00000000 %CLI-W-CAPTINQ, captive account - INQUIRE command not allowed
+MC 00038960 00000000 %CLI-W-NOFORCMD, account restricted - foreign commands not valid
+MC 00038968 00000000 %CLI-W-NORUNMCR, account restricted - RUN and MCR commands not valid
+MC 00038970 00000000 %CLI-W-NOREADCP, No read access to interrupted command procedure
+MC 00038978 00000000 %CLI-W-INVPREFIX, invalid prefix format string - check FAO directives
+MC 00038980 00000000 %CLI-W-CAPTSPAWN, captive account - SPAWN command not allowed
+MC 0003DDC0 00000200 %CLI-W-DEFKEY, !AC key !AS has been defined
+MC 0003DDC8 00000200 %CLI-W-DELKEY, !AC key !AC has been deleted
+MC 0003DDD0 00000100 %CLI-W-SETKEY, keypad state has been set to !AC
+MC 0003DDD8 00000000 %CLI-W-SPARE1, spare - for future use
+MC 0003DDE0 00000100 %CLI-W-ALLOC, !AS allocated
+MC 0003DDE8 00000100 %CLI-W-SUPERSEDE, previous value of !AS has been superseded
+MC 0003DDF0 00000000 %CLI-W-INSPRIV, insufficient privilege to change UIC - you need CMKRNL privilege
+MC 0003DDF8 00000000 %CLI-W-NODIRCHG, directory cannot be changed to match UIC greater than [377,377]
+MC 0003DE00 00000000 %CLI-W-IGNQUAL, qualifiers appearing before this item were ignored
+MC 0003DE08 00000100 %CLI-W-TABEXIST, !AS already exists - not superseded
+MC 0003DE10 00000100 %CLI-W-TABSUPER, previous table !AS has been superseded
+MC 0003DE18 00000100 %CLI-W-TABNOTFND, previous table !AS was not found - new table created
+MC 0003DE20 00000200 %CLI-W-DELSYM, !AC symbol !AC has been deleted
+MC 0003DE28 00000000 %CLI-W-SYMTRUNC, preceding symbol value has been truncated
+MC 0003DE30 00000200 %CLI-W-KEYCNV, synonym key !AS has been converted to !AS
+MC 0003DE38 00000100 %CLI-W-INVDEF, !AD does not exist
+MC 0003DE40 00000500 %CLI-W-MISSPELL, !AC !AD is misspelled, using !AC !AC!AC
+MC 0003DE48 00000000 %CLI-W-MSNGENDS, missing or misspelled ENDSUBROUTINE statement detected while scanning for label
+MC 0003FD00 00000100 %CLI-W-SPAWNED, process !AS spawned
+MC 0003FD08 00000100 %CLI-W-ATTACHED, terminal now attached to process !AS
+MC 0003FD10 00000100 %CLI-W-RETURNED, control returned to process !AS
+MC 0003FD18 00000000 %CLI-W-PRESENT, entity value is present in command string
+MC 0003FD20 00000000 %CLI-W-DEFAULTED, entity defaulted present in command string
+MC 0003FD28 00000000 %CLI-W-CONCAT, requested value is terminated by a plus sign
+MC 0003FD30 00000000 %CLI-W-LOCPRES, entity value is locally present in command string
+MC 0003FD38 00000000 %CLI-W-COMMA, requested value is terminated by a comma
+MC 0003FD40 00000000 %CLI-W-OKTAB, command tables are already in latest format
+MC 0003FD48 00000000 %CLI-W-UPGTAB, command tables have been upgraded to latest format
+MC 0003FFF0 00000100 %CLI-W-PROC_ID, identification of created process is !XL
+MC 0003FFF8 00000200 %CLI-W-QUEJOBCRE,   Job !UW entered on queue !AC
+MC 00128000 00000000 %SMG-W-NORMAL, normal successful completion
+MC 00128010 00000000 %SMG-W-PREDEFREP, previous key-definition replaced
+MC 00128018 00000000 %SMG-W-BATSTIPRO, batching is still in progress
+MC 00128020 00000000 %SMG-W-BATWASOFF, batching was off
+MC 00128028 00000000 %SMG-W-BATWAS_ON, batching was on
+MC 00128030 00000000 %SMG-W-PASALREXI, pasteboard already exists for this device
+MC 00128038 00000000 %SMG-W-NOT_A_TRM, pasteboard attached to a device that is not a terminal
+MC 00128040 00000000 %SMG-W-NO_MORMSG, no more broadcast messages are available
+MC 00128048 00000000 %SMG-W-WILUSERMS, output will be performed by RMS later
+MC 00128050 00000000 %SMG-W-NOTRMSOUT, RMS is not being used to perform output
+MC 00128058 00000000 %SMG-W-NO_CHADIS, no change in virtual display
+MC 00128060 00000000 %SMG-W-PRISECMAP, private terminal table used
+MC 00128068 00000000 %SMG-W-GBLSECMAP, system terminal table used
+MC 00128070 00000000 %SMG-W-WINTRUNCFIT, viewport truncated to fit
+MC 00128078 00000000 %SMG-W-SUBALREXI, subprocess already exists for this display
+MC 00128080 00000000 %SMG-W-NONBRDMSG, non-broadcast message returned
+MC 00128200 00000000 %SMG-W-FATERRLIB, fatal error in library
+MC 00128208 00000000 %SMG-W-INVARG, invalid argument
+MC 00128210 00000000 %SMG-W-INVCOL, invalid column
+MC 00128218 00000000 %SMG-W-INVDIS_ID, invalid display-id
+MC 00128220 00000000 %SMG-W-INVPAS_ID, invalid pasteboard-id
+MC 00128228 00000000 %SMG-W-INVROW, invalid row
+MC 00128230 00000000 %SMG-W-DSPIN_USE, operation invalid while display is active
+MC 00128238 00000000 %SMG-W-TOOMANPAS, too many pasteboards
+MC 00128240 00000000 %SMG-W-WRONUMARG, wrong number of arguments
+MC 00128248 00000000 %SMG-W-INVKBD_ID, invalid keyboard-id
+MC 00128250 00000000 %SMG-W-INVKTB_ID, invalid key-table-id
+MC 00128258 00000000 %SMG-W-INVMAXLEN, invalid maximum length (greater than 512)
+MC 00128260 00000000 %SMG-W-FILTOOLON, file-specification is too long (over 255 characters)
+MC 00128268 00000000 %SMG-W-PROTOOLON, prompt-string is too long
+MC 00128270 00000000 %SMG-W-NOTPASTED, given display is not pasted to given pasteboard
+MC 00128278 00000000 %SMG-W-PBDIN_USE, operation invalid while pasteboard is buffered
+MC 00128280 00000000 %SMG-W-INVWIDARG, width of 0 is not permitted
+MC 00128288 00000000 %SMG-W-INVPAGARG, height of 0 is not permitted
+MC 00128290 00000000 %SMG-W-INVCOLARG, unknown color specified
+MC 00128298 00000000 %SMG-W-DIALINNOT, diagonal line not allowed
+MC 001282A0 00000000 %SMG-W-TABID_MIS, terminal table ID mismatch
+MC 001282A8 00000000 %SMG-W-UNDTERNAM, undefined terminal name
+MC 001282B0 00000000 %SMG-W-INVTERTAB, invalid terminal table
+MC 001282B8 00000000 %SMG-W-INVREQCOD, invalid request code
+MC 001282C0 00000000 %SMG-W-NOTBOOCAP, not a Boolean capability
+MC 001282C8 00000000 %SMG-W-SYNERR, syntax error
+MC 001282D0 00000000 %SMG-W-UNDTERTYP, undefined terminal type
+MC 001282D8 00000000 %SMG-W-MISTERNAM, definition must begin with a terminal name
+MC 001282E0 00000000 %SMG-W-EXPTOOCOM, expression is too complex
+MC 001282E8 00000000 %SMG-W-ILLVAL, Boolean value must be 0 or 1
+MC 001282F0 00000000 %SMG-W-INVEXP, invalid expression
+MC 001282F8 00000500 %SMG-W-ERRAT_LIN, error in file !AF, line !UL at or near '!AF'
+MC 00128300 00000300 %SMG-W-ERRLIN, error in file !AF, line !UL
+MC 00128308 00000000 %SMG-W-UNDTERNOP, undefined terminal - couldn't access private terminal table
+MC 00128310 00000000 %SMG-W-UNDTERNOS, undefined terminal - couldn't access system terminal table
+MC 00128318 00000000 %SMG-W-MISFILSPE, missing file specification in REQUIRE statement
+MC 00128320 00000000 %SMG-W-UNRECSTA, unrecognized statement
+MC 00128328 00000200 %SMG-W-FAIOPEFIL, failed to open file !AF
+MC 00128330 00000000 %SMG-W-NO_ARGS, missing arguments for substitution
+MC 00128338 00000000 %SMG-W-NOTNUMCAP, not a numeric capability
+MC 00128340 00000000 %SMG-W-NOTSTRCAP, not a string capability
+MC 00128348 00000000 %SMG-W-MISENDSTA, missing END statement
+MC 00128350 00000000 %SMG-W-MISNAMREQ, expected NAME or REQUIRE
+MC 00128358 00000000 %SMG-W-ILLBATFNC, operation not permitted while display is batched
+MC 00128360 00000000 %SMG-W-INVDIR, invalid directive
+MC 00128368 00000000 %SMG-W-TRMNOTANS, terminal is not ANSI compatible
+MC 00128370 00000000 %SMG-W-LENNOTEQL, length of picture string and initial string are not equal
+MC 00128378 00000000 %SMG-W-LENMUSONE, length of fill string and clear string must be 1
+MC 00128380 00000000 %SMG-W-DISREQ, DISPLAY_ID parameter must be specified
+MC 00128388 00000000 %SMG-W-NOTIMP, routine not implemented in this version of SMG$
+MC 00128390 00000000 %SMG-W-NO_WINASSOC, no viewport has been associated with the display
+MC 00128398 00000000 %SMG-W-WINEXISTS, a viewport has already been associated with the display
+MC 001283A0 00000000 %SMG-W-NOSUBEXI, a subprocess does not exist for this virtual display
+MC 001283A8 00000000 %SMG-W-INSQUOCRE, insufficient quota to create a subprocess
+MC 001283B0 00000000 %SMG-W-INPTOOLON, input-string is too long
+MC 001283B8 00000000 %SMG-W-KBDIN_USE, operation invalid while keyboard is active
+MC 00128400 00000000 %SMG-W-EOF, end-of-file
+MC 00128408 00000000 %SMG-W-KEYDEFPRO, key definition is protected - cannot be changed or deleted
+MC 00128410 00000000 %SMG-W-INVDEFATT, invalid key-definition attributes
+MC 00128418 00000000 %SMG-W-INVKEYNAM, invalid key name
+MC 00128420 00000000 %SMG-W-INVSTANAM, invalid state name
+MC 00128428 00000000 %SMG-W-LINNOTFND, requested line was not found
+MC 00129000 00000000 %SMG-W-KEYNOTDEF, key is not defined
+MC 00129008 00000000 %SMG-W-NOMOREKEYS, no more keys defined
+MC 00129010 00000000 %SMG-W-STRTERESC, illegal escape sequence embedded in string
+MC 00129018 00000000 %SMG-W-GBLNOTCRE, global section not created
+MC 00129020 00000000 %SMG-W-DELEXIGBL, TERMTABLE section already exists
+MC 00129028 00000000 %SMG-W-GETDATSTR, not implemented
+MC 00129030 00000000 %SMG-W-OPNOTSUP, operation is not supported on this device
+MC 00129038 00000000 %SMG-W-HLPPMTSTR, Press RETURN to continue...
+MC 00158000 00000000 %LIB-W-NORMAL, normal successful completion
+MC 00158010 00000000 %LIB-W-STRTRU, string truncated
+MC 00158018 00000000 %LIB-W-ONEENTQUE, one entry in queue
+MC 00158020 00000000 %LIB-W-KEYALRINS, key already inserted in tree
+MC 00158028 00000000 %LIB-W-ERRROUCAL, error routine called
+MC 00158030 00000000 %LIB-W-RESTART, restart current instruction
+MC 00158200 00000000 %LIB-W-BADSTA, bad stack
+MC 00158208 00000000 %LIB-W-FATERRLIB, fatal error in library
+MC 00158210 00000000 %LIB-W-INSVIRMEM, insufficient virtual memory
+MC 00158218 00000000 %LIB-W-INPSTRTRU, input string truncated
+MC 00158220 00000000 %LIB-W-INVSTRDES, invalid string descriptor
+MC 00158228 00000000 %LIB-W-INTLOGERR, internal logic error
+MC 00158230 00000000 %LIB-W-INVARG, invalid argument(s)
+MC 00158238 00000100 %LIB-W-AMBKEY, "!AS" is an ambiguous keyword
+MC 00158240 00000100 %LIB-W-UNRKEY, "!AS" is an unrecognized keyword
+MC 00158248 00000000 %LIB-W-PUSSTAOVE, pushdown stack overflow
+MC 00158250 00000000 %LIB-W-USEFLORES, use of floating reserved operand
+MC 00158258 00000000 %LIB-W-SIGNO_ARG, signal with no arguments
+MC 00158260 00000000 %LIB-W-BADBLOADR, bad block address
+MC 00158268 00000000 %LIB-W-BADBLOSIZ, bad block size
+MC 00158270 00000000 %LIB-W-NOTFOU, not found
+MC 00158278 00000000 %LIB-W-ATTCONSTO, attempt to continue from stop
+MC 00158280 00000000 %LIB-W-SYNTAXERR, string syntax error detected by LIB$TPARSE
+MC 00158288 00000000 %LIB-W-INVTYPE, invalid LIB$TPARSE state table entry
+MC 00158290 00000000 %LIB-W-INSEF, insufficient event flags
+MC 00158298 00000000 %LIB-W-EF_ALRFRE, event flag already free
+MC 001582A0 00000000 %LIB-W-EF_ALRRES, event flag already reserved
+MC 001582A8 00000000 %LIB-W-EF_RESSYS, event flag reserved to system
+MC 001582B0 00000000 %LIB-W-INSLUN, insufficient logical unit numbers
+MC 001582B8 00000000 %LIB-W-LUNALRFRE, logical unit number already free
+MC 001582C0 00000000 %LIB-W-LUNRESSYS, logical unit number reserved to system
+MC 001582C8 00000000 %LIB-W-SCRBUFOVF, screen buffer overflow
+MC 001582D0 00000000 %LIB-W-INVSCRPOS, invalid screen position
+MC 001582D8 00000000 %LIB-W-SECINTFAI, secondary interlock failure in queue
+MC 001582E0 00000000 %LIB-W-INVCHA, invalid character
+MC 001582E8 00000000 %LIB-W-QUEWASEMP, queue was empty
+MC 001582F0 00000000 %LIB-W-STRIS_INT, string is interlocked
+MC 001582F8 00000000 %LIB-W-KEYNOTFOU, key not found in tree
+MC 00158300 00000000 %LIB-W-INVCVT, invalid conversion
+MC 00158308 00000000 %LIB-W-INVDTYDSC, invalid data type in descriptor
+MC 00158310 00000000 %LIB-W-INVCLADSC, invalid class in descriptor
+MC 00158318 00000000 %LIB-W-INVCLADTY, invalid class data type combination in descriptor
+MC 00158320 00000000 %LIB-W-INVNBDS, invalid numeric byte data string
+MC 00158328 00000000 %LIB-W-DESSTROVF, destination string overflow
+MC 00158330 00000000 %LIB-W-INTOVF, integer overflow
+MC 00158338 00000000 %LIB-W-DECOVF, decimal overflow
+MC 00158340 00000000 %LIB-W-FLTOVF, floating overflow
+MC 00158348 00000000 %LIB-W-FLTUND, floating underflow
+MC 00158350 00000000 %LIB-W-ROPRAND, reserved operand
+MC 00158358 00000000 %LIB-W-WRONUMARG, wrong number of arguments
+MC 00158360 00000000 %LIB-W-NOSUCHSYM, no such symbol
+MC 00158368 00000000 %LIB-W-INSCLIMEM, insufficient CLI memory
+MC 00158370 00000000 %LIB-W-AMBSYMDEF, ambiguous symbol definition
+MC 00158378 00000000 %LIB-W-NOCLI, no CLI present to perform function
+MC 00158380 00000000 %LIB-W-UNECLIERR, unexpected CLI error
+MC 00158388 00000000 %LIB-W-INVSYMNAM, invalid symbol name
+MC 00158390 00000000 %LIB-W-ATTREQREF, attach request refused
+MC 00158398 00000000 %LIB-W-INVFILSPE, invalid file specification
+MC 001583A0 00000000 %LIB-W-INVXAB, invalid XAB chain
+MC 001583A8 00000000 %LIB-W-NO_STRACT, no stream active
+MC 001583B0 00000000 %LIB-W-BADTAGVAL, bad boundary tag value
+MC 001583B8 00000000 %LIB-W-INVOPEZON, invalid operation for zone
+MC 001583C0 00000000 %LIB-W-PAGLIMEXC, page limit exceeded for zone
+MC 001583C8 00000000 %LIB-W-NOTIMP, not implemented
+MC 001583D0 00000000 %LIB-W-BADZONE, bad zone
+MC 001583D8 00000000 %LIB-W-IVTIME, invalid time passed in, or computed
+MC 001583E0 00000000 %LIB-W-ONEDELTIM, at least one delta time is required
+MC 001583E8 00000000 %LIB-W-NEGTIM, a negative time was computed
+MC 001583F0 00000000 %LIB-W-INVARGORD, invalid argument order
+MC 001583F8 00000000 %LIB-W-ABSTIMREQ, absolute time required, delta time supplied
+MC 00158400 00000000 %LIB-W-DELTIMREQ, delta time required, absolute time supplied
+MC 00158408 00000000 %LIB-W-INVOPER, invalid operation specified
+MC 00158410 00000000 %LIB-W-REENTRANCY, reentrancy detected
+MC 00158418 00000000 %LIB-W-UNRFORCOD, unrecognized format code
+MC 00158420 00000000 %LIB-W-ILLINISTR, illegal initialization string
+MC 00158428 00000000 %LIB-W-NUMELEMENTS, number of elements incorrect for component
+MC 00158430 00000000 %LIB-W-ELETOOLON, element too long, maximum 255 characters
+MC 00158438 00000000 %LIB-W-ILLCOMPONENT, illegal initialization component
+MC 00158440 00000000 %LIB-W-AMBDATTIM, ambiguous date-time
+MC 00158448 00000000 %LIB-W-INCDATTIM, incomplete date-time, missing fields with no defaults
+MC 00158450 00000000 %LIB-W-ILLFORMAT, illegal format, too many or not enough fields
+MC 00158458 00000000 %LIB-W-UNSUPVER, unsupported version
+MC 00158460 00000000 %LIB-W-BADFORMAT, too many or incorrectly formatted fields
+MC 00158468 00000000 %LIB-W-NODTOOLNG, primary node name too long after being quoted
+MC 00158470 00000000 %LIB-W-NOHOSNAM, no host node name found
+MC 00159000 00000000 %LIB-W-OUTSTRTRU, output string truncated
+MC 00159008 00000000 %LIB-W-FILFAIMAT, file failed to match selection criteria
+MC 00159010 00000000 %LIB-W-NEGANS, negative answer in response to /CONFIRM prompt
+MC 00159018 00000000 %LIB-W-QUIPRO, quit processing requested
+MC 00159020 00000000 %LIB-W-QUICONACT, quit /CONFIRM prompting
+MC 00159028 00000000 %LIB-W-ENGLUSED, English used, could not determine user's language
+MC 00159030 00000000 %LIB-W-DEFFORUSE, default format used, could not determine user's preference
+MC 00159038 00000000 %LIB-W-MEMALRFRE, memory already free
+MC 0015C000 00000200 %LIB-W-BADCCC, illegal compilation code (!UL.) in module !AC
+MC 0015C008 00000100 %LIB-W-EOMERROR, compilation errors in module !AC
+MC 0015C010 00000100 %LIB-W-EOMFATAL, fatal compilation errors in module !AC
+MC 0015C018 00000100 %LIB-W-EOMWARN, compilation warnings in module !AC
+MC 0015C020 00000200 %LIB-W-GSDTYP, illegal GSD record type (!UL.) in module !AC
+MC 0015C028 00000200 %LIB-W-ILLFMLCNT, minimum argument count exceeds maximum for procedure !AC in module !AC
+MC 0015C030 00000200 %LIB-W-ILLMODNAM, illegal module name length (!UL.) for module !AC
+MC 0015C038 00000300 %LIB-W-ILLPSCLEN, psect !AC has illegal length (!UL.) in module !AC
+MC 0015C040 00000200 %LIB-W-ILLRECLEN, illegal record length (!UL.) in module !AC
+MC 0015C048 00000100 %LIB-W-ILLRECLEN, illegal record length (!UL)
+MC 0015C050 00000200 %LIB-W-ILLRECTYP, illegal record type (!UL.) in module !AC
+MC 0015C058 00000100 %LIB-W-ILLRECTYP, illegal record type (!UL)
+MC 0015C060 00000300 %LIB-W-ILLSYMLEN, symbol !AC has illegal length (!UL.) in module !AC
+MC 0015C068 00000100 %LIB-W-NOEOM, module !AC does not contain end of module record
+MC 0015C070 00000100 %LIB-W-RECTOOSML, data overflows object record in module !AC
+MC 0015C078 00000100 %LIB-W-SEQUENCE, illegal record sequence in module !AC
+MC 0015C080 00000000 %LIB-W-SEQUENCE, illegal record sequence
+MC 0015C088 00000100 %LIB-W-STRLVL, illegal object language structure level in module !AC

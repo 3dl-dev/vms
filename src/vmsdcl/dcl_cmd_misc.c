@@ -2967,8 +2967,8 @@ int cmd_dismount(struct dcl_command *cmd)
      * defines none, so this is a no-op on the current path, kept idempotent. */
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
-        lnm_delete(mgr, LNM_PROCESS_TABLE, log_name, LNM_MODE_USER);
-        lnm_delete(mgr, LNM_SYSTEM_TABLE, log_name, LNM_MODE_USER);
+        lnm_delete(mgr, LNM_PROCESS_TABLE, log_name, LNM_MODE_EXEC);
+        lnm_delete(mgr, LNM_SYSTEM_TABLE, log_name, LNM_MODE_EXEC);
     }
 
     printf("%%DISMOUNT-I-DISMOUNTED, _%s dismounted\n", dev_name);

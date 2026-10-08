@@ -1,0 +1,49 @@
+        .TITLE  SP_MSGCAT  Message catalog dump (rd vms-546)
+; For every message number of the SYSTEM (0) and RMS (1) facilities, print the
+; condition value, the $GETMSG outadr longword and the message as $GETMSG
+; returns it with all four parts (flags 15) at severity 0. Observed output only.
+        .PSECT  DATA,WRT,NOEXE,LONG
+MSGBUF: .BLKB   256
+MSGDSC: .LONG   256
+        .ADDRESS MSGBUF
+MSGLEN: .WORD   0
+        .ALIGN  LONG
+OUTADR: .LONG   0
+CODE:   .LONG   0
+LINE:   .BLKB   400
+LINDSC: .LONG   400
+        .ADDRESS LINE
+LINLEN: .WORD   0
+        .ALIGN  LONG
+FACS:   .LONG   0,1
+CTL:    .ASCID  /MC !XL !XL !AD/
+BEG:    .ASCID  /MC-BEGIN/
+FIN:    .ASCID  /MC-END/
+        .PSECT  CODE,NOWRT,EXE
+        .ENTRY  START,^M<R2,R3,R4,R5,R6>
+        PUSHAQ  BEG
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        CLRL    R4
+FACLP:  MOVL    FACS[R4],R2
+        CLRL    R3
+MSGLP:  ASHL    #16,R2,R5
+        ASHL    #3,R3,R6
+        BISL3   R6,R5,CODE
+        MOVL    #256,MSGDSC
+        CLRL    OUTADR
+        $GETMSG_S MSGID=CODE,MSGLEN=MSGLEN,BUFADR=MSGDSC,FLAGS=#15,OUTADR=OUTADR
+        BLBC    R0,NEXT
+        MOVZWL  MSGLEN,R6
+        MOVL    #400,LINDSC
+        $FAO_S  CTRSTR=CTL,OUTLEN=LINLEN,OUTBUF=LINDSC,P1=CODE,P2=OUTADR,P3=R6,P4=#MSGBUF
+        MOVZWL  LINLEN,R6
+        MOVW    R6,LINDSC
+        PUSHAQ  LINDSC
+        CALLS   #1,G^LIB$PUT_OUTPUT
+NEXT:   AOBLSS  #8192,R3,MSGLP
+        AOBLSS  #2,R4,FACLP
+        PUSHAQ  FIN
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        MOVL    #1,R0
+        RET
+        .END    START

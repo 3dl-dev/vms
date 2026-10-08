@@ -67,11 +67,12 @@ struct dcl_rms_dir;      /* opaque: FAB+NAM over $PARSE/$SEARCH */
  * failure. */
 struct dcl_rms_dir *dcl_rms_dir_open(struct dcl_context *ctx, const char *pattern);
 /* Next match. Fills `spec` with the full resultant "DEV:[DIR]NAME.TYP;VER". If
- * `fid` is non-NULL, fills the genuine {num,seq,rvn} File ID of the match (from
- * the ACP search; all-zero on the POSIX cross). Returns 1 on a match, 0 at end
- * (RMS$_NMF) or on error. */
+ * `fid` is non-NULL, fills the genuine {num,seq,rvn} File ID of the match --
+ * the NAM$W_FID $SEARCH returned (vms-6e28); the file number includes its NMX
+ * extension (bits 16-23). All-zero on the POSIX cross. Returns 1 on a match, 0
+ * at end (RMS$_NMF) or on error. */
 int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
-                     uint16_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn);
+                     uint32_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn);
 /* The RMS status of the LAST $SEARCH on this context (the value dcl_rms_dir_next
  * saw when it returned 0). Lets a caller tell RMS$_NMF (the directory exists and
  * iteration is exhausted -- 0 matches means %DIRECT-W-NOFILES) apart from

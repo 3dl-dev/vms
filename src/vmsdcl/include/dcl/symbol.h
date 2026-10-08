@@ -48,6 +48,8 @@ int dcl_sym_set_int(const char *name, int32_t value, int scope);
  * SET SYMBOL/SCOPE=(...)/VERB or /GENERAL is honoured. */
 const char *dcl_sym_get_ex(const char *name, int domain);
 const char *dcl_sym_get(const char *name);
+/* dcl_sym_get, also reporting the table (DCL_SYM_LOCAL/GLOBAL) that answered. */
+const char *dcl_sym_get_which(const char *name, int *scope);
 int dcl_sym_get_int(const char *name, int32_t *value);
 
 /* Delete a symbol */

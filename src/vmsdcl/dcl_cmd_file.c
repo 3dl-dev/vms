@@ -47,13 +47,17 @@ struct dir_entry {
      * (from_acp=1). The real File ID DIRECTORY /FULL emits, the on-disk
      * protection/allocation, and the VMS 64-bit dates -- NOT stat()-derived. */
     int      from_acp;      /* 1 = fields below are genuine ACP/ODS-2 data */
-    uint16_t fid_num, fid_seq;
+    uint32_t fid_num;       /* file number incl. its NMX extension */
+    uint16_t fid_seq;
     uint8_t  fid_rvn;
     uint16_t vms_prot;      /* ODS-2 file protection (4 nibbles S/O/G/W) */
     long     alloc_blocks;  /* highest allocated VBN (allocation quantity) */
     uint8_t  credate[8];    /* VMS 64-bit creation time (0 => not recorded) */
     uint8_t  revdate[8];    /* VMS 64-bit revision time */
     int      has_cre, has_rev;
+    /* vms-b447: the header's record attributes (FAT). */
+    uint8_t  rfm, rat;       /* FAB$C_* record format, FAB$M_* attributes */
+    uint16_t mrs, lrl;       /* FAT$W_MAXREC (maximum), FAT$W_RSIZE (longest) */
 };
 
 /* /SIZE[=option] mode. VSI OpenVMS DCL Dictionary, DIRECTORY /SIZE: bare /SIZE
@@ -481,7 +485,7 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
     int entry_count = 0;
 
     char match[1024];
-    uint16_t fnum, fseq; uint8_t frvn;
+    uint32_t fnum; uint16_t fseq; uint8_t frvn;
     while (dcl_rms_dir_next(d, match, sizeof(match), &fnum, &fseq, &frvn)) {
         /* Resultant is "DEV:[DIR]NAME.TYP;VER" -- take the NAME.TYP;VER tail. */
         const char *nt = match;
@@ -535,6 +539,8 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
             memcpy(e->revdate, at.revdate, 8);
             e->has_cre = (memcmp(at.credate, "\0\0\0\0\0\0\0\0", 8) != 0);
             e->has_rev = (memcmp(at.revdate, "\0\0\0\0\0\0\0\0", 8) != 0);
+            e->rfm = at.rfm; e->rat = at.rat;
+            e->mrs = at.mrs; e->lrl = at.lrl;
         } else {
             e->st.st_mode = S_IFREG | 0644;
         }
@@ -669,6 +675,23 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
              * exactly these strings for a file that has none. */
             printf("Expired:  <None specified>\n");
             printf("Backup:   <No backup recorded>\n");
+
+            /* Record format / attributes from the header's FAT (vms-b447).
+             * Only the forms a real VMS has been captured printing are
+             * emitted (docs/oracle/semantics/rights/vax73-rightslist.txt,
+             * tests/ods2/PROVENANCE-real_vax_ods2.md):
+             *   Record format:      Variable length, maximum 64 bytes, longest 0 bytes
+             *   Record attributes:  None | Carriage return carriage control
+             * Other record formats and attribute combinations are omitted
+             * until captured (INV-6: no invented output). */
+            if (e->from_acp && e->rfm == FAB$C_VAR) {
+                printf("Record format:      Variable length, maximum %u bytes, "
+                       "longest %u bytes\n", (unsigned)e->mrs, (unsigned)e->lrl);
+                if (e->rat == 0)
+                    printf("Record attributes:  None\n");
+                else if (e->rat == FAB$M_CR)
+                    printf("Record attributes:  Carriage return carriage control\n");
+            }
 
             /* File protection (long form): the genuine ODS-2 protection word
              * from the ACP header, else derived from the passthrough st_mode. */

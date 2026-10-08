@@ -222,6 +222,9 @@ struct vms_acp_acpcontrol_args {
 #define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
 #define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
 #define VMS_ACP_ATTR_VERSIONS 0x04u   /* apply the FAT default version limit (attr.recattr[30..31]) */
+#define VMS_ACP_ATTR_RECATTR 0x08u    /* apply the FAT record attributes from attr.recattr: rtype (rfm|org),
+                                       * rattrib, rsize, bktsize, vfcsize, maxrec, defext, gbc -- never the
+                                       * ACP-owned hiblk/efblk/ffbyte nor versions (ATR$C_RECATTR) */
 struct vms_acp_fileop_args {
 	uint32_t chan;
 	uint32_t func;

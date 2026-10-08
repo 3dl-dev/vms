@@ -321,7 +321,7 @@ static void timer_signal_handler(int sig, siginfo_t *si, void *uc) {
     if (!te || !te->active) return;
 
     /* Set the event flag */
-    if (te->efn < 128) {
+    if ((te->efn & 0xFFu) < 128) {
         sys$setef(te->efn);
     }
 
@@ -370,7 +370,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
      * EF.SETIMR.*, rd vms-d08). The executive answers through $CLREF. Without
      * the clear, a $WAITFR on the timer's flag returns at once if the flag was
      * already set, before the timer has fired. EFN$C_ENF names no flag. */
-    if (efn != EFN$C_ENF) {
+    if ((efn & 0xFFu) != EFN$C_ENF) {
         uint32_t cst = sys$clref(efn);
         if (!(cst & 1))
             return cst;

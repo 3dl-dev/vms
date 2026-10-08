@@ -84,6 +84,7 @@ extern "C" {
 #define LIB$_AMBVAL         0x00158052  /* Ambiguous value */
 #define LIB$_NOSUCHSYM      0x00158364  /* No such symbol */
 #define LIB$_INSCLIMEM      0x0015836C  /* Insufficient CLI memory */
+#define LIB$_INVSYMNAM      0x0015838C  /* Invalid symbol name (alpha84 LIBDEF 1409932) */
 #define LIB$_BADZONE        0x001583D4  /* Bad zone identifier */
 #define LIB$_KEYNOTFOU      0x001582FC  /* Key not found in tree */
 #define LIB$_WRONUMARG      0x0015835C  /* Wrong number of arguments */

@@ -598,7 +598,7 @@ expect_red "$DEV_C" "5(c) sys_device.c fabricates device state from host statvfs
 # (d) LNM$SYSTEM: the executive route for the SYSTEM table is torn out, sending
 # DEFINE/SYSTEM back to the process-private logical_table[]. Removing the
 # vms_kif_lnm_define call is exactly what that reintroduction does.
-sed -i 's|^        return vms_kif_lnm_define(exec_tbl, name, vals, 1,$|        return SS$_NORMAL;  /* evasion: SYSTEM back to logical_table */|' "$LOG_C"
+sed -i 's|^    return vms_kif_lnm_define(tab_exec_id(t), name, vals, n, attr, mode);$|    return SS$_NORMAL;  /* evasion: SYSTEM back to a local table */|' "$LOG_C"
 expect_red "$LOG_C" "5(d) sys_logical.c drops the LNM\$SYSTEM executive route" \
     "$R_FK_LNM" "$R_FK_EF" "$R_FK_MBX" "$R_FK_DEV" "$R_FK_PRV"
 

@@ -62,6 +62,33 @@ uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
                              uint16_t *dn, uint16_t *ds,
                              uint8_t *dr, uint8_t *dx);
 
+/*
+ * rms_nam_set_fid / rms_nam_set_did - store a Files-11 ID in a NAM's
+ * nam$w_fid / nam$w_did (vms-6e28): {num, seq, rvn | nmx<<8}. The ACP addresses
+ * the MFD ([000000]) by an all-zero DID; the NAM carries its real FID (4,4,0)
+ * -- ODS-2 reserved file 4, 000000.DIR -- as a VMS NAM$W_DID does.
+ */
+static inline void rms_nam_set_id(uint16_t w[3], uint16_t num, uint16_t seq,
+                                  uint8_t rvn, uint8_t nmx)
+{
+    w[0] = num;
+    w[1] = seq;
+    w[2] = (uint16_t)(rvn | ((uint16_t)nmx << 8));
+}
+#define rms_nam_set_fid(nam, n, s, r, x) \
+    rms_nam_set_id((nam)->nam$w_fid, (n), (s), (r), (x))
+#define rms_nam_set_did(nam, n, s, r, x) do {                              \
+        if ((n) == 0 && (s) == 0 && (x) == 0)                               \
+            rms_nam_set_id((nam)->nam$w_did, 4, 4, (r), 0);                 \
+        else                                                                \
+            rms_nam_set_id((nam)->nam$w_did, (n), (s), (r), (x));           \
+    } while (0)
+
+/* $PARSE's directory-ID lookup (rms_search.c, vms-6e28): fills
+ * nam$w_did when the expanded spec's directory resolves over the ACP. */
+struct NAM;
+void rms_parse_did(struct NAM *nam);
+
 /* The boot volume unit RMS $ASSIGNs when a filespec names no device (the
  * mounted SYS$DISK, until the discovered-SYS$DISK logical is bound). Device-
  * native (vms-9f5): the substrate default -- VDA0: on virtio, DUA0: on VAX. */

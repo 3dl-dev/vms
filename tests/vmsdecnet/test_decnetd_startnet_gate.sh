@@ -48,7 +48,7 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 # --- 1. GATE OFF: no executor.dat -> NOADDRESS, nonzero exit (STARTNET skips) ---
 rm -f "$OVMX_DECNET_EXECUTOR"
 out="$("$BIN" --show-executor 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && echo "$out" | grep -q "NOADDRESS"; then
+if [ "$rc" -ne 0 ] && grep -q "NOADDRESS" <<<"$out"; then
     ok "unconfigured node: --show-executor exits nonzero with %DECNETD-E-NOADDRESS (STARTNET starts no NETACP)"
 else
     bad "unconfigured node should exit nonzero + NOADDRESS (rc=$rc): $out"
@@ -57,7 +57,7 @@ fi
 # --- 2. GATE ON: executor.dat present -> self-source, exit 0 (STARTNET starts) ---
 printf 'EXECUTOR 1.42 NAME OVMXR3 STATE ON\n' > "$OVMX_DECNET_EXECUTOR"
 out="$("$BIN" --show-executor 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Executor node = 1.42"; then
+if [ "$rc" -eq 0 ] && grep -q "Executor node = 1.42" <<<"$out"; then
     ok "configured node: --show-executor self-sources address 1.42 and exits SUCCESS (STARTNET starts NETACP)"
 else
     bad "configured node should self-source 1.42 + exit 0 (rc=$rc): $out"
@@ -68,7 +68,7 @@ serve()   { "$BIN" --show-executor "$@" 2>&1 | grep "Inbound SET HOST"; }
 check_serve() { # desc, expected-substring, args...
     local desc="$1" want="$2"; shift 2
     local line; line="$(serve "$@")"
-    if echo "$line" | grep -q "$want"; then ok "$desc"; else bad "$desc (got: $line)"; fi
+    if grep -q "$want" <<<"$line"; then ok "$desc"; else bad "$desc (got: $line)"; fi
 }
 check_serve "endnode daemon SERVES inbound object 42 by default (NETACP)"        "= served"
 check_serve "a --router does NOT serve inbound (routing only)"                   "= not served" --router
@@ -79,7 +79,7 @@ check_serve "an explicit --router --cterm-server DOES serve"                    
 #         instead of the compile-time "br0" (which is absent in a booted netns) ----
 iface_line() { "$BIN" --show-executor "$@" 2>&1 | grep "Datalink interface"; }
 # explicit --iface is echoed verbatim and tagged (--iface)
-if iface_line --iface lo | grep -q "= lo (--iface)"; then
+if grep -q "= lo (--iface)" < <(iface_line --iface lo); then
     ok "explicit --iface is honoured and reported"
 else
     bad "explicit --iface lo not reported (got: $(iface_line --iface lo))"
@@ -101,7 +101,7 @@ if cc -shared -fPIC -o "$SHIM" "$SHIM_SRC" -ldl 2>"$TMP/shim.err"; then
         bad "auto-detect should pick eth9 from lo,tun0(non-ether),eth9,eth10 (got: $got)"
     fi
     got="$(shim_iface 'lo:lo,tun0:other')"
-    if echo "$got" | grep -q "no usable NIC detected" && ! echo "$got" | grep -q "auto-detected primary NIC"; then
+    if grep -q "no usable NIC detected" <<<"$got" && ! grep -q "auto-detected primary NIC" <<<"$got"; then
         ok "no usable NIC: reports the compiled default honestly, not as auto-detected (INV-6)"
     else
         bad "with no usable NIC the readout must not claim auto-detection (got: $got)"
@@ -126,14 +126,14 @@ case "$dl" in
     executive|"AF_PACKET probe"|bpf) ok "--show-executor names the datalink backend ($dl)";;
     *) bad "--show-executor should name the datalink backend (got: '$dl')";;
 esac
-"$BIN" --show-executor 2>&1 | grep -q "^Executor database = $OVMX_DECNET_EXECUTOR\$" \
+grep -q "^Executor database = $OVMX_DECNET_EXECUTOR\$" < <("$BIN" --show-executor 2>&1) \
     && ok "--show-executor names where the executor database lives (the host hook here; SYS\$SYSTEM:NETNODE_LOCAL.DAT on the runtime)" \
     || bad "--show-executor should report the executor database location"
 
 # --- 4. INV-6: a garbage executor.dat is NOT a configured address ---------------
 printf 'garbage not an executor line\n' > "$OVMX_DECNET_EXECUTOR"
 out="$("$BIN" --show-executor 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && echo "$out" | grep -q "NOADDRESS"; then
+if [ "$rc" -ne 0 ] && grep -q "NOADDRESS" <<<"$out"; then
     ok "a malformed executor.dat yields NOADDRESS, never an invented address (INV-6)"
 else
     bad "malformed executor.dat should NOT be accepted (rc=$rc): $out"
@@ -141,8 +141,8 @@ fi
 
 # --- 5. HELP documents the new contract ----------------------------------------
 help="$("$BIN" --help 2>&1)"
-echo "$help" | grep -q -- "--no-cterm-server" && ok "--help documents --no-cterm-server" || bad "--help missing --no-cterm-server"
-echo "$help" | grep -qi "SELF-SOURCED"        && ok "--help documents executor-address self-sourcing" || bad "--help missing self-source note"
+grep -q -- "--no-cterm-server" <<<"$help" && ok "--help documents --no-cterm-server" || bad "--help missing --no-cterm-server"
+grep -qi "SELF-SOURCED" <<<"$help"        && ok "--help documents executor-address self-sourcing" || bad "--help missing self-source note"
 
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"

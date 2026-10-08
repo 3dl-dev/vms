@@ -472,4 +472,9 @@
 # Raised to 152 by bg-fork-channels-not-captured (vms-387: anchors the previously
 # DEFERRED test_syssvc_bg_fork_inherit at the shared vms_bg_capture_channels
 # primitive, the option the fork-inherit-disabled entry's own note proposed).
-170
+# Raised to 170 by acp-fat-recattr-not-applied (vms-b447: IO$_CREATE records
+# the creator's record attributes in the FAT; anchors test_syssvc_rms_acp's
+# default-FAB $OPEN header-attribute assertions).
+# Raised to 171 by spawn-arm-gone-subprocess-not-completed (vms-f45: the /NOWAIT
+# lib$spawn completion is delivered even when the subprocess is already gone).
+171

@@ -30,6 +30,7 @@
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_mbx.h"
+#include "ovmx_cli.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
@@ -539,12 +540,22 @@ static void setup_session(struct dcl_context *ctx)
         }
 
         /*
-         * Override SYS$DISK with the process default device.
-         * On a VMS system this would be set from the process PCB;
-         * here we default to the system device.
+         * SYS$DISK, the process default device: a supervisor-mode process
+         * name carrying LNM$M_CRELOG, as VMS creates it at login and SET
+         * DEFAULT re-creates it (observed attributes %X404, supervisor mode,
+         * docs/oracle/semantics/lnm/; rd vms-ef21). Supervisor, not user: a
+         * user-mode SYS$DISK would be deleted at the first image rundown.
          */
         lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK",
-                   "SYS$SYSDEVICE", 0, LNM_MODE_USER);
+                   "SYS$SYSDEVICE", LNM_ATTR_CRELOG, LNM_MODE_SUPER);
+    }
+
+    /* The CLI callback: an image activated in this process reaches DCL's
+     * symbol tables through LIB$SET/GET/DELETE_SYMBOL (rd vms-cded). */
+    {
+        extern void dcl_cli_handler(const struct ovmx_cli_req *,
+                                    struct ovmx_cli_rsp *);
+        lib$$set_cli_handler(dcl_cli_handler);
     }
 
     /* Register built-in commands */

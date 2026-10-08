@@ -131,11 +131,11 @@ static void test_xl(void)
 
     uint64_t args2[2] = {0, 0};
     fao("!XL", buf, sizeof(buf), args2);
-    check(strcmp(buf, "0") == 0, "!XL zero");
+    check(strcmp(buf, "00000000") == 0, "!XL zero -> 8 zero-filled digits (VMS-observed (docs/oracle/semantics/fao/{alpha84,vax73}.txt, rd vms-8d1))");
 
     uint64_t args3[2] = {255, 0};
     fao("!XL", buf, sizeof(buf), args3);
-    check(strcmp(buf, "FF") == 0, "!XL 255 -> FF");
+    check(strcmp(buf, "000000FF") == 0, "!XL 255 -> 000000FF");
 }
 
 /* ------------------------------------------------------------------ */
@@ -148,11 +148,11 @@ static void test_ol(void)
 
     uint64_t args[2] = {8, 0};
     fao("!OL", buf, sizeof(buf), args);
-    check(strcmp(buf, "10") == 0, "!OL 8 -> octal 10");
+    check(strcmp(buf, "00000000010") == 0, "!OL 8 -> 11 zero-filled octal digits (VMS-observed (docs/oracle/semantics/fao/{alpha84,vax73}.txt, rd vms-8d1))");
 
     uint64_t args2[2] = {0777, 0};
     fao("!OL", buf, sizeof(buf), args2);
-    check(strcmp(buf, "777") == 0, "!OL 0777 -> 777");
+    check(strcmp(buf, "00000000777") == 0, "!OL 0777 -> 00000000777");
 }
 
 /* ------------------------------------------------------------------ */
@@ -163,21 +163,22 @@ static void test_zl(void)
     printf("Testing FAO !ZL directive...\n");
     char buf[64];
 
-    /* !ZL = zero-filled DECIMAL longword (8 decimal digits).
-     * VMS !ZL is NOT hex — it formats the value as a zero-padded decimal
-     * integer with field width 8.  Value 255 decimal = "00000255". */
+    /* !ZL = zero-filled DECIMAL longword: zero-filled to the FIELD WIDTH, and
+     * with no width it is the minimal decimal -- "!ZL !5ZL" of 42, 42 is
+     * "42 00042" on VAX V7.3 and Alpha V8.4 (FAO.ZL in
+     * docs/oracle/semantics/fao/, rd vms-8d1). It is not hex. */
     uint64_t args[2] = {255, 0};
-    fao("!ZL", buf, sizeof(buf), args);
-    check(strlen(buf) == 8, "!ZL always 8 chars");
-    check(strcmp(buf, "00000255") == 0, "!ZL zero-padded decimal (255)");
+    fao("!8ZL", buf, sizeof(buf), args);
+    check(strlen(buf) == 8, "!8ZL is 8 chars");
+    check(strcmp(buf, "00000255") == 0, "!8ZL zero-padded decimal (255)");
 
     uint64_t args2[2] = {0, 0};
     fao("!ZL", buf, sizeof(buf), args2);
-    check(strcmp(buf, "00000000") == 0, "!ZL zero value");
+    check(strcmp(buf, "0") == 0, "!ZL with no width is the minimal decimal (0)");
 
     uint64_t args3[2] = {42, 0};
-    fao("!ZL", buf, sizeof(buf), args3);
-    check(strcmp(buf, "00000042") == 0, "!ZL zero-padded decimal (42)");
+    fao("!5ZL", buf, sizeof(buf), args3);
+    check(strcmp(buf, "00042") == 0, "!5ZL zero-padded decimal (42)");
 }
 
 /* ------------------------------------------------------------------ */
@@ -232,7 +233,7 @@ static void test_special(void)
     uint64_t args[1] = {0};
 
     fao("!/", buf, sizeof(buf), args);
-    check(buf[0] == '\n', "!/ produces newline");
+    check(buf[0] == '\r' && buf[1] == '\n', "!/ produces CR LF (FAO.CTLCHARS, VMS-observed)");
 
     fao("!_", buf, sizeof(buf), args);
     check(buf[0] == '\t', "!_ produces tab");

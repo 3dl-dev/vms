@@ -318,6 +318,34 @@ const char *dcl_sym_get_ex(const char *name, int domain)
 }
 
 /*
+ * dcl_sym_get_which - dcl_sym_get(), also reporting which table answered:
+ * *scope = DCL_SYM_LOCAL for a local at any visible command level, else
+ * DCL_SYM_GLOBAL. The LIB$GET_SYMBOL table output (rd vms-cded).
+ */
+const char *dcl_sym_get_which(const char *name, int *scope)
+{
+    if (!name) return NULL;
+    int d = SYM_DOM_GENERAL;
+    struct sym_entry *e = sym_find(cur_local(), name);
+    if (!e && !sym_frames[sym_top].hide_outer_local[d]) {
+        for (int f = sym_top - 1; f >= 0 && !e; f--)
+            e = sym_find(sym_frames[f].buckets, name);
+    }
+    if (e) {
+        if (scope) *scope = DCL_SYM_LOCAL;
+        return e->value;
+    }
+    if (!sym_frames[sym_top].hide_global[d]) {
+        e = sym_find(global_table, name);
+        if (e) {
+            if (scope) *scope = DCL_SYM_GLOBAL;
+            return e->value;
+        }
+    }
+    return NULL;
+}
+
+/*
  * Get a symbol value in the general (non-first-token) translation domain.
  * Searches local first, then global. Returns NULL if not found.
  */

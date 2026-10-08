@@ -643,7 +643,9 @@ uint32_t vms_kif_readef(uint32_t efn, uint32_t *state)
      * it was: observed on OpenVMS VAX V7.3 and Alpha V8.4 by the semantic
      * oracle (docs/oracle/semantics/ef/, cases EF.READ.64 .. EF.READ.M1, rd
      * vms-837). Only a success reports the cluster. */
-    if (state && (args.status & 1)) *state = args.state;
+    /* EFN$C_ENF (128 in the low byte, rd vms-3e9e) names no flag: $READEF
+     * answers WASSET and reports no cluster either. */
+    if (state && (args.status & 1) && (efn & 0xFFu) != 128u) *state = args.state;
     return args.status;
 }
 
@@ -2344,6 +2346,7 @@ static __thread vms_pid_t vms_lnm_map_pid = 0;
  */
 static __thread uint32_t vms_lnm_scope_group = 0;
 static __thread uint32_t vms_lnm_scope_job = 0;
+static __thread uint32_t vms_lnm_scope_proc = 0;
 static __thread int vms_lnm_scope_valid = 0;
 static __thread vms_pid_t vms_lnm_scope_pid = 0;
 
@@ -2406,7 +2409,9 @@ uint32_t vms_kif_lnm_define(uint32_t table, const char *name,
     struct vms_lnm_def_args args;
     unsigned i;
 
-    if (!name || !values || num_values == 0 || num_values > VMS_LNM_MAX_EQUIV)
+    /* A name with no equivalence string is legal ($CRELNM with an empty item
+     * list, rd vms-ef21), so num_values may be 0. */
+    if (!name || (num_values && !values) || num_values > VMS_LNM_MAX_EQUIV)
         return 0x00000014; /* SS$_BADPARAM */
 
     /*
@@ -2444,15 +2449,19 @@ uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode)
 {
     struct vms_lnm_del_args args;
 
-    if (!name)
-        return 0x00000014; /* SS$_BADPARAM */
-
     if (!vms_kif_lnm_arena())
         return SS$_NOSUCHDEV;
 
     vms_memset(&args, 0, sizeof(args));
     args.table = table;
     args.acmode = acmode;
+    if (!name) {
+        /* $DELLNM with no logical name: every name in the table at acmode and
+         * every outer mode (rd vms-ef21). */
+        args.flags = VMS_LNM_DEL_ALL;
+        KIF_CALL(VMS_IOCTL_LNM_DELETE, &args);
+        return args.status;
+    }
     vms_strncpy(args.name, name, VMS_LNM_MAX_NAME);
     args.name[VMS_LNM_MAX_NAME] = '\0';
     args.name_length = (uint16_t)vms_strlen(args.name);
@@ -2486,7 +2495,8 @@ uint32_t vms_kif_lnm_delete(uint32_t table, const char *name, uint8_t acmode)
  * with *group_key / *job_key left unset. kif_bind() still runs (kif_call()
  * calls it internally), so there is no separate bind step needed here.
  */
-static int vms_kif_lnm_myscope(uint32_t *group_key, uint32_t *job_key)
+static int vms_kif_lnm_myscope(uint32_t *group_key, uint32_t *job_key,
+                                uint32_t *proc_key)
 {
     struct vms_lnm_scope_args args;
     vms_pid_t pid = vms_sys_getpid();
@@ -2495,6 +2505,7 @@ static int vms_kif_lnm_myscope(uint32_t *group_key, uint32_t *job_key)
     if (vms_lnm_scope_valid && vms_lnm_scope_pid == pid) {
         *group_key = vms_lnm_scope_group;
         *job_key = vms_lnm_scope_job;
+        *proc_key = vms_lnm_scope_proc;
         return 1;
     }
 
@@ -2515,12 +2526,110 @@ static int vms_kif_lnm_myscope(uint32_t *group_key, uint32_t *job_key)
 
     vms_lnm_scope_group = args.group_key;
     vms_lnm_scope_job = args.job_key;
+    vms_lnm_scope_proc = args.process_key;
     vms_lnm_scope_valid = 1;
     vms_lnm_scope_pid = pid;
 
     *group_key = vms_lnm_scope_group;
     *job_key = vms_lnm_scope_job;
+    *proc_key = vms_lnm_scope_proc;
     return 1;
+}
+
+/* This caller's scope key for `table`: SYSTEM is singular (0); GROUP, JOB and
+ * PROCESS are the executive-derived keys (never recomputed locally). Returns 0
+ * when the executive is unavailable. */
+static int vms_kif_lnm_scope_of(uint32_t table, uint32_t *scope_key)
+{
+    uint32_t g, j, pk;
+
+    if (table == VMS_LNM_TBL_SYSTEM) {
+        *scope_key = 0u;
+        return 1;
+    }
+    if (!vms_kif_lnm_myscope(&g, &j, &pk))
+        return 0;
+    *scope_key = table == VMS_LNM_TBL_GROUP ? g
+               : table == VMS_LNM_TBL_JOB   ? j : pk;
+    return 1;
+}
+
+int vms_kif_lnm_scope_key(uint32_t table, uint32_t *key)
+{
+    if (!key || !vms_kif_lnm_arena())
+        return 0;
+    return vms_kif_lnm_scope_of(table, key);
+}
+
+int vms_kif_lnm_present(void)
+{
+    return vms_kif_lnm_arena() != 0;
+}
+
+static int lnm_name_eq(const char *a, const char *b, int case_blind)
+{
+    return case_blind ? vms_strcasecmp(a, b) == 0 : vms_strcmp(a, b) == 0;
+}
+
+int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
+                       uint8_t max_acmode, struct vms_kif_lnm_enum_rec *out)
+{
+    struct vms_lnm_arena *a;
+    uint32_t scope_key;
+    int tries;
+
+    if (!name || !out)
+        return -1;
+    a = vms_kif_lnm_arena();
+    if (!a)
+        return -1;
+    if (!vms_kif_lnm_scope_of(table, &scope_key))
+        return -1;
+
+    for (tries = 0; tries < 1024; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max;
+        const struct vms_lnm_entry *best = 0;
+
+        if (g0 & 1ULL)
+            continue;
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+        /* $TRNLNM ignores names at modes outer than the requested one and
+         * returns the outermost of the rest (rd vms-ef21). */
+        for (i = 0; i < max; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+                continue;
+            if (e->acmode > max_acmode || !lnm_name_eq(e->name, name, case_blind))
+                continue;
+            if (!best || e->acmode > best->acmode)
+                best = e;
+        }
+        if (best) {
+            uint8_t nv = best->num_equiv, k;
+            if (nv > VMS_LNM_MAX_EQUIV)
+                nv = VMS_LNM_MAX_EQUIV;
+            vms_strncpy(out->name, best->name, VMS_LNM_MAX_NAME);
+            out->name[VMS_LNM_MAX_NAME] = '\0';
+            for (k = 0; k < nv; k++) {
+                uint16_t vlen = best->equiv[k].length;
+                if (vlen > VMS_LNM_MAX_VALUE)
+                    vlen = VMS_LNM_MAX_VALUE;
+                vms_memcpy(out->values[k], best->equiv[k].value, vlen);
+                out->values[k][vlen] = '\0';
+            }
+            out->num_values = nv;
+            out->attributes = best->attributes;
+            out->acmode = best->acmode;
+        }
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (lnm_gen_load(a) != g0)
+            continue;
+        return best ? 1 : 0;
+    }
+    return -1;
 }
 
 int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
@@ -2528,109 +2637,37 @@ int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
                           uint16_t *vallen, uint32_t *attrs,
                           uint8_t *num_equiv)
 {
-    struct vms_lnm_arena *a;
-    uint32_t scope_key;
-    uint32_t group_key, job_key;
-    int tries;
+    struct vms_kif_lnm_enum_rec rec;
+    uint16_t vlen;
+    int r;
 
     if (num_equiv)
         *num_equiv = 0;
-
     if (!name || !value || valsz == 0)
         return -1;
 
-    a = vms_kif_lnm_arena();
-    if (!a)
-        return -1;   /* executive absent -> caller renders SS$_NOSUCHDEV */
-
-    /* SYSTEM is singular (scope 0). GROUP/JOB are this caller's own
-     * executive-derived scope keys (vms-aba) -- never recomputed locally
-     * (see vms_kif_lnm_myscope()). */
-    switch (table) {
-    case VMS_LNM_TBL_GROUP:
-    case VMS_LNM_TBL_JOB:
-        if (!vms_kif_lnm_myscope(&group_key, &job_key))
-            return -1;   /* executive absent -> SS$_NOSUCHDEV */
-        scope_key = (table == VMS_LNM_TBL_GROUP) ? group_key : job_key;
-        break;
-    case VMS_LNM_TBL_SYSTEM:
-    default:
-        scope_key = 0u;
-        break;
-    }
-
-    /*
-     * Seqlock read: sample the generation, walk the table, re-sample. Retry
-     * on an odd (write in flight) or changed counter. Writes are rare and
-     * brief, so this effectively never spins; the bound keeps a pathological
-     * writer from wedging a reader.
-     */
-    for (tries = 0; tries < 1024; tries++) {
-        uint64_t g0 = lnm_gen_load(a);
-        uint32_t i, max;
-        int name_found = 0;   /* the logical name itself exists in-scope */
-        int idx_found = 0;    /* AND `index` is one of its equivalence strings */
-        char vbuf[VMS_LNM_MAX_VALUE + 1];
-        uint16_t vlen = 0;
-        uint32_t vattr = 0;
-        uint8_t nequiv = 0;
-
-        if (g0 & 1ULL)
-            continue;   /* write in flight */
-
-        max = a->max_entries;
-        if (max > VMS_LNM_MAX_ENTRIES)
-            max = VMS_LNM_MAX_ENTRIES;
-
-        for (i = 0; i < max; i++) {
-            const struct vms_lnm_entry *e = &a->entries[i];
-
-            if (!e->in_use || e->table != table || e->scope_key != scope_key)
-                continue;
-            if (vms_strcasecmp(e->name, name) != 0)
-                continue;
-            if (e->num_equiv == 0)
-                continue;
-
-            name_found = 1;
-            nequiv = e->num_equiv;
-            vattr = e->attributes;
-
-            if (index < e->num_equiv) {
-                vlen = e->equiv[index].length;
-                if (vlen > VMS_LNM_MAX_VALUE)
-                    vlen = VMS_LNM_MAX_VALUE;
-                vms_memcpy(vbuf, e->equiv[index].value, vlen);
-                vbuf[vlen] = '\0';
-                idx_found = 1;
-            }
-            break;
-        }
-
-        /* Re-sample: if the arena changed under us, the read is not stable. */
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (lnm_gen_load(a) != g0)
-            continue;
-
-        if (num_equiv)
-            *num_equiv = name_found ? nequiv : 0;
-
-        if (!idx_found)
-            return 0;
-
-        if (vlen >= valsz)
-            vlen = (uint16_t)(valsz - 1);
-        vms_memcpy(value, vbuf, vlen);
-        value[vlen] = '\0';
-        if (vallen)
-            *vallen = vlen;
-        if (attrs)
-            *attrs = vattr;
-        return 1;
-    }
-
-    /* Writer never quiesced -- treat as unavailable rather than guess. */
-    return -1;
+    /* The OVMX-internal translation (DCL, vmsfs, RMS): case-blind, any access
+     * mode -- the outermost-mode name wins, as $TRNLNM with no acmode returns
+     * it (rd vms-ef21). The VMS service $TRNLNM itself uses
+     * vms_kif_lnm_lookup() directly for its case-sensitive, mode-limited
+     * search. */
+    r = vms_kif_lnm_lookup(table, name, 1, 3, &rec);
+    if (r <= 0)
+        return r;
+    if (num_equiv)
+        *num_equiv = rec.num_values;
+    if (index >= rec.num_values)
+        return 0;
+    vlen = (uint16_t)vms_strlen(rec.values[index]);
+    if (vlen >= valsz)
+        vlen = (uint16_t)(valsz - 1);
+    vms_memcpy(value, rec.values[index], vlen);
+    value[vlen] = '\0';
+    if (vallen)
+        *vallen = vlen;
+    if (attrs)
+        *attrs = rec.attributes;
+    return 1;
 }
 
 /* The public enumerate record tracks the arena's name/value/equiv widths. If
@@ -2665,18 +2702,9 @@ int vms_kif_lnm_enumerate(uint32_t table,
     /* Same scope resolution as vms_kif_lnm_translate: SYSTEM is singular
      * (scope 0); GROUP/JOB use this caller's own executive-derived keys,
      * never recomputed here. */
-    switch (table) {
-    case VMS_LNM_TBL_GROUP:
-    case VMS_LNM_TBL_JOB:
-        if (!vms_kif_lnm_myscope(&group_key, &job_key))
-            return -1;
-        scope_key = (table == VMS_LNM_TBL_GROUP) ? group_key : job_key;
-        break;
-    case VMS_LNM_TBL_SYSTEM:
-    default:
-        scope_key = 0u;
-        break;
-    }
+    (void)group_key; (void)job_key;
+    if (!vms_kif_lnm_scope_of(table, &scope_key))
+        return -1;
 
     /*
      * Seqlock read, exactly as the translate path: sample the generation,

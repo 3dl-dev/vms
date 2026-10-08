@@ -104,12 +104,15 @@ struct rms_fileattr {
     uint16_t ffbyte;             /* first free byte in the EOF block            */
     uint16_t fileprot;           /* ODS-2 protection, 4 nibbles S/O/G/W         */
     uint16_t uic_group, uic_member;
-    uint8_t  rfm;                /* record format (FAT fat_rtype == FAB$C_*)    */
+    uint8_t  rfm;                /* record format (FAT fat_rtype low nibble == FAB$C_*) */
     uint8_t  rat;                /* record attributes (FAT fat_rattrib)         */
-    uint16_t mrs;               /* max/record size (FAT fat_rsize)              */
+    uint16_t mrs;                /* maximum record size (FAT fat_maxrec)        */
     uint8_t  is_directory;       /* 1 if the file characteristics say directory */
     uint8_t  credate[8];         /* VMS 64-bit absolute creation time           */
     uint8_t  revdate[8];         /* VMS 64-bit absolute revision time           */
+    uint16_t lrl;                /* longest record length (FAT fat_rsize)       */
+    uint8_t  org;                /* file organization (fat_rtype high nibble ==
+                                  * FAB$C_SEQ / FAB$C_REL / FAB$C_IDX)          */
 };
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
 

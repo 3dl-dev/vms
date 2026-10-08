@@ -407,3 +407,11 @@ set_tests_properties(vmsrms_crtl_filespec PROPERTIES
     LABELS "unit;rms;crtl"
     TIMEOUT 30
 )
+
+# vms-0ae: RMS merges a relative directory ([.X], [-], []) with the process
+# default directory (rms_merge_default_dir, rms_core.c).
+add_executable(test_rms_default_dir test_rms_default_dir.c)
+target_include_directories(test_rms_default_dir PRIVATE ${VMS_RMS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_rms_default_dir PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_default_dir COMMAND test_rms_default_dir)
+set_tests_properties(vmsrms_default_dir PROPERTIES LABELS "unit;rms" TIMEOUT 30)

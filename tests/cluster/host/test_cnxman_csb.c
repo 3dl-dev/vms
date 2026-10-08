@@ -1963,6 +1963,29 @@ static void test_the_connect_data_settles_it_before_anyone_speaks(void)
 	ct_check_eq_u32(csb->cm_send_msg, 0u, "an impossible count resumes nothing");
 }
 
+/* rd vms-04b: an initial connect that dies leaves the block at NEW holding NO
+ * Con.ID, so the joiner's dialler (join_reach_ours: NEW and cdt_conid == 0)
+ * tries it again. Stall-rig arms K-5/K-11 waited forever on a dead Con.ID. */
+static void test_an_abandoned_connect_can_be_dialled_again(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-04b: an abandoned initial connect frees the block\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	if (csb == NULL) { ct_check(0, "a CSB"); return; }
+	cnxman_csb_bind_connection(csb, 0x4e620031u);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb, CNXMAN_CSB_EV_CONNECT_SENT,
+				  NULL);
+	ct_check_eq_u32(csb->state, VMS_CNXMAN_CSB_CONNECT, "the connect is out");
+	(void)cnxman_csb_dispatch(&g_cl.club, csb, CNXMAN_CSB_EV_CONN_LOST,
+				  NULL);
+	ct_check_eq_u32(csb->state, VMS_CNXMAN_CSB_NEW, "it was never OPEN: NEW");
+	ct_check_eq_u32(csb->cdt_conid, 0u,
+			"*** and it claims NO connection, so it is dialled "
+			"again ***");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -1993,6 +2016,7 @@ int main(void)
 	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();
 	test_a_new_incarnation_retires_the_old_block();
+	test_an_abandoned_connect_can_be_dialled_again();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

@@ -1809,7 +1809,7 @@ apply_edit() {
         sed -i 's|^\tif (vms_cm_response_accepted(m->body, m->len))$|\tif (1 \|\| vms_cm_response_accepted(m->body, m->len)) /* NEGCTL coord-ignores-rejection */|' "$_file";;
 
     scs-accept-conndata-dropped)
-        sed -i 's|^\tcdt_learn_accept_conndata(cdt, rx->ctrl);$|\t/* NEGCTL scs-accept-conndata-dropped */|' "$_file";;
+        sed -i 's|^\tcdt->peer_accept_conndata_valid = 1u;$|\tcdt->peer_accept_conndata_valid = 0u; /* NEGCTL scs-accept-conndata-dropped */|' "$_file";;
 
     csb-accept-resume-disarmed)
         sed -i 's|^\tif (csb == NULL \|\| peer_taken == 0u)$|\tif (1 \|\| csb == NULL \|\| peer_taken == 0u) /* NEGCTL csb-accept-resume-disarmed */|' "$_file";;

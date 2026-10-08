@@ -80,7 +80,14 @@ fetch_iso() {
     return 0
   fi
   log "downloading ${ISO_URL}"
-  curl -fSL --retry 3 --connect-timeout 30 -o "${ISO_PATH}.part" "${ISO_URL}"
+  # archive.netbsd.org truncates long transfers (sometimes with a clean EOF): resume
+  # the partial and re-fetch until the PINNED sha512 verifies (6 rounds), never trust a size.
+  n=0
+  until [ "$n" -ge 6 ]; do
+    curl -fsSL -C - --retry 2 --connect-timeout 30 -o "${ISO_PATH}.part" "${ISO_URL}" || true
+    echo "${ISO_SHA512}  ${ISO_PATH}.part" | sha512sum -c --status - 2>/dev/null && break
+    n=$((n + 1)); log "ISO fetch round ${n}/6 did not verify yet"; sleep $((n * 10))
+  done
   echo "${ISO_SHA512}  ${ISO_PATH}.part" | sha512sum -c --status - \
     || { rm -f "${ISO_PATH}.part"; die "ISO checksum mismatch for ${ISO_NAME} -- refusing to use it"; }
   mv "${ISO_PATH}.part" "${ISO_PATH}"

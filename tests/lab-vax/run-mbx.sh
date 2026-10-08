@@ -97,7 +97,8 @@ fetch_set() {
   local tgz="${KBUILD_DIR}/${name}.tgz"
   if [ ! -f "${tgz}" ] || ! echo "${sha}  ${tgz}" | sha512sum -c --status -; then
     log "downloading ${name}.tgz"
-    curl -fSL --retry 3 -o "${tgz}.part" "${SRC_BASE}/${name}.tgz"
+    # resumable, mirror-retrying, pinned-checksum-verified (archive.netbsd.org truncates long transfers)
+    "${REPO}/tools/cross-vax/fetch_verified.sh" sha512 "${sha}" "${tgz}.part" "${SRC_BASE}/${name}.tgz" || die "${name}.tgz could not be fetched with a matching checksum"
     echo "${sha}  ${tgz}.part" | sha512sum -c --status - || { rm -f "${tgz}.part"; die "${name}.tgz checksum mismatch"; }
     mv "${tgz}.part" "${tgz}"
   fi

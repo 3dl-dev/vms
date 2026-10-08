@@ -1667,9 +1667,12 @@ uint32_t sys$audit_eventw(uint32_t efn, uint32_t flags, const void *itmlst,
 /** sys$create_uid - Create a universal identifier (128 bits; DCE/RFC 4122 version-1 uuid) */
 uint32_t sys$create_uid(void *uid);
 
+/** sys$clrast - Clear the AST-in-progress state so a queued AST is delivered at once */
+uint32_t sys$clrast(void);
+#define sys$clrast sys$clrast   /* programs guard their own prototype with #ifndef sys$clrast */
+
 /** sys$setdfprot - Set/read the process default file protection (executive-resident); returns RMS$_NORMAL */
 uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot);
-
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

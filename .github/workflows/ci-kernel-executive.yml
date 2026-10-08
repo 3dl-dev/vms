@@ -162,7 +162,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # Content-addressed gha layer cache, SHARED SCOPE across all shards
       # (scope=kernel-executive): the vms.ko + initramfs image is
@@ -378,7 +378,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # Same image + SAME cache scope as the shards (scope=kernel-executive):
       # the vms.ko + initramfs is byte-identical, only the boot cmdline differs,
@@ -466,7 +466,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build kernel executive test image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1022,7 +1022,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # THE ONE WRITER of the shared cache (full actions/cache: restore + save).
       # Same key/path as the restore-only test jobs.
@@ -1084,7 +1084,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # Cache the installed NetBSD disk image + anita download mirror. Keyed on
       # the pinned release/harness sources (netbsd_version.env lives under
@@ -1206,7 +1206,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # Separate cache from P2a: the P2b image installs comp + syssrc, so its
       # wd0.img is a different, larger image. Keyed on the pinned release + the
@@ -1340,7 +1340,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
       # P2a and P2b jobs, so one install serves all three; version-keyed only.
@@ -1481,7 +1481,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
       # P2a/P2b/P2c jobs, so one install serves all of them.
@@ -1652,7 +1652,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-a68: run_facility_negctl.sh rebuilt tests/qemu/Dockerfile from
       # scratch on every one of the 22 shards (no cache reuse) -- the script

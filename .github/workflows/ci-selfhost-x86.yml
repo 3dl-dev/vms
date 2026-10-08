@@ -621,7 +621,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -670,7 +670,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
         env:

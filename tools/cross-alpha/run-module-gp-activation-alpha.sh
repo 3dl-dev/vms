@@ -599,6 +599,8 @@ assert_vmsabi() {
   region=$(awk '/VMSABI-PROOF: === INDEPENDENT READER/{f=1} f{print} /VMSABI-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
   printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$fid" \
     || { echo "  assert_vmsabi: DIRECTORY/FULL does not show File ID $fid" >&2; return 1; }
+  printf '%s\n' "$region" | grep -a "VMSABI_GATE" | grep -aq "PROVED_BY_CRELNM" \
+    || { echo "  assert_vmsabi: SHOW LOGICAL does not see the name SYS\$CRELNM defined" >&2; return 1; }
   return 0
 }
 
@@ -1751,6 +1753,7 @@ EOF
     MILESTONE_MAIN=vmsabi_rms_test.c
     export JOINT_MAIN_CFLAGS="-mpointer-size=no -I/src/src/libvms/include"
     export JOINT_MAIN_MUSL_HEADERS=1
+    export JOINT_USE_LIBVMS=1           # SYS$ASSIGN/$TRNLNM... live in LIBVMS$SHR
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
@@ -1760,11 +1763,13 @@ EOF
       echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
       echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
       echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
+      echo '   "VMSABI_GATE" = "PROVED_BY_CRELNM" (LNM$SYSTEM_TABLE)'
       echo "VMSABI-PROOF: === END INDEPENDENT READER ==="
     } > "$_st/pass.log"
     sed 's/File ID:  (34,1,0)/File ID:  (35,1,0)/' "$_st/pass.log" > "$_st/mismatch.log"
     grep -v "test: OK" "$_st/pass.log" > "$_st/notok.log"
-    for _c in "pass:0" "mismatch:1" "notok:1"; do
+    grep -v "PROVED_BY_CRELNM" "$_st/pass.log" > "$_st/nolnm.log"
+    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi

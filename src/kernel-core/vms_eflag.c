@@ -744,6 +744,22 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     exec_unlock(&vms_common_ef_lock);
 
     exec_lock(&proc->ef.lock);
+    /* Release the cluster this number was associated with before, exactly
+     * as the found-cluster path above does: associating cluster 2 with a NEW
+     * name gives up the old one, and a temporary cluster whose last
+     * association goes away is deleted (rd vms-ec97; observed on OpenVMS:
+     * re-associating the old name afterwards finds a fresh, zeroed cluster --
+     * EF.CEF.REASSOC.READ, docs/oracle/semantics/ef/). */
+    if (proc->ef.common[idx]) {
+        struct vms_common_ef_cluster *old = proc->ef.common[idx];
+        exec_lock(&vms_common_ef_lock);
+        old->refcount--;
+        if (old->refcount <= 0 && !old->perm) {
+            exec_list_del(&old->list);
+            vms_common_ef_free(old);
+        }
+        exec_unlock(&vms_common_ef_lock);
+    }
     proc->ef.common[idx] = cluster;
     exec_unlock(&proc->ef.lock);
 
@@ -778,8 +794,10 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     exec_lock(&proc->ef.lock);
     cluster = proc->ef.common[idx];
     if (!cluster) {
+        /* Nothing associated: there is nothing to give up, and OpenVMS says
+         * so with success (observed EF.DACEFC.64.AGAIN = SS$_NORMAL). */
         exec_unlock(&proc->ef.lock);
-        args.status = SS__UNASEFC;
+        args.status = SS__NORMAL;
         goto out;
     }
 

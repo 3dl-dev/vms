@@ -93,8 +93,12 @@ static void show_executor(const struct dnet_executor *x, int characteristics)
     else
         printf("Executor node = %s\n", astr);
     printf("State                    = %s\n", x->state_on ? "on" : "off");
-    if (characteristics)
+    if (characteristics) {
         printf("Identification           = OVMX DECnet-compatible networking\n");
+        /* The bound NETACP sizes its inbound logical-link pool from (vms-f91);
+         * unset, the VMS default a real V7.3 shows. */
+        printf("Maximum links            = %u\n", dnet_executor_max_links(x));
+    }
 }
 
 static void show_node(const struct dnet_node_entry *e)
@@ -162,7 +166,7 @@ static void usage(void)
         "  CLEAR|PURGE NODE <area.node>|<name>\n"
         "  SHOW KNOWN NODES\n"
         "  SHOW NODE <area.node>|<name>\n"
-        "  SET EXECUTOR ADDRESS <area.node> | NAME <name> | STATE ON|OFF\n"
+        "  SET EXECUTOR ADDRESS <area.node> | NAME <name> | STATE ON|OFF | MAXIMUM LINKS <n>\n"
         "  SHOW EXECUTOR [CHARACTERISTICS]\n"
         "  SET|DEFINE OBJECT <name> NUMBER <1..255> [FILE <spec>]\n"
         "  CLEAR|PURGE OBJECT <name>|<number>\n"
@@ -306,6 +310,12 @@ int main(int argc, char **argv)
                 snprintf(x.name, sizeof(x.name), "%.*s", DNET_NODEDB_NAMEMAX, argv[4]);
             } else if (ieq(argv[3], "STATE") && argc >= 5) {
                 x.state_on = ieq(argv[4], "ON");
+            } else if (ieq(argv[3], "MAXIMUM") && argc >= 6 && ieq(argv[4], "LINKS")) {
+                char *end = NULL;
+                unsigned long v = strtoul(argv[5], &end, 10);
+                if (!end || *end != '\0' || v == 0 || v > DNET_EXECUTOR_MAXLINKS_MAX)
+                    return fail("INVPVA, invalid parameter value (MAXIMUM LINKS 1 to 65535)");
+                x.max_links = (uint16_t)v;
             } else {
                 usage();
                 return 1;

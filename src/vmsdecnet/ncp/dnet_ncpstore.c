@@ -166,10 +166,12 @@ int dnet_executor_parse_line(const char *line, struct dnet_executor *x)
     if (*p == '#' || *p == '\n' || *p == '\r' || *p == '\0')
         return 0;
     char kw[16] = "", astr[32] = "", nkw[16] = "", name[64] = "", skw[16] = "",
-         st[16] = "";
-    if (sscanf(p, "%15s %31s %15s %63s %15s %15s", kw, astr, nkw, name, skw, st) != 6 ||
+         st[16] = "", mkw[16] = "", mval[16] = "", extra[8] = "";
+    int nf = sscanf(p, "%15s %31s %15s %63s %15s %15s %15s %15s %7s", kw, astr, nkw, name,
+                    skw, st, mkw, mval, extra);
+    if ((nf != 6 && nf != 8) ||
         strcmp(kw, "EXECUTOR") != 0 || strcmp(nkw, "NAME") != 0 ||
-        strcmp(skw, "STATE") != 0)
+        strcmp(skw, "STATE") != 0 || (nf == 8 && strcmp(mkw, "MAXLINKS") != 0))
         return -1;
     struct dnet_executor t;
     memset(&t, 0, sizeof(t));
@@ -189,8 +191,20 @@ int dnet_executor_parse_line(const char *line, struct dnet_executor *x)
         t.state_on = 1;
     else if (strcasecmp(st, "off") != 0)
         return -1;
+    if (nf == 8) {
+        char *end = NULL;
+        unsigned long v = strtoul(mval, &end, 10);
+        if (!end || *end != '\0' || v == 0 || v > DNET_EXECUTOR_MAXLINKS_MAX)
+            return -1;
+        t.max_links = (uint16_t)v;
+    }
     *x = t;
     return 1;
+}
+
+unsigned dnet_executor_max_links(const struct dnet_executor *x)
+{
+    return (x && x->max_links) ? x->max_links : DNET_EXECUTOR_DEFAULT_MAXLINKS;
 }
 
 void dnet_executor_format(const struct dnet_executor *x, char *buf, unsigned bufsz)
@@ -201,8 +215,13 @@ void dnet_executor_format(const struct dnet_executor *x, char *buf, unsigned buf
     if (x->have_addr)
         snprintf(astr, sizeof(astr), "%u.%u", dnet_area_of(x->addr),
                  dnet_node_of(x->addr));
-    snprintf(buf, bufsz, "EXECUTOR %s NAME %s STATE %s", astr,
-             x->name[0] ? x->name : "-", x->state_on ? "on" : "off");
+    if (x->max_links)
+        snprintf(buf, bufsz, "EXECUTOR %s NAME %s STATE %s MAXLINKS %u", astr,
+                 x->name[0] ? x->name : "-", x->state_on ? "on" : "off",
+                 (unsigned)x->max_links);
+    else
+        snprintf(buf, bufsz, "EXECUTOR %s NAME %s STATE %s", astr,
+                 x->name[0] ? x->name : "-", x->state_on ? "on" : "off");
 }
 
 struct exec_ctx {

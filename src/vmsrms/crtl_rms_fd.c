@@ -15,8 +15,8 @@
  * RMS file specification -- OpenVMS syntax as written, UNIX syntax translated
  * by the DEC C rules (crtl_filespec.c, the decc$to_vms translator) -- EXCEPT the
  * substrate kernel's own namespaces, which stay with the kernel: /dev, /proc,
- * /sys and /run (the device nodes, /dev/vms among them, and the boot
- * launcher). A path relative to a directory descriptor other than the current
+ * /sys, /run (the device nodes, /dev/vms among them, and the boot launcher)
+ * and /vms (the substrate's staging of the system tree). A path relative to a directory descriptor other than the current
  * directory is not an RMS form and goes to the kernel too.
  *
  * DESCRIPTOR NUMBERS. An RMS file's descriptor is a real kernel descriptor
@@ -204,7 +204,10 @@ static int rms_errno(uint32_t st)
 
 static int kernel_path(const char *p)
 {
-    static const char *const ns[] = { "/dev", "/proc", "/sys", "/run" };
+    /* /vms is the substrate's own staging of the system tree (initramfs / boot
+     * image), which OVMX's run-time libraries reach as kernel paths -- LIB$SPAWN
+     * checks the DCL image there (vms-003b); it is not a C program's file. */
+    static const char *const ns[] = { "/dev", "/proc", "/sys", "/run", "/vms" };
     if (!p || !*p)
         return 1;
     for (size_t i = 0; i < sizeof ns / sizeof ns[0]; i++) {

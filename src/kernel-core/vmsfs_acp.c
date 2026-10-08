@@ -3682,6 +3682,22 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             uint16_t dprot = 0;
             size_t acl_len = 0;
 
+            /* Naming ANOTHER owner for the new file takes privilege, as on
+             * VMS (rd vms-47fd): SYSPRV or BYPASS, or GRPPRV for an owner in
+             * the creator's own group. The creator's own UIC is always fine.
+             * Refused before anything is allocated. */
+            if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                uint32_t want = ((uint32_t)args.attr.uic_group << 16) |
+                                args.attr.uic_member;
+                int same_grp = args.attr.uic_group == (uint16_t)(proc->uic >> 16);
+                if (want != proc->uic &&
+                    !(proc->cur_privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS)) &&
+                    !(same_grp && (proc->cur_privs & VMS_PRV_M_GRPPRV))) {
+                    args.status = SS__NOPRIV;
+                    goto free_sc;
+                }
+            }
+
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
             did.fid_num = args.did_num;
@@ -3781,6 +3797,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             owner.uic_group  = (uint16_t)((proc->uic >> 16) & 0xFFFFu);
             owner.uic_member = (uint16_t)(proc->uic & 0xFFFFu);
             if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                /* (privilege to name this owner checked at the top of CREATE) */
                 owner.uic_group  = args.attr.uic_group;
                 owner.uic_member = args.attr.uic_member;
             }

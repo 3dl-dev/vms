@@ -75,6 +75,8 @@
 #include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "rms_io.h"         /* --fal-proc-accept-test: a fixture with an explicit protection */
+#include "sysuaf.h"         /* the recipient's UIC: mail-file owner check */
+#include "rms/rms.h"        /* sys$erase / rms_file_attr: the MAIL-11 test leaves no node DB */
 #include "vmsfs/ods2.h"     /* ODS2_FK_DATA_STMLF */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
@@ -5303,6 +5305,26 @@ static int run_mail11_accept_test(void)
             M1_CHECK(m11_live(slots) == 0, "each session ends when the remote disconnects (slot freed)");
     }
 
+    /* rd vms-47fd: the mail file belongs to its USER even though MAIL_SERVER
+     * (another account) may have created it -- VMS's MAIL_SERVER creates a
+     * recipient's mail file owned by the recipient. Read the owner from the
+     * file header. */
+    {
+        sysuaf_record_t sr;
+        struct rms_fileattr fa;
+        char spec[600] = "";
+        int owner_ok = 0;
+        if (sysuaf_lookup("SYSTEM", &sr) == 0) {
+            /* the spec MAIL_SERVER's mail_store_spec builds: <defdir>OVMX_MAIL.MAI */
+            snprintf(spec, sizeof spec, "%sOVMX_MAIL.MAI", sr.default_dir);
+            owner_ok = (rms_file_attr(spec, &fa) & 1) &&
+                       fa.uic_group == sr.uic_group && fa.uic_member == sr.uic_member;
+        }
+        memset(&sr, 0, sizeof sr);
+        M1_CHECK(owner_ok, "SYSTEM's mail file is owned by SYSTEM (the recipient), not by the"
+                           " MAIL_SERVER account that delivered into it");
+    }
+
     /* A connect this server does not speak (no MAIL-11 user data) is REFUSED --
      * nothing is confirmed, no process is created. */
     {
@@ -5330,8 +5352,28 @@ static int run_mail11_accept_test(void)
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
         netacp_slot_end(&slots[i], -1, 0, rig.tick++, "selftest teardown");
     g_netacp_tx = scs_datalink_send;
-    if (named) (void)dnet_store_save_nodes(&saved);
-    else printf("  NOTE: the node database could not name 1.1 VAX1 (From: shows the address)\n");
+    if (named && have_saved) {
+        (void)dnet_store_save_nodes(&saved);           /* put the original back */
+    } else if (named) {
+        /* There was NO node database before this test: remove every version
+         * it wrote, so the system is left exactly as it was found. */
+        const char *ns = dnet_store_vms_spec(DNET_STORE_NODES);
+        int erased = 0;
+        for (int k = 0; k < 32; k++) {
+            struct FAB ef = cc$rms_fab;
+            ef.fab$l_fna = (char *)ns;
+            ef.fab$b_fns = (uint8_t)strlen(ns);
+            if (!(sys$erase(&ef, 0, 0) & 1)) break;
+            erased++;
+        }
+        struct rms_fileattr fa;
+        int gone = !(rms_file_attr(ns, &fa) & 1);
+        printf("  %s: the node database this test created is removed again (%d version(s) erased)\n",
+               gone ? "PASS" : "FAIL", erased);
+        if (gone) pass++; else fail++;
+    } else {
+        printf("  NOTE: the node database could not name 1.1 VAX1 (From: shows the address)\n");
+    }
     printf("DECNETD-I-MAIL11, %d passed, %d failed\n", pass, fail);
     if (fail == 0 && pass > 0) { printf("DECNETD-MAIL11-ACCEPT: PASS\n"); return 0; }
     printf("DECNETD-MAIL11-ACCEPT: FAIL\n");

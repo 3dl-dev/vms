@@ -2450,6 +2450,29 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * asked for rather than the kind preset. */
         if (rms_fat_from_fab(fab, fop.attr.recattr))
             fop.attr_ctl |= VMS_ACP_ATTR_RECATTR;
+        /* XABPRO on $CREATE (rd vms-47fd): the new file's owner UIC and
+         * protection, as VMS RMS applies them (RMS Reference, XABPRO: "on
+         * $CREATE ... XAB$L_UIC specifies the owner, XAB$W_PRO the
+         * protection"). The ACP decides whether this process may name another
+         * owner (privilege), never RMS. */
+        {
+            const struct XABPRO *xp = NULL;
+            int guard = 0;
+            for (void *x = fab->fab$l_xab; x && guard < 32; guard++) {
+                const struct XABPRO *xh = (const struct XABPRO *)x;
+                if (xh->xab$b_cod == XAB$C_PRO) { xp = xh; break; }
+                x = xh->xab$l_nxt;
+            }
+            if (xp && xp->xab$l_uic) {
+                fop.attr_ctl       |= VMS_ACP_ATTR_OWNER;
+                fop.attr.uic_group  = (uint16_t)((xp->xab$l_uic >> 16) & 0xFFFFu);
+                fop.attr.uic_member = (uint16_t)(xp->xab$l_uic & 0xFFFFu);
+            }
+            if (xp && xp->xab$w_pro) {
+                fop.attr_ctl     |= VMS_ACP_ATTR_PROT;
+                fop.attr.fileprot = xp->xab$w_pro;
+            }
+        }
         /*
          * The version (rd vms-670): none asked for is the highest existing + 1;
          * an explicit one that already exists is RMS$_FEX unless FOP SUP asks

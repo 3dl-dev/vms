@@ -20,15 +20,18 @@
 
 #include "vms_mail_notify.h"
 #include "rms/rms.h"
+#include "rms/xab.h"
+#include "sysuaf.h"
 #include "vmsfs/device.h"
 
 static const char *const g_mon[12] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
 
 struct mstore {
-    struct FAB fab;
-    struct RAB rab;
-    char       spec[600];
+    struct FAB    fab;
+    struct RAB    rab;
+    struct XABPRO pro;
+    char          spec[600];
 };
 
 /* Open `user`'s mail file for append, creating it on first use. */
@@ -55,7 +58,20 @@ static uint32_t ms_open(struct mstore *m, const char *user)
     if (!(st & 1)) {
         if (st != RMS$_FNF)
             return st;                 /* there but unreachable: never a 2nd file */
+        /* The mail file belongs to its USER, whoever creates it: VMS
+         * MAIL_SERVER creates a recipient's MAIL.MAI owned by the recipient,
+         * so the recipient's own MAIL can later mark and delete. XABPRO's
+         * owner UIC carries it; the ACP checks the creator may (SYSPRV). */
+        sysuaf_record_t urec;
+        if (sysuaf_lookup(user, &urec) == 0) {
+            m->pro = cc$rms_xabpro;
+            m->pro.xab$l_uic = ((uint32_t)urec.uic_group << 16) |
+                               (urec.uic_member & 0xFFFFu);
+            m->fab.fab$l_xab = &m->pro;
+        }
+        memset(&urec, 0, sizeof urec);     /* the record carries the hash */
         st = sys$create(&m->fab, 0, 0);
+        m->fab.fab$l_xab = NULL;
         if (!(st & 1))
             return st;
     }

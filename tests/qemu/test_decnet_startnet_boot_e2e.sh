@@ -30,7 +30,14 @@
 #         EXECUTOR / CHARACTERISTICS / COUNTERS / KNOWN NODES / KNOWN LINKS print
 #         NETACP's own values in the real OpenVMS VAX V7.3 layout
 #         (docs/oracle/vax-ncp-show/), and SHOW NETWORK carries the DECNET
-#         product line -- which boot 1, with no NETACP, did not.
+#         product line -- which boot 1, with no NETACP, did not;
+#     (e) NCP SHOW KNOWN CIRCUITS / KNOWN LINES / KNOWN OBJECTS read that NETACP
+#         too (rd vms-2d0): its circuit and line ETH-0 (device-native: the
+#         executive's ETH0:), state on; its volatile object database -- FAL 17
+#         FAL.EXE byte-identical to the real VAX row, CTERM 42 served in place
+#         by NETACP's own PID (the PID SHOW SYSTEM lists for NETACP). Boot 1,
+#         with no NETACP, fails SHOW KNOWN OBJECTS %NCP-F-OPEFAI while LIST
+#         KNOWN OBJECTS reads the permanent file.
 #
 # Reboot mechanics + writeback settle: identical to test_tcpip_reboot_e2e.sh
 # (no DCL REBOOT under -no-reboot; a reboot is a fresh QEMU on the same disk).
@@ -133,6 +140,12 @@ if [ "$rc" -eq 0 ] && login_system "$LOG1"; then
     run_seg 'NCP SHOW EXECUTOR' "$LOG1" '%NCP-F-OPEFAI' 30
     if has '%NCP-F-OPEFAI' && ! has 'Node Volatile Summary'; then rc=0; else rc=1; fi
     record "boot 1: with no NETACP running, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI -- the configured file is never shown as the running network" "$rc"
+    run_seg 'NCP SHOW KNOWN OBJECTS' "$LOG1" '%NCP-F-OPEFAI' 30
+    if has '%NCP-F-OPEFAI' && ! has 'Known Object Volatile Summary'; then rc=0; else rc=1; fi
+    record "boot 1: with no NETACP running, NCP SHOW KNOWN OBJECTS fails %NCP-F-OPEFAI (no volatile object database; rd vms-2d0)" "$rc"
+    run_seg 'NCP LIST KNOWN OBJECTS' "$LOG1" 'Known Object Permanent Summary' 30
+    if has 'Known Object Permanent Summary' && ! has '%NCP-'; then rc=0; else rc=1; fi
+    record "boot 1: NCP LIST KNOWN OBJECTS reads the PERMANENT object database without a NETACP (the VMS SHOW/LIST split)" "$rc"
     run_seg 'SHOW NETWORK' "$LOG1" 'Product:' 20
     if has 'Product: OVMX TCP/IP' && ! has 'Product:  DECNET'; then rc=0; else rc=1; fi
     record "boot 1: SHOW NETWORK has NO DECNET product line while no NETACP serves (TCP/IP line unchanged)" "$rc"
@@ -181,6 +194,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SHOW SYSTEM lists a RUNNING NETACP ${NETACP_SETTLE}s after boot (it exits on any datalink failure)" "$rc"
     if printf '%s\n' "$seg" | grep -qF 'Process Name'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
+    netacp_pid=$(printf '%s\n' "$seg" | grep -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
 
     # rd vms-dda: an outbound link from a user process, brokered through the
     # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has
@@ -230,6 +244,30 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if has 'Product:  DECNET        Node:  OVMX                 Address(es):  1.42' \
        && has 'Product: OVMX TCP/IP'; then rc=0; else rc=1; fi
     record "boot 2: SHOW NETWORK carries the DECNET product line from the running NETACP (VAX columns); TCP/IP line unchanged" "$rc"
+
+    # (e) KNOWN CIRCUITS / LINES / OBJECTS from the same NETACP (rd vms-2d0).
+    run_seg 'NCP SHOW KNOWN CIRCUITS' "$LOG2" 'Routing Node' 30
+    if has 'Known Circuit Volatile Summary as of ' \
+       && has '   Circuit          State                   Loopback     Adjacent' \
+       && has '                                              Name      Routing Node' \
+       && printf '%s\n' "$seg" | grep -qE '^  ETH-0             on( |$)'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW KNOWN CIRCUITS prints NETACP's circuit ETH-0 (the executive's ETH0:), state on, in the VAX columns" "$rc"
+    run_seg 'NCP SHOW KNOWN LINES' "$LOG2" 'Known Line Volatile Summary' 30
+    if has '   Line             State' \
+       && printf '%s\n' "$seg" | grep -qE '^  ETH-0             on$'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW KNOWN LINES prints the line ETH-0, state on, in the VAX columns" "$rc"
+    run_seg 'NCP SHOW KNOWN OBJECTS' "$LOG2" 'CTERM' 30
+    if has 'Known Object Volatile Summary as of ' \
+       && has '   Object   Number  File/PID                   User Id          Password' \
+       && printf '%s\n' "$seg" | grep -qxF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW KNOWN OBJECTS lists NETACP's FAL 17 FAL.EXE (byte-identical to the real VAX row) under the VAX heading" "$rc"
+    cterm_pid=$(printf '%s\n' "$seg" | grep -oE '^  CTERM         42  [0-9A-F]{8}$' | cut -c21-28)
+    if [ -n "$cterm_pid" ] && [ -n "${netacp_pid:-}" ] && [ "$cterm_pid" = "$netacp_pid" ]; then rc=0; else rc=1; fi
+    record "boot 2: SHOW KNOWN OBJECTS' CTERM 42 row carries the PID of the NETACP serving it ($cterm_pid), the PID SHOW SYSTEM lists for NETACP (${netacp_pid:-none})" "$rc"
+    run_seg 'NCP SHOW OBJECT FAL' "$LOG2" 'Object Volatile Summary' 30
+    if printf '%s\n' "$seg" | grep -qxF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW OBJECT FAL reads the same NETACP entry" "$rc"
+
     if grep -qaF '%NCP-F-' <(tail -c "+$((off + 1))" "$LOG2"); then rc=1; else rc=0; fi
     record "boot 2: no %NCP-F- failure while NETACP is serving" "$rc"
 else

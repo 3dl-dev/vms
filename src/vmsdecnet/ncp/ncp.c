@@ -29,10 +29,15 @@
  * volatile database to read -- and the permanent database is read with LIST,
  * exactly the VMS split.
  *
- * HONEST SCOPE, not yet built: OVMX keeps ONE persisted database, so SET
+ * SHOW KNOWN CIRCUITS / LINES / OBJECTS (and SHOW CIRCUIT / LINE / OBJECT) read
+ * NETACP the same way (rd vms-2d0): its circuit and line (the datalink it runs)
+ * and the objects its inbound dispatch serves. LIST KNOWN OBJECTS / LIST OBJECT
+ * read the permanent NETOBJECT.DAT.
+ *
+ * HONEST SCOPE, not yet built: OVMX keeps ONE persisted node database, so SET
  * (volatile) and DEFINE (permanent) both act on it (a running NETACP re-reads it
- * per request) -- the volatile/permanent split for SET, circuits, lines, LOOP and
- * the object database's volatile view are later rungs and are not faked here
+ * per request); the permanent object database does not yet feed NETACP's
+ * object table; LOOP and circuit/line SET are later rungs and are not faked here
  * (INV-6).
  */
 #include <stdio.h>
@@ -149,7 +154,7 @@ static void show_object(const struct dnet_object_entry *e)
 
 static void show_known_objects(const struct dnet_objectdb *db)
 {
-    printf("\nKnown Object Volatile Summary\n\n");
+    printf("\nKnown Object Permanent Summary\n\n");
     printf("Object       Number  File\n\n");
     for (unsigned i = 0; i < db->count; i++) {
         const struct dnet_object_entry *e = dnet_objectdb_at(db, i);
@@ -282,6 +287,50 @@ static int ncp_show_node(const char *arg)
     return 1;
 }
 
+/* SHOW CIRCUIT c / SHOW LINE l: an entry of NETACP's circuit / line table. */
+static int ncp_show_circuit_line(const char *arg, int circuit)
+{
+    if (!ncp_fetch(circuit ? DNET_NETSHOW_ENT_CIRCUITS : DNET_NETSHOW_ENT_LINES))
+        return 1;
+    if (circuit) {
+        for (unsigned i = 0; i < g_view.ncircs; i++)
+            if (ieq(arg, g_view.circs[i].name)) {
+                dnet_netshow_fmt_circuits(&g_view, &g_view.circs[i], ncp_emit, NULL);
+                return 0;
+            }
+        fprintf(stderr, "%%NCP-E-UNRCIR, unrecognized circuit\n");
+        return 1;
+    }
+    for (unsigned i = 0; i < g_view.nlines; i++)
+        if (ieq(arg, g_view.lines[i].name)) {
+            dnet_netshow_fmt_lines(&g_view, &g_view.lines[i], ncp_emit, NULL);
+            return 0;
+        }
+    fprintf(stderr, "%%NCP-E-UNRLIN, unrecognized line\n");
+    return 1;
+}
+
+/* SHOW OBJECT o: an entry of NETACP's volatile object database, by name or
+ * number. */
+static int ncp_show_object(const char *arg)
+{
+    if (!ncp_fetch(DNET_NETSHOW_ENT_OBJECTS))
+        return 1;
+    char *end = NULL;
+    long n = strtol(arg, &end, 10);
+    int by_num = end && end != arg && *end == '\0';
+    for (unsigned i = 0; i < g_view.nobjs; i++) {
+        const struct dnet_netshow_object *o = &g_view.objs[i];
+        if ((by_num && n >= 1 && n <= 255 && o->number == (uint8_t)n) ||
+            (!by_num && o->name[0] && ieq(arg, o->name))) {
+            dnet_netshow_fmt_objects(&g_view, o, ncp_emit, NULL);
+            return 0;
+        }
+    }
+    fprintf(stderr, "%%NCP-E-UNROBJ, unrecognized object name or number\n");
+    return 1;
+}
+
 static int fail(const char *msg)
 {
     fprintf(stderr, "%%NCP-E-%s\n", msg);
@@ -313,8 +362,9 @@ static void usage(void)
         "  SET EXECUTOR ADDRESS <area.node> | NAME <name> | STATE ON|OFF | MAXIMUM LINKS <n>\n"
         "  SET|DEFINE OBJECT <name> NUMBER <1..255> [FILE <spec>]\n"
         "  CLEAR|PURGE OBJECT <name>|<number>\n"
-        "  SHOW KNOWN OBJECTS\n"
-        "  SHOW OBJECT <name>|<number>\n");
+        "  SHOW KNOWN CIRCUITS | KNOWN LINES | KNOWN OBJECTS (the running network)\n"
+        "  SHOW CIRCUIT <c> | LINE <l> | OBJECT <name>|<number>\n"
+        "  LIST KNOWN OBJECTS | OBJECT <name>|<number> (the permanent database)\n");
 }
 
 int main(int argc, char **argv)
@@ -340,6 +390,30 @@ int main(int argc, char **argv)
             dnet_netshow_fmt_known_links(&g_view, ncp_emit, NULL);
             return 0;
         }
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "CIRCUITS", 3)) {
+            if (!ncp_fetch(DNET_NETSHOW_ENT_CIRCUITS))
+                return 1;
+            dnet_netshow_fmt_circuits(&g_view, NULL, ncp_emit, NULL);
+            return 0;
+        }
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "LINES", 3)) {
+            if (!ncp_fetch(DNET_NETSHOW_ENT_LINES))
+                return 1;
+            dnet_netshow_fmt_lines(&g_view, NULL, ncp_emit, NULL);
+            return 0;
+        }
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "OBJECTS", 3)) {
+            if (!ncp_fetch(DNET_NETSHOW_ENT_OBJECTS))
+                return 1;
+            dnet_netshow_fmt_objects(&g_view, NULL, ncp_emit, NULL);
+            return 0;
+        }
+        if (kw(ent, "CIRCUIT", 3) && argc >= 4)
+            return ncp_show_circuit_line(argv[3], 1);
+        if (kw(ent, "LINE", 3) && argc >= 4)
+            return ncp_show_circuit_line(argv[3], 0);
+        if (kw(ent, "OBJECT", 3) && argc >= 4)
+            return ncp_show_object(argv[3]);
         if (kw(ent, "NODE", 4) && argc >= 4)
             return ncp_show_node(argv[3]);
         if (kw(ent, "EXECUTOR", 4)) {
@@ -359,13 +433,13 @@ int main(int argc, char **argv)
             dnet_netshow_fmt_executor(&g_view, kind, ncp_emit, NULL);
             return 0;
         }
+        usage();
+        return 1;
     }
 
-    /* ---- LIST: the permanent database. SHOW OBJECT / SHOW KNOWN OBJECTS stay
-     *      on it too: NETACP has no volatile object view yet (labelled). ---- */
-    if (kw(verb, "LIST", 3) || kw(verb, "SHOW", 3)) {
-        int list = kw(verb, "LIST", 3);
-        if (list && kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "NODES", 3)) {
+    /* ---- LIST: the permanent database (the files). ---- */
+    if (kw(verb, "LIST", 3)) {
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "NODES", 3)) {
 
             struct dnet_nodedb db;
             if (nodes_load(&db) != DNET_NODEDB_OK)
@@ -393,11 +467,11 @@ int main(int argc, char **argv)
                 e = dnet_objectdb_by_name(&db, argv[3]);
             if (!e)
                 return fail("UNROBJ, unrecognized object name or number");
-            printf("\nObject Volatile Summary\n\nObject       Number  File\n\n");
+            printf("\nObject Permanent Summary\n\nObject       Number  File\n\n");
             show_object(e);
             return 0;
         }
-        if (list && kw(ent, "NODE", 4) && argc >= 4) {
+        if (kw(ent, "NODE", 4) && argc >= 4) {
             struct dnet_nodedb db;
             if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
@@ -413,7 +487,7 @@ int main(int argc, char **argv)
             show_node(e);
             return 0;
         }
-        if (list && kw(ent, "EXECUTOR", 4)) {
+        if (kw(ent, "EXECUTOR", 4)) {
             struct dnet_executor x;
             exec_load(&x);
             show_executor(&x, argc >= 4 && kw(argv[3], "CHARACTERISTICS", 4));

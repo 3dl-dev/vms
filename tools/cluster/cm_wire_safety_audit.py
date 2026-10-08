@@ -15,6 +15,13 @@ such vectors REACTIVELY, by crashing lab VAXes:
   * `INVEXCEPTN` (integration note E78) -- OVMX answered the coordinator's
     254-frame `cat 0x01 op 0x06` membership burst with ONE `cat 0x04` ack per
     frame: 254 acks in 31.6 ms. VAX2 took a fatal bugcheck and stayed down.
+  * `CNXMGRERR` again (rd vms-e8b, 2026-10-08) -- OVMX answered a DEPARTING
+    member's cat-0x01 op-0x03 membership commit to the WRONG PEER: the member
+    its own join was driving through, which had never opened that transaction.
+    The body was byte-correct and the envelope was a valid continuation of that
+    peer's dialogue; only the destination was wrong. VAX2 bugchecked 193 us
+    later, twice out of two attempts. Vector S16 below, and it is the reason
+    this file now judges WHO a response went to as well as what it carried.
 
 Finding those by crashing hardware does not scale and does not generalise. This
 script makes the check PROACTIVE: it measures the envelope the corpus of real
@@ -668,6 +675,89 @@ def check_notification_answered(frames, audited):
     return findings
 
 
+def _crossed_requesters(frames, response):
+    """The peers OTHER than `response.dst` that asked `response.src` for this
+    exact transaction, inside the correlation window and before it."""
+    key = (response.base_category, response.opcode, response.txn,
+           response.token)
+    out = []
+    for f in frames:
+        if f.is_response or f.ts > response.ts or f.dst != response.src:
+            continue
+        if response.ts - f.ts > CORRELATION_WINDOW_S:
+            continue
+        if (f.category, f.opcode, f.txn, f.token) != key:
+            continue
+        if f.src != response.dst and f.src not in out:
+            out.append(f.src)
+    return out
+
+
+def check_response_peer_crossed(frames, audited, matched):
+    """A cat-0x01 response sent to a peer that never opened that transaction,
+    while ANOTHER peer in the same capture did.
+
+    THE OBSERVED CRASH (rd vms-e8b,
+    tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/). A real OpenVMS
+    VAX V7.3 left a three-node cluster with SHUTDOWN/REMOVE_NODE and opened its
+    class-0x04 self-departure transition (spec sec 4(r)) with a cat-0x01 op-0x03
+    COMMIT to each other member. OVMX answered VAX1's request to VAX2 -- the
+    member its own join happened to be driving through -- and VAX2 took a fatal
+    `CNXMGRERR, Error detected by VAXcluster Connection Manager` 193 us (run m3)
+    / 378 us (run m4) later. The body was byte-correct and the envelope was a
+    valid continuation of the OVMX<->VAX2 dialogue; the only wrong thing about
+    the frame was who it was sent to.
+
+    WHY IT IS A FINDING AND check_uncorrelatable_response()'s 5.3% is not.
+    `correlate()` keys on (cat, op, txn, token, src, dst), so a crossed response
+    simply fails to correlate, which the corpus already does 5.3% of the time
+    for honest reasons (a capture that began mid-transaction, a peer answering
+    from its other leg). What makes THIS deterministic is the second half: the
+    same (cat, op, txn, token) IS held, in the same capture and the same
+    window, by a DIFFERENT peer who asked US. That is not a missing request --
+    it is a request answered to the wrong station.
+
+    SCOPED TO CATEGORY 0x01 BY MEASUREMENT, not by preference. Spec sec 4(j)
+    grounds body[4:8] as a per-transaction correlation token for the
+    connection-manager category; the DLM's cat-0x02 reuses small (txn, token)
+    pairs freely across peers (the lock sub-fields of sec 4(f).1 are its real
+    correlation), and judging cat-0x02 by this rule produces 26 findings on
+    real-VAX-to-real-VAX traffic in this repo's own library. Restricted to
+    cat-0x01 the rule is CALIBRATED CLEAN:
+
+      * 62 captures in tests/lab/captures + captures: 409 judged cat-0x01
+        responses, 2 findings -- both OVMX, both cat-0x81 op-0x03, both the
+        same defect (vms-4f0-cn3-relay-20260924/run{1-fixed,2-base-control},
+        answering the real VAXC's request to the other OVMX node). ZERO
+        findings from any real-VAX responder.
+      * both vms-e8b reproductions: exactly 1 finding each, and in both it is
+        the last frame the crashing VAX received.
+    """
+    findings = []
+    for f in frames:
+        if not f.is_response or f.src not in audited:
+            continue
+        if f.base_category != 0x01 or (f.txn == 0 and f.token == 0):
+            continue
+        if matched.get(f.idx) is not None:
+            continue
+        crossed = _crossed_requesters(frames, f)
+        if not crossed:
+            continue
+        findings.append(Finding(
+            "S16-RESP-PEER-CROSSED", FATAL, f,
+            "answered %s to %s, but %s opened that transaction" %
+            (f.label(), f.dst, ", ".join(crossed)),
+            "spec sec 4(p): the dialogue rides ONE VC per peer -- answer on "
+            "whichever the request arrived on. A response naming a "
+            "transaction the destination never opened is a membership "
+            "assertion about a conversation that did not happen. OBSERVED "
+            "CRASH: CNXMGRERR, 193 us later, twice (rd vms-e8b). CALIBRATED: "
+            "409 judged cat-0x01 responses over 62 captures, 0 findings from "
+            "any real-VAX responder."))
+    return findings
+
+
 def check_uncorrelatable_response(frames, audited):
     """A response carrying txn == 0 can never be correlated to anything: spec
     sec 4(j) grounds body[4:6] as the transaction number a request and its
@@ -963,6 +1053,7 @@ def audit(path, frames, audited):
     findings += check_request_pair(frames, audited)
     findings += check_notification_answered(frames, audited)
     findings += check_uncorrelatable_response(frames, audited)
+    findings += check_response_peer_crossed(frames, audited, matched)
     findings += check_conid(frames, audited)
     findings += check_frame_size(path, audited)
     findings += check_credit_window(path, audited)
@@ -1149,6 +1240,9 @@ def _write_pcap(path, records):
 
 VAX = "08:00:2b:11:22:33"
 OVMX = "52:54:00:00:00:f4"
+# A SECOND reference node, for the vectors that only exist at three stations
+# (S16: a response can only cross peers when there are two peers to cross).
+VAX2 = "08:00:2b:11:22:34"
 
 
 def _clean_dialogue():
@@ -1287,6 +1381,21 @@ def _violation_cases():
                     0x9e8f000d),
         _synth_ctrl(ts + .003, OVMX, VAX, MT_CTRL_REJ_RSP, 0x9e8f000d,
                     0xbb0e000e)]
+
+    # S16: the rd vms-e8b exchange at three stations -- VAX1 opens its
+    # class-0x04 departure with a cat-0x01 op-0x03 to OVMX, and OVMX answers
+    # VAX2. The PASSING half rides in the SAME fixture: VAX2 asks its own
+    # op-0x03 and is answered correctly, so a check that fired on any
+    # uncorrelated response would not pass this case.
+    cases["S16-RESP-PEER-CROSSED"] = [
+        _synth_cm(ts, VAX2, OVMX, 0x5002, 0x2003, 1, 0, 20, 2001,
+                  0x01, 0x03),
+        _synth_cm(ts + .001, OVMX, VAX2, 0x2003, 0x5002, 1, 1, 20, 2001,
+                  0x81, 0x03),
+        _synth_cm(ts + .002, VAX, OVMX, 0x1002, 0x2002, 1, 0, 21, 2002,
+                  0x01, 0x03),
+        _synth_cm(ts + .003, OVMX, VAX2, 0x2003, 0x5002, 2, 1, 21, 2002,
+                  0x81, 0x03)]
     return cases
 
 

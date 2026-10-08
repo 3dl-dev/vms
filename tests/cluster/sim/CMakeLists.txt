@@ -94,6 +94,20 @@ target_compile_definitions(test_sim_cnxman_join PRIVATE
 target_include_directories(test_sim_cnxman_join PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# rd vms-e8b's rung-R2 leg: the REAL captured class-0x04 departure commit of a
+# VAX leaving with SHUTDOWN/REMOVE_NODE, replayed as arriving on the DEPARTING
+# member's connection -- the exchange whose answer OVMX used to send to the
+# wrong peer, bugchecking a real VAX2 CNXMGRERR.
+cluster_sim_test(test_sim_cnxman_departing_member
+                 scenarios/cnxman_departing_member.c)
+target_link_libraries(test_sim_cnxman_departing_member PRIVATE
+    cluster_host_cnxman cluster_host_fixture)
+target_compile_definitions(test_sim_cnxman_departing_member PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+target_include_directories(test_sim_cnxman_departing_member PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # rd vms-e88's rung-R2 leg: the real V7.3 trio C3 -- a joiner that can reach one
 # of two members -- replayed at one simulated joiner over five virtual minutes.
 cluster_sim_test(test_sim_cnxman_join_member_count

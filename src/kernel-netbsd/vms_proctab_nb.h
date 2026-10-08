@@ -499,6 +499,25 @@ struct vms_dfprot_args {
     uint32_t status;    /* return: SS$_ status */
 };
 #define VMS_IOCTL_DFPROT            _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x5E, struct vms_dfprot_args)
+
+/*
+ * $SETDDIR -- the process DEFAULT DIRECTORY (rd vms-872). A per-process attribute
+ * of the executive's PCB, like $SETDFPROT's default protection: set/read through
+ * VMS_IOCTL_DDIR, inherited by an image/subprocess at REGISTER_CONTINUE time, so
+ * a SET DEFAULT in DCL is the directory every image it runs resolves a relative
+ * file specification in (RMS completes a missing device/directory from it).
+ * `set` != 0 stores newdir (NUL-terminated, < VMS_DDIR_SIZE); olddir always
+ * returns the value in force ("" if never set). OVMX design choice (Rule 8):
+ * the byte layout of this ioctl.
+ */
+#define VMS_DDIR_SIZE 256
+struct vms_ddir_args {
+    uint32_t set;                    /* in:  nonzero = store newdir          */
+    uint32_t status;                 /* return: SS$_ status                   */
+    char     newdir[VMS_DDIR_SIZE];  /* in:  "DEV:[DIR]" or "[DIR]"           */
+    char     olddir[VMS_DDIR_SIZE];  /* out: the directory in force before    */
+};
+#define VMS_IOCTL_DDIR              _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x5F, struct vms_ddir_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY      _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -539,6 +558,10 @@ _Static_assert(sizeof(struct vms_dfprot_args) == 16,
                "vms_dfprot_args layout changed: VMS_IOCTL_DFPROT ABI break");
 _Static_assert(VMS_IOCTL_DFPROT == 0xC010565Eu,
                "VMS_IOCTL_DFPROT encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_ddir_args) == 8 + 2 * VMS_DDIR_SIZE,
+               "vms_ddir_args layout changed: VMS_IOCTL_DDIR ABI break");
+_Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
+               "VMS_IOCTL_DDIR encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,

@@ -207,6 +207,23 @@ void dcl_context_init(struct dcl_context *ctx)
         strncpy(ctx->default_dir, env_defdir, sizeof(ctx->default_dir) - 1);
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     }
+    /*
+     * THE EXECUTIVE HOLDS THE DEFAULT DIRECTORY (rd vms-872). A process that
+     * already carries one -- inherited from its creator at REGISTER_CONTINUE,
+     * e.g. a spawned DCL after the parent's SET DEFAULT -- keeps it, and this
+     * DCL adopts it; a fresh login session seeds it from the SYSUAF default
+     * (VMS_DEFAULT_DIR above). Every image this DCL runs then completes a
+     * relative file specification in that directory (RMS reads it back).
+     */
+    {
+        char exdir[256] = "";
+        if ((vms_kif_ddir(NULL, exdir, sizeof exdir) & 1) && exdir[0]) {
+            strncpy(ctx->default_dir, exdir, sizeof(ctx->default_dir) - 1);
+            ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
+        } else if (ctx->default_dir[0]) {
+            (void)vms_kif_ddir(ctx->default_dir, NULL, 0);
+        }
+    }
 
     /* The default protection is the EXECUTIVE's ($SETDFPROT), not a DCL-private field. */
 

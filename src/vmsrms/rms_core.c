@@ -243,6 +243,43 @@ struct rms_acp_spec {
 
 /* Compose the effective VMS filespec from fab$l_fna (+ fab$l_dna defaults)
  * WITHOUT resolving logical names. Returns 0 on success, -1 on empty. */
+/*
+ * rms_apply_default_dir - complete a file specification with no device and/or
+ * no directory from the PROCESS DEFAULT DIRECTORY (rd vms-872), the last step
+ * of VMS RMS defaulting (after the default name, fab$l_dna). The value is the
+ * executive's ($SETDDIR / SET DEFAULT), inherited by every image the CLI runs,
+ * so a program given "FILE.TXT" opens it where the user SET DEFAULT -- not in
+ * the volume's root. A process that never set one is left unchanged. A spec
+ * naming a device or logical ("SYS$LOGIN:X", "DKA0:[A]X") is never touched;
+ * one with a [directory] but no device gets only the default's device.
+ */
+void rms_apply_default_dir(char *spec, size_t speclen)
+{
+    char ddir[256] = "";
+    char out[1024];
+    const char *colon, *lb, *dev_end;
+    int n;
+
+    if (!spec || strstr(spec, "::"))
+        return;
+    lb = strpbrk(spec, "[<");
+    colon = strchr(spec, ':');
+    if (colon && (!lb || colon < lb))
+        return;                                  /* has a device / logical   */
+    if (!((vms_kif_ddir(NULL, ddir, sizeof(ddir)) & 1) && ddir[0]))
+        return;                                  /* no default set: as before */
+    dev_end = strchr(ddir, ':');
+    if (lb)
+        n = dev_end ? snprintf(out, sizeof(out), "%.*s%s",
+                               (int)(dev_end - ddir + 1), ddir, spec)
+                    : snprintf(out, sizeof(out), "%s", spec);
+    else
+        n = snprintf(out, sizeof(out), "%s%s", ddir, spec);
+    if (n < 0 || (size_t)n >= sizeof(out) || (size_t)n >= speclen)
+        return;                                  /* would not fit: unchanged  */
+    memcpy(spec, out, (size_t)n + 1);
+}
+
 static int rms_acp_effective_spec(struct FAB *fab, char *spec, size_t speclen)
 {
     if (!fab->fab$l_fna || fab->fab$b_fns == 0)
@@ -267,6 +304,7 @@ static int rms_acp_effective_spec(struct FAB *fab, char *spec, size_t speclen)
             spec[speclen - 1] = '\0';
         }
     }
+    rms_apply_default_dir(spec, speclen);
     return 0;
 }
 

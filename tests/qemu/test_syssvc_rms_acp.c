@@ -889,6 +889,11 @@ int main(void)
         static char out[32768];
         const char *script =
             "DIRECTORY/FULL VDA0:[OVMXDIR]FATVAR.DAT\n"
+            "DIRECTORY/FULL VDA0:[OVMXDIR]FATFIX.DAT\n"
+            "DIRECTORY/FULL VDA0:[OVMXDIR]FATSTM.DAT\n"
+            "E = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATVAR.DAT\",\"RAT\")\n"
+            "F = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATFIX.DAT\",\"RAT\")\n"
+            "WRITE SYS$OUTPUT \"FA-VAR-RAT=''E' FA-FIX-RAT=''F' END\"\n"
             "A = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATFIX.DAT\",\"MRS\")\n"
             "B = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATFIX.DAT\",\"RFM\")\n"
             "C = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATVAR.DAT\",\"LRL\")\n"
@@ -910,6 +915,16 @@ int main(void)
             check(fc[1].created && strstr(out, fidline) != NULL,
                   "vms-6e28: DIRECTORY/FULL's \"File ID:\" is the nam$w_fid $CREATE returned");
         }
+        /* vms-a44: the other record formats, worded as a VAX V7.3 prints them
+         * (tests/lab/captures/decnet-live-brackets-20261008/vax73-dirfull-recfmt.txt). */
+        check(has_line(out, "Record format:      Fixed length 20 byte records"),
+              "vms-a44: DIRECTORY/FULL of a FIX/mrs 20 file: \"Record format:      Fixed length 20 byte records\"");
+        check(has_line(out, "Record attributes:  None"),
+              "vms-a44: DIRECTORY/FULL of a file with no record attributes: \"Record attributes:  None\"");
+        check(has_line(out, "Record format:      Stream_LF, maximum 0 bytes, longest 15 bytes"),
+              "vms-a44: DIRECTORY/FULL of a STMLF file: \"Record format:      Stream_LF, maximum 0 bytes, longest 15 bytes\"");
+        check(strstr(out, "FA-VAR-RAT=CR FA-FIX-RAT= END") != NULL,
+              "vms-a44: F$FILE_ATTRIBUTES RAT names the attribute as VMS does (CR; empty for none), not a letter code");
         check(strstr(out, "FA-FIX-MRS=20 FA-FIX-RFM=FIX FA-VAR-LRL=27 FA-VAR-ORG=SEQ") != NULL,
               "vms-b447: F$FILE_ATTRIBUTES: FIX MRS 20, RFM FIX; VAR LRL 27, ORG SEQ");
 

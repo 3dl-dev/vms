@@ -225,6 +225,14 @@ struct vms_acp_acpcontrol_args {
 #define VMS_ACP_ATTR_RECATTR 0x08u    /* apply the FAT record attributes from attr.recattr: rtype (rfm|org),
                                        * rattrib, rsize, bktsize, vfcsize, maxrec, defext, gbc -- never the
                                        * ACP-owned hiblk/efblk/ffbyte nor versions (ATR$C_RECATTR) */
+
+/* IO$_MODIFY ACL operations (vms-d404), the ACL$C_ item codes (ACLDEF,
+ * oracle docs/oracle/alpha84-starlet-defs/ACLDEF.txt). */
+#define VMS_ACP_ACL_ADD        1u   /* ACL$C_ADDACLENT: add one ACE first */
+#define VMS_ACP_ACL_DEL        2u   /* ACL$C_DELACLENT: delete the matching ACE */
+#define VMS_ACP_ACL_DELETEALL  6u   /* ACL$C_DELETEACL: delete all but PROTECTED ACEs */
+#define VMS_ACP_ACL_READ       7u   /* ACL$C_READACL: return the whole ACL */
+#define VMS_ACP_ACL_PURGE     15u   /* ACL$C_DELETE_ALL: delete every ACE, protected too */
 struct vms_acp_fileop_args {
 	uint32_t chan;
 	uint32_t func;
@@ -268,6 +276,10 @@ struct vms_acp_fileop_args {
 	uint16_t pad4;
 	uint16_t pad5;
 	char     new_name[VMS_ACP_NAME_SIZE];
+	/* --- IO$_MODIFY access control list (vms-d404): ACL$C_ op codes ------ */
+	uint32_t acl_op;           /* in: VMS_ACP_ACL_* (0 => no ACL operation) */
+	uint32_t acl_len;          /* in: ACE bytes (ADD/DEL) or buffer size (READ); out: ACL bytes */
+	uint64_t acl_buf;          /* in: user address of the ACE / the ACL buffer (READ) */
 };
 
 /*
@@ -418,7 +430,7 @@ _Static_assert(sizeof(struct vms_acp_rw_args) == 48,
                "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
 _Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
                "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
-_Static_assert(sizeof(struct vms_acp_fileop_args) == 344,
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 360,
                "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
 _Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
                "FILEOP/ACPCONTROL must stay distinct on nr 0x6F (size-distinct _IOWR)");

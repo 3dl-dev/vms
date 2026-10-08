@@ -1570,6 +1570,13 @@ ods2_status_t ods2_security_parse(const void *block, size_t block_len,
 /* Append one format-1 FM2 retrieval pointer [lbn, lbn+count) to a file header's
  * map area (bumps fh2_map_inuse). ODS2_ERR_NOSPACE if the map area is full,
  * ODS2_ERR_ARGS if count/lbn exceed the format-1 range. Reseal after. */
+/* Byte offset where the header's map area ends (start of the ACL / reserved
+ * area, else the checksum word). */
+size_t ods2_fh2_map_end(const void *header_block);
+/* The header's access control list area: 1 + [*off, *off+*len) if present. */
+int ods2_fh2_acl_area(const void *header_block, size_t *off, size_t *len);
+/* Replace the header's ACL with `len` bytes of ACEs (0 = none); reseal after. */
+ods2_status_t ods2_fh2_acl_set(void *header_block, const uint8_t *acl, size_t len);
 ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t count);
 
 /* Set a file header's RECATTR size fields (fat_hiblk/fat_efblk/fat_ffbyte) +

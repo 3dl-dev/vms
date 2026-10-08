@@ -1,0 +1,140 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08
+#   by the corpus lane (tools/oracle/semantic/capture.py Lab class, commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$SYSDEVICE:[ACLT]
+
+
+$ COPY NL: H1.DAT
+
+
+$ COPY NL: H2.DAT
+
+
+$ COPY NL: H3.DAT
+
+
+$ COPY NL: H4.DAT
+
+
+$ COPY NL: H5.DAT
+
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G,W:R) H1.DAT
+
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G,W:R) H2.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[200,201],ACCESS=CONTROL) H2.DAT
+
+
+$ SET SECURITY/OWNER=[200,201]/PROTECTION=(S:RWED,O:RWED,G,W) H3.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=BOGUS) H4.DAT
+%SET-F-SYNTAX, error parsing 'ACCESS=BOGUS)'
+-SYSTEM-F-IVACL, invalid access control list entry syntax
+
+$ WRITE SYS$OUTPUT $STATUS
+%X00010001
+
+$ SET ACL/ACL=(FOO) H4.DAT
+%SET-F-SYNTAX, error parsing 'FOO)'
+-SYSTEM-F-IVACL, invalid access control list entry syntax
+
+$ WRITE SYS$OUTPUT $STATUS
+%X00010001
+
+$ SET ACL/ACL=(IDENTIFIER=NOSUCHNAME,ACCESS=READ) H4.DAT
+%SET-F-SYNTAX, error parsing 'NOSUCHNAME,ACCESS=READ)'
+-SYSTEM-F-NOSUCHID, unknown rights identifier
+
+$ WRITE SYS$OUTPUT $STATUS
+%X00010001
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=R+W+E+D+C) H4.DAT
+
+
+$ SET ACL/ACL=(IDENTIFIER=*,ACCESS=NONE) H4.DAT
+
+
+$ SET ACL/ACL=(identifier=[200,201], options=protected, access=read) H4.DAT
+
+
+$ SHOW ACL H4.DAT
+Object type: FILE,  Object name: SYS$SYSDEVICE:[ACLT]H4.DAT;1,  on  8-OCT-2026 08:34:36.36
+          (IDENTIFIER=[CORPTST],OPTIONS=PROTECTED,ACCESS=READ)
+          (IDENTIFIER=*,ACCESS=NONE)
+          (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE+EXECUTE+DELETE+CONTROL)
+
+$ SET ACL/DELETE H4.DAT
+
+
+$ SHOW ACL H4.DAT
+Object type: FILE,  Object name: SYS$SYSDEVICE:[ACLT]H4.DAT;1,  on  8-OCT-2026 08:34:38.04
+          (IDENTIFIER=[CORPTST],OPTIONS=PROTECTED,ACCESS=READ)
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=READ) H5.DAT
+
+
+$ SHOW ACL H5.DAT
+Object type: FILE,  Object name: SYS$SYSDEVICE:[ACLT]H5.DAT;1,  on  8-OCT-2026 08:34:39.75
+          (IDENTIFIER=[SYSTEM],ACCESS=READ)
+
+$ WRITE SYS$OUTPUT $STATUS
+%X00010001
+
+$ SHOW ACL H1.DAT
+%SYSTEM-W-ACLEMPTY, access control list is empty
+
+$ WRITE SYS$OUTPUT $STATUS
+%X00010001
+
+$ DIRECTORY/ACL H5.DAT
+
+Directory SYS$SYSDEVICE:[ACLT]
+
+H5.DAT;1           
+          (IDENTIFIER=[SYSTEM],ACCESS=READ)
+
+Total of 1 file.
+
+$ DIRECTORY/SECURITY H5.DAT
+
+Directory SYS$SYSDEVICE:[ACLT]
+
+H5.DAT;1             [SYSTEM]                         (RWED,RWED,RE,)
+          (IDENTIFIER=[SYSTEM],ACCESS=READ)
+
+Total of 1 file.
+
+$ SET SECURITY/PROTECTION=(S:RWED,O:RWED,G:RE,W:RE) PROBE3.COM
+
+
+$ SUBMIT/USER=CORPTST/NOPRINTER/LOG_FILE=SYS$SYSDEVICE:[ACLT]P3.LOG PROBE3.COM
+Job PROBE3 (queue SYS$BATCH, entry 4) started on SYS$BATCH
+
+$ TYPE SYS$SYSDEVICE:[ACLT]P3.LOG
+$ Set NoOn
+$ VERIFY = F$VERIFY(F$TRNLNM("SYLOGIN_VERIFY"))
+%SET-W-NOTSET, error modifying VAX1$DUA0:
+-CLI-E-IVDEVTYPE, invalid device type - specify a mailbox device
+%SYSTEM-W-ACLEMPTY, access control list is empty
+STATUS %X100009D0
+%SET-E-OPENIN, error opening SYS$SYSDEVICE:[ACLT]H1.DAT;1 as input
+-SYSTEM-F-NOPRIV, insufficient privilege or object protection violation
+STATUS %X1077109A
+STATUS %X00000001
+Object type: FILE,  Object name: SYS$SYSDEVICE:[ACLT]H2.DAT;1,  on  8-OCT-2026 08:34:53.32
+          (IDENTIFIER=[CORPTST],ACCESS=READ)
+STATUS %X00000001
+Object type: FILE,  Object name: SYS$SYSDEVICE:[ACLT]H3.DAT;1,  on  8-OCT-2026 08:34:53.41
+          (IDENTIFIER=[CORPTST],ACCESS=READ+WRITE)
+  CORPTST      job terminated at  8-OCT-2026 08:34:53.43
+
+  Accounting information:
+  Buffered I/O count:             203         Peak working set size:     662
+  Direct I/O count:                12         Peak page file size:      5320
+  Page faults:                   6089         Mounted volumes:             0
+  Charged CPU time:           0 00:00:00.44   Elapsed time:     0 00:00:00.53

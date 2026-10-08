@@ -88,6 +88,85 @@ static inline uint32_t ed_rd32(const uint8_t *p)
  * `header_block` is the file's already-parsed FH2 primary header (>= 512 bytes);
  * the caller reseals the checksum with ods2_fh2_reseal() after all edits.
  */
+/*
+ * ods2_fh2_map_end - byte offset where a header's map area ends: the start of its
+ * access control area (fh2_acoffset) or reserved area (fh2_rsoffset), whichever
+ * comes first, or the checksum word when neither is in use (offset 255). The ACL
+ * occupies the top of the header (observed on OpenVMS VAX V7.3: one 12-byte ACE
+ * moves acoffset from 255 to 249, docs/oracle/vax73-acl.md), so a map that grows
+ * must stop below it.
+ */
+size_t ods2_fh2_map_end(const void *header_block)
+{
+    const uint8_t *h = (const uint8_t *)header_block;
+    unsigned ac = h[offsetof(ods2_fh2_t, fh2_acoffset)];
+    unsigned rs = h[offsetof(ods2_fh2_t, fh2_rsoffset)];
+    unsigned e = ac < rs ? ac : rs;
+
+    if (e == 255u || (size_t)e * 2u > offsetof(ods2_fh2_t, fh2_checksum))
+        return offsetof(ods2_fh2_t, fh2_checksum);
+    return (size_t)e * 2u;
+}
+
+/*
+ * ods2_fh2_acl_area - locate a header's access control list: bytes
+ * [*off, *off + *len) of the header, from fh2_acoffset to fh2_rsoffset (or the
+ * checksum word). Returns 1 if the header carries an ACL area that lies within
+ * the header past its map, 0 if it has none (acoffset 255) or it is malformed.
+ */
+int ods2_fh2_acl_area(const void *header_block, size_t *off, size_t *len)
+{
+    const uint8_t *h = (const uint8_t *)header_block;
+    unsigned ac = h[offsetof(ods2_fh2_t, fh2_acoffset)];
+    unsigned rs = h[offsetof(ods2_fh2_t, fh2_rsoffset)];
+    unsigned mp = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    size_t a, e;
+
+    if (ac == 255u || ac < mp)
+        return 0;
+    a = (size_t)ac * 2u;
+    e = (rs == 255u) ? offsetof(ods2_fh2_t, fh2_checksum) : (size_t)rs * 2u;
+    if (e > offsetof(ods2_fh2_t, fh2_checksum) || a >= e)
+        return 0;
+    *off = a;
+    *len = e - a;
+    return 1;
+}
+
+/*
+ * ods2_fh2_acl_set - replace a header's access control list with `len` bytes of
+ * ACEs (back to back, ACE$B_SIZE first). The area is placed at the top of the
+ * header, ending where the reserved area (or the checksum word) begins, and
+ * fh2_acoffset moves down to its start; an empty list sets fh2_acoffset to 255.
+ * ODS2_ERR_NOSPACE when the ACEs do not fit above the map words in use (VMS
+ * then continues the ACL in an extension header, which this does not do).
+ * The caller reseals the checksum.
+ */
+ods2_status_t ods2_fh2_acl_set(void *header_block, const uint8_t *acl, size_t len)
+{
+    uint8_t *h = (uint8_t *)header_block;
+    unsigned rs = h[offsetof(ods2_fh2_t, fh2_rsoffset)];
+    unsigned mp = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    unsigned inuse = h[offsetof(ods2_fh2_t, fh2_map_inuse)];
+    size_t top = (rs == 255u) ? offsetof(ods2_fh2_t, fh2_checksum) : (size_t)rs * 2u;
+    size_t old_off, old_len, start;
+
+    if (!h || (len && !acl) || (len & 1u) || top > offsetof(ods2_fh2_t, fh2_checksum))
+        return ODS2_ERR_ARGS;
+    if (ods2_fh2_acl_area(h, &old_off, &old_len))
+        memset(h + old_off, 0, old_len);
+    if (len == 0) {
+        h[offsetof(ods2_fh2_t, fh2_acoffset)] = 255;
+        return ODS2_OK;
+    }
+    if (len > top || top - len < ((size_t)mp + inuse) * 2u)
+        return ODS2_ERR_NOSPACE;
+    start = top - len;
+    memcpy(h + start, acl, len);
+    h[offsetof(ods2_fh2_t, fh2_acoffset)] = (uint8_t)(start / 2u);
+    return ODS2_OK;
+}
+
 ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t count)
 {
     uint8_t *h = (uint8_t *)header_block;
@@ -142,8 +221,9 @@ ods2_status_t ods2_fh2_map_append(void *header_block, uint32_t lbn, uint32_t cou
         uint32_t high6;
         uint16_t w0, w1;
 
-        /* Need 4 bytes (2 words) and must stay clear of the checksum word (510). */
-        if (entry_byte + 4u > offsetof(ods2_fh2_t, fh2_checksum))
+        /* Need 4 bytes (2 words) and must stay clear of the ACL area and the
+         * checksum word (510). */
+        if (entry_byte + 4u > ods2_fh2_map_end(h))
             return ODS2_ERR_NOSPACE;
 
         /* FM2 format 1: word0 = 0x4000 | (count-1) | (high-6 LBN bits << 8),

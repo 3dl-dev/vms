@@ -1661,6 +1661,28 @@ uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t
 uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
                      uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
 
+/** sys$parse_acl - Text form of an access control entry to its binary form */
+uint32_t sys$parse_acl(const struct dsc$descriptor_s *aclstr, struct dsc$descriptor_s *aclent,
+                       uint16_t *errpos, void *accnam, uint32_t acmode);
+
+/** sys$format_acl - Binary access control entry to the text SHOW ACL prints */
+uint32_t sys$format_acl(const struct dsc$descriptor_s *aclent, uint16_t *acllen,
+                        struct dsc$descriptor_s *aclstr, uint16_t *width,
+                        struct dsc$descriptor_s *trmdsc, uint16_t *indent, void *accnam,
+                        void *nullarg);
+
+/** sys$get_security - Read an object's security profile (class FILE: owner,
+ *  protection, ACL) */
+uint32_t sys$get_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode);
+
+/** sys$set_security - Change an object's security profile (class FILE: owner,
+ *  protection, ACL entries) */
+uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode);
+
 /** sys$check_privilegew - Check the caller's privileges (auditing disabled: nothing logged) */
 uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum,
                               uint32_t flags, const void *itmlst, uint32_t *audsts,

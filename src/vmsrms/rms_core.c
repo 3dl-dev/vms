@@ -36,6 +36,16 @@
  * the IFI/ISI counters. So these are PARTIAL. (The netbsd-vax standalone cross
  * keeps a POSIX backend until VAX's own ACP re-target, vms-d5d.)
  *
+ * OVMX-PARTIAL: sys$get_security (vms-d404) -- exec: the file's owner,
+ *     protection and access control list are read from its header by the
+ *     executive ACP (IO$_ACCESS, IO$_MODIFY's ACL read).
+ * OVMX-LOCAL: sys$get_security -- the object name is resolved and the
+ *     security context is kept in this process; class FILE only.
+ * OVMX-PARTIAL: sys$set_security (vms-d404) -- exec: ACL entries are added and
+ *     deleted in the file header by the executive ACP, which grants the change
+ *     only to a process with CONTROL access.
+ * OVMX-LOCAL: sys$set_security -- OSS$M_LOCAL edits are held in this process's
+ *     context until OSS$M_RELCTX; owner and protection are not changed here.
  * OVMX-PARTIAL: sys$open (vms-bc7) -- exec: $ASSIGN the volume + IO$_ACCESS
  *     resolves the filespec by name to a FID and builds the file's VBN->LBN
  *     window (rms_acp_open_file).
@@ -3439,4 +3449,329 @@ uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *))
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *))
 {
     return rms_complete(rms_impl_flush(rab), rab, err, suc);
+}
+
+/* ======================================================================
+ * $GET_SECURITY / $SET_SECURITY for the FILE class (vms-d404). The object
+ * is a Files-11 file resolved the way $OPEN resolves its name (the RMS
+ * candidate walk over logicals, rooted and search-list devices); its owner,
+ * protection and access control list are the executive ACP's: read with
+ * IO$_ACCESS and IO$_MODIFY's ACL read, changed with IO$_MODIFY's ACL
+ * operations, which the ACP grants only to a process with CONTROL access.
+ * A security context (contxt) holds the located object between calls;
+ * OSS$M_LOCAL edits are held in it and applied when OSS$M_RELCTX releases
+ * it. Owner and protection are read here but changed only through the ACP's
+ * attribute path ($MODIFY), not by this service (SS$_UNSUPPORTED).
+ * ====================================================================== */
+
+#ifndef VMS_ACP_ACL_ADD              /* vms_acp.h's, when the ACP is not built in */
+#define VMS_ACP_ACL_ADD        1u
+#define VMS_ACP_ACL_DEL        2u
+#define VMS_ACP_ACL_DELETEALL  6u
+#define VMS_ACP_ACL_READ       7u
+#define VMS_ACP_ACL_PURGE     15u
+#endif
+#define RMS_OSS_ACL_ADD_ENTRY     3
+#define RMS_OSS_ACL_DELETE_ENTRY  4
+#define RMS_OSS_ACL_DELETE        5
+#define RMS_OSS_ACL_DELETE_ALL    6
+#define RMS_OSS_ACL_LENGTH       11
+#define RMS_OSS_ACL_READ         17
+#define RMS_OSS_OWNER            21
+#define RMS_OSS_PROTECTION       22
+#define RMS_OSS_M_RELCTX        0x2u
+#define RMS_OSS_M_LOCAL         0x4u
+
+struct rms_sec_item { uint16_t len, code; void *buf; uint16_t *ret; };
+
+#define RMS_SEC_CTX_MAX  8
+#define RMS_SEC_OPS_MAX  16
+struct rms_sec_ctx {
+    int      used;
+    uint32_t chan;
+    uint16_t fid_num, fid_seq;
+    uint8_t  fid_rvn, fid_nmx;
+    uint16_t owner_group, owner_member, prot;
+    int      nops;
+    struct { uint32_t op; uint32_t len; uint8_t ace[256]; } ops[RMS_SEC_OPS_MAX];
+};
+static struct rms_sec_ctx rms_sec_ctxs[RMS_SEC_CTX_MAX];
+static pthread_mutex_t rms_sec_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int rms_sec_class_is_file(const struct dsc$descriptor_s *c)
+{
+    static const char f[] = "FILE";
+    size_t i;
+    if (!c || !c->dsc$a_pointer || c->dsc$w_length != 4)
+        return 0;
+    for (i = 0; i < 4; i++) {
+        char ch = c->dsc$a_pointer[i];
+        if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+        if (ch != f[i]) return 0;
+    }
+    return 1;
+}
+
+#if defined(OVMX_HAVE_ACP)
+/* Locate the file named `objnam` and fill the context (channel left assigned). */
+static uint32_t rms_sec_locate(const struct dsc$descriptor_s *objnam, struct rms_sec_ctx *c)
+{
+    struct FAB fab = cc$rms_fab;
+    struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
+    char name[256];
+    uint32_t last = RMS$_FNF;
+    int n, i;
+
+    if (!objnam || !objnam->dsc$a_pointer || objnam->dsc$w_length == 0 ||
+        objnam->dsc$w_length >= sizeof(name))
+        return SS$_BADPARAM;
+    memcpy(name, objnam->dsc$a_pointer, objnam->dsc$w_length);
+    name[objnam->dsc$w_length] = '\0';
+    fab.fab$l_fna = name;
+    fab.fab$b_fns = (uint8_t)strlen(name);
+    n = rms_acp_specs_from_fab(&fab, specs, RMS_ACP_MAX_CANDS);
+    if (n <= 0)
+        return RMS$_SYN;
+    for (i = 0; i < n; i++) {
+        struct vms_acp_access_args a;
+        uint32_t chan = 0, st;
+        uint16_t dn = 0, ds = 0;
+        uint8_t dr = 0, dx = 0;
+
+        st = vms_kif_acp_assign(specs[i].devnam, &chan);
+        if (!(st & 1)) { last = st; continue; }
+        st = rms_acp_resolve_did(chan, specs[i].dirpath, &dn, &ds, &dr, &dx);
+        if (!(st & 1)) { vms_kif_dassgn(chan); last = RMS$_DNF; continue; }
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.did_num = dn; a.did_seq = ds; a.did_rvn = dr; a.did_nmx = dx;
+        a.version = specs[i].version;
+        strncpy(a.name, specs[i].name, VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&a);
+        if (!(st & 1)) {
+            vms_kif_dassgn(chan);
+            last = (st == SS$_NOSUCHFILE) ? RMS$_FNF : st;
+            continue;
+        }
+        (void)vms_kif_acp_deaccess(chan);
+        c->chan = chan;
+        c->fid_num = a.fid_num; c->fid_seq = a.fid_seq;
+        c->fid_rvn = a.fid_rvn; c->fid_nmx = a.fid_nmx;
+        c->owner_group = a.attr.uic_group; c->owner_member = a.attr.uic_member;
+        c->prot = a.attr.fileprot;
+        return SS$_NORMAL;
+    }
+    return last;
+}
+
+/* One ACL operation on the located file through IO$_MODIFY (by file ID). */
+static uint32_t rms_sec_aclop(struct rms_sec_ctx *c, uint32_t op, void *buf, uint32_t *len)
+{
+    struct vms_acp_fileop_args f;
+    uint32_t st;
+
+    memset(&f, 0, sizeof(f));
+    f.chan = c->chan;
+    f.func = VMS_ACP_FOP_MODIFY;
+    f.fidmode = 1;
+    f.fid_num = c->fid_num; f.fid_seq = c->fid_seq;
+    f.fid_rvn = c->fid_rvn; f.fid_nmx = c->fid_nmx;
+    f.acl_op = op;
+    f.acl_len = len ? *len : 0;
+    f.acl_buf = (uint64_t)(uintptr_t)buf;
+    st = vms_kif_acp_fileop(&f);
+    if (len)
+        *len = f.acl_len;
+    return st;
+}
+#endif /* OVMX_HAVE_ACP */
+
+static struct rms_sec_ctx *rms_sec_ctx_get(uint32_t *contxt, int create)
+{
+    struct rms_sec_ctx *c = NULL;
+    pthread_mutex_lock(&rms_sec_lock);
+    if (contxt && *contxt >= 1 && *contxt <= RMS_SEC_CTX_MAX &&
+        rms_sec_ctxs[*contxt - 1].used) {
+        c = &rms_sec_ctxs[*contxt - 1];
+    } else if (create) {
+        int i;
+        for (i = 0; i < RMS_SEC_CTX_MAX; i++)
+            if (!rms_sec_ctxs[i].used) {
+                c = &rms_sec_ctxs[i];
+                memset(c, 0, sizeof(*c));
+                c->used = 1;
+                if (contxt)
+                    *contxt = (uint32_t)(i + 1);
+                break;
+            }
+    }
+    pthread_mutex_unlock(&rms_sec_lock);
+    return c;
+}
+
+static void rms_sec_ctx_release(struct rms_sec_ctx *c, uint32_t *contxt)
+{
+#if defined(OVMX_HAVE_ACP)
+    if (c->chan)
+        vms_kif_dassgn(c->chan);
+#endif
+    pthread_mutex_lock(&rms_sec_lock);
+    c->used = 0;
+    pthread_mutex_unlock(&rms_sec_lock);
+    if (contxt)
+        *contxt = 0;
+}
+
+/* Get (or start) the context for a call: a new object when objnam is given. */
+static uint32_t rms_sec_begin(const struct dsc$descriptor_s *clsnam,
+                              const struct dsc$descriptor_s *objnam, uint32_t *contxt,
+                              struct rms_sec_ctx **out)
+{
+    struct rms_sec_ctx *c = rms_sec_ctx_get(contxt, 0);
+
+    *out = NULL;
+    if (c && !objnam) {
+        *out = c;
+        return SS$_NORMAL;
+    }
+    if (!objnam)
+        return SS$_BADPARAM;                    /* no object and no context */
+    if (!rms_sec_class_is_file(clsnam))
+        return SS$_NOCLASS;
+    if (c)
+        rms_sec_ctx_release(c, contxt);
+    c = rms_sec_ctx_get(contxt, 1);
+    if (!c)
+        return SS$_INSFMEM;
+#if defined(OVMX_HAVE_ACP)
+    {
+        uint32_t st = rms_sec_locate(objnam, c);
+        if (!(st & 1)) {
+            rms_sec_ctx_release(c, contxt);
+            return st;
+        }
+    }
+    *out = c;
+    return SS$_NORMAL;
+#else
+    rms_sec_ctx_release(c, contxt);
+    return SS$_NOSUCHDEV;
+#endif
+}
+
+uint32_t sys$get_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode)
+{
+    struct rms_sec_ctx *c;
+    struct rms_sec_item *it;
+    uint32_t local_ctx = 0, st;
+    uint32_t *cx = contxt ? contxt : &local_ctx;
+
+    (void)objhan; (void)acmode;
+    st = rms_sec_begin(clsnam, objnam, cx, &c);
+    if (!(st & 1))
+        return st;
+    for (it = (struct rms_sec_item *)itmlst; it && (it->len || it->code); it++) {
+        switch (it->code) {
+        case RMS_OSS_OWNER:
+            if (it->buf && it->len >= 4)
+                *(uint32_t *)it->buf = ((uint32_t)c->owner_group << 16) | c->owner_member;
+            if (it->ret) *it->ret = 4;
+            break;
+        case RMS_OSS_PROTECTION:
+            if (it->buf && it->len >= 4)
+                *(uint32_t *)it->buf = c->prot;
+            if (it->ret) *it->ret = 4;
+            break;
+#if defined(OVMX_HAVE_ACP)
+        case RMS_OSS_ACL_LENGTH:
+        case RMS_OSS_ACL_READ: {
+            uint8_t acl[512];
+            uint32_t n = sizeof(acl);
+            st = rms_sec_aclop(c, VMS_ACP_ACL_READ, acl, &n);
+            if (st == SS$_ACLEMPTY) { n = 0; st = SS$_NORMAL; }
+            if (!(st & 1))
+                goto done;
+            if (it->code == RMS_OSS_ACL_LENGTH) {
+                if (it->buf && it->len >= 4)
+                    *(uint32_t *)it->buf = n;
+                if (it->ret) *it->ret = 4;
+            } else {
+                if (n > it->len) { st = SS$_BUFFEROVF; goto done; }
+                if (n && it->buf)
+                    memcpy(it->buf, acl, n);
+                if (it->ret) *it->ret = (uint16_t)n;
+            }
+            break;
+        }
+#endif
+        default:
+            st = SS$_BADPARAM;                  /* an item this service does not return */
+            goto done;
+        }
+    }
+    st = SS$_NORMAL;
+done:
+    if ((flags & RMS_OSS_M_RELCTX) || !contxt)
+        rms_sec_ctx_release(c, cx);
+    return st;
+}
+
+uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
+                          const struct dsc$descriptor_s *objnam, uint32_t *objhan,
+                          uint32_t flags, void *itmlst, uint32_t *contxt, uint32_t *acmode)
+{
+    struct rms_sec_ctx *c;
+    struct rms_sec_item *it;
+    uint32_t local_ctx = 0, st;
+    uint32_t *cx = contxt ? contxt : &local_ctx;
+    int i;
+
+    (void)objhan; (void)acmode;
+    st = rms_sec_begin(clsnam, objnam, cx, &c);
+    if (!(st & 1))
+        return st;
+    for (it = (struct rms_sec_item *)itmlst; it && (it->len || it->code); it++) {
+        uint32_t op;
+        switch (it->code) {
+        case RMS_OSS_ACL_ADD_ENTRY:    op = VMS_ACP_ACL_ADD; break;
+        case RMS_OSS_ACL_DELETE_ENTRY: op = VMS_ACP_ACL_DEL; break;
+        case RMS_OSS_ACL_DELETE:       op = VMS_ACP_ACL_DELETEALL; break;
+        case RMS_OSS_ACL_DELETE_ALL:   op = VMS_ACP_ACL_PURGE; break;
+        default:
+            st = SS$_UNSUPPORTED;               /* owner/protection: not this service */
+            goto done;
+        }
+        if (c->nops >= RMS_SEC_OPS_MAX || it->len > sizeof(c->ops[0].ace) ||
+            ((op == VMS_ACP_ACL_ADD || op == VMS_ACP_ACL_DEL) && (!it->buf || it->len < 8))) {
+            st = SS$_BADPARAM;
+            goto done;
+        }
+        c->ops[c->nops].op = op;
+        c->ops[c->nops].len = (op == VMS_ACP_ACL_ADD || op == VMS_ACP_ACL_DEL) ? it->len : 0;
+        if (c->ops[c->nops].len)
+            memcpy(c->ops[c->nops].ace, it->buf, it->len);
+        c->nops++;
+    }
+    st = SS$_NORMAL;
+    /* Held edits are applied now unless the caller keeps them local to the
+     * context; releasing the context applies whatever is held. */
+    if (!(flags & RMS_OSS_M_LOCAL) || (flags & RMS_OSS_M_RELCTX) || !contxt) {
+#if defined(OVMX_HAVE_ACP)
+        for (i = 0; i < c->nops && (st & 1); i++) {
+            uint32_t len = c->ops[i].len;
+            st = rms_sec_aclop(c, c->ops[i].op, len ? c->ops[i].ace : NULL, &len);
+        }
+#else
+        if (c->nops)
+            st = SS$_NOSUCHDEV;
+        (void)i;
+#endif
+        c->nops = 0;
+    }
+done:
+    if ((flags & RMS_OSS_M_RELCTX) || !contxt)
+        rms_sec_ctx_release(c, cx);
+    return st;
 }

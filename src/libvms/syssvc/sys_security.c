@@ -32,6 +32,14 @@
  * OVMX-LOCAL: sys$asctoid -- the name-to-value lookup in the rights-database
  *     reader (rtl/rightslist.c) runs in this process; the identifier's ATTRIBUTE
  *     flags are not read back: attrib is reported 0.
+ * OVMX-PARTIAL: sys$parse_acl (vms-d404) -- exec: identifier names are
+ *     looked up in RIGHTSLIST.DAT read over the executive ACP ($ASCTOID).
+ * OVMX-LOCAL: sys$parse_acl -- the ACE text is parsed into the binary ACE
+ *     (docs/oracle/vax73-acl.md layout) in this process.
+ * OVMX-PARTIAL: sys$format_acl (vms-d404) -- exec: identifier values are named
+ *     from RIGHTSLIST.DAT read over the executive ACP ($IDTOASC).
+ * OVMX-LOCAL: sys$format_acl -- the text is composed in this process; width,
+ *     terminator and indent are not applied (one ACE, one line).
  * OVMX-PARTIAL: sys$idtoasc (vms-44a) -- exec: the same ACP read of RIGHTSLIST.DAT.
  * OVMX-LOCAL: sys$idtoasc -- the value-to-name lookup runs in this process; a
  *     wildcard context (ctx) is refused, one identifier is looked up.
@@ -70,6 +78,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include "starlet.h"
@@ -470,5 +479,397 @@ uint32_t (sys$create_uid)(void *uid)
     out[9] = (uint8_t)clock_seq;
     memcpy(out + 10, node, 6);
     memcpy(uid, out, sizeof(out));
+    return SS$_NORMAL;
+}
+
+/* ======================================================================
+ * $PARSE_ACL / $FORMAT_ACL -- an access control entry's text form <-> its
+ * binary form (vms-d404). Grounded on OpenVMS VAX V7.3, docs/oracle/
+ * vax73-acl.md: ACE$B_SIZE, ACE$B_TYPE, ACE$W_FLAGS, ACE$L_ACCESS, then
+ * identifiers (ACE$C_KEYID) or four S/O/G/W deny longwords (ACE$C_DIRDEF).
+ * ====================================================================== */
+
+#define ACE_KEYID         1u
+#define ACE_DIRDEF        9u
+#define ACE_UIC_WILD_G    0x3FFFu
+#define ACE_UIC_WILD_M    0xFFFFu
+#define ACE_ID_ANY        0xFFFFFFFFu   /* IDENTIFIER=* */
+#define ACE_MAX_IDS       16
+
+static const char *const ace_access_names[] = { "READ", "WRITE", "EXECUTE", "DELETE", "CONTROL" };
+static const char *const ace_option_names[] = { "DEFAULT", "PROTECTED", "HIDDEN", "NOPROPAGATE" };
+
+static void ace_put32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t ace_get32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static int ace_up(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
+
+struct ace_lex { const char *s; size_t n, i; };
+
+static void ace_ws(struct ace_lex *l)
+{
+    while (l->i < l->n && (l->s[l->i] == ' ' || l->s[l->i] == '\t'))
+        l->i++;
+}
+
+static int ace_ch(struct ace_lex *l, char c)
+{
+    ace_ws(l);
+    if (l->i < l->n && l->s[l->i] == c) { l->i++; return 1; }
+    return 0;
+}
+
+/* A keyword token (letters, digits, $, _) upcased into buf. */
+static size_t ace_word(struct ace_lex *l, char *buf, size_t cap)
+{
+    size_t k = 0;
+    ace_ws(l);
+    while (l->i < l->n && k + 1 < cap) {
+        char c = l->s[l->i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '$' || c == '_'))
+            break;
+        buf[k++] = (char)ace_up(c);
+        l->i++;
+    }
+    buf[k] = '\0';
+    return k;
+}
+
+/* `w` is a (possibly abbreviated, at least one letter) form of `full`. */
+static int ace_abbrev(const char *w, const char *full)
+{
+    size_t n = strlen(w);
+    return n > 0 && n <= strlen(full) && strncmp(w, full, n) == 0;
+}
+
+static uint32_t ace_lookup_name(const char *name, uint32_t *id)
+{
+    struct dsc$descriptor_s d = { (uint16_t)strlen(name), DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)name };
+    uint32_t attr = 0;
+    return sys$asctoid(&d, id, &attr);
+}
+
+/* Octal number or '*' inside a UIC; *wild set for '*'. */
+static int ace_uic_part(struct ace_lex *l, uint32_t *v, int *wild)
+{
+    uint32_t x = 0;
+    size_t d = 0;
+    ace_ws(l);
+    *wild = 0;
+    if (l->i < l->n && l->s[l->i] == '*') { l->i++; *wild = 1; return 1; }
+    while (l->i < l->n && l->s[l->i] >= '0' && l->s[l->i] <= '7') {
+        x = x * 8u + (uint32_t)(l->s[l->i] - '0');
+        l->i++; d++;
+    }
+    *v = x;
+    return d > 0;
+}
+
+/* One identifier: `*`, `[g,m]` (octal or `*`), `[name]` (a UIC identifier) or a
+ * name. Returns SS$_NORMAL, SS$_IVACL or the rights lookup's SS$_NOSUCHID. */
+static uint32_t ace_parse_id(struct ace_lex *l, uint32_t *id)
+{
+    char w[64];
+    ace_ws(l);
+    if (ace_ch(l, '*')) { *id = ACE_ID_ANY; return SS$_NORMAL; }
+    if (ace_ch(l, '[') || ace_ch(l, '<')) {
+        size_t save = l->i;
+        uint32_t g = 0, m = 0;
+        int gw, mw;
+        if (ace_uic_part(l, &g, &gw) && ace_ch(l, ',')) {
+            if (!ace_uic_part(l, &m, &mw) || !(ace_ch(l, ']') || ace_ch(l, '>')))
+                return SS$_IVACL;
+            if ((!gw && g > 037777u) || (!mw && m > 0177777u))
+                return SS$_IVACL;
+            *id = ((gw ? ACE_UIC_WILD_G : g) << 16) | (mw ? ACE_UIC_WILD_M : m);
+            return SS$_NORMAL;
+        }
+        l->i = save;
+        if (!ace_word(l, w, sizeof w) || !(ace_ch(l, ']') || ace_ch(l, '>')))
+            return SS$_IVACL;
+        {
+            uint32_t st = ace_lookup_name(w, id);
+            if (!(st & 1))
+                return st;
+            return (*id & 0x80000000u) ? SS$_IVACL : SS$_NORMAL;   /* [name] names a UIC */
+        }
+    }
+    if (!ace_word(l, w, sizeof w))
+        return SS$_IVACL;
+    return ace_lookup_name(w, id);
+}
+
+/* A '+'-joined keyword list into a bit mask (NONE = 0). */
+static uint32_t ace_parse_bits(struct ace_lex *l, const char *const *names, unsigned nn,
+                               uint32_t *mask)
+{
+    char w[32];
+    *mask = 0;
+    do {
+        unsigned k;
+        int hit = 0;
+        if (!ace_word(l, w, sizeof w))
+            return SS$_IVACL;
+        if (ace_abbrev(w, "NONE")) { hit = 1; }
+        for (k = 0; k < nn && !hit; k++)
+            if (ace_abbrev(w, names[k])) { *mask |= 1u << k; hit = 1; }
+        if (!hit)
+            return SS$_IVACL;
+    } while (ace_ch(l, '+'));
+    return SS$_NORMAL;
+}
+
+/* "S:RWED" style category: the letters granted, as a deny longword (CONTROL is
+ * always denied in a DEFAULT_PROTECTION ACE, as observed). */
+static uint32_t ace_parse_prot(struct ace_lex *l, uint32_t *deny)
+{
+    uint32_t allow = 0;
+    ace_ws(l);
+    while (l->i < l->n) {
+        int c = ace_up(l->s[l->i]);
+        if (c == 'R') allow |= 1u; else if (c == 'W') allow |= 2u;
+        else if (c == 'E') allow |= 4u; else if (c == 'D') allow |= 8u;
+        else break;
+        l->i++;
+    }
+    *deny = (~allow & 0xFu) | 0x10u;
+    return SS$_NORMAL;
+}
+
+uint32_t sys$parse_acl(const struct dsc$descriptor_s *aclstr, struct dsc$descriptor_s *aclent,
+                       uint16_t *errpos, void *accnam, uint32_t acmode)
+{
+    struct ace_lex l;
+    uint8_t ace[8 + 4 * ACE_MAX_IDS];
+    char w[64];
+    uint32_t st, flags = 0, access = 0;
+    size_t size, mark = 0;
+
+    (void)accnam; (void)acmode;
+    if (!aclstr || !aclstr->dsc$a_pointer || !aclent || !aclent->dsc$a_pointer)
+        return SS$_BADPARAM;
+    l.s = aclstr->dsc$a_pointer; l.n = aclstr->dsc$w_length; l.i = 0;
+    memset(ace, 0, sizeof ace);
+
+    st = SS$_IVACL;
+    if (!ace_ch(&l, '('))
+        goto fail;
+    ace_ws(&l);
+    mark = l.i;                                 /* errpos: start of the failing clause */
+    if (!ace_word(&l, w, sizeof w))
+        goto fail;
+    if (ace_abbrev(w, "IDENTIFIER") && strlen(w) >= 2) {
+        unsigned nid = 0;
+        if (!ace_ch(&l, '='))
+            goto fail;
+        do {
+            uint32_t id;
+            if (nid >= ACE_MAX_IDS) { st = SS$_IVACL; goto fail; }
+            ace_ws(&l);
+            mark = l.i;
+            st = ace_parse_id(&l, &id);
+            if (!(st & 1))
+                goto fail;
+            ace_put32(ace + 8 + 4 * nid++, id);
+        } while (ace_ch(&l, '+'));
+        while (ace_ch(&l, ',')) {
+            st = SS$_IVACL;
+            ace_ws(&l);
+            mark = l.i;
+            if (!ace_word(&l, w, sizeof w) || !ace_ch(&l, '='))
+                goto fail;
+            if (ace_abbrev(w, "OPTIONS"))
+                st = ace_parse_bits(&l, ace_option_names, 4, &flags);
+            else if (ace_abbrev(w, "ACCESS"))
+                st = ace_parse_bits(&l, ace_access_names, 5, &access);
+            if (!(st & 1))
+                goto fail;
+            if (w[0] == 'O')
+                flags <<= 8;                    /* ACE$V_DEFAULT is bit 8 */
+        }
+        size = 8u + 4u * nid;
+        ace[1] = ACE_KEYID;
+    } else if (ace_abbrev(w, "DEFAULT_PROTECTION") && strlen(w) >= 3) {
+        uint32_t deny[4] = { 0x1Fu, 0x1Fu, 0x1Fu, 0x1Fu };
+        while (ace_ch(&l, ',')) {
+            int cat = -1;
+            st = SS$_IVACL;
+            ace_ws(&l);
+            mark = l.i;
+            if (!ace_word(&l, w, sizeof w))
+                goto fail;
+            if (ace_abbrev(w, "OPTIONS") && strlen(w) >= 2) {
+                if (!ace_ch(&l, '=') || !((st = ace_parse_bits(&l, ace_option_names, 4, &flags)) & 1))
+                    goto fail;
+                flags <<= 8;
+                continue;
+            }
+            if (ace_abbrev(w, "SYSTEM")) cat = 0;
+            else if (ace_abbrev(w, "OWNER")) cat = 1;
+            else if (ace_abbrev(w, "GROUP")) cat = 2;
+            else if (ace_abbrev(w, "WORLD")) cat = 3;
+            if (cat < 0 || !(ace_ch(&l, ':') || ace_ch(&l, '=')))
+                goto fail;
+            (void)ace_parse_prot(&l, &deny[cat]);
+        }
+        size = 24u;
+        ace[1] = ACE_DIRDEF;
+        ace_put32(ace + 8, deny[0]); ace_put32(ace + 12, deny[1]);
+        ace_put32(ace + 16, deny[2]); ace_put32(ace + 20, deny[3]);
+    } else {
+        goto fail;
+    }
+    st = SS$_IVACL;
+    ace_ws(&l);
+    mark = l.i;
+    if (!ace_ch(&l, ')'))
+        goto fail;
+    ace_ws(&l);
+    if (l.i != l.n)
+        goto fail;
+    ace[0] = (uint8_t)size;
+    ace[2] = (uint8_t)flags; ace[3] = (uint8_t)(flags >> 8);
+    if (ace[1] == ACE_KEYID)
+        ace_put32(ace + 4, access);
+    if (aclent->dsc$w_length < size)
+        return SS$_BUFFEROVF;
+    memcpy(aclent->dsc$a_pointer, ace, size);
+    if (errpos)
+        *errpos = (uint16_t)l.i;
+    return SS$_NORMAL;
+fail:
+    if (errpos)
+        *errpos = (uint16_t)mark;
+    return st;
+}
+
+/* Text of one identifier, as SHOW ACL prints it. */
+static void ace_format_id(uint32_t id, char *out, size_t cap)
+{
+    char name[40];
+    uint16_t nl = 0;
+    struct dsc$descriptor_s nd = { sizeof(name) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, name };
+    uint32_t resid = 0, attr = 0;
+
+    if (id == ACE_ID_ANY) { snprintf(out, cap, "*"); return; }
+    if (!(id & 0x80000000u)) {
+        uint32_t g = (id >> 16) & 0x3FFFu, m = id & 0xFFFFu;
+        if (g == ACE_UIC_WILD_G && m == ACE_UIC_WILD_M) { snprintf(out, cap, "[*,*]"); return; }
+        if (g == ACE_UIC_WILD_G) { snprintf(out, cap, "[*,%o]", m); return; }
+        if (m == ACE_UIC_WILD_M) { snprintf(out, cap, "[%o,*]", g); return; }
+    }
+    if ((sys$idtoasc(id, &nl, &nd, &resid, &attr, NULL) & 1) && nl > 0) {
+        name[nl < sizeof(name) ? nl : sizeof(name) - 1] = '\0';
+        if (id & 0x80000000u)
+            snprintf(out, cap, "%s", name);
+        else
+            snprintf(out, cap, "[%s]", name);
+        return;
+    }
+    if (id & 0x80000000u)
+        snprintf(out, cap, "%%X%08X", id);
+    else
+        snprintf(out, cap, "[%o,%o]", (id >> 16) & 0x3FFFu, id & 0xFFFFu);
+}
+
+static void ace_cat(char *buf, size_t cap, const char *s)
+{
+    size_t n = strlen(buf);
+    if (n < cap - 1)
+        snprintf(buf + n, cap - n, "%s", s);
+}
+
+static void ace_format_bits(char *buf, size_t cap, uint32_t mask, const char *const *names,
+                            unsigned nn)
+{
+    unsigned k;
+    int first = 1;
+    for (k = 0; k < nn; k++)
+        if (mask & (1u << k)) {
+            if (!first) ace_cat(buf, cap, "+");
+            ace_cat(buf, cap, names[k]);
+            first = 0;
+        }
+    if (first)
+        ace_cat(buf, cap, "NONE");
+}
+
+static void ace_format_prot(char *buf, size_t cap, const char *cat, uint32_t deny)
+{
+    ace_cat(buf, cap, cat);
+    ace_cat(buf, cap, ":");
+    if (!(deny & 1u)) ace_cat(buf, cap, "R");
+    if (!(deny & 2u)) ace_cat(buf, cap, "W");
+    if (!(deny & 4u)) ace_cat(buf, cap, "E");
+    if (!(deny & 8u)) ace_cat(buf, cap, "D");
+}
+
+uint32_t sys$format_acl(const struct dsc$descriptor_s *aclent, uint16_t *acllen,
+                        struct dsc$descriptor_s *aclstr, uint16_t *width,
+                        struct dsc$descriptor_s *trmdsc, uint16_t *indent, void *accnam,
+                        void *nullarg)
+{
+    const uint8_t *a;
+    char buf[512];
+    unsigned size, flags;
+    size_t n;
+
+    (void)width; (void)trmdsc; (void)indent; (void)accnam; (void)nullarg;
+    if (!aclent || !aclent->dsc$a_pointer || !aclstr || !aclstr->dsc$a_pointer)
+        return SS$_BADPARAM;
+    a = (const uint8_t *)aclent->dsc$a_pointer;
+    size = a[0];
+    if (size < 8u || size > aclent->dsc$w_length)
+        return SS$_IVACL;
+    flags = (unsigned)(a[2] | (a[3] << 8));
+    buf[0] = '\0';
+    if (a[1] == ACE_KEYID) {
+        unsigned k, nid = (size - 8u) / 4u;
+        if (nid == 0 || (size - 8u) % 4u)
+            return SS$_IVACL;
+        ace_cat(buf, sizeof buf, "(IDENTIFIER=");
+        for (k = 0; k < nid; k++) {
+            char idt[64];
+            ace_format_id(ace_get32(a + 8 + 4 * k), idt, sizeof idt);
+            if (k) ace_cat(buf, sizeof buf, "+");
+            ace_cat(buf, sizeof buf, idt);
+        }
+        if (flags & 0x0F00u) {
+            ace_cat(buf, sizeof buf, ",OPTIONS=");
+            ace_format_bits(buf, sizeof buf, flags >> 8, ace_option_names, 4);
+        }
+        ace_cat(buf, sizeof buf, ",ACCESS=");
+        ace_format_bits(buf, sizeof buf, ace_get32(a + 4), ace_access_names, 5);
+        ace_cat(buf, sizeof buf, ")");
+    } else if (a[1] == ACE_DIRDEF && size >= 24u) {
+        ace_cat(buf, sizeof buf, "(DEFAULT_PROTECTION");
+        if (flags & 0x0F00u) {
+            ace_cat(buf, sizeof buf, ",OPTIONS=");
+            ace_format_bits(buf, sizeof buf, flags >> 8, ace_option_names, 4);
+        }
+        ace_format_prot(buf, sizeof buf, ",SYSTEM", ace_get32(a + 8));
+        ace_format_prot(buf, sizeof buf, ",OWNER", ace_get32(a + 12));
+        ace_format_prot(buf, sizeof buf, ",GROUP", ace_get32(a + 16));
+        ace_format_prot(buf, sizeof buf, ",WORLD", ace_get32(a + 20));
+        ace_cat(buf, sizeof buf, ")");
+    } else {
+        return SS$_IVACL;                       /* an ACE type this does not render */
+    }
+    n = strlen(buf);
+    if (n > aclstr->dsc$w_length) {
+        memcpy(aclstr->dsc$a_pointer, buf, aclstr->dsc$w_length);
+        if (acllen) *acllen = aclstr->dsc$w_length;
+        return SS$_BUFFEROVF;
+    }
+    memcpy(aclstr->dsc$a_pointer, buf, n);
+    if (acllen) *acllen = (uint16_t)n;
     return SS$_NORMAL;
 }

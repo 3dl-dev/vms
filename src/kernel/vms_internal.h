@@ -268,6 +268,12 @@
  * follow-up, the same footing #633 used for its SS__DEVALLOC "busy" choice).
  */
 #define SS__DEVICEFULL  2128        /* device full (extend cannot allocate) */
+/* Access control list statuses (vms-d404), values from the STARLET oracle
+ * (docs/oracle/alpha84-starlet-defs/SSDEF.txt). */
+#define SS__ACLEMPTY    2512        /* access control list is empty */
+#define SS__NOENTRY     2520        /* no such ACE */
+#define SS__ACLFULL     2552        /* no room in the ACL */
+#define SS__IVACL       8676        /* invalid access control list entry */
 /*
  * SS__NOMOREFILES (SS$_NOMOREFILES == 2352, %X0930) -- ORACLE-PINNED (vms-a0b,
  * 2026-08-17). MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1 by

@@ -28,9 +28,18 @@ extern "C" {
 #define OSS$_ACL_READ       17   /* Read entire ACL into buffer */
 #define OSS$_ACL_ADD_ENTRY  3   /* Add an ACE to the ACL */
 #define OSS$_ACL_DELETE_ENTRY 4 /* Delete an ACE from the ACL */
-#define OSS$_ACL_CLEAR      7   /* Delete all ACEs from the ACL */
-#define OSS$_CLASS_PROT     8   /* Information classification protection */
-#define OSS$_PRIVS          9   /* Privilege requirements */
+/* Values below read from the OpenVMS Alpha V8.4 oracle (docs/oracle/alpha84-starlet-defs/OSSDEF.txt). */
+#define OSS$_ACL_DELETE         5   /* Delete the ACL (all but protected ACEs) */
+#define OSS$_ACL_DELETE_ALL     6   /* Delete the ACL including protected ACEs */
+#define OSS$_ACL_FIND_ENTRY     7   /* Position at a matching ACE */
+#define OSS$_ACL_FIND_NEXT      8   /* Position at the next ACE */
+#define OSS$_ACL_FIND_TYPE      9   /* Position at the next ACE of a type */
+#define OSS$_ACL_GRANT_ACE     10   /* The ACE that granted access */
+#define OSS$_ACL_MODIFY_ENTRY  12   /* Replace the ACE at the position */
+#define OSS$_ACL_POSITION      13   /* Position at an ACE number */
+#define OSS$_ACL_POSITION_TOP  14   /* Position at the top */
+#define OSS$_ACL_POSITION_BOTTOM 15 /* Position at the bottom */
+#define OSS$_ACL_READ_ENTRY    16   /* Read the ACE at the position */
 
 /* ================================================================
  * OSS$M_ — Flags for sys$get_security / sys$set_security

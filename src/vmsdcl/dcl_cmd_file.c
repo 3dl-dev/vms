@@ -31,10 +31,14 @@
 #include "vmsfs/ods2.h"          /* vms-f05: ODS2_FH2_M_DIRECTORY (CREATE/DIRECTORY over ACP) */
 #include "vms_kif.h"             /* vms-f05: vms_kif_acp_* for CREATE/DIRECTORY over the ACP */
 #include "vmsqueue.h"
+#include "starlet.h"
+#include "ossdef.h"
+#include "descrip.h"
 
 /* Directory entry for sorting in DIRECTORY command */
 struct dir_entry {
     char vms_name[256];  /* Formatted VMS name (UPPERCASE, with version) */
+    char full_spec[300]; /* the full resultant "DEV:[DIR]NAME.TYP;VER" (ACP entries) */
     char raw_name[256];  /* Original d_name for name part comparison */
     int  version;        /* Numeric version for sort (descending) */
     long blocks;
@@ -307,7 +311,8 @@ static int dir_entry_cmp(const void *a, const void *b)
  */
 struct dir_opts {
     int show_size, show_date, show_full, show_brief, show_owner,
-        show_protection, suppress_files, columns, versions_limit;
+        show_protection, suppress_files, columns, versions_limit,
+        show_acl, show_security;
     enum dir_size_mode size_mode;
 };
 
@@ -514,6 +519,7 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
         memset(e, 0, sizeof(*e));
         e->from_acp = 1;
         e->fid_num = fnum; e->fid_seq = fseq; e->fid_rvn = frvn;
+        strncpy(e->full_spec, match, sizeof(e->full_spec) - 1);
         strncpy(e->vms_name, nt, sizeof(e->vms_name) - 1);
         e->vms_name[sizeof(e->vms_name) - 1] = '\0';
         strncpy(e->raw_name, nt, sizeof(e->raw_name) - 1);
@@ -571,6 +577,81 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
 }
 
 /*
+ * dcl_read_file_acl - read a file's access control list through
+ * $GET_SECURITY (class FILE, OSS$_ACL_READ) into buf. Returns the system
+ * service status; *len is the ACL's length in bytes (0: no ACL).
+ */
+uint32_t dcl_read_file_acl(const char *spec, uint8_t *buf, uint32_t cap, uint32_t *len)
+{
+    static char cls[] = "FILE";
+    struct dsc$descriptor_s cd = { 4, DSC$K_DTYPE_T, DSC$K_CLASS_S, cls };
+    struct dsc$descriptor_s od = { (uint16_t)strlen(spec), DSC$K_DTYPE_T, DSC$K_CLASS_S,
+                                   (char *)spec };
+    uint16_t ret = 0;
+    struct { uint16_t len, code; void *buf; uint16_t *ret; } it[2] = {
+        { (uint16_t)cap, OSS$_ACL_READ, buf, &ret }, { 0, 0, NULL, NULL } };
+    uint32_t st = sys$get_security(&cd, &od, NULL, 0, it, NULL, NULL);
+
+    *len = (st & 1) ? ret : 0;
+    return st;
+}
+
+/*
+ * dcl_print_acl - print each ACE of an ACL the way SHOW ACL / DIRECTORY/ACL do
+ * (observed on OpenVMS VAX V7.3, docs/oracle/vax73-acl.md): one ACE per line,
+ * indented ten spaces, in its $FORMAT_ACL text.
+ */
+void dcl_print_acl(const uint8_t *acl, uint32_t len)
+{
+    uint32_t pos = 0;
+    while (pos + 8u <= len && acl[pos] >= 8u && pos + acl[pos] <= len) {
+        char txt[512];
+        uint16_t tl = 0;
+        struct dsc$descriptor_s ad = { acl[pos], DSC$K_DTYPE_T, DSC$K_CLASS_S,
+                                       (char *)(acl + pos) };
+        struct dsc$descriptor_s td = { sizeof(txt), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
+        if (sys$format_acl(&ad, &tl, &td, NULL, NULL, NULL, NULL, NULL) & 1)
+            printf("          %.*s\n", (int)tl, txt);
+        pos += acl[pos];
+    }
+}
+
+/* "(RWED,RWED,RE,)": the granted letters per category, as DIRECTORY/SECURITY
+ * prints the protection (a set bit in the word denies). */
+static void dir_format_prot_short(uint16_t prot, char *out, size_t cap)
+{
+    static const char L[] = "RWED";
+    size_t n = 0;
+    int c, b;
+    if (cap < 24) { if (cap) out[0] = '\0'; return; }
+    out[n++] = '(';
+    for (c = 0; c < 4; c++) {
+        if (c) out[n++] = ',';
+        for (b = 0; b < 4; b++)
+            if (!(prot & (1u << (c * 4 + b))))
+                out[n++] = L[b];
+    }
+    out[n++] = ')';
+    out[n] = '\0';
+}
+
+/* "[NAME]" for an owner UIC that names an identifier, else "[g,m]" (octal). */
+static void dir_format_owner(uint16_t grp, uint16_t mem, char *out, size_t cap)
+{
+    char name[40];
+    uint16_t nl = 0;
+    uint32_t resid = 0, attr = 0;
+    struct dsc$descriptor_s nd = { sizeof(name) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, name };
+
+    if ((sys$idtoasc(((uint32_t)grp << 16) | mem, &nl, &nd, &resid, &attr, NULL) & 1) && nl) {
+        name[nl < sizeof(name) ? nl : sizeof(name) - 1] = '\0';
+        snprintf(out, cap, "[%s]", name);
+    } else {
+        snprintf(out, cap, "[%o,%o]", grp, mem);
+    }
+}
+
+/*
  * dir_print_entries - Print the file listing for one already-collected,
  * already-sorted directory, honoring the display qualifiers, and return the
  * listed file count and block totals. Shared by the single-directory and
@@ -615,6 +696,31 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
         file_count++;
 
         if (o->suppress_files) continue;
+
+        if (o->show_acl || o->show_security) {
+            /* DIRECTORY/ACL and DIRECTORY/SECURITY, laid out as OpenVMS VAX
+             * V7.3 prints them (docs/oracle/vax73-acl/ace-format.txt): the
+             * name padded to 19 columns (/ACL) or name 21 + owner 33 +
+             * protection (/SECURITY), then the ACL one ACE per line. The ACL
+             * comes from the file's header through $GET_SECURITY. */
+            if (o->show_security) {
+                char own[64], prot_buf[64];
+                uint16_t vprot = e->from_acp ? e->vms_prot
+                                             : vmsfs_mode_to_protection(st->st_mode);
+                dir_format_owner((uint16_t)st->st_gid, (uint16_t)st->st_uid, own, sizeof(own));
+                dir_format_prot_short(vprot, prot_buf, sizeof(prot_buf));
+                printf("%-21s%-33s%s\n", vms_name, own, prot_buf);
+            } else {
+                printf("%-19s\n", vms_name);
+            }
+            if (e->from_acp && e->full_spec[0]) {
+                uint8_t acl[512];
+                uint32_t alen = 0;
+                if ((dcl_read_file_acl(e->full_spec, acl, sizeof(acl), &alen) & 1) && alen)
+                    dcl_print_acl(acl, alen);
+            }
+            continue;
+        }
 
         if (o->show_full) {
             /* DIRECTORY/FULL: the authentic VMS multi-line per-file block.
@@ -774,6 +880,7 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
     /* Finish last line of columnar output */
     if (col > 0 && !o->show_size && !o->show_date && !o->show_full &&
         !o->show_brief && !o->show_owner && !o->show_protection &&
+        !o->show_acl && !o->show_security &&
         !o->suppress_files) {
         printf("\n");
     }
@@ -1179,6 +1286,8 @@ int cmd_directory(struct dcl_command *cmd)
     opts.show_brief = show_brief;
     opts.show_owner = show_owner;
     opts.show_protection = show_protection;
+    opts.show_acl = dcl_has_qualifier(cmd, "ACL");
+    opts.show_security = dcl_has_qualifier(cmd, "SECURITY");
     opts.suppress_files = suppress_files;
     opts.columns = columns;
     opts.versions_limit = versions_limit;

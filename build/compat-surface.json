@@ -74,44 +74,44 @@
     }
   ],
   "overall": {
-    "count": 470,
+    "count": 475,
     "by_status": {
       "verified": 24,
-      "implemented": 282,
-      "partial": 56,
+      "implemented": 285,
+      "partial": 59,
       "stub": 14,
       "designed": 1,
-      "absent": 93
+      "absent": 92
     },
     "by_authenticity": {
-      "real": 322,
-      "n/a": 94,
+      "real": 328,
+      "n/a": 93,
       "advisory": 48,
       "facade-risk": 6
     },
-    "met": 306,
-    "in_progress": 56,
-    "not_started": 108,
+    "met": 309,
+    "in_progress": 59,
+    "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 424,
+    "count": 430,
     "by_status": {
       "verified": 24,
-      "implemented": 282,
-      "partial": 55,
+      "implemented": 285,
+      "partial": 58,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 321,
+      "real": 327,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
-    "met": 306,
-    "in_progress": 55,
+    "met": 309,
+    "in_progress": 58,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -1219,25 +1219,25 @@
       "tier": null,
       "plan_ref": "vms-8ad",
       "vms_ref": "OpenVMS Guide to System Security ch. 5 (Protecting Data)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
-        "count": 6,
+        "count": 11,
         "by_status": {
           "verified": 1,
-          "implemented": 1,
-          "partial": 1,
+          "implemented": 4,
+          "partial": 4,
           "stub": 1,
           "designed": 0,
-          "absent": 2
+          "absent": 1
         },
         "by_authenticity": {
-          "real": 2,
+          "real": 8,
           "advisory": 2,
-          "n/a": 2
+          "n/a": 1
         },
-        "met": 2,
-        "in_progress": 1,
-        "not_started": 3,
+        "met": 5,
+        "in_progress": 4,
+        "not_started": 2,
         "facade_risk": 0
       }
     },
@@ -5835,12 +5835,87 @@
       "id": "acldef$acls",
       "kind": "feature",
       "vms": "Access Control List entries (ACEs) on files/objects",
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "stretch",
-      "evidence": "src/libvms/include/acldef.h",
-      "verified_against": null,
-      "notes": "Constants only; no ACE machinery on origin/main (grep for acl_entry/ace_apply/check_acl: zero hits). Re-census 2026-09-14: unchanged.",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vmsfs_acp.c (acp_acl_match, acp_acl_op)",
+      "verified_against": "tests/qemu/test_syssvc_acl.c against a real /dev/vms over the real-VAX ODS-2 fixture; behaviour and on-disk layout from docs/oracle/vax73-acl.md (OpenVMS VAX V7.3)",
+      "notes": "vms-d404: identifier ACEs stored in the FH2 access control area (top of the header, acoffset..rsoffset) as V7.3 stores them; the ACP access check takes the first matching identifier ACE (DEFAULT ACEs skipped); a denying ACE leaves only the system and owner fields; CONTROL required to change an ACL; ADD replaces an ACE for the same identifiers, DELETE keeps PROTECTED ACEs. Not done: an ACL longer than the primary header (VMS continues it in an extension header) is SS$_ACLFULL; DEFAULT ACEs and DEFAULT_PROTECTION are not propagated to files created in a directory; general identifiers match only once the process rights list exists (vms-7d5a), UIC identifiers and * match now.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$parse_acl",
+      "kind": "routine",
+      "vms": "$PARSE_ACL - ACE text to binary",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: IDENTIFIER (UIC, wildcard, *, names via RIGHTSLIST), OPTIONS, ACCESS and DEFAULT_PROTECTION ACEs; SS$_IVACL / SS$_NOSUCHID with the error position at the failing clause, as SET ACL reports it on V7.3.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$format_acl",
+      "kind": "routine",
+      "vms": "$FORMAT_ACL - binary ACE to text",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_security.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: SHOW ACL's text for identifier and DEFAULT_PROTECTION ACEs; width/terminator/indent arguments are not applied.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$get_security",
+      "kind": "routine",
+      "vms": "$GET_SECURITY - read an object's security profile",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_core.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: class FILE only: OSS$_OWNER, OSS$_PROTECTION, OSS$_ACL_LENGTH, OSS$_ACL_READ from the executive ACP; other classes SS$_NOCLASS.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "sys$set_security",
+      "kind": "routine",
+      "vms": "$SET_SECURITY - change an object's security profile",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_core.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: class FILE ACL edits (OSS$_ACL_ADD_ENTRY/DELETE_ENTRY/DELETE/DELETE_ALL), OSS$M_LOCAL held until OSS$M_RELCTX; owner/protection items SS$_UNSUPPORTED.",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "protection-acl",
+      "facility_name": "File Protection (SOGW/UIC) + ACLs",
+      "id": "dcl$set_acl",
+      "kind": "command",
+      "vms": "SET ACL / SHOW ACL / DIRECTORY/ACL, DIRECTORY/SECURITY",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsdcl/dcl_cmd_set.c",
+      "verified_against": "tests/qemu/test_syssvc_acl.c",
+      "notes": "vms-d404: output and messages as V7.3 prints them (docs/oracle/vax73-acl.md).",
       "plan_ref": "vms-8ad"
     },
     {

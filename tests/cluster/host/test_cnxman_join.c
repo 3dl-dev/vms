@@ -4866,6 +4866,29 @@ static void test_f297_member_answers_on_the_reconnected_connection(void)
 	ct_check_eq_u32(g.j.send_failures, 0u, "nothing was refused");
 }
 
+/*
+ * rd vms-f297: AN ORIGINATION DOES NOT FOLLOW. Stall-rig arms GM-14 / TG-3: the
+ * executive had re-bound the member's block to this node's own reconnect while
+ * the member's connect was accepted on another Con.ID; the identity burst that
+ * opening fires is an ORIGINATION, and following the block for it put op-0x14 /
+ * op-0x01 on a just-re-established connection with ack 0 -- ten milliseconds
+ * after a real VAX had continued the conversation there -- and the VAX
+ * bugchecked. Only answers follow; this burst keeps the E77 refusal.
+ */
+static void test_f297_an_origination_does_not_follow(void)
+{
+	const vms_conid_t OWN_RECONNECT = 0x4e620031u;
+
+	printf("\n-- rd vms-f297: the identity burst never rides a connection "
+	       "the join does not hold --\n");
+	drive_to_state(CNXMAN_JOIN_VC_CONNECT);
+	bed_peer_connected(g.member_csb, OWN_RECONNECT);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
+	ct_check_eq_u32(n_sent_on(OWN_RECONNECT), 0u,
+			"nothing is originated onto the block's other "
+			"connection with a fresh dialogue");
+}
+
 static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
 {
 	struct vms_csb *other;
@@ -6506,6 +6529,7 @@ int main(void)
 	test_joiner_recomputes_on_every_advert_it_learns();
 	test_f297_every_member_hears_before_the_request();
 	test_f297_member_answers_on_the_reconnected_connection();
+	test_f297_an_origination_does_not_follow();
 	test_e80_a_silent_member_is_re_issued_to_the_next();
 	test_e80_a_member_that_proposes_is_never_re_issued_away_from();
 	test_e80_an_ack_alone_is_not_an_answer();

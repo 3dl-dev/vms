@@ -416,16 +416,25 @@ static int join_emit_cm(struct cnxman_join *j, int is_response)
 	enum cnxman_diag_gate gate;
 
 	/*
-	 * RIDE THE CONNECTION THE EXECUTIVE RECORDS FOR THE MEMBER, at every
-	 * emit and not only while asking for admission (rd vms-f297). A
-	 * connection that closed while this join was in ADMIT and came back as
-	 * a new Con.ID was followed only by the admission hold; once the GO had
-	 * promoted the node, every later answer -- the coordinator's relay of
-	 * the NEXT joiner above all -- went to the dead one and was refused
-	 * (no-open-vc), and the real VAX coordinator never proposed that joiner
-	 * (stall-rig arm DX-1).
+	 * AN ANSWER RIDES THE CONNECTION THE EXECUTIVE RECORDS FOR THE MEMBER
+	 * (rd vms-f297). A connection that closed while this join was in ADMIT
+	 * and came back as a new Con.ID was followed only by the admission
+	 * hold; once the GO had promoted the node, every later answer -- the
+	 * coordinator's relay of the NEXT joiner above all -- went to the dead
+	 * one and was refused (no-open-vc), and the real VAX coordinator never
+	 * proposed that joiner (stall-rig arm DX-1).
+	 *
+	 * ANSWERS ONLY. A response is dispatched only after the glue has heard
+	 * (and, if the peer continued it, adopted) the request's numbers ON the
+	 * block's connection, so the stamp it gets is that conversation's.
+	 * An ORIGINATION has no such request in front of it: following for one
+	 * put this node's identity on a just-re-established connection with
+	 * ack 0, ten milliseconds after a real VAX had continued the
+	 * conversation there at send# 3 -- and the VAX bugchecked CNXMGRERR
+	 * (stall-rig arms GM-14, TG-3). Originations keep the E77 refusal and
+	 * the beat's adoption.
 	 */
-	if (csb != NULL)
+	if (csb != NULL && is_response)
 		(void)join_follow_csb_conn(j, csb);
 	gate = join_emit_gate(j, csb);
 	uint8_t cat, op;

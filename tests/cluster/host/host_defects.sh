@@ -132,6 +132,7 @@
 #   coord-ignores-rejection               vms_cnxman_coord_fsm.c
 #   join-asks-before-telling-members      vms_cnxman_join_fsm.c
 #   join-emits-on-a-stale-connection      vms_cnxman_join_fsm.c
+#   join-origination-follows              vms_cnxman_join_fsm.c
 #
 SELF="$0"
 
@@ -146,6 +147,7 @@ coord-open-skips-records-wait
 coord-ignores-rejection
 join-asks-before-telling-members
 join-emits-on-a-stale-connection
+join-origination-follows
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1383,6 +1385,19 @@ EOF
                       ;;
         esac;;
 
+    join-origination-follows)
+        case "$_f" in
+        facility)     echo "only an ANSWER follows the member's recorded connection; an origination keeps the E77 refusal (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the identity burst follows the block onto a just-re-established connection and goes out with ack 0 after a real VAX has continued the conversation there -- CNXMGRERR on stall-rig arms GM-14 and TG-3.";;
+        require_fail) cat <<'EOF'
+nothing is originated onto the block's other connection with a fresh dialogue
+EOF
+                      ;;
+        esac;;
+
     join-emits-on-a-stale-connection)
         case "$_f" in
         facility)     echo "every join emit rides the connection the executive records for the member, so a member whose connection came back as a new Con.ID answers on it (rd vms-f297)";;
@@ -1743,6 +1758,9 @@ apply_edit() {
 
     coord-ignores-rejection)
         sed -i 's|^\tif (vms_cm_response_accepted(m->body, m->len))$|\tif (1 \|\| vms_cm_response_accepted(m->body, m->len)) /* NEGCTL coord-ignores-rejection */|' "$_file";;
+
+    join-origination-follows)
+        sed -i 's|^\tif (csb != NULL \&\& is_response)$|\tif (csb != NULL) /* NEGCTL join-origination-follows */|' "$_file";;
 
     join-emits-on-a-stale-connection)
         sed -i 's|^\t\t(void)join_follow_csb_conn(j, csb);$|\t\t(void)0; /* NEGCTL join-emits-on-a-stale-connection */|' "$_file";;

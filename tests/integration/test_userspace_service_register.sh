@@ -897,7 +897,12 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # arch-internal struct kstat (musl-arch kstat.h), so it only compiles against
 # the extracted alpha-dec-vms musl tree (mk_decc_shr.sh, ALPHA_CRTL_RMS_FD=1).
 # It defines no sys$ service; its behaviour is proven by the alpha crtl-fd gate.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$"
+# src/vmslink/ovmx_decc_stat.c and tools/cross-alpha-vms/joint-e2e/
+# crtl_fd_test.c (vms-28d part 2) are written against the DEC C struct stat of
+# the alpha-dec-vms client headers (musl-arch bits/stat.h: st_ino[3], st_fab_*,
+# the __OVMX_DECC_STAT_FIELDS list); a host libc has neither. They define no
+# sys$ service; their real compiles are mk_decc_shr.sh and the crtl-fd gate.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

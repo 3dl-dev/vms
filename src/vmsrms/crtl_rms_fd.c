@@ -132,6 +132,18 @@ static void tr_fault(int sig, siginfo_t *si, void *ctx)
         __vms_alpha_syscall_raw(SYS_write, 2, (long long)(uintptr_t)b, r, 0, 0, 0);
     __vms_alpha_syscall_raw(SYS_exit_group, 98, 0, 0, 0, 0, 0);
 }
+static void tr_maps(void)
+{
+    long long fd = __vms_alpha_syscall_raw(SYS_openat, AT_FDCWD,
+                       (long long)(uintptr_t)"/proc/self/maps", O_RDONLY, 0, 0, 0);
+    char b[2048];
+    long long r;
+    while (fd >= 0 && (r = __vms_alpha_syscall_raw(SYS_read, fd, (long long)(uintptr_t)b,
+                                                   sizeof b, 0, 0, 0)) > 0)
+        __vms_alpha_syscall_raw(SYS_write, 2, (long long)(uintptr_t)b, r, 0, 0, 0);
+    if (fd >= 0)
+        __vms_alpha_syscall_raw(SYS_close, fd, 0, 0, 0, 0, 0);
+}
 static void tr_install(void)
 {
     static char altstk[65536];
@@ -490,6 +502,9 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     int writing = acc != O_RDONLY;
 
     TR("crtlfd: sp", (uintptr_t)&dir);
+#ifdef OVMX_CRTLFD_TRACE
+    tr_maps();
+#endif
     struct rfile *rf = calloc(1, sizeof *rf);
     TR("crtlfd: rf", (uintptr_t)rf);
     if (!rf)

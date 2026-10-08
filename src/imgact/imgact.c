@@ -1377,6 +1377,8 @@ static int imgact_page_mapped(unsigned long addr)
  * carrier (see ovmx_image.h), so it has no OVMX_*_SECTION macro there; found
  * by the same generic by-name section lookup below (bead vms-ee2). */
 #define ELF_INIT_ARRAY_SECTION ".init_array"
+/* The VMS psect of image-initialization routine addresses (vms-db7). */
+#define VMS_LIB_INITIALIZE_SECTION "LIB$INITIALIZE"
 
 /* Find a section's load vaddr + size by name, via the file's section headers
  * (read over the ACP window, vms-3e8e). */
@@ -2410,6 +2412,31 @@ static void register_exe_eh_frame(unsigned long base, unsigned long addr,
 	register_frame((void *)(base + ed->eh_frame_begin));
 }
 
+/*
+ * run_lib_initialize_symvec - call each routine whose address the image's
+ * LIB$INITIALIZE psect holds, in psect order, before main (vms-db7). VMS image
+ * activation does this through the STARLET LIB$INITIALIZE dispatcher (the
+ * EVAX images' path, src/vmslink/starlet/lib_initialize.c); an ELF image's
+ * psect is a table of native-width routine addresses (LINK.EXE relocates them
+ * through .vms$rel like any pointer), and a zero entry is padding. A routine
+ * is called with no arguments: the dispatcher's init-coroutine (which lets a
+ * routine run the rest of the image and regain control after main) is not
+ * offered on this path.
+ */
+static void run_lib_initialize_symvec(unsigned long base, unsigned long addr,
+				      unsigned long size)
+{
+	if (!size)
+		return;
+	ElfW(Addr) *arr = (ElfW(Addr) *)(base + addr);
+	unsigned long n = size / sizeof(ElfW(Addr));
+	for (unsigned long i = 0; i < n; i++) {
+		void (*fn)(void) = (void (*)(void))arr[i];
+		if (fn)
+			fn();
+	}
+}
+
 static void run_init_array_symvec(unsigned long base, unsigned long addr,
 				  unsigned long size)
 {
@@ -2782,6 +2809,11 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	unsigned long initarr_addr = 0, initarr_size = 0;
 	ovmx_find_section(&src, ELF_INIT_ARRAY_SECTION, &initarr_addr, &initarr_size);
 
+	/* ...and its LIB$INITIALIZE psect (vms-db7), the routines VMS image
+	 * activation calls before main; zeroed when the image has none. */
+	unsigned long libinit_addr = 0, libinit_size = 0;
+	ovmx_find_section(&src, VMS_LIB_INITIALIZE_SECTION, &libinit_addr, &libinit_size);
+
 	/* Locate this executable's .vms$ehf DWARF frame-registration descriptor
 	 * (if any) while `src` is still open (vms-70d), over the ACP window
 	 * (vms-3e8e). Zeroed when absent -- the correct "nothing to register" state
@@ -2914,6 +2946,13 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	 * bfd's ctor, which touches getrusage() via DECC$SHR) resolve. No-op
 	 * (initarr_size == 0) for every image with no real .init_array. */
 	run_init_array_symvec(exe_base, initarr_addr, initarr_size);
+
+	/* Then the image's LIB$INITIALIZE routines, in psect (link) order, before
+	 * control reaches main (vms-db7) -- unless the image transfers through the
+	 * STARLET LIB$INITIALIZE dispatcher (a .vms$xfer with more than one entry,
+	 * the EVAX path, vms-43c), which calls them itself. */
+	if (!(g_xfer.valid && g_xfer.count > 1))
+		run_lib_initialize_symvec(exe_base, libinit_addr, libinit_size);
 }
 
 /* Discover the ACP system device (rung vms-29ff / vms-104). Walk the process

@@ -11,7 +11,7 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 115 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 146 | 147 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 147 | 148 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
 **Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **150 of 229**.
 
@@ -122,6 +122,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `tier3-netlib` | not-running | VAX C era source: includes <varargs.h> (removed from GCC) and uses variant_union; needs an old-style varargs shim and UCX/QIO socket glue (vms-801.7) |
 | `tier4-mx` | not-running | MX is BLISS/MACRO-32 plus C over NETLIB; no BLISS or MACRO-32 compiler exists in the toolchain and NETLIB (tier3-netlib) does not build yet |
 | `tier6-cmatrix` | not-running | needs a terminal-screen library (curses/SMG$) OVMX does not provide, and an autoconf config.h |
-| `tier6-ipc-benchmark` | not-running | the IPC bodies compile; the VMS shims need the DEC C RTL feature switches (unixlib.h decc$feature_*, LIB$INITIALIZE psect) which DECC$SHR does not carry |
+| `tier6-ipc-benchmark` | running | ipc-benchmark's pipe benchmark (pipe.c + the vms_crtl shims, args "4096 100") is compiled by TCC.EXE and linked by LINK.EXE against DECC$SHR, mastered onto the system disk and run in the guest under a live /dev/vms (tests/qemu/corpus_runtime_native.txt); counted in the runtime column |
 | `tier6-laxdriver` | not-running | a VMS device driver (DPT/DDT, driver prologue tables), not an application; needs a VMS driver loading environment OVMX does not have (vms-df4) |
 | `tier6-memtester` | running | memtester (3 sources, args "1 1") runs to completion in the guest under a live /dev/vms (tests/qemu/corpus_runtime_apps.txt); counted in the runtime column |

@@ -874,6 +874,12 @@ struct TCCState {
     int *pack_stack_ptr;
     char **pragma_libs;
     int nb_pragma_libs;
+    /* OVMX (vms-db7): DEC C #pragma extern_model -- the psect (ELF section)
+       external definitions are placed in under strict_refdef "NAME"; NULL
+       for the default model. save/restore keep a small stack. */
+    struct Section *extern_model_sec;
+    struct Section *extern_model_stack[8];
+    int extern_model_sp;
 
     /* inline functions are stored as token lists and compiled last
        only if referenced */

@@ -43,15 +43,27 @@ struct feature {
     int cur;        /* current value (mode 1) */
 };
 
+/*
+ * OVMX_CRTL_NO_RMS_VENEER: built into a C RTL that does NOT open files through RMS
+ * (the x86_64/aarch64 DECC$SHR, musl over the substrate's file descriptors), where no
+ * feature in this table changes anything -- so none is offered: every name is -1/EINVAL
+ * there, and the API still answers as DEC C does for a switch the RTL does not have.
+ */
+#if defined(OVMX_CRTL_NO_RMS_VENEER)
+#define FILE_SHARING_NAME NULL
+#else
+#define FILE_SHARING_NAME "DECC$FILE_SHARING"
+#endif
+
 static struct feature features[OVMX_CRTL_FEAT_COUNT] = {
-    [OVMX_CRTL_FEAT_FILE_SHARING - 1] = { "DECC$FILE_SHARING", 0, 1, 0, 0 },
+    [OVMX_CRTL_FEAT_FILE_SHARING - 1] = { FILE_SHARING_NAME, 0, 1, 0, 0 },
 };
 
 static int reentrancy_level = OVMX_C_MULTITHREAD;
 
 static struct feature *by_index(int index)
 {
-    if (index < 1 || index > OVMX_CRTL_FEAT_COUNT)
+    if (index < 1 || index > OVMX_CRTL_FEAT_COUNT || !features[index - 1].name)
         return NULL;
     return &features[index - 1];
 }

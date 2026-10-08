@@ -27,6 +27,7 @@ BASELINE=${2:-}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIST=${3:-$HERE/corpus_runtime_programs.txt}
 APPS=$HERE/corpus_runtime_apps.txt
+NATIVE=$HERE/corpus_runtime_native.txt      # VMS-native (tcc + LINK.EXE) programs, vms-db7
 
 declare -A rc sig began expected_exit
 # designed non-zero exits (tests/corpus/expected_exit.txt): run-pass iff exactly that code
@@ -63,7 +64,7 @@ while IFS= read -r name; do
     elif [ -n "${began[$name]+x}" ]; then st=vm-crash; vmcrash=$((vmcrash+1))
     else st=not-run; notrun=$((notrun+1)); fi
     progs="$progs{\"name\":\"$name\",\"status\":\"$st\",\"signaled\":$([ "${sig[$name]:-0}" = 1 ] && echo true || echo false)},"
-done < <({ cat "$LIST"; if [ "$LIST" = "$HERE/corpus_runtime_programs.txt" ] && [ -f "$APPS" ]; then grep -E "^[A-Za-z0-9_]+\|" "$APPS" | cut -d"|" -f1; fi; })
+done < <({ cat "$LIST"; if [ "$LIST" = "$HERE/corpus_runtime_programs.txt" ]; then for _f in "$APPS" "$NATIVE"; do [ -f "$_f" ] && grep -E "^[A-Za-z0-9_]+\|" "$_f" | cut -d"|" -f1; done; fi; })
 progs=${progs%,}
 
 report=$(printf '{"total":%d,"summary":{"run-pass":%d,"run-fail":%d,"run-crash":%d,"vm-crash":%d,"not-run":%d,"run-pass-signaled":%d},"programs":[%s]}' \

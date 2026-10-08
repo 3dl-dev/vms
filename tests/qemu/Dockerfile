@@ -393,6 +393,11 @@ RUN cd /src/repo && \
     echo "--- DECC\$SHR.EXE (C run-time shareable; --use producer + IMGACT resolves it, vms-725) ---" && \
     ls -la 'build-static/bin/DECC$SHR.EXE'
 
+# Corpus programs built VMS-NATIVELY (vms-db7): TCC.EXE + LINK.EXE --use DECC$SHR, run
+# in the corpus guest through IMGACT.EXE (tests/qemu/corpus_runtime_native.txt). They
+# land in build-static/bin/corpus_rt_* and are staged with the other corpus programs.
+RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
+
 # (The SSH transport-proof harness build + /ovmxssh|/ovmxsshsrv staging was
 # RETIRED with the SSH scaffold, vms-d916: it built the --wrap veneer over a
 # musl-static cross ELF, which Baron ruled LARP. The faithful SSH is the real
@@ -453,7 +458,9 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
         SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
         SYSEXE:IMGACT.EXE=/src/repo/src/imgact/IMGACT.EXE \
-        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE'
+        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE' \
+        $(for f in /src/repo/build-static/native/*.EXE; do \
+            [ -f "$f" ] && echo "SYSEXE:$(basename "$f")=$f"; done)
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
@@ -822,6 +829,11 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # answer. The suite's positive assertions would simply stop being
     # reachable while the job stayed green.
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE && \
+    for f in /src/repo/build-static/native/*.EXE; do \
+        [ -f "$f" ] || continue; \
+        cp "$f" /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        chmod +x "/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/$(basename "$f")" || exit 1; \
+    done && \
     for f in RIGHTSLIST.DAT SYSUAF.DAT; do \
         cp "/src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/$f" \
            /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \

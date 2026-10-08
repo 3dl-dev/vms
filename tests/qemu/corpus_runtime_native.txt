@@ -1,0 +1,8 @@
+# Corpus programs the guest runs as VMS-NATIVE images (vms-db7): compiled with OVMX's
+# tcc (TCC.EXE) and linked by LINK.EXE --use DECC$SHR, so they activate through
+# IMGACT.EXE exactly as a program built on OVMX does -- the path that honours DEC C's
+# #pragma extern_model and the LIB$INITIALIZE psect, which a gcc-built corpus binary
+# cannot. Built by tests/qemu/mk_corpus_native.sh, graded by corpus_runtime_report.sh
+# like the tier-1 programs. One per line:
+#   name|corpus directory|compile definitions (comma-separated)|sources (comma-separated)|arguments
+ipc_pipe|tier6-ipc-benchmark|_XOPEN_SOURCE_EXTENDED,_DEFAULT_SOURCE|pipe.c,vms_crtl_init.c,vms_crtl_values.c|4096 100

@@ -1,7 +1,7 @@
 {
-  "total": 147,
+  "total": 148,
   "summary": {
-    "run-pass": 146,
+    "run-pass": 147,
     "run-fail": 0,
     "run-crash": 1,
     "vm-crash": 0,
@@ -741,6 +741,11 @@
     },
     {
       "name": "sys_trnlnm",
+      "status": "run-pass",
+      "signaled": false
+    },
+    {
+      "name": "ipc_pipe",
       "status": "run-pass",
       "signaled": false
     }

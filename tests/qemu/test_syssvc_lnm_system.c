@@ -337,6 +337,11 @@ static void run_seed_needs_sysnam(void)
     }
     CHECK(vms_kif_chkpriv(VMS_PRV_M_SYSNAM) == SS$_NORMAL,
           "seed: this process holds SYSNAM before the proof (so dropping it is the variable)");
+    /* SYSPRV is what lets a process without SYSNAM write LNM$SYSTEM at all;
+     * enable it for the proof (and put it back after), so the refusal below is
+     * the SYSNAM rule and not a missing write right. */
+    uint64_t prev_sysprv = 0;
+    (void)vms_kif_setprv(VMS_PRV_M_SYSPRV, 1, 0, &prev_sysprv);
     CHECK(vms_kif_chkpriv(VMS_PRV_M_SYSPRV) == SS$_NORMAL,
           "seed: this process holds SYSPRV (it may write LNM$SYSTEM at all)");
     CHECK(ec7e_system_marker_count() == 0,
@@ -372,6 +377,8 @@ static void run_seed_needs_sysnam(void)
 
     if (prev & VMS_PRV_M_SYSNAM)
         (void)vms_kif_setprv(VMS_PRV_M_SYSNAM, 1, 0, NULL);
+    if (!(prev_sysprv & VMS_PRV_M_SYSPRV))
+        (void)vms_kif_setprv(VMS_PRV_M_SYSPRV, 0, 0, NULL);
     CHECK(vms_kif_chkpriv(VMS_PRV_M_SYSNAM) == SS$_NORMAL,
           "seed: SYSNAM restored after the proof");
 }

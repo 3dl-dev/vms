@@ -13,12 +13,11 @@
  *   - opendir/readdir/closedir : enumerate the REAL ODS-2 directory entries
  *
  * Every reference is a GENUINE decc$ call: the alpha-dec-vms cross cc1 decorates
- * each name to the decc$ surface at codegen, and mk_decc_shr.sh's ALPHA/EVAX
- * branch (ALPHA_CRTL_RMS_USE) VECTOR-SUBSTITUTES decc$open/creat/unlink/remove/
- * rename/opendir/readdir/closedir -> src/vmsrms/crtl_rms_stdio.c's ovmx_crtl_*
- * (which drive sys$create/$open/$erase/$rename/$parse/$search over the real
- * Files-11 ODS-2 executive ACP). Under JOINT_CRTL_RMS_VENEER=1 this is the path
- * that runs — NOT musl-POSIX. Fail-honest: any RMS failure returns a sentinel.
+ * each name to the decc$ surface at codegen. In the RMS-backed DECC$SHR the C
+ * RTL's own open/unlink/rename/getdents system calls are served by the C RTL
+ * file layer (src/vmsrms/crtl_rms_fd.c: sys$create/$open/$erase/$rename/$parse/
+ * $search over the real Files-11 ODS-2 executive ACP) -- NOT musl-POSIX on the
+ * kernel VFS. Fail-honest: any RMS failure returns a sentinel.
  *
  * This program is its OWN first (same-CRTL) check — it returns sentinel 7 only
  * if every op succeeded AND its own decc$opendir/readdir enumeration agrees the
@@ -43,41 +42,16 @@
  *        or deleted/old-name still present)
  */
 
-/* alpha-dec-vms is LP64 (-mpointer-size=64). No libc headers in the cross image;
- * declare the CRTL surface directly — the NAMES matter for the link and the
- * cross cc1 decorates them to decc$ at codegen (matching crtl_rms_test.c). */
-typedef unsigned long ovmx_size_t;
-
-/* Alpha (OSF/1) open() flag ABI — arch/alpha uapi/asm/fcntl.h, matching the
- * OVMX alpha musl bits/fcntl.h the veneer is compiled against. */
-#define O_RDONLY   0x0000
-#define O_WRONLY   0x0001
-#define O_CREAT    0x0200      /* 01000 */
-#define O_TRUNC    0x0400      /* 02000 */
-
-extern int   open(const char *, int);   /* non-variadic: match the veneer ABI (vms-3320) */
-extern int   creat(const char *, int);
-extern int   close(int);
-extern int   unlink(const char *);
-extern int   rename(const char *, const char *);
-extern void *opendir(const char *);
-extern int   closedir(void *);
-extern int   printf(const char *, ...);
-extern int   fprintf(void *, const char *, ...);
-extern char *strstr(const char *, const char *);
-extern void *stderr;
-
-/* decc$readdir returns a struct dirent*; ovmx_crtl_readdir fills a struct whose
- * FIRST member is d_name[256] (offset 0), so this layout reads the name back. */
-struct portdirent {
-    char           d_name[256];
-    unsigned short d_namlen;
-    unsigned short d_fileid;
-};
-extern struct portdirent *readdir(void *);
-
-/* vms-32ae: the DEC C file-spec translator, as GCC's VMS-host code calls it. */
-extern int decc$to_vms(const char *, int (*)(char *, int), int, int);
+/* Built with the C RTL's own headers (JOINT_MAIN_MUSL_HEADERS=1) as an
+ * ordinary DEC C program, against the RMS-backed DECC$SHR (the C RTL file layer,
+ * src/vmsrms/crtl_rms_fd.c, vms-9f8e). <unixlib.h> declares decc$to_vms as the
+ * DEC C RTL's does. */
+#include <dirent.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <unixlib.h>
 
 static int  nwild, wild_cre, wild_dst, last_type;
 static char tovms_buf[128];
@@ -156,11 +130,11 @@ int main(int argc, char **argv, char **envp)
      *    confirm the created + renamed files are present, the deleted + old
      *    names gone. (The un-fakeable proof is the independent DIRECTORY reader
      *    the boot runs next — this is the same-CRTL corroboration.) */
-    void *dir = opendir(DIRSPEC);
+    DIR *dir = opendir(DIRSPEC);
     if (!dir)
         return 8;
     int saw_cre = 0, saw_dst = 0, saw_del = 0, saw_src = 0, nent = 0;
-    struct portdirent *e;
+    struct dirent *e;
     while ((e = readdir(dir)) != 0) {
         nent++;
         if (strstr(e->d_name, "FOPCRE.DAT")) saw_cre = 1;

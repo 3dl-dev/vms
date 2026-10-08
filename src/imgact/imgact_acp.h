@@ -74,6 +74,8 @@ struct imgact_acp_file {
  * (no /dev/vms, or the volume is not ACP-mounted), SS$_NOSUCHFILE (a path
  * component is not on the volume). Never a POSIX fallback.
  */
+uint32_t imgact_acp_open_fid(struct imgact_acp_file *f, const char *dev,
+			     uint16_t num, uint16_t seq, uint8_t rvn, uint8_t nmx);
 uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 			 const char *path);
 

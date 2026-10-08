@@ -747,11 +747,54 @@ static const char *imgsrc_map_staged(const char *path, char *buf, unsigned long 
 	return buf;
 }
 
+/*
+ * A main image DCL staged from outside SYS$SYSTEM: (rd vms-73e) is staged as
+ * "/run/ovmx-boot/<uid>/FID/<num>.<seq>.<rvn>.<nmx>/<NAME.EXE>": the on-volume
+ * File ID the ACP resolved, so the image is read back by FID wherever it lives.
+ * Returns 1 and fills the FID when `path` has that shape.
+ */
+static int imgsrc_staged_fid(const char *path, uint32_t fid[4])
+{
+	const char *sp = IMGACT_BOOT_STAGE_PREFIX;
+	unsigned long i = 0;
+	while (sp[i] && path[i] == sp[i])
+		i++;
+	if (sp[i] != '\0')
+		return 0;
+	const char *q = path + i;
+	while (*q >= '0' && *q <= '9')           /* the "<uid>/" component */
+		q++;
+	if (*q == '/')
+		q++;
+	if (!(q[0] == 'F' && q[1] == 'I' && q[2] == 'D' && q[3] == '/'))
+		return 0;
+	q += 4;
+	for (int k = 0; k < 4; k++) {
+		uint32_t v = 0;
+		if (*q < '0' || *q > '9')
+			return 0;
+		while (*q >= '0' && *q <= '9')
+			v = v * 10u + (uint32_t)(*q++ - '0');
+		fid[k] = v;
+		if (*q != (k < 3 ? '.' : '/'))
+			return 0;
+		q++;
+	}
+	return 1;
+}
+
 static int imgsrc_open(struct imgsrc *s, const char *path)
 {
 	char mapped[256];
-	const char *p = imgsrc_map_staged(path, mapped, sizeof mapped);
+	uint32_t fid[4];
 	s->posix_fd = -1;
+	if (imgsrc_staged_fid(path, fid)) {
+		uint32_t fst = imgact_acp_open_fid(&s->f, g_acp_sysdevice,
+						   (uint16_t)fid[0], (uint16_t)fid[1],
+						   (uint8_t)fid[2], (uint8_t)fid[3]);
+		return (fst & 1u) ? 0 : -1;
+	}
+	const char *p = imgsrc_map_staged(path, mapped, sizeof mapped);
 	uint32_t st = imgact_acp_open(&s->f, g_acp_sysdevice, p);
 	if (st & 1u)
 		return 0;

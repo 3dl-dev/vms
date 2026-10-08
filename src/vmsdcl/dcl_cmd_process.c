@@ -1564,6 +1564,49 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                     return 1;
                 }
             }
+            /* (3) An image OUTSIDE SYS$SYSTEM: (SYS$LOGIN:HELLO.EXE, a user's
+             * own [.BIN] -- rd vms-73e). VMS RUNs an image from any directory.
+             * Stage it the same way, per-user, under a path that carries the
+             * genuine File ID the ACP resolved for it:
+             *     OVMX_BOOT_STAGE_DIR/<uid>/FID/<num>.<seq>.<rvn>.<nmx>/<NAME.EXE>
+             * IMGACT recognises that shape and reads the image back through
+             * the ACP BY FID (imgsrc_staged_fid / imgact_acp_open_fid), so the
+             * bytes still come off the ODS-2 volume, wherever the file lives.
+             * Always re-staged: a user's image is relinked in place, and a
+             * new version has a new FID anyway. */
+            if (!ovmx_boot_stage_user_path(lp, staged, sizeof(staged),
+                                           (unsigned long)getuid()) &&
+                (at.fid_num || at.fid_nmx)) {
+                const char *base = lp;
+                for (const char *q = lp; *q; q++)
+                    if (*q == '/')
+                        base = q + 1;
+                char fiddir[1024];
+                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);
+                if (ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir),
+                                             (unsigned long)getuid())) {
+                    (void)mkdir(user_dir, 0700);
+                    snprintf(fiddir, sizeof(fiddir), "%s/FID", user_dir);
+                    (void)mkdir(fiddir, 0700);
+                    snprintf(fiddir, sizeof(fiddir), "%s/FID/%u.%u.%u.%u", user_dir,
+                             (unsigned)at.fid_num, (unsigned)at.fid_seq,
+                             (unsigned)at.fid_rvn, (unsigned)at.fid_nmx);
+                    (void)mkdir(fiddir, 0700);
+                    char up[256];
+                    size_t k = 0;
+                    for (; base[k] && k + 1 < sizeof(up); k++)
+                        up[k] = (char)toupper((unsigned char)base[k]);
+                    up[k] = '\0';
+                    snprintf(staged, sizeof(staged), "%s/%s", fiddir, up);
+                    (void)unlink(staged);
+                    if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
+                        access(staged, X_OK) == 0) {
+                        strncpy(resolved, staged, sz - 1);
+                        resolved[sz - 1] = '\0';
+                        return 1;
+                    }
+                }
+            }
             /* ACP confirmed the image is present but it could not be staged off
              * the volume. Fail HONESTLY -- do NOT read it off /vms (INV-6). The
              * caller reports %DCL-E-IVIMAGE. */

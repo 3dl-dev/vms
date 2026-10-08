@@ -1,0 +1,330 @@
+; EVACWL.MAR - the evacuation workload (vms-06c), MACRO-32 side.
+;
+; Assembled + run on the real VAX V7.3 lab node (no C compiler there --
+; EVACWL.C is the OVMX/TCC side of the same contract, same directory).
+; Clean-room (Rule 8): every $xxx_S system-service macro name and field
+; offset used here comes from the public STARLET.MLB definitions this
+; project's own oracle captured off a real VAX V7.3 / Alpha V8.4 node
+; (docs/oracle/vax73-starlet-defs/{LCKDEF,FABDEF,RABDEF,SYIDEF,JPIDEF}.txt);
+; none of this is VSI/HPE source. The command-line parse (LIB$GET_FOREIGN)
+; and the $ENQW/$HIBER/$SCHDWK shape follow this same lab's own proven
+; DLMENQ.MAR/DLMCVT.MAR drivers (tests/lab/captures/vms-c03-dlm-opcodes-
+; 20260911/dlm-drivers/).
+;
+; RECORD LAYOUT (EVAC.DAT, RMS sequential, fixed 64-byte records -- IDENTICAL
+; to EVACWL.C's own header comment; keep the two in sync by hand, there is no
+; shared generated source for a MACRO/C pair):
+;   bytes  0-15  NODE  (16, ASCII, left-justified, space-padded -- SYI$_SCSNODE)
+;   bytes 16-25  PID   (10, ASCII decimal, right-justified, space-padded)
+;   bytes 26-35  SEQ   (10, ASCII decimal, right-justified, space-padded)
+;   bytes 36-63  TIME  (28, ASCII, left-justified, space-padded -- the 23-char
+;                       $ASCTIM string "DD-MMM-YYYY HH:MM:SS.CC")
+;
+; LOCK NAMESPACE: $ENQW is called WITHOUT LCK$M_SYSTEM, so OpenVMS scopes
+; "EVAC$WORKLOAD" to the REQUESTING PROCESS'S UIC GROUP, not system-wide --
+; both EVACWL instances must run under the SAME UIC group (the lab runs
+; both under group 0, SYSTEM) or they will not see each other despite the
+; identical name. See EVACWL.C's header comment for OVMX's own (flatter,
+; no-group-scoping) executive behaviour on the other side of this contract.
+;
+; COMMAND LINE (via LIB$GET_FOREIGN, the same convention DLMENQ.MAR uses):
+;   (nothing)          direct EX, loop forever
+;   <n>                direct EX, stop after <n> records
+;   STANDBY             NL then CONVERT to EX, loop forever
+;   STANDBY <n>         NL then CONVERT to EX, stop after <n> records
+;
+ .TITLE EVACWL
+ $LCKDEF
+ $FABDEF
+ $RABDEF
+ $SYIDEF
+ $JPIDEF
+
+ .PSECT DAT,WRT,NOEXE,LONG
+
+; ---- command-line parse -----------------------------------------------
+CMDBUF: .BLKB 100
+CMDDSC: .WORD 100
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS CMDBUF
+CMDLEN: .WORD 0
+ .WORD 0
+STANDBY_LIT: .ASCII /STANDBY/
+STANDBY: .LONG 0
+COUNTVAL: .LONG -1              ; -1 = forever
+
+; ---- lock ---------------------------------------------------------------
+LKSB: .BLKB 8
+RESNAM_D: .ASCID /EVAC$WORKLOAD/
+
+; ---- RMS: EVAC.DAT, fixed 64-byte records -------------------------------
+; A plain byte string (NOT a descriptor): FAB$L_FNA/FAB$B_FNS want a raw
+; address + byte count, the same shape the C side's `char filename[]` is.
+FILENAME: .ASCII /EVAC$DATA:EVAC.DAT/
+MYFAB: $FAB
+MYRAB: $RAB
+REC: .BLKB 64
+SEQVAL: .LONG 0
+
+; ---- this node's SCSNODE / PID, fetched once at grant --------------------
+NODEBUF: .BLKB 16
+NODELEN: .WORD 0
+NODE_DSC: .WORD 0
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS NODEBUF
+SYI_ITMLST: .WORD 16
+ .WORD SYI$_SCSNODE
+ .ADDRESS NODEBUF
+ .ADDRESS NODELEN
+ .LONG 0
+PIDVAL: .LONG 0
+JPI_ITMLST: .WORD 4
+ .WORD JPI$_PID
+ .ADDRESS PIDVAL
+ .LONG 0
+ .LONG 0
+
+; ---- per-record time string ----------------------------------------------
+TIMEBUF: .BLKB 32
+TIMELEN: .WORD 0
+TIMEDSC: .WORD 31
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS TIMEBUF
+
+; ---- the 1-second sleep delta --------------------------------------------
+GDT: .ASCID /0 00:00:01.00/
+GDELTA: .QUAD 0
+
+; ---- banner (one $FAOL_S + LIB$PUT_OUTPUT, the proven idiom this lab's
+; own oracle-probe generator uses, tools/oracle/semantic/spgen.py) --------
+BANNER_CTL: .ASCID /EVACWL: !AS took EVAC$WORKLOAD EX at seq !UL/
+PRM: .BLKL 2
+FAOBUF: .BLKB 256
+FAODSC: .WORD 256
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS FAOBUF
+OUTLEN: .WORD 0
+
+; ---- SUB_ITOA10 scratch (in: ITOA_VAL/ITOA_ADDR/ITOA_WIDTH) --------------
+ITOA_VAL: .LONG 0
+ITOA_ADDR: .LONG 0
+ITOA_WIDTH: .LONG 0
+ITOA_SCRATCH: .BLKB 12
+
+; ---- SUB_ATOI scratch (in: ATOI_ADDR/ATOI_LEN, out: ATOI_OUT) ------------
+ATOI_ADDR: .LONG 0
+ATOI_LEN: .LONG 0
+ATOI_OUT: .LONG 0
+
+ .PSECT COD,EXE,NOWRT
+
+; ===========================================================================
+; SUB_ITOA10 - unsigned decimal, right-justified into a fixed-width field,
+; space-padded. in: ITOA_VAL (value), ITOA_ADDR (dest addr), ITOA_WIDTH
+; (field width). EDIV peels the least-significant digit each turn; digits
+; are built backward into ITOA_SCRATCH, then block-copied to the END of the
+; destination field (the field was blanked first, so an all-zero value or a
+; short result still lands correctly right-justified).
+; ===========================================================================
+ .ENTRY SUB_ITOA10,^M<R2,R3,R4,R5,R6,R7,R8,R9,R10,R11>
+ MOVL ITOA_WIDTH,R2
+ MOVL ITOA_ADDR,R3
+ MOVC5 #0,(R0),#^A/ /,R2,(R3)
+ MOVL ITOA_VAL,R6
+ MOVAB ITOA_SCRATCH+11,R7
+ CLRL R8
+10$: EDIV #10,R6,R9,R10
+ DECL R7
+ ADDL3 #^A/0/,R10,R11
+ MOVB R11,(R7)
+ INCL R8
+ MOVL R9,R6
+ BNEQ 10$
+ SUBL3 R8,R2,R9
+ ADDL3 R9,R3,R10
+ MOVC3 R8,(R7),(R10)
+ RET
+
+; ===========================================================================
+; SUB_ATOI - parse up to ATOI_LEN decimal digit characters at ATOI_ADDR,
+; stopping at the first non-digit or at ATOI_LEN; result in ATOI_OUT (0 if
+; no leading digit at all).
+; ===========================================================================
+ .ENTRY SUB_ATOI,^M<R2,R3,R4,R5>
+ CLRL ATOI_OUT
+ MOVL ATOI_ADDR,R1
+ MOVL ATOI_LEN,R3
+10$: TSTL R3
+ BLEQ 20$
+ CMPB (R1),#^A/0/
+ BLSS 20$
+ CMPB (R1),#^A/9/
+ BGTR 20$
+ MOVL ATOI_OUT,R0
+ MULL3 #10,R0,R0
+ MOVZBL (R1),R2
+ SUBL2 #^A/0/,R2
+ ADDL2 R2,R0
+ MOVL R0,ATOI_OUT
+ INCL R1
+ DECL R3
+ BRB 10$
+20$: RET
+
+; ===========================================================================
+; EVACWL - main entry
+; ===========================================================================
+ .ENTRY EVACWL,^M<R2,R3,R4,R5,R6,R7,R8,R9,R10,R11>
+
+ $BINTIM_S TIMBUF=GDT,TIMADR=GDELTA
+
+; ---- parse the command line ----------------------------------------------
+ PUSHAW CMDLEN
+ PUSHL #0
+ PUSHAB CMDDSC
+ CALLS #3,G^LIB$GET_FOREIGN
+
+ MOVZWL CMDLEN,R3
+ MOVAB CMDBUF,R1
+ CMPL R3,#7
+ BLSS NO_STANDBY
+ CMPC3 #7,(R1),STANDBY_LIT
+ BNEQ NO_STANDBY
+ MOVL #1,STANDBY
+ ADDL2 #7,R1
+ SUBL2 #7,R3
+ TSTL R3
+ BEQL PARSE_DONE
+ CMPB (R1),#^A/ /
+ BNEQ TRY_COUNT
+ INCL R1
+ DECL R3
+ BRB TRY_COUNT
+NO_STANDBY:
+TRY_COUNT:
+ TSTL R3
+ BLEQ PARSE_DONE
+ MOVL R1,ATOI_ADDR
+ MOVL R3,ATOI_LEN
+ CALLS #0,SUB_ATOI
+ MOVL ATOI_OUT,COUNTVAL
+PARSE_DONE:
+
+; ---- take EVAC$WORKLOAD -------------------------------------------------
+ TSTL STANDBY
+ BEQL DIRECT_EX
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_NLMODE,LKSB=LKSB,RESNAM=RESNAM_D
+ BLBC R0,ENQ_FAILED
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_EXMODE,LKSB=LKSB,FLAGS=#LCK$M_CONVERT
+ BRB ENQ_DONE
+DIRECT_EX:
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_EXMODE,LKSB=LKSB,RESNAM=RESNAM_D
+ENQ_DONE:
+ BLBC R0,ENQ_FAILED
+
+; ---- open (or create) EVAC.DAT, fixed 64-byte sequential ------------------
+ MOVAB FILENAME,MYFAB+FAB$L_FNA
+ MOVB #18,MYFAB+FAB$B_FNS               ; strlen("EVAC$DATA:EVAC.DAT")
+ MOVB #FAB$C_SEQ,MYFAB+FAB$B_ORG
+ MOVB #<FAB$M_GET!FAB$M_PUT>,MYFAB+FAB$B_FAC
+ MOVW #64,MYFAB+FAB$W_MRS
+ MOVB #FAB$M_CR,MYFAB+FAB$B_RAT
+ MOVB #FAB$C_FIX,MYFAB+FAB$B_RFM
+ MOVB #<FAB$M_GET!FAB$M_PUT>,MYFAB+FAB$B_SHR
+
+ $OPEN_S FAB=MYFAB
+ BLBS R0,OPENED
+ $CREATE_S FAB=MYFAB
+ BLBC R0,OPEN_FAILED
+OPENED:
+ MOVAB MYFAB,MYRAB+RAB$L_FAB
+ MOVB #RAB$C_SEQ,MYRAB+RAB$B_RAC
+ $CONNECT_S RAB=MYRAB
+ BLBC R0,OPEN_FAILED
+
+; ---- read the LAST record's seq (sequential scan to EOF; small files) ---
+ CLRL SEQVAL
+READLOOP:
+ MOVAB REC,MYRAB+RAB$L_UBF
+ MOVW #64,MYRAB+RAB$W_USZ
+ $GET_S RAB=MYRAB
+ BLBC R0,READDONE
+ MOVAB REC+26,ATOI_ADDR
+ MOVL #10,ATOI_LEN
+ CALLS #0,SUB_ATOI
+ MOVL ATOI_OUT,SEQVAL
+ BRB READLOOP
+READDONE:
+ INCL SEQVAL
+
+; ---- this node's SCSNODE + this process's PID, fetched once -------------
+ $GETSYI_S ITMLST=SYI_ITMLST
+ MOVW NODELEN,NODE_DSC
+ $GETJPI_S ITMLST=JPI_ITMLST
+
+; ---- banner ---------------------------------------------------------------
+ MOVAB NODE_DSC,PRM
+ MOVL SEQVAL,PRM+4
+ MOVW #256,FAODSC
+ $FAOL_S CTRSTR=BANNER_CTL,OUTLEN=OUTLEN,OUTBUF=FAODSC,PRMLST=PRM
+ MOVW OUTLEN,FAODSC
+ PUSHAB FAODSC
+ CALLS #1,G^LIB$PUT_OUTPUT
+
+; ===========================================================================
+MAINLOOP:
+ $ASCTIM_S TIMLEN=TIMELEN,TIMBUF=TIMEDSC,TIMADR=#0,CVTFLG=#0
+
+ MOVC5 #0,(R0),#^A/ /,#16,REC
+ MOVC5 NODELEN,NODEBUF,#^A/ /,#16,REC
+
+ MOVL PIDVAL,ITOA_VAL
+ MOVAB REC+16,ITOA_ADDR
+ MOVL #10,ITOA_WIDTH
+ CALLS #0,SUB_ITOA10
+
+ MOVL SEQVAL,ITOA_VAL
+ MOVAB REC+26,ITOA_ADDR
+ MOVL #10,ITOA_WIDTH
+ CALLS #0,SUB_ITOA10
+
+ MOVC5 #0,(R0),#^A/ /,#28,REC+36
+ MOVC5 TIMELEN,TIMEBUF,#^A/ /,#28,REC+36
+
+ MOVAB REC,MYRAB+RAB$L_RBF
+ MOVW #64,MYRAB+RAB$W_RSZ
+ $PUT_S RAB=MYRAB
+ BLBC R0,PUT_FAILED
+ $FLUSH_S RAB=MYRAB
+ BLBC R0,PUT_FAILED
+
+ INCL SEQVAL
+
+ CMPL COUNTVAL,#-1
+ BEQL SLEEP_AND_LOOP
+ DECL COUNTVAL
+ BLEQ DONE
+
+SLEEP_AND_LOOP:
+ $SCHDWK_S DAYTIM=GDELTA
+ $HIBER_S
+ BRW MAINLOOP
+
+; ===========================================================================
+DONE:
+ $DISCONNECT_S RAB=MYRAB
+ $CLOSE_S FAB=MYFAB
+ $DEQ_S LKID=LKSB+4
+ MOVL #1,R0
+ RET
+
+PUT_FAILED:
+OPEN_FAILED:
+ENQ_FAILED:
+ RET
+
+ .END EVACWL

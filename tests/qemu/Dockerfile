@@ -398,6 +398,17 @@ RUN cd /src/repo && \
 # land in build-static/bin/corpus_rt_* and are staged with the other corpus programs.
 RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
 
+# EVACWL (vms-06c, ci.6 evacuation workload): the SAME VMS-native TCC.EXE +
+# LINK.EXE --use {DECC$SHR + the five OVMX shareables} build the corpus
+# programs above use, for the bespoke (non-corpus) EVAC$WORKLOAD lock-and-
+# append workload tests/lab/ci6/EVACWL.MAR runs on the real VAX oracle. Lands
+# in build-static/native/EVACWL.EXE, which the two existing
+# `build-static/native/*.EXE` globs below already stage onto the corpus
+# system disk and into the booted guest's SYS$SYSTEM -- no new staging step.
+# test_syssvc_ci6_evacwl.c (built with qemu_syssvc_tests above, staged by
+# that same glob) execs it twice and proves the takeover-continuity contract.
+RUN cd /src/repo && sh tests/lab/ci6/mk_evacwl_native.sh /src/repo
+
 # (The SSH transport-proof harness build + /ovmxssh|/ovmxsshsrv staging was
 # RETIRED with the SSH scaffold, vms-d916: it built the --wrap veneer over a
 # musl-static cross ELF, which Baron ruled LARP. The faithful SSH is the real

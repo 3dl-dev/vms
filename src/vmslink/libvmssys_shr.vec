@@ -277,3 +277,6 @@ vms_kif_register_detached=PROCEDURE
 vms_kif_dfprot=PROCEDURE
 # $SETDDIR (rd vms-872): the executive-resident process default directory. APPENDED.
 vms_kif_ddir=PROCEDURE
+# RTAn: remote port information (rd vms-2166): DVI$_TT_ACCPORNAM. APPENDED.
+vms_kif_terminal_setrpi=PROCEDURE
+vms_kif_terminal_getrpi=PROCEDURE

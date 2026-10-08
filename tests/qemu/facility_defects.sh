@@ -562,6 +562,11 @@ libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
 clrast-no-delivery
+mbx-tmpmbx-check-removed
+mbx-prmmbx-check-removed
+acp-readall-ignored
+acp-bypass-ignored
+acp-sysprv-ignored
 crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
@@ -1004,6 +1009,101 @@ EOF
         why)          echo "sys\$clrast() clears the in-progress marker and then drains the executive's AST queue with 'vms\$\$deliver_pending_asts();' so an AST queued inside the routine runs before \$CLRAST returns. The mutation deletes that drain (the marker is still cleared, status still SS\$_NORMAL), so the queued AST waits until the routine returns -- the ordering \$CLRAST exists to change. The 8-space-indented call line is unique in sys_ast.c; gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 with $CLRAST it ran before the first AST returned (delivered by $CLRAST)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    mbx-tmpmbx-check-removed)
+        case "$_f" in
+        facility)     echo "\$CREMBX requires TMPMBX for a temporary mailbox";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "mbx_priv_check() tests TMPMBX for a temporary mailbox with ': (cur_privs & VMS_PRV_M_TMPMBX) != 0;'. The mutation replaces that arm with 'true', so a process that has switched TMPMBX off can still create a temporary mailbox. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+\$CREMBX (temporary) without TMPMBX is SS\$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    mbx-prmmbx-check-removed)
+        case "$_f" in
+        facility)     echo "\$CREMBX requires PRMMBX for a permanent mailbox";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_kmod_mbx test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "mbx_priv_check() tests PRMMBX for a permanent mailbox with 'permanent ? (cur_privs & VMS_PRV_M_PRMMBX) != 0'. The mutation replaces that test with 'true', so any process may create a permanent mailbox. test_kmod_mbx's own permanent-needs-PRMMBX assertion reddens too. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+\$CREMBX (permanent) without PRMMBX is SS\$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-readall-ignored)
+        case "$_f" in
+        facility)     echo "READALL grants read of any file (acp_check_access)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() grants a read-only request when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+READALL alone grants the read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-bypass-ignored)
+        case "$_f" in
+        facility)     echo "BYPASS lifts every file access control (acp_check_access)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() returns SS__NORMAL at once when BYPASS is held. The mutation makes that branch unreachable ('0 &&'), so BYPASS no longer lifts the protection check. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+BYPASS alone grants the read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-sysprv-ignored)
+        case "$_f" in
+        facility)     echo "SYSPRV confers the SYSTEM protection category (acp_check_access)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() sets is_system when the accessor's group is a system group OR SYSPRV is held. The mutation replaces the SYSPRV term with 0, so SYSPRV no longer qualifies the accessor for the SYSTEM category. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+SYSPRV alone grants the read (SYSTEM protection category)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -6860,6 +6960,16 @@ apply_edit() {
         # REGISTER (share_pid stays false -- the PID is still genuinely fresh).
         # Gone after apply (no-op re-apply).
         sed -i 's|return vms_ioctl_register(arg, true, false);|return vms_ioctl_register(arg, false, false); /* NEGCTL register-subprocess-identity-self-declared */|' "$_file";;
+    mbx-tmpmbx-check-removed)
+        sed -i 's|^                         : (cur_privs \& VMS_PRV_M_TMPMBX) != 0;$|                         : true; /* NEGCTL mbx-tmpmbx-check-removed */|' "$_file";;
+    mbx-prmmbx-check-removed)
+        sed -i 's|^    bool ok = permanent ? (cur_privs \& VMS_PRV_M_PRMMBX) != 0$|    bool ok = permanent ? true /* NEGCTL mbx-prmmbx-check-removed */|' "$_file";;
+    acp-readall-ignored)
+        sed -i 's|^    if ((privs \& ACP_PRV_M_READALL) \&\& !want_write)$|    if (0 \&\& (privs \& ACP_PRV_M_READALL) \&\& !want_write) /* NEGCTL acp-readall-ignored */|' "$_file";;
+    acp-bypass-ignored)
+        sed -i 's|^    if (privs \& ACP_PRV_M_BYPASS)$|    if (0 \&\& (privs \& ACP_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
+    acp-sysprv-ignored)
+        sed -i 's|^                (privs \& ACP_PRV_M_SYSPRV) != 0;$|                0; /* NEGCTL acp-sysprv-ignored */|' "$_file";;
     clrast-no-delivery)
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)

@@ -1599,6 +1599,45 @@ uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
     return args.status;
 }
 
+/* RTAn: remote port information (rd vms-2166): DVI$_TT_ACCPORNAM. */
+uint32_t vms_kif_terminal_setrpi(const char *devnam, const char *rpi)
+{
+    struct vms_termrpi_args args;
+
+    if (!devnam || !rpi)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    vms_strncpy(args.rpi, rpi, VMS_TT_ACCPORNAM_SIZE - 1);
+    args.rpi[VMS_TT_ACCPORNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_SETRPI, &args);
+    return args.status;
+}
+
+uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_size)
+{
+    struct vms_termrpi_args args;
+
+    if (!devnam || !rpi || rpi_size == 0)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_GETRPI, &args);
+
+    rpi[0] = '\0';
+    if (args.status & 1) {
+        vms_strncpy(rpi, args.rpi, rpi_size - 1);
+        rpi[rpi_size - 1] = '\0';
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
 {
     struct vms_getvol_args args;

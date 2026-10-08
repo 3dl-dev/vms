@@ -1,0 +1,65 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod semvax-1 node VAX1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/fao.py sha256=0ed07c7f23818db48db86d6f80ebb0034331bc0d04266d842bb6a8756749ee58
+=== SEMPROBE fao BEGIN ===
+FAO.LITERAL st=00000001 len=10 out="plain text"
+FAO.AS st=00000001 len=7 out="[Hello]"
+FAO.AS.EMPTY st=00000001 len=2 out="[]"
+FAO.AD st=00000001 len=5 out="[Hel]"
+FAO.AC st=00000001 len=7 out="[World]"
+FAO.AF st=00000001 len=6 out="[A..Z]"
+FAO.AS.WIDTH.PAD st=00000001 len=10 out="[Hello   ]"
+FAO.AS.WIDTH.TRUNC st=00000001 len=5 out="[Hel]"
+FAO.UL st=00000001 len=14 out="0 1 4294967295"
+FAO.SL st=00000001 len=16 out="0 -1 -2147483648"
+FAO.XL st=00000001 len=17 out="1234ABCD 00000000"
+FAO.OL st=00000001 len=11 out="00000000010"
+FAO.ZL st=00000001 len=8 out="42 00042"
+FAO.UW.UB st=00000001 len=19 out="22136 120 65535 255"
+FAO.XW.XB st=00000001 len=7 out="5678 78"
+FAO.SW.SB st=00000001 len=7 out="-1 -128"
+FAO.WIDTH st=00000001 len=26 out="[   42][   -1][000AB][***]"
+FAO.WIDTH.ZERO st=00000001 len=2 out="[]"
+FAO.REPEAT.CHAR st=00000001 len=7 out="[-----]"
+FAO.REPEAT.DIR st=00000001 len=5 out="[123]"
+FAO.REPEAT.WIDTH st=00000001 len=10 out="[   7   8]"
+FAO.FIELD st=00000001 len=12 out="[12-34     ]"
+FAO.FIELD.OVER st=00000001 len=5 out="[123]"
+FAO.REUSE st=00000001 len=5 out="5 5 6"
+FAO.SKIP st=00000001 len=3 out="5 7"
+FAO.PLURAL st=00000001 len=14 out="1 file, 1 file"
+FAO.PLURAL.WIDTH st=00000001 len=6 out="0 fils"
+FAO.UIC st=00000001 len=5 out="[1,4]"
+FAO.UIC.ID st=00000001 len=8 out="[SYSTEM]"
+FAO.DATE st=00000001 len=23 out=" 7-OCT-2026 13:45:56.78"
+FAO.TIME st=00000001 len=11 out="13:45:56.78"
+FAO.DATE.WIDTH st=00000001 len=13 out="[ 7-OCT-2026]"
+FAO.CTLCHARS st=00000001 len=10 out="a..b.c.d!e"
+FAO.UNKNOWN st=00000014 len=1 out="["
+FAO.TRAILING.BANG st=00000014 len=3 out="abc"
+FAO.BUFFEROVF st=00000601 len=8 out="ZZZZZZZZ"
+FAO.BUFFEROVF.AS st=00000601 len=8 out="[HelloHe"
+FAOL.BASIC st=00000001 len=11 out="2+3=5 Hello"
+FAOL.NOPRM st=00000001 len=9 out="no params"
+FAO.NOOUTLEN st=00000001 out="no paramslo."
+MSG.NORMAL.ALL st=00000001 len=46 msg="%SYSTEM-S-NORMAL, normal successful completion" outadr=00000000
+MSG.ACCVIO.ALL st=00000001 len=89 msg="%SYSTEM-F-ACCVIO, access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL" outadr=00040000
+MSG.ACCVIO.TEXT st=00000001 len=71 msg="access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL" outadr=00040000
+MSG.ACCVIO.IDENT st=00000001 len=7 msg="%ACCVIO" outadr=00040000
+MSG.ACCVIO.SEV st=00000001 len=2 msg="%F" outadr=00040000
+MSG.ACCVIO.FAC st=00000001 len=7 msg="%SYSTEM" outadr=00040000
+MSG.ACCVIO.FLAGS0 st=00000001 len=89 msg="%SYSTEM-F-ACCVIO, access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL" outadr=00040000
+MSG.ACCVIO.SEV_TEXT st=00000001 len=75 msg="%F, access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL" outadr=00040000
+MSG.RMS_FNF st=00000001 len=26 msg="%RMS-E-FNF, file not found" outadr=00000000
+MSG.BADPARAM st=00000001 len=39 msg="%SYSTEM-F-BADPARAM, bad parameter value" outadr=00000000
+MSG.WASSET st=00000001 len=89 msg="%SYSTEM-S-ACCVIO, access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL" outadr=00040000
+MSG.SEV_CHANGED st=00000001 len=89 msg="%SYSTEM-?-ACCVIO, access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL" outadr=00040000
+MSG.UNKNOWN st=00000001 len=46 msg="%NONAME-E-NORMAL, normal successful completion" outadr=00000000
+MSG.UNKNOWN.TEXT st=00000001 len=28 msg="normal successful completion" outadr=00000000
+MSG.ZERO st=00000621 len=40 msg="%NONAME-W-NOMSG, Message number 00000000" outadr=00000000
+MSG.UNKNOWN.NONZERO st=00000621 len=40 msg="%NONAME-E-NOMSG, Message number 0FFF8012" outadr=00000000
+MSG.EXQUOTA st=00000001 len=41 msg="%SYSTEM-F-EXQUOTA, process quota exceeded" outadr=00000000
+MSG.SHORTBUF st=00000601 len=10 msg="%SYSTEM-F-"
+MSG.FAO_INTO st=00000001 len=71 msg="access violation, reason mask=!XB, virtual address=!XL, PC=!XL, PSL=!XL"
+=== SEMPROBE fao END ===

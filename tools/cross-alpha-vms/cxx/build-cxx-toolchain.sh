@@ -121,7 +121,9 @@ ar t "$LGDIR/libgcc.a" | grep -q '^unwind-dw2.o$' || { echo "FAIL: libgcc.a has 
 cd /tmp/cxx
 
 echo "== [6/6] libstdc++-v3 over the OVMX C RTL (configure link tests via OVMX LINK.EXE) =="
-CXXF="-mpointer-size=64 -fno-function-sections -fno-data-sections"
+# _USE_STD_STAT (vms-28d part 2): libstdc++'s std::filesystem compares st_ino
+# as a scalar, the X/Open layout; DEC C clients default to the File-ID array.
+CXXF="-mpointer-size=64 -fno-function-sections -fno-data-sections -D_USE_STD_STAT"
 mkdir -p lsc && cd lsc
 CC="$X/bin/$TARGET-gcc $CXXF" CXX="$X/bin/$TARGET-g++ $CXXF" \
 AR=ar AR_FLAGS=crS RANLIB=true \
@@ -169,7 +171,7 @@ make install > /dev/null
 #   -isystem $X/p32/include/c++/$VERDIR -isystem $X/p32/include/c++/$VERDIR/$TARGET
 #   -L$X/p32/lib (ahead of the default libstdc++ search).
 echo "== [7/7] libstdc++-v3 at the DEC C default (32-bit) pointer size -> $X/p32 =="
-CXXF32="-fno-function-sections -fno-data-sections"
+CXXF32="-fno-function-sections -fno-data-sections -D_USE_STD_STAT"
 mkdir -p /tmp/cxx/lsc32 && cd /tmp/cxx/lsc32
 CC="$X/bin/$TARGET-gcc $CXXF32" CXX="$X/bin/$TARGET-g++ $CXXF32" \
 AR=ar AR_FLAGS=crS RANLIB=true \

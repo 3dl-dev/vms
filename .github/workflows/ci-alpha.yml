@@ -212,6 +212,12 @@ jobs:
       - name: Port compiler -- VMS-host xm-vms.h builds against the GCC 14 driver (vms-fd1)
         run: bash tools/cross-alpha-vms/test/run_xm_vms_delete.sh tools/cross-alpha-vms
 
+      # vms-fd1 (patches/0009): GCC's VMS-host vms-ld.c / vms-ar.c declare what
+      # they call (SYS$TRNLNM, SYS$CRELNM, decc$to_vms, mkstemps) -- GCC 14
+      # rejects implicit function declarations.
+      - name: Port compiler -- VMS-host vms-ld.c/vms-ar.c compile with every call declared (vms-fd1)
+        run: bash tools/cross-alpha-vms/test/run_vms_ld_ar_decls.sh tools/cross-alpha-vms
+
       # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
       # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
       # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they

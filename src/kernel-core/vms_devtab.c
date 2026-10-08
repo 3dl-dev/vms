@@ -975,6 +975,81 @@ out:
     return 0;
 }
 
+/*
+ * vms_ioctl_term_setrpi / _getrpi - an RTAn:'s remote port information (rd
+ * vms-2166): the node::user the CTERM host recorded when the remote terminal
+ * connected, read back by SHOW TERMINAL / SHOW PROCESS / F$GETDVI
+ * TT_ACCPORNAM. SET is privileged (exec_current_is_privileged, as SETLOGIN):
+ * only the network daemon that minted the terminal may vouch for where it
+ * comes from. GET is an ordinary read; "" = no remote port. Only a
+ * dynamically-minted RTAn: carries one (IVDEVNAM otherwise).
+ */
+static long term_rpi(struct vms_proc *proc, unsigned long arg, int set)
+{
+    struct vms_termrpi_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    args.rpi[VMS_TT_ACCPORNAM_SIZE - 1] = '\0';
+    if (!set)
+        memset(args.rpi, 0, sizeof(args.rpi));
+
+    /* Who may vouch for a terminal's remote port: the substrate superuser (the
+     * boot-started NETACP) or a VMS process holding SETPRV -- the same
+     * authority VMS gives a privileged network ACP over a UCB. */
+    if (set && !exec_current_is_privileged() &&
+        !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    if (set) {
+        memset(dev->tt_accpornam, 0, sizeof(dev->tt_accpornam));
+        strscpy(dev->tt_accpornam, args.rpi, sizeof(dev->tt_accpornam));
+    } else {
+        strscpy(args.rpi, dev->tt_accpornam, sizeof(args.rpi));
+    }
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg)
+{
+    return term_rpi(proc, arg, 1);
+}
+
+long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg)
+{
+    return term_rpi(proc, arg, 0);
+}
+
 int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;

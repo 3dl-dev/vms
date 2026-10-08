@@ -3,6 +3,7 @@
 its golden transcript (rd vms-8d1).
 
   capture.py <vax|alpha> <pod> <family> [--login PASSWORD] [--out DIR]
+  capture.py --dcl <vax|alpha> <pod> <outfile> [--login PASSWORD] 'DCL command' ...
 
 Drives a live ovmx-lab pod's console through its FIFO (never a direct console
 connection: AXPbox powers the machine off when a console client disconnects):
@@ -133,6 +134,9 @@ class Lab:
             subprocess.run(["kubectl", "-n", "ovmx-lab", "cp", a, "%s:%s" % (self.pod, b)], check=True)
         os.unlink(src); os.unlink(pusher)
         n = len(text.splitlines())
+        # a typist left running by an interrupted earlier capture would
+        # interleave its lines with these ('[s]' keeps pkill off its own shell)
+        self.kx("pkill -f '[s]p_push.py'; true")
         off = self.size()
         r = subprocess.run(["kubectl", "-n", "ovmx-lab", "exec", self.pod, "--", "python3", "/tmp/sp_push.py",
                             self.fifo, self.log, "/tmp/sp_src.txt", spec, "cr" if self.arch == "vax" else "lf"],
@@ -148,7 +152,40 @@ class Lab:
             sys.exit("capture: %s arrived with %s records, sent %d" % (spec, m and m.group(1), n))
 
 
+def dcl_capture(arch, pod, out, cmds, pw=None):
+    """run DCL commands on the node and keep their output verbatim, with a
+    provenance header -- for observations that are not a probe transcript
+    (an ANALYZE/RMS_FILE report, a DUMP of a system file)"""
+    lab = Lab(arch, pod)
+    if pw:
+        lab.login(pw)
+    lab.cmd("SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP")
+    node, key, desc = ARCH[arch]
+    with open(out, "w") as f:
+        f.write("# provenance: %s, ovmx-lab pod %s node %s, captured %s by\n" % (
+            desc, pod, node.upper(), datetime.date.today().isoformat()))
+        f.write("#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).\n")
+        f.write("#   Observed output of the real system (clean-room Rule 8); nothing disassembled.\n")
+        for c in cmds:
+            t = lab.cmd(c, 900)
+            f.write("\n$ %s\n" % c)
+            body = t.split("\n", 1)[1] if "\n" in t else ""
+            cut = body.rfind('$ WRITE SYS$OUTPUT "@@E')
+            if cut >= 0:
+                body = body[:cut]
+            f.write(body.rstrip() + "\n")
+    print("capture: %d DCL command(s) -> %s" % (len(cmds), out))
+
+
 def main(a):
+    if len(a) >= 5 and a[1] == "--dcl":
+        # capture.py --dcl <vax|alpha> <pod> <outfile> [--login PW] 'DCL' ...
+        rest = a[5:]
+        pw = None
+        if rest[:1] == ["--login"]:
+            pw, rest = rest[1], rest[2:]
+        dcl_capture(a[2], a[3], a[4], rest, pw)
+        return 0
     if len(a) < 4 or a[1] not in ARCH:
         print(__doc__); return 2
     arch, pod, fam = a[1], a[2], a[3]
@@ -162,6 +199,10 @@ def main(a):
     if pw:
         lab.login(pw)
     lab.cmd("SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP")
+    # OPCOM (security audit alarms among them) writes to the operator console
+    # the probe prints on; disable it for this terminal so its messages do not
+    # interleave with the transcript
+    lab.cmd("REPLY/DISABLE")
     lab.cmd("SET DEFAULT SYS$LOGIN")
     lab.cmd("DELETE %s.*;*" % F)
     lab.push(mar, F + ".MAR")
@@ -177,11 +218,20 @@ def main(a):
         b = lines.index("=== SEMPROBE %s BEGIN ===" % fam)
     except ValueError:
         sys.exit("capture: no transcript:\n" + out)
-    t = []
+    # keep the probe's own lines only: anything else on the console (a broadcast,
+    # an operator message) is not part of the transcript
+    ids = set(subprocess.run([sys.executable, os.path.join(HERE, "spgen.py"), "--list", spec],
+                             capture_output=True, text=True, check=True).stdout.split())
+    t, dropped = [], 0
     for ln in lines[b:]:
-        t.append(ln)
+        if ln.startswith("=== SEMPROBE ") or ln.split(" ", 1)[0] in ids:
+            t.append(ln)
+        elif ln.strip():
+            dropped += 1
         if ln in ("=== SEMPROBE %s END ===" % fam, "=== SEMPROBE aborted END ==="):
             break
+    if dropped:
+        print("capture: dropped %d console line(s) that were not the probe's" % dropped)
     sha = hashlib.sha256(open(spec, "rb").read()).hexdigest()
     node, key, desc = ARCH[arch]
     os.makedirs(outdir, exist_ok=True)

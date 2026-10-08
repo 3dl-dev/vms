@@ -1,0 +1,15 @@
+# Routines OVMX does not provide yet. The semantic-oracle C probe prints
+# st=ABSENT for a case that calls one (spgen.py gen_c), and the gate tracks it
+# like any other difference. Implementing a routine = delete its line here; the
+# real-VMS goldens are unaffected (this list is not part of any spec).
+SYS$ADD_IDENT        # rights database (rd vms-7d5a)
+SYS$REM_IDENT
+SYS$ADD_HOLDER
+SYS$REM_HOLDER
+SYS$FIND_HELD
+SYS$FIND_HOLDER
+SYS$FINISH_RDB
+SYS$GRANTID
+SYS$REVOKID
+SYS$MOD_IDENT
+SYS$MOD_HOLDER

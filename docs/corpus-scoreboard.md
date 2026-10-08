@@ -10,12 +10,12 @@ including the programs that do not run and why.
 
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
-| host (gcc container, no executive) | 110 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 142 | 144 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| host (gcc container, no executive) | 115 | 229 | `tests/conformance/run_corpus.sh` |
+| **runtime (guest, live /dev/vms)** | 144 | 146 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **141 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **148 of 229**.
 
-Host column detail: compile-fail 38, link-fail 47, run-fail 8, run-crash 26; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
+Host column detail: compile-fail 38, link-fail 40, run-fail 8, run-crash 28; 6 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
 Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
@@ -30,54 +30,49 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (88)
+### Not running (81)
 
 | program | host | runtime | reason |
 |---|---|---|---|
 | `lib_asn_wth_mbx` | link-fail | - | link: undefined lib$asn_wth_mbx |
 | `lib_attach` | link-fail | - | link: undefined lib$attach |
 | `lib_callg` | run-crash | - | ptr32: LIB$CALLG takes an argument list of 32-bit longwords holding pointers; the program asserts sizeof(unsigned)==sizeof(void*) (vms-95b) |
-| `lib_create_dir` | link-fail | - | link: undefined lib$create_dir, sys$setddir |
-| `lib_ctrl` | compile-fail | - | link: undefined lib$disable_ctrl, lib$enable_ctrl |
-| `lib_cvtf_from_internal_time` | compile-fail | - | link: undefined lib$cvtf_from_internal_time |
-| `lib_cvtf_to_internal_time` | compile-fail | - | link: undefined lib$cvtf_to_internal_time |
+| `lib_create_dir` | link-fail | - | link: undefined lib$create_dir |
+| `lib_ctrl` | compile-fail | - | compile: error: ‘LIB$M_CLI_CTRLT’ undeclared (first use in this function) |
+| `lib_cvtf_from_internal_time` | compile-fail | - | compile: 20 / #  error "Compile with CC/FLOAT=G_FLOAT (which is the default on alpha) |
+| `lib_cvtf_to_internal_time` | compile-fail | - | compile: error: #error "Please compile with CC/FLOAT=G_FLOAT (which is the default on alpha)" |
 | `lib_do_command` | link-fail | - | link: undefined lib$do_command |
-| `lib_emodg` | compile-fail | - | link: undefined lib$emodg |
+| `lib_emodg` | compile-fail | - | compile: error: #error "Please compile with CC/FLOAT=G_FLOAT (which is the default on alpha)" |
 | `lib_fid_to_name` | link-fail | - | link: undefined lib$fid_to_name |
 | `lib_find_image_symbol` | link-fail | - | link: undefined lib$callg, lib$find_image_symbol |
-| `lib_get_logical` | link-fail | - | link: undefined lib$get_logical |
 | `lib_getqui` | link-fail | - | link: undefined lib$format_sogw_prot, lib$get_accnam, lib$getqui |
 | `lib_host` | link-fail | - | link: undefined lib$expand_nodename, lib$get_fullname_offset, lib$get_hostname |
 | `lib_invo_ctx` | compile-fail | - | compile: missing header tbk$routines.h |
 | `lib_lock_image` | link-fail | - | link: undefined lib$lock_image, lib$unlock_image |
-| `lib_mult_delta_time` | compile-fail | - | link: undefined lib$multf_delta_time |
+| `lib_mult_delta_time` | compile-fail | - | compile: error: #error "Please compile with CC/FLOAT=G_FLOAT (which is the default on alpha)" |
 | `lib_pause` | link-fail | - | link: undefined lib$pause |
-| `lib_polyg` | compile-fail | - | link: undefined lib$polyg |
+| `lib_polyg` | compile-fail | - | compile: error: #error "Compile with /FLOAT=G_FLOAT (which is the default on alpha)" |
 | `lib_que` | run-pass | run-crash | ptr32: interlocked queue entries are linked by 32-bit self-relative displacements; the program's entries and header sit in a 64-bit address space (vms-95b) |
 | `lib_run_program` | link-fail | - | link: undefined lib$run_program |
 | `lib_tparse` | link-fail | - | link: undefined UIC_KEY, UIC_STATE |
 | `sys_acm` | compile-fail | - | compile: missing header acmemsgdef.h |
 | `sys_adjwsl` | link-fail | - | link: undefined sys$adjwsl |
-| `sys_align_faults` | compile-fail | - | link: undefined sys$get_align_fault_data, sys$start_align_fault_report, sys$stop_align_fault_report |
-| `sys_ascutc` | link-fail | - | link: undefined sys$ascutc, sys$binutc, sys$numutc |
-| `sys_audit_event` | link-fail | - | link: undefined sys$audit_eventw |
+| `sys_align_faults` | compile-fail | - | compile: error: ‘struct chf$signal_array’ has no member named ‘chf$l_sig_name’; did you mean ‘chf$is_sig_name’? |
 | `sys_avoid_preempt` | link-fail | - | link: undefined sys$avoid_preempt, sys$setup_avoid_preempt |
-| `sys_bio` | compile-fail | - | link: undefined sys$enter, sys$read, sys$remove, sys$wait, sys$write |
-| `sys_capabilities` | compile-fail | - | link: undefined sys$cpu_capabilities, sys$free_user_capability, sys$get_user_capability, sys$process_capabilities |
+| `sys_bio` | compile-fail | - | compile: compile error |
+| `sys_capabilities` | compile-fail | - | compile: error: ‘SYI$_ACTIVE_CPU_MASK’ undeclared (first use in this function); did you mean ‘SYI$_ACTIVE_CPU_BITMAP’? |
 | `sys_check_access` | link-fail | - | link: undefined sys$check_access |
-| `sys_chkpro` | compile-fail | - | link: undefined sys$create_user_profile, sys$get_security |
-| `sys_clrast` | link-fail | - | link: undefined SYS$CLRAST |
+| `sys_chkpro` | compile-fail | - | compile: error: lvalue required as unary ‘&’ operand |
 | `sys_cluevt` | link-fail | - | link: undefined sys$tstcluevt |
 | `sys_cmexec` | compile-fail | - | compile: missing header builtins.h |
 | `sys_cmkrnl` | compile-fail | - | compile: missing header builtins.h |
 | `sys_cpu_transition` | link-fail | - | link: undefined sys$cpu_transitionw |
-| `sys_create_gpfn` | compile-fail | - | link: undefined sys$create_gpfn, sys$mgblsc_gpfn_64 |
-| `sys_create_uid` | link-fail | - | link: undefined sys$create_uid |
-| `sys_cretva_64` | compile-fail | - | link: undefined sys$create_region_64, sys$cretva_64, sys$delete_region_64, sys$expreg_64, sys$setprt_64 |
-| `sys_crmpsc` | compile-fail | - | link: undefined sys$updsecw |
+| `sys_create_gpfn` | compile-fail | - | compile: error: conflicting types for ‘SECID’; have ‘struct _seciddef’ |
+| `sys_cretva_64` | compile-fail | - | compile: error: ‘VA$C_REGION_UCREATE_UOWN’ undeclared (first use in this function) |
+| `sys_crmpsc` | compile-fail | - | compile: error: ‘struct FAB’ has no member named ‘fab$b_rtv’; did you mean ‘fab$l_stv’? |
 | `sys_cvt_filename` | link-fail | - | link: undefined sys$cvt_filename |
-| `sys_dclcmh` | compile-fail | - | link: undefined sys$dclcmh |
-| `sys_device_path` | compile-fail | - | link: undefined sys$device_path_scan |
+| `sys_dclcmh` | compile-fail | - | compile: error: #error "This is Alpha specific code" |
+| `sys_device_path` | compile-fail | - | compile: error: ‘SS$_NOMOREPATHS’ undeclared (first use in this function); did you mean ‘SS$_NOMOREFILES’? |
 | `sys_enqw` | link-fail | - | link: undefined sys$getlkiw |
 | `sys_erapat` | compile-fail | - | compile: missing header eradef.h |
 | `sys_fao` | compile-fail | - | compile: error: initializer element is not constant |
@@ -85,42 +80,40 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_find_held` | link-fail | - | link: undefined sys$find_held, sys$find_holder, sys$finish_rdb |
 | `sys_forcex` | run-crash | run-fail | flaky: timing-dependent: a spawned DCL subprocess plus two 5s sleeps; passes on a local KVM guest, hangs to the 40s budget on the CI runner; held at its CI verdict until the race is root-caused (vms-f45) |
 | `sys_format_audit` | link-fail | - | link: undefined sys$format_audit |
-| `sys_get_arith` | compile-fail | - | link: undefined sys$get_arith_exception |
+| `sys_get_arith` | compile-fail | - | compile: error: #error "Alpha specific code" |
 | `sys_get_region_info` | link-fail | - | link: undefined sys$get_region_info |
-| `sys_getenv` | compile-fail | - | link: undefined sys$getenv |
+| `sys_getenv` | compile-fail | - | compile: error: #error "This is Alpha specific code" |
 | `sys_getrmi` | link-fail | - | link: undefined sys$getrmi |
-| `sys_glx_lock` | compile-fail | - | link: undefined sys$acquire_galaxy_lock, sys$create_galaxy_lock, sys$create_galaxy_lock_table, sys$delete_galaxy_lock, sys$delete_galaxy_lock_table, sys$get_galaxy_lock_info, sys$get_galaxy_lock_size, sys$release_galaxy_lock |
-| `sys_gs64` | compile-fail | - | link: undefined sys$crmpsc_gdzro_64, sys$mgblsc_64 |
+| `sys_glx_lock` | compile-fail | - | compile: error: #error "Alpha specific code" |
+| `sys_gs64` | compile-fail | - | compile: error: conflicting types for ‘SECID’; have ‘struct _seciddef’ |
 | `sys_hash_pwd` | compile-fail | - | compile: missing header smg$routines.h |
 | `sys_icc` | compile-fail | - | compile: missing header iccdef.h |
 | `sys_ident` | link-fail | - | link: undefined sys$add_holder, sys$add_ident, sys$grantid, sys$rem_holder, sys$rem_ident, sys$revokid |
 | `sys_ieee` | link-fail | - | link: undefined sys$ieee_set_fp_control, sys$ieee_set_precision_mode, sys$ieee_set_rounding_mode |
 | `sys_init_vol` | link-fail | - | link: undefined sys$init_vol |
-| `sys_io_fastpath` | compile-fail | - | link: undefined sys$io_fastpathw |
-| `sys_lkwset` | compile-fail | - | compile: error: lvalue required as unary '&' operand |
+| `sys_io_fastpath` | compile-fail | - | compile: error: ‘SYI$_FAST_PATH’ undeclared (first use in this function) |
+| `sys_lkwset` | compile-fail | - | compile: error: lvalue required as unary ‘&’ operand |
 | `sys_lnm` | link-fail | - | link: undefined sys$crelnt |
 | `sys_perm_align_fault` | link-fail | - | link: undefined sys$perm_dis_align_fault_report, sys$perm_report_align_fault |
 | `sys_persona` | link-fail | - | link: undefined sys$create_user_profile, sys$persona_assume, sys$persona_clone, sys$persona_create, sys$persona_delete, sys$persona_modify |
-| `sys_power` | compile-fail | - | link: undefined sys$power_control |
-| `sys_process_affinity` | compile-fail | - | link: undefined sys$process_affinity |
-| `sys_process_scan` | compile-fail | - | link: undefined sys$process_scan |
+| `sys_power` | compile-fail | - | compile: error: #error "IA64 specific code" |
+| `sys_process_affinity` | compile-fail | - | compile: error: ‘SYI$_ACTIVE_CPU_MASK’ undeclared (first use in this function); did you mean ‘SYI$_ACTIVE_CPU_BITMAP’? |
+| `sys_process_scan` | compile-fail | - | compile: error: lvalue required as unary ‘&’ operand |
 | `sys_proxy` | link-fail | - | link: undefined sys$add_proxy, sys$delete_proxy, sys$display_proxy, sys$verify_proxy |
 | `sys_queue` | compile-fail | - | compile: missing header sjcdef.h |
-| `sys_rpcc_64` | compile-fail | - | link: undefined sys$rpcc_64 |
-| `sys_set_implicit_affinity` | compile-fail | - | link: undefined sys$set_implicit_affinity |
+| `sys_rpcc_64` | compile-fail | - | compile: error: ‘HWRPB’ {aka ‘struct _hwrpb’} has no member named ‘hwrpb$iq_cycle_count_freq’ |
+| `sys_set_implicit_affinity` | compile-fail | - | compile: error: ‘SYI$_ACTIVE_CPU_MASK’ undeclared (first use in this function); did you mean ‘SYI$_ACTIVE_CPU_BITMAP’? |
 | `sys_set_process_properties` | link-fail | - | link: undefined sys$set_process_propertiesw |
 | `sys_set_security` | link-fail | - | link: undefined sys$parse_acl, sys$set_security |
-| `sys_setdfprot` | link-fail | - | link: undefined sys$setdfprot |
 | `sys_setpra` | link-fail | - | link: undefined sys$setpra |
 | `sys_setshlv` | link-fail | - | link: undefined sys$setshlv |
 | `sys_show_intr` | link-fail | - | link: undefined sys$delete_intrusion, sys$show_intrusion |
-| `sys_sigprc` | compile-fail | - | link: undefined signal |
+| `sys_sigprc` | compile-fail | - | compile: error: ‘SIGUSR1’ undeclared (first use in this function); did you mean ‘C$_SIGUSR1’? |
 | `sys_snderr` | link-fail | - | link: undefined sys$snderr |
 | `sys_subsystem` | link-fail | - | link: undefined sys$subsystem |
 | `sys_suspend` | link-fail | - | link: undefined sys$cmexec |
 | `sys_sys_event` | link-fail | - | link: undefined sys$clear_system_event, sys$cpu_transitionw, sys$set_system_event |
-| `sys_timcon` | link-fail | - | link: undefined sys$timcon |
-| `sys_trans` | compile-fail | - | link: undefined sys$abort_transw, sys$end_transw, sys$start_transw |
+| `sys_trans` | compile-fail | - | compile: error: unknown type name ‘XABITMDEF’ |
 | `sys_unwind` | link-fail | - | link: undefined lib$match_cond |
 
 ## Other tiers

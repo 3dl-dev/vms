@@ -1,0 +1,49 @@
+vms-fd1: VMS host -- declare what vms-ld.c and vms-ar.c call
+
+The VMS-host wrappers around the native linker and librarian call
+SYS$TRNLNM, SYS$CRELNM, decc$to_vms and mkstemps without a declaration in
+scope.  That was a warning with the C compilers these files were written for;
+GCC 14 makes an implicit function declaration an error, so a VMS-hosted build
+of ld.exe and ar.exe stops there.  Include the C RTL's <unixlib.h> (which
+declares decc$to_vms) and declare the two logical name services, both under
+VMS, and declare mkstemps, which libiberty supplies but declares only when
+config.h has run (these files do not include it).
+
+--- a/gcc/config/vms/vms-ld.c
++++ b/gcc/config/vms/vms-ld.c
+@@ -34,6 +34,17 @@
+ #include <safe-ctype.h>
+ #include <sys/stat.h>
+ 
++#ifdef VMS
++/* decc$to_vms is declared by the C RTL's <unixlib.h>.  */
++#include <unixlib.h>
++
++/* The logical name services called below, by their upper-case names.  */
++extern int SYS$TRNLNM (unsigned int *, void *, void *, unsigned char *,
++		       void *);
++extern int SYS$CRELNM (unsigned int *, void *, void *, unsigned char *,
++		       void *);
++#endif
++
+ /* Macro for logicals.  */
+ #define LNM__STRING 2
+ #define LNM_C_NAMLENGTH 255
+--- a/gcc/config/vms/vms-ar.c
++++ b/gcc/config/vms/vms-ar.c
+@@ -28,6 +28,15 @@
+ 
+ #include "libiberty.h"
+ 
++#ifdef VMS
++/* decc$to_vms is declared by the C RTL's <unixlib.h>.  */
++#include <unixlib.h>
++#endif
++
++/* libiberty supplies mkstemps where the C library has none; this file does
++   not include config.h, so libiberty.h does not declare it here.  */
++extern int mkstemps (char *, int);
++
+ #define FATAL_EXIT_CODE (44 | 0x10000000)
+ 
+ /* Librarian arguments.  */

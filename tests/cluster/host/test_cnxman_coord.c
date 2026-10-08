@@ -2207,6 +2207,8 @@ static int f297_open_to(vms_csid_t dst, struct vms_cm_open *o)
 {
 	uint32_t k;
 
+	memset(o, 0, sizeof(*o));   /* no open: every cell reads 0, never garbage */
+
 	for (k = 0; k < count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD); k++) {
 		const struct sent_frame *sf =
 			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD, k);

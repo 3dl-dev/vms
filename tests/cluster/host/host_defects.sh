@@ -1361,6 +1361,7 @@ EOF
         require_fail) cat <<'EOF'
 and NO open yet: their answers come first
 the coordinator waits in RECORDS
+each 0x81/0x05 consumed and counted, none unrouted
 EOF
                       ;;
         esac;;

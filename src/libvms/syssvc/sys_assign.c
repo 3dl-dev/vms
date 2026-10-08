@@ -680,6 +680,16 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             if (fd < 0) {
                 fd = open(devres.resolved_path, O_RDONLY);
             }
+            /*
+             * TT: is THIS process's terminal (rd vms-d900). A process that
+             * may not open the console node itself (it is not the substrate's
+             * superuser) still holds its terminal on its standard input --
+             * the console line its login session runs on, OPA0:, the one
+             * terminal the executive's device table carries -- so the
+             * channel's byte path is that descriptor, not a refusal.
+             */
+            if (fd < 0 && devres.is_terminal && isatty(STDIN_FILENO))
+                fd = dup(STDIN_FILENO);
         }
     } else {
         /* Not a VMS device -- try to open as a plain file */

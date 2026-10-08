@@ -517,6 +517,32 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     if (changed)
         vms_terminal_apply(term);
 
+    /* The width and page length are the TERMINAL's, held in the executive's
+     * device row, where every image's $QIO IO$_SENSEMODE and $GETDVI read
+     * them (rd vms-d900; vms-a36): set them there through a channel to TT:,
+     * keeping the other characteristics as the device has them. */
+    if ((width_val && *width_val) || (page_val && *page_val)) {
+        static const char ttn[] = "TT:";
+        struct dsc$descriptor_s td = { sizeof ttn - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)ttn };
+        uint16_t tch = 0;
+        if (sys$assign(&td, &tch, 0, NULL, 0) & 1) {
+            uint8_t cb[12];
+            uint16_t iosb[4];
+            memset(cb, 0, sizeof cb);
+            if ((sys$qiow(0, tch, IO$_SENSEMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0) & 1) &&
+                (iosb[0] & 1)) {
+                if (width_val && *width_val) {
+                    cb[2] = (uint8_t)(term->width & 0xFF);
+                    cb[3] = (uint8_t)((term->width >> 8) & 0xFF);
+                }
+                if (page_val && *page_val)
+                    cb[7] = (uint8_t)term->page;
+                (void)sys$qiow(0, tch, IO$_SETMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
+            }
+            (void)sys$dassgn(tch);
+        }
+    }
+
     return SS$_NORMAL;
 }
 

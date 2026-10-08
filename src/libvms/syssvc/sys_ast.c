@@ -231,7 +231,7 @@ uint32_t sys$clrast(void)
  */
 uint32_t vms$$async_begin(uint32_t efn)
 {
-    if (efn == 128 /* EFN$C_ENF */)
+    if ((efn & 0xFFu) == 128 /* EFN$C_ENF, in the low byte (rd vms-3e9e) */)
         return SS$_NORMAL;
     uint32_t c = sys$clref(efn);
     if (c == SS$_ILLEFC || c == SS$_UNASEFC)
@@ -253,7 +253,7 @@ uint32_t vms$$async_finish(uint32_t efn, void *iosb, uint32_t status,
     }
     if (!(status & 1))
         return status;
-    if (efn < 128)
+    if ((efn & 0xFFu) < 128)
         (void)sys$setef(efn);
     if (astadr) {
         uint32_t st = sys$dclast(astadr, astprm, 3 /* user mode: the access mode of the caller */);

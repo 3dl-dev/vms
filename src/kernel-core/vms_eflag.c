@@ -252,6 +252,21 @@ static int efn_resolve(struct vms_proc *proc, uint32_t efn,
 }
 
 /*
+ * efn_normalize - the event flag number a request names (rd vms-3e9e).
+ *
+ * VMS uses the low byte of the efn longword: 256 and 1024 name event flag 0,
+ * 255 (and 0xFFFFFFFF) is no event flag at all (SS$_ILLEFC), and 128 is
+ * EFN$C_ENF, "no event flag": $SETEF/$CLREF of it touch nothing and answer
+ * SS$_WASSET, $READEF answers SS$_WASSET, $WAITFR returns at once. Observed
+ * on OpenVMS VAX V7.3 and Alpha V8.4, docs/oracle/semantics/ef/.
+ */
+#define VMS_EFN_ENF 128u
+static uint32_t efn_normalize(uint32_t efn)
+{
+    return efn & 0xFFu;
+}
+
+/*
  * vms_ioctl_setef - Set event flag
  */
 long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg)
@@ -266,6 +281,11 @@ long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
+    if (args.efn == VMS_EFN_ENF) {          /* no flag: nothing to touch */
+        args.status = SS__WASSET;
+        goto out;
+    }
 
     exec_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
@@ -362,6 +382,11 @@ long vms_ioctl_clref(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
+    if (args.efn == VMS_EFN_ENF) {          /* no flag: nothing to touch */
+        args.status = SS__WASSET;
+        goto out;
+    }
 
     exec_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
@@ -407,6 +432,11 @@ long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
+    if (args.efn == VMS_EFN_ENF) {          /* no flag: nothing to wait for */
+        args.status = SS__NORMAL;
+        goto out;
+    }
 
     exec_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
@@ -486,6 +516,7 @@ long vms_ioctl_wflor(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
 
     /*
      * NO "efn must be a cluster base" check. ORACLE-PINNED (vms-2a8):
@@ -549,6 +580,7 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
 
     /* No cluster-base check -- see the note in vms_ioctl_wflor above. */
     exec_lock(&proc->ef.lock);
@@ -602,6 +634,12 @@ long vms_ioctl_readef(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
+    if (args.efn == VMS_EFN_ENF) {          /* no flag: WASSET, state untouched */
+        args.status = SS__WASSET;
+        args.state = 0;
+        goto out;
+    }
 
     exec_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitcv, &bit, &guard) < 0) {
@@ -647,6 +685,7 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
 
     idx = common_idx(args.efn);
     if (idx < 0) {
@@ -728,6 +767,7 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    args.efn = efn_normalize(args.efn);
 
     idx = common_idx(args.efn);
     if (idx < 0) {

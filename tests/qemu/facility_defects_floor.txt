@@ -475,4 +475,6 @@
 # Raised to 170 by acp-fat-recattr-not-applied (vms-b447: IO$_CREATE records
 # the creator's record attributes in the FAT; anchors test_syssvc_rms_acp's
 # default-FAB $OPEN header-attribute assertions).
-170
+# Raised to 172 by the two vms-47f7 defects (acp-dir-used-blocks-ignore-eof,
+# libcreatedir-rooted-default-unresolved).
+172

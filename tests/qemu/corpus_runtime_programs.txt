@@ -17,6 +17,7 @@ lib_bbssi
 lib_char
 lib_convert_date_string
 lib_crc
+lib_create_dir
 lib_currency
 lib_cvt_dtb
 lib_cvt_dx_dx

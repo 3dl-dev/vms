@@ -828,7 +828,7 @@ uint32_t lib$get_logical(
  * Returns SS$_CREATED if the directory was made, SS$_NORMAL if it already existed.
  * owner is a UIC longword, prot_enable/prot_value select protection bits (the rest come
  * from the process default protection), max_versions is the directory's version limit,
- * initial_alloc is the block allocation (1..64). rvn must be absent or 0.
+ * initial_alloc is the block allocation (at least 1). rvn must be absent or 0.
  */
 uint32_t lib$create_dir(
     const struct dsc$descriptor_s *spec,

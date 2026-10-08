@@ -35,4 +35,21 @@ Results:
 - **At DAP 7.2, the VAX sends the rename.** With either SYSCAP it sends ACCESS RENAME. With OVMX's SYSCAP it uses the DAP 5.6 field layout: no DAP 7 ACCESS extension and no segment trailer.
 - **Link-A names make no difference.**
 
-OVMX therefore advertises DAP 7.2. The lab driver `faldrv2.c` and `run3.sh` run OVMX's compiled server under three concurrent dapprobe instances, one per link, for a lab replay of whole VMS commands. They have not been run yet; the lab-access decision is pending.
+OVMX therefore advertises DAP 7.2. The lab driver `faldrv2.c` and `run3.sh` run OVMX's compiled server under three concurrent dapprobe instances, one per link, for a lab replay of whole VMS commands. They were first run on 2026-10-08 (below).
+
+## Third run: DAP 7.2 (rd vms-b2f): `falverbs-live3-*`
+
+`faldrv2` (built from this branch, so it advertises DAP 7.2 and ACKs each DIRLIST file for a DAP 7 client) ran at 1.43 under `run3.sh`. VAX1 V7.3 typed each command; `falverbs-live3-vax1-console.txt` is its console, and `falverbs-live3-<command>-<link>.log` is each link's DAP traffic as `dapprobe_skipci.py` logged it. The serve directory held `X.TXT`, `BRK1.TXT`, `BRK2.TXT` and `PRIVP.TXT`; the driver refuses `PRIV*` files, as the executive refuses a protected one.
+
+| command on VAX1 | result |
+|---|---|
+| `RENAME ...::X.TXT ...::Y.TXT` (`ren-0`, the earlier lab binary, which sent no per-file ACK, with `CFG_VER` patching its CONFIG to 7.2) | `RMS-F-BUG_DAP, DAP code = 0001A007`: a DAP 7.2 client wants the per-file ACK before ACCESS COMPLETE. |
+| `RENAME ...::X.TXT ...::Y.TXT` (`ren2`) | Renamed. Link B carried ACCESS RENAME + NAME; X.TXT became Y.TXT. |
+| `DIRECTORY/FULL ...::BRK*.TXT` (`dirf`) | Two full entries, `Total of 2 files`. The dates show `<None specified>` because the driver's file stand-in has none. |
+| `TYPE ...::BRK*.TXT` (`type`) | Both files typed, each headed by its name. |
+| `DELETE ...::BRK2.TXT;*` (`del`) | Deleted (three links: two DIRLISTs, then the ERASE). |
+| `DELETE ...::PRIVP.TXT;*` (`delp`) | `%DELETE-W-FILNOTDEL ... -RMS-E-PRV`, as against a VAX FAL. |
+| `RENAME ...::PRIVP.TXT ...::Z.TXT` (`renp`) | `-RMS-F-RMV, ACP remove function failed`, the same lines as the VAX-to-VAX run (`../vax1-console.txt`). |
+| `DIRECTORY ...::NOSUCH.TXT` (`nof`) | `%DIRECT-W-NOFILES, no files found`. |
+
+With OVMX's SYSCAP the 7.2 client still uses the DAP 5.6 field layout: no segment trailer, no type-18 File ID. Test 7 of `tests/vmsdecnet/test_dnet_fal_server.c` replays six of these links and requires OVMX's reply to be the bytes VAX1 accepted.

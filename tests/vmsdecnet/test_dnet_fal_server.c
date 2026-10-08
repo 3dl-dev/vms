@@ -87,11 +87,32 @@ static int brk_find(const char *nm)
 static int nonsystem(void) { return strcmp(g_user, "SYSTEM") != 0; }
 
 struct sctx { char found[8][256]; char esa[256]; int pos, nfound; uint32_t sts; };
+
+/* rd vms-b2f live bracket at DAP 7.2 (falverbs-live3-*): faldrv2's serve
+ * directory as the VAX listed it, SYS$SYSDEVICE:[SYSMGR]; PRIV* files are
+ * the ones the lab refuses. g_lab3 selects it. */
+static int g_lab3;
+static struct { const char *nm; int exists; } g_l3[] = {
+    { "X.TXT", 1 }, { "Y.TXT", 0 }, { "BRK1.TXT", 1 }, { "BRK2.TXT", 1 }, { "PRIVP.TXT", 1 },
+};
+#define NL3 ((int)(sizeof g_l3 / sizeof g_l3[0]))
+static int l3_find(const char *nm)
+{ for (int i = 0; i < NL3; i++) if (!strcmp(g_l3[i].nm, nm)) return i; return -1; }
 int dnet_fal_search_begin(const char *spec, void **ctx)
 {
     static struct sctx c;
     memset(&c, 0, sizeof c);
     char nm[128]; namepart(spec, nm, sizeof nm);
+    if (g_lab3) {
+        const char *star = strchr(nm, '*');
+        for (int i = 0; i < NL3; i++)
+            if (g_l3[i].exists && (star ? !strncmp(g_l3[i].nm, nm, (size_t)(star - nm)) : !strcmp(g_l3[i].nm, nm)))
+                snprintf(c.found[c.nfound++], sizeof c.found[0], "SYS$SYSDEVICE:[SYSMGR]%s;1", g_l3[i].nm);
+        const char *p = strrchr(spec, ']'); if (!p) p = strrchr(spec, ':');
+        snprintf(c.esa, sizeof c.esa, "SYS$SYSDEVICE:[SYSMGR]%s", p ? p + 1 : spec);
+        c.sts = c.nfound ? RMS$_NMF : RMS$_FNF;
+        *ctx = &c; return 0;
+    }
     if (strstr(spec, "GREET.TXT")) { snprintf(c.found[0], sizeof c.found[0], "DKA0:[SRV]GREET.TXT;1"); c.nfound = 1; }
     else if (strstr(spec, "PUTNAME.TXT") && g_put_spec[0]) { snprintf(c.found[0], sizeof c.found[0], "DKA0:[SRV]PUTNAME.TXT;1"); c.nfound = 1; }
     else if (!g_v2v && strstr(spec, "SYS$LOGIN:BRK")) {
@@ -179,6 +200,12 @@ int dnet_fal_erase(const char *spec, uint32_t *sts, uint32_t *stv)
 {
     char nm[128]; namepart(spec, nm, sizeof nm);
     *stv = 0;
+    if (g_lab3) {
+        int i = l3_find(nm);
+        if (i < 0 || !g_l3[i].exists) { *sts = RMS$_FNF; return -1; }
+        if (!strncmp(nm, "PRIV", 4)) { *sts = RMS$_PRV; *stv = SS$_NOPRIV; return -1; }
+        g_l3[i].exists = 0; *sts = RMS$_NORMAL; return 0;
+    }
     if (g_v2v && brk_find(nm) >= 0) {
         int i = brk_find(nm);
         if (!g_brk[i].exists) { *sts = RMS$_FNF; return -1; }
@@ -194,6 +221,14 @@ int dnet_fal_rename(const char *oldspec, const char *newspec, uint32_t *sts, uin
 {
     char nm[128]; namepart(oldspec, nm, sizeof nm);
     *stv = 0;
+    if (g_lab3) {
+        char nn[128]; namepart(newspec, nn, sizeof nn);
+        int i = l3_find(nm), j = l3_find(nn);
+        if (i < 0 || !g_l3[i].exists) { *sts = RMS$_FNF; return -1; }
+        if (!strncmp(nm, "PRIV", 4)) { *sts = RMS$_PRV; *stv = SS$_NOPRIV; return -1; }
+        if (j < 0) { *sts = RMS$_SYN; return -1; }
+        g_l3[i].exists = 0; g_l3[j].exists = 1; *sts = RMS$_NORMAL; return 0;
+    }
     if (g_v2v && brk_find(nm) >= 0) {
         char nn[128]; namepart(newspec, nn, sizeof nn);
         int i = brk_find(nm), j = brk_find(nn);
@@ -619,6 +654,73 @@ static void v2v_replay(const char *wire)
     g_v2v = 0;
 }
 
+/* 7. rd vms-b2f: the live bracket at DAP 7.2. VAX1 (V7.3) ran RENAME,
+ * DIRECTORY, TYPE, DELETE ;* and the refused RENAME/DELETE against OVMX's
+ * compiled FAL server (faldrv2 under dapprobe_skipci.py, 2026-10-08); the VAX
+ * console (falverbs-live3-vax1-console.txt) shows each command completing as
+ * on a VAX. Each link's client segments are replayed here and OVMX's reply
+ * must be the bytes the real VAX accepted, segment for segment. */
+struct l3link { char cli[16][3300]; int ncli; char srv[24][3300]; int nsrv; };
+static int l3_load(const char *dir, const char *name, struct l3link *L)
+{
+    char path[1024]; snprintf(path, sizeof path, "%s/falverbs-live3-%s.log", dir, name);
+    FILE *f = fopen(path, "r");
+    if (!f) { printf("  cannot open %s\n", path); return -1; }
+    static char line[8192];
+    memset(L, 0, sizeof *L);
+    while (fgets(line, sizeof line, f)) {
+        char *p;
+        if ((p = strstr(line, " RX DAP seg ")) && L->ncli < 16 &&
+            sscanf(p, " RX DAP seg %*d %3299s", L->cli[L->ncli]) == 1)
+            L->ncli++;
+        else if ((p = strstr(line, " TX DAP ")) && L->nsrv < 24 &&
+                 sscanf(p, " TX DAP %3299s", L->srv[L->nsrv]) == 1)
+            L->nsrv++;
+    }
+    fclose(f);
+    return 0;
+}
+static void live3_bracket(const char *dir)
+{
+    static const struct { const char *log, *what; } links[] = {
+        { "ren2-0", "RENAME X Y, link A: the DIRLIST of X.TXT, a DAP 7 per-file ACK, ACCOMP" },
+        { "ren2-1", "RENAME X Y, link B: ACCESS RENAME + NAME -> NAME ACK NAME ACK ACCOMP (the RENAME a DAP 5.6 FAL never got)" },
+        { "del-2",  "DELETE BRK2.TXT;*, link C: ERASE by name -> NAME ACK ACCOMP" },
+        { "delp-2", "DELETE PRIVP.TXT;*, link C: ERASE refused STATUS PRV 0x4055 STV 0x24 (VAX printed RMS-E-PRV)" },
+        { "renp-1", "RENAME PRIVP Z, link B: refused STATUS RMV 0x405f, no STV (VAX printed RMS-F-RMV)" },
+        { "nof-0",  "DIRECTORY NOSUCH.TXT: NAMEs + STATUS FNF (VAX printed NOFILES)" },
+    };
+    g_lab3 = 1;
+    g_user = "SYSTEM";
+    for (size_t i = 0; i < sizeof links / sizeof links[0]; i++) {
+        static struct l3link L;
+        char label[240];
+        snprintf(label, sizeof label, "live3 DAP 7.2 %s", links[i].what);
+        if (l3_load(dir, links[i].log, &L) != 0 || L.ncli < 2 || L.nsrv < 2) { CHECK(0, label); continue; }
+        static struct script sc;
+        memset(&sc, 0, sizeof sc);
+        static const char *in[16];
+        for (int k = 0; k < L.ncli; k++) in[k] = L.cli[k];
+        sc.in = in; sc.nin = L.ncli;
+        static struct dnet_dap_transport t;
+        memset(&t, 0, sizeof t);
+        t.send = s_send; t.recv = s_recv; t.ctx = &sc;
+        (void)dnet_fal_server_run(&t);
+        int ok = sc.nout == L.nsrv;
+        for (int k = 0; ok && k < sc.nout; k++) ok = !strcmp(sc.out[k], L.srv[k]);
+        if (!ok) {
+            printf("  %s: OVMX %d segments, the accepted run %d\n", label, sc.nout, L.nsrv);
+            for (int k = 0; k < sc.nout || k < L.nsrv; k++)
+                printf("    [%d] ovmx %s\n        live %s\n", k, k < sc.nout ? sc.out[k] : "-", k < L.nsrv ? L.srv[k] : "-");
+        }
+        CHECK(ok, label);
+        if (ok) printf("  ok: %s\n", label);
+    }
+    CHECK(!g_l3[0].exists && g_l3[1].exists && !g_l3[3].exists && g_l3[4].exists,
+          "live3: X was renamed to Y, BRK2 erased, PRIVP refused both times and still there");
+    g_lab3 = 0;
+}
+
 int main(int argc, char **argv)
 {
     static struct dnet_dap_transport t;
@@ -710,6 +812,10 @@ int main(int argc, char **argv)
     /* 6. The VAX<->VAX SYS$LOGIN capture (wildcards, VFC, refusals, NOFILES). */
     if (argc < 4) CHECK(0, "the VAX<->VAX SYS$LOGIN capture path is given (ctest passes it)");
     else v2v_replay(argv[3]);
+
+    /* 7. The DAP 7.2 live bracket (rd vms-b2f). */
+    if (argc < 5) CHECK(0, "the DAP 7.2 live-bracket directory is given (ctest passes it)");
+    else live3_bracket(argv[4]);
 
     printf("test_dnet_fal_server: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

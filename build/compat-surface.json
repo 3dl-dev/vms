@@ -6380,7 +6380,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/include/rms/xab.h",
       "verified_against": null,
-      "notes": "",
+      "notes": "vms-5dd2: on the ACP path $DISPLAY fills it from the FH2 ident-area dates IO$_ACCESS returns (previously left untouched there). The ACP does not stamp dates at create yet, so OVMX-created files read zero dates (vms-ab49)",
       "plan_ref": "vms-801"
     },
     {
@@ -6395,7 +6395,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/include/rms/xab.h",
       "verified_against": null,
-      "notes": "",
+      "notes": "vms-5dd2: on the ACP path $DISPLAY fills protection + owner UIC from the FH2 IO$_ACCESS returns (previously left untouched there)",
       "plan_ref": "vms-801"
     },
     {

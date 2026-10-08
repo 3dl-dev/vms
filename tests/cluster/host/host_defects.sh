@@ -1312,6 +1312,8 @@ the foreign member got its op 0x09
 [100:102] a first admission: one below its slot
 [104:106] highest slot
 [106:114] the -900 s delta
+the admission is proposed
+[24] = 1, the merge rebuild
 EOF
                       ;;
         esac;;

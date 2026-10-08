@@ -703,6 +703,17 @@ static int cnxman_jop_dir_inquire(void *ctx, vms_scs_sysid_t dst,
 					    cnxman_jop_dir_cb, cn));
 }
 
+/* What our own CONNECT's data advertised, read back off the bytes sent. */
+static void cnxman_note_connect_ack(struct vms_csb *csb, const uint8_t *cd)
+{
+	uint16_t ack = 0u;
+
+	if (cd != NULL &&
+	    vms_cm_conndata_peer_taken(cd, VMS_CM_CONNDATA_LEN, &ack) ==
+		    VMS_CODEC_OK)
+		cnxman_csb_note_connect_ack(csb, ack);
+}
+
 /*
  * Open a connection FROM one of this node's own registered SYSAPs. Success
  * also feeds the CSB ladder -- but ONLY for the VMS$VAXcluster local name: the
@@ -1247,17 +1258,6 @@ static vms_scs_sysid_t cnxman_bind_accepted(struct vms_cnxman *cn,
 		    CNXMAN_CSB_CONN_BIND)
 		cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid);
 	return peer;
-}
-
-/* What our own CONNECT's data advertised, read back off the bytes sent. */
-static void cnxman_note_connect_ack(struct vms_csb *csb, const uint8_t *cd)
-{
-	uint16_t ack = 0u;
-
-	if (cd != NULL &&
-	    vms_cm_conndata_peer_taken(cd, VMS_CM_CONNDATA_LEN, &ack) ==
-		    VMS_CODEC_OK)
-		cnxman_csb_note_connect_ack(csb, ack);
 }
 
 /* rd vms-f297: an OUTBOUND connection opened -- read the peer's ACCEPT data

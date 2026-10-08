@@ -991,7 +991,6 @@ static long term_rpi(struct vms_proc *proc, unsigned long arg, int set)
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
 
-    (void)proc;
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
@@ -1000,7 +999,11 @@ static long term_rpi(struct vms_proc *proc, unsigned long arg, int set)
     if (!set)
         memset(args.rpi, 0, sizeof(args.rpi));
 
-    if (set && !exec_current_is_privileged()) {
+    /* Who may vouch for a terminal's remote port: the substrate superuser (the
+     * boot-started NETACP) or a VMS process holding SETPRV -- the same
+     * authority VMS gives a privileged network ACP over a UCB. */
+    if (set && !exec_current_is_privileged() &&
+        !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
         args.status = SS__NOPRIV;
         goto out;
     }

@@ -559,6 +559,9 @@ setexit-status-not-recorded
 spawn-notify-flag-not-set
 register-subprocess-identity-self-declared
 libspawn-prcnam-dropped
+efn0-enqw-not-set
+setdfprot-not-stored
+clrast-no-delivery
 crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
@@ -948,6 +951,65 @@ $GETJPI-by-pid resolves the same registered subprocess
 EOF
                       ;;
         knock_on_why)  echo "the same skipped \$SETPRN means the subprocess is unnamed everywhere: the by-name lookup that anchors require_fail fails outright, so the two assertions that read fields off ITS result (the prcnam string, the cross-check pid) fail with it, and the separate by-VMS-pid lookup finds a real PCB but with no prcnam ever stamped on it, so its own prcnam comparison also reddens -- one missing \$SETPRN call, four readers of its effect.";;
+        esac;;
+
+    efn0-enqw-not-set)
+        case "$_f" in
+        facility)     echo "\$ENQW completion sets the named event flag, flag 0 included (vms-f811 efn0)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_efn0";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$enqw() sets the caller's event flag with 'if (efn < 128) sys\$setef(efn);' -- flag 0 is a real flag on VMS and only EFN\$C_ENF (128) means no flag. The mutation changes the guard to 'efn != 0 && efn < 128', the pre-fix behaviour that treated 0 as no-flag, so a synchronous enqueue naming EF 0 completes without setting it. The guard line (4-space indent, no && tail) is unique to sys\$enqw; sys\$enq's has an '&& (status & 1)' tail. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$ENQW (efn 0) set EF 0
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    setdfprot-not-stored)
+        case "$_f" in
+        facility)     echo "\$SETDFPROT default-protection attribute is held per process in the executive (vms-44a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_setdfprot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_dfprot() stores a new default protection with 'proc->dfprot = (uint16_t)(args.newprot & 0xFFFFu);'. The mutation replaces that store with a self-assignment, so the set flag flips but the value never lands: the next read returns the initial default instead of what was set, a REGISTER_CONTINUE child inherits the initial default, and the previous-value return of a second set is wrong. Unique line in the file; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a later read returns what was set
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a REGISTER_CONTINUE child (activated image) inherits it from the executive
+setting returns the previous value
+EOF
+                      ;;
+        knock_on_why)  echo "all three assertions read back the stored value; with the store dropped each sees the initial default.";;
+        esac;;
+
+    clrast-no-delivery)
+        case "$_f" in
+        facility)     echo "\$CLRAST lets the next queued AST be delivered inside the running AST routine (vms-44a)";;
+        targets)      echo "libvms/syssvc/sys_ast.c";;
+        suites_red)   echo "test_syssvc_clrast";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$clrast() clears the in-progress marker and then drains the executive's AST queue with 'vms\$\$deliver_pending_asts();' so an AST queued inside the routine runs before \$CLRAST returns. The mutation deletes that drain (the marker is still cleared, status still SS\$_NORMAL), so the queued AST waits until the routine returns -- the ordering \$CLRAST exists to change. The 8-space-indented call line is unique in sys_ast.c; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+with $CLRAST it ran before the first AST returned (delivered by $CLRAST)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
         esac;;
 
     crtl-fwrite-bypasses-rms)
@@ -6798,6 +6860,12 @@ apply_edit() {
         # REGISTER (share_pid stays false -- the PID is still genuinely fresh).
         # Gone after apply (no-op re-apply).
         sed -i 's|return vms_ioctl_register(arg, true, false);|return vms_ioctl_register(arg, false, false); /* NEGCTL register-subprocess-identity-self-declared */|' "$_file";;
+    clrast-no-delivery)
+        sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
+    efn0-enqw-not-set)
+        sed -i 's|^    if (efn < 128)$|    if (efn != 0 \&\& efn < 128) /* NEGCTL efn0-enqw-not-set */|' "$_file";;
+    setdfprot-not-stored)
+        sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)
         # Unique guard (sys$creprc's own $SETPRN gate); '0 &&' makes it
         # structurally unreachable so the created subprocess never gets named.

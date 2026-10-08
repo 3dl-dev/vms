@@ -68,6 +68,7 @@ int main(void)
     st = sys$setdfprot(&want, &old);
     CHECK(st == RMS$_NORMAL && old == 0xFF00u, "setting returns the previous value");
     st = sys$setdfprot(NULL, &old);
+    /* negctl: setdfprot-not-stored */
     CHECK(st == RMS$_NORMAL && old == 0x0F00, "a later read returns what was set");
 
     uint32_t v = 0;

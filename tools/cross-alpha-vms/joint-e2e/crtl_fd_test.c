@@ -255,6 +255,17 @@ int main(int argc, char **argv)
         rewinddir(d);
         e = readdir(d);
         check(e != NULL && strcmp(e->d_name, first) == 0, 37, "rewinddir starts the search over");
+        long pos = telldir(d);
+        char second[256] = "";
+        e = readdir(d);
+        if (e)
+            snprintf(second, sizeof second, "%s", e->d_name);
+        seekdir(d, pos);
+        e = readdir(d);
+        printf("CFD: telldir -> %ld, entry \"%s\", after seekdir \"%s\"\n", pos, second,
+               e ? e->d_name : "(none)");
+        check(n >= 2 && pos == 1 && second[0] && e != NULL && strcmp(e->d_name, second) == 0, 40,
+              "telldir/seekdir return to the same entry");
         closedir(d);
     }
     errno = 0;

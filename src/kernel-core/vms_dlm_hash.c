@@ -82,7 +82,7 @@ enum vms_dlm_hash_status vms_dlm_name_hash(uint16_t group, uint8_t mode,
 					   uint32_t name_len,
 					   uint32_t *out)
 {
-	if (name == NULL || out == NULL)
+	if (name == (const void *)0 || out == (void *)0)
 		return VMS_DLM_HASH_E_INVAL;
 	if (name_len == 0u || name_len > VMS_DLM_HASH_NAME_MAX)
 		return VMS_DLM_HASH_E_RANGE;

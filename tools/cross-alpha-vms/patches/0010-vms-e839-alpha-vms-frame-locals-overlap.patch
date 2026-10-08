@@ -1,0 +1,40 @@
+vms-e839: alpha VMS -- the locals area must not overlap the arguments above it
+
+alpha_vms_initial_elimination_offset puts the frame-pointer area (the
+locals) at ALPHA_ROUND (sa_size + pv_save_size) above the stack pointer,
+but computes the argument pointer -- and alpha_compute_frame_size the whole
+frame -- from ALPHA_ROUND of the unrounded sum.  When sa_size + pv_save_size
+is 8 mod 16 (a stack procedure saving FP, RA and PV: 24 bytes), the locals
+start 8 bytes higher than the size budget allows for, so the last local
+quadword overlaps the first quadword above the frame: for a varargs
+function, the word the argument-home routine fills with the argument count.
+At -O0 a function f (void *a, char *b, ...) keeps b in that word, and b
+reads back as the argument count after OTS$HOME_ARGS.
+
+Round the register-save area before adding the locals and pretend
+arguments in both places, so the argument pointer and the frame size cover
+the padding.
+
+--- a/gcc/config/alpha/alpha.cc
++++ b/gcc/config/alpha/alpha.cc
+@@ -7335,8 +7335,9 @@
+   sa_size *= 8;
+ 
+   if (TARGET_ABI_OPEN_VMS)
+-    frame_size = ALPHA_ROUND (sa_size
+-			      + (alpha_procedure_type == PT_STACK ? 8 : 0)
++    frame_size = ALPHA_ROUND (ALPHA_ROUND (sa_size
++					   + (alpha_procedure_type == PT_STACK
++					      ? 8 : 0))
+ 			      + frame_size
+ 			      + crtl->args.pretend_args_size);
+   else
+@@ -7478,7 +7479,7 @@
+ 	offset = ALPHA_ROUND (sa_size + pv_save_size);
+ 	break;
+       case ARG_POINTER_REGNUM:
+-	offset = (ALPHA_ROUND (sa_size + pv_save_size
++	offset = (ALPHA_ROUND (ALPHA_ROUND (sa_size + pv_save_size)
+ 			       + get_frame_size ()
+ 			       + crtl->args.pretend_args_size)
+ 		  - crtl->args.pretend_args_size);

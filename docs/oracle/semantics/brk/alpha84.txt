@@ -1,0 +1,21 @@
+# provenance: OpenVMS Alpha V8.4 (AXPbox ES40), ovmx-lab pod semalpha-1 node ALPHA1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/brk.py sha256=676c5fd44b18f64344520f81ab3be65756cd71781c5eb3c1fecd7910fdfc279e
+=== SEMPROBE brk BEGIN ===
+BRK.TT st=00000001 iosb=1 sent=1 timedout=0 refused=0
+BRK.TT.USERCLASS st=00000001 iosb=1 sent=1 timedout=0 refused=0
+BRK.TT.BADCLASS st=00000014 iosb=0 sent=0 timedout=0 refused=0
+BRK.TT.EMPTY st=00000001 iosb=1 sent=1 timedout=0 refused=0
+BRK.TT.HUGE st=00000001 iosb=1 sent=1 timedout=0 refused=0
+BRK.NODEV st=00000144 iosb=0 sent=0 timedout=0 refused=0
+BRK.NOUSER st=00000001 iosb=132 sent=0 timedout=0 refused=0
+BRK.BADTYPE st=00000014 iosb=0 sent=0 timedout=0 refused=0
+BRK.TYPE0 st=00000014 iosb=0 sent=0 timedout=0 refused=0
+BRK.DEVICE.NOSENDTO st=0000000C iosb=0 sent=0 timedout=0 refused=0
+OPR.REQUEST st=00000001
+OPR.SHORT st=00000001
+OPR.BADTYPE st=00000001
+OPR.BADCHAN st=00002224
+OPR.MBXCHAN st=00000001
+=== SEMPROBE brk END ===

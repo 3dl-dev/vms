@@ -17,6 +17,12 @@
 #include <vms/stsdef.h>
 #include <vms/descrip.h>
 #include <vms/lnmdef.h>
+#include <vms/starlet.h>
+#include <vms/atrdef.h>
+#include <vms/fibdef.h>
+#include <vms/fatdef.h>
+#include <vms/iodef.h>
+#include <vms/ssdef.h>
 
 #define RMS_NMF 99018           /* RMS$_NMF (rmsdef) */
 
@@ -86,6 +92,70 @@ int main(void)
     st = SYS$ASSIGN(&devdsc, &chan, 0, 0, 0);
     printf("VMSABI: $ASSIGN %.*s st=%%X%08X chan=%u\n", (int)devlen, devname, (unsigned)st, chan);
     check((st & 1) && chan != 0, 30, "SYS$ASSIGN with a 32-bit descriptor gives a channel");
+    /* vms-38b: $QIOW IO$_ACCESS!IO$M_ACCESS on that channel, the way GCC's
+     * vms_file_stats_name asks the ACP for a file's attributes: a 32-bit FIB
+     * descriptor with the directory's File ID, the file name, the resultant
+     * name, and an attribute list. */
+    {
+        FIBDEF fib;
+        memset(&fib, 0, sizeof fib);
+        fib.fib$w_did[0] = nam.nam$w_did[0];
+        fib.fib$w_did[1] = nam.nam$w_did[1];
+        fib.fib$w_did[2] = nam.nam$w_did[2];
+        struct { unsigned int len; void *addr; } fibdsc = { sizeof fib, &fib };
+        char fname[64];
+        const char *rb = strrchr(rs, ']');
+        snprintf(fname, sizeof fname, "%s", rb ? rb + 1 : rs);
+        struct dsc$descriptor_s filedsc = { (unsigned short)strlen(fname), DSC$K_DTYPE_T, DSC$K_CLASS_S, fname };
+        char res[64];
+        unsigned short reslen = 0;
+        struct dsc$descriptor_s resdsc = { sizeof res, DSC$K_DTYPE_T, DSC$K_CLASS_S, res };
+        long long cre = 0;
+        FAT recattr;
+        char asc[ATR$S_ASCNAME];
+        unsigned int uchar = 0, uic = 0;
+        unsigned short fpro = 0;
+        memset(&recattr, 0, sizeof recattr);
+        ATRDEF atr[] = {
+            { ATR$S_ASCNAME, ATR$C_ASCNAME, asc },
+            { ATR$S_CREDATE, ATR$C_CREDATE, &cre },
+            { ATR$S_RECATTR, ATR$C_RECATTR, &recattr },
+            { ATR$S_UCHAR, ATR$C_UCHAR, &uchar },
+            { ATR$S_FPRO, ATR$C_FPRO, &fpro },
+            { ATR$S_UIC, ATR$C_UIC, &uic },
+            { 0, 0, 0 }
+        };
+        struct { unsigned short status, count; unsigned int dev; } iosb = { 0, 0, 0 };
+        st = SYS$QIOW(0, chan, IO$_ACCESS | IO$M_ACCESS, &iosb, 0, 0,
+                      &fibdsc, &filedsc, &reslen, &resdsc, atr, 0);
+        unsigned an = 0;
+        while (an < sizeof asc && asc[an] != ' ')
+            an++;
+        int padded = 1;
+        for (unsigned i = an; i < sizeof asc; i++)
+            if (asc[i] != ' ')
+                padded = 0;
+        printf("VMSABI-QIO: st=%%X%08X iosb=%%X%04X fid=(%u,%u,%u) res=\"%.*s\" asc=\"%.*s\" "
+               "rtype=%u rsize=%u cre=%%X%016llX uchar=%%X%08X fpro=%%X%04X uic=[%o,%o]\n",
+               (unsigned)st, iosb.status, fib.fib$w_fid[0], fib.fib$w_fid[1], fib.fib$w_fid[2] & 0xFF,
+               (int)reslen, res, (int)an, asc, recattr.fat$v_rtype, recattr.fat$w_rsize,
+               (unsigned long long)cre, uchar, fpro, uic >> 16, uic & 0xFFFF);
+        printf("VMSABI-QIOFID: (%u,%u,%u)\n", fib.fib$w_fid[0], fib.fib$w_fid[1], fib.fib$w_fid[2] & 0xFF);
+        check((st & 1) && (iosb.status & 1), 40, "SYS$QIOW IO$_ACCESS with an attribute list succeeds");
+        check(fib.fib$w_fid[0] == nam.nam$w_fid[0] && fib.fib$w_fid[1] == nam.nam$w_fid[1], 41,
+              "the FIB comes back with the File ID $SEARCH found");
+        check(reslen == strlen(fname) && memcmp(res, fname, reslen) == 0, 42,
+              "P3/P4 receive the resultant NAME.TYP;VER");
+        check(an == strlen(fname) && memcmp(asc, fname, an) == 0 && padded, 43,
+              "ATR$C_ASCNAME is NAME.TYP;VER padded with spaces");
+        check(cre != 0 && recattr.fat$v_rtype != 0, 44, "ATR$C_CREDATE and ATR$C_RECATTR are filled");
+        st = SYS$QIOW(0, chan, IO$_DEACCESS, &iosb, 0, 0, &fibdsc, 0, 0, 0, atr, 0);
+        check((st & 1) && (iosb.status & 1), 45, "SYS$QIOW IO$_DEACCESS releases the read access");
+        ATRDEF bad[] = { { 4, 99, &uchar }, { 0, 0, 0 } };
+        st = SYS$QIOW(0, chan, IO$_ACCESS, &iosb, 0, 0, &fibdsc, &filedsc, 0, 0, bad, 0);
+        check((st & 1) && iosb.status == SS$_BADATTRIB, 46, "an unknown attribute code is SS$_BADATTRIB");
+    }
+
     st = SYS$DASSGN(chan);
     check(st & 1, 31, "SYS$DASSGN releases it");
     check(!(SYS$DASSGN(chan) & 1), 32, "a second SYS$DASSGN of the same channel fails");

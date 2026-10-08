@@ -11,6 +11,9 @@
  *    $SETDDIR in the executive. A program that names a file or a directory
  *    relative to its default ([.LOG], X.DAT) then resolves it on the mounted,
  *    writable system disk.
+ *    LOGINOUT also defines SYS$LOGIN and SYS$SCRATCH to that directory in the
+ *    process logical name table; so does this (a program that writes to
+ *    SYS$SCRATCH:, as sys_set_security does, then finds it).
  * 3. The RMS force-bind anchor below.
  *
  * The process control block is NOT made here any more: libvms establishes it from
@@ -54,6 +57,20 @@ unsigned int corpus_rt_rms_bind_never(void)
 
 extern unsigned int sys$getuai(unsigned int, void *, void *, void *, void *, void *, void *);
 extern unsigned int sys$setddir(void *, unsigned short *, void *);
+extern unsigned int sys$crelnm(const unsigned int *, void *, void *, const unsigned char *, void *);
+
+static void define_process_logical(const char *name, const char *value)
+{
+    static char tab[] = "LNM$PROCESS_TABLE";
+    struct dsc$descriptor_s td = { sizeof(tab) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, tab };
+    struct dsc$descriptor_s nd = { (unsigned short)strlen(name), DSC$K_DTYPE_T, DSC$K_CLASS_S,
+                                   (char *)name };
+    struct { unsigned short len, code; void *buf; unsigned short *ret; } il[2] = {
+        { (unsigned short)strlen(value), 2 /* LNM$_STRING */, (void *)value, 0 },
+        { 0, 0, 0, 0 },
+    };
+    (void)sys$crelnm(0, &td, &nd, 0, il);
+}
 
 /* A UAI$_DEFDEV/UAI$_DEFDIR value, either a counted string (length byte first) or
  * the bare text, appended to out. */
@@ -95,5 +112,7 @@ static void corpus_rt_run_as_system(void)
         struct dsc$descriptor_s nd = { (unsigned short)strlen(ddir), DSC$K_DTYPE_T,
                                        DSC$K_CLASS_S, ddir };
         (void)sys$setddir(&nd, 0, 0);
+        define_process_logical("SYS$LOGIN", ddir);
+        define_process_logical("SYS$SCRATCH", ddir);
     }
 }

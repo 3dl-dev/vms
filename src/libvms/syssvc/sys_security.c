@@ -32,6 +32,14 @@
  * OVMX-LOCAL: sys$asctoid -- the name-to-value lookup in the rights-database
  *     reader (rtl/rightslist.c) runs in this process; the identifier's ATTRIBUTE
  *     flags are not read back: attrib is reported 0.
+ * OVMX-PARTIAL: sys$parse_acl (vms-d404) -- exec: identifier names are
+ *     looked up in RIGHTSLIST.DAT read over the executive ACP ($ASCTOID).
+ * OVMX-LOCAL: sys$parse_acl -- the ACE text is parsed into the binary ACE
+ *     (docs/oracle/vax73-acl.md layout) in this process.
+ * OVMX-PARTIAL: sys$format_acl (vms-d404) -- exec: identifier values are named
+ *     from RIGHTSLIST.DAT read over the executive ACP ($IDTOASC).
+ * OVMX-LOCAL: sys$format_acl -- the text is composed in this process; width,
+ *     terminator and indent are not applied (one ACE, one line).
  * OVMX-PARTIAL: sys$idtoasc (vms-44a) -- exec: the same ACP read of RIGHTSLIST.DAT.
  * OVMX-LOCAL: sys$idtoasc -- the value-to-name lookup runs in this process; a
  *     wildcard context (ctx) is refused, one identifier is looked up.

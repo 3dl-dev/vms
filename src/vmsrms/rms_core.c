@@ -36,6 +36,16 @@
  * the IFI/ISI counters. So these are PARTIAL. (The netbsd-vax standalone cross
  * keeps a POSIX backend until VAX's own ACP re-target, vms-d5d.)
  *
+ * OVMX-PARTIAL: sys$get_security (vms-d404) -- exec: the file's owner,
+ *     protection and access control list are read from its header by the
+ *     executive ACP (IO$_ACCESS, IO$_MODIFY's ACL read).
+ * OVMX-LOCAL: sys$get_security -- the object name is resolved and the
+ *     security context is kept in this process; class FILE only.
+ * OVMX-PARTIAL: sys$set_security (vms-d404) -- exec: ACL entries are added and
+ *     deleted in the file header by the executive ACP, which grants the change
+ *     only to a process with CONTROL access.
+ * OVMX-LOCAL: sys$set_security -- OSS$M_LOCAL edits are held in this process's
+ *     context until OSS$M_RELCTX; owner and protection are not changed here.
  * OVMX-PARTIAL: sys$open (vms-bc7) -- exec: $ASSIGN the volume + IO$_ACCESS
  *     resolves the filespec by name to a FID and builds the file's VBN->LBN
  *     window (rms_acp_open_file).
@@ -3454,6 +3464,13 @@ uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *))
  * attribute path ($MODIFY), not by this service (SS$_UNSUPPORTED).
  * ====================================================================== */
 
+#ifndef VMS_ACP_ACL_ADD              /* vms_acp.h's, when the ACP is not built in */
+#define VMS_ACP_ACL_ADD        1u
+#define VMS_ACP_ACL_DEL        2u
+#define VMS_ACP_ACL_DELETEALL  6u
+#define VMS_ACP_ACL_READ       7u
+#define VMS_ACP_ACL_PURGE     15u
+#endif
 #define RMS_OSS_ACL_ADD_ENTRY     3
 #define RMS_OSS_ACL_DELETE_ENTRY  4
 #define RMS_OSS_ACL_DELETE        5

@@ -141,6 +141,7 @@ sys_putmsg
 sys_resched
 sys_rms_seq
 sys_schdwk
+sys_set_security
 sys_setast
 sys_setimr
 sys_setpri

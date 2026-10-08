@@ -24,7 +24,13 @@ for r in $(seq 1 "$ROUNDS"); do
     else fail=$((fail+1)); echo "round $r #$p: rc=$rc"; grep -E "^  FAIL:|NOTE:" /tmp/gate-$r-$p.log | head -12
       for n in $(grep -an '^  FAIL:' /tmp/gate-$r-$p.log | cut -d: -f1 | head -4); do
         echo "--- console before FAIL at line $n ---"; sed -n "$((n>16?n-16:1)),$((n))p" /tmp/gate-$r-$p.log | cat -v | cut -c1-220
-      done; echo "--- end ---"; fi
+      done
+      c=$(grep -an '^--- full console log ---' /tmp/gate-$r-$p.log | head -1 | cut -d: -f1)
+      if [ -n "$c" ]; then
+        echo "--- RAW CONSOLE (cat -v) near SHOW DEFAULT / QUOTAS / FAL connect ---"
+        tail -n +$c /tmp/gate-$r-$p.log | cat -v | grep -an -B2 -A6 'SHOW DEFAULT$\|SHOW PROCESS/QUOTAS$\|running as \[' | cut -c1-200 | head -80
+      fi
+      echo "--- end ---"; fi
   done
 done
 echo "RESULT dcl-gate: pass=$pass fail=$fail"

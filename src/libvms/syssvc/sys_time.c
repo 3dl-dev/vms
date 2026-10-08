@@ -67,6 +67,7 @@
 #include <pthread.h>
 #include "starlet.h"
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
+#include "efndef.h"     /* EFN$C_ENF */
 
 /* Offset between VMS epoch (Nov 17 1858) and Unix epoch (Jan 1 1970) in 100ns units */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -351,6 +352,19 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     if (!daytim) return SS$_BADPARAM;
 
+    /* The flag is CLEARED when the request is queued, and an efn that is not
+     * one of this process's flags fails the request (SS$_UNASEFC for an
+     * unassociated common cluster, SS$_ILLEFC) -- observed on OpenVMS VAX V7.3
+     * and Alpha V8.4 by the semantic oracle (docs/oracle/semantics/ef/, cases
+     * EF.SETIMR.*, rd vms-d08). The executive answers through $CLREF. Without
+     * the clear, a $WAITFR on the timer's flag returns at once if the flag was
+     * already set, before the timer has fired. EFN$C_ENF names no flag. */
+    if (efn != EFN$C_ENF) {
+        uint32_t cst = sys$clref(efn);
+        if (!(cst & 1))
+            return cst;
+    }
+
     init_timer_signals();
 
     pthread_mutex_lock(&timer_mutex);
@@ -504,7 +518,10 @@ uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcna
     wake_slot[slot].has_pid = (pidadr && *pidadr != 0);
     wake_slot[slot].pid = wake_slot[slot].has_pid ? *pidadr : 0;
 
-    uint32_t st = sys$setimr(0, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
+    /* EFN$C_ENF: a scheduled wakeup touches no event flag ($SCHDWK has no efn
+     * argument; EF 0 belongs to the caller, and $SETIMR clears and sets the
+     * flag it is given). */
+    uint32_t st = sys$setimr(EFN$C_ENF, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
     if (!(st & 1))
         wake_slot[slot].in_use = 0;
     return st;

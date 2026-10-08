@@ -639,7 +639,11 @@ uint32_t vms_kif_readef(uint32_t efn, uint32_t *state)
 
     KIF_CALL(VMS_IOCTL_READEF, &args);
 
-    if (state) *state = args.state;
+    /* A failed $READEF (ILLEFC, UNASEFC) leaves the caller's state longword as
+     * it was: observed on OpenVMS VAX V7.3 and Alpha V8.4 by the semantic
+     * oracle (docs/oracle/semantics/ef/, cases EF.READ.64 .. EF.READ.M1, rd
+     * vms-837). Only a success reports the cluster. */
+    if (state && (args.status & 1)) *state = args.state;
     return args.status;
 }
 

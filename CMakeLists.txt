@@ -603,6 +603,15 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(oracle_constants_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+    # rd vms-8d1: semantic oracle -- the buildless half (ratchet selftest, goldens
+    # well formed + captured from the current spec, specs generate + compile).
+    # The OVMX-vs-real-VMS diff itself runs on the booted runtime in CI's
+    # persistent-boot job (tests/qemu/test_semantic_oracle.sh).
+    add_test(NAME semantic_oracle_static
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_semantic_oracle_static.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(semantic_oracle_static PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
 
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;

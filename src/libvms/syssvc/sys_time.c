@@ -40,18 +40,25 @@
  *     from the compiled-in months[] table in this file.
  * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
- * OVMX-USERSPACE: sys$schdwk (vms-44a) -- the schedule is this process's own
- *     POSIX timer (the sys$setimr table below): a scheduled wakeup dies with the
- *     image that requested it and no executive timer queue holds it. At expiry
- *     the timer's AST issues $WAKE (the wake state IS the executive's -- reached
- *     through an AST function pointer, which this register's static call graph
- *     cannot see). A repeat interval, or a target named by process name, is
- *     refused.
+ * OVMX-PARTIAL: sys$schdwk (vms-44a) -- exec: the wake state, which the timer's
+ *     expiry AST sets with $WAKE (an AST function pointer this register's static
+ *     call graph cannot follow); the request goes through sys$setimr with
+ *     EFN$C_ENF, so no event flag is cleared or set (rd vms-8d1).
+ * OVMX-LOCAL: sys$schdwk -- the schedule is this process's own POSIX timer (the
+ *     sys$setimr table below): a scheduled wakeup dies with the image that
+ *     requested it and no executive timer queue holds it. A repeat interval, or
+ *     a target named by process name, is refused.
  * OVMX-USERSPACE: sys$canwak (vms-44a) -- cancels the timers sys$schdwk armed in
  *     that same process-local table.
- * OVMX-USERSPACE: sys$setimr (vms-642) -- arms a POSIX timer recorded in the
- *     process-local timer_table[] in this file. There is no executive timer
- *     queue, so the request dies with the process and nothing else can see it.
+ * OVMX-PARTIAL: sys$setimr (vms-d08) -- exec: the event flag. It is cleared
+ *     when the request is queued, through $CLREF, whose executive answer also
+ *     validates the efn (SS$_UNASEFC / SS$_ILLEFC fail the request), and set by
+ *     $SETEF at expiry -- as the semantic oracle observed on real VAX V7.3 and
+ *     Alpha V8.4 (docs/oracle/semantics/ef/, EF.SETIMR.*).
+ * OVMX-LOCAL: sys$setimr -- (vms-642) the timer itself is a POSIX timer recorded
+ *     in the process-local timer_table[] in this file. There is no executive
+ *     timer queue, so the request dies with the process and nothing else can
+ *     see it.
  * OVMX-USERSPACE: sys$cantim (vms-642) -- cancels entries in that same
  *     process-local table, so the timers it cancels are this process's.
  */

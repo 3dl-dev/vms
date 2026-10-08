@@ -195,9 +195,9 @@ extern "C" {
  *                      read 3, not 2 (7/7 runs)
  *   [24]    REBUILD    the book's rebuild type (p. 7-40): 4 = full, on every
  *                      FORMATION open (p. 7-35: FORM rebuilds in full); 3 =
- *                      directory, on every ADD and REMOVE in the library --
- *                      each of which had a nonzero-LOCKDIRWT joiner/leaver or
- *                      all-zero weights, the cases p. 7-40/7-44 make directory
+ *                      directory, on every ADD and REMOVE with a nonzero-
+ *                      LOCKDIRWT joiner/leaver or all-zero weights; 1 = merge,
+ *                      the zero-weight joiner among nonzero ones (XI)
  *   [26:28] SUBJ_QDSK  the SUBJECT's QDSKVOTES as its own PARAMS advertised it
  *                      (SET QDSKVOTES 2 -> 2, 0 -> 0, default -> 1; and an
  *                      OVMX joiner advertising 1 at PARAMS body[24:26] flipped a
@@ -226,8 +226,9 @@ extern "C" {
  *                      in the vector -- the subject's new slot when it is a
  *                      system the cluster has held before (KR-1, fault-f1,
  *                      oracle-return, XG), one below it on a first admission
- *   [96:98] CEVOTES    the post-transition votes figure (XA 2, XB 3, XC 1,
- *                      XD 4, XE 3/4, XF 2/3)
+ *   [96:98] CEVOTES    the proposed CEVOTES, max(EXPECTED_VOTES, votes): two
+ *                      votes against an EXPECTED_VOTES of 3 read 3 (XI); four
+ *                      against 3 read 4 (XD)
  *   [98:100] CSV_LOW   the lowest slot in the post-transition vector (1 in
  *                      every specimen: the founder's)
  *   [104:106] CSV_TOP  the highest slot in the post-transition nodemap
@@ -259,11 +260,13 @@ extern "C" {
 #define VMS_CM_OPEN_FSYSID_MAX      0xffffu
 /* -900 s as a VMS delta time (100 ns units, negative) */
 #define VMS_CM_OPEN_HOLD_DELTA      0xffffffde78ee6000ull
-/* Book p. 7-40 rebuild types, as the open's byte carries them. Only the two
- * the library holds are named; a transition that would need another is not
+/* Book p. 7-40 rebuild types, as the open's byte carries them. Only the codes
+ * a capture holds are named; a transition that would need another is not
  * proposed until a capture grounds its code. */
 #define VMS_CM_REBUILD_FULL         4u    /* every op 0x07 (FORM)          */
 #define VMS_CM_REBUILD_DIRECTORY    3u    /* every op 0x09 / op 0x08       */
+#define VMS_CM_REBUILD_MERGE        1u    /* a zero-LOCKDIRWT joiner among
+					   * nonzero ones (lab run XI)     */
 
 /*
  * PARAMS (cat 0x01 op 0x01) body[20:22] and body[24:26] (rd vms-f297), placed
@@ -275,6 +278,14 @@ extern "C" {
 #define VMS_OFF_CM_QDSKVOTES  (VMS_OFF_SYSAP_BODY + 24)  /* abs 96, LE u16 */
 #define VMS_OFB_CM_PQUORUM    (VMS_OFF_CM_PQUORUM    - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_QDSKVOTES  (VMS_OFF_CM_QDSKVOTES  - VMS_OFF_SYSAP_BODY)
+/*
+ * ...and body[76:80], the word earlier captures could only call "param_f2,
+ * observed constant 0x01": it is the sender's SYSGEN EXPECTED_VOTES (rd
+ * vms-f297). Every capture before the one-variable runs held EV 1; booted with
+ * SYSBOOT> SET EXPECTED_VOTES 1/2/3, 21 of 21 PARAMS from six runs carry 1/2/3
+ * here (XA: three systems at EV 1, 2, 3 -> 01, 02, 03).
+ */
+#define VMS_OFB_CM_PEXPVOTES  VMS_OFB_CM_PARAM_F2
 #define VMS_OFF_CM_RESP_MARK  (VMS_OFF_SYSAP_BODY + 18)  /* abs 90, 0x81
 							    * response marker  */
 #define VMS_OFF_CM_RELAY_EPOCH (VMS_OFF_SYSAP_BODY + 20) /* abs 92, LE u32 --
@@ -807,10 +818,12 @@ struct vms_cm_params {
 			     * LOCKDIRWT (rd vms-fcb, VMS_OFF_CM_LOCKDIRWT)   */
 	uint16_t quorum;    /* body[20:22] LE u16: (EXPECTED_VOTES + 2) / 2 as
 			     * the sender computes it (VMS_OFF_CM_PQUORUM)    */
+	uint16_t expected_votes; /* body[76:78] LE u16: the sender's SYSGEN
+				  * EXPECTED_VOTES (VMS_OFB_CM_PEXPVOTES)    */
 	uint16_t qdskvotes; /* body[24:26] LE u16: the sender's SYSGEN
 			     * QDSKVOTES (rd vms-f297, VMS_OFF_CM_QDSKVOTES)  */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
-	uint32_t param_f2; /* body[76:80], observed constant 0x01             */
+	uint32_t param_f2; /* body[76:80] -- the EXPECTED_VOTES word, raw    */
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
 };
 

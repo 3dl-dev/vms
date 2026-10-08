@@ -2130,11 +2130,10 @@ static void test_1ac_an_outranked_member_discards_silently(void)
 #define F297_FTIME  0x00bc3a8233500ee0ull
 #define F297_NOW    0x00bc3a8300000000ull
 
-static void f297_params(struct vms_csb *csb, uint16_t votes, uint16_t q,
+static void f297_params(struct vms_csb *csb, uint16_t votes, uint16_t ev,
 			uint16_t qdsk, uint8_t ldw)
 {
-	cnxman_csb_set_params(csb, votes, csb->expected_votes, qdsk);
-	cnxman_csb_set_adv_quorum(csb, q);
+	cnxman_csb_set_params(csb, votes, ev, qdsk);
 	cnxman_csb_set_lockdirwt(csb, ldw);
 }
 
@@ -2151,15 +2150,14 @@ static struct vms_csb *f297_bed(void)
 
 	bed_init(2);
 	local = cnxman_club_local(&g.cl.club);
-	local->expected_votes = 1u;
 	f297_params(local, 1u, 1u, 1u, 1u);
 	f297_params(f297_csb(1), 1u, 1u, 1u, 1u);
 	vax2 = f297_csb(2);
-	f297_params(vax2, 1u, 2u, 1u, 1u);
+	f297_params(vax2, 1u, 3u, 1u, 1u);
 	cnxman_csb_set_swver(vax2, (const uint8_t *)"VAXVMS73", 8,
 			     g.cl.params.sw_version, g.cl.params.sw_version_len);
 	joiner = f297_csb(bed_join_csb(2));
-	f297_params(joiner, 1u, 2u, 2u, 1u);
+	f297_params(joiner, 1u, 6u, 2u, 1u);
 
 	learned.fsysid = 1025u;
 	learned.ftime = F297_FTIME;
@@ -2213,8 +2211,8 @@ static void test_f297_foreign_member_gets_every_cell(void)
 	ct_check(f297_open_to(VAX2_CSID, &o), "the foreign member got its op 0x09");
 	ct_check_eq_u32(o.cells.slot_next, JOIN_SLOT + 1u,
 			"[20:22] the slot after the joiner's (4 -> 5)");
-	ct_check_eq_u32(o.cells.quorum, 3u,
-			"[22:24] quorum: four votes after the admission -> (4 + 2) / 2, above every advertised one");
+	ct_check_eq_u32(o.cells.quorum, 4u,
+			"[22:24] quorum: (CEVOTES + 2) / 2 = (6 + 2) / 2");
 	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_DIRECTORY,
 			"[24] directory rebuild: the joiner weighs 1");
 	ct_check_eq_u32(o.cells.subj_qdsk, 2u, "[26:28] the JOINER's QDSKVOTES");
@@ -2226,7 +2224,8 @@ static void test_f297_foreign_member_gets_every_cell(void)
 	ct_check_eq_u32(o.cells.fsysid, 1025u, "[49:51] the founder, not us");
 	ct_check_eq_u32(o.cells.subj_cfg, 3u,
 			"[87:89] the count the joiner's own op 0x02 carried");
-	ct_check_eq_u32(o.cells.cevotes, 4u, "[96:98] four voting systems");
+	ct_check_eq_u32(o.cells.cevotes, 6u,
+			"[96:98] CEVOTES: the joiner's EXPECTED_VOTES 6 beats four votes");
 	ct_check_eq_u32(o.cells.csv_low, 1u, "[98:100] lowest slot");
 	ct_check_eq_u32(o.cells.csv_hwm, JOIN_SLOT - 1u,
 			"[100:102] a first admission: one below its slot");
@@ -2257,13 +2256,29 @@ static void test_f297_lost_fact_withholds_the_open(void)
 			"withheld from every participant alike, and counted");
 }
 
+/* rd vms-f297: a zero-LOCKDIRWT joiner among nonzero members is a MERGE (book
+ * p. 7-40; the code a real coordinator writes, lab run XI). */
+static void test_f297_zero_weight_joiner_merges(void)
+{
+	struct vms_csb *joiner;
+	struct vms_cm_open o;
+
+	printf("\n-- rd vms-f297: a zero-weight joiner is a MERGE rebuild --\n");
+	joiner = f297_bed();
+	cnxman_csb_set_lockdirwt(joiner, 0u);
+	f297_ask(3u);
+	ct_check(f297_open_to(VAX2_CSID, &o), "the admission is proposed");
+	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_MERGE,
+			"[24] = 1, the merge rebuild");
+}
+
 static void test_f297_each_missing_fact_refuses(void)
 {
 	static const struct { const char *what; int gap; } k[] = {
 		{ "no founder learned",          CNXMAN_OPEN_GAP_FOUNDER },
 		{ "no formation time",           CNXMAN_OPEN_GAP_FTIME },
 		{ "no clock",                    CNXMAN_OPEN_GAP_CLOCK },
-		{ "a zero-weight joiner (MERGE)", CNXMAN_OPEN_GAP_REBUILD },
+		{ "a joiner's weight never learned", CNXMAN_OPEN_GAP_REBUILD },
 		{ "the joiner's PARAMS missing", CNXMAN_OPEN_GAP_SUBJECT },
 	};
 	uint32_t i;
@@ -2277,7 +2292,7 @@ static void test_f297_each_missing_fact_refuses(void)
 		case CNXMAN_OPEN_GAP_FOUNDER: g.cl.club.fsysid_valid = 0u; break;
 		case CNXMAN_OPEN_GAP_FTIME:   g.cl.club.ftime_valid = 0u; break;
 		case CNXMAN_OPEN_GAP_CLOCK:   g.fake.now_vms = 0u; break;
-		case CNXMAN_OPEN_GAP_REBUILD: cnxman_csb_set_lockdirwt(joiner, 0u); break;
+		case CNXMAN_OPEN_GAP_REBUILD: joiner->lockdirwt_valid = 0u; break;
 		default:                      joiner->params_valid = 0u; break;
 		}
 		f297_ask(3u);
@@ -2405,6 +2420,7 @@ int main(void)
 	test_1ac_no_open_for_a_system_that_is_not_ours();
 	test_f297_foreign_member_gets_every_cell();
 	test_f297_each_missing_fact_refuses();
+	test_f297_zero_weight_joiner_merges();
 	test_f297_lost_fact_withholds_the_open();
 
 	return ct_summary("test_cnxman_coord");

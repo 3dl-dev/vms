@@ -463,7 +463,7 @@ struct f297_open_case {
 	const char *name;
 	uint16_t slot_next, quorum, subj_qdsk, fsysid, subj_cfg, cevotes;
 	uint16_t csv_hwm, csv_top;
-	uint8_t  rc_members, rc_votes;
+	uint8_t  rc_members, rc_votes, rebuild;
 };
 
 static int f297_stale(uint32_t off)
@@ -486,8 +486,7 @@ static void f297_check_open(const struct f297_open_case *k)
 		 == VMS_CODEC_OK, "  it parses");
 	ct_check_eq_u32(o.cells.slot_next, k->slot_next, "  [20:22] next CSV slot");
 	ct_check_eq_u32(o.cells.quorum, k->quorum, "  [22:24] post-transition quorum");
-	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_DIRECTORY,
-			"  [24] rebuild type: directory");
+	ct_check_eq_u32(o.cells.rebuild, k->rebuild, "  [24] rebuild type");
 	ct_check_eq_u32(o.cells.subj_qdsk, k->subj_qdsk, "  [26:28] the subject's QDSKVOTES");
 	ct_check_eq_u32(o.cells.rc_members, k->rc_members, "  [28] last reconfiguration's members");
 	ct_check_eq_u32(o.cells.rc_votes, k->rc_votes, "  [29] ...and its votes");
@@ -515,16 +514,17 @@ static void f297_check_open(const struct f297_open_case *k)
 static void test_f297_open_cells(void)
 {
 	static const struct f297_open_case k[] = {
-		/* name                          next q  qd  fsys  cfg cev hwm top rc */
-		{ "cm-open09-founder-oracle",     3, 2, 1, 1025, 2, 2, 1, 2, 1, 1 },
-		{ "cm-open09-subjqdsk2-oracle",   3, 2, 2, 1025, 2, 2, 1, 2, 1, 1 },
-		{ "cm-open09-nonfounder-oracle",  4, 2, 0, 1025, 3, 3, 2, 3, 0, 0 },
-		{ "cm-open09-rejoin-oracle",      4, 2, 1, 1025, 2, 2, 3, 3, 1, 1 },
-		{ "cm-open09-ovmx-qdsk1-oracle",  3, 2, 1, 1989, 0, 2, 1, 2, 1, 1 },
+		/* name                          next q  qd  fsys  cfg cev hwm top rc   rebuild */
+		{ "cm-open09-founder-oracle",     3, 2, 1, 1025, 2, 2, 1, 2, 1, 1, VMS_CM_REBUILD_DIRECTORY },
+		{ "cm-open09-subjqdsk2-oracle",   3, 2, 2, 1025, 2, 2, 1, 2, 1, 1, VMS_CM_REBUILD_DIRECTORY },
+		{ "cm-open09-nonfounder-oracle",  4, 2, 0, 1025, 3, 3, 2, 3, 0, 0, VMS_CM_REBUILD_DIRECTORY },
+		{ "cm-open09-rejoin-oracle",      4, 2, 1, 1025, 2, 2, 3, 3, 1, 1, VMS_CM_REBUILD_DIRECTORY },
+		{ "cm-open09-ovmx-qdsk1-oracle",  3, 2, 1, 1989, 0, 2, 1, 2, 1, 1, VMS_CM_REBUILD_DIRECTORY },
+		{ "cm-open09-merge-oracle",       3, 2, 1, 1025, 2, 3, 1, 2, 1, 1, VMS_CM_REBUILD_MERGE },
 	};
 	uint32_t i;
 
-	printf("-- rd vms-f297: the transition-open cells, five real opens\n");
+	printf("-- rd vms-f297: the transition-open cells, six real opens\n");
 	for (i = 0; i < sizeof(k) / sizeof(k[0]); i++)
 		f297_check_open(&k[i]);
 }
@@ -533,9 +533,10 @@ static void test_f297_open_cells(void)
  * QDSKVOTES, and op 0x02 body[36:40] -- read off the real records. */
 static void test_f297_params_and_request(void)
 {
-	static const struct { const char *name; uint16_t q, qdsk; } k[] = {
-		{ "cm-params-qdsk2-oracle", 2u, 2u },   /* EV 2, QDSKVOTES 2 */
-		{ "cm-params-qdsk0-oracle", 2u, 0u },   /* EV 3, QDSKVOTES 0 */
+	static const struct { const char *name; uint16_t q, qdsk, ev; } k[] = {
+		{ "cm-params-qdsk2-oracle", 2u, 2u, 2u },   /* EV 2, QDSKVOTES 2 */
+		{ "cm-params-qdsk0-oracle", 2u, 0u, 3u },   /* EV 3, QDSKVOTES 0 */
+		{ "cm-params-ev3-oracle",   2u, 1u, 3u },   /* EV 3, LOCKDIRWT 0 */
 	};
 	const struct vms_fixture *r = fixture("cm-config-count2-oracle");
 	struct vms_cm_params p;
@@ -554,6 +555,8 @@ static void test_f297_params_and_request(void)
 		ct_check_eq_u32(p.quorum, k[i].q, "  body[20:22] = (EV + 2) / 2");
 		ct_check_eq_u32(p.qdskvotes, k[i].qdsk,
 				"  body[24:26] = the SYSBOOT-set QDSKVOTES");
+		ct_check_eq_u32(p.expected_votes, k[i].ev,
+				"  body[76:80] = the SYSBOOT-set EXPECTED_VOTES");
 	}
 	ct_check(r != NULL, "cm-config-count2-oracle");
 	if (r == NULL)

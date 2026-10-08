@@ -1066,44 +1066,44 @@ static int coord_counts_for_add(const struct cnxman_coord *c, uint32_t i,
 }
 
 /*
- * The post-transition quorum: (max(EXPECTED_VOTES, VOTES) + 2) / 2 over the
- * members plus the subject, never below the quorum already in force (p. 7-6:
- * CEVOTES does not fall by itself). A peer's EXPECTED_VOTES is not on the wire
- * but the quorum it gives is (PARAMS body[20:22]), and (EV + 2) / 2 is monotone
- * in EV, so the max of those is the max{} term itself. Returns 0 when a counted
- * system's PARAMS never arrived -- that sum would be a guess.
+ * THE PROPOSED VOTES (p. 7-6): CEVOTES = max{EXPECTED_VOTES; SUM VOTES; Old
+ * CEVOTES} over the members plus the subject, and QUORUM = (CEVOTES + 2) / 2,
+ * never below the quorum already in force. Every EXPECTED_VOTES is the one the
+ * system's own PARAMS carried at body[76:80] (VMS_OFB_CM_PEXPVOTES); this
+ * node's is its SYSGEN value. Returns nonzero when a counted system's PARAMS
+ * never arrived -- that sum would be a guess.
  */
-static uint16_t coord_open_quorum(const struct cnxman_coord *c)
+static int coord_open_votes(const struct cnxman_coord *c, uint32_t *cevotes,
+			    uint32_t *quorum)
 {
 	const struct vms_club *club = &c->cl->club;
-	uint32_t i, votes = 0u, q = club->quorum;
+	uint32_t i, votes = 0u, ev = 0u;
 
 	for (i = 0; i < club->n_csb; i++) {
 		const struct vms_csb *m = &club->csb[i];
-		uint32_t own_q;
 
 		if (!m->in_use || !coord_counts_for_add(c, i, m))
 			continue;
 		if (!m->params_valid)
-			return 0u;
+			return -1;
 		votes += m->votes;
-		own_q = ((m->flags & VMS_CSB_F_LOCAL) != 0u)
-				? ((uint32_t)m->expected_votes + 2u) / 2u
-				: (uint32_t)m->adv_quorum;
-		if (own_q > q)
-			q = own_q;
+		if ((uint32_t)m->expected_votes > ev)
+			ev = m->expected_votes;
 	}
-	if ((votes + 2u) / 2u > q)
-		q = (votes + 2u) / 2u;
-	return (q == 0u || q > 0xffffu) ? 0u : (uint16_t)q;
+	*cevotes = votes > ev ? votes : ev;
+	if ((uint32_t)club->cevotes > *cevotes)
+		*cevotes = club->cevotes;
+	*quorum = (*cevotes + 2u) / 2u;
+	if ((uint32_t)club->quorum > *quorum)
+		*quorum = club->quorum;
+	return (*cevotes == 0u || *cevotes > 0xffffu) ? -1 : 0;
 }
 
 /*
  * THE REBUILD TYPE (book p. 7-40): a joiner with a nonzero LOCKDIRWT, or a
  * cluster whose every selected system weighs 0, is a DIRECTORY rebuild; a
- * zero-weight joiner among nonzero ones is a MERGE -- whose wire code no
- * capture holds, so that admission is not proposed. Every weight must have
- * been learned (vms-fcb); an unknown one decides nothing.
+ * zero-weight joiner among nonzero ones is a MERGE (lab run XI). Every weight
+ * must have been learned (vms-fcb); an unknown one decides nothing.
  */
 static enum cnxman_open_gap coord_open_rebuild(const struct cnxman_coord *c,
 					       const struct vms_csb *subject,
@@ -1124,19 +1124,18 @@ static enum cnxman_open_gap coord_open_rebuild(const struct cnxman_coord *c,
 	}
 	if (!subject->lockdirwt_valid)
 		return CNXMAN_OPEN_GAP_REBUILD;
-	if (subject->lockdirwt == 0u && others_nonzero != 0u)
-		return CNXMAN_OPEN_GAP_REBUILD;   /* MERGE: code not grounded */
-	*out = (uint8_t)VMS_CM_REBUILD_DIRECTORY;
+	*out = (subject->lockdirwt == 0u && others_nonzero != 0u)
+		       ? (uint8_t)VMS_CM_REBUILD_MERGE
+		       : (uint8_t)VMS_CM_REBUILD_DIRECTORY;
 	return CNXMAN_OPEN_GAP_NONE;
 }
 
-/* The post-transition votes and the lowest / highest slot in the nodemap. */
-static void coord_open_census(const struct cnxman_coord *c, uint32_t *votes,
-			      uint32_t *low, uint32_t *top)
+/* The lowest / highest slot in the post-transition nodemap. */
+static void coord_open_census(const struct cnxman_coord *c, uint32_t *low,
+			      uint32_t *top)
 {
 	uint32_t k;
 
-	*votes = 0u;
 	*low = 0u;
 	*top = 0u;
 	for (k = 1u; k < CNXMAN_PHASE2_BITMAP_SLOTS; k++) {
@@ -1145,12 +1144,6 @@ static void coord_open_census(const struct cnxman_coord *c, uint32_t *votes,
 		if (*low == 0u)
 			*low = k;
 		*top = k;
-	}
-	for (k = 0; k < c->cl->club.n_csb; k++) {
-		const struct vms_csb *m = &c->cl->club.csb[k];
-
-		if (m->in_use && coord_counts_for_add(c, k, m))
-			*votes += m->votes;
 	}
 }
 
@@ -1167,7 +1160,7 @@ static enum cnxman_open_gap coord_open_csv(const struct cnxman_coord *c,
 					   struct vms_cm_open_cells *out,
 					   int assigned)
 {
-	uint32_t votes, low, top, slot;
+	uint32_t low, top, slot;
 	enum cnxman_open_gap gap;
 
 	gap = coord_open_rebuild(c, subject, &out->rebuild);
@@ -1177,12 +1170,11 @@ static enum cnxman_open_gap coord_open_csv(const struct cnxman_coord *c,
 		return CNXMAN_OPEN_GAP_SUBJECT;
 	if (!assigned)
 		return CNXMAN_OPEN_GAP_NONE;   /* gate: the rest follows the slot */
-	coord_open_census(c, &votes, &low, &top);
+	coord_open_census(c, &low, &top);
 	slot = (uint32_t)(subject->csid & 0xffffu);
-	if (!c->bitmap_valid || low != 1u || slot == 0u || votes > 0xffffu)
+	if (!c->bitmap_valid || low != 1u || slot == 0u)
 		return CNXMAN_OPEN_GAP_CSV;
 	out->subj_cfg = (uint16_t)subject->cfg_count;
-	out->cevotes = (uint16_t)votes;
 	out->csv_low = (uint16_t)low;
 	out->csv_hwm = (uint16_t)(c->subject_rejoined ? slot : slot - 1u);
 	out->csv_top = (uint16_t)top;
@@ -1203,6 +1195,7 @@ static enum cnxman_open_gap coord_open_cells(const struct cnxman_coord *c,
 	const struct vms_club *club = &c->cl->club;
 	const struct vms_csb *subject = NULL;
 	struct vms_cm_open_cells z = { 0 };
+	uint32_t cevotes, quorum;
 
 	*out = z;
 	if (c->subject_csb >= 0 && (uint32_t)c->subject_csb < club->n_csb)
@@ -1217,9 +1210,10 @@ static enum cnxman_open_gap coord_open_cells(const struct cnxman_coord *c,
 		return CNXMAN_OPEN_GAP_SLOT;
 	if (club->rc_lost)
 		return CNXMAN_OPEN_GAP_RECONFIG;
-	out->quorum = coord_open_quorum(c);
-	if (out->quorum == 0u)
+	if (coord_open_votes(c, &cevotes, &quorum) != 0)
 		return CNXMAN_OPEN_GAP_QUORUM;
+	out->quorum = (uint16_t)quorum;
+	out->cevotes = (uint16_t)cevotes;
 	out->stamp = coord_now_vms(c);
 	if (out->stamp == 0u)
 		return CNXMAN_OPEN_GAP_CLOCK;

@@ -1301,14 +1301,14 @@ EOF
         require_fail) cat <<'EOF'
 the foreign member got its op 0x09
 [20:22] the slot after the joiner's (4 -> 5)
-[22:24] quorum: four votes after the admission -> (4 + 2) / 2, above every advertised one
+[22:24] quorum: (CEVOTES + 2) / 2 = (6 + 2) / 2
 [24] directory rebuild: the joiner weighs 1
 [26:28] the JOINER's QDSKVOTES
 [32:40] the formation time held
 [40:48] this node's clock
 [49:51] the founder, not us
 [87:89] the count the joiner's own op 0x02 carried
-[96:98] four voting systems
+[96:98] CEVOTES: the joiner's EXPECTED_VOTES 6 beats four votes
 [100:102] a first admission: one below its slot
 [104:106] highest slot
 [106:114] the -900 s delta

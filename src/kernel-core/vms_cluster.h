@@ -360,11 +360,7 @@ struct vms_csb {
 	uint8_t  params_valid;      /* 0 until the peer's PARAMS record arrived */
 	uint8_t  lockdirwt;         /* LOCKDIRWT: the CM rebuilds the weight vector */
 	uint8_t  lockdirwt_valid;   /* 0 until the peer's PARAMS carried it */
-	uint8_t  pad2;
-	/* The quorum the system's own EXPECTED_VOTES gives, (EV + 2) / 2, as
-	 * its PARAMS advertised it (rd vms-f297, VMS_OFF_CM_PQUORUM). Learned
-	 * with params_valid; the local block computes its own. */
-	uint16_t adv_quorum;
+	uint8_t  pad2[3];
 	/* The count the system's own op-0x02 carried at body[36:40] (rd
 	 * vms-f297, VMS_OFB_CM_CONFIG_COUNT) -- its statement, repeated in the
 	 * open that admits it. Valid once an op 0x02 from it was read. */

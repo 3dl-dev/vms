@@ -1983,12 +1983,6 @@ void cnxman_club_found(struct vms_club *club, uint64_t ftime,
 	cnxman_club_note_slot(club, slot);
 }
 
-void cnxman_csb_set_adv_quorum(struct vms_csb *csb, uint16_t quorum)
-{
-	if (csb != NULL)
-		csb->adv_quorum = quorum;
-}
-
 /* Is `csb` named by the proposal's nodemap? Only a block whose CSID this node
  * has LEARNED can be matched (nodemap bit = CSID low 16 bits, p. 7-34 fn); an
  * unlearned one is not guessed into the transition. */

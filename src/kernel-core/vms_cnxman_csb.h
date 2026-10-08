@@ -632,9 +632,6 @@ void cnxman_club_note_slot(struct vms_club *club, uint32_t slot);
  * learned makes the pair underivable (rc_lost), never a smaller number. */
 void cnxman_club_note_reconfig(struct vms_club *club);
 
-/* The PARAMS-advertised quorum of a peer (rd vms-f297, VMS_OFF_CM_PQUORUM). */
-void cnxman_csb_set_adv_quorum(struct vms_csb *csb, uint16_t quorum);
-
 /*
  * TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40). When both ends re-dial inside
  * the same window, each accepts the other's CONNECT and the pair holds two

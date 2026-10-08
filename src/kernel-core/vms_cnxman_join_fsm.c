@@ -2113,15 +2113,11 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_CONSUMED;
 
 	/*
-	 * VOTES (spec sec 4(j)) and QDSKVOTES (rd vms-f297) are the parameters
-	 * this message GROUNDS, both pinned by controlled reconfiguration.
-	 * EXPECTED_VOTES itself is not on the wire -- the quorum it gives,
-	 * (EV + 2) / 2, is (VMS_OFF_CM_PQUORUM), and that is what is learned;
-	 * the CSB's EXPECTED_VOTES is passed through untouched rather than
-	 * back-computed into a number the peer never sent.
+	 * VOTES (spec sec 4(j)), EXPECTED_VOTES and QDSKVOTES (rd vms-f297) are
+	 * the three quorum parameters p. 7-23 puts on a CSB, and this message
+	 * GROUNDS all three, each pinned by controlled reconfiguration.
 	 */
-	cnxman_csb_set_params(csb, p.votes, csb->expected_votes, p.qdskvotes);
-	cnxman_csb_set_adv_quorum(csb, p.quorum);
+	cnxman_csb_set_params(csb, p.votes, p.expected_votes, p.qdskvotes);
 	/*
 	 * ...AND WHAT IT SAYS IT IS (rd vms-e88): the member count at
 	 * body[18:20], 0 from a system in no cluster. The joiner's choice of

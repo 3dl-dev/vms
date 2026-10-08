@@ -283,6 +283,7 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 	out->lockdirwt = vms_wire_get_le16(&v, VMS_OFB_CM_LOCKDIRWT);
 	out->quorum   = vms_wire_get_le16(&v, VMS_OFB_CM_PQUORUM);
 	out->qdskvotes = vms_wire_get_le16(&v, VMS_OFB_CM_QDSKVOTES);
+	out->expected_votes = vms_wire_get_le16(&v, VMS_OFB_CM_PEXPVOTES);
 	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
 	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
 	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,

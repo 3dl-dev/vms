@@ -494,4 +494,6 @@
 # Raised to 183 by the six vms-c6d1 mailbox-protection defects (mbx-prot-read-
 # unchecked, mbx-prot-write-unchecked, mbx-readall-grants-read, crembx-promsk-
 # dropped, mbx-sender-pid-not-stamped, mbx-norswait-ignored; test_syssvc_mbx_prot).
-183
+# Raised to 184 by vms-b71's getlki-grantcount-not-counted (SYS$GETLKI/
+# SYS$GETLKIW's LKI$_GRANTCOUNT; test_syssvc_getlki).
+184

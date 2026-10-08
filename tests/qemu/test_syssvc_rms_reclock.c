@@ -187,7 +187,7 @@ static void test_reclock(void)
     lkid1_rec0 = rab1._rec_lock_lkid;
 
     gm = 0; parent = 0xFFFFFFFFu;
-    gst = vms_kif_getlki_parent(lkid1_rec0, &gm, NULL, NULL, NULL, &parent);
+    gst = vms_kif_getlki_parent(lkid1_rec0, &gm, NULL, NULL, NULL, &parent, NULL);
     check(gst == SS$_NORMAL && gm == LCK_K_EXMODE,
           "GETLKI: rab1's record lock is a REAL granted EX lock");
     check(parent == fab_lkid(&fab1),
@@ -243,7 +243,7 @@ static void test_reclock(void)
     uint32_t lkid1_rec1 = rab1._rec_lock_lkid;
 
     gm = 0;
-    gst = vms_kif_getlki_parent(lkid1_rec0, &gm, NULL, NULL, NULL, NULL);
+    gst = vms_kif_getlki_parent(lkid1_rec0, &gm, NULL, NULL, NULL, NULL, NULL);
     check(gst == SS$_IVLOCKID,
           "GETLKI on rab1's rrn=0 lkid after its $get(rrn=1) -> SS$_IVLOCKID "
           "(the next $get released the prior record lock)");
@@ -281,7 +281,7 @@ static void test_reclock(void)
     check(rab1._rec_lock_lkid == 0, "rab1 disconnect cleared its stashed lkid");
 
     gm = 0;
-    gst = vms_kif_getlki_parent(lkid1_rec1, &gm, NULL, NULL, NULL, NULL);
+    gst = vms_kif_getlki_parent(lkid1_rec1, &gm, NULL, NULL, NULL, NULL, NULL);
     check(gst == SS$_IVLOCKID,
           "GETLKI on rab1's rrn=1 lkid after sys$disconnect -> SS$_IVLOCKID "
           "(a real release, not a stale grant)");

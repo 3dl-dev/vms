@@ -152,7 +152,9 @@ struct vms_getlki_args {
 	char     resnam[32];        /* return: resource name */
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
 	uint32_t status;            /* return: SS$_ status */
-	uint32_t pad;
+	uint32_t grant_count;       /* return: LKI$_GRANTCOUNT, the resource's
+	                             * granted-queue length (vms-b71). Was a
+	                             * reserved pad; same size, no ABI change. */
 };
 
 struct vms_resmaster_args {

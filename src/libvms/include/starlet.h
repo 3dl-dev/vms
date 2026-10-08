@@ -628,6 +628,45 @@ uint32_t sys$getsyiw(
     uint32_t astprm
 );
 
+/**
+ * sys$getlki - Get lock information (vms-b71)
+ *
+ * @param efn      Event flag for completion
+ * @param lkidadr  Pointer to the lock ID to query
+ * @param itmlst   Pointer to item list (ILE3 / struct item_list_3 layout;
+ *                 untyped here, as sys$getjpiw's itmlst is, so a caller's
+ *                 ILE3[] array -- field-identical but differently named --
+ *                 passes without a cast)
+ * @param iosb      Pointer to I/O status block
+ * @param astadr    Optional AST completion routine
+ * @param astprm    AST parameter
+ * @param nullarg   Reserved; VMS documents it, nothing here reads it
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$getlki(
+    uint32_t efn,
+    const uint32_t *lkidadr,
+    void *itmlst,
+    void *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm,
+    void *nullarg
+);
+
+/**
+ * sys$getlkiw - Get lock information (wait for completion)
+ */
+uint32_t sys$getlkiw(
+    uint32_t efn,
+    const uint32_t *lkidadr,
+    void *itmlst,
+    void *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm,
+    void *nullarg
+);
+
 /* ================================================================
  * Memory Management Services
  * ================================================================ */

@@ -141,6 +141,9 @@ int main(int argc, char **argv)
           "dup2(rms_fd, 1): write(1) goes to the RMS file; stdout restored");
 
     /* 8. A record file DCL wrote (OPEN/WRITE) reads as lines. */
+    struct stat ist;
+    int isr = stat(INF, &ist);
+    printf("CFD: DCL file stat -> %d size=%ld\n", isr, isr == 0 ? (long)ist.st_size : -1L);
     f = fopen(INF, "r");
     char l1[80] = "", l2[80] = "";
     if (f) {

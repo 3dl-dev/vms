@@ -197,10 +197,12 @@ _Static_assert(sizeof(((struct RAB *)0)->rab$l_ubf) == 8,
  *   rsa@24(8-aligned;+6 pad) rss@32 rsl@33 node..ver length bytes @34..39
  *   node@40 dev@48 dir@56 name@64 type@72 ver@80 (component ptrs)
  *   fnb@88(l) wcc@92(l) $$context@96(internal ptr)
- *   nop@104  rlf@112(8-aligned;+7 pad)  dvi[16]@120    size = 136
- * The vms-ec70 fields (nop/rlf/dvi) were "appended at the end so all
- * pre-existing field offsets are unchanged"; pinning both the pre-existing
- * offsets (esa/name/fnb) AND the appended ones enforces that promise.
+ *   nop@104  rlf@112(8-aligned;+7 pad)  dvi[16]@120
+ *   fid[3]@136(w)  did[3]@142(w)  end 148, struct 8-aligned => size = 152
+ * The vms-ec70 fields (nop/rlf/dvi) and then the vms-6e28 fields (fid/did)
+ * were "appended at the end so all pre-existing field offsets are unchanged";
+ * pinning both the pre-existing offsets (esa/name/fnb) AND the appended ones
+ * enforces that promise.
  * ================================================================ */
 #define EXP_NAM_ESA       8
 #define EXP_NAM_NAME      64
@@ -208,7 +210,9 @@ _Static_assert(sizeof(((struct RAB *)0)->rab$l_ubf) == 8,
 #define EXP_NAM_NOP       104  /* first vms-ec70 appended field */
 #define EXP_NAM_RLF       112
 #define EXP_NAM_DVI       120
-#define EXP_NAM_SIZE      136
+#define EXP_NAM_FID       136  /* first vms-6e28 appended field */
+#define EXP_NAM_DID       142
+#define EXP_NAM_SIZE      152
 
 _Static_assert(offsetof(struct NAM, nam$l_esa)  == EXP_NAM_ESA,  "nam esa");
 _Static_assert(offsetof(struct NAM, nam$l_name) == EXP_NAM_NAME, "nam name");
@@ -216,6 +220,8 @@ _Static_assert(offsetof(struct NAM, nam$l_fnb)  == EXP_NAM_FNB,  "nam fnb");
 _Static_assert(offsetof(struct NAM, nam$b_nop)  == EXP_NAM_NOP,  "nam nop (vms-ec70 appended)");
 _Static_assert(offsetof(struct NAM, nam$l_rlf)  == EXP_NAM_RLF,  "nam rlf (vms-ec70 appended)");
 _Static_assert(offsetof(struct NAM, nam$t_dvi)  == EXP_NAM_DVI,  "nam dvi (vms-ec70 appended)");
+_Static_assert(offsetof(struct NAM, nam$w_fid)  == EXP_NAM_FID,  "nam fid (vms-6e28 appended)");
+_Static_assert(offsetof(struct NAM, nam$w_did)  == EXP_NAM_DID,  "nam did (vms-6e28 appended)");
 _Static_assert(sizeof(struct NAM) == EXP_NAM_SIZE, "nam size");
 _Static_assert(sizeof(((struct NAM *)0)->nam$l_esa) == 8,
     "LP64-divergence tripwire: nam$l_esa is a native 8-byte pointer. See file header.");

@@ -245,6 +245,9 @@ static uint32_t rms_impl_parse(void *fab_ptr)
     nam->nam$l_type = NULL; nam->nam$b_type = 0;
     nam->nam$l_ver  = NULL; nam->nam$b_ver  = 0;
     nam->nam$l_fnb = 0;
+    /* NAM$W_FID: $PARSE names no file yet; NAM$W_DID is re-derived below. */
+    memset(nam->nam$w_fid, 0, sizeof(nam->nam$w_fid));
+    memset(nam->nam$w_did, 0, sizeof(nam->nam$w_did));
 
     if (!esa || esl == 0) {
         fab->fab$l_sts = RMS$_NORMAL;
@@ -419,6 +422,13 @@ static uint32_t rms_impl_parse(void *fab_ptr)
             nam->nam$l_fnb |= NAM$M_WILDCARD | NAM$M_WILD_VER;
         }
     }
+
+#if defined(OVMX_HAVE_ACP)
+    /* NAM$W_DID: the directory's file ID, when it names one directory
+     * (no wildcard) and the parse is not syntax-only (NAM$M_SYNCHK). */
+    if (!(nam->nam$b_nop & NAM$M_SYNCHK) && !(nam->nam$l_fnb & NAM$M_WILD_DIR))
+        rms_parse_did(nam);
+#endif
 
     fab->fab$l_sts = RMS$_NORMAL;
     nam->nam$l_sts = RMS$_NORMAL;

@@ -6125,7 +6125,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/rms_core.c",
       "verified_against": null,
-      "notes": "walks XABKEY/XABDAT/XABPRO and now XABFHC/XABALL, filled from the ODS-2 FAT retained on the open handle over the ACP (vms-dfa)",
+      "notes": "walks XABKEY/XABDAT/XABPRO and now XABFHC/XABALL, filled from the ODS-2 FAT retained on the open handle over the ACP (vms-dfa); $CREATE records the FAB's rfm/org/rat/mrs in the FAT and $CLOSE the longest record, and $OPEN loads rfm/rat/mrs back from it (vms-b447)",
       "plan_ref": "vms-801"
     },
     {
@@ -6395,7 +6395,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/include/rms/nam.h",
       "verified_against": null,
-      "notes": "full component pointers + CNCL_DEV/ROOT_DIR/SEARCH_LIST flags",
+      "notes": "full component pointers + CNCL_DEV/ROOT_DIR/SEARCH_LIST flags; NAM$W_FID/NAM$W_DID (appended -- OVMX's NAM is not the VMS byte layout) filled by $OPEN/$CREATE/$SEARCH, $PARSE fills NAM$W_DID and clears NAM$W_FID (vms-6e28)",
       "plan_ref": "vms-801"
     },
     {

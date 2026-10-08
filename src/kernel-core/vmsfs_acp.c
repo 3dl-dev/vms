@@ -3112,6 +3112,35 @@ static uint32_t acp_access_from_header(struct vms_proc *proc, uint32_t chan,
     return SS__NORMAL;
 }
 
+/*
+ * acp_apply_recattr - write the caller's record attributes (ATR$C_RECATTR, the
+ * on-disk FAT byte image in attr.recattr) into a file header: FAT$B_RTYPE
+ * (record format | file organization), FAT$B_RATTRIB, FAT$W_RSIZE,
+ * FAT$B_BKTSIZE, FAT$B_VFCSIZE, FAT$W_MAXREC, FAT$W_DEFEXT, FAT$W_GBC. The
+ * ACP-owned end-of-file and allocation fields (FAT$L_HIBLK / FAT$L_EFBLK /
+ * FAT$W_FFBYTE) and the version limit (VMS_ACP_ATTR_VERSIONS) are never taken
+ * from the caller. Byte copies: both sides are the little-endian on-disk image.
+ * The caller reseals the header.
+ */
+static void acp_apply_recattr(uint8_t *filehdr, const uint8_t *ra)
+{
+    static const struct { uint8_t off, len; } f[] = {
+        { offsetof(ods2_recattr_t, fat_rtype),   1 },
+        { offsetof(ods2_recattr_t, fat_rattrib), 1 },
+        { offsetof(ods2_recattr_t, fat_rsize),   2 },
+        { offsetof(ods2_recattr_t, fat_bktsize), 1 },
+        { offsetof(ods2_recattr_t, fat_vfcsize), 1 },
+        { offsetof(ods2_recattr_t, fat_maxrec),  2 },
+        { offsetof(ods2_recattr_t, fat_defext),  2 },
+        { offsetof(ods2_recattr_t, fat_gbc),     2 },
+    };
+    uint8_t *fat = filehdr + offsetof(ods2_fh2_t, fh2_recattr);
+    unsigned i;
+
+    for (i = 0; i < sizeof(f) / sizeof(f[0]); i++)
+        memcpy(fat + f[i].off, ra + f[i].off, f[i].len);
+}
+
 #endif /* OVMX_ODS2_KERNEL */
 
 long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
@@ -3275,6 +3304,15 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 fat[1] = args.attr.recattr[31];
                 ods2_fh2_reseal(sc->filehdr);
             }
+            /* The caller's record attributes (ATR$C_RECATTR): RMS $CREATE's
+             * rfm/org, rat and mrs land in the FAT here, so $OPEN, $DISPLAY,
+             * DIRECTORY/FULL and F$FILE_ATTRIBUTES read back what the creator
+             * asked for instead of the kind preset. Not for a directory, whose
+             * FAT is the ACP's own. */
+            if ((args.attr_ctl & VMS_ACP_ATTR_RECATTR) && !is_dir) {
+                acp_apply_recattr(sc->filehdr, args.attr.recattr);
+                ods2_fh2_reseal(sc->filehdr);
+            }
             /* A preallocated data file is allocated-but-EMPTY: keep hiblk but set
              * EOF to the empty position so a later $PUT/WRITEVBLK extends from 0. */
             if (n_ext > 0 && !is_dir) {
@@ -3358,6 +3396,11 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             args.fid_rvn = new_fid.fid_rvn;
             args.fid_nmx = new_fid.fid_nmx;
             args.out_version = new_version;
+            /* The new header's record attributes as written (ATR$C_RECATTR
+             * out), so the creator's view of the file is the disk's. */
+            memcpy(args.attr.recattr,
+                   sc->filehdr + offsetof(ods2_fh2_t, fh2_recattr),
+                   sizeof(args.attr.recattr));
             args.status = SS__NORMAL;
             goto free_sc;
         }
@@ -3592,6 +3635,14 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     new_hiblk = args.trunc_efblk;
                     new_efblk = args.trunc_efblk;
                     new_ffbyte = args.trunc_ffbyte;
+                    touched = 1;
+                }
+
+                /* WRITE ATTRIBUTES (record attributes, ATR$C_RECATTR): RMS
+                 * $CLOSE records the longest record written (FAT$W_RSIZE). */
+                if ((args.attr_ctl & VMS_ACP_ATTR_RECATTR) &&
+                    !(sc->fh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
+                    acp_apply_recattr(sc->filehdr, args.attr.recattr);
                     touched = 1;
                 }
 

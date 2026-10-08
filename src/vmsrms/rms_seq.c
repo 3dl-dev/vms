@@ -407,6 +407,9 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             return RMS$_ORG;
     }
 
+    /* The longest record written: $CLOSE records it in the header (vms-b447). */
+    if (len > fd->put_lrl)
+        fd->put_lrl = len;
     rab->_current_offset = rms_io_lseek(fd, 0, SEEK_CUR);
     return RMS$_NORMAL;
 }

@@ -795,7 +795,7 @@ struct dcl_rms_dir *dcl_rms_dir_open(struct dcl_context *ctx, const char *patter
 }
 
 int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
-                     uint16_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn)
+                     uint32_t *fid_num, uint16_t *fid_seq, uint8_t *fid_rvn)
 {
     uint32_t st;
     if (!d) return 0;
@@ -807,13 +807,12 @@ int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
         memcpy(spec, d->nam.nam$l_rsa, n);
         spec[n] = '\0';
     }
-    if (fid_num || fid_seq || fid_rvn) {
-        uint16_t num = 0, seq = 0; uint8_t rvn = 0, nmx = 0;
-        rms_search_fid(&d->nam, &num, &seq, &rvn, &nmx);
-        if (fid_num) *fid_num = num;
-        if (fid_seq) *fid_seq = seq;
-        if (fid_rvn) *fid_rvn = rvn;
-    }
+    /* The match's File ID is the NAM$W_FID $SEARCH returned (vms-6e28):
+     * {num, seq, rvn | nmx<<8}; the file number folds in its NMX extension. */
+    if (fid_num) *fid_num = (uint32_t)d->nam.nam$w_fid[0] |
+                            ((uint32_t)(d->nam.nam$w_fid[2] >> 8) << 16);
+    if (fid_seq) *fid_seq = d->nam.nam$w_fid[1];
+    if (fid_rvn) *fid_rvn = (uint8_t)(d->nam.nam$w_fid[2] & 0xFFu);
     return 1;
 }
 

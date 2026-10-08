@@ -444,6 +444,8 @@ struct vms_ef_common_args {
  * the public $ENQ flag contract (see src/libvms/syssvc/sys_lock.c).
  */
 #define LCK_M_SYNC      0x10   /* Block in-kernel until granted (sync ENQ) */
+#define LCK_M_SYNCSTS   0x20   /* $ENQ LCK$M_SYNCSTS: an at-once grant is SS$_SYNCH, no AST */
+#define LCK_M_DEQALL    0x40   /* $DEQ LCK$M_DEQALL: the lock and its sublocks, or (lkid 0) all */
 
 /* Lock value block size */
 #define LCK_VALBLK_SIZE 16

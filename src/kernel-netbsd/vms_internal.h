@@ -145,6 +145,8 @@
 #define SS__NOTQUEUED   2488       /* SS$_NOTQUEUED (LCK_M_NOQUEUE, not granted) */
 #define SS__DEADLOCK    3594       /* SS$_DEADLOCK (wait-for cycle detected) */
 #define SS__IVLOCKID    8484       /* SS$_IVLOCKID (invalid lock ID) */
+#define SS__SUBLOCKS    8492       /* SS$_SUBLOCKS (sublocks still held) */
+#define SS__SYNCH       1673       /* SS$_SYNCH (granted synchronously) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
 #define SS__UNSUPPORTED 3658       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
 /* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h

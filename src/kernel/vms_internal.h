@@ -157,6 +157,7 @@
 #define SS__DEADLOCK    3594        /* deadlock detected (ssdef.h SS$_DEADLOCK) */
 #define SS__IVLOCKID    8484        /* invalid lock ID (ssdef.h SS$_IVLOCKID) */
 #define SS__SUBLOCKS    8492        /* sublocks still held (ssdef.h SS$_SUBLOCKS) */
+#define SS__SYNCH       1673        /* granted synchronously (ssdef.h SS$_SYNCH) */
 #define SS__CANCELGRANT 8508        /* conversion cancelled (ssdef.h SS$_CVTUNGRANT) */
 #define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
 

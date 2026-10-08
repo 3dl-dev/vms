@@ -92,6 +92,8 @@ static inline void strscpy(char *dst, const char *src, size_t size)
 #define SS__NOTQUEUED   2488         /* SS$_NOTQUEUED */
 #define SS__DEADLOCK    3594         /* SS$_DEADLOCK */
 #define SS__IVLOCKID    8484         /* SS$_IVLOCKID */
+#define SS__SUBLOCKS    8492         /* SS$_SUBLOCKS */
+#define SS__SYNCH       1673         /* SS$_SYNCH */
 #define SS__CANCELGRANT 3626         /* SS$_CVTUNGRANT */
 #define SS__UNSUPPORTED 3658         /* SS$_UNSUPPORTED */
 

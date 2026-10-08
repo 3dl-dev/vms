@@ -66,6 +66,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate # crtl_rms heap+RMS+stdio -> N=7 (non-veneer control)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -585,6 +586,27 @@ assert_veneer() {
   return 1
 }
 
+# assert_crtlfd <console-log> -- THE TEETH for the vms-b90 C RTL file-layer
+# proof (`crtl-fd-gate' mode). PASS iff (a) the image ran every check and said
+# so ("OVMX CRTL-FD test: OK", which it prints only with zero failed checks:
+# stdio write/read, byte-exact stat, odd-sized read + lseek, fstat, append,
+# dup2 onto fd 1, a DCL-written record file read as lines, UNIX syntax, ENOENT,
+# rename/unlink, /dev/null still the kernel's), and (b) the INDEPENDENT reader
+# -- DCL TYPE, RMS in DCL's own image -- printed the first and last line the
+# image wrote and the appended line, with a success status. (b) is what a write
+# that missed the ODS-2 volume cannot fake.
+assert_crtlfd() {
+  local log="$1" region
+  grep -aq "OVMX CRTL-FD test: OK" "$log" || { echo "  assert_crtlfd: the image did not report every check OK" >&2; return 1; }
+  grep -aqE "%DCL-F-ABORT|terminated abnormally" "$log" && { echo "  assert_crtlfd: the image crashed" >&2; return 1; }
+  region=$(awk '/CRTLFD-PROOF: === INDEPENDENT READER/{f=1} f{print} /CRTLFD-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
+  printf '%s\n' "$region" | grep -aq "line 001 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the first line" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aq "line 120 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the last line" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aq "APPENDED BY THE C RTL" || { echo "  assert_crtlfd: TYPE did not show the appended line" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aqE "TYPE-STATUS=%X[0-9A-F]*[13579BDF]( |$)" || { echo "  assert_crtlfd: TYPE did not succeed" >&2; return 1; }
+  return 0
+}
+
 # assert_fileop <console-log> -- THE TEETH for the vms-3320 CRTL->RMS FILE-OP
 # veneer proof (`crtl-rms-fileop-gate' mode). Extends the vms-f49 veneer proof
 # from the stdio family to open/creat/unlink/remove/rename/opendir/readdir/
@@ -674,7 +696,8 @@ build_joint_images() {
   # byte-identical.
   log "step 1a: build the milestone image ($MILESTONE_MAIN${MILESTONE_EXTRA:+ + $MILESTONE_EXTRA}, sentinel $WANT_SENTINEL${JOINT_CRTL_RMS_VENEER:+ veneer=$JOINT_CRTL_RMS_VENEER}) with the merged toolchain"
   JOINT_MAIN="$MILESTONE_MAIN" JOINT_EXTRA="${MILESTONE_EXTRA:-}" \
-    JOINT_CRTL_RMS_VENEER="$JOINT_CRTL_RMS_VENEER" IMG="$VMS_IMG" bash "$bji" "$out_n3" \
+    JOINT_CRTL_RMS_VENEER="$JOINT_CRTL_RMS_VENEER" JOINT_CRTL_RMS_FD="${JOINT_CRTL_RMS_FD:-0}" \
+    IMG="$VMS_IMG" bash "$bji" "$out_n3" \
     || die "build-joint-image.sh (milestone $MILESTONE_MAIN) failed -- see $out_n3/build.log"
   grep -q 'LINK-S-CREATED' "$out_n3/build.log" \
     || die "milestone image did not link (no %LINK-S-CREATED) -- see $out_n3/build.log"
@@ -716,6 +739,8 @@ build_joint_images() {
     # set) instead of the stdio VENEER one (which reads PORTTEST.DAT). The
     # selective staging above would otherwise drop it.
     [ -f "$out_n3/FILEOP_PROOF" ] && cp "$out_n3/FILEOP_PROOF" "$WORK/joint/FILEOP_PROOF"
+    # vms-b90: likewise the C RTL file-layer gate's marker.
+    [ -f "$out_n3/CRTLFD_PROOF" ] && cp "$out_n3/CRTLFD_PROOF" "$WORK/joint/CRTLFD_PROOF"
     log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS + full RMS producer graph LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR)"
   else
     log "step 1: joint images staged into $WORK/joint (milestone N=$WANT_SENTINEL + SS\$_NORMAL control + producers)"
@@ -750,6 +775,8 @@ run_boot_a() {
     --name "$cname" --memory=8g --cpus="$(nproc)" \
     -v "$WORK":/work "$BOOT_IMG" bash -euo pipefail -c '
       BT="'"$BOOT_TIMEOUT"'"
+      # BOOT_APPEND_EXTRA is spliced in from the harness: this script runs in
+      # the container, where the harness environment is not visible.
       cd /work
       cp ovmx-distrib-alpha.img modgpA.img
       FIFO=/work/modgpA.fifo; rm -f "$FIFO"; mkfifo "$FIFO"
@@ -757,7 +784,7 @@ run_boot_a() {
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 ${BOOT_APPEND_EXTRA:-}" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
@@ -1646,6 +1673,57 @@ EOF
     grep -aE "FILEOP-PROOF:|%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|%DIRECT|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -30 || echo "  (none captured)"
     echo "--- last 60 console lines ---"
     tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    exit 1
+    ;;
+  crtl-fd-gate)
+    # vms-b90 (the file half of vms-254, blocks vms-fd1): the C RTL file layer
+    # over RMS. MILESTONE image crtl_fd_test.c is an ordinary 32-bit DEC C
+    # program (standard headers, default pointer size) built against the
+    # RMS-backed DECC$SHR (JOINT_CRTL_RMS_FD=1: decc$main installs the
+    # syscall-funnel hook, src/vmsrms/crtl_rms_fd.c). Its SYSTARTUP has DCL
+    # write the record file the image reads, and DCL TYPE read back the stream
+    # file the image wrote -- both directions through a different accessor.
+    MILESTONE_MAIN=crtl_fd_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    export JOINT_MAIN_MUSL_HEADERS=1
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    JOINT_CRTL_RMS_FD=1
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    _st=$(mktemp -d); _fails=0
+    {
+      echo "OVMX CRTL-FD test: OK (stdio + descriptors over RMS on ODS-2) argc=1"
+      echo "CRTLFD-PROOF: === INDEPENDENT READER: DCL TYPE of the file the image wrote ==="
+      echo "line 001 of the OVMX C RTL file layer over RMS"
+      echo "line 120 of the OVMX C RTL file layer over RMS"
+      echo "APPENDED BY THE C RTL"
+      echo "CRTLFD-PROOF: TYPE-STATUS=%X00000001 SEVERITY=1"
+      echo "CRTLFD-PROOF: === END INDEPENDENT READER ==="
+    } > "$_st/pass.log"
+    grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
+    sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
+    sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "crtlfd selftest failed -- assert_crtlfd cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
+    run_boot_a
+    grep -aE "CFD:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_crtlfd "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"
+      echo "      ODS-2 volume; DCL read back what it wrote and it read what DCL wrote."
+      exit 0
+    fi
+    echo "FAIL: the C RTL file layer did not work end to end. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;
   shipped-gate)

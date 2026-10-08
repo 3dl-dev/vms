@@ -892,7 +892,12 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # and only compiles inside the extracted musl tree. Its real compile runs in
 # build-musl.sh and its behaviour is proven by the alpha vfork gate. Anchored +
 # file-level, like lite_malloc.c above.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$"
+# src/vmsrms/crtl_rms_fd.c (vms-b90) is the C RTL file layer DECC$SHR's
+# RMS-backed pass links: it hooks the musl-arch syscall funnel and fills musl's
+# arch-internal struct kstat (musl-arch kstat.h), so it only compiles against
+# the extracted alpha-dec-vms musl tree (mk_decc_shr.sh, ALPHA_CRTL_RMS_FD=1).
+# It defines no sys$ service; its behaviour is proven by the alpha crtl-fd gate.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

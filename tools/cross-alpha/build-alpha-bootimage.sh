@@ -264,7 +264,11 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
             # so it stages its OWN independent-reader SYSTARTUP (DIRECTORY of the
             # FOP*.DAT set) instead of the stdio VENEER one (PORTTEST.DAT). The
             # producer graph staged just above is identical for both.
-            if [ -f "$JOINT/FILEOP_PROOF" ]; then
+            if [ -f "$JOINT/CRTLFD_PROOF" ]; then
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_CRTLFD_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (C RTL FILE LAYER): joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; CRTLFD-proof SYSTARTUP (DCL writer + DCL TYPE reader) staged"
+            elif [ -f "$JOINT/FILEOP_PROOF" ]; then
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_FILEOP_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (FILE-OP VENEER): joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; FILEOP-proof SYSTARTUP (independent DIRECTORY reader over creat/unlink/rename set) staged"

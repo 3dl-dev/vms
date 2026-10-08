@@ -215,19 +215,21 @@ static void test_getutc(void)
 {
     printf("Testing sys$getutc...\n");
 
-    uint64_t t1 = 0, t2 = 0;
-    uint32_t st = sys$getutc(&t1);
+    /* $GETUTC fills the 16-byte $UTCDEF structure (not a quadword): abstime (ticks
+     * since 15-OCT-1582 = system time + 100840 days), unspecified inaccuracy, TDF word. */
+    uint8_t u[16];
+    uint64_t t0 = 0, t2 = 0;
+    check(sys$gettim(&t0) == SS$_NORMAL, "sys$gettim returns SS$_NORMAL");
+    uint32_t st = sys$getutc(u);
     check(st == SS$_NORMAL, "sys$getutc returns SS$_NORMAL");
-    check(t1 != 0, "sys$getutc returns a non-zero VMS time");
-
-    /* sys$gettim and sys$getutc should agree closely (both derive
-     * from CLOCK_REALTIME with no local-time offset - see the
-     * sys$getutc doc comment in starlet.h). */
-    st = sys$gettim(&t2);
-    check(st == SS$_NORMAL, "sys$gettim returns SS$_NORMAL");
-    uint64_t delta = (t1 > t2) ? (t1 - t2) : (t2 - t1);
-    check(delta < 10000000ULL /* 1 second, in 100ns ticks */,
-          "sys$getutc and sys$gettim agree within 1 second");
+    check(sys$gettim(&t2) == SS$_NORMAL, "sys$gettim again");
+    uint64_t abst = 0;
+    for (int i = 0; i < 8; i++) abst |= (uint64_t)u[i] << (8 * i);
+    const uint64_t off = 0x0135886AC7960000ULL;
+    check(abst >= t0 + off && abst <= t2 + off,
+          "sys$getutc abstime is the system time + 100840 days (bracketed by two $GETTIMs)");
+    check(u[14] == 0x00 && (u[15] >> 4) == 1,
+          "the TDF word carries structure version 1");
 
     check(sys$getutc(NULL) == SS$_BADPARAM,
           "sys$getutc(NULL) returns SS$_BADPARAM");

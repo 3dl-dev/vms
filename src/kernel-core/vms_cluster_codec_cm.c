@@ -954,6 +954,8 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 	/* body[26:28] LOCKDIRWT -- GROUNDED by controlled reconfiguration
 	 * (rd vms-fcb): the caller's SYSGEN value, 0 included. */
 	vms_wire_put_le16(&w, VMS_OFB_CM_LOCKDIRWT, lockdirwt);
+	/* LAB-ONLY vms-f297 experiment X3: PARAMS body[24:26]=1 -- NEVER MERGE. */
+	vms_wire_put_le16(&w, 24, 0x0001u);
 	/* body[18:20] the member count (rd vms-e88): the caller's, and 0 --
 	 * "in no cluster" -- is a real value a joiner sends, not a default. */
 	vms_wire_put_le16(&w, VMS_OFB_CM_MEMBERS, members);

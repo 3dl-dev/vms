@@ -580,6 +580,8 @@ acp-acl-not-consulted
 acp-acl-deny-falls-to-world
 acp-acl-control-not-checked
 acp-acl-deleteall-drops-protected
+acp-acl-ext-not-matched
+acp-acl-spill-refused
 sys-parse-acl-drops-access
 rms-set-security-local-applied-early
 chkpro-acl-ignored
@@ -1439,6 +1441,49 @@ EOF
         why)          echo "acp_acl_op() refuses an ACL change SS\$_NOPRIV unless acp_has_control(). The mutation removes the check, so a world user changes the ACL of a file it does not own. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 a non-owner without CONTROL may not change ACLF1's ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-ext-not-matched)
+        case "$_f" in
+        facility)     echo "the ACP access check walks an ACL that continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_match() gathers the ACEs of the extension headers after the primary's. The mutation looks at the primary only, so an ACE that lives in the extension header grants nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the [100,100] ACE in the extension header grants [100,100] read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-spill-refused)
+        case "$_f" in
+        facility)     echo "an ACL longer than the primary header continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_store() puts the ACEs the primary header cannot hold in extension headers. The mutation refuses SS\$_ACLFULL instead, so the list stops growing at what the primary holds. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+35 ACEs are accepted (the list outgrows the primary header)
+reading the ACL returns all 35, newest first, [100,100] last
+a 36th ACE goes first; the rest move down the chain
+36 ACEs read back, [100,100] still last
+35 ACEs remain after the delete
+30 ACEs again (a fresh extension header)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7627,11 +7672,15 @@ apply_edit() {
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
-        sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
+        sed -i 's|^    ace_matched = acp_acl_match(proc, vol, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)
         sed -i 's|^    if (!ace_matched) {$|    if (1) { /* NEGCTL acp-acl-deny-falls-to-world */|' "$_file";;
     acp-acl-control-not-checked)
-        sed -i 's|^    if (!acp_has_control(proc, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+        sed -i 's|^    if (!acp_has_control(proc, vol, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+    acp-acl-ext-not-matched)
+        sed -i 's#^    if (acp_hdr_ext(h) == 0 || !vol)$#    if (1) /* NEGCTL acp-acl-ext-not-matched */#' "$_file";;
+    acp-acl-spill-refused)
+        sed -i 's#^    status = acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx);$#    status = (acp_acl_fit(sc->filehdr, out, n) < n) ? SS__ACLFULL : acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx); /* NEGCTL acp-acl-spill-refused */#' "$_file";;
     acp-acl-deleteall-drops-protected)
         sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file";;
     chkpro-acl-ignored)

@@ -550,6 +550,59 @@ int main(int argc, char **argv)
         check(0, DCL_PATH " is present in the initramfs");
     }
 
+    /* -- an ACL longer than the primary header (vms-a88c) --
+     * VMS continues it in an extension header (docs/oracle/vax73-acl/ace-editing.txt,
+     * BIG.TXT: 35 ACEs, 25 in the primary, 10 in segment 1). ACLF8 gets
+     * (IDENTIFIER=[100,100],ACCESS=READ) first and 34 other ACEs after it; each
+     * goes first, so the [100,100] ACE ends last -- in the extension header. */
+    {
+        uint16_t f8 = 0;
+        uint8_t big[4096];
+        uint32_t bn, g;
+        int ok = 1;
+
+        check(create_file(chan, "ACLF8.DAT", 1, 4, 0xFF00, &f8) & 1, "create ACLF8.DAT [1,4] (W none)");
+        ok &= (int)(add_ace(chan, f8, 0, 1u, CHILD_UIC, 0) & 1);
+        for (g = 0; g < 34; g++)
+            ok &= (int)(add_ace(chan, f8, 0, 1u, ((200u + g) << 16) | 0xFFFFu, 0) & 1);
+        /* negctl: acp-acl-spill-refused */
+        check(ok, "35 ACEs are accepted (the list outgrows the primary header)");
+        bn = sizeof(big);
+        memset(big, 0, sizeof(big));
+        check((aclop(chan, f8, VMS_ACP_ACL_READ, big, &bn) & 1) && bn == 35u * 12u &&
+              big[8] == 0xFF && big[9] == 0xFF && big[10] == (uint8_t)233 &&
+              big[34 * 12 + 8] == 0x64 && big[34 * 12 + 10] == 0x64,
+              "reading the ACL returns all 35, newest first, [100,100] last");
+        /* negctl: acp-acl-ext-not-matched */
+        check(as_child(argv[0], 'r', f8) & 1,
+              "the [100,100] ACE in the extension header grants [100,100] read");
+        check(add_ace(chan, f8, 0x0000, 1u, ((200u + 40u) << 16) | 0xFFFFu, 0) & 1,
+              "a 36th ACE goes first; the rest move down the chain");
+        bn = sizeof(big);
+        check((aclop(chan, f8, VMS_ACP_ACL_READ, big, &bn) & 1) && bn == 36u * 12u &&
+              big[35 * 12 + 8] == 0x64,
+              "36 ACEs read back, [100,100] still last");
+        {
+            uint8_t a[16];
+            uint32_t n = mkace(a, 0, 1u, CHILD_UIC, 0);
+            check(aclop(chan, f8, VMS_ACP_ACL_DEL, a, &n) & 1, "delete the [100,100] ACE");
+        }
+        bn = sizeof(big);
+        check((aclop(chan, f8, VMS_ACP_ACL_READ, big, &bn) & 1) && bn == 35u * 12u,
+              "35 ACEs remain after the delete");
+        check(as_child(argv[0], 'r', f8) == SS$_NOPRIV, "without that ACE [100,100] is refused again");
+        bn = 0;
+        check(aclop(chan, f8, VMS_ACP_ACL_DELETEALL, NULL, &bn) & 1, "SET ACL/DELETE of the long ACL");
+        bn = sizeof(big);
+        check(aclop(chan, f8, VMS_ACP_ACL_READ, big, &bn) == SS$_ACLEMPTY,
+              "the ACL is empty, the extension header released");
+        ok = 1;
+        for (g = 0; g < 30; g++)
+            ok &= (int)(add_ace(chan, f8, 0, 1u, ((300u + g) << 16) | 0xFFFFu, 0) & 1);
+        check(ok, "30 ACEs again (a fresh extension header)");
+        check(delete_file(chan, "ACLF8.DAT") & 1, "delete ACLF8.DAT with its extension header");
+    }
+
     /* -- inheritance on create (docs/oracle/vax73-acl/default-propagation.txt) --
      * [OVMXDIR]PROPD.DIR carries, in this order,
      *   (IDENTIFIER=[200,201],OPTIONS=DEFAULT,ACCESS=READ+WRITE)

@@ -714,7 +714,7 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                 printf("%-19s\n", vms_name);
             }
             if (e->from_acp && e->full_spec[0]) {
-                uint8_t acl[512];
+                uint8_t acl[4096];        /* the whole ACL, extension headers included (vms-a88c) */
                 uint32_t alen = 0;
                 if ((dcl_read_file_acl(e->full_spec, acl, sizeof(acl), &alen) & 1) && alen)
                     dcl_print_acl(acl, alen);

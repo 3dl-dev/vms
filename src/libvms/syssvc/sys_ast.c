@@ -221,17 +221,38 @@ uint32_t sys$clrast(void)
  *
  * efn values at or above 128 (EFN$C_ENF and friends) mean "no event flag".
  */
+/*
+ * vms$$async_begin - the request half of an asynchronous system service
+ * ($GETJPI, $GETSYI, $GETDVI, ...): the event flag is CLEARED when the request
+ * is made, and an efn that is not one of this process's flags fails the
+ * request at once (SS$_ILLEFC / SS$_UNASEFC) -- real VAX V7.3 and Alpha V8.4,
+ * semantic oracle docs/oracle/semantics/info/ (JPI.EFN255, JPI.EFN64.UNASSOC;
+ * rd vms-4ace). With no executive there are no flags to validate.
+ */
+uint32_t vms$$async_begin(uint32_t efn)
+{
+    if (efn == 128 /* EFN$C_ENF */)
+        return SS$_NORMAL;
+    uint32_t c = sys$clref(efn);
+    if (c == SS$_ILLEFC || c == SS$_UNASEFC)
+        return c;
+    return SS$_NORMAL;
+}
+
 uint32_t vms$$async_finish(uint32_t efn, void *iosb, uint32_t status,
                            void (*astadr)(uint32_t), uint32_t astprm)
 {
-    if (!(status & 1))
-        return status;
+    /* The IOSB carries the completion status whether or not the request
+     * succeeded (a $GETJPI of a process that does not exist: SS$_NONEXPR in
+     * both the return and the IOSB -- docs/oracle/semantics/info/, rd vms-4ace). */
     if (iosb) {
         struct _iosb *b = (struct _iosb *)iosb;
         b->iosb$w_status = (uint16_t)status;
         b->iosb$w_bcnt = 0;
         b->iosb$l_getxxi_status = status;
     }
+    if (!(status & 1))
+        return status;
     if (efn < 128)
         (void)sys$setef(efn);
     if (astadr) {

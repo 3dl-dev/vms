@@ -156,6 +156,28 @@ else
     ok "RUN reported no error for the clean exit (no spurious %DCL-*-ABORT)"
 fi
 
+# 3. RUN of an image OUTSIDE SYS$SYSTEM: (rd vms-73e). VMS RUNs an image from
+#    any directory; OVMX used to answer %DCL-E-IVIMAGE although DIRECTORY saw
+#    the file. Copy RC3 into SYS$LOGIN: (its own FID there) and RUN it from there.
+run_cmd 'COPY SYS$SYSTEM:RC3.EXE SYS$LOGIN:RC3LOGIN.EXE'
+run_cmd 'RUN SYS$LOGIN:RC3LOGIN.EXE'
+ANY_SEG="$SEG"
+echo "----- verbatim: RUN SYS\$LOGIN:RC3LOGIN.EXE -----"
+printf '%s\n' "$ANY_SEG"
+echo "-----------------------------------------------"
+if printf '%s\n' "$ANY_SEG" | grep -qF 'RC3: image output reached SYS$OUTPUT'; then
+    ok "RUN activates an image outside SYS\$SYSTEM: (SYS\$LOGIN:RC3LOGIN.EXE, vms-73e)"
+else
+    bad "RUN of SYS\$LOGIN:RC3LOGIN.EXE did not run the image (vms-73e)"
+fi
+run_cmd 'SET DEFAULT SYS$LOGIN'
+run_cmd 'RUN RC3LOGIN'
+if printf '%s\n' "$SEG" | grep -qF 'RC3: image output reached SYS$OUTPUT'; then
+    ok "RUN of a bare name finds the image in the default directory (vms-73e)"
+else
+    bad "RUN RC3LOGIN from SYS\$LOGIN: did not run the image (vms-73e)"
+fi
+
 echo ""
 echo "=== RUN \$STATUS e2e: $PASS passed, $FAIL failed ==="
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null

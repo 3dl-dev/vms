@@ -114,6 +114,7 @@
 #define SS__NOTALLPRIV 1665        /* SS$_NOTALLPRIV (not all requested privs authorized; V7.3 $SSDEF, severity S) */
 /* Mailbox subset (P4-A, rd vms-d7a). Values match src/kernel/vms_internal.h. */
 #define SS__EXQUOTA   28           /* SS$_EXQUOTA (mailbox buffer quota) */
+#define SS__MBTOOSML  412          /* SS$_MBTOOSML (message > maxmsg; semantic oracle io) */
 #define SS__ENDOFFILE 2160         /* SS$_ENDOFFILE (IO$M_NOW read of an empty mailbox) */
 #define SS__IVCHAN    316          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  324          /* SS$_IVDEVNAM -- invalid device name */
@@ -790,6 +791,8 @@ struct vms_device {
 
 	/* Terminal state (devclass == DC$_TERM) */
 	uint64_t            devchar;        /* VMS_TTC_* */
+	uint32_t            devchar_dev;    /* DEV$M_* characteristics (vms-de3a) */
+	uint32_t            devbufsiz;      /* DVI$_DEVBUFSIZ */
 	uint32_t            width;
 	uint32_t            page;
 

@@ -74,6 +74,9 @@
 #define DC__TERM       66   /* DC$_TERM */
 #define DC__DISK        1   /* DC$_DISK */
 #define DC__SCOM       32   /* DC$_SCOM -- serial-communications / LAN class */
+#define DC__MAILBOX   160   /* DC$_MAILBOX (V7.3 $DCDEF) -- the null device's class */
+#define VMS_DT_NULL     3   /* DT$_NULL (V7.3 $DCDEF) */
+#define VMS_NL_DEVCHAR 0x0C150001u /* DEV$M_REC|SHR|AVL|MBX|IDV|ODV, as $GETDVI reports NLA0: */
 
 /*
  * Device type codes: 0 is "Unknown".
@@ -1378,6 +1381,25 @@ int vms_devtab_init(void)
         return -ENOMEM;
 
     /*
+     * The null device NLA0: (rd vms-de3a), entered at init like the console:
+     * every VMS system has it before any process runs. Its I/O-database
+     * identity is the one observed on real VAX V7.3 and Alpha V8.4 by the
+     * semantic oracle (docs/oracle/semantics/info/, DVI.NLA0*): DEVCLASS
+     * DC$_MAILBOX (160), DEVTYPE DT$_NULL (3), DEVCHAR 0C150001 (REC SHR AVL
+     * MBX IDV ODV), DEVBUFSIZ 512, unit 0, and "shareable" (SHOW DEVICE/FULL,
+     * docs/oracle/vax73-terminal-device.md section 7.3). The I/O itself is
+     * the null device's (the $QIO path discards writes, reads end-of-file).
+     */
+    {
+        struct vms_device *nl = vms_devtab_create("NLA0:", DC__MAILBOX, VMS_DT_NULL,
+                                                  1 /* shareable */, 0, 0, 0);
+        if (nl) {
+            nl->devchar_dev = VMS_NL_DEVCHAR;
+            nl->devbufsiz   = 512;
+        }
+    }
+
+    /*
      * Enumerate the node's disks the way a VMS driver enters its units at boot
      * (vms-3e8): VDA0: for the first virtio block device, VDA100: for the
      * second, and so on (device-native naming, vms-9f5). Like the console
@@ -2206,6 +2228,8 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
      * composed answer: 1 only for a unit vms_devtab_add_served_disk() entered
      * from a REAL discovery walk on a REAL served node (FC-P7.1). */
     info->mscp_served = dev->mscp_served;
+    info->devchar_dev = dev->devchar_dev;
+    info->devbufsiz   = dev->devbufsiz;
     exec_unlock(&dev->lock);
 }
 

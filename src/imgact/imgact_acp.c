@@ -292,6 +292,56 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 }
 
 /*
+ * imgact_acp_open_fid - access an image by its File ID (IO$_ACCESS with
+ * FIB$W_FID, no name/directory walk). Used for a main image DCL staged from a
+ * directory other than SYS$SYSTEM: (rd vms-73e): the staged path carries the
+ * genuine FID the ACP resolved for it, and the bytes are read back through the
+ * ACP by that FID -- never from the tmpfs copy (INV-6).
+ */
+uint32_t imgact_acp_open_fid(struct imgact_acp_file *f, const char *dev,
+			     uint16_t num, uint16_t seq, uint8_t rvn, uint8_t nmx)
+{
+	struct vms_acp_access_args a;
+	uint32_t st;
+	int fd;
+
+	acp_memset(f, 0, sizeof(*f));
+	f->dev_fd = -1;
+	fd = imgact_acp_dev_open();
+	if (fd < 0)
+		return SS$_NOSUCHDEV;
+	f->dev_fd = fd;
+	st = acp_register(fd);
+	if ($VMS_STATUS_SUCCESS(st))
+		st = acp_assign(fd, dev, &f->chan);
+	if (!$VMS_STATUS_SUCCESS(st)) {
+		imgact_acp_dev_close(fd);
+		f->dev_fd = -1;
+		return st;
+	}
+	acp_memset(&a, 0, sizeof(a));
+	a.chan    = f->chan;
+	a.fidmode = 1;
+	a.fid_num = num;
+	a.fid_seq = seq;
+	a.fid_rvn = rvn;
+	a.fid_nmx = nmx;
+	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_ACCESS, &a) < 0)
+		st = SS$_NOSUCHDEV;
+	else
+		st = a.status;
+	if (!$VMS_STATUS_SUCCESS(st)) {
+		acp_dassgn(fd, f->chan);
+		imgact_acp_dev_close(fd);
+		f->dev_fd = -1;
+		return st;
+	}
+	f->valid = a.attr.efblk ? (a.attr.efblk - 1u) * 512u + a.attr.ffbyte : 0u;
+	f->accessed = 1;
+	return st;
+}
+
+/*
  * The executive caps a single IO$_READVBLK at ACP_RW_MAX_XFER (1 MiB) and
  * rejects a longer length with SS$_BADPARAM (src/kernel-core/vmsfs_acp.c:1878
  * and its check at ~:1972). That per-QIO bound is legitimate and stays; a

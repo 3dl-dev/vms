@@ -89,7 +89,7 @@ jobs:
           if-no-files-found: error
 
       # rd vms-8d1: the semantic-oracle probe disk (ovmx-distrib.img + the
-      # SYS$SYSTEM:SP_*.EXE probes) as its OWN artifact, so the
+      # SYS$COMMON:[SYSTEST]SP_*.EXE probes) as its OWN artifact, so the
       # three-file lab contract above is unchanged. Boot it in place of
       # ovmx-distrib.img to run tests/qemu/test_semantic_oracle.sh off-CI.
       - name: Extract the semantic-oracle probe disk

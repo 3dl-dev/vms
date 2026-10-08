@@ -1090,14 +1090,14 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
 # -- Semantic-oracle probe disk (rd vms-8d1) -----------------------------------
 # A SEPARATE mastered disk, built from the SAME staged system tree as
 # ovmx-distrib.img with exactly one addition: the semantic-oracle probe images
-# SP_<FAMILY>.EXE in SYS$SYSTEM:. (Not SYS$COMMON:[SYSTEST], where VMS keeps its
-# own test programs: DCL RUN of an image outside SYS$SYSTEM: is not yet possible
-# on OVMX -- rd vms-73e -- and the probes test services, not RUN.)
+# SP_<FAMILY>.EXE in SYS$COMMON:[SYSTEST], the directory VMS keeps its own test
+# programs in (RUN of an image outside SYS$SYSTEM: works since rd vms-73e).
 # Same copy-the-tree pattern as the negctl / install-media disks: the shipped
 # /system-stage/vms and ovmx-distrib.img are never touched, so no probe ships.
 # Consumed only by tests/qemu/test_semantic_oracle.sh.
 RUN cp -r /system-stage/vms /system-stage-semprobe-vms && \
-    cp /link-native/semprobe/SP_*.EXE /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    mkdir -p /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSTEST && \
+    cp /link-native/semprobe/SP_*.EXE /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSTEST/ && \
     /src/build-static/bin/vmsfs_master --ods2 master \
         /boot/ovmx-distrib-semprobe.img OVMXSYS /system-stage-semprobe-vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-semprobe.img | grep -i '\]SP_' && \
@@ -1328,7 +1328,7 @@ COPY --from=builder /boot/ovmx-distrib-negctl.img /boot/ovmx-distrib-negctl.img
 # Consumed only by tests/qemu/test_install_menu.sh -- ovmx-distrib.img
 # itself is untouched and keeps booting straight to login as before.
 COPY --from=builder /boot/ovmx-install-media.img /boot/ovmx-install-media.img
-# Semantic-oracle probe disk (rd vms-8d1): same tree + SYS$SYSTEM:SP_*.EXE.
+# Semantic-oracle probe disk (rd vms-8d1): same tree + SYS$COMMON:[SYSTEST]SP_*.EXE.
 # Consumed only by tests/qemu/test_semantic_oracle.sh.
 COPY --from=builder /boot/ovmx-distrib-semprobe.img /boot/ovmx-distrib-semprobe.img
 # OVMX OS kit (vms-0b6, docs/design-ovmx-kit-format.md). Not consumed by

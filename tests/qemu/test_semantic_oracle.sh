@@ -4,7 +4,7 @@
 #
 # Boots the REAL runtime (real vms.ko executive) from the semantic-oracle probe
 # disk /boot/ovmx-distrib-semprobe.img -- ovmx-distrib.img plus the probe images
-# SYS$SYSTEM:SP_*.EXE (distro/Dockerfile.bootable) -- logs in SYSTEM/MANAGER
+# SYS$COMMON:[SYSTEST]SP_*.EXE (distro/Dockerfile.bootable) -- logs in SYSTEM/MANAGER
 # and RUNs every SP_<FAMILY>.EXE found there. Each probe prints a canonical
 # transcript between "=== SEMPROBE <family> BEGIN ===" and "... END ===";
 # this script writes each one to $OUT_DIR/<family>.txt.
@@ -45,7 +45,7 @@ done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
 mkdir -p "$OUT_DIR"
 
-echo "=== OVMX semantic oracle (vms-8d1): boot, login, RUN SYS\$SYSTEM:SP_*.EXE ==="
+echo "=== OVMX semantic oracle (vms-8d1): boot, login, RUN SYS\$COMMON:[SYSTEST]SP_*.EXE ==="
 
 W=$(mktemp -d)
 DISK=$W/disk.img
@@ -118,15 +118,15 @@ run_cmd() {  # cmd [timeout] -> SEG; PROMPT=1 if DCL came back
 }
 
 boot_login
-run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$SYSTEM:SP_*.EXE' 60
+run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$COMMON:[SYSTEST]SP_*.EXE' 60
 PROBES=$(printf '%s\n' "$SEG" | grep -o 'SP_[A-Z0-9_]*\.EXE' | sed 's/\.EXE$//' | sort -u)
-[ -n "$PROBES" ] || die "no SP_*.EXE probe found in SYS\$SYSTEM: (listing: $SEG)"
+[ -n "$PROBES" ] || die "no SP_*.EXE probe found in SYS\$COMMON:[SYSTEST] (listing: $SEG)"
 echo "probes: $(echo $PROBES)"
 
 FAIL=0
 for p in $PROBES; do
     fam=$(echo "${p#SP_}" | tr '[:upper:]' '[:lower:]')
-    run_cmd "RUN SYS\$SYSTEM:$p.EXE"
+    run_cmd "RUN SYS\$COMMON:[SYSTEST]$p.EXE"
     printf '%s\n' "$SEG" | awk -v f="$fam" '
         $0 == "=== SEMPROBE " f " BEGIN ===" { on = 1 }
         on { print }

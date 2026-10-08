@@ -154,8 +154,10 @@ static void fill_dvi_item(const struct item_list_3 *item,
         break;
 
     case DVI$_DEVCHAR: {
-        /* Only the bits the executive can ground (see DEV$M_ note above). */
-        uint32_t chars = DEV$M_AVL;             /* present in the I/O DB */
+        /* The DEV$M_* characteristics the driver gave the unit when it was
+         * entered (rd vms-de3a); for a row without them, only the bits the
+         * executive can ground (see DEV$M_ note above). */
+        uint32_t chars = info->devchar_dev ? info->devchar_dev : DEV$M_AVL;
         if (info->allocated) chars |= DEV$M_ALL;
         if (item->bufaddr && item->buflen >= sizeof(uint32_t))
             *(uint32_t *)item->bufaddr = chars;
@@ -204,6 +206,28 @@ static void fill_dvi_item(const struct item_list_3 *item,
     case DVI$_BLOCKSIZE:
         if (item->bufaddr && item->buflen >= sizeof(uint32_t))
             *(uint32_t *)item->bufaddr = VMS_BLOCK_SIZE;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
+
+    /* booleans VMS derives from the unit's characteristics (rd vms-de3a) */
+    case DVI$_MBX:
+    case DVI$_TRM:
+    case DVI$_SPL: {
+        uint32_t bit = item->item_code == DVI$_MBX ? DEV$M_MBX :
+                       item->item_code == DVI$_TRM ? DEV$M_TRM : DEV$M_SPL;
+        uint32_t chars = info->devchar_dev;
+        if (!chars && info->devclass == DC$_TERM)
+            chars = DEV$M_TRM;          /* a terminal row with no DEV$ word yet */
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = (chars & bit) ? 1u : 0u;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
+    }
+
+    case DVI$_DEVBUFSIZ:
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = info->devbufsiz ? info->devbufsiz
+                                       : (info->devclass == DC$_TERM ? info->width : 0u);
         if (item->retlen) *item->retlen = sizeof(uint32_t);
         break;
 
@@ -317,6 +341,36 @@ static uint32_t device_lookup_translated(const char *devnam_in,
  * @param astprm   AST parameter (ignored)
  * @param nullarg  Reserved, pass 0
  */
+
+/*
+ * dvi_parse_devnam - the device part of a $GETDVI device-name argument, as
+ * VMS reads it (rd vms-de3a, docs/oracle/semantics/info/): a file
+ * specification's device field is accepted ("NLA0:[DIR]FILE.TXT" -> "NLA0:"),
+ * the name is case-blind, an empty name is SS$_IVLOGNAM and a character no
+ * device or logical name can hold is SS$_IVDEVNAM.
+ */
+static uint32_t dvi_parse_devnam(const struct dsc$descriptor_s *d, char *out, size_t sz)
+{
+    size_t n = 0;
+    if (!d || !d->dsc$a_pointer || d->dsc$w_length == 0)
+        return SS$_IVLOGNAM;
+    for (unsigned i = 0; i < d->dsc$w_length; i++) {
+        char c = d->dsc$a_pointer[i];
+        if (c == ':') {
+            if (n + 1 < sz) out[n++] = ':';
+            break;
+        }
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '$' || c == '_' || c == '-'))
+            return SS$_IVDEVNAM;
+        if (n + 1 < sz) out[n++] = (char)((c >= 'a' && c <= 'z') ? c - 32 : c);
+    }
+    out[n] = '\0';
+    if (n == 0 || (n == 1 && out[0] == ':'))
+        return SS$_IVLOGNAM;
+    return SS$_NORMAL;
+}
+
 static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
                     struct dsc$descriptor_s *devnam,
                     void *itmlst, struct _iosb *iosb,
@@ -331,9 +385,13 @@ static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
     /* Extract the device name, if one was given. */
     char devnam_str[VMS_DEVNAM_SIZE] = "";
     int have_name = 0;
-    if (devnam && devnam->dsc$a_pointer && devnam->dsc$w_length > 0) {
-        dsc$strncpy(devnam_str, devnam, sizeof(devnam_str));
-        have_name = (devnam_str[0] != '\0');
+    /* A channel, when given, names the device and the name is ignored (VMS --
+     * docs/oracle/semantics/info/ DVI.CHAN.AND.NAME, rd vms-de3a). */
+    if (chan == 0 && devnam) {
+        uint32_t pst = dvi_parse_devnam(devnam, devnam_str, sizeof(devnam_str));
+        if (pst != SS$_NORMAL)
+            return pst;
+        have_name = 1;
     }
 
     if (!have_name && chan == 0)
@@ -396,6 +454,9 @@ uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
                     void (*astadr)(uint32_t), uint32_t astprm,
                     uint32_t nullarg)
 {
+    uint32_t rq = vms$$async_begin(efn);
+    if (rq != SS$_NORMAL)
+        return rq;
     uint32_t st = getdvi_impl(efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg);
     return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }

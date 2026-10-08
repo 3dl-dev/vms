@@ -399,6 +399,9 @@ uint32_t sys$getsyi(uint32_t efn, uint32_t *csidadr,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm)
 {
+    uint32_t rq = vms$$async_begin(efn);
+    if (rq != SS$_NORMAL)
+        return rq;
     uint32_t st = getsyi_impl(efn, csidadr, nodename, itmlst, iosb, astadr, astprm);
     return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }

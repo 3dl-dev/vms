@@ -3,6 +3,11 @@
 # (vms-330 reproduction under CPU contention). Prints every FAIL line per run.
 set -u
 PAR=${PAR:-3}; ROUNDS=${ROUNDS:-3}
+if ! docker buildx version >/dev/null 2>&1; then   # the rail image ships docker without buildx
+  mkdir -p ~/.docker/cli-plugins
+  curl -fsSL --retry 5 -o ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 \
+    && chmod +x ~/.docker/cli-plugins/docker-buildx
+fi
 for try in 1 2 3; do
   DOCKER_BUILDKIT=1 docker build --progress=plain -f distro/Dockerfile.bootable -t ovmx-boot:latest . > /tmp/build.log 2>&1 && break
   echo "build attempt $try failed"; tail -n 15 /tmp/build.log; [ "$try" -lt 3 ] || exit 2; sleep 30

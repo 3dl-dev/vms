@@ -369,6 +369,23 @@ wait_for() {
     return 1
 }
 
+# wait_login_prompt SINCE -- block until the FIRST DCL prompt printed AFTER the
+# "Welcome to OpenVMX" banner has landed. "Welcome" appears before the login
+# procedure finishes, so the session's first '$ ' arrives LATER; without this
+# the first run_cmd() recorded its offset, sent, and then wait_for '$ ' matched
+# that still-arriving login prompt instead of its own command's -- capturing an
+# empty response for the first command (observed: GUEST's 'TYPE
+# SYS$MANAGER:LOGIN.COM' read "(got: )" while the transcript shows the output
+# landing one command late). Anchoring past the banner makes the first
+# command's synchronisation as sound as every later one.
+wait_login_prompt() {
+    local since="$1" rel banner_end
+    rel=$(tail -c "+$((since + 1))" "$CONSOLE_LOG" | tr -d '\r' | grep -bo 'Welcome to OpenVMX' | head -1 | cut -d: -f1)
+    [ -n "$rel" ] || return 1
+    local w="Welcome to OpenVMX"; banner_end=$((since + rel + ${#w}))
+    wait_for '$ ' "$COMMAND_TIMEOUT" "$banner_end"
+}
+
 fail_with_console() {
     echo "$1" >&2
     echo "--- console output so far ---" >&2
@@ -465,6 +482,7 @@ send 'SYSTEM'
 wait_for 'Password:' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: no password prompt"
 send 'MANAGER'
 wait_for 'Welcome to OpenVMX' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: login did not succeed"
+wait_login_prompt "$REALLOGIN_OFFSET" || fail_with_console "ERROR: no DCL prompt after the SYSTEM login"
 
 # --- Drive the session -----------------------------------------------------
 # Same command list as the SSH UAT, except SET DEFAULT SYS$MANAGER: (see the
@@ -623,6 +641,7 @@ wait_for 'Password:' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
 send 'GUEST'
 wait_for 'Welcome to OpenVMX' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
     || fail_with_console "ERROR: GUEST login did not succeed"
+wait_login_prompt "$GUEST_OFFSET" || fail_with_console "ERROR: no DCL prompt after the GUEST login"
 
 for cmd in "${USER_CMDS[@]}"; do
     run_cmd "$cmd"

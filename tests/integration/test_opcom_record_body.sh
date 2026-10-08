@@ -91,9 +91,17 @@ echo "  DCL under test: $DCL"
 # on a good record left behind by a previous one.
 STAMP="$WORK/stamp"
 : > "$STAMP"
+# vms-a9a: do NOT walk all of /tmp -- on a shared host it holds every worktree and
+# build tree, so the walk cost tracked host state and crossed the 60s test
+# timeout under parallel load. open_operator_log() only ever uses
+# /vms/.../operator.log or the TOP-LEVEL /tmp/OPERATOR.LOG fallback.
 # size of every OPERATOR.LOG that already exists, so the appended region can be
 # isolated afterwards (see the note below the run)
-find /vms /tmp -iname 'OPERATOR.LOG' 2>/dev/null | while read -r p; do
+oplogs() {   # the two places the service can write: under /vms, or /tmp's TOP LEVEL
+    find /vms -iname 'OPERATOR.LOG' "$@" 2>/dev/null
+    find /tmp -maxdepth 1 -iname 'OPERATOR.LOG' "$@" 2>/dev/null
+}
+oplogs | while read -r p; do
     printf '%s %s\n' "$(wc -c < "$p" 2>/dev/null || echo 0)" "$p"
 done > "$WORK/sizes"
 sleep 1   # filesystem timestamp granularity; without it a log written in the
@@ -119,7 +127,7 @@ DCL_RC=$?
 #
 # So the size of every candidate is snapshotted BEFORE the command runs, and
 # afterwards only the appended tail is examined.
-LOG=$(find /vms /tmp -iname 'OPERATOR.LOG' -newer "$STAMP" 2>/dev/null | head -1)
+LOG=$(oplogs -newer "$STAMP" | head -1)
 if [ -n "$LOG" ]; then
     PREV=$(grep -F " $LOG" "$WORK/sizes" 2>/dev/null | cut -d' ' -f1)
     [ -n "$PREV" ] || PREV=0

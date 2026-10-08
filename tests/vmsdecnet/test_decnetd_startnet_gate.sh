@@ -84,12 +84,37 @@ if iface_line --iface lo | grep -q "= lo (--iface)"; then
 else
     bad "explicit --iface lo not reported (got: $(iface_line --iface lo))"
 fi
-# no --iface: auto-detect a REAL, non-loopback interface that exists on this host
-auto="$(iface_line | sed -n 's/^Datalink interface = \([^ ]*\) (auto-detected.*/\1/p')"
-if [ -n "$auto" ] && [ "$auto" != "lo" ] && [ -e "/sys/class/net/$auto" ]; then
-    ok "no --iface: auto-detects a real primary NIC ($auto), not the dev-lab br0"
+# no --iface: the auto-detect SELECTION LOGIC, tested against a controlled
+# interface list (LD_PRELOAD getifaddrs shim) rather than the CI host's real
+# NICs -- the real set churns (docker veths appear/vanish under parallel jobs, a
+# sandbox may hold only lo), which made the old "a real NIC exists in /sys"
+# assertion intermittent (vms-94b). The shim is compiled here; a missing
+# compiler or an ineffective shim is a FAIL, never a skip.
+SHIM="$TMP/fake_getifaddrs.so"
+SHIM_SRC="$(dirname "$0")/fake_getifaddrs.c"
+if cc -shared -fPIC -o "$SHIM" "$SHIM_SRC" -ldl 2>"$TMP/shim.err"; then
+    shim_iface() { FAKE_IFS="$1" LD_PRELOAD="$SHIM" "$BIN" --show-executor 2>&1 | grep "Datalink interface"; }
+    got="$(shim_iface 'lo:lo,tun0:other,eth9:eth,eth10:eth')"
+    if [ "$got" = "Datalink interface = eth9 (auto-detected primary NIC)" ]; then
+        ok "no --iface: skips loopback and non-Ethernet netdevs, auto-detects the first Ethernet NIC (eth9)"
+    else
+        bad "auto-detect should pick eth9 from lo,tun0(non-ether),eth9,eth10 (got: $got)"
+    fi
+    got="$(shim_iface 'lo:lo,tun0:other')"
+    if echo "$got" | grep -q "no usable NIC detected" && ! echo "$got" | grep -q "auto-detected primary NIC"; then
+        ok "no usable NIC: reports the compiled default honestly, not as auto-detected (INV-6)"
+    else
+        bad "with no usable NIC the readout must not claim auto-detection (got: $got)"
+    fi
 else
-    bad "auto-detect should pick a real non-lo NIC (got: '$auto', line: $(iface_line))"
+    bad "could not compile the getifaddrs shim: $(cat "$TMP/shim.err")"
+fi
+# Real host: whatever is detected must never be loopback (host-independent).
+auto="$(iface_line | sed -n 's/^Datalink interface = \([^ ]*\) .*/\1/p')"
+if [ -n "$auto" ] && [ "$auto" != "lo" ]; then
+    ok "no --iface on the real host never resolves to loopback ($auto)"
+else
+    bad "real-host auto-detect resolved to '$auto' (line: $(iface_line))"
 fi
 
 # --- 3c. DATALINK BACKEND readout (rd vms-1f69): the dry run names, honestly,

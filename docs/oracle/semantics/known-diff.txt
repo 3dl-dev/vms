@@ -200,19 +200,11 @@ rights RDB.NOPRIV.REM_IDENT  # vms-7d5a: rights-database services not provided y
 rights RDB.NOPRIV.ASCTOID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.FIND_HELD  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rms RMS.CREATE  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.GET.WRITEONLY  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.PUT.AFTER_CLOSE  # vms-3b5: $GET/$PUT record semantics and stream errors
 rms RMS.OPEN  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.PUT.READONLY  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.GET.SMALLBUF  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.GET.DISCONNECTED  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.CLOSE.AGAIN  # vms-3b5: $GET/$PUT record semantics and stream errors
 rms RMS.CREATE.V2  # vms-670: file versions
 rms RMS.CREATE.SUP  # vms-670: file versions
 rms RMS.CREATE.EXPLICIT_V1  # vms-670: file versions
 rms RMS.CREATE.FIX  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.PUT.FIX.SHORT  # vms-3b5: $GET/$PUT record semantics and stream errors
-rms RMS.GET.FIX  # vms-3b5: $GET/$PUT record semantics and stream errors
 rms RMS.OPEN.FNF  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
 rms RMS.OPEN.DNF  # vms-137: $OPEN error codes
 rms RMS.OPEN.SYNTAX  # vms-137: $OPEN error codes

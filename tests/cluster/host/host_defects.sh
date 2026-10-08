@@ -1388,7 +1388,8 @@ EOF
         require_fail) cat <<'EOF'
 the relay is answered, on the member's new connection
 nothing was refused
-REQUIRE_MORE
+... the answer goes out once, on the member's new connection
+... numbered from THAT connection's own dialogue: send-msg# 1 (INV-6)
 EOF
                       ;;
         esac;;

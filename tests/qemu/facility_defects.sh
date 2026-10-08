@@ -1406,9 +1406,9 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "IO\$_CREATE with no protection of its own takes the directory's DEFAULT_PROTECTION. The mutation ignores it, so the file gets the class default (RWED,RWED,RE,RE) instead of (RWED,RWED,RE,). Gone after substitution (no-op re-apply).";;
+        why)          echo "IO\$_CREATE with no protection of its own takes the directory's DEFAULT_PROTECTION. The mutation ignores it, so the file gets the process default (RWED,RWED,RE,) instead of the directory's (RWED,RWED,R,R). Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,RE,)
+A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,R,R)
 B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
 EOF
                       ;;

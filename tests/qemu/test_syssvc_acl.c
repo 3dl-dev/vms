@@ -555,11 +555,13 @@ int main(int argc, char **argv)
      *   (IDENTIFIER=[200,201],OPTIONS=DEFAULT,ACCESS=READ+WRITE)
      *   (IDENTIFIER=[300,*],ACCESS=READ)
      *   (IDENTIFIER=[200,*],OPTIONS=DEFAULT+NOPROPAGATE,ACCESS=EXECUTE)
-     *   (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+     *   (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:R,WORLD:R)
      * and files are created in it with no protection of their own. */
     {
+        /* GROUP:R,WORLD:R -- unlike the process default %XFA00, so a file that took
+         * the process default instead would read differently. */
         static const uint8_t dirdef[24] = { 24, 9, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0x10, 0, 0, 0,
-                                            0x1A, 0, 0, 0, 0x1F, 0, 0, 0 };
+                                            0x1E, 0, 0, 0, 0x1E, 0, 0, 0 };
         static const uint8_t a_def[12] = { ACEB(0x0100, 3, U200_201) };
         static const uint8_t a_300[12] = { ACEB(0, 1, U300_ANY) };
         static const uint8_t a_np[12]  = { ACEB(0x0900, 4, U200_ANY) };
@@ -567,7 +569,7 @@ int main(int argc, char **argv)
         static const uint8_t file_acl[24] = { ACEB(0, 3, U200_201), ACEB(0x0800, 4, U200_ANY) };
         static const uint8_t sub_acl[48] = { ACEB(0x0100, 3, U200_201), ACEB(0, 1, U300_ANY),
                                              24, 9, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0x10, 0, 0, 0,
-                                             0x1A, 0, 0, 0, 0x1F, 0, 0, 0 };
+                                             0x1E, 0, 0, 0, 0x1E, 0, 0, 0 };
         static const uint8_t b_acl[12] = { ACEB(0, 3, U200_201) };
         static const uint8_t v2_acl[24] = { ACEB(0, 0x10, U1_4), ACEB(0, 3, U200_201) };
         struct pfid ovmx = { OVMXDIR_FID_NUM, 1, 0, 0 }, pd, sub, fa, fb, fa2;
@@ -585,7 +587,7 @@ int main(int argc, char **argv)
         check(pacl_is(chan, fa.num, file_acl, sizeof(file_acl)),
               "A.TXT inherits the DEFAULT ACEs, DEFAULT cleared, NOPROPAGATE kept; not the plain ACE");
         /* negctl: acp-default-protection-ignored */
-        check(pprot(chan, fa.num) == 0xFA00, "A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,RE,)");
+        check(pprot(chan, fa.num) == 0xEE00, "A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,R,R)");
 
         check(pcreate(chan, &pd, "SUB.DIR", 1, 1, &sub) & 1, "create [.PROPD]SUB.DIR");
         check(pacl_is(chan, sub.num, sub_acl, sizeof(sub_acl)),
@@ -593,7 +595,7 @@ int main(int argc, char **argv)
         check(pcreate(chan, &sub, "B.TXT", 0, 0, &fb) & 1, "create [.PROPD.SUB]B.TXT");
         check(pacl_is(chan, fb.num, b_acl, sizeof(b_acl)),
               "B.TXT inherits SUB.DIR's DEFAULT ACE, DEFAULT cleared");
-        check(pprot(chan, fb.num) == 0xFA00,
+        check(pprot(chan, fb.num) == 0xEE00,
               "B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited");
 
         /* a new version: the previous version's ACL (less NOPROPAGATE) and protection */

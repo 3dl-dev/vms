@@ -153,6 +153,7 @@ static $DESCRIPTOR (process_d, "FORCEX_SUB");
             int t;
             (void)fflush (stdout); (void)setvbuf (stdout, NULL, _IONBF, 0);
             { int ws = 0; pid_t wp = waitpid (-1, &ws, WNOHANG); (void)printf ("PROBE waitpid(-1)=%d exited=%d status=%d signaled=%d sig=%d\n", (int)wp, WIFEXITED(ws), WEXITSTATUS(ws), WIFSIGNALED(ws), WTERMSIG(ws)); }
+            (void)system ("echo PROBE-FILES; find / -xdev -name 'demo_forcex*' 2>/dev/null | while read f; do echo \"== $f\"; ls -la \"$f\"; cat \"$f\"; done; echo PROBE-FILES-END");
             for (t = 0; t < 5; t++) {
                 unsigned int pitem = JPI$_PRCNAM;
                 char pnm[40];

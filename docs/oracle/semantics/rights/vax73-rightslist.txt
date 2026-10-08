@@ -1,0 +1,352 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod semvax-1 node VAX1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$SYSTEM
+
+
+$ ANALYZE/RMS_FILE/FDL/OUTPUT=SYS$LOGIN:SP_RIGHTSLIST.FDL SYS$SYSTEM:RIGHTSLIST.DAT
+
+
+$ TYPE SYS$LOGIN:SP_RIGHTSLIST.FDL
+IDENT   " 8-OCT-2026 03:19:23   OpenVMS ANALYZE/RMS_FILE Utility"
+
+SYSTEM
+        SOURCE                  OpenVMS
+
+FILE
+        ALLOCATION              27
+        BEST_TRY_CONTIGUOUS     yes
+        BUCKET_SIZE             2
+        CLUSTER_SIZE            9
+        CONTIGUOUS              no
+        EXTENSION               0
+        FILE_MONITORING         no
+        GLOBAL_BUFFER_COUNT     0
+        NAME                    "SYS$COMMON:[SYSEXE]RIGHTSLIST.DAT;1"
+        ORGANIZATION            indexed
+        OWNER                   [SYSTEM]
+        PROTECTION              (system:RWED, owner:RWED, group:, world:)
+
+RECORD
+        BLOCK_SPAN              yes
+        CARRIAGE_CONTROL        none
+        FORMAT                  variable
+        SIZE                    64
+
+AREA 0
+        ALLOCATION              27
+        BUCKET_SIZE             2
+        EXTENSION               0
+
+KEY 0
+        CHANGES                 no
+        DATA_KEY_COMPRESSION    no
+        DATA_RECORD_COMPRESSION yes
+        DATA_AREA               0
+        DATA_FILL               100
+        DUPLICATES              yes
+        INDEX_AREA              0
+        INDEX_COMPRESSION       no
+        INDEX_FILL              100
+        LEVEL1_INDEX_AREA       0
+        NAME                    "IDENTIFIER"
+        NULL_KEY                no
+        PROLOG                  3
+        SEG0_LENGTH             4
+        SEG0_POSITION           0
+        TYPE                    bin4
+
+KEY 1
+        CHANGES                 yes
+        DATA_KEY_COMPRESSION    yes
+        DATA_AREA               0
+        DATA_FILL               100
+        DUPLICATES              yes
+        INDEX_AREA              0
+        INDEX_COMPRESSION       yes
+        INDEX_FILL              100
+        LEVEL1_INDEX_AREA       0
+        NAME                    "HOLDER"
+        NULL_KEY                yes
+        NULL_VALUE              0
+        SEG0_LENGTH             8
+        SEG0_POSITION           8
+        TYPE                    string
+
+KEY 2
+        CHANGES                 yes
+        DATA_KEY_COMPRESSION    yes
+        DATA_AREA               0
+        DATA_FILL               100
+        DUPLICATES              no
+        INDEX_AREA              0
+        INDEX_COMPRESSION       yes
+        INDEX_FILL              100
+        LEVEL1_INDEX_AREA       0
+        NAME                    "NAME"
+        NULL_KEY                yes
+        NULL_VALUE              0
+        SEG0_LENGTH             32
+        SEG0_POSITION           16
+        TYPE                    string
+
+ANALYSIS_OF_AREA 0
+        RECLAIMED_SPACE         0
+
+ANALYSIS_OF_KEY 0
+        DATA_FILL               57
+        DATA_KEY_COMPRESSION    0
+        DATA_RECORD_COMPRESSION 56
+        DATA_RECORD_COUNT       29
+        DATA_SPACE_OCCUPIED     6
+        DEPTH                   1
+        INDEX_COMPRESSION       0
+        INDEX_FILL              3
+        INDEX_SPACE_OCCUPIED    2
+        LEVEL1_RECORD_COUNT     3
+        MEAN_DATA_LENGTH        49
+        MEAN_INDEX_LENGTH       6
+
+ANALYSIS_OF_KEY 1
+        ! This index is uninitialized - there are no records.
+
+ANALYSIS_OF_KEY 2
+        DATA_FILL               28
+        DATA_KEY_COMPRESSION    64
+        DATA_RECORD_COUNT       29
+        DATA_SPACE_OCCUPIED     4
+        DEPTH                   1
+        DUPLICATES_PER_SIDR     0
+        INDEX_COMPRESSION       77
+        INDEX_FILL              2
+        INDEX_SPACE_OCCUPIED    4
+        LEVEL1_RECORD_COUNT     2
+        MEAN_DATA_LENGTH        18
+        MEAN_INDEX_LENGTH       22
+
+$ MCR AUTHORIZE ADD/IDENTIFIER SP_RDB_DUMP
+%UAF-I-RDBADDMSG, identifier SP_RDB_DUMP value %X80010013 added to rights database
+
+$ MCR AUTHORIZE GRANT/IDENTIFIER SP_RDB_DUMP SYSTEM
+%UAF-I-GRANTMSG, identifier SP_RDB_DUMP granted to SYSTEM
+
+$ MCR AUTHORIZE GRANT/IDENTIFIER SP_RDB_DUMP SYSTEST
+%UAF-I-GRANTMSG, identifier SP_RDB_DUMP granted to SYSTEST
+
+$ MCR AUTHORIZE SHOW/IDENTIFIER/FULL SP_RDB_DUMP
+  Name                             Value           Attributes
+  SP_RDB_DUMP                      %X80010013      
+    Holder                           Attributes
+    SYSTEM                           
+    SYSTEST
+
+$ DIRECTORY/FULL SYS$SYSTEM:RIGHTSLIST.DAT
+
+Directory SYS$COMMON:[SYSEXE]
+
+RIGHTSLIST.DAT;1              File ID:  (2330,2,0)            
+Size:           27/27         Owner:    [SYSTEM]
+Created:   13-APR-2025 23:38:55.12
+Revised:    8-OCT-2026 03:19:26.91 (20)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Indexed, Prolog: 3, Using 3 keys
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 27, Extend: 0, Maximum bucket size: 2, Global buffer count: 0, No version limit, Contiguous best try
+Record format:      Variable length, maximum 64 bytes, longest 0 bytes
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 27/27 blocks.
+
+$ DUMP/RECORDS SYS$SYSTEM:RIGHTSLIST.DAT
+
+Dump of file SYS$COMMON:[SYSEXE]RIGHTSLIST.DAT;1 on  8-OCT-2026 03:19:29.37
+File ID (2330,2,0)   End of file block 27 / Allocated 27
+
+Record number 1 (00000001), 64 (0040) bytes, RFA(0004,0000,0001)
+
+ 45525F45 434E414E 45544E49 414D2424 00000000 00000000 00000000 00000000 ................$$MAINTENANCE_RE 000000
+ 80010014 00BA9055 AF08EE40 00000101 20202020 20202020 20202020 44524F43 CORD            ....@î.¯U.º..... 000020
+
+Record number 2 (00000002), 48 (0030) bytes, RFA(0004,0000,000D)
+
+ 20202020 20202020 20204D45 54535953 00000000 00000000 00000000 00010004 ................SYSTEM           000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 3 (00000003), 48 (0030) bytes, RFA(0004,0000,000E)
+
+ 20202020 20202020 20545345 54535953 00000000 00000000 00000000 00010007 ................SYSTEST          000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 4 (00000004), 48 (0030) bytes, RFA(0004,0000,000C)
+
+ 20202020 20202020 20202044 4C454946 00000000 00000000 00000000 00010008 ................FIELD            000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 5 (00000005), 48 (0030) bytes, RFA(0004,0000,000B)
+
+ 20202020 20202020 20544C55 41464544 00000000 00000000 00000000 00800080 ................DEFAULT          000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 6 (00000006), 48 (0030) bytes, RFA(0004,0000,0017)
+
+ 20202020 52455652 4553244F 5252494D 00000000 00000000 00000000 00FE00F7 ÷.þ.............MIRRO$SERVER     000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 7 (00000007), 48 (0030) bytes, RFA(0004,0000,0018)
+
+ 20202020 20205245 56524553 244D5056 00000000 00000000 00000000 00FE00F8 ø.þ.............VPM$SERVER       000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 8 (00000008), 48 (0030) bytes, RFA(0004,0000,0016)
+
+ 20202020 20205245 56524553 244C4D4E 00000000 00000000 00000000 00FE00F9 ù.þ.............NML$SERVER       000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 9 (00000009), 48 (0030) bytes, RFA(0004,0000,0015)
+
+ 20202020 52455652 45532445 4E4F4850 00000000 00000000 00000000 00FE00FA ú.þ.............PHONE$SERVER     000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 10 (0000000A), 48 (0030) bytes, RFA(0004,0000,0013)
+
+ 20202020 20524556 52455324 4C49414D 00000000 00000000 00000000 00FE00FC ü.þ.............MAIL$SERVER      000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 11 (0000000B), 48 (0030) bytes, RFA(0004,0000,0014)
+
+ 20202020 20202020 20205445 4E434544 00000000 00000000 00000000 00FEFFFF ..þ.............DECNET           000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Dump of file SYS$COMMON:[SYSEXE]RIGHTSLIST.DAT;1 on  8-OCT-2026 03:19:29.37
+File ID (2330,2,0)   End of file block 27 / Allocated 27
+
+Record number 12 (0000000C), 48 (0030) bytes, RFA(0004,0000,001A)
+
+ 20202020 20202020 2020204E 4F524142 00000000 00000000 00000000 04000400 ................BARON            000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 13 (0000000D), 48 (0030) bytes, RFA(0004,0000,001C)
+
+ 20202020 20202050 54462450 49504354 00000000 00000000 00000000 07AD0001 ..­.............TCPIP$FTP        000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 14 (0000000E), 48 (0030) bytes, RFA(0004,0000,001B)
+
+ 20202020 20202058 55412450 49504354 00000000 00000000 00000000 07ADFFFF ..­.............TCPIP$AUX        000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 15 (0000000F), 48 (0030) bytes, RFA(0004,0000,0002)
+
+ 20202020 20202020 20202048 43544142 00000000 00000000 00000000 80000001 ................BATCH            000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 16 (00000010), 48 (0030) bytes, RFA(0004,0000,0003)
+
+ 20202020 20202020 20205055 4C414944 00000000 00000000 00000000 80000002 ................DIALUP           000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 17 (00000011), 48 (0030) bytes, RFA(0004,0000,0004)
+
+ 20202020 20455649 54434152 45544E49 00000000 00000000 00000000 80000003 ................INTERACTIVE      000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 18 (00000012), 48 (0030) bytes, RFA(0004,0000,0005)
+
+ 20202020 20202020 2020204C 41434F4C 00000000 00000000 00000000 80000004 ................LOCAL            000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 19 (00000013), 48 (0030) bytes, RFA(0004,0000,0006)
+
+ 20202020 20202020 204B524F 5754454E 00000000 00000000 00000000 80000005 ................NETWORK          000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 20 (00000014), 48 (0030) bytes, RFA(0004,0000,0007)
+
+ 20202020 20202020 20204554 4F4D4552 00000000 00000000 00000000 80000006 ................REMOTE           000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 21 (00000015), 48 (0030) bytes, RFA(0004,0000,0008)
+
+ 20202020 20205357 4F444E49 57434544 00000000 00000000 00000000 80000007 ................DECWINDOWS       000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 22 (00000016), 48 (0030) bytes, RFA(0004,0000,0009)
+
+ 43454A42 4F5F5245 46465542 24534D56 00000000 00000000 00000000 80000008 ................VMS$BUFFER_OBJEC 000000
+                                     20202020 20202020 20205245 53555F54 T_USER          ................ 000020
+
+Dump of file SYS$COMMON:[SYSEXE]RIGHTSLIST.DAT;1 on  8-OCT-2026 03:19:29.37
+File ID (2330,2,0)   End of file block 27 / Allocated 27
+
+Record number 23 (00000017), 48 (0030) bytes, RFA(0004,0000,000A)
+
+ 544E4544 49534552 5F4D454D 24534D56 00000000 00000000 00000000 80000009 ................VMS$MEM_RESIDENT 000000
+                                     20202020 20202020 20202052 4553555F _USER           ................ 000020
+
+Record number 24 (00000018), 48 (0030) bytes, RFA(0004,0000,0012)
+
+ 20202031 5841565F 45444F4E 24535953 00000000 00000000 00000000 80010000 ................SYS$NODE_VAX1    000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 25 (00000019), 48 (0030) bytes, RFA(0004,0000,0019)
+
+ 20202032 5841565F 45444F4E 24535953 00000000 00000000 00000000 80010001 ................SYS$NODE_VAX2    000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 26 (0000001A), 48 (0030) bytes, RFA(0004,0000,001D)
+
+ 20202033 5841565F 45444F4E 24535953 00000000 00000000 00000000 80010002 ................SYS$NODE_VAX3    000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 27 (0000001B), 48 (0030) bytes, RFA(0013,0000,0023)
+
+ 20202020 20504D55 445F4244 525F5053 00000000 00000000 00000000 80010013 ................SP_RDB_DUMP      000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 28 (0000001C), 16 (0010) bytes, RFA(0013,0000,0024)
+
+                                     00000000 00010004 00000000 80010013 ................................ 000000
+
+Record number 29 (0000001D), 16 (0010) bytes, RFA(0013,0000,0025)
+
+                                     00000000 00010007 00000000 80010013 ................................ 000000
+
+Record number 30 (0000001E), 48 (0030) bytes, RFA(0004,0000,000F)
+
+ 20202054 4E45494C 43245652 53434553 00000000 00000000 00000000 96EE0001 ..î.............SECSRV$CLIENT    000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 31 (0000001F), 48 (0030) bytes, RFA(0004,0000,0010)
+
+ 20202054 43454A42 4F245652 53434553 00000000 00000000 00000000 96EE0002 ..î.............SECSRV$OBJECT    000000
+                                     20202020 20202020 20202020 20202020                 ................ 000020
+
+Record number 32 (00000020), 48 (0030) bytes, RFA(0004,0000,0011)
+
+ 4143494E 554D4D4F 43245652 53434553 00000000 00000000 00000000 96EE0003 ..î.............SECSRV$COMMUNICA 000000
+                                     20202020 20202020 20202020 4E4F4954 TION            ................ 000020
+
+$ MCR AUTHORIZE REVOKE/IDENTIFIER SP_RDB_DUMP SYSTEM
+%UAF-I-REVOKEMSG, identifier SP_RDB_DUMP revoked from SYSTEM
+
+$ MCR AUTHORIZE REVOKE/IDENTIFIER SP_RDB_DUMP SYSTEST
+%UAF-I-REVOKEMSG, identifier SP_RDB_DUMP revoked from SYSTEST
+
+$ MCR AUTHORIZE REMOVE/IDENTIFIER SP_RDB_DUMP
+%UAF-I-RDBREMMSG, identifier SP_RDB_DUMP value %X80010013 removed from rights database
+
+$ DELETE SYS$LOGIN:SP_RIGHTSLIST.FDL;*
+
+
+$ SET DEFAULT SYS$LOGIN
+

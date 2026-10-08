@@ -1450,7 +1450,7 @@ EOF
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
         set -e
         /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/cc1run_test.c
-        cd /img && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -dumpbase hello.c hello.c -o ref.s' \
+        cd /img && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -nostdinc -dumpbase hello.c hello.c -o ref.s' \
       > "$GATE_ROOT/cc1-link.log" 2>&1 || { tail -40 "$GATE_ROOT/cc1-link.log"; die "launcher link / reference compile failed"; }
     [ -s "$GATE_ROOT/cc1img/ref.s" ] || die "the cross cc1 wrote no reference assembly"
     # Stage what boots: the launcher, cc1.exe and the shareables both were linked against.

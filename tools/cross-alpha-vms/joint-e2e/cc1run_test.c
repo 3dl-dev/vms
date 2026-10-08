@@ -30,15 +30,21 @@ int execv(const char *, cp32 const *) __asm__("decc$$execv32");
 
 int main(void)
 {
-    static cp32 av[8];
+    /* -nostdinc: the source includes nothing, so cc1 is not sent to look at
+     * the standard include directories (/gnu/alpha-dec-vms/include,
+     * /usr/include); stat() of a path on a device that does not exist is a
+     * separate rung of the C RTL (it must fail ENOENT, see vms-9a63's
+     * follow-up), not what this proof is about. */
+    static cp32 av[9];
     av[0] = "cc1";
     av[1] = "-quiet";
-    av[2] = "-dumpbase";
-    av[3] = "hello.c";
-    av[4] = "VDA0:[SYSTMP]HELLO.C";
-    av[5] = "-o";
-    av[6] = "VDA0:[SYSTMP]HELLO.S";
-    av[7] = 0;
+    av[2] = "-nostdinc";
+    av[3] = "-dumpbase";
+    av[4] = "hello.c";
+    av[5] = "VDA0:[SYSTMP]HELLO.C";
+    av[6] = "-o";
+    av[7] = "VDA0:[SYSTMP]HELLO.S";
+    av[8] = 0;
     int pid = vfork();
     if (pid == 0) {
         /* DEC C: this runs in the parent, on the child's behalf. */

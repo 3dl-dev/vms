@@ -230,6 +230,13 @@ if ! grep -q 'vms-28d: psignal' include/signal.h; then
 	perl -0pi -e 's/^void psiginfo\(const siginfo_t \*, const char \*\);\nvoid psignal\(int, const char \*\);\n/#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD) \/* vms-28d: psignal not in the DEC C RTL *\/\nvoid psiginfo(const siginfo_t *, const char *);\nvoid psignal(int, const char *);\n#endif\n/m' include/signal.h
 fi
 grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
+# vms-4ba3: DEC C fgetname(FILE *, char *, ...) -- the file specification of an
+# open stream, served by the RMS file layer (src/vmsrms/crtl_rms_fd.c). A DEC C
+# client form only; musl has no such routine.
+if ! grep -q 'vms-4ba3: fgetname' include/stdio.h; then
+	perl -0pi -e 's/^int fclose\(FILE \*\);\n/$&#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-4ba3: fgetname *\/\nchar *fgetname(FILE *, char *, ...);\n#endif\n/m' include/stdio.h
+fi
+grep -q 'vms-4ba3: fgetname' include/stdio.h || { echo "vms-4ba3 PATCH FAIL: fgetname in include/stdio.h" >&2; exit 7; }
 echo "== vms-28d DEC C header forms applied (vaxc\$errno, getcwd 3-arg, psignal) =="
 # vms-fb4: DEC C vfork()/exec*() for clients. vfork() is the DEC C expansion
 # (open the context, then the C RTL's setjmp in the CALLER's frame); the exec

@@ -104,6 +104,8 @@
 #define LCK_M_SYSTEM    0x04   /* System-wide resource */
 #define LCK_M_VALBLK    0x08   /* Lock has value block */
 #define LCK_M_SYNC      0x10   /* Block in-kernel until granted (sync ENQ) */
+#define LCK_M_SYNCSTS   0x20   /* $ENQ LCK$M_SYNCSTS: an at-once grant is SS$_SYNCH, no AST */
+#define LCK_M_DEQALL    0x40   /* $DEQ LCK$M_DEQALL: the lock and its sublocks, or (lkid 0) all */
 #endif
 
 /* Lock value block size (bytes). Byte-identical to src/kernel/vms_ioctl.h. */

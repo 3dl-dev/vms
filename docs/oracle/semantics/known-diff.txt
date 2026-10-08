@@ -10,19 +10,6 @@ lnm LNM.TRN.SYSIN  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT
 lnm LNM.TRN.SYSOUT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
 lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job in LNM$JOB
 lnm LNM.TRN.TT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
-lock LOCK.VAL.READ  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.VAL.NEWLOCK  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.SUB.UNDER.OTHER  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.X2  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.PARENT.WITH.SUB  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.SUB  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQ.PARENT  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.SYNCSTS  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.SYNCSTS.EF  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.ASYNC.DONE  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.DEQALL  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.AFTER.DEQALL.A  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-lock LOCK.AFTER.DEQALL.B  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
 prc PRC.SELF.COUNT0  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 prc PRC.JPI.SUB  # vms-ea42: JPI$_STATE (no executive scheduler state, the vms-8019 §5.1 ruling), JPI$_OWNER / MASTER_PID (owner and job root not in the executive row), JPI$_PRIB (no OVMX priority)
 prc PRC.SELF.COUNT1  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted

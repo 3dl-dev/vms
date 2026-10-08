@@ -97,9 +97,11 @@
 #include <string.h>
 #include <unistd.h>
 #include "starlet.h"
+#include "lckdef.h"   /* LCK$M_DEQALL ($DEQ flag word) */
 #include "vms_kif.h"
 
 void vms$$lock_complete_efn(uint32_t efn);   /* sys_efn.c */
+void vms$$deliver_pending_asts(void);        /* sys_ast.c */
 
 #ifndef SS$_IVBUFLEN
 #define SS$_IVBUFLEN 844      /* %X34C, observed $ENQ LOCK.NAME32 */
@@ -171,6 +173,7 @@ static uint32_t lckflags_to_kernel(uint32_t vms_flags)
     if (vms_flags & LCK$M_CONVERT) k |= LCK_M_CONVERT;
     if (vms_flags & LCK$M_NOQUEUE) k |= LCK_M_NOQUEUE;
     if (vms_flags & LCK$M_SYSTEM)  k |= LCK_M_SYSTEM;
+    if (vms_flags & LCK$M_SYNCSTS) k |= LCK_M_SYNCSTS;
     return k;
 }
 
@@ -261,7 +264,9 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
      * status -- NOTQUEUED under LCK$M_NOQUEUE, IVLOCKID, ...) leaves it as it
      * was; observed LOCK.SECOND.CR.NOQUEUE / LOCK.CVT.B.*.NOQUEUE. */
     if (status & 1) {
-        lksb->lksb$w_status = (uint16_t)status;
+        /* SS$_SYNCH is the SERVICE's answer to LCK$M_SYNCSTS; the request
+         * itself completed with SS$_NORMAL (observed LOCK.SYNCSTS: lksb=1). */
+        lksb->lksb$w_status = (uint16_t)(status == SS$_SYNCH ? SS$_NORMAL : status);
         lksb->lksb$l_lkid = lkid;
         memcpy(lksb->lksb$b_valblk, valblk, sizeof(valblk));
     }
@@ -323,8 +328,13 @@ uint32_t (sys$enq)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 0);
 
-    if (status & 1)
+    /* An at-once grant under LCK$M_SYNCSTS (SS$_SYNCH) sets no event flag. */
+    if ((status & 1) && status != SS$_SYNCH)
         vms$$lock_complete_efn(efn);
+    /* A completion AST the executive queued for an at-once grant is
+     * delivered as the service returns, as on OpenVMS (LOCK.ASYNC.DONE). */
+    if ((status & 1) && astadr)
+        vms$$deliver_pending_asts();
 
     return status;
 }
@@ -348,10 +358,10 @@ uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
                  uint32_t flags) {
     (void)acmode;
 
-    /* Translate public flags to the kernel bitmask at the boundary (same as
-     * $ENQ). NOTE: real OpenVMS $DEQ has its own flag namespace (LCK$M_DEQALL
-     * /CANCEL/INVVALBLK) distinct from the $ENQ flags defined in starlet.h;
-     * the kernel deq currently only acts on the VALBLK bit, so only that is
-     * meaningful here. Full $DEQ flag support is tracked separately. */
-    return vms_kif_deq(lkid, (uint8_t *)valblk, lckflags_to_kernel(flags));
+    /* $DEQ has its own flag word (LCK$M_DEQALL/CANCEL/INVVALBLK): its bit 0,
+     * LCK$M_DEQALL, is not $ENQ's LCK$M_VALBLK. DEQALL releases the lock and
+     * its sublocks, or with lock ID 0 every lock at this access mode (rd
+     * vms-a3d). The value block travels as before. */
+    return vms_kif_deq(lkid, (uint8_t *)valblk,
+                       (flags & LCK$M_DEQALL) ? LCK_M_DEQALL : 0);
 }

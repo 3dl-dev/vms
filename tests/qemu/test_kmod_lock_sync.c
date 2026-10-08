@@ -537,6 +537,20 @@ static void run_valblk_grant(int pfd, int *tot_pass, int *tot_fail)
     ioctl(pfd, VMS_IOCTL_ENQ, &pex);
     CHECK(pex.status == SS_NORMAL && pex.lkid != 0,
           "parent: EX+VALBLK granted immediately on fresh VALBLKRES (publishes VALBLK_SEED)");
+    /* A new lock only READS the value block (OpenVMS, rd vms-a3d); the EX
+     * holder WRITES it by converting EX -> EX with VALBLK. */
+    {
+        struct vms_enq_args pcv = {0};
+        pcv.lkid = pex.lkid;
+        pcv.lkmode = LCK_K_EXMODE;
+        pcv.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+        memcpy(pcv.valblk, VALBLK_SEED, sizeof(VALBLK_SEED));
+        ioctl(pfd, VMS_IOCTL_CONVERT, &pcv);
+        if (pcv.status == SS_NORMAL)
+            memcpy(pex.valblk, VALBLK_SEED, sizeof(VALBLK_SEED));
+        else
+            fail++;
+    }
 
     int c2p[2], p2c[2];
     if (pipe(c2p) < 0 || pipe(p2c) < 0) { fail++; return; }

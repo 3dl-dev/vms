@@ -566,25 +566,39 @@ static uint32_t resource_hash_key(const char *name)
     return h;
 }
 
-static struct vms_lock_resource *resource_find(const char *name)
+/*
+ * A resource is named within its PARENT resource (OpenVMS: a sublock's resource
+ * name is interpreted in the tree under the parent lock's resource, so the same
+ * name under two different parents is two resources -- observed LOCK.SUB.UNDER.
+ * OTHER on VAX V7.3 and Alpha V8.4, rd vms-a3d). `parent` is NULL for a root
+ * resource; every cluster/directory path names roots only.
+ */
+static struct vms_lock_resource *resource_find_under(const char *name,
+                                                     struct vms_lock_resource *parent)
 {
     struct vms_lock_resource *res;
     uint32_t key = resource_hash_key(name);
 
     exec_hash_for_each_possible(vms_res_hash, res, hash_node, key) {
-        if (strncmp(res->name, name, 32) == 0)
+        if (res->parent == parent && strncmp(res->name, name, 32) == 0)
             return res;
     }
     return NULL;
 }
 
-static struct vms_lock_resource *resource_find_or_create(const char *name)
+static struct vms_lock_resource *resource_find(const char *name)
+{
+    return resource_find_under(name, NULL);
+}
+
+static struct vms_lock_resource *resource_find_or_create_under(const char *name,
+                                                               struct vms_lock_resource *parent)
 {
     struct vms_lock_resource *res, *new_res;
     uint32_t key;
 
     exec_lock(&vms_res_hash_lock);
-    res = resource_find(name);
+    res = resource_find_under(name, parent);
     if (res) {
         res->refcount++;
         exec_unlock(&vms_res_hash_lock);
@@ -599,7 +613,7 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
 
     /* Re-check under lock — another thread may have created it */
     exec_lock(&vms_res_hash_lock);
-    res = resource_find(name);
+    res = resource_find_under(name, parent);
     if (res) {
         res->refcount++;
         exec_unlock(&vms_res_hash_lock);
@@ -616,7 +630,11 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
     memset(new_res->valblk, 0, LCK_VALBLK_SIZE);
     exec_lock_init(&new_res->lock);
     new_res->refcount = 1;
-    new_res->parent = NULL;
+    /* A sub-resource keeps its parent resource alive for as long as it exists:
+     * it holds one reference on it, given back when it is freed. */
+    new_res->parent = parent;
+    if (parent)
+        parent->refcount++;
 
     key = resource_hash_key(name);
     exec_hash_add(vms_res_hash, &new_res->hash_node, key);
@@ -626,9 +644,15 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
     return new_res;
 }
 
+static struct vms_lock_resource *resource_find_or_create(const char *name)
+{
+    return resource_find_or_create_under(name, NULL);
+}
+
 static void resource_release(struct vms_lock_resource *res)
 {
     int i, has_valblk = 0;
+    struct vms_lock_resource *parent = NULL;
 
     exec_lock(&vms_res_hash_lock);
     res->refcount--;
@@ -652,12 +676,17 @@ static void resource_release(struct vms_lock_resource *res)
          * told it, which is what VMS's own Resource Hash Table does (p. 6-49).
          */
         if (!has_valblk && !res->hash_known) {
+            parent = res->parent;
             exec_hash_del(&res->hash_node);
             vms_res_blocks--;
             resource_free(res);
         }
     }
     exec_unlock(&vms_res_hash_lock);
+
+    /* A freed sub-resource gives back the reference it held on its parent. */
+    if (parent)
+        resource_release(parent);
 }
 
 /* ================================================================
@@ -1554,6 +1583,25 @@ void vms_proc_release_locks(struct vms_proc *proc)
  * deeper tree unwinds too. Every release is a REAL teardown, never a fabricated
  * clear (INV-6).
  */
+/* Does this process hold a lock whose parent is `parent_lkid`? */
+static int lock_has_sublocks(struct vms_proc *proc, uint32_t parent_lkid)
+{
+    struct vms_lock_entry *lock;
+    int found = 0;
+
+    if (parent_lkid == 0)
+        return 0;
+    exec_lock(&proc->lock_list_lock);
+    exec_list_for_each_entry(lock, &proc->locks, proc_list) {
+        if (lock->parent_id == parent_lkid) {
+            found = 1;
+            break;
+        }
+    }
+    exec_unlock(&proc->lock_list_lock);
+    return found;
+}
+
 static void release_child_locks(struct vms_proc *proc, uint32_t parent_lkid)
 {
     struct lock_sweep s;
@@ -2696,8 +2744,34 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         goto out;
     }
 
-    /* Find or create the resource */
-    res = resource_find_or_create(args.resnam);
+    /*
+     * Find or create the resource -- under the parent lock's resource for a
+     * sublock (rd vms-a3d). The parent must be a lock this process holds
+     * (SS$_IVLOCKID otherwise). Only a local $ENQ names a parent this way; an
+     * inbound cross-node request's parid is the requester's handle and is
+     * stored, never resolved here.
+     */
+    {
+        struct vms_lock_resource *pres = NULL;
+        struct vms_lock_entry *plock = NULL;
+
+        if (args.parid != 0 && !xn) {
+            plock = lock_find_by_id(args.parid);
+            if (!plock || plock->proc != proc) {
+                if (plock)
+                    lock_put(plock);
+                args.status = SS__IVLOCKID;
+                goto out;
+            }
+            /* A parent the CLUSTER holds (a proxy LKB) has its tree at the
+             * master; the sub-tree is not modelled on this node, so the
+             * sublock is named at the root, as before. */
+            pres = plock->proxy ? NULL : plock->resource;
+        }
+        res = resource_find_or_create_under(args.resnam, pres);
+        if (plock)
+            lock_put(plock);
+    }
     if (!res) {
         args.status = SS__INSFMEM;
         goto out;
@@ -2865,18 +2939,19 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         lock->granted_mode = args.lkmode;
         exec_list_add_tail(&lock->res_granted, &res->granted);
 
-        if (args.flags & LCK_M_VALBLK) {
-            /* If user provided a value block, write it to resource.
-             * Otherwise, read resource value block into lock. */
-            int i, has_val = 0;
-            for (i = 0; i < LCK_VALBLK_SIZE; i++) {
-                if (lock->valblk[i]) { has_val = 1; break; }
-            }
-            if (has_val)
-                memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
-            else
-                memcpy(lock->valblk, res->valblk, LCK_VALBLK_SIZE);
-        }
+        /* A NEW lock with LCK$M_VALBLK READS the resource's value block: it
+         * was held in no mode, so it has nothing to write (rd vms-a3d). */
+        if (args.flags & LCK_M_VALBLK)
+            memcpy(lock->valblk, res->valblk, LCK_VALBLK_SIZE);
+
+        /*
+         * Granted at once. An asynchronous $ENQ still completes through its
+         * AST (observed LOCK.ASYNC.DONE: asts=1) -- unless it asked for
+         * LCK$M_SYNCSTS, which turns an at-once grant into SS$_SYNCH with no
+         * AST and no event flag (observed LOCK.SYNCSTS / LOCK.SYNCSTS.EF).
+         */
+        if (!(args.flags & (LCK_M_SYNC | LCK_M_SYNCSTS)))
+            queue_completion_ast(lock);
 
         exec_unlock(&res->lock);
 
@@ -2885,6 +2960,8 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         if (args.flags & LCK_M_VALBLK)
             memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
         args.status = SS__NORMAL;
+        if (args.flags & LCK_M_SYNCSTS)
+            args.status = SS__SYNCH;
     } else {
         /*
          * Not compatible -- or not grantable AT ALL while quorum is lost.
@@ -3079,6 +3156,25 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
     uint32_t proxy_st = SS__NORMAL;
+    int deqall = (args.flags & LCK_M_DEQALL) != 0;
+
+    /*
+     * LCK$M_DEQALL with no lock ID: every lock this process holds at the
+     * caller's access mode and the less privileged ones goes (observed
+     * LOCK.DEQALL / LOCK.AFTER.DEQALL.* on VAX V7.3 and Alpha V8.4, rd vms-a3d).
+     */
+    if (args.lkid == 0 && deqall) {
+        struct lock_sweep s;
+
+        memset(&s, 0, sizeof(s));
+        exec_lock(&proc->mode_lock);
+        s.min_acmode = proc->current_mode;
+        exec_unlock(&proc->mode_lock);
+        s.use_acmode = 1;
+        lock_sweep_run(proc, &s);
+        args.status = SS__NORMAL;
+        goto out;
+    }
 
     lock = lock_find_by_id(args.lkid);
     if (!lock || lock->proc != proc) {
@@ -3086,6 +3182,20 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
             lock_put(lock);
         args.status = SS__IVLOCKID;
         goto out;
+    }
+
+    /*
+     * A lock with sublocks is not dequeued on its own: SS$_SUBLOCKS, and the
+     * lock stays (observed LOCK.DEQ.PARENT.WITH.SUB). LCK$M_DEQALL with the
+     * lock ID releases the sublocks first, then the lock.
+     */
+    if (lock_has_sublocks(proc, args.lkid)) {
+        if (!deqall) {
+            lock_put(lock);
+            args.status = SS__SUBLOCKS;
+            goto out;
+        }
+        release_child_locks(proc, args.lkid);
     }
 
     res = lock->resource;
@@ -3252,7 +3362,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     struct vms_enq_args args;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
-    int hang, stalled;
+    int hang, stalled, vb_write;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -3309,8 +3419,18 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     if (args.blkastadr)
         lock->blkastadr = args.blkastadr;
 
-    /* Write value block before conversion if requested */
-    if (args.flags & LCK_M_VALBLK)
+    /*
+     * THE VALUE BLOCK ON A CONVERSION (rd vms-a3d). A lock held in PW or EX
+     * that converts to the same or a lower mode WRITES the caller's block to
+     * the resource; every other conversion READS the resource's block into the
+     * caller's once granted. A read never writes: an NL->CR read used to
+     * overwrite the block with the reader's own (empty) one -- observed
+     * LOCK.VAL.READ / LOCK.VAL.NEWLOCK on VAX V7.3 and Alpha V8.4.
+     */
+    vb_write = (args.flags & LCK_M_VALBLK) &&
+               lock->granted_mode >= LCK_K_PWMODE &&
+               args.lkmode <= lock->granted_mode;
+    if (vb_write)
         memcpy(res->valblk, args.valblk, LCK_VALBLK_SIZE);
 
     /* Check compatibility (exclude self) */
@@ -3319,7 +3439,8 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         lock->granted_mode = args.lkmode;
 
         if (args.flags & LCK_M_VALBLK)
-            memcpy(lock->valblk, res->valblk, LCK_VALBLK_SIZE);
+            memcpy(lock->valblk, vb_write ? args.valblk : res->valblk,
+                   LCK_VALBLK_SIZE);
 
         exec_unlock(&res->lock);
 

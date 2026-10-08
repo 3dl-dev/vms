@@ -6933,9 +6933,10 @@ static int net_req_probe_spawn(struct netreq_probe *v)
     struct dsc$descriptor_s img_d = { (uint16_t)strlen(img), DSC$K_DTYPE_T, DSC$K_CLASS_S, img };
     struct dsc$descriptor_s nam_d = { (uint16_t)strlen(prcnam), DSC$K_DTYPE_T, DSC$K_CLASS_S, prcnam };
     int ok = 0;
-    if (sys$creprc(&pid, &img_d, NULL, NULL, NULL, &privs, NULL, &nam_d, 0,
-                   (100u << 16) | 100u, 0, PRC$M_DETACH) & 1) {
-        for (int k = 0; k < 6000 && !ok; k++) {       /* up to ~60 s */
+    uint32_t st = sys$creprc(&pid, &img_d, NULL, NULL, NULL, &privs, NULL, &nam_d, 0,
+                             (100u << 16) | 100u, 0, PRC$M_DETACH);
+    if (st & 1) {
+        for (int k = 0; k < 2000 && !ok; k++) {       /* up to ~20 s */
             if (vms_kif_mbx_read(ch, v, sizeof *v, &n, 1) & 1)
                 ok = (n == sizeof *v);
             else {
@@ -6943,6 +6944,14 @@ static int net_req_probe_spawn(struct netreq_probe *v)
                 nanosleep(&ts, NULL);
             }
         }
+    }
+    if (!ok) {
+        struct vms_procinfo pi;
+        memset(&pi, 0, sizeof pi);
+        uint32_t js = pid ? vms_kif_getjpi_pid(pid, &pi) : 0;
+        printf("  NOTE: request-mailbox probe: $CREPRC %s status %08X pid %08X; image %s;"
+               " after the wait the process %s\n", prcnam, (unsigned)st, (unsigned)pid, img,
+               (js & 1) ? "is still alive" : "is gone");
     }
     (void)vms_kif_dassgn((uint16_t)ch);
     return ok;
@@ -6988,6 +6997,26 @@ static int run_net_loopback_accept_test(void)
     }
 
 
+    struct netcli c;
+    int assigned = netcli_assign(&c) == 0;
+    NL_CHECK(assigned, "$ASSIGN _NET: granted a channel to the DECnet device face");
+    if (assigned) {
+        struct dnet_copy_plan plan;
+        char spec[160];
+        snprintf(spec, sizeof spec, "0\"SYSTEM\"::%s", SRC);
+        int rp = dnet_copy_plan(spec, GOT, &plan);
+        uint32_t st = (rp == 0) ? copy_client_run_net(&c, &plan, "MANAGER") : SS$_BADPARAM;
+        NL_CHECK(st == SS$_NORMAL && fal_file_matches(GOT, lines, 1),
+                 "COPY 0\"SYSTEM MANAGER\"::file over $QIO _NET: completed through NETACP, and the"
+                 " records BYTE-MATCH (qio_net_op -> mailboxes -> NETACP -> loopback -> FAL.EXE)");
+        st = (rp == 0) ? copy_client_run_net(&c, &plan, "WRONGPW") : SS$_BADPARAM;
+        NL_CHECK(st == SS$_INVLOGIN,
+                 "the same COPY with a bad password completes IO$_ACCESS SS$_INVLOGIN -- no link, no file");
+        uint8_t b[8]; size_t x = 0;
+        st = netcli_op(&c, DNET_BROKER_OP_RECV, NULL, 0, b, sizeof b, &x);
+        NL_CHECK(st == SS$_FILNOTACC, "IO$_READVBLK on the channel after DEACCESS is SS$_FILNOTACC");
+        NL_CHECK(sys$dassgn(c.chan) == SS$_NORMAL, "$DASSGN releases the _NET: channel");
+    }
     /* The request mailbox, from an unprivileged process (rd vms-c6d1). */
     if (netacp_running() == 1) {
         struct netreq_probe v;
@@ -7013,26 +7042,6 @@ static int run_net_loopback_accept_test(void)
                  "the same request, truthful and with NETMBX, is served (FILNOTACC: no such link)");
     }
 
-    struct netcli c;
-    int assigned = netcli_assign(&c) == 0;
-    NL_CHECK(assigned, "$ASSIGN _NET: granted a channel to the DECnet device face");
-    if (assigned) {
-        struct dnet_copy_plan plan;
-        char spec[160];
-        snprintf(spec, sizeof spec, "0\"SYSTEM\"::%s", SRC);
-        int rp = dnet_copy_plan(spec, GOT, &plan);
-        uint32_t st = (rp == 0) ? copy_client_run_net(&c, &plan, "MANAGER") : SS$_BADPARAM;
-        NL_CHECK(st == SS$_NORMAL && fal_file_matches(GOT, lines, 1),
-                 "COPY 0\"SYSTEM MANAGER\"::file over $QIO _NET: completed through NETACP, and the"
-                 " records BYTE-MATCH (qio_net_op -> mailboxes -> NETACP -> loopback -> FAL.EXE)");
-        st = (rp == 0) ? copy_client_run_net(&c, &plan, "WRONGPW") : SS$_BADPARAM;
-        NL_CHECK(st == SS$_INVLOGIN,
-                 "the same COPY with a bad password completes IO$_ACCESS SS$_INVLOGIN -- no link, no file");
-        uint8_t b[8]; size_t x = 0;
-        st = netcli_op(&c, DNET_BROKER_OP_RECV, NULL, 0, b, sizeof b, &x);
-        NL_CHECK(st == SS$_FILNOTACC, "IO$_READVBLK on the channel after DEACCESS is SS$_FILNOTACC");
-        NL_CHECK(sys$dassgn(c.chan) == SS$_NORMAL, "$DASSGN releases the _NET: channel");
-    }
     if (own) {
         g_lb_stop = 1;
         pthread_join(th, NULL);

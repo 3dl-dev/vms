@@ -113,8 +113,10 @@ int main(void) {
 
     status = sys$fao(&fmt5, &outlen, &outbuf5);
     buffer[outlen] = '\0';
-    if ($VMS_STATUS_SUCCESS(status) && strcmp(buffer, "Line1\nLine2") == 0) {
-        printf("PASS: !/ directive (newline)\n");
+    /* !/ is CR LF on OpenVMS (FAO.CTLCHARS, docs/oracle/semantics/fao/,
+     * observed on VAX V7.3 and Alpha V8.4). */
+    if ($VMS_STATUS_SUCCESS(status) && strcmp(buffer, "Line1\r\nLine2") == 0) {
+        printf("PASS: !/ directive (CR LF)\n");
     } else {
         printf("FAIL: !/ directive (status=0x%x, expected newline, got \"%s\")\n",
                status, buffer);

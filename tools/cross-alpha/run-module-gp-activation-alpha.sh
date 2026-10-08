@@ -686,6 +686,11 @@ assert_crtlfd() {
   printf '%s\n' "$region" | grep -aq "line 120 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the last line" >&2; return 1; }
   printf '%s\n' "$region" | grep -aq "APPENDED BY THE C RTL" || { echo "  assert_crtlfd: TYPE did not show the appended line" >&2; return 1; }
   printf '%s\n' "$region" | grep -aqE "TYPE-STATUS=%X[0-9A-F]*[13579BDF]( |$)" || { echo "  assert_crtlfd: TYPE did not succeed" >&2; return 1; }
+  # vms-45f: the RMS keywords given to fopen/creat/open are the attributes DCL
+  # reads back from the file headers.
+  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF\r?$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDUDF.DAT RFM=UDF" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20\r?$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDFIX.DAT RFM=FIX MRS=20" >&2; return 1; }
+  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=\.\r?$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDSLF.DAT RFM=STMLF with no record attributes" >&2; return 1; }
   return 0
 }
 
@@ -1878,12 +1883,17 @@ EOF
       echo "line 120 of the OVMX C RTL file layer over RMS"
       echo "APPENDED BY THE C RTL"
       echo "CRTLFD-PROOF: TYPE-STATUS=%X00000001 SEVERITY=1"
+      echo "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF"
+      echo "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20"
+      echo "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=."
       echo "CRTLFD-PROOF: === END INDEPENDENT READER ==="
     } > "$_st/pass.log"
+    sed 's/CFDUDF.DAT RFM=UDF/CFDUDF.DAT RFM=STMLF/' "$_st/pass.log" > "$_st/kwignored.log"
+    sed 's/CFDSLF.DAT RFM=STMLF RAT=\./CFDSLF.DAT RFM=STMLF RAT=C./' "$_st/pass.log" > "$_st/ratignored.log"
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi

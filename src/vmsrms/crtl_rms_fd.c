@@ -758,32 +758,40 @@ static void fd_apply_create_attrs(struct FAB *fab, const struct fd_attrs *a)
 /*
  * The number of arguments a call passed: the low byte of the VMS argument
  * information (AI, R25), which OTS$HOME_ARGS stores at home[0] -- the quadword
- * va_start's pointer has `named` named-argument quadwords and that word below
- * it (tools/cross-alpha-vms/ots/ots_home_args.s). DEC C's va_count.
+ * `named` + 1 quadwords below where va_start points
+ * (tools/cross-alpha-vms/ots/ots_home_args.s). DEC C's va_count. A macro with
+ * a constant index, used in the variadic function itself: the port compiler's
+ * stdarg pass crashes when va_list pointer arithmetic is inlined from a helper
+ * (vms-45f, filed separately).
  */
-static unsigned fd_va_count(va_list ap, unsigned named)
-{
-    const uint64_t *home = (const uint64_t *)(void *)ap - (named + 1);
-    return (unsigned)(home[0] & 0xFF);
-}
+#define FD_VA_COUNT(ap, named) \
+    ((unsigned)(((const uint64_t *)(void *)(ap))[-((named) + 1)] & 0xFF))
 
-/* Collect the keyword arguments [first, count) of a call into fd_pending. */
-static int fd_collect(va_list ap, unsigned skip, unsigned nkw)
+/* Up to this many keyword arguments per call. */
+#define FD_MAX_KW 16
+
+/* Parse the keyword arguments kw[0..n) into fd_pending. */
+static int fd_collect(const char *const *kw, unsigned n)
 {
     memset(&fd_pending, 0, sizeof fd_pending);
-    for (unsigned i = 0; i < skip; i++)
-        (void)va_arg(ap, long);
-    for (unsigned i = 0; i < nkw; i++) {
-        const char *kw = va_arg(ap, const char *);
-        int r = kw_parse(kw, &fd_pending);
+    if (n > FD_MAX_KW)
+        return -EINVAL;
+    for (unsigned i = 0; i < n; i++) {
+        int r = kw_parse(kw[i], &fd_pending);
         if (r < 0) {
             memset(&fd_pending, 0, sizeof fd_pending);
             return r;
         }
     }
-    fd_pending.set = nkw > 0;
+    fd_pending.set = n > 0;
     return 0;
 }
+
+/* Copy `n` const char * variadic arguments out of `ap` into kw[] (bounded). */
+#define FD_TAKE_KW(ap, kw, n) do {                                   \
+        for (unsigned _i = 0; _i < (n) && _i < FD_MAX_KW; _i++)       \
+            (kw)[_i] = va_arg(ap, const char *);                       \
+    } while (0)
 
 static long long do_openat(long long dirfd, const char *path, long long flags,
                            int *handled)
@@ -1526,11 +1534,14 @@ static int fab_query(int fd, int dirfd, const char *path,
  * place of decc$fopen in the RMS-backed DECC$SHR (mk_decc_shr.sh). */
 FILE *ovmx_crtl_fopen(const char *name, const char *mode, ...)
 {
+    const char *kw[FD_MAX_KW];
     va_list ap;
     va_start(ap, mode);
-    unsigned n = fd_va_count(ap, 2);
-    int r = fd_collect(ap, 0, n > 2 ? n - 2 : 0);
+    unsigned n = FD_VA_COUNT(ap, 2);
+    unsigned nk = n > 2 ? n - 2 : 0;
+    FD_TAKE_KW(ap, kw, nk);
     va_end(ap);
+    int r = fd_collect(kw, nk);
     if (r < 0) {
         errno = -r;
         return NULL;
@@ -1543,12 +1554,15 @@ FILE *ovmx_crtl_fopen(const char *name, const char *mode, ...)
 /* DEC C open(file, flags [, mode [, keyword, ...]]). */
 int ovmx_crtl_open(const char *name, int flags, ...)
 {
+    const char *kw[FD_MAX_KW];
     va_list ap;
     va_start(ap, flags);
-    unsigned n = fd_va_count(ap, 2);
+    unsigned n = FD_VA_COUNT(ap, 2);
     int mode = n > 2 ? va_arg(ap, int) : 0;
-    int r = fd_collect(ap, 0, n > 3 ? n - 3 : 0);
+    unsigned nk = n > 3 ? n - 3 : 0;
+    FD_TAKE_KW(ap, kw, nk);
     va_end(ap);
+    int r = fd_collect(kw, nk);
     if (r < 0) {
         errno = -r;
         return -1;
@@ -1561,11 +1575,14 @@ int ovmx_crtl_open(const char *name, int flags, ...)
 /* DEC C creat(file, mode [, keyword, ...]). */
 int ovmx_crtl_creat(const char *name, mode_t mode, ...)
 {
+    const char *kw[FD_MAX_KW];
     va_list ap;
     va_start(ap, mode);
-    unsigned n = fd_va_count(ap, 2);
-    int r = fd_collect(ap, 0, n > 2 ? n - 2 : 0);
+    unsigned n = FD_VA_COUNT(ap, 2);
+    unsigned nk = n > 2 ? n - 2 : 0;
+    FD_TAKE_KW(ap, kw, nk);
     va_end(ap);
+    int r = fd_collect(kw, nk);
     if (r < 0) {
         errno = -r;
         return -1;

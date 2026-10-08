@@ -15,6 +15,8 @@
 #include <string.h>
 #include <vms/rms.h>
 #include <vms/stsdef.h>
+#include <vms/descrip.h>
+#include <vms/lnmdef.h>
 
 #define RMS_NMF 99018           /* RMS$_NMF (rmsdef) */
 
@@ -73,6 +75,46 @@ int main(void)
               nam.nam$l_dev[nam.nam$b_dev - 1] == ':',
           24, "NAM$L_DEV/NAM$B_DEV address the device inside the caller's RSA");
     printf("VMSABI-FID: (%u,%u,%u)\n", nam.nam$w_fid[0], nam.nam$w_fid[1], nam.nam$w_fid[2] & 0xFF);
+
+    /* vms-38b: $ASSIGN the device $SEARCH named, through a 32-bit descriptor
+     * (as vmsdbgout.cc does), then $DASSGN it; a second $DASSGN must fail. */
+    char devname[32];
+    unsigned devlen = nam.nam$b_dev < sizeof devname ? nam.nam$b_dev : sizeof devname - 1;
+    memcpy(devname, nam.nam$l_dev, devlen);
+    struct dsc$descriptor_s devdsc = { (unsigned short)devlen, DSC$K_DTYPE_T, DSC$K_CLASS_S, devname };
+    unsigned short chan = 0;
+    st = SYS$ASSIGN(&devdsc, &chan, 0, 0, 0);
+    printf("VMSABI: $ASSIGN %.*s st=%%X%08X chan=%u\n", (int)devlen, devname, (unsigned)st, chan);
+    check((st & 1) && chan != 0, 30, "SYS$ASSIGN with a 32-bit descriptor gives a channel");
+    st = SYS$DASSGN(chan);
+    check(st & 1, 31, "SYS$DASSGN releases it");
+    check(!(SYS$DASSGN(chan) & 1), 32, "a second SYS$DASSGN of the same channel fails");
+
+    /* vms-38b: $CRELNM in LNM$SYSTEM through a 32-bit ILE3 item list, $TRNLNM
+     * back; DCL SHOW LOGICAL (another process) reads it after the image ends. */
+    struct { unsigned short len, code; void *buf; unsigned short *retlen; } items[2];
+    static char eqv[] = "PROVED_BY_CRELNM";
+    static char tab[] = "LNM$SYSTEM", lnm[] = "VMSABI_GATE";
+    struct dsc$descriptor_s tabdsc = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, tab };
+    struct dsc$descriptor_s lnmdsc = { sizeof lnm - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, lnm };
+    memset(items, 0, sizeof items);
+    items[0].len = sizeof eqv - 1;
+    items[0].code = LNM$_STRING;
+    items[0].buf = eqv;
+    st = SYS$CRELNM(0, &tabdsc, &lnmdsc, 0, items);
+    printf("VMSABI: $CRELNM LNM$SYSTEM VMSABI_GATE st=%%X%08X\n", (unsigned)st);
+    check(st & 1, 33, "SYS$CRELNM with a 32-bit ILE3 list defines the name");
+    char back[64];
+    unsigned short backlen = 0;
+    memset(items, 0, sizeof items);
+    items[0].len = sizeof back;
+    items[0].code = LNM$_STRING;
+    items[0].buf = back;
+    items[0].retlen = &backlen;
+    st = SYS$TRNLNM(0, &tabdsc, &lnmdsc, 0, items);
+    printf("VMSABI: $TRNLNM st=%%X%08X -> \"%.*s\"\n", (unsigned)st, (int)backlen, back);
+    check((st & 1) && backlen == sizeof eqv - 1 && memcmp(back, eqv, backlen) == 0, 34,
+          "SYS$TRNLNM returns the equivalence string and its length through the item list");
 
     st = SYS$SEARCH(&fab, 0, 0);
     check(st == RMS_NMF && nam.nam$l_wcc == 0, 25, "the next $SEARCH is RMS$_NMF and drops the context");

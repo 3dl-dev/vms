@@ -74,44 +74,44 @@
     }
   ],
   "overall": {
-    "count": 469,
+    "count": 470,
     "by_status": {
       "verified": 24,
       "implemented": 282,
-      "partial": 55,
+      "partial": 56,
       "stub": 14,
       "designed": 1,
       "absent": 93
     },
     "by_authenticity": {
-      "real": 321,
+      "real": 322,
       "n/a": 94,
       "advisory": 48,
       "facade-risk": 6
     },
     "met": 306,
-    "in_progress": 55,
+    "in_progress": 56,
     "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 423,
+    "count": 424,
     "by_status": {
       "verified": 24,
       "implemented": 282,
-      "partial": 54,
+      "partial": 55,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 320,
+      "real": 321,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
     "met": 306,
-    "in_progress": 54,
+    "in_progress": 55,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -502,22 +502,22 @@
       "vms_ref": "OpenVMS Programming Concepts Manual, Ch. 4 (Descriptors); OpenVMS Calling Standard",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 14,
+        "count": 15,
         "by_status": {
           "verified": 0,
           "implemented": 9,
-          "partial": 1,
+          "partial": 2,
           "stub": 0,
           "designed": 0,
           "absent": 4
         },
         "by_authenticity": {
-          "real": 9,
+          "real": 10,
           "n/a": 4,
           "advisory": 1
         },
         "met": 9,
-        "in_progress": 1,
+        "in_progress": 2,
         "not_started": 4,
         "facade_risk": 0
       }
@@ -3801,6 +3801,21 @@
       "evidence": "src/libvms/descrip.c",
       "verified_against": null,
       "notes": "",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "descriptors",
+      "facility_name": "Descriptors & Data Types (DESCRIP.H)",
+      "id": "vms$abi_32bit_arguments",
+      "kind": "feature",
+      "vms": "System services accepting the VMS argument forms -- 32-bit (and DSC64) string descriptors, ILE3 (and ILEB_64) item lists -- from a DEC C caller at either pointer size",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/syssvc/sys_vmsabi.c",
+      "verified_against": null,
+      "notes": "vms-38b: SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM, SYS$CRELNM by their upper-case names (src/libvms/include/vms/starlet.h, vms/descrip.h) run the same executive paths as OVMX's lower-case services. Proven by the alpha vmsabi-rms gate (32-bit program; SHOW LOGICAL/SYSTEM sees the name SYS$CRELNM defined). Partial: SYS$QIO/SYS$QIOW (disk ACP IO$_ACCESS with an ATR list) waits on the ATR$C_ code oracle capture",
       "plan_ref": "vms-801"
     },
     {

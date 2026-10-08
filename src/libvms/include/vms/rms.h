@@ -10,6 +10,7 @@
 #include "fabdef.h"
 #include "namdef.h"
 #include "rabdef.h"
+#include "starlet.h"   /* the services RMS callers pair with $ASSIGN */
 
 #define cc$rms_fab ((struct fabdef){ .fab$b_bid = FAB$C_BID, .fab$b_bln = FAB$C_BLN, \
         .fab$l_fop = 0, .fab$b_fac = FAB$M_GET, .fab$b_org = FAB$C_SEQ, \

@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**469 surfaces catalogued** across 9 domains, each with a per-surface status.
+**470 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 321 |
+| ✅ verified | 24 | | real | 322 |
 | 🟢 implemented | 282 | | n/a | 94 |
-| 🟡 partial | 55 | | advisory | 48 |
+| 🟡 partial | 56 | | advisory | 48 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 93 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **423 committed** — **306 met** (implemented/verified), 54 in progress (partial), 63 not started (absent/stub/designed).
+- **424 committed** — **306 met** (implemented/verified), 55 in progress (partial), 63 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜`  —  216 surfaces catalogued (153 met · 16 in progress · 47 not started) · V1: 207 committed, 153 met · ⚠ 4 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜`  —  217 surfaces catalogued (153 met · 17 in progress · 47 not started) · V1: 208 committed, 153 met · ⚠ 4 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-09-14</sub>
@@ -69,7 +69,7 @@ Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): d
 16 DSC$K_CLASS_* descriptor classes defined; only S and D are backed by runtime support. A/VS/P/PI are constants only, blocking Fortran array-descriptor and COBOL/BASIC varying-string corpus. ~30 DSC$K_DTYPE_* data-type codes are all defined and real; VAX F/D/G/H floating dtypes are defined but nothing consumes them arithmetically. 6 copy/alloc helpers in descrip.c are implemented and real.
 
 
-<sub>14 items · 9 met · 1 in progress · 4 not started</sub>
+<sub>15 items · 9 met · 2 in progress · 4 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -87,6 +87,7 @@ Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): d
 | 🟢 | `dsc$copy` | routine | Copy descriptor contents, class-aware pad/truncate | implemented | real | in | `src/libvms/descrip.c` |
 | 🟢 | `dsc$length` | routine | Extract descriptor length | implemented | real | in | `src/libvms/descrip.c` |
 | 🟢 | `dsc$pointer` | routine | Extract descriptor data pointer | implemented | real | in | `src/libvms/descrip.c` |
+| 🟡 | `vms$abi_32bit_arguments` | feature | System services accepting the VMS argument forms -- 32-bit (and DSC64) string descriptors, ILE3 (and ILEB_64) item lists -- from a DEC C caller at either pointer size | partial | real | in | `src/libvms/syssvc/sys_vmsabi.c` — vms-38b: SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM, SYS$CRELNM by their upper-case names (src/libvms/include/vms/starlet.h, vms/descrip.h) run the same executive paths as OVMX's lower-case services. Proven by the alpha vmsabi-rms gate (32-bit program; SHOW LOGICAL/SYSTEM sees the name SYS$CRELNM defined). Partial: SYS$QIO/SYS$QIOW (disk ACP IO$_ACCESS with an ATR list) waits on the ATR$C_ code oracle capture |
 
 ### lib — LIB$ Run-Time Library
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS RTL Library (LIB$) Manual · reviewed 2026-09-14</sub>

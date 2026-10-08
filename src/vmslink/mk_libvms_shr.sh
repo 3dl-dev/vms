@@ -150,6 +150,10 @@ if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
         case "$_c" in syssvc/sys_imgact|syssvc/imgact_prodreg) continue;; esac
         ALPHA_LIST="$ALPHA_LIST $_c"
     done
+    # vms-38b: the VMS-ABI system services (SYS$ASSIGN/DASSGN/TRNLNM/CRELNM over
+    # 32-bit descriptors and item lists, syssvc/sys_vmsabi.c) and their native
+    # half; the 32-bit address fields need the port compiler, so Alpha only.
+    ALPHA_LIST="$ALPHA_LIST syssvc/sys_vmsabi_core syssvc/sys_vmsabi"
     ALPHA_INCS="$INCS" ALPHA_DEFS="$DEFS" ALPHA_ALLOW_UNDEF=1 \
         exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" "$ALPHA_LIST" \
             --use "$DECC_SHR" --use "$PROC_SHR" --use "$SYS_SHR" --use "$FS_SHR" --use "$ALPHA_OTS_USE"

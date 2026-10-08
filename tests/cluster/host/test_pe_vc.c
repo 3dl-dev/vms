@@ -955,8 +955,8 @@ static void test_gap_is_discarded_and_reacked(void)
 	struct pe_vc *vc;
 	uint16_t wire = 0;
 
-	printf("-- a sequence gap is DISCARDED and re-acked, never broken "
-	       "(3.2.5)\n");
+	printf("-- a sequence gap is held back and re-acked, never broken "
+	       "(3.2.5, rd vms-ec2)\n");
 	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
 	rx_seqmsg(&g_env, 1, 0);
 	fake_pe_clear_frames(&g_env.fake);
@@ -970,7 +970,7 @@ static void test_gap_is_discarded_and_reacked(void)
 			"and the circuit is STILL OPEN -- a gap is not a break");
 	ct_check_eq_u32(vc->recv_seq, 1, "recv_seq did NOT advance past the hole");
 	ct_check_eq_u32(g_env.upper_rec.messages, 0,
-			"the out-of-order frame was discarded, not delivered");
+			"the out-of-order frame was not delivered past the hole");
 	ct_check_eq_u32(g_env.upper_rec.downs, 0, "SCS was told nothing");
 	ct_check_eq_u32(g_env.fsm.vc_reformations, 0, "and nothing re-formed");
 	ct_check(last_wire_ack(&g_env, &wire) && wire == 1,
@@ -985,6 +985,50 @@ static void test_gap_is_discarded_and_reacked(void)
 			"and delivered upward exactly once each");
 	ct_check_eq_u32(vc->rx_gaps, 1, "with no further gap");
 	ct_check_eq_u32(vc->downs, 0, "and the circuit never went down");
+}
+
+/*
+ * rd vms-ec2 -- THE REAL PORT'S RECEIVE HOLD, against the oracle.
+ *
+ * tests/lab/captures/vms-ec2-vc-reorder-20261005, R2-rx3.pcap: a real VAX3
+ * received VAX1's 17, 16, 15 in that order and answered with one cumulative
+ * ack of 17; nothing was re-sent. The window is what this circuit GRANTED: a
+ * frame further ahead than recv_credit_max is not one it promised to buffer.
+ */
+static void test_receive_hold_matches_the_real_port(void)
+{
+	struct pe_vc *vc;
+	uint16_t wire = 0, far;
+
+	printf("-- rd vms-ec2: arrival 4,3,2 (after 1) is held and acked as 4; "
+	       "beyond the grant is discarded\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	rx_seqmsg(&g_env, 1, 0);
+	memset(&g_env.upper_rec, 0, sizeof(g_env.upper_rec));
+	vc = the_vc(&g_env);
+
+	/* The oracle's reversed triple, shifted to this circuit: 4, 3, 2. */
+	rx_seqmsg(&g_env, 4, 0);
+	rx_seqmsg(&g_env, 3, 0);
+	ct_check_eq_u32(vc->rx_held, 2, "4 and 3 are KEPT");
+	ct_check_eq_u32(g_env.upper_rec.messages, 0, "nothing passes the hole");
+	fake_pe_clear_frames(&g_env.fake);
+	rx_seqmsg(&g_env, 2, 0);
+	ct_check_eq_u32(vc->recv_seq, 4, "2 fills it: the frontier is 4");
+	ct_check(last_wire_ack(&g_env, &wire) && wire == 4,
+		 "*** one cumulative ack of the highest -- 4, like the real "
+		 "VAX3's 17 ***");
+	ct_check_eq_u32(g_env.upper_rec.messages, 3,
+			"2, 3, 4 delivered, each exactly once");
+	ct_check_eq_u32(vc->rx_held_delivered, 2, "two of them from the hold");
+
+	/* NEVER MORE THAN THE GRANT. */
+	far = (uint16_t)(vc->recv_seq + vc->recv_credit_max + 1u);
+	rx_seqmsg(&g_env, far, 0);
+	ct_check_eq_u32(vc->rx_held, 2,
+			"a frame beyond the receive credit this circuit granted "
+			"is not held");
+	ct_check_eq_u32(vc->recv_seq, 4, "and moves nothing");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1079,40 +1123,51 @@ static void test_recv_ack_never_freezes(void)
 	ct_check_eq_u32(the_vc(&g_env)->rx_gaps, 0, "and never seen a gap");
 
 	/*
-	 * Phase 2 -- REORDER, and the FC-P1.9 correction.
+	 * Phase 2 -- REORDER, and the rd vms-ec2 ruling.
 	 *
-	 * The link delivers 7 before 6. This phase used to assert that the
-	 * circuit BROKE on it; that assertion encoded the bug design §3.2.5
-	 * ruled on. With a receive window of 1 the reordered frame is
-	 * DISCARDED, the acknowledgement stays at 5, and it is RE-SENT -- which
-	 * is still the invariant this test exists for, because the third
-	 * outcome (an open circuit whose acknowledgement silently stops) is what
-	 * check_never_frozen() forbids. The ack does not advance past a hole,
-	 * and it does not stop being told to the peer either.
+	 * The link delivers 7 before 6. FC-P1.9's receive window of 1 DISCARDED
+	 * it and waited for the sender's retransmit; a real V7.3 port KEEPS it
+	 * (tests/lab/captures/vms-ec2-vc-reorder-20261005: arrival 17,16,15
+	 * acked as 17, nothing re-sent). Either way the invariant this test
+	 * exists for holds: the acknowledgement does not move past the hole,
+	 * and it does not stop being told to the peer (check_never_frozen).
 	 */
-	printf("--   ... and a reorder is discarded and re-acked, not a break\n");
+	printf("--   ... and a reorder is HELD and re-acked, not a break\n");
 	fake_pe_clear_frames(&g_env.fake);
-	rx_seqmsg(&g_env, 7, 0);
-	check_never_frozen(&g_env, 5, "reordered msg 7 before 6");
-	ct_check_eq_u32(the_vc(&g_env)->rx_gaps, 1, "scored as a gap");
-	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
-			"the circuit is untouched: a gap is a counter, not a "
-			"reason (3.2.5)");
-	ct_check_eq_u32(the_vc(&g_env)->downs, 0, "nothing was torn down");
+	{
+		uint32_t before = g_env.upper_rec.messages;
 
-	/*
-	 * Phase 3 -- the sender goes back N and the frontier moves again. 6 is
-	 * re-sent, then 7 behind it, and the acknowledgement follows the
-	 * contiguous frontier the whole way. No re-formation was needed: the
-	 * port absorbed the loss, which is precisely what makes a VC break a
-	 * REAL event for the layers above (design §3.2.5's FC-P2.2 contract).
-	 */
-	printf("--   ... and go-back-N fills the hole without a re-formation\n");
-	fake_pe_clear_frames(&g_env.fake);
-	rx_seqmsg(&g_env, 6, 0);
-	check_never_frozen(&g_env, 6, "the sender re-sent 6");
-	rx_seqmsg(&g_env, 7, 0);
-	check_never_frozen(&g_env, 7, "and 7 behind it, in order");
+		rx_seqmsg(&g_env, 7, 0);
+		check_never_frozen(&g_env, 5, "reordered msg 7 before 6");
+		ct_check_eq_u32(the_vc(&g_env)->rx_gaps, 1, "scored as a gap");
+		ct_check_eq_u32(the_vc(&g_env)->rx_held, 1,
+				"...and KEPT, inside the window it granted");
+		ct_check_eq_u32(g_env.upper_rec.messages, before,
+				"and nothing is delivered past the hole");
+		ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
+				"the circuit is untouched: a gap is a counter, "
+				"not a reason (3.2.5)");
+		ct_check_eq_u32(the_vc(&g_env)->downs, 0,
+				"nothing was torn down");
+
+		/*
+		 * Phase 3 -- the hole fills and the frontier jumps over what was
+		 * held: 6 arrives, 6 AND 7 are delivered in order, and the ack
+		 * reaches 7 at once. A late retransmit of 7 is then a duplicate.
+		 */
+		printf("--   ... and the hole filling delivers both, in order\n");
+		fake_pe_clear_frames(&g_env.fake);
+		rx_seqmsg(&g_env, 6, 0);
+		check_never_frozen(&g_env, 7, "6 filled the hole");
+		ct_check_eq_u32(g_env.upper_rec.messages, before + 2u,
+				"6 and the held 7 were both delivered");
+		ct_check_eq_u32(the_vc(&g_env)->rx_held_delivered, 1,
+				"the held one through the hold");
+		rx_seqmsg(&g_env, 7, 0);
+		check_never_frozen(&g_env, 7, "a late re-send of 7 is a duplicate");
+		ct_check_eq_u32(g_env.upper_rec.messages, before + 2u,
+				"and is never delivered twice");
+	}
 	ct_check_eq_u32(g_env.fsm.vc_reformations, 0,
 			"the whole loss/reorder scenario cost ZERO circuit "
 			"re-formations");
@@ -2581,6 +2636,7 @@ int main(void)
 	test_ack_without_an_upper_layer();
 	test_duplicate_is_absorbed_and_reacked();
 	test_gap_is_discarded_and_reacked();
+	test_receive_hold_matches_the_real_port();
 	test_recv_ack_never_freezes();
 	test_send_seq_is_one_contiguous_counter();
 	test_sequenced_frames_carry_this_peers_ack();

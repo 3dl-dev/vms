@@ -122,6 +122,7 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+pe-receive-hold-disarmed
 quorum-form-set-ignores-peers
 codec-vc-zero-incarnation-not-refused
 codec-cm-short-body-not-refused
@@ -637,6 +638,30 @@ the discard is COUNTED
 ...and named
 SILENTLY: not one console line, because a joiner that retries would otherwise print one per retry
 and no transition was opened
+EOF
+                      ;;
+        esac;;
+
+    pe-receive-hold-disarmed)
+        case "$_f" in
+        facility)     echo "the VC receive hold (rd vms-ec2): a sequenced frame that arrives ahead of the hole, inside the receive credit this circuit granted, is kept and delivered in order once the hole fills -- as a real V7.3 port does";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "vc_hold() refuses every frame, so OVMX is back to the window-1 receiver that discards a reordered frame and makes a real VAX wait ~3 s to re-send it -- 44 of 94 back-to-back pairs on the stall rig's jittered tap (tests/lab/captures/vms-ec2-vc-reorder-20261005).";;
+        require_fail) cat <<'EOF'
+...and KEPT, inside the window it granted
+6 filled the hole: OPEN circuit acknowledges 7 (highest contiguous)
+6 filled the hole: and the WIRE carries 7
+6 and the held 7 were both delivered
+the held one through the hold
+4 and 3 are KEPT
+2 fills it: the frontier is 4
+*** one cumulative ack of the highest -- 4, like the real VAX3's 17 ***
+2, 3, 4 delivered, each exactly once
+two of them from the hold
+a frame beyond the receive credit this circuit granted is not held
+and moves nothing
 EOF
                       ;;
         esac;;
@@ -1482,6 +1507,10 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-receive-hold-disarmed)
+        # `if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||` is unique.
+        sed -i 's/if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||/if (1 || rx->frame == NULL || rx->len > PE_VC_FRAME_MAX || \/\* NEGCTL pe-receive-hold-disarmed \*\//' "$_file";;
 
     pe-reformation-stacks-before-it-starts)
         # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.

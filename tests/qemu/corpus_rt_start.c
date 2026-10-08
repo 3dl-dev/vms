@@ -31,7 +31,8 @@
  * WEAKLY (rtl/rms_textfile.c, rtl/sysuaf.c -- libvms must not depend on
  * libvmsrms), and a weak reference does not pull an archive member out of
  * libvmsrms.a: without a strong reference somewhere in the link the reader is
- * silently unlinked and $GETUAI/$CREPRC see "no such user". DCL, LOGINOUT and
+ * silently unlinked and $GETUAI/$CREPRC see "no such user" ($ASCTOID/$IDTOASC
+ * likewise see no RIGHTSLIST.DAT: the rights-database readers are anchored too). DCL, LOGINOUT and
  * PROVISION each carry such an anchor (src/vmslink/*_rms_bind.c); this is the
  * corpus image's.
  */
@@ -43,6 +44,8 @@ extern unsigned int sys$put(void *, void (*)(void *), void (*)(void *));
 extern unsigned int sys$create(void *, void (*)(void *), void (*)(void *));
 extern unsigned int ovmx_sysuaf_read_user(const char *username, void *out);
 extern unsigned int ovmx_sysuaf_read_uic(unsigned int uic, void *out);
+extern unsigned int ovmx_rightslist_asctoid(const char *name, unsigned int *value);
+extern unsigned int ovmx_rightslist_idtoasc(unsigned int value, char *name, unsigned long bufsz);
 
 __attribute__((used, noinline))
 unsigned int corpus_rt_rms_bind_never(void)
@@ -52,7 +55,8 @@ unsigned int corpus_rt_rms_bind_never(void)
         return 0;
     return sys$open(0, 0, 0)  | sys$close(0, 0, 0) | sys$connect(0, 0, 0)
          | sys$get(0, 0, 0)   | sys$put(0, 0, 0)   | sys$create(0, 0, 0)
-         | ovmx_sysuaf_read_user(0, 0) | ovmx_sysuaf_read_uic(0, 0);
+         | ovmx_sysuaf_read_user(0, 0) | ovmx_sysuaf_read_uic(0, 0)
+         | ovmx_rightslist_asctoid(0, 0) | ovmx_rightslist_idtoasc(0, 0, 0);
 }
 
 extern unsigned int sys$getuai(unsigned int, void *, void *, void *, void *, void *, void *);

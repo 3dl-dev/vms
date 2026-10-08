@@ -113,9 +113,13 @@ struct vms_mbx_write_args {
     uint32_t chan;      /* in */
     uint32_t len;       /* in: bytes in data (<= VMS_MBX_IOCTL_MAXLEN) */
     uint32_t status;    /* out */
-    uint32_t pad;
+    uint32_t flags;     /* in: VMS_MBX_WRITE_* (was pad; 0 = an ordinary message) */
     char     data[VMS_MBX_IOCTL_MAXLEN];
 };
+
+/* IO$_WRITEOF: queue an END-OF-FILE message (len 0); the read that dequeues it
+ * completes with SS$_ENDOFFILE (rd vms-262a). */
+#define VMS_MBX_WRITE_EOF  0x00000001u
 
 /* Read modifiers carried in vms_mbx_read_args.flags (in).
  *
@@ -138,6 +142,9 @@ struct vms_mbx_read_args {
     uint32_t flags;     /* in: VMS_MBX_READ_* modifiers (IO$M_NOW) */
     uint32_t len;       /* out: actual message length */
     uint32_t status;    /* out */
+    uint32_t sender_pid; /* out: VMS PID of the process that wrote the message
+                         * (a mailbox read's IOSB second longword, rd vms-4a69) */
+    uint32_t pad2;
     char     data[VMS_MBX_IOCTL_MAXLEN];
 };
 
@@ -209,7 +216,7 @@ _Static_assert(sizeof(struct vms_mbx_delmbx_args) == 8,
                "vms_mbx_delmbx_args changed size -- VMS_IOCTL_MBX_DELMBX ABI break");
 _Static_assert(sizeof(struct vms_mbx_write_args) == 16 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_write_args changed size -- VMS_IOCTL_MBX_WRITE ABI break");
-_Static_assert(sizeof(struct vms_mbx_read_args) == 20 + VMS_MBX_IOCTL_MAXLEN,
+_Static_assert(sizeof(struct vms_mbx_read_args) == 28 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_read_args changed size -- VMS_IOCTL_MBX_READ ABI break");
 _Static_assert(sizeof(struct vms_mbx_wrtattn_args) == 32,
                "vms_mbx_wrtattn_args changed size -- VMS_IOCTL_MBX_SET_WRTATTN ABI break");

@@ -1119,6 +1119,9 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len);
  * nowait != 0: $QIO IO$M_NOW -- completes immediately; if the mailbox is empty
  *   returns SS$_ENDOFFILE without blocking (VSI OpenVMS I/O User's Reference
  *   Manual, Mailbox Driver). */
+uint32_t vms_kif_mbx_read_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                             uint32_t *actlen, int nowait, uint32_t *sender_pid);
+uint32_t vms_kif_mbx_write_eof(uint32_t exec_chan);
 uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
                           uint32_t *actlen, int nowait);
 

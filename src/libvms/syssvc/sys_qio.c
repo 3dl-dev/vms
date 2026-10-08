@@ -77,6 +77,39 @@ static int uring_available(void) {
  * Synchronous fallback I/O - used when io_uring is not available.
  * Performs read/write and fills the IOSB directly.
  */
+
+/* the null device NLA0: is /dev/null underneath (character major 1, minor 3) */
+static int qio_is_null_device(int fd)
+{
+    struct stat sb;
+    return fstat(fd, &sb) == 0 && S_ISCHR(sb.st_mode) &&
+           major(sb.st_rdev) == 1 && minor(sb.st_rdev) == 3;
+}
+
+/*
+ * IO$_WRITEOF on the null device completes at once with a count of 0, as on
+ * real VAX V7.3 / Alpha V8.4 (docs/oracle/semantics/io/ IO.NL.WRITEOF; rd
+ * vms-262a). Returns 1 when it handled the request.
+ */
+static int qio_null_writeof(uint16_t chan, uint32_t func, void *iosb_ptr,
+                            uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm)
+{
+    if ((func & IO$M_FCODE) != IO$_WRITEOF)
+        return 0;
+    int fd = vms$$chan_to_fd(chan);
+    if (fd < 0 || !qio_is_null_device(fd))
+        return 0;
+    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
+        iosb->iosb$w_bcnt = 0;
+        iosb->iosb$l_dev_depend = 0;
+    }
+    if (efn < 128) sys$setef(efn);
+    if (astadr) astadr(astprm);
+    return 1;
+}
+
 static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
                           void *p1, uint32_t p2, uint32_t efn,
                           void (*astadr)(uint32_t), uint32_t astprm) {
@@ -134,6 +167,11 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
                 return SS$_BADPARAM;
             }
             result = write(fd, p1, p2);
+            /* The null device NLA0: discards a write and reports a count of 0
+             * (real VAX V7.3 / Alpha V8.4, docs/oracle/semantics/io/
+             * IO.NL.WRITE; rd vms-262a). */
+            if (result > 0 && qio_is_null_device(fd))
+                result = 0;
             if (result < 0) {
                 if (iosb) {
                     iosb->iosb$w_status = (uint16_t)SS$_ABORT;
@@ -268,9 +306,13 @@ static void async_rd_poll(int sig, siginfo_t *si, void *uc)
         struct async_rd *r = &async_rd[i];
         if (!r->in_use)
             continue;
-        uint32_t actlen = 0;
-        uint32_t st = vms_kif_mbx_read(r->exec_chan, r->buf, r->bufsz, &actlen, 1);
-        if (st == SS$_ENDOFFILE) {      /* nothing queued yet: still pending */
+        uint32_t actlen = 0, sender = 0;
+        uint32_t st = vms_kif_mbx_read_ex(r->exec_chan, r->buf, r->bufsz, &actlen, 1,
+                                          &sender);
+        /* ENDOFFILE with no sender = nothing queued yet (IO$M_NOW on an empty
+         * mailbox): still pending. With a sender it is a dequeued IO$_WRITEOF
+         * message, which completes the read (rd vms-262a). */
+        if (st == SS$_ENDOFFILE && sender == 0) {
             pending = 1;
             continue;
         }
@@ -331,9 +373,9 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
     {
         /* A message already queued completes the request at once; only an empty
          * mailbox leaves it pending. */
-        uint32_t actlen = 0;
-        uint32_t st = vms_kif_mbx_read(r->exec_chan, p1, p2, &actlen, 1);
-        if (st != SS$_ENDOFFILE) {
+        uint32_t actlen = 0, sender = 0;
+        uint32_t st = vms_kif_mbx_read_ex(r->exec_chan, p1, p2, &actlen, 1, &sender);
+        if (st != SS$_ENDOFFILE || sender != 0) {
             async_rd_complete(r, st, (st & 1) ? actlen : 0);
             sigprocmask(SIG_SETMASK, &old, NULL);
             return SS$_NORMAL;
@@ -410,6 +452,7 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     uint32_t base_func = func & IO$M_FCODE;
     uint32_t st;
     uint32_t actlen = 0;
+    uint32_t sender = 0;            /* a read's writer PID (IOSB longword 2) */
 
     switch (base_func) {
         case IO$_READVBLK:
@@ -425,8 +468,8 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
              * default (modifier absent) keeps the documented blocking read
              * that MMK's send_cmd_and_wait and the wrtattn tests rely on.
              */
-            st = vms_kif_mbx_read(exec_chan, p1, p2, &actlen,
-                                  (func & IO$M_NOW) != 0);
+            st = vms_kif_mbx_read_ex(exec_chan, p1, p2, &actlen,
+                                     (func & IO$M_NOW) != 0, &sender);
             /* the vms_kif layer reports the WHOLE message length; a request
              * shorter than the message gets its bytes, that count, and
              * SS$_BUFFEROVF (rd vms-542) */
@@ -434,6 +477,12 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                 actlen = p2;
                 st = SS$_BUFFEROVF;
             }
+            break;
+
+        case IO$_WRITEOF:
+            /* an end-of-file message: the reader that dequeues it completes
+             * with SS$_ENDOFFILE (rd vms-262a) */
+            st = vms_kif_mbx_write_eof(exec_chan);
             break;
 
         case IO$_WRITEVBLK:
@@ -478,7 +527,10 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
-        iosb->iosb$l_dev_depend = actlen;
+        /* a mailbox READ's second IOSB longword is the sender's PID (real
+         * VAX V7.3 / Alpha V8.4, docs/oracle/semantics/io/ IO.MBX.READ;
+         * rd vms-4a69) */
+        iosb->iosb$l_dev_depend = sender ? sender : actlen;
     }
 
     if (st & 1) {
@@ -925,6 +977,9 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
     }
 
+    if (qio_null_writeof(chan, func, iosb_ptr, efn, astadr, astprm))
+        return SS$_NORMAL;
+
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
@@ -983,6 +1038,9 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
     if (vms$$chan_is_mailbox(chan))
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
+    if (qio_null_writeof(chan, func, iosb_ptr, efn, astadr, astprm))
+        return SS$_NORMAL;
+
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
@@ -1005,8 +1063,9 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
 
     uint32_t base_func = func & 0xFF;
 
-    /* Try io_uring: submit + wait */
-    if (uring_available()) {
+    /* Try io_uring: submit + wait (devices that can wait; a disk file or the
+     * null device is done in place, as $QIO does it) */
+    if (!qio_completes_at_once(fd) && uring_available()) {
         uint64_t offset = (p3 != 0) ? (uint64_t)p3 : (uint64_t)-1;
         int rc = vms_uring_submit_rw(fd, p1, p2, offset, is_read,
                                       iosb_ptr, efn, astadr, astprm);

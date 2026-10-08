@@ -2834,6 +2834,24 @@ uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan)
  * exactly as it did before this file used KIF_CALL for the (then always
  * synchronous) write.
  */
+/*
+ * vms_kif_mbx_write_eof - IO$_WRITEOF on a mailbox: queue an end-of-file
+ * message; the read that dequeues it completes with SS$_ENDOFFILE (rd vms-262a).
+ */
+uint32_t vms_kif_mbx_write_eof(uint32_t exec_chan)
+{
+    struct vms_mbx_write_args args;
+
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.len = 0;
+    args.flags = VMS_MBX_WRITE_EOF;
+    KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
+    return args.status;
+}
+
 uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
 {
     struct vms_mbx_write_args args;
@@ -2870,8 +2888,14 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
  * block. That path never returns -ERESTARTSYS (there is no wait to interrupt),
  * so the kif_wait_call() retry loop degenerates to a single ioctl round trip.
  */
-uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
-                          uint32_t *actlen, int nowait)
+/*
+ * vms_kif_mbx_read_ex - vms_kif_mbx_read that also returns the VMS PID of the
+ * process that wrote the message (a mailbox read's IOSB second longword on VMS,
+ * rd vms-4a69). An end-of-file message (IO$_WRITEOF) completes with
+ * SS$_ENDOFFILE and no data (rd vms-262a).
+ */
+uint32_t vms_kif_mbx_read_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                             uint32_t *actlen, int nowait, uint32_t *sender_pid)
 {
     struct vms_mbx_read_args args;
     uint32_t n;
@@ -2888,6 +2912,8 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
 
     KIF_WAIT_CALL(VMS_IOCTL_MBX_READ, &args);
 
+    if (sender_pid && args.status != 0 && args.status != SS$_IVCHAN)
+        *sender_pid = args.sender_pid;
     if (args.status & 1) {
         n = args.len;
         if (n > args.bufsz) n = args.bufsz;
@@ -2895,6 +2921,11 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
         if (actlen) *actlen = args.len;
     }
     return args.status;
+}
+uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                          uint32_t *actlen, int nowait)
+{
+    return vms_kif_mbx_read_ex(exec_chan, buf, bufsz, actlen, nowait, 0);
 }
 
 /*

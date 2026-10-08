@@ -84,6 +84,8 @@
 struct vms_mbx_msg {
     exec_list_node_t list;
     uint32_t len;
+    uint32_t sender_pid;        /* VMS PID of the writer (the reader's IOSB) */
+    uint32_t eof;               /* an IO$_WRITEOF end-of-file message (len 0) */
     char data[];
 };
 
@@ -554,6 +556,8 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
+    if (a->flags & VMS_MBX_WRITE_EOF)
+        a->len = 0;             /* IO$_WRITEOF: an end-of-file message, no data */
     if (a->len > VMS_MBX_IOCTL_MAXLEN) {
         a->status = SS__EXQUOTA;
         goto out_copy;
@@ -563,15 +567,12 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
     if (a->len > mbx->maxmsg) {
         exec_unlock(&mbx->lock);
         /*
-         * SS$_EXQUOTA: this message can NEVER fit in this mailbox (its own
-         * per-message cap), no matter how much a reader drains -- a genuine,
-         * permanent error, unlike the transient "temporarily full" case
-         * below. Real VMS's SS$_MBFULL is not yet oracle-pinned against any
-         * reference lab (see vms_internal.h's SS__EXQUOTA comment), so this
-         * reuses an already-pinned status rather than inventing one this
-         * tree cannot cite (CLAUDE.md Rule 8).
+         * SS$_MBTOOSML: this message can NEVER fit in this mailbox (its own
+         * per-message cap) -- observed on real VAX V7.3 and Alpha V8.4 by the
+         * semantic oracle (docs/oracle/semantics/io/, IO.MBX.WRITE.TOOBIG;
+         * rd vms-4a69). Was SS$_EXQUOTA before the oracle pinned it.
          */
-        a->status = SS__EXQUOTA;
+        a->status = SS__MBTOOSML;
         goto out_copy;
     }
     /*
@@ -615,6 +616,8 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
         goto out_free;
     }
     m->len = a->len;
+    m->sender_pid = proc->vms_pid;
+    m->eof = (a->flags & VMS_MBX_WRITE_EOF) ? 1u : 0u;
     memcpy(m->data, a->data, a->len);
 
     /*
@@ -799,8 +802,11 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
         n = VMS_MBX_IOCTL_MAXLEN;
     memcpy(a->data, m->data, n);
     a->len = m->len;
+    a->sender_pid = m->sender_pid;
+    /* An IO$_WRITEOF message completes the read with SS$_ENDOFFILE and no data
+     * (rd vms-262a); the sender is still reported. */
+    a->status = m->eof ? SS__ENDOFFILE : SS__NORMAL;
     exec_free(m);
-    a->status = SS__NORMAL;
 
 out_copy:
     if (exec_copyout((void *)arg, a, sizeof(*a)))

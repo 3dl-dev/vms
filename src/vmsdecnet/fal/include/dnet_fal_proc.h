@@ -63,6 +63,8 @@ extern "C" {
 struct dnet_falp_linkblk {
     char username[33];
     char default_dir[256];     /* SYSUAF default device:[directory] */
+    char remote_node[16];      /* the peer, by node name (else its address) */
+    char local_node[16];       /* this node's executor name                 */
 };
 
 /* ---- NETACP side ---------------------------------------------------------- */
@@ -95,7 +97,7 @@ int dnet_fal_proc_image_present(void);
 int dnet_fal_proc_put(struct dnet_fal_proc *p, const uint8_t *seg, size_t len);
 
 /* Poll (never blocks) for the server's next record. Returns 1 with a DATA
- * segment in buf/*len, 2 when the server reported EXIT (*status set), 0 when
+ * segment in buf (length *len), 2 when the server reported EXIT (*status set), 0 when
  * nothing is queued, -1 on a mailbox failure. */
 int dnet_fal_proc_poll(struct dnet_fal_proc *p, uint8_t *buf, size_t cap,
                        size_t *len, uint32_t *status);
@@ -105,6 +107,43 @@ int dnet_fal_proc_alive(const struct dnet_fal_proc *p);
 
 /* Tell the server the link is gone (END record) and release the mailboxes. */
 void dnet_fal_proc_close(struct dnet_fal_proc *p);
+
+/*
+ * THE SAME LINK FOR ANY NETWORK SERVER IMAGE (rd vms-47fd). FAL.EXE (object 17)
+ * and MAIL_SERVER.EXE (object 27) are both NETACP-created server processes on
+ * this mailbox link; only the image, the process-name prefix and the persona
+ * differ, so the plumbing is one implementation.
+ *
+ * dnet_netsrv_proc_start - $CREMBX the two mailboxes, queue the link block,
+ * $CREPRC `image_spec` (a SYS$SYSTEM: spec) as process `prcnam_fmt` (two %u:
+ * the to/from mailbox units) with `uic` + `privs`. Status as dnet_fal_proc_start.
+ */
+uint32_t dnet_netsrv_proc_start(struct dnet_fal_proc *p, const char *image_spec,
+                                const char *prcnam_fmt, uint32_t uic, uint64_t privs,
+                                const struct dnet_falp_linkblk *lb);
+
+/* Is a runnable `image_spec` on this system disk? 1 / 0. */
+int dnet_netsrv_image_present(const char *image_spec);
+
+/* ---- server-image side (FAL.EXE, MAIL_SERVER.EXE) ------------------------- */
+
+struct dnet_netsrv_link { uint32_t ch_in, ch_out; int ended; };
+
+/* Find this process's link from its own name (`prcnam_scanfmt`, e.g.
+ * "FAL_%u_%u"), assign both mailboxes, read the link block. SS$_NORMAL or a
+ * VMS status (no link: the image was not started by NETACP). */
+uint32_t dnet_netsrv_attach(const char *prcnam_scanfmt, struct dnet_netsrv_link *l,
+                            struct dnet_falp_linkblk *lb);
+
+/* Ship one NSP data segment payload to the peer. 0 / -1. */
+int dnet_netsrv_send(struct dnet_netsrv_link *l, const uint8_t *seg, size_t len);
+
+/* Next received segment payload (may be empty), waiting at most the idle bound
+ * DNET_FALP_IDLE_SEC. 0, or -1: the link ended, went idle, or failed. */
+int dnet_netsrv_recv(struct dnet_netsrv_link *l, uint8_t *buf, size_t cap, size_t *len);
+
+/* Report the session status to NETACP (the EXIT record). */
+void dnet_netsrv_exit(struct dnet_netsrv_link *l, uint32_t status);
 
 /* ---- FAL.EXE side --------------------------------------------------------- */
 

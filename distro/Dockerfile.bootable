@@ -697,6 +697,10 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # `cp ... SYSEXE/` form so the image-parity scanner sees it.
     cp build-static/bin/NCP.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/FAL.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # MAIL_SERVER.EXE (rd vms-47fd): the DECnet MAIL-11 (object 27) network
+    # server process NETACP creates for an inbound NODE::USER mail. Plain
+    # `cp ... SYSEXE/` form so the image-parity scanner sees it.
+    cp build-static/bin/MAIL_SERVER.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # TCC.EXE (compiler) + LINK.EXE (linker) -- the self-host toolchain on the
     # shipped disk (vms-992e). LINK.EXE comes from build-static (BUILD_TOOLS
     # vmslink target); TCC.EXE from the mk_tcc_static.sh step above. LIBRARIAN.EXE
@@ -1033,7 +1037,7 @@ RUN /src/build-static/bin/vmsfs_master --ods2 master \
         /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib.img > /tmp/distrib-list.txt && \
     cat /tmp/distrib-list.txt && \
-    for name in DCL.EXE LOGINOUT.EXE IMGACT.EXE PROVISION.EXE SYSUAF.DAT FAL.EXE; do \
+    for name in DCL.EXE LOGINOUT.EXE IMGACT.EXE PROVISION.EXE SYSUAF.DAT FAL.EXE MAIL_SERVER.EXE; do \
         grep -qi "\]$name;" /tmp/distrib-list.txt || { echo "FAIL: mastered ODS-2 ovmx-distrib.img missing SYS\$SYSTEM:$name"; exit 1; } && \
         echo "OK: ovmx-distrib.img carries SYS\$SYSTEM:$name (genuine ODS-2)"; \
     done && \

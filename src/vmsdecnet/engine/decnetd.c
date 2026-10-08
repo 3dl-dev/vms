@@ -66,7 +66,9 @@
 #include "dnet_cterm_hostfsm.h" /* CTERM HOST wire role, as a VMS host speaks it */
 #include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
 #include "dnet_fal.h"
-#include "dnet_fal_proc.h"  /* FAL network server process (rd vms-d85) */       /* FAL server + COPY client (object 17, rd vms-8c2) */
+#include "dnet_fal_proc.h"  /* FAL network server process (rd vms-d85) */
+#include "dnet_mail11.h"    /* MAIL-11 receiver (object 27, rd vms-47fd)    */
+#include "dnet_mail_proc.h" /* MAIL_SERVER.EXE network server process      */       /* FAL server + COPY client (object 17, rd vms-8c2) */
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
@@ -4424,6 +4426,10 @@ static void usage(const char *argv0)
         "  --netacp-pool-selftest  run NETACP's inbound session-pool proof (booted\n"
         "                      executive): concurrent SET HOST sessions, per-node\n"
         "                      cap, bounded pool, FAL dispatch (rd vms-6af1)\n"
+        "  --mail11-accept-test  run the inbound DECnet MAIL-11 proof (booted\n"
+        "                      executive): the real VAX capture replayed through\n"
+        "                      NETACP to MAIL_SERVER.EXE, replies byte-exact;\n"
+        "                      the message is stored in SYSTEM's mail (vms-47fd)\n"
         "  --fal-proc-accept-test  run the FAL server-PROCESS persona proof (booted\n"
         "                      executive): FAL.EXE runs with the authenticated\n"
         "                      user's UIC; GUEST is refused a SYSTEM-only file\n"
@@ -4474,12 +4480,15 @@ static void usage(const char *argv0)
  * parameter. Each session is still bounded in time by its own server: LOGINOUT's
  * login-read deadline for SET HOST, the FAL server's idle bound for FAL.
  *
- * TWO OBJECTS, BOTH THE VMS WAY. Object 42 (CTERM): an executive-minted RTAn:
+ * THREE OBJECTS, ALL THE VMS WAY. Object 42 (CTERM): an executive-minted RTAn:
  * with LOGINOUT $CREPRC'd onto it; the remote authenticates fresh. Object 17
  * (FAL): the connect-carried credentials are authenticated at connect, then a
  * FAL.EXE network server process runs the access with the USER's UIC and
- * privileges (dnet_fal_proc.h). NETACP holds no credential beyond the check
- * and serves no file itself.
+ * privileges (dnet_fal_proc.h). Object 27 (MAIL-11, rd vms-47fd): a
+ * MAIL_SERVER.EXE network server process under the MAIL object's account
+ * (dnet_mail_proc.h) receives the message and stores it in each recipient's
+ * mail file. NETACP holds no credential beyond the check, serves no file and
+ * stores no mail itself.
  */
 /* rd vms-277a: a VMS DELETE node::file;* holds THREE links to the FAL at once
  * (two DIRECTORY LISTs still open, then the ERASE: VAX<->VAX capture
@@ -4508,14 +4517,14 @@ static int netacp_pool_size(const struct dnet_executor *x, int *clamped)
 
 struct netacp_slot {
     int      used;
-    int      object;                    /* 42 = CTERM, 17 = FAL               */
+    int      object;                    /* 42 = CTERM, 17 = FAL, 27 = MAIL    */
     struct dnet_engine lk;              /* this session's NSP link state       */
     uint16_t peer;                      /* remote node (area<<10|node)         */
     uint8_t  peer_mac[6];
     struct dnet_cterm_host_session host;/* object 42: RTAn: + LOGINOUT        */
     struct dnet_cth cth;                /* object 42: the CTERM host wire role */
     int      term_recorded;             /* originating terminal on the RTAn:   */
-    struct dnet_fal_proc fal;           /* object 17                          */
+    struct dnet_fal_proc fal;           /* objects 17 + 27: the server process */
 };
 
 /* How long a session's terminal output must be quiet before the CTERM host
@@ -4580,11 +4589,12 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
         dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn, now) == 0)
         netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
     if (sl->object == DNET_CTERM_OBJECT) (void)dnet_cterm_host_close(&sl->host);
-    if (sl->object == DNET_FAL_OBJECT)   dnet_fal_proc_close(&sl->fal);
+    if (sl->object != DNET_CTERM_OBJECT) dnet_fal_proc_close(&sl->fal);
     log_ts(stdout);
     printf(" DECNETD-I-SESSEND, inbound %s session %s ended (%s)\n",
-           sl->object == DNET_FAL_OBJECT ? "FAL" : "SET HOST",
-           sl->object == DNET_FAL_OBJECT ? "" : sl->host.devnam, why);
+           sl->object == DNET_FAL_OBJECT ? "FAL" :
+           sl->object == DNET_MAIL11_OBJECT ? "MAIL" : "SET HOST",
+           sl->object == DNET_CTERM_OBJECT ? sl->host.devnam : "", why);
     fflush(stdout);
     memset(sl, 0, sizeof *sl);
 }
@@ -4631,7 +4641,9 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
                     netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
             }
             if (r == 2 || r < 0 || !dnet_fal_proc_alive(&sl->fal))
-                netacp_slot_end(sl, sock, ifindex, now, "the FAL server finished");
+                netacp_slot_end(sl, sock, ifindex, now,
+                                sl->object == DNET_MAIL11_OBJECT
+                                    ? "the MAIL server finished" : "the FAL server finished");
         }
     }
     return live;
@@ -4657,6 +4669,18 @@ static void netacp_rpi_by_name(struct dnet_cterm_host_session *hs, uint16_t peer
         return;
     memcpy(hs->remote_port_info, named, (size_t)n + 1);
     (void)vms_kif_terminal_setrpi(hs->devnam, hs->remote_port_info);
+}
+
+/* The remote node as VMS MAIL names it in From: -- its node-database name,
+ * else its decimal address (rd vms-47fd; the same rule as Remote Port Info). */
+static void netacp_peer_name(uint16_t peer, char *out, size_t cap)
+{
+    static struct dnet_nodedb db;
+    const struct dnet_node_entry *e = NULL;
+    if (dnet_store_load_nodes(&db) == DNET_STORE_OK)
+        e = dnet_nodedb_by_addr(&db, peer);
+    if (e && e->name[0]) snprintf(out, cap, "%s", e->name);
+    else                 snprintf(out, cap, "%u", (unsigned)peer);
 }
 
 static void netacp_refuse(struct dnet_engine *tmp, int sock, unsigned ifindex,
@@ -4705,9 +4729,11 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
             return;
         }
         if (ev != DNET_LINK_EV_DATA) return;
-        if (sl->object == DNET_FAL_OBJECT) {
+        if (sl->object != DNET_CTERM_OBJECT) {
             if (dnet_fal_proc_put(&sl->fal, sl->lk.rx_data, sl->lk.rx_datalen) != 0)
-                netacp_slot_end(sl, sock, ifindex, now, "FAL server link lost");
+                netacp_slot_end(sl, sock, ifindex, now,
+                                sl->object == DNET_MAIL11_OBJECT ? "MAIL server link lost"
+                                                                 : "FAL server link lost");
             return;
         }
         /* CTERM: the host FSM decodes the server's segment (bounded --
@@ -4754,7 +4780,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         else if (slots[i].peer == peer) from_peer++;
     }
     char pa[8];
-    if (obj != DNET_CTERM_OBJECT && obj != DNET_FAL_OBJECT) {
+    if (obj != DNET_CTERM_OBJECT && obj != DNET_FAL_OBJECT && obj != DNET_MAIL11_OBJECT) {
         netacp_refuse(&tmp, sock, ifindex, mac, DNET_LINK_REASON_OBJREJ, now);
         log_ts(stdout);
         printf(" DECNETD-I-CONNREJ, inbound connect from %s to object %d refused"
@@ -4773,6 +4799,8 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         return;
     }
 
+    uint8_t m11_acc[1 + DNET_M11_CONN_UDLEN];
+    size_t  m11_acclen = 0;
     sl = &slots[free_i];
     memset(sl, 0, sizeof *sl);
     sl->lk = tmp;
@@ -4796,6 +4824,34 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
             fprintf(stderr, "DECNETD-E-NOSESSION, inbound SET HOST refused: the session"
                     " could not be created (status %08X); no unauthenticated shell is"
                     " substituted\n", (unsigned)cst);
+            memset(sl, 0, sizeof *sl);
+            return;
+        }
+    } else if (obj == DNET_MAIL11_OBJECT) {
+        /* MAIL-11 (rd vms-47fd): only a client whose connect user data this
+         * server speaks is confirmed; the message is received and stored by a
+         * MAIL_SERVER.EXE process under the MAIL object's account. No image, no
+         * account, no process: refused -- nothing is ever acknowledged. */
+        char rnode[16], lnode[16];
+        netacp_peer_name(peer, rnode, sizeof rnode);
+        snprintf(lnode, sizeof lnode, "%s", node->node_name);
+        m11_acclen = 0;
+        if (dnet_m11_connect_accept(sl->lk.link.conn_data, sl->lk.link.conn_len,
+                                    m11_acc, sizeof m11_acc, &m11_acclen) != 0)
+            cst = SS$_BADPARAM;
+        else
+            cst = dnet_mail_proc_start(&sl->fal, rnode, lnode);
+        if (!(cst & 1)) {
+            netacp_refuse(&sl->lk, sock, ifindex, mac,
+                          cst == SS$_INVLOGIN ? DNET_LINK_REASON_ACCESS
+                                              : DNET_LINK_REASON_OBJREJ, now);
+            log_ts(stdout);
+            printf(" DECNETD-I-CONNREJ, inbound MAIL connect from %s refused (status"
+                   " %08X%s%s) -- no mail is accepted without a MAIL server\n",
+                   dnet_addr_str(peer, pa, sizeof pa), (unsigned)cst,
+                   sl->fal.fail_stage ? " at " : "",
+                   sl->fal.fail_stage ? sl->fal.fail_stage : "");
+            fflush(stdout);
             memset(sl, 0, sizeof *sl);
             return;
         }
@@ -4825,7 +4881,10 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     uint16_t lla = (*next_lla)++;
     if (*next_lla < 0x2100) *next_lla = 0x2100;
     uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
-    if (dnet_engine_link_accept(&sl->lk, lla, fr, sizeof fr, &fn, now) == 0)
+    if ((obj == DNET_MAIL11_OBJECT
+             ? dnet_engine_link_accept_data(&sl->lk, lla, m11_acc, m11_acclen, fr, sizeof fr,
+                                            &fn, now)
+             : dnet_engine_link_accept(&sl->lk, lla, fr, sizeof fr, &fn, now)) == 0)
         netacp_send(sock, ifindex, mac, fr, fn);
     if (obj == DNET_CTERM_OBJECT)
         netacp_rpi_by_name(&sl->host, peer);
@@ -4834,6 +4893,11 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         printf(" DECNETD-I-SESSTART, inbound SET HOST accepted on %s -- LOGINOUT is"
                " authenticating (Remote Port Info: %s)\n", sl->host.devnam,
                sl->host.remote_port_info);
+    else if (obj == DNET_MAIL11_OBJECT)
+        printf(" DECNETD-I-MAILSTART, inbound MAIL from %s accepted -- received by"
+               " MAIL_SERVER.EXE pid %08X as UIC [%o,%o]\n",
+               dnet_addr_str(peer, pa, sizeof pa), (unsigned)sl->fal.pid,
+               (unsigned)(sl->fal.uic >> 16), (unsigned)(sl->fal.uic & 0xffff));
     else
         printf(" DECNETD-I-FALSTART, inbound FAL access from %s accepted -- served by"
                " FAL.EXE pid %08X as UIC [%o,%o]\n", dnet_addr_str(peer, pa, sizeof pa),
@@ -5023,6 +5087,258 @@ static int run_netacp_pool_selftest(void)
 #undef PL_CHECK
 }
 
+/*
+ * ============== --mail11-accept-test (rd vms-47fd, booted battery) ==========
+ * INBOUND DECnet MAIL-11 through NETACP's REAL dispatch (netacp_dispatch_frame
+ * / netacp_service_sessions), this process playing the remote VAX1 (1.1) of the
+ * oracle tests/lab/captures/decnet-mail11-20261008/ against a node named VAX2
+ * (1.2): the oracle's own Connect Initiate and client segments go in, and every
+ * reply NETACP's MAIL_SERVER.EXE process sends comes back off the transmit hook
+ * and is compared BYTE FOR BYTE with what the real VAX2 sent. Session 1 is the
+ * oracle's accepted message to SYSTEM -- stored in SYSTEM's mail file, where
+ * the battery then reads it with OVMX MAIL; session 2 is NOSUCHUSER, refused
+ * with the VAX's exact status and text. Needs /dev/vms, SYSUAF and
+ * SYS$SYSTEM:MAIL_SERVER.EXE; with no image it says NOIMAGE and proves nothing.
+ */
+#define M11Q_MAX 16
+static uint8_t g_m11q[M11Q_MAX][DNET_FRAME_MAX];
+static size_t  g_m11q_len[M11Q_MAX];
+static unsigned g_m11q_n;
+static ssize_t m11_tx_capture(int fd, int ifx, uint16_t et, const uint8_t *mac,
+                              const uint8_t *f, size_t n)
+{
+    (void)fd; (void)ifx; (void)et; (void)mac;
+    if (g_m11q_n < M11Q_MAX && n <= DNET_FRAME_MAX) {
+        memcpy(g_m11q[g_m11q_n], f, n);
+        g_m11q_len[g_m11q_n++] = n;
+    }
+    return (ssize_t)n;
+}
+
+struct m11_rig {
+    struct dnet_engine *peer;
+    const struct dnet_engine *node;
+    struct netacp_slot *slots;
+    uint16_t *next_lla;
+    dnet_tick_t tick;
+};
+
+/* Hand every captured NETACP frame to the peer; collect the DATA payloads it
+ * receives into got[] and send the peer's acks back through dispatch. */
+static void m11_drain(struct m11_rig *r, uint8_t got[][DNET_M11_MAX_REPLY], size_t *glen,
+                      unsigned *ng, unsigned max)
+{
+    for (unsigned q = 0; q < g_m11q_n; q++) {
+        uint8_t rep[DNET_FRAME_MAX]; size_t rl = 0; int has = 0;
+        enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        if (dnet_engine_link_rx(r->peer, r->tick++, g_m11q[q], g_m11q_len[q], rep, sizeof rep,
+                                &rl, &has, &ev) != 0)
+            continue;
+        if (ev == DNET_LINK_EV_DATA && *ng < max && r->peer->rx_datalen <= DNET_M11_MAX_REPLY) {
+            memcpy(got[*ng], r->peer->rx_data, r->peer->rx_datalen);
+            glen[(*ng)++] = r->peer->rx_datalen;
+        }
+        if (has) {
+            unsigned keep = g_m11q_n; g_m11q_n = M11Q_MAX;     /* don't capture the echo */
+            netacp_dispatch_frame(r->slots, r->node, -1, 0, rep, rl, r->tick++, r->next_lla);
+            g_m11q_n = keep;
+        }
+    }
+    g_m11q_n = 0;
+}
+
+/* Send one client segment; wait (<= 15 s) until `want` reply segments arrived. */
+static unsigned m11_send(struct m11_rig *r, const void *seg, size_t n,
+                         uint8_t got[][DNET_M11_MAX_REPLY], size_t *glen, unsigned want)
+{
+    uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+    unsigned ng = 0;
+    g_m11q_n = 0;
+    if (seg && dnet_engine_link_send(r->peer, seg, n, f, sizeof f, &fl, r->tick++) == 0)
+        netacp_dispatch_frame(r->slots, r->node, -1, 0, f, fl, r->tick++, r->next_lla);
+    m11_drain(r, got, glen, &ng, want ? want : 1);
+    for (int i = 0; i < 1500 && ng < want; i++) {
+        netacp_service_sessions(r->slots, -1, 0, r->tick++);
+        m11_drain(r, got, glen, &ng, want);
+        if (ng < want) { struct timespec ts = { 0, 10 * 1000 * 1000 }; nanosleep(&ts, NULL); }
+    }
+    return ng;
+}
+
+static int m11_live(const struct netacp_slot *slots)
+{
+    int n = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        n += slots[i].used && slots[i].object == DNET_MAIL11_OBJECT;
+    return n;
+}
+
+static void m11_hex(const char *tag, const uint8_t *b, size_t n)
+{
+    printf("    %s (%zu):", tag, n);
+    for (size_t i = 0; i < n && i < 64; i++) printf(" %02x", b[i]);
+    printf("\n");
+}
+
+static int run_mail11_accept_test(void)
+{
+    printf("DECNETD-I-MAIL11, inbound DECnet MAIL-11 (object 27) through NETACP's real"
+           " dispatch to a MAIL_SERVER.EXE process, replayed from the real VAX"
+           " capture (rd vms-47fd)\n");
+    if (!dnet_mail_proc_image_present()) {
+        printf("DECNETD-I-MAIL11-NOIMAGE, SYS$SYSTEM:MAIL_SERVER.EXE is not on this system"
+               " disk: no MAIL server can be created, so the MAIL-11 proof cannot run here\n");
+        printf("DECNETD-MAIL11-ACCEPT: NOIMAGE\n");
+        return 1;
+    }
+    int pass = 0, fail = 0;
+#define M1_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    /* The From: the stored message carries is NODE::USER by the node database;
+     * name 1.1 VAX1 for the proof and put the database back afterwards. */
+    static struct dnet_nodedb saved, db;
+    int have_saved = dnet_store_load_nodes(&saved) == DNET_STORE_OK;
+    if (!have_saved) dnet_nodedb_init(&saved);
+    db = saved;
+    (void)dnet_nodedb_set(&db, (uint16_t)((1u << 10) | 1u), "VAX1");
+    int named = dnet_store_save_nodes(&db) == DNET_STORE_OK;
+
+    g_netacp_tx = m11_tx_capture;
+    static struct netacp_slot slots[NETACP_MAX_SESSIONS];
+    memset(slots, 0, sizeof slots);
+    uint16_t next_lla = 0x2100;
+    static struct dnet_engine node, peer;
+    const uint8_t hw2[6] = { 0xaa,0x00,0x04,0x00,0x02,0x04 };
+    const uint8_t hw1[6] = { 0xaa,0x00,0x04,0x00,0x01,0x04 };
+    dnet_engine_init(&node, 1, 2, "VAX2", "EWA0", NULL, hw2, 0, 0, 0);
+
+    /* The oracle RCI's Session Control connect data (object 27, SYSTEM, USRDATA). */
+    static const uint8_t conn[] = {
+        0x00,0x1b, 0x02,0x00,0x1a,0x02,0x20,0x20,0x06,'S','Y','S','T','E','M',
+        0x27, 0x00, 0x00, 0x00,
+        0x10, 0x03,0x01,0x00,0x07,0x00,0x00,0x00,0x00,0x10,0x00,0x00,0x00,0x02,0x02,0x00,0x00 };
+    static const uint8_t ok4[4] = { 0x01, 0x00, 0x00, 0x00 };
+    static const uint8_t nsu4[4] = { 0x12, 0x81, 0x7e, 0x00 };
+    static const char nsu_text[] = "%MAIL-E-NOSUCHUSR, no such user NOSUCHUSER at node VAX2";
+    static const uint8_t z = 0;
+    static uint8_t got[8][DNET_M11_MAX_REPLY];
+    size_t glen[8];
+    struct m11_rig rig = { &peer, &node, slots, &next_lla, 100 };
+
+    for (int sess = 0; sess < 2; sess++) {
+        dnet_engine_init(&peer, 1, 1, "VAX1", "EWA0", NULL, hw1, 0, 0, 0);
+        uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+        g_m11q_n = 0;
+        if (dnet_engine_link_open(&peer, 1, 2, (uint16_t)(0x2015 + sess), conn, sizeof conn,
+                                  1459, 1, DNET_NSP_VER_41, f, sizeof f, &fl, rig.tick++) != 0) {
+            M1_CHECK(0, "the oracle Connect Initiate could be built");
+            break;
+        }
+        netacp_dispatch_frame(slots, &node, -1, 0, f, fl, rig.tick++, &next_lla);
+        int confirmed = 0, ccdata_ok = 0;
+        for (unsigned q = 0; q < g_m11q_n; q++) {
+            uint8_t sid[DNET_ADDR_LEN]; const uint8_t *pdu = NULL; size_t pl = 0;
+            struct dnet_nsp_msg cc;
+            if (dnet_engine_parse_data_frame(g_m11q[q], g_m11q_len[q], sid, NULL, &pdu, &pl) ==
+                    DNET_ENGINE_OK && dnet_nsp_decode(pdu, pl, &cc, NULL) == DNET_NSP_OK &&
+                cc.type == DNET_NSP_T_CC)
+                ccdata_ok = cc.datalen == 17 && cc.data[0] == 0x10 &&
+                            memcmp(cc.data + 1, dnet_m11_accept_userdata, 16) == 0;
+            uint8_t rep[DNET_FRAME_MAX]; size_t rl = 0; int has = 0;
+            enum dnet_link_event ev = DNET_LINK_EV_NONE;
+            if (dnet_engine_link_rx(&peer, rig.tick++, g_m11q[q], g_m11q_len[q], rep, sizeof rep,
+                                    &rl, &has, &ev) == 0 && ev == DNET_LINK_EV_CONNECT_CONF)
+                confirmed = 1;
+        }
+        g_m11q_n = 0;
+        if (sess == 0) {
+            M1_CHECK(confirmed && m11_live(slots) == 1,
+                     "the oracle's object-27 connect is CONFIRMED and lands on a MAIL_SERVER.EXE process");
+            M1_CHECK(ccdata_ok,
+                     "the Connect Confirm carries the VAX MAIL_SERVER's 16-byte accept data, byte-exact");
+            for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+                if (slots[i].used && slots[i].object == DNET_MAIL11_OBJECT)
+                    printf("    MAIL_SERVER.EXE pid %08X runs as UIC [%o,%o]\n",
+                           (unsigned)slots[i].fal.pid, (unsigned)(slots[i].fal.uic >> 16),
+                           (unsigned)(slots[i].fal.uic & 0xffff));
+        }
+        if (!confirmed) { M1_CHECK(0, "session confirmed"); break; }
+
+        unsigned ng = m11_send(&rig, "SYSTEM      ", 12, got, glen, 0);
+        if (sess == 0) {
+            ng = m11_send(&rig, "SYSTEM", 6, got, glen, 1);
+            M1_CHECK(ng == 1 && glen[0] == 4 && memcmp(got[0], ok4, 4) == 0,
+                     "recipient SYSTEM is ACCEPTED: 01 00 00 00, as the VAX answered");
+            static const char *const recs[] = {
+                "", "VAX2::SYSTEM", "", "DECnet MAIL-11 oracle",
+                "Line one of a MAIL-11 message from VAX1.", "Line two." };
+            (void)m11_send(&rig, &z, 1, got, glen, 0);
+            for (unsigned i = 1; i < sizeof recs / sizeof recs[0]; i++)
+                (void)m11_send(&rig, recs[i], strlen(recs[i]), got, glen, 0);
+            ng = m11_send(&rig, &z, 1, got, glen, 1);
+            if (ng) m11_hex("final status", got[0], glen[0]);
+            M1_CHECK(ng == 1 && glen[0] == 4 && memcmp(got[0], ok4, 4) == 0,
+                     "the message is STORED in SYSTEM's mail file and acknowledged 01 00 00 00"
+                     " -- the VAX's final status, sent only after the store succeeded");
+        } else {
+            ng = m11_send(&rig, "NOSUCHUSER", 10, got, glen, 3);
+            if (ng) m11_hex("refusal status", got[0], glen[0]);
+            M1_CHECK(ng == 3 && glen[0] == 4 && memcmp(got[0], nsu4, 4) == 0 &&
+                     glen[1] == strlen(nsu_text) && memcmp(got[1], nsu_text, glen[1]) == 0 &&
+                     glen[2] == 1 && got[2][0] == 0,
+                     "recipient NOSUCHUSER is REFUSED with the VAX's exact bytes: 12 81 7E 00,"
+                     " '%MAIL-E-NOSUCHUSR, no such user NOSUCHUSER at node VAX2', 00");
+        }
+        /* The client disconnects, as the VAX did; the server process finishes. */
+        g_m11q_n = 0;
+        if (dnet_engine_link_close(&peer, DNET_LINK_REASON_NORMAL, f, sizeof f, &fl, rig.tick++) == 0)
+            netacp_dispatch_frame(slots, &node, -1, 0, f, fl, rig.tick++, &next_lla);
+        g_m11q_n = 0;
+        for (int i = 0; i < 300 && m11_live(slots); i++) {
+            netacp_service_sessions(slots, -1, 0, rig.tick++);
+            struct timespec ts = { 0, 10 * 1000 * 1000 }; nanosleep(&ts, NULL);
+        }
+        if (sess == 1)
+            M1_CHECK(m11_live(slots) == 0, "each session ends when the remote disconnects (slot freed)");
+    }
+
+    /* A connect this server does not speak (no MAIL-11 user data) is REFUSED --
+     * nothing is confirmed, no process is created. */
+    {
+        static const uint8_t bare[] = { 0x00,0x1b, 0x02,0x00,0x1a,0x02,0x20,0x20,0x06,
+                                        'S','Y','S','T','E','M', 0x00 };
+        dnet_engine_init(&peer, 1, 1, "VAX1", "EWA0", NULL, hw1, 0, 0, 0);
+        uint8_t f[DNET_FRAME_MAX], rep[DNET_FRAME_MAX]; size_t fl = 0, rl = 0; int has = 0;
+        enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        g_m11q_n = 0;
+        int refused = 0;
+        if (dnet_engine_link_open(&peer, 1, 2, 0x2030, bare, sizeof bare, 1459, 1,
+                                  DNET_NSP_VER_41, f, sizeof f, &fl, rig.tick++) == 0) {
+            netacp_dispatch_frame(slots, &node, -1, 0, f, fl, rig.tick++, &next_lla);
+            for (unsigned q = 0; q < g_m11q_n; q++)
+                if (dnet_engine_link_rx(&peer, rig.tick++, g_m11q[q], g_m11q_len[q], rep,
+                                        sizeof rep, &rl, &has, &ev) == 0 &&
+                    (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF))
+                    refused = 1;
+        }
+        g_m11q_n = 0;
+        M1_CHECK(refused && m11_live(slots) == 0,
+                 "an object-27 connect without MAIL-11 user data is REFUSED (no confirm, no server)");
+    }
+
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        netacp_slot_end(&slots[i], -1, 0, rig.tick++, "selftest teardown");
+    g_netacp_tx = scs_datalink_send;
+    if (named) (void)dnet_store_save_nodes(&saved);
+    else printf("  NOTE: the node database could not name 1.1 VAX1 (From: shows the address)\n");
+    printf("DECNETD-I-MAIL11, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-MAIL11-ACCEPT: PASS\n"); return 0; }
+    printf("DECNETD-MAIL11-ACCEPT: FAIL\n");
+    return 1;
+#undef M1_CHECK
+}
+
 int main(int argc, char **argv)
 {
     const char *ifname = DECNETD_DEFAULT_IFACE;
@@ -5101,6 +5417,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
         else if (!strcmp(argv[i], "--fal-proc-accept-test")) fal_proc_accept_test = 1;
         else if (!strcmp(argv[i], "--netacp-pool-selftest")) return run_netacp_pool_selftest();
+        else if (!strcmp(argv[i], "--mail11-accept-test")) return run_mail11_accept_test();
         else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
         else if (!strcmp(argv[i], "--copy-accept-test")) copy_accept_test = 1;
         else if (!strcmp(argv[i], "--copy-transport-selftest")) copy_xport_test = 1;

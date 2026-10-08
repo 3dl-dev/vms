@@ -236,6 +236,12 @@ int dnet_link_connect(struct dnet_link *lk,
 int dnet_link_accept(struct dnet_link *lk, struct dnet_nsp_msg *out,
                      dnet_tick_t now);
 
+/* dnet_link_accept_data - as dnet_link_accept, with Session Control accept data
+ * in the Connect Confirm (an object that confirms with data, e.g. MAIL-11's
+ * count-prefixed user data, rd vms-47fd). `len` <= DNET_NSP_MAX_DATA. */
+int dnet_link_accept_data(struct dnet_link *lk, const uint8_t *data, size_t len,
+                          struct dnet_nsp_msg *out, dnet_tick_t now);
+
 /*
  * Send a single data segment on a RUN link. Builds a data-segment PDU into *out
  * carrying up to DNET_NSP_MAX_DATA bytes, assigns the next segment number, and

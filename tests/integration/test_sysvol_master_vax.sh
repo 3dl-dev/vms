@@ -77,6 +77,8 @@ make_image STARTUP.EXE      S  9000
 make_image DECNETD.EXE      N  8000
 # FAL.EXE (rd vms-d85): the FAL network server process, staged beside it.
 make_image FAL.EXE          F  7000
+# MAIL_SERVER.EXE (rd vms-47fd): the MAIL-11 network server process, likewise.
+make_image MAIL_SERVER.EXE  M  6500
 # NCP.EXE (rd vms-5bb5): the DECnet network control program, staged beside it.
 make_image NCP.EXE          C  6000
 

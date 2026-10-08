@@ -191,11 +191,14 @@ set_target_properties(mkrightslist PROPERTIES
 
 add_executable(vms_mail
     vms_mail.c
-    mail_notify.c        # shared maildir/count helpers (vms-417)
+    mail_notify.c        # the mail store's read side + new-mail count (vms-417)
+    mail_store.c         # the mail store's write side (rd vms-47fd)
+    mail_rms_bind.c      # strong RMS + SYSUAF-reader anchor (weak-seam trap)
 )
 
 target_include_directories(vms_mail PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include
     ${VMS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
@@ -215,6 +218,37 @@ set_target_properties(vms_mail PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS vms_mail RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+# MAIL_SERVER.EXE (rd vms-47fd): the DECnet MAIL-11 (object 27) network server
+# process NETACP creates for an inbound NODE::USER mail. It stores into the SAME
+# mail file MAIL.EXE reads, through the same store code (mail_notify.c read
+# side, mail_store.c write side), over RMS; the protocol is the pure receiver
+# in src/vmsdecnet/mail (vmsdecnet_mail11) and the link is NETACP's server-
+# process mailbox pair (vmsdecnet_fal's dnet_netsrv_*).
+add_executable(mail_server_exe
+    mail_server.c
+    mail_notify.c
+    mail_store.c
+    mail_rms_bind.c      # strong RMS + SYSUAF-reader anchor (weak-seam trap)
+)
+target_include_directories(mail_server_exe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_compile_definitions(mail_server_exe PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+target_link_libraries(mail_server_exe PRIVATE vmsdecnet_mail vmsdecnet_mail11
+                                              vmsdecnet_fal vms vmsrms vmsfs vmslnm)
+set_target_properties(mail_server_exe PROPERTIES
+    OUTPUT_NAME "MAIL_SERVER"
+    SUFFIX ".EXE"
+)
+install(TARGETS mail_server_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vms_monitor
     vms_monitor.c

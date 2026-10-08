@@ -1240,6 +1240,7 @@ if(BUILD_TOOLS)
         vms_cnxtrace         # CNXTRACE.EXE
         decnetd_exe          # DECNETD.EXE
         fal_exe              # FAL.EXE
+        mail_server_exe      # MAIL_SERVER.EXE
         PARTS                # PARTS.EXE
         ncp_exe              # NCP.EXE
     )

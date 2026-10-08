@@ -149,3 +149,5 @@ sys_setrwm
 sys_setswm
 sys_sndopr
 sys_trnlnm
+sys_clrast
+sys_setdfprot

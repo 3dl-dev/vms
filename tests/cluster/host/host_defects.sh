@@ -133,6 +133,9 @@
 #   join-asks-before-telling-members      vms_cnxman_join_fsm.c
 #   join-emits-on-a-stale-connection      vms_cnxman_join_fsm.c
 #   join-origination-follows              vms_cnxman_join_fsm.c
+#   scs-accept-conndata-dropped           vms_scs_fsm.c
+#   csb-accept-resume-disarmed            vms_cnxman_csb.c
+#   csb-resume-reintroduces               vms_cnxman_csb.c
 #
 SELF="$0"
 
@@ -148,6 +151,9 @@ coord-ignores-rejection
 join-asks-before-telling-members
 join-emits-on-a-stale-connection
 join-origination-follows
+scs-accept-conndata-dropped
+csb-accept-resume-disarmed
+csb-resume-reintroduces
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1385,6 +1391,49 @@ EOF
                       ;;
         esac;;
 
+    scs-accept-conndata-dropped)
+        case "$_f" in
+        facility)     echo "the initiating CDT keeps the peer's ACCEPT_REQ connect data for the SYSAP (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_scs_fsm.c";;
+        suites_red)   echo "test_scs_fsm";;
+        isolation)    echo "isolated";;
+        why)          echo "h_rx_accept() drops the accept's connect data, so the VMS\$VAXcluster SYSAP cannot see that a real VAX accepting a re-dialled connection CONTINUED the conversation -- the CNXMGRERR of stall-rig arms GM-14, TG-3 and HM-11.";;
+        require_fail) cat <<'EOF'
+A's CDT holds the ACCEPT's connect data
+byte-exact, as the peer sent it
+EOF
+                      ;;
+        esac;;
+
+    csb-accept-resume-disarmed)
+        case "$_f" in
+        facility)     echo "a re-dialled conversation resumes from the count the peer's ACCEPT states (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_note_accept_conndata() ignores the ACCEPT's count: this node speaks at send 1 / ack 0 on a connection a real VAX has just re-established at send 3 -- CNXMGRERR (GM-14, TG-3, HM-11).";;
+        require_fail) cat <<'EOF'
+the next origination is 3 -- where the VAX continues
+and it acks the 2 our CONNECT advertised
+what this node said about itself stands on the new connection: nothing is re-introduced
+the bind resumes from it too
+EOF
+                      ;;
+        esac;;
+
+    csb-resume-reintroduces)
+        case "$_f" in
+        facility)     echo "a conversation resumed from the ACCEPT keeps what this node already said about itself (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "the resume leaves the advert mask on the dead connection, so this node re-introduces itself (MODEL/PARAMS) mid-stream on the continued conversation -- the frame a real VAX bugchecked on (rd vms-8c54 arm F-4).";;
+        require_fail) cat <<'EOF'
+what this node said about itself stands on the new connection: nothing is re-introduced
+EOF
+                      ;;
+        esac;;
+
     join-origination-follows)
         case "$_f" in
         facility)     echo "only an ANSWER follows the member's recorded connection; an origination keeps the E77 refusal (rd vms-f297)";;
@@ -1759,6 +1808,15 @@ apply_edit() {
     coord-ignores-rejection)
         sed -i 's|^\tif (vms_cm_response_accepted(m->body, m->len))$|\tif (1 \|\| vms_cm_response_accepted(m->body, m->len)) /* NEGCTL coord-ignores-rejection */|' "$_file";;
 
+    scs-accept-conndata-dropped)
+        sed -i 's|^\tcdt_learn_accept_conndata(cdt, rx->ctrl);$|\t/* NEGCTL scs-accept-conndata-dropped */|' "$_file";;
+
+    csb-accept-resume-disarmed)
+        sed -i 's|^\tif (csb == NULL \|\| peer_taken == 0u)$|\tif (1 \|\| csb == NULL \|\| peer_taken == 0u) /* NEGCTL csb-accept-resume-disarmed */|' "$_file";;
+
+    csb-resume-reintroduces)
+        sed -i 's|^\tif (csb->cm_resume_carries_advert)$|\tif (0 \&\& csb->cm_resume_carries_advert) /* NEGCTL csb-resume-reintroduces */|' "$_file";;
+
     join-origination-follows)
         sed -i 's|^\tif (csb != NULL \&\& is_response)$|\tif (csb != NULL) /* NEGCTL join-origination-follows */|' "$_file";;
 
@@ -2089,13 +2147,25 @@ cmd_selftest() {
             fi
         done
 
-        rm -rf "$_st_tmp/tree"
-        mkdir -p "$_st_tmp/tree"
-        if ! cp -a "$_st_root/kernel-core" "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/kernel-core for the self-test"
-            rm -rf "$_st_tmp"
-            return 2
+        # rd vms-f297: the tree is copied ONCE (below the loop's first pass)
+        # and each defect gets back pristine copies of exactly the files it
+        # edits -- every target is a kernel-core file. Re-copying the whole of
+        # kernel-core per defect made this self-test run ~20 s against its
+        # 30 s ctest TIMEOUT and time out under a parallel ctest.
+        if [ ! -d "$_st_tmp/tree/kernel-core" ]; then
+            mkdir -p "$_st_tmp/tree"
+            if ! cp -a "$_st_root/kernel-core" "$_st_tmp/tree/" 2>/dev/null; then
+                echo "FAIL: cannot copy $_st_root/kernel-core for the self-test"
+                rm -rf "$_st_tmp"
+                return 2
+            fi
         fi
+        for _st_t in $(defect_field "$_st_d" targets); do
+            cp -p "$_st_root/$_st_t" "$_st_tmp/tree/$_st_t" 2>/dev/null || {
+                echo "FAIL: $_st_d: target $_st_t is not a file under $_st_root"
+                _st_rc=1
+            }
+        done
 
         if cmd_apply "$_st_d" "$_st_tmp/tree" >/dev/null 2>&1; then
             echo "  ok: $_st_d injects into the current tree"
@@ -2132,7 +2202,12 @@ cmd_selftest() {
         for _st_suite_glob in $(defect_field "$_st_d" suites_red); do
             _st_src="$_st_tests/$_st_suite_glob.c"
             [ -f "$_st_src" ] || { echo "FAIL: $_st_d: suites_red names '$_st_suite_glob' but $_st_src does not exist"; _st_rc=1; continue; }
-            _st_flat=$(tr -d '"\\' <"$_st_src" | tr '\n\t' '  ' | tr -s ' ')
+            # flattened once per suite, not once per defect naming it
+            [ -n "${_st_flatdir:-}" ] || _st_flatdir=$(mktemp -d)
+            _st_flatf="$_st_flatdir/flat-$_st_suite_glob"
+            [ -f "$_st_flatf" ] ||
+                tr -d '"\\' <"$_st_src" | tr '\n\t' '  ' | tr -s ' ' >"$_st_flatf"
+            _st_flat=$(cat "$_st_flatf")
             defect_field "$_st_d" require_fail | while IFS= read -r _st_txt; do
                 [ -n "$_st_txt" ] || continue
                 _st_needle=$(printf '%s' "$_st_txt" | tr -d '"\\' | tr -s ' ')
@@ -2143,6 +2218,7 @@ cmd_selftest() {
             done
         done
     done
+    [ -n "${_st_flatdir:-}" ] && rm -rf "$_st_flatdir"
 
     # -----------------------------------------------------------------------
     # Negative control for cmd_coverage itself (vms-181, INV-6): a coverage

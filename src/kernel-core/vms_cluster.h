@@ -603,7 +603,11 @@ struct vms_csb {
 	uint16_t cm_peer_taken;
 	uint16_t cm_advertised_ack;
 	uint8_t  cm_peer_taken_valid;
-	uint8_t  cm_adopt_pad;
+	uint8_t  cm_resume_carries_advert; /* rd vms-f297: an ACCEPT-data resume
+					    * keeps what was already said    */
+	uint16_t cm_connect_ack;        /* the ack OUR last CONNECT's data
+					 * advertised (rd vms-f297)          */
+	uint16_t cm_connect_ack_pad;
 	uint32_t cm_dialogues_adopted;  /* peer continued: resumed from it   */
 	uint32_t cm_adopt_too_late;     /* peer continued after we had spoken*/
 	uint32_t cm_resumes;

@@ -627,6 +627,11 @@ void cnxman_club_learn_open(struct vms_club *club, int reconfig,
 void cnxman_club_found(struct vms_club *club, uint64_t ftime,
 		       vms_scs_sysid_t fsysid, uint16_t votes, uint32_t slot);
 void cnxman_club_note_slot(struct vms_club *club, uint32_t slot);
+
+/* rd vms-f297: the ACCEPT half of rd vms-ba4's connect-data resume. */
+void cnxman_csb_note_accept_conndata(struct vms_csb *csb, uint32_t conid,
+				     uint16_t peer_taken);
+void cnxman_csb_note_connect_ack(struct vms_csb *csb, uint16_t ack);
 /* cnxman_club_note_reconfig -- a REMOVAL committed: the pair is this node's
  * own committed members and their votes. A member whose VOTES were never
  * learned makes the pair underivable (rc_lost), never a smaller number. */

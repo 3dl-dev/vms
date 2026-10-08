@@ -760,6 +760,7 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 		struct vms_csb *csb = csb_ensure(&cn->cl->club, dst);
 
 		if (csb != NULL) {
+			cnxman_note_connect_ack(csb, conndata);   /* rd vms-f297 */
 			/* E77: adopting the connection RESTARTS this block's
 			 * send/ack dialogue, because the numbers it was holding
 			 * belonged to the connection this one replaces. */
@@ -1248,12 +1249,44 @@ static vms_scs_sysid_t cnxman_bind_accepted(struct vms_cnxman *cn,
 	return peer;
 }
 
+/* What our own CONNECT's data advertised, read back off the bytes sent. */
+static void cnxman_note_connect_ack(struct vms_csb *csb, const uint8_t *cd)
+{
+	uint16_t ack = 0u;
+
+	if (cd != NULL &&
+	    vms_cm_conndata_peer_taken(cd, VMS_CM_CONNDATA_LEN, &ack) ==
+		    VMS_CODEC_OK)
+		cnxman_csb_note_connect_ack(csb, ack);
+}
+
+/* rd vms-f297: an OUTBOUND connection opened -- read the peer's ACCEPT data
+ * before anything binds or speaks on it. */
+static void cnxman_note_accept_conndata(struct vms_cnxman *cn,
+					vms_conid_t local_conid)
+{
+	struct vms_csb *csb = csb_by_attempt(&cn->cl->club, local_conid);
+	uint8_t cd[16];
+	uint16_t taken = 0u;
+
+	if (csb == NULL)
+		csb = csb_by_conid(&cn->cl->club, local_conid);
+	if (csb == NULL || cn->cl->scs == NULL ||
+	    scs_conid_accept_conndata(cn->cl->scs, local_conid, cd) !=
+		    (int)SS__NORMAL ||
+	    vms_cm_conndata_peer_taken(cd, sizeof(cd), &taken) != VMS_CODEC_OK)
+		return;
+	cnxman_csb_note_accept_conndata(csb, (uint32_t)local_conid, taken);
+}
+
 static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	vms_scs_sysid_t accepted_from = 0u;
 	uint8_t accepted = 0u;
 	struct vms_csb *csb;
+
+	cnxman_note_accept_conndata(cn, local_conid);
 
 	/*
 	 * WHICH HALF, AND WHOSE (rd vms-1f40). An OUTBOUND connect recorded its
@@ -2088,6 +2121,7 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 					 csb->sysid, cn->conndata,
 					 &new_conid);
 			if (rc == (int)SS__NORMAL) {
+				cnxman_note_connect_ack(csb, cn->conndata);
 				/* E77: THE reconnect case -- the dialogue the
 				 * old CDT carried died with it, numbers burned
 				 * on it included. */
@@ -2801,6 +2835,7 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 				 cnxman_join_name_vaxcluster, csb->sysid,
 				 cn->conndata, &new_conid);
 		if (rc == (int)SS__NORMAL) {
+			cnxman_note_connect_ack(csb, cn->conndata);  /* f297 */
 			/* Same rule on the once-a-second beat's reconnect as on
 			 * the close-path one above. */
 			cnxman_csb_bind_reconnect(csb, (uint32_t)new_conid);

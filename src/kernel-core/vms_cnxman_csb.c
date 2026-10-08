@@ -1806,6 +1806,43 @@ static void csb_resume_from_conndata(struct vms_csb *csb)
 	csb->cm_token = csb->cm_prev_token;
 	csb->cm_adopt_pending = 0u;
 	csb->cm_dialogues_adopted++;
+	/* rd vms-f297 (ACCEPT path only): the conversation is the SAME one, so
+	 * what this node already told the peer about itself stands on the new
+	 * connection -- re-introducing itself mid-stream is the frame a real
+	 * VAX bugchecked on (rd vms-8c54 arm F-4). */
+	if (csb->cm_resume_carries_advert)
+		csb->cm_advert_conid = csb->cm_dialogue_conid;
+	csb->cm_resume_carries_advert = 0u;
+}
+
+/*
+ * A CONNECT THIS NODE MADE WAS ACCEPTED, AND THE ACCEPT SAYS HOW MUCH OF OUR
+ * CONVERSATION THE PEER HAD TAKEN (rd vms-f297). The same 16 bytes rd vms-ba4
+ * reads off a peer's CONNECT, read off its ACCEPT: a real V7.3 VAX re-
+ * establishing a connection a joiner re-dialled answered with taken 2 (stall-
+ * rig arm HM-11) and continued at send 3, where this node -- resetting the
+ * dialogue of a system not yet a member -- spoke at send 1, ack 0 and the VAX
+ * bugchecked CNXMGRERR (GM-14, TG-3, HM-11). Zero taken is a fresh peer and
+ * changes nothing. The resume runs now if the block is already on this
+ * connection, else at its bind.
+ */
+void cnxman_csb_note_accept_conndata(struct vms_csb *csb, uint32_t conid,
+				     uint16_t peer_taken)
+{
+	if (csb == NULL || peer_taken == 0u)
+		return;
+	csb->cm_peer_taken = peer_taken;
+	csb->cm_advertised_ack = csb->cm_connect_ack;
+	csb->cm_peer_taken_valid = 1u;
+	csb->cm_resume_carries_advert = 1u;
+	if (csb->cm_dialogue_conid == conid)
+		csb_resume_from_conndata(csb);
+}
+
+void cnxman_csb_note_connect_ack(struct vms_csb *csb, uint16_t ack)
+{
+	if (csb != NULL)
+		csb->cm_connect_ack = ack;
 }
 
 void cnxman_csb_note_peer_conndata(struct vms_csb *csb, uint16_t peer_taken,

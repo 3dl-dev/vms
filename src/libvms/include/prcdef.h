@@ -251,6 +251,7 @@ typedef struct _uic UIC;
 #define SYI$_CLUSTER_MEMBER 0x10CF  /* Cluster member flag (longword) */
 #define SYI$_CLUSTER_NODES  0x10CA  /* Number of cluster nodes (longword) */
 #define SYI$_SCSNODE        0x1067  /* Node's SCS system name (string); OVMX-private code; see vms-3ab */
+#define SYI$_DEFPRI         4279    /* Default base priority (SYSGEN DEFPRI); STARLET dump */
 #define SYI$_SCSSYSTEMID    0x1065  /* Node's cluster system ID (longword); OVMX-private code; see vms-3ab */
 /* CPU-inventory item codes (vms-f16).  OVMX-private codes continuing the
  * scheme above: the 2026-08-13 oracle dump confirms OVMX's whole SYI$_

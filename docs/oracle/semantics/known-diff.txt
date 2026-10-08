@@ -20,7 +20,6 @@ ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive row; PRIB has no OVMX priority; AUTHPRIV is the enforced set
-info SYI.LOCAL.W  # vms-74a: SYI$_DEFPRI -- OVMX has no SYSGEN DEFPRI
 info DVI.SYSCOMMAND  # vms-b14e: SYS$COMMAND / TT name a Linux path, not the terminal VMS device
 info DVI.TT  # vms-b14e: SYS$COMMAND / TT name a Linux path, not the terminal VMS device
 io IO.NL.READ  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
@@ -225,35 +224,9 @@ rms RMS.ERASE.TEST1  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
 rms RMS.ERASE.TEST2  # vms-670: file versions
 rms RMS.ERASE.TEST3  # vms-670: file versions
 rms RMS.OPEN.AFTER_ERASE  # vms-670: file versions
-rtl STR.CONCAT  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
-rtl STR.APPEND  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
-rtl STR.PREFIX  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
-rtl STR.TRIM  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
-rtl STR.LEN_EXTR.PAST_END  # vms-a91f: STR$ warnings never returned
-rtl STR.LEN_EXTR.NEGSTART  # vms-a91f: STR$ warnings never returned
-rtl STR.POS_EXTR  # vms-afcd: routine not provided by OVMX
-rtl STR.DUPL_CHAR  # vms-afcd: routine not provided by OVMX
-rtl STR.TRANSLATE  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
-rtl STR.ELEMENT.5  # vms-a91f: STR$ warnings never returned
-rtl STR.COPY_DX.FIXED.TRUNC  # vms-a91f: STR$ warnings never returned
-rtl STR.POSITION.EMPTYSUB  # vms-0ff7: STR$POSITION default start / empty substring; LIB$MATCHC
-rtl STR.COMPARE.PAD  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
-rtl STR.FIND_FIRST_IN_SET  # vms-afcd: routine not provided by OVMX
-rtl STR.FIND_FIRST_NOT_IN_SET  # vms-afcd: routine not provided by OVMX
-rtl LIB.MATCHC  # vms-0ff7: STR$POSITION default start / empty substring; LIB$MATCHC
 rtl LIB.FIND_FILE.WILD.2  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
 rtl LIB.FIND_FILE.NONE  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
 rtl LIB.FIND_FILE.SYNTAX  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
-rtl LIB.CVT_DTB.BAD  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
-rtl LIB.CVT_DTB.OVERFLOW  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
-rtl LIB.CVT_DTB.ZEROLEN  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
-rtl LIB.GETJPI.USERNAME  # vms-4c1: LIB$GETxxx string forms / bad item
-rtl LIB.GETJPI.UIC.STRING  # vms-4c1: LIB$GETxxx string forms / bad item
-rtl LIB.GETSYI.DEFPRI  # vms-4c1: LIB$GETxxx string forms / bad item
-rtl LIB.GETSYI.DEFPRI.STRING  # vms-4c1: LIB$GETxxx string forms / bad item
-rtl LIB.FREE_VM.AGAIN  # vms-e1f: LIB$GET_VM/FREE_VM fail
-rtl LIB.GET_VM.ZERO  # vms-e1f: LIB$GET_VM/FREE_VM fail
-rtl LIB.GET_VM.NEG  # vms-e1f: LIB$GET_VM/FREE_VM fail
 tt TT.ASSIGN  # vms-d900: $ASSIGN of TT: fails (TT names a Linux path, vms-b14e) so no terminal QIO runs
 tt TT.SENSEMODE  # vms-d900: $ASSIGN of TT: fails (TT names a Linux path, vms-b14e) so no terminal QIO runs
 tt TT.SENSECHAR  # vms-d900: $ASSIGN of TT: fails (TT names a Linux path, vms-b14e) so no terminal QIO runs

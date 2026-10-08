@@ -86,6 +86,8 @@ extern "C" {
 #define LIB$_INSCLIMEM      0x0015836C  /* Insufficient CLI memory */
 #define LIB$_INVSYMNAM      0x0015838C  /* Invalid symbol name (alpha84 LIBDEF 1409932) */
 #define LIB$_BADZONE        0x001583D4  /* Bad zone identifier */
+#define LIB$_BADBLOADR      0x00158264  /* Bad block address (STARLET dump, observed LIB$FREE_VM) */
+#define LIB$_BADBLOSIZ      0x0015826C  /* Bad block size (STARLET dump, observed LIB$GET_VM) */
 #define LIB$_KEYNOTFOU      0x001582FC  /* Key not found in tree */
 #define LIB$_WRONUMARG      0x0015835C  /* Wrong number of arguments */
 #define LIB$_BADSUBSCR      0x00158082  /* Bad subscript */

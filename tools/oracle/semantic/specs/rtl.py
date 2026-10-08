@@ -6,7 +6,6 @@
 # virtual memory, and the LIB$ character scans. Return values that are positions
 # or results (STR$POSITION, LIB$INDEX...) print as st=.
 P = Probe("rtl")
-P.absent_on_ovmx("STR$POS_EXTR", "STR$DUPL_CHAR", "STR$FIND_FIRST_IN_SET", "STR$FIND_FIRST_NOT_IN_SET")
 
 P.ddesc("D1"); P.ddesc("D2")
 P.buf("SBUF", 5); P.bdesc("SDSC", "SBUF", 5)

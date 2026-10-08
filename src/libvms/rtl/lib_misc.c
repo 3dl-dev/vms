@@ -17,6 +17,7 @@
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
+#include "str$routines.h"
 #include "prcdef.h"
 #include "lnmdef.h"
 #include "clidef.h"          /* CLI$M_NOWAIT — lib$spawn "flags" bits        */
@@ -84,42 +85,83 @@ static void find_file_release(uint32_t handle) {
  *   result_str - Receives string result (or NULL)
  *   result_len - Receives actual length of result (or NULL)
  */
+/*
+ * LIB$GETJPI / LIB$GETSYI deliver an item as TEXT when the caller gives a
+ * result-string descriptor (OpenVMS RTL Library (LIB$) Manual): a string item
+ * as it is, a numeric item as its decimal value, a UIC in the named [g,m]
+ * form $FAO's !%I gives (observed LIB.GETJPI.UIC.STRING "[SYSTEM]",
+ * LIB.GETSYI.DEFPRI.STRING "4"; docs/oracle/semantics/rtl/).
+ */
+static int lib_item_is_string(int jpi, uint32_t code)
+{
+    static const uint32_t jstr[] = { JPI$_USERNAME, JPI$_PRCNAM, JPI$_TERMINAL,
+        JPI$_ACCOUNT, JPI$_IMAGNAME, JPI$_NODENAME, JPI$_CLINAME,
+        JPI$_TABLENAME, JPI$_DFDEV, JPI$_DFDIR };
+    static const uint32_t sstr[] = { SYI$_NODENAME, SYI$_VERSION, SYI$_HW_NAME,
+        SYI$_ARCH_NAME, SYI$_SCSNODE };
+    const uint32_t *t = jpi ? jstr : sstr;
+    size_t n = jpi ? sizeof jstr / sizeof jstr[0] : sizeof sstr / sizeof sstr[0];
+    for (size_t i = 0; i < n; i++)
+        if (t[i] == code) return 1;
+    return 0;
+}
+
+static uint32_t lib_item_text(int jpi, uint32_t code, const char *raw, uint16_t rawlen,
+                              struct dsc$descriptor_s *out, uint16_t *outlen)
+{
+    char txt[256];
+    uint16_t tl;
+    if (lib_item_is_string(jpi, code)) {
+        tl = rawlen < sizeof txt ? rawlen : (uint16_t)(sizeof txt - 1);
+        memcpy(txt, raw, tl);
+    } else if (jpi && code == JPI$_UIC) {
+        uint32_t uic = 0;
+        memcpy(&uic, raw, rawlen < 4 ? rawlen : 4);
+        struct dsc$descriptor_s cd = { 3, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"!%I" };
+        struct dsc$descriptor_s od = { (uint16_t)(sizeof txt - 1), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
+        tl = 0;
+        if (!(sys$fao(&cd, &tl, &od, uic) & 1)) tl = 0;
+    } else {
+        uint64_t v = 0;
+        memcpy(&v, raw, rawlen < 8 ? rawlen : 8);
+        tl = (uint16_t)snprintf(txt, sizeof txt, "%llu", (unsigned long long)v);
+    }
+    txt[tl] = '\0';
+    struct dsc$descriptor_s src = { tl, DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
+    uint32_t st = str$copy_dx(out, &src);
+    if (outlen) *outlen = tl < out->dsc$w_length || out->dsc$b_class == DSC$K_CLASS_D
+                          ? tl : out->dsc$w_length;
+    return (st & 1) ? SS$_NORMAL : st;
+}
+
 uint32_t lib$getjpi(const uint32_t *item_code, const uint32_t *pid,
                     const struct dsc$descriptor_s *prcnam,
                     void *result, struct dsc$descriptor_s *result_str,
                     uint16_t *result_len) {
     if (!item_code) return SS$_BADPARAM;
 
+    char raw[256];
+    uint16_t rawlen = 0;
     struct item_list_3 items[2];
     memset(items, 0, sizeof(items));
-
-    items[0].buflen = result_str ? result_str->dsc$w_length : sizeof(uint32_t);
     items[0].item_code = (uint16_t)*item_code;
-    items[0].bufaddr = result_str ? (void *)result_str->dsc$a_pointer
-                                  : (void *)result;
-    items[0].retlen = result_len;
-    /* Terminator */
-    items[1].buflen = 0;
-    items[1].item_code = 0;
-    items[1].bufaddr = NULL;
-    items[1].retlen = NULL;
-
-    return sys$getjpiw(0, pid, (void *)prcnam, items, NULL, NULL, 0);
+    if (result_str) {
+        items[0].buflen = sizeof raw;
+        items[0].bufaddr = raw;
+        items[0].retlen = &rawlen;
+    } else {
+        items[0].buflen = sizeof(uint32_t);
+        items[0].bufaddr = result;
+        items[0].retlen = result_len;
+    }
+    uint32_t st = sys$getjpiw(0, pid, (void *)prcnam, items, NULL, NULL, 0);
+    if (!(st & 1) || !result_str)
+        return st;
+    return lib_item_text(1, *item_code, raw, rawlen, result_str, result_len);
 }
 
 /*
- * lib$getsyi - Get System Information (simplified wrapper).
- *
- * Provides a simpler calling interface to sys$getsyi for retrieving
- * a single item.
- *
- * Parameters:
- *   item_code  - SYI$_ item code
- *   result     - Receives numeric result (or NULL)
- *   result_str - Receives string result (or NULL)
- *   result_len - Receives actual length (or NULL)
- *   csid       - Cluster system ID (or NULL)
- *   node       - Node name descriptor (or NULL)
+ * lib$getsyi - Get System Information (simplified wrapper): as lib$getjpi.
  */
 uint32_t lib$getsyi(const uint32_t *item_code,
                     void *result, struct dsc$descriptor_s *result_str,
@@ -127,21 +169,24 @@ uint32_t lib$getsyi(const uint32_t *item_code,
                     const struct dsc$descriptor_s *node) {
     if (!item_code) return SS$_BADPARAM;
 
+    char raw[256];
+    uint16_t rawlen = 0;
     struct item_list_3 items[2];
     memset(items, 0, sizeof(items));
-
-    items[0].buflen = result_str ? result_str->dsc$w_length : sizeof(uint32_t);
     items[0].item_code = (uint16_t)*item_code;
-    items[0].bufaddr = result_str ? (void *)result_str->dsc$a_pointer
-                                  : (void *)result;
-    items[0].retlen = result_len;
-    /* Terminator */
-    items[1].buflen = 0;
-    items[1].item_code = 0;
-    items[1].bufaddr = NULL;
-    items[1].retlen = NULL;
-
-    return sys$getsyiw(0, csid, node, items, NULL, NULL, 0);
+    if (result_str) {
+        items[0].buflen = sizeof raw;
+        items[0].bufaddr = raw;
+        items[0].retlen = &rawlen;
+    } else {
+        items[0].buflen = sizeof(uint32_t);
+        items[0].bufaddr = result;
+        items[0].retlen = result_len;
+    }
+    uint32_t st = sys$getsyiw(0, csid, node, items, NULL, NULL, 0);
+    if (!(st & 1) || !result_str)
+        return st;
+    return lib_item_text(0, *item_code, raw, rawlen, result_str, result_len);
 }
 
 /*

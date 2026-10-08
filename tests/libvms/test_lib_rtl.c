@@ -149,10 +149,18 @@ static void test_lib_cvt(void)
     check(st == SS$_NORMAL && val == 63,
           "lib$cvt_otb('77') = 63");
 
-    /* Bad input: non-digit */
+    /* Bad input: non-digit -- OpenVMS answers 0 (not a condition value) and
+     * leaves the result alone (observed LIB.CVT_DTB.BAD, docs/oracle/
+     * semantics/rtl/) */
+    val = 0x5A5A;
     st = lib$cvt_dtb(2, "XY", &val);
-    check(st == SS$_BADPARAM,
-          "lib$cvt_dtb('XY') returns SS$_BADPARAM");
+    check(st == 0 && val == 0x5A5A,
+          "lib$cvt_dtb('XY') returns 0 and leaves the result unwritten");
+
+    /* Zero length: 0 and success (observed LIB.CVT_DTB.ZEROLEN) */
+    val = 0x5A5A;
+    st = lib$cvt_dtb(0, "1", &val);
+    check(st == SS$_NORMAL && val == 0, "lib$cvt_dtb of zero digits is 0 and SS$_NORMAL");
 }
 
 /* ------------------------------------------------------------------ */

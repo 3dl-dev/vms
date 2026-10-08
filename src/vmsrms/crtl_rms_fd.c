@@ -262,6 +262,8 @@ struct rattr {
     uint64_t size, blocks, ino, cdt, rdt;
     uint32_t uid, gid, dev;
     uint16_t mode;
+    uint8_t  rfm, rat;              /* record format/attributes (FAT) */
+    uint16_t mrs;                   /* maximum record size (FAT)      */
 };
 
 /* VMS binary time (100 ns since 17-NOV-1858) -> UNIX seconds. */
@@ -318,6 +320,9 @@ static int fill_attr(struct FAB *fab, struct NAM *nam, const char *rsa, struct r
     if (fhc.xab$l_ebk)
         a->size = (uint64_t)(fhc.xab$l_ebk - 1u) * BLK + fhc.xab$w_ffb;
     a->blocks = fhc.xab$l_hbk;
+    a->rfm = fhc.xab$b_rfm & 0x0Fu;            /* low nibble: RFM (high: ORG) */
+    a->rat = fhc.xab$b_atr;
+    a->mrs = fhc.xab$w_mrz;
     a->cdt = dat.xab$q_cdt;
     a->rdt = dat.xab$q_rdt;
     a->mode = (uint16_t)(S_IFREG | vms_prot_mode(pro.xab$w_pro));
@@ -578,22 +583,30 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
     }
     rf->rsa[rf->nam.nam$b_rsl] = '\0';            /* rsa[256], rsl <= 255 */
 
+    /* The file's own record format and attributes, from its header (XABFHC):
+     * they decide stream vs record access, and the RAB frames records by
+     * them, as $OPEN's FAB outputs do on VMS. */
+    struct rattr a;
+    int ar = fill_attr(&rf->fab, &rf->nam, rf->rsa, &a);
+    TR("crtlfd: attr rfm", a.rfm);
+    TR("crtlfd: attr size", a.size);
+    if (ar < 0) {                               /* no header attributes: no file */
+        sys$close(&rf->fab, 0, 0);
+        rfile_free(rf);
+        return ar;
+    }
+    if (a.rfm >= FAB$C_FIX && a.rfm <= FAB$C_STMCR) {
+        rf->fab.fab$b_rfm = a.rfm;
+        rf->fab.fab$b_rat = a.rat;
+        rf->fab.fab$w_mrs = a.mrs;
+    }
     rf->kind = is_record_rfm(rf->fab.fab$b_rfm) ? RF_RECORD : RF_STREAM;
     if (rf->kind == RF_RECORD && writing) {
         sys$close(&rf->fab, 0, 0);
         rfile_free(rf);
         return -EOPNOTSUPP;                     /* writing a record file: not yet */
     }
-    if (rf->kind == RF_STREAM) {
-        struct rattr a;
-        int ar = fill_attr(&rf->fab, &rf->nam, rf->rsa, &a);
-        if (ar < 0) {                           /* no end of file: no stream */
-            sys$close(&rf->fab, 0, 0);
-            rfile_free(rf);
-            return ar;
-        }
-        rf->eof = a.size;
-    }
+    rf->eof = a.size;
     rf->rab = cc$rms_rab;
     rf->rab.rab$l_fab = &rf->fab;
     st = sys$connect(&rf->rab, 0, 0);

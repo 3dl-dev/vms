@@ -74,44 +74,44 @@
     }
   ],
   "overall": {
-    "count": 467,
+    "count": 468,
     "by_status": {
       "verified": 24,
       "implemented": 282,
-      "partial": 53,
+      "partial": 54,
       "stub": 14,
       "designed": 1,
       "absent": 93
     },
     "by_authenticity": {
-      "real": 319,
+      "real": 320,
       "n/a": 94,
       "advisory": 48,
       "facade-risk": 6
     },
     "met": 306,
-    "in_progress": 53,
+    "in_progress": 54,
     "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 421,
+    "count": 422,
     "by_status": {
       "verified": 24,
       "implemented": 282,
-      "partial": 52,
+      "partial": 53,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 318,
+      "real": 319,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
     "met": 306,
-    "in_progress": 52,
+    "in_progress": 53,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -1310,21 +1310,21 @@
       "vms_ref": "OpenVMS Record Management Services Reference Manual",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 36,
+        "count": 37,
         "by_status": {
           "verified": 0,
           "implemented": 33,
-          "partial": 2,
+          "partial": 3,
           "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 35,
+          "real": 36,
           "n/a": 1
         },
         "met": 33,
-        "in_progress": 2,
+        "in_progress": 3,
         "not_started": 1,
         "facade_risk": 0
       }
@@ -6276,6 +6276,21 @@
       "evidence": "src/vmsrms/crtl_rms_stdio.c",
       "verified_against": null,
       "notes": "vms-47e/126/3c1: fopen/fwrite/fread/fclose drive sys$create/$open/$connect/$put/$get/$close against the real ODS-2 volume over the ACP (do-it-like-VMS: CRTL is a thin RMS veneer, not musl POSIX). Byte-exact FIX put/read + fail-honest no-POSIX-fallback; chunked >64KiB writes + delete-on-close temps (vms-126). Proven by tests/qemu/test_syssvc_crtl_rms_veneer.c (host ctest, not a real-VMS oracle -> implemented, not verified)",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "rms-api",
+      "facility_name": "RMS programmatic API \u2014 entry points, control blocks, file organizations",
+      "id": "crtl$rms_file_layer",
+      "kind": "feature",
+      "vms": "C RTL file descriptors and stdio as RMS clients (open/read/write/lseek/fstat/close, all of stdio)",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/crtl_rms_fd.c",
+      "verified_against": null,
+      "notes": "vms-b90: a hook in the musl syscall funnel serves every file system call that names an RMS file through $OPEN/$CREATE/$READ/$WRITE/$GET/$DISPLAY/$ERASE/$RENAME; /dev /proc /sys /run stay the kernel's; stream files are byte streams over block I/O, record files read as lines. Proven by the alpha crtl-fd gate (32-bit DEC C program; DCL writer + DCL TYPE reader). Partial: carried by the RMS-backed DECC$SHR the gates build, not yet the boot DECC$SHR (vms-9f8e); writing record files, directories as descriptors and mkdir/rmdir fail honestly (EOPNOTSUPP)",
       "plan_ref": "vms-801"
     },
     {

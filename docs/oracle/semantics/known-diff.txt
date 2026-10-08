@@ -104,22 +104,14 @@ lock LOCK.ASYNC.DONE  # vms-a3d: executive lock manager -- value block, sublock 
 lock LOCK.DEQALL  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
 lock LOCK.AFTER.DEQALL.A  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
 lock LOCK.AFTER.DEQALL.B  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-prc PRC.SELF.COUNT0  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.JPI.SUB  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.JPI.BYNAME  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SELF.COUNT1  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.CREATE.DUPNAME  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SUSPND  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SUSPND.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SUSPND.AGAIN  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.RESUME  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.RESUME.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.RESUME.AGAIN  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.DELPRC  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SELF.COUNT2  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.NOIMAGE.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SELF.COUNT3  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.FORCEX  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
+prc PRC.SELF.COUNT0  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
+prc PRC.JPI.SUB  # vms-ea42: JPI$_STATE (no executive scheduler state, the vms-8019 §5.1 ruling), JPI$_OWNER / MASTER_PID (owner and job root not in the executive row), JPI$_PRIB (no OVMX priority)
+prc PRC.SELF.COUNT1  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
+prc PRC.SUSPND.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vms-8019 §5.1)
+prc PRC.RESUME.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vms-8019 §5.1)
+prc PRC.SELF.COUNT2  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
+prc PRC.NOIMAGE.STATE  # vms-ea42: a hibernating process with a missing image is run down at once (OpenVMS keeps it until $WAKE fails activation), and JPI$_STATE
+prc PRC.SELF.COUNT3  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 rights RDB.ADD_IDENT.UIC1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.UIC2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds

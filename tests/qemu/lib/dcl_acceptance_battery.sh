@@ -1346,36 +1346,37 @@ run_dcl_acceptance_battery() {
             # 3. PRIVILEGE IS INHERITED, NOT THE OBSTACLE. This VM has no NIC
             # (-nic none), so the POSITIVE live-datalink proof (eth0, NETACP
             # running, hellos from AA-00-04-00-2A-04 on the wire) is
-            # tests/qemu/test_decnet_startnet_boot_e2e.sh. Here we pin that an
-            # activated image inherits this DCL row's PHY_IO: a foreground
-            # DECNETD on loopback reaches the executive PAST its PHY_IO gate
-            # (any refusal it gets is NOT SS$_NOPRIV), and its own executive row
-            # -- read back on refusal -- holds PHY_IO. (Loopback is not a
-            # DECnet circuit; the executive declining to open a raw L2 socket on
-            # it is an interface fact, reported with its real status.)
+            # tests/qemu/test_decnet_startnet_boot_e2e.sh. Here an image
+            # activated from this interactive (non-root) DCL session inherits
+            # its PHY_IO and the EXECUTIVE opens the datalink on loopback for
+            # it -- and again for a second image, with no reboot in between
+            # (rd vms-b72: the executive created its AF_PACKET socket under the
+            # caller's own Linux identity, so every interactive open was
+            # refused SS$_ABORT / host errno 1 and only a root-started boot
+            # NETACP got a datalink).
             run_cmd 'SET PROCESS/PRIVILEGES=PHY_IO'
             run_cmd 'SHOW PROCESS/PRIVILEGES'
             must_have "$SEG" 'PHY_IO' \
                 "NETACP [vms-1f69]: precondition -- the SYSTEM DCL process's executive row holds PHY_IO"
-            local DL_OFF; DL_OFF=$(wc -c <"$LOG")
-            send 'DNETACC --iface lo --hello-interval 1 --duration 3'
-            if wait_for 'DECNETD-I-COUNTERS' 45 "$DL_OFF" || wait_for 'DECNETD-E-' 5 "$DL_OFF"; then
-                wait_for '$ ' 20 "$DL_OFF"
-                local DLSEG; DLSEG=$(tail -c "+$((DL_OFF + 1))" "$LOG" | tr -d '\r')
-                must_not_have "$DLSEG" 'SS$_NOPRIV' \
-                    "NETACP [vms-1f69]: an image activated from a PHY_IO-holding DCL is NOT refused SS\$_NOPRIV (privilege inherited into its executive row)"
-                if printf '%s\n' "$DLSEG" | grep -qF 'DECNETD-I-PROCPRIV'; then
-                    must_have "$DLSEG" '(PHY_IO held)' \
-                        "NETACP [vms-1f69]: the activated image's OWN executive row holds PHY_IO (read back by \$GETJPI)"
-                else
+            local pass_n
+            for pass_n in 1 2; do
+                local DL_OFF; DL_OFF=$(wc -c <"$LOG")
+                send 'DNETACC --iface lo --hello-interval 1 --duration 3'
+                if wait_for 'DECNETD-I-COUNTERS' 45 "$DL_OFF" || wait_for 'DECNETD-E-' 5 "$DL_OFF"; then
+                    wait_for '$ ' 20 "$DL_OFF"
+                    local DLSEG; DLSEG=$(tail -c "+$((DL_OFF + 1))" "$LOG" | tr -d '\r')
+                    must_not_have "$DLSEG" 'SS$_NOPRIV' \
+                        "NETACP [vms-1f69]: an image activated from a PHY_IO-holding DCL is NOT refused SS\$_NOPRIV (open $pass_n)"
+                    must_not_have "$DLSEG" 'DECNETD-E-NOSOCKET' \
+                        "NETACP [vms-b72]: the executive datalink open from an interactive session is NOT refused (open $pass_n of 2, no reboot between)"
                     must_have "$DLSEG" 'DECNETD-I-DATALINK' \
-                        "NETACP [vms-1f69]: the executive datalink opened (no refusal to explain)"
+                        "NETACP [vms-b72]: the executive opened the datalink for an image of this interactive session (open $pass_n of 2, no reboot between)"
+                    negctl "$DLSEG" 'DECNETD' "NETACP executive datalink open $pass_n"
+                else
+                    bad "NETACP [vms-b72]: DECNETD.EXE --iface lo produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s (open $pass_n)"
+                    wait_for '$ ' 20 "$DL_OFF"
                 fi
-                negctl "$DLSEG" 'DECNETD' "NETACP privilege inheritance"
-            else
-                bad "NETACP [vms-1f69]: DECNETD.EXE --iface lo produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s"
-                wait_for '$ ' 20 "$DL_OFF"
-            fi
+            done
             # 4. negative: no PHY_IO -> the executive refuses, nothing is sent.
             run_cmd 'SET PROCESS/PRIVILEGES=NOPHY_IO'
             local NP_OFF; NP_OFF=$(wc -c <"$LOG")

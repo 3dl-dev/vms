@@ -957,11 +957,25 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 	int rc;
 
 	*out = NULL;
-	rc = sock_create_kern(&init_net, AF_PACKET, SOCK_RAW, htons(ethertype), &sock);
-	if (rc) {
-		pr_warn("vms: L2 open: sock_create_kern(AF_PACKET) errno %d\n", rc);
-		return rc;
+	/* rd vms-b72: the socket is the EXECUTIVE's, opened after its own PHY_IO
+	 * gate, so it is created with the kernel's credentials. AF_PACKET's
+	 * create checks CAP_NET_RAW against the CURRENT task's credentials even
+	 * for sock_create_kern, so under the calling process's own (non-root)
+	 * Linux identity every interactive open was refused EPERM; only a NETACP
+	 * started by root at boot got through. Override for the create only. */
+	{
+		struct cred *kcred = prepare_kernel_cred(&init_task);
+		const struct cred *old;
+
+		if (!kcred)
+			return -ENOMEM;
+		old = override_creds(kcred);
+		rc = sock_create_kern(&init_net, AF_PACKET, SOCK_RAW, htons(ethertype), &sock);
+		revert_creds(old);
+		put_cred(kcred);
 	}
+	if (rc)
+		return rc;
 
 	dev = dev_get_by_name(&init_net, ifname);
 	if (!dev) {
@@ -971,7 +985,6 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 
 	rc = exec_netdev_ensure_up(dev);
 	if (rc) {
-		pr_warn("vms: L2 open: bring-up of %s errno %d\n", ifname, rc);
 		dev_put(dev);
 		sock_release(sock);
 		return rc;
@@ -984,7 +997,6 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 
 	rc = kernel_bind(sock, (struct sockaddr *)&sll, sizeof(sll));
 	if (rc) {
-		pr_warn("vms: L2 open: bind to %s errno %d\n", ifname, rc);
 		dev_put(dev);
 		sock_release(sock);
 		return rc;
@@ -1011,7 +1023,6 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 	rc = dev_set_promiscuity(dev, 1);
 	rtnl_unlock();
 	if (rc) {
-		pr_warn("vms: L2 open: promiscuous mode on %s errno %d\n", ifname, rc);
 		kfree(h);
 		dev_put(dev);
 		sock_release(sock);

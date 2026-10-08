@@ -132,22 +132,29 @@ int main(void)
     priv(PRV$M_PRMMBX, 0);
 
     /* --- NETMBX: a channel to the DECnet network device -------------------------- */
+    /* The device exists only on a system with a NIC (the executive enters _NET: on the
+     * primary ETH0:). The x86 harness has one; the Alpha harness has none. Without the
+     * device there is nothing to refuse, so the section is skipped LOUDLY there -- it is
+     * not counted as a pass, and the x86 run (where the negctl bites) is the proof. */
     priv(PRV$M_NETMBX, 1);
     {
         uint32_t nchan = 0;
         uint32_t on = vms_kif_assign("_NET:", &nchan);
-        check($VMS_STATUS_SUCCESS(on) && nchan != 0,
-              "$ASSIGN _NET: with NETMBX yields a channel (the harness has a NIC)");
-        if ($VMS_STATUS_SUCCESS(on))
-            (void)vms_kif_dassgn(nchan);
+        if (on == SS$_NOSUCHDEV) {
+            printf("  SKIP: no _NET: device on this system (no NIC): the NETMBX section is not exercised here\n");
+        } else {
+            check($VMS_STATUS_SUCCESS(on) && nchan != 0,
+                  "$ASSIGN _NET: with NETMBX yields a channel");
+            if ($VMS_STATUS_SUCCESS(on))
+                (void)vms_kif_dassgn(nchan);
+            priv(PRV$M_NETMBX, 0);
+            nchan = 0;
+            /* negctl: net-assign-netmbx-check-removed */
+            check(vms_kif_assign("_NET:", &nchan) == SS$_NOPRIV,
+                  "$ASSIGN _NET: without NETMBX is SS$_NOPRIV");
+        }
     }
     priv(PRV$M_NETMBX, 0);
-    {
-        uint32_t nchan = 0;
-        /* negctl: net-assign-netmbx-check-removed */
-        check(vms_kif_assign("_NET:", &nchan) == SS$_NOPRIV,
-              "$ASSIGN _NET: without NETMBX is SS$_NOPRIV");
-    }
 
     /* --- READALL / BYPASS / SYSPRV on a file the UIC has no category for ----- */
     check(open_sysuaf(chan, sysexe) == SS$_NOPRIV,

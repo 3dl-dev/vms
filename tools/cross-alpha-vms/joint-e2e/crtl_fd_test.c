@@ -188,6 +188,13 @@ int main(int argc, char **argv)
           "fgetname(f, buf, 0) returns its UNIX form");
     check(fgetname(stdout, spec, 1) == NULL, 31, "fgetname of a non-RMS stream is a null pointer");
 
+    /* 8c. A floating argument through a varargs C RTL routine (the
+     *     OTS$HOME_ARGS home area carries F registers too). */
+    char fbuf[64];
+    snprintf(fbuf, sizeof fbuf, "%.2f|%d|%g", 1.5, 7, 2.25);
+    printf("CFD: snprintf floats -> \"%s\"\n", fbuf);
+    check(strcmp(fbuf, "1.50|7|2.25") == 0, 32, "snprintf formats double arguments passed through varargs");
+
     /* 9. UNIX syntax names the same file. */
     f = fopen("/vda0/systmp/cfdout.txt", "r");
     check(f != NULL && fgets(got, sizeof got, f) && strncmp(got, "line 001", 8) == 0,

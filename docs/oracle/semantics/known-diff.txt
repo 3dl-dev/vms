@@ -23,6 +23,35 @@ ef EF.WAITFR.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLE
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.SETIMR.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
+io IO.NL.WRITE  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.NL.READ  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.NL.WRITEOF  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.NL.ILLFUNC  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.NL.SENSEMODE  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.BADCHAN  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.QIO.EFN0.DONE  # vms-084: async $QIO never completes the IOSB / delivers the AST; efn not validated
+io IO.QIO.EFN5.DONE  # vms-084: async $QIO never completes the IOSB / delivers the AST; efn not validated
+io IO.QIO.EFN255  # vms-084: async $QIO never completes the IOSB / delivers the AST; efn not validated
+io IO.QIO.EFN64.UNASSOC  # vms-084: async $QIO never completes the IOSB / delivers the AST; efn not validated
+io IO.QIOW.EFN128  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.MBX.READ.EMPTY.NOW  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.MBX.READ  # vms-4a69: no sender PID in IOSB / EXQUOTA instead of MBTOOSML
+io IO.MBX.WRITE.TOOBIG  # vms-4a69: no sender PID in IOSB / EXQUOTA instead of MBTOOSML
+io IO.MBX.READ.SHORT  # vms-d01: $QIOW returns the I/O status (BUFFEROVF) as the service status; the IOSB and count are right since vms-542
+io IO.MBX.READ.AFTER_SHORT  # vms-d01: $QIOW returns the I/O status as the service status; illegal function writes the IOSB
+io IO.MBX.WRITEOF  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.MBX.READ.EOF  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.MBX.WRITE.ZERO  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.MBX.READ.ZERO  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.MBX.READ.PEND  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.CANCEL  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.CANCEL.WAIT  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.CANCEL.DONE  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.CANCEL.BADCHAN  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.DASSGN.MBX2  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.DELMBX  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.DASSGN.MBX  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
+io IO.ASSIGN.MBX.GONE  # vms-262a: IO$_WRITEOF unsupported; mailbox reader blocks (tail of the probe MISSING)
 lnm LNM.TRN.NEW  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
 lnm LNM.TRN.NEW.PROCTAB  # vms-62f: LNM$_ATTRIBUTES / LNM$_ACMODE / LNM$_TABLE not returned
 lnm LNM.TRN.NEW.PROCLOG  # vms-f3c: LNM$PROCESS / search-list create / directory tables

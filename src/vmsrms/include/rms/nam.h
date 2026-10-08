@@ -52,6 +52,17 @@ struct NAM {
     uint8_t  nam$b_nop;        /* $PARSE options (NAM$M_SYNCHK etc.) */
     struct NAM *nam$l_rlf;     /* Related-file NAM for relative $PARSE */
     char     nam$t_dvi[16];    /* Device-id (counted string) after $PARSE */
+    /* File ID and directory ID (vms-6e28). Each is the three-word Files-11 ID
+     * {number, sequence, RVN | NMX<<8} -- word 2's low byte is the relative
+     * volume number, its high byte the file-number extension (FID$B_RVN /
+     * FID$B_NMX). $OPEN, $CREATE and $SEARCH return the file's FID and its
+     * directory's DID; $PARSE returns the DID and clears the FID. VMS's NAM
+     * carries both in its fixed-offset head, but OVMX's NAM is a C struct with
+     * native pointers rather than the VMS byte layout (VMS-native images reach
+     * RMS through rms_vmsabi_core.c's VMS-layout bridge), so these are APPENDED,
+     * like the vms-ec70 fields above, and no earlier offset moves. */
+    uint16_t nam$w_fid[3];     /* File ID: num, seq, rvn|nmx<<8 */
+    uint16_t nam$w_did[3];     /* Directory ID: num, seq, rvn|nmx<<8 */
 };
 
 /* NAM flags (nam$l_fnb) */

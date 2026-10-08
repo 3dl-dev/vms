@@ -619,6 +619,7 @@ static void rms_acp_seed_handle(rms_file_t *h, const struct vms_acp_fileattr *at
         h->fhc_gbc      = fat->fat_gbc;
         h->fhc_verlimit = fat->fat_versions;
         h->fhc_bkz      = fat->fat_bktsize;
+        h->fhc_vfc      = fat->fat_vfcsize;
     }
     /* vms-5dd2: dates, protection and owner from the same header read. */
     memcpy(&h->hdr_cdt, at->credate, 8);
@@ -663,6 +664,8 @@ static uint32_t rms_acp_open_file(struct rms_acp_spec *s, int want_write,
     h->accessed = 1; h->writable = want_write ? 1 : 0;
     h->fid_num = a.fid_num; h->fid_seq = a.fid_seq;
     h->fid_rvn = a.fid_rvn; h->fid_nmx = a.fid_nmx;
+    h->did_num = a.did_num; h->did_seq = a.did_seq;
+    h->did_rvn = a.did_rvn; h->did_nmx = a.did_nmx;
     h->version = a.out_version;    /* resolved version (WRITE ACTIVE reports it) */
     rms_acp_seed_handle(h, &a.attr);
     *hp = h;
@@ -1157,13 +1160,20 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
     out->is_directory = (a.attr.filechar & 0x2000u) ? 1 : 0;   /* FCH$V_DIRECTORY */
     memcpy(out->credate, a.attr.credate, 8);
     memcpy(out->revdate, a.attr.revdate, 8);
-    /* Record format from the FAT (ATR$C_RECATTR, verbatim). fat_rtype's small
-     * integers ARE the FAB$C_* record-format codes (1=FIX..6=STMCR). */
+    /* Record format from the FAT (ATR$C_RECATTR, verbatim). fat_rtype's low
+     * nibble IS the FAB$C_* record-format code (1=FIX..6=STMCR), its high
+     * nibble the file organization (FAB$C_SEQ/REL/IDX: 0x00/0x10/0x20).
+     * FAT$W_MAXREC is the maximum record size (FAB$W_MRS, F$FILE_ATTRIBUTES
+     * "MRS"); FAT$W_RSIZE the longest record length ("LRL"). A real VAX reads
+     * an OVMX header with rsize 32, maxrec 0 as "maximum 0 bytes, longest 32
+     * bytes" (tests/ods2/PROVENANCE-real_vax_ods2.md, increment 9). */
     {
         const struct ods2_recattr *fat = (const struct ods2_recattr *)a.attr.recattr;
-        out->rfm = fat->fat_rtype;
+        out->rfm = fat->fat_rtype & 0x0Fu;
+        out->org = fat->fat_rtype & 0xF0u;
         out->rat = fat->fat_rattrib;
-        out->mrs = fat->fat_rsize;
+        out->mrs = fat->fat_maxrec;
+        out->lrl = fat->fat_rsize;
     }
 
     vms_kif_acp_deaccess(chan);
@@ -1916,7 +1926,12 @@ static void rms_nam_fill(struct FAB *fab, const struct rms_acp_spec *s,
         memcpy(nam->nam$l_esa, buf, l);
         nam->nam$b_esl = (uint8_t)l;
     }
-    (void)h;    /* OVMX's NAM carries no nam$w_fid field yet */
+    /* nam$w_fid / nam$w_did (vms-6e28): the file's own ID and its
+     * directory's, as the ACP returned them on IO$_ACCESS / IO$_CREATE. */
+    if (h) {
+        rms_nam_set_fid(nam, h->fid_num, h->fid_seq, h->fid_rvn, h->fid_nmx);
+        rms_nam_set_did(nam, h->did_num, h->did_seq, h->did_rvn, h->did_nmx);
+    }
 }
 
 /*
@@ -1929,19 +1944,23 @@ static void rms_nam_fill(struct FAB *fab, const struct rms_acp_spec *s,
  */
 static void rms_fab_from_header(struct FAB *fab, const rms_file_t *h)
 {
+    uint8_t rfm, org;
+
+    if (!h)
+        return;
+    rfm = h->fhc_rfm & 0x0Fu;          /* FAT$B_RTYPE: record format ...   */
+    org = h->fhc_rfm & 0xF0u;          /* ... | file organization << 4     */
     /* Sequential files only: relative/indexed opens bind their own on-disk
      * structure (cell size, Prolog-3) from the caller's FAB today. */
-    if (!h || fab->fab$b_org != FAB$C_SEQ ||
-        h->fhc_rfm < FAB$C_FIX || h->fhc_rfm > FAB$C_STMCR)
+    if (fab->fab$b_org != FAB$C_SEQ || org != FAB$C_SEQ ||
+        rfm < FAB$C_FIX || rfm > FAB$C_STMCR)
         return;
-    fab->fab$b_rfm = h->fhc_rfm;
+    fab->fab$b_rfm = rfm;
     fab->fab$b_rat = h->fhc_rat;
-    /* FAT rsize is the maximum record size, but OVMX's $CREATE does not yet
-     * record the caller's size in it for every format (a FIX file created with
-     * mrs 20 reads back a different rsize), so a caller-supplied size stands;
-     * only a default FAB (mrs 0) takes the header's. */
-    if (fab->fab$w_mrs == 0 && h->fhc_lrl)
-        fab->fab$w_mrs = h->fhc_lrl;
+    /* The maximum record size is FAT$W_MAXREC, which $CREATE records from the
+     * creator's fab$w_mrs (vms-b447) -- $OPEN returns it whatever the caller
+     * passed, as VMS does. A FIX file's record size is that same value. */
+    fab->fab$w_mrs = h->fhc_mrz;
 }
 #endif /* OVMX_HAVE_ACP */
 
@@ -2204,6 +2223,82 @@ static uint32_t rms_idx_author_p3(struct FAB *fab, rms_file_t *h, p3_ctx_t **out
     return RMS$_CREATED;
 }
 
+#if defined(OVMX_HAVE_ACP)
+/*
+ * rms_fat_from_fab - the record-attribute image (ATR$C_RECATTR: the FAT bytes
+ * of an ODS-2 file header) a $CREATE records for this FAB (vms-b447). VMS RMS
+ * Reference, $CREATE: the file takes the FAB's ORG, RFM, RAT, MRS (and FSZ for
+ * VFC, DEQ as its default extension). FAT$B_RTYPE is rfm | org (FAB$C_REL /
+ * FAB$C_IDX are already the organization in the high nibble); FAT$W_MAXREC is
+ * the maximum record size; FAT$W_RSIZE is the longest record, which for a FIX
+ * file is its record size and otherwise grows as records are written ($CLOSE,
+ * rms_close_record_lrl). Returns 0 -- leave the ACP's kind preset -- for a FIX
+ * file with no record size: VMS refuses that $CREATE, but OVMX's byte-exact C
+ * RTL veneer (crtl_rms_stdio.c) relies on it, so its header keeps the preset
+ * 512-byte record the reader then frames by.
+ */
+static int rms_fat_from_fab(const struct FAB *fab, uint8_t ra[32])
+{
+    struct ods2_recattr fat;
+    uint8_t rfm = fab->fab$b_rfm;
+
+    if (rfm > FAB$C_STMCR)
+        return 0;
+    if (rfm == FAB$C_FIX && fab->fab$w_mrs == 0)
+        return 0;
+    memset(&fat, 0, sizeof(fat));
+    fat.fat_rtype   = (uint8_t)((rfm & 0x0Fu) | (fab->fab$b_org & 0xF0u));
+    fat.fat_rattrib = fab->fab$b_rat;
+    fat.fat_maxrec  = fab->fab$w_mrs;
+    fat.fat_rsize   = (rfm == FAB$C_FIX) ? fab->fab$w_mrs : 0;
+    if (rfm == FAB$C_VFC)
+        fat.fat_vfcsize = fab->fab$b_fsz ? fab->fab$b_fsz : 2;  /* rms_seq_put's default */
+    fat.fat_defext  = fab->fab$w_deq;
+    memcpy(ra, &fat, sizeof(fat));
+    return 1;
+}
+
+/*
+ * rms_close_record_lrl - $CLOSE of a file this handle wrote records to:
+ * record the longest record length in the header (FAT$W_RSIZE, XAB$W_LRL,
+ * DIRECTORY/FULL "longest N bytes") when it grew (vms-b447). IO$_MODIFY by
+ * FID rewrites the record attributes the handle already holds from the header,
+ * with the new length. A FIX file's longest record is its record size, set at
+ * $CREATE. Best-effort, as the record data is already on disk: a failure
+ * leaves the header's previous length.
+ */
+static void rms_close_record_lrl(rms_file_t *h)
+{
+    struct vms_acp_fileop_args fop;
+    struct ods2_recattr fat;
+    uint8_t rfm = h->fhc_rfm & 0x0Fu;
+
+    /* Sequential, non-FIX record files whose header carries a real format. */
+    if (!h->writable || h->put_lrl <= h->fhc_lrl || (h->fhc_rfm & 0xF0u) ||
+        rfm < FAB$C_VAR || rfm > FAB$C_STMCR)
+        return;
+    memset(&fat, 0, sizeof(fat));
+    fat.fat_rtype   = h->fhc_rfm;
+    fat.fat_rattrib = h->fhc_rat;
+    fat.fat_rsize   = h->put_lrl;
+    fat.fat_bktsize = h->fhc_bkz;
+    fat.fat_vfcsize = h->fhc_vfc;
+    fat.fat_maxrec  = h->fhc_mrz;
+    fat.fat_defext  = h->fhc_dxq;
+    fat.fat_gbc     = h->fhc_gbc;
+    memset(&fop, 0, sizeof(fop));
+    fop.chan     = h->chan;
+    fop.func     = VMS_ACP_FOP_MODIFY;
+    fop.fidmode  = 1;
+    fop.fid_num  = h->fid_num; fop.fid_seq = h->fid_seq;
+    fop.fid_rvn  = h->fid_rvn; fop.fid_nmx = h->fid_nmx;
+    fop.attr_ctl = VMS_ACP_ATTR_RECATTR;
+    memcpy(fop.attr.recattr, &fat, sizeof(fat));
+    if ($VMS_STATUS_SUCCESS(vms_kif_acp_fileop(&fop)))
+        h->fhc_lrl = h->put_lrl;
+}
+#endif /* OVMX_HAVE_ACP */
+
 /*
  * sys$create - Create a new file.
  *
@@ -2318,6 +2413,12 @@ static uint32_t rms_impl_create(void *fab_ptr)
             fop.kind = ODS2_FK_DATA_STMLF;
         else
             fop.kind = ODS2_FK_DATA;             /* RFM=VAR (the default) */
+        /* vms-b447: and record the creator's own record attributes in the FAT
+         * (ATR$C_RECATTR): rfm | org, rat, mrs -- so $OPEN, $DISPLAY,
+         * DIRECTORY/FULL and F$FILE_ATTRIBUTES read back what this $CREATE
+         * asked for rather than the kind preset. */
+        if (rms_fat_from_fab(fab, fop.attr.recattr))
+            fop.attr_ctl |= VMS_ACP_ATTR_RECATTR;
         fop.version = 0;                     /* highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 
@@ -2330,9 +2431,25 @@ static uint32_t rms_impl_create(void *fab_ptr)
         h->accessed = 1; h->writable = 1;
         h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
         h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
+        h->did_num = fop.did_num; h->did_seq = fop.did_seq;
+        h->did_rvn = fop.did_rvn; h->did_nmx = fop.did_nmx;
         h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
                    + fop.new_ffbyte;
         h->hiblk = fop.new_hiblk;
+        h->fhc_ebk = fop.new_efblk;
+        h->fhc_ffb = (uint16_t)fop.new_ffbyte;
+        {
+            /* The new header's record attributes, as the ACP returned them
+             * (vms-b447): what $DISPLAY reports and $CLOSE builds on. */
+            const struct ods2_recattr *fat =
+                (const struct ods2_recattr *)fop.attr.recattr;
+            h->fhc_rfm = fat->fat_rtype;
+            h->fhc_rat = fat->fat_rattrib;
+            h->fhc_lrl = fat->fat_rsize;
+            h->fhc_mrz = fat->fat_maxrec;
+            h->fhc_dxq = fat->fat_defext;
+            h->fhc_vfc = fat->fat_vfcsize;
+        }
         fab->_rms_file = h;
 
         /* vms-50e (docs/design-rms-file-lock.md): same file-access $ENQ as
@@ -2560,6 +2677,8 @@ static uint32_t rms_impl_close(void *fab_ptr)
          * queued behind it (or a fresh NOQUEUE attempt) can now succeed. */
         rms_file_lock_release(h);
         rms_io_fsync(h);                       /* WRITEVBLK is write-through */
+        if (!deleting)
+            rms_close_record_lrl(h);           /* vms-b447: FAT$W_RSIZE */
         if (deleting) {
             /* Release the window, then deallocate the file by FID. */
             struct vms_acp_fileop_args fop;

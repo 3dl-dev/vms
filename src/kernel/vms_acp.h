@@ -477,6 +477,9 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
 #define VMS_ACP_ATTR_PROT    0x01u    /* apply attr.fileprot */
 #define VMS_ACP_ATTR_OWNER   0x02u    /* apply attr.uic_group/uic_member */
 #define VMS_ACP_ATTR_VERSIONS 0x04u   /* apply the FAT default version limit (attr.recattr[30..31]) */
+#define VMS_ACP_ATTR_RECATTR 0x08u    /* apply the FAT record attributes from attr.recattr: rtype (rfm|org),
+                                       * rattrib, rsize, bktsize, vfcsize, maxrec, defext, gbc -- never the
+                                       * ACP-owned hiblk/efblk/ffbyte nor versions (ATR$C_RECATTR) */
 
 /*
  * IO$_CREATE / IO$_DELETE / IO$_MODIFY. `func` selects the operation.
@@ -486,7 +489,9 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
  *    UIC per INV-6), optionally extend by `exsz` initial blocks, optionally
  *    (VMS_ACP_M_CREATE) enter it in FIB$W_DID at a NEW HIGHEST version (`version`
  *    0 => highest+1), optionally (VMS_ACP_M_ACCESS) build a window on `chan`.
- *    Returns the assigned FID (fid_*) and version (out_version). SS$_DUPLNAM (duplicate name; SS$_DUPFILNAM value not yet lab-pinned)
+ *    VMS_ACP_ATTR_RECATTR applies the caller's record attributes (attr.recattr)
+ *    over the kind preset. Returns the assigned FID (fid_*), version
+ *    (out_version) and the new header's FAT (attr.recattr). SS$_DUPLNAM (duplicate name; SS$_DUPFILNAM value not yet lab-pinned)
  *    if the {name,version} already exists; SS$_DEVICEFULL if INDEXF/BITMAP is
  *    exhausted; SS$_NOPRIV if the directory write is denied.
  *  - DELETE: remove the FIB$W_DID directory entry for `name`/`version` (0 => all
@@ -495,7 +500,7 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
  *    invalidate the header). SS$_NOSUCHFILE if the file/entry does not exist.
  *  - MODIFY: extend by `exsz` blocks (append a retrieval pointer, grow HIBLK);
  *    and/or truncate to `trunc_efblk`/`trunc_ffbyte` (free the blocks past it);
- *    and/or write attributes (fileprot/owner per attr_ctl). Returns the new
+ *    and/or write attributes (fileprot/owner/record attributes per attr_ctl). Returns the new
  *    HIBLK/EOF. By FID (fidmode) or by name in FIB$W_DID.
  *  - MODIFY!VMS_ACP_M_MOVE (rename/move, vms-de7): by NAME only (the source
  *    directory + name + version identify the entry to move; fidmode is rejected

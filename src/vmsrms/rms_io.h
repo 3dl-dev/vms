@@ -80,11 +80,22 @@ typedef struct rms_file {
     uint16_t fhc_gbc;     /* global buffer count                              */
     uint16_t fhc_verlimit;/* version limit                                    */
     uint8_t  fhc_bkz;     /* bucket size (blocks)                             */
+    uint8_t  fhc_vfc;     /* VFC fixed-control size (FAT$B_VFCSIZE)           */
     /* FID of the accessed file (IO$_DELETE by-FID, diagnostics). */
     uint16_t fid_num;
     uint16_t fid_seq;
     uint8_t  fid_rvn;
     uint8_t  fid_nmx;
+    /* FID of the directory the file was opened/created in (NAM$W_DID). The
+     * ACP's all-zero DID for the MFD is kept as-is here. */
+    uint16_t did_num;
+    uint16_t did_seq;
+    uint8_t  did_rvn;
+    uint8_t  did_nmx;
+    /* Longest record $PUT through this handle (vms-b447). $CLOSE writes it to
+     * the header's FAT$W_RSIZE (the longest record length, XAB$W_LRL) when it
+     * exceeds what the header already holds. */
+    uint16_t put_lrl;
     /* Resolved ODS-2 file version. On a create (IO$_CREATE version=0 =>
      * highest+1) this is the version the ACP minted (fop.out_version), which
      * SYSGEN WRITE CURRENT reports as "...OVMXVMSSYS.PAR;N". 0 when unset. */

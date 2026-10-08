@@ -1049,7 +1049,12 @@ static int lex_file_attributes(struct dcl_context *ctx, const char *args,
         /* Allocation quantity: highest allocated VBN. */
         snprintf(result, result_size, "%u", fa.hiblk);
     } else if (strcmp(item, "MRS") == 0) {
+        /* Maximum record size: the header's FAT$W_MAXREC, which $CREATE
+         * records from the creator's fab$w_mrs (vms-b447). */
         snprintf(result, result_size, "%u", fa.mrs);
+    } else if (strcmp(item, "LRL") == 0) {
+        /* Longest record length: the header's FAT$W_RSIZE. */
+        snprintf(result, result_size, "%u", fa.lrl);
     } else if (strcmp(item, "CDT") == 0 || strcmp(item, "RDT") == 0) {
         /* Creation/revision date from the header's ODS-2 64-bit time. A VMS
          * binary time is 100-ns ticks since 17-NOV-1858; Unix subtracts the
@@ -1070,10 +1075,10 @@ static int lex_file_attributes(struct dcl_context *ctx, const char *args,
     } else if (strcmp(item, "KNOWN") == 0) {
         snprintf(result, result_size, "TRUE");
     } else if (strcmp(item, "ORG") == 0) {
-        /* Sequential unless the FAT record format is not a record org OVMX
-         * distinguishes here (indexed/relative org is not carried in the ATR
-         * subset). */
-        snprintf(result, result_size, "SEQ");
+        /* File organization: the high nibble of the header's FAT$B_RTYPE,
+         * which $CREATE records from fab$b_org (vms-b447). */
+        snprintf(result, result_size, "%s",
+                 fa.org == FAB$C_IDX ? "IDX" : fa.org == FAB$C_REL ? "REL" : "SEQ");
     } else if (strcmp(item, "RAT") == 0) {
         /* Record attributes from the FAT fat_rattrib bits. */
         char rbuf[16]; size_t ri = 0;

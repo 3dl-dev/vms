@@ -159,6 +159,53 @@ static void search_split(const char *spec, char *dev, size_t devsz,
     }
 }
 
+/*
+ * rms_parse_did - $PARSE's NAM$W_DID (vms-6e28): look the expanded spec's
+ * directory up through the ACP -- the same candidate composition and
+ * directory walk $SEARCH does -- and store its FID in nam$w_did. Best-effort
+ * and status-neutral: a directory that does not resolve (or no executive)
+ * leaves nam$w_did zero, and $PARSE's own status is untouched.
+ */
+void rms_parse_did(struct NAM *nam)
+{
+    char expanded[1024];
+    char cands[4][VMSFS_MAX_FILESPEC];
+    size_t len;
+    int ncand;
+
+    if (!nam || !nam->nam$l_esa || nam->nam$b_esl == 0)
+        return;
+    len = nam->nam$b_esl;
+    if (len >= sizeof(expanded)) len = sizeof(expanded) - 1;
+    memcpy(expanded, nam->nam$l_esa, len);
+    expanded[len] = '\0';
+
+    ncand = vmsfs_compose_ods2_candidates(expanded, cands, 4);
+    if (ncand <= 0) {
+        strncpy(cands[0], expanded, sizeof(cands[0]) - 1);
+        cands[0][sizeof(cands[0]) - 1] = '\0';
+        ncand = 1;
+    }
+    for (int ci = 0; ci < ncand; ci++) {
+        char cdev[16], cdir[256], cpat[VMS_ACP_NAME_SIZE];
+        uint16_t dn, ds; uint8_t dr, dx;
+        uint32_t chan = 0, st;
+
+        search_split(cands[ci], cdev, sizeof(cdev), cdir, sizeof(cdir),
+                     cpat, sizeof(cpat));
+        if (cdev[0] == '\0')
+            strncpy(cdev, RMS_ACP_DEFAULT_DEV, sizeof(cdev) - 1);
+        if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(cdev, &chan)))
+            continue;
+        st = rms_acp_resolve_did(chan, cdir, &dn, &ds, &dr, &dx);
+        vms_kif_dassgn(chan);
+        if ($VMS_STATUS_SUCCESS(st)) {
+            rms_nam_set_did(nam, dn, ds, dr, dx);
+            return;
+        }
+    }
+}
+
 /* Release the executive channel behind a search context and free it. */
 static void search_ctx_free(struct acp_search_context *ctx)
 {
@@ -317,6 +364,11 @@ static uint32_t rms_acp_search(void *fab_ptr)
     ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;
     ctx->fid_rvn = a.fid_rvn; ctx->fid_nmx = a.fid_nmx;
     ctx->version = a.out_version;
+    /* ...and return it, with the searched directory's, in the NAM
+     * (NAM$W_FID / NAM$W_DID, vms-6e28) -- the same ID rms_search_fid hands
+     * DIRECTORY /FULL. */
+    rms_nam_set_fid(nam, ctx->fid_num, ctx->fid_seq, ctx->fid_rvn, ctx->fid_nmx);
+    rms_nam_set_did(nam, ctx->did_num, ctx->did_seq, ctx->did_rvn, ctx->did_nmx);
 
     /* Build the resultant VMS spec "DEV:[DIR]NAME.TYPE;VER" from the ACP's
      * resultant name (a.resnam == "NAME.TYPE;VERSION"). */

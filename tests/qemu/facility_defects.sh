@@ -569,6 +569,7 @@ acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
 acp-fat-versions-not-applied
+acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
 net-assign-netmbx-check-removed
 crtl-feature-unknown-accepted
@@ -1149,6 +1150,27 @@ EOF
         why)          echo "The ACP stamps attr.recattr[30..31] into the new header's FAT version-limit field when VMS_ACP_ATTR_VERSIONS is set. The mutation makes that branch unreachable ('0 &&'), so the directory keeps the default limit. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the directory's version limit is 7
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-fat-recattr-not-applied)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE records the creator's record attributes (ATR\$C_RECATTR: FAT\$B_RTYPE/RATTRIB, FAT\$W_RSIZE, FAT\$W_MAXREC) in the new file header, so RMS \$OPEN with a default FAB reads back the record format and maximum record size \$CREATE asked for (vms-b447)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The ACP applies attr.recattr's record attributes over the kind preset when VMS_ACP_ATTR_RECATTR is set on IO\$_CREATE. The mutation makes that branch unreachable ('0 &&'), so every new file keeps the preset FAT -- a FIX file created with mrs 20 is recorded as 512-byte records. \$OPEN takes the header's maximum record size, so the FIX files of test_syssvc_rms_acp reopen as 512-byte records: their \$GET read-back, XABFHC, F\$FILE_ATTRIBUTES and the header-mrs assertions redden (the per-file assertions are labelled at run time, so the manifest names the literal summary checks; the suite-wide byte-exact gate reddens with them). The VAR/STMLF files keep the preset's own format and attributes (the same values), and \$CLOSE's longest-record write (IO\$_MODIFY, not mutated) records the FAT for the files that took records, so they stay green -- the red is the creator's record size never reaching the header. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+vms-b447: FIX mrs 20 -- a default-FAB $OPEN reads FIX/mrs 20 from the header and $GETs the 20-byte records byte-exact
+vms-b447: F$FILE_ATTRIBUTES: FIX MRS 20, RFM FIX; VAR LRL 27, ORG SEQ
+RMS-over-ACP: all records round-tripped byte-exact through the ACP window
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7003,7 +7025,7 @@ EOF
         case "$_f" in
         facility)     echo "DCL file access via RMS/\$QIO-to-ACP: DCL DIRECTORY /FULL and the F\$SEARCH lexical reach files through RMS \$SEARCH, which returns each wildcard match's GENUINE ODS-2 File ID from the executive directory context (rms_search_fid over vms_kif_acp_acpcontrol; src/vmsrms/rms_search.c, consumed by src/vmsdcl/dcl_filespec.c dcl_rms_dir_*), vms-481, epic vms-208";;
         targets)      echo "vmsrms/rms_search.c";;
-        suites_red)   echo "test_syssvc_dcl_acp";;
+        suites_red)   echo "test_syssvc_dcl_acp test_syssvc_rms_acp";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -7016,9 +7038,10 @@ EOF
 F$SEARCH match 2 = A.TXT version 2, real File ID 13 (versions descending)
 F$SEARCH match 3 = A.TXT version 1, real File ID 12
 F$SEARCH match 4 = B.TXT version 1, real File ID 16 (B.LOG excluded by .TXT)
+vms-6e28: DIRECTORY/FULL's "File ID:" is the nam$w_fid $CREATE returned
 EOF
                       ;;
-        knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons.";;
+        knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons. \$SEARCH also returns that same (fabricated) ID in nam\$w_fid (vms-6e28), which DIRECTORY /FULL now prints, so test_syssvc_rms_acp's check that DIRECTORY /FULL's File ID is the one \$CREATE returned reddens too (with its run-time-labelled per-file \$SEARCH-vs-\$CREATE ID assertions).";;
         esac;;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
@@ -7116,6 +7139,8 @@ apply_edit() {
         sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
     acp-fat-versions-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
+    acp-fat-recattr-not-applied)
+        sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)

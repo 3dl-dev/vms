@@ -252,7 +252,7 @@ int vms_uring_process_completions(void) {
             }
 
             /* Set event flag */
-            if (comp->efn < 128) {
+            if ((comp->efn & 0xFFu) < 128) {
                 sys$setef(comp->efn);
             }
 

@@ -643,7 +643,9 @@ uint32_t vms_kif_readef(uint32_t efn, uint32_t *state)
      * it was: observed on OpenVMS VAX V7.3 and Alpha V8.4 by the semantic
      * oracle (docs/oracle/semantics/ef/, cases EF.READ.64 .. EF.READ.M1, rd
      * vms-837). Only a success reports the cluster. */
-    if (state && (args.status & 1)) *state = args.state;
+    /* EFN$C_ENF (128 in the low byte, rd vms-3e9e) names no flag: $READEF
+     * answers WASSET and reports no cluster either. */
+    if (state && (args.status & 1) && (efn & 0xFFu) != 128u) *state = args.state;
     return args.status;
 }
 

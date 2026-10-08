@@ -2345,6 +2345,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_term_setrpi(proc, arg);
     case VMS_IOCTL_TERM_GETRPI:
         return vms_ioctl_term_getrpi(proc, arg);
+    case VMS_IOCTL_TERM_SETCHAR:
+        return vms_ioctl_term_setchar(proc, arg);
     case VMS_IOCTL_SETTERM:
         return vms_ioctl_setterm(proc, arg);
 

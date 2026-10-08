@@ -569,9 +569,11 @@ acp-readall-ignored
 acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
+acp-dir-used-blocks-ignore-eof
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
+libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
 crtl-feature-unknown-accepted
 crtl-feature-set-ignored
@@ -1132,6 +1134,29 @@ EOF
         why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new directory holds the requested 3 blocks
+BIGD.DIR holds the 200 blocks asked for
+it grew into its preallocated blocks: the allocation is still 200
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-dir-used-blocks-ignore-eof)
+        case "$_f" in
+        facility)     echo "a directory insert works on the blocks in use (VBN 1 to end of file) and grows into the directory's preallocated blocks";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_dir_used_blocks() returns the directory's used blocks from its FAT end of file. The mutation returns the whole allocation, so a directory created with 200 blocks is treated as 200 blocks in use, beyond the 64-block working bound, and every insert into it fails SS\$_DEVICEFULL. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
+every one of them is found again by name
+BIGD.DIR grew past its first block
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1172,6 +1197,26 @@ EOF
 vms-b447: FIX mrs 20 -- a default-FAB $OPEN reads FIX/mrs 20 from the header and $GETs the 20-byte records byte-exact
 vms-b447: F$FILE_ATTRIBUTES: FIX MRS 20, RFM FIX; VAR LRL 27, ORG SEQ
 RMS-over-ACP: all records round-tripped byte-exact through the ACP window
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    libcreatedir-rooted-default-unresolved)
+        case "$_f" in
+        facility)     echo "LIB\$CREATE_DIR composes a logical (concealed rooted search-list) device to the on-volume member the directory is made in";;
+        targets)      echo "libvms/rtl/lib_dir.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$create_dir() calls pick_candidate() to compose the device through LNM\$FILE_DEV. The mutation drops the call, so a relative spec under the default CDIR\$ROOT:[RSUB] is \$ASSIGNed on the logical name itself and fails. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+LIB$CREATE_DIR [.LEAF] under a rooted default is SS$_CREATED
+LEAF.DIR is in [OVMXDIR.RSUB], the member that exists
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -5853,13 +5898,13 @@ EOF
 
     acp-create-header-slot-offbyone)
         case "$_f" in
-        facility)     echo "Files-11 (ODS-2) ACP IO\$_CREATE file-header allocation (VMS_IOCTL_ACP_FILEOP allocates a real FID from INDEXF.SYS's index bitmap and writes the new FH2 at that FID's header slot, idx_lbn + (FID - 1)), vms-5303, epic vms-208";;
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_CREATE file-header allocation (VMS_IOCTL_ACP_FILEOP allocates a real FID from INDEXF.SYS's index bitmap and writes the new FH2 at that FID's header slot, INDEXF VBN hdr_vbn0 + (FID - 1) through the index file's map), vms-5303, epic vms-208";;
         targets)      echo "kernel-core/vmsfs_acp.c";;
         suites_red)   echo "test_syssvc_acp_create";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "The IO\$_CREATE handler writes the freshly built file header at its INDEXF slot -- vol->idx_lbn + (new_fidnum - 1u) -- the same header-number arithmetic acp_read_header uses to READ a header (header N at idx_lbn + (N-1)). Dropping the -1 writes the header ONE SLOT TOO HIGH (at FID new_fidnum+1's slot). The CREATE still marks new_fidnum's index-bitmap bit used, still returns new_fidnum, and still enters the directory record pointing at new_fidnum -- so the create reports success -- but the FID the directory now resolves to (new_fidnum) has no valid header at its own slot: acp_read_header(new_fidnum) reads the wrong (unwritten/stale) block, fails to parse, and returns SS\$_NOSUCHFILE. The file therefore cannot be re-opened by name. Only an assertion that re-ACCESSes the created file BY NAME (resolving the directory record to the FID and reading the header at its slot) can tell; the CREATE call's own status, the assigned FID, and the fail-honest edge checks (bad func, non-directory DID, delete-nonexistent) never re-read the header at its slot and stay green.";;
+        why)          echo "The IO\$_CREATE handler writes the freshly built file header at its INDEXF slot -- acp_hdr_lbn(vol, new_fidnum) -- the same header-number mapping acp_read_header uses to READ a header. Asking for new_fidnum + 1 writes the header ONE SLOT TOO HIGH (at FID new_fidnum+1's slot). The CREATE still marks new_fidnum's index-bitmap bit used, still returns new_fidnum, and still enters the directory record pointing at new_fidnum -- so the create reports success -- but the FID the directory now resolves to (new_fidnum) has no valid header at its own slot: acp_read_header(new_fidnum) reads the wrong (unwritten/stale) block, fails to parse, and returns SS\$_NOSUCHFILE. The file therefore cannot be re-opened by name. Only an assertion that re-ACCESSes the created file BY NAME (resolving the directory record to the FID and reading the header at its slot) can tell; the CREATE call's own status, the assigned FID, and the fail-honest edge checks (bad func, non-directory DID, delete-nonexistent) never re-read the header at its slot and stay green.";;
         require_fail) cat <<'EOF'
 IO$_ACCESS CREAT.TST by name resolves the created FID at version 1 (header at its INDEXF slot)
 EOF
@@ -7159,6 +7204,10 @@ apply_edit() {
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
     acp-fat-recattr-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file";;
+    acp-dir-used-blocks-ignore-eof)
+        sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file";;
+    libcreatedir-rooted-default-unresolved)
+        sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)
@@ -7926,15 +7975,15 @@ apply_edit() {
 
     acp-create-header-slot-offbyone)
         # ANCHORED to the single IO$_CREATE header-slot write in
-        # vms_ioctl_acp_fileop: `vol->idx_lbn + (new_fidnum - 1u)` occurs exactly
-        # once in the file (the variable `new_fidnum` is unique to the CREATE
-        # path; acp_read_header/DELETE/MODIFY use `fid_num`/`file_fidnum`).
-        # Dropping the `- 1u` writes the new header one slot too high, so the
+        # vms_ioctl_acp_fileop: `hdr_lbn = acp_hdr_lbn(vol, new_fidnum);` occurs
+        # exactly once in the file (the variable `new_fidnum` is unique to the
+        # CREATE path; acp_read_header/DELETE/MODIFY use `fid_num`/`file_fidnum`).
+        # Asking for new_fidnum + 1 writes the new header one slot too high, so the
         # created file cannot be re-opened by name -- only the negctl-anchored
         # re-ACCESS-by-name assertions redden. After substitution the original
         # text is gone, so a second apply matches nothing (the no-op selftest
         # requires).
-        sed -i 's|vol->idx_lbn + (new_fidnum - 1u)|vol->idx_lbn + (new_fidnum) /* NEGCTL acp-create-header-slot-offbyone */|' "$_file";;
+        sed -i 's|hdr_lbn = acp_hdr_lbn(vol, new_fidnum);|hdr_lbn = acp_hdr_lbn(vol, new_fidnum + 1u); /* NEGCTL acp-create-header-slot-offbyone */|' "$_file";;
 
     acp-fileop-no-dlm-lock)
         # ANCHORED to the single per-volume DLM write-lock acquisition in

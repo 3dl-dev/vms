@@ -1027,6 +1027,12 @@ run_dcl_acceptance_battery() {
             "CTERM [vms-f40]: the DISABLED account is refused over CTERM with the CORRECT password -- the SYSUAF login-flag rule applies to a network login"
         must_have "$CTSEG" 'a real DC$_TERM device row' \
             "CTERM [vms-f40]: \$GETDVI on the session's RTAn: from a DIFFERENT process returns a real device row (§7.5 tell)"
+        must_have "$CTSEG" 'PASS: the RTAn:'"'"'s EXECUTIVE device row carries the originating terminal' \
+            "CTERM [vms-14b]: the real VAX Initiate's terminal (LA36, width 132, page 0) is recorded on the RTAn:'s executive row and read back by \$GETDVI"
+        must_have "$CTSEG" 'PASS: the RTAn:'"'"'s EXECUTIVE characteristics are the oracle' \
+            "CTERM [vms-14b]: the VAX's conveyed TT\$/TT2\$ characteristics are on the RTAn:'s executive row, matching the oracle RTAn:'s set"
+        must_have "$CTSEG" 'PASS: NEGCTL: OPA0: refuses the RTAn: setter' \
+            "CTERM [vms-14b]: the local console OPA0: keeps device type Unknown and its own geometry"
         must_not_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: FAIL' \
             "CTERM [vms-f40]: no assertion in the inbound-SET-HOST acceptance failed"
         negctl "$CTSEG" 'DECNETD-I-CTERMACCEPT' "DECnet CTERM acceptance"

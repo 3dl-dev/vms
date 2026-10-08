@@ -13,4 +13,3 @@
 #   flaky       passes in some environments and not others; held out of the floor until fixed (tracked item)
 lib_callg   ptr32       LIB$CALLG takes an argument list of 32-bit longwords holding pointers; the program asserts sizeof(unsigned)==sizeof(void*) (vms-95b)
 lib_que     ptr32       interlocked queue entries are linked by 32-bit self-relative displacements; the program's entries and header sit in a 64-bit address space (vms-95b)
-lib_create_dir product-gap the corpus guest has no mounted writable volume or default directory for the relative [.LOG] spec; lib$create_dir itself is proven by tests/qemu/test_syssvc_create_dir.c (vms-47f7)

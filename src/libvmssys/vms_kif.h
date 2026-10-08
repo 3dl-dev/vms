@@ -730,6 +730,12 @@ uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
  * privileged (the network daemon that minted the RTAn:); GET reads "" when none. */
 uint32_t vms_kif_terminal_setrpi(const char *devnam, const char *rpi);
 uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_size);
+/* RTAn: the ORIGINATING terminal's device type, width, page length and
+ * characteristics, as the remote conveyed them over CTERM (rd vms-14b). Privileged, RTAn: only; each
+ * field applies only under its VMS_TERMCHAR_M_* flag. Read back via $GETDVI. */
+uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
+                                  uint32_t devtype, uint32_t width, uint32_t page,
+                                  uint64_t setchar, uint64_t clrchar);
 
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN

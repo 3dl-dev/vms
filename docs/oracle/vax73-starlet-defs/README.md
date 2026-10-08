@@ -17,3 +17,5 @@ headers define against these files; `docs/oracle/constants-known-mismatch.txt` r
 values that are known to differ (rd vms-f811) and may only shrink. A name absent from
 a file is not defined on VAX V7.3 (several constants in the corpus are Alpha/Itanium
 additions); those need an Alpha/I64 oracle (`tests/lab-alpha`).
+
+`TTDEF.txt` and `TT2DEF.txt` came from the same command on node VAX1 (lab pod `dnlab-1`) on 2026-10-08 (rd vms-14b).

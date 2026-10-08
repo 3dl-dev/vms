@@ -15,8 +15,16 @@
  *                 which bits of the 16-bit protection word are taken from prot_value; the
  *                 rest come from the process default protection ($SETDFPROT).
  *   max_versions  the directory's default version limit (FAT$W_VERSIONS).
- *   initial_alloc blocks allocated to the new directory (1..64).
+ *   initial_alloc blocks allocated to the new directory (at least 1); the directory
+ *                 uses one of them and grows into the rest as entries are added.
  *   rvn           only relative volume 0 exists: a non-zero value is SS$_BADPARAM.
+ *
+ * The device may be a logical name, including a concealed rooted search list such as
+ * SYS$SYSROOT: (SYSTEM's default directory is SYS$SYSROOT:[SYSMGR]). The spec is
+ * composed to on-volume candidates in search-list order, the way RMS composes a
+ * $CREATE; the directory is made in the candidate where the longest leading part of
+ * the tree already exists (the earliest on a tie), so a create lands in the member
+ * a later lookup of the same spec resolves to.
  *
  * No /dev/vms -> SS$_NOSUCHDEV from the ACP wrappers; nothing is faked.
  */
@@ -31,6 +39,7 @@
 #include "starlet.h"
 #include "lnmdef.h"
 #include "vms_kif.h"
+#include "vmsfs/device.h"     /* vmsfs_compose_ods2_candidates: logical -> on-volume spec */
 
 extern uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir, unsigned short *old_len,
                            struct dsc$descriptor_s *old_dir);
@@ -72,6 +81,90 @@ static int split_spec(const char *spec, char *dev, size_t devcap, char *tree, si
     return 1;
 }
 
+/* Upcase a directory component and append ".DIR" (the name the ACP enters). */
+static void dir_file_name(const char *comp, char *nm, size_t cap)
+{
+    size_t tl = strlen(comp), k;
+
+    if (tl > cap - 5)
+        tl = cap - 5;
+    for (k = 0; k < tl; k++) {
+        char c = comp[k];
+        nm[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    }
+    nm[tl] = '\0';
+    strncat(nm, ".DIR", cap - strlen(nm) - 1);
+}
+
+/* How many leading components of `tree` ("A.B.C") already exist on `dev`. Returns
+ * -1 when the device cannot be assigned. */
+static int existing_depth(const char *dev, const char *tree)
+{
+    char buf[256], *save = NULL, *tok;
+    uint32_t chan = 0;
+    uint16_t dn = 0, ds = 0;
+    uint8_t dr = 0, dx = 0;
+    int depth = 0;
+
+    if (!(vms_kif_acp_assign(dev, &chan) & 1))
+        return -1;
+    snprintf(buf, sizeof(buf), "%s", tree);
+    for (tok = strtok_r(buf, ".", &save); tok; tok = strtok_r(NULL, ".", &save)) {
+        struct vms_acp_access_args a;
+
+        if (!tok[0])
+            continue;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        a.did_num = dn; a.did_seq = ds; a.did_rvn = dr; a.did_nmx = dx;
+        a.version = 1;
+        dir_file_name(tok, a.name, VMS_ACP_NAME_SIZE);
+        if (!(vms_kif_acp_access(&a) & 1))
+            break;
+        dn = a.fid_num; ds = a.fid_seq; dr = a.fid_rvn; dx = a.fid_nmx;
+        (void)vms_kif_acp_deaccess(chan);
+        depth++;
+    }
+    (void)vms_kif_dassgn(chan);
+    return depth;
+}
+
+/* Resolve "DEV:" + "[TREE]" through any (rooted, search-list) logical in DEV to the
+ * on-volume device and tree the directory is made in (see the header comment). A
+ * spec that composes to nothing (no such logical) is left as it is. */
+static void pick_candidate(char *dev, size_t devcap, char *tree, size_t treecap)
+{
+    char want[512];
+    char cands[8][VMSFS_MAX_FILESPEC];
+    int n, i, best = -1, best_depth = -1;
+
+    snprintf(want, sizeof(want), "%s[%s]", dev, tree);
+    n = vmsfs_compose_ods2_candidates(want, cands, 8);
+    for (i = 0; i < n; i++) {
+        char cdev[128], ctree[256];
+        int crel, d;
+
+        if (!split_spec(cands[i], cdev, sizeof(cdev), ctree, sizeof(ctree), &crel) ||
+            crel || !cdev[0])
+            continue;
+        d = existing_depth(cdev, ctree);
+        if (d > best_depth) {
+            best_depth = d;
+            best = i;
+        }
+    }
+    if (best >= 0) {
+        char cdev[128], ctree[256];
+        int crel;
+
+        (void)split_spec(cands[best], cdev, sizeof(cdev), ctree, sizeof(ctree), &crel);
+        if (strlen(cdev) < devcap && strlen(ctree) < treecap) {
+            strcpy(dev, cdev);
+            strcpy(tree, ctree);
+        }
+    }
+}
+
 uint32_t lib$create_dir(const struct dsc$descriptor_s *spec_d, const uint32_t *owner,
                         const uint32_t *prot_ena, const uint32_t *prot_val,
                         const uint32_t *max_versions, const uint32_t *rvn,
@@ -93,7 +186,7 @@ uint32_t lib$create_dir(const struct dsc$descriptor_s *spec_d, const uint32_t *o
     if (rvn && *rvn != 0)
         return SS$_BADPARAM;                  /* one relative volume only */
     if (init_alloc) {
-        if (*init_alloc < 1 || *init_alloc > 64)
+        if (*init_alloc < 1)
             return SS$_BADPARAM;
         ialloc = *init_alloc;
     }
@@ -159,6 +252,7 @@ uint32_t lib$create_dir(const struct dsc$descriptor_s *spec_d, const uint32_t *o
     }
     if (!dev[0])
         snprintf(dev, sizeof(dev), "SYS$DISK:");
+    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));
     snprintf(full, sizeof(full), "%s", tree);
 
     st = vms_kif_acp_assign(dev, &chan);
@@ -181,17 +275,9 @@ uint32_t lib$create_dir(const struct dsc$descriptor_s *spec_d, const uint32_t *o
             char nm[VMS_ACP_NAME_SIZE];
             struct vms_acp_access_args a;
             struct vms_acp_fileop_args fop;
-            size_t tl = strlen(comp[ci]), k;
             int leaf = (ci == ncomp - 1);
 
-            if (tl > VMS_ACP_NAME_SIZE - 5)
-                tl = VMS_ACP_NAME_SIZE - 5;
-            for (k = 0; k < tl; k++) {
-                char c = comp[ci][k];
-                nm[k] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
-            }
-            nm[tl] = '\0';
-            strncat(nm, ".DIR", sizeof(nm) - strlen(nm) - 1);
+            dir_file_name(comp[ci], nm, sizeof(nm));
 
             memset(&a, 0, sizeof(a));
             a.chan = chan;

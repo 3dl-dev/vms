@@ -1,0 +1,80 @@
+name: mirror-base-images
+
+# vms-9a6: CI must not depend on anonymous Docker Hub pulls from shared runner IPs
+# (observed: "unauthorized: authentication required" pulling moby/buildkit, and
+# ubuntu:24.04 metadata HEAD failures). This copies the digest-pinned base images listed in
+# .github/mirror-images.lock to GHCR, registry to registry, digest preserved, using only
+# GITHUB_TOKEN. The consuming side is .github/actions/setup-buildx, which prefers the GHCR
+# copy and falls back to a public Hub mirror, so nothing breaks while this has not run.
+#
+# ONE-TIME HUMAN STEP: GHCR packages created by GITHUB_TOKEN are private and unlinked.
+# After the first run, an org admin must open each ghcr.io/3dl-dev/mirror/* package ->
+# Package settings -> either "Change visibility: Public" or "Manage Actions access: add
+# 3dl-dev/vms (Read)". Until then the verify job below reports "not readable" and CI
+# uses the fallback.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - '.github/mirror-images.lock'
+      - '.github/workflows/mirror-base-images.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror:
+    name: Mirror pinned base images to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Copy each pinned image (digest preserved) and verify
+        run: |
+          set -eu
+          grep -v '^[[:space:]]*#' .github/mirror-images.lock | grep -v '^[[:space:]]*$' | while read -r name tag src digest; do
+            dst="ghcr.io/${{ github.repository_owner }}/mirror/${name}:${tag}"
+            echo "== ${src}@${digest} -> ${dst}"
+            n=0
+            until docker buildx imagetools create -t "$dst" "${src}@${digest}"; do
+              n=$((n+1)); [ "$n" -lt 4 ] || { echo "FAIL: could not copy ${src}@${digest}"; exit 1; }
+              sleep $((n*20))
+            done
+            got=$(docker buildx imagetools inspect "$dst" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            [ "$got" = "$digest" ] || { echo "FAIL: ${dst} digest ${got} != pinned ${digest}"; exit 1; }
+            echo "ok ${dst}@${got}"
+          done
+
+  verify-readable:
+    name: Verify the mirror is readable with a plain GITHUB_TOKEN
+    needs: mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull each mirrored image as a consumer would
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          rc=0
+          grep -v '^[[:space:]]*#' .github/mirror-images.lock | grep -v '^[[:space:]]*$' | while read -r name tag src digest; do
+            if docker buildx imagetools inspect "ghcr.io/${{ github.repository_owner }}/mirror/${name}@${digest}" >/dev/null 2>&1; then
+              echo "readable: ${name}@${digest}"
+            else
+              echo "::warning::NOT readable with GITHUB_TOKEN: ghcr.io/${{ github.repository_owner }}/mirror/${name} (package visibility/Actions access: see the header of this workflow)"
+            fi
+          done

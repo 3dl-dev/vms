@@ -166,7 +166,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -324,7 +324,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Compute SOURCE_HASH over the toolchain sources
         id: srchash
@@ -382,7 +382,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -503,7 +503,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -642,7 +642,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -811,7 +811,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -907,7 +907,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -1000,7 +1000,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -1129,7 +1129,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -1247,7 +1247,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
         uses: actions/cache/restore@v4
@@ -1353,7 +1353,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
       # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
@@ -1519,7 +1519,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
       # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
@@ -1615,7 +1615,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
       # ghcr (zero ftp.gnu.org fetch), falling through to a gha-cached source
@@ -1695,7 +1695,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
       # ghcr (zero ftp.gnu.org fetch), falling through to a gha-cached source
@@ -1780,7 +1780,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
         env:
@@ -1926,7 +1926,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
       # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
@@ -2062,7 +2062,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
       # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same

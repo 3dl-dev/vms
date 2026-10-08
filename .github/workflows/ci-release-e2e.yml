@@ -71,7 +71,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
         uses: docker/build-push-action@v6
@@ -309,7 +309,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # The module signing key is the one remaining random build input (vms-
       # secret-signing-key). It is NEVER committed. Mint ONE ephemeral key here
@@ -504,7 +504,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Cut the BASELINE release (pinned commit, pre version-bump)
         run: |
@@ -588,7 +588,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build host tools (INITIALIZE.EXE)
         run: |
@@ -675,7 +675,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build host tools (INITIALIZE.EXE)
         run: |
@@ -762,7 +762,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Cut the release bundle (tools/cut-release.sh, never hand-built)
         run: |
@@ -878,7 +878,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build daytime test-overlay bootable image (OVMX_TEST_ENABLE_TCPIP=1)
         uses: docker/build-push-action@v6
@@ -970,7 +970,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
         uses: docker/build-push-action@v6
@@ -1040,7 +1040,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
         uses: docker/build-push-action@v6
@@ -1096,7 +1096,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
         uses: docker/build-push-action@v6
@@ -1152,7 +1152,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # Same NetBSD/vax syssrc the R1 gates pin (tests/netbsd/netbsd_version.env,
       # read by cut-release-vax.sh itself) -- cached so a source-only PR never
@@ -1269,7 +1269,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # The ovmx-cross-alpha toolchain image is large (alpha-linux-gnu cross +
       # kernel/qemu deps); reclaim the big unused hosted toolchains up front so a
@@ -1385,7 +1385,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
         uses: docker/build-push-action@v6
@@ -1447,7 +1447,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
         uses: docker/build-push-action@v6
@@ -1511,7 +1511,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
         uses: docker/build-push-action@v6
@@ -1576,7 +1576,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
         uses: docker/build-push-action@v6
@@ -1630,7 +1630,7 @@ jobs:
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
         uses: docker/build-push-action@v6

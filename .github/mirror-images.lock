@@ -1,0 +1,11 @@
+# Base images CI depends on, pinned by the Docker Hub digest of the multi-arch index.
+# The mirror-base-images workflow copies each (registry to registry, digest preserved) to
+# ghcr.io/3dl-dev/mirror/<name>:<tag> so CI stops depending on anonymous Docker Hub pulls
+# (vms-9a6). Bump deliberately: edit the digest here, nowhere else.
+#
+# name          tag                 source                          digest
+moby-buildkit   buildx-stable-1     docker.io/moby/buildkit         sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+ubuntu          24.04               docker.io/library/ubuntu        sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+debian          trixie              docker.io/library/debian        sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
+debian          trixie-slim         docker.io/library/debian        sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+alpine          3.20                docker.io/library/alpine        sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc

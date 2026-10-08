@@ -100,7 +100,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: ./.github/actions/setup-buildx
 
       # Cut the reproducible bundle from the tagged commit into a known dir.
       # Sign modules with the persistent OVMX signing key from Actions secrets

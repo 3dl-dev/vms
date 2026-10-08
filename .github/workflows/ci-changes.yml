@@ -302,6 +302,10 @@ jobs:
               - 'tools/loginout_display.h'
               - 'tools/mail_notify.c'
               - 'tools/vms_mail_notify.h'
+              # rd vms-47fd: the MAIL store's write side + MAIL_SERVER.EXE.
+              - 'tools/mail_store.c'
+              - 'tools/mail_server.c'
+              - 'tools/mail_rms_bind.c'
               - 'tools/CMakeLists.txt'
               # vms-64a (unified cross-build Rung B): the ovmx-images
               # aggregate now builds these images too, so their sources are

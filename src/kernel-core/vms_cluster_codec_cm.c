@@ -984,6 +984,8 @@ vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
 	 * for that implementation (the same node's later 0x02 carries 0x0004
 	 * and binary there), and replaying them would assert a value this node
 	 * cannot derive. That is the exact failure mode INV-6 exists to stop. */
+	/* LAB-ONLY vms-f297 one-variable experiment X1 -- NEVER MERGE. */
+	vms_wire_put_le16(&w, 20, 0x0001u);
 	return cm_originate_end(&w, written);
 }
 

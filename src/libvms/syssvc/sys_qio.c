@@ -39,8 +39,11 @@
 #include <termios.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include "ovmx_async.h"
 #include "starlet.h"
+#include "efndef.h"
 #include "vms/pcb.h"
 #include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
@@ -859,11 +862,55 @@ static uint32_t qio_terminal_setmode(int fd, uint32_t p2, void *iosb_ptr,
  * filled, event flag set, and AST called when the I/O completes.
  * Falls back to synchronous I/O if io_uring is not available.
  */
+
+/*
+ * qio_efn_request - the event-flag half of queuing an I/O request: clear the
+ * flag; fail only when the executive says the number is not a flag of ours.
+ */
+static uint32_t qio_efn_request(uint32_t efn)
+{
+    if (efn == EFN$C_ENF)
+        return SS$_NORMAL;
+    uint32_t c = sys$clref(efn);
+    if (c == SS$_ILLEFC || c == SS$_UNASEFC)
+        return c;
+    return SS$_NORMAL;
+}
+
+/*
+ * qio_completes_at_once - a device whose I/O never waits (a disk file, the null
+ * device): an asynchronous $QIO on it is completed in the request -- IOSB, event
+ * flag, AST -- as the driver would complete it, instead of being parked on
+ * io_uring whose completions nothing reaps for $QIO (rd vms-084).
+ */
+static int qio_completes_at_once(int fd)
+{
+    struct stat sb;
+    if (fstat(fd, &sb) != 0)
+        return 0;
+    if (S_ISREG(sb.st_mode) || S_ISBLK(sb.st_mode))
+        return 1;
+    /* character major 1 = mem devices: /dev/null, /dev/zero, ... */
+    return S_ISCHR(sb.st_mode) && major(sb.st_rdev) == 1;
+}
+
 uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
                   uint32_t p4, uint32_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
+
+    /* The event flag is cleared when the request is queued, and an efn that is
+     * not one of this process's flags fails the request before anything else
+     * (SS$_ILLEFC / SS$_UNASEFC) -- real VAX V7.3 and Alpha V8.4, semantic
+     * oracle docs/oracle/semantics/io/ IO.QIO.* (rd vms-084). The executive
+     * answers through $CLREF; with no executive at all (a host test) there are
+     * no flags to validate and the request goes on. */
+    {
+        uint32_t cst = qio_efn_request(efn);
+        if (cst != SS$_NORMAL)
+            return cst;
+    }
 
     if (vms$$chan_is_mailbox(chan)) {
         uint32_t bf = func & IO$M_FCODE;
@@ -902,8 +949,8 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
 
     uint32_t base_func = func & 0xFF;
 
-    /* Try io_uring async submit */
-    if (uring_available()) {
+    /* Try io_uring async submit (devices that can wait: terminals, pipes) */
+    if (!qio_completes_at_once(fd) && uring_available()) {
         uint64_t offset = (p3 != 0) ? (uint64_t)p3 : (uint64_t)-1;
         int rc = vms_uring_submit_rw(fd, p1, p2, offset, is_read,
                                       iosb_ptr, efn, astadr, astprm);
@@ -926,6 +973,12 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
                    void *p1, uint32_t p2, uint32_t p3,
                    uint32_t p4, uint32_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
+
+    {   /* as for $QIO: clear the flag, refuse a number that is not a flag */
+        uint32_t cst = qio_efn_request(efn);
+        if (cst != SS$_NORMAL)
+            return cst;
+    }
 
     if (vms$$chan_is_mailbox(chan))
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);

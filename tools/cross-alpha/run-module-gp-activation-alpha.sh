@@ -68,6 +68,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output (OVMX_CC1_SNAPSHOT=dir skips the long build)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -452,6 +453,47 @@ assert_vfork() {
   echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
   echo "  (c) no activation err         : ok=$err_ok"
   [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+# assert_cc1 <console-log> <reference.s> -- THE TEETH for the vms-9a63 VMS-hosted
+# cc1 proof (`cc1-gate'). PASS iff (a) the launcher reports the cc1 subprocess
+# was created, exited and returned success, (b) the launcher's executive seam
+# decodes to sentinel 7, (c) DCL TYPE -- not the image -- shows an assembly file
+# identical, line for line, to what the same GCC built as a cross compiler writes
+# for the same source, and (d) no activation error or abnormal termination.
+assert_cc1() {
+  local log="$1" ref="$2"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  [ -s "$ref" ] || { echo "  FAIL: no reference assembly at $ref"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 nref ngot
+  port_ok=$(grep -qaE 'OVMX cc1 run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local got
+  got=$(mktemp)
+  awk '/CC1-PROOF: === INDEPENDENT READER: DCL TYPE HELLO.S ===/{f=1; next} /CC1-PROOF: TYPE-STATUS=/{f=0} f' "$log" \
+    | tr -d '\r' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$got"
+  nref=$(wc -l < "$ref"); ngot=$(wc -l < "$got")
+  if [ "$ngot" -gt 0 ] && diff -q <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" >/dev/null; then same=1; fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) cc1 subprocess ran + exit 0 : port_ok=$port_ok (want 1)"
+  echo "  (b) launcher seam               : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) DCL TYPE HELLO.S == cross cc1 output : same=$same ($ngot lines typed, $nref in the reference)"
+  [ "$same" -eq 1 ] || diff <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" | head -20 | sed 's/^/      /'
+  echo "  (d) no activation err           : ok=$err_ok"
+  rm -f "$got"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -1339,6 +1381,98 @@ EOF
     fi
     echo "FAIL: the 32-bit-pointer program did not run as required. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  cc1-gate)
+    # vms-9a63: GCC 14.2's compiler proper built FOR the alpha-dec-vms host
+    # (selfhost/build-host-gcc.sh: a 32-bit DEC C program over OVMX's C RTL)
+    # runs on OVMX/Alpha. The launcher (cc1run_test.c) vfork+execv's
+    # SYS$SYSTEM:CC1.EXE as the GCC driver does on a source DCL wrote; DCL TYPE
+    # shows the assembly it wrote, which must equal the cross compiler's output.
+    # OVMX_CC1_SNAPSHOT=<dir> (cxxtc/, joint-n3/, bin/cc1.exe from an earlier
+    # build of the same tree) skips the multi-hour toolchain + host-GCC build;
+    # the launcher, cc1 and the staged shareables are then all that build's.
+    MILESTONE_MAIN=cc1run_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    BOOT_TIMEOUT="${CC1_BOOT_TIMEOUT:-1500}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    _st=$(mktemp -d); _fails=0
+    printf '\t.set noat\n\t.text\nmain:\n\tret $31,($26),1\n' > "$_st/ref.s"
+    { printf '%s\n' 'OVMX cc1 run: pid_ok=1 exited=1 code=0 status=%X00000000'
+      printf '%s\n' 'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1'
+      printf '%s\n' 'CC1-PROOF: === INDEPENDENT READER: DCL TYPE HELLO.S ==='
+      sed 's/$/\r/' "$_st/ref.s"
+      printf '%s\n' 'CC1-PROOF: TYPE-STATUS=%X00000001 SEVERITY=1'; } > "$_st/pass.log"
+    sed 's/ret \$31/ret $30/' "$_st/pass.log" > "$_st/diffasm.log"
+    sed 's/code=0 /code=1 /; s/0x0035a039/0x0035a019/' "$_st/pass.log" > "$_st/fail.log"
+    grep -v 'main:' "$_st/pass.log" > "$_st/short.log"
+    awk '/INDEPENDENT READER/{print; exit} {print}' "$_st/pass.log" > "$_st/notyped.log"
+    printf '%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:CC1 terminated abnormally (signal 11)' >> "$_st/pass.log.crash"
+    cat "$_st/pass.log" "$_st/pass.log.crash" > "$_st/crash.log"
+    for _c in "pass:0" "diffasm:1" "fail:1" "short:1" "notyped:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_cc1 "$_st/$_n.log" "$_st/ref.s" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  cc1 selftest $_n: PASS"; else echo "  cc1 selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "cc1 selftest failed -- assert_cc1 cannot be trusted"
+    echo ""
+    build_joint_images
+    if [ -n "${OVMX_CC1_SNAPSHOT:-}" ]; then
+      _snap="$OVMX_CC1_SNAPSHOT"
+      for _f in cxxtc/cxx/bin/alpha-dec-vms-gcc joint-n3/DECC\$SHR.EXE bin/cc1.exe; do
+        [ -e "$_snap/$_f" ] || die "OVMX_CC1_SNAPSHOT=$_snap has no $_f"
+      done
+      _tc="$_snap/cxxtc"; _jr="$_snap/joint-n3"; _cc1="$_snap/bin/cc1.exe"
+      log "step 1c: snapshot $_snap -- stage-2 toolchain, shareables and cc1.exe of an earlier build of this tree"
+    else
+      _tc="$GATE_ROOT/cxxtc"; _jr="$GATE_ROOT/joint-n3"
+      if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+        log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+        mkdir -p "$_tc"
+        docker run --rm -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+          bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+          || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
+      fi
+      log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc)"
+      mkdir -p "$GATE_ROOT/hostgcc"
+      docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out/cxxtc:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+      _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"
+    fi
+    log "step 1d: link the launcher with the stage-2 gcc against the shareables cc1.exe was linked against"
+    mkdir -p "$GATE_ROOT/cc1img"
+    printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \
+      '  printf ("hello from cc1 on OVMX %d\n", sq (7));' '  return 0;' '}' > "$GATE_ROOT/cc1img/hello.c"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/cc1img:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
+        set -e
+        /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/cc1run_test.c
+        cd /img && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -dumpbase hello.c hello.c -o ref.s' \
+      > "$GATE_ROOT/cc1-link.log" 2>&1 || { tail -40 "$GATE_ROOT/cc1-link.log"; die "launcher link / reference compile failed"; }
+    [ -s "$GATE_ROOT/cc1img/ref.s" ] || die "the cross cc1 wrote no reference assembly"
+    # Stage what boots: the launcher, cc1.exe and the shareables both were linked against.
+    cp "$GATE_ROOT/cc1img/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    cp "$_cc1" "$WORK/joint/cc1.exe"
+    for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
+      [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
+      cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
+    done
+    : > "$WORK/joint/CC1_PROOF"
+    assemble_boot_image
+    log "step 3: BOOT A -- the VMS-hosted cc1 compiles a C file on the REAL executive (up to ${BOOT_TIMEOUT}s)"
+    run_boot_a
+    grep -aE "OVMX cc1|CC1-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|cc1:" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_cc1 "$WORK/modgpA.log" "$GATE_ROOT/cc1img/ref.s"; then
+      echo ""
+      echo "PASS: GCC 14.2's cc1, built for the alpha-dec-vms host, compiled a C file on"
+      echo "      OVMX/Alpha; DCL TYPE shows the same assembly the cross compiler writes."
+      exit 0
+    fi
+    echo "FAIL: the VMS-hosted cc1 proof did not pass. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;
   vfork-gate)

@@ -163,7 +163,12 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     off=$(wc -c <"$LOG2")
     send 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'; sleep 1
     send 'DNETACC --net-loopback-accept-test'
-    waitfor 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$LOG2" || true
+    if ! waitfor 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$LOG2"; then
+        # Diagnostics only (the verdicts below are unchanged): interrupt the
+        # stuck image and show what NETACP logged while the proof ran.
+        printf '\031' >&4; sleep 3
+        send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 8
+    fi
     seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
     if printf '%s\n' "$seg" | grep -qF 'DECNETD-NET-LOOPBACK-ACCEPT: PASS'; then rc=0; else rc=1; fi
     record "boot 2: a \$QIO _NET: link is brokered through the RUNNING NETACP -- COPY 0:: to FAL.EXE and back, byte-verified (vms-dda)" "$rc"

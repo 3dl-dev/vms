@@ -6971,6 +6971,7 @@ static int net_req_probe_spawn(struct netreq_probe *v)
 
 static int run_net_loopback_accept_test(void)
 {
+    dnet_tick_t t0 = monotonic_sec();
     printf("DECNETD-I-NETLOOP, $QIO on _NET: brokered through NETACP: COPY 0\"SYSTEM\"::"
            " over the local loopback to a FAL.EXE server process (rd vms-dda)\n");
     int pass = 0, fail = 0;
@@ -7017,11 +7018,17 @@ static int run_net_loopback_accept_test(void)
         char spec[160];
         snprintf(spec, sizeof spec, "0\"SYSTEM\"::%s", SRC);
         int rp = dnet_copy_plan(spec, GOT, &plan);
+        printf("  NOTE: t+%lus: COPY with the right password\n", (unsigned long)(monotonic_sec() - t0));
+        fflush(stdout);
         uint32_t st = (rp == 0) ? copy_client_run_net(&c, &plan, "MANAGER") : SS$_BADPARAM;
         NL_CHECK(st == SS$_NORMAL && fal_file_matches(GOT, lines, 1),
                  "COPY 0\"SYSTEM MANAGER\"::file over $QIO _NET: completed through NETACP, and the"
                  " records BYTE-MATCH (qio_net_op -> mailboxes -> NETACP -> loopback -> FAL.EXE)");
+        printf("  NOTE: t+%lus: COPY with a bad password\n", (unsigned long)(monotonic_sec() - t0));
+        fflush(stdout);
         st = (rp == 0) ? copy_client_run_net(&c, &plan, "WRONGPW") : SS$_BADPARAM;
+        printf("  NOTE: t+%lus: bad-password COPY returned %08X\n",
+               (unsigned long)(monotonic_sec() - t0), (unsigned)st);
         NL_CHECK(st == SS$_INVLOGIN,
                  "the same COPY with a bad password completes IO$_ACCESS SS$_INVLOGIN -- no link, no file");
         uint8_t b[8]; size_t x = 0;

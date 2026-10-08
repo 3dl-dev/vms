@@ -480,5 +480,6 @@
 # Raised to 173 by spawn-arm-gone-subprocess-not-completed (vms-f45: the /NOWAIT
 # lib$spawn completion is delivered even when the subprocess is already gone).
 # Raised to 174 by lnm-seed-without-sysnam (rd vms-ec7e; anchors test_syssvc_lnm_system).
-# Raised to 175 by spawn-input-via-linux-path (vms-ccc: lib$spawn INPUT is read through RMS).
-175
+# Raised to 180 by the six vms-d404 ACL defects (test_syssvc_acl).
+# Raised to 181 by spawn-input-via-linux-path (vms-ccc: lib$spawn INPUT is read through RMS).
+181

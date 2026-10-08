@@ -754,7 +754,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
                                            uint32_t astprm,
                                            int *out_fd, int *out_is_read) {
     int fd = vms$$chan_to_fd(chan);
-    if (fd < 0) return SS$_IVCHAN;
+    if (fd < 0) return pcb_chan_unheld_status(chan);
 
     /*
      * vms-1c57: THE CHANNEL IS THE IDENTITY. If this channel was bound to a
@@ -1121,7 +1121,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
         struct vms_devinfo tinfo;
         if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
             int tfd = vms$$chan_to_fd(chan);
-            if (tfd < 0) return SS$_IVCHAN;
+            if (tfd < 0) return pcb_chan_unheld_status(chan);
             int handled = 0;
             uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
                                            p1, p2, p3, p4, p5, p6, efn, astadr,
@@ -1135,7 +1135,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
      * SETMODE as SS$_ILLIOFUNC). Off a real tty it is a graceful no-op. */
     if ((func & IO$M_FCODE) == IO$_SETMODE) {
         int fd = vms$$chan_to_fd(chan);
-        if (fd < 0) return SS$_IVCHAN;
+        if (fd < 0) return pcb_chan_unheld_status(chan);
         return qio_terminal_setmode(fd, p2, iosb_ptr, efn, astadr, astprm);
     }
 
@@ -1196,7 +1196,7 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         struct vms_devinfo tinfo;
         if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
             int tfd = vms$$chan_to_fd(chan);
-            if (tfd < 0) return SS$_IVCHAN;
+            if (tfd < 0) return pcb_chan_unheld_status(chan);
             int handled = 0;
             uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
                                            p1, p2, p3, p4, p5, p6, efn, astadr,
@@ -1208,7 +1208,7 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
     /* IO$_SETMODE line discipline on a terminal channel (vms-f54): see sys$qio. */
     if ((func & IO$M_FCODE) == IO$_SETMODE) {
         int fd = vms$$chan_to_fd(chan);
-        if (fd < 0) return SS$_IVCHAN;
+        if (fd < 0) return pcb_chan_unheld_status(chan);
         return qio_terminal_setmode(fd, p2, iosb_ptr, efn, astadr, astprm);
     }
 
@@ -1260,7 +1260,8 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
 static int qio_refused(uint32_t st)
 {
     switch (st) {
-    case SS$_ILLIOFUNC: case SS$_MBTOOSML: case SS$_IVCHAN: case SS$_BADPARAM:
+    case SS$_ILLIOFUNC: case SS$_MBTOOSML: case SS$_IVCHAN: case SS$_IVIDENT:
+    case SS$_BADPARAM:
     case SS$_ACCVIO: case SS$_EXQUOTA: case SS$_ILLEFC: case SS$_UNASEFC:
     case SS$_NOPRIV: case SS$_INSFMEM: case SS$_IVBUFLEN: case SS$_NOSUCHDEV:
     case SS$_DEVOFFLINE: case SS$_UNSUPPORTED:
@@ -1278,7 +1279,7 @@ static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
         /* VMS clears the IOSB once the channel is validated, before the
          * driver's checks: a bad channel leaves it as it was (IO.CHAN0,
          * IO.AFTER_DASSGN), a refusal after that leaves it zeroed. */
-        if (iosb_ptr && st != SS$_IVCHAN)
+        if (iosb_ptr && st != SS$_IVCHAN && st != SS$_IVIDENT)
             memset(iosb_ptr, 0, sizeof(struct _iosb));
         return st;
     }

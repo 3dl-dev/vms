@@ -644,8 +644,16 @@ uint32_t vms_kif_readef(uint32_t efn, uint32_t *state)
      * oracle (docs/oracle/semantics/ef/, cases EF.READ.64 .. EF.READ.M1, rd
      * vms-837). Only a success reports the cluster. */
     /* EFN$C_ENF (128 in the low byte, rd vms-3e9e) names no flag: $READEF
-     * answers WASSET and reports no cluster either. */
-    if (state && (args.status & 1) && (efn & 0xFFu) != 128u) *state = args.state;
+     * answers WASSET. What it leaves in the state longword is arch-divergent:
+     * VAX V7.3 leaves it, Alpha V8.4 writes 1 (semantic oracle EF.READ.128). */
+    if (state && (args.status & 1)) {
+        if ((efn & 0xFFu) != 128u)
+            *state = args.state;
+#if !defined(__vax__) && !defined(__vax)
+        else
+            *state = 1u;
+#endif
+    }
     return args.status;
 }
 

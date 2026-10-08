@@ -572,6 +572,12 @@ acp-bypass-ignored
 acp-sysprv-ignored
 acp-dir-exsz-ignored
 acp-dir-used-blocks-ignore-eof
+acp-acl-not-consulted
+acp-acl-deny-falls-to-world
+acp-acl-control-not-checked
+acp-acl-deleteall-drops-protected
+sys-parse-acl-drops-access
+rms-set-security-local-applied-early
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
@@ -1159,6 +1165,127 @@ EOF
 30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
 every one of them is found again by name
 BIGD.DIR grew past its first block
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-not-consulted)
+        case "$_f" in
+        facility)     echo "the Files-11 ACP access check consults the file's access control list (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_check_access() asks acp_acl_match() for the first identifier ACE the process matches. The mutation sets ace_matched to 0, so the ACL is never consulted and only the protection code decides: [100,100] is refused ACLF1 although an ACE grants it read. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+F1: the ACE grants [100,100] read the protection code denies
+F2: the matching NONE ACE denies the read world allows
+F4: [100,100] READ, ahead of [100,*] NONE, grants
+F5: IDENTIFIER=* denies [100,100] the world read
+...and the ACE set by name grants [100,100] read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-deny-falls-to-world)
+        case "$_f" in
+        facility)     echo "a matching ACE that does not grant the access is final for the group and world categories (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "After a matching ACE that does not grant the wanted access, acp_check_access() lets only the system and owner fields grant ('if (!ace_matched) {' guards group and world). The mutation makes that guard always true, so world RE grants what the NONE ACE denied. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+F2: the matching NONE ACE denies the read world allows
+F5: IDENTIFIER=* denies [100,100] the world read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-control-not-checked)
+        case "$_f" in
+        facility)     echo "changing a file's ACL requires CONTROL access (owner, system, BYPASS/SYSPRV, or an ACE granting CONTROL) (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_op() refuses an ACL change SS\$_NOPRIV unless acp_has_control(). The mutation removes the check, so a world user changes the ACL of a file it does not own. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a non-owner without CONTROL may not change ACLF1's ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-deleteall-drops-protected)
+        case "$_f" in
+        facility)     echo "deleting a file's ACL keeps the ACEs marked OPTIONS=PROTECTED (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_op()'s DELETEALL drops an ACE only when it is not PROTECTED. The mutation drops every ACE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the PROTECTED ACE survives deleting the ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    sys-parse-acl-drops-access)
+        case "$_f" in
+        facility)     echo "\$PARSE_ACL encodes the ACCESS= keywords into ACE\$L_ACCESS (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ace_parse_bits() sets one bit per access keyword. The mutation sets none, so (identifier=[1,4], access=r+w) parses to an ACE granting nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$PARSE_ACL (identifier=[1,4], access=r+w) is the oracle's bytes
+$FORMAT_ACL prints (IDENTIFIER=<[1,4]>,ACCESS=READ+WRITE)
+DCL SET ACL then SHOW ACL prints the ACE as VMS does
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    rms-set-security-local-applied-early)
+        case "$_f" in
+        facility)     echo "\$SET_SECURITY holds OSS\$M_LOCAL edits in the context until OSS\$M_RELCTX (vms-d404)";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$set_security() applies its held ACL edits only without OSS\$M_LOCAL, on OSS\$M_RELCTX, or with no context. The mutation applies them at once, so a LOCAL edit is visible in the file before the context is released. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the file's ACL is unchanged until the context is released
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7247,6 +7374,18 @@ apply_edit() {
         sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file";;
     libcreatedir-rooted-default-unresolved)
         sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file";;
+    acp-acl-not-consulted)
+        sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
+    acp-acl-deny-falls-to-world)
+        sed -i 's|^    if (!ace_matched) {$|    if (1) { /* NEGCTL acp-acl-deny-falls-to-world */|' "$_file";;
+    acp-acl-control-not-checked)
+        sed -i 's|^    if (!acp_has_control(proc, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+    acp-acl-deleteall-drops-protected)
+        sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file";;
+    sys-parse-acl-drops-access)
+        sed -i 's#^            if (ace_abbrev(w, names\[k\])) { \*mask |= 1u << k; hit = 1; }$#            if (ace_abbrev(w, names[k])) { hit = 1; } /* NEGCTL sys-parse-acl-drops-access */#' "$_file";;
+    rms-set-security-local-applied-early)
+        sed -i 's#^    if (!(flags \& RMS_OSS_M_LOCAL) || (flags \& RMS_OSS_M_RELCTX) || !contxt) {$#    if (1) { /* NEGCTL rms-set-security-local-applied-early */#' "$_file";;
     libcreatedir-protection-ignored)
         sed -i 's|^                if (prot_ena \&\& prot_val) {$|                if (0 \&\& prot_ena \&\& prot_val) { /* NEGCTL libcreatedir-protection-ignored */|' "$_file";;
     net-assign-netmbx-check-removed)

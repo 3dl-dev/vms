@@ -174,6 +174,11 @@
 #define SS__NOSUCHFILE  2320       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
 #define SS__FILNOTACC   172       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
 #define SS__DEVICEFULL  2128       /* SS$_DEVICEFULL (extend cannot allocate) */
+/* Access control list statuses (vms-d404), STARLET oracle values. */
+#define SS__ACLEMPTY    2512       /* SS$_ACLEMPTY */
+#define SS__NOENTRY     2520       /* SS$_NOENTRY */
+#define SS__ACLFULL     2552       /* SS$_ACLFULL */
+#define SS__IVACL       8676       /* SS$_IVACL */
 #define SS__DEVALLOC    2112       /* SS$_DEVALLOC (device already allocated to another user) */
 /*
  * Device-table subset (rd vms-618). Values copied VERBATIM from
@@ -919,6 +924,9 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * every outer mode; vms_lnm_proc_gone applies image rundown (user mode) or
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
+/* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
+ * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
+void vms_lnm_forget_device(const char *devnam);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);

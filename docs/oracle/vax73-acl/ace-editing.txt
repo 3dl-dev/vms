@@ -1,0 +1,381 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod corpusvax-1 node VAX1, captured 2026-10-08
+#   by the corpus lane (tools/oracle/semantic/capture.py Lab class, commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$LOGIN
+
+
+$ SET DEFAULT [.ACLPRB]
+
+
+$ SHOW ACL C.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1,  on  8-OCT-2026 08:27:03.97
+          (IDENTIFIER=[SYSTEM],ACCESS=WRITE)
+          (IDENTIFIER=[*,*],ACCESS=EXECUTE)
+          (IDENTIFIER=[200,*],ACCESS=READ)
+
+$ SET ACL/ACL=(IDENTIFIER=[*,*],ACCESS=READ) C.TXT
+
+
+$ SHOW ACL C.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1,  on  8-OCT-2026 08:27:05.62
+          (IDENTIFIER=[*,*],ACCESS=READ)
+          (IDENTIFIER=[SYSTEM],ACCESS=WRITE)
+          (IDENTIFIER=[200,*],ACCESS=READ)
+
+$ SET ACL/DELETE/ACL=(IDENTIFIER=[300,*],ACCESS=READ) C.TXT
+%SET-W-NOSUCHACE, ACE for object SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1, does not exist
+    (IDENTIFIER=[300,*],ACCESS=READ)
+%SET-F-WRITEERR, error writing SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=READ+WRITE+EXECUTE+DELETE+CONTROL) C.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[1,*],ACCESS=NONE) C.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[7,*],ACCESS=CONTROL+WRITE+READ) C.TXT
+
+
+$ SHOW ACL C.TXT
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1,  on  8-OCT-2026 08:27:09.88
+          (IDENTIFIER=[7,*],ACCESS=READ+WRITE+CONTROL)
+          (IDENTIFIER=[1,*],ACCESS=NONE)
+          (IDENTIFIER=[SYSTEM],ACCESS=READ+WRITE+EXECUTE+DELETE+CONTROL)
+          (IDENTIFIER=[*,*],ACCESS=READ)
+          (IDENTIFIER=[200,*],ACCESS=READ)
+
+$ SET ACL/DELETE C.TXT
+
+
+$ SHOW ACL C.TXT
+%SYSTEM-W-ACLEMPTY, access control list is empty
+
+$ DUMP/HEADER/BLOCK=COUNT=0 C.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]C.TXT;1 on  8-OCT-2026 08:27:12.46
+File ID (5786,31790,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           255
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (5786,31790,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4013,42450,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name:                            C.TXT;1
+    Revision number:                      9
+    Creation date:                         8-OCT-2026 08:08:22.76
+    Revision date:                         8-OCT-2026 08:27:10.76
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+
+Checksum:                                 9891
+
+$ SHOW ACL SUBD.DIR
+Object type: FILE,  Object name: SYS$SYSROOT:[SYSMGR.ACLPRB]SUBD.DIR;1,  on  8-OCT-2026 08:27:13.27
+          (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+
+$ SHOW ACL [-]ACLPRB.DIR
+%SYSTEM-W-ACLEMPTY, access control list is empty
+
+$ COPY NL: BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[11,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[12,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[13,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[14,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[15,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[16,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[17,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[20,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[21,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[22,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[23,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[24,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[25,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[26,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[27,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[30,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[31,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[32,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[33,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[34,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[35,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[36,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[37,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[40,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[41,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[42,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[43,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[44,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[45,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[46,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[47,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[50,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[51,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[52,*],ACCESS=READ) BIG.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[53,*],ACCESS=READ) BIG.TXT
+
+
+$ DUMP/HEADER/BLOCK=COUNT=0 BIG.TXT
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]BIG.TXT;1 on  8-OCT-2026 08:27:45.17
+File ID (5814,31795,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           104
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (5814,31795,0)
+    Extension file identification:        (5815,31795,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4013,42450,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name:                            BIG.TXT;1
+    Revision number:                      36
+    Creation date:                         8-OCT-2026 08:27:14.95
+    Revision date:                         8-OCT-2026 08:27:44.35
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+
+Access Control List
+    (IDENTIFIER=[53,*],ACCESS=READ)
+    (IDENTIFIER=[52,*],ACCESS=READ)
+    (IDENTIFIER=[51,*],ACCESS=READ)
+    (IDENTIFIER=[50,*],ACCESS=READ)
+    (IDENTIFIER=[47,*],ACCESS=READ)
+    (IDENTIFIER=[46,*],ACCESS=READ)
+    (IDENTIFIER=[45,*],ACCESS=READ)
+    (IDENTIFIER=[44,*],ACCESS=READ)
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]BIG.TXT;1 on  8-OCT-2026 08:27:45.17
+File ID (5814,31795,0)   End of file block 0 / Allocated 0
+
+    (IDENTIFIER=[43,*],ACCESS=READ)
+    (IDENTIFIER=[42,*],ACCESS=READ)
+    (IDENTIFIER=[41,*],ACCESS=READ)
+    (IDENTIFIER=[40,*],ACCESS=READ)
+    (IDENTIFIER=[37,*],ACCESS=READ)
+    (IDENTIFIER=[36,*],ACCESS=READ)
+    (IDENTIFIER=[35,*],ACCESS=READ)
+    (IDENTIFIER=[34,*],ACCESS=READ)
+    (IDENTIFIER=[33,*],ACCESS=READ)
+    (IDENTIFIER=[32,*],ACCESS=READ)
+    (IDENTIFIER=[31,*],ACCESS=READ)
+    (IDENTIFIER=[30,*],ACCESS=READ)
+    (IDENTIFIER=[27,*],ACCESS=READ)
+    (IDENTIFIER=[26,*],ACCESS=READ)
+    (IDENTIFIER=[25,*],ACCESS=READ)
+    (IDENTIFIER=[24,*],ACCESS=READ)
+    (IDENTIFIER=[23,*],ACCESS=READ)
+
+Checksum:                                 40873
+
+Dump of file SYS$SYSROOT:[SYSMGR.ACLPRB]BIG.TXT;1 on  8-OCT-2026 08:27:45.17
+File ID (5814,31795,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      50
+    Access control area offset:           195
+    Reserved area offset:                 255
+    Extension segment number:             1
+    Structure level and version:          2, 1
+    File identification:                  (5815,31795,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (5814,31795,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name:                            BIG.TXT;1
+
+Map area
+    Retrieval pointers
+
+Access Control List
+    (IDENTIFIER=[22,*],ACCESS=READ)
+    (IDENTIFIER=[21,*],ACCESS=READ)
+    (IDENTIFIER=[20,*],ACCESS=READ)
+    (IDENTIFIER=[17,*],ACCESS=READ)
+    (IDENTIFIER=[16,*],ACCESS=READ)
+    (IDENTIFIER=[15,*],ACCESS=READ)
+    (IDENTIFIER=[14,*],ACCESS=READ)
+    (IDENTIFIER=[13,*],ACCESS=READ)
+    (IDENTIFIER=[12,*],ACCESS=READ)
+    (IDENTIFIER=[11,*],ACCESS=READ)
+
+Checksum:                                 11466
+
+$ SET ACL/DELETE C.TXT
+
+
+$ SET ACL/ACL=(IDENTIFIER=[1,4],ACCESS=READ) NOSUCH.TXT
+%SET-E-OPENOUT, error opening SYS$COMMON:[SYSMGR.ACLPRB]NOSUCH.TXT; as output
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+
+$ SHOW ACL NOSUCH.TXT
+%SHOW-F-READERR, error reading SYS$COMMON:[SYSMGR.ACLPRB]NOSUCH.TXT;
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file

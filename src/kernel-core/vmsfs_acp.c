@@ -1068,6 +1068,78 @@ out:
 #define ACP_MAXSYSGROUP    8u
 
 /*
+ * ACCESS CONTROL LISTS (vms-d404). Grounded on OpenVMS VAX V7.3, see
+ * docs/oracle/vax73-acl.md: an ACE is ACE$B_SIZE, ACE$B_TYPE, ACE$W_FLAGS,
+ * ACE$L_ACCESS, then (identifier ACE, ACE$C_KEYID) one longword per identifier.
+ */
+#define ACP_ACE_KEYID       1u        /* ACE$C_KEYID */
+#define ACP_ACE_M_DEFAULT   0x0100u   /* ACE$M_DEFAULT: propagated, not used for this file */
+#define ACP_ACE_M_PROTECTED 0x0200u   /* ACE$M_PROTECTED: survives a delete-all */
+#define ACP_ACE_M_CONTROL   0x10u     /* ACE$M_CONTROL */
+#define ACP_UIC_WILD_GROUP  0x3FFFu   /* [*,m]: an identifier's wildcard group */
+#define ACP_UIC_WILD_MEMBER 0xFFFFu   /* [g,*]: its wildcard member */
+
+/* Does the process hold identifier `id`? `*` (0xFFFFFFFF) is held by every
+ * process. A UIC identifier (bit 31 clear) is held
+ * when it names the process UIC, either half possibly the wildcard. A general
+ * identifier is held through the process rights list, which no process carries
+ * yet (rd vms-7d5a): none is held. */
+static int acp_proc_holds(const struct vms_proc *proc, uint32_t id)
+{
+    if (id == 0xFFFFFFFFu)
+        return 1;                               /* IDENTIFIER=*: everyone */
+    if (!(id & 0x80000000u)) {
+        uint32_t g = (id >> 16) & 0x3FFFu, m = id & 0xFFFFu;
+        uint32_t pg = (proc->uic >> 16) & 0xFFFFu, pm = proc->uic & 0xFFFFu;
+
+        return (g == ACP_UIC_WILD_GROUP || g == pg) &&
+               (m == ACP_UIC_WILD_MEMBER || m == pm);
+    }
+    return 0;
+}
+
+static uint32_t acp_rd32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+/* The first identifier ACE of the file's ACL whose identifiers the process ALL
+ * holds; DEFAULT ACEs are skipped (they are for files created in a directory,
+ * not for the directory itself). Returns 1 and its ACE$L_ACCESS in *access, or
+ * 0 when no ACE applies (then the protection code alone decides). */
+static int acp_acl_match(const struct vms_proc *proc, const ods2_fh2_t *fh,
+                         uint32_t *access)
+{
+    const uint8_t *h = (const uint8_t *)fh;
+    size_t off, len, pos = 0;
+
+    if (!ods2_fh2_acl_area(h, &off, &len))
+        return 0;
+    while (pos + 4u <= len) {
+        const uint8_t *ace = h + off + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+
+        if (sz < 4u || pos + sz > len)
+            break;                              /* end of list / malformed tail */
+        if (ace[1] == ACP_ACE_KEYID && sz >= 12u && !(flags & ACP_ACE_M_DEFAULT)) {
+            unsigned k, nid = (sz - 8u) / 4u;
+            int all = 1;
+
+            for (k = 0; k < nid && all; k++)
+                all = acp_proc_holds(proc, acp_rd32(ace + 8u + 4u * k));
+            if (all) {
+                *access = acp_rd32(ace + 4u);
+                return 1;
+            }
+        }
+        pos += sz;
+    }
+    return 0;
+}
+
+/*
  * acp_check_access - the Files-11 protection gate (INV-6). Grant the requested
  * access (read always; write additionally when `want_write`) iff SOME category
  * the accessor belongs to allows it, or a privilege overrides. Within each
@@ -1086,7 +1158,8 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
     uint64_t privs = proc->cur_privs;
     unsigned want = 0x1u;               /* read */
     unsigned denied;
-    int is_system, is_owner, is_group;
+    int is_system, is_owner, is_group, ace_matched;
+    uint32_t ace_access = 0;
 
     if (want_write)
         want |= 0x2u;                   /* write */
@@ -1117,14 +1190,27 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
     is_system = (acc_group <= ACP_MAXSYSGROUP) ||
                 (privs & ACP_PRV_M_SYSPRV) != 0;
 
+    /*
+     * The ACL first (vms-d404, docs/oracle/vax73-acl.md). The first identifier
+     * ACE the process matches decides: if it grants every wanted bit, access is
+     * granted. If it does not, its denial is final for the group and world
+     * categories -- only the system and owner fields of the protection code
+     * can still grant. With no matching ACE the protection code alone decides.
+     */
+    ace_matched = acp_acl_match(proc, fh, &ace_access);
+    if (ace_matched && (ace_access & want) == want)
+        return SS__NORMAL;
+
     /* Access is granted if ANY applicable category leaves the wanted bits
      * un-denied. Start denied; clear a want bit as soon as a category allows
-     * it. World always applies. */
+     * it. World applies unless a matching ACE denied. */
     denied = want;
     if (is_system) denied &= ~(~(unsigned)(prot & 0xFu) & want);
     if (is_owner)  denied &= ~(~(unsigned)((prot >> 4) & 0xFu) & want);
-    if (is_group)  denied &= ~(~(unsigned)((prot >> 8) & 0xFu) & want);
-    /* World: */    denied &= ~(~(unsigned)((prot >> 12) & 0xFu) & want);
+    if (!ace_matched) {
+        if (is_group)  denied &= ~(~(unsigned)((prot >> 8) & 0xFu) & want);
+        /* World: */    denied &= ~(~(unsigned)((prot >> 12) & 0xFu) & want);
+    }
 
     return denied ? SS__NOPRIV : SS__NORMAL;
 }
@@ -3104,7 +3190,7 @@ static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
 {
     unsigned mpoff = dirhdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
     uint8_t *mp = dirhdr + (size_t)mpoff * 2u;
-    size_t mapcap = ACP_BLOCK_SIZE - (size_t)mpoff * 2u - 2u;
+    size_t mapcap = ods2_fh2_map_end(dirhdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
     unsigned b = 0;
 
     memset(mp, 0, mapcap);
@@ -3310,6 +3396,135 @@ static void acp_apply_recattr(uint8_t *filehdr, const uint8_t *ra)
 
     for (i = 0; i < sizeof(f) / sizeof(f[0]); i++)
         memcpy(fat + f[i].off, ra + f[i].off, f[i].len);
+}
+
+/*
+ * CONTROL access over a file (vms-d404): what changing its ACL requires. The
+ * system and owner categories hold it implicitly; anyone else needs an ACE that
+ * grants CONTROL; BYPASS overrides.
+ */
+static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
+{
+    uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu, acc_member = proc->uic & 0xFFFFu;
+    uint32_t access = 0;
+
+    if (proc->cur_privs & (ACP_PRV_M_BYPASS | ACP_PRV_M_SYSPRV))
+        return 1;
+    if (acc_group <= ACP_MAXSYSGROUP)
+        return 1;
+    if (acc_group == fh->fh2_fileowner.uic_group && acc_member == fh->fh2_fileowner.uic_member)
+        return 1;
+    return acp_acl_match(proc, fh, &access) && (access & ACP_ACE_M_CONTROL);
+}
+
+/* Two ACEs name the same thing (an add replaces it, a delete removes it): same
+ * type and, for an identifier ACE, the same identifiers; a DEFAULT_PROTECTION ACE
+ * by type alone; anything else byte for byte. */
+static int acp_ace_same(const uint8_t *a, const uint8_t *b)
+{
+    if (a[1] != b[1])
+        return 0;
+    if (a[1] == ACP_ACE_KEYID)
+        return a[0] == b[0] && a[0] >= 12u && memcmp(a + 8, b + 8, a[0] - 8u) == 0;
+    if (a[1] == 9u)                             /* ACE$C_DIRDEF */
+        return 1;
+    return a[0] == b[0] && memcmp(a + 4, b + 4, a[0] - 4u) == 0;
+}
+
+/*
+ * acp_acl_op - IO$_MODIFY's access control list operations on the file whose
+ * header is in sc->filehdr (number file_fidnum): READ returns the ACL; ADD puts
+ * one ACE first, replacing an ACE for the same identifiers wherever it was; DEL
+ * removes the ACE for the given identifiers (SS$_NOENTRY if there is none);
+ * DELETEALL removes every ACE but the PROTECTED ones. Observed behaviour:
+ * docs/oracle/vax73-acl.md. An ACL that does not fit in the primary header is
+ * SS$_ACLFULL (VMS continues it in an extension header; not done here).
+ */
+static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
+                           struct acp_fileop_scratch *sc, uint32_t file_fidnum,
+                           struct vms_acp_fileop_args *a)
+{
+    const uint8_t *h = sc->filehdr;
+    uint8_t *out = sc->tdirhdr;                 /* MOVE scratch, free on this path */
+    uint8_t *ace_in = sc->ibblk;                /* index-bitmap scratch, free on this path */
+    size_t off = 0, len = 0, pos, n = 0;
+    int have = ods2_fh2_acl_area(h, &off, &len);
+    int found = 0;
+    uint32_t status, hdr_lbn;
+
+    if (!have)
+        len = 0;
+    if (a->acl_op == VMS_ACP_ACL_READ) {
+        status = acp_check_access(proc, &sc->fh, 0);
+        if (status != SS__NORMAL)
+            return status;
+        /* the list ends at the first zero-size ACE (an area may carry slack) */
+        for (pos = 0; pos + 4u <= len && h[off + pos] >= 4u && pos + h[off + pos] <= len;
+             pos += h[off + pos])
+            ;
+        if (pos == 0)
+            return SS__ACLEMPTY;
+        if (pos > a->acl_len || !a->acl_buf)
+            return SS__BADPARAM;            /* no room for the whole ACL */
+        if (exec_copyout((void *)(unsigned long)a->acl_buf, h + off, pos))
+            return SS__ACCVIO;
+        a->acl_len = (uint32_t)pos;
+        return SS__NORMAL;
+    }
+    if (a->acl_op != VMS_ACP_ACL_ADD && a->acl_op != VMS_ACP_ACL_DEL &&
+        a->acl_op != VMS_ACP_ACL_DELETEALL && a->acl_op != VMS_ACP_ACL_PURGE)
+        return SS__BADPARAM;
+    if (!acp_has_control(proc, &sc->fh))
+        return SS__NOPRIV;
+    if (a->acl_op == VMS_ACP_ACL_PURGE)
+        len = 0;                                /* every ACE, protected ones too */
+    else if (a->acl_op != VMS_ACP_ACL_DELETEALL) {
+        unsigned sz;
+        if (a->acl_len < 8u || a->acl_len > 255u || !a->acl_buf)
+            return SS__IVACL;
+        if (exec_copyin(ace_in, (const void *)(unsigned long)a->acl_buf, a->acl_len))
+            return SS__ACCVIO;
+        sz = ace_in[0];
+        if (sz != a->acl_len || (sz & 1u) ||
+            (ace_in[1] == ACP_ACE_KEYID && (sz < 12u || (sz - 8u) % 4u)))
+            return SS__IVACL;
+    }
+    if (a->acl_op == VMS_ACP_ACL_ADD) {
+        memcpy(out, ace_in, a->acl_len);
+        n = a->acl_len;
+    }
+    for (pos = 0; pos + 4u <= len; ) {
+        const uint8_t *ace = h + off + pos;
+        unsigned sz = ace[0];
+        uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
+        int drop = 0;
+
+        if (sz < 4u || pos + sz > len)
+            break;
+        if (a->acl_op == VMS_ACP_ACL_DELETEALL)
+            drop = !(flags & ACP_ACE_M_PROTECTED);
+        else if (!found && acp_ace_same(ace, ace_in))
+            drop = found = 1;
+        if (!drop) {
+            if (n + sz > ACP_BLOCK_SIZE)
+                return SS__ACLFULL;
+            memcpy(out + n, ace, sz);
+            n += sz;
+        }
+        pos += sz;
+    }
+    if (a->acl_op == VMS_ACP_ACL_DEL && !found)
+        return SS__NOENTRY;
+    if (ods2_fh2_acl_set(sc->filehdr, out, n) != ODS2_OK)
+        return SS__ACLFULL;
+    ods2_fh2_reseal(sc->filehdr);
+    hdr_lbn = acp_hdr_lbn(vol, file_fidnum);
+    if (hdr_lbn == 0 ||
+        acp_bdev_write(vol->backing_major, vol->backing_minor, hdr_lbn,
+                       sc->filehdr, ACP_BLOCK_SIZE) != 0)
+        return SS__DEVNOTMOUNT;
+    a->acl_len = (uint32_t)n;
+    return SS__NORMAL;
 }
 
 #endif /* OVMX_ODS2_KERNEL */
@@ -3622,6 +3837,14 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
 
             status = acp_read_header(vol, file_fidnum, sc->filehdr, &sc->fh);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            /* IO$_MODIFY of the access control list (vms-d404): its own
+             * access rule (CONTROL to change it, READ to read it). */
+            if (args.func == VMS_ACP_FOP_MODIFY && args.acl_op != 0) {
+                args.status = acp_acl_op(proc, vol, sc, file_fidnum, &args);
+                args.fid_num = file_fid.fid_num;
+                args.fid_nmx = file_fid.fid_nmx;
+                goto free_sc;
+            }
             /* Write access is required to delete or modify a file. */
             status = acp_check_access(proc, &sc->fh, 1);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
@@ -3791,7 +4014,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                             struct acp_winbuild wb;
                             unsigned mpoff = sc->filehdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
                             uint8_t *mp = sc->filehdr + (size_t)mpoff * 2u;
-                            size_t mapcap = ACP_BLOCK_SIZE - (size_t)mpoff * 2u - 2u;
+                            size_t mapcap = ods2_fh2_map_end(sc->filehdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
                             uint32_t want = args.trunc_efblk, e;
 
                             wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0;

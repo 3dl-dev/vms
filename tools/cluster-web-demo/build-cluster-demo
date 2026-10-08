@@ -63,6 +63,13 @@ INJECT_ODS2="$HERE/inject-ods2-config.sh"
 # to BUILD Node B's slim single disk); reused here to check that --vax-image is
 # really that disk rather than adding a second disklabel parser.
 MK_SINGLE_DISK="$HERE/../../tests/lab-vax/mk_single_disk.py"
+# The ODS-2 writer stamps the files it creates with the mastering time
+# (vms-263e). A bundle must be byte-identical for byte-identical inputs, so the
+# mastering time is the source tree's commit time unless the caller fixes one.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH=$(git -C "$HERE" log -1 --format=%ct 2>/dev/null || echo 0)
+fi
+export SOURCE_DATE_EPOCH
 
 usage() {
     cat >&2 <<EOF

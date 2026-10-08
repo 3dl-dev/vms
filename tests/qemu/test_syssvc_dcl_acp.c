@@ -101,7 +101,10 @@ static void prove_search_and_attr(void)
     struct FAB fab = cc$rms_fab;
     struct NAM nam = cc$rms_nam;
     char esa[256], rsa[256];
-    char spec[] = SRCH_UNIT "[SRCH]*.TXT";
+    /* ";*": every version (DIRECTORY's default). A wildcard spec with no
+     * version is the HIGHEST version of each file on OpenVMS, as $SEARCH now
+     * answers it (rd vms-42f8). */
+    char spec[] = SRCH_UNIT "[SRCH]*.TXT;*";
 
     fab.fab$l_fna = spec;
     fab.fab$b_fns = (uint8_t)strlen(spec);
@@ -110,7 +113,7 @@ static void prove_search_and_attr(void)
     fab.fab$l_nam = &nam;
 
     st = sys$parse(&fab, 0, 0);
-    check(st == RMS$_NORMAL, "sys$parse " SRCH_UNIT "[SRCH]*.TXT");
+    check(st == RMS$_NORMAL, "sys$parse " SRCH_UNIT "[SRCH]*.TXT;*");
 
     /* Genuine ODS-2 order: A.TXT;3(14), A.TXT;2(13), A.TXT;1(12), B.TXT;1(16). */
     uint16_t fidn = 0;

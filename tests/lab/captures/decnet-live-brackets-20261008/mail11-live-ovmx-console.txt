@@ -1,0 +1,40 @@
+67:$ RUN SYS$SYSTEM:MAIL.EXE
+68:
+69:   MAIL -- OpenVMS Mail Utility
+70:
+71:You have 2 new mail messages.
+72:
+73:MAIL> RUN SYS$SYSTEM:AUTHORIZE.EXE
+74:%MAIL-E-IVVERB, unrecognized MAIL command - \RUN\
+75:  Type HELP for list of available commands.
+76:MAIL> EXIT
+77:
+78:   Exiting MAIL
+79:
+80:$ DIRECTORY
+81:
+82:Directory SYS$SYSROOT:[SYSMGR]
+83:
+84:CLUSTER_CONFIG.COM;1                    CLUSTER_CONFIG_LAN.COM;1                
+85:LASTLOGIN_SYSTEM.DAT;2                  LASTLOGIN_SYSTEM.DAT;1                  
+86:LOGIN.COM;1         OPERATOR.LOG;1      OVMX$INSTALL.COM;1  OVMX_MAIL.MAI;1     
+87:STARTNET.COM;1      STARTUP.COM;1       SYCONFIG.COM;1      SYLOGICALS.COM;1    
+88:SYLOGIN.COM;1       SYSTARTUP_VMS.COM;1 TCPIP$CONFIG.COM;1  
+89:
+90:Total of 15 files.
+91:$ READ 2
+92:%DCL-E-NOKEYW, missing channel name and/or symbol name
+93:$ RUN SYS$SYSTEM:MAIL.EXE
+94:
+95:   MAIL -- OpenVMS Mail Utility
+96:
+97:You have 2 new mail messages.
+98:
+99:MAIL> DIRECTORY
+100:                                                                     NEWMAIL
+101:    # From                 Date         Subject
+102:
+103:    1 VAX1::SYSTEM          8-OCT-2026  DECnet MAIL-11 oracle
+104:    2 VAX1::SYSTEM          8-OCT-2026  OVMX bracket 20261008
+105:MAIL> READ 2
+106:    #2           8-OCT-2026 09:32:20.71                                  NEWMAIL

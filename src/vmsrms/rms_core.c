@@ -375,32 +375,38 @@ void rms_apply_default_dir(char *spec, size_t speclen)
     memcpy(spec, out, n + 1);
 }
 
+/*
+ * The last name the engine parsed for the RMS call in progress (rd vms-576):
+ * $OPEN / $CREATE / $ERASE fill the NAM from it (rms_nam_fill) and report its
+ * status when the name itself is bad (RMS$_SYN, RMS$_DIR, ...). Process
+ * static, not __thread: LIBVMSRMS$SHR carries no TLS segment (the vmsrms
+ * VMS-native migration gate), and an RMS call parses and fills in one go.
+ */
+static struct rms_pname rms_cur_pname;
+static uint32_t rms_cur_pname_st;
+
 static int rms_acp_effective_spec(struct FAB *fab, char *spec, size_t speclen)
 {
-    if (!fab->fab$l_fna || fab->fab$b_fns == 0)
+    /* The primary name, the default name and the process default, merged by
+     * the same engine $PARSE uses: the device and directory a logical name
+     * gives, the default's type, "." and ";" always present. (The default
+     * name used to be ignored here: "SP_X" with DNA ".DAT" created SP_X.) */
+    rms_cur_pname_st = rms_name_parse(fab->fab$l_fna, fab->fab$b_fns,
+                                      fab->fab$l_dna, fab->fab$b_dns,
+                                      &rms_cur_pname);
+    if (rms_cur_pname_st != RMS$_NORMAL)
         return -1;
-
-    {
-        size_t len = fab->fab$b_fns;
-        if (len >= speclen) len = speclen - 1;
-        memcpy(spec, fab->fab$l_fna, len);
-        spec[len] = '\0';
-    }
-    /* Apply a default filespec (fab$l_dna) for any missing name/type. */
-    if (fab->fab$l_dna && fab->fab$b_dns > 0) {
-        char dflt[1024] = "";
-        char combined[1024];
-        size_t dlen = fab->fab$b_dns;
-        if (dlen >= sizeof(dflt)) dlen = sizeof(dflt) - 1;
-        memcpy(dflt, fab->fab$l_dna, dlen);
-        dflt[dlen] = '\0';
-        if (rms_resolve_spec(spec, dflt, combined, sizeof(combined)) == 0) {
-            strncpy(spec, combined, speclen - 1);
-            spec[speclen - 1] = '\0';
-        }
-    }
-    rms_apply_default_dir(spec, speclen);
+    if ((size_t)rms_cur_pname.esl >= speclen)
+        return -1;
+    memcpy(spec, rms_cur_pname.esa, rms_cur_pname.esl);
+    spec[rms_cur_pname.esl] = '\0';
     return 0;
+}
+
+/* The status a bad name earns: the engine's (RMS$_SYN, RMS$_DIR, ...). */
+static uint32_t rms_name_status(void)
+{
+    return rms_cur_pname_st != RMS$_NORMAL ? rms_cur_pname_st : RMS$_SYN;
 }
 
 /* Split a fully-composed VMS filespec string into device / directory /
@@ -1894,38 +1900,39 @@ static void save_metadata(struct FAB *fab)
  * the caller's nam$b_rss / nam$b_ess; a short buffer truncates, as on VMS.
  */
 static void rms_nam_fill(struct FAB *fab, const struct rms_acp_spec *s,
-                         uint16_t version, const rms_file_t *h)
+                         uint16_t version, const rms_file_t *h, uint32_t xfnb)
 {
     struct NAM *nam = (struct NAM *)fab->fab$l_nam;
-    char buf[512];
-    int n;
+    struct rms_pname pn = rms_cur_pname;
 
-    if (!nam || nam->nam$b_bid != NAM$C_BID || !s)
+    if (!nam || nam->nam$b_bid != NAM$C_BID)
         return;
-    if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
-        n = snprintf(buf, sizeof(buf), "%s[%s]%s;%u", s->devnam,
-                     s->dirpath[0] ? s->dirpath : "000000", s->name,
-                     (unsigned)version);
-        if (n < 0) n = 0;
-        size_t l = strlen(buf);
-        if (l > nam->nam$b_rss) l = nam->nam$b_rss;
-        memcpy(nam->nam$l_rsa, buf, l);
-        nam->nam$b_rsl = (uint8_t)l;
+    (void)s;
+    /* The EXPANDED string: the name as the engine resolved it, the version
+     * as asked (";" when none). */
+    nam->nam$b_esl = 0;
+    if (nam->nam$l_esa && pn.esl <= nam->nam$b_ess) {
+        memcpy(nam->nam$l_esa, pn.esa, pn.esl);
+        nam->nam$b_esl = pn.esl;
+        rms_nam_set_parts(nam, nam->nam$l_esa, &pn);
     }
-    if (nam->nam$l_esa && nam->nam$b_ess > 0) {
-        if (s->version)
-            n = snprintf(buf, sizeof(buf), "%s[%s]%s;%u", s->devnam,
-                         s->dirpath[0] ? s->dirpath : "000000", s->name,
-                         (unsigned)s->version);
-        else
-            n = snprintf(buf, sizeof(buf), "%s[%s]%s;", s->devnam,
-                         s->dirpath[0] ? s->dirpath : "000000", s->name);
-        if (n < 0) n = 0;
-        size_t l = strlen(buf);
-        if (l > nam->nam$b_ess) l = nam->nam$b_ess;
-        memcpy(nam->nam$l_esa, buf, l);
-        nam->nam$b_esl = (uint8_t)l;
+    /* The RESULTANT: the file itself, at its real version -- the expanded
+     * string's device, directory, name and type (a concealed device stays
+     * concealed), and the NAM's parts then describe it (observed RMS.CREATE,
+     * RMS.OPEN, RMS.ERASE.*, docs/oracle/semantics/rms/). */
+    nam->nam$b_rsl = 0;
+    if (version && nam->nam$l_rsa) {
+        char rs[300];
+        int k = snprintf(rs, sizeof rs, "%.*s;%u", (int)pn.ver_off, pn.esa,
+                         (unsigned)version);
+        if (k > 0 && (size_t)k <= nam->nam$b_rss) {
+            memcpy(nam->nam$l_rsa, rs, (size_t)k);
+            nam->nam$b_rsl = (uint8_t)k;
+            pn.ver_len = (uint8_t)(k - pn.ver_off);
+            rms_nam_set_parts(nam, nam->nam$l_rsa, &pn);
+        }
     }
+    nam->nam$l_fnb = pn.fnb | xfnb;
     /* nam$w_fid / nam$w_did (vms-6e28): the file's own ID and its
      * directory's, as the ACP returned them on IO$_ACCESS / IO$_CREATE. */
     if (h) {
@@ -1994,9 +2001,9 @@ static uint32_t rms_impl_open(void *fab_ptr)
          * to on-volume ODS-2 candidates and try each in search-list order. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
-            fab->fab$l_sts = RMS$_SYN;
+            fab->fab$l_sts = rms_name_status();
             fab->fab$l_stv = 0;
-            return RMS$_SYN;
+            return fab->fab$l_sts;
         }
         strncpy(fab->_resolved_path, specs[0].name,
                 sizeof(fab->_resolved_path) - 1);
@@ -2010,6 +2017,8 @@ static uint32_t rms_impl_open(void *fab_ptr)
         if (!$VMS_STATUS_SUCCESS(st)) {
             if (st == SS$_NOSUCHFILE && (fab->fab$l_fop & FAB$M_CIF))
                 return rms_impl_create(fab_ptr);
+            /* not found: the NAM still gets the expanded name (RMS.OPEN.FNF) */
+            rms_nam_fill(fab, NULL, 0, NULL, 0);
             fab->fab$l_stv = st;
             fab->fab$l_sts = rms_acp_open_status(st);
             return fab->fab$l_sts;
@@ -2017,7 +2026,7 @@ static uint32_t rms_impl_open(void *fab_ptr)
         fab->_rms_file = h;
         rms_fab_from_header(fab, h);
         if (hit >= 0)
-            rms_nam_fill(fab, &specs[hit], h->version, h);
+            rms_nam_fill(fab, &specs[hit], h->version, h, 0);
 
         /* vms-50e (docs/design-rms-file-lock.md): the file-access $ENQ, right
          * after IO$_ACCESS -- the FID is now in hand (h->fid_*). A real DLM
@@ -2344,8 +2353,8 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * single candidate, so its behaviour is unchanged. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
-            fab->fab$l_sts = RMS$_SYN;
-            return RMS$_SYN;
+            fab->fab$l_sts = rms_name_status();
+            return fab->fab$l_sts;
         }
 
         /* vms-4ac: try EACH ODS-2 candidate directory, exactly as the $OPEN read
@@ -2419,7 +2428,35 @@ static uint32_t rms_impl_create(void *fab_ptr)
          * asked for rather than the kind preset. */
         if (rms_fat_from_fab(fab, fop.attr.recattr))
             fop.attr_ctl |= VMS_ACP_ATTR_RECATTR;
-        fop.version = 0;                     /* highest existing + 1 */
+        /*
+         * The version (rd vms-670): none asked for is the highest existing + 1;
+         * an explicit one that already exists is RMS$_FEX unless FOP SUP asks
+         * to supersede it, which deletes the old file first (observed
+         * RMS.CREATE.EXPLICIT_V1, docs/oracle/semantics/rms/).
+         */
+        if (sp.version != 0) {
+            rms_file_t *hx = NULL;
+            if ($VMS_STATUS_SUCCESS(rms_acp_open_file(&sp, 0, &hx)) && hx) {
+                struct vms_acp_fileop_args dop;
+                memset(&dop, 0, sizeof dop);
+                dop.fid_num = hx->fid_num; dop.fid_seq = hx->fid_seq;
+                dop.fid_rvn = hx->fid_rvn; dop.fid_nmx = hx->fid_nmx;
+                rms_acp_close_handle(hx);
+                if (!(fab->fab$l_fop & FAB$M_SUP)) {
+                    free(h); vms_kif_dassgn(chan);
+                    rms_nam_fill(fab, NULL, 0, NULL, 0);
+                    fab->fab$l_stv = 0;
+                    fab->fab$l_sts = RMS$_FEX;
+                    return RMS$_FEX;
+                }
+                dop.chan = chan;
+                dop.func = VMS_ACP_FOP_DELETE;
+                dop.modifiers = VMS_ACP_M_DELETE;
+                dop.fidmode = 1;
+                (void)vms_kif_acp_fileop(&dop);
+            }
+        }
+        fop.version = sp.version;            /* 0: highest existing + 1 */
         strncpy(fop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
 
         st = vms_kif_acp_fileop(&fop);
@@ -2513,8 +2550,12 @@ static uint32_t rms_impl_create(void *fab_ptr)
         pthread_mutex_unlock(&rms_id_lock);
         /* The resultant: the file this $CREATE really made, at the version
          * the ACP assigned (rd vms-98e). */
-        rms_nam_fill(fab, &sp, fop.out_version, h);
-        fab->fab$l_sts = RMS$_CREATED;
+        /* NAM$M_LOWVER: lower versions of the name already exist (observed
+         * RMS.CREATE.V2 / SUP, %X4000). */
+        rms_nam_fill(fab, &sp, fop.out_version, h, fop.out_version > 1 ? 0x4000u : 0);
+        /* RMS$_CREATED belongs to a create-if ($OPEN with FAB$M_CIF that had to
+         * create); a plain $CREATE reports RMS$_NORMAL (RMS.CREATE). */
+        fab->fab$l_sts = (fab->fab$l_fop & FAB$M_CIF) ? RMS$_CREATED : RMS$_NORMAL;
         fab->fab$l_stv = 0;
         return RMS$_NORMAL;
     }
@@ -2770,8 +2811,8 @@ static uint32_t rms_impl_erase(void *fab_ptr)
          * list candidate in order; the first that resolves + deletes wins. */
         ncand = rms_acp_specs_from_fab(fab, specs, RMS_ACP_MAX_CANDS);
         if (ncand < 0) {
-            fab->fab$l_sts = RMS$_SYN;
-            return RMS$_SYN;
+            fab->fab$l_sts = rms_name_status();
+            return fab->fab$l_sts;
         }
         for (int i = 0; i < ncand && !done; i++) {
             struct rms_acp_spec *sp = &specs[i];
@@ -2798,12 +2839,16 @@ static uint32_t rms_impl_erase(void *fab_ptr)
                 done = 1;
         }
         if (!done) {
+            rms_nam_fill(fab, NULL, 0, NULL, 0);
             fab->fab$l_stv = st;
             fab->fab$l_sts = (st == SS$_NOSUCHFILE) ? RMS$_FNF
                            : (st == SS$_NOPRIV)     ? RMS$_PRV
                                                     : RMS$_ACC;
             return fab->fab$l_sts;
         }
+        /* the NAM names the file erased (RMS.ERASE.*, rd vms-670) */
+        rms_nam_fill(fab, NULL, fop.out_version ? fop.out_version : specs[0].version,
+                     NULL, 0);
         fab->fab$l_sts = RMS$_NORMAL;
         fab->fab$l_stv = 0;
         return RMS$_NORMAL;

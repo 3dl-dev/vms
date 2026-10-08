@@ -278,9 +278,12 @@ int main(void)
     {
         char want_prc[128], want_usr[128], want_pid[128], want_self_usr[128];
         snprintf(want_prc, sizeof(want_prc), "A_PRCNAM=%s\n", A_PRCNAM);
-        snprintf(want_usr, sizeof(want_usr), "A_USERNAME=%s\n", A_USER);
+        /* JPI$_USERNAME: 12 characters, blank-filled (LEX.GETJPI.USERNAME) */
+        snprintf(want_usr, sizeof(want_usr), "A_USERNAME=%-12s\n", A_USER);
         snprintf(want_pid, sizeof(want_pid), "A_PID=%s\n", apid_hex);
-        snprintf(want_self_usr, sizeof(want_self_usr), "SELF_USERNAME=%s\n", B_USER);
+        snprintf(want_self_usr, sizeof(want_self_usr), "SELF_USERNAME=%-12s\n", B_USER);
+        char not_b[128];
+        snprintf(not_b, sizeof(not_b), "A_USERNAME=%-12s\n", B_USER);
 
         /* THE FACADE PROOF: A's values, read BY PID from a process B shares
          * nothing with but the executive's table -- not B's own. On
@@ -292,7 +295,7 @@ int main(void)
               "F$GETJPI(<A pid>,\"USERNAME\") == A's username (not the caller's)");
         CHECK(strstr(out, want_pid) != NULL,
               "F$GETJPI(<A pid>,\"PID\") echoes A's pid (not the caller's)");
-        CHECK(strstr(out, "A_USERNAME=" B_USER "\n") == NULL,
+        CHECK(strstr(out, not_b) == NULL,
               "F$GETJPI(<A pid>,...) did NOT simply report the caller B's own identity");
 
         /* THE SELF FORM still reads the executive (regression + the null

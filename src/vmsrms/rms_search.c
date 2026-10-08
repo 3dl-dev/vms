@@ -104,6 +104,12 @@ struct acp_search_context {
     uint16_t fid_num, fid_seq;
     uint8_t  fid_rvn, fid_nmx;
     uint16_t version;
+    /* The expanded string's device + directory ("SYS$SYSROOT:[SYSMGR]"), the
+     * prefix of every resultant, and how many files this walk has returned
+     * (none: RMS$_FNF, not RMS$_NMF, rd vms-42f8). */
+    char     esa_devdir[300];
+    uint8_t  esa_devlen, esa_dirlen;
+    unsigned found;
     /* The searched directory's File ID (NAM$W_DID, vms-692). */
     uint16_t did_num, did_seq;
     uint8_t  did_rvn, did_nmx;
@@ -257,12 +263,22 @@ static uint32_t rms_acp_search(void *fab_ptr)
             memcpy(expanded, nam->nam$l_esa, len);
             expanded[len] = '\0';
         } else {
-            fab->fab$l_sts = RMS$_SYN;
-            return RMS$_SYN;
+            /* No $PARSE before this $SEARCH: nothing to walk -- RMS$_NMF
+             * (RMS.SEARCH.NOPARSE, docs/oracle/semantics/rms/; rd vms-42f8). */
+            fab->fab$l_sts = RMS$_NMF;
+            fab->fab$l_stv = 0;
+            return RMS$_NMF;
         }
 
         ctx = calloc(1, sizeof(struct acp_search_context));
         if (!ctx) { fab->fab$l_sts = RMS$_DME; return RMS$_DME; }
+        if (nam->nam$l_dev && (size_t)nam->nam$b_dev + nam->nam$b_dir < sizeof ctx->esa_devdir) {
+            snprintf(ctx->esa_devdir, sizeof ctx->esa_devdir, "%.*s%.*s",
+                     (int)nam->nam$b_dev, nam->nam$l_dev,
+                     (int)nam->nam$b_dir, nam->nam$l_dir ? nam->nam$l_dir : "");
+            ctx->esa_devlen = nam->nam$b_dev;
+            ctx->esa_dirlen = nam->nam$b_dir;
+        }
 
         /* Resolve any concealed / rooted / directory device logical
          * (SYS$SYSTEM:, SYS$COMMON:[SYSEXE], SYS$SYSROOT: ...) in the expanded
@@ -350,9 +366,25 @@ static uint32_t rms_acp_search(void *fab_ptr)
 
     st = vms_kif_acp_acpcontrol(&a);
     if (st != SS$_NORMAL) {
-        /* SS$_NOMOREFILES => RMS$_NMF (and end the context); any other => the
-         * fail-honest RMS status. Either way the context is spent. */
+        /* SS$_NOMOREFILES => RMS$_NMF, or RMS$_FNF when the walk found
+         * nothing at all, with SS$_NOSUCHFILE in the STV, and the NAM's parts
+         * back on the expanded string (rd vms-42f8, observed RMS.SEARCH.4 /
+         * RMS.SEARCH.NONE); any other => the fail-honest RMS status. Either
+         * way the context is spent. */
         uint32_t rs = rms_acp_search_status(st);
+        if (st == SS$_NOMOREFILES) {
+            if (!ctx->found)
+                rs = RMS$_FNF;
+            fab->fab$l_stv = SS$_NOSUCHFILE;
+            if (nam->nam$l_esa && nam->nam$b_esl) {
+                struct rms_pname pn;
+                uint32_t keep = nam->nam$l_fnb;
+                if (rms_name_parse(nam->nam$l_esa, nam->nam$b_esl, NULL, 0, &pn) == RMS$_NORMAL) {
+                    pn.fnb = keep;
+                    rms_nam_set_parts(nam, nam->nam$l_esa, &pn);
+                }
+            }
+        }
         search_ctx_free(ctx);
         nam->nam$$l_context = NULL;
         fab->fab$l_sts = rs;
@@ -393,6 +425,38 @@ static uint32_t rms_acp_search(void *fab_ptr)
          * this is the VMS spec, not a Linux path). */
         strncpy(fab->_resolved_path, vms_result, sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
+
+        /*
+         * THE RESULTANT THE CALLER SEES (rd vms-42f8): the expanded string's
+         * own device and directory -- a concealed device stays concealed,
+         * "SYS$SYSROOT:[SYSMGR]" -- followed by the file found, and the NAM's
+         * name / type / version now describe THAT file, in the RSA; the FNB
+         * stays the $PARSE's (observed RMS.SEARCH.*, docs/oracle/semantics/rms/).
+         */
+        if (nam->nam$l_rsa && nam->nam$b_rss > 0 && ctx->esa_devdir[0]) {
+            char rs[300];
+            int k = snprintf(rs, sizeof rs, "%s%s", ctx->esa_devdir, a.resnam);
+            if (k > 0 && (size_t)k <= nam->nam$b_rss) {
+                struct rms_pname pn;
+                const char *dot, *semi;
+                memset(&pn, 0, sizeof pn);
+                memcpy(nam->nam$l_rsa, rs, (size_t)k);
+                nam->nam$b_rsl = (uint8_t)k;
+                pn.dev_off = 0;               pn.dev_len = ctx->esa_devlen;
+                pn.dir_off = ctx->esa_devlen; pn.dir_len = ctx->esa_dirlen;
+                pn.name_off = (uint8_t)strlen(ctx->esa_devdir);
+                semi = strrchr(rs + pn.name_off, ';');
+                dot = memchr(rs + pn.name_off, '.', (size_t)((semi ? semi : rs + k) - (rs + pn.name_off)));
+                pn.name_len = (uint8_t)((dot ? dot : semi ? semi : rs + k) - (rs + pn.name_off));
+                pn.type_off = (uint8_t)(pn.name_off + pn.name_len);
+                pn.type_len = (uint8_t)(dot ? (semi ? semi : rs + k) - dot : 0);
+                pn.ver_off = (uint8_t)(pn.type_off + pn.type_len);
+                pn.ver_len = (uint8_t)(semi ? (rs + k) - semi : 0);
+                pn.fnb = nam->nam$l_fnb;
+                rms_nam_set_parts(nam, nam->nam$l_rsa, &pn);
+            }
+        }
+        ctx->found++;
     }
 
     fab->fab$l_sts = RMS$_NORMAL;
@@ -566,6 +630,14 @@ static uint32_t rms_posix_search(void *fab_ptr)
         }
 
         if (!split_done) {
+            /* The expanded string ends in ";" or ";n" (rd vms-42f8); the
+             * POSIX store keeps plain names, so the version goes. */
+            {
+                char *semi = strrchr(expanded, ';');
+                const char *rb = strrchr(expanded, ']');
+                if (semi && (!rb || semi > rb))
+                    *semi = '\0';
+            }
             /* No "DEV:[DIR]" prefix (device-only or bare spec): translate the
              * whole spec and split on the last slash, as before. vmsfs_to_linux_path
              * returns a VMS status code (odd == success), NOT 0-on-success -- the

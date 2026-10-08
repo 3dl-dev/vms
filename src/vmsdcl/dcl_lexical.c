@@ -36,6 +36,9 @@
 #include "dcl/symbol.h"
 #include "ssdef.h"
 #include "devdef.h"
+#include "descrip.h"
+#include "lnmdef.h"
+#include "starlet.h"   /* sys$faol / sys$getmsg (F$FAO, F$MESSAGE) */
 /* Kernel-interface client: F$DEVICE enumerates the executive's device
  * table through it (vms-fb9), and F$SETPRV routes its privilege mutation
  * through vms_kif_setprv() here -- the SAME already-wired executive edge
@@ -77,6 +80,106 @@ static void format_vms_time(char *buf, size_t bufsize)
 /*
  * F$TIME() - Return current date/time in VMS format.
  */
+
+/* ------------------------------------------------------------------------
+ * EVALUATED LEXICAL ARGUMENTS (rd vms-8d1, docs/oracle/semantics/lex/).
+ * dcl_eval_lexical() hands every function except F$TYPE its arguments
+ * already evaluated: a string as a quoted literal (quotes doubled), an
+ * integer as decimal text, an omitted argument empty. lex_args() reads that
+ * form back.
+ * ---------------------------------------------------------------------- */
+#define LEX_MAXARG 16
+struct lex_arg {
+    int  present;
+    int  is_string;
+    long ival;
+    char sval[1024];
+};
+
+static int lex_args(const char *args, struct lex_arg *a, int max)
+{
+    int n = 0;
+    const char *p = args ? args : "";
+    for (int i = 0; i < max; i++) memset(&a[i], 0, sizeof a[i]);
+    if (!*p) return 0;
+    for (;;) {
+        struct lex_arg tmp; memset(&tmp, 0, sizeof tmp);
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '"') {
+            size_t o = 0;
+            p++;
+            while (*p) {
+                if (*p == '"') {
+                    if (p[1] == '"') { if (o + 1 < sizeof tmp.sval) tmp.sval[o++] = '"'; p += 2; continue; }
+                    p++; break;
+                }
+                if (o + 1 < sizeof tmp.sval) tmp.sval[o++] = *p;
+                p++;
+            }
+            tmp.sval[o] = '\0';
+            tmp.present = 1; tmp.is_string = 1;
+            while (*p && *p != ',') p++;
+        } else {
+            const char *st = p;
+            while (*p && *p != ',') p++;
+            while (st < p && (*st == ' ' || *st == '\t')) st++;
+            if (p > st) { tmp.present = 1; tmp.ival = strtol(st, NULL, 10); }
+        }
+        if (n < max) a[n] = tmp;
+        n++;
+        if (*p != ',') break;
+        p++;
+    }
+    return n;
+}
+
+/* An argument as a string: an integer becomes its decimal text. */
+static const char *lex_str(struct lex_arg *a, char *buf, size_t bsz)
+{
+    if (!a->present) return "";
+    if (a->is_string) return a->sval;
+    snprintf(buf, bsz, "%ld", a->ival);
+    return buf;
+}
+
+/* An argument as an integer: a string that IS an integer gives its value,
+ * one beginning T/t/Y/y gives 1 (true), anything else 0 (DCL Dictionary,
+ * "Converting String to Integer"; observed LEX.INTEGER.TRUE/YES/JUNK). */
+static long lex_int(struct lex_arg *a)
+{
+    if (!a->present) return 0;
+    if (!a->is_string) return a->ival;
+    extern long dcl_parse_int(const char *s, int *ok);
+    const char *t = a->sval;
+    while (*t == ' ' || *t == '\t') t++;
+    int ok = 0;
+    long v = dcl_parse_int(t, &ok);
+    if (ok) return v;
+    return (*t == 'T' || *t == 't' || *t == 'Y' || *t == 'y') ? 1 : 0;
+}
+
+/* Too many arguments for the function: CLI-W-SYMDEL (observed LEX.TOOMANY). */
+static int lex_toomany(struct dcl_context *ctx, int n, int max)
+{
+    if (n <= max) return 0;
+    if (ctx) ctx->last_status = 0x00038130;
+    return 1;
+}
+
+static int lex_fail(struct dcl_context *ctx, uint32_t code, char *result)
+{
+    if (ctx) ctx->last_status = code;
+    if (result) result[0] = '\0';
+    return -1;
+}
+
+static void lex_put(char *result, size_t rs, const char *src, size_t n)
+{
+    if (n >= rs) n = rs - 1;
+    memcpy(result, src, n);
+    result[n] = '\0';
+}
+
 static int lex_time(struct dcl_context *ctx, const char *args,
                     char *result, size_t result_size)
 {
@@ -92,29 +195,11 @@ static int lex_time(struct dcl_context *ctx, const char *args,
 static int lex_length(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
 {
-    (void)ctx;
-    if (!args) { snprintf(result, result_size, "0"); return 0; }
-
-    /* Strip surrounding quotes if present */
-    char str[4096];
-    strncpy(str, args, sizeof(str) - 1);
-    str[sizeof(str) - 1] = '\0';
-
-    /* Trim whitespace */
-    char *s = str;
-    while (*s == ' ' || *s == '\t') s++;
-    size_t len = strlen(s);
-    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) len--;
-    s[len] = '\0';
-
-    /* Remove quotes */
-    if (len >= 2 && s[0] == '"' && s[len - 1] == '"') {
-        s[len - 1] = '\0';
-        s++;
-        len -= 2;
-    }
-
-    snprintf(result, result_size, "%zu", strlen(s));
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 1)) return lex_fail(ctx, 0x00038130, result);
+    char b[32];
+    snprintf(result, result_size, "%zu", strlen(lex_str(&a[0], b, sizeof b)));
     return 0;
 }
 
@@ -124,52 +209,19 @@ static int lex_length(struct dcl_context *ctx, const char *args,
 static int lex_extract(struct dcl_context *ctx, const char *args,
                        char *result, size_t result_size)
 {
-    (void)ctx;
+    /* F$EXTRACT(start, length, string): a negative start gives the null
+     * string; a negative length runs to the end (observed LEX.EXTRACT.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 3)) return lex_fail(ctx, 0x00038130, result);
+    long start = lex_int(&a[0]), len = lex_int(&a[1]);
+    char b[32];
+    const char *str = lex_str(&a[2], b, sizeof b);
+    long slen = (long)strlen(str);
     result[0] = '\0';
-    if (!args) return 0;
-
-    /* Parse: start, length, string */
-    int start = 0, len = 0;
-    char str[4096] = {0};
-
-    /* Find the commas */
-    const char *p = args;
-    while (*p == ' ') p++;
-    start = (int)strtol(p, NULL, 10);
-
-    /* Skip to next comma */
-    p = strchr(p, ',');
-    if (!p) return 0;
-    p++;
-    while (*p == ' ') p++;
-    len = (int)strtol(p, NULL, 10);
-
-    /* Skip to the string argument */
-    p = strchr(p, ',');
-    if (!p) return 0;
-    p++;
-    while (*p == ' ') p++;
-
-    /* Copy string, removing quotes */
-    strncpy(str, p, sizeof(str) - 1);
-    size_t slen = strlen(str);
-    while (slen > 0 && (str[slen - 1] == ' ' || str[slen - 1] == '\t'))
-        str[--slen] = '\0';
-    if (slen >= 2 && str[0] == '"' && str[slen - 1] == '"') {
-        str[slen - 1] = '\0';
-        memmove(str, str + 1, slen - 1);
-        slen -= 2;
-    }
-
-    if (start < 0) start = 0;
-    if (start >= (int)slen) { result[0] = '\0'; return 0; }
-    if (len < 0) len = 0;
-    if (start + len > (int)slen) len = (int)slen - start;
-
-    if ((size_t)len >= result_size) len = (int)(result_size - 1);
-    memcpy(result, str + start, (size_t)len);
-    result[len] = '\0';
-
+    if (start < 0 || start >= slen) return 0;
+    if (len < 0 || start + len > slen) len = slen - start;
+    lex_put(result, result_size, str + start, (size_t)len);
     return 0;
 }
 
@@ -179,73 +231,24 @@ static int lex_extract(struct dcl_context *ctx, const char *args,
 static int lex_element(struct dcl_context *ctx, const char *args,
                        char *result, size_t result_size)
 {
-    (void)ctx;
-    result[0] = '\0';
-    if (!args) return 0;
-
-    const char *p = args;
-    while (*p == ' ') p++;
-    int element = (int)strtol(p, NULL, 10);
-
-    p = strchr(p, ',');
-    if (!p) return 0;
-    p++;
-    while (*p == ' ') p++;
-
-    /* Get delimiter */
-    char delim = ',';
-    if (*p == '"') {
-        p++;
-        delim = *p;
-        p++;
-        if (*p == '"') p++;
-    } else {
-        delim = *p;
-        p++;
+    /* F$ELEMENT(n, delimiter, string): element n (0-based); past the last
+     * element, the delimiter itself; a delimiter that is not exactly one
+     * character is an error (observed LEX.ELEMENT.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 3)) return lex_fail(ctx, 0x00038130, result);
+    long el = lex_int(&a[0]);
+    char b1[32], b2[32];
+    const char *d = lex_str(&a[1], b1, sizeof b1), *str = lex_str(&a[2], b2, sizeof b2);
+    if (strlen(d) != 1) return lex_fail(ctx, 0x000388FA, result);
+    const char *p = str;
+    for (long i = 0; i < el && p; i++) {
+        p = strchr(p, d[0]);
+        if (p) p++;
     }
-
-    p = strchr(p, ',');
-    if (!p) return 0;
-    p++;
-    while (*p == ' ') p++;
-
-    /* Get string */
-    char str[4096];
-    strncpy(str, p, sizeof(str) - 1);
-    str[sizeof(str) - 1] = '\0';
-    size_t slen = strlen(str);
-    while (slen > 0 && (str[slen - 1] == ' ' || str[slen - 1] == '\t'))
-        str[--slen] = '\0';
-    if (slen >= 2 && str[0] == '"' && str[slen - 1] == '"') {
-        str[slen - 1] = '\0';
-        memmove(str, str + 1, slen - 1);
-        slen -= 2;
-    }
-
-    /* Find the nth element */
-    int cur = 0;
-    const char *start = str;
-    const char *end = str;
-    while (*end) {
-        if (*end == delim) {
-            if (cur == element) break;
-            cur++;
-            start = end + 1;
-        }
-        end++;
-    }
-
-    if (cur == element || (element == 0 && cur == 0)) {
-        size_t elen = (size_t)(end - start);
-        if (elen >= result_size) elen = result_size - 1;
-        memcpy(result, start, elen);
-        result[elen] = '\0';
-    } else {
-        /* Element not found - return delimiter string */
-        result[0] = delim;
-        result[1] = '\0';
-    }
-
+    if (!p || el < 0) { lex_put(result, result_size, d, 1); return 0; }
+    const char *e = strchr(p, d[0]);
+    lex_put(result, result_size, p, e ? (size_t)(e - p) : strlen(p));
     return 0;
 }
 
@@ -255,60 +258,15 @@ static int lex_element(struct dcl_context *ctx, const char *args,
 static int lex_locate(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
 {
-    (void)ctx;
-    if (!args) { snprintf(result, result_size, "0"); return 0; }
-
-    /* Parse: substring, string */
-    char substr[1024] = {0};
-    char str[4096] = {0};
-
-    const char *p = args;
-    while (*p == ' ') p++;
-
-    /* Get substring (possibly quoted) */
-    if (*p == '"') {
-        p++;
-        size_t si = 0;
-        while (*p && *p != '"' && si < sizeof(substr) - 1) {
-            substr[si++] = *p++;
-        }
-        substr[si] = '\0';
-        if (*p == '"') p++;
-    } else {
-        size_t si = 0;
-        while (*p && *p != ',' && si < sizeof(substr) - 1) {
-            substr[si++] = *p++;
-        }
-        substr[si] = '\0';
-    }
-
-    p = strchr(p, ',');
-    if (!p) { snprintf(result, result_size, "0"); return 0; }
-    p++;
-    while (*p == ' ') p++;
-
-    /* Get string */
-    if (*p == '"') {
-        p++;
-        size_t si = 0;
-        while (*p && *p != '"' && si < sizeof(str) - 1) {
-            str[si++] = *p++;
-        }
-        str[si] = '\0';
-    } else {
-        strncpy(str, p, sizeof(str) - 1);
-        size_t slen = strlen(str);
-        while (slen > 0 && (str[slen - 1] == ' ' || str[slen - 1] == '\t'))
-            str[--slen] = '\0';
-    }
-
-    const char *found = strstr(str, substr);
-    if (found) {
-        snprintf(result, result_size, "%td", found - str);
-    } else {
-        snprintf(result, result_size, "%zu", strlen(str));
-    }
-
+    /* F$LOCATE(substring, string): the offset of the first match, or the
+     * string's length when there is none (an empty substring is found at 0). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 2)) return lex_fail(ctx, 0x00038130, result);
+    char b1[32], b2[32];
+    const char *sub = lex_str(&a[0], b1, sizeof b1), *str = lex_str(&a[1], b2, sizeof b2);
+    const char *f = strstr(str, sub);
+    snprintf(result, result_size, "%ld", f ? (long)(f - str) : (long)strlen(str));
     return 0;
 }
 
@@ -319,133 +277,71 @@ static int lex_locate(struct dcl_context *ctx, const char *args,
 static int lex_edit(struct dcl_context *ctx, const char *args,
                     char *result, size_t result_size)
 {
-    (void)ctx;
-    result[0] = '\0';
-    if (!args) return 0;
-
-    /* Parse: string, edit_list */
-    char str[4096] = {0};
-    char edits[256] = {0};
-
-    const char *p = args;
-    while (*p == ' ') p++;
-
-    /* Get string */
-    if (*p == '"') {
-        p++;
-        size_t si = 0;
-        while (*p && si < sizeof(str) - 1) {
-            if (*p == '"') {
-                if (*(p + 1) == '"') {
-                    str[si++] = '"';
-                    p += 2;
-                } else {
-                    p++;
-                    break;
-                }
-            } else {
-                str[si++] = *p++;
+    /* F$EDIT(string, edit-list). The edits apply in a fixed order whatever
+     * order they are listed in -- UNCOMMENT (from an unquoted "!" on, the
+     * blank before it kept), COLLAPSE, COMPRESS, TRIM, then UPCASE /
+     * LOWERCASE -- and text inside quotation marks is left alone; an unknown
+     * keyword is CLI-W-IVKEYW (observed LEX.EDIT.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 2)) return lex_fail(ctx, 0x00038130, result);
+    char b1[32], b2[32], kw[1024];
+    const char *in = lex_str(&a[0], b1, sizeof b1);
+    snprintf(kw, sizeof kw, "%s", lex_str(&a[1], b2, sizeof b2));
+    int uncomment = 0, collapse = 0, compress = 0, trim = 0, up = 0, low = 0;
+    for (char *t = strtok(kw, ","); t; t = strtok(NULL, ",")) {
+        while (*t == ' ') t++;
+        size_t tl = strlen(t);
+        while (tl && t[tl - 1] == ' ') t[--tl] = '\0';
+        for (char *q = t; *q; q++) *q = (char)toupper((unsigned char)*q);
+        if (!strcmp(t, "UNCOMMENT")) uncomment = 1;
+        else if (!strcmp(t, "COLLAPSE")) collapse = 1;
+        else if (!strcmp(t, "COMPRESS")) compress = 1;
+        else if (!strcmp(t, "TRIM")) trim = 1;
+        else if (!strcmp(t, "UPCASE")) up = 1;
+        else if (!strcmp(t, "LOWERCASE")) low = 1;
+        else return lex_fail(ctx, 0x00038060, result);
+    }
+    char w[4096];
+    snprintf(w, sizeof w, "%s", in);
+    if (uncomment) {
+        int q = 0;
+        for (char *c = w; *c; c++) {
+            if (*c == '"') q = !q;
+            else if (*c == '!' && !q) { *c = '\0'; break; }
+        }
+    }
+    if (collapse || compress) {
+        char o[4096]; size_t k = 0; int q = 0, prevblank = 0;
+        for (char *c = w; *c; c++) {
+            int blank = (*c == ' ' || *c == '\t');
+            if (*c == '"') q = !q;
+            if (!q && blank) {
+                if (collapse) continue;
+                if (prevblank) continue;
+                o[k++] = ' '; prevblank = 1; continue;
             }
+            prevblank = 0;
+            o[k++] = *c;
         }
-        str[si] = '\0';
-    } else {
-        size_t si = 0;
-        while (*p && *p != ',' && si < sizeof(str) - 1) {
-            str[si++] = *p++;
-        }
-        str[si] = '\0';
+        o[k] = '\0';
+        memcpy(w, o, k + 1);
     }
-
-    p = strchr(p, ',');
-    if (p) {
-        p++;
-        while (*p == ' ') p++;
-        strncpy(edits, p, sizeof(edits) - 1);
-        /* Remove surrounding quotes from edit list */
-        size_t elen = strlen(edits);
-        while (elen > 0 && (edits[elen - 1] == ' ' || edits[elen - 1] == '\t'))
-            edits[--elen] = '\0';
-        if (elen >= 2 && edits[0] == '"' && edits[elen - 1] == '"') {
-            edits[elen - 1] = '\0';
-            memmove(edits, edits + 1, elen - 1);
+    if (trim) {
+        char *c = w;
+        while (*c == ' ' || *c == '\t') c++;
+        memmove(w, c, strlen(c) + 1);
+        size_t l = strlen(w);
+        while (l && (w[l - 1] == ' ' || w[l - 1] == '\t')) w[--l] = '\0';
+    }
+    if (up || low) {
+        int q = 0;
+        for (char *c = w; *c; c++) {
+            if (*c == '"') { q = !q; continue; }
+            if (!q) *c = (char)(up ? toupper((unsigned char)*c) : tolower((unsigned char)*c));
         }
     }
-
-    /* Apply edits */
-    char temp[4096];
-    strncpy(temp, str, sizeof(temp) - 1);
-    temp[sizeof(temp) - 1] = '\0';
-
-    /* Uppercase the edit list for comparison */
-    char upper_edits[256];
-    size_t i;
-    for (i = 0; i < sizeof(upper_edits) - 1 && edits[i]; i++) {
-        upper_edits[i] = (char)toupper((unsigned char)edits[i]);
-    }
-    upper_edits[i] = '\0';
-
-    if (strstr(upper_edits, "UPCASE")) {
-        for (i = 0; temp[i]; i++) {
-            temp[i] = (char)toupper((unsigned char)temp[i]);
-        }
-    }
-
-    if (strstr(upper_edits, "LOWERCASE")) {
-        for (i = 0; temp[i]; i++) {
-            temp[i] = (char)tolower((unsigned char)temp[i]);
-        }
-    }
-
-    if (strstr(upper_edits, "TRIM")) {
-        /* Remove leading and trailing spaces/tabs */
-        char *s = temp;
-        while (*s == ' ' || *s == '\t') s++;
-        if (s != temp) memmove(temp, s, strlen(s) + 1);
-        size_t len = strlen(temp);
-        while (len > 0 && (temp[len - 1] == ' ' || temp[len - 1] == '\t'))
-            temp[--len] = '\0';
-    }
-
-    if (strstr(upper_edits, "COMPRESS")) {
-        /* Replace multiple spaces/tabs with single space */
-        char buf[4096];
-        size_t bi = 0;
-        int in_space = 0;
-        for (i = 0; temp[i] && bi < sizeof(buf) - 1; i++) {
-            if (temp[i] == ' ' || temp[i] == '\t') {
-                if (!in_space) { buf[bi++] = ' '; in_space = 1; }
-            } else {
-                buf[bi++] = temp[i]; in_space = 0;
-            }
-        }
-        buf[bi] = '\0';
-        strncpy(temp, buf, sizeof(temp) - 1);
-    }
-
-    if (strstr(upper_edits, "COLLAPSE")) {
-        /* Remove all spaces and tabs */
-        char buf[4096];
-        size_t bi = 0;
-        for (i = 0; temp[i] && bi < sizeof(buf) - 1; i++) {
-            if (temp[i] != ' ' && temp[i] != '\t')
-                buf[bi++] = temp[i];
-        }
-        buf[bi] = '\0';
-        strncpy(temp, buf, sizeof(temp) - 1);
-    }
-
-    if (strstr(upper_edits, "UNCOMMENT")) {
-        /* Remove everything from ! to end of string */
-        char *bang = strchr(temp, '!');
-        if (bang) *bang = '\0';
-        /* Trim trailing whitespace after removing comment */
-        size_t len = strlen(temp);
-        while (len > 0 && (temp[len - 1] == ' ' || temp[len - 1] == '\t'))
-            temp[--len] = '\0';
-    }
-
-    strncpy(result, temp, result_size - 1);
-    result[result_size - 1] = '\0';
+    lex_put(result, result_size, w, strlen(w));
     return 0;
 }
 
@@ -455,40 +351,14 @@ static int lex_edit(struct dcl_context *ctx, const char *args,
 static int lex_integer(struct dcl_context *ctx, const char *args,
                        char *result, size_t result_size)
 {
-    (void)ctx;
-    if (!args) { snprintf(result, result_size, "0"); return 0; }
-
-    char str[256];
-    strncpy(str, args, sizeof(str) - 1);
-    str[sizeof(str) - 1] = '\0';
-
-    /* Trim and unquote */
-    char *s = str;
-    while (*s == ' ') s++;
-    size_t len = strlen(s);
-    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) s[--len] = '\0';
-    int was_quoted = 0;
-    if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { s[len - 1] = '\0'; s++; was_quoted = 1; }
-
-    /* F$INTEGER takes an EXPRESSION: an unquoted argument that names a defined
-     * symbol is evaluated to that symbol's value first (VSI OpenVMS DCL
-     * Dictionary, F$INTEGER). MMK's end-of-command marker computes
-     * MMK____status = F$INTEGER($STATUS); without this it would read 0 (an even,
-     * "failed" status) and MMK would abort the build after the first command. */
-    if (!was_quoted && s[0] != '\0') {
-        const char *sv = dcl_sym_get(s);
-        if (sv) { strncpy(str, sv, sizeof(str) - 1); str[sizeof(str) - 1] = '\0'; s = str; }
-    }
-
-    /* Radix-aware: $STATUS is stored VMS-style as "%X00000001", so
-     * F$INTEGER($STATUS) must read a "%X" value (and %O/%D/%B, 0x) as an
-     * integer. Reference: VSI OpenVMS DCL Dictionary, F$INTEGER + radix
-     * qualifiers. Falls back to the previous strtol for anything else. */
-    extern long dcl_parse_int(const char *s, int *ok);
-    int iok;
-    long val = dcl_parse_int(s, &iok);
-    if (!iok) val = strtol(s, NULL, 0);
-    snprintf(result, result_size, "%ld", val);
+    /* F$INTEGER(expression): an integer stays; a string converts by the DCL
+     * rule -- an integer string (decimal, or %X/%O/%D radix: $STATUS is
+     * "%Xhhhhhhhh") gives its value, one starting T or Y gives 1, any other
+     * string 0 (observed LEX.INTEGER.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 1)) return lex_fail(ctx, 0x00038130, result);
+    snprintf(result, result_size, "%ld", lex_int(&a[0]));
     return 0;
 }
 
@@ -498,17 +368,14 @@ static int lex_integer(struct dcl_context *ctx, const char *args,
 static int lex_string(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
 {
-    (void)ctx;
-    if (!args) { result[0] = '\0'; return 0; }
-
-    char str[256];
-    strncpy(str, args, sizeof(str) - 1);
-    str[sizeof(str) - 1] = '\0';
-    char *s = str;
-    while (*s == ' ') s++;
-
-    long val = strtol(s, NULL, 0);
-    snprintf(result, result_size, "%ld", val);
+    /* F$STRING(expression): an integer as decimal text; a string as it is
+     * (observed LEX.STRING / LEX.STRING.STR). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 1)) return lex_fail(ctx, 0x00038130, result);
+    char b[32];
+    const char *v = lex_str(&a[0], b, sizeof b);
+    lex_put(result, result_size, v, strlen(v));
     return 0;
 }
 
@@ -518,31 +385,84 @@ static int lex_string(struct dcl_context *ctx, const char *args,
 static int lex_trnlnm(struct dcl_context *ctx, const char *args,
                        char *result, size_t result_size)
 {
-    (void)ctx;
+    /* F$TRNLNM(name [, table] [, index] [, mode] [, case] [, item]):
+     * $TRNLNM itself -- LNM$DCL_LOGICAL by default, the item asked for
+     * (VALUE by default; TABLE is "TRUE" when the name is itself a logical
+     * name table, ...), the null string when there is no translation
+     * (observed LEX.TRNLNM.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 6)) return lex_fail(ctx, 0x00038130, result);
+    char b0[32], b1[32], b3[32], b4[32], b5[32];
+    char name[256], table[256], mode[32], cs[32], item[32];
+    snprintf(name, sizeof name, "%s", lex_str(&a[0], b0, sizeof b0));
+    snprintf(table, sizeof table, "%s", a[1].present ? lex_str(&a[1], b1, sizeof b1) : "LNM$DCL_LOGICAL");
+    snprintf(mode, sizeof mode, "%s", lex_str(&a[3], b3, sizeof b3));
+    snprintf(cs, sizeof cs, "%s", lex_str(&a[4], b4, sizeof b4));
+    snprintf(item, sizeof item, "%s", a[5].present ? lex_str(&a[5], b5, sizeof b5) : "VALUE");
+    for (char *q = mode; *q; q++) *q = (char)toupper((unsigned char)*q);
+    for (char *q = cs; *q; q++) *q = (char)toupper((unsigned char)*q);
+    for (char *q = item; *q; q++) *q = (char)toupper((unsigned char)*q);
+    if (!table[0]) snprintf(table, sizeof table, "LNM$DCL_LOGICAL");
+    if (!item[0]) snprintf(item, sizeof item, "VALUE");
     result[0] = '\0';
-    if (!args) return 0;
 
-    char logname[256] = {0};
-    const char *p = args;
-    while (*p == ' ') p++;
-
-    /* Get logical name (possibly quoted) */
-    if (*p == '"') {
-        p++;
-        size_t si = 0;
-        while (*p && *p != '"' && si < sizeof(logname) - 1) {
-            logname[si++] = *p++;
-        }
-        logname[si] = '\0';
-    } else {
-        size_t si = 0;
-        while (*p && *p != ',' && *p != ' ' && si < sizeof(logname) - 1) {
-            logname[si++] = *p++;
-        }
-        logname[si] = '\0';
+    uint8_t acmode = 3, *acp = NULL;
+    if (mode[0]) {
+        if (!strcmp(mode, "USER")) acmode = 3;
+        else if (!strcmp(mode, "SUPERVISOR")) acmode = 2;
+        else if (!strcmp(mode, "EXECUTIVE")) acmode = 1;
+        else if (!strcmp(mode, "KERNEL")) acmode = 0;
+        else return lex_fail(ctx, 0x00038060, result);
+        acp = &acmode;
     }
+    uint32_t attr = LNM$M_CASE_BLIND;
+    if (!strcmp(cs, "CASE_SENSITIVE")) attr = 0;
+    else if (cs[0] && strcmp(cs, "CASE_BLIND")) return lex_fail(ctx, 0x00038060, result);
 
-    dcl_translate_logical(logname, result, result_size);
+    uint32_t index = a[2].present ? (uint32_t)lex_int(&a[2]) : 0;
+    char eq[256] = "", tab[64] = "";
+    uint16_t eql = 0, tabl = 0;
+    uint32_t eattr = 0, emax = 0, elen = 0;
+    uint8_t eacm = 0;
+    struct item_list_3 it[8];
+    memset(it, 0, sizeof it);
+    it[0].buflen = 4; it[0].item_code = LNM$_INDEX; it[0].bufaddr = &index;
+    it[1].buflen = (uint16_t)(sizeof eq - 1); it[1].item_code = LNM$_STRING; it[1].bufaddr = eq; it[1].retlen = &eql;
+    it[2].buflen = 4; it[2].item_code = LNM$_ATTRIBUTES; it[2].bufaddr = &eattr;
+    it[3].buflen = 4; it[3].item_code = LNM$_MAX_INDEX; it[3].bufaddr = &emax;
+    it[4].buflen = 4; it[4].item_code = LNM$_LENGTH; it[4].bufaddr = &elen;
+    it[5].buflen = 1; it[5].item_code = LNM$_ACMODE; it[5].bufaddr = &eacm;
+    it[6].buflen = (uint16_t)(sizeof tab - 1); it[6].item_code = LNM$_TABLE; it[6].bufaddr = tab; it[6].retlen = &tabl;
+    struct dsc$descriptor_s nd = { (uint16_t)strlen(name), DSC$K_DTYPE_T, DSC$K_CLASS_S, name };
+    struct dsc$descriptor_s td = { (uint16_t)strlen(table), DSC$K_DTYPE_T, DSC$K_CLASS_S, table };
+    uint32_t st = sys$trnlnm(&attr, &td, &nd, acp, it);
+    if (st == SS$_NOSUCHDEV) {
+        /* no executive (the host DCL test build): DCL's own logical-name
+         * layer answers the plain translation */
+        if (!strcmp(item, "VALUE"))
+            dcl_translate_logical(name, result, result_size);
+        return 0;
+    }
+    if (!(st & 1))
+        return 0;                                  /* no translation: "" */
+    eq[eql < sizeof eq ? eql : sizeof eq - 1] = '\0';
+    tab[tabl < sizeof tab ? tabl : sizeof tab - 1] = '\0';
+    static const char *const modes[4] = { "KERNEL", "EXECUTIVE", "SUPERVISOR", "USER" };
+#define TF(c) snprintf(result, result_size, "%s", (c) ? "TRUE" : "FALSE")
+    if (!strcmp(item, "VALUE")) lex_put(result, result_size, eq, strlen(eq));
+    else if (!strcmp(item, "TABLE")) TF(eattr & LNM$M_TABLE);
+    else if (!strcmp(item, "TABLE_NAME")) lex_put(result, result_size, tab, strlen(tab));
+    else if (!strcmp(item, "LENGTH")) snprintf(result, result_size, "%u", (unsigned)strlen(eq));
+    else if (!strcmp(item, "MAX_INDEX")) snprintf(result, result_size, "%u", emax);
+    else if (!strcmp(item, "ACCESS_MODE")) snprintf(result, result_size, "%s", modes[eacm & 3]);
+    else if (!strcmp(item, "CONCEALED")) TF(eattr & LNM$M_CONCEALED);
+    else if (!strcmp(item, "TERMINAL")) TF(eattr & LNM$M_TERMINAL);
+    else if (!strcmp(item, "CONFINE")) TF(eattr & LNM$M_CONFINE);
+    else if (!strcmp(item, "NO_ALIAS")) TF(eattr & LNM$M_NO_ALIAS);
+    else if (!strcmp(item, "CRELOG")) TF(eattr & LNM$M_CRELOG);
+    else return lex_fail(ctx, 0x00038060, result);
+#undef TF
     return 0;
 }
 
@@ -868,6 +788,12 @@ static int lex_search(struct dcl_context *ctx, const char *args,
         result[0] = '\0';
         return 0;
     }
+    /* A spec with no wildcard keeps no search context: every call answers
+     * the file again (observed on OpenVMS Alpha V8.4, F$SEARCH of
+     * SYS$SYSTEM:LOGINOUT.EXE three times running, the same file each time:
+     * docs/oracle/alpha84-fsearch-nonwild.txt). */
+    if (!dcl_rms_dir_wild(fsc->dir))
+        fsearch_slot_clear(fsc);
     return 0;
 }
 
@@ -877,111 +803,52 @@ static int lex_search(struct dcl_context *ctx, const char *args,
 static int lex_parse(struct dcl_context *ctx, const char *args,
                      char *result, size_t result_size)
 {
+    /* F$PARSE(filespec [, default-spec] [, related-spec] [, field]
+     *         [, parse-type]): RMS $PARSE itself -- the default spec fills
+     * what the filespec leaves out, the process default supplies device and
+     * directory -- and the field asked for out of the NAM block; a spec
+     * $PARSE refuses gives the null string (observed LEX.PARSE.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 5)) return lex_fail(ctx, 0x00038130, result);
+    char b0[32], b1[32], b3[32], b4[32], fld[32], ptype[32];
+    char spec[256], dflt[256];
+    snprintf(spec, sizeof spec, "%s", lex_str(&a[0], b0, sizeof b0));
+    snprintf(dflt, sizeof dflt, "%s", lex_str(&a[1], b1, sizeof b1));
+    snprintf(fld, sizeof fld, "%s", lex_str(&a[3], b3, sizeof b3));
+    snprintf(ptype, sizeof ptype, "%s", lex_str(&a[4], b4, sizeof b4));
+    for (char *q = fld; *q; q++) *q = (char)toupper((unsigned char)*q);
+    for (char *q = ptype; *q; q++) *q = (char)toupper((unsigned char)*q);
     result[0] = '\0';
-    if (!args) return 0;
 
-    /* Simple implementation: parse the first argument as a filespec */
-    char spec[512] = {0};
-    const char *p = args;
-    while (*p == ' ') p++;
-    if (*p == '"') {
-        p++;
-        size_t si = 0;
-        while (*p && *p != '"' && si < sizeof(spec) - 1)
-            spec[si++] = *p++;
-        spec[si] = '\0';
-    } else {
-        size_t si = 0;
-        while (*p && *p != ',' && si < sizeof(spec) - 1)
-            spec[si++] = *p++;
-        spec[si] = '\0';
-    }
+    struct FAB fab = cc$rms_fab;
+    struct NAM nam = cc$rms_nam;
+    char esa[256];
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$l_dna = dflt;
+    fab.fab$b_dns = (uint8_t)strlen(dflt);
+    fab.fab$l_nam = &nam;
+    nam.nam$l_esa = esa;
+    nam.nam$b_ess = (uint8_t)(sizeof esa - 1);
+    if (!strcmp(ptype, "SYNTAX_ONLY")) nam.nam$b_nop |= NAM$M_SYNCHK;
+    else if (!strcmp(ptype, "NO_CONCEAL")) nam.nam$b_nop |= NAM$M_NOCONCEAL;
+    else if (ptype[0]) return lex_fail(ctx, 0x00038060, result);
+    if (!(sys$parse(&fab, 0, 0) & 1))
+        return 0;                                  /* null string, not an error */
+    rms_search_end(&nam);
 
-    /* vms-481: F$PARSE is a SYNTACTIC VMS operation -- it fills in the device
-     * and directory defaults and returns the requested field of the resulting
-     * filespec. Build the effective VMS spec (device/dir defaulted from the
-     * process default) WITHOUT touching the file system -- no stat() on a /vms
-     * passthrough (VSI OpenVMS DCL Dictionary, F$PARSE; clean-room Rule 8). */
-    char vspec[1024];
-    dcl_rms_effective_spec(ctx, spec, vspec, sizeof(vspec));
-
-    /* Split the VMS spec "DEV:[DIR]NAME.TYP;VER" into components. */
-    char dev[64] = "SYS$DISK:", dir[512] = "", nm[256] = "", typ[128] = "";
-    {
-        const char *cur = vspec;
-        const char *lb = strchr(vspec, '[');
-        const char *colon = strchr(vspec, ':');
-        if (colon && (!lb || colon < lb)) {
-            size_t dl = (size_t)(colon - vspec) + 1;
-            if (dl < sizeof(dev)) { memcpy(dev, vspec, dl); dev[dl] = '\0'; }
-            cur = colon + 1;
-        }
-        lb = strchr(cur, '[');
-        const char *rb = lb ? strchr(lb, ']') : NULL;
-        if (lb && rb && rb > lb) {
-            size_t dl = (size_t)(rb - lb + 1);
-            if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
-            memcpy(dir, lb, dl); dir[dl] = '\0';
-            cur = rb + 1;
-        }
-        /* NAME.TYP;VER */
-        char nt[384];
-        strncpy(nt, cur, sizeof(nt) - 1); nt[sizeof(nt) - 1] = '\0';
-        char *semi = strchr(nt, ';'); if (semi) *semi = '\0';
-        char *dot = strrchr(nt, '.');
-        if (dot) {
-            size_t nl = (size_t)(dot - nt);
-            if (nl >= sizeof(nm)) nl = sizeof(nm) - 1;
-            memcpy(nm, nt, nl); nm[nl] = '\0';
-            strncpy(typ, dot, sizeof(typ) - 1); typ[sizeof(typ) - 1] = '\0';
-        } else {
-            strncpy(nm, nt, sizeof(nm) - 1); nm[sizeof(nm) - 1] = '\0';
-        }
-        for (size_t i = 0; nm[i]; i++)  nm[i]  = (char)toupper((unsigned char)nm[i]);
-        for (size_t i = 0; typ[i]; i++) typ[i] = (char)toupper((unsigned char)typ[i]);
-    }
-
-    /* Check for the 4th (field) argument. */
-    int comma_count = 0;
-    p = args;
-    while (*p) {
-        if (*p == ',') { comma_count++; if (comma_count == 3) { p++; break; } }
-        p++;
-    }
-
-    if (comma_count >= 3) {
-        while (*p == ' ') p++;
-        char field[64];
-        strncpy(field, p, sizeof(field) - 1);
-        field[sizeof(field) - 1] = '\0';
-        size_t flen = strlen(field);
-        while (flen > 0 && (field[flen - 1] == ' ' || field[flen - 1] == '\t'))
-            field[--flen] = '\0';
-        if (flen >= 2 && field[0] == '"' && field[flen - 1] == '"') {
-            field[flen - 1] = '\0';
-            memmove(field, field + 1, flen - 1);
-        }
-        for (size_t i = 0; field[i]; i++)
-            field[i] = (char)toupper((unsigned char)field[i]);
-
-        if (strcmp(field, "NAME") == 0)
-            strncpy(result, nm, result_size - 1);
-        else if (strcmp(field, "TYPE") == 0)
-            strncpy(result, typ, result_size - 1);
-        else if (strcmp(field, "DIRECTORY") == 0)
-            strncpy(result, dir, result_size - 1);
-        else if (strcmp(field, "DEVICE") == 0)
-            strncpy(result, dev, result_size - 1);
-        else if (strcmp(field, "NODE") == 0)
-            result[0] = '\0';
-        else
-            strncpy(result, vspec, result_size - 1);
-    } else {
-        /* No field specified - return the full expanded filespec. */
-        strncpy(result, vspec, result_size - 1);
-    }
-
-    result[result_size - 1] = '\0';
+    const char *ptr = esa; size_t len = nam.nam$b_esl;
+    if (!fld[0]) { /* the whole expanded string */ }
+    else if (!strcmp(fld, "NODE"))      { ptr = nam.nam$l_node; len = nam.nam$b_node; }
+    else if (!strcmp(fld, "DEVICE"))    { ptr = nam.nam$l_dev;  len = nam.nam$b_dev; }
+    else if (!strcmp(fld, "DIRECTORY")) { ptr = nam.nam$l_dir;  len = nam.nam$b_dir; }
+    else if (!strcmp(fld, "NAME"))      { ptr = nam.nam$l_name; len = nam.nam$b_name; }
+    else if (!strcmp(fld, "TYPE"))      { ptr = nam.nam$l_type; len = nam.nam$b_type; }
+    else if (!strcmp(fld, "VERSION"))   { ptr = nam.nam$l_ver;  len = nam.nam$b_ver; }
+    else return lex_fail(ctx, 0x00038060, result);
+    if (!ptr) len = 0;
+    lex_put(result, result_size, ptr ? ptr : "", len);
     return 0;
 }
 
@@ -1157,20 +1024,26 @@ static int lex_type(struct dcl_context *ctx, const char *args,
     while (*s == ' ') s++;
     size_t len = strlen(s);
     while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) s[--len] = '\0';
-    if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { s[len - 1] = '\0'; s++; }
-
+    /* F$TYPE names a symbol: a quoted literal or a number is not one
+     * (observed LEX.TYPE.NUMSTR -> ARGREQ, LEX.TYPE.INT -> IVSYMB). */
+    if (s[0] == '"') { if (ctx) ctx->last_status = 0x00038268; return -1; }
+    if (!(isalpha((unsigned char)s[0]) || s[0] == '_' || s[0] == '$')) {
+        if (ctx) ctx->last_status = 0x00038080;
+        return -1;
+    }
     const char *val = dcl_sym_get(s);
     if (!val) {
         result[0] = '\0'; /* Undefined */
     } else {
-        /* Try to determine type */
-        char *endp;
-        strtol(val, &endp, 0);
-        if (*endp == '\0' || *endp == ' ') {
-            strncpy(result, "INTEGER", result_size - 1);
-        } else {
-            strncpy(result, "STRING", result_size - 1);
-        }
+        /* INTEGER for an integer symbol or a string that IS a decimal integer
+         * ("-12"); STRING otherwise -- including "" and text that merely
+         * starts with blanks (observed LEX.STRING / LEX.ELEMENT.2 /
+         * LEX.EDIT.UPCASE). */
+        const char *q = val;
+        if (*q == '-' || *q == '+') q++;
+        int digits = 0;
+        while (isdigit((unsigned char)*q)) { q++; digits++; }
+        strncpy(result, (digits && *q == '\0') ? "INTEGER" : "STRING", result_size - 1);
     }
     result[result_size - 1] = '\0';
     return 0;
@@ -1209,144 +1082,169 @@ static int parse_vms_time(const char *ts, struct tm *tm_out, int *cs_out)
  * Supported formats: ABSOLUTE (DD-MON-YYYY HH:MM:SS.CC), COMPARISON (sortable).
  * Fields: DATE, TIME, DATETIME, WEEKDAY, MONTH, DAY, HOUR, MINUTE, SECOND.
  */
+static const char *const cvt_mon[12] = { "JAN","FEB","MAR","APR","MAY","JUN",
+                                         "JUL","AUG","SEP","OCT","NOV","DEC" };
+
+/* "d-hh:mm:ss.cc" / "hh:mm:ss.cc" (any trailing part omitted) -> centiseconds. */
+static int cvt_parse_delta(const char *t, int64_t *cs)
+{
+    long d = 0, h = 0, m = 0, sec = 0, c = 0;
+    const char *p = t;
+    char *e;
+    const char *dash = strchr(p, '-');
+    if (dash) {
+        d = strtol(p, &e, 10);
+        if (e != dash) return 0;
+        p = dash + 1;
+    }
+    if (*p) {
+        h = strtol(p, &e, 10); if (e == p && *p != ':') return 0; p = e;
+        if (*p == ':') { p++; m = strtol(p, &e, 10); p = e; }
+        if (*p == ':') { p++; sec = strtol(p, &e, 10); p = e; }
+        if (*p == '.') { p++; c = strtol(p, &e, 10); if (e - p == 1) c *= 10; p = e; }
+        if (*p) return 0;
+    }
+    if (h > 23 || m > 59 || sec > 59 || c > 99 || d < 0) return 0;
+    *cs = ((((int64_t)d * 24 + h) * 60 + m) * 60 + sec) * 100 + c;
+    return 1;
+}
+
+/* An absolute time "dd-mmm-yyyy[ |:]hh:mm:ss.cc", any part omitted taking
+ * today's / midnight's value, or TODAY / TOMORROW / YESTERDAY, optionally
+ * followed by "+delta" or "-delta" (a combination time) -> centiseconds since
+ * 1970 on the wall clock. 0 when it is not a valid time (CLI-W-IVATIME). */
+static int cvt_parse_abs(const char *in, int64_t *out)
+{
+    time_t now = time(NULL);
+    struct tm lt;
+    localtime_r(&now, &lt);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    char buf[128];
+    snprintf(buf, sizeof buf, "%s", in);
+    for (char *q = buf; *q; q++) *q = (char)toupper((unsigned char)*q);
+    char *t = buf;
+    while (*t == ' ') t++;
+    size_t tl = strlen(t);
+    while (tl && t[tl - 1] == ' ') t[--tl] = '\0';
+
+    /* split off a combination delta: the first '+', or a '-' after the time */
+    int64_t delta = 0; int dsign = 0;
+    char *plus = strchr(t, '+');
+    if (plus) { *plus = '\0'; if (!cvt_parse_delta(plus + 1, &delta)) return 0; dsign = 1; }
+
+    int day = lt.tm_mday, mon = lt.tm_mon, year = lt.tm_year + 1900;
+    int hh = lt.tm_hour, mm = lt.tm_min, ss = lt.tm_sec, cc = (int)(ts.tv_nsec / 10000000);
+    int time_given = 0;
+    if (!strcmp(t, "") ) {
+        /* the current time */
+    } else if (!strcmp(t, "TODAY") || !strcmp(t, "TOMORROW") || !strcmp(t, "YESTERDAY")) {
+        hh = mm = ss = cc = 0;
+        if (t[0] == 'T' && t[2] == 'M') delta += 8640000, dsign = dsign ? dsign : 1;
+        if (t[0] == 'Y') { delta = -8640000 + (dsign ? delta : 0); dsign = 1; }
+    } else {
+        char *sep = NULL;
+        char *dpart = t, *tpart = NULL;
+        /* a date part has a '-' before any ':' */
+        char *dash = strchr(t, '-'), *colon = strchr(t, ':');
+        if (dash && (!colon || dash < colon)) {
+            sep = strpbrk(t, " ");
+            if (!sep) {                       /* dd-mmm-yyyy:hh:mm... */
+                char *c2 = colon;
+                if (c2) { *c2 = '\0'; tpart = c2 + 1; }
+            } else { *sep = '\0'; tpart = sep + 1; }
+            /* dd-mmm-yyyy, each part optional */
+            char *f1 = dpart, *f2 = strchr(f1, '-'), *f3 = NULL;
+            if (f2) { *f2++ = '\0'; f3 = strchr(f2, '-'); if (f3) *f3++ = '\0'; }
+            if (*f1) { char *e; day = (int)strtol(f1, &e, 10); if (*e) return 0; }
+            if (f2 && *f2) {
+                int found = -1;
+                for (int i = 0; i < 12; i++) if (!strcmp(f2, cvt_mon[i])) found = i;
+                if (found < 0) return 0;
+                mon = found;
+            }
+            if (f3 && *f3) { char *e; year = (int)strtol(f3, &e, 10); if (*e) return 0; }
+        } else {
+            tpart = t;
+        }
+        if (tpart) {
+            while (*tpart == ' ') tpart++;
+            if (*tpart) {
+                time_given = 1;
+                int64_t c;
+                if (!cvt_parse_delta(tpart, &c)) return 0;
+                hh = (int)(c / 360000); mm = (int)(c / 6000 % 60);
+                ss = (int)(c / 100 % 60); cc = (int)(c % 100);
+            }
+        }
+        if (!time_given && dash) { hh = mm = ss = cc = 0; }
+        static const int mdays[12] = {31,29,31,30,31,30,31,31,30,31,30,31};
+        if (year < 1858 || year > 9999 || day < 1 || day > mdays[mon]) return 0;
+        if (mon == 1 && day == 29 && !((year % 4 == 0 && year % 100) || year % 400 == 0)) return 0;
+    }
+    struct tm tm = {0};
+    tm.tm_year = year - 1900; tm.tm_mon = mon; tm.tm_mday = day;
+    tm.tm_hour = hh; tm.tm_min = mm; tm.tm_sec = ss;
+    int64_t v = (int64_t)timegm(&tm) * 100 + cc;
+    if (dsign) v += delta;
+    *out = v;
+    return 1;
+}
+
 static int lex_cvtime(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
 {
-    (void)ctx;
-    result[0] = '\0';
+    /* F$CVTIME([input-time] [, output-format] [, field]): output format
+     * COMPARISON by default ("2026-10-07 13:45:56.78"), or ABSOLUTE
+     * ("7-OCT-2026 13:45:56.78"); a combination input "time+delta" adds the
+     * delta; a time that is not a time is CLI-W-IVATIME (observed
+     * LEX.CVTIME.*). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 3)) return lex_fail(ctx, 0x00038130, result);
+    char b0[32], b1[32], b2[32], fmt[32], fld[32];
+    const char *in = lex_str(&a[0], b0, sizeof b0);
+    snprintf(fmt, sizeof fmt, "%s", a[1].present ? lex_str(&a[1], b1, sizeof b1) : "COMPARISON");
+    snprintf(fld, sizeof fld, "%s", a[2].present ? lex_str(&a[2], b2, sizeof b2) : "DATETIME");
+    for (char *q = fmt; *q; q++) *q = (char)toupper((unsigned char)*q);
+    for (char *q = fld; *q; q++) *q = (char)toupper((unsigned char)*q);
+    if (!fmt[0]) snprintf(fmt, sizeof fmt, "COMPARISON");
+    if (!fld[0]) snprintf(fld, sizeof fld, "DATETIME");
+    int abs = !strcmp(fmt, "ABSOLUTE");
+    if (!abs && strcmp(fmt, "COMPARISON")) return lex_fail(ctx, 0x00038060, result);
 
-    /* Parse up to 3 comma-separated args: input_time, output_format, field */
-    char a_time[64]   = "";
-    char a_format[32] = "ABSOLUTE";
-    char a_field[32]  = "";
-
-    if (args && *args) {
-        char buf[256];
-        strncpy(buf, args, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-
-        /* arg 0 */
-        char *p = buf;
-        char *comma = strchr(p, ',');
-        if (comma) *comma = '\0';
-        /* trim + unquote */
-        while (*p == ' ') p++;
-        size_t l = strlen(p);
-        while (l > 0 && (p[l-1] == ' ' || p[l-1] == '\t')) p[--l] = '\0';
-        if (l >= 2 && p[0] == '"' && p[l-1] == '"') { p[l-1] = '\0'; p++; l -= 2; }
-        strncpy(a_time, p, sizeof(a_time) - 1);
-
-        if (comma) {
-            p = comma + 1;
-            comma = strchr(p, ',');
-            if (comma) *comma = '\0';
-            while (*p == ' ') p++;
-            l = strlen(p);
-            while (l > 0 && (p[l-1] == ' ' || p[l-1] == '\t')) p[--l] = '\0';
-            if (l >= 2 && p[0] == '"' && p[l-1] == '"') { p[l-1] = '\0'; p++; l -= 2; }
-            if (*p) {
-                for (size_t i = 0; p[i] && i < sizeof(a_format)-1; i++)
-                    a_format[i] = (char)toupper((unsigned char)p[i]);
-                a_format[l] = '\0';
-            }
-
-            if (comma) {
-                p = comma + 1;
-                while (*p == ' ') p++;
-                l = strlen(p);
-                while (l > 0 && (p[l-1] == ' ' || p[l-1] == '\t')) p[--l] = '\0';
-                if (l >= 2 && p[0] == '"' && p[l-1] == '"') { p[l-1] = '\0'; p++; l -= 2; }
-                for (size_t i = 0; p[i] && i < sizeof(a_field)-1; i++)
-                    a_field[i] = (char)toupper((unsigned char)p[i]);
-                a_field[l] = '\0';
-            }
-        }
-    }
-
-    /* Get the time value */
+    int64_t v;
+    if (!cvt_parse_abs(in, &v)) return lex_fail(ctx, 0x00038290, result);
+    time_t secs = (time_t)(v / 100);
+    int cc = (int)(v % 100);
     struct tm tm;
-    int centisec = 0;
+    gmtime_r(&secs, &tm);
+    static const char *const wd[7] = { "Sunday","Monday","Tuesday","Wednesday",
+                                       "Thursday","Friday","Saturday" };
+    char date[32], tod[32];
+    if (abs) snprintf(date, sizeof date, "%d-%s-%04d", tm.tm_mday, cvt_mon[tm.tm_mon], tm.tm_year + 1900);
+    else     snprintf(date, sizeof date, "%04d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    snprintf(tod, sizeof tod, "%02d:%02d:%02d.%02d", tm.tm_hour, tm.tm_min, tm.tm_sec, cc);
 
-    if (a_time[0]) {
-        if (!parse_vms_time(a_time, &tm, &centisec)) {
-            /* Fall back to current time */
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            localtime_r(&ts.tv_sec, &tm);
-            centisec = (int)(ts.tv_nsec / 10000000);
-        }
-    } else {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        localtime_r(&ts.tv_sec, &tm);
-        centisec = (int)(ts.tv_nsec / 10000000);
+    if (!strcmp(fld, "DATETIME")) snprintf(result, result_size, "%s %s", date, tod);
+    else if (!strcmp(fld, "DATE")) snprintf(result, result_size, "%s", date);
+    else if (!strcmp(fld, "TIME")) snprintf(result, result_size, "%s", tod);
+    else if (!strcmp(fld, "YEAR")) snprintf(result, result_size, "%04d", tm.tm_year + 1900);
+    else if (!strcmp(fld, "MONTH")) {
+        if (abs) snprintf(result, result_size, "%s", cvt_mon[tm.tm_mon]);
+        else snprintf(result, result_size, "%02d", tm.tm_mon + 1);
     }
-
-    /* Build the full formatted strings for both formats */
-    static const char *weekday_names[] = {
-        "Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"
-    };
-
-    if (strcmp(a_format, "COMPARISON") == 0) {
-        /* Sortable: YYYY-MM-DD HH:MM:SS.CC */
-        if (!a_field[0] || strcmp(a_field, "DATETIME") == 0) {
-            snprintf(result, result_size, "%04d-%02d-%02d %02d:%02d:%02d.%02d",
-                     1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
-                     tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
-        } else if (strcmp(a_field, "DATE") == 0) {
-            snprintf(result, result_size, "%04d-%02d-%02d",
-                     1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday);
-        } else if (strcmp(a_field, "TIME") == 0) {
-            snprintf(result, result_size, "%02d:%02d:%02d.%02d",
-                     tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
-        } else if (strcmp(a_field, "WEEKDAY") == 0) {
-            snprintf(result, result_size, "%s", weekday_names[tm.tm_wday]);
-        } else if (strcmp(a_field, "MONTH") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_mon + 1);
-        } else if (strcmp(a_field, "DAY") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_mday);
-        } else if (strcmp(a_field, "HOUR") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_hour);
-        } else if (strcmp(a_field, "MINUTE") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_min);
-        } else if (strcmp(a_field, "SECOND") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_sec);
-        } else {
-            snprintf(result, result_size, "%04d-%02d-%02d %02d:%02d:%02d.%02d",
-                     1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
-                     tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
-        }
-    } else {
-        /* ABSOLUTE format: DD-MON-YYYY HH:MM:SS.CC */
-        if (!a_field[0] || strcmp(a_field, "DATETIME") == 0) {
-            snprintf(result, result_size, "%2d-%s-%04d %02d:%02d:%02d.%02d",
-                     tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-                     tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
-        } else if (strcmp(a_field, "DATE") == 0) {
-            snprintf(result, result_size, "%2d-%s-%04d",
-                     tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year);
-        } else if (strcmp(a_field, "TIME") == 0) {
-            snprintf(result, result_size, "%02d:%02d:%02d.%02d",
-                     tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
-        } else if (strcmp(a_field, "WEEKDAY") == 0) {
-            snprintf(result, result_size, "%s", weekday_names[tm.tm_wday]);
-        } else if (strcmp(a_field, "MONTH") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_mon + 1);
-        } else if (strcmp(a_field, "DAY") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_mday);
-        } else if (strcmp(a_field, "HOUR") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_hour);
-        } else if (strcmp(a_field, "MINUTE") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_min);
-        } else if (strcmp(a_field, "SECOND") == 0) {
-            snprintf(result, result_size, "%d", tm.tm_sec);
-        } else {
-            snprintf(result, result_size, "%2d-%s-%04d %02d:%02d:%02d.%02d",
-                     tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-                     tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
-        }
-    }
-
+    else if (!strcmp(fld, "DAY")) snprintf(result, result_size, abs ? "%d" : "%02d", tm.tm_mday);
+    else if (!strcmp(fld, "HOUR")) snprintf(result, result_size, "%02d", tm.tm_hour);
+    else if (!strcmp(fld, "MINUTE")) snprintf(result, result_size, "%02d", tm.tm_min);
+    else if (!strcmp(fld, "SECOND")) snprintf(result, result_size, "%02d", tm.tm_sec);
+    else if (!strcmp(fld, "HUNDREDTH")) snprintf(result, result_size, "%02d", cc);
+    else if (!strcmp(fld, "WEEKDAY")) snprintf(result, result_size, "%s", wd[tm.tm_wday]);
+    else if (!strcmp(fld, "DAYOFYEAR")) snprintf(result, result_size, "%d", tm.tm_yday + 1);
+    else if (!strcmp(fld, "HOUROFYEAR")) snprintf(result, result_size, "%d", tm.tm_yday * 24 + tm.tm_hour);
+    else if (!strcmp(fld, "MINUTEOFYEAR")) snprintf(result, result_size, "%d", (tm.tm_yday * 24 + tm.tm_hour) * 60 + tm.tm_min);
+    else if (!strcmp(fld, "SECONDOFYEAR")) snprintf(result, result_size, "%d", ((tm.tm_yday * 24 + tm.tm_hour) * 60 + tm.tm_min) * 60 + tm.tm_sec);
+    else return lex_fail(ctx, 0x00038060, result);
     return 0;
 }
 
@@ -1545,7 +1443,13 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
     }
 
     if (strcmp(s, "USERNAME") == 0) {
-        strncpy(result, info.username, result_size - 1);
+        /* the 12-character, blank-filled SYSUAF name (observed
+         * LEX.GETJPI.USERNAME "SYSTEM      "; rd vms-bd30) -- an unnamed
+         * row stays the null string */
+        if (info.username[0])
+            snprintf(result, result_size, "%-12.12s", info.username);
+        else
+            result[0] = '\0';
     } else if (strcmp(s, "PRCNAM") == 0) {
         strncpy(result, info.prcnam, result_size - 1);
     } else if (strcmp(s, "PID") == 0) {
@@ -1729,7 +1633,11 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
             }
         }
     } else {
-        strncpy(result, "0", result_size - 1);
+        /* an item F$GETJPI does not know: CLI-W-IVKEYW, no value
+         * (observed LEX.GETJPI.BADITEM) */
+        result[0] = '\0';
+        if (ctx) ctx->last_status = 0x00038060;
+        return -1;
     }
 
     result[result_size - 1] = '\0';
@@ -1745,181 +1653,34 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
 static int lex_message(struct dcl_context *ctx, const char *args,
                        char *result, size_t result_size)
 {
-    (void)ctx;
-    result[0] = '\0';
-    if (!args) return 0;
-
-    char str[64];
-    strncpy(str, args, sizeof(str) - 1);
-    str[sizeof(str) - 1] = '\0';
-    char *s = str;
-    while (*s == ' ') s++;
-    /* Trim trailing */
-    size_t sl = strlen(s);
-    while (sl > 0 && (s[sl-1] == ' ' || s[sl-1] == '\t')) s[--sl] = '\0';
-    if (sl >= 2 && s[0] == '"' && s[sl-1] == '"') { s[sl-1] = '\0'; s++; }
-
-    unsigned long code = strtoul(s, NULL, 0);
-
-    /*
-     * This table is keyed by NUMBER, so it does not follow a corrected
-     * constant the way a consumer that names the symbol does. Bind the
-     * corrected rows to the values the product actually returns, so a
-     * future change breaks the build instead of leaving F$MESSAGE unable
-     * to name a status OVMX hands out (vms-9fc: SS$_ILLIOFUNC moved
-     * 580 -> 244 and this table was left behind, still rendering
-     * "illegal I/O function" for what the oracle calls VASFULL).
-     */
-    _Static_assert(SS$_ILLIOFUNC == 244,
-                   "F$MESSAGE's ILLIOFUNC row must carry the SS$_ILLIOFUNC "
-                   "value sys$qio returns");
-    _Static_assert(SS$_INSFMEM == 292,
-                   "F$MESSAGE's INSFMEM row must carry SS$_INSFMEM");
-
-    /* Inline lookup table for common SS$ condition codes */
-    static const struct {
-        unsigned long code;
-        const char *facility;
-        char sev;          /* S W E I F */
-        const char *ident;
-        const char *text;
-    } msg_table[] = {
-        { 1,     "SYSTEM", 'S', "NORMAL",       "normal successful completion" },
-        { 1537,     "SYSTEM", 'S', "BUFFEROVF",    "output buffer overflow" },
-        { 8,     "SYSTEM", 'E', "ERROR",         "error" },
-        { 9,     "SYSTEM", 'S', "WASSET",        "previous state was set" },
-        { 12,    "SYSTEM", 'E', "ACCVIO",        "access violation" },
-        { 20,    "SYSTEM", 'E', "BADPARAM",      "bad parameter value" },
-        { 28,    "SYSTEM", 'E', "EXQUOTA",       "exceeded quota" },
-        /* ORACLE-PINNED (vms-6a7): docs/oracle/vax73-privileges.md §1.
-         * F$MESSAGE(36) on VAX1 (OpenVMS VAX V7.3) renders
-         * "%SYSTEM-F-NOPRIV, insufficient privilege or object protection
-         * violation". BOTH fields here were wrong: the severity was 'E'
-         * where 36 & 7 == 4 == F, and the text was an OVMX sentence VMS
-         * has never printed. F$MESSAGE is the DCL surface that is
-         * supposed to round-trip the oracle exactly. */
-        { 36,    "SYSTEM", 'F', "NOPRIV",
-          "insufficient privilege or object protection violation" },
-        { 44,    "SYSTEM", 'E', "ABORT",         "abort" },
-        /* ORACLE-PINNED (vms-8019): value and severity taken from the
-         * reference lab OpenVMS VAX V7.3 node VAX1 -- $SSDEF in
-         * SYS$LIBRARY:STARLET.MLB gives SS$_DUPLNAM 148, and
-         * F$MESSAGE(148) renders "%SYSTEM-F-DUPLNAM, duplicate name".
-         * Replaces 434/'E', which the same oracle disproves. */
-        { 148,   "SYSTEM", 'F', "DUPLNAM",       "duplicate name" },
-        /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_ILLIOFUNC 244;
-         * F$MESSAGE(244) -> "%SYSTEM-F-ILLIOFUNC, illegal I/O function
-         * code". This row did not exist: the table carried ILLIOFUNC at
-         * 580, which the same oracle run shows is SS$_VASFULL, so
-         * F$MESSAGE could not name the status sys$qio actually returns
-         * for an unimplemented function code. */
-        { 244,   "SYSTEM", 'F', "ILLIOFUNC",     "illegal I/O function code" },
-        /* ORACLE-PINNED (vms-68c), docs/oracle/vax73-event-flags.md:
-         *   $EQU SS$_ILLEFC 236; F$MESSAGE(236) ->
-         *     "%SYSTEM-F-ILLEFC, illegal event flag cluster"
-         *   $EQU SS$_UNASEFC 564; F$MESSAGE(564) ->
-         *     "%SYSTEM-F-UNASEFC, unassociated event flag cluster"
-         * Neither row existed. Both statuses became reachable through the
-         * public API when sys$setef/$clref/$readef/$ascefc were wired to
-         * the executive (vms-2a8), and a status DCL's F$MESSAGE cannot name
-         * is a half-applied correction -- the ILLIOFUNC lesson above.
-         * There is deliberately NO row for SS$_WASCLR: it is 1 on VMS, the
-         * same value as SS$_NORMAL, which is already the first row. */
-        { 236,   "SYSTEM", 'F', "ILLEFC",        "illegal event flag cluster" },
-        { 564,   "SYSTEM", 'F', "UNASEFC",       "unassociated event flag cluster" },
-        /* ORACLE-PINNED (vms-2a8), docs/oracle/vax73-event-flags.md §1
-         * method 2: F$MESSAGE(292) -> "%SYSTEM-F-INSFMEM, insufficient
-         * dynamic memory". The severity here was 'E'; it is 'F'. The
-         * value itself was never in doubt -- the severity field of the
-         * status says so independently (292 & 7 == 4 == STS$K_SEVERE) --
-         * so OVMX was rendering a status whose own bits contradict the
-         * letter it printed. Same run that pinned ILLEFC/UNASEFC below. */
-        { 292,   "SYSTEM", 'F', "INSFMEM",       "insufficient dynamic memory" },
-        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_IVLOGNAM 340;
-         * F$MESSAGE(340) -> "%SYSTEM-F-IVLOGNAM, invalid logical name".
-         * Replaces 596/'E' -- 596 is SS$_VOLINV on the oracle. */
-        { 340,   "SYSTEM", 'F', "IVLOGNAM",      "invalid logical name" },
-        { 388,   "SYSTEM", 'E', "IVTIME",        "invalid time" },
-        { 444,   "SYSTEM", 'W', "NOLOGNAM",      "no logical name match" },
-        /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1.
-         * MEASURED on OpenVMS VAX V7.3 node VAX1, 2026-07-30:
-         *   F$MESSAGE(532)  -> %SYSTEM-F-RESULTOVF, resultant string overflow
-         *   F$MESSAGE(1664) -> %SYSTEM-W-NOTALLPRIV, not all requested
-         *                      privileges authorized
-         * 532 was mapped to NOTALLPRIV here (and in ssdef.h), so OVMX's
-         * F$MESSAGE answered a different condition than VMS's for both
-         * codes. Note the text too: "authorized", not "available". */
-        { 532,   "SYSTEM", 'F', "RESULTOVF",     "resultant string overflow" },
-        { 8740,   "SYSTEM", 'F', "IVIDENT",       "invalid identifier format" },
-        { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
-        /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_VASFULL 580;
-         * F$MESSAGE(580) -> "%SYSTEM-F-VASFULL, virtual address space is
-         * full". This slot used to be mislabelled ILLIOFUNC/'E', which
-         * meant F$MESSAGE(580) rendered "illegal I/O function" for a
-         * status that means address-space exhaustion. */
-        { 580,   "SYSTEM", 'F', "VASFULL",       "virtual address space is full" },
-        { 2560,   "SYSTEM", 'W', "NOMORENODE",    "no more nodes" },
-        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_VOLINV 596;
-         * F$MESSAGE(596) -> "%SYSTEM-F-VOLINV, volume is not software
-         * enabled". This slot used to be mislabelled IVLOGNAM. */
-        { 596,   "SYSTEM", 'F', "VOLINV",        "volume is not software enabled" },
-        { 316,   "SYSTEM", 'F', "IVCHAN",        "invalid I/O channel" },
-        { 324,   "SYSTEM", 'F', "IVDEVNAM",      "invalid device name" },
-        { 372,   "SYSTEM", 'F', "IVSSRQ",        "invalid system service request" },
-        { 1116,   "SYSTEM", 'F', "SSFAIL",        "system service failure exception" },
-        { 676,   "SYSTEM", 'F', "BUGCHECK",      "internal consistency failure" },
-        { 3594,   "SYSTEM", 'E', "DEADLOCK",      "deadlock detected" },
-        { 2544,   "SYSTEM", 'W', "VALNOTVALID",   "value block is not valid" },
-        { 8500,   "SYSTEM", 'F', "PARNOTGRANT",   "parent lock must be granted" },
-        { 1561,   "SYSTEM", 'S', "CREATED",       "file or section did not exist; has been created" },
-        { 1585,   "SYSTEM", 'S', "SUPERSEDE",     "logical name superseded" },
-        /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1 --
-         * the correct home for NOTALLPRIV, measured on VAX1 2026-07-30. */
-        { 1664,  "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges authorized" },
-        /* vms-f811: the symbol's real value is 1665 (severity S, V7.3 $SSDEF); both
-         * ids print on the lab because F$MESSAGE keys on the message id. */
-        { 1665,  "SYSTEM", 'S', "NOTALLPRIV",    "not all requested privileges authorized" },
-        { 2096,  "SYSTEM", 'W', "CANCEL",        "I/O operation canceled" },
-        { 2160,  "SYSTEM", 'W', "ENDOFFILE",     "end of file" },
-        { 2336,  "SYSTEM", 'W', "UNWIND",        "unwind currently in progress" },
-        { 10244,  "SYSTEM", 'F', "NOCMKRNL",      "operation requires CMKRNL privilege" },
-        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_NONEXPR 2280;
-         * F$MESSAGE(2280) -> "%SYSTEM-W-NONEXPR, nonexistent process".
-         * Replaces 2540/'E' -- F$MESSAGE(2540) on the oracle is
-         * "%SYSTEM-F-RIGHTSFULL, rights list is full". */
-        { 2280,  "SYSTEM", 'W', "NONEXPR",       "nonexistent process" },
-        { 2328,  "SYSTEM", 'W', "RESIGNAL",      "resignal condition" },
-        { 724,  "SYSTEM", 'F', "OPINCOMPL",     "operation is incomplete" },
-        { 932,  "SYSTEM", 'F', "SUSPENDED",     "process is suspended" },
-        { 2488,  "SYSTEM", 'W', "NOTQUEUED",     "request not queued" },
-        { 1689,  "SYSTEM", 'S', "INCOMPAT",      "feature incompatible with previous system version" },
-        { 2312,  "SYSTEM", 'W', "NOSUCHDEV",     "no such device available" },
-        { 124,  "SYSTEM", 'F', "DEVNOTMOUNT",   "device is not mounted" },
-        { 2320,  "SYSTEM", 'W', "NOSUCHFILE",    "no such file" },
-        { 1577,  "SYSTEM", 'S', "NOTRAN",        "no string translation performed" },
-        { 8404,  "SYSTEM", 'F', "DEVINACT",      "device inactive" },
-        { 8508,  "SYSTEM", 'F', "CVTUNGRANT",    "cannot convert an ungranted lock" },
-        { 924,  "SYSTEM", 'F', "NOSLOT",        "no PCB available" },
-        { 164,  "SYSTEM", 'F', "FILALRACC",     "file already accessed on channel" },
-        { 10820,  "SYSTEM", 'F', "EXENQLM",       "exceeded enqueue quota" },
-        { 10756,  "SYSTEM", 'F', "EXASTLM",       "exceeded AST quota" },
-        { 10772,  "SYSTEM", 'F', "EXBYTLM",       "exceeded byte count quota" },
-        { 2640, "SYSTEM", 'W', "ITEMNOTFOUND",  "requested item cannot be returned" },
-        { 0, NULL, 0, NULL, NULL }
-    };
-
-    for (int i = 0; msg_table[i].facility; i++) {
-        if (msg_table[i].code == code) {
-            snprintf(result, result_size, "%%%s-%c-%s, %s",
-                     msg_table[i].facility, msg_table[i].sev,
-                     msg_table[i].ident, msg_table[i].text);
-            return 0;
-        }
+    /* F$MESSAGE(code [, component...]): the message $GETMSG holds for the
+     * code -- facility, severity, identification and text by default, or the
+     * components named ("FACILITY", "SEVERITY", "IDENT", "TEXT"), FAO
+     * directives left in place (observed LEX.MESSAGE.*: the OpenVMS message
+     * catalog OVMX's $GETMSG carries, docs/oracle/messages/). */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 5)) return lex_fail(ctx, 0x00038130, result);
+    uint32_t code = (uint32_t)lex_int(&a[0]);
+    uint32_t flags = 0;
+    for (int i = 1; i < n; i++) {
+        char b[32], kw[32];
+        snprintf(kw, sizeof kw, "%s", lex_str(&a[i], b, sizeof b));
+        for (char *q = kw; *q; q++) *q = (char)toupper((unsigned char)*q);
+        if (!strcmp(kw, "TEXT")) flags |= 1;
+        else if (!strcmp(kw, "IDENT")) flags |= 2;
+        else if (!strcmp(kw, "SEVERITY")) flags |= 4;
+        else if (!strcmp(kw, "FACILITY")) flags |= 8;
+        else if (kw[0]) return lex_fail(ctx, 0x00038060, result);
     }
-
-    /* Unknown code */
-    snprintf(result, result_size, "%%SYSTEM-?-UNKNOWN, message code %%X%08lX", code);
-    result[result_size - 1] = '\0';
+    if (!flags) flags = 0xF;
+    char out[512];
+    struct dsc$descriptor_s od = { (uint16_t)(sizeof out - 1), DSC$K_DTYPE_T, DSC$K_CLASS_S, out };
+    uint16_t ol = 0;
+    uint32_t st = sys$getmsg(code, &ol, &od, flags, NULL);
+    if (!(st & 1) && st != SS$_MSGNOTFND)
+        return lex_fail(ctx, st, result);
+    lex_put(result, result_size, out, ol);
     return 0;
 }
 
@@ -1987,135 +1748,38 @@ static int fao_next_arg(const char **pp, char *out_buf, size_t out_size)
 static int lex_fao(struct dcl_context *ctx, const char *args,
                    char *result, size_t result_size)
 {
-    (void)ctx;
-    result[0] = '\0';
-    if (!args) return 0;
-
-    /* Extract control string (first arg) */
-    char ctrl[1024] = {0};
-    const char *p = args;
-
-    /* Skip leading whitespace */
-    while (*p == ' ' || *p == '\t') p++;
-
-    /* Get control string (quoted or unquoted) */
-    if (*p == '"') {
-        p++;
-        size_t ci = 0;
-        while (*p && ci < sizeof(ctrl) - 1) {
-            if (*p == '"') {
-                if (*(p+1) == '"') { ctrl[ci++] = '"'; p += 2; continue; }
-                p++; break;
-            }
-            ctrl[ci++] = *p++;
-        }
-        ctrl[ci] = '\0';
-    } else {
-        size_t ci = 0;
-        while (*p && *p != ',' && ci < sizeof(ctrl) - 1)
-            ctrl[ci++] = *p++;
-        ctrl[ci] = '\0';
-        /* Trim */
-        while (ci > 0 && (ctrl[ci-1]==' '||ctrl[ci-1]=='\t')) ctrl[--ci]='\0';
-    }
-
-    /* Skip past control string to remaining args */
-    if (*p == ',') p++;
-
-    /* Process the control string */
-    size_t ri = 0;
-    const char *c = ctrl;
-    while (*c && ri < result_size - 1) {
-        if (*c != '!') {
-            result[ri++] = *c++;
-            continue;
-        }
-        c++; /* consume '!' */
-
-        /* Check for repeat: !n*ch */
-        if (*c >= '1' && *c <= '9') {
-            char numstr[16];
-            size_t ni = 0;
-            while (*c >= '0' && *c <= '9' && ni < sizeof(numstr)-1)
-                numstr[ni++] = *c++;
-            numstr[ni] = '\0';
-            int count = (int)strtol(numstr, NULL, 10);
-            if (*c == '*') {
-                c++;
-                char fill = *c ? *c++ : ' ';
-                for (int k = 0; k < count && ri < result_size - 1; k++)
-                    result[ri++] = fill;
-            }
-            /* If no '*', just skip the number (malformed) */
-            continue;
-        }
-
-        if (*c == '/') {
-            /* newline */
-            result[ri++] = '\n';
-            c++;
-        } else if (*c == '!') {
-            result[ri++] = '!';
-            c++;
-        } else if (*c == '_') {
-            result[ri++] = '\t';
-            c++;
-        } else if (c[0] == 'U' && c[1] == 'L') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            unsigned long v = strtoul(arg, NULL, 0);
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%lu", v);
-            c += 2;
-        } else if (c[0] == 'S' && c[1] == 'L') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            long v = strtol(arg, NULL, 0);
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%ld", v);
-            c += 2;
-        } else if (c[0] == 'U' && c[1] == 'W') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            unsigned long v = strtoul(arg, NULL, 0) & 0xFFFF;
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%lu", v);
-            c += 2;
-        } else if (c[0] == 'X' && c[1] == 'L') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            unsigned long v = strtoul(arg, NULL, 0);
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%08lX", v);
-            c += 2;
-        } else if (c[0] == 'X' && c[1] == 'W') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            unsigned long v = strtoul(arg, NULL, 0) & 0xFFFF;
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%04lX", v);
-            c += 2;
-        } else if (c[0] == 'O' && c[1] == 'L') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            unsigned long v = strtoul(arg, NULL, 0);
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%lo", v);
-            c += 2;
-        } else if (c[0] == 'Z' && c[1] == 'L') {
-            char arg[128] = "0"; fao_next_arg(&p, arg, sizeof(arg));
-            unsigned long v = strtoul(arg, NULL, 0);
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%010lu", v);
-            c += 2;
-        } else if (c[0] == 'A' && c[1] == 'S') {
-            char arg[1024] = ""; fao_next_arg(&p, arg, sizeof(arg));
-            ri += (size_t)snprintf(result+ri, result_size-ri, "%s", arg);
-            c += 2;
-        } else if (c[0] == 'A' && c[1] == 'C') {
-            /* Counted string: first byte = length, rest = chars */
-            char arg[1024] = ""; fao_next_arg(&p, arg, sizeof(arg));
-            if (arg[0]) {
-                int cnt = (unsigned char)arg[0];
-                size_t slen2 = strlen(arg+1);
-                if (cnt > (int)slen2) cnt = (int)slen2;
-                ri += (size_t)snprintf(result+ri, result_size-ri, "%.*s", cnt, arg+1);
-            }
-            c += 2;
+    /* F$FAO(control, arg...): the $FAO directive engine itself ($FAOL), the
+     * arguments being integers by value and strings as descriptors -- what
+     * DCL hands $FAO (observed LEX.FAO.*: !AS widths, !%S plurals, !n*c
+     * repeats, !n(...) repeat groups, !%U). Up to 15 arguments. */
+    struct lex_arg a[LEX_MAXARG];
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (lex_toomany(ctx, n, 16)) return lex_fail(ctx, 0x00038130, result);
+    char b0[32];
+    const char *ctl = lex_str(&a[0], b0, sizeof b0);
+    static struct dsc$descriptor_s sd[LEX_MAXARG];
+    uint64_t prm[LEX_MAXARG + 1];
+    int k = 0;
+    for (int i = 1; i < n && i < LEX_MAXARG; i++) {
+        if (a[i].is_string) {
+            sd[i].dsc$w_length = (uint16_t)strlen(a[i].sval);
+            sd[i].dsc$b_dtype = DSC$K_DTYPE_T;
+            sd[i].dsc$b_class = DSC$K_CLASS_S;
+            sd[i].dsc$a_pointer = a[i].sval;
+            prm[k++] = (uint64_t)(uintptr_t)&sd[i];
         } else {
-            /* Unknown directive — emit literally */
-            result[ri++] = '!';
+            prm[k++] = (uint64_t)(uint32_t)a[i].ival;
         }
     }
-
-    result[ri] = '\0';
+    prm[k] = 0;
+    struct dsc$descriptor_s cd = { (uint16_t)strlen(ctl), DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)ctl };
+    char out[1024];
+    struct dsc$descriptor_s od = { (uint16_t)(sizeof out - 1), DSC$K_DTYPE_T, DSC$K_CLASS_S, out };
+    uint16_t ol = 0;
+    uint32_t st = sys$faol(&cd, &ol, &od, prm);
+    if (!(st & 1) && st != SS$_BUFFEROVF)
+        return lex_fail(ctx, st, result);
+    lex_put(result, result_size, out, ol);
     return 0;
 }
 
@@ -2179,6 +1843,22 @@ static int lex_privilege(struct dcl_context *ctx, const char *args,
     /* Uppercase */
     for (size_t i = 0; s[i]; i++) s[i] = (char)toupper((unsigned char)s[i]);
 
+    /* every name in the list must be a privilege (optionally NO-prefixed):
+     * F$PRIVILEGE("NOSUCHPRIV") is CLI-W-IVKEYW, not TRUE (observed
+     * LEX.PRIVILEGE.BAD) */
+    {
+        char tl[256];
+        snprintf(tl, sizeof tl, "%s", s);
+        for (char *t = strtok(tl, ","); t; t = strtok(NULL, ",")) {
+            while (*t == ' ') t++;
+            if (!strncmp(t, "NO", 2) && parse_privilege_string(t + 2) != 0) continue;
+            if (parse_privilege_string(t) == 0) {
+                result[0] = '\0';
+                if (ctx) ctx->last_status = 0x00038060;
+                return -1;
+            }
+        }
+    }
     uint64_t needed = parse_privilege_string(s);
     if (needed == 0) {
         /* No recognized privilege → TRUE (empty list) */
@@ -3612,6 +3292,9 @@ static const struct {
  * Output: result string
  * Returns 0 on success, -1 on error.
  */
+int dcl_eval_lexical_args(struct dcl_context *ctx, const char *raw,
+                          char *out, size_t outsz);   /* dcl_exec.c */
+
 int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
                      char *result, size_t result_size)
 {
@@ -3647,10 +3330,17 @@ int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
         args[ai] = '\0';
     }
 
-    /* Look up and call the function */
+    /* Look up and call the function. Its arguments are expressions and are
+     * evaluated first (dcl_eval_lexical_args), except F$TYPE's, which NAMES
+     * a symbol rather than giving a value. */
     for (int i = 0; lex_functions[i].name; i++) {
         if (strcmp(func_name, lex_functions[i].name) == 0) {
-            return lex_functions[i].handler(ctx, args, result, result_size);
+            if (strcmp(func_name, "F$TYPE") == 0 || args[0] == '\0')
+                return lex_functions[i].handler(ctx, args, result, result_size);
+            char vargs[4096];
+            if (dcl_eval_lexical_args(ctx, args, vargs, sizeof(vargs)) < 0)
+                return -1;
+            return lex_functions[i].handler(ctx, vargs, result, result_size);
         }
     }
 
@@ -3673,5 +3363,6 @@ int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
               "invalid lexical function name - check validity and spelling");
     fprintf(stderr, " \\%s(\\\n", func_name);
     result[0] = '\0';
+    if (ctx) ctx->last_status = 0x000381C0;   /* CLI-W-IVFNAM */
     return -1;
 }

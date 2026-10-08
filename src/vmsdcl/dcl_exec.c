@@ -65,6 +65,12 @@ typedef struct {
     struct dcl_context *ctx;
 } expr_parser_t;
 
+/* The condition of the last lexical function that failed inside the
+ * expression eval_expr() is evaluating (0: none failed). An expression with a
+ * failing lexical function fails as a whole, its value unused (OpenVMS: the
+ * assignment does not happen and $STATUS carries the function's error). */
+static uint32_t eval_fail_status;
+
 static void ep_skip_ws(expr_parser_t *ep)
 {
     while (ep->pos < ep->len &&
@@ -173,6 +179,21 @@ void dcl_set_status(struct dcl_context *ctx, int status)
     dcl_sym_set("$STATUS", buf, DCL_SYM_GLOBAL);
     snprintf(buf, sizeof(buf), "%u", (uint32_t)status & 7);
     dcl_sym_set("$SEVERITY", buf, DCL_SYM_GLOBAL);
+}
+
+/* The status a successful assignment leaves in $STATUS: %X00030001, the DCL
+ * (CLI facility) success, not SS$_NORMAL (observed: docs/oracle/semantics/
+ * lex/, st=00030001 on every case that assigned). */
+#define DCL_ASSIGN_NORMAL 0x00030001
+
+/* A lexical function failed: the status it recorded (ctx->last_status, an
+ * error condition), or a generic DCL warning if it recorded none. */
+static int dcl_lexical_failure(struct dcl_context *ctx)
+{
+    uint32_t st = ctx ? ctx->last_status : 0;
+    if (st & 1)
+        st = 0x00038060;   /* CLI-W-IVKEYW: the function refused its arguments */
+    return (int)st;
 }
 
 /*
@@ -322,8 +343,12 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         buf[bi] = '\0';
         char result[DCL_MAX_VALUE];
         result[0] = '\0';
-        if (ep->ctx)
-            dcl_eval_lexical(ep->ctx, buf, result, sizeof(result));
+        if (ep->ctx) {
+            ep->ctx->last_status = DCL_ASSIGN_NORMAL;
+            if (dcl_eval_lexical(ep->ctx, buf, result, sizeof(result)) < 0 &&
+                !eval_fail_status)
+                eval_fail_status = dcl_lexical_failure(ep->ctx);
+        }
         /* Coerce to int only for a CANONICAL integer; a formatted/zero-padded
          * lexical result (F$PID's %08X pid) stays a string. Shared rule:
          * dcl_lexical_result_is_int (rd vms-dee/vms-9357). */
@@ -542,6 +567,7 @@ static void eval_expr(struct dcl_context *ctx, const char *expr,
     ep.len   = strlen(subst);
     ep.ctx   = ctx;
 
+    eval_fail_status = 0;
     *out_val = parse_expr(&ep);
 }
 
@@ -568,6 +594,82 @@ void dcl_eval_expr_string(struct dcl_context *ctx, const char *expr,
     const char *s = val_to_str(&v, tmp, sizeof(tmp));
     strncpy(out, s, outlen - 1);
     out[outlen - 1] = '\0';
+}
+
+/*
+ * dcl_eval_lexical_args - evaluate each argument of a lexical function call.
+ *
+ * A lexical function's arguments are DCL EXPRESSIONS (DCL Dictionary,
+ * "Lexical Functions": "arguments ... can be expressions: symbols, literals,
+ * lexical functions, and operators"), so F$LENGTH(SP_S1) measures the value
+ * of SP_S1, not the five characters of its name (observed LEX.LENGTH,
+ * docs/oracle/semantics/lex/). `raw' is the text between the parentheses; on
+ * return `out' holds the same argument list with every non-empty argument
+ * replaced by its value -- a string as a quoted literal (embedded quotes
+ * doubled), an integer as decimal text -- and an omitted argument left empty,
+ * the form every lexical handler already parses.
+ */
+int dcl_eval_lexical_args(struct dcl_context *ctx, const char *raw,
+                          char *out, size_t outsz)
+{
+    size_t o = 0;
+    const char *p = raw ? raw : "";
+    if (outsz == 0) return 0;
+    out[0] = '\0';
+    for (;;) {
+        /* one argument: up to a comma outside quotes and parentheses */
+        const char *start = p;
+        int depth = 0, inq = 0;
+        while (*p) {
+            if (inq) {
+                if (*p == '"') {
+                    if (p[1] == '"') p++;
+                    else inq = 0;
+                }
+            } else if (*p == '"') inq = 1;
+            else if (*p == '(') depth++;
+            else if (*p == ')') depth--;
+            else if (*p == ',' && depth == 0) break;
+            p++;
+        }
+        size_t n = (size_t)(p - start);
+        char arg[DCL_MAX_VALUE];
+        if (n >= sizeof(arg)) n = sizeof(arg) - 1;
+        memcpy(arg, start, n);
+        arg[n] = '\0';
+        char *a = arg;
+        while (*a == ' ' || *a == '\t') a++;
+        size_t al = strlen(a);
+        while (al > 0 && (a[al - 1] == ' ' || a[al - 1] == '\t')) a[--al] = '\0';
+
+        if (al > 0) {
+            expr_val_t v;
+            uint32_t outer_fail = eval_fail_status;
+            eval_expr(ctx, a, &v);
+            if (eval_fail_status) {
+                if (ctx) ctx->last_status = eval_fail_status;
+                eval_fail_status = outer_fail ? outer_fail : eval_fail_status;
+                return -1;
+            }
+            eval_fail_status = outer_fail;
+            if (v.is_string) {
+                if (o + 1 < outsz) out[o++] = '"';
+                for (const char *q = v.sval; *q && o + 2 < outsz; q++) {
+                    if (*q == '"') out[o++] = '"';
+                    out[o++] = *q;
+                }
+                if (o + 1 < outsz) out[o++] = '"';
+            } else {
+                int k = snprintf(out + o, outsz - o, "%ld", v.ival);
+                if (k > 0) o += (size_t)k < outsz - o ? (size_t)k : outsz - o - 1;
+            }
+        }
+        if (!*p) break;
+        if (o + 1 < outsz) out[o++] = ',';
+        p++;                            /* past the comma */
+    }
+    out[o < outsz ? o : outsz - 1] = '\0';
+    return 0;
 }
 
 /*
@@ -1042,7 +1144,12 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         /* Check if it's a lexical function with no operators */
         if (strncasecmp(trimmed, "F$", 2) == 0 && !has_arith_op(trimmed)) {
             char result[DCL_MAX_VALUE];
-            dcl_eval_lexical(ctx, trimmed, result, sizeof(result));
+            ctx->last_status = DCL_ASSIGN_NORMAL;
+            if (dcl_eval_lexical(ctx, trimmed, result, sizeof(result)) < 0) {
+                /* the symbol is left the null string, $STATUS the error */
+                dcl_sym_set(cmd->verb, "", scope);
+                return dcl_lexical_failure(ctx);
+            }
             /* Store as int only if the result is a CANONICAL integer; F$PID's
              * %08X pid stays a STRING. The old base-0 strtol here additionally
              * octal-mis-read the leading-zero pid (00000067 -> 55). rd vms-9357. */
@@ -1055,6 +1162,10 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             /* Expression evaluation (arithmetic or string ops) */
             expr_val_t result;
             eval_expr(ctx, trimmed, &result);
+            if (eval_fail_status) {
+                dcl_sym_set(cmd->verb, "", scope);
+                return (int)eval_fail_status;
+            }
             if (result.is_string) {
                 dcl_sym_set(cmd->verb, result.sval, scope);
             } else {
@@ -1081,7 +1192,11 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             /* Lexical function after substitution */
             if (!was_quoted && strncasecmp(sv, "F$", 2) == 0) {
                 char result[DCL_MAX_VALUE];
-                dcl_eval_lexical(ctx, sv, result, sizeof(result));
+                ctx->last_status = DCL_ASSIGN_NORMAL;
+                if (dcl_eval_lexical(ctx, sv, result, sizeof(result)) < 0) {
+                    dcl_sym_set(cmd->verb, "", scope);
+                    return dcl_lexical_failure(ctx);
+                }
                 /* Canonical-int-only coercion; F$PID's %08X pid stays a STRING
                  * (the old base-0 strtol octal-mis-read it). rd vms-9357. */
                 long val;
@@ -1132,7 +1247,7 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         }
     }
 
-    return SS$_NORMAL;
+    return DCL_ASSIGN_NORMAL;
 }
 
 /*
@@ -1157,8 +1272,15 @@ int dcl_execute_command(struct dcl_command *cmd)
 
     /* Handle different command types */
     switch (cmd->type) {
-    case DCL_NODE_ASSIGN:
-        return exec_assign(ctx, cmd);
+    case DCL_NODE_ASSIGN: {
+        /* An assignment is a command: it leaves $STATUS = %X00030001 when it
+         * succeeds, or the condition of the expression that failed -- the
+         * symbol then keeps its old value (observed on OpenVMS: every LEX.*
+         * case, docs/oracle/semantics/lex/). */
+        int ast = exec_assign(ctx, cmd);
+        dcl_set_status(ctx, ast);
+        return ast;
+    }
 
     case DCL_NODE_COMMENT:
     case DCL_NODE_LABEL:

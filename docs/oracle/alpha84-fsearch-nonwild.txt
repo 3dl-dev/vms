@@ -1,0 +1,18 @@
+# provenance: OpenVMS Alpha V8.4 (AXPbox ES40), ovmx-lab pod semalpha-1 node ALPHA1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ WRITE SYS$OUTPUT "[1:" + F$SEARCH("SYS$SYSTEM:LOGINOUT.EXE") + ":]"
+[1:SYS$COMMON:[SYSEXE]LOGINOUT.EXE;1:]
+
+$ WRITE SYS$OUTPUT "[2:" + F$SEARCH("SYS$SYSTEM:LOGINOUT.EXE") + ":]"
+[2:SYS$COMMON:[SYSEXE]LOGINOUT.EXE;1:]
+
+$ WRITE SYS$OUTPUT "[3:" + F$SEARCH("SYS$SYSTEM:LOGINOUT.EXE") + ":]"
+[3:SYS$COMMON:[SYSEXE]LOGINOUT.EXE;1:]
+
+$ WRITE SYS$OUTPUT "[4:" + F$SEARCH("SYS$SYSTEM:NOSUCHFILE.DAT") + ":]"
+[4::]
+
+$ WRITE SYS$OUTPUT "[5:" + F$SEARCH("SYS$SYSTEM:LOGINOUT.EXE") + ":]"
+[5:SYS$COMMON:[SYSEXE]LOGINOUT.EXE;1:]

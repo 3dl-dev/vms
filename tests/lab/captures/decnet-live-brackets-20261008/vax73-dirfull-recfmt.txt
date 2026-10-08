@@ -1,0 +1,258 @@
+DIRECTORY/FULL FIX20.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+FIX20.DAT;1                   File ID:  (5826,106,0)          
+Size:            1/9          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:22.12
+Revised:    8-OCT-2026 07:28:08.49 (2)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Fixed length 20 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 1/9 blocks.
+$ 
+DIRECTORY/FULL STMLF.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+STMLF.DAT;1                   File ID:  (5828,107,0)          
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:27.64
+Revised:    8-OCT-2026 07:27:27.65 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Stream_LF, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL STM.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+STM.DAT;1                     File ID:  (5830,107,0)          
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:33.13
+Revised:    8-OCT-2026 07:27:33.14 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Stream, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL STMCR.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+STMCR.DAT;1                   File ID:  (5832,107,0)          
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:38.65
+Revised:    8-OCT-2026 07:27:38.66 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Stream_CR, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL VFC.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+VFC.DAT;1                     File ID:  (5834,109,0)          
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:44.14
+Revised:    8-OCT-2026 07:27:44.15 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      VFC, 2 byte header, maximum 0 bytes, longest 0 bytes
+Record attributes:  Print file carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL UDF.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+UDF.DAT;1                     File ID:  (5836,109,0)          
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:49.64
+Revised:    8-OCT-2026 07:27:49.65 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Undefined, maximum 0 bytes, longest 0 bytes
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL FTN.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+FTN.DAT;1                     File ID:  (5838,1,0)            
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:27:55.25
+Revised:    8-OCT-2026 07:27:55.25 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Fortran carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL BLK.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+BLK.DAT;1                     File ID:  (5840,1,0)            
+Size:            0/0          Owner:    [1,1]
+Created:    8-OCT-2026 07:28:00.76
+Revised:    8-OCT-2026 07:28:00.76 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control, Non-spanned
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 0/0 blocks.
+$ 
+DIRECTORY/FULL VAR.DAT
+
+Directory SYS$SYSDEVICE:[RMSCAP]
+
+VAR.DAT;1                     File ID:  (5841,1,0)            
+Size:            1/9          Owner:    [1,1]
+Created:    8-OCT-2026 07:28:01.84
+Revised:    8-OCT-2026 07:28:05.19 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, No version limit
+Record format:      VFC, 2 byte header, maximum 0 bytes, longest 32 bytes
+Record attributes:  Print file carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 1/9 blocks.
+$ 
+WRITE SYS$OUTPUT "FIX20 MRS=",F$FILE_ATTRIBUTES("FIX20.DAT","MRS")
+FIX20 MRS=20
+$ 
+WRITE SYS$OUTPUT "FIX20 LRL=",F$FILE_ATTRIBUTES("FIX20.DAT","LRL")
+FIX20 LRL=20
+$ 
+WRITE SYS$OUTPUT "FIX20 RFM=",F$FILE_ATTRIBUTES("FIX20.DAT","RFM")
+FIX20 RFM=FIX
+$ 
+WRITE SYS$OUTPUT "FIX20 RAT=",F$FILE_ATTRIBUTES("FIX20.DAT","RAT")
+FIX20 RAT=
+$ 
+WRITE SYS$OUTPUT "VAR MRS=",F$FILE_ATTRIBUTES("VAR.DAT","MRS")
+VAR MRS=0
+$ 
+WRITE SYS$OUTPUT "VAR LRL=",F$FILE_ATTRIBUTES("VAR.DAT","LRL")
+VAR LRL=32
+$ 
+WRITE SYS$OUTPUT "VAR RFM=",F$FILE_ATTRIBUTES("VAR.DAT","RFM")
+VAR RFM=VFC
+$ 
+WRITE SYS$OUTPUT "VAR RAT=",F$FILE_ATTRIBUTES("VAR.DAT","RAT")
+VAR RAT=PRN
+$ 

@@ -890,12 +890,25 @@ jobs:
               print("No files to analyze (no changed non-excluded C files on this PR).")
               sys.exit(0)
 
-          print(f"Running clang-tidy on {len(files)} files...")
-          result = subprocess.run(
-              ["clang-tidy", "-p", "build"] + files,
-              capture_output=True, text=True
-          )
-          output = result.stdout + result.stderr
+          # One serial clang-tidy over every file has no output and no bound: 4 of the last 30
+          # runs sat in it until the 30-minute job cap and were CANCELLED (red), although this
+          # step is informational. Run files in parallel, each with its own wall cap, and report
+          # (not fail on) any file that exceeds it.
+          import concurrent.futures
+          per_file_cap = 420
+          print(f"Running clang-tidy on {len(files)} files ({os.cpu_count()} parallel, {per_file_cap}s cap each)...")
+          def tidy(f):
+              try:
+                  r = subprocess.run(["clang-tidy", "-p", "build", f], capture_output=True, text=True,
+                                     timeout=per_file_cap)
+                  return f, r.stdout + r.stderr
+              except subprocess.TimeoutExpired:
+                  return f, f"TIMEOUT: clang-tidy exceeded {per_file_cap}s on {f}\n"
+          chunks = []
+          with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as ex:
+              for f, out in ex.map(tidy, files):
+                  chunks.append(out)
+          output = "".join(chunks)
           print(output)
           with open("clang-tidy-results.txt", "w") as out:
               out.write(output)

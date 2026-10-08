@@ -190,6 +190,7 @@
 #include "starlet.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include "vmsfs/filespec.h"   /* vmsfs_to_linux_path: a VMS image spec */
 #include <sched.h>
 #include "prvdef.h"
 #include "vms/pcb.h"
@@ -1041,7 +1042,18 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * non-staged or non-Linux path is left unchanged and fails honestly. */
     {
         char staged[512];
-        if (ovmx_boot_stage_exec_path(img_path, staged, sizeof(staged)) &&
+        /* A VMS image spec ("SYS$SYSTEM:LOGINOUT.EXE", the form $CREPRC is
+         * documented with) is located through the logical-name chain first:
+         * SYS$SYSTEM: -> SYS$SYSROOT:[SYSEXE], whose boot-staged copy is the
+         * execve target (rd vms-ea42 -- a $CREPRC of a VMS spec used to
+         * execve the spec text itself and fail). A POSIX path is taken as
+         * given. */
+        char located[512];
+        const char *probe = img_path;
+        if (img_path[0] != '/' &&
+            (vmsfs_to_linux_path(img_path, located, sizeof(located)) & 1))
+            probe = located;
+        if (ovmx_boot_stage_exec_path(probe, staged, sizeof(staged)) &&
             access(staged, X_OK) == 0)
             snprintf(img_path, sizeof(img_path), "%s", staged);
     }
@@ -1574,6 +1586,20 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 int fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
             }
+        }
+
+        /*
+         * PRC$M_HIBER: the new process hibernates before it activates its
+         * image, until a $WAKE (OpenVMS System Services, $CREPRC stsflg;
+         * observed in docs/oracle/semantics/prc/: the process is there to be
+         * $GETJPI'd, $SUSPND'd and $DELPRC'd). An image that is not there is
+         * found missing first, and the process runs down (observed
+         * PRC.NOIMAGE.STATE: gone before any $WAKE).
+         */
+        if (stsflg & PRC$M_HIBER) {
+            if (access(img_path, X_OK) != 0)
+                _exit(1);
+            (void)sys$hiber();
         }
 
         execl(img_path, img_path, (char *)NULL);

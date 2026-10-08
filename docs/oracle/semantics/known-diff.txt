@@ -7,85 +7,11 @@ brk BRK.NOUSER  # vms-eb46: a user with no terminal -- OpenVMS ends the IOSB SS$
 brk OPR.BADCHAN  # vms-4a69: arch-divergent -- an unassigned reply channel is SS$_IVIDENT on Alpha V8.4, SS$_IVCHAN on VAX V7.3 (OVMX: IVCHAN)
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS
 ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on VAX V7.3, writes 1 on Alpha V8.4; OVMX leaves it
-ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
-ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive row; PRIB has no OVMX priority; AUTHPRIV is the enforced set
-info DVI.SYSCOMMAND  # vms-b14e: SYS$COMMAND / TT name a Linux path, not the terminal VMS device
-info DVI.TT  # vms-b14e: SYS$COMMAND / TT name a Linux path, not the terminal VMS device
 io IO.BADCHAN  # vms-4a69: arch-divergent -- an unassigned channel number is SS$_IVIDENT on Alpha V8.4, SS$_IVCHAN on VAX V7.3 (OVMX: IVCHAN)
 io IO.CANCEL.BADCHAN  # vms-4a69: $CANCEL of a channel this process does not hold returns NORMAL (Alpha IVIDENT, VAX IVCHAN)
 io IO.ASSIGN.MBX.GONE  # vms-4a69: $ASSIGN of a deleted mailbox's logical name gives NOSUCHDEV (VMS IVDEVNAM: the name is gone)
-lex LEX.LENGTH  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.LENGTH.EMPTY  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EXTRACT  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EXTRACT.PAST_END  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EXTRACT.START_PAST  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EXTRACT.NEGSTART  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EXTRACT.NEGLEN  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.LOCATE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.LOCATE.MISSING  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.LOCATE.EMPTY  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.ELEMENT.0  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.ELEMENT.2  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.ELEMENT.3  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.ELEMENT.PAST  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.ELEMENT.LONGDELIM  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.UPCASE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.TRIM  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.COMPRESS  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.COLLAPSE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.UNCOMMENT  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.MULTI  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.EDIT.BADKEY  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER.HEX  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER.OCTAL  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER.NEG  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER.TRUE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER.YES  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.INTEGER.JUNK  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.STRING  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.STRING.STR  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.TYPE.INT  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.TYPE.NUMSTR  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVSI  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVUI  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.FAO.BASIC  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.FAO.STRINGS  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.FAO.PAD  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.FAO.REPEAT  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.FAO.UIC  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.ABS  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.WEEKDAY  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.DATE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.MONTH  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.COMPARISON  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.HUNDREDTH  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.DELTA  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.CVTIME.BAD  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PARSE.NAME  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PARSE.TYPE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PARSE.VERSION  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PARSE.DEFTYPE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PARSE.SYNTAX  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.MESSAGE.NORMAL  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.MESSAGE.ACCVIO  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.MESSAGE.FNF  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.MESSAGE.TEXT  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.MESSAGE.UNKNOWN  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.MODE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.USER  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PRIVILEGE.HELD  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.PRIVILEGE.BAD  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.GETJPI.USERNAME  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.GETJPI.BADITEM  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.GETDVI.NLA0  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.GETDVI.EXISTS  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.TRNLNM.MISSING  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.TRNLNM.TABLE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.NOSUCHFUNC  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.WRONGTYPE  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
-lex LEX.TOOMANY  # vms-86f: DCL lexical function arguments / answers / statuses differ (semantic oracle lex family)
+lex LEX.USER  # vms-86f: F$USER returns the user name; OpenVMS returns the UIC in named form ("[SYSTEM]")
 lnm LNM.TRN.SYSCMD  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
 lnm LNM.TRN.SYSIN  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
 lnm LNM.TRN.SYSOUT  # vms-b14e: process-permanent files (ESC NUL IFI prefix) / TT a concealed device
@@ -104,22 +30,14 @@ lock LOCK.ASYNC.DONE  # vms-a3d: executive lock manager -- value block, sublock 
 lock LOCK.DEQALL  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
 lock LOCK.AFTER.DEQALL.A  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
 lock LOCK.AFTER.DEQALL.B  # vms-a3d: executive lock manager -- value block, sublock namespace, SUBLOCKS, DEQALL, SYNCSTS, completion AST
-prc PRC.SELF.COUNT0  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.JPI.SUB  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.JPI.BYNAME  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SELF.COUNT1  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.CREATE.DUPNAME  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SUSPND  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SUSPND.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SUSPND.AGAIN  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.RESUME  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.RESUME.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.RESUME.AGAIN  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.DELPRC  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SELF.COUNT2  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.NOIMAGE.STATE  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.SELF.COUNT3  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
-prc PRC.FORCEX  # vms-ea42: PRC$M_HIBER not honoured, JPI$_PRCCNT unwritten, duplicate name not DUPLNAM
+prc PRC.SELF.COUNT0  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
+prc PRC.JPI.SUB  # vms-ea42: JPI$_STATE (no executive scheduler state, the vms-8019 §5.1 ruling), JPI$_OWNER / MASTER_PID (owner and job root not in the executive row), JPI$_PRIB (no OVMX priority)
+prc PRC.SELF.COUNT1  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
+prc PRC.SUSPND.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vms-8019 §5.1)
+prc PRC.RESUME.STATE  # vms-ea42: JPI$_STATE -- no executive scheduler state (vms-8019 §5.1)
+prc PRC.SELF.COUNT2  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
+prc PRC.NOIMAGE.STATE  # vms-ea42: a hibernating process with a missing image is run down at once (OpenVMS keeps it until $WAKE fails activation), and JPI$_STATE
+prc PRC.SELF.COUNT3  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted
 rights RDB.ADD_IDENT.UIC1  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.UIC2  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.ADD_IDENT.GENERAL  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
@@ -173,42 +91,9 @@ rights RDB.NOPRIV.REM_HOLDER  # vms-7d5a: rights-database services not provided 
 rights RDB.NOPRIV.REM_IDENT  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.ASCTOID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.FIND_HELD  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rms RMS.CREATE  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.OPEN  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.CREATE.V2  # vms-670: file versions
-rms RMS.CREATE.SUP  # vms-670: file versions
-rms RMS.CREATE.EXPLICIT_V1  # vms-670: file versions
-rms RMS.CREATE.FIX  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.OPEN.FNF  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.OPEN.DNF  # vms-137: $OPEN error codes
-rms RMS.OPEN.SYNTAX  # vms-137: $OPEN error codes
-rms RMS.OPEN.EMPTYNAME  # vms-137: $OPEN error codes
-rms RMS.OPEN.LOWERCASE  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.PARSE.DEFAULTS  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.NODEFAULT  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.DOT  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.SEMI  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.DEVONLY  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.WILD  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.LONGNAME  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.BIGVER  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.NEGVER  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.SYNTAX  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.SYNTAX2  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.LOWER  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.SEARCH.1  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.2  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.3  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.4  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.NONE  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.NOPARSE  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.ERASE.TEST1  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.ERASE.TEST2  # vms-670: file versions
-rms RMS.ERASE.TEST3  # vms-670: file versions
-rms RMS.OPEN.AFTER_ERASE  # vms-670: file versions
-rtl LIB.FIND_FILE.WILD.2  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
-rtl LIB.FIND_FILE.NONE  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
-rtl LIB.FIND_FILE.SYNTAX  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
+rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
+rms RMS.OPEN  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
+rms RMS.PARSE.SYNTAX2  # vms-576: arch-divergent -- Alpha V8.4 parses ODS-5 ^-escapes ("A^.B^.C"), VAX V7.3 says RMS$_SYN (OVMX: SYN, as VAX)
 tt TT.SENSECHAR  # vms-d900: IO$_SENSECHAR answers the PERMANENT characteristics (80/24 on the Alpha console) -- the executive device row holds only the current set
 tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count and where the text lands relative to the next record differ
 tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT -- the written text shares the case line on OVMX (no record boundary), so the line is not read back

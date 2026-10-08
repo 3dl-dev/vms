@@ -59,6 +59,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -295,6 +297,149 @@ static void run_banner_override(void)
     (void)lnm_delete(mgr, LNM_SYSTEM_TABLE, "SYS$ANNOUNCE", LNM_MODE_EXEC);
 }
 
+/*
+ * (d) A process WITHOUT SYSNAM does not seed LNM$SYSTEM (rd vms-ec7e).
+ *
+ * lnm_setup_defaults seeds the executive-mode system-locating names
+ * (SYS$SYSDEVICE, SYS$SYSROOT, SYS$SYSTEM, ...). Without SYSNAM the executive
+ * maximizes an executive-mode $CRELNM to supervisor mode (rd vms-ef21), and a
+ * supervisor-mode duplicate -- the outermost mode wins every translation --
+ * shadowed the node's name for every later process: test_syssvc_mmk_build's
+ * SYS$SYSTEM:TCC.EXE resolved on the wrong volume (%DCL-E-IVIMAGE). VMS: only
+ * a SYSNAM process (the boot) defines these; a login without SYSNAM leaves
+ * LNM$SYSTEM alone. Proven here with SYSPRV held (the privilege that lets a
+ * process write LNM$SYSTEM at all, so the refusal is the SYSNAM rule, not a
+ * missing write right) and a marker device, so a seed would be visible.
+ */
+#define EC7E_MARKER "OVMXEC7E:"
+static int ec7e_system_marker_count(void)
+{
+    static struct vms_kif_lnm_enum_rec recs[VMS_LNM_MAX_ENTRIES];
+    int n = vms_kif_lnm_enumerate(VMS_LNM_TBL_SYSTEM, recs, VMS_LNM_MAX_ENTRIES);
+    int hits = 0;
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < recs[i].num_values; k++)
+            if (strstr(recs[i].values[k], "OVMXEC7E"))
+                hits++;
+    return n < 0 ? -1 : hits;
+}
+
+static void run_seed_needs_sysnam(void)
+{
+    lnm_manager_t *mgr = lnm_get_manager();
+    uint64_t prev = 0;
+    char val[256];
+    uint16_t rlen = 0;
+    uint32_t attrs = 0;
+    const char *old = getenv("OVMX_SYSDEVICE");
+    char saved[128] = "";
+
+    if (old) {
+        strncpy(saved, old, sizeof(saved) - 1);
+    }
+    CHECK(vms_kif_chkpriv(VMS_PRV_M_SYSNAM) == SS$_NORMAL,
+          "seed: this process holds SYSNAM before the proof (so dropping it is the variable)");
+    /* SYSPRV is what lets a process without SYSNAM write LNM$SYSTEM at all;
+     * enable it for the proof (and put it back after), so the refusal below is
+     * the SYSNAM rule and not a missing write right. */
+    uint64_t prev_sysprv = 0;
+    (void)vms_kif_setprv(VMS_PRV_M_SYSPRV, 1, 0, &prev_sysprv);
+    CHECK(vms_kif_chkpriv(VMS_PRV_M_SYSPRV) == SS$_NORMAL,
+          "seed: this process holds SYSPRV (it may write LNM$SYSTEM at all)");
+    CHECK(ec7e_system_marker_count() == 0,
+          "seed: LNM$SYSTEM carries no " EC7E_MARKER " name before the unprivileged seed");
+
+    uint32_t st = vms_kif_setprv(VMS_PRV_M_SYSNAM, 0, 0, &prev);
+    CHECK((st & 1) && vms_kif_chkpriv(VMS_PRV_M_SYSNAM) == SS$_NOPRIV,
+          "seed: SYSNAM disabled for the seed (SYSPRV still held)");
+
+    setenv("OVMX_SYSDEVICE", EC7E_MARKER, 1);
+    lnm_setup_defaults(mgr, NULL);                 /* what every DCL start does */
+    if (saved[0])
+        setenv("OVMX_SYSDEVICE", saved, 1);
+    else
+        unsetenv("OVMX_SYSDEVICE");
+
+    /* negctl: lnm-seed-without-sysnam */
+    CHECK(ec7e_system_marker_count() == 0,
+          "seed: a process without SYSNAM left NO name in LNM$SYSTEM (no supervisor-mode duplicate to shadow the node's)");
+    st = lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", val, sizeof(val), &rlen, &attrs);
+    CHECK(!(st & 1) || strcmp(val, EC7E_MARKER) != 0,
+          "seed: SYS$SYSDEVICE still translates to the node's system device, not the unprivileged process's");
+
+    /* Undo a regression's damage for later suites in this guest: delete the
+     * supervisor/user-mode copies only (the executive-mode names stay). */
+    if (ec7e_system_marker_count() > 0) {
+        static const char *names[] = { "SYS$SYSDEVICE", "SYS$SYSROOT", "SYS$COMMON",
+            "SYS$SYSTEM", "SYS$LIBRARY", "SYS$SHARE", "SYS$MANAGER", "SYS$UPDATE",
+            "SYS$HELP", "DECC$LIBRARY_INCLUDE", "SYS$SCRATCH" };
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+            (void)vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, names[i], LNM_MODE_SUPER);
+    }
+
+    if (prev & VMS_PRV_M_SYSNAM)
+        (void)vms_kif_setprv(VMS_PRV_M_SYSNAM, 1, 0, NULL);
+    if (!(prev_sysprv & VMS_PRV_M_SYSPRV))
+        (void)vms_kif_setprv(VMS_PRV_M_SYSPRV, 0, 0, NULL);
+    CHECK(vms_kif_chkpriv(VMS_PRV_M_SYSNAM) == SS$_NORMAL,
+          "seed: SYSNAM restored after the proof");
+}
+
+/*
+ * (e) A translation never reports a name absent because a writer was busy
+ * (rd vms-ec7e). Every forked registration copies its parent's process names
+ * and every teardown deletes them -- both open a seqlock write section on the
+ * shared arena. A reader that gave up after a fixed spin budget returned "no
+ * such name" for SYS$SYSROOT while a writer ran on another vCPU (measured in
+ * DECNETD's FAL persona proof). Here children with copied process names come
+ * and go while this process translates SYS$SYSROOT continuously: every
+ * translation must succeed.
+ */
+static void run_translate_under_process_churn(void)
+{
+    lnm_manager_t *mgr = lnm_get_manager();
+    char val[256];
+    uint16_t rlen = 0;
+    uint32_t attrs = 0;
+    int lookups = 0, misses = 0, children = 0;
+
+    (void)lnm_create(mgr, LNM_PROCESS_TABLE, "OVMXEC7E$CHURN", "X", 0, LNM_MODE_SUPER);
+    pid_t churner = fork();
+    if (churner == 0) {
+        time_t end = time(NULL) + 4;
+        while (time(NULL) < end) {
+            pid_t c = fork();
+            if (c == 0) {
+                uint32_t key = 0;
+                (void)vms_kif_lnm_scope_key(VMS_LNM_TBL_PROCESS, &key); /* register: copy */
+                _exit(0);                                               /* exit: rundown */
+            }
+            if (c > 0)
+                (void)waitpid(c, NULL, 0);
+        }
+        _exit(0);
+    }
+    if (churner > 0) {
+        time_t end = time(NULL) + 4;
+        while (time(NULL) < end) {
+            uint32_t st = lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSROOT",
+                                        val, sizeof(val), &rlen, &attrs);
+            lookups++;
+            if (!(st & 1))
+                misses++;
+        }
+        int ws = 0;
+        (void)waitpid(churner, &ws, 0);
+        children = WIFEXITED(ws) && WEXITSTATUS(ws) == 0;
+    }
+    (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "OVMXEC7E$CHURN", LNM_MODE_SUPER);
+    printf("  (churn: %d translations, %d misses)\n", lookups, misses);
+    CHECK(churner > 0 && children && lookups > 0,
+          "churn: forked children registered and exited while this process translated");
+    CHECK(misses == 0,
+          "churn: SYS$SYSROOT translated every time while other processes' names were copied and deleted");
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -309,6 +454,8 @@ int main(void)
 
     run_manager_system_and_hierarchy();
     run_banner_override();
+    run_seed_needs_sysnam();
+    run_translate_under_process_churn();
 
     printf("=== test_syssvc_lnm_system: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

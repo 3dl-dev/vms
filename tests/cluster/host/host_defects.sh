@@ -123,6 +123,7 @@ SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
 pe-receive-hold-disarmed
+csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
 codec-vc-zero-incarnation-not-refused
 codec-cm-short-body-not-refused
@@ -662,6 +663,19 @@ the held one through the hold
 two of them from the hold
 a frame beyond the receive credit this circuit granted is not held
 and moves nothing
+EOF
+                      ;;
+        esac;;
+
+    csb-abandoned-connect-keeps-conid)
+        case "$_f" in
+        facility)     echo "h_connect_abandoned() (rd vms-04b): an initial connect that dies returns the block to NEW holding no Con.ID, so the joiner dials it again";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "the block keeps the dead Con.ID at NEW, join_reach_ours() never dials it again, and a joiner stalled mid-connect waits forever for connectivity to a member -- stall-rig arms K-5/K-11.";;
+        require_fail) cat <<'EOF'
+*** and it claims NO connection, so it is dialled again ***
 EOF
                       ;;
         esac;;
@@ -1511,6 +1525,10 @@ apply_edit() {
     pe-receive-hold-disarmed)
         # `if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||` is unique.
         sed -i 's/if (rx->frame == NULL || rx->len > PE_VC_FRAME_MAX ||/if (1 || rx->frame == NULL || rx->len > PE_VC_FRAME_MAX || \/\* NEGCTL pe-receive-hold-disarmed \*\//' "$_file";;
+
+    csb-abandoned-connect-keeps-conid)
+        # The bind that follows the comment ending `with no connect in flight.`
+        sed -i '/with no connect in flight\./{n;n;s|cnxman_csb_bind_connection(csb, 0u);|/* NEGCTL csb-abandoned-connect-keeps-conid */|}' "$_file";;
 
     pe-reformation-stacks-before-it-starts)
         # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.

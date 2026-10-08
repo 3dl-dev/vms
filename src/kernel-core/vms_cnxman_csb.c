@@ -649,6 +649,17 @@ static enum cnxman_csb_action h_connect_abandoned(struct vms_club *club,
 {
 	(void)club; (void)ops;
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_NEW;
+	/*
+	 * ...AND IT HOLDS NO CONNECTION (rd vms-04b). NEW means "may be dialled
+	 * again", and the dialler (join_reach_ours) dials only a block that
+	 * claims no Con.ID. Left bound to the connection that just died, the
+	 * block sat at NEW with a dead Con.ID nobody would ever replace --
+	 * measured, stall-rig arms K-5 and K-11: the joiner was SIGSTOPped
+	 * between the member's ACCEPT_REQ and its own ACCEPT_RSP, the circuit
+	 * failed under the stall, and on wake the joiner waited forever "for
+	 * connectivity to every cluster member" with no connect in flight.
+	 */
+	cnxman_csb_bind_connection(csb, 0u);
 	return CNXMAN_CSB_ACT_NONE;
 }
 

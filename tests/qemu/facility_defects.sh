@@ -4268,7 +4268,7 @@ A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programma
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
-A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|OPER) that are in VMS_PRV_M_ENFORCED (OPER is not)
+A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in VMS_PRV_M_ENFORCED (EXQUOTA is not)
 A: the executive accepted the identity a privileged writer established
 B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC

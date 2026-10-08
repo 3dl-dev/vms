@@ -109,7 +109,7 @@ static char *const poison_env[] = {
 #define A_NAME  "FIELD"
 #define A_GRP   200u
 #define A_MEM   10u
-#define A_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_OPER)
+#define A_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_EXQUOTA)
 
 /* Identity B: a different account, deliberately in a DIFFERENT group and
  * with a DIFFERENT mask, so B's report cannot be A's by coincidence.
@@ -124,7 +124,7 @@ static char *const poison_env[] = {
 #define B_NAME  "OPERATOR"
 #define B_GRP   1u
 #define B_MEM   6u
-#define B_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_ALTPRI | PRV$M_WORLD)
+#define B_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_LOG_IO | PRV$M_WORLD)
 
 /* Identity C: no identity at all. A real credential change, not a flag --
  * setgid() before setuid(), because setuid() away from root is what drops
@@ -1618,11 +1618,11 @@ int main(void)
      *
      * NARROWED TO "EMPTY" (vms-2b8, operator ruling 2026-07-31, Rule 10
      * applied to the reporting side a second time). The grid used to show
-     * the whole authorized mask (NETMBX/OPER/TMPMBX here); it now shows
+     * the whole authorized mask (NETMBX/EXQUOTA/TMPMBX here); it now shows
      * only the intersection with VMS_PRV_M_ENFORCED
      * (src/kernel/vms_ioctl.h: CMKRNL|CMEXEC|SYSNAM|GRPNAM|SETPRV|WORLD) -- the
      * privileges some vms.ko code path will actually refuse an operation
-     * over. A's mask (TMPMBX|NETMBX|OPER) shares none of those bits, so
+     * over. A's mask (TMPMBX|NETMBX|EXQUOTA) shares none of those bits, so
      * the grid is correctly EMPTY: nothing in it is enforced, so nothing
      * in it is shown. The positive case -- an enforced privilege DOES
      * appear -- is proved by B below, which adds WORLD to its mask for
@@ -1631,11 +1631,11 @@ int main(void)
     /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, "\nAuthorized privileges:\n NETMBX    TMPMBX\n \nProcess privileges:\n") != NULL,
           "A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the "
-          "bits of A's granted mask (TMPMBX|NETMBX|OPER) that are in "
-          "VMS_PRV_M_ENFORCED (OPER is not)");
-    CHECK(strstr(outa, "may perform operator functions") == NULL,
-          "A: SHOW PROCESS/PRIVILEGES does NOT list OPER, though A's SYSUAF-style "
-          "mask holds it -- OPER is stored and reported by the executive but "
+          "bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in "
+          "VMS_PRV_M_ENFORCED (EXQUOTA is not)");
+    CHECK(strstr(outa, "may exceed disk quota") == NULL,
+          "A: SHOW PROCESS/PRIVILEGES does NOT list EXQUOTA, though A's SYSUAF-style "
+          "mask holds it -- EXQUOTA is stored and reported by the executive but "
           "enforced nowhere in OVMX, so displaying it would be the illegal "
           "third answer (Rule 10)");
     /*
@@ -1710,15 +1710,15 @@ int main(void)
     CHECK(strstr(outb, "may affect other processes in the world") != NULL,
           "B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the "
           "process-privileges block too");
-    CHECK(strstr(outb, "may set any priority value") == NULL,
-          "B: SHOW PROCESS/PRIVILEGES does NOT list ALTPRI, though B's "
-          "SYSUAF-style mask holds it -- ALTPRI is stored and reported but "
+    CHECK(strstr(outb, "may do logical i/o") == NULL,
+          "B: SHOW PROCESS/PRIVILEGES does NOT list LOG_IO, though B's "
+          "SYSUAF-style mask holds it -- LOG_IO is stored and reported but "
           "enforced nowhere in OVMX, so showing it would be the illegal "
           "third answer (Rule 10)");
-    CHECK(strstr(outb, "may perform operator functions") == NULL,
+    CHECK(strstr(outb, "may exceed disk quota") == NULL,
           "B: the privilege display is B's mask, not A's -- two processes running "
           "the same image with the same environment report differently, and "
-          "neither shows OPER (A's unenforced privilege)");
+          "neither shows EXQUOTA (A's unenforced privilege)");
 
     /* ----------------------------------------------------------------
      * C. An UNPRIVILEGED process claims to be SYSTEM with every

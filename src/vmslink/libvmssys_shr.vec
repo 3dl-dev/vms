@@ -294,15 +294,11 @@ vms_kif_ttsetmode=PROCEDURE
 # Process rights list (rd vms-7d5a). APPENDED.
 vms_kif_rights=PROCEDURE
 vms_kif_rights_list=PROCEDURE
-<<<<<<< HEAD
 # Mailbox protection mask + IO$M_NORSWAIT write (rd vms-c6d1). APPENDED.
 vms_kif_mbx_create_prot=PROCEDURE
 vms_kif_mbx_write_ex=PROCEDURE
 # Length-carrying logical-name equivalences (rd vms-b14e, process-permanent files). APPENDED.
 vms_kif_lnm_define_n=PROCEDURE
-||||||| parent of 87ed79d5d (vms-768: ALTPRI, SYSLCK and OPER checked in the executive)
-=======
 # Base priority and broadcast scope in the executive (rd vms-768). APPENDED.
 vms_kif_pri=PROCEDURE
 vms_kif_brkauth=PROCEDURE
->>>>>>> 87ed79d5d (vms-768: ALTPRI, SYSLCK and OPER checked in the executive)

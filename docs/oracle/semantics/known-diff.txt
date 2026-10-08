@@ -150,3 +150,33 @@ lnm LNM.DEL.ALL_IN_TABLE.NONAME  # vms-ef21: process-permanent names not visible
 lnm LNM.TRN.AFTER_DELALL  # vms-ef21: process-permanent names not visible to an image
 lnm LNM.TRN.LOGIN_SURVIVES  # vms-ef21: process-permanent names not visible to an image
 lnm LNM.DEL.KERNEL_NAME  # vms-2b3: access modes not kept
+info JPI.SELF.W  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
+info JPI.SELF.PIDADR0  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
+info JPI.NOPROC.NAME  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info JPI.LONGNAME  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info JPI.NOPROC.PID  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info JPI.SHORTBUF  # vms-bd30: $GETJPI items unwritten / USERNAME not padded / pidadr not filled
+info JPI.BADITEM  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info JPI.EFN255  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info JPI.EFN64.UNASSOC  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info JPI.WILD.1  # vms-eb4: $GETJPI wildcard answers NONEXPR
+info JPI.WILD.2  # vms-eb4: $GETJPI wildcard answers NONEXPR
+info SYI.LOCAL.W  # vms-74a: $GETSYI items unwritten / bad CSID or node accepted
+info SYI.SHORTBUF  # vms-74a: $GETSYI items unwritten / bad CSID or node accepted
+info SYI.BADITEM  # vms-4ace: bad item / bad efn accepted; IOSB says success on failure
+info SYI.NOSUCHCSID  # vms-74a: $GETSYI items unwritten / bad CSID or node accepted
+info SYI.NOSUCHNODE  # vms-74a: $GETSYI items unwritten / bad CSID or node accepted
+info DVI.NLA0  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.NLA0.NOCOLON  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.NLA0.UNDERSCORE  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.NLA0.LOWERCASE  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.NLA0.FILESPEC  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.EMPTYNAME  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.SYSCOMMAND  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.TT  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.DEVNAM.NLA0  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.CHAN  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.CHAN.AND.NAME  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info ASSIGN.BADNAME  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.ASYNC  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+info DVI.ASYNC.DONE  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors

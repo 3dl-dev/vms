@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-07",
+    "generated": "2026-10-08",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -74,43 +74,43 @@
     }
   ],
   "overall": {
-    "count": 465,
+    "count": 467,
     "by_status": {
       "verified": 24,
-      "implemented": 280,
+      "implemented": 282,
       "partial": 53,
       "stub": 14,
       "designed": 1,
       "absent": 93
     },
     "by_authenticity": {
-      "real": 317,
+      "real": 319,
       "n/a": 94,
       "advisory": 48,
       "facade-risk": 6
     },
-    "met": 304,
+    "met": 306,
     "in_progress": 53,
     "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 419,
+    "count": 421,
     "by_status": {
       "verified": 24,
-      "implemented": 280,
+      "implemented": 282,
       "partial": 52,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 316,
+      "real": 318,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
-    "met": 304,
+    "met": 306,
     "in_progress": 52,
     "not_started": 63,
     "facade_risk": 4
@@ -1310,20 +1310,20 @@
       "vms_ref": "OpenVMS Record Management Services Reference Manual",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 34,
+        "count": 36,
         "by_status": {
           "verified": 0,
-          "implemented": 31,
+          "implemented": 33,
           "partial": 2,
           "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 33,
+          "real": 35,
           "n/a": 1
         },
-        "met": 31,
+        "met": 33,
         "in_progress": 2,
         "not_started": 1,
         "facade_risk": 0
@@ -6201,6 +6201,36 @@
       "evidence": "src/vmsrms/rms_record.c",
       "verified_against": null,
       "notes": "same record-lock seam as sys$get (vms-0dd)",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "rms-api",
+      "facility_name": "RMS programmatic API \u2014 entry points, control blocks, file organizations",
+      "id": "sys$read",
+      "kind": "routine",
+      "vms": "Block I/O: read virtual blocks (FAC BIO/BRO + GET)",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_record.c",
+      "verified_against": null,
+      "notes": "vms-254: RAB$L_BKT start VBN (0 = next block), USZ/RSZ/RBF/RFA per the RMS reference; IO$_READVBLK through the ACP window, partial transfer at end of file, RMS$_EOF past it, RMS$_FAC without block access. Proven over /dev/vms by tests/qemu/test_syssvc_rms_acp.c",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "rms-api",
+      "facility_name": "RMS programmatic API \u2014 entry points, control blocks, file organizations",
+      "id": "sys$write",
+      "kind": "routine",
+      "vms": "Block I/O: write virtual blocks (FAC BIO/BRO + PUT)",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/vmsrms/rms_record.c",
+      "verified_against": null,
+      "notes": "vms-254: IO$_WRITEVBLK through the ACP window, extending the file; the end of file moves byte-exact to the end of the transfer. Proven over /dev/vms by tests/qemu/test_syssvc_rms_acp.c",
       "plan_ref": "vms-801"
     },
     {

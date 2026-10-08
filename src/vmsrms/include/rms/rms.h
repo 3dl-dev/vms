@@ -54,6 +54,10 @@ uint32_t sys$update(void *rab, void (*err)(void *), void (*suc)(void *));     /*
 uint32_t sys$delete(void *rab, void (*err)(void *), void (*suc)(void *));     /* Delete current record */
 uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *));       /* Position to record without reading */
 
+/* Block I/O (FAB$M_BIO/BRO in FAC): whole virtual blocks, no record format */
+uint32_t sys$read(void *rab, void (*err)(void *), void (*suc)(void *));       /* Read blocks from rab$l_bkt */
+uint32_t sys$write(void *rab, void (*err)(void *), void (*suc)(void *));      /* Write blocks at rab$l_bkt */
+
 /* Filespec operations */
 uint32_t sys$parse(void *fab, void (*err)(void *), void (*suc)(void *));      /* Parse filespec into NAM block */
 uint32_t sys$search(void *fab, void (*err)(void *), void (*suc)(void *));     /* Search for next wildcard match */

@@ -4887,6 +4887,7 @@ static void test_f297_an_origination_does_not_follow(void)
 	 * the other -- the arms' exact shape */
 	bed_peer_connected(g.member_csb, OWN_RECONNECT);
 	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);   /* the open fires the burst */
 	ct_check_eq_u32(n_sent_on(OWN_RECONNECT), 0u,
 			"nothing is originated onto the block's other "
 			"connection with a fresh dialogue");

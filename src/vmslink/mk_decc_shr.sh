@@ -278,6 +278,14 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
         $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
+    # vms-28d part 2: the DEC C struct stat entries (decc$$stat/fstat/lstat/
+    # fstatat) a DEC C client's default <sys/stat.h> binds; 64-bit, against the
+    # musl headers like ovmx_decc_crtl.c.
+    ALPHA_STAT_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_stat.o"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+        $ALPHA_MUSL_INC -o "$ALPHA_STAT_OBJ" \
+        "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_stat.c"
     ALPHA_P32_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_p32.o"
     "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=32 -g0 \
         -o "$ALPHA_P32_OBJ" "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_p32.c"
@@ -285,7 +293,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # Ground-truth the decc$ universals these two objects ACTUALLY define —
     # same enumeration as libc.a/libgcc.a above, never a hardcoded name list.
     ALPHA_BOOT_VEC=$(mktemp)
-    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" 2>/dev/null \
+    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_STAT_OBJ" 2>/dev/null \
       | awk '
           $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
               t=$(NF-1); n=$NF;
@@ -574,7 +582,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" ${ALPHA_VENEER_OBJ:-}
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
     [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"

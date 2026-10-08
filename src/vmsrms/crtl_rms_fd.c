@@ -1091,6 +1091,50 @@ static long long rms_hook(long long n, long long a1, long long a2, long long a3,
     return r;
 }
 
+/* ---------------------------------------------- DEC C stat attributes ---- */
+
+/* The DEC C struct stat's st_fab_* (vms-28d part 2): src/vmslink/
+ * ovmx_decc_stat.c asks through this cell for an RMS file's record format,
+ * attributes, fixed-control size and maximum record size. */
+struct ovmx_fab_attrs {
+    unsigned char rfm, rat, fsz;
+    unsigned      mrs;
+};
+extern int (*__ovmx_crtl_fab_query)(int fd, int dirfd, const char *path,
+                                    struct ovmx_fab_attrs *out);
+
+static int fab_query(int fd, int dirfd, const char *path,
+                     struct ovmx_fab_attrs *out)
+{
+    int r = -1;
+    int was = in_rms;
+    in_rms = 1;                                 /* RMS's own calls -> kernel */
+    if (!path) {
+        struct rfile *rf = rget(fd);
+        if (rf) {
+            out->rfm = rf->fab.fab$b_rfm;
+            out->rat = rf->fab.fab$b_rat;
+            out->fsz = rf->fab.fab$b_fsz;
+            out->mrs = rf->fab.fab$w_mrs;
+            r = 0;
+        }
+    } else {
+        char spec[256];
+        int dir = 0;
+        struct rattr a;
+        if (rms_spec(dirfd, path, spec, sizeof spec, &dir) == 0 &&
+            stat_path(spec, dir, &a) == 0) {
+            out->rfm = a.rfm;
+            out->rat = a.rat;
+            out->fsz = 0;
+            out->mrs = a.mrs;
+            r = 0;
+        }
+    }
+    in_rms = was;
+    return r;
+}
+
 /* ------------------------------------------------------------ install ----- */
 
 /* decc$main is bound to this in the RMS-backed DECC$SHR (mk_decc_shr.sh): the
@@ -1106,6 +1150,7 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
 {
     TR("crtlfd: main enter", 0);
     __ovmx_sys_hook = rms_hook;
+    __ovmx_crtl_fab_query = fab_query;
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,
                         cliflag, argc, argv, envp);

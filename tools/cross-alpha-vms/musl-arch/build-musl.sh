@@ -503,7 +503,24 @@ _Static_assert(__builtin_types_compatible_p(ptrdiff_t, __PTRDIFF_TYPE__), "ptrdi
 _Static_assert(__builtin_types_compatible_p(intptr_t, __INTPTR_TYPE__), "intptr_t is the compiler's");
 _Static_assert(__builtin_types_compatible_p(uintptr_t, __UINTPTR_TYPE__), "uintptr_t is the compiler's");
 _Static_assert(INTPTR_MAX == __INTPTR_MAX__ && PTRDIFF_MAX == __PTRDIFF_MAX__, "pointer-width limits");
+/* vms-28d part 2: the DEC C struct stat by default -- the File ID in
+ * st_ino[3] (GCC incpath INO_T_EQ) and the record format in st_fab_rfm (GCC
+ * libcpp STAT_SIZE_RELIABLE). */
+#include <sys/stat.h>
+int forms_var(struct stat *st) { return st->st_fab_rfm == 2 && st->st_fab_mrs != 0; }
+_Static_assert(sizeof(((struct stat *)0)->st_ino) == 3 * sizeof(ino_t), "st_ino is the 3-word File ID");
+int forms_stat(const char *p, struct stat *st) { return stat(p, st) | fstat(0, st) | lstat(p, st); }
 EOF
+# _USE_STD_STAT selects the X/Open layout, as the DEC C RTL does.
+cat > /tmp/decc_stdstat.c <<'EOF'
+#include <sys/stat.h>
+_Static_assert(sizeof(((struct stat *)0)->st_ino) == sizeof(ino_t), "X/Open st_ino under _USE_STD_STAT");
+int forms_std(const char *p, struct stat *st) { return stat(p, st); }
+EOF
+"${TARGET}-gcc" -D_USE_STD_STAT -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+	-fsyntax-only /tmp/decc_stdstat.c 2>/tmp/decc_stdstat.err \
+	|| { echo "VERIFY FAIL (vms-28d): _USE_STD_STAT does not select the X/Open struct stat:" >&2; cat /tmp/decc_stdstat.err >&2; exit 7; }
+echo "  OK      _USE_STD_STAT selects the X/Open struct stat"
 for ps in "" "-mpointer-size=64"; do
 	if "${TARGET}-gcc" ${ps} -Werror=implicit-function-declaration -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
 		-fsyntax-only /tmp/decc_forms.c 2>/tmp/decc_forms.err; then

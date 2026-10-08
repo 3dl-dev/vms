@@ -23,6 +23,7 @@
 #include "clidef.h"          /* CLI$M_NOWAIT — lib$spawn "flags" bits        */
 #include "ovmx_layout.h"     /* VMS_DCL_PATH — the DCL CLI image filespec    */
 #include "rmsdef.h"
+#include "rms_textfile.h"   /* rms_textfile_open/getline -- SYS$INPUT read through RMS (vms-ccc) */
 #include "vmsfs/filespec.h"  /* vmsfs_to_linux_path — VMS filespec resolver  */
 #include "starlet.h"         /* sys$creprc — the one executive-registered create (B0) */
 #include "vms_kif.h"         /* vms_kif_getjpi_pid, struct vms_procinfo — the wait handle */
@@ -458,8 +459,51 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         close(tfd);
         in_str = cmd_tmp;
     } else if (have_in) {
-        spawn_resolve_spec(input_file, in_resv, sizeof(in_resv));
-        in_str = in_resv;
+        /*
+         * SYS$INPUT FROM A FILE (vms-ccc). The file is read through RMS over the
+         * ACP -- the same view the caller's own $CREATE/fopen wrote it through.
+         * The old code translated the spec to a Linux path (leftover of the retired
+         * /vms passthrough, e.g. /vms/SYSTMP/demo_forcex.com;0), which does not
+         * exist for an ODS-2 file; $CREPRC's child then failed the open() silently,
+         * left the subprocess on the creator's /dev/null, and DCL read EOF and
+         * exited at once. Materialise the records into the scratch file $CREPRC
+         * can open (the mechanism the command-string case already uses). A file
+         * RMS cannot reach is an honest RMS$_FNF here, before anything is created --
+         * never a silent substitute input.
+         */
+        char raw_in[1024];
+        dsc$strncpy(raw_in, input_file, sizeof(raw_in));
+        rms_textfile_t *tf = rms_textfile_open(raw_in);
+        if (tf) {
+            int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
+            if (tfd < 0) { rms_textfile_close(tf); return SS$_INSFMEM; }
+            have_tmp = 1;
+            char rec[4096];
+            int too_long = 0, werr = 0;
+            while (rms_textfile_getline(tf, rec, sizeof(rec), &too_long)) {
+                size_t rl = strlen(rec);
+                rec[rl++] = '\n';
+                for (size_t off = 0; off < rl; ) {
+                    ssize_t w = write(tfd, rec + off, rl - off);
+                    if (w < 0) { if (errno == EINTR) continue; werr = 1; break; }
+                    off += (size_t)w;
+                }
+                if (werr) break;
+            }
+            rms_textfile_close(tf);
+            close(tfd);
+            if (werr) { unlink(cmd_tmp); return SS$_INSFMEM; }
+            in_str = cmd_tmp;
+        } else {
+            /* Not reachable through RMS. A caller handing a plain Linux path (host-side
+             * tooling) still works when that path is a real regular file; anything
+             * else is a file-not-found, reported before a process exists. */
+            spawn_resolve_spec(input_file, in_resv, sizeof(in_resv));
+            struct stat ist;
+            if (stat(in_resv, &ist) != 0 || !S_ISREG(ist.st_mode))
+                return RMS$_FNF;
+            in_str = in_resv;
+        }
     }
 
     char out_resv[1024] = "";

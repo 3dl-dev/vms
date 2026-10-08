@@ -181,6 +181,8 @@ def check_goldens():
             if "# provenance:" not in head:
                 print("FAIL: %s has no '# provenance:' header" % p); ok = False
             spec = os.path.join(HERE, "specs", fam + ".py")
+            if not os.path.exists(spec):            # a DCL family (comgen.py)
+                spec = os.path.join(HERE, "specs-dcl", fam + ".py")
             m = re.search(r"^# spec: \S+ sha256=([0-9a-f]{64})$", head, re.M)
             if not os.path.exists(spec):
                 print("FAIL: %s has no spec %s" % (p, os.path.relpath(spec, ROOT))); ok = False

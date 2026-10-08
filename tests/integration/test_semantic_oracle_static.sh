@@ -30,3 +30,11 @@ for spec in "$SEM"/specs/*.py; do
     [ -d "$SRC/docs/oracle/semantics/$fam" ] || { echo "FAIL: spec $fam has no goldens in docs/oracle/semantics/$fam"; exit 1; }
     echo "OK: $fam ($n cases) generates MACRO-32 + C; C compiles"
 done
+for spec in "$SEM"/specs-dcl/*.py; do
+    [ -f "$spec" ] || continue
+    fam=$(basename "$spec" .py)
+    python3 "$SEM/comgen.py" "$spec" > "$TMP/$fam.com"
+    grep -q '^\$ WRITE SYS\$OUTPUT "=== SEMPROBE '"$fam"' END ==="$' "$TMP/$fam.com"
+    [ -d "$SRC/docs/oracle/semantics/$fam" ] || { echo "FAIL: DCL spec $fam has no goldens in docs/oracle/semantics/$fam"; exit 1; }
+    echo "OK: $fam (DCL) generates its command procedure"
+done

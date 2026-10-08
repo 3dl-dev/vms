@@ -1,0 +1,21 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod semvax-1 node VAX1, captured 2026-10-08 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/tt.py sha256=3180b53dafa601f376032e190f16a721867f1ef1aecf005c6484902d19f6ac4e
+=== SEMPROBE tt BEGIN ===
+TT.ASSIGN st=00000001
+TT.SENSEMODE st=00000001 iosb=1 count=6 class=66 width=511 page=0
+TT.SENSECHAR st=00000001 iosb=1 count=6 class=66 width=132 page=24
+TT.SENSEMODE.SHORT st=00000001 iosb=1 count=6
+TT.SETMODE.SAME st=00000001 iosb=1 count=6
+TT.WRITE st=00000001 iosb=1 count=15SP_TT_LINE_1
+TT.WRITE.NOFORMAT st=00000001 iosb=1 count=12
+TT.WRITE.ZERO st=00000001 iosb=1 count=0
+TT.READ.TIMED0 st=00000001 iosb=556 count=0 term=0 termlen=0
+TT.READ.TIMED0.ZEROLEN st=00000001 iosb=1 count=0 term=0 termlen=0
+TT.READPROMPT.TIMED0 st=00000001 iosb=556 count=0 term=0 termlen=0
+TT.ILLFUNC st=00000084 iosb=0 count=0
+TT.CANCEL st=00000001
+TT.DASSGN st=00000001
+TT.AFTER.DASSGN st=0000013C iosb=42405 count=42405
+=== SEMPROBE tt END ===

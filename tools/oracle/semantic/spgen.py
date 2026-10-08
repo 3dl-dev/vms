@@ -59,6 +59,10 @@ class V:                       # pass the CONTENTS of a long/word data item by v
     def __init__(self, n): self.n = n
 
 
+class VL:                      # pass BY VALUE the longword at byte <off> of a data item
+    def __init__(self, n, off=0): self.n, self.off = n, off      # (a lock ID in an LKSB)
+
+
 class R:                       # pass the ADDRESS of a data item (by reference)
     def __init__(self, n, off=0): self.n, self.off = n, off
 
@@ -232,7 +236,7 @@ class Probe:
         self._case(cid)
         self.ops.append(("show", cid, fields))
 
-    def setl(self, n, v): self.ops.append(("setl", n, v))
+    def setl(self, n, v, off=0): self.ops.append(("setl", n, v, off))  # long at byte off
     def setw(self, n, v): self.ops.append(("setw", n, v))
     def andl(self, n, mask): self.ops.append(("andl", n, mask))   # long &= mask
     def copyl(self, dst, src): self.ops.append(("copyl", dst, src))  # long dst = long src
@@ -568,6 +572,8 @@ def gen_mar(p):
                 code.append("        PUSHL   R1")
             else:
                 code.append("        PUSHL   %s" % a.n)
+        elif isinstance(a, VL):
+            code.append("        PUSHL   %s+%d" % (a.n, a.off) if a.off else "        PUSHL   %s" % a.n)
         elif isinstance(a, R):
             code.append("        PUSHAB  %s+%d" % (a.n, a.off) if a.off else "        PUSHAB  %s" % a.n)
         elif isinstance(a, str):
@@ -616,7 +622,8 @@ def gen_mar(p):
             elif t == "show":
                 emit_print(code, op[1], op[2])
             elif t == "setl":
-                code.append("        MOVL    #%d, %s" % (op[2] & 0xFFFFFFFF, op[1]))
+                tgt = "%s+%d" % (op[1], op[3]) if len(op) > 3 and op[3] else op[1]
+                code.append("        MOVL    #%d, %s" % (op[2] & 0xFFFFFFFF, tgt))
             elif t in ("setw", "setdlen"):
                 code.append("        MOVW    #%d, %s" % (op[2] & 0xFFFF, op[1]))
             elif t == "andl":
@@ -800,6 +807,8 @@ def gen_c(p):
             return "%uu" % (a & 0xFFFFFFFF)
         if isinstance(a, V):
             return "(unsigned int)" + a.n
+        if isinstance(a, VL):
+            return "*(unsigned int *)((char *)%s + %d)" % (caddr(a.n), a.off)
         if isinstance(a, R):
             k = p.names[a.n]
             base = a.n if k in ("buf", "quad", "items", "plist") else "&" + a.n
@@ -933,7 +942,10 @@ def gen_c(p):
             elif t == "show":
                 cprint(out, op[1], op[2])
             elif t == "setl":
-                out.append("    *(unsigned int *)%s = %uu;" % (caddr(op[1]), op[2] & 0xFFFFFFFF))
+                if len(op) > 3 and op[3]:
+                    out.append("    *(unsigned int *)((char *)%s + %d) = %uu;" % (caddr(op[1]), op[3], op[2] & 0xFFFFFFFF))
+                else:
+                    out.append("    *(unsigned int *)%s = %uu;" % (caddr(op[1]), op[2] & 0xFFFFFFFF))
             elif t == "setw":
                 out.append("    *(unsigned short *)%s = %u;" % (caddr(op[1]), op[2] & 0xFFFF))
             elif t == "setdlen":

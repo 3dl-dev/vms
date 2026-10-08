@@ -118,15 +118,21 @@ run_cmd() {  # cmd [timeout] -> SEG; PROMPT=1 if DCL came back
 }
 
 boot_login
-run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$COMMON:[SYSTEST]SP_*.EXE' 60
-PROBES=$(printf '%s\n' "$SEG" | grep -o 'SP_[A-Z0-9_]*\.EXE' | sed 's/\.EXE$//' | sort -u)
+run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$COMMON:[SYSTEST]SP_*.*' 60
+# an image probe (SP_x.EXE) is RUN; a DCL-family probe (SP_x.COM, comgen.py) is
+# run with @ -- each prints the same BEGIN/END-marked transcript
+PROBES=$(printf '%s\n' "$SEG" | grep -o 'SP_[A-Z0-9_]*\.\(EXE\|COM\)' | sort -u)
 [ -n "$PROBES" ] || die "no SP_*.EXE probe found in SYS\$COMMON:[SYSTEST] (listing: $SEG)"
 echo "probes: $(echo $PROBES)"
 
 FAIL=0
-for p in $PROBES; do
+for pf in $PROBES; do
+    p=${pf%.*}
     fam=$(echo "${p#SP_}" | tr '[:upper:]' '[:lower:]')
-    run_cmd "RUN SYS\$COMMON:[SYSTEST]$p.EXE"
+    case "$pf" in
+        *.COM) run_cmd "@SYS\$COMMON:[SYSTEST]$p.COM" ;;
+        *)     run_cmd "RUN SYS\$COMMON:[SYSTEST]$p.EXE" ;;
+    esac
     printf '%s\n' "$SEG" | awk -v f="$fam" '
         $0 == "=== SEMPROBE " f " BEGIN ===" { on = 1 }
         on { print }

@@ -192,8 +192,16 @@ def main(a):
     pw = a[a.index("--login") + 1] if "--login" in a else None
     outdir = a[a.index("--out") + 1] if "--out" in a else os.path.join(ROOT, "docs", "oracle", "semantics", fam)
     spec = os.path.join(HERE, "specs", fam + ".py")
-    mar = subprocess.run([sys.executable, os.path.join(HERE, "spgen.py"), "--mar", spec],
-                         capture_output=True, text=True, check=True).stdout
+    dclspec = os.path.join(HERE, "specs-dcl", fam + ".py")
+    is_dcl = not os.path.exists(spec) and os.path.exists(dclspec)
+    if is_dcl:
+        # a DCL family (comgen.py): a .COM run with @, no MACRO/LINK step
+        spec = dclspec
+        mar = subprocess.run([sys.executable, os.path.join(HERE, "comgen.py"), spec],
+                             capture_output=True, text=True, check=True).stdout
+    else:
+        mar = subprocess.run([sys.executable, os.path.join(HERE, "spgen.py"), "--mar", spec],
+                             capture_output=True, text=True, check=True).stdout
     F = "SP_" + fam.upper()
     lab = Lab(arch, pod)
     if pw:
@@ -205,14 +213,18 @@ def main(a):
     lab.cmd("REPLY/DISABLE")
     lab.cmd("SET DEFAULT SYS$LOGIN")
     lab.cmd("DELETE %s.*;*" % F)
-    lab.push(mar, F + ".MAR")
-    out = lab.cmd("MACRO %s" % F, 600)
-    if "-E-" in out or "-F-" in out:
-        sys.exit("capture: MACRO failed:\n" + out)
-    out = lab.cmd("LINK %s" % F, 300)
-    if "-E-" in out or "-F-" in out:
-        sys.exit("capture: LINK failed:\n" + out)
-    out = lab.cmd("RUN %s" % F, 600)
+    if is_dcl:
+        lab.push(mar, F + ".COM")
+        out = lab.cmd("@%s" % F, 600)
+    else:
+        lab.push(mar, F + ".MAR")
+        out = lab.cmd("MACRO %s" % F, 600)
+        if "-E-" in out or "-F-" in out:
+            sys.exit("capture: MACRO failed:\n" + out)
+        out = lab.cmd("LINK %s" % F, 300)
+        if "-E-" in out or "-F-" in out:
+            sys.exit("capture: LINK failed:\n" + out)
+        out = lab.cmd("RUN %s" % F, 600)
     lines = out.splitlines()
     try:
         b = lines.index("=== SEMPROBE %s BEGIN ===" % fam)
@@ -220,8 +232,13 @@ def main(a):
         sys.exit("capture: no transcript:\n" + out)
     # keep the probe's own lines only: anything else on the console (a broadcast,
     # an operator message) is not part of the transcript
-    ids = set(subprocess.run([sys.executable, os.path.join(HERE, "spgen.py"), "--list", spec],
-                             capture_output=True, text=True, check=True).stdout.split())
+    if is_dcl:
+        g = {}
+        exec(compile(open(spec).read(), spec, "exec"), g)
+        ids = set(c for c, _ in g["CASES"])
+    else:
+        ids = set(subprocess.run([sys.executable, os.path.join(HERE, "spgen.py"), "--list", spec],
+                                 capture_output=True, text=True, check=True).stdout.split())
     t, dropped = [], 0
     for ln in lines[b:]:
         if ln.startswith("=== SEMPROBE ") or ln.split(" ", 1)[0] in ids:
@@ -239,9 +256,12 @@ def main(a):
     with open(path, "w") as f:
         f.write("# provenance: %s, ovmx-lab pod %s node %s, captured %s by\n" % (
             desc, pod, node.upper(), datetime.date.today().isoformat()))
-        f.write("#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.\n")
+        f.write("#   tools/oracle/semantic/capture.py: %s\n" % (
+            "comgen.py, the node's own DCL running the procedure with @, as SYSTEM." if is_dcl
+            else "spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM."))
         f.write("#   Observed output of the real system (clean-room Rule 8); nothing disassembled.\n")
-        f.write("# spec: tools/oracle/semantic/specs/%s.py sha256=%s\n" % (fam, sha))
+        f.write("# spec: tools/oracle/semantic/%s/%s.py sha256=%s\n" % (
+            "specs-dcl" if is_dcl else "specs", fam, sha))
         f.write("\n".join(t) + "\n")
     print("capture: %s (%d cases) -> %s" % (fam, len(t) - 2, os.path.relpath(path, ROOT)))
     return 0

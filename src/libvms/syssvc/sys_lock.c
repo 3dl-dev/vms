@@ -101,6 +101,10 @@
 
 void vms$$lock_complete_efn(uint32_t efn);   /* sys_efn.c */
 
+#ifndef SS$_IVBUFLEN
+#define SS$_IVBUFLEN 844      /* %X34C, observed $ENQ LOCK.NAME32 */
+#endif
+
 /* Lock Status Block (VMS-compatible layout) */
 struct lksb {
     uint16_t lksb$w_status;
@@ -193,6 +197,22 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
     if (!lksb)
         return SS$_BADPARAM;
 
+    /*
+     * The argument checks $ENQ makes before it queues anything, in the order
+     * observed on OpenVMS (docs/oracle/semantics/lock/; rd vms-8d1): a mode
+     * above EX is SS$_BADPARAM; a new lock with no resource name argument is
+     * SS$_ACCVIO, and a name of 0 or more than 31 bytes SS$_IVBUFLEN. A
+     * request refused here leaves the LKSB as it was.
+     */
+    if (lkmode > LCK$K_EXMODE)
+        return SS$_BADPARAM;
+    if (!(flags & LCK$M_CONVERT)) {
+        if (!resnam)
+            return SS$_ACCVIO;
+        if (resnam->dsc$w_length == 0 || resnam->dsc$w_length > 31 || !resnam->dsc$a_pointer)
+            return SS$_IVBUFLEN;
+    }
+
     uint8_t valblk[16];
     memcpy(valblk, lksb->lksb$b_valblk, sizeof(valblk));
 
@@ -215,7 +235,10 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
     if (wait)
         kflags |= LCK_M_SYNC;
 
-    if ((flags & LCK$M_CONVERT) && lksb->lksb$l_lkid != 0) {
+    /* A conversion names its lock by the LKSB's lock ID, whatever it holds:
+     * an ID the process does not hold (0 included) is the lock manager's
+     * SS$_IVLOCKID, never a fresh lock (observed LOCK.CVT.BADID). */
+    if (flags & LCK$M_CONVERT) {
         lkid = lksb->lksb$l_lkid;
         status = vms_kif_convert(lkid, lkmode, kflags,
                                   (uint64_t)(uintptr_t)blkastadr, valblk);
@@ -234,9 +257,14 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
      * the final granted / deadlock status directly -- no userspace wait loop
      * remains, and since vms-82a no translation either: `status` IS the VMS
      * condition value the lock manager yielded. */
-    lksb->lksb$w_status = (uint16_t)status;
-    lksb->lksb$l_lkid = lkid;
-    memcpy(lksb->lksb$b_valblk, valblk, sizeof(valblk));
+    /* The LKSB is the request's: a request the service refuses (an even
+     * status -- NOTQUEUED under LCK$M_NOQUEUE, IVLOCKID, ...) leaves it as it
+     * was; observed LOCK.SECOND.CR.NOQUEUE / LOCK.CVT.B.*.NOQUEUE. */
+    if (status & 1) {
+        lksb->lksb$w_status = (uint16_t)status;
+        lksb->lksb$l_lkid = lkid;
+        memcpy(lksb->lksb$b_valblk, valblk, sizeof(valblk));
+    }
 
     return status;
 }

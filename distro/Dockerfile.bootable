@@ -1109,6 +1109,7 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
 RUN cp -r /system-stage/vms /system-stage-semprobe-vms && \
     mkdir -p /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSTEST && \
     cp /link-native/semprobe/SP_*.EXE /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSTEST/ && \
+    { cp /link-native/semprobe/SP_*.COM /system-stage-semprobe-vms/SYS0/SYSCOMMON/SYSTEST/ 2>/dev/null || true; } && \
     /src/build-static/bin/vmsfs_master --ods2 master \
         /boot/ovmx-distrib-semprobe.img OVMXSYS /system-stage-semprobe-vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-semprobe.img | grep -i '\]SP_' && \

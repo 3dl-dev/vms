@@ -467,11 +467,19 @@ static void setup_session(struct dcl_context *ctx)
          * terminal: the node name is a literal, not subject to further
          * translation.
          */
+        /* SYS$NODE and SYS$TIMEZONE_* are executive-mode LNM$SYSTEM names:
+         * seed them only with SYSNAM, as lnm_setup_defaults does (rd vms-ec7e,
+         * lnm_seed_system_allowed). Without it the executive would create a
+         * supervisor-mode duplicate that shadows the node's name for every
+         * process. SS$_NOSUCHDEV (no executive) still takes the LNM$PROCESS
+         * fallback below. */
+        int seed_sys = vms_kif_chkpriv(VMS_PRV_M_SYSNAM) != SS$_NOPRIV;
         char node[OVMX_IDENTITY_MAXLEN];
         ovmx_node_name(node, sizeof(node));
         char nodeval[OVMX_IDENTITY_MAXLEN + 3];
         snprintf(nodeval, sizeof(nodeval), "%s::", node);
-        uint32_t node_st = lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$NODE",
+        uint32_t node_st = !seed_sys ? SS$_NORMAL :
+                           lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$NODE",
                                       nodeval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
         if (node_st == SS$_NOSUCHDEV)
             lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$NODE", nodeval,
@@ -507,7 +515,8 @@ static void setup_session(struct dcl_context *ctx)
             char tzval[128];
 
             snprintf(tzval, sizeof(tzval), "%ld", (long)lt.tm_gmtoff);
-            if (lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_DIFFERENTIAL",
+            if (seed_sys &&
+                lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_DIFFERENTIAL",
                            tzval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC)
                     == SS$_NOSUCHDEV)
                 lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$TIMEZONE_DIFFERENTIAL",
@@ -516,7 +525,8 @@ static void setup_session(struct dcl_context *ctx)
             const char *tz_env = getenv("TZ");
             const char *zname = (lt.tm_zone && lt.tm_zone[0]) ? lt.tm_zone
                                 : (tz_env && tz_env[0]) ? tz_env : "UTC";
-            if (lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_NAME",
+            if (seed_sys &&
+                lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_NAME",
                            zname, LNM_ATTR_TERMINAL, LNM_MODE_EXEC)
                     == SS$_NOSUCHDEV)
                 lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$TIMEZONE_NAME",
@@ -532,7 +542,8 @@ static void setup_session(struct dcl_context *ctx)
             } else {
                 snprintf(tzval, sizeof(tzval), "%s0", zname);
             }
-            if (lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_RULE",
+            if (seed_sys &&
+                lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$TIMEZONE_RULE",
                            tzval, LNM_ATTR_TERMINAL, LNM_MODE_EXEC)
                     == SS$_NOSUCHDEV)
                 lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$TIMEZONE_RULE",

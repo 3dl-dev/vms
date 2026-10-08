@@ -247,8 +247,26 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode)
     if (!lnm_arena || vms_pid == 0)
         return;
     exec_lock(&lnm_write_lock);
-    lnm_write_begin();
+    /*
+     * Open a write section (bump the seqlock generation readers retry on)
+     * only when there is a name to delete (rd vms-ec7e). This runs at EVERY
+     * process teardown, most of which own no such name; bumping the generation
+     * for nothing made every concurrent translation retry. The pre-scan is
+     * stable: lnm_write_lock excludes every other writer.
+     */
     for (i = 0; i < lnm_arena->max_entries; i++) {
+        const struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_PROCESS &&
+            e->scope_key == vms_pid && e->acmode >= min_acmode)
+            break;
+    }
+    if (i == lnm_arena->max_entries) {
+        exec_unlock(&lnm_write_lock);
+        return;
+    }
+    lnm_write_begin();
+    for (; i < lnm_arena->max_entries; i++) {
         struct vms_lnm_entry *e = &lnm_arena->entries[i];
 
         if (e->in_use && e->table == VMS_LNM_TBL_PROCESS &&
@@ -289,6 +307,19 @@ void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid)
     if (!lnm_arena || !from_pid || !to_pid || from_pid == to_pid)
         return;
     exec_lock(&lnm_write_lock);
+    /* No write section when the parent has nothing to copy (rd vms-ec7e, as
+     * vms_lnm_rundown): this runs at every forked registration. */
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        const struct vms_lnm_entry *src = &lnm_arena->entries[i];
+
+        if (src->in_use && src->table == VMS_LNM_TBL_PROCESS &&
+            src->scope_key == from_pid && !(src->attributes & 0x02u))
+            break;
+    }
+    if (i == lnm_arena->max_entries) {
+        exec_unlock(&lnm_write_lock);
+        return;
+    }
     lnm_write_begin();
     for (i = 0; i < lnm_arena->max_entries; i++) {
         struct vms_lnm_entry *src = &lnm_arena->entries[i], *dst;

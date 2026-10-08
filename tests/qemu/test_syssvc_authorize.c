@@ -221,11 +221,12 @@ int main(void)
      *      inherits its job_id (the LNM$JOB scope key);
      *   2. $MOUNT the system-disk ODS-2 fixture (executive-global, reachable by
      *      an $ASSIGN of the unit from the child);
-     *   3. define SYS$SYSDEVICE=VDA300: in LNM$JOB. The child's own
-     *      lnm_setup_defaults re-seeds SYS$SYSDEVICE=VDA0: only into LNM$SYSTEM,
-     *      but LNM$JOB is searched BEFORE LNM$SYSTEM (first match wins), so the
-     *      job entry shadows it and the whole SYS$SYSTEM->SYS$SYSROOT->
-     *      SYS$SYSDEVICE chain composes onto VDA300: over the ACP.
+     *   3. define the node's system logicals as the boot would (this parent
+     *      holds SYSNAM; the child does not, so it no longer seeds LNM$SYSTEM,
+     *      rd vms-ec7e), then SYS$SYSDEVICE=VDA300: in LNM$JOB. LNM$JOB is
+     *      searched BEFORE LNM$SYSTEM (first match wins), so the job entry
+     *      shadows the system SYS$SYSDEVICE and the whole SYS$SYSTEM->
+     *      SYS$SYSROOT->SYS$SYSDEVICE chain composes onto VDA300: over the ACP.
      * With no mounted SYSUAF the admitted (SYSPRV) session's ovmx_sysuaf_enum
      * failed and AUTHORIZE exited 1; the non-SYSPRV refusal is decided earlier by
      * AUTHORIZE's executive SYSPRV gate and is unaffected by the mount.
@@ -237,6 +238,13 @@ int main(void)
         uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
         CHECK($VMS_STATUS_SUCCESS(mst),
               "$MOUNT of the system-disk ODS-2 fixture on " ODS2_UNIT " (precondition)");
+        /* The node's system logicals (SYS$SYSROOT, SYS$SYSTEM, ...) are
+         * defined by the boot, which holds SYSNAM. This harness has no boot,
+         * and the AUTHORIZE child holds SYSPRV but not SYSNAM, so it may not
+         * define them itself (rd vms-ec7e): define them here, as the boot
+         * would, before the child runs. */
+        if (mgr)
+            lnm_setup_defaults(mgr, NULL);
         if (mgr)
             lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
                        LNM_ATTR_TERMINAL, LNM_MODE_EXEC);

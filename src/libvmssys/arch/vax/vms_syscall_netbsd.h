@@ -40,6 +40,7 @@
 #include "vms_types.h"
 
 #include <unistd.h>
+#include <time.h>          /* nanosleep (vms_sys_nanosleep) -- vms-ec7e */
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <errno.h>
@@ -144,6 +145,15 @@ static inline int vms_sys_openat(int dirfd, const char *path, int flags,
 {
     /* NetBSD libc openat(2); flags is the VMS_O_* mask (== NetBSD O_*). */
     return openat(dirfd, path, flags, (mode_t)mode);
+}
+
+static inline int vms_sys_nanosleep(const struct vms_timespec *req,
+                                    struct vms_timespec *rem)
+{
+    /* NetBSD libc nanosleep(2); struct vms_timespec is layout-compatible with
+     * struct timespec on ILP32 (as vms_sys_futex above relies on). The LNM
+     * seqlock reader yields through this between retries (rd vms-ec7e). */
+    return nanosleep((const struct timespec *)req, (struct timespec *)rem);
 }
 
 static inline long vms_sys_futex(uint32_t *uaddr, int futex_op, uint32_t val,

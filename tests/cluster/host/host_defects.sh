@@ -1321,6 +1321,7 @@ the foreign member got its op 0x09
 [49:51] the founder, not us
 [87:89] the count the joiner's own op 0x02 carried
 [96:98] CEVOTES: the joiner's EXPECTED_VOTES 6 beats four votes
+[98:100] lowest slot
 [100:102] a first admission: one below its slot
 [104:106] highest slot
 [106:114] the -900 s delta

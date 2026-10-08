@@ -261,12 +261,9 @@ rtl LIB.GET_SYMBOL.LOCAL_WINS  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_S
 rtl LIB.GET_SYMBOL.GLOBAL_LEFT  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
 rtl LIB.SET_SYMBOL.BADNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
 rtl LIB.SET_SYMBOL.EMPTYNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
-rtl LIB.FIND_FILE.DEFAULT  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.SAME_CTX_AGAIN  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.WILD.1  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.WILD.2  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.NONE  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
-rtl LIB.FIND_FILE.SYNTAX  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.WILD.2  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
+rtl LIB.FIND_FILE.NONE  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
+rtl LIB.FIND_FILE.SYNTAX  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
 rtl LIB.CVT_DTB.BAD  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
 rtl LIB.CVT_DTB.OVERFLOW  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
 rtl LIB.CVT_DTB.ZEROLEN  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length

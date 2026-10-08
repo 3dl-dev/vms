@@ -147,7 +147,7 @@ uint32_t (sys$crembx)(int prmflg,
             sizeof(pcb->channels[slot].devnam) - 1);
     pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
 
-    *chan = (uint16_t)slot;
+    *chan = pcb_slot_to_chan((uint32_t)slot);
 
     pthread_mutex_unlock(&pcb->chan_lock);
 
@@ -193,7 +193,8 @@ uint32_t (sys$crembx)(int prmflg,
  *   SS$_IVCHAN    - Invalid, unassigned, or non-mailbox channel
  *   SS$_NOSUCHDEV - The executive is unreachable (INV-6: no fallback)
  */
-uint32_t sys$delmbx(uint16_t chan) {
+uint32_t sys$delmbx(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return SS$_IVCHAN;
 
     struct vms_pcb *pcb = vms_pcb_get();

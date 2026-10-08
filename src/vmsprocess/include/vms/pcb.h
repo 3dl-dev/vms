@@ -43,18 +43,36 @@
 /*
  * The status for a channel number this process does not hold (vms-4a69).
  * Observed on real systems: a number inside the channel table that is not
- * assigned is SS$_IVCHAN on both VAX V7.3 and Alpha V8.4; a number beyond the
- * table (12345, 0xFFF0) is SS$_IVIDENT on Alpha V8.4 and SS$_IVCHAN on VAX
+ * assigned is SS$_IVCHAN on both VAX V7.3 and Alpha V8.4; a number naming no
+ * slot (12345, 0xFFF0) is SS$_IVIDENT on Alpha V8.4 and SS$_IVCHAN on VAX
  * V7.3 (semantic oracle IO.BADCHAN, IO.CANCEL.BADCHAN, OPR.BADCHAN).
  */
+/*
+ * CHANNEL NUMBERS ARE OPENVMS'S: multiples of 16 (one channel control block
+ * per channel, as $ASSIGN hands them out on VAX and Alpha -- observed
+ * FAB$L_STV 0x50 for an open file's channel, semantic oracle RMS.CREATE).
+ * The process channel table is indexed by slot; slot N is channel N*16. A
+ * channel number that is not a multiple of 16 names no slot.
+ */
+#define PCB_CHAN_SHIFT 4
+static inline uint32_t pcb_chan_to_slot(uint32_t chan)
+{
+    return (chan & ((1u << PCB_CHAN_SHIFT) - 1u)) ? PCB_MAX_CHANNELS
+                                                  : (chan >> PCB_CHAN_SHIFT);
+}
+static inline uint16_t pcb_slot_to_chan(uint32_t slot)
+{
+    return (uint16_t)(slot << PCB_CHAN_SHIFT);
+}
+
 static inline uint32_t pcb_chan_unheld_status(uint32_t chan)
 {
 #if defined(__vax__) || defined(__vax)
     (void)chan;
     return 316u;                                    /* SS$_IVCHAN */
 #else
-    return chan >= PCB_MAX_CHANNELS ? 8740u          /* SS$_IVIDENT */
-                                    : 316u;          /* SS$_IVCHAN */
+    return pcb_chan_to_slot(chan) >= PCB_MAX_CHANNELS ? 8740u   /* SS$_IVIDENT */
+                                                      : 316u;   /* SS$_IVCHAN */
 #endif
 }
 #define PCB_MAX_AST_QUEUE   64

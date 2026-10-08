@@ -74,6 +74,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_ast.c
     syssvc/sys_cluevt.c
     syssvc/sys_lock.c
+    syssvc/sys_efn.c
     syssvc/sys_misc.c
     syssvc/sys_security.c
     syssvc/sys_fao.c

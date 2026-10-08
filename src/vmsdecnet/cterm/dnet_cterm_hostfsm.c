@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "dnet_cterm_hostfsm.h"
+#include "../../kernel/vms_ioctl.h"   /* VMS_TTC_* (constants only)          */
 
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 static uint16_t get16(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
@@ -140,6 +141,80 @@ int dnet_cth_vms_termchar_parse(const uint8_t *v, size_t vlen, struct dnet_cth_t
                         ((uint32_t)v[10] << 16) | ((uint32_t)v[11] << 24);
     }
     out->valid = 1;
+    return DNET_CTH_OK;
+}
+
+/*
+ * The conveyed word -> RTAn: characteristic map (rd vms-14b). Bit positions
+ * are the V7.3 node's own TT$V_* / TT2$V_* (docs/oracle/vax73-starlet-defs/
+ * TTDEF.txt, TT2DEF.txt). Each SHOW TERMINAL name is matched to its bit by the
+ * DCL SET TERMINAL qualifier it names; `invert` marks the six whose VMS bit
+ * is the negative sense (NOECHO, NOTYPEAHD, SCOPE, NOBRDCST, HALFDUP,
+ * APP_KEYPAD). Checked against the real session: the 2026-10-05 Initiate's
+ * words (TT$ 0x0202a0, TT2$ 0x3000) through this table give exactly the grid
+ * of tests/lab/captures/decnet-sethost-inbound-20261005/
+ * vax-rta-show-terminal.txt (tests/vmsdecnet/test_dnet_cterm_host.c).
+ */
+struct cth_ttmap { uint8_t word2; uint8_t bit; uint8_t invert; uint64_t ttc; };
+static const struct cth_ttmap k_ttmap[] = {
+    { 0,  1, 1, VMS_TTC_ECHO            },  /* TT$V_NOECHO     */
+    { 0,  2, 1, VMS_TTC_TYPEAHEAD       },  /* TT$V_NOTYPEAHD  */
+    { 0,  3, 0, VMS_TTC_ESCAPE          },  /* TT$V_ESCAPE     */
+    { 0,  4, 0, VMS_TTC_HOSTSYNC        },  /* TT$V_HOSTSYNC   */
+    { 0,  5, 0, VMS_TTC_TTSYNC          },  /* TT$V_TTSYNC     */
+    { 0,  7, 0, VMS_TTC_LOWERCASE       },  /* TT$V_LOWER      */
+    { 0,  8, 0, VMS_TTC_TAB             },  /* TT$V_MECHTAB    */
+    { 0,  9, 0, VMS_TTC_WRAP            },  /* TT$V_WRAP       */
+    { 0, 12, 1, VMS_TTC_HARDCOPY        },  /* TT$V_SCOPE      */
+    { 0, 13, 0, VMS_TTC_REMOTE          },  /* TT$V_REMOTE     */
+    { 0, 15, 0, VMS_TTC_EIGHTBIT        },  /* TT$V_EIGHTBIT   */
+    { 0, 17, 1, VMS_TTC_BROADCAST       },  /* TT$V_NOBRDCST   */
+    { 0, 18, 0, VMS_TTC_READSYNC        },  /* TT$V_READSYNC   */
+    { 0, 19, 0, VMS_TTC_FORM            },  /* TT$V_MECHFORM   */
+    { 0, 20, 1, VMS_TTC_FULLDUP         },  /* TT$V_HALFDUP    */
+    { 0, 21, 0, VMS_TTC_MODEM           },  /* TT$V_MODEM      */
+    { 1,  0, 0, VMS_TTC_LOCAL_ECHO      },  /* TT2$V_LOCALECHO */
+    { 1,  1, 0, VMS_TTC_AUTOBAUD        },  /* TT2$V_AUTOBAUD  */
+    { 1,  2, 0, VMS_TTC_HANGUP          },  /* TT2$V_HANGUP    */
+    { 1,  4, 0, VMS_TTC_BRDCSTMBX       },  /* TT2$V_BRDCSTMBX */
+    { 1,  6, 0, VMS_TTC_DMA             },  /* TT2$V_DMA       */
+    { 1,  7, 0, VMS_TTC_ALTYPEAHD       },  /* TT2$V_ALTYPEAHD */
+    { 1, 10, 0, VMS_TTC_DEC_CRT4        },  /* TT2$V_DECCRT4   */
+    { 1, 11, 0, VMS_TTC_COMMSYNC        },  /* TT2$V_COMMSYNC  */
+    { 1, 12, 0, VMS_TTC_LINE_EDITING    },  /* TT2$V_EDITING   */
+    { 1, 13, 0, VMS_TTC_INSERT_EDITING  },  /* TT2$V_INSERT    */
+    { 1, 14, 0, VMS_TTC_FALLBACK        },  /* TT2$V_FALLBACK  */
+    { 1, 15, 0, VMS_TTC_DIALUP          },  /* TT2$V_DIALUP    */
+    { 1, 16, 0, VMS_TTC_SECURE_SERVER   },  /* TT2$V_SECURE    */
+    { 1, 17, 0, VMS_TTC_DISCONNECT      },  /* TT2$V_DISCONNECT*/
+    { 1, 18, 0, VMS_TTC_PASTHRU         },  /* TT2$V_PASTHRU   */
+    { 1, 19, 0, VMS_TTC_SYSPASSWORD     },  /* TT2$V_SYSPWD    */
+    { 1, 20, 0, VMS_TTC_SIXEL           },  /* TT2$V_SIXEL     */
+    { 1, 21, 0, VMS_TTC_SOFT_CHARACTERS },  /* TT2$V_DRCS      */
+    { 1, 22, 0, VMS_TTC_PRINTER_PORT    },  /* TT2$V_PRINTER   */
+    { 1, 23, 1, VMS_TTC_NUMERIC_KEYPAD  },  /* TT2$V_APP_KEYPAD*/
+    { 1, 24, 0, VMS_TTC_ANSI_CRT        },  /* TT2$V_ANSICRT   */
+    { 1, 25, 0, VMS_TTC_REGIS           },  /* TT2$V_REGIS     */
+    { 1, 26, 0, VMS_TTC_BLOCK_MODE      },  /* TT2$V_BLOCK     */
+    { 1, 27, 0, VMS_TTC_ADVANCED_VIDEO  },  /* TT2$V_AVO       */
+    { 1, 28, 0, VMS_TTC_EDIT_MODE       },  /* TT2$V_EDIT      */
+    { 1, 29, 0, VMS_TTC_DEC_CRT         },  /* TT2$V_DECCRT    */
+    { 1, 30, 0, VMS_TTC_DEC_CRT2        },  /* TT2$V_DECCRT2   */
+    { 1, 31, 0, VMS_TTC_DEC_CRT3        },  /* TT2$V_DECCRT3   */
+};
+
+int dnet_cth_termchar_to_ttc(const struct dnet_cth_termchar *tc,
+                             uint64_t *setchar, uint64_t *clrchar)
+{
+    if (!tc || !setchar || !clrchar || !tc->valid) return DNET_CTH_EINVAL;
+    *setchar = *clrchar = 0;
+    for (size_t i = 0; i < sizeof k_ttmap / sizeof k_ttmap[0]; i++) {
+        const struct cth_ttmap *e = &k_ttmap[i];
+        if (e->word2 && !tc->have_tt2) continue;
+        uint32_t w = e->word2 ? tc->tt2char : tc->ttchar;
+        int on = ((w >> e->bit) & 1u) != (e->invert != 0);
+        if (on) *setchar |= e->ttc; else *clrchar |= e->ttc;
+    }
     return DNET_CTH_OK;
 }
 

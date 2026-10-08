@@ -379,19 +379,22 @@ _Static_assert(VMS_IOCTL_TERM_GETRPI == 0xC058567Bu,
 #define VMS_TERMCHAR_M_TYPE   0x1u
 #define VMS_TERMCHAR_M_WIDTH  0x2u
 #define VMS_TERMCHAR_M_PAGE   0x4u
+#define VMS_TERMCHAR_M_CHAR   0x8u
 struct vms_termchar_args {
     char     devnam[VMS_DEVNAM_SIZE];
     uint32_t flags;
     uint32_t devtype;
     uint32_t width;
     uint32_t page;
+    uint64_t setchar;
+    uint64_t clrchar;
     uint32_t status;
     uint32_t pad;
 };
 #define VMS_IOCTL_TERM_SETCHAR   _IOWR(VMS_ACP_IOC_MAGIC, 0x7c, struct vms_termchar_args)
-_Static_assert(sizeof(struct vms_termchar_args) == 40,
+_Static_assert(sizeof(struct vms_termchar_args) == 56,
                "struct vms_termchar_args changed size -- RTAn: terminal type would decode at the wrong offsets");
-_Static_assert(VMS_IOCTL_TERM_SETCHAR == 0xC028567Cu,
+_Static_assert(VMS_IOCTL_TERM_SETCHAR == 0xC038567Cu,
                "VMS_IOCTL_TERM_SETCHAR encodes differently here than on the Linux reference build");
 
 /*

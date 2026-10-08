@@ -264,12 +264,16 @@ uint32_t dnet_cterm_host_record_origin(struct dnet_cterm_host_session *hs,
 {
     if (!hs || !tc || !tc->valid || !hs->devnam[0])
         return SS$_BADPARAM;
-    /* Exactly the three values the wire carried and the oracle pins; the raw
-     * TT$/TT2$ words are not mapped (see dnet_cterm_hostfsm.h). */
+    /* Exactly what the wire carried: type, width, page, and every
+     * characteristic the conveyed TT$/TT2$ words hold (dnet_cterm_hostfsm.h);
+     * a characteristic they do not hold keeps its minted value. */
+    uint64_t setc = 0, clrc = 0;
+    if (dnet_cth_termchar_to_ttc(tc, &setc, &clrc) != DNET_CTH_OK)
+        return SS$_BADPARAM;
     return vms_kif_terminal_setchar(hs->devnam,
                                     VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
-                                    VMS_TERMCHAR_M_PAGE,
-                                    tc->devtype, tc->width, tc->page);
+                                    VMS_TERMCHAR_M_PAGE | VMS_TERMCHAR_M_CHAR,
+                                    tc->devtype, tc->width, tc->page, setc, clrc);
 }
 
 int dnet_cterm_host_fd(const struct dnet_cterm_host_session *hs)

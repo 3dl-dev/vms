@@ -2372,26 +2372,31 @@ _Static_assert(VMS_IOCTL_TERM_GETRPI == 0xC058567Bu,
  * end. Only a dynamically-minted RTAn: accepts it (SS$_IVDEVNAM otherwise --
  * a local terminal such as OPA0: is never redefined through this door). Each
  * field applies only when its VMS_TERMCHAR_M_* flag is set, so a value the
- * wire did not carry is never written. Bounds are the wire's own field sizes
+ * wire did not carry is never written. Under VMS_TERMCHAR_M_CHAR the
+ * characteristic vector is cleared by `clrchar`, then set by `setchar`
+ * (VMS_TTC_* bits only); bits named in neither keep their minted value. Bounds are the wire's own field sizes
  * (DT$ code and page length are bytes, width a word); a larger value is
  * SS$_BADPARAM, never clipped. OVMX design choice (Rule 8): the byte layout.
  */
 #define VMS_TERMCHAR_M_TYPE   0x1u   /* apply devtype (a DT$_ code)        */
 #define VMS_TERMCHAR_M_WIDTH  0x2u   /* apply width                        */
 #define VMS_TERMCHAR_M_PAGE   0x4u   /* apply page length                  */
+#define VMS_TERMCHAR_M_CHAR   0x8u   /* apply setchar/clrchar (VMS_TTC_*)  */
 struct vms_termchar_args {
     char     devnam[VMS_DEVNAM_SIZE];        /* the RTAn: terminal (in)        */
     uint32_t flags;                          /* VMS_TERMCHAR_M_*               */
     uint32_t devtype;                        /* DT$_ code, 0..255              */
     uint32_t width;                          /* 0..65535                       */
     uint32_t page;                           /* 0..255                         */
+    uint64_t setchar;                        /* VMS_TTC_* bits to set          */
+    uint64_t clrchar;                        /* VMS_TTC_* bits to clear        */
     uint32_t status;                         /* return: SS$_ status            */
     uint32_t pad;
 };
 #define VMS_IOCTL_TERM_SETCHAR  _IOWR(VMS_IOC_MAGIC, 0x7c, struct vms_termchar_args)
-_Static_assert(sizeof(struct vms_termchar_args) == 40,
+_Static_assert(sizeof(struct vms_termchar_args) == 56,
                "struct vms_termchar_args changed size -- RTAn: terminal type would decode at the wrong offsets");
-_Static_assert(VMS_IOCTL_TERM_SETCHAR == 0xC028567Cu,
+_Static_assert(VMS_IOCTL_TERM_SETCHAR == 0xC038567Cu,
                "VMS_IOCTL_TERM_SETCHAR encodes differently here than on the reference build");
 
 _Static_assert(sizeof(struct vms_termlogin_args) == 56,

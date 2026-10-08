@@ -1640,10 +1640,11 @@ uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_siz
     return args.status;
 }
 
-/* RTAn: originating-terminal type/width/page (rd vms-14b). Privileged; only
- * the fields named in `flags` (VMS_TERMCHAR_M_*) are applied. */
+/* RTAn: originating-terminal type/width/page/characteristics (rd vms-14b).
+ * Privileged; only the fields named in `flags` (VMS_TERMCHAR_M_*) apply. */
 uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
-                                  uint32_t devtype, uint32_t width, uint32_t page)
+                                  uint32_t devtype, uint32_t width, uint32_t page,
+                                  uint64_t setchar, uint64_t clrchar)
 {
     struct vms_termchar_args args;
 
@@ -1657,6 +1658,8 @@ uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
     args.devtype = devtype;
     args.width   = width;
     args.page    = page;
+    args.setchar = setchar;
+    args.clrchar = clrchar;
 
     KIF_CALL(VMS_IOCTL_TERM_SETCHAR, &args);
     return args.status;

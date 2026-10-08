@@ -203,11 +203,12 @@ int dnet_cth_initiate_build(uint16_t max_msg, uint8_t *buf, size_t cap, size_t *
  *     that capture came from a terminal set otherwise: byte 1 = 0x60 =
  *     DT$_VT100 96 (DCDEF), width 0x0050 = 80 -- so type and width are
  *     per-session values at these offsets, not constants.
- * The TT$/TT2$ words are kept RAW and are not mapped to characteristic names:
- * no public document available to this work pins their bit positions (see
- * docs/oracle/vax73-terminal-device.md, "Characteristic bit positions"), and
- * VMS message 19 in the same session carries TT2$ 0x3200 where this parameter
- * carries 0x3000 -- unexplained, so nothing is claimed from either. */
+ * The TT$/TT2$ words are mapped onto the RTAn:'s characteristic vector by
+ * dnet_cth_termchar_to_ttc() below, bit positions from the V7.3 node's own
+ * $TTDEF/$TT2DEF (docs/oracle/vax73-starlet-defs/TTDEF.txt, TT2DEF.txt). VMS
+ * message 19 in the same session carries TT2$ 0x3200 where this parameter
+ * carries 0x3000: the difference is TT2$V_DCL_MAILBX (bit 9), which has no
+ * SHOW TERMINAL name, so the two agree on every displayed characteristic. */
 #define DNET_CTH_INIT_P_VMS_TERMCHAR 4
 #define DNET_CTH_DC_TERM             66
 struct dnet_cth_termchar {
@@ -224,6 +225,20 @@ struct dnet_cth_termchar {
  * DC$_TERM value at least 8 bytes long; a shorter value is ETRUNC and a
  * different device class EINVAL (out->valid = 0 either way). */
 int dnet_cth_vms_termchar_parse(const uint8_t *v, size_t vlen, struct dnet_cth_termchar *out);
+
+/*
+ * dnet_cth_termchar_to_ttc - the conveyed TT$/TT2$ words as VMS_TTC_* bits to
+ * set and to clear on the RTAn: (src/kernel/vms_ioctl.h). Every characteristic
+ * the wire carries is set OR cleared from it; one the wire does not carry is
+ * in neither mask, so the RTAn: keeps the value it was minted with. Not
+ * carried: Interactive, VMS Style Input, DEC_CRT5, Ansi_Color (no TT$/TT2$ bit
+ * in V7.3's TTDEF/TT2DEF), and Set_speed -- the oracle RTAn: prints Set_speed
+ * while the conveyed TT2$V_SETSPEED is 0, so how that bit maps to the display
+ * is not established and it is not used. Returns DNET_CTH_EINVAL unless
+ * tc->valid; the TT2$ half is used only when tc->have_tt2.
+ */
+int dnet_cth_termchar_to_ttc(const struct dnet_cth_termchar *tc,
+                             uint64_t *setchar, uint64_t *clrchar);
 
 /* What a server's Initiate told us. Absent parameters stay 0. */
 struct dnet_cth_peer_init {

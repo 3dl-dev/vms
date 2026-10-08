@@ -25,6 +25,7 @@
 
 #include "dnet_cterm.h"
 #include "dnet_cterm_hostfsm.h"
+#include "../../src/kernel/vms_ioctl.h"   /* VMS_TTC_* */
 
 struct cth_oracle_seg { int host; const uint8_t *b; size_t n; };
 #include "cterm_host_oracle.inc"
@@ -363,6 +364,65 @@ static void test_origin_terminal(void)
     check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK && pi.term.valid &&
           pi.term.devtype == 96 && pi.term.width == 80 && pi.term.page == 24,
           "origin: the oracle's session-2 client Initiate decodes DT$_VT100 (96) / 80 / page 24");
+
+    /* THE CHARACTERISTICS. The RTAn: is minted wearing the console set
+     * (src/kernel-core/vms_devtab.c VMS_CONSOLE_DEVCHAR, reproduced here);
+     * applying the masks the real Initiate's TT$/TT2$ words produce must give
+     * EXACTLY the set the oracle RTAn: shows (vax-rta-show-terminal.txt): set =
+     * Interactive Echo Type_ahead TTsync Lowercase Wrap Hardcopy Fulldup
+     * Set_speed Line Editing Insert editing Numeric Keypad VMS Style Input,
+     * every other name "No ...". */
+    {
+        const uint64_t minted = VMS_TTC_INTERACTIVE | VMS_TTC_ECHO | VMS_TTC_TYPEAHEAD |
+            VMS_TTC_TTSYNC | VMS_TTC_LOWERCASE | VMS_TTC_WRAP | VMS_TTC_BROADCAST |
+            VMS_TTC_FULLDUP | VMS_TTC_SET_SPEED | VMS_TTC_INSERT_EDITING |
+            VMS_TTC_NUMERIC_KEYPAD | VMS_TTC_VMS_STYLE_INPUT;
+        const uint64_t oracle = VMS_TTC_INTERACTIVE | VMS_TTC_ECHO | VMS_TTC_TYPEAHEAD |
+            VMS_TTC_TTSYNC | VMS_TTC_LOWERCASE | VMS_TTC_WRAP | VMS_TTC_HARDCOPY |
+            VMS_TTC_FULLDUP | VMS_TTC_SET_SPEED | VMS_TTC_LINE_EDITING |
+            VMS_TTC_INSERT_EDITING | VMS_TTC_NUMERIC_KEYPAD | VMS_TTC_VMS_STYLE_INPUT;
+        const uint64_t not_carried = VMS_TTC_INTERACTIVE | VMS_TTC_VMS_STYLE_INPUT |
+            VMS_TTC_DEC_CRT5 | VMS_TTC_ANSI_COLOR | VMS_TTC_SET_SPEED;
+        uint64_t setc = 0, clrc = 0, setc19 = 0, clrc19 = 0;
+        struct dnet_cth_termchar t19;
+
+        m = carried(k_inb_initiate, sizeof k_inb_initiate, 0, &ml);
+        check(m && dnet_cth_initiate_parse(m, ml, &pi) == DNET_CTH_OK &&
+              dnet_cth_termchar_to_ttc(&pi.term, &setc, &clrc) == DNET_CTH_OK,
+              "chars: the real Initiate's TT$/TT2$ words map");
+        check((setc & clrc) == 0, "chars: no characteristic is both set and cleared");
+        check(((minted & ~clrc) | setc) == oracle,
+              "chars: minted RTAn: + the conveyed words = EXACTLY the oracle RTAn:'s"
+              " characteristic set (No Broadcast, Hardcopy, Line Editing come off the wire)");
+        check(((setc | clrc) & not_carried) == 0,
+              "chars: Interactive, VMS Style Input, DEC_CRT5, Ansi_Color and Set_speed"
+              " are not claimed from the wire");
+        check((setc | clrc) == (((VMS_TTC_VMS_STYLE_INPUT << 1) - 1) & ~not_carried),
+              "chars: every other displayed characteristic IS decided by the wire");
+
+        /* VMS message 19 of the same session repeats the blob with TT2$
+         * 0x3200 (the extra bit is TT2$V_DCL_MAILBX, no display name): the
+         * displayed characteristics come out identical. */
+        {
+            static const uint8_t blob19[12] = { 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x02,
+                                                0x00, 0x00, 0x32, 0x00, 0x00 };
+            check(dnet_cth_vms_termchar_parse(blob19, sizeof blob19, &t19) == DNET_CTH_OK &&
+                  dnet_cth_termchar_to_ttc(&t19, &setc19, &clrc19) == DNET_CTH_OK &&
+                  setc19 == setc && clrc19 == clrc,
+                  "chars: message 19's copy (TT2$ 0x3200) yields the same characteristics");
+        }
+
+        /* NEGCTL: an 8-byte value has no TT2$, so no TT2$ characteristic is
+         * claimed; an invalid decode maps nothing. */
+        check(dnet_cth_vms_termchar_parse(k_inb_initiate + 33, 8, &tc) == DNET_CTH_OK &&
+              dnet_cth_termchar_to_ttc(&tc, &setc, &clrc) == DNET_CTH_OK &&
+              ((setc | clrc) & (VMS_TTC_LINE_EDITING | VMS_TTC_NUMERIC_KEYPAD)) == 0 &&
+              (clrc & VMS_TTC_BROADCAST) != 0,
+              "chars NEGCTL: without TT2$ only the TT$ characteristics are decided");
+        memset(&tc, 0, sizeof tc);
+        check(dnet_cth_termchar_to_ttc(&tc, &setc, &clrc) == DNET_CTH_EINVAL,
+              "chars NEGCTL: an invalid decode maps nothing");
+    }
 
     /* NEGCTL: a host Initiate (no parameter 4) conveys no terminal. */
     m = carried(k_oracle_o[17].b, k_oracle_o[17].n, 0, &ml);

@@ -1992,6 +1992,17 @@ static int run_cterm_accept_test(void)
                      info.width == 132 && info.page == 0,
                  "the RTAn:'s EXECUTIVE device row carries the originating terminal"
                  " ($GETDVI from this process: device type LA36, width 132, page 0)");
+        /* The characteristic set the oracle RTAn: shows (vax-rta-show-
+         * terminal.txt): the conveyed TT$/TT2$ words decide No Broadcast,
+         * Hardcopy and Line Editing (among all the others they carry);
+         * Interactive, Set_speed and VMS Style Input are the minted values. */
+        CT_CHECK((dst & 1) && info.devchar == (VMS_TTC_INTERACTIVE | VMS_TTC_ECHO |
+                     VMS_TTC_TYPEAHEAD | VMS_TTC_TTSYNC | VMS_TTC_LOWERCASE |
+                     VMS_TTC_WRAP | VMS_TTC_HARDCOPY | VMS_TTC_FULLDUP |
+                     VMS_TTC_SET_SPEED | VMS_TTC_LINE_EDITING | VMS_TTC_INSERT_EDITING |
+                     VMS_TTC_NUMERIC_KEYPAD | VMS_TTC_VMS_STYLE_INPUT),
+                 "the RTAn:'s EXECUTIVE characteristics are the oracle RTAn:'s set"
+                 " (No Broadcast, Hardcopy, Line Editing from the VAX's TT$/TT2$)");
 
         /* NEGCTL: a local terminal is never redefined through this door, and
          * stays exactly as it was. */
@@ -1999,13 +2010,15 @@ static int run_cterm_accept_test(void)
         memset(&con1, 0, sizeof(con1));
         (void)vms_kif_getdvi_devnam("OPA0:", &con0);
         rst = vms_kif_terminal_setchar("OPA0:", VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
-                                       VMS_TERMCHAR_M_PAGE, CT_DT_LA36, 80, 66);
+                                       VMS_TERMCHAR_M_PAGE | VMS_TERMCHAR_M_CHAR,
+                                       CT_DT_LA36, 80, 66, VMS_TTC_HARDCOPY,
+                                       VMS_TTC_BROADCAST);
         dst = vms_kif_getdvi_devnam("OPA0:", &con1);
         CT_CHECK(rst == SS$_IVDEVNAM && (dst & 1) && con1.devtype == 0 &&
                      con1.devtype == con0.devtype && con1.width == con0.width &&
-                     con1.page == con0.page,
+                     con1.page == con0.page && con1.devchar == con0.devchar,
                  "NEGCTL: OPA0: refuses the RTAn: setter (SS$_IVDEVNAM) and keeps"
-                 " device type Unknown and its own width/page");
+                 " device type Unknown and its own width/page/characteristics");
     }
 
     /* ---- 4. Bind the CTERM session and read LOGINOUT's OWN prompt --------- */

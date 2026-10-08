@@ -1055,12 +1055,13 @@ long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg)
 
 /*
  * vms_ioctl_term_setchar - record the ORIGINATING terminal's device type,
- * width and page length on an RTAn: (rd vms-14b). The CTERM host that minted
+ * width, page length and conveyed characteristics on an RTAn: (rd vms-14b). The CTERM host that minted
  * the unit calls it with what the remote VAX conveyed in its CTERM Initiate;
  * $GETDVI (vms_devinfo devtype/width/page), SHOW TERMINAL and F$GETDVI read the
  * row back. Same gate as TERM_SETRPI: substrate superuser or SETPRV, and only
  * a dynamically-minted RTAn: (a local terminal is never redefined here). Each
- * field applies only under its flag; out-of-range values are SS$_BADPARAM.
+ * field applies only under its flag; out-of-range values (or a characteristic
+ * bit outside VMS_TTC_*) are SS$_BADPARAM.
  */
 long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
 {
@@ -1080,8 +1081,9 @@ long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
     if ((args.flags & ~(VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
-                        VMS_TERMCHAR_M_PAGE)) != 0 ||
-        args.devtype > 0xff || args.width > 0xffff || args.page > 0xff) {
+                        VMS_TERMCHAR_M_PAGE | VMS_TERMCHAR_M_CHAR)) != 0 ||
+        args.devtype > 0xff || args.width > 0xffff || args.page > 0xff ||
+        ((args.setchar | args.clrchar) & ~((VMS_TTC_VMS_STYLE_INPUT << 1) - 1)) != 0) {
         args.status = SS__BADPARAM;
         goto out;
     }
@@ -1109,6 +1111,10 @@ long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
         dev->width = args.width;
     if (args.flags & VMS_TERMCHAR_M_PAGE)
         dev->page = args.page;
+    if (args.flags & VMS_TERMCHAR_M_CHAR) {
+        dev->devchar &= ~args.clrchar;
+        dev->devchar |= args.setchar;
+    }
     exec_unlock(&dev->lock);
     exec_unlock(&vms_device_list_lock);
     args.status = SS__NORMAL;

@@ -160,7 +160,8 @@ int dnet_cterm_host_echo(const struct dnet_cterm_host_session *hs);
 
 /*
  * Record the ORIGINATING terminal on the session's RTAn: (rd vms-14b): the
- * device type, width and page length the remote's CTERM Initiate conveyed
+ * device type, width, page length and characteristics the remote's CTERM
+ * Initiate conveyed
  * (struct dnet_cth_termchar, decoded by the host FSM), written to the
  * executive's device row -- where $GETDVI, SHOW TERMINAL and F$GETDVI read
  * them. Only a `valid` decode is recorded; anything else leaves the row as it

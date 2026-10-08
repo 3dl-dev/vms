@@ -594,11 +594,23 @@ int main(void)
         CHECK((cst & 1) && rta[0],
               "an RTAn: was minted in the executive for the originating-terminal case");
         if ((cst & 1) && rta[0]) {
+            /* The characteristics the CTERM host derives from that VAX's
+             * conveyed TT$ 0x0202a0 / TT2$ 0x3000 (dnet_cth_termchar_to_ttc,
+             * pinned in tests/vmsdecnet/test_dnet_cterm_host.c): every mapped
+             * characteristic set or cleared; Interactive, Set_speed and VMS
+             * Style Input keep their minted values. */
+            const uint64_t mapped = ((VMS_TTC_VMS_STYLE_INPUT << 1) - 1) &
+                ~(uint64_t)(VMS_TTC_INTERACTIVE | VMS_TTC_VMS_STYLE_INPUT |
+                            VMS_TTC_DEC_CRT5 | VMS_TTC_ANSI_COLOR | VMS_TTC_SET_SPEED);
+            const uint64_t wire_set = VMS_TTC_ECHO | VMS_TTC_TYPEAHEAD | VMS_TTC_TTSYNC |
+                VMS_TTC_LOWERCASE | VMS_TTC_WRAP | VMS_TTC_HARDCOPY | VMS_TTC_FULLDUP |
+                VMS_TTC_LINE_EDITING | VMS_TTC_INSERT_EDITING | VMS_TTC_NUMERIC_KEYPAD;
             uint32_t sst = vms_kif_terminal_setchar(rta,
-                               VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH | VMS_TERMCHAR_M_PAGE,
-                               32 /* DT$_LA36 */, 132, 0);
+                               VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
+                               VMS_TERMCHAR_M_PAGE | VMS_TERMCHAR_M_CHAR,
+                               32 /* DT$_LA36 */, 132, 0, wire_set, mapped & ~wire_set);
             CHECK(sst == SS$_NORMAL,
-                  "the RTAn: takes the originating terminal's type LA36 (privileged setter)");
+                  "the RTAn: takes the originating terminal's type LA36 and characteristics (privileged setter)");
             snprintf(hdr, sizeof(hdr), "Terminal: _%-11sDevice_Type: LA36          Owner:", rta);
             if (run_dcl("SHOW TERMINAL", rta, out, sizeof(out)) == 0) {
                 show_capture("SHOW TERMINAL (bound to an RTAn: whose origin is an LA36)", out);
@@ -606,6 +618,34 @@ int main(void)
                       "SHOW TERMINAL on the RTAn: prints Device_Type: LA36 in the oracle's columns");
                 CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
                       "...and still no Width or Page value (the oracle's two-line block carries fields OVMX cannot source)");
+                {
+                    /* The oracle RTAn:'s whole grid, verbatim
+                     * (tests/lab/captures/decnet-sethost-inbound-20261005/
+                     * vax-rta-show-terminal.txt). */
+                    static const char *const rta_grid[] = {
+                        "   Interactive        Echo               Type_ahead         No Escape",
+                        "   No Hostsync        TTsync             Lowercase          No Tab",
+                        "   Wrap               Hardcopy           No Remote          No Eightbit",
+                        "   No Broadcast       No Readsync        No Form            Fulldup",
+                        "   No Modem           No Local_echo      No Autobaud        No Hangup",
+                        "   No Brdcstmbx       No DMA             No Altypeahd       Set_speed",
+                        "   No Commsync        Line Editing       Insert editing     No Fallback",
+                        "   No Dialup          No Secure server   No Disconnect      No Pasthru",
+                        "   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port",
+                        "   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode",
+                        "   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2",
+                        "   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color",
+                        "   VMS Style Input",
+                    };
+                    int all = 1;
+                    for (size_t g = 0; g < sizeof rta_grid / sizeof rta_grid[0]; g++)
+                        if (!has_line(out, rta_grid[g])) {
+                            printf("  INFO: missing oracle row: \"%s\"\n", rta_grid[g]);
+                            all = 0;
+                        }
+                    CHECK(all,
+                          "SHOW TERMINAL on the RTAn: prints the oracle RTAn:'s characteristic grid byte for byte (13 rows)");
+                }
             } else {
                 CHECK(0, "SHOW TERMINAL could not be run bound to the RTAn:");
             }
@@ -614,7 +654,7 @@ int main(void)
                       "NEGCTL: the console OPA0: still prints Device_Type: Unknown");
             else
                 CHECK(0, "SHOW TERMINAL could not be run bound to the console");
-            CHECK(vms_kif_terminal_setchar(CONSOLE_DEVNAM, VMS_TERMCHAR_M_TYPE, 32, 0, 0)
+            CHECK(vms_kif_terminal_setchar(CONSOLE_DEVNAM, VMS_TERMCHAR_M_TYPE, 32, 0, 0, 0, 0)
                       == SS$_IVDEVNAM,
                   "NEGCTL: the RTAn: setter refuses the console (SS$_IVDEVNAM)");
             (void)vms_kif_terminal_delete(rta);

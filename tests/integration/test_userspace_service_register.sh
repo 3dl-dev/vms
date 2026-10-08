@@ -886,7 +886,13 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # __libc_malloc / malloc forwarders to mallocng -- no sys$ symbol to certify.
 # Its real compile + the one-heap nm gate run in build-musl.sh. Anchored +
 # $-terminated so it excludes exactly this one file.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$"
+# tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork.c (vms-fb4)
+# is the same kind of musl arch-override source (src/process/$(ARCH)/ replaces
+# the generic _Fork.c): it includes musl's INTERNAL "libc.h"/"pthread_impl.h"
+# and only compiles inside the extracted musl tree. Its real compile runs in
+# build-musl.sh and its behaviour is proven by the alpha vfork gate. Anchored +
+# file-level, like lite_malloc.c above.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

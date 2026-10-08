@@ -1,0 +1,13 @@
+# config.site -- autoconf facts about an OVMX/Alpha (alpha-dec-vms) host that a
+# configure link test cannot observe (vms-fb4). Point CONFIG_SITE at this file
+# when configuring a package to RUN on OVMX/Alpha with this toolchain.
+#
+# vfork: DEC C supplies vfork() through <unistd.h> (a context + setjmp
+# expansion; exec*() creates the subprocess -- src/vmslink/ovmx_decc_vfork.c),
+# not as a bare `vfork` symbol, so AC_CHECK_FUNCS(vfork)'s header-less
+# `char vfork();` link test cannot find it. It works (vfork-gate). fork does not
+# exist in the DEC C RTL, so nothing may fall back to it.
+ac_cv_func_vfork=yes
+ac_cv_func_vfork_works=yes
+ac_cv_func_fork=no
+ac_cv_func_fork_works=no

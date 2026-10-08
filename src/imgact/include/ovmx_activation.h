@@ -75,8 +75,15 @@ struct ovmx_imghdr {
 	uint32_t version;     /* == OVMX_IMGHDR_VERSION                       */
 	uint32_t flags;       /* image characteristics (none defined yet)     */
 	void    *image_base;  /* run-time load base of the activated image    */
+	/* version >= 2 (vms-fb4): the argument vector the process was created
+	 * with (execve). An image another process creates with arguments -- the
+	 * DEC C exec* path -- receives them here; decc$main turns them into the
+	 * image's argv when no CLI supplies a command line. */
+	uint32_t argc;
+	uint32_t reserved2;
+	char   **argv;
 };
-#define OVMX_IMGHDR_VERSION 1u
+#define OVMX_IMGHDR_VERSION 2u
 /* enum ovmx_imghdr_flags: no flags defined yet -- decc$main branches on none. */
 
 /* ---------------------------------------------------------------------------

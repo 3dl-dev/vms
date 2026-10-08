@@ -87,6 +87,13 @@ cp -v  "${OVERLAY}/src/mman/${TARGET}/"* "src/mman/${TARGET}/"
 # below — stock musl is pinned + checksum-verified, so exact-text sed is safe and
 # reviewable (same idiom as the configure ARCH sed).
 cp -v  "${OVERLAY}/src/internal/syscall_ret.c" "src/internal/"
+# vms-fb4: fork hands the child its thread pointer explicitly (CLONE_SETTLS).
+# Linux/Alpha's plain-fork inheritance copies the parent's in-memory HWPCB
+# UNIQUE, which PALcode that caches UNIQUE (qemu-palcode) leaves stale until the
+# next context switch -- the child then faults on its first TLS access. See the
+# header of src/process/alpha-dec-vms/_Fork.c.
+mkdir -p "src/process/${TARGET}"
+cp -v  "${OVERLAY}/src/process/${TARGET}/"* "src/process/${TARGET}/"
 
 # ---- teach configure the triplet -> ARCH mapping (idempotent) ----
 if ! grep -q "ARCH=alpha-dec-vms" configure; then
@@ -224,6 +231,16 @@ if ! grep -q 'vms-28d: psignal' include/signal.h; then
 fi
 grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
 echo "== vms-28d DEC C header forms applied (vaxc\$errno, getcwd 3-arg, psignal) =="
+# vms-fb4: DEC C vfork()/exec*() for clients. vfork() is the DEC C expansion
+# (open the context, then the C RTL's setjmp in the CALLER's frame); the exec
+# family binds DECC$SHR's decc$$exec*32/64 entry points by the client's pointer
+# size (src/vmslink/ovmx_decc_vfork.c).
+# The C RTL's own build keeps the POSIX declarations.
+if ! grep -q 'vms-fb4' include/unistd.h; then
+	perl -0pi -e 's/^int execve\(const char \*, char \*const \[\], char \*const \[\]\);\nint execv\(const char \*, char \*const \[\]\);\nint execle\(const char \*, const char \*, \.\.\.\);\nint execl\(const char \*, const char \*, \.\.\.\);\nint execvp\(const char \*, char \*const \[\]\);\nint execlp\(const char \*, const char \*, \.\.\.\);\n/#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD)\n$&#else \/* vms-fb4: DEC C vfork\/exec *\/\nint decc\$\$alloc_vfork_blocks(void);\nvoid *decc\$\$vfork_jmpbuf(void);\nint decc\$\$vfork_setjmp(void *) __attribute__((__returns_twice__));\n#define vfork() (decc\$\$alloc_vfork_blocks() >= 0 ? decc\$\$vfork_setjmp(decc\$\$vfork_jmpbuf()) : -1)\n#if defined(__INITIAL_POINTER_SIZE) && __INITIAL_POINTER_SIZE == 64\n#define __OVMX_EXEC(n) __asm__("decc\$\$" #n "64")\n#else\n#define __OVMX_EXEC(n) __asm__("decc\$\$" #n "32")\n#endif\nint execve(const char *, char *const [], char *const []) __OVMX_EXEC(execve);\nint execv(const char *, char *const []) __OVMX_EXEC(execv);\nint execle(const char *, const char *, ...) __OVMX_EXEC(execle);\nint execl(const char *, const char *, ...) __asm__("decc\$\$execl32");\nint execvp(const char *, char *const []) __OVMX_EXEC(execvp);\nint execlp(const char *, const char *, ...) __asm__("decc\$\$execlp32");\n#endif\n/m' include/unistd.h
+fi
+grep -q '__OVMX_EXEC(execv)' include/unistd.h || { echo "vms-fb4 PATCH FAIL: exec family in include/unistd.h" >&2; exit 7; }
+
 # vms-fe03: the headers declare, for alpha-dec-vms clients, only what DECC$SHR
 # exports -- every function the port's CRTL name map covers (decc-crtl-names.txt);
 # the rest bind bare names no link can reach, so a configure probe would find a

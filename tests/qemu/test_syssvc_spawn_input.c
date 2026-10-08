@@ -38,7 +38,8 @@
 #define EXIT_SKIP 77
 #define WAIT_MS 30000
 #define EFN 12
-#define COM_SPEC "SYS$SYSROOT:[SYSMGR]SPIN_INPUT.COM"
+#define ODS2_UNIT "VDA0:"
+#define COM_SPEC "VDA0:[OVMXDIR]SPIN_INPUT.COM"
 #define OUT_PATH "/tmp/spin_input.out"
 #define MARKER "SPIN_INPUT_RAN_OK"
 
@@ -65,6 +66,8 @@ int main(void)
           "define SYS$SYSTEM -> /bin (stage DCL.EXE for lib$spawn)");
     if (!(vms_kif_open() >= 0 && (vms_kif_register(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
 
+    CHECK((vms_kif_acp_mount(ODS2_UNIT) & 1), "VDA0: mounted executive-global for the ACP");
+
     /* (1) the command file is an ODS-2 file made through RMS, not a Linux file */
     CHECK(rms_textfile_write_line(COM_SPEC, "$ WRITE SYS$OUTPUT \"" MARKER "\"") == 0,
           "a command file is laid down on the ODS-2 volume through RMS");
@@ -88,11 +91,12 @@ int main(void)
     CHECK(strstr(body, MARKER) != NULL, "the DCL executed the ODS-2 command file (its output reached the output file)");
 
     /* (2) a missing input is an honest RMS$_FNF and creates nothing */
-    struct dsc$descriptor_s missing = dsc("SYS$SYSROOT:[SYSMGR]NO_SUCH_SPAWN_INPUT.COM");
+    struct dsc$descriptor_s missing = dsc("VDA0:[OVMXDIR]NO_SUCH_SPAWN_INPUT.COM");
     uint32_t pid2 = 0;
     r = lib$spawn(NULL, &missing, NULL, &flags, NULL, &pid2, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(r == RMS$_FNF && pid2 == 0, "a missing INPUT file is RMS$_FNF and no subprocess is created");
 
+    (void)vms_kif_acp_dmount(ODS2_UNIT);   /* clean slate for co-resident suites */
     printf("=== %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

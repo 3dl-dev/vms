@@ -4,25 +4,9 @@
 # tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
 # and so does a listed case that now matches. Fix the bug, delete the line.
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS
-ef EF.SETEF.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.SETEF2.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.CLREF.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.CLREF2.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.SETEF.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.SETEF2.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF2.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.SETEF.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.SETEF2.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.CLREF2.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.READ.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
-ef EF.READ.256  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.READ.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
-ef EF.WAITFR.128  # vms-3e9e: EFN$C_ENF (128) means 'no flag'; OVMX answers ILLEFC
+ef EF.READ.128  # vms-3e9e: arch-divergent -- $READEF(EFN$C_ENF) leaves state on VAX V7.3, writes 1 on Alpha V8.4; OVMX leaves it
 ef EF.DACEFC.64.AGAIN  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
 ef EF.CEF.REASSOC.READ  # vms-ec97: DACEFC of an unassociated cluster / temporary cluster outlives its last user
-ef EF.SETIMR.1024  # vms-3e9e: real VMS takes the efn modulo 256; OVMX answers ILLEFC
 fao FAO.AC  # vms-4947: !AC/!AF empty, !AS width ignored
 fao FAO.AF  # vms-4947: !AC/!AF empty, !AS width ignored
 fao FAO.AS.WIDTH.PAD  # vms-4947: !AC/!AF empty, !AS width ignored

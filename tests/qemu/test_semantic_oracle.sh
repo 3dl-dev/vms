@@ -122,6 +122,9 @@ boot_login
 # a 511-column, unpaged terminal -- the tt family senses exactly this
 run_cmd 'SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP' 30
 run_cmd 'DIRECTORY/NOHEADING/NOTRAILING SYS$COMMON:[SYSTEST]SP_*.*' 60
+# an image probe (SP_x.EXE) is RUN; a DCL-family probe (SP_x.COM, comgen.py) is
+# run with @ -- each prints the same BEGIN/END-marked transcript
+PROBES=$(printf '%s\n' "$SEG" | grep -o 'SP_[A-Z0-9_]*\.\(EXE\|COM\)' | sort -u)
 [ -n "$PROBES" ] || die "no SP_*.EXE probe found in SYS\$COMMON:[SYSTEST] (listing: $SEG)"
 echo "probes: $(echo $PROBES)"
 

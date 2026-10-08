@@ -29,7 +29,11 @@
 #include "descrip.h"
 #include "lib$routines.h"
 #include "starlet.h"
+#include "lnmdef.h"
 #include "vms_kif.h"
+
+extern uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir, unsigned short *old_len,
+                           struct dsc$descriptor_s *old_dir);
 
 #define DIRFLAG_CHAR 0x2000u   /* FH2$M_DIRECTORY (ODS2_FH2_M_DIRECTORY) */
 
@@ -100,9 +104,42 @@ uint32_t lib$create_dir(const struct dsc$descriptor_s *spec_d, const uint32_t *o
     if (!split_spec(spec, dev, sizeof(dev), tree, sizeof(tree), &rel))
         return SS$_BADPARAM;
 
-    /* The executive's default directory completes a relative tree and a missing device. */
+    /* The process default directory completes a relative tree and a missing device. It is
+     * the executive's ($SETDDIR); a process that never set one has the logical SYS$LOGIN:
+     * as its default, which is translated to the DEV:[DIR] it names. */
     ddir[0] = '\0';
-    (void)vms_kif_ddir(NULL, ddir, sizeof(ddir));
+    if (rel || !dev[0]) {
+        struct dsc$descriptor_s dd = { sizeof(ddir) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, ddir };
+        unsigned short dl = 0;
+        int hops;
+
+        (void)sys$setddir(NULL, &dl, &dd);
+        ddir[dl < sizeof(ddir) ? dl : sizeof(ddir) - 1] = '\0';
+        for (hops = 0; hops < 8 && ddir[0] && !strpbrk(ddir, "[<"); hops++) {
+            char name[128], eq[256];
+            struct dsc$descriptor_s nd = { 0, DSC$K_DTYPE_T, DSC$K_CLASS_S, name };
+            struct item_list_3 il[2];
+            unsigned short el = 0;
+            size_t nl = strcspn(ddir, ":");
+
+            if (nl == 0 || nl >= sizeof(name))
+                break;
+            memcpy(name, ddir, nl);
+            name[nl] = '\0';
+            nd.dsc$w_length = (unsigned short)nl;
+            il[0].buflen = sizeof(eq) - 1; il[0].item_code = LNM$_STRING;
+            il[0].bufaddr = eq;            il[0].retlen = &el;
+            il[1].buflen = 0; il[1].item_code = 0; il[1].bufaddr = NULL; il[1].retlen = NULL;
+            {
+                static const struct dsc$descriptor_s tab = { 12, DSC$K_DTYPE_T, DSC$K_CLASS_S,
+                                                             (char *)"LNM$FILE_DEV" };
+                if (!(sys$trnlnm(NULL, &tab, &nd, NULL, il) & 1))
+                    break;
+            }
+            eq[el < sizeof(eq) ? el : sizeof(eq) - 1] = '\0';
+            snprintf(ddir, sizeof(ddir), "%s", eq);
+        }
+    }
     if (rel || !dev[0]) {
         char ddev[128], dtree[256];
         int drel;

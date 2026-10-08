@@ -52,7 +52,6 @@
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
-#include <sys/wait.h>   /* waitpid: the vms-c6d1 request-mailbox probe child */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +86,9 @@
 #include "rmsdef.h"         /* RMS$_FNF: --fal-proc-accept-test DELETE readback (vms-277a) */
 #include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
 #include "prvdef.h"         /* PRV$M_NETMBX: a broker requester must hold it (rd vms-c6d1) */
+#include "prcdef.h"         /* PRC$M_DETACH: the vms-c6d1 request-mailbox probe process */
+#include "vmsfs/filespec.h" /* vmsfs_to_linux_path: SYS$SYSTEM:DECNETD.EXE for that probe */
+#include "ovmx_layout.h"    /* ovmx_boot_stage_exec_path                              */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
 #include "descrip.h"        /* dsc$descriptor_s for the SYS$INPUT/SYS$OUTPUT assign */
 #include "iodef.h"          /* IO$_READVBLK/WRITEVBLK/SETMODE + IO$K_TT_PASSALL      */
@@ -6835,7 +6837,7 @@ static uint32_t net_req_probe_send(uint32_t req, uint32_t corr, uint32_t owner,
     return vms_kif_mbx_write(req, rec, (uint32_t)n);
 }
 
-static void net_req_probe(int wfd)
+static void net_req_probe(uint32_t result_unit)
 {
     struct netreq_probe v;
     struct vms_procinfo self;
@@ -6847,14 +6849,12 @@ static void net_req_probe(int wfd)
 
     memset(&v, 0, sizeof v);
     memset(&self, 0, sizeof self);
-    /* A NEW VMS process carrying its creator's identity (the SYSTEM session,
-     * which holds SETPRV) -- the $CREPRC/SPAWN registration -- so the SETIDENT
-     * below may drop it to [100,100]. A bare re-register would derive the
-     * identity from the host credentials of the logged-in session instead. */
-    (void)vms_kif_register_subprocess();
+    /* This process was $CREPRC'd by the test as UIC [100,100] -- the WORLD
+     * category of NETACP's request mailbox -- authorized for exactly the
+     * privileges toggled below. Start with only TMPMBX enabled. */
     (void)vms_kif_getjpi_self(&self);
-    v.setident = vms_kif_setident("NETPROBE", (100u << 16) | 100u, PRV$M_SETPRV);
-    (void)vms_kif_setprv(PRV$M_TMPMBX, 1, 0, &prev);
+    v.setident = (self.uic == ((100u << 16) | 100u)) ? 1u : 0u;
+    (void)vms_kif_setprv(PRV$M_NETMBX | PRV$M_READALL | PRV$M_BYPASS, 0, 0, &prev);
     if (vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, 0, dev,
                               sizeof dev - 1, &dl, NULL, NULL) == 1 && dl > 0) {
         dev[dl] = '\0';
@@ -6891,7 +6891,58 @@ static void net_req_probe(int wfd)
     (void)vms_kif_setprv(PRV$M_BYPASS, 0, 0, &prev);
     if (rep) (void)vms_kif_dassgn((uint16_t)rep);
     if (req) (void)vms_kif_dassgn((uint16_t)req);
-    (void)!write(wfd, &v, sizeof v);
+    {
+        char rdev[32];
+        uint32_t rc = 0;
+        snprintf(rdev, sizeof rdev, "MBA%u:", (unsigned)result_unit);
+        if (vms_kif_mbx_assign(rdev, &rc) & 1) {
+            (void)vms_kif_mbx_write(rc, &v, sizeof v);
+            (void)vms_kif_dassgn((uint16_t)rc);
+        }
+    }
+}
+
+/* The probe process's name carries the unit of the mailbox it reports to: the
+ * same rendezvous a FAL.EXE server process uses (dnet_fal_proc.c). */
+#define NETPRB_PRCNAM_FMT "NETPRB%u"
+
+/*
+ * net_req_probe_spawn - $CREPRC this image as a DETACHED process with UIC
+ * [100,100] and only TMPMBX|NETMBX|READALL|BYPASS authorized, the way NETACP
+ * creates a FAL server persona -- never a host fork: a VMS process comes from
+ * $CREPRC. It finds its role from its process name (main, NETPRB<unit>) and
+ * writes its verdicts to MBA<unit>:. Returns 1 with *v filled, 0 otherwise.
+ */
+static int net_req_probe_spawn(struct netreq_probe *v)
+{
+    char img[512], staged[512], prcnam[16], dev[32];
+    uint32_t ch = 0, unit = 0, pid = 0, n = 0;
+    uint64_t privs = PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_READALL | PRV$M_BYPASS;
+
+    if (vmsfs_to_linux_path("SYS$SYSTEM:DECNETD.EXE", img, sizeof img) != 1)
+        return 0;
+    if (ovmx_boot_stage_exec_path(img, staged, sizeof staged) && access(staged, X_OK) == 0)
+        snprintf(img, sizeof img, "%s", staged);
+    if (!(vms_kif_mbx_create(0, sizeof *v + 16, (sizeof *v + 16) * 2, &ch, &unit,
+                             dev, sizeof dev) & 1))
+        return 0;
+    snprintf(prcnam, sizeof prcnam, NETPRB_PRCNAM_FMT, (unsigned)unit);
+    struct dsc$descriptor_s img_d = { (uint16_t)strlen(img), DSC$K_DTYPE_T, DSC$K_CLASS_S, img };
+    struct dsc$descriptor_s nam_d = { (uint16_t)strlen(prcnam), DSC$K_DTYPE_T, DSC$K_CLASS_S, prcnam };
+    int ok = 0;
+    if (sys$creprc(&pid, &img_d, NULL, NULL, NULL, &privs, NULL, &nam_d, 0,
+                   (100u << 16) | 100u, 0, PRC$M_DETACH) & 1) {
+        for (int k = 0; k < 6000 && !ok; k++) {       /* up to ~60 s */
+            if (vms_kif_mbx_read(ch, v, sizeof *v, &n, 1) & 1)
+                ok = (n == sizeof *v);
+            else {
+                struct timespec ts = { 0, 10 * 1000 * 1000 };
+                nanosleep(&ts, NULL);
+            }
+        }
+    }
+    (void)vms_kif_dassgn((uint16_t)ch);
+    return ok;
 }
 
 static int run_net_loopback_accept_test(void)
@@ -6936,28 +6987,11 @@ static int run_net_loopback_accept_test(void)
 
     /* The request mailbox, from an unprivileged process (rd vms-c6d1). */
     if (netacp_running() == 1) {
-        int pfd[2];
         struct netreq_probe v;
         memset(&v, 0, sizeof v);
-        int got = 0;
-        if (pipe(pfd) == 0) {
-            pid_t cp = fork();
-            if (cp == 0) {
-                close(pfd[0]);
-                net_req_probe(pfd[1]);
-                _exit(0);
-            }
-            close(pfd[1]);
-            if (cp > 0) {
-                struct pollfd pp = { .fd = pfd[0], .events = POLLIN };
-                if (poll(&pp, 1, 60000) > 0 && read(pfd[0], &v, sizeof v) == (ssize_t)sizeof v)
-                    got = 1;
-                if (!got) kill(cp, SIGKILL);
-                waitpid(cp, NULL, 0);
-            }
-            close(pfd[0]);
-        }
-        NL_CHECK(got && (v.setident & 1), "an unprivileged probe process ([100,100], SETPRV only) reported");
+        int got = net_req_probe_spawn(&v);
+        NL_CHECK(got && (v.setident & 1),
+                 "an unprivileged probe process ($CREPRC'd as [100,100]) reported");
         NL_CHECK(v.assign == SS$_NORMAL,
                  "the unprivileged process may $ASSIGN DNET$NETACP_REQ (W:W -- it can submit requests)");
         NL_CHECK(v.read_unpriv == SS$_NOPRIV,
@@ -7012,6 +7046,19 @@ static int run_net_loopback_accept_test(void)
 
 int main(int argc, char **argv)
 {
+    /* rd vms-c6d1: started by net_req_probe_spawn ($CREPRC, no argv -- VMS
+     * semantics), this process is the request-mailbox probe if its process name
+     * says so. */
+    if (argc == 1) {
+        struct vms_procinfo me;
+        unsigned u = 0;
+        memset(&me, 0, sizeof me);
+        if ((vms_kif_getjpi_self(&me) & 1) &&
+            sscanf(me.prcnam, NETPRB_PRCNAM_FMT, &u) == 1 && u != 0) {
+            net_req_probe(u);
+            return 0;
+        }
+    }
     const char *ifname = DECNETD_DEFAULT_IFACE;
     int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;

@@ -10,6 +10,10 @@
  * image, then an independent reader -- DCL TYPE over RMS -- shows the file this
  * image wrote. Every check prints; the first failure picks the exit value, and
  * success is the distinctive 7.
+ *
+ * struct stat is the DEC C RTL's default layout (vms-28d part 2): st_ino[3] is
+ * the File ID and st_fab_rfm/rat/mrs the file's RMS record attributes -- what
+ * GCC's libcpp (STAT_SIZE_RELIABLE) and incpath (INO_T_EQ) read under VMS.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +26,9 @@
 #define OUTF  DIR "CFDOUT.TXT"
 #define INF   DIR "CFDIN.TXT"
 #define NLINE 120
+#define FAB_C_VAR   2       /* libcpp files.cc spells these out the same way */
+#define FAB_C_STMLF 5
+#define STAT_SIZE_RELIABLE(ST) ((ST).st_fab_rfm != FAB_C_VAR)
 
 static int fails;
 static int first_fail;
@@ -65,11 +72,15 @@ int main(int argc, char **argv)
     /* 2. stat reports the byte-exact size and a regular file. */
     struct stat st;
     int sr = stat(OUTF, &st);
-    printf("CFD: stat -> %d size=%ld (want %ld) mode=0%o ino=%llu\n", sr,
+    printf("CFD: stat -> %d size=%ld (want %ld) mode=0%o fid=(%u,%u,%u) rfm=%d rat=%d\n", sr,
            (long)st.st_size, total, (unsigned)st.st_mode,
-           (unsigned long long)st.st_ino);
-    check(sr == 0 && st.st_size == total && S_ISREG(st.st_mode) && st.st_ino != 0,
-          12, "stat: size == bytes written, S_IFREG, File ID as st_ino");
+           (unsigned)st.st_ino[0], (unsigned)st.st_ino[1], (unsigned)st.st_ino[2],
+           st.st_fab_rfm, st.st_fab_rat);
+    check(sr == 0 && st.st_size == total && S_ISREG(st.st_mode) && st.st_ino[0] != 0 &&
+              st.st_ino[1] != 0,
+          12, "stat: size == bytes written, S_IFREG, st_ino[3] is the File ID");
+    check(st.st_fab_rfm == FAB_C_STMLF && STAT_SIZE_RELIABLE(st), 27,
+          "stat: st_fab_rfm says Stream_LF, so the size is reliable");
 
     /* 3. open/read in odd-sized pieces reproduces every byte. */
     int fd = open(OUTF, O_RDONLY);
@@ -96,8 +107,10 @@ int main(int argc, char **argv)
               "lseek(1000) + read(40) lands mid-block on the right bytes");
         check(lseek(fd, 0, SEEK_END) == total, 16, "lseek(0, SEEK_END) == size");
         struct stat fst;
-        check(fstat(fd, &fst) == 0 && fst.st_size == total && fst.st_ino == st.st_ino,
-              17, "fstat on the descriptor agrees with stat");
+        check(fstat(fd, &fst) == 0 && fst.st_size == total &&
+                  memcmp(fst.st_ino, st.st_ino, sizeof st.st_ino) == 0 &&
+                  fst.st_fab_rfm == st.st_fab_rfm,
+              17, "fstat on the descriptor agrees with stat (File ID, record format)");
 
         /* 4. A descriptor dup()ed onto stdout writes into the same file. */
         close(fd);
@@ -143,7 +156,10 @@ int main(int argc, char **argv)
     /* 8. A record file DCL wrote (OPEN/WRITE) reads as lines. */
     struct stat ist;
     int isr = stat(INF, &ist);
-    printf("CFD: DCL file stat -> %d size=%ld\n", isr, isr == 0 ? (long)ist.st_size : -1L);
+    printf("CFD: DCL file stat -> %d size=%ld rfm=%d rat=%d\n", isr,
+           isr == 0 ? (long)ist.st_size : -1L, ist.st_fab_rfm, ist.st_fab_rat);
+    check(isr == 0 && ist.st_fab_rfm == FAB_C_VAR && !STAT_SIZE_RELIABLE(ist), 28,
+          "stat of the DCL record file: st_fab_rfm says VAR, so its size is not the read size");
     f = fopen(INF, "r");
     char l1[80] = "", l2[80] = "";
     if (f) {

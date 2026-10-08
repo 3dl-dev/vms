@@ -30,9 +30,15 @@ def lk(b):
     return [UW(b, "lksb", 0), EQ(b, "ZERO", "lkid0", aoff=4)]
 
 
+def enqargs(efn, mode, lksb, flags, res, parid=0, ast=None, astprm=0):
+    """$ENQ/$ENQW take all 11 arguments (efn lkmode lksb flags resnam parid
+    astadr astprm blkast acmode rsdm_id/nullarg) -- fewer is SS$_INSFARG"""
+    return [efn, mode, lksb, flags, res, parid, ast, astprm, None, 0, 0]
+
+
 def enqw(cid, mode, lksb, flags=0, res=None, parid=None, show=None):
-    args = [0, mode, R(lksb), flags, None if res is None else R(res),
-            0 if parid is None else VL(parid, 4)]
+    args = enqargs(0, mode, R(lksb), flags, None if res is None else R(res),
+                   0 if parid is None else VL(parid, 4))
     P.call(cid, "SYS$ENQW", *args, show=lk(lksb) if show is None else show)
 
 
@@ -87,18 +93,18 @@ enqw("LOCK.NONAME", NL, "LX", show=[UW("LX", "lksb", 0)])
 enqw("LOCK.BADMODE", 9, "LX", res="RA", show=[UW("LX", "lksb", 0)])
 P.call("LOCK.DEQ.BADID", "SYS$DEQ", V("BADID"), None, 0, 0)
 P.call("LOCK.DEQ.ZEROID", "SYS$DEQ", 0, None, 0, 0)
-P.call("LOCK.CVT.BADID", "SYS$ENQW", 0, NL, R("LX"), CONVERT, None, 0, show=[UW("LX", "lksb", 0)])
+P.call("LOCK.CVT.BADID", "SYS$ENQW", *enqargs(0, NL, R("LX"), CONVERT, None), show=[UW("LX", "lksb", 0)])
 
 # 5. SYNCSTS: a request granted at once reports SS$_SYNCH and sets no event flag
 P.do("SYS$CLREF", 7)
-P.call("LOCK.SYNCSTS", "SYS$ENQ", 7, NL, R("LX"), SYNCSTS, R("RB"), 0, show=lk("LX"))
+P.call("LOCK.SYNCSTS", "SYS$ENQ", *enqargs(7, NL, R("LX"), SYNCSTS, R("RB")), show=lk("LX"))
 P.call("LOCK.SYNCSTS.EF", "SYS$READEF", 7, R("STATE"))
 deq("LOCK.DEQ.SYNCSTS", "LX")
 
 # 6. $ENQ completion: efn cleared at request, set at grant; LKSB; AST
 P.do("SYS$SETEF", 6)
 P.setl("AST1", 0); P.setl("AST1_P", 0)
-P.call("LOCK.ASYNC", "SYS$ENQ", 6, CR, R("LX"), 0, R("RB"), 0, AST("AST1"), 0x5151)
+P.call("LOCK.ASYNC", "SYS$ENQ", *enqargs(6, CR, R("LX"), 0, R("RB"), 0, AST("AST1"), 0x5151))
 P.call("LOCK.ASYNC.WAIT", "SYS$WAITFR", 6)
 P.call("LOCK.ASYNC.DONE", "SYS$READEF", 6, R("STATE"),
        show=lk("LX") + [U("AST1", "asts"), X("AST1_P", "astprm")])

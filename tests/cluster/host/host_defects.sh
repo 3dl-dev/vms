@@ -1100,6 +1100,10 @@ EOF
         require_fail) cat <<'EOF'
 the next origination is 4 -- what the VAX waits for
 and it acks the 3 this node advertised, not 0
+the next origination is 3 -- where the VAX continues
+and it acks the 2 our CONNECT advertised
+what this node said about itself stands on the new connection: nothing is re-introduced
+the bind resumes from it too
 EOF
                       ;;
         esac;;

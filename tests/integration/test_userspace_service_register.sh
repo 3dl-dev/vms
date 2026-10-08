@@ -897,7 +897,16 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # arch-internal struct kstat (musl-arch kstat.h), so it only compiles against
 # the extracted alpha-dec-vms musl tree (mk_decc_shr.sh, ALPHA_CRTL_RMS_FD=1).
 # It defines no sys$ service; its behaviour is proven by the alpha crtl-fd gate.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$"
+# src/vmsrms/rms_vmsabi.c (vms-692) is the VMS-ABI RMS entry points over the
+# VMS-layout FAB/NAM (src/libvms/include/vms/): its 32-bit address fields need
+# the alpha-dec-vms compiler's #pragma __required_pointer_size, so a host
+# compiler fails the layout assertions by design. Its real compile is the
+# alpha LIBVMSRMS$SHR build (mk_vmsrms_shr.sh); the vmsabi-rms gate proves it.
+# Its two alpha client programs, tools/cross-alpha-vms/include-surface/
+# vms_abi_headers.c and tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test.c,
+# include those headers and are excluded for the same reason (their compiles:
+# run_vms_abi_headers.sh and the vmsabi-rms gate).
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

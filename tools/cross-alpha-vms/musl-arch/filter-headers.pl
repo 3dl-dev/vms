@@ -58,7 +58,12 @@ for my $f (@all) {
     for my $l (@in) {
         if ($l =~ /^[A-Za-z_]/ && $l !~ /^(typedef|struct|union|enum|static|extern\s+"C"|#)/
             && $l !~ /decc\$/                     # the DEC C RTL's own entry points
-            && $l =~ /\)\s*;\s*$/ && $l !~ /\(\s*\*/
+            && $l =~ /\)\s*;\s*$/
+            # a declarator whose FIRST parenthesis opens a pointer -- void
+            # (*signal(int, ...))(int) -- returns a function pointer and its name
+            # is not the identifier before that parenthesis; a callback
+            # PARAMETER (nftw, qsort_r, tsearch ...) does not exempt a prototype.
+            && $l !~ /^[^(]*\(\s*\*/
             && $l =~ /^[^(]*?\b([A-Za-z_]\w*)\s*\(/) {
             my $name = $1;
             if (!$kw{$name} && $name !~ /^_/ && !$keep{$name}) {

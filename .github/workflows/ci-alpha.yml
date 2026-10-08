@@ -226,6 +226,12 @@ jobs:
       - name: Port compiler -- VMS-host vms-ld.c/vms-ar.c compile with every call declared (vms-fd1)
         run: bash tools/cross-alpha-vms/test/run_vms_ld_ar_decls.sh tools/cross-alpha-vms
 
+      # gcov-tool on a host with <ftw.h> but no nftw (the DEC C RTL): the
+      # client headers hide nftw as DECC$SHR lacks it (filter-headers.pl, callback
+      # prototypes included) and GCC patch 0011 checks for nftw before using it.
+      - name: Port compiler -- gcov-tool builds where <ftw.h> has no nftw; client headers hide it (vms-fd1)
+        run: bash tools/cross-alpha-vms/test/run_gcov_tool_nftw.sh tools/cross-alpha-vms
+
       # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
       # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
       # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they

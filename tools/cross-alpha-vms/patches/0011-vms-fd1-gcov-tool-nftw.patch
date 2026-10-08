@@ -1,0 +1,70 @@
+vms-fd1: gcov-tool -- use nftw only where the host has it
+
+gcov-tool.cc calls nftw whenever <ftw.h> exists (HAVE_FTW_H).  A host can
+provide <ftw.h> with ftw but not nftw: the OpenVMS C RTL is one, so a
+VMS-hosted build of gcov-tool stops on an undeclared (or, where a header
+declares it without an implementation, unresolved) nftw.  Check for the
+function itself, as configure already does for fstatat and getauxval, and
+take the existing !HAVE_FTW_H path (unlink_profile_dir returns -1) when it
+is absent.
+
+configure is regenerated for the one added name in the AC_CHECK_FUNCS list;
+config.in gains the HAVE_NFTW template autoheader emits for it.
+
+--- a/gcc/configure.ac
++++ b/gcc/configure.ac
+@@ -1570,7 +1570,7 @@
+ AC_CHECK_FUNCS(times clock kill getrlimit setrlimit atoq \
+ 	popen sysconf strsignal getrusage nl_langinfo \
+ 	gettimeofday mbstowcs wcswidth mmap posix_fallocate setlocale \
+-	gcc_UNLOCKED_FUNCS madvise mallinfo mallinfo2 fstatat getauxval)
++	gcc_UNLOCKED_FUNCS madvise mallinfo mallinfo2 fstatat getauxval nftw)
+ 
+ if test x$ac_cv_func_mbstowcs = xyes; then
+   AC_CACHE_CHECK(whether mbstowcs works, gcc_cv_func_mbstowcs_works,
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -10783,7 +10783,7 @@
+ for ac_func in times clock kill getrlimit setrlimit atoq \
+ 	popen sysconf strsignal getrusage nl_langinfo \
+ 	gettimeofday mbstowcs wcswidth mmap posix_fallocate setlocale \
+-	clearerr_unlocked feof_unlocked   ferror_unlocked fflush_unlocked fgetc_unlocked fgets_unlocked   fileno_unlocked fprintf_unlocked fputc_unlocked fputs_unlocked   fread_unlocked fwrite_unlocked getchar_unlocked getc_unlocked   putchar_unlocked putc_unlocked madvise mallinfo mallinfo2 fstatat getauxval
++	clearerr_unlocked feof_unlocked   ferror_unlocked fflush_unlocked fgetc_unlocked fgets_unlocked   fileno_unlocked fprintf_unlocked fputc_unlocked fputs_unlocked   fread_unlocked fwrite_unlocked getchar_unlocked getc_unlocked   putchar_unlocked putc_unlocked madvise mallinfo mallinfo2 fstatat getauxval nftw
+ do :
+   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
+ ac_fn_cxx_check_func "$LINENO" "$ac_func" "$as_ac_var"
+--- a/gcc/config.in
++++ b/gcc/config.in
+@@ -1948,6 +1948,12 @@
+ #endif
+ 
+ 
++/* Define to 1 if you have the `nftw' function. */
++#ifndef USED_FOR_TARGET
++#undef HAVE_NFTW
++#endif
++
++
+ /* Define to 1 if you have the `nl_langinfo' function. */
+ #ifndef USED_FOR_TARGET
+ #undef HAVE_NL_LANGINFO
+--- a/gcc/gcov-tool.cc
++++ b/gcc/gcov-tool.cc
+@@ -54,7 +54,7 @@
+ /* Set to verbose output mode.  */
+ static bool verbose;
+ 
+-#if HAVE_FTW_H
++#if HAVE_FTW_H && HAVE_NFTW
+ 
+ /* Remove file NAME if it has a gcda suffix. */
+ 
+@@ -83,7 +83,7 @@
+ static int
+ unlink_profile_dir (const char *path ATTRIBUTE_UNUSED)
+ {
+-#if HAVE_FTW_H
++#if HAVE_FTW_H && HAVE_NFTW
+     return nftw(path, unlink_gcda_file, 64, FTW_DEPTH | FTW_PHYS);
+ #else
+     return -1;

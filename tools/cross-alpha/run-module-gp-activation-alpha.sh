@@ -775,6 +775,8 @@ run_boot_a() {
     --name "$cname" --memory=8g --cpus="$(nproc)" \
     -v "$WORK":/work "$BOOT_IMG" bash -euo pipefail -c '
       BT="'"$BOOT_TIMEOUT"'"
+      # BOOT_APPEND_EXTRA is spliced in from the harness: this script runs in
+      # the container, where the harness environment is not visible.
       cd /work
       cp ovmx-distrib-alpha.img modgpA.img
       FIFO=/work/modgpA.fifo; rm -f "$FIFO"; mkfifo "$FIFO"
@@ -782,7 +784,7 @@ run_boot_a() {
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 ${BOOT_APPEND_EXTRA:-}" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!

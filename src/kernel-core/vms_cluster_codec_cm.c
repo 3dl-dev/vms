@@ -1345,3 +1345,14 @@ vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
 
 	return VMS_CODEC_OK;
 }
+
+vms_codec_status_t vms_cm_conndata_peer_taken(const uint8_t *cd, uint32_t len,
+					      uint16_t *out)
+{
+	if (cd == (const uint8_t *)0 || out == (uint16_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_CM_CONNDATA_LEN)
+		return VMS_CODEC_E_SHORT;
+	*out = (uint16_t)((uint16_t)cd[12] | ((uint16_t)cd[13] << 8));
+	return VMS_CODEC_OK;
+}

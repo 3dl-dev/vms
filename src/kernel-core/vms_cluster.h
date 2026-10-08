@@ -571,7 +571,35 @@ struct vms_csb {
 	 * this block recorded; cleared when a fresh dialogue is bound.
 	 */
 	uint8_t  cm_new_incarnation;
-	uint8_t  cm_resume_pad[1];
+	/*
+	 * ...AND WHETHER THE PEER MAY STILL TURN OUT TO BE CONTINUING THE
+	 * DIALOGUE THIS BLOCK JUST RESET (rd vms-ba4). A pre-admission joiner's
+	 * block is not entitled to carry by csb_dialogue_may_continue(), yet a
+	 * real VAX's block for that joiner survives a re-formed circuit and
+	 * continues -- measured: VAX send=3 ack=2 against this node's reset
+	 * send=1 ack=0, and CNXMGRERR within a millisecond. So a reset of a
+	 * LIVE dialogue keeps its three numbers here, armed for one frame:
+	 * the peer's first envelope on the new connection says which it is.
+	 */
+	uint8_t  cm_adopt_pending;
+	uint16_t cm_prev_send;
+	uint16_t cm_prev_txn;
+	uint16_t cm_prev_token;
+	/*
+	 * ...AND WHAT THE PEER'S OWN CONNECT DATA SAID ABOUT THE CONNECTION
+	 * BEING ACCEPTED (rd vms-ba4). content[106:108] of its CONNECT_REQ is
+	 * the highest send-msg# it has TAKEN from this node (rd vms-8c54);
+	 * `cm_advertised_ack` is the same cell of OUR ACCEPT_REQ. Non-zero, the
+	 * peer is continuing, and the bind that follows resumes instead of
+	 * resetting -- measured: the VAX dialled with 3 (or 2), this node
+	 * answered and then opened at send 1 / ack 0, CNXMGRERR.
+	 */
+	uint16_t cm_peer_taken;
+	uint16_t cm_advertised_ack;
+	uint8_t  cm_peer_taken_valid;
+	uint8_t  cm_adopt_pad;
+	uint32_t cm_dialogues_adopted;  /* peer continued: resumed from it   */
+	uint32_t cm_adopt_too_late;     /* peer continued after we had spoken*/
 	uint32_t cm_resumes;
 
 	/*

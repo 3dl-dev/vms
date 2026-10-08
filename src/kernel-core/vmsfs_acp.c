@@ -2890,6 +2890,32 @@ static void acp_put16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)((v >> 8) & 0xFFu);
 }
 
+/*
+ * Stamp the header's ident-area dates from the executive clock (rd vms-6f5c):
+ * FI2$Q_CREDATE (when `create`) and FI2$Q_REVDATE, as VMS 64-bit times
+ * (100 ns since 17-NOV-1858, little-endian). A real VMS shows both for every
+ * file it writes (DIRECTORY/FULL "Created:" / "Revised:"); OVMX headers left
+ * them zero, so every OVMX-created file read "<not recorded>". The caller
+ * reseals the header.
+ */
+static void acp_stamp_dates(uint8_t *filehdr, int create)
+{
+    unsigned idoff = filehdr[offsetof(ods2_fh2_t, fh2_idoffset)];
+    uint64_t now = exec_time_now_vms();
+    uint8_t q[8];
+    uint8_t *id;
+    int i;
+
+    if (idoff == 0 || (size_t)idoff * 2u + sizeof(ods2_ident_t) > ACP_BLOCK_SIZE)
+        return;                               /* no ident area: nothing to stamp */
+    id = filehdr + (size_t)idoff * 2u;
+    for (i = 0; i < 8; i++)
+        q[i] = (uint8_t)(now >> (8 * i));
+    if (create)
+        memcpy(id + offsetof(ods2_ident_t, fi2_credate), q, 8);
+    memcpy(id + offsetof(ods2_ident_t, fi2_revdate), q, 8);
+}
+
 /* Fill a channel-snapshot-shaped view from the volume, for acp_bitmap_alloc. */
 static void acp_snap_from_vol(struct acp_chan_snap *snap, struct vms_acp_volume *vol)
 {
@@ -3775,6 +3801,9 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 args.status = SS__BADPARAM;
                 goto free_sc;
             }
+            /* The creation and revision dates (rd vms-6f5c). */
+            acp_stamp_dates(sc->filehdr, 1);
+            ods2_fh2_reseal(sc->filehdr);
             /* NEGCTL-ANCHORED (acp-acl-default-not-propagated): the inherited ACEs
              * go into the new header's access control area. */
             if (acl_len > 0) {
@@ -4182,6 +4211,14 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 }
 
                 if (touched) {
+                    /* The file's contents changed (extend, truncate/EOF, or
+                     * the longest-record attribute RMS $CLOSE writes): its
+                     * revision date is now (rd vms-6f5c). An owner/protection
+                     * change alone leaves it. */
+                    if (args.exsz > 0 || args.trunc_efblk > 0 ||
+                        ((args.attr_ctl & VMS_ACP_ATTR_RECATTR) &&
+                         !(sc->fh.fh2_filechar & ODS2_FH2_M_DIRECTORY)))
+                        acp_stamp_dates(sc->filehdr, 0);
                     (void)ods2_fh2_set_eof(sc->filehdr, new_hiblk, new_efblk, new_ffbyte);
                     ods2_fh2_reseal(sc->filehdr);
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,

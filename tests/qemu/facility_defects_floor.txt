@@ -494,4 +494,6 @@
 # Raised to 183 by the six vms-c6d1 mailbox-protection defects (mbx-prot-read-
 # unchecked, mbx-prot-write-unchecked, mbx-readall-grants-read, crembx-promsk-
 # dropped, mbx-sender-pid-not-stamped, mbx-norswait-ignored; test_syssvc_mbx_prot).
-183
+# Raised to 184 by acp-create-dates-not-stamped (vms-6f5c: IO$_CREATE stamps
+# the header's creation/revision dates; anchors test_syssvc_rms_acp's CDT/RDT check).
+184

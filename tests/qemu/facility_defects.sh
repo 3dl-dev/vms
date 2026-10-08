@@ -589,6 +589,7 @@ acp-acl-default-not-propagated
 acp-default-protection-ignored
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
+acp-create-dates-not-stamped
 libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
@@ -1619,6 +1620,25 @@ EOF
         why)          echo "The ACP stamps attr.recattr[30..31] into the new header's FAT version-limit field when VMS_ACP_ATTR_VERSIONS is set. The mutation makes that branch unreachable ('0 &&'), so the directory keeps the default limit. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the directory's version limit is 7
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-create-dates-not-stamped)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE stamps the new file header's creation and revision dates (FI2\$Q_CREDATE / FI2\$Q_REVDATE) from the executive clock, so DIRECTORY/FULL and F\$FILE_ATTRIBUTES CDT/RDT read real times (vms-6f5c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation replaces the create path's acp_stamp_dates(sc->filehdr, 1) with a no-op, so a new header keeps an all-zero FI2\$Q_CREDATE. RMS \$CLOSE's IO\$_MODIFY (not mutated) still stamps the revision date, but the creation date stays zero, so F\$FILE_ATTRIBUTES CDT of the file test_syssvc_rms_acp created is empty and its dates assertion reddens. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+vms-6f5c: a file the executive created has a creation and a revision date (F$FILE_ATTRIBUTES CDT/RDT not empty)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7614,6 +7634,8 @@ apply_edit() {
         sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file";;
     acp-fat-versions-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\&$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_VERSIONS) \&\& /* NEGCTL acp-fat-versions-not-applied */|' "$_file";;
+    acp-create-dates-not-stamped)
+        sed -i 's|^            acp_stamp_dates(sc->filehdr, 1);$|            (void)0; /* NEGCTL acp-create-dates-not-stamped */|' "$_file";;
     acp-fat-recattr-not-applied)
         sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file";;
     acp-dir-used-blocks-ignore-eof)

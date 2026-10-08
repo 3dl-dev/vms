@@ -180,3 +180,42 @@ info DVI.CHAN.AND.NAME  # vms-de3a: $GETDVI does not know NLA0: or the terminal;
 info ASSIGN.BADNAME  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
 info DVI.ASYNC  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
 info DVI.ASYNC.DONE  # vms-de3a: $GETDVI does not know NLA0: or the terminal; wrong bad-name errors
+rtl STR.CONCAT  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
+rtl STR.APPEND  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
+rtl STR.PREFIX  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
+rtl STR.TRIM  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
+rtl STR.LEN_EXTR.PAST_END  # vms-a91f: STR$ warnings never returned
+rtl STR.LEN_EXTR.NEGSTART  # vms-a91f: STR$ warnings never returned
+rtl STR.POS_EXTR  # vms-afcd: routine not provided by OVMX
+rtl STR.DUPL_CHAR  # vms-afcd: routine not provided by OVMX
+rtl STR.TRANSLATE  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
+rtl STR.ELEMENT.5  # vms-a91f: STR$ warnings never returned
+rtl STR.COPY_DX.FIXED.TRUNC  # vms-a91f: STR$ warnings never returned
+rtl STR.POSITION.EMPTYSUB  # vms-0ff7: STR$POSITION default start / empty substring; LIB$MATCHC
+rtl STR.COMPARE.PAD  # vms-bad: CONCAT/TRIM/TRANSLATE/COMPARE semantics
+rtl STR.FIND_FIRST_IN_SET  # vms-afcd: routine not provided by OVMX
+rtl STR.FIND_FIRST_NOT_IN_SET  # vms-afcd: routine not provided by OVMX
+rtl LIB.MATCHC  # vms-0ff7: STR$POSITION default start / empty substring; LIB$MATCHC
+rtl LIB.GET_SYMBOL  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
+rtl LIB.GET_SYMBOL.LOCAL_WINS  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
+rtl LIB.GET_SYMBOL.GLOBAL_LEFT  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
+rtl LIB.SET_SYMBOL.BADNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
+rtl LIB.SET_SYMBOL.EMPTYNAME  # vms-cded: LIB$GET_SYMBOL does not see LIB$SET_SYMBOL; bad names accepted
+rtl LIB.FIND_FILE.DEFAULT  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.SAME_CTX_AGAIN  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.WILD.1  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.WILD.2  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.NONE  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.FIND_FILE.SYNTAX  # vms-214: LIB$FIND_FILE answers NOSUCHDEV
+rtl LIB.CVT_DTB.BAD  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
+rtl LIB.CVT_DTB.OVERFLOW  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
+rtl LIB.CVT_DTB.ZEROLEN  # vms-dbd: LIB$CVT_DTB status on bad digits / zero length
+rtl LIB.GETJPI.USERNAME  # vms-4c1: LIB$GETxxx string forms / bad item
+rtl LIB.GETJPI.BADITEM  # vms-4c1: LIB$GETxxx string forms / bad item
+rtl LIB.GETJPI.UIC.STRING  # vms-4c1: LIB$GETxxx string forms / bad item
+rtl LIB.GETSYI.DEFPRI  # vms-4c1: LIB$GETxxx string forms / bad item
+rtl LIB.GETSYI.DEFPRI.STRING  # vms-4c1: LIB$GETxxx string forms / bad item
+rtl LIB.GETDVI.DEVCLASS  # vms-4c1: LIB$GETxxx string forms / bad item
+rtl LIB.FREE_VM.AGAIN  # vms-e1f: LIB$GET_VM/FREE_VM fail
+rtl LIB.GET_VM.ZERO  # vms-e1f: LIB$GET_VM/FREE_VM fail
+rtl LIB.GET_VM.NEG  # vms-e1f: LIB$GET_VM/FREE_VM fail

@@ -121,10 +121,11 @@ def FLD(cb, field, label=None, fmt="X"):
     return F("FLD", label or field.split("_", 1)[1], cb, field, fmt)
 
 
-def TPTR(cb, ptrfield, lenfield, label):
+def TPTR(cb, ptrfield, lenfield, label, limit=None):
     """the text a control-block POINTER field addresses, its length in another
-    field -- e.g. a NAM's nam$l_name / nam$b_name"""
-    return F("TPTR", label, cb, ptrfield, lenfield)
+    field -- e.g. a NAM's nam$l_name / nam$b_name. limit = a longer length
+    prints "" (a length the service never set must not walk off into memory)"""
+    return F("TPTR", label, cb, ptrfield, lenfield, limit)
 
 
 def DTEXT(desc, label, limit=None):
@@ -479,10 +480,15 @@ def gen_mar(p):
                 ctl.append("%s=%s" % (f.label, "!XL" if fmt == "X" else "!UL"))
                 body.append("        %s  %s+%s, %s" % (ins, cbn, field.upper(), nxt()))
             elif k == "TPTR":
-                cbn, pf, lf = f.a
+                cbn, pf, lf, limit = f.a
                 ins = {"l": "MOVL  ", "w": "MOVZWL", "b": "MOVZBL"}[lf.split("$")[1][0]]
                 ctl.append('%s="!AF"' % f.label)
-                body.append("        %s  %s+%s, %s" % (ins, cbn, lf.upper(), nxt()))
+                d = nxt()
+                body.append("        %s  %s+%s, %s" % (ins, cbn, lf.upper(), d))
+                if limit is not None:
+                    cl = "%s_P%s" % (lbl, d.split("+")[1])
+                    body += ["        CMPL    %s, #%d" % (d, limit), "        BLEQU   %s" % cl,
+                             "        CLRL    %s" % d, "%s:" % cl]
                 body.append("        MOVL    %s+%s, %s" % (cbn, pf.upper(), nxt()))
             elif k == "DTEXT":
                 dn, limit = f.a
@@ -837,9 +843,12 @@ def gen_c(p):
                 cbn, field, fmt = f.a
                 parts.append('printf(" %s=%s", (unsigned int)%s.%s);' % (f.label, "%08X" if fmt == "X" else "%u", cbn, field))
             elif k == "TPTR":
-                cbn, pf, lf = f.a
+                cbn, pf, lf, limit = f.a
+                ln = "(unsigned int)%s.%s" % (cbn, lf)
+                if limit is not None:
+                    ln = "(%s > %du ? 0u : %s)" % (ln, limit, ln)
                 parts.append('printf(" %s=\\"");' % f.label)
-                parts.append("if (%s.%s) sp_text((const unsigned char *)%s.%s, (unsigned int)%s.%s);" % (cbn, pf, cbn, pf, cbn, lf))
+                parts.append("if (%s.%s) sp_text((const unsigned char *)%s.%s, %s);" % (cbn, pf, cbn, pf, ln))
                 parts.append("putchar('\"');")
             elif k == "DTEXT":
                 dn, limit = f.a

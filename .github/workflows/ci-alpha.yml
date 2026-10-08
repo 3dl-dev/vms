@@ -459,7 +459,7 @@ jobs:
           # (3) the FINAL joint_e2e.exe link (after crt0 assembly) is zero-deferred/
           #     undef/muldef -- scope past the producer-graph's own pre-existing
           #     first-light residual (LIBVMS$SHR aggregator, unrelated to this rung,
-          #     same scoping build-decc-veneer.sh's own gate applies).
+          #     scoped to the final link).
           FINAL_START=$(grep -n '^-- assembling crt0.obj' "$LOG" | head -1 | cut -d: -f1)
           [ -n "$FINAL_START" ] || { echo "GATE FAIL (vms-2655): crt0.obj assembly marker not found in log"; exit 1; }
           TAIL=$(awk -v n="$FINAL_START" 'NR>=n' "$LOG")

@@ -584,12 +584,8 @@ libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
 crtl-feature-unknown-accepted
 crtl-feature-set-ignored
-crtl-feature-file-sharing-ignored
-crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
-crtl-fwrite-chunk-loop-stops-early
-crtl-unlink-fabricates-erase
 rms-dirfind-exact-version-ignored"
 
 # ---------------------------------------------------------------------------
@@ -1425,49 +1421,9 @@ get_value reads back what set_value stored, default untouched
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-with DECC$FILE_SHARING on a second open for write succeeds
-EOF
-                      ;;
-        knock_on_why)  echo "the same single mutation also changes what the dependent assertion reads.";;
-        esac;;
-
-    crtl-feature-file-sharing-ignored)
-        case "$_f" in
-        facility)     echo "DECC\$FILE_SHARING changes how the veneer opens a file";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_features";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "The veneer opens its FAB with SHRGET|SHRPUT when the current DECC\$FILE_SHARING value is 1. The mutation makes that test unreachable ('0 &&') in both open helpers, so the feature is stored and read back but changes nothing -- exactly what the honest rule forbids. Gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-with DECC$FILE_SHARING on a second open for write succeeds
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
 EOF
                       ;;
         knock_on_why)  echo "";;
-        esac;;
-
-    crtl-fwrite-bypasses-rms)
-        case "$_f" in
-        facility)     echo "C RTL stdio->RMS veneer \$PUT (ovmx_crtl_fwrite over sys\$put, vms-47e)";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_rms_veneer";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ovmx_crtl_fwrite()'s chunk loop replaces 'uint32_t st = sys\$put(&fh->rab, 0, 0);' with a hardcoded RMS\$_NORMAL, so the veneer reports every byte written without ever issuing the real \$PUT. sys\$create (fopen) still genuinely creates the file and its real directory entry (untouched), so the independent ACP directory search and on-disk header proofs (sections 2 and 3 of the suite) still find a real, correctly-versioned, zero-length file -- only its CONTENT is fabricated. The write call's own reported count is the fabricated success too, so fwrite's immediate return value coincidentally still matches the requested count; the lie surfaces only when something reads the bytes back. Unique call; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-4c: the RMS round-trip is byte-exact (FIX mrs=0 put / mrs=1 get)
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-4b: ovmx_crtl_fread reads all 8192 bytes back (sys$get)
-EOF
-                      ;;
-        knock_on_why)  echo "with the real \$PUT never issued the file is genuinely zero-length on disk, so the read-back \$GET loop hits RMS\$_EOF immediately (0 bytes, not 8192) -- the SAME never-written content, observed first as a short read (knock_on_fail) and then as a byte-exact-comparison failure against the deterministic payload (require_fail). The creation, directory-search, and on-disk-header assertions (sections 1-3) never touch the CONTENT and stay green.";;
         esac;;
 
     rms-open-no-file-access-enq)
@@ -1548,46 +1504,6 @@ later retry (which real VMS's release would have let through) still conflicts.
 Six symptoms, one dropped assignment.
 EOF
                       ;;
-        esac;;
-
-    crtl-fwrite-chunk-loop-stops-early)
-        case "$_f" in
-        facility)     echo "C RTL stdio->RMS veneer chunked large-write completion (ovmx_crtl_fwrite's >64KiB multi-\$PUT loop, vms-126)";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_rms_bigwrite";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ovmx_crtl_fwrite()'s chunk loop condition 'while (remaining)' is narrowed to 'while (remaining == nbytes)', which is true only on the very FIRST iteration (before any bytes are subtracted) -- so the loop always exits after exactly one real \$PUT (one FIX record, up to 0xFFFF bytes) regardless of how much was requested, yet the function's own unconditional trailing 'return nmemb;' still reports the FULL requested count. A request of nbytes <= 0xFFFF (test_syssvc_crtl_rms_veneer's 8192-byte write) needs only one iteration under the CORRECT condition too, so it is completely unaffected; only a write that genuinely needs a SECOND \$PUT (this suite's 200000-byte write, > 3 FIX records) silently loses every byte past the first chunk. Unique loop header; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-1h: the chunked round-trip is byte-exact across record boundaries
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-1g: ovmx_crtl_fread reads all 200000 bytes back ($GET loop over N records)
-EOF
-                      ;;
-        knock_on_why)  echo "with only the first 0xFFFF-byte chunk genuinely \$PUT, the file's real on-disk length is far short of 200000 bytes, so the read-back \$GET loop runs out of real records early (a short read, the knock-on) and the subsequent byte-for-byte comparison against the full deterministic payload fails (require_fail) -- the same truncated write, observed first as a short count and then as a content mismatch. The write call's OWN reported count (1b), the creation, and the independent-reader/on-disk-header proofs (1a, 1c-1f) never inspect the actual byte length and stay green.";;
-        esac;;
-
-    crtl-unlink-fabricates-erase)
-        case "$_f" in
-        facility)     echo "C RTL stdio->RMS veneer unlink/remove (ovmx_crtl_unlink over sys\$erase, vms-3c1/vms-3320)";;
-        targets)      echo "vmsrms/crtl_rms_stdio.c";;
-        suites_red)   echo "test_syssvc_crtl_rms_fileops";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "ovmx_crtl_unlink() replaces 'uint32_t st = sys\$erase(&fab, 0, 0);' with a hardcoded RMS\$_NORMAL, so the veneer reports every unlink/remove as successful without ever asking the ACP to delete the directory entry -- the file survives, unerased, on the real volume. Because the caller-visible return value is the SAME fabricated success the real erase would also have reported here (the file genuinely exists and a real erase WOULD succeed), the immediate call-site check cannot tell the difference; only an INDEPENDENT reader that looks for the file afterward can. Unique call; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-3d: independent sys$search sees the unlinked file GONE
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-5f: readdir agrees the op-3 unlink and op-4 rename-source are GONE (same self-check crtl_rms3 performs before its sentinel-7 return)
-EOF
-                      ;;
-        knock_on_why)  echo "the SAME never-erased FOPDEL.DAT is invisible to the immediate call-site check (which only reads the fabricated return code, unaffected) but visible to BOTH independent readers that later look for it by name: the direct sys\$search right after the unlink (require_fail) and the later opendir/readdir enumeration pass that re-checks the same file is gone (knock_on_fail) -- one un-erased file, found twice.";;
         esac;;
 
     rms-dirfind-exact-version-ignored)
@@ -7374,8 +7290,6 @@ apply_edit() {
         sed -i 's|^        if (features\[i\].name \&\& strcmp(features\[i\].name, name) == 0)$|        if (features[i].name) /* NEGCTL crtl-feature-unknown-accepted */|' "$_file";;
     crtl-feature-set-ignored)
         sed -i 's|^        f->cur = value;$|        f->cur = f->cur; /* NEGCTL crtl-feature-set-ignored */|' "$_file";;
-    crtl-feature-file-sharing-ignored)
-        sed -i 's|^    if (crtl_file_sharing())$|    if (0 \&\& crtl_file_sharing()) /* NEGCTL crtl-feature-file-sharing-ignored */|' "$_file";;
     clrast-no-delivery)
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)
@@ -7387,11 +7301,6 @@ apply_edit() {
         # structurally unreachable so the created subprocess never gets named.
         # Gone after apply (no-op re-apply).
         sed -i 's|if ((rep.status \& 1) \&\& child_prcnam\[0\])|if (0 \&\& (rep.status \& 1) \&\& child_prcnam[0]) /* NEGCTL libspawn-prcnam-dropped */|' "$_file";;
-    crtl-fwrite-bypasses-rms)
-        # Unique call (ovmx_crtl_fwrite's own $PUT); the real call is replaced
-        # with a hardcoded NORMAL, so no bytes are ever really written. Gone
-        # after apply (no-op re-apply).
-        sed -i 's|uint32_t st = sys\$put(&fh->rab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-fwrite-bypasses-rms: sys$put skipped */|' "$_file";;
     rms-open-no-file-access-enq)
         # Braceless-if success arm: empty {} (not a bare comment) avoids
         # -Werror=empty-body. Unique text; gone after apply (no-op re-apply).
@@ -7400,16 +7309,6 @@ apply_edit() {
         # Braceless-if success arm, same idiom as rms-open-no-file-access-enq.
         # Unique text; gone after apply (no-op re-apply).
         sed -i 's|        rab->_rec_lock_lkid = lkid;|        { } /* NEGCTL rms-record-lock-not-enqueued: lkid not stashed */|' "$_file";;
-    crtl-fwrite-chunk-loop-stops-early)
-        # Unique loop header (ovmx_crtl_fwrite's chunk loop); narrowed so the
-        # loop body runs exactly once regardless of how many chunks remain.
-        # Gone after apply (no-op re-apply).
-        sed -i 's|    while (remaining) {|    while (remaining == nbytes) { /* NEGCTL crtl-fwrite-chunk-loop-stops-early */|' "$_file";;
-    crtl-unlink-fabricates-erase)
-        # Unique call (ovmx_crtl_unlink's own $ERASE); the real call is
-        # replaced with a hardcoded NORMAL, so the file is never really erased.
-        # Gone after apply (no-op re-apply).
-        sed -i 's|uint32_t st = sys\$erase(&fab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-unlink-fabricates-erase: sys$erase skipped */|' "$_file";;
     rms-dirfind-exact-version-ignored)
         # UNIQUE TEXT, no range anchor needed: `if (version == c->want_ver) {`
         # occurs once, in acp_dirfind_scan_cb's exact-version branch. Forcing it

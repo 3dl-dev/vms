@@ -8,9 +8,9 @@ $! ONLY when the FILEOP proof marker is present (a crtl_rms3_test.c build); the
 $! product rootfs-alpha file is never modified.
 $!
 $! WHAT THIS PROVES (the anti-fabrication payoff, INV-6). SYS$SYSTEM:JOINT_E2E is
-$! the alpha-dec-vms GCC-port image built with the CRTL->RMS veneer wired in
-$! (JOINT_CRTL_RMS_VENEER=1): its decc$open/creat/unlink/rename/opendir/readdir/
-$! closedir bind, BY SYMBOL-VECTOR INDEX, to the crtl_rms_stdio.c veneer
+$! the alpha-dec-vms GCC-port image built against the RMS-backed DECC$SHR
+$! (JOINT_CRTL_RMS_VENEER=1): its open/creat/unlink/rename/opendir/readdir/
+$! closedir are served by the C RTL file layer (crtl_rms_fd.c, vms-9f8e)
 $! (ovmx_crtl_* -> sys$create/$open/$erase/$rename/$parse/$search ->
 $! LIBVMSRMS$SHR -> ioctl(/dev/vms) -> the Files-11 ACP), NOT to musl-POSIX. It
 $! creats FOPCRE.DAT, creats+unlinks FOPDEL.DAT, and creats+renames
@@ -26,8 +26,7 @@ $! ACP directory at all (it draws %DIRECT-W-NOFILES, NO File ID). So:
 $!   - FOPCRE.DAT + FOPDST.DAT present WITH File IDs  => creat + rename landed;
 $!   - FOPDEL.DAT + FOPSRC.DAT %DIRECT-W-NOFILES      => unlink + rename-away worked.
 $! The renamed FOPDST.DAT keeping a genuine File ID proves the ACP MODIFY!M_MOVE
-$! re-link (the same-File-ID atomicity is proven exhaustively on the host-arch
-$! layer, tests/qemu/test_syssvc_crtl_rms_veneer.c).
+$! re-link (the same-File-ID property is asserted by the crtl-fd gate, check 42).
 $!
 $ SET NOON
 $!

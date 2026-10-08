@@ -74,43 +74,43 @@
     }
   ],
   "overall": {
-    "count": 475,
+    "count": 474,
     "by_status": {
       "verified": 24,
-      "implemented": 285,
+      "implemented": 284,
       "partial": 59,
       "stub": 14,
       "designed": 1,
       "absent": 92
     },
     "by_authenticity": {
-      "real": 328,
+      "real": 327,
       "n/a": 93,
       "advisory": 48,
       "facade-risk": 6
     },
-    "met": 309,
+    "met": 308,
     "in_progress": 59,
     "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 430,
+    "count": 429,
     "by_status": {
       "verified": 24,
-      "implemented": 285,
+      "implemented": 284,
       "partial": 58,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 327,
+      "real": 326,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
-    "met": 309,
+    "met": 308,
     "in_progress": 58,
     "not_started": 63,
     "facade_risk": 4
@@ -1310,20 +1310,20 @@
       "vms_ref": "OpenVMS Record Management Services Reference Manual",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 38,
+        "count": 37,
         "by_status": {
           "verified": 0,
-          "implemented": 33,
+          "implemented": 32,
           "partial": 4,
           "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 37,
+          "real": 36,
           "n/a": 1
         },
-        "met": 33,
+        "met": 32,
         "in_progress": 4,
         "not_started": 1,
         "facade_risk": 0
@@ -6351,21 +6351,6 @@
       "evidence": "src/vmsrms/rms_search.c",
       "verified_against": null,
       "notes": "ACP $SEARCH; distinguishes RMS$_DNF (no such dir) from RMS$_NMF (no match)",
-      "plan_ref": "vms-801"
-    },
-    {
-      "domain": "programming-interfaces",
-      "facility": "rms-api",
-      "facility_name": "RMS programmatic API \u2014 entry points, control blocks, file organizations",
-      "id": "crtl$rms_stdio_veneer",
-      "kind": "feature",
-      "vms": "C RTL stdio FILE* (fopen/fwrite/fread/fclose) as a thin veneer over RMS",
-      "status": "implemented",
-      "authenticity": "real",
-      "scope_1_0": "in",
-      "evidence": "src/vmsrms/crtl_rms_stdio.c",
-      "verified_against": null,
-      "notes": "vms-47e/126/3c1: fopen/fwrite/fread/fclose drive sys$create/$open/$connect/$put/$get/$close against the real ODS-2 volume over the ACP (do-it-like-VMS: CRTL is a thin RMS veneer, not musl POSIX). Byte-exact FIX put/read + fail-honest no-POSIX-fallback; chunked >64KiB writes + delete-on-close temps (vms-126). Proven by tests/qemu/test_syssvc_crtl_rms_veneer.c (host ctest, not a real-VMS oracle -> implemented, not verified). vms-9f8e: no longer linked into the alpha DECC$SHR -- the C RTL file layer (crtl$rms_file_layer) serves every RMS-backed DECC$SHR; the source and its host suites remain until their retirement is decided",
       "plan_ref": "vms-801"
     },
     {

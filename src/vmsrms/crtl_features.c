@@ -8,8 +8,8 @@
  * never accepted and then ignored. This table therefore lists a feature only when some
  * code path really changes behaviour with it:
  *
- *   DECC$FILE_SHARING (0..1, default 0)  the stdio/file veneer (crtl_rms_stdio.c) and the
- *       fd layer (crtl_rms_fd.c) open their FAB with SHRGET|SHRPUT instead of no sharing, so a second fopen of a file
+ *   DECC$FILE_SHARING (0..1, default 0)  the C RTL file layer (crtl_rms_fd.c) opens its
+ *       FAB with SHRGET|SHRPUT instead of no sharing, so a second fopen of a file
  *       already open for write succeeds (RMS CW lock) instead of failing on the
  *       Files-11 file-access lock (RMS EX lock).
  *
@@ -27,14 +27,14 @@
  * than the two defined ones is -1/EINVAL.
  *
  * The alpha DECC$SHR binds the decc$ names to these ovmx_crtl_* functions with the
- * symbol-vector alias form (mk_decc_shr.sh), exactly as the stdio veneer; they are plain
+ * symbol-vector alias form (mk_decc_shr.sh); they are plain
  * names here so the cc1's decc$ auto-decoration never touches them.
  */
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
 
-#include "rms/crtl_stdio.h"
+#include "rms/crtl_features.h"
 
 struct feature {
     const char *name;
@@ -120,7 +120,7 @@ int ovmx_crtl_feature_set_value(int index, int mode, int value)
     return 0;
 }
 
-/* The veneer's own query: the CURRENT value of a feature it honours. */
+/* The C RTL file layer's query: the CURRENT value of a feature it honours. */
 int ovmx_crtl_feature_current(int index)
 {
     struct feature *f = by_index(index);

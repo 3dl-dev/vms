@@ -1,15 +1,13 @@
 /*
- * test_syssvc_crtl_features.c - the DEC C RTL feature switches (vms-db7), over the
- * stdio/file veneer on a real ODS-2 volume.
+ * test_syssvc_crtl_features.c - the DEC C RTL feature switches (vms-db7).
  *
  *   - the table holds only what OVMX honours: DECC$FILE_SHARING is index 1; a name the
  *     table lacks (a made-up one, and DEC C's real DECC$UNIX_LEVEL, which OVMX does not
  *     implement) is -1 with errno EINVAL, never accepted and ignored;
  *   - index 0, a bad mode and an out-of-range value are -1/EINVAL;
  *   - a value set is the value read back, current and default kept apart;
- *   - THE FEATURE CHANGES BEHAVIOUR: with DECC$FILE_SHARING off a second open for
- *     write of a file already open for write is refused (the Files-11 file-access lock
- *     is exclusive); with it on, the second open succeeds;
+ *   - (that DECC$FILE_SHARING changes how the C RTL opens a file is proven where the
+ *     C RTL file layer runs: the alpha crtl-fd gate, crtl_fd_test.c check 41);
  *   - decc$set_reentrancy accepts the two defined levels and refuses any other.
  *
  * No /dev/vms -> honest SKIP (77).
@@ -19,15 +17,13 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
-#include <fcntl.h>
 
 #include "vms_kif.h"
 #include "rms/rms.h"
-#include "rms/crtl_stdio.h"
+#include "rms/crtl_features.h"
 
 #define EXIT_SKIP 77
 #define ODS2_UNIT "VDA0:"
-#define FSPEC ODS2_UNIT "[OVMXDIR]FEATSH.DAT"
 
 static int pass, fail;
 static void check(int c, const char *m)
@@ -36,22 +32,12 @@ static void check(int c, const char *m)
     else   { printf("  FAIL: %s\n", m); fail++; }
 }
 
-static void erase_all(void)
-{
-    struct FAB fab = cc$rms_fab;
-    const char *spec = FSPEC ";*";
-    fab.fab$l_fna = (char *)spec;
-    fab.fab$b_fns = (uint8_t)strlen(spec);
-    (void)sys$erase(&fab, 0, 0);
-}
-
 int main(void)
 {
-    int idx, a, b;
-    OVMX_CRTL_FILE *f;
+    int idx;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("=== test_syssvc_crtl_features: DEC C feature switches over the RMS veneer ===\n");
+    printf("=== test_syssvc_crtl_features: DEC C feature switches ===\n");
     if (vms_kif_open() < 0) {
         printf("=== test_syssvc_crtl_features: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
@@ -87,31 +73,6 @@ int main(void)
     check(ovmx_crtl_feature_get_value(idx, 1) == 1 && ovmx_crtl_feature_get_value(idx, 0) == 0,
           "get_value reads back what set_value stored, default untouched");
     check(ovmx_crtl_feature_set_value(idx, 1, 0) == 0, "set it back to 0");
-
-    /* --- behaviour: file sharing ------------------------------------------------ */
-    erase_all();
-    f = ovmx_crtl_fopen(FSPEC, "w");
-    check(f != NULL, "create FEATSH.DAT through the veneer");
-    if (f)
-        (void)ovmx_crtl_fclose(f);
-
-    a = ovmx_crtl_open(FSPEC, O_WRONLY);
-    b = ovmx_crtl_open(FSPEC, O_WRONLY);
-    check(a >= 0 && b < 0,
-          "with DECC$FILE_SHARING off a second open for write of the same file is refused");
-    if (a >= 0) (void)ovmx_crtl_fdclose(a);
-    if (b >= 0) (void)ovmx_crtl_fdclose(b);
-
-    check(ovmx_crtl_feature_set_value(idx, 1, 1) == 0, "DECC$FILE_SHARING on");
-    a = ovmx_crtl_open(FSPEC, O_WRONLY);
-    b = ovmx_crtl_open(FSPEC, O_WRONLY);
-    /* negctl: crtl-feature-file-sharing-ignored */
-    check(a >= 0 && b >= 0,
-          "with DECC$FILE_SHARING on a second open for write succeeds");
-    if (a >= 0) (void)ovmx_crtl_fdclose(a);
-    if (b >= 0) (void)ovmx_crtl_fdclose(b);
-    (void)ovmx_crtl_feature_set_value(idx, 1, 0);
-    erase_all();
 
     /* --- reentrancy ------------------------------------------------------------- */
     check(ovmx_crtl_get_reentrancy() == OVMX_C_MULTITHREAD, "the C RTL starts multithread-safe");

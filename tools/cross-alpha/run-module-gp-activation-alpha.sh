@@ -1573,8 +1573,8 @@ EOF
     # closedir beyond the stdio family. Same VENEER path as crtl-rms-veneer-gate
     # (JOINT_CRTL_RMS_VENEER=1) but the MILESTONE image is crtl_rms3_test.c: it
     # creats FOPCRE.DAT, creats+unlinks FOPDEL.DAT, creats+renames FOPSRC.DAT->
-    # FOPDST.DAT via the VECTOR-SUBSTITUTED decc$* file-ops (bound by sv# index
-    # to the crtl_rms_stdio.c veneer -> sys$create/$erase/$rename -> the ACP),
+    # FOPDST.DAT via the C RTL's own file calls (served by the C RTL file layer
+    # over RMS, crtl_rms_fd.c -> sys$create/$erase/$rename -> the ACP),
     # leaving FOPCRE.DAT + FOPDST.DAT behind. The proof is an INDEPENDENT reader
     # (DCL DIRECTORY over the ACP, a different accessor) seeing FOPCRE.DAT +
     # FOPDST.DAT with genuine ODS-2 File IDs and FOPDEL.DAT/FOPSRC.DAT gone.
@@ -1705,7 +1705,7 @@ EOF
     # write the record file the image reads, and DCL TYPE read back the stream
     # file the image wrote -- both directions through a different accessor.
     MILESTONE_MAIN=crtl_fd_test.c
-    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no -I/src/src/libvms/include"   # <unixlib.h>: decc$feature_*
     export JOINT_MAIN_MUSL_HEADERS=1
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1

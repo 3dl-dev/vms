@@ -217,9 +217,8 @@ echo "   OK: auto-detect resolves to alpha (container-format-aware, vms-2a0)"
 RMS=""
 JOINT_CRTL_RMS_VENEER=${JOINT_CRTL_RMS_VENEER:-0}
 if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
-    # ---- vms-2655 (rung 3): the two-pass CRTL->RMS veneer bootstrap, composed
-    #      verbatim from tools/cross-alpha-vms/decc-veneer/build-decc-veneer.sh
-    #      (the rung 2 template) into this recipe producer graph. ----
+    # ---- vms-2655: the two-pass bootstrap of the RMS-backed DECC$SHR (the C RTL
+    #      file layer over RMS, vms-b90) through this recipe producer graph. ----
     MK=/src/src/vmslink
     OTS="$WORK/libots/LIBOTS_SHR.EXE"
 
@@ -333,12 +332,10 @@ done
 # that emit no OTS$ call, and closes the gap for those that do.
 #
 # vms-2655 (rung 3): when JOINT_CRTL_RMS_VENEER=1, DECC$SHR (above) is the
-# pass-2 veneer-wired build, whose decc$fopen/fwrite/fread/fclose alias to the
-# crtl_rms_stdio.c veneer (ovmx_crtl_*), which itself references
-# sys$create/open/connect/put/get/close -- cross-image imports that need a
-# producer at THIS link too, exactly like build-decc-veneer.sh step 12s test
-# image. --use LIBVMSRMS$SHR supplies it (RMS is empty/unset otherwise, so
-# this is inert -- no extra --use flag -- when the veneer is not opted in).
+# pass-2 RMS-backed build: its C RTL file layer references sys$open/create/
+# read/write/get/parse/search/... -- cross-image imports that need a producer
+# at THIS link too. --use LIBVMSRMS$SHR supplies it (RMS is empty/unset
+# otherwise, so this is inert -- no extra --use flag -- when not opted in).
 RMS_USE_FLAG=""
 [ -n "$RMS" ] && RMS_USE_FLAG="--use $RMS"
 # vms-43c: OVMX STARLET -- the object library every image is searched against,

@@ -2957,10 +2957,25 @@ static uint32_t rms_impl_rename(void *old_ptr, void *new_ptr)
 
         /* Rename has a SINGLE target (not a search-list op): use the first new
          * candidate. Try each source candidate in order; the first that
-         * resolves + moves wins (mirrors sys$erase's candidate walk). */
+         * resolves + moves wins (mirrors sys$erase's candidate walk).
+         *
+         * Except when the new name names the SAME device:[directory] as the
+         * old -- the same search list, member for member (SYS$SYSROOT:[SYSMGR]
+         * on both sides): then the file is renamed IN the directory it was
+         * found in, so source member i pairs with target member i. Observed:
+         * a VAX FAL renamed SYS$SYSROOT:[SYSMGR]RENME.TXT;1 to
+         * SYS$SYSROOT:[SYSMGR]RENAMED.TXT;1 in place
+         * (tests/lab/captures/decnet-fal-verbs-20261008/). Pairing with
+         * member 0 instead looked for the target directory in the node member
+         * and refused a file found in SYSCOMMON with SS$_NOSUCHFILE. */
+        int pair = (onc == nnc);
+        for (int k = 0; pair && k < onc; k++)
+            if (strcmp(ospecs[k].devnam, nspecs[k].devnam) != 0 ||
+                strcmp(ospecs[k].dirpath, nspecs[k].dirpath) != 0)
+                pair = 0;
         for (int i = 0; i < onc && !done; i++) {
             struct rms_acp_spec *os = &ospecs[i];
-            struct rms_acp_spec *ns = &nspecs[0];
+            struct rms_acp_spec *ns = &nspecs[pair ? i : 0];
 
             chan = 0;
             st = vms_kif_acp_assign(os->devnam, &chan);

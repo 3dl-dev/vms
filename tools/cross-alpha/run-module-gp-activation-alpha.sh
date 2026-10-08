@@ -1198,11 +1198,12 @@ EOF
     else
       _cxxf="-mpointer-size=64"
     fi
+    # (at the DEC C default pointer size, as the VMS host GCC is built: the
+    # VMS-layout FAB/NAM headers assert their 32-bit layout)
     log "step 1c': GCC's VMS-host vms_file_stats_name compiles as C++ with this g++ (vms-fd1, patches/0012)"
-    # shellcheck disable=SC2086
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -e OVMX_ALPHA_SYSROOT=/joint -v "$GATE_ROOT/joint-n3:/joint:ro" "$VMS_IMG" \
       bash /src/tools/cross-alpha-vms/test/run_vmsdbgout_vms_host_cxx.sh /src/tools/cross-alpha-vms \
-      /out/cxx/bin/alpha-dec-vms-g++ $_cxxf || die "vmsdbgout VMS-host C++ check failed"
+      /out/cxx/bin/alpha-dec-vms-g++ || die "vmsdbgout VMS-host C++ check failed"
     # shellcheck disable=SC2086
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$GATE_ROOT/cxximg:/img" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \

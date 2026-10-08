@@ -24,7 +24,7 @@ done
 # The VMS-host block: from the `#ifdef VMS` that opens the STARLET includes
 # through the closing brace of vms_file_stats_name.
 extract() {
-    awk '/^#ifdef VMS$/ { hold=$0; next }
+    awk '!on && /^#ifdef VMS$/ { hold=$0; next }
          hold != "" && /^#define __NEW_STARLET 1$/ { on=1; print hold }
          { hold="" }
          on { print }

@@ -6,8 +6,13 @@
 # path (/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, staged in the initramfs), and IMGACT
 # resolves DECC$SHR from SYS$LIBRARY on the mounted system disk.
 #
-# Output: <repo>/build-static/bin/corpus_rt_<name> (+ .args), which the corpus
-# staging glob copies into the guest's /tests/corpus_rt like every other entry.
+# Output: the image <repo>/build-static/native/<NAME>.EXE, which the Dockerfile
+# masters onto the corpus system disk as [SYS0.SYSCOMMON.SYSEXE]<NAME>.EXE and
+# stages at /vms/SYS0/SYSCOMMON/SYSEXE/<NAME>.EXE (IMGACT reads a main image's
+# bytes over the executive ACP from SYS$SYSDEVICE, never the POSIX copy), plus
+# <repo>/build-static/bin/corpus_rt_<name> (+ .args): a two-line sh wrapper that
+# execs that SYS$SYSTEM path, which the corpus staging glob copies into the
+# guest's /tests/corpus_rt like every other entry.
 #
 # Usage: mk_corpus_native.sh <repo-root>
 set -eu
@@ -17,7 +22,8 @@ TCC=$BIN/TCC.EXE
 DECC="$BIN/DECC\$SHR.EXE"
 LIST=$REPO/tests/qemu/corpus_runtime_native.txt
 W=${WORK:-/tmp/corpus-native}
-rm -rf "$W"; mkdir -p "$W/vmsinc"
+NATIVE=$REPO/build-static/native
+rm -rf "$W" "$NATIVE"; mkdir -p "$W/vmsinc" "$NATIVE"
 [ -x "$TCC" ] || { echo "mk_corpus_native: FATAL: no $TCC" >&2; exit 1; }
 [ -f "$DECC" ] || { echo "mk_corpus_native: FATAL: no $DECC" >&2; exit 1; }
 
@@ -42,8 +48,11 @@ grep -E '^[A-Za-z0-9_]+\|' "$LIST" | while IFS='|' read -r name dir defs srcs ar
         objs="$objs $o"
     done
     # shellcheck disable=SC2086
-    "$W/LINK.EXE" --executable --use "$DECC" -o "$BIN/corpus_rt_$name" $objs \
+    img=$(echo "$name" | tr 'a-z' 'A-Z').EXE
+    "$W/LINK.EXE" --executable --use "$DECC" -o "$NATIVE/$img" $objs \
         || { echo "mk_corpus_native: FATAL: LINK.EXE did not link $name" >&2; exit 1; }
+    chmod +x "$NATIVE/$img"
+    printf '#!/bin/sh\nexec /vms/SYS0/SYSCOMMON/SYSEXE/%s "$@"\n' "$img" > "$BIN/corpus_rt_$name"
     chmod +x "$BIN/corpus_rt_$name"
     if [ -n "$args" ]; then printf "%s\n" "$args" > "$BIN/corpus_rt_$name.args"; fi
     echo "mk_corpus_native: built corpus_rt_$name ($srcs)"

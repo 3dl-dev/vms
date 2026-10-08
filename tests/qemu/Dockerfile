@@ -458,7 +458,9 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
         SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
         SYSEXE:IMGACT.EXE=/src/repo/src/imgact/IMGACT.EXE \
-        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE'
+        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE' \
+        $(for f in /src/repo/build-static/native/*.EXE; do \
+            [ -f "$f" ] && echo "SYSEXE:$(basename "$f")=$f"; done)
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
@@ -827,6 +829,11 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # answer. The suite's positive assertions would simply stop being
     # reachable while the job stayed green.
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE && \
+    for f in /src/repo/build-static/native/*.EXE; do \
+        [ -f "$f" ] || continue; \
+        cp "$f" /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        chmod +x "/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/$(basename "$f")" || exit 1; \
+    done && \
     for f in RIGHTSLIST.DAT SYSUAF.DAT; do \
         cp "/src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/$f" \
            /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \

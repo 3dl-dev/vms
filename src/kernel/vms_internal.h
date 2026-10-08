@@ -1004,6 +1004,8 @@ struct vms_device {
 
     /* Terminal state (devclass == DC$_TERM) */
     uint64_t            devchar;        /* VMS_TTC_* */
+    uint32_t            devchar_dev;    /* DEV$M_* characteristics (vms-de3a) */
+    uint32_t            devbufsiz;      /* DVI$_DEVBUFSIZ */
     uint32_t            width;
     uint32_t            page;
 

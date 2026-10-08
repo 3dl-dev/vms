@@ -420,6 +420,20 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
     if (!devnam || !chan) return SS$_BADPARAM;
     if (!devnam->dsc$a_pointer || devnam->dsc$w_length == 0)
         return SS$_IVDEVNAM;
+    /* A device name's device field holds letters, digits, '$', '_' and '-'
+     * only: anything else before the ':' is SS$_IVDEVNAM, as on real VAX
+     * V7.3 / Alpha V8.4 (docs/oracle/semantics/info/ ASSIGN.BADNAME, rd
+     * vms-de3a). A host path ('/...') is OVMX's own spelling, left alone. */
+    if (devnam->dsc$a_pointer[0] != '/') {
+        for (unsigned i = 0; i < devnam->dsc$w_length; i++) {
+            char c = devnam->dsc$a_pointer[i];
+            if (c == ':' || c == '[' || c == '<' || c == '.' || c == ';')
+                break;
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '$' || c == '_' || c == '-'))
+                return SS$_IVDEVNAM;
+        }
+    }
 
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_BADPARAM;

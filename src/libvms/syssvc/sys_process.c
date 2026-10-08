@@ -541,6 +541,9 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm)
 {
+    uint32_t rq = vms$$async_begin(efn);
+    if (rq != SS$_NORMAL)
+        return rq;
     uint32_t st = getjpi_impl(efn, pidadr, prcnam_arg, itmlst_arg, iosb, astadr, astprm);
     return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }

@@ -96,12 +96,10 @@
 #ifndef IO$M_OUTBAND
 #define IO$M_OUTBAND    0x0080   /* $QIO func modifier: out-of-band AST */
 #endif
-#ifndef DVI$_TRM
-#define DVI$_TRM        16       /* $GETDVI: is-a-terminal (boolean) */
-#endif
-#ifndef DVI$_DEVBUFSIZ
-#define DVI$_DEVBUFSIZ  19       /* $GETDVI: device buffer size */
-#endif
+/* DVI$_TRM / DVI$_DEVBUFSIZ: OVMX's dvidef.h carries the V7.3 values now
+ * (0x4A / 0x08, rd vms-de3a) and $GETDVI answers them, so take them from there
+ * instead of the placeholder codes this shim used to invent. */
+#include "dvidef.h"
 #ifndef JPI$_DIOCNT
 #define JPI$_DIOCNT     0x040c   /* $GETJPI: direct-I/O count */
 #endif

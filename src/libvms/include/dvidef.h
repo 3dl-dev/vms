@@ -38,6 +38,10 @@ extern "C" {
 #define DVI$_DEVTYPE            0x0006  /* Device type code (L) */
 #define DVI$_DEVCLASS           0x0004  /* Device class code (L) — see dcdef.h */
 #define DVI$_DEVCHAR            0x0002  /* Device characteristics flags (L) */
+#define DVI$_DEVBUFSIZ          0x0008  /* Device buffer size (L) -- V7.3 $DVIDEF */
+#define DVI$_TRM                0x004A  /* Device is a terminal (L boolean) -- V7.3 $DVIDEF */
+#define DVI$_SPL                0x0052  /* Device is spooled (L boolean) -- V7.3 $DVIDEF */
+#define DVI$_MBX                0x0066  /* Device is a mailbox (L boolean) -- V7.3 $DVIDEF */
 #define DVI$_DEVCHAR2           0x00E6  /* Extended device characteristics (L) */
 #define DVI$_DEVDEPEND          0x000A  /* Device dependent info (L) */
 #define DVI$_DEVDEPEND2         0x001C  /* Extended device dependent info (L) */

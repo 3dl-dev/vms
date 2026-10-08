@@ -127,10 +127,17 @@ static void fill_dvi_item(const struct item_list_3 *item,
     case DVI$_FULLDEVNAM:
     case DVI$_ALLDEVNAM: {
         /* Single-node system: the full name is the physical name. A cluster
-         * node prefix ("node$") is a documented remainder (vms-dv1). */
-        uint16_t len = (uint16_t)strlen(info->devnam);
+         * node prefix ("node$") is a documented remainder (vms-dv1).
+         * DVI$_DEVNAM is the PHYSICAL name, which VMS writes with its leading
+         * underscore: "_NLA0:" (DVI.DEVNAM.NLA0, docs/oracle/semantics/info/;
+         * rd vms-de3a). */
+        char nm[VMS_DEVNAM_SIZE + 2];
+        snprintf(nm, sizeof nm, "%s%s",
+                 (item->item_code == DVI$_DEVNAM && info->devnam[0] != '_') ? "_" : "",
+                 info->devnam);
+        uint16_t len = (uint16_t)strlen(nm);
         if (len > item->buflen) len = item->buflen;
-        if (item->bufaddr) memcpy(item->bufaddr, info->devnam, len);
+        if (item->bufaddr) memcpy(item->bufaddr, nm, len);
         if (item->retlen) *item->retlen = len;
         break;
     }

@@ -365,6 +365,34 @@ static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
  * target -- the honest answer is SS$_NONEXPR, which is what VMS returns
  * for a process that does not exist.
  */
+#include "ovmx_itemcodes.inc"
+
+static int item_in(const uint32_t *tab, size_t n, uint32_t code)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (tab[mid] == code) return 1;
+        if (tab[mid] < code) lo = mid + 1; else hi = mid;
+    }
+    return 0;
+}
+
+static int jpi_item_defined(uint32_t code)
+{
+    return item_in(ovmx_jpi_items, sizeof ovmx_jpi_items / sizeof ovmx_jpi_items[0], code);
+}
+
+/* A longword item: as many of its bytes as the buffer holds, and that many as
+ * the return length (JPI.SHORTBUF: a 2-byte UIC buffer gets the low word). */
+static void jpi_put_long(const struct item_list_3 *item, uint32_t v)
+{
+    uint16_t n = item->buflen < 4 ? item->buflen : 4;
+    if (item->bufaddr && n)
+        memcpy(item->bufaddr, &v, n);
+    if (item->retlen) *item->retlen = n;
+}
+
 static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                     void *prcnam_arg,
                     void *itmlst_arg,
@@ -382,10 +410,34 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
 
     if (!itmlst) return SS$_BADPARAM;
 
+    /* An item code OpenVMS does not define is SS$_BADPARAM before anything is
+     * written (JPI.BADITEM, docs/oracle/semantics/info/; rd vms-bd30). */
+    for (const struct item_list_3 *it = itmlst; it->buflen || it->item_code; it++)
+        if (!jpi_item_defined(it->item_code))
+            return SS$_BADPARAM;
+
     struct vms_procinfo info;
     uint32_t status;
+    uint32_t *pidio = (uint32_t *)(uintptr_t)pidadr;
 
-    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
+    if (pidio && (*pidio & 0x80000000u)) {
+        /*
+         * WILDCARD (OpenVMS System Services Reference, $GETJPI): -1 starts a
+         * walk of the processes the caller may see; each call answers for the
+         * next one and leaves a context in *pidadr -- not that process's PID
+         * (JPI.WILD.*, docs/oracle/semantics/info/) -- and the walk ends with
+         * SS$_NOMOREPROC. The context is the executive scan cursor, tagged
+         * with the high bit no VMS PID OVMX assigns carries. Rows the caller
+         * may not read are passed over, as VMS passes over them.
+         */
+        uint32_t idx = (*pidio == 0xFFFFFFFFu) ? 0 : (*pidio & 0x7FFFFFFFu);
+        do {
+            status = vms_kif_procscan(&idx, &info);
+        } while ((status & 1) && info.redacted);
+        if (!(status & 1))
+            return SS$_NOMOREPROC;
+        *pidio = 0x80000000u | idx;
+    } else if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
         /* The key travels untruncated: VMS_PRCNAM_XFER is deliberately
          * larger than any legal process name so that an oversized name
          * is REJECTED by the executive (SS$_IVLOGNAM) instead of being
@@ -403,6 +455,10 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
     if (!(status & 1))
         return status;
 
+    /* A zero *pidadr asks for the caller itself and receives its PID. */
+    if (pidio && *pidio == 0)
+        *pidio = info.vms_pid;
+
     /*
      * NO PCB IS CONSULTED. Every item below is answered from the row the
      * executive resolved. The caller's own vms_pcb_get() used to supply
@@ -415,9 +471,7 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
          item->buflen != 0 || item->item_code != 0; item++) {
         switch (item->item_code) {
             case JPI$_PID:
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = info.vms_pid;
-                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                jpi_put_long(item, info.vms_pid);
                 break;
 
             case JPI$_PRCNAM:
@@ -482,17 +536,44 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                  * holds, so that is what is reported; a name is not
                  * invented to fill the field.
                  */
-                uint16_t len = (uint16_t)strlen(info.username);
+                /* A username is 12 characters, blank-filled, as SYSUAF
+                 * holds it (JPI.SELF.W: userlen=12 "SYSTEM      "); a
+                 * row with no identity is still an empty name. */
+                uint16_t ul = (uint16_t)strlen(info.username);
+                uint16_t len = ul ? 12 : 0;
                 if (len > item->buflen) len = item->buflen;
-                if (item->bufaddr) memcpy(item->bufaddr, info.username, len);
+                if (item->bufaddr) {
+                    for (uint16_t k = 0; k < len; k++)
+                        ((char *)item->bufaddr)[k] = k < ul ? info.username[k] : ' ';
+                }
                 if (item->retlen) *item->retlen = len;
                 break;
             }
 
             case JPI$_UIC:
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = info.uic;
-                if (item->retlen) *item->retlen = sizeof(uint32_t);
+                jpi_put_long(item, info.uic);
+                break;
+
+            /* From the UIC and the process's classification, both the
+             * executive's (rd vms-bd30). */
+            case JPI$_GRP:
+                jpi_put_long(item, info.uic >> 16);
+                break;
+            case JPI$_MEM:
+                jpi_put_long(item, info.uic & 0xFFFFu);
+                break;
+            case JPI$_MODE:
+                /* An interactive job's processes (its SPAWNed subprocesses
+                 * too) are INTERACTIVE; batch BATCH; a detached process OTHER. */
+                jpi_put_long(item, info.proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                                 : info.proc_type == VMS_PROC_T_OTHER ? JPI$K_OTHER
+                                 : JPI$K_INTERACTIVE);
+                break;
+            case JPI$_JOBTYPE:
+                /* A job on a terminal is LOCAL (OVMX's terminals are local
+                 * lines); one without a terminal is DETACHED, or BATCH. */
+                jpi_put_long(item, info.proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                                 : info.terminal[0] ? JPI$K_LOCAL : JPI$K_DETACHED);
                 break;
 
             case JPI$_CPUTIM: {

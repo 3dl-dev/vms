@@ -143,6 +143,9 @@ extern "C" {
  * consistency failure). */
 #define SS$_ILLIOFUNC       244     /* Illegal I/O function (%SYSTEM-F-ILLIOFUNC) */
 #define SS$_NOMORENODE      2560     /* No more cluster nodes (VMS: 0x24C) */
+/* ORACLE-PINNED: docs/oracle/alpha84-starlet-defs/SSDEF.txt ($EQU SS$_NOSUCHNODE 652):
+ * $GETSYI of a node this system has no information for (rd vms-74a). */
+#define SS$_NOSUCHNODE      652      /* Remote node is unknown */
 /* ================================================================
  * ORACLE-PINNED VALUES (vms-8019, 2026-07-30)
  *

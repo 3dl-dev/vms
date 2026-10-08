@@ -740,11 +740,9 @@ uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.
- * OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36) -- SET TERMINAL is the writer, and
- * what it writes is ctx->terminal, a per-process DCL-local model no other
- * process (and no later image in this one) can observe. Re-pointed from
- * vms-fb9, which is CLOSED: an item that is done tracks nothing, and the whole
- * price of this declaration is that a LIVE item owns the gap. */
+ * Wired (rd vms-d900): $QIO IO$_SETMODE / IO$_SETCHAR with a characteristics
+ * buffer on a terminal channel (sys_qio.c qio_terminal_op), which DCL's SET
+ * TERMINAL /WIDTH /PAGE now goes through. */
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);

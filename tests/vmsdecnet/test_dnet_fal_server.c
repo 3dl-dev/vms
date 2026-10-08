@@ -29,9 +29,9 @@
  *     omitted, never invented (INV-6); every field it sends must equal the
  *     VAX's.
  *   - The CONFIGURATION reply is OVMX's own.
- *   - A DIRECTORY LIST has no per-file ACKNOWLEDGE in DAP 5.6 (spec 5.2.11);
- *     the VAX FAL's is a DAP 7 peer's, and a VMS client talking 5.6 to OVMX
- *     REJECTS one (BUG_DAP 0001A006, the 2026-10-08 live bracket, test 5).
+ *   - The DIRECTORY LIST per-file ACKNOWLEDGE is DAP 7's: OVMX advertises
+ *     DAP 7.2 (rd vms-b2f) and sends it to a DAP 7 client byte for byte; a
+ *     DAP 5.6 FAL must not (BUG_DAP 0001A006, live bracket, test 5).
  * Everything else -- every NAME, ACK, ACCESS COMPLETE, SUMMARY, PROTECTION and
  * every STATUS -- must be byte-identical, FLAGS/LENGTH framing included.
  */
@@ -347,6 +347,9 @@ static int load_wire(const char *path)
 
 struct dmsg { struct dnet_dap_msg m; const uint8_t *raw; size_t len; };
 static int g_drop_ack;   /* VAX side of a DIRLIST link: DAP 7 per-file ACK */
+/* OVMX advertises DAP 7.2 (rd vms-b2f): against a DAP 7 client it ACKs each
+ * DIRLIST file as the VAX FAL does, so no ACK is normalised away. */
+static int g_ack_normalise = 0;
 /* The dates the VAX console printed, in DATE AND TIME message order. */
 static const char *g_dates[4][2] = { { "08-OCT-26 06:29:07", "08-OCT-26 06:29:36" } };
 static int g_ndate;
@@ -374,7 +377,7 @@ static int seg_matches(const char *label, const uint8_t *ov, size_t ovn, const u
 {
     static struct dmsg a[32], v[32];
     int na = split(ov, ovn, a, 32);
-    g_drop_ack = dirlist;
+    g_drop_ack = dirlist && g_ack_normalise;
     int nv = split(vx, vxn, v, 32);
     g_drop_ack = 0;
     char h1[2048], h2[2048];
@@ -526,7 +529,8 @@ static void live_bracket(const char *wire)
     int had_ack = 0;
     k = (L->nsrv >= 2) ? split(L->srv[1].b, L->srv[1].n, m, 32) : -1;
     for (int i = 0; i < k; i++) if (m[i].m.op == DNET_DAP_ACKNOWLEDGE) had_ack = 1;
-    CHECK(had_ack, "live bracket: the captured OVMX DIRLIST reply carried the per-file ACK the VAX rejected");
+    CHECK(had_ack && cfg.u.config.vernum == 7,
+          "live bracket: the captured OVMX (then DAP 5.6) DIRLIST reply carried the ACK the VAX rejected; OVMX now advertises DAP 7.2");
     int files = 0, acks = 0, last = -1;
     n = (s.nout >= 2) ? unhex(s.out[1], b, sizeof b) : 0;
     k = n ? split(b, n, m, 32) : -1;
@@ -535,8 +539,8 @@ static void live_bracket(const char *wire)
         if (m[i].m.op == DNET_DAP_ACKNOWLEDGE) acks++;
         last = m[i].m.op;
     }
-    CHECK(s.nout == 2 && files == 2 && acks == 0 && last == DNET_DAP_ACCESS_COMPLETE,
-          "live bracket: the same DIRLIST now lists BRK1 AND BRK2 with no ACK, then ACCESS COMPLETE");
+    CHECK(s.nout == 2 && files == 2 && acks == 2 && last == DNET_DAP_ACCESS_COMPLETE,
+          "live bracket: the same DIRLIST (a DAP 7.2 client) now lists BRK1 AND BRK2, an ACK after each, then ACCESS COMPLETE");
 }
 
 /* 6. The VAX<->VAX SYS$LOGIN capture (vax-to-vax-sys-login/): DIRECTORY/FULL
@@ -662,8 +666,8 @@ int main(int argc, char **argv)
     t.ctx = &ds; t.rxlen = t.rxoff = 0;
     st = dnet_fal_server_run(&t);
     CHECK(st == 1 && ds.nout == 2 &&
-          !strcmp(ds.out[1], "0f02070805444b41303a0f020704055b5352565d0f020d020b47524545542e5458543b31070002"),
-          "DIRECTORY LIST = NAME(volume), NAME(directory), NAME(file), ACCESS COMPLETE(RESPONSE), blocked, no ACK");
+          !strcmp(ds.out[1], "0f02070805444b41303a0f020704055b5352565d0f020d020b47524545542e5458543b31060200070002"),
+          "DIRECTORY LIST to a DAP 7 client = NAME(volume), NAME(directory), NAME(file), ACK, ACCESS COMPLETE(RESPONSE), blocked");
 
     static const char *get_in[] = {
         "01003c1007030702000500f7fbd9ffaeac8694e77f",

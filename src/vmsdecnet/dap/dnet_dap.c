@@ -578,8 +578,15 @@ void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz)
     m->u.config.bufsiz  = bufsiz;
     m->u.config.ostype  = DNET_DAP_OS_VAXVMS;
     m->u.config.filesys = DNET_DAP_FS_RMS32;
-    m->u.config.vernum  = 5;        /* DAP 5.6: the version OVMX implements */
-    m->u.config.econum  = 6;
+    /* DAP 7.2 (rd vms-b2f): a VMS V7.3 client issues a remote $RENAME only to
+     * a FAL advertising DAP version 7 or later -- at 5.6 it refuses
+     * RMS-F-SUPPORT whatever the SYSCAP (two-link lab probe 2026-10-08,
+     * tests/lab/captures/decnet-fal-verbs-20261008/live-bracket/). OVMX keeps
+     * advertising only the SYSCAP bits it serves; with those, the VAX sends
+     * the DAP 5.6 field layout (no DAP 7 ACCESS extension, no segment
+     * trailer -- same probe). */
+    m->u.config.vernum  = 7;
+    m->u.config.econum  = 2;
     /* SYSCAP: exactly what OVMX serves (dnet_dap.h VERSION / SCOPE). */
     /* A real VMS COPY reading a remote file requires DIRECTORY LIST (it
      * $SEARCHes its input first) and asks for NAME; without bit 25 it refuses

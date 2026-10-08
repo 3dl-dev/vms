@@ -409,6 +409,7 @@ struct fal_batch {
     uint8_t last[DNET_DAP_MAX_MSG], lastb[DNET_DAP_MAX_MSG];
     size_t  lastlen, lastblen;
     int     have_last;
+    int     dap7;        /* both peers at DAP 7+: DIRLIST ACKs each file  */
 };
 
 static int fb_flush(struct fal_batch *b)
@@ -725,11 +726,11 @@ static uint32_t server_dirlist(struct fal_batch *b, struct dnet_dap_transport *t
         }
         if ((display & DNET_DAP_DSP_NAME) && fb_name(b, DNET_DAP_NT_FILESPEC, rsa) < 0)
             goto abort;
-        /* No ACKNOWLEDGE per file: DAP 5.6's directory list (spec 5.2.11) has
-         * none, and a VMS client talking 5.6 to OVMX rejects one as a sync
-         * error -- "RMS-F-BUG_DAP, DAP code = 0001A006" (MAC 10 / MIC ACK),
-         * listing stopped after the first file (live bracket 2026-10-08).
-         * The ACK in the VAX<->VAX capture is a DAP 7 peer's. */
+        /* A DAP 7 directory list ACKs each file (VAX<->VAX captures); DAP
+         * 5.6's (spec 5.2.11) has none, and a VMS client facing a 5.6 FAL
+         * rejects one as a sync error, "RMS-F-BUG_DAP, DAP code = 0001A006"
+         * (live bracket 2026-10-08). So: only when both peers speak 7+. */
+        if (b->dap7 && fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0) goto abort;
         n++;
     }
     if (n == 0) {
@@ -943,6 +944,11 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
     b->t = t;
     b->cap = FAL_BUFSIZ;
     if (m.u.config.bufsiz && m.u.config.bufsiz < b->cap) b->cap = m.u.config.bufsiz;
+    {
+        struct dnet_dap_msg ours;
+        dnet_dap_ovmx_config(&ours, FAL_BUFSIZ);
+        b->dap7 = (m.u.config.vernum >= 7 && ours.u.config.vernum >= 7);
+    }
 
     /* Accesses follow one another on the link (spec 5.1: a VMS COPY lists its
      * input with a DIRECTORY LIST access, then OPENs it, on one link). Serve
@@ -979,6 +985,11 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
             if (send_config(t) < 0) return SS$_ABORT;
             b->cap = FAL_BUFSIZ;
             if (m.u.config.bufsiz && m.u.config.bufsiz < b->cap) b->cap = m.u.config.bufsiz;
+            {
+                struct dnet_dap_msg ours;
+                dnet_dap_ovmx_config(&ours, FAL_BUFSIZ);
+                b->dap7 = (m.u.config.vernum >= 7 && ours.u.config.vernum >= 7);
+            }
             have_attr = 0;
             continue;
         case DNET_DAP_ACCESS:

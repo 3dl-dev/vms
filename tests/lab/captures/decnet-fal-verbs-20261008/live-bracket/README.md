@@ -22,3 +22,17 @@ DIRECTORY/FULL, DIRECTORY, TYPE of a wildcard, the GUEST TYPE of SYSUAF.DAT (RMS
 |---|---|---|
 | GUEST `DELETE ...SYSUAF.DAT;*` gets `RMS-E-MKD` / `SYSTEM-F-REMRSRC` | VMS holds two DIRLIST links open and then connects a third for the ERASE. NETACP refused the third link immediately with Disconnect reason 1 (resource), because its per-node share was 2. The VAX-to-VAX capture shows three concurrent links. | Fixed outside this PR: Baron's rd vms-9cd decision allows 3 links per node (pool 9), merged as #1522. |
 | `RENAME` gets `RMS-F-SUPPORT` | After OVMX's CONFIGURATION, VAX1 disconnects without sending an ACCESS. Some property of the CONFIGURATION (version or SYSCAP) makes the client refuse. | Open. `config_probe_drv.py` lets the lab try candidate CONFIGURATIONs against the same RENAME. |
+
+## RENAME and the DAP version (rd vms-b2f, 2026-10-08)
+
+The peer ran a two-link probe from VAX1 V7.3: `RENAME 1.43"SYSTEM x"::X.TXT 1.43"SYSTEM x"::Y.TXT`.
+- Link A was played by `dirlist_drv.py`.
+- Link B was played by `config_probe_drv.py`.
+- Both ran under `dapprobe_skipci.py` instances.
+
+Results:
+- **At DAP 5.6, link B is refused.** If link B answers with DAP 5.6, the VAX disconnects (`RMS-F-SUPPORT`) even with the VAX's full SYSCAP.
+- **At DAP 7.2, the VAX sends the rename.** With either SYSCAP it sends ACCESS RENAME. With OVMX's SYSCAP it uses the DAP 5.6 field layout: no DAP 7 ACCESS extension and no segment trailer.
+- **Link-A names make no difference.**
+
+OVMX therefore advertises DAP 7.2. The lab driver `faldrv2.c` and `run3.sh` run OVMX's compiled server under three concurrent dapprobe instances, one per link, for a lab replay of whole VMS commands. They have not been run yet; the lab-access decision is pending.

@@ -6,10 +6,11 @@
 # and stage-2 toolchains use; GMP/MPFR/MPC are built for the host first. Runs
 # INSIDE the ovmx-cross-alpha-vms toolchain image:
 #
-#   docker run -v <repo>:/src:ro -v <cxxtc>:/out/cxxtc:ro -v <joint>:/joint:ro \
+#   docker run -v <repo>:/src:ro -v <cxxtc>:/out:ro -v <joint>:/joint:ro \
 #       -v <work>:/w ovmx-cross-alpha-vms bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh
 #
-# <cxxtc> is a cxx/build-cxx-toolchain.sh output (its cxx/ is the stage-2 C/C++
+# <cxxtc> is a cxx/build-cxx-toolchain.sh output, mounted at /out as it was built
+# (its specs and ld wrapper name /out/cxx; its cxx/ is the stage-2 C/C++
 # compiler + the 32-bit libstdc++ in cxx/p32); <joint> the shareables the
 # programs link against (DECC$SHR, LIBOTS_SHR, LIBVMS*$SHR, STARLET.a). The
 # host GCC is built at the DEC C default pointer size (32-bit), as DEC C and
@@ -17,7 +18,7 @@
 # and /w/host-gcc/build.log.
 set -euo pipefail
 T=alpha-dec-vms; B=x86_64-pc-linux-gnu
-X=/out/cxxtc/cxx
+X=/out/cxx
 export PATH=$X/bin:/opt/cross-alpha-vms/bin:$PATH
 export OVMX_ALPHA_SYSROOT=/joint
 JOBS=${JOBS:-$(nproc)}

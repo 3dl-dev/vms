@@ -1428,7 +1428,7 @@ EOF
     fi
     log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc)"
     mkdir -p "$GATE_ROOT/hostgcc"
-    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out/cxxtc:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
       bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
       || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
     _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"

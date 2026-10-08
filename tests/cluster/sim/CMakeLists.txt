@@ -241,6 +241,45 @@ set_tests_properties(cluster_sim_test_sim_dlm_requester PROPERTIES
     TIMEOUT 120
 )
 
+# rd vms-025 / vms-db2a / vms-c27(3)'s R2: THE WORKLOAD'S LOCK MOVES between a
+# real-VMS node and the OVMX node with ONE master throughout, and the two
+# things one node cannot show -- that BOTH systems' independently built weight
+# vectors send every root name to the OVMX node (the interim configuration is a
+# property of the CLUSTER, not an assumption of one member), and the evacuation
+# SEQUENCE in time, through the shipping requester FSM's own beat.
+#
+# Same include recipe and same three library recipes as test_sim_dlm_requester
+# above, plus the directory table (which is inside cluster_host_cnxman).
+add_executable(test_sim_dlm_mixed_evacuation
+    scenarios/dlm_mixed_evacuation.c
+)
+target_include_directories(test_sim_dlm_mixed_evacuation BEFORE PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host/lock_shim
+)
+target_include_directories(test_sim_dlm_mixed_evacuation PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host
+)
+target_compile_definitions(test_sim_dlm_mixed_evacuation PRIVATE
+    OVMX_CLUSTER_HOST)
+target_link_libraries(test_sim_dlm_mixed_evacuation PRIVATE
+    cluster_host_dlm
+    cluster_host_cnxman
+    cluster_host_lock
+    cluster_sim_core
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_sim_dlm_mixed_evacuation PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME cluster_sim_test_sim_dlm_mixed_evacuation
+         COMMAND test_sim_dlm_mixed_evacuation)
+set_tests_properties(cluster_sim_test_sim_dlm_mixed_evacuation PROPERTIES
+    LABELS "unit;cluster;cluster_sim;lock;dlm"
+    TIMEOUT 120
+)
+
 cluster_sim_test(test_replay test_replay.c)
 target_link_libraries(test_replay PRIVATE cluster_host_fixture)
 target_compile_definitions(test_replay PRIVATE

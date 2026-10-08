@@ -316,6 +316,25 @@ struct dlm_req_ops {
 	 */
 	int (*all_ovmx)(void *ctx);
 
+	/*
+	 * IS THIS NODE THE SOLE LOCK-DIRECTORY NODE of this cluster? (rd vms-025 /
+	 * vms-db2a -- the mixed-cluster INTERIM CONFIGURATION.) Production:
+	 * vms_ldwv_sole_directory() over the same vector, so it too is derived on
+	 * every read and cannot go stale.
+	 *
+	 * It opens the SECOND door to the shapes `all_ovmx` guards, for the ONE
+	 * configuration in which this node's own lock directory is authoritative
+	 * for every root name and an OVMX $ENQ can therefore be routed at the
+	 * real VMS master the directory names. The op-0x03 release is the shape
+	 * it matters for: a lock this node holds AT that master has to be
+	 * releasable, or the evacuation can take a lock and never give it back.
+	 *
+	 * It does NOT open the op-0x05 blocking AST (whose body[30:32] is
+	 * observed-and-not-pinned) nor the origination of a deferred grant: see
+	 * vms_dlm_scs.c's gate note. A NULL op is CLOSED, for the same reason.
+	 */
+	int (*mixed_dlm_ok)(void *ctx);
+
 	/* --- the engine ACTIONS (vms_dlm_proxy.h) --- */
 
 	/* Outcome 2: record the master the directory named, THEN refill. */

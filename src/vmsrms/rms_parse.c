@@ -155,6 +155,48 @@ static uint32_t fs_split(const char *s, size_t n, struct fspec *f)
         f->has_dir = 1;
         i = j + 1;
     }
+#if !defined(__vax__) && !defined(__vax)
+    /*
+     * MORE THAN ONE '.' IN THE NAME FIELD (64-bit). OpenVMS Alpha V8.4 RMS
+     * takes the LAST '.' as the type delimiter and keeps the earlier ones in
+     * the name, escaped ODS-5 style: "A.B.C.D" -> name "A^.B^.C", type ".D"
+     * (semantic oracle RMS.PARSE.SYNTAX2). VAX V7.3 RMS knows no such name
+     * and says RMS$_SYN, which the scanner below still does on VAX. A last
+     * segment that is a version ("A.B.1") keeps the classic reading.
+     */
+    {
+        size_t e = i, dots = 0, last = 0, q;
+        while (e < n && (fs_namech((unsigned char)s[e]) || s[e] == '.')) {
+            if (s[e] == '.') { dots++; last = e; }
+            e++;
+        }
+        if (dots >= 2 && (e == n || s[e] == ';')) {
+            int numeric = last + 1 < e;
+            for (q = last + 1; q < e; q++)
+                if (!(isdigit((unsigned char)s[q]) || s[q] == '*' || s[q] == '-'))
+                    numeric = 0;
+            if (!numeric) {
+                k = 0;
+                for (; i < last; i++) {
+                    if (k + 3 >= sizeof f->name) return RMS$_SYN;
+                    if (s[i] == '.')
+                        f->name[k++] = '^';
+                    f->name[k++] = (char)toupper((unsigned char)s[i]);
+                }
+                f->name[k] = '\0';
+                f->has_name = k > 0;
+                i = last + 1;
+                k = 0;
+                while (i < e) {
+                    if (k + 1 >= sizeof f->type) return RMS$_SYN;
+                    f->type[k++] = (char)toupper((unsigned char)s[i++]);
+                }
+                f->has_type = 1;
+                goto version;
+            }
+        }
+    }
+#endif
     /* name */
     k = 0;
     while (i < n && fs_namech((unsigned char)s[i])) {
@@ -172,6 +214,9 @@ static uint32_t fs_split(const char *s, size_t n, struct fspec *f)
         }
         f->has_type = 1;
     }
+#if !defined(__vax__) && !defined(__vax)
+version:
+#endif
     /* ;version, or .version after a type */
     if (i < n && (s[i] == ';' || (s[i] == '.' && f->has_type))) {
         int dotver = s[i] == '.';

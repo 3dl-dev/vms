@@ -309,8 +309,14 @@ static void fat_create(struct fat_case *c)
     (void)sys$connect(&rab, 0, 0);
     int ok = 1;
     for (int i = 0; i < 3 && c->recs[i]; i++) {
-        rab.rab$l_rbf = (char *)c->recs[i];
-        rab.rab$w_rsz = (uint16_t)strlen(c->recs[i]);
+        /* A FIXED record is exactly mrs bytes: RMS refuses any other size with
+         * RMS$_RSZ, as OpenVMS does (RMS.PUT.FIX.SHORT, docs/oracle/semantics/
+         * rms/, vms-3b5), so the writer pads it -- the bytes fat_rec() expects
+         * back. */
+        char rec[64];
+        uint16_t rl = fat_rec(c, i, rec, sizeof rec);
+        rab.rab$l_rbf = rec;
+        rab.rab$w_rsz = rl;
         if (sys$put(&rab, 0, 0) != RMS$_NORMAL) ok = 0;
     }
     snprintf(label, sizeof label, "vms-b447: [%s] $PUT the records", c->name);

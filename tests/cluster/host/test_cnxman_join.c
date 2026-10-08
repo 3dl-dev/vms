@@ -3359,15 +3359,22 @@ static void test_e77_a_skewed_dialogue_is_not_stamped(void)
 	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
 	before = n_cm_sent();
 
+	/* rd vms-f297: the join no longer waits for the beat -- every emit
+	 * rides the connection the executive records for the member, so the
+	 * answer goes out on the NEW connection, numbered from ITS dialogue,
+	 * and nothing at all goes onto the one this join was holding. The
+	 * guard itself is unchanged and is exercised where it still applies:
+	 * test_e77_skew_with_no_connection_is_refused() below. */
 	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0050));
 	ct_check_eq_u32(n_cm_sent(), before,
-			"nothing is originated onto the connection this join "
-			"still holds ...");
-	ct_check_eq_u32(g.member_csb->cm_send_msg, 0u,
-			"... and no number is assigned out of the NEW "
-			"connection's dialogue for a frame that would not have "
-			"ridden it (INV-6)");
-	ct_check(g.j.send_failures >= 1u, "... the refusal is counted");
+			"nothing goes onto the connection this join was "
+			"still holding ...");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 1u,
+			"... the answer goes out once, on the member's new "
+			"connection");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
+			"... numbered from THAT connection's own dialogue: "
+			"send-msg# 1 (INV-6)");
 
 	/* And the glue closes the window the same beat it opened it: the old
 	 * CDT's close arrives (vms_cnxman.c binds the reconnect's Con.ID and
@@ -3384,6 +3391,36 @@ static void test_e77_a_skewed_dialogue_is_not_stamped(void)
 			"the beat adopts the connection the executive holds");
 	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
 			"... and the first message on it carries send-msg# 1");
+}
+
+/*
+ * THE E77 GUARD WHERE IT STILL BITES (rd vms-f297): the member's block names a
+ * different Con.ID but the executive holds NO open connection for it -- there
+ * is nothing to follow, the join's own Con.ID is not the block's dialogue, and
+ * the emit is REFUSED rather than stamped.
+ */
+static void test_e77_skew_with_no_connection_is_refused(void)
+{
+	uint32_t before;
+
+	printf("\n-- E77: no open connection to follow -- the skewed emit is "
+	       "refused --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	before = n_cm_sent();
+
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0050));
+	ct_check_eq_u32(n_cm_sent(), before,
+			"nothing is originated onto the connection this join "
+			"still holds ...");
+	ct_check_eq_u32(g.member_csb->cm_send_msg, 0u,
+			"... and no number is assigned out of the NEW "
+			"connection's dialogue for a frame that would not have "
+			"ridden it (INV-6)");
+	ct_check(g.j.send_failures >= 1u, "... the refusal is counted");
 }
 
 /*
@@ -4800,6 +4837,33 @@ static void test_f297_every_member_hears_before_the_request(void)
 	ct_check_eq_u32(g.j.config_sent, 1u,
 			"a beat later every member has heard it: the request "
 			"goes out");
+}
+
+/*
+ * rd vms-f297: A MEMBER ANSWERS ON THE CONNECTION THE EXECUTIVE RECORDS FOR ITS
+ * MEMBER, even when the one it joined on is gone. Stall-rig arm DX-1: the
+ * member's connection closed while this node was still in ADMIT and came back
+ * as a new Con.ID; the GO promoted the node; its answer to the coordinator's
+ * relay of the next joiner was then refused (no-open-vc) and the real VAX never
+ * proposed that joiner.
+ */
+static void test_f297_member_answers_on_the_reconnected_connection(void)
+{
+	const vms_conid_t NEW_CONID = 0x4e620021u;
+	uint32_t len;
+
+	printf("\n-- rd vms-f297: a member's answers ride the member's CURRENT "
+	       "connection --\n");
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	(void)join_feed(mk_open_add(EPOCH, 0x0eu));   /* a real class to answer with */
+	cnxman_join_closed(&g.j, g.j.cm_conid, 0u);    /* the old one is gone ...    */
+	bed_peer_connected(g.member_csb, NEW_CONID);   /* ... and the member is back */
+
+	len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY, 0x0301);
+	(void)join_feed(len);
+	ct_check_eq_u32(n_sent_on(NEW_CONID), 1u,
+			"the relay is answered, on the member's new connection");
+	ct_check_eq_u32(g.j.send_failures, 0u, "nothing was refused");
 }
 
 static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
@@ -6422,6 +6486,7 @@ int main(void)
 	test_reoffer_is_per_connection_not_per_lifetime();
 	test_e77_a_new_connection_opens_at_send_msg_1();
 	test_e77_a_skewed_dialogue_is_not_stamped();
+	test_e77_skew_with_no_connection_is_refused();
 	test_a_start_with_no_target_is_deferred_not_terminal();
 	test_every_table_cell();
 	test_e73_the_executive_delivers_a_body();
@@ -6440,6 +6505,7 @@ int main(void)
 	test_votes_learned_before_the_commit_are_in_the_commit();
 	test_joiner_recomputes_on_every_advert_it_learns();
 	test_f297_every_member_hears_before_the_request();
+	test_f297_member_answers_on_the_reconnected_connection();
 	test_e80_a_silent_member_is_re_issued_to_the_next();
 	test_e80_a_member_that_proposes_is_never_re_issued_away_from();
 	test_e80_an_ack_alone_is_not_an_answer();

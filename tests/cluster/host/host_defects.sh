@@ -131,6 +131,7 @@
 #   coord-open-skips-records-wait         vms_cnxman_coord_fsm.c
 #   coord-ignores-rejection               vms_cnxman_coord_fsm.c
 #   join-asks-before-telling-members      vms_cnxman_join_fsm.c
+#   join-emits-on-a-stale-connection      vms_cnxman_join_fsm.c
 #
 SELF="$0"
 
@@ -144,6 +145,7 @@ coord-step-ack-unmarked
 coord-open-skips-records-wait
 coord-ignores-rejection
 join-asks-before-telling-members
+join-emits-on-a-stale-connection
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1376,6 +1378,21 @@ EOF
                       ;;
         esac;;
 
+    join-emits-on-a-stale-connection)
+        case "$_f" in
+        facility)     echo "every join emit rides the connection the executive records for the member, so a member whose connection came back as a new Con.ID answers on it (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "a member whose connection closed while it was being admitted keeps the dead Con.ID: its answer to the coordinator's relay of the next joiner is refused (no-open-vc) and the real VAX coordinator never proposes that joiner (stall-rig arm DX-1).";;
+        require_fail) cat <<'EOF'
+the relay is answered, on the member's new connection
+nothing was refused
+REQUIRE_MORE
+EOF
+                      ;;
+        esac;;
+
     join-asks-before-telling-members)
         case "$_f" in
         facility)     echo "a joiner tells every connected member who it is before it asks for admission, as a real V7.3 joiner does (rd vms-f297)";;
@@ -1720,6 +1737,9 @@ apply_edit() {
 
     coord-ignores-rejection)
         sed -i 's|^\tif (vms_cm_response_accepted(m->body, m->len))$|\tif (1 \|\| vms_cm_response_accepted(m->body, m->len)) /* NEGCTL coord-ignores-rejection */|' "$_file";;
+
+    join-emits-on-a-stale-connection)
+        sed -i 's|^\t\t(void)join_follow_csb_conn(j, csb);$|\t\t(void)0; /* NEGCTL join-emits-on-a-stale-connection */|' "$_file";;
 
     join-asks-before-telling-members)
         sed -i 's|^\tif (join_peer_ident_owed(j))$|\tif (0 \&\& join_peer_ident_owed(j)) /* NEGCTL join-asks-before-telling-members */|' "$_file";;

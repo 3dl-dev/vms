@@ -177,7 +177,8 @@ target_compile_options(test_dnet_fal_server PRIVATE -Werror)
 # rd vms-277a: argv[1] = the committed real-VAX FAL verbs capture; the test
 # replays its client segments and compares the replies (missing file = FAIL).
 add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server
-         ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/falverbs-wire.txt)
+         ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/falverbs-wire.txt
+         ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket/falverbs-live-wire.txt)
 
 add_executable(test_dnet_dap test_dnet_dap.c)
 target_link_libraries(test_dnet_dap PRIVATE vmsdecnet_dap vmsdecnet_cterm)

@@ -99,7 +99,12 @@ enum dnet_dap_op {
 #define DNET_DAP_CAP_SEQ_XFER       5
 #define DNET_DAP_CAP_BLOCK_TO_RESP  18
 #define DNET_DAP_CAP_LEN256         20
+#define DNET_DAP_CAP_SUMMARY        24
 #define DNET_DAP_CAP_DIRLIST        25
+#define DNET_DAP_CAP_DATETIME       26
+#define DNET_DAP_CAP_PROTECTION     27
+#define DNET_DAP_CAP_RENAME         37
+#define DNET_DAP_CAP_WILDCARD       38
 #define DNET_DAP_CAP_SEQ_RECORD     33
 #define DNET_DAP_CAP_NAME_MSG       40
 

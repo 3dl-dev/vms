@@ -29,6 +29,9 @@
  *     omitted, never invented (INV-6); every field it sends must equal the
  *     VAX's.
  *   - The CONFIGURATION reply is OVMX's own.
+ *   - A DIRECTORY LIST has no per-file ACKNOWLEDGE in DAP 5.6 (spec 5.2.11);
+ *     the VAX FAL's is a DAP 7 peer's, and a VMS client talking 5.6 to OVMX
+ *     REJECTS one (BUG_DAP 0001A006, the 2026-10-08 live bracket, test 5).
  * Everything else -- every NAME, ACK, ACCESS COMPLETE, SUMMARY, PROTECTION and
  * every STATUS -- must be byte-identical, FLAGS/LENGTH framing included.
  */
@@ -79,6 +82,11 @@ int dnet_fal_search_begin(const char *spec, void **ctx)
     char nm[128]; namepart(spec, nm, sizeof nm);
     if (strstr(spec, "GREET.TXT")) { snprintf(c.found, sizeof c.found, "DKA0:[SRV]GREET.TXT;1"); c.nfound = 1; }
     else if (strstr(spec, "PUTNAME.TXT") && g_put_spec[0]) { snprintf(c.found, sizeof c.found, "DKA0:[SRV]PUTNAME.TXT;1"); c.nfound = 1; }
+    else if (strstr(spec, "SYS$LOGIN:BRK")) {
+        /* the live bracket's two files, as OVMX RMS resolved them */
+        c.nfound = 2;
+        snprintf(c.found, sizeof c.found, "VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK%%d.TXT;1");
+    }
     else if (strstr(spec, "SYS$SYSROOT:[SYSMGR]")) {
         if (exists(nm)) { snprintf(c.found, sizeof c.found, "SYS$SYSROOT:[SYSMGR]%s;1", nm); c.nfound = 1; }
         else {
@@ -94,7 +102,9 @@ int dnet_fal_search_begin(const char *spec, void **ctx)
 }
 int dnet_fal_search_next(void *ctx, char *rsa, size_t cap)
 { struct sctx *c = ctx; if (c->pos >= c->nfound) return -1; c->pos++;
-  snprintf(rsa, cap, "%s", c->found); return 0; }
+  if (strstr(c->found, "%d")) snprintf(rsa, cap, c->found, c->pos);
+  else snprintf(rsa, cap, "%s", c->found);
+  return 0; }
 void dnet_fal_search_end(void *ctx) { (void)ctx; }
 uint32_t dnet_fal_search_status(void *ctx, uint32_t *stv, char *esa, size_t cap)
 { struct sctx *c = ctx; if (stv) *stv = 0;
@@ -210,6 +220,7 @@ static int g_nlinks;
 static struct olink *link_by_id(unsigned id)
 { for (int i = 0; i < g_nlinks; i++) if (g_links[i].id == id) return &g_links[i]; return NULL; }
 
+static int g_strip_trailer;   /* 1 for the VAX<->VAX DAP 7 capture only */
 /* Parse nspdump output: "<t> 1.1->1.2 KIND...: hex hex ..." */
 static int load_wire(const char *path)
 {
@@ -226,10 +237,12 @@ static int load_wire(const char *path)
         uint8_t b[1600]; size_t n = 0;
         for (char *p = colon + 1; *p && n < sizeof b; ) {
             while (*p == ' ') p++;
-            unsigned v; if (sscanf(p, "%2x", &v) != 1) break;
+            unsigned v;
+            if (p[0] == 'X' && p[1] == 'X') v = 'x';   /* masked password byte */
+            else if (sscanf(p, "%2x", &v) != 1) break;
             b[n++] = (uint8_t)v; p += 2;
         }
-        int from_client = !strcmp(dir, "1.1->1.2");
+        int from_client = !strncmp(dir, "1.1->", 5);
         if (!strcmp(kind, "RCI:") && n >= 9 && g_nlinks < MAXLINK) {
             struct olink *L = &g_links[g_nlinks++];
             memset(L, 0, sizeof *L);
@@ -245,7 +258,7 @@ static int load_wire(const char *path)
         } else if (!strcmp(kind, "DATA") && cur) {
             int segno = 0;
             if (sscanf(line, "%*f %*s DATA seg%d", &segno) != 1) continue;
-            if (segno >= 2) { if (n < 2) continue; n -= 2; }   /* DAP 7 trailer */
+            if (g_strip_trailer && segno >= 2) { if (n < 2) continue; n -= 2; }   /* DAP 7 trailer */
             struct oseg *o = from_client ? &cur->cli[cur->ncli] : &cur->srv[cur->nsrv];
             if ((from_client ? cur->ncli : cur->nsrv) >= MAXLSEG) continue;
             memcpy(o->b, b, n); o->n = n;
@@ -257,6 +270,7 @@ static int load_wire(const char *path)
 }
 
 struct dmsg { struct dnet_dap_msg m; const uint8_t *raw; size_t len; };
+static int g_drop_ack;   /* VAX side of a DIRLIST link: DAP 7 per-file ACK */
 static int split(const uint8_t *b, size_t n, struct dmsg *out, int max)
 {
     int k = 0; size_t off = 0;
@@ -266,6 +280,7 @@ static int split(const uint8_t *b, size_t n, struct dmsg *out, int max)
         out[k].raw = b + off; out[k].len = used;
         off += used;
         if (out[k].m.type == 18) continue;         /* DAP 7 only: not served */
+        if (g_drop_ack && out[k].m.op == DNET_DAP_ACKNOWLEDGE) continue;
         k++;
     }
     return k;
@@ -275,10 +290,14 @@ static void hexs(const uint8_t *b, size_t n, char *o, size_t cap)
 { o[0] = '\0'; for (size_t i = 0; i < n && 3 * i + 4 < cap; i++) sprintf(o + 3 * i, "%02x ", b[i]); }
 
 /* Compare one OVMX reply segment with the VAX FAL's (see NORMALISATION). */
-static int seg_matches(const char *label, const uint8_t *ov, size_t ovn, const uint8_t *vx, size_t vxn)
+static int seg_matches(const char *label, const uint8_t *ov, size_t ovn, const uint8_t *vx, size_t vxn,
+                       int dirlist)
 {
     static struct dmsg a[32], v[32];
-    int na = split(ov, ovn, a, 32), nv = split(vx, vxn, v, 32);
+    int na = split(ov, ovn, a, 32);
+    g_drop_ack = dirlist;
+    int nv = split(vx, vxn, v, 32);
+    g_drop_ack = 0;
     char h1[2048], h2[2048];
     if (na < 0 || nv < 0 || na != nv) {
         hexs(ov, ovn, h1, sizeof h1); hexs(vx, vxn, h2, sizeof h2);
@@ -336,17 +355,24 @@ static int replay_link(const struct olink *L, const char *label, uint32_t *st_ou
         for (int i = 0; i < s.nout; i++) printf("    ovmx[%d] %s\n", i, s.out[i]);
         return 0;
     }
+    /* A DIRECTORY LIST link: the client's ACCESS has ACCFUNC 6. */
+    int dirlist = L->ncli > 1 && L->cli[1].n > 2 && L->cli[1].b[0] == 3 &&
+                  L->cli[1].b[(L->cli[1].b[1] & DNET_DAP_FLAG_LENGTH) ? 3 : 2] == DNET_DAP_ACC_DIRLIST;
     for (int i = 1; i < s.nout; i++) {
         uint8_t ob[1600];
         size_t on = unhex(s.out[i], ob, sizeof ob);
-        if (!seg_matches(label, ob, on, L->srv[i].b, L->srv[i].n)) return 0;
+        if (!seg_matches(label, ob, on, L->srv[i].b, L->srv[i].n, dirlist)) return 0;
     }
     return 1;
 }
 
+static void live_bracket(const char *wire);
 static void oracle_replay(const char *wire)
 {
-    if (load_wire(wire) != 0) { CHECK(0, "the vms-277a oracle capture loads"); return; }
+    g_strip_trailer = 1;
+    int lw = load_wire(wire);
+    g_strip_trailer = 0;
+    if (lw != 0) { CHECK(0, "the vms-277a oracle capture loads"); return; }
     CHECK(g_nlinks == 17, "the capture holds the 17 links of the nine VAX commands");
     if (g_nlinks != 17) return;
     /* Link order = the console's command order (vax1-console.txt). */
@@ -383,6 +409,53 @@ static void oracle_replay(const char *wire)
     }
     CHECK(g_erased_delme && !g_delme, "the ERASE reached $ERASE for DELME.TXT;1");
     CHECK(g_renamed_ok, "the RENAME reached $RENAME RENME.TXT -> RENAMED.TXT");
+}
+
+/* The live bracket (tests/lab/captures/decnet-fal-verbs-20261008/live-bracket/):
+ * VAX1 talked DAP 5.6 to a booted OVMX (#1487 at 549c21d2). Its DIRECTORY of
+ * SYS$LOGIN:BRK*.TXT listed only BRK1 and failed "RMS-F-BUG_DAP, DAP code =
+ * 0001A006" (MAC 10 sync / MIC ACK): OVMX sent a per-file ACK; DIRECTORY/FULL
+ * asked only for MAIN attributes and RENAME was refused "RMS-F-SUPPORT"
+ * because OVMX's SYSCAP lacked SUMMARY/DATE/PROTECTION and RENAME. The VAX's
+ * own segments are replayed and the fixed replies checked. */
+static void live_bracket(const char *wire)
+{
+    g_nlinks = 0;
+    if (load_wire(wire) != 0) { CHECK(0, "the live-bracket capture loads"); return; }
+    CHECK(g_nlinks == 12, "the live bracket holds its 12 links");
+    if (g_nlinks < 1) return;
+    const struct olink *L = &g_links[0];            /* DIRECTORY/FULL BRK*.TXT */
+    static struct script s;
+    memset(&s, 0, sizeof s);
+    for (int i = 0; i < L->ncli; i++) { s.bin[i] = L->cli[i].b; s.binlen[i] = L->cli[i].n; }
+    s.nin = L->ncli;
+    static struct dnet_dap_transport t;
+    memset(&t, 0, sizeof t);
+    t.send = s_send; t.recv = s_recv; t.ctx = &s;
+    g_user = "SYSTEM";
+    (void)dnet_fal_server_run(&t);
+    uint8_t b[1600]; size_t n;
+    struct dmsg m[32]; int k;
+    n = unhex(s.out[0], b, sizeof b);
+    struct dnet_dap_msg cfg; size_t used = 0;
+    CHECK(s.nout >= 1 && dnet_dap_decode(b, n, &cfg, &used) == DNET_DAP_OK &&
+          dnet_dap_syscap_has(&cfg, DNET_DAP_CAP_SUMMARY) && dnet_dap_syscap_has(&cfg, DNET_DAP_CAP_DATETIME) &&
+          dnet_dap_syscap_has(&cfg, DNET_DAP_CAP_PROTECTION) && dnet_dap_syscap_has(&cfg, DNET_DAP_CAP_RENAME),
+          "live bracket: OVMX's CONFIGURATION now advertises SUMMARY, DATE AND TIME, PROTECTION and RENAME");
+    int had_ack = 0;
+    k = (L->nsrv >= 2) ? split(L->srv[1].b, L->srv[1].n, m, 32) : -1;
+    for (int i = 0; i < k; i++) if (m[i].m.op == DNET_DAP_ACKNOWLEDGE) had_ack = 1;
+    CHECK(had_ack, "live bracket: the captured OVMX DIRLIST reply carried the per-file ACK the VAX rejected");
+    int files = 0, acks = 0, last = -1;
+    n = (s.nout >= 2) ? unhex(s.out[1], b, sizeof b) : 0;
+    k = n ? split(b, n, m, 32) : -1;
+    for (int i = 0; i < k; i++) {
+        if (m[i].m.op == DNET_DAP_NAME && m[i].m.u.name.nametype == DNET_DAP_NT_FILENAME) files++;
+        if (m[i].m.op == DNET_DAP_ACKNOWLEDGE) acks++;
+        last = m[i].m.op;
+    }
+    CHECK(s.nout == 2 && files == 2 && acks == 0 && last == DNET_DAP_ACCESS_COMPLETE,
+          "live bracket: the same DIRLIST now lists BRK1 AND BRK2 with no ACK, then ACCESS COMPLETE");
 }
 
 int main(int argc, char **argv)
@@ -432,8 +505,8 @@ int main(int argc, char **argv)
     t.ctx = &ds; t.rxlen = t.rxoff = 0;
     st = dnet_fal_server_run(&t);
     CHECK(st == 1 && ds.nout == 2 &&
-          !strcmp(ds.out[1], "0f02070805444b41303a0f020704055b5352565d0f020d020b47524545542e5458543b31060200070002"),
-          "DIRECTORY LIST = NAME(volume), NAME(directory), NAME(file), ACK, ACCESS COMPLETE(RESPONSE), blocked");
+          !strcmp(ds.out[1], "0f02070805444b41303a0f020704055b5352565d0f020d020b47524545542e5458543b31070002"),
+          "DIRECTORY LIST = NAME(volume), NAME(directory), NAME(file), ACCESS COMPLETE(RESPONSE), blocked, no ACK");
 
     static const char *get_in[] = {
         "01003c1007030702000500f7fbd9ffaeac8694e77f",
@@ -468,6 +541,10 @@ int main(int argc, char **argv)
      * sessions, replayed and compared segment for segment. */
     if (argc < 2) CHECK(0, "the oracle capture path is given (ctest passes it)");
     else oracle_replay(argv[1]);
+
+    /* 5. The 2026-10-08 live bracket: a real VAX against a booted OVMX. */
+    if (argc < 3) CHECK(0, "the live-bracket capture path is given (ctest passes it)");
+    else live_bracket(argv[2]);
 
     printf("test_dnet_fal_server: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

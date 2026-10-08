@@ -584,9 +584,17 @@ void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz)
     /* A real VMS COPY reading a remote file requires DIRECTORY LIST (it
      * $SEARCHes its input first) and asks for NAME; without bit 25 it refuses
      * the open "FAL-F-ACCFUNC, unsupported RMS service call" (rd vms-d85 lab). */
+    /* rd vms-277a live bracket: a VMS client asks DIRECTORY/FULL for only the
+     * main ATTRIBUTES unless SUMMARY / DATE AND TIME / PROTECTION are
+     * advertised (bits 24, 26, 27 -- all served from the file header), and
+     * refuses a remote RENAME "RMS-F-SUPPORT" without bit 37. Wildcard
+     * (bit 38) obliges wildcard retrieval/delete/rename (spec 5.2.20) and is
+     * not advertised until those are served. */
     const unsigned caps[] = { DNET_DAP_CAP_SEQ_ORG, DNET_DAP_CAP_SEQ_XFER,
                               DNET_DAP_CAP_BLOCK_TO_RESP, DNET_DAP_CAP_LEN256,
-                              DNET_DAP_CAP_DIRLIST, DNET_DAP_CAP_SEQ_RECORD,
+                              DNET_DAP_CAP_SUMMARY, DNET_DAP_CAP_DIRLIST,
+                              DNET_DAP_CAP_DATETIME, DNET_DAP_CAP_PROTECTION,
+                              DNET_DAP_CAP_SEQ_RECORD, DNET_DAP_CAP_RENAME,
                               DNET_DAP_CAP_NAME_MSG };
     unsigned maxbit = 0;
     for (size_t i = 0; i < sizeof caps / sizeof caps[0]; i++) {

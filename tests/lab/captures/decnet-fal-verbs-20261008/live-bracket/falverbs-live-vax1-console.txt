@@ -1,0 +1,73 @@
+DIRECTORY/FULL OVMX"SYSTEM password"::SYS$LOGIN:BRK*.TXT
+
+Directory OVMX"SYSTEM password"::VDA0:[SYS0.SYSCOMMON.SYSMGR]
+
+BRK1.TXT;1                    File ID:  None
+Size:            1/1          Owner:    [0,0]
+Created:   <None specified>
+Revised:   <None specified>
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      (remote)
+Caching attribute:  (remote)
+File attributes:    Allocation: 1, Extend: 0, Global buffer count: 0, Version limit: 0
+Record format:      Variable length, maximum 0 bytes, longest 16 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:, Owner:, Group:, World:
+Access Cntrl List:  None
+Client attributes:  None
+%DIRECT-E-OPENIN, error opening OVMX"SYSTEM password"::SYS$LOGIN:VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK1.TXT;1 as input
+-RMS-F-BUG_DAP, Data Access Protocol error detected; DAP code = 0001A006
+
+Total of 1 file, 1/1 block.
+$ 
+TYPE OVMX"SYSTEM password"::SYS$LOGIN:BRK1.TXT
+bracket file one
+second record
+$ 
+RENAME OVMX"SYSTEM password"::SYS$LOGIN:BRK2.TXT OVMX"SYSTEM password"::SYS$LOGIN:BRK3.TXT
+%RENAME-E-OPENIN, error opening OVMX"SYSTEM password"::VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK2.TXT;1 as input
+-RMS-F-SUPPORT, network operation not supported
+-NONAME-W-NOMSG, Message number 00000000
+$ 
+DIRECTORY OVMX"SYSTEM password"::SYS$LOGIN:BRK*.TXT
+
+Directory OVMX"SYSTEM password"::VDA0:[SYS0.SYSCOMMON.SYSMGR]
+
+%DIRECT-E-OPENIN, error opening OVMX"SYSTEM password"::SYS$LOGIN:VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK1.TXT;1 as input
+-RMS-F-BUG_DAP, Data Access Protocol error detected; DAP code = 0001A006
+BRK1.TXT;1          
+
+Total of 1 file.
+$ 
+DELETE OVMX"SYSTEM password"::SYS$LOGIN:BRK3.TXT;*
+%DELETE-W-FILNOTDEL, error deleting OVMX"SYSTEM password"::SYS$LOGIN:BRK3.TXT;*
+-RMS-F-WLD, invalid wildcard operation
+$ 
+DIRECTORY OVMX"SYSTEM password"::SYS$LOGIN:BRK*.TXT
+
+Directory OVMX"SYSTEM password"::VDA0:[SYS0.SYSCOMMON.SYSMGR]
+
+%DIRECT-E-OPENIN, error opening OVMX"SYSTEM password"::SYS$LOGIN:VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK1.TXT;1 as input
+-RMS-F-BUG_DAP, Data Access Protocol error detected; DAP code = 0001A006
+BRK1.TXT;1          
+
+Total of 1 file.
+$ 
+DELETE OVMX"GUEST password"::SYS$LOGIN:BRK1.TXT;*
+%DELETE-W-FILNOTDEL, error deleting OVMX"GUEST password"::SYS$LOGIN:BRK1.TXT;*
+-RMS-F-WLD, invalid wildcard operation
+$ 
+DIRECTORY OVMX"SYSTEM password"::SYS$LOGIN:NOSUCH.TXT
+
+Directory OVMX"SYSTEM password"::SYS$LOGIN:
+
+NOSUCH.TXT;*        
+
+Total of 1 file.
+$ 

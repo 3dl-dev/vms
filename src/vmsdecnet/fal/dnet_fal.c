@@ -674,7 +674,11 @@ static uint32_t server_dirlist(struct fal_batch *b, const struct dnet_dap_msg *a
         }
         if ((display & DNET_DAP_DSP_NAME) && fb_name(b, DNET_DAP_NT_FILESPEC, rsa) < 0)
             goto abort;
-        if (fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0) goto abort;
+        /* No ACKNOWLEDGE per file: DAP 5.6's directory list (spec 5.2.11) has
+         * none, and a VMS client talking 5.6 to OVMX rejects one as a sync
+         * error -- "RMS-F-BUG_DAP, DAP code = 0001A006" (MAC 10 / MIC ACK),
+         * listing stopped after the first file (live bracket 2026-10-08).
+         * The ACK in the VAX<->VAX capture is a DAP 7 peer's. */
         n++;
     }
     if (n == 0) {

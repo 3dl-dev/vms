@@ -222,6 +222,11 @@ static void test_encoder_lab_bytes(void)
           dnet_dap_syscap_has(&d, DNET_DAP_CAP_SEQ_XFER) && dnet_dap_syscap_has(&d, DNET_DAP_CAP_SEQ_ORG) &&
           !dnet_dap_syscap_has(&d, 7) && !dnet_dap_syscap_has(&d, 21),
           "OVMX CONFIG: DAP 5.6, advertises seq org + seq file transfer, NOT VBN/block or checksum");
+    CHECK(dnet_dap_syscap_has(&d, DNET_DAP_CAP_SUMMARY) && dnet_dap_syscap_has(&d, DNET_DAP_CAP_DATETIME) &&
+          dnet_dap_syscap_has(&d, DNET_DAP_CAP_PROTECTION) && dnet_dap_syscap_has(&d, DNET_DAP_CAP_RENAME) &&
+          !dnet_dap_syscap_has(&d, DNET_DAP_CAP_WILDCARD) && !dnet_dap_syscap_has(&d, 22) &&
+          !dnet_dap_syscap_has(&d, 23) && !dnet_dap_syscap_has(&d, 28),
+          "OVMX CONFIG (vms-277a): advertises SUMMARY, DATE AND TIME, PROTECTION, RENAME; NOT wildcard, KEYDEF, ALLOC, ACL");
     /* LENGTH form for blocking, incl. LEN256 above 255. */
     memset(&m, 0, sizeof m); m.op = DNET_DAP_DATA; m.u.data.reclen = 300;
     memset(m.u.data.rec, 'x', 300);

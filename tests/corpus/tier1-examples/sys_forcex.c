@@ -149,6 +149,12 @@ static $DESCRIPTOR (process_d, "FORCEX_SUB");
         ** Give the subprocess some image activation time ;-)
         */
         (void)sleep (5);
+        { /* vms-f45 DEBUG PROBE (branch only): what exists 5s after the spawn */
+            char dbg[160];
+            (void)fflush (stdout); (void)setvbuf (stdout, NULL, _IONBF, 0);
+            (void)snprintf (dbg, sizeof dbg, "echo PROBE spawn_status=%08x sub_pid=%08x; ps 2>&1 | head -40", r0_status, sub_pid);
+            (void)system (dbg);
+        }
 
         /*
         ** Finally demo the call.  Note the SS$_ABORT.  This is the condition

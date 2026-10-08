@@ -6663,9 +6663,10 @@ static int run_netacp_broker_selftest(void)
             pending = pending && nb_reply_status(0x61, cs[i]) == 0;
         NA_CHECK(sx == SS$_EXQUOTA && pending && g_nb_wire == wire0,
                  "a process holding its share of links is refused another (EXQUOTA), no Connect Initiate sent");
-        for (uint32_t p = 0x200;
-             p < 0x200 + (NETACP_MAX_SESSIONS - NETACP_MAX_PER_SOURCE) / NETACP_MAX_PER_SOURCE; p++)
-            for (int i = 0; i < NETACP_MAX_PER_SOURCE; i++)
+        /* Fill the rest of the pool, each process taking at most its share. */
+        int left = NETACP_MAX_SESSIONS - NETACP_MAX_PER_SOURCE;
+        for (uint32_t p = 0x200; left > 0; p++)
+            for (int i = 0; i < NETACP_MAX_PER_SOURCE && left > 0; i++, left--)
                 nb_raw_open(p, 0x62, "1.11::\"17=\"", &corr);
         int full = nb_used();
         wire0 = g_nb_wire;

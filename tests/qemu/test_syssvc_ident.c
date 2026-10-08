@@ -1052,14 +1052,20 @@ static void scenario_g_unnamed_row_reports_nothing(void)
     CHECK(strstr(outg, "G_SUB_PWNAM=" G_PWNAME "\n") != NULL,
           "G/F$USER: getpwuid(getuid()) DOES resolve to a Linux account name "
           "in this process -- so the next check is about a name that existed");
+    /* F$USER is the process UIC in named form (OpenVMS: "[SYSTEM]", semantic
+     * oracle LEX.USER, vms-86f). This row's UIC is [210,11] (the session's
+     * dropped credentials) and no identifier holds it (IDENT_N below), so the
+     * named form is the octal numeric one, as $FAO !%I renders it. */
+    snprintf(want, sizeof(want), "IDENT_U = \"[%o,%o]\"\n", G_GRP, G_MEM);
     /* negctl: dcl-fuser-host-login-name */
     /* negctl: dcl-fuser-system-fabricated */
-    CHECK(strstr(outg, "IDENT_U = \"\"\n") != NULL,
-          "G/F$USER: reports NO name for a process the executive has not "
-          "named -- not the host Linux login name, not SYSTEM");
+    CHECK(strstr(outg, want) != NULL,
+          "G/F$USER: answers this process's own UIC in named form -- not the "
+          "host Linux login name, not SYSTEM's");
     /* negctl: dcl-fuser-system-fabricated */
-    CHECK(strstr(outg, "IDENT_U = \"SYSTEM\"") == NULL,
-          "G/F$USER: does not answer with the literal SYSTEM");
+    CHECK(strstr(outg, "IDENT_U = \"[SYSTEM]\"") == NULL &&
+          strstr(outg, "IDENT_U = \"SYSTEM\"") == NULL,
+          "G/F$USER: does not answer with SYSTEM");
     /* Searched over DCL's OUTPUT ONLY -- everything after the harness's own
      * G_SUB_PWNAM line, which necessarily contains the name and would make a
      * whole-buffer search unfalsifiable. */

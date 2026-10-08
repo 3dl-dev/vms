@@ -52,6 +52,7 @@
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
+#include <sys/wait.h>   /* waitpid: the vms-c6d1 request-mailbox probe child */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +86,7 @@
 #include "ssdef.h"          /* SS$_BADPARAM (isolation-seam refusal, vms-9ab) */
 #include "rmsdef.h"         /* RMS$_FNF: --fal-proc-accept-test DELETE readback (vms-277a) */
 #include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
+#include "prvdef.h"         /* PRV$M_NETMBX: a broker requester must hold it (rd vms-c6d1) */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
 #include "descrip.h"        /* dsc$descriptor_s for the SYS$INPUT/SYS$OUTPUT assign */
 #include "iodef.h"          /* IO$_READVBLK/WRITEVBLK/SETMODE + IO$K_TT_PASSALL      */
@@ -5238,7 +5240,10 @@ static int netacp_reply_mbx(struct netacp_slot *sl, uint32_t reply_unit,
             return -1;                       /* the client's mailbox is gone */
         if (sl) sl->reply_chan = ch; else transient = 1;
     }
-    uint32_t st = vms_kif_mbx_write(ch, rec, (uint32_t)n);
+    /* IO$M_NORSWAIT (rd vms-c6d1): a client that never drains its reply
+     * mailbox gets SS$_MBFULL for its reply -- NETACP's serve loop never
+     * waits on a client. */
+    uint32_t st = vms_kif_mbx_write_ex(ch, rec, (uint32_t)n, 1);
     if (transient)
         (void)vms_kif_dassgn(ch);
     return (st & 1) ? 0 : -1;
@@ -6238,13 +6243,24 @@ static int run_mail11_accept_test(void)
  * no executive mailbox the broker is honestly NOT offered -- the inbound pool
  * still serves, and outbound clients get SS$_DEVOFFLINE.
  */
+/*
+ * The request mailbox's protection (rd vms-c6d1): S:RWLP,O:RWLP,G:,W:W. Every
+ * process may WRITE a request into it; only NETACP itself (its owner, a SYSTEM-
+ * category UIC) -- or a holder of SYSPRV/READALL/BYPASS, exactly as for any VMS
+ * object -- may READ it, so no client can dequeue another client's request and
+ * the NCB access-control password in it. Enforced by the executive's one
+ * protection decision (src/kernel-core/vms_prot.h), the same one a file gets.
+ */
+#define NETACP_REQ_PROMSK 0xDF00u
+
 static int netacp_broker_start(uint32_t *chan)
 {
     uint32_t unit = 0;
     char dev[64] = "";
-    uint32_t st = vms_kif_mbx_create(0, DNET_BROKER_REQ_MAX + 16,
-                                     (DNET_BROKER_REQ_MAX + 16) * 32,
-                                     chan, &unit, dev, sizeof dev);
+    uint32_t st = vms_kif_mbx_create_prot(0, DNET_BROKER_REQ_MAX + 16,
+                                          (DNET_BROKER_REQ_MAX + 16) * 32,
+                                          NETACP_REQ_PROMSK, chan, &unit, dev,
+                                          sizeof dev);
     if (!(st & 1)) {
         log_ts(stdout);
         printf(" DECNETD-W-NOBROKER, could not create the _NET: request mailbox"
@@ -6286,16 +6302,45 @@ static void netacp_broker_stop(uint32_t chan)
  * NETACP never blocks here) and service it. A record that fails the
  * bounds-validated decode is dropped: its reply unit is untrusted. */
 static unsigned long g_broker_malformed;
-/* Decode + service one raw broker request record (the mailbox drain and the
- * host selftest's in-process queue both come through here). */
+/* Requests dropped because the executive says their writer is not the process
+ * they claim (owner_pid), or the writer does not hold NETMBX (rd vms-c6d1). */
+static unsigned long g_broker_forged, g_broker_nonetmbx;
+/*
+ * Decode + service one raw broker request record (the mailbox drain and the
+ * host selftest's in-process queue both come through here).
+ *
+ * WHO SENT IT (rd vms-c6d1). `verify` is set for a record read from the
+ * executive mailbox, and `sender_pid` is then the executive's own stamp of the
+ * process that wrote it (the mailbox read's IOSB second longword) -- not
+ * something the writer can assert. A request whose owner_pid is not its writer
+ * is a forgery and is dropped unanswered (its reply unit is the forger's
+ * choice); so is one whose writer does not hold NETMBX, the privilege VMS
+ * requires of every network user (the same one $ASSIGN _NET: demands) -- read
+ * from the executive ($GETJPI of the stamped PID), never from the request. The
+ * host selftest's in-process queue has no executive and passes verify = 0.
+ */
 static void netacp_broker_record(struct netacp_slot *slots, const struct dnet_engine *node,
                                  int sock, unsigned ifindex, const uint8_t *rec, size_t len,
+                                 int verify, uint32_t sender_pid,
                                  dnet_tick_t now, uint16_t *next_lla)
 {
     static struct dnet_broker_req req;
     if (dnet_broker_req_decode(rec, len, &req) != DNET_BROKER_OK) {
         g_broker_malformed++;
         return;                            /* untrusted reply unit: no answer */
+    }
+    if (verify) {
+        struct vms_procinfo pi;
+        if (sender_pid == 0 || req.owner_pid != sender_pid) {
+            g_broker_forged++;
+            return;                        /* not who it says: no answer */
+        }
+        memset(&pi, 0, sizeof pi);
+        if (!(vms_kif_getjpi_pid(sender_pid, &pi) & 1) || pi.redacted ||
+            !(pi.cur_privs & PRV$M_NETMBX)) {
+            g_broker_nonetmbx++;
+            return;                        /* no NETMBX: not a network user */
+        }
     }
     netacp_broker_request(slots, node, sock, ifindex, &req, now, next_lla);
 }
@@ -6306,12 +6351,13 @@ static void netacp_broker_drain(uint32_t chan, struct netacp_slot *slots,
 {
     static uint8_t buf[DNET_BROKER_REQ_MAX + 16];
     for (int k = 0; k < 32; k++) {
-        uint32_t got = 0;
-        uint32_t st = vms_kif_mbx_read(chan, buf, sizeof buf, &got, 1);
+        uint32_t got = 0, sender = 0;
+        uint32_t st = vms_kif_mbx_read_ex(chan, buf, sizeof buf, &got, 1, &sender);
         if (!(st & 1))
             return;                       /* SS$_ENDOFFILE: nothing waiting */
         netacp_broker_record(slots, node, sock, ifindex, buf,
-                             got > sizeof buf ? sizeof buf : got, now, next_lla);
+                             got > sizeof buf ? sizeof buf : got, 1, sender,
+                             now, next_lla);
     }
 }
 
@@ -6393,7 +6439,7 @@ static void nb_pump(void)
     dnet_tick_t now = monotonic_sec();
     for (unsigned i = 0; i < g_nbreq_n; i++)
         netacp_broker_record(g_nbslots, &g_nbnode, g_nb_wire_fd, 0, g_nbreq[i].rec,
-                             g_nbreq[i].len, now, &g_nb_lla);
+                             g_nbreq[i].len, 0, 0, now, &g_nb_lla);
     g_nbreq_n = 0;
     if (g_nb_wire_fd >= 0) {
         uint8_t f[DNET_FRAME_MAX];
@@ -6726,6 +6772,113 @@ static void *lb_netacp_thread(void *v)
     return NULL;
 }
 
+
+/*
+ * net_req_probe - the request mailbox's protection and NETACP's sender check,
+ * seen from an UNPRIVILEGED process (rd vms-c6d1). Runs in a forked child, which
+ * the executive registers as a process of its own (kif_bind re-registers a
+ * forked task), dropped to UIC [100,100] holding only SETPRV -- the WORLD
+ * category of NETACP's S:RWLP,O:RWLP,G:,W:W request mailbox. Every verdict is
+ * written to `wfd` for the parent's checks; the child never prints.
+ */
+struct netreq_probe {
+    uint32_t setident;      /* SETIDENT to [100,100]                          */
+    uint32_t assign;        /* $ASSIGN DNET$NETACP_REQ: a channel (W access)  */
+    uint32_t read_unpriv;   /* IO$M_NOW read with no privilege: SS$_NOPRIV    */
+    uint32_t read_readall;  /* the same read with READALL: allowed            */
+    uint32_t nonetmbx;      /* own-PID request without NETMBX: reply status    */
+    uint32_t forged;        /* request claiming ANOTHER owner_pid: reply status */
+    uint32_t honest;        /* own-PID request with NETMBX: reply status        */
+};
+
+/* Wait (~3 s) for the reply with correlation id `corr` on `rep`; 0 = none came.
+ * Any reply to a DROPPED request seen meanwhile is recorded in *late. */
+static uint32_t net_req_probe_wait(uint32_t rep, uint32_t corr, uint32_t *late)
+{
+    for (int k = 0; k < 300; k++) {
+        uint8_t buf[DNET_BROKER_RSP_MAX + 16];
+        uint32_t got = 0;
+        uint32_t st = vms_kif_mbx_read(rep, buf, sizeof buf, &got, 1);
+        if (st & 1) {
+            struct dnet_broker_rsp rsp;
+            if (dnet_broker_rsp_decode(buf, got > sizeof buf ? sizeof buf : got, &rsp) ==
+                DNET_BROKER_OK) {
+                if (rsp.corr_id == corr)
+                    return rsp.status ? rsp.status : 1u;
+                *late = rsp.corr_id;
+            }
+            continue;
+        }
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+static uint32_t net_req_probe_send(uint32_t req, uint32_t corr, uint32_t owner,
+                                   uint32_t unit)
+{
+    struct dnet_broker_req r;
+    uint8_t rec[DNET_BROKER_REQ_MAX];
+    size_t n = 0;
+    memset(&r, 0, sizeof r);
+    r.corr_id = corr;
+    r.owner_pid = owner;
+    r.link_handle = 0xDEAD0000u | corr;      /* no such link: an honest NETACP says FILNOTACC */
+    r.reply_unit = unit;
+    r.op = DNET_BROKER_OP_CLOSE;
+    if (dnet_broker_req_encode(&r, rec, sizeof rec, &n) != DNET_BROKER_OK)
+        return SS$_BADPARAM;
+    return vms_kif_mbx_write(req, rec, (uint32_t)n);
+}
+
+static void net_req_probe(int wfd)
+{
+    struct netreq_probe v;
+    struct vms_procinfo self;
+    char dev[64];
+    uint16_t dl = 0;
+    uint32_t req = 0, rep = 0, unit = 0, late = 0, n = 0;
+    uint8_t buf[DNET_BROKER_REQ_MAX + 16];
+    uint64_t prev = 0;
+
+    memset(&v, 0, sizeof v);
+    memset(&self, 0, sizeof self);
+    (void)vms_kif_getjpi_self(&self);
+    v.setident = vms_kif_setident("NETPROBE", (100u << 16) | 100u, PRV$M_SETPRV);
+    (void)vms_kif_setprv(PRV$M_TMPMBX, 1, 0, &prev);
+    if (vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, 0, dev,
+                              sizeof dev - 1, &dl, NULL, NULL) == 1 && dl > 0) {
+        dev[dl] = '\0';
+        v.assign = vms_kif_mbx_assign(dev, &req);
+    }
+    v.read_unpriv = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
+    {
+        char rdev[64];
+        (void)vms_kif_mbx_create_prot(0, DNET_BROKER_RSP_MAX + 16,
+                                      (DNET_BROKER_RSP_MAX + 16) * 8, 0xFF00u,
+                                      &rep, &unit, rdev, sizeof rdev);
+    }
+    /* 1: our own PID, but no NETMBX -> dropped, no reply */
+    (void)net_req_probe_send(req, 1, self.vms_pid, unit);
+    v.nonetmbx = net_req_probe_wait(rep, 1, &late);
+    (void)vms_kif_setprv(PRV$M_NETMBX, 1, 0, &prev);
+    /* 2: NETMBX, but claiming to be ANOTHER process -> dropped, no reply */
+    (void)net_req_probe_send(req, 2, self.vms_pid + 1u, unit);
+    v.forged = net_req_probe_wait(rep, 2, &late);
+    /* 3: NETMBX and the truth -> served (FILNOTACC: no such link) */
+    (void)net_req_probe_send(req, 3, self.vms_pid, unit);
+    v.honest = net_req_probe_wait(rep, 3, &late);
+    if (late == 1) v.nonetmbx = 0xFFFFFFFFu;     /* a dropped request was answered after all */
+    if (late == 2) v.forged = 0xFFFFFFFFu;
+    (void)vms_kif_setprv(PRV$M_READALL, 1, 0, &prev);
+    v.read_readall = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
+    (void)vms_kif_setprv(PRV$M_READALL, 0, 0, &prev);
+    if (rep) (void)vms_kif_dassgn((uint16_t)rep);
+    if (req) (void)vms_kif_dassgn((uint16_t)req);
+    (void)!write(wfd, &v, sizeof v);
+}
+
 static int run_net_loopback_accept_test(void)
 {
     printf("DECNETD-I-NETLOOP, $QIO on _NET: brokered through NETACP: COPY 0\"SYSTEM\"::"
@@ -6763,6 +6916,47 @@ static int run_net_loopback_accept_test(void)
             own = 0;
     } else {
         printf("  NOTE: a NETACP is already serving on this node -- the client uses it\n");
+    }
+
+
+    /* The request mailbox, from an unprivileged process (rd vms-c6d1). */
+    if (netacp_running() == 1) {
+        int pfd[2];
+        struct netreq_probe v;
+        memset(&v, 0, sizeof v);
+        int got = 0;
+        if (pipe(pfd) == 0) {
+            pid_t cp = fork();
+            if (cp == 0) {
+                close(pfd[0]);
+                net_req_probe(pfd[1]);
+                _exit(0);
+            }
+            close(pfd[1]);
+            if (cp > 0) {
+                struct pollfd pp = { .fd = pfd[0], .events = POLLIN };
+                if (poll(&pp, 1, 60000) > 0 && read(pfd[0], &v, sizeof v) == (ssize_t)sizeof v)
+                    got = 1;
+                if (!got) kill(cp, SIGKILL);
+                waitpid(cp, NULL, 0);
+            }
+            close(pfd[0]);
+        }
+        NL_CHECK(got && (v.setident & 1), "an unprivileged probe process ([100,100], SETPRV only) reported");
+        NL_CHECK(v.assign == SS$_NORMAL,
+                 "the unprivileged process may $ASSIGN DNET$NETACP_REQ (W:W -- it can submit requests)");
+        NL_CHECK(v.read_unpriv == SS$_NOPRIV,
+                 "the unprivileged process may NOT read DNET$NETACP_REQ (SS$_NOPRIV) -- no other"
+                 " client's request, NCB password included, is readable");
+        NL_CHECK(v.read_readall != SS$_NOPRIV && v.read_readall != 0,
+                 "with READALL the same read is permitted -- the VMS privilege override, not a"
+                 " special case");
+        NL_CHECK(v.nonetmbx == 0, "a request from a process without NETMBX is dropped unanswered");
+        NL_CHECK(v.forged == 0,
+                 "a request whose owner_pid is not its writer (the executive-stamped sender PID) is"
+                 " dropped unanswered");
+        NL_CHECK(v.honest == SS$_FILNOTACC,
+                 "the same request, truthful and with NETMBX, is served (FILNOTACC: no such link)");
     }
 
     struct netcli c;

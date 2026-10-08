@@ -808,9 +808,12 @@ static uint32_t net_bind(uint16_t chan, struct net_chan_state *ns)
 
     uint32_t unit = 0;
     char rdev[64];
-    uint32_t st = vms_kif_mbx_create(0, DNET_BROKER_RSP_MAX + 16,
-                                     (DNET_BROKER_RSP_MAX + 16) * 8,
-                                     &ns->rep_chan, &unit, rdev, sizeof rdev);
+    /* The reply mailbox is this process's alone: S:RWLP,O:RWLP,G:,W: (rd
+     * vms-c6d1) -- NETACP (a SYSTEM-category UIC) may write the answer, no other
+     * user may read it, since a reply can carry the link's data. */
+    uint32_t st = vms_kif_mbx_create_prot(0, DNET_BROKER_RSP_MAX + 16,
+                                          (DNET_BROKER_RSP_MAX + 16) * 8, 0xFF00u,
+                                          &ns->rep_chan, &unit, rdev, sizeof rdev);
     if (!(st & 1)) {
         (void)vms_kif_dassgn(ns->req_chan);
         memset(ns, 0, sizeof *ns);

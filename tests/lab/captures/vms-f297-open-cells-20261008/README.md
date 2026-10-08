@@ -94,6 +94,44 @@ listed, not a shipped result.
 `runP.sh` greps "BUGCHECK"; the console says "BUG CHECK". The graders used for the
 stall matrices (`grade3.sh`) and `pfloop.sh` match both spellings.
 
+## A joiner re-dialling a real VAX mid-conversation (rd vms-a35c)
+
+The stall matrices on lab build c8 (arms GM-14, TG-3, HM-11; `rig/matrix.sh`,
+graded by `rig/grade3.sh`) bugchecked VAXC with CNXMGRERR. In each one OVMXB was
+not yet a member and already had a conversation open with VAXC, because it now
+introduces itself to every connected member before it asks (PK-1 above). Its
+connection to VAXC re-formed during the stall. VAXC's ACCEPT carried connect
+data cd[12:14] = 2: it had taken two of OVMXB's messages and expected the
+conversation to continue at send 3. OVMXB reset the conversation, as E77 does
+for a system that is not a member, and spoke at send 1, ack 0.
+
+The fix is the ACCEPT half of rd vms-ba4's connect-data resume:
+
+- SCS keeps the ACCEPT's 16 connect-data bytes on the initiator's CDT
+  (`scs_conid_accept_conndata`).
+- The connection manager reads them when the connection opens. When the peer
+  says it has taken N, the block resumes at send N and acks what this node's
+  own CONNECT advertised.
+- What this node already told the peer about itself stands. A resumed
+  conversation does not re-send MODEL or PARAMS (rd vms-8c54 arm F-4).
+- A peer that took 0 is a fresh conversation and changes nothing.
+
+| build | runs | result |
+|---|---|---|
+| c8 (before) | HM, 21 arms | 1 VAX bugcheck (HM-11, together:20) |
+| c9 (fix) | IM, the same 21 tokens | 21 × 0 VAX bugchecks; 20 PASS, and IM-2's FAIL is the login harness below (both nodes members, VAX proposed B) |
+| c9 (fix) | PFI: `rig/pfloop.sh`, 3 runP + 3 runPK | 6/6 PASS, 0 bugchecks; the VAX reported losing member OVMXB in all three kills |
+| c9 (fix) | IMR: IM-2's token plus two more, on the final login harness | 3/3 PASS, 0 bugchecks; every login on the first attempt |
+
+The rig's console login is now prompt-synchronised (rd vms-b64, `rig/b36node.sh`).
+It used to log in by timing, and a %CNXMAN line landing between the prompts typed
+the poll's SHOW CLUSTER into `Username:` (FM-5, FM-11, HM-8). Now:
+
+- each field is sent only after its own prompt appears, counted past a baseline;
+- a DCL prompt is any line that *starts* with `$`, because in IM-2 a kernel line
+  was appended to the `$ ` itself;
+- a session found back at `Username:` before a poll logs in again.
+
 ## Still open
 
 - **body[48]** (rd vms-91d) is 02 in one archived oracle (`vms-af4-unclean-return-20261001/oracle`:

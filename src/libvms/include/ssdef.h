@@ -355,6 +355,7 @@ extern "C" {
 #define SS$_NOMOREACE       2528    /* No more access control entries */
 #define SS$_ACLFULL         2552    /* No room in access control list for entry */
 #define SS$_IVACL           8676    /* Invalid access control list entry */
+#define SS$_NOCLASS         9436    /* No such object class */
 #define SS$_NONETMBX        10404   /* Network mailbox privilege required (NETMBX) */
 #define SS$_NOSYSPRV        10468   /* SYSPRV privilege required */
 #define SS$_NOAUDIT         10540   /* Event is not audited */

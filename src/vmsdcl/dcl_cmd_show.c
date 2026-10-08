@@ -32,6 +32,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_rms.h"
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
@@ -136,6 +137,70 @@ const struct dcl_priv_name vms_priv_names[] = {
     VMS_PRIV_NAME_LIST(VMS_PRIV_ROW_ENTRY)
     { NULL, 0, NULL }
 };
+
+/*
+ * SHOW ACL file (vms-d404): the file's access control list, read from its
+ * header through $GET_SECURITY, laid out as OpenVMS VAX V7.3 prints it
+ * (docs/oracle/vax73-acl.md): an "Object type: FILE,  Object name: ...,  on
+ * <time>" line, then one ACE per line; a file with no ACL is
+ * %SYSTEM-W-ACLEMPTY.
+ */
+extern uint32_t dcl_read_file_acl(const char *spec, uint8_t *buf, uint32_t cap, uint32_t *len);
+extern void dcl_print_acl(const uint8_t *acl, uint32_t len);
+
+static int cmd_show_acl(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    const char *spec = (cmd->param_count > 1) ? cmd->params[1] : NULL;
+    struct dcl_rms_dir *d;
+    char match[1024];
+    uint16_t fn, fs;
+    uint8_t fr;
+    int n = 0;
+    uint32_t worst = SS$_NORMAL;
+
+    if (!spec || !spec[0]) {
+        dcl_error("DCL", 2, "INSFPRM", "missing command parameters - supply all required parameters");
+        return SS$_BADPARAM;
+    }
+    d = dcl_rms_dir_open(ctx, spec);
+    if (!d) {
+        dcl_error("RMS", 2, "FNF", "file not found");
+        return RMS$_FNF;
+    }
+    while (dcl_rms_dir_next(d, match, sizeof(match), &fn, &fs, &fr)) {
+        uint8_t acl[512];
+        uint32_t len = 0, st;
+        n++;
+        st = dcl_read_file_acl(match, acl, sizeof(acl), &len);
+        if (!(st & 1)) {
+            dcl_error("SHOW", 2, "OPENIN", "error opening %s as input", match);
+            worst = st;
+            continue;
+        }
+        if (len == 0) {
+            dcl_error("SYSTEM", 0, "ACLEMPTY", "access control list is empty");
+            worst = SS$_ACLEMPTY;
+            continue;
+        }
+        {
+            struct timespec ts;
+            struct tm tm;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            localtime_r(&ts.tv_sec, &tm);
+            printf("Object type: FILE,  Object name: %s,  on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+                   match, tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+                   tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
+        }
+        dcl_print_acl(acl, len);
+    }
+    dcl_rms_dir_close(d);
+    if (!n) {
+        dcl_error("RMS", 2, "FNF", "file not found");
+        return RMS$_FNF;
+    }
+    return (int)(worst == SS$_ACLEMPTY ? (SS$_ACLEMPTY | 0x10000000u) : worst);
+}
 
 static int cmd_show_time(struct dcl_command *cmd)
 {
@@ -4181,6 +4246,8 @@ int cmd_show(struct dcl_command *cmd)
      * VAX V7.3 and Alpha V8.4, vms-050). They fall through to IVKEYW below --
      * which also makes the abbreviation SH VER unrecognized on real VMS,
      * rather than resolving to a (non-existent) SHOW VERIFY. */
+    if (dcl_match_command(subcmd, "ACL", 3))
+        return cmd_show_acl(cmd);
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_show_protection(cmd);
     /* DEVICES is a VMS synonym for DEVICE (vms-9344a): both the singular and

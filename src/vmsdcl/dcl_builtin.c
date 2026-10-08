@@ -146,6 +146,10 @@ static const struct dcl_qual_def q_directory[] = {
      * All three do real work in the handler -- not declared-and-ignored
      * (INV-DCL sec 3). */
     { "PROTECTION",  CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
+    /* vms-d404: /ACL lists each file's access control list; /SECURITY its
+     * owner, protection and ACL (the file header's, through $GET_SECURITY). */
+    { "ACL",         CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
+    { "SECURITY",    CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
     { "VERSIONS",    CDU_VT_VALUE,   CDU_Q_VALREQ,    NULL, NULL },
     { "EXCLUDE",     CDU_VT_VALUE,   CDU_Q_VALREQ,    NULL, NULL },
     QUAL_END

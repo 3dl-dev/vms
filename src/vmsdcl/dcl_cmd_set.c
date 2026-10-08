@@ -37,6 +37,8 @@
 #include "vmsfs/filespec.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
+#include "ossdef.h"
+#include "descrip.h"
 #include "sysuaf.h"
 #include "uaidef.h"    /* UAI$M_LOCKPWD (vms-c8fa) */
 #include "ovmx_accounting.h"
@@ -566,6 +568,203 @@ static int cmd_set_terminal(struct dcl_command *cmd)
  * We seed the protection word from the file's present mode and let
  * vmsfs_parse_protection() override only the named categories.
  */
+/*
+ * SET ACL (vms-d404): change a file's access control list through
+ * $SET_SECURITY, the file header's ACL in the executive ACP.
+ *
+ *   SET ACL/ACL=ace file           add the ACE(s) at the top (an ACE for the
+ *                                  same identifier is replaced)
+ *   SET ACL/ACL=(ace,ace) file     several, the first ending first
+ *   SET ACL/DELETE/ACL=ace file    delete the ACE(s)
+ *   SET ACL/DELETE file            delete the ACL (PROTECTED ACEs stay)
+ *
+ * Messages are the ones OpenVMS VAX V7.3 prints (docs/oracle/vax73-acl.md):
+ * %SET-F-SYNTAX + -SYSTEM-F-IVACL / -SYSTEM-F-NOSUCHID for an ACE that does
+ * not parse, %SET-E-OPENIN + -SYSTEM-F-NOPRIV without CONTROL access,
+ * %SET-W-NOSUCHACE + %SET-F-WRITEERR for an ACE /DELETE does not find.
+ */
+#define SET_ACL_MAX_ACES 16
+
+static const char *set_acl_sysmsg(uint32_t st, char *sev)
+{
+    *sev = (st & 7u) == 0 ? 'W' : (st & 7u) == 4 ? 'F' : 'E';
+    switch (st) {
+    case SS$_IVACL:    *sev = 'F'; return "IVACL, invalid access control list entry syntax";
+    case SS$_NOSUCHID: *sev = 'F'; return "NOSUCHID, unknown rights identifier";
+    case SS$_NOPRIV:   *sev = 'F'; return "NOPRIV, insufficient privilege or object protection violation";
+    case SS$_ACLFULL:  return "ACLFULL, no room in access control list for entry";
+    default:           return NULL;
+    }
+}
+
+/* Read a balanced "( ... )" group starting at *pp; returns its length incl. parens. */
+static size_t set_acl_group(const char *p)
+{
+    size_t i = 0;
+    int depth = 0;
+    do {
+        if (p[i] == '(') depth++;
+        else if (p[i] == ')') depth--;
+        else if (p[i] == '\0') return 0;
+        i++;
+    } while (depth > 0);
+    return i;
+}
+
+static int cmd_set_acl(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    const char *p = cmd->raw_tail;
+    char acetxt[SET_ACL_MAX_ACES][256];
+    uint8_t aces[SET_ACL_MAX_ACES][256];
+    int nace = 0, del = 0, i, nfiles = 0;
+    char filespec[512] = "";
+    uint32_t worst = SS$_NORMAL;
+
+    while (*p == ' ' || *p == '\t') p++;
+    while (*p && *p != '/' && *p != ' ' && *p != '\t') p++;     /* the ACL keyword */
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '/') {
+            char q[32];
+            size_t n = 0;
+            p++;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_') && n < sizeof(q) - 1)
+                q[n++] = (char)toupper((unsigned char)*p++);
+            q[n] = '\0';
+            if (n >= 1 && strncmp("DELETE", q, n) == 0 && n >= 3) {
+                del = 1;
+            } else if (n >= 1 && strncmp("ACL", q, n) == 0) {
+                size_t g;
+                while (*p == ' ') p++;
+                if (*p != '=') { dcl_error("DCL", 2, "VALREQ", "missing qualifier or keyword value - supply all required values"); return SS$_BADPARAM; }
+                p++;
+                while (*p == ' ') p++;
+                g = set_acl_group(p);
+                if (g == 0) { dcl_error("SET", 4, "SYNTAX", "error parsing '%s'", p); return SS$_IVACL; }
+                {
+                    /* "((a),(b))" is a list; "(a)" one ACE */
+                    const char *q2 = p + 1;
+                    while (*q2 == ' ') q2++;
+                    if (*q2 == '(') {
+                        const char *e = p + g - 1;
+                        while (q2 < e && nace < SET_ACL_MAX_ACES) {
+                            size_t g2;
+                            while (q2 < e && (*q2 == ' ' || *q2 == ',')) q2++;
+                            if (q2 >= e) break;
+                            g2 = set_acl_group(q2);
+                            if (g2 == 0 || g2 >= sizeof(acetxt[0])) { dcl_error("SET", 4, "SYNTAX", "error parsing '%s'", q2); return SS$_IVACL; }
+                            memcpy(acetxt[nace], q2, g2); acetxt[nace][g2] = '\0';
+                            nace++;
+                            q2 += g2;
+                        }
+                    } else if (nace < SET_ACL_MAX_ACES && g < sizeof(acetxt[0])) {
+                        memcpy(acetxt[nace], p, g); acetxt[nace][g] = '\0';
+                        nace++;
+                    }
+                }
+                p += g;
+            } else if (n >= 1 && strncmp("OBJECT_TYPE", q, n) == 0) {
+                while (*p == ' ' || *p == '=') p++;
+                while (*p && *p != '/' && *p != ' ') p++;
+            } else {
+                dcl_error("DCL", 0, "IVQUAL", "unrecognized qualifier - check validity, spelling, and placement");
+                return SS$_BADPARAM;
+            }
+        } else if (*p) {
+            size_t n = 0;
+            while (*p && *p != ' ' && *p != '\t' && *p != '/' && n < sizeof(filespec) - 1)
+                filespec[n++] = *p++;
+            filespec[n] = '\0';
+        }
+    }
+    if (!filespec[0]) {
+        dcl_error("DCL", 2, "INSFPRM", "missing command parameters - supply all required parameters");
+        return SS$_BADPARAM;
+    }
+    if (!nace && !del) {
+        dcl_error("SET", 4, "SYNTAX", "error parsing ''");
+        return SS$_BADPARAM;
+    }
+    for (i = 0; i < nace; i++) {
+        struct dsc$descriptor_s td = { (uint16_t)strlen(acetxt[i]), DSC$K_DTYPE_T, DSC$K_CLASS_S, acetxt[i] };
+        struct dsc$descriptor_s bd = { sizeof(aces[i]), DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)aces[i] };
+        uint16_t ep = 0;
+        uint32_t st = sys$parse_acl(&td, &bd, &ep, NULL, 0);
+        if (!(st & 1)) {
+            char sev;
+            const char *m = set_acl_sysmsg(st, &sev);
+            const char *rest = acetxt[i] + (ep < strlen(acetxt[i]) ? ep : 0);
+            dcl_error("SET", 4, "SYNTAX", "error parsing '%s'", rest + (rest[0] == '(' ? 1 : 0));
+            if (m) fprintf(stderr, "-SYSTEM-%c-%s\n", sev, m);
+            return (int)st;
+        }
+    }
+
+    {
+        struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, filespec);
+        char match[1024];
+        uint16_t fn, fs;
+        uint8_t fr;
+        if (!d) {
+            dcl_error("SET", 2, "SEARCHFAIL", "error searching for %s", filespec);
+            return SS$_NOSUCHFILE;
+        }
+        while (dcl_rms_dir_next(d, match, sizeof(match), &fn, &fs, &fr)) {
+            static char cls[] = "FILE";
+            struct dsc$descriptor_s cd = { 4, DSC$K_DTYPE_T, DSC$K_CLASS_S, cls };
+            struct dsc$descriptor_s od = { (uint16_t)strlen(match), DSC$K_DTYPE_T, DSC$K_CLASS_S, match };
+            struct { uint16_t len, code; void *buf; uint16_t *ret; } it[SET_ACL_MAX_ACES + 1];
+            int k = 0;
+            uint32_t st;
+
+            nfiles++;
+            if (del && !nace) {
+                it[k].len = 0; it[k].code = OSS$_ACL_DELETE; it[k].buf = NULL; it[k].ret = NULL; k++;
+            } else {
+                /* added at the top one at a time: last first, so the list reads as typed */
+                for (i = nace - 1; i >= 0; i--) {
+                    it[k].len = aces[i][0];
+                    it[k].code = del ? OSS$_ACL_DELETE_ENTRY : OSS$_ACL_ADD_ENTRY;
+                    it[k].buf = aces[i]; it[k].ret = NULL; k++;
+                }
+            }
+            it[k].len = 0; it[k].code = 0; it[k].buf = NULL; it[k].ret = NULL;
+            st = sys$set_security(&cd, &od, NULL, 0, it, NULL, NULL);
+            if (st & 1)
+                continue;
+            if (st == SS$_NOENTRY) {
+                for (i = 0; i < nace; i++) {
+                    char txt[256]; uint16_t tl = 0;
+                    struct dsc$descriptor_s ad = { aces[i][0], DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)aces[i] };
+                    struct dsc$descriptor_s xd = { sizeof(txt), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
+                    dcl_error("SET", 0, "NOSUCHACE", "ACE for object %s, does not exist", match);
+                    if (sys$format_acl(&ad, &tl, &xd, NULL, NULL, NULL, NULL, NULL) & 1)
+                        fprintf(stderr, "    %.*s\n", (int)tl, txt);
+                }
+                dcl_error("SET", 4, "WRITEERR", "error writing %s", match);
+            } else {
+                char sev;
+                const char *m = set_acl_sysmsg(st, &sev);
+                if (st == SS$_NOPRIV)
+                    dcl_error("SET", 2, "OPENIN", "error opening %s as input", match);
+                else
+                    dcl_error("SET", 2, "WRITEERR", "error writing %s", match);
+                if (m) fprintf(stderr, "-SYSTEM-%c-%s\n", sev, m);
+                else fprintf(stderr, "-SYSTEM-E-STATUS, status %%X%08X\n", st);
+            }
+            worst = st;
+        }
+        dcl_rms_dir_close(d);
+    }
+    if (!nfiles) {
+        dcl_error("SET", 2, "SEARCHFAIL", "error searching for %s", filespec);
+        dcl_error("RMS", 2, "FNF", "file not found");
+        return RMS$_FNF;
+    }
+    return (int)worst;
+}
+
 static int cmd_set_protection(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -2277,6 +2476,8 @@ int cmd_set(struct dcl_command *cmd)
         return cmd_set_verify(cmd);
     if (dcl_match_command(subcmd, "TERMINAL", 4))
         return cmd_set_terminal(cmd);
+    if (dcl_match_command(subcmd, "ACL", 3))
+        return cmd_set_acl(cmd);
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_set_protection(cmd);
     if (dcl_match_command(subcmd, "PASSWORD", 3))

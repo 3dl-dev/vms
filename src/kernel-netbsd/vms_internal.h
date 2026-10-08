@@ -1137,6 +1137,7 @@ long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setrpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*

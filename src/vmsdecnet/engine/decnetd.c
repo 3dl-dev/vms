@@ -1833,6 +1833,9 @@ static int g_ct_pass, g_ct_fail;
  * its existing (deliberately narrow) include set; a divergence shows up as a
  * failing CHECK, not a silently passing one. */
 #define CT_DC_TERM  66
+/* DT$_LA36, per the V7.3 node's own DCDEF (docs/oracle/vax73-starlet-defs/
+ * DCDEF.txt). */
+#define CT_DT_LA36  32
 
 static int run_cterm_accept_test(void)
 {
@@ -1949,6 +1952,60 @@ static int run_cterm_accept_test(void)
                  " session returns a real DC$_TERM device row (design sec-7.5 tell:"
                  " a green produced without the executive device table changing is"
                  " a LARP)");
+    }
+
+    /* ---- 3b. THE ORIGINATING TERMINAL (rd vms-14b) -------------------------
+     * A real VAX SET HOST conveys its terminal in its CTERM Initiate. Replay
+     * the REAL bytes VAX1 sent from its LA36-typed console (tests/lab/captures/
+     * decnet-sethost-inbound-20261005/sethost-inbound.wire.txt, 1.1->1.44 seg 1
+     * and seg 2) through the host FSM NETACP runs, record the decode on this
+     * session's RTAn: with the call NETACP makes, and read the device row back
+     * from the executive -- the oracle (vax-rta-show-terminal.txt) is
+     * Device_Type LA36 (DT$_LA36 = 32), Width 132, Page 0. */
+    {
+        static const uint8_t vax_bind_accept[17] = {
+            0x04, 0x02, 0x04, 0x00, 0x07, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        static const uint8_t vax_initiate_seg[57] = {
+            0x09, 0x00, 0x35, 0x00, 0x01, 0x00, 0x01, 0x04, 0x00, 0x07, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0,
+            0x03, 0x03, 0x04, 0xfe, 0xff, 0xef, 0x00, 0x04, 0x18, 0x42, 0x20, 0x84,
+            0x00, 0xa0, 0x02, 0x02, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        static struct dnet_cth cth;
+        struct vms_devinfo info, con0, con1;
+        uint32_t rst, dst;
+
+        dnet_cth_init(&cth, 60);   /* NETACP_CTERM_IDLE_MS; the idle time plays no part here */
+        CT_CHECK(dnet_cth_open(&cth) == DNET_CTH_OK &&
+                     dnet_cth_rx(&cth, vax_bind_accept, sizeof vax_bind_accept, 0) == DNET_CTH_OK &&
+                     dnet_cth_rx(&cth, vax_initiate_seg, sizeof vax_initiate_seg, 0) == DNET_CTH_OK &&
+                     cth.peer.term.valid && cth.peer.term.devtype == CT_DT_LA36,
+                 "the host FSM decodes the real VAX Initiate's terminal: DC$_TERM,"
+                 " DT$_LA36 (32), width 132, page 0");
+        rst = dnet_cterm_host_record_origin(&c.hs, &cth.peer.term);
+        memset(&info, 0, sizeof(info));
+        dst = vms_kif_getdvi_devnam(c.hs.devnam, &info);
+        printf("  INFO: %s after record: status %08X, devtype %u, width %u, page %u\n",
+               c.hs.devnam, (unsigned)rst, (unsigned)info.devtype,
+               (unsigned)info.width, (unsigned)info.page);
+        CT_CHECK((rst & 1) && (dst & 1) && info.devtype == CT_DT_LA36 &&
+                     info.width == 132 && info.page == 0,
+                 "the RTAn:'s EXECUTIVE device row carries the originating terminal"
+                 " ($GETDVI from this process: device type LA36, width 132, page 0)");
+
+        /* NEGCTL: a local terminal is never redefined through this door, and
+         * stays exactly as it was. */
+        memset(&con0, 0, sizeof(con0));
+        memset(&con1, 0, sizeof(con1));
+        (void)vms_kif_getdvi_devnam("OPA0:", &con0);
+        rst = vms_kif_terminal_setchar("OPA0:", VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
+                                       VMS_TERMCHAR_M_PAGE, CT_DT_LA36, 80, 66);
+        dst = vms_kif_getdvi_devnam("OPA0:", &con1);
+        CT_CHECK(rst == SS$_IVDEVNAM && (dst & 1) && con1.devtype == 0 &&
+                     con1.devtype == con0.devtype && con1.width == con0.width &&
+                     con1.page == con0.page,
+                 "NEGCTL: OPA0: refuses the RTAn: setter (SS$_IVDEVNAM) and keeps"
+                 " device type Unknown and its own width/page");
     }
 
     /* ---- 4. Bind the CTERM session and read LOGINOUT's OWN prompt --------- */
@@ -4305,6 +4362,7 @@ struct netacp_slot {
     uint8_t  peer_mac[6];
     struct dnet_cterm_host_session host;/* object 42: RTAn: + LOGINOUT        */
     struct dnet_cth cth;                /* object 42: the CTERM host wire role */
+    int      term_recorded;             /* originating terminal on the RTAn:   */
     struct dnet_fal_proc fal;           /* object 17                          */
 };
 
@@ -4504,6 +4562,19 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
          * these bytes arrive before anyone authenticated); typed lines go to
          * the session's terminal, to LOGINOUT, which decides any login. */
         int crc = dnet_cth_rx(&sl->cth, sl->lk.rx_data, sl->lk.rx_datalen, monotonic_ms());
+        /* rd vms-14b: the remote's Initiate told us what terminal the SET HOST
+         * came from (type, width, page). Record it on the RTAn: once, in the
+         * executive, as VMS's RTAn: takes it from the originating terminal. */
+        if (!sl->term_recorded && sl->cth.peer.term.valid) {
+            uint32_t tst = dnet_cterm_host_record_origin(&sl->host, &sl->cth.peer.term);
+            sl->term_recorded = 1;
+            log_ts(stdout);
+            printf(" DECNETD-I-RTATERM, %s takes the originating terminal: device type"
+                   " %u, width %u, page %u (status %08X)\n", sl->host.devnam,
+                   (unsigned)sl->cth.peer.term.devtype, (unsigned)sl->cth.peer.term.width,
+                   (unsigned)sl->cth.peer.term.page, (unsigned)tst);
+            fflush(stdout);
+        }
         netacp_cterm_feed_terminal(sl);
         netacp_cterm_drain(sl, sock, ifindex, now);
         if (sl->cth.peer_unbound)

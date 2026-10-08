@@ -40,8 +40,15 @@
  *      whose length field "did not match" -- it is TWO carried messages, and
  *      the length field matches the first exactly);
  *   4. the server's own Initiate arrives (its max message size, input buffer
- *      size, supported-message bitmap); the host answers with the VMS message
- *      23 (0x17) both real VAX hosts sent, reproduced literally.
+ *      size, supported-message bitmap and -- a VMS server -- its terminal's
+ *      characteristics, parameter 4, decoded below and recorded on the RTAn:
+ *      by NETACP); the host answers with the VMS message 23 (0x17) both real
+ *      VAX hosts sent, reproduced literally. Neither VAX host ever sends a
+ *      CTERM Read Characteristics (message 10) -- the host-sent message types
+ *      in both captures are 1, 2, 7, 11, 15 and 23. What a VAX host does send
+ *      is VMS message 15 when LOGINOUT/DCL issue $QIO SENSEMODE, and the reply
+ *      repeats the blob the Initiate already carried. So the server
+ *      volunteers its terminal at bind time and this host adds no message.
  * Then terminal I/O: output goes as Writes, input is SOLICITED with Start Read
  * (the prompt rides in the read, as VMS does it), the typed line comes back as
  * Read Data, and when the session process exits the host sends foundation
@@ -173,12 +180,58 @@ int dnet_cth_cd_iter_next(struct dnet_cth_cd_iter *it, const uint8_t **msg, size
  * supported-message bitmap the VAX hosts sent: fe ff ef 00). */
 int dnet_cth_initiate_build(uint16_t max_msg, uint8_t *buf, size_t cap, size_t *outlen);
 
+/* THE ORIGINATING TERMINAL (rd vms-14b). A VMS server's Initiate carries a
+ * fourth parameter the public spec does not list (sec 4.16.2 defines 1-3): its
+ * VALUE is the server terminal's characteristics in the layout the public
+ * OpenVMS I/O User's Reference Manual documents for the terminal driver's
+ * IO$_SENSEMODE/IO$_SETMODE characteristics buffer --
+ *     byte 0      device class  (DC$_TERM = 66)
+ *     byte 1      device type   (a DT$_ code)
+ *     bytes 2-3   page width    (LE word)
+ *     bytes 4-6   terminal characteristics (TT$), byte 7 page length
+ *     bytes 8-11  extended terminal characteristics (TT2$)
+ * Pinned on the wire, never assumed:
+ *   - tests/lab/captures/decnet-sethost-inbound-20261005: VAX1's SET HOST from
+ *     its LA36-typed console sends `04 18 42 20 84 00 a0 02 02 00 00 30 00 00
+ *     ...` (24-byte value), and SHOW TERMINAL on the RTAn: of THAT session
+ *     prints Device_Type LA36, Width 132, Page 0 (vax-rta-show-terminal.txt).
+ *     0x42 = DC$_TERM 66 and 0x20 = DT$_LA36 32 per the V7.3 node's own DCDEF
+ *     (docs/oracle/vax73-starlet-defs/DCDEF.txt); 0x0084 = 132; byte 7 = 0.
+ *   - docs/oracle/vax-sethost-cterm.pcap, session 1: the same LA36 console at
+ *     Page 24 sends byte 7 = 0x18 (and the earlier SET TERMINAL/PAGE=48 diff,
+ *     dnet_cterm.h vms-bd0, moved exactly that byte to 0x30). Session 2 of
+ *     that capture came from a terminal set otherwise: byte 1 = 0x60 =
+ *     DT$_VT100 96 (DCDEF), width 0x0050 = 80 -- so type and width are
+ *     per-session values at these offsets, not constants.
+ * The TT$/TT2$ words are kept RAW and are not mapped to characteristic names:
+ * no public document available to this work pins their bit positions (see
+ * docs/oracle/vax73-terminal-device.md, "Characteristic bit positions"), and
+ * VMS message 19 in the same session carries TT2$ 0x3200 where this parameter
+ * carries 0x3000 -- unexplained, so nothing is claimed from either. */
+#define DNET_CTH_INIT_P_VMS_TERMCHAR 4
+#define DNET_CTH_DC_TERM             66
+struct dnet_cth_termchar {
+    int      valid;         /* a DC$_TERM value of at least 8 bytes arrived */
+    uint8_t  devclass;      /* DC$_ */
+    uint8_t  devtype;       /* DT$_ */
+    uint16_t width;
+    uint8_t  page;
+    int      have_tt2;      /* the value reached bytes 8-11                 */
+    uint32_t ttchar;        /* TT$ bytes 4-6, RAW (not mapped)              */
+    uint32_t tt2char;       /* TT2$ bytes 8-11, RAW (not mapped)            */
+};
+/* Decode one parameter-4 VALUE. DNET_CTH_OK with out->valid = 1 only for a
+ * DC$_TERM value at least 8 bytes long; a shorter value is ETRUNC and a
+ * different device class EINVAL (out->valid = 0 either way). */
+int dnet_cth_vms_termchar_parse(const uint8_t *v, size_t vlen, struct dnet_cth_termchar *out);
+
 /* What a server's Initiate told us. Absent parameters stay 0. */
 struct dnet_cth_peer_init {
     uint8_t  version[3];
     uint16_t max_msg;       /* parameter 1 */
     uint16_t input_buf;     /* parameter 2 */
     int      have_bitmap;   /* parameter 3 present */
+    struct dnet_cth_termchar term;  /* parameter 4 (VMS), when it decoded */
 };
 int dnet_cth_initiate_parse(const uint8_t *msg, size_t len, struct dnet_cth_peer_init *out);
 

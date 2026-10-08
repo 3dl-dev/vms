@@ -148,13 +148,14 @@ static const char *dcl_path(void)
  * run_dcl - feed one DCL command line to the real DCL.EXE and capture its
  * stdout.
  *
- * `bind` decides whether the forked process records the console as its
- * terminal BEFORE exec'ing DCL. That is the only difference between the two
+ * `bind` (a device name, or NULL) decides whether the forked process records
+ * that terminal -- the console, or an RTAn: -- as its terminal BEFORE exec'ing
+ * DCL. That is the only difference between the two
  * runs, and it is made in the CHILD, after fork and before exec -- the same
  * place and the same two calls as src/ovmx_init/ovmx_init.c's login child.
  * The parent never binds anything, so nothing leaks between runs.
  */
-static int run_dcl(const char *cmdline, int bind, char *out, size_t outsz)
+static int run_dcl(const char *cmdline, const char *bind, char *out, size_t outsz)
 {
     char script[] = "/tmp/showterm_in.XXXXXX";
     char capture[] = "/tmp/showterm_out.XXXXXX";
@@ -192,7 +193,7 @@ static int run_dcl(const char *cmdline, int bind, char *out, size_t outsz)
 
         if (bind) {
             uint32_t chan = 0;
-            if (vms_kif_assign(CONSOLE_DEVNAM, &chan) != SS$_NORMAL)
+            if (vms_kif_assign(bind, &chan) != SS$_NORMAL)
                 _exit(126);
             if (vms_kif_setterm(chan) != SS$_NORMAL)
                 _exit(125);
@@ -424,7 +425,7 @@ int main(void)
          * name a terminal it could not have read. No binding is possible
          * here, so this is the UNBOUND run and nothing else.
          */
-        if (run_dcl("SHOW TERMINAL", 0, out, sizeof(out)) < 0) {
+        if (run_dcl("SHOW TERMINAL", NULL, out, sizeof(out)) < 0) {
             printf("  FAIL: DCL.EXE could not be run\n");
             printf("=== test_syssvc_showterm: 0 passed, 1 failed ===\n");
             return 1;
@@ -439,7 +440,7 @@ int main(void)
     }
 
     /* ---- 1. UNBOUND: nothing recorded this job's terminal ------------ */
-    if (run_dcl("SHOW TERMINAL", 0, out, sizeof(out)) < 0) {
+    if (run_dcl("SHOW TERMINAL", NULL, out, sizeof(out)) < 0) {
         printf("  FAIL: DCL.EXE could not be run\n");
         printf("=== test_syssvc_showterm: 0 passed, 1 failed ===\n");
         return 1;
@@ -480,7 +481,7 @@ int main(void)
                "a second process put the console in a known state through the executive (IO$_SETMODE)");
 
     /* ---- 3. BOUND: the session recorded it, exactly as PID 1 does ---- */
-    if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) < 0) {
+    if (run_dcl("SHOW TERMINAL", CONSOLE_DEVNAM, out, sizeof(out)) < 0) {
         printf("  FAIL: DCL.EXE could not be run for the bound case\n");
         printf("=== test_syssvc_showterm: %d passed, %d failed ===\n", pass, fail + 1);
         return 1;
@@ -532,7 +533,7 @@ int main(void)
                    "the second process changed width, Echo and Pasthru through the executive");
     }
 
-    if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) == 0) {
+    if (run_dcl("SHOW TERMINAL", CONSOLE_DEVNAM, out, sizeof(out)) == 0) {
         show_capture("SHOW TERMINAL (while another process holds the change)", out);
         /* negctl: showterm-width-page-fabricated */
         /* negctl: showterm-width-page-oracle-shaped */
@@ -560,7 +561,7 @@ int main(void)
         expect_ack(pipefd[0], "the second process restored the console");
     }
 
-    if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) == 0) {
+    if (run_dcl("SHOW TERMINAL", CONSOLE_DEVNAM, out, sizeof(out)) == 0) {
         show_capture("SHOW TERMINAL (after the change was undone)", out);
         /* negctl: showterm-width-page-fabricated */
         /* negctl: showterm-width-page-oracle-shaped */
@@ -577,6 +578,48 @@ int main(void)
     close(stopfd[1]);
     waitpid(child, NULL, 0);
     close(pipefd[0]);
+
+    /* ---- 5b. an RTAn: carries its ORIGINATING terminal's type (vms-14b) --
+     * The CTERM host mints an RTAn: and records the type the remote's
+     * Initiate conveyed (a real VAX SET HOST from an LA36 console: DT$_LA36
+     * 32, width 132, page 0). Do the same two executive calls here, bind a
+     * DCL job to that RTAn:, and read SHOW TERMINAL's header: the oracle
+     * (tests/lab/captures/decnet-sethost-inbound-20261005/
+     * vax-rta-show-terminal.txt) is "Terminal: _RTA1:      Device_Type: LA36
+     * Owner: _RTA1:". The console, asserted Unknown above, is the control. */
+    {
+        char rta[32] = "", hdr[96];
+        uint32_t cst = vms_kif_terminal_create("showterm-test", rta, sizeof(rta));
+
+        CHECK((cst & 1) && rta[0],
+              "an RTAn: was minted in the executive for the originating-terminal case");
+        if ((cst & 1) && rta[0]) {
+            uint32_t sst = vms_kif_terminal_setchar(rta,
+                               VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH | VMS_TERMCHAR_M_PAGE,
+                               32 /* DT$_LA36 */, 132, 0);
+            CHECK(sst == SS$_NORMAL,
+                  "the RTAn: takes the originating terminal's type LA36 (privileged setter)");
+            snprintf(hdr, sizeof(hdr), "Terminal: _%-11sDevice_Type: LA36          Owner:", rta);
+            if (run_dcl("SHOW TERMINAL", rta, out, sizeof(out)) == 0) {
+                show_capture("SHOW TERMINAL (bound to an RTAn: whose origin is an LA36)", out);
+                CHECK(has_line_prefix(out, hdr),
+                      "SHOW TERMINAL on the RTAn: prints Device_Type: LA36 in the oracle's columns");
+                CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
+                      "...and still no Width or Page value (the oracle's two-line block carries fields OVMX cannot source)");
+            } else {
+                CHECK(0, "SHOW TERMINAL could not be run bound to the RTAn:");
+            }
+            if (run_dcl("SHOW TERMINAL", CONSOLE_DEVNAM, out, sizeof(out)) == 0)
+                CHECK(has_line_prefix(out, HEADER_PREFIX),
+                      "NEGCTL: the console OPA0: still prints Device_Type: Unknown");
+            else
+                CHECK(0, "SHOW TERMINAL could not be run bound to the console");
+            CHECK(vms_kif_terminal_setchar(CONSOLE_DEVNAM, VMS_TERMCHAR_M_TYPE, 32, 0, 0)
+                      == SS$_IVDEVNAM,
+                  "NEGCTL: the RTAn: setter refuses the console (SS$_IVDEVNAM)");
+            (void)vms_kif_terminal_delete(rta);
+        }
+    }
 
     /* ---- 6. the bindings did not leak into this process -------------- */
     {

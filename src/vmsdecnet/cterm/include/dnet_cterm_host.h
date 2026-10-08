@@ -54,6 +54,7 @@
 #include <stdint.h>
 
 #include "dnet_cterm.h"
+#include "dnet_cterm_hostfsm.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -156,6 +157,18 @@ long dnet_cterm_host_write(struct dnet_cterm_host_session *hs,
  * turned echo off (LOGINOUT's Password: read). The CTERM host turns that into
  * a no-echo Start Read; the remote server does the echoing (rd vms-a70). */
 int dnet_cterm_host_echo(const struct dnet_cterm_host_session *hs);
+
+/*
+ * Record the ORIGINATING terminal on the session's RTAn: (rd vms-14b): the
+ * device type, width and page length the remote's CTERM Initiate conveyed
+ * (struct dnet_cth_termchar, decoded by the host FSM), written to the
+ * executive's device row -- where $GETDVI, SHOW TERMINAL and F$GETDVI read
+ * them. Only a `valid` decode is recorded; anything else leaves the row as it
+ * was minted (type Unknown). Returns the executive's status (SS$_BADPARAM when
+ * there is nothing valid to record).
+ */
+uint32_t dnet_cterm_host_record_origin(struct dnet_cterm_host_session *hs,
+                                       const struct dnet_cth_termchar *tc);
 
 /* The substrate channel to poll(), or -1. The ONE substrate detail a caller
  * needs, and the caller may do nothing with it but wait on it. */

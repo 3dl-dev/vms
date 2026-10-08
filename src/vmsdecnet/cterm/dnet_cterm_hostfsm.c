@@ -114,8 +114,32 @@ int dnet_cth_initiate_parse(const uint8_t *msg, size_t len, struct dnet_cth_peer
         if (type == 1 && vlen >= 2) out->max_msg = get16(v);
         else if (type == 2 && vlen >= 2) out->input_buf = get16(v);
         else if (type == 3) out->have_bitmap = 1;
+        else if (type == DNET_CTH_INIT_P_VMS_TERMCHAR)
+            /* A value that does not decode leaves term.valid = 0: the
+             * originating terminal then stays honestly unknown. */
+            (void)dnet_cth_vms_termchar_parse(v, vlen, &out->term);
         off += 2u + vlen;
     }
+    return DNET_CTH_OK;
+}
+
+int dnet_cth_vms_termchar_parse(const uint8_t *v, size_t vlen, struct dnet_cth_termchar *out)
+{
+    if (!v || !out) return DNET_CTH_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (vlen < 8) return DNET_CTH_ETRUNC;
+    if (v[0] != DNET_CTH_DC_TERM) return DNET_CTH_EINVAL;
+    out->devclass = v[0];
+    out->devtype  = v[1];
+    out->width    = get16(v + 2);
+    out->ttchar   = (uint32_t)v[4] | ((uint32_t)v[5] << 8) | ((uint32_t)v[6] << 16);
+    out->page     = v[7];
+    if (vlen >= 12) {
+        out->have_tt2 = 1;
+        out->tt2char  = (uint32_t)v[8] | ((uint32_t)v[9] << 8) |
+                        ((uint32_t)v[10] << 16) | ((uint32_t)v[11] << 24);
+    }
+    out->valid = 1;
     return DNET_CTH_OK;
 }
 

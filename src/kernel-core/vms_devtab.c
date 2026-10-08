@@ -1053,6 +1053,71 @@ long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg)
     return term_rpi(proc, arg, 0);
 }
 
+/*
+ * vms_ioctl_term_setchar - record the ORIGINATING terminal's device type,
+ * width and page length on an RTAn: (rd vms-14b). The CTERM host that minted
+ * the unit calls it with what the remote VAX conveyed in its CTERM Initiate;
+ * $GETDVI (vms_devinfo devtype/width/page), SHOW TERMINAL and F$GETDVI read the
+ * row back. Same gate as TERM_SETRPI: substrate superuser or SETPRV, and only
+ * a dynamically-minted RTAn: (a local terminal is never redefined here). Each
+ * field applies only under its flag; out-of-range values are SS$_BADPARAM.
+ */
+long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_termchar_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    if (!exec_current_is_privileged() &&
+        !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    if ((args.flags & ~(VMS_TERMCHAR_M_TYPE | VMS_TERMCHAR_M_WIDTH |
+                        VMS_TERMCHAR_M_PAGE)) != 0 ||
+        args.devtype > 0xff || args.width > 0xffff || args.page > 0xff) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    if (args.flags & VMS_TERMCHAR_M_TYPE)
+        dev->devtype = args.devtype;
+    if (args.flags & VMS_TERMCHAR_M_WIDTH)
+        dev->width = args.width;
+    if (args.flags & VMS_TERMCHAR_M_PAGE)
+        dev->page = args.page;
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;

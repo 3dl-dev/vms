@@ -2357,6 +2357,43 @@ _Static_assert(VMS_IOCTL_TERM_SETRPI == 0xC058567Au,
 _Static_assert(VMS_IOCTL_TERM_GETRPI == 0xC058567Bu,
                "VMS_IOCTL_TERM_GETRPI encodes differently here than on the reference build");
 
+/*
+ * RTAn: ORIGINATING-TERMINAL TYPE AND GEOMETRY (rd vms-14b). On VMS a remote
+ * terminal takes its device type and characteristics from the terminal the
+ * SET HOST came from: a real VAX SET HOST from an LA36-typed console shows
+ * "Device_Type: LA36", Width 132, Page 0 on the RTAn: (oracle tests/lab/
+ * captures/decnet-sethost-inbound-20261005/vax-rta-show-terminal.txt). The
+ * CTERM host that minted the RTAn: decodes what the VAX conveyed (its CTERM
+ * Initiate, src/vmsdecnet/cterm/dnet_cterm_hostfsm.c) and records ONLY those
+ * values here; $GETDVI (struct vms_devinfo devtype/width/page) reads them back.
+ *
+ * SET is privileged exactly as TERM_SETRPI (substrate superuser or SETPRV):
+ * only the network ACP that minted the terminal may say what is at its far
+ * end. Only a dynamically-minted RTAn: accepts it (SS$_IVDEVNAM otherwise --
+ * a local terminal such as OPA0: is never redefined through this door). Each
+ * field applies only when its VMS_TERMCHAR_M_* flag is set, so a value the
+ * wire did not carry is never written. Bounds are the wire's own field sizes
+ * (DT$ code and page length are bytes, width a word); a larger value is
+ * SS$_BADPARAM, never clipped. OVMX design choice (Rule 8): the byte layout.
+ */
+#define VMS_TERMCHAR_M_TYPE   0x1u   /* apply devtype (a DT$_ code)        */
+#define VMS_TERMCHAR_M_WIDTH  0x2u   /* apply width                        */
+#define VMS_TERMCHAR_M_PAGE   0x4u   /* apply page length                  */
+struct vms_termchar_args {
+    char     devnam[VMS_DEVNAM_SIZE];        /* the RTAn: terminal (in)        */
+    uint32_t flags;                          /* VMS_TERMCHAR_M_*               */
+    uint32_t devtype;                        /* DT$_ code, 0..255              */
+    uint32_t width;                          /* 0..65535                       */
+    uint32_t page;                           /* 0..255                         */
+    uint32_t status;                         /* return: SS$_ status            */
+    uint32_t pad;
+};
+#define VMS_IOCTL_TERM_SETCHAR  _IOWR(VMS_IOC_MAGIC, 0x7c, struct vms_termchar_args)
+_Static_assert(sizeof(struct vms_termchar_args) == 40,
+               "struct vms_termchar_args changed size -- RTAn: terminal type would decode at the wrong offsets");
+_Static_assert(VMS_IOCTL_TERM_SETCHAR == 0xC028567Cu,
+               "VMS_IOCTL_TERM_SETCHAR encodes differently here than on the reference build");
+
 _Static_assert(sizeof(struct vms_termlogin_args) == 56,
                "struct vms_termlogin_args changed size -- RTAn: netlogin note would decode at the wrong offsets");
 _Static_assert(VMS_IOCTL_TERM_SETLOGIN == 0xC038565Cu,

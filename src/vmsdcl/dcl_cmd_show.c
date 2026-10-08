@@ -1934,6 +1934,33 @@ static void show_device_disk_full(const struct vms_devinfo *info,
 static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz);
 
 /*
+ * A terminal's device type, as VMS spells it -- ONLY the spellings an oracle
+ * pins (rd vms-14b). The executive row carries a DT$_ code: 0 (DT$_TTYUNKN)
+ * on a terminal nobody identified, or, on an RTAn:, the type of the terminal
+ * a SET HOST came from (recorded by the CTERM host). Codes are the V7.3 node's
+ * own DCDEF (docs/oracle/vax73-starlet-defs/DCDEF.txt: DT$_TTYUNKN 0,
+ * DT$_LA36 32). Spellings:
+ *   - SHOW TERMINAL "Unknown" and SHOW DEVICE/FULL "unknown":
+ *     docs/oracle/vax73-terminal-device.md sec 3 and sec 7.4;
+ *   - "LA36" in both: sec 1, sec 5, and the RTAn: of a real SET HOST from an
+ *     LA36 console (tests/lab/captures/decnet-sethost-inbound-20261005/
+ *     vax-rta-show-terminal.txt).
+ * Any other code returns NULL: no oracle has shown its spelling, so none is
+ * written down (Rule 10) -- the caller prints the field empty rather than a
+ * plausible name.
+ */
+#define SHOW_DT_TTYUNKN  0
+#define SHOW_DT_LA36     32
+static const char *terminal_type_name(uint32_t devtype, int show_device)
+{
+    switch (devtype) {
+    case SHOW_DT_TTYUNKN: return show_device ? "unknown" : "Unknown";
+    case SHOW_DT_LA36:    return "LA36";
+    default:              return NULL;
+    }
+}
+
+/*
  * SHOW DEVICE/FULL for a terminal -- the deferred "section 5" rung (vms-bed),
  * oracle docs/oracle/vax73-terminal-device.md sec 5. Renders ONLY fields OVMX
  * can source honestly from vms_devinfo; any oracle-listed field with no real
@@ -1949,13 +1976,22 @@ static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz);
  * Owner lines print only for an owned device (owner_pid != 0); ownership is not
  * allocation (oracle sec 4). owner_uic is the owner's real caller_uic(), shown
  * [g,m] octal (the numeric UIC VMS accepts; a name form would need a lookup OVMX
- * lacks here). Device type is "unknown" -- OVMX's console type is genuinely
- * unidentified (oracle sec 3).
+ * lacks here). Device type is the executive row's, spelled by
+ * terminal_type_name(): "unknown" for OVMX's console (genuinely unidentified,
+ * oracle sec 3), "LA36" for an RTAn: whose SET HOST came from an LA36 (oracle
+ * sec 5's spelling). A type no oracle has spelled drops the "device type"
+ * clause rather than inventing a name for it.
  */
 static void show_device_terminal_full(const struct vms_devinfo *info)
 {
-    printf("\nTerminal %s, device type unknown, is online, record-oriented device.\n\n",
-           info->devnam);
+    const char *tname = terminal_type_name(info->devtype, 1);
+
+    if (tname)
+        printf("\nTerminal %s, device type %s, is online, record-oriented device.\n\n",
+               info->devnam, tname);
+    else
+        printf("\nTerminal %s, is online, record-oriented device.\n\n",
+               info->devnam);
 
     printf("    Error count            %10u    Operations completed   %10llu\n",
            info->errcnt, (unsigned long long)info->opcnt);
@@ -2815,12 +2851,11 @@ static void show_terminal_render(const struct vms_devinfo *info)
     /*
      * Header. The leading underscore is the physical-name form the
      * oracle prints (section 1); the executive keys its table on the
-     * form without it. "Unknown" is the oracle's spelling for a
-     * terminal whose type is not identified (section 3), and it is the
-     * only device type the executive's table can report -- vms.ko
-     * creates the console with type 0 and has no operation that sets
-     * another, so no other spelling is reachable and none is written
-     * down here.
+     * form without it. The device type is the executive row's DT$_
+     * code, spelled by terminal_type_name(): "Unknown" (section 3) for
+     * the console, which vms.ko creates with type 0; on an RTAn:, the
+     * originating terminal's type the CTERM host recorded (rd vms-14b),
+     * e.g. "LA36" for a SET HOST from an LA36 console.
      */
     /*
      * FIELD WIDTHS MEASURED OFF THE CAPTURE, NOT COPIED FROM THE OLD
@@ -2834,13 +2869,9 @@ static void show_terminal_render(const struct vms_devinfo *info)
      */
     printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n",
            phys,
-           /* "Unknown" is pinned (section 3) and 0 is the only device
-            * type the executive's table can hold: vms.ko creates the
-            * console with type 0 and implements no operation that sets
-            * another. A type the oracle has not shown us gets NO
-            * spelling rather than a plausible one -- the first device
-            * with a real type owes this line its pin. */
-           info->devtype == 0 ? "Unknown" : "",
+           /* A type the oracle has not shown us gets NO spelling rather
+            * than a plausible one. */
+           terminal_type_name(info->devtype, 0) ? terminal_type_name(info->devtype, 0) : "",
            owner);
     /* Remote Port Info (rd vms-2166): a remote terminal's node::user, read
      * from the executive's device row (DVI$_TT_ACCPORNAM) -- oracle

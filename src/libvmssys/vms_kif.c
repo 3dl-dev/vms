@@ -1640,6 +1640,28 @@ uint32_t vms_kif_terminal_getrpi(const char *devnam, char *rpi, uint32_t rpi_siz
     return args.status;
 }
 
+/* RTAn: originating-terminal type/width/page (rd vms-14b). Privileged; only
+ * the fields named in `flags` (VMS_TERMCHAR_M_*) are applied. */
+uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
+                                  uint32_t devtype, uint32_t width, uint32_t page)
+{
+    struct vms_termchar_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    args.flags   = flags;
+    args.devtype = devtype;
+    args.width   = width;
+    args.page    = page;
+
+    KIF_CALL(VMS_IOCTL_TERM_SETCHAR, &args);
+    return args.status;
+}
+
 uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
 {
     struct vms_getvol_args args;

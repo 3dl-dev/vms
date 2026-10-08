@@ -188,14 +188,18 @@ int main(void)
     st = access_hello(chan, 0, &a);
     check($VMS_STATUS_SUCCESS(st) && a.attr.efblk == HELLO_EFBLK,
           "IO$_ACCESS HELLO.TXT for read (efblk 34)");
-    /* vms-263e: a mastered file carries its creation and revision dates and
-     * revision count 1, as a created-and-written file on a real VMS volume. */
+    /* vms-263e: this is the real VAX volume (tests/ods2/real_vax_ods2.dsk):
+     * HELLO.TXT was created and written on OpenVMS, so its header carries a
+     * creation date, a revision date at the close (10 ms later) and revision
+     * count 1. */
     uint64_t cre0, revd0;
     uint16_t rev0 = a.attr.revision;
     memcpy(&cre0, a.attr.credate, 8);
     memcpy(&revd0, a.attr.revdate, 8);
-    check($VMS_STATUS_SUCCESS(st) && cre0 != 0 && revd0 == cre0 && rev0 == 1,
-          "HELLO.TXT's header has a creation date, revision date == creation date, revision count 1");
+    printf("  INFO: HELLO.TXT credate=%%X%016llX revdate=%%X%016llX revision=%u\n",
+           (unsigned long long)cre0, (unsigned long long)revd0, (unsigned)rev0);
+    check($VMS_STATUS_SUCCESS(st) && cre0 != 0 && revd0 >= cre0 && rev0 == 1,
+          "HELLO.TXT's header (written on OpenVMS) has a creation date, a later-or-equal revision date, revision count 1");
     rw_init(&r, chan, 1, 0, HELLO_VALID, rdbuf);
     st = vms_kif_acp_readvb(&r);
     check($VMS_STATUS_SUCCESS(st) && r.xferred == HELLO_VALID,

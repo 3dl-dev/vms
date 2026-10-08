@@ -551,14 +551,10 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
                 result = SS$_ABORT;
                 continue;
             }
-            /* OVMX RMS $CREATE does not yet fill the NAM resultant (rd
-             * vms-98e); when it comes back empty, the resultant is read by a
-             * real $PARSE/$SEARCH of the file just created -- never omitted:
-             * a VMS COPY that asked for NAME rejects an ACK without it
-             * (RMS-F-BUG_DAP, DAP code 0001A006 = MAC 10 sync / MIC ACK,
-             * observed against a booted OVMX 2026-10-05). */
-            if (want_name && !rsa[0] && resolve_one(spec, rsa, sizeof rsa) != 0)
-                rsa[0] = '\0';
+            /* $CREATE returns the resultant in the NAM (rd vms-98e). A VMS
+             * COPY that asked for NAME rejects an ACK without it (RMS-F-BUG_DAP,
+             * DAP code 0001A006 = MAC 10 sync / MIC ACK, observed against a
+             * booted OVMX 2026-10-05), so no resultant is an honest refusal. */
             if (want_name && !rsa[0]) {
                 (void)dnet_fal_wclose(h);
                 if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_CRE, 0) < 0)

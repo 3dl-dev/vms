@@ -101,6 +101,7 @@
 #include "vms_kif.h"
 
 void vms$$lock_complete_efn(uint32_t efn);   /* sys_efn.c */
+void vms$$deliver_pending_asts(void);        /* sys_ast.c */
 
 #ifndef SS$_IVBUFLEN
 #define SS$_IVBUFLEN 844      /* %X34C, observed $ENQ LOCK.NAME32 */
@@ -330,6 +331,10 @@ uint32_t (sys$enq)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     /* An at-once grant under LCK$M_SYNCSTS (SS$_SYNCH) sets no event flag. */
     if ((status & 1) && status != SS$_SYNCH)
         vms$$lock_complete_efn(efn);
+    /* A completion AST the executive queued for an at-once grant is
+     * delivered as the service returns, as on OpenVMS (LOCK.ASYNC.DONE). */
+    if ((status & 1) && astadr)
+        vms$$deliver_pending_asts();
 
     return status;
 }

@@ -1150,6 +1150,19 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
     TR("crtlfd: main enter", 0);
 #ifdef OVMX_CRTLFD_TRACE
     tr_install();
+    {
+        /* Probe: RMS from the C RTL's own entry, before any hook nesting. */
+        struct FAB pf = cc$rms_fab;
+        static char pspec[] = "VDA0:[SYSTMP]CFDIN.TXT";
+        pf.fab$l_fna = pspec;
+        pf.fab$b_fns = (uint8_t)(sizeof pspec - 1);
+        pf.fab$b_fac = FAB$M_GET;
+        TR("crtlfd: probe $open ...", 0);
+        uint32_t pst = sys$open(&pf, 0, 0);
+        TR("crtlfd: probe $open", pst);
+        if (pst & 1)
+            TR("crtlfd: probe $close", sys$close(&pf, 0, 0));
+    }
 #endif
     __ovmx_sys_hook = rms_hook;
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);

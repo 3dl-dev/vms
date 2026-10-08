@@ -419,7 +419,7 @@ vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len
 /* Which frames name a resource FOR A DIRECTORY, and is this one of them? */
 static int dlm_names_for_directory(vms_wire_view_t *v, uint8_t op)
 {
-	if (op == VMS_DLM_WIREOP_ENQ)
+	if (op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_DIR_LOOKUP_TR)
 		return dlm_is_root(v);
 	return op == VMS_DLM_WIREOP_DIR_REMOVE || op == VMS_DLM_WIREOP_REBUILD;
 }
@@ -475,7 +475,8 @@ vms_codec_status_t vms_dlm_dir_answer_build(const uint8_t *req_body,
 		return VMS_CODEC_E_INVAL;
 	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
 		return VMS_CODEC_E_SHORT;
-	if (req_body[VMS_OFB_DLM_OP] != VMS_DLM_WIREOP_ENQ)
+	if (req_body[VMS_OFB_DLM_OP] != VMS_DLM_WIREOP_ENQ &&
+	    req_body[VMS_OFB_DLM_OP] != VMS_DLM_WIREOP_DIR_LOOKUP_TR)
 		return VMS_CODEC_E_CLASS;
 	st = vms_dlm_res_ident_parse_body(req_body, req_len, &id);
 	if (st != VMS_CODEC_OK)
@@ -487,6 +488,7 @@ vms_codec_status_t vms_dlm_dir_answer_build(const uint8_t *req_body,
 	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			(uint8_t)(VMS_DLM_CAT_REQUEST | VMS_WIRE_RESPONSE_BIT));
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	for (i = VMS_DLM_DIR_ANSWER_LO; i < VMS_DLM_DIR_ANSWER_HI; i++)
 		vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + i, 0u);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_DIR_STATUS, status);

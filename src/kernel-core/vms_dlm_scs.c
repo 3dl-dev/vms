@@ -219,10 +219,13 @@ struct vms_dlm_scs {
 	uint32_t dir_misaddressed;    /* the lookup's key is not ours by OUR  */
 				       /* vector (served anyway, as VMS does)  */
 	uint32_t dir_regs_seen;       /* op-0x0d registrations recorded       */
+	uint32_t dir_tr_lookups;      /* op-0x08 barrier lookups answered     */
+	uint32_t dir_tr_redirect_held;/* op-0x08 whose answer would redirect: */
+				       /* that shape is unobserved, not sent   */
 	uint8_t  dir_said_self_held;
 	uint8_t  dir_said_unanswered;
 	uint8_t  dir_said_misaddressed;
-	uint8_t  dir_pad;
+	uint8_t  dir_said_tr_redirect;
 };
 
 /* ==========================================================================
@@ -1314,6 +1317,30 @@ static int dlm_arm_dir_is_ours(void *ctx, uint32_t hash)
 
 /* op-0x01 from a real VMS system: answer the lookup from the table. 0 when an
  * answer was staged; -1 when it is not a root lookup or is not answered. */
+/*
+ * An op-0x08 lookup (rd vms-629) whose answer would be a REDIRECT. Both real
+ * samples are 0xf9 answers for the sender's own SYS$SYS_ID, which no other
+ * system masters; a 0xf8 to an op-0x08 has never been seen on a wire, so it is
+ * not sent -- counted and said once instead.
+ */
+static int dlm_arm_dir_tr_redirect(struct vms_dlm_scs *d,
+				   const struct dlm_scs_request *req,
+				   enum vms_dlm_dir_outcome o)
+{
+	if (req->opcode != (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)
+		return 0;
+	if (o != VMS_DLM_DIR_ANSWER_REDIRECT) {
+		d->dir_tr_lookups++;
+		return 0;
+	}
+	d->dir_tr_redirect_held++;
+	dlm_arm_dir_say(d, &d->dir_said_tr_redirect,
+		"%DLM, a VMS system's barrier lookup names a resource another "
+		"system masters: a redirect to that lookup has never been "
+		"observed, so it is not answered");
+	return 1;
+}
+
 static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			      const struct dlm_scs_request *req,
 			      const struct vms_dlm_res_ident *id,
@@ -1348,6 +1375,8 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			"(no directory table, or it is full): not answered");
 		return -1;
 	}
+	if (dlm_arm_dir_tr_redirect(d, req, o))
+		return -1;
 	status = (o == VMS_DLM_DIR_ANSWER_REDIRECT) ? VMS_DLM_DIR_REDIRECT :
 						      VMS_DLM_DIR_YOU_MASTER;
 	memset(d->txframe, 0, sizeof(d->txframe));
@@ -1381,7 +1410,8 @@ static int dlm_arm_directory(struct vms_dlm_scs *d,
 	if (vms_dlm_res_ident_parse_body(req->body, req->len, &id) !=
 	    VMS_CODEC_OK)
 		return -1;
-	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_ENQ)
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_ENQ ||
+	    req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)
 		return dlm_arm_dir_lookup(d, req, &id, reply);
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_REMOVE) {
 		(void)vms_dlm_dir_remove(&d->dir, &id, req->from_csid);

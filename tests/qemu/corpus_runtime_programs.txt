@@ -134,6 +134,7 @@ sys_getsyi
 sys_gettim_prec
 sys_getuai
 sys_getutc
+sys_ident
 sys_lckpag
 sys_numtim
 sys_purge_ws

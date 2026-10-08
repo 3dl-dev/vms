@@ -127,6 +127,8 @@ _Static_assert(RMS$_RTB       ==  98728, "RMS$_RTB != VAX V7.3 oracle 98728");
 _Static_assert(RMS$_SEQ       == 100012, "RMS$_SEQ != VAX V7.3 oracle 100012");
 _Static_assert(RMS$_SIZ       == 100028, "RMS$_SIZ != VAX V7.3 oracle 100028");
 _Static_assert(RMS$_SYN       == 100052, "RMS$_SYN != VAX V7.3 oracle 100052");
+_Static_assert(RMS$_RBF       ==  99924, "RMS$_RBF != VAX V7.3 oracle 99924");
+_Static_assert(RMS$_USZ       == 100084, "RMS$_USZ != VAX V7.3 oracle 100084");
 _Static_assert(RMS$_TNS       ==  98744, "RMS$_TNS != VAX V7.3 oracle 98744");
 _Static_assert(RMS$_TRE       == 100060, "RMS$_TRE != VAX V7.3 oracle 100060");
 _Static_assert(RMS$_TYP       == 100068, "RMS$_TYP != VAX V7.3 oracle 100068");

@@ -265,6 +265,64 @@ int main(void)
     rfm_roundtrip("RMSSTM.DAT",  FAB$C_STMLF, 0);
     rfm_roundtrip("RMSFIX.DAT",  FAB$C_FIX,   20);
 
+    /* ---- vms-254: block I/O ($WRITE/$READ, FAC BIO) over the ACP window.
+     * 1300 bytes written at VBN 1 span three blocks; after $CLOSE + re-$OPEN
+     * a $READ from VBN 1 returns exactly those 1300 bytes (the end of file is
+     * byte-exact on the ODS-2 header, EBK/FFB), and the next-block $READ is
+     * RMS$_EOF. This is the byte-stream substrate the C RTL's read()/write()
+     * on a stream file rides. ---- */
+    {
+        char spec[128];
+        snprintf(spec, sizeof(spec), "%s[OVMXDIR]BLKIO.DAT", ODS2_UNIT);
+        static char wbuf[1300], rbuf[2048];
+        for (int i = 0; i < (int)sizeof wbuf; i++)
+            wbuf[i] = (char)(' ' + (i * 7) % 95);
+
+        struct FAB fab = cc$rms_fab;
+        fab.fab$l_fna = spec;
+        fab.fab$b_fns = (uint8_t)strlen(spec);
+        fab.fab$b_org = FAB$C_SEQ;
+        fab.fab$b_rfm = FAB$C_UDF;
+        fab.fab$b_fac = FAB$M_PUT | FAB$M_GET | FAB$M_BIO;
+        uint32_t bst = sys$create(&fab, 0, 0);
+        check(bst == RMS$_NORMAL, "vms-254: sys$create BLKIO.DAT (FAC BIO) over the ACP");
+        if (bst == RMS$_NORMAL) {
+            struct RAB rab = cc$rms_rab;
+            rab.rab$l_fab = &fab;
+            sys$connect(&rab, 0, 0);
+            rab.rab$l_bkt = 1;
+            rab.rab$l_rbf = wbuf;
+            rab.rab$w_rsz = sizeof wbuf;
+            check(sys$write(&rab, 0, 0) == RMS$_NORMAL,
+                  "vms-254: sys$write 1300 bytes at VBN 1 -> IO$_WRITEVBLK");
+            sys$close(&fab, 0, 0);
+
+            fab.fab$b_fac = FAB$M_GET | FAB$M_BIO;
+            bst = sys$open(&fab, 0, 0);
+            check(bst == RMS$_NORMAL, "vms-254: re-$OPEN BLKIO.DAT for block reads");
+            if (bst == RMS$_NORMAL) {
+                rab = cc$rms_rab;
+                rab.rab$l_fab = &fab;
+                sys$connect(&rab, 0, 0);
+                rab.rab$l_bkt = 1;
+                rab.rab$l_ubf = rbuf;
+                rab.rab$w_usz = sizeof rbuf;
+                bst = sys$read(&rab, 0, 0);
+                check(bst == RMS$_NORMAL && rab.rab$w_rsz == sizeof wbuf &&
+                      memcmp(rbuf, wbuf, sizeof wbuf) == 0,
+                      "vms-254: sys$read from VBN 1 returns the 1300 bytes byte-exact (EOF from the header)");
+                rab.rab$l_bkt = 0;
+                check(sys$read(&rab, 0, 0) == RMS$_EOF,
+                      "vms-254: next-block sys$read past the end of file -> RMS$_EOF");
+                sys$close(&fab, 0, 0);
+            }
+            fab = cc$rms_fab;
+            fab.fab$l_fna = spec;
+            fab.fab$b_fns = (uint8_t)strlen(spec);
+            check(sys$erase(&fab, 0, 0) == RMS$_NORMAL, "vms-254: sys$erase BLKIO.DAT");
+        }
+    }
+
     /* If rms_io_write() ($PUT) writes a record one VBN too high while
      * rms_io_read() ($GET) still reads the true VBN, every byte-exact readback
      * above misses on re-$OPEN -- so this whole-suite gate reddens exactly when

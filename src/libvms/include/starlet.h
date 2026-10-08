@@ -1120,6 +1120,12 @@ uint32_t sys$delete(void *rab, void (*err)(void *), void (*suc)(void *));
 /** sys$find - Find record, position without reading (cb=RAB) */
 uint32_t sys$find(void *rab, void (*err)(void *), void (*suc)(void *));
 
+/** sys$read - Block I/O: read virtual blocks starting at rab$l_bkt (cb=RAB, FAC BIO+GET) */
+uint32_t sys$read(void *rab, void (*err)(void *), void (*suc)(void *));
+
+/** sys$write - Block I/O: write virtual blocks starting at rab$l_bkt (cb=RAB, FAC BIO+PUT) */
+uint32_t sys$write(void *rab, void (*err)(void *), void (*suc)(void *));
+
 /** sys$rewind - Rewind record stream to beginning (cb=RAB) */
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));
 

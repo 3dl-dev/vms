@@ -36,10 +36,12 @@
 #include "dnet_cterm.h"     /* dnet_fal_access_decode (bounded cred decoder) */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sysuaf.h"         /* the ONE faithful authenticator (Purdy)        */
 #include "ssdef.h"
+#include "rmsdef.h"
 
 #define FAL_BUFSIZ  1459   /* the NSP segment size OVMX negotiates (oracle) */
 
@@ -89,10 +91,9 @@ static int send_complete(struct dnet_dap_transport *t, uint8_t cmpfunc)
     return fal_send(t, &m);
 }
 
-/* STATUS. A real VMS FAL also carries the system condition in STV (lab:
- * FNF -> STV 0x0910 = real SS$_NOSUCHFILE); OVMX sends NO STV until its own
- * ssdef values match real VMS (rd vms-ef2: OVMX SS$_NOSUCHFILE is 2320, which
- * real VMS reads as NOSUCHOBJECT) -- an honest omission, not a wrong code. */
+/* STATUS without an STV. The RMS refusals of an access carry the real VMS
+ * STV a VAX FAL sends (rms_status_msg, rd vms-277a); the protocol statuses
+ * sent here (sync, unsupported, EOF) carry none. */
 static int send_status(struct dnet_dap_transport *t, uint16_t stscode, uint32_t stv)
 {
     struct dnet_dap_msg m;
@@ -392,48 +393,319 @@ static int send_name(struct dnet_dap_transport *t, unsigned type, const char *sp
     return fal_send(t, &m);
 }
 
-/* Split a resultant "DEV:[DIR]NAME.TYP;V" after its directory (or device). */
-static size_t name_split(const char *rsa)
+/* ---- blocked replies (rd vms-277a) ----------------------------------------
+ * A real VMS FAL answers a DIRECTORY LIST, an ERASE or a RENAME in ONE Session
+ * Control buffer: every message but the last carries FLAGS.LENGTH, the last
+ * runs to the end of the segment (spec 3.2; both peers advertise SYSCAP
+ * "blocking up to response", tests/lab/captures/decnet-fal-verbs-20261008).
+ * The batch holds the committed (LENGTH) messages plus the pending last one in
+ * both forms, and never builds a segment longer than the smaller of the
+ * peer's CONFIGURATION BUFSIZ and OVMX's own. */
+struct fal_batch {
+    struct dnet_dap_transport *t;
+    size_t  cap;
+    uint8_t seg[DNET_FAL_SEG_MAX];
+    size_t  len;
+    uint8_t last[DNET_DAP_MAX_MSG], lastb[DNET_DAP_MAX_MSG];
+    size_t  lastlen, lastblen;
+    int     have_last;
+};
+
+static int fb_flush(struct fal_batch *b)
 {
-    const char *rb = strrchr(rsa, ']');
-    if (!rb) rb = strrchr(rsa, '>');
-    if (!rb) rb = strrchr(rsa, ':');
-    return rb ? (size_t)(rb - rsa + 1) : 0;
+    if (!b->have_last) return 0;
+    memcpy(b->seg + b->len, b->last, b->lastlen);
+    size_t n = b->len + b->lastlen;
+    b->len = 0; b->have_last = 0;
+    return b->t->send(b->t->ctx, b->seg, n);
 }
 
-/* DIRECTORY LIST (spec 5.2.11): for every file the spec (wildcards allowed)
- * resolves to, NAME(directory) when the directory changes, NAME(file), and the
- * main ATTRIBUTES if DISPLAY asks; then ACCESS COMPLETE(RESPONSE). Names are
- * the RESULTANT specs RMS $SEARCH returns (dnet_fal_search_*), never composed
- * here. A real VMS COPY lists its input this way before opening it. */
-static uint32_t server_dirlist(struct dnet_dap_transport *t, const struct dnet_dap_msg *acc)
+static int fb_add(struct fal_batch *b, const struct dnet_dap_msg *m)
+{
+    uint8_t u[DNET_DAP_MAX_MSG], k[DNET_DAP_MAX_MSG];
+    size_t un = 0, kn = 0;
+    if (dnet_dap_encode(m, 0, u, sizeof u, &un) != DNET_DAP_OK ||
+        dnet_dap_encode(m, 1, k, sizeof k, &kn) != DNET_DAP_OK)
+        return -1;
+    if (b->have_last) {
+        if (b->len + b->lastblen + un > b->cap) {
+            if (fb_flush(b) < 0) return -1;
+        } else {
+            memcpy(b->seg + b->len, b->lastb, b->lastblen);
+            b->len += b->lastblen;
+        }
+    }
+    memcpy(b->last, u, un);  b->lastlen = un;
+    memcpy(b->lastb, k, kn); b->lastblen = kn;
+    b->have_last = 1;
+    return 0;
+}
+
+static int fb_name(struct fal_batch *b, unsigned type, const char *spec)
+{
+    struct dnet_dap_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = DNET_DAP_NAME;
+    m.u.name.nametype = type;
+    snprintf(m.u.name.namespec, sizeof m.u.name.namespec, "%s", spec);
+    return fb_add(b, &m);
+}
+
+static int fb_simple(struct fal_batch *b, enum dnet_dap_op op)
+{
+    struct dnet_dap_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = op;
+    return fb_add(b, &m);
+}
+
+static int fb_complete(struct fal_batch *b)
+{
+    struct dnet_dap_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = DNET_DAP_ACCESS_COMPLETE;
+    m.u.complete.cmpfunc = DNET_DAP_CMP_RESPONSE;
+    return fb_add(b, &m);
+}
+
+/* ---- RMS completion -> DAP STATUS (rd vms-277a) ----------------------------
+ * The REFUSAL itself always comes from RMS over the executive ACP, as this
+ * process (the authenticated user); only its ENCODING is chosen here, and it
+ * is the encoding a real VMS V7.3 FAL put on the wire for the same outcome
+ * (tests/lab/captures/decnet-fal-verbs-20261008, segment by segment):
+ *   - not found (DIRECTORY LIST, OPEN, ERASE): MAC 4 / MIC 062 FNF,
+ *     STV 0x0910 (real VMS SS$_NOSUCHFILE)              STATUS 09 00 32 40 00 00 02 10 09
+ *   - OPEN refused by protection: the SAME FNF + 0x0910 -- the VAX FAL
+ *     answered DNTEST's TYPE of a SYSTEM-only file exactly so (every OPEN
+ *     refusal is answered FNF, the server's behaviour before vms-277a too)
+ *   - ERASE refused by protection: MAC 4 / MIC 0125 PRV, STV 0x24 (real VMS
+ *     SS$_NOPRIV)                                        STATUS 09 00 55 40 00 00 01 24
+ *   - RENAME refused by protection: MAC 4 / MIC 0137 RMV, no STV
+ *                                                        STATUS 09 00 5f 40
+ * The STV values are the REAL VMS condition values seen on the wire, not
+ * OVMX's own ssdef.h numbers (rd vms-ef2: several of those differ from VMS).
+ * Other refusals map to the DAP 5.6 Table 4 MICCODE of the same RMS error,
+ * without an STV (none was observed to copy). */
+#define VMS_WIRE_SS_NOSUCHFILE 0x0910u
+#define VMS_WIRE_SS_NOPRIV     0x0024u
+
+enum fal_verb { FV_OPEN, FV_LIST, FV_ERASE, FV_RENAME };
+
+static void rms_status_msg(enum fal_verb v, uint32_t sts, struct dnet_dap_msg *m)
+{
+    memset(m, 0, sizeof *m);
+    m->op = DNET_DAP_STATUS;
+    uint16_t mic = 0;
+    uint32_t stv = 0;
+    int fnf = (sts == RMS$_FNF || sts == RMS$_NMF);
+    int prv = (sts == RMS$_PRV);
+    /* OPEN: every refusal is FNF, as it was before rd vms-277a (and as the VAX
+     * FAL answered a protection refusal); the cause stays in the ACP. */
+    if (fnf || v == FV_OPEN)          { mic = DNET_DAP_MIC_FNF; stv = VMS_WIRE_SS_NOSUCHFILE; }
+    else if (prv && v == FV_RENAME)   { mic = DNET_DAP_MIC_RMV; }
+    else if (prv)                     { mic = DNET_DAP_MIC_PRV; stv = VMS_WIRE_SS_NOPRIV; }
+    else if (sts == RMS$_DNF)         { mic = DNET_DAP_MIC_DNF; }
+    else if (sts == RMS$_FEX)         { mic = DNET_DAP_MIC_FEX; }
+    else if (sts == RMS$_ACC)         { mic = DNET_DAP_MIC_ACC; }
+    m->u.status.stscode = (uint16_t)((DNET_DAP_MAC_OPEN << 12) | mic);
+    m->u.status.have_stv = (stv != 0);
+    m->u.status.stv = stv;
+}
+
+/* The access's own result (FAL.EXE's exit status) for an RMS refusal. */
+static uint32_t rms_cond(uint32_t sts)
+{
+    if (sts == RMS$_FNF || sts == RMS$_NMF) return SS$_NOSUCHFILE;
+    if (sts == RMS$_PRV) return SS$_NOPRIV;
+    return SS$_BADPARAM;
+}
+
+/* Split a spec "DEV:[DIR]NAME.TYP;V" into its volume ("DEV:", may be empty),
+ * directory ("[DIR]", may be empty) and file parts -- the three NAME messages
+ * of a DIRECTORY LIST. Pure string surgery on a spec RMS returned. */
+static void spec_split(const char *s, char *vol, char *dir, char *file, size_t cap)
+{
+    const char *lb = strpbrk(s, "[<");
+    const char *rb = lb ? strpbrk(lb, "]>") : NULL;
+    const char *colon = NULL;
+    for (const char *p = s; *p && (!lb || p < lb); p++) if (*p == ':') colon = p;
+    if (lb && !rb) lb = NULL;
+    size_t vn = colon ? (size_t)(colon - s + 1) : 0;
+    snprintf(vol, cap, "%.*s", (int)vn, s);
+    if (lb) {
+        snprintf(dir, cap, "%.*s", (int)(rb - lb + 1), lb);
+        snprintf(file, cap, "%s", rb + 1);
+    } else {
+        dir[0] = '\0';
+        snprintf(file, cap, "%s", s + vn);
+    }
+}
+
+/* VMS 64-bit absolute time -> the DAP A-18 "dd-MON-yy hh:mm:ss" (spec 3.15).
+ * 0 (no date recorded) or a delta time -> -1: the field is then omitted. */
+static int vms_time_dap(const uint8_t q[8], char out[DNET_DAP_DATE_LEN + 1])
+{
+    static const char mon[12][4] = { "JAN","FEB","MAR","APR","MAY","JUN",
+                                     "JUL","AUG","SEP","OCT","NOV","DEC" };
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | q[i];
+    if (v == 0 || (v >> 63)) return -1;
+    uint64_t secs = v / 10000000u;
+    int64_t days = (int64_t)(secs / 86400u) - 40587;   /* MJD 0 = 17-NOV-1858 */
+    unsigned sod = (unsigned)(secs % 86400u);
+    /* days since 1970-01-01 -> civil date (proleptic Gregorian). */
+    int64_t z = days + 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t y = (int64_t)yoe + era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp = (5 * doy + 2) / 153;
+    unsigned d = doy - (153 * mp + 2) / 5 + 1;
+    unsigned m = mp < 10 ? mp + 3 : mp - 9;
+    if (m <= 2) y++;
+    snprintf(out, DNET_DAP_DATE_LEN + 1, "%02u-%s-%02u %02u:%02u:%02u", d, mon[m - 1],
+             (unsigned)(((y % 100) + 100) % 100), sod / 3600, (sod / 60) % 60, sod % 60);
+    return 0;
+}
+
+/* The attribute messages DISPLAY asks for, from the file's real header:
+ * MAIN ATTRIBUTES, SUMMARY, DATE AND TIME, PROTECTION -- in the spec's order
+ * and the order the VAX FAL sent them. Only fields the header holds are sent:
+ * no FOP / DEV / SBN / datatype (not read here) and nothing DAP 7 adds
+ * (ATTMENU bit 21, binary DATE AND TIME, message type 18 "File ID" -- a DAP 7
+ * peer's; OVMX advertises DAP 5.6). Returns -1 only on a transport failure. */
+static int fb_attrs(struct fal_batch *b, uint64_t display, const struct dnet_fal_fattr *fa)
+{
+    struct dnet_dap_msg m;
+    if (display & DNET_DAP_DSP_MAIN) {
+        memset(&m, 0, sizeof m);
+        m.op = DNET_DAP_ATTRIBUTES;
+        m.u.attr.menu = (1u << DNET_DAP_ATT_ORG) | (1u << DNET_DAP_ATT_RFM) |
+                        (1u << DNET_DAP_ATT_RAT) | (1u << DNET_DAP_ATT_MRS) |
+                        (1u << DNET_DAP_ATT_ALQ) | (1u << DNET_DAP_ATT_DEQ) |
+                        (1u << DNET_DAP_ATT_LRL) | (1u << DNET_DAP_ATT_HBK) |
+                        (1u << DNET_DAP_ATT_EBK) | (1u << DNET_DAP_ATT_FFB);
+        m.u.attr.org = fa->org;
+        m.u.attr.rfm = fa->rfm;
+        m.u.attr.rat = fa->rat & 0x0f;
+        m.u.attr.mrs = fa->mrs;
+        m.u.attr.alq = fa->alq;
+        m.u.attr.deq = fa->deq;
+        m.u.attr.lrl = fa->lrl;
+        m.u.attr.hbk = fa->alq;
+        m.u.attr.ebk = fa->ebk;
+        m.u.attr.ffb = fa->ffb;
+        if (fb_add(b, &m) < 0) return -1;
+    }
+    /* A sequential file has no keys, areas or record descriptors to
+     * summarise: the VAX FAL sends SUMMARY with an empty operand, and so
+     * does OVMX (nothing held, nothing claimed). */
+    if ((display & DNET_DAP_DSP_SUMMARY) && fa->org == DNET_DAP_ORG_SEQ) {
+        memset(&m, 0, sizeof m);
+        m.op = DNET_DAP_SUMMARY;
+        if (fb_add(b, &m) < 0) return -1;
+    }
+    if (display & DNET_DAP_DSP_DATETIME) {
+        memset(&m, 0, sizeof m);
+        m.op = DNET_DAP_DATETIME;
+        if (vms_time_dap(fa->credate, m.u.datetime.cdt) == 0) m.u.datetime.menu |= DNET_DAP_DAT_CDT;
+        if (vms_time_dap(fa->revdate, m.u.datetime.rdt) == 0) m.u.datetime.menu |= DNET_DAP_DAT_RDT;
+        if (vms_time_dap(fa->expdate, m.u.datetime.edt) == 0) m.u.datetime.menu |= DNET_DAP_DAT_EDT;
+        m.u.datetime.menu |= DNET_DAP_DAT_RVN;
+        m.u.datetime.rvn = fa->revision;
+        if (fb_add(b, &m) < 0) return -1;
+    }
+    if (display & DNET_DAP_DSP_PROT) {
+        memset(&m, 0, sizeof m);
+        m.op = DNET_DAP_PROTECTION;
+        m.u.prot.menu = DNET_DAP_PRM_OWNER | DNET_DAP_PRM_SYS | DNET_DAP_PRM_OWN |
+                        DNET_DAP_PRM_GRP | DNET_DAP_PRM_WLD;
+        snprintf(m.u.prot.owner, sizeof m.u.prot.owner, "[%06o,%06o]",
+                 (unsigned)fa->uic_group, (unsigned)fa->uic_member);
+        m.u.prot.psys = fa->fileprot & 0xf;
+        m.u.prot.pown = (fa->fileprot >> 4) & 0xf;
+        m.u.prot.pgrp = (fa->fileprot >> 8) & 0xf;
+        m.u.prot.pwld = (fa->fileprot >> 12) & 0xf;
+        if (fb_add(b, &m) < 0) return -1;
+    }
+    return 0;
+}
+
+#define FAL_ATTR_DISPLAY (DNET_DAP_DSP_MAIN | DNET_DAP_DSP_SUMMARY | \
+                          DNET_DAP_DSP_DATETIME | DNET_DAP_DSP_PROT)
+
+/* DIRECTORY LIST (spec 5.2.11), in the VAX FAL's shape: for every file the spec
+ * (wildcards allowed) resolves to, NAME(volume) / NAME(directory) when they
+ * change, NAME(file), the attribute messages DISPLAY asks for, [NAME(resultant)
+ * if DISPLAY bit 8], ACKNOWLEDGE; then ACCESS COMPLETE(RESPONSE) -- one blocked
+ * segment. Names are the RESULTANT specs RMS $SEARCH returns, never composed.
+ * Nothing found: the volume / directory / file NAMEs of the EXPANDED spec RMS
+ * parsed, then STATUS (FNF + STV 0x0910), exactly as the VAX FAL answers. */
+static uint32_t server_dirlist(struct fal_batch *b, const struct dnet_dap_msg *acc)
 {
     void *ctx = NULL;
-    char rsa[DNET_DAP_MAX_SPEC + 1], lastdir[DNET_DAP_MAX_SPEC + 1] = "";
-    int n = 0;
-    if (dnet_fal_search_begin(acc->u.access.filespec, &ctx) == 0) {
-        while (dnet_fal_search_next(ctx, rsa, sizeof rsa) == 0) {
-            size_t cut = name_split(rsa);
-            char dir[DNET_DAP_MAX_SPEC + 1];
-            snprintf(dir, sizeof dir, "%.*s", (int)cut, rsa);
-            if (strcmp(dir, lastdir) != 0) {
-                if (send_name(t, DNET_DAP_NT_DIRECTORY, dir) < 0) { dnet_fal_search_end(ctx); return SS$_ABORT; }
-                snprintf(lastdir, sizeof lastdir, "%s", dir);
-            }
-            if (send_name(t, DNET_DAP_NT_FILENAME, rsa + cut) < 0) { dnet_fal_search_end(ctx); return SS$_ABORT; }
-            if (acc->u.access.have_display && (acc->u.access.display & DNET_DAP_DSP_MAIN)) {
-                struct dnet_dap_msg a;
-                text_attributes(&a);
-                if (fal_send(t, &a) < 0) { dnet_fal_search_end(ctx); return SS$_ABORT; }
-            }
-            n++;
+    char rsa[DNET_DAP_MAX_SPEC + 1];
+    char vol[DNET_DAP_MAX_SPEC + 1], dir[DNET_DAP_MAX_SPEC + 1], file[DNET_DAP_MAX_SPEC + 1];
+    char lastvol[DNET_DAP_MAX_SPEC + 1] = "", lastdir[DNET_DAP_MAX_SPEC + 1] = "";
+    uint64_t display = acc->u.access.have_display ? acc->u.access.display : 0;
+    int n = 0, first = 1;
+    uint32_t sts = RMS$_FNF;
+    if (dnet_fal_search_begin(acc->u.access.filespec, &ctx) != 0) ctx = NULL;
+    while (ctx && dnet_fal_search_next(ctx, rsa, sizeof rsa) == 0) {
+        spec_split(rsa, vol, dir, file, sizeof vol);
+        if (vol[0] && (first || strcmp(vol, lastvol) != 0)) {
+            if (fb_name(b, DNET_DAP_NT_VOLUME, vol) < 0) goto abort;
+            snprintf(lastvol, sizeof lastvol, "%s", vol);
+            lastdir[0] = '\0';
         }
-        dnet_fal_search_end(ctx);
+        if (dir[0] && strcmp(dir, lastdir) != 0) {
+            if (fb_name(b, DNET_DAP_NT_DIRECTORY, dir) < 0) goto abort;
+            snprintf(lastdir, sizeof lastdir, "%s", dir);
+        }
+        first = 0;
+        if (fb_name(b, DNET_DAP_NT_FILENAME, file) < 0) goto abort;
+        if (display & FAL_ATTR_DISPLAY) {
+            struct dnet_fal_fattr fa;
+            /* A file whose header this user may not read gets its NAME and no
+             * attributes: nothing is sent that was not read (INV-6). */
+            if (dnet_fal_fileattr(rsa, &fa, NULL) == 0 && fb_attrs(b, display, &fa) < 0)
+                goto abort;
+        }
+        if ((display & DNET_DAP_DSP_NAME) && fb_name(b, DNET_DAP_NT_FILESPEC, rsa) < 0)
+            goto abort;
+        if (fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0) goto abort;
+        n++;
     }
-    if (n == 0)
-        return (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
-                   ? SS$_ABORT : SS$_NOSUCHFILE;
-    return (send_complete(t, DNET_DAP_CMP_RESPONSE) < 0) ? SS$_ABORT : SS$_NORMAL;
+    if (n == 0) {
+        char esa[DNET_DAP_MAX_SPEC + 1] = "";
+        if (ctx) sts = dnet_fal_search_status(ctx, NULL, esa, sizeof esa);
+        if (esa[0]) {
+            spec_split(esa, vol, dir, file, sizeof vol);
+            if (vol[0] && fb_name(b, DNET_DAP_NT_VOLUME, vol) < 0) goto abort;
+            if (dir[0] && fb_name(b, DNET_DAP_NT_DIRECTORY, dir) < 0) goto abort;
+            if (fb_name(b, DNET_DAP_NT_FILENAME, file) < 0) goto abort;
+        }
+        if (ctx) dnet_fal_search_end(ctx);
+        struct dnet_dap_msg s;
+        rms_status_msg(FV_LIST, sts, &s);
+        if (fb_add(b, &s) < 0 || fb_flush(b) < 0) return SS$_ABORT;
+        return rms_cond(sts);
+    }
+    sts = dnet_fal_search_status(ctx, NULL, NULL, 0);
+    dnet_fal_search_end(ctx);
+    if (sts != RMS$_NMF && sts != RMS$_FNF && !(sts & 1)) {
+        /* The listing broke off on a real error after some files. */
+        struct dnet_dap_msg s;
+        rms_status_msg(FV_LIST, sts, &s);
+        if (fb_add(b, &s) < 0 || fb_flush(b) < 0) return SS$_ABORT;
+        return rms_cond(sts);
+    }
+    if (fb_complete(b) < 0 || fb_flush(b) < 0) return SS$_ABORT;
+    return SS$_NORMAL;
+abort:
+    if (ctx) dnet_fal_search_end(ctx);
+    return SS$_ABORT;
 }
 
 /* The resultant spec of the file an OPEN names (first $SEARCH match). */
@@ -448,6 +720,131 @@ static int resolve_one(const char *spec, char *rsa, size_t cap)
     return rc;
 }
 
+static int spec_is_wild(const char *s)
+{
+    return strpbrk(s, "*%") != NULL || strstr(s, "...") != NULL;
+}
+
+/* Send a STATUS for an RMS refusal as the whole (one-segment) reply. */
+static uint32_t fb_refuse(struct fal_batch *b, enum fal_verb v, uint32_t sts)
+{
+    struct dnet_dap_msg s;
+    rms_status_msg(v, sts, &s);
+    if (fb_add(b, &s) < 0 || fb_flush(b) < 0) return SS$_ABORT;
+    return rms_cond(sts);
+}
+
+/* ERASE (spec 5.2.6): ACCESS(ERASE) -> [NAME(resultant) ACK] ACCESS COMPLETE
+ * (RESPONSE), or STATUS. $ERASE runs as this process, so the executive ACP
+ * decides whether the user may delete the file. A wildcard spec erases every
+ * file $SEARCH resolves, each by its resultant; the first refusal ends the
+ * access with its STATUS. */
+static uint32_t server_erase(struct fal_batch *b, const struct dnet_dap_msg *acc)
+{
+    const char *spec = acc->u.access.filespec;
+    int want_name = acc->u.access.have_display && (acc->u.access.display & DNET_DAP_DSP_NAME);
+    uint32_t sts = 0, stv = 0;
+    char rsa[DNET_DAP_MAX_SPEC + 1] = "";
+    if (!spec_is_wild(spec)) {
+        /* The resultant is for the NAME reply; the ERASE is RMS's verdict,
+         * whether or not this user may $SEARCH the directory. */
+        if (resolve_one(spec, rsa, sizeof rsa) != 0) rsa[0] = '\0';
+        if (dnet_fal_erase(rsa[0] ? rsa : spec, &sts, &stv) != 0)
+            return fb_refuse(b, FV_ERASE, sts);
+        if (want_name && rsa[0] &&
+            (fb_name(b, DNET_DAP_NT_FILESPEC, rsa) < 0 || fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0))
+            return SS$_ABORT;
+        return (fb_complete(b) < 0 || fb_flush(b) < 0) ? SS$_ABORT : SS$_NORMAL;
+    }
+    /* Wildcard: resolve every match first, then erase -- never delete under
+     * a live directory search. */
+    void *ctx = NULL;
+    size_t nm = 0, capn = 0;
+    char (*names)[DNET_DAP_MAX_SPEC + 1] = NULL;
+    uint32_t ssts = RMS$_FNF;
+    if (dnet_fal_search_begin(spec, &ctx) == 0) {
+        while (dnet_fal_search_next(ctx, rsa, sizeof rsa) == 0) {
+            if (nm == capn) {
+                size_t nc = capn ? capn * 2 : 16;
+                if (nc > 4096) break;
+                void *p = realloc(names, nc * sizeof *names);
+                if (!p) break;
+                names = p; capn = nc;
+            }
+            memcpy(names[nm++], rsa, sizeof rsa);
+        }
+        ssts = dnet_fal_search_status(ctx, NULL, NULL, 0);
+        dnet_fal_search_end(ctx);
+    }
+    uint32_t result;
+    if (nm == 0) {
+        result = fb_refuse(b, FV_ERASE, ssts);
+    } else {
+        result = SS$_NORMAL;
+        for (size_t i = 0; i < nm; i++) {
+            if (dnet_fal_erase(names[i], &sts, &stv) != 0) {
+                result = fb_refuse(b, FV_ERASE, sts);
+                break;
+            }
+            if (want_name && (fb_name(b, DNET_DAP_NT_FILESPEC, names[i]) < 0 ||
+                              fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0)) {
+                result = SS$_ABORT; break;
+            }
+        }
+        if (result == SS$_NORMAL && (fb_complete(b) < 0 || fb_flush(b) < 0))
+            result = SS$_ABORT;
+    }
+    free(names);
+    return result;
+}
+
+/* RENAME (spec 5.2.8): ACCESS(RENAME, old) + NAME(new) -> [NAME(old resultant)
+ * ACK NAME(new resultant) ACK] ACCESS COMPLETE(RESPONSE), or STATUS -- the
+ * VAX FAL's reply, one segment. $RENAME (the executive ACP's atomic MOVE) runs
+ * as this process. A wildcard rename (spec 5.2.20.3, go/no-go) is not served. */
+static uint32_t server_rename(struct fal_batch *b, struct dnet_dap_transport *t,
+                              const struct dnet_dap_msg *acc)
+{
+    struct dnet_dap_msg nm;
+    if (fal_recv(t, &nm) < 0) return SS$_ABORT;
+    if (nm.op != DNET_DAP_NAME) {
+        struct dnet_dap_msg s;
+        memset(&s, 0, sizeof s);
+        s.op = DNET_DAP_STATUS;
+        s.u.status.stscode = (uint16_t)((DNET_DAP_MAC_SYNC << 12) | (nm.type & 0xfff));
+        (void)fb_add(b, &s);
+        (void)fb_flush(b);
+        return SS$_ABORT;
+    }
+    const char *oldspec = acc->u.access.filespec;
+    const char *newspec = nm.u.name.namespec;
+    int want_name = acc->u.access.have_display && (acc->u.access.display & DNET_DAP_DSP_NAME);
+    if (spec_is_wild(oldspec) || spec_is_wild(newspec)) {
+        struct dnet_dap_msg s;
+        memset(&s, 0, sizeof s);
+        s.op = DNET_DAP_STATUS;
+        s.u.status.stscode = (uint16_t)(DNET_DAP_MAC_UNSUPP << 12);
+        if (fb_add(b, &s) < 0 || fb_flush(b) < 0) return SS$_ABORT;
+        return SS$_BADPARAM;
+    }
+    char orsa[DNET_DAP_MAX_SPEC + 1] = "", nrsa[DNET_DAP_MAX_SPEC + 1] = "";
+    uint32_t sts = 0, stv = 0;
+    if (resolve_one(oldspec, orsa, sizeof orsa) != 0) orsa[0] = '\0';
+    if (dnet_fal_rename(orsa[0] ? orsa : oldspec, newspec, &sts, &stv) != 0)
+        return fb_refuse(b, FV_RENAME, sts);
+    if (want_name) {
+        if (orsa[0] && (fb_name(b, DNET_DAP_NT_FILESPEC, orsa) < 0 ||
+                        fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0))
+            return SS$_ABORT;
+        /* The new resultant is what RMS now finds under the new name. */
+        if (resolve_one(newspec, nrsa, sizeof nrsa) == 0 &&
+            (fb_name(b, DNET_DAP_NT_FILESPEC, nrsa) < 0 ||
+             fb_simple(b, DNET_DAP_ACKNOWLEDGE) < 0))
+            return SS$_ABORT;
+    }
+    return (fb_complete(b) < 0 || fb_flush(b) < 0) ? SS$_ABORT : SS$_NORMAL;
+}
+
 uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
 {
     if (!t || !t->send || !t->recv) return SS$_ABORT;
@@ -458,6 +855,13 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
     struct dnet_dap_msg m;
     if (fal_recv(t, &m) < 0 || m.op != DNET_DAP_CONFIG) return SS$_ABORT;
     if (send_config(t) < 0) return SS$_ABORT;
+
+    static struct fal_batch batch;          /* one FAL session per process   */
+    struct fal_batch *b = &batch;
+    memset(b, 0, sizeof *b);
+    b->t = t;
+    b->cap = FAL_BUFSIZ;
+    if (m.u.config.bufsiz && m.u.config.bufsiz < b->cap) b->cap = m.u.config.bufsiz;
 
     /* Accesses follow one another on the link (spec 5.1: a VMS COPY lists its
      * input with a DIRECTORY LIST access, then OPENs it, on one link). Serve
@@ -494,10 +898,15 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
             return SS$_ABORT;
         }
 
-
-        if (m.u.access.accfunc == DNET_DAP_ACC_DIRLIST) {
+        /* DIRECTORY LIST, ERASE and RENAME need no ATTRIBUTES first (spec
+         * 5.1.2 note 1) and are answered in one blocked segment. */
+        if (m.u.access.accfunc == DNET_DAP_ACC_DIRLIST ||
+            m.u.access.accfunc == DNET_DAP_ACC_ERASE ||
+            m.u.access.accfunc == DNET_DAP_ACC_RENAME) {
             have_attr = 0;
-            result = server_dirlist(t, &m);
+            if (m.u.access.accfunc == DNET_DAP_ACC_DIRLIST)     result = server_dirlist(b, &m);
+            else if (m.u.access.accfunc == DNET_DAP_ACC_ERASE)  result = server_erase(b, &m);
+            else                                                result = server_rename(b, t, &m);
             if (result == SS$_ABORT) return result;
             continue;
         }
@@ -516,21 +925,36 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
         if (m.u.access.accfunc == DNET_DAP_ACC_OPEN) {
             void *rf = NULL;
             uint8_t frfm = DNET_DAP_RFM_VAR, frat = DNET_DAP_RAT_CR;
-            if (dnet_fal_ropen(spec, &rf, &frfm, &frat) != 0) {
-                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
-                    return SS$_ABORT;
+            uint32_t osts = RMS$_FNF;
+            if (dnet_fal_ropen_st(spec, &rf, &frfm, &frat, &osts) != 0) {
+                /* The executive ACP refused or found nothing: the VAX FAL's
+                 * STATUS for both is FNF + STV 0x0910 (rms_status_msg). */
+                struct dnet_dap_msg s;
+                rms_status_msg(FV_OPEN, osts, &s);
+                if (fal_send(t, &s) < 0) return SS$_ABORT;
                 result = SS$_NOSUCHFILE;
                 continue;
             }
             (void)dnet_fal_rclose(rf);
             char rsa[DNET_DAP_MAX_SPEC + 1];
+            int have_rsa = (resolve_one(spec, rsa, sizeof rsa) == 0);
             text_attributes(&a);
             /* The file's REAL record format and attributes, as RMS opened it. */
             if (frfm >= DNET_DAP_RFM_FIX && frfm <= 6) a.u.attr.rfm = frfm;
             a.u.attr.rat = (uint8_t)(frat & 0x0f);
             if (fal_send(t, &a) < 0) return SS$_ABORT;
-            if (want_name && resolve_one(spec, rsa, sizeof rsa) == 0 &&
-                send_name(t, DNET_DAP_NT_FILESPEC, rsa) < 0)
+            /* Extended attributes the accessor asked for (a VMS TYPE asks for
+             * DATE AND TIME), from the opened file's header. */
+            uint64_t disp = m.u.access.have_display ? m.u.access.display : 0;
+            if (disp & (DNET_DAP_DSP_SUMMARY | DNET_DAP_DSP_DATETIME | DNET_DAP_DSP_PROT)) {
+                struct dnet_fal_fattr fa;
+                if (dnet_fal_fileattr(have_rsa ? rsa : spec, &fa, NULL) == 0) {
+                    if (fb_attrs(b, disp & ~(uint64_t)DNET_DAP_DSP_MAIN, &fa) < 0 ||
+                        fb_flush(b) < 0)
+                        return SS$_ABORT;
+                }
+            }
+            if (want_name && have_rsa && send_name(t, DNET_DAP_NT_FILESPEC, rsa) < 0)
                 return SS$_ABORT;
             if (send_simple(t, DNET_DAP_ACKNOWLEDGE) < 0) return SS$_ABORT;
             result = server_open_phase(t, spec);
@@ -703,4 +1127,56 @@ uint32_t dnet_fal_client_get(const char *remote_spec, const char *local_spec,
     }
     if (dnet_fal_wclose(h) != 0) { (void)client_close(t); return SS$_ABORT; }
     return client_close(t);
+}
+
+/* ---- DELETE / RENAME client (rd vms-277a) ----------------------------------
+ * ACCESS(ERASE | RENAME) with DISPLAY = NAME, the RENAME's NAME(new) after it,
+ * then the remote's reply: NAME / ACK until ACCESS COMPLETE(RESPONSE), or a
+ * STATUS whose exact STSCODE / STV the caller gets back. */
+static uint32_t client_fileop(struct dnet_dap_transport *t, uint8_t accfunc,
+                              const char *spec, const char *newspec,
+                              uint16_t *stscode, uint64_t *stv)
+{
+    if (stscode) *stscode = 0;
+    if (stv) *stv = 0;
+    if (!t || !t->send || !t->recv || !spec) return SS$_ABORT;
+    if (strlen(spec) > DNET_DAP_MAX_SPEC || (newspec && strlen(newspec) > DNET_DAP_MAX_SPEC))
+        return SS$_BADPARAM;
+    t->rxlen = t->rxoff = 0;
+    if (config_exchange_client(t) < 0) return SS$_ABORT;
+
+    struct dnet_dap_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = DNET_DAP_ACCESS;
+    m.u.access.accfunc = accfunc;
+    strncpy(m.u.access.filespec, spec, sizeof m.u.access.filespec - 1);
+    m.u.access.have_display = 1;
+    m.u.access.display = DNET_DAP_DSP_NAME;
+    if (fal_send(t, &m) < 0) return SS$_ABORT;
+    if (newspec && send_name(t, DNET_DAP_NT_FILESPEC, newspec) < 0) return SS$_ABORT;
+    for (;;) {
+        if (fal_recv(t, &m) < 0) return SS$_ABORT;
+        if (m.op == DNET_DAP_NAME || m.op == DNET_DAP_ACKNOWLEDGE) continue;
+        if (m.op == DNET_DAP_ACCESS_COMPLETE && m.u.complete.cmpfunc == DNET_DAP_CMP_RESPONSE)
+            return SS$_NORMAL;
+        if (m.op == DNET_DAP_STATUS) {
+            if (stscode) *stscode = m.u.status.stscode;
+            if (stv && m.u.status.have_stv) *stv = m.u.status.stv;
+        }
+        return SS$_ABORT;
+    }
+}
+
+uint32_t dnet_fal_client_erase(const char *remote_spec, struct dnet_dap_transport *t,
+                               uint16_t *stscode, uint64_t *stv)
+{
+    return client_fileop(t, DNET_DAP_ACC_ERASE, remote_spec, NULL, stscode, stv);
+}
+
+uint32_t dnet_fal_client_rename(const char *old_spec, const char *new_spec,
+                                struct dnet_dap_transport *t,
+                                uint16_t *stscode, uint64_t *stv)
+{
+    if (!new_spec) return SS$_BADPARAM;
+    return client_fileop(t, DNET_DAP_ACC_RENAME, old_spec, new_spec, stscode, stv);
 }

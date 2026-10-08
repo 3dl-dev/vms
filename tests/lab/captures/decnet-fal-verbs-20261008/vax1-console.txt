@@ -1,0 +1,56 @@
+### DIRECTORY/FULL VAX2"SYSTEM xxxxxx"::SYS$SYSROOT:[SYSMGR]DELME.TXT
+
+Directory VAX2"SYSTEM password"::SYS$SYSROOT:[SYSMGR]
+
+DELME.TXT;1                   File ID:  None
+Size:            1/9          Owner:    [1,4]
+Created:    8-OCT-2026 06:29:07.02
+Revised:    8-OCT-2026 06:29:36.37 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      (remote)
+Caching attribute:  (remote)
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, Version limit: 0
+Record format:      Variable length, maximum 0 bytes, longest 9 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 1/9 blocks.
+$ 
+### TYPE VAX2"SYSTEM xxxxxx"::SYS$SYSROOT:[SYSMGR]NOSUCH.TXT
+%TYPE-W-SEARCHFAIL, error searching for VAX2"SYSTEM password"::SYS$COMMON:[SYSMGR]NOSUCH.TXT;
+-RMS-E-FNF, file not found
+$ 
+### TYPE VAX2::SYS$SYSROOT:[SYSMGR]PROT.TXT
+%TYPE-W-SEARCHFAIL, error searching for VAX2::SYS$SYSROOT:[SYSMGR]PROT.TXT;
+-RMS-E-FND, ACP file or directory lookup failed
+-SYSTEM-F-INVLOGIN, login information invalid at remote node
+$ 
+### RENAME VAX2"SYSTEM xxxxxx"::SYS$SYSROOT:[SYSMGR]RENME.TXT VAX2"SYSTEM xxxxxx"::SYS$SYSROOT:[SYSMGR]RENAMED.TXT
+$ 
+### DELETE VAX2"SYSTEM xxxxxx"::SYS$SYSROOT:[SYSMGR]DELME.TXT;1
+$ 
+### DELETE VAX2"SYSTEM xxxxxx"::SYS$SYSROOT:[SYSMGR]NOSUCH.TXT;1
+%DELETE-W-SEARCHFAIL, error searching for VAX2"SYSTEM password"::SYS$COMMON:[SYSMGR]NOSUCH.TXT;1
+-RMS-E-FNF, file not found
+$ 
+### TYPE VAX2"DNTEST xxxxxxxxxx"::SYS$SYSROOT:[SYSMGR]PROT.TXT
+%TYPE-W-OPENIN, error opening VAX2"DNTEST password"::SYS$SYSROOT:[SYSMGR]PROT.TXT;1 as input
+-RMS-E-FNF, file not found
+$ 
+### DELETE VAX2"DNTEST xxxxxxxxxx"::SYS$SYSROOT:[SYSMGR]PROT.TXT;1
+%DELETE-W-FILNOTDEL, error deleting VAX2"DNTEST password"::SYS$SYSROOT:[SYSMGR]PROT.TXT;1
+-RMS-E-PRV, insufficient privilege or file protection violation
+$ 
+### RENAME VAX2"DNTEST xxxxxxxxxx"::SYS$SYSROOT:[SYSMGR]PROT.TXT VAX2"DNTEST xxxxxxxxxx"::SYS$SYSROOT:[SYSMGR]STOLEN.TXT
+%RENAME-E-OPENIN, error opening VAX2"DNTEST password"::SYS$SYSROOT:[SYSMGR]PROT.TXT;1 as input
+-RMS-F-RMV, ACP remove function failed
+-NONAME-W-NOMSG, Message number 00000000
+$ 

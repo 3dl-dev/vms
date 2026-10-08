@@ -1180,7 +1180,10 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
         out->rat = fat->fat_rattrib;
         out->mrs = fat->fat_maxrec;
         out->lrl = fat->fat_rsize;
+        out->defext = fat->fat_defext;
     }
+    out->revision = a.attr.revision;
+    memcpy(out->expdate, a.attr.expdate, 8);
 
     vms_kif_acp_deaccess(chan);
     vms_kif_dassgn(chan);

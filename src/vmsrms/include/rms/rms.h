@@ -113,6 +113,11 @@ struct rms_fileattr {
     uint16_t lrl;                /* longest record length (FAT fat_rsize)       */
     uint8_t  org;                /* file organization (fat_rtype high nibble ==
                                   * FAB$C_SEQ / FAB$C_REL / FAB$C_IDX)          */
+    /* vms-277a (DECnet FAL DIRECTORY/FULL): further header fields, appended so
+     * existing callers are unaffected. Zero on the stat() fallback paths. */
+    uint16_t defext;             /* FAT fat_defext (default extend quantity)    */
+    uint16_t revision;           /* fi2_revision: times the file was modified   */
+    uint8_t  expdate[8];         /* VMS 64-bit expiration time, 0 = none        */
 };
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
 

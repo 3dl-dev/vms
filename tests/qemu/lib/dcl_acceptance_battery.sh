@@ -1151,6 +1151,14 @@ run_dcl_acceptance_battery() {
             "FAL persona [vms-d85]: the path itself works (SYSTEM reads the file through it) -- so GUEST's refusal below is the persona, not a broken path"
         must_have "$FALPSEG" 'checked against the user, not the daemon' \
             "FAL persona [vms-d85]: GUEST is REFUSED the SYSTEM-only file SYSTEM just read"
+        must_have "$FALPSEG" 'REFUSED by the executive with the VAX FAL'"'"'s STATUS 0x4055 (RMS-E-PRV) STV 0x24' \
+            "FAL verbs [vms-277a]: GUEST's remote DELETE of a SYSTEM-only file is refused by the executive ACP and answered with the real VMS FAL's STATUS bytes (PRV + SS\$_NOPRIV)"
+        must_have "$FALPSEG" 'REFUSED by the executive with the VAX FAL'"'"'s STATUS 0x405f (RMS-F-RMV), no STV' \
+            "FAL verbs [vms-277a]: GUEST's remote RENAME of a SYSTEM-only file is refused by the executive ACP and answered with the real VMS FAL's STATUS bytes (RMV)"
+        must_have "$FALPSEG" 'RMS reads the records under the NEW name and the old name is gone' \
+            "FAL verbs [vms-277a]: SYSTEM renames its own file through FAL.EXE, read back through RMS"
+        must_have "$FALPSEG" 'RMS $OPEN then finds no such file (RMS-E-FNF)' \
+            "FAL verbs [vms-277a]: SYSTEM deletes its own file through FAL.EXE, read back through RMS"
         must_not_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: FAIL' \
             "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
         negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"

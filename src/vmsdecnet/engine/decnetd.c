@@ -77,6 +77,7 @@
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
 #include "ssdef.h"          /* SS$_BADPARAM (isolation-seam refusal, vms-9ab) */
+#include "rmsdef.h"         /* RMS$_FNF: --fal-proc-accept-test DELETE readback (vms-277a) */
 #include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
 #include "descrip.h"        /* dsc$descriptor_s for the SYS$INPUT/SYS$OUTPUT assign */
@@ -3370,10 +3371,15 @@ static void *falp_pump_thread(void *v)
 }
 
 /* One FAL access through the network-server-process path. Returns the client
- * status; *srv_uic gets the server process's executive UIC (0 if none). */
-static uint32_t falp_session(const char *user, const char *pw, int is_get,
-                             const char *remote, const char *local,
-                             uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit)
+ * status; *srv_uic gets the server process's executive UIC (0 if none).
+ * op: FALP_PUT / FALP_GET (remote, local), FALP_ERASE (remote), FALP_RENAME
+ * (remote -> local as the NEW remote name); for ERASE / RENAME the remote's
+ * refusal STATUS lands in *stscode / *stv (rd vms-277a). */
+enum { FALP_PUT = 0, FALP_GET = 1, FALP_ERASE = 2, FALP_RENAME = 3 };
+static uint32_t falp_session_op(const char *user, const char *pw, int op,
+                                const char *remote, const char *local,
+                                uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit,
+                                uint16_t *stscode, uint64_t *stv)
 {
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
     const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
@@ -3425,8 +3431,12 @@ static uint32_t falp_session(const char *user, const char *pw, int is_get,
     pthread_create(&th, NULL, falp_pump_thread, &pp);
     struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
     struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
-    cst = is_get ? dnet_fal_client_get(remote, local, &ct)
-                 : dnet_fal_client_put(local, remote, &ct);
+    switch (op) {
+    case FALP_GET:    cst = dnet_fal_client_get(remote, local, &ct); break;
+    case FALP_PUT:    cst = dnet_fal_client_put(local, remote, &ct); break;
+    case FALP_ERASE:  cst = dnet_fal_client_erase(remote, &ct, stscode, stv); break;
+    default:          cst = dnet_fal_client_rename(remote, local, &ct, stscode, stv); break;
+    }
     for (int i = 0; i < 300 && !pp.got_exit; i++) {          /* <= 3 s for EXIT */
         struct timespec ts = { 0, 10 * 1000 * 1000 }; nanosleep(&ts, NULL);
     }
@@ -3437,6 +3447,14 @@ static uint32_t falp_session(const char *user, const char *pw, int is_get,
 out:
     close(sv[0]); close(sv[1]);
     return cst;
+}
+
+static uint32_t falp_session(const char *user, const char *pw, int is_get,
+                             const char *remote, const char *local,
+                             uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit)
+{
+    return falp_session_op(user, pw, is_get ? FALP_GET : FALP_PUT, remote, local,
+                           auth_out, srv_uic, srv_exit, NULL, NULL);
 }
 
 /* The persona fixture must be genuinely SYSTEM-only: protection
@@ -3519,6 +3537,60 @@ static int run_fal_proc_accept_test(void)
     st = falp_session("GUEST", "WRONGPW", 1, PRIV, LOCAL, &auth, &uic, &xst);
     FP_CHECK(auth == SS$_INVLOGIN && uic == 0,
              "a bad password is refused at connect and NO FAL server process is created");
+
+    /* (5) rd vms-277a: remote DELETE and RENAME through the SAME server
+     * process. The refusals are the executive ACP's verdict on GUEST's
+     * identity, and the STATUS the client receives must be the bytes a real
+     * VMS V7.3 FAL sent for the same refusal
+     * (tests/lab/captures/decnet-fal-verbs-20261008): DELETE = MAC 4 / MIC PRV
+     * (0x4055) + STV 0x24, RENAME = MAC 4 / MIC RMV (0x405f) without STV. Then
+     * SYSTEM, which owns the files, deletes and renames them, read back
+     * through RMS. */
+    {
+        const char *DEL = "SYS$SYSROOT:[SYSMGR]FALP_DEL.TXT";
+        const char *REN = "SYS$SYSROOT:[SYSMGR]FALP_REN.TXT";
+        const char *RENAMED = "SYS$SYSROOT:[SYSMGR]FALP_RENAMED.TXT";
+        const char *STOLEN = "SYS$SYSROOT:[SYSMGR]FALP_STOLEN.TXT";
+        static const char *dl[] = { "FAL verbs: a SYSTEM-only file to delete" };
+        static const char *rl[] = { "FAL verbs: a SYSTEM-only file to rename" };
+        uint32_t s1 = 0, s2 = 0;
+        (void)dnet_fal_erase(RENAMED, &s1, &s2);        /* a previous run's */
+        FP_CHECK(falp_write_private(DEL, dl[0]) == 0 && falp_write_private(REN, rl[0]) == 0,
+                 "SYSTEM-only files (S:RWED,O:RWED,G,W) to DELETE and RENAME are laid down via RMS");
+        uint16_t sc = 0; uint64_t sv = 0;
+
+        st = falp_session_op("GUEST", "GUEST", FALP_ERASE, DEL, NULL, &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: GUEST DELETE -> client %08X, STATUS %04X STV %llX\n",
+               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
+        FP_CHECK(st != SS$_NORMAL && sc == 0x4055 && sv == 0x24,
+                 "GUEST's remote DELETE of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x4055 (RMS-E-PRV) STV 0x24 (SS$_NOPRIV)");
+        FP_CHECK(fal_file_matches(DEL, dl, 1), "the file GUEST tried to delete is still there, intact");
+
+        st = falp_session_op("GUEST", "GUEST", FALP_RENAME, REN, STOLEN, &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: GUEST RENAME -> client %08X, STATUS %04X STV %llX\n",
+               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
+        void *rf = NULL;
+        int stolen = (dnet_fal_ropen(STOLEN, &rf, NULL, NULL) == 0);
+        if (stolen) (void)dnet_fal_rclose(rf);
+        FP_CHECK(st != SS$_NORMAL && sc == 0x405f && sv == 0,
+                 "GUEST's remote RENAME of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x405f (RMS-F-RMV), no STV");
+        FP_CHECK(!stolen && fal_file_matches(REN, rl, 1),
+                 "the refused RENAME moved nothing: the old name still holds the file, the new name does not exist");
+
+        st = falp_session_op("SYSTEM", "MANAGER", FALP_RENAME, REN, RENAMED, &auth, &uic, &xst, &sc, &sv);
+        int old_gone = (dnet_fal_ropen(REN, &rf, NULL, NULL) != 0);
+        if (!old_gone) (void)dnet_fal_rclose(rf);
+        FP_CHECK(st == SS$_NORMAL && old_gone && fal_file_matches(RENAMED, rl, 1),
+                 "SYSTEM renames its file through the FAL server process: RMS reads the records under the NEW name and the old name is gone");
+
+        st = falp_session_op("SYSTEM", "MANAGER", FALP_ERASE, DEL, NULL, &auth, &uic, &xst, &sc, &sv);
+        uint32_t ost = 0;
+        int del_gone = (dnet_fal_ropen_st(DEL, &rf, NULL, NULL, &ost) != 0);
+        if (!del_gone) (void)dnet_fal_rclose(rf);
+        FP_CHECK(st == SS$_NORMAL && del_gone && ost == RMS$_FNF,
+                 "SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)");
+        (void)dnet_fal_erase(RENAMED, &s1, &s2);
+    }
 
     printf("DECNETD-I-FALPROC, %d passed, %d failed\n", pass, fail);
     if (fail == 0 && pass > 0) { printf("DECNETD-FAL-PROC-ACCEPT: PASS\n"); return 0; }

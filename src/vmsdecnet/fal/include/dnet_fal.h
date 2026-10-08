@@ -134,6 +134,43 @@ int  dnet_fal_search_begin(const char *spec, void **ctx);
 int  dnet_fal_search_next(void *ctx, char *rsa, size_t cap);
 void dnet_fal_search_end(void *ctx);
 
+/*
+ * The RMS completion of the last $PARSE/$SEARCH on a search context (RMS$_FNF,
+ * RMS$_NMF, RMS$_PRV, ...) and, in esa (may be NULL), the EXPANDED spec RMS
+ * built -- what a real VMS FAL names back when a lookup finds nothing
+ * (NAME volume/directory/file, then STATUS). The begin call keeps its context
+ * even when $PARSE fails so this can report why; it returns -1 only when no
+ * context could be made at all.
+ */
+uint32_t dnet_fal_search_status(void *ctx, uint32_t *stv, char *esa, size_t cap);
+
+/*
+ * The file attributes a DIRECTORY LIST / DISPLAY reports, read from the real
+ * ODS-2 file header through the executive ACP (rms_file_attr). Only what the
+ * header holds; the DAP layer omits everything else (INV-6).
+ */
+struct dnet_fal_fattr {
+    uint8_t  org, rfm, rat;      /* FAT: org nibble (DAP ORG), FAB$C_ rfm, rattrib */
+    uint16_t mrs, lrl, deq;      /* FAT maxrec, rsize (longest record), defext */
+    uint32_t alq, ebk;           /* highest allocated VBN, end-of-file VBN       */
+    uint16_t ffb;                /* first free byte of the EOF block             */
+    uint16_t fileprot;           /* ODS-2 protection: S/O/G/W deny nibbles       */
+    uint16_t uic_group, uic_member;
+    uint16_t revision;           /* header revision count                        */
+    uint8_t  credate[8], revdate[8], expdate[8];   /* VMS 64-bit times, 0 = none */
+};
+/* 0 = filled; -1 = failed with the RMS status in *sts (may be NULL). */
+int  dnet_fal_fileattr(const char *spec, struct dnet_fal_fattr *out, uint32_t *sts);
+
+/*
+ * $ERASE / $RENAME through RMS over the ACP, as THIS process (the FAL server
+ * process carries the authenticated user's UIC + privileges, so the executive
+ * ACP decides). 0 = done; -1 = refused, with the RMS completion in *sts and the
+ * system status (FAB$L_STV) in *stv. Never a server-side protection rule.
+ */
+int  dnet_fal_erase(const char *spec, uint32_t *sts, uint32_t *stv);
+int  dnet_fal_rename(const char *oldspec, const char *newspec, uint32_t *sts, uint32_t *stv);
+
 /* Record output for a FAL CREATE: $CREATE the file (sequential, the given
  * RMS record format + attributes) returning its RESULTANT spec, $PUT records
  * verbatim, $CLOSE. RMS over the ACP (dnet_fal_search.c); 0 = ok, -1 = fail. */
@@ -149,6 +186,10 @@ int  dnet_fal_wclose(void *h);
  * attributes for the ATTRIBUTES reply. rget: 1 = a record (len in *len),
  * 0 = end of file, -1 = error. 0 = ok / -1 = fail elsewhere. */
 int  dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat);
+/* dnet_fal_ropen, plus the RMS completion of a refused $OPEN in *sts (may be
+ * NULL): FNF vs PRV decide the STATUS the server sends. */
+int  dnet_fal_ropen_st(const char *spec, void **h, uint8_t *rfm, uint8_t *rat,
+                       uint32_t *sts);
 int  dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len);
 int  dnet_fal_rclose(void *h);
 
@@ -159,6 +200,11 @@ int  dnet_fal_rclose(void *h);
  * session over `t`: CONFIGURATION exchange, then an ACCESS (open for a GET /
  * create for a PUT), ATTRIBUTES/NAME, CONTROL, DATA records (read from / written
  * to the local file via RMS over the ACP), and STATUS / ACCESS-COMPLETE.
+ *
+ * Also served (rd vms-277a): DIRECTORY LIST with the ATTRIBUTES / SUMMARY /
+ * DATE AND TIME / PROTECTION messages DISPLAY asks for, ACCESS ERASE and
+ * ACCESS RENAME + NAME -- each answered in one blocked segment in a real VMS
+ * FAL's shape, with its STATUS bytes for a refusal.
  *
  * Returns SS$_NORMAL on a completed transfer, SS$_NOSUCHFILE if the requested
  * file cannot be opened for a GET, or SS$_ABORT on a transport/protocol failure
@@ -188,6 +234,21 @@ uint32_t dnet_fal_client_put(const char *local_spec, const char *remote_spec,
  */
 uint32_t dnet_fal_client_get(const char *remote_spec, const char *local_spec,
                              struct dnet_dap_transport *t);
+
+/*
+ * dnet_fal_client_erase / dnet_fal_client_rename - `$ DELETE node::spec` and
+ * `$ RENAME node::old node::new` at the DAP level (spec 5.2.6 / 5.2.8): the
+ * CONFIGURATION exchange, then ACCESS(ERASE) or ACCESS(RENAME) + NAME(new),
+ * DISPLAY = NAME as a VMS client asks. Returns SS$_NORMAL on ACCESS COMPLETE
+ * (RESPONSE); otherwise SS$_ABORT, with the remote STATUS's STSCODE and STV
+ * (0 when absent) in *stscode / *stv (may be NULL) so a caller can report the
+ * exact refusal the remote FAL sent.
+ */
+uint32_t dnet_fal_client_erase(const char *remote_spec, struct dnet_dap_transport *t,
+                               uint16_t *stscode, uint64_t *stv);
+uint32_t dnet_fal_client_rename(const char *old_spec, const char *new_spec,
+                                struct dnet_dap_transport *t,
+                                uint16_t *stscode, uint64_t *stv);
 
 #ifdef __cplusplus
 }

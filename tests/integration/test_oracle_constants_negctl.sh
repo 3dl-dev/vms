@@ -22,5 +22,16 @@ mk; sed -i 's/^\(#define SS\$_NORMAL[[:space:]]*\)1\b/\1 3/' "$TMP/t/src/libvms/
 red "a wrong value for SS\$_NORMAL"
 mk; echo 'SS$_NORMAL 3 1' >> "$TMP/t/docs/oracle/constants-known-mismatch.txt"
 red "a known-mismatch entry that already matches"
+mk; sed -i 's/^\(#define ATR\$C_ASCNAME[[:space:]]*\)16$/\1 61/' "$TMP/t/src/libvms/include/vms/atrdef.h"
+red "a wrong value for ATR\$C_ASCNAME in the VMS-layout vms/atrdef.h"
+# vms/atrdef.h is generated: a hand edit must fail the generator check.
+cp "$SRC/src/libvms/include/vms/atrdef.h" "$TMP/atrdef.keep"
+sed -i 's/^\(#define ATR\$C_ASCNAME[[:space:]]*\)16$/\1 61/' "$SRC/src/libvms/include/vms/atrdef.h"
+if python3 "$SRC/tools/cross-alpha-vms/include-surface/gen_atrdef.py" --check >/dev/null 2>&1; then
+    echo "NEGCTL FAIL: a hand-edited vms/atrdef.h was ACCEPTED"; rc=1
+else
+    echo "ok: a hand-edited vms/atrdef.h is rejected"
+fi
+cp "$TMP/atrdef.keep" "$SRC/src/libvms/include/vms/atrdef.h"
 [ "$rc" -eq 0 ] && echo "PASS: the oracle-constants gate rejects new wrong values and stale list entries"
 exit $rc

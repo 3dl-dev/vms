@@ -20,3 +20,8 @@ are structure sizes/offsets and `$_MAX_*` sentinels (not compared), the PSL$ lay
 processor status word differs by architecture) and a handful of high SS$/SYI$ codes.
 
 UAFDEF, UTCDEF and FPDEF come from `SYS$LIBRARY:LIB.MLB` (same command, other library).
+
+ATRDEF (the ACP attribute codes, sizes and the attribute-list item layout) was added 2026-10-08
+by the same command on lab pod selfhost-alpha-2 (ALPHA1, cloned from the golden image); four
+`<^X..>` masks normalised to decimal. `src/libvms/include/vms/atrdef.h` is generated from it
+(`tools/cross-alpha-vms/include-surface/gen_atrdef.py`).

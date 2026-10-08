@@ -11,5 +11,5 @@ summary: >
   vms.ko-resident. Replaced an earlier AF_UNIX facade.
 last_reviewed: 2026-10-08
 items:
-  - {id: sys$crembx, kind: routine, status: implemented, authenticity: real, vms: "Create a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c, notes: "vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at $ASSIGN/read/write, with BYPASS/READALL/SYSPRV (rd vms-c6d1); acmode and flags are not yet honoured"}
+  - {id: sys$crembx, kind: routine, status: implemented, authenticity: real, vms: "Create a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c, notes: "vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at each read/write (not at $ASSIGN, as on real VMS), with BYPASS/SYSPRV (READALL does not open a mailbox, oracle mbxprot) (rd vms-c6d1); acmode and flags are not yet honoured"}
   - {id: sys$delmbx, kind: routine, status: implemented, authenticity: real, vms: "Delete a mailbox device", evidence: src/libvms/syssvc/sys_mailbox.c}

@@ -388,8 +388,16 @@ static void mbx_put(struct vms_mailbox *mbx)
 static uint32_t mbx_access(const struct vms_proc *proc,
                            const struct vms_mailbox *mbx, unsigned want)
 {
-    return vms_prot_check(proc->uic, proc->cur_privs, mbx->owner_uic,
-                          mbx->prot, want);
+    /*
+     * READALL does not open a mailbox: on real VAX V7.3 and Alpha V8.4 an
+     * unprivileged process holding READALL alone is still refused SS$_NOPRIV
+     * reading a read-denied mailbox (docs/oracle/semantics/mbxprot/,
+     * MBXP.READALL.READ), while BYPASS opens it (MBXP.BYPASS.READ). READALL is
+     * a file privilege; a mailbox is a device. So the override is withheld here.
+     */
+    uint64_t privs = proc->cur_privs & ~VMS_PRV_M_READALL;
+
+    return vms_prot_check(proc->uic, privs, mbx->owner_uic, mbx->prot, want);
 }
 
 /* ================================================================
@@ -504,21 +512,12 @@ long vms_ioctl_mbx_assign(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
     /*
-     * PROTECTION (rd vms-c6d1): a channel is assigned only to a process the
-     * mailbox's protection lets read OR write it. A process with neither right
-     * is refused SS$_NOPRIV here, before it holds a channel at all; one with
-     * only one of them gets the channel, and the right it lacks is refused at
-     * the read or write itself (vms_ioctl_mbx_read/_write). The mailbox's
-     * owner UIC and mask are fixed at $CREMBX, so no mbx->lock is needed to
-     * read them; the list lock keeps the mailbox alive meanwhile.
+     * PROTECTION (rd vms-c6d1) is NOT checked here. Measured on real VAX V7.3
+     * and Alpha V8.4 (docs/oracle/semantics/mbxprot/, MBXP.ALL.ASSIGN): an
+     * unprivileged $ASSIGN of a mailbox whose mask denies every access to every
+     * category SUCCEEDS; it is each read and write that is refused SS$_NOPRIV
+     * (vms_ioctl_mbx_read/_write), with the privileges enabled at that I/O.
      */
-    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL &&
-        mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) {
-        exec_unlock(&vms_mbx_list_lock);
-        exec_free(ch);
-        args.status = SS__NOPRIV;
-        goto out;
-    }
     exec_lock(&mbx->lock);
     mbx->refcnt++;
     exec_unlock(&mbx->lock);

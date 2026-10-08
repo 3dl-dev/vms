@@ -12,14 +12,15 @@
  *
  *   - $CREMBX's promsk is a SOGW protection mask owned by the creator's UIC, and
  *     the executive's ONE protection decision (src/kernel-core/vms_prot.h, the
- *     same one the Files-11 ACP applies to a file) gates $ASSIGN, read and write:
- *       * no read AND no write right       -> $ASSIGN is SS$_NOPRIV
+ *     same one the Files-11 ACP applies to a file) gates every read and write,
+ *     with the privileges enabled at that I/O. $ASSIGN itself is NOT checked:
+ *     real VAX V7.3 and Alpha V8.4 assign a channel to a mailbox the caller may
+ *     neither read nor write (docs/oracle/semantics/mbxprot/, MBXP.ALL.ASSIGN).
  *       * write right only (the request-mailbox shape S:RWLP,O:RWLP,G,W:W)
- *                                          -> the channel, the write, but the
- *                                             READ is SS$_NOPRIV
- *       * read right only                  -> the channel, the read, but the
- *                                             WRITE is SS$_NOPRIV
- *     and READALL, SYSPRV and BYPASS lift it exactly as they do for a file.
+ *                                          -> the write, but the READ is NOPRIV
+ *       * read right only                  -> the read, but the WRITE is NOPRIV
+ *     BYPASS and SYSPRV lift it as they do for a file; READALL does NOT open a
+ *     mailbox (MBXP.READALL.READ on both real systems).
  *   - every message carries the writer's VMS PID, stamped by the executive (the
  *     reader's IOSB second longword) -- not something the writer can assert.
  *   - IO$M_NORSWAIT: a write to a mailbox with no room completes at once with
@@ -32,11 +33,11 @@
  * mailbox, and reports each verdict over a pipe. Single privilege bits are then
  * switched on and off one at a time, so every verdict is decided by one bit.
  *
- * NEGATIVE CONTROLS (tests/qemu/facility_defects.sh): mbx-prot-assign-unchecked,
- * mbx-prot-read-unchecked, mbx-prot-write-unchecked, crembx-promsk-dropped,
- * mbx-sender-pid-not-stamped, mbx-norswait-ignored; and the three privilege
- * overrides acp-readall-ignored / acp-bypass-ignored / acp-sysprv-ignored, which
- * mutate the shared vms_prot.h and so redden this suite AND the file one.
+ * NEGATIVE CONTROLS (tests/qemu/facility_defects.sh): mbx-prot-read-unchecked,
+ * mbx-prot-write-unchecked, mbx-readall-grants-read, crembx-promsk-dropped,
+ * mbx-sender-pid-not-stamped, mbx-norswait-ignored; and the privilege overrides
+ * acp-bypass-ignored / acp-sysprv-ignored, which mutate the shared vms_prot.h
+ * and so redden this suite AND the file one.
  *
  * No /dev/vms -> honest SKIP (77), never a fabricated pass.
  */
@@ -86,21 +87,23 @@ struct mbx_names {
 struct verdicts {
     uint32_t pid;                   /* the child's own VMS PID ($GETJPI) */
     uint32_t setident;
-    uint32_t priv_assign;           /* PROT_PRIVATE: expect SS$_NOPRIV */
-    uint32_t sys_assign;            /* the sys$crembx(promsk) one, via sys$assign */
+    uint32_t priv_assign;           /* PROT_PRIVATE: a channel (assign unchecked) */
+    uint32_t priv_read;             /*   read: SS$_NOPRIV */
+    uint32_t priv_write;            /*   write: SS$_NOPRIV */
+    uint32_t sys_write;             /* the sys$crembx(promsk) one, via sys$qiow */
     uint32_t req_assign;            /* PROT_REQUEST: a channel */
     uint32_t req_write[6];          /* six requests: each SS$_NORMAL */
     uint32_t req_read;              /* unprivileged read: SS$_NOPRIV */
     uint32_t rdr_assign;            /* PROT_READER: a channel */
-    uint32_t rdr_write;             /* SS$_NOPRIV */
     uint32_t rdr_read;              /* empty + IO$M_NOW: SS$_ENDOFFILE (allowed) */
-    uint32_t readall_read;          /* READALL alone: the read is granted */
-    uint32_t readall_off_read;      /* READALL off again: SS$_NOPRIV */
-    uint32_t bypass_assign;         /* BYPASS alone: PROT_PRIVATE is assignable */
-    uint32_t bypass_off_assign;     /* BYPASS off again: SS$_NOPRIV */
-    uint32_t sysprv_assign;         /* SYSPRV alone: SYSTEM category -> assignable */
-    uint32_t sysprv_read;           /* SYSPRV alone: the request read is granted */
-    uint32_t sysprv_off_assign;     /* SYSPRV off again: SS$_NOPRIV */
+    uint32_t rdr_write;             /* SS$_NOPRIV */
+    uint32_t readall_read;          /* READALL alone: still SS$_NOPRIV on a mailbox */
+    uint32_t bypass_read;           /* BYPASS alone: the request read is granted */
+    uint32_t bypass_write;          /* BYPASS alone: the private write is granted */
+    uint32_t bypass_off_read;       /* BYPASS off again: SS$_NOPRIV */
+    uint32_t sysprv_read;           /* SYSPRV alone: SYSTEM category -> granted */
+    uint32_t sysprv_write;          /* SYSPRV alone: the private write is granted */
+    uint32_t sysprv_off_write;      /* SYSPRV off again: SS$_NOPRIV */
 };
 
 static struct dsc$descriptor_s mkdsc(const char *s)
@@ -133,17 +136,6 @@ static void priv(uint64_t bit, int on)
     (void)vms_kif_setprv(bit, on, 0, &prev);
 }
 
-/* $ASSIGN by device name through the executive; the channel is given back at
- * once (only the verdict matters). */
-static uint32_t try_assign(const char *dev)
-{
-    uint32_t ch = 0;
-    uint32_t st = vms_kif_mbx_assign(dev, &ch);
-    if ($VMS_STATUS_SUCCESS(st))
-        (void)vms_kif_dassgn((uint16_t)ch);
-    return st;
-}
-
 static uint32_t read_now(uint32_t ch)
 {
     char buf[64];
@@ -157,7 +149,7 @@ static int child_main(int rfd, int wfd)
     struct mbx_names nm;
     struct verdicts v;
     struct vms_procinfo pi;
-    uint32_t req = 0, rdr = 0;
+    uint32_t req = 0, rdr = 0, prv = 0;
     int i;
 
     memset(&v, 0, sizeof(v));
@@ -173,13 +165,23 @@ static int child_main(int rfd, int wfd)
     /* World category of every mailbox below, no privilege but SETPRV. */
     v.setident = vms_kif_setident("MBXPROT", (100u << 16) | 100u, PRV$M_SETPRV);
 
-    v.priv_assign = try_assign(nm.priv);
+    v.priv_assign = vms_kif_mbx_assign(nm.priv, &prv);
+    v.priv_read = read_now(prv);
+    v.priv_write = vms_kif_mbx_write(prv, "P", 1);
     {
         struct dsc$descriptor_s d = mkdsc(nm.sysmbx);
+        struct _iosb iosb;
         uint16_t c = 0;
-        v.sys_assign = sys$assign(&d, &c, 0, NULL);
-        if ($VMS_STATUS_SUCCESS(v.sys_assign))
+        uint32_t st = sys$assign(&d, &c, 0, NULL);
+        if ($VMS_STATUS_SUCCESS(st)) {
+            memset(&iosb, 0, sizeof(iosb));
+            st = sys$qiow(0, c, IO$_WRITEVBLK | IO$M_NOW, &iosb, NULL, 0, (void *)"S", 1,
+                          0, 0, 0, 0);
+            if ($VMS_STATUS_SUCCESS(st))
+                st = iosb.iosb$w_status;
             (void)sys$dassgn(c);
+        }
+        v.sys_write = st;
     }
 
     v.req_assign = vms_kif_mbx_assign(nm.request, &req);
@@ -197,28 +199,29 @@ static int child_main(int rfd, int wfd)
     priv(PRV$M_READALL, 1);
     v.readall_read = read_now(req);
     priv(PRV$M_READALL, 0);
-    v.readall_off_read = read_now(req);
 
     priv(PRV$M_BYPASS, 1);
-    v.bypass_assign = try_assign(nm.priv);
+    v.bypass_read = read_now(req);
+    v.bypass_write = vms_kif_mbx_write(prv, "B", 1);
     priv(PRV$M_BYPASS, 0);
-    v.bypass_off_assign = try_assign(nm.priv);
+    v.bypass_off_read = read_now(req);
 
     priv(PRV$M_SYSPRV, 1);
-    v.sysprv_assign = try_assign(nm.priv);
     v.sysprv_read = read_now(req);
+    v.sysprv_write = vms_kif_mbx_write(prv, "Y", 1);
     priv(PRV$M_SYSPRV, 0);
-    v.sysprv_off_assign = try_assign(nm.priv);
+    v.sysprv_off_write = vms_kif_mbx_write(prv, "Z", 1);
 
     if (write(wfd, &v, sizeof(v)) != (ssize_t)sizeof(v))
         return 1;
-    /* Hold the request channel until the parent has read what is left. */
+    /* Hold the channels until the parent has read what is left. */
     {
         char go;
         (void)!read(rfd, &go, 1);
     }
     if (req) (void)vms_kif_dassgn((uint16_t)req);
     if (rdr) (void)vms_kif_dassgn((uint16_t)rdr);
+    if (prv) (void)vms_kif_dassgn((uint16_t)prv);
     return 0;
 }
 
@@ -303,13 +306,18 @@ int main(int argc, char **argv)
 
     check($VMS_STATUS_SUCCESS(v.setident), "child: SETIDENT to [100,100] holding only SETPRV");
 
-    /* negctl: mbx-prot-assign-unchecked */
-    check(v.priv_assign == SS$_NOPRIV,
-          "unprivileged $ASSIGN of a mailbox whose protection grants it neither read nor write is SS$_NOPRIV");
+    check(v.priv_assign == SS$_NORMAL,
+          "an unprivileged $ASSIGN of a no-world-access mailbox yields a channel (VMS checks each I/O, not the assign)");
+    /* negctl-knockon: mbx-prot-read-unchecked */
+    check(v.priv_read == SS$_NOPRIV,
+          "an unprivileged READ of a no-world-access mailbox is SS$_NOPRIV");
+    /* negctl-knockon: mbx-prot-write-unchecked */
+    check(v.priv_write == SS$_NOPRIV,
+          "an unprivileged WRITE to a no-world-access mailbox is SS$_NOPRIV");
     /* negctl: crembx-promsk-dropped */
-    /* negctl-knockon: mbx-prot-assign-unchecked */
-    check(v.sys_assign == SS$_NOPRIV,
-          "the promsk given to sys$crembx is enforced: unprivileged sys$assign by logical name is SS$_NOPRIV");
+    /* negctl-knockon: mbx-prot-write-unchecked */
+    check(v.sys_write == SS$_NOPRIV,
+          "the promsk given to sys$crembx is enforced: an unprivileged $QIOW write through sys$assign is SS$_NOPRIV");
 
     check(v.req_assign == SS$_NORMAL,
           "unprivileged $ASSIGN of the write-only (W:W) request mailbox yields a channel");
@@ -323,30 +331,32 @@ int main(int argc, char **argv)
 
     check(v.rdr_assign == SS$_NORMAL,
           "unprivileged $ASSIGN of the read-only (W:R) mailbox yields a channel");
+    check(v.rdr_read == SS$_ENDOFFILE,
+          "an unprivileged IO$M_NOW READ of the empty W:R mailbox is allowed (SS$_ENDOFFILE)");
     /* negctl: mbx-prot-write-unchecked */
     check(v.rdr_write == SS$_NOPRIV,
           "an unprivileged WRITE to the W:R mailbox is SS$_NOPRIV");
-    check(v.rdr_read == SS$_ENDOFFILE,
-          "an unprivileged IO$M_NOW READ of the empty W:R mailbox is allowed (SS$_ENDOFFILE)");
 
-    /* negctl-knockon: acp-readall-ignored */
-    check(v.readall_read == SS$_NORMAL,
-          "READALL alone grants the read of the W:W request mailbox");
+    /* negctl: mbx-readall-grants-read */
     /* negctl-knockon: mbx-prot-read-unchecked */
-    check(v.readall_off_read == SS$_NOPRIV, "READALL off again: the read is refused");
+    check(v.readall_read == SS$_NOPRIV,
+          "READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)");
     /* negctl-knockon: acp-bypass-ignored */
-    check(v.bypass_assign == SS$_NORMAL,
-          "BYPASS alone grants $ASSIGN of the no-world-access mailbox");
-    /* negctl-knockon: mbx-prot-assign-unchecked */
-    check(v.bypass_off_assign == SS$_NOPRIV, "BYPASS off again: $ASSIGN is refused");
-    /* negctl-knockon: acp-sysprv-ignored */
-    check(v.sysprv_assign == SS$_NORMAL,
-          "SYSPRV alone grants $ASSIGN of the no-world-access mailbox (SYSTEM protection category)");
+    check(v.bypass_read == SS$_NORMAL,
+          "BYPASS alone grants the read of the W:W request mailbox");
+    /* negctl-knockon: acp-bypass-ignored */
+    check(v.bypass_write == SS$_NORMAL,
+          "BYPASS alone grants a write to the no-world-access mailbox");
+    /* negctl-knockon: mbx-prot-read-unchecked */
+    check(v.bypass_off_read == SS$_NOPRIV, "BYPASS off again: the read is refused");
     /* negctl-knockon: acp-sysprv-ignored */
     check(v.sysprv_read == SS$_NORMAL,
           "SYSPRV alone grants the read of the W:W request mailbox (SYSTEM protection category)");
-    /* negctl-knockon: mbx-prot-assign-unchecked */
-    check(v.sysprv_off_assign == SS$_NOPRIV, "SYSPRV off again: $ASSIGN is refused");
+    /* negctl-knockon: acp-sysprv-ignored */
+    check(v.sysprv_write == SS$_NORMAL,
+          "SYSPRV alone grants a write to the no-world-access mailbox (SYSTEM protection category)");
+    /* negctl-knockon: mbx-prot-write-unchecked */
+    check(v.sysprv_off_write == SS$_NOPRIV, "SYSPRV off again: the write is refused");
 
     /* The privileged reader (the parent, SYSTEM category) reads what the child
      * wrote, and the executive -- not the child -- says who wrote it. */

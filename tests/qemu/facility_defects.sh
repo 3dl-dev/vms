@@ -592,8 +592,8 @@ acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
-mbx-prot-assign-unchecked
 mbx-prot-read-unchecked
+mbx-readall-grants-read
 mbx-prot-write-unchecked
 crembx-promsk-dropped
 mbx-sender-pid-not-stamped
@@ -1106,22 +1106,21 @@ EOF
 
     acp-readall-ignored)
         case "$_f" in
-        facility)     echo "READALL grants read of any protected object -- file or mailbox (vms_prot_check)";;
+        facility)     echo "READALL grants read of any file (vms_prot_check)";;
         targets)      echo "kernel-core/vms_prot.h";;
-        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_prot_check() -- the executive's one protection decision, used by the Files-11 ACP for a file and by the mailbox driver for a mailbox (rd vms-c6d1) -- grants a request for only read/execute bits when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check on either object class. Gone after substitution (no-op re-apply).";;
+        why)          echo "vms_prot_check() -- the executive's one protection decision, used by the Files-11 ACP for a file (the mailbox driver withholds READALL, as real VMS does: rd vms-c6d1) -- grants a request for only read/execute bits when READALL is held. The mutation makes that branch unreachable ('0 &&'), so READALL no longer lifts the protection check on a file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 READALL alone grants the read
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-READALL alone grants the read of the W:W request mailbox
 EOF
                       ;;
-        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to grant READALL a mailbox read; it is the one READALL property observed on a second object class, not a second property.";;
+        knock_on_why)  echo "";;
         esac;;
 
     acp-bypass-ignored)
@@ -1138,10 +1137,11 @@ BYPASS alone grants the read
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-BYPASS alone grants $ASSIGN of the no-world-access mailbox
+BYPASS alone grants the read of the W:W request mailbox
+BYPASS alone grants a write to the no-world-access mailbox
 EOF
                       ;;
-        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to let BYPASS assign a mailbox the world has no access to; it is the one BYPASS property observed on a second object class.";;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to let BYPASS read and write mailboxes whose mask denies the world; it is the one BYPASS property observed on a second object class.";;
         esac;;
 
     acp-sysprv-ignored)
@@ -1158,33 +1158,30 @@ SYSPRV alone grants the read (SYSTEM protection category)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-SYSPRV alone grants $ASSIGN of the no-world-access mailbox (SYSTEM protection category)
 SYSPRV alone grants the read of the W:W request mailbox (SYSTEM protection category)
+SYSPRV alone grants a write to the no-world-access mailbox (SYSTEM protection category)
 EOF
                       ;;
-        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to put a SYSPRV holder in a mailbox's SYSTEM category, for the assign and for the read; it is the one SYSPRV property observed on a second object class.";;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to put a SYSPRV holder in a mailbox's SYSTEM category, for the read and for the write; it is the one SYSPRV property observed on a second object class.";;
         esac;;
 
-    mbx-prot-assign-unchecked)
+    mbx-readall-grants-read)
         case "$_f" in
-        facility)     echo "\$ASSIGN of a mailbox is refused to a process its protection grants neither read nor write (rd vms-c6d1)";;
+        facility)     echo "READALL does not open a read-denied mailbox (rd vms-c6d1, oracle mbxprot MBXP.READALL.READ)";;
         targets)      echo "kernel-core/vms_mbx.c";;
         suites_red)   echo "test_syssvc_mbx_prot";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_mbx_assign() refuses SS\$_NOPRIV when vms_prot_check() grants the caller neither read nor write on the mailbox. The mutation makes that refusal unreachable ('0 &&'), so an unprivileged process gets a channel to a mailbox the world has no access to. The read/write checks are untouched. Gone after substitution (no-op re-apply).";;
+        why)          echo "mbx_access() withholds READALL from the privileges it hands vms_prot_check(), because real VAX V7.3 and Alpha V8.4 refuse a READALL-only process the read of a read-denied mailbox. The mutation passes cur_privs whole, so READALL opens the mailbox as it would a file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-unprivileged $ASSIGN of a mailbox whose protection grants it neither read nor write is SS$_NOPRIV
+READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-the promsk given to sys$crembx is enforced: unprivileged sys$assign by logical name is SS$_NOPRIV
-BYPASS off again: $ASSIGN is refused
-SYSPRV off again: $ASSIGN is refused
 EOF
                       ;;
-        knock_on_why)  echo "the same missing \$ASSIGN refusal observed through sys\$assign (the public service reaches the same executive check) and after each privilege is switched back off -- every unprivileged \$ASSIGN of a no-world-access mailbox now succeeds.";;
+        knock_on_why)  echo "";;
         esac;;
 
     mbx-prot-read-unchecked)
@@ -1201,10 +1198,12 @@ an unprivileged client may NOT READ the W:W request mailbox (SS$_NOPRIV) -- no o
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-READALL off again: the read is refused
+an unprivileged READ of a no-world-access mailbox is SS$_NOPRIV
+READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)
+BYPASS off again: the read is refused
 EOF
                       ;;
-        knock_on_why)  echo "the same missing read refusal observed again once READALL is switched back off.";;
+        knock_on_why)  echo "the same missing read refusal observed on the no-world-access mailbox, under READALL (which must not open it) and after BYPASS is switched back off.";;
         esac;;
 
     mbx-prot-write-unchecked)
@@ -1221,9 +1220,12 @@ an unprivileged WRITE to the W:R mailbox is SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+an unprivileged WRITE to a no-world-access mailbox is SS$_NOPRIV
+the promsk given to sys$crembx is enforced: an unprivileged $QIOW write through sys$assign is SS$_NOPRIV
+SYSPRV off again: the write is refused
 EOF
                       ;;
-        knock_on_why)  echo "";;
+        knock_on_why)  echo "the same missing write refusal observed on the no-world-access mailbox, through the public sys\$qiow path, and after SYSPRV is switched back off.";;
         esac;;
 
     crembx-promsk-dropped)
@@ -1236,7 +1238,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "sys\$crembx passes promsk to vms_kif_mbx_create_prot(). The mutation passes 0 (all access to all categories) instead -- what the service did before rd vms-c6d1 -- so a mailbox created through the public service is unprotected while one created directly through the executive interface still is. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-the promsk given to sys$crembx is enforced: unprivileged sys$assign by logical name is SS$_NOPRIV
+the promsk given to sys$crembx is enforced: an unprivileged $QIOW write through sys$assign is SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7596,8 +7598,8 @@ apply_edit() {
         sed -i 's|^    if (privs \& VMS_PRV_M_BYPASS)$|    if (0 \&\& (privs \& VMS_PRV_M_BYPASS)) /* NEGCTL acp-bypass-ignored */|' "$_file";;
     acp-sysprv-ignored)
         sed -i 's#^                (privs \& VMS_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
-    mbx-prot-assign-unchecked)
-        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL \&\&$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL \&\& /* NEGCTL mbx-prot-assign-unchecked */|' "$_file";;
+    mbx-readall-grants-read)
+        sed -i 's|^    uint64_t privs = proc->cur_privs \& ~VMS_PRV_M_READALL;$|    uint64_t privs = proc->cur_privs; /* NEGCTL mbx-readall-grants-read */|' "$_file";;
     mbx-prot-read-unchecked)
         sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) { /* NEGCTL mbx-prot-read-unchecked */|' "$_file";;
     mbx-prot-write-unchecked)

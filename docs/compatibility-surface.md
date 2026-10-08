@@ -384,7 +384,7 @@ VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resid
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| 🟢 | `sys$crembx` | routine | Create a mailbox device | implemented | real | in | `src/libvms/syssvc/sys_mailbox.c` — vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at $ASSIGN/read/write, with BYPASS/READALL/SYSPRV (rd vms-c6d1); acmode and flags are not yet honoured |
+| 🟢 | `sys$crembx` | routine | Create a mailbox device | implemented | real | in | `src/libvms/syssvc/sys_mailbox.c` — vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at each read/write (not at $ASSIGN, as on real VMS), with BYPASS/SYSPRV (READALL does not open a mailbox, oracle mbxprot) (rd vms-c6d1); acmode and flags are not yet honoured |
 | 🟢 | `sys$delmbx` | routine | Delete a mailbox device | implemented | real | in | `src/libvms/syssvc/sys_mailbox.c` |
 
 ### sys-memory — SYS$ Memory Management

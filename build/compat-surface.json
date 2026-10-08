@@ -1713,7 +1713,7 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS System Services Reference Manual \u2014 Mailbox Services",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-08",
       "rollup": {
         "count": 2,
         "by_status": {
@@ -7804,7 +7804,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_mailbox.c",
       "verified_against": null,
-      "notes": "vms.ko-resident; replaced an earlier AF_UNIX facade",
+      "notes": "vms.ko-resident; replaced an earlier AF_UNIX facade. promsk is enforced: owner UIC + SOGW mask through the executive protection decision (vms_prot.h) at $ASSIGN/read/write, with BYPASS/READALL/SYSPRV (rd vms-c6d1); acmode and flags are not yet honoured",
       "plan_ref": "vms-801"
     },
     {

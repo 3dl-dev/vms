@@ -127,6 +127,7 @@
 #   club-open-facts-unlearned             vms_cnxman_barrier_fsm.c
 #   removal-pair-not-rederived            vms_cnxman_phase2.c
 #   join-swallows-step-reports            vms_cnxman_join_fsm.c
+#   coord-step-ack-unmarked               vms_cluster_codec_cm.c
 #
 SELF="$0"
 
@@ -136,6 +137,7 @@ coord-open-withhold-disarmed
 club-open-facts-unlearned
 removal-pair-not-rederived
 join-swallows-step-reports
+coord-step-ack-unmarked
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1347,6 +1349,20 @@ EOF
                       ;;
         esac;;
 
+    coord-step-ack-unmarked)
+        case "$_f" in
+        facility)     echo "the coordinator's 0x81/0x0b step acknowledgement carries 10 <class> 01 at body[16:19], as every real one does (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_step_ack_build() drops the response marker at body[18]: the ack goes out 10 02 00, which OVMX's own participant never reads -- and a real OpenVMS VAX V7.3 member, sent such an ack by an OVMX coordinator, re-sent its step and bugchecked CNXMGRERR (lab arm PF-2).";;
+        require_fail) cat <<'EOF'
+  byte-identical to the real ack after the stamp
+  body[18] = the response marker
+EOF
+                      ;;
+        esac;;
+
     join-swallows-step-reports)
         case "$_f" in
         facility)     echo "join_forward() hands a member's op-0x0b step report on to this node's coordinator (rd vms-f297)";;
@@ -1632,6 +1648,9 @@ apply_edit() {
 
     club-open-facts-unlearned)
         sed -i 's|^\tcnxman_club_learn_open(\&b->cl->club,$|\tif (0) /* NEGCTL club-open-facts-unlearned */ cnxman_club_learn_open(\&b->cl->club,|' "$_file";;
+
+    coord-step-ack-unmarked)
+        sed -i 's|^\tvms_wire_put_u8(\&w, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY, 0x01u);$|\t/* NEGCTL coord-step-ack-unmarked */|' "$_file";;
 
     join-swallows-step-reports)
         sed -i 's|^\t    CNXMAN_BARRIER_RX_NOT_MINE)$|\t    CNXMAN_BARRIER_RX_NOT_MINE \&\& 0) /* NEGCTL join-swallows-step-reports */|' "$_file";;

@@ -1,0 +1,17 @@
+# keystroke oracle transcript (unmasked) -- case LE.OVERSTRIKE (OpenVMS VAX V7.3 OPA0:)
+# line editing: ^A toggles insert/overstrike for the rest of the line
+# case-sha256 b98eb2d996f49347d544663a9a07d5f8358243f14d546968cc34172d61b1bbbe
+@start loggedin OK
+=== STEP T
+| WRITE SYS$OUTPUT 1X3
+=== STEP L1
+| <BS>
+=== STEP L2
+| <BS>
+=== STEP A
+=== STEP O
+| 2
+=== STEP R
+| <CR><LF>
+| <CR>123<CR><LF>
+| <CR><NUL>$ 

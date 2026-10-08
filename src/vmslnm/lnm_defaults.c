@@ -383,11 +383,33 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * On real VMS this would be the physical terminal (TTA0:, VTA123:).
      * All I/O channel logicals point here via "TT:".
      */
-    const char *tty = ttyname(STDIN_FILENO);
-    if (!tty)
-        tty = "/dev/tty";
-    lnm_create(mgr, LNM_PROCESS_TABLE, "TT", tty,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    char term[VMS_DEVNAM_SIZE] = "";
+    {
+        struct vms_procinfo pi;
+        memset(&pi, 0, sizeof pi);
+        if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0]) {
+            snprintf(term, sizeof term, "%s", pi.terminal);
+            size_t tl = strlen(term);
+            if (tl && term[tl - 1] == ':')
+                term[tl - 1] = '\0';
+        }
+    }
+    /* TT is this process's terminal, a CONCEALED terminal device name
+     * ("_OPA0:", attributes CONCEALED|TERMINAL in exec mode -- observed
+     * LNM.TRN.TT on VAX V7.3 and Alpha V8.4, rd vms-b14e). Without a terminal
+     * in the executive row it stays the host line the process runs on. */
+    if (term[0]) {
+        char ttv[VMS_DEVNAM_SIZE + 4];
+        snprintf(ttv, sizeof ttv, "_%s:", term);
+        lnm_create(mgr, LNM_PROCESS_TABLE, "TT", ttv,
+                   LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    } else {
+        const char *tty = ttyname(STDIN_FILENO);
+        if (!tty)
+            tty = "/dev/tty";
+        lnm_create(mgr, LNM_PROCESS_TABLE, "TT", tty,
+                   LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    }
 
     /*
      * I/O channel logicals — point at TT:, not Linux /dev/ paths.
@@ -401,16 +423,44 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * creator names the new process's SYS$INPUT/SYS$OUTPUT. Since the process
      * table became executive-resident and visible to $TRNLNM (rd vms-ef21), a
      * "TT:" seeded here would shadow that published name. */
-    static const char *const io_names[] = {
-        "SYS$INPUT", "SYS$OUTPUT", "SYS$ERROR", "SYS$COMMAND"
+    /*
+     * PROCESS-PERMANENT FILES (rd vms-b14e). On OpenVMS a process with a
+     * terminal has SYS$INPUT, SYS$COMMAND, SYS$OUTPUT and SYS$ERROR defined as
+     * process-permanent files: the equivalence is ESC, NUL, the file's
+     * 2-byte internal file identifier (IFI) and then the device -- observed on
+     * VAX V7.3 and Alpha V8.4 (semantic oracle LNM.TRN.SYSIN/SYSCMD/SYSOUT):
+     *   SYS$INPUT, SYS$COMMAND  exec mode, CONCEALED|TERMINAL,  IFI bytes 01 81
+     *   SYS$OUTPUT, SYS$ERROR   super mode, CONCEALED|TERMINAL|CONFINE, IFI bytes 03 81
+     * The device is this process's terminal as the executive row records it.
+     * A process with no terminal, or no executive, keeps the plain "TT:".
+     */
+    static const struct { const char *name; uint8_t ifi_hi; int out; } io_names[] = {
+        { "SYS$INPUT", 0x01, 0 }, { "SYS$OUTPUT", 0x03, 1 },
+        { "SYS$ERROR", 0x03, 1 }, { "SYS$COMMAND", 0x01, 0 },
     };
     for (size_t k = 0; k < sizeof io_names / sizeof io_names[0]; k++) {
         char cur[LNM_MAX_VALUE + 1];
         uint16_t cl = 0;
-        if (lnm_translate(mgr, LNM_FILE_DEV, io_names[k], cur, sizeof cur,
+        if (lnm_translate(mgr, LNM_FILE_DEV, io_names[k].name, cur, sizeof cur,
                           &cl, NULL) == SS$_NORMAL)
             continue;
-        lnm_create(mgr, LNM_PROCESS_TABLE, io_names[k], "TT:", 0, LNM_MODE_EXEC);
+        if (term[0]) {
+            char ppf[LNM_MAX_VALUE + 1];
+            int dl = snprintf(ppf + 4, sizeof ppf - 4, "_%s:", term);
+            ppf[0] = 0x1B;
+            ppf[1] = 0x00;
+            ppf[2] = (char)io_names[k].ifi_hi;   /* IFI: 01 81 / 03 81, as the */
+            ppf[3] = (char)0x81;                 /* oracle's bytes read */
+            uint32_t at = LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL |
+                          (io_names[k].out ? LNM_ATTR_CONFINE : 0);
+            uint32_t st = lnm_create_bytes(mgr, LNM_PROCESS_TABLE, io_names[k].name,
+                                           ppf, (uint16_t)(4 + dl), at,
+                                           io_names[k].out ? LNM_MODE_SUPER
+                                                           : LNM_MODE_EXEC);
+            if (st == SS$_NORMAL || st == SS$_SUPERSEDE)
+                continue;
+        }
+        lnm_create(mgr, LNM_PROCESS_TABLE, io_names[k].name, "TT:", 0, LNM_MODE_EXEC);
     }
 }
 

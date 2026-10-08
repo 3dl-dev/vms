@@ -1,0 +1,18 @@
+# keystroke oracle transcript (unmasked) -- case OOB.CTRLS (OpenVMS VAX V7.3 OPA0:)
+# ^S suspends output in flight (nothing arrives while held); ^Q resumes it
+# case-sha256 360ffabc89bc4bcb3241be86cb9017e3909e13b7521ef32b0f1a961c71da5aff
+@start loggedin OK
+=== STEP G quiet
+=== STEP W quiet
+=== STEP S quiet
+=== STEP H0 quiet
+=== STEP H
+=== STEP Q quiet
+=== STEP QW quiet
+=== STEP Y (from *INTERRUPT*)
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP X
+| STOP<CR><LF>
+| <CR><NUL>$ 

@@ -1,0 +1,20 @@
+# keystroke oracle transcript (unmasked) -- case LOGIN.BANNER (OpenVMS VAX V7.3 OPA0:)
+# login on the console: Username:, Password: (no echo), banner, first prompt
+# case-sha256 2f617ee4e80c0c10c1c92a948c83826731e4c7c7a35c5aca50f3b7372283af3a
+@start loggedout OK
+=== STEP U
+| <BEL><LF>
+| <CR><LF>
+| VAX/VMS V7.3      node VAX1<CR><LF>
+| <CR><LF>
+| <CR>Username: 
+=== STEP N
+| SYSTEM<CR><LF>
+| <CR>Password: 
+=== STEP P
+| <CR><LF>
+|  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1<CR><LF>
+|     Last interactive login on Thursday,  8-OCT-2026 19:36<CR><ESC>[c<ESC>\<ESC>Z<ESC>[0c<CR><LF>
+| %SET-W-NOTSET, error modifying OPA0:<CR><LF>
+| -SET-I-UNKTERM, unknown terminal type<CR><LF>
+| <CR><NUL>$ 

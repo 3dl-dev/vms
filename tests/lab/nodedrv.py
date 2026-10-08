@@ -7,6 +7,9 @@
 Forks ./vax vax.ini in <nodedir> under a pty. Tees console -> <logpath>.
 Creates an input FIFO at <logpath>.in : anything written to it is sent to the
 VAX console (append \\r yourself, or send a line and we translate \\n->\\r).
+And a RAW input FIFO at <logpath>.raw : its bytes go to the console verbatim
+and at once (no \\n translation) -- the keystroke oracle (vms-370) needs a real
+LINEFEED (^J, delete-word) and exact keystroke timing.
 Auto-answers boot prompts:
     '>>>'                 -> --boot (default 'B DUA0')  (once, echo-verified)
     'ENTER DATE AND TIME' -> the --date                 (each time seen)
@@ -173,15 +176,17 @@ def main():
         os.setsid()
 
     fifopath = logpath + '.in'
+    rawpath = logpath + '.raw'
     failpath = logpath + '.bootfail'
     try:
         os.unlink(failpath)
     except OSError:
         pass
-    try:
-        os.mkfifo(fifopath)
-    except FileExistsError:
-        pass
+    for fp in (fifopath, rawpath):
+        try:
+            os.mkfifo(fp)
+        except FileExistsError:
+            pass
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -204,13 +209,15 @@ def main():
     # open FIFO read end non-blocking, keep a write end so we never get EOF
     fifo_r = os.open(fifopath, os.O_RDONLY | os.O_NONBLOCK)
     fifo_w = os.open(fifopath, os.O_WRONLY)  # keep-open writer
+    raw_r = os.open(rawpath, os.O_RDONLY | os.O_NONBLOCK)
+    raw_w = os.open(rawpath, os.O_WRONLY)    # keep-open writer
 
     tail = b''
     boot_sent = False
     autoboot_flagged = False
     while True:
         try:
-            r, _, _ = select.select([fd, fifo_r], [], [], 2.0)
+            r, _, _ = select.select([fd, fifo_r, raw_r], [], [], 2.0)
         except (OSError, ValueError):
             break
         if fd in r:
@@ -257,6 +264,13 @@ def main():
             if cmd:
                 cmd = cmd.replace(b'\n', b'\r')
                 os.write(fd, cmd)
+        if raw_r in r:
+            try:
+                raw = os.read(raw_r, 4096)
+            except OSError:
+                raw = b''
+            if raw:
+                os.write(fd, raw)
     log.write(b'\n[drv:emulator exited]\n')
     log.close()
 

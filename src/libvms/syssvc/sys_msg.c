@@ -41,6 +41,7 @@
 #include <ctype.h>
 #include "starlet.h"
 #include "msgdef.h"
+#include "ovmx_status.h"   /* OVMX_FACILITY */
 
 /* Imported from status.c */
 extern int vms_status_string(uint32_t status, char *buf, size_t bufsize);
@@ -140,7 +141,11 @@ uint32_t sys$getmsg(uint32_t msgid, uint16_t *msglen,
 
     uint32_t fac = (msgid >> 16) & 0xFFF, num = (msgid >> 3) & 0x1FFF;
     const struct ovmx_msgdef *m = NULL;
-    if (msgid != 0)
+    /* OVMX's own facility (ovmx_status.h, OVMX_FACILITY) is never one of
+     * VMS's: its message numbers mean nothing in VMS's catalog. (Any OTHER
+     * facility number, customer-defined or not, uses the shared messages, as
+     * VMS does: 0x0FFF0002 is "%NONAME-E-NORMAL".) */
+    if (msgid != 0 && fac != OVMX_FACILITY)
         m = msgcat_find((num & 0x1000) ? msgid : (num << 3));
     const char *facname = msgcat_facility(fac);
 

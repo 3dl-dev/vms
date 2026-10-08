@@ -370,7 +370,16 @@ static void die(const char *msg)
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
 enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBSS,
-       B_EH_FRAME };
+       B_EH_FRAME, B_LIBINIT };
+
+/* B_LIBINIT (vms-db7): input sections named LIB$INITIALIZE -- the VMS psect a C
+ * program fills with the addresses of routines image activation calls before
+ * main (DEC C `#pragma extern_model strict_refdef "LIB$INITIALIZE"`, which OVMX's
+ * tcc honours). They are concatenated in link order into ONE output section of
+ * the same name, as the VMS linker collects a psect's contributions, and the
+ * symbol LIB$INITIALIZE names that section; IMGACT reads it by name and calls
+ * each entry, after the image's .init_array and before main. */
+static uint64_t g_libinit_va;       /* the placed LIB$INITIALIZE section (image-relative) */
 
 /* The buckets LINK.EXE places FLAT (a real image vaddr per input section) and
  * can therefore apply relocations into. B_BSS/B_TBSS are NOBITS (no bytes to
@@ -394,7 +403,7 @@ enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_INIT_ARRAY, B_BSS, B_TDATA, B_TBS
 static int bucket_is_patchable(int b)
 {
     return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
-           b == B_EH_FRAME;
+           b == B_EH_FRAME || b == B_LIBINIT;
 }
 
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
@@ -561,6 +570,9 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
             o->sec_bucket[i] = B_BSS;
         else if (s->sh_type == SHT_INIT_ARRAY)
             o->sec_bucket[i] = B_INIT_ARRAY;   /* ctor pointer table (vms-ee2) */
+        else if (s->sh_type == SHT_PROGBITS &&
+                 strcmp(o->shstr + s->sh_name, "LIB$INITIALIZE") == 0)
+            o->sec_bucket[i] = B_LIBINIT;      /* VMS init-routine psect (vms-db7) */
         else if (s->sh_type == SHT_PROGBITS &&
                  strcmp(o->shstr + s->sh_name, ".eh_frame") == 0)
             /* DWARF unwinder frame table (vms-70d). Read-only PROGBITS that
@@ -1705,7 +1717,7 @@ static uint64_t placed_addr(struct obj *d, Elf_Sym *s)
     if (sh <= 0 || sh >= d->nsh) return 0;
     switch (d->sec_bucket[sh]) {
     case B_TEXT: case B_RODATA: case B_DATA: case B_INIT_ARRAY: case B_BSS:
-    case B_EH_FRAME:
+    case B_EH_FRAME: case B_LIBINIT:
         return d->sec_va[sh] + s->st_value;
     default:
         return 0;
@@ -1760,6 +1772,8 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx,
          * add a .vms$rel bias for it (it is absolute, not image-relative) — it
          * re-checks gval_find() to suppress that. (vms-954) */
         { uint64_t gv; if (gval_find(nm, &gv)) return gv; }
+        /* LIB$INITIALIZE names the image's LIB$INITIALIZE psect (vms-db7). */
+        if (g_libinit_va && strcmp(nm, "LIB$INITIALIZE") == 0) return g_libinit_va;
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
         if (g_allow_undef) {
             dump_undef(nm); g_deferred++;
@@ -2157,7 +2171,7 @@ static int defined_placed(struct obj *objs, const char *name)
     if (shx <= 0 || shx >= objs[doi].nsh) return 0;
     int b = objs[doi].sec_bucket[shx];
     return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
-           b == B_BSS || b == B_EH_FRAME;
+           b == B_BSS || b == B_EH_FRAME || b == B_LIBINIT;
 }
 
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
@@ -2346,12 +2360,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     }
 
     int has_ro = 0, has_data = 0, has_init_array = 0, has_bss = 0, has_eh_frame = 0;
+    int has_libinit = 0;
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
             if (objs[i].sh[s].sh_size == 0) continue;
             if (objs[i].sec_bucket[s] == B_RODATA)     has_ro = 1;
             if (objs[i].sec_bucket[s] == B_DATA)       has_data = 1;
             if (objs[i].sec_bucket[s] == B_INIT_ARRAY) has_init_array = 1;
+            if (objs[i].sec_bucket[s] == B_LIBINIT)    has_libinit = 1;
             if (objs[i].sec_bucket[s] == B_BSS)        has_bss = 1;
             if (objs[i].sec_bucket[s] == B_EH_FRAME)   has_eh_frame = 1;
         }
@@ -2680,9 +2696,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     }
     uint64_t initarr_end = cur;
 
+    /* LIB$INITIALIZE (vms-db7): every contribution, in link order (object
+     * order, then section order within an object) -- no sorting, as the VMS
+     * linker concatenates a psect's contributions. Its start is the value of
+     * the symbol LIB$INITIALIZE (also when the image has no such psect: an
+     * empty range, so a reference still resolves). */
+    cur = ALIGN_UP(cur, 8);
+    uint64_t libinit_beg = cur;
+    if (has_libinit)
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_LIBINIT && objs[i].sh[s].sh_size) {
+                    uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                    cur = ALIGN_UP(cur, al);
+                    objs[i].sec_va[s] = cur;
+                    cur += objs[i].sh[s].sh_size;
+                }
+    uint64_t libinit_end = cur;
+    g_libinit_va = libinit_beg;
+
     /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved
      * vaddr is assigned even for a pure-.tbss image (tdata_sz == 0). */
-    uint64_t tdata_va = 0, tdata_end = initarr_end;
+    uint64_t tdata_va = 0, tdata_end = libinit_end;
     if (has_tls) {
         cur = ALIGN_UP(cur, tls_align);
         tdata_va = cur;
@@ -2815,6 +2850,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
     int ix_initarr = -1; if (has_init_array) { ix_initarr = nsec; secn[nsec++] = ".init_array"; }
+    int ix_libinit = -1; if (has_libinit) { ix_libinit = nsec; secn[nsec++] = "LIB$INITIALIZE"; }
     int ix_tdata = -1; if (has_tls && tdata_sz) { ix_tdata = nsec; secn[nsec++] = ".tdata"; }
     int ix_igot = -1; if (nimp)     { ix_igot = nsec; secn[nsec++] = ".igot"; }
     int ix_plt = -1;  if (nimp)     { ix_plt  = nsec; secn[nsec++] = ".plt"; }
@@ -2864,7 +2900,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * A PT_TLS follows when the image has thread-local storage. An executable
      * adds PT_PHDR (so IMGACT derives the load bias) + PT_INTERP=IMGACT.EXE, and
      * its GOT/import cells are written at activation so it is always writable. */
-    int writable = (ngot || ntls || has_data || has_init_array || has_bss ||
+    int writable = (ngot || ntls || has_data || has_init_array || has_libinit || has_bss ||
                     has_tls || nimp || is_exec);
     Elf_Phdr *ph = (Elf_Phdr *)(img + off_ph);
     int li;   /* index of the PT_LOAD phdr */
@@ -2899,7 +2935,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         for (int s = 0; s < objs[i].nsh; s++) {
             int b = objs[i].sec_bucket[s];
             if ((b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_INIT_ARRAY ||
-                 b == B_EH_FRAME) &&
+                 b == B_EH_FRAME || b == B_LIBINIT) &&
                 objs[i].sh[s].sh_size)
                 memcpy(img + objs[i].sec_va[s],
                        objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
@@ -3363,6 +3399,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_initarr].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_initarr].sh_addr = initarr_beg;
         sh[ix_initarr].sh_offset = initarr_beg; sh[ix_initarr].sh_size = initarr_end - initarr_beg;
         sh[ix_initarr].sh_addralign = 8;
+    }
+    if (has_libinit) {
+        /* The image's LIB$INITIALIZE psect, by name (vms-db7): IMGACT finds it
+         * with ovmx_find_section and calls each routine address it holds. */
+        sh[ix_libinit].sh_name = sn_off[ix_libinit]; sh[ix_libinit].sh_type = SHT_PROGBITS;
+        sh[ix_libinit].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_libinit].sh_addr = libinit_beg;
+        sh[ix_libinit].sh_offset = libinit_beg; sh[ix_libinit].sh_size = libinit_end - libinit_beg;
+        sh[ix_libinit].sh_addralign = 8;
     }
     if (has_tls && tdata_sz) {
         sh[ix_tdata].sh_name = sn_off[ix_tdata]; sh[ix_tdata].sh_type = SHT_PROGBITS;

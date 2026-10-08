@@ -456,4 +456,5 @@ vms$$chan_devnam=PROCEDURE
 sys$check_privilegew=PROCEDURE
 sys$audit_eventw=PROCEDURE
 sys$create_uid=PROCEDURE
+sys$clrast=PROCEDURE
 sys$setdfprot=PROCEDURE

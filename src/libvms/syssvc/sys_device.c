@@ -67,6 +67,8 @@
 #include "dvidef.h"
 #include "dcdef.h"
 #include "dvsdef.h"
+#include "lnmdef.h"
+#include <strings.h>
 #include "vms_kif.h"        /* pulls in struct vms_devinfo, VMS_DEVNAM_SIZE */
 
 /*
@@ -317,11 +319,40 @@ static uint32_t device_lookup_translated(const char *devnam_in,
         memcpy(key, cur, klen);
         key[klen] = '\0';
 
+        /* TT is THIS process's terminal: the device the executive's process
+         * row names (rd vms-b14e; observed DVI.TT / DVI.SYSCOMMAND, a DC$_TERM
+         * row, docs/oracle/semantics/info/). Its process-table equivalence is
+         * the substrate path the byte I/O uses, not a device name. */
+        if (!strcasecmp(key, "TT")) {
+            struct vms_procinfo me;
+            memset(&me, 0, sizeof me);
+            if ((vms_kif_getjpi_self(&me) & 1) && me.terminal[0]) {
+                strncpy(cur, me.terminal, sizeof(cur) - 1);
+                cur[sizeof(cur) - 1] = '\0';
+                continue;
+            }
+            return SS$_NOSUCHDEV;
+        }
+
+        /* A logical name in the device-name search order (LNM$FILE_DEV:
+         * process, job, group, system -- SYS$COMMAND is a process name), as
+         * $GETDVI translates its device argument. */
         char equiv[256];   /* >= VMS_LNM_MAX_VALUE+1 (src/kernel/vms_lnm.h) */
-        int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, key, 0,
-                                      equiv, sizeof(equiv), NULL, NULL, NULL);
-        if (r <= 0)
-            return SS$_NOSUCHDEV;   /* no such logical, or executive absent */
+        {
+            static const char fd[] = "LNM$FILE_DEV";
+            struct dsc$descriptor_s td = { sizeof fd - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)fd };
+            struct dsc$descriptor_s nd = { (uint16_t)strlen(key), DSC$K_DTYPE_T, DSC$K_CLASS_S, key };
+            uint16_t el = 0;
+            struct item_list_3 it[2];
+            memset(it, 0, sizeof it);
+            it[0].buflen = (uint16_t)(sizeof equiv - 1);
+            it[0].item_code = LNM$_STRING;
+            it[0].bufaddr = equiv;
+            it[0].retlen = &el;
+            if (!(sys$trnlnm(NULL, &td, &nd, NULL, it) & 1) || el == 0)
+                return SS$_NOSUCHDEV;   /* no such logical, or executive absent */
+            equiv[el < sizeof equiv ? el : sizeof equiv - 1] = '\0';
+        }
 
         strncpy(cur, equiv, sizeof(cur) - 1);
         cur[sizeof(cur) - 1] = '\0';

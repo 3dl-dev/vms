@@ -128,6 +128,7 @@
 #   removal-pair-not-rederived            vms_cnxman_phase2.c
 #   join-swallows-step-reports            vms_cnxman_join_fsm.c
 #   coord-step-ack-unmarked               vms_cluster_codec_cm.c
+#   coord-open-skips-records-wait         vms_cnxman_coord_fsm.c
 #
 SELF="$0"
 
@@ -138,6 +139,7 @@ club-open-facts-unlearned
 removal-pair-not-rederived
 join-swallows-step-reports
 coord-step-ack-unmarked
+coord-open-skips-records-wait
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1349,6 +1351,20 @@ EOF
                       ;;
         esac;;
 
+    coord-open-skips-records-wait)
+        case "$_f" in
+        facility)     echo "the coordinator's Phase 1 open waits for every op-0x05 membership record's 0x81/0x05 answer, as a real V7.3 coordinator's does (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_enter_open() sends the open in the same instant as the records: a real OpenVMS VAX V7.3 member, sent op 05 and op 09 together by an OVMX coordinator, bugchecked CNXMGRERR (lab arm PF-3), where its own coordinator always sends op 05, takes the answer, then op 09 (lab run XF).";;
+        require_fail) cat <<'EOF'
+and NO open yet: their answers come first
+the coordinator waits in RECORDS
+EOF
+                      ;;
+        esac;;
+
     coord-step-ack-unmarked)
         case "$_f" in
         facility)     echo "the coordinator's 0x81/0x0b step acknowledgement carries 10 <class> 01 at body[16:19], as every real one does (rd vms-f297)";;
@@ -1648,6 +1664,9 @@ apply_edit() {
 
     club-open-facts-unlearned)
         sed -i 's|^\tcnxman_club_learn_open(\&b->cl->club,$|\tif (0) /* NEGCTL club-open-facts-unlearned */ cnxman_club_learn_open(\&b->cl->club,|' "$_file";;
+
+    coord-open-skips-records-wait)
+        sed -i 's|^\tif (coord_records_outstanding(c) != 0u) {$|\tif (0 \&\& coord_records_outstanding(c) != 0u) { /* NEGCTL coord-open-skips-records-wait */|' "$_file";;
 
     coord-step-ack-unmarked)
         sed -i 's|^\tvms_wire_put_u8(\&w, VMS_OFF_CM_RESP_MARK - VMS_OFF_SYSAP_BODY, 0x01u);$|\t/* NEGCTL coord-step-ack-unmarked */|' "$_file";;

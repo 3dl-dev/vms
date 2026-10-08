@@ -536,7 +536,28 @@ static void drive_relay_acks(uint32_t n_members)
 		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 }
 
-/* The other members answer their commits first, then the subject (rd vms-9484). */
+/* Every op-0x05 membership record the coordinator sent is answered by its
+ * recipient with the 0x81/0x05 echo (rd vms-f297: the open waits for them). */
+static void drive_membrec_acks(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	uint32_t k, total = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+
+	for (k = 0; k < total; k++) {
+		const struct sent_frame *sf =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, k);
+		struct vms_csb *to = cnxman_club_find_csid(&g.cl.club,
+							   (vms_csid_t)sf->dst);
+
+		if (to != NULL)
+			(void)coord_feed(&g.c, f, n,
+				(int32_t)cnxman_club_csb_index(&g.cl.club, to));
+	}
+}
+
+/* The other members answer their commits first, then the subject (rd vms-9484),
+ * and then every membership record is answered. */
 static void drive_commit_ack(uint32_t n_members)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
@@ -546,6 +567,7 @@ static void drive_commit_ack(uint32_t n_members)
 	for (i = 0; i < n_members; i++)
 		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
 	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
+	drive_membrec_acks();
 }
 
 /* Every frozen participant acknowledges Phase 1 (p. 7-41). */
@@ -2272,6 +2294,38 @@ static void test_f297_zero_weight_joiner_merges(void)
 			"[24] = 1, the merge rebuild");
 }
 
+/* rd vms-f297: the open waits for every membership record's answer, as a real
+ * V7.3 coordinator does (op 05, its 0x81/0x05, THEN op 09 -- lab run XF); sent
+ * in the same instant, a real member bugchecked CNXMGRERR (lab arm PF-3). */
+static void test_f297_open_waits_for_the_records(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	uint32_t i;
+
+	printf("\n-- rd vms-f297: no open until every membership record is "
+	       "answered --\n");
+	bed_init(2);
+	(void)coord_feed(&g.c, f, mk_join_request(f), bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	for (i = 0; i < 2u; i++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC) > 0u,
+		 "the membership records went out");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD), 0u,
+			"and NO open yet: their answers come first");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_RECORDS,
+		 "the coordinator waits in RECORDS");
+	drive_membrec_acks();
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_ADD) > 0u,
+		 "every record answered: the open goes out");
+	ct_check_eq_u32(g.c.membrec_acks,
+			count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC),
+			"each 0x81/0x05 consumed and counted, none unrouted");
+}
+
 static void test_f297_each_missing_fact_refuses(void)
 {
 	static const struct { const char *what; int gap; } k[] = {
@@ -2420,6 +2474,7 @@ int main(void)
 	test_1ac_no_open_for_a_system_that_is_not_ours();
 	test_f297_foreign_member_gets_every_cell();
 	test_f297_each_missing_fact_refuses();
+	test_f297_open_waits_for_the_records();
 	test_f297_zero_weight_joiner_merges();
 	test_f297_lost_fact_withholds_the_open();
 

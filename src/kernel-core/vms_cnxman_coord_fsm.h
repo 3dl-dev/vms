@@ -198,6 +198,15 @@ enum cnxman_coord_state {
 	CNXMAN_COORD_COMPLETE  = 6, /* release #12 sent to every member     */
 	CNXMAN_COORD_ABANDONED = 7, /* p. 7-41: a rejection, a lost member,
 				     * or another coordinator won the race  */
+	/*
+	 * Between the subject's commit and Phase 1 (rd vms-f297): the op-0x05
+	 * membership records are out and each one's 0x81/0x05 is awaited
+	 * before the open. A real V7.3 coordinator does exactly this -- to an
+	 * existing member op 05, its answer, THEN op 09 (lab run XF); OVMX sent
+	 * the open in the same millisecond, and a real member bugchecked
+	 * CNXMGRERR on it (lab arm PF-3).
+	 */
+	CNXMAN_COORD_RECORDS   = 8,
 	CNXMAN_COORD_STATE__COUNT
 };
 
@@ -378,6 +387,8 @@ struct cnxman_coord {
 	/* ---- the census, one cell per CLUB slot ---- */
 	uint8_t part_flags[VMS_CLUB_MAX_CSB];
 	uint8_t part_step[VMS_CLUB_MAX_CSB];  /* highest step each reported   */
+	uint8_t part_recs[VMS_CLUB_MAX_CSB];  /* op-0x05 records out to each,
+					       * not yet answered (vms-f297)  */
 
 	/* ---- the CSV knowledge a coordinator needs to assign a CSID ----
 	 * Book p. 7-25: slots are handed out round-robin, slot 0 is never used,
@@ -464,6 +475,7 @@ struct cnxman_coord {
 	uint8_t  open_gap_pad[2];
 	uint32_t open_withheld;        /* opens NOT sent: a cell went missing
 					* between the gate and the send      */
+	uint32_t membrec_acks;         /* 0x81/0x05 answers to our records   */
 	/*
 	 * THE DEPARTURE GATE (rd vms-b36). Removals this node did NOT propose
 	 * because the subject was never a committed member (p. 7-49's SELECTED

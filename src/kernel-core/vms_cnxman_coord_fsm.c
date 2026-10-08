@@ -110,6 +110,7 @@ static int coord_is_active(const struct cnxman_coord *c)
 {
 	return c->state == (uint8_t)CNXMAN_COORD_RELAY ||
 	       c->state == (uint8_t)CNXMAN_COORD_COMMIT ||
+	       c->state == (uint8_t)CNXMAN_COORD_RECORDS ||
 	       c->state == (uint8_t)CNXMAN_COORD_OPEN ||
 	       c->state == (uint8_t)CNXMAN_COORD_BARRIER;
 }
@@ -142,10 +143,13 @@ static void coord_note_send_failure(struct cnxman_coord *c, const char *why)
 	coord_log(c, why);
 }
 
-static void coord_emit(struct cnxman_coord *c, vms_csid_t dst, uint32_t len)
+/* 0 = handed to the connection; the result matters only where an answer is
+ * then awaited (the membership records). */
+static int coord_emit(struct cnxman_coord *c, vms_csid_t dst, uint32_t len)
 {
 	if (c->ops != NULL && c->ops->send != NULL)
-		(void)c->ops->send(c->ops->ctx, dst, c->scratch, len);
+		return c->ops->send(c->ops->ctx, dst, c->scratch, len);
+	return -1;
 }
 
 static void coord_emit_response(struct cnxman_coord *c, uint32_t len)
@@ -678,6 +682,7 @@ static uint32_t coord_freeze_participants(struct cnxman_coord *c)
 
 	coord_bzero(c->part_flags, (uint32_t)sizeof(c->part_flags));
 	coord_bzero(c->part_step, (uint32_t)sizeof(c->part_step));
+	coord_bzero(c->part_recs, (uint32_t)sizeof(c->part_recs));
 
 	for (i = 0; i < club->n_csb; i++) {
 		struct vms_csb *csb = &club->csb[i];
@@ -1003,7 +1008,8 @@ static void coord_send_membrec(struct cnxman_coord *c, uint32_t to_csb,
 	 * -- measured nonzero on all 8 real frames -- and is answered with the
 	 * grounded 0x81/0x05 echo. */
 	cnxman_envelope_originate(dst_csb, c->scratch, CNXMAN_ENV_REQUEST);
-	coord_emit(c, dst, written);
+	if (coord_emit(c, dst, written) == 0 && c->part_recs[to_csb] < 0xffu)
+		c->part_recs[to_csb]++;   /* its 0x81/0x05 is now awaited */
 	c->membrecs_sent++;
 	c->membrec_fields_omitted++;   /* body[42:132], sec 5c */
 }
@@ -1432,6 +1438,19 @@ static void coord_try_go(struct cnxman_coord *c);
 
 static void coord_advance_epoch(struct cnxman_coord *c);
 
+static void coord_phase1(struct cnxman_coord *c);
+
+/* How many op-0x05 records are out without their 0x81/0x05 answer. */
+static uint32_t coord_records_outstanding(const struct cnxman_coord *c)
+{
+	uint32_t i, n = 0u;
+
+	for (i = 0; i < c->cl->club.n_csb; i++)
+		if (coord_is_participant(c, i))
+			n += c->part_recs[i];
+	return n;
+}
+
 static void coord_enter_open(struct cnxman_coord *c)
 {
 	/* A REMOVE and a FOUNDING open arrive here without a commit; the
@@ -1458,7 +1477,17 @@ static void coord_enter_open(struct cnxman_coord *c)
 		 */
 		coord_send_membership_set(c);
 	}
+	/* ...and the open waits for every record's answer (rd vms-f297). */
+	if (coord_records_outstanding(c) != 0u) {
+		c->state = (uint8_t)CNXMAN_COORD_RECORDS;
+		return;
+	}
+	coord_phase1(c);
+}
 
+/* PHASE 1: the opens go out, and the GO follows every acknowledgement. */
+static void coord_phase1(struct cnxman_coord *c)
+{
 	c->state = (uint8_t)CNXMAN_COORD_OPEN;
 	coord_fanout(c, coord_send_open);
 	/*
@@ -1946,6 +1975,32 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 }
 
 /*
+ * [RECORDS][RX_TR_ACK] -- a 0x81/0x05 answer to one of our membership records.
+ * The open goes out once every record a participant was sent is answered.
+ */
+static void coord_h_membrec_ack(struct cnxman_coord *c,
+				const struct coord_msg *m)
+{
+	int32_t i;
+
+	if (m->env.opcode != VMS_CM_OP_MEMBREC) {
+		c->ignored_events++;
+		return;
+	}
+	i = coord_participant_of(c, m);
+	if (i < 0)
+		return;
+	c->membrec_acks++;
+	if (c->part_recs[i] == 0u) {
+		c->ignored_events++;   /* an answer to no record of ours */
+		return;
+	}
+	c->part_recs[i]--;
+	if (coord_records_outstanding(c) == 0u)
+		coord_phase1(c);
+}
+
+/*
  * [OPEN][RX_TR_ACK] -- PHASE 1 acknowledged. p. 7-41: "each system normally
  * acknowledges to VAX_A that it has received and processed the information",
  * and the GO does not go out until every one of them has.
@@ -2124,6 +2179,13 @@ coord_table[CNXMAN_COORD_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_TR_GO]   = coord_h_collision,
 	},
 
+	/* [RECORDS] the membership records are out; their answers come first. */
+	[CNXMAN_COORD_RECORDS] = {
+		[CNXMAN_EV_RX_TR_ACK]  = coord_h_membrec_ack,
+		[CNXMAN_EV_RX_TR_OPEN] = coord_h_collision,
+		[CNXMAN_EV_RX_TR_GO]   = coord_h_collision,
+	},
+
 	/* [OPEN] PHASE 1: every participant must acknowledge before the GO. */
 	[CNXMAN_COORD_OPEN] = {
 		[CNXMAN_EV_RX_TR_ACK]  = coord_h_open_ack,
@@ -2170,6 +2232,7 @@ static enum cnxman_event coord_event_of_response(const struct coord_msg *m)
 	case VMS_CM_OP_COMMIT:      /* 0x81/0x03: the subject committed   */
 	case VMS_CM_OP_XITION_ADD:  /* 0x81/0x09: Phase 1 acknowledged    */
 	case VMS_CM_OP_XITION_REM:  /* 0x81/0x08: ... of a removal        */
+	case VMS_CM_OP_MEMBREC:     /* 0x81/0x05: a membership record     */
 		return CNXMAN_EV_RX_TR_ACK;
 	default:
 		/* 0x81/0x0b is the COORDINATOR's own ack coming back at a
@@ -2683,6 +2746,7 @@ void cnxman_coord_timer(struct cnxman_coord *c)
 
 	if (c->state == (uint8_t)CNXMAN_COORD_RELAY ||
 	    c->state == (uint8_t)CNXMAN_COORD_COMMIT ||
+	    c->state == (uint8_t)CNXMAN_COORD_RECORDS ||
 	    c->state == (uint8_t)CNXMAN_COORD_OPEN) {
 		/*
 		 * A proposal nobody has answered. Book p. 7-41 lets the
@@ -2792,6 +2856,7 @@ const char *cnxman_coord_state_name(enum cnxman_coord_state s)
 	case CNXMAN_COORD_RELAY:     return "relay";
 	case CNXMAN_COORD_COMMIT:    return "commit";
 	case CNXMAN_COORD_OPEN:      return "open";
+	case CNXMAN_COORD_RECORDS:   return "records";
 	case CNXMAN_COORD_BARRIER:   return "barrier";
 	case CNXMAN_COORD_COMPLETE:  return "complete";
 	case CNXMAN_COORD_ABANDONED: return "abandoned";

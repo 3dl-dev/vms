@@ -126,6 +126,7 @@
 #   coord-open-withhold-disarmed          vms_cnxman_coord_fsm.c
 #   club-open-facts-unlearned             vms_cnxman_barrier_fsm.c
 #   removal-pair-not-rederived            vms_cnxman_phase2.c
+#   join-swallows-step-reports            vms_cnxman_join_fsm.c
 #
 SELF="$0"
 
@@ -134,6 +135,7 @@ coord-open-cells-not-attached
 coord-open-withhold-disarmed
 club-open-facts-unlearned
 removal-pair-not-rederived
+join-swallows-step-reports
 pe-receive-hold-disarmed
 csb-abandoned-connect-keeps-conid
 quorum-form-set-ignores-peers
@@ -1343,6 +1345,20 @@ EOF
                       ;;
         esac;;
 
+    join-swallows-step-reports)
+        case "$_f" in
+        facility)     echo "join_forward() hands a member's op-0x0b step report on to this node's coordinator (rd vms-f297)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the join FSM swallows every op-0x0b in [MEMBER], so a node that was itself admitted and then coordinates never sees its participants' step reports: the real VAX member of lab arm PF-1 reported step 1 and was never released.";;
+        require_fail) cat <<'EOF'
+a step REPORT is not the join's or the participant's: it is handed on
+and is not counted as delivered to the participant
+EOF
+                      ;;
+        esac;;
+
     removal-pair-not-rederived)
         case "$_f" in
         facility)     echo "a committed removal re-derives the last-reconfiguration (members, votes) pair every later open carries (rd vms-f297)";;
@@ -1614,6 +1630,9 @@ apply_edit() {
 
     club-open-facts-unlearned)
         sed -i 's|^\tcnxman_club_learn_open(\&b->cl->club,$|\tif (0) /* NEGCTL club-open-facts-unlearned */ cnxman_club_learn_open(\&b->cl->club,|' "$_file";;
+
+    join-swallows-step-reports)
+        sed -i 's|^\t    CNXMAN_BARRIER_RX_NOT_MINE)$|\t    CNXMAN_BARRIER_RX_NOT_MINE \&\& 0) /* NEGCTL join-swallows-step-reports */|' "$_file";;
 
     removal-pair-not-rederived)
         sed -i 's|^\tif (in->reconfig)$|\tif (0 \&\& in->reconfig) /* NEGCTL removal-pair-not-rederived */|' "$_file";;

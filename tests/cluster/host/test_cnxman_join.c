@@ -3995,6 +3995,43 @@ static uint32_t n_step_bodies(void)
 	return k;
 }
 
+/*
+ * rd vms-f297: A MEMBER'S STEP REPORT IS FOR ITS COORDINATOR. A node that was
+ * admitted (and so runs this FSM in [MEMBER]) and now coordinates the next
+ * admission must SEE the op-0x0b each participant sends it; the join hands the
+ * frame back (NOT_MINE) instead of swallowing it. Measured on the lab: OVMXA,
+ * admitted by a real VAX, coordinated OVMXB; the real VAX reported step 1 and
+ * was never released.
+ */
+static void test_f297_step_report_reaches_the_coordinator(void)
+{
+	uint32_t len;
+	enum cnxman_join_rx rx;
+	uint32_t handoffs;
+
+	printf("\n-- rd vms-f297: in [MEMBER] a member's op-0x0b step report is "
+	       "handed on to the coordinator --\n");
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	handoffs = g.j.handoffs;
+	len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER, 0x0300);
+	{
+		vms_wire_buf_t w;
+
+		vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+		vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, EPOCH + 1u);
+		vms_wire_put_le32(&w, VMS_OFF_CM_STEP, 1u);
+	}
+	rx = join_feed(len);
+	ct_check_eq_u32(rx, CNXMAN_JOIN_RX_NOT_MINE,
+			"a step REPORT is not the join's or the participant's: "
+			"it is handed on");
+	ct_check_eq_u32(g.j.handoffs, handoffs,
+			"and is not counted as delivered to the participant");
+	len = mk_release(1u, 0x0301);
+	ct_check_eq_u32(join_feed(len), CNXMAN_JOIN_RX_CONSUMED,
+			"while the coordinator's RELEASE is still the participant's");
+}
+
 static void test_e85_barrier_survives_to_member(void)
 {
 	uint32_t len, step, i, j, idx;
@@ -6338,6 +6375,7 @@ int main(void)
 	test_every_table_cell();
 	test_e73_the_executive_delivers_a_body();
 	test_post_admit_drive_to_member();
+	test_f297_step_report_reaches_the_coordinator();
 	test_e85_barrier_survives_to_member();
 	test_member_only_on_a_real_op06_csid();
 	test_e79_op06_burst_originates_nothing();

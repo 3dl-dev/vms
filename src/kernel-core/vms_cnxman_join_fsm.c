@@ -2634,15 +2634,27 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
  * Handlers: the hand-off to the barrier (FC-P3.5)
  * ========================================================================== */
 
+/*
+ * Hand a transition-family frame to the participant barrier -- and pass on its
+ * verdict. The one frame of the family the barrier never owns is a member's
+ * op-0x0b STEP REPORT, which is addressed to a COORDINATOR (vms_cnxman_
+ * barrier_fsm.c: "an inbound 0x0b is a member reporting to a COORDINATOR"):
+ * returned NOT_MINE, the glue offers it to this node's coordinator. Swallowing
+ * it here was invisible on a FOUNDER, which never runs this FSM, and fatal to
+ * the first admission a node that was itself ADMITTED coordinated: a real VAX
+ * member reported step 1 and was never released (rd vms-f297, lab arm PF-1).
+ */
 static enum cnxman_join_rx join_forward(struct cnxman_join *j,
 					const struct join_ev *e)
 {
 	if (j->barrier == NULL)
 		return CNXMAN_JOIN_RX_HANDOFF;
 
+	if (cnxman_barrier_rx_body(j->barrier, e->body, e->len, e->from_csid,
+				   e->from_valid, e->from_csb) ==
+	    CNXMAN_BARRIER_RX_NOT_MINE)
+		return CNXMAN_JOIN_RX_NOT_MINE;
 	j->handoffs++;
-	(void)cnxman_barrier_rx_body(j->barrier, e->body, e->len,
-				     e->from_csid, e->from_valid, e->from_csb);
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 

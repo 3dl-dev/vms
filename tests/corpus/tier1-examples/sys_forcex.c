@@ -5,6 +5,7 @@
 #define __NEW_STARLET 1
 
 #include <stdio.h>
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <ssdef.h>
 #include <stsdef.h>
@@ -151,6 +152,7 @@ static $DESCRIPTOR (process_d, "FORCEX_SUB");
         { /* vms-f45 DEBUG PROBE v3 (branch only): watch the subprocess second by second */
             int t;
             (void)fflush (stdout); (void)setvbuf (stdout, NULL, _IONBF, 0);
+            { int ws = 0; pid_t wp = waitpid (-1, &ws, WNOHANG); (void)printf ("PROBE waitpid(-1)=%d exited=%d status=%d signaled=%d sig=%d\n", (int)wp, WIFEXITED(ws), WEXITSTATUS(ws), WIFSIGNALED(ws), WTERMSIG(ws)); }
             for (t = 0; t < 5; t++) {
                 unsigned int pitem = JPI$_PRCNAM;
                 char pnm[40];
@@ -158,7 +160,7 @@ static $DESCRIPTOR (process_d, "FORCEX_SUB");
                 unsigned short pnl = 0;
                 unsigned int pst = lib$getjpi (&pitem, &sub_pid, 0, 0, &pnd, &pnl);
                 (void)printf ("PROBE t=%d getjpi(sub_pid=%08x) status=%08x name=%.*s\n", t, sub_pid, pst, (int)pnl, pnm);
-                (void)system ("ps 2>&1 | grep -v '\\[' | grep -v 'PID'");
+                (void)system ("ps 2>&1 | grep -v 'PID' | grep -v 'kworker\\|ksoftirqd\\|migration\\|rcu_\\|cpuhp\\|kthread\\|irq/\\|idle_inject\\|kdevtmpfs\\|kauditd\\|khungtask\\|oom_reaper\\|kcompactd\\|ksmd'");
                 (void)sleep (1);
             }
             (void)system ("dmesg 2>&1 | tail -n 40");

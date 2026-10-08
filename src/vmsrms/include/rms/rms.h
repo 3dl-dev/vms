@@ -75,6 +75,12 @@ uint32_t sys$search(void *fab, void (*err)(void *), void (*suc)(void *));     /*
 int rms_search_fid(void *nam, uint16_t *num, uint16_t *seq,
                    uint8_t *rvn, uint8_t *nmx);
 
+/* rms_search_did (OVMX, vms-692) - the File ID of the directory the active
+ * wildcard context searches (VMS NAM$W_DID). 1 and the outputs filled on the
+ * ACP backend, 0 otherwise. */
+int rms_search_did(void *nam, uint16_t *num, uint16_t *seq,
+                   uint8_t *rvn, uint8_t *nmx);
+
 /* rms_search_end (OVMX, vms-481) - release a NAM's wildcard search context and
  * its executive channel without iterating to RMS$_NMF (early-stop cleanup). */
 void rms_search_end(void *nam);

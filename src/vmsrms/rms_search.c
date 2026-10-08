@@ -104,6 +104,9 @@ struct acp_search_context {
     uint16_t fid_num, fid_seq;
     uint8_t  fid_rvn, fid_nmx;
     uint16_t version;
+    /* The searched directory's File ID (NAM$W_DID, vms-692). */
+    uint16_t did_num, did_seq;
+    uint8_t  did_rvn, did_nmx;
 };
 
 /*
@@ -285,6 +288,7 @@ static uint32_t rms_acp_search(void *fab_ptr)
         a.chan = ctx->chan;
         a.func = VMS_ACP_CTL_SEARCH;
         a.did_num = dn; a.did_seq = ds; a.did_rvn = dr; a.did_nmx = dx;
+        ctx->did_num = dn; ctx->did_seq = ds; ctx->did_rvn = dr; ctx->did_nmx = dx;
         a.wcc_reset = 1;                              /* (re)open the context */
         strncpy(a.pattern, pattern, VMS_ACP_NAME_SIZE - 1);
         ctx->opened = 1;
@@ -660,6 +664,26 @@ static uint32_t rms_impl_search(void *fab_ptr)
 #else
     return rms_posix_search(fab_ptr);
 #endif
+}
+
+int rms_search_did(void *nam_ptr, uint16_t *num, uint16_t *seq,
+                   uint8_t *rvn, uint8_t *nmx)
+{
+#if defined(OVMX_HAVE_ACP)
+    struct NAM *nam = (struct NAM *)nam_ptr;
+    if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context &&
+        ((struct search_ctx_hdr *)nam->nam$$l_context)->is_posix == 0) {
+        struct acp_search_context *ctx =
+            (struct acp_search_context *)nam->nam$$l_context;
+        if (num) *num = ctx->did_num;
+        if (seq) *seq = ctx->did_seq;
+        if (rvn) *rvn = ctx->did_rvn;
+        if (nmx) *nmx = ctx->did_nmx;
+        return 1;
+    }
+#endif
+    (void)nam_ptr; (void)num; (void)seq; (void)rvn; (void)nmx;
+    return 0;                       /* no executive directory on the POSIX path */
 }
 
 int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,

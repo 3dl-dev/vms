@@ -584,6 +584,8 @@ rms-set-security-local-applied-early
 chkpro-acl-ignored
 chkpro-self-rights-ignored
 create-user-profile-uic-dropped
+acp-acl-default-not-propagated
+acp-default-protection-ignored
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
 libcreatedir-protection-ignored
@@ -1365,6 +1367,49 @@ EOF
         require_fail) cat <<'EOF'
 $CHKPRO: DEFAULT is world to a [1,4] S:RWED,O:RWED,G,W object -- read refused (UP.WORLD.NONE.READ)
 $CHKPRO: DEFAULT owns a [200,200] S,O:RWED,G,W object -- read granted (UP.OWNER.RWED.READ)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-default-not-propagated)
+        case "$_f" in
+        facility)     echo "the ACP gives a new file its directory's DEFAULT ACEs, a new directory its parent's ACL, a new version the previous version's ACL (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_CREATE composes the inherited ACEs (acp_acl_inherit) and writes them into the new header. The mutation never writes them, so files and directories are born with no ACL whatever their directory or previous version carries. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A.TXT inherits the DEFAULT ACEs, DEFAULT cleared, NOPROPAGATE kept; not the plain ACE
+SUB.DIR inherits PROPD.DIR's ACL as it is, except the NOPROPAGATE ACE
+B.TXT inherits SUB.DIR's DEFAULT ACE, DEFAULT cleared
+B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
+A.TXT;2 inherits A.TXT;1's ACL less its NOPROPAGATE ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-default-protection-ignored)
+        case "$_f" in
+        facility)     echo "a directory's DEFAULT_PROTECTION ACE gives a file created in it its protection (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_CREATE with no protection of its own takes the directory's DEFAULT_PROTECTION. The mutation ignores it, so the file gets the class default (RWED,RWED,RE,RE) instead of (RWED,RWED,RE,). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,RE,)
+B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7431,6 +7476,10 @@ apply_edit() {
         sed -i 's#^        uint32_t n = 0, st = vms_kif_rights_list(0, s->rights, NULL, CHKPRO_RIGHTS_MAX, \&n);$#        uint32_t n = 0, st = SS$_NORMAL; /* NEGCTL chkpro-self-rights-ignored */#' "$_file";;
     create-user-profile-uic-dropped)
         sed -i 's#^    up.uic = uic;$#    up.uic = 0; /* NEGCTL create-user-profile-uic-dropped */#' "$_file";;
+    acp-acl-default-not-propagated)
+        sed -i 's#^            if (acl_len > 0) {$#            if (0 \&\& acl_len > 0) { /* NEGCTL acp-acl-default-not-propagated */#' "$_file";;
+    acp-default-protection-ignored)
+        sed -i 's#^            else if (have_dprot)$#            else if (0 \&\& have_dprot) /* NEGCTL acp-default-protection-ignored */#' "$_file";;
     sys-parse-acl-drops-access)
         sed -i 's#^            if (ace_abbrev(w, names\[k\])) { \*mask |= 1u << k; hit = 1; }$#            if (ace_abbrev(w, names[k])) { hit = 1; } /* NEGCTL sys-parse-acl-drops-access */#' "$_file";;
     rms-set-security-local-applied-early)

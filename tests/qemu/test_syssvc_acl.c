@@ -150,6 +150,82 @@ static uint32_t add_ace(uint32_t chan, uint16_t fid, uint16_t flags, uint32_t ac
     return aclop(chan, fid, VMS_ACP_ACL_ADD, a, &n);
 }
 
+/* --- inheritance on create (vms-d404, docs/oracle/vax73-acl/default-propagation.txt) --- */
+struct pfid { uint16_t num, seq; uint8_t rvn, nmx; };
+
+/* IO$_CREATE `name` in directory `dir` with NO protection/owner attributes, so
+ * the file system's own choice (previous version, DEFAULT_PROTECTION) applies.
+ * version 0 = a new highest version. */
+static uint32_t pcreate(uint32_t chan, const struct pfid *dir, const char *name, int is_dir,
+                        uint16_t version, struct pfid *out)
+{
+    struct vms_acp_fileop_args f;
+    uint32_t st;
+    memset(&f, 0, sizeof(f));
+    f.chan = chan;
+    f.func = VMS_ACP_FOP_CREATE;
+    f.modifiers = VMS_ACP_M_CREATE;
+    f.did_num = dir->num; f.did_seq = dir->seq; f.did_rvn = dir->rvn; f.did_nmx = dir->nmx;
+    f.version = version;
+    if (is_dir)
+        f.attr.filechar = 0x2000;          /* FH2$M_DIRECTORY */
+    strncpy(f.name, name, VMS_ACP_NAME_SIZE - 1);
+    st = vms_kif_acp_fileop(&f);
+    out->num = f.fid_num; out->seq = f.fid_seq; out->rvn = f.fid_rvn; out->nmx = f.fid_nmx;
+    return st;
+}
+
+static uint32_t pdelete(uint32_t chan, const struct pfid *dir, const char *name, uint16_t version)
+{
+    struct vms_acp_fileop_args f;
+    memset(&f, 0, sizeof(f));
+    f.chan = chan;
+    f.func = VMS_ACP_FOP_DELETE;
+    f.modifiers = VMS_ACP_M_DELETE;
+    f.did_num = dir->num; f.did_seq = dir->seq; f.did_rvn = dir->rvn; f.did_nmx = dir->nmx;
+    f.version = version;
+    strncpy(f.name, name, VMS_ACP_NAME_SIZE - 1);
+    return vms_kif_acp_fileop(&f);
+}
+
+/* the file's protection word, read back over IO$_ACCESS by File ID */
+static uint16_t pprot(uint32_t chan, uint16_t fid)
+{
+    struct vms_acp_access_args a;
+    memset(&a, 0, sizeof(a));
+    a.chan = chan;
+    a.fidmode = 1;
+    a.fid_num = fid; a.fid_seq = 1;
+    if (!(vms_kif_acp_access(&a) & 1))
+        return 0xDEAD;
+    (void)vms_kif_acp_deaccess(chan);
+    return (uint16_t)a.attr.fileprot;
+}
+
+/* the file's ACL equals `want` (len bytes) */
+static int pacl_is(uint32_t chan, uint16_t fid, const uint8_t *want, uint32_t len)
+{
+    uint8_t got[512];
+    uint32_t n = sizeof(got);
+    memset(got, 0, sizeof(got));
+    if (!(aclop(chan, fid, VMS_ACP_ACL_READ, got, &n) & 1) && len != 0)
+        return 0;
+    return n == len && (len == 0 || memcmp(got, want, len) == 0);
+}
+
+static uint32_t add_raw(uint32_t chan, uint16_t fid, const uint8_t *ace)
+{
+    uint32_t n = ace[0];
+    return aclop(chan, fid, VMS_ACP_ACL_ADD, (void *)ace, &n);
+}
+
+#define ACEB(fl, acc, id) 12, 1, (uint8_t)(fl), (uint8_t)((fl) >> 8), (uint8_t)(acc), 0, 0, 0, \
+    (uint8_t)(id), (uint8_t)((id) >> 8), (uint8_t)((id) >> 16), (uint8_t)((id) >> 24)
+#define U200_201 0x00800081u               /* [200,201] */
+#define U300_ANY 0x00C0FFFFu               /* [300,*] */
+#define U200_ANY 0x0080FFFFu               /* [200,*] */
+#define U1_4     0x00010004u               /* [1,4] */
+
 /* --- the unprivileged child ------------------------------------------------ */
 
 struct child_rep { uint32_t assign_st, op_st; };
@@ -472,6 +548,75 @@ int main(int argc, char **argv)
               "DIRECTORY/ACL lists the file and its ACE");
     } else {
         check(0, DCL_PATH " is present in the initramfs");
+    }
+
+    /* -- inheritance on create (docs/oracle/vax73-acl/default-propagation.txt) --
+     * [OVMXDIR]PROPD.DIR carries, in this order,
+     *   (IDENTIFIER=[200,201],OPTIONS=DEFAULT,ACCESS=READ+WRITE)
+     *   (IDENTIFIER=[300,*],ACCESS=READ)
+     *   (IDENTIFIER=[200,*],OPTIONS=DEFAULT+NOPROPAGATE,ACCESS=EXECUTE)
+     *   (DEFAULT_PROTECTION,SYSTEM:RWED,OWNER:RWED,GROUP:RE,WORLD:)
+     * and files are created in it with no protection of their own. */
+    {
+        static const uint8_t dirdef[24] = { 24, 9, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0x10, 0, 0, 0,
+                                            0x1A, 0, 0, 0, 0x1F, 0, 0, 0 };
+        static const uint8_t a_def[12] = { ACEB(0x0100, 3, U200_201) };
+        static const uint8_t a_300[12] = { ACEB(0, 1, U300_ANY) };
+        static const uint8_t a_np[12]  = { ACEB(0x0900, 4, U200_ANY) };
+        static const uint8_t a_ctl[12] = { ACEB(0, 0x10, U1_4) };
+        static const uint8_t file_acl[24] = { ACEB(0, 3, U200_201), ACEB(0x0800, 4, U200_ANY) };
+        static const uint8_t sub_acl[48] = { ACEB(0x0100, 3, U200_201), ACEB(0, 1, U300_ANY),
+                                             24, 9, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0x10, 0, 0, 0,
+                                             0x1A, 0, 0, 0, 0x1F, 0, 0, 0 };
+        static const uint8_t b_acl[12] = { ACEB(0, 3, U200_201) };
+        static const uint8_t v2_acl[24] = { ACEB(0, 0x10, U1_4), ACEB(0, 3, U200_201) };
+        struct pfid ovmx = { OVMXDIR_FID_NUM, 1, 0, 0 }, pd, sub, fa, fb, fa2;
+        int ok;
+
+        check(pcreate(chan, &ovmx, "PROPD.DIR", 1, 1, &pd) & 1, "create [OVMXDIR]PROPD.DIR");
+        ok  = (int)(add_raw(chan, pd.num, dirdef) & 1);
+        ok &= (int)(add_raw(chan, pd.num, a_np) & 1);
+        ok &= (int)(add_raw(chan, pd.num, a_300) & 1);
+        ok &= (int)(add_raw(chan, pd.num, a_def) & 1);
+        check(ok, "PROPD.DIR gets two DEFAULT ACEs, a plain ACE and a DEFAULT_PROTECTION ACE");
+
+        check(pcreate(chan, &pd, "A.TXT", 0, 0, &fa) & 1, "create [.PROPD]A.TXT with no protection of its own");
+        /* negctl: acp-acl-default-not-propagated */
+        check(pacl_is(chan, fa.num, file_acl, sizeof(file_acl)),
+              "A.TXT inherits the DEFAULT ACEs, DEFAULT cleared, NOPROPAGATE kept; not the plain ACE");
+        /* negctl: acp-default-protection-ignored */
+        check(pprot(chan, fa.num) == 0xFA00, "A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,RE,)");
+
+        check(pcreate(chan, &pd, "SUB.DIR", 1, 1, &sub) & 1, "create [.PROPD]SUB.DIR");
+        check(pacl_is(chan, sub.num, sub_acl, sizeof(sub_acl)),
+              "SUB.DIR inherits PROPD.DIR's ACL as it is, except the NOPROPAGATE ACE");
+        check(pcreate(chan, &sub, "B.TXT", 0, 0, &fb) & 1, "create [.PROPD.SUB]B.TXT");
+        check(pacl_is(chan, fb.num, b_acl, sizeof(b_acl)),
+              "B.TXT inherits SUB.DIR's DEFAULT ACE, DEFAULT cleared");
+        check(pprot(chan, fb.num) == 0xFA00,
+              "B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited");
+
+        /* a new version: the previous version's ACL (less NOPROPAGATE) and protection */
+        check(add_raw(chan, fa.num, a_ctl) & 1, "A.TXT;1 gets (IDENTIFIER=[1,4],ACCESS=CONTROL)");
+        {
+            struct vms_acp_fileop_args m;
+            memset(&m, 0, sizeof(m));
+            m.chan = chan; m.func = VMS_ACP_FOP_MODIFY; m.fidmode = 1;
+            m.fid_num = fa.num; m.fid_seq = 1;
+            m.attr_ctl = VMS_ACP_ATTR_PROT; m.attr.fileprot = 0xE000;   /* S:RWED,O:RWED,G:RWED,W:R */
+            check(vms_kif_acp_fileop(&m) & 1, "A.TXT;1 protection set to (RWED,RWED,RWED,R)");
+        }
+        check(pcreate(chan, &pd, "A.TXT", 0, 0, &fa2) & 1, "create A.TXT;2");
+        check(pacl_is(chan, fa2.num, v2_acl, sizeof(v2_acl)),
+              "A.TXT;2 inherits A.TXT;1's ACL less its NOPROPAGATE ACE");
+        check(pprot(chan, fa2.num) == 0xE000, "A.TXT;2 inherits A.TXT;1's protection (RWED,RWED,RWED,R)");
+
+        ok  = (int)(pdelete(chan, &sub, "B.TXT", 1) & 1);
+        ok &= (int)(pdelete(chan, &pd, "SUB.DIR", 1) & 1);
+        ok &= (int)(pdelete(chan, &pd, "A.TXT", 2) & 1);
+        ok &= (int)(pdelete(chan, &pd, "A.TXT", 1) & 1);
+        ok &= (int)(pdelete(chan, &ovmx, "PROPD.DIR", 1) & 1);
+        check(ok, "delete the inheritance files and directories (restore)");
     }
 
     /* -- clean up -- */

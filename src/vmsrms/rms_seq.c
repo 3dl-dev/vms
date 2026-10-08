@@ -40,7 +40,7 @@
  *   RMS$_RAB     - Invalid RAB (no buffer)
  *   RMS$_ACC     - File not accessible
  */
-uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
+static uint32_t rms_seq_get_record(struct FAB *fab, struct RAB *rab)
 {
     struct rms_file *fd = fab->_rms_file;
     if (!fd) return RMS$_ACC;
@@ -222,6 +222,24 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
     }
 
     return RMS$_NORMAL;
+}
+
+/*
+ * rms_seq_get - the record-reading body above, plus what the RAB says about the
+ * result: in move mode RAB$L_RBF addresses the record just read (the user
+ * buffer), and at end of file RAB$W_RSZ is 0 -- as the semantic oracle observed
+ * on real VAX V7.3 and Alpha V8.4 (docs/oracle/semantics/rms/, RMS.GET.1..5;
+ * rd vms-3b5). Before this a $GET left RBF at the caller's last $PUT buffer, so
+ * a program reading the record through RBF saw the wrong bytes.
+ */
+uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
+{
+    uint32_t st = rms_seq_get_record(fab, rab);
+    if (st == RMS$_NORMAL)
+        rab->rab$l_rbf = rab->rab$l_ubf;
+    else if (st == RMS$_EOF)
+        rab->rab$w_rsz = 0;
+    return st;
 }
 
 /*

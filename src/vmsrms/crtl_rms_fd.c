@@ -112,6 +112,36 @@ static void tr(const char *m, long long v)
     __vms_alpha_syscall_raw(SYS_write, 2, (long long)(uintptr_t)b, n, 0, 0, 0);
 }
 #define TR(m, v) tr(m, (long long)(v))
+#include <signal.h>
+#include <ucontext.h>
+static void tr_fault(int sig, siginfo_t *si, void *ctx)
+{
+    ucontext_t *uc = ctx;
+    TR("crtlfd: FAULT sig", sig);
+    TR("crtlfd: FAULT addr", (uintptr_t)si->si_addr);
+    TR("crtlfd: FAULT pc", uc->uc_mcontext.sc_pc);
+    TR("crtlfd: FAULT ra", uc->uc_mcontext.sc_regs[26]);
+    TR("crtlfd: FAULT pv", uc->uc_mcontext.sc_regs[27]);
+    TR("crtlfd: FAULT sp", uc->uc_mcontext.sc_regs[30]);
+    long long fd = __vms_alpha_syscall_raw(SYS_openat, AT_FDCWD,
+                       (long long)(uintptr_t)"/proc/self/maps", O_RDONLY, 0, 0, 0);
+    char b[2048];
+    long long r;
+    while (fd >= 0 && (r = __vms_alpha_syscall_raw(SYS_read, fd, (long long)(uintptr_t)b,
+                                                   sizeof b, 0, 0, 0)) > 0)
+        __vms_alpha_syscall_raw(SYS_write, 2, (long long)(uintptr_t)b, r, 0, 0, 0);
+    __vms_alpha_syscall_raw(SYS_exit_group, 98, 0, 0, 0, 0, 0);
+}
+static void tr_install(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = tr_fault;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, 0);
+    sigaction(SIGBUS, &sa, 0);
+    sigaction(SIGILL, &sa, 0);
+}
 #else
 #define TR(m, v) ((void)0)
 #endif
@@ -1093,6 +1123,9 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
                        unsigned int cliflag, int *argc, int *argv, int *envp)
 {
     TR("crtlfd: main enter", 0);
+#ifdef OVMX_CRTLFD_TRACE
+    tr_install();
+#endif
     __ovmx_sys_hook = rms_hook;
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,

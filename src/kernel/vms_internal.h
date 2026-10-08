@@ -1022,6 +1022,8 @@ struct vms_device {
     uint32_t            devbufsiz;      /* DVI$_DEVBUFSIZ */
     uint32_t            width;
     uint32_t            page;
+    uint32_t            perm_width;     /* PERMANENT width / page (rd vms-d900) */
+    uint32_t            perm_page;
 
     /*
      * Disk backing (devclass == DC$_DISK, vms-3e8). The Linux block device

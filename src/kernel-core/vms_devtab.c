@@ -157,7 +157,15 @@ static void device_reap(exec_list_head_t *reap);
                              VMS_TTC_NUMERIC_KEYPAD | \
                              VMS_TTC_VMS_STYLE_INPUT)
 
+/* The console's width is the oracle's per architecture: the VAX V7.3 console
+ * is an LA36 (132 columns); the Alpha V8.4 console senses 80 permanent
+ * columns (semantic oracle TT.SENSECHAR), and the 64-bit OVMX console
+ * follows the Alpha (rd vms-d900). */
+#if defined(__vax__) || defined(__vax)
 #define VMS_CONSOLE_WIDTH   132
+#else
+#define VMS_CONSOLE_WIDTH   80
+#endif
 #define VMS_CONSOLE_PAGE    24
 
 /*
@@ -243,6 +251,8 @@ static struct vms_device *vms_devtab_create(const char *devnam,
     dev->devchar   = devchar;
     dev->width     = width;
     dev->page      = page;
+    dev->perm_width = width;     /* a unit starts at its permanent set */
+    dev->perm_page  = page;
     exec_list_head_init(&dev->chanlist);
     exec_lock_init(&dev->lock);
 
@@ -1107,10 +1117,12 @@ long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
     exec_lock(&dev->lock);
     if (args.flags & VMS_TERMCHAR_M_TYPE)
         dev->devtype = args.devtype;
+    /* What the remote terminal conveys is its own geometry: the permanent
+     * set as well as the current one (rd vms-d900). */
     if (args.flags & VMS_TERMCHAR_M_WIDTH)
-        dev->width = args.width;
+        dev->width = dev->perm_width = args.width;
     if (args.flags & VMS_TERMCHAR_M_PAGE)
-        dev->page = args.page;
+        dev->page = dev->perm_page = args.page;
     if (args.flags & VMS_TERMCHAR_M_CHAR) {
         dev->devchar &= ~args.clrchar;
         dev->devchar |= args.setchar;
@@ -2295,6 +2307,8 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
     info->devchar   = dev->devchar;
     info->width     = dev->width;
     info->page      = dev->page;
+    info->perm_width = dev->perm_width;
+    info->perm_page  = dev->perm_page;
     /* DVI$_MSCP_SERVED (dvidef.h 0x0073). A projection of the row, never a
      * composed answer: 1 only for a unit vms_devtab_add_served_disk() entered
      * from a REAL discovery walk on a REAL served node (FC-P7.1). */
@@ -2562,6 +2576,13 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
         dev->width = args.width;
     if (args.flags & VMS_TTSET_PAGE)
         dev->page = args.page;
+    /* SET TERMINAL/PERMANENT: the permanent set too (rd vms-d900). */
+    if (args.flags & VMS_TTSET_PERM) {
+        if (args.flags & VMS_TTSET_WIDTH)
+            dev->perm_width = args.width;
+        if (args.flags & VMS_TTSET_PAGE)
+            dev->perm_page = args.page;
+    }
     dev->opcnt++;
     exec_unlock(&dev->lock);
 

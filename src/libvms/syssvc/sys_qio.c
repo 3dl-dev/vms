@@ -1005,15 +1005,20 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     case IO$_SENSECHAR: {
         if (p1 && p2 > 0) {
             uint8_t b[12];
+            /* IO$_SENSECHAR answers the PERMANENT width and page, SENSEMODE
+             * the current ones (observed TT.SENSECHAR 80/24 vs TT.SENSEMODE
+             * 511/0 on Alpha V8.4; rd vms-d900). */
+            uint32_t w = base == IO$_SENSECHAR ? info->perm_width : info->width;
+            uint32_t pg = base == IO$_SENSECHAR ? info->perm_page : info->page;
             memset(b, 0, sizeof b);
             b[0] = (uint8_t)info->devclass;
             b[1] = (uint8_t)info->devtype;
-            b[2] = (uint8_t)(info->width & 0xFF);
-            b[3] = (uint8_t)((info->width >> 8) & 0xFF);
+            b[2] = (uint8_t)(w & 0xFF);
+            b[3] = (uint8_t)((w >> 8) & 0xFF);
             b[4] = (uint8_t)(info->devchar & 0xFF);
             b[5] = (uint8_t)((info->devchar >> 8) & 0xFF);
             b[6] = (uint8_t)((info->devchar >> 16) & 0xFF);
-            b[7] = (uint8_t)(info->page & 0xFF);
+            b[7] = (uint8_t)(pg & 0xFF);
             uint32_t ext = (uint32_t)(info->devchar >> 32);
             memcpy(b + 8, &ext, 4);
             memcpy(p1, b, p2 < sizeof b ? p2 : sizeof b);
@@ -1035,7 +1040,10 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
         /* the buffer carries characteristic bits 0-23 and (with room) the
          * extended longword; bits 24-31 are not in it and are left alone */
         uint64_t covered = 0x0000000000FFFFFFULL | (p2 >= 12 ? 0xFFFFFFFF00000000ULL : 0);
-        uint32_t st = vms_kif_ttsetmode(ec, VMS_TTSET_CHAR | VMS_TTSET_WIDTH | VMS_TTSET_PAGE,
+        /* IO$_SETCHAR sets the permanent characteristics as well as the
+         * current ones; IO$_SETMODE only the current (rd vms-d900). */
+        uint32_t st = vms_kif_ttsetmode(ec, VMS_TTSET_CHAR | VMS_TTSET_WIDTH | VMS_TTSET_PAGE |
+                                            (base == IO$_SETCHAR ? VMS_TTSET_PERM : 0),
                                         chars & covered, (~chars) & covered, width, page);
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
         tt_iosb(iosb_ptr, SS$_NORMAL, TT_SPEED_9600, 0, 0);

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-07",
+    "generated": "2026-10-08",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -6350,7 +6350,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/include/rms/xab.h",
       "verified_against": null,
-      "notes": "",
+      "notes": "vms-5dd2: on the ACP path $DISPLAY fills it from the FH2 ident-area dates IO$_ACCESS returns (previously left untouched there). The ACP does not stamp dates at create yet, so OVMX-created files read zero dates (vms-ab49)",
       "plan_ref": "vms-801"
     },
     {
@@ -6365,7 +6365,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsrms/include/rms/xab.h",
       "verified_against": null,
-      "notes": "",
+      "notes": "vms-5dd2: on the ACP path $DISPLAY fills protection + owner UIC from the FH2 IO$_ACCESS returns (previously left untouched there)",
       "plan_ref": "vms-801"
     },
     {

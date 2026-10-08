@@ -311,7 +311,16 @@ int main(void)
             /* Reopen with XABFHC + XABALL chained; $DISPLAY fills them. */
             struct XABFHC fhc = cc$rms_xabfhc;
             struct XABALL all = cc$rms_xaball;
+            /* vms-5dd2: XABDAT + XABPRO ride the same chain, seeded with
+             * values no real header carries, so an unfilled XAB is caught. */
+            struct XABDAT dat = cc$rms_xabdat;
+            struct XABPRO pro = cc$rms_xabpro;
+            dat.xab$q_cdt = dat.xab$q_rdt = 0x1234567812345678ULL;
+            pro.xab$w_pro = 0xABCD;
+            pro.xab$l_uic = 0xDEADBEEFu;
             fhc.xab$l_nxt = &all;
+            all.xab$l_nxt = &dat;
+            dat.xab$l_nxt = &pro;
             fab.fab$l_xab = (struct XABKEY *)&fhc;
             fab.fab$b_fac = FAB$M_GET;
 
@@ -329,6 +338,16 @@ int main(void)
                       "vms-dfa: XABFHC xab$l_hbk (allocated) >= xab$l_ebk (EOF)");
                 check(all.xab$l_alq >= 1 && all.xab$l_alq == fhc.xab$l_hbk,
                       "vms-dfa: XABALL xab$l_alq == the file's realized allocation (hiblk)");
+                /* vms-5dd2: the header's dates/protection/owner over the ACP.
+                 * The XABs were seeded with values no header holds; $DISPLAY
+                 * must replace them with the FH2's (the ACP does not stamp
+                 * dates at IO$_CREATE yet -- vms-ab49 -- so they read back as
+                 * the header's zero, which is still the header's value). */
+                check(dat.xab$q_cdt != 0x1234567812345678ULL &&
+                          dat.xab$q_rdt != 0x1234567812345678ULL,
+                      "vms-5dd2: XABDAT creation/revision dates come from the ODS-2 header (not left untouched)");
+                check(pro.xab$w_pro != 0xABCD && pro.xab$l_uic != 0xDEADBEEFu,
+                      "vms-5dd2: XABPRO protection + owner UIC come from the ODS-2 header (not left untouched)");
                 sys$close(&fab, 0, 0);
             }
             sys$erase(&fab, 0, 0);

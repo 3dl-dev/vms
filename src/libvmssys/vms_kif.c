@@ -2596,6 +2596,29 @@ static int lnm_name_eq(const char *a, const char *b, int case_blind)
     return case_blind ? vms_strcasecmp(a, b) == 0 : vms_strcmp(a, b) == 0;
 }
 
+/*
+ * Seqlock reader retry policy (rd vms-ec7e). A reader that samples an odd
+ * generation, or sees it move under its walk, retries. It used to spin 1024
+ * times flat out and then give up with -1 -- which every caller reads as "no
+ * such name": under TCG, with every process registration and teardown now
+ * opening a write section (LNM$PROCESS, rd vms-ef21), the budget ran out
+ * while a writer on another vCPU finished, and a SYS$SYSROOT / SYS$SYSTEM
+ * translation intermittently "failed" (measured: DECNETD's FAL persona proof
+ * lost SYS$SYSROOT mid-test). A name that exists never translates as absent
+ * because a writer was busy: spin briefly (a write section is a short bounded
+ * loop), then yield the CPU each retry so the writer can finish. The bound
+ * stays, so a wedged executive still surfaces as an error, not a hang.
+ */
+#define LNM_READ_SPINS 64
+#define LNM_READ_TRIES 65536
+static void lnm_read_backoff(int tries)
+{
+    if (tries >= LNM_READ_SPINS) {
+        struct vms_timespec ts = { 0, 1000 };
+        (void)vms_sys_nanosleep(&ts, 0);
+    }
+}
+
 int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
                        uint8_t max_acmode, struct vms_kif_lnm_enum_rec *out)
 {
@@ -2611,8 +2634,12 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
     if (!vms_kif_lnm_scope_of(table, &scope_key))
         return -1;
 
-    for (tries = 0; tries < 1024; tries++) {
-        uint64_t g0 = lnm_gen_load(a);
+    for (tries = 0; tries < LNM_READ_TRIES; tries++) {
+        uint64_t g0;
+
+        if (tries)
+            lnm_read_backoff(tries);
+        g0 = lnm_gen_load(a);
         uint32_t i, max;
         const struct vms_lnm_entry *best = 0;
 
@@ -2739,8 +2766,12 @@ int vms_kif_lnm_enumerate(uint32_t table,
      * returns a stable snapshot -- never mid-walk, so a retry cannot
      * double-deliver an entry.
      */
-    for (tries = 0; tries < 1024; tries++) {
-        uint64_t g0 = lnm_gen_load(a);
+    for (tries = 0; tries < LNM_READ_TRIES; tries++) {
+        uint64_t g0;
+
+        if (tries)
+            lnm_read_backoff(tries);
+        g0 = lnm_gen_load(a);
         uint32_t i, max;
         uint32_t n = 0;
 

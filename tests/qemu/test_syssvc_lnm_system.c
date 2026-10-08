@@ -59,6 +59,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -383,6 +385,61 @@ static void run_seed_needs_sysnam(void)
           "seed: SYSNAM restored after the proof");
 }
 
+/*
+ * (e) A translation never reports a name absent because a writer was busy
+ * (rd vms-ec7e). Every forked registration copies its parent's process names
+ * and every teardown deletes them -- both open a seqlock write section on the
+ * shared arena. A reader that gave up after a fixed spin budget returned "no
+ * such name" for SYS$SYSROOT while a writer ran on another vCPU (measured in
+ * DECNETD's FAL persona proof). Here children with copied process names come
+ * and go while this process translates SYS$SYSROOT continuously: every
+ * translation must succeed.
+ */
+static void run_translate_under_process_churn(void)
+{
+    lnm_manager_t *mgr = lnm_get_manager();
+    char val[256];
+    uint16_t rlen = 0;
+    uint32_t attrs = 0;
+    int lookups = 0, misses = 0, children = 0;
+
+    (void)lnm_create(mgr, LNM_PROCESS_TABLE, "OVMXEC7E$CHURN", "X", 0, LNM_MODE_SUPER);
+    pid_t churner = fork();
+    if (churner == 0) {
+        time_t end = time(NULL) + 4;
+        while (time(NULL) < end) {
+            pid_t c = fork();
+            if (c == 0) {
+                uint32_t key = 0;
+                (void)vms_kif_lnm_scope_key(VMS_LNM_TBL_PROCESS, &key); /* register: copy */
+                _exit(0);                                               /* exit: rundown */
+            }
+            if (c > 0)
+                (void)waitpid(c, NULL, 0);
+        }
+        _exit(0);
+    }
+    if (churner > 0) {
+        time_t end = time(NULL) + 4;
+        while (time(NULL) < end) {
+            uint32_t st = lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSROOT",
+                                        val, sizeof(val), &rlen, &attrs);
+            lookups++;
+            if (!(st & 1))
+                misses++;
+        }
+        int ws = 0;
+        (void)waitpid(churner, &ws, 0);
+        children = WIFEXITED(ws) && WEXITSTATUS(ws) == 0;
+    }
+    (void)lnm_delete(mgr, LNM_PROCESS_TABLE, "OVMXEC7E$CHURN", LNM_MODE_SUPER);
+    printf("  (churn: %d translations, %d misses)\n", lookups, misses);
+    CHECK(churner > 0 && children && lookups > 0,
+          "churn: forked children registered and exited while this process translated");
+    CHECK(misses == 0,
+          "churn: SYS$SYSROOT translated every time while other processes' names were copied and deleted");
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -398,6 +455,7 @@ int main(void)
     run_manager_system_and_hierarchy();
     run_banner_override();
     run_seed_needs_sysnam();
+    run_translate_under_process_churn();
 
     printf("=== test_syssvc_lnm_system: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

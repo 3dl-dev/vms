@@ -236,6 +236,7 @@ int dnet_fal_fileattr(const char *spec, struct dnet_fal_fattr *out, uint32_t *st
     out->uic_group = a.uic_group;
     out->uic_member = a.uic_member;
     out->revision = a.revision;
+    out->fsz = a.vfcsize;
     memcpy(out->credate, a.credate, 8);
     memcpy(out->revdate, a.revdate, 8);
     memcpy(out->expdate, a.expdate, 8);

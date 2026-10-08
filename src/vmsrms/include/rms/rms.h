@@ -118,6 +118,7 @@ struct rms_fileattr {
     uint16_t defext;             /* FAT fat_defext (default extend quantity)    */
     uint16_t revision;           /* fi2_revision: times the file was modified   */
     uint8_t  expdate[8];         /* VMS 64-bit expiration time, 0 = none        */
+    uint8_t  vfcsize;            /* FAT fat_vfcsize (VFC fixed-control bytes)   */
 };
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
 

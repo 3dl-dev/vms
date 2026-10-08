@@ -587,15 +587,18 @@ void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz)
     /* rd vms-277a live bracket: a VMS client asks DIRECTORY/FULL for only the
      * main ATTRIBUTES unless SUMMARY / DATE AND TIME / PROTECTION are
      * advertised (bits 24, 26, 27 -- all served from the file header), and
-     * refuses a remote RENAME "RMS-F-SUPPORT" without bit 37. Wildcard
-     * (bit 38) obliges wildcard retrieval/delete/rename (spec 5.2.20) and is
-     * not advertised until those are served. */
+     * refuses a remote RENAME "RMS-F-SUPPORT" without bit 37 and a DELETE ;*
+     * "RMS-F-WLD" without bit 38. A VMS client resolves the wildcard itself
+     * by a DIRECTORY LIST and then names each file explicitly (VAX<->VAX
+     * capture, tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-
+     * sys-login/); OVMX serves a wildcard ERASE and refuses a wildcard OPEN
+     * or RENAME with an honest STATUS (unsupported). */
     const unsigned caps[] = { DNET_DAP_CAP_SEQ_ORG, DNET_DAP_CAP_SEQ_XFER,
                               DNET_DAP_CAP_BLOCK_TO_RESP, DNET_DAP_CAP_LEN256,
                               DNET_DAP_CAP_SUMMARY, DNET_DAP_CAP_DIRLIST,
                               DNET_DAP_CAP_DATETIME, DNET_DAP_CAP_PROTECTION,
                               DNET_DAP_CAP_SEQ_RECORD, DNET_DAP_CAP_RENAME,
-                              DNET_DAP_CAP_NAME_MSG };
+                              DNET_DAP_CAP_WILDCARD, DNET_DAP_CAP_NAME_MSG };
     unsigned maxbit = 0;
     for (size_t i = 0; i < sizeof caps / sizeof caps[0]; i++) {
         m->u.config.syscap[caps[i] / 7] |= (uint8_t)(1u << (caps[i] % 7));

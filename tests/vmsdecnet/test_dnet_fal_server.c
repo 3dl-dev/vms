@@ -62,6 +62,7 @@ static int g_erased_delme, g_renamed_ok;
 static void namepart(const char *spec, char *out, size_t cap)
 {
     const char *rb = strrchr(spec, ']');
+    if (!rb) rb = strrchr(spec, ':');
     snprintf(out, cap, "%s", rb ? rb + 1 : spec);
     char *sc = strchr(out, ';'); if (sc) *sc = '\0';
 }
@@ -74,21 +75,46 @@ static int exists(const char *nm)
     return 0;
 }
 
-struct sctx { char found[256]; char esa[256]; int pos, nfound; uint32_t sts; };
+/* The VAX<->VAX SYS$LOGIN capture's directory (VAX2 SYS$SYSDEVICE:[SYSMGR],
+ * default account DNTEST [200,201]): BRK1, BRK2 owned by DNTEST, BRKP by
+ * [1,4] with (S:RWED,O:RWED,G,W). g_v2v selects it for SYS$LOGIN: specs. */
+static int g_v2v;
+static struct { const char *nm; int exists, prot; } g_brk[] = {
+    { "BRK1.TXT", 1, 0 }, { "BRK2.TXT", 1, 0 }, { "BRK3.TXT", 0, 0 }, { "BRKP.TXT", 1, 1 },
+};
+static int brk_find(const char *nm)
+{ for (int i = 0; i < 4; i++) if (!strcmp(g_brk[i].nm, nm)) return i; return -1; }
+static int nonsystem(void) { return strcmp(g_user, "SYSTEM") != 0; }
+
+struct sctx { char found[8][256]; char esa[256]; int pos, nfound; uint32_t sts; };
 int dnet_fal_search_begin(const char *spec, void **ctx)
 {
     static struct sctx c;
     memset(&c, 0, sizeof c);
     char nm[128]; namepart(spec, nm, sizeof nm);
-    if (strstr(spec, "GREET.TXT")) { snprintf(c.found, sizeof c.found, "DKA0:[SRV]GREET.TXT;1"); c.nfound = 1; }
-    else if (strstr(spec, "PUTNAME.TXT") && g_put_spec[0]) { snprintf(c.found, sizeof c.found, "DKA0:[SRV]PUTNAME.TXT;1"); c.nfound = 1; }
-    else if (strstr(spec, "SYS$LOGIN:BRK")) {
+    if (strstr(spec, "GREET.TXT")) { snprintf(c.found[0], sizeof c.found[0], "DKA0:[SRV]GREET.TXT;1"); c.nfound = 1; }
+    else if (strstr(spec, "PUTNAME.TXT") && g_put_spec[0]) { snprintf(c.found[0], sizeof c.found[0], "DKA0:[SRV]PUTNAME.TXT;1"); c.nfound = 1; }
+    else if (!g_v2v && strstr(spec, "SYS$LOGIN:BRK")) {
         /* the live bracket's two files, as OVMX RMS resolved them */
         c.nfound = 2;
-        snprintf(c.found, sizeof c.found, "VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK%%d.TXT;1");
+        snprintf(c.found[0], sizeof c.found[0], "VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK1.TXT;1");
+        snprintf(c.found[1], sizeof c.found[1], "VDA0:[SYS0.SYSCOMMON.SYSMGR]BRK2.TXT;1");
+    }
+    else if (g_v2v && (strstr(spec, "SYS$LOGIN:") || strstr(spec, "SYS$SYSDEVICE:[SYSMGR]"))) {
+        /* VMS RMS: SYS$LOGIN translates to SYS$SYSDEVICE:[SYSMGR]. */
+        int wild = strchr(nm, '*') != NULL;
+        for (int i = 0; i < 4; i++) {
+            if (!g_brk[i].exists) continue;
+            if (wild ? !strncmp(g_brk[i].nm, nm, (size_t)(strchr(nm, '*') - nm)) : !strcmp(g_brk[i].nm, nm))
+                snprintf(c.found[c.nfound++], sizeof c.found[0], "SYS$SYSDEVICE:[SYSMGR]%s;1", g_brk[i].nm);
+        }
+        if (!c.nfound) {
+            const char *p = strrchr(spec, ']'); if (!p) p = strrchr(spec, ':');
+            snprintf(c.esa, sizeof c.esa, "SYS$SYSDEVICE:[SYSMGR]%s", p + 1);
+        }
     }
     else if (strstr(spec, "SYS$SYSROOT:[SYSMGR]")) {
-        if (exists(nm)) { snprintf(c.found, sizeof c.found, "SYS$SYSROOT:[SYSMGR]%s;1", nm); c.nfound = 1; }
+        if (exists(nm)) { snprintf(c.found[0], sizeof c.found[0], "SYS$SYSROOT:[SYSMGR]%s;1", nm); c.nfound = 1; }
         else {
             /* What VMS RMS leaves in the NAM after the search list
              * SYS$SYSROOT (SYS$SPECIFIC, SYS$COMMON) is exhausted. */
@@ -102,8 +128,7 @@ int dnet_fal_search_begin(const char *spec, void **ctx)
 }
 int dnet_fal_search_next(void *ctx, char *rsa, size_t cap)
 { struct sctx *c = ctx; if (c->pos >= c->nfound) return -1; c->pos++;
-  if (strstr(c->found, "%d")) snprintf(rsa, cap, c->found, c->pos);
-  else snprintf(rsa, cap, "%s", c->found);
+  snprintf(rsa, cap, "%s", c->found[c->pos - 1]);
   return 0; }
 void dnet_fal_search_end(void *ctx) { (void)ctx; }
 uint32_t dnet_fal_search_status(void *ctx, uint32_t *stv, char *esa, size_t cap)
@@ -122,6 +147,22 @@ static void vmstime(uint8_t q[8], int hh, int mm, int ss, int cc)
 int dnet_fal_fileattr(const char *spec, struct dnet_fal_fattr *out, uint32_t *sts)
 {
     memset(out, 0, sizeof *out);
+    if (strstr(spec, "BRK")) {
+        char nm[128]; namepart(spec, nm, sizeof nm);
+        int i = brk_find(nm);
+        if (i < 0 || (g_v2v && !g_brk[i].exists)) { if (sts) *sts = RMS$_FNF; return -1; }
+        if (g_brk[i].prot && nonsystem()) { if (sts) *sts = RMS$_PRV; return -1; }
+        /* BRK1/BRK2 as VAX2's DIRECTORY/FULL printed them: 1/9 blocks, owner
+         * [200,201], VFC 2-byte header, max 0 longest 16, print carriage
+         * control, created 11:22:12.72 / 11:22:17.10, revised 11:22:23.72 (2). */
+        out->org = 0; out->rfm = 3; out->rat = 4; out->mrs = 0; out->lrl = 16; out->deq = 0;
+        out->alq = 9; out->ebk = 1; out->ffb = (i == 0) ? 38 : 20; out->fsz = 2;
+        out->fileprot = 0xfa00; out->uic_group = 0200; out->uic_member = 0201; out->revision = 2;
+        if (i == 0) vmstime(out->credate, 11, 22, 12, 72); else vmstime(out->credate, 11, 22, 17, 10);
+        vmstime(out->revdate, 11, 22, 23, 72);
+        if (sts) *sts = RMS$_NORMAL;
+        return 0;
+    }
     if (!strstr(spec, "DELME.TXT") || !g_delme) { if (sts) *sts = RMS$_FNF; return -1; }
     /* DELME.TXT's header as the VAX DIRECTORY/FULL printed it: 1/9 blocks,
      * owner [1,4], VAR max 0 longest 9, CR, extend 0, S:RWED,O:RWED,G:RE,W:,
@@ -138,6 +179,12 @@ int dnet_fal_erase(const char *spec, uint32_t *sts, uint32_t *stv)
 {
     char nm[128]; namepart(spec, nm, sizeof nm);
     *stv = 0;
+    if (g_v2v && brk_find(nm) >= 0) {
+        int i = brk_find(nm);
+        if (!g_brk[i].exists) { *sts = RMS$_FNF; return -1; }
+        if (g_brk[i].prot && nonsystem()) { *sts = RMS$_PRV; *stv = SS$_NOPRIV; return -1; }
+        g_brk[i].exists = 0; *sts = RMS$_NORMAL; return 0;
+    }
     if (!exists(nm)) { *sts = RMS$_FNF; return -1; }
     if (!strcmp(nm, "PROT.TXT") && strcmp(g_user, "SYSTEM")) { *sts = RMS$_PRV; *stv = SS$_NOPRIV; return -1; }
     if (!strcmp(nm, "DELME.TXT")) { g_delme = 0; g_erased_delme = 1; }
@@ -147,6 +194,14 @@ int dnet_fal_rename(const char *oldspec, const char *newspec, uint32_t *sts, uin
 {
     char nm[128]; namepart(oldspec, nm, sizeof nm);
     *stv = 0;
+    if (g_v2v && brk_find(nm) >= 0) {
+        char nn[128]; namepart(newspec, nn, sizeof nn);
+        int i = brk_find(nm), j = brk_find(nn);
+        if (!g_brk[i].exists) { *sts = RMS$_FNF; return -1; }
+        if (g_brk[i].prot && nonsystem()) { *sts = RMS$_PRV; *stv = SS$_NOPRIV; return -1; }
+        if (j < 0) { *sts = RMS$_SYN; return -1; }
+        g_brk[i].exists = 0; g_brk[j].exists = 1; *sts = RMS$_NORMAL; return 0;
+    }
     if (!exists(nm)) { *sts = RMS$_FNF; return -1; }
     if (!strcmp(nm, "PROT.TXT") && strcmp(g_user, "SYSTEM")) { *sts = RMS$_PRV; *stv = SS$_NOPRIV; return -1; }
     if (!strcmp(nm, "RENME.TXT") && strstr(newspec, "RENAMED.TXT")) { g_renme = 0; g_renamed = 1; g_renamed_ok = 1; }
@@ -164,7 +219,20 @@ int dnet_fal_wclose(void *h) { (void)h; g_put_closed = 1; return 0; }
 static int g_rpos;
 int dnet_fal_ropen_st(const char *spec, void **h, uint8_t *rfm, uint8_t *rat, uint32_t *sts)
 {
-  if (strstr(spec, "PROT.TXT") && strcmp(g_user, "SYSTEM")) { if (sts) *sts = RMS$_PRV; return -1; }
+  /* VMS RMS through the search list SYS$SYSROOT: the first member has no
+   * PROT.TXT, so the $OPEN completes FNF (the VAX FAL's 0x4032 for it). */
+  if (strstr(spec, "PROT.TXT") && strcmp(g_user, "SYSTEM")) { if (sts) *sts = RMS$_FNF; return -1; }
+  if (g_v2v && strstr(spec, "BRK")) {
+      char nm[128]; namepart(spec, nm, sizeof nm);
+      int i = brk_find(nm);
+      if (i < 0 || !g_brk[i].exists) { if (sts) *sts = RMS$_FNF; return -1; }
+      if (g_brk[i].prot && nonsystem()) { if (sts) *sts = RMS$_PRV; return -1; }
+      g_rpos = (i == 0) ? 10 : 20;
+      if (rfm) *rfm = 3;
+      if (rat) *rat = 4;
+      if (sts) *sts = RMS$_NORMAL;
+      *h = &g_rpos; return 0;
+  }
   if (!strstr(spec, "GREET.TXT")) { if (sts) *sts = RMS$_FNF; return -1; }
   g_rpos = 0;
   if (rfm) *rfm = 2;
@@ -176,7 +244,15 @@ int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
 /* The second record carries an embedded NUL: records are length-delimited,
  * never C strings (a VAR file read back must be record-for-record). */
 int dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len)
-{ int *p = h; if (*p >= 2) return 0;
+{ int *p = h;
+  if (*p >= 10) {                       /* BRK1: 2 records, BRK2: 1 record */
+      static const char *b1[] = { "bracket file one", "second record" }, *b2[] = { "bracket file two" };
+      int k = *p % 10, nrec = (*p >= 20) ? 1 : 2;
+      if (k >= nrec) return 0;
+      const char *l = (*p >= 20) ? b2[k] : b1[k];
+      size_t n = strlen(l); if (n > cap) return -1;
+      memcpy(rec, l, n); *len = n; (*p)++; return 1; }
+  if (*p >= 2) return 0;
   const char *l = g_src_lines[*p]; size_t n = strlen(l);
   if (*p == 1) { if (n + 2 > cap) return -1; memcpy(rec, l, n); rec[n] = 0; rec[n + 1] = 'Z'; *len = n + 2; }
   else { if (n > cap) return -1; memcpy(rec, l, n); *len = n; }
@@ -205,7 +281,7 @@ static int saw(struct script *s, const char *prefix)
 
 /* ======================= the vms-277a oracle replay ======================= */
 #define MAXLINK 32
-#define MAXLSEG 8
+#define MAXLSEG 32
 struct oseg { uint8_t b[1600]; size_t n; };
 struct olink {
     unsigned id;
@@ -271,6 +347,9 @@ static int load_wire(const char *path)
 
 struct dmsg { struct dnet_dap_msg m; const uint8_t *raw; size_t len; };
 static int g_drop_ack;   /* VAX side of a DIRLIST link: DAP 7 per-file ACK */
+/* The dates the VAX console printed, in DATE AND TIME message order. */
+static const char *g_dates[4][2] = { { "08-OCT-26 06:29:07", "08-OCT-26 06:29:36" } };
+static int g_ndate;
 static int split(const uint8_t *b, size_t n, struct dmsg *out, int max)
 {
     int k = 0; size_t off = 0;
@@ -316,14 +395,16 @@ static int seg_matches(const char *label, const uint8_t *ov, size_t ovn, const u
                  x->u.attr.rat == y->u.attr.rat && x->u.attr.mrs == y->u.attr.mrs &&
                  x->u.attr.alq == y->u.attr.alq && x->u.attr.deq == y->u.attr.deq &&
                  x->u.attr.lrl == y->u.attr.lrl && x->u.attr.hbk == y->u.attr.hbk &&
-                 x->u.attr.ebk == y->u.attr.ebk && x->u.attr.ffb == y->u.attr.ffb;
+                 x->u.attr.ebk == y->u.attr.ebk && x->u.attr.ffb == y->u.attr.ffb &&
+                 x->u.attr.fsz == y->u.attr.fsz;
         } else if (x->op == DNET_DAP_DATETIME) {
             /* VAX (DAP 7): RVN + binary times; OVMX (DAP 5.6): CDT, RDT, RVN.
              * The dates are the ones the VAX console printed for the file. */
+            const char *ec = g_dates[g_ndate][0], *er = g_dates[g_ndate][1];
+            if (g_dates[g_ndate + 1][0]) g_ndate++;
             ok = x->u.datetime.menu == (DNET_DAP_DAT_CDT | DNET_DAP_DAT_RDT | DNET_DAP_DAT_RVN) &&
                  (y->u.datetime.menu & DNET_DAP_DAT_RVN) && x->u.datetime.rvn == y->u.datetime.rvn &&
-                 !strcmp(x->u.datetime.cdt, "08-OCT-26 06:29:07") &&
-                 !strcmp(x->u.datetime.rdt, "08-OCT-26 06:29:36");
+                 !strcmp(x->u.datetime.cdt, ec) && !strcmp(x->u.datetime.rdt, er);
         } else {
             ok = a[i].len == v[i].len && !memcmp(a[i].raw, v[i].raw, a[i].len);
         }
@@ -458,6 +539,82 @@ static void live_bracket(const char *wire)
           "live bracket: the same DIRLIST now lists BRK1 AND BRK2 with no ACK, then ACCESS COMPLETE");
 }
 
+/* 6. The VAX<->VAX SYS$LOGIN capture (vax-to-vax-sys-login/): DIRECTORY/FULL
+ * with a protected file, wildcard TYPE (a DIRLIST, then CONFIG + OPEN per file
+ * on one link), RENAME, DELETE ;* (a DIRLIST, then ERASE by name), a
+ * refused DELETE, and a DIRECTORY of a missing file. */
+static void v2v_replay(const char *wire)
+{
+    g_nlinks = 0;
+    g_strip_trailer = 1;
+    int lw = load_wire(wire);
+    g_strip_trailer = 0;
+    if (lw != 0) { CHECK(0, "the VAX<->VAX SYS$LOGIN capture loads"); return; }
+    CHECK(g_nlinks == 15, "the VAX<->VAX SYS$LOGIN capture holds its 15 links");
+    if (g_nlinks != 15) return;
+    g_v2v = 1;
+    g_dates[0][0] = "08-OCT-26 11:22:12"; g_dates[0][1] = "08-OCT-26 11:22:23";
+    g_dates[1][0] = "08-OCT-26 11:22:17"; g_dates[1][1] = "08-OCT-26 11:22:23";
+    g_dates[2][0] = NULL;
+    g_ndate = 0;
+    static const char *what[15] = {
+        "DIRECTORY/FULL BRK*.TXT: two full entries, BRKP refused (NAME + STATUS PRV, CONTINUE skip, ACCOMP)",
+        "DIRECTORY BRK*.TXT: three NAMEs, ACCOMP",
+        "TYPE BRK*.TXT: DIRLIST of the wildcard",
+        "TYPE BRK*.TXT: CONFIG+OPEN per file on one link; BRKP refused STATUS PRV 0x4055 STV 0x24",
+        "RENAME BRK2 BRK3: DIRLIST", "RENAME BRK2 BRK3: NAME ACK NAME ACK ACCOMP",
+        "DIRECTORY after RENAME",
+        "DELETE BRK3.TXT;*: DIRLIST (1)", "DELETE BRK3.TXT;*: DIRLIST (2)",
+        "DELETE BRK3.TXT;*: ERASE by name -> NAME ACK ACCOMP",
+        "DELETE BRKP.TXT;*: DIRLIST (1)", "DELETE BRKP.TXT;*: DIRLIST (2)",
+        "DELETE BRKP.TXT;*: ERASE refused STATUS PRV 0x4055 STV 0x24",
+        "DIRECTORY NOSUCH.TXT: NAME volume/directory/file + STATUS FNF (VMS prints NOFILES)",
+        "DIRECTORY after DELETE",
+    };
+    for (int i = 0; i < 15; i++) {
+        const struct olink *L = &g_links[i];
+        char label[240];
+        snprintf(label, sizeof label, "v2v link %04x %s", L->id, what[i]);
+        g_user = "DNTEST";                    /* the default DECnet account */
+        if (i != 3) {
+            int ok = replay_link(L, label, NULL);
+            CHECK(ok, label);
+            if (ok) printf("  ok: %s\n", label);
+            continue;
+        }
+        /* TYPE's OPEN link: per-file segment grouping is the VAX's DAP 7
+         * blocking; the checks are the protocol ones. */
+        static struct script sc;
+        memset(&sc, 0, sizeof sc);
+        for (int k = 0; k < L->ncli; k++) { sc.bin[k] = L->cli[k].b; sc.binlen[k] = L->cli[k].n; }
+        sc.nin = L->ncli;
+        static struct dnet_dap_transport t;
+        memset(&t, 0, sizeof t);
+        t.send = s_send; t.recv = s_recv; t.ctx = &sc;
+        (void)dnet_fal_server_run(&t);
+        int configs = 0, r1 = 0, r2 = 0, r3 = 0;
+        for (int k = 0; k < sc.nout; k++) {
+            if (!strncmp(sc.out[k], "0100", 4)) configs++;
+            if (strstr(sc.out[k], "627261636b65742066696c65206f6e65")) r1 = 1;   /* "bracket file one" */
+            if (strstr(sc.out[k], "7365636f6e64207265636f7264")) r2 = 1;          /* "second record" */
+            if (strstr(sc.out[k], "627261636b65742066696c652074776f")) r3 = 1;   /* "bracket file two" */
+        }
+        const struct oseg *lastv = &L->srv[L->nsrv - 1];
+        char lv[64] = ""; for (size_t k = 0; k < lastv->n && k < 30; k++) sprintf(lv + 2 * k, "%02x", lastv->b[k]);
+        int ok = configs == 3 && r1 && r2 && r3 && sc.nout > 0 && !strcmp(sc.out[sc.nout - 1], lv) &&
+                 !strcmp(lv, "0900554000000124");
+        if (!ok) {
+            printf("  %s: configs %d records %d%d%d last ovmx %s vax %s\n", label, configs, r1, r2, r3,
+                   sc.nout ? sc.out[sc.nout - 1] : "-", lv);
+        }
+        CHECK(ok, label);
+        if (ok) printf("  ok: %s\n", label);
+    }
+    CHECK(!g_brk[1].exists && !g_brk[2].exists && g_brk[3].exists,
+          "v2v: BRK2 was renamed to BRK3, BRK3 erased, BRKP refused and still there");
+    g_v2v = 0;
+}
+
 int main(int argc, char **argv)
 {
     static struct dnet_dap_transport t;
@@ -545,6 +702,10 @@ int main(int argc, char **argv)
     /* 5. The 2026-10-08 live bracket: a real VAX against a booted OVMX. */
     if (argc < 3) CHECK(0, "the live-bracket capture path is given (ctest passes it)");
     else live_bracket(argv[2]);
+
+    /* 6. The VAX<->VAX SYS$LOGIN capture (wildcards, VFC, refusals, NOFILES). */
+    if (argc < 4) CHECK(0, "the VAX<->VAX SYS$LOGIN capture path is given (ctest passes it)");
+    else v2v_replay(argv[3]);
 
     printf("test_dnet_fal_server: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

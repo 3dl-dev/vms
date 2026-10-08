@@ -1181,6 +1181,7 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
         out->mrs = fat->fat_maxrec;
         out->lrl = fat->fat_rsize;
         out->defext = fat->fat_defext;
+        out->vfcsize = fat->fat_vfcsize;
     }
     out->revision = a.attr.revision;
     memcpy(out->expdate, a.attr.expdate, 8);

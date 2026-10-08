@@ -157,6 +157,7 @@ struct dnet_fal_fattr {
     uint16_t fileprot;           /* ODS-2 protection: S/O/G/W deny nibbles       */
     uint16_t uic_group, uic_member;
     uint16_t revision;           /* header revision count                        */
+    uint8_t  fsz;                /* VFC fixed-control size (FAT vfcsize)         */
     uint8_t  credate[8], revdate[8], expdate[8];   /* VMS 64-bit times, 0 = none */
 };
 /* 0 = filled; -1 = failed with the RMS status in *sts (may be NULL). */
@@ -249,6 +250,16 @@ uint32_t dnet_fal_client_erase(const char *remote_spec, struct dnet_dap_transpor
 uint32_t dnet_fal_client_rename(const char *old_spec, const char *new_spec,
                                 struct dnet_dap_transport *t,
                                 uint16_t *stscode, uint64_t *stv);
+
+/*
+ * dnet_fal_client_dirlist - ACCESS(DIRECTORY LIST) of `spec`, DISPLAY none.
+ * Each NAME received is appended to `names` as "<nametype>:<spec>|" (cap
+ * bytes, truncated). SS$_NORMAL on ACCESS COMPLETE(RESPONSE); otherwise
+ * SS$_ABORT with the remote STATUS in *stscode / *stv (rd vms-277a).
+ */
+uint32_t dnet_fal_client_dirlist(const char *spec, struct dnet_dap_transport *t,
+                                 char *names, size_t cap,
+                                 uint16_t *stscode, uint64_t *stv);
 
 #ifdef __cplusplus
 }

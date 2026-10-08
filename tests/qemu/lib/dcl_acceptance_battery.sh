@@ -1159,6 +1159,8 @@ run_dcl_acceptance_battery() {
             "FAL verbs [vms-277a]: SYSTEM renames its own file through FAL.EXE, read back through RMS"
         must_have "$FALPSEG" 'PASS: SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)' \
             "FAL verbs [vms-277a]: SYSTEM deletes its own file through FAL.EXE, read back through RMS"
+        must_have "$FALPSEG" 'PASS: GUEST'"'"'s remote DIRECTORY of a missing file is STATUS FNF 0x4032 STV 0x0910' \
+            "FAL verbs [vms-277a]: a remote DIRECTORY of a missing file is FNF with the VAX FAL's bytes and never names a file without its directory (the live-bracket 'Total of 1 file' bug)"
         must_not_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: FAIL' \
             "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
         negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"

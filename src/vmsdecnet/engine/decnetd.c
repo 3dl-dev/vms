@@ -3375,7 +3375,8 @@ static void *falp_pump_thread(void *v)
  * op: FALP_PUT / FALP_GET (remote, local), FALP_ERASE (remote), FALP_RENAME
  * (remote -> local as the NEW remote name); for ERASE / RENAME the remote's
  * refusal STATUS lands in *stscode / *stv (rd vms-277a). */
-enum { FALP_PUT = 0, FALP_GET = 1, FALP_ERASE = 2, FALP_RENAME = 3 };
+enum { FALP_PUT = 0, FALP_GET = 1, FALP_ERASE = 2, FALP_RENAME = 3, FALP_DIRLIST = 4 };
+static char falp_names[512];      /* FALP_DIRLIST: the NAMEs received */
 static uint32_t falp_session_op(const char *user, const char *pw, int op,
                                 const char *remote, const char *local,
                                 uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit,
@@ -3435,6 +3436,8 @@ static uint32_t falp_session_op(const char *user, const char *pw, int op,
     case FALP_GET:    cst = dnet_fal_client_get(remote, local, &ct); break;
     case FALP_PUT:    cst = dnet_fal_client_put(local, remote, &ct); break;
     case FALP_ERASE:  cst = dnet_fal_client_erase(remote, &ct, stscode, stv); break;
+    case FALP_DIRLIST: cst = dnet_fal_client_dirlist(remote, &ct, falp_names, sizeof falp_names,
+                                                      stscode, stv); break;
     default:          cst = dnet_fal_client_rename(remote, local, &ct, stscode, stv); break;
     }
     for (int i = 0; i < 300 && !pp.got_exit; i++) {          /* <= 3 s for EXIT */
@@ -3610,6 +3613,19 @@ static int run_fal_proc_accept_test(void)
         FP_CHECK(st == SS$_NORMAL && del_gone && ost == RMS$_FNF,
                  "SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)");
         (void)dnet_fal_erase(RENAMED, &s1, &s2);
+
+        /* A DIRECTORY of a missing file in GUEST's SYS$LOGIN (live bracket
+         * 2026-10-08: a VMS client printed "Total of 1 file" when the NAMEs
+         * came back as volume + file with no directory). The miss must be
+         * STATUS FNF, and any NAMEs must be the fully expanded spec. */
+        st = falp_session_op("GUEST", "GUEST", FALP_DIRLIST, "SYS$LOGIN:NOSUCH_FALP.TXT;*", NULL,
+                             &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: GUEST DIRECTORY SYS$LOGIN:NOSUCH_FALP.TXT;* -> client %08X, NAMEs '%s',"
+               " STATUS %04X STV %llX\n", (unsigned)st, falp_names, (unsigned)sc,
+               (unsigned long long)sv);
+        int has_file = strstr(falp_names, "2:") != NULL, has_dir = strstr(falp_names, "4:") != NULL;
+        FP_CHECK(st != SS$_NORMAL && sc == 0x4032 && sv == 0x0910 && (!has_file || has_dir),
+                 "GUEST's remote DIRECTORY of a missing file is STATUS FNF 0x4032 STV 0x0910, never a file NAME without its directory (VMS prints NOFILES)");
     }
 
     printf("DECNETD-I-FALPROC, %d passed, %d failed\n", pass, fail);

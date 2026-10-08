@@ -119,6 +119,21 @@ static int dcl_logical_is_terminal(const char *equiv)
         return 1;
     if (strncasecmp(equiv, "/dev/tty", 8) == 0)
         return 1;
+    /* A mailbox device (MBAn:) is a stream too: when SYS$INPUT/SYS$OUTPUT
+     * name a mailbox, DCL bound its stdin/stdout to it at startup
+     * (dcl_mbx_bind_std_streams, vms-786), so writing the stream IS writing
+     * the mailbox. Since the process table became visible to every
+     * translation (rd vms-ef21) a mailbox-driven DCL translates its own
+     * SYS$OUTPUT to the mailbox rather than to a seeded TT:. */
+    if (strncasecmp(t, "MBA", 3) == 0 || strncasecmp(t, "_MBA", 4) == 0) {
+        const char *d = t + (t[0] == '_' ? 4 : 3);
+        if (*d) {
+            while (*d >= '0' && *d <= '9')
+                d++;
+            if (*d == '\0')
+                return 1;
+        }
+    }
     return 0;
 }
 

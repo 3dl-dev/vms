@@ -713,6 +713,14 @@ uint32_t (lib$find_file)(const struct dsc$descriptor_s *filespec,
     uint32_t st = sys$search(&c->fab, 0, 0);
     if (!(st & 1)) {
         if (status_value) *status_value = c->fab.fab$l_stv;
+        /* At the end of the search the result is the expanded (wildcard)
+         * spec the search walked (observed LIB.FIND_FILE.WILD.2:
+         * "...]LOGINOU*.EXE;*" with RMS$_NMF; docs/oracle/semantics/rtl/). */
+        if ((st == RMS$_NMF || st == RMS$_FNF) && c->nam.nam$b_esl &&
+            resultspec->dsc$b_class != DSC$K_CLASS_VS) {
+            uint16_t el = c->nam.nam$b_esl;
+            (void)lib$scopy_r_dx(&el, c->esa, resultspec);
+        }
         ff_close(c);
         find_file_release(*context);
         free(c);

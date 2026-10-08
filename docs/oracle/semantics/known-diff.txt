@@ -173,42 +173,9 @@ rights RDB.NOPRIV.REM_HOLDER  # vms-7d5a: rights-database services not provided 
 rights RDB.NOPRIV.REM_IDENT  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.ASCTOID  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
 rights RDB.NOPRIV.FIND_HELD  # vms-7d5a: rights-database services not provided yet (ovmx_absent.txt) / $ASCTOID $IDTOASC see no identifiers the probe adds
-rms RMS.CREATE  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.OPEN  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.CREATE.V2  # vms-670: file versions
-rms RMS.CREATE.SUP  # vms-670: file versions
-rms RMS.CREATE.EXPLICIT_V1  # vms-670: file versions
-rms RMS.CREATE.FIX  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.OPEN.FNF  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.OPEN.DNF  # vms-137: $OPEN error codes
-rms RMS.OPEN.SYNTAX  # vms-137: $OPEN error codes
-rms RMS.OPEN.EMPTYNAME  # vms-137: $OPEN error codes
-rms RMS.OPEN.LOWERCASE  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.PARSE.DEFAULTS  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.NODEFAULT  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.DOT  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.SEMI  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.DEVONLY  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.WILD  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.LONGNAME  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.BIGVER  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.NEGVER  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.SYNTAX  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.SYNTAX2  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.PARSE.LOWER  # vms-576: $PARSE FNB / empty parts / syntax / case
-rms RMS.SEARCH.1  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.2  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.3  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.4  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.NONE  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.SEARCH.NOPARSE  # vms-42f8: $SEARCH returns the wildcard, no NMF
-rms RMS.ERASE.TEST1  # vms-0a2: NAM block unfilled / CREATE STS 0x10619
-rms RMS.ERASE.TEST2  # vms-670: file versions
-rms RMS.ERASE.TEST3  # vms-670: file versions
-rms RMS.OPEN.AFTER_ERASE  # vms-670: file versions
-rtl LIB.FIND_FILE.WILD.2  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
-rtl LIB.FIND_FILE.NONE  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
-rtl LIB.FIND_FILE.SYNTAX  # vms-42f8: $SEARCH end/no-match/syntax statuses (FNF, SYN, expanded spec at NMF)
+rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
+rms RMS.OPEN  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
+rms RMS.PARSE.SYNTAX2  # vms-576: arch-divergent -- Alpha V8.4 parses ODS-5 ^-escapes ("A^.B^.C"), VAX V7.3 says RMS$_SYN (OVMX: SYN, as VAX)
 tt TT.SENSECHAR  # vms-d900: IO$_SENSECHAR answers the PERMANENT characteristics (80/24 on the Alpha console) -- the executive device row holds only the current set
 tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count and where the text lands relative to the next record differ
 tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT -- the written text shares the case line on OVMX (no record boundary), so the line is not read back

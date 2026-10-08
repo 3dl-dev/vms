@@ -79,6 +79,8 @@ int dcl_rms_dir_next(struct dcl_rms_dir *d, char *spec, size_t specsz,
  * RMS$_DNF (the directory itself does not exist -- %RMS-E-DNF). VMS distinguishes
  * the two; DIRECTORY must too. Valid only after dcl_rms_dir_next has returned 0. */
 uint32_t dcl_rms_dir_status(const struct dcl_rms_dir *d);
+/* 1 when the pattern $PARSE expanded carries a wildcard (NAM$M_WILDCARD). */
+int dcl_rms_dir_wild(const struct dcl_rms_dir *d);
 void dcl_rms_dir_close(struct dcl_rms_dir *d);
 
 /* ---- File erase (DELETE) ---- */

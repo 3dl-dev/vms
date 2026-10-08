@@ -89,11 +89,31 @@ static inline void rms_nam_set_id(uint16_t w[3], uint16_t num, uint16_t seq,
 struct NAM;
 void rms_parse_did(struct NAM *nam);
 
+
 /* The boot volume unit RMS $ASSIGNs when a filespec names no device (the
  * mounted SYS$DISK, until the discovered-SYS$DISK logical is bound). Device-
  * native (vms-9f5): the substrate default -- VDA0: on virtio, DUA0: on VAX. */
 #include "ovmx_layout.h"
 #define RMS_ACP_DEFAULT_DEV SYSDISK_DEVICE ":"
 #endif /* OVMX_HAVE_ACP */
+
+#include <stddef.h>
+#include <stdint.h>
+struct NAM;
+/* The name engine (rms_parse.c, rd vms-576): a primary spec + default spec,
+ * parsed and defaulted as VMS $PARSE does; the expanded string, the offsets of
+ * its parts and the FNB bits. rms_nam_set_parts points a NAM's parts into a
+ * string laid out the same way (its ESA, or an RSA built from it). */
+struct rms_pname {
+    char     esa[256];
+    uint8_t  esl;
+    uint8_t  node_off, node_len, dev_off, dev_len, dir_off, dir_len;
+    uint8_t  name_off, name_len, type_off, type_len, ver_off, ver_len;
+    uint32_t fnb;
+};
+uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns,
+                        struct rms_pname *pn);
+void rms_nam_set_parts(struct NAM *nam, char *base, const struct rms_pname *pn);
+
 
 #endif /* RMS_INTERNAL_H */

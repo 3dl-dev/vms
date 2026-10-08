@@ -51,6 +51,9 @@ int __wrap_fclose(FILE *fp)
         for (char *ln = strtok_r(open_w[i].buf, "\n", &save); ok && ln; ln = strtok_r(NULL, "\n", &save)) {
             ok = (first ? rms_textfile_write_line(open_w[i].path, ln)
                         : rms_textfile_append_line(open_w[i].path, ln)) == 0;
+            if (!ok) { fprintf(stderr, "SHIMDBG: RMS write of [%s] to '%s' failed (first=%d)\n", ln, open_w[i].path, first);
+                       fprintf(stderr, "SHIMDBG: control write SYS$SYSROOT:[SYSMGR]SHIMCTL.TMP -> %d\n", rms_textfile_write_line("SYS$SYSROOT:[SYSMGR]SHIMCTL.TMP", "x"));
+                       fprintf(stderr, "SHIMDBG: control write sys$scratch:shimctl.tmp -> %d\n", rms_textfile_write_line("sys$scratch:shimctl.tmp", "x")); }
             first = 0;
         }
         free(open_w[i].buf);

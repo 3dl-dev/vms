@@ -68,7 +68,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
-#   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output (OVMX_CC1_SNAPSHOT=dir skips the long build)
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -1389,9 +1389,8 @@ EOF
     # runs on OVMX/Alpha. The launcher (cc1run_test.c) vfork+execv's
     # SYS$SYSTEM:CC1.EXE as the GCC driver does on a source DCL wrote; DCL TYPE
     # shows the assembly it wrote, which must equal the cross compiler's output.
-    # OVMX_CC1_SNAPSHOT=<dir> (cxxtc/, joint-n3/, bin/cc1.exe from an earlier
-    # build of the same tree) skips the multi-hour toolchain + host-GCC build;
-    # the launcher, cc1 and the staged shareables are then all that build's.
+    # cc1.exe, the launcher and the staged shareables all come from THIS
+    # build, so the C RTL and RMS they bind match the executive that boots.
     MILESTONE_MAIN=cc1run_test.c
     export JOINT_MAIN_CFLAGS="-mpointer-size=no"
     WANT_SENTINEL=7
@@ -1419,29 +1418,23 @@ EOF
     [ "$_fails" -eq 0 ] || die "cc1 selftest failed -- assert_cc1 cannot be trusted"
     echo ""
     build_joint_images
-    if [ -n "${OVMX_CC1_SNAPSHOT:-}" ]; then
-      _snap="$OVMX_CC1_SNAPSHOT"
-      for _f in cxxtc/cxx/bin/alpha-dec-vms-gcc joint-n3/DECC\$SHR.EXE bin/cc1.exe; do
-        [ -e "$_snap/$_f" ] || die "OVMX_CC1_SNAPSHOT=$_snap has no $_f"
-      done
-      _tc="$_snap/cxxtc"; _jr="$_snap/joint-n3"; _cc1="$_snap/bin/cc1.exe"
-      log "step 1c: snapshot $_snap -- stage-2 toolchain, shareables and cc1.exe of an earlier build of this tree"
-    else
-      _tc="$GATE_ROOT/cxxtc"; _jr="$GATE_ROOT/joint-n3"
-      if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
-        log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
-        mkdir -p "$_tc"
-        docker run --rm -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
-          bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
-          || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
-      fi
-      log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc)"
-      mkdir -p "$GATE_ROOT/hostgcc"
-      docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out/cxxtc:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
-        bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
-        || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
-      _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"
+    _tc="$GATE_ROOT/cxxtc"; _jr="$GATE_ROOT/joint-n3"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+      mkdir -p "$_tc"
+      docker run --rm -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
     fi
+    log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc)"
+    mkdir -p "$GATE_ROOT/hostgcc"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out/cxxtc:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+    _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"
+    # The reference is the same GCC built as a cross compiler, given a file named
+    # exactly as cc1 sees it on OVMX: the module name it records (the .vmsdebug
+    # traceback section VMS compilers always emit) comes from the input name.
     log "step 1d: link the launcher with the stage-2 gcc against the shareables cc1.exe was linked against"
     mkdir -p "$GATE_ROOT/cc1img"
     printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \
@@ -1450,7 +1443,8 @@ EOF
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
         set -e
         /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/cc1run_test.c
-        cd /img && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -nostdinc -dumpbase hello.c hello.c -o ref.s' \
+        cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C" \
+          && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -nostdinc -dumpbase hello.c "VDA0:[SYSTMP]HELLO.C" -o ref.s' \
       > "$GATE_ROOT/cc1-link.log" 2>&1 || { tail -40 "$GATE_ROOT/cc1-link.log"; die "launcher link / reference compile failed"; }
     [ -s "$GATE_ROOT/cc1img/ref.s" ] || die "the cross cc1 wrote no reference assembly"
     # Stage what boots: the launcher, cc1.exe and the shareables both were linked against.

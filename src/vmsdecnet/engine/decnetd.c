@@ -6652,18 +6652,21 @@ static int run_netacp_broker_selftest(void)
     {
         g_nb_wire_fd = -1;
         uint32_t corr = 0;
-        uint32_t c1 = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
-        uint32_t c2 = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
+        uint32_t cs[NETACP_MAX_PER_SOURCE];
+        for (int i = 0; i < NETACP_MAX_PER_SOURCE; i++)
+            cs[i] = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
         unsigned long wire0 = g_nb_wire;
-        uint32_t c3 = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
-        uint32_t s3 = nb_reply_status(0x61, c3);   /* consumes unit 0x61's queue */
-        NA_CHECK(s3 == SS$_EXQUOTA && nb_reply_status(0x61, c1) == 0 &&
-                 nb_reply_status(0x61, c2) == 0 && g_nb_wire == wire0,
+        uint32_t cx = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
+        uint32_t sx = nb_reply_status(0x61, cx);   /* consumes unit 0x61's queue */
+        int pending = 1;
+        for (int i = 0; i < NETACP_MAX_PER_SOURCE; i++)
+            pending = pending && nb_reply_status(0x61, cs[i]) == 0;
+        NA_CHECK(sx == SS$_EXQUOTA && pending && g_nb_wire == wire0,
                  "a process holding its share of links is refused another (EXQUOTA), no Connect Initiate sent");
-        for (uint32_t p = 0x200; p < 0x200 + (NETACP_MAX_SESSIONS - 2) / 2; p++) {
-            nb_raw_open(p, 0x62, "1.11::\"17=\"", &corr);
-            nb_raw_open(p, 0x62, "1.11::\"17=\"", &corr);
-        }
+        for (uint32_t p = 0x200;
+             p < 0x200 + (NETACP_MAX_SESSIONS - NETACP_MAX_PER_SOURCE) / NETACP_MAX_PER_SOURCE; p++)
+            for (int i = 0; i < NETACP_MAX_PER_SOURCE; i++)
+                nb_raw_open(p, 0x62, "1.11::\"17=\"", &corr);
         int full = nb_used();
         wire0 = g_nb_wire;
         uint32_t cf = nb_raw_open(0x300, 0x63, "1.11::\"17=\"", &corr);

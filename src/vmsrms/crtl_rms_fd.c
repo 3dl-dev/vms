@@ -52,6 +52,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -491,7 +492,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
             return -(e ? e : EIO);
         }
     }
-    rf->rsa[rf->nam.nam$b_rsl < sizeof rf->rsa ? rf->nam.nam$b_rsl : 0] = '\0';
+    rf->rsa[rf->nam.nam$b_rsl] = '\0';            /* rsa[256], rsl <= 255 */
 
     rf->kind = is_record_rfm(rf->fab.fab$b_rfm) ? RF_RECORD : RF_STREAM;
     if (rf->kind == RF_RECORD && writing) {

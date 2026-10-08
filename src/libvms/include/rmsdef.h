@@ -110,6 +110,8 @@ extern "C" {
 #define RMS$_SIZ            100028  /* Invalid size value */
 #define RMS$_SYN            100052  /* Syntax error in filespec */
 #define RMS$_USZ            100084  /* Invalid user buffer size */
+#define RMS$_VER            100092  /* Invalid file version number */
+#define RMS$_DEV            99524   /* Error in device name or inappropriate device */
 #define RMS$_TNS            98744   /* Terminator not seen (partial record) */
 #define RMS$_TRE            100060  /* Index tree error */
 #define RMS$_TYP            100068  /* Invalid file type */

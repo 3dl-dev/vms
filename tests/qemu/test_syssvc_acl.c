@@ -34,6 +34,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <poll.h>
+#include <signal.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -183,6 +185,21 @@ static int run_child(int wfd, char mode, uint16_t fid)
 }
 
 /* Run the child as [100,100]; returns the status it observed (0 on harness failure). */
+/* Reads from a child are BOUNDED: a broken executive (a lock that is never
+ * released, an ACP request that never completes) must fail this suite, not hang
+ * the guest and starve every suite after it. */
+#define CHILD_WAIT_MS 60000
+static ssize_t read_bounded(int fd, void *buf, size_t len, int *timed_out)
+{
+    struct pollfd pf = { fd, POLLIN, 0 };
+    int r = poll(&pf, 1, CHILD_WAIT_MS);
+    if (r <= 0) {
+        *timed_out = 1;
+        return -1;
+    }
+    return read(fd, buf, len);
+}
+
 static uint32_t as_child(const char *self, char mode, uint16_t fid)
 {
     int p[2];
@@ -204,8 +221,13 @@ static uint32_t as_child(const char *self, char mode, uint16_t fid)
     }
     close(p[1]);
     if (pid > 0) {
-        if (read(p[0], &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
+        int to = 0;
+        if (read_bounded(p[0], &rep, sizeof(rep), &to) != (ssize_t)sizeof(rep))
             rep.op_st = 0;
+        if (to) {
+            printf("  (the [100,100] child did not answer in %d s; killed)\n", CHILD_WAIT_MS / 1000);
+            kill(pid, SIGKILL);
+        }
         waitpid(pid, NULL, 0);
     }
     close(p[0]);
@@ -237,7 +259,13 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     (void)!write(in_pipe[1], script, strlen(script));
     close(in_pipe[1]);
     for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+        int to = 0;
+        ssize_t n = read_bounded(out_pipe[0], out + used, outsz - 1 - used, &to);
+        if (to) {
+            printf("  (DCL did not finish in %d s; killed)\n", CHILD_WAIT_MS / 1000);
+            kill(pid, SIGKILL);
+            break;
+        }
         if (n <= 0) break;
         used += (size_t)n;
         if (used >= outsz - 1) break;

@@ -3181,9 +3181,13 @@ uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
     vms_enq_core_ex(proc, &a, NULL);   /* ACP volume lock: local, full detection */
-    if (a.status == SS__NORMAL && lkid_out)
+    /* Whatever lock the $ENQ created is handed back, whatever status it reported,
+     * so the caller's single exit releases it: a granted $ENQ may report SS$_SYNCH
+     * as well as SS$_NORMAL, and a lock id kept only on SS$_NORMAL would leak the
+     * EX volume lock and stall every later ACP write on the volume. */
+    if (lkid_out)
         *lkid_out = a.lkid;
-    return a.status;
+    return (a.status & 1u) ? SS__NORMAL : a.status;
 }
 
 /* Release the volume lock taken by vms_lock_acp_vol_ex. A zero lkid (the lock

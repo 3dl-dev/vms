@@ -191,6 +191,9 @@ static const struct vent decc_tv[] = {
 static const struct rtlimg rtlimgs[] = {
 	{ "LIBRTL",   librtl_tv, sizeof librtl_tv / sizeof librtl_tv[0] },
 	{ "DECC$SHR", decc_tv,   sizeof decc_tv / sizeof decc_tv[0] },
+	/* The VAX C link names MTHRTL for every DEC C program (CSTDIO.MAP);
+	 * a call into it reaches no routine here and is refused at fixup. */
+	{ "MTHRTL",   0,         0 },
 };
 
 /* One transfer vector entry: the routine's entry mask, then JMP @#rtn+2. */
@@ -243,6 +246,7 @@ struct shr {
 	uint32_t  ident;
 };
 static struct img imgs[8];
+static uintptr_t g_p0next;       /* next free P0 page below the activator's text */
 static int nimgs;
 static struct shr shrs[16];
 static int nshrs;
@@ -407,10 +411,25 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 			fail_notimpl(m->name, m->spec, "mapping the image at its link address");
 		TRACE("%s mapped at %p (%lu bytes)", m->name, map, (unsigned long)span);
 		m->base = 0;
+		g_p0next = PG_UP(m->hi);
 	} else {
-		map = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+		/* A shareable is placed in P0 (32-bit addresses, as on VAX/VMS):
+		 * in the free pages between the main image and the activator's
+		 * own text, else above the activator. NetBSD/vax gives an unhinted
+		 * mmap an address outside P0. */
+		extern char __executable_start[];
+		map = MAP_FAILED;
+		if (g_p0next + span <= (uintptr_t)__executable_start)
+			map = mmap((void *)g_p0next, span, PROT_READ | PROT_WRITE,
+				   MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+		if (map == MAP_FAILED)
+			map = mmap((void *)0x01000000u, span, PROT_READ | PROT_WRITE,
+				   MAP_PRIVATE | MAP_ANON, -1, 0);
 		if (map == MAP_FAILED || (uintptr_t)map + span > 0x40000000u)
 			fail_notimpl(m->name, m->spec, "mapping the shareable in P0");
+		if ((uintptr_t)map == g_p0next)
+			g_p0next += span;
+		TRACE("%s mapped at %p (%lu bytes)", m->name, map, (unsigned long)span);
 		m->base = (uintptr_t)map - PG_DOWN(m->lo);
 	}
 
@@ -483,7 +502,7 @@ static int activate_shr(const char *name, const char *by)
 		if (!strcmp(rtlimgs[k].name, name)) {
 			/* An OVMX run-time library: its transfer vector, built here. */
 			const struct rtlimg *r = &rtlimgs[k];
-			uint32_t top = 0;
+			uint32_t top = 8;        /* an RTL with no routines still gets a page */
 			for (unsigned j = 0; j < r->n; j++)
 				if (r->e[j].at + 8 > top)
 					top = r->e[j].at + 8;

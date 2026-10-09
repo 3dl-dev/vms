@@ -433,6 +433,7 @@ lock-valblk-grant-not-delivered
 lock-enq-immediate-grant-status-wrong
 lock-deq-status-wrong
 lock-convert-mode-not-updated
+lock-convert-contended-upconvert-granted
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
 spawn-input-via-linux-path
@@ -2912,6 +2913,58 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    lock-convert-contended-upconvert-granted)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- \$ENQ/CONVERT's COMPATIBILITY decision on a CONTENDED up-conversion (VMS_IOCTL_CONVERT)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        # The control for test_syssvc_ci6_evacwl (vms-06c), which had none.
+        #
+        # WHY THIS MUTATION AND NOT A WIDER ONE. The evacuation workload's
+        # whole contract is a HANDOFF: a standby instance holds EVAC$WORKLOAD
+        # NL, converts to EX, and must be granted only when the running
+        # instance's $DEQ releases it. The executive decision that makes that
+        # true is the compatibility test on the CONVERT path -- and that one
+        # decision is reached with CONTENTION by exactly one suite. Every other
+        # CONVERT in tests/qemu is issued by the resource's SOLE holder
+        # (test_kmod_lock's NL->CR->EX ladder, test_kmod_lock_sync's EX->EX
+        # VALBLK write), where lock_compatible() -- which excludes the
+        # converting lock itself -- answers "compatible" either way, so the
+        # mutation cannot change their outcome. The one suite that converts
+        # while a DIFFERENT process holds an incompatible mode is this one.
+        #
+        # RANGE-ANCHORED to vms_ioctl_convert's own body. The mutated text
+        # ("lock" as lock_compatible's third argument) is in fact unique in the
+        # file -- vms_enq_core_ex's copy passes NULL -- but the range states the
+        # intent so a future edit that makes the texts converge cannot silently
+        # widen this control onto the $ENQ grant path.
+        #
+        # NOT the CVTUNGRANT path: vms_ioctl_convert refuses a convert on a
+        # still-queued lock (lock->waiting -> SS$_CANCELGRANT) and a proxy LKB's
+        # convert goes to the master, both BEFORE this decision, so
+        # test_syssvc_lock_status's own convert scenario is untouched.
+        #
+        # CANNOT HANG THE GUEST (the lesson recorded under
+        # lock-enq-immediate-grant-status-wrong): the mutation only GRANTS
+        # something that should have queued. The lock stays on res->granted, no
+        # waiter is created, no completion is owed, and every instance still
+        # runs to its record count and exits -- the suite reddens on its
+        # assertions, it does not burn the shard's timeout.
+        suites_red)   echo "test_syssvc_ci6_evacwl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$ENQ/CONVERT stops consulting lock compatibility on a conversion: 'if (!stalled && lock_compatible(res, args.lkmode, lock))' becomes 'if (!stalled)', so an up-conversion is granted IMMEDIATELY even while another process holds an incompatible mode on the same resource. EVAC\$WORKLOAD then has two EX holders at once: the standby instance is granted EX while the running instance still holds it, opens EVAC.DAT behind it, and resumes from whatever sequence number it happens to read -- so the file's SEQ column is no longer the unbroken 1..N handoff and the two instances' records interleave instead of forming one run per holder. Nothing about the \$ENQ grant path, lock IDs, value blocks, release or AST delivery changes; the uncontended conversions every other lock suite issues are unaffected because lock_compatible() excludes the converting lock itself and answers 'compatible' for a sole holder either way.";;
+        require_fail) cat <<'EOF'
+SEQ is the unbroken sequence 1..N across both instances (takeover continuity)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the first COUNT_A records share one PID, the rest a DIFFERENT one (a real takeover, not one process writing twice)
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME two-holders-at-once state, observed on the other column of the same file: with the standby granted EX alongside the running instance, the records are written by both PIDs in whatever order the two processes reach their \$PUT, so neither the first COUNT_A rows nor the remainder is a single holder's contiguous run. It is one defect read twice -- the SEQ column and the PID column of the same interleaved file -- not two.";;
         esac;;
 
     dlm-xnode-mode-unvalidated)
@@ -7997,6 +8050,17 @@ apply_edit() {
         # conversion branch), not an unbraced single-statement `if`, so there
         # is no dangling-body hazard here.
         sed -i '/^long vms_ioctl_convert/,/^}$/ s|^        lock->granted_mode = args\.lkmode;$|        /* NEGCTL lock-convert-mode-not-updated: granted_mode left unchanged */|' "$_file";;
+    lock-convert-contended-upconvert-granted)
+        # RANGE-ANCHORED to vms_ioctl_convert's own body, for intent rather than
+        # necessity: lock_compatible's third argument is `lock` only here (the
+        # $ENQ core passes NULL), so the text is already unique -- but the range
+        # keeps a future edit that converges the two texts from widening this
+        # control onto the grant path. Dropping the compatibility term leaves
+        # `if (!stalled) {` -- both arms still reachable (the quorum-stall case
+        # takes the else), so no unreachable-code warning under -Werror, and
+        # lock_compatible keeps its other caller so it is not unused. The term is
+        # GONE after one apply, so a second apply is the no-op the selftest wants.
+        sed -i '/^long vms_ioctl_convert/,/^}$/ s|^    if (!stalled \&\& lock_compatible(res, args\.lkmode, lock)) {$|    if (!stalled) { /* NEGCTL lock-convert-contended-upconvert-granted: compatibility not consulted */|' "$_file";;
     dlm-xnode-mode-unvalidated)
         # RE-ANCHORED (vms-e7d CI red, 2026-09-24). vms_lock_dlm_xnode_dispatch's
         # OWN front-door `if (req->lkmode > LCK_K_EXMODE) return SS__BADPARAM;`

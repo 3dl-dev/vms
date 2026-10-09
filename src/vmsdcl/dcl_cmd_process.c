@@ -1949,6 +1949,109 @@ static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
     }
 }
 
+/* --------------------------------------------------------------------------
+ * THE EXEC HANDSHAKE (rd vms-06c): did the image get ENTERED at all?
+ *
+ * The fork fallback below used to end `execv(linux_path, argv); _exit(1);`.
+ * When execve() ITSELF failed -- the image's activator (its PT_INTERP, the
+ * staged IMGACT.EXE) not where the image names it, the file not executable --
+ * the child died silently with POSIX code 1, nothing on SYS$OUTPUT or
+ * SYS$ERROR, and the parent reported the one message that is guaranteed to
+ * mislead: "image <name> exited with error status %X00000001" -- i.e. that the
+ * image RAN and returned 1. It never ran. (This cost the ci.6 lane hours on a
+ * booted node whose EVACWL.EXE carried the /vms-flavoured PT_INTERP.)
+ *
+ * A distinguished exit CODE cannot fix it: every code is also one a real image
+ * may legitimately return, so reading one as "activation failed" would
+ * FABRICATE a diagnostic for an image that merely exited with that value
+ * (INV-6). So the fact travels out of band, by the POSIX close-on-exec idiom:
+ * a CLOEXEC pipe the kernel closes for us on a SUCCESSFUL exec. The parent
+ * reading 0 bytes therefore means the image genuinely was entered; a full int
+ * means execve() failed and the value IS the errno the failing call set --
+ * read, never inferred.
+ * -------------------------------------------------------------------------- */
+
+/* Open the handshake. plain pipe() + FD_CLOEXEC rather than pipe2(): the same
+ * two lines work on every substrate DCL is built for (Linux glibc/musl and
+ * NetBSD-vax) with no feature-test-macro dependency. On failure both ends stay
+ * -1 and the path behaves exactly as it did before -- an exec failure is then
+ * merely undiagnosed, never MISdiagnosed, because dcl_exec_handshake_read
+ * reports "the image was entered" when it has no channel to learn otherwise. */
+static void dcl_exec_handshake_open(int fds[2])
+{
+    if (pipe(fds) != 0) {
+        fds[0] = fds[1] = -1;
+        return;
+    }
+    /* CLOEXEC on the WRITE end is the signal itself: a successful execve closes
+     * it for us, and the parent's read then sees end-of-file. */
+    if (fcntl(fds[1], F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(fds[0], F_SETFD, FD_CLOEXEC) != 0) {
+        close(fds[0]);
+        close(fds[1]);
+        fds[0] = fds[1] = -1;
+    }
+}
+
+/* Child side, after a failed execv: record the errno and leave. Never returns. */
+static void dcl_exec_handshake_fail(int wfd, int err)
+{
+    if (wfd >= 0) {
+        ssize_t n;
+        do { n = write(wfd, &err, sizeof err); } while (n < 0 && errno == EINTR);
+        (void)n;
+    }
+    _exit(1);
+}
+
+/* Parent side: 0 = the image was entered; otherwise the child's exec errno. */
+static int dcl_exec_handshake_read(int rfd)
+{
+    int err = 0;
+    ssize_t n;
+
+    if (rfd < 0)
+        return 0;
+    do { n = read(rfd, &err, sizeof err); } while (n < 0 && errno == EINTR);
+    return (n == (ssize_t)sizeof err) ? err : 0;
+}
+
+/*
+ * Report a failed activation the way OpenVMS's CLI does -- the %DCL-W-ACTIMAGE
+ * primary, the image file it was activating, and the condition the substrate
+ * actually reported, mapped from the handshake errno. Returns the $STATUS the
+ * caller hands back (SS$_NOSUCHFILE is the same condition this CLI's own
+ * %DCL-E-IVIMAGE "image not found" returns, so a missing image reports one
+ * $STATUS whichever stage noticed it).
+ */
+static uint32_t dcl_report_actimage(const char *display_name,
+                                    const char *linux_path, int err)
+{
+    dcl_error("DCL", 0, "ACTIMAGE", "error activating image %s", display_name);
+    fprintf(stderr, "-CLI-E-IMGNAME, image file %s\n", linux_path);
+
+    switch (err) {
+    case ENOENT:
+        fprintf(stderr, "-RMS-E-FNF, file not found\n");
+        /* The image file itself being PRESENT means what the substrate could
+         * not open is the activator the image names, not the image. Saying
+         * "file not found" about a file that exists would be false, so name
+         * the real condition -- from an access() probe, not a guess. */
+        if (access(linux_path, F_OK) == 0)
+            fprintf(stderr, "-DCL-I-ACTIVATOR, the image is present; the "
+                            "activator it names could not be opened\n");
+        return SS$_NOSUCHFILE;
+    case EACCES:
+    case EPERM:
+        fprintf(stderr, "-RMS-E-PRV, insufficient privilege or file "
+                        "protection violation\n");
+        return SS$_NOPRIV;
+    default:
+        fprintf(stderr, "-SYSTEM-F-ABORT, abort (%s)\n", strerror(err));
+        return SS$_ABORT;
+    }
+}
+
 static int dcl_activate_image_inner(struct dcl_context *ctx,
                                     const char *display_name,
                                     const char *linux_path, char *argv[])
@@ -2038,6 +2141,10 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, cli_sv) != 0)
         cli_sv[0] = cli_sv[1] = -1;
 
+    /* The exec handshake (vms-06c): whether the image was ENTERED at all. */
+    int exec_pipe[2] = { -1, -1 };
+    dcl_exec_handshake_open(exec_pipe);
+
     pid_t pid = fork();
     if (pid == 0) {
         /* Child */
@@ -2066,8 +2173,13 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * create genuinely new VMS processes and do not call this.
          */
         (void)vms_kif_register_continue();
+        if (exec_pipe[0] >= 0)
+            close(exec_pipe[0]);
         execv(linux_path, argv);
-        _exit(1);
+        /* execve() itself failed: the image was NEVER entered. Hand the real
+         * errno to DCL through the handshake and leave -- an exit code alone
+         * cannot carry this (vms-06c, dcl_exec_handshake_open). */
+        dcl_exec_handshake_fail(exec_pipe[1], errno);
     } else if (pid > 0) {
         /*
          * Parent. On OpenVMS the image runs IN the CLI's process and its
@@ -2092,6 +2204,10 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         siginfo_t si;
         if (cli_sv[1] >= 0)
             close(cli_sv[1]);
+        /* Our copy of the write end must go now, or the handshake read below
+         * would never see end-of-file on a successful exec. */
+        if (exec_pipe[1] >= 0)
+            close(exec_pipe[1]);
         dcl_cli_wait(cli_sv[0], pid, &si);
         if (cli_sv[0] >= 0)
             close(cli_sv[0]);
@@ -2099,9 +2215,29 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         if (si.si_code == CLD_STOPPED || si.si_code == CLD_TRAPPED) {
             /* Child stopped by Ctrl-Y — save for CONTINUE (do NOT reap it). */
             dcl_running_child = 0;
+            if (exec_pipe[0] >= 0)
+                close(exec_pipe[0]);
             printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
             return SS$_ABORT;
+        }
+
+        /*
+         * THE IMAGE WAS NEVER ENTERED (vms-06c). The child has terminated, so
+         * the handshake is settled: a full errno means execve() failed. Report
+         * the real activation failure instead of the "exited with error status
+         * %X00000001" claim that the POSIX-outcome branch below would make
+         * about an image that never ran.
+         */
+        int exec_err = dcl_exec_handshake_read(exec_pipe[0]);
+        if (exec_pipe[0] >= 0)
+            close(exec_pipe[0]);
+        if (exec_err != 0) {
+            int st_discard = 0;
+            while (waitpid(pid, &st_discard, 0) < 0 && errno == EINTR)
+                ;
+            dcl_running_child = 0;
+            return (int)dcl_report_actimage(display_name, linux_path, exec_err);
         }
 
         /*
@@ -2159,6 +2295,8 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
     } else {
         if (cli_sv[0] >= 0) close(cli_sv[0]);
         if (cli_sv[1] >= 0) close(cli_sv[1]);
+        if (exec_pipe[0] >= 0) close(exec_pipe[0]);
+        if (exec_pipe[1] >= 0) close(exec_pipe[1]);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }

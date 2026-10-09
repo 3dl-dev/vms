@@ -1,0 +1,186 @@
+
+                                                                 9-OCT-2026 06:01        Linker A13-04                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+SP_TT           V1                   9394 SYS$SYSROOT:[SYSMGR]SP_TT.OBJ;1       9-OCT-2026 06:01  AMAC V5.0-120-5
+LIBRTL          X01-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      31-MAR-2010 02:04  Linker A13-04
+SYS$PUBLIC_VECTORS             
+                X-125                   0 [SYSLIB]SYS$PUBLIC_VECTORS.EXE;1     31-MAR-2010 02:03  Linker A13-04
+
+SYS$SYSROOT:[SYSMGR]SP_TT.EXE;1                                  9-OCT-2026 06:01        Linker A13-04                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pglts   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    0     1    00010000          3   0 READ WRITE   NON-SHAREABLE ADDRESS DATA
+                   0     5    00020000          4   0 READ WRITE   COPY ON REF
+                   0    13    00030000          9   0 READ ONLY    EXECUTABLE
+                   0     1    00040000         22   0 READ WRITE   FIXUP VECTORS
+                 253    20    7FFF0000          0   0 READ WRITE   DEMAND ZERO  
+
+LIBRTL             3  1787    00000000-R        0   0 READ ONLY    EXECUTABLE    LIBRTL_001       LESS/EQUAL        1         1
+                   2   123    000E0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_002       LESS/EQUAL        1         1
+                   2    26    000F0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1         1
+                   3   103    00100000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_004       LESS/EQUAL        1         1
+                   4     1  P-00110000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_005       LESS/EQUAL        1         1
+                   2    20    00120000-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_006       LESS/EQUAL        1         1
+                   2    14    00130000-R        0   0 READ WRITE   FIXUP VECTORS LIBRTL_007       LESS/EQUAL        1         1
+
+SYS$PUBLIC_VECTORS             
+                   2    20    00000000-R        0   0 READ ONLY    EXECUTABLE    SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   1    64    00004000-R        0   0 READ WRITE   COPY ON REF   SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   2     2    0000C000-R        0   0 READ WRITE   FIXUP VECTORS SYS$PUBLIC_VECTO EQUAL            51  16699012
+
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! R  - Relocatable   !
+                ! P  - Protected     !
+                +--------------------+
+
+SYS$SYSROOT:[SYSMGR]SP_TT.EXE;1                                  9-OCT-2026 06:01        Linker A13-04                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+$LINKAGE                        00010000 0001017F 00000180 (        384.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,  MOD 
+                SP_TT           00010000 0001017F 00000180 (        384.) OCTA  4
+
+SP_DATA                         00020000 0002095D 0000095E (       2398.) LONG  2 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,  MOD 
+                SP_TT           00020000 0002095D 0000095E (       2398.) LONG  2
+
+SP_CODE                         00030000 000319D3 000019D4 (       6612.) LONG  2 NOPIC,CON,REL,LCL,NOSHR,  EXE,NOWRT,NOVEC,  MOD 
+                SP_TT           00030000 000319D3 000019D4 (       6612.) LONG  2
+
+. BLANK .                       00040000 00040000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,  EXE,  WRT,NOVEC,  MOD 
+                SP_TT           00040000 00040000 00000000 (          0.) OCTA  4
+
+SYS$SYSROOT:[SYSMGR]SP_TT.EXE;1                                  9-OCT-2026 06:01        Linker A13-04                    Page    4
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol         Value             Defined By               Referenced By ...
+------         -----             ----------               -----------------
+GUARD_AST      000100B0-R        SP_TT              
+LIB$PUT_OUTPUT 00000320-RX       LIBRTL                   SP_TT              
+PR0            00010000-R        SP_TT              
+PR1            00010050-R        SP_TT              
+PR2            00010070-R        SP_TT              
+PR3            00010090-R        SP_TT              
+START          000100E0-R        SP_TT              
+SYS$ASSIGN     00000100-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$BINTIM     00000120-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$CANCEL     00000130-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$CANTIM     00000140-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$DASSGN     00000230-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$EXIT       000002F0-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$FAOL       00000320-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$IMGSTA     00000340-RX       SYS$PUBLIC_VECTORS 
+SYS$QIOW       00000080-RX       SYS$PUBLIC_VECTORS       SP_TT              
+SYS$SETIMR     000004A0-RX       SYS$PUBLIC_VECTORS       SP_TT              
+
+SYS$SYSROOT:[SYSMGR]SP_TT.EXE;1                                  9-OCT-2026 06:01        Linker A13-04                    Page    5
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000080     RX-SYS$QIOW      
+00000100     RX-SYS$ASSIGN    
+00000120     RX-SYS$BINTIM    
+00000130     RX-SYS$CANCEL    
+00000140     RX-SYS$CANTIM    
+00000230     RX-SYS$DASSGN    
+000002F0     RX-SYS$EXIT      
+00000320     RX-LIB$PUT_OUTPUT  RX-SYS$FAOL      
+00000340     RX-SYS$IMGSTA    
+000004A0     RX-SYS$SETIMR    
+00010000      R-PR0           
+00010050      R-PR1           
+00010070      R-PR2           
+00010090      R-PR3           
+000100B0      R-GUARD_AST     
+000100E0      R-START         
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! *  - Undefined     !
+                ! A  - Alias Name    !
+                ! I  - Internal Name !
+                ! U  - Universal     !
+                ! R  - Relocatable   !
+                ! X  - External      !
+                ! WK - Weak          !
+                +--------------------+
+
+SYS$SYSROOT:[SYSMGR]SP_TT.EXE;1                                  9-OCT-2026 06:01        Linker A13-04                    Page    6
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00010000 0004FFFF 00040000 (262144. bytes, 512. pages)
+Stack size:                                             20. pages
+Image header virtual block limits:                       1.        2. (    2. blocks)
+Image binary virtual block limits:                       3.       22. (   20. blocks)
+Image name and identification:                    SP_TT V1
+Number of files:                                         5.
+Number of modules:                                       3.
+Number of program sections:                              7.
+Number of global symbols:                              428.
+Number of cross references:                             27.
+Number of image sections:                               15.
+User transfer address:                            000100E0
+Debugger transfer address:                        00000340
+Number of code references to shareable images:          11.
+Image type:                                       EXECUTABLE.
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]SP_TT.MAP;1
+Estimated map length:                             74. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults   CPU Time        Elapsed Time
+----------------------                            -----------   --------        ------------
+    Command processing:                                    32   00:00:00.01     00:00:00.01
+    Pass 1:                                               105   00:00:00.06     00:00:00.06
+    Allocation/Relocation:                                 14   00:00:00.00     00:00:00.00
+    Pass 2:                                                10   00:00:00.02     00:00:00.01
+    Map data after object module synopsis:                  3   00:00:00.01     00:00:00.01
+    Symbol table output:                                    0   00:00:00.00     00:00:00.00
+Total run values:                                         164   00:00:00.10     00:00:00.10
+
+Using a working set limited to 6496 pages and 635 pages of data storage (excluding image)
+
+Total number object records read (both passes):   155
+    of which 0 were in libraries and 0 were DEBUG data records containing 0 bytes
+
+Number of modules extracted explicitly             = 0
+    with 0 extracted to resolve undefined symbols
+
+10 library searches were for symbols not in the library searched
+
+A total of 0 global symbol table records was written
+
+LINK/MAP=SP_TT.MAP/FULL/CROSS SP_TT

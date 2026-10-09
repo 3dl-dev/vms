@@ -66,4 +66,20 @@ uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,
 /* LIB$PUT_OUTPUT of `len` bytes at `p` (vms-3b3f). */
 uint32_t ovmx_vmsabi_put_output(const char *p, unsigned len);
 
+/* vms-3b3f: the services an image LINKed on OpenVMS Alpha reaches through
+ * SYS$PUBLIC_VECTORS that take a descriptor, given here as address + length
+ * (an output buffer as address + capacity). */
+uint32_t ovmx_vmsabi_ascefc(uint32_t efn, const char *name, unsigned namelen,
+                            uint32_t prot, uint32_t perm);
+uint32_t ovmx_vmsabi_dlcefc(const char *name, unsigned namelen);
+uint32_t ovmx_vmsabi_bintim(const char *s, unsigned len, void *timadr);
+uint32_t ovmx_vmsabi_asctim(uint16_t *timlen, char *out, unsigned outcap,
+                            const void *timadr, uint32_t cvtflg);
+uint32_t ovmx_vmsabi_getmsg(uint32_t msgid, uint16_t *msglen, char *out,
+                            unsigned outcap, uint32_t flags, uint8_t *outadr);
+/* The $FAO engine in the VMS argument forms (sys_fao.c). */
+uint32_t ovmx_fao_vmsabi(const char *ctr, unsigned ctrlen, uint16_t *outlen,
+                         char *out, unsigned outcap, const uint64_t *prm);
+int count_fao_args(const char *ctrl, uint16_t len);
+
 #endif /* SYS_VMSABI_CORE_H */

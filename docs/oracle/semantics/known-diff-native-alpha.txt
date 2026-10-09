@@ -1,0 +1,9 @@
+# known-diff-native-alpha.txt - the native-image semantic ratchet (rd vms-3b3f).
+# "<family> <CASE-ID>  # <rd item>: <why>" -- a case where the semantic-oracle
+# probe image LINKed on the lab OpenVMS Alpha V8.4 node, run UNCHANGED on
+# OVMX/Alpha (tests/native-images/alpha/sp/, CI alpha-native-image), prints
+# something other than what the same image printed on that node
+# (docs/oracle/semantics/<family>/alpha84.txt). Read by
+# tools/oracle/semantic/semantic_diff.py --known: an unlisted difference fails
+# the gate, and so does a listed case that now matches. Fix the bug, delete the
+# line.

@@ -44,5 +44,14 @@ $ DEASSIGN MYSHR
 $ WRITE SYS$OUTPUT "NATIVE-PROOF: === RUN NOTIMG (a text file) ==="
 $ RUN SYS$SYSTEM:NOTIMG
 $ WRITE SYS$OUTPUT "NATIVE-PROOF: NOTIMG-STATUS=''$STATUS'"
+$!
+$! The semantic-oracle probes LINKed on the lab Alpha V8.4 node (the very
+$! programs docs/oracle/semantics/<family>/alpha84.txt was printed by), run
+$! unchanged; each prints its own "=== SEMPROBE <family> BEGIN/END ===".
+$! One RUN per image in tests/native-images/alpha/sp/ (the gate checks the
+$! two lists agree).
+$ RUN SYS$SYSTEM:SP_EF
+$ RUN SYS$SYSTEM:SP_FAO
+$ RUN SYS$SYSTEM:SP_TT
 $ WRITE SYS$OUTPUT "NATIVE-PROOF: === END ==="
 $ EXIT

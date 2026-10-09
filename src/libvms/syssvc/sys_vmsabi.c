@@ -405,3 +405,102 @@ int SYS$IMGSTA(void *xfervec, void *cli_util, void *imghdr, void *imgfile,
     void *a0 = vec[2] ? (void *)&vec[1] : (void *)vec[1];
     return next(a0, cli_util, imghdr, imgfile, linkflag, cliflag);
 }
+
+/* ------------------------------------------- descriptor services (vms-3b3f) */
+
+/* A descriptor's buffer for the service to write into (either form). */
+static int dsc_buffer(void *d, char **p, unsigned *len)
+{
+    const char *cp;
+    if (!dsc_string(d, &cp, len) || !cp)
+        return 0;
+    *p = (char *)cp;
+    return 1;
+}
+
+int SYS$ASCEFC(unsigned int efn, void *name, unsigned int prot, unsigned int perm)
+{
+    const char *p;
+    unsigned len;
+    if (!dsc_string(name, &p, &len))
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_ascefc(efn, p, len, prot, perm);
+}
+
+int SYS$DLCEFC(void *name)
+{
+    const char *p;
+    unsigned len;
+    if (!dsc_string(name, &p, &len))
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_dlcefc(p, len);
+}
+
+int SYS$BINTIM(void *timbuf, void *timadr)
+{
+    const char *p;
+    unsigned len;
+    if (!dsc_string(timbuf, &p, &len))
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_bintim(p, len, timadr);
+}
+
+int SYS$ASCTIM(unsigned short *timlen, void *timbuf, void *timadr, unsigned int cvtflg)
+{
+    char *p;
+    unsigned cap;
+    if (!dsc_buffer(timbuf, &p, &cap))
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_asctim(timlen, p, cap, timadr, cvtflg);
+}
+
+int SYS$GETMSG(unsigned int msgid, unsigned short *msglen, void *bufadr,
+               unsigned int flags, unsigned char *outadr)
+{
+    char *p;
+    unsigned cap;
+    if (!dsc_buffer(bufadr, &p, &cap))
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_getmsg(msgid, msglen, p, cap, flags, outadr);
+}
+
+/* $FAOL: the parameter list is LONGWORDS (a 32-bit caller's values and
+ * addresses); each is sign-extended as the Alpha loads it. An !AS parameter
+ * names a VMS-form descriptor (ovmx_fao_vmsabi). */
+#define FAO_MAXPRM 256
+int SYS$FAOL(void *ctrstr, unsigned short *outlen, void *outbuf, int *prmlst)
+{
+    const char *c;
+    char *o;
+    unsigned clen, ocap;
+    if (!dsc_string(ctrstr, &c, &clen) || !dsc_buffer(outbuf, &o, &ocap))
+        return SS$_BADPARAM;
+    int n = count_fao_args(c, (unsigned short)clen);
+    if (n > FAO_MAXPRM)
+        n = FAO_MAXPRM;
+    unsigned long long prm[FAO_MAXPRM];
+    for (int i = 0; i < n; i++)
+        prm[i] = prmlst ? (unsigned long long)(long long)prmlst[i] : 0;
+    return (int)ovmx_fao_vmsabi(c, clen, outlen, o, ocap,
+                                (const uint64_t *)prm);
+}
+
+/* $FAO: the parameters follow in the argument list, one per quadword slot. */
+int SYS$FAO(void *ctrstr, unsigned short *outlen, void *outbuf, ...)
+{
+    const char *c;
+    char *o;
+    unsigned clen, ocap;
+    if (!dsc_string(ctrstr, &c, &clen) || !dsc_buffer(outbuf, &o, &ocap))
+        return SS$_BADPARAM;
+    int n = count_fao_args(c, (unsigned short)clen);
+    if (n > FAO_MAXPRM)
+        n = FAO_MAXPRM;
+    unsigned long long prm[FAO_MAXPRM];
+    va_list ap;
+    va_start(ap, outbuf);
+    for (int i = 0; i < n; i++)
+        prm[i] = va_arg(ap, unsigned long long);
+    va_end(ap);
+    return (int)ovmx_fao_vmsabi(c, clen, outlen, o, ocap, (const uint64_t *)prm);
+}

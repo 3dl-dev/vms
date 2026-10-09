@@ -11,12 +11,16 @@
 # comes from a VSI/HPE binary or source.
 #
 # Each entry is a null-frame procedure that transfers, arguments untouched,
-# to the OVMX universal named in the third column (in LIBVMS$SHR, taking the
-# VMS argument forms: src/libvms/syssvc/sys_vmsabi.c). Only services whose
-# VMS-ABI implementation exists are listed; every other slot is a retired
-# (PRIVATE) entry, so an image that calls one fails to activate honestly
-# (%IMGACT-I-NOTIMPL) instead of reaching a routine that misreads its
-# arguments. Add a service by implementing its VMS-ABI entry, then a line.
+# to the OVMX universal named in the third column, in LIBVMS$SHR. An
+# UPPER-CASE target takes the VMS argument forms (descriptors, item lists:
+# src/libvms/syssvc/sys_vmsabi.c). A lower-case target is OVMX's own service,
+# listed only where every argument is a value or the address of a value or
+# buffer whose layout is the same for a 32-bit-pointer VMS caller (event flag
+# numbers, masks, quadword times, an AST routine and its parameter). Every
+# other slot is a retired (PRIVATE) entry, so an image that calls one fails to
+# activate honestly (%IMGACT-I-NOTIMPL) instead of reaching a routine that
+# misreads its arguments. Each listed entry is exercised by an image LINKed
+# on the lab node (tests/native-images/alpha/sp/, the semantic-oracle probes).
 #
 # GSMATCH: images record the ident of the SYS$PUBLIC_VECTORS they were linked
 # against (major 51, minor 16699012, match EQUAL -- observed in every captured
@@ -27,9 +31,27 @@
 #
 # offset  universal        OVMX target
 0x080     SYS$QIOW         SYS$QIOW
+0x0E0     SYS$ASCEFC       SYS$ASCEFC
+0x0F0     SYS$ASCTIM       SYS$ASCTIM
 0x100     SYS$ASSIGN       SYS$ASSIGN
+0x120     SYS$BINTIM       SYS$BINTIM
+0x130     SYS$CANCEL       sys$cancel
+0x140     SYS$CANTIM       sys$cantim
+0x1A0     SYS$CLREF        sys$clref
+0x210     SYS$DACEFC       sys$dacefc
 0x230     SYS$DASSGN       SYS$DASSGN
+0x2C0     SYS$DLCEFC       SYS$DLCEFC
+0x2F0     SYS$EXIT         sys$exit
+0x310     SYS$FAO          SYS$FAO
+0x320     SYS$FAOL         SYS$FAOL
 0x340     SYS$IMGSTA       SYS$IMGSTA
 0x400     SYS$QIO          SYS$QIO
+0x410     SYS$READEF       sys$readef
+0x460     SYS$SETEF        sys$setef
+0x4A0     SYS$SETIMR       sys$setimr
+0x550     SYS$WAITFR       sys$waitfr
+0x570     SYS$WFLAND       sys$wfland
+0x580     SYS$WFLOR        sys$wflor
+0x5C0     SYS$GETMSG       SYS$GETMSG
 0xA00     SYS$CRELNM       SYS$CRELNM
 0xA20     SYS$TRNLNM       SYS$TRNLNM

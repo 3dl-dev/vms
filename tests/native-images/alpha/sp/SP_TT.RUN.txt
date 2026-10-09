@@ -1,0 +1,21 @@
+=== SEMPROBE tt BEGIN ===
+TT.ASSIGN st=00000001
+TT.SENSEMODE st=00000001 iosb=1 count=15 class=66 width=511 page=0
+TT.SENSECHAR st=00000001 iosb=1 count=15 class=66 width=80 page=24
+TT.SENSEMODE.SHORT st=00000001 iosb=1 count=15
+TT.SETMODE.SAME st=00000001 iosb=1 count=15
+SP_TT_LINE_1
+TT.WRITE st=00000001 iosb=1 count=15SP_TT_LINE_1
+TT.WRITE.NOFORMAT st=00000001 iosb=1 count=12
+TT.WRITE.ZERO st=00000001 iosb=1 count=0
+
+TT.READ.TIMED0 st=00000001 iosb=556 count=0 term=0 termlen=0
+
+TT.READ.TIMED0.ZEROLEN st=00000001 iosb=1 count=0 term=0 termlen=0
+SP> 
+TT.READPROMPT.TIMED0 st=00000001 iosb=556 count=0 term=0 termlen=0
+TT.ILLFUNC st=00000084 iosb=0 count=0
+TT.CANCEL st=00000001
+TT.DASSGN st=00000001
+TT.AFTER.DASSGN st=0000013C iosb=42405 count=42405
+=== SEMPROBE tt END ===

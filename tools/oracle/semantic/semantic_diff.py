@@ -27,6 +27,7 @@ So the list can only shrink.
   semantic_diff.py --selftest                          prove the gate can go red
   semantic_diff.py --goldens                           check goldens are well formed
   semantic_diff.py <dir> --write-known                 (re)write known-diff.txt
+  semantic_diff.py <dir> --known FILE --families a,b   another ratchet, these families only
 """
 import hashlib
 import os
@@ -257,7 +258,18 @@ def main(a):
     if len(a) >= 2 and os.path.isdir(a[1]):
         if a[2:] == ["--write-known"]:
             write_known(a[1]); return 0
-        return 0 if gate(a[1], report=a[2:] == ["--report"]) else 1
+        rest = a[2:]
+        known_path, gold = KNOWN, None
+        # --known FILE --families a,b: the native-image gate (vms-3b3f) runs
+        # the probe images LINKed on the lab node itself, for the families
+        # it has them for, against its own ratchet.
+        if "--known" in rest:
+            known_path = rest[rest.index("--known") + 1]
+        if "--families" in rest:
+            want = rest[rest.index("--families") + 1].split(",")
+            gold = {f: g for f, g in goldens().items() if f in want}
+        return 0 if gate(a[1], report="--report" in rest, known_path=known_path,
+                         gold=gold) else 1
     print(__doc__)
     return 2
 

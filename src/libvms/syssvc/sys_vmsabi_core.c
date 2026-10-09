@@ -171,3 +171,41 @@ uint32_t ovmx_vmsabi_put_output(const char *p, unsigned len)
     mkdsc(&d, p, len);
     return lib$put_output(&d);
 }
+
+uint32_t ovmx_vmsabi_ascefc(uint32_t efn, const char *name, unsigned namelen,
+                            uint32_t prot, uint32_t perm)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, name, namelen);
+    return sys$ascefc(efn, &d, prot, perm);
+}
+
+uint32_t ovmx_vmsabi_dlcefc(const char *name, unsigned namelen)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, name, namelen);
+    return sys$dlcefc(&d);
+}
+
+uint32_t ovmx_vmsabi_bintim(const char *s, unsigned len, void *timadr)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, s, len);
+    return sys$bintim(&d, (struct _generic_64 *)timadr);
+}
+
+uint32_t ovmx_vmsabi_asctim(uint16_t *timlen, char *out, unsigned outcap,
+                            const void *timadr, uint32_t cvtflg)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, out, outcap);
+    return sys$asctim(timlen, &d, (const uint64_t *)timadr, cvtflg);
+}
+
+uint32_t ovmx_vmsabi_getmsg(uint32_t msgid, uint16_t *msglen, char *out,
+                            unsigned outcap, uint32_t flags, uint8_t *outadr)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, out, outcap);
+    return sys$getmsg(msgid, msglen, &d, flags, (uint32_t *)outadr);
+}

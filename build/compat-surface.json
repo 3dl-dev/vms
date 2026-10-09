@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-08",
+    "generated": "2026-10-09",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -77,8 +77,8 @@
     "count": 477,
     "by_status": {
       "verified": 24,
-      "implemented": 285,
-      "partial": 61,
+      "implemented": 286,
+      "partial": 60,
       "stub": 14,
       "designed": 1,
       "absent": 92
@@ -89,8 +89,8 @@
       "advisory": 46,
       "facade-risk": 6
     },
-    "met": 309,
-    "in_progress": 61,
+    "met": 310,
+    "in_progress": 60,
     "not_started": 107,
     "facade_risk": 6
   },
@@ -98,8 +98,8 @@
     "count": 431,
     "by_status": {
       "verified": 24,
-      "implemented": 285,
-      "partial": 59,
+      "implemented": 286,
+      "partial": 58,
       "stub": 10,
       "designed": 1,
       "absent": 52
@@ -110,8 +110,8 @@
       "advisory": 44,
       "facade-risk": 4
     },
-    "met": 309,
-    "in_progress": 59,
+    "met": 310,
+    "in_progress": 58,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -1224,8 +1224,8 @@
         "count": 12,
         "by_status": {
           "verified": 1,
-          "implemented": 5,
-          "partial": 4,
+          "implemented": 6,
+          "partial": 3,
           "stub": 1,
           "designed": 0,
           "absent": 1
@@ -1235,8 +1235,8 @@
           "advisory": 1,
           "n/a": 1
         },
-        "met": 6,
-        "in_progress": 4,
+        "met": 7,
+        "in_progress": 3,
         "not_started": 2,
         "facade_risk": 0
       }
@@ -5879,12 +5879,12 @@
       "id": "acldef$acls",
       "kind": "feature",
       "vms": "Access Control List entries (ACEs) on files/objects",
-      "status": "partial",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vmsfs_acp.c",
       "verified_against": "tests/qemu/test_syssvc_acl.c against a real /dev/vms over the real-VAX ODS-2 fixture; behaviour and on-disk layout from docs/oracle/vax73-acl.md (OpenVMS VAX V7.3)",
-      "notes": "vms-d404: identifier ACEs stored in the FH2 access control area (top of the header, acoffset..rsoffset) as V7.3 stores them; the ACP access check takes the first matching identifier ACE (DEFAULT ACEs skipped); a denying ACE leaves only the system and owner fields; CONTROL required to change an ACL; ADD replaces an ACE for the same identifiers, DELETE keeps PROTECTED ACEs. On create a file inherits its directory's DEFAULT ACEs (DEFAULT cleared) and DEFAULT_PROTECTION, a directory its parent's ACL less NOPROPAGATE ACEs, a new version the previous version's ACL and protection (docs/oracle/vax73-acl.md, Inheritance). Not done: an ACL longer than the primary header (VMS continues it in an extension header) is SS$_ACLFULL; general identifiers match only once the process rights list exists (vms-7d5a), UIC identifiers and * match now.",
+      "notes": "vms-d404: identifier ACEs stored in the FH2 access control area (top of the header, acoffset..rsoffset) as V7.3 stores them; the ACP access check takes the first matching identifier ACE (DEFAULT ACEs skipped); a denying ACE leaves only the system and owner fields; CONTROL required to change an ACL; ADD replaces an ACE for the same identifiers, DELETE keeps PROTECTED ACEs. On create a file inherits its directory's DEFAULT ACEs (DEFAULT cleared) and DEFAULT_PROTECTION, a directory its parent's ACL less NOPROPAGATE ACEs, a new version the previous version's ACL and protection (docs/oracle/vax73-acl.md, Inheritance). An ACL longer than the primary header continues in extension headers chained from FH2$W_EXT_FID, as V7.3 continues it (vms-a88c); general identifiers match through the executive process rights list (vms-7d5a).",
       "plan_ref": "vms-8ad"
     },
     {

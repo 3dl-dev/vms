@@ -26,7 +26,6 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <signal.h>
-#include <sys/ioctl.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -56,13 +55,7 @@ static void check(int c, const char *m)
  * the way the VAX native image activator does. The answer is the status. */
 static uint32_t page0_ask(void)
 {
-    struct vms_native_page0_args pa;
-    int fd = vms_kif_open();
-
-    memset(&pa, 0, sizeof(pa));
-    if (fd < 0 || ioctl(fd, VMS_IOCTL_NATIVE_PAGE0, &pa) < 0)
-        return 0;
-    return pa.status;
+    return vms_kif_native_page0();
 }
 
 static int run_child(int rfd, int wfd, uint16_t fid)

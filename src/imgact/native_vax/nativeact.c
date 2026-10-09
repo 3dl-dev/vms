@@ -47,6 +47,7 @@
 #include "descrip.h"
 #include "lib$routines.h"
 #include "starlet.h"
+#include "vms_kif.h"
 #include "lnmdef.h"
 #include "imgact_acp.h"
 #include "imgact_eihd.h"   /* shared: GSMATCH, shareable file resolution */
@@ -328,14 +329,9 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 	if (is_main) {
 		/* Page 0 for this process only, granted by the executive. */
 		if (PG_DOWN(m->lo) == 0) {
-			int fd = open("/dev/vms", O_RDWR | O_CLOEXEC);
-			struct vms_native_page0_args pa;
-			memset(&pa, 0, sizeof pa);
-			if (fd < 0 || ioctl(fd, VMS_IOCTL_NATIVE_PAGE0, &pa) < 0 ||
-			    !(pa.status & 1))
+			if (!(vms_kif_native_page0() & 1))
 				fail_notimpl(m->name, m->spec,
 					     "virtual page 0 (the executive refused it)");
-			close(fd);
 		}
 		map = mmap((void *)PG_DOWN(m->lo), span, PROT_READ | PROT_WRITE,
 			   MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);

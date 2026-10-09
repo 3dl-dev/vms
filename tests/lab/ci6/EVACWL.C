@@ -249,6 +249,25 @@ int main(int argc, char **argv)
     fab.fab$b_shr = FAB$M_GET | FAB$M_PUT;
 
     st = sys$open(&fab, 0, 0);
+    if (!(st & 1) && standby) {
+        /* A STANDBY takes over an EXISTING workload: it never starts a fresh
+         * file. Its data volume arrives after the lock does when the volume
+         * is handed over by DISMOUNT on the old node + MOUNT here (ci.6), so
+         * it waits for the file, one try a second, holding the lock. */
+        static const int64_t again = -10000000LL;  /* 1 s, delta */
+        int tries = 0;
+        printf("EVACWL: holding EVAC$WORKLOAD, waiting for EVAC$DATA:EVAC.DAT\n");
+        fflush(stdout);
+        while (!(st & 1) && tries++ < 3600) {
+            sys$schdwk(0, 0, (uint64_t *)&again, 0);
+            sys$hiber();
+            st = sys$open(&fab, 0, 0);
+        }
+        if (!(st & 1)) {
+            fprintf(stderr, "EVACWL: EVAC.DAT never appeared, status %u\n", st);
+            return 1;
+        }
+    }
     if (!(st & 1)) {
         /* Not found (or any other open failure): create it fresh. */
         st = sys$create(&fab, 0, 0);

@@ -1364,32 +1364,61 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
 }
 
 /*
- * vms_proc_rundown_locked - process deletion, the executive's half (rd vms-9f32).
+ * Process deletion, the executive's half (rd vms-9f32).
  *
- * The substrate's process-exit hook calls this for a process that has ended --
- * however it ended, whether or not it ever issued a system service -- with
- * vms_proc_hash_lock held and `victim` already unlinked from vms_proc_hash (the
- * ownership claim). It tells the creator how the process ended: a termination
- * record in the OWNER's PCB (read once, by that owner only, through GETEXIT or
- * SPAWN_NOTIFY), and the creator's armed /NOWAIT completion if one is armed.
- * The substrate then releases everything the process held
- * (vms_proc_free_claimed) outside the lock. Atomic-safe: nothing here sleeps.
+ * The substrate's process-exit hook deletes a process that has ended -- however
+ * it ended, whether or not it ever issued a system service -- in three steps:
+ *
+ *   1. under vms_proc_hash_lock: unlink the row (the ownership claim; its PID
+ *      now answers SS$_NONEXPR) and vms_proc_termination_capture() what its
+ *      creator must be told;
+ *   2. unlocked: release everything the process held (vms_proc_free_claimed:
+ *      channels, locks, mailboxes, devices, sockets, LNM$PROCESS ...);
+ *   3. under vms_proc_hash_lock again: vms_proc_termination_post_locked() --
+ *      the termination record in the creator's PCB and the creator's armed
+ *      /NOWAIT completion.
+ *
+ * So, as on VMS, a creator hears that its subprocess ended only after the
+ * subprocess's resources are gone. Both halves are atomic-safe (nothing here
+ * sleeps); step 2 is the substrate's and may sleep.
  */
-void vms_proc_rundown_locked(struct vms_proc *victim)
+void vms_proc_termination_capture(const struct vms_proc *victim,
+                                  struct vms_termination *t)
 {
-    struct vms_proc *owner = victim->owner_vms_pid
-                           ? find_by_vms_pid(victim->owner_vms_pid) : NULL;
+    memset(t, 0, sizeof(*t));
+    t->owner_vms_pid    = victim->owner_vms_pid;
+    t->vms_pid          = victim->vms_pid;
+    t->linux_pid        = (uint32_t)victim->linux_pid;
+    t->condition        = victim->has_exit_status ? victim->exit_status : SS__ABORT;
+    t->has_status       = victim->has_exit_status;
+    t->compl_armed      = victim->compl_armed;
+    t->compl_acmode     = victim->compl_acmode;
+    t->compl_parent_pid = victim->compl_parent_pid;
+    t->compl_efn        = victim->compl_efn;
+    t->compl_astadr     = victim->compl_astadr;
+    t->compl_astprm     = victim->compl_astprm;
+}
+
+void vms_proc_termination_post_locked(const struct vms_termination *t)
+{
+    struct vms_proc *owner = t->owner_vms_pid ? find_by_vms_pid(t->owner_vms_pid) : NULL;
 
     if (owner) {
         struct vms_termrec *r = &owner->termrec[owner->termrec_next % VMS_TERMREC_MAX];
         owner->termrec_next++;
-        r->vms_pid    = victim->vms_pid;
-        r->linux_pid  = (uint32_t)victim->linux_pid;
-        r->condition  = victim->has_exit_status ? victim->exit_status : SS__ABORT;
-        r->has_status = victim->has_exit_status;
+        r->vms_pid    = t->vms_pid;
+        r->linux_pid  = t->linux_pid;
+        r->condition  = t->condition;
+        r->has_status = t->has_status;
     }
-    vms_proc_deliver_abnormal_completion(victim);
+    if (t->compl_armed) {
+        struct vms_proc *parent = find_by_vms_pid(t->compl_parent_pid);
+        if (parent)
+            spawn_notify_deliver(parent, t->compl_efn, t->compl_astadr,
+                                 t->compl_astprm, t->compl_acmode);
+    }
 }
+
 
 /*
  * termrec_find - the caller's own termination record for its ended subprocess

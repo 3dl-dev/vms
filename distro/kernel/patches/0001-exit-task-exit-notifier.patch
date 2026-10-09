@@ -1,0 +1,88 @@
+exit: notify in-kernel subsystems when a task exits (task_exit_notifier)
+
+Same change as tools/cross-alpha/patches/0002-exit-task-exit-notifier.patch
+(see its header for the rationale), against the distro's pinned 6.12 LTS.
+Some in-kernel subsystems keep per-process state outside struct task_struct
+and must learn, in process context and before the parent is notified, that a
+process ended however it ended. Add a blocking notifier chain called from
+do_exit() where trace_sched_process_exit() fires, once per exiting thread with
+the thread group's group_dead flag; export registration GPL-only;
+HAVE_TASK_EXIT_NOTIFIER selects it at build time.
+
+OVMX (rd vms-9f32, docs/design-executive-process-lifecycle.md section 3.2):
+the VMS executive (vms.ko) runs process rundown from this hook, synchronously,
+before the process becomes a zombie.
+
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -68,6 +68,7 @@
+ #include <linux/rethook.h>
+ #include <linux/sysfs.h>
+ #include <linux/user_events.h>
++#include <linux/notifier.h>
+ #include <linux/uaccess.h>
+ 
+ #include <uapi/linux/wait.h>
+@@ -880,6 +881,30 @@
+ 	spin_unlock_irq(&sighand->siglock);
+ }
+ 
++/*
++ * Process exit notification for in-kernel subsystems that keep per-process
++ * state outside struct task_struct (an executive's process control block, for
++ * example) and must learn that a process ended however it ended -- not only
++ * when it closed a file it happened to hold. Called from do_exit() at the
++ * point trace_sched_process_exit() fires, in process context (callbacks may
++ * sleep), once per exiting thread with the thread group's group_dead flag:
++ * a subscriber that tracks whole processes acts when group_dead is true (the
++ * last thread is leaving; every other thread has already passed this point).
++ */
++static BLOCKING_NOTIFIER_HEAD(task_exit_notifier);
++
++int task_exit_notifier_register(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_register(&task_exit_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exit_notifier_register);
++
++int task_exit_notifier_unregister(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_unregister(&task_exit_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exit_notifier_unregister);
++
+ void __noreturn do_exit(long code)
+ {
+ 	struct task_struct *tsk = current;
+@@ -943,6 +968,7 @@
+ 	if (group_dead)
+ 		acct_process();
+ 	trace_sched_process_exit(tsk);
++	blocking_notifier_call_chain(&task_exit_notifier, group_dead, tsk);
+ 
+ 	exit_sem(tsk);
+ 	exit_shm(tsk);
+--- a/include/linux/sched/task.h
++++ b/include/linux/sched/task.h
+@@ -13,6 +13,7 @@
+ #include <linux/uaccess.h>
+ 
+ struct task_struct;
++struct notifier_block;
+ struct rusage;
+ union thread_union;
+ struct css_set;
+@@ -237,4 +238,13 @@
+ 
+ DEFINE_GUARD(task_lock, struct task_struct *, task_lock(_T), task_unlock(_T))
+ 
++/*
++ * task_exit_notifier_{register,unregister} - be called (process context) from
++ * do_exit() for every exiting thread; the callback's action argument is the
++ * thread group's group_dead flag, its data the exiting task_struct.
++ */
++#define HAVE_TASK_EXIT_NOTIFIER 1
++extern int task_exit_notifier_register(struct notifier_block *nb);
++extern int task_exit_notifier_unregister(struct notifier_block *nb);
++
+ #endif /* _LINUX_SCHED_TASK_H */

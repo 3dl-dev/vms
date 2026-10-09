@@ -2547,68 +2547,63 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
  * Process deletion at process exit (rd vms-9f32)
  *
  * On VMS a process is deleted when it ends, however it ends; the executive
- * owns that, not the image. The hook fires for every exiting thread; it acts
- * once the thread group's LIVE count is zero -- every thread of the process
- * has passed the point in do_exit() that decrements it, so the process really
- * is ending (not thread_group_empty(): the zombie leader stays on the thread
- * list while a non-leader thread is the last to leave, rd vms-003b). Under
- * vms_proc_hash_lock the row is unlinked (the claim) and
- * vms_proc_rundown_locked() tells the creator how it ended; everything the
- * process held is then released from a workqueue, because the tracepoint
- * runs where sleeping is not allowed.
+ * owns that, not the image. vms_process_ended() runs in PROCESS CONTEXT in the
+ * exiting task, after its last thread has decremented the thread group's live
+ * count and BEFORE the process becomes a zombie (exit_notify): claim the row
+ * (its PID now answers SS$_NONEXPR), release everything it held, then tell its
+ * creator (termination record + armed /NOWAIT completion). A parent's wait for
+ * the Linux child therefore never returns before the VMS process is gone.
  *
- * The hook: the do_exit task_exit_notifier where the kernel carries it (the
- * OVMX Alpha kernel, tools/cross-alpha/patches/0002 -- Alpha cannot build
- * CONFIG_TRACEPOINTS), otherwise the sched_process_exit tracepoint, attached
- * by name exactly as vms_bg_forkinherit.c does.
+ * The hook, chosen at build time:
+ *   - task_exit_notifier: the do_exit notifier the OVMX kernels carry
+ *     (distro/kernel/patches/0001, tools/cross-alpha/patches/0002); called in
+ *     process context with group_dead.
+ *   - otherwise the sched_process_exit tracepoint (attached by name, as
+ *     vms_bg_forkinherit.c does), whose probe cannot sleep: it queues a
+ *     task_work on the exiting task, which do_exit runs at exit_task_work() --
+ *     still in the exiting task, still before exit_notify -- in process context.
+ *     If that cannot be queued, the deletion falls back to a workqueue (the
+ *     process is still deleted; only the ordering against the parent's wait is
+ *     lost) and says so.
  * ================================================================ */
-static LLIST_HEAD(vms_ended_list);
-
-static void vms_ended_work_fn(struct work_struct *w)
+static void vms_process_ended(pid_t tgid, struct pid *ref)
 {
-    struct llist_node *batch = llist_del_all(&vms_ended_list);
-    struct vms_proc *proc, *tmp;
+    for (;;) {
+        struct vms_termination t;
+        struct vms_proc *proc, *victim = NULL;
+        struct hlist_node *tmp;
 
-    (void)w;
-    llist_for_each_entry_safe(proc, tmp, batch, ended_node)
-        vms_proc_free_claimed(proc);
-}
-static DECLARE_WORK(vms_ended_work, vms_ended_work_fn);
+        spin_lock(&vms_proc_hash_lock);
+        hash_for_each_possible_safe(vms_proc_hash, proc, tmp, hash_node, tgid) {
+            if (proc->linux_pid != tgid || proc->pid_ref != ref)
+                continue;
+            hash_del_rcu(&proc->hash_node);          /* the claim */
+            vms_proc_termination_capture(proc, &t);
+            proc->compl_armed = 0;
+            victim = proc;
+            break;
+        }
+        spin_unlock(&vms_proc_hash_lock);
+        if (!victim)
+            return;
 
-static void vms_process_ended(struct task_struct *p)
-{
-    struct vms_proc *proc;
-    struct hlist_node *tmp;
-    struct pid *ref;
-    pid_t tgid;
-    int claimed = 0;
+        vms_proc_free_claimed(victim);               /* may sleep */
 
-    if (atomic_read(&p->signal->live) != 0)
-        return;                         /* another thread of it is still running */
-
-    tgid = task_tgid_nr(p);
-    ref  = task_tgid(p);
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible_safe(vms_proc_hash, proc, tmp, hash_node, tgid) {
-        if (proc->linux_pid != tgid || proc->pid_ref != ref)
-            continue;
-        hash_del_rcu(&proc->hash_node);
-        vms_proc_rundown_locked(proc);
-        llist_add(&proc->ended_node, &vms_ended_list);
-        claimed = 1;
+        spin_lock(&vms_proc_hash_lock);
+        vms_proc_termination_post_locked(&t);
+        spin_unlock(&vms_proc_hash_lock);
     }
-    spin_unlock(&vms_proc_hash_lock);
-    if (claimed)
-        schedule_work(&vms_ended_work);
 }
 
 #if defined(HAVE_TASK_EXIT_NOTIFIER)
 static int vms_task_exit_notify(struct notifier_block *nb, unsigned long group_dead,
                                 void *data)
 {
+    struct task_struct *p = data;
+
     (void)nb;
     if (group_dead)
-        vms_process_ended((struct task_struct *)data);
+        vms_process_ended(task_tgid_nr(p), task_tgid(p));
     return NOTIFY_OK;
 }
 static struct notifier_block vms_task_exit_nb = { .notifier_call = vms_task_exit_notify };
@@ -2622,12 +2617,53 @@ static void vms_exit_hook_exit(void)
     (void)task_exit_notifier_unregister(&vms_task_exit_nb);
 }
 #elif defined(CONFIG_TRACEPOINTS)
+#include <linux/task_work.h>
+
+struct vms_exit_item {
+    struct callback_head cb;     /* exit_task_work in the exiting task */
+    struct work_struct   work;   /* fallback: a worker */
+    struct pid          *ref;
+    pid_t                tgid;
+};
 static struct tracepoint *vms_tp_exit;
+static struct workqueue_struct *vms_exit_wq;
+
+static void vms_exit_item_run(struct vms_exit_item *it)
+{
+    vms_process_ended(it->tgid, it->ref);
+    put_pid(it->ref);
+    kfree(it);
+}
+static void vms_exit_task_work(struct callback_head *cb)
+{
+    vms_exit_item_run(container_of(cb, struct vms_exit_item, cb));
+}
+static void vms_exit_work(struct work_struct *w)
+{
+    vms_exit_item_run(container_of(w, struct vms_exit_item, work));
+}
 
 static void vms_on_process_exit(void *data, struct task_struct *p)
 {
+    struct vms_exit_item *it;
+
     (void)data;
-    vms_process_ended(p);
+    if (atomic_read(&p->signal->live) != 0)
+        return;                         /* another thread of it is still running */
+    it = kzalloc(sizeof(*it), GFP_ATOMIC);
+    if (!it) {
+        pr_err_ratelimited("vms: no memory to delete process %d -- its PCB is kept\n",
+                           task_tgid_nr(p));
+        return;
+    }
+    it->tgid = task_tgid_nr(p);
+    it->ref  = get_pid(task_tgid(p));
+    init_task_work(&it->cb, vms_exit_task_work);
+    if (p == current && task_work_add(p, &it->cb, TWA_NONE) == 0)
+        return;
+    pr_warn_ratelimited("vms: process %d deleted asynchronously (no task_work)\n", it->tgid);
+    INIT_WORK(&it->work, vms_exit_work);
+    queue_work(vms_exit_wq, &it->work);
 }
 static void vms_find_exit_tp(struct tracepoint *tp, void *priv)
 {
@@ -2637,20 +2673,29 @@ static void vms_find_exit_tp(struct tracepoint *tp, void *priv)
 }
 static int vms_exit_hook_init(void)
 {
+    int ret;
+
+    vms_exit_wq = alloc_workqueue("vms_exit", 0, 0);
+    if (!vms_exit_wq)
+        return -ENOMEM;
     for_each_kernel_tracepoint(vms_find_exit_tp, NULL);
-    if (!vms_tp_exit)
+    if (!vms_tp_exit) {
+        destroy_workqueue(vms_exit_wq);
         return -ENOENT;
-    return tracepoint_probe_register(vms_tp_exit, (void *)vms_on_process_exit, NULL);
+    }
+    ret = tracepoint_probe_register(vms_tp_exit, (void *)vms_on_process_exit, NULL);
+    if (ret)
+        destroy_workqueue(vms_exit_wq);
+    return ret;
 }
 static void vms_exit_hook_exit(void)
 {
-    if (vms_tp_exit) {
-        tracepoint_probe_unregister(vms_tp_exit, (void *)vms_on_process_exit, NULL);
-        tracepoint_synchronize_unregister();
-    }
+    tracepoint_probe_unregister(vms_tp_exit, (void *)vms_on_process_exit, NULL);
+    tracepoint_synchronize_unregister();
+    destroy_workqueue(vms_exit_wq);     /* drains any fallback deletion */
 }
 #else
-#error "the VMS executive needs a process-exit hook (rd vms-9f32): CONFIG_TRACEPOINTS, or a kernel carrying task_exit_notifier (tools/cross-alpha/patches/0002)"
+#error "the VMS executive needs a process-exit hook (rd vms-9f32): a kernel carrying task_exit_notifier (distro/kernel/patches/0001), or CONFIG_TRACEPOINTS"
 #endif
 
 /*
@@ -3007,7 +3052,6 @@ static void __exit vms_exit(void)
     /* No new deletion can be queued once the hook is gone; finish the queued
      * ones before the PCBs that remain are freed below. */
     vms_exit_hook_exit();
-    flush_work(&vms_ended_work);
 
     /* vms-0cd: stop capturing forks and drain any un-consumed fork-inherit records
      * (dropping the socket refs they hold) BEFORE the PCBs they snapshot are freed. */

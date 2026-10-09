@@ -611,6 +611,14 @@ extern uint32_t vms_local_csid;
 /* One ended subprocess's termination record (rd vms-9f32); identical to
  * src/kernel/vms_internal.h's. */
 #define VMS_TERMREC_MAX 16
+/* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
+struct vms_termination {
+	uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
+	uint8_t  has_status, compl_armed, compl_acmode, pad;
+	uint32_t compl_parent_pid, compl_efn;
+	uint64_t compl_astadr, compl_astprm;
+};
+
 struct vms_termrec {
 	uint32_t vms_pid;
 	uint32_t linux_pid;
@@ -1378,9 +1386,10 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 /* Facility-provided (src/kernel-core/vms_proctab.c). vms_proc_reap_dead and
  * vms_proc_may_read are used cross-file on Linux; here they are simply part of
  * the compiled facility. The ioctl entry points are dispatched by vms_netbsd.c. */
-/* Process deletion, the executive half (rd vms-9f32): called by the substrate
- * exit hook with vms_proc_hash_lock held and `victim` unlinked. */
-void vms_proc_rundown_locked(struct vms_proc *victim);
+/* The two halves of process deletion around the substrate's release (rd vms-9f32). */
+void vms_proc_termination_capture(const struct vms_proc *victim,
+                                  struct vms_termination *t);
+void vms_proc_termination_post_locked(const struct vms_termination *t);
 
 /* Facility-provided (src/kernel-core/vms_proctab.c): deliver a /NOWAIT spawn
  * completion for a subprocess reclaimed WITHOUT a recorded exit (SIGKILL/crash),

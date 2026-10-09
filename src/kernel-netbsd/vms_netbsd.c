@@ -542,23 +542,31 @@ static void *vms_exithook_cookie;
 static void
 vms_proc_exithook(struct proc *p, void *arg __unused)
 {
+	struct vms_termination t;
 	struct vms_proc *proc, *victim = NULL;
 	int bkt;
 
+	/* Claim + capture, release, then tell the creator (rd vms-9f32): the
+	 * creator hears of the end only once the process's resources are gone. */
 	exec_lock(&vms_proc_hash_lock);
 	exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
 		if (proc->pid == p->p_pid) {
 			exec_hash_del_rcu(&proc->hash_node);
+			vms_proc_termination_capture(proc, &t);
+			proc->compl_armed = 0;
 			victim = proc;
 			break;
 		}
 	}
-	if (victim != NULL)
-		vms_proc_rundown_locked(victim);   /* tell the creator (rd vms-9f32) */
 	exec_unlock(&vms_proc_hash_lock);
+	if (victim == NULL)
+		return;
 
-	if (victim != NULL)
-		vms_proc_free_claimed(victim);
+	vms_proc_free_claimed(victim);
+
+	exec_lock(&vms_proc_hash_lock);
+	vms_proc_termination_post_locked(&t);
+	exec_unlock(&vms_proc_hash_lock);
 }
 
 /*

@@ -7225,7 +7225,7 @@ EOF
 
     proc-rundown-locks-not-released)
         case "$_f" in
-        facility)     echo "process rundown: lock/EF/channel release at task death, via BOTH the /dev/vms .release path and the lazy reaper (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8)";;
+        facility)     echo "process rundown: lock/EF/channel release when the process is deleted at its end (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8 / rd vms-9f32)";;
         targets)      echo "kernel/vms_module.c";;
         suites_red)   echo "test_syssvc_rundown_ff8";;
         blind_suites) echo "";;
@@ -7233,14 +7233,14 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "vms_proc_free_claimed() stops calling vms_proc_release_locks(proc), so the locks a dead subject held are NEVER released as its PCB is freed -- neither on the synchronous .release path (a subject that owns its /dev/vms channel exits) nor on the lazy vms_proc_reap_dead() path (a shared-fd subject reaped by a later process-table op). The PCB is still unhashed and freed and the sibling AST / common-EF / channel releases in the same function are untouched, so rundown still 'happens' -- only the dead subject's still-granted lock survives on the resource, so a conflicting \$ENQ from a live process is denied forever. This is the exact rundown-completeness property vms-ff8 characterized: rundown must RELEASE the resources, not merely unhash the entry. Only the two assertions that re-take the resource after the subject dies can tell the difference.";;
         require_fail) cat <<'EOF'
-A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (SYNCHRONOUS .release rundown)
+A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (its deletion at exit released the lock)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-B2: after an unrelated process-table op reaps the dead subject, the SAME $ENQ is granted (held only until the reap)
+B [vms-9f32]: a shared-fd subject's EX lock is released by its deletion at exit -- the
 EOF
                       ;;
-        knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE OTHER RELEASE PATH. vms_proc_release_locks() is called once, from vms_proc_free_claimed(), which BOTH the synchronous .release (Part A, a fresh-fd subject's own exit) and the lazy reaper (Part B2, a shared-fd subject reaped by a later \$GETJPI) funnel through. With that one call removed, the fresh-fd subject's lock is not released at .release (require_fail) and the shared-fd subject's lock is not released when the reaper frees its PCB (this assertion) -- the two visible faces of the one skipped release, not two independent properties.";;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED FOR THE OTHER fd SHAPE: vms_proc_free_claimed() is the one release funnel of process deletion, so the shared-fd subject's lock is never released either.";;
         esac;;
 
     imgact-p1-not-protected)

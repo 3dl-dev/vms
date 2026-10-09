@@ -299,6 +299,63 @@ items:
       of its parent too, rd vms-4fb finding 3, and none was ever captured).
       Every frame this node puts in front of a system it cannot prove runs this
       implementation is counted separately (cnxman's dlm_mixed_sends).
+  - id: cluster-dlm$grant-correlation
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "A master's answer to a remote $ENQ is a frame the REQUESTER CAN CORRELATE: it returns the requester's own lock handle unchanged, assigns the master's handle in the master's slot, carries the grant record whose body[34]=0xfa is the outcome, returns the master resource's value block, and carries no granted mode (a grant means the mode that was asked for)"
+    evidence: src/kernel-core/vms_cluster_codec_dlm.c
+    verified_against: "tests/cluster/host/test_codec_dlm.c test_real_grant_is_reproduced (R1, THE ACCEPTANCE PROOF: a REAL OpenVMS VAX V7.3 master's grant and the request it answered 155 us earlier, both captured off the same wire and carried as the fixtures dlm-real-enq-request / dlm-real-enq-grant with the loader's clean-room custody check; OVMX's builder reproduces that grant on 126 of 132 body bytes -- every byte this codec owns. The six it does not write are body[0:4], the connection manager's transaction envelope, and body[52:54], an SCS-layer word: both asserted to be left ZERO rather than minted). tests/cluster/host/test_dlm_echo_guard.c (R1, the echo guard driven by the REAL storm bytes: the captured request/answer pair replayed a thousand times yields exactly VMS_DLM_ECHO_MAX_SAME answers and then silence, counted, with the console line raised once; a dialogue that MOVES is never capped at 5000 frames; the cap is per-system and a crowd of other systems cannot flush it). tests/cluster/sim/scenarios/dlm_mixed_evacuation.c a_grantable_remote_request_is_answered_correlatably (R2, the lab configuration exactly: an OVMX process holds NL, a VMS member asks EX, the engine grants at once and the frame built from the request carries the VMS node's own handle back while OUR handle sits in the master's slot). tests/cluster/host/test_dlm_scs_arm.c (the echo guard is asked on the ONE path every reply passes through, and a withheld answer is counted). Negative controls: tests/cluster/host/host_defects.sh dlm-grant-handles-swapped, dlm-grant-record-omitted, dlm-echo-guard-never-caps -- each reddens exactly its named assertion set. NOT PROVEN HERE: the real-VAX lab leg (a booted OVMX master granting a real VAX's $ENQW with zero retransmits, rd vms-b5b0's done-condition)."
+    notes: >
+      rd vms-b5b0, after a MEASURED request storm in the 2026-10-09 evacuation lab.
+      WHAT HAPPENED. An OVMX process took NL on EVAC$WORKLOAD, so OVMX mastered it;
+      ten seconds later VAX1 $ENQW'd EX. NL conflicts with nothing, so the request was
+      grantable at once and OVMX answered -- but its answer carried the two lock
+      handles in each other's slots, no grant record (so body[34], the outcome byte,
+      read 0x00, a value no real answer carries) and the granted mode in a byte every
+      real grant clears. VAX1's own handle appeared NOWHERE in the frame, so it could
+      not match the completion to its lock: it re-sent the same request 65,356 times
+      in 63.7 s (1026/s, median gap 0.362 ms) and OVMX answered 65,340 of them. No
+      bugcheck on either VAX -- an operator stopped it.
+      WHAT THE SLOTS REALLY ARE. body[20:24] is the MASTER's handle and body[24:28]
+      the REQUESTER's. The earlier reading came from SDA SHOW LOCKS, which reports a
+      lock id without saying which node it lives on; the capture settles it two ways:
+      36 of 36 op-0x03 releases name their lock at body[20:24] with the value the
+      master's grant returned, and a requester's very first frame already carries its
+      own handle at body[24:28], before any master could have told it. This CORRECTS
+      two rows of docs/cluster-protocol-spec.md 4(f).1 that were marked GROUNDED
+      byte-exact vs SDA; the byte values in them are unchanged, only which side each
+      belongs to.
+      AND A GRANT CARRIES NO MODE. body[30] is cleared in 38 of 38 real grants. The
+      granted mode is therefore read off THIS node's own proxy LKB -- the mode the
+      lock asked for -- and never taken as a zero off the wire, which would have
+      granted NL to a lock that asked for EX.
+      THE GRANT RECORD IS THE GRANT'S, NOT A VALUE-BLOCK MARKER. It rides on every
+      grant including grants whose block is all zero, so it cannot mark the block's
+      presence; the block is body[36:52] either way, which a real c2-seq grant proves
+      by returning the exact 16 bytes the requester had written (the dlm-grant-valblk
+      specimen, vms-727's read crossing). That span OVERLAPS a request's identity and
+      first name bytes -- the two layouts never co-occur, and "clearing the name
+      length" on a grant destroys five bytes of the block.
+      HOW A GRANT IS BUILT NOW, and this is the structural fix: the master ECHOES THE
+      REQUEST and overwrites only what a grant owns. Every other byte in the frame --
+      the requester's handle, the directory hash, the stale tail of its own buffer --
+      is the REQUESTER's own, handed back. A builder that lays out fields itself can
+      put them in the wrong slots; one that echoes cannot.
+      THE ECHO GUARD (src/kernel-core/vms_dlm_echo_guard.c), the teeth that make this
+      failure class self-limiting whatever causes it next: a reply is staged only
+      while the (requester, request bytes, answer bytes) triple keeps CHANGING. Once
+      it repeats more than VMS_DLM_ECHO_MAX_SAME times in a row this node STOPS
+      ANSWERING that requester's identical request, counted (answers_capped) and said
+      once on the console. Any change resets the run, so a retransmit answered
+      identically a few times and a rebuild burst of hundreds of DIFFERENT records are
+      untouched. The bound is an OVMX DESIGN VALUE, not a VMS one -- no published VMS
+      limit exists and none was reverse-engineered (Rule 8) -- chosen above every
+      retransmit ladder observed on this cluster's wire. It is a sameness rule rather
+      than a rate limit because a rate limit has to guess what "too fast" is for a VAX
+      on a quiet LAN. Withholding an answer asserts nothing about another system's
+      state (INV-6): the requester's own ladder and timeout decide what follows,
+      exactly as if this node had crashed.
   - id: cluster-dlm$name-hash
     kind: feature
     status: implemented

@@ -289,6 +289,39 @@ static void wire_learn(const char *resnam)
  * a BLKAST is accepted in. A test that shortcut the grant straight into the
  * engine would leave the arm in ST_ENQ and prove nothing about the real path.
  */
+/*
+ * Build the request this node would send for (lkid, name, mode) and then the
+ * grant a master would answer it with. Both through the shipping builders:
+ * nothing here is hand-laid bytes.
+ */
+static int build_grant_for(uint32_t req_lkid, uint32_t master_lkid,
+			   uint32_t mode, const char *resnam, uint8_t *frame)
+{
+	struct vms_dlm_enq_request rq;
+	uint8_t reqframe[VMS_CM_FRAME_LEN];
+	uint32_t written = 0;
+	size_t n = strlen(resnam);
+
+	memset(&rq, 0, sizeof(rq));
+	rq.mode = (uint8_t)mode;
+	rq.req_lkid = req_lkid;       /* OUR handle, in the requester's slot */
+	rq.master_lkid = 0u;          /* a fresh ENQ knows no master handle  */
+	rq.name_len = (uint8_t)n;
+	memcpy(rq.name, resnam, n);
+	rq.res_ident_valid = 1u;
+	memset(reqframe, 0, sizeof(reqframe));
+	if (vms_dlm_enq_request_build(&rq, VMS_DLM_WIREOP_ENQ, reqframe,
+				      (uint32_t)sizeof(reqframe), &written) !=
+	    VMS_CODEC_OK)
+		return -1;
+	memset(frame, 0, VMS_CM_FRAME_LEN);
+	return vms_dlm_enq_response_build_grant(reqframe + VMS_OFF_SYSAP_BODY,
+						VMS_CM_BODY_LEN, master_lkid,
+						NULL, frame,
+						VMS_CM_FRAME_LEN, &written) ==
+	       VMS_CODEC_OK ? 0 : -1;
+}
+
 static uint32_t granted_proxy_with_blkast(struct vms_proc *proc,
 					  const char *resnam, uint32_t mode,
 					  uint32_t master_lkid)
@@ -306,11 +339,17 @@ static uint32_t granted_proxy_with_blkast(struct vms_proc *proc,
 	if (e.lkid == 0u)
 		return 0u;
 
+	/*
+	 * A GRANT IS AN ECHO OF A REQUEST (rd vms-b5b0), so the scripted master
+	 * answers the request this node would really have sent: built through
+	 * the shipping request builder with OUR proxy handle in the requester's
+	 * slot, then echoed back by the shipping grant builder. That is also
+	 * what makes the handle correlation real here instead of asserted.
+	 */
 	memset(frame, 0, sizeof(frame));
-	if (vms_dlm_enq_response_build_grant(e.lkid, master_lkid, (uint8_t)mode,
-					     frame, (uint32_t)sizeof(frame),
-					     &written) != VMS_CODEC_OK)
+	if (build_grant_for(e.lkid, master_lkid, mode, resnam, frame) != 0)
 		return 0u;
+	(void)written;
 	if (dlm_req_fsm_reply_body(&h.fsm, (vms_csid_t)CSID_MASTER, 0u,
 				   body_of(frame), VMS_CM_BODY_LEN) !=
 	    DLM_REQ_OK)

@@ -643,8 +643,18 @@ struct vms_dlm_proxy_grant {
 	uint32_t master_lkid;
 	uint32_t master_csid;
 	uint8_t  granted_mode;
+	/*
+	 * IS THERE A GRANTED MODE ON THE WIRE AT ALL? (rd vms-b5b0.) 38 of 38
+	 * real master grants CLEAR body[30]: a grant means "the mode you asked
+	 * for", and the only copy of that is the requester's own LKB. So this
+	 * reads 0 on a real grant and the engine grants the mode the lock
+	 * REQUESTED -- which is an executive read, where taking a zero off the
+	 * wire would have been a fabricated NL grant for a lock that asked for
+	 * EX.
+	 */
+	uint8_t  granted_mode_present;
 	uint8_t  valblk_present;
-	uint8_t  pad[2];
+	uint8_t  pad;
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
 };
 

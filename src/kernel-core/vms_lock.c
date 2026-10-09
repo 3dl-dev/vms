@@ -2733,6 +2733,25 @@ uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
  * bytes are what goes into the args, so the engine's copy is a no-op and the
  * value block is left exactly as it was.
  */
+/*
+ * THE MODE A PROXY LKB ASKED FOR (rd vms-b5b0) -- what a real grant means,
+ * since the wire carries no granted mode. 0 (NL) when the handle names no
+ * proxy of ours, which the grant-receive path then refuses as it always has:
+ * never a mode invented for a lock this node cannot find.
+ */
+static uint32_t dlm_proxy_requested_mode(uint32_t req_lkid)
+{
+    struct vms_lock_entry *lock;
+    uint32_t mode;
+
+    lock = dlm_proxy_find(req_lkid);
+    if (lock == NULL)
+        return 0u;
+    mode = lock->requested_mode;
+    lock_put(lock);
+    return mode;
+}
+
 static void dlm_grant_valblk_from_proxy(uint32_t req_lkid, uint8_t *out)
 {
     struct vms_lock_entry *lock;
@@ -2762,7 +2781,17 @@ uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g)
     args.master_lkid = g->master_lkid;
     args.master_csid = g->master_csid;
     args.req_csid    = vms_local_csid;
-    args.lkmode      = g->granted_mode;
+    /*
+     * THE GRANTED MODE, FROM THE LOCK WHEN THE WIRE DOES NOT CARRY ONE (rd
+     * vms-b5b0). 38 of 38 real master grants clear body[30]: a grant means the
+     * mode the request ASKED for, and the only copy of that is this node's own
+     * proxy LKB. Taking the wire's zero would grant NL to a lock that asked for
+     * EX -- a fabricated completion, and the caller would hold a lock it did
+     * not get. So the mode is READ OFF THE LKB here, and the wire's value is
+     * used only when the frame really carried one.
+     */
+    args.lkmode      = g->granted_mode_present ? g->granted_mode
+                                               : dlm_proxy_requested_mode(g->req_lkid);
     if (g->valblk_present)
         memcpy(args.valblk, g->valblk, LCK_VALBLK_SIZE);
     else

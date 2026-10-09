@@ -27,6 +27,7 @@
  */
 #include "cluster_fixture.h"
 #include "cluster_test.h"
+#include "vms_cluster_codec_cm.h"   /* VMS_CM_BODY_LEN */
 #include "vms_cluster_codec_dlm.h"
 
 #include <stdlib.h>
@@ -108,9 +109,22 @@ static void test_enq_request_pw(void)
 		 "parses as an ENQ/CONVERT request");
 	ct_check_eq_u32(opcode, VMS_DLM_WIREOP_ENQ, "  opcode == ENQ (0x01)");
 	ct_check_eq_u32(req.mode, VMS_LCK_PW, "  mode == PW (4)");
-	ct_check_eq_u32(req.req_pid_or_lkid, 0x2020021cu,
-			"  req_pid == the GROUNDED interactive-process constant");
-	ct_check_eq_u32(req.master_lkid, 0, "  master_lkid == 0 (fresh ENQ)");
+	/*
+	 * THE TWO HANDLE SLOTS, AS rd vms-b5b0 MEASURED THEM. body[20:24] is
+	 * THE MASTER's handle slot and body[24:28] THE REQUESTER's -- the other
+	 * way round from this test's first reading. The byte values are this
+	 * capture's own, unchanged; only which side each belongs to moved, and
+	 * it moved on evidence (36 of 36 releases carry the master-returned
+	 * handle at body[20:24]; the requester's own appears at body[24:28] in
+	 * its very first frame, before any master could have told it).
+	 */
+	ct_check_eq_u32(req.master_lkid, 0x2020021cu,
+			"  body[20:24]: the master-handle slot, carrying the "
+			"GROUNDED PID-form placeholder (no master handle yet)");
+	ct_check_eq_u32(req.req_lkid, 0,
+			"  body[24:28]: this composed specimen leaves the "
+			"requester's own slot 0 (a real VAX puts its handle "
+			"there -- see dlm-real-enq-request)");
 	ct_check_eq_u32(req.name_len, 8, "  name_len == 8");
 	ct_check(memcmp(req.name, "OVMXAAAA", 8) == 0, "  name == \"OVMXAAAA\"");
 	/*
@@ -157,15 +171,32 @@ static void test_enq_request_pw(void)
 	}
 }
 
+/*
+ * THE COMPOSED GRANT (ac4-LKID2's reading), KEPT AS A PARSE CASE ONLY
+ * (rd vms-b5b0).
+ *
+ * This specimen was composed from docs/cluster-protocol-spec.md SS4(f).1 before
+ * a real master's grant had been byte-diffed against the request it answers.
+ * Two of its labels were the other way round and one of its fields does not
+ * exist on a real grant:
+ *
+ *   - body[20:24] is THE MASTER's handle and body[24:28] THE REQUESTER's, not
+ *     the reverse (see the codec header's measurement);
+ *   - a real grant CLEARS body[30]: there is no granted mode on the wire;
+ *   - a real grant carries the grant record at body[28]/[32:36], which this
+ *     specimen has nothing at.
+ *
+ * So the bytes stay (they are what the ac4 reading produced, and the parser
+ * still has an arm for a grant with no grant record) and the BUILD half moves
+ * to test_real_grant_is_reproduced() below, against a real captured pair.
+ */
 static void test_enq_grant(void)
 {
 	const struct vms_fixture *f = fixture("dlm-enq-grant");
 	struct vms_frame_info fi;
 	struct vms_dlm_enq_response resp;
-	uint8_t built[256];
-	uint32_t written = 0;
 
-	printf("-- dlm-enq-grant: GRANTED shape (spec 4(f).1 \"Completion status\")\n");
+	printf("-- dlm-enq-grant: the COMPOSED grant, as a parse case (rd vms-b5b0)\n");
 	ct_check(f != NULL, "fixture loads");
 	if (f == NULL)
 		return;
@@ -175,19 +206,150 @@ static void test_enq_grant(void)
 	ct_check(vms_dlm_enq_response_parse(f->bytes, f->wire_len, &fi, &resp)
 		 == VMS_CODEC_OK, "parses as an ENQ/CONVERT response");
 	ct_check(resp.outcome == VMS_DLM_ENQ_GRANTED,
-		 "  discriminated as GRANTED (mode!=0, no name echoed)");
-	ct_check_eq_u32(resp.req_lkid, 0x310000ABu,
-			"  req_lkid == the GROUNDED SDA-confirmed handle");
-	ct_check_eq_u32(resp.master_lkid, 0x520006AFu,
-			"  master_lkid == the GROUNDED SDA-confirmed handle");
-	ct_check_eq_u32(resp.granted_mode, VMS_LCK_PW, "  granted_mode == PW");
+		 "  discriminated as GRANTED (no name echoed)");
+	ct_check_eq_u32(resp.master_lkid, 0x310000ABu,
+			"  body[20:24] is THE MASTER's handle (rd vms-b5b0 "
+			"relabelled it; the byte value is the ac4 one)");
+	ct_check_eq_u32(resp.req_lkid, 0x520006AFu,
+			"  body[24:28] is THE REQUESTER's own handle");
+	ct_check_eq_u32((unsigned long)resp.granted_mode_present, 1u,
+			"  this shape DOES carry a mode -- it has no grant "
+			"record, which no real grant is without");
+	ct_check_eq_u32(resp.granted_mode, VMS_LCK_PW, "  and it reads PW");
+	ct_check_eq_u32((unsigned long)resp.valblk_present, 0u,
+			"  and it claims NO value block");
+}
 
+/*
+ * ===========================================================================
+ * THE ACCEPTANCE PROOF FOR A MASTER'S GRANT (rd vms-b5b0, the ev5 request
+ * storm): OVMX's builder reproduces a REAL OpenVMS VAX master's grant
+ * BYTE-FOR-BYTE on every byte this codec owns.
+ *
+ * WHAT WENT WRONG WITHOUT IT. OVMX's grant carried the two lock handles in
+ * each other's slots, no grant record (so body[34] -- the outcome byte -- read
+ * 0x00, a value no real answer carries) and the granted mode in a byte every
+ * real grant clears. VAX1 could not correlate the completion to its own lock:
+ * it re-sent the same op-01 65,356 times in 63.7 s (1026/s) and OVMX answered
+ * 65,340 of them. A human stopped it.
+ *
+ * WHAT THIS TEST IS. The real request (dlm-real-enq-request) and the real grant
+ * that answered it 155 us later (dlm-real-enq-grant), both captured off the
+ * same wire. Build a grant from the request with the master handle the real
+ * master assigned and the block the real master returned, and demand EQUALITY
+ * on all 132 body bytes except an explicitly named six:
+ *
+ *   body[0:4]    the CM's transaction envelope -- the wrapper's, not this
+ *                codec's (every builder here leaves it alone)
+ *   body[52:54]  the SCS-layer word this codec's own header already documents
+ *                as "not the DLM codec's to reproduce"
+ *
+ * A regression that touches ANY other byte -- or that stops writing the grant
+ * record, or swaps the handles back -- reddens here.
+ * ===========================================================================
+ */
+static void test_real_grant_is_reproduced(void)
+{
+	const struct vms_fixture *rq = fixture("dlm-real-enq-request");
+	const struct vms_fixture *gr = fixture("dlm-real-enq-grant");
+	struct vms_frame_info fi;
+	struct vms_dlm_enq_request parsed;
+	struct vms_dlm_enq_response resp;
+	uint8_t opcode = 0;
+	uint8_t built[256];
+	uint32_t written = 0, i, diffs = 0;
+	/* body[0:4] (the CM envelope) and body[52:54] (the SCS word). */
+	static const int owned_elsewhere[] = { 0, 1, 2, 3, 52, 53 };
+
+	printf("-- rd vms-b5b0: a REAL master's grant, reproduced byte-for-byte\n");
+	ct_check(rq != NULL && gr != NULL, "both real-capture fixtures load");
+	if (rq == NULL || gr == NULL)
+		return;
+
+	/* The real REQUEST, as this codec reads it. */
+	ct_check(vms_frame_classify(rq->bytes, rq->wire_len, &fi) ==
+		 VMS_CODEC_OK &&
+		 vms_dlm_enq_request_parse(rq->bytes, rq->wire_len, &fi,
+					   &opcode, &parsed) == VMS_CODEC_OK,
+		 "the real request parses as a cat-02 op-01");
+	ct_check_eq_u32(parsed.req_lkid, 0x090003cdu,
+			"*** body[24:28] is THE REQUESTER's own handle "
+			"(0x090003cd -- a value no master ever sent it) ***");
+	ct_check_eq_u32(parsed.master_lkid, 0x20200213u,
+			"*** body[20:24] is the MASTER's handle slot, carrying "
+			"the PID-form placeholder on a fresh ENQ ***");
+
+	/* The real GRANT, as this codec reads it. */
+	ct_check(vms_frame_classify(gr->bytes, gr->wire_len, &fi) ==
+		 VMS_CODEC_OK &&
+		 vms_dlm_enq_response_parse(gr->bytes, gr->wire_len, &fi,
+					    &resp) == VMS_CODEC_OK,
+		 "the real grant parses as a cat-82 op-01");
+	ct_check(resp.outcome == VMS_DLM_ENQ_GRANTED,
+		 "  and is read as GRANTED (the 0xfa outcome at body[34])");
+	ct_check_eq_u32(resp.req_lkid, 0x090003cdu,
+			"*** the grant ECHOES the requester's handle -- which is "
+			"the correlation OVMX was breaking ***");
+	ct_check_eq_u32(resp.master_lkid, 0x650006b0u,
+			"*** and carries the handle the MASTER assigned ***");
+	ct_check_eq_u32((unsigned long)resp.granted_mode_present, 0u,
+			"  a real grant carries NO granted mode (body[30] is "
+			"cleared in 38 of 38)");
+	ct_check_eq_u32((unsigned long)resp.valblk_present, 1u,
+			"  and it carries the master resource's value block");
+
+	/* *** THE REPRODUCTION *** */
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_dlm_enq_response_build_grant(resp.req_lkid, resp.master_lkid,
-						  resp.granted_mode, built,
-						  sizeof(built), &written)
-		 == VMS_CODEC_OK, "builds back from the typed fields");
-	assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len, "dlm-enq-grant");
+	ct_check(vms_dlm_enq_response_build_grant(rq->bytes + VMS_OFF_SYSAP_BODY,
+						  VMS_CM_BODY_LEN,
+						  resp.master_lkid, resp.valblk,
+						  built, sizeof(built),
+						  &written) == VMS_CODEC_OK,
+		 "OVMX builds a grant from the real request");
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++) {
+		int skip = 0, k;
+
+		for (k = 0; k < (int)(sizeof(owned_elsewhere) /
+				      sizeof(owned_elsewhere[0])); k++) {
+			if ((int)i == owned_elsewhere[k])
+				skip = 1;
+		}
+		if (skip)
+			continue;
+		if (built[VMS_OFF_SYSAP_BODY + i] !=
+		    gr->bytes[VMS_OFF_SYSAP_BODY + i]) {
+			printf("   body[%3u] ours=%02x real=%02x\n", i,
+			       built[VMS_OFF_SYSAP_BODY + i],
+			       gr->bytes[VMS_OFF_SYSAP_BODY + i]);
+			diffs++;
+		}
+	}
+	ct_check_eq_u32(diffs, 0u,
+			"*** every byte of the real grant that this codec owns "
+			"is reproduced exactly (126 of 132) ***");
+
+	/* And the two spans that are not this codec's are UNTOUCHED by it --
+	 * asserted positively, so a builder that started writing them would
+	 * redden rather than pass by being ignored. */
+	ct_check(built[VMS_OFF_SYSAP_BODY + 52] == 0u &&
+		 built[VMS_OFF_SYSAP_BODY + 53] == 0u,
+		 "  the SCS-layer word at body[52:54] is left zero, not minted");
+
+	/* A grant that hands out lock-id 0 is not a grant (the fc8540ae rule). */
+	ct_check(vms_dlm_enq_response_build_grant(rq->bytes + VMS_OFF_SYSAP_BODY,
+						  VMS_CM_BODY_LEN,
+						  VMS_DLM_LKID_UNSET,
+						  resp.valblk, built,
+						  sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL,
+		 "  and a master handle of 0 is refused");
+	/* ...and a grant can only answer a request. */
+	ct_check(vms_dlm_enq_response_build_grant(gr->bytes + VMS_OFF_SYSAP_BODY,
+						  VMS_CM_BODY_LEN,
+						  resp.master_lkid, resp.valblk,
+						  built, sizeof(built),
+						  &written) == VMS_CODEC_E_CLASS,
+		 "  a grant cannot be built from another grant (E_CLASS)");
 }
 
 static void test_enq_deny(void)
@@ -209,8 +371,10 @@ static void test_enq_deny(void)
 		 == VMS_CODEC_OK, "parses as an ENQ/CONVERT response");
 	ct_check(resp.outcome == VMS_DLM_ENQ_DENIED,
 		 "  discriminated as DENIED (mode==0, name echoed)");
-	ct_check_eq_u32(resp.req_lkid, 0x2020021cu,
-			"  req_lkid == the request's PID placeholder, UNCHANGED");
+	ct_check_eq_u32(resp.master_lkid, 0x2020021cu,
+			"  body[20:24] echoes the request's own master-slot "
+			"placeholder UNCHANGED: a deny assigns no handle "
+			"(slots per rd vms-b5b0)");
 	ct_check_eq_u32(resp.granted_mode, 0, "  mode CLEARED to 0");
 	ct_check_eq_u32(resp.name_len, 8, "  name_len == 8, echoed");
 	ct_check(memcmp(resp.name, "OVMXAAAA", 8) == 0,
@@ -251,10 +415,12 @@ static void test_convert_request(void)
 		 "parses as an ENQ/CONVERT request");
 	ct_check_eq_u32(opcode, VMS_DLM_WIREOP_CONVERT, "  opcode == CONVERT (0x07)");
 	ct_check_eq_u32(req.mode, VMS_LCK_EX, "  new mode == EX (5)");
-	ct_check_eq_u32(req.req_pid_or_lkid, 0x5000038Au,
-			"  body[20] == the EXISTING local lock-id (not a PID)");
-	ct_check_eq_u32(req.master_lkid, 0x120004B9u,
-			"  master_lkid == the established RSB handle");
+	ct_check_eq_u32(req.master_lkid, 0x5000038Au,
+			"  body[20:24] == the MASTER's handle for the lock "
+			"being converted (a convert names the lock on the "
+			"master; slots per rd vms-b5b0)");
+	ct_check_eq_u32(req.req_lkid, 0x120004B9u,
+			"  body[24:28] == the requester's own handle");
 
 	/*
 	 * THE PARSE DOES NOT VOUCH FOR AN op-0x07's IDENTITY SPAN (rd vms-b5b0):
@@ -307,11 +473,13 @@ static void test_deq_release(void)
 		 "classifies without error");
 	ct_check(vms_dlm_deq_parse(f->bytes, f->wire_len, &fi, &d) ==
 		 VMS_CODEC_OK, "parses as a $DEQ");
-	ct_check_eq_u32(d.master_lkid, 0x3a0004ebu,
-			"  body[24:28] == 0x3a0004eb, the master handle the "
+	ct_check_eq_u32(d.req_lkid, 0x3a0004ebu,
+			"  body[24:28] == 0x3a0004eb, the REQUESTER's own "
+			"handle (rd vms-b5b0 relabelled the slot), the "
 			"driving ENQ for 'OVMXDEQ1' carried");
-	ct_check_eq_u32(d.req_lkid, 0x080001cdu,
-			"  body[20:24] == 0x080001cd, the handle the GRANT "
+	ct_check_eq_u32(d.master_lkid, 0x080001cdu,
+			"  body[20:24] == 0x080001cd, the MASTER's handle -- "
+			"which is why a release names its lock here: the GRANT "
 			"assigned this requester");
 	ct_check_eq_u32(d.mode, VMS_LCK_NL, "  body[30] == NL, the released mode");
 
@@ -358,11 +526,13 @@ static void test_blkast(void)
 		 "classifies without error");
 	ct_check(vms_dlm_blkast_parse(f->bytes, f->wire_len, &fi, &b) ==
 		 VMS_CODEC_OK, "parses as a BLKAST");
-	ct_check_eq_u32(b.master_lkid, 0x590004e3u,
-			"  body[24:28] == 0x590004e3, the master handle the EX "
+	ct_check_eq_u32(b.req_lkid, 0x590004e3u,
+			"  body[24:28] == 0x590004e3, the holder's own handle "
+			"(rd vms-b5b0 relabelled the slot) -- the EX "
 			"holder's ENQ for 'OVMXBLK2' carried");
-	ct_check_eq_u32(b.req_lkid, 0x0a0003afu,
-			"  body[20:24] == 0x0a0003af, the holder's own handle");
+	ct_check_eq_u32(b.master_lkid, 0x0a0003afu,
+			"  body[20:24] == 0x0a0003af, the MASTER's handle for "
+			"the resource");
 
 	/* OBSERVED, not pinned -- asserted as "the two bytes the peer sent",
 	 * which is all the codec claims about them. */
@@ -417,11 +587,13 @@ static void test_valblk_convert(void)
 		 "classifies without error");
 	ct_check(vms_dlm_valblk_convert_parse(f->bytes, f->wire_len, &fi, &c) ==
 		 VMS_CODEC_OK, "parses as a value-block CONVERT");
-	ct_check_eq_u32(c.master_lkid, 0x2b000489u,
-			"  body[24:28] == 0x2b000489, the master handle the "
+	ct_check_eq_u32(c.req_lkid, 0x2b000489u,
+			"  body[24:28] == 0x2b000489, the requester's own "
+			"handle (rd vms-b5b0 relabelled the slot) -- the "
 			"driving ENQ for 'OVMXLVB3' carried");
-	ct_check_eq_u32(c.req_lkid, 0x270001cdu,
-			"  body[20:24] == the handle the GRANT assigned");
+	ct_check_eq_u32(c.master_lkid, 0x270001cdu,
+			"  body[20:24] == the MASTER's handle, which the GRANT "
+			"assigned (rd vms-b5b0 relabelled the slot)");
 	ct_check_eq_u32(c.mode, VMS_LCK_NL,
 			"  body[30] == NL: this is the convert DOWN from EX");
 	ct_check(memcmp(c.valblk, "WROTEBYVAX1XXXXX",
@@ -527,43 +699,31 @@ static void test_grant_valblk(void)
 			VMS_DLM_VALBLK_WIRE_LEN) == 0,
 		 "*** body[36:52] IS the 16 bytes the requester wrote, returned "
 		 "by the master in the grant, verbatim off a real wire ***");
-	ct_check_eq_u32(resp.req_lkid, 0x0a0003a4u,
-			"  body[20:24] == 0x0a0003a4, the requester handle "
-			"(SDA Lock id 0A0003A4)");
-	ct_check_eq_u32(resp.master_lkid, 0x570001b7u,
-			"  body[24:28] == 0x570001b7, the master handle for "
-			"'OVMXLV01'");
+	/*
+	 * THE SLOTS, RELABELLED ON EVIDENCE (rd vms-b5b0). SDA showed lock id
+	 * 0A0003A4 and this test took body[20:24] to be the requester's because
+	 * of it; the storm capture settled it the other way (36 of 36 releases
+	 * name their lock at body[20:24] with the value the master returned,
+	 * and a requester's first frame already carries its own handle at
+	 * body[24:28]). An SDA lock id is a lock id on SOME node, and which
+	 * node it is cannot be read off SDA alone.
+	 */
+	ct_check_eq_u32(resp.master_lkid, 0x0a0003a4u,
+			"  body[20:24] == 0x0a0003a4, the MASTER's handle");
+	ct_check_eq_u32(resp.req_lkid, 0x570001b7u,
+			"  body[24:28] == 0x570001b7, the requester's own "
+			"handle for 'OVMXLV01', echoed by the grant");
 
 	/*
-	 * THE BYTE-IDENTICAL BUILD PROOF (vms-727). Build the grant back from
-	 * ONLY req_lkid/master_lkid/mode + the 16-byte block and assert every
-	 * CITED byte of the real capture is reproduced exactly. Poison the whole
-	 * buffer first so anything the builder does NOT write shows as a mismatch.
+	 * THE BYTE-IDENTICAL BUILD PROOF moved (rd vms-b5b0). There is ONE grant
+	 * builder now and it builds by ECHOING THE REQUEST, so it cannot be
+	 * driven from a grant alone -- the request this grant answered is not in
+	 * this fixture pair. The byte-for-byte reproduction is
+	 * test_real_grant_is_reproduced() above, against a real captured
+	 * request/grant PAIR, which is a stronger proof than rebuilding a grant
+	 * from its own parsed fields: it shows the echoed bytes are the
+	 * requester's own and not ours.
 	 */
-	{
-		uint8_t built[256];
-		uint32_t written = 0;
-
-		memset(built, 0xAA, sizeof(built));
-		ct_check(vms_dlm_enq_response_build_grant_valblk(resp.req_lkid,
-				resp.master_lkid, resp.granted_mode, resp.valblk,
-				built, sizeof(built), &written) == VMS_CODEC_OK,
-			 "builds the grant-with-valblk back from the typed fields");
-		assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY,
-					 f->wire_len, "dlm-grant-valblk");
-		ct_check_eq_u32(written, VMS_OFF_SYSAP_BODY + VMS_DLM_VALBLK_BODY_LEN,
-				"  written length is the full grant-valblk body");
-
-		/* A grant-id of 0 is not a grant (the fc8540ae rule). */
-		ct_check(vms_dlm_enq_response_build_grant_valblk(VMS_DLM_LKID_UNSET,
-				resp.master_lkid, resp.granted_mode, resp.valblk,
-				built, sizeof(built), &written) == VMS_CODEC_E_INVAL,
-			 "  refuses req_lkid 0; refuses master_lkid 0 likewise");
-		ct_check(vms_dlm_enq_response_build_grant_valblk(resp.req_lkid,
-				VMS_DLM_LKID_UNSET, resp.granted_mode, resp.valblk,
-				built, sizeof(built), &written) == VMS_CODEC_E_INVAL,
-			 "  refuses master_lkid 0");
-	}
 
 	/*
 	 * A PLAIN grant (dlm-enq-grant) carries NO value block: the record marker
@@ -666,6 +826,7 @@ static void test_fixture_roundtrips(void)
 {
 	test_enq_request_pw();
 	test_enq_grant();
+	test_real_grant_is_reproduced();
 	test_enq_deny();
 	test_convert_request();
 	test_deq_release();
@@ -972,14 +1133,23 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 			 "a value block");
 	}
 
-	/* The GRANT builder carries the same guard on req_lkid (the value
-	 * this codec is about to hand a peer as "the lock-id I assigned
-	 * you"; a zero there is the same class of lie). */
-	ct_check(vms_dlm_enq_response_build_grant(VMS_DLM_LKID_UNSET,
-						  0x00020017u, VMS_LCK_PW,
-						  built, sizeof(built), &written)
-		 == VMS_CODEC_E_INVAL,
-		 "  vms_dlm_enq_response_build_grant refuses req_lkid==0");
+	/* The GRANT builder carries the same guard on the handle it is about to
+	 * hand a peer as "the lock-id I assigned you"; a zero there is the same
+	 * class of lie. (Driven on the real pair in
+	 * test_real_grant_is_reproduced; restated here with the other lock-id
+	 * refusals so the family is in one place.) */
+	{
+		const struct vms_fixture *rq = fixture("dlm-real-enq-request");
+
+		ct_check(rq != NULL &&
+			 vms_dlm_enq_response_build_grant(
+				 rq->bytes + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, VMS_DLM_LKID_UNSET, NULL,
+				 built, sizeof(built), &written) ==
+			 VMS_CODEC_E_INVAL,
+			 "  vms_dlm_enq_response_build_grant refuses a master "
+			 "handle of 0");
+	}
 }
 
 /*
@@ -1084,7 +1254,7 @@ static void test_dir_hash_accessor(void)
 }
 
 /*
- * ==========================================================================
+ * ===========================================================================
  * THE E73 REGRESSION GUARD (rd vms-1ee): a SYSAP BODY parses, and the
  * frame-absolute entry refuses the very same bytes.
  *
@@ -1094,7 +1264,7 @@ static void test_dir_hash_accessor(void)
  * real inbound message, which is how a live run lost a whole CM dialogue. This
  * pins BOTH halves: the body entry reads the same fields the frame entry does,
  * and the frame entry on a bare body is a refusal, not a misparse.
- * ==========================================================================
+ * ===========================================================================
  */
 static void test_body_entries_are_what_scs_delivers(void)
 {
@@ -1127,7 +1297,7 @@ static void test_body_entries_are_what_scs_delivers(void)
 	/* ONE implementation: the two must agree field for field. */
 	ct_check_eq_u32(op_body, op_frame, "  same opcode");
 	ct_check_eq_u32(from_body.mode, from_frame.mode, "  same mode");
-	ct_check_eq_u32(from_body.req_pid_or_lkid, from_frame.req_pid_or_lkid,
+	ct_check_eq_u32(from_body.req_lkid, from_frame.req_lkid,
 			"  same req_pid/lkid");
 	ct_check_eq_u32(from_body.master_lkid, from_frame.master_lkid,
 			"  same master_lkid");

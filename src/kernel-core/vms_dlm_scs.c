@@ -92,6 +92,7 @@
 #include "vms_dlm_dir.h"      /* rd vms-8219: the lock directory's entries */
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_quorum.h"
+#include "vms_dlm_echo_guard.h"
 #include "vms_cnxman_quorum.h"
 #include "vms_dlm_scs.h"
 #include "vms_dlm_scs_fsm.h"
@@ -251,6 +252,10 @@ struct vms_dlm_scs {
 	uint8_t  dir_said_misaddressed;
 	uint8_t  dir_said_tr_redirect;
 	uint8_t  dir_said_mixed;
+
+	/* THE ECHO GUARD's state (rd vms-b5b0, vms_dlm_echo_guard.h). */
+	struct vms_dlm_echo_guard echo;
+	uint32_t answers_capped;      /* replies withheld by the echo guard   */
 };
 
 /* ==========================================================================
@@ -1001,7 +1006,7 @@ static void dlm_arm_fill_master_req(const struct dlm_scs_request *in,
 	out->op = (wireop == VMS_DLM_WIREOP_CONVERT) ? VMS_DLM_MREQ_CONVERT
 						     : VMS_DLM_MREQ_ENQ;
 	out->req_csid = (uint32_t)in->from_csid;
-	out->req_lkid = e->req_pid_or_lkid;
+	out->req_lkid = e->req_lkid;
 	out->master_lkid = e->master_lkid;
 	out->lkmode = e->mode;
 	if (n >= sizeof(out->resnam))
@@ -1021,15 +1026,50 @@ static void dlm_arm_fill_master_req(const struct dlm_scs_request *in,
 	out->res_ident_valid = e->res_ident_valid;
 }
 
+/*
+ * THE ECHO GUARD's one call site (rd vms-b5b0). The rule, the measurement that
+ * forced it and the bound all live in vms_dlm_echo_guard.h -- a pure
+ * kernel-core TU so the real storm bytes can drive it in a host test. Here it
+ * is only asked, counted and said.
+ */
+static int dlm_arm_echo_ok(struct vms_dlm_scs *d,
+			   const struct dlm_scs_request *in)
+{
+	uint8_t first = 0u;
+
+	if (in == NULL)
+		return 1;
+	if (vms_dlm_echo_admit(&d->echo, (uint32_t)in->from_csid,
+			       in->body, in->len,
+			       d->txframe + VMS_OFF_SYSAP_BODY,
+			       VMS_CM_BODY_LEN, &first))
+		return 1;
+	d->answers_capped++;
+	if (first)
+		exec_console_printf(
+			"%%DLM, a system is re-sending one lock request this "
+			"node has already answered identically; no further "
+			"answer is sent for it (the answer is not being "
+			"understood -- see the DLM counters)\n");
+	return 0;
+}
+
 /* Hand the body the codec just built into the CM's reply buffer. The builders
  * write frame-absolute, so the body is the splice at VMS_OFF_SYSAP_BODY -- the
  * only place in this file that names an offset, and it names the codec's own
- * published body origin, not a field. */
+ * published body origin, not a field.
+ *
+ * EVERY REPLY THIS ARM STAGES GOES THROUGH HERE, which is why the echo guard
+ * lives here and not in one shape's builder: a loop is a loop whether the
+ * repeated answer is a grant, a deny or a directory answer. */
 static int dlm_arm_stage_reply(struct vms_dlm_scs *d,
+			       const struct dlm_scs_request *in,
 			       struct dlm_scs_reply *reply)
 {
 	if (reply == NULL || reply->body == NULL ||
 	    reply->cap < VMS_CM_BODY_LEN)
+		return -1;
+	if (!dlm_arm_echo_ok(d, in))
 		return -1;
 	memcpy(reply->body, d->txframe + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
 	reply->len = VMS_CM_BODY_LEN;
@@ -1040,35 +1080,37 @@ static int dlm_arm_stage_reply(struct vms_dlm_scs *d,
  * the handle it minted, the mode that lock actually holds, and the requester
  * handle it recorded. None of them is echoed from the request (RULE B). */
 static int dlm_arm_reply_grant(struct vms_dlm_scs *d,
+			       const struct dlm_scs_request *in,
 			       const struct vms_dlm_master_result *r,
 			       struct dlm_scs_reply *reply)
 {
 	uint32_t written = 0;
-	vms_codec_status_t rc;
 
 	memset(d->txframe, 0, sizeof(d->txframe));
 	/*
-	 * THE LVB READ CROSSING (vms-727). When the master resource holds a
-	 * value block (result->valblk_present), the grant RETURNS it -- the
-	 * grant-with-valblk builder -- so the requester's $ENQ(VALBLK)/$GETLKI
-	 * reads the master's LVB back. Otherwise the plain grant, unchanged and
-	 * proven cross-node. Every byte of either frame is read off the LKB/RSB
-	 * the engine stamped or is a grounded constant; none is composed.
+	 * ONE GRANT SHAPE, BUILT BY ECHOING THE REQUEST (rd vms-b5b0). A real
+	 * master's grant is the request echoed with a fixed set of bytes
+	 * rewritten -- 38 of 38 in the ev5 capture -- and the requester's own
+	 * handle among the bytes it does NOT rewrite, which is what the
+	 * requester correlates by. Echoing is therefore not a shortcut: it is
+	 * the only way to be sure the frame carries the requester's handle
+	 * unchanged and the grant record on every grant.
+	 *
+	 * THE VALUE BLOCK still rides when the master resource holds one
+	 * (r->valblk_present, the op-0x06-grounded span) and is left zero
+	 * otherwise. What is GONE is the claim that the record around it MARKS
+	 * a value block: every real grant carries that record, so it marks a
+	 * GRANT (see the codec header).
 	 */
-	if (r->valblk_present)
-		rc = vms_dlm_enq_response_build_grant_valblk(r->req_lkid,
-					     r->master_lkid, r->granted_mode,
-					     r->valblk, d->txframe,
-					     (uint32_t)sizeof(d->txframe), &written);
-	else
-		rc = vms_dlm_enq_response_build_grant(r->req_lkid, r->master_lkid,
-					     r->granted_mode, d->txframe,
-					     (uint32_t)sizeof(d->txframe), &written);
-	if (rc != VMS_CODEC_OK) {
+	if (vms_dlm_enq_response_build_grant(in->body, in->len, r->master_lkid,
+					     r->valblk_present ? r->valblk : NULL,
+					     d->txframe,
+					     (uint32_t)sizeof(d->txframe),
+					     &written) != VMS_CODEC_OK) {
 		d->codec_failures++;
 		return -1;
 	}
-	if (dlm_arm_stage_reply(d, reply) != 0)
+	if (dlm_arm_stage_reply(d, in, reply) != 0)
 		return -1;
 	d->grants_sent++;
 	return 0;
@@ -1082,6 +1124,7 @@ static int dlm_arm_reply_grant(struct vms_dlm_scs *d,
  * no lock for it.
  */
 static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
+			      const struct dlm_scs_request *in,
 			      const struct vms_dlm_enq_request *e,
 			      struct dlm_scs_reply *reply)
 {
@@ -1090,7 +1133,7 @@ static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
 	memset(d->txframe, 0, sizeof(d->txframe));
 	/* body[46] echoes the DENIED REQUEST's own access mode (rd vms-b5b0):
 	 * this reply is about that requester's resource, in its domain. */
-	if (vms_dlm_enq_response_build_deny(e->req_pid_or_lkid, e->master_lkid,
+	if (vms_dlm_enq_response_build_deny(e->req_lkid, e->master_lkid,
 					    e->res_acmode, e->name_len,
 					    e->name, d->txframe,
 					    (uint32_t)sizeof(d->txframe),
@@ -1098,7 +1141,7 @@ static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
 		d->codec_failures++;
 		return -1;
 	}
-	if (dlm_arm_stage_reply(d, reply) != 0)
+	if (dlm_arm_stage_reply(d, in, reply) != 0)
 		return -1;
 	d->denies_sent++;
 	return 0;
@@ -1214,9 +1257,9 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 	d->req_received++;
 	switch ((enum vms_dlm_master_outcome)res.outcome) {
 	case VMS_DLM_MASTER_GRANTED:
-		return dlm_arm_reply_grant(d, &res, reply);
+		return dlm_arm_reply_grant(d, in, &res, reply);
 	case VMS_DLM_MASTER_DENIED:
-		return dlm_arm_reply_deny(d, e, reply);
+		return dlm_arm_reply_deny(d, in, e, reply);
 	case VMS_DLM_MASTER_QUEUED:
 		/* A REAL lock on a REAL waiting queue. The answer is the grant
 		 * that follows when the holder releases, so nothing goes back
@@ -1734,7 +1777,7 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 		d->codec_failures++;
 		return -1;
 	}
-	if (dlm_arm_stage_reply(d, reply) != 0)
+	if (dlm_arm_stage_reply(d, req, reply) != 0)
 		return -1;
 	d->dir_answers_sent++;
 	return 0;
@@ -2121,6 +2164,11 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 	if (d->dir_store == NULL ||
 	    vms_dlm_dir_init(&d->dir, d->dir_store, VMS_DLM_DIR_CAP) != 0)
 		(void)vms_dlm_dir_init(&d->dir, NULL, 0u);
+
+	/* The echo guard, empty (rd vms-b5b0): exec_zalloc already zeroed it,
+	 * but the state is initialised through its own entry point so the TU
+	 * that owns the rule owns the reset too. */
+	vms_dlm_echo_guard_init(&d->echo);
 
 	dlm_arm_bind_req_ops(d);
 	dlm_arm_bind_engine_ops(d);

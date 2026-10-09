@@ -172,9 +172,25 @@ static void arm_bindings(void)
 	    "... before the pure requester FSM is driven");
 
 	/* RULE B: the reply's fields come from the engine's result object. */
-	has("vms_dlm_enq_response_build_grant(r->req_lkid, r->master_lkid,",
-	    "the GRANT reply is built from the master result's own handles");
-	has("r->granted_mode", "... and from the mode read off the LKB");
+	/*
+	 * THE GRANT IS BUILT BY ECHOING THE REQUEST (rd vms-b5b0): the only
+	 * field this node asserts is the handle its own engine assigned. The
+	 * requester's handle, the resource identity, the directory hash and
+	 * everything else in that frame are the REQUESTER's own bytes, handed
+	 * back -- which is what a real master does, and what makes the
+	 * requester able to correlate the completion. Reading the two handles
+	 * out of OUR result object and writing them into our own slot order was
+	 * the storm.
+	 */
+	has("vms_dlm_enq_response_build_grant(in->body, in->len,",
+	    "the GRANT reply ECHOES THE REQUEST's own body");
+	has("in->len, r->master_lkid,",
+	    "... and the ONE value it asserts is the handle our engine "
+	    "assigned, plus the master resource's value block");
+	absent("r->granted_mode",
+	       "*** no granted mode is written into a grant: a real grant "
+	       "clears body[30] (38 of 38) and the requester grants the mode "
+	       "its own LKB asked for ***");
 	absent("VMS_DLM_LKID_UNSET, ",
 	       "no builder is ever called with the unset-lock-id sentinel");
 
@@ -261,7 +277,22 @@ static void arm_bindings(void)
 	      "*** and so is OVMX's OWN directory hash: one function "
 	      "cluster-wide, VMS's own ***");
 	absent("16777619u",
-	      "... not even its FNV-1a constant is left in this file");
+	      "... not even its FNV-1a constant is left in this file (the echo "
+	      "guard's private signature lives in its OWN pure TU, "
+	      "vms_dlm_echo_guard.c, where no wire value can reach it)");
+
+	/*
+	 * THE ECHO GUARD is asked on the ONE path every reply passes through
+	 * (rd vms-b5b0) -- not in one shape's builder, because a reply loop is
+	 * a loop whether the repeated answer is a grant, a deny or a directory
+	 * answer.
+	 */
+	has("if (!dlm_arm_echo_ok(d, in))",
+	    "the ECHO GUARD is asked before any reply is staged");
+	has("vms_dlm_echo_admit(&d->echo",
+	    "... through the pure guard TU's own entry point");
+	has("d->answers_capped++",
+	    "... and a withheld answer is COUNTED");
 	has("d->eng_ops.post           = dlm_arm_post;",
 	    "the engine's POST op is installed too -- the remote route it serves is "
 	    "now reachable behind the gate");

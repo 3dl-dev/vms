@@ -499,7 +499,7 @@ static int vax_build_enq(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 
 	memset(&r, 0, sizeof(r));
 	r.mode = mode;
-	r.req_pid_or_lkid = vax_lkid;
+	r.req_lkid = vax_lkid;
 	r.name_len = (uint8_t)strlen(name);
 	memcpy(r.name, name, r.name_len);
 	r.dir_hash = hash;
@@ -531,7 +531,7 @@ static int vax_build_convert(uint8_t *frame, uint32_t vax_lkid,
 
 	memset(&r, 0, sizeof(r));
 	r.mode = mode;
-	r.req_pid_or_lkid = vax_lkid;
+	r.req_lkid = vax_lkid;
 	r.master_lkid = master_lkid;
 	r.name_len = 0u;
 	r.res_ident_valid = 1u;   /* the BUILDER needs a value to write; the
@@ -598,7 +598,7 @@ static void vax_served_as_master(const uint8_t *frame, vms_csid_t from,
 	mr.op = (wireop == VMS_DLM_WIREOP_CONVERT) ? VMS_DLM_MREQ_CONVERT :
 						     VMS_DLM_MREQ_ENQ;
 	mr.req_csid = (uint32_t)from;
-	mr.req_lkid = e.req_pid_or_lkid;
+	mr.req_lkid = e.req_lkid;
 	mr.master_lkid = e.master_lkid;
 	mr.lkmode = e.mode;
 	mr.flags = flags;
@@ -613,16 +613,29 @@ static void vax_served_as_master(const uint8_t *frame, vms_csid_t from,
 	(void)vms_lock_dlm_master_serve(&mr, out);
 }
 
-/* The VAX's grant for a request OVMX sent it: the shipping grant builder, fed
- * to the shipping FSM entry the arm calls. */
+/*
+ * The VAX's grant for a request OVMX sent it: the shipping grant builder, fed
+ * to the shipping FSM entry the arm calls.
+ *
+ * IT ECHOES THE REQUEST OVMX ACTUALLY SENT (rd vms-b5b0) -- g.last, the bytes
+ * the FSM put on the wire a moment ago -- because that is what a real master
+ * does, and because it makes the handle correlation REAL here: the grant can
+ * only carry OVMX's own handle back if OVMX put it in the slot a master reads.
+ * `ovmx_lkid` and `mode` are now only cross-checks on that frame.
+ */
 static int vax_grants(uint32_t ovmx_lkid, uint32_t vax_master_lkid, uint8_t mode)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	uint32_t written = 0;
 
+	(void)ovmx_lkid;
+	(void)mode;
+	if (g.n_sent == 0u)
+		return -1;              /* nothing to answer */
 	memset(frame, 0, sizeof(frame));
-	if (vms_dlm_enq_response_build_grant(ovmx_lkid, vax_master_lkid, mode,
-					     frame, (uint32_t)sizeof(frame),
+	if (vms_dlm_enq_response_build_grant(g.last, VMS_CM_BODY_LEN,
+					     vax_master_lkid, NULL, frame,
+					     (uint32_t)sizeof(frame),
 					     &written) != VMS_CODEC_OK)
 		return -1;
 	return dlm_req_fsm_reply_body(&g.fsm, (vms_csid_t)CSID_VAX, 0u,

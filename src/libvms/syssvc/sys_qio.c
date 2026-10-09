@@ -1337,8 +1337,9 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
         uint32_t tec = 0;
         struct vms_devinfo tinfo;
         if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+            /* the terminal's I/O is the executive driver's: no descriptor
+             * is needed (rd vms-f8c) */
             int tfd = vms$$chan_to_fd(chan);
-            if (tfd < 0) return pcb_chan_unheld_status(chan);
             int handled = 0;
             uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
                                            p1, p2, p3, p4, p5, p6, efn, astadr,
@@ -1412,8 +1413,9 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         uint32_t tec = 0;
         struct vms_devinfo tinfo;
         if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+            /* the terminal's I/O is the executive driver's: no descriptor
+             * is needed (rd vms-f8c) */
             int tfd = vms$$chan_to_fd(chan);
-            if (tfd < 0) return pcb_chan_unheld_status(chan);
             int handled = 0;
             uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
                                            p1, p2, p3, p4, p5, p6, efn, astadr,

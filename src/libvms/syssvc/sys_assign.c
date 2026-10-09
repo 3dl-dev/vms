@@ -41,6 +41,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <ctype.h>
+#include <strings.h>
 #include "starlet.h"
 #include "descrip.h"
 #include "lnmdef.h"
@@ -65,6 +66,10 @@ extern void vms$$net_chan_release(uint16_t chan);
 struct vms_device_result {
     int  resolved_fd;           /* fd to dup (-1 if not applicable) */
     char resolved_path[256];    /* Linux path to open ("" if not applicable) */
+    /* rd vms-f8c: with is_terminal, the executive terminal UNIT the channel is
+     * to: OPA0:, or the RTAn: a network session runs on. TT: is THIS
+     * process's terminal (its executive row's), not always the console. */
+    char term_unit[32];
     int  is_mailbox;            /* nonzero if MBA<n>: device */
     int  mbx_unit;              /* mailbox unit number (if is_mailbox) */
     /*
@@ -198,7 +203,40 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     if (ovmx_console_terminal_path(name, result->resolved_path,
                                    sizeof(result->resolved_path))) {
         result->is_terminal = 1;
+        snprintf(result->term_unit, sizeof(result->term_unit), "OPA0:");
+        /*
+         * TT: / TT0: is THE JOB'S terminal, which is the console only for a
+         * console session (rd vms-f8c). A session created on an RTAn: (SET
+         * HOST, SSH) has that unit recorded as its terminal in the executive
+         * process table; its TT: is that unit, and its terminal I/O must go
+         * to that unit's driver, never the console's.
+         */
+        if (strcmp(upper, "TT") == 0 || strcmp(upper, "TT0") == 0) {
+            struct vms_procinfo pi;
+            memset(&pi, 0, sizeof(pi));
+            if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0] != '\0') {
+                const char *t = pi.terminal + (pi.terminal[0] == '_');
+                if (strncasecmp(t, "OPA0", 4) != 0) {
+                    snprintf(result->term_unit, sizeof(result->term_unit), "%s", t);
+                    result->resolved_path[0] = '\0';
+                    result->resolved_fd = isatty(STDIN_FILENO) ? STDIN_FILENO : -1;
+                }
+            }
+        }
         return 1;
+    }
+
+    /* rd vms-f8c: any other TERMINAL unit in the executive's device table
+     * (an RTAn:) -- a channel to it is a channel to that unit's driver. */
+    {
+        struct vms_devinfo ti;
+        memset(&ti, 0, sizeof(ti));
+        if (vms_kif_getdvi_devnam(name, &ti) == 1 && ti.devclass == 66 /* DC$_TERM */) {
+            result->is_terminal = 1;
+            snprintf(result->term_unit, sizeof(result->term_unit), "%s",
+                     name + (name[0] == '_'));
+            return 1;
+        }
     }
 
     /* Standard I/O devices - use dup() of the existing fd */
@@ -705,7 +743,8 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
              * too -- there is no per-process fallback identity for a terminal
              * (CLAUDE.md Rule 11).
              */
-            uint32_t st = vms_kif_assign("OPA0:", &exec_chan);
+            uint32_t st = vms_kif_assign(devres.term_unit[0] ? devres.term_unit : "OPA0:",
+                                         &exec_chan);
             if (!(st & 1)) {
                 pthread_mutex_unlock(&pcb->chan_lock);
                 return st;
@@ -755,7 +794,11 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
         }
     }
 
-    if (fd < 0) {
+    if (fd < 0 && devres.is_terminal && exec_chan != 0) {
+        /* rd vms-f8c: a terminal's I/O is the executive terminal driver's
+         * ($QIO -> the class driver); the channel needs no local descriptor,
+         * exactly like a mailbox, BG or ACP-file channel. */
+    } else if (fd < 0) {
         /*
          * The executive channel was granted but there is no local byte-I/O
          * path to go with it (e.g. no /dev/tty in this process's controlling

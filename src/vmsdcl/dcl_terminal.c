@@ -147,8 +147,8 @@ static int dcl_tt_assign(void)
     return dcl_tt_state == 1;
 }
 
-int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
-                uint32_t timeout_sec, uint16_t *term_out)
+int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
+                uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out)
 {
     uint16_t iosb[4];
     uint32_t func, st;
@@ -167,8 +167,8 @@ int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
 
     static char pbuf[512];
     size_t plen = 0;
-    if (prompt && prompt[0]) {
-        plen = strlen(prompt);
+    if (prompt && prompt_len) {
+        plen = prompt_len;
         if (plen > sizeof pbuf)
             plen = sizeof pbuf;
         memcpy(pbuf, prompt, plen);
@@ -211,7 +211,7 @@ int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
     size_t len;
 
     if (isatty(STDIN_FILENO)) {
-        int n = dcl_tt_read(prompt, buf, bufsz, 0, 0, NULL);
+        int n = dcl_tt_read(prompt, prompt ? strlen(prompt) : 0, buf, bufsz, 0, 0, NULL);
         if (n >= 0)
             return 0;
         if (n != DCL_TT_NODRIVER)

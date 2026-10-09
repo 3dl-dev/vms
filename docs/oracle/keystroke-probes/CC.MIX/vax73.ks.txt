@@ -1,0 +1,51 @@
+# keystroke oracle transcript (unmasked) -- case CC.MIX (OpenVMS VAX V7.3 OPA0:)
+# carriage control probe: prompts of each kind after a record, echo and noecho
+# case-sha256 9e47dd189329c4bdc7b1a0e754574644d9ff357c4c71a1c413914705fdcb0fe4
+@start loggedin OK
+=== STEP A1
+| WRITE SYS$OUTPUT "A"<CR><LF>
+| <CR>A<CR><LF>
+| <CR><NUL>$ 
+=== STEP A2
+| @KSCC3<CR><LF>
+| <CR>A<CR><LF>
+| Z> 
+=== STEP A3
+| q<CR><LF>
+| <CR><NUL>$ 
+=== STEP A4
+| @KSCC4<CR><LF>
+| <CR>A<CR><LF>
+| <CR>Your name: 
+=== STEP A5
+| q<CR><LF>
+| <CR><NUL>$ 
+=== STEP A6
+| WRITE SYS$OUTPUT F$FAO("A!/")<CR><LF>
+| <CR>A<CR><LF>
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP N1
+| SET TERMINAL/NOECHO<CR><LF>
+| <CR><NUL>$ 
+=== STEP N2
+| <CR><LF>
+| A<CR><LF>
+| B<CR><LF>
+| <NUL>$ 
+=== STEP N3
+| <CR><LF>
+| A<CR>Z> 
+=== STEP N4
+| <CR><LF>
+| <NUL>$ 
+=== STEP N5
+| <CR><LF>
+| A<CR><LF>
+| Your name: 
+=== STEP N6
+| <CR><LF>
+| <NUL>$ 
+=== STEP N7
+| <CR><LF>
+| <NUL>$ 

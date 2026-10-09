@@ -1,0 +1,23 @@
+# keystroke oracle transcript (unmasked) -- case CC.NOECHO (OpenVMS VAX V7.3 OPA0:)
+# carriage control probe: NOECHO terminal, empty command and a record
+# case-sha256 2f05125aed1dfc0b05aaaabd1d54f812f39cf8af1d3030890e1b69d398afa4a2
+@start loggedin OK
+=== STEP N1
+| SET TERMINAL/NOECHO<CR><LF>
+| <CR><NUL>$ 
+=== STEP N2
+| <CR><LF>
+| <NUL>$ 
+=== STEP N3
+| <CR><LF>
+| <NUL>$ 
+=== STEP N4
+| <CR><LF>
+| A<CR><LF>
+| <NUL>$ 
+=== STEP N5
+| <CR><LF>
+| <NUL>$ 
+=== STEP N6
+| <CR><LF>
+| <CR><NUL>$ 

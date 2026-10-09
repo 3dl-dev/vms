@@ -98,7 +98,7 @@ COPY src/kernel-netbsd/vms_ast_nb.h src/kernel-netbsd/vms_access_nb.h src/kernel
 # #includes, and the uvm arena/mmap glue TU src/kernel-netbsd/Makefile's SRCS
 # lists. Without these the in-guest `make' fails at `vms_lnm_nb.h: No such file'
 # (vms_internal.h:81) and cannot link vms_lnm_{init,cleanup}/vms_ioctl_lnm_*/vms_mmap.
-COPY src/kernel-netbsd/vms_lnm_nb.h src/kernel-netbsd/vms_lnm_arena_netbsd.c src/kernel-netbsd/vms_acct_rss_netbsd.c src/kernel-netbsd/vms_sysmem_netbsd.c /netbsd/guest-src/kmod/
+COPY src/kernel-netbsd/vms_lnm_nb.h src/kernel-netbsd/vms_lnm_arena_netbsd.c src/kernel-netbsd/vms_acct_rss_netbsd.c src/kernel-netbsd/vms_sysmem_netbsd.c src/kernel-netbsd/vms_native_p0_netbsd.c /netbsd/guest-src/kmod/
 # --- kernel-core/: the shared, substrate-agnostic facility + shim contracts ---
 COPY src/kernel-core/vms_eflag.c src/kernel-core/exec_kbackend.h src/kernel-core/exec_list.h /netbsd/guest-src/kernel-core/
 # P4-A: the remaining five shared facility sources (rd vms-f8a) -- SAME sources

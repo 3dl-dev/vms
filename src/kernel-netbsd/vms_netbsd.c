@@ -491,6 +491,47 @@ vms_proc_free_claimed(struct vms_proc *proc)
 }
 
 /*
+ * vms_proc_exithook - the process `p' is ending: delete its PCB now (rd vms-003b).
+ *
+ * On VMS a process is deleted when it ends, however it ends, and a creator that
+ * armed a /NOWAIT completion on it is notified then. This substrate had no
+ * process-end hook at all: a PCB was reclaimed only by the facility's lazy
+ * reaper, which runs on PROCESS-TABLE operations -- so a creator waiting on its
+ * completion flag ($READEF/$WAITFR are not table operations) never saw a
+ * subprocess that ended without recording an $EXIT (a crash, a kill, an image
+ * whose main thread returned first). NetBSD calls exit hooks from exit1() after
+ * exit_lwps() (no other LWP of `p' remains) and fd_free() (no ioctl can reach
+ * /dev/vms from it any more), in the exiting process's own context, which may
+ * sleep. The claim is the facility's: unlink under vms_proc_hash_lock (a
+ * concurrent reaper that already unlinked it leaves nothing to find here),
+ * deliver an armed completion under that same lock, then free outside it --
+ * the Linux module's vms_proc_free() sequence.
+ */
+static void *vms_exithook_cookie;
+
+static void
+vms_proc_exithook(struct proc *p, void *arg __unused)
+{
+	struct vms_proc *proc, *victim = NULL;
+	int bkt;
+
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+		if (proc->pid == p->p_pid) {
+			exec_hash_del_rcu(&proc->hash_node);
+			victim = proc;
+			break;
+		}
+	}
+	if (victim != NULL)
+		vms_proc_deliver_abnormal_completion(victim);
+	exec_unlock(&vms_proc_hash_lock);
+
+	if (victim != NULL)
+		vms_proc_free_claimed(victim);
+}
+
+/*
  * vms_proctab_teardown - free every proc at module unload, walking the hash. The
  * COMMON clusters are freed separately by vms_eflag_cleanup(); we do NOT call
  * vms_proc_release_common_ef() here (it would touch clusters this teardown's
@@ -1590,6 +1631,9 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * exec_timer_ yet (that is FC-P0.9), so this is how the R3 substrate-
 		 * contract test proves the real bindings on a booted node. */
 		vms_cluster_seam_selftest();
+		/* A process ending deletes its PCB at once (rd vms-003b), not only
+		 * when a later table operation happens to reap it. */
+		vms_exithook_cookie = exithook_establish(vms_proc_exithook, NULL);
 		return 0;
 
 	case MODULE_CMD_FINI:
@@ -1599,6 +1643,10 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * harness every process has closed the device before unload, so it is
 		 * not busy and no facility wait is in flight.
 		 */
+		if (vms_exithook_cookie != NULL) {
+			exithook_disestablish(vms_exithook_cookie);
+			vms_exithook_cookie = NULL;
+		}
 		devsw_detach(NULL, &vms_cdevsw);
 		/* Free the shared common-EF clusters and every lock entry + resource
 		 * (vms_lock_cleanup, walking the resource database) FIRST, then tear down

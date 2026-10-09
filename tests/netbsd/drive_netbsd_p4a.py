@@ -340,6 +340,9 @@ def main():
                       "cc -O -Wall -Wextra -I. -o vmsaccess "
                       "vmsaccess.c kif_transport_netbsd.c "
                       ">> /tmp/toolbuild.log 2>&1 && "
+                      "cc -O -Wall -Wextra -I. -o vmsexitcompl "
+                      "vmsexitcompl.c kif_transport_netbsd.c -lpthread "
+                      ">> /tmp/toolbuild.log 2>&1 && "
                       "echo TOOLS_BUILD_OK || cat /tmp/toolbuild.log",
                       build_timeout)
         if "TOOLS_BUILD_OK" not in out:
@@ -460,6 +463,24 @@ def main():
             "$GETJPI -- the process table is shared kernel state (INV-6)")
         log("OK: process C enumerated the shared process table with "
             "$PROCESS_SCAN and found A's row")
+
+        # =====================================================================
+        # EXITCOMPL (rd vms-003b): a creator's armed /NOWAIT completion fires
+        # when its subprocess ENDS -- here a child whose main thread exits first
+        # and which never records an exit. The creator only polls $READEF (not
+        # a process-table op), so the executive itself must notice the end.
+        # =====================================================================
+        exc = ("EC=$(/root/ovmx/probe/vmsexitcompl 2>&1); "
+               "{ echo '### exitcompl'; echo \"$EC\"; } >>%s; "
+               "echo \"$EC\" | grep -q '^EXITCOMPL SET' "
+               "&& echo EXITCOMPL=PASS || echo \"EXITCOMPL=FAIL\"; echo \"$EC\"" % TX)
+        rc, out = run(child, exc, cmd_timeout)
+        if phase_token(out, "EXITCOMPL") != "PASS":
+            log("FAIL: a subprocess that ended (main thread first, no $EXIT) did "
+                "not complete its creator's armed /NOWAIT flag: %s" % out.strip()[-300:])
+            return 34
+        log("OK: a subprocess that ended without $EXIT (main thread first) "
+            "completed its creator's armed /NOWAIT event flag")
 
         # =====================================================================
         # MBX: A creates a TEMPORARY mailbox and holds it open; B writes; C

@@ -574,6 +574,12 @@ one frame left this node
 *** and the mastery is RECORDED in this node's own directory -- which is what stops the next asker being told to master it ***
 *** the directory answers THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
   nothing was answered 'you master it'
+  and the identity that value is OF: group 1 (body[44:46])
+  carrying the value VAX1 ITSELF put on the wire for that name -- the LEARNED one, never a recomputed one
+  the engine claims no mastery
+  user mode (body[46])
+*** addressed to VAX1, the master its own frame told us about ***
+*** and the resource's MASTER is VAX1 -- this node did NOT master it a second time ***
 EOF
                       ;;
         esac;;

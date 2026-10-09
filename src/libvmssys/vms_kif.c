@@ -794,18 +794,26 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 }
 
 /*
- * vms_kif_getlki_parent (vms-0dd) -- a sibling of vms_kif_getlki that ALSO
- * surfaces args.parent_id. Same VMS_IOCTL_GETLKI ioctl, same kernel handler
- * (no new op/ABI addition -- ca673c87 already wired the kernel side to fill
- * args.parent_id from lock->parent_id; only the original wrapper dropped it
- * on the floor). Added as a separate entry point rather than widening
- * vms_kif_getlki's signature so every existing caller (the H0->H11 DLM
- * harness, vms-50e's file-lock test, the negctl dead-helper generator)
- * keeps compiling unchanged -- the regression net vms-0dd must not disturb.
+ * vms_kif_getlki_parent (vms-0dd, extended vms-b71) -- a sibling of
+ * vms_kif_getlki that ALSO surfaces args.parent_id and args.grant_count.
+ * Same VMS_IOCTL_GETLKI ioctl, same kernel handler (no new op/ABI addition --
+ * ca673c87 already wired the kernel side to fill args.parent_id from
+ * lock->parent_id; only the original wrapper dropped it on the floor).
+ * Added as a separate entry point rather than widening vms_kif_getlki's
+ * signature so every existing caller (the H0->H11 DLM harness, vms-50e's
+ * file-lock test, the negctl dead-helper generator) keeps compiling
+ * unchanged -- the regression net vms-0dd must not disturb.
+ *
+ * vms-b71: this is now the engine behind sys$getlki/sys$getlkiw
+ * (src/libvms/syssvc/sys_lock.c) -- its first real product caller -- so
+ * grant_count (LKI$_GRANTCOUNT, the resource's granted-queue length the
+ * kernel counts in vms_ioctl_getlki) is surfaced here rather than through a
+ * third sibling.
  */
 uint32_t vms_kif_getlki_parent(uint32_t lkid, uint32_t *granted_mode,
                                 uint32_t *requested_mode, char *resnam,
-                                uint8_t *valblk, uint32_t *parent_id)
+                                uint8_t *valblk, uint32_t *parent_id,
+                                uint32_t *grant_count)
 {
     struct vms_getlki_args args;
 
@@ -819,6 +827,7 @@ uint32_t vms_kif_getlki_parent(uint32_t lkid, uint32_t *granted_mode,
     if (resnam) vms_strncpy(resnam, args.resnam, 32);
     if (valblk) vms_memcpy(valblk, args.valblk, LCK_VALBLK_SIZE);
     if (parent_id) *parent_id = args.parent_id;
+    if (grant_count) *grant_count = args.grant_count;
 
     return args.status;
 }

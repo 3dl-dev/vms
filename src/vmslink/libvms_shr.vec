@@ -474,3 +474,6 @@ sys$format_acl=PROCEDURE
 sys$grantid=PROCEDURE
 sys$revokid=PROCEDURE
 sys$create_user_profile=PROCEDURE
+# vms-b71: SYS$GETLKI/GETLKIW over the executive's GETLKI ioctl. APPENDED.
+sys$getlki=PROCEDURE
+sys$getlkiw=PROCEDURE

@@ -1,0 +1,197 @@
+$ LINK/NOTRACEBACK/MAP=PRIVPROBE/FULL PRIVPROBE
+$ SHOW PROCESS/PRIVILEGES
+
+ 9-OCT-2026 20:54:58.83   User: SYSTEM           Process ID:   2020021D
+                          Node: VAX1             Process name: "SYSTEM"
+ 
+Authorized privileges:
+ ACNT      ALLSPOOL  ALTPRI    AUDIT     BUGCHK    BYPASS    CMEXEC    CMKRNL
+ IMPERSONATDIAGNOSE  DOWNGRADE EXQUOTA   GROUP     GRPNAM    GRPPRV    IMPORT
+ LOG_IO    MOUNT     NETMBX    OPER      PFNMAP    PHY_IO    PRMCEB    PRMGBL
+ PRMMBX    PSWAPM    READALL   SECURITY  SETPRV    SHARE     SHMEM     SYSGBL
+ SYSLCK    SYSNAM    SYSPRV    TMPMBX    UPGRADE   VOLPRO    WORLD
+ 
+Process privileges:
+ ACNT                 may suppress accounting messages
+ ALLSPOOL             may allocate spooled device
+ ALTPRI               may set any priority value
+ AUDIT                may direct audit to system security audit log
+ BUGCHK               may make bug check log entries
+ BYPASS               may bypass all object access controls
+ CMEXEC               may change mode to exec
+ CMKRNL               may change mode to kernel
+ IMPERSONATE          may impersonate another user
+ DIAGNOSE             may diagnose devices
+ DOWNGRADE            may downgrade object secrecy
+ EXQUOTA              may exceed disk quota
+ GROUP                may affect other processes in same group
+ GRPNAM               may insert in group logical name table
+ GRPPRV               may access group objects via system protection
+ IMPORT               may set classification for unlabeled object
+ LOG_IO               may do logical i/o
+ MOUNT                may execute mount acp function
+ NETMBX               may create network device
+ OPER                 may perform operator functions
+ PFNMAP               may map to specific physical pages
+ PHY_IO               may do physical i/o
+ PRMCEB               may create permanent common event clusters
+ PRMGBL               may create permanent global sections
+ PRMMBX               may create permanent mailbox
+ PSWAPM               may change process swap mode
+ READALL              may read anything as the owner
+ SECURITY             may perform security administration functions
+ SETPRV               may set any privilege bit
+ SHARE                may assign channels to non-shared devices
+ SHMEM                may create/delete objects in shared memory
+ SYSGBL               may create system wide global sections
+ SYSLCK               may lock system wide resources
+ SYSNAM               may insert in system logical name table
+ SYSPRV               may access objects via system protection
+ TMPMBX               may create temporary mailbox
+ UPGRADE              may upgrade object integrity
+ VOLPRO               may override volume protection
+ WORLD                may affect other processes in the world
+ 
+Process rights:
+ SYSTEM                            resource
+ INTERACTIVE                       
+ LOCAL                             
+ 
+System rights:
+ SYS$NODE_VAX1                     
+$ RUN PRIVPROBE
+PRIVPROBE jpi=00000001 cur=FFFFFFFFFFFFFFFF img=0000000000000000 proc=FFFFFFFFFFFFFFFF cmkrnl=00000001
+$ INSTALL ADD SYS$DISK:[]PRIVPROBE.EXE/PRIVILEGED=CMKRNL
+$ INSTALL LIST/FULL SYS$DISK:[]PRIVPROBE.EXE
+
+DISK$SYSDSK1:<SYS0.SYSMGR>.EXE
+   PRIVPROBE;2                    Prv 
+        Entry access count         = 0
+        Privileges = CMKRNL 
+
+$ INSTALL LIST SYS$DISK:[]PRIVPROBE.EXE
+
+DISK$SYSDSK1:<SYS0.SYSMGR>.EXE
+   PRIVPROBE;2                    Prv 
+$ SET PROCESS/PRIVILEGES=NOALL
+$ SHOW PROCESS/PRIVILEGES
+
+ 9-OCT-2026 20:55:04.04   User: SYSTEM           Process ID:   2020021D
+                          Node: VAX1             Process name: "SYSTEM"
+ 
+Authorized privileges:
+ ACNT      ALLSPOOL  ALTPRI    AUDIT     BUGCHK    BYPASS    CMEXEC    CMKRNL
+ IMPERSONATDIAGNOSE  DOWNGRADE EXQUOTA   GROUP     GRPNAM    GRPPRV    IMPORT
+ LOG_IO    MOUNT     NETMBX    OPER      PFNMAP    PHY_IO    PRMCEB    PRMGBL
+ PRMMBX    PSWAPM    READALL   SECURITY  SETPRV    SHARE     SHMEM     SYSGBL
+ SYSLCK    SYSNAM    SYSPRV    TMPMBX    UPGRADE   VOLPRO    WORLD
+ 
+Process privileges:
+ 
+Process rights:
+ SYSTEM                            resource
+ INTERACTIVE                       
+ LOCAL                             
+ 
+System rights:
+ SYS$NODE_VAX1                     
+$ RUN PRIVPROBE
+PRIVPROBE jpi=00000001 cur=0000000000000001 img=0000000000000001 proc=0000000000000000 cmkrnl=00000001
+$ SHOW PROCESS/PRIVILEGES
+
+ 9-OCT-2026 20:55:05.74   User: SYSTEM           Process ID:   2020021D
+                          Node: VAX1             Process name: "SYSTEM"
+ 
+Authorized privileges:
+ ACNT      ALLSPOOL  ALTPRI    AUDIT     BUGCHK    BYPASS    CMEXEC    CMKRNL
+ IMPERSONATDIAGNOSE  DOWNGRADE EXQUOTA   GROUP     GRPNAM    GRPPRV    IMPORT
+ LOG_IO    MOUNT     NETMBX    OPER      PFNMAP    PHY_IO    PRMCEB    PRMGBL
+ PRMMBX    PSWAPM    READALL   SECURITY  SETPRV    SHARE     SHMEM     SYSGBL
+ SYSLCK    SYSNAM    SYSPRV    TMPMBX    UPGRADE   VOLPRO    WORLD
+ 
+Process privileges:
+ 
+Process rights:
+ SYSTEM                            resource
+ INTERACTIVE                       
+ LOCAL                             
+ 
+System rights:
+ SYS$NODE_VAX1                     
+$ SET PROCESS/PRIVILEGES=ALL
+$ INSTALL REPLACE SYS$DISK:[]PRIVPROBE.EXE/PRIVILEGED=(CMKRNL,SYSPRV)
+$ INSTALL LIST/FULL SYS$DISK:[]PRIVPROBE.EXE
+
+DISK$SYSDSK1:<SYS0.SYSMGR>.EXE
+   PRIVPROBE;2                    Prv 
+        Entry access count         = 0
+        Privileges = CMKRNL SYSPRV 
+
+$ INSTALL REMOVE SYS$DISK:[]PRIVPROBE.EXE
+$ INSTALL LIST/FULL SYS$DISK:[]PRIVPROBE.EXE
+%INSTALL-W-FAIL, failed to LIST entry for DISK$SYSDSK1:<SYS0.SYSMGR>PRIVPROBE.EXE
+-INSTALL-E-NOKFEFND, Known File Entry not found
+$ SET PROCESS/PRIVILEGES=NOALL
+$ RUN PRIVPROBE
+PRIVPROBE jpi=00000001 cur=0000000000000000 img=0000000000000000 proc=0000000000000000 cmkrnl=00000024
+$ SET PROCESS/PRIVILEGES=ALL
+$ SHOW PROCESS/PRIVILEGES
+
+ 9-OCT-2026 20:55:13.50   User: SYSTEM           Process ID:   2020021D
+                          Node: VAX1             Process name: "SYSTEM"
+ 
+Authorized privileges:
+ ACNT      ALLSPOOL  ALTPRI    AUDIT     BUGCHK    BYPASS    CMEXEC    CMKRNL
+ IMPERSONATDIAGNOSE  DOWNGRADE EXQUOTA   GROUP     GRPNAM    GRPPRV    IMPORT
+ LOG_IO    MOUNT     NETMBX    OPER      PFNMAP    PHY_IO    PRMCEB    PRMGBL
+ PRMMBX    PSWAPM    READALL   SECURITY  SETPRV    SHARE     SHMEM     SYSGBL
+ SYSLCK    SYSNAM    SYSPRV    TMPMBX    UPGRADE   VOLPRO    WORLD
+ 
+Process privileges:
+ ACNT                 may suppress accounting messages
+ ALLSPOOL             may allocate spooled device
+ ALTPRI               may set any priority value
+ AUDIT                may direct audit to system security audit log
+ BUGCHK               may make bug check log entries
+ BYPASS               may bypass all object access controls
+ CMEXEC               may change mode to exec
+ CMKRNL               may change mode to kernel
+ IMPERSONATE          may impersonate another user
+ DIAGNOSE             may diagnose devices
+ DOWNGRADE            may downgrade object secrecy
+ EXQUOTA              may exceed disk quota
+ GROUP                may affect other processes in same group
+ GRPNAM               may insert in group logical name table
+ GRPPRV               may access group objects via system protection
+ IMPORT               may set classification for unlabeled object
+ LOG_IO               may do logical i/o
+ MOUNT                may execute mount acp function
+ NETMBX               may create network device
+ OPER                 may perform operator functions
+ PFNMAP               may map to specific physical pages
+ PHY_IO               may do physical i/o
+ PRMCEB               may create permanent common event clusters
+ PRMGBL               may create permanent global sections
+ PRMMBX               may create permanent mailbox
+ PSWAPM               may change process swap mode
+ READALL              may read anything as the owner
+ SECURITY             may perform security administration functions
+ SETPRV               may set any privilege bit
+ SHARE                may assign channels to non-shared devices
+ SHMEM                may create/delete objects in shared memory
+ SYSGBL               may create system wide global sections
+ SYSLCK               may lock system wide resources
+ SYSNAM               may insert in system logical name table
+ SYSPRV               may access objects via system protection
+ TMPMBX               may create temporary mailbox
+ UPGRADE              may upgrade object integrity
+ VOLPRO               may override volume protection
+ WORLD                may affect other processes in the world
+ 
+Process rights:
+ SYSTEM                            resource
+ INTERACTIVE                       
+ LOCAL                             
+ 
+System rights:
+ SYS$NODE_VAX1                     

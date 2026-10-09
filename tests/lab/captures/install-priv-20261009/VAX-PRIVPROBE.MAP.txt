@@ -1,0 +1,146 @@
+
+                                                                 9-OCT-2026 20:54        Linker V11-50                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+PRIVPROBE       0                     578 SYS$SYSROOT:[SYSMGR]PRIVPROBE.OBJ;1   9-OCT-2026 20:54  VAX MACRO V5.4-3
+SYS$P1_VECTOR   X-4                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     16-MAR-2001 00:59  VAX MACRO V5.4-3
+LIBRTL          V06-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      16-MAR-2001 02:47  Linker V11-38
+
+SYS$SYSROOT:[SYSMGR]PRIVPROBE.EXE;2                              9-OCT-2026 20:54        Linker V11-50                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pages   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    0     1    00000200          2   0 READ WRITE   COPY ON REF
+                   0     1    00000400          3   0 READ ONLY     
+                   0     1    00000600          4   0 READ WRITE   FIXUP VECTORS
+                 253    20    7FFFD800          0   0 READ WRITE   DEMAND ZERO  
+
+LIBRTL             3   265    00000000-R        0   0 READ ONLY                  LIBRTL_001       LESS/EQUAL        1        14
+                   4     6    00021200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_002       LESS/EQUAL        1        14
+                   4     2    00021E00-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1        14
+                   4     8    00022200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_004       LESS/EQUAL        1        14
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! R  - Relocatable   !
+                ! P  - Protected     !
+                +--------------------+
+
+SYS$SYSROOT:[SYSMGR]PRIVPROBE.EXE;2                              9-OCT-2026 20:54        Linker V11-50                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+PDATA                           00000200 0000039F 000001A0 (        416.) LONG  2 NOPIC,USR,CON,REL,LCL,NOSHR,NOEXE,  RD,  WRT,NOVEC
+                PRIVPROBE       00000200 0000039F 000001A0 (        416.) LONG  2
+
+PCODE                           00000400 000004A1 000000A2 (        162.) BYTE  0 NOPIC,USR,CON,REL,LCL,NOSHR,  EXE,  RD,NOWRT,NOVEC
+                PRIVPROBE       00000400 000004A1 000000A2 (        162.) BYTE  0
+
+SYS$SYSROOT:[SYSMGR]PRIVPROBE.EXE;2                              9-OCT-2026 20:54        Linker V11-50                    Page    4
+
+                                                +-----------------+
+                                                ! Symbols By Name !
+                                                +-----------------+
+
+Symbol          Value              Symbol          Value              Symbol          Value              Symbol          Value
+------          -----              ------          -----              ------          -----              ------          -----
+KRN             00000400-R        
+LIB$PUT_OUTPUT  00000648-RX       
+START           00000406-R        
+SYS$CMKRNL      7FFEDE90          
+SYS$FAO         7FFEDF50          
+SYS$GETJPIW     7FFEE420          
+
+SYS$SYSROOT:[SYSMGR]PRIVPROBE.EXE;2                              9-OCT-2026 20:54        Linker V11-50                    Page    5
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000400      R-KRN           
+00000406      R-START         
+00000648     RX-LIB$PUT_OUTPUT
+7FFEDE90        SYS$CMKRNL    
+7FFEDF50        SYS$FAO       
+7FFEE420        SYS$GETJPIW   
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! *  - Undefined     !
+                ! A  - Alias Name    !
+                ! I  - Internal Name !
+                ! U  - Universal     !
+                ! R  - Relocatable   !
+                ! X  - External      !
+                ! WK - Weak          !
+                +--------------------+
+
+SYS$SYSROOT:[SYSMGR]PRIVPROBE.EXE;2                              9-OCT-2026 20:54        Linker V11-50                    Page    6
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000200 000007FF 00000600 (1536. bytes, 3. pages)
+Stack size:                                             20. pages
+Image header virtual block limits:                       1.        1. (    1. block)
+Image binary virtual block limits:                       2.        4. (    3. blocks)
+Image name and identification:                    PRIVPROBE 0
+Number of files:                                         4.
+Number of modules:                                       3.
+Number of program sections:                              5.
+Number of global symbols:                              311.
+Number of image sections:                                8.
+User transfer address:                            00000406
+Number of code references to shareable images:           1.
+Image type:                                       EXECUTABLE.
+Map format:                                       FULL in file SYS$SYSROOT:[SYSMGR]PRIVPROBE.MAP;2
+Estimated map length:                             55. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults   CPU Time        Elapsed Time
+----------------------                            -----------   --------        ------------
+    Command processing:                                    94   00:00:00.00     00:00:00.00
+    Pass 1:                                              1308   00:00:00.03     00:00:00.04
+    Allocation/Relocation:                                 75   00:00:00.00     00:00:00.00
+    Pass 2:                                               828   00:00:00.02     00:00:00.04
+    Map data after object module synopsis:                 45   00:00:00.00     00:00:00.00
+    Symbol table output:                                   11   00:00:00.00     00:00:00.01
+Total run values:                                        2361   00:00:00.05     00:00:00.09
+
+Using a working set limited to 662 pages and 109 pages of data storage (excluding image)
+
+Total number object records read (both passes):   122
+    of which 27 were in libraries and 3 were DEBUG data records containing 93 bytes
+
+Number of modules extracted explicitly             = 0
+    with 1 extracted to resolve undefined symbols
+
+0 library searches were for symbols not in the library searched
+
+A total of 0 global symbol table records was written
+
+LINK/NOTRACEBACK/MAP=PRIVPROBE/FULL PRIVPROBE

@@ -317,10 +317,33 @@ vtt_softint(void *arg __unused)
 
 /* ---- struct linesw ----------------------------------------------- */
 
+/*
+ * NetBSD calls l_open on EVERY open of the line (ptsopen, the console's open),
+ * but l_close only on the LAST close -- unlike Linux, whose line discipline is
+ * opened once when it is set. So an open of a line that already has its port
+ * keeps that port: a second open replacing it left the binding on an orphaned
+ * port, and every byte typed after a session's own open of its RTAn: went to
+ * an unbound one (the VAX CTERM login read timed out, and the unit was never
+ * withdrawn because the master's close killed the wrong port). Like ttylopen,
+ * the open marks the line open.
+ */
 static int
-vtt_open(dev_t dev __unused, struct tty *tp)
+vtt_open(dev_t dev, struct tty *tp)
 {
 	struct vms_ttport_nb *p;
+
+	mutex_spin_enter(&tty_lock);
+	tp->t_dev = dev;
+	if (!ISSET(tp->t_state, TS_ISOPEN)) {
+		SET(tp->t_state, TS_ISOPEN);
+		memset(&tp->t_winsize, 0, sizeof(tp->t_winsize));
+		tp->t_flags = 0;
+	}
+	if (tp->t_sc != NULL) {
+		mutex_spin_exit(&tty_lock);
+		return 0;                    /* this line's port, already */
+	}
+	mutex_spin_exit(&tty_lock);
 
 	p = kmem_zalloc(sizeof(*p), KM_SLEEP);
 	p->tp = tp;
@@ -328,6 +351,13 @@ vtt_open(dev_t dev __unused, struct tty *tp)
 	cv_init(&p->owcv, "vmsttw");
 	p->refs = 1;                         /* the tty's */
 	mutex_spin_enter(&tty_lock);
+	if (tp->t_sc != NULL) {              /* a racing open got there first */
+		mutex_spin_exit(&tty_lock);
+		cv_destroy(&p->owcv);
+		mutex_destroy(&p->bind_lock);
+		kmem_free(p, sizeof(*p));
+		return 0;
+	}
 	tp->t_sc = p;
 	mutex_spin_exit(&tty_lock);
 	return 0;

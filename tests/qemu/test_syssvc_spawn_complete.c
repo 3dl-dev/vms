@@ -143,12 +143,14 @@ static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t ef
     (void)mkdir(STUB_DIR, 0755);
     snprintf(link, sizeof link, "%s/DCL.EXE", STUB_DIR);
     (void)unlink(link);
-    if (symlink(self_exe, link) != 0) return -1;
+    if (symlink(self_exe, link) != 0) { printf("  INFO: symlink %s -> %s failed\n", link, self_exe); return -1; }
     snprintf(link, sizeof link, "%s/dcl.exe", STUB_DIR);
     (void)unlink(link);
     (void)symlink(self_exe, link);
-    if (!(lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", STUB_DIR, 0, LNM_MODE_SUPER) & 1))
+    if (!(lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", STUB_DIR, 0, LNM_MODE_SUPER) & 1)) {
+        printf("  INFO: redefining SYS$SYSTEM failed\n");
         return -1;
+    }
     struct sched_param sp = { .sched_priority = 1 };
     cpu_set_t one;
     CPU_ZERO(&one);
@@ -156,6 +158,8 @@ static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t ef
     int rt = sched_setaffinity(0, sizeof one, &one) == 0 &&
              sched_setscheduler(0, SCHED_FIFO, &sp) == 0;
     int set = -1;
+    if (!rt)
+        printf("  INFO: SCHED_FIFO/affinity refused (errno %d)\n", errno);
     if (rt) {
         struct dsc$descriptor_s cmd = dsc("EXIT");
         uint32_t flags = CLI$M_NOWAIT, e = efn, pid = 0;
@@ -164,6 +168,8 @@ static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t ef
                                NULL, NULL, NULL, NULL, NULL);
         struct sched_param np = { .sched_priority = 0 };
         (void)sched_setscheduler(0, SCHED_OTHER, &np);
+        if (!(r & 1))
+            printf("  INFO: lib$spawn of the stub CLI returned %08x\n", (unsigned)r);
         if (r & 1) {
             set = 0;
             for (int waited = 0; waited < 5000 && !set; waited += 50) {

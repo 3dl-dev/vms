@@ -9010,7 +9010,26 @@ apply_edit() {
         # pe-vc-snapshot/scs-cdt-snapshot entries above), so the identically
         # indented "n++;" inside the OTHER two GETLKI-shaped walks in this file
         # (vms_ioctl_dlm_member_depart / vms_ioctl_get_resmaster) is untouched.
-        sed -i '/^long vms_ioctl_getlki(/,/^}/ s|            n++;|            /* NEGCTL getlki-grantcount-not-counted: grant not counted */|' "$_file";;
+        #
+        # THE REPLACEMENT KEEPS ITS OWN TRAILING SEMICOLON (rd vms-b71 CI fix,
+        # measured 2026-10-09). `exec_list_for_each_entry(...)` expands to a
+        # braceless `for (...)`, so its body is whatever ONE statement follows
+        # syntactically -- here, the real source's `n++;`. A comment-only
+        # replacement with NO semicolon leaves the `for` with nothing to
+        # terminate its body, so the compiler attaches the NEXT statement,
+        # `exec_unlock(&res->lock);`, as the loop body instead: exec_unlock then
+        # runs once per granted entry (a harmless no-op double-unlock when
+        # n_granted==1) but NEVER when n_granted==0 (e.g. the DLM cross-node
+        # origin/proxy records test_syssvc_dlm_xnode's GETLKI calls read) --
+        # leaking res->lock held forever and deadlocking the NEXT operation on
+        # that resource. That is a real guest HANG under this defect (CI shards
+        # 17/22 and 19/22, both runs stopping after 55 suites at
+        # test_syssvc_dlm_xnode, whole-VM wall budget fired), not a crash and
+        # not a timing/ordering issue -- a malformed fixture mutation. The
+        # trailing `;` makes the comment an empty statement, so the loop body
+        # stays a no-op and exec_unlock stays OUTSIDE the loop exactly as the
+        # unmutated source has it; grant_count still always reports 0.
+        sed -i '/^long vms_ioctl_getlki(/,/^}/ s|            n++;|            /* NEGCTL getlki-grantcount-not-counted: grant not counted */;|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

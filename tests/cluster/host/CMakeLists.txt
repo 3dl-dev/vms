@@ -287,6 +287,12 @@ cluster_host_cnxman_test(test_dlm_dir test_dlm_dir.c)
 cluster_host_cnxman_test(test_dlm_scs_arm test_dlm_scs_arm.c)
 target_compile_definitions(test_dlm_scs_arm PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+    # The TWO hand-maintained copies of the diagnostic row ABI (rd vms-025 put
+    # a field in its pad byte): the Linux rind's src/kernel/vms_ioctl.h and the
+    # NetBSD-vax rind's src/kernel-netbsd/vms_lock_nb.h. Neither leg's compiler
+    # sees the other, so their agreement is scanned here.
+    OVMX_KLINUX_DIR="${CMAKE_SOURCE_DIR}/src/kernel"
+    OVMX_KNETBSD_DIR="${CMAKE_SOURCE_DIR}/src/kernel-netbsd"
 )
 
 # FC-P3.15's own done-condition: prove NO CNXMAN TU writes below body offset 0
@@ -992,9 +998,16 @@ target_include_directories(test_dlm_mixed_master PRIVATE
     ${CMAKE_SOURCE_DIR}/src/kernel
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_compile_definitions(test_dlm_mixed_master PRIVATE OVMX_CLUSTER_HOST)
+# OVMX_FIXTURE_DIR / OVMX_CLEANROOM_MANIFEST: rd vms-025's section 1b drives the
+# REAL captured frame (fixtures/dlm-evac-workload-enq-from-vax1.spec, record 3907
+# of the 2026-10-09 lab pcap) through the shipping parsers, the shipping
+# directory role and the shipping master-side door.
+target_compile_definitions(test_dlm_mixed_master PRIVATE OVMX_CLUSTER_HOST
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}")
 target_link_libraries(test_dlm_mixed_master PRIVATE
-    cluster_host_lock cluster_host_cnxman cluster_host_dlm Threads::Threads)
+    cluster_host_lock cluster_host_cnxman cluster_host_dlm
+    cluster_host_fixture Threads::Threads)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(test_dlm_mixed_master PRIVATE -Wall -Wextra -Werror)
 endif()

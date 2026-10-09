@@ -165,6 +165,7 @@ ldwv-refusal-uncounted
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
+dlm-mixed-refusal-cause-unnamed
 dlm-dir-matched-by-name-alone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
@@ -425,6 +426,19 @@ EOF
         require_fail) cat <<'EOF'
 and counted in the CLUB
 the refusal is counted
+EOF
+                      ;;
+        esac;;
+
+    dlm-mixed-refusal-cause-unnamed)
+        case "$_f" in
+        facility)     echo "WHY a message from a real VMS system was refused (dlm_arm_say_refusal(), rd vms-025): an unanswerable SHAPE, a frame stating no resource identity, and a placeable resource this node neither masters nor holds a directory entry for are three different facts, counted and said apart";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_scs.c is not host-linkable (it names exec_kbackend.h and the fork API), so its properties are proved by a source-scan of the SHIPPING file. The shape test that splits the first cause off is removed from dlm_arm_say_refusal(), which collapses it toward the pre-rd-vms-025 behaviour: ONE line -- 'a system that has not proved it runs this implementation' -- true of every refusal here and therefore naming no cause at all. A real-VAX lab watched exactly that line for a whole run while the actual fault was a LOCKDIRWT that never reached the executive.";;
+        require_fail) cat <<'EOF'
+RULE C's refusal distinguishes a shape this implementation has no grounded answer for
 EOF
                       ;;
         esac;;
@@ -1769,6 +1783,16 @@ apply_edit() {
     recnx-last-gasp-uncounted)
         # `r->last_gasps++;` is unique in this file.
         sed -i 's|r->last_gasps++;|/* NEGCTL recnx-last-gasp-uncounted: the last gasp is not counted */|' "$_file";;
+
+    dlm-mixed-refusal-cause-unnamed)
+        # vms_dlm_scs.c is not host-linkable -- test_dlm_scs_arm.c proves its
+        # properties by SOURCE-SCANNING the shipping file. The line that opens
+        # dlm_arm_say_refusal()'s first cause is unique in the file (the helper
+        # it calls is referenced exactly twice: its definition, and here), so
+        # disarming it collapses the shape cause into the next one and removes
+        # exactly the scanned property. Idempotency-safe: the matched text is
+        # consumed by the edit.
+        sed -i 's|\tif (!dlm_arm_refusal_is_a_servable_shape(req->opcode)) {|\tif (0) { (void)dlm_arm_refusal_is_a_servable_shape; /* NEGCTL dlm-mixed-refusal-cause-unnamed */|' "$_file";;
 
     dlm-learner-unbounded)
         # `vms_res_blocks < VMS_DLM_LEARN_RES_CAP;` is unique in this file.

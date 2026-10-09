@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #include "sysboot.h"
+#include "sysgen_factory.h"   /* the SHARED factory parameter table (vms-025) */
 #include "ssdef.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
@@ -97,28 +98,25 @@ int sysboot_conversational_requested(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * Same default value as tools/vms_sysgen.c's SCSNODE entry (both are
- * OVMX's own convention, not VMS-authentic -- vms-ci.8) so the two
- * utilities never visibly disagree about SCSNODE's factory default.
+ * SYSBOOT'S PARAMETER TABLE IS THE SYSTEM'S, NOT THE FILE'S (rd vms-025).
+ *
+ * This used to be a ONE-ROW table (SCSNODE), and SET looked names up ONLY in
+ * the loaded parameter file -- so on a real mixed-cluster lab run
+ * `SYSBOOT> SET LOCKDIRWT 1` answered %SYSGEN-E-NOSUCHP and the interim
+ * sole-directory configuration could not be configured on a booted node at
+ * all. The shipped seed SYS$SYSTEM:OVMXVMSSYS.PAR was authored before
+ * LOCKDIRWT (and QDSKVOTES/TIMVCFAIL/CLUSTER_CREDITS/NISCS_MAX_PKTSZ/
+ * MSCP_LOAD/MSCP_SERVE_ALL/DISK_QUORUM) existed.
+ *
+ * sysgen_factory.h now holds the factory table ONCE, shared with SYSGEN.EXE,
+ * and sysgen_factory_merge() unions in whatever a loaded file lacks -- which is
+ * exactly what sysgen_params.h already describes as the rule ("a parameter the
+ * system knows but the file has never held takes the system's default, exactly
+ * as SYSBOOT's parameter table supplies one on VMS").
  */
-static const struct sysgen_param sysboot_default_params[] = {
-    { .name = "SCSNODE", .flags = SYSGEN_F_DYNAMIC,
-      .description = "Cluster node name (SCS system name, max 6 chars)",
-      .type = SYSGEN_TYPE_STRING,
-      .str_current = "OVMX", .str_default = "OVMX" },
-};
-
-#define SYSBOOT_DEFAULT_PARAM_COUNT \
-    ((uint32_t)(sizeof(sysboot_default_params) / sizeof(sysboot_default_params[0])))
-
 static void sysboot_load_defaults(struct sysgen_file *ws)
 {
-    memset(ws, 0, sizeof(*ws));
-    ws->magic   = SYSGEN_MAGIC;
-    ws->version = SYSGEN_VERSION;
-    ws->count   = SYSBOOT_DEFAULT_PARAM_COUNT;
-    for (uint32_t i = 0; i < SYSBOOT_DEFAULT_PARAM_COUNT; i++)
-        ws->params[i] = sysboot_default_params[i];
+    sysgen_factory_load(ws);
 }
 
 #if !defined(OVMX_BOOT_LINUX)
@@ -168,14 +166,18 @@ void sysboot_load_working_set(struct sysgen_file *ws, const char *dir,
      * falls back to compiled-in factory defaults; there is NO /vms fallback
      * (Rule 9 / INV-6). */
     (void)dir; (void)name; (void)ext;
-    if (sysgen_load_working(ws) == 0)
+    if (sysgen_load_working(ws) == 0) {
+        (void)sysgen_factory_merge(ws);
         return;
+    }
     sysboot_load_defaults(ws);
 #else
     char path[VMSFS_MAX_PATH];
     if (highest_version_path(dir, name, ext, path, sizeof(path)) >= 1 &&
-        load_from_file(ws, path) == 0)
+        load_from_file(ws, path) == 0) {
+        (void)sysgen_factory_merge(ws);
         return;
+    }
     sysboot_load_defaults(ws);
 #endif
 }

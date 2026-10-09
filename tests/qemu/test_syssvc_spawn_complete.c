@@ -329,10 +329,10 @@ int main(int argc, char **argv)
         uint32_t jpi = 0;
         int r = noexec_image_completion(COMPLETION_EFN, &jpi);
         CHECK(r != -1, "a registered child is armed and then exec()s an image that never opens /dev/vms");
-        /* negctl: process-exit-rundown-skipped */
+        /* negctl: process-exit-deletion-needs-vms-fd */
         CHECK(r == 1, "that image ending completes the creator's armed /NOWAIT flag: the executive"
                       " deletes the process whatever the image did (vms-d9ab)");
-        /* negctl-knockon: process-exit-rundown-skipped */
+        /* negctl-knockon: process-exit-deletion-needs-vms-fd */
         CHECK(jpi == SS$_NONEXPR, "$GETJPI of the ended process is SS$_NONEXPR before its creator"
                                   " reaps it: a deleted process cannot be read");
     }

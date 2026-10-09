@@ -443,7 +443,7 @@ spawn-input-via-linux-path
 spawn-arm-gone-subprocess-not-completed
 release-leader-zombie-pcb-kept
 creprc-detached-intermediate-not-held
-process-exit-rundown-skipped
+process-exit-deletion-needs-vms-fd
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -3162,7 +3162,7 @@ EOF
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
         esac;;
-    process-exit-rundown-skipped)
+    process-exit-deletion-needs-vms-fd)
         case "$_f" in
         facility)     echo "process deletion at process exit (vms_process_ended, the Linux module rind, rd vms-9f32) -- the executive deletes a process when it ends, however it ends, whatever its image did";;
         targets)      echo "kernel/vms_module.c";;
@@ -3170,7 +3170,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_process_ended() returns before deleting anything ('if (1) return'): no process is ever deleted by its end. An image that never opened /dev/vms (vms-d9ab) leaves its PCB behind, its creator's armed completion never fires, and its PID still answers \$GETJPI. The same missing deletion reddens the leader-exits-first check and the gone-before-arm checks in the same suite. Gone after apply (no-op re-apply).";;
+        why)          echo "vms_on_process_exit() deletes a process only if it still holds the executive device open as it ends -- the fd-bound deletion vms-9f32 removed. A subprocess that exec's an image which never opens /dev/vms (its creator's open is O_CLOEXEC) is never deleted: its PCB stays, its PID still answers \$GETJPI and its creator's armed completion never fires (vms-d9ab). Processes that end holding the device are deleted as before. Gone after apply (no-op re-apply).";;
         require_fail) cat <<'EOF'
 that image ending completes the creator's armed /NOWAIT flag: the executive
 EOF
@@ -8410,8 +8410,18 @@ apply_edit() {
         sed -i 's|^            ticket_sync = syncfd\[1\];$|            ticket_sync = syncfd[1]; if (!use_ticket) { pid_t ip = getppid(); close(ticket_sync); ticket_sync = -1; while (getppid() == ip) usleep(1000); } /* NEGCTL creprc-detached-intermediate-not-held */|' "$_file";;
     release-leader-zombie-pcb-kept)
         sed -i 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (!thread_group_empty(p)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file";;
-    process-exit-rundown-skipped)
-        sed -i 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (1) /* NEGCTL process-exit-rundown-skipped */|' "$_file";;
+    process-exit-deletion-needs-vms-fd)
+        # The vms-d9ab bug class, re-introduced: deletion happens only for a
+        # process still holding the executive device open when it ends -- what
+        # fd-bound release amounted to. A process whose image never opened it
+        # (or exec'd past an O_CLOEXEC open) is never deleted. The probe runs at
+        # sched_process_exit, before exit_files, so p->files is still there.
+        sed -i -e '/^static void vms_on_process_exit(void \*data, struct task_struct \*p)$/i\
+#include <linux/fdtable.h> /* NEGCTL process-exit-deletion-needs-vms-fd */\
+static const struct file_operations vms_fops; /* NEGCTL process-exit-deletion-needs-vms-fd */\
+static int vms_negctl_vmsfd(const void *v, struct file *f, unsigned int fd)\
+{ (void)v; (void)fd; return f->f_op == \&vms_fops; }' \
+            -e 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (atomic_read(\&p->signal->live) != 0 \|\| !p->files \|\| !iterate_fd(p->files, 0, vms_negctl_vmsfd, NULL)) /* NEGCTL process-exit-deletion-needs-vms-fd */|' "$_file";;
     spawn-arm-gone-subprocess-not-completed)
         # UNIQUE TEXT: the termination-record branch of vms_ioctl_spawn_notify.
         # Forcing it never-true restores SS$_NONEXPR for a gone subprocess.

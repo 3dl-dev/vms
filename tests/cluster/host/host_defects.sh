@@ -763,7 +763,7 @@ EOF
         why)          echo "the queued answer claims GRANTED (0xfa): the VAX would believe it holds a mode it does not -- two holders of one EX. Without any answer at all the VAX process waits in RWSCS for ever (measured, ci6-evac-13).";;
         require_fail) cat <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
-... outcome byte 0xfb (queued)
+  ... outcome byte 0xfb (queued)
 EOF
                       ;;
         esac;;

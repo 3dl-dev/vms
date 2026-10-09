@@ -88,6 +88,7 @@ struct vms_tt_read_req {
 	uint32_t promptsz;
 	const void *owner;           /* who may resume this read after a signal
 				      * (vms_tt_read); NULL: not resumable */
+	int ldisc;                   /* the substrate's read(2) on the line */
 };
 
 /* Lifecycle (vms_tt.c "LIFETIME"): vms_tt_bind creates the instance and
@@ -108,6 +109,8 @@ void vms_tt_detach(struct vms_tt *tt);
  * re-opened by a session hangup): continue on the new port, releasing the
  * old. The binding, type-ahead and outstanding reads survive. */
 void vms_tt_set_port(struct vms_tt *tt, const struct vms_tt_port_ops *ops, void *port);
+/* The line's session hung up: end read(2)-path reads (vms_tt.c). */
+void vms_tt_kick_ldisc(struct vms_tt *tt);
 
 /* Port -> class: received bytes (any context the port's receive runs in). */
 void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n);

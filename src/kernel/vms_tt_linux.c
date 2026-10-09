@@ -374,8 +374,15 @@ static void vms_ldisc_hangup(struct tty_struct *tty)
 		return;
 	if (!port_is_pty(tty)) {        /* a session ended, not the line */
 		/* the close (and re-open) that follows parks and recovers the
-		 * binding */
+		 * binding. A read(2) blocked on the line holds the line-discipline
+		 * reference that close must take: end it, as a hangup ends it. */
+		struct vms_tt *tt = port_tt_get(p);
+
 		p->hungup = 1;
+		if (tt) {
+			vms_tt_kick_ldisc(tt);
+			vms_tt_release(tt);
+		}
 		return;
 	}
 	port_kill(p);
@@ -470,6 +477,7 @@ static ssize_t vms_ldisc_read(struct tty_struct *tty, struct file *file, u8 *buf
 	/* leave room for the LF that stands for the RETURN */
 	rq.bufsz = nr > 1 ? min_t(size_t, nr - 1, VMS_TT_LINE_MAX) : 1;
 	rq.owner = current;               /* a signal suspends; a restart resumes */
+	rq.ldisc = 1;
 	rc = vms_tt_read(tt, &rq, line, &r);
 	vms_tt_release(tt);
 	if (rc == -ERESTARTSYS) {

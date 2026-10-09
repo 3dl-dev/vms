@@ -70,6 +70,8 @@ struct vms_tt {
 	const void *rd_owner;      /* who may resume it */
 	uint64_t rd_susp_ms;
 	uint64_t rd_deadline;      /* IO$M_TIMED, absolute */
+	int rd_ldisc;              /* the read is the line's own read(2) */
+	uint32_t ldisc_kick;       /* vms_tt_kick_ldisc generation */
 	uint32_t rd_flags;
 	uint32_t rd_cap;           /* bytes this read may assemble */
 	uint32_t rd_mask[8];       /* terminator mask in force */
@@ -628,6 +630,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 {
 	uint64_t dc = tt_devchar(tt->dev);
 	int intr = 0, timed_out = 0, resumed = 0;
+	uint32_t kick0;
 
 	memset(res, 0, sizeof(*res));
 	if (req->bufsz == 0) {
@@ -637,6 +640,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 
 	exec_lock(&tt->lock);
 	tt->refs++;
+	kick0 = tt->ldisc_kick;
 
 	if (tt->rd_busy && tt->rd_suspended && tt->rd_owner == req->owner &&
 	    req->owner != NULL) {
@@ -645,7 +649,8 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 	}
 
 	/* one read at a time: later readers queue */
-	while (!resumed && tt->rd_busy && !tt->detached) {
+	while (!resumed && tt->rd_busy && !tt->detached &&
+	       !(req->ldisc && tt->ldisc_kick != kick0)) {
 		if (tt->rd_suspended &&
 		    exec_ticks_ms() - tt->rd_susp_ms >= VMS_TT_SUSPEND_MS) {
 			/* its owner never came back for it */
@@ -662,6 +667,12 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		if (intr)
 			break;
 	}
+	if (!intr && !tt->detached && req->ldisc && tt->ldisc_kick != kick0) {
+		res->status = SS__HANGUP;     /* the line's session hung up */
+		exec_unlock(&tt->lock);
+		tt_put(tt);
+		return 0;
+	}
 	if (intr || tt->detached) {
 		res->status = tt->detached ? SS__HANGUP : SS__ABORT;
 		exec_unlock(&tt->lock);
@@ -673,6 +684,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		tt->rd_busy = 1;
 		tt->rd_done = 0;
 		tt->rd_owner = req->owner;
+		tt->rd_ldisc = req->ldisc;
 		tt->rd_flags = req->flags;
 		tt->rd_cap = req->bufsz < VMS_TT_LINE_MAX ? req->bufsz : VMS_TT_LINE_MAX;
 		tt->rd_dc = dc;
@@ -805,6 +817,23 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 			return rc;
 	}
 	return 0;
+}
+
+/*
+ * vms_tt_kick_ldisc - the line's SESSION hung up (not the line): a read the
+ * substrate's own read(2) path is blocked in -- holding the substrate's line-
+ * discipline reference, which the hangup must take -- ends SS$_HANGUP (read(2)
+ * returns 0, as for any hung-up terminal), and so does one queued behind
+ * another read. A $QIO read is the unit's, not the session's: it goes on.
+ */
+void vms_tt_kick_ldisc(struct vms_tt *tt)
+{
+	exec_lock(&tt->lock);
+	tt->ldisc_kick++;
+	if (tt->rd_active && tt->rd_ldisc)
+		tt_complete(tt, SS__HANGUP, 0, 0);
+	exec_cv_broadcast(&tt->cv);
+	exec_unlock(&tt->lock);
 }
 
 /*

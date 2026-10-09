@@ -351,6 +351,17 @@ int main(void)
         pid_t c;
 
         CHECK(ast == SS_NORMAL || ast == SS_DEVALLOC, "the console is attached to OPA0: (as STARTUP attaches it)");
+        /* a process blocked in read(2) on the console while the session
+         * ends: the hangup must end ITS read (it holds the line discipline
+         * the hangup re-opens), not wedge the exiting session */
+        pid_t rdr = fork();
+        if (rdr == 0) {
+            char b[16];
+            int rfd = open("/dev/console", O_RDONLY | O_NOCTTY);
+            ssize_t k = read(rfd, b, sizeof(b));
+            _exit(k == 0 ? 0 : 3);
+        }
+        msleep(300);
         c = fork();
         if (c == 0) {
             int fd;
@@ -359,7 +370,23 @@ int main(void)
             (void)ioctl(fd, TIOCSCTTY, 1);
             _exit(0);                       /* a session on the console ends */
         }
-        waitpid(c, NULL, 0);
+        {
+            int w, rst = -1, cst = -1;
+            for (w = 0; w < 50; w++) {             /* 5 s */
+                if (cst < 0 && waitpid(c, &cst, WNOHANG) != c)
+                    cst = -1;
+                if (rst < 0 && waitpid(rdr, &rst, WNOHANG) != rdr)
+                    rst = -1;
+                if (cst >= 0 && rst >= 0)
+                    break;
+                msleep(100);
+            }
+            CHECK(cst >= 0, "the session leader's exit completes (the console hangup does not wedge on a blocked reader)");
+            CHECK(rst >= 0 && WIFEXITED(rst) && WEXITSTATUS(rst) == 0,
+                  "a read(2) blocked on the console ends with end-of-file when the session hangs up");
+            if (cst < 0) kill(c, SIGKILL);
+            if (rst < 0) kill(rdr, SIGKILL);
+        }
         msleep(300);
         state = 0;
         st = vms_kif_tt_sense("OPA0:", &state);

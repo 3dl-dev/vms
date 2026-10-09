@@ -486,6 +486,7 @@ vtt_read(struct tty *tp, struct uio *uio, int flag __unused)
 	memset(&rq, 0, sizeof(rq));
 	rq.bufsz = nr > 1 ? (nr - 1 < VMS_TT_LINE_MAX ? nr - 1 : VMS_TT_LINE_MAX) : 1;
 	rq.owner = curlwp;                /* a signal suspends; a restart resumes */
+	rq.ldisc = 1;
 	rc = vms_tt_read(tt, &rq, line, &r);
 	vms_tt_release(tt);
 	if (rc == -ERESTARTSYS) {

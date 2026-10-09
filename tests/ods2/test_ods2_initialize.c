@@ -250,6 +250,14 @@ static uint8_t *slurp(const char *path, uint32_t nblocks)
     return buf;
 }
 
+/* vms-263e: the writer stamps file dates with the mastering time; a fixed
+ * SOURCE_DATE_EPOCH makes two writer runs (and INITIALIZE.EXE, which inherits
+ * the environment) produce the same bytes, so the comparison stays whole. */
+__attribute__((constructor)) static void fixed_mastering_time(void)
+{
+    setenv("SOURCE_DATE_EPOCH", "1791468000", 1);
+}
+
 int main(void)
 {
     uint32_t total_blocks = (uint32_t)((uint64_t)VOL_MB * 1024 * 1024 / ODS2_BLOCK_SIZE);

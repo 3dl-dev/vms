@@ -565,6 +565,7 @@ libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
 acp-create-ignores-dfprot
+acp-deaccess-revision-not-recorded
 clrast-no-delivery
 mbx-tmpmbx-check-removed
 mbx-prmmbx-check-removed
@@ -589,6 +590,7 @@ acp-acl-default-not-propagated
 acp-default-protection-ignored
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
+acp-create-dates-not-stamped
 libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
@@ -999,6 +1001,44 @@ EOF
         why)          echo "the lock services set the caller's event flag through vms\$\$lock_complete_efn() (src/libvms/syssvc/sys_efn.c), whose body is 'if (efn < 128) sys\$setef(efn);' -- flag 0 is a real flag on VMS and only EFN\$C_ENF (128) means no flag. The mutation changes the guard to 'efn != 0 && efn < 128', the pre-fix behaviour that treated 0 as no-flag, so a synchronous enqueue naming EF 0 completes without setting it. The guard line is unique in that one-function file. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 $ENQW (efn 0) set EF 0
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-create-dates-not-stamped)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE stamps the new file header's creation and revision dates (FI2\$Q_CREDATE / FI2\$Q_REVDATE) from the executive clock, so DIRECTORY/FULL and F\$FILE_ATTRIBUTES CDT/RDT read real times (vms-263e, folded in from vms-6f5c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation replaces the create path's ods2_fh2_set_dates(sc->filehdr, now, now) with a no-op, so a new header keeps an all-zero FI2\$Q_CREDATE; F\$FILE_ATTRIBUTES CDT of the file test_syssvc_rms_acp created is empty and its dates assertion reddens. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+vms-263e: a file the executive created has a creation and a revision date (F$FILE_ATTRIBUTES CDT/RDT not empty)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-deaccess-revision-not-recorded)
+        case "$_f" in
+        facility)     echo "IO\$_DEACCESS of a file accessed for write records the modification in its header: revision count +1, revision date = now (vms-263e)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_rw";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_deaccess calls ods2_fh2_touch_revision on the header of a file that was accessed for write. The mutation drops the call, so the header is re-sealed and written back unchanged: the revision count and date stay as mastered. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+DEACCESS after write access: revision count +1, new revision date, creation date kept
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -7660,6 +7700,10 @@ apply_edit() {
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)
         sed -i 's|^    if (efn < 128)$|    if (efn != 0 \&\& efn < 128) /* NEGCTL efn0-enqw-not-set */|' "$_file";;
+    acp-create-dates-not-stamped)
+        sed -i 's|^                (void)ods2_fh2_set_dates(sc->filehdr, now, now);$|                (void)now; /* NEGCTL acp-create-dates-not-stamped */|' "$_file";;
+    acp-deaccess-revision-not-recorded)
+        sed -i 's#^                ods2_fh2_touch_revision(hdr, exec_time_now_vms()) != ODS2_OK) {$#                0) { /* NEGCTL acp-deaccess-revision-not-recorded */#' "$_file";;
     acp-create-ignores-dfprot)
         sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file";;
     setdfprot-not-stored)

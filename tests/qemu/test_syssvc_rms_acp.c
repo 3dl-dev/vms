@@ -881,6 +881,25 @@ int main(void)
         check(fc[2].hdr_ok && fc[2].get_ok,
               "vms-b447: STMLF -- a default-FAB $OPEN reads STMLF/CR/mrs 0 from the header and $GETs each line");
 
+        /* vms-263e (folded in from #1560, vms-6f5c): the executive stamps the
+         * creation and revision dates into the new header, so F$FILE_ATTRIBUTES
+         * CDT/RDT (and DIRECTORY/FULL "Created:"/"Revised:") read real times. */
+        {
+            static char dout[8192];
+            const char *dscript =
+                "G = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATVAR.DAT\",\"CDT\")\n"
+                "H = F$FILE_ATTRIBUTES(\"VDA0:[OVMXDIR]FATVAR.DAT\",\"RDT\")\n"
+                "WRITE SYS$OUTPUT \"FA-DATES CDT=[''G'] RDT=[''H']\"\n"
+                "LOGOUT\n";
+            int dran = (access("/bin/DCL.EXE", X_OK) == 0) && run_dcl(dscript, dout, sizeof dout) == 0;
+            const char *ln = strstr(dout, "FA-DATES CDT=[");
+            printf("  ---- dates ----\n%s\n  ---- end ----\n", dout);
+            /* negctl: acp-create-dates-not-stamped */
+            check(dran && ln && strncmp(ln, "FA-DATES CDT=[]", 15) != 0 &&
+                  strstr(ln, "RDT=[]") == NULL && strstr(ln, "-20") != NULL,
+                  "vms-263e: a file the executive created has a creation and a revision date (F$FILE_ATTRIBUTES CDT/RDT not empty)");
+        }
+
         /* DCL: DIRECTORY/FULL prints the VAR file's record format as a real
          * VMS does (docs/oracle/semantics/rights/vax73-rightslist.txt:
          * "Record format:      Variable length, maximum 64 bytes, longest 0

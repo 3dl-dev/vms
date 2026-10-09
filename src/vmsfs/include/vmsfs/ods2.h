@@ -1692,6 +1692,23 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
                              ods2_fid_t backlink, ods2_uic_t owner,
                              uint16_t fileprot, uint32_t maxfiles);
 
+/* Store the creation and revision dates (VMS 64-bit absolute time) in a
+ * header's ident area; expiration/backup dates untouched. Reseal after. */
+ods2_status_t ods2_fh2_set_dates(void *header_block, uint64_t credate,
+                                 uint64_t revdate);
+
+/* One modification: revision count + 1, revision date = now. The file system
+ * does this when a file accessed for write is deaccessed. Reseal after. */
+ods2_status_t ods2_fh2_touch_revision(void *header_block, uint64_t now);
+
+/* VMS absolute time (100 ns ticks since 17-NOV-1858) of a Unix-epoch time in
+ * nanoseconds: 3506716800 s separate the two bases. */
+#define ODS2_VMS_EPOCH_OFFSET_100NS 35067168000000000ULL
+static inline uint64_t ods2_vms_time_from_unix_ns(uint64_t unix_ns)
+{
+    return unix_ns / 100u + ODS2_VMS_EPOCH_OFFSET_100NS;
+}
+
 /* Rewrite an EXISTING file header's ident area (file name + version), and --
  * when `new_backlink` != NULL -- its fh2_backlink (parent-directory FID), for an
  * IO$_MODIFY!IO$M_MOVE rename/move (vms-de7). Touches ONLY the name/revision/

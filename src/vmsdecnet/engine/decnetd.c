@@ -6550,6 +6550,9 @@ static unsigned long g_broker_malformed;
 /* Requests dropped because the executive says their writer is not the process
  * they claim (owner_pid), or the writer does not hold NETMBX (rd vms-c6d1). */
 static unsigned long g_broker_forged, g_broker_nonetmbx;
+/* Requests dropped because their writer could not READ the reply mailbox it
+ * named (rd vms-046). */
+static unsigned long g_broker_badreply;
 /*
  * Decode + service one raw broker request record (the mailbox drain and the
  * host selftest's in-process queue both come through here).
@@ -6563,6 +6566,16 @@ static unsigned long g_broker_forged, g_broker_nonetmbx;
  * requires of every network user (the same one $ASSIGN _NET: demands) -- read
  * from the executive ($GETJPI of the stamped PID), never from the request. The
  * host selftest's in-process queue has no executive and passes verify = 0.
+ *
+ * WHERE THE ANSWER GOES (rd vms-046). NETACP writes its answer into the
+ * mailbox the request names (reply_unit), and NETACP's own privileges would
+ * let that write land in ANY mailbox -- so a requester could aim NETACP's
+ * writes at a mailbox it could not use itself (another process's reply
+ * mailbox, or NETACP's own request mailbox). The executive is asked, for the
+ * WRITER, whether it may READ that mailbox (VMS_IOCTL_MBX_CHKACC: the same
+ * decision its own $QIO read would get, through vms_prot.h -- the shape of
+ * $CHECK_ACCESS, docs/oracle/semantics/mbxown/); a requester that could not
+ * read its answer is not answered at all.
  */
 static void netacp_broker_record(struct netacp_slot *slots, const struct dnet_engine *node,
                                  int sock, unsigned ifindex, const uint8_t *rec, size_t len,
@@ -6585,6 +6598,12 @@ static void netacp_broker_record(struct netacp_slot *slots, const struct dnet_en
             !(pi.cur_privs & PRV$M_NETMBX)) {
             g_broker_nonetmbx++;
             return;                        /* no NETMBX: not a network user */
+        }
+        char rdev[24];
+        snprintf(rdev, sizeof rdev, "MBA%u:", (unsigned)req.reply_unit);
+        if (vms_kif_mbx_chkacc(rdev, sender_pid, VMS_MBX_ACC_READ) != SS$_NORMAL) {
+            g_broker_badreply++;
+            return;                        /* not a mailbox the requester can read */
         }
     }
     netacp_broker_request(slots, node, sock, ifindex, &req, now, next_lla);
@@ -7582,7 +7601,10 @@ struct netreq_probe {
     uint32_t nonetmbx;      /* own-PID request without NETMBX: reply status    */
     uint32_t forged;        /* request claiming ANOTHER owner_pid: reply status */
     uint32_t honest;        /* own-PID request with NETMBX: reply status        */
+    uint32_t victim;        /* a request aimed at a mailbox it cannot read: 1 = sent,
+                             * then an honest one answered (rd vms-046)           */
 };
+#define NETPRB_VICTIM_LOGNAM "DNET$NETPRB_VICTIM"
 
 /* Wait up to `ticks` x 10 ms for the reply with correlation id `corr` on `rep`;
  * 0 = none came. Any OTHER reply seen meanwhile (to a request that must have
@@ -7673,6 +7695,26 @@ static void net_req_probe(uint32_t result_unit)
     v.forged = 0;
     if (late == 1) v.nonetmbx = 0xFFFFFFFFu;     /* a dropped request was answered after all */
     if (late == 2) v.forged = 0xFFFFFFFFu;
+    /* 4: truthful, NETMBX, but naming as its reply mailbox one this process may
+     * not READ (the test's no-world-access victim, rd vms-046) -> dropped: NETACP
+     * must not write into it. 5: an honest request after it is still served, so
+     * 4 has been decided by the time 5 is answered; the creator then checks
+     * that nothing arrived in the victim. */
+    {
+        char vdev[64];
+        uint16_t vl = 0;
+        unsigned vunit = 0;
+        if (vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NETPRB_VICTIM_LOGNAM, 0, vdev,
+                                  sizeof vdev - 1, &vl, NULL, NULL) == 1 && vl > 0) {
+            vdev[vl] = '\0';
+            if (sscanf(vdev, "MBA%u", &vunit) == 1 && vunit != 0) {
+                (void)net_req_probe_send(req, 4, self.vms_pid, vunit);
+                (void)net_req_probe_send(req, 5, self.vms_pid, unit);
+                if (net_req_probe_wait(rep, 5, &late, 1000) == SS$_FILNOTACC)
+                    v.victim = 1;
+            }
+        }
+    }
     (void)vms_kif_setprv(PRV$M_READALL, 1, 0, &prev);
     v.read_readall = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
     (void)vms_kif_setprv(PRV$M_READALL, 0, 0, &prev);
@@ -7823,7 +7865,33 @@ static int run_net_loopback_accept_test(void)
     if (netacp_running() == 1) {
         struct netreq_probe v;
         memset(&v, 0, sizeof v);
+        /* A mailbox the probe may not use (S:RWLP,O:RWLP,G:,W: -- the probe is
+         * WORLD), published so the probe can name it as its reply mailbox
+         * (rd vms-046). */
+        uint32_t vch = 0, vunit = 0;
+        char vdev[32] = "";
+        int victim = (vms_kif_mbx_create_prot(0, DNET_BROKER_RSP_MAX + 16,
+                                              (DNET_BROKER_RSP_MAX + 16) * 8, 0xFF00u,
+                                              &vch, &vunit, vdev, sizeof vdev) & 1) != 0;
+        if (victim) {
+            const char *vv[1] = { vdev };
+            victim = (vms_kif_lnm_define(VMS_LNM_TBL_SYSTEM, NETPRB_VICTIM_LOGNAM, vv, 1, 0,
+                                         LNM$C_USER) & 1) != 0;
+        }
         int got = net_req_probe_spawn(&v);
+        if (victim) {
+            uint8_t vb[DNET_BROKER_RSP_MAX + 16];
+            uint32_t vn = 0;
+            NL_CHECK(v.victim == 1 &&
+                     vms_kif_mbx_read(vch, vb, sizeof vb, &vn, 1) == SS$_ENDOFFILE,
+                     "a request naming a reply mailbox its writer may not READ is dropped:"
+                     " NETACP wrote nothing into that mailbox, and the writer's next honest"
+                     " request was still served (rd vms-046)");
+            (void)vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, NETPRB_VICTIM_LOGNAM, LNM$C_USER);
+        } else {
+            NL_CHECK(0, "the no-world-access victim mailbox for the reply-mailbox check was created");
+        }
+        if (vch) { (void)vms_kif_mbx_delmbx(vch); (void)vms_kif_dassgn(vch); }
         NL_CHECK(got && (v.setident & 1),
                  "an unprivileged probe process ($CREPRC'd as [100,100]) reported");
         NL_CHECK(v.assign == SS$_NORMAL,

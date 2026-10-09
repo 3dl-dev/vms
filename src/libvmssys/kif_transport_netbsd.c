@@ -31,13 +31,19 @@
 #include <unistd.h>
 #include <errno.h>
 
+const char *kif_xport_device_path(void)
+{
+    return "/dev/vms";
+}
+
 int kif_xport_dev_open(void)
 {
 	/* The device name is the transport's own knowledge, per the contract;
 	 * the policy layer never spells it. A negative return is the raw open(2)
 	 * result -- the policy layer treats any negative as "no device" and fails
 	 * honestly (SS$_NOSUCHDEV); it is never turned into a fake success. */
-	return open("/dev/vms", O_RDWR);
+	int fd = open(kif_xport_device_path(), O_RDWR);
+	return fd < 0 ? -errno : fd;   /* a NEGATIVE errno, as the Linux leaf returns */
 }
 
 void kif_xport_dev_close(int fd)

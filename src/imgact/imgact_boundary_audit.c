@@ -41,6 +41,7 @@
 #endif
 
 #include "boundary_audit_filter.h"   /* shared classifier + finding format */
+#include "kif_transport.h"           /* kif_xport_device_path (rd vms-bbde) */
 
 /* --------------------------------------------------------------------------
  * Extra raw syscall numbers (imgact_arch.h provides only the subset IMGACT
@@ -286,7 +287,7 @@ static int ba_is_exempt(int pid, int nr, const unsigned long *args)
 		if (n <= 0)
 			return 0;   /* cannot resolve -> record (fail visible) */
 		target[n] = '\0';
-		if (ba_streq(target, "/dev/vms"))
+		if (ba_streq(target, kif_xport_device_path()))
 			return 1;
 	}
 	return 0;

@@ -58,7 +58,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_include_directories(ovmx_datalink_exec PRIVATE
         ${CMAKE_SOURCE_DIR}/src/kernel                    # vms_ioctl.h / vms_l2.h
+        ${CMAKE_SOURCE_DIR}/src/libvmssys                 # kif_calls.h (rd vms-bbde)
     )
+    # The executive is reached through libvmssys's transport seam only.
+    target_link_libraries(ovmx_datalink_exec PUBLIC vmssys)
 else()
     set(OVMX_DATALINK_VIA_EXECUTIVE OFF CACHE BOOL
         "DECNETD datalink via the executive (Linux only)" FORCE)

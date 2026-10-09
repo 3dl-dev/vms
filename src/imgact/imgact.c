@@ -53,7 +53,8 @@
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 #include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
 #include "imgact_boundary_audit.h" /* executive-boundary AUDIT tracer install (vms-617) */
-#include "vms_ioctl.h"    /* VMS_IOCTL_SETEXIT/GETCLI + arg structs (vms-f60d)       */
+#include "vms_ioctl.h"
+#include "kif_calls.h"     /* the executive transport seam (rd vms-bbde) */
 #include "ssdef.h"        /* SS$_NOSUCHDEV -- the "executive absent" defer signal */
 
 #ifndef AT_EXECFN
@@ -148,29 +149,10 @@ static long sys_munmap(void *addr, unsigned long len)
 {
 	return syscall6(SYS_munmap, (long)addr, len, 0, 0, 0, 0);
 }
-static long sys_ioctl(int fd, unsigned long req, void *arg)
-{
-	return syscall6(SYS_ioctl, fd, (long)req, (long)arg, 0, 0, 0);
-}
-
-/* --------------------------------------------------------------------------
- * Files-11 ACP host primitives (vms-3e8e). imgact_acp.c reaches /dev/vms
- * through these three functions; here they are the freestanding syscall
- * backings (the QEMU test provides libc-backed versions of the same symbols).
- * -------------------------------------------------------------------------- */
-int imgact_acp_dev_open(void)
-{
-	long fd = sys_openat("/dev/vms", O_RDWR);
-	return fd < 0 ? -1 : (int)fd;
-}
-void imgact_acp_dev_close(int fd)
-{
-	sys_close(fd);
-}
-long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
-{
-	return sys_ioctl(fd, req, arg);
-}
+/* The executive is reached only through the libvmssys transport seam
+ * (kif_transport.h / kif_calls.h, rd vms-bbde): IMGACT links
+ * kif_transport_<substrate>.c and names services, never a device or a
+ * request word. */
 
 #ifndef PROT_READ
 #define PROT_READ  0x1
@@ -292,6 +274,30 @@ int fstat(int fd, void *statbuf)
  * no dynamic JMP_SLOT) — the same treatment as the other freestanding shims. */
 extern __typeof(fstat) __fstat50
 	__attribute__((alias("fstat"), visibility("hidden")));
+#endif
+#if defined(__vax__)
+/* NetBSD/vax: the transport seam IMGACT links there is kif_transport_netbsd.c,
+ * written against libc's ioctl(2) and errno (rd vms-bbde); these are the
+ * freestanding shims for exactly those two names, like open/close above. */
+static int imgact_errno;
+int *__errno(void)
+{
+	return &imgact_errno;
+}
+int ioctl(int fd, unsigned long req, ...)
+{
+	__builtin_va_list ap;
+	void *arg;
+	__builtin_va_start(ap, req);
+	arg = __builtin_va_arg(ap, void *);
+	__builtin_va_end(ap);
+	long r = syscall6(SYS_ioctl, fd, (long)req, (long)arg, 0, 0, 0);
+	if (r < 0) {
+		imgact_errno = (int)-r;
+		return -1;
+	}
+	return (int)r;
+}
 #endif
 void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
 {
@@ -802,7 +808,7 @@ static int imgsrc_open(struct imgsrc *s, const char *path)
 	/*
 	 * ATOMIC-FLIP DEFER (vms-5f0): the ACP is unavailable only when
 	 * /dev/vms / the executive is absent -- imgact_acp_open() renders that
-	 * as SS$_NOSUCHDEV (its imgact_acp_dev_open() fd < 0 path). In that
+	 * as SS$_NOSUCHDEV (its kif_xport_dev_open() fd < 0 path). In that
 	 * environment (host ctest and the plain-container self-host / link /
 	 * activation gates) there is no runtime to be authentic against, so we
 	 * defer to the legacy POSIX open() on the pre-flip /vms path, exactly as
@@ -2488,7 +2494,7 @@ static struct ovmx_xfer_info g_xfer;   /* zeroed => SYSV, no standard call */
  * no-CLI path (cliflag == 0), which needs no command line. */
 static unsigned int imgact_query_cli_context(void)
 {
-	int fd = imgact_acp_dev_open();
+	int fd = kif_xport_dev_open();
 	if (fd < 0)
 		return 0;               /* no executive => truthfully no CLI */
 	/* Adopt (register-continue) this process's executive PCB, then read the
@@ -2497,13 +2503,13 @@ static unsigned int imgact_query_cli_context(void)
 	 * process/CLI relationship, so cliflag comes from there, never an env var. */
 	struct vms_register_args reg;
 	memset(&reg, 0, sizeof(reg));
-	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_getcli_args g;
 	memset(&g, 0, sizeof(g));
 	unsigned int cliflag = 0;
-	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETCLI, &g) >= 0 && (g.status & 1))
+	if (kif_call(fd, KIF_SVC_GETCLI, &g) >= 0 && (g.status & 1))
 		cliflag = g.cliflag ? 1u : 0u;   /* truthful executive-owned answer */
-	imgact_acp_dev_close(fd);
+	kif_xport_dev_close(fd);
 	return cliflag;
 }
 
@@ -2520,18 +2526,18 @@ static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
 		out->dsc$b_class   = DSC$K_CLASS_S;
 		out->dsc$a_pointer = 0;
 	}
-	int fd = imgact_acp_dev_open();
+	int fd = kif_xport_dev_open();
 	if (fd < 0)
 		return SS$_NOSUCHDEV;   /* no executive => fail honest */
 	/* Read the invoking command line the executive holds for this process
 	 * (vms-f60d): register-continue to adopt the PCB, then GETCLI. */
 	struct vms_register_args reg;
 	memset(&reg, 0, sizeof(reg));
-	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_getcli_args g;
 	memset(&g, 0, sizeof(g));
-	long rc = imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETCLI, &g);
-	imgact_acp_dev_close(fd);
+	long rc = kif_call(fd, KIF_SVC_GETCLI, &g);
+	kif_xport_dev_close(fd);
 	if (rc < 0)
 		return SS$_NOSUCHDEV;
 	if (!(g.status & 1))
@@ -2583,7 +2589,7 @@ static int g_seam_no_transfer;
 
 static void imgact_vms_exit(unsigned long cond)
 {
-	int fd = imgact_acp_dev_open();
+	int fd = kif_xport_dev_open();
 	if (fd < 0) {
 		/* No executive: cannot record the VMS completion status. Report
 		 * it honestly and exit with a DISTINGUISHED code -- do not fake
@@ -2601,13 +2607,13 @@ static void imgact_vms_exit(unsigned long cond)
 	 * VMS condition value DCL's $STATUS observes (INV-6). */
 	struct vms_register_args reg;
 	memset(&reg, 0, sizeof(reg));
-	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_exit_args e;
 	memset(&e, 0, sizeof(e));
 	e.condition = (uint32_t)cond;
-	long rc = imgact_acp_dev_ioctl(fd, VMS_IOCTL_SETEXIT, &e);
+	long rc = kif_call(fd, KIF_SVC_SETEXIT, &e);
 	if (rc < 0 || !(e.status & 1)) {
-		imgact_acp_dev_close(fd);
+		kif_xport_dev_close(fd);
 		vms_fatal("NOEXITSVC",
 			  "executive $EXIT could not record the VMS condition "
 			  "value", 0);
@@ -2626,7 +2632,7 @@ static void imgact_vms_exit(unsigned long cond)
 		struct vms_getexit_args gx;
 		memset(&gx, 0, sizeof(gx));
 		gx.select = VMS_JPI_SEL_SELF;   /* our own recorded $STATUS */
-		(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_GETEXIT, &gx);
+		(void)kif_call(fd, KIF_SVC_GETEXIT, &gx);
 
 		/* basename of the activated image path (argv[0] the kernel set) */
 		const char *base = g_argv0 ? g_argv0 : "";
@@ -2654,7 +2660,7 @@ static void imgact_vms_exit(unsigned long cond)
 		xstrcat(line, "\n");
 		eputs(line);
 	}
-	imgact_acp_dev_close(fd);
+	kif_xport_dev_close(fd);
 	sys_exit((int)e.exit_code);   /* the executive-mapped POSIX exit code */
 }
 
@@ -3470,21 +3476,21 @@ static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
 #define EIHD_MAP_SHARED 0x01
 static int eihd_lnm_translate(const char *name, char *out, unsigned long outsz)
 {
-	int fd = imgact_acp_dev_open();
+	int fd = kif_xport_dev_open();
 	if (fd < 0)
 		return -1;
 	struct vms_register_args reg;
 	memset(&reg, 0, sizeof reg);
-	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_lnm_scope_args sc;
 	memset(&sc, 0, sizeof sc);
-	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_LNM_GETSCOPE, &sc) < 0 || !(sc.status & 1)) {
-		imgact_acp_dev_close(fd);
+	if (kif_call(fd, KIF_SVC_LNM_GETSCOPE, &sc) < 0 || !(sc.status & 1)) {
+		kif_xport_dev_close(fd);
 		return -1;
 	}
 	unsigned long asz = sizeof(struct vms_lnm_arena);
 	void *m = sys_mmap(0, asz, PROT_READ, EIHD_MAP_SHARED, fd, VMS_LNM_MMAP_OFFSET);
-	imgact_acp_dev_close(fd);
+	kif_xport_dev_close(fd);
 	if ((unsigned long)m >= (unsigned long)-4095L)
 		return -1;
 	const struct vms_lnm_arena *a = (const struct vms_lnm_arena *)m;

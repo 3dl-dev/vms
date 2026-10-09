@@ -83,11 +83,18 @@ static void acp_reset(uint32_t len)
 	g_qio_max_len = 0;
 }
 
-/* --- the three host primitives imgact_acp.c calls (the freestanding seam) --- */
-int  imgact_acp_dev_open(void)  { return 3; }   /* any non-negative fd */
-void imgact_acp_dev_close(int fd) { (void)fd; }
+/* --- the transport seam imgact_acp.c calls (kif_transport.h, rd vms-bbde),
+ * backed here by an in-memory file: all four entry points are defined, so the
+ * real transport is never linked into this test. --- */
+int  kif_xport_dev_open(void)  { return 3; }   /* any non-negative handle */
+void kif_xport_dev_close(int fd) { (void)fd; }
+void *kif_xport_mmap(int fd, unsigned long length, unsigned long offset)
+{
+	(void)fd; (void)length; (void)offset;
+	return 0;
+}
 
-long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
+int kif_xport_ioctl(int fd, unsigned long req, void *arg)
 {
 	(void)fd;
 	if (req == VMS_IOCTL_ACP_READVBLK) {
@@ -191,14 +198,14 @@ int main(void)
 		memset(&r, 0, sizeof(r));
 		r.vbn = 1; r.offset = 0; r.length = 2u * MiB;
 		r.buffer = (uint64_t)(uintptr_t)g_file;   /* dummy dst */
-		(void)imgact_acp_dev_ioctl(3, VMS_IOCTL_ACP_READVBLK, &r);
+		(void)kif_xport_ioctl(3, VMS_IOCTL_ACP_READVBLK, &r);
 		check(r.status == SS$_BADPARAM && r.xferred == 0,
 		      "a single >1 MiB IO$_READVBLK is rejected SS$_BADPARAM (the cliff)");
 	}
 
 	/* Now drive the REAL imgact_acp_pread across the boundary, every case. */
 	memset(&f, 0, sizeof(f));
-	f.dev_fd = imgact_acp_dev_open();
+	f.dev_fd = kif_xport_dev_open();
 	f.chan = 1;
 	f.accessed = 1;
 

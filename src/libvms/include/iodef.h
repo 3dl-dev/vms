@@ -85,6 +85,13 @@ extern "C" {
 #define IO$M_EXTEND         0x8000  /*  extended read */
 #define IO$M_NOFORMAT       0x0100  /*  terminal write: no carriage control (VAX V7.3 IODEF 256) */
 
+/* IO$_SETMODE terminal modifiers (out-of-band ASTs, rd vms-f0fb). Values from
+ * the VAX V7.3 node's own IODEF (docs/oracle/vax73-starlet-defs/IODEF.txt);
+ * they share bits with the read modifiers above, the function decides. */
+#define IO$M_CTRLYAST       0x0080  /* 128  */
+#define IO$M_CTRLCAST       0x0100  /* 256  */
+#define IO$M_OUTBAND        0x0400  /* 1024 */
+
 /* File system modifiers */
 #define IO$M_ACCESS         0x0040  /* Bit 6: access mode */
 #define IO$M_CREATE         0x0080  /* Bit 7: create if nonexistent */

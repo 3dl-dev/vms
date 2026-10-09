@@ -51,6 +51,7 @@
 #define SS_DEVALLOC   2112
 #define SS_TIMEOUT    556
 #define SS_HANGUP     716
+#define SS_ABORT      44
 
 static int pass = 0, fail = 0;
 
@@ -364,6 +365,148 @@ int main(void)
     CHECK(strcmp(scr, "\nd\r") == 0, "the record after it pays the owed line feed: <LF>d<CR>");
     (void)vms_kif_tt_write(chan, "\r\n", 2);      /* back to a fresh line */
     (void)screen(m, scr, sizeof(scr), 300);
+
+    /* ---- out-of-band ASTs (rd vms-f0fb) ----
+     * Expected bytes and behaviour: VAX V7.3 console probes OB.PROMPT/OB.READ
+     * (docs/oracle/keystroke-probes/OB.*). AST routine addresses are opaque
+     * values to the executive; vms_kif_deliverast hands back what was armed. */
+    {
+        uint64_t aa = 0, ap = 0;
+        uint8_t am = 0;
+        int got;
+
+        while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+            ;                                   /* start with an empty queue */
+
+        /* no AST armed: CTRL/Y interrupts nothing -- *INTERRUPT* is shown and
+         * the character ends the read like a terminator, its line intact */
+        rd_start(&r, chan, 0, NULL, 0);
+        msleep(200);
+        type(m, "AB\x19");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-ctrly-not-shown */
+        CHECK(strcmp(scr, "AB\r\n*INTERRUPT*\r\n") == 0,
+              "CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver");
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "AB") == 0 && r.a.term == 0x19,
+              "with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT");
+
+        /* CTRL/Y AST armed: the read ends SS$_ABORT, the AST is queued in the
+         * executive for this process, and it is spent */
+        st = vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0x1234, 77, 0, 3);
+        CHECK(st & 1, "IO$M_CTRLYAST arms a CTRL/Y AST on the channel");
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        type(m, "AB\x19");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        CHECK(r.st == SS_ABORT, "with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)");
+        got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+        /* negctl: tt-oob-ast-not-queued */
+        CHECK(got && aa == 0x1234 && ap == 77 && am == 3,
+              "the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)");
+        CHECK(vms_kif_deliverast(&aa, &ap, &am) != 0, "exactly one AST was queued");
+
+        /* spent: the next CTRL/Y finds no AST */
+        rd_start(&r, chan, 0, NULL, 0);
+        msleep(200);
+        type(m, "\x19");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        CHECK(r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
+              "a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed");
+
+        /* CTRL/C with no CTRL/C AST fires the CTRL/Y AST */
+        (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0x2222, 5, 0, 3);
+        rd_start(&r, chan, 0, NULL, 0);
+        msleep(200);
+        type(m, "\x03");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+        CHECK(r.st == SS_ABORT && got && aa == 0x2222,
+              "CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST");
+
+        /* an OUT-OF-BAND character (CTRL/T): the read stays outstanding, the
+         * reader is let go to deliver the AST (character as parameter), output
+         * written meanwhile breaks through, and the read resumes with its line
+         * shown again (OB.PROMPT T2) */
+        st = vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0x3333, 0, 1u << 0x14, 3);
+        CHECK(st & 1, "IO$M_OUTBAND arms an out-of-band AST for CTRL/T");
+        {
+            struct vms_tt_read_args ra;
+            char data[64];
+            uint32_t rs;
+
+            memset(&ra, 0, sizeof ra);
+            ra.chan = chan;
+            ra.flags = VMS_TT_RD_TIMED;
+            ra.timeout = BOUND;
+            ra.buf = (uint64_t)(uintptr_t)data;
+            ra.bufsz = sizeof data - 1;
+            ra.prompt = (uint64_t)(uintptr_t)"\r\n\0$ ";
+            ra.promptsz = 5;
+            {
+                pid_t kid = fork();
+                if (kid == 0) {                 /* the keyboard */
+                    msleep(300);
+                    type(m, "ABC\x14");
+                    _exit(0);
+                }
+                rs = vms_kif_tt_read(&ra);
+                waitpid(kid, NULL, 0);
+            }
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            /* negctl: tt-outband-ends-read */
+            CHECK((ra.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x3333 && ap == 0x14,
+                  "CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character");
+            (void)screen(m, scr, sizeof(scr), 300);
+            (void)!write(s, "STATUS\n", 7);      /* the AST's status line */
+            screen(m, scr, sizeof(scr), 300);
+            /* negctl: tt-breakthrough-no-redisplay */
+            CHECK(memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) == 0,
+                  "output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC");
+            if (memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) != 0) {
+                printf("      screen was [");
+                for (size_t q = 0; q < 40 && (scr[q] || q < 22); q++)
+                    printf(scr[q] < 32 ? "<%02X>" : "%c", (unsigned char)scr[q]);
+                printf("]\n");
+            }
+            {
+                pid_t kid = fork();
+                if (kid == 0) {
+                    msleep(300);
+                    type(m, "D\r");
+                    _exit(0);
+                }
+                ra.oflags = 0;
+                rs = vms_kif_tt_read(&ra);
+                waitpid(kid, NULL, 0);
+            }
+            CHECK(rs == SS_NORMAL && ra.oflags == 0 && ra.count == 4 && memcmp(data, "ABCD", 4) == 0,
+                  "the same read resumes and completes with the whole line 'ABCD'");
+            (void)screen(m, scr, sizeof(scr), 300);
+        }
+        (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
+        (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0, 0, 0, 3);
+
+        /* the arming channel's deassign ends its AST */
+        {
+            uint32_t chan3 = 0;
+            if (vms_kif_assign(devnam, &chan3) & 1) {
+                (void)vms_kif_tt_oobast(chan3, VMS_TT_OOB_CTRLY, 0x4444, 0, 0, 3);
+                (void)vms_kif_dassgn(chan3);
+            }
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(200);
+            type(m, "\x19");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            /* negctl: tt-oob-survives-deassign */
+            CHECK(chan3 && r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
+                  "an AST armed through a channel ends when that channel is deassigned");
+        }
+    }
 
     /* ---- read(2) on the line is a terminal-driver read ---- */
     type(m, "hi\r");

@@ -1799,6 +1799,10 @@ static void device_release_channel(struct vms_channel *ch)
     pid_t pid = ch->owner_linux_pid;
     EXEC_LIST_HEAD(reap);
 
+    /* out-of-band ASTs armed through this channel end with it (rd vms-f0fb) */
+    if (dev->devclass == DC__TERM)
+        vms_tt_chan_gone(dev, pid, ch->chan);
+
     exec_lock(&vms_device_list_lock);
     exec_lock(&dev->lock);
     exec_list_del(&ch->devlink);

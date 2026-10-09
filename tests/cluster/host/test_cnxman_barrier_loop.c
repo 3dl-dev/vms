@@ -483,20 +483,16 @@ static void test_two_node_add_runs_the_barrier_to_completion(void)
 	ct_check_eq_u32(g.unrouted_at_b, 0, "B routed every frame A sent");
 
 	/*
-	 * HONEST, AND A SEPARATE GAP. Two frames A cannot place: B's 0x81/0x05
-	 * acknowledgements of the two MEMBERSHIP RECORDS the coordinator
-	 * ORIGINATED -- no FSM has a cell for them, so the executive logs
-	 * "an unroutable VMS$VAXcluster frame was received" twice per
-	 * admission. The live rig logs exactly the same two
-	 * (vms-4838-rejoin-2node-20260913 control-nodeA.console.log
-	 * t=36.126/36.132), which is one of the three facts that identified
-	 * this bed as faithful. Nothing gates on them, so they are asserted as
-	 * the count they really are rather than wished to zero.
+	 * THE MEMBERSHIP-RECORD ACKS ARE THE COORDINATOR'S NOW (rd vms-f297).
+	 * B's 0x81/0x05 answers to the two records A originated used to fall
+	 * through every FSM ("an unroutable VMS$VAXcluster frame", twice per
+	 * admission, also on the live rig). A real V7.3 coordinator WAITS for
+	 * them before its open, and so does A: both are consumed and counted.
 	 */
-	ct_check_eq_u32(g.unrouted_at_a, 2,
-			"exactly the two membership-record acks are unplaced");
-	ct_check_eq_u32(g.last_unrouted_op, VMS_CM_OP_MEMBREC,
-			"... and they are op-0x05, as on the live rig");
+	ct_check_eq_u32(g.unrouted_at_a, 0,
+			"A routes both membership-record acks");
+	ct_check_eq_u32(g.coord.membrec_acks, 2,
+			"...to its coordinator, which counted them");
 }
 
 /* The order law, observed on a closed loop rather than asserted on a bed's own

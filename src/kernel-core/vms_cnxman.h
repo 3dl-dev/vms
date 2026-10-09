@@ -132,6 +132,11 @@ struct cnxman_ops {
 	void (*cancel_timer)(void *ctx, enum cnxman_timer which, uint32_t key);
 
 	uint32_t (*now_ms)(void *ctx);
+	/* VMS absolute time (100 ns since 17-NOV-1858): the formation time a
+	 * founder records and the stamp a coordinator's open carries (rd
+	 * vms-f297). Production: exec_time_now_vms(); 0 = no clock, which the
+	 * coordinator treats as a cell it cannot fill. */
+	uint64_t (*now_vms)(void *ctx);
 	void     (*log)(void *ctx, const char *msg);   /* the %CNXMAN lines */
 	void    *(*alloc)(void *ctx, uint32_t n);
 	void     (*free)(void *ctx, void *p);

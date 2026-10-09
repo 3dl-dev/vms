@@ -977,6 +977,74 @@ static void test_class_remove_drops_the_named_member(void)
 			"the committed count is the nodemap's popcount");
 }
 
+/*
+ * rd vms-f297: A RECEIVED OPEN TEACHES THE CLUSTER'S FACTS. Whichever member
+ * coordinates next carries the founder, the formation time and the slot
+ * counter in its own open, so a participant keeps them from the open it
+ * answered -- but NOT the last-reconfiguration pair, which only a formation or
+ * removal sets (a real V7.3 member that joined later sends 0 0: XA/XE/XF ep4).
+ */
+static void test_f297_open_teaches_the_cluster_facts(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	vms_wire_buf_t w;
+	uint32_t n;
+
+	printf("[barrier] rd vms-f297: an ADD open teaches founder, formation "
+	       "time and slot counter -- never the reconfiguration pair\n");
+	bed_init();
+	n = mk_open_add(f, EPOCH, 0x0eu);
+	vms_wire_buf_init(&w, f, VMS_CM_FRAME_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_SLOT_NEXT, 4u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_FTIME, 0x233500e0u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_FTIME + 4u, 0x00bc3a82u);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_RC_MEMBERS, 1u);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_RC_VOTES, 1u);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_FSYSID, 1025u);
+	(void)feed(f, n);
+
+	ct_check(g.cl.club.fsysid_valid && g.cl.club.fsysid == 1025u,
+		 "the founder's SCSSYSTEMID is kept");
+	ct_check(g.cl.club.ftime_valid &&
+		 g.cl.club.ftime == 0x00bc3a82233500e0ull,
+		 "and the formation time");
+	ct_check(g.cl.club.slot_next_valid && g.cl.club.slot_next == 4u,
+		 "and the slot counter");
+	ct_check_eq_u32(g.cl.club.rc_valid, 0u,
+			"but an ADD's reconfiguration pair is NOT adopted");
+}
+
+/* rd vms-f297: a committed REMOVAL re-derives the pair from the membership it
+ * leaves -- this node's own CSBs, whichever side coordinated. */
+static void test_f297_removal_rederives_the_pair(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	struct vms_csb *coord, *peer, *local;
+	uint32_t i;
+
+	printf("[barrier] rd vms-f297: a removal leaves its (members, votes) "
+	       "pair in the CLUB\n");
+	bed_init();
+	coord = cnxman_club_find_csid(&g.cl.club, COORD_CSID);
+	peer = cnxman_club_find_csid(&g.cl.club, PEER_CSID);
+	local = cnxman_club_local(&g.cl.club);
+	cnxman_csb_set_flags(coord, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_flags(peer, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_flags(local, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_params(coord, 2u, 0u, 1u);
+	cnxman_csb_set_params(peer, 1u, 0u, 1u);
+	cnxman_csb_set_params(local, 1u, 0u, 1u);
+
+	(void)feed(f, mk_open_remove(f, 0x12u, 0x0au));
+	(void)feed(f, mk_go(f, 0x12u, VMS_CM_CLASS_REMOVE, VMS_CM_ROLE_GO));
+	for (i = 1; i <= CNXMAN_BARRIER_STEPS; i++)
+		(void)feed(f, mk_release(f, 0x12u, i));
+	ct_check_eq_u32(g.cl.club.rc_valid, 1u, "the pair is held");
+	ct_check_eq_u32(g.cl.club.rc_members, 2u,
+			"its members: the two the removal keeps");
+	ct_check_eq_u32(g.cl.club.rc_votes, 3u, "its votes: theirs, 2 + 1");
+}
+
 static void test_class_depart_starts_no_barrier(void)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
@@ -1511,6 +1579,8 @@ int main(void)
 	test_class_remove_runs_the_same_barrier();
 	test_class_remove_open_is_answered();
 	test_class_remove_drops_the_named_member();
+	test_f297_open_teaches_the_cluster_facts();
+	test_f297_removal_rederives_the_pair();
 	test_class_depart_starts_no_barrier();
 	test_op0f_extra_step();
 	test_bitmap_popcount_and_slots();

@@ -790,6 +790,16 @@ static int sent_on_is(vms_conid_t conid, uint32_t n, uint8_t cat, uint8_t op)
 	       b->body[VMS_OFB_CM_OPCODE] == op;
 }
 
+/* rd vms-f297: what a connected member that is NOT asked hears from a joiner
+ * -- this node's identity records and nothing else, as from a real V7.3 joiner
+ * (lab run XF). Nonzero when `conid` carried exactly MODEL then PARAMS. */
+static int sent_on_is_identity_only(vms_conid_t conid)
+{
+	return n_sent_on(conid) == 2u &&
+	       sent_on_is(conid, 0u, VMS_CM_CAT_CONFIG, VMS_CM_OP_MODEL) &&
+	       sent_on_is(conid, 1u, VMS_CM_CAT_CONFIG, VMS_CM_OP_PARAMS);
+}
+
 static uint16_t sent_on_le16(vms_conid_t conid, uint32_t n, uint32_t off)
 {
 	const struct sent_body *b = nth_sent_on(conid, n);
@@ -4210,6 +4220,43 @@ static uint32_t n_step_bodies(void)
 	return k;
 }
 
+/*
+ * rd vms-f297: A MEMBER'S STEP REPORT IS FOR ITS COORDINATOR. A node that was
+ * admitted (and so runs this FSM in [MEMBER]) and now coordinates the next
+ * admission must SEE the op-0x0b each participant sends it; the join hands the
+ * frame back (NOT_MINE) instead of swallowing it. Measured on the lab: OVMXA,
+ * admitted by a real VAX, coordinated OVMXB; the real VAX reported step 1 and
+ * was never released.
+ */
+static void test_f297_step_report_reaches_the_coordinator(void)
+{
+	uint32_t len;
+	enum cnxman_join_rx rx;
+	uint32_t handoffs;
+
+	printf("\n-- rd vms-f297: in [MEMBER] a member's op-0x0b step report is "
+	       "handed on to the coordinator --\n");
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	handoffs = g.j.handoffs;
+	len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER, 0x0300);
+	{
+		vms_wire_buf_t w;
+
+		vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+		vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, EPOCH + 1u);
+		vms_wire_put_le32(&w, VMS_OFF_CM_STEP, 1u);
+	}
+	rx = join_feed(len);
+	ct_check_eq_u32(rx, CNXMAN_JOIN_RX_NOT_MINE,
+			"a step REPORT is not the join's or the participant's: "
+			"it is handed on");
+	ct_check_eq_u32(g.j.handoffs, handoffs,
+			"and is not counted as delivered to the participant");
+	len = mk_release(1u, 0x0301);
+	ct_check_eq_u32(join_feed(len), CNXMAN_JOIN_RX_CONSUMED,
+			"while the coordinator's RELEASE is still the participant's");
+}
+
 static void test_e85_barrier_survives_to_member(void)
 {
 	uint32_t len, step, i, j, idx;
@@ -4928,7 +4975,109 @@ static struct vms_csb *bed_admit_with_a_second_member(void)
 	cnxman_csb_set_scsnode(g.member_csb, (const uint8_t *)"VAX1", 4u);
 	other = bed_other_member_connected();
 	drive_to_admit_member_dialled();
+	/* rd vms-f297: the OTHER connected member is told who this node is
+	 * first, and the request follows on the next beat -- a real V7.3
+	 * joiner advertises to every member before it asks (lab run XF). */
+	bed_beats(1u);
 	return other;
+}
+
+/*
+ * rd vms-f297: EVERY CONNECTED MEMBER HEARS WHO THIS NODE IS BEFORE ANY IS
+ * ASKED. Lab arm PK-1: OVMXB asked 20 ms after a real VAX member's connection
+ * opened and before telling that VAX anything; the coordinator's membership
+ * record about OVMXB then reached a VAX holding no PARAMS for it, the VAX
+ * answered status 00 and bugchecked on the open. A real V7.3 joiner tells every
+ * member first (lab run XF: VAX3, 1.3 s before its request).
+ */
+static void test_f297_every_member_hears_before_the_request(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- rd vms-f297: no request until every connected member has "
+	       "heard this node's identity --\n");
+	bed_init();
+	bed_set_identity();
+	cnxman_csb_set_scsnode(g.member_csb, (const uint8_t *)"VAX1", 4u);
+	other = bed_other_member_connected();
+	if (other == NULL) {
+		ct_check(0, "the bed has a second member");
+		return;
+	}
+	drive_to_admit_member_dialled();
+	ct_check_eq_u32(g.j.config_sent, 0u,
+			"the request is held while the other member is owed "
+			"this node's identity");
+	ct_check(sent_on_is_identity_only(OTHER_CONID),
+		 "...which goes out to it at once");
+	ct_check(g.j.ident_owed_holds >= 1u, "and the hold is counted");
+	bed_beats(1u);
+	ct_check_eq_u32(g.j.config_sent, 1u,
+			"a beat later every member has heard it: the request "
+			"goes out");
+}
+
+/*
+ * rd vms-f297, stall-rig arm DX-1: A MEMBER ANSWERS ON THE CONNECTION IT HOLDS
+ * NOW, even when the one it joined on is gone. The member's connection closed
+ * while this node was still in ADMIT and came back as a new Con.ID; the GO
+ * promoted the node; its answer to the coordinator's relay of the next joiner
+ * was then refused (no-open-vc) and the real VAX never proposed that joiner.
+ *
+ * HOW IT HOLDS NOW (rd vms-e8b): not by chasing the stale handle, but because
+ * an answer is not addressed from the join's handle at all -- join_emit_reply()
+ * takes the CSB the request ARRIVED on and emits through `ops->respond`, so the
+ * Con.ID is the live one SCS really delivered on. DX-1 is the case that proves
+ * "the arrival connection" and "the member's current connection" are the same
+ * fact: this case is therefore left exactly as the DX-1 arm shaped it, and it
+ * reds under the `join-reply-to-the-join-target` negative control.
+ */
+static void test_f297_member_answers_on_the_reconnected_connection(void)
+{
+	const vms_conid_t NEW_CONID = 0x4e620021u;
+	uint32_t len;
+
+	printf("\n-- rd vms-f297: a member's answers ride the member's CURRENT "
+	       "connection --\n");
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	(void)join_feed(mk_open_add(EPOCH, 0x0eu));   /* a real class to answer with */
+	cnxman_join_closed(&g.j, g.j.cm_conid, 0u);    /* the old one is gone ...    */
+	bed_peer_connected(g.member_csb, NEW_CONID);   /* ... and the member is back */
+
+	len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY, 0x0301);
+	(void)join_feed(len);
+	ct_check_eq_u32(n_sent_on(NEW_CONID), 1u,
+			"the relay is answered, on the member's new connection");
+	ct_check_eq_u32(g.j.send_failures, 0u, "nothing was refused");
+}
+
+/*
+ * rd vms-f297: AN ORIGINATION DOES NOT FOLLOW. Stall-rig arms GM-14 / TG-3: the
+ * executive had re-bound the member's block to this node's own reconnect while
+ * the member's connect was accepted on another Con.ID; the identity burst that
+ * opening fires is an ORIGINATION, and following the block for it put op-0x14 /
+ * op-0x01 on a just-re-established connection with ack 0 -- ten milliseconds
+ * after a real VAX had continued the conversation there -- and the VAX
+ * bugchecked. An origination goes to the member THIS JOIN DRIVES THROUGH on
+ * the Con.ID THIS JOIN HOLDS, and keeps the E77 refusal; there is no "follow"
+ * on the emit path for it to inherit.
+ */
+static void test_f297_an_origination_does_not_follow(void)
+{
+	const vms_conid_t OWN_RECONNECT = 0x4e620031u;
+
+	printf("\n-- rd vms-f297: the identity burst never rides a connection "
+	       "the join does not hold --\n");
+	drive_to_state(CNXMAN_JOIN_VC_CONNECT);
+	/* the block keeps this node's own reconnect (rd vms-1f40: two
+	 * connections for one pair), and the member's connect is accepted on
+	 * the other -- the arms' exact shape */
+	bed_peer_connected(g.member_csb, OWN_RECONNECT);
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);   /* the open fires the burst */
+	ct_check_eq_u32(n_sent_on(OWN_RECONNECT), 0u,
+			"nothing is originated onto the block's other "
+			"connection with a fresh dialogue");
 }
 
 static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
@@ -4953,8 +5102,9 @@ static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
 	ct_check_eq_u32(g.j.requests_unanswered, 0u,
 			"five beats of silence is not yet a decline");
 	ct_check_eq_u32(g.j.reissues, 0u, "... and nothing was re-issued");
-	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
-			"... the other member has heard nothing from this join");
+	ct_check(sent_on_is_identity_only(OTHER_CONID),
+		 "... the other member has heard only this node's identity "
+		 "(MODEL, PARAMS), never a request");
 
 	/* The sixth. */
 	bed_beats(1u);
@@ -5061,9 +5211,9 @@ static void test_e80_a_member_that_proposes_is_never_re_issued_away_from(void)
 			"however long the transition takes, this member is "
 			"never declined");
 	ct_check_eq_u32(g.j.reissues, 0u, "... and nothing is re-issued");
-	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
-			"the other member is never asked: ONE op-0x02 per "
-			"attempt, and it was answered");
+	ct_check(sent_on_is_identity_only(OTHER_CONID),
+		 "the other member is never asked: ONE op-0x02 per attempt, "
+		 "and it was answered -- it heard only who this node is");
 	ct_check_eq_u32(g.j.target_sysid == MEMBER_SYSID, 1,
 			"the join still drives the member that answered");
 }
@@ -5122,8 +5272,9 @@ static void test_e80_a_running_transition_holds_the_clock(void)
 			"nobody is declined during it");
 	ct_check_eq_u32(g.j.reissues, 0u,
 			"and no second membership request goes anywhere");
-	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
-			"the other member hears nothing from this join");
+	ct_check(sent_on_is_identity_only(OTHER_CONID),
+		 "the other member hears only who this node is, never a "
+		 "request");
 }
 
 static void test_e80_a_refused_request_is_never_a_decline(void)
@@ -5584,8 +5735,8 @@ static void test_f3ec_abort_rearms_the_admission_clock(void)
 	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS - 1u);
 	ct_check_eq_u32(g.j.requests_unanswered, 0u,
 			"five beats after the abort is not yet a decline");
-	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u,
-			"...and the other member has heard nothing yet");
+	ct_check(sent_on_is_identity_only(OTHER_CONID),
+		 "...and the other member has heard only who this node is");
 
 	bed_beats(1u);
 	ct_check_eq_u32(g.j.requests_unanswered, 1u,
@@ -6554,6 +6705,7 @@ int main(void)
 	test_every_table_cell();
 	test_e73_the_executive_delivers_a_body();
 	test_post_admit_drive_to_member();
+	test_f297_step_report_reaches_the_coordinator();
 	test_e85_barrier_survives_to_member();
 	test_member_only_on_a_real_op06_csid();
 	test_e79_op06_burst_originates_nothing();
@@ -6566,6 +6718,9 @@ int main(void)
 	test_quorum_is_never_asserted_before_membership();
 	test_votes_learned_before_the_commit_are_in_the_commit();
 	test_joiner_recomputes_on_every_advert_it_learns();
+	test_f297_every_member_hears_before_the_request();
+	test_f297_member_answers_on_the_reconnected_connection();
+	test_f297_an_origination_does_not_follow();
 	test_e80_a_silent_member_is_re_issued_to_the_next();
 	test_e80_a_member_that_proposes_is_never_re_issued_away_from();
 	test_e80_an_ack_alone_is_not_an_answer();

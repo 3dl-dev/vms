@@ -380,6 +380,11 @@ struct scs_cdt {
 	uint8_t   local_name[VMS_SCS_PROCNAME_LEN];
 	uint8_t   remote_name[VMS_SCS_PROCNAME_LEN];
 	uint8_t   conndata[VMS_SCS_PROCNAME_LEN];  /* spec SS4(N), verbatim  */
+	/* rd vms-f297: the connect data the PEER's op-2 ACCEPT_REQ carried, on a
+	 * connection WE initiated (a SYSAP reads it at opened(); its meaning is
+	 * the SYSAP's -- SCS keeps it verbatim and interprets nothing). */
+	uint8_t   peer_accept_conndata[VMS_SCS_PROCNAME_LEN];
+	uint8_t   peer_accept_conndata_valid;
 
 	const struct scs_sysap_ops *sysap;
 

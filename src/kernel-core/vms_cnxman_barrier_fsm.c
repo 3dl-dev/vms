@@ -492,7 +492,8 @@ static void barrier_commit_phase2(struct cnxman_barrier *b)
 	in.bitmap = b->bitmap;
 	in.bitmap_valid = b->bitmap_valid;
 	in.bitmap_popcount = b->bitmap_popcount;
-	in.pad = 0u;
+	in.reconfig = (uint8_t)(b->cl->club.transition_class ==
+				VMS_CM_CLASS_REMOVE);
 
 	(void)cnxman_phase2_commit(b->cl, &in, &st, b->ops);
 
@@ -584,6 +585,10 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 
 	barrier_start_transition(b, m, &open);
 	barrier_take_bitmap(b, m, &open);
+	cnxman_club_learn_open(&b->cl->club,
+			       open.env.opcode == VMS_CM_OP_XITION_FORM ||
+			       open.env.opcode == VMS_CM_OP_XITION_REM,
+			       &open.cells);
 	barrier_phase1_mark(b);
 	b->state = (uint8_t)CNXMAN_BARRIER_OPEN;
 	barrier_dlm_begin(b);

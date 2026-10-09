@@ -425,6 +425,15 @@ int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
 int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 		   vms_scs_sysid_t *out);
 
+/*
+ * The 16 connect-data bytes the PEER's ACCEPT carried on a connection this node
+ * initiated (rd vms-f297), verbatim. SS$_NORMAL with `out` filled; SS$_BADPARAM
+ * when the Con.ID names no live CDT or no ACCEPT carried any; SS$_NOSUCHDEV
+ * with no SCS. A SYSAP reads it at opened().
+ */
+int scs_conid_accept_conndata(struct vms_scs *scs, vms_conid_t local_conid,
+			      uint8_t out[16]);
+
 /* ==========================================================================
  * 6. Directory service (the SCS$DIRECTORY SYSAP, FC-P2.3)
  * ========================================================================== */

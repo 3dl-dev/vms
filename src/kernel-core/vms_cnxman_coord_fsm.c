@@ -69,6 +69,14 @@ static uint32_t coord_now(const struct cnxman_coord *c)
 	return 0u;
 }
 
+/* VMS absolute time, 0 when no clock is wired (rd vms-f297). */
+static uint64_t coord_now_vms(const struct cnxman_coord *c)
+{
+	if (c->ops != NULL && c->ops->now_vms != NULL)
+		return c->ops->now_vms(c->ops->ctx);
+	return 0u;
+}
+
 /* This TU calls no library (a pure TU builds on the host too, where the
  * substrate's memset is not in scope). */
 static void coord_bzero(void *p, uint32_t n)
@@ -102,6 +110,7 @@ static int coord_is_active(const struct cnxman_coord *c)
 {
 	return c->state == (uint8_t)CNXMAN_COORD_RELAY ||
 	       c->state == (uint8_t)CNXMAN_COORD_COMMIT ||
+	       c->state == (uint8_t)CNXMAN_COORD_RECORDS ||
 	       c->state == (uint8_t)CNXMAN_COORD_OPEN ||
 	       c->state == (uint8_t)CNXMAN_COORD_BARRIER;
 }
@@ -134,10 +143,13 @@ static void coord_note_send_failure(struct cnxman_coord *c, const char *why)
 	coord_log(c, why);
 }
 
-static void coord_emit(struct cnxman_coord *c, vms_csid_t dst, uint32_t len)
+/* 0 = handed to the connection; the result matters only where an answer is
+ * then awaited (the membership records). */
+static int coord_emit(struct cnxman_coord *c, vms_csid_t dst, uint32_t len)
 {
 	if (c->ops != NULL && c->ops->send != NULL)
-		(void)c->ops->send(c->ops->ctx, dst, c->scratch, len);
+		return c->ops->send(c->ops->ctx, dst, c->scratch, len);
+	return -1;
 }
 
 static void coord_emit_response(struct cnxman_coord *c, uint32_t len)
@@ -249,6 +261,13 @@ static int coord_outranked_for_admission(struct cnxman_coord *c,
 /*
  * GATE 2 -- CAN THIS NODE BUILD THE OPEN IT IS ABOUT TO SEND?
  *
+ * UPDATED (rd vms-f297): for an ADDITION the answer is now read from the CLUB
+ * -- coord_admit_foreign() admits a foreign participant exactly when every
+ * Phase 1 cell (founder, formation time, slot counter, quorum/CEVOTES, rebuild
+ * type, the subject's QDSKVOTES and op-0x02 count, the CSV block) is held. The
+ * history below is why the gate exists, and it still stands for the REMOVAL,
+ * whose op-0x08 cells are not grounded.
+ *
  * The class-0x02 transition-open this executive builds carries the grounded
  * fields and leaves the rest zero (vms_cm_xition_open_build: epoch, role/class
  * tag, nodemap). A REAL coordinator's op-0x09 carries more -- measured on
@@ -293,6 +312,10 @@ static int coord_outranked_for_admission(struct cnxman_coord *c,
  * the system being ADMITTED, a removal does not -- the departing system is not
  * in the census (spec sec 4(r)) and is asked to act on nothing.
  */
+static enum cnxman_open_gap coord_open_cells(const struct cnxman_coord *c,
+					     struct vms_cm_open_cells *out,
+					     int assigned);
+
 static int coord_open_is_grounded_for(struct cnxman_coord *c,
 				      int32_t subject_csb, int subject_counts)
 {
@@ -314,6 +337,35 @@ static int coord_open_is_grounded_for(struct cnxman_coord *c,
 			return 0;
 	}
 	return 1;
+}
+
+/*
+ * A FOREIGN SYSTEM WILL RECEIVE THIS ADD'S OPEN (rd vms-f297). Gate 2 used to
+ * refuse outright, because the open went out with its Phase 1 cells zero and
+ * that is the frame after which a real VAX bugchecked (rd vms-1ac). The cells
+ * are now grounded and filled from this node's own CLUB, so the admission is
+ * driven exactly when every one of them is held -- and refused, naming the
+ * missing fact, when one is not. The subject is staged on c for the fill and
+ * restored: nothing is assigned until the open is really built.
+ */
+static enum cnxman_coord_verdict coord_admit_foreign(struct cnxman_coord *c,
+						     int32_t subject_csb)
+{
+	struct vms_cm_open_cells cells;
+	int32_t was = c->subject_csb;
+	enum cnxman_open_gap gap;
+
+	c->subject_csb = subject_csb;
+	gap = coord_open_cells(c, &cells, 0);
+	c->subject_csb = was;
+	if (gap == CNXMAN_OPEN_GAP_NONE)
+		return CNXMAN_COORD_DRIVE;
+	c->open_ungrounded++;
+	c->open_gap_last = (uint8_t)gap;
+	return coord_refuse(c, CNXMAN_COORD_REF_OPEN_UNGROUNDED,
+		"%CNXMAN, a system in this cluster does not run this "
+		"implementation and this node does not hold every fact the "
+		"transition open carries: the addition is not proposed");
 }
 
 enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
@@ -418,14 +470,8 @@ enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
 		c->refusals++;
 		return CNXMAN_COORD_REFUSE;
 	}
-	if (!coord_open_is_grounded_for(c, subject_csb, 1)) {
-		c->open_ungrounded++;
-		return coord_refuse(c, CNXMAN_COORD_REF_OPEN_UNGROUNDED,
-			"%CNXMAN, a system in this cluster does not run this "
-			"implementation and the transition open this node can "
-			"build is not grounded for it: the addition is not "
-			"proposed");
-	}
+	if (!coord_open_is_grounded_for(c, subject_csb, 1))
+		return coord_admit_foreign(c, subject_csb);
 	return CNXMAN_COORD_DRIVE;
 }
 
@@ -490,6 +536,12 @@ static void coord_seed_max_slot(struct cnxman_coord *c)
 		if (slot > c->max_slot_seen)
 			c->max_slot_seen = slot;
 	}
+	/* ...and a slot a DEPARTED member held, which no CSB shows any more but
+	 * every open since has carried (rd vms-f297, KR-1: the readmitted
+	 * system took slot 4, not its old 3). */
+	if (club->slot_next_valid && club->slot_next > 0u &&
+	    (uint32_t)club->slot_next - 1u > c->max_slot_seen)
+		c->max_slot_seen = (uint32_t)club->slot_next - 1u;
 }
 
 /*
@@ -550,6 +602,7 @@ static void coord_assign_slot(struct cnxman_coord *c, struct vms_csb *subject,
 	cnxman_csb_set_csid(subject, coord_csid_of_slot(slot));
 	c->max_slot_seen = slot;
 	c->csids_assigned++;
+	cnxman_club_note_slot(coord_club(c), slot);
 }
 
 /* ==========================================================================
@@ -636,6 +689,7 @@ static uint32_t coord_freeze_participants(struct cnxman_coord *c)
 
 	coord_bzero(c->part_flags, (uint32_t)sizeof(c->part_flags));
 	coord_bzero(c->part_step, (uint32_t)sizeof(c->part_step));
+	coord_bzero(c->part_recs, (uint32_t)sizeof(c->part_recs));
 
 	for (i = 0; i < club->n_csb; i++) {
 		struct vms_csb *csb = &club->csb[i];
@@ -961,7 +1015,8 @@ static void coord_send_membrec(struct cnxman_coord *c, uint32_t to_csb,
 	 * -- measured nonzero on all 8 real frames -- and is answered with the
 	 * grounded 0x81/0x05 echo. */
 	cnxman_envelope_originate(dst_csb, c->scratch, CNXMAN_ENV_REQUEST);
-	coord_emit(c, dst, written);
+	if (coord_emit(c, dst, written) == 0 && c->part_recs[to_csb] < 0xffu)
+		c->part_recs[to_csb]++;   /* its 0x81/0x05 is now awaited */
 	c->membrecs_sent++;
 	c->membrec_fields_omitted++;   /* body[42:132], sec 5c */
 }
@@ -1000,17 +1055,223 @@ static void coord_send_membership_set(struct cnxman_coord *c)
 	}
 }
 
+/* ==========================================================================
+ * THE PHASE 1 CELLS (rd vms-f297) -- every one read from this node's CLUB/CSBs
+ *
+ * Davis p. 7-40 lists what a proposal carries; the codec header's
+ * VMS_OFB_CM_OPEN_* note grounds where each sits and what a real V7.3
+ * coordinator puts there. None is copied out of a received frame here: the
+ * CLUB learned the founder, the formation time, the slot counter and the
+ * last-reconfiguration pair as the cluster's own facts (cnxman_club_learn_open,
+ * cnxman_club_found, cnxman_club_note_reconfig), and the subject's QDSKVOTES and
+ * every member's quorum came in their own PARAMS.
+ * ========================================================================== */
+
+/* Is this block in the post-transition membership of the ADD being opened? */
+static int coord_counts_for_add(const struct cnxman_coord *c, uint32_t i,
+				const struct vms_csb *m)
+{
+	if ((int32_t)i == c->subject_csb)
+		return 1;
+	if ((m->flags & VMS_CSB_F_LOCAL) != 0u)
+		return m->in_use;
+	return coord_is_other_member(m);
+}
+
+/*
+ * THE PROPOSED VOTES (p. 7-6): CEVOTES = max{EXPECTED_VOTES; SUM VOTES; Old
+ * CEVOTES} over the members plus the subject, and QUORUM = (CEVOTES + 2) / 2,
+ * never below the quorum already in force. Every EXPECTED_VOTES is the one the
+ * system's own PARAMS carried at body[76:80] (VMS_OFB_CM_PEXPVOTES); this
+ * node's is its SYSGEN value. Returns nonzero when a counted system's PARAMS
+ * never arrived -- that sum would be a guess.
+ */
+static int coord_open_votes(const struct cnxman_coord *c, uint32_t *cevotes,
+			    uint32_t *quorum)
+{
+	const struct vms_club *club = &c->cl->club;
+	uint32_t i, votes = 0u, ev = 0u;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *m = &club->csb[i];
+
+		if (!m->in_use || !coord_counts_for_add(c, i, m))
+			continue;
+		if (!m->params_valid)
+			return -1;
+		votes += m->votes;
+		if ((uint32_t)m->expected_votes > ev)
+			ev = m->expected_votes;
+	}
+	*cevotes = votes > ev ? votes : ev;
+	if ((uint32_t)club->cevotes > *cevotes)
+		*cevotes = club->cevotes;
+	*quorum = (*cevotes + 2u) / 2u;
+	if ((uint32_t)club->quorum > *quorum)
+		*quorum = club->quorum;
+	return (*cevotes == 0u || *cevotes > 0xffffu) ? -1 : 0;
+}
+
+/*
+ * THE REBUILD TYPE (book p. 7-40): a joiner with a nonzero LOCKDIRWT, or a
+ * cluster whose every selected system weighs 0, is a DIRECTORY rebuild; a
+ * zero-weight joiner among nonzero ones is a MERGE (lab run XI). Every weight
+ * must have been learned (vms-fcb); an unknown one decides nothing.
+ */
+static enum cnxman_open_gap coord_open_rebuild(const struct cnxman_coord *c,
+					       const struct vms_csb *subject,
+					       uint8_t *out)
+{
+	const struct vms_club *club = &c->cl->club;
+	uint32_t i, others_nonzero = 0u;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *m = &club->csb[i];
+
+		if (!m->in_use || !coord_counts_for_add(c, i, m) || m == subject)
+			continue;
+		if (!m->lockdirwt_valid)
+			return CNXMAN_OPEN_GAP_REBUILD;
+		if (m->lockdirwt != 0u)
+			others_nonzero++;
+	}
+	if (!subject->lockdirwt_valid)
+		return CNXMAN_OPEN_GAP_REBUILD;
+	*out = (subject->lockdirwt == 0u && others_nonzero != 0u)
+		       ? (uint8_t)VMS_CM_REBUILD_MERGE
+		       : (uint8_t)VMS_CM_REBUILD_DIRECTORY;
+	return CNXMAN_OPEN_GAP_NONE;
+}
+
+/* The lowest / highest slot in the post-transition nodemap. */
+static void coord_open_census(const struct cnxman_coord *c, uint32_t *low,
+			      uint32_t *top)
+{
+	uint32_t k;
+
+	*low = 0u;
+	*top = 0u;
+	for (k = 1u; k < CNXMAN_PHASE2_BITMAP_SLOTS; k++) {
+		if ((c->bitmap & (1u << k)) == 0u)
+			continue;
+		if (*low == 0u)
+			*low = k;
+		*top = k;
+	}
+}
+
+/*
+ * The CSV block (codec VMS_OFB_CM_OPEN_SUBJ_CFG .. _HOLD). The high-water slot
+ * is the subject's new slot when the cluster has held this system before (its
+ * block still carried a CSID when the slot was assigned) and one below it on a
+ * first admission -- the two cases the library holds. Outside what the library
+ * shows (a vector whose lowest slot is not the founder's 1) nothing is
+ * proposed.
+ */
+static enum cnxman_open_gap coord_open_csv(const struct cnxman_coord *c,
+					   const struct vms_csb *subject,
+					   struct vms_cm_open_cells *out,
+					   int assigned)
+{
+	uint32_t low, top, slot;
+	enum cnxman_open_gap gap;
+
+	gap = coord_open_rebuild(c, subject, &out->rebuild);
+	if (gap != CNXMAN_OPEN_GAP_NONE)
+		return gap;
+	if (!subject->cfg_count_valid || subject->cfg_count > 0xffffu)
+		return CNXMAN_OPEN_GAP_SUBJECT;
+	if (!assigned)
+		return CNXMAN_OPEN_GAP_NONE;   /* gate: the rest follows the slot */
+	coord_open_census(c, &low, &top);
+	slot = (uint32_t)(subject->csid & 0xffffu);
+	if (!c->bitmap_valid || low != 1u || slot == 0u)
+		return CNXMAN_OPEN_GAP_CSV;
+	out->subj_cfg = (uint16_t)subject->cfg_count;
+	out->csv_low = (uint16_t)low;
+	out->csv_hwm = (uint16_t)(c->subject_rejoined ? slot : slot - 1u);
+	out->csv_top = (uint16_t)top;
+	out->hold = VMS_CM_OPEN_HOLD_DELTA;
+	return CNXMAN_OPEN_GAP_NONE;
+}
+
+/*
+ * Fill the cells of an ADD open, or return the first fact this node does not
+ * hold. Nothing is defaulted: a missing fact is a refusal (gate 2), and the
+ * caller sends no cells at all to a system running this implementation when
+ * one is missing -- exactly the open it sent before this existed.
+ */
+static enum cnxman_open_gap coord_open_cells(const struct cnxman_coord *c,
+					     struct vms_cm_open_cells *out,
+					     int assigned)
+{
+	const struct vms_club *club = &c->cl->club;
+	const struct vms_csb *subject = NULL;
+	struct vms_cm_open_cells z = { 0 };
+	uint32_t cevotes, quorum;
+
+	*out = z;
+	if (c->subject_csb >= 0 && (uint32_t)c->subject_csb < club->n_csb)
+		subject = &club->csb[c->subject_csb];
+	if (subject == NULL || !subject->params_valid)
+		return CNXMAN_OPEN_GAP_SUBJECT;
+	if (!club->fsysid_valid || club->fsysid > VMS_CM_OPEN_FSYSID_MAX)
+		return CNXMAN_OPEN_GAP_FOUNDER;
+	if (!club->ftime_valid)
+		return CNXMAN_OPEN_GAP_FTIME;
+	if (!club->slot_next_valid)
+		return CNXMAN_OPEN_GAP_SLOT;
+	if (club->rc_lost)
+		return CNXMAN_OPEN_GAP_RECONFIG;
+	if (coord_open_votes(c, &cevotes, &quorum) != 0)
+		return CNXMAN_OPEN_GAP_QUORUM;
+	out->quorum = (uint16_t)quorum;
+	out->cevotes = (uint16_t)cevotes;
+	out->stamp = coord_now_vms(c);
+	if (out->stamp == 0u)
+		return CNXMAN_OPEN_GAP_CLOCK;
+	out->slot_next = club->slot_next;
+	out->subj_qdsk = subject->qdskvotes;
+	if (club->rc_valid) {
+		out->rc_members = club->rc_members;
+		out->rc_votes = club->rc_votes;
+	}
+	out->ftime = club->ftime;
+	out->fsysid = (uint16_t)club->fsysid;
+	return coord_open_csv(c, subject, out, assigned);
+}
+
 static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 {
 	struct vms_csb *csb;
 	vms_csid_t dst;
 	uint32_t written = 0;
 
+	struct vms_cm_open_cells cells;
+	const struct vms_cm_open_cells *cp = NULL;
+
 	csb = coord_out_to(c, i, &dst);
 	if (csb == NULL)
 		return;
+	/* An ADD carries its cells whenever this node holds every one of them;
+	 * gate 2 has already refused the admission a foreign member would
+	 * receive without them. */
+	if (c->tr_class == VMS_CM_CLASS_ADD &&
+	    coord_open_cells(c, &cells, 1) == CNXMAN_OPEN_GAP_NONE)
+		cp = &cells;
+	if (cp == NULL && c->tr_class == VMS_CM_CLASS_ADD &&
+	    !coord_open_is_grounded_for(c, c->subject_csb, 1)) {
+		/* The gate admitted it, the slot is assigned, and a cell still
+		 * cannot be filled: a foreign system gets NO open rather than
+		 * one with zeros where its own coordinator writes facts. */
+		c->open_withheld++;
+		coord_note_send_failure(c,
+			"%CNXMAN, transition proposal withheld: a fact it "
+			"carries could not be read");
+		return;
+	}
 	if (vms_cm_xition_open_build(c->tr_class, c->epoch, c->bitmap,
-				     (int)c->bitmap_valid, c->scratch,
+				     (int)c->bitmap_valid, cp, c->scratch,
 				     (uint32_t)sizeof(c->scratch),
 				     &written) != VMS_CODEC_OK) {
 		coord_note_send_failure(c,
@@ -1021,10 +1282,10 @@ static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_REQUEST);
 	coord_emit(c, dst, written);
 	c->opens_sent++;
-	/* Book p. 7-40's proposed quorum / votes / foundation time / founder /
-	 * rebuild type ride in bytes no capture has isolated (codec header
-	 * sec 5b). They go out zero and the omission is counted, per open. */
-	c->open_cells_omitted++;
+	/* Counted per open that went out WITHOUT its cells -- a removal (whose
+	 * op-0x08 cells are not grounded) or an ADD missing a fact. */
+	if (cp == NULL)
+		c->open_cells_omitted++;
 }
 
 static void coord_send_go(struct cnxman_coord *c, uint32_t i)
@@ -1131,7 +1392,7 @@ static void coord_commit_phase2(struct cnxman_coord *c)
 	in.bitmap = c->bitmap;
 	in.bitmap_valid = c->bitmap_valid;
 	in.bitmap_popcount = c->bitmap_popcount;
-	in.pad = 0u;
+	in.reconfig = (uint8_t)(c->tr_class == VMS_CM_CLASS_REMOVE);
 
 	(void)cnxman_phase2_commit(c->cl, &in, &st, c->ops);
 
@@ -1184,6 +1445,19 @@ static void coord_try_go(struct cnxman_coord *c);
 
 static void coord_advance_epoch(struct cnxman_coord *c);
 
+static void coord_phase1(struct cnxman_coord *c);
+
+/* How many op-0x05 records are out without their 0x81/0x05 answer. */
+static uint32_t coord_records_outstanding(const struct cnxman_coord *c)
+{
+	uint32_t i, n = 0u;
+
+	for (i = 0; i < c->cl->club.n_csb; i++)
+		if (coord_is_participant(c, i))
+			n += c->part_recs[i];
+	return n;
+}
+
 static void coord_enter_open(struct cnxman_coord *c)
 {
 	/* A REMOVE and a FOUNDING open arrive here without a commit; the
@@ -1210,7 +1484,17 @@ static void coord_enter_open(struct cnxman_coord *c)
 		 */
 		coord_send_membership_set(c);
 	}
+	/* ...and the open waits for every record's answer (rd vms-f297). */
+	if (coord_records_outstanding(c) != 0u) {
+		c->state = (uint8_t)CNXMAN_COORD_RECORDS;
+		return;
+	}
+	coord_phase1(c);
+}
 
+/* PHASE 1: the opens go out, and the GO follows every acknowledgement. */
+static void coord_phase1(struct cnxman_coord *c)
+{
 	c->state = (uint8_t)CNXMAN_COORD_OPEN;
 	coord_fanout(c, coord_send_open);
 	/*
@@ -1474,8 +1758,12 @@ static int coord_take_nodemap(struct cnxman_coord *c, uint8_t tr_class,
 	 * back -- so any csid already on this CSB is replaced. A founding open
 	 * has no subject and assigns nothing: the founder's own CSID was minted
 	 * before this call. */
-	if (tr_class == VMS_CM_CLASS_ADD && subject != NULL)
+	if (tr_class == VMS_CM_CLASS_ADD && subject != NULL) {
+		/* A block that still carries a CSID is a system this cluster
+		 * has held before: its open says so (VMS_OFB_CM_OPEN_CSV_HWM*). */
+		c->subject_rejoined = subject->csid_valid;
 		coord_assign_slot(c, subject, subject_slot);
+	}
 	return 0;
 }
 
@@ -1575,6 +1863,21 @@ static void coord_begin_remove(struct cnxman_coord *c, int32_t subject_csb)
  * SILENTLY DISCARDS op 0x02". Being asked is what makes this node the
  * coordinator (book pp. 7-37/7-38); there is nothing further to decide.
  */
+/* Keep what the asking system said about itself in its op 0x02 (rd vms-f297,
+ * VMS_OFB_CM_CONFIG_COUNT): its admission open repeats it. */
+static void coord_note_request_count(struct cnxman_coord *c,
+				     const struct coord_msg *m)
+{
+	struct vms_cm_config cfg;
+	struct vms_csb *csb = coord_csb_at(c, m->from_csb);
+
+	if (csb == NULL ||
+	    vms_cm_config_parse(m->body, m->len, &cfg) != VMS_CODEC_OK)
+		return;
+	csb->cfg_count = cfg.count;
+	csb->cfg_count_valid = 1u;
+}
+
 static void coord_h_request(struct cnxman_coord *c, const struct coord_msg *m)
 {
 	enum cnxman_coord_verdict v;
@@ -1585,6 +1888,7 @@ static void coord_h_request(struct cnxman_coord *c, const struct coord_msg *m)
 		c->unknown_peer++;
 		return;
 	}
+	coord_note_request_count(c, m);
 	v = cnxman_coord_select(c, CNXMAN_COORD_TRIG_ASKED, m->from_csb);
 	if (v == CNXMAN_COORD_BACKOFF) {
 		coord_enter_backoff(c, CNXMAN_COORD_TRIG_ASKED, m->from_csb);
@@ -1594,6 +1898,8 @@ static void coord_h_request(struct cnxman_coord *c, const struct coord_msg *m)
 		return;   /* refused, logged and counted inside select() */
 	coord_begin_add(c, m->from_csb);
 }
+
+static int coord_rejected(struct cnxman_coord *c, const struct coord_msg *m);
 
 /* Which participant slot did this frame come from? -1 when we cannot tell, and
  * then nothing is credited to anybody. */
@@ -1616,7 +1922,7 @@ static void coord_h_relay_ack(struct cnxman_coord *c, const struct coord_msg *m)
 		c->ignored_events++;
 		return;
 	}
-	if (i < 0)
+	if (i < 0 || coord_rejected(c, m))
 		return;
 	c->part_flags[i] |= CNXMAN_COORD_P_RELAY_ACK;
 	c->relay_acks++;
@@ -1646,6 +1952,8 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 		c->ignored_events++;
 		return;
 	}
+	if (coord_rejected(c, m))
+		return;
 	if (m->from_csb >= 0 && m->from_csb != c->subject_csb &&
 	    coord_is_participant(c, (uint32_t)m->from_csb)) {
 		coord_member_commit_ack(c, (uint32_t)m->from_csb);
@@ -1678,6 +1986,51 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 }
 
 /*
+ * A PARTICIPANT REJECTED A REQUEST OF OURS (rd vms-f297): its 0x81 answer does
+ * not carry the accepting 0x01 (vms_cm_response_accepted). Book p. 7-41: the
+ * coordinator abandons the transition on any rejection -- and in particular
+ * sends NO open after it: a real V7.3 member that answered our membership
+ * record with 00 bugchecked CNXMGRERR on the op 0x09 that followed (PF-3,
+ * PK-1). Nonzero when it was a rejection and the transition is abandoned.
+ */
+static int coord_rejected(struct cnxman_coord *c, const struct coord_msg *m)
+{
+	if (vms_cm_response_accepted(m->body, m->len))
+		return 0;
+	c->rejections++;
+	coord_abandon_internal(c,
+		"%CNXMAN, a system rejected the proposed state transition; "
+		"abandoning it");
+	return 1;
+}
+
+/*
+ * [RECORDS][RX_TR_ACK] -- a 0x81/0x05 answer to one of our membership records.
+ * The open goes out once every record a participant was sent is answered.
+ */
+static void coord_h_membrec_ack(struct cnxman_coord *c,
+				const struct coord_msg *m)
+{
+	int32_t i;
+
+	if (m->env.opcode != VMS_CM_OP_MEMBREC) {
+		c->ignored_events++;
+		return;
+	}
+	i = coord_participant_of(c, m);
+	if (i < 0 || coord_rejected(c, m))
+		return;
+	c->membrec_acks++;
+	if (c->part_recs[i] == 0u) {
+		c->ignored_events++;   /* an answer to no record of ours */
+		return;
+	}
+	c->part_recs[i]--;
+	if (coord_records_outstanding(c) == 0u)
+		coord_phase1(c);
+}
+
+/*
  * [OPEN][RX_TR_ACK] -- PHASE 1 acknowledged. p. 7-41: "each system normally
  * acknowledges to VAX_A that it has received and processed the information",
  * and the GO does not go out until every one of them has.
@@ -1692,7 +2045,7 @@ static void coord_h_open_ack(struct cnxman_coord *c, const struct coord_msg *m)
 		return;
 	}
 	i = coord_participant_of(c, m);
-	if (i < 0)
+	if (i < 0 || coord_rejected(c, m))
 		return;
 	c->part_flags[i] |= CNXMAN_COORD_P_PHASE1_ACK;
 	c->open_acks++;
@@ -1720,7 +2073,7 @@ static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 
 	if (csb == NULL || !csb->csid_valid)
 		return;
-	if (vms_cm_step_ack_build(m->body, m->len, c->scratch,
+	if (vms_cm_step_ack_build(m->body, m->len, c->tr_class, c->scratch,
 				  (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
@@ -1856,6 +2209,13 @@ coord_table[CNXMAN_COORD_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_TR_GO]   = coord_h_collision,
 	},
 
+	/* [RECORDS] the membership records are out; their answers come first. */
+	[CNXMAN_COORD_RECORDS] = {
+		[CNXMAN_EV_RX_TR_ACK]  = coord_h_membrec_ack,
+		[CNXMAN_EV_RX_TR_OPEN] = coord_h_collision,
+		[CNXMAN_EV_RX_TR_GO]   = coord_h_collision,
+	},
+
 	/* [OPEN] PHASE 1: every participant must acknowledge before the GO. */
 	[CNXMAN_COORD_OPEN] = {
 		[CNXMAN_EV_RX_TR_ACK]  = coord_h_open_ack,
@@ -1902,6 +2262,7 @@ static enum cnxman_event coord_event_of_response(const struct coord_msg *m)
 	case VMS_CM_OP_COMMIT:      /* 0x81/0x03: the subject committed   */
 	case VMS_CM_OP_XITION_ADD:  /* 0x81/0x09: Phase 1 acknowledged    */
 	case VMS_CM_OP_XITION_REM:  /* 0x81/0x08: ... of a removal        */
+	case VMS_CM_OP_MEMBREC:     /* 0x81/0x05: a membership record     */
 		return CNXMAN_EV_RX_TR_ACK;
 	default:
 		/* 0x81/0x0b is the COORDINATOR's own ack coming back at a
@@ -2374,6 +2735,11 @@ int cnxman_coord_found(struct cnxman_coord *c,
 	 * it, so it can no more be said without a membership than the joiner's.
 	 */
 	coord_log(c, "%CNXMAN, this node is now a VAXcluster member");
+	/* ...and this node now holds what every later open carries: it is the
+	 * founder, now is the formation time, the cluster it formed is one
+	 * system with its votes (rd vms-f297). */
+	cnxman_club_found(club, coord_now_vms(c), c->cl->params.scssystemid,
+			  c->cl->params.votes, (uint32_t)(csid & 0xffffu));
 	return 0;
 }
 
@@ -2410,6 +2776,7 @@ void cnxman_coord_timer(struct cnxman_coord *c)
 
 	if (c->state == (uint8_t)CNXMAN_COORD_RELAY ||
 	    c->state == (uint8_t)CNXMAN_COORD_COMMIT ||
+	    c->state == (uint8_t)CNXMAN_COORD_RECORDS ||
 	    c->state == (uint8_t)CNXMAN_COORD_OPEN) {
 		/*
 		 * A proposal nobody has answered. Book p. 7-41 lets the
@@ -2519,6 +2886,7 @@ const char *cnxman_coord_state_name(enum cnxman_coord_state s)
 	case CNXMAN_COORD_RELAY:     return "relay";
 	case CNXMAN_COORD_COMMIT:    return "commit";
 	case CNXMAN_COORD_OPEN:      return "open";
+	case CNXMAN_COORD_RECORDS:   return "records";
 	case CNXMAN_COORD_BARRIER:   return "barrier";
 	case CNXMAN_COORD_COMPLETE:  return "complete";
 	case CNXMAN_COORD_ABANDONED: return "abandoned";

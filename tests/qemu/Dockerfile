@@ -398,16 +398,12 @@ RUN cd /src/repo && \
 # land in build-static/bin/corpus_rt_* and are staged with the other corpus programs.
 RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
 
-# EVACWL (vms-06c, ci.6 evacuation workload): the SAME VMS-native TCC.EXE +
-# LINK.EXE --use {DECC$SHR + the five OVMX shareables} build the corpus
-# programs above use, for the bespoke (non-corpus) EVAC$WORKLOAD lock-and-
-# append workload tests/lab/ci6/EVACWL.MAR runs on the real VAX oracle. Lands
-# in build-static/native/EVACWL.EXE, which the two existing
-# `build-static/native/*.EXE` globs below already stage onto the corpus
-# system disk and into the booted guest's SYS$SYSTEM -- no new staging step.
-# test_syssvc_ci6_evacwl.c (built with qemu_syssvc_tests above, staged by
-# that same glob) execs it twice and proves the takeover-continuity contract.
-RUN cd /src/repo && sh tests/lab/ci6/mk_evacwl_native.sh /src/repo
+# (EVACWL.EXE -- vms-06c, the ci.6 evacuation workload -- is built FURTHER DOWN,
+# inside the initramfs stage, immediately after the seven OVMX shareables are
+# staged into the guest's SYS$LIBRARY. It cannot be built here: the five
+# LIBVMS*$SHR.EXE producers it --uses do not exist in build-static/bin in this
+# image, and it must link against the very copies the guest activates it
+# against, since .vms$imp binds by symbol-vector index.)
 
 # (The SSH transport-proof harness build + /ovmxssh|/ovmxsshsrv staging was
 # RETIRED with the SSH scaffold, vms-d916: it built the --wrap veneer over a
@@ -711,6 +707,28 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSLIB full && \
     ls -la /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/*'$SHR.EXE' && \
+    # EVACWL.EXE (vms-06c, the ci.6 evacuation workload): the SAME VMS-native
+    # TCC.EXE + LINK.EXE --use {DECC$SHR + the five OVMX shareables} build the
+    # corpus programs use, for the bespoke (non-corpus) EVAC$WORKLOAD
+    # lock-and-append workload tests/lab/ci6/EVACWL.MAR runs on the real VAX
+    # oracle. BUILT HERE, not up with the corpus images, for two reasons:
+    #   (1) the five LIBVMS*$SHR.EXE producers it --uses exist nowhere else in
+    #       this image -- only mk_mmk_native_staged.sh (just above) builds them --
+    #       and it must link against THE COPIES THE GUEST ACTIVATES IT AGAINST,
+    #       because .vms$imp binds by symbol-vector INDEX, not by name;
+    #   (2) the default PT_INTERP LINK.EXE bakes is
+    #       /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, which is exactly where this
+    #       harness stages the activator (two steps above) -- so no
+    #       IMGACT_INTERP_PATH override belongs here. (A BOOTED node stages its
+    #       activator at /run/ovmx-boot/IMGACT.EXE instead; Dockerfile.bootable
+    #       passes its own LINK.EXE for that. Getting this wrong produces an
+    #       image the host kernel cannot exec at all -- execve fails ENOENT
+    #       before any OVMX code runs, which is how vms-06c first went red.)
+    # Output goes straight to the guest's SYS$SYSTEM, the path
+    # test_syssvc_ci6_evacwl.c execs twice to prove takeover continuity.
+    sh /src/repo/tests/lab/ci6/mk_evacwl_native.sh /src/repo \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSLIB \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

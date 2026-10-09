@@ -3,13 +3,14 @@
  * (vms-06c).
  *
  * Runs the REAL, VMS-native EVACWL.EXE (tests/lab/ci6/EVACWL.C, compiled by
- * OVMX's own TCC + LINK.EXE --use DECC$SHR, staged at
- * /vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE by tests/lab/ci6/mk_evacwl_native.sh
- * -- the same build-static/native directory glob every booted-OVMX native
- * image rides, no new Dockerfile staging needed) TWICE, as two genuinely separate
- * processes activated through IMGACT.EXE exactly as a customer's compiled
- * program would be: this harness does not call sys$enq/RMS itself to
- * emulate the workload, it execs the real image.
+ * OVMX's own TCC.EXE and linked by LINK.EXE --use {DECC$SHR + the five OVMX
+ * shareables}) TWICE, as two genuinely separate processes activated through
+ * IMGACT.EXE exactly as a customer's compiled program would be: this harness
+ * does not call sys$enq/RMS itself to emulate the workload, it execs the real
+ * image. tests/qemu/Dockerfile builds that image straight into the guest's
+ * SYS$SYSTEM (/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE), in the same step that
+ * stages the shareables it binds to -- .vms$imp binds by symbol-vector index,
+ * so the image and the producers it activates against are built together.
  *
  * SETUP: this harness defines the EVAC$DATA logical (LNM$SYSTEM, which is
  * executive-resident and therefore visible to a distinct process, the same
@@ -18,12 +19,14 @@
  * this harness's mounted system disk -- so EVACWL's own "EVAC$DATA:
  * EVAC.DAT" open resolves there with no new volume to mount.
  *
- * PROOF: instance A starts directly (no "standby"), instance B starts in
- * "standby" (NL then CONVERT to EX) within the same fork burst, so B's
- * $ENQW genuinely queues behind A's held EX and is granted only once A's
- * $DEQ runs at exit -- not a race that happens to resolve favourably. After
- * both exit clean, this harness reads EVAC.DAT back itself (RMS $GET, the
- * same public API) and asserts:
+ * PROOF: instance A starts directly (no "standby"). B starts in "standby"
+ * (NL then CONVERT to EX) only ONCE A IS OBSERVED TO HOLD THE RESOURCE -- A's
+ * first record read back out of EVAC.DAT, plus a WNOWAIT peek showing A is
+ * still running -- so B's EX conversion genuinely queues behind A's held EX
+ * and is granted only when A's $DEQ runs at exit. (Forking both at once made
+ * the outcome a scheduler coin flip, and the losing side deadlocked; see the
+ * start-order comment in main.) After both exit clean, this harness reads
+ * EVAC.DAT back itself (RMS $GET, the same public API) and asserts:
  *   - exactly A's record count + B's record count rows exist;
  *   - SEQ is the unbroken sequence 1..N across BOTH instances (B's first
  *     record continues at A's last seq + 1 -- the takeover-continuity
@@ -197,6 +200,46 @@ int main(void)
         _exit(127);
     }
 
+    /*
+     * B STARTS ONCE A IS DEMONSTRABLY THE HOLDER -- not "back to back".
+     *
+     * Forking both at once left which instance reached $ENQW first to the
+     * scheduler, and that is not a 50/50 that merely picks which proof runs:
+     * if the STANDBY won the race it would be granted EX outright (nothing
+     * held the resource yet) and then sit in its own wait-for-the-data-volume
+     * loop -- a standby never starts a fresh EVAC.DAT, by contract -- HOLDING
+     * EX while A queued behind it forever. Both would be killed at the
+     * timeout. A flaky test is a broken test, so the start order is observed,
+     * not assumed: wait until A's FIRST RECORD IS READABLE (real state, read
+     * back through RMS -- A cannot have written it without holding EX and
+     * having created the file), and only then start B.
+     *
+     * This is also the real ci.6 sequence: a standby joins a workload that is
+     * already running, it does not race it from a cold start. The "B genuinely
+     * queued" property is not weakened -- it is ASSERTED below (A is still
+     * running when B starts, so B's EX conversion has to wait for A's $DEQ),
+     * and the unbroken SEQ + distinct-PID assertions still carry the handoff.
+     */
+    int a_records = 0;
+    for (int i = 0; i < WAIT_TIMEOUT_MS / 50 && a_records < 1; i++) {
+        unsigned long p[32], s[32];
+        int got = read_evac_dat(p, s, 32);
+        if (got >= 1) { a_records = got; break; }
+        struct pollfd nothing = { .fd = -1, .events = 0 };
+        poll(&nothing, 1, 50);
+    }
+    CHECK(a_records >= 1,
+          "instance A took EVAC$WORKLOAD EX and its first record is readable from EVAC.DAT");
+    /* WNOWAIT: peek only. A plain waitpid() would REAP A here if it had
+     * already finished, and the exit-code wait below would then never see it. */
+    siginfo_t a_si;
+    memset(&a_si, 0, sizeof a_si);
+    int a_still_running =
+        (waitid(P_PID, (id_t)pid_a, &a_si, WEXITED | WNOWAIT | WNOHANG) == 0 &&
+         a_si.si_pid == 0);
+    CHECK(a_still_running,
+          "instance A still HOLDS EVAC$WORKLOAD when B starts (so B's $ENQW genuinely queues)");
+
     pid_t pid_b = fork();
     if (pid_b < 0) { printf("  FAIL: fork() for instance B\n"); kill(pid_a, SIGKILL); return 1; }
     if (pid_b == 0) {
@@ -236,6 +279,7 @@ int main(void)
     int seq_ok = (n == COUNT_A + COUNT_B);
     for (int i = 0; seq_ok && i < n; i++)
         if (seqs[i] != (unsigned long)(i + 1)) seq_ok = 0;
+    /* negctl: lock-convert-contended-upconvert-granted */
     CHECK(seq_ok, "SEQ is the unbroken sequence 1..N across both instances (takeover continuity)");
 
     int holder_ok = (n == COUNT_A + COUNT_B);
@@ -246,6 +290,7 @@ int main(void)
             if (pids[i] != pids[COUNT_A]) holder_ok = 0;
         if (pids[0] == pids[COUNT_A]) holder_ok = 0;
     }
+    /* negctl-knockon: lock-convert-contended-upconvert-granted */
     CHECK(holder_ok,
           "the first COUNT_A records share one PID, the rest a DIFFERENT one (a real takeover, not one process writing twice)");
 

@@ -388,6 +388,13 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 	uintptr_t span = PG_UP(m->hi) - PG_DOWN(m->lo);
 	void *map;
 	if (is_main) {
+		/* The image lives below the activator's own text (its P0 base,
+		 * 0x10000 by default): VAX P0 page tables run from address 0, so
+		 * the activator cannot simply sit higher. */
+		extern char __executable_start[];
+		if (PG_UP(m->hi) > (uintptr_t)__executable_start)
+			fail_notimpl(m->name, m->spec,
+				     "an image reaching the activator's own P0 pages");
 		/* Page 0 for this process only, granted by the executive. */
 		if (PG_DOWN(m->lo) == 0) {
 			if (!(vms_kif_native_page0() & 1))

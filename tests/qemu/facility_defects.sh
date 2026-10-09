@@ -476,6 +476,7 @@ kstat-cvtungrant-mismapped
 assign-terminal-bypasses-executive
 net-qio-fakes-io
 net-client-takes-qio-service-status
+tcpip-client-takes-qio-service-status
 dcl-submit-owner-fabricated
 dcl-print-owner-fabricated
 dcl-logout-user-fabricated
@@ -5330,6 +5331,23 @@ EOF
         knock_on_why)  echo "one status rule serves every _NET: function: the read after the refused connect (SS\$_FILNOTACC) and the empty IO\$M_NOW read (SS\$_ENDOFFILE) end in the IOSB too, so the same dropped line takes both for SS\$_NORMAL.";;
         esac;;
 
+    tcpip-client-takes-qio-service-status)
+        case "$_f" in
+        facility)     echo "the TCP/IP Services client \$QIOW status rule (tcpip_qiow, src/vmstcpip/services/tcpip_qio.h) -- TELNET, FTP and PING read how a BGn: I/O ENDED from the IOSB (rd vms-d01)";;
+        targets)      echo "vmstcpip/services/tcpip_qio.h";;
+        suites_red)   echo "test_syssvc_tcpip_client";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_qiow() stops replacing \$QIOW's service status with the IOSB status: since vms-d01 a queued \$QIOW returns SS\$_NORMAL whatever the BGn: driver answered, so a connect to a port nobody listens on (the error in the IOSB) is reported as an open connection. Every successful TELNET/FTP exchange ends SS\$_NORMAL in both statuses and stays green; only the refused-connect assertion reddens. The assignment text is unique in the header; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+TELNET/FTP connect to a port nobody listens on FAILS (the IOSB status)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     # -----------------------------------------------------------------------
     # THE SIX USER-NAME FABRICATIONS (vms-cb5 / vms-f39 / vms-f42d)
     #
@@ -8435,6 +8453,9 @@ apply_edit() {
 
     net-client-takes-qio-service-status)
         sed -i 's|^        st = iosb\.iosb\$w_status;$|        (void)0; /* NEGCTL net-client-takes-qio-service-status */|' "$_file";;
+
+    tcpip-client-takes-qio-service-status)
+        sed -i 's|^        st = iosb->iosb\$w_status;$|        (void)0; /* NEGCTL tcpip-client-takes-qio-service-status */|' "$_file";;
 
     # The six user-name fabrications. Each restores ONE deleted fallback.
     # RANGE-ANCHORED to the function that owns the site: `const char *user =

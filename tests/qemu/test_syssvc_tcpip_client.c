@@ -366,6 +366,28 @@ int main(void)
         return 1;
     }
 
+    /* ---------------- a REFUSED connect (rd vms-d01 sweep) ---------------- */
+    /* A port nobody listens on: take an ephemeral one and close it. The
+     * executive answers the IO$_ACCESS with an error in the IOSB while the
+     * queued $QIOW itself is SS$_NORMAL; a client that read only the service
+     * status reported this connection as open. */
+    {
+        uint16_t port = 0;
+        int lsock = listen_loopback(&port);
+        CHECK(lsock >= 0, "an ephemeral 127.0.0.1 port is taken (to be closed)");
+        if (lsock >= 0) {
+            close(lsock);
+            struct tcpip_conn conn;
+            uint32_t st = tcpip_connect(&conn, lo_be, port);
+            /* negctl: tcpip-client-takes-qio-service-status */
+            CHECK(!(st & 1) && conn.chan == 0 && !conn.connected,
+                  "TELNET/FTP connect to a port nobody listens on FAILS (the IOSB status), and the"
+                  " channel is released -- never a connection reported open");
+            if (st & 1)
+                tcpip_close(&conn);
+        }
+    }
+
     /* --------------------------- TELNET --------------------------- */
     {
         uint16_t port = 0;

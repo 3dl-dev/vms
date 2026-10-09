@@ -1078,10 +1078,45 @@ static void test_glue_bindings(void)
 		     "is treated as accepted");
 }
 
+/*
+ * rd vms-e8b -- A RESPONSE LEAVES ON THE CONNECTION ITS REQUEST ARRIVED ON.
+ *
+ * Read out of the shipping source, because this is a BINDING: the FSM half is
+ * proven as behaviour in test_cnxman_join.c, and what cannot be proven there
+ * is that the `respond` op the FSM calls really resolves the connection SCS
+ * delivered on. The defect this pins put a membership-commit response for
+ * VAX1's departure transition onto the OVMX<->VAX2 connection and VAX2 took a
+ * fatal CNXMGRERR 193 us later
+ * (tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/).
+ */
+static void test_e8b_a_response_rides_its_own_connection(void)
+{
+	printf("-- rd vms-e8b: a response rides the connection it arrived on "
+	       "--\n");
+	if (read_glue("vms_cnxman.c") != 0) {
+		ct_check(0, "could not open vms_cnxman.c");
+		return;
+	}
+	check_has("cn->cur_conid = local_conid;",
+		  "the request being dispatched is recorded as the Con.ID SCS "
+		  "really delivered on");
+	check_before("cn->cur_conid = local_conid;",
+		     "cnxman_join_rx_body(&cn->join",
+		     "... BEFORE any FSM is offered the body");
+	check_has("scs_send_msg(cn->cl->scs, cn->cur_conid, body,",
+		  "... and ops.respond answers on exactly that connection");
+	check_has("cn->cur_csb = csb;",
+		  "... and the CSB handed to the FSMs as `from_csb` is the one "
+		  "that same Con.ID resolved to, so the envelope and the wire "
+		  "are one fact");
+}
+
 int main(void)
 {
 	printf("FC-P3.8 R1: the CNXMAN glue's algorithm + its shipped "
 	       "bindings\n\n");
+	test_e8b_a_response_rides_its_own_connection();
+	printf("\n");
 	test_open_preload_go_stays_new();
 	printf("\n");
 	test_csb_club_projection();

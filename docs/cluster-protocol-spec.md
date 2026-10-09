@@ -3584,6 +3584,29 @@ opened one, frame 208, and the whole commit dialogue rode VAX2's). Either way
 the dialogue rides **one** VC per peer; answer on whichever the request arrived
 on.
 
+> **AND THE DESTINATION RULE IS FATAL, NOT STYLISTIC (GROUNDED by a crash,
+> `vms-e8b`).** "Answer on whichever the request arrived on" reads like a
+> convenience until the coordinator of a transition is a member you did *not*
+> join through. Then it decides whether a peer survives. On a real three-node
+> cluster (real VAX1 1025 + real VAX2 1026 + booted OVMXE 1030, cluster group 1,
+> `tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/`, reproduced 2/2),
+> VAX1 left with `@SYS$SYSTEM:SHUTDOWN` / `REMOVE_NODE` and opened its
+> class-`0x04` self-departure transition (§4(r)) with a cat-`0x01` op-`0x03`
+> COMMIT to **each** other member. VAX2 answered its own copy **226 µs** later
+> on the connection it arrived on. OVMX — which had joined through VAX2 and so
+> had VAX2 as its join target — answered **VAX1's** copy **to VAX2**, with the
+> right body and a valid envelope for the OVMX↔VAX2 dialogue. **193 µs** later
+> VAX2 took `Fatal BUG CHECK CNXMGRERR, Error detected by VAXcluster Connection
+> Manager`; VAX1, never answered, lost the transition and then quorum.
+>
+> So the rule, stated as the implementation obligation: **a response is
+> addressed by the connection its request arrived on, and its envelope
+> (`body[0:4]`) comes out of that same connection's dialogue counters.** The
+> two must be one fact, not two facts that happen to agree. The crash-safety
+> auditor's `S16-RESP-PEER-CROSSED` measures it (409 judged cat-`0x01`
+> responses over 62 captures, zero findings from any real-VMS responder;
+> `docs/cluster-crash-safety.md` C11).
+
 **Two body fields of the admission `0x02` are REPLAYED, not decoded** —
 `body[10:12]` = `0x5041` and twelve `0x20` spaces at `body[40:52]`
 (frame 285). They are **not constants**: the same node's later `0x02`
@@ -4000,6 +4023,47 @@ connection-manager opcodes with zero residuals:
 
 A class-`0x04` departure is `0x12` → `0x03` → `0x0d` → `0x0a` and then nothing;
 an `0x81/0x0b` carrying class `0x04` occurs in **no** capture.
+
+#### 4(r).D The class-0x04 op-0x03 COMMIT, and the answer a real VAX gives it (GROUNDED, `vms-e8b`)
+
+The class-`0x04` sequence above was grounded on the `af2-*` captures as an
+ordering. Its **op-`0x03`** step now has specimens, from the first capture in
+this tree of a real OpenVMS VAX V7.3 leaving a **three-node** cluster with
+`@SYS$SYSTEM:SHUTDOWN` / `REMOVE_NODE`
+(`tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/`, two independent
+runs; fixtures `cm-depart-commit-req.spec`,
+`cm-depart-commit-resp-oracle.spec`, `cm-depart-commit-to-ovmx.spec`):
+
+| specimen | frame | what |
+|---|---|---|
+| `cm-depart-commit-req` | m4 #88 | VAX1 (1025) → VAX2 (1026): cat `0x01` op `0x03`, role `0x20`, **class `0x04`**, epoch `51249195`, txn 5, token 47903 |
+| `cm-depart-commit-resp-oracle` | m4 #89, **+226 µs** | VAX2's own `0x81/0x03` answer **on the connection the request arrived on** |
+| `cm-depart-commit-to-ovmx` | m4 #90 | the SAME commit, to the third member, with that connection's own envelope and txn/token |
+
+**The departing node sends it to EVERY other member**, each on that member's own
+VC, each with that VC's own `(txn, token)` — the two copies in m4 carry
+`(5, 47903)` and `(9, 46657)`. It is **not** a broadcast and the pairs are not
+shared.
+
+**The answer is the §4(p) three-mutation echo and nothing more** —
+`body[8] |= 0x80`, `body[18] = 0x01`, and that is all. Two negatives worth
+stating because an implementation is tempted by both: `body[55]` is **ECHOED**
+(`0x6d` in both directions of m4 #88/#89), not cleared — clearing it is
+op-`0x09`-specific; and `body[17]` keeps the **requester's** class `0x04`, not
+the responder's — substituting your own class is op-`0x12`-specific. OVMX's
+shipping `vms_cm_echo_response_build()` reproduces VAX2's captured answer
+byte-for-byte over all **128** cited body bytes (`test_codec_cm.c`).
+
+**The OPCOM line this transition carries** is *"`%CNXMAN, proposing
+modification of quorum or quorum disk membership`"* on the departing node — the
+`REMOVE_NODE` option's implicit `SET CLUSTER/EXPECTED_VOTES` reduction
+(`docs/design-cluster-book-grounding.md`, p. 7-31/7-47) — followed on the
+survivors by the removal of the departed system. **Not grounded here:** the
+`op 0x0d` / `op 0x0a` tail of the class-`0x04` sequence in a three-node
+cluster, because in both runs the second survivor bugchecked before VAX1 got
+that far (see the destination-rule warning in §4(o) and `S16` in
+`docs/cluster-crash-safety.md`). A VAX-only three-node `REMOVE_NODE` capture
+would close it.
 
 The `op 0x0a` tag is `(class << 8) | role`, i.e. `0x0260` / `0x0360` / `0x0460`.
 Two of the three start a barrier.

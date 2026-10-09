@@ -952,6 +952,19 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	 * memory in bytes via the MAINTAINED accessor uvm_availmem(true); when uvm
 	 * is not yet up it returns 0 and we leave VMS_SYIMEM_V_PHYS clear so the
 	 * renderer honestly omits the section (INV-6), never a fabricated 0. */
+	/*
+	 * Native-image page 0 (rd vms-b869): granted to the calling process only,
+	 * and only to the native image activator -- Baron's per-process ruling.
+	 * _IOWR: `data' is the kernel copy NetBSD writes back.
+	 */
+	case VMS_IOCTL_NATIVE_PAGE0: {
+		struct vms_native_page0_args *na = (struct vms_native_page0_args *)data;
+		na->reserved = 0;
+		na->status = ovmx_native_page0_allow(l->l_proc,
+		    "/run/ovmx-boot/NATIVEACT.EXE") == 0 ? VMS_SS_NORMAL : SS__NOPRIV;
+		return 0;
+	}
+
 	case VMS_IOCTL_GETSYIMEM: {
 		struct vms_getsyi_mem_args *ma = (struct vms_getsyi_mem_args *)data;
 		uint64_t total_b = 0, free_b = 0;

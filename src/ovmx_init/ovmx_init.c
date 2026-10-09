@@ -977,6 +977,9 @@ static void stage_boot_images(void)
         "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "MAIL.EXE",
         "MONITOR.EXE", "INITIALIZE.EXE", "PRODUCT.EXE", "LIBRARIAN.EXE",
         "HELP.EXE", "SCSD.EXE",
+        /* OVMX/VAX: the native image activator DCL execs for an image LINKed
+         * on real OpenVMS VAX (vms-b869); absent elsewhere. */
+        "NATIVEACT.EXE",
         /* The DECnet FAL network server (rd vms-d85): NETACP $CREPRCs it with
          * the authenticated user's UIC for each inbound file access, and
          * $CREPRC execve()s -- the same SYSEXE-utility class as above. */

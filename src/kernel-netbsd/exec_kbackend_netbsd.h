@@ -464,6 +464,14 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
 
+/*
+ * ovmx_native_page0_allow (rd vms-b869): lower the minimum address of the
+ * caller's map to 0 when the caller is the native image activator
+ * (vms_native_p0_netbsd.c, uvm-only TU). 0 granted, EPERM refused.
+ */
+struct proc;
+extern int ovmx_native_page0_allow(struct proc *p, const char *activator);
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {

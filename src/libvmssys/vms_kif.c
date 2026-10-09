@@ -1760,7 +1760,11 @@ uint32_t vms_kif_tt_read(struct vms_tt_read_args *a)
 {
     if (!a)
         return 0x00000014; /* SS$_BADPARAM */
-    KIF_CALL(VMS_IOCTL_TT_READ, a);
+    /* A signal SUSPENDS a terminal read in the executive (no status written);
+     * re-entering resumes the same read -- the prompt is not written again and
+     * nothing typed is lost. VMS has no "your read was interrupted": an AST
+     * runs and the read goes on (kif_wait_call). */
+    KIF_WAIT_CALL(VMS_IOCTL_TT_READ, a);
     return a->status;
 }
 

@@ -39,6 +39,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <time.h>
+#include <signal.h>
 
 #include "vms_kif.h"
 
@@ -56,6 +57,9 @@ static int pass = 0, fail = 0;
     else { printf("  FAIL: %s\n", msg); fail++; } \
     fflush(stdout); \
 } while (0)
+
+static volatile int sigs_seen;
+static void on_usr1(int sig) { (void)sig; sigs_seen++; }
 
 static void msleep(int ms)
 {
@@ -196,6 +200,29 @@ int main(void)
           "the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF");
     if (strcmp(scr, "P> abc\r\n") != 0)
         printf("      screen was [%s]\n", scr);
+
+    /* ---- a signal does not end a read: it is suspended and resumed ---- */
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = on_usr1;            /* no SA_RESTART: the kif re-enters */
+        sigaction(SIGUSR1, &sa, NULL);
+        rd_start(&r, chan, 0, "S> ", 0);
+        msleep(200);
+        type(m, "o");
+        msleep(100);
+        pthread_kill(r.th, SIGUSR1);
+        msleep(200);
+        type(m, "k\r");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        CHECK(sigs_seen == 1 && r.st == SS_NORMAL && strcmp(r.data, "ok") == 0,
+              "a signal mid-read does not end it: the read resumes and returns the whole line 'ok'");
+        CHECK(strcmp(scr, "S> ok\r\n") == 0,
+              "the resumed read does not write its prompt a second time");
+        if (strcmp(scr, "S> ok\r\n") != 0)
+            printf("      screen was [%s]\n", scr);
+    }
 
     /* ---- IO$M_NOECHO ---- */
     rd_start(&r, chan, VMS_TT_RD_NOECHO, NULL, 0);

@@ -86,6 +86,8 @@ struct vms_tt_read_req {
 	uint32_t termmask[8];        /* with VMS_TT_RD_TERMMASK: bit n = char n */
 	const uint8_t *prompt;       /* kernel copy, or NULL */
 	uint32_t promptsz;
+	const void *owner;           /* who may resume this read after a signal
+				      * (vms_tt_read); NULL: not resumable */
 };
 
 /* Lifecycle (vms_tt.c "LIFETIME"): vms_tt_bind creates the instance and
@@ -107,8 +109,9 @@ void vms_tt_detach(struct vms_tt *tt);
 void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n);
 
 /* A read (process context; may sleep). `out` gets up to req->bufsz bytes.
- * Returns 0 with *res filled, or -EINTR when the caller was signalled
- * (the read is then cancelled: res->status = SS$_ABORT). */
+ * Returns 0 with *res filled, or -ERESTARTSYS when the caller was signalled:
+ * the read is then SUSPENDED, not ended, and the same req->owner calling
+ * again resumes it (vms_tt.c). */
 int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
                 uint8_t *out, struct vms_tt_read_result *res);
 

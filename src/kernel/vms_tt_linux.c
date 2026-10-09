@@ -367,9 +367,10 @@ static ssize_t vms_ldisc_read(struct tty_struct *tty, struct file *file, u8 *buf
 	memset(&rq, 0, sizeof(rq));
 	/* leave room for the LF that stands for the RETURN */
 	rq.bufsz = nr > 1 ? min_t(size_t, nr - 1, VMS_TT_LINE_MAX) : 1;
+	rq.owner = current;               /* a signal suspends; a restart resumes */
 	rc = vms_tt_read(tt, &rq, line, &r);
 	vms_tt_release(tt);
-	if (rc == -EINTR && r.count == 0) {
+	if (rc == -ERESTARTSYS) {
 		kfree(line);
 		return -ERESTARTSYS;
 	}

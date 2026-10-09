@@ -2083,6 +2083,8 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
+a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+the resumed read does not write its prompt a second time
 a NOECHO read returns what was typed
 IO$M_PURGE discards the type-ahead before reading
 DELETE rubs out the last character (data 'ac')

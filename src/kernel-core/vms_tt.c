@@ -64,6 +64,10 @@ struct vms_tt {
 	int rd_busy;               /* a reader owns the slot */
 	int rd_active;             /* it is consuming input */
 	int rd_done;
+	int rd_suspended;          /* a signal sent its reader back to userspace */
+	const void *rd_owner;      /* who may resume it */
+	uint64_t rd_susp_ms;
+	uint64_t rd_deadline;      /* IO$M_TIMED, absolute */
 	uint32_t rd_flags;
 	uint32_t rd_cap;           /* bytes this read may assemble */
 	uint32_t rd_mask[8];       /* terminator mask in force */
@@ -449,8 +453,13 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 			/* OUT-OF-BAND: acted on when TYPED, read or no read. */
 			if (c == TT_CTRL('Y') || c == TT_CTRL('C')) {
 				/* rd vms-f0fb delivers these as ASTs; until then the
-				 * port raises the substrate interrupt it always did. */
+				 * port raises the substrate interrupt it always did.
+				 * The type-ahead is discarded, and a read in progress
+				 * ends SS$_ABORT here, deterministically, rather than
+				 * by the signal that follows. */
 				tt_ta_purge(tt);
+				if (tt->rd_active)
+					tt_complete(tt, SS__ABORT, 0, 0);
 				if (nintr < sizeof(intr))
 					intr[nintr++] = c;
 				continue;
@@ -510,13 +519,38 @@ int vms_tt_readable(struct vms_tt *tt)
 
 /*
  * vms_tt_read - one read (IO$_READVBLK / READLBLK / READPROMPT).
+ *
+ * A SIGNAL DOES NOT END A READ. On VMS what interrupts a waiting process is an
+ * AST, which runs while the read stays outstanding: the user keeps typing into
+ * the same line and nothing is lost. On the substrate the waiting thread must
+ * return to deliver a signal, so the read is SUSPENDED instead of ended: the
+ * slot, the line typed so far, the prompt and the deadline all stay in the
+ * class driver (input that arrives meanwhile is still consumed and echoed by
+ * the receive path), and -ERESTARTSYS goes back to the caller. When the same
+ * owner issues its read again (an SA_RESTART restart of the ioctl, or the
+ * kif's re-entry -- kif_wait_call), the read RESUMES where it was: no second
+ * prompt, no lost characters. A suspended read nobody resumes (its owner died)
+ * is abandoned after VMS_TT_SUSPEND_MS by the next reader that needs the slot.
+ *
+ * What DOES end a read early is the driver's own out-of-band handling: ^Y/^C
+ * complete it SS$_ABORT in vms_tt_receive() before the interrupt is raised.
  */
+#define VMS_TT_SUSPEND_MS 1000
+
+static void tt_slot_release(struct vms_tt *tt)
+{
+	tt->rd_busy = 0;
+	tt->rd_done = 0;
+	tt->rd_suspended = 0;
+	tt->rd_owner = NULL;
+	exec_cv_broadcast(&tt->cv);               /* the next queued reader */
+}
+
 int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
                 uint8_t *out, struct vms_tt_read_result *res)
 {
 	uint64_t dc = tt_devchar(tt->dev);
-	uint64_t deadline = 0;
-	int intr = 0, timed_out = 0;
+	int intr = 0, timed_out = 0, resumed = 0;
 
 	memset(res, 0, sizeof(*res));
 	if (req->bufsz == 0) {
@@ -526,52 +560,73 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 
 	exec_lock(&tt->lock);
 	tt->refs++;
+
+	if (tt->rd_busy && tt->rd_suspended && tt->rd_owner == req->owner &&
+	    req->owner != NULL) {
+		tt->rd_suspended = 0;            /* the same read, resumed */
+		resumed = 1;
+	}
+
 	/* one read at a time: later readers queue */
-	while (tt->rd_busy && !tt->detached) {
-		if (exec_cv_wait(&tt->cv, &tt->lock)) {
-			intr = 1;
+	while (!resumed && tt->rd_busy && !tt->detached) {
+		if (tt->rd_suspended &&
+		    exec_ticks_ms() - tt->rd_susp_ms >= VMS_TT_SUSPEND_MS) {
+			/* its owner never came back for it */
+			tt->rd_active = 0;
+			tt_slot_release(tt);
 			break;
 		}
+		if (tt->rd_suspended) {
+			int to = 0;
+			intr = exec_cv_wait_timeout(&tt->cv, &tt->lock, 100, &to);
+		} else {
+			intr = exec_cv_wait(&tt->cv, &tt->lock);
+		}
+		if (intr)
+			break;
 	}
 	if (intr || tt->detached) {
 		res->status = tt->detached ? SS__HANGUP : SS__ABORT;
 		exec_unlock(&tt->lock);
 		tt_put(tt);
-		return intr ? -EINTR : 0;
+		return intr ? -ERESTARTSYS : 0;
 	}
 
-	tt->rd_busy = 1;
-	tt->rd_done = 0;
-	tt->rd_flags = req->flags;
-	tt->rd_cap = req->bufsz < VMS_TT_LINE_MAX ? req->bufsz : VMS_TT_LINE_MAX;
-	tt->rd_dc = dc;
-	tt->len = 0;
-	tt->hc_del = 0;
-	memset(&tt->res, 0, sizeof(tt->res));
-	if (req->flags & VMS_TT_RD_TERMMASK)
-		memcpy(tt->rd_mask, req->termmask, sizeof(tt->rd_mask));
-	else
-		tt_std_mask(tt->rd_mask);
-	tt->promptsz = 0;
-	if (req->prompt && req->promptsz) {
-		tt->promptsz = req->promptsz < VMS_TT_PROMPT_MAX ? req->promptsz
-								 : VMS_TT_PROMPT_MAX;
-		memcpy(tt->prompt, req->prompt, tt->promptsz);
+	if (!resumed) {
+		tt->rd_busy = 1;
+		tt->rd_done = 0;
+		tt->rd_owner = req->owner;
+		tt->rd_flags = req->flags;
+		tt->rd_cap = req->bufsz < VMS_TT_LINE_MAX ? req->bufsz : VMS_TT_LINE_MAX;
+		tt->rd_dc = dc;
+		tt->len = 0;
+		tt->hc_del = 0;
+		memset(&tt->res, 0, sizeof(tt->res));
+		if (req->flags & VMS_TT_RD_TERMMASK)
+			memcpy(tt->rd_mask, req->termmask, sizeof(tt->rd_mask));
+		else
+			tt_std_mask(tt->rd_mask);
+		tt->promptsz = 0;
+		if (req->prompt && req->promptsz) {
+			tt->promptsz = req->promptsz < VMS_TT_PROMPT_MAX ? req->promptsz
+									 : VMS_TT_PROMPT_MAX;
+			memcpy(tt->prompt, req->prompt, tt->promptsz);
+		}
+		tt->rd_deadline = 0;
+		if (req->flags & VMS_TT_RD_TIMED)
+			tt->rd_deadline = exec_ticks_ms() + (uint64_t)req->timeout_s * 1000u;
+
+		if (req->flags & VMS_TT_RD_PURGE)
+			tt_ta_purge(tt);
+		/* the prompt is written BEFORE any type-ahead is consumed and echoed */
+		if (tt->promptsz)
+			tt_out(tt, tt->prompt, tt->promptsz);
+
+		tt->rd_active = 1;
+		tt_drain_typeahead(tt);
+		if (tt->passall && tt->rd_active && tt->len)
+			tt_complete(tt, SS__NORMAL, 0, 0);
 	}
-
-	if (req->flags & VMS_TT_RD_PURGE)
-		tt_ta_purge(tt);
-	/* the prompt is written BEFORE any type-ahead is consumed and echoed */
-	if (tt->promptsz)
-		tt_out(tt, tt->prompt, tt->promptsz);
-
-	tt->rd_active = 1;
-	tt_drain_typeahead(tt);
-	if (tt->passall && tt->rd_active && tt->len)
-		tt_complete(tt, SS__NORMAL, 0, 0);
-
-	if (req->flags & VMS_TT_RD_TIMED)
-		deadline = exec_ticks_ms() + (uint64_t)req->timeout_s * 1000u;
 
 	while (!tt->rd_done && !tt->detached) {
 		uint32_t olen = tt->olen;
@@ -582,22 +637,30 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 			exec_lock(&tt->lock);
 			continue;
 		}
-		if (req->flags & VMS_TT_RD_TIMED) {
+		if (tt->rd_flags & VMS_TT_RD_TIMED) {
 			uint64_t now = exec_ticks_ms();
 
-			if (now >= deadline) {
+			if (now >= tt->rd_deadline) {
 				timed_out = 1;
 				break;
 			}
 			intr = exec_cv_wait_timeout(&tt->cv, &tt->lock,
-						    (unsigned int)(deadline - now),
+						    (unsigned int)(tt->rd_deadline - now),
 						    &timed_out);
 			timed_out = 0;            /* re-tested at the loop top */
 		} else {
 			intr = exec_cv_wait(&tt->cv, &tt->lock);
 		}
-		if (intr && !tt->rd_done)
-			break;
+		if (intr && !tt->rd_done) {
+			/* a signal: suspend, do not end (see above) */
+			tt->rd_suspended = 1;
+			tt->rd_susp_ms = exec_ticks_ms();
+			exec_unlock(&tt->lock);
+			tt_flush(tt);
+			tt_put(tt);
+			res->status = SS__ABORT;
+			return -ERESTARTSYS;
+		}
 	}
 
 	if (!tt->rd_done) {
@@ -611,13 +674,11 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 
 	*res = tt->res;
 	memcpy(out, tt->line, res->count);
-	tt->rd_busy = 0;
-	tt->rd_done = 0;
-	exec_cv_broadcast(&tt->cv);               /* the next queued reader */
+	tt_slot_release(tt);
 	exec_unlock(&tt->lock);
 	tt_flush(tt);
 	tt_put(tt);
-	return (intr && res->status == SS__ABORT) ? -EINTR : 0;
+	return 0;
 }
 
 /*
@@ -724,7 +785,15 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 		goto out_rel;
 	}
 
-	(void)vms_tt_read(tt, &rq, line, &r);
+	/* a signal suspends the read; this process's re-entry resumes it */
+	rq.owner = proc;
+	if (vms_tt_read(tt, &rq, line, &r) == -ERESTARTSYS) {
+		vms_tt_release(tt);
+		exec_free(line);
+		if (prompt)
+			exec_free(prompt);
+		return -ERESTARTSYS;            /* no status written: re-enter */
+	}
 	a.status = r.status;
 	a.count = r.count;
 	a.term = r.term;

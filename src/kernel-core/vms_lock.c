@@ -1729,17 +1729,42 @@ static int lock_compatible(struct vms_lock_resource *res,
  * because false positives just cause SS$_DEADLOCK, which the caller
  * retries or reports).
  */
+static struct vms_proc *dlm_delivery_proc_get(void);
+
+/* Upper bound on wait-for edges one search may visit. The stack bounds DEPTH,
+ * not WORK: a cycle that does not pass through the requester re-pushes the same
+ * locks forever (measured in the lab, rd vms-ci.6 ev11: CPU 0 spun here with
+ * res->lock held -- an RCU stall -- the moment a local CONVERT queued behind a
+ * remote system's EX). */
+#define MAX_DEADLOCK_STEPS 256
+static uint32_t deadlock_budget_hits;   /* searches that ran out of budget */
+
+uint32_t vms_lock_deadlock_budget_hits(void)
+{
+    return deadlock_budget_hits;
+}
+
 static int check_deadlock(struct vms_lock_entry *lock,
                            int depth __attribute__((unused)))
 {
     struct vms_proc *origin_proc = lock->proc;
+    struct vms_proc *delivery = dlm_delivery_proc_get();
     struct vms_lock_entry *stack[MAX_DEADLOCK_DEPTH];
     int sp = 0;
+    int steps = 0;
 
     stack[sp++] = lock;
 
     while (sp > 0) {
         struct vms_lock_entry *cur = stack[--sp];
+
+        /* Out of budget: report no deadlock rather than spin. A real cycle
+         * missed here keeps its waiters waiting -- never a fabricated
+         * SS$_DEADLOCK, and never a wedged CPU. */
+        if (++steps > MAX_DEADLOCK_STEPS) {
+            deadlock_budget_hits++;
+            return 0;
+        }
         struct vms_lock_resource *res = cur->resource;
         struct vms_lock_entry *granted;
 
@@ -1758,6 +1783,19 @@ static int check_deadlock(struct vms_lock_entry *lock,
             /* Direct cycle: blocker is the original requester */
             if (granted->proc == origin_proc)
                 return 1;  /* Deadlock! */
+
+            /* A lock held FOR ANOTHER SYSTEM (the cluster delivery process
+             * owns every remote holder's lock here, FC-P4.4/vms-c27). That
+             * one owner stands for many systems, so its other waiting locks
+             * are NOT this blocker's wait-for edges -- following them would
+             * chain unrelated systems together (and loop: two remote systems
+             * contending for one resource are both "the delivery process").
+             * A cycle through another node is the distributed search's to
+             * find (H11), not this node-local one's. */
+            if (delivery != NULL && granted->proc == delivery)
+                continue;
+            if (granted->proc == NULL)
+                continue;
 
             /* Check if the blocking process has any waiting locks */
             if (!exec_trylock(&granted->proc->lock_list_lock))

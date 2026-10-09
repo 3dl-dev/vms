@@ -1027,6 +1027,79 @@ static void a_signal_ends_the_wait_instead_of_spinning(void)
 	vms_lock_cleanup();
 }
 
+/* ev11 (rd vms-ci.6, 2026-10-09 11:12Z): the lab's OVMX node spun CPU 0 with
+ * res->lock held (an RCU stall) the moment a local CONVERT queued behind a
+ * remote EX. check_deadlock() walked the blocker's owner -- the cluster
+ * delivery process, which owns EVERY remote system's lock -- found one of its
+ * OTHER locks waiting behind ANOTHER of its locks (two VAXes contending for
+ * one resource), and re-pushed that pair forever. alarm() turns a regression
+ * back into a hang into a failed test instead of a wedged ctest. */
+
+
+static void the_ev11_remote_contention_does_not_spin_the_deadlock_search(void)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+	struct vms_proc delivery, app;
+	struct vms_enq_args cvt;
+	uint32_t local_lkid = 0;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "ev11: vms_lock_init");
+		return;
+	}
+	printf("-- ev11: a local CONVERT behind a remote EX while two remote "
+	       "systems contend for another resource\n");
+	proc_init(&delivery);
+	proc_init(&app);
+	delivery.current_mode = PSL_C_USER;
+	app.current_mode = MD_PEER_MODE;
+	app.uic = (MD_PEER_GROUP << 16);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* Two remote systems contend on OTHER$NAME: VAX1 EX granted, VAX2 EX
+	 * queued -- both owned here by the delivery process. */
+	ct_check(do_enq(&app, "OTHER$NAME", LCK_K_NLMODE, 0, &local_lkid) ==
+		 SS__NORMAL, "this node masters OTHER$NAME");
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A, LCK_K_EXMODE, 0,
+		"OTHER$NAME");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "VAX1 holds EX on OTHER$NAME");
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_B, MD_LKID_B + 1u, LCK_K_EXMODE, 0,
+		"OTHER$NAME");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED,
+		 "VAX2's EX on OTHER$NAME queues behind VAX1's");
+
+	/* The workload resource: local NL, VAX1 EX, then the local CONVERT. */
+	ct_check(do_enq(&app, "EVAC$WORKLOAD", LCK_K_NLMODE, 0, &local_lkid) ==
+		 SS__NORMAL, "an OVMX process takes NL on EVAC$WORKLOAD");
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A + 2u, LCK_K_EXMODE, 0,
+		"EVAC$WORKLOAD");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "VAX1's EX on EVAC$WORKLOAD is granted");
+
+	memset(&cvt, 0, sizeof(cvt));
+	cvt.lkid = local_lkid;
+	cvt.lkmode = LCK_K_EXMODE;
+	alarm(10);
+	vms_ioctl_convert(&app, (unsigned long)(void *)&cvt);
+	alarm(0);
+	ct_check_eq_u32(cvt.status, SS__NORMAL,
+			"*** the local NL->EX convert QUEUES and returns -- the "
+			"deadlock search does not spin through the delivery "
+			"process ***");
+	ct_check_eq_u32(vms_lock_deadlock_budget_hits(), 0u,
+			"*** and it never needed the step budget: a remote "
+			"holder's other waits are not this request's wait-for "
+			"edges ***");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
@@ -1040,5 +1113,6 @@ int main(void)
 	dlksrch_both_initiate_aborts_once();
 	the_ev6_queue_shape_does_not_spin();
 	a_signal_ends_the_wait_instead_of_spinning();
+	the_ev11_remote_contention_does_not_spin_the_deadlock_search();
 	return ct_summary("test_lock_host");
 }

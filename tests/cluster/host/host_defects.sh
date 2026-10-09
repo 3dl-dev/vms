@@ -180,6 +180,7 @@ dlm-unroutable-refuses-the-caller
 dlm-grant-handles-swapped
 dlm-grant-record-omitted
 dlm-echo-guard-never-caps
+dlm-deadlock-search-follows-remote-holders
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -735,6 +736,19 @@ and the console line is flagged exactly ONCE, however long the peer keeps asking
 one conversation hit the bound
 the guard's own counter agrees -- a real number for SHOW CLUSTER/diagnostics, not a log line
 the loud system is capped
+EOF
+                      ;;
+        esac;;
+
+    dlm-deadlock-search-follows-remote-holders)
+        case "$_f" in
+        facility)     echo "the node-local DEADLOCK SEARCH (vms_lock.c check_deadlock, rd vms-ci.6 ev11): it does not walk through the cluster delivery process, which owns every remote system's lock";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_host";;
+        isolation)    echo "isolated";;
+        why)          echo "the search follows the delivery process's other waiting locks as if they were the blocker's own wait-for edges: two VAXes contending for one resource become one owner blocking itself, and without the step budget the search re-pushes them forever with res->lock held -- the lab OVMX node spun CPU 0 into an RCU stall the moment a local CONVERT queued behind a VAX EX (2026-10-09 11:12Z).";;
+        require_fail) cat <<'EOF'
+*** and it never needed the step budget: a remote holder's other waits are not this request's wait-for edges ***
 EOF
                       ;;
         esac;;
@@ -1884,6 +1898,10 @@ apply_edit() {
         # removes the anchor, so a second apply cannot match.
         sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
         sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+
+    dlm-deadlock-search-follows-remote-holders)
+        # The skip line is unique in vms_lock.c.
+        sed -i 's|            if (delivery != NULL \&\& granted->proc == delivery)|            if (0) /* NEGCTL dlm-deadlock-search-follows-remote-holders */|' "$_file";;
 
     dlm-echo-guard-never-caps)
         # The one decision this TU makes. Replacing the bound test with an

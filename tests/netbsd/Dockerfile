@@ -213,7 +213,7 @@ COPY tests/netbsd/guest/vmsprobe.c tests/netbsd/guest/vmseflag.c src/libvmssys/k
 # P4-A (rd vms-f8a): the cross-process test tools for the remaining five
 # facilities (proctab, mbx, lock, access, ast) + the wire-contract headers they
 # #include.
-COPY tests/netbsd/guest/vmsproctab.c tests/netbsd/guest/vmsmbx.c tests/netbsd/guest/vmslock.c tests/netbsd/guest/vmsaccess.c src/kernel-netbsd/vms_proctab_nb.h src/kernel-netbsd/vms_mbx_nb.h src/kernel-netbsd/vms_lock_nb.h src/kernel-netbsd/vms_ast_nb.h src/kernel-netbsd/vms_access_nb.h /netbsd/guest-src/probe/
+COPY tests/netbsd/guest/vmsproctab.c tests/netbsd/guest/vmsexitcompl.c tests/netbsd/guest/vmsmbx.c tests/netbsd/guest/vmslock.c tests/netbsd/guest/vmsaccess.c src/kernel-netbsd/vms_proctab_nb.h src/kernel-netbsd/vms_mbx_nb.h src/kernel-netbsd/vms_lock_nb.h src/kernel-netbsd/vms_ast_nb.h src/kernel-netbsd/vms_access_nb.h /netbsd/guest-src/probe/
 COPY tests/netbsd/drive_netbsd_p2b.py tests/netbsd/run_p2b.sh tests/netbsd/drive_netbsd_p2c.py tests/netbsd/run_p2c.sh tests/netbsd/drive_netbsd_p4a.py tests/netbsd/run_p4a.sh /netbsd/
 
 # P4-VFS V4 (rd vms-308) — RETIRED by vms-165. This was the OVMX/NetBSD ODS-2

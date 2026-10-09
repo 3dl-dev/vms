@@ -1,0 +1,22 @@
+$ LINK/SHAREABLE/MAP/FULL/CROSS/NOEXECUTABLE ORDSC
+%LINK-W-NUDFSYMS, 5 undefined symbols:
+%LINK-I-UDFSYM, 	DECC$GXATOF 
+%LINK-I-UDFSYM, 	DECC$GXSTRTOD 
+%LINK-I-UDFSYM, 	DECC$TXATOF 
+%LINK-I-UDFSYM, 	DECC$TXSTRTOD 
+%LINK-I-UDFSYM, 	DECC$__READ_RND 
+%LINK-W-USEUNDEF, undefined symbol DECC$GXATOF referenced
+	in psect ODATA offset %X000002BC
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$GXSTRTOD referenced
+	in psect ODATA offset %X000002DC
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$TXATOF referenced
+	in psect ODATA offset %X000006C0
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$TXSTRTOD referenced
+	in psect ODATA offset %X000006E0
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$__READ_RND referenced
+	in psect ODATA offset %X00000920
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1

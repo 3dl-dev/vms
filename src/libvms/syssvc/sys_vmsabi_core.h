@@ -58,4 +58,12 @@ uint32_t ovmx_vmsabi_acp_deaccess(uint16_t chan);
 /* Complete a $QIO: set the event flag and deliver the AST, if one was given. */
 void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), unsigned long long astprm);
 
+/* $QIO / $QIOW (wait != 0) of any non-ACP function, P1-P6 as the caller
+ * passed them (vms-3b3f). */
+uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,
+                         void *iosb, unsigned long long astadr,
+                         unsigned long long astprm, const unsigned long long p[6]);
+/* LIB$PUT_OUTPUT of `len` bytes at `p` (vms-3b3f). */
+uint32_t ovmx_vmsabi_put_output(const char *p, unsigned len);
+
 #endif /* SYS_VMSABI_CORE_H */

@@ -1,0 +1,18 @@
+        .TITLE  CSTDIO  OVMX vms-3b3f rung-2 C RTL stdio probe
+; Our own program: calls the C RTL (DECC$SHR) stdio entry points.
+        $SSDEF
+        .PSECT  CDATA,WRT,NOEXE,QUAD
+PMSG:   .ASCIZ  /OVMX-NATIVE DECC puts: hello/
+FMT:    .ASCIZ  /OVMX-NATIVE DECC printf: %s %d/<10>
+WORD:   .ASCIZ  /answer/
+        .PSECT  CCODE,EXE,NOWRT,QUAD
+        .ENTRY  CSTDIO,^M<>
+        PUSHAB  PMSG
+        CALLS   #1,G^DECC$PUTS
+        PUSHL   #42
+        PUSHAB  WORD
+        PUSHAB  FMT
+        CALLS   #3,G^DECC$TXPRINTF
+        MOVL    #SS$_NORMAL,R0
+        RET
+        .END    CSTDIO

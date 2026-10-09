@@ -266,12 +266,12 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
         /* Writing attributes back on IO$_DEACCESS is not implemented: an
          * attribute list is refused for a file accessed for write, never
          * accepted and dropped. */
-        if (n_atr && chan < ABI_MAXCHAN && chan_write[chan])
+        if (n_atr && (chan >> 4) < ABI_MAXCHAN && chan_write[chan >> 4])
             st = SS$_BADATTRIB;
         else
             st = (unsigned short)ovmx_vmsabi_acp_deaccess(chan);
-        if (chan < ABI_MAXCHAN)
-            chan_write[chan] = 0;
+        if ((chan >> 4) < ABI_MAXCHAN)
+            chan_write[chan >> 4] = 0;
     } else {
         const char *fibp, *name = "";
         unsigned fiblen, namelen = 0;
@@ -313,8 +313,8 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
                             *p3 = (unsigned short)n;
                     }
                 }
-                if (keep && chan < ABI_MAXCHAN)
-                    chan_write[chan] = (acctl & 256u) != 0;   /* FIB$M_WRITE */
+                if (keep && (chan >> 4) < ABI_MAXCHAN)
+                    chan_write[chan >> 4] = (acctl & 256u) != 0;   /* FIB$M_WRITE */
             }
         }
     }

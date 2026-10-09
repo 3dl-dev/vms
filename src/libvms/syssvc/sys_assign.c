@@ -573,7 +573,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             strncpy(pcb->channels[slot].devnam, name,
                     sizeof(pcb->channels[slot].devnam) - 1);
             pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
-            *chan = (uint16_t)slot;
+            *chan = pcb_slot_to_chan((uint32_t)slot);
 
             pthread_mutex_unlock(&pcb->chan_lock);
             return SS$_NORMAL;
@@ -606,7 +606,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             strncpy(pcb->channels[slot].devnam, name,
                     sizeof(pcb->channels[slot].devnam) - 1);
             pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
-            *chan = (uint16_t)slot;
+            *chan = pcb_slot_to_chan((uint32_t)slot);
 
             pthread_mutex_unlock(&pcb->chan_lock);
             return SS$_NORMAL;
@@ -648,7 +648,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             strncpy(pcb->channels[slot].devnam, name,
                     sizeof(pcb->channels[slot].devnam) - 1);
             pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
-            *chan = (uint16_t)slot;
+            *chan = pcb_slot_to_chan((uint32_t)slot);
 
             pthread_mutex_unlock(&pcb->chan_lock);
             return SS$_NORMAL;
@@ -682,7 +682,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             strncpy(pcb->channels[slot].devnam, name,
                     sizeof(pcb->channels[slot].devnam) - 1);
             pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
-            *chan = (uint16_t)slot;
+            *chan = pcb_slot_to_chan((uint32_t)slot);
 
             pthread_mutex_unlock(&pcb->chan_lock);
             return SS$_NORMAL;
@@ -775,7 +775,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
     strncpy(pcb->channels[slot].devnam, name,
             sizeof(pcb->channels[slot].devnam) - 1);
     pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
-    *chan = (uint16_t)slot;
+    *chan = pcb_slot_to_chan((uint32_t)slot);
 
     pthread_mutex_unlock(&pcb->chan_lock);
     return SS$_NORMAL;
@@ -792,8 +792,9 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
  *   SS$_NORMAL - Channel deassigned
  *   SS$_IVCHAN - Invalid or unassigned channel number
  */
-uint32_t sys$dassgn(uint16_t chan) {
-    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return pcb_chan_unheld_status(chan);
+uint32_t sys$dassgn(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return pcb_chan_unheld_status(chan_arg);
 
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_IVCHAN;
@@ -869,7 +870,8 @@ uint32_t sys$dassgn(uint16_t chan) {
  *
  * Returns the fd on success, or -1 if the channel is invalid.
  */
-int vms$$chan_to_fd(uint16_t chan) {
+int vms$$chan_to_fd(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return -1;
 
     struct vms_pcb *pcb = vms_pcb_get();
@@ -893,14 +895,16 @@ int vms$$chan_to_fd(uint16_t chan) {
  * NULL if the slot is not in use / records none. Lets $GETDVI by channel ask
  * the executive about the device a process-local channel stands for.
  */
-const char *vms$$chan_devnam(uint16_t chan) {
+const char *vms$$chan_devnam(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return NULL;
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb || !pcb->channels[chan].in_use) return NULL;
     return pcb->channels[chan].devnam[0] ? pcb->channels[chan].devnam : NULL;
 }
 
-uint32_t vms$$chan_exec_chan(uint16_t chan) {
+uint32_t vms$$chan_exec_chan(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
 
     struct vms_pcb *pcb = vms_pcb_get();
@@ -916,7 +920,8 @@ uint32_t vms$$chan_exec_chan(uint16_t chan) {
  * a mailbox channel's fd is always -1, since the mailbox itself is
  * entirely the executive's.
  */
-int vms$$chan_is_mailbox(uint16_t chan) {
+int vms$$chan_is_mailbox(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
 
     struct vms_pcb *pcb = vms_pcb_get();
@@ -934,7 +939,8 @@ int vms$$chan_is_mailbox(uint16_t chan) {
  * (DKA0:/SYS$SYSDEVICE) sets PCB_CHAN_FILE; this is the reader that proves the
  * channel is the executive's, not a Linux fd.
  */
-int vms$$chan_is_file(uint16_t chan) {
+int vms$$chan_is_file(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
 
     struct vms_pcb *pcb = vms_pcb_get();
@@ -949,7 +955,8 @@ int vms$$chan_is_file(uint16_t chan) {
  * the executive's BG driver (vms_kif_bg_*) instead of the fd-based path -- a
  * BG channel's fd is always -1, since the socket is executive-resident.
  */
-int vms$$chan_is_bg(uint16_t chan) {
+int vms$$chan_is_bg(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
 
     struct vms_pcb *pcb = vms_pcb_get();
@@ -964,7 +971,8 @@ int vms$$chan_is_bg(uint16_t chan) {
  * to qio_net_op (the NETACP broker path) instead of the fd-based path -- a
  * _NET: channel's fd is always -1, since the link lives in the executive/NETACP.
  */
-int vms$$chan_is_net(uint16_t chan) {
+int vms$$chan_is_net(uint16_t chan_arg) {
+    uint32_t chan = pcb_chan_to_slot(chan_arg);   /* the slot this channel number names */
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
 
     struct vms_pcb *pcb = vms_pcb_get();

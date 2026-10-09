@@ -50,6 +50,7 @@
 #include <sys/poll.h>
 #include <sys/select.h>
 #include <sys/intr.h>
+#include <sys/cpu.h>         /* cpu_intr_p, cpu_softintr_p */
 #include <sys/condvar.h>
 #include <sys/mutex.h>
 #include <sys/queue.h>
@@ -266,6 +267,8 @@ port_kill(struct vms_ttport_nb *p)
 
 /* ---- the soft interrupt: received bytes -> class driver ------------ */
 
+static kmutex_t vtt_drain_lock;   /* one drainer at a time: bytes stay in order */
+
 static void
 vtt_softint(void *arg __unused)
 {
@@ -274,11 +277,13 @@ vtt_softint(void *arg __unused)
 	u_int n, i;
 	int kill;
 
+	mutex_enter(&vtt_drain_lock);
 	for (;;) {
 		mutex_spin_enter(&tty_lock);
 		p = TAILQ_FIRST(&vtt_pending);
 		if (p == NULL) {
 			mutex_spin_exit(&tty_lock);
+			mutex_exit(&vtt_drain_lock);
 			return;
 		}
 		TAILQ_REMOVE(&vtt_pending, p, pend);
@@ -411,6 +416,29 @@ vtt_unpark(const char *devnam, char *devnam_out)
 	return tt;
 }
 
+/*
+ * Hand pending input / kills to the class driver. From a hardware interrupt
+ * (a serial line's receiver, a carrier change) that is the soft interrupt's
+ * job. But a pseudo-terminal's input arrives in THREAD context -- ptcwrite()
+ * calls l_rint with tty_lock dropped, ptcclose() calls l_modem -- and there
+ * the drain runs at once: a soft interrupt scheduled from a preemptible thread
+ * is not guaranteed to run (softint_schedule() requires preemption disabled),
+ * and on NetBSD/vax an RTAn:'s input then sat queued until some console
+ * interrupt happened to drain it (the CTERM login read timed out; its line
+ * was never detached at session end).
+ */
+static void
+vtt_kick(void)
+{
+	if (cpu_intr_p() || cpu_softintr_p()) {
+		kpreempt_disable();
+		softint_schedule(vtt_sih);
+		kpreempt_enable();
+	} else {
+		vtt_softint(NULL);
+	}
+}
+
 static int
 vtt_rint(int c, struct tty *tp)
 {
@@ -430,7 +458,7 @@ vtt_rint(int c, struct tty *tp)
 	}
 	port_pend_locked(p);
 	mutex_spin_exit(&tty_lock);
-	softint_schedule(vtt_sih);
+	vtt_kick();
 	return 0;
 }
 
@@ -453,7 +481,7 @@ vtt_modem(struct tty *tp, int flag)
 			port_pend_locked(p);
 		}
 		mutex_spin_exit(&tty_lock);
-		softint_schedule(vtt_sih);
+		vtt_kick();
 	}
 	return r;
 }
@@ -639,6 +667,7 @@ vms_tt_netbsd_init(void)
 	int error;
 
 	mutex_init(&vtt_park_lock, MUTEX_DEFAULT, IPL_NONE);
+	mutex_init(&vtt_drain_lock, MUTEX_DEFAULT, IPL_NONE);
 	vtt_sih = softint_establish(SOFTINT_SERIAL | SOFTINT_MPSAFE, vtt_softint, NULL);
 	if (vtt_sih == NULL)
 		return ENOMEM;
@@ -663,4 +692,5 @@ vms_tt_netbsd_fini(void)
 	softint_disestablish(vtt_sih);
 	vtt_sih = NULL;
 	mutex_destroy(&vtt_park_lock);
+	mutex_destroy(&vtt_drain_lock);
 }

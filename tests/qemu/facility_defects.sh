@@ -2087,19 +2087,21 @@ the read returns the type-ahead 'abc' and the RETURN terminator
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
-a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
-the resumed read does not write its prompt a second time
-a NOECHO read returns what was typed
-IO$M_PURGE discards the type-ahead before reading
-DELETE rubs out the last character (data 'ac')
+DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 DELETE is echoed as BS SP BS on a scope terminal
+DELETE rubs out the last character (data 'ac')
+IO$M_PURGE discards the type-ahead before reading
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
-an escape sequence (up-arrow) neither ends the read nor lands in the line
 ^Z terminates the read
-the driver echoes *EXIT* for ^Z
-read(2) on the bound line returns the line with LF for the RETURN
+a NOECHO read returns what was typed
+a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+an escape sequence (up-arrow) neither ends the read nor lands in the line
 read(2) echoes as it consumes, like any driver read
+read(2) on the bound line returns the line with LF for the RETURN
+the driver echoes *EXIT* for ^Z
+the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
+the resumed read does not write its prompt a second time
+two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
 EOF
                       ;;
         knock_on_why)  echo "one dropped receive path, every typed-input observation: each case that types at the line and expects a read to consume it sees its read time out with nothing (and no consumption echo). The cases that type nothing -- the bind, the NOECHO sense, the empty timed read, ^X (which expects an empty read anyway), the \$QIO write, the portless unit and the hangup -- stay green.";;

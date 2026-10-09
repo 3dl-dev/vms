@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <poll.h>
 #include <sched.h>
+#include <sys/syscall.h>
 #include <sys/stat.h>
 #include <strings.h>
 #include <errno.h>
@@ -155,8 +156,10 @@ static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t ef
     cpu_set_t one;
     CPU_ZERO(&one);
     CPU_SET(0, &one);
+    /* musl's sched_setscheduler() is a stub (ENOSYS, by design); the policy is
+     * set with the system call itself. */
     int rt = sched_setaffinity(0, sizeof one, &one) == 0 &&
-             sched_setscheduler(0, SCHED_FIFO, &sp) == 0;
+             syscall(SYS_sched_setscheduler, 0, SCHED_FIFO, &sp) == 0;
     int set = -1;
     if (!rt)
         printf("  INFO: SCHED_FIFO/affinity refused (errno %d)\n", errno);
@@ -167,7 +170,7 @@ static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t ef
         uint32_t r = lib$spawn(&cmd, NULL, NULL, &flags, NULL, &pid, NULL, &e,
                                NULL, NULL, NULL, NULL, NULL);
         struct sched_param np = { .sched_priority = 0 };
-        (void)sched_setscheduler(0, SCHED_OTHER, &np);
+        (void)syscall(SYS_sched_setscheduler, 0, SCHED_OTHER, &np);
         if (!(r & 1))
             printf("  INFO: lib$spawn of the stub CLI returned %08x\n", (unsigned)r);
         if (r & 1) {

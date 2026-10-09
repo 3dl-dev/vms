@@ -114,6 +114,12 @@ struct vms_modexfer_args {
 	uint32_t status;        /* return: SS$_ status */
 };
 
+/* Virtual page 0 for the native image activator (rd vms-b869). */
+struct vms_native_page0_args {
+	uint32_t status;        /* return: SS$_NORMAL / SS$_NOPRIV / SS$_UNSUPPORTED */
+	uint32_t reserved;
+};
+
 /* ================================================================
  * Request numbers -- SAME NR bytes, structs, magic and direction class as
  * src/kernel/vms_ioctl.h, realized through the substrate's own macros so the
@@ -125,5 +131,6 @@ struct vms_modexfer_args {
 #define VMS_IOCTL_CHKPRIV        _IOWR(VMS_ACCESS_IOC_MAGIC, 0x04, struct vms_priv_args)
 #define VMS_IOCTL_ENTER_IMAGE    _IOWR(VMS_ACCESS_IOC_MAGIC, 0x66, struct vms_modexfer_args)
 #define VMS_IOCTL_IMAGE_RUNDOWN  _IOWR(VMS_ACCESS_IOC_MAGIC, 0x67, struct vms_modexfer_args)
+#define VMS_IOCTL_NATIVE_PAGE0   _IOWR(VMS_ACCESS_IOC_MAGIC, 0x99, struct vms_native_page0_args)
 
 #endif /* _VMS_ACCESS_NB_H */

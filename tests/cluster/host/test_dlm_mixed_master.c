@@ -287,6 +287,14 @@ static uint32_t eng_dir_generation(void *ctx)
 	return vms_ldwv_generation(&g.cl.club.ldwv);
 }
 
+/* The one question the vector answers WITHOUT a value (rd vms-b5b0), read
+ * exactly as the arm reads it: dlm_arm_eng_dir_all_ours. */
+static int eng_dir_all_ours(void *ctx)
+{
+	(void)ctx;
+	return vms_ldwv_directs_everything_here(&g.cl.club.ldwv);
+}
+
 /*
  * WHICH NODE THE VECTOR NAMES FOR A RESOURCE, computed the way the engine
  * computes it: the PROVEN resource-name hash over the resource's identity, then
@@ -448,6 +456,7 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.eng_ops.post             = eng_post;
 	g.eng_ops.dir_resolve      = eng_dir_resolve;
 	g.eng_ops.dir_generation   = eng_dir_generation;
+	g.eng_ops.dir_all_ours     = eng_dir_all_ours;
 	g.eng_ops.dir_local_lookup = eng_dir_local_lookup;
 	g.eng_ops.dir_claim_self   = eng_dir_claim_self;
 	g.eng_ops.ctx              = &g;
@@ -786,27 +795,39 @@ static void the_vector_routes_at_the_default_lockdirwt(void)
 
 /*
  * NEGATIVE CONTROL for §1, and the one that keeps a real VAX safe: an identity
- * OUTSIDE the proven coverage is refused, and NO frame is built -- so a value
- * nobody has watched VMS produce can never reach a VAX's directory.
+ * OUTSIDE the proven coverage puts NO FRAME on the wire -- so a value nobody
+ * has watched VMS produce can never reach a VAX's directory.
+ *
+ * AND IT DOES NOT REFUSE THE CALLER (rd vms-b5b0, the PR #1578 lab
+ * regression). It did, and on a real booted node that refusal reached the ACP:
+ * 74 file operations failed with SS$_UNSUPPORTED and STARTUP.COM died on
+ * `%RMS-E-FNF ... SYS$STARTUP:VMS$VMS.DAT`. The resource is mastered LOCALLY
+ * instead -- Baron's option A on rd vms-dc2, which his ruling prefers to
+ * refusing in as many words -- counted and said once.
  */
 static void an_unproven_identity_sends_nothing_at_the_vax(void)
 {
 	struct vms_proc app;
-	uint32_t lkid = 0, st;
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0, st, before;
 
 	printf("-- negative: an identity outside the proven coverage sends "
 	       "NOTHING --\n");
 	mixed_up(0u, 0u);
 	proc_init(&app);
 	app.current_mode = PSL_C_SUPER;   /* mode 2: never seen on a wire */
+	before = vms_lock_dlm_dir_hash_uncovered();
 
 	st = do_enq(&app, "EVAC$SUPER", LCK_K_EXMODE, 0u, &lkid);
-	ct_check_eq_u32(st, SS__UNSUPPORTED,
-			"*** SS$_UNSUPPORTED: supervisor mode is outside the "
-			"coverage the driven run proved ***");
-	ct_check_eq_u32(lkid, 0u, "no lock handle was invented");
+	ct_check(st == SS__NORMAL && lkid != 0u,
+		 "the $ENQ is GRANTED -- the ACP cannot be refused");
 	ct_check_eq_u32(g.n_sent, 0u,
 			"*** and NOT ONE FRAME went at the VAX ***");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_uncovered(), before + 1u,
+			"*** the local-only mastery is COUNTED, not silent ***");
+	read_resmaster("EVAC$SUPER", &rm);
+	ct_check_eq_u32(rm.dir_csid, 0u,
+			"  and NO directory is asserted for it (INV-6)");
 	mixed_down();
 }
 
@@ -980,6 +1001,74 @@ static void an_entry_without_a_stored_value_is_routed(void)
 	read_resmaster(N, &rm);
 	ct_check_eq_u32(rm.is_local_master, 0u,
 			"  and it did NOT become a second master");
+	mixed_down();
+}
+
+/*
+ * AN UNCOVERED IDENTITY IS STILL PROTECTED FROM THE TWO-MASTER HOLE WHERE THE
+ * VECTOR CAN ANSWER WITHOUT A VALUE (rd vms-b5b0).
+ *
+ * This is the payoff of `dir_all_ours`, and the reason the uncovered-identity
+ * fallback is not simply "master it blind". With every vector entry ours the
+ * vector cannot name anyone else whatever the value would have been (p. 6-32),
+ * so an identity outside the hash's proven coverage is STILL resolved to this
+ * node correctly -- and so still goes through this node's own directory table.
+ * If a real VAX locked that exact resource first, its own lookup taught us the
+ * value, and the request is addressed AT THE VAX carrying the VAX's OWN value:
+ * an uncovered identity the cluster has named is routable after all.
+ */
+static void an_uncovered_identity_the_vax_named_is_still_routed(void)
+{
+	/* 23 bytes: outside the proven coverage (the driven run pre-registered
+	 * it and the VAX never put it on the wire). */
+	const char *N = "EVAC$TWENTYTHREEBYTES12";
+	const uint32_t VAX_HASH = 0x7c3d0244u;
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_resmaster_args rm;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, st, before;
+
+	printf("-- an UNCOVERED identity the VAX named first: still routed "
+	       "THERE --\n");
+	mixed_up(1u, 0u);                 /* the vector directs everything here */
+	proc_init(&app);
+	before = vms_lock_dlm_dir_hash_uncovered();
+
+	ct_check((uint32_t)strlen(N) == 23u,
+		 "the name is 23 bytes long");
+	ct_check(vms_dlm_name_hash_coverage(OVMX_RES_GROUP, OVMX_RES_MODE,
+					    23u) == VMS_DLM_HASH_E_COVER,
+		 "...which is outside the PROVEN coverage");
+	ct_check(vms_ldwv_directs_everything_here(&g.cl.club.ldwv) == 1,
+		 "and this vector directs every resource HERE");
+
+	/* The VAX locks it first; its lookup is answered and RECORDED, and its
+	 * own value for the resource is learned off that frame. */
+	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_EXMODE, N, VAX_HASH) == 0,
+		 "the VAX's op-0x01 for it is built");
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_YOU && master == CSID_VAX,
+		 "this node's directory answers 'you master it' and records it");
+
+	/* *** THE $ENQ *** -- no provable value of our own, and it does not
+	 * matter: the vector cannot name anyone but us, so the directory table
+	 * is consulted and it names the VAX. */
+	st = do_enq(&app, N, LCK_K_EXMODE, 0u, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0u, "the $ENQ is accepted");
+	read_resmaster(N, &rm);
+	ct_check_eq_u32(rm.master_csid, CSID_VAX,
+			"*** and the MASTER is the VAX -- an uncovered identity "
+			"is NOT mastered a second time here ***");
+	ct_check_eq_u32(g.n_sent, 1u, "one frame left this node");
+	ct_check_eq_u32((uint32_t)g.last_dst, CSID_VAX, "  addressed to the VAX");
+	ct_check_eq_u32(sent_dir_hash(), VAX_HASH,
+			"*** carrying the value THE VAX ITSELF put on the wire "
+			"for it -- the one value this executive holds ***");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_uncovered(), before,
+			"*** and NO uncovered-identity fallback was taken: the "
+			"vector answered without a value ***");
 	mixed_down();
 }
 
@@ -1295,6 +1384,7 @@ int main(void)
 	vax_first_then_ovmx_routes_to_the_vax();
 	with_no_entry_the_enq_masters_locally();
 	an_entry_without_a_stored_value_is_routed();
+	an_uncovered_identity_the_vax_named_is_still_routed();
 	a_full_directory_table_still_locks();
 
 	ovmx_first_then_the_vax_is_served_as_master();

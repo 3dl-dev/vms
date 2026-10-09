@@ -14,9 +14,11 @@
  *      $ENQ routes by the value vms_dlm_name_hash_proven() computes over the
  *      resource's own identity, and the test checks the routed value IS that
  *      function's output. For an identity OUTSIDE the proven coverage
- *      (supervisor mode; a UIC group in the system range) $ENQ returns
- *      SS$_UNSUPPORTED, NO lock handle is invented, the directory resolver is
- *      NEVER CALLED and NOTHING is posted. That last clause is the one that
+ *      (supervisor mode; a UIC group in the system range) the directory
+ *      resolver is NEVER CALLED and NOTHING is posted -- the resource is
+ *      mastered LOCALLY instead, counted and announced, because refusing the
+ *      caller reached the ACP on a real booted node and killed STARTUP.COM
+ *      (rd vms-b5b0). The "nothing is posted" clause is the one that
  *      matters: the strawman's failure was not a bad local decision, it was a
  *      frame that left this node carrying a hash of 0, which made a real VAX
  *      create a directory entry naming OVMX as the master of resources it did
@@ -301,25 +303,34 @@ static void novel_root_computes_and_routes(void)
 }
 
 /* ================================================================
- * 2b. AN IDENTITY OUTSIDE THE PROVEN COVERAGE IS STILL REFUSED, AND NOTHING
- *     IS SENT -- the anti-LARP clause this file has always carried, now where
- *     the risk actually lives (rd vms-b5b0).
+ * 2b. AN IDENTITY OUTSIDE THE PROVEN COVERAGE PUTS NOTHING ON THE WIRE -- and
+ *     is MASTERED LOCALLY, not refused (rd vms-b5b0; the PR #1578 lab
+ *     regression).
  *
- * The strawman's failure was not a bad local decision: it was a FRAME that
- * left this node carrying a value nobody derived, which made a real VAX create
- * a directory entry naming OVMX as the master of resources it did not master
- * (memory cluster-promotion-gap). So for an identity no VMS node has been
- * watched hashing -- here SUPERVISOR mode, which the corpus and the driven run
- * never show -- the engine refuses, invents no handle, does not consult the
- * vector and puts NOTHING on the wire.
+ * The anti-LARP clause this file has always carried is about the WIRE, and it
+ * is unchanged: the strawman's failure was not a bad local decision, it was a
+ * FRAME that left this node carrying a value nobody derived, which made a real
+ * VAX create a directory entry naming OVMX as the master of resources it did
+ * not master (memory cluster-promotion-gap). So for an identity no VMS node has
+ * been watched hashing -- here SUPERVISOR mode, which the corpus and the driven
+ * run never show -- the vector is not consulted and NOTHING is posted.
+ *
+ * WHAT IT DOES *NOT* DO ANY MORE IS REFUSE THE CALLER. It used to return
+ * SS$_UNSUPPORTED, and on a real booted node that reached the ACP: 74 file
+ * operations failed with 3658 and STARTUP.COM died on
+ * `%RMS-E-FNF ... SYS$STARTUP:VMS$VMS.DAT`. Baron's ruling on rd vms-dc2 had
+ * already judged that: option (B), refusing, is "NEVER"; option A -- master it
+ * locally, honestly labelled -- is the answer for a resource this node cannot
+ * route. It is counted and said once, and the readback asserts NO directory
+ * rather than a guessed one.
  * ================================================================ */
-static void an_unproven_identity_refuses_and_sends_nothing(void)
+static void an_unproven_identity_masters_locally_and_sends_nothing(void)
 {
 	struct vms_proc proc;
 	struct vms_resmaster_args rm;
-	uint32_t lkid = 0, st;
+	uint32_t lkid = 0, st, before;
 
-	printf("--- an identity outside the PROVEN coverage is REFUSED, nothing sent ---\n");
+	printf("--- an identity outside the PROVEN coverage: local, nothing sent ---\n");
 	if (vms_lock_init() != 0) {
 		ct_check(0, "vms_lock_init");
 		return;
@@ -328,40 +339,48 @@ static void an_unproven_identity_refuses_and_sends_nothing(void)
 	cm_install();
 	proc_init(&proc);
 	proc.current_mode = PSL_C_SUPER;   /* mode 2: never observed on a wire */
+	before = vms_lock_dlm_dir_hash_uncovered();
 
 	ct_check(vms_dlm_name_hash_coverage(RES_GROUP, PSL_C_SUPER, 10u) ==
 		 VMS_DLM_HASH_E_COVER,
 		 "supervisor mode is outside the proven coverage");
 
 	st = do_enq(&proc, "SUPERROOT1", LCK_K_EXMODE, &lkid);
-	ct_check_eq_u32(st, SS__UNSUPPORTED,
-			"$ENQ on it -> SS$_UNSUPPORTED, the honest floor");
-	ct_check_eq_u32(lkid, 0u, "no lock handle was invented");
+	ct_check(st == SS__NORMAL && lkid != 0u,
+		 "*** the $ENQ is GRANTED -- a caller that cannot be refused "
+		 "(the ACP) keeps working ***");
 	ct_check_eq_u32((unsigned long)cm.posts, 0u,
-			"and NOTHING was put on the wire (the anti-LARP clause)");
+			"*** and NOTHING was put on the wire (the anti-LARP "
+			"clause) ***");
 	ct_check_eq_u32(cm.resolve_calls, 0u,
 			"the vector was not consulted: there was no value to "
 			"index it with");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_uncovered(), before + 1u,
+			"*** and the local-only mastery is COUNTED, not silent "
+			"***");
 
 	read_resmaster("SUPERROOT1", &rm);
 	ct_check_eq_u32(rm.dir_csid, 0u,
-			"and the readback reports NO directory rather than a "
+			"the readback reports NO directory rather than a "
 			"guessed one (INV-6)");
-	ct_check_eq_u32(rm.master_csid, 0u, "and no master");
+	ct_check_eq_u32(rm.is_local_master, 1u,
+			"...and says plainly that THIS node masters it");
 
 	/* A UIC GROUP in the system range is the other unobserved axis. */
 	proc.current_mode = (uint8_t)RES_MODE;
 	proc.uic = (16400u << 16) | 4u;    /* group bit 14 set */
 	cm.posts = 0;
+	lkid = 0;
 	st = do_enq(&proc, "SYSGROUPROOT", LCK_K_EXMODE, &lkid);
-	ct_check_eq_u32(st, SS__UNSUPPORTED,
-			"a UIC group with bit 14 set is refused too");
+	ct_check(st == SS__NORMAL && lkid != 0u,
+		 "a UIC group with bit 14 set also LOCKS");
 	ct_check_eq_u32((unsigned long)cm.posts, 0u, "and sends nothing");
 
 	vms_lock_cleanup();
 }
 
 /* ================================================================
+ * 3. The wire supplies the hash: the lookup routes, with THAT value./* ================================================================
  * 3. The wire supplies the hash: the lookup routes, with THAT value./* ================================================================
  * 3. The wire supplies the hash: the lookup routes, with THAT value.
  * ================================================================ */
@@ -564,15 +583,35 @@ static void generation_invalidates_the_cache(void)
 	ct_check_eq_u32(cm.last_post.dst_csid, CSID_LOCAL + 40u,
 			"and the NEW directory node is the one addressed");
 
-	/* And a vector that is not usable at all -- mid-transition -- refuses
-	 * rather than falling back to the old answer. */
+	/*
+	 * And a vector that is not usable at all -- mid-transition, or a node
+	 * still forming -- does NOT reuse the old answer. It masters the
+	 * resource locally instead (rd vms-b5b0: refusing here reached the ACP
+	 * on a real booted node and killed STARTUP.COM), counted and said once,
+	 * with NOTHING sent to the directory the stale answer named.
+	 */
 	cm.generation++;
 	cm.refuse = 1u;
 	{
-		uint32_t st = do_enq(&proc, "GENROOT", LCK_K_EXMODE, &lkid);
+		uint32_t before = vms_lock_dlm_dir_no_vector();
+		uint32_t posts_before = (uint32_t)cm.posts;
+		uint32_t lkid2 = 0;
+		struct vms_resmaster_args rm;
 
-		ct_check_eq_u32(st, SS__UNSUPPORTED,
-				"an unusable vector refuses, it does not reuse");
+		/* A resource never touched before, so no cached answer and no
+		 * recorded master can carry it. */
+		ct_check_eq_u32(do_enq(&proc, "GENROOT2", LCK_K_EXMODE,
+				       &lkid2), SS__NORMAL,
+				"an unusable vector does not refuse the caller");
+		ct_check_eq_u32((unsigned long)(cm.posts - (int)posts_before),
+				0u,
+				"*** and nothing was posted to the directory a "
+				"superseded vector named ***");
+		ct_check_eq_u32(vms_lock_dlm_dir_no_vector(), before + 1u,
+				"  the no-vector local mastery is counted");
+		read_resmaster("GENROOT2", &rm);
+		ct_check_eq_u32(rm.is_local_master, 1u,
+				"  and this node masters it, honestly");
 	}
 	vms_lock_cleanup();
 }
@@ -853,12 +892,180 @@ static void genesis_relabels_this_nodes_own_mastery(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * 10. A CLUSTERED NODE CAN STILL LOCK ITS OWN FILE SYSTEM
+ *     (rd vms-b5b0, the lab regression in PR #1578)
+ *
+ * MEASURED ON A REAL LAB NODE: a booted OVMXE that had started its cluster
+ * stack failed EVERY ACP/RMS file operation with SS$_UNSUPPORTED (3658) --
+ * "%OVMX-W-OWNER, cannot create home SYS$SYSDEVICE:[USERS.DEFAULT]: SS$ 3658",
+ * 74 of them, then "%RMS-E-FNF, error opening SYS$STARTUP:VMS$VMS.DAT" and a
+ * STARTUP.COM loop until DCL was OOM-killed. CI never caught it because CI
+ * never boots a node with a cluster stack bound.
+ *
+ * TWO CAUSES, both of them a refusal reaching a caller that cannot survive one:
+ *
+ *   (1) NO COMMITTED VECTOR. While a node is "waiting to form or join" there is
+ *       no Lock Directory Weight Vector at all (it is filled at Phase 2 of a
+ *       transition, and discarded at Phase 1 -- Davis p. 6-33, p. 7-40..42), so
+ *       the resolver answers "not resolved" for every value. Before this item
+ *       the retired all-OVMX gate swallowed that case (it reads 0 on an invalid
+ *       vector), so the row was documented and unreachable; retiring the gate
+ *       made it the live boot path.
+ *   (2) AN IDENTITY OUTSIDE THE PROVEN COVERAGE. The executive's own locks are
+ *       not all inside it -- any 23- or 29-character resource name is outside
+ *       it, as is supervisor mode -- and refusing those is refusing the file
+ *       system.
+ *
+ * WHAT IS CORRECT, and it is the ruling this item was built on. Baron's ruling
+ * on rd vms-dc2 considered exactly this: "(B) refuse (SS$_UNSUPPORTED) an OVMX
+ * $ENQ on a wire-unknown name ... NEVER (it breaks the product to be pedantic
+ * about a hole that has no exposure yet)", and chose option A -- master it
+ * LOCALLY, honestly labelled -- as the behaviour for a name this executive
+ * cannot route. The proof narrowed that set from "every OVMX-first name" to
+ * "an identity outside the proven coverage, or a resource touched while no
+ * vector is committed"; it did not change what to do with the remainder.
+ *
+ * So this section is the boot-critical floor: with a cluster stack bound, in
+ * EVERY vector state, a $ENQ on EVERY name length 1..31 at EVERY access mode
+ * succeeds -- and nothing is put on the wire for the ones that cannot be
+ * routed.
+ * ================================================================ */
+static void a_clustered_node_can_lock_every_name(const char *what,
+						 uint32_t dir_csid, int refuse,
+						 int expect_frames)
+{
+	struct vms_proc proc;
+	uint32_t len, mode, failures = 0, posts_before;
+
+	printf("--- %s: every length 1..31 x every access mode still locks ---\n",
+	       what);
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	cm_reset(dir_csid);
+	cm.refuse = (uint32_t)refuse;
+	cm_install();
+	posts_before = (uint32_t)cm.posts;
+
+	for (mode = 0u; mode < 4u; mode++) {
+		proc_init(&proc);
+		proc.current_mode = (uint8_t)mode;
+		for (len = 1u; len <= 31u; len++) {
+			char nm[32];
+			uint32_t i, lkid = 0, st;
+
+			/* A name of exactly `len` bytes, distinct per (mode,len). */
+			for (i = 0u; i < len; i++)
+				nm[i] = (char)('A' + (int)((i + len + mode * 7u) % 26u));
+			nm[len] = '\0';
+			st = do_enq(&proc, nm, LCK_K_EXMODE, &lkid);
+			if (st != SS__NORMAL || lkid == 0u) {
+				if (failures == 0u)
+					printf("   first failure: mode=%u len=%u st=%u\n",
+					       (unsigned)mode, (unsigned)len,
+					       (unsigned)st);
+				failures++;
+				continue;
+			}
+			(void)do_deq(&proc, lkid);
+		}
+	}
+	ct_check_eq_u32(failures, 0u,
+			"*** all 124 (length, access mode) combinations LOCK -- "
+			"a clustered node can still open its own files ***");
+	if (!expect_frames)
+		ct_check_eq_u32((unsigned long)(cm.posts - (int)posts_before),
+				0u,
+				"  and NOTHING was put on the wire for them");
+	vms_lock_cleanup();
+}
+
+static void the_boot_critical_floor(void)
+{
+	/*
+	 * (1) THE FORMING WINDOW: a cluster stack is bound and the vector is
+	 * not usable. This is the state the lab node was in when the first 74
+	 * file operations failed.
+	 */
+	a_clustered_node_can_lock_every_name("no committed vector (forming)",
+					     CSID_DIRECTORY, 1 /* refuse */, 0);
+
+	/*
+	 * (2) THE LAB'S OWN CONFIGURATION: every vector entry is this node's
+	 * (VAX1/VAX2 at LOCKDIRWT 0, OVMXE above 0), so the resolver answers
+	 * "your entry" for every value -- and for an identity with no provable
+	 * value the vector STILL cannot name anyone else, so no value is needed
+	 * to know this node is the directory.
+	 */
+	a_clustered_node_can_lock_every_name("the vector directs everything here",
+					     0u /* our own entry */, 0, 0);
+
+	/*
+	 * (3) THE DEFAULT CONFIGURATION: the vector names another system for
+	 * the values it can resolve. The covered identities route THERE (frames
+	 * leave, which is this item's whole point); the uncovered ones are
+	 * mastered locally and send nothing. Either way every $ENQ succeeds.
+	 */
+	a_clustered_node_can_lock_every_name("the vector names another system",
+					     CSID_DIRECTORY, 0, 1);
+}
+
+/*
+ * AND THE RESIDUAL IS COUNTED AND SAID, never silent (rd vms-b5b0). The lab had
+ * no way to see WHY the file system was failing: the refusal reached DCL as
+ * SS$_UNSUPPORTED and nothing in the executive said "I could not route that
+ * resource". Both fallbacks now raise a counter a diagnostic can read.
+ */
+static void the_fallbacks_are_counted(void)
+{
+	struct vms_proc proc;
+	uint32_t before_novec, before_cover, lkid = 0;
+	static const uint8_t n23[23] = "ABCDEFGHIJKLMNOPQRSTUVW";
+
+	printf("--- the two local-mastery fallbacks are COUNTED ---\n");
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	cm_reset(CSID_DIRECTORY);
+	cm_install();
+	proc_init(&proc);
+
+	/* A 23-byte name is outside the proven coverage (the driven run
+	 * pre-registered it and the VAX never put it on the wire). */
+	ct_check(vms_dlm_name_hash_coverage(0u, 0u, 23u) ==
+		 VMS_DLM_HASH_E_COVER,
+		 "a 23-byte name is outside the proven coverage");
+	before_cover = vms_lock_dlm_dir_hash_uncovered();
+	ct_check_eq_u32(do_enq(&proc, (const char *)n23, LCK_K_EXMODE, &lkid),
+			SS__NORMAL, "and it LOCKS anyway");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_uncovered(), before_cover + 1u,
+			"*** counted as an uncovered-identity local mastery ***");
+	ct_check_eq_u32((unsigned long)cm.posts, 0u, "  with nothing sent");
+	(void)do_deq(&proc, lkid);
+
+	/* ...and the forming window. */
+	cm.refuse = 1u;
+	cm.generation++;
+	before_novec = vms_lock_dlm_dir_no_vector();
+	lkid = 0;
+	ct_check_eq_u32(do_enq(&proc, "NOVECTORYET", LCK_K_EXMODE, &lkid),
+			SS__NORMAL,
+			"a resource touched with no committed vector LOCKS");
+	ct_check_eq_u32(vms_lock_dlm_dir_no_vector(), before_novec + 1u,
+			"*** counted as a no-vector local mastery ***");
+	ct_check_eq_u32((unsigned long)cm.posts, 0u, "  with nothing sent");
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_dir (FC-P4.3 dir_resolve in the real engine, R1) ===\n");
 	standalone_still_locks();
 	novel_root_computes_and_routes();
-	an_unproven_identity_refuses_and_sends_nothing();
+	an_unproven_identity_masters_locally_and_sends_nothing();
 	wire_hash_routes_the_lookup();
 	conflicting_learn_is_counted();
 	learner_is_bounded();
@@ -867,5 +1074,7 @@ int main(void)
 	the_value_does_not_depend_on_the_membership();
 	the_wire_overrides_a_computed_value_and_counts_it();
 	genesis_relabels_this_nodes_own_mastery();
+	the_boot_critical_floor();
+	the_fallbacks_are_counted();
 	return ct_summary("test_lock_dir");
 }

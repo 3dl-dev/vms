@@ -171,6 +171,7 @@ dlm-requester-hash-refusal-uncounted
 dlm-hash-empty-name-not-refused
 dlm-hash-coverage-claims-too-much
 dlm-engine-extrapolates-the-hash
+dlm-unroutable-refuses-the-caller
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -571,13 +572,38 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "dir_hash_compute() is pointed at the UNGATED vms_dlm_name_hash() instead of vms_dlm_name_hash_proven(), so the engine computes -- and ROUTES, and puts on the wire -- a value for an identity no VMS node has been watched hashing (supervisor mode; a UIC group in the system range). The value is arithmetically well-defined and that is exactly the danger: it does not fail locally, it makes the receiving directory node scan the wrong chain, miss the name and install OVMX as the master of a resource somebody else already masters, at 35 frames a second (memory cluster-promotion-gap).";;
         require_fail) cat <<'EOF'
-$ENQ on it -> SS$_UNSUPPORTED, the honest floor
-no lock handle was invented
-and NOTHING was put on the wire (the anti-LARP clause)
+*** and NOTHING was put on the wire (the anti-LARP clause) ***
 the vector was not consulted: there was no value to index it with
-and the readback reports NO directory rather than a guessed one (INV-6)
-a UIC group with bit 14 set is refused too
+*** and the local-only mastery is COUNTED, not silent ***
+the readback reports NO directory rather than a guessed one (INV-6)
+...and says plainly that THIS node masters it
 and sends nothing
+*** counted as an uncovered-identity local mastery ***
+  with nothing sent
+EOF
+                      ;;
+        esac;;
+
+    dlm-unroutable-refuses-the-caller)
+        case "$_f" in
+        facility)     echo "the ENGINE's HONEST FALLBACK for a resource it cannot route (vms_lock.c dlm_resolve_master, rd vms-b5b0): it is mastered LOCALLY -- counted and announced -- and never refused to the caller, because the caller is the file system";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_dir";;
+        isolation)    echo "isolated";;
+        why)          echo "the DLM_DIR_UNROUTABLE arm of dlm_resolve_master() is turned back into a refusal (SS\$_UNSUPPORTED to the caller) -- which is EXACTLY the measured PR #1578 lab regression: a booted node with a cluster stack bound failed 74 ACP/RMS file operations with 3658 and STARTUP.COM died on '%RMS-E-FNF, error opening SYS\$STARTUP:VMS\$VMS.DAT', looping until DCL was OOM-killed. Baron's ruling on rd vms-dc2 had already judged this answer -- option (B), refusing, is 'NEVER' -- and the resource is mastered locally instead. CI never boots a clustered node, which is why only the lab caught it; this defect is what makes the host bed catch it.";;
+        require_fail) cat <<'EOF'
+*** all 124 (length, access mode) combinations LOCK -- a clustered node can still open its own files ***
+*** the $ENQ is GRANTED -- a caller that cannot be refused (the ACP) keeps working ***
+...and says plainly that THIS node masters it
+*** and the local-only mastery is COUNTED, not silent ***
+a UIC group with bit 14 set also LOCKS
+and it LOCKS anyway
+*** counted as an uncovered-identity local mastery ***
+a resource touched with no committed vector LOCKS
+*** counted as a no-vector local mastery ***
+an unusable vector does not refuse the caller
+  and this node masters it, honestly
+  the no-vector local mastery is counted
 EOF
                       ;;
         esac;;
@@ -1690,6 +1716,12 @@ apply_edit() {
     dlm-hash-coverage-claims-too-much)
         # The mask literal is unique in the header.
         sed -i 's|#define VMS_DLM_HASH_LEN_PROVEN    0xdf7ffffeu|#define VMS_DLM_HASH_LEN_PROVEN    0xfffffffeu /* NEGCTL dlm-hash-coverage-claims-too-much */|' "$_file";;
+
+    dlm-unroutable-refuses-the-caller)
+        # The fallback's own line is unique in vms_lock.c.
+        # The call is unique in this file, and replacing it removes the
+        # anchor -- a second apply cannot match (the selftest requires that).
+        sed -i 's|        dlm_dir_note_unroutable(no_vector);|        return SS__UNSUPPORTED; /* NEGCTL dlm-unroutable-refuses-the-caller */|' "$_file";;
 
     dlm-engine-extrapolates-the-hash)
         # The gated call is unique in vms_lock.c.

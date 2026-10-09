@@ -688,19 +688,26 @@ static void a_novel_name_routes_and_an_unproven_identity_does_not(void)
 				"  and the access mode");
 	}
 
-	/* *** AND THE REFUSAL, where the risk actually lives. *** */
+	/* *** AND WHERE THE RISK ACTUALLY LIVES: NOTHING ON THE LAN. *** */
 	{
 	uint32_t arm_before = g_fsm.hash_unknown_refused + g_fsm.lookups_sent;
+	uint32_t unc_before = vms_lock_dlm_dir_hash_uncovered();
 
 	reset_wire();
 	lkid = 0xdeadu;
 	g_proc.current_mode = PSL_C_SUPER;       /* mode 2: never observed */
 	st = do_enq("OVMX$SUPERMODE", LCK_K_EXMODE, &lkid);
 	g_proc.current_mode = (uint8_t)SIM_RES_MODE;
-	ct_check_eq_u32(st, (uint32_t)SS__UNSUPPORTED,
-			"$ENQ at an UNPROVEN access mode is refused "
-			"SS$_UNSUPPORTED");
-	ct_check_eq_u32(lkid, 0u, "no lock handle was invented");
+	/*
+	 * It is GRANTED, not refused (rd vms-b5b0): on a real booted node the
+	 * refusal reached the ACP and killed STARTUP.COM. What must be true --
+	 * and is -- is that an identity no VMS node has been watched hashing
+	 * puts NOTHING on the LAN, and that the local-only mastery is counted.
+	 */
+	ct_check(st == (uint32_t)SS__NORMAL && lkid != 0u,
+		 "$ENQ at an UNPROVEN access mode is GRANTED (mastered here)");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_uncovered(), unc_before + 1u,
+			"  and the local-only mastery is COUNTED");
 	ct_check_eq_u32(g_wire_n, 0u,
 			"*** NOT ONE FRAME went on the LAN ***");
 	ct_check_eq_u32(g_fsm.hash_unknown_refused + g_fsm.lookups_sent,

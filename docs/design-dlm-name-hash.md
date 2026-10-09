@@ -261,8 +261,14 @@ Two things this run establishes that the corpus could not:
   through the weight vector in every LOCKDIRWT configuration — a real VAX
   directory node included. For an identity OUTSIDE the proven coverage
   (supervisor mode; a UIC group with bit 14/15 set; a name of 23 or 29 bytes)
-  it REFUSES with `SS$_UNSUPPORTED` and builds no frame:
-  `vms_dlm_name_hash_proven()` is the only entry point routing may use, and
+  it builds NO FRAME and consults no vector, and the resource is **mastered on
+  that node only** — counted (`vms_lock_dlm_dir_hash_uncovered()`) and
+  announced on the console once. It is deliberately **not** refused to the
+  caller: that refusal reached a booted node's ACP and killed STARTUP.COM
+  (PR #1578's lab run), and Baron's ruling on rd vms-dc2 names refusing
+  ("option B") as the one answer never to give.
+  `vms_dlm_name_hash_proven()` is the only entry point routing may use
+  (enforced by `tools/ci/cluster_dlm_hash_gate.sh`), and
   `vms_dlm_name_hash()` stays ungated solely so tests and capture scorers can
   evaluate identities the wire has not shown. A *wrong* hash on the wire is not
   a benign error — the directory node scans the wrong chain, decides the name

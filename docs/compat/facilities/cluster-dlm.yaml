@@ -222,7 +222,7 @@ items:
     authenticity: real
     vms: "Mixed cluster, ONE master per resource, at ANY LOCKDIRWT: an OVMX $ENQ resolves a root resource's directory node through the weight vector and goes there -- a real VMS member included -- and a VMS member's $ENQ on a resource OVMX masters is served by OVMX (Davis p. 6-31 outcomes (a)/(b)/(c), p. 6-51)"
     evidence: src/kernel-core/vms_lock.c
-    verified_against: "tests/cluster/host/test_dlm_mixed_master.c (R1, the widest in the directory: the REAL engine + the REAL CLUB's weight vector + the REAL directory table + the REAL requester FSM + the REAL codec on one path. At the V7.3 DEFAULT LOCKDIRWT 0 on every member: an OVMX-first name the vector directs AT THE VAX leaves as exactly one op-0x01 addressed there, carrying the value vms_dlm_name_hash_proven() computes for the resource's identity at body[128:132] and that identity at body[44:48], with nothing granted locally; a name the same vector directs HERE is mastered here. The VAX-first direction -- the resource's master is the VAX, this node did NOT master it twice, the request carries the hash THE VAX put on the wire, the grant lands and the local process holds EX; the OVMX-first direction -- the mastery is recorded in this node's own directory under the full identity, the VAX's lookup is answered SELF, its EX queues, NOQUEUE is DENIED, and the local $DEQ leaves the lock granted FOR the VAX's CSID; a VAX convert takes its resource from the LOCK it names, not from the frame's stale span; the departure -- exactly the departed CSID's locks released and the local waiter granted EX. NEGATIVE CONTROLS in the same file: an empty directory still masters locally, and an identity OUTSIDE THE PROVEN COVERAGE of the resource-name hash (supervisor mode) is refused SS$_UNSUPPORTED with ZERO frames at the VAX. tests/cluster/sim/scenarios/dlm_mixed_evacuation.c (R2: both systems' independently built vectors name the SAME directory node for all 65536 keys and the work really is split 32768/32768; an OVMX-first name whose directory is the VAX reaches a scripted VAX DIRECTORY which checks both that it arrived at the node its OWN vector names and that the value is the one the identity hashes to, then answers -- 0xf9 completes the $ENQ by assuming mastery, 0xf8 records the master and re-addresses; then the evacuation sequence on the virtual clock through the shipping FSM's retransmit beat). tests/cluster/host/test_lock_dir.c (the engine: computed-else-learned, the computed value IS the function's output, the same value in any membership, the wire overriding a computed value and counting it). tests/cluster/host/test_dlm_dir.c (the table, keyed by exact identity). tests/cluster/host/test_dlm_scs_arm.c (the arm's gate placement, and that the BLKAST gate is NOT widened). Negative controls: tests/cluster/host/host_defects.sh dlm-own-directory-not-consulted, dlm-dir-matched-by-name-alone, dlm-engine-extrapolates-the-hash, dlm-hash-coverage-claims-too-much -- each reddens exactly its named assertion set. NOT PROVEN HERE: the real-VAX lab leg (rd vms-025/vms-db2a/vms-b5b0 done-conditions)."
+    verified_against: "tests/cluster/host/test_dlm_mixed_master.c (R1, the widest in the directory: the REAL engine + the REAL CLUB's weight vector + the REAL directory table + the REAL requester FSM + the REAL codec on one path. At the V7.3 DEFAULT LOCKDIRWT 0 on every member: an OVMX-first name the vector directs AT THE VAX leaves as exactly one op-0x01 addressed there, carrying the value vms_dlm_name_hash_proven() computes for the resource's identity at body[128:132] and that identity at body[44:48], with nothing granted locally; a name the same vector directs HERE is mastered here. The VAX-first direction -- the resource's master is the VAX, this node did NOT master it twice, the request carries the hash THE VAX put on the wire, the grant lands and the local process holds EX; the OVMX-first direction -- the mastery is recorded in this node's own directory under the full identity, the VAX's lookup is answered SELF, its EX queues, NOQUEUE is DENIED, and the local $DEQ leaves the lock granted FOR the VAX's CSID; a VAX convert takes its resource from the LOCK it names, not from the frame's stale span; the departure -- exactly the departed CSID's locks released and the local waiter granted EX. NEGATIVE CONTROLS in the same file: an empty directory still masters locally, and an identity OUTSIDE THE PROVEN COVERAGE of the resource-name hash (supervisor mode) puts ZERO frames at the VAX while still granting the lock locally and counting it. tests/cluster/sim/scenarios/dlm_mixed_evacuation.c (R2: both systems' independently built vectors name the SAME directory node for all 65536 keys and the work really is split 32768/32768; an OVMX-first name whose directory is the VAX reaches a scripted VAX DIRECTORY which checks both that it arrived at the node its OWN vector names and that the value is the one the identity hashes to, then answers -- 0xf9 completes the $ENQ by assuming mastery, 0xf8 records the master and re-addresses; then the evacuation sequence on the virtual clock through the shipping FSM's retransmit beat). tests/cluster/host/test_lock_dir.c (the engine: computed-else-learned, the computed value IS the function's output, the same value in any membership, the wire overriding a computed value and counting it -- AND THE BOOT-CRITICAL FLOOR, which is what PR #1578's lab regression cost: with a cluster stack bound, in all three vector states (no committed vector, every entry ours, another system named), a $ENQ on every name length 1..31 at every access mode succeeds, 124 combinations, with nothing on the wire for the ones that cannot be routed). tests/cluster/host/test_dlm_dir.c (the table, keyed by exact identity). tests/cluster/host/test_dlm_scs_arm.c (the arm's gate placement, and that the BLKAST gate is NOT widened). Negative controls: tests/cluster/host/host_defects.sh dlm-own-directory-not-consulted, dlm-dir-matched-by-name-alone, dlm-engine-extrapolates-the-hash, dlm-hash-coverage-claims-too-much -- each reddens exactly its named assertion set. NOT PROVEN HERE: the real-VAX lab leg (rd vms-025/vms-db2a/vms-b5b0 done-conditions)."
     notes: >
       rd vms-025 + vms-db2a + vms-c27 condition 3 (rd vms-4d3), generalised and the
       interim retired by rd vms-b5b0. MEASURED HOLE, both horns: vms_lock.c's
@@ -244,9 +244,10 @@ items:
       HOW A RESOURCE IS ROUTED, in one line, and every term is an executive read: the
       value is the one some system in this cluster put on the wire for that exact
       resource identity if this node holds it, else the one vms_dlm_name_hash_proven()
-      computes for the identity, else nothing and the $ENQ is refused; the directory
-      node is ldwv[(value >> 16) mod n]; the directory is consulted if it is this
-      node, and the request is addressed there if it is not.
+      computes for the identity; the directory node is ldwv[(value >> 16) mod n]; the
+      directory is consulted if it is this node, and the request is addressed there if
+      it is not. When this executive can produce NEITHER a value NOR a vector answer,
+      the resource is mastered on THIS NODE ONLY -- see the fourth honest gap below.
       THE RESOURCE IDENTITY IS NOW PART OF THE NAMESPACE (rd vms-b5b0, closing this
       row's own former gap 3). A VMS resource name is qualified by the enqueuing
       process's UIC group -- 0 for a LCK$M_SYSTEM name -- and by the access mode
@@ -278,7 +279,19 @@ items:
       uncorrelated grant (deferred_grants_no_wire_op counts what the master owes). So
       a VMS member QUEUED at an OVMX master is granted in this executive's lock
       database and learns of it on its next request, not from an unsolicited frame.
-      (3) A SUB-RESOURCE is not routed by a hash of its own: only a tree's ROOT is
+      (3) A RESOURCE THIS EXECUTIVE CANNOT ROUTE is mastered on THIS NODE ONLY, not
+      refused and not routed (rd vms-b5b0, after PR #1578's lab run: refusing reached
+      the ACP and killed STARTUP.COM, which is the answer Baron's ruling on rd vms-dc2
+      calls "NEVER"). Two ways to get there, two counters, and the first of each is
+      announced on the console: no committed weight vector at the moment the resource
+      was first locked (vms_lock_dlm_dir_no_vector -- a node forming or joining, or a
+      transition in flight; p. 6-33 discards directory information at Phase 1), or no
+      provable value for its identity (vms_lock_dlm_dir_hash_uncovered). NOTHING goes
+      on the wire for such a resource, so this node asserts nothing about it to
+      anybody; the residual is that if a real VMS member masters the same resource
+      there are two masters for it until a rebuild re-masters (FC-P5.3..5.5). That is
+      the pre-proof floor, now narrow, counted and announced rather than silent.
+      (4) A SUB-RESOURCE is not routed by a hash of its own: only a tree's ROOT is
       looked up (p. 6-31/6-32), and a resource block has a parent here only when the
       parent lock is a real LOCAL lock -- which means this node masters that tree, so
       it masters the sub-resource. A $ENQ under a PROXY parent is named at the root
@@ -304,18 +317,31 @@ items:
       out of it, on a 533-key capture written after the function was frozen, and on a
       driven real-VAX run whose predictions were committed first.
       Method, hypothesis by hypothesis: docs/design-dlm-name-hash.md.
-      THE PROVEN COVERAGE IS A MEASUREMENT, NOT A POLICY, and outside it the engine
-      REFUSES (SS$_UNSUPPORTED) rather than extrapolating: access modes 0, 1 and 3 are
-      observed and SUPERVISOR mode (2) is not; UIC groups 0, 1, 300 and 16382 are
-      observed, which exercises group bits 0..13, and bits 14/15 are not; every name
-      length 1..31 is observed except 23 and 29 (both pre-registered in the driven run
-      and never put on the wire by the VAX). A refusal costs an $ENQ on such a
-      resource; a WRONG value costs the cluster -- it makes the directory node scan
-      the wrong chain, miss the name and install the sender as master of a resource
-      somebody else already masters, at 35 frames a second (memory
-      cluster-promotion-gap). The two length gaps close with one lab errand (lock a
-      23- and a 29-character root name on a real VAX and score the capture); the mode
-      and group gaps need a driven run that exercises them.
+      THE PROVEN COVERAGE IS A MEASUREMENT, NOT A POLICY, and outside it NO FRAME IS
+      BUILT: access modes 0, 1 and 3 are observed and SUPERVISOR mode (2) is not; UIC
+      groups 0, 1, 300 and 16382 are observed, which exercises group bits 0..13, and
+      bits 14/15 are not; every name length 1..31 is observed except 23 and 29 (both
+      pre-registered in the driven run and never put on the wire by the VAX). A WRONG
+      value costs the cluster -- it makes the directory node scan the wrong chain,
+      miss the name and install the sender as master of a resource somebody else
+      already masters, at 35 frames a second (memory cluster-promotion-gap). The two
+      length gaps close with one lab errand (lock a 23- and a 29-character root name
+      on a real VAX and score the capture); the mode and group gaps need a driven run
+      that exercises them.
+      WITHHOLDING A FRAME IS NOT REFUSING THE CALLER, and conflating the two broke a
+      booted node (rd vms-b5b0, PR #1578's lab run): with a cluster stack bound the
+      engine answered SS$_UNSUPPORTED to its own ACP -- 74 file operations failed with
+      3658 and STARTUP.COM died on "%RMS-E-FNF, error opening
+      SYS$STARTUP:VMS$VMS.DAT", looping until DCL was OOM-killed. Baron's ruling on
+      rd vms-dc2 had already judged that answer ("option (B) ... NEVER"). So a
+      resource whose identity is outside the coverage is MASTERED ON THIS NODE ONLY
+      (option A, honestly labelled), the fallback is COUNTED
+      (vms_lock_dlm_dir_hash_uncovered) and the first one is ANNOUNCED on the console
+      -- "%DLM, resource-name hash coverage: ... mastered on THIS NODE ONLY". ONE
+      configuration needs no value at all: when every entry of the committed vector is
+      this node's, "value mod n" cannot select anyone else, so the resource is still
+      resolved correctly and still goes through this node's own directory table
+      (vms_ldwv_directs_everything_here, p. 6-32).
       THE LIVE FALSIFICATION DETECTOR. The function is a determination, not a theorem,
       so the executive checks it in production: a frame naming an identity this node
       had already COMPUTED a value for, and carrying a different value, makes the WIRE

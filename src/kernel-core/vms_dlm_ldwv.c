@@ -347,6 +347,26 @@ int vms_ldwv_all_ovmx(const struct vms_ldwv *v)
 	return (v->valid && v->n_members > 0u && !v->any_foreign) ? 1 : 0;
 }
 
+/*
+ * DOES THIS VECTOR DIRECT EVERYTHING AT THIS NODE? See the header for what this
+ * is and what it is not (rd vms-b5b0). One read of the vector this connection
+ * manager BUILT from LOCKDIRWTs it LEARNED: every entry 0 means every entry is
+ * ours (p. 6-32), so no value can select another system. A vector that is not
+ * authoritative right now answers 0, like every other read of it.
+ */
+int vms_ldwv_directs_everything_here(const struct vms_ldwv *v)
+{
+	uint32_t i;
+
+	if (v == NULL || !v->valid || v->n == 0u)
+		return 0;
+	for (i = 0u; i < v->n; i++) {
+		if (v->entry[i] != 0u)
+			return 0;
+	}
+	return 1;
+}
+
 /* ==========================================================================
  * The index rule (p. 6-31) -- ONE spelling, used by everything
  * ========================================================================== */

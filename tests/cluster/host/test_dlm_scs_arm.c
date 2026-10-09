@@ -246,6 +246,14 @@ static void arm_bindings(void)
 	 */
 	has("d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;",
 	    "the engine's directory resolver IS installed");
+	/* rd vms-b5b0: the ONE question the vector can answer without a value,
+	 * and the reason an uncovered identity is not simply mastered blind. */
+	has("d->eng_ops.dir_all_ours   = dlm_arm_eng_dir_all_ours;",
+	    "...and so is the read that asks whether the vector directs "
+	    "EVERYTHING here -- the one answer that needs no value");
+	has("return vms_ldwv_directs_everything_here(&d->cl->club.ldwv);",
+	    "...which is one read of the connection manager's own committed "
+	    "vector, derived every time it is asked");
 	absent("dir_groundable",
 	      "*** the all-OVMX GATE on routing is GONE from this arm "
 	      "(rd vms-b5b0) ***");

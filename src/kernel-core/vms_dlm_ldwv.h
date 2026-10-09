@@ -198,17 +198,29 @@ int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16);
 int vms_ldwv_all_ovmx(const struct vms_ldwv *v);
 
 /*
- * THE SOLE-DIRECTORY PREDICATE RETIRED HERE (rd vms-b5b0).
- * `vms_ldwv_sole_directory()` answered "is every entry of this vector one of
- * mine?", which in the interim lab configuration (every real VMS member at
- * LOCKDIRWT 0, this node above 0) meant "every root name in this cluster is
- * directed here" -- the one configuration in which a DIRECTORY decision could
- * be made without the resource-name hash (rd vms-025 / vms-db2a). The hash is
- * now determined and proven (vms_dlm_hash.h), so the vector is consulted per
- * resource in EVERY configuration and nothing needs the predicate. It is
- * deleted rather than left callable: a configuration test that no longer
- * protects anything is a thing a future caller would lean on.
+ * DOES THIS VECTOR DIRECT *EVERYTHING* AT THIS NODE? (rd vms-b5b0.)
+ *
+ * Nonzero iff the vector is authoritative and EVERY one of its entries is one
+ * of this node's own (p. 6-32: a system's own entries read 0 in its own copy).
+ *
+ * WHAT IT IS, AND WHAT IT IS NOT. This is the same arithmetic the retired
+ * `vms_ldwv_sole_directory()` did, and deliberately NOT the same claim. That
+ * one was the interim mixed-cluster GATE (rd vms-025/vms-db2a): a permission
+ * for paths that were otherwise closed, in a configuration an operator had to
+ * arrange (every real VMS member at LOCKDIRWT 0, this node above 0). This is a
+ * READ of what the vector can and cannot say, and the engine asks it for one
+ * reason only: when every entry is ours, `value mod n` cannot select anyone
+ * else, so THIS NODE IS THE DIRECTORY whatever the value would have been --
+ * which is the one case where a resource whose identity is outside the hash's
+ * PROVEN COVERAGE (vms_dlm_hash.h) can still be resolved correctly, and so
+ * still reach this node's own directory table rather than fall back to blind
+ * local mastery (vms_dlm_proxy.h `dir_all_ours`).
+ *
+ * Derived from real executive state on every call -- never a configured flag,
+ * a remembered verdict or a build option (INV-6).
  */
+int vms_ldwv_directs_everything_here(const struct vms_ldwv *v);
+
 
 /* ==========================================================================
  * 5. The CLUB-facing half

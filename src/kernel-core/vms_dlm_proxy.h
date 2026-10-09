@@ -322,6 +322,27 @@ struct vms_dlm_requester_ops {
 	 */
 
 	/*
+	 * DOES THE VECTOR DIRECT *EVERY* ROOT RESOURCE AT THIS NODE? (rd
+	 * vms-b5b0.) Production: vms_ldwv_directs_everything_here() over the
+	 * connection manager's own committed vector -- nonzero when the vector
+	 * is authoritative and every one of its entries is one of this node's.
+	 *
+	 * WHY THIS IS NOT THE RETIRED INTERIM GATE. The sole-directory gate was
+	 * a PERMISSION: it let paths run that were otherwise closed. This is a
+	 * READ of what the vector can and cannot say: when every entry is ours,
+	 * `value mod n` cannot select anyone else, so THIS NODE IS THE DIRECTORY
+	 * whatever the value would have been (Davis p. 6-32). That is the one
+	 * situation in which a resource whose identity is outside the hash's
+	 * proven coverage can still be resolved -- and resolved CORRECTLY, so it
+	 * still goes through this node's own directory table and is still
+	 * protected from the two-master hole, instead of falling back to blind
+	 * local mastery.
+	 *
+	 * Absent (NULL) reads as 0, which costs only that fallback.
+	 */
+	int (*dir_all_ours)(void *ctx);
+
+	/*
 	 * WHAT THIS NODE'S OWN LOCK DIRECTORY ALREADY SAYS ABOUT A ROOT RESOURCE
 	 * (rd vms-025, generalised by rd vms-b5b0) -- and the reason it may take
 	 * an identity when `dir_resolve` may not take a name.
@@ -431,6 +452,28 @@ uint32_t vms_lock_dlm_dir_hash_conflicts(void);
  * carries. A diagnostic reads it; nothing acts on it.
  */
 uint32_t vms_lock_dlm_dir_hash_computed_wrong(void);
+
+/*
+ * HOW MANY RESOURCES THIS EXECUTIVE COULD NOT ROUTE, and so mastered on THIS
+ * NODE ONLY -- split by the reason (rd vms-b5b0). Both are the honest
+ * fallback Baron's option A names, both are counted, and the first of each is
+ * announced on the console:
+ *
+ *   _dir_no_vector()        no committed Lock Directory Weight Vector at the
+ *                           moment the resource was first locked (the node was
+ *                           forming/joining, or a transition was in flight).
+ *                           It does NOT re-master itself afterwards: the
+ *                           cluster rebuild is what re-masters (FC-P5.3..5.5).
+ *   _dir_hash_uncovered()   the resource's identity is outside the hash's
+ *                           PROVEN COVERAGE (vms_dlm_hash.h) and the vector has
+ *                           more than this node in it.
+ *
+ * A nonzero reading is not an error -- it is the size of the honest residual,
+ * and the thing to quote when asking whether a lab run's locks were
+ * cluster-wide.
+ */
+uint32_t vms_lock_dlm_dir_no_vector(void);
+uint32_t vms_lock_dlm_dir_hash_uncovered(void);
 
 /* How many learned hashes were NOT kept because the resource table was at the
  * learner's bound and held no block for that name (rd vms-4e9). A real $ENQ is

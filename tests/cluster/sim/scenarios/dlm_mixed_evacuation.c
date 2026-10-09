@@ -346,6 +346,15 @@ static uint32_t o_dir_generation(void *ctx)
 	return vms_ldwv_generation(ovmx_ldwv());
 }
 
+/* The one question the vector answers WITHOUT a value (rd vms-b5b0) --
+ * dlm_arm_eng_dir_all_ours. At the default LOCKDIRWT this reads 0, which is
+ * the configuration these scenarios run in. */
+static int o_dir_all_ours(void *ctx)
+{
+	(void)ctx;
+	return vms_ldwv_directs_everything_here(ovmx_ldwv());
+}
+
 static int o_send(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len)
 {
 	(void)ctx;
@@ -470,6 +479,7 @@ static void ovmx_up(void)
 	o.eng_ops.post             = o_post;
 	o.eng_ops.dir_resolve      = o_dir_resolve;
 	o.eng_ops.dir_generation   = o_dir_generation;
+	o.eng_ops.dir_all_ours     = o_dir_all_ours;
 	o.eng_ops.dir_local_lookup = o_dir_local_lookup;
 	o.eng_ops.dir_claim_self   = o_dir_claim_self;
 	o.eng_ops.ctx              = &o;

@@ -974,11 +974,34 @@ Decisions:
   directory node included. Three properties make that safe rather than a return
   of the 90b3bbbd hazard, and each is pinned by a test and a negative control:
 
-  1. **The PROVEN COVERAGE is a measurement, and outside it the engine
-     REFUSES.** The three coverage masks in `vms_dlm_hash.h` are DERIVED in
+  1. **The PROVEN COVERAGE is a measurement, and outside it NO FRAME IS
+     BUILT.** The three coverage masks in `vms_dlm_hash.h` are DERIVED in
      `test_dlm_hash.c` from the corpus and the driven run's own score file, so
      a hand-widened constant reddens. Unproven today: supervisor mode (2), UIC
      groups with bit 14/15 set, and name lengths 23 and 29.
+
+     **The $ENQ is NOT refused, and that distinction is load-bearing** (rd
+     vms-b5b0, PR #1578's lab run). Withholding a FRAME and refusing a CALLER
+     are different acts: the first protects the cluster, the second broke the
+     node. A booted member with a cluster stack bound answered
+     `SS$_UNSUPPORTED` to its own ACP — 74 file operations failed and
+     STARTUP.COM died on `%RMS-E-FNF ... SYS$STARTUP:VMS$VMS.DAT` — which is
+     exactly what Baron's ruling on rd vms-dc2 called out ("option (B) …
+     NEVER"). So a resource this executive cannot route is **mastered on this
+     node only** (option A), counted and announced once. Two counters name the
+     two ways to get there: `vms_lock_dlm_dir_hash_uncovered()` (no provable
+     value for the identity) and `vms_lock_dlm_dir_no_vector()` (no committed
+     vector at all — a node forming or joining, or a transition in flight;
+     Davis p. 6-33 discards directory information at Phase 1). The residual is
+     the pre-proof floor for that narrow set, and a rebuild is what re-masters
+     (FC-P5.3..5.5).
+
+     **One case needs no value at all:** when every entry of the committed
+     vector is this node's, `value mod n` cannot select anyone else, so THIS
+     NODE IS THE DIRECTORY whatever the value would have been
+     (`vms_ldwv_directs_everything_here()`, p. 6-32). An uncovered identity in
+     that configuration is therefore still resolved CORRECTLY and still goes
+     through this node's own directory table — it does not fall back.
   2. **The RESOURCE IDENTITY is part of the engine's namespace.** A VMS
      resource name is qualified by the enqueuing process's UIC group (0 for a
      LCK$M_SYSTEM name) and by the access mode, and those are exactly the two

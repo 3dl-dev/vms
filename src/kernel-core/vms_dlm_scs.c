@@ -751,6 +751,7 @@ static void dlm_arm_run_release(struct vms_dlm_scs *d, uint32_t slot,
 static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid);
 static uint32_t dlm_arm_eng_dir_generation(void *ctx);
+static int dlm_arm_eng_dir_all_ours(void *ctx);
 static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
 					     const struct vms_dlm_dir_ask *q,
 					     struct vms_dlm_dir_local *out);
@@ -766,6 +767,10 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 	 * used to stand here, together with the OVMX-own hash it protected). */
 	d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;
 	d->eng_ops.dir_generation = dlm_arm_eng_dir_generation;
+	/* ...and the one question the vector can answer WITHOUT a value: does it
+	 * direct everything here? (rd vms-b5b0 -- the engine asks it only for a
+	 * resource whose identity is outside the hash's proven coverage.) */
+	d->eng_ops.dir_all_ours   = dlm_arm_eng_dir_all_ours;
 	/* The engine's read of, and write to, THIS NODE's own lock directory
 	 * (rd vms-025/db2a). The engine asks them only after the vector has named
 	 * THIS NODE as the resource's directory, which is what makes "no entry"
@@ -835,6 +840,21 @@ static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 static uint32_t dlm_arm_eng_dir_generation(void *ctx)
 {
 	return dlm_arm_dir_generation(ctx);
+}
+
+/*
+ * DOES THE VECTOR DIRECT EVERYTHING HERE? One read of the connection manager's
+ * own committed vector, derived on every call (rd vms-b5b0). It is NOT the
+ * retired sole-directory gate: it grants no permission, it reports what the
+ * vector can say -- see vms_dlm_ldwv.h.
+ */
+static int dlm_arm_eng_dir_all_ours(void *ctx)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || d->cl == NULL)
+		return 0;
+	return vms_ldwv_directs_everything_here(&d->cl->club.ldwv);
 }
 
 /*

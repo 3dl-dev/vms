@@ -70,9 +70,20 @@
  * WHAT MAY NOT. A WRONG hash on the wire is not a benign mistake: it makes the
  * directory node scan the wrong chain, conclude the name is unknown, and name
  * the sender as master -- the 35-per-second grant storm in memory
- * cluster-promotion-gap. So an identity OUTSIDE the proven coverage is REFUSED,
- * not extrapolated: `vms_dlm_name_hash_proven()` below is the one entry point
+ * cluster-promotion-gap. So an identity OUTSIDE the proven coverage NEVER
+ * REACHES A FRAME: `vms_dlm_name_hash_proven()` below is the one entry point
  * routing may use, and §"THE PROVEN COVERAGE" states exactly what it serves.
+ *
+ * AND WHAT HAPPENS TO THE $ENQ INSTEAD, because this is where the distinction
+ * is load-bearing (rd vms-b5b0, the PR #1578 lab regression). Refusing the
+ * CALLER is not the same act as withholding a FRAME, and for a while the engine
+ * did both: a booted node with a cluster stack bound answered SS$_UNSUPPORTED
+ * to its own ACP, 74 file operations failed and STARTUP.COM died on
+ * `%RMS-E-FNF ... SYS$STARTUP:VMS$VMS.DAT`. Baron's ruling on rd vms-dc2 had
+ * already judged that -- option (B), refusing, is "NEVER" -- so the resource is
+ * MASTERED LOCALLY instead (option A, honestly labelled), the fallback is
+ * COUNTED (vms_lock_dlm_dir_hash_uncovered) and the first one is ANNOUNCED on
+ * the console. Nothing is asserted to anybody: a local grant is not a claim.
  *
  * SUB-RESOURCES ARE OUT OF SCOPE. A sub-resource's value is a property of its
  * parent too (rd vms-4fb finding 3), so no (name -> value) pair can be learned
@@ -167,9 +178,11 @@ enum vms_dlm_hash_status {
  *     tools/cluster/dlm_hash/check_heldout_run.py, and widen the mask WITH the
  *     capture.
  *
- * A refusal here is SS$_UNSUPPORTED from $ENQ (vms_lock.c dir_resolve) -- the
- * honest floor the design has always stated for an unroutable name, not a new
- * failure mode.
+ * An identity outside these sets is not routed and not refused: the lock
+ * engine masters the resource on THIS NODE ONLY, counts it and says so once
+ * (vms_lock.c, rd vms-b5b0). That is the pre-proof floor for the narrow set of
+ * identities the proof does not cover -- not a new failure mode, and not a
+ * cluster-wide claim.
  * =========================================================================== */
 
 /* Bit `mode` set for each access mode observed. Modes 0, 1, 3. */

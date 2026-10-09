@@ -1207,34 +1207,186 @@ static uint32_t dir_hash_for_routing(struct vms_lock_resource *res)
     return dir_hash_store(res, h, 1 /* computed */);
 }
 
-static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
+/* ==========================================================================
+ * WHAT dir_resolve ANSWERS, AND WHY THERE ARE THREE ANSWERS (rd vms-b5b0, the
+ * lab regression in PR #1578)
+ *
+ * It used to answer with an SS$_ status and a CSID, and "I cannot route this
+ * resource" came back as SS$_UNSUPPORTED -- which the enqueue path handed
+ * straight to the caller. On a REAL booted node with a cluster stack bound
+ * that refusal reached the ACP: 74 file operations failed with SS$_UNSUPPORTED
+ * (3658) and STARTUP.COM died on `%RMS-E-FNF ... SYS$STARTUP:VMS$VMS.DAT`.
+ * Baron's ruling on rd vms-dc2 had already judged that answer: option (B),
+ * refuse an $ENQ this node cannot route, is "NEVER (it breaks the product to be
+ * pedantic about a hole that has no exposure yet)" -- option A, master it
+ * LOCALLY and label it honestly, is the behaviour for a resource with no
+ * routable value.
+ *
+ * So the three answers are the three real situations, and only one of them is
+ * a refusal of anything:
+ *
+ *   DLM_DIR_THIS_NODE   this node is the resource's directory. Either the
+ *                       vector said so for the value we hold, or the vector
+ *                       HAS NO OTHER ANSWER TO GIVE -- every one of its entries
+ *                       is ours (`dir_all_ours`), and then `value mod n` cannot
+ *                       choose anyone else, so no value is needed to know it
+ *                       (Davis p. 6-32: a system's own entries read 0 in its own
+ *                       copy). That second case is what makes an uncovered
+ *                       identity still reach this node's own directory table,
+ *                       and so still be protected from the two-master hole, in
+ *                       the configuration where every root resource is directed
+ *                       here.
+ *   DLM_DIR_ELSEWHERE   *out_csid is the directory node, from the vector,
+ *                       indexed by a value this executive holds.
+ *   DLM_DIR_UNROUTABLE  this executive cannot route this resource AT ALL, and
+ *                       there are exactly two ways to be here:
+ *                         - NO USABLE VECTOR. The node is forming or joining,
+ *                           or a transition is in flight, so there is no
+ *                           committed Lock Directory Weight Vector at all (it
+ *                           is discarded at Phase 1 and filled at Phase 2 --
+ *                           p. 6-33, pp. 7-40..42). This is the state the lab
+ *                           node booted in.
+ *                         - NO PROVABLE VALUE. The resource's identity is
+ *                           outside the hash's PROVEN COVERAGE (vms_dlm_hash.h:
+ *                           supervisor mode, a UIC group with bit 14/15 set, a
+ *                           23- or 29-byte name) and the vector has more than
+ *                           this node in it, so the question cannot be dodged.
+ *                       The caller masters the resource LOCALLY, COUNTS which
+ *                       of the two it was, and SAYS it on the console once.
+ *                       NOTHING goes on the wire -- which is the invariant that
+ *                       actually matters (INV-6 is about what this node
+ *                       ASSERTS, and a local grant asserts nothing to anybody).
+ *
+ * THE HONEST RESIDUAL, named rather than hidden: a resource mastered locally
+ * under DLM_DIR_UNROUTABLE is mastered locally, not cluster-wide. If a real VMS
+ * member masters the same resource, there are two masters for it until a
+ * rebuild re-masters it (FC-P5.3..5.5). That is the pre-rd-vms-b5b0 floor for
+ * the set of resources this executive cannot route -- which the proof narrowed
+ * from "every name OVMX touches first" to "an identity outside the coverage, or
+ * a resource first touched while no vector is committed". It is not a new hole;
+ * it is the old one, now narrow, counted and announced.
+ * ========================================================================== */
+enum dlm_dir_answer {
+    DLM_DIR_THIS_NODE = 0,
+    DLM_DIR_ELSEWHERE = 1,
+    DLM_DIR_UNROUTABLE = 2
+};
+
+/*
+ * HOW MANY RESOURCES WERE MASTERED LOCALLY BECAUSE THIS EXECUTIVE COULD NOT
+ * ROUTE THEM, split by the reason -- the two counters that make the residual
+ * above measurable instead of invisible (rd vms-b5b0). Written under
+ * vms_res_hash_lock, read the same way.
+ */
+static uint32_t vms_dlm_dir_no_vector_n;
+static uint32_t vms_dlm_dir_uncovered_n;
+static uint8_t  vms_dlm_dir_said_no_vector;
+static uint8_t  vms_dlm_dir_said_uncovered;
+
+uint32_t vms_lock_dlm_dir_no_vector(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_no_vector_n;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+uint32_t vms_lock_dlm_dir_hash_uncovered(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_uncovered_n;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+/*
+ * SAY IT ONCE, on the node's console (exec_kbackend.h's console seam -- printk
+ * at KERN_ERR / printf(9), so it survives the product boot's console level and
+ * is safe from this path's spinlock). ONCE, because the ACP asks about hundreds
+ * of resources: the lab's 74 identical failure lines were noise, and a single
+ * named line plus a counter is what a transcript can actually be read for.
+ */
+static void dlm_dir_say_once(uint8_t *said, const char *msg)
+{
+    if (*said)
+        return;
+    *said = 1u;
+    exec_console_printf("%s\n", msg);
+}
+
+/* Count + announce one UNROUTABLE resource. Caller holds res->lock; the
+ * counters take vms_res_hash_lock, which is the outer lock nowhere on this
+ * path, so they are taken here and not around the console write. */
+static void dlm_dir_note_unroutable(int no_vector)
+{
+    exec_lock(&vms_res_hash_lock);
+    if (no_vector)
+        vms_dlm_dir_no_vector_n++;
+    else
+        vms_dlm_dir_uncovered_n++;
+    exec_unlock(&vms_res_hash_lock);
+
+    if (no_vector)
+        dlm_dir_say_once(&vms_dlm_dir_said_no_vector,
+            "%DLM, no lock directory vector is committed yet: resources locked "
+            "now are mastered on THIS NODE ONLY until a cluster transition "
+            "completes");
+    else
+        dlm_dir_say_once(&vms_dlm_dir_said_uncovered,
+            "%DLM, resource-name hash coverage: a resource's identity is "
+            "outside the values a real VMS node has been observed hashing "
+            "(docs/design-dlm-name-hash.md) -- it is mastered on THIS NODE "
+            "ONLY, and no cluster-wide claim is made for it");
+}
+
+static enum dlm_dir_answer dir_resolve(struct vms_lock_resource *res,
+                                       uint32_t *out_csid, int *why_no_vector)
 {
     struct vms_dlm_requester_ops ops = dlm_req_ops_get();
     uint32_t gen, csid = 0;
 
     *out_csid = 0;
+    if (why_no_vector != NULL)
+        *why_no_vector = 0;
     if (ops.dir_resolve == NULL)
-        return SS__NORMAL;                 /* cluster of one: nothing to resolve */
+        return DLM_DIR_THIS_NODE;          /* cluster of one: nothing to resolve */
     if (res->parent != NULL)
-        return SS__NORMAL;                 /* a sub-resource: see the note above */
+        return DLM_DIR_THIS_NODE;          /* a sub-resource: see the note above */
 
-    if (dir_hash_for_routing(res) != SS__NORMAL)
-        return SS__UNSUPPORTED;            /* learned, proven-computed, or nothing */
+    if (dir_hash_for_routing(res) != SS__NORMAL) {
+        /*
+         * No value, and none can be PROVEN for this identity. The vector can
+         * still answer if every one of its entries is ours: `value mod n`
+         * cannot choose anyone else, so this node is the directory whatever
+         * the value would have been. Otherwise the question is unanswerable.
+         */
+        if (ops.dir_all_ours != NULL && ops.dir_all_ours(ops.ctx))
+            return DLM_DIR_THIS_NODE;
+        return DLM_DIR_UNROUTABLE;
+    }
 
     gen = (ops.dir_generation != NULL) ? ops.dir_generation(ops.ctx) : 0u;
     if (res->dir_valid && res->dir_gen == gen) {
         *out_csid = res->dir_csid;
-        return SS__NORMAL;
+        return res->dir_csid != 0u ? DLM_DIR_ELSEWHERE : DLM_DIR_THIS_NODE;
     }
 
-    if (ops.dir_resolve(ops.ctx, res->dir_hash, &csid) != SS__NORMAL)
-        return SS__UNSUPPORTED;
+    if (ops.dir_resolve(ops.ctx, res->dir_hash, &csid) != SS__NORMAL) {
+        /* A value we hold, and no vector to index with it. */
+        if (why_no_vector != NULL)
+            *why_no_vector = 1;
+        return DLM_DIR_UNROUTABLE;
+    }
 
     res->dir_csid = csid;                  /* 0 == this node (p. 6-32) */
     res->dir_gen = gen;
     res->dir_valid = 1;
     *out_csid = csid;
-    return SS__NORMAL;
+    return csid != 0u ? DLM_DIR_ELSEWHERE : DLM_DIR_THIS_NODE;
 }
 
 /* Where a $ENQ for this resource must be served (FC-P4.4). */
@@ -1464,7 +1616,9 @@ static int dlm_route_own_directory(struct vms_lock_resource *res,
 static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
                                    enum dlm_route *route, uint32_t *dst_csid)
 {
+    enum dlm_dir_answer where;
     uint32_t dir = 0, st;
+    int no_vector = 0;
 
     *route = DLM_ROUTE_LOCAL;
     *dst_csid = 0;
@@ -1472,33 +1626,48 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
     if (dlm_route_known_master(res, route, dst_csid))
         return SS__NORMAL;
 
-    st = dir_resolve(res, &dir);
-    if (st != SS__NORMAL) {
+    where = dir_resolve(res, &dir, &no_vector);
+    if (where == DLM_DIR_UNROUTABLE) {
         /*
-         * WHY AN INBOUND REQUEST DOES NOT INHERIT THIS REFUSAL. A cross-node
-         * request arrived HERE because the SENDER resolved the directory and
-         * the cluster addressed it at this node -- that routing decision is a
-         * fact this node RECEIVED, and re-deriving it is not required to honour
-         * it. Refusing because we cannot independently reproduce a decision the
-         * cluster already made would break locking on exactly the shared names
-         * the cluster is talking to us about, and it would refuse a resource we
-         * are in fact about to master (p. 6-31 outcome 3, "the requester
-         * becomes the master"). The REQUESTER side is where the refusal has to
-         * bite -- it is the side that would otherwise put a guessed hash on the
-         * wire -- and it does, below.
+         * THIS EXECUTIVE CANNOT ROUTE THIS RESOURCE: no committed vector, or
+         * no provable value for its identity. It is mastered HERE -- Baron's
+         * option A on rd vms-dc2, honestly labelled -- and NOT refused: a
+         * refusal reaches the ACP and takes the node's own file system with it
+         * (the PR #1578 lab regression; see the note above dir_resolve).
+         *
+         * Counted and said once, so the residual is visible in a transcript
+         * instead of being a silent local-only lock. NOTHING is put on the
+         * wire for it, which is the invariant that matters: this node asserts
+         * nothing to anybody about a resource it could not route.
          */
-        if (!inbound)
-            return st;
-    } else if (dir != 0 && dir != vms_local_csid) {
+        dlm_dir_note_unroutable(no_vector);
+        res->master_csid = vms_local_csid;
+        return SS__NORMAL;
+    }
+    if (where == DLM_DIR_ELSEWHERE && dir != vms_local_csid) {
+        if (inbound) {
+            /*
+             * WHY AN INBOUND REQUEST IS NOT ROUTED BY THIS NODE'S VECTOR. A
+             * cross-node request arrived HERE because the SENDER resolved the
+             * directory and the cluster addressed it at this node -- that
+             * routing decision is a fact this node RECEIVED, and re-deriving
+             * it is not required to honour it. It is served, or refused, as
+             * the master role decides (enq_inbound_not_master), which is what
+             * reporting the remote route below does.
+             */
+            *route = DLM_ROUTE_REMOTE;
+            *dst_csid = dir;
+            return SS__NORMAL;
+        }
         *route = DLM_ROUTE_REMOTE;           /* the lookup goes to the directory */
         *dst_csid = dir;
         return SS__NORMAL;
     }
 
     /*
-     * THIS NODE IS THE DIRECTORY FOR THIS NAME (`dir == 0` is the vector's own
-     * way of saying "your entry", p. 6-32; `dir == vms_local_csid` is the same
-     * fact through a resolver that names us explicitly) -- so the directory
+     * THIS NODE IS THE DIRECTORY FOR THIS RESOURCE (`dir == 0` is the vector's
+     * own way of saying "your entry", p. 6-32; `dir == vms_local_csid` is the
+     * same fact through a resolver that names us explicitly) -- so the directory
      * this node HOLDS is the authority on who masters it, and it is consulted
      * BEFORE mastery is assumed (rd vms-025/vms-b5b0). An entry naming another
      * system routes the request there; no entry is p. 6-31's "no master", and
@@ -4643,7 +4812,14 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 
         exec_lock(&res->lock);
         args.found = 1;
-        if (dir_resolve(res, &dir) == SS__NORMAL)
+        /*
+         * A READBACK NEVER COUNTS AND NEVER SAYS (rd vms-b5b0): it asks the
+         * same resolver the router asks, and an UNROUTABLE answer is reported
+         * as "no directory" (dir_csid 0), exactly as it was when the resolver
+         * returned a status. Passing no `why_no_vector` is what keeps a
+         * diagnostic read out of the fallback counters.
+         */
+        if (dir_resolve(res, &dir, NULL) != DLM_DIR_UNROUTABLE)
             args.dir_csid = (dir != 0) ? dir : vms_local_csid;
         /* The SAME "is that node us?" test the router applies (vms-151), so a
          * readback taken after this node learned its cluster identity names the

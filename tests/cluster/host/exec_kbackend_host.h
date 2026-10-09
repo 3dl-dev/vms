@@ -73,6 +73,7 @@
 #define OVMX_EXEC_KBACKEND_HOST_H
 
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -146,5 +147,18 @@ static inline void *exec_zalloc(size_t n)        { return calloc(1, n ? n : 1); 
 static inline void *exec_zalloc_atomic(size_t n) { return calloc(1, n ? n : 1); }
 static inline void *exec_alloc(size_t n)         { return malloc(n ? n : 1); }
 static inline void  exec_free(void *p)           { free(p); }
+
+/*
+ * THE CONSOLE SEAM (rd vms-b5b0). src/kernel-core/exec_kbackend.h documents it
+ * as "emit one line on the node's console" -- printk(KERN_ERR) on Linux,
+ * printf(9) on NetBSD -- and a host-linked kernel-core TU needs it for the same
+ * reason the kmod does: the engine's own honest-residual announcements
+ * (vms_lock.c dlm_dir_say_once) are part of the behaviour under test, not
+ * decoration. On the host it is stdout, so a test can read what the node would
+ * have said.
+ */
+#ifndef exec_console_printf
+#define exec_console_printf(...) printf(__VA_ARGS__)
+#endif
 
 #endif /* OVMX_EXEC_KBACKEND_HOST_H */

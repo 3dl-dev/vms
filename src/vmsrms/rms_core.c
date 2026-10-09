@@ -3739,7 +3739,7 @@ uint32_t sys$get_security(const struct dsc$descriptor_s *clsnam,
 #if defined(OVMX_HAVE_ACP)
         case RMS_OSS_ACL_LENGTH:
         case RMS_OSS_ACL_READ: {
-            uint8_t acl[512];
+            uint8_t acl[4096];        /* the whole ACL, extension headers included (vms-a88c) */
             uint32_t n = sizeof(acl);
             st = rms_sec_aclop(c, VMS_ACP_ACL_READ, acl, &n);
             if (st == SS$_ACLEMPTY) { n = 0; st = SS$_NORMAL; }

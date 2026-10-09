@@ -1090,20 +1090,99 @@ static uint32_t acp_rd32(const uint8_t *p)
            ((uint32_t)p[3] << 24);
 }
 
+/*
+ * AN ACL ACROSS EXTENSION HEADERS (vms-a88c). An ACL longer than the primary
+ * header holds continues in extension headers chained from FH2$W_EXT_FID
+ * (observed on OpenVMS VAX V7.3, docs/oracle/vax73-acl/ace-editing.txt BIG.TXT:
+ * the primary carries the first 25 ACEs, an extension header -- segment 1,
+ * back-linked to the primary, the file name only in its ident area -- the
+ * other 10). The ACL is the primary's ACEs followed by each extension header's,
+ * in chain order.
+ */
+#define ACP_ACL_MAX  4096u      /* ACL bytes one file may carry over its headers */
+#define ACP_EXT_MAX  8u         /* extension headers followed */
+
+struct acp_xscratch { uint8_t raw[ACP_BLOCK_SIZE]; ods2_fh2_t fh; };
+
+static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
+                                uint8_t *raw, ods2_fh2_t *parsed);
+
+/* One header's ACEs: *p and the byte count (the list ends at the first zero-size
+ * ACE -- an area may carry slack). */
+static size_t acp_hdr_acl(const uint8_t *h, const uint8_t **p)
+{
+    size_t off = 0, len = 0, pos;
+
+    *p = h;
+    if (!ods2_fh2_acl_area(h, &off, &len))
+        return 0;
+    for (pos = 0; pos + 4u <= len && h[off + pos] >= 4u && pos + h[off + pos] <= len;
+         pos += h[off + pos])
+        ;
+    *p = h + off;
+    return pos;
+}
+
+static uint32_t acp_hdr_ext(const uint8_t *h)
+{
+    return ods2_fid_number(&((const ods2_fh2_t *)h)->fh2_ext_fid);
+}
+
+/* The file's whole ACL into buf[0..cap): *len bytes; xfids[0..*nx) the extension
+ * header file numbers in chain order (either may be NULL). */
+static uint32_t acp_acl_gather(struct vms_acp_volume *vol, const uint8_t *primary,
+                               uint8_t *buf, size_t cap, size_t *len,
+                               uint32_t *xfids, unsigned *nx)
+{
+    const uint8_t *p;
+    size_t n = acp_hdr_acl(primary, &p), total;
+    uint32_t next = acp_hdr_ext(primary), st = SS__NORMAL;
+    struct acp_xscratch *x = NULL;
+    unsigned k = 0;
+
+    if (n > cap)
+        return SS__ACLFULL;
+    if (buf)
+        memcpy(buf, p, n);
+    total = n;
+    while (next != 0 && vol) {
+        if (k >= ACP_EXT_MAX) { st = SS__BADPARAM; break; }
+        if (!x && !(x = exec_zalloc(sizeof(*x)))) { st = SS__INSFMEM; break; }
+        st = acp_read_header(vol, next, x->raw, &x->fh);
+        if (st != SS__NORMAL)
+            break;
+        if (xfids)
+            xfids[k] = next;
+        k++;
+        n = acp_hdr_acl(x->raw, &p);
+        if (total + n > cap) { st = SS__ACLFULL; break; }
+        if (buf)
+            memcpy(buf + total, p, n);
+        total += n;
+        next = acp_hdr_ext(x->raw);
+    }
+    if (x)
+        exec_free(x);
+    if (len)
+        *len = total;
+    if (nx)
+        *nx = k;
+    return st;
+}
+
 /* The first identifier ACE of the file's ACL whose identifiers the process ALL
  * holds; DEFAULT ACEs are skipped (they are for files created in a directory,
  * not for the directory itself). Returns 1 and its ACE$L_ACCESS in *access, or
- * 0 when no ACE applies (then the protection code alone decides). */
-static int acp_acl_match(const struct vms_proc *proc, const ods2_fh2_t *fh,
-                         uint32_t *access)
+ * 0 when no ACE applies (then the protection code alone decides). The ACL may
+ * continue in extension headers (vms-a88c); a chain that cannot be read counts
+ * as a matching ACE that grants nothing -- never as no ACL. */
+static int acp_acl_match_buf(const struct vms_proc *proc, const uint8_t *acl, size_t len,
+                             uint32_t *access)
 {
-    const uint8_t *h = (const uint8_t *)fh;
-    size_t off, len, pos = 0;
+    size_t pos = 0;
 
-    if (!ods2_fh2_acl_area(h, &off, &len))
-        return 0;
     while (pos + 4u <= len) {
-        const uint8_t *ace = h + off + pos;
+        const uint8_t *ace = acl + pos;
         unsigned sz = ace[0];
         uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
 
@@ -1125,6 +1204,29 @@ static int acp_acl_match(const struct vms_proc *proc, const ods2_fh2_t *fh,
     return 0;
 }
 
+static int acp_acl_match(const struct vms_proc *proc, struct vms_acp_volume *vol,
+                         const ods2_fh2_t *fh, uint32_t *access)
+{
+    const uint8_t *h = (const uint8_t *)fh, *p;
+    size_t len = acp_hdr_acl(h, &p);
+    uint8_t *buf;
+    int m;
+
+    if (acp_hdr_ext(h) == 0 || !vol)
+        return acp_acl_match_buf(proc, p, len, access);
+    /* NEGCTL-ANCHORED (acp-acl-ext-not-matched): the extension headers' ACEs. */
+    buf = exec_zalloc(ACP_ACL_MAX);
+    if (!buf || acp_acl_gather(vol, h, buf, ACP_ACL_MAX, &len, NULL, NULL) != SS__NORMAL) {
+        if (buf)
+            exec_free(buf);
+        *access = 0;
+        return 1;
+    }
+    m = acp_acl_match_buf(proc, buf, len, access);
+    exec_free(buf);
+    return m;
+}
+
 /*
  * acp_check_access - the Files-11 protection gate (INV-6). Grant the requested
  * access (read always; write additionally when `want_write`) through the
@@ -1134,8 +1236,8 @@ static int acp_acl_match(const struct vms_proc *proc, const ods2_fh2_t *fh,
  * BYPASS, READALL and SYSPRV are applied there, for every object class alike.
  * Returns SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
  */
-static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
-                                 int want_write)
+static uint32_t acp_check_access(struct vms_proc *proc, struct vms_acp_volume *vol,
+                                 const ods2_fh2_t *fh, int want_write)
 {
     uint32_t owner_uic = ((uint32_t)fh->fh2_fileowner.uic_group << 16) |
                          (uint32_t)fh->fh2_fileowner.uic_member;
@@ -1167,7 +1269,7 @@ static uint32_t acp_check_access(struct vms_proc *proc, const ods2_fh2_t *fh,
      * privilege overrides, a granting ACE, and otherwise the protection code with
      * group/world closed by a matching ACE that denied.
      */
-    ace_matched = acp_acl_match(proc, fh, &ace_access);
+    ace_matched = acp_acl_match(proc, vol, fh, &ace_access);
 
     return vms_prot_check_acl(proc->uic, proc->cur_privs, owner_uic,
                               fh->fh2_fileprot, want, ace_matched, ace_access);
@@ -1932,7 +2034,7 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
 
         /* PROTECTION GATE (INV-6): refuse a denied open before building any
          * window or marking the channel accessed. */
-        status = acp_check_access(proc, &s->fh, want_write);
+        status = acp_check_access(proc, vol, &s->fh, want_write);
         if (status != SS__NORMAL) {
             exec_free(s);
             args.status = status;       /* SS$_NOPRIV -- fail-honest, not a silent allow */
@@ -2920,7 +3022,15 @@ struct acp_fileop_scratch {
     ods2_fh2_t dfh;
     ods2_fh2_t fh;
     ods2_fh2_t tfh;                    /* MODIFY!M_MOVE cross-dir target parse */
+    uint8_t   *aclheap;                /* 2 x ACP_ACL_MAX, allocated on first ACL use */
 };
+
+static uint8_t *acp_aclheap(struct acp_fileop_scratch *sc)
+{
+    if (!sc->aclheap)
+        sc->aclheap = exec_zalloc(2u * ACP_ACL_MAX);
+    return sc->aclheap;
+}
 
 /* Little-endian 16-bit store into a raw FH2 field (fileprot/fileowner edits).
  * The on-disk field is byte-authentic; only this scalar write is host-neutral. */
@@ -3401,7 +3511,8 @@ static void acp_apply_recattr(uint8_t *filehdr, const uint8_t *ra)
  * system and owner categories hold it implicitly; anyone else needs an ACE that
  * grants CONTROL; BYPASS overrides.
  */
-static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
+static int acp_has_control(const struct vms_proc *proc, struct vms_acp_volume *vol,
+                           const ods2_fh2_t *fh)
 {
     uint32_t acc_group = (proc->uic >> 16) & 0xFFFFu, acc_member = proc->uic & 0xFFFFu;
     uint32_t access = 0;
@@ -3412,7 +3523,7 @@ static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
         return 1;
     if (acc_group == fh->fh2_fileowner.uic_group && acc_member == fh->fh2_fileowner.uic_member)
         return 1;
-    return acp_acl_match(proc, fh, &access) && (access & ACP_ACE_M_CONTROL);
+    return acp_acl_match(proc, vol, fh, &access) && (access & ACP_ACE_M_CONTROL);
 }
 
 /* Two ACEs name the same thing (an add replaces it, a delete removes it): same
@@ -3438,16 +3549,14 @@ static int acp_has_control(const struct vms_proc *proc, const ods2_fh2_t *fh)
 #define ACP_ACE_M_NOPROPAGATE 0x0800u   /* ACE$M_NOPROPAGATE */
 enum { ACP_INHERIT_FILE, ACP_INHERIT_DIR, ACP_INHERIT_VER };
 
-static uint32_t acp_acl_inherit(const uint8_t *src, int mode, uint8_t *out, size_t cap,
-                                size_t *outlen, int *have_dprot, uint16_t *dprot)
+static uint32_t acp_acl_inherit(const uint8_t *src, size_t len, int mode, uint8_t *out,
+                                size_t cap, size_t *outlen, int *have_dprot, uint16_t *dprot)
 {
-    size_t off, len, pos = 0, n = 0;
+    size_t pos = 0, n = 0;
 
     *outlen = 0;
-    if (!ods2_fh2_acl_area(src, &off, &len))
-        return SS__NORMAL;
     while (pos + 4u <= len) {
-        const uint8_t *ace = src + off + pos;
+        const uint8_t *ace = src + pos;
         unsigned sz = ace[0];
         uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
         int copy;
@@ -3497,50 +3606,247 @@ static int acp_ace_same(const uint8_t *a, const uint8_t *b)
     return a[0] == b[0] && memcmp(a + 4, b + 4, a[0] - 4u) == 0;
 }
 
+/* How many leading bytes of acl[0..n) -- whole ACEs -- fit in header h's ACL
+ * area: from the top of the header (the reserved area or the checksum) down to
+ * the map words in use, as ods2_fh2_acl_set places them. */
+static size_t acp_acl_fit(const uint8_t *h, const uint8_t *acl, size_t n)
+{
+    unsigned rs = h[offsetof(ods2_fh2_t, fh2_rsoffset)];
+    unsigned mp = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    unsigned inuse = h[offsetof(ods2_fh2_t, fh2_map_inuse)];
+    size_t top = (rs == 255u) ? offsetof(ods2_fh2_t, fh2_checksum) : (size_t)rs * 2u;
+    size_t floor = ((size_t)mp + inuse) * 2u, cap = top > floor ? top - floor : 0, k = 0;
+
+    while (k + 4u <= n && acl[k] >= 4u && k + acl[k] <= n && k + acl[k] <= cap)
+        k += acl[k];
+    return k;
+}
+
+/* Free one extension header: its blocks (if it maps any), its INDEXF bit, and
+ * the header block itself zeroed so nothing reads it as live. */
+static void acp_ext_free(struct vms_acp_volume *vol, struct acp_fileop_scratch *sc,
+                         uint32_t fidnum, const uint8_t *raw)
+{
+    static const uint8_t zero[ACP_BLOCK_SIZE];
+
+    if (raw && raw[offsetof(ods2_fh2_t, fh2_map_inuse)])
+        (void)acp_free_file_blocks(vol, raw, sc, 1);
+    (void)acp_fid_free(vol, fidnum, sc->ibblk);
+    (void)acp_bdev_write(vol->backing_major, vol->backing_minor, acp_hdr_lbn(vol, fidnum),
+                         zero, ACP_BLOCK_SIZE);
+}
+
+/* Free every extension header of the file whose primary header is `primary`
+ * (IO$_DELETE). */
+static void acp_ext_free_chain(struct vms_acp_volume *vol, struct acp_fileop_scratch *sc,
+                               const uint8_t *primary)
+{
+    uint32_t xf[ACP_EXT_MAX];
+    unsigned nx = 0, i;
+    struct acp_xscratch *x;
+
+    if (acp_hdr_ext(primary) == 0)
+        return;
+    (void)acp_acl_gather(vol, primary, NULL, (size_t)-1, NULL, xf, &nx);
+    x = exec_zalloc(sizeof(*x));
+    for (i = 0; i < nx; i++)
+        acp_ext_free(vol, sc, xf[i],
+                     (x && acp_read_header(vol, xf[i], x->raw, &x->fh) == SS__NORMAL) ? x->raw : NULL);
+    if (x)
+        exec_free(x);
+}
+
+static void acp_put_fid(uint8_t *h, size_t field, uint32_t fidnum, uint16_t seq)
+{
+    acp_put16(h + field + 0, (uint16_t)(fidnum & 0xFFFFu));
+    acp_put16(h + field + 2, seq);
+    h[field + 4] = 0;
+    h[field + 5] = (uint8_t)(fidnum >> 16);
+}
+
+/*
+ * acp_acl_store - give the file whose primary header is hdr (number fidnum; the
+ * caller writes hdr) the ACL acl[0..n): as many whole ACEs as fit in the primary,
+ * the rest in extension headers -- its existing ones (xfids, in chain order)
+ * first, then new ones -- as VMS continues an ACL (vms-a88c). An extension header
+ * left with no ACEs and no map at the end of the chain is freed. A new extension
+ * header is segment k, back-linked to the primary, and carries the primary's file
+ * name. Too long for ACP_EXT_MAX headers -> SS$_ACLFULL, nothing changed.
+ */
+static uint32_t acp_acl_store(struct vms_acp_volume *vol, struct acp_fileop_scratch *sc,
+                              uint8_t *hdr, uint32_t fidnum, const uint8_t *acl, size_t n,
+                              const uint32_t *xfids, unsigned nx)
+{
+    size_t take[1 + 2 * ACP_EXT_MAX], pos, k;
+    uint32_t newf[ACP_EXT_MAX], keep_upto = 0, st = SS__NORMAL;
+    unsigned nnew = 0, i, last_used = 0, total;
+    struct acp_xscratch *x;
+    uint16_t pseq = (uint16_t)(hdr[offsetof(ods2_fh2_t, fh2_fid) + 2] |
+                               (hdr[offsetof(ods2_fh2_t, fh2_fid) + 3] << 8));
+
+    take[0] = acp_acl_fit(hdr, acl, n);
+    if (take[0] == n && nx == 0) {
+        if (ods2_fh2_acl_set(hdr, acl, n) != ODS2_OK)
+            return SS__ACLFULL;
+        return SS__NORMAL;
+    }
+    x = exec_zalloc(sizeof(*x));
+    if (!x)
+        return SS__INSFMEM;
+    /* plan: the primary, each existing extension header, then fresh ones */
+    pos = take[0];
+    for (i = 0; i < nx; i++) {
+        st = acp_read_header(vol, xfids[i], x->raw, &x->fh);
+        if (st != SS__NORMAL)
+            goto out;
+        k = acp_acl_fit(x->raw, acl + pos, n - pos);
+        take[1 + i] = k;
+        pos += k;
+        if (k || x->raw[offsetof(ods2_fh2_t, fh2_map_inuse)])
+            last_used = i + 1;            /* keep through this one */
+    }
+    if (pos < n) {
+        ods2_fid_t bl; ods2_uic_t ow = { 0, 0 };
+        size_t fresh;
+
+        memset(&bl, 0, sizeof(bl));
+        if (ods2_fh2_build(x->raw, 1, 1, "EXT", 1, 0, ODS2_FK_DATA, NULL, 0, 0, bl, ow, 0, 0) != ODS2_OK) {
+            st = SS__BADPARAM;
+            goto out;
+        }
+        while (pos < n) {
+            if (nx + nnew >= ACP_EXT_MAX) { st = SS__ACLFULL; goto out; }
+            fresh = acp_acl_fit(x->raw, acl + pos, n - pos);
+            if (fresh == 0) { st = SS__IVACL; goto out; }
+            take[1 + nx + nnew] = fresh;
+            pos += fresh;
+            nnew++;
+        }
+        last_used = nx;                   /* every existing one is used */
+    }
+    keep_upto = last_used;                /* existing extension headers kept */
+    total = keep_upto + nnew;
+
+    /* allocate the new headers' file numbers */
+    for (i = 0; i < nnew; i++) {
+        st = acp_fid_alloc(vol, sc->ibblk, &newf[i]);
+        if (st == SS__NORMAL)
+            st = acp_idx_extend(vol, sc, newf[i]);
+        if (st != SS__NORMAL) {
+            while (i-- > 0)
+                (void)acp_fid_free(vol, newf[i], sc->ibblk);
+            goto out;
+        }
+    }
+#define ACP_XF(j) ((j) < keep_upto ? xfids[j] : newf[(j) - keep_upto])
+    /* write the extension headers, each linked to the next */
+    pos = take[0];
+    for (i = 0; i < total; i++) {
+        uint32_t f = ACP_XF(i), nextf = (i + 1 < total) ? ACP_XF(i + 1) : 0;
+        size_t share = take[1 + (i < keep_upto ? i : nx + (i - keep_upto))];
+
+        if (i < keep_upto) {
+            st = acp_read_header(vol, f, x->raw, &x->fh);
+            if (st != SS__NORMAL)
+                goto out;
+        } else {
+            const ods2_ident_t *pid = ods2_fh2_ident(hdr);
+            ods2_fid_t bl; ods2_uic_t ow = { 0, 0 };
+
+            memset(&bl, 0, sizeof(bl));
+            if (ods2_fh2_build(x->raw, f, 1, "EXT", 1, 0, ODS2_FK_DATA, NULL, 0, 0, bl, ow,
+                               hdr[offsetof(ods2_fh2_t, fh2_fileprot)] |
+                               (uint16_t)(hdr[offsetof(ods2_fh2_t, fh2_fileprot) + 1] << 8),
+                               vol->maxfiles) != ODS2_OK) {
+                st = SS__BADPARAM;
+                goto out;
+            }
+            acp_put16(x->raw + offsetof(ods2_fh2_t, fh2_seg_num), (uint16_t)(i + 1u));
+            acp_put_fid(x->raw, offsetof(ods2_fh2_t, fh2_backlink), fidnum, pseq);
+            memcpy(x->raw + offsetof(ods2_fh2_t, fh2_fileowner),
+                   hdr + offsetof(ods2_fh2_t, fh2_fileowner), sizeof(ods2_uic_t));
+            if (pid) {
+                ods2_ident_t *xid = (ods2_ident_t *)(uintptr_t)ods2_fh2_ident(x->raw);
+                if (xid)
+                    memcpy(xid->fi2_filename, pid->fi2_filename, sizeof(xid->fi2_filename));
+            }
+        }
+        if (ods2_fh2_acl_set(x->raw, acl + pos, share) != ODS2_OK) { st = SS__ACLFULL; goto out; }
+        pos += share;
+        if (nextf)
+            acp_put_fid(x->raw, offsetof(ods2_fh2_t, fh2_ext_fid), nextf, 1);
+        else
+            memset(x->raw + offsetof(ods2_fh2_t, fh2_ext_fid), 0, sizeof(ods2_fid_t));
+        ods2_fh2_reseal(x->raw);
+        if (acp_bdev_write(vol->backing_major, vol->backing_minor, acp_hdr_lbn(vol, f),
+                           x->raw, ACP_BLOCK_SIZE) != 0) {
+            st = SS__DEVNOTMOUNT;
+            goto out;
+        }
+    }
+    /* the existing ones no longer needed (the tail of the chain) */
+    for (i = keep_upto; i < nx; i++)
+        acp_ext_free(vol, sc, xfids[i],
+                     acp_read_header(vol, xfids[i], x->raw, &x->fh) == SS__NORMAL ? x->raw : NULL);
+    /* the primary: its share, linked to the first extension header */
+    if (ods2_fh2_acl_set(hdr, acl, take[0]) != ODS2_OK) { st = SS__ACLFULL; goto out; }
+    if (total)
+        acp_put_fid(hdr, offsetof(ods2_fh2_t, fh2_ext_fid), ACP_XF(0), 1);
+    else
+        memset(hdr + offsetof(ods2_fh2_t, fh2_ext_fid), 0, sizeof(ods2_fid_t));
+#undef ACP_XF
+    st = SS__NORMAL;
+out:
+    exec_free(x);
+    return st;
+}
+
 /*
  * acp_acl_op - IO$_MODIFY's access control list operations on the file whose
  * header is in sc->filehdr (number file_fidnum): READ returns the ACL; ADD puts
  * one ACE first, replacing an ACE for the same identifiers wherever it was; DEL
  * removes the ACE for the given identifiers (SS$_NOENTRY if there is none);
  * DELETEALL removes every ACE but the PROTECTED ones. Observed behaviour:
- * docs/oracle/vax73-acl.md. An ACL that does not fit in the primary header is
- * SS$_ACLFULL (VMS continues it in an extension header; not done here).
+ * docs/oracle/vax73-acl.md. The ACL spans the primary header and its extension
+ * headers (acp_acl_gather / acp_acl_store, vms-a88c).
  */
 static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
                            struct acp_fileop_scratch *sc, uint32_t file_fidnum,
                            struct vms_acp_fileop_args *a)
 {
-    const uint8_t *h = sc->filehdr;
-    uint8_t *out = sc->tdirhdr;                 /* MOVE scratch, free on this path */
-    uint8_t *ace_in = sc->ibblk;                /* index-bitmap scratch, free on this path */
-    size_t off = 0, len = 0, pos, n = 0;
-    int have = ods2_fh2_acl_area(h, &off, &len);
+    uint8_t *heap = acp_aclheap(sc);
+    uint8_t *cur, *out;
+    uint8_t *ace_in = sc->tdirhdr;              /* MOVE scratch, free on this path */
+    uint32_t xf[ACP_EXT_MAX];
+    unsigned nx = 0;
+    size_t len = 0, pos, n = 0;
     int found = 0;
     uint32_t status, hdr_lbn;
 
-    if (!have)
-        len = 0;
+    if (!heap)
+        return SS__INSFMEM;
+    cur = heap;
+    out = heap + ACP_ACL_MAX;
+    status = acp_acl_gather(vol, sc->filehdr, cur, ACP_ACL_MAX, &len, xf, &nx);
+    if (status != SS__NORMAL)
+        return status;
     if (a->acl_op == VMS_ACP_ACL_READ) {
-        status = acp_check_access(proc, &sc->fh, 0);
+        status = acp_check_access(proc, vol, &sc->fh, 0);
         if (status != SS__NORMAL)
             return status;
-        /* the list ends at the first zero-size ACE (an area may carry slack) */
-        for (pos = 0; pos + 4u <= len && h[off + pos] >= 4u && pos + h[off + pos] <= len;
-             pos += h[off + pos])
-            ;
-        if (pos == 0)
+        if (len == 0)
             return SS__ACLEMPTY;
-        if (pos > a->acl_len || !a->acl_buf)
+        if (len > a->acl_len || !a->acl_buf)
             return SS__BADPARAM;            /* no room for the whole ACL */
-        if (exec_copyout((void *)(unsigned long)a->acl_buf, h + off, pos))
+        if (exec_copyout((void *)(unsigned long)a->acl_buf, cur, len))
             return SS__ACCVIO;
-        a->acl_len = (uint32_t)pos;
+        a->acl_len = (uint32_t)len;
         return SS__NORMAL;
     }
     if (a->acl_op != VMS_ACP_ACL_ADD && a->acl_op != VMS_ACP_ACL_DEL &&
         a->acl_op != VMS_ACP_ACL_DELETEALL && a->acl_op != VMS_ACP_ACL_PURGE)
         return SS__BADPARAM;
-    if (!acp_has_control(proc, &sc->fh))
+    if (!acp_has_control(proc, vol, &sc->fh))
         return SS__NOPRIV;
     if (a->acl_op == VMS_ACP_ACL_PURGE)
         len = 0;                                /* every ACE, protected ones too */
@@ -3560,7 +3866,7 @@ static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
         n = a->acl_len;
     }
     for (pos = 0; pos + 4u <= len; ) {
-        const uint8_t *ace = h + off + pos;
+        const uint8_t *ace = cur + pos;
         unsigned sz = ace[0];
         uint16_t flags = (uint16_t)(ace[2] | (ace[3] << 8));
         int drop = 0;
@@ -3572,7 +3878,7 @@ static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
         else if (!found && acp_ace_same(ace, ace_in))
             drop = found = 1;
         if (!drop) {
-            if (n + sz > ACP_BLOCK_SIZE)
+            if (n + sz > ACP_ACL_MAX)
                 return SS__ACLFULL;
             memcpy(out + n, ace, sz);
             n += sz;
@@ -3581,8 +3887,11 @@ static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
     }
     if (a->acl_op == VMS_ACP_ACL_DEL && !found)
         return SS__NOENTRY;
-    if (ods2_fh2_acl_set(sc->filehdr, out, n) != ODS2_OK)
-        return SS__ACLFULL;
+    /* NEGCTL-ANCHORED (acp-acl-spill-refused): an ACL longer than the primary
+     * header continues in extension headers. */
+    status = acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx);
+    if (status != SS__NORMAL)
+        return status;
     ods2_fh2_reseal(sc->filehdr);
     hdr_lbn = acp_hdr_lbn(vol, file_fidnum);
     if (hdr_lbn == 0 ||
@@ -3702,7 +4011,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 goto free_sc;
             }
             /* Writing a directory entry is a write to the directory file. */
-            status = acp_check_access(proc, &sc->dfh, 1);
+            status = acp_check_access(proc, vol, &sc->dfh, 1);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
             /* New highest version (VMS $CREATE default): highest existing + 1. */
@@ -3740,10 +4049,19 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 args.status = status;
                 goto free_sc;
             }
-            /* The inherited ACL, composed in sc->ibblk (free from here until the
-             * header is built; acp_bitmap_alloc works in sc->rw). */
-            status = acp_acl_inherit(inherit_from, inherit_mode, sc->ibblk, ACP_BLOCK_SIZE,
-                                     &acl_len, &have_dprot, &dprot);
+            /* The inherited ACL: the source's whole ACL (it may continue in
+             * extension headers) in the first half of the ACL heap, the
+             * inherited ACEs composed in the second. */
+            {
+                uint8_t *heap = acp_aclheap(sc);
+                size_t slen = 0;
+
+                status = heap ? acp_acl_gather(vol, inherit_from, heap, ACP_ACL_MAX, &slen,
+                                               NULL, NULL) : SS__INSFMEM;
+                if (status == SS__NORMAL)
+                    status = acp_acl_inherit(heap, slen, inherit_mode, heap + ACP_ACL_MAX,
+                                             ACP_ACL_MAX, &acl_len, &have_dprot, &dprot);
+            }
             if (status != SS__NORMAL) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = status;
@@ -3827,11 +4145,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             /* NEGCTL-ANCHORED (acp-acl-default-not-propagated): the inherited ACEs
              * go into the new header's access control area. */
             if (acl_len > 0) {
-                if (ods2_fh2_acl_set(sc->filehdr, sc->ibblk, acl_len) != ODS2_OK) {
+                status = acp_acl_store(vol, sc, sc->filehdr, new_fidnum,
+                                       sc->aclheap + ACP_ACL_MAX, acl_len, NULL, 0);
+                if (status != SS__NORMAL) {
                     if (n_ext > 0)
                         (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                    args.status = SS__ACLFULL;
+                    args.status = status;
                     goto free_sc;
                 }
                 ods2_fh2_reseal(sc->filehdr);
@@ -3916,6 +4236,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                                         new_fidnum <= ODS2_RESFILES, NULL);
                 if (status != SS__NORMAL) {
                     /* Roll back: free the header + its blocks. */
+                    acp_ext_free_chain(vol, sc, sc->filehdr);
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                     if (n_ext > 0)
                         (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
@@ -3994,7 +4315,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 goto free_sc;
             }
             /* Write access is required to delete or modify a file. */
-            status = acp_check_access(proc, &sc->fh, 1);
+            status = acp_check_access(proc, vol, &sc->fh, 1);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
             if (args.func == VMS_ACP_FOP_DELETE) {
@@ -4011,6 +4332,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 if ((args.modifiers & VMS_ACP_M_DELETE) || args.fidmode) {
                     status = acp_free_file_blocks(vol, sc->filehdr, sc, 1);
                     if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    acp_ext_free_chain(vol, sc, sc->filehdr);   /* vms-a88c: ACL extension headers */
                     status = acp_fid_free(vol, file_fidnum, sc->ibblk);
                     if (status != SS__NORMAL) { args.status = status; goto free_sc; }
                     /* Invalidate the header so a later ACCESS is SS$_NOSUCHFILE. */
@@ -4050,7 +4372,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     goto free_sc;
                 }
                 /* Source directory write access (removing an entry). */
-                status = acp_check_access(proc, &sc->dfh, 1);
+                status = acp_check_access(proc, vol, &sc->dfh, 1);
                 if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
                 /* Target directory (new_did 0 => the same directory). */
@@ -4069,7 +4391,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                         args.status = SS__NOSUCHFILE;   /* target DID not a directory */
                         goto free_sc;
                     }
-                    status = acp_check_access(proc, &sc->tfh, 1);
+                    status = acp_check_access(proc, vol, &sc->tfh, 1);
                     if (status != SS__NORMAL) { args.status = status; goto free_sc; }
                     tdirhdr = sc->tdirhdr;
                     tfh = &sc->tfh;
@@ -4254,6 +4576,8 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
 
 free_sc:
         vms_lock_acp_vol_release(proc, fop_lkid);   /* vms-233: release the volume lock (no-op if 0) */
+        if (sc->aclheap)
+            exec_free(sc->aclheap);
         exec_free(sc);
     }
 #else

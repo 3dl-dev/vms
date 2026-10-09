@@ -951,19 +951,14 @@ static int creprc_is_mailbox(const char *spec)
     return *p == ':' && p[1] == '\0';
 }
 
-/* SYS$INPUT of a new process named by a VMS disk file (rd vms-003b): the
- * process-permanent logical name the CLI opens through RMS. */
+/* SYS$INPUT of a new process named by a VMS device or file (rd vms-003b): the
+ * process-permanent logical name the CLI opens. Defined with ONE executive
+ * ioctl in the forked child (LNM$PROCESS is executive-resident) -- nothing that
+ * could take a userspace lock between fork and exec. */
 static void creprc_define_sysinput(const char *spec)
 {
-    static char tab[] = "LNM$PROCESS_TABLE";
-    static char nam[] = "SYS$INPUT";
-    struct dsc$descriptor_s td = { sizeof(tab) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, tab };
-    struct dsc$descriptor_s nd = { sizeof(nam) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, nam };
-    struct item_list_3 il[2] = {
-        { (uint16_t)strlen(spec), LNM$_STRING, (void *)spec, 0 },
-        { 0, 0, 0, 0 },
-    };
-    (void)sys$crelnm(0, &td, &nd, 0, il);
+    const char *vals[1] = { spec };
+    (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, "SYS$INPUT", vals, 1, 0, 3 /* user mode */);
 }
 
 /*
@@ -1263,6 +1258,30 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * executive call (vms_kif_register_detached). Same engage rule as the
      * child computes below; LOGINOUT sessions establish their own identity.
      */
+    /*
+     * SYS$INPUT named by a VMS DEVICE OR FILE (rd vms-003b): decided HERE, in the
+     * creator, before anything is forked -- the forked child of a possibly
+     * multithreaded caller may only make async-signal-safe calls and executive
+     * ioctls before exec, never RMS or the userspace logical-name layer (a lock
+     * another thread held at fork time would hang the child forever; observed as
+     * a lost /NOWAIT completion in test_syssvc_spawn_complete). A path the host
+     * can open stays a path; a mailbox (MBAn:, LIB$SPAWN's command mailbox) or
+     * an RMS disk file becomes the child's SYS$INPUT logical name, which the CLI
+     * reads through $QIO or RMS.
+     */
+    char child_sysinput[256] = "";
+    if (input && input->dsc$a_pointer) {
+        char ipath[256];
+        dsc$strncpy(ipath, input, sizeof(ipath));
+        if (access(ipath, R_OK) != 0) {
+            rms_textfile_t *itf = NULL;
+            if (creprc_is_mailbox(ipath) || (itf = rms_textfile_open(ipath)) != NULL) {
+                if (itf) rms_textfile_close(itf);
+                snprintf(child_sysinput, sizeof(child_sysinput), "%s", ipath);
+            }
+        }
+    }
+
     const int use_ticket = detached && !loginout && child_username[0] != 0;
     uint64_t detach_ticket = 0;
     if (use_ticket) {
@@ -1623,7 +1642,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             if (input && input->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, input, sizeof(path));
-                int fd = open(path, O_RDONLY);
+                int fd = child_sysinput[0] ? -1 : open(path, O_RDONLY);
                 if (fd >= 0) {
                     dup2(fd, STDIN_FILENO); close(fd);
                 } else {
@@ -1636,12 +1655,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                      * reads a mailbox through $QIO and a file through RMS
                      * (DCL, dcl_mbx.c) -- no host copy, no host path.
                      */
-                    rms_textfile_t *tf = NULL;
-                    if (creprc_is_mailbox(path) ||
-                        (tf = rms_textfile_open(path)) != NULL) {
-                        if (tf) rms_textfile_close(tf);
-                        creprc_define_sysinput(path);
-                    }
+                    if (child_sysinput[0])
+                        creprc_define_sysinput(child_sysinput);
                     int nfd = open("/dev/null", O_RDONLY);
                     if (nfd >= 0) { dup2(nfd, STDIN_FILENO); close(nfd); }
                 }

@@ -34,7 +34,10 @@
 #include "vmsfs/filespec.h"
 
 #define EXIT_SKIP 77
-#define ITERATIONS 30
+/* 200: a lost completion was seen ONCE in 30 when $CREPRC's forked child took a
+ * userspace lock before exec (rd vms-003b); the loop has to be long enough to
+ * catch a 1-in-30 race with near certainty. */
+#define ITERATIONS 200
 #define COMPLETION_EFN 11
 #define WAIT_MS 20000
 
@@ -77,7 +80,11 @@ int main(void)
             set = (st == SS$_WASSET);
             if (!set) { struct pollfd nothing = { .fd = -1, .events = 0 }; poll(&nothing, 1, 50); }
         }
-        if (!set) lost++;
+        if (!set) {
+            lost++;
+            printf("  INFO: iteration %d: completion event flag never set (pid %08x)\n", i, pid);
+            break;          /* one lost completion fails the property; stop waiting 20 s each */
+        }
     }
     /* negctl: spawn-arm-gone-subprocess-not-completed */
     CHECK(lost == 0, "every /NOWAIT lib$spawn of an instantly-finishing command set its completion event flag");

@@ -628,7 +628,12 @@ tt-bind-privilege-ignored
 tt-port-input-dropped
 tt-console-hangup-unbinds
 tt-newline-ignores-cursor
-tt-owed-linefeed-unpaid"
+tt-owed-linefeed-unpaid
+tt-ctrly-not-shown
+tt-oob-ast-not-queued
+tt-outband-ends-read
+tt-breakthrough-no-redisplay
+tt-oob-survives-deassign"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2145,6 +2150,107 @@ DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 EOF
                       ;;
         knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;
+        esac;;
+
+    tt-ctrly-not-shown)
+        case "$_f" in
+        facility)     echo "the terminal class driver shows CTRL/Y and CTRL/C as <CR><LF>*INTERRUPT*<CR><LF> (vms_tt.c tt_echo_interrupt, rd vms-f0fb; probes OB.PROMPT Y1/Y3/C2/N2 on VAX V7.3)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() echoes *INTERRUPT* for CTRL/Y and CTRL/C (\`tt_echo_interrupt(tt);\`), armed AST or not. The mutation drops the call: the interrupt is silent, as the substrate's n_tty left it. Non-fatal: bytes not queued. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: only the screen check observes the echo; the read and AST checks see the same completions.";;
+        esac;;
+
+    tt-oob-ast-not-queued)
+        case "$_f" in
+        facility)     echo "out-of-band ASTs are queued in the EXECUTIVE's AST queue for the arming process (vms_tt.c tt_oob_fire/tt_queue_ast, rd vms-f0fb)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_oob_fire() queues the armed AST with tt_queue_ast() (\`if (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))\`). The mutation makes every queueing look failed (\`if (1)\`): the AST is never queued and the reader is never let go -- a driver that shows *INTERRUPT* but delivers nothing. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+the same read resumes and completes with the whole line 'ABCD'
+EOF
+                      ;;
+        knock_on_why)  echo "every later check that needs an AST queued fails with it: the CTRL/C-fires-CTRL/Y check finds no AST; with the CTRL/T AST never queued the reader is never let go, so the read takes 'ABC' then times out, and the breakthrough and resume checks see no outstanding read.";;
+        esac;;
+
+    tt-outband-ends-read)
+        case "$_f" in
+        facility)     echo "an out-of-band character (IO\$M_OUTBAND, e.g. CTRL/T) leaves the read outstanding: the reader is let go to deliver the AST and the same read resumes (vms_tt.c, rd vms-f0fb; probe OB.PROMPT T2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() fires the out-of-band AST and nothing else (\`tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);\`). The mutation also ends a read in progress SS\$_ABORT -- the line the user was typing is lost to a CTRL/T, the shape of a driver that treats every out-of-band character as an interrupt. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+the same read resumes and completes with the whole line 'ABCD'
+EOF
+                      ;;
+        knock_on_why)  echo "the read the CTRL/T ended cannot be shown again or resumed: the status line lands with no read outstanding, and the re-issued read starts a NEW read with its own prompt, missing 'ABC'.";;
+        esac;;
+
+    tt-breakthrough-no-redisplay)
+        case "$_f" in
+        facility)     echo "write breakthrough: output written while a read is outstanding is followed by the read shown again -- the owed line feed, the prompt, the line so far (vms_tt.c vms_tt_write, rd vms-f0fb / vms-53a; probe OB.PROMPT T2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() redisplays an outstanding read after the write (\`if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {\`). The mutation never does (\`if (0) {\`): a CTRL/T status line or a broadcast leaves the prompt and the typed line scrolled away. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the resumed read still completes with 'ABCD' -- only the screen shows the missing redisplay.";;
+        esac;;
+
+    tt-oob-survives-deassign)
+        case "$_f" in
+        facility)     echo "an out-of-band AST ends with the channel it was armed through (vms_tt.c vms_tt_chan_gone, called from vms_devtab.c device_release_channel; rd vms-f0fb)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_chan_gone() clears every out-of-band entry armed through the deassigned channel (\`memset(&tt->oob[i], 0, sizeof(tt->oob[i]));\`). The mutation leaves them armed (\`(void)0;\`): the AST still fires for a channel that is gone -- and, at process exit, for a process that is gone. Non-fatal in the suite: the test's own process is still alive. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an AST armed through a channel ends when that channel is deassigned
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: it is the section's last check.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8270,6 +8376,16 @@ apply_edit() {
     tt-newline-ignores-cursor)
         # Unique text: tt_nl()'s FRESH case.
         sed -i 's|^\tcase TT_POS_FRESH: tt_out1(tt, CH_CR);       break;$|\tcase TT_POS_FRESH: tt_out(tt, "\\r\\n", 2); break; /* NEGCTL tt-newline-ignores-cursor */|' "$_file";;
+    tt-ctrly-not-shown)
+        sed -i 's|^\t\t\t\ttt_echo_interrupt(tt);$|\t\t\t\t(void)0; /* NEGCTL tt-ctrly-not-shown */|' "$_file";;
+    tt-oob-ast-not-queued)
+        sed -i 's|^\tif (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))$|\tif (1) /* NEGCTL tt-oob-ast-not-queued */|' "$_file";;
+    tt-outband-ends-read)
+        sed -i 's|^\t\t\t\ttt_oob_fire(tt, \&tt->oob\[VMS_TT_OOB_OUTBAND - 1\], c);$|\t\t\t\ttt_oob_fire(tt, \&tt->oob[VMS_TT_OOB_OUTBAND - 1], c); if (tt->rd_active) tt_complete(tt, SS__ABORT, 0, 0); /* NEGCTL tt-outband-ends-read */|' "$_file";;
+    tt-breakthrough-no-redisplay)
+        sed -i 's|^\tif (tt->rd_busy \&\& !tt->rd_done \&\& !tt->passall \&\& n) {$|\tif (0) { /* NEGCTL tt-breakthrough-no-redisplay */|' "$_file";;
+    tt-oob-survives-deassign)
+        sed -i 's|^\t\t\tmemset(\&tt->oob\[i\], 0, sizeof(tt->oob\[i\]));$|\t\t\t(void)0; /* NEGCTL tt-oob-survives-deassign */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

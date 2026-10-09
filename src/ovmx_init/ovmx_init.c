@@ -544,6 +544,24 @@ static void report_kernel_taint(void)
            mask, mask,
            (mask & 4096UL) ? " O:out-of-tree" : "",
            (mask & 8192UL) ? " E:unsigned" : "");
+
+    /* Name the module (rd vms-146). A nonzero mask was seen intermittently with
+     * vms.ko verifiably signed and no notice on the console, so say which
+     * loaded module carries a taint flag: /proc/modules prints it in its last
+     * field, e.g. "(E)". Only when the mask is nonzero, only under the flag. */
+    if (mask) {
+        FILE *mf = fopen("/proc/modules", "r");
+        if (mf) {
+            char line[512];
+            while (fgets(line, sizeof(line), mf)) {
+                line[strcspn(line, "\n")] = '\0';
+                printf("%%OVMX-I-TAINTMOD, %s\n", line);
+            }
+            fclose(mf);
+        } else {
+            printf("%%OVMX-W-TAINT, /proc/modules unreadable: %s\n", strerror(errno));
+        }
+    }
 }
 
 /*

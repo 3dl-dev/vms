@@ -504,3 +504,179 @@ int SYS$FAO(void *ctrstr, unsigned short *outlen, void *outbuf, ...)
     va_end(ap);
     return (int)ovmx_fao_vmsabi(c, clen, outlen, o, ocap, (const uint64_t *)prm);
 }
+
+/* ------------------------------------------------ vms-3b3f batch 2 -------- */
+
+/* An optional string argument (a VMS descriptor of either form, or 0). */
+static void str_arg(void *d, struct ovmx_abi_str *s)
+{
+    s->p = NULL;
+    s->len = 0;
+    s->given = d && dsc_string(d, &s->p, &s->len);
+}
+
+int SYS$DELLNM(void *tabnam, void *lognam, unsigned char *acmode)
+{
+    struct ovmx_abi_str t, l;
+    str_arg(tabnam, &t);
+    str_arg(lognam, &l);
+    return (int)ovmx_vmsabi_dellnm(&t, &l, acmode);
+}
+
+int SYS$CREMBX(unsigned int prmflg, unsigned short *chan, unsigned int maxmsg,
+               unsigned int bufquo, unsigned int promsk, unsigned int acmode,
+               void *lognam, unsigned int flags)
+{
+    struct ovmx_abi_str l;
+    str_arg(lognam, &l);
+    return (int)ovmx_vmsabi_crembx((int)prmflg, chan, maxmsg, bufquo, promsk, acmode, &l, flags);
+}
+
+#define ITEMS_OR_BAD(list, items, n) \
+    struct ovmx_abi_item items[ABI_MAXITEMS]; \
+    int n = items_in(list, items, ABI_MAXITEMS); \
+    if (n < 0) return SS$_BADPARAM
+
+static int getjpi(int wait, unsigned int efn, unsigned int *pidadr, void *prcnam,
+                  void *itmlst, void *iosb, unsigned long long astadr,
+                  unsigned long long astprm)
+{
+    struct ovmx_abi_str p;
+    str_arg(prcnam, &p);
+    ITEMS_OR_BAD(itmlst, items, n);
+    return (int)ovmx_vmsabi_getjpi(wait, efn, pidadr, &p, items, (unsigned)n, iosb, astadr, astprm);
+}
+int SYS$GETJPI(unsigned int efn, unsigned int *pidadr, void *prcnam, void *itmlst,
+               void *iosb, unsigned long long astadr, unsigned long long astprm)
+{ return getjpi(0, efn, pidadr, prcnam, itmlst, iosb, astadr, astprm); }
+int SYS$GETJPIW(unsigned int efn, unsigned int *pidadr, void *prcnam, void *itmlst,
+                void *iosb, unsigned long long astadr, unsigned long long astprm)
+{ return getjpi(1, efn, pidadr, prcnam, itmlst, iosb, astadr, astprm); }
+
+static int getsyi(int wait, unsigned int efn, unsigned int *csidadr, void *node,
+                  void *itmlst, void *iosb, unsigned long long astadr,
+                  unsigned long long astprm)
+{
+    struct ovmx_abi_str d;
+    str_arg(node, &d);
+    ITEMS_OR_BAD(itmlst, items, n);
+    return (int)ovmx_vmsabi_getsyi(wait, efn, csidadr, &d, items, (unsigned)n, iosb, astadr, astprm);
+}
+int SYS$GETSYI(unsigned int efn, unsigned int *csidadr, void *node, void *itmlst,
+               void *iosb, unsigned long long astadr, unsigned long long astprm)
+{ return getsyi(0, efn, csidadr, node, itmlst, iosb, astadr, astprm); }
+int SYS$GETSYIW(unsigned int efn, unsigned int *csidadr, void *node, void *itmlst,
+                void *iosb, unsigned long long astadr, unsigned long long astprm)
+{ return getsyi(1, efn, csidadr, node, itmlst, iosb, astadr, astprm); }
+
+static int getdvi(int wait, unsigned int efn, unsigned short chan, void *devnam,
+                  void *itmlst, void *iosb, unsigned long long astadr,
+                  unsigned long long astprm)
+{
+    struct ovmx_abi_str d;
+    str_arg(devnam, &d);
+    ITEMS_OR_BAD(itmlst, items, n);
+    return (int)ovmx_vmsabi_getdvi(wait, efn, chan, &d, items, (unsigned)n, iosb, astadr, astprm);
+}
+int SYS$GETDVI(unsigned int efn, unsigned short chan, void *devnam, void *itmlst,
+               void *iosb, unsigned long long astadr, unsigned long long astprm)
+{ return getdvi(0, efn, chan, devnam, itmlst, iosb, astadr, astprm); }
+int SYS$GETDVIW(unsigned int efn, unsigned short chan, void *devnam, void *itmlst,
+                void *iosb, unsigned long long astadr, unsigned long long astprm)
+{ return getdvi(1, efn, chan, devnam, itmlst, iosb, astadr, astprm); }
+
+static int enq(int wait, unsigned int efn, unsigned int lkmode, void *lksb, unsigned int flags,
+               void *resnam, unsigned int parid, unsigned long long astadr,
+               unsigned long long astprm, unsigned long long blkast, unsigned int acmode,
+               unsigned int rsdm)
+{
+    struct ovmx_abi_str r;
+    str_arg(resnam, &r);
+    return (int)ovmx_vmsabi_enq(wait, efn, lkmode, lksb, flags, &r, parid, astadr, astprm,
+                                blkast, acmode, rsdm);
+}
+int SYS$ENQ(unsigned int efn, unsigned int lkmode, void *lksb, unsigned int flags,
+            void *resnam, unsigned int parid, unsigned long long astadr,
+            unsigned long long astprm, unsigned long long blkast, unsigned int acmode,
+            unsigned int rsdm)
+{ return enq(0, efn, lkmode, lksb, flags, resnam, parid, astadr, astprm, blkast, acmode, rsdm); }
+int SYS$ENQW(unsigned int efn, unsigned int lkmode, void *lksb, unsigned int flags,
+             void *resnam, unsigned int parid, unsigned long long astadr,
+             unsigned long long astprm, unsigned long long blkast, unsigned int acmode,
+             unsigned int rsdm)
+{ return enq(1, efn, lkmode, lksb, flags, resnam, parid, astadr, astprm, blkast, acmode, rsdm); }
+
+static int prc(int op, unsigned int *pidadr, void *prcnam, unsigned int arg)
+{
+    struct ovmx_abi_str p;
+    str_arg(prcnam, &p);
+    return (int)ovmx_vmsabi_prc(op, pidadr, &p, arg);
+}
+int SYS$WAKE(unsigned int *pidadr, void *prcnam)
+{ return prc(OVMX_ABI_PRC_WAKE, pidadr, prcnam, 0); }
+int SYS$RESUME(unsigned int *pidadr, void *prcnam)
+{ return prc(OVMX_ABI_PRC_RESUME, pidadr, prcnam, 0); }
+int SYS$SUSPND(unsigned int *pidadr, void *prcnam, unsigned int flags)
+{ return prc(OVMX_ABI_PRC_SUSPND, pidadr, prcnam, flags); }
+int SYS$FORCEX(unsigned int *pidadr, void *prcnam, unsigned int code)
+{ return prc(OVMX_ABI_PRC_FORCEX, pidadr, prcnam, code); }
+int SYS$DELPRC(unsigned int *pidadr, void *prcnam)
+{ return prc(OVMX_ABI_PRC_DELPRC, pidadr, prcnam, 0); }
+
+int SYS$SETPRI(unsigned int *pidadr, void *prcnam, unsigned int pri, unsigned int *prvpri,
+               unsigned int pol, unsigned int *prevpol)
+{
+    struct ovmx_abi_str p;
+    str_arg(prcnam, &p);
+    return (int)ovmx_vmsabi_setpri(pidadr, &p, pri, prvpri, pol, prevpol);
+}
+
+int SYS$ASCTOID(void *name, unsigned int *id, unsigned int *attrib)
+{
+    struct ovmx_abi_str n;
+    str_arg(name, &n);
+    return (int)ovmx_vmsabi_asctoid(&n, id, attrib);
+}
+
+int SYS$IDTOASC(unsigned int id, unsigned short *namlen, void *nambuf, unsigned int *resid,
+                unsigned int *attrib, unsigned int *ctx)
+{
+    char *p = NULL;
+    unsigned cap = 0;
+    if (nambuf && !dsc_buffer(nambuf, &p, &cap))
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_idtoasc(id, namlen, p, cap, resid, attrib, ctx);
+}
+
+static int grant(int revoke, unsigned int *pidadr, void *prcnam, unsigned int *id,
+                 void *name, unsigned int *prvatr, unsigned int segment)
+{
+    struct ovmx_abi_str p, n;
+    str_arg(prcnam, &p);
+    str_arg(name, &n);
+    return (int)ovmx_vmsabi_grantid(revoke, pidadr, &p, id, &n, prvatr, segment);
+}
+int SYS$GRANTID(unsigned int *pidadr, void *prcnam, unsigned int *id, void *name,
+                unsigned int *prvatr, unsigned int segment)
+{ return grant(0, pidadr, prcnam, id, name, prvatr, segment); }
+int SYS$REVOKID(unsigned int *pidadr, void *prcnam, unsigned int *id, void *name,
+                unsigned int *prvatr, unsigned int segment)
+{ return grant(1, pidadr, prcnam, id, name, prvatr, segment); }
+
+int SYS$SNDOPR(void *msgbuf, unsigned short chan)
+{
+    struct ovmx_abi_str m;
+    str_arg(msgbuf, &m);
+    return (int)ovmx_vmsabi_sndopr(&m, chan);
+}
+
+int SYS$BRKTHRUW(unsigned int efn, void *msgbuf, void *sendto, unsigned int sndtyp,
+                 void *iosb, unsigned int carcon, unsigned int flags, unsigned int reqid,
+                 unsigned int timout, unsigned long long astadr, unsigned long long astprm)
+{
+    struct ovmx_abi_str m, t;
+    str_arg(msgbuf, &m);
+    str_arg(sendto, &t);
+    return (int)ovmx_vmsabi_brkthru(1, efn, &m, &t, sndtyp, iosb, carcon, flags, reqid, timout,
+                                    astadr, astprm);
+}

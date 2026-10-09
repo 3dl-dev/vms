@@ -82,4 +82,56 @@ uint32_t ovmx_fao_vmsabi(const char *ctr, unsigned ctrlen, uint16_t *outlen,
                          char *out, unsigned outcap, const uint64_t *prm);
 int count_fao_args(const char *ctrl, uint16_t len);
 
+/* A string argument as address + length; `p == NULL && !len` is "omitted". */
+struct ovmx_abi_str {
+    const char *p;
+    unsigned    len;
+    int         given;
+};
+
+uint32_t ovmx_vmsabi_dellnm(const struct ovmx_abi_str *tab, const struct ovmx_abi_str *log,
+                            const uint8_t *acmode);
+uint32_t ovmx_vmsabi_crembx(int prmflg, uint16_t *chan, uint32_t maxmsg, uint32_t bufquo,
+                            uint32_t promsk, uint32_t acmode, const struct ovmx_abi_str *log,
+                            uint32_t flags);
+/* $GETJPI(W) / $GETSYI(W) / $GETDVI(W): the item list rebuilt natively. */
+uint32_t ovmx_vmsabi_getjpi(int wait, uint32_t efn, const uint32_t *pidadr,
+                            const struct ovmx_abi_str *prcnam,
+                            const struct ovmx_abi_item *items, unsigned n, void *iosb,
+                            unsigned long long astadr, unsigned long long astprm);
+uint32_t ovmx_vmsabi_getsyi(int wait, uint32_t efn, uint32_t *csidadr,
+                            const struct ovmx_abi_str *node,
+                            const struct ovmx_abi_item *items, unsigned n, void *iosb,
+                            unsigned long long astadr, unsigned long long astprm);
+uint32_t ovmx_vmsabi_getdvi(int wait, uint32_t efn, uint16_t chan,
+                            const struct ovmx_abi_str *devnam,
+                            const struct ovmx_abi_item *items, unsigned n, void *iosb,
+                            unsigned long long astadr, unsigned long long astprm);
+uint32_t ovmx_vmsabi_enq(int wait, uint32_t efn, uint32_t lkmode, void *lksb, uint32_t flags,
+                         const struct ovmx_abi_str *resnam, uint32_t parid,
+                         unsigned long long astadr, unsigned long long astprm,
+                         unsigned long long blkast, uint32_t acmode, uint32_t rsdm);
+/* The services that name a process by PID address or process-name descriptor. */
+#define OVMX_ABI_PRC_WAKE   1
+#define OVMX_ABI_PRC_RESUME 2
+#define OVMX_ABI_PRC_SUSPND 3
+#define OVMX_ABI_PRC_FORCEX 4
+#define OVMX_ABI_PRC_DELPRC 5
+uint32_t ovmx_vmsabi_prc(int op, const uint32_t *pidadr, const struct ovmx_abi_str *prcnam,
+                         uint32_t arg);
+uint32_t ovmx_vmsabi_setpri(const uint32_t *pidadr, const struct ovmx_abi_str *prcnam,
+                            uint32_t pri, uint32_t *prvpri, uint32_t pol, uint32_t *prevpol);
+uint32_t ovmx_vmsabi_asctoid(const struct ovmx_abi_str *name, uint32_t *id, uint32_t *attrib);
+uint32_t ovmx_vmsabi_idtoasc(uint32_t id, uint16_t *namlen, char *out, unsigned cap,
+                             uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
+uint32_t ovmx_vmsabi_grantid(int revoke, const uint32_t *pidadr,
+                             const struct ovmx_abi_str *prcnam, const uint32_t *id,
+                             const struct ovmx_abi_str *name, uint32_t *prvatr,
+                             uint32_t segment);
+uint32_t ovmx_vmsabi_sndopr(const struct ovmx_abi_str *msg, uint16_t chan);
+uint32_t ovmx_vmsabi_brkthru(int wait, uint32_t efn, const struct ovmx_abi_str *msg,
+                             const struct ovmx_abi_str *sendto, uint32_t sndtyp, void *iosb,
+                             uint32_t carcon, uint32_t flags, uint32_t reqid, uint32_t timout,
+                             unsigned long long astadr, unsigned long long astprm);
+
 #endif /* SYS_VMSABI_CORE_H */

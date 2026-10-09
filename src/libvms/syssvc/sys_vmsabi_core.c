@@ -209,3 +209,169 @@ uint32_t ovmx_vmsabi_getmsg(uint32_t msgid, uint16_t *msglen, char *out,
     mkdsc(&d, out, outcap);
     return sys$getmsg(msgid, msglen, &d, flags, (uint32_t *)outadr);
 }
+
+/* ------------------------------------------------ vms-3b3f batch 2 -------- */
+
+/* A native descriptor for an argument, or NULL when it was omitted. */
+static struct dsc$descriptor_s *dsc_of(struct dsc$descriptor_s *d,
+                                       const struct ovmx_abi_str *s)
+{
+    if (!s || !s->given)
+        return NULL;
+    mkdsc(d, s->p, s->len);
+    return d;
+}
+
+/* A native item list (item_list_3, zero-terminated) for n VMS-form items. */
+static struct item_list_3 *items_native(const struct ovmx_abi_item *items, unsigned n)
+{
+    struct item_list_3 *il = calloc(n + 1, sizeof *il);
+    if (!il)
+        return NULL;
+    for (unsigned i = 0; i < n; i++) {
+        il[i].buflen = items[i].len;
+        il[i].item_code = items[i].code;
+        il[i].bufaddr = items[i].buf;
+        il[i].retlen = items[i].retlen;
+    }
+    return il;
+}
+
+#define AST(a) ((void (*)(uint32_t))(uintptr_t)(a))
+
+uint32_t ovmx_vmsabi_dellnm(const struct ovmx_abi_str *tab, const struct ovmx_abi_str *log,
+                            const uint8_t *acmode)
+{
+    struct dsc$descriptor_s t, l;
+    return sys$dellnm(dsc_of(&t, tab), dsc_of(&l, log), acmode);
+}
+
+uint32_t ovmx_vmsabi_crembx(int prmflg, uint16_t *chan, uint32_t maxmsg, uint32_t bufquo,
+                            uint32_t promsk, uint32_t acmode, const struct ovmx_abi_str *log,
+                            uint32_t flags)
+{
+    struct dsc$descriptor_s l;
+    return sys$crembx(prmflg, chan, maxmsg, bufquo, promsk, acmode, dsc_of(&l, log), flags, NULL);
+}
+
+uint32_t ovmx_vmsabi_getjpi(int wait, uint32_t efn, const uint32_t *pidadr,
+                            const struct ovmx_abi_str *prcnam,
+                            const struct ovmx_abi_item *items, unsigned n, void *iosb,
+                            unsigned long long astadr, unsigned long long astprm)
+{
+    struct dsc$descriptor_s p;
+    struct item_list_3 *il = items_native(items, n);
+    if (!il)
+        return SS$_INSFMEM;
+    uint32_t st = (wait ? sys$getjpiw : sys$getjpi)(efn, pidadr, dsc_of(&p, prcnam), il, iosb,
+                                                   AST(astadr), (uint32_t)astprm);
+    free(il);
+    return st;
+}
+
+uint32_t ovmx_vmsabi_getsyi(int wait, uint32_t efn, uint32_t *csidadr,
+                            const struct ovmx_abi_str *node,
+                            const struct ovmx_abi_item *items, unsigned n, void *iosb,
+                            unsigned long long astadr, unsigned long long astprm)
+{
+    struct dsc$descriptor_s d;
+    struct item_list_3 *il = items_native(items, n);
+    if (!il)
+        return SS$_INSFMEM;
+    uint32_t st = (wait ? sys$getsyiw : sys$getsyi)(efn, csidadr, dsc_of(&d, node), il, iosb,
+                                                   AST(astadr), (uint32_t)astprm);
+    free(il);
+    return st;
+}
+
+uint32_t ovmx_vmsabi_getdvi(int wait, uint32_t efn, uint16_t chan,
+                            const struct ovmx_abi_str *devnam,
+                            const struct ovmx_abi_item *items, unsigned n, void *iosb,
+                            unsigned long long astadr, unsigned long long astprm)
+{
+    struct dsc$descriptor_s d;
+    struct item_list_3 *il = items_native(items, n);
+    if (!il)
+        return SS$_INSFMEM;
+    uint32_t st = (wait ? sys$getdviw : sys$getdvi)(efn, chan, dsc_of(&d, devnam), il,
+                                                   (struct _iosb *)iosb, AST(astadr),
+                                                   (uint32_t)astprm, 0);
+    free(il);
+    return st;
+}
+
+uint32_t ovmx_vmsabi_enq(int wait, uint32_t efn, uint32_t lkmode, void *lksb, uint32_t flags,
+                         const struct ovmx_abi_str *resnam, uint32_t parid,
+                         unsigned long long astadr, unsigned long long astprm,
+                         unsigned long long blkast, uint32_t acmode, uint32_t rsdm)
+{
+    struct dsc$descriptor_s r;
+    return (wait ? sys$enqw : sys$enq)(efn, lkmode, lksb, flags, dsc_of(&r, resnam), parid,
+                                       AST(astadr), (uint32_t)astprm, AST(blkast), acmode,
+                                       rsdm, NULL);
+}
+
+uint32_t ovmx_vmsabi_prc(int op, const uint32_t *pidadr, const struct ovmx_abi_str *prcnam,
+                         uint32_t arg)
+{
+    struct dsc$descriptor_s p;
+    struct dsc$descriptor_s *pn = dsc_of(&p, prcnam);
+    switch (op) {
+    case OVMX_ABI_PRC_WAKE:   return sys$wake(pidadr, pn);
+    case OVMX_ABI_PRC_RESUME: return sys$resume(pidadr, pn);
+    case OVMX_ABI_PRC_SUSPND: return sys$suspnd(pidadr, pn, arg);
+    case OVMX_ABI_PRC_FORCEX: return sys$forcex(pidadr, pn, arg);
+    case OVMX_ABI_PRC_DELPRC: return sys$delprc(pidadr, pn, NULL);
+    default:                  return SS$_BADPARAM;
+    }
+}
+
+uint32_t ovmx_vmsabi_setpri(const uint32_t *pidadr, const struct ovmx_abi_str *prcnam,
+                            uint32_t pri, uint32_t *prvpri, uint32_t pol, uint32_t *prevpol)
+{
+    struct dsc$descriptor_s p;
+    return sys$setpri(pidadr, dsc_of(&p, prcnam), pri, prvpri, pol, prevpol);
+}
+
+uint32_t ovmx_vmsabi_asctoid(const struct ovmx_abi_str *name, uint32_t *id, uint32_t *attrib)
+{
+    struct dsc$descriptor_s n;
+    return sys$asctoid(dsc_of(&n, name), id, attrib);
+}
+
+uint32_t ovmx_vmsabi_idtoasc(uint32_t id, uint16_t *namlen, char *out, unsigned cap,
+                             uint32_t *resid, uint32_t *attrib, uint32_t *ctx)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, out, cap);
+    return sys$idtoasc(id, namlen, out ? &d : NULL, resid, attrib, ctx);
+}
+
+uint32_t ovmx_vmsabi_grantid(int revoke, const uint32_t *pidadr,
+                             const struct ovmx_abi_str *prcnam, const uint32_t *id,
+                             const struct ovmx_abi_str *name, uint32_t *prvatr,
+                             uint32_t segment)
+{
+    struct dsc$descriptor_s p, n;
+    return (revoke ? sys$revokid : sys$grantid)(pidadr, dsc_of(&p, prcnam), id,
+                                                dsc_of(&n, name), prvatr, segment);
+}
+
+uint32_t ovmx_vmsabi_sndopr(const struct ovmx_abi_str *msg, uint16_t chan)
+{
+    struct dsc$descriptor_s m;
+    return sys$sndopr(dsc_of(&m, msg), chan);
+}
+
+uint32_t ovmx_vmsabi_brkthru(int wait, uint32_t efn, const struct ovmx_abi_str *msg,
+                             const struct ovmx_abi_str *sendto, uint32_t sndtyp, void *iosb,
+                             uint32_t carcon, uint32_t flags, uint32_t reqid, uint32_t timout,
+                             unsigned long long astadr, unsigned long long astprm)
+{
+    struct dsc$descriptor_s m, t;
+    if (!wait)
+        return SS$_UNSUPPORTED;     /* OVMX provides $BRKTHRUW only */
+    return (sys$brkthruw)(efn, dsc_of(&m, msg), dsc_of(&t, sendto), sndtyp,
+                          (struct _iosb *)iosb, carcon, flags, reqid, timout,
+                          AST(astadr), (uint32_t)astprm);
+}

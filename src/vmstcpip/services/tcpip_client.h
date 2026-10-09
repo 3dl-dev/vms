@@ -52,6 +52,7 @@
 #include "iodef.h"
 #include "iosbdef.h"
 #include "ssdef.h"
+#include "tcpip_qio.h"      /* a $QIOW ends with its IOSB status (rd vms-d01) */
 
 /* The BGn: driver caps one $QIO transfer at 4096 bytes (VMS_BG_IOCTL_MAXLEN,
  * an OVMX design cap stated in src/kernel/vms_bg.h). Repeated here as a plain
@@ -158,8 +159,7 @@ static inline uint32_t tcpip_connect(struct tcpip_conn *c,
     if (!(st & 1))
         return st;
 
-    st = sys$qiow(0, c->chan, IO$_SETMODE, &iosb, NULL, 0,
-                  NULL, 0, 0, 0, 0, 0);
+    st = tcpip_qiow(c->chan, IO$_SETMODE, &iosb, NULL, 0, 0);
     if (!(st & 1)) {
         sys$dassgn(c->chan);
         c->chan = 0;
@@ -169,8 +169,7 @@ static inline uint32_t tcpip_connect(struct tcpip_conn *c,
     sa.family = 2;                      /* AF_INET */
     sa.port   = tcpip_port_be(port_host);
     sa.addr   = addr_be;
-    st = sys$qiow(0, c->chan, IO$_ACCESS, &iosb, NULL, 0,
-                  &sa, (uint32_t)sizeof(sa), 0, 0, 0, 0);
+    st = tcpip_qiow(c->chan, IO$_ACCESS, &iosb, &sa, (uint32_t)sizeof(sa), 0);
     if (!(st & 1)) {
         sys$dassgn(c->chan);
         c->chan = 0;
@@ -207,8 +206,7 @@ static inline uint32_t tcpip_send_all(struct tcpip_conn *c,
         uint32_t st;
         if (chunk > TCPIP_XFER_MAX)
             chunk = TCPIP_XFER_MAX;
-        st = sys$qiow(0, c->chan, IO$_WRITEVBLK, &iosb, NULL, 0,
-                      (void *)(p + off), chunk, 0, 0, 0, 0);
+        st = tcpip_qiow(c->chan, IO$_WRITEVBLK, &iosb, (void *)(p + off), chunk, 0);
         if (!(st & 1))
             return st;
         if (iosb.iosb$w_bcnt == 0)
@@ -227,8 +225,7 @@ static inline uint32_t tcpip_fill(struct tcpip_conn *c, uint32_t *got)
 
     c->rpos = 0;
     c->rlen = 0;
-    st = sys$qiow(0, c->chan, IO$_READVBLK, &iosb, NULL, 0,
-                  c->rbuf, (uint32_t)sizeof(c->rbuf), 0, 0, 0, 0);
+    st = tcpip_qiow(c->chan, IO$_READVBLK, &iosb, c->rbuf, (uint32_t)sizeof(c->rbuf), 0);
     if (!(st & 1)) {
         *got = 0;
         return st;

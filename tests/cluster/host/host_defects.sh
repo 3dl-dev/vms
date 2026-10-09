@@ -164,6 +164,9 @@ recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
 ldwv-drops-our-own-membership
 join-promotion-records-nothing
+dlm-deferred-grant-not-sent
+lock-interrupted-wait-ignored
+dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
@@ -420,6 +423,50 @@ EOF
                       ;;
         esac;;
 
+    lock-interrupted-wait-ignored)
+        case "$_f" in
+        facility)     echo "THE INTERRUPTED WAIT (enq_wait_sync(), rd vms-f87): a signal to a process blocked in \$ENQW ends the ioctl with no status, so userspace re-enters the wait -- it NEVER loops in the kernel";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_host";;
+        isolation)    echo "isolated";;
+        why)          echo "the backend's INTERRUPTED return is dropped again, exactly as it was before rd vms-f87. MEASURED in lab run ci6-evac-11: the Linux backend does not sleep while a signal is pending, so the loop re-tested a predicate that was still false and called straight back in -- a tight loop taking and dropping res->lock, a CPU that never left the kernel, and 'rcu: INFO: self-detected stall on CPU 0 (9931 ticks this GP)' growing to 98,763 ticks while the fork thread on the other CPU served the cluster normally. The host bed reproduces it through the backend's interrupt seam, and the suite's own ctest timeout is what catches the spin.";;
+        require_fail) cat <<'EOF'
+  with -ERESTARTSYS
+*** and returns -ERESTARTSYS ***
+*** the interrupted $ENQW COMES BACK (it does not spin in the kernel: the lab's CPU 0 never did) ***
+*** the interrupted $ENQW CONVERT comes back too -- the exact ioctl the lab's stuck CPU was in ***
+*** writing NO status: $ENQW has no 'your wait was interrupted' condition value, so userspace re-enters the wait and no caller can observe this ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-deferred-grant-not-sent)
+        case "$_f" in
+        facility)     echo "THE DEFERRED GRANT (dlm_arm_send_deferred_grant(), rd vms-f87): when a release advances this master's queue, the waiter is TOLD -- its own queued frame echoed back with the handle this engine assigned";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "the origination is removed and the flip goes back to being counted in silence, which is what shipped before. MEASURED COST, 2026-10-09 10:56Z on vaxlab-3: an OVMX master held EX on EVAC\$WORKLOAD, VAX1's \$ENQW EX queued at it correctly, OVMX released -- and VAX1 was never told. Its process sat in RWSCS indefinitely and could not even be STOPped. The engine HAD granted the lock; only the frame was missing. This is ci.6's last step.";;
+        require_fail) cat <<'EOF'
+*** and the RELEASE path really CALLS the origination -- not just defines it ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-pending-overflow-overwrites)
+        case "$_f" in
+        facility)     echo "THE UNANSWERED-REQUEST TABLE's bound (vms_dlm_pending_keep(), rd vms-f87): a full table REFUSES, so one waiter's frame is never overwritten by another's";;
+        targets)      echo "kernel-core/vms_dlm_pending.c";;
+        suites_red)   echo "test_dlm_pending";;
+        isolation)    echo "isolated";;
+        why)          echo "the full-table refusal is turned into an overwrite of slot 0. The frames in this table are what the deferred grants are BUILT from, so handing one waiter another waiter's frame would send a grant naming the wrong lock to the wrong node -- a fabricated completion of exactly the class INV-6 names, and the class that put a real VAX into a 65,000-frame storm (rd vms-b5b0). A full table has an honest answer already: refuse, count it, and let the requester's next ask be answered from the lock database.";;
+        require_fail) cat <<'EOF'
+*** one more is REFUSED, not silently dropped on top of another waiter's frame ***
+and counted
+EOF
+                      ;;
+        esac;;
+
     join-promotion-records-nothing)
         case "$_f" in
         facility)     echo "THE PROMOTION'S RECORD (join_h_transition_done(), rd vms-b5b0 follow-on): when this node becomes a member off a completed transition, the fact is written where the rest of the executive reads it -- its own CSB's MEMBER/SELECTED flags, cl->state and the lock directory weight vector";;
@@ -428,38 +475,10 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "the promotion is put back to setting only the join FSM's own state. MEASURED TWICE on a real VAX cluster: a node's CSV slot climbs with every rejoin (p. 7-25), and at slots 8 and 10 -- past the eight slots this executive has grounded of the transition nodemap -- Phase 2 correctly leaves this node's membership undecided, so NOTHING else recorded it. The console said 'this node is now a VAXcluster member' while the node's own CSB said otherwise: its weight vector gave it no directory entry while both VAXes directed every lookup at it (a directory split), and cl->state never reached MEMBER, so SHOW CLUSTER and \$GETSYI disagreed with the console.";;
         require_fail) cat <<'EOF'
-  slot 10: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 10: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 11: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 11: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 12: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 12: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 13: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 13: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 14: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 14: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 15: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 15: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 8: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 8: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-  slot 9: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
-  slot 9: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
-*** slot 10: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 10: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 11: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 11: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 12: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 12: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 13: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 13: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 14: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 14: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 15: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 15: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 8: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 8: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
-*** slot 9: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
-*** slot 9: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+  ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+*** its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
 EOF
                       ;;
         esac;;
@@ -1937,6 +1956,31 @@ apply_edit() {
     dlm-dir-remove-by-anyone)
         # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.
         sed -i 's#if (i < 0 || d->slot\[i\].master != master) {#if (i < 0 || (d->slot[i].master != master \&\& 0)) { /* NEGCTL dlm-dir-remove-by-anyone */#' "$_file";;
+
+    lock-interrupted-wait-ignored)
+        # The interrupted arm's own test: `if (exec_cv_wait_timeout(...` is
+        # unique in this file. Turning the condition into a constant 0 makes the
+        # facility ignore the return exactly as it used to, and removes the
+        # anchor, so a second apply cannot match.
+        # Two lines, because the condition spans two: the call must still
+        # HAPPEN (the pre-fix code called it and dropped the result -- a
+        # short-circuited `if (0 && ...)` would instead remove the sleep and
+        # spin the suite's own CPU, which is unmeasurable). Both anchors are
+        # unique and both are consumed, so a second apply cannot match.
+        sed -i 's|        if (exec_cv_wait_timeout(&lock->wait_wq, \&res->lock,|        (void)exec_cv_wait_timeout(\&lock->wait_wq, \&res->lock, /* NEGCTL lock-interrupted-wait-ignored */|' "$_file"
+        sed -i 's|                                 VMS_DEADLOCK_WAIT_MS, &timed_out)) {|                             VMS_DEADLOCK_WAIT_MS, \&timed_out);\n        if (0) {|' "$_file";;
+
+    dlm-deferred-grant-not-sent)
+        # The one call that originates it. Removing it removes the anchor.
+        sed -i 's|\tdlm_arm_send_deferred_grant(d, \&res);|\td->deferred_grants_no_wire_op++; /* NEGCTL dlm-deferred-grant-not-sent */|' "$_file";;
+
+    dlm-pending-overflow-overwrites)
+        # The full-table arm's own two lines (both unique in this file, and
+        # both consumed, so a second apply cannot match): the refusal becomes
+        # an OVERWRITE of slot 0 -- one waiter's frame handed out as another's,
+        # which is a grant naming the wrong lock to the wrong node.
+        sed -i 's|\t\t\tp->overflow++;|\t\t\t/* NEGCTL dlm-pending-overflow-overwrites */|' "$_file"
+        sed -i 's|\t\t\treturn 0;|\t\t\ts = \&p->slot[0];|' "$_file";;
 
     join-promotion-records-nothing)
         # The one call the promotion makes. Removing it removes the anchor.

@@ -620,6 +620,7 @@ struct vms_dlm_scs_view_wire {
 	uint32_t releases_refused;
 	uint32_t blkasts_unparsed;
 	uint32_t deferred_grants_owed;
+	uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
 	uint32_t queued_no_reply;
 	uint32_t unparsed;
 	uint32_t foreign_refused;
@@ -857,9 +858,9 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 140,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

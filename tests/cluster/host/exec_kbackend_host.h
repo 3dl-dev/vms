@@ -91,12 +91,37 @@ static inline void exec_lock_destroy(exec_lock_t *l) { pthread_mutex_destroy(l);
 static inline int  exec_trylock(exec_lock_t *l)      { return pthread_mutex_trylock(l) == 0; }
 
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h sec 2) ---- */
+/*
+ * THE INTERRUPT SEAM (rd vms-f87). A host unit test has no signals, so these
+ * waits never reported INTERRUPTED and the facility's handling of that return
+ * was untestable here -- which is how a facility that IGNORED it shipped and
+ * spun a CPU into an RCU stall on a booted node (lab run ci6-evac-11: the
+ * Linux backend does not sleep while a signal is pending, so a loop that
+ * re-tested a still-false predicate and called back in never left the kernel).
+ *
+ * Setting this to N makes the next N waits return INTERRUPTED **without
+ * sleeping**, which is exactly what the Linux backend does with a signal
+ * pending. It is the ONE host-only control in this backend, it defaults to 0,
+ * and no shipping code reads or writes it.
+ */
+extern unsigned int exec_host_interrupt_waits;
+
+static inline int exec_host_take_interrupt(void)
+{
+	if (exec_host_interrupt_waits == 0u)
+		return 0;
+	exec_host_interrupt_waits--;
+	return 1;
+}
+
 static inline void exec_cv_init(exec_cv_t *cv) { pthread_cond_init(cv, NULL); }
 
 static inline int exec_cv_wait(exec_cv_t *cv, exec_lock_t *lk)
 {
+	if (exec_host_take_interrupt())
+		return 1;   /* a signal is pending: do not sleep (see above) */
 	pthread_cond_wait(cv, lk);
-	return 0;   /* no signal delivery in a host unit test -- never interrupted */
+	return 0;
 }
 
 static inline int exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk,
@@ -114,10 +139,12 @@ static inline int exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk,
 	}
 
 	*timed_out = 0;
+	if (exec_host_take_interrupt())
+		return 1;   /* a signal is pending: do not sleep (see above) */
 	rc = pthread_cond_timedwait(cv, lk, &ts);
 	if (rc == ETIMEDOUT)
 		*timed_out = 1;
-	return 0;   /* no signal delivery in a host unit test -- never interrupted */
+	return 0;
 }
 
 static inline void exec_cv_signal(exec_cv_t *cv)    { pthread_cond_signal(cv); }

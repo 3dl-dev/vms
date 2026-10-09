@@ -160,6 +160,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_dlm_ldwv.o \
          ../kernel-core/vms_dlm_dir.o \
          ../kernel-core/vms_dlm_echo_guard.o \
+         ../kernel-core/vms_dlm_pending.o \
          ../kernel-core/vms_dlm_hash.o \
          ../kernel-core/vms_cnxman_barrier_fsm.o \
          ../kernel-core/vms_cnxman_coord_fsm.o \

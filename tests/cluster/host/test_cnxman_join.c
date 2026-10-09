@@ -1345,7 +1345,6 @@ static void test_promotion_records_membership_at_any_csv_slot(void)
 
 	for (slot = 3u; slot <= 15u; slot++) {
 		const struct vms_csb *local;
-		char what[180];
 		/*
 		 * The coordinator's nodemap. For the CONTROL (slot 3) it is
 		 * 0x0e = {1,2,3} -- the real cn3 value, which names this node;
@@ -1359,6 +1358,12 @@ static void test_promotion_records_membership_at_any_csv_slot(void)
 		if (slot > 3u && slot < 8u)
 			continue;   /* 3 is the control; 8..15 are the case */
 
+		/* The slot is PRINTED rather than built into each assertion's
+		 * text: host_defects.sh's selftest requires every require_fail
+		 * string to appear literally in this source, so a per-slot
+		 * snprintf would make the negative control unmeasurable. */
+		printf("   [CSV slot %u, nodemap 0x%02x]\n", (unsigned)slot,
+		       (unsigned)bitmap);
 		bed_init();
 		bed_set_identity();
 		(void)cnxman_join_start(&g.j);
@@ -1401,31 +1406,25 @@ static void test_promotion_records_membership_at_any_csv_slot(void)
 			(void)join_feed(len);
 		}
 
-		snprintf(what, sizeof(what),
-			 "slot %u: this node is a MEMBER (the transition "
-			 "completed and did not exclude it)", (unsigned)slot);
-		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER, what);
+		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+				"this node is a MEMBER (the transition "
+				"completed and did not exclude it)");
 
 		local = cnxman_club_local(&g.cl.club);
 		ct_check(local != NULL, "  the local CSB exists");
 		if (local == NULL)
 			return;
 
-		snprintf(what, sizeof(what),
-			 "*** slot %u: its OWN CSB carries MEMBER -- the fact "
-			 "the vector, the quorum readout and SHOW CLUSTER all "
-			 "read ***", (unsigned)slot);
-		ct_check((local->flags & VMS_CSB_F_MEMBER) != 0u, what);
-		snprintf(what, sizeof(what),
-			 "  slot %u: ... and SELECTED, which the member count "
-			 "and the weight vector are taken from (p. 7-49)",
-			 (unsigned)slot);
-		ct_check((local->flags & VMS_CSB_F_SELECTED) != 0u, what);
-		snprintf(what, sizeof(what),
-			 "  slot %u: and cl->state is MEMBER, so SHOW CLUSTER "
-			 "agrees with the console line", (unsigned)slot);
+		ct_check((local->flags & VMS_CSB_F_MEMBER) != 0u,
+			 "*** its OWN CSB carries MEMBER -- the fact the "
+			 "vector, the quorum readout and SHOW CLUSTER all "
+			 "read ***");
+		ct_check((local->flags & VMS_CSB_F_SELECTED) != 0u,
+			 "  ... and SELECTED, which the member count and the "
+			 "weight vector are taken from (p. 7-49)");
 		ct_check_eq_u32(g.cl.state, (unsigned long)VMS_CLUSTER_MEMBER,
-				what);
+				"  and cl->state is MEMBER, so SHOW CLUSTER "
+				"agrees with the console line");
 
 		/*
 		 * And the TRANSCRIPT says which way it was learned, so a
@@ -1433,21 +1432,16 @@ static void test_promotion_records_membership_at_any_csv_slot(void)
 		 * silent.
 		 */
 		if (in_map) {
-			snprintf(what, sizeof(what),
-				 "  slot %u (the control): the nodemap NAMED "
-				 "us, so Phase 2 had already set the flags and "
-				 "nothing had to come off the map",
-				 (unsigned)slot);
 			ct_check_eq_u32(g.cl.club.local_committed_off_map, 0u,
-					what);
+					"  the control slot: the nodemap NAMED "
+					"us, so Phase 2 had already set the "
+					"flags and nothing came off the map");
 		} else {
-			snprintf(what, sizeof(what),
-				 "*** slot %u: the map could not express this "
-				 "slot, and the membership is recorded from "
-				 "the COMPLETION -- counted, not implied ***",
-				 (unsigned)slot);
 			ct_check_eq_u32(g.cl.club.local_committed_off_map, 1u,
-					what);
+					"*** the map could not express this "
+					"slot, and the membership is recorded "
+					"from the COMPLETION -- counted, not "
+					"implied ***");
 		}
 	}
 }

@@ -1053,6 +1053,42 @@ Decisions:
      this node had crashed. **OVMX must never be the node that keeps feeding a
      peer a frame it cannot use.**
 
+- **D-DLM-2.2 — THE ANSWER THE MASTER OWES, AND THE WAIT THAT CARRIES IT**
+  (rd vms-f87, two measured faults on 2026-10-09).
+
+  1. **A queued remote requester is TOLD when the queue advances.** This used to
+     be counted (`deferred_grants_owed`) and not sent, because "a cat-0x82 at a
+     system that did not just ask" had no grounding. The lab showed the cost: a
+     real VAX `$ENQW` queued at an OVMX master, OVMX released, the engine
+     flipped the request to granted **for real**, and the VAX process sat in
+     `RWSCS` indefinitely — unkillable. And the grounding is now **measured**
+     (`tools/cluster/dlm_grant_correlation.py`, 129 real captures): a grant is
+     correlated by the **requester's own handle** at `body[24:28]` (27,513 of
+     27,513 in the f03 capture), it need not be the next frame (gaps to 137 ms),
+     and a real master does originate grants nobody just asked for (139 in one
+     second). The **frame** is therefore the requester's **own queued frame,
+     echoed back** with the handle this engine assigned (`vms_dlm_pending.h`
+     keeps it): byte-for-byte the grant it would have got by asking again, and
+     not a frame composed out of fields — which is what rd vms-b5b0's storm was.
+     *Honest gap kept:* no capture in the corpus holds a cross-node **queued**
+     waiter, so the queue-advance **context** is not directly captured; the
+     capture that closes it is specified in
+     `tests/lab/captures/vms-f87-deferred-grant-20261009/README.md`.
+  2. **A WAIT MUST BE A WAIT.** `enq_wait_sync` dropped the backend's
+     INTERRUPTED return, and since the Linux backend does not sleep while a
+     signal is pending, the loop re-tested a still-false predicate and called
+     straight back in: a CPU that never left the kernel and an RCU self-detected
+     stall (98,763 ticks) while the fork thread on the other CPU served the
+     cluster normally. **Any** signal to a process blocked in `$ENQW` did it.
+     The rule, and it is the one the rest of this executive already follows
+     (`vms_eflag.c`, `vms_mbx.c`, `$HIBER`): **an interrupted wait ends the
+     ioctl with `-ERESTARTSYS` and no status, the request stays queued, and
+     userspace re-enters the wait.** That is VMS's own behaviour — an AST
+     interrupts a wait, runs, and the wait resumes — which is why `$ENQW` has no
+     "your wait was interrupted" condition value. Any future in-kernel wait in
+     this stack inherits the rule: *handle the interrupted return, or you have
+     written a spin.*
+
 - **D-DLM-3 — directory-node role is built anyway** (for LOCKDIRWT>0 later,
   and because the rebuild pushes records at whichever node the cluster
   chooses): a stored directory table, populated from rebuild records and

@@ -49,6 +49,17 @@
 #include <string.h>
 #include <errno.h>
 
+/*
+ * ERESTARTSYS is a KERNEL-INTERNAL errno: the Linux substrate has it, the
+ * NetBSD shim defines it (src/kernel-netbsd/vms_internal.h), and <errno.h> on
+ * the host does not. The host bed needs it because the facility returns it on
+ * an INTERRUPTED wait -- the path rd vms-f87's lab run found spinning a CPU --
+ * and this bed is where that path is tested.
+ */
+#ifndef ERESTARTSYS
+#define ERESTARTSYS  512
+#endif
+
 /* The container/lock/cv seam. vms_lock.c includes these itself too (all
  * header-guarded, so re-inclusion there is a no-op), but this file uses their
  * types in the struct definitions below and so needs them FIRST -- exactly

@@ -3057,9 +3057,9 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "lib\$spawn no longer completes the caller's request when the completion arm finds the subprocess already gone and reclaimed (SS\$_NONEXPR): the event flag is never set, so a \$WAITFR on it hangs. The race is the subprocess finishing before the arm runs; the suite spawns an instantly-finishing command repeatedly so the lost flag shows.";;
+        why)          echo "lib\$spawn no longer completes the caller's request when the completion arm finds the subprocess already gone and reclaimed (SS\$_NONEXPR): the event flag is never set, so a \$WAITFR on it hangs. The suite makes the race certain: a SCHED_FIFO creator on the guest's one CPU spawns a CLI that ends at once, so the subprocess is deleted before the arm runs and the arm always answers SS\$_NONEXPR. (The 200-spawn loop in the same suite may also redden by scheduling -- a non-gating extra.)";;
         require_fail) cat <<'EOF'
-every /NOWAIT lib$spawn of an instantly-finishing command set its completion event flag
+a /NOWAIT lib$spawn whose subprocess is already gone when the arm runs
 EOF
                       ;;
         knock_on_fail) echo "";;

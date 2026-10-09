@@ -16,6 +16,7 @@
  *
  * Requires a real, insmod'd vms.ko; without one it SKIPs (77), never a fake pass.
  */
+#define _GNU_SOURCE 1   /* sched_setaffinity, CPU_SET */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,9 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <poll.h>
+#include <sched.h>
+#include <sys/stat.h>
+#include <strings.h>
 #include <errno.h>
 #include <pthread.h>
 #include <sys/wait.h>
@@ -114,8 +118,75 @@ static int leader_first_completion(uint32_t efn)
     return set;
 }
 
-int main(void)
+/*
+ * THE ARM FINDS THE SUBPROCESS ALREADY GONE (vms-f45), made deterministic. The
+ * CLI lib$spawn runs is SYS$SYSTEM:DCL.EXE; here SYS$SYSTEM names a directory
+ * whose DCL.EXE is this program, which -- started under that name -- opens its
+ * own /dev/vms and exits at once. The creator runs SCHED_FIFO on the guest's one
+ * CPU, so once it blocks in $CREPRC the subprocess runs to its end (and the
+ * executive deletes it) before the creator is scheduled again to arm the
+ * completion: the arm always answers SS$_NONEXPR, and lib$spawn must complete
+ * the request itself.
+ */
+#define STUB_DIR "/tmp/ovmxstub"
+static int stub_cli_main(void)
 {
+    struct vms_procinfo me;
+    if (vms_kif_open() >= 0)
+        (void)vms_kif_getjpi_self(&me);      /* its own /dev/vms file */
+    return 0;
+}
+
+static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t efn)
+{
+    char link[256];
+    (void)mkdir(STUB_DIR, 0755);
+    snprintf(link, sizeof link, "%s/DCL.EXE", STUB_DIR);
+    (void)unlink(link);
+    if (symlink(self_exe, link) != 0) return -1;
+    snprintf(link, sizeof link, "%s/dcl.exe", STUB_DIR);
+    (void)unlink(link);
+    (void)symlink(self_exe, link);
+    if (!(lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", STUB_DIR, 0, LNM_MODE_SUPER) & 1))
+        return -1;
+    struct sched_param sp = { .sched_priority = 1 };
+    cpu_set_t one;
+    CPU_ZERO(&one);
+    CPU_SET(0, &one);
+    int rt = sched_setaffinity(0, sizeof one, &one) == 0 &&
+             sched_setscheduler(0, SCHED_FIFO, &sp) == 0;
+    int set = -1;
+    if (rt) {
+        struct dsc$descriptor_s cmd = dsc("EXIT");
+        uint32_t flags = CLI$M_NOWAIT, e = efn, pid = 0;
+        (void)sys$clref(efn);
+        uint32_t r = lib$spawn(&cmd, NULL, NULL, &flags, NULL, &pid, NULL, &e,
+                               NULL, NULL, NULL, NULL, NULL);
+        struct sched_param np = { .sched_priority = 0 };
+        (void)sched_setscheduler(0, SCHED_OTHER, &np);
+        if (r & 1) {
+            set = 0;
+            for (int waited = 0; waited < 5000 && !set; waited += 50) {
+                set = (sys$readef(efn, &(uint32_t){0}) == SS$_WASSET);
+                if (!set) { struct pollfd n = { .fd = -1, .events = 0 }; poll(&n, 1, 50); }
+            }
+            struct vms_procinfo pi;
+            if (set && (vms_kif_getjpi_pid(pid, &pi) & 1))
+                set = 2;                   /* not gone after all: not this case */
+        }
+    }
+    (void)lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", "/bin", 0, LNM_MODE_SUPER);
+    return set;
+}
+
+int main(int argc, char **argv)
+{
+    {
+        const char *b = strrchr(argv[0], '/');
+        b = b ? b + 1 : argv[0];
+        if (argc >= 1 && strcasecmp(b, "DCL.EXE") == 0)
+            return stub_cli_main();       /* started by lib$spawn as the CLI */
+    }
     printf("=== test_syssvc_spawn_complete (vms-f45: /NOWAIT completion is never lost) ===\n");
 
     int devfd = open("/dev/vms", O_RDWR);
@@ -129,6 +200,17 @@ int main(void)
           "define SYS$SYSTEM -> /bin (stage DCL.EXE for lib$spawn)");
     if (!(vms_kif_open() >= 0 && (vms_kif_register(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
 
+    {
+        char self[256];
+        ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1);
+        int r = -1;
+        if (sl > 0) { self[sl] = 0; r = gone_before_arm(mgr, self, COMPLETION_EFN); }
+        CHECK(r == 0 || r == 1, "a SCHED_FIFO creator spawns an instantly-ending CLI on one CPU");
+        CHECK(r != 2, "the instantly-ending subprocess is already deleted when its completion is armed");
+        /* negctl: spawn-arm-gone-subprocess-not-completed */
+        CHECK(r == 1, "a /NOWAIT lib$spawn whose subprocess is already gone when the arm runs"
+                      " still sets the creator's completion event flag");
+    }
     {
         int r = leader_first_completion(COMPLETION_EFN);
         CHECK(r != -1, "a registered child process with its own /dev/vms is created and armed");

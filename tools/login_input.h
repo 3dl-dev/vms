@@ -178,13 +178,10 @@ static inline void login_drain_typeahead(int fd, size_t max_bytes)
  *
  * @fd           descriptor to read (the session's terminal).
  * @buf/@bufsiz  destination; always NUL-terminated on LOGIN_READ_OK.
- * @echo_off     nonzero to suppress terminal echo for the duration (the
- *               Password: prompt). Only attempted when `fd' is a terminal; the
- *               original settings are restored before returning, and a newline
- *               is emitted on `echo_fd' so the cursor leaves the prompt line.
- * @echo_fd      the terminal's output side (STDOUT_FILENO for LOGINOUT):
- *               where the newline above goes, and where the timeout report
- *               below is written.
+ * @echo_off     ignored: echo belongs to the executive terminal driver (rd
+ *               vms-f8c), which LOGINOUT asks for IO$M_NOECHO directly; this
+ *               reader serves only descriptors no terminal driver is behind.
+ * @echo_fd      where the timeout report below is written.
  * @timeout_sec  the idle deadline in seconds. 0 means "no deadline" -- used by
  *               nothing in LOGINOUT today, but it keeps the helper usable for a
  *               prompt VMS does not time out.
@@ -197,8 +194,8 @@ static inline void login_drain_typeahead(int fd, size_t max_bytes)
  * before a timeout are discarded: a partial username is not a username.
  *
  * ON LOGIN_READ_TIMEOUT THE EXPIRY IS REPORTED ON `echo_fd', as VMS does: the
- * prompt line is ended (exactly once -- the echo-off path has already ended
- * it) and LOGIN_MSG_CMDINPUT and LOGIN_MSG_TIMEOUT follow, one per line.
+ * prompt line is ended (exactly once) and LOGIN_MSG_CMDINPUT and
+ * LOGIN_MSG_TIMEOUT follow, one per line.
  *
  * A line longer than the buffer is TRUNCATED and the remainder consumed
  * through the newline, so an over-long username cannot leave its tail to be
@@ -208,22 +205,18 @@ static inline int login_read_line_timed(int fd, char *buf, size_t bufsiz,
                                         int echo_off, int echo_fd,
                                         unsigned timeout_sec)
 {
-    struct termios old_term, new_term;
-    int have_term = 0;
     size_t len = 0;
     int rc = LOGIN_READ_EOF;
     long long deadline;
 
+    /* Echo is the terminal driver's business, not this reader's (rd vms-f8c):
+     * on a terminal the executive drives, LOGINOUT reads with $QIO
+     * IO$M_NOECHO instead of calling here. A plain stream has no echo. */
+    (void)echo_off;
+
     if (!buf || bufsiz == 0)
         return LOGIN_READ_EOF;
     buf[0] = '\0';
-
-    if (echo_off && isatty(fd) && tcgetattr(fd, &old_term) == 0) {
-        new_term = old_term;
-        new_term.c_lflag &= ~(tcflag_t)ECHO;
-        (void)tcsetattr(fd, TCSAFLUSH, &new_term);
-        have_term = 1;
-    }
 
     deadline = login_now_ms() + (long long)timeout_sec * 1000;
 
@@ -287,31 +280,16 @@ static inline int login_read_line_timed(int fd, char *buf, size_t bufsiz,
 
     buf[(rc == LOGIN_READ_OK) ? len : 0] = '\0';
 
-    if (have_term) {
-        (void)tcsetattr(fd, TCSAFLUSH, &old_term);
-        /* Echo was off, so the user's RETURN produced no newline. */
-        (void)!write(echo_fd, "\n", 1);
-    }
-
     if (rc == LOGIN_READ_TIMEOUT) {
         static const char report[] =
             LOGIN_MSG_CMDINPUT "\n" LOGIN_MSG_TIMEOUT "\n";
-        /* A half-typed line still sitting in the terminal's own (canonical)
-         * input queue is not a response either: discard it, so it cannot
-         * become the head of whatever the next session reads. */
+        /* A half-typed line still sitting in the descriptor's input queue is
+         * not a response either: discard it, so it cannot become the head of
+         * whatever the next session reads. */
         if (isatty(fd))
             (void)tcflush(fd, TCIFLUSH);
-        if (!have_term)                /* the prompt line is still open */
-            (void)!write(echo_fd, "\n", 1);
+        (void)!write(echo_fd, "\n", 1);   /* the prompt line is still open */
         (void)!write(echo_fd, report, sizeof(report) - 1);
-        /* vms-330: the process exits right after this and JOB_CONTROL replaces the session
-         * on the same terminal; make sure the report has left the line discipline first, or
-         * a loaded guest can drop the VMS text the oracle expects. */
-        if (isatty(echo_fd)) {          /* tcdrain() is not in DECC$SHR's vector; TCSADRAIN drains too */
-            struct termios dt;
-            if (tcgetattr(echo_fd, &dt) == 0)
-                (void)tcsetattr(echo_fd, TCSADRAIN, &dt);
-        }
     }
 
     return rc;

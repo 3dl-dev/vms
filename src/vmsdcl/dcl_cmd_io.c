@@ -15,6 +15,7 @@
 #include <fcntl.h>
 
 #include "dcl/context.h"
+#include "dcl/terminal.h"
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
@@ -605,15 +606,10 @@ int cmd_read(struct dcl_command *cmd)
     const char *prompt = dcl_qualifier_value(cmd, "PROMPT");
     if (prompt) {
         char buf[4096];
-        if (prompt[0]) {
-            printf("%s", prompt);
-            fflush(stdout);
-        }
-        if (!fgets(buf, sizeof(buf), stdin)) {
+        /* IO$_READPROMPT through the terminal driver (rd vms-f8c) */
+        if (dcl_tt_read_line(prompt, buf, sizeof(buf)) != 0) {
             return SS$_ENDOFFILE;
         }
-        size_t len = strlen(buf);
-        if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
         dcl_sym_set(symbol_name, buf, DCL_SYM_LOCAL);
         return SS$_NORMAL;
     }
@@ -661,12 +657,10 @@ int cmd_read(struct dcl_command *cmd)
 
         /* Terminal SYS$INPUT: read one line from the process stdin. */
         char tbuf[4096];
-        if (!fgets(tbuf, sizeof(tbuf), stdin)) {
+        if (dcl_tt_read_line(NULL, tbuf, sizeof(tbuf)) != 0) {
             dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
             return SS$_ENDOFFILE;
         }
-        size_t tl = strlen(tbuf);
-        if (tl > 0 && tbuf[tl - 1] == '\n') tbuf[tl - 1] = '\0';
         dcl_sym_set(symbol_name, tbuf, DCL_SYM_LOCAL);
         return SS$_NORMAL;
     }

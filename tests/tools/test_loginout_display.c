@@ -490,11 +490,13 @@ int main(void)
             {
                 const char *ident = strstr(login,
                         "loginout_display_system_identification(stdout");
-                const char *prompt = strstr(login, "printf(\"Username: \")");
+                /* The prompt is the terminal driver's IO$_READPROMPT P5 now
+                 * (rd vms-f8c): LOGINOUT hands "Username: " to the read. */
+                const char *prompt = strstr(login, "read_prompt_response(\"Username: \"");
                 CHECK(ident != NULL,
                       "vms_login.c: emits the pre-Username system-identification line (vms-3e9 a)");
                 CHECK(prompt != NULL,
-                      "vms_login.c: still prints the Username: prompt");
+                      "vms_login.c: still prompts Username: (the read's prompt)");
                 CHECK(ident && prompt && ident < prompt,
                       "vms_login.c: the identification line precedes the Username: prompt");
             }

@@ -44,6 +44,7 @@
                               * the C-string + ctype + fixed-width vocabulary */
 #include "exec_kbackend.h"    /* exec_lock/copy/alloc/current/blockdev */
 #include "exec_list.h"        /* exec_list_* (device list, channel lists) */
+#include "vms_tt.h"           /* the terminal class driver (rd vms-f8c) */
 /*
  * FC-P0.9: vms_cluster_node()/VMS_IOCTL_CLUSTER_DIAG_PORT read the real
  * vms_pe.c port objects through the frozen FC-P0.1 contracts. vms_devtab.c is
@@ -1596,6 +1597,29 @@ void vms_devtab_tt_release(struct vms_device *dev)
 }
 #endif
 
+#ifdef VMS_DEVICE_HAS_TT
+/*
+ * vms_devtab_tt_by_name - the class-driver instance attached to TERMINAL row
+ * `devnam`, REFERENCED (vms_tt_release), or NULL (no such row / no port).
+ * rd vms-f8c: VMS_IOCTL_TT_SENSE.
+ */
+struct vms_tt *vms_devtab_tt_by_name(const char *devnam)
+{
+    char name[VMS_DEVNAM_SIZE];
+    struct vms_device *dev;
+    struct vms_tt *tt = NULL;
+
+    if (normalize_devnam(devnam, name, sizeof(name)) != SS__NORMAL)
+        return NULL;
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(name);
+    if (dev && dev->devclass == DC__TERM)
+        tt = vms_tt_of(dev);
+    exec_unlock(&vms_device_list_lock);
+    return tt;
+}
+#endif
+
 /*
  * vms_devtab_tt_attach - enter class-driver instance `tt` as the port of the
  * TERMINAL row `devnam` (rd vms-f8c, the line discipline's VMS_TTIOC_BIND).
@@ -1613,7 +1637,7 @@ uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
     uint32_t st = SS__NOSUCHDEV;
 
     *out = NULL;
-    if (normalize_devnam(devnam, name, sizeof(name)) != 0)
+    if (normalize_devnam(devnam, name, sizeof(name)) != SS__NORMAL)
         return SS__NOSUCHDEV;
     exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(name);

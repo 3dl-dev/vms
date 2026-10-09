@@ -2136,10 +2136,25 @@ struct vms_tt_bind_args {
     uint32_t pad;
 };
 
+/* VMS_IOCTL_TT_SENSE: what the class driver of terminal `devnam` is doing --
+ * for a NETWORK PORT that relays the terminal's reads to a remote (the DECnet
+ * CTERM host, dnet_cterm_host.c): whether a read is outstanding and whether it
+ * echoes, so the remote is told to echo exactly when the driver would. CMKRNL. */
+#define VMS_TT_SENSE_BOUND    0x1u     /* a port is attached */
+#define VMS_TT_SENSE_READING  0x2u     /* a read is outstanding */
+#define VMS_TT_SENSE_ECHOING  0x4u     /* typed characters are echoed now */
+#define VMS_TT_SENSE_PASSALL  0x8u
+struct vms_tt_sense_args {
+    char     devnam[VMS_DEVNAM_SIZE];  /* in: terminal row */
+    uint32_t state;                    /* out: VMS_TT_SENSE_* */
+    uint32_t status;                   /* out: SS$_ */
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
+#define VMS_IOCTL_TT_SENSE    _IOWR(VMS_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
 
 /* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
  * numbers on ILP32 VAX; these are the reference-build values. */
@@ -2159,6 +2174,10 @@ _Static_assert(VMS_IOCTL_TT_SETMODE == 0xC01056A2u,
                "VMS_IOCTL_TT_SETMODE encodes differently here than on the reference build");
 _Static_assert(VMS_TTIOC_BIND == 0xC01856A3u,
                "VMS_TTIOC_BIND encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_sense_args) == 24,
+               "struct vms_tt_sense_args changed size");
+_Static_assert(VMS_IOCTL_TT_SENSE == 0xC01856A4u,
+               "VMS_IOCTL_TT_SENSE encodes differently here than on the reference build");
 
 /*
  * Resolve a DISK unit to the Linux block device the executive enumerated it

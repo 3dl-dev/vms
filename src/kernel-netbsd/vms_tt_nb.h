@@ -75,10 +75,21 @@ struct vms_tt_bind_args {
 	uint32_t pad;
 };
 
+#define VMS_TT_SENSE_BOUND    0x1u
+#define VMS_TT_SENSE_READING  0x2u
+#define VMS_TT_SENSE_ECHOING  0x4u
+#define VMS_TT_SENSE_PASSALL  0x8u
+struct vms_tt_sense_args {
+	char     devnam[VMS_DEVNAM_SIZE];
+	uint32_t state;
+	uint32_t status;
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_TT_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_TT_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_TT_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_TT_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
+#define VMS_IOCTL_TT_SENSE    _IOWR(VMS_TT_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
 
 _Static_assert(sizeof(struct vms_tt_read_args) == 88,
                "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
@@ -96,5 +107,9 @@ _Static_assert(VMS_IOCTL_TT_SETMODE == 0xC01056A2u,
                "VMS_IOCTL_TT_SETMODE encodes differently here than on the reference build");
 _Static_assert(VMS_TTIOC_BIND == 0xC01856A3u,
                "VMS_TTIOC_BIND encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_sense_args) == 24,
+               "struct vms_tt_sense_args changed size");
+_Static_assert(VMS_IOCTL_TT_SENSE == 0xC01856A4u,
+               "VMS_IOCTL_TT_SENSE encodes differently here than on the reference build");
 
 #endif /* OVMX_VMS_TT_NB_H */

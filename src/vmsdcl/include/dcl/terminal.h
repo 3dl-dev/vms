@@ -102,6 +102,23 @@ int vms_terminal_get_char(const struct vms_terminal *term, uint32_t bit);
 /* Apply characteristics that map to real termios (echo, etc.) */
 void vms_terminal_apply(const struct vms_terminal *term);
 
+/*
+ * The terminal, through the executive's terminal driver (rd vms-f8c).
+ * dcl_tt_read issues $QIO IO$_READPROMPT (IO$_READVBLK with no prompt) on a
+ * channel to TT:, with IO$M_* `modifiers` and, if `timeout_sec`, IO$M_TIMED.
+ * Returns the line's length (NUL-terminated in buf, terminator not stored;
+ * *term_out gets it), or one of:
+ */
+#define DCL_TT_EOF       (-1)   /* ^Z ended the read */
+#define DCL_TT_GONE      (-2)   /* hangup / unrecoverable */
+#define DCL_TT_NODRIVER  (-3)   /* no executive terminal behind TT: */
+#define DCL_TT_INTR      (-4)   /* aborted by an interrupt (^Y / ^C) */
+#define DCL_TT_TIMEOUT   (-5)   /* IO$M_TIMED expired */
+int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
+                uint32_t timeout_sec, uint16_t *term_out);
+uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr);
+int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz);
+
 /* vms_terminal_show() was here and is DELETED (vms-d0b). SHOW TERMINAL reads
  * the executive now; see the note at the deletion site in dcl_terminal.c. */
 

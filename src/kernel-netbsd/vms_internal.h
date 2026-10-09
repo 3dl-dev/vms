@@ -1318,6 +1318,7 @@ uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
                               struct vms_device **out);
 void vms_devtab_tt_detached(struct vms_device *dev, struct vms_tt *tt);
 void vms_devtab_tt_release(struct vms_device *dev);
+struct vms_tt *vms_devtab_tt_by_name(const char *devnam);
 int vms_tt_netbsd_init(void);
 void vms_tt_netbsd_fini(void);
 struct vms_proc *vms_netbsd_proc_current(void);

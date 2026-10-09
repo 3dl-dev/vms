@@ -16,7 +16,6 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <errno.h>
-#include <termios.h>
 #include <fcntl.h>
 
 #include "dcl/context.h"
@@ -519,9 +518,53 @@ static int cmd_set_terminal(struct dcl_command *cmd)
         }
     }
 
-    /* Apply changes to real terminal */
-    if (changed)
+    /* Apply changes to the terminal itself. The characteristics the
+     * executive's terminal driver acts on live in its device row (rd vms-f8c):
+     * /[NO]ECHO is the driver echoing or not, /[NO]TYPEAHEAD whether it keeps
+     * unsolicited input, and so on -- carried there through $QIO IO$_SETMODE,
+     * never a substrate termios flag. Only the qualifiers actually named move
+     * a bit. */
+    if (changed) {
+        static const struct { uint32_t dcl; uint64_t exec; } drv[] = {
+            { TT_ECHO,      VMS_TTC_ECHO      },
+            { TT_TYPEAHEAD, VMS_TTC_TYPEAHEAD },
+            { TT_ESCAPE,    VMS_TTC_ESCAPE    },
+            { TT_HOSTSYNC,  VMS_TTC_HOSTSYNC  },
+            { TT_TTSYNC,    VMS_TTC_TTSYNC    },
+            { TT_LOWERCASE, VMS_TTC_LOWERCASE },
+            { TT_TAB,       VMS_TTC_TAB       },
+            { TT_WRAP,      VMS_TTC_WRAP      },
+            { TT_EIGHTBIT,  VMS_TTC_EIGHTBIT  },
+            { TT_BROADCAST, VMS_TTC_BROADCAST },
+            { TT_READSYNC,  VMS_TTC_READSYNC  },
+            { TT_FORM,      VMS_TTC_FORM      },
+            { TT_FULLDUP,   VMS_TTC_FULLDUP   },
+            { TT_MODEM,     VMS_TTC_MODEM     },
+            { TT_ALTYPEAHD, VMS_TTC_ALTYPEAHD },
+        };
+        uint64_t exec_set = 0, exec_clr = 0;
+        for (unsigned i = 0; i < sizeof(quals)/sizeof(quals[0]); i++) {
+            int named = 0;
+            for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+                const char *qn = cmd->qualifiers[qi].name;
+                if (strcasecmp(qn, quals[i].on) == 0 || strcasecmp(qn, quals[i].off) == 0)
+                    named = 1;
+            }
+            if (!named)
+                continue;
+            for (unsigned d = 0; d < sizeof(drv)/sizeof(drv[0]); d++) {
+                if (drv[d].dcl != quals[i].bit)
+                    continue;
+                if (vms_terminal_get_char(term, quals[i].bit))
+                    exec_set |= drv[d].exec;
+                else
+                    exec_clr |= drv[d].exec;
+            }
+        }
+        if (exec_set | exec_clr)
+            (void)dcl_tt_set_characteristics(exec_set, exec_clr);
         vms_terminal_apply(term);
+    }
 
     /* The width and page length are the TERMINAL's, held in the executive's
      * device row, where every image's $QIO IO$_SENSEMODE and $GETDVI read
@@ -885,37 +928,28 @@ static int cmd_set_protection(struct dcl_command *cmd)
 }
 
 /*
- * dcl_read_noecho_line - read one line from the controlling terminal with
- * echo suppressed, for the SET PASSWORD prompts below.
- *
- * Same termios technique tools/vms_login.c's read_password() uses at the
- * LOGIN Password: prompt -- a small, UI-only duplicate (terminal echo
- * control, not a SYSUAF format) rather than a shared library function,
- * since nothing about it is part of the SYSUAF format INV-1 guards.
- * Returns 0 on success (buf holds the trimmed line), -1 on EOF/read error.
+ * dcl_read_noecho_line - read one line from the terminal with echo
+ * suppressed, for the SET PASSWORD prompts below: $QIO IO$_READPROMPT with
+ * IO$M_NOECHO through the executive's terminal driver (rd vms-f8c), the read
+ * VMS's own SET PASSWORD issues. The caller has already written its prompt,
+ * so this read carries none. Off the OVMX runtime (no terminal driver behind
+ * TT:) the descriptor is read plainly. Returns 0 on success (buf holds the
+ * trimmed line), -1 on EOF/read error.
  */
 static int dcl_read_noecho_line(char *buf, size_t bufsz)
 {
-    struct termios old_term, new_term;
-    int have_term = 0;
-
-    if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old_term) == 0) {
-        new_term = old_term;
-        new_term.c_lflag &= ~(tcflag_t)ECHO;
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &new_term);
-        have_term = 1;
-    }
-
     int rc = 0;
+    int n;
+
+    fflush(stdout);
+    n = dcl_tt_read(NULL, buf, bufsz, IO$M_NOECHO, 0, NULL);
+    if (n >= 0)
+        return 0;
+    if (n != DCL_TT_NODRIVER)
+        return -1;
+
     if (fgets(buf, (int)bufsz, stdin) == NULL)
         rc = -1;
-
-    if (have_term) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_term);
-        putchar('\n');
-        fflush(stdout);
-    }
-
     if (rc == 0) {
         size_t len = strlen(buf);
         while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))

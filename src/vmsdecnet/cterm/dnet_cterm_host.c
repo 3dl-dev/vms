@@ -43,7 +43,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <termios.h>
 
 #include "dnet_cterm_host.h"
 
@@ -247,16 +246,22 @@ long dnet_cterm_host_write(struct dnet_cterm_host_session *hs,
     return (long)done;
 }
 
-/* Does the session's terminal echo right now? Read from the terminal's own
- * mode (the RTAn:'s substrate pair), so the CTERM host can issue the no-echo
- * read VMS issues for a Password: prompt (rd vms-a70). Unknown -> echo. */
+/* Does the session's terminal echo right now? The executive's terminal class
+ * driver decides that (rd vms-f8c): it echoes what a read consumes unless the
+ * read is IO$M_NOECHO (LOGINOUT's Password:) or the terminal is SET
+ * TERMINAL/NOECHO. So the CTERM host asks the driver, and issues the no-echo
+ * read VMS issues for a Password: prompt exactly when the driver is not
+ * echoing (rd vms-a70). A terminal with no driver attached: unknown -> echo. */
 int dnet_cterm_host_echo(const struct dnet_cterm_host_session *hs)
 {
-    struct termios t;
+    uint32_t state = 0;
 
-    if (!hs || hs->master_fd < 0 || tcgetattr(hs->master_fd, &t) != 0)
+    if (!hs || !hs->devnam[0])
         return 1;
-    return (t.c_lflag & ECHO) ? 1 : 0;
+    if (!(vms_kif_tt_sense(hs->devnam, &state) & 1) ||
+        !(state & VMS_TT_SENSE_BOUND))
+        return 1;
+    return (state & VMS_TT_SENSE_ECHOING) ? 1 : 0;
 }
 
 uint32_t dnet_cterm_host_record_origin(struct dnet_cterm_host_session *hs,

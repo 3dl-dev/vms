@@ -14,7 +14,6 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <time.h>
-#include <termios.h>
 #include <pwd.h>
 #include <grp.h>
 #include <errno.h>
@@ -36,6 +35,10 @@
 #include "rmsdef.h"
 #include "ovmx_status.h"
 #include "ssdef.h"
+/* $ASSIGN / $QIO: the login prompts are terminal-driver reads (rd vms-f8c). */
+#include "starlet.h"
+#include "descrip.h"
+#include "iodef.h"
 /* The OpenVMS-faithful post-authentication login-info block (vms-417), and the
  * pre-Username system-identification line (vms-3e9). */
 #include "loginout_display.h"
@@ -84,10 +87,127 @@
  * otherwise, and the silence is what let an idle-timed-out console be mistaken
  * for a login read "abandoned" by the executive's operator lines.
  */
-static int read_prompt_response(char *buf, size_t bufsiz, int hide)
+/*
+ * THE LOGIN READS ARE THE TERMINAL DRIVER'S (rd vms-f8c). On a terminal the
+ * executive drives (OPA0:, bound by STARTUP; an RTAn:, bound below), each
+ * prompt is ONE $QIO IO$_READPROMPT, as VMS LOGINOUT issues it:
+ *   - the driver writes the prompt itself, then reads;
+ *   - Username: purges the type-ahead buffer first (IO$M_PURGE) -- what the
+ *     operator struck before the prompt appeared is not a user name
+ *     (docs/oracle/keystroke/TA.USERNAME: "Username: purges type-ahead");
+ *   - Password: is read with IO$M_NOECHO -- the DRIVER does not echo it; no
+ *     substrate echo flag is switched off and back on;
+ *   - both carry IO$M_TIMED with the LGI-style deadline above.
+ * A descriptor with no terminal driver behind it -- a scripted LOGINOUT fed a
+ * session file on stdin (src/imgact/test/run_login_native.sh) -- is read as a
+ * plain stream by login_read_line_timed(), which no longer touches termios.
+ */
+static uint16_t lgi_tt_chan;
+static int lgi_tt_state;            /* 0 untried, 1 driver read, -1 none */
+
+static int loginout_tt_chan(void)
 {
-    int rc = login_read_line_timed(STDIN_FILENO, buf, bufsiz, hide,
+    struct vms_procinfo pi;
+    static char devnam[VMS_DEVNAM_SIZE + 1];
+    struct dsc$descriptor_s d;
+
+    if (lgi_tt_state != 0)
+        return lgi_tt_state == 1;
+    lgi_tt_state = -1;
+    if (!isatty(STDIN_FILENO))
+        return 0;
+    memset(&pi, 0, sizeof(pi));
+    if (!(vms_kif_getjpi_self(&pi) & 1) || pi.terminal[0] == '\0')
+        return 0;
+    snprintf(devnam, sizeof(devnam), "%s", pi.terminal);
+    d.dsc$w_length = (uint16_t)strlen(devnam);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = devnam;
+    if (sys$assign(&d, &lgi_tt_chan, 0, NULL, 0) & 1)
+        lgi_tt_state = 1;
+    return lgi_tt_state == 1;
+}
+
+/*
+ * loginout_attach_terminal - a session created on a network terminal (RTAn:,
+ * by $CREPRC(LOGINOUT, RTAn:)) is bound to the executive's terminal driver
+ * here, while LOGINOUT still runs as SYSTEM (the bind needs CMKRNL): its pty
+ * becomes the unit's port. The console was bound by STARTUP at boot, so on
+ * OPA0: this finds the line already the driver's (SS$_DEVALLOC) and does
+ * nothing. A failure leaves the terminal driverless, and every read on it
+ * then fails honestly (SS$_DEVOFFLINE); nothing falls back to the substrate.
+ */
+static void loginout_attach_terminal(void)
+{
+    struct vms_procinfo pi;
+
+    if (!isatty(STDIN_FILENO))
+        return;
+    memset(&pi, 0, sizeof(pi));
+    if (!(vms_kif_getjpi_self(&pi) & 1) || pi.terminal[0] == '\0')
+        return;
+    (void)vms_kif_tt_attach(STDIN_FILENO, pi.terminal);
+}
+
+/* One terminal-driver read; LOGIN_READ_* (the driver wrote the prompt). */
+static int loginout_tt_read(const char *prompt, char *buf, size_t bufsiz,
+                            uint32_t modifiers, unsigned timeout_sec)
+{
+    /* P5 is a longword: the prompt must sit at a 32-bit address, which
+     * LOGINOUT's static data does (P0) and its stack need not. */
+    static char pbuf[64];
+    uint16_t iosb[4];
+    uint32_t st, func;
+    size_t plen = prompt ? strlen(prompt) : 0, n;
+
+    if (plen > sizeof(pbuf))
+        plen = sizeof(pbuf);
+    if (plen)
+        memcpy(pbuf, prompt, plen);
+    fflush(stdout);
+    func = (plen ? IO$_READPROMPT : IO$_READVBLK) | modifiers |
+           (timeout_sec ? IO$M_TIMED : 0);
+    memset(iosb, 0, sizeof(iosb));
+    st = sys$qiow(0, lgi_tt_chan, func, iosb, NULL, 0, buf, (uint32_t)(bufsiz - 1),
+                  timeout_sec, 0, plen ? (uint32_t)(uintptr_t)pbuf : 0, (uint32_t)plen);
+    if (st & 1)
+        st = iosb[0];
+    n = iosb[1] < bufsiz - 1 ? iosb[1] : bufsiz - 1;
+    buf[(st & 1) ? n : 0] = '\0';
+    if (st == SS$_TIMEOUT) {
+        /* The oracle's report (rd vms-29e): the prompt line ended, then the
+         * two lines -- written through the same driver. */
+        static const char report[] =
+            "\r\n" LOGIN_MSG_CMDINPUT "\r\n" LOGIN_MSG_TIMEOUT "\r\n";
+        static char rbuf[sizeof(report)];
+        memcpy(rbuf, report, sizeof(report));
+        (void)sys$qiow(0, lgi_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0, rbuf,
+                       sizeof(report) - 1, 0, 0, 0, 0);
+        return LOGIN_READ_TIMEOUT;
+    }
+    if (!(st & 1))
+        return LOGIN_READ_EOF;
+    if (iosb[3] && iosb[2] == 26 && n == 0)
+        return LOGIN_READ_EOF;          /* ^Z: end of input */
+    return LOGIN_READ_OK;
+}
+
+static int read_prompt_response(const char *prompt, char *buf, size_t bufsiz,
+                                int hide)
+{
+    int rc;
+
+    if (loginout_tt_chan()) {
+        rc = loginout_tt_read(prompt, buf, bufsiz,
+                              hide ? IO$M_NOECHO : IO$M_PURGE,
+                              LOGIN_INPUT_TIMEOUT_SEC);
+    } else {
+        fputs(prompt, stdout);
+        fflush(stdout);
+        rc = login_read_line_timed(STDIN_FILENO, buf, bufsiz, hide,
                                    STDOUT_FILENO, LOGIN_INPUT_TIMEOUT_SEC);
+    }
     if (rc != LOGIN_READ_OK)
         return rc;
 
@@ -670,70 +790,44 @@ static int console_login(void)
      * JOB_CONTROL respawn the session forever.
      */
     if (loginout_at_operator_terminal()) {
-        char c;
-        ssize_t n;
-
-        for (;;) {
-            n = read(STDIN_FILENO, &c, 1);
-            if (n < 0 && (errno == EINTR || errno == EAGAIN))
-                continue;
-            if (n <= 0)
-                return 1;              /* EOF: connection closed, nobody there */
-            if (c == '\n')
-                break;
-        }
-        /*
-         * DISCARD TYPE-AHEAD QUEUED DURING THE (LONG) BOOT (vms-3ab8).
-         *
-         * The wake design above invites the operator to strike RETURN while
-         * the slow console boot is still running -- and an operator naturally
-         * hits it several times. Every RETURN typed before this image started
-         * reading sits in the terminal's type-ahead buffer; the wake loop
-         * consumes exactly one line (up to the first '\n'), leaving the rest.
-         * Without this flush those leftover RETURNs are read by the fgets()
-         * below as a burst of EMPTY usernames, each of which reprints
-         * "Username: " with no wait -- machine-gunning ~20 prompts onto a
-         * single line before the terminal finally blocks (the exact defect
-         * the operator hit in the 0.4 demo boot). The queued RETURNs were
-         * already echoed by the tty at type-time, during the boot output, so
-         * the reprompts have no newline of their own and pile up on one line.
-         *
-         * Flushing the input queue after the single wake keystroke is consumed
-         * makes the first real "Username:" prompt block for the operator's
-         * NEXT keystroke, as a VMS operator console does. This is OVMX
-         * console-handling behaviour (CLAUDE.md Rule 8), not a claimed
-         * byte-level VMS terminal-driver detail: stdin is unbuffered
-         * (setvbuf _IONBF above), so there is no stdio buffer to reconcile.
-         *
-         * WHY NOT tcflush() ALONE any more (vms-3e9). tcflush() empties the
-         * TERMINAL's input queue and is a no-op on a descriptor the substrate
-         * does not present as a terminal -- so on the VAX rail's SIMH serial
-         * console the queued RETURNs survived it and the machine-gun came back
-         * on one arch only. login_drain_typeahead() still issues the tcflush
-         * where there is a tty to flush, and then drains whatever is
-         * immediately readable with a zero-timeout poll(), which works the same
-         * on a tty, a serial line and a pipe.
-         */
-        login_drain_typeahead(STDIN_FILENO, 64 * 1024);
-        /*
-         * RE-ENABLE ECHO for the real "Username:" prompt (vms-dec). PID 1
-         * turned the console's ECHO OFF for the whole boot so the operator's
-         * RETURN keystrokes, mashed while waiting on the slow console, were not
-         * echoed as blank-line "newline spam" (boot_console_disable_echo() in
-         * src/ovmx_init/ovmx_init.c). This is the point where the operator's
-         * typing must show again, so turn ECHO back on. Idempotent and
-         * console-only (inside the operator-terminal guard): a scripted/piped
-         * LOGINOUT never reaches here, and on a descriptor with no termios at
-         * all the tcgetattr() simply fails and nothing is changed. If the
-         * console still had ECHO on (some substrate where PID 1's disable did
-         * not take), this is a harmless no-op and the prompt still echoes.
-         */
-        {
-            struct termios t;
-            if (tcgetattr(STDIN_FILENO, &t) == 0) {
-                t.c_lflag |= (tcflag_t)ECHO;
-                tcsetattr(STDIN_FILENO, TCSANOW, &t);
+        if (loginout_tt_chan()) {
+            /* The wake is a terminal-driver read too (rd vms-f8c): it ends at
+             * the operator's RETURN. Whatever else was struck during the boot
+             * waited unechoed in the type-ahead buffer; the Username: read
+             * purges it (IO$M_PURGE), so no burst of empty user names follows
+             * (vms-3ab8) -- and nothing typed during the boot was echoed. */
+            static char wbuf[128];
+            for (;;) {
+                /* the wake keystroke is not echoed (vms-dec: no blank
+                 * line per RETURN struck) */
+                int wr = loginout_tt_read(NULL, wbuf, sizeof(wbuf),
+                                          IO$M_NOECHO | IO$M_TRMNOECHO, 0);
+                if (wr == LOGIN_READ_EOF)
+                    return 1;          /* the line went away: nobody there */
+                if (wr == LOGIN_READ_OK)
+                    break;
             }
+        } else {
+            char c;
+            ssize_t n;
+
+            for (;;) {
+                n = read(STDIN_FILENO, &c, 1);
+                if (n < 0 && (errno == EINTR || errno == EAGAIN))
+                    continue;
+                if (n <= 0)
+                    return 1;          /* EOF: connection closed, nobody there */
+                if (c == '\n')
+                    break;
+            }
+            /*
+             * DISCARD TYPE-AHEAD QUEUED DURING THE (LONG) BOOT (vms-3ab8):
+             * every RETURN typed before this image started reading would
+             * otherwise be read as a burst of EMPTY usernames. On a terminal
+             * the driver's IO$M_PURGE does this (above); a plain descriptor
+             * is drained here, substrate-independently (vms-3e9).
+             */
+            login_drain_typeahead(STDIN_FILENO, 64 * 1024);
         }
     }
 
@@ -770,9 +864,7 @@ static int console_login(void)
     while (attempts < MAX_ATTEMPTS) {
         /* Prompt for username. Bounded by the LGI-style idle deadline: on
          * expiry the session is disconnected silently (read_prompt_response). */
-        printf("Username: ");
-        fflush(stdout);
-        if (read_prompt_response(username, sizeof(username), 0) != LOGIN_READ_OK)
+        if (read_prompt_response("Username: ", username, sizeof(username), 0) != LOGIN_READ_OK)
             return 1;  /* EOF, or the idle deadline expired */
         str_upcase(username);
 
@@ -780,9 +872,7 @@ static int console_login(void)
             continue;
 
         /* Prompt for password (echo suppressed), same deadline. */
-        printf("Password: ");
-        fflush(stdout);
-        if (read_prompt_response(password, sizeof(password), 1) != LOGIN_READ_OK)
+        if (read_prompt_response("Password: ", password, sizeof(password), 1) != LOGIN_READ_OK)
             return 1;
 
         /*
@@ -1147,6 +1237,10 @@ int main(int argc, char *argv[])
      * operator console and DECnet SET HOST both re-challenge on their own
      * terminal, so their sessions carry no note and reach console_login().
      */
+    /* The session's terminal is the executive terminal driver's (rd vms-f8c):
+     * bind an RTAn: pty now, while LOGINOUT still holds CMKRNL. */
+    loginout_attach_terminal();
+
     {
         char netuser[VMS_USERNAME_SIZE];
         if (network_login_conveyed(netuser, sizeof(netuser)))

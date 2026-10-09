@@ -790,3 +790,53 @@ out:
 		return -EFAULT;
 	return 0;
 }
+
+/*
+ * VMS_IOCTL_TT_SENSE (rd vms-f8c): what terminal `devnam`'s class driver is
+ * doing, for a network port relaying its reads (the DECnet CTERM host). The
+ * echo answer is the driver's own decision -- the read's IO$M_NOECHO, the
+ * terminal's ECHO characteristic -- so a remote asked to echo echoes exactly
+ * what the driver would, and a Password: read is never echoed remotely. CMKRNL,
+ * like the bind: this is the port side of the class/port interface.
+ */
+long vms_ioctl_tt_sense(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_tt_sense_args a;
+	struct vms_tt *tt;
+	uint64_t dc;
+
+	memset(&a, 0, sizeof(a));
+	if (exec_copyin(&a, (const void *)arg, sizeof(a)))
+		return -EFAULT;
+	a.devnam[sizeof(a.devnam) - 1] = '\0';
+	a.state = 0;
+	a.status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);
+	if (!(a.status & 1))
+		goto out;
+	tt = vms_devtab_tt_by_name(a.devnam);
+	if (!tt) {
+		a.status = SS__NORMAL;          /* no port: state 0 */
+		goto out;
+	}
+	dc = tt_devchar(tt->dev);
+	exec_lock(&tt->lock);
+	if (!tt->detached) {
+		a.state |= VMS_TT_SENSE_BOUND;
+		if (tt->passall)
+			a.state |= VMS_TT_SENSE_PASSALL;
+		if (tt->rd_active) {
+			a.state |= VMS_TT_SENSE_READING;
+			if (!tt->passall && tt_echoing(tt))
+				a.state |= VMS_TT_SENSE_ECHOING;
+		} else if (!tt->passall && (dc & VMS_TTC_ECHO)) {
+			a.state |= VMS_TT_SENSE_ECHOING;
+		}
+	}
+	exec_unlock(&tt->lock);
+	vms_tt_release(tt);
+	a.status = SS__NORMAL;
+out:
+	if (exec_copyout((void *)arg, &a, sizeof(a)))
+		return -EFAULT;
+	return 0;
+}

@@ -1791,6 +1791,22 @@ uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode)
     return args.status;
 }
 
+uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state)
+{
+    struct vms_tt_sense_args args;
+
+    if (!devnam || !state)
+        return 0x00000014; /* SS$_BADPARAM */
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TT_SENSE, &args);
+
+    *state = args.state;
+    return args.status;
+}
+
 /*
  * vms_kif_tt_attach - make the executive the terminal driver of the substrate
  * tty open on `ttyfd`, as terminal unit `devnam` (OPA0:, RTAn:). The transport

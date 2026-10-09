@@ -2332,6 +2332,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_tt_write(proc, arg);
     case VMS_IOCTL_TT_SETMODE:
         return vms_ioctl_tt_setmode(proc, arg);
+    case VMS_IOCTL_TT_SENSE:
+        return vms_ioctl_tt_sense(proc, arg);
     case VMS_IOCTL_ALLOC:
         return vms_ioctl_alloc(proc, arg);
     case VMS_IOCTL_DALLOC:

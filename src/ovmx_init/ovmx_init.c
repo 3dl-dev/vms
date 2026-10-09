@@ -51,7 +51,6 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <termios.h>
 
 /* vms/pcb.h and vms/privs.h are DELIBERATELY NOT INCLUDED (vms-9b7). PID 1
  * no longer seeds a private PCB and no longer parses a privilege string --
@@ -560,42 +559,45 @@ static void report_kernel_taint(void)
  * tree the way the deleted code did.
  */
 /*
- * BOOT-CONSOLE ECHO SILENCE (vms-dec).
+ * THE CONSOLE'S TERMINAL DRIVER (rd vms-f8c, epic vms-4eba; supersedes vms-dec's
+ * boot-time ECHO toggle).
  *
- * The operator console (OPA0: -> /dev/console) is a cooked-mode tty with ECHO
- * on. During the slow boot no login prompt is visible yet, so an operator
- * naturally strikes RETURN several times -- and the tty echoes each keystroke
- * at type-time as a BLANK LINE, scattered through the boot narration: the
- * operator-reported "newline spam". PID 1 owns the console for the WHOLE boot
- * -- LOGINOUT is not forked until STARTUP.COM's tail (JOB_CONTROL, seen as the
- * final %RUN-S-PROC_ID line) -- so the echo has to be silenced HERE, not in
- * LOGINOUT, to cover the entire window the operator is hammering. Silencing it
- * only inside LOGINOUT's wake catches almost none of the mashing, because the
- * mashing happens long before LOGINOUT exists.
+ * On VMS the console OPA0: is driven by the terminal class driver from system
+ * initialization on: a character the operator types while nothing is reading
+ * the terminal -- the RETURNs struck at a slow boot -- waits UNECHOED in the
+ * type-ahead buffer, and is echoed only when a read consumes it. OVMX used to
+ * approximate that by switching the substrate tty's ECHO off for the boot and
+ * having LOGINOUT switch it back on; both toggles are gone. Instead, the moment
+ * the executive is attached, PID 1 makes the executive the console's terminal
+ * driver: it puts the console tty under the executive's line discipline and
+ * binds it to OPA0: (vms_kif_tt_attach; the executive requires CMKRNL, which
+ * PID 1 holds). From then on every byte typed at the console goes to the
+ * executive's type-ahead buffer, and every read -- the SYSBOOT> prompt,
+ * LOGINOUT's, DCL's -- is the executive's.
  *
- * ECHO gates INPUT echo only: the boot's own OUTPUT is untouched. LOGINOUT
- * RE-ENABLES ECHO right before it prints "Username:" (console_login() in
- * tools/vms_login.c), so the operator's typed username shows normally. termios
- * is per-tty device state shared across the exec/fork chain that reaches the
- * same /dev/console, so clearing it here persists until LOGINOUT restores it.
- *
- * OVMX console-handling behaviour (CLAUDE.md Rule 8), not a claimed VMS
- * terminal-driver byte detail. Best-effort: never blocks or fails the boot.
- * Deliberately NOT applied across the conversational SYSBOOT> prompt, which
- * must keep echoing the commands the operator types there; it is applied on
- * that path only after the prompt hands over, before the boot narration.
+ * The descriptor stays open for the life of the system: the binding lives as
+ * long as the console tty is open. A console the executive cannot drive is a
+ * system with no VMS terminal: that halts, it is not papered over (Rule 9).
  */
-static void boot_console_disable_echo(void)
+static int console_tt_fd = -1;
+
+static void console_attach_terminal_driver(void)
 {
-    int fd = open("/dev/console", O_RDWR | O_NOCTTY);
-    if (fd < 0)
+    uint32_t st;
+    int fd;
+
+    if (console_tt_fd >= 0)
         return;
-    struct termios t;
-    if (tcgetattr(fd, &t) == 0) {
-        t.c_lflag &= ~(tcflag_t)ECHO;
-        tcsetattr(fd, TCSANOW, &t);
+    fd = open("/dev/console", O_RDWR | O_NOCTTY);
+    if (fd < 0)
+        ovmx_exec_halt("console terminal OPA0: did not open", strerror(errno));
+    st = vms_kif_tt_attach(fd, "OPA0:");
+    if (!(st & 1) && st != SS$_DEVALLOC) {
+        char why[64];
+        snprintf(why, sizeof(why), "status %%X%08X", (unsigned)st);
+        ovmx_exec_halt("terminal driver did not attach the console OPA0:", why);
     }
-    close(fd);
+    console_tt_fd = fd;
 }
 
 static void bare_metal_init(void)
@@ -637,12 +639,6 @@ static void bare_metal_init(void)
         /* ---- Flagless boot: EXACTLY the code that stood here before
          * this item, unchanged in content and order. ---- */
 
-        /* Silence the console's echo of operator RETURN keystrokes for the
-         * duration of the boot (vms-dec) -- before the first narration line
-         * below, so the whole hammering window is covered. LOGINOUT re-enables
-         * ECHO at its "Username:" prompt. */
-        boot_console_disable_echo();
-
         /* NO hardcoded sethostname() HERE (vms-b6a7: "the hardcoded OVMX
          * hostname DIES"). The real node name is SYS$SYSTEM:OVMXVMSSYS.PAR's
          * SCSNODE parameter, and that file is ON the system disk --
@@ -654,6 +650,10 @@ static void bare_metal_init(void)
          *
          * The executive comes up before anything else runs. */
         executive_attach();
+        /* The executive drives the console from here on (rd vms-f8c): the
+         * operator's RETURNs struck during the boot wait unechoed in OPA0:'s
+         * type-ahead buffer instead of echoing as blank lines (vms-dec). */
+        console_attach_terminal_driver();
 
         /* BANNER-FIRST (vms-1fb): SYSBOOT has now handed over -- the
          * executive is attached, and this is the earliest point in the
@@ -753,6 +753,9 @@ static void bare_metal_init(void)
      */
     executive_announce_deferred = 1;   /* attach silently; announce after SYSBOOT> */
     executive_attach();
+    /* The SYSBOOT> dialogue itself is read through the executive's terminal
+     * driver (rd vms-f8c): echo as the operator's characters are read. */
+    console_attach_terminal_driver();
 
     if (!ovmx_boot_system_disk_present()) {
         char msg[128];
@@ -786,11 +789,9 @@ static void bare_metal_init(void)
     conversational_boot_result_valid = 1;
 
     /* SYSBOOT> has handed over: from here the boot narration prints and the
-     * operator may be hammering RETURN waiting for the login. Silence the
-     * console echo now (vms-dec) -- AFTER the prompt above, which had to keep
-     * echoing the commands the operator typed into it. LOGINOUT re-enables
-     * ECHO at its "Username:" prompt. */
-    boot_console_disable_echo();
+     * operator may be hammering RETURN waiting for the login. Those keystrokes
+     * wait unechoed in OPA0:'s type-ahead buffer -- the executive has driven
+     * the console since executive_attach() (rd vms-f8c). */
 
     /* SYSBOOT has handed over -- emit the deferred narration in the flagless
      * branch's order (vms-1fb): the executive-attach line (already attached

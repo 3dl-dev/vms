@@ -133,5 +133,6 @@ struct vms_proc;
 long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_setmode(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_tt_sense(struct vms_proc *proc, unsigned long arg);
 
 #endif /* VMS_TT_H */

@@ -233,6 +233,18 @@ export const newObservations = () => ({
   panel_started: {}, panel_watchdog_fired: {},
   // NetBSD boot output seen on the OVMX/VAX node's raw console (rd vms-553).
   substrate_noise: {},
+  // rd vms-4ff: Node A is the qemu-wasm node, and it had NO counterpart to the
+  // pcjs nodes' panel_started/panel_watchdog_fired above. Its own node.html
+  // wrapper publishes worker-level state on window.__nodeState -- whether the
+  // worker was spawned, whether the guest ever wrote to the console, whether
+  // the qemu module halted or aborted, how many frames the guest actually put
+  // on the wire -- and the gate read NONE of it, only consoleText. So a Node A
+  // that stopped was recorded as "a console that ends at %OVMX-I-MOUNTED" and
+  // nothing else: a worker that aborted, a worker that errored, and a guest
+  // still grinding through the ACP staging phase were indistinguishable in the
+  // evidence, which is why two V0.7-7 failures could not be root-caused from
+  // what the run kept. Observed, monotonic, never inferred.
+  nodeA_worker: {},
 });
 
 // A SILENT never-start: the raw console stayed empty (nothing to show a
@@ -246,6 +258,76 @@ export const newObservations = () => ({
 export function silentNeverStarts(R, pcjsNodes) {
   return pcjsNodes.filter((w) =>
     !(R.transcript[w] || '').length && !R.panel_started[w] && !R.panel_watchdog_fired[w]);
+}
+
+// ---- Node A's own worker state (rd vms-4ff) -------------------------------
+//
+// The three groups of window.__nodeState fields node.html publishes for the
+// qemu-wasm node (demo/cluster/node.html in openvmx-site). Named here so the
+// gate records the node's OWN report of itself and not a guess from its
+// console: a flag that latched, a counter that moved, a fault it declared.
+export const NODEA_FLAGS = ['workerSpawned', 'pipeReady', 'firstOut', 'acpOk'];
+// workerTicks is the worker's OWN event-loop heartbeat (1 Hz, node-worker.js),
+// and it is a statement about the WORKER, not the guest: the qemu-wasm module
+// can hold that thread between yields. Frozen ticks say this worker is not being
+// scheduled; ticks advancing against a console that has not moved say it is, and
+// the guest is not printing. Absent on a deploy older than rd vms-4ff, which
+// reads as absent -- never as 0.
+export const NODEA_COUNTERS = ['nicTxCount', 'nicRxCount', 'nicRxDeliverOk', 'workerTicks'];
+export const NODEA_FAULTS = ['halt', 'workerError'];
+
+// Fold one sample of Node A's __nodeState into the observations, in place.
+// MONOTONIC for the same reason the transcript is: flags latch, counters only
+// grow, and the FIRST fault seen is kept -- a frame that reloads (or a worker
+// that stops answering) must not erase a halt it already reported.
+export function observeNodeAWorker(R, st) {
+  if (!st) return R;
+  const W = (R.nodeA_worker = R.nodeA_worker || {});
+  for (const k of NODEA_FLAGS) if (st[k]) W[k] = true;
+  for (const k of NODEA_COUNTERS) {
+    const n = Number(st[k]);
+    if (Number.isFinite(n)) W[k] = Math.max(W[k] || 0, n);
+  }
+  for (const k of NODEA_FAULTS) if (st[k] && !W[k]) W[k] = String(st[k]).slice(0, 200);
+  return R;
+}
+
+// The last line a console actually printed -- what a stalled node ends on.
+// Trailing blank lines and the cursor's own line are not output (joinScrollback
+// has the long version of why).
+export function lastLineOf(text) {
+  const lines = String(text || '').split('\n')
+    .map((s) => s.replace(/[\s█]+$/u, '')).filter((s) => s.length);
+  return lines.length ? lines[lines.length - 1] : '';
+}
+
+// Why Node A has nothing on the wire, IN ITS OWN REPORT OF ITSELF -- or null
+// when it is talking (then there is nothing to explain).
+//
+// Every branch is a reading, not a diagnosis: the gate has twice named a cause
+// its evidence did not carry (this file's header), and "Node A stalled" is
+// exactly that kind of sentence. What it may say is which of the node's own
+// facts held: the worker declared an error, the module halted, the console
+// never produced a byte, or the console stopped at a named line with the
+// worker reporting neither fault.
+export function nodeAStallWhy(R) {
+  const sca = (R.sca || {}).OVMXA || 0;
+  if (sca > 0) return null;
+  const W = R.nodeA_worker || {};
+  const tail = lastLineOf((R.transcript || {}).OVMXA);
+  if (W.workerError) return `Node A's worker declared an error: ${JSON.stringify(W.workerError)}`;
+  if (W.halt) return `Node A's qemu module halted: ${JSON.stringify(W.halt)}`;
+  if (!W.workerSpawned && !Object.keys(W).length) {
+    return 'Node A\'s worker state was never readable (its node.html frame answered nothing)';
+  }
+  if (!W.firstOut) {
+    return `Node A's worker was spawned but the guest never wrote to the console ` +
+           `(pipeReady=${!!W.pipeReady})`;
+  }
+  const beat = Number.isFinite(W.workerTicks)
+    ? `, worker event-loop ticks=${W.workerTicks}` : ', worker event-loop ticks not reported';
+  return `Node A's console stops after ${JSON.stringify(tail)} with its worker reporting ` +
+         `no halt and no error (nicTx=${W.nicTxCount || 0}, ACP mount seen=${!!W.acpOk}${beat})`;
 }
 
 // Is the OVMX/VAX node's raw console free of NetBSD boot output (rd vms-553)?
@@ -280,6 +362,10 @@ export function verdictOf(R) {
   for (const w of NODES) if ((R.restarts || {})[w]) why.push(`${w} restarted ${R.restarts[w]}x`);
   const quiet = NODES.filter((w) => !(R.sca || {})[w]);
   if (quiet.length) why.push(`no SCA frames from ${quiet.join(',')}`);
+  // rd vms-4ff: "no SCA frames from OVMXA" is where this gate's reports used to
+  // stop. Node A's own worker state says more, so it is said here.
+  const aWhy = nodeAStallWhy(R);
+  if (aWhy) why.push(aWhy);
   if (Object.keys(R.lost || {}).length) why.push(`lost: ${JSON.stringify(R.lost)}`);
   if (Object.keys(R.lost_unnamed || {}).length) {
     why.push(`unnamed connection losses: ${JSON.stringify(R.lost_unnamed)}`);

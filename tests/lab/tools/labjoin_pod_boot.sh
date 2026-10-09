@@ -128,12 +128,23 @@ send() { printf '%s\r' "$1" >&4; }
 # ovmx.flags=0,1 halts at SYSBOOT> pre-banner so we can author the cluster
 # identity (SET/WRITE/CONTINUE), exactly as tests/qemu/test_sysboot_cluster_
 # params_e2e.sh does. -serial stdio carries the console; stdin comes from the FIFO.
+#
+# no_timer_check (rd vms-4ff): this is a TCG boot inside a pod that is sharing
+# its cores with everything else on the node -- the exact condition in which the
+# kernel's 8254-to-IO-APIC verification mis-measures. check_timer()'s
+# timer_irq_works() demands five SERVICED IRQ0 ticks inside a window bounded in
+# TSC CYCLES, i.e. ~18 ms of HOST WALL time, which a slowed software-emulated
+# vCPU cannot deliver; MEASURED (tests/lab/captures/vms-4ff-timer-check-
+# 20261009/) the kernel then silently re-routes IRQ0 off the IO-APIC at ~6x
+# slowdown and panics "IO-APIC + timer doesn't work!" at ~12x, before OVMX
+# prints a line. Upstream Linux sets the same flag itself for the guests it can
+# identify (kvm.c, cpu/vmware.c); its only consumer is that measurement.
 # The DROP_PREFIX (capsh --drop=cap_net_raw -- -c 'exec "$@"' _) runs the whole
 # QEMU subtree with CAP_NET_RAW stripped; empty when OVMX_DROP_NET_RAW=0.
 # shellcheck disable=SC2086
 "${DROP_PREFIX[@]}" timeout -k 15 "$BOOT_TO" "$QEMU" -accel tcg \
     -kernel "$KERNEL" -initrd "$INITRD" \
-    -nographic -append "console=ttyS0 loglevel=3 net.ifnames=0 ovmx.flags=0,1" \
+    -nographic -append "console=ttyS0 loglevel=3 no_timer_check net.ifnames=0 ovmx.flags=0,1" \
     -m 512M -smp 1 -nodefaults -serial stdio \
     "${NET_ARGS[@]}" \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \

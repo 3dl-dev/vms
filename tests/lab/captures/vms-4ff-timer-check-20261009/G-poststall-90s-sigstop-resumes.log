@@ -1,0 +1,26 @@
+[   0.216] c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+[   0.240] iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFCADB0+0EF0ADB0 CA00
+[   0.247] Press Ctrl-B to configure iPXE (PCI 00:03.0)...
+[   0.298] Booting from ROM...
+[   5.574] c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+[   5.788] %OVMX-I-EXEC, VMS executive attached on /dev/vms
+[   5.794]     OpenVMX V0.7-7 - OpenVMS-compatible
+[   5.795]      9-OCT-2026 04:53:23.71
+[   5.800] %OVMX-I-SYSDISK, mounting system disk VDA0:
+[   5.808] %OVMX-I-MOUNTED, system disk VDA0: mounted
+[  59.160] %OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[  59.180] [   57.300755] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[  59.187] [   57.307507] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[  62.226] %CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+[  62.226] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[  62.227] %STDRV-I-STARTUP, OpenVMX startup begun at  9-OCT-2026 04:54:20.15
+[  78.061] %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[  97.727] The OVMX system is now executing the site-specific startup commands.
+[  97.796] %INSTALL-I-ADDED, DECC$SHR.EXE installed
+[  97.821] %INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+[  97.836] %INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+[  97.848] %INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+[  97.859] %INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+[  97.871] %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+[  97.888] %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+[  98.076] %RUN-S-PROC_ID, identification of created process is 10000003

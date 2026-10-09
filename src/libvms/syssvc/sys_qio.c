@@ -1275,6 +1275,8 @@ static int qio_chan_is_terminal(uint16_t chan, uint32_t *exec_chan_out,
     return 1;
 }
 
+void vms$$deliver_pending_asts(void);        /* sys_ast.c */
+
 static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint16_t w3)
 {
     if (!iosb_ptr) return;
@@ -1320,6 +1322,25 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     }
     case IO$_SETMODE:
     case IO$_SETCHAR: {
+        if (base == IO$_SETMODE && (func & (IO$M_CTRLYAST | IO$M_CTRLCAST | IO$M_OUTBAND))) {
+            /* OUT-OF-BAND ASTs (rd vms-f0fb; I/O User's Reference, "Terminal
+             * Driver"): P1 = the AST routine (0 disarms), P3 = its access
+             * mode; CTRL/Y and CTRL/C: P2 = the AST parameter; OUTBAND: P2 =
+             * the address of a quadword whose second longword is the mask of
+             * control characters, and the AST parameter is the character. */
+            uint32_t which = (func & IO$M_CTRLYAST) ? VMS_TT_OOB_CTRLY
+                           : (func & IO$M_CTRLCAST) ? VMS_TT_OOB_CTRLC
+                           : VMS_TT_OOB_OUTBAND;
+            uint32_t mask = 0;
+            if (which == VMS_TT_OOB_OUTBAND && p2)
+                mask = ((const uint32_t *)(uintptr_t)p2)[1];
+            uint32_t st = vms_kif_tt_oobast(ec, which, (uint64_t)(uintptr_t)p1,
+                                            which == VMS_TT_OOB_OUTBAND ? 0 : p2,
+                                            mask, p3 & 3u);
+            if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+            tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0);
+            break;
+        }
         if (!p1 || p2 < 8) {
             /* the P2-selector form (vms-f54): IO$K_TT_PASSALL hands every
              * byte through unedited, unechoed (a SET HOST CTERM session);
@@ -1390,6 +1411,16 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
             ra.promptsz = p6;
         }
         uint32_t st = vms_kif_tt_read(&ra);
+        /* An AST the driver queued for this process (an out-of-band
+         * character) is delivered while the read stays outstanding, then the
+         * read goes on where it was (rd vms-f0fb). */
+        while (ra.oflags & VMS_TT_RDO_ASTPEND) {
+            vms$$deliver_pending_asts();
+            ra.oflags = 0;
+            st = vms_kif_tt_read(&ra);
+        }
+        /* an AST that ended the read (CTRL/Y) runs before $QIOW returns */
+        vms$$deliver_pending_asts();
         if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN) {
             tt_iosb(iosb_ptr, st, 0, 0, 0);
             return st;

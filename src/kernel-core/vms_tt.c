@@ -31,6 +31,7 @@
  */
 #include "vms_internal.h"
 #include "exec_kbackend.h"
+#include "exec_list.h"
 #include "vms_tt.h"
 #include "vms_prot.h"
 
@@ -94,6 +95,21 @@ struct vms_tt {
 	int      pos;              /* TT_POS_FRESH / TT_POS_CR / TT_POS_MID */
 	uint8_t  last;             /* the last byte emitted */
 	int      rec_open;         /* a cooked write's record awaits its '\n' */
+
+	/* OUT-OF-BAND ASTs (rd vms-f0fb), armed through a channel by $QIO
+	 * IO$_SETMODE!IO$M_CTRLYAST / CTRLCAST / OUTBAND. `proc` is valid while
+	 * the arming channel exists: deassigning it (vms_tt_chan_gone, under
+	 * tt->lock) clears the entry before the process can be freed. */
+	struct tt_oob {
+		struct vms_proc *proc;     /* NULL: not armed */
+		pid_t    owner;            /* the arming channel: its process ... */
+		uint32_t chan;             /* ... and number */
+		uint64_t astadr, astprm;
+		uint8_t  acmode;
+		uint32_t mask;             /* OUTBAND: control characters */
+	} oob[3];                      /* VMS_TT_OOB_CTRLY / _CTRLC / _OUTBAND, minus 1 */
+	int      rd_astpend;       /* an AST for the reader's process is queued */
+	int      rd_disturbed;     /* output broke through the read: redisplay */
 };
 
 /* ------------------------------------------------------------------ */
@@ -549,6 +565,7 @@ void vms_tt_detach(struct vms_tt *tt)
 
 	exec_lock(&tt->lock);
 	tt->detached = 1;
+	memset(tt->oob, 0, sizeof(tt->oob)); /* no line, no out-of-band */
 	tt->olen = 0;                        /* nowhere to send it */
 	if (tt->rd_active)
 		tt_complete(tt, SS__HANGUP, 0, 0);
@@ -590,6 +607,61 @@ void vms_tt_set_passall(struct vms_tt *tt, int on)
 }
 
 /*
+ * Queue an AST for `proc` -- the executive's own AST queue, exactly as a
+ * mailbox write-attention or a lock completion does (vms_mbx.c, vms_lock.c):
+ * atomic allocation (tt->lock is held), proc->ast[mode].lock innermost, the
+ * arrival wake after it is dropped. A full queue drops it (the quota is the
+ * process's). Returns 1 when queued.
+ */
+static int tt_queue_ast(struct vms_proc *proc, uint64_t astadr, uint64_t astprm,
+			uint8_t acmode)
+{
+	struct vms_ast_entry *ast = exec_zalloc_atomic(sizeof(*ast));
+	struct vms_ast_state *st;
+
+	if (!ast)
+		return 0;
+	ast->astadr = astadr;
+	ast->astprm = astprm;
+	ast->acmode = acmode;
+	st = &proc->ast[acmode];
+	exec_lock(&st->lock);
+	if (st->count >= VMS_AST_MAX_PER_MODE) {
+		exec_unlock(&st->lock);
+		exec_free(ast);
+		return 0;
+	}
+	exec_list_add_tail(&ast->list, &st->pending);
+	st->count++;
+	exec_unlock(&st->lock);
+	vms_ast_notify_arrival(proc);
+	return 1;
+}
+
+/* Fire out-of-band entry `o`, under tt->lock. A process waiting in this
+ * terminal's read is let go to deliver it (the read stays outstanding). */
+static void tt_oob_fire(struct vms_tt *tt, struct tt_oob *o, uint64_t astprm)
+{
+	if (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))
+		return;
+	if (tt->rd_busy && tt->rd_owner == (const void *)o->proc) {
+		tt->rd_astpend = 1;
+		exec_cv_broadcast(&tt->cv);
+	}
+}
+
+/* *INTERRUPT* -- what the driver shows for CTRL/Y and CTRL/C, with an AST
+ * armed or not (probes OB.PROMPT Y1/Y3/C2/N2, VAX V7.3): a new line, the word,
+ * CR LF; the line after it is not a fresh one (the next prompt starts with its
+ * own CR LF). */
+static void tt_echo_interrupt(struct vms_tt *tt)
+{
+	tt_nl(tt);
+	tt_out(tt, "*INTERRUPT*\r\n", 13);
+	tt->pos = TT_POS_MID;
+}
+
+/*
  * vms_tt_receive - the port hands over received bytes.
  */
 void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
@@ -606,16 +678,47 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 		if (!tt->passall) {
 			/* OUT-OF-BAND: acted on when TYPED, read or no read. */
 			if (c == TT_CTRL('Y') || c == TT_CTRL('C')) {
-				/* rd vms-f0fb delivers these as ASTs; until then the
-				 * port raises the substrate interrupt it always did.
-				 * The type-ahead is discarded, and a read in progress
-				 * ends SS$_ABORT here, deterministically, rather than
-				 * by the signal that follows. */
+				/*
+				 * CTRL/Y, CTRL/C (rd vms-f0fb). The driver echoes
+				 * *INTERRUPT* and discards the type-ahead. With a
+				 * CTRL/C AST armed a CTRL/C fires it; otherwise, and
+				 * for CTRL/Y, the CTRL/Y AST. A fired AST is spent
+				 * (re-armed by its owner) and the read in progress
+				 * ends SS$_ABORT: its line is gone. With NO AST
+				 * armed nothing is interrupted -- the character ends
+				 * the read like a terminator, its line intact (probe
+				 * OB.PROMPT N2: SET NOCONTROL=Y, "AB" ^Y -> DCL runs
+				 * AB).
+				 */
+				struct tt_oob *o = NULL;
+
+				tt_echo_interrupt(tt);
 				tt_ta_purge(tt);
-				if (tt->rd_active)
-					tt_complete(tt, SS__ABORT, 0, 0);
-				if (nintr < sizeof(intr))
-					intr[nintr++] = c;
+				if (c == TT_CTRL('C') && tt->oob[VMS_TT_OOB_CTRLC - 1].proc)
+					o = &tt->oob[VMS_TT_OOB_CTRLC - 1];
+				else if (tt->oob[VMS_TT_OOB_CTRLY - 1].proc)
+					o = &tt->oob[VMS_TT_OOB_CTRLY - 1];
+				if (o) {
+					struct tt_oob fire = *o;
+
+					o->proc = NULL;          /* spent */
+					if (tt->rd_active)
+						tt_complete(tt, SS__ABORT, 0, 0);
+					tt_oob_fire(tt, &fire, fire.astprm);
+					/* the substrate interrupt still stops an
+					 * image the AST owner is waiting on */
+					if (nintr < sizeof(intr))
+						intr[nintr++] = c;
+				} else if (tt->rd_active) {
+					tt_complete(tt, SS__NORMAL, c, 1);
+				}
+				continue;
+			}
+			if (c < 0x20 && tt->oob[VMS_TT_OOB_OUTBAND - 1].proc &&
+			    (tt->oob[VMS_TT_OOB_OUTBAND - 1].mask & (1u << c))) {
+				/* an out-of-band character: never data, never
+				 * echoed; its AST carries it (stays armed) */
+				tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);
 				continue;
 			}
 			if ((dc & VMS_TTC_TTSYNC) &&
@@ -700,6 +803,8 @@ int vms_tt_readable(struct vms_tt *tt)
 
 static void tt_slot_release(struct vms_tt *tt)
 {
+	tt->rd_astpend = 0;
+	tt->rd_disturbed = 0;
 	tt->rd_busy = 0;
 	tt->rd_done = 0;
 	tt->rd_suspended = 0;
@@ -808,6 +913,21 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 
 	while (!tt->rd_done && !tt->detached) {
 		uint32_t olen = tt->olen;
+
+		if (tt->rd_astpend && req->owner && tt->rd_owner == req->owner) {
+			/* an AST the driver queued for this process (an out-of-
+			 * band character): let the caller deliver it, keeping the
+			 * read outstanding -- the same owner's next read resumes
+			 * it, as after a signal (rd vms-f0fb) */
+			tt->rd_astpend = 0;
+			tt->rd_suspended = 1;
+			tt->rd_susp_ms = exec_ticks_ms();
+			exec_unlock(&tt->lock);
+			tt_flush(tt);
+			tt_put(tt);
+			res->status = SS__NORMAL;
+			return VMS_TT_READ_ASTPEND;
+		}
 
 		if (olen) {                       /* show the prompt/echo first */
 			exec_unlock(&tt->lock);
@@ -943,6 +1063,27 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		if (rc)
 			return rc;
 	}
+
+	/*
+	 * WRITE BREAKTHROUGH (rd vms-f0fb, vms-53a). Output written while a read
+	 * is outstanding -- a CTRL/T status line, a broadcast, another process's
+	 * write -- lands on the read's line; the driver then shows the read
+	 * again: the owed line feed, its prompt, what was typed so far (probe
+	 * OB.PROMPT T2, VAX V7.3: <CR><LF>status<CR><LF><CR><NUL>$ ABC).
+	 */
+	exec_lock(&tt->lock);
+	if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {
+		if (tt->pos == TT_POS_CR && tt_echoing(tt)) {
+			tt_out1(tt, CH_LF);
+			tt->rec_open = 0;
+		}
+		if (tt->promptsz)
+			tt_prompt_out(tt, tt->prompt, tt->promptsz);
+		if (tt_echoing(tt))
+			tt_out(tt, tt->line, tt->len);
+	}
+	exec_unlock(&tt->lock);
+	tt_flush(tt);
 	return 0;
 }
 
@@ -1066,12 +1207,24 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 
 	/* a signal suspends the read; this process's re-entry resumes it */
 	rq.owner = proc;
-	if (vms_tt_read(tt, &rq, line, &r) == -ERESTARTSYS) {
-		vms_tt_release(tt);
-		exec_free(line);
-		if (prompt)
-			exec_free(prompt);
-		return -ERESTARTSYS;            /* no status written: re-enter */
+	{
+		int rrc = vms_tt_read(tt, &rq, line, &r);
+
+		if (rrc == -ERESTARTSYS) {
+			vms_tt_release(tt);
+			exec_free(line);
+			if (prompt)
+				exec_free(prompt);
+			return -ERESTARTSYS;    /* no status written: re-enter */
+		}
+		a.oflags = 0;
+		if (rrc == VMS_TT_READ_ASTPEND) {
+			/* still outstanding: deliver the AST, read again */
+			a.oflags = VMS_TT_RDO_ASTPEND;
+			a.status = SS__NORMAL;
+			a.count = 0;
+			goto out_rel;
+		}
 	}
 	a.status = r.status;
 	a.count = r.count;
@@ -1204,4 +1357,75 @@ out:
 	if (exec_copyout((void *)arg, &a, sizeof(a)))
 		return -EFAULT;
 	return 0;
+}
+
+/*
+ * VMS_IOCTL_TT_OOBAST (rd vms-f0fb): $QIO IO$_SETMODE!IO$M_CTRLYAST /
+ * IO$M_CTRLCAST / IO$M_OUTBAND on a channel to a terminal -- arm (astadr) or
+ * disarm (0) an out-of-band AST (I/O User's Reference, "Terminal Driver").
+ * The AST is delivered at the less privileged of the requested mode and the
+ * caller's. Re-arming replaces the previous entry, whoever armed it.
+ */
+long vms_ioctl_tt_oobast(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_tt_oobast_args a;
+	struct vms_tt *tt;
+	struct tt_oob *o;
+	uint32_t st = SS__NORMAL;
+	uint8_t mode;
+
+	memset(&a, 0, sizeof(a));
+	if (exec_copyin(&a, (const void *)arg, sizeof(a)))
+		return -EFAULT;
+	if (a.which < VMS_TT_OOB_CTRLY || a.which > VMS_TT_OOB_OUTBAND || a.acmode > 3) {
+		a.status = SS__BADPARAM;
+		goto out;
+	}
+	tt = tt_from_chan(proc, a.chan, &st);
+	if (!tt) {
+		a.status = st;
+		goto out;
+	}
+	mode = (uint8_t)a.acmode;
+	exec_lock(&proc->mode_lock);
+	if (mode < proc->current_mode)
+		mode = proc->current_mode;
+	exec_unlock(&proc->mode_lock);
+
+	exec_lock(&tt->lock);
+	o = &tt->oob[a.which - 1];
+	if (a.astadr == 0) {
+		memset(o, 0, sizeof(*o));
+	} else {
+		o->proc = proc;
+		o->owner = proc->linux_pid;
+		o->chan = a.chan;
+		o->astadr = a.astadr;
+		o->astprm = a.astprm;
+		o->acmode = mode;
+		o->mask = a.which == VMS_TT_OOB_OUTBAND ? a.mask : 0;
+	}
+	exec_unlock(&tt->lock);
+	vms_tt_release(tt);
+	a.status = SS__NORMAL;
+out:
+	if (exec_copyout((void *)arg, &a, sizeof(a)))
+		return -EFAULT;
+	return 0;
+}
+
+void vms_tt_chan_gone(struct vms_device *dev, pid_t owner_linux_pid, uint32_t chan)
+{
+	struct vms_tt *tt = vms_tt_of(dev);
+	int i;
+
+	if (!tt)
+		return;
+	exec_lock(&tt->lock);
+	for (i = 0; i < 3; i++)
+		if (tt->oob[i].proc && tt->oob[i].owner == owner_linux_pid &&
+		    tt->oob[i].chan == chan)
+			memset(&tt->oob[i], 0, sizeof(tt->oob[i]));
+	exec_unlock(&tt->lock);
+	vms_tt_release(tt);
 }

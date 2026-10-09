@@ -1810,6 +1810,24 @@ uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode)
     return args.status;
 }
 
+uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
+                           uint64_t astprm, uint32_t mask, uint32_t acmode)
+{
+    struct vms_tt_oobast_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.which = which;
+    args.astadr = astadr;
+    args.astprm = astprm;
+    args.mask = mask;
+    args.acmode = acmode;
+
+    KIF_CALL(VMS_IOCTL_TT_OOBAST, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state)
 {
     struct vms_tt_sense_args args;

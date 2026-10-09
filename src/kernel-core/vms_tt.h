@@ -147,5 +147,15 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_setmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_sense(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_tt_oobast(struct vms_proc *proc, unsigned long arg);
+
+/* A channel to terminal row `dev` is being deassigned (vms_devtab.c): the
+ * out-of-band ASTs armed through it end with it (rd vms-f0fb). */
+void vms_tt_chan_gone(struct vms_device *dev, pid_t owner_linux_pid, uint32_t chan);
+
+/* vms_tt_read's return when it suspended the read so the caller can deliver an
+ * AST the driver queued for it (VMS_TT_RDO_ASTPEND); the same owner's next read
+ * resumes it. */
+#define VMS_TT_READ_ASTPEND 1
 
 #endif /* VMS_TT_H */

@@ -108,9 +108,18 @@ static void *rd_main(void *arg)
     return NULL;
 }
 
+/* Every read is bounded (IO$M_TIMED): a driver that loses input must turn this
+ * suite red, never hang it. BOUND is far above anything a working driver
+ * needs here; a read the test means to time out passes its own, shorter one. */
+#define BOUND 5
+
 static void rd_start(struct rd *r, uint32_t chan, uint32_t flags,
                      const char *prompt, uint32_t timeout)
 {
+    if (!(flags & VMS_TT_RD_TIMED)) {
+        flags |= VMS_TT_RD_TIMED;
+        timeout = BOUND;
+    }
     memset(r, 0, sizeof(*r));
     r->a.chan = chan;
     r->a.flags = flags;
@@ -157,12 +166,12 @@ int main(void)
     st = vms_kif_setprv(VMS_PRV_M_CMKRNL, 0, 0, &prev);
     CHECK(st & 1, "CMKRNL disabled for the negative control");
     st = vms_kif_tt_attach(s, devnam);
+    /* negctl: tt-bind-privilege-ignored */
     CHECK(st == SS_NOPRIV, "binding a line to a terminal unit WITHOUT CMKRNL is SS$_NOPRIV");
     st = vms_kif_setprv(VMS_PRV_M_CMKRNL, 1, 0, &prev);
     CHECK(st & 1, "CMKRNL re-enabled");
     st = vms_kif_tt_attach(s, devnam);
     CHECK(st == SS_NORMAL, "with CMKRNL the line is bound to the unit (SS$_NORMAL)");
-    if (st != SS_NORMAL) printf("      bind status %u\n", st);
     st = vms_kif_tt_attach(s, devnam);
     CHECK(st == SS_DEVALLOC, "binding the same line twice is SS$_DEVALLOC");
 
@@ -173,12 +182,14 @@ int main(void)
     (void)screen(m, scr, sizeof(scr), 100);
     type(m, "abc");
     screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-typeahead-echoed-on-receipt */
     CHECK(scr[0] == '\0', "characters typed with no read outstanding are NOT echoed (held in type-ahead)");
     rd_start(&r, chan, 0, "P> ", 0);
     msleep(200);
     type(m, "\r");
     rd_wait(&r);
     screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-port-input-dropped */
     CHECK(r.st == SS_NORMAL && strcmp(r.data, "abc") == 0 && r.a.term == 13 && r.a.termsz == 1,
           "the read returns the type-ahead 'abc' and the RETURN terminator");
     CHECK(strcmp(scr, "P> abc\r\n") == 0,
@@ -248,7 +259,11 @@ int main(void)
     type(m, "hi\r");
     {
         char b[32] = "";
-        ssize_t k = read(s, b, sizeof(b) - 1);
+        struct pollfd p = { s, POLLIN, 0 };
+        ssize_t k = -1;
+        /* poll first: the line is readable once the type-ahead holds input */
+        if (poll(&p, 1, BOUND * 1000) == 1)
+            k = read(s, b, sizeof(b) - 1);
         b[k > 0 ? k : 0] = '\0';
         screen(m, scr, sizeof(scr), 300);
         CHECK(k == 3 && strcmp(b, "hi\n") == 0, "read(2) on the bound line returns the line with LF for the RETURN");

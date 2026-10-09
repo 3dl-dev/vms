@@ -494,9 +494,8 @@
 # Raised to 183 by the six vms-c6d1 mailbox-protection defects (mbx-prot-read-
 # unchecked, mbx-prot-write-unchecked, mbx-readall-grants-read, crembx-promsk-
 # dropped, mbx-sender-pid-not-stamped, mbx-norswait-ignored; test_syssvc_mbx_prot).
-# Raised to 184 by acp-deaccess-revision-not-recorded (vms-263e; anchors test_syssvc_acp_rw).
-# Raised to 185 by acp-create-dates-not-stamped (vms-263e, folded in from #1560 vms-6f5c;
-# anchors test_syssvc_rms_acp CDT/RDT).
 # Raised to 186 by vms-b71's getlki-grantcount-not-counted (SYS$GETLKI/
 # SYS$GETLKIW's LKI$_GRANTCOUNT; test_syssvc_getlki).
-186
+# Raised to 189 by the terminal class driver's three (rd vms-f8c): tt-typeahead-
+# echoed-on-receipt, tt-bind-privilege-ignored, tt-port-input-dropped (test_kmod_tt).
+189

@@ -2141,6 +2141,25 @@ struct vms_tt_bind_args {
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
 
+/* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
+ * numbers on ILP32 VAX; these are the reference-build values. */
+_Static_assert(sizeof(struct vms_tt_read_args) == 88,
+               "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_tt_write_args) == 24,
+               "struct vms_tt_write_args changed size");
+_Static_assert(sizeof(struct vms_tt_mode_args) == 16,
+               "struct vms_tt_mode_args changed size");
+_Static_assert(sizeof(struct vms_tt_bind_args) == 24,
+               "struct vms_tt_bind_args changed size");
+_Static_assert(VMS_IOCTL_TT_READ == 0xC05856A0u,
+               "VMS_IOCTL_TT_READ encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TT_WRITE == 0xC01856A1u,
+               "VMS_IOCTL_TT_WRITE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TT_SETMODE == 0xC01056A2u,
+               "VMS_IOCTL_TT_SETMODE encodes differently here than on the reference build");
+_Static_assert(VMS_TTIOC_BIND == 0xC01856A3u,
+               "VMS_TTIOC_BIND encodes differently here than on the reference build");
+
 /*
  * Resolve a DISK unit to the Linux block device the executive enumerated it
  * from (vms-3e8). The executive creates DKA0:/DKA100:/... at module init by

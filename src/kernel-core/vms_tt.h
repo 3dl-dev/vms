@@ -36,7 +36,8 @@
 #define VMS_TT_H
 
 #include "exec_kbackend.h"
-#include "vms_ioctl.h"
+/* The /dev/vms argument structs (struct vms_tt_*_args, VMS_TT_RD_*) come from
+ * vms_internal.h: Linux vms_ioctl.h, NetBSD vms_tt_nb.h (byte-identical). */
 
 /* TTY_TYPAHDSZ / TTY_ALTYPAHD defaults (SYSGEN; OpenVMS System Management
  * Utilities Reference, "System Parameters"). */
@@ -62,6 +63,9 @@ struct vms_tt_port_ops {
 	/* An out-of-band ^Y / ^C with no AST armed for it (rd vms-f0fb lands the
 	 * ASTs); the port delivers it as the substrate's interrupt. May be NULL. */
 	void (*interrupt)(void *port, uint8_t ch);
+	/* The class driver's last reference is gone: free the port. May be
+	 * NULL (a port that frees itself). Never called with a lock held. */
+	void (*release)(void *port);
 };
 
 /* One completed (or failed) read. */
@@ -81,10 +85,19 @@ struct vms_tt_read_req {
 	uint32_t promptsz;
 };
 
-/* Lifecycle: a terminal device row gains a class-driver instance when a port
- * attaches (the line discipline's bind), and loses it on detach. */
-struct vms_tt *vms_tt_attach(struct vms_device *dev,
-                             const struct vms_tt_port_ops *ops, void *port);
+/* Lifecycle (vms_tt.c "LIFETIME"): vms_tt_bind creates the instance and
+ * attaches it to a terminal row; vms_tt_detach (the port's close/hangup) ends
+ * the attachment. `proc` (the process issuing the line's VMS_TTIOC_BIND) must
+ * hold CMKRNL -- decided by the executive's protection code (vms_prot.h),
+ * never by a substrate capability -- and `devnam` must name a terminal row with
+ * no port yet. SS$_NORMAL with *out set, or SS$_NOPRIV / SS$_NOSUCHDEV /
+ * SS$_DEVALLOC / SS$_INSFMEM. After vms_tt_detach the port's ops are never
+ * called again, and its memory is released through ops->release when the last
+ * reference goes. */
+struct vms_proc;
+uint32_t vms_tt_bind(struct vms_proc *proc, const char *devnam,
+                     const struct vms_tt_port_ops *ops, void *port,
+                     struct vms_tt **out);
 void vms_tt_detach(struct vms_tt *tt);
 
 /* Port -> class: received bytes (any context the port's receive runs in). */
@@ -109,8 +122,10 @@ void vms_tt_set_passall(struct vms_tt *tt, int on);
 int vms_tt_readable(struct vms_tt *tt);
 
 /* The class-driver instance of a terminal row, REFERENCED, or NULL (no port
- * attached). Every non-NULL return is paired with vms_tt_release(). */
+ * attached). Every non-NULL return -- and every vms_tt_get -- is paired with
+ * vms_tt_release(). */
 struct vms_tt *vms_tt_of(struct vms_device *dev);
+void vms_tt_get(struct vms_tt *tt);
 void vms_tt_release(struct vms_tt *tt);
 
 /* The /dev/vms surface (vms_module.c dispatch). */

@@ -37,6 +37,7 @@
 #include <linux/tty.h>
 #include <linux/tty_ldisc.h>
 #include <linux/poll.h>
+#include <linux/refcount.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
@@ -51,11 +52,20 @@
 #define VMS_N_TT        N_DEVELOPMENT
 #define VMS_PORT_RING   8192
 
+/*
+ * One per tty running the executive's line discipline. Two holders keep it
+ * alive: the tty (from open until close) and, while the line is bound, the
+ * class-driver instance (released through vms_ttport_ops.release when its last
+ * reference goes -- a $QIO read can outlive the line). `dead` (under olock)
+ * says the tty is closed or hung up: from then on no op touches it.
+ */
 struct vms_ttport {
 	struct tty_struct *tty;
-	struct vms_tt *tt;          /* NULL until VMS_TTIOC_BIND */
+	struct vms_tt *tt;          /* NULL until VMS_TTIOC_BIND; under bind_lock */
 	struct mutex bind_lock;
+	refcount_t refs;
 	spinlock_t olock;
+	int dead;                   /* under olock */
 	u8 ring[VMS_PORT_RING];
 	u32 head, len;
 	wait_queue_head_t owq;      /* writers waiting for ring room */
@@ -64,11 +74,34 @@ struct vms_ttport {
 				     * called with the uart port lock held) */
 };
 
+static void port_put(struct vms_ttport *p)
+{
+	if (refcount_dec_and_test(&p->refs))
+		kfree(p);
+}
+
+/* The bound class driver, referenced, or NULL. */
+static struct vms_tt *port_tt_get(struct vms_ttport *p)
+{
+	struct vms_tt *tt;
+
+	mutex_lock(&p->bind_lock);
+	tt = p->tt;
+	if (tt)
+		vms_tt_get(tt);
+	mutex_unlock(&p->bind_lock);
+	return tt;
+}
+
 /* Push ring bytes into the tty while it has room. Caller holds olock. */
 static void port_push_locked(struct vms_ttport *p)
 {
 	struct tty_struct *tty = p->tty;
 
+	if (p->dead) {
+		p->len = 0;
+		return;
+	}
 	while (p->len) {
 		u32 chunk = min_t(u32, p->len, VMS_PORT_RING - p->head);
 		int room = tty_write_room(tty);
@@ -88,13 +121,18 @@ static void port_push_locked(struct vms_ttport *p)
 		clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 }
 
-/* Append what fits; returns how many bytes were taken. */
+/* Append what fits; returns how many bytes were taken (all of them, dropped,
+ * once the line is dead). */
 static size_t port_queue(struct vms_ttport *p, const u8 *buf, size_t n)
 {
 	unsigned long flags;
 	size_t i;
 
 	spin_lock_irqsave(&p->olock, flags);
+	if (p->dead) {
+		spin_unlock_irqrestore(&p->olock, flags);
+		return n;
+	}
 	for (i = 0; i < n && p->len < VMS_PORT_RING; i++) {
 		p->ring[(p->head + p->len) % VMS_PORT_RING] = buf[i];
 		p->len++;
@@ -116,11 +154,15 @@ static int port_write(void *port, const uint8_t *buf, size_t n)
 	struct vms_ttport *p = port;
 
 	while (n) {
-		size_t k = port_queue(p, buf, n);
+		size_t k;
 
+		if (READ_ONCE(p->dead))
+			return -EIO;
+		k = port_queue(p, buf, n);
 		buf += k;
 		n -= k;
-		if (n && wait_event_interruptible(p->owq, READ_ONCE(p->len) < VMS_PORT_RING))
+		if (n && wait_event_interruptible(p->owq,
+				READ_ONCE(p->len) < VMS_PORT_RING || READ_ONCE(p->dead)))
 			return -EINTR;
 	}
 	return 0;
@@ -128,16 +170,25 @@ static int port_write(void *port, const uint8_t *buf, size_t n)
 
 /* An out-of-band ^Y / ^C with no AST armed (rd vms-f0fb lands the ASTs): the
  * substrate interrupt OVMX's DCL has always taken them as -- SIGINT for ^Y,
- * SIGQUIT for ^C (dcl_main.c) -- to the line's foreground process group. */
+ * SIGQUIT for ^C (dcl_main.c) -- to the line's foreground process group.
+ * Called only from the receive path, while the tty is alive. */
 static void port_interrupt(void *port, uint8_t ch)
 {
 	struct vms_ttport *p = port;
-	struct pid *pgrp = tty_get_pgrp(p->tty);
+	struct pid *pgrp;
 
+	if (READ_ONCE(p->dead))
+		return;
+	pgrp = tty_get_pgrp(p->tty);
 	if (pgrp) {
 		kill_pgrp(pgrp, ch == 0x19 ? SIGINT : SIGQUIT, 1);
 		put_pid(pgrp);
 	}
+}
+
+static void port_release(void *port)
+{
+	port_put(port);
 }
 
 static void vms_ttport_tx_work(struct work_struct *w);
@@ -146,6 +197,7 @@ static const struct vms_tt_port_ops vms_ttport_ops = {
 	.xmit      = port_xmit,
 	.write     = port_write,
 	.interrupt = port_interrupt,
+	.release   = port_release,
 };
 
 /* ------------------------------------------------------------------ */
@@ -161,6 +213,7 @@ static int vms_ldisc_open(struct tty_struct *tty)
 		return -ENOMEM;
 	p->tty = tty;
 	mutex_init(&p->bind_lock);
+	refcount_set(&p->refs, 1);           /* the tty's */
 	spin_lock_init(&p->olock);
 	init_waitqueue_head(&p->owq);
 	INIT_WORK(&p->tx_work, vms_ttport_tx_work);
@@ -169,61 +222,82 @@ static int vms_ldisc_open(struct tty_struct *tty)
 	return 0;
 }
 
+/* The line is going away (close) or has gone (hangup): it carries nothing
+ * more, and the class driver lets go of it -- outstanding reads end
+ * SS$_HANGUP. Idempotent. */
+static void port_kill(struct vms_ttport *p)
+{
+	unsigned long flags;
+	struct vms_tt *tt;
+
+	spin_lock_irqsave(&p->olock, flags);
+	p->dead = 1;
+	p->len = 0;
+	spin_unlock_irqrestore(&p->olock, flags);
+	wake_up_interruptible(&p->owq);
+
+	mutex_lock(&p->bind_lock);
+	tt = p->tt;
+	p->tt = NULL;
+	mutex_unlock(&p->bind_lock);
+	if (tt)
+		vms_tt_detach(tt);           /* drops the class driver's hold
+					      * on p via port_release, later */
+}
+
 static void vms_ldisc_close(struct tty_struct *tty)
 {
 	struct vms_ttport *p = tty->disc_data;
 
 	if (!p)
 		return;
-	mutex_lock(&p->bind_lock);
-	if (p->tt) {
-		vms_tt_detach(p->tt);
-		p->tt = NULL;
-	}
-	mutex_unlock(&p->bind_lock);
+	port_kill(p);
 	cancel_work_sync(&p->tx_work);
 	tty->disc_data = NULL;
-	kfree(p);
+	port_put(p);                         /* the tty's */
 }
 
 static void vms_ldisc_hangup(struct tty_struct *tty)
 {
 	struct vms_ttport *p = tty->disc_data;
 
-	if (!p)
-		return;
-	mutex_lock(&p->bind_lock);
-	if (p->tt) {
-		vms_tt_detach(p->tt);      /* outstanding reads end SS$_HANGUP */
-		p->tt = NULL;
+	if (p)
+		port_kill(p);
+}
+
+static void port_receive(struct vms_ttport *p, struct tty_struct *tty,
+			 const u8 *cp, const u8 *fp, size_t count)
+{
+	struct vms_tt *tt = port_tt_get(p);
+	size_t i, start = 0;
+
+	if (!tt)
+		return;                    /* unbound: nobody owns the line yet */
+	if (!fp) {
+		vms_tt_receive(tt, cp, count);
+	} else {
+		/* hand over runs of good characters; drop framing/parity errors */
+		for (i = 0; i < count; i++) {
+			if (fp[i] != TTY_NORMAL) {
+				if (i > start)
+					vms_tt_receive(tt, cp + start, i - start);
+				start = i + 1;
+			}
+		}
+		if (count > start)
+			vms_tt_receive(tt, cp + start, count - start);
 	}
-	mutex_unlock(&p->bind_lock);
-	wake_up_interruptible(&p->owq);
+	vms_tt_release(tt);
+	wake_up_interruptible_poll(&tty->read_wait, EPOLLIN | EPOLLRDNORM);
 }
 
 static size_t vms_ldisc_receive_buf2(struct tty_struct *tty, const u8 *cp,
 				     const u8 *fp, size_t count)
 {
 	struct vms_ttport *p = tty->disc_data;
-	struct vms_tt *tt = p ? READ_ONCE(p->tt) : NULL;
-	size_t i, start = 0;
 
-	if (!tt)
-		return count;              /* unbound: nobody owns the line yet */
-	if (!fp) {
-		vms_tt_receive(tt, cp, count);
-		return count;
-	}
-	/* hand over runs of good characters; drop framing/parity errors */
-	for (i = 0; i < count; i++) {
-		if (fp[i] != TTY_NORMAL) {
-			if (i > start)
-				vms_tt_receive(tt, cp + start, i - start);
-			start = i + 1;
-		}
-	}
-	if (count > start)
-		vms_tt_receive(tt, cp + start, count - start);
+	if (p)
+		port_receive(p, tty, cp, fp, count);
 	return count;
 }
 
@@ -262,21 +336,26 @@ static ssize_t vms_ldisc_read(struct tty_struct *tty, struct file *file, u8 *buf
 	struct vms_tt *tt;
 	u8 *line;
 	ssize_t ret;
+	int rc;
 
 	(void)file; (void)cookie; (void)offset;
 	if (!p || nr == 0)
 		return 0;
-	tt = READ_ONCE(p->tt);
+	tt = port_tt_get(p);
 	if (!tt)
 		return -EIO;               /* no terminal row owns this line */
 	line = kmalloc(VMS_TT_LINE_MAX, GFP_KERNEL);
-	if (!line)
+	if (!line) {
+		vms_tt_release(tt);
 		return -ENOMEM;
+	}
 
 	memset(&rq, 0, sizeof(rq));
 	/* leave room for the LF that stands for the RETURN */
 	rq.bufsz = nr > 1 ? min_t(size_t, nr - 1, VMS_TT_LINE_MAX) : 1;
-	if (vms_tt_read(tt, &rq, line, &r) == -EINTR && r.count == 0) {
+	rc = vms_tt_read(tt, &rq, line, &r);
+	vms_tt_release(tt);
+	if (rc == -EINTR && r.count == 0) {
 		kfree(line);
 		return -ERESTARTSYS;
 	}
@@ -305,9 +384,10 @@ static ssize_t vms_ldisc_write(struct tty_struct *tty, struct file *file,
 	(void)file;
 	if (!p)
 		return -EIO;
-	tt = READ_ONCE(p->tt);
+	tt = port_tt_get(p);
 	if (tt) {
 		rc = vms_tt_write(tt, buf, nr, 1);
+		vms_tt_release(tt);
 	} else {
 		/* unbound (boot, before the console is bound): cooked passthrough */
 		size_t i;
@@ -320,22 +400,27 @@ static ssize_t vms_ldisc_write(struct tty_struct *tty, struct file *file,
 				rc = port_write(p, buf + i, 1);
 		}
 	}
-	return rc ? -ERESTARTSYS : (ssize_t)nr;
+	if (rc == -EINTR)
+		return -ERESTARTSYS;
+	return rc ? rc : (ssize_t)nr;
 }
 
 static __poll_t vms_ldisc_poll(struct tty_struct *tty, struct file *file,
 			       struct poll_table_struct *wait)
 {
 	struct vms_ttport *p = tty->disc_data;
-	struct vms_tt *tt = p ? READ_ONCE(p->tt) : NULL;
+	struct vms_tt *tt = p ? port_tt_get(p) : NULL;
 	__poll_t mask = 0;
 
 	poll_wait(file, &tty->read_wait, wait);
 	poll_wait(file, &tty->write_wait, wait);
 	if (tty_hung_up_p(file))
 		mask |= EPOLLHUP;
-	if (tt && vms_tt_readable(tt))
-		mask |= EPOLLIN | EPOLLRDNORM;
+	if (tt) {
+		if (vms_tt_readable(tt))
+			mask |= EPOLLIN | EPOLLRDNORM;
+		vms_tt_release(tt);
+	}
 	if (!p || READ_ONCE(p->len) < VMS_PORT_RING)
 		mask |= EPOLLOUT | EPOLLWRNORM;
 	return mask;
@@ -346,36 +431,31 @@ static int vms_ldisc_ioctl(struct tty_struct *tty, unsigned int cmd,
 {
 	struct vms_ttport *p = tty->disc_data;
 	struct vms_tt_bind_args a;
-	struct vms_device *dev;
-	struct vms_tt *tt;
+	struct vms_tt *tt = NULL;
 
 	if (cmd != VMS_TTIOC_BIND)
 		return n_tty_ioctl_helper(tty, cmd, arg);
 	if (!p)
 		return -EIO;
-	/* Binding a line to a terminal unit is the system's business, not a
-	 * user's: the same bar the executive's other terminal-row operations
-	 * (VMS_IOCTL_TERM_CREATE) hold their callers to. */
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
 	if (copy_from_user(&a, (void __user *)arg, sizeof(a)))
 		return -EFAULT;
 	a.devnam[sizeof(a.devnam) - 1] = '\0';
 
 	mutex_lock(&p->bind_lock);
-	dev = vms_devtab_find_terminal(a.devnam);
-	if (!dev) {
-		a.status = SS__NOSUCHDEV;
-	} else if (p->tt) {
+	if (p->tt) {
 		a.status = SS__DEVALLOC;        /* this line is already bound */
+	} else if (READ_ONCE(p->dead)) {
+		a.status = SS__HANGUP;
 	} else {
-		tt = vms_tt_attach(dev, &vms_ttport_ops, p);
-		if (!tt) {
-			a.status = SS__DEVALLOC;    /* that unit already has a port */
-		} else {
-			WRITE_ONCE(p->tt, tt);
-			a.status = SS__NORMAL;
-		}
+		/* The executive decides: CMKRNL, through vms_prot.h (rd vms-f8c,
+		 * Baron's ruling 2) -- never a substrate capability. */
+		refcount_inc(&p->refs);       /* the class driver's hold */
+		a.status = vms_tt_bind(vms_proc_find_or_err(), a.devnam,
+				       &vms_ttport_ops, p, &tt);
+		if (tt)
+			p->tt = tt;
+		else
+			refcount_dec(&p->refs);
 	}
 	mutex_unlock(&p->bind_lock);
 	if (copy_to_user((void __user *)arg, &a, sizeof(a)))

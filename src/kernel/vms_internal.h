@@ -1070,9 +1070,11 @@ struct vms_device {
      * The terminal CLASS DRIVER instance (rd vms-f8c, src/kernel-core/
      * vms_tt.c): non-NULL while a port -- the substrate tty behind the
      * executive's line discipline -- is attached to this row. Set and cleared
-     * under `lock` by vms_tt_attach/vms_tt_detach only.
+     * under `lock` by vms_devtab_tt_attach/_detached only; `tt_hold` keeps a
+     * withdrawn row alive until the instance is freed (vms_devtab_tt_release).
      */
     struct vms_tt      *tt;
+    uint32_t            tt_hold;        /* the class driver instance still names this row */
 #define VMS_DEVICE_HAS_TT 1
 
     /*
@@ -1736,7 +1738,11 @@ int vms_devtab_add_terminal(const char *devnam, const char *pty_backing);
 int vms_devtab_remove_terminal(const char *devnam);
 /* rd vms-f8c: lookups for the terminal class driver (src/kernel-core/vms_tt.c) */
 struct vms_device *vms_devtab_chan_device(struct vms_proc *proc, uint32_t chan);
-struct vms_device *vms_devtab_find_terminal(const char *devnam);
+struct vms_tt;
+uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
+                              struct vms_device **out);
+void vms_devtab_tt_detached(struct vms_device *dev, struct vms_tt *tt);
+void vms_devtab_tt_release(struct vms_device *dev);
 int vms_tt_linux_init(void);         /* src/kernel/vms_tt_linux.c */
 void vms_tt_linux_exit(void);
 int vms_lnm_init(void);

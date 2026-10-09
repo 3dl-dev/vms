@@ -1750,6 +1750,76 @@ uint32_t vms_kif_setterm(uint32_t chan)
 }
 
 /* ================================================================
+ * The terminal class driver (rd vms-f8c, epic vms-4eba): a terminal's
+ * reads, writes and modes go to the executive, which owns type-ahead, echo
+ * and line editing (src/kernel-core/vms_tt.c). These are the $QIO
+ * IO$_READVBLK / READPROMPT / WRITEVBLK / SETMODE paths of sys_qio.c.
+ * ================================================================ */
+
+uint32_t vms_kif_tt_read(struct vms_tt_read_args *a)
+{
+    if (!a)
+        return 0x00000014; /* SS$_BADPARAM */
+    KIF_CALL(VMS_IOCTL_TT_READ, a);
+    return a->status;
+}
+
+uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len)
+{
+    struct vms_tt_write_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.buf = (uint64_t)(uintptr_t)buf;
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_WRITE, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode)
+{
+    struct vms_tt_mode_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.mode = mode;
+
+    KIF_CALL(VMS_IOCTL_TT_SETMODE, &args);
+
+    return args.status;
+}
+
+/*
+ * vms_kif_tt_attach - make the executive the terminal driver of the substrate
+ * tty open on `ttyfd`, as terminal unit `devnam` (OPA0:, RTAn:). The transport
+ * switches the tty to the executive's line discipline and binds it; the
+ * executive refuses the bind (SS$_NOPRIV) unless the caller holds CMKRNL. A
+ * line already bound to that unit answers SS$_DEVALLOC.
+ */
+uint32_t vms_kif_tt_attach(int ttyfd, const char *devnam)
+{
+    struct vms_tt_bind_args args;
+    int rc;
+
+    if (ttyfd < 0 || !devnam || !devnam[0])
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /* register first: the executive checks THIS process's privileges */
+    kif_bind();
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    rc = kif_xport_tty_attach(ttyfd, VMS_TTIOC_BIND, &args);
+    if (rc < 0)
+        return vms_kif_kerr_to_ss(rc);
+    return args.status;
+}
+
+/* ================================================================
  * Process table (executive-resident PCB directory)
  * ================================================================ */
 

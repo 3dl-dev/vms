@@ -32,6 +32,7 @@
 #include "vms_internal.h"
 #include "exec_kbackend.h"
 #include "vms_tt.h"
+#include "vms_prot.h"
 
 #define VMS_DC_TERM 66   /* DC$_TERM (dcdef.h; vms_devtab.c DC__TERM) */
 #define TT_CTRL(c)  ((uint8_t)((c) & 0x1F))
@@ -41,6 +42,9 @@
 #define CH_TAB      0x09
 #define CH_BS       0x08
 #define CH_BEL      0x07
+/* a racy peek is enough: a write that misses the flag reaches a port whose
+ * own op is a no-op once the line is closed */
+#define READ_ONCE_TT(x) (*(volatile __typeof__(x) *)&(x))
 
 struct vms_tt {
 	exec_lock_t lock;
@@ -108,6 +112,8 @@ static void tt_flush(struct vms_tt *tt)
 
 	for (;;) {
 		exec_lock(&tt->lock);
+		if (tt->detached)
+			tt->olen = 0;            /* the port is gone */
 		n = tt->olen < sizeof(buf) ? tt->olen : (uint32_t)sizeof(buf);
 		memcpy(buf, tt->obuf, n);
 		memmove(tt->obuf, tt->obuf + n, tt->olen - n);
@@ -311,34 +317,16 @@ static void tt_drain_typeahead(struct vms_tt *tt)
 
 /* ------------------------------------------------------------------ */
 
-struct vms_tt *vms_tt_attach(struct vms_device *dev,
-                             const struct vms_tt_port_ops *ops, void *port)
-{
-	struct vms_tt *tt;
-
-	if (!dev || !ops)
-		return NULL;
-	tt = exec_zalloc(sizeof(*tt));
-	if (!tt)
-		return NULL;
-	exec_lock_init(&tt->lock);
-	exec_cv_init(&tt->cv);
-	tt->dev = dev;
-	tt->ops = ops;
-	tt->port = port;
-	tt->refs = 1;
-
-	exec_lock(&dev->lock);
-	if (dev->tt) {
-		exec_unlock(&dev->lock);
-		exec_free(tt);
-		return NULL;                     /* one port per terminal */
-	}
-	dev->tt = tt;
-	exec_unlock(&dev->lock);
-	return tt;
-}
-
+/*
+ * LIFETIME. A class-driver instance is created by vms_tt_bind (one reference:
+ * the attachment) and referenced by every caller inside vms_tt_read and every
+ * vms_tt_of/vms_tt_get holder. vms_tt_detach (the port's close or hangup) ends
+ * the attachment: no $QIO can find it through its row any more, outstanding
+ * reads end SS$_HANGUP, and no port op is called again. The PORT's own memory
+ * and the device row both live until the LAST reference is dropped, so a read
+ * that wakes after the line went away touches nothing freed: the port is
+ * released through ops->release, the row through vms_devtab_tt_release.
+ */
 static void tt_put(struct vms_tt *tt)
 {
 	int last;
@@ -347,26 +335,63 @@ static void tt_put(struct vms_tt *tt)
 	last = (--tt->refs == 0);
 	exec_unlock(&tt->lock);
 	if (last) {
+		if (tt->ops->release)
+			tt->ops->release(tt->port);
+		vms_devtab_tt_release(tt->dev);
 		exec_cv_destroy(&tt->cv);
 		exec_lock_destroy(&tt->lock);
 		exec_free(tt);
 	}
 }
 
-void vms_tt_detach(struct vms_tt *tt)
+uint32_t vms_tt_bind(struct vms_proc *proc, const char *devnam,
+                     const struct vms_tt_port_ops *ops, void *port,
+                     struct vms_tt **out)
 {
 	struct vms_device *dev;
+	struct vms_tt *tt;
+	uint32_t st;
 
+	*out = NULL;
+	if (!proc || !ops || !devnam)
+		return SS__NOPRIV;          /* no executive identity, no privilege */
+	/* Connecting a line to a terminal unit is SYSGEN CONNECT's business on
+	 * VMS: CMKRNL. STARTUP (OPA0:) and LOGINOUT (its session terminal) run
+	 * as SYSTEM and hold it; a user process does not. */
+	st = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);
+	if (!(st & 1))
+		return st;
+
+	tt = exec_zalloc(sizeof(*tt));
+	if (!tt)
+		return SS__INSFMEM;
+	exec_lock_init(&tt->lock);
+	exec_cv_init(&tt->cv);
+	tt->ops = ops;
+	tt->port = port;
+	tt->refs = 1;
+
+	st = vms_devtab_tt_attach(devnam, tt, &dev);
+	if (!(st & 1)) {
+		exec_cv_destroy(&tt->cv);
+		exec_lock_destroy(&tt->lock);
+		exec_free(tt);
+		return st;
+	}
+	tt->dev = dev;
+	*out = tt;
+	return SS__NORMAL;
+}
+
+void vms_tt_detach(struct vms_tt *tt)
+{
 	if (!tt)
 		return;
-	dev = tt->dev;
-	exec_lock(&dev->lock);
-	if (dev->tt == tt)
-		dev->tt = NULL;
-	exec_unlock(&dev->lock);
+	vms_devtab_tt_detached(tt->dev, tt);
 
 	exec_lock(&tt->lock);
 	tt->detached = 1;
+	tt->olen = 0;                        /* nowhere to send it */
 	if (tt->rd_active)
 		tt_complete(tt, SS__HANGUP, 0, 0);
 	exec_cv_broadcast(&tt->cv);
@@ -380,13 +405,17 @@ struct vms_tt *vms_tt_of(struct vms_device *dev)
 
 	exec_lock(&dev->lock);
 	tt = dev->tt;
-	if (tt) {
-		exec_lock(&tt->lock);
-		tt->refs++;
-		exec_unlock(&tt->lock);
-	}
+	if (tt)
+		vms_tt_get(tt);
 	exec_unlock(&dev->lock);
 	return tt;
+}
+
+void vms_tt_get(struct vms_tt *tt)
+{
+	exec_lock(&tt->lock);
+	tt->refs++;
+	exec_unlock(&tt->lock);
 }
 
 void vms_tt_release(struct vms_tt *tt)
@@ -591,6 +620,9 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	while (i < n) {
 		size_t k = 0;
 		int rc;
+
+		if (READ_ONCE_TT(tt->detached))
+			return -EIO;             /* the line went away */
 
 		while (i < n && k < sizeof(chunk) - 1) {
 			if (cooked && buf[i] == CH_LF)

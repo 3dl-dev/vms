@@ -1153,14 +1153,6 @@ int vms_devtab_remove_terminal(const char *devnam)
         return -ENODEV;
     }
     dynamic_term = (dev->dynamic_term != 0);
-#ifdef VMS_DEVICE_HAS_TT
-    /* A unit whose port is still attached (rd vms-f8c) is in use by the
-     * terminal class driver: detach the port (close its tty) first. */
-    if (dynamic_term && dev->tt) {
-        exec_unlock(&vms_device_list_lock);
-        return -EBUSY;
-    }
-#endif
     if (dynamic_term) {
         /* WITHDRAW, and delete now only if nothing still holds the unit
          * (rd vms-1875): a channel still assigned -- the session process
@@ -1569,25 +1561,78 @@ struct vms_device *vms_devtab_chan_device(struct vms_proc *proc, uint32_t chan)
     return dev;
 }
 
+#ifdef VMS_DEVICE_HAS_TT
 /*
- * vms_devtab_find_terminal - a TERMINAL row by name, or NULL. For binding a
- * port to it (rd vms-f8c, the line discipline's VMS_TTIOC_BIND). A dynamic
- * row with a port attached cannot be withdrawn (vms_devtab_remove_terminal),
- * so the pointer outlives the binding.
+ * vms_devtab_tt_detached - the terminal class driver's port has left `dev`
+ * (rd vms-f8c): no $QIO can reach the class driver through this row any more.
+ * The row stays held (tt_hold) until the class-driver instance itself is gone,
+ * because a read still in flight reads the row's characteristics.
  */
-struct vms_device *vms_devtab_find_terminal(const char *devnam)
+void vms_devtab_tt_detached(struct vms_device *dev, struct vms_tt *tt)
+{
+    exec_lock(&dev->lock);
+    if (dev->tt == tt)
+        dev->tt = NULL;
+    exec_unlock(&dev->lock);
+}
+
+/*
+ * vms_devtab_tt_release - the last reference to the class-driver instance that
+ * was this row's port is gone: drop its hold and, if the facility that minted
+ * the row has withdrawn it and no channel holds it, delete it now
+ * (device_unlink_if_withdrawn_locked).
+ */
+void vms_devtab_tt_release(struct vms_device *dev)
+{
+    EXEC_LIST_HEAD(reap);
+
+    exec_lock(&vms_device_list_lock);
+    exec_lock(&dev->lock);
+    dev->tt_hold = 0;
+    device_unlink_if_withdrawn_locked(dev, &reap);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+    device_reap(&reap);
+}
+#endif
+
+/*
+ * vms_devtab_tt_attach - enter class-driver instance `tt` as the port of the
+ * TERMINAL row `devnam` (rd vms-f8c, the line discipline's VMS_TTIOC_BIND).
+ * Found and attached under the table lock, so a row being withdrawn cannot be
+ * attached to; once attached, the port holds the row
+ * (device_unlink_if_withdrawn_locked) until vms_devtab_tt_detached. Returns the
+ * row in *out. SS$_NORMAL, SS$_NOSUCHDEV (no such terminal), or SS$_DEVALLOC
+ * (the unit already has a port).
+ */
+uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
+                              struct vms_device **out)
 {
     char name[VMS_DEVNAM_SIZE];
     struct vms_device *dev;
+    uint32_t st = SS__NOSUCHDEV;
 
+    *out = NULL;
     if (normalize_devnam(devnam, name, sizeof(name)) != 0)
-        return NULL;
+        return SS__NOSUCHDEV;
     exec_lock(&vms_device_list_lock);
     dev = devtab_lookup_locked(name);
-    if (dev && (dev->devclass != DC__TERM || dev->withdrawn))
-        dev = NULL;
+    if (dev && dev->devclass == DC__TERM) {
+        exec_lock(&dev->lock);
+        if (dev->withdrawn) {
+            st = SS__NOSUCHDEV;
+        } else if (dev->tt) {
+            st = SS__DEVALLOC;
+        } else {
+            dev->tt = tt;
+            dev->tt_hold = 1;
+            *out = dev;
+            st = SS__NORMAL;
+        }
+        exec_unlock(&dev->lock);
+    }
     exec_unlock(&vms_device_list_lock);
-    return dev;
+    return st;
 }
 
 /*
@@ -1691,6 +1736,13 @@ static int device_unlink_if_withdrawn_locked(struct vms_device *dev,
 {
     if (!dev->withdrawn || dev->refcnt != 0)
         return 0;
+#ifdef VMS_DEVICE_HAS_TT
+    /* A port still attached (rd vms-f8c) is a reference too: the terminal
+     * class driver names this row until its line detaches, and the detach
+     * (vms_devtab_tt_detached) deletes a withdrawn row then. */
+    if (dev->tt_hold)
+        return 0;
+#endif
     exec_list_move(&dev->list, reap);
     return 1;
 }

@@ -95,6 +95,10 @@
  * (which $ALLOCs before it $MOUNTs) could not mount a device on NetBSD/vax. */
 #include "vms_devtab_nb.h"
 
+/* The terminal class driver's /dev/vms contract (rd vms-f8c): the TT_READ/
+ * WRITE/SETMODE/BIND structs and numbers, byte-identical to vms_ioctl.h. */
+#include "vms_tt_nb.h"
+
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
  * src/kernel/vms_internal.h exactly (ORACLE-PINNED there, vms-2a8/vms-8019).
@@ -899,6 +903,17 @@ struct vms_device {
 	uint32_t            withdrawn;
 
 	/*
+	 * The terminal CLASS DRIVER instance (rd vms-f8c, src/kernel-core/
+	 * vms_tt.c): non-NULL while a port -- the substrate tty behind the
+	 * executive's line discipline (vms_tt_netbsd.c) -- is attached to this
+	 * row. Set and cleared under `lock` by vms_devtab_tt_attach/_detached only; `tt_hold` keeps a
+	 * withdrawn row alive until the instance is freed (vms_devtab_tt_release).
+	 */
+	struct vms_tt      *tt;
+	uint32_t            tt_hold;        /* the class driver instance still names this row */
+#define VMS_DEVICE_HAS_TT 1
+
+	/*
 	 * The SSH-pre-authenticated user name a network daemon vouched for this
 	 * RTAn: (rd vms-65b), stamped by VMS_IOCTL_TERM_SETLOGIN and read back by
 	 * the $CREPRC(LOGINOUT) child bound here (VMS_IOCTL_TERM_GETLOGIN). Empty
@@ -1295,6 +1310,17 @@ long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
+/* rd vms-f8c: the terminal class driver (src/kernel-core/vms_tt.c) and its
+ * NetBSD port (vms_tt_netbsd.c, the "vms_tt" line discipline). */
+struct vms_device *vms_devtab_chan_device(struct vms_proc *proc, uint32_t chan);
+struct vms_tt;
+uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
+                              struct vms_device **out);
+void vms_devtab_tt_detached(struct vms_device *dev, struct vms_tt *tt);
+void vms_devtab_tt_release(struct vms_device *dev);
+int vms_tt_netbsd_init(void);
+void vms_tt_netbsd_fini(void);
+struct vms_proc *vms_netbsd_proc_current(void);
 
 /* ----------------------------------------------------------------
  * Cross-facility image-rundown release helpers. vms_ioctl_image_rundown()

@@ -273,8 +273,10 @@ kernel-core/vms_cnxman_phase2.c
 kernel-core/vms_cnxman_quorum.c
 kernel-core/vms_cnxman_recnx_fsm.c
 kernel-core/vms_dlm_dir.c
+kernel-core/vms_dlm_echo_guard.c
 kernel-core/vms_dlm_hash.c
 kernel-core/vms_dlm_ldwv.c
+kernel-core/vms_dlm_pending.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
 kernel-core/vms_mscp_cl.c

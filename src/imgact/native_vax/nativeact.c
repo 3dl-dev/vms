@@ -191,9 +191,11 @@ static const struct vent decc_tv[] = {
 static const struct rtlimg rtlimgs[] = {
 	{ "LIBRTL",   librtl_tv, sizeof librtl_tv / sizeof librtl_tv[0] },
 	{ "DECC$SHR", decc_tv,   sizeof decc_tv / sizeof decc_tv[0] },
-	/* The VAX C link names MTHRTL for every DEC C program (CSTDIO.MAP);
-	 * a call into it reaches no routine here and is refused at fixup. */
-	{ "MTHRTL",   0,         0 },
+	/* The VAX C link names MTHRTL and CMA$TIS_SHR for every DEC C program
+	 * (CSTDIO.MAP); a call into either reaches no routine here and is
+	 * refused at fixup. */
+	{ "MTHRTL",      0,      0 },
+	{ "CMA$TIS_SHR", 0,      0 },
 };
 
 /* One transfer vector entry: the routine's entry mask, then JMP @#rtn+2. */

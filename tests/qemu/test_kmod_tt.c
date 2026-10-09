@@ -386,8 +386,10 @@ int main(void)
         rd_wait(&r);
         screen(m, scr, sizeof(scr), 300);
         /* negctl: tt-ctrly-not-shown */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(strcmp(scr, "AB\r\n*INTERRUPT*\r\n") == 0,
               "CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver");
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_NORMAL && strcmp(r.data, "AB") == 0 && r.a.term == 0x19,
               "with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT");
 
@@ -400,9 +402,11 @@ int main(void)
         type(m, "AB\x19");
         rd_wait(&r);
         screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_ABORT, "with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)");
         got = vms_kif_deliverast(&aa, &ap, &am) == 0;
         /* negctl: tt-oob-ast-not-queued */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(got && aa == 0x1234 && ap == 77 && am == 3,
               "the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)");
         CHECK(vms_kif_deliverast(&aa, &ap, &am) != 0, "exactly one AST was queued");
@@ -413,6 +417,7 @@ int main(void)
         type(m, "\x19");
         rd_wait(&r);
         (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
               "a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed");
 
@@ -425,6 +430,7 @@ int main(void)
         (void)screen(m, scr, sizeof(scr), 300);
         got = vms_kif_deliverast(&aa, &ap, &am) == 0;
         /* negctl-knockon: tt-oob-ast-not-queued */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_ABORT && got && aa == 0x2222,
               "CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST");
 
@@ -460,6 +466,7 @@ int main(void)
             got = vms_kif_deliverast(&aa, &ap, &am) == 0;
             /* negctl: tt-outband-ends-read */
             /* negctl-knockon: tt-oob-ast-not-queued */
+            /* negctl-knockon: tt-port-input-dropped */
             CHECK((ra.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x3333 && ap == 0x14,
                   "CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character");
             (void)screen(m, scr, sizeof(scr), 300);
@@ -468,6 +475,8 @@ int main(void)
             /* negctl: tt-breakthrough-no-redisplay */
             /* negctl-knockon: tt-oob-ast-not-queued */
             /* negctl-knockon: tt-outband-ends-read */
+            /* negctl-knockon: tt-newline-ignores-cursor */
+            /* negctl-knockon: tt-port-input-dropped */
             CHECK(memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) == 0,
                   "output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC");
             if (memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) != 0) {
@@ -489,6 +498,7 @@ int main(void)
             }
             /* negctl-knockon: tt-oob-ast-not-queued */
             /* negctl-knockon: tt-outband-ends-read */
+            /* negctl-knockon: tt-port-input-dropped */
             CHECK(rs == SS_NORMAL && ra.oflags == 0 && ra.count == 4 && memcmp(data, "ABCD", 4) == 0,
                   "the same read resumes and completes with the whole line 'ABCD'");
             (void)screen(m, scr, sizeof(scr), 300);
@@ -509,6 +519,7 @@ int main(void)
             rd_wait(&r);
             (void)screen(m, scr, sizeof(scr), 300);
             /* negctl: tt-oob-survives-deassign */
+            /* negctl-knockon: tt-port-input-dropped */
             CHECK(chan3 && r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
                   "an AST armed through a channel ends when that channel is deassigned");
         }
@@ -521,17 +532,20 @@ int main(void)
     type(m, "\x0f");
     msleep(200);
     screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-port-input-dropped */
     CHECK(strcmp(scr, "\n*OUTPUT OFF*\r\n") == 0,
           "CTRL/O while output runs shows <LF>*OUTPUT OFF*<CR><LF> (the owed line feed first)");
     (void)!write(s, "B\n", 2);
     screen(m, scr, sizeof(scr), 300);
     /* negctl: tt-ctrlo-not-discarding */
+    /* negctl-knockon: tt-port-input-dropped */
     CHECK(scr[0] == '\0', "output written while CTRL/O is on is discarded");
     type(m, "\x0f");
     msleep(200);                                /* the receive path runs first */
     (void)!write(s, "C\n", 2);
     screen(m, scr, sizeof(scr), 300);
     /* negctl-knockon: tt-ctrlo-not-discarding */
+    /* negctl-knockon: tt-port-input-dropped */
     CHECK(strcmp(scr, "*OUTPUT ON*\r\nC\r") == 0,
           "a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)");
     rd_start(&r, chan, 0, NULL, 0);
@@ -539,6 +553,8 @@ int main(void)
     type(m, "a\x0f" "b\r");
     rd_wait(&r);
     screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-owed-linefeed-unpaid */
+    /* negctl-knockon: tt-port-input-dropped */
     CHECK(r.st == SS_NORMAL && strcmp(r.data, "ab") == 0 && strcmp(scr, "\nab\r\n") == 0,
           "CTRL/O during a read is neither data nor shown, and does not end the read");
     if (strcmp(scr, "\nab\r\n") != 0)

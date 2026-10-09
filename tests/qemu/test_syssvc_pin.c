@@ -115,7 +115,9 @@ int main(void)
     errno = 0;
     long rc = syscall(SYS_delete_module, "vms", O_NONBLOCK);
     int err = errno;
-    /* negctl: executive-not-pinned */
+    /* No negctl anchor: since 90b955bfe something besides the descriptor also
+     * pins vms.ko, so removing the descriptor's pin no longer turns this red
+     * (executive-not-pinned isolates the reference count above instead). */
     CHECK(rc != 0,
           "rmmod vms is REFUSED while a descriptor is open (executive pinned)");
 
@@ -133,7 +135,6 @@ int main(void)
      * loaded because it was in use. Anything else means the unload was
      * refused for an unrelated reason and this test is not measuring the pin.
      */
-    /* negctl: executive-not-pinned */
     CHECK(rc != 0 && (err == EWOULDBLOCK || err == EBUSY),
           "the refusal is specifically 'module is in use'");
     if (rc == 0) {

@@ -321,6 +321,7 @@ int main(void)
     (void)screen(m, scr, sizeof(scr), 300);
     (void)!write(s, "A\nB\n", 4);
     screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-newline-ignores-cursor */
     CHECK(strcmp(scr, "\rA\r\nB\r") == 0,
           "two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)");
     if (strcmp(scr, "\rA\r\nB\r") != 0)
@@ -328,6 +329,8 @@ int main(void)
     rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);   /* the NUL is part of it */
     msleep(200);
     screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-owed-linefeed-unpaid */
+    /* negctl-knockon: tt-newline-ignores-cursor */
     CHECK(memcmp(scr, "\n\r", 2) == 0 && scr[2] == '\0' && memcmp(scr + 3, "$ ", 2) == 0,
           "DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ ");
     type(m, "\r");
@@ -336,6 +339,7 @@ int main(void)
     rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
     msleep(200);
     screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-newline-ignores-cursor */
     CHECK(scr[0] == '\r' && scr[1] == '\0' && memcmp(scr + 2, "$ ", 2) == 0,
           "DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)");
     type(m, "\r");

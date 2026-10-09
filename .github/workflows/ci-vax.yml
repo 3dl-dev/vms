@@ -1311,6 +1311,103 @@ jobs:
         run: tests/lab-vax/run-boot.sh acceptance
 
   # -----------------------------------------------------------------------
+  # vax-status-gate (rd vms-b869, parent vms-3b3f). The VAX analogue of the
+  # Alpha native-image gate (run-module-gp-activation-alpha.sh native-gate):
+  # boot OVMX/NetBSD-vax under SIMH with a SYSTEM volume whose SYSTARTUP_VMS.COM
+  # (tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM) RUNs proof images from
+  # SYS$SYSTEM, and assert the EXACT $STATUS each RUN left on the console:
+  # SYS$EXIT(SS$_NORMAL) -> %X00000001, SYS$EXIT(%X0FEDC0A9) -> %X0FEDC0A9.
+  # run-boot.sh runs the assertion's can-fail selftest before the boot (the
+  # selftest also runs per PR as the vax_status_gate_selftest ctest). Native
+  # VAX images LINKed on real VAX/VMS join the same proof SYSTARTUP; see the
+  # STATUS_PROOF_EXPECT comment in run-boot.sh.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), same shape as
+  # vax-dcl-acceptance above.
+  # -----------------------------------------------------------------------
+  vax-status-gate:
+    name: "OVMX/NetBSD-vax $STATUS gate — RUN images from a proof SYSTARTUP, assert the exact $STATUS (vms-b869)"
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-status-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-vax' || '' }}
+
+      - name: "$STATUS gate — selftest, boot the proof SYSTEM volume, assert each RUN's exact $STATUS"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+        run: tests/lab-vax/run-boot.sh status-gate
+
+      - name: Upload the status gate console log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vax-status-gate-console
+          path: .boot-cache/lab-vax/status-gate-console.log
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
   # Job: NetBSD/vax vms module cross-compiles (rd vms-20b9, epic vms-8e8; P4-B).
   #
   # THE elf32-vax TWIN of netbsd-amd64-vms-crosscompile. Where that gate compiles

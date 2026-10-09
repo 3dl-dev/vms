@@ -82,6 +82,16 @@ echo "=== build: cmake --build --target ovmx-images ==="
 cmake --build "$BUILD_DIR" --target ovmx-images -- -j"$(nproc)"
 echo
 
+# rd vms-b869: the $STATUS proof images (tests/netbsd/guest/status_exit.c ->
+# STSNORM.EXE / STSCOND.EXE) that tests/lab-vax/run-boot.sh status-gate RUNs
+# under SIMH. NOT shipped (not in ovmx-images), but built here per PR and held
+# to the same Decision-A activation contract below, so a link break shows up
+# before the nightly boot.
+echo "=== build: cmake --build --target ovmx-vax-status-images (rd vms-b869) ==="
+cmake --build "$BUILD_DIR" --target ovmx-vax-status-images -- -j"$(nproc)"
+STATUS_PROOF_IMAGES="STSNORM.EXE STSCOND.EXE"
+echo
+
 # The full shipped-image set ovmx-images builds on this substrate (LINK.EXE
 # is deliberately excluded on NetBSD -- see header; it has no vax role by
 # design). Boot set + LIBRARIAN.EXE are rung A/C's existing scope, carried
@@ -95,7 +105,7 @@ IMAGES="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN
 DRIFT_IMAGES="HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE"
 
 FAIL=0
-for img in $IMAGES; do
+for img in $IMAGES $STATUS_PROOF_IMAGES; do
     BIN="$BUILD_DIR/bin/$img"
     if [ ! -f "$BIN" ]; then
         echo "FAIL: $img was not produced at $BIN"

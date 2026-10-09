@@ -763,6 +763,15 @@ if(BUILD_TESTS)
                     ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(sysvol_master_vax PROPERTIES
             LABELS "integration;tools;netbsd-vax" TIMEOUT 120)
+        # rd vms-b869: the VAX $STATUS gate's can-fail selftest, per PR (the
+        # SIMH boot itself is the nightly vax-status-gate job). No docker, no
+        # boot: a good console transcript must pass assert_status_proof and
+        # every breakage (wrong / missing status, image never ran, truncated
+        # run, no END line) must fail it.
+        add_test(NAME vax_status_gate_selftest
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab-vax/run-boot.sh status-selftest)
+        set_tests_properties(vax_status_gate_selftest PROPERTIES
+            LABELS "integration;netbsd-vax" TIMEOUT 60)
     endif()
 
     # vms-0b6: the OVMX kit packer (tools/ovmx_kit_pack.c) must produce a kit

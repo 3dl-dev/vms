@@ -152,4 +152,41 @@ this test's Decision-A check can no longer distinguish the two files; re-derive 
 fi
 echo "PASS: control -- the Linux SYSTARTUP_VMS.COM DOES carry the block the vax variant drops (check has teeth)"
 
+# ---------------------------------------------------------------------------
+# 6. --status-proof (rd vms-b869): the $STATUS proof volume run-boot.sh
+#    status-gate boots. The proof SYSTARTUP replaces the Decision-A one, the
+#    proof images land in SYS$SYSTEM, and every image the proof RUNs must be
+#    staged -- a missing one is refused at staging time, not in a SIMH boot.
+# ---------------------------------------------------------------------------
+PROOF_IMAGES="$WORK/proof-images"
+mkdir -p "$PROOF_IMAGES"
+printf '\x7f\x45\x4c\x46\x01\x01STSNORM\n' > "$PROOF_IMAGES/STSNORM.EXE"
+printf '\x7f\x45\x4c\x46\x01\x01STSCOND\n' > "$PROOF_IMAGES/STSCOND.EXE"
+PSTAGE="$WORK/proof-stage"
+"$STAGE_SCRIPT" --status-proof "$PROOF_IMAGES" "$IMAGES" "$REPO" "$PSTAGE" >/dev/null \
+    || fail "stage_sysvol.sh --status-proof exited non-zero"
+cmp -s "$REPO/tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM" "$PSTAGE/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM" \
+    || fail "--status-proof did not stage the proof SYSTARTUP_VMS.COM"
+for f in STSNORM.EXE STSCOND.EXE; do
+    cmp -s "$PROOF_IMAGES/$f" "$PSTAGE/$ROOTED/$f" || fail "--status-proof did not stage $f byte-exact into SYS\$SYSTEM"
+done
+[ -f "$PSTAGE/$ROOTED/DCL.EXE" ] || fail "--status-proof dropped the boot images"
+PIMG="$WORK/proof.img"
+"$MASTER" master "$PIMG" OVMXSYS "$PSTAGE" 32 >/dev/null || fail "vmsfs_master could not master the --status-proof tree"
+"$MASTER" list "$PIMG" | grep -qiF 'STSCOND.EXE' || fail "mastered --status-proof volume lacks STSCOND.EXE"
+echo "PASS: --status-proof stages the proof SYSTARTUP + proof images and masters"
+
+# Teeth: a proof image the SYSTARTUP RUNs but that is not supplied is refused.
+rm -f "$PROOF_IMAGES/STSCOND.EXE"
+if "$STAGE_SCRIPT" --status-proof "$PROOF_IMAGES" "$IMAGES" "$REPO" "$WORK/proof-stage2" >/dev/null 2>&1; then
+    fail "--status-proof staged a volume whose SYSTARTUP RUNs STSCOND with no STSCOND.EXE"
+fi
+# Teeth: a proof image may not replace a boot image.
+cp "$IMAGES/DCL.EXE" "$PROOF_IMAGES/DCL.EXE"
+printf '\x7f\x45\x4c\x46\x01\x01STSCOND\n' > "$PROOF_IMAGES/STSCOND.EXE"
+if "$STAGE_SCRIPT" --status-proof "$PROOF_IMAGES" "$IMAGES" "$REPO" "$WORK/proof-stage3" >/dev/null 2>&1; then
+    fail "--status-proof let a proof image replace SYS\$SYSTEM:DCL.EXE"
+fi
+echo "PASS: --status-proof refuses a missing proof image and a proof image that collides with a boot image"
+
 echo "ALL PASS: OVMX/NetBSD-vax system volume masters to a rooted, Decision-A-clean bootable layout"

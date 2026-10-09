@@ -182,6 +182,18 @@ struct vms_mbx_wrtattn_args {
 	uint32_t pad;
 };
 
+/* $CHECK_ACCESS-shaped decision for another process (rd vms-046); see
+ * src/kernel/vms_mbx.h for the contract. */
+#define VMS_MBX_ACC_READ   0x1u
+#define VMS_MBX_ACC_WRITE  0x2u
+struct vms_mbx_chkacc_args {
+	char     devnam[VMS_DEVNAM_SIZE]; /* in: "MBAn:" */
+	uint32_t target_pid;              /* in: VMS PID whose access is decided */
+	uint32_t access;                  /* in: VMS_MBX_ACC_* */
+	uint32_t status;                  /* out */
+	uint32_t pad;
+};
+
 /* ================================================================
  * Request numbers. The four CONTROL ops are _IOWR carrying the SAME structs and
  * NR bytes as src/kernel/vms_mbx.h, so their numbers are identical across
@@ -199,6 +211,7 @@ struct vms_mbx_wrtattn_args {
 #define VMS_IOCTL_MBX_READ        _IO(VMS_MBX_IOC_MAGIC, 0x73)   /* IOC_VOID: driver copyin/out struct vms_mbx_read_args */
 #define VMS_IOCTL_MBX_DELMBX      _IOWR(VMS_MBX_IOC_MAGIC, 0x74, struct vms_mbx_delmbx_args)
 #define VMS_IOCTL_MBX_SET_WRTATTN _IOWR(VMS_MBX_IOC_MAGIC, 0x75, struct vms_mbx_wrtattn_args)
+#define VMS_IOCTL_MBX_CHKACC      _IOWR(VMS_MBX_IOC_MAGIC, 0x76, struct vms_mbx_chkacc_args)
 
 /*
  * Freeze the shared layouts -- see src/kernel/vms_mbx.h's identical asserts:
@@ -217,5 +230,7 @@ _Static_assert(sizeof(struct vms_mbx_read_args) == 28 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_read_args changed size -- VMS_IOCTL_MBX_READ ABI break");
 _Static_assert(sizeof(struct vms_mbx_wrtattn_args) == 32,
                "vms_mbx_wrtattn_args changed size -- VMS_IOCTL_MBX_SET_WRTATTN ABI break");
+_Static_assert(sizeof(struct vms_mbx_chkacc_args) == 32,
+               "vms_mbx_chkacc_args changed size -- VMS_IOCTL_MBX_CHKACC ABI break");
 
 #endif /* _VMS_MBX_NB_H */

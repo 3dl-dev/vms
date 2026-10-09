@@ -1036,6 +1036,11 @@ long vms_ioctl_mbx_delmbx(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg);
+/* $CHECK_ACCESS-shaped: may ANOTHER process read/write a mailbox (rd vms-046). */
+long vms_ioctl_mbx_chkacc(struct vms_proc *proc, unsigned long arg);
+/* That process's UIC + enabled privileges, under the $GETJPI read rule. */
+uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pid,
+                                  uint32_t *uic, uint64_t *privs);
 int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_mbx_release_all(struct vms_proc *proc);
 

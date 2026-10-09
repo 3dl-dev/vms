@@ -409,6 +409,37 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * vms_proc_access_identity - the UIC and ENABLED privileges the executive holds
+ * for the process `vms_pid`, for an access decision made on its behalf (rd
+ * vms-046: NETACP asking whether a requester could use the reply mailbox it
+ * named). Read under vms_proc_hash_lock and returned by value, so the caller
+ * decides with no table lock held. Asking about another process is reading its
+ * identity, so the $GETJPI rule applies (vms_proc_may_read). SS__NORMAL,
+ * SS__NONEXPR (no such process) or SS__NOPRIV.
+ */
+uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pid,
+                                  uint32_t *uic, uint64_t *privs)
+{
+    struct vms_proc *target;
+    uint32_t st;
+
+    vms_proc_reap_dead();
+    exec_lock(&vms_proc_hash_lock);
+    target = find_by_vms_pid(vms_pid);
+    if (!target) {
+        st = SS__NONEXPR;
+    } else if (!vms_proc_may_read(caller, target)) {
+        st = SS__NOPRIV;
+    } else {
+        *uic   = target->uic;
+        *privs = target->cur_privs;
+        st = SS__NORMAL;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    return st;
+}
+
+/*
  * vms_lnm_proc_gone - LNM$PROCESS housekeeping for a PCB being torn down
  * (rd vms-ef21). Called by each substrate's vms_proc_free_claimed() AFTER the
  * row is unhashed and WITHOUT vms_proc_hash_lock held. If another row still

@@ -3314,6 +3314,33 @@ uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
     return args.status;
 }
 
+/*
+ * vms_kif_mbx_chkacc - may the process `target_vms_pid` perform `access`
+ * (VMS_MBX_ACC_READ / _WRITE) on the mailbox `devnam`? (rd vms-046) The
+ * executive's own decision for that process's $QIO -- for a server about to
+ * write into a mailbox a requester named. SS$_NORMAL / SS$_NOPRIV /
+ * SS$_NONEXPR / SS$_NOSUCHDEV; SS$_NOSUCHDEV with no executive.
+ */
+uint32_t vms_kif_mbx_chkacc(const char *devnam, uint32_t target_vms_pid,
+                            uint32_t access)
+{
+    struct vms_mbx_chkacc_args args;
+
+    if (!devnam)
+        return SS$_BADPARAM;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, sizeof(args.devnam) - 1);
+    args.target_pid = target_vms_pid;
+    args.access = access;
+
+    KIF_CALL(VMS_IOCTL_MBX_CHKACC, &args);
+
+    return args.status;
+}
+
 /* ================================================================
  * INET pseudo-device BGn: (vms-527)
  *

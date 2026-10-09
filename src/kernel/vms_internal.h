@@ -1612,6 +1612,11 @@ long vms_ioctl_mbx_delmbx(struct vms_proc *proc, unsigned long arg);
  * and the lock manager use (vms_ast.c). One-shot; re-arm with another call.
  */
 long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg);
+/* $CHECK_ACCESS-shaped: may ANOTHER process read/write a mailbox (rd vms-046). */
+long vms_ioctl_mbx_chkacc(struct vms_proc *proc, unsigned long arg);
+/* That process's UIC + enabled privileges, under the $GETJPI read rule. */
+uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pid,
+                                  uint32_t *uic, uint64_t *privs);
 /*
  * Release one mailbox channel by number, for vms_ioctl_dassgn()'s fallback
  * when `chan` is not in proc->channels. Returns 0 if `chan` named a

@@ -2462,6 +2462,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_acp_fileop(proc, arg);
     case VMS_IOCTL_MBX_SET_WRTATTN:
         return vms_ioctl_mbx_set_wrtattn(proc, arg);
+    case VMS_IOCTL_MBX_CHKACC:
+        return vms_ioctl_mbx_chkacc(proc, arg);
 
     /* INET pseudo-device (executive-resident BGn:, vms-527). BGn: is a
      * kernel-mode driver over the host in-kernel socket API (src/kernel/

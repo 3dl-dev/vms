@@ -510,4 +510,5 @@
 # Raised to 198 by tt-ctrlo-not-discarding (rd vms-f0fb; test_kmod_tt).
 # Raised to 201 by the line-editing three (rd vms-eda8): tt-edit-cursor-ignored,
 # tt-edit-overstrike-ignored, tt-edit-ctrlj-ignored (test_kmod_tt).
-201
+# Raised to 203 by recall (rd vms-eb3d): tt-recall-key-not-terminator, tt-inistr-ignored (test_kmod_tt).
+203

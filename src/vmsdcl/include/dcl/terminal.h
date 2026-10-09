@@ -121,6 +121,13 @@ void vms_terminal_apply(const struct vms_terminal *term);
  * when `t_on`; disarms the ones that are off. Issued before every command read,
  * since a CTRL/Y AST is spent when it fires. */
 void dcl_tt_arm_oob(void (*yast)(uint32_t), int y_on, void (*tast)(uint32_t), int t_on);
+/* dcl_tt_read with an initial line (TRM$_INISTRNG through IO$M_EXTEND, rd
+ * vms-eb3d): `ini` is shown after the prompt, editable, the cursor at its end.
+ * *term_out gets the IOSB terminator word (the down arrow: 0x1B | 'B' << 8). */
+int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
+                    char *buf, size_t bufsz, uint16_t *term_out);
+const char *dcl_recall_get(int back);
+int dcl_recall_size(void);
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
                 uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out);
 uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr);

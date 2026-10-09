@@ -28,6 +28,7 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "iodef.h"
+#include "trmdef.h"
 
 /* Path to the shared terminal device table */
 #include "ovmx_layout.h"
@@ -215,6 +216,61 @@ int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
         return DCL_TT_GONE;            /* hangup, or the line is gone */
     if (iosb[3] && iosb[2] == 26 && n == 0)
         return DCL_TT_EOF;             /* ^Z: the driver echoed *EXIT* */
+    return (int)n;
+}
+
+int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
+                    char *buf, size_t bufsz, uint16_t *term_out)
+{
+    uint16_t iosb[4];
+    uint32_t st;
+    size_t n;
+    static char pbuf[512];
+    static char ibuf[512];
+    struct ovmx_trm_item items[2];
+    size_t plen = prompt_len < sizeof pbuf ? prompt_len : sizeof pbuf;
+    size_t ilen = ini ? strlen(ini) : 0;
+
+    if (term_out)
+        *term_out = 0;
+    if (!buf || bufsz < 2)
+        return DCL_TT_GONE;
+    if (!dcl_tt_assign())
+        return DCL_TT_NODRIVER;
+    fflush(stdout);
+    fflush(stderr);
+    if (ilen > sizeof ibuf)
+        ilen = sizeof ibuf;
+    memcpy(pbuf, prompt, plen);
+    memcpy(ibuf, ini ? ini : "", ilen);
+    memset(items, 0, sizeof items);
+    items[0].code = TRM$_PROMPT;
+    items[0].len = (unsigned short)plen;
+    items[0].val = (uintptr_t)pbuf;
+    items[1].code = TRM$_INISTRNG;
+    items[1].len = (unsigned short)ilen;
+    items[1].val = (uintptr_t)ibuf;
+    memset(iosb, 0, sizeof iosb);
+    st = sys$qiow(0, dcl_tt_chan, IO$_READVBLK | IO$M_EXTEND, iosb, NULL, 0,
+                  buf, (uint32_t)(bufsz - 1), 0, 0, (uintptr_t)items,
+                  (uint32_t)(ilen ? sizeof items : sizeof items[0]));
+    if (st & 1)
+        st = iosb[0];
+    if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN ||
+        st == SS$_IVDEVNAM)
+        return DCL_TT_NODRIVER;
+    n = iosb[1] < bufsz - 1 ? iosb[1] : bufsz - 1;
+    buf[n] = '\0';
+    if (term_out)
+        *term_out = iosb[2];
+    if (st == SS$_TIMEOUT)
+        return DCL_TT_TIMEOUT;
+    if (st == SS$_ABORT)
+        return DCL_TT_INTR;
+    if (!(st & 1))
+        return DCL_TT_GONE;
+    if (iosb[3] && iosb[2] == 26 && n == 0)
+        return DCL_TT_EOF;
     return (int)n;
 }
 

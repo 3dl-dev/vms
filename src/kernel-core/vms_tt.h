@@ -86,6 +86,8 @@ struct vms_tt_read_req {
 	uint32_t termmask[8];        /* with VMS_TT_RD_TERMMASK: bit n = char n */
 	const uint8_t *prompt;       /* kernel copy, or NULL */
 	uint32_t promptsz;
+	const uint8_t *inistr;       /* kernel copy: the initial line, or NULL */
+	uint32_t inisz;
 	const void *owner;           /* who may resume this read after a signal
 				      * (vms_tt_read); NULL: not resumable */
 	int ldisc;                   /* the substrate's read(2) on the line */

@@ -637,7 +637,9 @@ tt-oob-survives-deassign
 tt-ctrlo-not-discarding
 tt-edit-cursor-ignored
 tt-edit-overstrike-ignored
-tt-edit-ctrlj-ignored"
+tt-edit-ctrlj-ignored
+tt-recall-key-not-terminator
+tt-inistr-ignored"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2105,6 +2107,10 @@ DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 DELETE is echoed as BS SP BS on a scope terminal
 DELETE rubs out the last character (data 'ac')
 IO$M_PURGE discards the type-ahead before reading
+TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')
+^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')
+^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')
+^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
 ^Z terminates the read
 a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed
@@ -2112,16 +2118,19 @@ a NOECHO read returns what was typed
 a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)
 a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
 an AST armed through a channel ends when that channel is deassigned
-an escape sequence (up-arrow) neither ends the read nor lands in the line
+an escape sequence (a cursor key with nowhere to move) neither ends the read nor lands in the line
 output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
 output written while CTRL/O is on is discarded
 read(2) echoes as it consumes, like any driver read
 read(2) on the bound line returns the line with LF for the RETURN
 the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)
+the down arrow ends the read with the escape sequence as terminator, echoing nothing (RC.RECALL DN)
 the driver echoes *EXIT* for ^Z
+the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up
 the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
 the resumed read does not write its prompt a second time
 the same read resumes and completes with the whole line 'ABCD'
+the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)
 two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
 with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT
 with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)
@@ -2348,6 +2357,45 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: no other check types ^J.";;
+        esac;;
+
+    tt-recall-key-not-terminator)
+        case "$_f" in
+        facility)     echo "the up arrow is the recall key: it ends the read as CTRL/B, echoed <02> (vms_tt.c, rd vms-eb3d; keystroke RC.RECALL U1/U2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() ends the read on the up arrow as CTRL/B (\`} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {\`). The mutation drops that branch: the key is swallowed and DCL never learns the user asked for the last command. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the down-arrow and initial-line checks use their own keys.";;
+        esac;;
+
+    tt-inistr-ignored)
+        case "$_f" in
+        facility)     echo "an extended read's TRM\$_INISTRNG starts the line with the given characters, shown after the prompt and editable (vms_tt.c, rd vms-eb3d; RC.RECALL U1)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_read() preloads the line from the request's initial string (\`if (req->inistr \&\& req->inisz) {\`). The mutation ignores it (\`if (0) {\`): a recalled command is neither shown nor in the line. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ WRITE SYS$OUTPUT 6)
+EOF
+                      ;;
+        knock_on_why)  echo "the same ignored string is missing from the screen too.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8492,6 +8540,10 @@ apply_edit() {
         sed -i 's|^\tif (tt->cur < tt->len \&\& tt->ovs) {$|\tif (0) { /* NEGCTL tt-edit-overstrike-ignored */|' "$_file";;
     tt-edit-ctrlj-ignored)
         sed -i "s|^\t\t\twhile (at \&\& tt->line\[at - 1\] != ' ')$|\t\t\twhile (0) /* NEGCTL tt-edit-ctrlj-ignored */|" "$_file";;
+    tt-recall-key-not-terminator)
+        sed -i "s|^\t\t\t} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {$|\t\t\t} else if (0) { /* NEGCTL tt-recall-key-not-terminator */|" "$_file";;
+    tt-inistr-ignored)
+        sed -i 's|^\t\tif (req->inistr \&\& req->inisz) {$|\t\tif (0) { /* NEGCTL tt-inistr-ignored */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

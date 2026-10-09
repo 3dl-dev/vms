@@ -2097,6 +2097,7 @@ struct vms_setmode_args {
 #define VMS_TT_RD_TRMNOECHO   0x0010u  /* IO$M_TRMNOECHO */
 #define VMS_TT_RD_CVTLOW      0x0020u  /* IO$M_CVTLOW    */
 #define VMS_TT_RD_TERMMASK    0x0100u  /* termmask[] is the caller's (P4) */
+#define VMS_TT_RD_INISTR      0x0200u  /* inistr/inisz: the initial line (TRM$_INISTRNG) */
 
 struct vms_tt_read_args {
     uint32_t chan;              /* in: channel assigned to the terminal */
@@ -2112,6 +2113,11 @@ struct vms_tt_read_args {
     uint32_t term;              /* out: the terminator character */
     uint32_t termsz;            /* out: 1 when a terminator ended the read */
     uint32_t oflags;            /* out: VMS_TT_RDO_* */
+    uint64_t inistr;            /* in: with VMS_TT_RD_INISTR, the line's initial
+                                 * contents (TRM$_INISTRNG): shown after the prompt,
+                                 * editable, the cursor at its end (rd vms-eb3d) */
+    uint32_t inisz;             /* in: its size */
+    uint32_t pad2;
 };
 /* The read is still OUTSTANDING (suspended in the class driver) and an AST the
  * driver queued for this process is deliverable: deliver it, then issue the
@@ -2192,7 +2198,7 @@ struct vms_tt_oobast_args {
 
 /* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
  * numbers on ILP32 VAX; these are the reference-build values. */
-_Static_assert(sizeof(struct vms_tt_read_args) == 88,
+_Static_assert(sizeof(struct vms_tt_read_args) == 104,
                "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_tt_write_args) == 24,
                "struct vms_tt_write_args changed size");
@@ -2200,7 +2206,7 @@ _Static_assert(sizeof(struct vms_tt_mode_args) == 16,
                "struct vms_tt_mode_args changed size");
 _Static_assert(sizeof(struct vms_tt_bind_args) == 24,
                "struct vms_tt_bind_args changed size");
-_Static_assert(VMS_IOCTL_TT_READ == 0xC05856A0u,
+_Static_assert(VMS_IOCTL_TT_READ == 0xC06856A0u,
                "VMS_IOCTL_TT_READ encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TT_WRITE == 0xC01856A1u,
                "VMS_IOCTL_TT_WRITE encodes differently here than on the reference build");

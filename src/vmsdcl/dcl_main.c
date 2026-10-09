@@ -915,7 +915,28 @@ int main(int argc, char *argv[])
             dcl_ctx.ctrly_pending = 0;
             dcl_ctx.abort_procedures = 0;
             dcl_arm_oob();
-            int tn = dcl_tt_read(pb, pbl, tt_buf, sizeof(tt_buf), 0, 0, NULL);
+            /*
+             * COMMAND RECALL (rd vms-eb3d). The up arrow (or CTRL/B) and the
+             * down arrow end the read as terminators; DCL then reads again
+             * with the recalled command as the line's initial contents
+             * (TRM$_INISTRNG), so it is shown after the prompt and can be
+             * edited (RC.RECALL: <02><CR><LF><NUL>$ WRITE SYS$OUTPUT 6).
+             */
+            static int recall_back;      /* 0: not walking the list */
+            uint16_t tterm = 0;
+            const char *ini = recall_back ? dcl_recall_get(recall_back) : NULL;
+            int tn = dcl_tt_read_ini(pb, pbl, ini, tt_buf, sizeof(tt_buf), &tterm);
+            if (tn >= 0 && tterm == 0x02) {          /* up arrow / CTRL/B */
+                if (recall_back < dcl_recall_size())
+                    recall_back++;
+                continue;
+            }
+            if (tn >= 0 && tterm == (0x1B | ('B' << 8))) {   /* down arrow */
+                if (recall_back > 0)
+                    recall_back--;
+                continue;
+            }
+            recall_back = 0;
             if (tn == DCL_TT_EOF) {
                 /*
                  * Ctrl/Z AT THE DCL PROMPT DOES NOT LOG OUT (vms-a70). The

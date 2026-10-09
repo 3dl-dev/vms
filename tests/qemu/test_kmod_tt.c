@@ -294,11 +294,11 @@ int main(void)
     /* ---- a cursor key is one key, not data, and does not end the read ---- */
     rd_start(&r, chan, 0, NULL, 0);
     msleep(200);
-    type(m, "ab\x1b[Ac\r");
+    type(m, "ab\x1b[Cc\r");                 /* -> at the end of the line: nowhere to go */
     rd_wait(&r);
     screen(m, scr, sizeof(scr), 300);
     CHECK(r.st == SS_NORMAL && strcmp(r.data, "abc") == 0 && r.a.term == 13,
-          "an escape sequence (up-arrow) neither ends the read nor lands in the line");
+          "an escape sequence (a cursor key with nowhere to move) neither ends the read nor lands in the line");
 
     /* ---- ^Z ---- */
     rd_start(&r, chan, 0, NULL, 0);
@@ -566,9 +566,11 @@ int main(void)
         rd_wait(&r);
         got = screen(m, scr, sizeof(scr), 300);
         /* negctl: tt-edit-cursor-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
               "^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')");
         /* negctl-knockon: tt-edit-cursor-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(got == wl && memcmp(scr, want_cursor, got) == 0,
               "the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up");
 
@@ -579,6 +581,7 @@ int main(void)
         rd_wait(&r);
         (void)screen(m, scr, sizeof(scr), 300);
         /* negctl: tt-edit-overstrike-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
               "^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')");
 
@@ -589,8 +592,67 @@ int main(void)
         rd_wait(&r);
         (void)screen(m, scr, sizeof(scr), 300);
         /* negctl: tt-edit-ctrlj-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 1 ") == 0,
               "^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')");
+    }
+
+    /* ---- recall keys and the initial line (rd vms-eb3d; RC.RECALL) ---- */
+    {
+        struct vms_tt_read_args ra;
+        char data[64];
+        uint32_t rs;
+        static const char ini[] = "WRITE SYS$OUTPUT 6";
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "\x1b[A");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-recall-key-not-terminator */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && r.a.term == 0x02 && strcmp(scr, "\x02") == 0,
+              "the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)");
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "\x1b[B");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && (r.a.term & 0xFF) == 0x1B && scr[0] == '\0',
+              "the down arrow ends the read with the escape sequence as terminator, echoing nothing (RC.RECALL DN)");
+
+        memset(&ra, 0, sizeof ra);
+        ra.chan = chan;
+        ra.flags = VMS_TT_RD_TIMED | VMS_TT_RD_INISTR;
+        ra.timeout = BOUND;
+        ra.buf = (uint64_t)(uintptr_t)data;
+        ra.bufsz = sizeof data - 1;
+        ra.prompt = (uint64_t)(uintptr_t)"\r\n\0$ ";
+        ra.promptsz = 5;
+        ra.inistr = (uint64_t)(uintptr_t)ini;
+        ra.inisz = sizeof ini - 1;
+        {
+            pid_t kid = fork();
+            if (kid == 0) {
+                msleep(300);
+                type(m, "\x7f" "7\r");
+                _exit(0);
+            }
+            rs = vms_kif_tt_read(&ra);
+            waitpid(kid, NULL, 0);
+        }
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-inistr-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(rs == SS_NORMAL && ra.count == 18 && memcmp(data, "WRITE SYS$OUTPUT 7", 18) == 0,
+              "TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')");
+        /* negctl-knockon: tt-inistr-ignored */
+        CHECK(memcmp(scr, "\r\n\0$ WRITE SYS$OUTPUT 6", 23) == 0,
+              "the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ WRITE SYS$OUTPUT 6)");
     }
 
     /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */

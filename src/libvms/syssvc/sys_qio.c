@@ -48,6 +48,7 @@
 #include "vms_kif.h"
 #include "dcdef.h"
 #include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
+#include "trmdef.h"        /* IO$M_EXTEND item list (rd vms-eb3d) */
 
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
@@ -1413,6 +1414,50 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
         if (base == IO$_READPROMPT && p5 && p6) {
             ra.prompt = (uint64_t)(uintptr_t)p5;
             ra.promptsz = p6;
+        }
+        if ((func & IO$M_EXTEND) && base != IO$_READPROMPT) {
+            /* THE EXTENDED READ (I/O User's Reference, "Terminal Driver",
+             * IO$M_EXTEND): P5 = the item list, P6 = its size in bytes; the
+             * entries are ovmx_trm_item (trmdef.h). Supported: MODIFIERS,
+             * TIMEOUT, TERM, PROMPT, INISTRNG; an item the driver does not
+             * implement is refused, not ignored (Rule 9). */
+            const struct ovmx_trm_item *it = (const struct ovmx_trm_item *)p5;
+            size_t nit = p5 ? p6 / sizeof(*it) : 0;
+            for (size_t k = 0; k < nit; k++) {
+                const struct ovmx_trm_item *e = &it[k];
+                switch (e->code) {
+                case TRM$_MODIFIERS:
+                    if (e->val & TRM$M_TM_NOECHO)    ra.flags |= VMS_TT_RD_NOECHO;
+                    if (e->val & TRM$M_TM_TIMED)     ra.flags |= VMS_TT_RD_TIMED;
+                    if (e->val & TRM$M_TM_PURGE)     ra.flags |= VMS_TT_RD_PURGE;
+                    if (e->val & TRM$M_TM_NOFILTR)   ra.flags |= VMS_TT_RD_NOFILTR;
+                    if (e->val & TRM$M_TM_TRMNOECHO) ra.flags |= VMS_TT_RD_TRMNOECHO;
+                    if (e->val & TRM$M_TM_CVTLOW)    ra.flags |= VMS_TT_RD_CVTLOW;
+                    break;
+                case TRM$_TIMEOUT:
+                    ra.timeout = (uint32_t)e->val;
+                    break;
+                case TRM$_TERM: {
+                    uint32_t msz = e->len < sizeof ra.termmask ? e->len : sizeof ra.termmask;
+                    memset(ra.termmask, 0, sizeof ra.termmask);
+                    if (e->val && msz) memcpy(ra.termmask, (const void *)(uintptr_t)e->val, msz);
+                    ra.flags |= VMS_TT_RD_TERMMASK;
+                    break;
+                }
+                case TRM$_PROMPT:
+                    ra.prompt = e->val;
+                    ra.promptsz = e->len;
+                    break;
+                case TRM$_INISTRNG:
+                    ra.inistr = e->val;
+                    ra.inisz = e->len;
+                    ra.flags |= VMS_TT_RD_INISTR;
+                    break;
+                default:
+                    tt_iosb(iosb_ptr, SS$_BADPARAM, 0, 0, 0);
+                    return SS$_BADPARAM;
+                }
+            }
         }
         uint32_t st = vms_kif_tt_read(&ra);
         /* An AST the driver queued for this process (an out-of-band

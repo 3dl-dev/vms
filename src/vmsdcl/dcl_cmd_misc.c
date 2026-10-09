@@ -1383,6 +1383,20 @@ void dcl_recall_push(const char *line)
     }
 }
 
+/* The command `back` places before the newest (1 = the last command), or NULL
+ * past the oldest -- what the recall key (up arrow, CTRL/B) brings back. */
+const char *dcl_recall_get(int back)
+{
+    if (back < 1 || back > dcl_recall_count)
+        return NULL;
+    return dcl_recall_ring[dcl_recall_count - back];
+}
+
+int dcl_recall_size(void)
+{
+    return dcl_recall_count;
+}
+
 void dcl_recall_erase(void)
 {
     for (int i = 0; i < dcl_recall_count; i++) {

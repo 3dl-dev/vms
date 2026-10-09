@@ -526,6 +526,20 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 				if (tt_echoing(tt))
 					tt_out1(tt, tt->line[tt->cur]);
 				tt->cur++;
+			} else if (c == 'A' && tt_is_term(tt, TT_CTRL('B'))) {
+				/* up arrow: the recall key, as CTRL/B (RC.RECALL U1
+				 * shows the same <02> echo for both) */
+				tt_hc_close(tt);
+				if (tt_echoing(tt))
+					tt_out1(tt, TT_CTRL('B'));
+				tt_complete(tt, SS__NORMAL, TT_CTRL('B'), 1);
+			} else if (c == 'B' && tt_is_term(tt, 0x1B)) {
+				/* down arrow: ends the read, the sequence reported
+				 * as the terminator (the caller walks its recall
+				 * list forward; RC.RECALL DN echoes nothing) */
+				tt_hc_close(tt);
+				tt_complete(tt, SS__NORMAL, 0x1B, 3);
+				tt->res.term = 0x1B | ((uint32_t)'B' << 8);
 			}
 			return;
 		}
@@ -649,6 +663,8 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		if (c == CH_CR && !(tt->rd_flags & VMS_TT_RD_TRMNOECHO) &&
 		    (tt->rd_dc & VMS_TTC_ECHO))
 			tt_nl(tt);             /* the RETURN, echoed */
+		else if (c == TT_CTRL('B') && tt_echoing(tt))
+			tt_out1(tt, c);        /* CTRL/B is echoed as itself (RC.RECALL B) */
 		tt_complete(tt, SS__NORMAL, c, 1);
 		return;
 	}
@@ -1169,6 +1185,17 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		/* the prompt is written BEFORE any type-ahead is consumed and echoed */
 		if (tt->promptsz)
 			tt_prompt_out(tt, tt->prompt, tt->promptsz);
+		/* TRM$_INISTRNG: the line starts with these characters, shown
+		 * after the prompt, the cursor after them (a recalled command,
+		 * RC.RECALL U1) */
+		if (req->inistr && req->inisz) {
+			uint32_t ni = req->inisz < tt->rd_cap ? req->inisz : tt->rd_cap;
+
+			memcpy(tt->line, req->inistr, ni);
+			tt->len = tt->cur = ni;
+			if (tt_echoing(tt))
+				tt_out(tt, tt->line, ni);
+		}
 
 		tt->rd_active = 1;
 		tt_drain_typeahead(tt);
@@ -1436,7 +1463,7 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 	struct vms_tt_read_req rq;
 	struct vms_tt_read_result r;
 	struct vms_tt *tt;
-	uint8_t *line = NULL, *prompt = NULL;
+	uint8_t *line = NULL, *prompt = NULL, *ini = NULL;
 	uint32_t st = SS__NORMAL;
 
 	memset(&a, 0, sizeof(a));
@@ -1466,6 +1493,19 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 		}
 		rq.prompt = prompt;
 	}
+	if ((a.flags & VMS_TT_RD_INISTR) && a.inistr && a.inisz) {
+		rq.inisz = a.inisz < rq.bufsz ? a.inisz : rq.bufsz;
+		ini = rq.inisz ? exec_alloc(rq.inisz) : NULL;
+		if (rq.inisz && !ini) {
+			a.status = SS__INSFMEM;
+			goto out_rel;
+		}
+		if (rq.inisz && exec_copyin(ini, (const void *)(uintptr_t)a.inistr, rq.inisz)) {
+			a.status = SS__ACCVIO;
+			goto out_rel;
+		}
+		rq.inistr = ini;
+	}
 	line = exec_alloc(VMS_TT_LINE_MAX);
 	if (!line) {
 		a.status = SS__INSFMEM;
@@ -1482,6 +1522,8 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 			exec_free(line);
 			if (prompt)
 				exec_free(prompt);
+			if (ini)
+				exec_free(ini);
 			return -ERESTARTSYS;    /* no status written: re-enter */
 		}
 		a.oflags = 0;
@@ -1507,6 +1549,8 @@ out:
 		exec_free(line);
 	if (prompt)
 		exec_free(prompt);
+	if (ini)
+		exec_free(ini);
 	if (exec_copyout((void *)arg, &a, sizeof(a)))
 		return -EFAULT;
 	return 0;

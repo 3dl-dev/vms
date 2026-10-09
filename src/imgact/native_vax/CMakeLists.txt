@@ -12,4 +12,8 @@ target_include_directories(vms_nativeact PRIVATE
 target_compile_definitions(vms_nativeact PRIVATE _NETBSD_SOURCE _DEFAULT_SOURCE)
 target_link_libraries(vms_nativeact PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 set_target_properties(vms_nativeact PROPERTIES OUTPUT_NAME "NATIVEACT" SUFFIX ".EXE")
+# The native image owns low P0 (a VAX image is linked at 0x200 upward and its
+# shareables are mapped below 0x40000000): put the activator's own text high
+# in P0, out of the way.
+target_link_options(vms_nativeact PRIVATE -Wl,-Ttext-segment=0x30000000)
 install(TARGETS vms_nativeact RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

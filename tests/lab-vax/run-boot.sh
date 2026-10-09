@@ -186,6 +186,18 @@ die() { echo "[run-boot] FATAL: $*" >&2; exit 1; }
 STATUS_PROOF_EXPECT=(
   "STSNORM|%X00000001|OVMX-STATUS STSNORM: image ran, calling SYS\$EXIT(%X00000001)"
   "STSCOND|%X0FEDC0A9|OVMX-STATUS STSCOND: image ran, calling SYS\$EXIT(%X0FEDC0A9)"
+  # Native VAX images (rd vms-b869): .EXE files LINKed on the lab VAX V7.3
+  # (tests/native-images/vax/), RUN unchanged through NATIVEACT.EXE. Every
+  # status and line below is what the same RUN produced on the lab VAX
+  # (tests/lab/captures/native-image-vax-20261009/*.RUN.txt, NEG-*.txt).
+  "HELLO|%X00000001|OVMX-NATIVE LIB\$PUT_OUTPUT: hello"
+  "RETST|%X0FEDC0A9|"
+  "CSTDIO|%X00000001|OVMX-NATIVE DECC printf: answer 42"
+  "MAIN3|%X00000001|OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok"
+  "MAIN4V1|%X100020BC|-SYSTEM-F-SHRIDMISMAT, ident mismatch with shareable image"
+  "MAIN4V2|%X00000001|OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok"
+  "MAIN4NONE|%X100388B2|-CLI-E-IMAGEFNF, image file not found"
+  "NOTIMG|%X104D8C84|-IMGACT-F-BADHDR, an error was discovered in the image header"
 )
 
 # assert_status_proof <console-log> -- THE TEETH of the status gate. For every
@@ -1139,13 +1151,22 @@ build_status_proof_images() {
           -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
           -DCMAKE_BUILD_TYPE=Release >/tmp/build-status-vax-configure.log 2>&1 \
           || { tail -40 /tmp/build-status-vax-configure.log; exit 1; }
-        cmake --build /tmp/build-status-vax --target ovmx-vax-status-images -- -j"$(nproc)" \
+        cmake --build /tmp/build-status-vax --target ovmx-vax-status-images vms_nativeact -- -j"$(nproc)" \
           >/tmp/build-status-vax-build.log 2>&1 \
           || { tail -60 /tmp/build-status-vax-build.log; exit 1; }
-        cp /tmp/build-status-vax/bin/STSNORM.EXE /tmp/build-status-vax/bin/STSCOND.EXE /out/'
+        cp /tmp/build-status-vax/bin/STSNORM.EXE /tmp/build-status-vax/bin/STSCOND.EXE \
+           /tmp/build-status-vax/bin/NATIVEACT.EXE /out/'
   rc=$?; set -e
   [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "status proof image build failed/timed out (rc=${rc})"; }
-  for img in STSNORM.EXE STSCOND.EXE; do
+  # The native VAX images, LINKed on the lab VAX V7.3 (rd vms-b869), and the
+  # activator DCL hands them to (NATIVEACT.EXE, staged to the boot exec dir by
+  # ovmx_init like every SYS$SYSTEM utility). NOTIMG.EXE is a text file, the
+  # same refusal the lab VAX was shown (NEG-notimg.txt: HELLO.MAR copied).
+  for img in HELLO RETST CSTDIO MAIN3 MAIN4 MYSHR MYSHRV2; do
+    cp "${REPO}/tests/native-images/vax/${img}.EXE" "${STATUS_PROOF_IMAGES_DIR}/"
+  done
+  cp "${REPO}/tests/native-images/vax/HELLO.MAR" "${STATUS_PROOF_IMAGES_DIR}/NOTIMG.EXE"
+  for img in STSNORM.EXE STSCOND.EXE NATIVEACT.EXE; do
     [ -f "${STATUS_PROOF_IMAGES_DIR}/${img}" ] || die "status proof image ${img} was not produced"
   done
   log "status proof images: $(ls "${STATUS_PROOF_IMAGES_DIR}" | tr '\n' ' ')"

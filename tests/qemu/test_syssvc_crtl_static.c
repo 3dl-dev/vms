@@ -15,7 +15,8 @@
  *   - stat() reports the byte count written;
  *   - unlink() removes it, and the ACP no longer finds it;
  *   - with the layer off again, no POSIX file of that name exists in the cwd.
- * Without the layer linked (a host libc): honest SKIP (77). No /dev/vms: SKIP.
+ * Registered only where the layer is linked (OVMX_CRTL_FD_STATIC; tests/qemu/
+ * CMakeLists.txt), so it never builds to SKIP on a rig without it. No /dev/vms: SKIP.
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -65,8 +66,7 @@ int main(void)
 {
     printf("=== test_syssvc_crtl_static: the C RTL's file system is RMS ===\n");
 #if !defined(OVMX_CRTLFD_STATIC)
-    printf("=== test_syssvc_crtl_static: 0 passed, 0 failed (SKIPPED: the C RTL file layer is not linked in this build) ===\n");
-    return EXIT_SKIP;
+#error "test_syssvc_crtl_static is registered only where the C RTL file layer is linked (OVMX_CRTL_FD_STATIC, tests/qemu/CMakeLists.txt)"
 #else
     {
         static const char l1[] = "first line\n", l2[] = "the second line\n";

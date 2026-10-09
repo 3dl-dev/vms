@@ -10308,12 +10308,13 @@ cmd_selftest() {
         # executive-resident BGn: device). It was absent from this copy set, so
         # that defect was reported as a dead fixture ("its sed anchor no longer
         # matches") on every selftest run even though its anchor is fine.
-        if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
-                   "$_st_root/libvmssys" "$_st_root/libvms" \
-                   "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
-                   "$_st_root/vmsfs" "$_st_root/vmstcpip" "$_st_root/imgact" \
-                   "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip,imgact} for the self-test"
+        # THE WHOLE src/ TREE, not a list of directories (vms-dda): a list goes
+        # stale the moment a defect targets a directory nobody added -- it was
+        # vmstcpip once (vms-6c6), then vmsdecnet (net-client-takes-qio-service-
+        # status reported as a dead fixture though its anchor matched) -- and
+        # every such miss reads as a broken anchor rather than a broken copy.
+        if ! cp -a "$_st_root/." "$_st_tmp/tree/" 2>/dev/null; then
+            echo "FAIL: cannot copy $_st_root for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

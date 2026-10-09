@@ -119,6 +119,27 @@ jobs:
       - name: check_cache_writers.py
         run: python3 tools/ci/check_cache_writers.py .
 
+  negctl-fixtures-selftest:
+    # Every per-facility negative control injects its defect with a sed anchor
+    # into a source file. When a change moves an anchor, the mutation injects
+    # NOTHING and the QEMU control certifies a defect that was never applied --
+    # and the heavy negctl shards that would notice do not run on pull_request.
+    # `facility_defects.sh selftest` applies every defect to a scratch copy of
+    # the tree and fails on any dead anchor (net-client-takes-qio-service-status
+    # went dead on main unseen, 2026-10-09). It takes about a minute, so it runs
+    # on EVERY pull request and push, with no path filter: any file a defect
+    # anchors in can move an anchor.
+    name: Negative-control fixtures self-test (every defect's anchor still injects)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: facility_defects.sh selftest
+        run: sh tests/qemu/facility_defects.sh selftest "$GITHUB_WORKSPACE"
+      - name: facility_defects.sh coverage
+        run: sh tests/qemu/facility_defects.sh coverage src tests/qemu
+
   compat-surface-drift:
     name: Compat Surface Drift Gate (INV-LEDGER)
     needs: changes

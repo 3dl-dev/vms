@@ -519,6 +519,14 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
  * out lock-id 0 is not a grant) and E_CLASS for a body that is not a cat-0x02
  * op-0x01/op-0x07 request.
  */
+/* The immediate answer to a CONVERT a master QUEUED: the request echoed, cat
+ * 0x82, body[34] = 0xfb, body[52:54] left zero (rd vms-cab). */
+vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body,
+							 uint32_t req_len,
+							 uint8_t *frame,
+							 uint32_t cap,
+							 uint32_t *written);
+
 vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 						    uint32_t req_len,
 						    uint32_t master_lkid,
@@ -1074,6 +1082,10 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * answers' 0xf9/0xf8 are declared with the directory role above; this is the
  * third value, and the one a master's GRANT carries. */
 #define VMS_DLM_REPLY_GRANTED             0xfau
+/* A master QUEUED the request (rd vms-cab): the immediate answer to a CONVERT
+ * that cannot be granted yet. Grounded from real VAX<->VAX pairs, see
+ * vms_dlm_convert_response_build_queued. */
+#define VMS_DLM_REPLY_QUEUED              0xfbu
 
 /*
  * body[30:32] (abs 102): the BLKAST's mode-context pair.

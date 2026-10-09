@@ -182,6 +182,7 @@ dlm-grant-handles-swapped
 dlm-grant-record-omitted
 dlm-echo-guard-never-caps
 dlm-deadlock-search-follows-remote-holders
+dlm-queued-convert-answered-as-granted
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -763,6 +764,20 @@ EOF
         why)          echo "the search follows the delivery process's other waiting locks as if they were the blocker's own wait-for edges: two VAXes contending for one resource become one owner blocking itself, and without the step budget the search re-pushes them forever with res->lock held -- the lab OVMX node spun CPU 0 into an RCU stall the moment a local CONVERT queued behind a VAX EX (2026-10-09 11:12Z).";;
         require_fail) cat <<'EOF'
 *** and it never needed the step budget: a remote holder's other waits are not this request's wait-for edges ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-convert-answered-as-granted)
+        case "$_f" in
+        facility)     echo "the immediate answer to a CONVERT this master QUEUED (vms_cluster_codec_dlm.c vms_dlm_convert_response_build_queued, rd vms-cab): the request echoed with outcome 0xfb, exactly as a real VAX master answers";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the queued answer claims GRANTED (0xfa): the VAX would believe it holds a mode it does not -- two holders of one EX. Without any answer at all the VAX process waits in RWSCS for ever (measured, ci6-evac-13).";;
+        require_fail) cat <<'EOF'
+*** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
+  ... outcome byte 0xfb (queued)
 EOF
                       ;;
         esac;;
@@ -1912,6 +1927,10 @@ apply_edit() {
         # removes the anchor, so a second apply cannot match.
         sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
         sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+
+    dlm-queued-convert-answered-as-granted)
+        # The queued outcome is written in exactly one place.
+        sed -i 's|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_REC + 2u, VMS_DLM_REPLY_QUEUED);|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_REC + 2u, VMS_DLM_REPLY_GRANTED); /* NEGCTL dlm-queued-convert-answered-as-granted */|' "$_file";;
 
     dlm-deadlock-search-follows-remote-holders)
         # The skip line is unique in vms_lock.c.

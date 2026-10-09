@@ -155,6 +155,7 @@ struct vms_dlm_scs {
 	uint32_t grants_sent;         /* grant replies built from a real LKB  */
 	uint32_t denies_sent;
 	uint32_t queued_no_reply;     /* genuinely queued: the grant comes later */
+	uint32_t queued_answered;     /* queued CONVERTs answered 0xfb at once (vms-cab) */
 	uint32_t redirects_sent;      /* "the master is X", from a real RSB   */
 	uint32_t blkasts_sent;        /* op-0x05 blocking ASTs really emitted,*/
 				       /* built from the blocking LKB's own two*/
@@ -1377,6 +1378,30 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 							      : e->req_lkid,
 					   in->body, in->len);
 		dlm_arm_send_blkast(d, &res);
+		/*
+		 * A queued CONVERT is ANSWERED NOW (rd vms-cab): a real master
+		 * echoes it back with body[34] = 0xfb, and a VAX that gets no
+		 * answer waits in RWSCS for ever. A queued first ENQ (op 0x01)
+		 * has master-side fields no capture lets this node fill
+		 * (body[40:44] reads as the master's own S0 address), so it
+		 * stays the honest, counted silence.
+		 */
+		if (wireop == VMS_DLM_WIREOP_CONVERT) {
+			uint32_t written = 0;
+
+			memset(d->txframe, 0, sizeof(d->txframe));
+			if (vms_dlm_convert_response_build_queued(
+				    in->body, in->len, d->txframe,
+				    (uint32_t)sizeof(d->txframe),
+				    &written) != VMS_CODEC_OK) {
+				d->codec_failures++;
+				return -1;
+			}
+			if (dlm_arm_stage_reply(d, in, reply) != 0)
+				return -1;
+			d->queued_answered++;
+			return 0;
+		}
 		d->queued_no_reply++;
 		return 0;
 	case VMS_DLM_MASTER_REDIRECT:

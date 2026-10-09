@@ -5,8 +5,8 @@
  * A system service built for the OpenVMS Alpha calling standard (the OVMX/Alpha
  * shareables a native VMS image calls) links against DECC$SHR, which exports
  * the DEC C RTL's names only (tools/cross-alpha-vms/musl-arch/
- * decc-crtl-names.txt). POSIX timers, termios, setpriority, sched_yield and the
- * realtime signal range are not among them, so the producer link left each
+ * decc-crtl-names.txt). POSIX timers, termios, setpriority, sched_yield, fork and
+ * the realtime signal range are not among them, so the producer link left each
  * reference at 0 and a service that reached one jumped to address 0. In that
  * build each name below fails honestly instead (-1, errno ENOSYS), and the
  * service takes the failure path it already has for a host that refuses the
@@ -34,6 +34,7 @@ static inline int ovmx_host_absent(void)
 #undef tcflush
 #undef setpriority
 #undef sched_yield
+#undef fork
 #define timer_create(c, s, t)       ((void)(c), (void)(s), (void)(t), ovmx_host_absent())
 #define timer_settime(t, f, n, o)   ((void)(t), (void)(f), (void)(n), (void)(o), ovmx_host_absent())
 #define timer_delete(t)             ((void)(t), ovmx_host_absent())
@@ -42,6 +43,7 @@ static inline int ovmx_host_absent(void)
 #define tcflush(fd, q)              ((void)(fd), (void)(q), ovmx_host_absent())
 #define setpriority(w, i, n)        ((void)(w), (void)(i), (void)(n), ovmx_host_absent())
 #define sched_yield()               ovmx_host_absent()
+#define fork()                      ovmx_host_absent()
 #else
 #define OVMX_HOST_ABSENT 0
 #endif

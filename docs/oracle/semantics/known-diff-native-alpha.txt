@@ -7,3 +7,26 @@
 # tools/oracle/semantic/semantic_diff.py --known: an unlisted difference fails
 # the gate, and so does a listed case that now matches. Fix the bug, delete the
 # line.
+ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS (same as the Linux gate)
+fao FAO.UIC.ID  # vms-e1a7: !%I needs the rights database, not in the VMS-ABI producers -- prints [1,4]
+info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive (same as the Linux gate)
+info DVI.SYSCOMMAND  # vms-3432: $GETDVI of SYS$COMMAND is SS$_NOSUCHDEV under the OVMX/Alpha boot
+info DVI.TT  # vms-3432: $GETDVI of TT is SS$_NOSUCHDEV under the OVMX/Alpha boot
+lnm LNM.TRN.SYSCMD  # vms-3432: SYS$COMMAND is not the terminal-device form (attr 0400 vs 0700)
+lnm LNM.TRN.SYSIN  # vms-3432: SYS$INPUT is not the terminal-device form (attr 0400 vs 0700)
+lnm LNM.TRN.SYSOUT  # vms-3432: SYS$OUTPUT is not the terminal-device form (attr 0400 vs 0702, mode 1 vs 2)
+lnm LNM.TRN.SYSLOGIN  # vms-3432: SYS$LOGIN is in LNM$SYSTEM, not the job table
+lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job (same as the Linux gate)
+lnm LNM.TRN.TT  # vms-3432: TT attr 0600 vs 0700
+lnm LNM.TRN.LOGIN_SURVIVES  # vms-3432: follows SYS$LOGIN's table (mode 2 vs 1)
+rtl LIB.FIND_FILE.DEFAULT  # vms-e1a7: no RMS $PARSE/$SEARCH in the VMS-ABI producers -- SS$_NOSUCHDEV
+rtl LIB.FIND_FILE.SAME_CTX_AGAIN  # vms-e1a7: as LIB.FIND_FILE.DEFAULT
+rtl LIB.FIND_FILE.WILD.1  # vms-e1a7: as LIB.FIND_FILE.DEFAULT
+rtl LIB.FIND_FILE.WILD.2  # vms-e1a7: as LIB.FIND_FILE.DEFAULT
+rtl LIB.FIND_FILE.NONE  # vms-e1a7: as LIB.FIND_FILE.DEFAULT
+rtl LIB.FIND_FILE.SYNTAX  # vms-e1a7: as LIB.FIND_FILE.DEFAULT
+rtl LIB.GETJPI.UIC.STRING  # vms-e1a7: the UIC's identifier name needs the rights database -- [1,4]
+tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count (same as the Linux gate)
+tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT (same as the Linux gate)
+tt TT.ILLFUNC  # vms-40fb: an illegal function through the VMS-ABI $QIOW is SS$_BADPARAM, IOSB untouched
+tt TT.READPROMPT.TIMED0  # vms-40fb: missing from the VMS-ABI terminal path

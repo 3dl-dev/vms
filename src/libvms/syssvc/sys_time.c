@@ -408,6 +408,8 @@ static struct vt_slot {
     uint64_t  due_ns;                  /* CLOCK_REALTIME */
 } vt[VT_MAX];
 static int vt_installed;
+static void (*vt_poll_fn)(void);       /* a 5 ms poll ($QIO's pending mailbox reads) */
+#define VT_POLL_NS 5000000ULL
 
 static long long vt_syscall(long long n, long long a1, long long a2, long long a3,
                             long long a4, long long a5)
@@ -453,6 +455,8 @@ static void vt_arm(void)
     for (int i = 0; i < VT_MAX; i++)
         if (vt[i].active && (!due || vt[i].due_ns < due))
             due = vt[i].due_ns;
+    if (vt_poll_fn && (!due || now + VT_POLL_NS < due))
+        due = now + VT_POLL_NS;
     long long it[4] = { 0, 0, 0, 0 };  /* it_interval {sec,usec}, it_value {sec,usec} */
     if (due) {
         uint64_t d = due > now ? due - now : 0;
@@ -479,6 +483,8 @@ static void vt_alarm(int sig, void *si, void *uc)
         if (s.astadr)
             s.astadr(s.reqidt);
     }
+    if (vt_poll_fn)
+        vt_poll_fn();
     vt_arm();
 }
 
@@ -509,6 +515,22 @@ static int vt_install(void)
     vt_installed = 1;
     return 1;
 }
+
+/* For sys_qio.c: run fn every 5 ms from the same SIGALRM until called with
+ * NULL, and block / restore that signal around shared state. */
+int ovmx$$vt_poll(void (*fn)(void))
+{
+    if (fn && !vt_install())
+        return 0;
+    uint64_t old = vt_block();
+    vt_poll_fn = fn;
+    if (vt_installed)
+        vt_arm();
+    vt_restore(old);
+    return 1;
+}
+uint64_t ovmx$$vt_block(void) { return vt_block(); }
+void ovmx$$vt_restore(uint64_t old) { vt_restore(old); }
 #endif /* !OVMX_HOST_POSIX_TIMERS */
 
 /*

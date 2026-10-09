@@ -1305,9 +1305,12 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     pid_t pid = fork();
     if (pid < 0) {
+        int why = errno;
         close(namefd[0]);
         close(namefd[1]);
-        return SS$_INSFMEM;
+        /* No host fork at all (the OpenVMS-calling-standard build,
+         * ovmx_host_absent.h): the service is not available there. */
+        return why == ENOSYS ? SS$_UNSUPPORTED : SS$_INSFMEM;
     }
 
     if (pid == 0) {

@@ -3742,6 +3742,16 @@ static void eihd_activate_main(const char *spec, const char *volpath)
 	unsigned long cond = imgact_vms_transfer_stack((void *)xvec[0],
 						       OVMX_AI_VMS_ACTIVATION, args,
 						       imgact_p1_stack());
+	/* Image exit: the C RTL's exit handler writes out every stream it still
+	 * buffers (VMS declares it when the C RTL initializes). OVMX's C RTL has
+	 * no exit handler of its own here, so the activator runs that flush
+	 * before recording the exit. */
+	{
+		struct ovmx_prod *crtl = find_crtl_producer();
+		unsigned long ff = crtl ? sv_find_named(crtl, "decc$fflush") : 0;
+		if (ff)
+			(void)imgact_sv_call(ff, 0, 0);
+	}
 	imgact_vms_exit(cond);
 	sys_exit(IMGACT_EXIT_NOEXEC);
 }

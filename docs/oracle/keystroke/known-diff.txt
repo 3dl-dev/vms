@@ -4,7 +4,6 @@
 # tools/oracle/keystroke/ksdiff.py: an unlisted difference fails the gate, and so does
 # a listed step that now matches. Fix the bug, delete the line. Nearly every step
 # also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
-BC.READ S  # vms-53a: broadcast mid-read: no driver redisplay
 BC.READ W  # vms-53a: broadcast mid-read: no driver redisplay
 ERR.DCL E1  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E3  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
@@ -42,22 +41,8 @@ LOGIN.BANNER P  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT L  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT X  # vms-bd71: LOGINOUT console bytes differ
-OOB.CTRLO OW  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO OW2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLS Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLS X  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY C  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT C  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT O  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT O2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT Y2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 RC.RECALL U1  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL U2  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL DN  # vms-eb3d: command recall (up/down/^B) not VMS

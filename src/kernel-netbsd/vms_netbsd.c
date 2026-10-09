@@ -519,7 +519,9 @@ vms_proc_free_claimed(struct vms_proc *proc)
  * sleep. The claim is the facility's: unlink under vms_proc_hash_lock (a
  * concurrent reaper that already unlinked it leaves nothing to find here),
  * deliver an armed completion under that same lock, then free outside it --
- * the Linux module's vms_proc_free() sequence.
+ * the Linux module's vms_proc_free() sequence. A process that recorded its exit
+ * condition is the exception: its row stays for the reaper, so its parent can
+ * still read that condition (rd vms-3701).
  */
 static void *vms_exithook_cookie;
 
@@ -532,6 +534,14 @@ vms_proc_exithook(struct proc *p, void *arg __unused)
 	exec_lock(&vms_proc_hash_lock);
 	exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
 		if (proc->pid == p->p_pid) {
+			/* A process that recorded its $EXIT condition keeps its row
+			 * until its parent reaps it (the lazy reaper, proc_find_raw):
+			 * DCL's RUN reads that condition into $STATUS after the image
+			 * has exited (rd vms-3701; the vax-status-gate went red when
+			 * this hook freed the row at exit). Its armed completion was
+			 * already delivered when the exit was recorded. */
+			if (proc->has_exit_status && !proc->compl_armed)
+				break;
 			exec_hash_del_rcu(&proc->hash_node);
 			victim = proc;
 			break;

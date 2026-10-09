@@ -1,14 +1,14 @@
 # keystroke oracle transcript (unmasked) -- case LE.CTRLR (OpenVMS VAX V7.3 OPA0:)
 # line editing: ^R redisplays the prompt and the line typed so far
-# case-sha256 6dd117055e5702d4433d542547f8f14020bab635cea9545f7544bd720c75d0ea
+# case-sha256 36aff0bbe62746e63e72bbf2f85d1f4f723b52cdbcd8012cc4498f776bc6740f
 @start loggedin OK
+=== STEP V0 quiet
 === STEP T
 | WRITE SYS$OUTPUT 1
 === STEP D
-| \1
+| <BS> <BS>
 === STEP X
-| \<CR><LF>
-| <CR><NUL>$ WRITE SYS$OUTPUT 
+| <CR><NUL>$ WRITE SYS$OUTPUT                                                                                                                 <BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
 === STEP F
 | 2
 === STEP R

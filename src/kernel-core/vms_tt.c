@@ -82,6 +82,8 @@ struct vms_tt {
 	uint8_t  line[VMS_TT_LINE_MAX];
 	uint32_t len;
 	uint32_t cur;              /* line editing: the cursor, 0..len (rd vms-eda8) */
+	uint32_t rd_pcol;          /* the column the line starts at (after the prompt) */
+	uint32_t rd_width;         /* the terminal's width at read start */
 	int      ovs;              /* overstrike (^A toggles; INSERT_EDITING default) */
 	int      hc_del;           /* hardcopy: inside a \...\ rubout run */
 	int      esc;              /* inside an escape sequence: 1 after ESC, 2 after CSI/SS3 */
@@ -151,6 +153,16 @@ static void tt_port_exit(struct vms_tt *tt)
 	if (--tt->port_busy == 0)
 		exec_cv_broadcast(&tt->cv);
 	exec_unlock(&tt->lock);
+}
+
+static uint32_t tt_devwidth(struct vms_device *dev)
+{
+	uint32_t w;
+
+	exec_lock(&dev->lock);
+	w = dev->width;
+	exec_unlock(&dev->lock);
+	return w ? w : 80;
 }
 
 static uint64_t tt_devchar(struct vms_device *dev)
@@ -331,6 +343,8 @@ static void tt_redisplay(struct vms_tt *tt, int with_line)
 
 static void tt_bs(struct vms_tt *tt, uint32_t n);
 static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad);
+static void tt_redraw_in_place(struct vms_tt *tt);
+static void tt_prompt_cr(struct vms_tt *tt);
 
 /* Rub out the line (^X during a read: all of it; ^U: from the cursor back to
  * the start). */
@@ -348,19 +362,14 @@ static void tt_kill_line(struct vms_tt *tt)
 			tt_bs(tt, keep);
 			return;
 		}
-		if (keep == 0) {
-			for (i = 0; i < tt->len; i++)
-				tt_out(tt, "\b \b", 3);
-		} else {
-			uint32_t gone = tt->cur;
-
-			tt_bs(tt, gone);
-			memmove(tt->line, tt->line + gone, keep);
-			tt->len = keep;
-			tt->cur = 0;
-			tt_echo_tail(tt, 0, gone);
-			return;
-		}
+		/* a screen: the prompt again in place, what is left after it,
+		 * the rest of the line erased (LE.CTRLU / LE.CTRLX) */
+		(void)i;
+		memmove(tt->line, tt->line + tt->cur, keep);
+		tt->len = keep;
+		tt->cur = 0;
+		tt_redraw_in_place(tt);
+		return;
 	}
 	memmove(tt->line, tt->line + tt->cur, keep);
 	tt->len = keep;
@@ -386,8 +395,26 @@ static void tt_bs(struct vms_tt *tt, uint32_t n)
 		tt_out1(tt, CH_BS);
 }
 
-/* Show line[from..len) then come back to the cursor; `pad` blanks cover
- * characters that were removed from the end of the visible line. */
+/*
+ * ERASE TO THE END OF THE LINE, the way the VAX V7.3 driver does on a video
+ * terminal it knows no escape sequences for (OPA0:, "Unknown" type; keystroke
+ * LE.* captured with SET TERMINAL/NOHARDCOPY): blanks out to the last column
+ * but one, then back. `col` is where the cursor stands; returns the blanks
+ * written.
+ */
+static uint32_t tt_erase_eol(struct vms_tt *tt, uint32_t col)
+{
+	uint32_t last = tt->rd_width ? tt->rd_width - 1 : 79;
+	uint32_t n = col < last ? last - col : 0, i;
+
+	for (i = 0; i < n; i++)
+		tt_out1(tt, ' ');
+	return n;
+}
+
+/* Show line[from..len) then come back to the cursor; on paper, `pad` blanks
+ * cover characters removed from the end, on a screen the rest of the line is
+ * erased. */
 static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad)
 {
 	uint32_t i;
@@ -395,9 +422,41 @@ static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad)
 	if (!tt_echoing(tt))
 		return;
 	tt_out(tt, tt->line + from, tt->len - from);
+	if (!tt_hardcopy(tt)) {
+		uint32_t e = tt_erase_eol(tt, tt->rd_pcol + tt->len);
+		tt_bs(tt, e + tt->len - tt->cur);
+		return;
+	}
 	for (i = 0; i < pad; i++)
 		tt_out1(tt, ' ');
 	tt_bs(tt, tt->len - tt->cur + pad);
+}
+
+/* The prompt again from the start of its line, without its new line (^H, and
+ * a screen's ^U / ^X / ^R). */
+static void tt_prompt_cr(struct vms_tt *tt)
+{
+	const uint8_t *pp = tt->prompt;
+	uint32_t pn = tt->promptsz;
+
+	tt_out1(tt, CH_CR);
+	if (pn >= 2 && pp[0] == CH_CR && pp[1] == CH_LF) {
+		pp += 2;
+		pn -= 2;
+	}
+	tt_out(tt, pp, pn);
+}
+
+/* A screen's redisplay: the line drawn again in place, the rest erased, the
+ * cursor put back (^R; ^U and ^X with what is left of the line). */
+static void tt_redraw_in_place(struct vms_tt *tt)
+{
+	uint32_t e;
+
+	tt_prompt_cr(tt);
+	tt_out(tt, tt->line, tt->len);
+	e = tt_erase_eol(tt, tt->rd_pcol + tt->len);
+	tt_bs(tt, e + tt->len - tt->cur);
 }
 
 /* Remove line[at..at+n) with the cursor at `at` (already moved there on the
@@ -508,25 +567,18 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 			return;
 		case TT_CTRL('R'):                  /* redisplay prompt + line */
 			tt_hc_close(tt);
-			tt_redisplay(tt, 1);
-			if (tt_echoing(tt))
-				tt_bs(tt, tt->len - tt->cur);
+			if (tt_hardcopy(tt)) {
+				tt_redisplay(tt, 1);
+				if (tt_echoing(tt))
+					tt_bs(tt, tt->len - tt->cur);
+			} else if (tt_echoing(tt)) {
+				tt_redraw_in_place(tt);
+			}
 			return;
 		case CH_BS:                         /* ^H: to the start of the line */
 			tt_hc_close(tt);
-			if (tt->cur && tt_echoing(tt)) {
-				tt_out1(tt, CH_CR);
-				if (tt->promptsz) {
-					const uint8_t *pp = tt->prompt;
-					uint32_t pn = tt->promptsz;
-
-					if (pn >= 2 && pp[0] == CH_CR && pp[1] == CH_LF) {
-						pp += 2;
-						pn -= 2;
-					}
-					tt_out(tt, pp, pn);
-				}
-			}
+			if (tt->cur && tt_echoing(tt))
+				tt_prompt_cr(tt);
 			tt->cur = 0;
 			return;
 		case TT_CTRL('E'):                  /* to the end of the line */
@@ -1074,6 +1126,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		tt->rd_flags = req->flags;
 		tt->rd_cap = req->bufsz < VMS_TT_LINE_MAX ? req->bufsz : VMS_TT_LINE_MAX;
 		tt->rd_dc = dc;
+		tt->rd_width = tt_devwidth(tt->dev);
 		tt->len = 0;
 		tt->cur = 0;
 		tt->ovs = !(dc & VMS_TTC_INSERT_EDITING);
@@ -1085,10 +1138,20 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		else
 			tt_std_mask(tt->rd_mask);
 		tt->promptsz = 0;
+		tt->rd_pcol = 0;
 		if (req->prompt && req->promptsz) {
+			uint32_t q;
+
 			tt->promptsz = req->promptsz < VMS_TT_PROMPT_MAX ? req->promptsz
 									 : VMS_TT_PROMPT_MAX;
 			memcpy(tt->prompt, req->prompt, tt->promptsz);
+			for (q = 0; q < tt->promptsz; q++) {
+				uint8_t pc = tt->prompt[q];
+				if (pc == CH_CR || pc == CH_LF)
+					tt->rd_pcol = 0;
+				else if (pc >= 0x20)
+					tt->rd_pcol++;
+			}
 		}
 		tt->rd_deadline = 0;
 		if (req->flags & VMS_TT_RD_TIMED)

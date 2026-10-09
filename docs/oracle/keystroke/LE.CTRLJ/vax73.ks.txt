@@ -1,11 +1,12 @@
 # keystroke oracle transcript (unmasked) -- case LE.CTRLJ (OpenVMS VAX V7.3 OPA0:)
 # line editing: LINEFEED (^J) deletes the word to the left
-# case-sha256 870aeb654f2ee4f5e450818da080e5254a49e8574c056d6c461a92e98172b35e
+# case-sha256 9e3972f2c09c30c65936d35c5ae2221f4ba093b1da1af39b26280720dfeb8978
 @start loggedin OK
+=== STEP V0 quiet
 === STEP T
 | WRITE SYS$OUTPUT 1 BOGUS
 === STEP J
-| <BS><BS><BS><BS><BS>
+| <BS><BS><BS><BS><BS>                                                                                                              <BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
 === STEP R
 | <CR><LF>
 | <CR>1<CR><LF>

@@ -160,7 +160,7 @@ static void rd_wait(struct rd *r)
 
 int main(void)
 {
-    char devnam[32] = "", devnam2[32] = "", scr[512];
+    char devnam[32] = "", devnam2[32] = "", scr[2048];
     uint32_t st, chan = 0, chan2 = 0, state = 0;
     uint64_t prev = 0;
     int m, s;
@@ -528,17 +528,35 @@ int main(void)
     /* ---- line editing (rd vms-eda8): the VAX V7.3 bytes of LE.CURSOR,
      * LE.OVERSTRIKE and LE.CTRLJ ---- */
     {
-        static const char want_cursor[] =
-            "RITE SYS$OUTPUT 13"
-            "\r\0$ "                                        /* ^H */
-            "WRITE SYS$OUTPUT 13\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b" /* W, inserted */
-            "RITE SYS$OUTPUT 13"                              /* ^E */
-            "\b"                                             /* ^D */
-            "23\b"                                           /* 2, inserted */
-            "\b"                                             /* <- */
-            "2"                                               /* -> */
-            "3"                                               /* ^F */
-            "\r\n";                                         /* RETURN */
+        /* A screen with no escape sequences: the driver erases to the end
+         * of the line by printing blanks out to the last column but one and
+         * backing up (LE.* captured with SET TERMINAL/NOHARDCOPY). The column
+         * count is the unit's width; the prompt "$ " starts the line at 2. */
+        char want_cursor[1024];
+        size_t wl = 0;
+        unsigned wdt = 80, last, k;
+        struct vms_devinfo wi;
+
+        memset(&wi, 0, sizeof wi);
+        if ((vms_kif_getdvi_devnam(devnam, &wi) & 1) && wi.width)
+            wdt = wi.width;
+        last = wdt - 1;
+#define WANT(str, n) do { memcpy(want_cursor + wl, (str), (n)); wl += (n); } while (0)
+#define WANTC(ch, n) do { for (k = 0; k < (n); k++) want_cursor[wl++] = (ch); } while (0)
+        WANT("RITE SYS$OUTPUT 13", 18);
+        WANT("\r\0$ ", 4);                              /* ^H */
+        WANT("WRITE SYS$OUTPUT 13", 19);                 /* W inserted, the rest after it */
+        WANTC(' ', last - (2 + 19)); WANTC('\b', last - (2 + 19) + 18);
+        WANT("RITE SYS$OUTPUT 13", 18);                  /* ^E */
+        WANT("\b", 1);                                   /* ^D */
+        WANT("23", 2);                                   /* 2 inserted */
+        WANTC(' ', last - (2 + 20)); WANTC('\b', last - (2 + 20) + 1);
+        WANT("\b", 1);                                   /* <- */
+        WANT("2", 1);                                    /* -> */
+        WANT("3", 1);                                    /* ^F */
+        WANT("\r\n", 2);                                 /* RETURN */
+#undef WANT
+#undef WANTC
         size_t got;
 
         rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
@@ -551,8 +569,8 @@ int main(void)
         CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
               "^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')");
         /* negctl-knockon: tt-edit-cursor-ignored */
-        CHECK(got == sizeof(want_cursor) - 1 && memcmp(scr, want_cursor, got) == 0,
-              "the editing echo is the VAX's: <CR><NUL>$ for ^H, the line and backspaces for an insert");
+        CHECK(got == wl && memcmp(scr, want_cursor, got) == 0,
+              "the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up");
 
         rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
         msleep(200);

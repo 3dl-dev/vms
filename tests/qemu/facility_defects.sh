@@ -2306,7 +2306,7 @@ EOF
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-the editing echo is the VAX's: <CR><NUL>$ for ^H, the line and backspaces for an insert
+the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up
 EOF
                       ;;
         knock_on_why)  echo "the same misplaced character changes the echo: the inserted character is printed alone, with no tail and no backspaces.";;

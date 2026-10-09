@@ -1,0 +1,361 @@
+$ TYPE MYSHR2.ANL
+
+Analyze Image                                 8-OCT-2026 21:13:33.41   Page 1
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+This is an OpenVMS Alpha image file
+
+IMAGE HEADER
+
+	Fixed Header Information
+
+		image format major id: 3, minor id: 0
+		header block count: 2
+		image type: shareable (EIHD$K_LIM)
+			global section major id: %X'02', minor id: %X'000000'
+			match control: ISD$K_MATLEQ
+		I/O channel count: default
+		I/O pagelet count: default
+		Symbol Vector Virtual Address: %X'00000060'
+		Symbol Vector Size: 32 bytes
+		Virtual Memory Block Size: 65536 (BPAGE = 16)
+		Fixup Section Virtual Address: %X'00030000'
+		linker flags:
+			(0)  EIHD$V_LNKDEBUG      0
+			(1)  EIHD$V_LNKNOTFR      1
+			(2)  EIHD$V_NOP0BUFS      0
+			(3)  EIHD$V_PICIMG        1
+			(4)  EIHD$V_P0IMAGE       0
+			(5)  EIHD$V_DBGDMT        1
+			(6)  EIHD$V_INISHR        0
+			(7)  EIHD$V_XLATED        0
+			(8)  EIHD$V_BIND_CODE_SEC 0
+			(9)  EIHD$V_BIND_DATA_SEC 0
+			(10) EIHD$V_MKTHREADS     0
+			(11) EIHD$V_UPCALLS       0
+			(12) EIHD$V_OMV_READY     0
+			(13) EIHD$V_EXT_BIND_SECT 0
+
+	Image Activation Information
+
+		first transfer address:  %X'00000340'
+		second transfer address: %X'00000000'
+		third transfer address:  %X'00000000'
+
+	Global Symbol Table & Debug Symbol Table Information
+
+		debug symbol table VBN:  0, byte count: 0
+		global symbol table VBN: 7, record count: 5
+		debug module/psect table VBN: 0, byte count: 0
+
+	Image Identification Information
+
+		image name: "MYSHR2"
+		image file identification: "V1"
+		image file build identification: ""
+		link date/time:  8-OCT-2026 20:34:30.19
+		linker identification: "A13-04"
+
+
+Analyze Image                                 8-OCT-2026 21:13:33.42   Page 2
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+	Patch Information
+
+		There are no patches at this time.
+
+	Image Section Descriptors (ISD)
+
+		1)  image section descriptor (36 bytes)
+			byte count: 512
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  EISD$V_GBL           0
+				(1)  EISD$V_CRF           1
+				(2)  EISD$V_DZRO          0
+				(3)  EISD$V_WRT           1
+				(4)  EISD$V_INITALCODE    0
+				(5)  EISD$V_BASED         0
+				(6)  EISD$V_FIXUPVEC      0
+				(7)  EISD$V_RESIDENT      0
+				(8)  EISD$V_VECTOR        0
+				(9)  EISD$V_PROTECT       0
+				(10) EISD$V_LASTCLU       0
+				(11) EISD$V_EXE           0
+				(12) EISD$V_NONSHRADR     1
+			section type: EISD$K_PRVFXD
+			base VBN: 3
+
+		2)  image section descriptor (36 bytes)
+			byte count: 512
+			base virtual address: %X'00010000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  EISD$V_GBL           0
+				(1)  EISD$V_CRF           1
+				(2)  EISD$V_DZRO          0
+				(3)  EISD$V_WRT           1
+				(4)  EISD$V_INITALCODE    0
+				(5)  EISD$V_BASED         0
+				(6)  EISD$V_FIXUPVEC      0
+				(7)  EISD$V_RESIDENT      0
+				(8)  EISD$V_VECTOR        0
+				(9)  EISD$V_PROTECT       0
+				(10) EISD$V_LASTCLU       0
+				(11) EISD$V_EXE           0
+				(12) EISD$V_NONSHRADR     0
+			section type: EISD$K_PRVFXD
+			base VBN: 4
+
+		3)  image section descriptor (36 bytes)
+			byte count: 512
+			base virtual address: %X'00020000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  EISD$V_GBL           0
+				(1)  EISD$V_CRF           0
+
+Analyze Image                                 8-OCT-2026 21:13:33.42   Page 3
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+				(2)  EISD$V_DZRO          0
+				(3)  EISD$V_WRT           0
+				(4)  EISD$V_INITALCODE    0
+				(5)  EISD$V_BASED         0
+				(6)  EISD$V_FIXUPVEC      0
+				(7)  EISD$V_RESIDENT      0
+				(8)  EISD$V_VECTOR        0
+				(9)  EISD$V_PROTECT       0
+				(10) EISD$V_LASTCLU       0
+				(11) EISD$V_EXE           1
+				(12) EISD$V_NONSHRADR     0
+			section type: EISD$K_PRVFXD
+			base VBN: 5
+
+		4)  image section descriptor (36 bytes)
+			byte count: 512
+			base virtual address: %X'00030000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  EISD$V_GBL           0
+				(1)  EISD$V_CRF           1
+				(2)  EISD$V_DZRO          0
+				(3)  EISD$V_WRT           1
+				(4)  EISD$V_INITALCODE    0
+				(5)  EISD$V_BASED         0
+				(6)  EISD$V_FIXUPVEC      1
+				(7)  EISD$V_RESIDENT      0
+				(8)  EISD$V_VECTOR        0
+				(9)  EISD$V_PROTECT       0
+				(10) EISD$V_LASTCLU       0
+				(11) EISD$V_EXE           0
+				(12) EISD$V_NONSHRADR     0
+			section type: EISD$K_PRVFXD
+			base VBN: 6
+
+		5)  image section descriptor (52 bytes)
+			byte count: 914944
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  EISD$V_GBL           1
+				(1)  EISD$V_CRF           0
+				(2)  EISD$V_DZRO          0
+				(3)  EISD$V_WRT           0
+				(4)  EISD$V_INITALCODE    0
+				(5)  EISD$V_BASED         0
+				(6)  EISD$V_FIXUPVEC      0
+				(7)  EISD$V_RESIDENT      0
+				(8)  EISD$V_VECTOR        0
+				(9)  EISD$V_PROTECT       0
+				(10) EISD$V_LASTCLU       0
+				(11) EISD$V_EXE           0
+				(12) EISD$V_NONSHRADR     0
+			section type: EISD$K_SHRPIC
+			base VBN: 0
+
+Analyze Image                                 8-OCT-2026 21:13:33.43   Page 4
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+			global section major id: %X'01', minor id: %X'000001'
+			match control: ISD$K_MATLEQ
+			global section name: "LIBRTL_001"
+
+		6)  image section descriptor (64 bytes)
+			byte count: 10240
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  EISD$V_GBL           1
+				(1)  EISD$V_CRF           0
+				(2)  EISD$V_DZRO          0
+				(3)  EISD$V_WRT           0
+				(4)  EISD$V_INITALCODE    0
+				(5)  EISD$V_BASED         0
+				(6)  EISD$V_FIXUPVEC      0
+				(7)  EISD$V_RESIDENT      0
+				(8)  EISD$V_VECTOR        0
+				(9)  EISD$V_PROTECT       0
+				(10) EISD$V_LASTCLU       0
+				(11) EISD$V_EXE           0
+				(12) EISD$V_NONSHRADR     0
+			section type: EISD$K_PRVFXD
+			base VBN: 0
+			global section major id: %X'33', minor id: %X'FECE84'
+			match control: ISD$K_MATEQU
+			global section name: "SYS$PUBLIC_VECTORS_001"
+
+Analyze Image                                 8-OCT-2026 21:13:33.43   Page 5
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+SHAREABLE IMAGE - GLOBAL SYMBOL TABLE
+
+
+1.  MODULE HEADER (EOBJ$C_EMH), 64 bytes
+
+	structure level: 2
+	maximum record size: 512
+	module name: "MYSHR2"
+	module version: "V1"
+	creation   date/time:  8-OCT-2026 20:34
+
+
+2.  LANGUAGE PROCESSOR HEADER (EMH$C_LNM), 19 bytes
+
+	Textual information:
+	"Linker A13-04"
+
+
+3.  GLOBAL SYMBOL DIRECTORY (EOBJ$C_EGSD), 32 bytes
+
+	1)  Program Section Definition (EGSD$C_PSC)
+		alignment: 1-byte boundary                       <-- psect 0
+		attribute flags:
+			(0)  EGPS$V_PIC           1
+			(1)  EGPS$V_LIB           1
+			(2)  EGPS$V_OVR           0
+			(3)  EGPS$V_REL           0
+			(4)  EGPS$V_GBL           0
+			(5)  EGPS$V_SHR           0
+			(6)  EGPS$V_EXE           0
+			(7)  EGPS$V_RD            1
+			(8)  EGPS$V_WRT           0
+			(9)  EGPS$V_VEC           0
+			(10) EGPS$V_NOMOD         0
+			(11) EGPS$V_COM           0
+		allocation: 0 (%X'00000000')
+		symbol: ".$$ABS$$."
+
+
+4.  GLOBAL SYMBOL DIRECTORY (EOBJ$C_EGSD), 104 bytes
+
+	1) Universal Symbol Specification (EGSD$C_SYMG)
+		data type: DSC$K_DTYPE_Z (0)
+		symbol flags:
+			(0)  EGSY$V_WEAK          0
+			(1)  EGSY$V_DEF           1
+			(2)  EGSY$V_UNI           1
+			(3)  EGSY$V_REL           1
+			(4)  EGSY$V_COMM          0
+			(5)  EGSY$V_VECEP         0
+			(6)  EGSY$V_NORM          1
+		psect: 0
+		value: 16 (%X'00000010')
+		symbol vector entry (procedure)
+			%X'00000000 00020030'
+
+Analyze Image                                 8-OCT-2026 21:13:33.44   Page 6
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+			%X'00000000 00000020'
+		symbol: "MYSHR_GREET"
+
+	2) Universal Symbol Specification (EGSD$C_SYMG)
+		data type: DSC$K_DTYPE_Z (0)
+		symbol flags:
+			(0)  EGSY$V_WEAK          0
+			(1)  EGSY$V_DEF           1
+			(2)  EGSY$V_UNI           1
+			(3)  EGSY$V_REL           1
+			(4)  EGSY$V_COMM          0
+			(5)  EGSY$V_VECEP         0
+			(6)  EGSY$V_NORM          1
+		psect: 0
+		value: 0 (%X'00000000')
+		symbol vector entry (procedure)
+			%X'00000000 00020000'
+			%X'00000000 00000000'
+		symbol: "MYSHR_ADD"
+
+
+5.  END OF MODULE (EOBJ$C_EEOM), 10 bytes
+
+	severity: successful (0)
+
+
+
+Analyze Image                                 8-OCT-2026 21:13:33.44   Page 7
+SYS$SYSROOT:[SYSMGR]MYSHR2.EXE;1
+ANALYZ A01-07
+
+IMAGE ACTIVATOR FIXUP SECTION
+
+
+	Fixed Information
+
+		Flags:
+			(0)  EIAF$V_SHR           1
+
+	EIAF$L_QRELFIXOFF    : 00000058
+	EIAF$L_LRELFIXOFF    : 00000070
+	EIAF$L_QDOTADROFF    : 00000000
+	EIAF$L_LDOTADROFF    : 00000000
+	EIAF$L_CODEADROFF    : 00000000
+	EIAF$L_LPFIXOFF      : 00000088
+	EIAF$L_CHGPRTOFF     : 000000A0
+	EIAF$L_SHLSTOFF      : 000000C8
+	EIAF$L_SHRIMGCNT     : 00000002
+	EIAF$L_SHLEXTRA      : 00000000
+	EIAF$L_PERMCTX       : 00000000
+	EIAF$L_LPPSBFIXOFF   : 00000000
+
+	Shareable Image List
+
+		0)  "LIBRTL"
+		1)  "SYS$PUBLIC_VECTORS"
+
+	Quadword Relocations (relative to %X'00000000')
+
+		  00000008  00000028  00000050  00000060  00000068  00000070
+		  00000078
+
+	Longword Relocations (relative to %X'00000000')
+
+		  00010004
+
+	Linkage Pair Reference Fixups (relative to %X'00000000')
+
+		1 reference to image 0:
+			offset:   00000040
+
+	Protection Change Fixups (relative to %X'00000000')
+
+		address: %X'00030000', byte count: 512
+		protection: PRT$C_UREW
+
+		address: %X'00000000', byte count: 512
+		protection: PRT$C_UR
+
+
+
+The analysis uncovered NO errors.
+
+
+ANALYZE/IMAGE/OUTPUT=MYSHR2.ANL MYSHR2.EXE                                      

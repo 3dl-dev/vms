@@ -217,6 +217,16 @@ if(BUILD_TESTS)
     add_test(NAME imgact_xfer_parse_unit COMMAND test_xfer_parse)
     set_tests_properties(imgact_xfer_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
 
+    # OpenVMS Alpha native image reader (rd vms-3b3f): the EIHD/EISD/EIAF
+    # reader IMGACT uses, run over the real images LINKed on the lab OpenVMS
+    # Alpha V8.4 node and checked field by field against that node's own
+    # ANALYZE/IMAGE reports.
+    add_executable(test_eihd_parse src/imgact/test/test_eihd_parse.c)
+    target_include_directories(test_eihd_parse PRIVATE src/imgact)
+    add_test(NAME imgact_eihd_parse_unit
+        COMMAND test_eihd_parse ${CMAKE_SOURCE_DIR}/tests/native-images/alpha)
+    set_tests_properties(imgact_eihd_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
+
     # elf32-vax symbol-vector resolve (rd vms-73b2, epic vms-404). Host proof
     # that IMGACT's elf32 class-width abstraction (imgact_elf.h, the real
     # backend header) + the real ovmx_symvec resolver bind a real elf32-vax

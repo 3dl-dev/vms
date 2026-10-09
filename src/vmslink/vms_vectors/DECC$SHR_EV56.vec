@@ -1,0 +1,37 @@
+# DECC$SHR_EV56.vec -- OVMX's DECC$SHR_EV56.EXE, the C RTL image an image
+# LINKed on real OpenVMS Alpha reaches when it calls DECC$SHR (rd vms-3b3f).
+# SINGLE SOURCE for this image's symbol vector; format as in
+# SYS$PUBLIC_VECTORS.vec.
+#
+# On OpenVMS Alpha the system logical DECC$SHR is "SYS$SHARE:DECC$SHR_EV56"
+# (observed on the lab V8.4 node), so the activator opens this image for an
+# image's DECC$SHR references. OVMX seeds the same logical
+# (src/vmslnm/lnm_defaults.c, Alpha only). OVMX's own images name
+# DECC$SHR.EXE, OVMX's C RTL, directly; this image forwards into it.
+#
+# Offsets are OBSERVED: the values our probe's link map reported
+# (tools/lab-alpha/probes/ORDSC.MAR; docs/oracle/alpha84-symvec-offsets.txt,
+# DECC$SHR rows). An entry is listed only where the OVMX routine takes the
+# same arguments the way a 32-bit-pointer DEC C caller passes them (values and
+# P0 string addresses) and returns a value, not a structure or pointer the
+# caller would read in VMS layout. Every other slot is retired, so an image
+# that calls one fails to activate (%IMGACT-I-NOTIMPL).
+#
+# DECC$TXPRINTF is printf with IEEE T_float doubles; OVMX's decc$tprintf is
+# the same format engine. OVMX has no 128-bit X_float long double, so a
+# %Lf argument is not supported (the register records it).
+#
+# GSMATCH: images linked on V8.4 record DECC$SHR ident major 1, minor 1,
+# match LEQUAL (observed), so this image carries 1,1.
+#
+#   gsmatch LEQUAL,1,1
+#   use     DECC$SHR.EXE
+#
+# offset  universal        OVMX target
+0x1770    DECC$PUTCHAR     decc$putchar
+0x1780    DECC$PUTS        decc$puts
+0x2070    DECC$ABS         decc$abs
+0x2080    DECC$ATOI        decc$atoi
+0x26C0    DECC$STRCMP      decc$strcmp
+0x2710    DECC$STRLEN      decc$strlen
+0x4960    DECC$TXPRINTF    decc$tprintf

@@ -994,6 +994,51 @@ jobs:
       - name: "VMS-ABI RMS gate — DIRECTORY/FULL File ID cross-check; 3-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate
 
+  alpha-native-image:
+    name: "OVMX/Alpha native image — .EXE files LINKed on real OpenVMS Alpha V8.4 run unchanged: SYS$QIOW/LIB$PUT_OUTPUT (rung 1), DECC$SHR stdio via DECC$SHR_EV56 (rung 2), two-module image + own shareable with GSMATCH and DEFINE (rung 3); refusals match the real activator (vms-3b3f)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+
+      - name: "Native-image gate — rungs 1-3 run, refusals as on VMS; 20-case can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate
+
   # -----------------------------------------------------------------------
   # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --
   # the rung above alpha-crtl-rms-n7 (which is single-object). The milestone

@@ -5,6 +5,7 @@
  * services OVMX's own code calls ($ASSIGN, $DASSGN, $TRNLNM, $CRELNM, and the
  * executive ACP's IO$_ACCESS / IO$_DEACCESS for $QIO on a file channel).
  */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include "lnmdef.h"
 #include "ssdef.h"
 #include "starlet.h"
+#include "lib$routines.h"
 #include "sys_vmsabi_core.h"
 #include "vms_kif.h"
 
@@ -146,4 +148,26 @@ void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), u
         sys$setef(efn);
     if (astadr)
         astadr(astprm);
+}
+
+uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,
+                         void *iosb, unsigned long long astadr,
+                         unsigned long long astprm, const unsigned long long p[6])
+{
+    void (*ast)(uint32_t) = (void (*)(uint32_t))(uintptr_t)astadr;
+    void *p1 = (void *)(uintptr_t)p[0];
+    if (wait)
+        return sys$qiow(efn, chan, func, iosb, ast, (uint32_t)astprm, p1,
+                        (uint32_t)p[1], (uint32_t)p[2], (uint32_t)p[3],
+                        (uint32_t)p[4], (uint32_t)p[5]);
+    return sys$qio(efn, chan, func, iosb, ast, (uint32_t)astprm, p1,
+                   (uint32_t)p[1], (uint32_t)p[2], (uint32_t)p[3],
+                   (uint32_t)p[4], (uint32_t)p[5]);
+}
+
+uint32_t ovmx_vmsabi_put_output(const char *p, unsigned len)
+{
+    struct dsc$descriptor_s d;
+    mkdsc(&d, p, len);
+    return lib$put_output(&d);
 }

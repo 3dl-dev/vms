@@ -154,6 +154,7 @@ docker run --rm \
     -e JOINT_MAIN_CFLAGS \
     -e JOINT_MAIN_MUSL_HEADERS \
     -e JOINT_LINK_BASE \
+    -e JOINT_NATIVE_PROOF \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -266,11 +267,24 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     # the first unstaged producer). A non-veneer run never enters this block.
     cp "$SYS" "$PROC" "$LNM" "$FS" "$VMS" "$OUT/"
 
+    [ "${JOINT_NATIVE_PROOF:-0}" = 1 ] && { : > "$OUT/NATIVE_PROOF"; echo "== NATIVE_PROOF marker staged (vms-3b3f native-image gate) =="; }
+
     echo "-- [vms-9f8e] DECC\$SHR pass 2 (final, the C RTL file layer over RMS, vms-b90) --"
     OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
         ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
         ALPHA_CRTL_RMS_USE="$RMS" \
         sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
+
+    # vms-3b3f: the vector images through which an image LINKed on real
+    # OpenVMS Alpha reaches OVMX (SYS$PUBLIC_VECTORS, LIBRTL, and the C RTL
+    # image DECC$SHR_EV56), each symbol vector in the VMS ordinal layout of
+    # its manifest (src/vmslink/vms_vectors/), forwarding into LIBVMS$SHR or
+    # the final DECC$SHR just built.
+    echo "-- [vms-3b3f] the VMS vector images (SYS\$PUBLIC_VECTORS, LIBRTL, DECC\$SHR_EV56) --"
+    for _vec in SYS\$PUBLIC_VECTORS LIBRTL DECC\$SHR_EV56; do
+        ALPHA_CC="$ALPHA_CC" sh "$MK/vms_vectors/mk_vms_vector_shr.sh" "$WORK/LINK.EXE" \
+            "$MK/vms_vectors/$_vec.vec" "$OUT/$_vec.EXE" "$WORK"
+    done
 else
     echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"
     OVMX_DECC_ARCH=alpha \

@@ -512,6 +512,9 @@ rms-put-wrong-vbn
 p3-index-child-pointer-offbyone
 imgact-acp-valid-bytes-offbyone
 imgact-acp-read-unchunked
+eihd-lp-pair-swapped
+eihd-spec-no-default-type
+eihd-gsmatch-leq-ignores-major
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -6688,6 +6691,61 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    eihd-lp-pair-swapped)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, the LINKAGE-PAIR fixup (rd vms-3b3f): an image LINKed on real OpenVMS Alpha calls a shareable routine through a linkage pair that, on disk, holds the routine's symbol-vector byte offset; the activator replaces it with the target entry's {code address, procedure value} (src/imgact/imgact_eihd.h eihd_fixup_lp, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_lp_one() stores the resolved PROCEDURE VALUE into the linkage pair's code-address half as well (its first eihd_put_q writes pv instead of code), so every pair still names the right target and the fixup still reports success -- but the caller's ldq/jsr through quad 0 would jump to the procedure descriptor, not the code. Parsing, relocation, GSMATCH and the refusal of an unresolvable entry run before or apart from that store and stay green, so only the two assertions that read a filled pair back can tell -- one per kind of target (a native shareable's own vector, an OVMX vector image's), the same single store.";;
+        require_fail) cat <<'EOF'
+MAIN3's linkage pairs to MYSHR hold MYSHR's relocated {code address, procedure value}
+MAIN3's linkage pairs to LIBRTL hold the {code address, procedure value} of entry %X320
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    eihd-spec-no-default-type)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, SHAREABLE FILE RESOLUTION (rd vms-3b3f rung 2/3): after the logical-name translation of a shareable's name (DECC\$SHR -> SYS\$SHARE:DECC\$SHR_EV56 on OpenVMS Alpha; a DEFINE MYSHR SYS\$SYSTEM:MYSHRV2) the activator applies the defaults SYS\$SHARE: and .EXE (src/imgact/imgact_eihd.h eihd_spec_to_file, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_spec_to_file() stops appending the default .EXE type to the VOLUME PATH (its first if (!has_type) block is disabled), so a translated spec with no type -- exactly what the DECC\$SHR system logical and a DEFINE to SYS\$SYSTEM:MYSHRV2 produce -- names a file that does not exist and the activation would fail -CLI-E-IMAGEFNF. The message spec keeps its .EXE (the second block), and a spec that carries its own type or names another device is untouched, so only the three assertions that read the resolved path back for a typeless spec go red -- the same single missing default.";;
+        require_fail) cat <<'EOF'
+DECC$SHR's system-logical equivalence resolves to SYS$SHARE:DECC$SHR_EV56.EXE
+a shareable defined to SYS$SYSTEM:MYSHRV2 resolves to SYS$SYSTEM:MYSHRV2.EXE
+an untranslated shareable name defaults to SYS$SHARE:<name>.EXE
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    eihd-gsmatch-leq-ignores-major)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, GSMATCH (rd vms-3b3f rung 3): an image records the ident (major, minor) and match control of each shareable it was linked against; under LEQUAL the activator accepts a shareable only with the SAME major id and a minor id at least the recorded one, else -SYSTEM-F-SHRIDMISMAT (observed on the lab Alpha V8.4 node; src/imgact/imgact_eihd.h eihd_gsmatch_ok, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_gsmatch_ok()'s LEQUAL case stops comparing the major id, so a shareable relinked into an incompatible major version (MYSHR 1.0 vs 2.0) is accepted and its symbol vector bound as if compatible -- the case VMS refuses SHRIDMISMAT. The minor-id comparison, EQUAL and ALWAYS are untouched, so the acceptances stay green and only the two refusals that differ in major id (MAIN3 vs MYSHR 2.0, MAIN4 vs MYSHR 1.0) go red -- the same single dropped comparison.";;
+        require_fail) cat <<'EOF'
+MAIN3 refuses MYSHR relinked GSMATCH=LEQUAL,2,0 (SHRIDMISMAT on VMS)
+MAIN4 (linked against MYSHR 2.0) refuses MYSHR 1.0 (SHRIDMISMAT on VMS)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -8667,6 +8725,28 @@ apply_edit() {
         # untouched). After substitution the `(1u << 20)` text is gone, so a
         # second apply matches nothing (the no-op selftest requires).
         sed -i 's|#define IMGACT_ACP_RW_MAX_XFER (1u << 20)|#define IMGACT_ACP_RW_MAX_XFER (1u << 30) /* NEGCTL imgact-acp-read-unchunked: cap raised so the whole >1 MiB segment goes in ONE over-cap QIO */|' "$_file";;
+
+    eihd-lp-pair-swapped)
+        # UNIQUE TEXT: `eihd_put_q(lp, code);` is the one store of a linkage
+        # pair's code-address half (eihd_lp_one, imgact_eihd.h). Writing pv
+        # there leaves the pair naming the right target but pointing quad 0 at
+        # the procedure descriptor. After substitution the text is gone, so a
+        # second apply matches nothing (the no-op selftest requires).
+        sed -i 's|	eihd_put_q(lp, code);|	eihd_put_q(lp, pv); /* NEGCTL eihd-lp-pair-swapped: the code-address half gets the procedure value */|' "$_file";;
+
+    eihd-spec-no-default-type)
+        # UNIQUE TEXT: the volume path's default-type block in
+        # eihd_spec_to_file carries its own comment (the message spec's block
+        # does not). Disabling it leaves a typeless translation naming NAME (no
+        # .EXE) on the volume. After substitution the text is gone, so a
+        # second apply matches nothing.
+        sed -i 's|	if (!has_type) {   /\* the volume path.s default type \*/|	if (0) {   /* NEGCTL eihd-spec-no-default-type: the volume path gets no default .EXE type */|' "$_file";;
+
+    eihd-gsmatch-leq-ignores-major)
+        # UNIQUE TEXT: the LEQUAL case of eihd_gsmatch_ok. Dropping the major
+        # comparison accepts an incompatible major version. After substitution
+        # the text is gone, so a second apply matches nothing.
+        sed -i 's|	case EIHD_MATCH_LEQUAL: return hmaj == wmaj \&\& hmin >= wmin;|	case EIHD_MATCH_LEQUAL: return hmin >= wmin; /* NEGCTL eihd-gsmatch-leq-ignores-major: LEQUAL compares only the minor id */|' "$_file";;
 
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =

@@ -27,6 +27,8 @@ vms-y := vms_module.o \
          vms_access.o \
          vms_ast.o \
          vms_devtab.o \
+         vms_tt.o \
+         vms_tt_linux.o \
          vms_eflag.o \
          vms_lnm.o \
          vms_lock.o \

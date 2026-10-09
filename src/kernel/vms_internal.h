@@ -237,6 +237,14 @@
  */
 #define SS__ABORT       44          /* I/O aborted (ssdef.h SS$_ABORT) */
 /*
+ * The terminal class driver's read completions (rd vms-f8c). Values are the
+ * oracle's: docs/oracle/vax73-starlet-defs/SSDEF.txt, "$EQU SS$_TIMEOUT 556"
+ * (a timed read, IO$M_TIMED, that expired) and "$EQU SS$_HANGUP 716" (the
+ * terminal's port went away under an outstanding read).
+ */
+#define SS__TIMEOUT     556
+#define SS__HANGUP      716
+/*
  * Allocation statuses. Unlike the four above, these two were measured
  * directly on the oracle rather than inherited: VMS's own message
  * facility on the ~/vax OpenVMS VAX V7.3 lab reports
@@ -1059,6 +1067,15 @@ struct vms_device {
     uint32_t            perm_page;
 
     /*
+     * The terminal CLASS DRIVER instance (rd vms-f8c, src/kernel-core/
+     * vms_tt.c): non-NULL while a port -- the substrate tty behind the
+     * executive's line discipline -- is attached to this row. Set and cleared
+     * under `lock` by vms_tt_attach/vms_tt_detach only.
+     */
+    struct vms_tt      *tt;
+#define VMS_DEVICE_HAS_TT 1
+
+    /*
      * Disk backing (devclass == DC$_DISK, vms-3e8). The Linux block device
      * this unit was enumerated from at module init -- "vda" for DKA0:, "vdb"
      * for DKA100:, and so on. Empty and zero for every non-disk device (the
@@ -1717,6 +1734,11 @@ int vms_devtab_remove_served_disk(const char *devnam);
  */
 int vms_devtab_add_terminal(const char *devnam, const char *pty_backing);
 int vms_devtab_remove_terminal(const char *devnam);
+/* rd vms-f8c: lookups for the terminal class driver (src/kernel-core/vms_tt.c) */
+struct vms_device *vms_devtab_chan_device(struct vms_proc *proc, uint32_t chan);
+struct vms_device *vms_devtab_find_terminal(const char *devnam);
+int vms_tt_linux_init(void);         /* src/kernel/vms_tt_linux.c */
+void vms_tt_linux_exit(void);
 int vms_lnm_init(void);
 void vms_lnm_cleanup(void);
 void vms_mbx_init(void);

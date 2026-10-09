@@ -1153,6 +1153,14 @@ int vms_devtab_remove_terminal(const char *devnam)
         return -ENODEV;
     }
     dynamic_term = (dev->dynamic_term != 0);
+#ifdef VMS_DEVICE_HAS_TT
+    /* A unit whose port is still attached (rd vms-f8c) is in use by the
+     * terminal class driver: detach the port (close its tty) first. */
+    if (dynamic_term && dev->tt) {
+        exec_unlock(&vms_device_list_lock);
+        return -EBUSY;
+    }
+#endif
     if (dynamic_term) {
         /* WITHDRAW, and delete now only if nothing still holds the unit
          * (rd vms-1875): a channel still assigned -- the session process
@@ -1540,6 +1548,46 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
             return ch;
     }
     return NULL;
+}
+
+/*
+ * vms_devtab_chan_device - the device a caller's channel is assigned to, or
+ * NULL (no such channel). For the terminal class driver's $QIO surface
+ * (rd vms-f8c, vms_tt.c): the row stays alive while the channel does, the
+ * same guarantee vms_ioctl_ttsetmode() relies on.
+ */
+struct vms_device *vms_devtab_chan_device(struct vms_proc *proc, uint32_t chan)
+{
+    struct vms_channel *ch;
+    struct vms_device *dev = NULL;
+
+    exec_lock(&proc->chan_lock);
+    ch = chan_find_locked(proc, chan);
+    if (ch)
+        dev = ch->dev;
+    exec_unlock(&proc->chan_lock);
+    return dev;
+}
+
+/*
+ * vms_devtab_find_terminal - a TERMINAL row by name, or NULL. For binding a
+ * port to it (rd vms-f8c, the line discipline's VMS_TTIOC_BIND). A dynamic
+ * row with a port attached cannot be withdrawn (vms_devtab_remove_terminal),
+ * so the pointer outlives the binding.
+ */
+struct vms_device *vms_devtab_find_terminal(const char *devnam)
+{
+    char name[VMS_DEVNAM_SIZE];
+    struct vms_device *dev;
+
+    if (normalize_devnam(devnam, name, sizeof(name)) != 0)
+        return NULL;
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(name);
+    if (dev && (dev->devclass != DC__TERM || dev->withdrawn))
+        dev = NULL;
+    exec_unlock(&vms_device_list_lock);
+    return dev;
 }
 
 /*

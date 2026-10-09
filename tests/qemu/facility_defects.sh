@@ -4084,12 +4084,10 @@ EOF
         suites_red)   echo "test_syssvc_pin";;
         blind_suites) echo "";;
         blind_why)    echo "";;
-        isolation)    echo "fatal";;
-        why)          echo "vms_fops loses .owner = THIS_MODULE, so an open descriptor no longer holds a module reference and test_syssvc_pin's own rmmod succeeds. FATAL, and measured, not assumed: the guest then takes 'Unable to handle kernel paging request' + 'Internal error: Oops' with Comm: test_syssvc_pin, and the run never reaches its own accounting. That IS the guarantee -- an unpinned executive is not a degraded system, it is a dead one -- so the control asserts what is checkable (every suite ordered before test_syssvc_pin ran clean -- a count derived from the checkout, never written down -- and the three pin assertions went red by name) instead of pretending the unload is survivable.";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_fops loses .owner = THIS_MODULE, so an open descriptor no longer holds a module reference: test_syssvc_pin's reference-count assertion goes red. MEASURED 2026-10-09 (main 90b955bfe onward, shard 3): the guest no longer crashes and vms.ko stays loaded with the defect -- since the executive terminal driver (#1574) another reference pins the module -- so this control is no longer FATAL; the descriptor's own reference is what it isolates. Whether the rmmod-refusal assertions should still isolate the descriptor pin now that something else also pins vms.ko is test_syssvc_pin's question (tracked separately).";;
         require_fail) cat <<'EOF'
 an open /dev/vms descriptor holds a reference on vms.ko
-rmmod vms is REFUSED while a descriptor is open (executive pinned)
-the refusal is specifically 'module is in use'
 EOF
                       ;;
         knock_on_fail) echo "";;

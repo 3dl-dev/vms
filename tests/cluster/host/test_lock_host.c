@@ -267,6 +267,17 @@ static void lock_stress(void)
 #define C27_REMOTE_CSID 0x00020005u
 #define C27_REMOTE_LKID 0x0000beefu
 
+/* The granted mode of a lock, straight off $GETLKI. */
+static uint32_t lki_mode(uint32_t lkid)
+{
+	struct vms_getlki_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkid = lkid;
+	vms_ioctl_getlki(NULL, (unsigned long)(void *)&a);
+	return a.status == SS__NORMAL ? a.granted_mode : 0xffffffffu;
+}
+
 static uint32_t do_resmaster(struct vms_proc *proc, const char *resnam,
 			     struct vms_resmaster_args *rm)
 {
@@ -707,6 +718,106 @@ static void master_door_refuses_an_unstated_identity(void)
 	vms_lock_cleanup();
 }
 
+/* ==========================================================================
+ * THE ev6 LAB QUEUE SHAPE (rd vms-b5b0 follow-on, 2026-10-09)
+ *
+ * The configuration a booted OVMX master hung in: an OVMX process holds NL on a
+ * resource it masters, a VAX holds EX, the LOCAL lock converts NL->EX and
+ * queues, a second VAX takes NL and converts NL->EX behind it, and then the EX
+ * holder DEQs over the wire. The lab saw an RCU self-detected stall on the fork
+ * thread at the moment that DEQ arrived.
+ *
+ * WHAT THIS TEST ESTABLISHES, and it is a NEGATIVE as much as a positive: the
+ * ENGINE serves that exact sequence through its own master door WITHOUT
+ * spinning, and with the right answers at every step. So the stall is NOT in
+ * the engine's convert/queue/release path for this shape -- which is worth
+ * pinning down, because it is where one would look first. (The suite's 30 s
+ * ctest timeout is the detector: if this ever hangs, the engine HAS acquired
+ * the fault.)
+ * ========================================================================== */
+static void the_ev6_queue_shape_does_not_spin(void)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+	struct vms_proc delivery, app;
+	struct vms_enq_args cvt;
+	uint32_t local_lkid = 0, vax1_master = 0;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "ev6 shape: vms_lock_init");
+		return;
+	}
+	printf("-- the ev6 lab queue shape: local NL converting + remote NL "
+	       "converting, and the remote EX holder DEQs\n");
+	proc_init(&delivery);
+	proc_init(&app);
+	delivery.current_mode = PSL_C_USER;
+	app.current_mode = MD_PEER_MODE;
+	app.uic = (MD_PEER_GROUP << 16);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* 1. The OVMX process takes NL, so this node masters the resource. */
+	ct_check(do_enq(&app, "EVAC$WORKLOAD", LCK_K_NLMODE, 0,
+			&local_lkid) == SS__NORMAL && local_lkid != 0u,
+		 "an OVMX process takes NL and this node masters the resource");
+
+	/* 2. VAX1 asks EX. NL conflicts with nothing, so it is granted. */
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A, LCK_K_EXMODE, 0,
+		"EVAC$WORKLOAD");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "VAX1's EX is GRANTED (NL conflicts with nothing)");
+	vax1_master = out.master_lkid;
+
+	/* 3. The local lock converts NL->EX. Incompatible with VAX1's EX, so it
+	 *    QUEUES -- async, so the status is "accepted" and the mode stays NL
+	 *    until a grant. */
+	memset(&cvt, 0, sizeof(cvt));
+	cvt.lkid = local_lkid;
+	cvt.lkmode = LCK_K_EXMODE;
+	vms_ioctl_convert(&app, (unsigned long)(void *)&cvt);
+	ct_check_eq_u32(cvt.status, SS__NORMAL,
+			"the local NL->EX convert is accepted");
+	ct_check_eq_u32(cvt.lk_status, LCK_K_EXMODE,
+			"  ... as a QUEUED request at the new mode (the async "
+			"form: lk_status is what was ASKED for)");
+
+	/* 4. VAX2 takes NL behind the EX holder -- compatible, granted. */
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_B, MD_LKID_B, LCK_K_NLMODE, 0,
+		"EVAC$WORKLOAD");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "VAX2's NL is GRANTED");
+
+	/* 5. VAX2 converts NL->EX: queued behind the local convert. */
+	md_fill(&r, VMS_DLM_MREQ_CONVERT, MD_PEER_B, MD_LKID_B, LCK_K_EXMODE,
+		0, "EVAC$WORKLOAD");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED,
+		 "VAX2's NL->EX convert is QUEUED behind it");
+
+	/* 6. THE MOMENT THE LAB HUNG IN: the remote EX holder releases. */
+	md_fill(&r, VMS_DLM_MREQ_DEQ, MD_PEER_A, MD_LKID_A, 0, 0,
+		"EVAC$WORKLOAD");
+	r.master_lkid = vax1_master;
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_RELEASED,
+		 "*** VAX1's cross-node $DEQ is served and RELEASES -- the "
+		 "engine does not spin on this queue shape ***");
+
+	/* And it granted the right one: FIFO gives the LOCAL convert the EX, so
+	 * VAX2's convert is still waiting and no deferred grant is owed to it. */
+	ct_check_eq_u32(lki_mode(local_lkid), LCK_K_EXMODE,
+			"the LOCAL convert is the one the release granted "
+			"(FIFO), now held at EX");
+	ct_check_eq_u32((unsigned long)out.deferred_grant, 0u,
+			"and NO deferred grant is reported for VAX2, whose "
+			"convert is still genuinely queued behind it");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
@@ -718,5 +829,6 @@ int main(void)
 	master_door_reports_what_the_engine_did();
 	the_namespace_is_qualified();
 	dlksrch_both_initiate_aborts_once();
+	the_ev6_queue_shape_does_not_spin();
 	return ct_summary("test_lock_host");
 }

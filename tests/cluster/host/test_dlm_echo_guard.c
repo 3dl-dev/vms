@@ -250,6 +250,40 @@ static void more_peers_than_slots_still_caps_the_loop(void)
 		 "varying who asks ***");
 }
 
+/* ==========================================================================
+ * 6. No number off the wire sets a loop bound
+ * ========================================================================== */
+static void a_bad_length_cannot_make_the_executive_loop(void)
+{
+	struct vms_dlm_echo_guard g;
+	uint8_t b[VMS_CM_BODY_LEN];
+	uint32_t i, admitted = 0;
+
+	printf("-- a length from a received frame is CAPPED, not trusted\n");
+	vms_dlm_echo_guard_init(&g);
+	memset(b, 0x7e, sizeof(b));
+
+	/*
+	 * The length is the only caller-supplied loop bound on this path. Hand
+	 * in a preposterous one -- what a mis-decoded frame would look like --
+	 * and the guard must still return promptly and still SEE the sameness:
+	 * if this test ever hangs, that is the bug it exists to catch (the
+	 * suite's own 30 s ctest timeout is the detector).
+	 */
+	for (i = 0u; i < VMS_DLM_ECHO_MAX_SAME; i++) {
+		if (vms_dlm_echo_admit(&g, CSID_VAX1, b, 0xffffffffu, b,
+				       0xffffffffu, NULL))
+			admitted++;
+	}
+	ct_check_eq_u32(admitted, VMS_DLM_ECHO_MAX_SAME,
+			"the first answers go out (it returned at all: the "
+			"4-billion-byte length did not become a loop)");
+	ct_check(vms_dlm_echo_admit(&g, CSID_VAX1, b, 0xffffffffu, b,
+				    0xffffffffu, NULL) == 0,
+		 "*** and the run is still capped: capping the compared length "
+		 "does not cost the guard its teeth ***");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -270,6 +304,7 @@ int main(void)
 	a_looping_peer_does_not_silence_another();
 	nothing_to_compare_means_answer();
 	more_peers_than_slots_still_caps_the_loop();
+	a_bad_length_cannot_make_the_executive_loop();
 
 	return ct_summary("test_dlm_echo_guard");
 }

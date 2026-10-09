@@ -634,7 +634,10 @@ tt-oob-ast-not-queued
 tt-outband-ends-read
 tt-breakthrough-no-redisplay
 tt-oob-survives-deassign
-tt-ctrlo-not-discarding"
+tt-ctrlo-not-discarding
+tt-edit-cursor-ignored
+tt-edit-overstrike-ignored
+tt-edit-ctrlj-ignored"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2287,6 +2290,64 @@ a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.C
 EOF
                       ;;
         knock_on_why)  echo "the record let through while CTRL/O was on leaves its line feed owed, so the record after *OUTPUT ON* no longer starts where the notice left the cursor.";;
+        esac;;
+
+    tt-edit-cursor-ignored)
+        case "$_f" in
+        facility)     echo "line editing: a character typed with the cursor moved back (^H ^D <- ...) is INSERTED there (vms_tt.c tt_consume, rd vms-eda8; keystroke LE.CURSOR)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() inserts a data character at the cursor when it is inside the line (\`if (tt->cur < tt->len) {                    /* insert */\`). The mutation never does (\`if (0) {\`): the character lands at the end, as a line editor that tracks no cursor would put it. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the editing echo is the VAX's: <CR><NUL>$ for ^H, the line and backspaces for an insert
+EOF
+                      ;;
+        knock_on_why)  echo "the same misplaced character changes the echo: the inserted character is printed alone, with no tail and no backspaces.";;
+        esac;;
+
+    tt-edit-overstrike-ignored)
+        case "$_f" in
+        facility)     echo "line editing: ^A switches the read to overstrike (vms_tt.c, rd vms-eda8; keystroke LE.OVERSTRIKE)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() replaces the character under the cursor in overstrike mode (\`if (tt->cur < tt->len && tt->ovs) {\`). The mutation never overstrikes (\`if (0) {\`): ^A has no effect and the character is inserted. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check uses ^A.";;
+        esac;;
+
+    tt-edit-ctrlj-ignored)
+        case "$_f" in
+        facility)     echo "line editing: LINEFEED (^J) deletes the word left of the cursor (vms_tt.c, rd vms-eda8; keystroke LE.CTRLJ)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() walks back over the word before the cursor (\`while (at && tt->line[at - 1] != ' ')\`). The mutation never does (\`while (0)\`): ^J deletes nothing. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check types ^J.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8425,6 +8486,12 @@ apply_edit() {
         sed -i 's|^\t\t\tmemset(\&tt->oob\[i\], 0, sizeof(tt->oob\[i\]));$|\t\t\t(void)0; /* NEGCTL tt-oob-survives-deassign */|' "$_file";;
     tt-ctrlo-not-discarding)
         sed -i 's|^\t\treturn 0;                    /\* CTRL/O: the output is discarded \*/$|\t\t(void)0; /* NEGCTL tt-ctrlo-not-discarding */|' "$_file";;
+    tt-edit-cursor-ignored)
+        sed -i 's|^\tif (tt->cur < tt->len) {                    /\* insert \*/$|\tif (0) { /* NEGCTL tt-edit-cursor-ignored */|' "$_file";;
+    tt-edit-overstrike-ignored)
+        sed -i 's|^\tif (tt->cur < tt->len \&\& tt->ovs) {$|\tif (0) { /* NEGCTL tt-edit-overstrike-ignored */|' "$_file";;
+    tt-edit-ctrlj-ignored)
+        sed -i "s|^\t\t\twhile (at \&\& tt->line\[at - 1\] != ' ')$|\t\t\twhile (0) /* NEGCTL tt-edit-ctrlj-ignored */|" "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

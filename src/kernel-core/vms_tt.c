@@ -81,6 +81,8 @@ struct vms_tt {
 	uint32_t promptsz;
 	uint8_t  line[VMS_TT_LINE_MAX];
 	uint32_t len;
+	uint32_t cur;              /* line editing: the cursor, 0..len (rd vms-eda8) */
+	int      ovs;              /* overstrike (^A toggles; INSERT_EDITING default) */
 	int      hc_del;           /* hardcopy: inside a \...\ rubout run */
 	int      esc;              /* inside an escape sequence: 1 after ESC, 2 after CSI/SS3 */
 	struct vms_tt_read_result res;
@@ -327,22 +329,87 @@ static void tt_redisplay(struct vms_tt *tt, int with_line)
 		tt_out(tt, tt->line, tt->len);
 }
 
-/* Rub out the whole line (^U; ^X during a read). */
+static void tt_bs(struct vms_tt *tt, uint32_t n);
+static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad);
+
+/* Rub out the line (^X during a read: all of it; ^U: from the cursor back to
+ * the start). */
 static void tt_kill_line(struct vms_tt *tt)
+{
+	uint32_t i, keep = tt->len - tt->cur;
+
+	tt_hc_close(tt);
+	if (tt_echoing(tt) && tt->cur) {
+		if (tt_hardcopy(tt)) {
+			memmove(tt->line, tt->line + tt->cur, keep);
+			tt->len = keep;
+			tt->cur = 0;
+			tt_redisplay(tt, keep != 0);
+			tt_bs(tt, keep);
+			return;
+		}
+		if (keep == 0) {
+			for (i = 0; i < tt->len; i++)
+				tt_out(tt, "\b \b", 3);
+		} else {
+			uint32_t gone = tt->cur;
+
+			tt_bs(tt, gone);
+			memmove(tt->line, tt->line + gone, keep);
+			tt->len = keep;
+			tt->cur = 0;
+			tt_echo_tail(tt, 0, gone);
+			return;
+		}
+	}
+	memmove(tt->line, tt->line + tt->cur, keep);
+	tt->len = keep;
+	tt->cur = 0;
+}
+
+/*
+ * LINE EDITING (rd vms-eda8). The read keeps a cursor inside its line; the
+ * editing keys move it and the echo keeps the terminal in step using only
+ * what every terminal does -- print, backspace, carriage return -- as the VAX
+ * V7.3 console shows (keystroke cases LE.CURSOR, LE.OVERSTRIKE, LE.CTRLJ):
+ *   ^H     to the start: CR and the prompt again ("<CR><NUL>$ ")
+ *   ^E     to the end: the rest of the line printed
+ *   ^D, <- one left: BS          ^F, -> one right: the character printed
+ *   ^A     insert/overstrike for the rest of this read
+ *   ^J     delete the word left of the cursor
+ * Inserting mid-line prints the character, the rest of the line, and
+ * backspaces to just after it ("23<BS>").
+ */
+static void tt_bs(struct vms_tt *tt, uint32_t n)
+{
+	while (n--)
+		tt_out1(tt, CH_BS);
+}
+
+/* Show line[from..len) then come back to the cursor; `pad` blanks cover
+ * characters that were removed from the end of the visible line. */
+static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad)
 {
 	uint32_t i;
 
-	tt_hc_close(tt);
-	if (tt_echoing(tt) && tt->len) {
-		if (tt_hardcopy(tt)) {
-			tt->len = 0;
-			tt_redisplay(tt, 0);
-			return;
-		}
-		for (i = 0; i < tt->len; i++)
-			tt_out(tt, "\b \b", 3);
-	}
-	tt->len = 0;
+	if (!tt_echoing(tt))
+		return;
+	tt_out(tt, tt->line + from, tt->len - from);
+	for (i = 0; i < pad; i++)
+		tt_out1(tt, ' ');
+	tt_bs(tt, tt->len - tt->cur + pad);
+}
+
+/* Remove line[at..at+n) with the cursor at `at` (already moved there on the
+ * terminal), and show the result. */
+static void tt_delete_at(struct vms_tt *tt, uint32_t at, uint32_t n)
+{
+	memmove(tt->line + at, tt->line + at + n, tt->len - at - n);
+	tt->len -= n;
+	tt->cur = at;
+	if (tt_hardcopy(tt) && at == tt->len)
+		return;                     /* paper: nothing to erase */
+	tt_echo_tail(tt, at, n);
 }
 
 static void tt_complete(struct vms_tt *tt, uint32_t status, uint8_t term, uint32_t termsz)
@@ -387,8 +454,22 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		if (tt->esc == 2 && c >= 0x20 && c < 0x40)
 			return;                  /* parameter / intermediate bytes */
 		tt->esc = 0;
-		if (c >= 0x40 && c < 0x7F)
-			return;                  /* the final byte ends the sequence */
+		if (c >= 0x40 && c < 0x7F) {
+			/* the final byte ends the sequence: <- and -> move the
+			 * cursor (^D / ^F); the others belong to recall */
+			if (c == 'D' && tt->cur > 0) {
+				tt_hc_close(tt);
+				tt->cur--;
+				if (tt_echoing(tt))
+					tt_out1(tt, CH_BS);
+			} else if (c == 'C' && tt->cur < tt->len) {
+				tt_hc_close(tt);
+				if (tt_echoing(tt))
+					tt_out1(tt, tt->line[tt->cur]);
+				tt->cur++;
+			}
+			return;
+		}
 		/* not a sequence after all: treat c normally */
 	}
 	if (filter && c == 0x1B && !(tt->rd_flags & VMS_TT_RD_TERMMASK)) {
@@ -398,10 +479,18 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 
 	if (filter) {
 		switch (c) {
-		case CH_DEL:                        /* rub out the last character */
-			if (!tt->len)
+		case CH_DEL:                        /* rub out the character left of the cursor */
+			if (!tt->cur)
 				return;
+			if (tt->cur < tt->len) {
+				tt_hc_close(tt);
+				if (tt_echoing(tt))
+					tt_out1(tt, CH_BS);
+				tt_delete_at(tt, tt->cur - 1, 1);
+				return;
+			}
 			tt->len--;
+			tt->cur--;
 			if (!tt_echoing(tt))
 				return;
 			if (tt_hardcopy(tt)) {
@@ -420,6 +509,72 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		case TT_CTRL('R'):                  /* redisplay prompt + line */
 			tt_hc_close(tt);
 			tt_redisplay(tt, 1);
+			if (tt_echoing(tt))
+				tt_bs(tt, tt->len - tt->cur);
+			return;
+		case CH_BS:                         /* ^H: to the start of the line */
+			tt_hc_close(tt);
+			if (tt->cur && tt_echoing(tt)) {
+				tt_out1(tt, CH_CR);
+				if (tt->promptsz) {
+					const uint8_t *pp = tt->prompt;
+					uint32_t pn = tt->promptsz;
+
+					if (pn >= 2 && pp[0] == CH_CR && pp[1] == CH_LF) {
+						pp += 2;
+						pn -= 2;
+					}
+					tt_out(tt, pp, pn);
+				}
+			}
+			tt->cur = 0;
+			return;
+		case TT_CTRL('E'):                  /* to the end of the line */
+			tt_hc_close(tt);
+			if (tt_echoing(tt))
+				tt_out(tt, tt->line + tt->cur, tt->len - tt->cur);
+			tt->cur = tt->len;
+			return;
+		case TT_CTRL('D'):                  /* one character left */
+			tt_hc_close(tt);
+			if (tt->cur) {
+				tt->cur--;
+				if (tt_echoing(tt))
+					tt_out1(tt, CH_BS);
+			}
+			return;
+		case TT_CTRL('F'):                  /* one character right */
+			tt_hc_close(tt);
+			if (tt->cur < tt->len) {
+				if (tt_echoing(tt))
+					tt_out1(tt, tt->line[tt->cur]);
+				tt->cur++;
+			}
+			return;
+		case TT_CTRL('A'):                  /* insert <-> overstrike */
+			tt->ovs = !tt->ovs;
+			return;
+		case CH_LF: {                       /* ^J: delete the word to the left */
+			uint32_t at = tt->cur;
+
+			tt_hc_close(tt);
+			while (at && tt->line[at - 1] == ' ')
+				at--;
+			while (at && tt->line[at - 1] != ' ')
+				at--;
+			if (at == tt->cur)
+				return;
+			if (tt_echoing(tt))
+				tt_bs(tt, tt->cur - at);
+			{
+				uint32_t n = tt->cur - at;
+
+				tt->cur = at + n;   /* tt_delete_at removes [at, at+n) */
+				tt_delete_at(tt, at, n);
+			}
+			return;
+		}
+		case TT_CTRL('W'):                  /* refresh: nothing to redraw on this terminal */
 			return;
 		default:
 			break;
@@ -446,13 +601,30 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		return;
 	}
 
-	/* a data character */
+	/* a data character, at the cursor */
 	if ((tt->rd_flags & VMS_TT_RD_CVTLOW) && c >= 'a' && c <= 'z')
 		c = (uint8_t)(c - 'a' + 'A');
 	tt_hc_close(tt);
-	tt->line[tt->len++] = c;
-	if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
-		tt_out1(tt, c);
+	if (tt->cur < tt->len && tt->ovs) {
+		tt->line[tt->cur++] = c;            /* overstrike */
+		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
+			tt_out1(tt, c);
+		return;
+	}
+	if (tt->cur < tt->len) {                    /* insert */
+		memmove(tt->line + tt->cur + 1, tt->line + tt->cur, tt->len - tt->cur);
+		tt->line[tt->cur++] = c;
+		tt->len++;
+		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB)) {
+			tt_out1(tt, c);
+			tt_echo_tail(tt, tt->cur, 0);
+		}
+	} else {
+		tt->line[tt->len++] = c;
+		tt->cur = tt->len;
+		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
+			tt_out1(tt, c);
+	}
 	if (tt->len >= tt->rd_cap)              /* buffer full ends the read */
 		tt_complete(tt, SS__NORMAL, 0, 0);
 }
@@ -762,6 +934,7 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 				tt_ta_purge(tt);
 				if (tt->rd_active) {
 					tt->rd_dc = dc;
+					tt->cur = tt->len;   /* all of it */
 					tt_kill_line(tt);
 				}
 				continue;
@@ -902,6 +1075,8 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		tt->rd_cap = req->bufsz < VMS_TT_LINE_MAX ? req->bufsz : VMS_TT_LINE_MAX;
 		tt->rd_dc = dc;
 		tt->len = 0;
+		tt->cur = 0;
+		tt->ovs = !(dc & VMS_TTC_INSERT_EDITING);
 		tt->hc_del = 0;
 		tt->esc = 0;
 		memset(&tt->res, 0, sizeof(tt->res));

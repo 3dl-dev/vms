@@ -508,4 +508,6 @@
 # tt-oob-ast-not-queued, tt-outband-ends-read, tt-breakthrough-no-redisplay,
 # tt-oob-survives-deassign (test_kmod_tt).
 # Raised to 198 by tt-ctrlo-not-discarding (rd vms-f0fb; test_kmod_tt).
-198
+# Raised to 201 by the line-editing three (rd vms-eda8): tt-edit-cursor-ignored,
+# tt-edit-overstrike-ignored, tt-edit-ctrlj-ignored (test_kmod_tt).
+201

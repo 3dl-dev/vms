@@ -525,6 +525,56 @@ int main(void)
         }
     }
 
+    /* ---- line editing (rd vms-eda8): the VAX V7.3 bytes of LE.CURSOR,
+     * LE.OVERSTRIKE and LE.CTRLJ ---- */
+    {
+        static const char want_cursor[] =
+            "RITE SYS$OUTPUT 13"
+            "\r\0$ "                                        /* ^H */
+            "WRITE SYS$OUTPUT 13\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b" /* W, inserted */
+            "RITE SYS$OUTPUT 13"                              /* ^E */
+            "\b"                                             /* ^D */
+            "23\b"                                           /* 2, inserted */
+            "\b"                                             /* <- */
+            "2"                                               /* -> */
+            "3"                                               /* ^F */
+            "\r\n";                                         /* RETURN */
+        size_t got;
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "RITE SYS$OUTPUT 13\x08W\x05\x04" "2\x1b[D\x1b[C\x06\r");
+        rd_wait(&r);
+        got = screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-edit-cursor-ignored */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
+              "^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')");
+        /* negctl-knockon: tt-edit-cursor-ignored */
+        CHECK(got == sizeof(want_cursor) - 1 && memcmp(scr, want_cursor, got) == 0,
+              "the editing echo is the VAX's: <CR><NUL>$ for ^H, the line and backspaces for an insert");
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "WRITE SYS$OUTPUT 1X3\x04\x04\x01" "2\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-edit-overstrike-ignored */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
+              "^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')");
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "WRITE SYS$OUTPUT 1 BOGUS\n\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-edit-ctrlj-ignored */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 1 ") == 0,
+              "^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')");
+    }
+
     /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */
     (void)screen(m, scr, sizeof(scr), 100);
     (void)!write(s, "A\n", 2);                 /* a record: its line feed owed */

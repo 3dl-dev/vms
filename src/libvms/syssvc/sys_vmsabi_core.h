@@ -134,4 +134,79 @@ uint32_t ovmx_vmsabi_brkthru(int wait, uint32_t efn, const struct ovmx_abi_str *
                              uint32_t carcon, uint32_t flags, uint32_t reqid, uint32_t timout,
                              unsigned long long astadr, unsigned long long astprm);
 
+/* ---------------- vms-3b3f batch 3: LIBRTL string / symbol / VM routines ----
+ * A VMS descriptor as the shim read it (either form). For a class-D
+ * destination, ptr is storage from the VMS-ABI heap below (a 32-bit address),
+ * which the core half reallocates and the shim writes back. */
+struct ovmx_abi_dx {
+    uint16_t len;
+    uint8_t  dtype;
+    uint8_t  cls;
+    char    *ptr;
+    int      given;
+};
+
+/* Storage a 32-bit caller can address (below 2 GB), for class-D strings and
+ * LIB$GET_VM. NULL when none is available. */
+void    *ovmx_vmsabi_p0_alloc(uint32_t n);
+int      ovmx_vmsabi_p0_free(void *p);          /* 1 freed, 0 not a live block */
+
+#define OVMX_ABI_STR_COPY_DX  1
+#define OVMX_ABI_STR_APPEND   2
+#define OVMX_ABI_STR_PREFIX   3
+#define OVMX_ABI_STR_UPCASE   4
+uint32_t ovmx_vmsabi_str_dst(int op, struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src);
+#define OVMX_ABI_STR_LEFT     1
+#define OVMX_ABI_STR_RIGHT    2
+#define OVMX_ABI_STR_LEN_EXTR 3
+#define OVMX_ABI_STR_POS_EXTR 4
+uint32_t ovmx_vmsabi_str_extract(int op, struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                                 const void *a, const void *b);
+uint32_t ovmx_vmsabi_str_replace(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                                 const uint32_t *start, const uint32_t *end,
+                                 const struct ovmx_abi_dx *rep);
+uint32_t ovmx_vmsabi_str_translate(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                                   const struct ovmx_abi_dx *tran, const struct ovmx_abi_dx *match);
+uint32_t ovmx_vmsabi_str_trim(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                              uint16_t *outlen);
+uint32_t ovmx_vmsabi_str_dupl_char(struct ovmx_abi_dx *dst, const int32_t *len, const char *ch);
+uint32_t ovmx_vmsabi_str_element(struct ovmx_abi_dx *dst, const uint32_t *elem,
+                                 const struct ovmx_abi_dx *delim, const struct ovmx_abi_dx *src);
+uint32_t ovmx_vmsabi_str_concat(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src, unsigned n);
+uint32_t ovmx_vmsabi_str_free1(struct ovmx_abi_dx *dst);
+#define OVMX_ABI_CMP_COMPARE     1
+#define OVMX_ABI_CMP_COMPARE_EQL 2
+#define OVMX_ABI_CMP_POSITION    3
+#define OVMX_ABI_CMP_FFIS        4
+#define OVMX_ABI_CMP_FFNIS       5
+#define OVMX_ABI_CMP_INDEX       6
+#define OVMX_ABI_CMP_LOCC        7
+#define OVMX_ABI_CMP_MATCHC      8
+#define OVMX_ABI_CMP_SKPC        9
+uint32_t ovmx_vmsabi_str_in(int op, const struct ovmx_abi_dx *a, const struct ovmx_abi_dx *b,
+                            const uint32_t *start);
+uint32_t ovmx_vmsabi_set_symbol(const struct ovmx_abi_dx *sym, const struct ovmx_abi_dx *val,
+                                const uint32_t *tbl);
+uint32_t ovmx_vmsabi_get_symbol(const struct ovmx_abi_dx *sym, struct ovmx_abi_dx *val,
+                                uint16_t *len, uint32_t *tbl);
+uint32_t ovmx_vmsabi_delete_symbol(const struct ovmx_abi_dx *sym, const uint32_t *tbl);
+uint32_t ovmx_vmsabi_find_file(const struct ovmx_abi_dx *spec, struct ovmx_abi_dx *result,
+                               uint32_t *ctx, const struct ovmx_abi_dx *def,
+                               const struct ovmx_abi_dx *rel, uint32_t *stv,
+                               const uint32_t *flags);
+#define OVMX_ABI_GETXXI_JPI 1
+#define OVMX_ABI_GETXXI_SYI 2
+#define OVMX_ABI_GETXXI_DVI 3
+uint32_t ovmx_vmsabi_lib_getxxi(int op, const uint32_t *item, const uint32_t *pid,
+                                uint16_t chan, const struct ovmx_abi_dx *name, void *resval,
+                                struct ovmx_abi_dx *resstr, uint16_t *reslen, uint32_t *csid);
+uint32_t ovmx_vmsabi_sys_fao(const struct ovmx_abi_dx *ctr, uint16_t *outlen,
+                             struct ovmx_abi_dx *out, const uint64_t *prm);
+uint32_t ovmx_vmsabi_creprc(uint32_t *pidadr, const struct ovmx_abi_str *image,
+                            const struct ovmx_abi_str *input, const struct ovmx_abi_str *output,
+                            const struct ovmx_abi_str *error, const void *prvadr,
+                            const void *quota, const struct ovmx_abi_str *prcnam,
+                            uint32_t baspri, uint32_t uic, uint32_t mbxunt, uint32_t stsflg,
+                            const struct ovmx_abi_str *node);
+
 #endif /* SYS_VMSABI_CORE_H */

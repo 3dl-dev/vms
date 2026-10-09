@@ -39,6 +39,7 @@
 0x140     SYS$CANTIM       sys$cantim
 0x1A0     SYS$CLREF        sys$clref
 0x1E0     SYS$CREMBX       SYS$CREMBX
+0x1F0     SYS$CREPRC       SYS$CREPRC
 0x210     SYS$DACEFC       sys$dacefc
 0x230     SYS$DASSGN       SYS$DASSGN
 0x270     SYS$DELMBX       sys$delmbx

@@ -27,6 +27,7 @@
 #include <vms/ssdef.h>
 #include <vms/starlet.h>
 #include "sys_vmsabi_core.h"
+#include "libdef.h"       /* LIB$_BADBLOADR, LIB$_BADBLOSIZ, LIB$_INSVIRMEM */
 
 #define ABI_MAXITEMS 64
 
@@ -679,4 +680,458 @@ int SYS$BRKTHRUW(unsigned int efn, void *msgbuf, void *sendto, unsigned int sndt
     str_arg(sendto, &t);
     return (int)ovmx_vmsabi_brkthru(1, efn, &m, &t, sndtyp, iosb, carcon, flags, reqid, timout,
                                     astadr, astprm);
+}
+
+/* ======================================== vms-3b3f batch 3 (LIBRTL) ======
+ *
+ * LIB$ and STR$ routines by their VMS-ABI names. A caller LINKed on OpenVMS
+ * passes a counted argument list and may omit trailing optional arguments, so
+ * each routine with optional arguments takes the count from the argument
+ * information (R25, homed by OTS$HOME_ARGS -- DEC C's va_count; the same read
+ * src/vmsrms/crtl_rms_fd.c makes) and reads only the arguments passed. A
+ * descriptor is either form; a class-D result gets storage below 2 GB from the
+ * VMS-ABI heap (sys_vmsabi_core.c), and its new length and address are
+ * written back into the caller's descriptor.
+ */
+/* The argument count: OTS$HOME_ARGS stores the argument information at home[0],
+ * `named` + 1 quadwords below where va_start points. The empty asm keeps the
+ * address opaque to the port compiler's stdarg pass, which otherwise fails on
+ * the negative offset (an internal compiler error, vms-45f). */
+static inline unsigned abi_va_count(const void *apv, int named)
+{
+    const unsigned long long *p = apv;
+    __asm__("" : "+r"(p));
+    return (unsigned)(p[-(named + 1)] & 0xFF);
+}
+#define ABI_VA_COUNT(ap, named) abi_va_count((const void *)(ap), (named))
+
+/* Read a descriptor (either form) into the neutral form; given=0 for 0. */
+static void dx_get(void *d, struct ovmx_abi_dx *x)
+{
+    memset(x, 0, sizeof *x);
+    if (!d)
+        return;
+    const struct dsc64 *d64 = d;
+    x->given = 1;
+    if (d64->mbo == 1 && d64->mbmo == -1) {
+        x->len = (uint16_t)d64->len;
+        x->dtype = d64->dtype;
+        x->cls = d64->cls;
+        x->ptr = (char *)(uintptr_t)d64->ptr;
+        return;
+    }
+    const struct dsc$descriptor_s *d32 = d;
+    x->len = d32->dsc$w_length;
+    x->dtype = d32->dsc$b_dtype;
+    x->cls = d32->dsc$b_class;
+    x->ptr = d32->dsc$a_pointer;
+}
+
+/* Write a class-D result's length and address back into the caller's
+ * descriptor (a fixed-length destination keeps its own). */
+static void dx_put(void *d, const struct ovmx_abi_dx *x)
+{
+    if (!d || !x->given || x->cls != DSC$K_CLASS_D)
+        return;
+    struct dsc64 *d64 = d;
+    if (d64->mbo == 1 && d64->mbmo == -1) {
+        d64->len = x->len;
+        d64->ptr = (unsigned long long)(uintptr_t)x->ptr;
+        return;
+    }
+    struct dsc$descriptor_s *d32 = d;
+    d32->dsc$w_length = x->len;
+    d32->dsc$a_pointer = x->ptr;
+}
+
+/* Take argument i (0-based, counting the named ones) into var when the caller
+ * passed it; var keeps its 0 otherwise. A statement, not an expression: the
+ * port compiler's stdarg pass cannot take va_arg inside a conditional
+ * expression (vms-45f). */
+#define ABI_OPT(ap, have, i, var) \
+    do { if ((i) < (have)) (var) = va_arg(ap, void *); } while (0)
+
+static int str_dst(int op, void *dst, void *src)
+{
+    struct ovmx_abi_dx d, s;
+    dx_get(dst, &d);
+    dx_get(src, &s);
+    int st = (int)ovmx_vmsabi_str_dst(op, &d, &s);
+    dx_put(dst, &d);
+    return st;
+}
+int STR$COPY_DX(void *dst, void *src) { return str_dst(OVMX_ABI_STR_COPY_DX, dst, src); }
+int STR$APPEND(void *dst, void *src)  { return str_dst(OVMX_ABI_STR_APPEND, dst, src); }
+int STR$PREFIX(void *dst, void *src)  { return str_dst(OVMX_ABI_STR_PREFIX, dst, src); }
+int STR$UPCASE(void *dst, void *src)  { return str_dst(OVMX_ABI_STR_UPCASE, dst, src); }
+int LIB$SCOPY_DXDX(void *src, void *dst) { return str_dst(OVMX_ABI_STR_COPY_DX, dst, src); }
+
+static int str_extract(int op, void *dst, void *src, void *a, void *b)
+{
+    struct ovmx_abi_dx d, s;
+    dx_get(dst, &d);
+    dx_get(src, &s);
+    int st = (int)ovmx_vmsabi_str_extract(op, &d, &s, a, b);
+    dx_put(dst, &d);
+    return st;
+}
+int STR$LEFT(void *dst, void *src, int *end)  { return str_extract(OVMX_ABI_STR_LEFT, dst, src, end, 0); }
+int STR$RIGHT(void *dst, void *src, int *beg) { return str_extract(OVMX_ABI_STR_RIGHT, dst, src, beg, 0); }
+int STR$LEN_EXTR(void *dst, void *src, int *start, int *len)
+{ return str_extract(OVMX_ABI_STR_LEN_EXTR, dst, src, start, len); }
+int STR$POS_EXTR(void *dst, void *src, int *start, int *end)
+{ return str_extract(OVMX_ABI_STR_POS_EXTR, dst, src, start, end); }
+
+int STR$REPLACE(void *dst, void *src, unsigned int *start, unsigned int *end, void *rep)
+{
+    struct ovmx_abi_dx d, s, r;
+    dx_get(dst, &d);
+    dx_get(src, &s);
+    dx_get(rep, &r);
+    int st = (int)ovmx_vmsabi_str_replace(&d, &s, start, end, &r);
+    dx_put(dst, &d);
+    return st;
+}
+
+int STR$TRANSLATE(void *dst, void *src, void *tran, void *match)
+{
+    struct ovmx_abi_dx d, s, t, m;
+    dx_get(dst, &d);
+    dx_get(src, &s);
+    dx_get(tran, &t);
+    dx_get(match, &m);
+    int st = (int)ovmx_vmsabi_str_translate(&d, &s, &t, &m);
+    dx_put(dst, &d);
+    return st;
+}
+
+int STR$TRIM(void *dst, void *src, ...)
+{
+    va_list ap;
+    va_start(ap, src);
+    unsigned n = ABI_VA_COUNT(ap, 2);
+    unsigned short *outlen = 0;
+    ABI_OPT(ap, n, 2u, outlen);
+    va_end(ap);
+    struct ovmx_abi_dx d, s;
+    dx_get(dst, &d);
+    dx_get(src, &s);
+    int st = (int)ovmx_vmsabi_str_trim(&d, &s, outlen);
+    dx_put(dst, &d);
+    return st;
+}
+
+int STR$DUPL_CHAR(void *dst, ...)
+{
+    static const int one = 1;
+    static const char blank = ' ';
+    va_list ap;
+    va_start(ap, dst);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    const int *len = 0;
+    ABI_OPT(ap, n, 1u, len);
+    const char *ch = 0;
+    ABI_OPT(ap, n, 2u, ch);
+    va_end(ap);
+    struct ovmx_abi_dx d;
+    dx_get(dst, &d);
+    int st = (int)ovmx_vmsabi_str_dupl_char(&d, len ? len : &one, ch ? ch : &blank);
+    dx_put(dst, &d);
+    return st;
+}
+
+int STR$ELEMENT(void *dst, unsigned int *elem, void *delim, void *src)
+{
+    struct ovmx_abi_dx d, l, s;
+    dx_get(dst, &d);
+    dx_get(delim, &l);
+    dx_get(src, &s);
+    int st = (int)ovmx_vmsabi_str_element(&d, elem, &l, &s);
+    dx_put(dst, &d);
+    return st;
+}
+
+#define ABI_CONCAT_MAX 16
+int STR$CONCAT(void *dst, ...)
+{
+    struct ovmx_abi_dx d, s[ABI_CONCAT_MAX];
+    va_list ap;
+    va_start(ap, dst);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    unsigned srcs = n > 1 ? n - 1 : 0;
+    if (srcs > ABI_CONCAT_MAX) {
+        va_end(ap);
+        return SS$_BADPARAM;
+    }
+    for (unsigned i = 0; i < srcs; i++)
+        dx_get(va_arg(ap, void *), &s[i]);
+    va_end(ap);
+    dx_get(dst, &d);
+    int st = (int)ovmx_vmsabi_str_concat(&d, s, srcs);
+    dx_put(dst, &d);
+    return st;
+}
+
+int STR$FREE1_DX(void *dst)
+{
+    struct ovmx_abi_dx d;
+    dx_get(dst, &d);
+    int st = (int)ovmx_vmsabi_str_free1(&d);
+    dx_put(dst, &d);
+    return st;
+}
+
+static int str_in(int op, void *a, void *b, unsigned int *start)
+{
+    struct ovmx_abi_dx x, y;
+    dx_get(a, &x);
+    dx_get(b, &y);
+    return (int)ovmx_vmsabi_str_in(op, &x, &y, start);
+}
+int STR$COMPARE(void *a, void *b)     { return str_in(OVMX_ABI_CMP_COMPARE, a, b, 0); }
+int STR$COMPARE_EQL(void *a, void *b) { return str_in(OVMX_ABI_CMP_COMPARE_EQL, a, b, 0); }
+int STR$FIND_FIRST_IN_SET(void *a, void *b)     { return str_in(OVMX_ABI_CMP_FFIS, a, b, 0); }
+int STR$FIND_FIRST_NOT_IN_SET(void *a, void *b) { return str_in(OVMX_ABI_CMP_FFNIS, a, b, 0); }
+int LIB$INDEX(void *a, void *b)  { return str_in(OVMX_ABI_CMP_INDEX, a, b, 0); }
+int LIB$LOCC(void *a, void *b)   { return str_in(OVMX_ABI_CMP_LOCC, a, b, 0); }
+int LIB$MATCHC(void *a, void *b) { return str_in(OVMX_ABI_CMP_MATCHC, a, b, 0); }
+int LIB$SKPC(void *a, void *b)   { return str_in(OVMX_ABI_CMP_SKPC, a, b, 0); }
+int STR$POSITION(void *src, void *sub, ...)
+{
+    va_list ap;
+    va_start(ap, sub);
+    unsigned n = ABI_VA_COUNT(ap, 2);
+    unsigned int *start = 0;
+    ABI_OPT(ap, n, 2u, start);
+    va_end(ap);
+    return str_in(OVMX_ABI_CMP_POSITION, src, sub, start);
+}
+
+int LIB$SET_SYMBOL(void *sym, void *val, ...)
+{
+    va_list ap;
+    va_start(ap, val);
+    unsigned n = ABI_VA_COUNT(ap, 2);
+    unsigned int *tbl = 0;
+    ABI_OPT(ap, n, 2u, tbl);
+    va_end(ap);
+    struct ovmx_abi_dx s, v;
+    dx_get(sym, &s);
+    dx_get(val, &v);
+    return (int)ovmx_vmsabi_set_symbol(&s, &v, tbl);
+}
+
+int LIB$GET_SYMBOL(void *sym, void *val, ...)
+{
+    va_list ap;
+    va_start(ap, val);
+    unsigned n = ABI_VA_COUNT(ap, 2);
+    unsigned short *len = 0;
+    ABI_OPT(ap, n, 2u, len);
+    unsigned int *tbl = 0;
+    ABI_OPT(ap, n, 3u, tbl);
+    va_end(ap);
+    struct ovmx_abi_dx s, v;
+    dx_get(sym, &s);
+    dx_get(val, &v);
+    int st = (int)ovmx_vmsabi_get_symbol(&s, &v, len, tbl);
+    dx_put(val, &v);
+    return st;
+}
+
+int LIB$DELETE_SYMBOL(void *sym, ...)
+{
+    va_list ap;
+    va_start(ap, sym);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    unsigned int *tbl = 0;
+    ABI_OPT(ap, n, 1u, tbl);
+    va_end(ap);
+    struct ovmx_abi_dx s;
+    dx_get(sym, &s);
+    return (int)ovmx_vmsabi_delete_symbol(&s, tbl);
+}
+
+int LIB$FIND_FILE(void *spec, void *result, unsigned int *ctx, ...)
+{
+    va_list ap;
+    va_start(ap, ctx);
+    unsigned n = ABI_VA_COUNT(ap, 3);
+    void *def = 0;
+    ABI_OPT(ap, n, 3u, def);
+    void *rel = 0;
+    ABI_OPT(ap, n, 4u, rel);
+    unsigned int *stv = 0;
+    ABI_OPT(ap, n, 5u, stv);
+    unsigned int *flags = 0;
+    ABI_OPT(ap, n, 6u, flags);
+    va_end(ap);
+    struct ovmx_abi_dx f, r, d, l;
+    dx_get(spec, &f);
+    dx_get(result, &r);
+    dx_get(def, &d);
+    dx_get(rel, &l);
+    int st = (int)ovmx_vmsabi_find_file(&f, &r, ctx, &d, &l, stv, flags);
+    dx_put(result, &r);
+    return st;
+}
+
+int LIB$GETJPI(unsigned int *item, ...)
+{
+    va_list ap;
+    va_start(ap, item);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    unsigned int *pid = 0;
+    ABI_OPT(ap, n, 1u, pid);
+    void *prcnam = 0;
+    ABI_OPT(ap, n, 2u, prcnam);
+    void *resval = 0;
+    ABI_OPT(ap, n, 3u, resval);
+    void *resstr = 0;
+    ABI_OPT(ap, n, 4u, resstr);
+    unsigned short *reslen = 0;
+    ABI_OPT(ap, n, 5u, reslen);
+    va_end(ap);
+    struct ovmx_abi_dx p, r;
+    dx_get(prcnam, &p);
+    dx_get(resstr, &r);
+    int st = (int)ovmx_vmsabi_lib_getxxi(OVMX_ABI_GETXXI_JPI, item, pid, 0, &p, resval, &r,
+                                         reslen, 0);
+    dx_put(resstr, &r);
+    return st;
+}
+
+int LIB$GETSYI(unsigned int *item, ...)
+{
+    va_list ap;
+    va_start(ap, item);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    void *resval = 0;
+    ABI_OPT(ap, n, 1u, resval);
+    void *resstr = 0;
+    ABI_OPT(ap, n, 2u, resstr);
+    unsigned short *reslen = 0;
+    ABI_OPT(ap, n, 3u, reslen);
+    unsigned int *csid = 0;
+    ABI_OPT(ap, n, 4u, csid);
+    void *node = 0;
+    ABI_OPT(ap, n, 5u, node);
+    va_end(ap);
+    struct ovmx_abi_dx nd, r;
+    dx_get(node, &nd);
+    dx_get(resstr, &r);
+    int st = (int)ovmx_vmsabi_lib_getxxi(OVMX_ABI_GETXXI_SYI, item, 0, 0, &nd, resval, &r,
+                                         reslen, csid);
+    dx_put(resstr, &r);
+    return st;
+}
+
+/* LIB$GETDVI's channel is a word passed by reference. */
+int LIB$GETDVI(unsigned int *item, ...)
+{
+    va_list ap;
+    va_start(ap, item);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    unsigned short *chan = 0;
+    ABI_OPT(ap, n, 1u, chan);
+    void *devnam = 0;
+    ABI_OPT(ap, n, 2u, devnam);
+    void *resval = 0;
+    ABI_OPT(ap, n, 3u, resval);
+    void *resstr = 0;
+    ABI_OPT(ap, n, 4u, resstr);
+    unsigned short *reslen = 0;
+    ABI_OPT(ap, n, 5u, reslen);
+    va_end(ap);
+    struct ovmx_abi_dx d, r;
+    dx_get(devnam, &d);
+    dx_get(resstr, &r);
+    int st = (int)ovmx_vmsabi_lib_getxxi(OVMX_ABI_GETXXI_DVI, item, 0, chan ? *chan : 0, &d,
+                                         resval, &r, reslen, 0);
+    dx_put(resstr, &r);
+    return st;
+}
+
+/* LIB$SYS_FAO: the $FAO parameters follow in the argument list. */
+int LIB$SYS_FAO(void *ctrstr, unsigned short *outlen, void *outbuf, ...)
+{
+    struct ovmx_abi_dx c, o;
+    unsigned long long prm[FAO_MAXPRM];
+    va_list ap;
+    va_start(ap, outbuf);
+    unsigned n = ABI_VA_COUNT(ap, 3);
+    unsigned np = n > 3 ? n - 3 : 0;
+    if (np > FAO_MAXPRM)
+        np = FAO_MAXPRM;
+    memset(prm, 0, sizeof prm);
+    for (unsigned i = 0; i < np; i++)
+        prm[i] = va_arg(ap, unsigned long long);
+    va_end(ap);
+    dx_get(ctrstr, &c);
+    dx_get(outbuf, &o);
+    int st = (int)ovmx_vmsabi_sys_fao(&c, outlen, &o, (const uint64_t *)prm);
+    dx_put(outbuf, &o);
+    return st;
+}
+
+/* LIB$GET_VM / LIB$FREE_VM: the base address is a longword. The default zone
+ * is the VMS-ABI heap; a zone argument naming another zone is refused. */
+int LIB$GET_VM(int *nbytes, unsigned int *base, ...)
+{
+    va_list ap;
+    va_start(ap, base);
+    unsigned n = ABI_VA_COUNT(ap, 2);
+    unsigned int *zone = 0;
+    ABI_OPT(ap, n, 2u, zone);
+    va_end(ap);
+    if (!nbytes || !base)
+        return SS$_BADPARAM;
+    if (zone && *zone)
+        return SS$_UNSUPPORTED;         /* only the default zone is carried */
+    if (*nbytes <= 0)
+        return LIB$_BADBLOSIZ;
+    void *p = ovmx_vmsabi_p0_alloc((unsigned)*nbytes);
+    if (!p)
+        return LIB$_INSVIRMEM;
+    *base = (unsigned int)(uintptr_t)p;
+    return SS$_NORMAL;
+}
+
+int LIB$FREE_VM(int *nbytes, unsigned int *base, ...)
+{
+    va_list ap;
+    va_start(ap, base);
+    unsigned n = ABI_VA_COUNT(ap, 2);
+    unsigned int *zone = 0;
+    ABI_OPT(ap, n, 2u, zone);
+    va_end(ap);
+    if (!nbytes || !base)
+        return SS$_BADPARAM;
+    if (zone && *zone)
+        return SS$_UNSUPPORTED;         /* only the default zone is carried */
+    if (*nbytes <= 0)
+        return LIB$_BADBLOSIZ;
+    if (!ovmx_vmsabi_p0_free((void *)(uintptr_t)*base))
+        return LIB$_BADBLOADR;
+    return SS$_NORMAL;
+}
+
+/* ------------------------------------------------------- SYS$CREPRC ----- */
+int SYS$CREPRC(unsigned int *pidadr, void *image, void *input, void *output, void *error,
+               void *prvadr, void *quota, void *prcnam, unsigned int baspri, unsigned int uic,
+               unsigned short mbxunt, unsigned int stsflg, void *itmlst, void *node,
+               unsigned int home_rad)
+{
+    struct ovmx_abi_str i, in, out, err, p, nd;
+    (void)home_rad;
+    if (itmlst)
+        return SS$_UNSUPPORTED;         /* the item-list form is not carried yet */
+    str_arg(image, &i);
+    str_arg(input, &in);
+    str_arg(output, &out);
+    str_arg(error, &err);
+    str_arg(prcnam, &p);
+    str_arg(node, &nd);
+    return (int)ovmx_vmsabi_creprc(pidadr, &i, &in, &out, &err, prvadr, quota, &p, baspri, uic,
+                                   mbxunt, stsflg, &nd);
 }

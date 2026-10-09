@@ -15,6 +15,9 @@
 #include "ssdef.h"
 #include "starlet.h"
 #include "lib$routines.h"
+#include "str$routines.h"
+#include "libdef.h"
+#include <sys/mman.h>
 #include "sys_vmsabi_core.h"
 #include "vms_kif.h"
 
@@ -374,4 +377,375 @@ uint32_t ovmx_vmsabi_brkthru(int wait, uint32_t efn, const struct ovmx_abi_str *
     return (sys$brkthruw)(efn, dsc_of(&m, msg), dsc_of(&t, sendto), sndtyp,
                           (struct _iosb *)iosb, carcon, flags, reqid, timout,
                           AST(astadr), (uint32_t)astprm);
+}
+
+
+/* ================= vms-3b3f batch 3: LIBRTL string / symbol / VM routines ====
+ *
+ * The VMS-ABI heap. A caller LINKed on OpenVMS holds addresses in longwords:
+ * a class-D string's pointer field and LIB$GET_VM's base address are 32 bits.
+ * So their storage comes from regions mapped below 2 GB (P0), never from the
+ * process's 64-bit heap. Blocks carry a 16-byte header; a freed block keeps a
+ * FREE mark, so freeing it again (or freeing an address this heap never gave)
+ * is detected and refused, as LIB$FREE_VM refuses it with LIB$_BADBLOADR.
+ * Not thread-safe: a native image's code runs on one thread.
+ */
+#define P0_LIVE 0x4C30504Fu
+#define P0_FREE 0x4630504Fu
+#define P0_CHUNK (1u << 20)
+#define P0_LIMIT 0x80000000ull
+
+struct p0hdr {
+    uint32_t size;          /* payload bytes, a multiple of 16 */
+    uint32_t magic;
+    struct p0hdr *next;     /* free list link (free blocks only) */
+};
+
+static char *p0_cur, *p0_end;
+static struct p0hdr *p0_freelist;
+
+static void *p0_map(size_t len)
+{
+    for (unsigned long long hint = 0x40000000ull; hint + len <= P0_LIMIT; hint += 0x01000000ull) {
+        void *m = mmap((void *)(uintptr_t)hint, len, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (m == MAP_FAILED)
+            return NULL;
+        if ((unsigned long long)(uintptr_t)m + len <= P0_LIMIT)
+            return m;
+        munmap(m, len);
+    }
+    return NULL;
+}
+
+void *ovmx_vmsabi_p0_alloc(uint32_t n)
+{
+    uint32_t want = (n + 15u) & ~15u;
+    if (want == 0)
+        want = 16;
+    for (struct p0hdr **pp = &p0_freelist; *pp; pp = &(*pp)->next) {
+        struct p0hdr *h = *pp;
+        if (h->size >= want) {
+            *pp = h->next;
+            h->magic = P0_LIVE;
+            h->next = NULL;
+            return h + 1;
+        }
+    }
+    size_t need = sizeof(struct p0hdr) + want;
+    if (!p0_cur || (size_t)(p0_end - p0_cur) < need) {
+        size_t len = need > P0_CHUNK ? (need + 0xFFFFu) & ~(size_t)0xFFFFu : P0_CHUNK;
+        char *m = p0_map(len);
+        if (!m)
+            return NULL;
+        p0_cur = m;
+        p0_end = m + len;
+    }
+    struct p0hdr *h = (struct p0hdr *)p0_cur;
+    p0_cur += need;
+    h->size = want;
+    h->magic = P0_LIVE;
+    h->next = NULL;
+    return h + 1;
+}
+
+int ovmx_vmsabi_p0_free(void *p)
+{
+    if (!p || ((uintptr_t)p & 15u) || (unsigned long long)(uintptr_t)p >= P0_LIMIT)
+        return 0;
+    struct p0hdr *h = (struct p0hdr *)p - 1;
+    if (h->magic != P0_LIVE)
+        return 0;
+    h->magic = P0_FREE;
+    h->next = p0_freelist;
+    p0_freelist = h;
+    return 1;
+}
+
+/* A native descriptor for an input argument (NULL when omitted). */
+static struct dsc$descriptor_s *dx_in(struct dsc$descriptor_s *n, const struct ovmx_abi_dx *x)
+{
+    if (!x || !x->given)
+        return NULL;
+    n->dsc$w_length = x->len;
+    n->dsc$b_dtype = x->dtype;
+    n->dsc$b_class = x->cls;
+    n->dsc$a_pointer = x->ptr;
+    return n;
+}
+
+/* A destination: a fixed-length one is written in place; a class-D one is
+ * built as a native dynamic string seeded with its current value, and
+ * dst_close moves the result into the VMS-ABI heap. */
+static uint32_t dst_open(struct dsc$descriptor_s *n, const struct ovmx_abi_dx *x)
+{
+    if (!x || !x->given)
+        return SS$_BADPARAM;
+    dx_in(n, x);
+    if (x->cls != DSC$K_CLASS_D)
+        return SS$_NORMAL;
+    n->dsc$w_length = 0;
+    n->dsc$a_pointer = NULL;
+    if (x->len && x->ptr) {
+        uint16_t l = x->len;
+        return str$copy_r(n, &l, x->ptr);
+    }
+    return SS$_NORMAL;
+}
+
+static uint32_t dst_close(struct dsc$descriptor_s *n, struct ovmx_abi_dx *x, uint32_t st)
+{
+    if (!x || x->cls != DSC$K_CLASS_D)
+        return st;
+    char *p = NULL;
+    if (n->dsc$w_length) {
+        p = ovmx_vmsabi_p0_alloc(n->dsc$w_length);
+        if (!p) {
+            str$free1_dx((struct dsc$descriptor_d *)n);
+            return LIB$_INSVIRMEM;
+        }
+        memcpy(p, n->dsc$a_pointer, n->dsc$w_length);
+    }
+    (void)ovmx_vmsabi_p0_free(x->ptr);
+    x->ptr = p;
+    x->len = n->dsc$w_length;
+    str$free1_dx((struct dsc$descriptor_d *)n);
+    return st;
+}
+
+uint32_t ovmx_vmsabi_str_dst(int op, struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src)
+{
+    struct dsc$descriptor_s d, s;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    switch (op) {
+    case OVMX_ABI_STR_COPY_DX: st = str$copy_dx(&d, dx_in(&s, src)); break;
+    case OVMX_ABI_STR_APPEND:  st = str$append(&d, dx_in(&s, src)); break;
+    case OVMX_ABI_STR_PREFIX:  st = str$prefix(&d, dx_in(&s, src)); break;
+    default:                   st = str$upcase(&d, dx_in(&s, src)); break;
+    }
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_extract(int op, struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                                 const void *a, const void *b)
+{
+    struct dsc$descriptor_s d, s;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    switch (op) {
+    case OVMX_ABI_STR_LEFT:     st = str$left(&d, dx_in(&s, src), a); break;
+    case OVMX_ABI_STR_RIGHT:    st = str$right(&d, dx_in(&s, src), a); break;
+    case OVMX_ABI_STR_LEN_EXTR: st = str$len_extr(&d, dx_in(&s, src), a, b); break;
+    default:                    st = str$pos_extr(&d, dx_in(&s, src), a, b); break;
+    }
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_replace(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                                 const uint32_t *start, const uint32_t *end,
+                                 const struct ovmx_abi_dx *rep)
+{
+    struct dsc$descriptor_s d, s, r;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    st = str$replace(&d, dx_in(&s, src), start, end, dx_in(&r, rep));
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_translate(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                                   const struct ovmx_abi_dx *tran, const struct ovmx_abi_dx *match)
+{
+    struct dsc$descriptor_s d, s, t, m;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    st = str$translate(&d, dx_in(&s, src), dx_in(&t, tran), dx_in(&m, match));
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_trim(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src,
+                              uint16_t *outlen)
+{
+    struct dsc$descriptor_s d, s;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    st = str$trim(&d, dx_in(&s, src), outlen);
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_dupl_char(struct ovmx_abi_dx *dst, const int32_t *len, const char *ch)
+{
+    struct dsc$descriptor_s d;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    st = str$dupl_char(&d, len, ch);
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_element(struct ovmx_abi_dx *dst, const uint32_t *elem,
+                                 const struct ovmx_abi_dx *delim, const struct ovmx_abi_dx *src)
+{
+    struct dsc$descriptor_s d, l, s;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    st = str$element(&d, elem, dx_in(&l, delim), dx_in(&s, src));
+    return dst_close(&d, dst, st);
+}
+
+/* STR$CONCAT: the native routine ends its source list with a NULL pointer. */
+#define ABI_CONCAT_MAX 16
+uint32_t ovmx_vmsabi_str_concat(struct ovmx_abi_dx *dst, const struct ovmx_abi_dx *src, unsigned n)
+{
+    struct dsc$descriptor_s d, s[ABI_CONCAT_MAX];
+    struct dsc$descriptor_s *a[ABI_CONCAT_MAX + 1];
+    if (n == 0 || n > ABI_CONCAT_MAX)
+        return SS$_BADPARAM;
+    for (unsigned i = 0; i < n; i++)
+        a[i] = dx_in(&s[i], &src[i]);
+    for (unsigned i = n; i <= ABI_CONCAT_MAX; i++)
+        a[i] = NULL;
+    uint32_t st = dst_open(&d, dst);
+    if (!(st & 1))
+        return st;
+    st = (str$concat)(&d, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9],
+                      a[10], a[11], a[12], a[13], a[14], a[15], a[16]);
+    return dst_close(&d, dst, st);
+}
+
+uint32_t ovmx_vmsabi_str_free1(struct ovmx_abi_dx *dst)
+{
+    if (!dst || !dst->given)
+        return SS$_BADPARAM;
+    if (dst->cls != DSC$K_CLASS_D)
+        return SS$_NORMAL;
+    (void)ovmx_vmsabi_p0_free(dst->ptr);
+    dst->ptr = NULL;
+    dst->len = 0;
+    return SS$_NORMAL;
+}
+
+uint32_t ovmx_vmsabi_str_in(int op, const struct ovmx_abi_dx *a, const struct ovmx_abi_dx *b,
+                            const uint32_t *start)
+{
+    struct dsc$descriptor_s x, y;
+    struct dsc$descriptor_s *pa = dx_in(&x, a), *pb = dx_in(&y, b);
+    switch (op) {
+    case OVMX_ABI_CMP_COMPARE:     return (uint32_t)str$compare(pa, pb);
+    case OVMX_ABI_CMP_COMPARE_EQL: return (uint32_t)str$compare_eql(pa, pb);
+    case OVMX_ABI_CMP_POSITION:    return (uint32_t)str$position(pa, pb, start);
+    case OVMX_ABI_CMP_FFIS:        return (uint32_t)str$find_first_in_set(pa, pb);
+    case OVMX_ABI_CMP_FFNIS:       return (uint32_t)str$find_first_not_in_set(pa, pb);
+    case OVMX_ABI_CMP_INDEX:       return (uint32_t)lib$index(pa, pb);
+    case OVMX_ABI_CMP_LOCC:        return (uint32_t)lib$locc(pa, pb);
+    case OVMX_ABI_CMP_MATCHC:      return (uint32_t)lib$matchc(pa, pb);
+    default:                       return (uint32_t)lib$skpc(pa, pb);
+    }
+}
+
+uint32_t ovmx_vmsabi_set_symbol(const struct ovmx_abi_dx *sym, const struct ovmx_abi_dx *val,
+                                const uint32_t *tbl)
+{
+    struct dsc$descriptor_s s, v;
+    return lib$set_symbol(dx_in(&s, sym), dx_in(&v, val), tbl);
+}
+
+uint32_t ovmx_vmsabi_get_symbol(const struct ovmx_abi_dx *sym, struct ovmx_abi_dx *val,
+                                uint16_t *len, uint32_t *tbl)
+{
+    struct dsc$descriptor_s s, v;
+    uint32_t st = dst_open(&v, val);
+    if (!(st & 1))
+        return st;
+    st = lib$get_symbol(dx_in(&s, sym), &v, len, tbl);
+    return dst_close(&v, val, st);
+}
+
+uint32_t ovmx_vmsabi_delete_symbol(const struct ovmx_abi_dx *sym, const uint32_t *tbl)
+{
+    struct dsc$descriptor_s s;
+    return lib$delete_symbol(dx_in(&s, sym), tbl);
+}
+
+uint32_t ovmx_vmsabi_find_file(const struct ovmx_abi_dx *spec, struct ovmx_abi_dx *result,
+                               uint32_t *ctx, const struct ovmx_abi_dx *def,
+                               const struct ovmx_abi_dx *rel, uint32_t *stv,
+                               const uint32_t *flags)
+{
+    struct dsc$descriptor_s f, r, d, l;
+    uint32_t st = dst_open(&r, result);
+    if (!(st & 1))
+        return st;
+    st = lib$find_file(dx_in(&f, spec), &r, ctx, dx_in(&d, def), dx_in(&l, rel), stv, flags);
+    return dst_close(&r, result, st);
+}
+
+uint32_t ovmx_vmsabi_lib_getxxi(int op, const uint32_t *item, const uint32_t *pid,
+                                uint16_t chan, const struct ovmx_abi_dx *name, void *resval,
+                                struct ovmx_abi_dx *resstr, uint16_t *reslen, uint32_t *csid)
+{
+    struct dsc$descriptor_s n, r, *pr = NULL;
+    uint32_t st;
+    if (resstr && resstr->given) {
+        st = dst_open(&r, resstr);
+        if (!(st & 1))
+            return st;
+        pr = &r;
+    }
+    switch (op) {
+    case OVMX_ABI_GETXXI_JPI: st = lib$getjpi(item, pid, dx_in(&n, name), resval, pr, reslen); break;
+    case OVMX_ABI_GETXXI_SYI: st = lib$getsyi(item, resval, pr, reslen, csid, dx_in(&n, name)); break;
+    default:                  st = lib$getdvi(item, chan, dx_in(&n, name), resval, pr, reslen); break;
+    }
+    return pr ? dst_close(&r, resstr, st) : st;
+}
+
+/* LIB$SYS_FAO: $FAO with the VMS-form parameters, into a fixed or dynamic
+ * output string. */
+uint32_t ovmx_vmsabi_sys_fao(const struct ovmx_abi_dx *ctr, uint16_t *outlen,
+                             struct ovmx_abi_dx *out, const uint64_t *prm)
+{
+    char buf[1024];
+    uint16_t len = 0;
+    if (!ctr || !ctr->given || !out || !out->given)
+        return SS$_BADPARAM;
+    if (out->cls != DSC$K_CLASS_D) {
+        uint32_t st = ovmx_fao_vmsabi(ctr->ptr, ctr->len, &len, out->ptr, out->len, prm);
+        if (outlen)
+            *outlen = len;
+        return st;
+    }
+    uint32_t st = ovmx_fao_vmsabi(ctr->ptr, ctr->len, &len, buf, sizeof buf, prm);
+    if (!(st & 1))
+        return st;
+    char *p = len ? ovmx_vmsabi_p0_alloc(len) : NULL;
+    if (len && !p)
+        return LIB$_INSVIRMEM;
+    if (len)
+        memcpy(p, buf, len);
+    (void)ovmx_vmsabi_p0_free(out->ptr);
+    out->ptr = p;
+    out->len = len;
+    if (outlen)
+        *outlen = len;
+    return st;
+}
+
+uint32_t ovmx_vmsabi_creprc(uint32_t *pidadr, const struct ovmx_abi_str *image,
+                            const struct ovmx_abi_str *input, const struct ovmx_abi_str *output,
+                            const struct ovmx_abi_str *error, const void *prvadr,
+                            const void *quota, const struct ovmx_abi_str *prcnam,
+                            uint32_t baspri, uint32_t uic, uint32_t mbxunt, uint32_t stsflg,
+                            const struct ovmx_abi_str *node)
+{
+    struct dsc$descriptor_s i, in, out, err, p, n;
+    return sys$creprc(pidadr, dsc_of(&i, image), dsc_of(&in, input), dsc_of(&out, output),
+                      dsc_of(&err, error), prvadr, quota, dsc_of(&p, prcnam), baspri, uic,
+                      mbxunt, stsflg, NULL, dsc_of(&n, node));
 }

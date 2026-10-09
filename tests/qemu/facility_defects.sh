@@ -2093,21 +2093,35 @@ the read returns the type-ahead 'abc' and the RETURN terminator
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST
+CTRL/O during a read is neither data nor shown, and does not end the read
+CTRL/O while output runs shows <LF>*OUTPUT OFF*<CR><LF> (the owed line feed first)
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver
 DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 DELETE is echoed as BS SP BS on a scope terminal
 DELETE rubs out the last character (data 'ac')
 IO$M_PURGE discards the type-ahead before reading
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
 ^Z terminates the read
+a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed
 a NOECHO read returns what was typed
+a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)
 a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+an AST armed through a channel ends when that channel is deassigned
 an escape sequence (up-arrow) neither ends the read nor lands in the line
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+output written while CTRL/O is on is discarded
 read(2) echoes as it consumes, like any driver read
 read(2) on the bound line returns the line with LF for the RETURN
+the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)
 the driver echoes *EXIT* for ^Z
 the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
 the resumed read does not write its prompt a second time
+the same read resumes and completes with the whole line 'ABCD'
 two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
+with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT
+with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)
 EOF
                       ;;
         knock_on_why)  echo "one dropped receive path, every typed-input observation: each case that types at the line and expects a read to consume it sees its read time out with nothing (and no consumption echo). The cases that type nothing -- the bind, the NOECHO sense, the empty timed read, ^X (which expects an empty read anyway), the \$QIO write, the portless unit and the hangup -- stay green.";;
@@ -2146,8 +2160,9 @@ two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owe
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ 
+DCL's prompt after a record: the owed <LF>, then <CR><NUL>$
 DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
 EOF
                       ;;
         knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;
@@ -2288,6 +2303,7 @@ DCL's prompt after a record: the owed <LF>, then <CR><NUL>$
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+CTRL/O during a read is neither data nor shown, and does not end the read
 EOF
                       ;;
         knock_on_why)  echo "none: the payment happens only at the start of a read after a record, which only the named check observes";;

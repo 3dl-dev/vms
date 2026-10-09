@@ -23,6 +23,9 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <poll.h>
+#include <errno.h>
+#include <pthread.h>
+#include <sys/wait.h>
 
 #include "ssdef.h"
 #include "descrip.h"
@@ -51,6 +54,66 @@ static struct dsc$descriptor_s dsc(const char *s)
     return d;
 }
 
+/*
+ * THE LEADER EXITS FIRST (rd vms-003b). A multithreaded subprocess whose main
+ * thread ends before another thread -- DCL with its SYS$INPUT reader thread --
+ * leaves its group leader a zombie while the LAST thread drops /dev/vms. The
+ * executive must still see the process end and deliver the creator's armed
+ * completion. Deterministic: the child's main thread pthread_exit()s at once and
+ * a second thread ends the process 200 ms later.
+ */
+static void *leader_gone_tail(void *v)
+{
+    (void)v;
+    struct pollfd nothing = { .fd = -1, .events = 0 };
+    poll(&nothing, 1, 200);
+    exit(0);
+}
+
+/* Fork a registered child process whose leader exits first; arm the completion
+ * on it, release it, and wait for the flag. Returns 1 set, 0 lost, -1 setup. */
+static int leader_first_completion(uint32_t efn)
+{
+    int up[2], go[2];
+    if (pipe(up) != 0 || pipe(go) != 0) return -1;
+    pid_t lp = fork();
+    if (lp < 0) return -1;
+    if (lp == 0) {
+        close(up[0]); close(go[1]);
+        /* Its OWN /dev/vms (not the creator's shared one) and its own PCB. */
+        vms_kif_close();
+        uint32_t me = 0;
+        if (vms_kif_open() < 0 || !(vms_kif_register(&me) & 1)) me = 0;
+        (void)write(up[1], &me, sizeof me);
+        char c;
+        (void)read(go[0], &c, 1);
+        pthread_t t;
+        if (pthread_create(&t, NULL, leader_gone_tail, NULL) != 0) _exit(2);
+        pthread_exit(NULL);               /* the leader goes first */
+    }
+    close(up[1]); close(go[0]);
+    uint32_t child = 0;
+    int ok = read(up[0], &child, sizeof child) == (ssize_t)sizeof child && child != 0;
+    int done = 0;
+    (void)sys$clref(efn);
+    if (ok)
+        ok = (vms_kif_spawn_notify(child, efn, 0, 0, &done) & 1) != 0;
+    (void)write(go[1], "g", 1);
+    close(up[0]); close(go[1]);
+    int set = -1;
+    if (ok) {
+        set = 0;
+        for (int waited = 0; waited < 10000 && !set; waited += 50) {
+            set = (sys$readef(efn, &(uint32_t){0}) == SS$_WASSET);
+            if (!set) { struct pollfd n = { .fd = -1, .events = 0 }; poll(&n, 1, 50); }
+        }
+    }
+    int ws;
+    while (waitpid(lp, &ws, 0) < 0 && errno == EINTR)
+        ;
+    return set;
+}
+
 int main(void)
 {
     printf("=== test_syssvc_spawn_complete (vms-f45: /NOWAIT completion is never lost) ===\n");
@@ -65,6 +128,14 @@ int main(void)
     CHECK(lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", "/bin", 0, LNM_MODE_SUPER) & 1,
           "define SYS$SYSTEM -> /bin (stage DCL.EXE for lib$spawn)");
     if (!(vms_kif_open() >= 0 && (vms_kif_register(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
+
+    {
+        int r = leader_first_completion(COMPLETION_EFN);
+        CHECK(r != -1, "a registered child process with its own /dev/vms is created and armed");
+        /* negctl: release-leader-zombie-pcb-kept */
+        CHECK(r == 1, "a subprocess whose main thread exits before its last thread still completes:"
+                      " the creator's armed completion event flag is set");
+    }
 
     int lost = 0;
     for (int i = 0; i < ITERATIONS; i++) {

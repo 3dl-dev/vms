@@ -441,6 +441,7 @@ dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
 spawn-input-via-linux-path
 spawn-arm-gone-subprocess-not-completed
+release-leader-zombie-pcb-kept
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -3032,6 +3033,22 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    release-leader-zombie-pcb-kept)
+        case "$_f" in
+        facility)     echo "process deletion at the last /dev/vms close (vms_dev_release, the Linux module rind) -- the moment the executive learns a process ended and fires its creator's armed /NOWAIT completion (rd vms-003b)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dev_release() goes back to asking thread_group_empty(current) instead of the group's live-thread count. When the last thread to drop /dev/vms is NOT the group leader (the leader exited first -- DCL with its SYS\$INPUT reader thread), thread_group_empty() is false, the PCB is never freed, the zombie leader keeps it alive for the lazy reaper, and the creator's armed completion never fires. The deterministic leader-exits-first assertion reddens; the 200-spawn DCL loop in the same suite may also redden (it hits the same window by scheduling), which the equality reports as a non-gating extra. The live-count text is unique in the file; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a subprocess whose main thread exits before its last thread still completes:
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
     spawn-arm-gone-subprocess-not-completed)
         case "$_f" in
         facility)     echo "LIB\$SPAWN /NOWAIT completion notification (the subprocess-exit event flag, vms-e9a B1 / vms-f45)";;
@@ -8205,6 +8222,8 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    release-leader-zombie-pcb-kept)
+        sed -i 's|atomic_read(\&current->signal->live) != 0)|!thread_group_empty(current)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file";;
     spawn-arm-gone-subprocess-not-completed)
         # UNIQUE TEXT: "if (ast == SS$_NONEXPR) {" occurs once, in lib$spawn's NOWAIT arm
         # handling. Forcing it never-true restores the pre-fix behaviour (the NONEXPR from

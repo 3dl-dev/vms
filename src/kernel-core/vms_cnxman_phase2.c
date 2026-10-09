@@ -121,8 +121,20 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 			st->local_named = (uint8_t)(known ? 1 : 0);
 			st->local_in_map = (uint8_t)((known && in_map) ? 1 : 0);
 		}
-		if (!known)
+		if (!known) {
+			/*
+			 * A SLOT THIS EXECUTIVE CANNOT EXPRESS, SAID OUT LOUD
+			 * WITH ITS NUMBERS (rd vms-b5b0 follow-on, ev7). The
+			 * generic "bitmap is wider than the grounded byte" line
+			 * did not say WHOSE slot fell off the end, and when the
+			 * answer was "ours" the consequence was a directory
+			 * split nobody could see. Counted; the detail line is
+			 * the LDWV's member readout, which prints every slot.
+			 */
+			if (csb == local)
+				st->local_slot_unexpressible++;
 			continue;
+		}
 		matched++;
 		if (in_map) {
 			cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |

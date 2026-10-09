@@ -162,6 +162,7 @@ barrier-bit0-uncounted
 phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
+ldwv-drops-our-own-membership
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
@@ -414,6 +415,24 @@ EOF
         why)          echo "cnxman_recnx_shutdown()'s 'r->last_gasps++;' is dropped. The CLUB/CSB SHUTDOWN flags are still set and the last-gasp record is still emitted to the caller -- only the counter that tells an operator one was sent goes silent.";;
         require_fail) cat <<'EOF'
 counted once
+EOF
+                      ;;
+        esac;;
+
+    ldwv-drops-our-own-membership)
+        case "$_f" in
+        facility)     echo "THIS NODE'S OWN PLACE IN ITS OWN VECTOR (ldwv_csb_counts(), rd vms-b5b0 follow-on): a committed LOCAL member counts even when the transition nodemap could not express its CSV slot";;
+        targets)      echo "kernel-core/vms_dlm_ldwv.c";;
+        suites_red)   echo "test_dlm_ldwv";;
+        isolation)    echo "isolated";;
+        why)          echo "the member test is put back to SELECTED-only, which is what shipped before the 2026-10-09 ev7 lab run. On its NINTH rejoin of the same real VAX cluster in a day this node was assigned CSID 0x00010008 -- CSV slot 8, one past the eight slots this executive has grounded of the nodemap byte -- so nothing could set its SELECTED flag, and its own vector read '2 entries over 2 systems, 0 of them this node's' while BOTH VAXes directed every directory lookup at it. A DIRECTORY SPLIT in which the node had omitted ITSELF, the one member whose membership it does not need a bitmap to know. The slot climbs with every rejoin (p. 7-25), so this is a cliff any cluster walks off, not a corner case.";;
+        require_fail) cat <<'EOF'
+*** all THREE systems are represented -- this node is no longer missing from its own vector ***
+*** and the entry is OURS (an own entry reads 0) -- so every lookup the VAXes send here is answered by the node they sent it to ***
+ONE entry: our LOCKDIRWT 1 against their 0 (p. 6-32), which is the '1 entries over 3 systems' line the earlier boot printed
+and the directory-split watchdog is silent
+the watchdog stays silent for a node that is not a member -- holding no entry is correct then
+this node is the directory for every value, which is what both VAXes' own vectors say too
 EOF
                       ;;
         esac;;
@@ -1873,6 +1892,11 @@ apply_edit() {
     dlm-dir-remove-by-anyone)
         # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.
         sed -i 's#if (i < 0 || d->slot\[i\].master != master) {#if (i < 0 || (d->slot[i].master != master \&\& 0)) { /* NEGCTL dlm-dir-remove-by-anyone */#' "$_file";;
+
+    ldwv-drops-our-own-membership)
+        # The local-membership arm of the member test. Removing its two lines
+        # removes the anchor, so a second apply cannot match.
+        sed -i 's|\tif ((csb->flags \& VMS_CSB_F_LOCAL) != 0u)|\tif (0) { /* NEGCTL ldwv-drops-our-own-membership */ }\n\tif (0)|' "$_file";;
 
     ldwv-refusal-uncounted)
         # `club->ldwv_build_refused++;` occurs TWICE in this file (the

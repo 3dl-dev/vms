@@ -110,6 +110,21 @@ struct cnxman_phase2_stats {
 	uint8_t local_named;
 	uint8_t local_in_map;
 	uint8_t pad[2];
+
+	/*
+	 * ...AND WHEN THE SILENCE WAS ABOUT OUR OWN CSV SLOT (rd vms-b5b0
+	 * follow-on, ev7). `local_named == 0` has two causes -- our CSID is not
+	 * learned yet, or its slot is past the one grounded bitmap byte -- and
+	 * the second is a CLIFF every cluster walks off: a node's CSID slot
+	 * climbs with each rejoin (p. 7-25: a rejoining system gets a NEW
+	 * CSID), so the ninth incarnation lands on slot 8 and the map can no
+	 * longer express it. Counted separately because the consequence is
+	 * specific: nothing can set this node's SELECTED flag, and anything
+	 * that reads selection as "is a member" then drops this node out of its
+	 * own answer. vms_dlm_ldwv.c's member test reads the committed MEMBER
+	 * flag for the local node for exactly this reason.
+	 */
+	uint32_t local_slot_unexpressible;
 };
 
 /* ==========================================================================

@@ -856,10 +856,11 @@ static void net_unbind(struct net_chan_state *ns)
  */
 void vms$$net_chan_release(uint16_t chan)
 {
-    if (chan == 0 || chan >= PCB_MAX_CHANNELS)
+    uint32_t slot = pcb_chan_to_slot(chan);     /* channel N*16 is slot N */
+    if (chan == 0 || slot >= PCB_MAX_CHANNELS)
         return;
     pthread_mutex_lock(&g_netchan_lock);
-    struct net_chan_state *ns = &g_netchan[chan];
+    struct net_chan_state *ns = &g_netchan[slot];
     if (ns->bound && ns->bc.handle != 0) {
         struct dnet_broker_io io = { ns, net_io_put, net_io_get, net_io_idle,
                                      NET_REPLY_POLLS, NET_OPEN_POLLS };
@@ -891,13 +892,14 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         st = SS$_NORMAL;
     } else if (op == 0) {
         st = SS$_ILLIOFUNC;
-    } else if (chan == 0 || chan >= PCB_MAX_CHANNELS) {
+    } else if (chan == 0 || pcb_chan_to_slot(chan) >= PCB_MAX_CHANNELS) {
         st = SS$_IVCHAN;
     } else {
         /* One request at a time per channel; channels proceed independently
-         * (the lock is dropped while a request waits on its reply). */
+         * (the lock is dropped while a request waits on its reply). The
+         * state is per channel SLOT: channel numbers are N*16 (rd vms-0a2). */
         pthread_mutex_lock(&g_netchan_lock);
-        struct net_chan_state *ns = &g_netchan[chan];
+        struct net_chan_state *ns = &g_netchan[pcb_chan_to_slot(chan)];
         uint32_t bst = net_bind(chan, ns);
         pthread_mutex_unlock(&g_netchan_lock);
         if (!(bst & 1)) {

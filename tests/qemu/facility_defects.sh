@@ -475,6 +475,7 @@ kstat-ivlockid-mismapped
 kstat-cvtungrant-mismapped
 assign-terminal-bypasses-executive
 net-qio-fakes-io
+net-client-takes-qio-service-status
 dcl-submit-owner-fabricated
 dcl-print-owner-fabricated
 dcl-logout-user-fabricated
@@ -5308,6 +5309,27 @@ EOF
         knock_on_why)  echo "the same fabricated SS\$_NORMAL makes the IO\$_ACCESS assertion fail alongside the IO\$_READVBLK one -- one substituted status, both recognized-function readers in qio_net_op.";;
         esac;;
 
+    net-client-takes-qio-service-status)
+        case "$_f" in
+        facility)     echo "the DECnet _NET: client's \$QIOW status rule (dnet_net_qiow, src/vmsdecnet/broker/include/dnet_netqio.h) -- every DECnet client image (DECNETD's COPY / SET HOST over NETACP) reads how a logical-link I/O ENDED from the IOSB (rd vms-dda / vms-d01)";;
+        targets)      echo "vmsdecnet/broker/include/dnet_netqio.h";;
+        suites_red)   echo "test_syssvc_net_qio_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "dnet_net_qiow() stops replacing \$QIOW's service status with the IOSB status, restoring the client bug behind the booted refused-OPEN hang: since vms-d01 a queued \$QIOW returns SS\$_NORMAL whatever NETACP answered, so a connect refused SS\$_INVLOGIN reads as an open link and every read of that nonexistent link (SS\$_FILNOTACC in the IOSB) reads as an empty message -- a bad-password COPY polls for ever. The raw \$QIOW contract assertion, the accepted connect and IO\$_DEACCESS (both SS\$_NORMAL either way) stay green; the refused connect, the read after it, and the empty IO\$M_NOW read (SS\$_ENDOFFILE) redden. The assignment text is unique in the header; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the DECnet client's IO$_ACCESS (dnet_net_qiow) ends SS$_INVLOGIN for a refused
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a read on the channel after the refused connect ends SS$_FILNOTACC (no link)
+IO$_READVBLK|IO$M_NOW with no message buffered ends SS$_ENDOFFILE, 0 bytes
+EOF
+                      ;;
+        knock_on_why)  echo "one status rule serves every _NET: function: the read after the refused connect (SS\$_FILNOTACC) and the empty IO\$M_NOW read (SS\$_ENDOFFILE) end in the IOSB too, so the same dropped line takes both for SS\$_NORMAL.";;
+        esac;;
+
     # -----------------------------------------------------------------------
     # THE SIX USER-NAME FABRICATIONS (vms-cb5 / vms-f39 / vms-f42d)
     #
@@ -8410,6 +8432,9 @@ apply_edit() {
 
     net-qio-fakes-io)
         sed -i '/^static uint32_t qio_net_op(/,/^}/ s|st = SS\$_DEVOFFLINE;|st = SS\$_NORMAL; /* NEGCTL net-qio-fakes-io */|' "$_file";;
+
+    net-client-takes-qio-service-status)
+        sed -i 's|^        st = iosb\.iosb\$w_status;$|        (void)0; /* NEGCTL net-client-takes-qio-service-status */|' "$_file";;
 
     # The six user-name fabrications. Each restores ONE deleted fallback.
     # RANGE-ANCHORED to the function that owns the site: `const char *user =

@@ -71,6 +71,7 @@
 #include "dnet_mail11.h"    /* MAIL-11 receiver (object 27, rd vms-47fd)    */
 #include "dnet_mail_proc.h" /* MAIL_SERVER.EXE network server process      */       /* FAL server + COPY client (object 17, rd vms-8c2) */
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
+#include "dnet_netqio.h"    /* a _NET: $QIOW ends with its IOSB status (rd vms-d01) */
 #include "ovmx_status.h"     /* vms_status_string: the authentic %FAC-S-ID text */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
@@ -4524,12 +4525,10 @@ static uint32_t netcli_op(struct netcli *c, uint16_t op, const void *in, size_t 
     case DNET_BROKER_OP_CLOSE: func = IO$_DEACCESS;  break;
     default: return SS$_ILLIOFUNC;
     }
-    struct _iosb iosb;
-    memset(&iosb, 0, sizeof iosb);
-    uint32_t st = sys$qiow(0, c->chan, func, &iosb, NULL, 0, p1, p2, 0, 0, 0, 0);
-    if (xfer && (st & 1))
-        *xfer = iosb.iosb$l_dev_depend;
-    return st;
+    /* How the I/O ENDED, not whether it was queued (dnet_netqio.h, rd vms-d01):
+     * reading only $QIOW's service status took a refused connect for an open
+     * link -- a bad-password COPY then polled a link that never existed. */
+    return dnet_net_qiow(c->chan, func, p1, p2, xfer);
 }
 
 static void netcli_idle(struct netcli *c)
@@ -6984,53 +6983,6 @@ static int net_req_probe_spawn(struct netreq_probe *v)
 }
 
 
-/* DIAGNOSTIC (rd vms-dda booted hang): if the step it guards has not finished
- * in 60 s, print where the running NETACP is (its kernel wait channel and
- * syscall, read from the host /proc of the process the executive names NETACP)
- * and the tail of its log (its stdout), then keep waiting. Read-only. */
-static volatile int g_wd_done;
-static void wd_cat(const char *path, size_t tail)
-{
-    FILE *f = fopen(path, "r");
-    if (!f) { printf("    (cannot read %s)\n", path); return; }
-    static char b[16384];
-    size_t n = fread(b, 1, sizeof b - 1, f);
-    fclose(f);
-    b[n] = '\0';
-    const char *p = n > tail ? b + n - tail : b;
-    printf("%s\n", p);
-}
-static void *netacp_watchdog(void *v)
-{
-    (void)v;
-    for (int k = 0; k < 600 && !g_wd_done; k++) {
-        struct timespec ts = { 0, 100 * 1000 * 1000 };
-        nanosleep(&ts, NULL);
-    }
-    if (g_wd_done) return NULL;
-    struct vms_procinfo pi;
-    memset(&pi, 0, sizeof pi);
-    if (!(vms_kif_getjpi_prcnam("NETACP", &pi) & 1) || !pi.linux_pid) {
-        printf("  DIAG: 60 s and no answer; no NETACP process found by name\n");
-        return NULL;
-    }
-    char path[64], lnk[512];
-    printf("  DIAG: 60 s and no answer; NETACP is linux pid %u\n", (unsigned)pi.linux_pid);
-    snprintf(path, sizeof path, "/proc/%u/wchan", (unsigned)pi.linux_pid);
-    printf("  DIAG: wchan: "); wd_cat(path, 200);
-    snprintf(path, sizeof path, "/proc/%u/syscall", (unsigned)pi.linux_pid);
-    printf("  DIAG: syscall: "); wd_cat(path, 200);
-    snprintf(path, sizeof path, "/proc/%u/fd/1", (unsigned)pi.linux_pid);
-    ssize_t ln = readlink(path, lnk, sizeof lnk - 1);
-    if (ln > 0) {
-        lnk[ln] = '\0';
-        printf("  DIAG: NETACP log %s (tail):\n", lnk);
-        wd_cat(lnk, 6000);
-    }
-    fflush(stdout);
-    return NULL;
-}
-
 static int run_net_loopback_accept_test(void)
 {
     dnet_tick_t t0 = monotonic_sec();
@@ -7088,12 +7040,7 @@ static int run_net_loopback_accept_test(void)
                  " records BYTE-MATCH (qio_net_op -> mailboxes -> NETACP -> loopback -> FAL.EXE)");
         printf("  NOTE: t+%lus: COPY with a bad password\n", (unsigned long)(monotonic_sec() - t0));
         fflush(stdout);
-        pthread_t wdt;
-        g_wd_done = 0;
-        int wd = pthread_create(&wdt, NULL, netacp_watchdog, NULL) == 0;
         st = (rp == 0) ? copy_client_run_net(&c, &plan, "WRONGPW") : SS$_BADPARAM;
-        g_wd_done = 1;
-        if (wd) pthread_join(wdt, NULL);
         printf("  NOTE: t+%lus: bad-password COPY returned %08X\n",
                (unsigned long)(monotonic_sec() - t0), (unsigned)st);
         NL_CHECK(st == SS$_INVLOGIN,

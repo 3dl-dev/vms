@@ -1,12 +1,12 @@
 # keystroke oracle transcript (unmasked) -- case LE.CTRLX (OpenVMS VAX V7.3 OPA0:)
 # line editing: ^X at the prompt discards the line (and the type-ahead)
-# case-sha256 f11ce104a9e4d9e93a28d5a492a66746b79ae8ddeae432551d6ef6fc442bdb38
+# case-sha256 1a7bf326b3d9309d66c0ec32a1ea29557718099b32ed79bd92db70b5ee4f4239
 @start loggedin OK
 === STEP V0 quiet
 === STEP T
 | WRITE SYS$OUTPUT 9
 === STEP X
-| <CR><NUL>$                                                                                                                                  <BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
+| <CR><NUL>$                                                                              <BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
 === STEP F
 | WRITE SYS$OUTPUT 1
 === STEP R

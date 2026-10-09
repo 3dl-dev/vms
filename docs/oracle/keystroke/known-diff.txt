@@ -13,14 +13,6 @@ ERR.DCL E7  # vms-c174: DCL error message differs (and vms-fc4 record carriage c
 ERR.DCL E8  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E9  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E10  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-LE.CTRLJ J  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLR D  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLR X  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLU U  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLX X  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.DEL D1  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.DEL D2  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.DEL F  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LOGIN.BANNER U  # vms-bd71: LOGINOUT console bytes differ
 LOGIN.BANNER P  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT L  # vms-bd71: LOGINOUT console bytes differ
@@ -28,12 +20,6 @@ LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT X  # vms-bd71: LOGINOUT console bytes differ
 OOB.PROMPT T  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-RC.RECALL U1  # vms-eb3d: command recall (up/down/^B) not VMS
-RC.RECALL U2  # vms-eb3d: command recall (up/down/^B) not VMS
-RC.RECALL DN  # vms-eb3d: command recall (up/down/^B) not VMS
-RC.RECALL R1  # vms-eb3d: command recall (up/down/^B) not VMS
-RC.RECALL B  # vms-eb3d: command recall (up/down/^B) not VMS
-RC.RECALL R2  # vms-eb3d: command recall (up/down/^B) not VMS
 RD.EOF Z  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED W  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED R2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics

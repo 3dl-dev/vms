@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case LE.DEL (OpenVMS VAX V7.3 OPA0:)
 # line editing: DELETE rubs out the last character
-# case-sha256 b688d49238fd35dc97410130759dee856c23c2657ad31dd157596853982a7e6a
+# case-sha256 5c8dd1bc6606f55b49312d0e295b09b87ad2c2915986afa0f7cce16f0321f7fc
 @start loggedin OK
 === STEP V0 quiet
 === STEP T

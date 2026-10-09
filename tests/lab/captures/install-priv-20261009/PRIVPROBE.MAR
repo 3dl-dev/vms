@@ -1,0 +1,44 @@
+        .TITLE  PRIVPROBE  OVMX vms-7c64 installed-privilege probe
+; Our own probe: print $GETJPI CURPRIV / IMAGPRIV / PROCPRIV and whether
+; $CMKRNL is allowed, so INSTALL /PRIVILEGED can be observed.
+        $JPIDEF
+        .PSECT  PDATA,NOEXE,WRT,LONG
+CUR:    .QUAD   0
+IMG:    .QUAD   0
+PRC:    .QUAD   0
+ITM:    .WORD   8, JPI$_CURPRIV
+        .ADDRESS CUR
+        .LONG   0
+        .WORD   8, JPI$_IMAGPRIV
+        .ADDRESS IMG
+        .LONG   0
+        .WORD   8, JPI$_PROCPRIV
+        .ADDRESS PRC
+        .LONG   0
+        .LONG   0
+IOSB:   .QUAD   0
+ST:     .LONG   0
+KST:    .LONG   0
+BUF:    .BLKB   256
+OUT:    .WORD   256
+        .BYTE   14,1
+        .ADDRESS BUF
+OLEN:   .WORD   0
+FMT:    .ASCID  "PRIVPROBE jpi=!XL cur=!XL!XL img=!XL!XL proc=!XL!XL cmkrnl=!XL"
+        .PSECT  PCODE,EXE,NOWRT
+        .ENTRY  KRN,^M<>
+        MOVL    #1,R0
+        RET
+        .ENTRY  START,^M<R2>
+        $GETJPIW_S ITMLST=ITM, IOSB=IOSB
+        MOVL    R0,ST
+        $CMKRNL_S ROUTIN=KRN
+        MOVL    R0,KST
+        $FAO_S  CTRSTR=FMT, OUTLEN=OLEN, OUTBUF=OUT, P1=ST, P2=CUR+4, P3=CUR, -
+                P4=IMG+4, P5=IMG, P6=PRC+4, P7=PRC, P8=KST
+        MOVW    OLEN,OUT
+        PUSHAQ  OUT
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        MOVL    #1,R0
+        RET
+        .END    START

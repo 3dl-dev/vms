@@ -1,0 +1,380 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCADB0+36F0ADB0 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 1
+%SYSGEN-I-SETPARAM, LOCKDIRWT changed from 0 to 1
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 40 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+     9-OCT-2026 14:23:09.79
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   28.920690] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   28.927428] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  9-OCT-2026 14:23:11.75
+[   29.051062] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[   31.071837] %PEA0, channel verified
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+[   31.078033] %PEA0, virtual circuit open
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+[   31.701376] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   32.023005] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   32.054640] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   32.059272] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   32.066570] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: [   32.439814] %PEA0, channel verified
+
+Username: [   32.442906] %PEA0, virtual circuit open
+[   33.113185] %CNXMAN, sending VAXcluster membership request to the selected member
+[   33.119117] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   33.139177] %CNXMAN, the cluster assigned this node a cluster system id
+[   33.142081] %CNXMAN, the cluster assigned this node a cluster system id
+[   33.148609] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   33.289372] %CNXMAN, membership bitmap is wider than the grounded byte; recording, not decoding
+[   33.301714] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   33.305287] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 [not this implementation]
+[   33.309823] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=1 [not this implementation]
+[   33.315205] %CNXMAN, VAXcluster state transition in progress
+[   33.318961] %CNXMAN, this node is now a VAXcluster member
+[   33.321956] %CNXMAN, this node is a member of the cluster
+[   33.323844] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   33.326133] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=0 [not this implementation]
+[   33.327975] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[   33.331916] %CNXMAN,   csid=00010008 slot=8 lockdirwt=1 entries=1 (this node)
+[   33.333779] %CNXMAN, system 0000000000000406 was added to the cluster
+[   33.335816] %CNXMAN, system 0000000000000402 was added to the cluster
+[   33.338001] %CNXMAN, system 0000000000000401 was added to the cluster
+[   33.342015] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   33.672575] %DLM, lock directory weight vector: 1 entries over 3 systems, 1 of them this node's; weights advertised; a member does not run this implementation
+[   33.677533] %CNXMAN, completed VAXcluster state transition
+SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ DEFINE/SYSTEM EVAC$DATA VDA100:[EVAC]
+$ CREATE SYS$LOGIN:OVSTBY.COM
+$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE
+$ EVACWL STANDBY NL=90
+$ 
+$ SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ EVACWL: standby holds EVAC$WORKLOAD NL for 90 s
+SHOW CLUSTER
+View of Cluster from system ID 1030 node: OVMXE    09-OCT-2026 14:28:09
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXE  | 00010008 | VMX V0.7        | MEMBER           |
+| 1026   | 00010002 |                 | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ EVACWL: holding EVAC$WORKLOAD, waiting for EVAC$DATA:EVAC.DAT
+[  558.177758] %DLM, refusing a lock message from a system that has not proved it runs this implementation: this implementation has no grounded answer for that message shape
+RUN SYS$SYSTEM:CNXTRACE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=MEMBER failure=none ignored_events=41 recording=yes
+%CNXTRACE-I-COUNT, held=256 recorded=423 dropped=167
+CNXTRACE seq=00000167 t=00193797 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0020
+CNXTRACE seq=00000168 t=00193797 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0020
+CNXTRACE seq=00000169 t=00193797 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0021
+CNXTRACE seq=00000170 t=00193797 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0021
+CNXTRACE seq=00000171 t=00197739 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000172 t=00197743 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000173 t=00197745 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000174 t=00197746 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000175 t=00197754 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000176 t=00197760 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000177 t=00206144 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00206151
+CNXTRACE seq=00000178 t=00206154 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00206154
+CNXTRACE seq=00000179 t=00206177 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00206179
+CNXTRACE seq=00000180 t=00206215 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00206215
+CNXTRACE seq=00000181 t=00221164 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00221167
+CNXTRACE seq=00000182 t=00221170 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00221170
+CNXTRACE seq=00000183 t=00221183 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00221189
+CNXTRACE seq=00000184 t=00221191 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00221192
+CNXTRACE seq=00000185 t=00225535 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0025
+CNXTRACE seq=00000186 t=00225535 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0025
+CNXTRACE seq=00000187 t=00225536 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0024
+CNXTRACE seq=00000188 t=00225536 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0024
+CNXTRACE seq=00000189 t=00236192 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00236194
+CNXTRACE seq=00000190 t=00236197 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000191 t=00236201 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000192 t=00236203 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000193 t=00236204 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000194 t=00236206 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00236211
+CNXTRACE seq=00000195 t=00251201 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00251205
+CNXTRACE seq=00000196 t=00251209 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00251209
+CNXTRACE seq=00000197 t=00251209 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000198 t=00251210 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00251211
+CNXTRACE seq=00000199 t=00257280 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0029
+CNXTRACE seq=00000200 t=00257280 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0029
+CNXTRACE seq=00000201 t=00257280 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0028
+CNXTRACE seq=00000202 t=00257280 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0028
+CNXTRACE seq=00000203 t=00266206 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00266210
+CNXTRACE seq=00000204 t=00266212 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000205 t=00266214 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000206 t=00266214 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=3 tlast=00266219
+CNXTRACE seq=00000207 t=00279961 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000208 t=00279964 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000209 t=00279966 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000210 t=00279967 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000211 t=00279968 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000212 t=00279968 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000213 t=00279970 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00279996
+CNXTRACE seq=00000214 t=00279996 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000215 t=00279997 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00280005
+CNXTRACE seq=00000216 t=00280008 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000207
+CNXTRACE seq=00000217 t=00281214 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00281218
+CNXTRACE seq=00000218 t=00281220 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00281220
+CNXTRACE seq=00000219 t=00281221 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000220 t=00281224 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00281224
+CNXTRACE seq=00000221 t=00289024 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee002c
+CNXTRACE seq=00000222 t=00289024 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee002c
+CNXTRACE seq=00000223 t=00289025 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee002d
+CNXTRACE seq=00000224 t=00289025 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee002d
+CNXTRACE seq=00000225 t=00296233 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00296242
+CNXTRACE seq=00000226 t=00296245 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000227 t=00296246 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000228 t=00296249 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=3 tlast=00296250
+CNXTRACE seq=00000229 t=00299236 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000230 t=00299242 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000231 t=00299244 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000232 t=00299246 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000233 t=00299247 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00299279
+CNXTRACE seq=00000234 t=00299281 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000235 t=00299283 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000236 t=00299287 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000237 t=00299288 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000238 t=00299289 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000239 t=00299295 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000240 t=00299298 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000241 t=00299299 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000242 t=00299301 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000243 t=00299303 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000244 t=00299306 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000245 t=00299308 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000246 t=00299311 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000247 t=00299312 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000248 t=00299317 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000249 t=00299317 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00299320
+CNXTRACE seq=00000250 t=00299417 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00299422
+CNXTRACE seq=00000251 t=00299436 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000252 t=00299442 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000253 t=00299447 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000254 t=00299449 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000255 t=00299450 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00299452
+CNXTRACE seq=00000256 t=00299483 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00299486
+CNXTRACE seq=00000257 t=00311241 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00311248
+CNXTRACE seq=00000258 t=00311249 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000259 t=00311253 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000260 t=00311254 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=5 tlast=00311522
+CNXTRACE seq=00000261 t=00320772 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0030
+CNXTRACE seq=00000262 t=00320772 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0030
+CNXTRACE seq=00000263 t=00320772 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0031
+CNXTRACE seq=00000264 t=00320772 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0031
+CNXTRACE seq=00000265 t=00326282 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00326286
+CNXTRACE seq=00000266 t=00326288 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00326288
+CNXTRACE seq=00000267 t=00326299 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00326302
+CNXTRACE seq=00000268 t=00326303 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00326306
+CNXTRACE seq=00000269 t=00330827 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000270 t=00330832 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000271 t=00330834 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000272 t=00330839 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000273 t=00330853 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000274 t=00330855 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=3 tlast=00337036
+CNXTRACE seq=00000275 t=00337037 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000276 t=00337037 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=4 tlast=00337042
+CNXTRACE seq=00000277 t=00337043 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000203
+CNXTRACE seq=00000278 t=00337044 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00337044
+CNXTRACE seq=00000279 t=00341283 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00341285
+CNXTRACE seq=00000280 t=00341287 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00341287
+CNXTRACE seq=00000281 t=00341299 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00341301
+CNXTRACE seq=00000282 t=00341302 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00341304
+CNXTRACE seq=00000283 t=00352512 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0034
+CNXTRACE seq=00000284 t=00352512 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0034
+CNXTRACE seq=00000285 t=00352514 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0035
+CNXTRACE seq=00000286 t=00352514 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0035
+CNXTRACE seq=00000287 t=00356287 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00356291
+CNXTRACE seq=00000288 t=00356292 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00356294
+CNXTRACE seq=00000289 t=00356304 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00356307
+CNXTRACE seq=00000290 t=00356308 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00356309
+CNXTRACE seq=00000291 t=00361092 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000292 t=00361093 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000293 t=00361095 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000294 t=00361097 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000295 t=00361098 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00361112
+CNXTRACE seq=00000296 t=00361116 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000297 t=00361116 kind=DISPATCH state=MEMBER->MEMBER ev=RX_CLOSE detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000298 t=00361117 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000299 t=00361118 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000300 t=00371356 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00371361
+CNXTRACE seq=00000301 t=00371365 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00371365
+CNXTRACE seq=00000302 t=00371396 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00371400
+CNXTRACE seq=00000303 t=00371405 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00371405
+CNXTRACE seq=00000304 t=00384259 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0038
+CNXTRACE seq=00000305 t=00384259 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0038
+CNXTRACE seq=00000306 t=00384259 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0039
+CNXTRACE seq=00000307 t=00384259 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0039
+CNXTRACE seq=00000308 t=00386391 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00386396
+CNXTRACE seq=00000309 t=00386399 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00386399
+CNXTRACE seq=00000310 t=00386413 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00386416
+CNXTRACE seq=00000311 t=00386418 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00386419
+CNXTRACE seq=00000312 t=00401433 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00401437
+CNXTRACE seq=00000313 t=00401439 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00401441
+CNXTRACE seq=00000314 t=00401459 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00401463
+CNXTRACE seq=00000315 t=00401464 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00401466
+CNXTRACE seq=00000316 t=00406022 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000317 t=00406033 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000318 t=00406033 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00406037
+CNXTRACE seq=00000319 t=00406043 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00406043
+CNXTRACE seq=00000320 t=00406048 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000321 t=00406052 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000322 t=00409380 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000323 t=00409382 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000324 t=00409383 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00409391
+CNXTRACE seq=00000325 t=00409404 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00409404
+CNXTRACE seq=00000326 t=00409405 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000327 t=00409408 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000328 t=00416004 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee003c
+CNXTRACE seq=00000329 t=00416004 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee003c
+CNXTRACE seq=00000330 t=00416005 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee003d
+CNXTRACE seq=00000331 t=00416005 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee003d
+CNXTRACE seq=00000332 t=00416439 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00416449
+CNXTRACE seq=00000333 t=00416453 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00416454
+CNXTRACE seq=00000334 t=00416500 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00416502
+CNXTRACE seq=00000335 t=00416507 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00416507
+CNXTRACE seq=00000336 t=00431466 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00431472
+CNXTRACE seq=00000337 t=00431476 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00431476
+CNXTRACE seq=00000338 t=00431496 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00431500
+CNXTRACE seq=00000339 t=00431502 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00431503
+CNXTRACE seq=00000340 t=00446503 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00446517
+CNXTRACE seq=00000341 t=00446527 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00446531
+CNXTRACE seq=00000342 t=00446531 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000343 t=00446534 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00446534
+CNXTRACE seq=00000344 t=00447746 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0041
+CNXTRACE seq=00000345 t=00447746 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0041
+CNXTRACE seq=00000346 t=00447747 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0040
+CNXTRACE seq=00000347 t=00447747 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0040
+CNXTRACE seq=00000348 t=00461515 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00461518
+CNXTRACE seq=00000349 t=00461521 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00461521
+CNXTRACE seq=00000350 t=00461539 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00461541
+CNXTRACE seq=00000351 t=00461542 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00461543
+CNXTRACE seq=00000352 t=00476532 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00476540
+CNXTRACE seq=00000353 t=00476543 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00476544
+CNXTRACE seq=00000354 t=00476545 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000355 t=00476546 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00476548
+CNXTRACE seq=00000356 t=00479489 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0045
+CNXTRACE seq=00000357 t=00479489 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0045
+CNXTRACE seq=00000358 t=00479489 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0044
+CNXTRACE seq=00000359 t=00479489 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0044
+CNXTRACE seq=00000360 t=00491534 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00491537
+CNXTRACE seq=00000361 t=00491538 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00491542
+CNXTRACE seq=00000362 t=00491545 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00491549
+CNXTRACE seq=00000363 t=00491553 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00491554
+CNXTRACE seq=00000364 t=00506543 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00506546
+CNXTRACE seq=00000365 t=00506550 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00506551
+CNXTRACE seq=00000366 t=00506551 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00506553
+CNXTRACE seq=00000367 t=00506554 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00506557
+CNXTRACE seq=00000368 t=00511236 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0049
+CNXTRACE seq=00000369 t=00511236 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0049
+CNXTRACE seq=00000370 t=00511236 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0048
+CNXTRACE seq=00000371 t=00511236 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0048
+CNXTRACE seq=00000372 t=00521546 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00521548
+CNXTRACE seq=00000373 t=00521549 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00521551
+CNXTRACE seq=00000374 t=00521551 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00521558
+CNXTRACE seq=00000375 t=00521561 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00521561
+CNXTRACE seq=00000376 t=00525966 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000377 t=00525969 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000378 t=00525969 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000379 t=00525972 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000380 t=00525972 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00525995
+CNXTRACE seq=00000381 t=00525997 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000382 t=00525997 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000383 t=00526063 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00526063
+CNXTRACE seq=00000384 t=00536547 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00536556
+CNXTRACE seq=00000385 t=00536560 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00536562
+CNXTRACE seq=00000386 t=00536589 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00536598
+CNXTRACE seq=00000387 t=00536603 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00536604
+CNXTRACE seq=00000388 t=00542976 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee004c
+CNXTRACE seq=00000389 t=00542976 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee004c
+CNXTRACE seq=00000390 t=00542976 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee004d
+CNXTRACE seq=00000391 t=00542976 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee004d
+CNXTRACE seq=00000392 t=00551603 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00551604
+CNXTRACE seq=00000393 t=00551605 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00551606
+CNXTRACE seq=00000394 t=00551616 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00551619
+CNXTRACE seq=00000395 t=00551622 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00551626
+CNXTRACE seq=00000396 t=00555164 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000397 t=00555166 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000398 t=00555168 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00555169
+CNXTRACE seq=00000399 t=00555175 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00555175
+CNXTRACE seq=00000400 t=00555177 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000401 t=00555179 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000402 t=00558154 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x0000020f rep=3 tlast=00558170
+CNXTRACE seq=00000403 t=00566602 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00566610
+CNXTRACE seq=00000404 t=00566614 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00566614
+CNXTRACE seq=00000405 t=00566617 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00566622
+CNXTRACE seq=00000406 t=00566624 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00566624
+CNXTRACE seq=00000407 t=00574729 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0050
+CNXTRACE seq=00000408 t=00574729 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0050
+CNXTRACE seq=00000409 t=00574730 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0051
+CNXTRACE seq=00000410 t=00574730 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0051
+CNXTRACE seq=00000411 t=00581605 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00581607
+CNXTRACE seq=00000412 t=00581608 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00581609
+CNXTRACE seq=00000413 t=00581634 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00581639
+CNXTRACE seq=00000414 t=00581642 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00581642
+CNXTRACE seq=00000415 t=00596655 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=3 tlast=00596658
+CNXTRACE seq=00000416 t=00596659 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000417 t=00596661 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000418 t=00596663 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=3 tlast=00596663
+CNXTRACE seq=00000419 t=00606464 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0054
+CNXTRACE seq=00000420 t=00606464 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0054
+CNXTRACE seq=00000421 t=00606465 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x95ee0055
+CNXTRACE seq=00000422 t=00606465 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x95ee0055
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=1 dirvec_own=1 gen=3 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=4 grants sent=2 received=0 declined=3
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=1 rx=0 delivered=0  queued=0 unparsed=0 foreign=3
+%CNXTRACE-I-DLMRECV, releases received=1 refused=0  blkasts unparsed=0  deferred grants sent=0 owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=465 replies_sent=235 declined=3
+%CNXTRACE-I-END, 256 records printed
+$ 

@@ -1,0 +1,14 @@
+13:34:50 T0 capture ci6-evac-13 (all 0x6007 frames). OVMXE build 07b07b8d = origin/main + #1578@fcf4f9a1 + #1582 + lab-only EVACWL staging. OVMXE 1030 LOCKDIRWT 1 VOTES 1 EV 3; real VAX1 1025 / VAX2 1026 OpenVMS VAX V7.3 LOCKDIRWT 0 VOTES 1 EV 3; group 1. No workload process on any node; EVAC.DAT absent
+13:37:07 OVMXE booted, member, logged in
+13:37:41 STEP 1 OVMXE: EVACWL STANDBY NL=90 -- NL on EVAC$WORKLOAD first (OVMXE = directory + master); CONVERT to EX after 90 s
+13:37:49 STEP 2 VAX1: EVACWL direct EX, forever -- the workload runs on the real VMS node
+13:39:29 T+90 s: OVMXE standby issued CONVERT NL->EX (must queue: VAX1 holds EX)
+13:39:44 STEP 3 VAX2: EVACWL STANDBY (falsifier: VAX2 must never hold EX while another node does)
+13:40:23 SDA VAX1: EVAC$WORKLOAD master CSID 00010007 (= OVMXE), VAX1 EX granted; no RCU stall after OVMX's CONVERT queued (the ev11 spin is gone)
+13:40:35 STEP 4 EVACUATE: STOP EVACVAX1 on VAX1 -- the workload leaves the VAX; its EX is released to the master OVMXE
+13:41:05 TAKEOVER: OVMXE's CONVERT granted on VAX1's release ('EVACWL: holding EVAC$WORKLOAD'); VAX2's standby still queued (no output)
+13:41:05 STEP 5 volume handoff: VAX1 DISMOUNT/CLUSTER $2$DUA1: (VAX1DATA leaves both VAXes)
+13:41:36 DISMOUNT/CLUSTER: VAX2 refused (files open): VAX2's falsifier runs EVACWL.EXE off $2$DUA1: itself. Moving the falsifier's image to VAX2's system disk
+13:43:10 FINDING: VAX2's falsifier (EVACVAX2, its CONVERT queued at the OVMXE master) cannot be deleted: RWSCS, waiting for the master's answer to its op-07; the image it runs keeps $2$DUA1 open on VAX2, so DISMOUNT/CLUSTER fails. The volume handoff is blocked by this gap; the lock takeover itself completed
+13:44:10 STEP 6 VAX1 leaves the cluster: SHUTDOWN, option REMOVE_NODE, no reboot
+13:47:08 FINDING: VAX1's DISMOUNT/CLUSTER and SHUTDOWN hung too (DCL never returned); OVMXE logged 'refusing a lock message ... no grounded answer for that message shape' -- VAX processes waiting on OVMX-mastered resources hang (RWSCS) when a request shape has no grounded answer (op-07 CONVERT among them). Stopping the run: OVMXE killed to release the VAXes

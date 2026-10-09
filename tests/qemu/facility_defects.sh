@@ -2443,7 +2443,7 @@ EOF
         knock_on_fail) cat <<'EOF'
 EOF
                       ;;
-        knock_on_why)  echo "measured.";;
+        knock_on_why)  echo "none: ^U on a wrapped line decides from the line's length, not from what was drawn, so it still clears the row.";;
         esac;;
 
     tt-owed-linefeed-unpaid)

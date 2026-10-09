@@ -720,7 +720,6 @@ int main(void)
         want[wl2++] = '\r';
         for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = ' ';
         for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = '\b';
-        /* negctl-knockon: tt-wrap-ignored */
         /* negctl-knockon: tt-port-input-dropped */
         CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
               "^U on a wrapped line clears its last row and leaves the cursor at its start (WRAP.LONG U)");

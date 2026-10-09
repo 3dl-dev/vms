@@ -218,8 +218,11 @@ static void arm_bindings(void)
 	    "every directory answer is built by the grounded builder");
 	has("if (dlm_arm_dir_name_held(id)) {",
 	    "a name THIS node holds locks on is never answered 'you master it'");
-	has("o = vms_dlm_dir_lookup(&d->dir, id, req->from_csid, &master);",
+	has("o = dlm_arm_dir_ask(d, id, req->from_csid, &master);",
 	    "the outcome comes from this node's own directory entries");
+	has("vms_dlm_dir_lookup(&d->dir, id, from,",
+	    "... through the one accessor that holds the table's leaf lock, "
+	    "because the LOCK ENGINE reads the table too now (rd vms-025)");
 	/* rd vms-629: a VAX's barrier lookup (op 0x08) is answered like an
 	 * op-0x01 one -- unanswered, the VAX's barrier never releases. */
 	has("req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)\n\t\treturn dlm_arm_dir_lookup(d, req, &id, reply);",
@@ -322,6 +325,21 @@ static void arm_bindings(void)
 	has("d->blkasts_no_wire_op++",
 	    "every way the notification can fail to go out -- off-gate, no "
 	    "route, RULE C, a refused lock id -- is COUNTED, nothing sent");
+	/*
+	 * ... AND THE SOLE-DIRECTORY INTERIM DOES NOT OPEN IT (rd vms-025/db2a).
+	 * That configuration lets this node serve a real VMS system as master,
+	 * and the master OWES a blocking AST to a remote holder it blocks --
+	 * which this executive STILL withholds, because op-0x05's mode-context
+	 * pair at body[30:32] is observed-and-not-pinned and OVMX would have to
+	 * put a zero where every real frame carries data. The engine's decision
+	 * is real and proven (test_dlm_mixed_master.c names the holder from the
+	 * blocking LKB); the FRAME is the gap, and this is the assertion that
+	 * keeps the gap from being closed by accident instead of by a capture.
+	 */
+	absent("dlm_arm_sole_directory(d) || dlm_arm_build_blkast",
+	       "*** the BLKAST gate is NOT widened by the sole-directory "
+	       "interim: body[30:32] is unpinned, so it stays all-OVMX only "
+	       "***");
 	has("d->blkasts_sent++",
 	    "... and one that really went out is counted separately");
 	absent("scs_send_msg",
@@ -422,13 +440,54 @@ static void arm_bindings(void)
 	has("return dlm_arm_deliver_blkast(d, req);",
 	    "... to the holder-side delivery path");
 	before("if (!dlm_arm_peer_is_ours(d, req))",
-	       "if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)",
-	       "*** RULE C is evaluated BEFORE the inbound $DEQ is served -- a "
-	       "release from an unproven system releases NOTHING ***");
-	before("if (!dlm_arm_peer_is_ours(d, req))",
 	       "if (req->opcode == (uint8_t)VMS_DLM_WIREOP_BLKAST)",
 	       "*** RULE C is evaluated BEFORE the inbound BLKAST -- an AST is "
 	       "never fired on behalf of an unproven system ***");
+
+	/*
+	 * ===================================================================
+	 * ... AND THE ONE WAY PAST IT, STATED EXACTLY (rd vms-025 / vms-db2a).
+	 *
+	 * This used to assert that RULE C was evaluated before the inbound
+	 * op-0x03 was served -- "a release from an unproven system releases
+	 * NOTHING". That is no longer the whole truth and the assertion is
+	 * REPLACED rather than deleted: in the SOLE-DIRECTORY configuration
+	 * this node acts as MASTER for a real VMS system, and a master that
+	 * takes a system's lock requests but refuses its releases hands that
+	 * system a resource it can never let go of.
+	 *
+	 * So the claim is narrowed to what the code actually does, and every
+	 * clause of it is pinned here: the door is ONE function, it is gated on
+	 * the configuration BEFORE it looks at an opcode, and the AUTHORITY is
+	 * still the engine's -- the LKB's own req_csid tag, which refuses a
+	 * release of a lock held for anybody else (driven against the real
+	 * engine in test_dlm_recv_arm.c, "a peer may not release another
+	 * node's lock", and in the mixed flows in test_dlm_mixed_master.c).
+	 * The op-0x05 BLKAST is NOT in that door, which is why its RULE C
+	 * ordering assertion above is untouched.
+	 * ===================================================================
+	 */
+	has("if (dlm_arm_serve_mixed_held(d, req, reply) == 0)",
+	    "the mixed-cluster master role is ONE door in the dispatch");
+	before("if (dlm_arm_serve_mixed_held(d, req, reply) == 0)",
+	       "if (!dlm_arm_peer_is_ours(d, req))",
+	       "it sits ABOVE RULE C, deliberately, like the directory role");
+	before("\tif (!dlm_arm_sole_directory(d))\n\t\treturn -1;\n\tif (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)",
+	       "\tif (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)\n\t\treturn dlm_arm_serve_deq(d, req);",
+	       "*** and the SOLE-DIRECTORY gate is evaluated BEFORE any opcode "
+	       "in it: outside that configuration an unproven system's release "
+	       "reaches nothing ***");
+	has("if (!dlm_arm_sole_directory(d))",
+	    "... the gate is the derived configuration, never a flag");
+	has("return vms_ldwv_sole_directory(&d->cl->club.ldwv);",
+	    "... read from the connection manager's own weight vector every "
+	    "time it is asked (no cached copy to go stale)");
+	has("d->mixed_served++",
+	    "a request from a real VMS system served as MASTER is counted");
+	has("d->mixed_replies_taken++",
+	    "... and so is an answer from one, matched to a request of ours");
+	has("!req->peer_is_ours && dlm_arm_sole_directory(d)",
+	    "an unproven system's REPLY is taken only in that configuration");
 
 	/* The $DEQ's fields, and where each one comes from (RULE B). */
 	has("vms_dlm_deq_parse_body(in->body, in->len, &q)",
@@ -478,14 +537,14 @@ static void cnxman_legs(void)
 
 	has("int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,",
 	    "the DLM's origination entry exists, addressed by CSID");
-	has("if (!cnxman_dlm_peer_proven(cn, csb))",
+	has("if (!cnxman_dlm_peer_proven(cn, cl, csb))",
 	    "RULE C's EMISSION half: nothing DLM leaves for an unproven system");
 	has("cn->dlm_foreign_refused++", "... and that refusal is counted");
 	/* ORDER, because this is the gate under BOTH new emits (rd vms-d7a3):
 	 * the release the requester arm originates and the BLKAST the master
 	 * arm originates both arrive here, and both must be refused before a
 	 * byte reaches the port. */
-	before("if (!cnxman_dlm_peer_proven(cn, csb))",
+	before("if (!cnxman_dlm_peer_proven(cn, cl, csb))",
 	       "scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx",
 	       "*** RULE C is evaluated BEFORE a byte reaches the port -- the "
 	       "one gate under every DLM origination, old and new ***");

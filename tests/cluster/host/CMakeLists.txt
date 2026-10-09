@@ -964,6 +964,34 @@ set_tests_properties(cluster_host_test_dlm_recv_arm PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-025 / vms-db2a / vms-c27(3): ONE MASTER PER RESOURCE, MIXED -----
+# The widest R1 in this directory, and it has to be: the two-master hole can
+# only be seen where the ENGINE, the CLUB's real weight vector, the real
+# DIRECTORY TABLE, the real requester FSM and the real CODEC are all on one
+# path. So it links all three library recipes -- cluster_host_lock (the engine;
+# lock_shim/ FIRST on the include path), cluster_host_cnxman (the LDWV + the
+# directory table, built -DOVMX_CLUSTER_HOST) and cluster_host_dlm (the
+# requester FSM) -- which meet only in this test's own TU, exactly as
+# test_lock_quorum_hang and test_dlm_deq_reachable each do for two of them.
+add_executable(test_dlm_mixed_master test_dlm_mixed_master.c)
+target_include_directories(test_dlm_mixed_master PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_mixed_master PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_mixed_master PRIVATE
+    cluster_host_lock cluster_host_cnxman cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_mixed_master PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_mixed_master COMMAND test_dlm_mixed_master)
+set_tests_properties(cluster_host_test_dlm_mixed_master PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm;cnxman"
+    TIMEOUT 60
+)
+
 # ---- FC-P7.1: the MSCP disk CLASS DRIVER, against the REAL FC-P6.3 server ----
 # Three real, shipping objects in one host process: FC-P7.1's class driver
 # (vms_mscp_cl_io_fsm.c, driving FC-P3.4's real discovery FSM), FC-P6.3's real

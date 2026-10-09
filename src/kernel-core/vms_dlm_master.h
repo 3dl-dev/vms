@@ -123,6 +123,21 @@ uint32_t vms_lock_dlm_local_csid(void);
  */
 int vms_lock_dlm_name_in_use(const char *resnam);
 
+/*
+ * DOES THIS NODE MASTER THE RESOURCE OF THIS NAME? (rd vms-db2a.)
+ *
+ * The next question after the one above, and the one that decides whether a
+ * real VMS system's directory lookup is answered AS THE MASTER. Davis p. 6-31
+ * outcome (a) / p. 6-51: when the directory node is itself the master it
+ * RESOLVES the request -- it does not answer "you master it" (a second master)
+ * and it does not redirect to itself (the asker would come straight back with
+ * the identical frame, forever).
+ *
+ * A read of the engine's own `res->master_csid`, through the same "is that node
+ * us?" test the router applies (rd vms-151). Nonzero = this node masters it.
+ */
+int vms_lock_dlm_name_mastered_here(const char *resnam);
+
 /* ==========================================================================
  * 2. One inbound request, as the master sees it
  *
@@ -275,11 +290,23 @@ uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lki
  * possible answer to. `*found` (optional) reports whether it really mastered
  * anything here: a real observation, not a lookup in a configured list.
  *
- * WHAT IT DOES NOT DO, STATED RATHER THAN IMPLIED: it does not yet RELEASE the
- * master-side LKBs this node holds FOR the departed CSID. That is rd vms-4d3
- * (vms-c27 condition 3), a rung of its own with its own proof, and claiming it
- * here would be claiming a cleanup the executive does not perform.
+ * ...and, since rd vms-4d3 (vms-c27 condition 3), RELEASE the master-side LKBs
+ * this node holds FOR the departed CSID -- which is what lets a waiter behind
+ * them be granted. It is the function below, called from here so the ioctl and
+ * the membership path run the same cleanup.
  * ========================================================================== */
 void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found);
+
+/*
+ * PER-CSID CLEANUP (rd vms-4d3; vms-c27 binding condition 3). One system left:
+ * release EXACTLY the locks this node holds for it, through the shipping
+ * master-side release path, and let try_grant_waiters decide what that frees.
+ *
+ * Selected by each LKB's own `req_csid` tag -- condition 2's whole purpose -- so
+ * a sibling CSID's locks and this node's own local locks are untouched. Returns
+ * SS$_NORMAL; `*n_released` (optional) is how many locks really went, a counted
+ * observation and not a configured expectation.
+ */
+uint32_t vms_lock_dlm_release_csid_locks(uint32_t csid, uint32_t *n_released);
 
 #endif /* OVMX_VMS_DLM_MASTER_H */

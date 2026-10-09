@@ -105,6 +105,30 @@ static void fail_notimpl(const char *image, const char *spec, const char *what)
 	fail(image, "-CLI-E-IMGNAME, image file ", spec, l3, SS_UNSUPPORTED);
 }
 
+/* ---- tracing: OVMX$NATIVEACT_TRACE defined (any table in LNM$FILE_DEV)
+ * prints each activation step and each vector call to SYS$ERROR, so a
+ * native image that stops can be followed from the console. ---- */
+static int g_trace = -1;
+static int tracing(void)
+{
+	if (g_trace < 0) {
+		char tr[64];
+		uint16_t rl = 0;
+		$DESCRIPTOR(tab, "LNM$FILE_DEV");
+		$DESCRIPTOR(ln, "OVMX$NATIVEACT_TRACE");
+		struct item_list_3 il[2];
+		memset(il, 0, sizeof il);
+		il[0].buflen = sizeof tr;
+		il[0].item_code = LNM$_STRING;
+		il[0].bufaddr = tr;
+		il[0].retlen = &rl;
+		g_trace = (sys$trnlnm(0, &tab, &ln, 0, il) & 1) ? 1 : 0;
+	}
+	return g_trace;
+}
+#define TRACE(...) do { if (tracing()) { fprintf(stderr, "%%NATIVEACT-I-TRACE, " __VA_ARGS__); \
+		fputc('\n', stderr); fflush(stderr); } } while (0)
+
 /* ---- the routines an image reaches through the P1 vector and the RTL
  * transfer vectors: address/offset -> OVMX routine ---- */
 static int imgsta(void *xfervec, void *cli, void *hdr, void *imgfile,
@@ -113,18 +137,52 @@ static int imgsta(void *xfervec, void *cli, void *hdr, void *imgfile,
 typedef void (*rtn_t)(void);
 struct vent { uint32_t at; rtn_t fn; const char *name; };
 
+/* The vector targets: OVMX's own services; the image's VAX argument forms
+ * (32-bit descriptors and addresses) are the native forms here. */
+static int v_qiow(uint32_t efn, uint16_t chan, uint32_t func, void *iosb, void *astadr,
+		  uint32_t astprm, void *p1, uint32_t p2, uint32_t p3, uint32_t p4,
+		  uint32_t p5, uint32_t p6)
+{
+	TRACE("SYS$QIOW efn=%u chan=%u func=%#x p1=%p p2=%u", efn, chan, func, p1, p2);
+	int st = (int)sys$qiow(efn, chan, func, iosb, (void (*)(uint32_t))astadr, astprm, p1,
+			       p2, p3, p4, p5, p6);
+	TRACE("SYS$QIOW -> %#x", st);
+	return st;
+}
+static int v_assign(void *devnam, uint16_t *chan, uint32_t acmode, void *mbxnam,
+		    uint32_t flags)
+{
+	TRACE("SYS$ASSIGN");
+	int st = (int)sys$assign(devnam, chan, acmode, mbxnam, flags);
+	TRACE("SYS$ASSIGN -> %#x chan=%u", st, chan ? *chan : 0);
+	return st;
+}
+static void v_exit(uint32_t code)
+{
+	TRACE("SYS$EXIT %#x", code);
+	fflush(stdout);
+	sys$exit(code);
+}
+
 /* P1 system service vector (absolute addresses). */
 static const struct vent p1vec[] = {
-	{ 0x7FFEDE00, (rtn_t)sys$qiow,   "SYS$QIOW"   },
-	{ 0x7FFEDE50, (rtn_t)sys$assign, "SYS$ASSIGN" },
-	{ 0x7FFEDF40, (rtn_t)sys$exit,   "SYS$EXIT"   },
+	{ 0x7FFEDE00, (rtn_t)v_qiow,     "SYS$QIOW"   },
+	{ 0x7FFEDE50, (rtn_t)v_assign,   "SYS$ASSIGN" },
+	{ 0x7FFEDF40, (rtn_t)v_exit,     "SYS$EXIT"   },
 	{ 0x7FFEDF68, (rtn_t)imgsta,     "SYS$IMGSTA" },
 };
 
 /* Run-time library transfer vectors (offset from the image base). */
 struct rtlimg { const char *name; const struct vent *e; unsigned n; };
+static int v_put_output(void *msg)
+{
+	TRACE("LIB$PUT_OUTPUT");
+	int st = (int)lib$put_output(msg);
+	TRACE("LIB$PUT_OUTPUT -> %#x", st);
+	return st;
+}
 static const struct vent librtl_tv[] = {
-	{ 0x478, (rtn_t)lib$put_output, "LIB$PUT_OUTPUT" },
+	{ 0x478, (rtn_t)v_put_output, "LIB$PUT_OUTPUT" },
 };
 static const struct vent decc_tv[] = {
 	{ 0x380, (rtn_t)printf, "DECC$DPRINTF" },   /* D_float printf: NetBSD/vax's own */
@@ -157,7 +215,10 @@ static int imgsta(void *xfervec, void *cli, void *hdr, void *imgfile,
 		return SS$_BADPARAM;
 	xfer_t next = (xfer_t)(uintptr_t)v[1];
 	void *a0 = v[2] ? (void *)&v[1] : (void *)(uintptr_t)v[1];
-	return next(a0, cli, hdr, imgfile, linkflag, cliflag);
+	TRACE("SYS$IMGSTA -> transfer to %#x", v[1]);
+	int st = next(a0, cli, hdr, imgfile, linkflag, cliflag);
+	TRACE("the image returned %#x", st);
+	return st;
 }
 
 /* ---- the images of this activation ---- */
@@ -337,6 +398,7 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 			   MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
 		if (map != (void *)PG_DOWN(m->lo))
 			fail_notimpl(m->name, m->spec, "mapping the image at its link address");
+		TRACE("%s mapped at %p (%lu bytes)", m->name, map, (unsigned long)span);
 		m->base = 0;
 	} else {
 		map = mmap(NULL, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -364,6 +426,7 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 	}
 	if (!m->iaf || iaf_parse(m->iaf, m->iaflen, &m->a) < 0)
 		fail_hdr(m->name, m->spec);
+	TRACE("%s: sections read, %u shareable(s)", m->name, m->a.shrimgcnt ? m->a.shrimgcnt - 1 : 0);
 
 	/* Shareables (entry 0 is this image), GSMATCH-checked. */
 	for (unsigned i = 1; i < m->a.shrimgcnt; i++) {
@@ -395,6 +458,7 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 	g_cp = m;
 	if (iaf_walk_chgprt(m->iaf, m->iaflen, &m->a, chgprt_cb, 0) < 0)
 		fail_hdr(m->name, m->spec);
+	TRACE("%s: fixups applied", m->name);
 }
 
 static int activate_shr(const char *name, const char *by)
@@ -481,6 +545,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%%NATIVEACT-F-NOIMAGE, no image to activate\n");
 		return 44;
 	}
+	TRACE("activating %s", argv[1]);
 	g_sysdev = getenv("OVMX_SYSDEVICE");
 	if (!g_sysdev || !*g_sysdev)
 		g_sysdev = "DUA0:";
@@ -489,8 +554,10 @@ int main(int argc, char **argv)
 	struct imgact_acp_file f;
 	if (open_main(&f, argv[1], m->spec, sizeof m->spec, m->name, sizeof m->name) < 0)
 		fail(m->name, "-CLI-E-IMAGEFNF, image file not found ", m->spec, 0, CLI_IMAGEFNF);
+	TRACE("opened %s", m->spec);
 	load(m, &f, 1);
 	imgact_acp_close(&f);
+	TRACE("loaded %#x..%#x base %#lx", m->lo, m->hi, (unsigned long)m->base);
 
 	/* The P1 system service vector, below the NetBSD user stack top. */
 	uint8_t *pv = mmap((void *)P1VEC_PAGE, NBPG, PROT_READ | PROT_WRITE,
@@ -501,6 +568,7 @@ int main(int argc, char **argv)
 	for (unsigned k = 0; k < sizeof p1vec / sizeof p1vec[0]; k++)
 		put_entry(pv + (p1vec[k].at - P1VEC_PAGE), p1vec[k].fn);
 	mprotect(pv, NBPG, PROT_READ | PROT_EXEC);
+	TRACE("P1 vector page mapped at %p", (void *)pv);
 
 	/* The transfer vector: SYS$IMGSTA, then the image's own. */
 	static uint32_t xvec[4];
@@ -523,6 +591,7 @@ int main(int argc, char **argv)
 	struct dsc$descriptor_s img = { (uint16_t)strlen(m->spec), DSC$K_DTYPE_T,
 					DSC$K_CLASS_S, m->spec };
 	xfer_t first = (xfer_t)(uintptr_t)xvec[0];
+	TRACE("transfer vector %#x %#x %#x", xvec[0], xvec[1], xvec[2]);
 	int cond = first(n > 1 ? (void *)xvec : (void *)(uintptr_t)xvec[0], 0, m->hdr, &img,
 			 m->h.lnkflags, 1);
 	fflush(stdout);

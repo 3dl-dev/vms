@@ -6951,6 +6951,13 @@ static int net_req_probe_spawn(struct netreq_probe *v)
         return 0;
     if (ovmx_boot_stage_exec_path(img, staged, sizeof staged) && access(staged, X_OK) == 0)
         snprintf(img, sizeof img, "%s", staged);
+    if (access(img, X_OK) != 0) {
+        /* No runnable copy: say so rather than $CREPRC a process whose image
+         * activation then fails after the creation reported success. */
+        printf("  NOTE: request-mailbox probe: %s is not executable here (not on the"
+               " boot exec stage)\n", img);
+        return 0;
+    }
     if (!(vms_kif_mbx_create(0, sizeof *v + 16, (sizeof *v + 16) * 2, &ch, &unit,
                              dev, sizeof dev) & 1))
         return 0;

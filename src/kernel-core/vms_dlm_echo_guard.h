@@ -65,6 +65,17 @@
  */
 #define VMS_DLM_ECHO_SLOTS 8u
 
+/*
+ * THE MOST BYTES THIS GUARD WILL EVER READ from either buffer. A DLM SYSAP body
+ * is 132 bytes, and this is the only loop on the receive path with a
+ * CALLER-SUPPLIED bound, so it is capped here rather than trusted: a length
+ * that ever arrived wrong would otherwise be an unbounded loop on the fork
+ * thread -- which on Linux is an RCU stall and on NetBSD a wedged softint, in
+ * the one place a peer's frame controls the count. Comparing the first 256
+ * bytes is as good a sameness test as comparing all of them.
+ */
+#define VMS_DLM_ECHO_SIG_MAX 256u
+
 struct vms_dlm_echo_slot {
 	uint32_t from;          /* the requester's CSID                      */
 	uint32_t req_sig;       /* private signature of the request's bytes   */
@@ -89,7 +100,8 @@ void vms_dlm_echo_guard_init(struct vms_dlm_echo_guard *g);
  *          refuse a reply -- this is a safety net, never a gate on service)
  * @from:   the requester's CSID
  * @req:    the request's body bytes, as received (NULL/0 admits: with nothing
- *          to compare there is no loop to see)
+ *          to compare there is no loop to see). Lengths are capped at
+ *          VMS_DLM_ECHO_SIG_MAX; no caller's number sets a loop bound here.
  * @ans:    the answer's body bytes, as staged
  *
  * Returns 1 to send, 0 to withhold. On the transition to withholding,

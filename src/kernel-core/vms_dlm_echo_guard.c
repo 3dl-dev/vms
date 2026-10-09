@@ -7,11 +7,16 @@
  */
 #include "vms_dlm_echo_guard.h"
 
-/* FNV-1a over a body. A private "are these the same bytes" signature. */
+/* FNV-1a over a body. A private "are these the same bytes" signature.
+ * The length is CAPPED (see VMS_DLM_ECHO_SIG_MAX): the count comes from a
+ * received frame, and no number off the wire gets to set a loop bound in the
+ * executive. */
 static uint32_t echo_sig(const uint8_t *b, uint32_t len)
 {
 	uint32_t h = 2166136261u, i;
 
+	if (len > VMS_DLM_ECHO_SIG_MAX)
+		len = VMS_DLM_ECHO_SIG_MAX;
 	for (i = 0u; i < len; i++) {
 		h ^= (uint32_t)b[i];
 		h *= 16777619u;

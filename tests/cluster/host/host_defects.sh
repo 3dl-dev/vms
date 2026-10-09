@@ -658,6 +658,7 @@ EOF
         why)          echo "the guard is made to admit every answer, so a reply loop runs without end again. The guard is the TEETH that makes the measured storm class self-limiting whatever causes it next: 63.7 s of 1026-frames-per-second against a real VAX ended because a human noticed, not because either executive stopped. OVMX must never be the node that keeps feeding a peer a frame it cannot use (memory ovmx-never-crashes-a-peer).";;
         require_fail) cat <<'EOF'
 *** ...and the loud system is STILL capped after a crowd of quiet ones passed through: a peer cannot flush the guard by varying who asks ***
+*** and the run is still capped: capping the compared length does not cost the guard its teeth ***
 *** every one after that was WITHHELD: 63 s of storm becomes 8 frames ***
 *** exactly VMS_DLM_ECHO_MAX_SAME identical answers went out of a thousand asked for ***
 VAX1's loop is being withheld

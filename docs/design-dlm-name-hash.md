@@ -255,13 +255,36 @@ Two things this run establishes that the corpus could not:
   descriptor above, but the high bits of each are extrapolation from the
   layout, not measurement — which is exactly what the fresh-lab edge-case run
   is for.
-* **Nothing routes on it.** `vms_lock.c` `dir_resolve` is untouched; OVMX still
-  puts only learned values on the wire and still masters wire-unknown names
-  locally (interim option A). Wiring is rd vms-b5b0, deliberately after the
-  fresh-lab proof: a *wrong* hash on the wire is not a benign error — the
-  directory node scans the wrong chain, decides the name is unknown and names
-  the sender as master, which is the 35-per-second grant storm in operator
-  memory `cluster-promotion-gap.md`.
+* **IT ROUTES NOW (rd vms-b5b0, 2026-10-09), and the coverage above is what
+  bounds it.** `vms_lock.c` `dir_resolve` computes the value for a root
+  resource this node is the first to touch and resolves the directory node
+  through the weight vector in every LOCKDIRWT configuration — a real VAX
+  directory node included. For an identity OUTSIDE the proven coverage
+  (supervisor mode; a UIC group with bit 14/15 set; a name of 23 or 29 bytes)
+  it builds NO FRAME and consults no vector, and the resource is **mastered on
+  that node only** — counted (`vms_lock_dlm_dir_hash_uncovered()`) and
+  announced on the console once. It is deliberately **not** refused to the
+  caller: that refusal reached a booted node's ACP and killed STARTUP.COM
+  (PR #1578's lab run), and Baron's ruling on rd vms-dc2 names refusing
+  ("option B") as the one answer never to give.
+  `vms_dlm_name_hash_proven()` is the only entry point routing may use
+  (enforced by `tools/ci/cluster_dlm_hash_gate.sh`), and
+  `vms_dlm_name_hash()` stays ungated solely so tests and capture scorers can
+  evaluate identities the wire has not shown. A *wrong* hash on the wire is not
+  a benign error — the directory node scans the wrong chain, decides the name
+  is unknown and names the sender as master, which is the 35-per-second grant
+  storm in operator memory `cluster-promotion-gap.md` — so the executive also
+  carries a LIVE FALSIFICATION DETECTOR: a frame contradicting a value this
+  node computed makes the wire value win and raises
+  `vms_lock_dlm_dir_hash_computed_wrong()`. It must read 0 on every real
+  cluster.
+* **THE LENGTH GAPS ARE A LAB ERRAND.** Lengths 23 and 29 were pre-registered
+  in the driven run and the VAX never put them on the wire, so they are the one
+  coverage gap that needs no new reasoning: lock one 23-character and one
+  29-character root name on a real VAX, score the capture with
+  `tools/cluster/dlm_hash/check_heldout_run.py`, and widen
+  `VMS_DLM_HASH_LEN_PROVEN` WITH the capture (the ctest derives the mask from
+  the evidence, so it cannot be widened without one).
 * **Sub-resources are out of scope.** A sub-resource's value depends on its
   parent too (rd vms-4fb finding 3), so no `(name → value)` pair can be learned
   for one and none was used. This function answers for ROOT resources only.

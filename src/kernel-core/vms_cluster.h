@@ -873,6 +873,28 @@ struct vms_club {
 	uint32_t ldwv_build_refused;
 
 	/*
+	 * Vector builds that left THIS NODE -- a committed member -- with no
+	 * directory entry of its own (rd vms-b5b0 follow-on, ev7). A number,
+	 * not a log line: every other member's vector gives this node entries,
+	 * so each one of these is a transition at which this node's own copy
+	 * disagreed with the cluster's and lookups arrived at a node that did
+	 * not think it was the directory. Zero is the only correct value and
+	 * the console says so loudly the first time it is not.
+	 */
+	uint32_t ldwv_own_entry_missing;
+
+	/*
+	 * Transitions at which this node's OWN membership had to be taken from
+	 * the completion rather than from the nodemap, because the map could
+	 * not express its CSV slot (rd vms-b5b0 follow-on, ev7/int-7 -- slots 8
+	 * and 10 of an eight-slot grounded byte). Not an error: it is the
+	 * honest substitute sec 4(q) licenses, and it is counted so a
+	 * diagnostic can say the corroboration was MISSING rather than leave
+	 * the reader to assume it was present.
+	 */
+	uint32_t local_committed_off_map;
+
+	/*
 	 * ---- THE GIVE-UP LEDGER (rd vms-0f9) ----
 	 *
 	 * p. 7-24's DEAD state is "a new incarnation of a VAX system has been

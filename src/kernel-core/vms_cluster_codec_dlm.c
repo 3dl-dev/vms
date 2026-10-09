@@ -34,6 +34,10 @@ static int dlm_class_ok(const struct vms_frame_info *fi)
  * op 0x01 ENQ / op 0x07 CONVERT -- GROUNDED, spec §4(f).1
  * ------------------------------------------------------------------ */
 
+/* Defined with the directory-hash section below (the parent span lives there);
+ * the ENQ parser needs it to tell a ROOT request from a sub-resource one. */
+static int dlm_is_root(vms_wire_view_t *v);
+
 static vms_codec_status_t dlm_name_get(vms_wire_view_t *v, uint8_t *len_out,
 				       uint8_t *name_out)
 {
@@ -74,13 +78,25 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 		return VMS_CODEC_E_CLASS;
 
 	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
-	out->req_pid_or_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
 	/* body[128:132]: the SENDER's own directory hash for the name (rd
 	 * vms-4fb, Davis p. 6-50); the flag is what tells the caller it may be
 	 * learned at all, because "0" and "absent" are different facts. */
 	out->dir_hash = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_HASH);
 	out->dir_hash_valid = 1u;
+	/*
+	 * The identity that QUALIFIES the name (rd vms-b5b0). Read for both
+	 * opcodes -- the bytes are there either way -- but marked VALID only for
+	 * an op-0x01 ROOT request: see the struct's note on op-0x07's stale
+	 * name/identity span.
+	 */
+	out->res_group = vms_wire_get_le16(&v, VMS_OFB_DLM_RES_GROUP);
+	out->res_acmode = vms_wire_get_u8(&v, VMS_OFB_DLM_RES_MODE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	out->res_ident_valid = (op == VMS_DLM_WIREOP_ENQ && dlm_is_root(&v))
+			       ? 1u : 0u;
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -105,6 +121,18 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 		return VMS_CODEC_E_INVAL;
 	if (req->name_len > VMS_DLM_NAME_MAX)
 		return VMS_CODEC_E_INVAL;
+	/*
+	 * body[44:48] IS NOT OPTIONAL on a frame that names a resource (rd
+	 * vms-b5b0): the UIC group and the access mode are what say WHICH
+	 * resource of that name is meant, and a zero group on a frame for a
+	 * group-qualified resource makes the receiving directory scan for a
+	 * resource nobody has. The engine always holds both (they are part of
+	 * the key its resource block was created under), so a caller that
+	 * cannot state them is a caller with no resource -- refused here, the
+	 * same shape as the codec's refusal of lock id 0.
+	 */
+	if (!req->res_ident_valid)
+		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
@@ -113,7 +141,7 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, opcode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, req->mode);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_pid_or_lkid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_lkid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, req->master_lkid);
 	/*
 	 * body[128:132] ONLY when the caller holds a WIRE-LEARNED hash for this
@@ -124,7 +152,14 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 */
 	if (req->dir_hash_valid)
 		vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, req->dir_hash);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
+	/*
+	 * body[44:46] + body[46]: the identity that qualifies the name, and only
+	 * when the caller says it holds one. A zero group on a frame for a
+	 * group-qualified resource would make the directory node scan for a
+	 * resource nobody has -- the same class of error as a zero hash.
+	 */
+	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, req->res_group);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, req->res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, req->name_len, req->name);
 
@@ -165,32 +200,45 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 		return v.err;
 
 	/*
-	 * THE GRANT-WITH-VALBLK RECORD, CHECKED FIRST (vms-727). When the grant
-	 * returns the master's value block, body[46:48] is the middle of that
-	 * 16-byte block, not a name -- so dlm_name_get below would read a bogus
-	 * length there and REJECT the frame. The value-block record has its own
-	 * unambiguous marker (body[28]==0x10 AND body[32:36]=={01 00 fa 00}, the
-	 * cat-0x82 REPLY stamp shape, grounded constant across nine+ captures),
-	 * so recognise it here and take the block. The EXACT match is what keeps
-	 * a stale-buffer grant (body[28] some other flag, body[34]==0xf9,
-	 * body[36:52] a prior frame's leftover) from being read as a block.
+	 * THE GRANT RECORD, CHECKED FIRST, AND IT IS ON EVERY GRANT (rd
+	 * vms-b5b0; 38 of 38 real grants). body[28]==0x10 AND
+	 * body[32:36]=={01 00 fa 00} -- whose body[34] is the 0xfa GRANTED
+	 * outcome -- is what says "granted"; it has to be read before the name
+	 * because a grant clears body[47] and leaves body[48:56] as its own
+	 * buffer, which dlm_name_get would read as a bogus length.
+	 *
+	 * IT IS THE GRANT'S RECORD, NOT A "HAS A VALUE BLOCK" MARKER (which is
+	 * what this codec used to call it, vms-727). Every grant carries it,
+	 * including grants for resources whose value block is all zero -- so it
+	 * cannot mark the block's PRESENCE. What it does mark is the grant, and
+	 * body[36:52] inside it IS the master resource's value block: proven by
+	 * the dlm-grant-valblk specimen, a real c2-seq grant that returns the
+	 * exact 16 bytes the requester had written. So `valblk_present` stays 1
+	 * whenever the record is there, and the engine records the master's
+	 * block -- zeros included, because for a resource whose block is zero
+	 * that is the data and not a placeholder.
+	 *
+	 * AND A GRANT CARRIES NO MODE: body[30] is cleared in 38 of 38. The
+	 * requester asked for a mode and a grant means that mode, which only the
+	 * requester's own LKB holds -- so `granted_mode` is reported as 0 and
+	 * `granted_mode_present` as 0, and the engine grants what the lock
+	 * requested.
 	 */
 	{
-		uint8_t  f   = vms_wire_get_u8(&v,
-				VMS_OFB_FROM_FRAME(VMS_OFF_DLM_VALBLK_FLAG));
-		uint32_t rec = vms_wire_get_le32(&v, VMS_OFB_DLM_VALBLK_SERIAL);
+		uint8_t  f   = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_FLAG);
+		uint32_t rec = vms_wire_get_le32(&v, VMS_OFB_DLM_GRANT_REC);
 
 		if (!vms_wire_view_ok(&v))
 			return v.err;
-		if (f == VMS_DLM_GRANT_VALBLK_FLAG_VAL &&
-		    rec == VMS_DLM_GRANT_VALBLK_REC_VAL) {
+		if (f == VMS_DLM_GRANT_FLAG_VAL && rec == VMS_DLM_GRANT_REC_VAL) {
 			vms_wire_get_bytes(&v, VMS_OFB_DLM_VALBLK,
 					   VMS_DLM_VALBLK_WIRE_LEN, out->valblk);
 			if (!vms_wire_view_ok(&v))
 				return v.err;
 			out->outcome = VMS_DLM_ENQ_GRANTED;
 			out->req_lkid = lkid;
-			out->granted_mode = mode;
+			out->granted_mode = 0;
+			out->granted_mode_present = 0;
 			out->name_len = 0;      /* a grant carries no name */
 			out->valblk_present = 1;
 			return VMS_CODEC_OK;
@@ -210,43 +258,136 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 
 	if (mode == 0 && out->name_len != 0) {
 		out->outcome = VMS_DLM_ENQ_DENIED;
-		out->req_lkid = lkid;      /* echoed PID placeholder */
+		out->req_lkid = lkid;      /* echoed, the requester's own handle */
 		out->granted_mode = 0;
+		out->granted_mode_present = 0;
 	} else {
+		/*
+		 * A grant WITHOUT the grant record above. No real grant looks
+		 * like this (38 of 38 carry it), so this arm survives only for
+		 * the shapes OVMX's own older builders produced and for a
+		 * capture that has not been seen yet. The mode is reported as
+		 * the wire's, flagged present, because that is what such a
+		 * frame asserts.
+		 */
 		out->outcome = VMS_DLM_ENQ_GRANTED;
-		out->req_lkid = lkid;      /* the real assigned lock-id */
+		out->req_lkid = lkid;      /* the requester's own handle */
 		out->granted_mode = mode;
+		out->granted_mode_present = 1;
 		out->name_len = 0;         /* spec: grant does not echo the name */
 	}
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_dlm_enq_response_build_grant(uint32_t req_lkid,
+vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
+						    uint32_t req_len,
 						    uint32_t master_lkid,
-						    uint8_t granted_mode,
+						    const uint8_t *valblk,
 						    uint8_t *frame, uint32_t cap,
 						    uint32_t *written)
 {
+	vms_wire_view_t v;
 	vms_wire_buf_t w;
+	uint8_t cat, op, req_name_len;
+	uint32_t i;
 
-	/* A GRANT that hands the requester lock-id 0 is not a grant -- the
-	 * executive's own DLM never assigns lkid 0 to an established lock
-	 * (see the file header's fc8540ae lesson). */
-	if (req_lkid == VMS_DLM_LKID_UNSET)
+	/* A GRANT that hands out lock-id 0 is not a grant -- the executive's own
+	 * DLM never assigns lkid 0 to an established lock (the fc8540ae lesson
+	 * in this file's header). */
+	if (master_lkid == VMS_DLM_LKID_UNSET)
 		return VMS_CODEC_E_INVAL;
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	/* The request's OWN name length: it says how much of the name span the
+	 * grant has to clear (below). Read from the request, never assumed. */
+	req_name_len = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (req_name_len > VMS_DLM_NAME_MAX)
+		req_name_len = VMS_DLM_NAME_MAX;
+	if (cat != VMS_DLM_CAT_REQUEST ||
+	    (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT))
+		return VMS_CODEC_E_CLASS;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
 
+	/*
+	 * THE REQUEST, ECHOED. Everything the master does not rewrite is the
+	 * requester's own bytes -- including the directory hash at body[128:132]
+	 * and the identity at body[44:48], which is exactly what 38 of 38 real
+	 * grants do. body[0:8] is the CM's envelope and the wrapper owns it.
+	 */
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_lkid);
+	/* body[9], the op, is the REQUEST'S, echoed: a CONVERT's grant is 82/07
+	 * (rd vms-cab: real VAX1 -> VAX2 grant of an op-0x07, lab run ev13
+	 * 13:39:44.798831), an ENQ's 82/01. Forcing 0x01 answered a convert
+	 * with an ENQ grant the requester never asked for. */
+	/* body[20:24]: the handle THIS master assigned. body[24:28] is left as
+	 * the requester's own, echoed -- the correlation. */
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, granted_mode);
-	/* Name span deliberately untouched: spec grounds "does not echo the
-	 * resource name" for the granted shape. */
+	/* The grant record, on every grant (38/38). */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + 1u, 0); /* body[29], 38/38 */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, 0);          /* cleared, 38/38 */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u, 0);     /* body[31], 38/38 */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
+	/*
+	 * body[36:52] -- THE MASTER RESOURCE'S VALUE BLOCK, the span the op-0x06
+	 * write grounds and the dlm-grant-valblk specimen proves a real grant
+	 * returns (it hands back the exact 16 bytes the requester had written).
+	 * The caller's block, or zeros when it holds none -- and zeros are the
+	 * data for a resource whose block is zero, not a placeholder. It is also
+	 * what makes the byte-for-byte reproduction of the real grant land:
+	 * body[36] and body[40] in those 38 grants are this block's content.
+	 */
+	/*
+	 * THE REQUEST'S IDENTITY AND NAME ARE NOT ECHOED BACK, AND THE TWO
+	 * LAYOUTS OVERLAP -- which is the trap this builder exists to avoid:
+	 *
+	 *   a REQUEST   body[44:46] group, body[46] mode, body[47] name length,
+	 *               body[48..48+len) the name
+	 *   a GRANT     body[36:52] the value block, which COVERS body[44:52]
+	 *
+	 * On the reference pair the master cleared body[44:52] and the name's
+	 * tail body[52:58] -- a 10-byte name -- and echoed everything beyond it
+	 * (that tail is the requester's own stale buffer, "ION_DATABASE" in both
+	 * frames, verbatim). Clearing a fixed span instead, or writing a zero at
+	 * body[47] "because a grant carries no name", destroys five bytes of the
+	 * value block; writing the block LAST is what keeps both rules true at
+	 * once.
+	 *
+	 * body[52:54] is the SCS-layer word this codec does not own (see the
+	 * header): left zero, never minted.
+	 */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_GROUP, 0);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_GROUP + 1u, 0);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, 0);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, 0);
+	for (i = 0u; i < req_name_len; i++)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_NAME + i, 0u);
+
+	/*
+	 * body[36:52] -- THE MASTER RESOURCE'S VALUE BLOCK, written LAST so it
+	 * owns every byte of its own span. The op-0x06 write crossing grounds
+	 * this span, and the dlm-grant-valblk specimen proves a real grant
+	 * returns it (it hands back the exact 16 bytes the requester had
+	 * written). The caller's block, or zeros when it holds none -- and for a
+	 * resource whose block is zero, zero is the data.
+	 */
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i,
+				valblk != (const uint8_t *)0 ? valblk[i] : 0u);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
@@ -256,67 +397,56 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(uint32_t req_lkid,
 }
 
 /*
- * Build a GRANT reply that returns the master's VALUE BLOCK (vms-727, the LVB
- * READ crossing -- the symmetric mirror of the op-0x06 write build above). The
- * grant fields are exactly build_grant's; the value-block record is the grounded
- * grant shape (VMS_DLM_GRANT_VALBLK_* constants, ALL of body[28]/[32]/[34]
- * verified constant across nine+ real grant-with-valblk captures). The value
- * block itself is read from the master RESOURCE by the caller; nothing here is
- * composed. body[52:88] is zero-filled (an SCS sequence word plus stale tail
- * this DLM codec does not own), exactly as the op-0x06 builder zero-fills.
+ * A CONVERT (op 0x07) the master QUEUED (rd vms-cab). GROUNDED from real
+ * VAX<->VAX traffic (2026-10-09 lab captures ev11/ev13/e8b-refire/m4): a real
+ * VMS master answers a queued conversion AT ONCE with the request echoed, the
+ * category made a response (0x82), and the outcome byte body[34] = 0xfb. Every
+ * sampled pair differs from its request in exactly body[0:4] (the CM
+ * envelope, the wrapper's), body[8] (category), body[34] (outcome) and
+ * body[52:54] (the SCS-layer word this codec does not own: left zero, as the
+ * grant leaves it). The op stays 0x07. Without this answer the requesting
+ * VAX process waits in RWSCS for ever, and cannot even be deleted
+ * (measured: run ci6-evac-13). The later grant is a separate message.
  */
-vms_codec_status_t vms_dlm_enq_response_build_grant_valblk(uint32_t req_lkid,
-						    uint32_t master_lkid,
-						    uint8_t granted_mode,
-						    const uint8_t *valblk,
-						    uint8_t *frame, uint32_t cap,
-						    uint32_t *written)
+vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body,
+							 uint32_t req_len,
+							 uint8_t *frame,
+							 uint32_t cap,
+							 uint32_t *written)
 {
+	vms_wire_view_t v;
 	vms_wire_buf_t w;
+	uint8_t cat, op;
 
-	if (valblk == (const uint8_t *)0)
-		return VMS_CODEC_E_INVAL;
-	/* A grant handing out lock-id 0 is not a grant (the fc8540ae rule),
-	 * and a value block naming no master lock is nothing. */
-	if (req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET)
-		return VMS_CODEC_E_INVAL;
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_CONVERT)
+		return VMS_CODEC_E_CLASS;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
-
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
-	vms_wire_put_le16(&w, VMS_OFF_DLM_VALBLK_HDR1, VMS_DLM_VALBLK_HDR1_VAL);
-	vms_wire_put_le16(&w, VMS_OFF_DLM_VALBLK_HDR2, VMS_DLM_VALBLK_HDR2_VAL);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_lkid);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_FLAG, VMS_DLM_GRANT_VALBLK_FLAG_VAL);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, granted_mode);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_VALBLK_SERIAL, VMS_DLM_GRANT_VALBLK_REC_VAL);
-	vms_wire_put_bytes(&w, VMS_OFF_DLM_VALBLK, VMS_DLM_VALBLK_WIRE_LEN, valblk);
-	/*
-	 * body[52:88]: an SCS sequence word at body[52:54] built by another
-	 * layer, then uninitialised sender buffer -- neither this DLM codec's to
-	 * reproduce. Zero-fill explicitly so the emit never leaks memory and the
-	 * length claim below is bounds-checked against `cap`.
-	 */
-	{
-		static const uint8_t zeros[VMS_DLM_VALBLK_BODY_LEN - 52u] = { 0 };
-		vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY + 52u,
-				   (uint32_t)sizeof(zeros), zeros);
-	}
-
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_REC + 2u, VMS_DLM_REPLY_QUEUED);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 52u, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 53u, 0u);
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
-		*written = VMS_OFF_SYSAP_BODY + VMS_DLM_VALBLK_BODY_LEN;
+		*written = vms_wire_buf_len(&w);
 	return VMS_CODEC_OK;
 }
 
 vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 						   uint32_t master_lkid,
+						   uint8_t res_acmode,
 						   uint8_t name_len,
 						   const uint8_t *name,
 						   uint8_t *frame, uint32_t cap,
@@ -337,7 +467,11 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_pid_echo);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, 0); /* cleared, spec grounded */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
+	/* body[46]: the ACCESS MODE, echoed from the request this denies (rd
+	 * vms-b5b0 -- it is not the constant 0x03 this used to write). A reply
+	 * that renamed the resource's domain would deny a lock on one resource
+	 * and name another. */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, name_len, name);
 
@@ -424,6 +558,23 @@ static int dlm_names_for_directory(vms_wire_view_t *v, uint8_t op)
 	return op == VMS_DLM_WIREOP_DIR_REMOVE || op == VMS_DLM_WIREOP_REBUILD;
 }
 
+int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return 0;
+	if (cat != VMS_DLM_CAT_REQUEST)
+		return 0;
+	return op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_CONVERT ||
+	       op == VMS_DLM_WIREOP_CONVERT_VALBLK ||
+	       op == VMS_DLM_WIREOP_DEQ;
+}
+
 vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 						uint32_t len,
 						struct vms_dlm_res_ident *out)
@@ -455,6 +606,67 @@ vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	*out = id;
+	return VMS_CODEC_OK;
+}
+
+/* The echoed identity of an ANSWER body: the same four positions a request
+ * carries it in, read without the request-only class checks. */
+static vms_codec_status_t dlm_answer_ident(vms_wire_view_t *v,
+					   struct vms_dlm_res_ident *id)
+{
+	id->group = vms_wire_get_le16(v, VMS_OFB_DLM_RES_GROUP);
+	id->mode = vms_wire_get_u8(v, VMS_OFB_DLM_RES_MODE);
+	id->name_len = vms_wire_get_u8(v, VMS_OFB_DLM_NAME_LEN);
+	id->hash = vms_wire_get_le32(v, VMS_OFB_DLM_DIR_HASH);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (id->name_len == 0u || id->name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_CLASS;
+	vms_wire_get_bytes(v, VMS_OFB_DLM_NAME, id->name_len, id->name);
+	return vms_wire_view_ok(v) ? VMS_CODEC_OK : v->err;
+}
+
+vms_codec_status_t vms_dlm_dir_answer_parse_body(const uint8_t *body,
+						 uint32_t len,
+						 struct vms_dlm_dir_answer *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_dir_answer a;
+	vms_codec_status_t st;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_dir_answer *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (!vms_wire_is_response(cat) ||
+	    (cat & 0x7fu) != VMS_DLM_CAT_REQUEST ||
+	    op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+
+	a.status = vms_wire_get_u8(&v, VMS_OFB_DLM_DIR_STATUS);
+	a.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	a.req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	a.master_csid = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_MASTER);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	/* Signal 1: the outcome byte at body[34]. */
+	if (a.status != VMS_DLM_DIR_YOU_MASTER &&
+	    a.status != VMS_DLM_DIR_REDIRECT)
+		return VMS_CODEC_E_CLASS;
+	/* Signal 2: the NAME is echoed (a grant omits it). */
+	st = dlm_answer_ident(&v, &a.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	/* A redirect that names nobody is not a redirect. */
+	if (a.status == VMS_DLM_DIR_REDIRECT && a.master_csid == 0u)
+		return VMS_CODEC_E_CLASS;
+	if (a.status == VMS_DLM_DIR_YOU_MASTER)
+		a.master_csid = 0u;
+	*out = a;
 	return VMS_CODEC_OK;
 }
 

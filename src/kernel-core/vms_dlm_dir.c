@@ -2,9 +2,10 @@
 /*
  * vms_dlm_dir.c - the lock directory's entries (rd vms-8219). See the header.
  *
- * Open addressing with linear probing over a power-of-two table, keyed by the
- * resource NAME (see the header: NOT by the wire hash, which this node does not
- * always have and which its own entries never have). A removal back-shifts the
+ * Open addressing with linear probing over a power-of-two table, probed by a
+ * private index over the resource NAME and matched by the resource's EXACT WIRE
+ * IDENTITY (see the header: NOT by the wire hash, which is a routing value and
+ * which this node does not always have). A removal back-shifts the
  * rest of its probe chain (Knuth vol. 3, 6.4 Algorithm R), so there are no
  * tombstones to compact and every chain stays exactly as short as its contents.
  */
@@ -60,15 +61,14 @@ static int dir_same_name(const struct vms_dlm_res_ident *a,
 }
 
 /*
- * EXACT WIRE IDENTITY. A NAME-ONLY entry (this node's own self-claim) carries no
- * group and no access mode, so it can never match one: the wire ops stay exact,
- * and the conflation lives only where it is safe -- see the header.
+ * EXACT WIRE IDENTITY -- the ONE matching rule in this file (rd vms-b5b0).
+ * Every entry has a group and an access mode, whether it came from a frame or
+ * from this node's own claim, so there is no entry shape this has to
+ * special-case and no conflation left to argue about.
  */
 static int dir_same(const struct vms_dlm_dir_entry *e,
 		    const struct vms_dlm_res_ident *b)
 {
-	if (e->name_only)
-		return 0;
 	if (e->id.group != b->group || e->id.mode != b->mode)
 		return 0;
 	return dir_same_name(&e->id, b->name, b->name_len);
@@ -176,7 +176,6 @@ static int dir_set(struct vms_dlm_dir *d, const struct vms_dlm_res_ident *id,
 	 * OVMX as master of resources it did not master.
 	 */
 	d->slot[i].hash_known = (id->hash != 0u) ? 1u : 0u;
-	d->slot[i].name_only = 0u;
 	d->used++;
 	return 0;
 }
@@ -184,12 +183,6 @@ static int dir_set(struct vms_dlm_dir *d, const struct vms_dlm_res_ident *id,
 /* ==========================================================================
  * 2. The directory's operations
  * ========================================================================== */
-
-/* Defined with vms_dlm_dir_lookup_name below; used by the claim above it. */
-static enum vms_dlm_dir_name_outcome
-dir_scan_name(struct vms_dlm_dir *d, const uint8_t *name, uint32_t name_len,
-	      vms_csid_t *out_master, uint32_t *out_hash,
-	      uint8_t *out_hash_known);
 
 int vms_dlm_dir_init(struct vms_dlm_dir *d, struct vms_dlm_dir_entry *storage,
 		     uint32_t cap)
@@ -206,7 +199,6 @@ int vms_dlm_dir_init(struct vms_dlm_dir *d, struct vms_dlm_dir_entry *storage,
 	for (i = 0u; i < cap; i++) {
 		storage[i].state = (uint8_t)VMS_DLM_DIR_EMPTY;
 		storage[i].hash_known = 0u;
-		storage[i].name_only = 0u;
 	}
 	d->slot = storage;
 	d->cap = cap;
@@ -236,33 +228,6 @@ int vms_dlm_dir_register(struct vms_dlm_dir *d,
 	return 0;
 }
 
-/*
- * Does a NAME-ONLY entry for this name name `self`? (rd vms-db2a.) That is this
- * node's own record of its own mastery, and it is the only thing that makes
- * p. 6-51's outcome (a) reachable for a name whose UIC group and access mode
- * this executive does not hold.
- */
-static int dir_self_claims(const struct vms_dlm_dir *d,
-			   const struct vms_dlm_res_ident *id, vms_csid_t self)
-{
-	uint32_t i, n, mask;
-
-	if (self == 0u || d->cap == 0u)
-		return 0;
-	mask = d->cap - 1u;
-	for (n = 0u, i = dir_name_index(id->name, id->name_len) & mask;
-	     n < d->cap; n++, i = (i + 1u) & mask) {
-		const struct vms_dlm_dir_entry *e = &d->slot[i];
-
-		if (e->state == (uint8_t)VMS_DLM_DIR_EMPTY)
-			return 0;
-		if (e->name_only && e->master == self &&
-		    dir_same_name(&e->id, id->name, id->name_len))
-			return 1;
-	}
-	return 0;
-}
-
 enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
 					    const struct vms_dlm_res_ident *id,
 					    vms_csid_t requester,
@@ -289,14 +254,13 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
 		return VMS_DLM_DIR_ANSWER_REDIRECT;
 	}
 	if (e == (const struct vms_dlm_dir_entry *)0) {
-		/* No exact-identity entry -- but this node may hold a NAME-ONLY
-		 * record of its own mastery of that name, and then the answer is
-		 * p. 6-51's outcome (a) and NEVER "you master it". */
-		if (dir_self_claims(d, id, self)) {
-			*out_master = self;
-			d->answered_self++;
-			return VMS_DLM_DIR_ANSWER_SELF;
-		}
+		/*
+		 * No entry for this resource at all: p. 6-31's outcome 3, the
+		 * requester becomes the master -- recorded, THEN answered. An
+		 * entry naming THIS node (including one this node recorded for
+		 * its own mastery, which carries the same full identity since
+		 * rd vms-b5b0) was already answered ANSWER_SELF above.
+		 */
 		if (dir_set(d, id, requester) != 0)
 			return VMS_DLM_DIR_ANSWER_NONE;
 	}
@@ -305,111 +269,54 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
 	return VMS_DLM_DIR_ANSWER_YOU;
 }
 
-int vms_dlm_dir_claim_self(struct vms_dlm_dir *d, const char *name,
-			   uint32_t name_len, vms_csid_t master)
+int vms_dlm_dir_claim_self(struct vms_dlm_dir *d,
+			   const struct vms_dlm_res_ident *id,
+			   vms_csid_t master)
 {
-	vms_csid_t held = 0u;
 	int32_t slot;
 
-	if (d == (struct vms_dlm_dir *)0 || name == (const char *)0 ||
-	    master == 0u || name_len == 0u || name_len > VMS_DLM_NAME_MAX)
+	if (d == (struct vms_dlm_dir *)0 ||
+	    id == (const struct vms_dlm_res_ident *)0 || master == 0u ||
+	    id->name_len == 0u || id->name_len > VMS_DLM_NAME_MAX)
 		return -1;
-	/* Already recorded as ours, exactly or name-only? Nothing to do. */
-	if (dir_scan_name(d, (const uint8_t *)name, name_len, &held,
-			  (uint32_t *)0, (uint8_t *)0) ==
-	    VMS_DLM_DIR_NAME_MASTER && held == master)
-		return 0;
-	if (!dir_has_room(d))
+	/* Already recorded, and recorded as OURS? Nothing to do. An entry naming
+	 * SOMEBODY ELSE is not overwritten here: a claim is this node saying what
+	 * it masters, not a way to take an entry off another system. */
+	slot = dir_slot_of(d, id);
+	if (slot >= 0)
+		return d->slot[slot].master == master ? 0 : -1;
+	if (dir_set(d, id, master) != 0)
 		return -1;
-	slot = dir_free_slot(d, (const uint8_t *)name, name_len);
-	if (slot < 0)
-		return -1;
-	{
-		struct vms_dlm_dir_entry *e = &d->slot[slot];
-		uint32_t i;
-
-		e->id.hash = 0u;
-		e->id.group = 0u;
-		e->id.mode = 0u;
-		e->id.name_len = (uint8_t)name_len;
-		for (i = 0u; i < name_len; i++)
-			e->id.name[i] = (uint8_t)name[i];
-		e->master = master;
-		e->state = (uint8_t)VMS_DLM_DIR_USED;
-		e->hash_known = 0u;   /* this node holds none: never a zero hash */
-		e->name_only = 1u;
-	}
-	d->used++;
 	d->self_claims++;
+	/* dir_set counts nothing of its own; `registered` means "a master
+	 * registered this with us over the wire", which this is not. */
 	return 0;
 }
 
-/*
- * Scan the name's probe chain. Counts nothing, so the claim path above can use
- * it too -- `name_lookups` means "this executive's own $ENQ asked", and a claim
- * is not an ask.
- */
-static enum vms_dlm_dir_name_outcome
-dir_scan_name(struct vms_dlm_dir *d, const uint8_t *name, uint32_t name_len,
-	      vms_csid_t *out_master, uint32_t *out_hash,
-	      uint8_t *out_hash_known)
+enum vms_dlm_dir_ident_outcome
+vms_dlm_dir_lookup_ident(struct vms_dlm_dir *d,
+			 const struct vms_dlm_res_ident *id,
+			 vms_csid_t *out_master, uint32_t *out_hash,
+			 uint8_t *out_hash_known)
 {
-	uint32_t i, n, mask;
-	vms_csid_t master = 0u;
-	uint32_t hash = 0u;
-	uint8_t hash_known = 0u;
-	int found = 0;
+	const struct vms_dlm_dir_entry *e;
 
-	mask = d->cap - 1u;
-	for (n = 0u, i = dir_name_index((const uint8_t *)name, name_len) & mask;
-	     n < d->cap; n++, i = (i + 1u) & mask) {
-		const struct vms_dlm_dir_entry *e = &d->slot[i];
+	if (d == (struct vms_dlm_dir *)0 ||
+	    id == (const struct vms_dlm_res_ident *)0 ||
+	    out_master == (vms_csid_t *)0 || d->cap == 0u ||
+	    id->name_len == 0u || id->name_len > VMS_DLM_NAME_MAX)
+		return VMS_DLM_DIR_IDENT_INVAL;
 
-		if (e->state == (uint8_t)VMS_DLM_DIR_EMPTY)
-			break;
-		if (!dir_same_name(&e->id, name, name_len))
-			continue;
-		if (found && e->master != master) {
-			/* Two resource domains of one name, mastered on
-			 * different systems. Refused: picking one would route a
-			 * lock request on a coin toss. */
-			return VMS_DLM_DIR_NAME_AMBIGUOUS;
-		}
-		found = 1;
-		master = e->master;
-		if (e->hash_known && !hash_known) {
-			hash = e->id.hash;
-			hash_known = 1u;
-		}
-	}
-	if (!found)
-		return VMS_DLM_DIR_NAME_NONE;
-	*out_master = master;
+	d->own_lookups++;
+	e = vms_dlm_dir_find(d, id);
+	if (e == (const struct vms_dlm_dir_entry *)0)
+		return VMS_DLM_DIR_IDENT_NONE;
+	*out_master = e->master;
 	if (out_hash != (uint32_t *)0)
-		*out_hash = hash;
+		*out_hash = e->id.hash;
 	if (out_hash_known != (uint8_t *)0)
-		*out_hash_known = hash_known;
-	return VMS_DLM_DIR_NAME_MASTER;
-}
-
-enum vms_dlm_dir_name_outcome
-vms_dlm_dir_lookup_name(struct vms_dlm_dir *d, const char *name,
-			uint32_t name_len, vms_csid_t *out_master,
-			uint32_t *out_hash, uint8_t *out_hash_known)
-{
-	enum vms_dlm_dir_name_outcome o;
-
-	if (d == (struct vms_dlm_dir *)0 || name == (const char *)0 ||
-	    out_master == (vms_csid_t *)0 || d->cap == 0u || name_len == 0u ||
-	    name_len > VMS_DLM_NAME_MAX)
-		return VMS_DLM_DIR_NAME_INVAL;
-
-	d->name_lookups++;
-	o = dir_scan_name(d, (const uint8_t *)name, name_len, out_master,
-			  out_hash, out_hash_known);
-	if (o == VMS_DLM_DIR_NAME_AMBIGUOUS)
-		d->name_ambiguous++;
-	return o;
+		*out_hash_known = e->hash_known;
+	return VMS_DLM_DIR_IDENT_MASTER;
 }
 
 int vms_dlm_dir_remove(struct vms_dlm_dir *d,

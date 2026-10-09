@@ -174,7 +174,10 @@ static void wire_learn(const char *resnam)
 
 	for (c = resnam; *c != '\0'; c++)
 		h = (uint16_t)((h << 1) ^ (uint8_t)*c);
-	(void)vms_lock_dlm_learn_dir_hash(resnam, h);
+	/* Under the identity the test's own processes enqueue at (uic 0, access
+	 * mode 0): a learned value belongs to an identity, not to a name
+	 * (rd vms-b5b0). */
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, h);
 }
 
 /* Wait (bounded) until at least `n` requests have been posted, then copy the

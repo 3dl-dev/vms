@@ -64,7 +64,7 @@
 #   dlm-dir-remove-by-anyone                 vms_dlm_dir.c   (rd vms-8219)
 #   dlm-learner-unbounded                    vms_lock.c      (rd vms-4e9)
 #   dlm-own-directory-not-consulted          vms_lock.c      (rd vms-025)
-#   dlm-self-claim-answered-you-master       vms_dlm_dir.c   (rd vms-db2a)
+#   dlm-dir-matched-by-name-alone            vms_dlm_dir.c   (rd vms-b5b0)
 #
 # (vms_dlm_ldwv.c above -- FC-P4.3's Lock Directory Weight Vector -- was the
 # seventh TU named by the item that grew this manifest; see its own defect
@@ -162,13 +162,26 @@ barrier-bit0-uncounted
 phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
+ldwv-drops-our-own-membership
+join-promotion-records-nothing
+dlm-deferred-grant-not-sent
+lock-interrupted-wait-ignored
+dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
-dlm-self-claim-answered-you-master
+dlm-dir-matched-by-name-alone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 dlm-hash-empty-name-not-refused
+dlm-hash-coverage-claims-too-much
+dlm-engine-extrapolates-the-hash
+dlm-unroutable-refuses-the-caller
+dlm-grant-handles-swapped
+dlm-grant-record-omitted
+dlm-echo-guard-never-caps
+dlm-deadlock-search-follows-remote-holders
+dlm-queued-convert-answered-as-granted
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -260,8 +273,10 @@ kernel-core/vms_cnxman_phase2.c
 kernel-core/vms_cnxman_quorum.c
 kernel-core/vms_cnxman_recnx_fsm.c
 kernel-core/vms_dlm_dir.c
+kernel-core/vms_dlm_echo_guard.c
 kernel-core/vms_dlm_hash.c
 kernel-core/vms_dlm_ldwv.c
+kernel-core/vms_dlm_pending.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
 kernel-core/vms_mscp_cl.c
@@ -412,6 +427,84 @@ EOF
                       ;;
         esac;;
 
+    lock-interrupted-wait-ignored)
+        case "$_f" in
+        facility)     echo "THE INTERRUPTED WAIT (enq_wait_sync(), rd vms-f87): a signal to a process blocked in \$ENQW ends the ioctl with no status, so userspace re-enters the wait -- it NEVER loops in the kernel";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_host";;
+        isolation)    echo "isolated";;
+        why)          echo "the backend's INTERRUPTED return is dropped again, exactly as it was before rd vms-f87. MEASURED in lab run ci6-evac-11: the Linux backend does not sleep while a signal is pending, so the loop re-tested a predicate that was still false and called straight back in -- a tight loop taking and dropping res->lock, a CPU that never left the kernel, and 'rcu: INFO: self-detected stall on CPU 0 (9931 ticks this GP)' growing to 98,763 ticks while the fork thread on the other CPU served the cluster normally. The host bed reproduces it through the backend's interrupt seam, and the suite's own ctest timeout is what catches the spin.";;
+        require_fail) cat <<'EOF'
+  with -ERESTARTSYS
+*** and returns -ERESTARTSYS ***
+*** the interrupted $ENQW COMES BACK (it does not spin in the kernel: the lab's CPU 0 never did) ***
+*** the interrupted $ENQW CONVERT comes back too -- the exact ioctl the lab's stuck CPU was in ***
+*** writing NO status: $ENQW has no 'your wait was interrupted' condition value, so userspace re-enters the wait and no caller can observe this ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-deferred-grant-not-sent)
+        case "$_f" in
+        facility)     echo "THE DEFERRED GRANT (dlm_arm_send_deferred_grant(), rd vms-f87): when a release advances this master's queue, the waiter is TOLD -- its own queued frame echoed back with the handle this engine assigned";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "the origination is removed and the flip goes back to being counted in silence, which is what shipped before. MEASURED COST, 2026-10-09 10:56Z on vaxlab-3: an OVMX master held EX on EVAC\$WORKLOAD, VAX1's \$ENQW EX queued at it correctly, OVMX released -- and VAX1 was never told. Its process sat in RWSCS indefinitely and could not even be STOPped. The engine HAD granted the lock; only the frame was missing. This is ci.6's last step.";;
+        require_fail) cat <<'EOF'
+*** and the RELEASE path really CALLS the origination -- not just defines it ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-pending-overflow-overwrites)
+        case "$_f" in
+        facility)     echo "THE UNANSWERED-REQUEST TABLE's bound (vms_dlm_pending_keep(), rd vms-f87): a full table REFUSES, so one waiter's frame is never overwritten by another's";;
+        targets)      echo "kernel-core/vms_dlm_pending.c";;
+        suites_red)   echo "test_dlm_pending";;
+        isolation)    echo "isolated";;
+        why)          echo "the full-table refusal is turned into an overwrite of slot 0. The frames in this table are what the deferred grants are BUILT from, so handing one waiter another waiter's frame would send a grant naming the wrong lock to the wrong node -- a fabricated completion of exactly the class INV-6 names, and the class that put a real VAX into a 65,000-frame storm (rd vms-b5b0). A full table has an honest answer already: refuse, count it, and let the requester's next ask be answered from the lock database.";;
+        require_fail) cat <<'EOF'
+*** one more is REFUSED, not silently dropped on top of another waiter's frame ***
+and counted
+EOF
+                      ;;
+        esac;;
+
+    join-promotion-records-nothing)
+        case "$_f" in
+        facility)     echo "THE PROMOTION'S RECORD (join_h_transition_done(), rd vms-b5b0 follow-on): when this node becomes a member off a completed transition, the fact is written where the rest of the executive reads it -- its own CSB's MEMBER/SELECTED flags, cl->state and the lock directory weight vector";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the promotion is put back to setting only the join FSM's own state. MEASURED TWICE on a real VAX cluster: a node's CSV slot climbs with every rejoin (p. 7-25), and at slots 8 and 10 -- past the eight slots this executive has grounded of the transition nodemap -- Phase 2 correctly leaves this node's membership undecided, so NOTHING else recorded it. The console said 'this node is now a VAXcluster member' while the node's own CSB said otherwise: its weight vector gave it no directory entry while both VAXes directed every lookup at it (a directory split), and cl->state never reached MEMBER, so SHOW CLUSTER and \$GETSYI disagreed with the console.";;
+        require_fail) cat <<'EOF'
+  ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+*** its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+EOF
+                      ;;
+        esac;;
+
+    ldwv-drops-our-own-membership)
+        case "$_f" in
+        facility)     echo "THIS NODE'S OWN PLACE IN ITS OWN VECTOR (ldwv_csb_counts(), rd vms-b5b0 follow-on): a committed LOCAL member counts even when the transition nodemap could not express its CSV slot";;
+        targets)      echo "kernel-core/vms_dlm_ldwv.c";;
+        suites_red)   echo "test_dlm_ldwv";;
+        isolation)    echo "isolated";;
+        why)          echo "the member test is put back to SELECTED-only, which is what shipped before the 2026-10-09 ev7 lab run. On its NINTH rejoin of the same real VAX cluster in a day this node was assigned CSID 0x00010008 -- CSV slot 8, one past the eight slots this executive has grounded of the nodemap byte -- so nothing could set its SELECTED flag, and its own vector read '2 entries over 2 systems, 0 of them this node's' while BOTH VAXes directed every directory lookup at it. A DIRECTORY SPLIT in which the node had omitted ITSELF, the one member whose membership it does not need a bitmap to know. The slot climbs with every rejoin (p. 7-25), so this is a cliff any cluster walks off, not a corner case.";;
+        require_fail) cat <<'EOF'
+*** all THREE systems are represented -- this node is no longer missing from its own vector ***
+*** and the entry is OURS (an own entry reads 0) -- so every lookup the VAXes send here is answered by the node they sent it to ***
+ONE entry: our LOCKDIRWT 1 against their 0 (p. 6-32), which is the '1 entries over 3 systems' line the earlier boot printed
+and the directory-split watchdog is silent
+the watchdog stays silent for a node that is not a member -- holding no entry is correct then
+this node is the directory for every value, which is what both VAXes' own vectors say too
+EOF
+                      ;;
+        esac;;
+
     ldwv-refusal-uncounted)
         case "$_f" in
         facility)     echo "the p. 6-33 Lock Directory Weight Vector's refusal accounting (cnxman_ldwv_rebuild(): a mixed-kind or foreign-member refusal must be counted, the rd vms-1ee split-brain teeth)";;
@@ -446,19 +539,23 @@ EOF
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_dlm_mixed_master";;
         isolation)    echo "isolated";;
-        why)          echo "dlm_resolve_master()'s call to dlm_route_own_directory() is short-circuited, which is EXACTLY the measured origin/main behaviour: with a real VAX in the membership the all-OVMX gate makes dir_resolve() answer 'this node' for every name, so a resource a VAX already masters (its lookup answered and recorded in this node's own directory) is mastered HERE as well -- two masters for one resource, which is a lock manager agreeing that two systems may both grant EX on the same file.";;
+        why)          echo "dlm_resolve_master()'s call to dlm_route_own_directory() is short-circuited, so the engine assumes mastery of every resource the vector directs HERE without ever asking the directory it holds -- and a resource a real VAX already masters (its lookup answered and recorded in this node's own directory, rd vms-8219) is mastered HERE as well. Two masters for one resource, which is a lock manager agreeing that two systems may both grant EX on the same file. It also takes the engine's own claim recording with it, which is the same hole from the other side (rd vms-db2a).";;
         require_fail) cat <<'EOF'
 *** and the resource's MASTER is the VAX -- this node did NOT master it a second time ***
   the engine does not claim mastery
 exactly one frame left this node
 *** addressed to the VAX the directory named ***
-  as an op-0x01 request
 *** carrying the hash the VAX ITSELF put on the wire for that name -- never a computed one ***
   and OUR OWN handle, the one this executive minted
 *** and NOTHING is granted yet: the requester waits for the VAX's master, it does not grant itself ***
 the VAX's grant reply is accepted by the shipping FSM
-*** the $ENQ is REFUSED honestly: the VAX masters it and this node has no hash to address it with ***
-  and it did NOT become a second master instead
+one frame left this node
+  addressed to the master the registration named
+*** carrying the value this executive COMPUTED for the identity -- never a zero where the hash goes ***
+  and it did NOT become a second master
+*** and the MASTER is the VAX -- an uncovered identity is NOT mastered a second time here ***
+  addressed to the VAX
+*** carrying the value THE VAX ITSELF put on the wire for it -- the one value this executive holds ***
   and the refusals to RECORD are counted, not hidden
 *** and the mastery is RECORDED in this node's own directory -- which is what stops the next asker being told to master it ***
 *** the directory answers THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
@@ -467,18 +564,20 @@ EOF
                       ;;
         esac;;
 
-    dlm-self-claim-answered-you-master)
+    dlm-dir-matched-by-name-alone)
         case "$_f" in
-        facility)     echo "the lock directory's NAME-ONLY self-claim (dir_self_claims(), rd vms-db2a): a VMS system's lookup for a name THIS NODE masters is answered 'this node masters it' (p. 6-51), never 'you master it'";;
+        facility)     echo "the lock directory's EXACT-IDENTITY match (dir_same(), rd vms-b5b0): an entry answers only for the resource it is an entry for -- the same NAME in another UIC group or at another access mode is a DIFFERENT resource";;
         targets)      echo "kernel-core/vms_dlm_dir.c";;
         suites_red)   echo "test_dlm_dir";;
         isolation)    echo "isolated";;
-        why)          echo "vms_dlm_dir_lookup()'s consultation of the name-only self-claim is disarmed. A real VAX's lookup carries ITS group, ITS access mode and ITS hash -- none of which this executive holds for a name it mastered first -- so it finds no exact-identity entry and is answered 'you master it': the VAX becomes a second master of a resource this node already masters.";;
+        why)          echo "dir_same()'s group/mode comparison is disarmed, so the table matches by NAME ALONE across resource domains -- which is what it did before rd vms-b5b0 gave the engine a full resource identity to key on. One system's QMAN$ in UIC group 0 and another's in group 1 then collapse into ONE entry: a lookup for either is answered with the OTHER's master, and the directory routes a lock request at a system that does not master that resource.";;
         require_fail) cat <<'EOF'
-*** the VAX's lookup is answered THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
-  nothing was answered 'you master it'
-  and the outcome is counted
-another resource domain of that name is answered the same way (over-serialize, never two masters)
+*** the same NAME in another UIC group / access mode is NOT this entry: no cross-domain answer ***
+*** and group 1's QMAN$ names VAX2 -- two resources, two masters, no coin toss ***
+another resource domain of that name is a different resource: the asker masters it
+the same name in another GROUP is another resource
+the same name in another ACCESS MODE is another resource
+a departure drops every entry its system mastered
 EOF
                       ;;
         esac;;
@@ -539,6 +638,158 @@ EOF
         require_fail) cat <<'EOF'
 a zero-length name is refused
 a refusal writes nothing (INV-6)
+EOF
+                      ;;
+        esac;;
+
+    dlm-hash-coverage-claims-too-much)
+        case "$_f" in
+        facility)     echo "the PROVEN-COVERAGE masks in vms_dlm_hash.h (rd vms-b5b0): each one is exactly the set of values a real OpenVMS VAX has been WATCHED hashing, derived in the test from the corpus and the driven run -- never widened by hand";;
+        targets)      echo "kernel-core/vms_dlm_hash.h";;
+        suites_red)   echo "test_dlm_hash";;
+        isolation)    echo "isolated";;
+        why)          echo "VMS_DLM_HASH_LEN_PROVEN is widened by hand to every length 1..31, including the two (23 and 29) the driven run pre-registered and the VAX never put on the wire. The arithmetic is untouched -- all 1216 captured rows stay green, which is the point -- but the executive would now ROUTE on a value for an identity no VMS node has been observed producing one for, and a wrong value makes the directory node scan the wrong chain and install the sender as master of somebody else's resource (memory cluster-promotion-gap). The test derives the masks from the two proof artifacts, so a hand-widened constant has nowhere to hide.";;
+        require_fail) cat <<'EOF'
+VMS_DLM_HASH_LEN_PROVEN is exactly the observed lengths
+a 23-byte name is refused (never seen on the wire)
+a 29-byte name is refused (never seen on the wire)
+EOF
+                      ;;
+        esac;;
+
+    dlm-engine-extrapolates-the-hash)
+        case "$_f" in
+        facility)     echo "the ENGINE's refusal to route a resource whose identity is outside the proven coverage (vms_lock.c dir_hash_compute, rd vms-b5b0): learned, or proven-computed, or SS\$_UNSUPPORTED -- never extrapolated";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_dir";;
+        isolation)    echo "isolated";;
+        why)          echo "dir_hash_compute() is pointed at the UNGATED vms_dlm_name_hash() instead of vms_dlm_name_hash_proven(), so the engine computes -- and ROUTES, and puts on the wire -- a value for an identity no VMS node has been watched hashing (supervisor mode; a UIC group in the system range). The value is arithmetically well-defined and that is exactly the danger: it does not fail locally, it makes the receiving directory node scan the wrong chain, miss the name and install OVMX as the master of a resource somebody else already masters, at 35 frames a second (memory cluster-promotion-gap).";;
+        require_fail) cat <<'EOF'
+*** and NOTHING was put on the wire (the anti-LARP clause) ***
+the vector was not consulted: there was no value to index it with
+*** and the local-only mastery is COUNTED, not silent ***
+the readback reports NO directory rather than a guessed one (INV-6)
+...and says plainly that THIS node masters it
+and sends nothing
+*** counted as an uncovered-identity local mastery ***
+  with nothing sent
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-handles-swapped)
+        case "$_f" in
+        facility)     echo "THE TWO LOCK HANDLE SLOTS of a DLM request/grant (vms_cluster_codec_dlm.h, rd vms-b5b0): body[20:24] is the MASTER's handle and body[24:28] the REQUESTER's -- a grant that returns them the other way round cannot be correlated by the requester";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.h";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place.";;
+        require_fail) cat <<'EOF'
+  body[20:24] == 0x080001cd, the MASTER's handle -- which is why a release names its lock here: the GRANT assigned this requester
+  body[20:24] == 0x0a0003a4, the MASTER's handle
+  body[20:24] == 0x0a0003af, the MASTER's handle for the resource
+  body[20:24] == the MASTER's handle for the lock being converted (a convert names the lock on the master; slots per rd vms-b5b0)
+  body[20:24] == the MASTER's handle, which the GRANT assigned (rd vms-b5b0 relabelled the slot)
+  body[20:24] echoes the request's own master-slot placeholder UNCHANGED: a deny assigns no handle (slots per rd vms-b5b0)
+  body[20:24] is THE MASTER's handle (rd vms-b5b0 relabelled it; the byte value is the ac4 one)
+  body[20:24]: the master-handle slot, carrying the GROUNDED PID-form placeholder (no master handle yet)
+  body[24:28] == 0x2b000489, the requester's own handle (rd vms-b5b0 relabelled the slot) -- the driving ENQ for 'OVMXLVB3' carried
+  body[24:28] == 0x3a0004eb, the REQUESTER's own handle (rd vms-b5b0 relabelled the slot), the driving ENQ for 'OVMXDEQ1' carried
+  body[24:28] == 0x570001b7, the requester's own handle for 'OVMXLV01', echoed by the grant
+  body[24:28] == 0x590004e3, the holder's own handle (rd vms-b5b0 relabelled the slot) -- the EX holder's ENQ for 'OVMXBLK2' carried
+  body[24:28] == the requester's own handle
+  body[24:28] is THE REQUESTER's own handle
+  body[24:28]: this composed specimen leaves the requester's own slot 0 (a real VAX puts its handle there -- see dlm-real-enq-request)
+*** and carries the handle the MASTER assigned ***
+*** body[20:24] is the MASTER's handle slot, carrying the PID-form placeholder on a fresh ENQ ***
+*** body[24:28] is THE REQUESTER's own handle (0x090003cd -- a value no master ever sent it) ***
+*** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+*** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-record-omitted)
+        case "$_f" in
+        facility)     echo "THE GRANT RECORD a real master's grant always carries (vms_cluster_codec_dlm.c, rd vms-b5b0): body[28]=0x10 and body[32:36]={01 00 fa 00}, whose body[34]=0xfa is the outcome byte every answer is read by";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
+        require_fail) cat <<'EOF'
+*** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-echo-guard-never-caps)
+        case "$_f" in
+        facility)     echo "THE ECHO GUARD (vms_dlm_echo_guard.c, rd vms-b5b0): this node stops answering a system that keeps re-sending one request it has already answered identically";;
+        targets)      echo "kernel-core/vms_dlm_echo_guard.c";;
+        suites_red)   echo "test_dlm_echo_guard";;
+        isolation)    echo "isolated";;
+        why)          echo "the guard is made to admit every answer, so a reply loop runs without end again. The guard is the TEETH that makes the measured storm class self-limiting whatever causes it next: 63.7 s of 1026-frames-per-second against a real VAX ended because a human noticed, not because either executive stopped. OVMX must never be the node that keeps feeding a peer a frame it cannot use (memory ovmx-never-crashes-a-peer).";;
+        require_fail) cat <<'EOF'
+*** ...and the loud system is STILL capped after a crowd of quiet ones passed through: a peer cannot flush the guard by varying who asks ***
+*** and the run is still capped: capping the compared length does not cost the guard its teeth ***
+*** every one after that was WITHHELD: 63 s of storm becomes 8 frames ***
+*** exactly VMS_DLM_ECHO_MAX_SAME identical answers went out of a thousand asked for ***
+VAX1's loop is being withheld
+and the console line is flagged exactly ONCE, however long the peer keeps asking (65,000 identical console lines is its own denial of service)
+one conversation hit the bound
+the guard's own counter agrees -- a real number for SHOW CLUSTER/diagnostics, not a log line
+the loud system is capped
+EOF
+                      ;;
+        esac;;
+
+    dlm-deadlock-search-follows-remote-holders)
+        case "$_f" in
+        facility)     echo "the node-local DEADLOCK SEARCH (vms_lock.c check_deadlock, rd vms-ci.6 ev11): it does not walk through the cluster delivery process, which owns every remote system's lock";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_host";;
+        isolation)    echo "isolated";;
+        why)          echo "the search follows the delivery process's other waiting locks as if they were the blocker's own wait-for edges: two VAXes contending for one resource become one owner blocking itself, and without the step budget the search re-pushes them forever with res->lock held -- the lab OVMX node spun CPU 0 into an RCU stall the moment a local CONVERT queued behind a VAX EX (2026-10-09 11:12Z).";;
+        require_fail) cat <<'EOF'
+*** and it never needed the step budget: a remote holder's other waits are not this request's wait-for edges ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-convert-answered-as-granted)
+        case "$_f" in
+        facility)     echo "the immediate answer to a CONVERT this master QUEUED (vms_cluster_codec_dlm.c vms_dlm_convert_response_build_queued, rd vms-cab): the request echoed with outcome 0xfb, exactly as a real VAX master answers";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the queued answer claims GRANTED (0xfa): the VAX would believe it holds a mode it does not -- two holders of one EX. Without any answer at all the VAX process waits in RWSCS for ever (measured, ci6-evac-13).";;
+        require_fail) cat <<'EOF'
+*** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
+  ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    dlm-unroutable-refuses-the-caller)
+        case "$_f" in
+        facility)     echo "the ENGINE's HONEST FALLBACK for a resource it cannot route (vms_lock.c dlm_resolve_master, rd vms-b5b0): it is mastered LOCALLY -- counted and announced -- and never refused to the caller, because the caller is the file system";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_dir";;
+        isolation)    echo "isolated";;
+        why)          echo "the DLM_DIR_UNROUTABLE arm of dlm_resolve_master() is turned back into a refusal (SS\$_UNSUPPORTED to the caller) -- which is EXACTLY the measured PR #1578 lab regression: a booted node with a cluster stack bound failed 74 ACP/RMS file operations with 3658 and STARTUP.COM died on '%RMS-E-FNF, error opening SYS\$STARTUP:VMS\$VMS.DAT', looping until DCL was OOM-killed. Baron's ruling on rd vms-dc2 had already judged this answer -- option (B), refusing, is 'NEVER' -- and the resource is mastered locally instead. CI never boots a clustered node, which is why only the lab caught it; this defect is what makes the host bed catch it.";;
+        require_fail) cat <<'EOF'
+*** all 124 (length, access mode) combinations LOCK -- a clustered node can still open its own files ***
+*** the $ENQ is GRANTED -- a caller that cannot be refused (the ACP) keeps working ***
+...and says plainly that THIS node masters it
+*** and the local-only mastery is COUNTED, not silent ***
+a UIC group with bit 14 set also LOCKS
+and it LOCKS anyway
+*** counted as an uncovered-identity local mastery ***
+a resource touched with no committed vector LOCKS
+*** counted as a no-vector local mastery ***
+an unusable vector does not refuse the caller
+  and this node masters it, honestly
+  the no-vector local mastery is counted
 EOF
                       ;;
         esac;;
@@ -1648,6 +1899,46 @@ apply_edit() {
         # completely alone.
         sed -i 's|c->genesis_refused_noquorum++;|/* NEGCTL coord-genesis-refusal-uncounted: the refusal is not counted */|' "$_file";;
 
+    dlm-hash-coverage-claims-too-much)
+        # The mask literal is unique in the header.
+        sed -i 's|#define VMS_DLM_HASH_LEN_PROVEN    0xdf7ffffeu|#define VMS_DLM_HASH_LEN_PROVEN    0xfffffffeu /* NEGCTL dlm-hash-coverage-claims-too-much */|' "$_file";;
+
+    dlm-grant-handles-swapped)
+        # The two #define lines are unique; swapping their values is the whole
+        # defect. The replacement text differs from the original, so a second
+        # apply cannot match it.
+        sed -i 's|#define VMS_OFF_DLM_MASTER_LKID    92u|#define VMS_OFF_DLM_MASTER_LKID    96u /* NEGCTL dlm-grant-handles-swapped */|' "$_file"
+        sed -i 's|#define VMS_OFF_DLM_REQ_LKID       96u|#define VMS_OFF_DLM_REQ_LKID       92u /* NEGCTL */|' "$_file";;
+
+    dlm-grant-record-omitted)
+        # The record's two writes in the grant builder. Removing the flag write
+        # removes the anchor, so a second apply cannot match.
+        sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
+        sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+
+    dlm-queued-convert-answered-as-granted)
+        # The queued outcome is written in exactly one place.
+        sed -i 's|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_REC + 2u, VMS_DLM_REPLY_QUEUED);|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_REC + 2u, VMS_DLM_REPLY_GRANTED); /* NEGCTL dlm-queued-convert-answered-as-granted */|' "$_file";;
+
+    dlm-deadlock-search-follows-remote-holders)
+        # The skip line is unique in vms_lock.c.
+        sed -i 's|            if (delivery != NULL \&\& granted->proc == delivery)|            if (0) /* NEGCTL dlm-deadlock-search-follows-remote-holders */|' "$_file";;
+
+    dlm-echo-guard-never-caps)
+        # The one decision this TU makes. Replacing the bound test with an
+        # always-admit removes the anchor.
+        sed -i 's|\tif (s->run >= VMS_DLM_ECHO_MAX_SAME) {|\tif (0) { /* NEGCTL dlm-echo-guard-never-caps */|' "$_file";;
+
+    dlm-unroutable-refuses-the-caller)
+        # The fallback's own line is unique in vms_lock.c.
+        # The call is unique in this file, and replacing it removes the
+        # anchor -- a second apply cannot match (the selftest requires that).
+        sed -i 's|        dlm_dir_note_unroutable(no_vector);|        return SS__UNSUPPORTED; /* NEGCTL dlm-unroutable-refuses-the-caller */|' "$_file";;
+
+    dlm-engine-extrapolates-the-hash)
+        # The gated call is unique in vms_lock.c.
+        sed -i 's|if (vms_dlm_name_hash_proven(res->res_group, res->res_mode,|if (vms_dlm_name_hash(res->res_group, res->res_mode, /* NEGCTL dlm-engine-extrapolates-the-hash */|' "$_file";;
+
     dlm-hash-empty-name-not-refused)
         # `name_len == 0u || ` is unique in this file; dropping just that
         # disjunct leaves the upper bound armed, so the mutated build cannot
@@ -1697,13 +1988,47 @@ apply_edit() {
         # is unique in this file.
         sed -i 's|if (!inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st))|if (0 \&\& !inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st)) /* NEGCTL dlm-own-directory-not-consulted */|' "$_file";;
 
-    dlm-self-claim-answered-you-master)
-        # `if (dir_self_claims(d, id, self)) {` is unique in this file.
-        sed -i 's|if (dir_self_claims(d, id, self)) {|if (0 \&\& dir_self_claims(d, id, self)) { /* NEGCTL dlm-self-claim-answered-you-master */|' "$_file";;
+    dlm-dir-matched-by-name-alone)
+        # `if (e->id.group != b->group || e->id.mode != b->mode)` is unique.
+        sed -i 's|if (e->id.group != b->group \|\| e->id.mode != b->mode)|if (0) /* NEGCTL dlm-dir-matched-by-name-alone */|' "$_file";;
 
     dlm-dir-remove-by-anyone)
         # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.
         sed -i 's#if (i < 0 || d->slot\[i\].master != master) {#if (i < 0 || (d->slot[i].master != master \&\& 0)) { /* NEGCTL dlm-dir-remove-by-anyone */#' "$_file";;
+
+    lock-interrupted-wait-ignored)
+        # The interrupted arm's own test: `if (exec_cv_wait_timeout(...` is
+        # unique in this file. Turning the condition into a constant 0 makes the
+        # facility ignore the return exactly as it used to, and removes the
+        # anchor, so a second apply cannot match.
+        # Two lines, because the condition spans two: the call must still
+        # HAPPEN (the pre-fix code called it and dropped the result -- a
+        # short-circuited `if (0 && ...)` would instead remove the sleep and
+        # spin the suite's own CPU, which is unmeasurable). Both anchors are
+        # unique and both are consumed, so a second apply cannot match.
+        sed -i 's|        if (exec_cv_wait_timeout(&lock->wait_wq, \&res->lock,|        (void)exec_cv_wait_timeout(\&lock->wait_wq, \&res->lock, /* NEGCTL lock-interrupted-wait-ignored */|' "$_file"
+        sed -i 's|                                 VMS_DEADLOCK_WAIT_MS, &timed_out)) {|                             VMS_DEADLOCK_WAIT_MS, \&timed_out);\n        if (0) {|' "$_file";;
+
+    dlm-deferred-grant-not-sent)
+        # The one call that originates it. Removing it removes the anchor.
+        sed -i 's|\tdlm_arm_send_deferred_grant(d, \&res);|\td->deferred_grants_no_wire_op++; /* NEGCTL dlm-deferred-grant-not-sent */|' "$_file";;
+
+    dlm-pending-overflow-overwrites)
+        # The full-table arm's own two lines (both unique in this file, and
+        # both consumed, so a second apply cannot match): the refusal becomes
+        # an OVERWRITE of slot 0 -- one waiter's frame handed out as another's,
+        # which is a grant naming the wrong lock to the wrong node.
+        sed -i 's|\t\t\tp->overflow++;|\t\t\t/* NEGCTL dlm-pending-overflow-overwrites */|' "$_file"
+        sed -i 's|\t\t\treturn 0;|\t\t\ts = \&p->slot[0];|' "$_file";;
+
+    join-promotion-records-nothing)
+        # The one call the promotion makes. Removing it removes the anchor.
+        sed -i 's|\tcnxman_phase2_local_committed(j->cl, j->ops);|\t/* NEGCTL join-promotion-records-nothing */|' "$_file";;
+
+    ldwv-drops-our-own-membership)
+        # The local-membership arm of the member test. Removing its two lines
+        # removes the anchor, so a second apply cannot match.
+        sed -i 's|\tif ((csb->flags \& VMS_CSB_F_LOCAL) != 0u)|\tif (0) { /* NEGCTL ldwv-drops-our-own-membership */ }\n\tif (0)|' "$_file";;
 
     ldwv-refusal-uncounted)
         # `club->ldwv_build_refused++;` occurs TWICE in this file (the

@@ -160,42 +160,6 @@ static uint8_t dq_wireop(uint32_t post_op)
 	return 0u;
 }
 
-/*
- * THE NEW-SHAPE GATE (memory ovmx-never-crashes-a-peer; header §"WHAT IS
- * GROUNDED").
- *
- * GROUNDED IS NOT CLEARED. op 0x03 is a shape this tree has read off a real
- * cluster's wire and has never yet WATCHED a real peer accept from OVMX, so it
- * is addressed only where every member is proven to run this implementation --
- * a fact the connection manager holds (vms_ldwv_all_ovmx) and this object only
- * asks for. An ABSENT op reads CLOSED: "nobody told us" and "every member is
- * ours" are different facts and only one may put a new shape on a wire.
- *
- * ... OR where this node is the SOLE LOCK-DIRECTORY NODE (`mixed_dlm_ok`, rd
- * vms-025/db2a). In that configuration this arm addresses op-0x01 requests at
- * the real VMS master its own directory named, and a lock taken there must be
- * releasable: withholding the release would mean an OVMX $ENQ that can acquire
- * a cluster-wide lock and never give it back, which is worse for a real VAX
- * than the frame is. Every field of it is still an executive read and the
- * grounded field map is unchanged; what differs from op-0x05 is that this shape
- * has no observed-but-unpinned span to fill with a zero.
- *
- * RULE C is the OTHER half and it is deliberately not here: the connection
- * manager refuses per DESTINATION on `csb->peer_is_ours` inside ops->send.
- */
-static int dq_new_shape_ok(const struct dlm_req_fsm *f)
-{
-	if (f->ops == (const struct dlm_req_ops *)0)
-		return 0;
-	if (f->ops->all_ovmx != (int (*)(void *))0 &&
-	    f->ops->all_ovmx(f->ops->ctx) != 0)
-		return 1;
-	if (f->ops->mixed_dlm_ok != (int (*)(void *))0 &&
-	    f->ops->mixed_dlm_ok(f->ops->ctx) != 0)
-		return 1;
-	return 0;
-}
-
 /* Hand the built body to the connection manager. The codec wrote FRAME-absolute
  * offsets into txframe; a SYSAP is handed a body, so the body is the span from
  * VMS_OFF_SYSAP_BODY on (header §7, the splice). */
@@ -270,11 +234,21 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 
 	dq_bzero(&req, (uint32_t)sizeof(req));
 	req.mode            = (uint8_t)p->lkmode;
-	req.req_pid_or_lkid = p->req_lkid;      /* our own executive handle */
+	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
 	req.dir_hash        = p->dir_hash;
 	req.dir_hash_valid  = p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);
+	/*
+	 * The identity that qualifies the name, body[44:46] + body[46] (rd
+	 * vms-b5b0). Every resource block carries one -- it is part of the key the
+	 * block was created under -- so the post always holds it and the builder is
+	 * told so. It is the SAME identity the hash above is of; a frame where the
+	 * two disagreed would address a resource nobody has.
+	 */
+	req.res_group       = p->res_group;
+	req.res_acmode      = p->res_acmode;
+	req.res_ident_valid = 1u;
 
 	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
 	if (vms_dlm_enq_request_build(&req, wireop, f->txframe,
@@ -363,15 +337,6 @@ static enum dlm_req_status dq_may_transmit(struct dlm_req_fsm *f, uint8_t wireop
 		return DLM_REQ_E_INVAL;
 	if (wireop == 0u) {
 		f->posts_no_wireop++;
-		return DLM_REQ_E_NOWIREOP;
-	}
-	if (wireop == (uint8_t)VMS_DLM_WIREOP_DEQ && !dq_new_shape_ok(f)) {
-		/* The all-OVMX gate is closed: a shape no real peer has been
-		 * watched to take may not be addressed at a mixed cluster. */
-		dq_log(f, "%CNXMAN, cross-node lock release not sent: the "
-			  "cluster is not all-OVMX and op-03 is not cleared "
-			  "for a system that has not proved it runs this "
-			  "implementation");
 		return DLM_REQ_E_NOWIREOP;
 	}
 	if (dst == 0u) {
@@ -731,9 +696,17 @@ static void h_grant(struct dlm_req_fsm *f, struct dq_ev *e)
 
 	dq_bzero(&g, (uint32_t)sizeof(g));
 	g.req_lkid     = r->req_lkid;          /* OUR key, not the frame's    */
-	g.master_lkid  = e->rsp->master_lkid;  /* codec body[24:28]           */
+	g.master_lkid  = e->rsp->master_lkid;  /* codec body[20:24]           */
 	g.master_csid  = e->from_csid;         /* the frame's SCA source      */
-	g.granted_mode = e->rsp->granted_mode; /* codec body[30]              */
+	/*
+	 * THE GRANTED MODE IS NOT ON THE WIRE (rd vms-b5b0): 38 of 38 real
+	 * grants clear body[30]. A grant means "the mode you asked for", and
+	 * only the requester's own LKB holds that -- so this is passed through
+	 * as "absent" and the ENGINE grants from the lock. The field is filled
+	 * only for the one shape that does carry a mode.
+	 */
+	g.granted_mode = e->rsp->granted_mode;
+	g.granted_mode_present = e->rsp->granted_mode_present;
 	/*
 	 * THE LVB READ CROSSING (vms-727). When the grant reply carried the
 	 * master's value block (the codec recognised the grounded
@@ -787,6 +760,7 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 	g.master_lkid  = e->rsp->master_lkid;
 	g.master_csid  = e->from_csid;
 	g.granted_mode = e->rsp->granted_mode;
+	g.granted_mode_present = e->rsp->granted_mode_present;
 
 	f->grants_duplicate++;
 	if (f->ops->grant_recv(f->ops->ctx, &g) != 0) {
@@ -1358,40 +1332,11 @@ uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid)
  * hash at all.
  * ========================================================================== */
 
-/* The root name a cat-0x02 frame carries, if it carries one. Requests and the
- * DENY reply shape echo it; a GRANT does not (spec §4(f).1). */
-static int dq_frame_name(const uint8_t *frame, uint32_t len,
-			 const struct vms_frame_info *fi, char *out)
-{
-	struct vms_dlm_enq_request req;
-	struct vms_dlm_enq_response rsp;
-	struct vms_dlm_rebuild_record rec;
-	uint8_t opcode = 0u;
 
-	if (vms_dlm_enq_request_parse(frame, len, fi, &opcode, &req) ==
-	    VMS_CODEC_OK) {
-		if (req.name_len == 0u)
-			return -1;
-		dq_name_to_cstr(req.name, req.name_len, out);
-		return 0;
-	}
-	if (vms_dlm_rebuild_parse(frame, len, fi, &rec) == VMS_CODEC_OK) {
-		if (rec.name_len == 0u)
-			return -1;
-		dq_name_to_cstr(rec.name, rec.name_len, out);
-		return 0;
-	}
-	if (vms_dlm_enq_response_parse(frame, len, fi, &rsp) == VMS_CODEC_OK) {
-		if (rsp.name_len == 0u)
-			return -1;   /* a GRANT echoes no name */
-		dq_name_to_cstr(rsp.name, rsp.name_len, out);
-		return 0;
-	}
-	return -1;
-}
-
-/* The body twin of dq_frame_name (rd vms-1ee): the same three shapes, read out
- * of the 132 bytes SCS delivers instead of a captured frame. */
+/* The root name a cat-0x02 BODY carries, if it carries one (rd vms-1ee): a
+ * request and the DENY reply shape echo it, a GRANT does not (spec §4(f).1).
+ * The frame-taking entry reaches this through the body splice, so there is one
+ * reader of a name, not two. */
 static int dq_body_name(const uint8_t *body, uint32_t len, char *out)
 {
 	struct vms_dlm_enq_request req;
@@ -1437,19 +1382,31 @@ uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
 				  uint32_t len)
 {
 	char name[VMS_DLM_NAME_MAX + 1u];
+	struct vms_dlm_res_ident id;
 	uint32_t hash = 0u;
 
 	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
 		return 0u;
 	if (f->ops == (const struct dlm_req_ops *)0 ||
-	    f->ops->learn_dir_hash == (int (*)(void *, const char *,
-					       uint32_t))0)
+	    f->ops->learn_dir_hash == (int (*)(void *, const char *, uint16_t,
+					       uint8_t, uint32_t))0)
 		return 0u;
 	if (vms_dlm_dir_hash_parse_body(body, len, &hash) != VMS_CODEC_OK)
 		return 0u;
+	/*
+	 * A hash belongs to an IDENTITY, not to a name (rd vms-b5b0): the
+	 * function is computed over the group word and the access mode as well,
+	 * and two domains of one name have two different values. The identity
+	 * comes off the SAME frame the value did, through the codec -- the
+	 * directory-role parse, which refuses any frame that is not a trusted
+	 * name carrier.
+	 */
+	if (vms_dlm_res_ident_parse_body(body, len, &id) != VMS_CODEC_OK)
+		return 0u;
 	if (dq_body_name(body, len, name) != 0)
 		return 0u;
-	if (f->ops->learn_dir_hash(f->ops->ctx, name, hash) != 0)
+	if (f->ops->learn_dir_hash(f->ops->ctx, name, id.group, id.mode,
+				   hash) != 0)
 		return 0u;
 	f->hashes_learned++;
 	return 1u;
@@ -1468,6 +1425,48 @@ enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
 		return DLM_REQ_E_INVAL;
 	if (!dq_ops_ok(f))
 		return DLM_REQ_E_INVAL;
+
+	/*
+	 * THE DIRECTORY'S ANSWER COMES FIRST (rd vms-b5b0). Since an OVMX $ENQ
+	 * can be addressed at a real VAX's DIRECTORY node, the answer to it
+	 * arrives here -- and the grant/deny discriminator would read a 0xf9
+	 * "nobody masters it, YOU do" as a DENY (the mode byte is untouched and
+	 * the name IS echoed), failing an $ENQ that the cluster had just made
+	 * this node the master of. The directory parse is tried first, is
+	 * refused for every other shape (VMS_CODEC_E_CLASS), and its outcome is
+	 * dispatched through the SAME two entry points the model already has.
+	 */
+	{
+		struct vms_dlm_dir_answer ans;
+
+		if (vms_dlm_dir_answer_parse_body(body, len, &ans) ==
+		    VMS_CODEC_OK) {
+			/*
+			 * ...AND ONLY IF WE ASKED A DIRECTORY. No body field
+			 * tells a directory answer from a DENY (the answer
+			 * rewrites the mode byte too, and body[34] is not
+			 * cited in the deny grounding), so the deciding fact
+			 * is this arm's OWN record of where it addressed the
+			 * request -- `to_directory`, set at post time from the
+			 * engine's own routing decision. An answer to a
+			 * request we sent to a MASTER falls through to the
+			 * grant/deny discriminator, exactly as before.
+			 */
+			struct dlm_req *dr = dq_find(f, correlated_lkid !=
+						     VMS_DLM_LKID_UNSET ?
+						     correlated_lkid :
+						     ans.req_lkid);
+
+			if (dr != (struct dlm_req *)0 && dr->to_directory) {
+				(void)dlm_req_fsm_observe_body(f, body, len);
+				if (ans.status == VMS_DLM_DIR_YOU_MASTER)
+					return dlm_req_fsm_assume_mastery(f,
+							ans.req_lkid);
+				return dlm_req_fsm_redirect(f, ans.req_lkid,
+						(vms_csid_t)ans.master_csid);
+			}
+		}
+	}
 
 	if (vms_dlm_enq_response_parse_body(body, len, &rsp) != VMS_CODEC_OK) {
 		f->replies_unparsed++;
@@ -1538,27 +1537,22 @@ uint32_t dlm_req_fsm_observe(struct dlm_req_fsm *f, const uint8_t *frame,
 			     uint32_t len)
 {
 	struct vms_frame_info fi;
-	char name[VMS_DLM_NAME_MAX + 1u];
-	uint32_t hash = 0u;
 
 	if (f == (struct dlm_req_fsm *)0 || frame == (const uint8_t *)0)
 		return 0u;
-	if (f->ops == (const struct dlm_req_ops *)0 ||
-	    f->ops->learn_dir_hash == (int (*)(void *, const char *,
-					       uint32_t))0)
-		return 0u;
 	if (vms_frame_classify(frame, len, &fi) != VMS_CODEC_OK)
 		return 0u;
-	if (vms_dlm_dir_hash_parse(frame, len, &fi, &hash) != VMS_CODEC_OK)
+	if (fi.cls != (uint8_t)VMS_FCLS_SCS_MSG)
 		return 0u;
-	if (dq_frame_name(frame, len, &fi, name) != 0)
+	if (len < VMS_OFF_SYSAP_BODY + DLM_REQ_BODY_LEN)
 		return 0u;
-
-	if (f->ops->learn_dir_hash(f->ops->ctx, name, hash) != 0)
-		return 0u;   /* refused (a conflicting value) -- the engine
-			      * counts it; the first value stands */
-	f->hashes_learned++;
-	return 1u;
+	/* One learner, one place (rd vms-b5b0): the frame-taking entry splices
+	 * out the body at the codec's own published body origin -- the same
+	 * splice dq_emit() makes in the other direction -- and the body-taking
+	 * entry does the work, so the identity a learned value is filed under
+	 * cannot differ between the two entries. */
+	return dlm_req_fsm_observe_body(f, frame + VMS_OFF_SYSAP_BODY,
+					len - VMS_OFF_SYSAP_BODY);
 }
 
 /* ==========================================================================

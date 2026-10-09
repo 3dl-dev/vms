@@ -98,25 +98,32 @@
  *   frame's body[46] holds uninitialised bytes that differ between two
  *   specimens in one capture, which is the proof it is not a field).
  *
- *   GROUNDED IS NOT CLEARED, so the emission is gated TWICE and neither gate
- *   is this object's to relax (memory ovmx-never-crashes-a-peer):
+ *   WHICH MEMBERS IT MAY BE ADDRESSED AT (rd vms-b5b0). The op-0x03 shape used
+ *   to be gated TWICE from here -- an ALL-OVMX gate (`ops->all_ovmx`) plus a
+ *   sole-directory escape hatch (`ops->mixed_dlm_ok`) -- because it was a shape
+ *   OVMX had read off a real cluster's wire and never been watched emitting at
+ *   one. Both ops are GONE, and the question is answered in ONE place instead:
+ *   the CODEC says which REQUEST shapes are fit to face a member this executive
+ *   cannot prove runs this implementation (vms_dlm_shape_fit_for_any_member --
+ *   op-0x01, 0x07, 0x06 and 0x03, each grounded on real VAX<->VAX traffic with
+ *   no span OVMX would have to invent a value for), and the CONNECTION MANAGER
+ *   applies it PER DESTINATION under `ops->send` together with
+ *   `csb->peer_is_ours`. A release had to become emittable at a real master:
+ *   once an OVMX $ENQ can take a lock there (which rd vms-b5b0's routing is),
+ *   withholding the release would mean taking a cluster-wide lock and never
+ *   giving it back -- worse for the VAX than the frame is.
  *
- *     1. THE ALL-OVMX GATE, `ops->all_ovmx` -- every member of this cluster
- *        proven to run this implementation. A frame shape no real VAX has yet
- *        been WATCHED to accept may not be addressed at one. An ABSENT op
- *        reads CLOSED: "nobody told us" and "every member is ours" are
- *        different facts, and only one of them may put a new shape on a wire.
- *     2. RULE C, per destination, in the CONNECTION MANAGER under `ops->send`
- *        (`csb->peer_is_ours`). Two gates, two layers, neither a substitute
- *        for the other -- a gate that is only upstream is a gate one new call
- *        site bypasses.
+ *   What is STILL gated here and in the arm: the op-0x05 blocking AST (its
+ *   body[30:32] is observed-and-not-pinned, so the arm keeps its own all-OVMX
+ *   read, `dlm_arm_all_ovmx`) and the origination of an uncorrelated deferred
+ *   grant. Neither is in the codec's fit list, so BOTH gates refuse them --
+ *   two layers, neither a substitute for the other.
  *
- *   A release that either gate (or a missing route, or a lock id the codec
- *   refuses) stops is COUNTED in `releases_no_wire_op` and NOTHING is sent;
- *   one that goes out is counted in `releases_sent`. That closes the open half
- *   of integration note E6 -- rundown already COLLECTED the release and posted
- *   it from a blockable context (lock_sweep_run); this is the transmission --
- *   for an all-OVMX cluster, and leaves it honestly counted everywhere else.
+ *   A release that a missing route, or a lock id the codec refuses, or RULE C
+ *   stops is COUNTED in `releases_no_wire_op` and NOTHING is sent; one that
+ *   goes out is counted in `releases_sent`. That closes the open half of
+ *   integration note E6 -- rundown already COLLECTED the release and posted it
+ *   from a blockable context (lock_sweep_run); this is the transmission.
  *
  *   THE RECEIVE HALF IS A SEPARATE RUNG AND IS NOT CLAIMED HERE. OVMX's master
  *   arm (vms_dlm_scs.c) serves op 0x01/0x07/0x0d and DECLINES an inbound
@@ -303,37 +310,15 @@ struct dlm_req_ops {
 	uint32_t (*dir_generation)(void *ctx);
 
 	/*
-	 * IS EVERY MEMBER OF THIS CLUSTER PROVEN TO RUN THIS IMPLEMENTATION?
-	 * Production: vms_ldwv_all_ovmx() over the connection manager's own
-	 * vector -- the SAME one fact the engine's `dir_groundable` reads, so a
-	 * VAX joining closes both and a VAX leaving reopens both with no code
-	 * path to go stale.
-	 *
-	 * It gates the frame shapes this arm has grounded but never yet watched
-	 * a real peer take (today: the op-0x03 release). Non-zero means open.
-	 * A NULL op is CLOSED -- see §"WHAT IS GROUNDED" for why an absent
-	 * answer may not be read as a permissive one.
+	 * THE TWO MEMBERSHIP GATES THAT RETIRED HERE (rd vms-b5b0): `all_ovmx`
+	 * (vms_ldwv_all_ovmx -- "is every member proven to run this
+	 * implementation?") and `mixed_dlm_ok` (vms_ldwv_sole_directory -- the
+	 * interim mixed-cluster configuration). They gated ONE shape, the
+	 * op-0x03 release, and the question they were asking is now asked of the
+	 * codec per SHAPE and applied by the connection manager per DESTINATION
+	 * (see §"WHAT IS GROUNDED" above). The arm keeps its OWN all-OVMX read
+	 * for the op-0x05 blocking AST, which is not in the codec's fit list.
 	 */
-	int (*all_ovmx)(void *ctx);
-
-	/*
-	 * IS THIS NODE THE SOLE LOCK-DIRECTORY NODE of this cluster? (rd vms-025 /
-	 * vms-db2a -- the mixed-cluster INTERIM CONFIGURATION.) Production:
-	 * vms_ldwv_sole_directory() over the same vector, so it too is derived on
-	 * every read and cannot go stale.
-	 *
-	 * It opens the SECOND door to the shapes `all_ovmx` guards, for the ONE
-	 * configuration in which this node's own lock directory is authoritative
-	 * for every root name and an OVMX $ENQ can therefore be routed at the
-	 * real VMS master the directory names. The op-0x03 release is the shape
-	 * it matters for: a lock this node holds AT that master has to be
-	 * releasable, or the evacuation can take a lock and never give it back.
-	 *
-	 * It does NOT open the op-0x05 blocking AST (whose body[30:32] is
-	 * observed-and-not-pinned) nor the origination of a deferred grant: see
-	 * vms_dlm_scs.c's gate note. A NULL op is CLOSED, for the same reason.
-	 */
-	int (*mixed_dlm_ok)(void *ctx);
 
 	/* --- the engine ACTIONS (vms_dlm_proxy.h) --- */
 
@@ -349,9 +334,12 @@ struct dlm_req_ops {
 	 * user-mode AST. Non-zero means nothing was delivered (no proxy, no
 	 * routine, no owner) -- honest, never faked. */
 	int (*blkast_deliver)(void *ctx, uint32_t req_lkid);
-	/* Learn a root name's directory hash from a frame that carried it
-	 * (Davis p. 6-50) -- production: vms_lock_dlm_learn_dir_hash. */
-	int (*learn_dir_hash)(void *ctx, const char *resnam, uint32_t dir_hash);
+	/* Learn a root resource's directory hash from a frame that carried it
+	 * (Davis p. 6-50) -- production: vms_lock_dlm_learn_dir_hash. The
+	 * `group`/`mode` come off the SAME frame: a hash is a value of the whole
+	 * identity, not of the name (rd vms-b5b0). */
+	int (*learn_dir_hash)(void *ctx, const char *resnam, uint16_t group,
+			      uint8_t mode, uint32_t dir_hash);
 	/* No answer is coming: end the proxy's wait with a real status. */
 	void (*fail)(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why);
 
@@ -564,12 +552,11 @@ enum dlm_req_status dlm_req_fsm_reply(struct dlm_req_fsm *f,
 
 /*
  * OUTCOME 2 (Davis p. 6-31): the directory node answered "the master is
- * `master_csid`". NO GROUNDED cat-0x02 SHAPE CARRIES THIS TODAY -- §4(f).1
- * grounds the grant and deny shapes and nothing else -- so this is an explicit
- * entry point rather than something dlm_req_fsm_reply() infers. FC-P4.8's
- * classifier may raise it only from a genuinely sourced CSID (a frame's own SCA
- * source address is the one grounded candidate), and FC-P5.2's capture is what
- * grounds a reply shape if there is one.
+ * `master_csid`". THE SHAPE IS NOW GROUNDED AND PARSED (rd vms-b5b0): the
+ * answer is the request echoed with body[34] = 0xf8 and the master's CSID at
+ * body[28:32] -- 36 of 36 real redirects in the rd vms-8219 capture -- and
+ * dlm_req_fsm_reply_body() tries that parse FIRST and calls this. The entry
+ * point remains for a caller that already holds the two values.
  *
  * The FSM records the master IN THE LOCK DATABASE and then REFILLS, so the
  * retry's destination is an executive read.
@@ -579,8 +566,9 @@ enum dlm_req_status dlm_req_fsm_redirect(struct dlm_req_fsm *f,
 					 vms_csid_t master_csid);
 
 /*
- * OUTCOME 3: "there is no master -- YOU master it". Same grounding note as
- * above. The FSM asks the engine to promote the proxy onto res->waiting and run
+ * OUTCOME 3: "there is no master -- YOU master it" (body[34] = 0xf9, 4960 of
+ * 4960 real pairs). Same grounding note as above, and the same live receive
+ * path. The FSM asks the engine to promote the proxy onto res->waiting and run
  * the local granting algorithm, so the requester's $ENQW completes from a real
  * local grant. It sends nothing: there is nobody to send to.
  */

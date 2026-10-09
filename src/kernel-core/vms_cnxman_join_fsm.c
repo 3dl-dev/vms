@@ -38,6 +38,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_barrier_fsm.h"
+#include "vms_cnxman_phase2.h"   /* the promotion re-runs its tasks (rd vms-b5b0) */
 #include "vms_cnxman_join_fsm.h"
 #include "vms_cnxman_diag.h"
 #include "vms_cnxman_quorum.h"
@@ -3149,6 +3150,22 @@ static enum cnxman_join_rx join_h_transition_done(struct cnxman_join *j,
 
 	join_goto(j, CNXMAN_JOIN_MEMBER);
 	join_log(j, "%CNXMAN, this node is now a VAXcluster member");
+	/*
+	 * ...AND THE EXECUTIVE RECORDS IT WHERE EVERY OTHER READER LOOKS (rd
+	 * vms-b5b0 follow-on, ev7/int-7). This promotion used to set only this
+	 * FSM's own state, which was enough while the nodemap could express
+	 * this node's CSV slot -- Phase 2 had then already set the local CSB's
+	 * flags from the bit. From the ninth rejoin on it cannot (slots 8 and
+	 * 10 were both measured against an eight-slot grounded byte), and the
+	 * consequence was a node that said "this node is now a VAXcluster
+	 * member" on the console while its own CSB said otherwise: its weight
+	 * vector gave it no directory entry (a split, with both VAXes sending
+	 * lookups here) and cl->state never reached MEMBER.
+	 *
+	 * Phase 2 remains the owner of all four of its tasks; this hands it the
+	 * fact it was missing. Idempotent when the map did name us.
+	 */
+	cnxman_phase2_local_committed(j->cl, j->ops);
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 

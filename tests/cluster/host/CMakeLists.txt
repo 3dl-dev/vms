@@ -214,6 +214,15 @@ add_library(cluster_host_cnxman STATIC
     # rd vms-8219: the lock directory's ENTRIES, the vector's companion. Pure
     # on the same terms (no seam, no allocation, no clock).
     ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_dir.c         # rd vms-8219
+    # rd vms-b5b0: the ECHO GUARD -- "this node will not answer the same
+    # request from the same system the same way without end". Pure on the same
+    # terms (no seam, no allocation, no clock), which is what lets the REAL
+    # 65,000-frame storm drive it in a host test.
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_echo_guard.c  # rd vms-b5b0
+    # rd vms-f87: THE REQUESTS THIS MASTER OWES AN ANSWER -- kept so the
+    # deferred grant can be the requester's OWN frame echoed back. Pure on the
+    # same terms (no seam, no allocation, no clock).
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_pending.c     # rd vms-f87
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
@@ -278,6 +287,14 @@ cluster_host_cnxman_test(test_dlm_ldwv test_dlm_ldwv.c)
 # identity a lookup/removal/registration carries, and the 0xf9/0xf8 answer),
 # against REAL frames from a private V7.3 cluster whose directory node was VAX1.
 cluster_host_cnxman_test(test_dlm_dir test_dlm_dir.c)
+
+# rd vms-b5b0: the ECHO GUARD, driven by the REAL 65,356-frame request storm
+# (the two captured frames ride as fixtures, so the test runs on the bytes that
+# caused it and not on a retelling of them).
+cluster_host_cnxman_test(test_dlm_echo_guard test_dlm_echo_guard.c)
+
+# rd vms-f87: the unanswered-request table the deferred grant is built from.
+cluster_host_cnxman_test(test_dlm_pending test_dlm_pending.c)
 
 # rd vms-1ee: the DLM's WIRE ARM (vms_dlm_scs.c). The arm itself is not
 # host-linkable (exec_kbackend.h + the fork API, test_cnxman_glue.c's own
@@ -742,6 +759,8 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_dlm_scs.c
     hdr_alone_vms_dlm_ldwv.c          # FC-P4.3
     hdr_alone_vms_dlm_dir.c           # rd vms-8219
+    hdr_alone_vms_dlm_echo_guard.c    # rd vms-b5b0
+    hdr_alone_vms_dlm_pending.c       # rd vms-f87
     hdr_alone_vms_dlm_hash.c          # rd vms-66fe
     hdr_alone_vms_cnxman_csb.c        # FC-P3.6
     hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
@@ -812,6 +831,14 @@ find_package(Threads REQUIRED)
 
 add_library(cluster_host_lock STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_lock.c
+    # rd vms-f87: the host backend's interrupt seam (one shared object, see
+    # exec_kbackend_host.h) -- what makes an INTERRUPTED wait testable here.
+    exec_kbackend_host.c
+    # rd vms-b5b0: the engine computes a resource's directory hash for an
+    # identity no frame has named yet (vms_lock.c dir_resolve ->
+    # vms_dlm_name_hash_proven). Pure arithmetic, no seam, no kernel header --
+    # so it links into the host lock build on exactly the engine's own terms.
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_hash.c
 )
 target_include_directories(cluster_host_lock PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim

@@ -430,20 +430,26 @@ struct vms_dlm_scs_view {
 	 * delivery proc to own one). `blkasts_unparsed` is the codec's own
 	 * refusal, including the zero-lock-id one.
 	 *
-	 * `deferred_grants_owed` is deliberately NOT a success: a release that
-	 * flips a queued cross-node waiter to granted leaves this master owing
-	 * that waiter a GRANT it has no grounded way to originate (an
-	 * uncorrelated cat-0x82 reply is what a real VAX rejects). The waiter's
-	 * own retransmit finds the lock granted; this counter is what makes the
-	 * owed grant visible instead of silent.
+	 * `deferred_grants_sent` is the grant this master ORIGINATED when a
+	 * release flipped a queued cross-node waiter to granted (rd vms-f87):
+	 * the requester's own queued frame, echoed back with the handle this
+	 * engine assigned. `deferred_grants_owed` is what is left of the old
+	 * honest silence -- a real flip whose request frame this master no
+	 * longer holds (the pending table overflowed, or it has been restarted
+	 * since), where the lock IS granted in this executive's database and
+	 * the requester's next ask is answered from it. Still deliberately NOT
+	 * a success: a grant composed out of fields to fill that gap is what rd
+	 * vms-b5b0's 65,000-frame storm was.
 	 */
 	uint32_t releases_received;     /* op-0x03 $DEQs that really released    */
 	uint32_t valblk_writes_received;/* op-0x06 CONVERTs that really wrote a  */
 					 /* master resource's value block (727)  */
 	uint32_t releases_refused;      /* ...and the ones naming no lock of ours*/
 	uint32_t blkasts_unparsed;      /* op-0x04 bodies the codec refused      */
-	uint32_t deferred_grants_owed;  /* a real flip this master cannot yet    */
-					 /* announce (RULE A)                    */
+	uint32_t deferred_grants_owed;  /* a real flip whose request frame is no */
+					 /* longer held: nothing sent, counted   */
+	uint32_t deferred_grants_sent;  /* ...and the ones really ORIGINATED     */
+					 /* (rd vms-f87)                         */
 	uint32_t queued_no_reply;       /* inbound requests genuinely QUEUED at  */
 					 /* this master -- the state that owes a  */
 					 /* BLKAST                                */
@@ -499,7 +505,11 @@ struct vms_dlm_scs_view {
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 140,
+/* 144 since rd vms-f87 added deferred_grants_sent: a fixed-width ABI struct
+ * whose size is PINNED, so a field added here fails to build until both
+ * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
+ * and this number are updated together. */
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 144,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

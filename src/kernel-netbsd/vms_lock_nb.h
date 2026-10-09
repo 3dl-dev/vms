@@ -229,7 +229,16 @@ struct vms_dlm_xnode_args {
 	uint64_t blkastadr;
 	uint64_t blkastprm;
 	uint32_t blkast_delivered;
-	uint32_t pad_blkast;
+	/* The rest of the resource's identity -- UIC group (0 for a LCK$M_SYSTEM
+	 * name) and access mode, the two values that qualify a VMS resource name
+	 * and that its directory hash is computed over (rd vms-b5b0). IN on every
+	 * op that names a resource; the wire arm reads them off the received frame
+	 * and refuses a request whose identity it could not parse. Carved out of
+	 * the former pad_blkast -- same size, no ABI change. Mirror of the Linux
+	 * twin (src/kernel/vms_ioctl.h), where the full note lives. */
+	uint16_t res_group;
+	uint8_t  res_mode;
+	uint8_t  pad_res;
 };
 
 /*
@@ -611,6 +620,7 @@ struct vms_dlm_scs_view_wire {
 	uint32_t releases_refused;
 	uint32_t blkasts_unparsed;
 	uint32_t deferred_grants_owed;
+	uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
 	uint32_t queued_no_reply;
 	uint32_t unparsed;
 	uint32_t foreign_refused;
@@ -848,9 +858,9 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 140,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

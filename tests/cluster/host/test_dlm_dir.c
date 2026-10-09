@@ -383,21 +383,44 @@ static void test_name_lookup_finds_a_wire_recorded_master(void)
 
 	/* *** THE QUESTION THE ENGINE COULD NOT ASK *** -- by NAME, with no
 	 * hash, because a local $ENQ holds a name and nothing else. */
-	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, &hash,
-					 &hash_known) ==
-		 VMS_DLM_DIR_NAME_MASTER && master == VAX_CSID,
-		 "*** the name lookup names the VAX as the master -- so a local "
+	/* *** THE QUESTION THE ENGINE COULD NOT ASK *** -- by the resource's
+	 * own IDENTITY, which the engine now carries on every resource block
+	 * (rd vms-b5b0; it used to hold a name and nothing else). */
+	ct_check(vms_dlm_dir_lookup_ident(&d, &a, &master, &hash,
+					  &hash_known) ==
+		 VMS_DLM_DIR_IDENT_MASTER && master == VAX_CSID,
+		 "*** the lookup names the VAX as the master -- so a local "
 		 "$ENQ cannot master it a second time ***");
 	ct_check(hash_known == 1u && hash == 0x1234abcdu,
 		 "  and it carries the WIRE hash off the VAX's own frame -- the "
-		 "only value that may address a frame for this name");
-	ct_check_eq_u32(d.name_lookups, 1u, "the ask is counted");
+		 "value that may address a frame for this resource");
+	ct_check_eq_u32(d.own_lookups, 1u, "the ask is counted");
 
-	/* A name nothing has been said about is NOT an answer. */
-	ct_check(vms_dlm_dir_lookup_name(&d, "NOBODY", 6u, &master, NULL,
-					 NULL) == VMS_DLM_DIR_NAME_NONE,
-		 "a name no system has named here is reported as NO entry, "
-		 "never as an unmastered 0");
+	/* A resource nothing has been said about is NOT an answer. */
+	{
+		struct vms_dlm_res_ident nobody;
+
+		ident(&nobody, "NOBODY", 0u, 3u, 0x5555u);
+		ct_check(vms_dlm_dir_lookup_ident(&d, &nobody, &master, NULL,
+						  NULL) ==
+			 VMS_DLM_DIR_IDENT_NONE,
+			 "a resource no system has named here is reported as NO "
+			 "entry, never as an unmastered 0");
+	}
+
+	/* AND A DIFFERENT DOMAIN OF THE SAME NAME IS A DIFFERENT RESOURCE --
+	 * the conflation the name-keyed predecessor had to argue safe is gone
+	 * (rd vms-b5b0). */
+	{
+		struct vms_dlm_res_ident other;
+
+		ident(&other, "EVACWL", 1u, 1u, 0x9999fefeu);
+		ct_check(vms_dlm_dir_lookup_ident(&d, &other, &master, NULL,
+						  NULL) ==
+			 VMS_DLM_DIR_IDENT_NONE,
+			 "*** the same NAME in another UIC group / access mode "
+			 "is NOT this entry: no cross-domain answer ***");
+	}
 }
 
 static void test_self_claim_is_answered_as_master(void)
@@ -412,23 +435,39 @@ static void test_self_claim_is_answered_as_master(void)
 
 	/* This node mastered the name on first use and recorded the claim. It
 	 * has no wire hash for it and must not invent one. */
-	ct_check(vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID) == 0,
-		 "this node records its own mastery of a name it touched first");
+	ident(&a, "EVACWL", 0u, 3u, 0x1234abcdu);
+	ct_check(vms_dlm_dir_claim_self(&d, &a, SELF_CSID) == 0,
+		 "this node records its own mastery of a resource it touched "
+		 "first, under its FULL identity (rd vms-b5b0)");
 	ct_check_eq_u32(d.self_claims, 1u, "counted");
-	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, NULL,
-					 &hash_known) ==
-		 VMS_DLM_DIR_NAME_MASTER && master == SELF_CSID &&
-		 hash_known == 0u,
-		 "  the entry names THIS node and carries NO hash (honest "
-		 "absence, never a zero dressed as a hash)");
-	ct_check(vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID) == 0 &&
+	ct_check(vms_dlm_dir_lookup_ident(&d, &a, &master, NULL,
+					  &hash_known) ==
+		 VMS_DLM_DIR_IDENT_MASTER && master == SELF_CSID &&
+		 hash_known == 1u,
+		 "  the entry names THIS node and carries the value this "
+		 "executive holds for the resource");
+	ct_check(vms_dlm_dir_claim_self(&d, &a, SELF_CSID) == 0 &&
 		 d.self_claims == 1u, "  claiming it again changes nothing");
+	/* A claim with no value held records an HONEST ABSENCE, never a zero
+	 * dressed as a hash. */
+	{
+		struct vms_dlm_res_ident novalue;
+		uint8_t hk = 1u;
+
+		ident(&novalue, "NOVALUE", 0u, 3u, 0u);
+		ct_check(vms_dlm_dir_claim_self(&d, &novalue, SELF_CSID) == 0,
+			 "a claim for a resource this node holds no value for "
+			 "is recorded");
+		ct_check(vms_dlm_dir_lookup_ident(&d, &novalue, &master, NULL,
+						  &hk) ==
+			 VMS_DLM_DIR_IDENT_MASTER && hk == 0u,
+			 "  with hash_known 0 -- the honest absence");
+	}
 
 	/* *** THE HOLE, FROM THE OTHER SIDE *** -- a VAX now looks the name up.
 	 * Its frame carries ITS group, ITS access mode and ITS hash, none of
 	 * which this node holds; on the hash-probed table its lookup missed the
 	 * claim entirely and was answered "you master it". */
-	ident(&a, "EVACWL", 0u, 3u, 0x1234abcdu);
 	ct_check(vms_dlm_dir_lookup(&d, &a, VAX_CSID, SELF_CSID, &m) ==
 		 VMS_DLM_DIR_ANSWER_SELF && m == SELF_CSID,
 		 "*** the VAX's lookup is answered THIS NODE MASTERS IT "
@@ -437,14 +476,16 @@ static void test_self_claim_is_answered_as_master(void)
 			"  nothing was answered 'you master it'");
 	ct_check_eq_u32(d.answered_self, 1u, "  and the outcome is counted");
 
-	/* A DIFFERENT resource domain of the same name reaches the same answer:
-	 * the conflation is conservative and can only ever conclude that THIS
-	 * node is the master -- never route one system at another. */
+	/* A DIFFERENT resource domain of the same name is a DIFFERENT resource,
+	 * and is answered on its own merits -- "you master it" to the asker,
+	 * because nobody masters THAT resource (rd vms-b5b0 retired the
+	 * deliberate over-serialization the name-only claim needed). */
 	ident(&a_other_domain, "EVACWL", 1u, 1u, 0x9999fefeu);
 	ct_check(vms_dlm_dir_lookup(&d, &a_other_domain, VAX2_CSID, SELF_CSID,
-				    &m) == VMS_DLM_DIR_ANSWER_SELF,
-		 "another resource domain of that name is answered the same "
-		 "way (over-serialize, never two masters)");
+				    &m) == VMS_DLM_DIR_ANSWER_YOU &&
+		 m == VAX2_CSID,
+		 "another resource domain of that name is a different "
+		 "resource: the asker masters it");
 
 	/* With no identity of our own the outcome is unreachable rather than
 	 * guessed: a node that does not know its CSID cannot claim mastery. */
@@ -453,24 +494,30 @@ static void test_self_claim_is_answered_as_master(void)
 		 "a node that does not know its own CSID never answers SELF");
 }
 
-static void test_two_masters_for_one_name_are_refused(void)
+static void test_two_domains_of_one_name_are_two_resources(void)
 {
 	struct vms_dlm_dir d;
 	struct vms_dlm_res_ident g0, g1;
 	vms_csid_t m = 0, master = 0;
 
-	printf("-- two systems mastering one name: refused, never chosen\n");
+	printf("-- two systems mastering one NAME in two domains: two resources\n");
 	(void)vms_dlm_dir_init(&d, g_store, 64u);
 	ident(&g0, "QMAN$", 0u, 3u, 0x11110000u);
 	ident(&g1, "QMAN$", 1u, 3u, 0x22220000u);
 	(void)vms_dlm_dir_lookup(&d, &g0, VAX_CSID, SELF_CSID, &m);
 	(void)vms_dlm_dir_lookup(&d, &g1, VAX2_CSID, SELF_CSID, &m);
 
-	ct_check(vms_dlm_dir_lookup_name(&d, "QMAN$", 5u, &master, NULL,
-					 NULL) == VMS_DLM_DIR_NAME_AMBIGUOUS,
-		 "*** a local $ENQ on that name is REFUSED, not routed at one "
-		 "of them on a coin toss ***");
-	ct_check_eq_u32(d.name_ambiguous, 1u, "counted");
+	/* Each domain's own lookup names ITS OWN master -- which is the point
+	 * of keying on the identity: the predecessor matched by name alone,
+	 * could not tell these two apart, and had to refuse an AMBIGUOUS answer
+	 * rather than route a lock request on a coin toss (rd vms-b5b0). */
+	ct_check(vms_dlm_dir_lookup_ident(&d, &g0, &master, NULL, NULL) ==
+		 VMS_DLM_DIR_IDENT_MASTER && master == VAX_CSID,
+		 "*** group 0's QMAN$ names VAX1 ***");
+	ct_check(vms_dlm_dir_lookup_ident(&d, &g1, &master, NULL, NULL) ==
+		 VMS_DLM_DIR_IDENT_MASTER && master == VAX2_CSID,
+		 "*** and group 1's QMAN$ names VAX2 -- two resources, two "
+		 "masters, no coin toss ***");
 }
 
 static int keep_nothing(void *ctx, uint32_t hash, int hash_known)
@@ -481,41 +528,42 @@ static int keep_nothing(void *ctx, uint32_t hash, int hash_known)
 	return 0;
 }
 
-static int keep_sole_directory(void *ctx, uint32_t hash, int hash_known)
+static int keep_if_hash_known(void *ctx, uint32_t hash, int hash_known)
 {
+	(void)ctx;
 	(void)hash;
-	/* What dlm_arm_dir_is_ours does: an entry with no wire hash cannot be
-	 * judged against a vector index, so it is kept exactly while this node
-	 * is the sole directory node. */
-	return hash_known ? 1 : (*(const int *)ctx);
+	/* What dlm_arm_dir_is_ours does for an entry carrying no value: it
+	 * cannot be judged against a vector index, so it goes (rd vms-b5b0). */
+	return hash_known ? 1 : 0;
 }
 
-static void test_a_hashless_claim_survives_only_the_sole_directory(void)
+static void test_a_valueless_entry_is_dropped_by_a_transition(void)
 {
 	struct vms_dlm_dir d;
-	int sole;
+	struct vms_dlm_res_ident withvalue, novalue;
 	vms_csid_t master = 0;
 
-	printf("-- a transition: a hashless self-claim is judged on the vector\n");
+	printf("-- a transition: an entry with no value cannot be judged, so it goes\n");
 	(void)vms_dlm_dir_init(&d, g_store, 64u);
-	(void)vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID);
-	sole = 1;
-	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_sole_directory, &sole),
-			0u, "sole directory node: the claim stays");
-	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, NULL,
-					 NULL) == VMS_DLM_DIR_NAME_MASTER,
-		 "  and is still answerable");
-	sole = 0;
-	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_sole_directory, &sole),
-			1u, "no longer the sole directory node: it is dropped "
-			    "(p. 6-33), never kept on a stale vector");
-	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, NULL,
-					 NULL) == VMS_DLM_DIR_NAME_NONE,
-		 "  and the directory then says nothing about the name");
+	ident(&withvalue, "EVACWL", 0u, 3u, 0x1234abcdu);
+	ident(&novalue, "NOVALUE", 0u, 3u, 0u);
+	(void)vms_dlm_dir_claim_self(&d, &withvalue, SELF_CSID);
+	(void)vms_dlm_dir_claim_self(&d, &novalue, SELF_CSID);
+
+	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_if_hash_known, NULL),
+			1u,
+			"the entry with NO value is dropped (p. 6-33) -- it "
+			"cannot be judged against the new vector");
+	ct_check(vms_dlm_dir_lookup_ident(&d, &withvalue, &master, NULL,
+					  NULL) == VMS_DLM_DIR_IDENT_MASTER,
+		 "  and this node's own claim, which DOES carry a value, is "
+		 "judged on the vector and kept");
+	ct_check(vms_dlm_dir_lookup_ident(&d, &novalue, &master, NULL, NULL) ==
+		 VMS_DLM_DIR_IDENT_NONE,
+		 "  the dropped entry is gone");
 
 	/* And a departure takes this node's own claims with it only when the
 	 * CSID that left is this node's -- which it never is. */
-	(void)vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID);
 	ct_check_eq_u32(vms_dlm_dir_drop_master(&d, VAX_CSID), 0u,
 			"another system's departure does not drop our claim");
 	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_nothing, NULL), 1u,
@@ -585,8 +633,8 @@ int main(void)
 	test_table_full_is_refused();
 	test_name_lookup_finds_a_wire_recorded_master();
 	test_self_claim_is_answered_as_master();
-	test_two_masters_for_one_name_are_refused();
-	test_a_hashless_claim_survives_only_the_sole_directory();
+	test_two_domains_of_one_name_are_two_resources();
+	test_a_valueless_entry_is_dropped_by_a_transition();
 	test_table_model();
 	return ct_summary("test_dlm_dir");
 }

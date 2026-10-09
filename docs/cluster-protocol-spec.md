@@ -765,10 +765,11 @@ them.
 |---|---|---|---|---|
 | 8 | 80 | 1 | **message category** — `0x02` DLM request, `0x82` response (bit `0x80`) | §4j; reconfirmed on every ac4 frame |
 | 9 | 81 | 1 | **DLM opcode** — **`0x01` = new-lock ENQ request**, **`0x07` = lock CONVERT** | **GROUNDED**: the `0x01`/`0x81` pair carries every fresh `$ENQ`; the convert driver's mode-change step is the only `0x07` frame in `ac4-CVT.pcap` (SCA f13, VAX1→VAX2), paired with a `0x87` reply. *(This grounds the `cat 0x02 op 0x01` request `vms-2d6` flagged as "a DLM request we have never grounded".)* |
-| 20 | 92 | 4 | **requester lock-id / PID** (LE u32) — in an **ENQ request** it holds the requesting **process PID**; in the **grant response** it is the requester's assigned **local lock-id** | **GROUNDED byte-exact vs SDA** in two captures: the `0x81` grant carries the value SDA `SHOW LOCKS` reports as the requester's *process copy* — `ac4-LKID2` → `0x310000AB`, `ac4-MPW` → `0x0D000380`. In the fresh `0x01` request it instead reads the PID form `0x2020021x` (constant `0x2020021c` across all six console-issued captures = the interactive SYSTEM process; a different value under a SPAWNed subprocess). A CONVERT `0x07` request — where the lock already exists — already carries the real local lock-id here (`ac4-CVT` `0x5000038A`). |
-| 24 | 96 | 4 | **master lock-id** (LE u32) — the lock's id on the resource-master node | **GROUNDED byte-exact vs SDA** (the *master copy* id): `ac4-LKID2` → `0x520006AF`, `ac4-MPW` → `0x4A0006AC`, `ac4-CVT` → `0x120004B9`. Present in **both** the request and the response of an established lock (the request references the master's RSB). |
+| 20 | 92 | 4 | **master lock-id** (LE u32) — the lock's id **on the master's node**. A fresh ENQ has none and carries a **PID-form placeholder** (`0x2020021x`); a CONVERT, a release and the master's own grant carry the real value | **GROUNDED, and CORRECTED (rd vms-b5b0 — this row and the next were the other way round until 2026-10-09).** The correction is byte evidence from the `vms-b5b0-storm-window` capture, which the earlier SDA-only reading could not see: (a) 36 of 36 op-0x03 releases name their lock HERE with the value the master's grant returned; (b) a requester's very first frame already carries its own handle at `body[24:28]`, before any master could have told it. An SDA `SHOW LOCKS` id is a lock id **on some node**, and which node it belongs to cannot be read off SDA alone — which is how the two slots came to be swapped. Shipping that swap cost a **65,356-frame request storm** against a real VAX V7.3 node in 63.7 s (the requester could not correlate the completion, so it re-sent at 1026/s; an operator stopped it). The reference values are unchanged: `ac4-LKID2` → `0x310000AB`, `ac4-MPW` → `0x0D000380`, `ac4-CVT` → `0x5000038A`. |
+| 24 | 96 | 4 | **requester lock-id** (LE u32) — the lock's id **on the requesting node**, its own, and the value the master **echoes back unchanged** in its grant so the requester can match the completion to its lock | **GROUNDED byte-exact** on the real request/grant pair in `vms-b5b0-storm-window.pcap` (fixtures `dlm-real-enq-request` / `dlm-real-enq-grant`): the request carries `0x090003CD` here and the grant 155 µs later returns that exact value while assigning its own `0x650006B0` at `body[20:24]`. The SDA-grounded reference values are unchanged, with their sides corrected: `ac4-LKID2` → `0x520006AF`, `ac4-MPW` → `0x4A0006AC`, `ac4-CVT` → `0x120004B9`. |
 | 30 | 102 | 1 | **requested lock mode** — `NL=0 CR=1 CW=2 PR=3 PW=4 EX=5` | **GROUNDED by a clean six-value one-variable diff** on the *same* resource `OVMXAAAA`: `ac4-MCR/MCW/MPR/MPW2/MEX` read `body[30] = 01/02/03/04/05` and the NL acquire in `ac4-CVT` reads `00`, byte-for-byte the documented encoding (VAXcluster Principles Table 6-1 p. 6-2 and the numeric map NL=0…EX=5 p. 6-3; identical to `lckdef.h` `LCK$K_*`). The CONVERT `0x07` request carries the **new** mode here (`ac4-CVT` NL→EX reads `05`). Cross-checks against the resource diff: `body[30]` is `04` in **both** `ac4-MPW2` (OVMXAAAA) and `ac4-RBBBB` (OVMXBBBB), i.e. it tracks *mode*, not resource. |
-| 46 | 118 | 1 | constant `0x03` preceding the resource name | observed constant, all ac4 request frames |
+| 44 | 116 | 2 | **UIC group** of the resource's namespace (LE u16) | **GROUNDED (rd vms-b5b0)**: `0x0001` on the group-1 `EVAC$WORKLOAD` requests in `vms-b5b0-storm-window.pcap`, `0x0000` on the system-wide XQP locks in the same capture. |
+| 46 | 118 | 1 | **access mode** of the resource's namespace — `K=0 E=1 S=2 U=3` | **GROUNDED (rd vms-b5b0), replacing "constant `0x03` preceding the resource name"**: it reads `0x03` on the user-mode ac4 requests and `0x00` on the kernel-mode XQP requests in the storm capture, so it is not a constant. |
 | 47 | 119 | 1 | **resource-name length** (bytes) | **GROUNDED by a length diff**: `0x08` for the 8-byte `OVMXAAAA`/`OVMXBBBB`, `0x0c` for the 12-byte `OVMXLONGNAME` (`ac4-LEN`), `0x16`=22 for the XQP `F11B$aSYSDSK1…` locks seen incidentally in `ac4-CVT`. |
 | 48 | 120 | *len* | **resource name** (ASCII, the `$ENQ` `resnam` string) | **GROUNDED by a resource diff**: same mode PW, `ac4-MPW2` carries `OVMXAAAA` and `ac4-RBBBB` carries `OVMXBBBB` at `body[48]` — the only bytes that change are the name itself (`41→42`), with `body[30]` (mode) unchanged. |
 
@@ -778,12 +779,27 @@ held NL) against a **NOQUEUE-denied** PW request (`ac4-DENY`, resource held EX b
 VAX2 → `$ENQ` returns `%X2124`) shows the master's reply distinguishes the two
 outcomes by *shape*, holding the PW request otherwise constant:
 
-- **granted** → the `0x81` reply **assigns** the requester's local lock-id at
-  `body[20]` (the PID placeholder is replaced by a real lock-id, SDA-confirmed)
-  and does **not** echo the resource name;
-- **denied (`SS$_NOTQUEUED`)** → the reply leaves `body[20]` as the request's PID
+- **granted** → the reply **assigns** the master's lock-id at `body[20:24]`,
+  **echoes the requester's own** at `body[24:28]`, carries **the grant record**
+  — `body[28] = 0x10` and `body[32:36] = {01 00 fa 00}`, whose `body[34] = 0xfa`
+  is the **outcome byte** every answer is read by (a directory answer carries
+  `0xf9`/`0xf8` in the same position) — returns the **master resource's value
+  block** at `body[36:52]`, **clears the mode byte** `body[30]` (a grant means
+  the mode that was asked for, which only the requester's own LKB holds), and
+  does **not** echo the identity or the resource name;
+- **denied (`SS$_NOTQUEUED`)** → the reply leaves `body[20:24]` as the request's
   placeholder, clears the mode byte `body[30]` to `0x00`, and **echoes the
   resource name** back at `body[48]`.
+
+> **The grant's fields are GROUNDED byte-for-byte (rd vms-b5b0).** 38 of 38
+> grants in `vms-b5b0-storm-window.pcap` agree on the record, the cleared mode
+> byte and the echoed requester handle, and OVMX's own builder reproduces one of
+> them on **126 of 132 body bytes** — every byte the DLM codec owns. The six it
+> does not write are `body[0:4]` (the connection manager's transaction envelope)
+> and `body[52:54]` (an SCS-layer word), both left zero rather than minted.
+> Note `body[36:52]` (the value block) **overlaps** a request's identity and
+> first name bytes: the two layouts never co-occur, and a builder that "clears
+> the name length" on a grant destroys five bytes of the block.
 
 The literal VMS status longword (`SS$_NORMAL`=1 / `SS$_NOTQUEUED`=`%X2124`) does
 **not** appear anywhere in the reply body — `SS$_NORMAL`'s `0x0001` at `body[4:6]`

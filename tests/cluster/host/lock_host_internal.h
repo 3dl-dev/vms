@@ -49,6 +49,17 @@
 #include <string.h>
 #include <errno.h>
 
+/*
+ * ERESTARTSYS is a KERNEL-INTERNAL errno: the Linux substrate has it, the
+ * NetBSD shim defines it (src/kernel-netbsd/vms_internal.h), and <errno.h> on
+ * the host does not. The host bed needs it because the facility returns it on
+ * an INTERRUPTED wait -- the path rd vms-f87's lab run found spinning a CPU --
+ * and this bed is where that path is tested.
+ */
+#ifndef ERESTARTSYS
+#define ERESTARTSYS  512
+#endif
+
 /* The container/lock/cv seam. vms_lock.c includes these itself too (all
  * header-guarded, so re-inclusion there is a no-op), but this file uses their
  * types in the struct definitions below and so needs them FIRST -- exactly
@@ -142,6 +153,10 @@ struct vms_proc {
 	exec_lock_t          lock_list_lock;
 
 	uint64_t             cur_privs;     /* SYSLCK for an LCK$M_SYSTEM $ENQ (vms-768) */
+	/* (group << 16) | member, as the real twin spells it. The lock manager
+	 * reads the GROUP half: it qualifies every resource name a $ENQ without
+	 * LCK$M_SYSTEM creates (rd vms-b5b0). */
+	uint32_t             uic;
 };
 
 /* ================================================================
@@ -190,6 +205,11 @@ struct vms_lock_entry {
 struct vms_lock_resource {
 	exec_hash_node_t          hash_node;
 	char                      name[32];
+	/* The rest of the resource's identity: UIC group (0 for a LCK$M_SYSTEM
+	 * name) and access mode -- the two values that qualify a VMS resource
+	 * name and that its directory hash is computed over (rd vms-b5b0). */
+	uint16_t                  res_group;
+	uint8_t                   res_mode;
 	exec_list_head_t          granted;
 	exec_list_head_t          waiting;
 	exec_list_head_t          proxies;        /* FC-P4.4 proxy queue */
@@ -220,6 +240,7 @@ struct vms_lock_resource {
 	 */
 	uint32_t            dir_hash;
 	uint8_t             hash_known;
+	uint8_t             hash_computed;   /* rd vms-b5b0: 0 learned, 1 computed */
 	uint8_t             dir_valid;
 	uint32_t            dir_gen;
 	uint32_t                  dir_csid;

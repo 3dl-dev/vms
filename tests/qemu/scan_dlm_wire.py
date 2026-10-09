@@ -52,7 +52,10 @@ OPNAMES = {
 }
 
 # src/kernel-core/vms_cluster_codec_dlm.h VMS_OFF_DLM_MASTER_LKID / _VALBLK.
-OFF_DLM_MASTER_LKID = 96     # body[24:28] LE u32
+# rd vms-b5b0 CORRECTED which slot is which: body[20:24] is the MASTER's handle
+# and body[24:28] the REQUESTER's (the header carries the measurement). This
+# scanner reports the MASTER's handle, so it follows the header's constant.
+OFF_DLM_MASTER_LKID = 92     # body[20:24] LE u32
 OFF_DLM_VALBLK = 108         # body[36:52], 16 bytes
 DLM_VALBLK_LEN = 16
 WIREOP_CONVERT_VALBLK = 0x06
@@ -60,12 +63,14 @@ WIREOP_CONVERT_VALBLK = 0x06
 # The LVB READ crossing (rd vms-727, #1190): a GRANT reply (cat=0x82, op=0x01)
 # carries the master's value block when the record marker is present. Same
 # VMS_OFF_DLM_MASTER_LKID / OFF_DLM_VALBLK field positions as the op-0x06
-# write above (vms_cluster_codec_dlm.h vms_dlm_enq_response_build_grant_valblk
-# writes exactly those two spans); the marker that discriminates it from a
-# PLAIN grant is its own pair of constants, read off the same header:
-#   VMS_OFF_DLM_VALBLK_FLAG (100, body[28])   == VMS_DLM_GRANT_VALBLK_FLAG_VAL (0x10)
-#   VMS_OFF_DLM_VALBLK_SERIAL (104, body[32]) == VMS_DLM_GRANT_VALBLK_REC_VAL (0x00fa0001,
-#       little-endian bytes 01 00 fa 00 -- body[34]==0xfa is the cat-0x82 reply stamp)
+# write above (vms_cluster_codec_dlm.h vms_dlm_enq_response_build_grant writes
+# exactly those two spans). rd vms-b5b0 corrected what the record MEANS: it is
+# on EVERY real grant (38 of 38), so it marks the grant rather than the value
+# block's presence -- the block rides in it either way. The constants, read off
+# the same header:
+#   VMS_OFF_DLM_GRANT_FLAG (100, body[28])   == VMS_DLM_GRANT_FLAG_VAL (0x10)
+#   VMS_OFF_DLM_GRANT_REC  (104, body[32])   == VMS_DLM_GRANT_REC_VAL (0x00fa0001,
+#       little-endian bytes 01 00 fa 00 -- body[34]==0xfa is THE OUTCOME BYTE)
 # never a byte position guessed off a hexdump -- the C parser
 # (vms_dlm_enq_response_parse_body) checks these same two fields, in this
 # same order, before it will even attempt to read a name out of the frame.

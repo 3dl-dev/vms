@@ -2,7 +2,8 @@
 /*
  * vms_dlm_ldwv.c - the Lock Directory Weight Vector (FC-P4.3).
  *
- * The contract, the page cites and the reason the hash is never computed here
+ * The contract, the page cites and the reason the hash is never computed in
+ * THIS layer (the lock engine owns that decision -- rd vms-b5b0)
  * are in vms_dlm_ldwv.h. Read it first; this file is the behaviour.
  *
  * This TU is PURE: no seam call, no allocation, no clock, no library -- so it
@@ -347,21 +348,13 @@ int vms_ldwv_all_ovmx(const struct vms_ldwv *v)
 }
 
 /*
- * THE SOLE-DIRECTORY CONFIGURATION (rd vms-025 / vms-db2a). See the header.
- *
- * It is one read of the vector this connection manager BUILT from LOCKDIRWTs it
- * LEARNED off the wire (PARAMS body[26:28], rd vms-fcb): every entry reads 0,
- * and p. 6-32 says a system's own entries are the ones that read 0 in its own
- * copy. So "every entry is mine" is exactly "every root name in this cluster is
- * directed here", which is what the configuration means and the only thing that
- * makes a directory decision possible WITHOUT the resource-name hash.
- *
- * It is NOT configured, declared or remembered anywhere: it is derived, and it
- * stops being true the instant a member with a nonzero LOCKDIRWT joins and the
- * vector is refilled at Phase 2. A vector that is not authoritative right now
- * (mid-transition, or refused) answers 0, like every other read of it.
+ * DOES THIS VECTOR DIRECT EVERYTHING AT THIS NODE? See the header for what this
+ * is and what it is not (rd vms-b5b0). One read of the vector this connection
+ * manager BUILT from LOCKDIRWTs it LEARNED: every entry 0 means every entry is
+ * ours (p. 6-32), so no value can select another system. A vector that is not
+ * authoritative right now answers 0, like every other read of it.
  */
-int vms_ldwv_sole_directory(const struct vms_ldwv *v)
+int vms_ldwv_directs_everything_here(const struct vms_ldwv *v)
 {
 	uint32_t i;
 
@@ -422,14 +415,59 @@ int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16)
  * The CLUB-facing half: CSV-index order, over real CSBs
  * ========================================================================== */
 
-/* Is this CSB a member of the committed cluster whose CSID we have LEARNED?
+/*
+ * Is this CSB a member of the committed cluster whose CSID we have LEARNED?
  * Both halves matter: an unlearned CSID has no CSV slot, so it has no place in
- * the vector, and asserting one would be an invented identity (INV-6). */
+ * the vector, and asserting one would be an invented identity (INV-6).
+ *
+ * ==========================================================================
+ * AND THIS NODE'S OWN MEMBERSHIP IS A FACT IT HOLDS DIRECTLY, which is the
+ * other half this predicate used to miss -- MEASURED, and it cost a lab run
+ * (rd vms-b5b0 follow-on, 2026-10-09 ev7).
+ *
+ * SELECTED is set by cnxman_phase2_commit() from the transition's NODEMAP, and
+ * the nodemap bit is the CSID's low 16 bits against a bitmap this executive has
+ * grounded ONE BYTE of -- eight slots (sec 4(p): the true width is
+ * undetermined, "do not assume 8 slots"). phase2_csb_in_nodemap() therefore
+ * answers UNKNOWN, correctly, for a slot it cannot express, and leaves
+ * SELECTED alone: silence is not a refusal.
+ *
+ * On its NINTH rejoin of the same VAX cluster in a day this node's CSID reached
+ * 0x00010008 -- CSV slot 8, one past the grounded byte. The cluster admitted it
+ * (`%CNXMAN, this node is now a VAXcluster member`, off a real op-0x0c
+ * transition-done), both VAXes directed their directory lookups AT it, and its
+ * own vector read:
+ *
+ *     %DLM, lock directory weight vector: 2 entries over 2 systems,
+ *           0 of them this node's
+ *
+ * A DIRECTORY SPLIT, and the node had omitted ITSELF -- the one member whose
+ * membership it does not need a bitmap to know. Every lookup the VAXes sent
+ * arrived at a node whose vector said it was not the directory.
+ *
+ * So for THE LOCAL CSB, the committed MEMBER flag counts as well: it is set by
+ * the join FSM's promotion off a genuine transition-done plus this node's own
+ * CSB (join_h_transition_done), which is a stronger and more direct read than a
+ * bitmap bit about us. Nothing is fabricated -- both flags are real executive
+ * state, and this adds no weight, no entry and no identity that was not already
+ * known.
+ *
+ * SCOPED TO THE LOCAL NODE ON PURPOSE. For a REMOTE system the selection set is
+ * what the transition said, and this node has no better source for it; widening
+ * the test there would let a stale MEMBER flag put a departed system in the
+ * vector. The asymmetry is the point: we know our own membership, we are told
+ * everyone else's.
+ * ==========================================================================
+ */
 static int ldwv_csb_counts(const struct vms_csb *csb)
 {
 	if (!csb->in_use || !csb->csid_valid)
 		return 0;
-	return (csb->flags & VMS_CSB_F_SELECTED) != 0u;
+	if ((csb->flags & VMS_CSB_F_SELECTED) != 0u)
+		return 1;
+	if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
+		return (csb->flags & VMS_CSB_F_MEMBER) != 0u;
+	return 0;
 }
 
 /* Fill `m` from a CSB. The local system is the one flagged VMS_CSB_F_LOCAL --
@@ -531,6 +569,174 @@ static enum vms_ldwv_status ldwv_fill_club(struct vms_club *club,
 	return VMS_LDWV_OK;
 }
 
+/* ==========================================================================
+ * THE LAB'S READOUT: one line per member, with the numbers (rd vms-b5b0
+ * follow-on, ev7).
+ *
+ * The injected logger takes a STRING (cnxman_ops.log), and this TU is pure --
+ * it may not reach the console seam (CI gate cluster_core_includes_gate.sh).
+ * So a line with numbers in it has to be assembled here, by hand, into a fixed
+ * stack buffer: no libc, no seam, no allocation.
+ *
+ * WHY IT IS WORTH THE CODE. The vector is the one piece of cluster state where
+ * "my copy disagrees with yours" is silent by construction -- every member's
+ * copy is supposed to be logically equivalent, and the only way to check is to
+ * read both. SDA on a VAX prints its vector; now this node prints its own in
+ * the same terms (CSID, weight, entry run, whose), so a lab comparison is a
+ * line-by-line diff instead of an inference.
+ * ========================================================================== */
+
+#define LDWV_LINE_MAX   96u
+#define LDWV_LINES_MAX  16u   /* members detailed before the tail summary */
+
+struct ldwv_line {
+	char buf[LDWV_LINE_MAX];
+	uint32_t len;
+};
+
+static void ldwv_line_init(struct ldwv_line *l)
+{
+	l->len = 0u;
+	l->buf[0] = '\0';
+}
+
+static void ldwv_puts(struct ldwv_line *l, const char *s)
+{
+	while (*s != '\0' && l->len + 1u < LDWV_LINE_MAX)
+		l->buf[l->len++] = *s++;
+	l->buf[l->len] = '\0';
+}
+
+/* An unsigned value in base 10 or 16, zero-padded to `width` (0 = none). */
+static void ldwv_putu(struct ldwv_line *l, uint32_t v, uint32_t base,
+		      uint32_t width)
+{
+	static const char digits[] = "0123456789ABCDEF";
+	char tmp[11];
+	uint32_t n = 0u;
+
+	if (base != 10u && base != 16u)
+		return;
+	do {
+		tmp[n++] = digits[v % base];
+		v /= base;
+	} while (v != 0u && n < (uint32_t)sizeof(tmp));
+	while (n < width && n < (uint32_t)sizeof(tmp))
+		tmp[n++] = '0';
+	while (n > 0u && l->len + 1u < LDWV_LINE_MAX)
+		l->buf[l->len++] = tmp[--n];
+	l->buf[l->len] = '\0';
+}
+
+/* One member's row. Every number is read from the member record the survey
+ * built out of that system's CSB -- nothing here is recomputed or assumed. */
+static void ldwv_log_member(const struct cnxman_ops *ops,
+			    const struct vms_ldwv_member *m, uint32_t entries)
+{
+	struct ldwv_line l;
+
+	ldwv_line_init(&l);
+	/* CSID in the eight hex digits SDA prints it in, so the lab's
+	 * comparison is a string match and not an arithmetic one. */
+	ldwv_puts(&l, "%CNXMAN,   csid=");
+	ldwv_putu(&l, (uint32_t)m->csid, 16u, 8u);
+	ldwv_puts(&l, " slot=");
+	ldwv_putu(&l, ldwv_csv_slot(m->csid), 10u, 0u);
+	ldwv_puts(&l, m->lockdirwt_valid ? " lockdirwt=" : " lockdirwt=?");
+	if (m->lockdirwt_valid)
+		ldwv_putu(&l, (uint32_t)m->lockdirwt, 10u, 0u);
+	ldwv_puts(&l, " entries=");
+	ldwv_putu(&l, entries, 10u, 0u);
+	ldwv_puts(&l, m->is_local ? " (this node)" : "");
+	ldwv_puts(&l, m->is_ovmx ? "" : " [not this implementation]");
+	ldwv_log(ops, l.buf);
+}
+
+/* The per-member readout, walked in the SAME order the vector was laid down
+ * in, so row k of this readout is run k of the vector. */
+static void ldwv_log_members(const struct vms_club *club,
+			     const struct ldwv_survey *s,
+			     const struct cnxman_ops *ops)
+{
+	struct vms_ldwv_member m;
+	uint32_t slot = 0u, next = 0u, shown = 0u;
+
+	if (ops == NULL || ops->log == NULL)
+		return;
+	ldwv_log(ops, "%CNXMAN, lock directory weight vector, by member "
+		      "(compare with SDA SHOW CLUSTER on a VMS member):");
+	while (ldwv_next_member(club, slot, &m, &next)) {
+		if (shown >= LDWV_LINES_MAX) {
+			ldwv_log(ops, "%CNXMAN,   (further members not "
+				      "detailed)");
+			return;
+		}
+		ldwv_log_member(ops, &m, ldwv_member_entries(&m,
+							     (int)s->all_zero));
+		shown++;
+		slot = next;
+	}
+}
+
+/*
+ * THE LOUD FINDING: a committed member whose own vector gives it NO directory
+ * entry THAT ITS OWN WEIGHT SAYS IT SHOULD HAVE (rd vms-b5b0 follow-on, ev7).
+ *
+ * Every member's copy of the vector is supposed to be logically equivalent, so
+ * if the rest of the cluster directs lookups here while our own copy gives us
+ * no entry we had every right to, the cluster has TWO answers for "who is the
+ * directory for this resource" -- a directory split, the failure that strands
+ * locks, and the one thing here this node can detect about ITSELF with no help
+ * from anybody.
+ *
+ * IT IS NOT "own entries == 0". A node at LOCKDIRWT 0 in a cluster where some
+ * other system advertised a weight holds NO directory entries, and that is
+ * CORRECT -- p. 6-32's whole point. So the test is against what this node's OWN
+ * weight entitles it to, computed by the same ldwv_member_entries() that laid
+ * the vector down: a contradiction between our weight and our vector, never a
+ * complaint about a legitimate zero.
+ *
+ * It is a watchdog, not a mechanism: ldwv_csb_counts() now counts this node's
+ * own committed membership, so a build that reaches here should never show it.
+ * If one ever does, the operator finds out from OPA0: rather than from a hung
+ * lock -- which is how ev7 was found, by eye, after the fact.
+ */
+static void ldwv_check_own_entry(struct vms_club *club,
+				 const struct ldwv_survey *s,
+				 const struct cnxman_ops *ops)
+{
+	const struct vms_csb *local = cnxman_club_local(club);
+	struct vms_ldwv_member m;
+	uint32_t i, own = 0u, due;
+
+	if (local == NULL)
+		return;
+	if ((local->flags & VMS_CSB_F_MEMBER) == 0u)
+		return;            /* not a member: no entry is correct */
+
+	ldwv_member_from_csb(local, &m);
+	due = ldwv_member_entries(&m, (int)s->all_zero);
+	if (due == 0u)
+		return;            /* our own weight asks for none */
+
+	for (i = 0u; i < club->ldwv.n; i++) {
+		if (club->ldwv.entry[i] == 0u)
+			own++;
+	}
+	if (own >= due)
+		return;
+
+	club->ldwv_own_entry_missing++;
+	/* The DIAGNOSIS FIRST: an operator reading OPA0: (and a lab grep) must
+	 * get the finding from the head of the line, not the tail. */
+	ldwv_log(ops, "%CNXMAN, DIRECTORY SPLIT: this node is a cluster member "
+		      "and its LOCKDIRWT entitles it to directory entries, but "
+		      "its own lock directory weight vector gives it none -- "
+		      "the other members are directing directory lookups at a "
+		      "node whose own vector says it is not the directory "
+		      "(member readout above)");
+}
+
 static const char *ldwv_refusal_line(enum vms_ldwv_status st)
 {
 	switch (st) {
@@ -606,6 +812,10 @@ enum vms_ldwv_status cnxman_ldwv_rebuild(struct vms_club *club,
 			      "the unadvertised reading: no system has "
 			      "advertised a LOCKDIRWT");
 	club->ldwv.valid = 1u;
+
+	/* The readout, then the watchdog that reads the vector we just built. */
+	ldwv_log_members(club, &s, ops);
+	ldwv_check_own_entry(club, &s, ops);
 	return VMS_LDWV_OK;
 }
 

@@ -57,6 +57,7 @@
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_scs_fsm.h"
 #include "vms_frame_compose.h"
+#include "vms_dlm_hash.h"
 
 /* ==========================================================================
  * The four-system cluster (the same shape scenarios/dlm_directory.c uses, so
@@ -167,6 +168,11 @@ static uint32_t g_wire_n;
 static struct dlm_req_fsm g_fsm;
 static struct vms_proc g_proc;
 
+/* The resource identity this rig's process locks in: uic 0 and access mode 0
+ * (proc_init leaves both), so (group 0, mode 0) -- rd vms-b5b0. */
+#define SIM_RES_GROUP 0u
+#define SIM_RES_MODE  0u
+
 /* who the simulated cluster says masters the resource under test */
 static vms_csid_t g_sim_master;
 /* what handle that simulated master assigns */
@@ -225,8 +231,14 @@ static int sender_addressed_the_directory(uint32_t req_lkid)
 	return r != NULL && r->to_directory != 0u;
 }
 
-static uint32_t make_grant_frame(uint8_t *frame, uint32_t req_lkid,
-				 uint32_t master_lkid, uint8_t mode)
+/*
+ * A simulated master's GRANT (rd vms-b5b0): an ECHO OF THE REQUEST it answers,
+ * which is the one shape a real master sends. `reqbody` is the body that
+ * arrived at this simulated system -- so the grant carries the requester's own
+ * handle back by construction rather than by the scenario asserting it.
+ */
+static uint32_t make_grant_frame(uint8_t *frame, const uint8_t *reqbody,
+				 uint32_t reqlen, uint32_t master_lkid)
 {
 	struct vms_cm_link link;
 	uint32_t written = 0;
@@ -234,10 +246,9 @@ static uint32_t make_grant_frame(uint8_t *frame, uint32_t req_lkid,
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
-	(void)vms_dlm_enq_response_build_grant(req_lkid, master_lkid, mode,
-					       frame, VMS_CM_FRAME_LEN,
+	(void)vms_dlm_enq_response_build_grant(reqbody, reqlen, master_lkid,
+					       NULL, frame, VMS_CM_FRAME_LEN,
 					       &written);
-	frame[VMS_OFF_DLM_CAT] = (uint8_t)(VMS_DLM_CAT_REQUEST | 0x80u);
 	return VMS_CM_FRAME_LEN;
 }
 
@@ -297,7 +308,7 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	 * to a MASTER would be asking "are you the directory for a frame nobody
 	 * sent you as a lookup", and its answer means nothing.
 	 */
-	if (sender_addressed_the_directory(req.req_pid_or_lkid)) {
+	if (sender_addressed_the_directory(req.req_lkid)) {
 		if (cnxman_dir_lookup_received(&g_sys[sys].cl.club,
 					       vms_ldwv_key(req.dir_hash),
 					       g_csid[SIM_OVMX],
@@ -310,15 +321,15 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	if (g_csid[sys] == g_sim_master) {
 		/* This system masters the tree: it GRANTS, with a handle of its
 		 * own choosing. */
-		uint32_t rlen = make_grant_frame(rframe, req.req_pid_or_lkid,
-						 g_sim_master_lkid, req.mode);
+		uint32_t rlen = make_grant_frame(rframe, body, len,
+						 g_sim_master_lkid);
 
 		(void)dlm_req_fsm_reply(&g_fsm, g_csid[sys], 0u, rframe, rlen);
 		return;
 	}
 
 	/* It is the directory but not the master: outcome 2. */
-	(void)dlm_req_fsm_redirect(&g_fsm, req.req_pid_or_lkid, g_sim_master);
+	(void)dlm_req_fsm_redirect(&g_fsm, req.req_lkid, g_sim_master);
 }
 
 static int fsm_send(void *ctx, vms_csid_t dst, const uint8_t *body,
@@ -393,10 +404,11 @@ static int fsm_blkast(void *ctx, uint32_t req_lkid)
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_learn(void *ctx, const char *resnam, uint32_t hash16)
+static int fsm_learn(void *ctx, const char *resnam, uint16_t group,
+		     uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, hash16) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
@@ -472,19 +484,12 @@ static uint32_t eng_dir_generation(void *ctx)
  * the FSM fail-close on a frame shape this rig is entitled to emit, and the
  * difference would show up as a counter nobody was looking at.
  */
-static int fsm_all_ovmx(void *ctx)
-{
-	(void)ctx;
-	return 1;
-}
-
 static void bind_everything(void)
 {
 	struct vms_dlm_requester_ops eng;
 
 	memset(&g_fsm_ops, 0, sizeof(g_fsm_ops));
 	g_fsm_ops.send = fsm_send;
-	g_fsm_ops.all_ovmx = fsm_all_ovmx;
 	g_fsm_ops.refill_post = fsm_refill;
 	g_fsm_ops.dir_resolve = fsm_dir_resolve;
 	g_fsm_ops.dir_generation = fsm_dir_generation;
@@ -562,9 +567,16 @@ static void wire_teaches_hash(const char *resnam, uint32_t hash)
 
 	memset(&req, 0, sizeof(req));
 	req.mode = VMS_LCK_PR;
-	req.req_pid_or_lkid = 0x5150u;      /* the SENDER's handle, not ours */
+	req.req_lkid = 0x5150u;      /* the SENDER's handle, not ours */
 	req.dir_hash = hash;
 	req.dir_hash_valid = 1u;
+	/* ...and the IDENTITY the value is of (rd vms-b5b0): the domain this
+	 * rig's own process locks in, so the value is learned for the resource
+	 * the $ENQ below will name. The builder refuses a frame that states no
+	 * identity at all. */
+	req.res_group = SIM_RES_GROUP;
+	req.res_acmode = SIM_RES_MODE;
+	req.res_ident_valid = 1u;
 	req.name_len = (uint8_t)strlen(resnam);
 	memcpy(req.name, resnam, req.name_len);
 
@@ -632,25 +644,82 @@ static void check_no_phantom_frames(const char *label)
 }
 
 /* ==========================================================================
- * 1. A NOVEL ROOT NAME: refused, and NOTHING goes on the LAN
+ * 1. A NOVEL ROOT NAME: COMPUTED and routed; AN UNPROVEN IDENTITY: refused,
+ *    and NOTHING goes on the LAN (rd vms-b5b0)
+ *
+ * This scenario used to assert the first half of that as a refusal too, because
+ * a value could only be LEARNED. It is now determined and proven, so a novel
+ * root name routes -- and what still has to be true, on the LAN and not merely
+ * in a status, is that an identity NO VMS NODE HAS BEEN WATCHED HASHING puts
+ * ZERO FRAMES out. The strawman's defect was not a bad status: it was a frame
+ * leaving this node with a value nobody derived, which made a real VAX install
+ * OVMX as master of resources it did not master (the 35/s grant storm).
  * ========================================================================== */
-static void novel_name_posts_nothing(void)
+static void a_novel_name_routes_and_an_unproven_identity_does_not(void)
 {
-	uint32_t lkid = 0xdeadu, st;
+	uint32_t lkid = 0xdeadu, st, expect = 0;
 
-	printf("--- a root name no system has ever named: refused, zero "
-	       "frames ---\n");
+	printf("--- a novel root name: computed and routed; an unproven "
+	       "identity: zero frames ---\n");
 	reset_wire();
 
+	ct_check(vms_dlm_name_hash(SIM_RES_GROUP, SIM_RES_MODE,
+				   (const uint8_t *)"OVMX$NEVER_SEEN", 15u,
+				   &expect) == VMS_DLM_HASH_OK,
+		 "the proven function answers for this identity");
 	st = do_enq("OVMX$NEVER_SEEN", LCK_K_EXMODE, &lkid);
-	ct_check_eq_u32(st, (uint32_t)SS__UNSUPPORTED,
-			"$ENQ is refused SS$_UNSUPPORTED");
-	ct_check_eq_u32(lkid, 0u, "no lock handle was invented");
+	ct_check(st == (uint32_t)SS__NORMAL && lkid != 0u,
+		 "$ENQ on a name no system has ever named is ACCEPTED");
+	ct_check(g_wire_n >= 1u, "and a frame went on the LAN");
+	{
+		uint8_t frame[VMS_CM_FRAME_LEN];
+		struct vms_frame_info fi;
+		struct vms_dlm_enq_request sent;
+		uint8_t opcode = 0;
+		uint32_t flen = splice(g_wire[0].body, g_wire[0].len, frame);
+
+		ct_check(vms_frame_classify(frame, flen, &fi) == VMS_CODEC_OK &&
+			 vms_dlm_enq_request_parse(frame, flen, &fi, &opcode,
+						   &sent) == VMS_CODEC_OK,
+			 "  it parses as a cat-02 op-01");
+		ct_check_eq_u32(sent.dir_hash, expect,
+				"*** carrying the value the PROVEN function "
+				"computes for the resource's identity ***");
+		ct_check_eq_u32((unsigned long)sent.res_ident_valid, 1u,
+				"  with the identity span stated");
+		ct_check_eq_u32((unsigned long)sent.res_group, SIM_RES_GROUP,
+				"  the UIC group it is a value of");
+		ct_check_eq_u32((unsigned long)sent.res_acmode, SIM_RES_MODE,
+				"  and the access mode");
+	}
+
+	/* *** AND WHERE THE RISK ACTUALLY LIVES: NOTHING ON THE LAN. *** */
+	{
+	uint32_t arm_before = g_fsm.hash_unknown_refused + g_fsm.lookups_sent;
+	uint32_t unc_before = vms_lock_dlm_dir_hash_uncovered();
+
+	reset_wire();
+	lkid = 0xdeadu;
+	g_proc.current_mode = PSL_C_SUPER;       /* mode 2: never observed */
+	st = do_enq("OVMX$SUPERMODE", LCK_K_EXMODE, &lkid);
+	g_proc.current_mode = (uint8_t)SIM_RES_MODE;
+	/*
+	 * It is GRANTED, not refused (rd vms-b5b0): on a real booted node the
+	 * refusal reached the ACP and killed STARTUP.COM. What must be true --
+	 * and is -- is that an identity no VMS node has been watched hashing
+	 * puts NOTHING on the LAN, and that the local-only mastery is counted.
+	 */
+	ct_check(st == (uint32_t)SS__NORMAL && lkid != 0u,
+		 "$ENQ at an UNPROVEN access mode is GRANTED (mastered here)");
+	ct_check_eq_u32(vms_lock_dlm_dir_hash_uncovered(), unc_before + 1u,
+			"  and the local-only mastery is COUNTED");
 	ct_check_eq_u32(g_wire_n, 0u,
 			"*** NOT ONE FRAME went on the LAN ***");
-	ct_check_eq_u32(g_fsm.hash_unknown_refused + g_fsm.lookups_sent, 0u,
+	ct_check_eq_u32(g_fsm.hash_unknown_refused + g_fsm.lookups_sent,
+			arm_before,
 			"the requester arm was never even reached: the ENGINE "
 			"refused first");
+	}
 }
 
 /* ==========================================================================
@@ -705,7 +774,7 @@ static void cross_node_enq_resolves_and_grants(void)
 		 "the lookup parses as a cat-02 op-01");
 	ct_check_eq_u32(sent.dir_hash, hash,
 			"*** body[128:132] is the value the WIRE taught us ***");
-	ct_check_eq_u32(sent.req_pid_or_lkid, lkid,
+	ct_check_eq_u32(sent.req_lkid, lkid,
 			"body[20:24] is the executive's own lock handle");
 
 	ct_check_eq_u32(g_wire[1].dst, g_csid[0],
@@ -1000,7 +1069,7 @@ int main(void)
 			"1 + 3 + 0 + 2 == six entries (Davis p. 6-32)");
 	bind_everything();
 
-	novel_name_posts_nothing();
+	a_novel_name_routes_and_an_unproven_identity_does_not();
 	cross_node_enq_resolves_and_grants();
 	directory_is_the_master();
 	misaddressed_inbound_is_redirected();

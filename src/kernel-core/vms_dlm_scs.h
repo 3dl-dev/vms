@@ -83,25 +83,32 @@ enum dlm_role {
  *     in the CLUB, is resized at Phase 1 and filled at Phase 2, and every
  *     change discards all cached directory information.
  *
- *   RUNG A', taken.  The hash FUNCTION is not published at the bit level, so
- *     OVMX never computes one. It does not need to: p. 6-50 documents that
- *     every directory lookup carries the SENDER'S 16-bit hash on the wire and
- *     that the directory node uses the received value. OVMX learns it
- *     (vms_lock.c `dir_hash`/`hash_known`, fed from the codec's
- *     vms_dlm_dir_hash_parse) and sends a lookup ONLY with a value it received.
- *     A root name OVMX is the first in the cluster to touch has no hash and is
- *     refused SS$_UNSUPPORTED -- the honest floor, and a narrow one.
+ *   RUNG A', taken, and then RUNG D (rd vms-b5b0). p. 6-50 documents that every
+ *     directory lookup carries the SENDER'S own value on the wire and that the
+ *     directory node uses the received value, so OVMX learns it (vms_lock.c
+ *     `dir_hash`/`hash_known`, fed from the codec's vms_dlm_dir_hash_parse)
+ *     whenever the cluster supplies one. For a resource no frame has named, the
+ *     engine now COMPUTES it with VMS's own resource-name hash -- determined
+ *     black-box from the values real VMS nodes broadcast in the clear (Baron's
+ *     ruling on rd vms-dc2) and proven on names held out of the determination
+ *     (src/kernel-core/vms_dlm_hash.h). An identity outside that proven
+ *     coverage is refused SS$_UNSUPPORTED -- the honest floor, and a narrow
+ *     one.
  *
  *   RUNG B (probe) is expected UNSAFE and is NOT built; rung C(i) is an
  *     operator matter. Neither is a code path here.
  *
  * WHY NO FUNCTION POINTER IN THIS HEADER. The resolver used to be typed
  * `(resnam, namelen) -> csid`, and an interface that takes a NAME is an
- * interface somebody can implement by hashing the name -- which is exactly the
- * thing that broke a real cluster (commit 90b3bbbd) and later produced the
- * grant storm. The seam the lock engine actually uses takes the HASH
- * (src/kernel-core/vms_dlm_proxy.h `dir_resolve(ctx, dir_hash, &csid)`), so the
- * fabrication is not merely forbidden, it is unrepresentable.
+ * interface somebody can implement by hashing the name with WHATEVER FUNCTION
+ * IS TO HAND -- which is exactly the thing that broke a real cluster (commit
+ * 90b3bbbd: an OVMX hash standing in for VMS's) and later produced the grant
+ * storm. The seam the lock engine actually uses takes the HASH
+ * (src/kernel-core/vms_dlm_proxy.h `dir_resolve(ctx, dir_hash, &csid)`), so
+ * that substitution is not merely forbidden, it is unrepresentable -- and it
+ * stays that way now that a value CAN be computed: the engine computes it with
+ * ONE named, proven, coverage-gated function and hands the result down, rather
+ * than any layer hashing a name it happens to hold.
  * ========================================================================== */
 
 /* ==========================================================================

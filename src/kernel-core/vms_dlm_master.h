@@ -73,6 +73,11 @@
  *
  * Called from VMS_IOCTL_CLUSTER_START, with that ioctl's own caller.
  */
+/* Node-local deadlock searches that exhausted their step budget (rd vms-ci.6
+ * ev11): answered "no deadlock" rather than spinning. A nonzero value is a
+ * diagnostic, never a fabricated SS$_DEADLOCK. */
+uint32_t vms_lock_deadlock_budget_hits(void);
+
 void vms_lock_dlm_set_delivery_proc(void *proc);
 
 /* Is one registered? The arm's condition-4 gate reads this before it asks the
@@ -120,8 +125,12 @@ uint32_t vms_lock_dlm_local_csid(void);
  * -- a rung of its own -- so the directory must not answer "you master it"
  * and create a second master. Nonzero = held (or the name cannot be asked
  * about exactly: refuse rather than guess).
+ *
+ * `group`/`mode` are the rest of the resource's IDENTITY (rd vms-b5b0), read
+ * off the asking frame: one name in two resource domains is two resources, and
+ * answering about the wrong one is how a second master is made.
  */
-int vms_lock_dlm_name_in_use(const char *resnam);
+int vms_lock_dlm_name_in_use(const char *resnam, uint16_t group, uint8_t mode);
 
 /*
  * DOES THIS NODE MASTER THE RESOURCE OF THIS NAME? (rd vms-db2a.)
@@ -135,8 +144,11 @@ int vms_lock_dlm_name_in_use(const char *resnam);
  *
  * A read of the engine's own `res->master_csid`, through the same "is that node
  * us?" test the router applies (rd vms-151). Nonzero = this node masters it.
+ * `group`/`mode` identify WHICH resource of that name is being asked about
+ * (rd vms-b5b0), from the asking frame's own identity span.
  */
-int vms_lock_dlm_name_mastered_here(const char *resnam);
+int vms_lock_dlm_name_mastered_here(const char *resnam, uint16_t group,
+				    uint8_t mode);
 
 /* ==========================================================================
  * 2. One inbound request, as the master sees it
@@ -165,6 +177,21 @@ struct vms_dlm_master_request {
 	uint32_t lkmode;       /* body[30], LCK$K_ encoding                   */
 	uint32_t flags;        /* LCK$M_ the requester supplied               */
 	char     resnam[32];   /* body[48..], the root resource name          */
+	/*
+	 * THE REST OF THE RESOURCE'S IDENTITY (rd vms-b5b0): body[44:46] UIC
+	 * group and body[46] access mode, read off the SAME frame as the name
+	 * by vms_dlm_res_ident_parse_body(). A VMS resource name is qualified by
+	 * them, so a master that ignored them would serve one request against
+	 * another domain's resource -- and the master arm must REFUSE a request
+	 * whose identity the codec would not give it rather than default these
+	 * to 0 (`ident_valid` below is that refusal made checkable).
+	 */
+	uint16_t res_group;
+	uint8_t  res_mode;
+	/* 1 when res_group/res_mode came off the frame. A request with 0 here is
+	 * REFUSED by vms_lock_dlm_master_serve: "which resource of that name"
+	 * has no honest default (INV-6). */
+	uint8_t  res_ident_valid;
 
 	/* The lock value block the releaser wrote, when it said it wrote one.
 	 * `valblk_present` 0 means the frame carried none, and the master's

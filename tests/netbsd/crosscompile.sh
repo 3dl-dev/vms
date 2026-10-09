@@ -145,6 +145,15 @@ SRCS=(
     # added them touched vms_cnxman.c and vms_cnxman_join_fsm.c, and a
     # substrate break in either is exactly the asymmetric red this list
     # exists to catch.
+    # rd vms-b5b0: the DLM's ECHO GUARD. A pure TU whose only include is
+    # vms_cluster.h, so it compiles here standalone -- and it is the one piece
+    # that stops a reply loop against a real peer, so an asymmetric substrate
+    # break in it is exactly the kind this list exists to catch. (The rest of
+    # the DLM family -- the codec, the arm, the FSM, the directory, the hash --
+    # is in src/kernel-netbsd/Makefile's SRCS but still absent from THIS
+    # hand-maintained list, a pre-existing hole flagged in the note above.)
+    "$CORE/vms_dlm_echo_guard.c"
+    "$CORE/vms_dlm_pending.c"
     "$CORE/vms_cluster_codec_cm.c"
     "$CORE/vms_cnxman_csb.c"
     "$CORE/vms_cnxman_recnx_fsm.c"

@@ -95,13 +95,9 @@ struct fake_engine {
 	uint32_t n_sent;
 	int      send_fails;
 
-	/*
-	 * THE ALL-OVMX GATE, as the connection manager answers it
-	 * (vms_ldwv_all_ovmx). 1 == every member is proven to run this
-	 * implementation, which is the only configuration a frame shape OVMX
-	 * has never been watched to emit may be addressed at.
-	 */
-	int all_ovmx;
+	/* The identity a learned value was filed under (rd vms-b5b0). */
+	uint16_t learn_group;
+	uint8_t  learn_mode;
 
 	/* the directory vector */
 	vms_csid_t dir_answer;
@@ -207,11 +203,6 @@ static uint32_t fe_dir_generation(void *ctx)
 	return ((struct fake_engine *)ctx)->dir_generation;
 }
 
-static int fe_all_ovmx(void *ctx)
-{
-	return ((struct fake_engine *)ctx)->all_ovmx;
-}
-
 static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
 			    vms_csid_t master_csid)
 {
@@ -273,13 +264,16 @@ static int fe_blkast(void *ctx, uint32_t req_lkid)
 	return 0;
 }
 
-static int fe_learn(void *ctx, const char *resnam, uint32_t hash16)
+static int fe_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
+		    uint32_t hash)
 {
 	struct fake_engine *e = ctx;
 
 	e->learn_calls++;
 	snprintf(e->learn_name, sizeof(e->learn_name), "%s", resnam);
-	e->learn_hash = hash16;
+	e->learn_hash = hash;
+	e->learn_group = group;
+	e->learn_mode = mode;
 	return 0;
 }
 
@@ -319,14 +313,12 @@ static void fe_reset(const char *resnam, uint32_t lkmode, uint32_t hash,
 	g.dir_answer = CSID_DIR;
 	g.dir_generation = 1u;
 	g.now_ms = 1000u;
-	g.all_ovmx = 1;   /* the scenarios below are an OVMX-only cluster */
 
 	memset(&g_ops, 0, sizeof(g_ops));
 	g_ops.send = fe_send;
 	g_ops.refill_post = fe_refill;
 	g_ops.dir_resolve = fe_dir_resolve;
 	g_ops.dir_generation = fe_dir_generation;
-	g_ops.all_ovmx = fe_all_ovmx;
 	g_ops.record_master = fe_record_master;
 	g_ops.assume_mastery = fe_assume;
 	g_ops.grant_recv = fe_grant;
@@ -508,7 +500,7 @@ static void check_frame_traces_to_lkb(const struct sent_frame *s,
 
 	snprintf(what, sizeof(what), "%s: body[20:24] == the LKB's own lock id",
 		 label);
-	ct_check_eq_u32(req.req_pid_or_lkid, l->lkid, what);
+	ct_check_eq_u32(req.req_lkid, l->lkid, what);
 
 	snprintf(what, sizeof(what), "%s: body[30] == the LKB's mode", label);
 	ct_check_eq_u32(req.mode, l->lkmode, what);
@@ -608,40 +600,66 @@ static void check_deq_traces_to_lkb(const struct sent_frame *s,
 /* ==========================================================================
  * Reply frames, built with the SHIPPING codec's own response builders
  * ========================================================================== */
-static uint32_t make_grant(uint8_t *frame, uint32_t req_lkid,
-			   uint32_t master_lkid, uint8_t mode)
+/*
+ * THE REQUEST A GRANT ANSWERS (rd vms-b5b0). A master's grant is an ECHO of
+ * the request, so a scripted grant needs a request to echo -- built here
+ * through the SHIPPING request builder, with the handle the caller wants in
+ * the requester's own slot (body[24:28]). The cases that script a grant for a
+ * handle this node never asked about get a request carrying THAT handle, which
+ * is exactly how such a frame would arrive off a real wire.
+ */
+static void compose_request_body(uint8_t *body, uint32_t req_lkid, uint8_t mode)
 {
-	struct vms_cm_link link;
+	struct vms_dlm_enq_request rq;
+	uint8_t reqframe[VMS_CM_FRAME_LEN];
 	uint32_t written = 0;
 
+	memset(&rq, 0, sizeof(rq));
+	rq.mode = mode;
+	rq.req_lkid = req_lkid;
+	rq.name_len = 8u;
+	memcpy(rq.name, "OVMXREQ1", 8);
+	rq.res_ident_valid = 1u;
+	memset(reqframe, 0, sizeof(reqframe));
+	(void)vms_dlm_enq_request_build(&rq, VMS_DLM_WIREOP_ENQ, reqframe,
+					(uint32_t)sizeof(reqframe), &written);
+	memcpy(body, reqframe + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+}
+
+static uint32_t make_grant_vb(uint8_t *frame, uint32_t req_lkid,
+			      uint32_t master_lkid, uint8_t mode,
+			      const uint8_t *valblk)
+{
+	struct vms_cm_link link;
+	uint8_t reqbody[VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+
+	compose_request_body(reqbody, req_lkid, mode);
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
-	(void)vms_dlm_enq_response_build_grant(req_lkid, master_lkid, mode,
-					       frame, VMS_CM_FRAME_LEN,
-					       &written);
-	/* the response bit -- the builder writes cat 0x02; a reply is 0x82 */
-	frame[VMS_OFF_DLM_CAT] = (uint8_t)(VMS_DLM_CAT_REQUEST | 0x80u);
+	(void)vms_dlm_enq_response_build_grant(reqbody, VMS_CM_BODY_LEN,
+					       master_lkid, valblk, frame,
+					       VMS_CM_FRAME_LEN, &written);
+	/* The builder writes the response category itself (0x82): a grant that
+	 * had to be stamped a reply afterwards was the old shape. */
 	return VMS_CM_FRAME_LEN;
 }
 
+static uint32_t make_grant(uint8_t *frame, uint32_t req_lkid,
+			   uint32_t master_lkid, uint8_t mode)
+{
+	return make_grant_vb(frame, req_lkid, master_lkid, mode, NULL);
+}
+
 /* A GRANT that RETURNS THE MASTER'S VALUE BLOCK (vms-727, the LVB READ
- * crossing) -- built by the SHIPPING grant-with-valblk builder. */
+ * crossing) -- the same builder: a real grant carries the block in the grant
+ * record it always has. */
 static uint32_t make_grant_valblk(uint8_t *frame, uint32_t req_lkid,
 				  uint32_t master_lkid, uint8_t mode,
 				  const uint8_t *valblk)
 {
-	struct vms_cm_link link;
-	uint32_t written = 0;
-
-	memset(&link, 0, sizeof(link));
-	memset(frame, 0, VMS_CM_FRAME_LEN);
-	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
-	(void)vms_dlm_enq_response_build_grant_valblk(req_lkid, master_lkid, mode,
-						      valblk, frame,
-						      VMS_CM_FRAME_LEN, &written);
-	frame[VMS_OFF_DLM_CAT] = (uint8_t)(VMS_DLM_CAT_REQUEST | 0x80u);
-	return VMS_CM_FRAME_LEN;
+	return make_grant_vb(frame, req_lkid, master_lkid, mode, valblk);
 }
 
 static uint32_t make_deny(uint8_t *frame, uint32_t pid_echo,
@@ -657,7 +675,9 @@ static uint32_t make_deny(uint8_t *frame, uint32_t pid_echo,
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
-	(void)vms_dlm_enq_response_build_deny(pid_echo, master_lkid, n, nm,
+	/* body[46] = the access mode the denied request carried (rd vms-b5b0);
+	 * these scenarios are user-mode locks. */
+	(void)vms_dlm_enq_response_build_deny(pid_echo, master_lkid, 3u, n, nm,
 					      frame, VMS_CM_FRAME_LEN, &written);
 	frame[VMS_OFF_DLM_CAT] = (uint8_t)(VMS_DLM_CAT_REQUEST | 0x80u);
 	return VMS_CM_FRAME_LEN;
@@ -706,9 +726,18 @@ static void test_full_path(void)
 			"  the master's CSID is the frame's OWN SCA source");
 	ct_check_eq_u32(g.last_grant.req_lkid, g.lkb.lkid,
 			"  the request handle is OURS, not the frame's");
-	ct_check_eq_u32(g.last_grant.valblk_present, 0u,
-			"  valblk_present is 0: no grounded LVB field, so the "
-			"engine keeps the proxy's own block");
+	/*
+	 * THE BLOCK CROSSES ON EVERY GRANT (rd vms-b5b0, correcting this test's
+	 * first reading). The record at body[28]/[32:36] is on 38 of 38 real
+	 * grants, so it marks the GRANT and not "a value block is enclosed";
+	 * body[36:52] inside it IS the master resource's block (dlm-grant-valblk
+	 * returns the requester's own 16 bytes there, off a real wire). This
+	 * scripted master holds no block, so it sends zeros -- and zeros from
+	 * the master ARE the master's block: the master is the authority on it.
+	 */
+	ct_check_eq_u32(g.last_grant.valblk_present, 1u,
+			"  valblk_present is 1: a grant carries the master's "
+			"block, which is what the engine records");
 
 	/* *** THE SETTLE-ON-GRANT ASSERTION. *** */
 	ct_check_eq_u32(g.n_sent, 1u,
@@ -1257,37 +1286,20 @@ static void test_release_gates(void)
 			"  the connection manager's refusal is counted too");
 
 	/*
-	 * (b) THE ALL-OVMX GATE. op 0x03 is grounded but has never been watched
-	 * to leave OVMX for a real peer, so it may not be addressed at a
-	 * cluster that is not all-proven-OVMX -- even one whose members each
-	 * hold an open connection.
+	 * (b) THE SHAPE GATE MOVED, AND IS PROVEN WHERE IT NOW LIVES
+	 * (rd vms-b5b0). op 0x03 used to be refused here unless the cluster was
+	 * all-proven-OVMX (`ops->all_ovmx`) or this node was its sole directory
+	 * node (`ops->mixed_dlm_ok`). Both ops are gone: a release HAS to be
+	 * emittable at a real VAX master, because an OVMX $ENQ can now take a
+	 * lock there, and withholding the release would mean taking a
+	 * cluster-wide lock and never giving it back. Which shapes may face an
+	 * unproven member is now ONE codec predicate applied per destination by
+	 * the connection manager -- driven in
+	 * tests/cluster/host/test_dlm_deq_reachable.c
+	 * (test_shape_fitness_for_an_unproven_member), where op-0x05 and a
+	 * cat-0x82 reply are still refused. Leg (a) above is the half that
+	 * reaches THIS object, and it is unchanged.
 	 */
-	n = release_setup(0x0888u);
-	g.all_ovmx = 0;
-	expect_release_refused(n, "the all-OVMX gate (a mixed cluster)");
-	ct_check_eq_u32(g.logs > 0u ? 1u : 0u, 1u, "  and said out loud");
-
-	/*
-	 * (b') THE GATE IS FAIL-CLOSED. An arm wired with no `all_ovmx` op at
-	 * all holds no proof that every member is ours, and "nobody told us"
-	 * may not read as "go ahead".
-	 */
-	n = release_setup(0x0888u);
-	g_ops.all_ovmx = NULL;
-	dlm_req_fsm_init(&g_fsm, &g_ops);   /* rebind: same ops, gate absent */
-	{
-		struct vms_dlm_proxy_post p;
-
-		/* the block went with the re-init, so this is the untracked
-		 * release path -- which must be gated identically */
-		post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
-		(void)dlm_req_fsm_post(&g_fsm, &p);
-	}
-	ct_check_eq_u32(g.n_sent, n,
-			"an ABSENT all-OVMX op is CLOSED, not permissive "
-			"(untracked release path)");
-	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u, "  and counted");
-	g_ops.all_ovmx = fe_all_ovmx;
 
 	/*
 	 * (c) THE CODEC's LOCK-ID REFUSAL, reached through the FSM. A lock the
@@ -1413,14 +1425,22 @@ static void test_lvb(void)
 			"and nothing was written to the wire");
 	check_frame_traces_to_lkb(&g.sent[0], "enq with a value block");
 
-	/* And an inbound grant must not zero the proxy's block. */
+	/*
+	 * And the grant brings the MASTER's block back (rd vms-b5b0): the ENQ's
+	 * own block rode in the post and was never on the wire, but what the
+	 * proxy holds AFTER the grant is what the master says the resource's
+	 * block is. This scripted master sends zeros, so the proxy's 0xA0..
+	 * guess is replaced by the master's zeros -- the read crossing doing its
+	 * job, not a value invented locally.
+	 */
 	len = make_grant(frame, g.lkb.lkid, 0x0aaau, VMS_LCK_EX);
 	(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
-	ct_check_eq_u32(g.last_grant.valblk_present, 0u,
-			"the grant is handed to the engine with "
-			"valblk_present = 0");
-	ct_check(g.lkb.valblk[0] == 0xA0u,
-		 "*** so the proxy's own value block SURVIVED the grant ***");
+	ct_check_eq_u32(g.last_grant.valblk_present, 1u,
+			"the grant is handed to the engine with the master's "
+			"block (valblk_present = 1)");
+	ct_check(g.lkb.valblk[0] == 0x00u,
+		 "*** so the proxy's block is now THE MASTER's, not its own "
+		 "pre-grant guess ***");
 
 	/*
 	 * CASE B: a CONVERT the engine marked as a value-block WRITE (a demote
@@ -1551,8 +1571,8 @@ static void test_retransmit_idempotency(void)
 	ct_check(parse_request(&g.sent[0], &oa, &a) == 0 &&
 		 parse_request(&g.sent[1], &ob, &b) == 0,
 		 "both parse");
-	ct_check(a.req_pid_or_lkid == b.req_pid_or_lkid &&
-		 a.req_pid_or_lkid == g.lkb.lkid,
+	ct_check(a.req_lkid == b.req_lkid &&
+		 a.req_lkid == g.lkb.lkid,
 		 "both carry the SAME (req_csid, req_lkid) key");
 	ct_check_eq_u32(g_fsm.retransmits, 1u, "the second is counted a retransmit");
 
@@ -1664,9 +1684,14 @@ static void test_observe_learns_the_hash(void)
 	/* An inbound REQUEST from another system, carrying ITS hash. */
 	memset(&req, 0, sizeof(req));
 	req.mode = VMS_LCK_PR;
-	req.req_pid_or_lkid = 0x5150u;
+	req.req_lkid = 0x5150u;
 	req.dir_hash = 0xBEEFu;
 	req.dir_hash_valid = 1u;
+	/* ...and the identity the value is OF, from the same frame
+	 * (body[44:46]/body[46], rd vms-b5b0). */
+	req.res_group = 300u;
+	req.res_acmode = 1u;
+	req.res_ident_valid = 1u;
 	req.name_len = (uint8_t)strlen("F11B$aSYSDSK1");
 	memcpy(req.name, "F11B$aSYSDSK1", req.name_len);
 
@@ -1684,6 +1709,11 @@ static void test_observe_learns_the_hash(void)
 			"  the value the SENDER put on the wire");
 	ct_check(strcmp(g.learn_name, "F11B$aSYSDSK1") == 0,
 		 "  against the name from the SAME frame");
+	ct_check_eq_u32((unsigned long)g.learn_group, 300u,
+			"  and under the UIC GROUP from that frame -- a hash "
+			"belongs to an identity, not to a name (rd vms-b5b0)");
+	ct_check_eq_u32((unsigned long)g.learn_mode, 1u,
+			"  ...and its access mode");
 	ct_check_eq_u32(g_fsm.hashes_learned, 1u, "counted");
 
 	/* A GRANT echoes no name (spec 4(f).1), so it teaches nothing -- a

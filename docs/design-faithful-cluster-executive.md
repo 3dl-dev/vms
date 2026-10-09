@@ -934,53 +934,160 @@ Decisions:
   every shared name, membership, directory duty and mastering are
   unaffected, and the rebuild chain (P4.6, P5.3–5.5) proceeds.
   **Rung A" — OVMX's own directory hash, for an all-proven-OVMX cluster only
-  (vms-3e3, ratified 2026-09-11).** The residual above -- a root name OVMX is
-  the first in the cluster to touch, so no wire hash exists -- has one more
-  honest resolution when EVERY member is proven-OVMX, and it needs neither DEC's
-  function nor an operator Rule-8 exception. In that configuration there is no
-  real VAX to mis-address and no DEC directory to be compatible with on a
-  member's own private names, so OVMX may originate the first hash with its OWN
-  16-bit directory hash: FNV-1a over the resource-name bytes folded to 16 (the
-  same public function the lock manager already uses for its resource hash
-  table, `vms_lock.c` `resource_hash_key`), documented here as OVMX's own and
-  bearing no relation to DEC's unpublished function. Its only correctness
-  requirement is consistency (p. 6-32) -- every OVMX node maps a name to the
-  same value, which holds by construction because every node runs the one
-  function -- so all OVMX members agree on the master.
+  (vms-3e3, ratified 2026-09-11) — RETIRED 2026-10-09 by rd vms-b5b0, see
+  rung D below.** It bridged the residual above (a root name OVMX is the first
+  in the cluster to touch, so no wire value exists) for an all-proven-OVMX
+  cluster, with OVMX's OWN FNV-1a fold behind a dynamic all-OVMX gate and five
+  binding conditions. It is gone -- the `dir_groundable`/`dir_ground` ops and
+  `vms_dlm_ovmx_dir_hash()` with it -- because rung D answers the same residual
+  for EVERY membership with ONE function, and keeping a second hash for
+  all-OVMX clusters would make a resource's master CHANGE the moment a VAX
+  joined (vms-3e3's own condition 2 asks for "same name -> same master
+  everywhere"; one function satisfies it strictly better than two). Conditions
+  1 and 4 (gate it, label it a bridge) retire with the thing they governed;
+  condition 5 still holds -- the hash existing flips no compat row, only a real
+  multi-node proof does.
 
-  This is **exactly parallel to the LDWV all-zero fallback (Option-A)**: that
-  grounds the *vector* for an all-OVMX cluster without a real VAX's LOCKDIRWT;
-  this grounds the *hash* for an all-OVMX cluster without DEC's hash function.
-  Both are OVMX bridges for all-OVMX clusters; real-VMS DLM-directory interop
-  stays deferred to FC-P3.2 (oracle-grounded), and neither claims it (INV-6).
+  **Rung D — the VMS resource-name hash, determined black-box and PROVEN, and
+  the executive routes on it (rd vms-66fe / vms-c6e / vms-b5b0; Baron's ruling
+  on rd vms-dc2, 2026-10-08).** The ladder's own rung C(i) -- "go to the
+  operator with the p. 6-50 framing (VMS broadcasts the input/output pairs by
+  design)" -- is what happened, and the answer was YES, narrowly: Rule 8's
+  scope extends to determining THIS ONE FUNCTION from the (name, value) pairs
+  real OpenVMS nodes broadcast in the clear on every directory lookup, and from
+  nothing else. Never from a VSI/HPE binary, a disassembly, a listing or
+  source.
 
-  It carries FIVE binding conditions, and it is safe only because of them:
-  1. **Gated to all-proven-OVMX only.** `vms_ldwv_all_ovmx()` (a stricter guard
-     than the split-brain gate: it refuses a foreign member even when the
-     vector built with learned weights) governs it, checked DYNAMICALLY at
-     resolve time. A member that cannot be proven OVMX turns grounding off and
-     the engine masters names locally exactly as before -- so a mixed OVMX+VAX
-     cluster and a lone node see NO change (no interop regression), and the
-     name->hash step never runs with a real VAX present. This is why it does not
-     reopen the 90b3bbbd hazard: that broke a REAL cluster, and this can never
-     touch one.
-  2. **Deterministic and identical across all OVMX nodes** -- by construction.
-  3. **Rule-8 clean-room:** OVMX's own function, documented as OVMX's own here
-     and in the research note; not reverse-engineered from DEC's.
-  4. **Honestly labelled a bridge:** "OVMX-own directory hash for all-OVMX
-     clusters; real-VMS DLM-directory interop deferred to FC-P3.2." Never a
-     claim of real-VMS directory compatibility.
-  5. **It unblocks the cross-node rungs; it does NOT flip compat rows.** The
-     `cluster-dlm` rows flip verified only on a real multi-node /dev/vms proof
-     (the #1052 bar), never on the hash existing.
+  The determination used 963 such pairs and was proven on 253 held out of it
+  before the work began, on a 533-key capture written after the function was
+  frozen, and on a DRIVEN real-VAX run whose predicted values were committed and
+  pushed before the VAX was asked to lock anything (55 of 55 observed triples
+  matched, 0 mismatches, plus 541 live values on the same wire). Method and
+  every eliminated hypothesis: `docs/design-dlm-name-hash.md`. Implementation:
+  `src/kernel-core/vms_dlm_hash.{c,h}`.
 
-  It reverses, under exactly this gate, the "no `dir_resolve` variant that takes
-  a NAME" prohibition stated in `vms_dlm_proxy.h`: the new `dir_ground(name)` op
-  IS that shape, admissible only because conditions 1 and 3 remove the failure
-  mode the prohibition guards against. Implemented in `vms_lock.c` `dir_resolve`
-  (the all-OVMX gate + grounding) and `vms_dlm_scs.c` (`vms_dlm_ovmx_dir_hash`,
-  `dlm_arm_eng_dir_ground`), pinned by `tests/cluster/host/test_dlm_ldwv.c`
-  (the gate) and `test_lock_dir.c` (grounds all-OVMX / masters locally mixed).
+  So `dir_resolve` (vms_lock.c) is now one line of policy: **the value is the
+  wire-learned one if this node holds it, else the one
+  `vms_dlm_name_hash_proven()` computes for the resource's identity, else
+  nothing and the $ENQ is refused** -- and the directory node is
+  `ldwv[(value >> 16) mod n]` in every LOCKDIRWT configuration, a real VAX
+  directory node included. Three properties make that safe rather than a return
+  of the 90b3bbbd hazard, and each is pinned by a test and a negative control:
+
+  1. **The PROVEN COVERAGE is a measurement, and outside it NO FRAME IS
+     BUILT.** The three coverage masks in `vms_dlm_hash.h` are DERIVED in
+     `test_dlm_hash.c` from the corpus and the driven run's own score file, so
+     a hand-widened constant reddens. Unproven today: supervisor mode (2), UIC
+     groups with bit 14/15 set, and name lengths 23 and 29.
+
+     **The $ENQ is NOT refused, and that distinction is load-bearing** (rd
+     vms-b5b0, PR #1578's lab run). Withholding a FRAME and refusing a CALLER
+     are different acts: the first protects the cluster, the second broke the
+     node. A booted member with a cluster stack bound answered
+     `SS$_UNSUPPORTED` to its own ACP — 74 file operations failed and
+     STARTUP.COM died on `%RMS-E-FNF ... SYS$STARTUP:VMS$VMS.DAT` — which is
+     exactly what Baron's ruling on rd vms-dc2 called out ("option (B) …
+     NEVER"). So a resource this executive cannot route is **mastered on this
+     node only** (option A), counted and announced once. Two counters name the
+     two ways to get there: `vms_lock_dlm_dir_hash_uncovered()` (no provable
+     value for the identity) and `vms_lock_dlm_dir_no_vector()` (no committed
+     vector at all — a node forming or joining, or a transition in flight;
+     Davis p. 6-33 discards directory information at Phase 1). The residual is
+     the pre-proof floor for that narrow set, and a rebuild is what re-masters
+     (FC-P5.3..5.5).
+
+     **One case needs no value at all:** when every entry of the committed
+     vector is this node's, `value mod n` cannot select anyone else, so THIS
+     NODE IS THE DIRECTORY whatever the value would have been
+     (`vms_ldwv_directs_everything_here()`, p. 6-32). An uncovered identity in
+     that configuration is therefore still resolved CORRECTLY and still goes
+     through this node's own directory table — it does not fall back.
+  2. **The RESOURCE IDENTITY is part of the engine's namespace.** A VMS
+     resource name is qualified by the enqueuing process's UIC group (0 for a
+     LCK$M_SYSTEM name) and by the access mode, and those are exactly the two
+     fields the hash is computed over and the frame carries at body[44:48]. The
+     engine keys resource blocks on them, writes them on every frame that names
+     a resource, and files learned values under them.
+  3. **A LIVE FALSIFICATION DETECTOR.** A frame naming an identity this node
+     had already computed a value for, carrying a different value, makes the
+     WIRE value win and raises `vms_lock_dlm_dir_hash_computed_wrong()`. A
+     determination is not a theorem; this is the executive checking it in
+     production.
+
+  Retired with rung A": the all-OVMX gate on routing, the sole-directory
+  interim configuration (rd vms-025/vms-db2a), and RULE C's configuration test
+  -- which is replaced by a per-SHAPE codec predicate
+  (`vms_dlm_shape_fit_for_any_member`: op-0x01, 0x07, 0x06, 0x03) applied per
+  DESTINATION in the connection manager. The op-0x05 BLKAST is still not in
+  that set and still gated, for the reason it always was.
+
+- **D-DLM-2.1 — THE ANSWER MUST BE CORRELATABLE, and the reply path has
+  teeth** (rd vms-b5b0, forced by a measured storm on 2026-10-09). A master's
+  grant is **the request, echoed**, with only what a grant owns overwritten:
+  the master's handle at `body[20:24]`, the grant record (`body[28]=0x10`,
+  `body[32:36]={01 00 fa 00}`, whose `body[34]=0xfa` is the outcome byte), the
+  master resource's value block at `body[36:52]`, the mode byte cleared, the
+  identity and name span cleared. **The requester's own handle at
+  `body[24:28]` is echoed unchanged** — that is the correlation, and OVMX had
+  been writing its own handle there (the two slots were swapped relative to
+  what the wire does; see the correction in spec §4(f).1). A real VAX then
+  re-sent one request 65,356 times in 63.7 s and OVMX answered 65,340 of them.
+  Two design consequences:
+
+  1. **BUILD BY ECHOING, not by laying out fields.** Every byte of a reply
+     that is not a field the answer owns is the requester's own byte, handed
+     back. A builder that lays out a frame itself can put a value in the wrong
+     slot; one that echoes cannot. (This also stops OVMX inventing the
+     requester's stale buffer tail, which a real master echoes verbatim.)
+  2. **THE ECHO GUARD** (`vms_dlm_echo_guard.c`, a pure kernel-core TU asked
+     at the ONE place every reply is staged): a reply goes out only while the
+     *(requester, request bytes, answer bytes)* triple keeps CHANGING. Past a
+     bounded number of identical answers in a row this node STOPS ANSWERING
+     that requester's identical request — counted, said once. The bound is an
+     **OVMX design value**, not a VMS one (Rule 8: nothing here is a
+     reverse-engineered VMS limit). It is a *sameness* rule rather than a rate
+     limit because a rate limit must guess what "too fast" is for a VAX on a
+     quiet LAN, while "I have told you this nine times and nothing changed" is
+     a loop by definition. Withholding asserts nothing about another system
+     (INV-6) — the requester's own ladder decides what follows, exactly as if
+     this node had crashed. **OVMX must never be the node that keeps feeding a
+     peer a frame it cannot use.**
+
+- **D-DLM-2.2 — THE ANSWER THE MASTER OWES, AND THE WAIT THAT CARRIES IT**
+  (rd vms-f87, two measured faults on 2026-10-09).
+
+  1. **A queued remote requester is TOLD when the queue advances.** This used to
+     be counted (`deferred_grants_owed`) and not sent, because "a cat-0x82 at a
+     system that did not just ask" had no grounding. The lab showed the cost: a
+     real VAX `$ENQW` queued at an OVMX master, OVMX released, the engine
+     flipped the request to granted **for real**, and the VAX process sat in
+     `RWSCS` indefinitely — unkillable. And the grounding is now **measured**
+     (`tools/cluster/dlm_grant_correlation.py`, 129 real captures): a grant is
+     correlated by the **requester's own handle** at `body[24:28]` (27,513 of
+     27,513 in the f03 capture), it need not be the next frame (gaps to 137 ms),
+     and a real master does originate grants nobody just asked for (139 in one
+     second). The **frame** is therefore the requester's **own queued frame,
+     echoed back** with the handle this engine assigned (`vms_dlm_pending.h`
+     keeps it): byte-for-byte the grant it would have got by asking again, and
+     not a frame composed out of fields — which is what rd vms-b5b0's storm was.
+     *Honest gap kept:* no capture in the corpus holds a cross-node **queued**
+     waiter, so the queue-advance **context** is not directly captured; the
+     capture that closes it is specified in
+     `tests/lab/captures/vms-f87-deferred-grant-20261009/README.md`.
+  2. **A WAIT MUST BE A WAIT.** `enq_wait_sync` dropped the backend's
+     INTERRUPTED return, and since the Linux backend does not sleep while a
+     signal is pending, the loop re-tested a still-false predicate and called
+     straight back in: a CPU that never left the kernel and an RCU self-detected
+     stall (98,763 ticks) while the fork thread on the other CPU served the
+     cluster normally. **Any** signal to a process blocked in `$ENQW` did it.
+     The rule, and it is the one the rest of this executive already follows
+     (`vms_eflag.c`, `vms_mbx.c`, `$HIBER`): **an interrupted wait ends the
+     ioctl with `-ERESTARTSYS` and no status, the request stays queued, and
+     userspace re-enters the wait.** That is VMS's own behaviour — an AST
+     interrupts a wait, runs, and the wait resumes — which is why `$ENQW` has no
+     "your wait was interrupted" condition value. Any future in-kernel wait in
+     this stack inherits the rule: *handle the interrupted return, or you have
+     written a spin.*
 
 - **D-DLM-3 — directory-node role is built anyway** (for LOCKDIRWT>0 later,
   and because the rebuild pushes records at whichever node the cluster
@@ -1004,8 +1111,12 @@ The cat-02 opcode → operation mapping (op-01 ENQ, op-07 convert, op-03/op-04
 completion/commit, op-0d rebuild record, op-12/op-15 unknown) is GROUNDED for
 shape and INFERRED for semantics (spec §4(f), §5). The 17K-message "grant
 storm" of the daemon experiments (`LNM$CWLOGICALS`/`F11B$aSYSDSK1` re-requested
-35/s after a "grant") is consistent with those op-01s being **directory
-lookups** that OVMX answered as if they were master grants. The executive
+35/s after a "grant") was read as those op-01s being **directory lookups** that
+OVMX answered as if they were master grants. **The 2026-10-09 storm (rd
+vms-b5b0) gives the mechanism directly, measured**: a requester re-sends when it
+cannot CORRELATE the answer -- OVMX's grant carried neither the requester's own
+handle nor an outcome byte -- so "a reply the requester cannot match to its
+lock" is the storm's cause, whatever the opcode's role. See D-DLM-2.1. The executive
 implements the *operations* (lookup / enqueue / convert / dequeue / grant /
 blocking-AST / value-block / directory-entry / rebuild) and binds opcodes to
 them through the codec table, so an opcode re-assignment after §5.4's capture

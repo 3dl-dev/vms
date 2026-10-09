@@ -198,27 +198,29 @@ int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16);
 int vms_ldwv_all_ovmx(const struct vms_ldwv *v);
 
 /*
- * IS THIS NODE THE SOLE LOCK-DIRECTORY NODE of this cluster? (rd vms-025 /
- * vms-db2a -- the mixed-cluster INTERIM CONFIGURATION, honestly labelled.)
+ * DOES THIS VECTOR DIRECT *EVERYTHING* AT THIS NODE? (rd vms-b5b0.)
  *
  * Nonzero iff the vector is authoritative and EVERY one of its entries is one
  * of this node's own (p. 6-32: a system's own entries read 0 in its own copy).
- * In the interim lab configuration -- every real VMS member at LOCKDIRWT 0 and
- * this node above 0 (p. 6-32's per-system entry count, Davis p. 6-32) -- that is
- * exactly what the vector comes out as, and it is the one configuration in which
- * a DIRECTORY decision for a root name needs NO hash at all: there is only one
- * entry set to choose from, so `hash mod n` cannot choose anything else.
  *
- * WHY THIS EXISTS AND WHAT IT IS NOT. It is NOT a claim of real-VMS directory
- * compatibility and it is not the general case: routing OVMX's own names to the
- * VMS-correct directory node in a cluster with default weights needs the
- * resource-name hash (rd vms-dc2 / vms-b5b0) and is deliberately NOT done here.
- * Outside this configuration every caller keeps its previous behaviour.
+ * WHAT IT IS, AND WHAT IT IS NOT. This is the same arithmetic the retired
+ * `vms_ldwv_sole_directory()` did, and deliberately NOT the same claim. That
+ * one was the interim mixed-cluster GATE (rd vms-025/vms-db2a): a permission
+ * for paths that were otherwise closed, in a configuration an operator had to
+ * arrange (every real VMS member at LOCKDIRWT 0, this node above 0). This is a
+ * READ of what the vector can and cannot say, and the engine asks it for one
+ * reason only: when every entry is ours, `value mod n` cannot select anyone
+ * else, so THIS NODE IS THE DIRECTORY whatever the value would have been --
+ * which is the one case where a resource whose identity is outside the hash's
+ * PROVEN COVERAGE (vms_dlm_hash.h) can still be resolved correctly, and so
+ * still reach this node's own directory table rather than fall back to blind
+ * local mastery (vms_dlm_proxy.h `dir_all_ours`).
  *
- * Derived from real executive state on every call -- never a configured flag, a
- * remembered verdict or a build option (INV-6).
+ * Derived from real executive state on every call -- never a configured flag,
+ * a remembered verdict or a build option (INV-6).
  */
-int vms_ldwv_sole_directory(const struct vms_ldwv *v);
+int vms_ldwv_directs_everything_here(const struct vms_ldwv *v);
+
 
 /* ==========================================================================
  * 5. The CLUB-facing half

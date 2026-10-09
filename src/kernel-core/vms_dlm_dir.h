@@ -51,12 +51,18 @@
  * hash (Rule 8). It has no relationship to routing: the LDWV is indexed by the
  * WIRE hash and nothing here ever indexes anything with it.
  *
- * THE WIRE HASH IS STILL STORED, because it is a fact the cluster put on the
- * wire and the ONE value this node may ever place on an outbound frame for that
- * name (`hash_known`, Davis p. 6-50). An entry this node recorded for its own
- * mastery carries `hash_known == 0` -- an honest absence, never a zero dressed
- * as a hash (the "honest 0" that made a real VAX install OVMX as master of
- * resources it did not master).
+ * THE HASH IS STILL STORED, because it is the value this node may place on an
+ * outbound frame for that resource (`hash_known`, Davis p. 6-50) -- either the
+ * one the cluster put on the wire for it or the one this executive computed for
+ * it (rd vms-b5b0). An entry carrying neither reads `hash_known == 0`: an honest
+ * absence, never a zero dressed as a hash (the "honest 0" that made a real VAX
+ * install OVMX as master of resources it did not master).
+ *
+ * AND THE MATCH IS NOW ALWAYS EXACT (rd vms-b5b0). The second bullet above is
+ * historical: the engine carries a resource's UIC group and access mode on the
+ * resource block itself, so a self-claim is recorded under the same full
+ * identity a registration is, and the name-only entries -- with their
+ * deliberately-argued conflation -- are gone.
  * ===========================================================================
  *
  * INV-6. Every entry is a fact the cluster put on the wire: a registration
@@ -92,24 +98,24 @@ struct vms_dlm_dir_entry {
 	vms_csid_t master;
 	uint8_t    state;
 	/*
-	 * Does `id.hash` carry a value some system in this cluster really put on
-	 * the wire for this name? 0 for an entry THIS node recorded for its own
-	 * mastery of a name it touched first: this executive holds no hash for
-	 * such a name and must not invent one (INV-6, Rule 8).
+	 * Does `id.hash` carry a value this executive genuinely holds for this
+	 * resource -- one some system in this cluster put on the wire for it, or
+	 * one computed for it by the PROVEN resource-name hash (rd vms-b5b0)? 0
+	 * means this entry carries no usable value, and a caller that needs one
+	 * to address a frame is told so rather than handed a zero (INV-6).
 	 */
 	uint8_t    hash_known;
 	/*
-	 * Is this entry's identity the NAME ALONE? 1 for an entry THIS node
-	 * recorded for its own mastery (vms_dlm_dir_claim_self): the lock engine
-	 * holds a resource NAME and no UIC group / access mode, so `id.group` and
-	 * `id.mode` carry nothing and must not be matched against. A name-only
-	 * entry is NEVER an answer naming another system -- it names THIS node and
-	 * nothing else -- so the conflation it introduces can only ever conclude
-	 * "I am the master", which this node can verify and serve. It can never
-	 * mis-route one system's lookup to another system.
+	 * NAME-ONLY ENTRIES ARE GONE (rd vms-b5b0). This entry used to be able to
+	 * carry a NAME and nothing else -- a self-claim recorded when the lock
+	 * engine held a resource name but no UIC group or access mode -- and every
+	 * matching rule in this file had to special-case it, with the conflation
+	 * argued safe rather than absent. The engine now carries the full identity
+	 * on every resource block, so every entry here has a group, an access mode
+	 * and (for a self-claim too) a hash: one matching rule, EXACT IDENTITY, in
+	 * both directions.
 	 */
-	uint8_t    name_only;
-	uint8_t    pad;
+	uint8_t    pad[2];
 };
 
 struct vms_dlm_dir {
@@ -132,10 +138,8 @@ struct vms_dlm_dir {
 	uint32_t answered_self;    /* lookups answered from a self-claim: this */
 				   /* node masters the name, so the directory  */
 				   /* resolves the request (Davis p. 6-51)     */
-	uint32_t name_lookups;     /* this executive's own $ENQ consulted this */
-				   /* directory for a name                     */
-	uint32_t name_ambiguous;   /* two entries for one name naming          */
-				   /* DIFFERENT masters: refused, never picked  */
+	uint32_t own_lookups;      /* this executive's own $ENQ consulted this */
+				   /* directory about a resource it holds      */
 };
 
 enum vms_dlm_dir_outcome {
@@ -185,60 +189,61 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
 					    vms_csid_t *out_master);
 
 /*
- * THIS NODE IS ABOUT TO MASTER `name` -- record it in its own directory
+ * THIS NODE IS ABOUT TO MASTER THIS RESOURCE -- record it in its own directory
  * (rd vms-db2a; Davis p. 6-51, "a directory node becomes master when it
  * acquires the first lock in the cluster on the root resource", whose directory
  * entry then names itself).
  *
- * Recorded NAME-ONLY: the lock engine holds a resource name and no UIC group or
- * access mode, and inventing a group of 0 would make a VAX's lookup for the same
- * name in a different resource domain MISS the entry and be told "you master it"
- * -- a second master, which is the whole hole this closes. No hash is recorded
- * either (`hash_known` 0): this node has none for a name it touched first, and a
- * zero there is the value that made a real VAX install OVMX as master of
- * resources it did not master.
+ * Recorded under the FULL identity the engine holds (rd vms-b5b0): the name, the
+ * UIC group, the access mode, and the directory hash -- learned off the wire or
+ * computed by the proven function (vms_dlm_hash.h), whichever the resource block
+ * carries. That is what makes a real VAX's lookup for the same NAME in a
+ * DIFFERENT resource domain miss this entry and be answered on its own merits,
+ * instead of being told about a master that is not its resource's. `id->hash` 0
+ * still records `hash_known` 0 -- "no value is held" and "the value is 0" remain
+ * different facts.
  *
- * Idempotent: a claim for a name this node already claims, or already has an
- * exact-identity entry for naming itself, changes nothing. 0 when the claim is
- * held afterwards, -1 when the table could not take it (counted in
- * `full_refusals`) or `master` is 0 -- and then the caller must NOT proceed as
- * if the directory named it, because the next asker would be told "you master
- * it".
+ * Idempotent: a claim for a resource this node already claims changes nothing.
+ * 0 when the claim is held afterwards, -1 when the table could not take it
+ * (counted in `full_refusals`) or `master` is 0 -- and then the caller must NOT
+ * proceed as if the directory named it, because the next asker would be told
+ * "you master it".
  */
-int vms_dlm_dir_claim_self(struct vms_dlm_dir *d, const char *name,
-			   uint32_t name_len, vms_csid_t master);
+int vms_dlm_dir_claim_self(struct vms_dlm_dir *d,
+			   const struct vms_dlm_res_ident *id,
+			   vms_csid_t master);
 
-/* What this node's own directory says about one ROOT NAME. */
-enum vms_dlm_dir_name_outcome {
-	VMS_DLM_DIR_NAME_MASTER = 0,   /* an entry names a master: *out_master */
-	VMS_DLM_DIR_NAME_NONE,         /* no entry for that name at all        */
-	VMS_DLM_DIR_NAME_AMBIGUOUS,    /* entries for the name DISAGREE        */
-	VMS_DLM_DIR_NAME_INVAL         /* no table, or a null/empty name       */
+/* What this node's own directory says about one ROOT RESOURCE. */
+enum vms_dlm_dir_ident_outcome {
+	VMS_DLM_DIR_IDENT_MASTER = 0,  /* an entry names a master: *out_master */
+	VMS_DLM_DIR_IDENT_NONE,        /* no entry for that resource at all    */
+	VMS_DLM_DIR_IDENT_INVAL        /* no table, or a null/empty identity   */
 };
 
 /*
- * ASK THIS NODE'S OWN DIRECTORY ABOUT A ROOT NAME (rd vms-025) -- the question
- * the lock engine must ask before it masters anything, and could not ask while
- * the table was probed by a hash the engine does not hold.
+ * ASK THIS NODE'S OWN DIRECTORY ABOUT A ROOT RESOURCE (rd vms-025) -- the
+ * question the lock engine must ask before it masters anything, and could not
+ * ask while the table was probed by a hash the engine does not hold.
  *
- * Matched by the NAME BYTES, across every resource domain: see the header's
- * note on why the conflation is the safe direction (it can only conclude that
- * some system already masters the name, never that nobody does). When entries
- * for the name name DIFFERENT masters this refuses with AMBIGUOUS rather than
- * choosing one -- choosing would be routing a lock request at a system on a
- * coin toss.
+ * Matched by EXACT IDENTITY (name, UIC group, access mode) -- the same rule the
+ * wire-facing ops match by, now that the engine holds an identity for every
+ * resource (rd vms-b5b0). The predecessor matched by NAME ALONE across domains
+ * and had to refuse an AMBIGUOUS answer when two domains of one name named
+ * different masters; that case cannot arise against an exact key, so the
+ * outcome is gone rather than left unreachable.
  *
- * `*out_hash`/`*out_hash_known` report the WIRE hash stored with the answering
- * entry, so the caller can place THAT value -- and only that value -- on a frame
+ * `*out_hash`/`*out_hash_known` report the hash stored with the answering entry,
+ * so the caller can place THAT value -- and only that value -- on a frame
  * addressed to the master it just learned. Both are optional.
  *
  * Takes no `claim`: recording is vms_dlm_dir_claim_self above, so a read of this
  * directory can never be a write by accident.
  */
-enum vms_dlm_dir_name_outcome
-vms_dlm_dir_lookup_name(struct vms_dlm_dir *d, const char *name,
-			uint32_t name_len, vms_csid_t *out_master,
-			uint32_t *out_hash, uint8_t *out_hash_known);
+enum vms_dlm_dir_ident_outcome
+vms_dlm_dir_lookup_ident(struct vms_dlm_dir *d,
+			 const struct vms_dlm_res_ident *id,
+			 vms_csid_t *out_master, uint32_t *out_hash,
+			 uint8_t *out_hash_known);
 
 /* The master removes its entry (op-0x04). Only the master named by the entry
  * may remove it. 0 when removed, -1 otherwise (counted). */

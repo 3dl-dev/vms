@@ -693,7 +693,28 @@ struct vms_dlm_xnode_args {
     uint64_t blkastadr;
     uint64_t blkastprm;
     uint32_t blkast_delivered;
-    uint32_t pad_blkast;
+    /*
+     * THE RESOURCE'S IDENTITY, the rest of it (rd vms-b5b0). A VMS resource
+     * name is qualified by the enqueuing process's UIC GROUP (0 for a
+     * LCK$M_SYSTEM name) and by the ACCESS MODE, and the same two values are
+     * its identity on the cluster wire (body[44:46] / body[46],
+     * src/kernel-core/vms_cluster_codec_dlm.h). A cross-node request must
+     * carry them or the master cannot tell which of two same-named resources
+     * it is being asked about -- and cannot compute the resource's directory
+     * hash, which is a function of exactly these fields
+     * (src/kernel-core/vms_dlm_hash.h).
+     *
+     * IN, on every op that names a resource. The WIRE ARM reads them out of
+     * the received frame through the codec and REFUSES to serve a request
+     * whose identity it could not parse (src/kernel-core/vms_dlm_scs.c), so
+     * the executive never invents one; a local caller of this ioctl states
+     * the identity it means, exactly as it states the resource name.
+     *
+     * Carved out of the former pad_blkast: same size, no ABI change.
+     */
+    uint16_t res_group;
+    uint8_t  res_mode;
+    uint8_t  pad_res;
 };
 _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
@@ -1408,6 +1429,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t releases_refused;
     uint32_t blkasts_unparsed;
     uint32_t deferred_grants_owed;
+    uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
     uint32_t queued_no_reply;
     uint32_t unparsed;
     uint32_t foreign_refused;
@@ -1424,7 +1446,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t posts_lock_gone;
     uint32_t posts_refused;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 140,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1432,7 +1454,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1450,7 +1472,7 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC094566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC098566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*

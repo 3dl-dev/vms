@@ -221,10 +221,76 @@ enum vms_lck_mode {
 /* ------------------------------------------------------------------ *
  * op 0x01 ENQ / op 0x07 CONVERT -- GROUNDED, spec §4(f).1
  * ------------------------------------------------------------------ */
-#define VMS_OFF_DLM_REQ_LKID       92u  /* body[20:24] LE u32, spec row     */
-#define VMS_OFF_DLM_MASTER_LKID    96u  /* body[24:28] LE u32, spec row     */
+/*
+ * ===========================================================================
+ * THE TWO LOCK-HANDLE SLOTS, AND THEY ARE THE OTHER WAY ROUND FROM WHAT THIS
+ * CODEC USED TO SAY (rd vms-b5b0, MEASURED on the ev5 storm capture:
+ * tests/lab/captures/vms-b5b0-grant-storm-20261009/).
+ *
+ * EACH SLOT NAMES THE LOCK ON ONE NODE'S SIDE, and each end fills in the one
+ * it knows:
+ *
+ *   body[20:24]  THE LOCK ID ON THE MASTER'S NODE. A fresh op-01 request
+ *                carries a PID-form placeholder here (the requester has no
+ *                master handle yet -- 0x2020021x on the ac4 captures); the
+ *                MASTER's grant REPLACES it with the handle it assigned; and
+ *                every later message the requester sends about that lock
+ *                (op-03 release, op-07 convert) carries that handle back.
+ *   body[24:28]  THE LOCK ID ON THE REQUESTER'S NODE. The requester fills it
+ *                on its own request and the master ECHOES IT UNCHANGED in the
+ *                grant -- which is how the requester correlates the completion
+ *                to its own lock.
+ *
+ * WHAT PROVED IT, and why the ac4 captures could not. docs/cluster-protocol-
+ * spec.md SS4(f).1 labelled these two the other way round ("requester lock-id /
+ * PID" at body[20], "master lock-id" at body[24]), byte-exact against SDA but
+ * with the ROLES not separable: in ac4 the requester already knew the master's
+ * RSB, so both values were present in both directions and either labelling fits.
+ * The ev5 capture separates them twice over:
+ *
+ *   - VAX1 sent an op-01 EX request to OVMX for EVAC$WORKLOAD -- a resource
+ *     VAX1 had NEVER locked and OVMX had never told it anything about -- and it
+ *     carried body[24:28] = 0x0f0003ce, a value OVMX had never sent. A value
+ *     the requester cannot have learned from the master is the REQUESTER'S OWN.
+ *   - All 38 real VAX2->VAX1 grants in that capture carry at body[20:24] a
+ *     value found NOWHERE in the request they answer, and all 36 real op-03
+ *     releases from VAX1 carry that same value back at body[20:24] while
+ *     repeating their own id at body[24:28]. A value the requester can only
+ *     have got from the master's grant is the MASTER'S.
+ *
+ * WHAT IT COST TO HAVE THEM SWAPPED: OVMX's master answered VAX1's request with
+ * its own handle at body[24:28] and echoed the PID placeholder at body[20:24],
+ * so VAX1 could not match the completion to its lock. It retransmitted 65,356
+ * times in 63.7 s (1026/s, median gap 0.362 ms) and OVMX answered 65,340 of
+ * them -- a two-node request storm that only a human stopping the workload
+ * ended (memory ovmx-never-crashes-a-peer).
+ * ===========================================================================
+ */
+#define VMS_OFF_DLM_MASTER_LKID    92u  /* body[20:24] LE u32: the MASTER's   */
+#define VMS_OFF_DLM_REQ_LKID       96u  /* body[24:28] LE u32: the REQUESTER's*/
 #define VMS_OFF_DLM_MODE          102u  /* body[30]    u8,     spec row     */
-#define VMS_OFF_DLM_NAME_MARKER   118u  /* body[46]    u8, const 0x03       */
+/*
+ * body[46] IS THE RESOURCE'S ACCESS MODE, NOT A CONSTANT (rd vms-8219,
+ * rd vms-b5b0). It was read for a long time as a "name marker" holding a
+ * constant 0x03 (VMS_DLM_NAME_MARKER / VMS_DLM_NAME_MARKER_CONST, both
+ * retired here) -- because every frame the early captures held was a USER-mode
+ * lock, and user mode IS 3.
+ *
+ * Two later groundings falsified that reading and agree with each other:
+ *   - the DIRECTORY-ROLE capture (rd vms-8219, 14k lookups on a private V7.3
+ *     cluster) reads body[46] as the access mode, "0 kernel / 1 executive /
+ *     3 user, NEVER a constant" -- see the directory section below;
+ *   - the resource-name HASH determination (docs/design-dlm-name-hash.md) hashes
+ *     body[44:48] as group | mode<<16 | name_len<<24 and reproduces 1216 corpus
+ *     rows plus 55 driven pre-registered triples, with the mode byte taking 0,
+ *     1 and 3 across them. A constant there would not fit.
+ *
+ * So VMS_OFF_DLM_RES_MODE (below, same offset) is the ONE name for this byte,
+ * and every builder writes the access mode the caller's own lock is held at.
+ * Writing 0x03 unconditionally made every OVMX frame assert "user mode" --
+ * false for the kernel- and executive-mode locks RMS and the XQP take, and now
+ * also a frame whose identity span would disagree with the hash beside it.
+ */
 #define VMS_OFF_DLM_NAME_LEN      119u  /* body[47]    u8,     spec row     */
 #define VMS_OFF_DLM_NAME          120u  /* body[48..]  ASCII,  spec row     */
 
@@ -233,11 +299,9 @@ enum vms_lck_mode {
 #define VMS_OFB_DLM_REQ_LKID    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REQ_LKID)
 #define VMS_OFB_DLM_MASTER_LKID VMS_OFB_FROM_FRAME(VMS_OFF_DLM_MASTER_LKID)
 #define VMS_OFB_DLM_MODE        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_MODE)
-#define VMS_OFB_DLM_NAME_MARKER VMS_OFB_FROM_FRAME(VMS_OFF_DLM_NAME_MARKER)
 #define VMS_OFB_DLM_NAME_LEN    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_NAME_LEN)
 #define VMS_OFB_DLM_NAME        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_NAME)
 
-#define VMS_DLM_NAME_MARKER_CONST 0x03u
 /* Longest observed resource name is 22 bytes ("F11B$aSYSDSK1     *" family,
  * spec §4(f).1 row 47); a generous bound, not a second grounded fact. */
 #define VMS_DLM_NAME_MAX          32u
@@ -250,18 +314,26 @@ enum vms_lck_mode {
 
 /*
  * A parsed/to-be-built ENQ (op 0x01) or CONVERT (op 0x07) REQUEST.
- * `req_pid_or_lkid` carries the DUAL meaning spec §4(f).1 grounds at
- * body[20]: a fresh ENQ's PROCESS id placeholder, or an existing lock's
- * real local lock-id on a CONVERT. The field is named for the wire's own
- * dual role rather than picking one meaning, exactly as the spec presents
- * it -- resolving which meaning applies is the FSM's job (it knows whether
- * it is originating a fresh ENQ or a CONVERT), not this codec's.
+ *
+ * THE TWO HANDLE FIELDS NAME THE TWO SIDES (rd vms-b5b0 -- read the header's
+ * note on the two handle slots before touching either):
+ *
+ *   `master_lkid`  body[20:24], the lock id ON THE MASTER's node. A fresh ENQ
+ *                  has none, and a real VAX sends a PID-FORM PLACEHOLDER
+ *                  (0x2020021x) there; a CONVERT and a release carry the real
+ *                  handle the master assigned.
+ *   `req_lkid`     body[24:28], the lock id ON THE REQUESTER's node -- its own,
+ *                  always, and the value the master echoes back in its grant
+ *                  so the requester can correlate the completion.
+ *
+ * It used to be the other way round, with body[20:24] called
+ * "req_pid_or_lkid"; that cost a 65,000-frame request storm against a real
+ * VAX (the header's note carries the measurement).
  */
 struct vms_dlm_enq_request {
 	uint8_t  mode;              /* LKB requested mode (CONVERT: the NEW mode) */
-	uint32_t req_pid_or_lkid;   /* body[20:24], see doc comment above     */
-	uint32_t master_lkid;       /* body[24:28]: the RSB's master lock-id, */
-				     /* present once the lock is established   */
+	uint32_t master_lkid;       /* body[20:24], see doc comment above     */
+	uint32_t req_lkid;          /* body[24:28], see doc comment above     */
 	uint8_t  name_len;
 	uint8_t  name[VMS_DLM_NAME_MAX];
 
@@ -283,6 +355,30 @@ struct vms_dlm_enq_request {
 	 */
 	uint32_t dir_hash;
 	uint8_t  dir_hash_valid;
+
+	/*
+	 * THE REST OF THE RESOURCE'S IDENTITY, body[44:46] + body[46] (rd
+	 * vms-b5b0). The UIC group and the access mode that QUALIFY the name --
+	 * the same two fields the directory role reads (struct
+	 * vms_dlm_res_ident) and the two the name hash is computed over
+	 * (vms_dlm_hash.h).
+	 *
+	 * `res_ident_valid` IS NOT DECORATION. The parser sets it for an op-0x01
+	 * ROOT request and NOT for an op-0x07 CONVERT, because an op-0x07 body's
+	 * name span -- and with it the identity span beside it -- is STALE
+	 * BUFFER on a real VAX frame: measured, docs/design-dlm-name-hash.md
+	 * §4a, where 2 of 8 op-0x07 frames carried a visibly half-overwritten
+	 * name whose hash field belonged to an entirely different resource. A
+	 * caller must therefore take a convert's resource identity from the lock
+	 * the convert NAMES (its master lock-id), not from the frame.
+	 *
+	 * The BUILDER writes the two fields only when the flag is set, exactly
+	 * as it treats `dir_hash` -- an omission, never a zero passed off as an
+	 * identity (INV-6).
+	 */
+	uint16_t res_group;
+	uint8_t  res_acmode;
+	uint8_t  res_ident_valid;
 };
 
 /*
@@ -300,27 +396,44 @@ enum vms_dlm_enq_outcome {
 
 struct vms_dlm_enq_response {
 	enum vms_dlm_enq_outcome outcome;
-	uint32_t req_lkid;      /* GRANTED: the requester's newly assigned   */
-				 /* local lock-id (body[20]); DENIED: the     */
-				 /* request's PID placeholder, echoed         */
-	uint32_t master_lkid;   /* body[24:28], echoed in both shapes        */
-	uint8_t  granted_mode;  /* GRANTED: the mode now held; DENIED: 0     */
+	/*
+	 * THE REQUESTER'S OWN handle, body[24:28], echoed by the master in both
+	 * shapes -- the value the requester correlates its completion by (rd
+	 * vms-b5b0 swapped this with master_lkid; the header's note on the two
+	 * handle slots carries the measurement).
+	 */
+	uint32_t req_lkid;
+	/* THE MASTER'S handle, body[20:24]: the value the master ASSIGNED in a
+	 * grant (and a PID-form placeholder on the request it answers). */
+	uint32_t master_lkid;
+	/*
+	 * A GRANT CARRIES NO MODE on the wire -- body[30] is cleared in 38 of 38
+	 * real grants (rd vms-b5b0) -- so `granted_mode_present` is 0 on one and
+	 * `granted_mode` is 0 with it. The requester asked for a mode and a
+	 * grant means that mode: only the requester's own LKB holds it, and the
+	 * engine grants from there. The field survives for the one shape that
+	 * does carry a mode (a grant with no grant record, which no real capture
+	 * shows) and for DENIED, where it is 0.
+	 */
+	uint8_t  granted_mode;
+	uint8_t  granted_mode_present;
 	uint8_t  name_len;      /* DENIED only -- GRANTED carries no name    */
 	uint8_t  name[VMS_DLM_NAME_MAX];
 
 	/*
-	 * THE LVB READ CROSSING (vms-727). A GRANT reply carries the master
-	 * resource's current 16-byte value block when the record marker is
-	 * present (body[28]==0x10 AND body[32:36]=={01 00 fa 00}, the grounded
-	 * grant-with-valblk shape -- distinct from the op-0x06 write's 0x13/
-	 * per-lock-SERIAL shape). `valblk_present` 0 means the grant carried no
-	 * block, and the requester's own proxy value block is then LEFT ALONE.
-	 * The exact-match marker is what keeps a STALE-BUFFER grant (body[36:52]
-	 * a prior frame's leftover, body[34]==0xf9) from being mis-read as a
-	 * value block -- the codec header's stale-buffer trap, applied here.
+	 * THE LVB READ CROSSING (vms-727), WITH ITS MARKER CORRECTED (rd
+	 * vms-b5b0). The record this codec used to read as "a value block is
+	 * present" (body[28]==0x10 AND body[32:36]=={01 00 fa 00}) is on EVERY
+	 * real grant -- 38 of 38, including grants whose block is all zero --
+	 * so it marks the GRANT, not the block's presence. The block itself is
+	 * body[36:52] either way, which the dlm-grant-valblk specimen proves
+	 * directly: a real c2-seq grant returns the exact 16 bytes the requester
+	 * had written. So `valblk_present` is set whenever the record is there,
+	 * and zeros in it are the master resource's zeros -- data for a resource
+	 * whose block is zero, not a placeholder.
 	 */
-	uint8_t  valblk_present;
 	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
+	uint8_t  valblk_present;
 };
 
 /*
@@ -359,7 +472,7 @@ vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
  * vms_sca_hdr_build) or the generic SYSAP envelope's send/ack/txn fields
  * (abs 72-79, spec §4(j) -- owned by whichever item lands the CM/generic
  * envelope codec, not this DLM item); `frame` must already hold a valid
- * frame of at least `cap` >= 132 (VMS_DLM_NAME_MARKER's max reach) bytes
+ * frame of at least `cap` >= 132 (the directory hash's max reach) bytes
  * that the caller assembles those spans into separately. `opcode` selects
  * VMS_DLM_WIREOP_ENQ or VMS_DLM_WIREOP_CONVERT.
  */
@@ -381,26 +494,42 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
  * body[24:28] echoes master_lkid, body[30] is the granted mode. The name
  * span is left untouched (spec: grant does not echo the name).
  */
-vms_codec_status_t vms_dlm_enq_response_build_grant(uint32_t req_lkid,
-						    uint32_t master_lkid,
-						    uint8_t granted_mode,
-						    uint8_t *frame, uint32_t cap,
-						    uint32_t *written);
-
 /*
- * Build a GRANT reply THAT RETURNS THE MASTER'S VALUE BLOCK (vms-727, the LVB
- * READ crossing). Identical to build_grant in its req_lkid/master_lkid/mode
- * fields, plus the grounded grant-with-valblk record: the HDR words body[12:16],
- * the record flag body[28]=0x10, the reply stamp body[34]=0xfa, and the 16-byte
- * `valblk` at body[36:52] (read from the master RESOURCE, never composed). The
- * sequence/stale tail body[52:88] is zero-filled. `valblk` must be non-NULL;
- * both lock ids are REFUSED at VMS_DLM_LKID_UNSET (the fc8540ae rule). Callers
- * use this ONLY when the master resource holds a real (non-zero) block; sixteen
- * zeros presented as an LVB is the placeholder INV-6 forbids.
+ * BUILD A MASTER'S GRANT -- BY ECHOING THE REQUEST (rd vms-b5b0).
+ *
+ * A real master's grant IS the request echoed with a fixed set of bytes
+ * rewritten: that is what 38 of 38 real VAX2->VAX1 grants are, byte for byte
+ * (tests/lab/captures/vms-b5b0-grant-storm-20261009/). So this builder takes
+ * the REQUEST BODY and rewrites exactly those bytes -- which makes the two
+ * things that storm-ed OVMX structurally impossible:
+ *
+ *   - THE REQUESTER'S HANDLE IS ECHOED, never re-supplied. It is the value the
+ *     requester correlates its completion by (body[24:28]); a caller cannot
+ *     pass the wrong one because it cannot pass one at all.
+ *   - THE GRANT RECORD IS ALWAYS WRITTEN (body[28]/[30]/[32]/[34], including
+ *     the 0xfa outcome), because every real grant carries it.
+ *
+ * `master_lkid` is the handle THIS master assigned, and the only value the
+ * caller supplies. `valblk` is the master resource's value block or NULL; it
+ * rides body[36:52], the span the op-0x06 write grounds, and NULL leaves it
+ * zero (an honest omission -- see `valblk_present` for why a grant no longer
+ * CLAIMS to carry one).
+ *
+ * Refuses E_INVAL for a zero master_lkid (the fc8540ae rule: a grant that hands
+ * out lock-id 0 is not a grant) and E_CLASS for a body that is not a cat-0x02
+ * op-0x01/op-0x07 request.
  */
-vms_codec_status_t vms_dlm_enq_response_build_grant_valblk(uint32_t req_lkid,
+/* The immediate answer to a CONVERT a master QUEUED: the request echoed, cat
+ * 0x82, body[34] = 0xfb, body[52:54] left zero (rd vms-cab). */
+vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body,
+							 uint32_t req_len,
+							 uint8_t *frame,
+							 uint32_t cap,
+							 uint32_t *written);
+
+vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
+						    uint32_t req_len,
 						    uint32_t master_lkid,
-						    uint8_t granted_mode,
 						    const uint8_t *valblk,
 						    uint8_t *frame, uint32_t cap,
 						    uint32_t *written);
@@ -410,8 +539,11 @@ vms_codec_status_t vms_dlm_enq_response_build_grant_valblk(uint32_t req_lkid,
  * placeholder verbatim (`req_pid_echo`), body[30] is cleared to 0, and the
  * name is echoed at body[46:48+len] (spec §4(f).1).
  */
+/* `res_acmode` is the access mode the DENIED REQUEST carried at body[46] --
+ * echoed, never a constant (rd vms-b5b0). */
 vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 						   uint32_t master_lkid,
+						   uint8_t res_acmode,
 						   uint8_t name_len,
 						   const uint8_t *name,
 						   uint8_t *frame, uint32_t cap,
@@ -525,6 +657,44 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  */
 #define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
 
+/* ------------------------------------------------------------------ *
+ * RULE C's PER-FRAME HALF (rd vms-b5b0)
+ *
+ * May this body be ADDRESSED AT a member this executive cannot prove runs this
+ * implementation -- i.e. at a real VAX? It is a question about the SHAPE, and
+ * the codec is the layer that knows shapes, so the connection manager asks it
+ * here instead of reading a byte of its own (no wire offset lives outside this
+ * translation unit).
+ *
+ * YES for the four REQUEST shapes whose field map is grounded on real VAX<->VAX
+ * traffic and which carry no span this executive would have to fill with an
+ * invented value:
+ *   op 0x01 ENQ / directory lookup   spec §4(f).1; the identity at
+ *                                    body[44:48] and the hash at body[128:132]
+ *                                    are both executive reads (rd vms-b5b0)
+ *   op 0x07 CONVERT                  same shape, the mode converted TO
+ *   op 0x06 CONVERT with the value   vms-727, wire-confirmed both crossings
+ *   op 0x03 DEQ                      vms-c03; a lock taken at a real master
+ *                                    MUST be releasable, or an OVMX $ENQ can
+ *                                    take a cluster-wide lock and never give
+ *                                    it back -- worse for the VAX than the
+ *                                    frame is
+ *
+ * NO for everything else, and the two that matter are named because their
+ * refusal is a standing honest gap, not an oversight:
+ *   op 0x05 BLKAST   its mode-context pair at body[30:32] is OBSERVED AND NOT
+ *                    PINNED (see the section above), so OVMX would have to
+ *                    write a zero where every real frame carries data.
+ *   a cat-0x82 reply an uncorrelated reply is what RULE A forbids; the answers
+ *                    this node does send to a real VAX are the DIRECTORY's,
+ *                    staged as replies to that VAX's own request and built by
+ *                    vms_dlm_dir_answer_build from the request's own bytes.
+ *
+ * Nonzero = fit to address at any member. A body this codec cannot read at all
+ * reads 0, because "nobody told us" and "it is safe" are different facts.
+ * ------------------------------------------------------------------ */
+int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len);
+
 /* One resource as a directory sees it. `name` is NOT NUL-terminated. */
 struct vms_dlm_res_ident {
 	uint32_t hash;                    /* body[128:132]                  */
@@ -545,6 +715,64 @@ struct vms_dlm_res_ident {
 vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 						uint32_t len,
 						struct vms_dlm_res_ident *out);
+
+/*
+ * THE DIRECTORY'S ANSWER, AS THE REQUESTER READS IT (rd vms-b5b0, grounding in
+ * the directory-role block above: 4960 of 4960 real "you master it" pairs and
+ * 36 of 36 real redirects).
+ *
+ * The answer is the REQUEST ECHOED, with body[8] = 0x82 and body[28:39]
+ * rewritten -- body[34] carrying the outcome (0xf9 "nobody masters it, YOU do"
+ * / 0xf8 "the master is the CSID at body[28:32]"). The requester half of that
+ * had to exist the moment an OVMX $ENQ could be addressed at a real VAX's
+ * DIRECTORY (rd vms-b5b0's routing): without it, the 0xf9 answer to our own
+ * lookup is read by the grant/deny discriminator as a DENY -- mode byte
+ * untouched is not 0, but the NAME is echoed -- and an $ENQ that should have
+ * made this node the master returns SS$_NOTQUEUED instead. A wrong status to
+ * the caller, from a frame that said the opposite.
+ *
+ * WHAT THIS PARSE CAN AND CANNOT DECIDE, stated exactly, because the honest
+ * answer is that TWO of the three signals live here and the third does not:
+ *   body[34] is 0xf9 or 0xf8     the outcome byte. NOT sufficient alone: the
+ *                                codec has measured STALE-BUFFER grants
+ *                                carrying 0xf9 there (see the grant-with-
+ *                                valblk note in vms_dlm_enq_response_parse_body).
+ *   the NAME is echoed           a GRANT omits it (spec §4(f).1), so a grant --
+ *                                stale buffer or not -- is never read as an
+ *                                answer here.
+ *   ...and A DENY CANNOT BE TOLD APART BY ANY BODY FIELD. A real answer
+ *                                rewrites body[28:39], the mode byte included,
+ *                                so "mode cleared + name echoed" describes the
+ *                                DENY shape and the ANSWER shape equally, and
+ *                                body[34] is not cited in the deny grounding at
+ *                                all. The deciding fact is NOT in the frame: it
+ *                                is WHAT THIS NODE SENT. An answer to a request
+ *                                this node addressed at a DIRECTORY is a
+ *                                directory answer; an answer to one it
+ *                                addressed at a MASTER is a grant or a deny --
+ *                                and the requester FSM holds that record
+ *                                (`struct dlm_req.to_directory`), which is
+ *                                where dlm_req_fsm_reply_body() applies it. A
+ *                                caller without such a record must NOT read a
+ *                                reply as a directory answer on these two
+ *                                signals alone.
+ *
+ * `req_lkid` is body[20:24] -- the value THIS node put on its own request, so
+ * the answer is matched to a lock by a handle this executive minted. `*out` is
+ * written only on VMS_CODEC_OK; VMS_CODEC_E_CLASS for anything that is not a
+ * directory answer, so a caller can try this parse first and fall through.
+ */
+struct vms_dlm_dir_answer {
+	uint8_t  status;              /* VMS_DLM_DIR_YOU_MASTER / _REDIRECT */
+	uint8_t  mode;                /* body[30], the echoed request's mode */
+	uint32_t req_lkid;            /* body[20:24], OUR OWN handle        */
+	uint32_t master_csid;         /* body[28:32]; 0 unless _REDIRECT    */
+	struct vms_dlm_res_ident id;  /* the echoed identity, name and hash */
+};
+
+vms_codec_status_t vms_dlm_dir_answer_parse_body(const uint8_t *body,
+						 uint32_t len,
+						 struct vms_dlm_dir_answer *out);
 
 /*
  * Build the directory's answer to an op-0x01 or op-0x08 ROOT lookup: the
@@ -804,36 +1032,60 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 #define VMS_DLM_VALBLK_BODY_LEN   88u
 
 /*
- * THE GRANT-WITH-VALBLK RECORD (vms-727, the LVB READ crossing).
+ * ===========================================================================
+ * THE GRANT RECORD -- and it is ON EVERY GRANT, not only on one that returns a
+ * value block (rd vms-b5b0, MEASURED: 38 of 38 real VAX2->VAX1 grants in
+ * tests/lab/captures/vms-b5b0-grant-storm-20261009/).
  *
- * A cat-0x82 op-0x01 GRANT reply that returns the master resource's current
- * value block carries it at the SAME body[36:52] the op-0x06 write uses, but
- * with a DISTINCT surrounding record -- the reply shape, not the request shape:
+ * This block used to read these bytes as "the grant-WITH-VALBLK record" -- the
+ * marker that distinguished a grant returning the master's LVB from a plain
+ * one. The ev5 capture says otherwise: EVERY grant carries them, including
+ * grants for resources with no value block at all. They are the GRANT's own
+ * record, and the outcome byte in them is what tells the requester its lock was
+ * granted:
  *
- *   body[28]    = 0x10   -- the grant-with-valblk record flag (contrast the
- *       op-0x06 write's 0x13 and a plain ENQ request's 0x11). CONSTANT across
- *       nine+ real grant-with-valblk frames spanning c1/c2/c4/c5/c6/c7 and the
- *       vms-c03 dlm-blk2/dlm-deq/dlm-lvb3 captures.
- *   body[32:36] = 01 00 fa 00 -- CONSTANT across all nine+ (UNLIKE the write's
- *       per-lock SERIAL): body[32]=0x01, body[34]=0xfa is the cat-0x82 REPLY
- *       stamp (the write's RESULT_STAMP position, which a REQUEST carries 0x01
- *       and a REPLY 0xfa/0xf9 -- grounded in the op-0x06 spec comment above).
- *       Nothing here is minted or per-request derived, so no peer-crash risk.
- *   body[36:52] = the 16-byte value block, read from the master RESOURCE
- *       (VMS_OFF_DLM_VALBLK, the write's own offset).
- *   body[52:88] = a sequence-like word at body[52:54] (varies across captures,
- *       an SCS-layer counter this DLM codec does not own) then stale buffer.
- *       ZERO-FILLED by the builder -- an honest omission, exactly as the
- *       op-0x06 builder zero-fills its own body[56:88] tail.
+ *   body[28]    = 0x10   CONSTANT, 38/38 (contrast the op-0x06 write's 0x13
+ *                        and a plain ENQ request's 0x11).
+ *   body[30]    = 0x00   CONSTANT, 38/38 -- the mode byte is CLEARED. A real
+ *                        grant carries NO granted mode: the requester asked
+ *                        for one and a grant means that one. (OVMX used to
+ *                        write the granted mode here.)
+ *   body[32]    = 0x01   CONSTANT, 38/38
+ *   body[34]    = 0xfa   CONSTANT, 38/38 -- THE OUTCOME BYTE, the same
+ *                        position that carries 0xf9 "you master it" and 0xf8
+ *                        "the master is X" in a directory answer (rd vms-8219).
+ *                        So body[34] is the universal cat-0x82 outcome:
+ *                        0xfa granted / 0xf9 you-master-it / 0xf8 redirect.
+ *   body[47]    = 0x00   CONSTANT, 38/38 -- the name length is cleared (the
+ *                        resource name is not echoed on a grant).
+ *   body[36:52] the span the op-0x06 WRITE grounds as the value block. On these
+ *                        38 grants it is mostly zero with body[36]=0x01 in 27
+ *                        of 38 and body[40]=0x01 in 32 of 38 -- i.e. NOT a
+ *                        clean LVB and NOT a constant either. So this codec no
+ *                        longer claims a grant RETURNS a value block: see
+ *                        `valblk_present` on struct vms_dlm_enq_response.
+ *
+ * WHAT IT COST: OVMX wrote this record only when the master resource happened
+ * to hold a non-zero value block, so an ordinary grant went out with body[28],
+ * [32] and [34] all zero -- an outcome byte no real answer carries. Together
+ * with the swapped handle slots above, that is the ev5 request storm.
+ * ===========================================================================
  */
-#define VMS_DLM_GRANT_VALBLK_FLAG_VAL     0x10u  /* body[28] grant-valblk flag  */
-/*
- * body[32:36] as one LE32 == 01 00 fa 00: body[32]=0x01 (const, NOT a per-lock
- * SERIAL -- the whole word is constant across nine+ grant-with-valblk captures),
- * body[34]=0xfa the cat-0x82 REPLY stamp. Written and matched as a unit so the
- * builder's own output round-trips through the parser (body[33]/[35] pinned 0).
- */
-#define VMS_DLM_GRANT_VALBLK_REC_VAL      0x00fa0001u
+#define VMS_OFF_DLM_GRANT_FLAG           100u  /* body[28] u8                  */
+#define VMS_OFF_DLM_GRANT_REC            104u  /* body[32:36] LE u32           */
+#define VMS_OFB_DLM_GRANT_FLAG  VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_FLAG)
+#define VMS_OFB_DLM_GRANT_REC   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_REC)
+#define VMS_DLM_GRANT_FLAG_VAL            0x10u  /* body[28], 38/38           */
+#define VMS_DLM_GRANT_REC_VAL             0x00fa0001u /* body[32:36], 38/38   */
+
+/* THE UNIVERSAL cat-0x82 OUTCOME BYTE at body[34] (rd vms-b5b0). The directory
+ * answers' 0xf9/0xf8 are declared with the directory role above; this is the
+ * third value, and the one a master's GRANT carries. */
+#define VMS_DLM_REPLY_GRANTED             0xfau
+/* A master QUEUED the request (rd vms-cab): the immediate answer to a CONVERT
+ * that cannot be granted yet. Grounded from real VAX<->VAX pairs, see
+ * vms_dlm_convert_response_build_queued. */
+#define VMS_DLM_REPLY_QUEUED              0xfbu
 
 /*
  * body[30:32] (abs 102): the BLKAST's mode-context pair.

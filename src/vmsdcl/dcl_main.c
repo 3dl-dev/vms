@@ -15,7 +15,6 @@
 #include <ctype.h>
 #include <time.h>
 #include <sys/stat.h>
-#include <termios.h>
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -373,47 +372,13 @@ static int dcl_ctrl_t_rl_handler(int count, int key)
 #endif
 
 /*
- * Terminal configuration for VMS signal/EOF model.
- * - VEOF = 26 (Ctrl+Z is EOF, not Ctrl+D)
- * - VINTR = 25 (Ctrl+Y generates SIGINT for DCL interrupt)
- * - VQUIT = 3 (Ctrl+C generates SIGQUIT for user-mode AST)
- * - VSUSP = disabled (Ctrl+Z is EOF, not suspend)
+ * THE TERMINAL IS THE EXECUTIVE'S (rd vms-f8c). DCL used to reprogram the
+ * substrate tty here -- VEOF = ^Z, VINTR = ^Y, VQUIT = ^C, VSUSP off -- and put
+ * it back at exit. Those keys are the executive terminal driver's now
+ * (src/kernel-core/vms_tt.c): ^Z is a read terminator that echoes *EXIT*, ^Y
+ * and ^C are out-of-band characters it acts on when typed. DCL reads with
+ * $QIO IO$_READPROMPT (dcl_tt_read) and touches no termios.
  */
-static struct termios orig_termios;
-static int termios_saved = 0;
-
-static void restore_termios(void)
-{
-    if (termios_saved) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
-        termios_saved = 0;
-    }
-}
-
-static void setup_vms_eof(void)
-{
-    if (!isatty(STDIN_FILENO))
-        return;
-
-    struct termios tio;
-    if (tcgetattr(STDIN_FILENO, &tio) != 0)
-        return;
-
-    /* Save original settings for restore on exit */
-    orig_termios = tio;
-    termios_saved = 1;
-    atexit(restore_termios);
-
-    /* Set VEOF to Ctrl+Z (0x1A = 26) — VMS convention */
-    tio.c_cc[VEOF] = 26;
-    /* Disable Ctrl+Z as suspend (we use it for EOF) */
-    tio.c_cc[VSUSP] = _POSIX_VDISABLE;
-    /* Map Ctrl+Y (0x19) to VINTR — generates SIGINT for DCL interrupt */
-    tio.c_cc[VINTR] = 25;
-    /* Map Ctrl+C (0x03) to VQUIT — generates SIGQUIT for user-mode AST */
-    tio.c_cc[VQUIT] = 3;
-    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
-}
 
 /*
  * The DCL-side login banner + last-login emitter was DELETED here (vms-417,
@@ -643,9 +608,6 @@ int main(int argc, char *argv[])
      * DCL runs unchanged (INV-6, no per-process fake). */
     dcl_p1_init();
 
-    /* Set VEOF to Ctrl+Z (VMS convention) */
-    setup_vms_eof();
-
     /* Check for --login flag, and the login command file LOGINOUT hands over
      * with --lgicmd <spec> (vms-e48: the SYSUAF LGICMD field, already resolved
      * to its documented default by LOGINOUT when the field was empty). */
@@ -819,72 +781,61 @@ int main(int argc, char *argv[])
         sigint_received = 0;
 
         if (dcl_ctx.interactive) {
-#ifdef HAVE_READLINE
-            line = readline(dcl_ctx.prompt);
-            if (!line) {
-                /* Ctrl/Z at the prompt does not log out (vms-a70; see the
-                 * fgets branch below for the oracle). readline reports a
-                 * Ctrl/Z and a hangup alike, so ask the terminal: a hung-up
-                 * terminal polls POLLHUP/POLLERR and ends the session. */
-                struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
-                int hung = poll(&pfd, 1, 0) < 0 ||
-                           (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0;
-                printf("\n");
-                if (!hung && isatty(STDIN_FILENO) && ++ctrlz_run <= 64)
-                    continue;
-                break;
-            }
-            ctrlz_run = 0;
-            /* Add to history if non-empty */
-            if (line[0] != '\0') {
-                add_history(line);
-            }
-#else
-            /* No readline - use fgets */
-            static char fgets_buf[DCL_MAX_LINE];
-            printf("%s", dcl_ctx.prompt);
-            fflush(stdout);
-            /* vms-195: when SYS$OUTPUT is a mailbox (async writer) but SYS$INPUT
-             * is still the terminal -- the live console login -- the newline-less
-             * prompt would ride the async writer while the kernel echoes the next
-             * keystroke synchronously, interleaving as "d$ ir". Wait for the
-             * prompt to be fully emitted over the mailbox before reading input,
-             * which arms that echo. A no-op for a terminal/file SYS$OUTPUT. */
+            /* vms-195: SYS$OUTPUT may be a mailbox drained by an async writer
+             * while SYS$INPUT is the terminal; let the last output reach the
+             * terminal before the read writes its prompt. */
             dcl_mbx_output_drain_sync();
-            if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
+            /*
+             * THE COMMAND READ IS $QIO IO$_READPROMPT (rd vms-f8c), as VMS
+             * DCL's is: the executive's terminal driver writes the prompt,
+             * then consumes the type-ahead -- what the user typed while the
+             * last command ran waited there UNECHOED and is echoed now, after
+             * the prompt -- and ends the read on a terminator.
+             */
+            static char tt_buf[DCL_MAX_LINE];
+            int tn = dcl_tt_read(dcl_ctx.prompt, tt_buf, sizeof(tt_buf), 0, 0, NULL);
+            if (tn == DCL_TT_EOF) {
                 /*
-                 * Ctrl/Z AT THE DCL PROMPT DOES NOT LOG OUT (vms-a70). On VMS
-                 * the terminal driver echoes "*EXIT*" and DCL simply prompts
-                 * again; the session ends only on LOGOUT or a hangup. Oracle: a
-                 * real VAX V7.3, Ctrl/Z at "$ " inside SET HOST 0 -> "*EXIT*",
-                 * new "$ " prompt, session still there (tests/lab/captures/
-                 * decnet-sethost-inbound-20261005/vax-dcl-ctrlz.txt). Breaking
-                 * here made a VAX SET HOST to OVMX drop the whole session on
-                 * Ctrl/Z.
-                 *
-                 * The terminal's VEOF is Ctrl/Z (configured above), so the
-                 * keystroke reads as a clean EOF with no error. A HANGUP is
-                 * different: once the terminal's far side is gone the read
-                 * fails (EIO -> ferror), and that still ends the session. The
-                 * consecutive-EOF bound is a guard against a terminal that
-                 * reports EOF forever without input: it cannot spin DCL.
+                 * Ctrl/Z AT THE DCL PROMPT DOES NOT LOG OUT (vms-a70). The
+                 * driver has echoed "*EXIT*"; DCL simply prompts again. Oracle:
+                 * a real VAX V7.3, Ctrl/Z at "$ " -> "*EXIT*", new "$ "
+                 * (tests/lab/captures/decnet-sethost-inbound-20261005/
+                 * vax-dcl-ctrlz.txt; docs/oracle/keystroke/ERR.DCL E6Z).
                  */
-                if (feof(stdin) && !ferror(stdin) && isatty(STDIN_FILENO) &&
-                    ++ctrlz_run <= 64) {
-                    clearerr(stdin);
-                    printf("\n");
-                    continue;
-                }
-                printf("\n");
-                break;
+                continue;
             }
-            ctrlz_run = 0;
-            size_t flen = strlen(fgets_buf);
-            if (flen > 0 && fgets_buf[flen - 1] == '\n')
-                fgets_buf[flen - 1] = '\0';
-            line = strdup(fgets_buf);
-            if (!line) break;
-#endif
+            if (tn == DCL_TT_INTR || tn == DCL_TT_TIMEOUT)
+                continue;               /* ^Y / ^C at the prompt: prompt again */
+            if (tn == DCL_TT_GONE)
+                break;                  /* hangup: the session ends */
+            if (tn >= 0) {
+                ctrlz_run = 0;
+                line = strdup(tt_buf);
+                if (!line) break;
+            } else {
+                /* DCL_TT_NODRIVER: no executive terminal behind TT: -- a
+                 * developer's host build run outside the OVMX runtime. Read
+                 * the descriptor plainly; nothing reprograms it. */
+                static char fgets_buf[DCL_MAX_LINE];
+                printf("%s", dcl_ctx.prompt);
+                fflush(stdout);
+                if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
+                    if (feof(stdin) && !ferror(stdin) && isatty(STDIN_FILENO) &&
+                        ++ctrlz_run <= 64) {
+                        clearerr(stdin);
+                        printf("\n");
+                        continue;
+                    }
+                    printf("\n");
+                    break;
+                }
+                ctrlz_run = 0;
+                size_t flen = strlen(fgets_buf);
+                if (flen > 0 && fgets_buf[flen - 1] == '\n')
+                    fgets_buf[flen - 1] = '\0';
+                line = strdup(fgets_buf);
+                if (!line) break;
+            }
         } else {
             /* Non-interactive: read from stdin */
             static char buf[DCL_MAX_LINE];
@@ -908,20 +859,21 @@ int main(int argc, char *argv[])
 
                 char *cont = NULL;
                 if (dcl_ctx.interactive) {
-#ifdef HAVE_READLINE
-                    cont = readline("_$ ");
-#else
-                    static char cbuf[DCL_MAX_LINE];
-                    printf("_$ ");
-                    fflush(stdout);
+                    static char ccbuf[DCL_MAX_LINE];
                     dcl_mbx_output_drain_sync();  /* vms-195: prompt before echo */
-                    if (fgets(cbuf, sizeof(cbuf), stdin)) {
-                        size_t clen = strlen(cbuf);
-                        if (clen > 0 && cbuf[clen - 1] == '\n')
-                            cbuf[clen - 1] = '\0';
-                        cont = strdup(cbuf);
+                    int cn = dcl_tt_read("_$ ", ccbuf, sizeof(ccbuf), 0, 0, NULL);
+                    if (cn >= 0) {
+                        cont = strdup(ccbuf);
+                    } else if (cn == DCL_TT_NODRIVER) {
+                        printf("_$ ");
+                        fflush(stdout);
+                        if (fgets(ccbuf, sizeof(ccbuf), stdin)) {
+                            size_t clen = strlen(ccbuf);
+                            if (clen > 0 && ccbuf[clen - 1] == '\n')
+                                ccbuf[clen - 1] = '\0';
+                            cont = strdup(ccbuf);
+                        }
                     }
-#endif
                 } else {
                     static char cbuf[DCL_MAX_LINE];
                     if (fgets(cbuf, sizeof(cbuf), stdin)) {
@@ -985,7 +937,6 @@ int main(int argc, char *argv[])
     dcl_mbx_shutdown();
 
     /* Cleanup */
-    restore_termios();
     /* Deallocate terminal device */
     vms_term_deallocate(dcl_ctx.terminal.device_name);
     /* Close any open channels (stdio streams AND RMS reader/writer handles). */

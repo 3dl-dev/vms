@@ -70,6 +70,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/wait.h>
 #include <stdint.h>
@@ -289,7 +290,21 @@ int main(void)
           after_assign.refcnt == baseline_refcnt + 1,
           "A-WRITES/B-READS: a fresh child sees the reference sys$assign(\"TT:\") added to OPA0: in the executive (public API, cross-process)");
 
-    /* --- 3. Real I/O through the PUBLIC sys$qiow on that channel --- */
+    /* --- 3. Real I/O through the PUBLIC sys$qiow on that channel ---
+     * A terminal's I/O is the executive terminal driver's (rd vms-f8c): bytes
+     * reach the console only through the port attached to OPA0:. On the
+     * product STARTUP attaches it at boot; this rig boots no STARTUP, so the
+     * suite attaches the console itself, exactly as STARTUP does (a
+     * privileged process: CMKRNL). A console already attached by an earlier
+     * suite answers SS$_DEVALLOC -- attached either way. */
+    {
+        int cfd = open("/dev/console", O_RDWR | O_NOCTTY);
+        uint32_t ast = cfd >= 0 ? vms_kif_tt_attach(cfd, "OPA0:") : 0;
+        CHECK(ast == SS$_NORMAL || ast == SS$_DEVALLOC,
+              "parent: the console is attached to OPA0:'s terminal driver (as STARTUP attaches it)");
+        /* cfd stays open: the attachment lives as long as the console tty */
+    }
+
     static const char msg[] = "OVMX vms-1c57: $QIO to a terminal now reaches the executive's device table\n";
     struct _iosb iosb = {0};
     uint32_t qst = sys$qiow(0, chan, IO$_WRITEVBLK, &iosb, NULL, 0,

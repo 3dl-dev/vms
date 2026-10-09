@@ -82,4 +82,16 @@ void *kif_xport_mmap(int fd, unsigned long length, unsigned long offset);
  */
 void kif_xport_munmap(void *addr, unsigned long length);
 
+/*
+ * kif_xport_tty_attach - hand the substrate tty open on `ttyfd` to the
+ * executive's terminal driver (rd vms-f8c): switch the tty to the executive's
+ * line discipline (the PORT driver; Linux TIOCSETD, NetBSD TIOCSLINED), then
+ * issue `bind_req` (VMS_TTIOC_BIND) with `bind_args` ON THE TTY, binding it to
+ * the terminal unit the args name. Returns 0 when both were delivered (the
+ * caller then reads the bind's own VMS status out of `bind_args`), or a
+ * NEGATIVE ERRNO. Which line discipline is the executive's is substrate
+ * knowledge, held here.
+ */
+int kif_xport_tty_attach(int ttyfd, unsigned long bind_req, void *bind_args);
+
 #endif /* _KIF_TRANSPORT_H */

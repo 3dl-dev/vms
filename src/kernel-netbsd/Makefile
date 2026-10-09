@@ -52,6 +52,8 @@ SRCS=		vms_netbsd.c \
 		vms_lock.c \
 		vms_lnm.c \
 		vms_devtab.c \
+		vms_tt.c \
+		vms_tt_netbsd.c \
 		vms_cluster_fork.c \
 		vms_cluster_fork_bind.c \
 		vms_pe.c \

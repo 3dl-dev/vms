@@ -2073,6 +2073,113 @@ struct vms_setmode_args {
 #define VMS_IOCTL_DALLOC    _IOWR(VMS_IOC_MAGIC, 0x56, struct vms_alloc_args)
 
 /*
+ * THE TERMINAL CLASS DRIVER (rd vms-f8c, epic vms-4eba; src/kernel-core/
+ * vms_tt.c, design docs/design-terminal-driver.md). A terminal's bytes now
+ * traverse the executive: the substrate tty runs the executive's line
+ * discipline (the PORT driver), and the class driver owns the type-ahead
+ * buffer, echo (only when a read consumes a character), line editing,
+ * terminators and timed reads -- what TTDRIVER owns on VMS (OpenVMS I/O
+ * User's Reference Manual, "Terminal Driver").
+ *
+ * VMS_IOCTL_TT_READ is $QIO IO$_READVBLK / READLBLK / READPROMPT on a channel
+ * to a terminal; the VMS_TT_RD_* flags are the IO$M_* read modifiers it
+ * honours. A terminal row with no port attached answers SS$_DEVOFFLINE.
+ *
+ * VMS_TTIOC_BIND is issued on the TERMINAL's own file descriptor (it is the
+ * line discipline's ioctl, not /dev/vms's): it attaches that tty, as the port,
+ * to the named terminal row. OVMX construct, labelled (Rule 8): binding a
+ * substrate tty to a VMS terminal unit has no VMS counterpart.
+ */
+#define VMS_TT_RD_NOECHO      0x0001u  /* IO$M_NOECHO    */
+#define VMS_TT_RD_TIMED       0x0002u  /* IO$M_TIMED     */
+#define VMS_TT_RD_PURGE       0x0004u  /* IO$M_PURGE     */
+#define VMS_TT_RD_NOFILTR     0x0008u  /* IO$M_NOFILTR   */
+#define VMS_TT_RD_TRMNOECHO   0x0010u  /* IO$M_TRMNOECHO */
+#define VMS_TT_RD_CVTLOW      0x0020u  /* IO$M_CVTLOW    */
+#define VMS_TT_RD_TERMMASK    0x0100u  /* termmask[] is the caller's (P4) */
+
+struct vms_tt_read_args {
+    uint32_t chan;              /* in: channel assigned to the terminal */
+    uint32_t flags;             /* in: VMS_TT_RD_* */
+    uint64_t buf;               /* in: user buffer (P1) */
+    uint32_t bufsz;             /* in: its size (P2) */
+    uint32_t timeout;           /* in: seconds, with VMS_TT_RD_TIMED (P3) */
+    uint64_t prompt;            /* in: prompt (P5), or 0 */
+    uint32_t promptsz;          /* in: its size (P6) */
+    uint32_t termmask[8];       /* in: with VMS_TT_RD_TERMMASK: bit n = char n */
+    uint32_t status;            /* out: SS$_ completion status */
+    uint32_t count;             /* out: data bytes before the terminator */
+    uint32_t term;              /* out: the terminator character */
+    uint32_t termsz;            /* out: 1 when a terminator ended the read */
+    uint32_t pad;
+};
+
+struct vms_tt_write_args {
+    uint32_t chan;              /* in: channel assigned to the terminal */
+    uint32_t flags;             /* in: reserved, 0 */
+    uint64_t buf;               /* in: the bytes (P1) */
+    uint32_t len;               /* in: their count (P2) */
+    uint32_t status;            /* out: SS$_ */
+};
+
+#define VMS_TT_MODE_PASSALL   0x1u     /* IO$_SETMODE P2 = IO$K_TT_PASSALL */
+struct vms_tt_mode_args {
+    uint32_t chan;              /* in: channel assigned to the terminal */
+    uint32_t mode;              /* in: VMS_TT_MODE_* (0 = normal) */
+    uint32_t status;            /* out: SS$_ */
+    uint32_t pad;
+};
+
+struct vms_tt_bind_args {
+    char     devnam[VMS_DEVNAM_SIZE];  /* in: terminal row, e.g. "OPA0:" */
+    uint32_t status;                   /* out: SS$_ */
+    uint32_t pad;
+};
+
+/* VMS_IOCTL_TT_SENSE: what the class driver of terminal `devnam` is doing --
+ * for a NETWORK PORT that relays the terminal's reads to a remote (the DECnet
+ * CTERM host, dnet_cterm_host.c): whether a read is outstanding and whether it
+ * echoes, so the remote is told to echo exactly when the driver would. CMKRNL. */
+#define VMS_TT_SENSE_BOUND    0x1u     /* a port is attached */
+#define VMS_TT_SENSE_READING  0x2u     /* a read is outstanding */
+#define VMS_TT_SENSE_ECHOING  0x4u     /* typed characters are echoed now */
+#define VMS_TT_SENSE_PASSALL  0x8u
+struct vms_tt_sense_args {
+    char     devnam[VMS_DEVNAM_SIZE];  /* in: terminal row */
+    uint32_t state;                    /* out: VMS_TT_SENSE_* */
+    uint32_t status;                   /* out: SS$_ */
+};
+
+#define VMS_IOCTL_TT_READ     _IOWR(VMS_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
+#define VMS_IOCTL_TT_WRITE    _IOWR(VMS_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
+#define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
+#define VMS_TTIOC_BIND        _IOWR(VMS_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
+#define VMS_IOCTL_TT_SENSE    _IOWR(VMS_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
+
+/* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
+ * numbers on ILP32 VAX; these are the reference-build values. */
+_Static_assert(sizeof(struct vms_tt_read_args) == 88,
+               "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_tt_write_args) == 24,
+               "struct vms_tt_write_args changed size");
+_Static_assert(sizeof(struct vms_tt_mode_args) == 16,
+               "struct vms_tt_mode_args changed size");
+_Static_assert(sizeof(struct vms_tt_bind_args) == 24,
+               "struct vms_tt_bind_args changed size");
+_Static_assert(VMS_IOCTL_TT_READ == 0xC05856A0u,
+               "VMS_IOCTL_TT_READ encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TT_WRITE == 0xC01856A1u,
+               "VMS_IOCTL_TT_WRITE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TT_SETMODE == 0xC01056A2u,
+               "VMS_IOCTL_TT_SETMODE encodes differently here than on the reference build");
+_Static_assert(VMS_TTIOC_BIND == 0xC01856A3u,
+               "VMS_TTIOC_BIND encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_sense_args) == 24,
+               "struct vms_tt_sense_args changed size");
+_Static_assert(VMS_IOCTL_TT_SENSE == 0xC01856A4u,
+               "VMS_IOCTL_TT_SENSE encodes differently here than on the reference build");
+
+/*
  * Resolve a DISK unit to the Linux block device the executive enumerated it
  * from (vms-3e8). The executive creates DKA0:/DKA100:/... at module init by
  * enumerating the node's virtio block devices (src/kernel/vms_devtab.c), so it

@@ -441,6 +441,8 @@ EOF
 *** the interrupted $ENQW COMES BACK (it does not spin in the kernel: the lab's CPU 0 never did) ***
 *** the interrupted $ENQW CONVERT comes back too -- the exact ioctl the lab's stuck CPU was in ***
 *** writing NO status: $ENQW has no 'your wait was interrupted' condition value, so userspace re-enters the wait and no caller can observe this ***
+  and no status written
+*** and the lock is STILL HELD AT ITS OLD MODE: a failed convert never loses the lock (VMS semantics) ***
 EOF
                       ;;
         esac;;

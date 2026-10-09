@@ -499,4 +499,7 @@
 # anchors test_syssvc_rms_acp CDT/RDT).
 # Raised to 186 by vms-b71's getlki-grantcount-not-counted (SYS$GETLKI/
 # SYS$GETLKIW's LKI$_GRANTCOUNT; test_syssvc_getlki).
-186
+# Raised to 190 by the terminal class driver's four (rd vms-f8c): tt-typeahead-
+# echoed-on-receipt, tt-bind-privilege-ignored, tt-port-input-dropped,
+# tt-console-hangup-unbinds (test_kmod_tt).
+190

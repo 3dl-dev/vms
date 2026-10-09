@@ -15,7 +15,6 @@
 #include <sys/file.h>
 #include <signal.h>
 #include <errno.h>
-#include <termios.h>
 #include <ctype.h>
 #include <time.h>
 #include <inttypes.h>
@@ -25,6 +24,9 @@
 /* struct vms_procinfo + VMS_PI_V_* valid-bit mask (the executive's $GETJPI
  * contract) -- src/libvmssys/vms_kif.h pulls src/kernel/vms_ioctl.h. */
 #include "vms_kif.h"
+#include "starlet.h"
+#include "descrip.h"
+#include "iodef.h"
 
 /* Path to the shared terminal device table */
 #include "ovmx_layout.h"
@@ -100,27 +102,17 @@ int vms_terminal_get_char(const struct vms_terminal *term, uint32_t bit)
 }
 
 /*
- * vms_terminal_apply - Apply characteristics to real termios/winsize.
+ * vms_terminal_apply - make the characteristics SET TERMINAL changed true of
+ * the terminal itself.
  *
- * Only characteristics with a real mapping are applied:
- *   TT_ECHO     → termios ECHO flag
- *   width/page  → ioctl TIOCSWINSZ
- * All others are stored and reported but have no physical effect.
+ * Echo (and the other characteristics the terminal driver acts on) live in the
+ * executive's device row, where the terminal class driver reads them per read
+ * (rd vms-f8c): /NOECHO is the driver not echoing, never a substrate termios
+ * flag. dcl_tt_set_characteristics() carries them there; this function keeps
+ * only the substrate's window geometry in step for full-screen images.
  */
 void vms_terminal_apply(const struct vms_terminal *term)
 {
-    /* Apply echo setting via termios */
-    if (isatty(STDIN_FILENO)) {
-        struct termios tio;
-        if (tcgetattr(STDIN_FILENO, &tio) == 0) {
-            if (term->characteristics & TT_ECHO)
-                tio.c_lflag |= ECHO;
-            else
-                tio.c_lflag &= ~(tcflag_t)ECHO;
-            tcsetattr(STDIN_FILENO, TCSANOW, &tio);
-        }
-    }
-
     /* Apply width/page to terminal window size */
     if (isatty(STDOUT_FILENO)) {
         struct winsize ws;
@@ -130,6 +122,142 @@ void vms_terminal_apply(const struct vms_terminal *term)
             ioctl(STDOUT_FILENO, TIOCSWINSZ, &ws);
         }
     }
+}
+
+/* ================================================================
+ * THE TERMINAL, THROUGH THE EXECUTIVE'S TERMINAL DRIVER (rd vms-f8c)
+ *
+ * DCL reads its commands the way VMS DCL does: $QIO IO$_READPROMPT on a
+ * channel to the terminal. The executive's terminal class driver
+ * (src/kernel-core/vms_tt.c) writes the prompt, consumes the type-ahead
+ * buffer -- echoing each character as it is consumed, never on receipt --
+ * applies the line-editing keys and the terminators, and completes the read
+ * with the terminator in the IOSB. Nothing here touches the substrate tty.
+ * ================================================================ */
+static uint16_t dcl_tt_chan;
+static int dcl_tt_state;        /* 0 untried, 1 assigned, -1 no terminal */
+
+static int dcl_tt_assign(void)
+{
+    static const char ttn[] = "TT:";
+    struct dsc$descriptor_s td = { sizeof ttn - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)ttn };
+
+    if (dcl_tt_state == 0)
+        dcl_tt_state = (sys$assign(&td, &dcl_tt_chan, 0, NULL, 0) & 1) ? 1 : -1;
+    return dcl_tt_state == 1;
+}
+
+int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
+                uint32_t timeout_sec, uint16_t *term_out)
+{
+    uint16_t iosb[4];
+    uint32_t func, st;
+    size_t n;
+
+    if (term_out)
+        *term_out = 0;
+    if (!buf || bufsz < 2)
+        return DCL_TT_GONE;
+    if (!dcl_tt_assign())
+        return DCL_TT_NODRIVER;
+    /* what DCL has written through stdio reaches the terminal before the
+     * prompt does */
+    fflush(stdout);
+    fflush(stderr);
+
+    static char pbuf[512];
+    size_t plen = 0;
+    if (prompt && prompt[0]) {
+        plen = strlen(prompt);
+        if (plen > sizeof pbuf)
+            plen = sizeof pbuf;
+        memcpy(pbuf, prompt, plen);
+    }
+
+    func = (plen ? IO$_READPROMPT : IO$_READVBLK) | modifiers;
+    if (timeout_sec)
+        func |= IO$M_TIMED;
+    memset(iosb, 0, sizeof iosb);
+    st = sys$qiow(0, dcl_tt_chan, func, iosb, NULL, 0, buf, (uint32_t)(bufsz - 1),
+                  timeout_sec, 0, plen ? (uintptr_t)pbuf : 0, (uint32_t)plen);
+    if (st & 1)
+        st = iosb[0];
+    if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN ||
+        st == SS$_IVDEVNAM)
+        return DCL_TT_NODRIVER;
+    n = iosb[1] < bufsz - 1 ? iosb[1] : bufsz - 1;
+    buf[n] = '\0';
+    if (term_out)
+        *term_out = iosb[2];
+    if (st == SS$_TIMEOUT)
+        return DCL_TT_TIMEOUT;
+    if (st == SS$_ABORT)
+        return DCL_TT_INTR;            /* interrupted (^Y / ^C) */
+    if (!(st & 1))
+        return DCL_TT_GONE;            /* hangup, or the line is gone */
+    if (iosb[3] && iosb[2] == 26 && n == 0)
+        return DCL_TT_EOF;             /* ^Z: the driver echoed *EXIT* */
+    return (int)n;
+}
+
+/*
+ * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT
+ * from an interactive terminal: through the terminal driver when stdin is
+ * that terminal, else (a pipe, a file, or no driver) the plain stream. 0 with
+ * buf filled, -1 at end of file (^Z, or the stream's EOF).
+ */
+int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
+{
+    size_t len;
+
+    if (isatty(STDIN_FILENO)) {
+        int n = dcl_tt_read(prompt, buf, bufsz, 0, 0, NULL);
+        if (n >= 0)
+            return 0;
+        if (n != DCL_TT_NODRIVER)
+            return -1;
+    }
+    if (prompt && prompt[0]) {
+        fputs(prompt, stdout);
+        fflush(stdout);
+    }
+    if (!fgets(buf, (int)bufsz, stdin))
+        return -1;
+    len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n')
+        buf[len - 1] = '\0';
+    return 0;
+}
+
+/*
+ * dcl_tt_set_characteristics - SET TERMINAL's characteristics, in the
+ * executive's device row (IO$_SENSEMODE, then IO$_SETMODE with the
+ * characteristics buffer -- rd vms-d900's path), so the terminal driver acts
+ * on them. `set`/`clr` are VMS_TTC_* bits within the buffer's first three
+ * characteristic bytes. SS$ status.
+ */
+uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr)
+{
+    uint8_t cb[12];
+    uint16_t iosb[4];
+    uint64_t chars;
+    uint32_t st;
+
+    if (!dcl_tt_assign())
+        return SS$_NOSUCHDEV;
+    memset(cb, 0, sizeof cb);
+    st = sys$qiow(0, dcl_tt_chan, IO$_SENSEMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
+    if (!(st & 1) || !(iosb[0] & 1))
+        return (st & 1) ? iosb[0] : st;
+    chars = (uint64_t)cb[4] | ((uint64_t)cb[5] << 8) | ((uint64_t)cb[6] << 16);
+    chars = (chars | set) & ~clr;
+    cb[4] = (uint8_t)(chars & 0xFF);
+    cb[5] = (uint8_t)((chars >> 8) & 0xFF);
+    cb[6] = (uint8_t)((chars >> 16) & 0xFF);
+    st = sys$qiow(0, dcl_tt_chan, IO$_SETMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
+    if (!(st & 1))
+        return st;
+    return iosb[0];
 }
 
 /*

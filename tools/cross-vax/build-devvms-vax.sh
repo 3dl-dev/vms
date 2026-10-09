@@ -95,6 +95,8 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_lock.c \
       $CORE/vms_lnm.c \
       $CORE/vms_devtab.c \
+      $CORE/vms_tt.c \
+      $KMOD/vms_tt_netbsd.c \
       $CORE/vmsfs_acp.c \
       $ODS2/ods2_reader.c \
       $ODS2/ods2_edit.c \

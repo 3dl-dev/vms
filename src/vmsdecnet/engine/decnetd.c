@@ -1774,6 +1774,23 @@ static void ct_screen_append(struct ct_accept *c, const uint8_t *d, size_t n)
     c->screen[c->screen_len] = '\0';
 }
 
+/* On a failed assertion: what the remote terminal actually saw (its tail),
+ * escaped, so a CI log names the cause instead of only the symptom. */
+static void ct_screen_dump(const struct ct_accept *c, const char *when)
+{
+    size_t from = c->screen_len > 600 ? c->screen_len - 600 : 0;
+
+    printf("  INFO: remote screen %s (last %zu bytes): [", when, c->screen_len - from);
+    for (size_t i = from; i < c->screen_len; i++) {
+        unsigned char b = (unsigned char)c->screen[i];
+        if (b == '\r')      printf("<CR>");
+        else if (b == '\n') printf("<LF>\n");
+        else if (b < 0x20 || b >= 0x7f) printf("<%02X>", b);
+        else putchar(b);
+    }
+    printf("]\n");
+}
+
 /* Case-insensitive substring search over the captured screen. */
 static int ct_screen_has(const struct ct_accept *c, const char *needle)
 {
@@ -2164,6 +2181,13 @@ static int run_cterm_accept_test(void)
                  " with a bare $)");
         if (!woke)
             goto verdict;
+        /* A network terminal gets no wake (vms-a70): LOGINOUT prompts at
+         * once, so the RETURN above may land on a LIVE Username: read as an
+         * empty user name -- and the re-prompt PURGES type-ahead, as VMS's
+         * does (keystroke oracle TA.USERNAME, rd vms-f8c). A user name typed
+         * before that re-prompt would be discarded. So let the session go
+         * quiet first: type at the prompt that is actually there. */
+        (void)ct_pump(&c, NULL, 3000);
     }
 
     /* ---- 5. REJECTION IS THE PROOF: bad credentials are refused ----------- */
@@ -2174,6 +2198,7 @@ static int run_cterm_accept_test(void)
                  " (%LOGIN-F-INVPWD, user authorization failure)");
     } else {
         CT_CHECK(0, "LOGINOUT solicited a password for the offered username");
+        ct_screen_dump(&c, "after the offered username");
     }
 
     /* A REAL account with a WRONG password must be refused too -- otherwise the
@@ -2272,6 +2297,12 @@ static int run_cterm_accept_test(void)
         CT_CHECK(unit_gone,
                  "the RTAn: row is WITHDRAWN from the executive when the session"
                  " ends -- it appeared with the session and disappears with it");
+        if (!unit_gone) {
+            uint32_t tst = 0, tstate = 0;
+            tst = vms_kif_tt_sense(devnam, &tstate);
+            printf("  INFO: %s still in the table: refcnt %u, terminal driver sense %08X state %X\n",
+                   devnam, (unsigned)info.refcnt, (unsigned)tst, (unsigned)tstate);
+        }
     }
 
 verdict:

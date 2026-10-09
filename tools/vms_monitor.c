@@ -33,7 +33,6 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
-#include <termios.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -41,6 +40,9 @@
 
 #include "ovmx_identity.h"
 #include "vms_kif.h"   /* vms_kif_procscan + struct vms_procinfo (vms-c840) */
+#include "starlet.h"   /* $ASSIGN / $QIO: the keyboard poll (rd vms-f8c) */
+#include "descrip.h"
+#include "iodef.h"
 
 /* ================================================================== */
 /*                         Constants                                   */
@@ -143,8 +145,6 @@ typedef struct {
 /* ================================================================== */
 
 static volatile int g_quit = 0;
-static struct termios g_orig_termios;
-static int g_termios_saved = 0;
 
 /* ================================================================== */
 /*                      Signal Handling                                */
@@ -160,24 +160,29 @@ static void sig_handler(int sig)
 /*                      Terminal Helpers                               */
 /* ================================================================== */
 
+/*
+ * The keyboard, through the executive's terminal driver (rd vms-f8c). MONITOR
+ * polls for its exit key between screens with a zero-timeout $QIO read --
+ * IO$_READVBLK | IO$M_TIMED, P3 = 0, IO$M_NOECHO -- which returns at once with
+ * whatever the type-ahead buffer holds (I/O User's Reference, "Timed read").
+ * The substrate tty is not switched to raw mode: it belongs to the driver.
+ */
+static uint16_t g_tt_chan;
+static int g_tt_ok;
+
 static void term_raw(void)
 {
-    struct termios t;
-    if (tcgetattr(STDIN_FILENO, &g_orig_termios) == 0) {
-        g_termios_saved = 1;
-        t = g_orig_termios;
-        t.c_lflag &= ~(unsigned)(ICANON | ECHO);
-        t.c_cc[VMIN] = 0;
-        t.c_cc[VTIME] = 0;
-        tcsetattr(STDIN_FILENO, TCSANOW, &t);
-    }
+    static const char ttn[] = "TT:";
+    struct dsc$descriptor_s td = { sizeof ttn - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)ttn };
+
+    g_tt_ok = (sys$assign(&td, &g_tt_chan, 0, NULL, 0) & 1) != 0;
 }
 
 static void term_restore(void)
 {
-    if (g_termios_saved) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
-    }
+    if (g_tt_ok)
+        (void)sys$dassgn(g_tt_chan);
+    g_tt_ok = 0;
 }
 
 static void clear_screen(void)
@@ -190,8 +195,19 @@ static void clear_screen(void)
 static int key_pressed_quit(void)
 {
     char c = 0;
-    ssize_t n = read(STDIN_FILENO, &c, 1);
-    if (n == 1 && (c == 'q' || c == 'Q')) return 1;
+    uint16_t iosb[4];
+
+    if (!g_tt_ok)
+        return 0;
+    memset(iosb, 0, sizeof(iosb));
+    if (!(sys$qiow(0, g_tt_chan, IO$_READVBLK | IO$M_TIMED | IO$M_NOECHO, iosb,
+                   NULL, 0, &c, 1, 0, 0, 0, 0) & 1))
+        return 0;
+    if ((iosb[0] & 1) && (iosb[1] == 1) && (c == 'q' || c == 'Q'))
+        return 1;
+    /* ^Z (a terminator) ends MONITOR too */
+    if ((iosb[0] & 1) && iosb[3] && iosb[2] == 26)
+        return 1;
     return 0;
 }
 

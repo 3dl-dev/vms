@@ -44,6 +44,7 @@
                               * the C-string + ctype + fixed-width vocabulary */
 #include "exec_kbackend.h"    /* exec_lock/copy/alloc/current/blockdev */
 #include "exec_list.h"        /* exec_list_* (device list, channel lists) */
+#include "vms_tt.h"           /* the terminal class driver (rd vms-f8c) */
 /*
  * FC-P0.9: vms_cluster_node()/VMS_IOCTL_CLUSTER_DIAG_PORT read the real
  * vms_pe.c port objects through the frozen FC-P0.1 contracts. vms_devtab.c is
@@ -1543,6 +1544,122 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
 }
 
 /*
+ * vms_devtab_chan_device - the device a caller's channel is assigned to, or
+ * NULL (no such channel). For the terminal class driver's $QIO surface
+ * (rd vms-f8c, vms_tt.c): the row stays alive while the channel does, the
+ * same guarantee vms_ioctl_ttsetmode() relies on.
+ */
+struct vms_device *vms_devtab_chan_device(struct vms_proc *proc, uint32_t chan)
+{
+    struct vms_channel *ch;
+    struct vms_device *dev = NULL;
+
+    exec_lock(&proc->chan_lock);
+    ch = chan_find_locked(proc, chan);
+    if (ch)
+        dev = ch->dev;
+    exec_unlock(&proc->chan_lock);
+    return dev;
+}
+
+#ifdef VMS_DEVICE_HAS_TT
+/*
+ * vms_devtab_tt_detached - the terminal class driver's port has left `dev`
+ * (rd vms-f8c): no $QIO can reach the class driver through this row any more.
+ * The row stays held (tt_hold) until the class-driver instance itself is gone,
+ * because a read still in flight reads the row's characteristics.
+ */
+void vms_devtab_tt_detached(struct vms_device *dev, struct vms_tt *tt)
+{
+    exec_lock(&dev->lock);
+    if (dev->tt == tt)
+        dev->tt = NULL;
+    exec_unlock(&dev->lock);
+}
+
+/*
+ * vms_devtab_tt_release - the last reference to the class-driver instance that
+ * was this row's port is gone: drop its hold and, if the facility that minted
+ * the row has withdrawn it and no channel holds it, delete it now
+ * (device_unlink_if_withdrawn_locked).
+ */
+void vms_devtab_tt_release(struct vms_device *dev)
+{
+    EXEC_LIST_HEAD(reap);
+
+    exec_lock(&vms_device_list_lock);
+    exec_lock(&dev->lock);
+    dev->tt_hold = 0;
+    device_unlink_if_withdrawn_locked(dev, &reap);
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+    device_reap(&reap);
+}
+#endif
+
+#ifdef VMS_DEVICE_HAS_TT
+/*
+ * vms_devtab_tt_by_name - the class-driver instance attached to TERMINAL row
+ * `devnam`, REFERENCED (vms_tt_release), or NULL (no such row / no port).
+ * rd vms-f8c: VMS_IOCTL_TT_SENSE.
+ */
+struct vms_tt *vms_devtab_tt_by_name(const char *devnam)
+{
+    char name[VMS_DEVNAM_SIZE];
+    struct vms_device *dev;
+    struct vms_tt *tt = NULL;
+
+    if (normalize_devnam(devnam, name, sizeof(name)) != SS__NORMAL)
+        return NULL;
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(name);
+    if (dev && dev->devclass == DC__TERM)
+        tt = vms_tt_of(dev);
+    exec_unlock(&vms_device_list_lock);
+    return tt;
+}
+#endif
+
+/*
+ * vms_devtab_tt_attach - enter class-driver instance `tt` as the port of the
+ * TERMINAL row `devnam` (rd vms-f8c, the line discipline's VMS_TTIOC_BIND).
+ * Found and attached under the table lock, so a row being withdrawn cannot be
+ * attached to; once attached, the port holds the row
+ * (device_unlink_if_withdrawn_locked) until vms_devtab_tt_detached. Returns the
+ * row in *out. SS$_NORMAL, SS$_NOSUCHDEV (no such terminal), or SS$_DEVALLOC
+ * (the unit already has a port).
+ */
+uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
+                              struct vms_device **out)
+{
+    char name[VMS_DEVNAM_SIZE];
+    struct vms_device *dev;
+    uint32_t st = SS__NOSUCHDEV;
+
+    *out = NULL;
+    if (normalize_devnam(devnam, name, sizeof(name)) != SS__NORMAL)
+        return SS__NOSUCHDEV;
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(name);
+    if (dev && dev->devclass == DC__TERM) {
+        exec_lock(&dev->lock);
+        if (dev->withdrawn) {
+            st = SS__NOSUCHDEV;
+        } else if (dev->tt) {
+            st = SS__DEVALLOC;
+        } else {
+            dev->tt = tt;
+            dev->tt_hold = 1;
+            *out = dev;
+            st = SS__NORMAL;
+        }
+        exec_unlock(&dev->lock);
+    }
+    exec_unlock(&vms_device_list_lock);
+    return st;
+}
+
+/*
  * The caller's UIC, from its host-task credentials.
  *
  * The [group,member] -> UIC packing is the facility's own; only the raw
@@ -1643,6 +1760,13 @@ static int device_unlink_if_withdrawn_locked(struct vms_device *dev,
 {
     if (!dev->withdrawn || dev->refcnt != 0)
         return 0;
+#ifdef VMS_DEVICE_HAS_TT
+    /* A port still attached (rd vms-f8c) is a reference too: the terminal
+     * class driver names this row until its line detaches, and the detach
+     * (vms_devtab_tt_detached) deletes a withdrawn row then. */
+    if (dev->tt_hold)
+        return 0;
+#endif
     exec_list_move(&dev->list, reap);
     return 1;
 }

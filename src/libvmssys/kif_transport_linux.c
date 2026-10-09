@@ -78,3 +78,22 @@ void kif_xport_munmap(void *addr, unsigned long length)
 {
     vms_sys_munmap(addr, (vms_size_t)length);
 }
+
+/*
+ * The executive's terminal line discipline (src/kernel/vms_tt_linux.c) is
+ * registered under N_DEVELOPMENT (29); TIOCSETD selects it. TIOCSETD is 0x5423
+ * on every Linux this runs on -- asm-generic (x86_64, aarch64) and Alpha alike
+ * (arch/alpha/include/uapi/asm/ioctls.h keeps the 0x54xx tty numbers).
+ */
+#define KIF_TIOCSETD 0x5423UL
+#define KIF_N_VMS_TT 29
+
+int kif_xport_tty_attach(int ttyfd, unsigned long bind_req, void *bind_args)
+{
+    int disc = KIF_N_VMS_TT;
+    int rc = vms_sys_ioctl(ttyfd, KIF_TIOCSETD, (vms_reg_t)&disc);
+
+    if (rc < 0)
+        return rc;
+    return vms_sys_ioctl(ttyfd, bind_req, (vms_reg_t)bind_args);
+}

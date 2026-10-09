@@ -42,6 +42,49 @@
 /* The executive records a device's backing RELATIVE to /dev (a disk row holds
  * "vda", not "/dev/vda"). Strip the prefix the substrate hands us so the one
  * place that knows it is this file and $CREPRC's resolver. */
+/*
+ * THE NEW UNIT'S TERMINAL DRIVER (rd vms-f8c). An RTAn:'s bytes are the
+ * executive terminal driver's from the moment the unit exists, as every VMS
+ * terminal's are: the network daemon minting it (it runs as SYSTEM -- the bind
+ * needs CMKRNL, decided by the executive) puts the pty's line under the
+ * executive's line discipline and binds it to the unit, BEFORE $CREPRC starts
+ * LOGINOUT there. The daemon keeps that line open for the unit's life (the
+ * binding lives as long as the line is open) and closes it in
+ * ovmx_vterm_delete. A bind the executive refuses fails the create: a unit no
+ * driver serves is not a terminal (Rule 9).
+ */
+#define VTERM_MAX 64
+static struct { char devnam[32]; int line_fd; } vterm_lines[VTERM_MAX];
+
+static void vterm_line_keep(const char *devnam, int fd)
+{
+    int i;
+
+    for (i = 0; i < VTERM_MAX; i++) {
+        if (vterm_lines[i].devnam[0] == '\0') {
+            snprintf(vterm_lines[i].devnam, sizeof(vterm_lines[i].devnam), "%s", devnam);
+            vterm_lines[i].line_fd = fd;
+            return;
+        }
+    }
+    /* table full: the line stays open for the daemon's life */
+}
+
+static void vterm_line_drop(const char *devnam)
+{
+    int i;
+
+    for (i = 0; i < VTERM_MAX; i++) {
+        if (vterm_lines[i].devnam[0] != '\0' &&
+            strcmp(vterm_lines[i].devnam, devnam) == 0) {
+            close(vterm_lines[i].line_fd);
+            vterm_lines[i].devnam[0] = '\0';
+            vterm_lines[i].line_fd = -1;
+            return;
+        }
+    }
+}
+
 static const char *vterm_strip_dev_prefix(const char *path)
 {
     static const char pfx[] = "/dev/";
@@ -128,6 +171,28 @@ uint32_t ovmx_vterm_create(char *devnam, size_t devnam_size, int *master_fd)
         return SS$_DEVOFFLINE;
     }
 
+    /* 3. The unit's terminal driver: the pty's line, under the executive's
+     *    line discipline, bound to the unit (rd vms-f8c). */
+    {
+        int lfd = open(slave, O_RDWR | O_NOCTTY);
+        if (lfd < 0) {
+            (void)vms_kif_terminal_delete(devnam);
+            close(mfd);
+            devnam[0] = '\0';
+            return SS$_DEVOFFLINE;
+        }
+        (void)fcntl(lfd, F_SETFD, FD_CLOEXEC);
+        st = vms_kif_tt_attach(lfd, devnam);
+        if (!(st & 1)) {
+            close(lfd);
+            (void)vms_kif_terminal_delete(devnam);
+            close(mfd);
+            devnam[0] = '\0';
+            return st;          /* the executive's own honest status */
+        }
+        vterm_line_keep(devnam, lfd);
+    }
+
     *master_fd = mfd;
     return SS$_NORMAL;
 }
@@ -140,5 +205,9 @@ uint32_t ovmx_vterm_delete(const char *devnam, int master_fd)
         st = vms_kif_terminal_delete(devnam);
     if (master_fd >= 0)
         close(master_fd);
+    /* the unit's line: closing it ends the driver's binding (the row, already
+     * withdrawn, goes with its last reference) */
+    if (devnam && devnam[0])
+        vterm_line_drop(devnam);
     return st;
 }

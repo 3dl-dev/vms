@@ -56,6 +56,8 @@
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev, bdev_open_by_dev/bdev_file_open_by_dev */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
+#include <linux/file.h>           /* fget, fput (exec_file_identity, vms-7c64) */
+#include <linux/fs.h>             /* file_inode */
 #include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
 #include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
 /* FC-P0.1 (the cluster seam, SS15/SS16/SS18) backing headers: the TYPES the core
@@ -276,6 +278,19 @@ typedef struct pid          exec_task_ref_t;   /* PCB pid_ref: the tgid's pid */
 typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
+
+/* exec_file_identity (exec_kbackend.h section 5): the device and inode number of
+ * the file the CURRENT task's descriptor `fd` refers to. */
+static inline int exec_file_identity(int fd, uint64_t *dev, uint64_t *ino)
+{
+	struct file *f = fget(fd);
+	if (!f)
+		return -EBADF;
+	*dev = (uint64_t)file_inode(f)->i_sb->s_dev;
+	*ino = (uint64_t)file_inode(f)->i_ino;
+	fput(f);
+	return 0;
+}
 
 /* exec_current_uid/gid (vms-31b): the REAL uid/gid of `current`, mapped into the
  * initial user namespace -- exactly the reads the device table's caller_uic()

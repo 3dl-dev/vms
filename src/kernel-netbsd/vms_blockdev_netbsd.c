@@ -65,6 +65,9 @@
 #include <sys/mutex.h>
 #include <sys/conf.h>
 #include <miscfs/specfs/specdev.h>	/* v_rdev on the device vnode */
+#include <sys/file.h>			/* struct file, fd_getfile/fd_putfile (vms-7c64) */
+#include <sys/filedesc.h>
+#include <sys/kauth.h>
 
 /*
  * QUARANTINE (the vms_lnm_arena_netbsd.c precedent). This TU pulls the heavy
@@ -574,4 +577,36 @@ vms_blockdev_netbsd_release_all(void)
 		}
 	}
 	mutex_exit(&ovmx_acp_disk_lk);
+}
+
+/*
+ * ovmx_file_identity (rd vms-7c64): the file system id and file number of the
+ * vnode behind the current process's descriptor `fd` -- the identity the
+ * executive's known-file list (INSTALL) keys on. 0 or an errno. Lives in this
+ * TU because it already speaks vnode(9); OVMX glue over public NetBSD
+ * interfaces (fd_getfile(9), VOP_GETATTR(9)), no NetBSD source copied.
+ */
+int ovmx_file_identity(int fd, uint64_t *dev, uint64_t *ino);
+int
+ovmx_file_identity(int fd, uint64_t *dev, uint64_t *ino)
+{
+	file_t *fp;
+	struct vattr va;
+	int error;
+
+	if ((fp = fd_getfile(fd)) == NULL)
+		return EBADF;
+	if (fp->f_type != DTYPE_VNODE || fp->f_vnode == NULL) {
+		fd_putfile(fd);
+		return EINVAL;
+	}
+	vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
+	error = VOP_GETATTR(fp->f_vnode, &va, kauth_cred_get());
+	VOP_UNLOCK(fp->f_vnode);
+	fd_putfile(fd);
+	if (error)
+		return error;
+	*dev = (uint64_t)va.va_fsid;
+	*ino = (uint64_t)va.va_fileid;
+	return 0;
 }

@@ -107,6 +107,7 @@
 #define SS__WASCLR   1             /* SS$_WASCLR (== SS$_NORMAL on VMS) */
 #define SS__WASSET   9             /* SS$_WASSET */
 #define SS__INSFMEM  292           /* SS$_INSFMEM */
+#define SS__DUPLNAM  148           /* SS$_DUPLNAM (INSTALL ADD of an installed file) */
 #define SS__ILLEFC   236           /* SS$_ILLEFC */
 #define SS__UNASEFC  564           /* SS$_UNASEFC */
 /* Access-mode + AST subset (P4-A). Values match src/kernel/vms_internal.h
@@ -1020,6 +1021,8 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
+uint64_t vms_kfe_image_privs(uint64_t dev, uint64_t ino);
 
 /* ----------------------------------------------------------------
  * MAILBOX facility (MBAn:, P4-A, rd vms-d7a) -- DEFINED in

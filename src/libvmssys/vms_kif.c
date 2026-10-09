@@ -2544,6 +2544,20 @@ uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode)
 }
 
 /*
+ * vms_kif_kfe - the executive's known-file list (VMS_IOCTL_KFE, rd vms-7c64):
+ * INSTALL ADD/REPLACE/REMOVE (CMKRNL) and LIST/FIND. `a` is in/out; the
+ * executive's status is returned and left in a->status.
+ */
+uint32_t vms_kif_kfe(struct vms_kfe_args *a)
+{
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    KIF_CALL(VMS_IOCTL_KFE, a);
+    return a->status;
+}
+
+/*
  * vms_kif_p1_protect - NOT an ioctl. See the header comment for why:
  * this wraps a real mprotect(2) on the caller's own address space, the
  * enforced half of the design's critical-P1 mechanism, and it has no

@@ -464,6 +464,16 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
 
+/* exec_file_identity (exec_kbackend.h section 5): vms_blockdev_netbsd.c
+ * (vnode TU), fd_getfile + VOP_GETATTR. 0, or a negative errno. */
+extern int ovmx_file_identity(int fd, uint64_t *dev, uint64_t *ino);
+static __inline int
+exec_file_identity(int fd, uint64_t *dev, uint64_t *ino)
+{
+	int e = ovmx_file_identity(fd, dev, ino);
+	return e ? -e : 0;
+}
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {

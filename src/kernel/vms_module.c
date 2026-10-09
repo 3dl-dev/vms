@@ -2227,6 +2227,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_enter_image(proc, arg);
     case VMS_IOCTL_IMAGE_RUNDOWN:
         return vms_ioctl_image_rundown(proc, arg);
+    case VMS_IOCTL_KFE:              /* rd vms-7c64: the known-file list */
+        return vms_ioctl_kfe(proc, arg);
     case VMS_IOCTL_SETPRV:
         return vms_ioctl_setprv(proc, arg);
     case VMS_IOCTL_CHKPRIV:

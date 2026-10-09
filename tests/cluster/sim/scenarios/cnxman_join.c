@@ -134,6 +134,14 @@ struct bed {
 	struct cnxman_join      j;
 	struct cnxman_barrier   b;
 	struct vms_csb         *member_csb;
+	/*
+	 * The bed's mirror of vms_cnxman.c's `cur_csb`: the CSB whose Con.ID
+	 * SCS delivered the body being dispatched on. `ops.respond` answers on
+	 * this and nothing else, exactly as cnxman_ops_respond() does -- and
+	 * since rd vms-e8b every 0x81 this FSM builds leaves that way, on the
+	 * connection its request arrived on rather than on the join's own.
+	 */
+	struct vms_csb         *cur_csb;
 
 	enum ref_step obs[MAX_OBS];
 	uint32_t      n_obs;
@@ -277,6 +285,19 @@ static int bed_send_msg(void *ctx, vms_conid_t conid, const uint8_t *body,
 	return 0;
 }
 
+/*
+ * rd vms-e8b: the 0x81 answers ride `ops.respond`, which is defined as "answer
+ * the request currently being dispatched, ON ITS OWN CONNECTION". It is routed
+ * into the same accounting as an origination so the per-connection counts below
+ * keep meaning exactly what they meant.
+ */
+static int bed_respond(void *ctx, const uint8_t *body, uint32_t len)
+{
+	if (g.cur_csb == NULL || g.cur_csb->cdt_conid == 0u)
+		return -1;
+	return bed_send_msg(ctx, (vms_conid_t)g.cur_csb->cdt_conid, body, len);
+}
+
 static int bed_disconnect(void *ctx, vms_conid_t conid)
 {
 	(void)ctx;
@@ -299,6 +320,7 @@ static void bed_init(void)
 	g.ops.cancel_timer = bed_cancel;
 	g.ops.now_ms = bed_now_ms;
 	g.ops.log = bed_log;
+	g.ops.respond = bed_respond;
 
 	g.jops.dir_inquire = bed_dir_inquire;
 	g.jops.connect = bed_connect;
@@ -365,6 +387,7 @@ static int32_t member_csb_index(void)
 
 static enum cnxman_join_rx join_feed(const uint8_t *frame, uint32_t len)
 {
+	g.cur_csb = g.member_csb;
 	return cnxman_join_rx_body(&g.j, frame + VMS_OFF_SYSAP_BODY,
 				   len - VMS_OFF_SYSAP_BODY, MEMBER_CSID, 1,
 				   member_csb_index());

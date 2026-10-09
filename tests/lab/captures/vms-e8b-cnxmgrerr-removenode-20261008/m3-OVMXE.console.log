@@ -1,0 +1,103 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCAE00+36F0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 1
+%SYSGEN-E-NOSUCHP, no such parameter "LOCKDIRWT"
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+     8-OCT-2026 20:51:54.11
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   27.348109] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   27.355660] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  8-OCT-2026 20:51:56.21
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+[   29.427368] %PEA0, channel verified
+[   29.432409] %PEA0, virtual circuit open
+[   29.523631] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: [   30.453459] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   30.463810] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   30.467449] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   30.473016] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   31.036915] %PEA0, channel verified
+
+Username: [   31.037863] %PEA0, virtual circuit open
+[   31.478008] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   32.503227] %CNXMAN, sending VAXcluster membership request to the selected member
+[   32.516393] %CNXMAN, the cluster assigned this node a cluster system id
+[   32.521572] %CNXMAN, the cluster assigned this node a cluster system id
+[   32.530801] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   32.592143] %CNXMAN, this node is a member of the cluster
+[   32.596332] %CNXMAN, VAXcluster state transition in progress
+[   32.601076] %CNXMAN, this node is now a VAXcluster member
+[   32.602486] %CNXMAN, system 0000000000000406 was added to the cluster
+[   32.607352] %CNXMAN, system 0000000000000401 was added to the cluster
+[   32.609877] %CNXMAN, system 0000000000000402 was added to the cluster
+[   32.612016] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   32.756996] %CNXMAN, completed VAXcluster state transition
+SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ [  259.577525] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[  259.583263] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[  259.587282] %PEA0, peer announced departure, channel closed
+[  259.587506] %PEA0, peer departed, virtual circuit closed
+[  259.601031] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[  259.609466] %CNXMAN, lost connection to a cluster member, reconnecting
+[  259.611635] %CNXMAN, lost the VMS$VAXcluster connection to a cluster member
+[  259.614673] vms: SCS path lost to system 0:1026 -> SS$ 132
+[  280.309651] %CNXMAN, reconnect interval expired, proposing removal
+[  280.312146] %CNXMAN, a system in this cluster does not run this implementation and the removal this node can build is not grounded for it: the removal is not proposed
+[  280.316724] %CNXMAN, system 0000000000000402 was removed from the cluster
+[  344.019829] %PEA0, channel verified
+[  344.020253] %PEA0, a verified channel formed no circuit: this system already has one on a path that is still live
+[  344.022362] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[  344.031211] %CNXMAN, lost connection to a cluster member, reconnecting
+[  344.037211] %CNXMAN, quorum lost, blocking activity
+[  344.040813] vms: SCS path lost to system 0:1025 -> SS$ 132
+[  344.043436] %PEA0, peer re-started the circuit (its START carries send-msg# 1), re-forming
+[  344.045231] %PEA0, virtual circuit open
+[  344.529847] %CNXMAN, new incarnation seen, old CSB is dead
+[  344.536051] %CNXMAN, a system in this cluster does not run this implementation and the removal this node can build is not grounded for it: the removal is not proposed
+[  373.429315] %PEA0, no HELLO within the listen timeout, channel lost
+[  373.429507] %PEA0, channel lost, virtual circuit continues on another channel to the same system
+[  387.830302] %SCS-W-DIRNOANSWER, directory inquiry unanswered

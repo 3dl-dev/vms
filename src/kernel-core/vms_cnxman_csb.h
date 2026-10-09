@@ -550,7 +550,7 @@ enum cnxman_envelope_kind {
  * continuation is not what a real node does.
  *
  * WHAT IT COST. Keeping the counters per-CSB across teardowns, while
- * join_emit_cm() legitimately BURNS a number on a refused send, made this node
+ * join_emit_to_target() legitimately BURNS a number on a refused send, made this node
  * open brand-new Con.IDs at send-msg# 8 and 13 -- acking peer messages the peer
  * had never sent on them. Both real VAXes bugchecked (CNXMGRERR, "Error
  * detected by VAXcluster Connection Manager") within 1.2 ms and 0.2 ms of those

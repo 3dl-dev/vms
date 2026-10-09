@@ -907,8 +907,22 @@ static int run_with_deadline(struct intr_call *c, unsigned int secs,
 		(void)do_deq(holder, unblock_lkid);
 	clock_gettime(CLOCK_REALTIME, &ts);
 	ts.tv_sec += (time_t)secs;
-	if (pthread_timedjoin_np(th, NULL, &ts) != 0)
-		(void)pthread_detach(th);   /* nothing left to try */
+	if (pthread_timedjoin_np(th, NULL, &ts) != 0) {
+		/*
+		 * Nothing left to try, and the thread is still inside the engine,
+		 * spinning on its locks. Any later test would share that engine
+		 * with it: the next vms_lock_init()/cleanup() or lock operation
+		 * deadlocks behind it, and the whole run hangs until the CI job
+		 * is cancelled (measured: main 8ff477847, Build & Test, the
+		 * lock-interrupted-wait-ignored negctl). The verdict is already
+		 * decided -- the assertions that named the spin have failed --
+		 * so end the suite here with that verdict.
+		 */
+		printf("  (a waiter never came back; ending the suite so it cannot "
+		       "hang behind it)\n");
+		fflush(stdout);
+		_exit(ct_summary("test_lock_host"));
+	}
 	return 0;
 }
 
@@ -917,7 +931,7 @@ static void a_signal_ends_the_wait_instead_of_spinning(void)
 	struct vms_proc holder, waiter;
 	struct intr_call c;
 	struct vms_resmaster_args rm;
-	uint32_t holder_lkid = 0, waiter_lkid = 0;
+	uint32_t holder_lkid = 0, waiter_lkid = 0, cvt_holder = 0;
 
 	if (vms_lock_init() != 0) {
 		ct_check(0, "signal/wait: vms_lock_init");
@@ -962,7 +976,7 @@ static void a_signal_ends_the_wait_instead_of_spinning(void)
 	ct_check(do_enq(&waiter, "F87_CVT", LCK_K_NLMODE, 0,
 			&waiter_lkid) == SS__NORMAL && waiter_lkid != 0u,
 		 "the waiter takes NL on a second resource");
-	ct_check(do_enq(&holder, "F87_CVT", LCK_K_EXMODE, 0, NULL) ==
+	ct_check(do_enq(&holder, "F87_CVT", LCK_K_EXMODE, 0, &cvt_holder) ==
 		 SS__NORMAL,
 		 "and the holder takes EX on it (NL conflicts with nothing)");
 
@@ -973,7 +987,10 @@ static void a_signal_ends_the_wait_instead_of_spinning(void)
 	c.args.lkmode = LCK_K_EXMODE;
 	c.args.flags = LCK_M_SYNC | LCK_M_CONVERT;
 	exec_host_interrupt_waits = 1u;
-	ct_check(run_with_deadline(&c, 5u, &holder, 0u) == 1,
+	/* The holder's EX is the way out for a waiter that does not come back
+	 * on its own: releasing it lets the stuck thread finish, so the suite
+	 * goes on to its remaining assertions instead of ending here. */
+	ct_check(run_with_deadline(&c, 5u, &holder, cvt_holder) == 1,
 		 "*** the interrupted $ENQW CONVERT comes back too -- the "
 		 "exact ioctl the lab's stuck CPU was in ***");
 	ct_check_eq_u32((unsigned long)(-c.rc), (unsigned long)ERESTARTSYS,

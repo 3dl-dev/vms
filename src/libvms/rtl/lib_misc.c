@@ -329,6 +329,12 @@ static const char *spawn_scratch_dir(void)
 
     if (dir)
         return dir;
+    /* /run itself may not exist on a minimal system (the corpus guest's
+     * initramfs has none); without it this fell back to /tmp, which the C RTL
+     * file layer (vms-003b) maps to RMS, so the scratch open failed and
+     * LIB$SPAWN returned SS$_INSFMEM (corpus sys_forcex). /run is the kernel's
+     * namespace on every substrate: make sure it is there. */
+    (void)mkdir("/run", 0755);
     if ((mkdir("/run/ovmx-spawn", 01777) == 0 || errno == EEXIST) &&
         stat("/run/ovmx-spawn", &sd) == 0 && S_ISDIR(sd.st_mode) &&
         access("/run/ovmx-spawn", W_OK) == 0)

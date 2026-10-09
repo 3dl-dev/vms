@@ -1,0 +1,13 @@
+        .TITLE  MYSHR   OVMX vms-3b3f rung-3 own shareable image
+; Our own shareable: two universal procedures exported by symbol vector.
+        .PSECT  SDATA,WRT,NOEXE,QUAD
+GMSG:   .ASCID  /OVMX-NATIVE MYSHR: greeting from own shareable/
+        .PSECT  SCODE,EXE,NOWRT,QUAD
+        .ENTRY  MYSHR_ADD,^M<>
+        ADDL3   4(AP),8(AP),R0
+        RET
+        .ENTRY  MYSHR_GREET,^M<>
+        PUSHAQ  GMSG
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        RET
+        .END

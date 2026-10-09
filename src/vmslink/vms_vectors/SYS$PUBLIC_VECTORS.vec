@@ -1,0 +1,35 @@
+# SYS$PUBLIC_VECTORS.vec -- OVMX's SYS$PUBLIC_VECTORS.EXE, the shareable image
+# through which an image LINKed on real OpenVMS Alpha reaches the system
+# services (rd vms-3b3f). SINGLE SOURCE for this image's symbol vector.
+#
+# An Alpha image calls a system service through a linkage pair that names
+# the service by its BYTE OFFSET in SYS$PUBLIC_VECTORS' symbol vector (16
+# bytes per entry). Each offset below is OBSERVED: it is the value the link
+# map of our own probe program (tools/lab-alpha/probes/ORDS.MAR, linked on the
+# lab OpenVMS Alpha V8.4 node) reports for that universal; the full observed
+# table is docs/oracle/alpha84-symvec-offsets.txt. Clean-room: nothing here
+# comes from a VSI/HPE binary or source.
+#
+# Each entry is a null-frame procedure that transfers, arguments untouched,
+# to the OVMX universal named in the third column (in LIBVMS$SHR, taking the
+# VMS argument forms: src/libvms/syssvc/sys_vmsabi.c). Only services whose
+# VMS-ABI implementation exists are listed; every other slot is a retired
+# (PRIVATE) entry, so an image that calls one fails to activate honestly
+# (%IMGACT-I-NOTIMPL) instead of reaching a routine that misreads its
+# arguments. Add a service by implementing its VMS-ABI entry, then a line.
+#
+# GSMATCH: images record the ident of the SYS$PUBLIC_VECTORS they were linked
+# against (major 51, minor 16699012, match EQUAL -- observed in every captured
+# image's global section descriptor), so OVMX's carries that ident.
+#
+#   gsmatch EQUAL,51,16699012
+#   use     LIBVMS$SHR.EXE
+#
+# offset  universal        OVMX target
+0x080     SYS$QIOW         SYS$QIOW
+0x100     SYS$ASSIGN       SYS$ASSIGN
+0x230     SYS$DASSGN       SYS$DASSGN
+0x340     SYS$IMGSTA       SYS$IMGSTA
+0x400     SYS$QIO          SYS$QIO
+0xA00     SYS$CRELNM       SYS$CRELNM
+0xA20     SYS$TRNLNM       SYS$TRNLNM

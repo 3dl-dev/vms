@@ -5,18 +5,18 @@
 
 ## Inventory
 
-**478 surfaces catalogued** across 9 domains, each with a per-surface status.
+**481 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 333 |
-| 🟢 implemented | 287 | | n/a | 93 |
-| 🟡 partial | 60 | | advisory | 46 |
+| ✅ verified | 24 | | real | 335 |
+| 🟢 implemented | 288 | | n/a | 94 |
+| 🟡 partial | 61 | | advisory | 46 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 92 | |  |  |
+| ⬜ absent | 93 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **432 committed** — **311 met** (implemented/verified), 58 in progress (partial), 63 not started (absent/stub/designed).
+- **435 committed** — **312 met** (implemented/verified), 59 in progress (partial), 64 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
@@ -1020,15 +1020,15 @@ Absent. docs/compatibility-contract.md lists host-based (DSSA) volume shadowing 
 
 _Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAGE, MMS/MMK, self-hosting compiler._
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡⬜⬜⬜`  —  23 surfaces catalogued (19 met · 1 in progress · 3 not started) · V1: 21 committed, 19 met
+`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜⬜`  —  25 surfaces catalogued (19 met · 2 in progress · 4 not started) · V1: 23 committed, 19 met
 
 ### image-activation — Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)
-<sub>scope: in · plan: vms-ade · ref: OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation) · reviewed 2026-09-14</sub>
+<sub>scope: in · plan: vms-ade · ref: OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation) · reviewed 2026-10-08</sub>
 
 IMGACT.EXE activates images in-process via PT_INTERP (freestanding static-PIE); DCL, LOGINOUT, TCC and all shareable images activate natively through symbol vectors. Now exercised on Alpha as well as x86_64 (arch start.S + vms_transfer.S under arch/alpha, run_test_alpha.sh / run_vms_std_activation_alpha.sh). Installed images (Known Image DB) and TLS in activated images are real. Image container byte layout (.vms$sv/.vms$imp/.vms$rel/.vms$tls) is covered under the symbol-vectors facility.
 
 
-<sub>4 items · 4 met · 0 in progress · 0 not started</sub>
+<sub>6 items · 4 met · 1 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1036,6 +1036,8 @@ IMGACT.EXE activates images in-process via PT_INTERP (freestanding static-PIE); 
 | ✅ | `image-activation$symvec-activation` | feature | Symbol-vector-based activation of shareable images (DCL, LOGINOUT, TCC, all shareables) | verified | real | in | `src/imgact/test/run_symvec_activation.sh` — Activation behavior real; symbol-vector byte layout is advisory (Rule 8) — see symbol-vectors facility. |
 | 🟢 | `image-activation$known-images` | feature | Installed Images (Known Image DB) — shared/installed image mapping | implemented | real | in | `src/imgact/known_images.c` — mmap MAP_SHARED IPC; exercised by src/imgact/test/run_known_images_lookup.sh. |
 | 🟢 | `image-activation$tls` | feature | Thread-Local Storage in activated images | implemented | real | in | `src/imgact/test/run_exec_tls.sh` — .vms$tls section; run_exec_tls.sh, run_tls_producer_over_crtl.sh. |
+| 🟡 | `image-activation$native-alpha-eihd` | feature | Activation of an OpenVMS Alpha native image (EIHD/EISD/EIAF .EXE LINKed on real VMS), unchanged, with its SYS$/LIB$/DECC$ calls bound by symbol-vector offset and its own native shareables activated | partial | real | in | `tools/cross-alpha/run-module-gp-activation-alpha.sh` — rd vms-3b3f. CI alpha-native-image (native-gate) runs images LINKed on the lab Alpha V8.4 node from our own MACRO-32 sources (tests/native-images/alpha/) on the booted executive, and their output and $STATUS must match the node's. HELLO calls SYS$QIOW and LIB$PUT_OUTPUT. RETST returns a condition value. CSTDIO calls DECC$PUTS and DECC$TXPRINTF through DECC$SHR, which the system logical DECC$SHR resolves to SYS$SHARE:DECC$SHR_EV56. MAIN3 and MAIN4 are two-module images using our own shareable MYSHR: GSMATCH LEQUAL is checked against the ident each was linked with (MAIN4 against MYSHR 1.0 gives %X100020BC), and DEFINE MYSHR redirects the activation. The refusals give the real statuses: a missing shareable %X100388B2, a text file %X104D8CFC. The reader and fixup steps are checked on the real images by imgact_eihd_parse_unit and test_imgact_eihd (negctl eihd-lp-pair-swapped, eihd-spec-no-default-type, eihd-gsmatch-leq-ignores-major). Partial: the vector images provide only the entries with an ABI-compatible OVMX implementation (src/vmslink/vms_vectors/*.vec: 7 system services incl. SYS$IMGSTA, LIB$PUT_OUTPUT, 7 DECC$ routines), and any other entry fails activation with SS$_UNSUPPORTED. A shareable is located only in SYS$SHARE or SYS$SYSTEM; another device or directory in its translation is refused. .ADDRESS, code-address and PSB fixups, and shareable initialization, are refused. SYS$IMGSTA does not establish a traceback handler. The CLI callback argument is not passed. At image exit the activator flushes the C RTL streams, which on VMS is the C RTL exit handler's job; other exit handlers declared with $DCLEXH are not run on this path. %Lf X_float long double is not supported. |
+| ⬜ | `image-activation$native-vax-isd` | feature | Activation of an OpenVMS VAX native image (IHD/ISD .EXE LINKed on real VMS) on OVMX/VAX | absent | n/a | in | `src/imgact/imgact_eihd.h` — rd vms-3b3f. Not started: Alpha came first, because OVMX/Alpha already runs the Alpha calling standard and its page size matches. A VAX image calls system services at fixed S0 addresses, and these collide with the NetBSD-VAX kernel's own S0 mapping. |
 
 ### librarian — LIBRARIAN (.OLB Object Libraries + .TLB/.HLB)
 <sub>scope: in · plan: vms-59a · ref: OpenVMS LIBRARIAN Utility Reference Manual; VSI OpenVMS DCL Dictionary (LIBRARY) · reviewed 2026-09-14</sub>

@@ -514,6 +514,21 @@ add_test(NAME test_imgact_chunk COMMAND test_imgact_chunk)
 set_tests_properties(test_imgact_chunk PROPERTIES
     LABELS "userspace-imgact")
 
+# test_imgact_eihd (vms-3b3f) -- the activation steps IMGACT.EXE performs on an
+# OpenVMS Alpha native image (relocation, GSMATCH, linkage-pair fill), run
+# through the SAME src/imgact/imgact_eihd.h functions on the real images LINKed
+# on the lab Alpha V8.4 node (tests/native-images/alpha/, embedded by .incbin).
+# USERSPACE (no /dev/vms), arch-independent: a real ctest on any host, and a
+# suite the kernel-executive negctl attributes (eihd-lp-pair-swapped).
+qemu_syssvc_add_test(test_imgact_eihd test_imgact_eihd.c)
+target_sources(test_imgact_eihd PRIVATE test_imgact_eihd_images.S)
+target_include_directories(test_imgact_eihd PRIVATE ${CMAKE_SOURCE_DIR}/src/imgact)
+set_source_files_properties(test_imgact_eihd_images.S PROPERTIES
+    COMPILE_OPTIONS "-Wa,-I${CMAKE_SOURCE_DIR}/tests/native-images/alpha"
+    OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MAIN3.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MYSHR.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/HELLO.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/HELLO.MAR;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MAIN4.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MYSHRV2.EXE")
+add_test(NAME test_imgact_eihd COMMAND test_imgact_eihd)
+set_tests_properties(test_imgact_eihd PROPERTIES LABELS "userspace-imgact")
+
 # ---------------------------------------------------------------------------
 # TESTIMG.EXE -- the in-process-eligible image test_syssvc_imgact_inproc.c
 # activates in DCL's own process (vms-68f increment iv). A freestanding,

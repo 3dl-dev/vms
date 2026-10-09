@@ -1,0 +1,14 @@
+# LIBRTL.vec -- OVMX's LIBRTL.EXE vector image, the run-time library entry
+# points an image LINKed on real OpenVMS Alpha calls (rd vms-3b3f). SINGLE
+# SOURCE for this image's symbol vector; format and provenance as in
+# SYS$PUBLIC_VECTORS.vec (offsets observed in our own probe's link map on the
+# lab OpenVMS Alpha V8.4 node, docs/oracle/alpha84-symvec-offsets.txt).
+#
+# GSMATCH: images linked on V8.4 record LIBRTL ident major 1, minor 1, match
+# LEQUAL (observed), so OVMX's LIBRTL carries 1,1.
+#
+#   gsmatch LEQUAL,1,1
+#   use     LIBVMS$SHR.EXE
+#
+# offset  universal        OVMX target
+0x320     LIB$PUT_OUTPUT   LIB$PUT_OUTPUT

@@ -1,0 +1,1551 @@
+$ TYPE ORDSC.MAP
+
+NL:                                                              9-OCT-2026 01:30        Linker A13-04                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+%LINK-W-NUDFSYMS, 5 undefined symbols:
+%LINK-I-UDFSYM, 	DECC$GXATOF 
+%LINK-I-UDFSYM, 	DECC$GXSTRTOD 
+%LINK-I-UDFSYM, 	DECC$TXATOF 
+%LINK-I-UDFSYM, 	DECC$TXSTRTOD 
+%LINK-I-UDFSYM, 	DECC$__READ_RND 
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+ORDSC           V1                   2484 SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1       9-OCT-2026 01:30  AMAC V5.0-120-5
+%LINK-W-USEUNDEF, undefined symbol DECC$GXATOF referenced
+	in psect ODATA offset %X000002BC
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$GXSTRTOD referenced
+	in psect ODATA offset %X000002DC
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$TXATOF referenced
+	in psect ODATA offset %X000006C0
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$TXSTRTOD referenced
+	in psect ODATA offset %X000006E0
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol DECC$__READ_RND referenced
+	in psect ODATA offset %X00000920
+	in module ORDSC file SYS$SYSROOT:[SYSMGR]ORDSC.OBJ;1
+DECC$SHR_EV56   V8.4-00                 0 [SYSLIB]DECC$SHR_EV56.EXE;1          31-MAR-2010 02:07  Linker A13-04
+SYS$PUBLIC_VECTORS             
+                X-125                   0 [SYSLIB]SYS$PUBLIC_VECTORS.EXE;1     31-MAR-2010 02:03  Linker A13-04
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pglts   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    2     5    00000000-R        0   0 READ WRITE   DEMAND ZERO  
+                   2    11    00010000-R        2   0 READ WRITE   FIXUP VECTORS
+
+DECC$SHR           3  4139    00000000-R        0   0 READ ONLY    EXECUTABLE    DECC$SHR_001     LESS/EQUAL        1         1
+                   2   534    00210000-R        0   0 READ WRITE   COPY ON REF   DECC$SHR_002     LESS/EQUAL        1         1
+                   2    95    00260000-R        0   0 READ WRITE   COPY ON REF   DECC$SHR_003     LESS/EQUAL        1         1
+                   3   119    00270000-R        0   0 READ ONLY                  DECC$SHR_004     LESS/EQUAL        1         1
+                   4     6    00280000-R        0   0 READ ONLY                  DECC$SHR_005     LESS/EQUAL        1         1
+                   4     1  P-00290000-R        0   0 READ WRITE   COPY ON REF   DECC$SHR_006     LESS/EQUAL        1         1
+                   2    60    002A0000-R        0   0 READ WRITE   DEMAND ZERO   DECC$SHR_007     LESS/EQUAL        1         1
+                   2    35    002B0000-R        0   0 READ WRITE   FIXUP VECTORS DECC$SHR_008     LESS/EQUAL        1         1
+
+SYS$PUBLIC_VECTORS             
+                   2    20    00000000-R        0   0 READ ONLY    EXECUTABLE    SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   1    64    00004000-R        0   0 READ WRITE   COPY ON REF   SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   2     2    0000C000-R        0   0 READ WRITE   FIXUP VECTORS SYS$PUBLIC_VECTO EQUAL            51  16699012
+
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! R  - Relocatable   !
+		! P  - Protected     !
+		+--------------------+
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+ODATA                           00000000 000009B3 000009B4 (       2484.) QUAD  3 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,  MOD 
+                ORDSC           00000000 000009B3 000009B4 (       2484.) QUAD  3
+
+. BLANK .                       00010000 00010000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,  EXE,  WRT,NOVEC,  MOD 
+                ORDSC           00010000 00010000 00000000 (          0.) OCTA  4
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    4
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$A64L                      0000CF60-RX       DECC$SHR_EV56            ORDSC              
+DECC$ABORT                     00001FD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ABS                       00002070-RX       DECC$SHR_EV56            ORDSC              
+DECC$ACCESS                    00001DB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ALARM                     00001410-RX       DECC$SHR_EV56            ORDSC              
+DECC$ASCTIME                   00002910-RX       DECC$SHR_EV56            ORDSC              
+DECC$ASCTIME_R                 0000AC40-RX       DECC$SHR_EV56            ORDSC              
+DECC$ATEXIT                    00001FE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ATOI                      00002080-RX       DECC$SHR_EV56            ORDSC              
+DECC$ATOL                      00002090-RX       DECC$SHR_EV56            ORDSC              
+DECC$ATOLL                     000042A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ATOQ                      00004290-RX       DECC$SHR_EV56            ORDSC              
+DECC$BCMP                      00006960-RX       DECC$SHR_EV56            ORDSC              
+DECC$BCOPY                     00006980-RX       DECC$SHR_EV56            ORDSC              
+DECC$BOX                       00002A90-RX       DECC$SHR_EV56            ORDSC              
+DECC$BSD_WADDBYTES             00003C80-RX       DECC$SHR_EV56            ORDSC              
+DECC$BSD_WADDSTR               00003CA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$BTOWC                     000071E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$BZERO                     000069A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CALLOC_OPT                000036A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CATCLOSE                  00004FA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CATOPEN                   00004FE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CFREE                     000021E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CFREE_OPT                 000036C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CHDIR                     00003910-RX       DECC$SHR_EV56            ORDSC              
+DECC$CHMOD                     00003920-RX       DECC$SHR_EV56            ORDSC              
+DECC$CHOWN                     00003930-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLEARERR                  00001570-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLEARERR_UNLOCKED         0000D180-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLOCK                     00002920-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLOCK_GETRES              0000CC20-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLOCK_GETTIME             0000CC60-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLOCK_SETTIME             0000CC40-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLOSE                     00001DC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CLOSEDIR                  00007DF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CONFSTR                   000087F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CREAT                     00001DD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CRTL_INIT                 000036E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$CTIME                     00002930-RX       DECC$SHR_EV56            ORDSC              
+DECC$CTIME_R                   0000AC60-RX       DECC$SHR_EV56            ORDSC              
+DECC$DELETE                    00001DE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DELWIN                    00002AA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DIV                       000020B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DLCLOSE                   0000AD80-RX       DECC$SHR_EV56            ORDSC              
+DECC$DLERROR                   0000ADA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DLOPEN                    0000ADC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DLSYM                     0000ADE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DUP                       00001DF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$DUP2                      00001E00-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    5
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$ENCRYPT                   0000D4B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDGRENT                  0000B680-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDHOSTENT                00006A00-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDNETENT                 00006A40-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDPROTOENT               00006AE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDPWENT                  0000B620-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDSERVENT                00006AA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ENDWIN                    00002AB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXECL                     00003030-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXECLE                    00003040-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXECLP                    00003050-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXECV                     00003070-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXECVE                    00003080-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXECVP                    00003060-RX       DECC$SHR_EV56            ORDSC              
+DECC$EXIT                      00002000-RX       DECC$SHR_EV56            ORDSC              
+DECC$FCHMOD                    000087C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FCHOWN                    0000B290-RX       DECC$SHR_EV56            ORDSC              
+DECC$FCLOSE                    00001580-RX       DECC$SHR_EV56            ORDSC              
+DECC$FCNTL                     0000AE30-RX       DECC$SHR_EV56            ORDSC              
+DECC$FDOPEN                    00001D20-RX       DECC$SHR_EV56            ORDSC              
+DECC$FEOF                      00001590-RX       DECC$SHR_EV56            ORDSC              
+DECC$FEOF_UNLOCKED             0000D1E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FERROR                    000015A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FERROR_UNLOCKED           0000D200-RX       DECC$SHR_EV56            ORDSC              
+DECC$FFLUSH                    000015B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FFS                       00007160-RX       DECC$SHR_EV56            ORDSC              
+DECC$FGETC                     000015C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FGETC_UNLOCKED            0000D220-RX       DECC$SHR_EV56            ORDSC              
+DECC$FGETPOS                   000015D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FGETWC                    00005060-RX       DECC$SHR_EV56            ORDSC              
+DECC$FILENO                    000015F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FLOCKFILE                 0000D080-RX       DECC$SHR_EV56            ORDSC              
+DECC$FOPEN                     00001600-RX       DECC$SHR_EV56            ORDSC              
+DECC$FPATHCONF                 00008850-RX       DECC$SHR_EV56            ORDSC              
+DECC$FPUTC                     00001640-RX       DECC$SHR_EV56            ORDSC              
+DECC$FPUTC_UNLOCKED            0000D240-RX       DECC$SHR_EV56            ORDSC              
+DECC$FPUTS                     00001650-RX       DECC$SHR_EV56            ORDSC              
+DECC$FPUTWC                    000050A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FPUTWS                    000050C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FREAD                     00001660-RX       DECC$SHR_EV56            ORDSC              
+DECC$FREE                      00002020-RX       DECC$SHR_EV56            ORDSC              
+DECC$FREEADDRINFO              0000AEF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FREEHOSTENT               0000AF10-RX       DECC$SHR_EV56            ORDSC              
+DECC$FREE_OPT                  000036B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FREOPEN                   00001670-RX       DECC$SHR_EV56            ORDSC              
+DECC$FSEEK                     00001680-RX       DECC$SHR_EV56            ORDSC              
+DECC$FSEEKO                    0000B920-RX       DECC$SHR_EV56            ORDSC              
+DECC$FSETPOS                   000016C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FSTAT                     00001E10-RX       DECC$SHR_EV56            ORDSC              
+DECC$FSTATVFS                  0000CB00-RX       DECC$SHR_EV56            ORDSC              
+DECC$FSYNC                     000031B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FTELL                     000016D0-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    6
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$FTELLO                    0000B940-RX       DECC$SHR_EV56            ORDSC              
+DECC$FTIME                     000029C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FTRUNCATE                 00008780-RX       DECC$SHR_EV56            ORDSC              
+DECC$FTRYLOCKFILE              0000D0A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FTW                       00007E90-RX       DECC$SHR_EV56            ORDSC              
+DECC$FUNLOCKFILE               0000D0C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$FWAIT                     00003950-RX       DECC$SHR_EV56            ORDSC              
+DECC$FWIDE                     00007610-RX       DECC$SHR_EV56            ORDSC              
+DECC$FWRITE                    000016E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GAI_STRERROR              0000AF30-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_MVPRINTW             00008BD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_MVSCANW              00008C50-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_MVWPRINTW            00008BF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_MVWSCANW             00008C70-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_PRINTW               00008B90-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_SCANW                00008C10-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_WPRINTW              00008BB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GBSD_WSCANW               00008C30-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETADDRINFO               0000C380-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETADDRINFO_COMPAT43      0000AF50-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETC                      000016F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETCHAR                   00001700-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETCHAR_UNLOCKED          0000D1C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETCLOCK                  000076E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETC_UNLOCKED             0000D1A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETDTABLESIZE             00006CC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETEGID                   000024B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETENV                    00002030-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETEUID                   000024D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGID                    000024C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGRENT                  0000B6A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGRGID                  0000B6C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGRGID_R                0000B6E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGRNAM                  0000B700-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGRNAM_R                0000B720-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETGROUPS                 0000BD40-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETHOSTADDR               00003300-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETHOSTENT                000069C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETHOSTNAME               000032F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETIPNODEBYADDR           0000AF70-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETIPNODEBYNAME           0000AF90-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETITIMER                 00007F50-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETLOGIN                  000084D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETLOGIN_R                0000B900-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETNAMEINFO               0000AFB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETNETBYADDR              00003330-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETNETBYNAME              00003340-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETNETENT                 000033A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPAGESIZE               000088A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPGID                   0000B3E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPGRP                   0000B400-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPID                    000024E0-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    7
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$GETPPID                   000024F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPROTOBYNAME            000033C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPROTOBYNUMBER          000033D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPROTOENT               000033E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPWENT                  0000B640-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPWNAM                  000084F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETPWUID                  00008510-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETSERVBYNAME             00003360-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETSERVBYPORT             000033B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETSERVENT                00006A60-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETSID                    0000B3C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETSOCKOPT                00003380-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETTIMEOFDAY              000076C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETUID                    00002500-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETW                      00001D00-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETWC                     00005120-RX       DECC$SHR_EV56            ORDSC              
+DECC$GETWCHAR                  00005100-RX       DECC$SHR_EV56            ORDSC              
+DECC$GET_ERRNO_ADDR            000007D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GET_VMS_ERRNO_ADDR        000007E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GMTIME                    00002940-RX       DECC$SHR_EV56            ORDSC              
+DECC$GMTIME_R                  0000AC80-RX       DECC$SHR_EV56            ORDSC              
+DECC$GSIGNAL                   00001420-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXATOF                    00000000-*                                 ORDSC              
+DECC$GXFPRINTF                 000046D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXFSCANF                  00004790-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXPRINTF                  000046E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXSCANF                   000047A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXSNPRINTF                0000C760-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXSPRINTF                 000046F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXSSCANF                  000047B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXSTRTOD                  00000000-*                                 ORDSC              
+DECC$GXVFPRINTF                00004700-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXVPRINTF                 00004710-RX       DECC$SHR_EV56            ORDSC              
+DECC$GXVSPRINTF                00004720-RX       DECC$SHR_EV56            ORDSC              
+DECC$HERROR                    00006C60-RX       DECC$SHR_EV56            ORDSC              
+DECC$HOSTALIAS                 00006CE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$HSTRERROR                 00006C80-RX       DECC$SHR_EV56            ORDSC              
+DECC$HTONL                     00003180-RX       DECC$SHR_EV56            ORDSC              
+DECC$HTONS                     000031A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ICONV                     00005000-RX       DECC$SHR_EV56            ORDSC              
+DECC$ICONV_CLOSE               00005040-RX       DECC$SHR_EV56            ORDSC              
+DECC$ICONV_OPEN                00005020-RX       DECC$SHR_EV56            ORDSC              
+DECC$IF_FREENAMEINDEX          0000AFD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$IF_INDEXTONAME            0000AFF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$IF_NAMEINDEX              0000B010-RX       DECC$SHR_EV56            ORDSC              
+DECC$IF_NAMETOINDEX            0000B030-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_OPT_APPEND          0000B070-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_OPT_FIND            0000B0F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_OPT_FINISH          0000B090-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_OPT_GET_VAL         0000C7C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_OPT_INIT            0000B050-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_OPT_NEXT            0000B0D0-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    8
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$INET6_OPT_SET_VAL         0000B0B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_RTH_ADD             0000B150-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_RTH_GETADDR         0000C820-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_RTH_INIT            0000B130-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_RTH_REVERSE         0000C7E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_RTH_SEGMENTS        0000C800-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET6_RTH_SPACE           0000B110-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_ADDR                 00003240-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_ATON                 0000B170-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_LNAOF                00003280-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_MAKEADDR             00003270-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_NETOF                00003290-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_NETWORK              00003250-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_NTOA                 00003260-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_NTOP                 0000B190-RX       DECC$SHR_EV56            ORDSC              
+DECC$INET_PTON                 0000B1B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$INITSCR                   00002AC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$INITSTATE                 00006E80-RX       DECC$SHR_EV56            ORDSC              
+DECC$IOCTL                     00006CA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISALNUM                   00000830-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISALPHA                   00000840-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISAPIPE                   00001E30-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISASCII                   00000850-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISATTY                    00001E40-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISCNTRL                   00000860-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISDIGIT                   00000870-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISGRAPH                   00000880-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISLOWER                   00000890-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISPRINT                   000008A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISPUNCT                   000008B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISSPACE                   000008C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISUPPER                   000008D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWALNUM                  00005140-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWALPHA                  00005160-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWCNTRL                  00005180-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWCTYPE                  000051A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWDIGIT                  000051C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWGRAPH                  000051E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWLOWER                  00005200-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWPRINT                  00005220-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWPUNCT                  00005240-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWSPACE                  00005260-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWUPPER                  00005280-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISWXDIGIT                 000052A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$ISXDIGIT                  000008E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$JRAND48                   00007000-RX       DECC$SHR_EV56            ORDSC              
+DECC$KILL                      00001430-RX       DECC$SHR_EV56            ORDSC              
+DECC$L64A                      0000CF20-RX       DECC$SHR_EV56            ORDSC              
+DECC$L64A_R                    0000CF40-RX       DECC$SHR_EV56            ORDSC              
+DECC$LABS                      00002120-RX       DECC$SHR_EV56            ORDSC              
+DECC$LCHOWN                    0000BBC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LCONG48                   00007060-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page    9
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$LDIV                      00002130-RX       DECC$SHR_EV56            ORDSC              
+DECC$LINK                      0000B2D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LISTEN                    000031F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LLABS                     000042C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LLDIV                     000042E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LOCALE                    00004ED0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LOCALECONV                00000A00-RX       DECC$SHR_EV56            ORDSC              
+DECC$LOCALTIME                 00002950-RX       DECC$SHR_EV56            ORDSC              
+DECC$LOCALTIME_R               0000ACA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LONGJMP                   00001370-RX       DECC$SHR_EV56            ORDSC              
+DECC$LRAND48                   00006FA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$LSEEK                     00001E50-RX       DECC$SHR_EV56            ORDSC              
+DECC$LSTAT                     0000BC00-RX       DECC$SHR_EV56            ORDSC              
+DECC$LWAIT                     00003940-RX       DECC$SHR_EV56            ORDSC              
+DECC$MALLOC_OPT                00003690-RX       DECC$SHR_EV56            ORDSC              
+DECC$MBLEN                     00002140-RX       DECC$SHR_EV56            ORDSC              
+DECC$MBRLEN                    000072A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MBRTOWC                   00007220-RX       DECC$SHR_EV56            ORDSC              
+DECC$MBSINIT                   000072C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MBSTOWCS                  00002150-RX       DECC$SHR_EV56            ORDSC              
+DECC$MBTOWC                    00002160-RX       DECC$SHR_EV56            ORDSC              
+DECC$MEMCMP                    00002660-RX       DECC$SHR_EV56            ORDSC              
+DECC$MKDIR                     00003960-RX       DECC$SHR_EV56            ORDSC              
+DECC$MKSTEMP                   00008AA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MKTIME                    000029B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MPROTECT                  000086C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MRAND48                   00006FE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MSYNC                     000086E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MUNMAP                    000086A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$MVWADDSTR                 00003A90-RX       DECC$SHR_EV56            ORDSC              
+DECC$MVWIN                     00002AE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$NANOSLEEP                 0000CC80-RX       DECC$SHR_EV56            ORDSC              
+DECC$NEWWIN                    00002AF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$NICE                      00003820-RX       DECC$SHR_EV56            ORDSC              
+DECC$NL_LANGINFO               000052C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$NRAND48                   00006FC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$NTOHL                     00003170-RX       DECC$SHR_EV56            ORDSC              
+DECC$NTOHS                     00003190-RX       DECC$SHR_EV56            ORDSC              
+DECC$OPEN                      00001E70-RX       DECC$SHR_EV56            ORDSC              
+DECC$OPENDIR                   00007DD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$OVERLAY                   00002B00-RX       DECC$SHR_EV56            ORDSC              
+DECC$OVERWRITE                 00002B10-RX       DECC$SHR_EV56            ORDSC              
+DECC$PATHCONF                  00008830-RX       DECC$SHR_EV56            ORDSC              
+DECC$PAUSE                     00001440-RX       DECC$SHR_EV56            ORDSC              
+DECC$PCLOSE                    00008760-RX       DECC$SHR_EV56            ORDSC              
+DECC$PERROR                    00001720-RX       DECC$SHR_EV56            ORDSC              
+DECC$PIPE                      00003090-RX       DECC$SHR_EV56            ORDSC              
+DECC$POLL                      0000C360-RX       DECC$SHR_EV56            ORDSC              
+DECC$POPEN                     00008740-RX       DECC$SHR_EV56            ORDSC              
+DECC$PREAD                     0000C3A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTC                      00001760-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTCHAR                   00001770-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   10
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$PUTCHAR_UNLOCKED          0000D280-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTC_UNLOCKED             0000D260-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTENV                    00008530-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTS                      00001780-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTW                      00001D10-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTWC                     000052E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$PUTWCHAR                  00005300-RX       DECC$SHR_EV56            ORDSC              
+DECC$PWRITE                    0000C3C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$QABS                      000042B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$QDIV                      000042D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$RAISE                     000013E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$RAND                      00002180-RX       DECC$SHR_EV56            ORDSC              
+DECC$RANDOM                    00006EC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$RAND_R                    0000CB20-RX       DECC$SHR_EV56            ORDSC              
+DECC$READ                      00001E80-RX       DECC$SHR_EV56            ORDSC              
+DECC$READDIR                   00007E30-RX       DECC$SHR_EV56            ORDSC              
+DECC$READLINK                  0000BBA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$REALLOC_OPT               000036D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$RECORD_READ               000041B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$RECV                      000032B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$REMOVE                    00001790-RX       DECC$SHR_EV56            ORDSC              
+DECC$RENAME                    000017A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$REWIND                    000017B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$REWINDDIR                 00007E10-RX       DECC$SHR_EV56            ORDSC              
+DECC$RMDIR                     00008700-RX       DECC$SHR_EV56            ORDSC              
+DECC$RTL_PRIVATE               000058B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SCROLL                    00002B80-RX       DECC$SHR_EV56            ORDSC              
+DECC$SEED48                    00007040-RX       DECC$SHR_EV56            ORDSC              
+DECC$SEEKDIR                   00007E50-RX       DECC$SHR_EV56            ORDSC              
+DECC$SELECT                    000032E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SEND                      00003210-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETBUF                    000017F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETENV                    00008550-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETEUID                   0000B300-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETGID                    00002510-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETGRENT                  0000B740-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETHOSTENT                000069E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETITIMER                 00007F30-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETKEY                    0000D4D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETLOCALE                 000009F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETNETENT                 00006A20-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETPGID                   0000B320-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETPGRP                   0000B340-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETPROTOENT               00006AC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETPWENT                  0000B660-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETREGID                  0000B360-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETREUID                  0000B380-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETSERVENT                00006A80-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETSID                    0000B3A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETSOCKOPT                00003390-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETSTATE                  00006EA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SETUID                    00002520-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   11
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$SETVBUF                   00001800-RX       DECC$SHR_EV56            ORDSC              
+DECC$SET_NEW_HANDLER__XPXV_V   00003AB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SHM_OPEN                  0000AE50-RX       DECC$SHR_EV56            ORDSC              
+DECC$SHM_UNLINK                0000AE70-RX       DECC$SHR_EV56            ORDSC              
+DECC$SHUTDOWN                  000032D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGACTION                 00006D00-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGADDSET                 00006D20-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGBLOCK                  000014D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGDELSET                 00006D40-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGEMPTYSET               00006D60-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGFILLSET                00006D80-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGHOLD                   0000CB60-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGIGNORE                 0000CBA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGISMEMBER               00006DA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGLONGJMP                00006DC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGMASK                   00008900-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGNAL                    000013D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGPAUSE                  000014E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGPENDING                00006E40-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGPROCMASK               00006DE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGRELSE                  0000CB80-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGSETJMP                 00006E00-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGSETMASK                000014F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGSTACK                  00001500-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGSUSPEND                00006E20-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGTIMEDWAIT              0000CC00-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGVEC                    00001510-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGWAIT                   0000CBC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SIGWAITINFO               0000CBE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SLEEP                     00001450-RX       DECC$SHR_EV56            ORDSC              
+DECC$SOCKET                    000031C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SOCKETPAIR                0000D160-RX       DECC$SHR_EV56            ORDSC              
+DECC$SRAND                     00002190-RX       DECC$SHR_EV56            ORDSC              
+DECC$SRAND48                   00007020-RX       DECC$SHR_EV56            ORDSC              
+DECC$SRANDOM                   00006E60-RX       DECC$SHR_EV56            ORDSC              
+DECC$SSIGNAL                   00001460-RX       DECC$SHR_EV56            ORDSC              
+DECC$STAT                      00001E90-RX       DECC$SHR_EV56            ORDSC              
+DECC$STATVFS                   0000CAE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRCASECMP                00007080-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRCMP                    000026C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRCOLL                   000026D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRCSPN                   000026F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRERROR                  00002700-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRFTIME                  00002960-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRLEN                    00002710-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRNCASECMP               000070C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRNCMP                   00002730-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRNLEN                   00005820-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRPTIME_XPG4             0000AED0-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRSPN                    00002770-RX       DECC$SHR_EV56            ORDSC              
+DECC$STRXFRM                   00002790-RX       DECC$SHR_EV56            ORDSC              
+DECC$SUBWIN                    00002B90-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   12
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$SWAB                      000071C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$SYMLINK                   0000BB80-RX       DECC$SHR_EV56            ORDSC              
+DECC$SYSCONF                   00008810-RX       DECC$SHR_EV56            ORDSC              
+DECC$SYSTEM                    00002060-RX       DECC$SHR_EV56            ORDSC              
+DECC$TELLDIR                   00007E70-RX       DECC$SHR_EV56            ORDSC              
+DECC$TEMPNAM                   00008720-RX       DECC$SHR_EV56            ORDSC              
+DECC$TIME                      00002970-RX       DECC$SHR_EV56            ORDSC              
+DECC$TIMES                     00003840-RX       DECC$SHR_EV56            ORDSC              
+DECC$TMPFILE                   00001840-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOASCII                   0000D3A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOLOWER                   000008F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOUCHWIN                  00002BA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOUPPER                   00000900-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOWCTRANS                 00007DB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOWLOWER                  00005360-RX       DECC$SHR_EV56            ORDSC              
+DECC$TOWUPPER                  00005380-RX       DECC$SHR_EV56            ORDSC              
+DECC$TRUNCATE                  000087A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TTYNAME                   00001EA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TTYNAME_R                 0000CB40-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXATOF                    00000000-*                                 ORDSC              
+DECC$TXFPRINTF                 00004950-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXFSCANF                  00004A10-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXPRINTF                  00004960-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXSCANF                   00004A20-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXSNPRINTF                0000C7A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXSPRINTF                 00004970-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXSSCANF                  00004A30-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXSTRTOD                  00000000-*                                 ORDSC              
+DECC$TXVFPRINTF                00004980-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXVPRINTF                 00004990-RX       DECC$SHR_EV56            ORDSC              
+DECC$TXVSPRINTF                000049A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$TZSET                     000076A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$UALARM                    00007F70-RX       DECC$SHR_EV56            ORDSC              
+DECC$UMASK                     00003970-RX       DECC$SHR_EV56            ORDSC              
+DECC$UNAME                     00008590-RX       DECC$SHR_EV56            ORDSC              
+DECC$UNGETC                    00001860-RX       DECC$SHR_EV56            ORDSC              
+DECC$UNGETWC                   000053A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$UNLINK                    000085C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$UNSETENV                  00008570-RX       DECC$SHR_EV56            ORDSC              
+DECC$USLEEP                    00007F90-RX       DECC$SHR_EV56            ORDSC              
+DECC$UTIME                     0000B210-RX       DECC$SHR_EV56            ORDSC              
+DECC$UTIMES                    0000B230-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$CALLOC_OPT           00003700-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$CFREE_OPT            00003720-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$CRTL_INIT            00003740-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$FREE_OPT             00003710-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$GET_SDC              00003160-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$MALLOC_OPT           000036F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$VAXC$REALLOC_OPT          00003730-RX       DECC$SHR_EV56            ORDSC              
+DECC$WADDCH                    00002BB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WADDSTR                   00002BC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WAIT                      000030A0-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   13
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$WAIT3                     00008450-RX       DECC$SHR_EV56            ORDSC              
+DECC$WAIT4                     00008470-RX       DECC$SHR_EV56            ORDSC              
+DECC$WAITPID                   00008430-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCLEAR                    00002BD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCLRATTR                  00002BE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCLRTOBOT                 00002BF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCLRTOEOL                 00002C00-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCRTOMB                   00007240-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSCMP                    00005400-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSCOLL                   00005420-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSCSPN                   00005460-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSFTIME                  00005480-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSLEN                    000054A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSNCMP                   000054E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSSPN                    00005560-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSTOMBS                  000021C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSWIDTH                  000055E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCSXFRM                   00005600-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCTOB                     00007200-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCTOMB                    000021D0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCTRANS                   00007D90-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCTYPE                    00005660-RX       DECC$SHR_EV56            ORDSC              
+DECC$WCWIDTH                   00005680-RX       DECC$SHR_EV56            ORDSC              
+DECC$WDELCH                    00002C10-RX       DECC$SHR_EV56            ORDSC              
+DECC$WDELETELN                 00002C20-RX       DECC$SHR_EV56            ORDSC              
+DECC$WERASE                    00002C30-RX       DECC$SHR_EV56            ORDSC              
+DECC$WGETCH                    00002C40-RX       DECC$SHR_EV56            ORDSC              
+DECC$WGETSTR                   00002C50-RX       DECC$SHR_EV56            ORDSC              
+DECC$WINCH                     00002C60-RX       DECC$SHR_EV56            ORDSC              
+DECC$WINSCH                    00002C70-RX       DECC$SHR_EV56            ORDSC              
+DECC$WINSERTLN                 00002C80-RX       DECC$SHR_EV56            ORDSC              
+DECC$WINSSTR                   00002C90-RX       DECC$SHR_EV56            ORDSC              
+DECC$WMEMCMP                   00007300-RX       DECC$SHR_EV56            ORDSC              
+DECC$WMOVE                     00002CA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WREFRESH                  00002CE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WRITE                     00001EB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WRITEV                    0000B2B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$WSETATTR                  00002D20-RX       DECC$SHR_EV56            ORDSC              
+DECC$WSTANDEND                 00002D30-RX       DECC$SHR_EV56            ORDSC              
+DECC$WSTANDOUT                 00002D40-RX       DECC$SHR_EV56            ORDSC              
+DECC$_EXIT                     00002010-RX       DECC$SHR_EV56            ORDSC              
+DECC$_FSTAT                    0000D3C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__32_GETPWENT             0000CF00-RX       DECC$SHR_EV56            ORDSC              
+DECC$__32_GETPWNAM             0000CDE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__32_GETPWUID             0000CE60-RX       DECC$SHR_EV56            ORDSC              
+DECC$__32_SIGACTION            0000D340-RX       DECC$SHR_EV56            ORDSC              
+DECC$__32_SIGNAL               0000D2C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__32_SSIGNAL              0000D300-RX       DECC$SHR_EV56            ORDSC              
+DECC$__64_GETPWENT             0000CEC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__64_GETPWNAM             0000CDA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__64_GETPWUID             0000CE20-RX       DECC$SHR_EV56            ORDSC              
+DECC$__64_SIGACTION            0000D320-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   14
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$__64_SIGNAL               0000D2A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__64_SSIGNAL              0000D2E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__ASSERT                  00000810-RX       DECC$SHR_EV56            ORDSC              
+DECC$__DL__XPV                 00003AD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__FREEADDRINFO32          0000C580-RX       DECC$SHR_EV56            ORDSC              
+DECC$__FREEADDRINFO64          0000C520-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETADDRINFO32           0000C540-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETADDRINFO64           0000C4E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETADDRINFO_COMPAT4332  0000C560-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETADDRINFO_COMPAT4364  0000C500-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETGRENT64              0000B760-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETGRGID64              0000B780-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETGRGID_R64            0000B7A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETGRNAM64              0000B7C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__GETGRNAM_R64            0000B7E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_ACCESS         0000B520-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_CHMOD          0000B800-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_CHOWN          0000B540-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_FCHMOD         000087E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_FCHOWN         0000B560-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_FSTAT          0000B580-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_FTW            0000B5E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETEGID        0000B820-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETEUID        0000B840-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETGID         0000B860-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETGROUPS      0000C240-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETPWNAM       0000B5A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETPWUID       0000B600-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_GETUID         0000B880-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_LCHOWN         0000BBE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_LSTAT          0000BC40-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_SETGID         0000B8A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_SETUID         0000B8C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID_STAT           0000B5C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID___32_GETPWNAM  0000CE00-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID___32_GETPWUID  0000CE80-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID___64_GETPWNAM  0000CDC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__LONG_GID___64_GETPWUID  0000CE40-RX       DECC$SHR_EV56            ORDSC              
+DECC$__NON_UTC_FTW             0000BB00-RX       DECC$SHR_EV56            ORDSC              
+DECC$__NW__XUI                 00003AC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_FCNTL             0000D450-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_FSEEKO            0000B980-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_FSTAT             0000BAA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_FTELLO            0000B960-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_FTRUNCATE         0000B9C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_FTW               0000BB40-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_LONG_GID_FSTAT    0000BAE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_LONG_GID_FTW      0000BB60-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_LONG_GID_LSTAT    0000BCA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_LONG_GID_STAT     0000BA80-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_LSEEK             0000B9A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_LSTAT             0000BC60-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   15
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+DECC$__OFF64_NON_UTC_FTW       0000BB20-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_PREAD             0000D510-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_PWRITE            0000D4F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_STAT              0000BA40-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_TRUNCATE          0000B9E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_UTC_FSTAT         0000BAC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_UTC_LSTAT         0000BC80-RX       DECC$SHR_EV56            ORDSC              
+DECC$__OFF64_UTC_STAT          0000BA60-RX       DECC$SHR_EV56            ORDSC              
+DECC$__PDAM_WCSFTIME           000075F0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__POSIX_EXIT              000084B0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__POSIX_KILL              00008880-RX       DECC$SHR_EV56            ORDSC              
+DECC$__POSIX_LONG_GID_KILL     0000B8E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__POSIX_SYSTEM            00008DF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__POSIX_WAIT              00008490-RX       DECC$SHR_EV56            ORDSC              
+DECC$__POSIX__EXIT             00008E10-RX       DECC$SHR_EV56            ORDSC              
+DECC$__READ_RND                00000000-*                                 ORDSC              
+DECC$__SHORT_GID_GETPWENT      0000BDA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__SHORT_GID___32_GETPWENT 0000CEE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__SHORT_GID___64_GETPWENT 0000CEA0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__STD_FSTAT               0000D100-RX       DECC$SHR_EV56            ORDSC              
+DECC$__STD_FTW                 0000D140-RX       DECC$SHR_EV56            ORDSC              
+DECC$__STD_LSTAT               0000D120-RX       DECC$SHR_EV56            ORDSC              
+DECC$__STD_STAT                0000D0E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UNIX_GETEUID            000088C0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UNIX_GETUID             000088E0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTCTZ_GMTIME            00007700-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTCTZ_GMTIME_R          0000AD20-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTCTZ_LOCALTIME         00007720-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTCTZ_LOCALTIME_R       0000AD40-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_CTIME               00008D90-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_CTIME_R             0000ACC0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_FSTAT               00008D10-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_FTIME               00008DD0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_GMTIME              00008D30-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_GMTIME_R            0000ACE0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_LOCALTIME           00008D50-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_LOCALTIME_R         0000AD00-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_LSTAT               0000BC20-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_MKTIME              00008D70-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_PDAM_WCSFTIME       00008E70-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_STAT                00008CF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_STRFTIME            00008E30-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_TIME                00008DB0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_UTIME               0000B250-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_UTIMES              0000B270-RX       DECC$SHR_EV56            ORDSC              
+DECC$__UTC_WCSFTIME            00008E50-RX       DECC$SHR_EV56            ORDSC              
+DECC$__VMS_PCLOSE              0000C260-RX       DECC$SHR_EV56            ORDSC              
+DECC$__VMS_WAIT3               0000AC10-RX       DECC$SHR_EV56            ORDSC              
+DECC$__VMS_WAIT4               0000AC30-RX       DECC$SHR_EV56            ORDSC              
+DECC$__VMS_WAITPID             0000ABF0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__WRITEV32                0000C5A0-RX       DECC$SHR_EV56            ORDSC              
+DECC$__WRITEV64                0000C5C0-RX       DECC$SHR_EV56            ORDSC              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   16
+
+
+Symbol                         Value             Defined By               Referenced By ...
+------                         -----             ----------               -----------------
+SYS$IMGSTA                     00000340-RX       SYS$PUBLIC_VECTORS 
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   17
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000340     RX-SYS$IMGSTA                    
+000007D0     RX-DECC$GET_ERRNO_ADDR           
+000007E0     RX-DECC$GET_VMS_ERRNO_ADDR       
+00000810     RX-DECC$__ASSERT                 
+00000830     RX-DECC$ISALNUM                  
+00000840     RX-DECC$ISALPHA                  
+00000850     RX-DECC$ISASCII                  
+00000860     RX-DECC$ISCNTRL                  
+00000870     RX-DECC$ISDIGIT                  
+00000880     RX-DECC$ISGRAPH                  
+00000890     RX-DECC$ISLOWER                  
+000008A0     RX-DECC$ISPRINT                  
+000008B0     RX-DECC$ISPUNCT                  
+000008C0     RX-DECC$ISSPACE                  
+000008D0     RX-DECC$ISUPPER                  
+000008E0     RX-DECC$ISXDIGIT                 
+000008F0     RX-DECC$TOLOWER                  
+00000900     RX-DECC$TOUPPER                  
+000009F0     RX-DECC$SETLOCALE                
+00000A00     RX-DECC$LOCALECONV               
+00001370     RX-DECC$LONGJMP                  
+000013D0     RX-DECC$SIGNAL                   
+000013E0     RX-DECC$RAISE                    
+00001410     RX-DECC$ALARM                    
+00001420     RX-DECC$GSIGNAL                  
+00001430     RX-DECC$KILL                     
+00001440     RX-DECC$PAUSE                    
+00001450     RX-DECC$SLEEP                    
+00001460     RX-DECC$SSIGNAL                  
+000014D0     RX-DECC$SIGBLOCK                 
+000014E0     RX-DECC$SIGPAUSE                 
+000014F0     RX-DECC$SIGSETMASK               
+00001500     RX-DECC$SIGSTACK                 
+00001510     RX-DECC$SIGVEC                   
+00001570     RX-DECC$CLEARERR                 
+00001580     RX-DECC$FCLOSE                   
+00001590     RX-DECC$FEOF                     
+000015A0     RX-DECC$FERROR                   
+000015B0     RX-DECC$FFLUSH                   
+000015C0     RX-DECC$FGETC                    
+000015D0     RX-DECC$FGETPOS                  
+000015F0     RX-DECC$FILENO                   
+00001600     RX-DECC$FOPEN                    
+00001640     RX-DECC$FPUTC                    
+00001650     RX-DECC$FPUTS                    
+00001660     RX-DECC$FREAD                    
+00001670     RX-DECC$FREOPEN                  
+00001680     RX-DECC$FSEEK                    
+000016C0     RX-DECC$FSETPOS                  
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   18
+
+
+Value                                   Symbols...
+-----                                   ----------
+000016D0     RX-DECC$FTELL                    
+000016E0     RX-DECC$FWRITE                   
+000016F0     RX-DECC$GETC                     
+00001700     RX-DECC$GETCHAR                  
+00001720     RX-DECC$PERROR                   
+00001760     RX-DECC$PUTC                     
+00001770     RX-DECC$PUTCHAR                  
+00001780     RX-DECC$PUTS                     
+00001790     RX-DECC$REMOVE                   
+000017A0     RX-DECC$RENAME                   
+000017B0     RX-DECC$REWIND                   
+000017F0     RX-DECC$SETBUF                   
+00001800     RX-DECC$SETVBUF                  
+00001840     RX-DECC$TMPFILE                  
+00001860     RX-DECC$UNGETC                   
+00001D00     RX-DECC$GETW                     
+00001D10     RX-DECC$PUTW                     
+00001D20     RX-DECC$FDOPEN                   
+00001DB0     RX-DECC$ACCESS                   
+00001DC0     RX-DECC$CLOSE                    
+00001DD0     RX-DECC$CREAT                    
+00001DE0     RX-DECC$DELETE                   
+00001DF0     RX-DECC$DUP                      
+00001E00     RX-DECC$DUP2                     
+00001E10     RX-DECC$FSTAT                    
+00001E30     RX-DECC$ISAPIPE                  
+00001E40     RX-DECC$ISATTY                   
+00001E50     RX-DECC$LSEEK                    
+00001E70     RX-DECC$OPEN                     
+00001E80     RX-DECC$READ                     
+00001E90     RX-DECC$STAT                     
+00001EA0     RX-DECC$TTYNAME                  
+00001EB0     RX-DECC$WRITE                    
+00001FD0     RX-DECC$ABORT                    
+00001FE0     RX-DECC$ATEXIT                   
+00002000     RX-DECC$EXIT                     
+00002010     RX-DECC$_EXIT                    
+00002020     RX-DECC$FREE                     
+00002030     RX-DECC$GETENV                   
+00002060     RX-DECC$SYSTEM                   
+00002070     RX-DECC$ABS                      
+00002080     RX-DECC$ATOI                     
+00002090     RX-DECC$ATOL                     
+000020B0     RX-DECC$DIV                      
+00002120     RX-DECC$LABS                     
+00002130     RX-DECC$LDIV                     
+00002140     RX-DECC$MBLEN                    
+00002150     RX-DECC$MBSTOWCS                 
+00002160     RX-DECC$MBTOWC                   
+00002180     RX-DECC$RAND                     
+00002190     RX-DECC$SRAND                    
+000021C0     RX-DECC$WCSTOMBS                 
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   19
+
+
+Value                                   Symbols...
+-----                                   ----------
+000021D0     RX-DECC$WCTOMB                   
+000021E0     RX-DECC$CFREE                    
+000024B0     RX-DECC$GETEGID                  
+000024C0     RX-DECC$GETGID                   
+000024D0     RX-DECC$GETEUID                  
+000024E0     RX-DECC$GETPID                   
+000024F0     RX-DECC$GETPPID                  
+00002500     RX-DECC$GETUID                   
+00002510     RX-DECC$SETGID                   
+00002520     RX-DECC$SETUID                   
+00002660     RX-DECC$MEMCMP                   
+000026C0     RX-DECC$STRCMP                   
+000026D0     RX-DECC$STRCOLL                  
+000026F0     RX-DECC$STRCSPN                  
+00002700     RX-DECC$STRERROR                 
+00002710     RX-DECC$STRLEN                   
+00002730     RX-DECC$STRNCMP                  
+00002770     RX-DECC$STRSPN                   
+00002790     RX-DECC$STRXFRM                  
+00002910     RX-DECC$ASCTIME                  
+00002920     RX-DECC$CLOCK                    
+00002930     RX-DECC$CTIME                    
+00002940     RX-DECC$GMTIME                   
+00002950     RX-DECC$LOCALTIME                
+00002960     RX-DECC$STRFTIME                 
+00002970     RX-DECC$TIME                     
+000029B0     RX-DECC$MKTIME                   
+000029C0     RX-DECC$FTIME                    
+00002A90     RX-DECC$BOX                      
+00002AA0     RX-DECC$DELWIN                   
+00002AB0     RX-DECC$ENDWIN                   
+00002AC0     RX-DECC$INITSCR                  
+00002AE0     RX-DECC$MVWIN                    
+00002AF0     RX-DECC$NEWWIN                   
+00002B00     RX-DECC$OVERLAY                  
+00002B10     RX-DECC$OVERWRITE                
+00002B80     RX-DECC$SCROLL                   
+00002B90     RX-DECC$SUBWIN                   
+00002BA0     RX-DECC$TOUCHWIN                 
+00002BB0     RX-DECC$WADDCH                   
+00002BC0     RX-DECC$WADDSTR                  
+00002BD0     RX-DECC$WCLEAR                   
+00002BE0     RX-DECC$WCLRATTR                 
+00002BF0     RX-DECC$WCLRTOBOT                
+00002C00     RX-DECC$WCLRTOEOL                
+00002C10     RX-DECC$WDELCH                   
+00002C20     RX-DECC$WDELETELN                
+00002C30     RX-DECC$WERASE                   
+00002C40     RX-DECC$WGETCH                   
+00002C50     RX-DECC$WGETSTR                  
+00002C60     RX-DECC$WINCH                    
+00002C70     RX-DECC$WINSCH                   
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   20
+
+
+Value                                   Symbols...
+-----                                   ----------
+00002C80     RX-DECC$WINSERTLN                
+00002C90     RX-DECC$WINSSTR                  
+00002CA0     RX-DECC$WMOVE                    
+00002CE0     RX-DECC$WREFRESH                 
+00002D20     RX-DECC$WSETATTR                 
+00002D30     RX-DECC$WSTANDEND                
+00002D40     RX-DECC$WSTANDOUT                
+00003030     RX-DECC$EXECL                    
+00003040     RX-DECC$EXECLE                   
+00003050     RX-DECC$EXECLP                   
+00003060     RX-DECC$EXECVP                   
+00003070     RX-DECC$EXECV                    
+00003080     RX-DECC$EXECVE                   
+00003090     RX-DECC$PIPE                     
+000030A0     RX-DECC$WAIT                     
+00003160     RX-DECC$VAXC$GET_SDC             
+00003170     RX-DECC$NTOHL                    
+00003180     RX-DECC$HTONL                    
+00003190     RX-DECC$NTOHS                    
+000031A0     RX-DECC$HTONS                    
+000031B0     RX-DECC$FSYNC                    
+000031C0     RX-DECC$SOCKET                   
+000031F0     RX-DECC$LISTEN                   
+00003210     RX-DECC$SEND                     
+00003240     RX-DECC$INET_ADDR                
+00003250     RX-DECC$INET_NETWORK             
+00003260     RX-DECC$INET_NTOA                
+00003270     RX-DECC$INET_MAKEADDR            
+00003280     RX-DECC$INET_LNAOF               
+00003290     RX-DECC$INET_NETOF               
+000032B0     RX-DECC$RECV                     
+000032D0     RX-DECC$SHUTDOWN                 
+000032E0     RX-DECC$SELECT                   
+000032F0     RX-DECC$GETHOSTNAME              
+00003300     RX-DECC$GETHOSTADDR              
+00003330     RX-DECC$GETNETBYADDR             
+00003340     RX-DECC$GETNETBYNAME             
+00003360     RX-DECC$GETSERVBYNAME            
+00003380     RX-DECC$GETSOCKOPT               
+00003390     RX-DECC$SETSOCKOPT               
+000033A0     RX-DECC$GETNETENT                
+000033B0     RX-DECC$GETSERVBYPORT            
+000033C0     RX-DECC$GETPROTOBYNAME           
+000033D0     RX-DECC$GETPROTOBYNUMBER         
+000033E0     RX-DECC$GETPROTOENT              
+00003690     RX-DECC$MALLOC_OPT               
+000036A0     RX-DECC$CALLOC_OPT               
+000036B0     RX-DECC$FREE_OPT                 
+000036C0     RX-DECC$CFREE_OPT                
+000036D0     RX-DECC$REALLOC_OPT              
+000036E0     RX-DECC$CRTL_INIT                
+000036F0     RX-DECC$VAXC$MALLOC_OPT          
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   21
+
+
+Value                                   Symbols...
+-----                                   ----------
+00003700     RX-DECC$VAXC$CALLOC_OPT          
+00003710     RX-DECC$VAXC$FREE_OPT            
+00003720     RX-DECC$VAXC$CFREE_OPT           
+00003730     RX-DECC$VAXC$REALLOC_OPT         
+00003740     RX-DECC$VAXC$CRTL_INIT           
+00003820     RX-DECC$NICE                     
+00003840     RX-DECC$TIMES                    
+00003910     RX-DECC$CHDIR                    
+00003920     RX-DECC$CHMOD                    
+00003930     RX-DECC$CHOWN                    
+00003940     RX-DECC$LWAIT                    
+00003950     RX-DECC$FWAIT                    
+00003960     RX-DECC$MKDIR                    
+00003970     RX-DECC$UMASK                    
+00003A90     RX-DECC$MVWADDSTR                
+00003AB0     RX-DECC$SET_NEW_HANDLER__XPXV_V  
+00003AC0     RX-DECC$__NW__XUI                
+00003AD0     RX-DECC$__DL__XPV                
+00003C80     RX-DECC$BSD_WADDBYTES            
+00003CA0     RX-DECC$BSD_WADDSTR              
+000041B0     RX-DECC$RECORD_READ              
+00004290     RX-DECC$ATOQ                     
+000042A0     RX-DECC$ATOLL                    
+000042B0     RX-DECC$QABS                     
+000042C0     RX-DECC$LLABS                    
+000042D0     RX-DECC$QDIV                     
+000042E0     RX-DECC$LLDIV                    
+000046D0     RX-DECC$GXFPRINTF                
+000046E0     RX-DECC$GXPRINTF                 
+000046F0     RX-DECC$GXSPRINTF                
+00004700     RX-DECC$GXVFPRINTF               
+00004710     RX-DECC$GXVPRINTF                
+00004720     RX-DECC$GXVSPRINTF               
+00004790     RX-DECC$GXFSCANF                 
+000047A0     RX-DECC$GXSCANF                  
+000047B0     RX-DECC$GXSSCANF                 
+00004950     RX-DECC$TXFPRINTF                
+00004960     RX-DECC$TXPRINTF                 
+00004970     RX-DECC$TXSPRINTF                
+00004980     RX-DECC$TXVFPRINTF               
+00004990     RX-DECC$TXVPRINTF                
+000049A0     RX-DECC$TXVSPRINTF               
+00004A10     RX-DECC$TXFSCANF                 
+00004A20     RX-DECC$TXSCANF                  
+00004A30     RX-DECC$TXSSCANF                 
+00004ED0     RX-DECC$LOCALE                   
+00004FA0     RX-DECC$CATCLOSE                 
+00004FE0     RX-DECC$CATOPEN                  
+00005000     RX-DECC$ICONV                    
+00005020     RX-DECC$ICONV_OPEN               
+00005040     RX-DECC$ICONV_CLOSE              
+00005060     RX-DECC$FGETWC                   
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   22
+
+
+Value                                   Symbols...
+-----                                   ----------
+000050A0     RX-DECC$FPUTWC                   
+000050C0     RX-DECC$FPUTWS                   
+00005100     RX-DECC$GETWCHAR                 
+00005120     RX-DECC$GETWC                    
+00005140     RX-DECC$ISWALNUM                 
+00005160     RX-DECC$ISWALPHA                 
+00005180     RX-DECC$ISWCNTRL                 
+000051A0     RX-DECC$ISWCTYPE                 
+000051C0     RX-DECC$ISWDIGIT                 
+000051E0     RX-DECC$ISWGRAPH                 
+00005200     RX-DECC$ISWLOWER                 
+00005220     RX-DECC$ISWPRINT                 
+00005240     RX-DECC$ISWPUNCT                 
+00005260     RX-DECC$ISWSPACE                 
+00005280     RX-DECC$ISWUPPER                 
+000052A0     RX-DECC$ISWXDIGIT                
+000052C0     RX-DECC$NL_LANGINFO              
+000052E0     RX-DECC$PUTWC                    
+00005300     RX-DECC$PUTWCHAR                 
+00005360     RX-DECC$TOWLOWER                 
+00005380     RX-DECC$TOWUPPER                 
+000053A0     RX-DECC$UNGETWC                  
+00005400     RX-DECC$WCSCMP                   
+00005420     RX-DECC$WCSCOLL                  
+00005460     RX-DECC$WCSCSPN                  
+00005480     RX-DECC$WCSFTIME                 
+000054A0     RX-DECC$WCSLEN                   
+000054E0     RX-DECC$WCSNCMP                  
+00005560     RX-DECC$WCSSPN                   
+000055E0     RX-DECC$WCSWIDTH                 
+00005600     RX-DECC$WCSXFRM                  
+00005660     RX-DECC$WCTYPE                   
+00005680     RX-DECC$WCWIDTH                  
+00005820     RX-DECC$STRNLEN                  
+000058B0     RX-DECC$RTL_PRIVATE              
+00006960     RX-DECC$BCMP                     
+00006980     RX-DECC$BCOPY                    
+000069A0     RX-DECC$BZERO                    
+000069C0     RX-DECC$GETHOSTENT               
+000069E0     RX-DECC$SETHOSTENT               
+00006A00     RX-DECC$ENDHOSTENT               
+00006A20     RX-DECC$SETNETENT                
+00006A40     RX-DECC$ENDNETENT                
+00006A60     RX-DECC$GETSERVENT               
+00006A80     RX-DECC$SETSERVENT               
+00006AA0     RX-DECC$ENDSERVENT               
+00006AC0     RX-DECC$SETPROTOENT              
+00006AE0     RX-DECC$ENDPROTOENT              
+00006C60     RX-DECC$HERROR                   
+00006C80     RX-DECC$HSTRERROR                
+00006CA0     RX-DECC$IOCTL                    
+00006CC0     RX-DECC$GETDTABLESIZE            
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   23
+
+
+Value                                   Symbols...
+-----                                   ----------
+00006CE0     RX-DECC$HOSTALIAS                
+00006D00     RX-DECC$SIGACTION                
+00006D20     RX-DECC$SIGADDSET                
+00006D40     RX-DECC$SIGDELSET                
+00006D60     RX-DECC$SIGEMPTYSET              
+00006D80     RX-DECC$SIGFILLSET               
+00006DA0     RX-DECC$SIGISMEMBER              
+00006DC0     RX-DECC$SIGLONGJMP               
+00006DE0     RX-DECC$SIGPROCMASK              
+00006E00     RX-DECC$SIGSETJMP                
+00006E20     RX-DECC$SIGSUSPEND               
+00006E40     RX-DECC$SIGPENDING               
+00006E60     RX-DECC$SRANDOM                  
+00006E80     RX-DECC$INITSTATE                
+00006EA0     RX-DECC$SETSTATE                 
+00006EC0     RX-DECC$RANDOM                   
+00006FA0     RX-DECC$LRAND48                  
+00006FC0     RX-DECC$NRAND48                  
+00006FE0     RX-DECC$MRAND48                  
+00007000     RX-DECC$JRAND48                  
+00007020     RX-DECC$SRAND48                  
+00007040     RX-DECC$SEED48                   
+00007060     RX-DECC$LCONG48                  
+00007080     RX-DECC$STRCASECMP               
+000070C0     RX-DECC$STRNCASECMP              
+00007160     RX-DECC$FFS                      
+000071C0     RX-DECC$SWAB                     
+000071E0     RX-DECC$BTOWC                    
+00007200     RX-DECC$WCTOB                    
+00007220     RX-DECC$MBRTOWC                  
+00007240     RX-DECC$WCRTOMB                  
+000072A0     RX-DECC$MBRLEN                   
+000072C0     RX-DECC$MBSINIT                  
+00007300     RX-DECC$WMEMCMP                  
+000075F0     RX-DECC$__PDAM_WCSFTIME          
+00007610     RX-DECC$FWIDE                    
+000076A0     RX-DECC$TZSET                    
+000076C0     RX-DECC$GETTIMEOFDAY             
+000076E0     RX-DECC$GETCLOCK                 
+00007700     RX-DECC$__UTCTZ_GMTIME           
+00007720     RX-DECC$__UTCTZ_LOCALTIME        
+00007D90     RX-DECC$WCTRANS                  
+00007DB0     RX-DECC$TOWCTRANS                
+00007DD0     RX-DECC$OPENDIR                  
+00007DF0     RX-DECC$CLOSEDIR                 
+00007E10     RX-DECC$REWINDDIR                
+00007E30     RX-DECC$READDIR                  
+00007E50     RX-DECC$SEEKDIR                  
+00007E70     RX-DECC$TELLDIR                  
+00007E90     RX-DECC$FTW                      
+00007F30     RX-DECC$SETITIMER                
+00007F50     RX-DECC$GETITIMER                
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   24
+
+
+Value                                   Symbols...
+-----                                   ----------
+00007F70     RX-DECC$UALARM                   
+00007F90     RX-DECC$USLEEP                   
+00008430     RX-DECC$WAITPID                  
+00008450     RX-DECC$WAIT3                    
+00008470     RX-DECC$WAIT4                    
+00008490     RX-DECC$__POSIX_WAIT             
+000084B0     RX-DECC$__POSIX_EXIT             
+000084D0     RX-DECC$GETLOGIN                 
+000084F0     RX-DECC$GETPWNAM                 
+00008510     RX-DECC$GETPWUID                 
+00008530     RX-DECC$PUTENV                   
+00008550     RX-DECC$SETENV                   
+00008570     RX-DECC$UNSETENV                 
+00008590     RX-DECC$UNAME                    
+000085C0     RX-DECC$UNLINK                   
+000086A0     RX-DECC$MUNMAP                   
+000086C0     RX-DECC$MPROTECT                 
+000086E0     RX-DECC$MSYNC                    
+00008700     RX-DECC$RMDIR                    
+00008720     RX-DECC$TEMPNAM                  
+00008740     RX-DECC$POPEN                    
+00008760     RX-DECC$PCLOSE                   
+00008780     RX-DECC$FTRUNCATE                
+000087A0     RX-DECC$TRUNCATE                 
+000087C0     RX-DECC$FCHMOD                   
+000087E0     RX-DECC$__LONG_GID_FCHMOD        
+000087F0     RX-DECC$CONFSTR                  
+00008810     RX-DECC$SYSCONF                  
+00008830     RX-DECC$PATHCONF                 
+00008850     RX-DECC$FPATHCONF                
+00008880     RX-DECC$__POSIX_KILL             
+000088A0     RX-DECC$GETPAGESIZE              
+000088C0     RX-DECC$__UNIX_GETEUID           
+000088E0     RX-DECC$__UNIX_GETUID            
+00008900     RX-DECC$SIGMASK                  
+00008AA0     RX-DECC$MKSTEMP                  
+00008B90     RX-DECC$GBSD_PRINTW              
+00008BB0     RX-DECC$GBSD_WPRINTW             
+00008BD0     RX-DECC$GBSD_MVPRINTW            
+00008BF0     RX-DECC$GBSD_MVWPRINTW           
+00008C10     RX-DECC$GBSD_SCANW               
+00008C30     RX-DECC$GBSD_WSCANW              
+00008C50     RX-DECC$GBSD_MVSCANW             
+00008C70     RX-DECC$GBSD_MVWSCANW            
+00008CF0     RX-DECC$__UTC_STAT               
+00008D10     RX-DECC$__UTC_FSTAT              
+00008D30     RX-DECC$__UTC_GMTIME             
+00008D50     RX-DECC$__UTC_LOCALTIME          
+00008D70     RX-DECC$__UTC_MKTIME             
+00008D90     RX-DECC$__UTC_CTIME              
+00008DB0     RX-DECC$__UTC_TIME               
+00008DD0     RX-DECC$__UTC_FTIME              
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   25
+
+
+Value                                   Symbols...
+-----                                   ----------
+00008DF0     RX-DECC$__POSIX_SYSTEM           
+00008E10     RX-DECC$__POSIX__EXIT            
+00008E30     RX-DECC$__UTC_STRFTIME           
+00008E50     RX-DECC$__UTC_WCSFTIME           
+00008E70     RX-DECC$__UTC_PDAM_WCSFTIME      
+0000ABF0     RX-DECC$__VMS_WAITPID            
+0000AC10     RX-DECC$__VMS_WAIT3              
+0000AC30     RX-DECC$__VMS_WAIT4              
+0000AC40     RX-DECC$ASCTIME_R                
+0000AC60     RX-DECC$CTIME_R                  
+0000AC80     RX-DECC$GMTIME_R                 
+0000ACA0     RX-DECC$LOCALTIME_R              
+0000ACC0     RX-DECC$__UTC_CTIME_R            
+0000ACE0     RX-DECC$__UTC_GMTIME_R           
+0000AD00     RX-DECC$__UTC_LOCALTIME_R        
+0000AD20     RX-DECC$__UTCTZ_GMTIME_R         
+0000AD40     RX-DECC$__UTCTZ_LOCALTIME_R      
+0000AD80     RX-DECC$DLCLOSE                  
+0000ADA0     RX-DECC$DLERROR                  
+0000ADC0     RX-DECC$DLOPEN                   
+0000ADE0     RX-DECC$DLSYM                    
+0000AE30     RX-DECC$FCNTL                    
+0000AE50     RX-DECC$SHM_OPEN                 
+0000AE70     RX-DECC$SHM_UNLINK               
+0000AED0     RX-DECC$STRPTIME_XPG4            
+0000AEF0     RX-DECC$FREEADDRINFO             
+0000AF10     RX-DECC$FREEHOSTENT              
+0000AF30     RX-DECC$GAI_STRERROR             
+0000AF50     RX-DECC$GETADDRINFO_COMPAT43     
+0000AF70     RX-DECC$GETIPNODEBYADDR          
+0000AF90     RX-DECC$GETIPNODEBYNAME          
+0000AFB0     RX-DECC$GETNAMEINFO              
+0000AFD0     RX-DECC$IF_FREENAMEINDEX         
+0000AFF0     RX-DECC$IF_INDEXTONAME           
+0000B010     RX-DECC$IF_NAMEINDEX             
+0000B030     RX-DECC$IF_NAMETOINDEX           
+0000B050     RX-DECC$INET6_OPT_INIT           
+0000B070     RX-DECC$INET6_OPT_APPEND         
+0000B090     RX-DECC$INET6_OPT_FINISH         
+0000B0B0     RX-DECC$INET6_OPT_SET_VAL        
+0000B0D0     RX-DECC$INET6_OPT_NEXT           
+0000B0F0     RX-DECC$INET6_OPT_FIND           
+0000B110     RX-DECC$INET6_RTH_SPACE          
+0000B130     RX-DECC$INET6_RTH_INIT           
+0000B150     RX-DECC$INET6_RTH_ADD            
+0000B170     RX-DECC$INET_ATON                
+0000B190     RX-DECC$INET_NTOP                
+0000B1B0     RX-DECC$INET_PTON                
+0000B210     RX-DECC$UTIME                    
+0000B230     RX-DECC$UTIMES                   
+0000B250     RX-DECC$__UTC_UTIME              
+0000B270     RX-DECC$__UTC_UTIMES             
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   26
+
+
+Value                                   Symbols...
+-----                                   ----------
+0000B290     RX-DECC$FCHOWN                   
+0000B2B0     RX-DECC$WRITEV                   
+0000B2D0     RX-DECC$LINK                     
+0000B300     RX-DECC$SETEUID                  
+0000B320     RX-DECC$SETPGID                  
+0000B340     RX-DECC$SETPGRP                  
+0000B360     RX-DECC$SETREGID                 
+0000B380     RX-DECC$SETREUID                 
+0000B3A0     RX-DECC$SETSID                   
+0000B3C0     RX-DECC$GETSID                   
+0000B3E0     RX-DECC$GETPGID                  
+0000B400     RX-DECC$GETPGRP                  
+0000B520     RX-DECC$__LONG_GID_ACCESS        
+0000B540     RX-DECC$__LONG_GID_CHOWN         
+0000B560     RX-DECC$__LONG_GID_FCHOWN        
+0000B580     RX-DECC$__LONG_GID_FSTAT         
+0000B5A0     RX-DECC$__LONG_GID_GETPWNAM      
+0000B5C0     RX-DECC$__LONG_GID_STAT          
+0000B5E0     RX-DECC$__LONG_GID_FTW           
+0000B600     RX-DECC$__LONG_GID_GETPWUID      
+0000B620     RX-DECC$ENDPWENT                 
+0000B640     RX-DECC$GETPWENT                 
+0000B660     RX-DECC$SETPWENT                 
+0000B680     RX-DECC$ENDGRENT                 
+0000B6A0     RX-DECC$GETGRENT                 
+0000B6C0     RX-DECC$GETGRGID                 
+0000B6E0     RX-DECC$GETGRGID_R               
+0000B700     RX-DECC$GETGRNAM                 
+0000B720     RX-DECC$GETGRNAM_R               
+0000B740     RX-DECC$SETGRENT                 
+0000B760     RX-DECC$__GETGRENT64             
+0000B780     RX-DECC$__GETGRGID64             
+0000B7A0     RX-DECC$__GETGRGID_R64           
+0000B7C0     RX-DECC$__GETGRNAM64             
+0000B7E0     RX-DECC$__GETGRNAM_R64           
+0000B800     RX-DECC$__LONG_GID_CHMOD         
+0000B820     RX-DECC$__LONG_GID_GETEGID       
+0000B840     RX-DECC$__LONG_GID_GETEUID       
+0000B860     RX-DECC$__LONG_GID_GETGID        
+0000B880     RX-DECC$__LONG_GID_GETUID        
+0000B8A0     RX-DECC$__LONG_GID_SETGID        
+0000B8C0     RX-DECC$__LONG_GID_SETUID        
+0000B8E0     RX-DECC$__POSIX_LONG_GID_KILL    
+0000B900     RX-DECC$GETLOGIN_R               
+0000B920     RX-DECC$FSEEKO                   
+0000B940     RX-DECC$FTELLO                   
+0000B960     RX-DECC$__OFF64_FTELLO           
+0000B980     RX-DECC$__OFF64_FSEEKO           
+0000B9A0     RX-DECC$__OFF64_LSEEK            
+0000B9C0     RX-DECC$__OFF64_FTRUNCATE        
+0000B9E0     RX-DECC$__OFF64_TRUNCATE         
+0000BA40     RX-DECC$__OFF64_STAT             
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   27
+
+
+Value                                   Symbols...
+-----                                   ----------
+0000BA60     RX-DECC$__OFF64_UTC_STAT         
+0000BA80     RX-DECC$__OFF64_LONG_GID_STAT    
+0000BAA0     RX-DECC$__OFF64_FSTAT            
+0000BAC0     RX-DECC$__OFF64_UTC_FSTAT        
+0000BAE0     RX-DECC$__OFF64_LONG_GID_FSTAT   
+0000BB00     RX-DECC$__NON_UTC_FTW            
+0000BB20     RX-DECC$__OFF64_NON_UTC_FTW      
+0000BB40     RX-DECC$__OFF64_FTW              
+0000BB60     RX-DECC$__OFF64_LONG_GID_FTW     
+0000BB80     RX-DECC$SYMLINK                  
+0000BBA0     RX-DECC$READLINK                 
+0000BBC0     RX-DECC$LCHOWN                   
+0000BBE0     RX-DECC$__LONG_GID_LCHOWN        
+0000BC00     RX-DECC$LSTAT                    
+0000BC20     RX-DECC$__UTC_LSTAT              
+0000BC40     RX-DECC$__LONG_GID_LSTAT         
+0000BC60     RX-DECC$__OFF64_LSTAT            
+0000BC80     RX-DECC$__OFF64_UTC_LSTAT        
+0000BCA0     RX-DECC$__OFF64_LONG_GID_LSTAT   
+0000BD40     RX-DECC$GETGROUPS                
+0000BDA0     RX-DECC$__SHORT_GID_GETPWENT     
+0000C240     RX-DECC$__LONG_GID_GETGROUPS     
+0000C260     RX-DECC$__VMS_PCLOSE             
+0000C360     RX-DECC$POLL                     
+0000C380     RX-DECC$GETADDRINFO              
+0000C3A0     RX-DECC$PREAD                    
+0000C3C0     RX-DECC$PWRITE                   
+0000C4E0     RX-DECC$__GETADDRINFO64          
+0000C500     RX-DECC$__GETADDRINFO_COMPAT4364 
+0000C520     RX-DECC$__FREEADDRINFO64         
+0000C540     RX-DECC$__GETADDRINFO32          
+0000C560     RX-DECC$__GETADDRINFO_COMPAT4332 
+0000C580     RX-DECC$__FREEADDRINFO32         
+0000C5A0     RX-DECC$__WRITEV32               
+0000C5C0     RX-DECC$__WRITEV64               
+0000C760     RX-DECC$GXSNPRINTF               
+0000C7A0     RX-DECC$TXSNPRINTF               
+0000C7C0     RX-DECC$INET6_OPT_GET_VAL        
+0000C7E0     RX-DECC$INET6_RTH_REVERSE        
+0000C800     RX-DECC$INET6_RTH_SEGMENTS       
+0000C820     RX-DECC$INET6_RTH_GETADDR        
+0000CAE0     RX-DECC$STATVFS                  
+0000CB00     RX-DECC$FSTATVFS                 
+0000CB20     RX-DECC$RAND_R                   
+0000CB40     RX-DECC$TTYNAME_R                
+0000CB60     RX-DECC$SIGHOLD                  
+0000CB80     RX-DECC$SIGRELSE                 
+0000CBA0     RX-DECC$SIGIGNORE                
+0000CBC0     RX-DECC$SIGWAIT                  
+0000CBE0     RX-DECC$SIGWAITINFO              
+0000CC00     RX-DECC$SIGTIMEDWAIT             
+0000CC20     RX-DECC$CLOCK_GETRES             
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   28
+
+
+Value                                   Symbols...
+-----                                   ----------
+0000CC40     RX-DECC$CLOCK_SETTIME            
+0000CC60     RX-DECC$CLOCK_GETTIME            
+0000CC80     RX-DECC$NANOSLEEP                
+0000CDA0     RX-DECC$__64_GETPWNAM            
+0000CDC0     RX-DECC$__LONG_GID___64_GETPWNAM 
+0000CDE0     RX-DECC$__32_GETPWNAM            
+0000CE00     RX-DECC$__LONG_GID___32_GETPWNAM 
+0000CE20     RX-DECC$__64_GETPWUID            
+0000CE40     RX-DECC$__LONG_GID___64_GETPWUID 
+0000CE60     RX-DECC$__32_GETPWUID            
+0000CE80     RX-DECC$__LONG_GID___32_GETPWUID 
+0000CEA0     RX-DECC$__SHORT_GID___64_GETPWENT
+0000CEC0     RX-DECC$__64_GETPWENT            
+0000CEE0     RX-DECC$__SHORT_GID___32_GETPWENT
+0000CF00     RX-DECC$__32_GETPWENT            
+0000CF20     RX-DECC$L64A                     
+0000CF40     RX-DECC$L64A_R                   
+0000CF60     RX-DECC$A64L                     
+0000D080     RX-DECC$FLOCKFILE                
+0000D0A0     RX-DECC$FTRYLOCKFILE             
+0000D0C0     RX-DECC$FUNLOCKFILE              
+0000D0E0     RX-DECC$__STD_STAT               
+0000D100     RX-DECC$__STD_FSTAT              
+0000D120     RX-DECC$__STD_LSTAT              
+0000D140     RX-DECC$__STD_FTW                
+0000D160     RX-DECC$SOCKETPAIR               
+0000D180     RX-DECC$CLEARERR_UNLOCKED        
+0000D1A0     RX-DECC$GETC_UNLOCKED            
+0000D1C0     RX-DECC$GETCHAR_UNLOCKED         
+0000D1E0     RX-DECC$FEOF_UNLOCKED            
+0000D200     RX-DECC$FERROR_UNLOCKED          
+0000D220     RX-DECC$FGETC_UNLOCKED           
+0000D240     RX-DECC$FPUTC_UNLOCKED           
+0000D260     RX-DECC$PUTC_UNLOCKED            
+0000D280     RX-DECC$PUTCHAR_UNLOCKED         
+0000D2A0     RX-DECC$__64_SIGNAL              
+0000D2C0     RX-DECC$__32_SIGNAL              
+0000D2E0     RX-DECC$__64_SSIGNAL             
+0000D300     RX-DECC$__32_SSIGNAL             
+0000D320     RX-DECC$__64_SIGACTION           
+0000D340     RX-DECC$__32_SIGACTION           
+0000D3A0     RX-DECC$TOASCII                  
+0000D3C0     RX-DECC$_FSTAT                   
+0000D450     RX-DECC$__OFF64_FCNTL            
+0000D4B0     RX-DECC$ENCRYPT                  
+0000D4D0     RX-DECC$SETKEY                   
+0000D4F0     RX-DECC$__OFF64_PWRITE           
+0000D510     RX-DECC$__OFF64_PREAD            
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   29
+
+
+Value                                   Symbols...
+-----                                   ----------
+
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! *  - Undefined     !
+		! A  - Alias Name    !
+		! I  - Internal Name !
+		! U  - Universal     !
+		! R  - Relocatable   !
+		! X  - External      !
+		! WK - Weak          !
+		+--------------------+
+
+NL:[].EXE;                                                       9-OCT-2026 01:30        Linker A13-04                    Page   30
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000000 0001FFFF 00020000 (131072. bytes, 256. pages)
+Stack size:                                              0. pages
+Image header virtual block limits:                       1.        1. (    1. block)
+Image binary virtual block limits:                       2.       12. (   11. blocks)
+Image name and identification:                     V1
+Number of files:                                         5.
+Number of modules:                                       3.
+Number of program sections:                              5.
+Number of global symbols:                             3389.
+Including undefined count of:                            5.
+Number of cross references:                           1238.
+Number of image sections:                               13.
+Debugger transfer address:                        00000340
+Number of code references to shareable images:         617.
+Image type:                                         PIC, SHAREABLE. Global Section Match=EQUAL, Ident, Major=59, Minor=1459997
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]ORDSC.MAP;1
+Estimated map length:                             500. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults	CPU Time	Elapsed Time
+----------------------                            -----------	--------	------------
+    Command processing:                                    40	00:00:00.01	00:00:00.00
+    Pass 1:                                               162	00:00:00.30	00:00:00.31
+    Allocation/Relocation:                                 21	00:00:00.01	00:00:00.00
+    Pass 2:                                                16	00:00:00.02	00:00:00.03
+    Map data after object module synopsis:                  4	00:00:00.13	00:00:00.13
+    Symbol table output:                                    1	00:00:00.00	00:00:00.00
+Total run values:                                         244	00:00:00.47	00:00:00.50
+
+Using a working set limited to 8896 pages and 1227 pages of data storage (excluding image)
+
+Total number object records read (both passes):   492
+    of which 0 were in libraries and 0 were DEBUG data records containing 0 bytes
+
+Number of modules extracted explicitly             = 0
+    with 0 extracted to resolve undefined symbols
+
+6 library searches were for symbols not in the library searched
+
+A total of 4 global symbol table records was written
+
+LINK/SHAREABLE/MAP/FULL/CROSS/NOEXECUTABLE ORDSC

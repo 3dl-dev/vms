@@ -1,0 +1,25 @@
+        .TITLE  MAIN3A  OVMX vms-3b3f rung-3 main module
+; Calls a routine in a second module of the same image (MAIN3B) and two
+; routines in our own shareable MYSHR, then returns SS$_NORMAL.
+        $SSDEF
+        .PSECT  MDATA,WRT,NOEXE,QUAD
+OKMSG:  .ASCID  /OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok/
+BADMSG: .ASCID  /OVMX-NATIVE MAIN3: MYSHR_ADD wrong/
+        .PSECT  MCODE,EXE,NOWRT,QUAD
+        .ENTRY  MAIN3,^M<R2>
+        CALLS   #0,G^MAIN3B_SAY
+        CALLS   #0,G^MYSHR_GREET
+        PUSHL   #3
+        PUSHL   #2
+        CALLS   #2,G^MYSHR_ADD
+        CMPL    R0,#5
+        BNEQ    20$
+        PUSHAQ  OKMSG
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        MOVL    #SS$_NORMAL,R0
+        RET
+20$:    PUSHAQ  BADMSG
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        MOVL    #SS$_ABORT,R0
+        RET
+        .END    MAIN3

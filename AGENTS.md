@@ -85,6 +85,10 @@ accepted.
   merging, run `tools/ci/merge_freshness.sh origin/main <pr-head>`; if it reports STALE (main has
   since changed files the PR changes), update the branch to current main and merge only on the new
   green result.
+- **Skipped is not green.** The heavy boot/e2e/negative-control jobs do not run on `pull_request`
+  and show SKIPPED there. Dispatch each such workflow on the PR branch (`gh workflow run <file> --ref
+  <branch>`) and merge only when `tools/ci/merge_heavy_gates.py <pr-number>` reports OK: every
+  workflow the PR skipped has passed on its head SHA.
 - **CI must be green.** A PR that leaves CI red has shipped nothing. Gates include `Build & Test`,
   the kernel-executive proof against a real `/dev/vms`, and the VMS-native link / self-host jobs.
 - **Tests are mandatory.** No change is complete while a test in any layer it touches is skipped,

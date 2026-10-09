@@ -393,6 +393,54 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 	return VMS_CODEC_OK;
 }
 
+/*
+ * A CONVERT (op 0x07) the master QUEUED (rd vms-cab). GROUNDED from real
+ * VAX<->VAX traffic (2026-10-09 lab captures ev11/ev13/e8b-refire/m4): a real
+ * VMS master answers a queued conversion AT ONCE with the request echoed, the
+ * category made a response (0x82), and the outcome byte body[34] = 0xfb. Every
+ * sampled pair differs from its request in exactly body[0:4] (the CM
+ * envelope, the wrapper's), body[8] (category), body[34] (outcome) and
+ * body[52:54] (the SCS-layer word this codec does not own: left zero, as the
+ * grant leaves it). The op stays 0x07. Without this answer the requesting
+ * VAX process waits in RWSCS for ever, and cannot even be deleted
+ * (measured: run ci6-evac-13). The later grant is a separate message.
+ */
+vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body,
+							 uint32_t req_len,
+							 uint8_t *frame,
+							 uint32_t cap,
+							 uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	uint8_t cat, op;
+
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_CONVERT)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_REC + 2u, VMS_DLM_REPLY_QUEUED);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 52u, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 53u, 0u);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 						   uint32_t master_lkid,
 						   uint8_t res_acmode,

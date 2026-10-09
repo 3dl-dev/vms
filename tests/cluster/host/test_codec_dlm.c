@@ -1403,6 +1403,51 @@ static void test_dlksrch_twin(void)
 	free(exact);
 }
 
+/*
+ * rd vms-cab: the immediate answer to a QUEUED CONVERT, against a real pair
+ * captured between two OpenVMS VAX V7.3 nodes (lab run ev11, 2026-10-09
+ * 11:14:31.737771 VAX1 -> VAX2 op-0x07, and VAX2's answer 78 us later).
+ * Everything after the CM envelope (body[0:4]) must be byte-identical.
+ */
+static void test_queued_convert_answer_is_the_real_one(void)
+{
+	static const char req_hex[] =
+	    "b93ba22b070099bd020703000100070000000000b7040001880200011b0605000f000100"
+	    "000000000000000000000000000000000f02202000000000534b3120202020209a090000"
+	    "02000100000000000000000000000000000000000000000000000000000000000000000000"
+	    "00000000000000ffffffff00000000ffffffff5e640d90";
+	static const char rep_hex[] =
+	    "a42bb93b070099bd820703000100070000000000b7040001880200011b0605000f00fb00"
+	    "000000000000000000000000000000000000202000000000534b3120202020209a090000"
+	    "02000100000000000000000000000000000000000000000000000000000000000000000000"
+	    "00000000000000ffffffff00000000ffffffff5e640d90";
+	uint8_t req[132], rep[132], frame[VMS_OFF_SYSAP_BODY + 132];
+	uint32_t i, written = 0, diffs = 0;
+
+	for (i = 0; i < 132u; i++) {
+		unsigned int x, y;
+		sscanf(&req_hex[2 * i], "%2x", &x);
+		sscanf(&rep_hex[2 * i], "%2x", &y);
+		req[i] = (uint8_t)x;
+		rep[i] = (uint8_t)y;
+	}
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_convert_response_build_queued(req, sizeof(req), frame,
+						       sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "a queued CONVERT's answer builds");
+	for (i = 4u; i < 132u; i++)
+		if (frame[VMS_OFF_SYSAP_BODY + i] != rep[i])
+			diffs++;
+	ct_check_eq_u32(diffs, 0u,
+			"*** the queued-CONVERT answer equals the real VAX "
+			"master's, byte for byte after the envelope ***");
+	ct_check_eq_u32(frame[VMS_OFF_SYSAP_BODY + 34u], 0xfbu,
+			"  ... outcome byte 0xfb (queued)");
+	ct_check(vms_dlm_convert_response_build_queued(rep, sizeof(rep), frame,
+						       sizeof(frame), &written) !=
+		 VMS_CODEC_OK, "  ... and a RESPONSE is refused as input");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1425,5 +1470,6 @@ int main(void)
 	test_body_entries_are_what_scs_delivers();
 	test_dlksrch_twin();
 
+	test_queued_convert_answer_is_the_real_one();
 	return ct_summary("test_codec_dlm");
 }

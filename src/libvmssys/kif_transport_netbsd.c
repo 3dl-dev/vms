@@ -78,10 +78,16 @@ void kif_xport_munmap(void *addr, unsigned long length)
  */
 int kif_xport_tty_attach(int ttyfd, unsigned long bind_req, void *bind_args)
 {
-	linedn_t name = "vms_tt";
+	/* a linedn_t: the discipline's name, NUL-padded to TTLINEDNAMELEN */
+	char name[32] = "vms_tt";
 
+#ifdef TIOCSLINED
 	if (ioctl(ttyfd, TIOCSLINED, name) < 0)
 		return -errno;
+#else
+	(void)name;
+	return -ENOTTY;                 /* not a NetBSD build: no such discipline */
+#endif
 	if (ioctl(ttyfd, (unsigned long)bind_req, bind_args) < 0)
 		return -errno;
 	return 0;

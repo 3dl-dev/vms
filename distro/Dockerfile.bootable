@@ -536,6 +536,13 @@ RUN cmake -B build-static \
 # BUILD_TOOLS -- the `vmslink` target -- and only needs staging.)
 RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 
+# LAB-ONLY (evac/int-*, never merged): the ci.6 workload image on the lab disk.
+RUN set -e; R=/tmp/evrepo; mkdir -p $R/build-static/bin; \
+    ln -s /src/src $R/src; ln -s /src/third-party $R/third-party; ln -s /src/tests $R/tests; \
+    cp build-static/bin/TCC.EXE /link-native/SYSLIB/*.EXE $R/build-static/bin/; \
+    CC=gcc sh /src/tests/lab/ci6/mk_evacwl_native.sh $R; \
+    cp $R/build-static/native/EVACWL.EXE /link-native/SYSEXE/EVACWL.EXE
+
 # MMK.EXE (vms-fc2 / self-host spine #4): the descrip.mms build driver -- the
 # actual replacement for the retired BUILD.COM (vms-e49). TCC.EXE + LINK.EXE are
 # the compiler + linker; MMK is the driver that orchestrates them from a
@@ -713,6 +720,7 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     cp build-static/bin/LINK.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/TCC.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/MMK.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp /link-native/SYSEXE/EVACWL.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     # NOTE (vms-992e): TCC's header closure (tinycc + musl <stdint.h>) is NOT
     # staged here yet. It belongs in SYS$SYSEXE:[.INCLUDE], but ovmx_kit_pack
     # cannot round-trip that nested lowercase-header subdirectory byte-exact (the

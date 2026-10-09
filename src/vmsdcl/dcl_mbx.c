@@ -83,6 +83,7 @@
 #include "lnmdef.h"
 #include "vms_kif.h"
 #include "dcl/dcl_mbx.h"
+#include "rms_textfile.h"   /* a disk-file SYS$INPUT is read through RMS (rd vms-003b) */
 
 /* One mailbox message never exceeds the executive's per-ioctl cap
  * (VMS_MBX_IOCTL_MAXLEN == 4096, src/kernel/vms_mbx.h); a DCL command line is
@@ -209,6 +210,77 @@ static int is_mbx_device(const char *s)
  * name is undefined or resolves to something that is not a mailbox (a terminal,
  * a file, undefined -- all of which leave DCL on its fd/stdio path).
  */
+/* The final equivalence of `name` through the logical-name tables (up to ten
+ * levels), or 0 if `name` is not a logical name. */
+static int resolve_final(const char *name, char *out, size_t outsz)
+{
+    char cur[256];
+    int any = 0;
+    strncpy(cur, name, sizeof(cur) - 1);
+    cur[sizeof(cur) - 1] = '\0';
+    for (int depth = 0; depth < 10; depth++) {
+        struct dsc$descriptor_s namdsc;
+        char equiv[256];
+        uint16_t rl = 0;
+        struct item_list_3 itmlst[2];
+        vms_cstr_to_desc(&namdsc, cur);
+        memset(itmlst, 0, sizeof(itmlst));
+        itmlst[0].buflen    = (uint16_t)(sizeof(equiv) - 1);
+        itmlst[0].item_code = LNM$_STRING;
+        itmlst[0].bufaddr   = equiv;
+        itmlst[0].retlen    = &rl;
+        if (!(sys$trnlnm(NULL, NULL, &namdsc, NULL, itmlst) & 1) || rl == 0)
+            break;
+        if (rl >= sizeof(equiv))
+            rl = (uint16_t)(sizeof(equiv) - 1);
+        equiv[rl] = '\0';
+        if (strcmp(equiv, cur) == 0)
+            break;
+        strncpy(cur, equiv, sizeof(cur) - 1);
+        cur[sizeof(cur) - 1] = '\0';
+        any = 1;
+    }
+    if (!any)
+        return 0;
+    strncpy(out, cur, outsz - 1);
+    out[outsz - 1] = '\0';
+    return 1;
+}
+
+/* A FILE specification -- a device field followed by a directory or file name
+ * -- rather than a bare device such as a terminal or the null device. */
+static int names_a_file(const char *spec)
+{
+    const char *c = strrchr(spec, ':');
+    return c && c[1] != '\0';
+}
+
+/* Feeds DCL's stdin pipe from a disk-file SYS$INPUT, record by record. */
+static rms_textfile_t *g_in_file;
+static void *file_reader_main(void *arg)
+{
+    char rec[4096];
+    int too_long = 0;
+    (void)arg;
+    while (rms_textfile_getline(g_in_file, rec, sizeof(rec) - 1, &too_long)) {
+        size_t n = strlen(rec);
+        if (n == 0 || rec[n - 1] != '\n')
+            rec[n++] = '\n';
+        size_t off = 0;
+        while (off < n) {
+            ssize_t w = write(g_in_pipe_w, rec + off, n - off);
+            if (w <= 0) goto done;
+            off += (size_t)w;
+        }
+    }
+done:
+    rms_textfile_close(g_in_file);
+    g_in_file = NULL;
+    close(g_in_pipe_w);
+    g_in_pipe_w = -1;
+    return NULL;
+}
+
 static int resolve_to_mailbox(const char *name, char *out, size_t outsz)
 {
     char cur[256];
@@ -513,6 +585,40 @@ int dcl_mbx_bind_std_streams(void)
                 }
             } else {
                 (void)vms_kif_dassgn(chan);
+            }
+        }
+    }
+
+    /*
+     * SYS$INPUT a DISK FILE (rd vms-003b): a process $CREPRC'd with a VMS file
+     * as its input -- LIB$SPAWN's command file, or INPUT=file -- has SYS$INPUT
+     * naming that file, as on VMS, and DCL reads its commands from it through
+     * RMS. A terminal or a mailbox is not a file and is left to the paths
+     * around this one.
+     */
+    if (!(bound & DCL_MBX_BOUND_INPUT) && !isatty(STDIN_FILENO)) {
+        char spec[256];
+        if (resolve_final("SYS$INPUT", spec, sizeof(spec)) && names_a_file(spec) &&
+            (g_in_file = rms_textfile_open(spec)) != NULL) {
+            int p[2];
+            if (pipe(p) == 0) {
+                g_in_pipe_w = p[1];
+                if (dup2(p[0], STDIN_FILENO) >= 0 &&
+                    pthread_create(&g_reader, NULL, file_reader_main, NULL) == 0) {
+                    pthread_detach(g_reader);
+                    g_reader_up = 1;
+                    bound |= DCL_MBX_BOUND_INPUT;
+                    close(p[0]);
+                } else {
+                    close(p[0]);
+                    close(p[1]);
+                    g_in_pipe_w = -1;
+                    rms_textfile_close(g_in_file);
+                    g_in_file = NULL;
+                }
+            } else {
+                rms_textfile_close(g_in_file);
+                g_in_file = NULL;
             }
         }
     }

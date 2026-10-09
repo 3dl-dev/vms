@@ -15,8 +15,8 @@
  * RMS file specification -- OpenVMS syntax as written, UNIX syntax translated
  * by the DEC C rules (crtl_filespec.c, the decc$to_vms translator) -- EXCEPT the
  * substrate kernel's own namespaces, which stay with the kernel: /dev, /proc,
- * /sys and /run (the device nodes, /dev/vms among them, and the boot
- * launcher). A path relative to a directory descriptor other than the current
+ * /sys, /run (the device nodes, /dev/vms among them, and the boot launcher)
+ * and /vms (the substrate's staging of the system tree). A path relative to a directory descriptor other than the current
  * directory is not an RMS form and goes to the kernel too.
  *
  * DESCRIPTOR NUMBERS. An RMS file's descriptor is a real kernel descriptor
@@ -90,13 +90,23 @@ static int fd_file_sharing(void)
 #define F_DUPFD_CLOEXEC 1030
 #endif
 
-/* The raw trap and the hook cell (musl-arch src/internal/vms_alpha_syscall.c). */
+/* The raw trap and the hook cell: musl-arch src/internal/vms_alpha_syscall.c on
+ * alpha; on x86_64 the OVMX musl funnel (src/crtl-musl-x86_64/src/internal/
+ * ovmx_syscall.c, vms-003b), which offers the legacy path calls (open, stat,
+ * unlink, ...) to this layer in their *at() form. */
 typedef long long (*ovmx_sys_hook_fn)(long long, long long, long long, long long,
                                       long long, long long, long long, int *);
 extern ovmx_sys_hook_fn __ovmx_sys_hook;
+#if defined(__alpha__)
 extern long long __vms_alpha_syscall_raw(long long, long long, long long,
                                          long long, long long, long long,
                                          long long);
+#else
+extern long long __ovmx_syscall_raw(long long, long long, long long,
+                                    long long, long long, long long,
+                                    long long);
+#define __vms_alpha_syscall_raw __ovmx_syscall_raw
+#endif
 
 static long long rawsys(long long n, long long a1, long long a2, long long a3,
                         long long a4, long long a5)
@@ -194,7 +204,10 @@ static int rms_errno(uint32_t st)
 
 static int kernel_path(const char *p)
 {
-    static const char *const ns[] = { "/dev", "/proc", "/sys", "/run" };
+    /* /vms is the substrate's own staging of the system tree (initramfs / boot
+     * image), which OVMX's run-time libraries reach as kernel paths -- LIB$SPAWN
+     * checks the DCL image there (vms-003b); it is not a C program's file. */
+    static const char *const ns[] = { "/dev", "/proc", "/sys", "/run", "/vms" };
     if (!p || !*p)
         return 1;
     for (size_t i = 0; i < sizeof ns / sizeof ns[0]; i++) {
@@ -1651,6 +1664,23 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
 
 /* ------------------------------------------------------------ install ----- */
 
+/* Turn the RMS file layer on for this image: from here every C RTL file call
+ * that names an RMS file goes to RMS. decc$main does it for a DECC$SHR image;
+ * a statically linked C image's start-up (vms-003b) calls it directly. */
+void ovmx_crtl_fd_install(void)
+{
+    __ovmx_sys_hook = rms_hook;
+    __ovmx_crtl_fab_query = fab_query;
+    TR("crtlfd: hook installed", (uintptr_t)rms_hook);
+}
+
+#if defined(OVMX_CRTLFD_STATIC)
+/* A static image has no DECC$SHR to carry the DEC C struct stat query cell
+ * (src/vmslink/ovmx_decc_stat.c); the layer keeps its own. */
+int (*__ovmx_crtl_fab_query)(int fd, int dirfd, const char *path,
+                             struct ovmx_fab_attrs *out);
+#else
+
 /* decc$main is bound to this in the RMS-backed DECC$SHR (mk_decc_shr.sh): the
  * C RTL's per-image entry turns the RMS file layer on, then runs the C RTL's
  * own argument/environment setup. */
@@ -1663,10 +1693,9 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
                        unsigned int cliflag, int *argc, int *argv, int *envp)
 {
     TR("crtlfd: main enter", 0);
-    __ovmx_sys_hook = rms_hook;
-    __ovmx_crtl_fab_query = fab_query;
-    TR("crtlfd: hook installed", (uintptr_t)rms_hook);
+    ovmx_crtl_fd_install();
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,
                         cliflag, argc, argv, envp);
     TR("crtlfd: decc$main returned", 0);
 }
+#endif /* !OVMX_CRTLFD_STATIC */

@@ -25,6 +25,9 @@
 #include "rmsdef.h"
 #include "rms_textfile.h"   /* rms_textfile_open/getline -- SYS$INPUT read through RMS (vms-ccc) */
 #include "vmsfs/filespec.h"  /* vmsfs_to_linux_path — VMS filespec resolver  */
+#if defined(OVMX_HAVE_ACP)
+#include "vmsfs/device.h"   /* vmsfs_resolve_filespec_device: a spawn input spec, fully named */
+#endif
 #include "starlet.h"         /* sys$creprc — the one executive-registered create (B0) */
 #include "vms_kif.h"         /* vms_kif_getjpi_pid, struct vms_procinfo — the wait handle */
 #include <pthread.h>
@@ -302,32 +305,44 @@ static struct dsc$descriptor_s spawn_dsc(const char *s)
     return d;
 }
 
-/*
- * Create an exclusive scratch file for the subprocess's SYS$INPUT, filling
- * `buf` with its path and returning an open write fd (or -1).
- *
- * WHY NOT mkstemp() (vms-e9a, VMS-native link). The VMS-native LIBVMS$SHR link
- * binds every C-RTL call against DECC$SHR's symbol vector, which exports the
- * bare universals open/close/write/unlink/getpid/snprintf but NOT bare mkstemp
- * (only the decorated decc$mkstemp the GCC port uses) -- so a bare mkstemp()
- * here is an unresolved external that breaks LIBVMS$SHR and every consumer of
- * it. This builds a unique name from getpid() + a counter and opens it
- * O_CREAT|O_EXCL (retrying on a name clash), using only exported universals --
- * the same collision-safe guarantee mkstemp gave, with no unexported symbol.
- */
-static int spawn_open_scratch(char *buf, size_t bufsz)
+/* The spec with its device logical names translated in THIS process (SYS$SCRATCH
+ * may be one of the caller's process logicals, which the subprocess does not
+ * inherit), so the subprocess opens the same file. */
+static const char *spawn_full_spec(const char *spec, char *out, size_t outsz)
 {
-    static unsigned seq = 0;
-    for (int tries = 0; tries < 4096; tries++) {
-        snprintf(buf, bufsz, "/tmp/ovmx_spawn_cmd_%d_%u",
-                 (int)getpid(), seq++);
-        int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
-        if (fd >= 0)
-            return fd;
-        if (errno != EEXIST)
-            return -1;             /* a real error, not a name clash */
+#if defined(OVMX_HAVE_ACP)
+    if (vmsfs_resolve_filespec_device(spec, out, outsz) == SS$_NORMAL && out[0])
+        return out;
+#endif
+    snprintf(out, outsz, "%s", spec);
+    return out;
+}
+
+/*
+ * THE COMMAND STRING (rd vms-003b): on VMS, LIB$SPAWN hands the subprocess's CLI
+ * its command through a mailbox. Here too: a temporary mailbox holds the command
+ * record followed by an end-of-file, and its device name is the subprocess's
+ * SYS$INPUT ($CREPRC defines it; DCL reads a mailbox SYS$INPUT through $QIO).
+ * No file and no host path. The creator keeps its channel until the subprocess
+ * has been waited for (a NOWAIT spawn's channel lives until image exit), so the
+ * temporary mailbox outlives the subprocess's own $ASSIGN.
+ */
+static uint32_t spawn_cmd_mailbox(const char *cmd, uint32_t *chan, char *dev, size_t devsz)
+{
+    uint32_t unit = 0;
+    size_t n = strlen(cmd);
+    uint32_t st = vms_kif_mbx_create(0, (uint32_t)(n + 16), (uint32_t)(n + 64),
+                                     chan, &unit, dev, (uint32_t)devsz);
+    if (!(st & 1))
+        return st;
+    st = vms_kif_mbx_write(*chan, cmd, (uint32_t)n);
+    if (st & 1)
+        st = vms_kif_mbx_write_eof(*chan);
+    if (!(st & 1)) {
+        (void)vms_kif_dassgn((uint16_t)*chan);
+        *chan = 0;
     }
-    return -1;
+    return st;
 }
 
 /* Resolve a VMS filespec to a Linux path for open()/freopen(); if translation
@@ -436,28 +451,18 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
      * descriptors as literal paths (no filespec translation of its own), so
      * they are handed already-resolved paths.
      */
-    char cmd_tmp[256]  = "";
+    char cmd_dev[32]   = "";
+    uint32_t cmd_chan  = 0;
     char in_resv[1024] = "";
-    int  have_tmp      = 0;
     const char *in_str = NULL;
 
     if (have_cmd) {
-        int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
-        if (tfd < 0)
-            return SS$_INSFMEM;
-        have_tmp = 1;
         char cbuf[4096];
         dsc$strncpy(cbuf, command, sizeof(cbuf) - 1);
-        size_t clen = strlen(cbuf);
-        cbuf[clen++] = '\n';                 /* one command line, then EOF */
-        for (size_t off = 0; off < clen; ) {
-            ssize_t w = write(tfd, cbuf + off, clen - off);
-            if (w < 0) { if (errno == EINTR) continue; break; }
-            if (w == 0) break;
-            off += (size_t)w;
-        }
-        close(tfd);
-        in_str = cmd_tmp;
+        uint32_t mst = spawn_cmd_mailbox(cbuf, &cmd_chan, cmd_dev, sizeof(cmd_dev));
+        if (!(mst & 1))
+            return mst;
+        in_str = cmd_dev;
     } else if (have_in) {
         /*
          * SYS$INPUT FROM A FILE (vms-ccc). The file is read through RMS over the
@@ -475,25 +480,10 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         dsc$strncpy(raw_in, input_file, sizeof(raw_in));
         rms_textfile_t *tf = rms_textfile_open(raw_in);
         if (tf) {
-            int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
-            if (tfd < 0) { rms_textfile_close(tf); return SS$_INSFMEM; }
-            have_tmp = 1;
-            char rec[4096];
-            int too_long = 0, werr = 0;
-            while (rms_textfile_getline(tf, rec, sizeof(rec), &too_long)) {
-                size_t rl = strlen(rec);
-                rec[rl++] = '\n';
-                for (size_t off = 0; off < rl; ) {
-                    ssize_t w = write(tfd, rec + off, rl - off);
-                    if (w < 0) { if (errno == EINTR) continue; werr = 1; break; }
-                    off += (size_t)w;
-                }
-                if (werr) break;
-            }
+            /* An RMS file: the subprocess reads it as SYS$INPUT through RMS
+             * ($CREPRC hands the VMS spec on; rd vms-003b) -- no host copy. */
             rms_textfile_close(tf);
-            close(tfd);
-            if (werr) { unlink(cmd_tmp); return SS$_INSFMEM; }
-            in_str = cmd_tmp;
+            in_str = spawn_full_spec(raw_in, in_resv, sizeof(in_resv));
         } else {
             /* Not reachable through RMS. A caller handing a plain Linux path (host-side
              * tooling) still works when that path is a real regular file; anything
@@ -536,7 +526,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
          * SS$_NOSUCHDEV with no executive). No fabricated success (INV-6):
          * lib$spawn no longer has an unregistered fork/exec to fall back to.
          */
-        if (have_tmp) unlink(cmd_tmp);
+        if (cmd_chan) (void)vms_kif_dassgn((uint16_t)cmd_chan);
         return cst;
     }
 
@@ -591,10 +581,9 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         }
 
         /*
-         * The scratch SYS$INPUT file, if any, is NOT unlinked here: the
-         * subprocess may not have opened it yet, and lib$spawn has no exit hook
-         * to reclaim it. It is a genuine file left for the subprocess to
-         * consume.
+         * The command mailbox's channel, if any, is kept: the subprocess may
+         * not have assigned the mailbox yet, and a temporary mailbox goes away
+         * with its last channel. Image exit gives it back.
          */
         return SS$_NORMAL;
     }
@@ -632,7 +621,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         *status = SS$_NORMAL;
     }
 
-    if (have_tmp) unlink(cmd_tmp);
+    if (cmd_chan) (void)vms_kif_dassgn((uint16_t)cmd_chan);
     return SS$_NORMAL;
 }
 

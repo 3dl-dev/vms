@@ -397,15 +397,32 @@ foreach(_n ${_corpus_rt_lines})
     list(APPEND _corpus_rt_targets corpus_rt_${_n})
 endforeach()
 
-# vms-ccc: sys_forcex writes its command procedure with fopen("sys$scratch:demo_forcex.com;")
-# and hands the same spec to LIB$SPAWN. On OpenVMS that fopen is RMS; here it is musl's. Give THIS
-# program the DEC C mapping (fclose lays the stream down through RMS) so the spawned DCL really
-# reads and runs the file and $FORCEX hits a live subprocess. See corpus_rt_forcex_stdio.c.
-if(TARGET corpus_rt_sys_forcex)
-    target_sources(corpus_rt_sys_forcex PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/corpus_rt_forcex_stdio.c)
-    target_include_directories(corpus_rt_sys_forcex PRIVATE ${CMAKE_SOURCE_DIR}/src/libvms/include)
-    target_link_options(corpus_rt_sys_forcex PRIVATE -Wl,--wrap=fopen -Wl,--wrap=fclose)
+# vms-003b: the C RTL file layer over RMS for a statically linked C image. With
+# OVMX_CRTL_FD_STATIC (tests/qemu/Dockerfile builds the container's musl with the
+# OVMX system-call funnel, src/crtl-musl-x86_64) every corpus image and
+# test_syssvc_crtl_static link src/vmsrms/crtl_rms_fd.c, and the image's start-up
+# turns it on: fopen()/open()/stat()/unlink() of an RMS file go to RMS on the
+# Files-11 volume, as the DEC C RTL's do. Without the funnel (a host libc) the
+# layer cannot be linked and test_syssvc_crtl_static reports an honest SKIP.
+option(OVMX_CRTL_FD_STATIC "link the C RTL file layer over RMS into static C images" OFF)
+if(OVMX_CRTL_FD_STATIC)
+    add_library(ovmx_crtl_fd_static OBJECT
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_fd.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c)
+    target_compile_definitions(ovmx_crtl_fd_static PRIVATE OVMX_CRTLFD_STATIC)
+    target_compile_options(ovmx_crtl_fd_static PRIVATE -w)
+    target_include_directories(ovmx_crtl_fd_static PRIVATE
+        ${VMS_INCLUDE_DIR} ${VMS_RMS_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/vmsrms
+        ${CMAKE_SOURCE_DIR}/src/crtl-musl-x86_64/include)
+    foreach(_t ${_corpus_rt_targets} test_syssvc_crtl_static)
+        if(TARGET ${_t})
+            target_sources(${_t} PRIVATE $<TARGET_OBJECTS:ovmx_crtl_fd_static>)
+            target_compile_definitions(${_t} PRIVATE OVMX_CRTLFD_STATIC)
+        endif()
+    endforeach()
 endif()
+
 # Non-tier-1 corpus applications (tests/qemu/corpus_runtime_apps.txt): multi-file
 # programs the guest also runs. Line format (pipe separated):
 #   name|corpus-dir|compile-definitions (,-list)|sources (,-list)|arguments

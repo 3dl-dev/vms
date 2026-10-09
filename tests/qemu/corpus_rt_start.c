@@ -15,6 +15,8 @@
  *    process logical name table; so does this (a program that writes to
  *    SYS$SCRATCH:, as sys_set_security does, then finds it).
  * 3. The RMS force-bind anchor below.
+ * 4. With the OVMX C RTL base linked (OVMX_CRTLFD_STATIC): the heap in P0, as
+ *    DEC C's 32-bit pointers expect, and the C RTL file layer over RMS on.
  *
  * The process control block is NOT made here any more: libvms establishes it from
  * the executive's row on the first PCB-backed service (ovmx_pcb_ctx.h), as VMS gives
@@ -25,6 +27,11 @@
 #include "vms_kif.h"
 #include "descrip.h"
 #include "uaidef.h"
+
+#if defined(OVMX_CRTLFD_STATIC)
+void ovmx_crtl_fd_install(void);   /* src/vmsrms/crtl_rms_fd.c */
+extern int __ovmx_p0_heap;         /* src/crtl-musl-x86_64 ovmx_syscall.c */
+#endif
 
 /*
  * RMS FORCE-BIND ANCHOR. libvms reaches SYSUAF.DAT/RIGHTSLIST.DAT through RMS
@@ -94,6 +101,17 @@ static void append_uai_text(char *out, size_t cap, const char *v, unsigned short
     out[have + len] = '\0';
 }
 
+/* 4. The C RTL's file system is RMS (vms-003b), as decc$main makes it for a
+ *    DECC$SHR image: from here the program's fopen()/open()/stat()/unlink() of
+ *    an RMS file reach the Files-11 volume. Turned on after the start-up above,
+ *    which is the image activator's work, not the program's. */
+static void crtl_on(void)
+{
+#if defined(OVMX_CRTLFD_STATIC)
+    ovmx_crtl_fd_install();
+#endif
+}
+
 __attribute__((constructor))
 static void corpus_rt_run_as_system(void)
 {
@@ -107,9 +125,16 @@ static void corpus_rt_run_as_system(void)
         { 0, 0, 0, 0 },
     };
 
+#if defined(OVMX_CRTLFD_STATIC)
+    /* 0. DEC C's default pointer size is 32: the heap lives in P0 (below
+     *    0x40000000), as on OpenVMS (vms-95b). */
+    __ovmx_p0_heap = 1;
+#endif
     (void)vms_kif_establish_system();
-    if (!(sys$getuai(0, 0, &ud, il, 0, 0, 0) & 1))
+    if (!(sys$getuai(0, 0, &ud, il, 0, 0, 0) & 1)) {
+        crtl_on();
         return;
+    }
     append_uai_text(ddir, sizeof(ddir), dev, dl);
     append_uai_text(ddir, sizeof(ddir), dir, rl);
     if (ddir[0]) {
@@ -119,4 +144,5 @@ static void corpus_rt_run_as_system(void)
         define_process_logical("SYS$LOGIN", ddir);
         define_process_logical("SYS$SCRATCH", ddir);
     }
+    crtl_on();
 }

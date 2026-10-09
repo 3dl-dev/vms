@@ -25,7 +25,7 @@
 #include <linux/uidgid.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
-#include <linux/sched/signal.h>     /* thread_group_empty() */
+#include <linux/sched/signal.h>     /* current->signal->live */
 #include <linux/mm.h>               /* vm_area_struct, vm_flags_clear, PAGE_* (vms_lnm_mmap) */
 #include <linux/vmalloc.h>          /* remap_vmalloc_range (vms_lnm_mmap, vms-d61) */
 
@@ -2532,11 +2532,23 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
      * entry is keyed by tgid and shared by every thread, so an exiting
      * worker thread that happens to hold a channel must not delete the
      * PCB out from under the threads still running: on VMS a thread
-     * terminating does not delete the process. thread_group_empty() is
-     * true only for the last thread standing, which is the point at
-     * which the VMS process really is ending.
+     * terminating does not delete the process. The test is the thread
+     * group's LIVE count (signal->live), which every exiting thread
+     * decrements in do_exit() before it drops its files: zero means every
+     * thread of the process is past that point, so the process really is
+     * ending.
+     *
+     * NOT thread_group_empty() (rd vms-003b, the lost /NOWAIT completion).
+     * The group leader stays on the thread list as a zombie until its
+     * parent reaps it, so when a NON-leader thread is the last to drop the
+     * files -- the leader exited first, e.g. DCL with its SYS$INPUT reader
+     * thread -- thread_group_empty() is false for the last thread standing.
+     * The PCB was then never freed, the zombie leader kept it "alive" for
+     * the lazy reaper, and a parent's armed spawn completion never fired
+     * (observed: subprocess DCL.EXE in state Z, its executive row present,
+     * the creator's completion event flag clear after 20 s).
      */
-    if (!(current->flags & PF_EXITING) || !thread_group_empty(current))
+    if (!(current->flags & PF_EXITING) || atomic_read(&current->signal->live) != 0)
         return 0;
 
     proc = vms_proc_find_or_err();

@@ -7,12 +7,11 @@
  * shareables}) TWICE, as two genuinely separate processes activated through
  * IMGACT.EXE exactly as a customer's compiled program would be: this harness
  * does not call sys$enq/RMS itself to emulate the workload, it execs the real
- * image. tests/qemu/Dockerfile builds it into build-static/native, the
- * directory BOTH staging globs read: the ODS-2 system volume (so the executive
- * ACP can read the image's section headers -- IMGACT has no POSIX fallback for
- * a main image when /dev/vms is present) and the initramfs SYS$SYSTEM below
- * (so the host kernel can execve it). An image staged in only one of the two
- * execs fine and then dies %IMGACT-F-IMGNOTFND.
+ * image. tests/qemu/Dockerfile builds it in the initramfs stage, right after
+ * the shareables it binds to (.vms$imp binds by symbol-vector index, so the
+ * image and its producers come from one graph); this harness then stages it,
+ * and them, onto the system VOLUME before running it -- see the
+ * sysvol_stage_subject call in main, and why it is not optional.
  *
  * SETUP: this harness defines the EVAC$DATA logical (LNM$SYSTEM, which is
  * executive-resident and therefore visible to a distinct process, the same
@@ -58,6 +57,9 @@
 #include "lnmdef.h"
 #include "vms_kif.h"
 #include "rms.h"
+#include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors (sysvol_stage.h) */
+#include "sysvol_stage.h" /* shared VDA300: mount / write-over-ACP /
+                           * OVMX_SYSDEVICE staging for an ACTIVATED subject */
 
 #define EXIT_SKIP 77
 #define WAIT_TIMEOUT_MS 30000
@@ -198,6 +200,33 @@ int main(void)
      */
     CHECK(vms_kif_acp_mount(ODS2_UNIT) & 1,
           "parent: VDA0: mounted executive-global (the volume EVAC$DATA names)");
+
+    /*
+     * PUT THE ACTIVATED SUBJECT WHERE IMGACT RESOLVES IT -- the system VOLUME,
+     * not just a POSIX path (the same thing test_syssvc_mmk_drive does for the
+     * activated MMK.EXE, through this same shared helper).
+     *
+     * execv() below makes the Linux kernel map EVACWL.EXE's PT_LOADs and open
+     * its PT_INTERP (IMGACT.EXE) from the initramfs POSIX copy. IMGACT then
+     * re-reads the GENUINE main-image bytes -- its section headers, .vms$imp --
+     * off OVMX_SYSDEVICE over the executive Files-11 ACP, and has NO POSIX
+     * fallback for a main image while /dev/vms is present (imgsrc_open,
+     * src/imgact/imgact.c: the POSIX open is reached only on SS$_NOSUCHDEV,
+     * i.e. no executive at all -- Rule 9 / INV-6). An image that exists only as
+     * a POSIX file therefore execs fine and then dies %IMGACT-F-IMGNOTFND,
+     * which is exactly what this suite's first in-guest run did.
+     *
+     * sysvol_stage_subject mounts VDA300:, writes the image there over the ACP,
+     * and sets OVMX_SYSDEVICE -- which the forked children inherit, so THEIR
+     * activator reads it off that volume. The six shareables EVACWL --uses must
+     * live there too (IMGACT resolves each SONAME off the same volume); only
+     * DECC$SHR.EXE is mastered into the image, so the rest are staged from the
+     * very SYS$LIBRARY copies EVACWL was linked against.
+     */
+    CHECK(sysvol_stage_subject(EVACWL_IMAGE, "EVACWL.EXE") == 0,
+          "parent: EVACWL.EXE staged on " SYSVOL_UNIT " over the ACP (IMGACT reads a main image off the volume, never /vms)");
+    CHECK(sysvol_stage_shareables_from("/vms/SYS0/SYSCOMMON/SYSLIB") >= 0,
+          "parent: the OVMX shareables EVACWL --uses staged on " SYSVOL_UNIT " SYS$LIBRARY");
 
     erase_evac_dat();
 

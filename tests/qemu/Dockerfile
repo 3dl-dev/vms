@@ -398,41 +398,12 @@ RUN cd /src/repo && \
 # land in build-static/bin/corpus_rt_* and are staged with the other corpus programs.
 RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
 
-# EVACWL.EXE (vms-06c, the ci.6 evacuation workload): the SAME VMS-native
-# TCC.EXE + LINK.EXE --use build the corpus images above use, for the bespoke
-# (non-corpus) EVAC$WORKLOAD lock-and-append workload tests/lab/ci6/EVACWL.MAR
-# runs on the real VAX oracle. test_syssvc_ci6_evacwl.c execs it twice and
-# proves the takeover-continuity contract.
-#
-# IT NEEDS THE FIVE LIBVMS*$SHR.EXE PRODUCERS, which build-static/bin does not
-# carry: EVACWL calls sys$ services DECC$SHR does not own (sys$enqw /
-# sys$getsyiw / RMS), so --use DECC$SHR alone -- enough for the corpus, whose
-# one native entry calls no sys$ service -- cannot link it. The only thing in
-# this image that builds those producers is the shareable graph, so build it
-# here (graph-only: no MMK; the initramfs stage below builds its own for the
-# ACTIVATED MMK.EXE, from the same script and the same sources).
-#
-# AND IT MUST BE BUILT *HERE*, BEFORE THE ODS-2 SYSTEM VOLUME IS MASTERED, not
-# later beside the initramfs staging. IMGACT reads a main image's section
-# headers over the executive Files-11 ACP with NO POSIX fallback when /dev/vms
-# is present (imgsrc_open, src/imgact/imgact.c) -- so an image that exists only
-# as an initramfs POSIX file execve()s fine and then dies
-# %IMGACT-F-IMGNOTFND, which is exactly what the first attempt at this did.
-# build-static/native/*.EXE is the directory BOTH staging globs read: the ODS-2
-# master below (so the ACP can read it) and the initramfs SYSEXE copy (so the
-# host kernel can execve it). The image needs both, so it lands there.
-#
-# The default PT_INTERP LINK.EXE bakes, /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE,
-# is exactly where this harness stages the activator, so no IMGACT_INTERP_PATH
-# override belongs here. (A BOOTED node stages its activator at
-# /run/ovmx-boot/IMGACT.EXE instead and must pass a LINK.EXE that bakes that.)
-RUN cd /src/repo && \
-    sh src/vmslink/mk_mmk_native_staged.sh /src/repo \
-        /src/repo/build-static/evacwl-graph/SYSEXE \
-        /src/repo/build-static/evacwl-graph/SYSLIB graph-only && \
-    sh tests/lab/ci6/mk_evacwl_native.sh /src/repo \
-        /src/repo/build-static/evacwl-graph/SYSLIB \
-        /src/repo/build-static/native/EVACWL.EXE
+# (EVACWL.EXE -- vms-06c, the ci.6 evacuation workload -- is built FURTHER
+# DOWN, in the initramfs stage, right after the seven OVMX shareables are staged
+# into the guest's SYS$LIBRARY. It cannot be built here: the five
+# LIBVMS*$SHR.EXE producers it --uses -- EVACWL calls sys$enqw / sys$getsyiw /
+# RMS, which DECC$SHR does not own, so the corpus's `--use DECC$SHR` alone
+# cannot link it -- exist nowhere in this image until that step builds them.)
 
 # (The SSH transport-proof harness build + /ovmxssh|/ovmxsshsrv staging was
 # RETIRED with the SSH scaffold, vms-d916: it built the --wrap veneer over a
@@ -736,6 +707,36 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSLIB full && \
     ls -la /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/*'$SHR.EXE' && \
+    # EVACWL.EXE (vms-06c, the ci.6 evacuation workload): the SAME VMS-native
+    # TCC.EXE + LINK.EXE --use build the corpus images use, for the bespoke
+    # (non-corpus) EVAC$WORKLOAD lock-and-append workload
+    # tests/lab/ci6/EVACWL.MAR runs on the real VAX oracle.
+    #
+    # BUILT HERE, not up with the corpus images, because the five
+    # LIBVMS*$SHR.EXE producers it --uses exist nowhere else in this image --
+    # mk_mmk_native_staged.sh (just above) is the only thing that builds them --
+    # and because it must link against THE VERY COPIES the suite then stages on
+    # the system volume for IMGACT to resolve: .vms$imp binds by symbol-vector
+    # INDEX, not by name, so one graph serves both ends.
+    #
+    # The default PT_INTERP LINK.EXE bakes,
+    # /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE, is exactly where this harness
+    # stages the activator (two steps above), so no IMGACT_INTERP_PATH override
+    # belongs here. (A BOOTED node stages its activator at
+    # /run/ovmx-boot/IMGACT.EXE and must pass a LINK.EXE that bakes that path;
+    # getting it wrong yields an image the host kernel cannot exec at all --
+    # execve fails ENOENT before any OVMX code runs.)
+    #
+    # The POSIX copy below is only half of what an activated image needs: IMGACT
+    # re-reads a main image's section headers off OVMX_SYSDEVICE over the ACP,
+    # with NO POSIX fallback while /dev/vms is present, so EVACWL also has to
+    # LIVE on the mounted system volume. test_syssvc_ci6_evacwl.c puts it there
+    # at run time through the shared sysvol_stage.h helper (the same way
+    # test_syssvc_mmk_drive stages the activated MMK.EXE) -- which is also why
+    # this builds AFTER the SYS$LIBRARY shareables it stages alongside it.
+    sh /src/repo/tests/lab/ci6/mk_evacwl_native.sh /src/repo \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSLIB \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

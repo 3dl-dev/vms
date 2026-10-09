@@ -390,8 +390,10 @@ static void dcl_ctrlt_ast(uint32_t ch)
 
 void dcl_arm_oob(void)
 {
-    dcl_tt_arm_oob(dcl_ctrly_ast, dcl_ctx.ctrl_y_enabled,
-                   dcl_ctrlt_ast, dcl_ctx.ctrl_t_enabled);
+    /* CTRL/T's AST is armed whether or not CONTROL=T: with NOCONTROL=T a
+     * CTRL/T is still out-of-band -- not data, not a terminator, nothing shown
+     * (VAX V7.3 probe Q.CTRLT C) -- the AST just has nothing to say. */
+    dcl_tt_arm_oob(dcl_ctrly_ast, dcl_ctx.ctrl_y_enabled, dcl_ctrlt_ast, 1);
 }
 
 /* DCL's prompt as the terminal driver is handed it (see the REPL below). */

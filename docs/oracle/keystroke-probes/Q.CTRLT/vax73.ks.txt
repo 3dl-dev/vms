@@ -1,0 +1,20 @@
+# keystroke oracle transcript (unmasked) -- case Q.CTRLT (OpenVMS VAX V7.3 OPA0:)
+# probe: where does CONTROL=T come from on the lab node
+# case-sha256 b4856666846a1f08ba163cb12c6e2e25acd9e7d620c3eb13f6a3f2f65588f126
+@start loggedin OK
+=== STEP A
+| SEARCH SYS$LOGIN:LOGIN.COM,SYS$MANAGER:SYLOGIN.COM CONTROL<CR><LF>
+| <CR><LF>
+| ******************************<CR><LF>
+| SYS$COMMON:[SYSMGR]SYLOGIN.COM;3<CR><LF>
+| <CR><LF>
+| $! Turn on the processing of <Control/T>. <CR><LF>
+| $ SET CONTROL=T<CR><LF>
+| <CR><NUL>$ 
+=== STEP B
+| SET NOCONTROL=T<CR><LF>
+| <CR><NUL>$ 
+=== STEP C
+=== STEP D
+| SET CONTROL=T<CR><LF>
+| <CR><NUL>$ 

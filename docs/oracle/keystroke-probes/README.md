@@ -34,3 +34,6 @@ out-of-band handling in `src/kernel-core/vms_tt.c` and DCL:
 - CTRL/T (after `SET CONTROL=T`) shows the status line as a record. The read then reappears: the
   owed line feed, the prompt, and what had been typed (T2).
 - CTRL/O at an idle prompt shows nothing.
+- `Q.CTRLT`: the lab node's `SYLOGIN.COM` turns CTRL/T on (`SET CONTROL=T`), as VMS's site template
+  does. That is why the ratchet's `OOB.PROMPT T` shows a status line before the case enables
+  CTRL/T itself. With `SET NOCONTROL=T`, CTRL/T shows nothing and does not end the read.

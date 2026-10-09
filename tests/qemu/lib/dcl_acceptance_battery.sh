@@ -1452,11 +1452,34 @@ run_dcl_acceptance_battery() {
         must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR NAME OVMX persists"
         run_cmd 'NCP SET EXECUTOR STATE ON'
         must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
-        run_cmd 'NCP SHOW EXECUTOR'
+        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
+        # SHOW now reads the RUNNING NETACP, the VMS split).
+        run_cmd 'NCP LIST EXECUTOR'
         must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
             "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
-        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: SHOW EXECUTOR reads back State = on"
-        negctl "$SEG" 'Executor node' "NCP SHOW EXECUTOR"
+        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
+        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
+        # NCP SHOW / SHOW NETWORK READ THE RUNNING NETWORK (rd vms-30e). This VM
+        # has no NIC, so no _NET: device and no NETACP: SHOW EXECUTOR must FAIL
+        # honestly (no volatile database -- never the configured file passed off
+        # as the running network), and SHOW NETWORK must carry NO DECNET product
+        # line (VMS prints one only while NETACP serves). The POSITIVE half --
+        # SHOW EXECUTOR / CHARACTERISTICS / COUNTERS / KNOWN NODES / KNOWN LINKS
+        # and the DECNET line read from a RUNNING NETACP in the oracle layout --
+        # needs a NIC and a boot-time NETACP: test_decnet_startnet_boot_e2e.sh
+        # boot 2 (same CI job); the layout is diffed against the real VAX
+        # transcripts by decnetd_netacp_show_selftest (ctest).
+        run_cmd 'NCP SHOW EXECUTOR'
+        must_have "$SEG" '%NCP-F-OPEFAI' \
+            "NCP SHOW [vms-30e]: with no NETACP serving, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI (no volatile database to read)"
+        must_not_have "$SEG" 'Node Volatile Summary' \
+            "NCP SHOW [vms-30e]: a down network prints no volatile summary (the permanent file is not shown as the running network)"
+        run_cmd 'SHOW NETWORK'
+        must_have "$SEG" 'Product: OVMX TCP/IP' \
+            "SHOW NETWORK [vms-30e]: the TCP/IP product line is unchanged"
+        must_not_have "$SEG" 'Product:  DECNET' \
+            "SHOW NETWORK [vms-30e]: no DECNET product line while no NETACP serves"
+        negctl "$SEG" 'Product:' "SHOW NETWORK"
         run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
         must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
             "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"

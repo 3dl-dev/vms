@@ -70,6 +70,10 @@
 #define DNET_BROKER_OP_SEND    2u   /* send a task-to-task message (IO$_WRITEVBLK) */
 #define DNET_BROKER_OP_RECV    3u   /* receive a message (IO$_READVBLK)            */
 #define DNET_BROKER_OP_CLOSE   4u   /* disconnect the link (IO$_DEACCESS)          */
+/* A READ-ONLY query of NETACP's volatile database (IO$_ACPCONTROL on a _NET:
+ * channel, rd vms-30e): data = a dnet_netshow request, response data = one
+ * dnet_netshow snapshot record. Needs no logical link on the channel. */
+#define DNET_BROKER_OP_SHOW    5u
 #define DNET_BROKER_OP_MASK    0x00FFu
 /* Modifier: RECV completes at once with DNET_BROKER_ST_ENDOFFILE when nothing is
  * buffered (the IO$M_NOW form of IO$_READVBLK) instead of the client waiting. */
@@ -95,6 +99,7 @@
 #define DNET_BROKER_ST_NOSUCHDEV   2312u   /* SS$_NOSUCHDEV   */
 #define DNET_BROKER_ST_DEVOFFLINE  132u    /* SS$_DEVOFFLINE  */
 #define DNET_BROKER_ST_FILNOTACC   172u    /* SS$_FILNOTACC   */
+#define DNET_BROKER_ST_BUFFEROVF   1537u   /* SS$_BUFFEROVF   */
 
 /* On-wire header sizes (fixed LE fields; the data buffer follows). */
 #define DNET_BROKER_REQ_HDR    24u  /* magic+corr+pid+handle+reply_unit(5x4) + op+datalen(2x2) */
@@ -228,5 +233,19 @@ DNET_BROKER_API uint32_t dnet_broker_xfer(struct dnet_broker_chan *bc,
                                           const void *in, size_t inlen,
                                           void *out, size_t outcap,
                                           size_t *xfer);
+
+/*
+ * dnet_broker_control - one READ-ONLY NETACP control query on a client channel
+ * (the body of a _NET: IO$_ACPCONTROL, rd vms-30e): sends `in` (<=
+ * DNET_NSP_MAX_DATA) as DNET_BROKER_OP_SHOW and copies NETACP's response data
+ * into `out`. No logical link is needed or touched (bc->handle is left alone).
+ * Returns NETACP's status; BUFFEROVF (a success-with-warning, *xfer = outcap) if
+ * the answer is longer than `out`; BADPARAM for an over-bound request;
+ * DEVOFFLINE when NETACP does not answer -- never a fabricated answer (INV-6).
+ */
+DNET_BROKER_API uint32_t dnet_broker_control(struct dnet_broker_chan *bc,
+                                             const struct dnet_broker_io *io,
+                                             const void *in, size_t inlen,
+                                             void *out, size_t outcap, size_t *xfer);
 
 #endif /* DNET_BROKER_H */

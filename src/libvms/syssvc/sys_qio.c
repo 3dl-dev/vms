@@ -725,6 +725,15 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
  *   IO$_READVBLK  p1 = buffer, p2 = size; waits for a message. With IO$M_NOW it
  *                 completes at once, SS$_ENDOFFILE when none is buffered.
  *   IO$_DEACCESS  disconnect.
+ *   IO$_ACPCONTROL a READ-ONLY query of NETACP's volatile database (NCP SHOW,
+ *                 DCL SHOW NETWORK -- rd vms-30e): p1 = buffer, p2 = its size,
+ *                 p3 = the length of the query the caller placed at p1 (a
+ *                 dnet_netshow request). NETACP's snapshot record overwrites the
+ *                 buffer; the IOSB byte count is its length. Needs no logical
+ *                 link on the channel. (VMS passes the NFB in p1 and the result
+ *                 buffer in p4; OVMX's $QIO carries p3..p6 as 32-bit values, so
+ *                 the query and the answer share the one p1 buffer -- an OVMX
+ *                 calling form, labelled.)
  * FAIL-HONEST (Rule 9 / INV-6): no NETACP serving -> SS$_DEVOFFLINE; a NETACP
  * that stops answering -> SS$_DEVOFFLINE; never a fabricated transfer.
  */
@@ -744,7 +753,8 @@ _Static_assert(DNET_BROKER_ST_NORMAL == SS$_NORMAL &&
                DNET_BROKER_ST_ILLIOFUNC == SS$_ILLIOFUNC &&
                DNET_BROKER_ST_TIMEOUT == SS$_TIMEOUT &&
                DNET_BROKER_ST_INVLOGIN == SS$_INVLOGIN &&
-               DNET_BROKER_ST_NOSUCHDEV == SS$_NOSUCHDEV,
+               DNET_BROKER_ST_NOSUCHDEV == SS$_NOSUCHDEV &&
+               DNET_BROKER_ST_BUFFEROVF == SS$_BUFFEROVF,
                "broker statuses are the VMS SS$_ values");
 
 #define NET_REQ_LOGNAM  "DNET$NETACP_REQ"
@@ -872,7 +882,7 @@ void vms$$net_chan_release(uint16_t chan)
 }
 
 static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
-                           void *p1, uint32_t p2, uint32_t efn,
+                           void *p1, uint32_t p2, uint32_t p3, uint32_t efn,
                            void (*astadr)(uint32_t), uint32_t astprm) {
     struct _iosb *iosb = (struct _iosb *)iosb_ptr;
     uint32_t base_func = func & IO$M_FCODE;
@@ -885,6 +895,7 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_WRITEVBLK: op = DNET_BROKER_OP_SEND;  break;  /* send message */
         case IO$_READVBLK:  op = DNET_BROKER_OP_RECV;  break;  /* receive      */
         case IO$_DEACCESS:  op = DNET_BROKER_OP_CLOSE; break;  /* disconnect   */
+        case IO$_ACPCONTROL: op = DNET_BROKER_OP_SHOW; break;  /* NCP SHOW     */
         default: break;
     }
 
@@ -911,11 +922,17 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                                          NET_REPLY_POLLS, NET_OPEN_POLLS };
             if (op == DNET_BROKER_OP_RECV && (func & IO$M_NOW))
                 op |= DNET_BROKER_OPF_NOW;
-            st = dnet_broker_xfer(&ns->bc, &io, op,
-                                  (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p1 : NULL,
-                                  (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p2 : 0,
-                                  (base_func == IO$_READVBLK) ? p1 : NULL,
-                                  (base_func == IO$_READVBLK) ? p2 : 0, &xfer);
+            if (op == DNET_BROKER_OP_SHOW) {
+                /* The query sits at p1 (p3 bytes); the answer replaces it. */
+                st = (!p1 || p3 == 0 || p3 > p2) ? SS$_BADPARAM
+                   : dnet_broker_control(&ns->bc, &io, p1, p3, p1, p2, &xfer);
+            } else {
+                st = dnet_broker_xfer(&ns->bc, &io, op,
+                                      (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p1 : NULL,
+                                      (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p2 : 0,
+                                      (base_func == IO$_READVBLK) ? p1 : NULL,
+                                      (base_func == IO$_READVBLK) ? p2 : 0, &xfer);
+            }
         }
     }
 
@@ -1314,7 +1331,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     if (vms$$chan_is_net(chan))
-        return qio_net_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+        return qio_net_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     {
         uint32_t tec = 0;
@@ -1389,7 +1406,7 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     if (vms$$chan_is_net(chan))
-        return qio_net_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+        return qio_net_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     {
         uint32_t tec = 0;

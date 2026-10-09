@@ -122,9 +122,9 @@ static void engine_fill_hello(const struct dnet_engine *e,
 {
     memset(h, 0, sizeof(*h));
     h->rflags   = DNET_RFLAG_ENDNODE_HELLO;
-    h->version  = 2;                 /* vms-3be: vers 2 */
-    h->eco      = 0;
-    h->user_eco = 0;
+    h->version  = DNET_ENGINE_ROUTING_VERSION;   /* vms-3be: vers 2 */
+    h->eco      = DNET_ENGINE_ROUTING_ECO;
+    h->user_eco = DNET_ENGINE_ROUTING_UECO;
     memcpy(h->id, e->my_id, DNET_ADDR_LEN);
     h->iinfo    = DNET_NODETYPE_ENDNODE;
     h->blksize  = e->blksize;
@@ -211,9 +211,9 @@ static void engine_fill_router_hello(const struct dnet_engine *e,
 {
     memset(r, 0, sizeof(*r));
     r->rflags   = DNET_RFLAG_ROUTER_HELLO; /* 0x0b: control, msg type 5 (router hello) */
-    r->version  = 2;                        /* DNA version -- the vms-3be oracle value */
-    r->eco      = 0;
-    r->user_eco = 0;
+    r->version  = DNET_ENGINE_ROUTING_VERSION;  /* DNA version -- the vms-3be oracle value */
+    r->eco      = DNET_ENGINE_ROUTING_ECO;
+    r->user_eco = DNET_ENGINE_ROUTING_UECO;
     memcpy(r->id, e->my_id, DNET_ADDR_LEN); /* AA-00-04-00-<LE addr>, grounded mapping */
     /* IINFO node-type = L1 router: the bits that make an endnode treat us as a
      * designated-router candidate. THE key field of this whole run-mode. */

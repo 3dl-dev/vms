@@ -5,7 +5,10 @@
 #
 # Boot 1 (SYSTEM; DECnet unconfigured at boot): NCP SET EXECUTOR ADDRESS 1.42 / NAME OVMX / STATE ON
 #   persists SYS$SYSTEM:NETNODE_LOCAL.DAT through RMS over the Files-11 ACP;
-#   NCP SHOW EXECUTOR reads it back. Settle for guest writeback, power off.
+#   NCP DEFINE NODE 1.1 NAME VAX1 adds a remote node; NCP LIST EXECUTOR reads
+#   the permanent database back. With NO NETACP yet, NCP SHOW EXECUTOR fails
+#   %NCP-F-OPEFAI and SHOW NETWORK has no DECNET line (rd vms-30e: SHOW reads
+#   the RUNNING network). Settle for guest writeback, power off.
 # Both boots carry a virtio NIC whose guest->wire frames QEMU dumps to a pcap
 #   (-object filter-dump), so boot 1 is the wire's negative control.
 # Boot 2 (same disk): the LPBETA startup phase runs
@@ -22,7 +25,12 @@
 #         algorithmic station of 1.42, stamped by the executive), ethertype
 #         0x6003 -- sent through the executive's L2 datalink by a process with
 #         no CAP_NET_RAW. Negative control: the boot-1 pcap (no DECnet
-#         configured at boot) holds NO such frame.
+#         configured at boot) holds NO such frame;
+#     (d) NCP SHOW + SHOW NETWORK READ THAT RUNNING NETACP (rd vms-30e): SHOW
+#         EXECUTOR / CHARACTERISTICS / COUNTERS / KNOWN NODES / KNOWN LINKS print
+#         NETACP's own values in the real OpenVMS VAX V7.3 layout
+#         (docs/oracle/vax-ncp-show/), and SHOW NETWORK carries the DECNET
+#         product line -- which boot 1, with no NETACP, did not.
 #
 # Reboot mechanics + writeback settle: identical to test_tcpip_reboot_e2e.sh
 # (no DCL REBOOT under -no-reboot; a reboot is a fresh QEMU on the same disk).
@@ -59,6 +67,16 @@ waitfor() { local pat="$1" lim="${2:-60}" log="$3" w=0
         sleep 0.25; w=$((w+1))
     done; return 1; }
 # count frames whose first 14 bytes are dst|src|ethertype = $1 (hex, no spaces)
+# send a command; wait (bounded) for $3 in its output; $seg = the output
+# (only output AFTER the command is searched, so an earlier match cannot satisfy it)
+run_seg() { local o w=0; o=$(wc -c <"$2"); send "$1"
+    while [ $w -lt $(( ${4:-20} * 4 )) ]; do
+        tail -c "+$((o + 1))" "$2" | grep -qaF -- "$3" && break
+        kill -0 "$qp" 2>/dev/null || break
+        sleep 0.25; w=$((w+1))
+    done
+    sleep 2; seg=$(tail -c "+$((o + 1))" "$2" | tr -d '\r'); }
+has() { printf '%s\n' "$seg" | grep -qF -- "$1"; }
 frames_with() { [ -s "$2" ] || { echo 0; return; }
     od -An -v -tx1 "$2" | tr -d ' \n' | grep -o "$1" | wc -l; }
 
@@ -105,11 +123,19 @@ if [ "$rc" -eq 0 ] && login_system "$LOG1"; then
     send 'NCP SET EXECUTOR ADDRESS 1.42'; sleep 3
     send 'NCP SET EXECUTOR NAME OVMX'; sleep 3
     send 'NCP SET EXECUTOR STATE ON'; sleep 3
-    send 'NCP SHOW EXECUTOR'
+    send 'NCP DEFINE NODE 1.1 NAME VAX1'; sleep 3
+    send 'NCP LIST EXECUTOR'
     if waitfor 'Executor node = 1.42 (OVMX)' 30 "$LOG1"; then rc=0; else rc=1; fi
-    record "boot 1: NCP SET EXECUTOR persisted 1.42 (OVMX) -- read back by a fresh NCP image" "$rc"
+    record "boot 1: NCP SET EXECUTOR persisted 1.42 (OVMX) -- read back from the permanent database by a fresh NCP image (LIST)" "$rc"
     if grep -qaF '%NCP-E-' "$LOG1"; then rc=1; else rc=0; fi
     record "boot 1: no %NCP-E- error (written through RMS over the ACP)" "$rc"
+    # No NETACP on this boot: SHOW has no volatile database to read.
+    run_seg 'NCP SHOW EXECUTOR' "$LOG1" '%NCP-F-OPEFAI' 30
+    if has '%NCP-F-OPEFAI' && ! has 'Node Volatile Summary'; then rc=0; else rc=1; fi
+    record "boot 1: with no NETACP running, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI -- the configured file is never shown as the running network" "$rc"
+    run_seg 'SHOW NETWORK' "$LOG1" 'Product:' 20
+    if has 'Product: OVMX TCP/IP' && ! has 'Product:  DECNET'; then rc=0; else rc=1; fi
+    record "boot 1: SHOW NETWORK has NO DECNET product line while no NETACP serves (TCP/IP line unchanged)" "$rc"
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"
 else
@@ -176,6 +202,36 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: a bad password is refused at IO\$_ACCESS (INVLOGIN) through NETACP" "$rc"
     if printf '%s\n' "$seg" | grep -qF 'DECNETD-I-NETLOOP'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the brokered-link segment is real output (the test's banner is present)" "$rc"
+
+    # (d) NCP SHOW + SHOW NETWORK read the RUNNING NETACP (rd vms-30e).
+    send 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1
+    run_seg 'NCP SHOW EXECUTOR' "$LOG2" 'Identification' 30
+    if has 'Node Volatile Summary as of ' && has 'Executor node = 1.42 (OVMX)' \
+       && has 'State                    = on' \
+       && has 'Identification           = OVMX DECnet-compatible'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW EXECUTOR reads the running NETACP: 1.42 (OVMX), State on, OVMX identification, in the VAX layout" "$rc"
+    run_seg 'NCP SHOW EXECUTOR CHARACTERISTICS' "$LOG2" 'Type ' 30
+    if has 'Node Volatile Characteristics as of ' && has 'NSP version              = V4.1.0' \
+       && has 'Maximum links            = 32' && has 'Routing version          = V2.0.0' \
+       && has 'Type                     = nonrouting IV'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW EXECUTOR CHARACTERISTICS prints NETACP's NSP/routing versions, pool size and type" "$rc"
+    run_seg 'NCP SHOW EXECUTOR COUNTERS' "$LOG2" 'Maximum logical links active' 30
+    if printf '%s\n' "$seg" | grep -qE '^ +[0-9]+  Maximum logical links active$'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW EXECUTOR COUNTERS prints NETACP's counted 'Maximum logical links active' in the VAX column" "$rc"
+    run_seg 'NCP SHOW KNOWN NODES' "$LOG2" '1.1 (VAX1)' 30
+    if has 'Known Node Volatile Summary as of ' \
+       && has '    Node           State      Active  Delay   Circuit     Next node' \
+       && printf '%s\n' "$seg" | grep -qE '^ 1\.1 \(VAX1\) +[A-Z0-9]+-[0-9]+ +0$'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW KNOWN NODES lists 1.1 (VAX1) from NETACP's node database on its circuit, in the VAX table columns" "$rc"
+    run_seg 'NCP SHOW KNOWN LINKS' "$LOG2" 'Known Link Volatile Summary' 30
+    if has 'No information in database'; then rc=0; else rc=1; fi
+    record "boot 2: NCP SHOW KNOWN LINKS with no logical links says 'No information in database' (VAX wording)" "$rc"
+    run_seg 'SHOW NETWORK' "$LOG2" 'Product:' 30
+    if has 'Product:  DECNET        Node:  OVMX                 Address(es):  1.42' \
+       && has 'Product: OVMX TCP/IP'; then rc=0; else rc=1; fi
+    record "boot 2: SHOW NETWORK carries the DECNET product line from the running NETACP (VAX columns); TCP/IP line unchanged" "$rc"
+    if grep -qaF '%NCP-F-' <(tail -c "+$((off + 1))" "$LOG2"); then rc=1; else rc=0; fi
+    record "boot 2: no %NCP-F- failure while NETACP is serving" "$rc"
 else
     record "boot 2: SYSTEM logs in" 1
 fi

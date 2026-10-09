@@ -129,6 +129,13 @@ extern const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN];
 #define DNET_DATA_NSP_OFF       (DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + \
                                  DNET_DATA_PAD_LEN + DNET_DATA_RHDR_LEN)
 
+/* The routing-layer version this engine's endnode- and router-hellos carry in
+ * TIVER (vers 2 eco 0 ueco 0 -- the vms-3be oracle value). One definition, so
+ * the version NCP SHOW EXECUTOR CHARACTERISTICS reports is the one on the wire. */
+#define DNET_ENGINE_ROUTING_VERSION 2u
+#define DNET_ENGINE_ROUTING_ECO     0u
+#define DNET_ENGINE_ROUTING_UECO    0u
+
 /* NCP node names are 1..6 characters (DNA Phase IV). +1 for the NUL. */
 #define DNET_NODENAME_MAX   6
 /* VMS device / DECnet circuit name field caps (e.g. "EWA0" / "EWA-0"). */

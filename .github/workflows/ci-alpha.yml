@@ -1967,15 +1967,18 @@ jobs:
   # the environmental blockers green. A new failure is triaged, never
   # auto-absorbed (adding to the baseline is an explicit, reviewed commit).
   #
-  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), like alpha-boot-login:
-  # a full Alpha cross-build + ~66-suite qemu-system-alpha run is ~45-60 min, off
-  # the per-PR path. Conductor fires workflow_dispatch on the frozen SHA for the
-  # green-by-SHA reap; nightly schedule catches drift on main.
+  # HEAVY-EMULATOR TIER, off the per-PR path (a full Alpha cross-build +
+  # ~66-suite qemu-system-alpha run is ~45-60 min): it runs on EVERY push to main,
+  # on workflow_dispatch (the conductor's green-by-SHA reap on a frozen SHA) and
+  # nightly. Every main push, not just nightly: a schedule-only gate let three
+  # merged suites sit red on Alpha unseen (nightly 37900258563 red, no owner)
+  # until branches touching Alpha paths tripped over them -- an arch-asymmetric
+  # red hidden from main is exactly the trap this tier exists to catch.
   # -----------------------------------------------------------------------
   alpha-syssvc-suite:
     name: OVMX/Alpha public sys$ API tier RUNS LP64 on qemu-system-alpha, no-new-vs-baseline (vms-341)
     needs: changes
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 

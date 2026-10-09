@@ -70,3 +70,25 @@ void kif_xport_munmap(void *addr, unsigned long length)
 {
 	(void)munmap(addr, (size_t)length);
 }
+
+/*
+ * The executive's terminal line discipline (src/kernel-netbsd/vms_tt_netbsd.c)
+ * is attached by NAME: ttyldisc_attach() registered it as "vms_tt", and
+ * TIOCSLINED selects it on this tty.
+ */
+int kif_xport_tty_attach(int ttyfd, unsigned long bind_req, void *bind_args)
+{
+	/* a linedn_t: the discipline's name, NUL-padded to TTLINEDNAMELEN */
+	char name[32] = "vms_tt";
+
+#ifdef TIOCSLINED
+	if (ioctl(ttyfd, TIOCSLINED, name) < 0)
+		return -errno;
+#else
+	(void)name;
+	return -ENOTTY;                 /* not a NetBSD build: no such discipline */
+#endif
+	if (ioctl(ttyfd, (unsigned long)bind_req, bind_args) < 0)
+		return -errno;
+	return 0;
+}

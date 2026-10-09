@@ -90,15 +90,12 @@ RD.TIMED W  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED R2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED W2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED S  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-TA.CTRLX T  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.CTRLX D  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.CTRLX R  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.LOGIN W  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.USERNAME U  # vms-bd71: Username: purges type-ahead, then times out
-TA.WAIT T  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.WAIT D  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.WAIT R  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
-TA.WAIT.CR T  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 TA.WAIT.CR D  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 WRAP.LONG T  # vms-cef: long-line wrap at terminal width
 WRAP.LONG X  # vms-cef: long-line wrap at terminal width

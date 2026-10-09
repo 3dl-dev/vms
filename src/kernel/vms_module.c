@@ -30,6 +30,7 @@
 #include <linux/vmalloc.h>          /* remap_vmalloc_range (vms_lnm_mmap, vms-d61) */
 
 #include "vms_internal.h"
+#include "vms_tt.h"
 #include "vms_bg_core.h"    /* vms_bg_capture_channels -- fork-inherit snapshot (vms-0cd) */
 
 #if defined(OVMX_KTEST_CLUSTER_SEAM)
@@ -2325,6 +2326,14 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_devscan(proc, arg);
     case VMS_IOCTL_TTSETMODE:
         return vms_ioctl_ttsetmode(proc, arg);
+    case VMS_IOCTL_TT_READ:          /* rd vms-f8c: the terminal class driver */
+        return vms_ioctl_tt_read(proc, arg);
+    case VMS_IOCTL_TT_WRITE:
+        return vms_ioctl_tt_write(proc, arg);
+    case VMS_IOCTL_TT_SETMODE:
+        return vms_ioctl_tt_setmode(proc, arg);
+    case VMS_IOCTL_TT_SENSE:
+        return vms_ioctl_tt_sense(proc, arg);
     case VMS_IOCTL_ALLOC:
         return vms_ioctl_alloc(proc, arg);
     case VMS_IOCTL_DALLOC:
@@ -2765,6 +2774,12 @@ static int __init vms_init(void)
 
     pr_info("vms: /dev/vms registered successfully\n");
 
+    /* rd vms-f8c: the terminal PORT driver -- the executive's line discipline.
+     * A failure leaves every terminal row portless: a terminal $QIO then
+     * answers SS$_DEVOFFLINE and binding the console fails, both honestly. */
+    if (vms_tt_linux_init() == 0)
+        pr_info("vms: terminal class driver ready (line discipline attached per terminal)\n");
+
     /* vms-0cd: eager fork-time BG channel inheritance (sched_process_fork hook), so
      * an accept->fork->close forking server (sshd, inetd) hands its accepted
      * connection to the forked child even though it closes its own copy right after
@@ -2892,6 +2907,7 @@ static void __exit vms_exit(void)
 
     /* Unregister device */
     misc_deregister(&vms_misc);
+    vms_tt_linux_exit();             /* rd vms-f8c */
 
     /* vms-0cd: stop capturing forks and drain any un-consumed fork-inherit records
      * (dropping the socket refs they hold) BEFORE the PCBs they snapshot are freed. */

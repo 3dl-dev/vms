@@ -649,9 +649,10 @@ int cmd_inquire(struct dcl_command *cmd)
     const char *symbol_name = cmd->params[0];
     const char *prompt_text = (cmd->param_count >= 2) ? cmd->params[1] : "";
 
-    /* Display prompt */
+    /* The prompt, written by the terminal driver's IO$_READPROMPT (rd vms-f8c) */
+    char pbuf[300];
     if (prompt_text[0]) {
-        printf("%s: ", prompt_text);
+        snprintf(pbuf, sizeof(pbuf), "%.290s: ", prompt_text);
     } else {
         /* Default prompt is symbol name */
         char upper_name[256];
@@ -659,18 +660,14 @@ int cmd_inquire(struct dcl_command *cmd)
         for (i = 0; i < sizeof(upper_name) - 1 && symbol_name[i]; i++)
             upper_name[i] = (char)toupper((unsigned char)symbol_name[i]);
         upper_name[i] = '\0';
-        printf("%s: ", upper_name);
+        snprintf(pbuf, sizeof(pbuf), "%s: ", upper_name);
     }
-    fflush(stdout);
 
     char buf[1024];
-    if (!fgets(buf, sizeof(buf), stdin)) {
+    if (dcl_tt_read_line(pbuf, buf, sizeof(buf)) != 0) {
         dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
         return SS$_NORMAL;
     }
-
-    size_t len = strlen(buf);
-    if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
 
     /* Unless /NOPUNCTUATION, upcase the input */
     if (!dcl_has_qualifier(cmd, "NOPUNCTUATION")) {

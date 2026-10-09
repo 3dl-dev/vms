@@ -36,7 +36,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
-#include <termios.h>
 #include <poll.h>
 #include <signal.h>
 #include <time.h>
@@ -1052,20 +1051,16 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
 }
 
 /*
- * qio_terminal_setmode - IO$_SETMODE line discipline for a TERMINAL channel
- * (vms-f54). THIS is the terminal driver's home for the substrate line
- * discipline: a $ SET HOST CTERM client (src/vmsdecnet/engine/decnetd.c) issues
- * $QIO IO$_SETMODE with the OVMX-defined P2 selector IO$K_TT_PASSALL to hand
- * echo/editing to the REMOTE session, and IO$K_TT_NORMAL to restore it -- the
- * caller never touches termios, only VMS I/O function codes. The termios call
- * lives HERE, below the $QIO interface, exactly as VMS's terminal class driver
- * realises pass-all mode below IO$_SETMODE.
- *
- * On a channel whose fd is not a real terminal (a pipe / redirect -- e.g. the
- * automated end-to-end test feeds the client a pipe) this is a graceful no-op
- * that still reports SS$_NORMAL: pass-all has no meaning off a tty and there is
- * nothing to fake. A tcgetattr/tcsetattr failure on a real tty is reported as
- * SS$_ABORT rather than a false success (INV-6).
+ * qio_terminal_setmode - the P2-selector IO$_SETMODE (IO$K_TT_PASSALL /
+ * IO$K_TT_NORMAL) on a channel that is NOT an executive terminal (vms-f54;
+ * rd vms-f8c). A $ SET HOST CTERM client (src/vmsdecnet/engine/decnetd.c) asks
+ * for pass-all on its terminal; on a terminal unit that request is the
+ * executive terminal driver's (qio_terminal_op below, VMS_IOCTL_TT_SETMODE).
+ * What reaches HERE is a channel with no terminal behind it -- a pipe or a
+ * redirect, e.g. the automated end-to-end test feeding the client a pipe --
+ * where pass-all has no meaning: a graceful no-op that reports SS$_NORMAL.
+ * Nothing touches the substrate's termios: the line discipline belongs to the
+ * executive (rd vms-f8c), not to userspace.
  */
 static uint32_t qio_terminal_setmode(int fd, uint32_t p2, void *iosb_ptr,
                                      uint32_t efn, void (*astadr)(uint32_t),
@@ -1073,50 +1068,14 @@ static uint32_t qio_terminal_setmode(int fd, uint32_t p2, void *iosb_ptr,
     struct _iosb *iosb = (struct _iosb *)iosb_ptr;
     uint32_t st = SS$_NORMAL;
 
-    if (isatty(fd)) {
-        struct termios tio;
-        if (tcgetattr(fd, &tio) != 0) {
-            st = SS$_ABORT;
-        } else {
-            if (p2 == IO$K_TT_PASSALL) {
-                /* PASS-ALL: raw bytes both ways, no echo, no canonical line
-                 * editing, no signal keys, no CR/LF translation -- the remote
-                 * CTERM session owns all of that. Set the raw-mode flags
-                 * INLINE (the exact cfmakeraw(3) semantics): cfmakeraw is a BSD
-                 * libc convenience helper, NOT a DECC$SHR universal, so calling
-                 * it leaves an unresolved external when LINK.EXE links the
-                 * VMS-native graph that pulls in this executive TU (vms-f54). */
-                tio.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP |
-                                 INLCR | IGNCR | ICRNL | IXON);
-                tio.c_oflag &= ~OPOST;
-                tio.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-                tio.c_cflag &= ~(CSIZE | PARENB);
-                tio.c_cflag |= CS8;
-                tio.c_cc[VMIN] = 1;
-                tio.c_cc[VTIME] = 0;
-            } else {
-                /* IO$K_TT_NORMAL: the interactive line discipline (canonical
-                 * input, echo, signals, output post-processing). */
-                tio.c_iflag |= (ICRNL | IXON);
-                tio.c_oflag |= (OPOST | ONLCR);
-                tio.c_lflag |= (ICANON | ECHO | ECHOE | ECHOK | ISIG | IEXTEN);
-                tio.c_cc[VMIN] = 1;
-                tio.c_cc[VTIME] = 0;
-            }
-            if (tcsetattr(fd, TCSANOW, &tio) != 0)
-                st = SS$_ABORT;
-        }
-    }
-
+    (void)fd; (void)p2;
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = 0;
         iosb->iosb$l_dev_depend = 0;
     }
-    if (st == SS$_NORMAL) {
-        if ((efn & 0xFFu) < 128) sys$setef(efn);
-        if (astadr) astadr(astprm);
-    }
+    if ((efn & 0xFFu) < 128) sys$setef(efn);
+    if (astadr) astadr(astprm);
     return st;
 }
 
@@ -1202,11 +1161,11 @@ static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint1
 static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
                                 const struct vms_devinfo *info, uint32_t func,
                                 void *iosb_ptr, void *p1, uint32_t p2, uint32_t p3,
-                                uint32_t p4, uint32_t p5, uint32_t p6,
+                                uintptr_t p4, uintptr_t p5, uint32_t p6,
                                 uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm,
                                 int *handled)
 {
-    (void)chan; (void)p4;
+    (void)chan; (void)fd;
     uint32_t base = func & IO$M_FCODE;
     *handled = 1;
     switch (base) {
@@ -1237,7 +1196,15 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     }
     case IO$_SETMODE:
     case IO$_SETCHAR: {
-        if (!p1 || p2 < 8) { *handled = 0; return SS$_NORMAL; }  /* the P2-selector form */
+        if (!p1 || p2 < 8) {
+            /* the P2-selector form (vms-f54): IO$K_TT_PASSALL hands every
+             * byte through unedited, unechoed (a SET HOST CTERM session);
+             * IO$K_TT_NORMAL restores the interactive driver (rd vms-f8c). */
+            uint32_t st = vms_kif_tt_setmode(ec, p2 == IO$K_TT_PASSALL ? VMS_TT_MODE_PASSALL : 0);
+            if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+            tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0);
+            break;
+        }
         const uint8_t *b = (const uint8_t *)p1;
         uint32_t width = (uint32_t)b[2] | ((uint32_t)b[3] << 8);
         uint32_t page = b[7];
@@ -1261,24 +1228,57 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     case IO$_READVBLK:
     case IO$_READLBLK:
     case IO$_READPROMPT: {
-        if (func & IO$M_PURGE)
-            (void)tcflush(fd, TCIFLUSH);
-        if (base == IO$_READPROMPT && p5 && p6)
-            (void)!write(fd, (const void *)(uintptr_t)p5, p6);
-        if (!p1 || p2 == 0) { tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0); break; }
-        if (func & IO$M_TIMED) {
-            struct pollfd pf = { fd, POLLIN, 0 };
-            int pr = poll(&pf, 1, (int)(p3 > 2000000 ? 2000000000 : p3 * 1000));
-            if (pr <= 0) { tt_iosb(iosb_ptr, SS$_TIMEOUT, 0, 0, 0); break; }
+        /* THE EXECUTIVE TERMINAL DRIVER (rd vms-f8c): the read is the class
+         * driver's -- type-ahead consumed and echoed as it is read, after the
+         * prompt; the terminator mask; IO$M_TIMED / PURGE / NOECHO / NOFILTR /
+         * TRMNOECHO / CVTLOW. Nothing here reads the substrate descriptor. A
+         * terminal with no port attached answers SS$_DEVOFFLINE (Rule 9). */
+        struct vms_tt_read_args ra;
+        memset(&ra, 0, sizeof ra);
+        ra.chan = ec;
+        if (func & IO$M_NOECHO)    ra.flags |= VMS_TT_RD_NOECHO;
+        if (func & IO$M_TIMED)     ra.flags |= VMS_TT_RD_TIMED;
+        if (func & IO$M_PURGE)     ra.flags |= VMS_TT_RD_PURGE;
+        if (func & IO$M_NOFILTR)   ra.flags |= VMS_TT_RD_NOFILTR;
+        if (func & IO$M_TRMNOECHO) ra.flags |= VMS_TT_RD_TRMNOECHO;
+        if (func & IO$M_CVTLOW)    ra.flags |= VMS_TT_RD_CVTLOW;
+        ra.buf = (uint64_t)(uintptr_t)p1;
+        ra.bufsz = p1 ? p2 : 0;
+        ra.timeout = p3;
+        /* P4: the terminator descriptor. Short form: a quadword whose first
+         * longword is 0 and whose second is the mask for characters 0-31.
+         * Long form: a word mask size in bytes and the mask's address. 0 =
+         * the standard terminator set (I/O User's Reference, "Terminators"). */
+        if (p4) {
+            const uint32_t *td = (const uint32_t *)(uintptr_t)p4;
+            if (td[0] == 0) {
+                ra.termmask[0] = td[1];
+            } else {
+                uint32_t msz = td[0] & 0xFFFFu;
+                const uint8_t *m = (const uint8_t *)(uintptr_t)td[1];
+                if (msz > sizeof ra.termmask) msz = sizeof ra.termmask;
+                if (m) memcpy(ra.termmask, m, msz);
+            }
+            ra.flags |= VMS_TT_RD_TERMMASK;
         }
-        ssize_t r = read(fd, p1, p2);
-        if (r <= 0) { tt_iosb(iosb_ptr, r == 0 ? SS$_ENDOFFILE : SS$_ABORT, 0, 0, 0); break; }
-        /* the terminator: a CR/LF/^Z ends the line and is not counted */
-        uint8_t *c = (uint8_t *)p1;
-        uint16_t off = (uint16_t)r, term = 0, tsz = 0;
-        for (ssize_t i = 0; i < r; i++)
-            if (c[i] == '\r' || c[i] == '\n' || c[i] == 26) { off = (uint16_t)i; term = c[i]; tsz = 1; break; }
-        tt_iosb(iosb_ptr, SS$_NORMAL, off, term, tsz);
+        if (base == IO$_READPROMPT && p5 && p6) {
+            ra.prompt = (uint64_t)(uintptr_t)p5;
+            ra.promptsz = p6;
+        }
+        uint32_t st = vms_kif_tt_read(&ra);
+        if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN) {
+            tt_iosb(iosb_ptr, st, 0, 0, 0);
+            return st;
+        }
+        tt_iosb(iosb_ptr, st, (uint16_t)ra.count, (uint16_t)ra.term, (uint16_t)ra.termsz);
+        break;
+    }
+    case IO$_WRITEVBLK:
+    case IO$_WRITELBLK: {
+        /* Output through the class driver, byte for byte (rd vms-f8c). */
+        uint32_t st = (p1 && p2) ? vms_kif_tt_write(ec, p1, p2) : SS$_NORMAL;
+        if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+        tt_iosb(iosb_ptr, SS$_NORMAL, (uint16_t)p2, 0, 0);
         break;
     }
     case IO$_ACCESS:
@@ -1296,7 +1296,7 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
 static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
-                  uint32_t p4, uint32_t p5, uint32_t p6) {
+                  uintptr_t p4, uintptr_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
 
     /* The event flag is cleared when the request is queued, and an efn that is
@@ -1337,8 +1337,9 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
         uint32_t tec = 0;
         struct vms_devinfo tinfo;
         if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+            /* the terminal's I/O is the executive driver's: no descriptor
+             * is needed (rd vms-f8c) */
             int tfd = vms$$chan_to_fd(chan);
-            if (tfd < 0) return pcb_chan_unheld_status(chan);
             int handled = 0;
             uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
                                            p1, p2, p3, p4, p5, p6, efn, astadr,
@@ -1387,7 +1388,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
 static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
                    void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                    void *p1, uint32_t p2, uint32_t p3,
-                   uint32_t p4, uint32_t p5, uint32_t p6) {
+                   uintptr_t p4, uintptr_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
 
     {   /* as for $QIO: clear the flag, refuse a number that is not a flag */
@@ -1412,8 +1413,9 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         uint32_t tec = 0;
         struct vms_devinfo tinfo;
         if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+            /* the terminal's I/O is the executive driver's: no descriptor
+             * is needed (rd vms-f8c) */
             int tfd = vms$$chan_to_fd(chan);
-            if (tfd < 0) return pcb_chan_unheld_status(chan);
             int handled = 0;
             uint32_t tst = qio_terminal_op(chan, tfd, tec, &tinfo, func, iosb_ptr,
                                            p1, p2, p3, p4, p5, p6, efn, astadr,
@@ -1517,7 +1519,7 @@ static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
 uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
                  void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                  void *p1, uint32_t p2, uint32_t p3,
-                 uint32_t p4, uint32_t p5, uint32_t p6)
+                 uintptr_t p4, uintptr_t p5, uint32_t p6)
 {
     uint32_t cst = qio_efn_request(efn);   /* refused before anything: IOSB as is */
     if (cst != SS$_NORMAL)
@@ -1529,7 +1531,7 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
 uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
-                  uint32_t p4, uint32_t p5, uint32_t p6)
+                  uintptr_t p4, uintptr_t p5, uint32_t p6)
 {
     uint32_t cst = qio_efn_request(efn);
     if (cst != SS$_NORMAL)

@@ -191,7 +191,9 @@ vms-y := vms_module.o \
          vms_p1.o \
          vms_bg_pollfd.o \
          vms_bg_datafd.o \
-         vms_bg_forkinherit.o
+         vms_bg_forkinherit.o \
+         ../kernel-core/vms_tt.o \
+         vms_tt_linux.o
 
 # The GENUINE ODS-2 codec, kernel-resident, gives the Files-11 ACP $MOUNT
 # (kernel-core/vmsfs_acp.c, vms-127) its home-block/SCB validation. Only

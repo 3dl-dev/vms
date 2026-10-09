@@ -74,45 +74,45 @@
     }
   ],
   "overall": {
-    "count": 485,
+    "count": 491,
     "by_status": {
       "verified": 24,
-      "implemented": 292,
-      "partial": 62,
+      "implemented": 293,
+      "partial": 64,
       "stub": 14,
       "designed": 1,
-      "absent": 92
+      "absent": 95
     },
     "by_authenticity": {
-      "real": 340,
-      "n/a": 93,
-      "advisory": 46,
+      "real": 342,
+      "n/a": 96,
+      "advisory": 47,
       "facade-risk": 6
     },
-    "met": 316,
-    "in_progress": 62,
-    "not_started": 107,
+    "met": 317,
+    "in_progress": 64,
+    "not_started": 110,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 439,
+    "count": 445,
     "by_status": {
       "verified": 24,
-      "implemented": 292,
-      "partial": 60,
+      "implemented": 293,
+      "partial": 62,
       "stub": 10,
       "designed": 1,
-      "absent": 52
+      "absent": 55
     },
     "by_authenticity": {
-      "real": 338,
-      "n/a": 53,
-      "advisory": 44,
+      "real": 340,
+      "n/a": 56,
+      "advisory": 45,
       "facade-risk": 4
     },
-    "met": 316,
-    "in_progress": 60,
-    "not_started": 63,
+    "met": 317,
+    "in_progress": 62,
+    "not_started": 66,
     "facade_risk": 4
   },
   "facilities": [
@@ -1626,25 +1626,25 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS System Services Reference Manual \u2014 I/O Services (QIO)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-09",
       "rollup": {
-        "count": 6,
+        "count": 12,
         "by_status": {
           "verified": 0,
-          "implemented": 5,
-          "partial": 0,
+          "implemented": 6,
+          "partial": 2,
           "stub": 0,
           "designed": 0,
-          "absent": 1
+          "absent": 4
         },
         "by_authenticity": {
-          "advisory": 4,
-          "real": 1,
-          "n/a": 1
+          "advisory": 5,
+          "real": 3,
+          "n/a": 4
         },
-        "met": 5,
-        "in_progress": 0,
-        "not_started": 1,
+        "met": 6,
+        "in_progress": 2,
+        "not_started": 4,
         "facade_risk": 0
       }
     },
@@ -3634,7 +3634,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsdcl/dcl_cmd_set.c",
       "verified_against": "rd vms-a70, tests/lab/captures/decnet-sethost-dcl-20260911/ \u2014 OVMX --set-host to a real OpenVMS VAX V7.3 reached an authenticated live DCL and ran commands with output returned over the link (the session's own _RTA1: process appears in its own SHOW SYSTEM output)",
-      "notes": "DCL `SET HOST <node>` activates SYS$SYSTEM:DECNETD.EXE --set-host on the CALLER'S TERMINAL through the executive image activator (dcl_activate_image -> imgact_activate, with DCL's fork fallback -- the same path RUN uses, NOT a bare fork/exec). The client (src/vmsdecnet/engine/decnetd.c run_set_host_loop) opens a REAL NSP logical link to the remote's Session Control object 42, binds a CTERM terminal session, and bridges THIS process's local terminal to it. VMS-NATIVE terminal I/O (the anti-LARP core): the client does $ASSIGN SYS$INPUT/SYS$OUTPUT + $QIO IO$_SETMODE (OVMX pass-all selector IO$K_TT_PASSALL) + IO$_READVBLK/IO$_WRITEVBLK -- NEVER tcsetattr/cfmakeraw on fd 0/1; the termios that realises pass-all lives in the executive terminal driver (src/libvms/syssvc/sys_qio.c qio_terminal_setmode), below the $QIO interface. On teardown control returns with the canonical %REM-S-END (oracle docs/oracle/vax-sethost-cterm.console.txt). The remote authenticates FRESH (the carried --user is proxy only, never auto-login). The client contains NO fork/exec/openpty/dup2. Response decoders are bounded against a hostile remote (mutation fuzz of dnet_nsp_decode/dnet_cterm_rx, tests/vmsdecnet/test_dnet_cterm.c, clean under ASan/UBSan). LIVE-PROVEN end-to-end against a real OpenVMS VAX V7.3 (rd vms-a70, tests/lab/captures/decnet-sethost-dcl-20260911/): OVMX --set-host 1.1 drove CI -> CC -> NSP Link Service -> CTERM foundation negotiation (byte-exact vs the oracle) -> real VAX LOGINOUT -> authenticated DCL -> F$GETSYI(NODENAME)=VAX1 + SHOW SYSTEM returning VAX1's live process table (incl the session's OWN _RTA1: process) -> clean LOGOUT + NSP disconnect. The earlier CTERM-BIND FACADE is RETIRED: the CTERM foundation/Bind protocol was re-grounded byte-for-byte on the real oracle (the foundation short-TLV + msgtype-9 envelope codec, the host-speaks-first negotiation FSM, the NSP link-service credit grant after CC, and prompt-gated Read Data \u2014 one line per host read-solicit), oracle-anchored in tests/vmsdecnet/test_dnet_cterm.c. NOT yet: the INBOUND direction is wire-proven against a real VAX only through the lab harness (decnet$cterm-session-auth), not yet into a booted OVMX; general task-to-task ($QIO) and the outbound COPY-over-datalink client are separate rungs.",
+      "notes": "DCL `SET HOST <node>` activates SYS$SYSTEM:DECNETD.EXE --set-host on the CALLER'S TERMINAL through the executive image activator (dcl_activate_image -> imgact_activate, with DCL's fork fallback -- the same path RUN uses, NOT a bare fork/exec). The client (src/vmsdecnet/engine/decnetd.c run_set_host_loop) opens a REAL NSP logical link to the remote's Session Control object 42, binds a CTERM terminal session, and bridges THIS process's local terminal to it. VMS-NATIVE terminal I/O (the anti-LARP core): the client does $ASSIGN SYS$INPUT/SYS$OUTPUT + $QIO IO$_SETMODE (OVMX pass-all selector IO$K_TT_PASSALL) + IO$_READVBLK/IO$_WRITEVBLK -- NEVER tcsetattr/cfmakeraw on fd 0/1; pass-all is the executive terminal driver's PASSALL mode (src/kernel-core/vms_tt.c, VMS_IOCTL_TT_SETMODE via sys_qio.c), below the $QIO interface -- no termios anywhere (rd vms-f8c). On teardown control returns with the canonical %REM-S-END (oracle docs/oracle/vax-sethost-cterm.console.txt). The remote authenticates FRESH (the carried --user is proxy only, never auto-login). The client contains NO fork/exec/openpty/dup2. Response decoders are bounded against a hostile remote (mutation fuzz of dnet_nsp_decode/dnet_cterm_rx, tests/vmsdecnet/test_dnet_cterm.c, clean under ASan/UBSan). LIVE-PROVEN end-to-end against a real OpenVMS VAX V7.3 (rd vms-a70, tests/lab/captures/decnet-sethost-dcl-20260911/): OVMX --set-host 1.1 drove CI -> CC -> NSP Link Service -> CTERM foundation negotiation (byte-exact vs the oracle) -> real VAX LOGINOUT -> authenticated DCL -> F$GETSYI(NODENAME)=VAX1 + SHOW SYSTEM returning VAX1's live process table (incl the session's OWN _RTA1: process) -> clean LOGOUT + NSP disconnect. The earlier CTERM-BIND FACADE is RETIRED: the CTERM foundation/Bind protocol was re-grounded byte-for-byte on the real oracle (the foundation short-TLV + msgtype-9 envelope codec, the host-speaks-first negotiation FSM, the NSP link-service credit grant after CC, and prompt-gated Read Data \u2014 one line per host read-solicit), oracle-anchored in tests/vmsdecnet/test_dnet_cterm.c. NOT yet: the INBOUND direction is wire-proven against a real VAX only through the lab harness (decnet$cterm-session-auth), not yet into a booted OVMX; general task-to-task ($QIO) and the outbound COPY-over-datalink client are separate rungs.",
       "plan_ref": "vms-30e"
     },
     {
@@ -7790,6 +7790,96 @@
       "evidence": "src/libvms/syssvc/sys_device.c",
       "verified_against": null,
       "notes": "",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "sys-io",
+      "facility_name": "SYS$ I/O Channel + QIO",
+      "id": "tt$class-driver",
+      "kind": "feature",
+      "vms": "Terminal class driver (TTDRIVER): type-ahead held UNECHOED and echoed when a read consumes it, after that read's prompt; standard and caller (P4) terminators; IO$_READPROMPT; IO$M_NOECHO / TIMED / PURGE / TRMNOECHO / NOFILTR / CVTLOW; ^Z echoes *EXIT*; ^X purges type-ahead; TTSYNC ^S/^Q hold/release output; PASSALL; a signal suspends a read rather than ending it",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vms_tt.c",
+      "verified_against": "docs/oracle/keystroke/ TA.WAIT T, TA.WAIT.CR T, TA.CTRLX T byte-match the VAX V7.3 console (rd vms-f8c); tests/qemu/test_kmod_tt.c pins the bytes on a real pty",
+      "notes": "rd vms-f8c. ONE class driver in kernel-core, a line-discipline PORT per substrate (Linux tty_ldisc_ops, NetBSD linesw \"vms_tt\"): the substrate's own line discipline is REPLACED on the line, so no userspace termios ECHO/ICANON toggle remains anywhere. Binding a line to a unit needs CMKRNL, decided by the executive (vms_prot.h). STARTUP binds OPA0:; the network daemon binds each RTAn:; the console's binding survives a session hangup. DCL, LOGINOUT, MONITOR read with $QIO; a CRTL read(2) on the line is served by the same driver. A unit with no port answers SS$_DEVOFFLINE.",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "sys-io",
+      "facility_name": "SYS$ I/O Channel + QIO",
+      "id": "tt$line-editing",
+      "kind": "feature",
+      "vms": "Terminal line editing: DELETE, ^U, ^R, ^X, cursor keys, ^A ^B ^D ^E ^F ^H ^J, insert/overstrike",
+      "status": "partial",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vms_tt.c",
+      "verified_against": null,
+      "notes": "rd vms-eda8. DELETE / ^U / ^R / ^X are the driver's (scope form; the hardcopy \\X\\ form under HARDCOPY). A cursor-key escape sequence is consumed as one key with no effect (it neither ends the read nor lands in the line). ^A ^D ^E ^F ^H ^J and insert/overstrike editing are not implemented yet.",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "sys-io",
+      "facility_name": "SYS$ I/O Channel + QIO",
+      "id": "tt$out-of-band",
+      "kind": "feature",
+      "vms": "Out-of-band ^Y ^C ^O ^T delivered as ASTs ($QIO IO$_SETMODE IO$M_CTRLYAST / CTRLCAST / OUTBAND)",
+      "status": "partial",
+      "authenticity": "advisory",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vms_tt.c",
+      "verified_against": null,
+      "notes": "rd vms-f0fb. The DRIVER acts on ^Y/^C when typed (type-ahead discarded, an outstanding read ended SS$_ABORT) and raises the substrate interrupt DCL takes them as (SIGINT / SIGQUIT to the line's foreground group) -- not yet an AST. ^O and ^T are not out-of-band yet.",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "sys-io",
+      "facility_name": "SYS$ I/O Channel + QIO",
+      "id": "tt$carriage-control",
+      "kind": "feature",
+      "vms": "VMS record carriage control on terminal output (implied-CC prefix/suffix, the <CR><NUL> prompt forms the console shows)",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in",
+      "evidence": "",
+      "verified_against": null,
+      "notes": "rd vms-fc4: nearly every keystroke-oracle step still differs here; needs lab $QIO probes to pin each rule, not inference",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "sys-io",
+      "facility_name": "SYS$ I/O Channel + QIO",
+      "id": "tt$broadcast-redisplay",
+      "kind": "feature",
+      "vms": "A broadcast ($BRKTHRU / REPLY) mid-read is written on its own lines and the prompt + partial line redisplayed",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in",
+      "evidence": "",
+      "verified_against": null,
+      "notes": "rd vms-53a",
+      "plan_ref": "vms-801"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "sys-io",
+      "facility_name": "SYS$ I/O Channel + QIO",
+      "id": "tt$command-recall",
+      "kind": "feature",
+      "vms": "DCL command recall through the terminal read (up-arrow / ^B / down-arrow)",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "in",
+      "evidence": "",
+      "verified_against": null,
+      "notes": "rd vms-eb3d",
       "plan_ref": "vms-801"
     },
     {

@@ -620,7 +620,11 @@ crtl-feature-set-ignored
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
 rms-dirfind-exact-version-ignored
-getlki-grantcount-not-counted"
+getlki-grantcount-not-counted
+tt-typeahead-echoed-on-receipt
+tt-bind-privilege-ignored
+tt-port-input-dropped
+tt-console-hangup-unbinds"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2023,6 +2027,97 @@ sys$open WKOBJ.OBJ;3 (no such version) -> RMS$_FNF (fail-honest)
 EOF
                       ;;
         knock_on_why)  echo "the SAME always-true version-match gate lets an explicit-version open resolve against whichever entry the scan reaches first (the newest version, since ODS-2 directory blocks are scanned newest-first) instead of the version actually asked for: A4's request for the OLDER ;1 wrongly returns the newer ;2 payload (require_fail), and A6's request for a NONEXISTENT ;3 wrongly matches that same newest real entry and reports NORMAL instead of RMS\$_FNF (knock_on_fail) -- both off the one bypassed comparison.";;
+        esac;;
+
+    tt-typeahead-echoed-on-receipt)
+        case "$_f" in
+        facility)     echo "the executive terminal class driver's type-ahead buffer (vms_tt_receive, rd vms-f8c / vms-d732): a character typed with no read outstanding waits UNECHOED and is echoed only when a read consumes it";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() queues a character that arrives with no read consuming it (\`tt_ta_put(tt, c, dc);\`) and echoes nothing: the only echo site is tt_consume(), on behalf of a read. The mutation adds an echo AT RECEIPT in front of the queueing (\`tt_out1(tt, c); tt_ta_put(tt, c, dc);\`) -- exactly the Linux n_tty behaviour the keystroke oracle measured as OVMX's defect (TA.WAIT: the typed command appeared at once instead of after the next prompt). Non-fatal by construction: one more byte into the echo buffer, flushed through the same port op. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+characters typed with no read outstanding are NOT echoed (held in type-ahead)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+read(2) echoes as it consumes, like any driver read
+EOF
+                      ;;
+        knock_on_why)  echo "the same receipt echo shows up wherever the suite types AHEAD of a read and then inspects the screen: the read(2) case types 'hi<CR>' before the read, so the screen carries the receipt echo 'hi<CR>' in front of the read's own consumption echo 'hi<CR><LF>'. The prompt-first check reads a screen that was drained after the receipt echo, so it stays green; the PURGE and ^X cases do not inspect the screen.";;
+        esac;;
+
+    tt-bind-privilege-ignored)
+        case "$_f" in
+        facility)     echo "binding a substrate line to a terminal unit (vms_tt_bind, rd vms-f8c, Baron's ruling 2): the executive requires CMKRNL through vms_prot.h, never a substrate capability";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_bind() asks the executive's protection code whether the caller's ENABLED privileges include CMKRNL (\`st = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);\`) and refuses with SS\$_NOPRIV otherwise. The mutation replaces the decision with SS\$_NORMAL, so any process may make itself the port of any terminal unit. The suite disables CMKRNL and binds: the bind now SUCCEEDS. Non-fatal: the bind completes normally. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+binding a line to a terminal unit WITHOUT CMKRNL is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with CMKRNL the line is bound to the unit (SS$_NORMAL)
+EOF
+                      ;;
+        knock_on_why)  echo "the unprivileged bind went through, so the line is already bound when the suite binds it again WITH CMKRNL: that second bind answers SS\$_DEVALLOC instead of SS\$_NORMAL. Everything after runs on the (wrongly) bound line and stays green.";;
+        esac;;
+
+    tt-port-input-dropped)
+        case "$_f" in
+        facility)     echo "the terminal PORT driver on Linux (vms_tt_linux.c, rd vms-f8c): the executive's line discipline hands every received byte to the class driver";;
+        targets)      echo "kernel/vms_tt_linux.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "port_receive() passes an error-free receive run straight to the class driver (\`vms_tt_receive(tt, cp, count);\`). The mutation drops it, so nothing typed at the line ever reaches the type-ahead buffer or a read. Every read in the suite is IO\$M_TIMED-bounded and the read(2) case polls first, so the defect turns reads into timeouts -- the suite goes red, it does not hang -- and nothing is freed or dereferenced differently (non-fatal). The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the read returns the type-ahead 'abc' and the RETURN terminator
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
+a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+the resumed read does not write its prompt a second time
+a NOECHO read returns what was typed
+IO$M_PURGE discards the type-ahead before reading
+DELETE rubs out the last character (data 'ac')
+DELETE is echoed as BS SP BS on a scope terminal
+^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
+an escape sequence (up-arrow) neither ends the read nor lands in the line
+^Z terminates the read
+the driver echoes *EXIT* for ^Z
+read(2) on the bound line returns the line with LF for the RETURN
+read(2) echoes as it consumes, like any driver read
+EOF
+                      ;;
+        knock_on_why)  echo "one dropped receive path, every typed-input observation: each case that types at the line and expects a read to consume it sees its read time out with nothing (and no consumption echo). The cases that type nothing -- the bind, the NOECHO sense, the empty timed read, ^X (which expects an empty read anyway), the \$QIO write, the portless unit and the hangup -- stay green.";;
+        esac;;
+
+    tt-console-hangup-unbinds)
+        case "$_f" in
+        facility)     echo "the console outlives its sessions (vms_tt_linux.c, rd vms-f8c): a session-leader exit hangs the Linux console up and re-opens its line discipline; OPA0:'s binding is parked across it and taken back";;
+        targets)      echo "kernel/vms_tt_linux.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ldisc_hangup() treats a hangup of a line that is not a pty as one SESSION ending, not the line (\`if (!port_is_pty(tty)) {        /* a session ended, not the line */\` -- mark hungup, let the close park the binding for the re-open). The mutation drops that branch, so a console hangup kills the port like a pty's far end going away: OPA0: is left unbound after any session leader on the console exits -- every later read on it answers SS\$_DEVOFFLINE, the login loop the first boot of this driver showed. Non-fatal: the ordinary detach path runs. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+OPA0: is still bound after a session whose controlling terminal it was ends (console hangup)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: it is the suite's last observation, and nothing before it hangs the console up.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -8045,6 +8140,22 @@ apply_edit() {
         # comparison text is gone after apply, so a second apply is a no-op
         # (selftest).
         sed -i 's|if (version == c->want_ver) {|if (1 /* NEGCTL rms-dirfind-exact-version-ignored */) {|' "$_file";;
+    tt-typeahead-echoed-on-receipt)
+        # Unique text: the one tt_ta_put() call, in vms_tt_receive(). The
+        # receipt echo is inserted in front of it; the original line no longer
+        # exists after apply (no-op re-apply).
+        sed -i 's|^\t\ttt_ta_put(tt, c, dc);$|\t\ttt_out1(tt, c); tt_ta_put(tt, c, dc); /* NEGCTL tt-typeahead-echoed-on-receipt */|' "$_file";;
+    tt-bind-privilege-ignored)
+        # Unique text: vms_tt_bind()'s CMKRNL decision (the sense ioctl's own
+        # check is spelled `a.status = ...`).
+        sed -i 's|^\tst = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);$|\tst = SS__NORMAL; /* NEGCTL tt-bind-privilege-ignored */|' "$_file";;
+    tt-port-input-dropped)
+        # Unique text: the error-free run in port_receive() (the flagged-run
+        # calls pass cp + start).
+        sed -i 's|^\t\tvms_tt_receive(tt, cp, count);$|\t\t(void)cp; /* NEGCTL tt-port-input-dropped */|' "$_file";;
+    tt-console-hangup-unbinds)
+        # Unique text: vms_ldisc_hangup()'s not-a-pty branch.
+        sed -i 's|^\tif (!port_is_pty(tty)) {        /\* a session ended, not the line \*/$|\tif (0) { /* NEGCTL tt-console-hangup-unbinds */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

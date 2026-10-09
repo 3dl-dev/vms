@@ -128,4 +128,18 @@ static inline uint32_t vms_prot_check(uint32_t acc_uic, uint64_t privs,
     return vms_prot_check_acl(acc_uic, privs, owner_uic, prot, want, 0, 0u);
 }
 
+/*
+ * vms_prot_require_priv - an operation reserved to holders of a PRIVILEGE, not
+ * guarded by an object's owner and mask: grant it only if every bit of `needed`
+ * (VMS_PRV_M_*) is among the accessor's ENABLED privileges `privs`. VMS gates
+ * system-level operations this way -- connecting a device to its driver
+ * (SYSGEN CONNECT) needs CMKRNL (OpenVMS System Management Utilities Reference,
+ * SYSGEN CONNECT) -- and the terminal class driver uses it for binding a
+ * substrate line to a terminal unit (rd vms-f8c). SS__NORMAL or SS__NOPRIV.
+ */
+static inline uint32_t vms_prot_require_priv(uint64_t privs, uint64_t needed)
+{
+    return ((privs & needed) == needed) ? SS__NORMAL : SS__NOPRIV;
+}
+
 #endif /* _VMS_PROT_H */

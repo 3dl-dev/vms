@@ -62,6 +62,7 @@
 #include <sys/errno.h>
 #include <sys/proc.h>       /* struct proc, p_pid */
 #include <sys/lwp.h>        /* struct lwp, l_proc */
+#include <sys/kmem.h>       /* vms_tt_rw_bounce (rd vms-f8c) */
 
 #include "vms_ping.h"
 /*
@@ -72,6 +73,7 @@
  * exec_* primitives, `struct vms_proc', and the vms_ioctl_* prototypes.
  */
 #include "vms_internal.h"
+#include "vms_tt.h"           /* the terminal class driver $QIO surface (rd vms-f8c) */
 
 /* ================================================================
  * The executive process table -- ONE table, shared by every facility (rd
@@ -292,6 +294,18 @@ vms_proc_get(pid_t pid)
 	exec_hash_add(vms_proc_hash, &np->hash_node, (uint32_t)pid);
 	exec_unlock(&vms_proc_hash_lock);
 	return np;
+}
+
+/*
+ * vms_netbsd_proc_current - the calling process's executive entry (find or
+ * create), for paths that are not /dev/vms ioctls: the terminal line
+ * discipline's VMS_TTIOC_BIND (vms_tt_netbsd.c, rd vms-f8c), whose privilege
+ * check needs the caller's enabled privileges.
+ */
+struct vms_proc *
+vms_netbsd_proc_current(void)
+{
+	return vms_proc_get(curlwp->l_proc->p_pid);
 }
 
 /*
@@ -789,6 +803,91 @@ vms_acp_rw_bounce(struct lwp *l, void *data, int for_write)
 	return vms_facility_errno(r);
 }
 
+/*
+ * vms_tt_rw_bounce - dispatch a terminal $QIO read/write (rd vms-f8c). Like the
+ * ACP's, the arg struct carries separate user pointers -- the data buffer and,
+ * for a READPROMPT, the prompt -- which the shared handler's exec_copyin/out (an
+ * in-kernel memcpy on this backend) cannot reach. Bounce them: copy the prompt
+ * (and a write's data) in, rewrite the pointers to the kernel copies, run the
+ * shared handler, copy a read's data out, restore the caller's pointers.
+ */
+#define VMS_TT_BOUNCE_MAX 1024     /* VMS_TT_LINE_MAX / VMS_TT_PROMPT_MAX bound */
+static int
+vms_tt_rw_bounce(struct lwp *l, u_long cmd, void *data)
+{
+	struct vms_proc *proc;
+	void *kbuf = NULL, *kprompt = NULL;
+	uint64_t ubuf, uprompt = 0;
+	uint32_t len, plen = 0;
+	long r;
+
+	proc = vms_proc_get(l->l_proc->p_pid);
+	if (proc == NULL)
+		return ENOMEM;
+
+	if (cmd == VMS_IOCTL_TT_READ) {
+		struct vms_tt_read_args *a = data;
+
+		ubuf = a->buf;
+		len = a->bufsz > VMS_TT_BOUNCE_MAX ? VMS_TT_BOUNCE_MAX : a->bufsz;
+		uprompt = a->prompt;
+		plen = a->promptsz > VMS_TT_BOUNCE_MAX ? VMS_TT_BOUNCE_MAX : a->promptsz;
+		if (len > 0) {
+			kbuf = kmem_alloc(len, KM_SLEEP);
+			a->buf = (uint64_t)(uintptr_t)kbuf;
+			a->bufsz = len;
+		}
+		if (uprompt != 0 && plen > 0) {
+			kprompt = kmem_alloc(plen, KM_SLEEP);
+			if (copyin((void *)(uintptr_t)uprompt, kprompt, plen)) {
+				r = -EFAULT;
+				goto out_read;
+			}
+			a->prompt = (uint64_t)(uintptr_t)kprompt;
+			a->promptsz = plen;
+		}
+		r = vms_ioctl_tt_read(proc, (unsigned long)data);
+		if (r == 0 && kbuf != NULL && a->count > 0 &&
+		    copyout(kbuf, (void *)(uintptr_t)ubuf,
+		        a->count > len ? len : a->count))
+			r = -EFAULT;
+out_read:
+		a->buf = ubuf;
+		a->prompt = uprompt;
+		if (kbuf != NULL)
+			kmem_free(kbuf, len);
+		if (kprompt != NULL)
+			kmem_free(kprompt, plen);
+		return vms_facility_errno(r);
+	} else {
+		struct vms_tt_write_args *a = data;
+		uint32_t done = 0, total = a->len, k;
+
+		ubuf = a->buf;
+		kbuf = kmem_alloc(VMS_TT_BOUNCE_MAX, KM_SLEEP);
+		r = 0;
+		a->status = SS__NORMAL;
+		/* in slices: a write is not bounded by the line length */
+		while (done < total) {
+			k = total - done > VMS_TT_BOUNCE_MAX ? VMS_TT_BOUNCE_MAX : total - done;
+			if (copyin((void *)(uintptr_t)(ubuf + done), kbuf, k)) {
+				r = -EFAULT;
+				break;
+			}
+			a->buf = (uint64_t)(uintptr_t)kbuf;
+			a->len = k;
+			r = vms_ioctl_tt_write(proc, (unsigned long)data);
+			if (r != 0 || !(a->status & 1))
+				break;
+			done += k;
+		}
+		a->buf = ubuf;
+		a->len = total;
+		kmem_free(kbuf, VMS_TT_BOUNCE_MAX);
+		return vms_facility_errno(r);
+	}
+}
+
 static int
 vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
     struct lwp *l)
@@ -1273,6 +1372,25 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		}
 		return vms_facility_errno(r);
 
+	/*
+	 * The terminal class driver (rd vms-f8c, src/kernel-core/vms_tt.c):
+	 * $QIO terminal reads/writes carry SEPARATE user buffer pointers (the
+	 * data, the READPROMPT prompt), bounced here exactly as the ACP's are.
+	 */
+	case VMS_IOCTL_TT_READ:
+	case VMS_IOCTL_TT_WRITE:
+		return vms_tt_rw_bounce(l, cmd, data);
+	case VMS_IOCTL_TT_SETMODE:
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		return vms_facility_errno(vms_ioctl_tt_setmode(proc, (unsigned long)data));
+	case VMS_IOCTL_TT_SENSE:
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		return vms_facility_errno(vms_ioctl_tt_sense(proc, (unsigned long)data));
+
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);
 	case VMS_IOCTL_ACP_WRITEVBLK:
@@ -1634,6 +1752,15 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		/* A process ending deletes its PCB at once (rd vms-003b), not only
 		 * when a later table operation happens to reap it. */
 		vms_exithook_cookie = exithook_establish(vms_proc_exithook, NULL);
+		/* rd vms-f8c: the terminal PORT driver -- the executive's line
+		 * discipline "vms_tt". A failure leaves every terminal row portless:
+		 * a terminal $QIO answers SS$_DEVOFFLINE and binding the console
+		 * fails, both honestly. */
+		error = vms_tt_netbsd_init();
+		if (error == 0)
+			printf("vms: terminal class driver ready (line discipline vms_tt)\n");
+		else
+			printf("vms: terminal line discipline not attached: %d\n", error);
 		return 0;
 
 	case MODULE_CMD_FINI:
@@ -1648,6 +1775,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			vms_exithook_cookie = NULL;
 		}
 		devsw_detach(NULL, &vms_cdevsw);
+		vms_tt_netbsd_fini();            /* rd vms-f8c */
 		/* Free the shared common-EF clusters and every lock entry + resource
 		 * (vms_lock_cleanup, walking the resource database) FIRST, then tear down
 		 * the procs (this gives back each proc's mailbox channels, drains its

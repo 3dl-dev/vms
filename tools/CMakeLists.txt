@@ -277,7 +277,9 @@ target_compile_options(vms_monitor PRIVATE
 # calls through to vmsfs for SYS$SYSTEM:OVMXVMSSYS.PAR version resolution.
 # vms-c840: vmssys provides vms_kif_procscan() -- the executive process table
 # reader, MONITOR's single process source (shared with SHOW SYSTEM).
-target_link_libraries(vms_monitor PRIVATE vmsfs vmslnm vmssys)
+# rd vms-f8c: vms provides $ASSIGN/$QIO -- the keyboard poll is a terminal-
+# driver read, not a raw-mode substrate tty.
+target_link_libraries(vms_monitor PRIVATE vms vmsfs vmslnm vmssys)
 
 set_target_properties(vms_monitor PROPERTIES
     OUTPUT_NAME "MONITOR"

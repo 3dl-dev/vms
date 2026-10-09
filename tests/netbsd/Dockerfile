@@ -114,6 +114,10 @@ COPY src/kernel-core/vms_lnm.c /netbsd/guest-src/kernel-core/vms_lnm.c
 # in-guest module build needs it staged (the four-enumeration rule).
 COPY src/kernel-core/vms_devtab.c /netbsd/guest-src/kernel-core/vms_devtab.c
 COPY src/kernel-netbsd/vms_devtab_nb.h /netbsd/guest-src/kmod/vms_devtab_nb.h
+COPY src/kernel-core/vms_tt.c /netbsd/guest-src/kernel-core/vms_tt.c
+COPY src/kernel-core/vms_tt.h /netbsd/guest-src/kernel-core/vms_tt.h
+COPY src/kernel-netbsd/vms_tt_nb.h /netbsd/guest-src/kmod/vms_tt_nb.h
+COPY src/kernel-netbsd/vms_tt_netbsd.c /netbsd/guest-src/kmod/vms_tt_netbsd.c
 COPY src/kernel-core/exec_hash.h src/kernel-core/exec_rbtree.h /netbsd/guest-src/kernel-core/
 # --- Files-11 ODS-2 ACP (vms-d5d): the ACP handlers + the NetBSD block-device
 # seam + the genuine ODS-2 codec (ods2_reader/edit, built under -DOVMX_ODS2_KERNEL).

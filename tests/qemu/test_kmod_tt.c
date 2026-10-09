@@ -393,6 +393,18 @@ int main(void)
         /* negctl: tt-console-hangup-unbinds */
         CHECK((st & 1) && (state & VMS_TT_SENSE_BOUND),
               "OPA0: is still bound after a session whose controlling terminal it was ends (console hangup)");
+        /* Give the console line back to the substrate's own discipline when
+         * this suite attached it (rd vms-0125): a console left on the
+         * executive's discipline holds a module reference of its own, and
+         * test_syssvc_pin must find the descriptor the ONLY thing pinning
+         * vms.ko. A fresh descriptor: the hangup above killed cfd's. */
+        if (ast == SS_NORMAL) {
+            int gfd = open("/dev/console", O_RDWR | O_NOCTTY), n_tty = 0;
+            if (gfd >= 0) {
+                (void)ioctl(gfd, TIOCSETD, &n_tty);
+                close(gfd);
+            }
+        }
     }
 
     printf("=== test_kmod_tt: %d passed, %d failed ===\n", pass, fail);

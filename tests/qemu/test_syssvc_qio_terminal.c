@@ -75,6 +75,7 @@
 #include <sys/wait.h>
 #include <stdint.h>
 #include <errno.h>
+#include <sys/ioctl.h>     /* TIOCSETD: give the console line back (rd vms-0125) */
 
 #include "starlet.h"
 #include "descrip.h"
@@ -216,6 +217,25 @@ static int read_via_fresh_child(struct child_msg *out)
     return 1;
 }
 
+/* The console line this suite attached (rd vms-0125): given back to the
+ * substrate's own line discipline when the suite ends. The rig boots no
+ * STARTUP; a console left on the executive's discipline holds a reference on
+ * vms.ko of its own, which would make test_syssvc_pin's "rmmod is refused while
+ * a descriptor is open" pass for the wrong reason -- the descriptor would no
+ * longer be the only thing pinning the executive. */
+static int console_fd = -1;
+static int console_attached_here;
+
+static void console_give_back(void)
+{
+#ifdef TIOCSETD
+    if (console_attached_here && console_fd >= 0) {
+        int n_tty = 0;                       /* N_TTY */
+        (void)ioctl(console_fd, TIOCSETD, &n_tty);
+    }
+#endif
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
@@ -298,11 +318,12 @@ int main(void)
      * privileged process: CMKRNL). A console already attached by an earlier
      * suite answers SS$_DEVALLOC -- attached either way. */
     {
-        int cfd = open("/dev/console", O_RDWR | O_NOCTTY);
-        uint32_t ast = cfd >= 0 ? vms_kif_tt_attach(cfd, "OPA0:") : 0;
+        console_fd = open("/dev/console", O_RDWR | O_NOCTTY);
+        uint32_t ast = console_fd >= 0 ? vms_kif_tt_attach(console_fd, "OPA0:") : 0;
         CHECK(ast == SS$_NORMAL || ast == SS$_DEVALLOC,
               "parent: the console is attached to OPA0:'s terminal driver (as STARTUP attaches it)");
-        /* cfd stays open: the attachment lives as long as the console tty */
+        console_attached_here = (ast == SS$_NORMAL);
+        /* console_fd stays open: the attachment lives as long as the console tty */
     }
 
     static const char msg[] = "OVMX vms-1c57: $QIO to a terminal now reaches the executive's device table\n";
@@ -334,5 +355,6 @@ int main(void)
           "parent: sys$qio on the now-deassigned channel is refused with SS$_IVCHAN, not silently allowed to keep writing");
 
     printf("=== test_syssvc_qio_terminal: %d passed, %d failed ===\n", pass, fail);
+    console_give_back();
     return fail > 0 ? 1 : 0;
 }

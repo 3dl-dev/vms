@@ -2114,11 +2114,14 @@ TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -
 ^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')
 ^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
+^U on a wrapped line clears its last row and leaves the cursor at its start (WRAP.LONG U)
 ^Z terminates the read
 a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed
 a NOECHO read returns what was typed
+a line longer than the width wraps: CR LF before the character that would pass the last column
 a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)
 a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+after ^U the read returns an empty line
 an AST armed through a channel ends when that channel is deassigned
 an escape sequence (a cursor key with nowhere to move) neither ends the read nor lands in the line
 output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC

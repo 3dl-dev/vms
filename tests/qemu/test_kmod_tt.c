@@ -711,6 +711,7 @@ int main(void)
         type(m, typed);
         size_t got2 = screen(m, scr, sizeof(scr), 300);
         /* negctl: tt-wrap-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
               "a line longer than the width wraps: CR LF before the character that would pass the last column");
         type(m, "\x15");                          /* ^U across the wrap */
@@ -720,11 +721,13 @@ int main(void)
         for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = ' ';
         for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = '\b';
         /* negctl-knockon: tt-wrap-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
               "^U on a wrapped line clears its last row and leaves the cursor at its start (WRAP.LONG U)");
         type(m, "\r");
         rd_wait(&r);
         (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
         CHECK(r.st == SS_NORMAL && r.a.count == 0, "after ^U the read returns an empty line");
     }
 

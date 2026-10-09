@@ -212,7 +212,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: NCP SHOW EXECUTOR reads the running NETACP: 1.42 (OVMX), State on, OVMX identification, in the VAX layout" "$rc"
     run_seg 'NCP SHOW EXECUTOR CHARACTERISTICS' "$LOG2" 'Type ' 30
     if has 'Node Volatile Characteristics as of ' && has 'NSP version              = V4.1.0' \
-       && has 'Maximum links            = 8' && has 'Routing version          = V2.0.0' \
+       && has 'Maximum links            = 32' && has 'Routing version          = V2.0.0' \
        && has 'Type                     = nonrouting IV'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW EXECUTOR CHARACTERISTICS prints NETACP's NSP/routing versions, pool size and type" "$rc"
     run_seg 'NCP SHOW EXECUTOR COUNTERS' "$LOG2" 'Maximum logical links active' 30

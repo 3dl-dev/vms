@@ -342,6 +342,7 @@ static void tt_redisplay(struct vms_tt *tt, int with_line)
 }
 
 static void tt_bs(struct vms_tt *tt, uint32_t n);
+static int tt_line_wrapped(const struct vms_tt *tt);
 static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad);
 static void tt_redraw_in_place(struct vms_tt *tt);
 static void tt_prompt_cr(struct vms_tt *tt);
@@ -363,8 +364,21 @@ static void tt_kill_line(struct vms_tt *tt)
 			return;
 		}
 		/* a screen: the prompt again in place, what is left after it,
-		 * the rest of the line erased (LE.CTRLU / LE.CTRLX) */
+		 * the rest of the line erased (LE.CTRLU / LE.CTRLX). A line that
+		 * has wrapped cannot be reached above its last row: that row is
+		 * cleared and the cursor left at its start (WRAP.LONG U). */
 		(void)i;
+		if (keep == 0 && tt_line_wrapped(tt)) {
+			uint32_t w = tt->rd_width - 1;
+
+			tt_out1(tt, CH_CR);
+			for (i = 0; i < w; i++)
+				tt_out1(tt, ' ');
+			tt_bs(tt, w);
+			tt->len = 0;
+			tt->cur = 0;
+			return;
+		}
 		memmove(tt->line, tt->line + tt->cur, keep);
 		tt->len = keep;
 		tt->cur = 0;
@@ -402,6 +416,51 @@ static void tt_bs(struct vms_tt *tt, uint32_t n)
  * but one, then back. `col` is where the cursor stands; returns the blanks
  * written.
  */
+/*
+ * WRAP (rd vms-cef). With the terminal's WRAP characteristic a line longer
+ * than the width continues on the next row: the driver writes CR LF before the
+ * character that would fall past the last column (keystroke WRAP.LONG, VAX
+ * V7.3 at 80 columns: "$ WRITE ...<60 digits><CR><LF><the rest>").
+ */
+static int tt_wraps(const struct vms_tt *tt)
+{
+	return (tt->rd_dc & VMS_TTC_WRAP) && tt->rd_width;
+}
+
+/* Echo line[i] at its place in the line, wrapping first if it starts a row. */
+static void tt_out_linech(struct vms_tt *tt, uint32_t i)
+{
+	uint32_t at = tt->rd_pcol + i;
+
+	if (tt_wraps(tt) && at && at % tt->rd_width == 0)
+		tt_out(tt, "\r\n", 2);
+	tt_out1(tt, tt->line[i]);
+}
+
+static void tt_out_line(struct vms_tt *tt, uint32_t from, uint32_t to)
+{
+	uint32_t i;
+
+	for (i = from; i < to; i++)
+		tt_out_linech(tt, i);
+}
+
+/* The column the line's position `i` is shown at (on its row). */
+static uint32_t tt_col(const struct vms_tt *tt, uint32_t i)
+{
+	uint32_t at = tt->rd_pcol + i;
+
+	if (!tt_wraps(tt))
+		return at;
+	return at && at % tt->rd_width == 0 ? tt->rd_width : at % tt->rd_width;
+}
+
+/* Does the line occupy more than its first row? */
+static int tt_line_wrapped(const struct vms_tt *tt)
+{
+	return tt_wraps(tt) && tt->rd_pcol + tt->len > tt->rd_width;
+}
+
 static uint32_t tt_erase_eol(struct vms_tt *tt, uint32_t col)
 {
 	uint32_t last = tt->rd_width ? tt->rd_width - 1 : 79;
@@ -421,9 +480,9 @@ static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad)
 
 	if (!tt_echoing(tt))
 		return;
-	tt_out(tt, tt->line + from, tt->len - from);
+	tt_out_line(tt, from, tt->len);
 	if (!tt_hardcopy(tt)) {
-		uint32_t e = tt_erase_eol(tt, tt->rd_pcol + tt->len);
+		uint32_t e = tt_erase_eol(tt, tt_col(tt, tt->len));
 		tt_bs(tt, e + tt->len - tt->cur);
 		return;
 	}
@@ -454,8 +513,8 @@ static void tt_redraw_in_place(struct vms_tt *tt)
 	uint32_t e;
 
 	tt_prompt_cr(tt);
-	tt_out(tt, tt->line, tt->len);
-	e = tt_erase_eol(tt, tt->rd_pcol + tt->len);
+	tt_out_line(tt, 0, tt->len);
+	e = tt_erase_eol(tt, tt_col(tt, tt->len));
 	tt_bs(tt, e + tt->len - tt->cur);
 }
 
@@ -691,7 +750,7 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		tt->line[tt->len++] = c;
 		tt->cur = tt->len;
 		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
-			tt_out1(tt, c);
+			tt_out_linech(tt, tt->len - 1);
 	}
 	if (tt->len >= tt->rd_cap)              /* buffer full ends the read */
 		tt_complete(tt, SS__NORMAL, 0, 0);

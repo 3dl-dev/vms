@@ -512,4 +512,5 @@
 # tt-edit-overstrike-ignored, tt-edit-ctrlj-ignored (test_kmod_tt).
 # Raised to 203 by recall (rd vms-eb3d): tt-recall-key-not-terminator, tt-inistr-ignored (test_kmod_tt).
 # Raised to 204 by tt-brkthru-privilege-ignored (rd vms-53a; test_kmod_tt).
-204
+# Raised to 205 by tt-wrap-ignored (rd vms-cef; test_kmod_tt).
+205

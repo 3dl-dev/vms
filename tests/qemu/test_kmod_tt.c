@@ -687,6 +687,47 @@ int main(void)
               "the read the broadcast broke through goes on and returns 'AB'");
     }
 
+    /* ---- wrap (rd vms-cef; WRAP.LONG at 80 columns) ---- */
+    {
+        struct vms_devinfo wi;
+        unsigned wdt = 80, k2;
+        char typed[300], want[700];
+        size_t wl2 = 0, nt;
+
+        memset(&wi, 0, sizeof wi);
+        if ((vms_kif_getdvi_devnam(devnam, &wi) & 1) && wi.width)
+            wdt = wi.width;
+        nt = (wdt - 2) + 5;                       /* past the first row by 5 */
+        for (k2 = 0; k2 < nt; k2++)
+            typed[k2] = (char)('0' + k2 % 10);
+        typed[nt] = '\0';
+        for (k2 = 0; k2 < wdt - 2; k2++) want[wl2++] = typed[k2];
+        want[wl2++] = '\r'; want[wl2++] = '\n';
+        for (; k2 < nt; k2++) want[wl2++] = typed[k2];
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, typed);
+        size_t got2 = screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-wrap-ignored */
+        CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
+              "a line longer than the width wraps: CR LF before the character that would pass the last column");
+        type(m, "\x15");                          /* ^U across the wrap */
+        got2 = screen(m, scr, sizeof(scr), 300);
+        wl2 = 0;
+        want[wl2++] = '\r';
+        for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = ' ';
+        for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = '\b';
+        /* negctl-knockon: tt-wrap-ignored */
+        CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
+              "^U on a wrapped line clears its last row and leaves the cursor at its start (WRAP.LONG U)");
+        type(m, "\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        CHECK(r.st == SS_NORMAL && r.a.count == 0, "after ^U the read returns an empty line");
+    }
+
     /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */
     (void)screen(m, scr, sizeof(scr), 100);
     (void)!write(s, "A\n", 2);                 /* a record: its line feed owed */

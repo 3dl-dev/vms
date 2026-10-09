@@ -640,7 +640,8 @@ tt-edit-overstrike-ignored
 tt-edit-ctrlj-ignored
 tt-recall-key-not-terminator
 tt-inistr-ignored
-tt-brkthru-privilege-ignored"
+tt-brkthru-privilege-ignored
+tt-wrap-ignored"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2421,6 +2422,25 @@ with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR
 EOF
                       ;;
         knock_on_why)  echo "the refused write goes out too, so the screen after the privileged one carries the broadcast twice.";;
+        esac;;
+
+    tt-wrap-ignored)
+        case "$_f" in
+        facility)     echo "wrap: with the WRAP characteristic a line longer than the terminal width continues on the next row (vms_tt.c tt_out_linech, rd vms-cef; keystroke WRAP.LONG)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_out_linech() writes CR LF before the character that would pass the last column (\`if (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)\`). The mutation never wraps (\`if (0)\`): the terminal is left to do it, or overprint. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a line longer than the width wraps: CR LF before the character that would pass the last column
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "measured.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8571,6 +8591,8 @@ apply_edit() {
         sed -i 's|^\t\tif (req->inistr \&\& req->inisz) {$|\t\tif (0) { /* NEGCTL tt-inistr-ignored */|' "$_file";;
     tt-brkthru-privilege-ignored)
         sed -i 's|^\ta->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);$|\ta->status = SS__NORMAL; /* NEGCTL tt-brkthru-privilege-ignored */|' "$_file";;
+    tt-wrap-ignored)
+        sed -i 's|^\tif (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)$|\tif (0) /* NEGCTL tt-wrap-ignored */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

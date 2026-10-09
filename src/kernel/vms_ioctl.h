@@ -1381,7 +1381,7 @@ struct vms_dlm_scs_view_wire {
     uint8_t  lockdirwt;
     uint8_t  rebuild_phase;
     uint8_t  connected;
-    uint8_t  pad0;
+    uint8_t  sole_directory;   /* vms_ldwv_sole_directory() (rd vms-025) */
     uint32_t rebuild_generation;
     uint32_t proxy_lkbs;
     uint32_t mastered_resources;

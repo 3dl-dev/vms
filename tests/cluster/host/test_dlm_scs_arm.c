@@ -218,6 +218,37 @@ static void arm_bindings(void)
 	    "every directory answer is built by the grounded builder");
 	has("if (dlm_arm_dir_name_held(id)) {",
 	    "a name THIS node holds locks on is never answered 'you master it'");
+
+	/*
+	 * rd vms-025, THE 2026-10-09 LAB FINDING: THE REFUSAL MUST SAY WHICH
+	 * CAUSE IT WAS.
+	 *
+	 * The lab watched a real VAX's op-0x01 for a resource this node held AND
+	 * mastered go unanswered under two console lines that between them named
+	 * the wrong fault: "this node ... does NOT master" (it did) and "a system
+	 * that has not proved it runs this implementation" (true of every refusal
+	 * here, so it distinguishes nothing). The actual cause was the PREDICATE:
+	 * LOCKDIRWT never reached the executive, so vms_ldwv_sole_directory() was
+	 * false and the whole interim arm was gated off. Both halves of that are
+	 * pinned here, in the shipped text.
+	 */
+	has("d->dir_master_unserved++;",
+	    "a name this node DOES master and could not serve is counted apart "
+	    "from one it does not master");
+	has("for a resource this node MASTERS, and it could not be",
+	    "... and SAID as that, never as 'does not master'");
+	has("if (!dlm_arm_sole_directory(d)) {\n\t\td->mixed_refused_not_sole_dir++;",
+	    "RULE C's refusal READS the sole-directory predicate and counts the "
+	    "two causes apart");
+	has("NOT the sole lock directory node of this cluster",
+	    "... and the console line NAMES the predicate, and LOCKDIRWT with "
+	    "it (the knob the operator could not set)");
+	has("d->mixed_refused_op++;",
+	    "... while the configuration being IN force and the message still "
+	    "having no grounded answer is a DIFFERENT counter");
+	has("out->sole_directory     = (uint8_t)(dlm_arm_sole_directory(d)",
+	    "and the diagnostic projection carries the predicate the executive "
+	    "really read (CNXTRACE soledir=)");
 	has("o = dlm_arm_dir_ask(d, id, req->from_csid, &master);",
 	    "the outcome comes from this node's own directory entries");
 	has("vms_dlm_dir_lookup(&d->dir, id, from,",
@@ -527,6 +558,45 @@ static void arm_bindings(void)
 	    "... and fails every request outstanding at the departed member");
 }
 
+/*
+ * THE DIAGNOSTIC ROW'S TWO HAND-MAINTAINED COPIES (rd vms-025).
+ *
+ * `struct vms_dlm_scs_view_wire` is declared TWICE by hand -- once per rind --
+ * because each ioctl header must stay includable with no kernel-core dependency.
+ * The Linux copy's agreement with kernel-core is pinned by a _Static_assert in
+ * vms_devtab.c; the NetBSD-vax copy's is pinned by NOTHING the Linux build
+ * compiles, so a field added to one and not the other is an arch-asymmetric
+ * break that an x86_64-only proof cannot see.
+ *
+ * rd vms-025 took the row's `pad0` byte for `sole_directory` -- the predicate
+ * the interim mixed-cluster arm stands behind -- so both copies are scanned for
+ * it here, in the same slot (after `connected`, before the 32-bit generation).
+ */
+static void the_diag_row_agrees_across_both_rinds(void)
+{
+	printf("-- the DLM diagnostic row, in BOTH rinds' ioctl headers --\n");
+
+	if (read_src(OVMX_KLINUX_DIR, "vms_ioctl.h") != 0) {
+		ct_check(0, "could not open src/kernel/vms_ioctl.h");
+		return;
+	}
+	has("    uint8_t  connected;\n    uint8_t  sole_directory;",
+	    "the Linux rind's row carries sole_directory in the former pad "
+	    "byte, right after connected");
+	absent("    uint8_t  connected;\n    uint8_t  pad0;",
+	       "... and no pad byte is left there to drift");
+
+	if (read_src(OVMX_KNETBSD_DIR, "vms_lock_nb.h") != 0) {
+		ct_check(0, "could not open src/kernel-netbsd/vms_lock_nb.h");
+		return;
+	}
+	has("\tuint8_t  connected;\n\tuint8_t  sole_directory;",
+	    "*** and the NetBSD-vax rind's row carries it in the SAME slot -- "
+	    "the arch-asymmetric break an x86_64-only proof cannot see ***");
+	absent("\tuint8_t  connected;\n\tuint8_t  pad0;",
+	       "... with no pad byte left there either");
+}
+
 static void cnxman_legs(void)
 {
 	printf("-- the two legs, read out of src/kernel-core/vms_cnxman.c --\n");
@@ -591,6 +661,7 @@ int main(void)
 	printf("=== test_dlm_scs_arm (the DLM wire arm's R1) ===\n");
 	trust_anchor_is_the_advertised_version();
 	arm_bindings();
+	the_diag_row_agrees_across_both_rinds();
 	cnxman_legs();
 	cluster_start_order();
 	return ct_summary("test_dlm_scs_arm");

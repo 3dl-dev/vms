@@ -162,6 +162,8 @@ barrier-bit0-uncounted
 phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
+ldwv-directory-verdict-unannounced
+dlm-mixed-refusal-cause-unnamed
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
@@ -422,6 +424,32 @@ EOF
         require_fail) cat <<'EOF'
 and counted in the CLUB
 the refusal is counted
+EOF
+                      ;;
+        esac;;
+
+    ldwv-directory-verdict-unannounced)
+        case "$_f" in
+        facility)     echo "the p. 6-32 directory verdict EVERY rebuild announces (cnxman_ldwv_rebuild(), rd vms-025): one %CNXMAN line saying whether this node came out the SOLE lock directory node -- the one predicate the interim mixed-cluster DLM arm stands behind";;
+        targets)      echo "kernel-core/vms_dlm_ldwv.c";;
+        suites_red)   echo "test_dlm_ldwv";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_ldwv_rebuild()'s sole-directory verdict line is replaced by the NOT-sole wording unconditionally, so the console says the same thing in both configurations. That is exactly the blind spot the 2026-10-09 real-VAX lab ran into: vms_ldwv_sole_directory() read FALSE (the operator's SET LOCKDIRWT had been refused at SYSBOOT), every arm of the mixed-cluster DLM was gated off, and nothing on OPA0: named the predicate -- the lab spent a whole run inferring it from a refusal.";;
+        require_fail) cat <<'EOF'
+*** and the console says THAT instead ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-mixed-refusal-cause-unnamed)
+        case "$_f" in
+        facility)     echo "WHY a mixed-cluster lock message was refused (dlm_arm_say_refusal(), rd vms-025): the predicate being false and the opcode having no grounded answer are two different facts, counted and said apart";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_scs.c is not host-linkable (it names exec_kbackend.h and the fork API), so its properties are proved by a source-scan of the SHIPPING file. The sole-directory read that splits the two causes is removed from dlm_arm_say_refusal(), which is the pre-rd-vms-025 behaviour: ONE line -- 'a system that has not proved it runs this implementation' -- true of every refusal here and therefore naming neither cause. A real-VAX lab watched that line for an entire run while the actual fault was a LOCKDIRWT that never reached the executive.";;
+        require_fail) cat <<'EOF'
+RULE C's refusal READS the sole-directory predicate and counts the two causes apart
 EOF
                       ;;
         esac;;
@@ -1687,6 +1715,26 @@ apply_edit() {
     recnx-last-gasp-uncounted)
         # `r->last_gasps++;` is unique in this file.
         sed -i 's|r->last_gasps++;|/* NEGCTL recnx-last-gasp-uncounted: the last gasp is not counted */|' "$_file";;
+
+    ldwv-directory-verdict-unannounced)
+        # The sole-directory verdict's TRUE arm. The `if (vms_ldwv_sole_directory(
+        # &club->ldwv))` line is unique in this file (every other reference is
+        # the function's own definition or the header's name in a comment), so
+        # forcing it false makes the rebuild always print the NOT-sole wording.
+        # The predicate itself, and every caller of it, is untouched.
+        sed -i 's|\tif (vms_ldwv_sole_directory(&club->ldwv))|\tif (0 \&\& vms_ldwv_sole_directory(\&club->ldwv)) /* NEGCTL ldwv-directory-verdict-unannounced */|' "$_file";;
+
+    dlm-mixed-refusal-cause-unnamed)
+        # vms_dlm_scs.c is not host-linkable -- test_dlm_scs_arm.c proves its
+        # properties by SOURCE-SCANNING the shipping file. The two-cause split
+        # is the `if (!dlm_arm_sole_directory(d)) {` that OPENS
+        # dlm_arm_say_refusal(), immediately followed by the not-sole-dir
+        # counter; that two-line sequence is unique in the file, so the FIRST
+        # line of it is anchored by the counter on the next line. Replacing the
+        # whole function body's opening predicate with the old unconditional
+        # single line removes both scanned properties and nothing else.
+        # Idempotency-safe: the anchored text is consumed by the edit.
+        perl -0pi -e 's/\tif \(!dlm_arm_sole_directory\(d\)\) \{\n\t\td->mixed_refused_not_sole_dir\+\+;/\tif (1) { \/* NEGCTL dlm-mixed-refusal-cause-unnamed *\/\n\t\td->mixed_refused_op++;/' "$_file";;
 
     dlm-learner-unbounded)
         # `vms_res_blocks < VMS_DLM_LEARN_RES_CAP;` is unique in this file.

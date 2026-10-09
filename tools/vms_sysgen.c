@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #include "sysgen_params.h"
+#include "sysgen_factory.h"
 #include "ovmx_layout.h"
 #include "ssdef.h"
 #include "vmsfs/filespec.h"
@@ -45,174 +46,14 @@
 
 /* ================================================================== */
 /*                    Default Parameter Database                       */
+/*                                                                     */
+/* The factory table lives in sysgen_factory.h -- SHARED with SYSBOOT  */
+/* (src/ovmx_init/sysboot.c), which needs the identical set or a       */
+/* parameter this system knows is NOSUCHP at the conversational boot   */
+/* (rd vms-025, the 2026-10-09 LOCKDIRWT lab finding).                 */
 /* ================================================================== */
 
-static const struct sysgen_param default_params[] = {
-    {"MAXPROCESSCNT",   64,      64,      4,       1024,     0,
-     "Maximum number of concurrent processes", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"CHANNELCNT",      16,      16,      4,       256,      SYSGEN_F_DYNAMIC,
-     "Number of I/O channels per process", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"DEFPRI",          4,       4,       0,       31,       SYSGEN_F_DYNAMIC,
-     "Default process priority", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"MAXPRI",          31,      31,      0,       31,       0,
-     "Maximum process priority", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"MAXBUF",          8192,    8192,    512,     65536,    SYSGEN_F_DYNAMIC,
-     "Maximum buffered I/O byte count", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DWSDEFAULT",  256,     256,     64,      65536,    SYSGEN_F_DYNAMIC,
-     "Default working set size", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DWSQUOTA",    512,     512,     64,      65536,    SYSGEN_F_DYNAMIC,
-     "Working set quota", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DWSEXTENT",   2048,    2048,    64,      262144,   SYSGEN_F_DYNAMIC,
-     "Working set extent", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DENQLM",      200,     200,     4,       32767,    SYSGEN_F_DYNAMIC,
-     "Default enqueue limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DFILLM",      100,     100,     4,       8192,     SYSGEN_F_DYNAMIC,
-     "Default open file limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DTQELM",      20,      20,      1,       1024,     SYSGEN_F_DYNAMIC,
-     "Default timer queue entry limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DBIOLM",      40,      40,      4,       4096,     SYSGEN_F_DYNAMIC,
-     "Default buffered I/O limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DDIOLM",      40,      40,      4,       4096,     SYSGEN_F_DYNAMIC,
-     "Default direct I/O limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DBYTLM",      65536,   65536,   1024,    16777216, SYSGEN_F_DYNAMIC,
-     "Default buffered I/O byte limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DPGFLQUOTA",  50000,   50000,   1024,    4194304,  SYSGEN_F_DYNAMIC,
-     "Default page file quota", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"VIRTUALPAGECNT",  1048576, 1048576, 1024,    67108864, 0,
-     "Virtual page count", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"GBLPAGES",        8192,    8192,    256,     4194304,  SYSGEN_F_DYNAMIC,
-     "Global pages", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"GBLSECTIONS",     256,     256,     16,      4096,     SYSGEN_F_DYNAMIC,
-     "Global sections", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"LNMPHASHTBL",     128,     128,     16,      8192,     SYSGEN_F_DYNAMIC,
-     "Logical name hash table size", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"ACP_MAPCACHE",    32,      32,      4,       256,      SYSGEN_F_DYNAMIC,
-     "ACP map cache size", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"BALSETCNT",       16,      16,      4,       256,      0,
-     "Maximum number of processes in balance set", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"IRPCOUNT",        256,     256,     32,      4096,     0,
-     "Number of I/O request packets", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"SRPCOUNT",        256,     256,     32,      4096,     0,
-     "Number of small request packets", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"LRPCOUNT",        32,      32,      4,       512,      0,
-     "Number of large request packets", SYSGEN_TYPE_NUMERIC, "", ""},
-
-    /* --- vms-ci.8: cluster node-identity parameters ---
-     * OVMX-defined defaults (NOT VMS-authentic values) — see item vms-ci.8.
-     * SCSSYSTEMID/ALLOCLASS/VOTES/EXPECTED_VOTES/VAXCLUSTER mirror the real
-     * VMS SYSGEN parameter names; SCSNODE is the only string-typed param. */
-    { .name = "SCSSYSTEMID", .current = 0, .default_val = 0,
-      .min_val = 0, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Cluster system ID (OVMX default 0)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "ALLOCLASS", .current = 0, .default_val = 0,
-      .min_val = 0, .max_val = 255, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Allocation class for shared cluster devices",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "VOTES", .current = 1, .default_val = 1,
-      .min_val = 0, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Cluster quorum votes contributed by this node",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "EXPECTED_VOTES", .current = 1, .default_val = 1,
-      .min_val = 1, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Expected total cluster quorum votes",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "VAXCLUSTER", .current = 0, .default_val = 0,
-      .min_val = 0, .max_val = 2, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Cluster participation (0=disabled,1=enabled,2=auto)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    /* --- vms-c3b: RECNXINTERVAL, the cluster reconnection interval ---
-     * GROUNDED (CLAUDE.md Rule 8) from PUBLIC OpenVMS docs, NOT VSI source:
-     * the VSI/HPE OpenVMS System Management Utilities Reference Manual (SYSGEN
-     * Parameters) documents RECNXINTERVAL as the polling interval, in seconds,
-     * during which the OpenVMS Cluster software attempts to restore a lost
-     * connection -- default 20, and (Appendix J, "System Parameters by
-     * Category") a CLUSTER parameter marked Dynamic. Its documented SYSGEN
-     * range is minimum 1, maximum 32767 seconds. The default 20 matches
-     * scs_recnx.h's SCS_RECNX_DEFAULT_RECNXINTERVAL (the runtime reconnect
-     * loop's fallback, vms-c7d), so an unconfigured store and the runtime
-     * agree. Authored here so src/ovmx_init/ovmx_init.c's sysgen_read_param()
-     * call picks up the operator's value on (re)boot the same way it reads
-     * SCSNODE/SCSSYSTEMID/ALLOCLASS, feeding VMS_IOCTL_SYSGEN_LOAD and, from
-     * there, vms_cnxman_recnx_fsm.c; this is the AUTHORING surface only -- the
-     * reconnect wire behavior is vms-694's (scs_recnx.c), unchanged. */
-    { .name = "RECNXINTERVAL", .current = 20, .default_val = 20,
-      .min_val = 1, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Cluster reconnection interval, in seconds",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "SCSNODE", .flags = SYSGEN_F_DYNAMIC,
-      .description = "Cluster node name (SCS system name, max 6 chars)",
-      .type = SYSGEN_TYPE_STRING,
-      .str_current = "OVMX", .str_default = "OVMX" },
-
-    /* --- FC-P0.10: the remaining VMS_IOCTL_SYSGEN_LOAD parameters --- */
-
-    /* LOCKDIRWT: OVMX's OWN default is 0, not a VMS-published number --
-     * design D-DLM-1 (docs/design-faithful-cluster-executive.md): "join with
-     * LOCKDIRWT=0 and advertise it honestly" is the smallest faithful
-     * footprint (never a lock directory node unless the operator opts in). */
-    { .name = "LOCKDIRWT", .current = 0, .default_val = 0,
-      .min_val = 0, .max_val = 255, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Lock directory weight (0 = never a directory node, D-DLM-1)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    /* QDSKVOTES: 0 matches the DISK_QUORUM default below (no quorum disk
-     * configured -- it contributes no votes until one is). OVMX-defined. */
-    { .name = "QDSKVOTES", .current = 0, .default_val = 0,
-      .min_val = 0, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Quorum disk votes (0 = no quorum disk configured)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    /* CLUSTER_CREDITS: OVMX's OWN default for a port whose SYSGEN value has
-     * not been loaded -- vms_pe_fsm.h's "CLUSTER_CREDITS, 10 in the lab". Not
-     * a published VMS constant; disclosed here as an OVMX choice matching the
-     * lab's own value so an unconfigured store and a captured configuration
-     * agree. */
-    /* TIMVCFAIL: GROUNDED (rd vms-b98) by SYSGEN SHOW TIMVCFAIL on a real
-     * OpenVMS VAX V7.3, which prints current 1600, default 1600, min 100,
-     * max 65535, unit "10Ms", dynamic. The executive converts the 10 ms unit
-     * (cluster_sysgen_timvcfail_ms) and the port runs on the loaded value. */
-    { .name = "TIMVCFAIL", .current = 1600, .default_val = 1600,
-      .min_val = 100, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Virtual circuit failure detection time, 10 ms units",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "CLUSTER_CREDITS",
-      .current = SYSGEN_DEFAULT_CLUSTER_CREDITS,
-      .default_val = SYSGEN_DEFAULT_CLUSTER_CREDITS,
-      .min_val = 1, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Per-circuit send credit (OVMX default; matches the lab capture)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    /* NISCS_MAX_PKTSZ: 1498, GROUNDED in the cluster protocol spec sec 4(k)
-     * (src/kernel-core/vms_cluster_codec_hello.h's VMS_HELLO_PADDED_MAX_SCA
-     * comment: "NISCS_MAX_PKTSZ 1498+2"). Clamped to the interface MTU by
-     * the port at CLUSTER_START; this is the SYSGEN ceiling only. */
-    { .name = "NISCS_MAX_PKTSZ", .current = 1498, .default_val = 1498,
-      .min_val = 512, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Maximum NISCA packet size, bytes (spec sec 4(k))",
-      .type = SYSGEN_TYPE_NUMERIC },
-    /* MSCP_LOAD / MSCP_SERVE_ALL: published OpenVMS SYSGEN defaults (VSI/HPE
-     * OpenVMS System Management Utilities Reference Manual, SYSGEN
-     * Parameters) -- MSCP_LOAD defaults to load the MSCP server, MSCP_
-     * SERVE_ALL defaults to NOT serving every disk automatically. */
-    { .name = "MSCP_LOAD", .current = 1, .default_val = 1,
-      .min_val = 0, .max_val = 1, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Load the MSCP server (published OpenVMS default: enabled)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    { .name = "MSCP_SERVE_ALL", .current = 0, .default_val = 0,
-      .min_val = 0, .max_val = 1, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Serve every disk via MSCP (published OpenVMS default: disabled)",
-      .type = SYSGEN_TYPE_NUMERIC },
-    /* DISK_QUORUM: the quorum disk's device name, empty = none configured.
-     * String-typed like SCSNODE; NOTE the shared store's SYSGEN_STRVAL_LEN
-     * (8 bytes) is sized for SCSNODE-class strings and can TRUNCATE a longer
-     * real device name (e.g. "$102$DGA1023") -- disclosed here, not silently
-     * widened: FC-P0.10 wires the load path, not a store-format change. */
-    { .name = "DISK_QUORUM", .flags = SYSGEN_F_DYNAMIC,
-      .description = "Quorum disk device name (\"\" = none configured)",
-      .type = SYSGEN_TYPE_STRING,
-      .str_current = "", .str_default = "" },
-};
-
-#define DEFAULT_PARAM_COUNT \
-    ((uint32_t)(sizeof(default_params) / sizeof(default_params[0])))
+#define DEFAULT_PARAM_COUNT OVMX_SYSGEN_FACTORY_COUNT
 
 /* ================================================================== */
 /*                        Working Set State                           */
@@ -248,15 +89,7 @@ static char *str_trim(char *s)
 
 static void load_defaults(void)
 {
-    memset(&working_set, 0, sizeof(working_set));
-    working_set.magic   = SYSGEN_MAGIC;
-    working_set.version = SYSGEN_VERSION;
-    working_set.count   = DEFAULT_PARAM_COUNT;
-
-    for (uint32_t i = 0; i < DEFAULT_PARAM_COUNT && i < SYSGEN_MAX_PARAMS; i++) {
-        working_set.params[i] = default_params[i];
-    }
-
+    sysgen_factory_load(&working_set);
     working_set_loaded   = 1;
     working_set_modified = 0;
 }
@@ -296,6 +129,15 @@ static int load_from_file(const char *path)
     }
 
     working_set = tmp;
+    /*
+     * ...AND THE ROWS THIS SYSTEM KNOWS THAT THE FILE DOES NOT (rd vms-025).
+     * A stored .PAR carries VALUES; the parameter TABLE is the system's, and a
+     * file written before a parameter existed must not make that parameter
+     * NOSUCHP. The merged rows carry the FACTORY value -- which is already what
+     * the boot-time reader falls back to for an absent record -- so nothing
+     * running changes; only SHOW/SET/WRITE can reach the knob.
+     */
+    (void)sysgen_factory_merge(&working_set);
     working_set_loaded   = 1;
     working_set_modified = 0;
     return 0;
@@ -417,6 +259,15 @@ static void cmd_use(const char *arg)
             struct sysgen_file db;
             if ($VMS_STATUS_SUCCESS(ovmx_sysgen_acp_read(&db))) {
                 working_set = db;
+                if (working_set.count > SYSGEN_MAX_PARAMS)
+                    working_set.count = SYSGEN_MAX_PARAMS;
+                /* The PRODUCTION read, and so the one that matters most: the
+                 * rows this system knows that the stored file does not are
+                 * unioned in, exactly as the load_from_file() path does and for
+                 * the same reason (rd vms-025). Without this, SET/SHOW on a
+                 * parameter added after the file was written answers NOSUCHP on
+                 * the real runtime while the test/staging path works. */
+                (void)sysgen_factory_merge(&working_set);
                 working_set_loaded = 1;
                 working_set_modified = 0;
                 printf("%%SYSGEN-I-LOADED, %u parameters loaded from "

@@ -54,6 +54,7 @@
  * old behaviour, and is still the behaviour outside the interim configuration.
  */
 #include "cluster_test.h"
+#include "cluster_fixture.h"  /* the REAL captured frame, rd vms-025           */
 
 #include "vms_internal.h"     /* -> lock_shim/vms_internal.h (the real engine) */
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h            */
@@ -608,6 +609,225 @@ static void the_configuration_is_derived(void)
 }
 
 /* ==========================================================================
+ * 1b. THE 2026-10-09 LAB BED, AND THE FRAME IT REFUSED (rd vms-025)
+ *
+ * On a real OpenVMS VAX V7.3 mixed cluster -- VAX1 (1025) + VAX2 (1026) at
+ * LOCKDIRWT 0 and the OVMX member OVMXE (1030) meant to be at LOCKDIRWT 1 --
+ * an OVMX process took NL on the user-mode resource EVAC$WORKLOAD first, and
+ * VAX1 then sent ONE cat-0x02 op-0x01 ENQ(EX) for it. OVMXE answered NOTHING,
+ * logged "refusing a lock message from a system that has not proved it runs
+ * this implementation", and VAX1's $ENQW hung forever.
+ *
+ * THE CAUSE WAS NOT IN THE FRAME. `SYSBOOT> SET LOCKDIRWT 1` had been answered
+ * %SYSGEN-E-NOSUCHP -- the shipped OVMXVMSSYS.PAR carried no LOCKDIRWT row at
+ * all -- so OVMXE joined at weight 0, THREE members at weight 0 gave one vector
+ * entry per system, vms_ldwv_sole_directory() read FALSE, and every arm of the
+ * mixed-cluster DLM was gated off.
+ *
+ * So this section is two things a lab cannot be asked to infer again:
+ *   (a) the EXACT lab member set, built by the shipping Phase 2 fill, with its
+ *       verdict either way -- three members at 0 is NOT the configuration, and
+ *       the intended weights ARE;
+ *   (b) the EXACT captured frame (fixtures/dlm-evac-workload-enq-from-vax1.spec,
+ *       record 3907 of the lab pcap) driven through the shipping parser and the
+ *       shipping master-side door: unserved on the lab bed, GRANTED at EX on the
+ *       intended one -- and granted with values read off the LKB this executive
+ *       minted, never echoed from the frame.
+ * ========================================================================== */
+
+#define EVAC_RESNAM   "EVAC$WORKLOAD"
+/* VAX1's own values, read OFF the captured frame -- not chosen here. */
+#define EVAC_VAX_PID  0x2020021eu   /* body[20:24] */
+#define EVAC_VAX_LKID 0x1a00021du   /* body[24:28] */
+#define EVAC_VAX_HASH 0x00027e10u   /* body[128:132], the VAX's OWN hash */
+
+/* Bring up the lab's THREE-member bed: this node plus TWO real VAXes, neither
+ * proven to run this implementation, at the LOCKDIRWTs the caller names. The
+ * vector is built by the SHIPPING cnxman_ldwv_rebuild from those weights. */
+static void labbed_up(uint8_t ovmx_wt, uint8_t vax1_wt, uint8_t vax2_wt)
+{
+	struct vms_csb *csb;
+
+	mixed_up(ovmx_wt, vax1_wt);          /* this node + VAX1 */
+	csb = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)CSID_VAX2, 1);
+	ct_check(csb != NULL, "the lab's SECOND real VAX gets a CSB");
+	if (csb == NULL)
+		return;
+	cnxman_csb_set_csid(csb, CSID_VAX2);
+	cnxman_csb_set_lockdirwt(csb, vax2_wt);
+	cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
+					     VMS_CSB_F_MEMBER));
+	(void)cnxman_ldwv_rebuild(&g.cl.club, &g.cnx_ops);
+}
+
+/* The captured frame, loaded and validated by the clean-room specimen loader
+ * (sha256 over the assembled bytes, capture listed in the chain of custody).
+ * Returns the 204-byte frame, or NULL with the test already reddened. */
+static const uint8_t *evac_captured_frame(void)
+{
+	static struct vms_fixture fx;
+	static int loaded;
+	char path[600];
+	char err[VMS_FIXTURE_ERRLEN] = "";
+
+	if (loaded)
+		return fx.wire_len == VMS_CM_FRAME_LEN ? fx.bytes : NULL;
+	loaded = 1;
+	snprintf(path, sizeof(path), "%s/%s", OVMX_FIXTURE_DIR,
+		 "dlm-evac-workload-enq-from-vax1.spec");
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &fx, err,
+			     sizeof(err)) != 0) {
+		printf("       reason: %s\n", err);
+		ct_check(0, "the captured EVAC$WORKLOAD ENQ specimen loads");
+		return NULL;
+	}
+	ct_check(fx.origin == VMS_FIXTURE_ORIGIN_CAPTURE &&
+		 fx.wire_len == VMS_CM_FRAME_LEN,
+		 "the specimen is a real CAPTURE of the 204-byte frame class");
+	return fx.wire_len == VMS_CM_FRAME_LEN ? fx.bytes : NULL;
+}
+
+/* What the captured frame SAYS, read by the shipping parsers only. */
+static void the_captured_frame_is_what_the_lab_saw(void)
+{
+	const uint8_t *frame = evac_captured_frame();
+	struct vms_dlm_enq_request e;
+	struct vms_dlm_res_ident id;
+	uint32_t hash = 0;
+	uint8_t wireop = 0;
+
+	printf("-- the REAL captured frame, read by the shipping parsers --\n");
+	if (frame == NULL)
+		return;
+
+	ct_check(vms_dlm_enq_request_parse_body(body_of(frame),
+						VMS_CM_BODY_LEN, &wireop, &e) ==
+		 VMS_CODEC_OK, "the shipping ENQ parser reads VAX1's frame");
+	ct_check_eq_u32(wireop, (uint32_t)VMS_DLM_WIREOP_ENQ,
+			"  it is an op-0x01 ENQ, a new lock request");
+	ct_check_eq_u32(e.mode, LCK_K_EXMODE,
+			"  at EX -- which is COMPATIBLE with the NL this node "
+			"held, so the faithful answer was a grant");
+	ct_check_eq_u32(e.req_pid_or_lkid, EVAC_VAX_PID,
+			"  carrying VAX1's own requesting PID");
+	ct_check(e.name_len == (uint8_t)strlen(EVAC_RESNAM) &&
+		 memcmp(e.name, EVAC_RESNAM, e.name_len) == 0,
+		 "  for the resource EVAC$WORKLOAD");
+
+	ct_check(vms_dlm_res_ident_parse_body(body_of(frame), VMS_CM_BODY_LEN,
+					      &id) == VMS_CODEC_OK,
+		 "the shipping resource-identity parser reads the same frame");
+	ct_check_eq_u32(id.group, 1u, "  UIC group 1, as the lab bed was");
+	ct_check_eq_u32(id.mode, 3u,
+			"  access mode 3 (USER) -- a user-mode resource, which "
+			"is what the evacuation workload locks");
+	ct_check(vms_dlm_dir_hash_parse_body(body_of(frame), VMS_CM_BODY_LEN,
+					     &hash) == VMS_CODEC_OK &&
+		 hash == EVAC_VAX_HASH,
+		 "*** and the directory hash is the one VAX1 ITSELF put on the "
+		 "wire (Davis p. 6-50) -- the only value OVMX may assert for "
+		 "this name ***");
+}
+
+/*
+ * THE REFUSAL, REPRODUCED. The lab bed exactly: three members, every LOCKDIRWT
+ * 0 (because the operator's SET was refused), this node holding NL on
+ * EVAC$WORKLOAD and mastering it. The captured frame arrives and the master
+ * role is NOT in force -- which is the whole refusal, and it is the PREDICATE
+ * that is false, not anything about the frame.
+ */
+static void on_the_lab_bed_the_configuration_is_not_in_force(void)
+{
+	struct vms_proc app;
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0;
+
+	printf("-- the 2026-10-09 lab bed: three members, every LOCKDIRWT 0 "
+	       "--\n");
+	labbed_up(0u, 0u, 0u);
+	proc_init(&app);
+
+	ct_check(g.cl.club.ldwv.valid && g.cl.club.ldwv.n == 3u,
+		 "the vector is one entry per system (p. 6-32's all-zero rule)");
+	ct_check_eq_u32((uint32_t)sole_directory(NULL), 0u,
+			"*** so this node is NOT the sole lock directory node: "
+			"the interim mixed-cluster arm is GATED OFF ***");
+
+	/* The OVMX standby's NL, exactly as the lab's EVACWL took it. */
+	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_NLMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u,
+		 "the OVMX standby holds EVAC$WORKLOAD at NL");
+	read_resmaster(EVAC_RESNAM, &rm);
+	ct_check_eq_u32(rm.master_csid, CSID_OVMX,
+			"  and this node MASTERS it (no other system had it)");
+
+	/* The engine's own two reads the directory role asks first. BOTH were
+	 * true on the lab node, which is why the console's "does not master"
+	 * line was false and why it was replaced. */
+	ct_check_eq_u32((uint32_t)vms_lock_dlm_name_mastered_here(EVAC_RESNAM),
+			1u,
+			"*** the engine says this node MASTERS the name -- the "
+			"console line that said 'does not master' was wrong ***");
+	ct_check_eq_u32((uint32_t)vms_lock_dlm_name_in_use(EVAC_RESNAM), 1u,
+			"  and that it holds locks on it");
+	mixed_down();
+}
+
+/*
+ * ...AND THE SAME FRAME IS SERVED once the configuration really holds. Nothing
+ * about the frame changed: only this node's LOCKDIRWT, which is what the
+ * operator was trying to set at SYSBOOT and could not.
+ */
+static void with_lockdirwt_set_the_captured_frame_is_granted(void)
+{
+	const uint8_t *frame = evac_captured_frame();
+	struct vms_dlm_master_result res;
+	struct vms_resmaster_args rm;
+	struct vms_proc app;
+	uint32_t lkid = 0;
+
+	printf("-- the intended bed (this node LOCKDIRWT 1): the SAME captured "
+	       "frame is GRANTED --\n");
+	if (frame == NULL)
+		return;
+	labbed_up(1u, 0u, 0u);
+	proc_init(&app);
+
+	ct_check(g.cl.club.ldwv.valid && g.cl.club.ldwv.n == 1u,
+		 "LOCKDIRWT 1 here and 0 on both VAXes is a ONE-entry vector");
+	ct_check_eq_u32((uint32_t)sole_directory(NULL), 1u,
+			"*** and this node IS the sole lock directory node ***");
+
+	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_NLMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u,
+		 "the OVMX standby holds EVAC$WORKLOAD at NL, as before");
+	ct_check_eq_u32((uint32_t)vms_lock_dlm_name_mastered_here(EVAC_RESNAM),
+			1u, "  and masters it");
+
+	vax_served_as_master(frame, (vms_csid_t)CSID_VAX, 0u, &res);
+	ct_check_eq_u32(res.outcome, (uint32_t)VMS_DLM_MASTER_GRANTED,
+			"*** VAX1's captured ENQ(EX) is GRANTED by this node as "
+			"the resource's master (p. 6-31 outcome (a)) ***");
+	ct_check_eq_u32(res.granted_mode, LCK_K_EXMODE,
+			"  at EX, the mode the frame asked for and the engine "
+			"recorded on the LKB");
+	ct_check_eq_u32(res.req_lkid, EVAC_VAX_PID,
+			"  and the requester handle is VAX1's own, echoed where "
+			"the protocol says the requester's handle goes");
+	ct_check(res.master_lkid != 0u && res.master_lkid != EVAC_VAX_LKID,
+		 "*** while the MASTER handle is one THIS executive minted -- "
+		 "not the frame's body[24:28] plumbed through (RULE B) ***");
+
+	read_resmaster(EVAC_RESNAM, &rm);
+	ct_check_eq_u32(rm.master_csid, CSID_OVMX,
+			"  and the resource still has exactly ONE master: this "
+			"node");
+	ct_check_eq_u32(rm.remote_holder_csid, CSID_VAX,
+			"  with VAX1 recorded as the remote holder");
+	mixed_down();
+}
+
+/* ==========================================================================
  * 2. rd vms-025 -- THE VAX LOCKED IT FIRST
  * ========================================================================== */
 static void vax_first_then_ovmx_routes_to_the_vax(void)
@@ -1066,6 +1286,10 @@ int main(void)
 	       "ONE master per resource in a MIXED cluster, R1) ===\n");
 
 	the_configuration_is_derived();
+
+	the_captured_frame_is_what_the_lab_saw();
+	on_the_lab_bed_the_configuration_is_not_in_force();
+	with_lockdirwt_set_the_captured_frame_is_granted();
 
 	vax_first_then_ovmx_routes_to_the_vax();
 	with_no_entry_the_enq_masters_locally();

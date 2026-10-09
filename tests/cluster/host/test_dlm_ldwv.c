@@ -823,6 +823,48 @@ static void club_mixed_cluster_builds_the_vaxs_vector(void)
 }
 
 /*
+ * EVERY REBUILD SAYS WHERE THIS NODE LANDED (rd vms-025, the 2026-10-09 lab
+ * finding).
+ *
+ * "Am I the sole lock directory node?" is the predicate the whole interim
+ * mixed-cluster DLM arm stands behind, and on the real-VAX lab bed it was FALSE
+ * for a reason nothing on OPA0: named: the operator's `SET LOCKDIRWT 1` had been
+ * refused at SYSBOOT, so the node joined at weight 0 and the arm was gated off
+ * silently. The verdict is now one %CNXMAN line per rebuild -- and it is DERIVED
+ * from the vector that just came out, so it cannot say one thing while
+ * vms_ldwv_sole_directory() says another.
+ */
+static void every_rebuild_announces_the_directory_verdict(void)
+{
+	struct vms_cluster cl;
+	struct cnxman_ops ops;
+	struct fake_cnx f;
+
+	printf("--- rd vms-025: every rebuild SAYS whether this node is the "
+	       "sole directory node ---\n");
+
+	/* The lab's measured bed: this node and a real VAX, both at 0. */
+	mixed_club(&cl, &ops, &f, 0u, 0u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "every weight 0 builds");
+	ct_check_eq_u32((unsigned long)vms_ldwv_sole_directory(&cl.club.ldwv),
+			0ul, "  and this node is NOT the sole directory node");
+	ct_check(strstr(f.last_log, "NOT the sole lock directory node") != NULL,
+		 "*** and the console SAYS SO -- the lab does not have to "
+		 "infer it from a refusal ***");
+
+	/* The interim configuration the mixed-cluster arm needs. */
+	mixed_club(&cl, &ops, &f, 1u, 0u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "OVMX 1 / VAX 0 builds");
+	ct_check_eq_u32((unsigned long)vms_ldwv_sole_directory(&cl.club.ldwv),
+			1ul, "  and this node IS the sole directory node");
+	ct_check(strstr(f.last_log, "SOLE lock directory node") != NULL &&
+		 strstr(f.last_log, "NOT the sole") == NULL,
+		 "*** and the console says THAT instead ***");
+}
+
+/*
  * THE ALL-OVMX GATE (vms-3e3, rung A"): vms_ldwv_all_ovmx() decides whether
  * OVMX's own directory hash may be grounded. Its whole job is to be a STRICTER
  * guard than the split-brain gate: a foreign member with a LEARNED weight passes
@@ -890,6 +932,7 @@ int main(void)
 	club_local_withhold_refused_when_a_peer_advertised();
 	club_split_brain_gate_refuses_a_foreign_member();
 	club_mixed_cluster_builds_the_vaxs_vector();
+	every_rebuild_announces_the_directory_verdict();
 	all_ovmx_gate_governs_grounding();
 	return ct_summary("test_dlm_ldwv");
 }

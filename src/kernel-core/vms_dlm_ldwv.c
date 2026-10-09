@@ -606,6 +606,26 @@ enum vms_ldwv_status cnxman_ldwv_rebuild(struct vms_club *club,
 			      "the unadvertised reading: no system has "
 			      "advertised a LOCKDIRWT");
 	club->ldwv.valid = 1u;
+	/*
+	 * SAY WHERE THIS NODE LANDED IN THE VECTOR IT JUST BUILT (rd vms-025).
+	 *
+	 * "Am I the sole lock directory node?" is the predicate the whole interim
+	 * mixed-cluster DLM arm stands behind, and on a real-VAX lab bed it was
+	 * FALSE for a reason nothing on the console named: the operator's
+	 * `SET LOCKDIRWT 1` had been refused at SYSBOOT, so this node joined at
+	 * weight 0, the all-zero rule gave one entry per system, and every arm of
+	 * the mixed-cluster DLM was gated off silently. One line per rebuild --
+	 * which is once per state transition, not per lookup -- derived from the
+	 * vector that now stands and from nothing else.
+	 */
+	if (vms_ldwv_sole_directory(&club->ldwv))
+		ldwv_log(ops, "%CNXMAN, lock directory weight vector built: "
+			      "every entry is this node's -- this node is the "
+			      "SOLE lock directory node of the cluster");
+	else
+		ldwv_log(ops, "%CNXMAN, lock directory weight vector built: "
+			      "this node is NOT the sole lock directory node -- "
+			      "entries direct root names at other systems too");
 	return VMS_LDWV_OK;
 }
 

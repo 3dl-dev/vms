@@ -42,3 +42,26 @@ set_tests_properties(console_policy_unit PROPERTIES
     LABELS "unit;ovmx_init;console"
     TIMEOUT 10
 )
+
+# test_sysgen_factory: rd vms-025 -- the SYSGEN parameter table is the SYSTEM's,
+# not the parameter FILE's. Compiles against the REAL shared factory table
+# (src/libvms/include/sysgen_factory.h) that SYSGEN.EXE and SYSBOOT both build
+# on, reads the REAL shipped OVMXVMSSYS.PAR seed off disk, and derives the set of
+# parameters it requires by scanning the shipping text of ovmx_init.c's cluster
+# load. Pure: no /dev/vms, no boot, no RMS -- the header's readers are inline and
+# this test never calls them.
+add_executable(test_sysgen_factory test_sysgen_factory.c)
+target_include_directories(test_sysgen_factory PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+)
+target_compile_definitions(test_sysgen_factory PRIVATE
+    OVMX_REPO_ROOT="${CMAKE_SOURCE_DIR}")
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_sysgen_factory PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME sysgen_factory_unit COMMAND test_sysgen_factory)
+set_tests_properties(sysgen_factory_unit PROPERTIES
+    LABELS "unit;ovmx_init;sysgen;cluster"
+    TIMEOUT 10
+)

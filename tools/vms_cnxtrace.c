@@ -315,9 +315,13 @@ static void cnxtrace_print_dlm(void)
         return;
     }
 
+    /* `soledir` is vms_ldwv_sole_directory() as the EXECUTIVE read it -- the
+     * one predicate the interim mixed-cluster arm stands behind (rd vms-025).
+     * A lab that can see this does not have to infer it from a refusal. */
     printf("%%CNXTRACE-I-DLM, lock-manager wire arm: connected=%u lockdirwt=%u "
-           "gen=%u proxy_lkbs=%u\n",
+           "soledir=%u gen=%u proxy_lkbs=%u\n",
            (unsigned)v->connected, (unsigned)v->lockdirwt,
+           (unsigned)v->sole_directory,
            (unsigned)v->rebuild_generation, (unsigned)v->proxy_lkbs);
     printf("%%CNXTRACE-I-DLMREQ, requests sent=%u received=%u grants sent=%u "
            "received=%u declined=%u\n",

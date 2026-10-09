@@ -246,11 +246,43 @@ struct vms_dlm_scs {
 				       /* system matched to a request of OURS    */
 	uint32_t dir_self_mastered;   /* lookups answered by SERVING as master  */
 				       /* (p. 6-31 outcome (a)), not redirected  */
+
+	/*
+	 * WHY A MIXED-CLUSTER MESSAGE WAS REFUSED (rd vms-025, the 2026-10-09
+	 * lab finding). The refusal used to be ONE counter and ONE console line
+	 * -- "a system that has not proved it runs this implementation" -- which
+	 * is true of every refusal here and therefore says nothing about which
+	 * of the two very different causes fired. On the lab bed the cause was
+	 * the PREDICATE (this node was not the sole lock-directory node, because
+	 * LOCKDIRWT never reached the executive), and the console could not tell
+	 * that from "the opcode has no mixed-cluster answer". Two counters and
+	 * two lines, because they are two facts.
+	 */
+	uint32_t mixed_refused_not_sole_dir; /* the interim predicate is false */
+	uint32_t mixed_refused_op;    /* no grounded mixed-cluster answer for   */
+				       /* this opcode, predicate or not          */
+	uint32_t dir_master_unserved; /* we DO master the name and still could  */
+				       /* not serve it: counted apart from       */
+				       /* dir_self_held, which means we do NOT   */
 	uint8_t  dir_said_self_held;
 	uint8_t  dir_said_unanswered;
 	uint8_t  dir_said_misaddressed;
 	uint8_t  dir_said_tr_redirect;
 	uint8_t  dir_said_mixed;
+	uint8_t  dir_said_master_unserved;
+	uint8_t  said_refused_not_sole_dir;
+	uint8_t  said_refused_op;
+};
+
+/*
+ * WHY THE MIXED-CLUSTER ARM WOULD NOT TAKE A FRAME. Derived on every call from
+ * executive state and the frame's own opcode -- never remembered.
+ */
+enum dlm_mixed_refusal {
+	DLM_MIXED_SERVE_OK = 0,      /* nothing refused it                     */
+	DLM_MIXED_NOT_SOLE_DIR,      /* vms_ldwv_sole_directory() is false     */
+	DLM_MIXED_OP_UNSUPPORTED,    /* no grounded answer exists for this op  */
+	DLM_MIXED_SERVE_DECLINED     /* the engine or the codec declined       */
 };
 
 /* ==========================================================================
@@ -455,7 +487,7 @@ static int dlm_arm_all_ovmx_op(void *ctx)
  * and is deliberately not attempted here (rd vms-dc2 / vms-b5b0).
  * ===========================================================================
  */
-static int dlm_arm_sole_directory(struct vms_dlm_scs *d)
+static int dlm_arm_sole_directory(const struct vms_dlm_scs *d)
 {
 	if (d == NULL || d->cl == NULL)
 		return 0;
@@ -1050,14 +1082,60 @@ static uint32_t dlm_arm_eng_dir_claim_self(void *ctx, const char *name,
  * request is not served, no lock state is created for it, and nothing is
  * emitted at it. Counted, never silent.
  */
+/*
+ * ...AND SAY WHICH OF THE TWO CAUSES IT WAS (rd vms-025, 2026-10-09).
+ *
+ * Both lines are the same refusal; they differ in the ONE thing an operator
+ * watching a mixed cluster needs:
+ *
+ *   NOT THE SOLE DIRECTORY NODE -- the interim configuration is not in force on
+ *     this node right now (vms_ldwv_sole_directory() reads the vector the
+ *     connection manager built from LEARNED LOCKDIRWTs). That is a
+ *     CONFIGURATION fact the operator can change, and the real-VAX lab spent a
+ *     whole run not knowing it was the cause: `SYSBOOT> SET LOCKDIRWT 1`
+ *     answered %SYSGEN-E-NOSUCHP, so this node joined at weight 0, the vector
+ *     came out one entry per system, and every arm of the mixed-cluster DLM was
+ *     gated off while the console said only "has not proved it runs this
+ *     implementation".
+ *
+ *   NO GROUNDED ANSWER FOR THE OPCODE -- the configuration IS in force and the
+ *     frame is still not one this implementation has a grounded mixed-cluster
+ *     answer for. That is a PROTOCOL gap, not a knob.
+ *
+ * The predicate is READ here, not remembered, and the line is said once per
+ * cause per boot (a refused peer can retry at 35 frames a second).
+ */
+/* The say-once helper, defined with the directory role it was written for. */
+static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
+			    const char *msg);
+
+static void dlm_arm_say_refusal(struct vms_dlm_scs *d)
+{
+	if (!dlm_arm_sole_directory(d)) {
+		d->mixed_refused_not_sole_dir++;
+		dlm_arm_dir_say(d, &d->said_refused_not_sole_dir,
+			"%DLM, refusing a lock message from a system that has "
+			"not proved it runs this implementation: this node is "
+			"NOT the sole lock directory node of this cluster, so "
+			"the mixed-cluster lock arm is not in force -- check "
+			"LOCKDIRWT on every member");
+		return;
+	}
+	d->mixed_refused_op++;
+	dlm_arm_dir_say(d, &d->said_refused_op,
+		"%DLM, refusing a lock message from a system that has not "
+		"proved it runs this implementation: this node IS the sole "
+		"lock directory node, and this message is not one with a "
+		"grounded mixed-cluster answer");
+}
+
 static int dlm_arm_peer_is_ours(struct vms_dlm_scs *d,
 				const struct dlm_scs_request *req)
 {
 	if (req->peer_is_ours)
 		return 1;
 	d->foreign_refused++;
-	dlm_arm_log(d, "%DLM, refusing a lock message from a system that has "
-		       "not proved it runs this implementation");
+	dlm_arm_say_refusal(d);
 	return 0;
 }
 
@@ -1700,8 +1778,10 @@ static int dlm_arm_serve_enq_frame(struct vms_dlm_scs *d,
  */
 static int dlm_arm_dir_serve_as_master(struct vms_dlm_scs *d,
 				       const struct dlm_scs_request *req,
-				       struct dlm_scs_reply *reply)
+				       struct dlm_scs_reply *reply,
+				       enum dlm_mixed_refusal *why)
 {
+	*why = DLM_MIXED_SERVE_OK;
 	if (req->opcode != (uint8_t)VMS_DLM_WIREOP_ENQ &&
 	    req->opcode != (uint8_t)VMS_DLM_WIREOP_CONVERT) {
 		/*
@@ -1715,16 +1795,19 @@ static int dlm_arm_dir_serve_as_master(struct vms_dlm_scs *d,
 		 * system masters, so this is a path a real capture has never
 		 * shown rather than one being refused in the common case.
 		 */
+		*why = DLM_MIXED_OP_UNSUPPORTED;
 		return -1;
 	}
 	if (!dlm_arm_sole_directory(d)) {
 		/* Outside the interim configuration this node does not act as
 		 * master for a system that has not proved it runs this
 		 * implementation -- the behaviour before rd vms-db2a. */
+		*why = DLM_MIXED_NOT_SOLE_DIR;
 		return -1;
 	}
 	if (dlm_arm_serve_enq_frame(d, req, reply) != 0) {
 		d->mixed_declined++;
+		*why = DLM_MIXED_SERVE_DECLINED;
 		return -1;
 	}
 	d->dir_self_mastered++;
@@ -1736,6 +1819,7 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			      const struct vms_dlm_res_ident *id,
 			      struct dlm_scs_reply *reply)
 {
+	enum dlm_mixed_refusal why = DLM_MIXED_SERVE_OK;
 	enum vms_dlm_dir_outcome o;
 	vms_csid_t master = 0u;
 	uint32_t written = 0u;
@@ -1743,16 +1827,31 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 
 	/* p. 6-51 outcome (a) FIRST: a name this node masters is resolved as the
 	 * master, never answered from the directory table. */
-	if (dlm_arm_dir_name_mastered(id) &&
-	    dlm_arm_dir_serve_as_master(d, req, reply) == 0)
-		return 0;
+	if (dlm_arm_dir_name_mastered(id)) {
+		if (dlm_arm_dir_serve_as_master(d, req, reply, &why) == 0)
+			return 0;
+		/*
+		 * WE DO MASTER IT and still could not serve it. Said as that,
+		 * and not as "this node ... does not master" -- which is what
+		 * this path used to print, and which sent a real-VAX lab after
+		 * the wrong fault for an entire run (rd vms-025, 2026-10-09).
+		 * The WHY is named by the RULE C line the caller reaches next.
+		 */
+		d->dir_master_unserved++;
+		dlm_arm_dir_say(d, &d->dir_said_master_unserved,
+			"%DLM, a VMS system asked this node, its lock directory, "
+			"for a resource this node MASTERS, and it could not be "
+			"served as master: not answered");
+		return -1;
+	}
 
 	if (dlm_arm_dir_name_held(id)) {
 		/*
-		 * We hold locks on the name but do NOT master it (or cannot
-		 * serve as master in this configuration): some other system is
-		 * the master, so "you master it" would be false and a guess.
-		 * Not answered, counted, said once.
+		 * We hold locks on the name but do NOT master it: some other
+		 * system is the master, so "you master it" would be false and a
+		 * guess. Not answered, counted, said once. (A name we DO master
+		 * can no longer reach here -- it is answered, or named as
+		 * unserved, above.)
 		 */
 		d->dir_self_held++;
 		dlm_arm_dir_say(d, &d->dir_said_self_held,
@@ -1780,12 +1879,12 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 		/* The table names THIS node -- including a name-only record of
 		 * this node's own mastery (rd vms-db2a). Same p. 6-51 outcome as
 		 * the engine read above, reached from the table instead. */
-		if (dlm_arm_dir_serve_as_master(d, req, reply) == 0)
+		if (dlm_arm_dir_serve_as_master(d, req, reply, &why) == 0)
 			return 0;
-		d->dir_self_held++;
-		dlm_arm_dir_say(d, &d->dir_said_self_held,
+		d->dir_master_unserved++;
+		dlm_arm_dir_say(d, &d->dir_said_master_unserved,
 			"%DLM, a VMS system asked this node, its lock directory, "
-			"for a resource this node masters and it could not be "
+			"for a resource this node MASTERS, and it could not be "
 			"served as master: not answered");
 		return -1;
 	}
@@ -2338,6 +2437,10 @@ static void dlm_arm_project_state(const struct vms_cluster *cl,
 				  struct vms_dlm_scs_view *out)
 {
 	out->lockdirwt          = (uint8_t)cl->params.lockdirwt;
+	/* The interim configuration's own predicate, READ off the vector the
+	 * connection manager built (rd vms-025) -- so a diagnostic can see the
+	 * one fact that decides whether the mixed-cluster arm is in force. */
+	out->sole_directory     = (uint8_t)(dlm_arm_sole_directory(d) ? 1 : 0);
 	out->rebuild_generation = vms_ldwv_generation(&cl->club.ldwv);
 	/* "the VMS$VAXcluster CDT carrying cat-02 is open" -- read as the CLUB's
 	 * own member count being more than this node, which is exactly when

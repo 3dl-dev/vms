@@ -381,7 +381,15 @@ struct vms_dlm_scs_view {
 	uint8_t  lockdirwt;             /* OUR advertised LOCKDIRWT (0 = never directory) */
 	uint8_t  rebuild_phase;         /* enum vms_dlm_rebuild_phase */
 	uint8_t  connected;             /* the VMS$VAXcluster CDT carrying cat-02 is open */
-	uint8_t  pad0;
+	/*
+	 * IS THIS NODE THE SOLE LOCK DIRECTORY NODE right now
+	 * (vms_ldwv_sole_directory, rd vms-025)? The ONE predicate the whole
+	 * interim mixed-cluster DLM arm stands behind, and the one a real-VAX
+	 * lab had no way to read: it took the former `pad0` byte, so the wire
+	 * row's size is unchanged. DERIVED from the weight vector on every
+	 * projection -- never a configured flag (INV-6).
+	 */
+	uint8_t  sole_directory;
 	uint32_t rebuild_generation;    /* bumped every transition; invalidates dir caches */
 	uint32_t proxy_lkbs;            /* LKBs mastered ELSEWHERE that we hold */
 	uint32_t mastered_resources;    /* RSBs this node masters */

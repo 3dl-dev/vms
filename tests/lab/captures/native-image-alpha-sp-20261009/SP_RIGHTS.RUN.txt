@@ -1,0 +1,378 @@
+=== SEMPROBE rights BEGIN ===
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.00  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier added
+Event time:                9-OCT-2026 15:28:43.00
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_U1                    
+Identifier value:         %X00ED00ED      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_IDENT.UIC1 st=00000001 resid=00ED00ED
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.02  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier added
+Event time:                9-OCT-2026 15:28:43.02
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_U2                    
+Identifier value:         %X00ED00EE      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_IDENT.UIC2 st=00000001
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.04  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier added
+Event time:                9-OCT-2026 15:28:43.03
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID                    
+Identifier value:         %X80010002      
+Attributes:               RESOURCE
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_IDENT.GENERAL st=00000001 general=1 bit30=0
+RDB.ADD_IDENT.DUP_NAME st=00000094
+RDB.ADD_IDENT.DUP_VALUE st=0000222C
+RDB.ADD_IDENT.DUP_UIC st=0000222C
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.07  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier added
+Event time:                9-OCT-2026 15:28:43.06
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          1BAD                            
+Identifier value:         %X80010003      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_IDENT.BADNAME st=00000001
+RDB.ADD_IDENT.EMPTYNAME st=00002224
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.09  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier added
+Event time:                9-OCT-2026 15:28:43.08
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+Identifier value:         %X80010004      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_IDENT.LONGNAME st=00000001
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.11  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier added
+Event time:                9-OCT-2026 15:28:43.10
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID2                   
+Identifier value:         %X80010005      
+Attributes:               DYNAMIC
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_IDENT.GENERAL2 st=00000001 general=1
+RDB.GENERAL.NEXT_VALUE same=0
+RDB.ASCTOID.GENERAL st=00000001 id=added=1 attr=00000001
+RDB.ASCTOID.UIC st=00000001 id=00ED00ED attr=00000000
+RDB.ASCTOID.NONE st=000021EC
+RDB.IDTOASC.GENERAL st=00000001 len=12 name="SP_RIGHTS_ID" attr=00000001
+RDB.IDTOASC.UIC st=00000001 name="SP_RIGHTS_U2"
+RDB.IDTOASC.NONE st=000021EC
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:43.13  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier granted
+Event time:                9-OCT-2026 15:28:43.13
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID                    
+Identifier value:         %X80010002      
+Attributes:               none
+Holder name:              SP_RIGHTS_U1                    
+Holder owner:             [SP_RIGHTS_U1]
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_HOLDER.1 st=00000001
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:44.76  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier granted
+Event time:                9-OCT-2026 15:28:44.75
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID                    
+Identifier value:         %X80010002      
+Attributes:               RESOURCE
+Holder name:              SP_RIGHTS_U2                    
+Holder owner:             [SP_RIGHTS_U2]
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_HOLDER.2 st=00000001
+RDB.ADD_HOLDER.DUP st=0000222C
+RDB.ADD_HOLDER.NOSUCH_HOLDER st=000021EC
+RDB.ADD_HOLDER.NOSUCH_ID st=000021EC
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:44.82  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier granted
+Event time:                9-OCT-2026 15:28:44.81
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID2                   
+Identifier value:         %X80010005      
+Attributes:               none
+Holder name:              SP_RIGHTS_U1                    
+Holder owner:             [SP_RIGHTS_U1]
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ADD_HOLDER.ID2 st=00000001
+RDB.FIND_HOLDER.1 st=00000001 holder=00ED00ED holder_hi=00000000 attr=00000000
+RDB.FIND_HOLDER.2 st=00000001 holder=00ED00EE holder_hi=00000000 attr=00000001
+RDB.FIND_HOLDER.3 st=000021EC holder=EEEEEEEE holder_hi=EEEEEEEE attr=A5A5A5A5
+RDB.FINISH_RDB.HOLDER st=0000013C ctx=00000000
+RDB.FIND_HELD.1 st=00000001 id=ID=1 id=ID2=0 attr=00000000
+RDB.FIND_HELD.2 st=00000001 id=ID=0 id=ID2=1 attr=00000000
+RDB.FIND_HELD.3 st=000021EC id=ID=0 id=ID2=0 attr=A5A5A5A5
+RDB.FINISH_RDB.HELD st=0000013C ctx=00000000
+RDB.FIND_HELD.H2 st=00000001 id=ID=1
+RDB.FIND_HOLDER.NOSUCH_ID st=000021EC
+RDB.FINISH_RDB.ZERO st=0000013C
+RDB.GRANTID.BY_ID st=00000001
+RDB.GRANTID.AGAIN st=00000009
+RDB.REVOKID.BY_ID st=00000009
+RDB.REVOKID.AGAIN st=00000001
+RDB.GRANTID.BY_NAME st=00000001
+RDB.REVOKID.BY_NAME st=00000009
+RDB.GRANTID.NONAME st=000021EC
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:44.89  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier revoked
+Event time:                9-OCT-2026 15:28:44.88
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID                    
+Identifier value:         %X80010002      
+Attributes:               none
+Holder name:              SP_RIGHTS_U1                    
+Holder owner:             [SP_RIGHTS_U1]
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.REM_HOLDER st=00000001
+RDB.REM_HOLDER.AGAIN st=000021EC
+RDB.REM_HOLDER.NOSUCH_ID st=000021EC
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:44.92  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier removed
+Event time:                9-OCT-2026 15:28:44.91
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID                    
+Identifier value:         %X80010002      
+Attributes:               RESOURCE
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.REM_IDENT st=00000001
+RDB.REM_IDENT.AGAIN st=000021EC
+RDB.FIND_HOLDER.AFTER_REM st=000021EC
+RDB.FIND_HELD.AFTER_REM st=00000001 id=ID2=1
+RDB.SETPRV.OFF st=00000001
+RDB.NOPRIV.GRANTID st=00000024
+RDB.NOPRIV.ADD_IDENT st=00000094
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:44.94  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier granted
+Event time:                9-OCT-2026 15:28:44.94
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID2                   
+Identifier value:         %X80010005      
+Attributes:               none
+Holder name:              SP_RIGHTS_U2                    
+Holder owner:             [SP_RIGHTS_U2]
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.NOPRIV.ADD_HOLDER st=00000001
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:44.98  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier revoked
+Event time:                9-OCT-2026 15:28:44.97
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID2                   
+Identifier value:         %X80010005      
+Attributes:               none
+Holder name:              SP_RIGHTS_U1                    
+Holder owner:             [SP_RIGHTS_U1]
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.NOPRIV.REM_HOLDER st=00000001
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:45.00  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier removed
+Event time:                9-OCT-2026 15:28:45.00
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_ID2                   
+Identifier value:         %X80010005      
+Attributes:               DYNAMIC
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.NOPRIV.REM_IDENT st=00000001
+RDB.NOPRIV.ASCTOID st=00000001 id=00ED00ED
+RDB.NOPRIV.FIND_HELD st=000021EC
+RDB.SETPRV.ON st=00000001
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:45.02  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier removed
+Event time:                9-OCT-2026 15:28:45.02
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_U1                    
+Identifier value:         %X00ED00ED      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:46.76  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier removed
+Event time:                9-OCT-2026 15:28:46.76
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          SP_RIGHTS_U2                    
+Identifier value:         %X00ED00EE      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:46.78  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier removed
+Event time:                9-OCT-2026 15:28:46.78
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          1BAD                            
+Identifier value:         %X80010003      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 15:28:46.80  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 2049
+Auditable event:          Identifier removed
+Event time:                9-OCT-2026 15:28:46.80
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.][SYSMGR]SP_RIGHTS.EXE;1
+Identifier name:          RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR
+Identifier value:         %X80010004      
+Attributes:               none
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+
+RDB.ASCTOID.AFTER_CLEANUP st=000021EC
+=== SEMPROBE rights END ===

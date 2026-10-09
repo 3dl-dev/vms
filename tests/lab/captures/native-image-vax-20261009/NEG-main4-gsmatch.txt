@@ -1,0 +1,9 @@
+$ DEFINE MYSHR SYS$SCRATCH:MYSHR.EXE
+%DCL-I-SUPERSEDE, previous value of MYSHR has been superseded
+$ RUN MAIN4
+%DCL-W-ACTIMAGE, error activating image MYSHR
+-CLI-E-IMGNAME, image file $2$DUA0:[SYS0.][SYSMGR]MYSHR.EXE;1
+-SYSTEM-F-SHRIDMISMAT, ident mismatch with shareable image
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X100020BC"
+$ DEASSIGN MYSHR

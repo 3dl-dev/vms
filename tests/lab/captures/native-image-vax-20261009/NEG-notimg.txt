@@ -1,0 +1,7 @@
+$ COPY HELLO.MAR NOTIMG.EXE
+$ RUN NOTIMG
+%DCL-W-ACTIMAGE, error activating image NOTIMG
+-CLI-E-IMGNAME, image file $2$DUA0:[SYS0.][SYSMGR]NOTIMG.EXE;1
+-IMGACT-F-BADHDR, an error was discovered in the image header
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X104D8C84"

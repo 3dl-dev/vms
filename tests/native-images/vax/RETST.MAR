@@ -1,0 +1,8 @@
+        .TITLE  RETST   OVMX vms-3b3f exit-status probe
+; Our own test program: no shareable references at all; returns a
+; distinctive condition value so the activator's exit path is observable.
+        .PSECT  RCODE,EXE,NOWRT,QUAD
+        .ENTRY  RETST,^M<>
+        MOVL    #^X0FEDC0A9,R0
+        RET
+        .END    RETST

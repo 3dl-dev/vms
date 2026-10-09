@@ -122,7 +122,8 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
     # mk_evacwl_native.sh). LINK.EXE's native backend exists for x86_64 and
     # aarch64 only (src/vmslink/CMakeLists.txt, OVMX_LINK_NATIVE_ARCH), so on any
     # other arch the subject image cannot exist and the suite is not registered
-    # (rd vms-f09).
+    # (rd vms-f09). TEMPORARY: a capability gap, not a property of the test --
+    # remove this condition when LINK.EXE produces native Alpha images (rd vms-b2b).
     if(_name STREQUAL "test_syssvc_ci6_evacwl" AND
        NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
         continue()

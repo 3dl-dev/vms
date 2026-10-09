@@ -442,6 +442,7 @@ dlm-xnode-redirect-target-dropped
 spawn-input-via-linux-path
 spawn-arm-gone-subprocess-not-completed
 release-leader-zombie-pcb-kept
+creprc-detached-intermediate-not-held
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -3128,6 +3129,22 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    creprc-detached-intermediate-not-held)
+        case "$_f" in
+        facility)     echo "\$CREPRC of a DETACHED process (sys\$creprc PRC\$M_DETACH, libvms sys_process.c, rd vms-fe7) -- the new process enters the executive's table while its intermediate still links it to the creator, so it starts with no copied process logical names";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_creprc_detached_lnm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The un-ticketed detached path releases the intermediate BEFORE the new process registers, so the intermediate usually exits first: the new process is reparented to the nearest subreaper, which the executive then treats as its fork parent and copies that row's LNM\$PROCESS names into it. On a booted node that is PID 1's plain SYS\$INPUT/OUTPUT/COMMAND (vms-fe7). The suite's creator is the subreaper and holds a marker name; detached subjects now see it. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+no detached process started with a copy of its creator's (or any) process logical names
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
     release-leader-zombie-pcb-kept)
         case "$_f" in
         facility)     echo "process deletion at the last /dev/vms close (vms_dev_release, the Linux module rind) -- the moment the executive learns a process ended and fires its creator's armed /NOWAIT completion (rd vms-003b)";;
@@ -8360,6 +8377,12 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    creprc-detached-intermediate-not-held)
+        # UNIQUE TEXT: where the grandchild takes its end of the intermediate's
+        # release pipe. The mutation drops it at once on the un-ticketed path --
+        # the pre-fix behaviour (the intermediate exits before the grandchild
+        # has registered); the ticketed path is left as it is.
+        sed -i 's|^            ticket_sync = syncfd\[1\];$|            ticket_sync = syncfd[1]; if (!use_ticket) { close(ticket_sync); ticket_sync = -1; } /* NEGCTL creprc-detached-intermediate-not-held */|' "$_file";;
     release-leader-zombie-pcb-kept)
         sed -i 's|atomic_read(\&current->signal->live) != 0)|!thread_group_empty(current)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file";;
     spawn-arm-gone-subprocess-not-completed)

@@ -81,15 +81,11 @@ void kif_xport_munmap(void *addr, unsigned long length)
 
 /*
  * The executive's terminal line discipline (src/kernel/vms_tt_linux.c) is
- * registered under N_DEVELOPMENT (29); TIOCSETD selects it. TIOCSETD's request
- * number is the arch's own: 0x5423 on the asm-generic ioctl numbering
- * (x86_64, aarch64), _IOW('t', 1, int) on Alpha.
+ * registered under N_DEVELOPMENT (29); TIOCSETD selects it. TIOCSETD is 0x5423
+ * on every Linux this runs on -- asm-generic (x86_64, aarch64) and Alpha alike
+ * (arch/alpha/include/uapi/asm/ioctls.h keeps the 0x54xx tty numbers).
  */
-#if defined(__alpha__)
-#define KIF_TIOCSETD 0x80047401UL
-#else
 #define KIF_TIOCSETD 0x5423UL
-#endif
 #define KIF_N_VMS_TT 29
 
 int kif_xport_tty_attach(int ttyfd, unsigned long bind_req, void *bind_args)

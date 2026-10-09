@@ -46,6 +46,12 @@
 #include <sys/socket.h>
 #include "ovmx_cli.h"       /* the CLI callback channel (vms-cded) */
 
+/* STS$M_INHIB_MSG: a condition value whose message has already been
+ * displayed. DCL does not display it again (vms-3b3f: the image activator
+ * reports its own activation failure, as on VMS, and returns the condition
+ * message-inhibited). */
+#define DCL_STS_M_INHIB_MSG 0x10000000u
+
 int cmd_wait(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
@@ -2117,7 +2123,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                 int exited = 0;
                 uint32_t gx = vms_kif_getexit(&cond, &exited);
                 if (gx == SS$_NORMAL && exited) {
-                    if (!(cond & 1))
+                    if (!(cond & 1) && !(cond & DCL_STS_M_INHIB_MSG))
                         dcl_error("DCL", (int)(cond & 7), "ABORT",
                                   "image %s exited with error status %%X%08X",
                                   display_name, (unsigned)cond);
@@ -2176,10 +2182,36 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         if (exec_pipe[0] >= 0)
             close(exec_pipe[0]);
         execv(linux_path, argv);
-        /* execve() itself failed: the image was NEVER entered. Hand the real
-         * errno to DCL through the handshake and leave -- an exit code alone
-         * cannot carry this (vms-06c, dcl_exec_handshake_open). */
-        dcl_exec_handshake_fail(exec_pipe[1], errno);
+        {
+            int exec_err = errno;
+            if (exec_err == ENOEXEC) {
+                /*
+                 * The substrate kernel can only load ELF. An image in a native
+                 * OpenVMS format (an Alpha EIHD image LINKed on real VMS,
+                 * vms-3b3f) is the VMS image activator's to load, as on VMS:
+                 * run IMGACT.EXE as this process's program with the image spec
+                 * as its first argument (the vms-fb4 launch mode). IMGACT reads
+                 * the image off the volume, and an image it cannot activate
+                 * faithfully fails there with an honest %IMGACT-F error.
+                 */
+                int n = 0;
+                while (argv[n])
+                    n++;
+                char **iargv = calloc((size_t)n + 2, sizeof *iargv);
+                if (iargv) {
+                    iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/IMGACT.EXE";
+                    iargv[1] = (char *)linux_path;
+                    for (int k = 1; k < n; k++)
+                        iargv[k + 1] = argv[k];
+                    execv(iargv[0], iargv);
+                    exec_err = errno;   /* the activator itself failed */
+                }
+            }
+            /* execve() failed: the image was NEVER entered. Hand the real
+             * errno to DCL through the handshake and leave -- an exit code
+             * alone cannot carry this (vms-06c, dcl_exec_handshake_open). */
+            dcl_exec_handshake_fail(exec_pipe[1], exec_err);
+        }
     } else if (pid > 0) {
         /*
          * Parent. On OpenVMS the image runs IN the CLI's process and its
@@ -2265,7 +2297,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
              * is $STATUS. Surface an error severity exactly as the in-process
              * path does, then hand back the true condition value (not a
              * POSIX-derived collapse). */
-            if (!(cond & 1))
+            if (!(cond & 1) && !(cond & DCL_STS_M_INHIB_MSG))
                 dcl_error("DCL", (int)(cond & 7), "ABORT",
                           "image %s exited with error status %%X%08X",
                           display_name, (unsigned)cond);

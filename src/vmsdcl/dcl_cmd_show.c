@@ -169,7 +169,7 @@ static int cmd_show_acl(struct dcl_command *cmd)
         return RMS$_FNF;
     }
     while (dcl_rms_dir_next(d, match, sizeof(match), &fn, &fs, &fr)) {
-        uint8_t acl[512];
+        uint8_t acl[4096];        /* the whole ACL, extension headers included (vms-a88c) */
         uint32_t len = 0, st;
         n++;
         st = dcl_read_file_acl(match, acl, sizeof(acl), &len);

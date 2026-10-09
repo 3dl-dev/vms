@@ -324,6 +324,21 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     lnm_seed_system_locating_multi(mgr, "DECC$LIBRARY_INCLUDE",
                                    decc_include_members, 2, 0);
 
+#if defined(__alpha__)
+    /*
+     * DECC$SHR -> SYS$SHARE:DECC$SHR_EV56. On OpenVMS Alpha the C RTL image
+     * an image names as DECC$SHR is reached through this system logical
+     * (observed on the lab Alpha V8.4 node: SHOW LOGICAL DECC$SHR gives
+     * "DECC$SHR" = "SYS$SHARE:DECC$SHR_EV56" (LNM$SYSTEM_TABLE),
+     * tests/lab/captures/native-image-alpha-20261008/LNM-shareables.txt), so
+     * an image LINKed on real VMS activates against DECC$SHR_EV56.EXE, whose
+     * symbol vector carries the VMS layout (src/vmslink/vms_vectors/, rd
+     * vms-3b3f). OVMX's own images name their producer file DECC$SHR.EXE
+     * directly and are unaffected.
+     */
+    lnm_seed_system_locating(mgr, "DECC$SHR", "SYS$SHARE:DECC$SHR_EV56", 0);
+#endif
+
     /* SYS$SCRATCH -> system temp directory */
     lnm_seed_system_locating(mgr, "SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 0);
 

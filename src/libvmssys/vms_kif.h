@@ -303,24 +303,25 @@ uint32_t vms_kif_convert(uint32_t lkid, uint32_t lkmode, uint32_t flags,
                           uint64_t blkastadr, uint8_t *valblk);
 
 /* Get lock information
- * OVMX-UNWIRED: vms_kif_getlki (vms-a86) -- there is no sys$getlki in
- * src/libvms at all: lckdef.h and lkidef.h name the service and define its
- * LKI$_ item codes, but nothing implements it, so the kernel handler, the
- * ioctl and this wrapper serve a system service that does not exist. */
+ * OVMX-UNWIRED: vms_kif_getlki (vms-a86) -- sys$getlki/sys$getlkiw now exist
+ * in src/libvms (src/libvms/syssvc/sys_lock.c, vms-b71), but their engine is
+ * the sibling vms_kif_getlki_parent below (it already carried the parent-id
+ * and grant-count fields the service needs), not this entry point. This
+ * plain form has no product caller of its own -- only the H0->H11 DLM host
+ * harness and the QEMU kmod/syssvc suites call it directly. */
 uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
 
 /* vms_kif_getlki_parent -- vms_kif_getlki plus the lock's PARENT lkid (0 for
- * a root lock), the #GETLKI field ca673c87 wired the kernel to fill but the
- * original wrapper never surfaced. Same ioctl, no new op.
- * OVMX-UNWIRED: vms_kif_getlki_parent (vms-0dd) -- sys$getlki does not exist
- * in src/libvms (see vms_kif_getlki's own OVMX-UNWIRED note above); this
- * sibling wrapper has the same non-existent product caller, exercised only
- * by tests/qemu/test_syssvc_rms_reclock.c. */
+ * a root lock) and the resource's GRANTCOUNT (vms-b71), the #GETLKI fields
+ * the kernel already fills but the original wrapper never surfaced. Same
+ * ioctl, no new op. WIRED (vms-b71): this is the engine behind
+ * sys$getlki/sys$getlkiw (src/libvms/syssvc/sys_lock.c). */
 uint32_t vms_kif_getlki_parent(uint32_t lkid, uint32_t *granted_mode,
                                 uint32_t *requested_mode, char *resnam,
-                                uint8_t *valblk, uint32_t *parent_id);
+                                uint8_t *valblk, uint32_t *parent_id,
+                                uint32_t *grant_count);
 
 /* Read a resource's DLM directory + mastering state (vms-ci.5 DB).
  * OVMX-UNWIRED: vms_kif_get_resmaster (vms-ci.5) -- a READ-ONLY DLM
@@ -852,6 +853,9 @@ uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
 uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap);
 /* The process rights list (vms-7d5a, VMS_IOCTL_RIGHTS): $GRANTID / $REVOKID. op = VMS_RIGHTS_OP_GRANT / _REVOKE; pid 0 = the caller. */
 uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib);
+uint32_t vms_kif_pri(uint32_t op, uint32_t pid, uint32_t *pri, uint32_t *prev,
+                     uint32_t *authpri);
+uint32_t vms_kif_brkauth(uint32_t sndtyp);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 

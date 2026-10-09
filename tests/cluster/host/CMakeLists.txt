@@ -61,6 +61,12 @@ set(OVMX_CLUSTER_CLEANROOM_MANIFEST
 # lives with the other cluster fixtures one level up, not in this directory's
 # frame-specimen set.
 set(OVMX_DLM_HASH_DIR "${CMAKE_SOURCE_DIR}/tests/cluster/fixtures")
+# rd vms-c6e leg 2: the driven run's PREDICTION file. Not a fixture of captured
+# values -- it is what this tree says the VAX will do, and this build checks it
+# against the C function so the lab is scored against the product, not a
+# Python lookalike.
+set(OVMX_C6E_RUN_DIR
+    "${CMAKE_SOURCE_DIR}/tests/lab/captures/vms-c6e-heldout-20261008")
 
 function(cluster_host_test name)
     add_executable(${name} ${ARGN})
@@ -72,6 +78,7 @@ function(cluster_host_test name)
         OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
         OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
         OVMX_DLM_HASH_DIR="${OVMX_DLM_HASH_DIR}"
+        OVMX_C6E_RUN_DIR="${OVMX_C6E_RUN_DIR}"
     )
     add_test(NAME cluster_host_${name} COMMAND ${name})
     set_tests_properties(cluster_host_${name} PROPERTIES
@@ -961,6 +968,34 @@ endif()
 add_test(NAME cluster_host_test_dlm_recv_arm COMMAND test_dlm_recv_arm)
 set_tests_properties(cluster_host_test_dlm_recv_arm PROPERTIES
     LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
+# ---- rd vms-025 / vms-db2a / vms-c27(3): ONE MASTER PER RESOURCE, MIXED -----
+# The widest R1 in this directory, and it has to be: the two-master hole can
+# only be seen where the ENGINE, the CLUB's real weight vector, the real
+# DIRECTORY TABLE, the real requester FSM and the real CODEC are all on one
+# path. So it links all three library recipes -- cluster_host_lock (the engine;
+# lock_shim/ FIRST on the include path), cluster_host_cnxman (the LDWV + the
+# directory table, built -DOVMX_CLUSTER_HOST) and cluster_host_dlm (the
+# requester FSM) -- which meet only in this test's own TU, exactly as
+# test_lock_quorum_hang and test_dlm_deq_reachable each do for two of them.
+add_executable(test_dlm_mixed_master test_dlm_mixed_master.c)
+target_include_directories(test_dlm_mixed_master PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_mixed_master PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_mixed_master PRIVATE
+    cluster_host_lock cluster_host_cnxman cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_mixed_master PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_mixed_master COMMAND test_dlm_mixed_master)
+set_tests_properties(cluster_host_test_dlm_mixed_master PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm;cnxman"
     TIMEOUT 60
 )
 

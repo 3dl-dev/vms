@@ -16,6 +16,13 @@
  *   BYPASS  the same open is granted with BYPASS alone.
  *   SYSPRV  the same open is granted with SYSPRV alone (the accessor qualifies for
  *           the SYSTEM protection category).
+ *   SYSLCK  $ENQW of a system-wide resource (LCK$M_SYSTEM) is SS$_NOSYSLCK without
+ *           it, granted with it.
+ *   ALTPRI  $SETPRI above the authorized priority (4) succeeds but leaves the base
+ *           priority at 4 without it; with it the base priority becomes 10.
+ *   OPER    $BRKTHRUW to every terminal (BRK$C_ALLTERMS) is SS$_NOOPER without it;
+ *           the executive's broadcast-scope decision grants it with OPER.
+ * (Statuses as OpenVMS VAX V7.3 answers them: docs/oracle/semantics/privchk.)
  *
  * After each grant the privilege is switched off again and the refusal re-checked, so
  * every verdict is decided by exactly one privilege bit. No /dev/vms -> honest SKIP.
@@ -30,6 +37,9 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "prvdef.h"
+#include "lckdef.h"
+#include "brkdef.h"
+#include "prcdef.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
 
@@ -247,6 +257,65 @@ int main(void)
     check((rmfile(chan, sysexe, "GRPT1.DAT") & 1) && (rmfile(chan, sysexe, "GRPT2.DAT") & 1) &&
           (rmfile(chan, sysexe, "GRPT3.DAT") & 1), "delete the GRPPRV fixtures (restore)");
     priv(PRV$M_BYPASS, 0);
+
+    /* -- SYSLCK: a system-wide lock resource -- */
+    {
+        static char rn[] = "PRIVENF_SYSLCK";
+        struct dsc$descriptor_s rd = { sizeof(rn) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, rn };
+        uint32_t lksb[6];
+
+        memset(lksb, 0, sizeof(lksb));
+        /* negctl: enq-syslck-not-checked */
+        check(sys$enqw(0, LCK$K_EXMODE, lksb, LCK$M_SYSTEM | LCK$M_NOQUEUE, &rd, 0, 0, 0, 0, 0, 0, 0)
+                  == SS$_NOSYSLCK,
+              "$ENQW of a system-wide resource without SYSLCK is SS$_NOSYSLCK");
+        priv(PRV$M_SYSLCK, 1);
+        memset(lksb, 0, sizeof(lksb));
+        st = sys$enqw(0, LCK$K_EXMODE, lksb, LCK$M_SYSTEM | LCK$M_NOQUEUE, &rd, 0, 0, 0, 0, 0, 0, 0);
+        check((st & 1) && lksb[1] != 0, "with SYSLCK it is granted");
+        if (st & 1)
+            (void)sys$deq(lksb[1], 0, 0, 0);
+        priv(PRV$M_SYSLCK, 0);
+    }
+
+    /* -- ALTPRI: a base priority above the authorized one -- */
+    {
+        uint32_t prv = 0, prib = 0, auth = 0;
+        struct { uint16_t len, code; void *buf; uint16_t *ret; } jl[3] = {
+            { 4, JPI$_PRIB, &prib, 0 }, { 4, JPI$_AUTHPRI, &auth, 0 }, { 0, 0, 0, 0 } };
+        uint16_t iosb[4];
+
+        check((sys$setpri(0, 0, 10, &prv, 0, 0) & 1) && prv == 4,
+              "$SETPRI 10 without ALTPRI succeeds; the previous base priority is 4");
+        prib = auth = 0;
+        (void)sys$getjpiw(0, 0, 0, jl, iosb, 0, 0);
+        /* negctl: pri-altpri-not-checked */
+        check(prib == 4 && auth == 4, "...and the base priority stays at the authorized 4");
+        priv(PRV$M_ALTPRI, 1);
+        check((sys$setpri(0, 0, 10, &prv, 0, 0) & 1) && prv == 4, "$SETPRI 10 with ALTPRI");
+        prib = 0;
+        (void)sys$getjpiw(0, 0, 0, jl, iosb, 0, 0);
+        check(prib == 10, "with ALTPRI the base priority is 10");
+        check((sys$setpri(0, 0, 4, &prv, 0, 0) & 1) && prv == 10, "back to 4 (restore)");
+        priv(PRV$M_ALTPRI, 0);
+    }
+
+    /* -- OPER: a broadcast to every terminal -- */
+    {
+        static char mt[] = "PRIVENF_OPER";
+        struct dsc$descriptor_s md = { sizeof(mt) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, mt };
+        uint16_t iosb[4];
+
+        /* negctl: brk-oper-not-checked */
+        check(sys$brkthruw(0, &md, 0, BRK$C_ALLTERMS, (void *)iosb, 0x20, 0, 0, 0, 0, 0) == SS$_NOOPER,
+              "$BRKTHRUW to every terminal without OPER is SS$_NOOPER");
+        check(vms_kif_brkauth(BRK$C_ALLUSERS) == SS$_NOOPER,
+              "the executive refuses every-user scope without OPER");
+        priv(PRV$M_OPER, 1);
+        check(vms_kif_brkauth(BRK$C_ALLTERMS) == SS$_NORMAL,
+              "with OPER the executive grants every-terminal scope");
+        priv(PRV$M_OPER, 0);
+    }
 
     (void)vms_kif_dassgn((uint16_t)chan);
     printf("=== test_syssvc_privilege_enforce: %d passed, %d failed ===\n", pass, fail);

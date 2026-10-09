@@ -453,25 +453,29 @@ int dnet_cterm_found_client_seg4_build(uint8_t *buf, size_t cap, size_t *outlen)
 }
 
 /* Client read-characteristics response body (26 bytes; oracle #53/#67/#70).
- * Body offset 2-3 is the read handle echoed from the host's 0f-00 solicit; the
- * template carries #53's 04 34 and is overwritten by the builder. */
+ * Body offset 2-5 is the read handle echoed from the host's 0f-00 solicit; the
+ * template carries #53's 04 34 00 00 and is overwritten by the builder. The
+ * handle is FOUR bytes (rd vms-b19): a real VAX V7.3 host sent a7 59 01 00,
+ * and a reply that echoed a7 59 00 00 was ignored -- the session stalled
+ * before the Username: prompt (dnlab-1 live bracket 2026-10-08). The oracle's
+ * handles all had zero high bytes, which hid it. */
 static const uint8_t k_found_client_readchar_body[26] = {
     0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00,
     0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00, 0x18,
     0x00, 0x32, 0x00, 0x00
 };
 #define DNET_CTERM_FOUND_READCHAR_HANDLE_OFF 2
+#define DNET_CTERM_FOUND_READCHAR_HANDLE_LEN 4
 
-int dnet_cterm_found_client_readchar_build(const uint8_t handle[2],
+int dnet_cterm_found_client_readchar_build(const uint8_t handle[4],
                                            uint8_t *buf, size_t cap,
                                            size_t *outlen)
 {
     uint8_t body[sizeof(k_found_client_readchar_body)];
     memcpy(body, k_found_client_readchar_body, sizeof(body));
-    if (handle) {
-        body[DNET_CTERM_FOUND_READCHAR_HANDLE_OFF]     = handle[0];
-        body[DNET_CTERM_FOUND_READCHAR_HANDLE_OFF + 1] = handle[1];
-    }
+    if (handle)
+        memcpy(body + DNET_CTERM_FOUND_READCHAR_HANDLE_OFF, handle,
+               DNET_CTERM_FOUND_READCHAR_HANDLE_LEN);
     return dnet_cterm_found_envelope_build(0x001a, body, sizeof(body),
                                            buf, cap, outlen);
 }
@@ -564,7 +568,7 @@ int dnet_cterm_inq_dequeue(struct dnet_cterm_inq *q, uint8_t *line,
 int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
                                  enum dnet_cterm_found_term_kind *kind,
                                  uint8_t *text, size_t textcap, size_t *textlen,
-                                 uint8_t handle[2])
+                                 uint8_t handle[4])
 {
     if (kind)    *kind = DNET_CTERM_TK_NONE;
     if (textlen) *textlen = 0;
@@ -636,12 +640,13 @@ int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
         return DNET_CTERM_OK;
     }
 
-    /* 0f 00 -> read-characteristics solicit; handle is at body offset 2-3. */
+    /* 0f 00 -> read-characteristics solicit; the 4-byte handle is at body
+     * offset 2-5 (rd vms-b19). */
     if (body[0] == 0x0f && body[1] == 0x00) {
         if (kind) *kind = DNET_CTERM_TK_READ_ATTR;
         if (handle) {
-            handle[0] = body_len > 2 ? body[2] : 0;
-            handle[1] = body_len > 3 ? body[3] : 0;
+            for (size_t i = 0; i < 4; i++)
+                handle[i] = body_len > 2 + i ? body[2 + i] : 0;
         }
         return DNET_CTERM_OK;
     }

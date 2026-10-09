@@ -217,6 +217,16 @@ if(BUILD_TESTS)
     add_test(NAME imgact_xfer_parse_unit COMMAND test_xfer_parse)
     set_tests_properties(imgact_xfer_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
 
+    # OpenVMS Alpha native image reader (rd vms-3b3f): the EIHD/EISD/EIAF
+    # reader IMGACT uses, run over the real images LINKed on the lab OpenVMS
+    # Alpha V8.4 node and checked field by field against that node's own
+    # ANALYZE/IMAGE reports.
+    add_executable(test_eihd_parse src/imgact/test/test_eihd_parse.c)
+    target_include_directories(test_eihd_parse PRIVATE src/imgact)
+    add_test(NAME imgact_eihd_parse_unit
+        COMMAND test_eihd_parse ${CMAKE_SOURCE_DIR}/tests/native-images/alpha)
+    set_tests_properties(imgact_eihd_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
+
     # elf32-vax symbol-vector resolve (rd vms-73b2, epic vms-404). Host proof
     # that IMGACT's elf32 class-width abstraction (imgact_elf.h, the real
     # backend header) + the real ovmx_symvec resolver bind a real elf32-vax
@@ -637,6 +647,20 @@ if(BUILD_TESTS)
                 --fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/cluster/fixtures)
     set_tests_properties(dlm_hash_corpus_split_frozen PROPERTIES
         LABELS "integration;cluster;authenticity" TIMEOUT 60)
+    # rd vms-c6e leg 2: the DRIVEN held-out run. Static half only -- the four
+    # lab artifacts are exactly what the generator writes (so the names the
+    # VAX locks cannot drift from the names that were predicted), the
+    # prediction file is exactly the reference hash over them, and the
+    # reference hash still reproduces eight values real OpenVMS VAX nodes put
+    # on the wire. No pcap, no lab: scoring the capture is a separate
+    # invocation (--pcap), run once the lab has driven the names.
+    add_test(NAME dlm_hash_heldout_run_predictions
+        COMMAND python3
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/cluster/dlm_hash/check_heldout_run.py
+                --verify
+                --rundir ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/captures/vms-c6e-heldout-20261008)
+    set_tests_properties(dlm_hash_heldout_run_predictions PROPERTIES
+        LABELS "integration;cluster;authenticity" TIMEOUT 60)
 
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
@@ -647,6 +671,15 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_workflow_size_guard.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(workflow_size_guard_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
+    # A PR's green CI is evidence about the merge only while main has not
+    # changed the same files since (#1490 x #1532 broke vms.ko, 2026-10-08):
+    # tools/ci/merge_freshness.sh goes STALE exactly then. Throwaway git repo.
+    add_test(NAME merge_freshness_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_merge_freshness.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(merge_freshness_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
     # Negative controls for the above -- proves the checker actually goes red

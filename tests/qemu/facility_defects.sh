@@ -268,12 +268,15 @@
 #     uncovered come back UNPROBED -- zero of them are covered in effect
 #     through a shared-code-path mutation on a sibling handler in the same
 #     file; the line-level gap and the behavioural gap are the same gap here.
-#     Of those 24, 8 (setprv, chkpriv, dclast, deliverast, getlki, alloc,
-#     dalloc, ttsetmode) are OVMX-UNWIRED declarations (src/libvmssys/
-#     vms_kif.h) with zero product-tree callers -- exempt under the vms-1e1
-#     ruling, not a gap this file can close without inventing a caller. The
-#     other 16 have a real product-side caller (a DCL command or a sys$
-#     wrapper) and are not exempt. Of those 16, an existing QEMU assertion
+#     Of those 24, 7 (setprv, chkpriv, dclast, deliverast, alloc, dalloc,
+#     ttsetmode) are OVMX-UNWIRED declarations (src/libvmssys/vms_kif.h)
+#     with zero product-tree callers -- exempt under the vms-1e1 ruling, not
+#     a gap this file can close without inventing a caller. getlki is NO
+#     LONGER in this set: vms-b71 wired sys$getlki/sys$getlkiw onto it
+#     (src/libvms/syssvc/sys_lock.c), and getlki-grantcount-not-counted
+#     above is its negctl control. The other 17 have a real product-side
+#     caller (a DCL command or a sys$ wrapper) and are not exempt. Of the
+#     16 that were already covered before vms-b71, an existing QEMU assertion
 #     already checks a real result/side-effect for 14 (ascefc, convert,
 #     dacefc, dassgn, deq, devscan, dlcefc, enq, getdvi, getjpi, procscan,
 #     readef, register, setef) -- a manifest entry for each is mechanical, no
@@ -510,6 +513,9 @@ rms-put-wrong-vbn
 p3-index-child-pointer-offbyone
 imgact-acp-valid-bytes-offbyone
 imgact-acp-read-unchunked
+eihd-lp-pair-swapped
+eihd-spec-no-default-type
+eihd-gsmatch-leq-ignores-major
 p0-map-not-recorded
 p1-map-not-recorded
 p0-unmap-clears-p1
@@ -565,7 +571,11 @@ register-subprocess-identity-self-declared
 libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
+enq-syslck-not-checked
+pri-altpri-not-checked
+brk-oper-not-checked
 acp-create-ignores-dfprot
+acp-deaccess-revision-not-recorded
 clrast-no-delivery
 mbx-tmpmbx-check-removed
 mbx-prmmbx-check-removed
@@ -581,6 +591,8 @@ acp-acl-not-consulted
 acp-acl-deny-falls-to-world
 acp-acl-control-not-checked
 acp-acl-deleteall-drops-protected
+acp-acl-ext-not-matched
+acp-acl-spill-refused
 sys-parse-acl-drops-access
 rms-set-security-local-applied-early
 chkpro-acl-ignored
@@ -590,6 +602,7 @@ acp-acl-default-not-propagated
 acp-default-protection-ignored
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
+acp-create-dates-not-stamped
 libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
@@ -603,7 +616,8 @@ crtl-feature-unknown-accepted
 crtl-feature-set-ignored
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
-rms-dirfind-exact-version-ignored"
+rms-dirfind-exact-version-ignored
+getlki-grantcount-not-counted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1008,6 +1022,44 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    acp-create-dates-not-stamped)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE stamps the new file header's creation and revision dates (FI2\$Q_CREDATE / FI2\$Q_REVDATE) from the executive clock, so DIRECTORY/FULL and F\$FILE_ATTRIBUTES CDT/RDT read real times (vms-263e, folded in from vms-6f5c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation replaces the create path's ods2_fh2_set_dates(sc->filehdr, now, now) with a no-op, so a new header keeps an all-zero FI2\$Q_CREDATE; F\$FILE_ATTRIBUTES CDT of the file test_syssvc_rms_acp created is empty and its dates assertion reddens. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+vms-263e: a file the executive created has a creation and a revision date (F$FILE_ATTRIBUTES CDT/RDT not empty)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-deaccess-revision-not-recorded)
+        case "$_f" in
+        facility)     echo "IO\$_DEACCESS of a file accessed for write records the modification in its header: revision count +1, revision date = now (vms-263e)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_rw";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_deaccess calls ods2_fh2_touch_revision on the header of a file that was accessed for write. The mutation drops the call, so the header is re-sealed and written back unchanged: the revision count and date stay as mastered. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+DEACCESS after write access: revision count +1, new revision date, creation date kept
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     acp-create-ignores-dfprot)
         case "$_f" in
         facility)     echo "IO\$_CREATE gives an ordinary file that names no protection the creating process's default file protection (\$SETDFPROT / RMS_FILEPROT)";;
@@ -1019,6 +1071,65 @@ EOF
         why)          echo "The ACP's CREATE takes proc->dfprot for an ordinary file with no protection of its own. The mutation leaves it 0, so the file gets the class default (RWED,RWED,RE,RE) whatever the process set. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new file's protection is the process default (0x0F00), not a class default
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    enq-syslck-not-checked)
+        case "$_f" in
+        facility)     echo "a system-wide lock resource (LCK\$M_SYSTEM) needs SYSLCK in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_enq() refuses an LCK\$M_SYSTEM request without SYSLCK. The mutation lets it through, so any process takes system-wide locks. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$ENQW of a system-wide resource without SYSLCK is SS$_NOSYSLCK
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    pri-altpri-not-checked)
+        case "$_f" in
+        facility)     echo "a base priority above the authorized one needs ALTPRI in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_pri() holds a \$SETPRI above the authorized priority at the authorized priority without ALTPRI. The mutation sets whatever is asked. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the base priority stays at the authorized 4
+$SETPRI 10 with ALTPRI
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    brk-oper-not-checked)
+        case "$_f" in
+        facility)     echo "a broadcast to every terminal / every user needs OPER in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_brkauth() refuses BRK\$C_ALLTERMS / ALLUSERS without OPER. The mutation grants them to anyone. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$BRKTHRUW to every terminal without OPER is SS$_NOOPER
+the executive refuses every-user scope without OPER
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1440,6 +1551,49 @@ EOF
         why)          echo "acp_acl_op() refuses an ACL change SS\$_NOPRIV unless acp_has_control(). The mutation removes the check, so a world user changes the ACL of a file it does not own. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 a non-owner without CONTROL may not change ACLF1's ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-ext-not-matched)
+        case "$_f" in
+        facility)     echo "the ACP access check walks an ACL that continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_match() gathers the ACEs of the extension headers after the primary's. The mutation looks at the primary only, so an ACE that lives in the extension header grants nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the [100,100] ACE in the extension header grants [100,100] read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-spill-refused)
+        case "$_f" in
+        facility)     echo "an ACL longer than the primary header continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_store() puts the ACEs the primary header cannot hold in extension headers. The mutation refuses SS\$_ACLFULL instead, so the list stops growing at what the primary holds. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+35 ACEs are accepted (the list outgrows the primary header)
+reading the ACL returns all 35, newest first, [100,100] last
+a 36th ACE goes first; the rest move down the chain
+36 ACEs read back, [100,100] still last
+35 ACEs remain after the delete
+30 ACEs again (a fresh extension header)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -4174,7 +4328,7 @@ A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programma
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
-A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|OPER) that are in VMS_PRV_M_ENFORCED (OPER is not)
+A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in VMS_PRV_M_ENFORCED (EXQUOTA is not)
 A: the executive accepted the identity a privileged writer established
 B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC
@@ -4187,7 +4341,7 @@ C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$
 C: the privilege display shows NETMBX and TMPMBX -- the two privileges the executive granted an unprivileged process, both in VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,ALTPRI,SETPRV,TMPMBX,WORLD,MOUNT,OPER,NETMBX,PHY_IO,SYSPRV,BYPASS,SYSLCK,GRPPRV,READALL), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
@@ -6590,6 +6744,61 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    eihd-lp-pair-swapped)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, the LINKAGE-PAIR fixup (rd vms-3b3f): an image LINKed on real OpenVMS Alpha calls a shareable routine through a linkage pair that, on disk, holds the routine's symbol-vector byte offset; the activator replaces it with the target entry's {code address, procedure value} (src/imgact/imgact_eihd.h eihd_fixup_lp, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_lp_one() stores the resolved PROCEDURE VALUE into the linkage pair's code-address half as well (its first eihd_put_q writes pv instead of code), so every pair still names the right target and the fixup still reports success -- but the caller's ldq/jsr through quad 0 would jump to the procedure descriptor, not the code. Parsing, relocation, GSMATCH and the refusal of an unresolvable entry run before or apart from that store and stay green, so only the two assertions that read a filled pair back can tell -- one per kind of target (a native shareable's own vector, an OVMX vector image's), the same single store.";;
+        require_fail) cat <<'EOF'
+MAIN3's linkage pairs to MYSHR hold MYSHR's relocated {code address, procedure value}
+MAIN3's linkage pairs to LIBRTL hold the {code address, procedure value} of entry %X320
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    eihd-spec-no-default-type)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, SHAREABLE FILE RESOLUTION (rd vms-3b3f rung 2/3): after the logical-name translation of a shareable's name (DECC\$SHR -> SYS\$SHARE:DECC\$SHR_EV56 on OpenVMS Alpha; a DEFINE MYSHR SYS\$SYSTEM:MYSHRV2) the activator applies the defaults SYS\$SHARE: and .EXE (src/imgact/imgact_eihd.h eihd_spec_to_file, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_spec_to_file() stops appending the default .EXE type to the VOLUME PATH (its first if (!has_type) block is disabled), so a translated spec with no type -- exactly what the DECC\$SHR system logical and a DEFINE to SYS\$SYSTEM:MYSHRV2 produce -- names a file that does not exist and the activation would fail -CLI-E-IMAGEFNF. The message spec keeps its .EXE (the second block), and a spec that carries its own type or names another device is untouched, so only the three assertions that read the resolved path back for a typeless spec go red -- the same single missing default.";;
+        require_fail) cat <<'EOF'
+DECC$SHR's system-logical equivalence resolves to SYS$SHARE:DECC$SHR_EV56.EXE
+a shareable defined to SYS$SYSTEM:MYSHRV2 resolves to SYS$SYSTEM:MYSHRV2.EXE
+an untranslated shareable name defaults to SYS$SHARE:<name>.EXE
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    eihd-gsmatch-leq-ignores-major)
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, GSMATCH (rd vms-3b3f rung 3): an image records the ident (major, minor) and match control of each shareable it was linked against; under LEQUAL the activator accepts a shareable only with the SAME major id and a minor id at least the recorded one, else -SYSTEM-F-SHRIDMISMAT (observed on the lab Alpha V8.4 node; src/imgact/imgact_eihd.h eihd_gsmatch_ok, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_gsmatch_ok()'s LEQUAL case stops comparing the major id, so a shareable relinked into an incompatible major version (MYSHR 1.0 vs 2.0) is accepted and its symbol vector bound as if compatible -- the case VMS refuses SHRIDMISMAT. The minor-id comparison, EQUAL and ALWAYS are untouched, so the acceptances stay green and only the two refusals that differ in major id (MAIN3 vs MYSHR 2.0, MAIN4 vs MYSHR 1.0) go red -- the same single dropped comparison.";;
+        require_fail) cat <<'EOF'
+MAIN3 refuses MYSHR relinked GSMATCH=LEQUAL,2,0 (SHRIDMISMAT on VMS)
+MAIN4 (linked against MYSHR 2.0) refuses MYSHR 1.0 (SHRIDMISMAT on VMS)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     p0-map-not-recorded)
         case "$_f" in
         facility)     echo "P0 program-region bookkeeping (VMS_IOCTL_P0_MAP/P0_UNMAP, vms-68f.i -- foundation increment of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
@@ -7560,6 +7769,26 @@ EOF
         knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons. \$SEARCH also returns that same (fabricated) ID in nam\$w_fid (vms-6e28), which DIRECTORY /FULL now prints, so test_syssvc_rms_acp's check that DIRECTORY /FULL's File ID is the one \$CREATE returned reddens too (with its run-time-labelled per-file \$SEARCH-vs-\$CREATE ID assertions).";;
         esac;;
 
+    getlki-grantcount-not-counted)
+        case "$_f" in
+        facility)     echo "SYS\$GETLKI/SYS\$GETLKIW's LKI\$_GRANTCOUNT (vms_ioctl_getlki, vms-b71)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_syssvc_getlki";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_getlki()'s LKI\$_GRANTCOUNT walk drops its own increment ('n++;' inside the 'exec_list_for_each_entry(granted, &res->granted, res_granted)' loop), so grant_count is always reported as 0 regardless of how many locks the resource genuinely has granted -- the resource's REAL granted-queue length is never read, only a constant. The lock's own granted/requested mode, resource name and lock ID (the sibling LKI\$_ items the same ioctl answers) are untouched, so only the GRANTCOUNT assertions redden. Unique statement at this indent inside vms_ioctl_getlki; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+LKI$_GRANTCOUNT reports BOTH holders (2), the resource's real granted-queue length
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+LKI$_GRANTCOUNT reports 1 (this process is the only holder)
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment makes grant_count read 0 regardless of the resource's true holder count, so the single-holder scenario's GRANTCOUNT==1 check reddens alongside the two-holder scenario's GRANTCOUNT==2 check -- one defect, the two scenarios that can observe it.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -7680,11 +7909,15 @@ apply_edit() {
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
-        sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
+        sed -i 's|^    ace_matched = acp_acl_match(proc, vol, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)
         sed -i 's|^    if (!ace_matched) {$|    if (1) { /* NEGCTL acp-acl-deny-falls-to-world */|' "$_file";;
     acp-acl-control-not-checked)
-        sed -i 's|^    if (!acp_has_control(proc, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+        sed -i 's|^    if (!acp_has_control(proc, vol, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+    acp-acl-ext-not-matched)
+        sed -i 's#^    if (acp_hdr_ext(h) == 0 || !vol)$#    if (1) /* NEGCTL acp-acl-ext-not-matched */#' "$_file";;
+    acp-acl-spill-refused)
+        sed -i 's#^    status = acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx);$#    status = (acp_acl_fit(sc->filehdr, out, n) < n) ? SS__ACLFULL : acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx); /* NEGCTL acp-acl-spill-refused */#' "$_file";;
     acp-acl-deleteall-drops-protected)
         sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file";;
     chkpro-acl-ignored)
@@ -7713,8 +7946,18 @@ apply_edit() {
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)
         sed -i 's|^    if (efn < 128)$|    if (efn != 0 \&\& efn < 128) /* NEGCTL efn0-enqw-not-set */|' "$_file";;
+    acp-create-dates-not-stamped)
+        sed -i 's|^                (void)ods2_fh2_set_dates(sc->filehdr, now, now);$|                (void)now; /* NEGCTL acp-create-dates-not-stamped */|' "$_file";;
+    acp-deaccess-revision-not-recorded)
+        sed -i 's#^                ods2_fh2_touch_revision(hdr, exec_time_now_vms()) != ODS2_OK) {$#                0) { /* NEGCTL acp-deaccess-revision-not-recorded */#' "$_file";;
     acp-create-ignores-dfprot)
         sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file";;
+    enq-syslck-not-checked)
+        sed -i 's#^        !(proc->cur_privs \& VMS_PRV_M_SYSLCK)) {$#        0) { /* NEGCTL enq-syslck-not-checked */#' "$_file";;
+    pri-altpri-not-checked)
+        sed -i 's#^        if (pri > args.authpri \&\& !(proc->cur_privs \& VMS_PRV_M_ALTPRI))$#        if (0) /* NEGCTL pri-altpri-not-checked */#' "$_file";;
+    brk-oper-not-checked)
+        sed -i 's#^    if ((args.sndtyp == 3u || args.sndtyp == 4u) \&\& !(proc->cur_privs \& VMS_PRV_M_OPER))$#    if (0) /* NEGCTL brk-oper-not-checked */#' "$_file";;
     setdfprot-not-stored)
         sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)
@@ -8547,6 +8790,28 @@ apply_edit() {
         # second apply matches nothing (the no-op selftest requires).
         sed -i 's|#define IMGACT_ACP_RW_MAX_XFER (1u << 20)|#define IMGACT_ACP_RW_MAX_XFER (1u << 30) /* NEGCTL imgact-acp-read-unchunked: cap raised so the whole >1 MiB segment goes in ONE over-cap QIO */|' "$_file";;
 
+    eihd-lp-pair-swapped)
+        # UNIQUE TEXT: `eihd_put_q(lp, code);` is the one store of a linkage
+        # pair's code-address half (eihd_lp_one, imgact_eihd.h). Writing pv
+        # there leaves the pair naming the right target but pointing quad 0 at
+        # the procedure descriptor. After substitution the text is gone, so a
+        # second apply matches nothing (the no-op selftest requires).
+        sed -i 's|	eihd_put_q(lp, code);|	eihd_put_q(lp, pv); /* NEGCTL eihd-lp-pair-swapped: the code-address half gets the procedure value */|' "$_file";;
+
+    eihd-spec-no-default-type)
+        # UNIQUE TEXT: the volume path's default-type block in
+        # eihd_spec_to_file carries its own comment (the message spec's block
+        # does not). Disabling it leaves a typeless translation naming NAME (no
+        # .EXE) on the volume. After substitution the text is gone, so a
+        # second apply matches nothing.
+        sed -i 's|	if (!has_type) {   /\* the volume path.s default type \*/|	if (0) {   /* NEGCTL eihd-spec-no-default-type: the volume path gets no default .EXE type */|' "$_file";;
+
+    eihd-gsmatch-leq-ignores-major)
+        # UNIQUE TEXT: the LEQUAL case of eihd_gsmatch_ok. Dropping the major
+        # comparison accepts an incompatible major version. After substitution
+        # the text is gone, so a second apply matches nothing.
+        sed -i 's|	case EIHD_MATCH_LEQUAL: return hmaj == wmaj \&\& hmin >= wmin;|	case EIHD_MATCH_LEQUAL: return hmin >= wmin; /* NEGCTL eihd-gsmatch-leq-ignores-major: LEQUAL compares only the minor id */|' "$_file";;
+
     p0-map-not-recorded)
         # RANGE-ANCHORED to vms_ioctl_p0_map's own body: `proc->p0_base =
         # args.base;` immediately followed by `proc->p0_limit = args.limit;`
@@ -9044,6 +9309,32 @@ apply_edit() {
         # substitution `, user_dest)` is gone -- a second apply is the no-op the
         # idempotency selftest requires.
         sed -i 's|st = rms_stage_over_acp(IMG_SPEC, user_dest);|st = rms_stage_over_acp(IMG_SPEC, shared_dest); /* NEGCTL multiuser-stage-shared-not-peruser */|' "$_file";;
+
+    getlki-grantcount-not-counted)
+        # Range-scoped to vms_ioctl_getlki's own body (same idiom as the
+        # pe-vc-snapshot/scs-cdt-snapshot entries above), so the identically
+        # indented "n++;" inside the OTHER two GETLKI-shaped walks in this file
+        # (vms_ioctl_dlm_member_depart / vms_ioctl_get_resmaster) is untouched.
+        #
+        # THE REPLACEMENT KEEPS ITS OWN TRAILING SEMICOLON (rd vms-b71 CI fix,
+        # measured 2026-10-09). `exec_list_for_each_entry(...)` expands to a
+        # braceless `for (...)`, so its body is whatever ONE statement follows
+        # syntactically -- here, the real source's `n++;`. A comment-only
+        # replacement with NO semicolon leaves the `for` with nothing to
+        # terminate its body, so the compiler attaches the NEXT statement,
+        # `exec_unlock(&res->lock);`, as the loop body instead: exec_unlock then
+        # runs once per granted entry (a harmless no-op double-unlock when
+        # n_granted==1) but NEVER when n_granted==0 (e.g. the DLM cross-node
+        # origin/proxy records test_syssvc_dlm_xnode's GETLKI calls read) --
+        # leaking res->lock held forever and deadlocking the NEXT operation on
+        # that resource. That is a real guest HANG under this defect (CI shards
+        # 17/22 and 19/22, both runs stopping after 55 suites at
+        # test_syssvc_dlm_xnode, whole-VM wall budget fired), not a crash and
+        # not a timing/ordering issue -- a malformed fixture mutation. The
+        # trailing `;` makes the comment an empty statement, so the loop body
+        # stays a no-op and exec_unlock stays OUTSIDE the loop exactly as the
+        # unmutated source has it; grant_count still always reports 0.
+        sed -i '/^long vms_ioctl_getlki(/,/^}/ s|            n++;|            /* NEGCTL getlki-grantcount-not-counted: grant not counted */;|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

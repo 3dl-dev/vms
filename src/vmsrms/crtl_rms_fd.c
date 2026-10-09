@@ -57,6 +57,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>              /* strncasecmp, strcasecmp */
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -605,6 +606,193 @@ static long long dir_getdents(struct rfile *rf, char *buf, uint64_t len)
     return (long long)used;
 }
 
+/* ------------------------------------------- RMS file-attribute keywords --- */
+
+/*
+ * DEC C's fopen, open and creat take optional RMS file-attribute arguments
+ * after their standard ones -- strings such as "rfm=udf", "rat=none",
+ * "mrs=512", "deq=5", "shr=get,put" (VSI C RTL Reference Manual,
+ * creat: "file attribute arguments"; binutils' bfd/fopen-vms.h passes
+ * "rfm=udf","rat=none" for every object file). They describe the file RMS
+ * creates: they go into the FAB of the $CREATE (vms-45f). Opening an existing
+ * file takes that file's own attributes, as $OPEN does.
+ *
+ * The wrappers below parse the keywords into `fd_pending` for the duration of
+ * the one standard call they make; do_openat applies them at $CREATE. A
+ * keyword this layer does not know is EINVAL; a known keyword whose effect it
+ * does not provide (alq, fop, ctx=rec/xplct, acc, bls, ...) is EOPNOTSUPP --
+ * never accepted and ignored.
+ */
+struct fd_attrs {
+    int      set;
+    int      rfm_set, rat_set, mrs_set, deq_set, shr_set;
+    uint8_t  rfm, rat, shr;
+    uint16_t mrs, deq;
+};
+static struct fd_attrs fd_pending;
+
+static int kw_num(const char *v, unsigned long max, unsigned long *out)
+{
+    char *end = NULL;
+    if (!v || !*v)
+        return -EINVAL;
+    unsigned long n = strtoul(v, &end, 10);
+    if (!end || *end || n > max)
+        return -EINVAL;
+    *out = n;
+    return 0;
+}
+
+/* Is the comma-separated list item [p, p+n) the word w (case-blind)? */
+static int kw_is(const char *p, size_t n, const char *w)
+{
+    return strlen(w) == n && strncasecmp(p, w, n) == 0;
+}
+
+/* Parse one "key=value[,value...]" argument into *a. */
+static int kw_parse(const char *kw, struct fd_attrs *a)
+{
+    const char *eq = kw ? strchr(kw, '=') : NULL;
+    unsigned long n;
+    if (!eq)
+        return -EINVAL;
+    size_t kl = (size_t)(eq - kw);
+    const char *v = eq + 1;
+
+    if (kw_is(kw, kl, "rfm")) {
+        static const char *const rfm[] = { "udf", "fix", "var", "vfc", "stm", "stmlf", "stmcr" };
+        for (unsigned i = 0; i < sizeof rfm / sizeof rfm[0]; i++)
+            if (strcasecmp(v, rfm[i]) == 0) {
+                a->rfm = (uint8_t)i;           /* FAB$C_UDF .. FAB$C_STMCR = 0..6 */
+                a->rfm_set = 1;
+                return 0;
+            }
+        return -EINVAL;
+    }
+    if (kw_is(kw, kl, "rat") || kw_is(kw, kl, "shr") || kw_is(kw, kl, "fop") ||
+        kw_is(kw, kl, "ctx")) {
+        int which = kw_is(kw, kl, "rat") ? 0 : kw_is(kw, kl, "shr") ? 1 :
+                    kw_is(kw, kl, "fop") ? 2 : 3;
+        const char *p = v;
+        if (!*p)
+            return -EINVAL;
+        while (*p) {
+            const char *c = strchr(p, ',');
+            size_t il = c ? (size_t)(c - p) : strlen(p);
+            if (which == 0) {                   /* rat */
+                if (kw_is(p, il, "none"))      { a->rat = 0; }
+                else if (kw_is(p, il, "cr"))   { a->rat |= FAB$M_CR; }
+                else if (kw_is(p, il, "ftn"))  { a->rat |= FAB$M_FTN; }
+                else if (kw_is(p, il, "prn"))  { a->rat |= FAB$M_PRN; }
+                else if (kw_is(p, il, "blk"))  { a->rat |= FAB$M_BLK; }
+                else return -EINVAL;
+                a->rat_set = 1;
+            } else if (which == 1) {            /* shr */
+                if (kw_is(p, il, "get"))       { a->shr |= FAB$M_SHRGET; }
+                else if (kw_is(p, il, "put"))  { a->shr |= FAB$M_SHRPUT; }
+                else if (kw_is(p, il, "upd"))  { a->shr |= FAB$M_SHRUPD; }
+                else if (kw_is(p, il, "del"))  { a->shr |= FAB$M_SHRDEL; }
+                else if (kw_is(p, il, "nil"))  { a->shr |= FAB$M_NIL; }
+                else if (kw_is(p, il, "mse") || kw_is(p, il, "upi") || kw_is(p, il, "nql"))
+                    return -EOPNOTSUPP;
+                else return -EINVAL;
+                a->shr_set = 1;
+            } else if (which == 2) {            /* fop */
+                /* The FAB options RMS's $CREATE does not act on here yet
+                 * (ctg, cbt, sup, tef, dfw, ...): refused, never ignored. */
+                static const char *const fop[] = { "ctg", "cbt", "dfw", "dlt", "mxv",
+                    "nef", "nam", "ofp", "pos", "rck", "rwc", "rwo", "scf", "spl",
+                    "sqo", "sup", "tef", "tmd", "tmp", "wck" };
+                for (unsigned i = 0; i < sizeof fop / sizeof fop[0]; i++)
+                    if (kw_is(p, il, fop[i]))
+                        return -EOPNOTSUPP;
+                return -EINVAL;
+            } else {                            /* ctx */
+                /* bin / stm / nocvt / cvt: byte-stream access with no record
+                 * translation, which is what this layer gives every file it
+                 * creates. rec and xplct (record-mode I/O) it does not do. */
+                if (kw_is(p, il, "bin") || kw_is(p, il, "stm") ||
+                    kw_is(p, il, "nocvt") || kw_is(p, il, "cvt") || kw_is(p, il, "noxplct"))
+                    ;
+                else if (kw_is(p, il, "rec") || kw_is(p, il, "xplct"))
+                    return -EOPNOTSUPP;
+                else return -EINVAL;
+            }
+            p += il;
+            if (*p == ',')
+                p++;
+        }
+        return 0;
+    }
+    if (kw_is(kw, kl, "mrs")) {
+        if (kw_num(v, 32767, &n)) return -EINVAL;
+        a->mrs = (uint16_t)n; a->mrs_set = 1;
+        return 0;
+    }
+    if (kw_is(kw, kl, "deq")) {
+        if (kw_num(v, 65535, &n)) return -EINVAL;
+        a->deq = (uint16_t)n; a->deq_set = 1;
+        return 0;
+    }
+    /* alq: $CREATE does not pre-allocate here yet (only $EXTEND does). */
+    if (kw_is(kw, kl, "alq") || kw_is(kw, kl, "acc") || kw_is(kw, kl, "bls") || kw_is(kw, kl, "dna") ||
+        kw_is(kw, kl, "fsz") || kw_is(kw, kl, "gbc") || kw_is(kw, kl, "mbc") ||
+        kw_is(kw, kl, "mbf") || kw_is(kw, kl, "rop") || kw_is(kw, kl, "rtv") ||
+        kw_is(kw, kl, "tmo"))
+        return -EOPNOTSUPP;
+    return -EINVAL;
+}
+
+/* Apply the pending keywords to the FAB of a $CREATE. */
+static void fd_apply_create_attrs(struct FAB *fab, const struct fd_attrs *a)
+{
+    if (!a->set)
+        return;
+    if (a->rfm_set) fab->fab$b_rfm = a->rfm;
+    if (a->rat_set) fab->fab$b_rat = a->rat;
+    if (a->mrs_set) fab->fab$w_mrs = a->mrs;
+    if (a->deq_set) fab->fab$w_deq = a->deq;
+    if (a->shr_set) fab->fab$b_shr = a->shr;
+}
+
+/*
+ * The number of arguments a call passed: the low byte of the VMS argument
+ * information (AI, R25), which OTS$HOME_ARGS stores at home[0] -- the quadword
+ * `named` + 1 quadwords below where va_start points
+ * (tools/cross-alpha-vms/ots/ots_home_args.s). DEC C's va_count. A macro with
+ * a constant index, used in the variadic function itself: the port compiler's
+ * stdarg pass crashes when va_list pointer arithmetic is inlined from a helper
+ * (vms-45f, filed separately).
+ */
+#define FD_VA_COUNT(ap, named) \
+    ((unsigned)(((const uint64_t *)(void *)(ap))[-((named) + 1)] & 0xFF))
+
+/* Up to this many keyword arguments per call. */
+#define FD_MAX_KW 16
+
+/* Parse the keyword arguments kw[0..n) into fd_pending. */
+static int fd_collect(const char *const *kw, unsigned n)
+{
+    memset(&fd_pending, 0, sizeof fd_pending);
+    if (n > FD_MAX_KW)
+        return -EINVAL;
+    for (unsigned i = 0; i < n; i++) {
+        int r = kw_parse(kw[i], &fd_pending);
+        if (r < 0) {
+            memset(&fd_pending, 0, sizeof fd_pending);
+            return r;
+        }
+    }
+    fd_pending.set = n > 0;
+    return 0;
+}
+
+/* Copy `n` const char * variadic arguments out of `ap` into kw[] (bounded). */
+#define FD_TAKE_KW(ap, kw, n) do {                                   \
+        for (unsigned _i = 0; _i < (n) && _i < FD_MAX_KW; _i++)       \
+            (kw)[_i] = va_arg(ap, const char *);                       \
+    } while (0)
+
 static long long do_openat(long long dirfd, const char *path, long long flags,
                            int *handled)
 {
@@ -687,6 +875,7 @@ static long long do_openat(long long dirfd, const char *path, long long flags,
         rf->fab.fab$b_fac = FAB$M_GET | FAB$M_PUT | FAB$M_BIO;
         if (fd_file_sharing())
             rf->fab.fab$b_shr = FAB$M_SHRGET | FAB$M_SHRPUT;
+        fd_apply_create_attrs(&rf->fab, &fd_pending);  /* "rfm=udf", ... (vms-45f) */
         st = sys$create(&rf->fab, 0, 0);
         TR("crtlfd: $create", st);
         if (!(st & 1)) {
@@ -1336,6 +1525,71 @@ static int fab_query(int fd, int dirfd, const char *path,
     }
     in_rms = was;
     return r;
+}
+
+/* ------------------------------------------- fopen / open / creat ------- */
+
+/* DEC C fopen(file, mode [, keyword, ...]) (vms-45f): the standard fopen with
+ * the RMS file-attribute keywords applied if it creates the file. Bound in
+ * place of decc$fopen in the RMS-backed DECC$SHR (mk_decc_shr.sh). */
+FILE *ovmx_crtl_fopen(const char *name, const char *mode, ...)
+{
+    const char *kw[FD_MAX_KW];
+    va_list ap;
+    va_start(ap, mode);
+    unsigned n = FD_VA_COUNT(ap, 2);
+    unsigned nk = n > 2 ? n - 2 : 0;
+    FD_TAKE_KW(ap, kw, nk);
+    va_end(ap);
+    int r = fd_collect(kw, nk);
+    if (r < 0) {
+        errno = -r;
+        return NULL;
+    }
+    FILE *f = fopen(name, mode);
+    memset(&fd_pending, 0, sizeof fd_pending);
+    return f;
+}
+
+/* DEC C open(file, flags [, mode [, keyword, ...]]). */
+int ovmx_crtl_open(const char *name, int flags, ...)
+{
+    const char *kw[FD_MAX_KW];
+    va_list ap;
+    va_start(ap, flags);
+    unsigned n = FD_VA_COUNT(ap, 2);
+    int mode = n > 2 ? va_arg(ap, int) : 0;
+    unsigned nk = n > 3 ? n - 3 : 0;
+    FD_TAKE_KW(ap, kw, nk);
+    va_end(ap);
+    int r = fd_collect(kw, nk);
+    if (r < 0) {
+        errno = -r;
+        return -1;
+    }
+    int fd = open(name, flags, mode);
+    memset(&fd_pending, 0, sizeof fd_pending);
+    return fd;
+}
+
+/* DEC C creat(file, mode [, keyword, ...]). */
+int ovmx_crtl_creat(const char *name, mode_t mode, ...)
+{
+    const char *kw[FD_MAX_KW];
+    va_list ap;
+    va_start(ap, mode);
+    unsigned n = FD_VA_COUNT(ap, 2);
+    unsigned nk = n > 2 ? n - 2 : 0;
+    FD_TAKE_KW(ap, kw, nk);
+    va_end(ap);
+    int r = fd_collect(kw, nk);
+    if (r < 0) {
+        errno = -r;
+        return -1;
+    }
+    int fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    memset(&fd_pending, 0, sizeof fd_pending);
+    return fd;
 }
 
 /* ------------------------------------------------------------ fgetname --- */

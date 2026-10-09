@@ -237,6 +237,18 @@ if ! grep -q 'vms-4ba3: fgetname' include/stdio.h; then
 	perl -0pi -e 's/^int fclose\(FILE \*\);\n/$&#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-4ba3: fgetname *\/\nchar *fgetname(FILE *, char *, ...);\n#endif\n/m' include/stdio.h
 fi
 grep -q 'vms-4ba3: fgetname' include/stdio.h || { echo "vms-4ba3 PATCH FAIL: fgetname in include/stdio.h" >&2; exit 7; }
+# vms-45f: DEC C fopen and creat take optional RMS file-attribute keyword
+# arguments ("rfm=udf", "rat=none", ...) after their standard ones (open is
+# already variadic). The client sees the DEC C forms; the C RTL itself keeps
+# musl's.
+if ! grep -q 'vms-45f: fopen' include/stdio.h; then
+	perl -0pi -e 's/^FILE \*fopen\(const char \*__restrict, const char \*__restrict\);\n/#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-45f: fopen RMS keywords *\/\nFILE *fopen(const char *__restrict, const char *__restrict, ...);\n#else\n$&#endif\n/m' include/stdio.h
+fi
+grep -q 'vms-45f: fopen' include/stdio.h || { echo "vms-45f PATCH FAIL: fopen in include/stdio.h" >&2; exit 7; }
+if ! grep -q 'vms-45f: creat' include/fcntl.h; then
+	perl -0pi -e 's/^int creat\(const char \*, mode_t\);\n/#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-45f: creat RMS keywords *\/\nint creat(const char *, mode_t, ...);\n#else\n$&#endif\n/m' include/fcntl.h
+fi
+grep -q 'vms-45f: creat' include/fcntl.h || { echo "vms-45f PATCH FAIL: creat in include/fcntl.h" >&2; exit 7; }
 echo "== vms-28d DEC C header forms applied (vaxc\$errno, getcwd 3-arg, psignal) =="
 # vms-fb4: DEC C vfork()/exec*() for clients. vfork() is the DEC C expansion
 # (open the context, then the C RTL's setjmp in the CALLER's frame); the exec

@@ -510,6 +510,7 @@ extern "C" {
 #define SS$_NOLOG           9332    /* Logging is not enabled */
 #define SS$_NOIMPERSONATE   10284   /* No impersonate privilege */
 #define SS$_NOOPER          10388   /* No operator privilege */
+#define SS$_NOSYSLCK        10484   /* No privilege for a system-wide lock (SYSLCK) */
 #define SS$_EXITFORCED      11220   /* Forced exit occurred (Alpha V8.4 oracle) */
 #define SS$_USERDISABLED    11290   /* User account is disabled */
 

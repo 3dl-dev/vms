@@ -1,0 +1,30 @@
+        .TITLE  HELLO   OVMX vms-3b3f rung-1 native-image probe
+; Our own test program (OVMX project), assembled and linked on the lab
+; OpenVMS Alpha V8.4 node to produce a real VMS-linked image for activation
+; tests. Calls SYS$ASSIGN, SYS$QIOW (SYS$PUBLIC_VECTORS) and LIB$PUT_OUTPUT
+; (LIBRTL), then returns SS$_NORMAL.
+        $IODEF
+        $SSDEF
+        .PSECT  HDATA,WRT,NOEXE,QUAD
+TTNAME: .ASCID  /SYS$OUTPUT/
+CHAN:   .WORD   0
+        .ALIGN  QUAD
+IOSB:   .QUAD   0
+MSG1:   .ASCII  /OVMX-NATIVE QIOW: hello from a VMS-linked image/<13><10>
+MSG1_L = .-MSG1
+MSG2:   .ASCID  /OVMX-NATIVE LIB$PUT_OUTPUT: hello/
+        .PSECT  HCODE,EXE,NOWRT,QUAD
+        .ENTRY  HELLO,^M<>
+        $ASSIGN_S DEVNAM=TTNAME,CHAN=CHAN
+        BLBC    R0,10$
+        $QIOW_S CHAN=CHAN,FUNC=#IO$_WRITEVBLK,IOSB=IOSB,-
+                P1=MSG1,P2=#MSG1_L
+        BLBC    R0,10$
+        MOVZWL  IOSB,R0
+        BLBC    R0,10$
+        PUSHAQ  MSG2
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        BLBC    R0,10$
+        MOVL    #SS$_NORMAL,R0
+10$:    RET
+        .END    HELLO

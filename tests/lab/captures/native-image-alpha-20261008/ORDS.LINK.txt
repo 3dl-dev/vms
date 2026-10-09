@@ -1,0 +1,110 @@
+$ LINK/SHAREABLE/MAP/FULL/CROSS/NOEXECUTABLE ORDS
+%LINK-W-NUDFSYMS, 27 undefined symbols:
+%LINK-I-UDFSYM, 	CLI$COMPILE_CLD 
+%LINK-I-UDFSYM, 	CLI$FREE_CLD 
+%LINK-I-UDFSYM, 	LIB$$SET_CLI_HANDLER 
+%LINK-I-UDFSYM, 	LIB$ESTABLISH 
+%LINK-I-UDFSYM, 	LIB$REVERT 
+%LINK-I-UDFSYM, 	MTH$ABSF 
+%LINK-I-UDFSYM, 	MTH$ACOSF 
+%LINK-I-UDFSYM, 	MTH$ALOG10F 
+%LINK-I-UDFSYM, 	MTH$ALOGF 
+%LINK-I-UDFSYM, 	MTH$ASINF 
+%LINK-I-UDFSYM, 	MTH$ATAN2F 
+%LINK-I-UDFSYM, 	MTH$ATANF 
+%LINK-I-UDFSYM, 	MTH$COSF 
+%LINK-I-UDFSYM, 	MTH$EXPF 
+%LINK-I-UDFSYM, 	MTH$MAX 
+%LINK-I-UDFSYM, 	MTH$MIN 
+%LINK-I-UDFSYM, 	MTH$MOD 
+%LINK-I-UDFSYM, 	MTH$NINT 
+%LINK-I-UDFSYM, 	MTH$POWER 
+%LINK-I-UDFSYM, 	MTH$POWER_JI 
+%LINK-I-UDFSYM, 	MTH$SINF 
+%LINK-I-UDFSYM, 	MTH$SQRTF 
+%LINK-I-UDFSYM, 	MTH$TANF 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_D 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_F 
+%LINK-I-UDFSYM, 	SYS$FAO_COUNT_ARGS 
+%LINK-I-UDFSYM, 	SYS$SUSPEND 
+%LINK-W-USEUNDEF, undefined symbol CLI$COMPILE_CLD referenced
+	in psect ODATA offset %X00000000
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol CLI$FREE_CLD referenced
+	in psect ODATA offset %X00000008
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$$SET_CLI_HANDLER referenced
+	in psect ODATA offset %X00000014
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$ESTABLISH referenced
+	in psect ODATA offset %X00000094
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$REVERT referenced
+	in psect ODATA offset %X00000170
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ABSF referenced
+	in psect ODATA offset %X000001F8
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ACOSF referenced
+	in psect ODATA offset %X00000200
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOG10F referenced
+	in psect ODATA offset %X0000020C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOGF referenced
+	in psect ODATA offset %X00000214
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ASINF referenced
+	in psect ODATA offset %X0000021C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATAN2F referenced
+	in psect ODATA offset %X00000228
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATANF referenced
+	in psect ODATA offset %X0000022C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$COSF referenced
+	in psect ODATA offset %X0000023C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$EXPF referenced
+	in psect ODATA offset %X00000248
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MAX referenced
+	in psect ODATA offset %X00000250
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MIN referenced
+	in psect ODATA offset %X00000254
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MOD referenced
+	in psect ODATA offset %X00000258
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$NINT referenced
+	in psect ODATA offset %X0000025C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER referenced
+	in psect ODATA offset %X00000260
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER_JI referenced
+	in psect ODATA offset %X00000264
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SINF referenced
+	in psect ODATA offset %X0000027C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SQRTF referenced
+	in psect ODATA offset %X00000288
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$TANF referenced
+	in psect ODATA offset %X00000294
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_D referenced
+	in psect ODATA offset %X0000029C
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_F referenced
+	in psect ODATA offset %X000002A0
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$FAO_COUNT_ARGS referenced
+	in psect ODATA offset %X00000430
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$SUSPEND referenced
+	in psect ODATA offset %X000004CC
+	in module ORDS file SYS$SYSROOT:[SYSMGR]ORDS.OBJ;1

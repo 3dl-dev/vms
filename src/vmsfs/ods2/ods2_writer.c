@@ -753,9 +753,21 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
 
         memset(id, ' ', 20);
         memcpy(id, idbuf, first_len);
-        put16(id + 20, version); /* fi2_revision */
-        /* fi2_credate .. fi2_bakdate left zero:
-         * [OVMX-inferred] timestamps not modeled, see ods2.h. */
+        /* fi2_revision is the revision COUNT, and a mastered file has been
+         * created and written once: 1, as INIT's reserved files and MFD and a
+         * created-and-written file on the real VAX volume
+         * (tests/ods2/real_vax_ods2.dsk). Creation and revision dates are the
+         * mastering time (vms-263e); expiration and backup stay zero
+         * ("<None specified>" / "<No backup recorded>"), as there. */
+        (void)version;
+        put16(id + 20, 1); /* fi2_revision */
+        {
+            uint64_t now = ods2_vms_time_from_unix_ns(ods2_wall_ns());
+            put32(id + offsetof(ods2_ident_t, fi2_credate), (uint32_t)now);
+            put32(id + offsetof(ods2_ident_t, fi2_credate) + 4, (uint32_t)(now >> 32));
+            put32(id + offsetof(ods2_ident_t, fi2_revdate), (uint32_t)now);
+            put32(id + offsetof(ods2_ident_t, fi2_revdate) + 4, (uint32_t)(now >> 32));
+        }
         if (ext_len > 0) {
             uint8_t *ext = id + offsetof(ods2_ident_t, fi2_filenamext);
 

@@ -1963,6 +1963,62 @@ static void test_the_connect_data_settles_it_before_anyone_speaks(void)
 	ct_check_eq_u32(csb->cm_send_msg, 0u, "an impossible count resumes nothing");
 }
 
+/*
+ * rd vms-f297: THE ACCEPT HALF. This node RE-DIALS a system it was in the
+ * middle of a conversation with (sent 1..2, took its 1..2); the real VAX's
+ * ACCEPT says it had taken 2 (stall-rig arm HM-11) and it continues at 3. The
+ * block resumes from that -- whether it is already on the new connection
+ * (the reconnect ladder binds at CONNECT) or binds to it at open (the join's
+ * own connect) -- and what this node already said about itself STANDS: no
+ * MODEL/PARAMS mid-stream (rd vms-8c54 arm F-4).
+ */
+static void f297_redial(struct vms_csb *csb, uint32_t old_conid)
+{
+	cnxman_csb_bind_connection(csb, old_conid);
+	csb->cm_advert_conid = old_conid;      /* MODEL/PARAMS said on it */
+	csb->cm_advert_sent = 0x03u;
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);         /* sent 1..2 */
+	cnxman_csb_dialogue_heard(csb, 2u);    /* took the VAX's 1..2 */
+	cnxman_csb_note_connect_ack(csb, 2u);  /* our CONNECT advertised 2 */
+}
+
+static void test_f297_the_accept_data_settles_a_redial(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-f297: the peer's ACCEPT_REQ count resumes a re-dial\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	if (csb == NULL) { ct_check(0, "a CSB"); return; }
+
+	/* the ladder's reconnect: bound at CONNECT, then the ACCEPT arrives */
+	f297_redial(csb, 0x4e620041u);
+	cnxman_csb_bind_connection(csb, 0x4e620042u);
+	cnxman_csb_note_accept_conndata(csb, 0x4e620042u, 2u);
+	ct_check_eq_u32(csb->cm_send_msg, 2u,
+			"the next origination is 3 -- where the VAX continues");
+	ct_check_eq_u32(csb->cm_ack_msg, 2u,
+			"and it acks the 2 our CONNECT advertised");
+	ct_check_eq_u32(csb->cm_advert_conid, 0x4e620042u,
+			"what this node said about itself stands on the new "
+			"connection: nothing is re-introduced");
+
+	/* the join's own connect: the ACCEPT is read BEFORE the open binds */
+	f297_redial(csb, 0x4e620043u);
+	cnxman_csb_note_accept_conndata(csb, 0x4e620044u, 2u);
+	cnxman_csb_bind_connection(csb, 0x4e620044u);
+	ct_check_eq_u32(csb->cm_send_msg, 2u, "the bind resumes from it too");
+
+	/* a FRESH peer (taken 0) changes nothing: 1/0, as E77 */
+	f297_redial(csb, 0x4e620045u);
+	cnxman_csb_bind_connection(csb, 0x4e620046u);
+	cnxman_csb_note_accept_conndata(csb, 0x4e620046u, 0u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u, "a fresh ACCEPT: send-msg# 1");
+	ct_check(csb->cm_advert_conid != 0x4e620046u,
+		 "and a fresh conversation hears who this node is again");
+}
+
 /* rd vms-04b: an initial connect that dies leaves the block at NEW holding NO
  * Con.ID, so the joiner's dialler (join_reach_ours: NEW and cdt_conid == 0)
  * tries it again. Stall-rig arms K-5/K-11 waited forever on a dead Con.ID. */
@@ -2016,6 +2072,7 @@ int main(void)
 	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();
 	test_a_new_incarnation_retires_the_old_block();
+	test_f297_the_accept_data_settles_a_redial();
 	test_an_abandoned_connect_can_be_dialled_again();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");

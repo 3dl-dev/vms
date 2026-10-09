@@ -905,6 +905,9 @@ struct cnxman_join {
 	uint32_t holds_unheard;
 	uint32_t holds_fresh;
 	uint32_t holds_connectivity;
+	uint32_t ident_owed_holds;   /* admission held: a connected peer was
+				      * still owed this node's identity
+				      * records (rd vms-f297)              */
 	uint32_t holds_no_member;
 	uint32_t retargets;
 	uint32_t conn_follows;
@@ -949,6 +952,28 @@ struct cnxman_join {
 	 */
 	uint32_t relays_seen;
 	uint32_t relays_no_class;
+	/*
+	 * WHERE THIS NODE'S 0x81 ANSWERS WENT (rd vms-e8b).
+	 *
+	 * `replies_offtarget` counts answers sent on a connection to a member
+	 * OTHER than the one this join drives through -- which is CORRECT and
+	 * is the capability the cell exists for: spec 4(p) says a response goes
+	 * back on the connection its request arrived on, and the coordinator of
+	 * a transition is not always the join's own target. It was zero for the
+	 * life of this stack because every answer left on the target's Con.ID
+	 * whoever had asked, and the first real cat-0x01 request from a
+	 * non-target member -- a departing VAX1's class-0x04 op-0x03 -- was
+	 * answered to VAX2, which took a fatal CNXMGRERR 193 us later
+	 * (tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/).
+	 *
+	 * `replies_unaddressed` counts requests NOT answered because they
+	 * arrived on no connection this node holds a CSB for: there are no
+	 * dialogue counters to stamp honestly, so nothing is sent (INV-6).
+	 * Nonzero here strands whoever asked and is a gap to close, never a
+	 * resting state.
+	 */
+	uint32_t replies_offtarget;
+	uint32_t replies_unaddressed;
 	/*
 	 * RETIRED BY E79 and kept at zero rather than deleted: this counted the
 	 * cat-0x04 this FSM emitted per op-0x06, which is the flood that halted

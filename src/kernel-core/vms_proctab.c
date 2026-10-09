@@ -1875,3 +1875,82 @@ long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg)
         return -EFAULT;
     return 0;
 }
+
+/*
+ * vms_ioctl_pri - a process's base priority ($SETPRI / $GETJPI JPI$_PRIB, vms-768).
+ *
+ * Observed on OpenVMS VAX V7.3 (docs/oracle/semantics/privchk): $SETPRI below or
+ * up to the authorized priority sets it; above it, without ALTPRI, the call
+ * succeeds and the priority becomes the authorized one; with ALTPRI it is set as
+ * asked. The previous base priority is returned either way. Another process is
+ * reached under the same gate as $WAKE / $GETJPI (vms_proc_may_read).
+ */
+long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_pri_args args;
+    struct vms_proc *t;
+    uint32_t base, pri;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    if (args.op != VMS_PRI_OP_GET && args.op != VMS_PRI_OP_SET) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    t = (args.pid == 0 || args.pid == proc->vms_pid) ? proc : find_by_vms_pid(args.pid);
+    if (!t) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+    if (t != proc && !vms_proc_may_read(proc, t)) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    base = t->pri_set ? t->pri_base : VMS_PRI_DEFAULT;
+    args.prev = base;
+    args.authpri = VMS_PRI_DEFAULT;
+    if (args.op == VMS_PRI_OP_SET) {
+        pri = args.pri > 31u ? 31u : args.pri;
+        /* NEGCTL-ANCHORED (pri-altpri-not-checked): above the authorized
+         * priority only with ALTPRI. */
+        if (pri > args.authpri && !(proc->cur_privs & VMS_PRV_M_ALTPRI))
+            pri = args.authpri;
+        t->pri_base = (uint8_t)pri;
+        t->pri_set = 1;
+        args.pri = pri;
+    } else {
+        args.pri = base;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_brkauth - may the caller $BRKTHRU to every terminal / every user
+ * (vms-768)? Those send types need OPER: SS$_NOOPER without it (OpenVMS VAX
+ * V7.3, docs/oracle/semantics/privchk). Any other send type is the caller's own
+ * business here.
+ */
+long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_brkauth_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.status = SS__NORMAL;
+    /* NEGCTL-ANCHORED (brk-oper-not-checked) */
+    if ((args.sndtyp == 3u || args.sndtyp == 4u) && !(proc->cur_privs & VMS_PRV_M_OPER))
+        args.status = SS__NOOPER;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}

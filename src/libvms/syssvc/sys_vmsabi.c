@@ -2,7 +2,9 @@
  * sys_vmsabi.c - system services by their upper-case (VMS-ABI) names, taking
  * the VMS argument forms (vms-38b): SYS$ASSIGN, SYS$DASSGN, SYS$TRNLNM,
  * SYS$CRELNM, and SYS$QIO(W) for the ACP functions IO$_ACCESS / IO$_DEACCESS
- * on a file-class channel.
+ * on a file-class channel; vms-3b3f adds SYS$QIO(W) for every other function,
+ * LIB$PUT_OUTPUT and SYS$IMGSTA, which an image LINKed on real OpenVMS Alpha
+ * reaches through OVMX's SYS$PUBLIC_VECTORS / LIBRTL (src/vmslink/vms_vectors/).
  *
  * A string argument is a VMS descriptor: the 8-byte 32-bit form
  * (vms/descrip.h), or the 64-bit form, recognised as VMS services recognise
@@ -266,12 +268,12 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
         /* Writing attributes back on IO$_DEACCESS is not implemented: an
          * attribute list is refused for a file accessed for write, never
          * accepted and dropped. */
-        if (n_atr && chan < ABI_MAXCHAN && chan_write[chan])
+        if (n_atr && (chan >> 4) < ABI_MAXCHAN && chan_write[chan >> 4])
             st = SS$_BADATTRIB;
         else
             st = (unsigned short)ovmx_vmsabi_acp_deaccess(chan);
-        if (chan < ABI_MAXCHAN)
-            chan_write[chan] = 0;
+        if ((chan >> 4) < ABI_MAXCHAN)
+            chan_write[chan >> 4] = 0;
     } else {
         const char *fibp, *name = "";
         unsigned fiblen, namelen = 0;
@@ -313,8 +315,8 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
                             *p3 = (unsigned short)n;
                     }
                 }
-                if (keep && chan < ABI_MAXCHAN)
-                    chan_write[chan] = (acctl & 256u) != 0;   /* FIB$M_WRITE */
+                if (keep && (chan >> 4) < ABI_MAXCHAN)
+                    chan_write[chan >> 4] = (acctl & 256u) != 0;   /* FIB$M_WRITE */
             }
         }
     }
@@ -323,11 +325,32 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
     return SS$_NORMAL;
 }
 
+/* Every other function (a terminal or mailbox read/write, a device
+ * function...): P1-P6 are values or buffer addresses, not descriptors, so the
+ * request goes to the same $QIO OVMX's own code calls, unchanged (vms-3b3f). */
+static int is_acp_function(unsigned int func)
+{
+    unsigned fcode = func & IO$M_FCODE;
+    return fcode == IO$_ACCESS || fcode == IO$_DEACCESS;
+}
+
+static int dev_qio(int wait, unsigned int efn, unsigned short chan, unsigned int func,
+                   void *iosb, va_list ap)
+{
+    unsigned long long astadr = va_arg(ap, unsigned long long);
+    unsigned long long astprm = va_arg(ap, unsigned long long);
+    unsigned long long p[6];
+    for (int i = 0; i < 6; i++)
+        p[i] = va_arg(ap, unsigned long long);
+    return (int)ovmx_vmsabi_qio(wait, efn, chan, func, iosb, astadr, astprm, p);
+}
+
 int SYS$QIOW(unsigned int efn, unsigned short chan, unsigned int func, void *iosb, ...)
 {
     va_list ap;
     va_start(ap, iosb);
-    int st = acp_qio(efn, chan, func, iosb, ap);
+    int st = is_acp_function(func) ? acp_qio(efn, chan, func, iosb, ap)
+                                   : dev_qio(1, efn, chan, func, iosb, ap);
     va_end(ap);
     return st;
 }
@@ -336,7 +359,49 @@ int SYS$QIO(unsigned int efn, unsigned short chan, unsigned int func, void *iosb
 {
     va_list ap;
     va_start(ap, iosb);
-    int st = acp_qio(efn, chan, func, iosb, ap);
+    int st = is_acp_function(func) ? acp_qio(efn, chan, func, iosb, ap)
+                                   : dev_qio(0, efn, chan, func, iosb, ap);
     va_end(ap);
     return st;
+}
+
+/* ------------------------------------------ LIB$PUT_OUTPUT (LIBRTL) ------ */
+
+/* The message is a VMS descriptor, either form (vms-3b3f). */
+int LIB$PUT_OUTPUT(void *message)
+{
+    const char *p;
+    unsigned len;
+    if (!dsc_string(message, &p, &len) || !p)
+        return SS$_BADPARAM;
+    return (int)ovmx_vmsabi_put_output(p, len);
+}
+
+/* ---------------------------------------------------- SYS$IMGSTA ------ */
+
+/*
+ * SYS$IMGSTA -- the first transfer address of every image LINKed with
+ * traceback (its EIHD transfer vector names it in SYS$PUBLIC_VECTORS). The
+ * activator calls it with the six-argument activation list whose first
+ * argument is the transfer vector (procedure values, zero-terminated, this
+ * routine first); it calls the next transfer address with the same list, as
+ * LIB$INITIALIZE does (src/vmslink/starlet/lib_initialize.c): the remaining
+ * vector when another entry follows, else the main program's own procedure
+ * value. VMS also establishes the traceback condition handler here; OVMX's
+ * condition handling has no traceback handler to establish yet, so an
+ * unhandled condition is reported by OVMX's default handling instead (the
+ * compat register records SYS$IMGSTA as partial).
+ */
+typedef int (*vmsabi_xfer_fn)(void *, void *, void *, void *, unsigned int,
+                              unsigned int);
+
+int SYS$IMGSTA(void *xfervec, void *cli_util, void *imghdr, void *imgfile,
+               unsigned int linkflag, unsigned int cliflag)
+{
+    unsigned long long *vec = xfervec;
+    if (!vec || !vec[1])
+        return SS$_BADPARAM;
+    vmsabi_xfer_fn next = (vmsabi_xfer_fn)vec[1];
+    void *a0 = vec[2] ? (void *)&vec[1] : (void *)vec[1];
+    return next(a0, cli_util, imghdr, imgfile, linkflag, cliflag);
 }

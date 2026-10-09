@@ -204,6 +204,14 @@ static int capture_first_extent_cb(const ods2_extent_t *ext, void *ctx)
     return 1;   /* stop after the first extent */
 }
 
+/* vms-263e: the writer stamps file dates with the mastering time; a fixed
+ * SOURCE_DATE_EPOCH makes two writer runs (and INITIALIZE.EXE, which inherits
+ * the environment) produce the same bytes, so the comparison stays whole. */
+__attribute__((constructor)) static void fixed_mastering_time(void)
+{
+    setenv("SOURCE_DATE_EPOCH", "1791468000", 1);
+}
+
 int main(void)
 {
     ods2_fid_t dir_fid, file_fid;

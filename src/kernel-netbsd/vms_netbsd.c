@@ -378,6 +378,8 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 		memcpy(proc->rights_id, parent->rights_id, sizeof(proc->rights_id));
 		memcpy(proc->rights_attr, parent->rights_attr, sizeof(proc->rights_attr));
 		proc->rights_n = parent->rights_n;   /* the process rights list (vms-7d5a) */
+		proc->pri_base = parent->pri_base;   /* base priority (vms-768) */
+		proc->pri_set  = parent->pri_set;
 
 		/* Privilege masks: read parent under its mode_lock into locals... */
 		exec_lock(&parent->mode_lock);
@@ -1267,6 +1269,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DFPROT:
 	case VMS_IOCTL_DDIR:
 	case VMS_IOCTL_RIGHTS:
+	case VMS_IOCTL_PRI:
+	case VMS_IOCTL_BRKAUTH:
 	case VMS_IOCTL_SPAWN_NOTIFY:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
@@ -1305,6 +1309,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_ddir(proc, (unsigned long)uarg);             break;
 		case VMS_IOCTL_RIGHTS:
 			r = vms_ioctl_rights(proc, (unsigned long)uarg);           break;
+		case VMS_IOCTL_PRI:
+			r = vms_ioctl_pri(proc, (unsigned long)uarg);              break;
+		case VMS_IOCTL_BRKAUTH:
+			r = vms_ioctl_brkauth(proc, (unsigned long)uarg);          break;
 		/* /NOWAIT subprocess-exit completion arm (vms-e9a B1) */
 		case VMS_IOCTL_SPAWN_NOTIFY:
 			r = vms_ioctl_spawn_notify(proc, (unsigned long)uarg);     break;

@@ -362,6 +362,43 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
             }
             break;
 
+        case TOK_AT:
+            /*
+             * '@' IN A PARAMETER POSITION (rd vms-a18).
+             *
+             * '@' is honoured as a VERB only at the start of a line (the
+             * TOK_AT arm near the top of this function). Everywhere else it is
+             * the first character of a COMMAND STRING this command carries to
+             * somebody else -- `SPAWN @PROC.COM`, `SPAWN/NOWAIT
+             * @SYS$LOGIN:X.COM` -- and the default arm below silently DROPPED
+             * it, because TOK_AT is not one of the param token types. cmd_spawn
+             * then joined the surviving parameters, so the SPAWNed DCL was
+             * handed the bare filespec as its VERB and answered %DCL-E-IVVERB.
+             *
+             * Keep it, glued to the word that follows, the way DCL's own
+             * command tail carries it. The following word is consumed here
+             * (the TOK_PLUS arm's idiom) whether or not a blank separates it,
+             * because OpenVMS accepts `@ FILE.COM` as well as `@FILE.COM`. A
+             * trailing '@' with no word after it stays its own parameter, so
+             * the consumer reports its own error instead of acting on a command
+             * string that quietly lost a character.
+             */
+            if (cmd->param_count < DCL_MAX_PARAMS) {
+                char *dst = cmd->params[cmd->param_count];
+                dcl_token_t next;
+                dst[0] = '@';
+                dst[1] = '\0';
+                if (dcl_lexer_peek(&lex, &next) == 0 &&
+                    (next.type == TOK_WORD || next.type == TOK_STRING ||
+                     next.type == TOK_NUMBER)) {
+                    dcl_lexer_next(&lex, &next);
+                    strncat(dst, next.value, sizeof(cmd->params[0]) - 2);
+                }
+                cmd->param_count++;
+                last_was_param = 1;
+            }
+            break;
+
         case TOK_COMMA:
             /* Comma-separated parameters (continue to next param) */
             break;

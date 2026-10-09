@@ -26,6 +26,7 @@
  * dumped image (ODS2_WRITE_DUMP env var) can be attached the same way.
  */
 
+#define _POSIX_C_SOURCE 200809L   /* setenv */
 #include "vmsfs/ods2.h"
 
 #include <stdio.h>
@@ -122,6 +123,10 @@ int main(void)
     size_t manyline_len = 0;
 
     printf("=== ODS-2 writer round-trip (increment 3) ===\n");
+
+    /* vms-263e: a fixed mastering time, so every header's creation/revision
+     * date is a known quadword (8-OCT-2026 14:00:00 UTC). */
+    setenv("SOURCE_DATE_EPOCH", "1791468000", 1);
 
     /* ---------------------------------------------------------------
      * Build the volume.
@@ -270,8 +275,20 @@ int main(void)
                 CHECK(id != NULL, "reserved file ident non-NULL");
                 if (id) {
                     size_t nlen = strlen(names[fid - 1]);
+                    uint64_t cre, rev;
                     CHECK(memcmp(id->fi2_filename, names[fid - 1], nlen) == 0,
                           "reserved file name matches");
+                    /* vms-263e: as on the real VAX volume (INIT): revision
+                     * count 1, creation == revision date == the mastering
+                     * time, no expiration or backup date. */
+                    memcpy(&cre, id->fi2_credate, 8);
+                    memcpy(&rev, id->fi2_revdate, 8);
+                    CHECK_EQ(id->fi2_revision, 1, "reserved file revision count 1");
+                    CHECK(cre == 0x00BC3AB5C5957000ULL, "reserved file credate == mastering time");
+                    CHECK(rev == cre, "reserved file revdate == credate");
+                    CHECK(memcmp(id->fi2_expdate, "\0\0\0\0\0\0\0\0", 8) == 0 &&
+                          memcmp(id->fi2_bakdate, "\0\0\0\0\0\0\0\0", 8) == 0,
+                          "reserved file has no expiration/backup date");
                 }
                 /* [F2] every reserved file backlinks to the MFD (FID 4),
                  * and fh2_fid.seq == its own fid_num -- see ods2.h. A real

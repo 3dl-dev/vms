@@ -154,3 +154,4 @@ sys_sndopr
 sys_trnlnm
 sys_clrast
 sys_setdfprot
+sys_enqw

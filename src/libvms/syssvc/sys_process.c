@@ -577,6 +577,18 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                                  : info.terminal[0] ? JPI$K_LOCAL : JPI$K_DETACHED);
                 break;
 
+            case JPI$_PRIB:
+            case JPI$_PRI:
+            case JPI$_AUTHPRI: {
+                /* The executive's base / authorized priority (vms-768). */
+                uint32_t p = 0, auth = 0;
+                uint32_t pst = vms_kif_pri(VMS_PRI_OP_GET, info.vms_pid, &p, NULL, &auth);
+                if (!(pst & 1))
+                    return pst;
+                jpi_put_long(item, item->item_code == JPI$_AUTHPRI ? auth : p);
+                break;
+            }
+
             case JPI$_CPUTIM: {
                 /*
                  * THE WHOLE CALL FAILS IF THE TARGET HAS GONE.
@@ -2050,24 +2062,25 @@ uint32_t (sys$setpri)(const uint32_t *pidadr,
     if (!(status & 1))
         return status;
 
-    /* The target's PRIOR base priority, from ITS Linux nice, for prvpri. */
-    if (prvpri) {
-        errno = 0;
-        int current_nice = getpriority(PRIO_PROCESS, (id_t)target.linux_pid);
-        if (errno != 0) current_nice = 0;
-        /* Convert Linux nice (-20 to 19) back to VMS priority (31 to 0). */
-        *prvpri = (uint32_t)(19 - current_nice);
-        if (*prvpri > 31) *prvpri = 31;
+    /* The base priority is the executive's (vms-768): it sets it, clamping a
+     * raise above the authorized priority unless the caller holds ALTPRI, and
+     * hands back the previous one. */
+    {
+        uint32_t prev = 0;
+        status = vms_kif_pri(VMS_PRI_OP_SET, target.vms_pid, &pri, &prev, NULL);
+        if (!(status & 1))
+            return status;
+        if (prvpri)
+            *prvpri = prev;
     }
 
-    /* Map VMS priority to Linux nice value and apply it to the RESOLVED target:
-     *   VMS 31 -> nice -20 (highest priority); VMS 0 -> nice 19 (lowest).
-     * A raise the OS won't permit (unprivileged -> lower nice) fails honestly as
-     * SS$_NOPRIV; a target that vanished between resolution and here is
-     * SS$_NONEXPR -- never a fake success. */
+    /* The substrate scheduler follows it: VMS 31 -> nice -20, VMS 0 -> nice 19.
+     * A target that vanished is SS$_NONEXPR. A nice the host will not let this
+     * process lower is a host limit on scheduling only -- the VMS base priority
+     * is the executive's and is already set. */
     int nice_value = 19 - (int)pri;
-    if (setpriority(PRIO_PROCESS, (id_t)target.linux_pid, nice_value) < 0)
-        return (errno == ESRCH) ? SS$_NONEXPR : SS$_NOPRIV;
+    if (setpriority(PRIO_PROCESS, (id_t)target.linux_pid, nice_value) < 0 && errno == ESRCH)
+        return SS$_NONEXPR;
 
     return SS$_NORMAL;
 }
@@ -2090,8 +2103,9 @@ extern void vms$$qio_cancel_chan(uint16_t chan);
 uint32_t sys$cancel(uint16_t chan) {
     /* A channel this process does not hold is refused, as on OpenVMS (vms-4a69,
      * observed IO.CANCEL.BADCHAN) -- never a success that cancelled nothing. */
-    struct vms_pcb *cpcb = (chan != 0 && chan < PCB_MAX_CHANNELS) ? vms_pcb_get() : NULL;
-    if (!cpcb || !cpcb->channels[chan].in_use)
+    uint32_t cslot = pcb_chan_to_slot(chan);
+    struct vms_pcb *cpcb = (cslot != 0 && cslot < PCB_MAX_CHANNELS) ? vms_pcb_get() : NULL;
+    if (!cpcb || !cpcb->channels[cslot].in_use)
         return pcb_chan_unheld_status(chan);
     /* Pending asynchronous MAILBOX reads on the channel complete with SS$_ABORT
      * (vms-003). KNOWN GAP (vms-c8c): io_uring-submitted file I/O in flight on

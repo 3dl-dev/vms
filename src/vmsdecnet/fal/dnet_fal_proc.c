@@ -33,13 +33,26 @@ extern uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
                             unsigned short *old_len,
                             struct dsc$descriptor_s *old_dir);
 
-static int put_rec(uint32_t ch, uint8_t type, const void *p, size_t n)
+static int put_rec_w(uint32_t ch, uint8_t type, const void *p, size_t n, int norswait)
 {
     uint8_t rec[DNET_FALP_MAXMSG];
     if (n + 1 > sizeof rec) return -1;
     rec[0] = type;
     if (n) memcpy(rec + 1, p, n);
-    return (vms_kif_mbx_write(ch, rec, (uint32_t)(n + 1)) & 1) ? 0 : -1;
+    return (vms_kif_mbx_write_ex(ch, rec, (uint32_t)(n + 1), norswait) & 1) ? 0 : -1;
+}
+/* The server process's writes to NETACP may wait for room. */
+static int put_rec(uint32_t ch, uint8_t type, const void *p, size_t n)
+{
+    return put_rec_w(ch, type, p, n, 0);
+}
+/* NETACP's writes to a server process never wait (IO$M_NORSWAIT, rd vms-dda):
+ * NETACP serves every link from one loop, so a server process that has stopped
+ * reading -- exited, or wedged -- must cost only its own session (SS$_MBFULL ->
+ * the session ends), never stall NETACP and every other link with it. */
+static int put_rec_acp(uint32_t ch, uint8_t type, const void *p, size_t n)
+{
+    return put_rec_w(ch, type, p, n, 1);
 }
 
 /* ---- NETACP side ---------------------------------------------------------- */
@@ -105,7 +118,7 @@ uint32_t dnet_netsrv_proc_start(struct dnet_fal_proc *p, const char *image_spec,
     lb.default_dir[sizeof lb.default_dir - 1] = '\0';
     lb.remote_node[sizeof lb.remote_node - 1] = '\0';
     lb.local_node[sizeof lb.local_node - 1] = '\0';
-    if (put_rec(p->ch_to, DNET_FALP_REC_LINKBLK, &lb, sizeof lb) != 0) {
+    if (put_rec_acp(p->ch_to, DNET_FALP_REC_LINKBLK, &lb, sizeof lb) != 0) {
         dnet_fal_proc_close(p);
         p->fail_stage = "mailbox $QIO";
         return SS$_EXQUOTA;
@@ -160,7 +173,7 @@ uint32_t dnet_fal_proc_start(struct dnet_fal_proc *p, uint32_t uic,
 int dnet_fal_proc_put(struct dnet_fal_proc *p, const uint8_t *seg, size_t len)
 {
     if (!p || !p->active) return -1;
-    return put_rec(p->ch_to, DNET_FALP_REC_DATA, seg, len);
+    return put_rec_acp(p->ch_to, DNET_FALP_REC_DATA, seg, len);
 }
 
 int dnet_fal_proc_poll(struct dnet_fal_proc *p, uint8_t *buf, size_t cap,
@@ -199,7 +212,7 @@ void dnet_fal_proc_close(struct dnet_fal_proc *p)
 {
     if (!p) return;
     if (p->ch_to) {
-        (void)put_rec(p->ch_to, DNET_FALP_REC_END, NULL, 0);
+        (void)put_rec_acp(p->ch_to, DNET_FALP_REC_END, NULL, 0);
         vms_kif_mbx_delmbx(p->ch_to);
     }
     if (p->ch_from) vms_kif_mbx_delmbx(p->ch_from);

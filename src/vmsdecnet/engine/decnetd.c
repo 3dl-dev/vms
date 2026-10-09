@@ -6644,6 +6644,20 @@ static int run_netacp_broker_selftest(void)
                  " and its own inbound dispatch refuses the unserved object honestly (ABORT)");
     }
 
+    /* (3b) This node to ITSELF with credentials its inbound FAL refuses: the
+     * loopback refusal must reach the outbound slot, which completes the OPEN
+     * SS$_INVLOGIN -- never a client left waiting (the booted bad-password COPY). */
+    {
+        unsigned long wire0 = g_nb_wire;
+        const char *ncb = "0\"SYSTEM WRONGPW\"::\"17=\"";
+        size_t x = 0;
+        uint32_t st = netcli_op(&nc, DNET_BROKER_OP_OPEN, ncb, strlen(ncb), NULL, 0, &x);
+        printf("  INFO: loopback refused-FAL OPEN -> %08X\n", (unsigned)st);
+        NA_CHECK(st == SS$_INVLOGIN && g_nb_wire == wire0 && nb_used() == 0,
+                 "a link to this node itself whose credentials its own FAL refuses completes the OPEN"
+                 " SS$_INVLOGIN over the loopback, with no slot left behind");
+    }
+
     /* (4) Honest refusals before any link is attempted. */
     {
         size_t x = 0;
@@ -6969,6 +6983,54 @@ static int net_req_probe_spawn(struct netreq_probe *v)
     return ok;
 }
 
+
+/* DIAGNOSTIC (rd vms-dda booted hang): if the step it guards has not finished
+ * in 60 s, print where the running NETACP is (its kernel wait channel and
+ * syscall, read from the host /proc of the process the executive names NETACP)
+ * and the tail of its log (its stdout), then keep waiting. Read-only. */
+static volatile int g_wd_done;
+static void wd_cat(const char *path, size_t tail)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) { printf("    (cannot read %s)\n", path); return; }
+    static char b[16384];
+    size_t n = fread(b, 1, sizeof b - 1, f);
+    fclose(f);
+    b[n] = '\0';
+    const char *p = n > tail ? b + n - tail : b;
+    printf("%s\n", p);
+}
+static void *netacp_watchdog(void *v)
+{
+    (void)v;
+    for (int k = 0; k < 600 && !g_wd_done; k++) {
+        struct timespec ts = { 0, 100 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    if (g_wd_done) return NULL;
+    struct vms_procinfo pi;
+    memset(&pi, 0, sizeof pi);
+    if (!(vms_kif_getjpi_prcnam("NETACP", &pi) & 1) || !pi.linux_pid) {
+        printf("  DIAG: 60 s and no answer; no NETACP process found by name\n");
+        return NULL;
+    }
+    char path[64], lnk[512];
+    printf("  DIAG: 60 s and no answer; NETACP is linux pid %u\n", (unsigned)pi.linux_pid);
+    snprintf(path, sizeof path, "/proc/%u/wchan", (unsigned)pi.linux_pid);
+    printf("  DIAG: wchan: "); wd_cat(path, 200);
+    snprintf(path, sizeof path, "/proc/%u/syscall", (unsigned)pi.linux_pid);
+    printf("  DIAG: syscall: "); wd_cat(path, 200);
+    snprintf(path, sizeof path, "/proc/%u/fd/1", (unsigned)pi.linux_pid);
+    ssize_t ln = readlink(path, lnk, sizeof lnk - 1);
+    if (ln > 0) {
+        lnk[ln] = '\0';
+        printf("  DIAG: NETACP log %s (tail):\n", lnk);
+        wd_cat(lnk, 6000);
+    }
+    fflush(stdout);
+    return NULL;
+}
+
 static int run_net_loopback_accept_test(void)
 {
     dnet_tick_t t0 = monotonic_sec();
@@ -7026,7 +7088,12 @@ static int run_net_loopback_accept_test(void)
                  " records BYTE-MATCH (qio_net_op -> mailboxes -> NETACP -> loopback -> FAL.EXE)");
         printf("  NOTE: t+%lus: COPY with a bad password\n", (unsigned long)(monotonic_sec() - t0));
         fflush(stdout);
+        pthread_t wdt;
+        g_wd_done = 0;
+        int wd = pthread_create(&wdt, NULL, netacp_watchdog, NULL) == 0;
         st = (rp == 0) ? copy_client_run_net(&c, &plan, "WRONGPW") : SS$_BADPARAM;
+        g_wd_done = 1;
+        if (wd) pthread_join(wdt, NULL);
         printf("  NOTE: t+%lus: bad-password COPY returned %08X\n",
                (unsigned long)(monotonic_sec() - t0), (unsigned)st);
         NL_CHECK(st == SS$_INVLOGIN,

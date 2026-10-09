@@ -77,6 +77,7 @@ struct vms_tt {
 	uint8_t  line[VMS_TT_LINE_MAX];
 	uint32_t len;
 	int      hc_del;           /* hardcopy: inside a \...\ rubout run */
+	int      esc;              /* inside an escape sequence: 1 after ESC, 2 after CSI/SS3 */
 	struct vms_tt_read_result res;
 
 	/* echo bytes waiting for the port (handed over outside the lock) */
@@ -220,6 +221,30 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		tt->line[tt->len++] = c;
 		if (tt->len >= tt->rd_cap)
 			tt_complete(tt, SS__NORMAL, 0, 0);
+		return;
+	}
+
+	/* An escape sequence (a cursor key: ESC [ A, ESC O A, ...) is one key,
+	 * not a run of data characters, and it does not end the read unless the
+	 * caller's own terminator mask asks for ESC. The cursor keys' editing
+	 * meanings -- recall, cursor motion -- belong to the line editor and to
+	 * DCL's recall (rd vms-eda8 / vms-eb3d); until then the key is consumed
+	 * and has no effect, rather than ending the read (which would run the
+	 * half-typed command) or landing in the line as "^[[A". */
+	if (tt->esc) {
+		if (tt->esc == 1 && (c == '[' || c == 'O')) {
+			tt->esc = 2;
+			return;
+		}
+		if (tt->esc == 2 && c >= 0x20 && c < 0x40)
+			return;                  /* parameter / intermediate bytes */
+		tt->esc = 0;
+		if (c >= 0x40 && c < 0x7F)
+			return;                  /* the final byte ends the sequence */
+		/* not a sequence after all: treat c normally */
+	}
+	if (filter && c == 0x1B && !(tt->rd_flags & VMS_TT_RD_TERMMASK)) {
+		tt->esc = 1;
 		return;
 	}
 
@@ -601,6 +626,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		tt->rd_dc = dc;
 		tt->len = 0;
 		tt->hc_del = 0;
+		tt->esc = 0;
 		memset(&tt->res, 0, sizeof(tt->res));
 		if (req->flags & VMS_TT_RD_TERMMASK)
 			memcpy(tt->rd_mask, req->termmask, sizeof(tt->rd_mask));

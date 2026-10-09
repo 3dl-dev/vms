@@ -2090,6 +2090,7 @@ IO$M_PURGE discards the type-ahead before reading
 DELETE rubs out the last character (data 'ac')
 DELETE is echoed as BS SP BS on a scope terminal
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
+an escape sequence (up-arrow) neither ends the read nor lands in the line
 ^Z terminates the read
 the driver echoes *EXIT* for ^Z
 read(2) on the bound line returns the line with LF for the RETURN

@@ -277,6 +277,15 @@ int main(void)
     CHECK(r.st == SS_NORMAL && strcmp(r.data, "ab") == 0,
           "^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'");
 
+    /* ---- a cursor key is one key, not data, and does not end the read ---- */
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "ab\x1b[Ac\r");
+    rd_wait(&r);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(r.st == SS_NORMAL && strcmp(r.data, "abc") == 0 && r.a.term == 13,
+          "an escape sequence (up-arrow) neither ends the read nor lands in the line");
+
     /* ---- ^Z ---- */
     rd_start(&r, chan, 0, NULL, 0);
     msleep(200);

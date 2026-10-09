@@ -260,9 +260,10 @@ static void test_op08_barrier_lookup(void)
  * ========================================================================== */
 static struct vms_dlm_dir_entry g_store[64];
 
-static int keep_even(void *ctx, uint32_t hash)
+static int keep_even(void *ctx, uint32_t hash, int hash_known)
 {
 	(void)ctx;
+	(void)hash_known;
 	return (hash & 1u) == 0u;
 }
 
@@ -282,19 +283,19 @@ static void test_table_outcomes(void)
 	ident(&a_grp1, "DLMTA", 1u, 3u, 0x00336fe3u);
 	ident(&b, "DLMTB", 0u, 3u, 0x7e66dde3u);
 
-	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010002u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010002u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_YOU && m == 0x00010002u,
 		 "no entry: the requester masters it, and it is RECORDED");
-	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010003u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010003u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_REDIRECT && m == 0x00010002u,
 		 "the next asker is redirected to that master");
-	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010002u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010002u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_YOU,
 		 "the master itself asking is told it masters it");
-	ct_check(vms_dlm_dir_lookup(&d, &a_mode1, 0x00010003u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &a_mode1, 0x00010003u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_YOU,
 		 "the same name in another ACCESS MODE is another resource");
-	ct_check(vms_dlm_dir_lookup(&d, &a_grp1, 0x00010003u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &a_grp1, 0x00010003u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_YOU,
 		 "the same name in another GROUP is another resource");
 
@@ -303,7 +304,7 @@ static void test_table_outcomes(void)
 		 "a removal from a system that is not the master removes nothing");
 	ct_check(vms_dlm_dir_remove(&d, &a, 0x00010002u) == 0 &&
 		 vms_dlm_dir_find(&d, &a) == NULL, "the master's removal does");
-	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010003u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &a, 0x00010003u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_YOU && m == 0x00010003u,
 		 "after removal the next asker becomes the master");
 
@@ -340,15 +341,185 @@ static void test_table_full_is_refused(void)
 	for (i = 0; i < 20u; i++) {
 		snprintf(nm, sizeof(nm), "R%u", i);
 		ident(&id, nm, 0u, 0u, i * 2654435761u);
-		if (vms_dlm_dir_lookup(&d, &id, 0x00010002u, &m) ==
+		if (vms_dlm_dir_lookup(&d, &id, 0x00010002u, 0u, &m) ==
 		    VMS_DLM_DIR_ANSWER_YOU)
 			ok++;
 	}
 	ct_check_eq_u32(ok, 14u, "14 of 16 slots fill (one eighth stays free)");
-	ct_check(vms_dlm_dir_lookup(&d, &id, 0x00010002u, &m) ==
+	ct_check(vms_dlm_dir_lookup(&d, &id, 0x00010002u, 0u, &m) ==
 		 VMS_DLM_DIR_ANSWER_NONE,
 		 "the 15th new name gets NO answer -- not an unrecorded 0xf9");
 	ct_check(d.full_refusals >= 1u, "and the refusal is counted");
+}
+
+/* ==========================================================================
+ * 3b. THE TWO-MASTER HOLE, at the table (rd vms-025 / vms-db2a)
+ *
+ * The table is now keyed by the NAME, and that is not a refactor: it is what
+ * makes the two questions below answerable at all. Each test here FAILS on the
+ * hash-probed table this replaced, which is the negative control.
+ * ========================================================================== */
+#define SELF_CSID  0x00010004u
+#define VAX_CSID   0x00010002u
+#define VAX2_CSID  0x00010003u
+
+static void test_name_lookup_finds_a_wire_recorded_master(void)
+{
+	struct vms_dlm_dir d;
+	struct vms_dlm_res_ident a;
+	vms_csid_t m = 0, master = 0;
+	uint32_t hash = 0;
+	uint8_t hash_known = 0;
+
+	printf("-- rd vms-025: THIS NODE's own $ENQ can ask its own directory\n");
+	(void)vms_dlm_dir_init(&d, g_store, 64u);
+	ident(&a, "EVACWL", 0u, 3u, 0x1234abcdu);
+
+	/* A real VAX looked the name up here and this directory answered "you
+	 * master it" -- and RECORDED it (rd vms-8219). */
+	ct_check(vms_dlm_dir_lookup(&d, &a, VAX_CSID, SELF_CSID, &m) ==
+		 VMS_DLM_DIR_ANSWER_YOU && m == VAX_CSID,
+		 "a VAX's lookup is answered 'you master it' and recorded");
+
+	/* *** THE QUESTION THE ENGINE COULD NOT ASK *** -- by NAME, with no
+	 * hash, because a local $ENQ holds a name and nothing else. */
+	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, &hash,
+					 &hash_known) ==
+		 VMS_DLM_DIR_NAME_MASTER && master == VAX_CSID,
+		 "*** the name lookup names the VAX as the master -- so a local "
+		 "$ENQ cannot master it a second time ***");
+	ct_check(hash_known == 1u && hash == 0x1234abcdu,
+		 "  and it carries the WIRE hash off the VAX's own frame -- the "
+		 "only value that may address a frame for this name");
+	ct_check_eq_u32(d.name_lookups, 1u, "the ask is counted");
+
+	/* A name nothing has been said about is NOT an answer. */
+	ct_check(vms_dlm_dir_lookup_name(&d, "NOBODY", 6u, &master, NULL,
+					 NULL) == VMS_DLM_DIR_NAME_NONE,
+		 "a name no system has named here is reported as NO entry, "
+		 "never as an unmastered 0");
+}
+
+static void test_self_claim_is_answered_as_master(void)
+{
+	struct vms_dlm_dir d;
+	struct vms_dlm_res_ident a, a_other_domain;
+	vms_csid_t m = 0, master = 0;
+	uint8_t hash_known = 1u;
+
+	printf("-- rd vms-db2a: a name THIS NODE masters is answered as master\n");
+	(void)vms_dlm_dir_init(&d, g_store, 64u);
+
+	/* This node mastered the name on first use and recorded the claim. It
+	 * has no wire hash for it and must not invent one. */
+	ct_check(vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID) == 0,
+		 "this node records its own mastery of a name it touched first");
+	ct_check_eq_u32(d.self_claims, 1u, "counted");
+	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, NULL,
+					 &hash_known) ==
+		 VMS_DLM_DIR_NAME_MASTER && master == SELF_CSID &&
+		 hash_known == 0u,
+		 "  the entry names THIS node and carries NO hash (honest "
+		 "absence, never a zero dressed as a hash)");
+	ct_check(vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID) == 0 &&
+		 d.self_claims == 1u, "  claiming it again changes nothing");
+
+	/* *** THE HOLE, FROM THE OTHER SIDE *** -- a VAX now looks the name up.
+	 * Its frame carries ITS group, ITS access mode and ITS hash, none of
+	 * which this node holds; on the hash-probed table its lookup missed the
+	 * claim entirely and was answered "you master it". */
+	ident(&a, "EVACWL", 0u, 3u, 0x1234abcdu);
+	ct_check(vms_dlm_dir_lookup(&d, &a, VAX_CSID, SELF_CSID, &m) ==
+		 VMS_DLM_DIR_ANSWER_SELF && m == SELF_CSID,
+		 "*** the VAX's lookup is answered THIS NODE MASTERS IT "
+		 "(p. 6-51), not 'you master it' ***");
+	ct_check_eq_u32(d.answered_you, 0u,
+			"  nothing was answered 'you master it'");
+	ct_check_eq_u32(d.answered_self, 1u, "  and the outcome is counted");
+
+	/* A DIFFERENT resource domain of the same name reaches the same answer:
+	 * the conflation is conservative and can only ever conclude that THIS
+	 * node is the master -- never route one system at another. */
+	ident(&a_other_domain, "EVACWL", 1u, 1u, 0x9999fefeu);
+	ct_check(vms_dlm_dir_lookup(&d, &a_other_domain, VAX2_CSID, SELF_CSID,
+				    &m) == VMS_DLM_DIR_ANSWER_SELF,
+		 "another resource domain of that name is answered the same "
+		 "way (over-serialize, never two masters)");
+
+	/* With no identity of our own the outcome is unreachable rather than
+	 * guessed: a node that does not know its CSID cannot claim mastery. */
+	ct_check(vms_dlm_dir_lookup(&d, &a, VAX_CSID, 0u, &m) !=
+		 VMS_DLM_DIR_ANSWER_SELF,
+		 "a node that does not know its own CSID never answers SELF");
+}
+
+static void test_two_masters_for_one_name_are_refused(void)
+{
+	struct vms_dlm_dir d;
+	struct vms_dlm_res_ident g0, g1;
+	vms_csid_t m = 0, master = 0;
+
+	printf("-- two systems mastering one name: refused, never chosen\n");
+	(void)vms_dlm_dir_init(&d, g_store, 64u);
+	ident(&g0, "QMAN$", 0u, 3u, 0x11110000u);
+	ident(&g1, "QMAN$", 1u, 3u, 0x22220000u);
+	(void)vms_dlm_dir_lookup(&d, &g0, VAX_CSID, SELF_CSID, &m);
+	(void)vms_dlm_dir_lookup(&d, &g1, VAX2_CSID, SELF_CSID, &m);
+
+	ct_check(vms_dlm_dir_lookup_name(&d, "QMAN$", 5u, &master, NULL,
+					 NULL) == VMS_DLM_DIR_NAME_AMBIGUOUS,
+		 "*** a local $ENQ on that name is REFUSED, not routed at one "
+		 "of them on a coin toss ***");
+	ct_check_eq_u32(d.name_ambiguous, 1u, "counted");
+}
+
+static int keep_nothing(void *ctx, uint32_t hash, int hash_known)
+{
+	(void)ctx;
+	(void)hash;
+	(void)hash_known;
+	return 0;
+}
+
+static int keep_sole_directory(void *ctx, uint32_t hash, int hash_known)
+{
+	(void)hash;
+	/* What dlm_arm_dir_is_ours does: an entry with no wire hash cannot be
+	 * judged against a vector index, so it is kept exactly while this node
+	 * is the sole directory node. */
+	return hash_known ? 1 : (*(const int *)ctx);
+}
+
+static void test_a_hashless_claim_survives_only_the_sole_directory(void)
+{
+	struct vms_dlm_dir d;
+	int sole;
+	vms_csid_t master = 0;
+
+	printf("-- a transition: a hashless self-claim is judged on the vector\n");
+	(void)vms_dlm_dir_init(&d, g_store, 64u);
+	(void)vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID);
+	sole = 1;
+	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_sole_directory, &sole),
+			0u, "sole directory node: the claim stays");
+	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, NULL,
+					 NULL) == VMS_DLM_DIR_NAME_MASTER,
+		 "  and is still answerable");
+	sole = 0;
+	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_sole_directory, &sole),
+			1u, "no longer the sole directory node: it is dropped "
+			    "(p. 6-33), never kept on a stale vector");
+	ct_check(vms_dlm_dir_lookup_name(&d, "EVACWL", 6u, &master, NULL,
+					 NULL) == VMS_DLM_DIR_NAME_NONE,
+		 "  and the directory then says nothing about the name");
+
+	/* And a departure takes this node's own claims with it only when the
+	 * CSID that left is this node's -- which it never is. */
+	(void)vms_dlm_dir_claim_self(&d, "EVACWL", 6u, SELF_CSID);
+	ct_check_eq_u32(vms_dlm_dir_drop_master(&d, VAX_CSID), 0u,
+			"another system's departure does not drop our claim");
+	ct_check_eq_u32(vms_dlm_dir_drop_unless(&d, keep_nothing, NULL), 1u,
+			"a predicate that keeps nothing drops it");
 }
 
 /* A randomized model check: the table agrees with a flat reference after
@@ -412,6 +583,10 @@ int main(void)
 	test_op08_barrier_lookup();
 	test_table_outcomes();
 	test_table_full_is_refused();
+	test_name_lookup_finds_a_wire_recorded_master();
+	test_self_claim_is_answered_as_master();
+	test_two_masters_for_one_name_are_refused();
+	test_a_hashless_claim_survives_only_the_sole_directory();
 	test_table_model();
 	return ct_summary("test_dlm_dir");
 }

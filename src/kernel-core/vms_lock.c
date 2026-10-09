@@ -856,6 +856,41 @@ int vms_lock_dlm_name_in_use(const char *resnam)
     return busy;
 }
 
+/* Defined with the router below (the rd vms-151 relabelling lives there). */
+static int dlm_master_is_us(struct vms_lock_resource *res);
+
+/*
+ * vms_lock_dlm_name_mastered_here - does THIS node master the resource of this
+ * name, right now? (rd vms-db2a.)
+ *
+ * The directory role asks before it answers a real VMS system's lookup: when
+ * this node is the tree's master the faithful answer is not "you master it" and
+ * not a redirect naming ourselves -- it is to RESOLVE the request as the master
+ * (Davis p. 6-31 outcome (a), p. 6-51). This is the one read that decides it,
+ * and it is a read of res->master_csid, the engine's own mastering record.
+ *
+ * `dlm_master_is_us` rather than a bare comparison, for the reason that function
+ * documents (rd vms-151): a resource mastered before the cluster assigned this
+ * node its CSID carries the previous identity, and it is still this node's.
+ */
+int vms_lock_dlm_name_mastered_here(const char *resnam)
+{
+    struct vms_lock_resource *res;
+    int mine = 0;
+
+    if (resnam == NULL || resnam[0] == '\0')
+        return 0;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find(resnam);
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        mine = (res->master_csid != 0 && dlm_master_is_us(res)) ? 1 : 0;
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return mine;
+}
+
 uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
 {
     struct vms_lock_resource *res;
@@ -1093,6 +1128,102 @@ static int dlm_route_known_master(struct vms_lock_resource *res,
     return 1;
 }
 
+/*
+ * THIS NODE'S OWN LOCK DIRECTORY, CONSULTED BEFORE ANYTHING IS MASTERED
+ * (rd vms-025 / vms-db2a; vms_dlm_proxy.h `dir_local_lookup`).
+ *
+ * THE HOLE, MEASURED on origin/main. With a real VAX in the membership the
+ * all-OVMX gate makes dir_resolve() answer "this node" for EVERY name, so this
+ * engine mastered everything locally -- while the directory entries THIS NODE
+ * HOLDS said otherwise. A VAX that locked a name first had its lookup answered
+ * here and RECORDED here (rd vms-8219): this node's own directory truthfully
+ * named the VAX as the master, and the next local $ENQ for that name mastered it
+ * here as well. Two masters for one resource; the first shared file is corrupt.
+ *
+ * WHAT THIS FUNCTION IS. One read of the directory this node already holds,
+ * taken before the "master it locally on first use" step, plus the record of
+ * this node's own mastery when nobody else has it. No hash is involved in either
+ * direction -- which is why it is confined to the SOLE-DIRECTORY configuration,
+ * where the vector directs every root name here and a missing entry therefore
+ * really does mean "no system in this cluster masters this name". The
+ * implementation refuses outside it (vms_ldwv_sole_directory), and then this
+ * returns "unsettled" and the pre-existing behaviour stands, unchanged.
+ *
+ * Caller holds res->lock. Returns 1 when the route is SETTLED.
+ */
+static int dlm_route_own_directory(struct vms_lock_resource *res,
+                                   enum dlm_route *route, uint32_t *dst_csid,
+                                   uint32_t *status)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    struct vms_dlm_dir_local a;
+    uint32_t name_len;
+
+    *status = SS__NORMAL;
+    if (ops.dir_local_lookup == NULL)
+        return 0;
+    name_len = (uint32_t)strnlen(res->name, sizeof(res->name));
+    if (name_len == 0u)
+        return 0;
+
+    memset(&a, 0, sizeof(a));
+    if (ops.dir_local_lookup(ops.ctx, res->name, name_len, &a) != SS__NORMAL)
+        return 0;              /* not the sole directory, or it cannot answer */
+
+    if (a.is_self || a.master_csid == 0u) {
+        /*
+         * NO SYSTEM MASTERS IT YET and this node is its directory: p. 6-31's
+         * "simply assumes mastery". The mastery is also RECORDED in this node's
+         * own directory, so a reader of that directory sees what the engine
+         * sees.
+         *
+         * AND A FAILED RECORD IS NOT A FAILED $ENQ. The record is belt-and-
+         * braces, not the protection: the directory role's FIRST question
+         * about an incoming lookup is the ENGINE's own mastering record
+         * (vms_lock_dlm_name_mastered_here), which needs no table entry, so a
+         * name this node masters is answered "this node masters it" whether or
+         * not the claim fit. Refusing the $ENQ because a fixed-size table was
+         * full would turn a bounded table into a node that stops locking --
+         * a worse failure than the one it would be guarding against, and one
+         * the guard is not needed for. The table counts the refusal
+         * (full_refusals) and this node masters the name, as it always did.
+         */
+        if (ops.dir_claim_self != NULL)
+            (void)ops.dir_claim_self(ops.ctx, res->name, name_len);
+        res->master_csid = vms_local_csid;
+        *route = DLM_ROUTE_LOCAL;
+        *dst_csid = 0;
+        return 1;
+    }
+
+    /*
+     * ANOTHER SYSTEM MASTERS IT, and this node's own directory is where that
+     * fact came from. Route the request THERE (p. 6-32: the RSB's master CSID
+     * is why the next $ENQ in the tree goes straight to the master).
+     *
+     * THE HASH IS THE OTHER HALF AND IT IS NOT OPTIONAL. The frame that carries
+     * this request also carries body[128:132], and the only value that may go
+     * there is one the cluster itself produced for this exact name. The
+     * directory entry carries the value off the frame that created it; it is
+     * recorded on the RSB here (the same store the wire learner uses) so the
+     * post is built from an executive read like every other field. With no such
+     * value -- an entry created by a registration frame, which carries no
+     * learnable hash -- the request is REFUSED rather than sent with a zero:
+     * that zero made a real VAX install OVMX as master of resources it did not
+     * master, at 35 frames a second.
+     */
+    if (a.dir_hash_known && a.dir_hash != 0u)
+        (void)dir_hash_store(res, a.dir_hash);
+    if (!res->hash_known) {
+        *status = SS__UNSUPPORTED;
+        return 1;
+    }
+    res->master_csid = a.master_csid;
+    *route = DLM_ROUTE_REMOTE;
+    *dst_csid = a.master_csid;
+    return 1;
+}
+
 static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
                                    enum dlm_route *route, uint32_t *dst_csid)
 {
@@ -1103,6 +1234,15 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
 
     if (dlm_route_known_master(res, route, dst_csid))
         return SS__NORMAL;
+
+    /*
+     * An INBOUND request is not routed by this node's directory: it arrived
+     * here because the SENDER's cluster addressed it here, and that decision is
+     * a fact this node received (the same reasoning as the refusal below). It
+     * is served, or refused, as the master role decides.
+     */
+    if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))
+        return st;
 
     st = dir_resolve(res, &dir);
     if (st != SS__NORMAL) {
@@ -3634,6 +3774,114 @@ static void dlm_proxies_master_departed(struct vms_lock_resource *res,
 }
 
 /*
+ * dlm_find_lock_of_csid - the FIRST master-side LKB this node holds for `csid`,
+ * named by the two handles a release needs. Returns 1 when one was found.
+ *
+ * A snapshot, deliberately: the release itself must run with no lock of ours
+ * held (it takes the resource hash lock), so this reads the two ids under the
+ * locks that make them coherent and lets go.
+ *
+ * `proxy` LKBs are skipped. A proxy is this node's own image of a lock SOMEBODY
+ * ELSE masters; it is not a lock held for the departed system and its fate is
+ * dlm_proxies_master_departed's business.
+ */
+static int dlm_find_lock_of_csid(uint32_t csid, uint32_t *master_lkid,
+                                 uint32_t *req_lkid)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *l;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->granted, res_granted) {
+            if (l->proxy || l->req_csid != csid)
+                continue;
+            *master_lkid = l->lkid;
+            *req_lkid = l->req_lkid;
+            found = 1;
+            break;
+        }
+        if (!found) {
+            exec_list_for_each_entry(l, &res->waiting, res_waiting) {
+                if (l->proxy || l->req_csid != csid)
+                    continue;
+                *master_lkid = l->lkid;
+                *req_lkid = l->req_lkid;
+                found = 1;
+                break;
+            }
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+/*
+ * vms_lock_dlm_release_csid_locks - ONE SYSTEM LEFT: release exactly the locks
+ * this node holds FOR it (rd vms-4d3; vms-c27 binding condition 3).
+ *
+ * WHY THIS IS A RUNG OF ITS OWN AND WHY IT MATTERS HERE. Every master-side LKB
+ * this node creates for a remote requester is OWNED by the delivery proc
+ * (vms_dlm_master.h), so "the owner died" is a whole-cluster teardown and says
+ * nothing about one member leaving. Without this sweep a departed system's locks
+ * stay GRANTED on this master forever: the resource is wedged, and a waiter --
+ * including the OVMX process that is supposed to take the workload over -- waits
+ * for a holder that no longer exists. That is the evacuation gate's whole point.
+ *
+ * EVERY RELEASE GOES THROUGH THE ONE REAL RELEASE PATH. It builds the same
+ * master-side DEQ request an inbound op-0x03 builds and calls the same
+ * vms_lock_dlm_master_serve(), so the authorization (the LKB's own `req_csid`
+ * tag, condition 2), the LVB rules and try_grant_waiters -- which is what GRANTS
+ * the waiter -- are the shipping ones and not a second implementation. Nothing
+ * is fabricated: a lock is released only because the lock database says this
+ * node holds it for that CSID.
+ *
+ * Returns SS$_NORMAL; `*n_released` (optional) is how many really went.
+ */
+uint32_t vms_lock_dlm_release_csid_locks(uint32_t csid, uint32_t *n_released)
+{
+    uint32_t n = 0u;
+
+    if (n_released != NULL)
+        *n_released = 0u;
+    if (csid == 0u)
+        return SS__BADPARAM;
+
+    for (;;) {
+        struct vms_dlm_master_request r;
+        struct vms_dlm_master_result out;
+        uint32_t master_lkid = 0u, req_lkid = 0u;
+
+        if (!dlm_find_lock_of_csid(csid, &master_lkid, &req_lkid))
+            break;
+
+        memset(&r, 0, sizeof(r));
+        r.op = VMS_DLM_MREQ_DEQ;
+        r.req_csid = csid;
+        r.req_lkid = req_lkid;
+        r.master_lkid = master_lkid;
+        if (vms_lock_dlm_master_serve(&r, &out) != SS__NORMAL ||
+            out.outcome != (uint8_t)VMS_DLM_MASTER_RELEASED) {
+            /* The engine declined to release a lock it reported holding for
+             * this CSID -- stop rather than spin. Nothing was released and
+             * nothing is claimed. */
+            break;
+        }
+        n++;
+    }
+
+    if (n_released != NULL)
+        *n_released = n;
+    return SS__NORMAL;
+}
+
+/*
  * The sweep itself, callable from kernel-core (vms_dlm_master.h): the DLM's
  * wire arm learns a departure as a DIRECT CALL from the connection manager, not
  * through an ioctl, so the ioctl below and the arm run the SAME code.
@@ -3669,6 +3917,10 @@ void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found)
     }
 
     exec_unlock(&vms_res_hash_lock);
+
+    /* ... and the locks this node holds ON BEHALF OF the departed system are
+     * released, which is what lets a waiter behind them run (rd vms-4d3). */
+    (void)vms_lock_dlm_release_csid_locks(departed_csid, NULL);
 }
 
 /*

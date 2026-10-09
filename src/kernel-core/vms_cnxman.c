@@ -90,6 +90,9 @@
 #include "vms_cnxman_recnx_fsm.h"
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_quorum.h"
+#include "vms_dlm_ldwv.h"       /* rd vms-025: vms_ldwv_sole_directory, the one
+				 * read the DLM's emission gate makes of the
+				 * vector this file already owns */
 #include "vms_pe.h"             /* E70: pe_send_refusal, the port's own reason */
 #include "vms_pe_fsm.h"         /* ... and struct pe_vc_send_refusal          */
 
@@ -418,6 +421,10 @@ struct vms_cnxman {
 	uint32_t dlm_sends;            /* originations the arm asked for     */
 	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
 	uint32_t dlm_foreign_refused;  /* RULE C: the peer is not proven ours*/
+	uint32_t dlm_mixed_sends;      /* ... and the ones sent anyway because */
+				       /* this node is the SOLE lock-directory */
+				       /* node (rd vms-025/db2a). A counted     */
+				       /* exception, never a silent one.        */
 };
 
 /* ==========================================================================
@@ -1536,11 +1543,45 @@ static void cnxman_cluexit_clear_on_contact(struct vms_cnxman *cn);
  * is the teeth under it: a gate that is only upstream is a gate that one new
  * call site bypasses.
  */
+/*
+ * ... AND THE ONE CONFIGURATION IN WHICH IT IS NOT THE WHOLE ANSWER (rd
+ * vms-025 / vms-db2a; the posture is stated in full at
+ * vms_dlm_scs.c's `dlm_arm_sole_directory`).
+ *
+ * While this node is the SOLE lock-directory node of the cluster -- every entry
+ * of the committed weight vector is ours, which is what the interim mixed-
+ * cluster configuration produces -- its own directory is authoritative for every
+ * root name, and the cat-0x02 requests it addresses at the master that directory
+ * named are the shapes whose field map is grounded on real VAX<->VAX traffic,
+ * carrying the WIRE-LEARNED hash (refused without one, upstream in the engine)
+ * and no value this executive does not hold. Without this, an OVMX $ENQ for a
+ * resource a real VAX masters can only ever be refused -- which is the two-master
+ * hole's other horn: the alternative the engine took was to master it locally.
+ *
+ * The shapes this does NOT clear are blocked UPSTREAM, in the arm and the FSM
+ * (the op-0x05 blocking AST, whose body[30:32] is observed-and-not-pinned, and
+ * the uncorrelated deferred grant), so this function is not the place to look
+ * for them -- and both still count every frame they withheld.
+ *
+ * Every send under it is counted separately (`dlm_mixed_sends`), so a transcript
+ * says exactly how many frames this node put in front of a system it could not
+ * prove runs this implementation, and under which configuration.
+ */
+static int cnxman_dlm_mixed_ok(const struct vms_cluster *cl)
+{
+	return vms_ldwv_sole_directory(&cl->club.ldwv);
+}
+
 static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
+				  const struct vms_cluster *cl,
 				  const struct vms_csb *csb)
 {
 	if (csb != NULL && csb->peer_is_ours)
 		return 1;
+	if (csb != NULL && cnxman_dlm_mixed_ok(cl)) {
+		cn->dlm_mixed_sends++;
+		return 1;
+	}
 	cn->dlm_foreign_refused++;
 	cnxman_ops_log(cn, "%CNXMAN, refusing to send a lock-manager message "
 			   "to a system that has not proved it runs this "
@@ -1574,7 +1615,7 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 		cn->dlm_sends_refused++;
 		return -1;
 	}
-	if (!cnxman_dlm_peer_proven(cn, csb))
+	if (!cnxman_dlm_peer_proven(cn, cl, csb))
 		return -1;
 
 	memcpy(cn->dlm_tx, body, VMS_CM_BODY_LEN);

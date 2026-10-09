@@ -197,6 +197,29 @@ int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16);
  * for why this is safe where a name->hash op is otherwise forbidden (design SS3.6). */
 int vms_ldwv_all_ovmx(const struct vms_ldwv *v);
 
+/*
+ * IS THIS NODE THE SOLE LOCK-DIRECTORY NODE of this cluster? (rd vms-025 /
+ * vms-db2a -- the mixed-cluster INTERIM CONFIGURATION, honestly labelled.)
+ *
+ * Nonzero iff the vector is authoritative and EVERY one of its entries is one
+ * of this node's own (p. 6-32: a system's own entries read 0 in its own copy).
+ * In the interim lab configuration -- every real VMS member at LOCKDIRWT 0 and
+ * this node above 0 (p. 6-32's per-system entry count, Davis p. 6-32) -- that is
+ * exactly what the vector comes out as, and it is the one configuration in which
+ * a DIRECTORY decision for a root name needs NO hash at all: there is only one
+ * entry set to choose from, so `hash mod n` cannot choose anything else.
+ *
+ * WHY THIS EXISTS AND WHAT IT IS NOT. It is NOT a claim of real-VMS directory
+ * compatibility and it is not the general case: routing OVMX's own names to the
+ * VMS-correct directory node in a cluster with default weights needs the
+ * resource-name hash (rd vms-dc2 / vms-b5b0) and is deliberately NOT done here.
+ * Outside this configuration every caller keeps its previous behaviour.
+ *
+ * Derived from real executive state on every call -- never a configured flag, a
+ * remembered verdict or a build option (INV-6).
+ */
+int vms_ldwv_sole_directory(const struct vms_ldwv *v);
+
 /* ==========================================================================
  * 5. The CLUB-facing half
  * ========================================================================== */

@@ -162,6 +162,42 @@ struct vms_dlm_proxy_post {
 };
 
 /*
+ * WHAT THIS NODE'S OWN LOCK DIRECTORY SAYS ABOUT ONE ROOT NAME (rd vms-025).
+ *
+ * Filled by the connection manager's `dir_local_lookup` op below out of the
+ * directory table (vms_dlm_dir.h), whose every entry came off the wire. Declared
+ * here, in kernel-core's substrate-free vocabulary, so the engine can read the
+ * answer without including the codec (whose wire opcodes collide with the
+ * engine's ioctl op family -- the same reason `struct vms_dlm_proxy_grant`
+ * exists).
+ */
+struct vms_dlm_dir_local {
+	/*
+	 * The master this node's directory names. It is either a system the
+	 * cluster told us about, or this node itself. 0 never appears: "no entry"
+	 * is reported by the op's status, not by a zero that reads like a CSID.
+	 */
+	uint32_t master_csid;
+
+	/*
+	 * THE WIRE HASH STORED WITH THAT ENTRY, and `hash_known` 0 when the entry
+	 * carries none (this node's own self-claim, or a registration frame the
+	 * hash learner does not read). It is the ONLY value this executive may
+	 * place at body[128:132] of a frame addressed to that master -- it came
+	 * from that cluster's own frame for that exact name (Davis p. 6-50).
+	 * Never computed, never defaulted to 0 (the grant storm).
+	 */
+	uint32_t dir_hash;
+	uint8_t  dir_hash_known;
+
+	/* 1 when the entry names THIS node -- "the directory node is itself the
+	 * master" (p. 6-51). The engine then masters it locally, as it already
+	 * does, and the value is stated rather than re-derived by the caller. */
+	uint8_t  is_self;
+	uint8_t  pad[2];
+};
+
+/*
  * The requester ops. `post` hands the request to the connection manager's fork
  * context; it MUST NOT block and MUST NOT wait for the answer -- the engine owns
  * the wait, because the engine owns the LKB (vms_dlm_scs.h SS5). It returns
@@ -272,6 +308,61 @@ struct vms_dlm_requester_ops {
 	 */
 	uint32_t (*dir_ground)(void *ctx, const char *name, uint32_t name_len,
 			       uint32_t *out_hash);
+
+	/*
+	 * WHAT THIS NODE'S OWN LOCK DIRECTORY ALREADY SAYS ABOUT A ROOT NAME
+	 * (rd vms-025) -- and the reason it is allowed to take a NAME when
+	 * `dir_resolve` is not.
+	 *
+	 * THE HOLE IT CLOSES, MEASURED. In a mixed cluster the engine masters
+	 * every name locally (the all-OVMX gate above) and never looked at the
+	 * directory entries THIS NODE HOLDS. But a real VAX's own directory
+	 * lookups land here and are answered -- "you master it" -- and that
+	 * answer is RECORDED (rd vms-8219, vms_dlm_dir.h): this node's directory
+	 * then says, truthfully, that the VAX masters the name. The next local
+	 * $ENQ for the same name mastered it HERE as well. One resource, two
+	 * masters, and the first shared file is a corrupted one.
+	 *
+	 * WHY A NAME IS SAFE HERE AND FORBIDDEN IN dir_resolve. Nothing is
+	 * COMPUTED from the name: it is a lookup key into a table whose every
+	 * entry was created by a frame the cluster itself sent (a lookup it
+	 * addressed here, or a master's registration). The implementation may not
+	 * hash the name into a routing decision -- that is the thing that broke a
+	 * real cluster -- and it does not: it answers only what some other system
+	 * already told this one.
+	 *
+	 * `*out` is written only on SS$_NORMAL. SS$_UNSUPPORTED is the honest
+	 * "cannot answer": this node is not the sole directory node (so a name
+	 * absent from its table may be directed elsewhere and the table proves
+	 * nothing), there is no table, or two resource domains of that name name
+	 * different masters. The engine then keeps the behaviour it had before
+	 * this op existed.
+	 *
+	 * Same non-block/no-re-enter contract as dir_resolve: the engine calls it
+	 * holding res->lock, so the implementation takes at most a leaf lock of
+	 * its own and calls nothing back into the lock manager.
+	 */
+	uint32_t (*dir_local_lookup)(void *ctx, const char *name,
+				     uint32_t name_len,
+				     struct vms_dlm_dir_local *out);
+
+	/*
+	 * RECORD THIS NODE AS A ROOT NAME'S MASTER IN ITS OWN DIRECTORY
+	 * (rd vms-db2a). Called when the engine masters a name on first use and
+	 * this node is the sole directory node, so that the NEXT lookup a real
+	 * VMS system addresses here is answered "this node masters it" instead of
+	 * "you master it" -- the same two-master hole, from the other side.
+	 *
+	 * Returns SS$_NORMAL only when the record is really held afterwards, and
+	 * any other return means the directory does NOT name this node. It is
+	 * belt-and-braces and NOT the protection, so a failure does not fail the
+	 * $ENQ: the directory role's first question about an incoming lookup is
+	 * the ENGINE's own mastering record (vms_lock_dlm_name_mastered_here),
+	 * which needs no table entry. See the comment at the engine's call site
+	 * for why refusing on a full fixed-size table would be the worse bug.
+	 */
+	uint32_t (*dir_claim_self)(void *ctx, const char *name,
+				   uint32_t name_len);
 
 	void *ctx;
 };

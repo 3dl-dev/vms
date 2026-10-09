@@ -322,6 +322,7 @@ int main(void)
     (void)!write(s, "A\nB\n", 4);
     screen(m, scr, sizeof(scr), 300);
     /* negctl: tt-newline-ignores-cursor */
+    /* negctl-knockon: tt-port-input-dropped */
     CHECK(strcmp(scr, "\rA\r\nB\r") == 0,
           "two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)");
     if (strcmp(scr, "\rA\r\nB\r") != 0)
@@ -340,6 +341,7 @@ int main(void)
     msleep(200);
     screen(m, scr, sizeof(scr), 300);
     /* negctl-knockon: tt-newline-ignores-cursor */
+    /* negctl-knockon: tt-port-input-dropped */
     CHECK(scr[0] == '\r' && scr[1] == '\0' && memcmp(scr + 2, "$ ", 2) == 0,
           "DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)");
     type(m, "\r");

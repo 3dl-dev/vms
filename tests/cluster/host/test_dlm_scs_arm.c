@@ -216,6 +216,41 @@ static void arm_bindings(void)
 	    "a known CSID (between OVMX nodes the engine owns the directory)");
 	has("if (vms_dlm_dir_answer_build(req->body, req->len, status,",
 	    "every directory answer is built by the grounded builder");
+	/*
+	 * rd vms-025, THE 2026-10-09 LAB FINDING: THE REFUSAL AND THE VECTOR
+	 * MUST BE READABLE FROM THE CONSOLE.
+	 *
+	 * The lab watched a real VAX's op-0x01 for a resource this node held
+	 * AND mastered go unanswered under two console lines that between them
+	 * named the wrong fault -- "this node ... does NOT master" (it did) and
+	 * "a system that has not proved it runs this implementation" (true of
+	 * every refusal here, so it distinguishes nothing) -- and nothing said
+	 * what the weight vector had come out as. All three are pinned here, in
+	 * the shipped text.
+	 */
+	has("d->dir_master_unserved++;",
+	    "a resource this node DOES master and could not serve is counted "
+	    "apart from one it does not master");
+	has("for a resource this node MASTERS, and it could not be",
+	    "... and SAID as that, never as 'does not master'");
+	has("if (!dlm_arm_refusal_is_a_servable_shape(req->opcode)) {",
+	    "RULE C's refusal distinguishes a shape this implementation has no "
+	    "grounded answer for");
+	has("d->refused_no_identity++;",
+	    "... from a frame that states no resource identity at all");
+	has("d->refused_unserved_res++;",
+	    "... from a placeable resource this node neither masters nor holds "
+	    "a directory entry for");
+	has("check that every member agrees on LOCKDIRWT and on the",
+	    "... and the last one NAMES LOCKDIRWT, the knob the lab could not "
+	    "set");
+	has("dlm_arm_say_ldwv(d);",
+	    "every state transition SAYS what the lock directory weight vector "
+	    "came out as -- the fact the lab had to infer");
+	has("out->directory_vector_own = dlm_arm_own_dir_entries(",
+	    "and the diagnostic projection carries how many of the vector's "
+	    "entries are this node's (CNXTRACE dirvec_own=)");
+
 	has("if (dlm_arm_dir_name_held(id)) {",
 	    "a name THIS node holds locks on is never answered 'you master it'");
 	has("o = dlm_arm_dir_ask(d, id, req->from_csid, &master);",
@@ -538,6 +573,45 @@ static void arm_bindings(void)
 	    "... and fails every request outstanding at the departed member");
 }
 
+/*
+ * THE DIAGNOSTIC ROW'S TWO HAND-MAINTAINED COPIES (rd vms-025).
+ *
+ * `struct vms_dlm_scs_view_wire` is declared TWICE by hand -- once per rind --
+ * because each ioctl header must stay includable with no kernel-core dependency.
+ * The Linux copy's agreement with kernel-core is pinned by a _Static_assert in
+ * vms_devtab.c; the NetBSD-vax copy's is pinned by NOTHING the Linux build
+ * compiles, so a field added to one and not the other is an arch-asymmetric
+ * break an x86_64-only proof cannot see.
+ *
+ * rd vms-025 took the row's `pad0` byte for `directory_vector_own`, so both
+ * copies are scanned for it in the same slot (after `connected`, before the
+ * 32-bit generation).
+ */
+static void the_diag_row_agrees_across_both_rinds(void)
+{
+	printf("-- the DLM diagnostic row, in BOTH rinds' ioctl headers --\n");
+
+	if (read_src(OVMX_KLINUX_DIR, "vms_ioctl.h") != 0) {
+		ct_check(0, "could not open src/kernel/vms_ioctl.h");
+		return;
+	}
+	has("    uint8_t  connected;\n    uint8_t  directory_vector_own;",
+	    "the Linux rind's row carries directory_vector_own in the former "
+	    "pad byte, right after connected");
+	absent("    uint8_t  connected;\n    uint8_t  pad0;",
+	       "... and no pad byte is left there to drift");
+
+	if (read_src(OVMX_KNETBSD_DIR, "vms_lock_nb.h") != 0) {
+		ct_check(0, "could not open src/kernel-netbsd/vms_lock_nb.h");
+		return;
+	}
+	has("\tuint8_t  connected;\n\tuint8_t  directory_vector_own;",
+	    "*** and the NetBSD-vax rind's row carries it in the SAME slot -- "
+	    "the arch-asymmetric break an x86_64-only proof cannot see ***");
+	absent("\tuint8_t  connected;\n\tuint8_t  pad0;",
+	       "... with no pad byte left there either");
+}
+
 static void cnxman_legs(void)
 {
 	printf("-- the two legs, read out of src/kernel-core/vms_cnxman.c --\n");
@@ -611,6 +685,7 @@ int main(void)
 	printf("=== test_dlm_scs_arm (the DLM wire arm's R1) ===\n");
 	trust_anchor_is_the_advertised_version();
 	arm_bindings();
+	the_diag_row_agrees_across_both_rinds();
 	cnxman_legs();
 	cluster_start_order();
 	return ct_summary("test_dlm_scs_arm");

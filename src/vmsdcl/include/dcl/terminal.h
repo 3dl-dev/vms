@@ -116,6 +116,11 @@ void vms_terminal_apply(const struct vms_terminal *term);
 #define DCL_TT_NODRIVER  (-3)   /* no executive terminal behind TT: */
 #define DCL_TT_INTR      (-4)   /* aborted by an interrupt (^Y / ^C) */
 #define DCL_TT_TIMEOUT   (-5)   /* IO$M_TIMED expired */
+/* Arm DCL's out-of-band ASTs on its terminal channel (rd vms-f0fb): the
+ * CTRL/Y AST (a CTRL/C fires it too) when `y_on`, the CTRL/T out-of-band AST
+ * when `t_on`; disarms the ones that are off. Issued before every command read,
+ * since a CTRL/Y AST is spent when it fires. */
+void dcl_tt_arm_oob(void (*yast)(uint32_t), int y_on, void (*tast)(uint32_t), int t_on);
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
                 uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out);
 uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr);

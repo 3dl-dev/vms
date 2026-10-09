@@ -150,6 +150,17 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, FILE *fp)
         /* Execute the line */
         status = dcl_execute_line(substituted);
 
+        /* CTRL/Y (rd vms-f0fb): the driver showed *INTERRUPT* and the CTRL/Y
+         * AST flagged it; the procedure stops HERE, held, while the user is
+         * at the interactive level -- CONTINUE goes on with the next line. */
+        if (ctx->ctrly_pending && !ctx->abort_procedures) {
+            extern int dcl_interrupt_level(void);
+            if (dcl_interrupt_level())
+                ctx->abort_procedures = 1;
+        }
+        if (ctx->abort_procedures)
+            break;
+
         /* RETURN / ENDSUBROUTINE inside a CALLed subroutine: stop this level. */
         if (ctx->return_requested)
             break;

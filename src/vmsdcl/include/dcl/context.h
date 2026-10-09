@@ -102,6 +102,13 @@ struct dcl_context {
      * "Ctrl/T is disabled by default"), so 0 == off until SET CONTROL=T. */
     int ctrl_t_enabled;
 
+    /* CTRL/Y delivered (rd vms-f0fb): set by the CTRL/Y AST the terminal
+     * driver queues; the command loop acts on it at the next command boundary.
+     * abort_procedures unwinds every procedure level after an interrupt that
+     * was not CONTINUEd. */
+    volatile int ctrly_pending;
+    int abort_procedures;
+
     /* User info */
     char username[64];
     char process_name[16];

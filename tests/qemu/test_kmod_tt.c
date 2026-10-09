@@ -424,6 +424,7 @@ int main(void)
         rd_wait(&r);
         (void)screen(m, scr, sizeof(scr), 300);
         got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+        /* negctl-knockon: tt-oob-ast-not-queued */
         CHECK(r.st == SS_ABORT && got && aa == 0x2222,
               "CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST");
 
@@ -458,12 +459,15 @@ int main(void)
             }
             got = vms_kif_deliverast(&aa, &ap, &am) == 0;
             /* negctl: tt-outband-ends-read */
+            /* negctl-knockon: tt-oob-ast-not-queued */
             CHECK((ra.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x3333 && ap == 0x14,
                   "CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character");
             (void)screen(m, scr, sizeof(scr), 300);
             (void)!write(s, "STATUS\n", 7);      /* the AST's status line */
             screen(m, scr, sizeof(scr), 300);
             /* negctl: tt-breakthrough-no-redisplay */
+            /* negctl-knockon: tt-oob-ast-not-queued */
+            /* negctl-knockon: tt-outband-ends-read */
             CHECK(memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) == 0,
                   "output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC");
             if (memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) != 0) {
@@ -483,6 +487,8 @@ int main(void)
                 rs = vms_kif_tt_read(&ra);
                 waitpid(kid, NULL, 0);
             }
+            /* negctl-knockon: tt-oob-ast-not-queued */
+            /* negctl-knockon: tt-outband-ends-read */
             CHECK(rs == SS_NORMAL && ra.oflags == 0 && ra.count == 4 && memcmp(data, "ABCD", 4) == 0,
                   "the same read resumes and completes with the whole line 'ABCD'");
             (void)screen(m, scr, sizeof(scr), 300);

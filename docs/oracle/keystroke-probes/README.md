@@ -19,3 +19,18 @@ The rules `src/kernel-core/vms_tt.c` implements from them (its CARRIAGE CONTROL 
 - DCL's prompt is a new line, a fill NUL, then the text. `SET PROMPT/NOCARRIAGE_CONTROL`
   makes it three NULs (CC.PROMPT). INQUIRE's prompt is a new line with no NUL. A
   READ/PROMPT prompt has no carriage control (CC.READ, CC.MIX).
+
+## Out-of-band characters (rd vms-f0fb)
+
+`OB.PROMPT` and `OB.READ` were captured the same way on 2026-10-09. They are the basis for the
+out-of-band handling in `src/kernel-core/vms_tt.c` and DCL:
+
+- CTRL/Y and CTRL/C show `CR LF *INTERRUPT* CR LF`. This happens at a prompt, mid-line, inside
+  `READ/PROMPT` and inside `INQUIRE`. The typed line is discarded, and DCL's next prompt starts
+  with its own `CR LF`.
+- With `SET NOCONTROL=Y`, CTRL/Y still shows `*INTERRUPT*`, but the read completes with the
+  typed line, and DCL runs it (N2). So the driver shows the word, and the CTRL/Y AST decides
+  whether anything is interrupted.
+- CTRL/T (after `SET CONTROL=T`) shows the status line as a record. The read then reappears: the
+  owed line feed, the prompt, and what had been typed (T2).
+- CTRL/O at an idle prompt shows nothing.

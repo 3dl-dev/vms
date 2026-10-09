@@ -1,0 +1,22 @@
+# keystroke oracle transcript (unmasked) -- case OB.READ (OpenVMS VAX V7.3 OPA0:)
+# OOB probe: ^Y inside READ/PROMPT and INQUIRE, and ^Z there
+# case-sha256 c2ef0627ee34cabd7d93bae4f2927e870b2aeec0ddea2820129f5a5613c26772
+@start loggedin OK
+=== STEP R1
+| READ/PROMPT="Z> " SYS$COMMAND X<CR><LF>
+| Z> 
+=== STEP R2
+| AB
+=== STEP R3
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP I1
+| INQUIRE Q "Name"<CR><LF>
+| <CR>Name: 
+=== STEP I2
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 

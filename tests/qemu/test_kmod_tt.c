@@ -514,6 +514,36 @@ int main(void)
         }
     }
 
+    /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */
+    (void)screen(m, scr, sizeof(scr), 100);
+    (void)!write(s, "A\n", 2);                 /* a record: its line feed owed */
+    (void)screen(m, scr, sizeof(scr), 300);
+    type(m, "\x0f");
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(strcmp(scr, "\n*OUTPUT OFF*\r\n") == 0,
+          "CTRL/O while output runs shows <LF>*OUTPUT OFF*<CR><LF> (the owed line feed first)");
+    (void)!write(s, "B\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-ctrlo-not-discarding */
+    CHECK(scr[0] == '\0', "output written while CTRL/O is on is discarded");
+    type(m, "\x0f");
+    msleep(200);                                /* the receive path runs first */
+    (void)!write(s, "C\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-ctrlo-not-discarding */
+    CHECK(strcmp(scr, "*OUTPUT ON*\r\nC\r") == 0,
+          "a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)");
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "a\x0f" "b\r");
+    rd_wait(&r);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(r.st == SS_NORMAL && strcmp(r.data, "ab") == 0 && strcmp(scr, "\nab\r\n") == 0,
+          "CTRL/O during a read is neither data nor shown, and does not end the read");
+    if (strcmp(scr, "\nab\r\n") != 0)
+        printf("      screen was [%s] data [%s] st %u\n", scr, r.data, r.st);
+
     /* ---- read(2) on the line is a terminal-driver read ---- */
     type(m, "hi\r");
     {

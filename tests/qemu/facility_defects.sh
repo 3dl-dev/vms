@@ -633,7 +633,8 @@ tt-ctrly-not-shown
 tt-oob-ast-not-queued
 tt-outband-ends-read
 tt-breakthrough-no-redisplay
-tt-oob-survives-deassign"
+tt-oob-survives-deassign
+tt-ctrlo-not-discarding"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2251,6 +2252,26 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: it is the section's last check.";;
+        esac;;
+
+    tt-ctrlo-not-discarding)
+        case "$_f" in
+        facility)     echo "CTRL/O discards the terminal's output until the next CTRL/O or read (vms_tt.c vms_tt_write, rd vms-f0fb; keystroke oracle OOB.CTRLO)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() drops the bytes while CTRL/O is on (\`return 0;                    /* CTRL/O: the output is discarded */\`). The mutation lets them through: *OUTPUT OFF* is shown but nothing is stopped. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+output written while CTRL/O is on is discarded
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)
+EOF
+                      ;;
+        knock_on_why)  echo "the record let through while CTRL/O was on leaves its line feed owed, so the record after *OUTPUT ON* no longer starts where the notice left the cursor.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8386,6 +8407,8 @@ apply_edit() {
         sed -i 's|^\tif (tt->rd_busy \&\& !tt->rd_done \&\& !tt->passall \&\& n) {$|\tif (0) { /* NEGCTL tt-breakthrough-no-redisplay */|' "$_file";;
     tt-oob-survives-deassign)
         sed -i 's|^\t\t\tmemset(\&tt->oob\[i\], 0, sizeof(tt->oob\[i\]));$|\t\t\t(void)0; /* NEGCTL tt-oob-survives-deassign */|' "$_file";;
+    tt-ctrlo-not-discarding)
+        sed -i 's|^\t\treturn 0;                    /\* CTRL/O: the output is discarded \*/$|\t\t(void)0; /* NEGCTL tt-ctrlo-not-discarding */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

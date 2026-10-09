@@ -26,6 +26,8 @@ extern const uint8_t eihd_img_main3[], eihd_img_main3_end[];
 extern const uint8_t eihd_img_myshr[], eihd_img_myshr_end[];
 extern const uint8_t eihd_img_hello[], eihd_img_hello_end[];
 extern const uint8_t eihd_img_text[], eihd_img_text_end[];
+extern const uint8_t eihd_img_main4[], eihd_img_main4_end[];
+extern const uint8_t eihd_img_myshrv2[], eihd_img_myshrv2_end[];
 
 static int pass = 0, fail = 0;
 static void check(int cond, const char *name)
@@ -212,6 +214,49 @@ int main(void)
 	      q_at(&main3, 0x10090) == STANDIN_CODE(0x320) &&
 	      q_at(&main3, 0x10098) == STANDIN_PV(0x320),
 	      "MAIN3's linkage pairs to LIBRTL hold the {code address, procedure value} of entry %X320");
+
+	/* Rung 3: MAIN4 is MAIN3's modules LINKed against MYSHR relinked
+	 * GSMATCH=LEQUAL,2,0. On VMS, run against MYSHR 1.0 it is refused
+	 * SHRIDMISMAT; against the 2.0 image it runs. */
+	{
+		struct placed main4, v2;
+		uint32_t w4 = 0, c4 = 99;
+		int ok = place(&main4, eihd_img_main4, eihd_img_main4_end) == 0 &&
+			 place(&v2, eihd_img_myshrv2, eihd_img_myshrv2_end) == 0 &&
+			 consumer_match(&main4, "MYSHR", &w4, &c4) == 0;
+		check(ok && v2.h.ident == 0x02000000 && w4 == 0x02000000 &&
+		      c4 == EIHD_MATCH_LEQUAL && eihd_gsmatch_ok(c4, w4, v2.h.ident),
+		      "MAIN4 accepts the MYSHR 2.0 it was linked against");
+		/* negctl: eihd-gsmatch-leq-ignores-major */
+		check(ok && !eihd_gsmatch_ok(c4, w4, g_myshr.h.ident),
+		      "MAIN4 (linked against MYSHR 2.0) refuses MYSHR 1.0 (SHRIDMISMAT on VMS)");
+	}
+
+	/* Rungs 2/3: the file a shareable's translated name designates. DECC$SHR
+	 * is the system logical "SYS$SHARE:DECC$SHR_EV56" on OpenVMS Alpha; a
+	 * DEFINE MYSHR SYS$SYSTEM:MYSHRV2 names the system image directory. */
+	{
+		char path[256], full[256];
+		int r1 = eihd_spec_to_file("SYS$SHARE:DECC$SHR_EV56", "/L/", "/E/", path,
+					   sizeof path, full, sizeof full);
+		/* negctl: eihd-spec-no-default-type */
+		check(r1 == 0 && strcmp(path, "/L/DECC$SHR_EV56.EXE") == 0 &&
+		      strcmp(full, "SYS$SHARE:DECC$SHR_EV56.EXE") == 0,
+		      "DECC$SHR's system-logical equivalence resolves to SYS$SHARE:DECC$SHR_EV56.EXE");
+		int r2 = eihd_spec_to_file("SYS$SYSTEM:MYSHRV2", "/L/", "/E/", path,
+					   sizeof path, full, sizeof full);
+		check(r2 == 0 && strcmp(path, "/E/MYSHRV2.EXE") == 0,
+		      "a shareable defined to SYS$SYSTEM:MYSHRV2 resolves to SYS$SYSTEM:MYSHRV2.EXE");
+		int r3 = eihd_spec_to_file("MYSHR", "/L/", "/E/", path, sizeof path,
+					   full, sizeof full);
+		check(r3 == 0 && strcmp(path, "/L/MYSHR.EXE") == 0 &&
+		      strcmp(full, "SYS$SHARE:MYSHR.EXE") == 0,
+		      "an untranslated shareable name defaults to SYS$SHARE:<name>.EXE");
+		int r4 = eihd_spec_to_file("DKA100:[USER]MYSHR.EXE;3", "/L/", "/E/", path,
+					   sizeof path, full, sizeof full);
+		check(r4 == 1,
+		      "a translation to another device or directory is reported, not guessed");
+	}
 
 	printf("=== test_imgact_eihd: %d passed, %d failed ===\n", pass, fail);
 	return fail == 0 ? 0 : 1;

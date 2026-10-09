@@ -3184,6 +3184,7 @@ struct eihd_shr {
 	struct ovmx_prod *prod;        /* an OVMX producer (ELF symbol vector)   */
 	struct eihd_img  *img;         /* or a native shareable                   */
 	uint32_t         ident;        /* its GSMATCH ident                       */
+	char             spec[160];    /* the file spec it was activated from     */
 };
 static struct eihd_img g_eimg[8];
 static int             g_neimg;
@@ -3419,12 +3420,7 @@ static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
 			if (!(d.flags & EISD_M_GBL) || !eihd_gblnam_is(d.gblnam, nm))
 				continue;
 			if (!eihd_gsmatch_ok(d.matchctl, d.ident, s->ident)) {
-				char sp[64];
-				sp[0] = '\0';
-				xstrcat(sp, "SYS$SHARE:");
-				xstrcat(sp, nm);
-				xstrcat(sp, ".EXE");
-				eihd_fail(nm, "-CLI-E-IMGNAME, image file ", sp,
+				eihd_fail(nm, "-CLI-E-IMGNAME, image file ", s->spec,
 					  "-SYSTEM-F-SHRIDMISMAT, ident mismatch with shareable image",
 					  0, EIHD_SS_SHRIDMISMAT);
 			}
@@ -3456,6 +3452,123 @@ static void eihd_load(struct eihd_img *m, struct imgsrc *src, int is_main)
 			       "-SYSTEM-F-BADIMGHDR, bad image header", EIHD_SS_BADIMGHDR);
 }
 
+/* Translate `name` as a logical name the way the image activator does for a
+ * shareable image name: LNM$PROCESS, LNM$JOB, LNM$GROUP, then LNM$SYSTEM,
+ * the outermost-mode entry of the first table that has it, equivalence 0
+ * (rd vms-3b3f). The tables are the executive's (read-only arena mmap,
+ * src/kernel/vms_lnm.h). Returns 1 with the equivalence in `out`, 0 when the
+ * name has no translation, -1 when the tables cannot be read. */
+#define EIHD_MAP_SHARED 0x01
+static int eihd_lnm_translate(const char *name, char *out, unsigned long outsz)
+{
+	int fd = imgact_acp_dev_open();
+	if (fd < 0)
+		return -1;
+	struct vms_register_args reg;
+	memset(&reg, 0, sizeof reg);
+	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+	struct vms_lnm_scope_args sc;
+	memset(&sc, 0, sizeof sc);
+	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_LNM_GETSCOPE, &sc) < 0 || !(sc.status & 1)) {
+		imgact_acp_dev_close(fd);
+		return -1;
+	}
+	unsigned long asz = sizeof(struct vms_lnm_arena);
+	void *m = sys_mmap(0, asz, PROT_READ, EIHD_MAP_SHARED, fd, VMS_LNM_MMAP_OFFSET);
+	imgact_acp_dev_close(fd);
+	if ((unsigned long)m >= (unsigned long)-4095L)
+		return -1;
+	const struct vms_lnm_arena *a = (const struct vms_lnm_arena *)m;
+	int rc = -1;
+	if (a->magic == VMS_LNM_ARENA_MAGIC && a->version == VMS_LNM_ARENA_VERSION) {
+		static const uint32_t order[4] = { VMS_LNM_TBL_PROCESS, VMS_LNM_TBL_JOB,
+						   VMS_LNM_TBL_GROUP, VMS_LNM_TBL_SYSTEM };
+		for (int tries = 0; tries < 64 && rc < 0; tries++) {
+			uint64_t g0 = __atomic_load_n(&a->generation, __ATOMIC_ACQUIRE);
+			if (g0 & 1)
+				continue;
+			int found = 0;
+			unsigned long n = 0;
+			uint32_t max = a->max_entries < VMS_LNM_MAX_ENTRIES
+				? a->max_entries : VMS_LNM_MAX_ENTRIES;
+			for (int t = 0; t < 4 && !found; t++) {
+				uint32_t key = order[t] == VMS_LNM_TBL_PROCESS ? sc.process_key
+					     : order[t] == VMS_LNM_TBL_JOB ? sc.job_key
+					     : order[t] == VMS_LNM_TBL_GROUP ? sc.group_key : 0;
+				const struct vms_lnm_entry *best = 0;
+				for (uint32_t i = 0; i < max; i++) {
+					const struct vms_lnm_entry *e = &a->entries[i];
+					if (!e->in_use || e->table != order[t] || e->scope_key != key ||
+					    e->num_equiv < 1 || xstrcmp(e->name, name) != 0)
+						continue;
+					if (!best || e->acmode > best->acmode)
+						best = e;
+				}
+				if (best) {
+					n = best->equiv[0].length;
+					if (n > VMS_LNM_MAX_VALUE)
+						n = VMS_LNM_MAX_VALUE;
+					if (n >= outsz)
+						n = outsz - 1;
+					memcpy(out, best->equiv[0].value, n);
+					out[n] = '\0';
+					found = 1;
+				}
+			}
+			__atomic_thread_fence(__ATOMIC_ACQUIRE);
+			if (__atomic_load_n(&a->generation, __ATOMIC_ACQUIRE) != g0)
+				continue;
+			rc = found;
+		}
+	}
+	sys_munmap(m, asz);
+	return rc;
+}
+
+/* Upcase `s` into `out`. */
+static void eihd_upcase(const char *s, char *out, unsigned long sz)
+{
+	unsigned long i = 0;
+	for (; s[i] && i + 1 < sz; i++)
+		out[i] = (s[i] >= 'a' && s[i] <= 'z') ? (char)(s[i] - 32) : s[i];
+	out[i] = '\0';
+}
+
+/* Resolve the file a shareable name designates: its logical-name
+ * translation (iterated while the result is itself a bare logical name), with
+ * the activator's defaults SYS$SHARE: and .EXE. OVMX maps the system
+ * directories SYS$SHARE / SYS$LIBRARY / SYS$SYSTEM onto the volume; any other
+ * device or directory in a translation is reported (`*other` = 1) rather than
+ * guessed. `spec` receives the VMS file spec for messages. */
+static int eihd_shl_file(const char *name, char *path, unsigned long psz,
+			 char *spec, unsigned long ssz, int *other)
+{
+	char cur[260], tr[260];
+	eihd_upcase(name, cur, sizeof cur);
+	*other = 0;
+	for (int depth = 0; depth < 10; depth++) {
+		int has_delim = 0;
+		for (const char *q = cur; *q; q++)
+			if (*q == ':' || *q == '[' || *q == '<' || *q == '.' || *q == ';')
+				has_delim = 1;
+		if (has_delim)
+			break;
+		int r = eihd_lnm_translate(cur, tr, sizeof tr);
+		if (r <= 0)
+			break;
+		eihd_upcase(tr, cur, sizeof cur);
+	}
+	int r = eihd_spec_to_file(cur, IMGACT_FALLBACK_SYSLIB "/", IMGACT_SYSEXE_VOLPATH,
+				  path, psz, spec, ssz);
+	if (r < 0) {
+		path[0] = '\0';
+		spec[0] = '\0';
+		xstrcpy(spec, name);
+	}
+	*other = r != 0;
+	return 0;
+}
+
 /* Activate (once) the shareable `name` an image calls: SYS$SHARE:<name>.EXE,
  * an OVMX producer or a native shareable. */
 static struct eihd_shr *eihd_activate_shl(const char *name, const char *by)
@@ -3469,16 +3582,18 @@ static struct eihd_shr *eihd_activate_shl(const char *name, const char *by)
 	if (g_neshr >= (int)(sizeof g_eshr / sizeof g_eshr[0]) ||
 	    xstrlen(name) > 31)
 		eihd_fail_notimpl(by, name, "this many shareable images");
-	char file[48], path[256], spec[64];
-	file[0] = '\0';
-	xstrcat(file, name);
-	xstrcat(file, ".EXE");
-	path[0] = '\0';
-	xstrcat(path, IMGACT_FALLBACK_SYSLIB "/");
-	xstrcat(path, file);
-	spec[0] = '\0';
-	xstrcat(spec, "SYS$SHARE:");
-	xstrcat(spec, file);
+	char file[64], path[256], spec[300];
+	int other;
+	eihd_shl_file(name, path, sizeof path, spec, sizeof spec, &other);
+	if (other)
+		eihd_fail_notimpl(by, spec, "activating a shareable image outside SYS$SHARE or SYS$SYSTEM");
+	{
+		const char *b = path;
+		for (const char *q = path; *q; q++)
+			if (*q == '/')
+				b = q + 1;
+		xstrcpy(file, b);
+	}
 	struct imgsrc src;
 	if (imgsrc_open(&src, path) < 0)
 		eihd_fail(name, "-CLI-E-IMAGEFNF, image file not found ", spec,
@@ -3491,13 +3606,28 @@ static struct eihd_shr *eihd_activate_shl(const char *name, const char *by)
 	}
 	struct eihd_shr *s = &g_eshr[g_neshr++];
 	xstrcpy(s->name, name);
+	{
+		unsigned long n = xstrlen(spec);
+		if (n >= sizeof s->spec)
+			n = sizeof s->spec - 1;
+		memcpy(s->spec, spec, n);
+		s->spec[n] = '\0';
+	}
 	s->prod = 0;
 	s->img = 0;
 	if (mag[0] == 0x7f && mag[1] == 'E' && mag[2] == 'L' && mag[3] == 'F') {
 		/* An OVMX shareable: its symbol vector carries the VMS ordinal
 		 * layout of the image it stands for (src/vmslink/vms_vectors/). */
 		imgsrc_close(&src);
-		s->prod = load_ovmx_producer(file);
+		/* A SYS$SHARE image by its file name (the producer naming every
+		 * OVMX image uses); one elsewhere by its volume path. */
+		{
+			const char *lib = IMGACT_FALLBACK_SYSLIB "/";
+			unsigned long k = 0;
+			while (lib[k] && path[k] == lib[k])
+				k++;
+			s->prod = load_ovmx_producer(lib[k] ? path : file);
+		}
 		if (!s->prod)
 			eihd_fail(name, "-CLI-E-IMAGEFNF, image file not found ", spec,
 				  0, 0, EIHD_CLI_IMAGEFNF);

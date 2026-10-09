@@ -46,3 +46,16 @@ fixup and give its value. Matching those values to the bytes of the same file fi
 field's offset; `src/imgact/imgact_eihd.h` records the result and
 `src/imgact/test/test_eihd_parse.c` checks every field against these reports. Clean-room:
 nothing was disassembled and no VSI/HPE source, header or binary was read.
+
+## Second session (2026-10-09): rungs 2 and 3
+
+The node was cloned fresh and logged in again; the sources were re-sent and verified by `TYPE`.
+
+| item | built with / run | on the node |
+|---|---|---|
+| `MYSHRV2.EXE` | `LINK/SHAREABLE=[.V2]MYSHR.EXE MYSHR,MYSHR2.OPT/OPTIONS` (`GSMATCH=LEQUAL,2,0`) | the same shareable, image name `MYSHR`, ident 2.0 (`MYSHRV2.ANL.txt`) |
+| `MAIN4.EXE` | `LINK/EXECUTABLE=MAIN4 MAIN3A,MAIN3B,MAIN4.OPT/OPTIONS` against `[.V2]MYSHR` | with `MYSHR` defined to the 2.0 image: three lines, `%X00000001` (`MAIN4.RUN.txt`). Against MYSHR 1.0: `-SYSTEM-F-SHRIDMISMAT`, `%X100020BC` (`NEG-main4-gsmatch.txt`) |
+| `ORDSC.MAR` | `.ADDRESS DECC$<name>` for every C RTL name OVMX's DECC$SHR provides | `ORDSC.MAP.txt`: the symbol-vector offset of each in DECC$SHR (resolved to DECC$SHR_EV56); 5 undefined (`ORDSC.LINK.txt`) |
+| `SHOW LOGICAL DECC$SHR` | | `"DECC$SHR" = "SYS$SHARE:DECC$SHR_EV56" (LNM$SYSTEM_TABLE)`; no logical for LIBRTL or SYS$PUBLIC_VECTORS (`LNM-shareables.txt`) |
+
+`MYSHR2.EXE` (`MYSHR2.ANL.txt`) is the first session's GSMATCH 2.0 relink, whose image name is `MYSHR2`, so it cannot stand in for `MYSHR`. It is kept only as the record of the `NEG-gsmatch.txt` run.

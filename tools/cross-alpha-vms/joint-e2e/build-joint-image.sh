@@ -267,15 +267,6 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     # the first unstaged producer). A non-veneer run never enters this block.
     cp "$SYS" "$PROC" "$LNM" "$FS" "$VMS" "$OUT/"
 
-    # vms-3b3f: the vector images through which an image LINKed on real
-    # OpenVMS Alpha reaches OVMX (SYS$PUBLIC_VECTORS, LIBRTL), each symbol
-    # vector in the VMS ordinal layout of its manifest (src/vmslink/vms_vectors/),
-    # forwarding into LIBVMS$SHR. Built beside the producer graph they use.
-    echo "-- [vms-3b3f] the VMS vector images (SYS\$PUBLIC_VECTORS, LIBRTL) --"
-    for _vec in SYS\$PUBLIC_VECTORS LIBRTL; do
-        ALPHA_CC="$ALPHA_CC" sh "$MK/vms_vectors/mk_vms_vector_shr.sh" "$WORK/LINK.EXE" \
-            "$MK/vms_vectors/$_vec.vec" "$OUT/$_vec.EXE" "$WORK"
-    done
     [ "${JOINT_NATIVE_PROOF:-0}" = 1 ] && { : > "$OUT/NATIVE_PROOF"; echo "== NATIVE_PROOF marker staged (vms-3b3f native-image gate) =="; }
 
     echo "-- [vms-9f8e] DECC\$SHR pass 2 (final, the C RTL file layer over RMS, vms-b90) --"
@@ -283,6 +274,17 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
         ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
         ALPHA_CRTL_RMS_USE="$RMS" \
         sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
+
+    # vms-3b3f: the vector images through which an image LINKed on real
+    # OpenVMS Alpha reaches OVMX (SYS$PUBLIC_VECTORS, LIBRTL, and the C RTL
+    # image DECC$SHR_EV56), each symbol vector in the VMS ordinal layout of
+    # its manifest (src/vmslink/vms_vectors/), forwarding into LIBVMS$SHR or
+    # the final DECC$SHR just built.
+    echo "-- [vms-3b3f] the VMS vector images (SYS\$PUBLIC_VECTORS, LIBRTL, DECC\$SHR_EV56) --"
+    for _vec in SYS\$PUBLIC_VECTORS LIBRTL DECC\$SHR_EV56; do
+        ALPHA_CC="$ALPHA_CC" sh "$MK/vms_vectors/mk_vms_vector_shr.sh" "$WORK/LINK.EXE" \
+            "$MK/vms_vectors/$_vec.vec" "$OUT/$_vec.EXE" "$WORK"
+    done
 else
     echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"
     OVMX_DECC_ARCH=alpha \

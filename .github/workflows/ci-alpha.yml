@@ -995,7 +995,7 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate
 
   alpha-native-image:
-    name: "OVMX/Alpha native image — .EXE files LINKed on real OpenVMS Alpha V8.4 run unchanged: HELLO's SYS$QIOW + LIB$PUT_OUTPUT reach OVMX through SYS$PUBLIC_VECTORS/LIBRTL by symbol-vector offset; missing-shareable and not-an-image refusals match the real activator (vms-3b3f)"
+    name: "OVMX/Alpha native image — .EXE files LINKed on real OpenVMS Alpha V8.4 run unchanged: SYS$QIOW/LIB$PUT_OUTPUT (rung 1), DECC$SHR stdio via DECC$SHR_EV56 (rung 2), two-module image + own shareable with GSMATCH and DEFINE (rung 3); refusals match the real activator (vms-3b3f)"
     needs: changes
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
@@ -1036,7 +1036,7 @@ jobs:
           cache-from: type=gha,scope=cross-alpha-vms
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
 
-      - name: "Native-image gate — HELLO/RETST run, MAIN3/NOTIMG refused as on VMS; 11-case can-fail selftest first"
+      - name: "Native-image gate — rungs 1-3 run, refusals as on VMS; 20-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate
 
   # -----------------------------------------------------------------------

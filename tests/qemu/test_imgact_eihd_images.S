@@ -25,4 +25,14 @@ eihd_img_hello_end:
 eihd_img_text:
 	.incbin "HELLO.MAR"
 eihd_img_text_end:
+	.balign 16
+	.globl eihd_img_main4, eihd_img_main4_end
+eihd_img_main4:
+	.incbin "MAIN4.EXE"
+eihd_img_main4_end:
+	.balign 16
+	.globl eihd_img_myshrv2, eihd_img_myshrv2_end
+eihd_img_myshrv2:
+	.incbin "MYSHRV2.EXE"
+eihd_img_myshrv2_end:
 	.section .note.GNU-stack,"",%progbits

@@ -775,26 +775,33 @@ assert_fileop() {
 # ---------------------------------------------------------------------------
 assert_native() {
   local log="$1" ok=1
-  grep -aq "^OVMX-NATIVE QIOW: hello from a VMS-linked image" "$log" \
-    || { echo "  assert_native: no SYS\$QIOW line from HELLO" >&2; ok=0; }
-  grep -aq "^OVMX-NATIVE LIB\$PUT_OUTPUT: hello" "$log" \
-    || { echo "  assert_native: no LIB\$PUT_OUTPUT line from HELLO" >&2; ok=0; }
-  grep -aq "NATIVE-PROOF: HELLO-STATUS=%X00000001" "$log" \
-    || { echo "  assert_native: HELLO \$STATUS is not %X00000001" >&2; ok=0; }
+  _need() { grep -aq "$1" "$log" || { echo "  assert_native: $2" >&2; ok=0; }; }
+  # rung 1
+  _need "^OVMX-NATIVE QIOW: hello from a VMS-linked image" "no SYS\$QIOW line from HELLO"
+  _need "^OVMX-NATIVE LIB\$PUT_OUTPUT: hello" "no LIB\$PUT_OUTPUT line from HELLO"
+  _need "NATIVE-PROOF: HELLO-STATUS=%X00000001" "HELLO \$STATUS is not %X00000001"
   grep -aE "OVMX-SEAM: image=HELLO.EXE " "$log" | grep -aq '\$STATUS=0x00000001' \
     || { echo "  assert_native: the executive did not record HELLO's completion status" >&2; ok=0; }
-  grep -aq "NATIVE-PROOF: RETST-STATUS=%X0FEDC0A9" "$log" \
-    || { echo "  assert_native: RETST \$STATUS is not %X0FEDC0A9" >&2; ok=0; }
-  grep -aq "^-CLI-E-IMAGEFNF, image file not found .*MYSHR.EXE" "$log" \
-    || { echo "  assert_native: MAIN3 without MYSHR did not fail -CLI-E-IMAGEFNF" >&2; ok=0; }
-  grep -aq "NATIVE-PROOF: MAIN3-STATUS=%X100388B2" "$log" \
-    || { echo "  assert_native: MAIN3 \$STATUS is not %X100388B2" >&2; ok=0; }
-  grep -aq "^-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image" "$log" \
-    || { echo "  assert_native: NOTIMG did not fail -IMGACT-F-NOTNATIVE" >&2; ok=0; }
-  grep -aq "NATIVE-PROOF: NOTIMG-STATUS=%X104D8CFC" "$log" \
-    || { echo "  assert_native: NOTIMG \$STATUS is not %X104D8CFC" >&2; ok=0; }
-  grep -aq "NATIVE-PROOF: === END ===" "$log" \
-    || { echo "  assert_native: the proof SYSTARTUP did not run to its end" >&2; ok=0; }
+  _need "NATIVE-PROOF: RETST-STATUS=%X0FEDC0A9" "RETST \$STATUS is not %X0FEDC0A9"
+  # rung 2
+  _need "^OVMX-NATIVE DECC puts: hello" "no DECC\$PUTS line from CSTDIO"
+  _need "^OVMX-NATIVE DECC printf: answer 42" "no DECC\$TXPRINTF line from CSTDIO"
+  _need "NATIVE-PROOF: CSTDIO-STATUS=%X00000001" "CSTDIO \$STATUS is not %X00000001"
+  # rung 3
+  _need "NATIVE-PROOF: MAIN3-STATUS=%X00000001" "MAIN3 \$STATUS is not %X00000001"
+  [ "$(grep -ac "^OVMX-NATIVE MYSHR: greeting from own shareable" "$log")" -ge 2 ] \
+    || { echo "  assert_native: MYSHR_GREET did not run for both MAIN3 and MAIN4/MYSHRV2" >&2; ok=0; }
+  [ "$(grep -ac "^OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok" "$log")" -ge 2 ] \
+    || { echo "  assert_native: MYSHR_ADD did not return 5 for both MAIN3 and MAIN4/MYSHRV2" >&2; ok=0; }
+  _need "^-SYSTEM-F-SHRIDMISMAT, ident mismatch with shareable image" "MAIN4 against MYSHR 1.0 was not refused SHRIDMISMAT"
+  _need "NATIVE-PROOF: MAIN4V1-STATUS=%X100020BC" "MAIN4 against MYSHR 1.0: \$STATUS is not %X100020BC"
+  _need "NATIVE-PROOF: MAIN4V2-STATUS=%X00000001" "MAIN4 with MYSHR defined to MYSHRV2: \$STATUS is not %X00000001"
+  _need "^-CLI-E-IMAGEFNF, image file not found .*NOSUCH.EXE" "MAIN4 with MYSHR defined to a missing file did not fail -CLI-E-IMAGEFNF"
+  _need "NATIVE-PROOF: MAIN4NONE-STATUS=%X100388B2" "MAIN4 with MYSHR missing: \$STATUS is not %X100388B2"
+  # refusal of a non-image
+  _need "^-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image" "NOTIMG did not fail -IMGACT-F-NOTNATIVE"
+  _need "NATIVE-PROOF: NOTIMG-STATUS=%X104D8CFC" "NOTIMG \$STATUS is not %X104D8CFC"
+  _need "NATIVE-PROOF: === END ===" "the proof SYSTARTUP did not run to its end"
   [ "$ok" -eq 1 ]
 }
 
@@ -871,7 +878,7 @@ build_joint_images() {
     [ -f "$out_n3/VMSABI_PROOF" ] && cp "$out_n3/VMSABI_PROOF" "$WORK/joint/VMSABI_PROOF"
     # vms-3b3f: the VMS vector images (built on every veneer build) and the
     # native-image gate marker.
-    for _v in "SYS\$PUBLIC_VECTORS" LIBRTL; do
+    for _v in "SYS\$PUBLIC_VECTORS" LIBRTL "DECC\$SHR_EV56"; do
       [ -s "$out_n3/$_v.EXE" ] && cp "$out_n3/$_v.EXE" "$WORK/joint/$_v.EXE"
     done
     [ -f "$out_n3/NATIVE_PROOF" ] && cp "$out_n3/NATIVE_PROOF" "$WORK/joint/NATIVE_PROOF"
@@ -2040,28 +2047,51 @@ EOF
       echo "OVMX-NATIVE LIB\$PUT_OUTPUT: hello"
       echo "OVMX-SEAM: image=HELLO.EXE stdcall_returned=1 has_exited=1 \$STATUS=0x00000001 p0=1"
       echo "NATIVE-PROOF: HELLO-STATUS=%X00000001"
-      echo "OVMX-SEAM: image=RETST.EXE stdcall_returned=1 has_exited=1 \$STATUS=0x0FEDC0A9 p0=1"
       echo "NATIVE-PROOF: RETST-STATUS=%X0FEDC0A9"
+      echo "OVMX-NATIVE DECC puts: hello"
+      echo "OVMX-NATIVE DECC printf: answer 42"
+      echo "NATIVE-PROOF: CSTDIO-STATUS=%X00000001"
+      echo "OVMX-NATIVE MAIN3B: second module of the image"
+      echo "OVMX-NATIVE MYSHR: greeting from own shareable"
+      echo "OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok"
+      echo "NATIVE-PROOF: MAIN3-STATUS=%X00000001"
       echo "%DCL-W-ACTIMAGE, error activating image MYSHR"
-      echo "-CLI-E-IMAGEFNF, image file not found SYS\$SHARE:MYSHR.EXE"
-      echo "NATIVE-PROOF: MAIN3-STATUS=%X100388B2"
-      echo "%DCL-W-ACTIMAGE, error activating image NOTIMG"
-      echo "-CLI-E-IMGNAME, image file SYS\$SYSTEM:NOTIMG.EXE"
+      echo "-CLI-E-IMGNAME, image file SYS\$SHARE:MYSHR.EXE"
+      echo "-SYSTEM-F-SHRIDMISMAT, ident mismatch with shareable image"
+      echo "NATIVE-PROOF: MAIN4V1-STATUS=%X100020BC"
+      echo "OVMX-NATIVE MAIN3B: second module of the image"
+      echo "OVMX-NATIVE MYSHR: greeting from own shareable"
+      echo "OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok"
+      echo "NATIVE-PROOF: MAIN4V2-STATUS=%X00000001"
+      echo "%DCL-W-ACTIMAGE, error activating image MYSHR"
+      echo "-CLI-E-IMAGEFNF, image file not found SYS\$SYSTEM:NOSUCH.EXE"
+      echo "NATIVE-PROOF: MAIN4NONE-STATUS=%X100388B2"
       echo "-IMGACT-F-NOTNATIVE, image is not an OpenVMS Alpha image"
       echo "NATIVE-PROOF: NOTIMG-STATUS=%X104D8CFC"
       echo "NATIVE-PROOF: === END ==="
     } > "$_st/pass.log"
-    grep -v "^OVMX-NATIVE QIOW" "$_st/pass.log" > "$_st/noqiow.log"
-    grep -v "^OVMX-NATIVE LIB" "$_st/pass.log" > "$_st/noput.log"
-    sed 's/HELLO-STATUS=%X00000001/HELLO-STATUS=%X00000002/' "$_st/pass.log" > "$_st/hellofail.log"
-    grep -v "OVMX-SEAM: image=HELLO" "$_st/pass.log" > "$_st/noseam.log"
-    sed 's/RETST-STATUS=%X0FEDC0A9/RETST-STATUS=%X00000001/' "$_st/pass.log" > "$_st/retst.log"
-    sed 's/MAIN3-STATUS=%X100388B2/MAIN3-STATUS=%X00000001/' "$_st/pass.log" > "$_st/main3ran.log"
-    grep -v "IMAGEFNF" "$_st/pass.log" > "$_st/nofnf.log"
-    grep -v "NOTNATIVE" "$_st/pass.log" > "$_st/nonat.log"
-    sed 's/NOTIMG-STATUS=%X104D8CFC/NOTIMG-STATUS=%X00000001/' "$_st/pass.log" > "$_st/notimgran.log"
-    grep -v "=== END ===" "$_st/pass.log" > "$_st/noend.log"
-    for _c in "pass:0" "noqiow:1" "noput:1" "hellofail:1" "noseam:1" "retst:1" "main3ran:1" "nofnf:1" "nonat:1" "notimgran:1" "noend:1"; do
+    _mk() { grep -v "$2" "$_st/pass.log" > "$_st/$1.log"; }
+    _sub() { sed "$2" "$_st/pass.log" > "$_st/$1.log"; }
+    _mk noqiow "^OVMX-NATIVE QIOW"
+    _mk noput "^OVMX-NATIVE LIB"
+    _sub hellofail 's/HELLO-STATUS=%X00000001/HELLO-STATUS=%X00000002/'
+    _mk noseam "OVMX-SEAM: image=HELLO"
+    _sub retst 's/RETST-STATUS=%X0FEDC0A9/RETST-STATUS=%X00000001/'
+    _mk noputs "DECC puts"
+    _mk noprintf "DECC printf"
+    _sub cstdiofail 's/CSTDIO-STATUS=%X00000001/CSTDIO-STATUS=%X0000002C/'
+    _sub main3fail 's/MAIN3-STATUS=%X00000001/MAIN3-STATUS=%X0000002C/'
+    _sub onegreet '0,/MYSHR: greeting/{/MYSHR: greeting/d}'
+    _sub oneadd '0,/MYSHR_ADD(2,3)=5 ok/{/MYSHR_ADD(2,3)=5 ok/d}'
+    _mk nomismat "SHRIDMISMAT"
+    _sub v1ran 's/MAIN4V1-STATUS=%X100020BC/MAIN4V1-STATUS=%X00000001/'
+    _sub v2fail 's/MAIN4V2-STATUS=%X00000001/MAIN4V2-STATUS=%X100020BC/'
+    _mk nofnf "IMAGEFNF"
+    _sub noneran 's/MAIN4NONE-STATUS=%X100388B2/MAIN4NONE-STATUS=%X00000001/'
+    _mk nonat "NOTNATIVE"
+    _sub notimgran 's/NOTIMG-STATUS=%X104D8CFC/NOTIMG-STATUS=%X00000001/'
+    _mk noend "=== END ==="
+    for _c in pass:0 noqiow:1 noput:1 hellofail:1 noseam:1 retst:1 noputs:1 noprintf:1 cstdiofail:1 main3fail:1 onegreet:1 oneadd:1 nomismat:1 v1ran:1 v2fail:1 nofnf:1 noneran:1 nonat:1 notimgran:1 noend:1; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_native "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  native selftest $_n: PASS"; else echo "  native selftest $_n: FAIL"; _fails=$((_fails+1)); fi

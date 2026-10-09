@@ -529,4 +529,103 @@ static inline int eihd_symvec_entry(const uint8_t *rt, unsigned long lo,
 	return 0;
 }
 
+/* --------------------------------------------------------------------------
+ * Shareable file resolution (rd vms-3b3f). After the logical-name
+ * translation of a shareable's name, the activator applies the defaults
+ * SYS$SHARE: and .EXE. `spec` is the (upcased) translated name; the OVMX
+ * volume directories for SYS$SHARE/SYS$LIBRARY and SYS$SYSTEM are given.
+ * Writes the volume path and the full VMS spec (for messages). Returns 0, or
+ * 1 when the spec names a device or directory OVMX does not map (the caller
+ * reports it instead of guessing), or -1 when it does not fit.
+ * -------------------------------------------------------------------------- */
+static inline unsigned long eihd_strlen(const char *s)
+{
+	unsigned long n = 0;
+	while (s[n])
+		n++;
+	return n;
+}
+
+static inline int eihd_streq(const char *a, const char *b)
+{
+	while (*a && *a == *b) {
+		a++;
+		b++;
+	}
+	return *a == *b;
+}
+
+static inline int eihd_spec_to_file(const char *spec, const char *syslib,
+				    const char *sysexe, char *path,
+				    unsigned long psz, char *full,
+				    unsigned long fsz)
+{
+	char dev[64];
+	const char *file = spec;
+	dev[0] = '\0';
+	for (const char *q = spec; *q; q++)
+		if (*q == ':') {
+			unsigned long n = (unsigned long)(q - spec);
+			if (n >= sizeof dev)
+				return -1;
+			for (unsigned long i = 0; i < n; i++)
+				dev[i] = spec[i];
+			dev[n] = '\0';
+			file = q + 1;
+		}
+	const char *vol;
+	int other = 0;
+	if (!dev[0] || eihd_streq(dev, "SYS$SHARE") || eihd_streq(dev, "SYS$LIBRARY"))
+		vol = syslib;
+	else if (eihd_streq(dev, "SYS$SYSTEM"))
+		vol = sysexe;
+	else {
+		vol = syslib;
+		other = 1;
+	}
+	if (*file == '[' || *file == '<') {
+		other = 1;
+		for (const char *q = file; *q; q++)
+			if (*q == ']' || *q == '>')
+				file = q + 1;
+	}
+	/* NAME[.TYP][;VER]: the type defaults to .EXE, the version is dropped. */
+	unsigned long vl = eihd_strlen(vol), k = 0;
+	int has_type = 0;
+	if (vl + 1 > psz)
+		return -1;
+	for (unsigned long i = 0; i < vl; i++)
+		path[k++] = vol[i];
+	for (const char *q = file; *q && *q != ';'; q++) {
+		if (*q == '.')
+			has_type = 1;
+		if (k + 5 >= psz)
+			return -1;
+		path[k++] = *q;
+	}
+	if (!has_type) {   /* the volume path's default type */
+		const char *t = ".EXE";
+		for (int i = 0; t[i]; i++)
+			path[k++] = t[i];
+	}
+	path[k] = '\0';
+	/* The full spec: the default device, the given spec, the default type. */
+	k = 0;
+	const char *pre = dev[0] ? "" : "SYS$SHARE:";
+	unsigned long need = eihd_strlen(pre) + eihd_strlen(spec) + 5;
+	if (need > fsz)
+		return -1;
+	for (const char *q = pre; *q; q++)
+		full[k++] = *q;
+	for (const char *q = spec; *q; q++)
+		full[k++] = *q;
+	if (!has_type) {
+		const char *t = ".EXE";
+		for (int i = 0; t[i]; i++)
+			full[k++] = t[i];
+	}
+	full[k] = '\0';
+	return other;
+}
+
 #endif /* OVMX_IMGACT_EIHD_H */

@@ -525,7 +525,7 @@ target_sources(test_imgact_eihd PRIVATE test_imgact_eihd_images.S)
 target_include_directories(test_imgact_eihd PRIVATE ${CMAKE_SOURCE_DIR}/src/imgact)
 set_source_files_properties(test_imgact_eihd_images.S PROPERTIES
     COMPILE_OPTIONS "-Wa,-I${CMAKE_SOURCE_DIR}/tests/native-images/alpha"
-    OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MAIN3.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MYSHR.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/HELLO.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/HELLO.MAR")
+    OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MAIN3.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MYSHR.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/HELLO.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/HELLO.MAR;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MAIN4.EXE;${CMAKE_SOURCE_DIR}/tests/native-images/alpha/MYSHRV2.EXE")
 add_test(NAME test_imgact_eihd COMMAND test_imgact_eihd)
 set_tests_properties(test_imgact_eihd PROPERTIES LABELS "userspace-imgact")
 

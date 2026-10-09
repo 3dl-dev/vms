@@ -967,6 +967,12 @@ static void stage_boot_images(void)
          * the same server-image class as FAL.EXE. Without it on the exec
          * stage, a booted node refuses every inbound mail (NOIMAGE). */
         "MAIL_SERVER.EXE",
+        /* NETACP's own image (rd vms-c6d1): DECNETD.EXE $CREPRCs a copy of
+         * itself as an unprivileged request-mailbox probe in the booted
+         * brokered-link proof -- the same $CREPRC/execve server-image class.
+         * (STARTNET's RUN/DETACHED reaches it through DCL's lazy ACP staging;
+         * a $CREPRC from NETACP has no such path.) */
+        "DECNETD.EXE",
         /* OVMX-native toolchain (vms-104). The MMK self-host path defines
          * TCC :== $SYS$SYSTEM:TCC.EXE and LNK :== $SYS$SYSTEM:LINK.EXE (the
          * descrip.mms toolchain verbs) and fork()+execve()s each (a plain

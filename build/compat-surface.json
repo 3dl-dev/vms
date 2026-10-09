@@ -78,20 +78,20 @@
     "by_status": {
       "verified": 24,
       "implemented": 288,
-      "partial": 61,
+      "partial": 62,
       "stub": 14,
       "designed": 1,
-      "absent": 93
+      "absent": 92
     },
     "by_authenticity": {
-      "real": 335,
-      "n/a": 94,
+      "real": 336,
+      "n/a": 93,
       "advisory": 46,
       "facade-risk": 6
     },
     "met": 312,
-    "in_progress": 61,
-    "not_started": 108,
+    "in_progress": 62,
+    "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
@@ -99,20 +99,20 @@
     "by_status": {
       "verified": 24,
       "implemented": 288,
-      "partial": 59,
+      "partial": 60,
       "stub": 10,
       "designed": 1,
-      "absent": 53
+      "absent": 52
     },
     "by_authenticity": {
-      "real": 333,
-      "n/a": 54,
+      "real": 334,
+      "n/a": 53,
       "advisory": 44,
       "facade-risk": 4
     },
     "met": 312,
-    "in_progress": 59,
-    "not_started": 64,
+    "in_progress": 60,
+    "not_started": 63,
     "facade_risk": 4
   },
   "facilities": [
@@ -477,18 +477,17 @@
         "by_status": {
           "verified": 3,
           "implemented": 9,
-          "partial": 5,
+          "partial": 6,
           "stub": 0,
           "designed": 0,
-          "absent": 1
+          "absent": 0
         },
         "by_authenticity": {
-          "real": 17,
-          "n/a": 1
+          "real": 18
         },
         "met": 12,
-        "in_progress": 5,
-        "not_started": 1,
+        "in_progress": 6,
+        "not_started": 0,
         "facade_risk": 0
       }
     },
@@ -3450,12 +3449,12 @@
       "id": "decnet$task-to-task",
       "kind": "feature",
       "vms": "Task-to-task DECnet communication (logical-link $QIO / FAL)",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "partial",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "docs/design-decnet-ovmx.md",
+      "evidence": "src/libvms/syssvc/sys_qio.c",
       "verified_against": null,
-      "notes": "The codecs exist but the engine boundary has not moved \u2014 no socket/AF_PACKET engine binds them into a live link.",
+      "notes": "OUTBOUND links through NETACP (rd vms-dda): $ASSIGN _NET: + $QIO IO$_ACCESS (NCB NODE\"user password account\"::\"object\") / IO$_WRITEVBLK / IO$_READVBLK (IO$M_NOW) / IO$_DEACCESS are brokered by libvms qio_net_op to the running NETACP over executive mailboxes (T1: request mailbox DNET$NETACP_REQ, a reply mailbox per channel, correlation ids); NETACP holds the link in its bounded session pool (per-process share, idle bound, EXQUOTA refusal), fills the connect's source identity from the requesting process's executive row, and runs a local loopback for links to itself (0::). The booted DCL COPY / SET HOST clients use this path whenever a NETACP is serving (no second NSP engine on the node). Proven on the host floor by DECNETD.EXE --netacp-broker-selftest (ctest) and booted by --net-loopback-accept-test (COPY 0\"SYSTEM MANAGER\":: through NETACP to FAL.EXE, byte-verified). NETACP absent -> SS$_DEVOFFLINE (INV-6). NOT yet (filed, never faked): the INBOUND task side (IO$_ACCESS|IO$M_ACCEPT, SYS$NET, declared names); the DECnet-specific SS$ codes (LINKDISCON/REJECT/NOSUCHNODE/NOLINKS -- nearest existing codes are used, labelled); a live real-VAX run of the brokered path (lab); executive mailbox sender-PID stamping + a non-blocking reply write (a hostile local process can read the request mailbox or stall NETACP's reply).",
       "plan_ref": "vms-30e"
     },
     {

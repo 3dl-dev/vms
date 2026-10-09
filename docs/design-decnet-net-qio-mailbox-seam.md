@@ -119,3 +119,27 @@ IO$M_NOW baseline either way.
   IO$_ACCESS → the chain → a link) on /dev/vms via run-on-rail (a2 test).
 - **a1-3 (vms-da1a)** — the data-plane $QIO ops end-to-end; **a1-4 (vms-5b5c)** —
   real-VAX lab interop.
+
+## Protection of the T1 mailboxes (rd vms-c6d1)
+
+The request mailbox carries NCB access-control passwords, so it is a protected
+VMS object, decided by the executive's one protection check
+(`src/kernel-core/vms_prot.h`, the same decision a file gets) -- never by host
+uid/mode bits:
+
+- **Request mailbox** `DNET$NETACP_REQ`: created by NETACP with promsk
+  S:RWLP,O:RWLP,G:,W:W (`NETACP_REQ_PROMSK`). Any process may `$ASSIGN` it and
+  write a request; only NETACP (its SYSTEM-category owner) or a BYPASS/SYSPRV
+  holder may read it. As on real VMS (oracle family `mbxprot`), `$ASSIGN` itself
+  is not checked and READALL does not open a mailbox.
+- **Who sent it**: every mailbox message carries the writer's PID, stamped by the
+  executive. NETACP drops, unanswered, a request whose `owner_pid` is not that
+  stamped PID, or whose writer does not hold NETMBX (read by `$GETJPI` of the
+  stamped PID).
+- **Reply mailbox**: each client creates its own with promsk S:RWLP,O:RWLP,G:,W:
+  (only the client and SYSTEM-category NETACP), and NETACP writes replies with
+  `IO$M_NORSWAIT`: a client that never drains it gets `SS$_MBFULL`, NETACP never
+  waits on a client.
+- **Open**: a verified requester still chooses `reply_unit`; NETACP should confirm
+  the unit is the requester's own mailbox through an executive owner query (rd
+  vms-046).

@@ -129,6 +129,18 @@ if(BUILD_TESTS)
     # qio_net_op marshalling + the IO$M_NOW serve loop build on it.
     add_test(NAME decnetd_net_service_selftest
              COMMAND decnetd_exe --net-service-selftest)
+    # rd vms-dda: OUTBOUND links brokered through NETACP -- the host floor. A real
+    # NETACP pool serves clients that reach it ONLY through broker records
+    # (dnet_broker_xfer, the marshalling libvms's qio_net_op runs) over an
+    # in-process queue standing in for the executive mailboxes; a second engine
+    # across a socketpair is the remote. COPY's FAL client end to end through
+    # NETACP, a remote access-control rejection (INVLOGIN), the local loopback
+    # (0::), per-process share + full-pool refusals (EXQUOTA), handle-ownership
+    # and correlation-id refusals, a silent NETACP (DEVOFFLINE). No executive;
+    # the booted $QIO _NET: proof is --net-loopback-accept-test in the battery.
+    add_test(NAME decnetd_netacp_broker_selftest
+             COMMAND decnetd_exe --netacp-broker-selftest)
+    set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
     # rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
     # (the same client the live $ COPY drives) brings up an object-17 link + NSP
     # link-service + a DAP session over the copy_wire transport against a threaded

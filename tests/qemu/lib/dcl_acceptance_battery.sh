@@ -1332,6 +1332,43 @@ run_dcl_acceptance_battery() {
     wait_for '$ ' 20 "$NMBX_OFF"
 
     # =======================================================================
+    # DECnet OUTBOUND LINKS THROUGH NETACP (rd vms-dda). On VMS every logical
+    # link belongs to NETACP; a COPY / SET HOST image reaches one only through
+    # $ASSIGN _NET: + $QIO. --net-loopback-accept-test runs a NETACP (request
+    # mailbox published as DNET$NETACP_REQ) and, as its client, does exactly what
+    # DECNETD --copy does on a booted node: COPY 0"SYSTEM MANAGER"::file over
+    # $QIO IO$_ACCESS/WRITEVBLK/READVBLK/DEACCESS -- libvms qio_net_op -> the
+    # executive mailboxes -> NETACP's outbound slot -> its local loopback ->
+    # NETACP's inbound FAL dispatch -> a FAL.EXE server process -> back; records
+    # byte-verified through RMS. A bad password completes IO$_ACCESS INVLOGIN.
+    # Real executive mailboxes + SYSUAF + FAL.EXE only; no skip. HARD GATE where
+    # DECNETD.EXE ships; a loud note where it is absent.
+    local NLB_OFF; NLB_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --net-loopback-accept-test'
+    if wait_for 'IVIMAGE' 15 "$NLB_OFF"; then
+        note "NETACP _NET: links [vms-dda]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the brokered-link proof DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$NLB_OFF" &&
+         tail -c "+$((NLB_OFF + 1))" "$LOG" | grep -q 'DECNETD-E-NONET'; then
+        note "NETACP _NET: links [vms-dda]: this VM has no NIC, so no _NET: device exists (NIC-gated, INV-6) -- the brokered-link proof is a hard gate in tests/qemu/test_decnet_startnet_boot_e2e.sh, which boots with a NIC and a running NETACP"
+    elif tail -c "+$((NLB_OFF + 1))" "$LOG" | grep -q 'DECNETD-NET-LOOPBACK-ACCEPT:'; then
+        local NLBSEG; NLBSEG=$(tail -c "+$((NLB_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$NLBSEG" 'DECNETD-NET-LOOPBACK-ACCEPT: PASS' \
+            "NETACP _NET: links [vms-dda]: an outbound link opened by \$QIO on _NET: was brokered through NETACP on the real executive (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$NLBSEG" 'completed through NETACP, and the records BYTE-MATCH' \
+            "NETACP _NET: links [vms-dda]: COPY 0\"SYSTEM MANAGER\"::file over \$QIO _NET: moved the file through NETACP to FAL.EXE and back, byte-verified"
+        must_have "$NLBSEG" 'completes IO$_ACCESS SS$_INVLOGIN' \
+            "NETACP _NET: links [vms-dda]: a bad password is refused at IO\$_ACCESS (INVLOGIN) -- the remote FAL's auth reaches the \$QIO caller"
+        must_have "$NLBSEG" 'DECNETD-I-LINKOUT' \
+            "NETACP _NET: links [vms-dda]: NETACP itself reports the outbound link RUN for the requesting process"
+        must_not_have "$NLBSEG" 'DECNETD-NET-LOOPBACK-ACCEPT: FAIL' \
+            "NETACP _NET: links [vms-dda]: no assertion in the brokered-link proof failed"
+        negctl "$NLBSEG" 'DECNETD-I-NETLOOP' "DECnet NETACP-brokered _NET: links"
+    else
+        bad "NETACP _NET: links [vms-dda]: DECNETD.EXE --net-loopback-accept-test produced no verdict line within 240s -- the brokered-link proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung link)"
+    fi
+    wait_for '$ ' 20 "$NLB_OFF"
+
+    # =======================================================================
     # DECnet OUTBOUND $ COPY (vms-ea8) -- the COMMAND-LAYER twin of the FAL
     # section above. Where --fal-accept-test drives dnet_fal_client_put/get with
     # hardcoded specs, --copy-accept-test enters through the DCL COPY verb's own

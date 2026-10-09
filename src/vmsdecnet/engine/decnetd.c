@@ -46,6 +46,7 @@
  * vms-3be lab capture + OVMX's own scsd datalink pattern. No VSI/HPE source.
  */
 #include <errno.h>
+#include <fcntl.h>      /* open(/dev/urandom): the NETACP link-handle secret */
 #include <net/if.h>      /* if_nametoindex() */
 #include <ifaddrs.h>    /* getifaddrs(): auto-detect the primary NIC (no argv) */
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
@@ -70,6 +71,8 @@
 #include "dnet_mail11.h"    /* MAIL-11 receiver (object 27, rd vms-47fd)    */
 #include "dnet_mail_proc.h" /* MAIL_SERVER.EXE network server process      */       /* FAL server + COPY client (object 17, rd vms-8c2) */
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
+#include "dnet_netqio.h"    /* a _NET: $QIOW ends with its IOSB status (rd vms-d01) */
+#include "ovmx_status.h"     /* vms_status_string: the authentic %FAC-S-ID text */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
@@ -83,9 +86,14 @@
 #include "ssdef.h"          /* SS$_BADPARAM (isolation-seam refusal, vms-9ab) */
 #include "rmsdef.h"         /* RMS$_FNF: --fal-proc-accept-test DELETE readback (vms-277a) */
 #include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
+#include "prvdef.h"         /* PRV$M_NETMBX: a broker requester must hold it (rd vms-c6d1) */
+#include "prcdef.h"         /* PRC$M_DETACH: the vms-c6d1 request-mailbox probe process */
+#include "vmsfs/filespec.h" /* vmsfs_to_linux_path: SYS$SYSTEM:DECNETD.EXE for that probe */
+#include "ovmx_layout.h"    /* ovmx_boot_stage_exec_path                              */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
 #include "descrip.h"        /* dsc$descriptor_s for the SYS$INPUT/SYS$OUTPUT assign */
 #include "iodef.h"          /* IO$_READVBLK/WRITEVBLK/SETMODE + IO$K_TT_PASSALL      */
+#include "lnmdef.h"         /* LNM$C_USER: the DNET$NETACP_REQ logical (rd vms-dda)   */
 
 /* The executive terminal channel's backing fd, so the client can poll() the
  * datalink AND the terminal for readiness in one wait -- readiness only; every
@@ -655,6 +663,23 @@ static int run_net_ncb_selftest(void)
     NC_CHECK(dnet_ncb_parse(NCB_S("NODE::SERVER")) == DNET_NCB_OK &&
              !strcmp(n.node, "NODE") && n.is_named && !strcmp(n.task, "SERVER"),
              "an unquoted object spec (NODE::SERVER) parses");
+    /* rd vms-dda: access control + the documented "17=" object form */
+    NC_CHECK(dnet_ncb_parse(NCB_S("VAX1\"SYSTEM MANAGER\"::\"17=\"")) == DNET_NCB_OK &&
+             !strcmp(n.node, "VAX1") && n.has_access && !strcmp(n.user, "SYSTEM") &&
+             !strcmp(n.password, "MANAGER") && n.account[0] == '\0' &&
+             !n.is_named && n.object == 17,
+             "NODE\"user password\"::\"17=\" -> node + access control + object 17");
+    NC_CHECK(dnet_ncb_parse(NCB_S("1.11\"U P:W ACCT\"::\"0=ECHO/data\"")) == DNET_NCB_OK &&
+             !strcmp(n.node, "1.11") && !strcmp(n.password, "P:W") &&
+             !strcmp(n.account, "ACCT") && n.is_named && !strcmp(n.task, "ECHO"),
+             "a password holding ':' and an account parse; a /connect-data tail is ignored");
+    NC_CHECK(dnet_ncb_parse(NCB_S("N\"A B C D\"::\"17=\"")) == DNET_NCB_EBADLEN &&
+             n.node[0] == '\0' && n.password[0] == '\0',
+             "a four-field access string is refused and nothing (no password) is left behind");
+    NC_CHECK(dnet_ncb_parse(NCB_S("N\"\"::\"17=\"")) == DNET_NCB_ETRUNC,
+             "an empty access string is refused");
+    NC_CHECK(dnet_ncb_parse(NCB_S("N\"USER::\"17=\"")) == DNET_NCB_ETRUNC,
+             "an unterminated access-control quote is refused (no \"::\" outside quotes)");
 
     /* bounds-safe refusals -- never over-read */
     NC_CHECK(dnet_ncb_parse("", 0, &n) == DNET_NCB_ETRUNC,
@@ -878,6 +903,86 @@ static int run_net_broker_selftest(void)
 }
 
 /*
+ * broker_open_connect (rd vms-dda) -- turn a broker OPEN's payload, the NCB text
+ * the client handed $QIO IO$_ACCESS (NODE"user password account"::"object"), into
+ * a resolved target + the Session Control connect NETACP sends. This is NETACP's
+ * job on VMS, not the client's:
+ *   - the node is resolved from NETACP's own node database ("area.node"
+ *     literals too; "0" and the executor's own name are THIS node, reached over
+ *     the local loopback);
+ *   - the connect's SOURCE descriptor is the REQUESTING process's identity --
+ *     its UIC group/member and username, read from the executive by pid
+ *     ($GETJPI), never taken from the request; a pid the executive does not
+ *     know is refused. With no executive (the host floor) NETACP falls back to
+ *     its own nonzero identity (sethost_src_codes) and its node name, LABELLED.
+ * Bounds: the NCB parse is the bounds-checked dnet_ncb_parse; every refusal is
+ * an honest SS$_ status with nothing sent. The parsed password is wiped.
+ */
+static uint32_t broker_open_connect(const struct dnet_engine *node, uint32_t owner_pid,
+                                    const uint8_t *ncbtxt, size_t ncblen,
+                                    unsigned *rarea, unsigned *rnode, int *object,
+                                    uint8_t *desc, size_t cap, size_t *dlen)
+{
+    struct dnet_ncb n;
+    uint32_t st = SS$_NORMAL;
+    if (dnet_ncb_parse((const char *)ncbtxt, ncblen, &n) != DNET_NCB_OK)
+        return SS$_BADPARAM;
+
+    if (strcmp(n.node, "0") == 0 || strcasecmp(n.node, node->node_name) == 0) {
+        *rarea = dnet_area_of(node->addr);
+        *rnode = dnet_node_of(node->addr);
+    } else if (sethost_resolve_target(n.node, rarea, rnode) != 0) {
+        st = SS$_NOSUCHDEV;               /* not area.node, not in the node DB */
+        goto out;
+    }
+
+    uint16_t grp = 0, usr = 0;
+    char srcuser[DNET_SC_MAX_STR + 1] = "";
+    if (owner_pid != 0) {
+        struct vms_procinfo pi;
+        uint32_t js = vms_kif_getjpi_pid(owner_pid, &pi);
+        if (js == SS$_NONEXPR) {
+            st = SS$_BADPARAM;            /* no such requesting process */
+            goto out;
+        }
+        if (js & 1) {
+            grp = (uint16_t)(pi.uic >> 16);
+            usr = (uint16_t)(pi.uic & 0xFFFF);
+            size_t k = 0;
+            while (k < sizeof pi.username && k < DNET_SC_MAX_STR &&
+                   pi.username[k] && pi.username[k] != ' ') {
+                srcuser[k] = pi.username[k];
+                k++;
+            }
+            srcuser[k] = '\0';
+        }
+    }
+    if (grp == 0 && usr == 0)
+        sethost_src_codes(&grp, &usr);
+    if (!srcuser[0])
+        snprintf(srcuser, sizeof srcuser, "%s", node->node_name);
+
+    int rc;
+    if (n.is_named) {
+        *object = 0;
+        rc = dnet_cterm_sc_connect_build_task(n.task, srcuser, grp, usr, n.user,
+                                              n.password, n.account, desc, cap, dlen);
+    } else if (n.object > 255) {
+        st = SS$_BADPARAM;
+        goto out;
+    } else {
+        *object = (int)n.object;
+        rc = dnet_cterm_sc_connect_build((uint8_t)n.object, srcuser, grp, usr, n.user,
+                                         n.password, n.account, desc, cap, dlen);
+    }
+    if (rc != DNET_CTERM_OK)
+        st = SS$_BADPARAM;
+out:
+    memset(&n, 0, sizeof n);              /* the parsed access-control password */
+    return st;
+}
+
+/*
  * dnet_broker_serve (rd vms-22c, a1-2 integration) -- service ONE bounds-
  * validated broker request against the NSP link engine, producing a
  * correlation-matched response. This is the NETACP "brain" the mailbox serve
@@ -894,11 +999,9 @@ static int run_net_broker_selftest(void)
  * match); a response is never emitted with a zero/mismatched id.
  *
  * Request payload layout (data[], already length-bounded by the decode):
- *   OP_OPEN : node_name_len(1) + node_name + the Session Control connect
- *             descriptor the client built (dnet_cterm_sc_connect_build[_task]).
- *             NETACP RESOLVES the node NAME (or an "area.node" literal) to
- *             area.node via the node database it owns -- the client has no DB, so
- *             it sends the name and the server resolves it (rd vms-22c a1-2).
+ *   OP_OPEN : the NCB text the client gave IO$_ACCESS; NETACP resolves the node
+ *             from the node database it owns and builds the Session Control
+ *             connect (broker_open_connect, rd vms-dda).
  *   OP_SEND : the raw task-to-task message bytes.
  *   OP_RECV / OP_CLOSE : no request payload.
  * OP_OPEN sends the Connect Initiate and returns SS$_NORMAL "initiated" -- the
@@ -925,37 +1028,26 @@ static int dnet_broker_serve(struct dnet_engine *eng,
 
     switch (req->op) {
     case DNET_BROKER_OP_OPEN:
-        /* data = [node_name_len:1][node_name][SC connect descriptor]. NETACP
-         * RESOLVES the node here -- the node database (name<->address) is
-         * NETACP's, not the client's, so the request carries the node NAME (or an
-         * "area.node" literal) and the server resolves it (rd vms-22c a1-2:
-         * node resolution is server-side). Bounds-checked: a name that over-runs
-         * the record, an empty/over-long name, or an unresolvable node are each
-         * refused honestly, never over-read or faked (INV-6). */
-        if (req->datalen < 1) {
-            rsp->status = SS$_BADPARAM;
-            return 0;
-        }
+        /* data = the NCB text (NODE"user password account"::"object"), the
+         * single OPEN contract NETACP's pool also serves (rd vms-dda). NETACP
+         * resolves the node and builds the connect (broker_open_connect);
+         * a malformed NCB or an unresolvable node is refused honestly, never
+         * over-read or faked (INV-6). */
         {
-            uint8_t nlen = req->data[0];
-            char node_name[32];
-            if (nlen == 0 || (size_t)1 + nlen > req->datalen || nlen >= sizeof node_name) {
-                rsp->status = SS$_BADPARAM;   /* name absent / over-runs the record */
+            unsigned rarea = 0, rnode = 0; int obj = 0;
+            uint8_t desc[192]; size_t desclen = 0;
+            uint32_t ost = broker_open_connect(eng, req->owner_pid, req->data, req->datalen,
+                                               &rarea, &rnode, &obj, desc, sizeof desc,
+                                               &desclen);
+            if (!(ost & 1)) {
+                rsp->status = ost;
                 return 0;
             }
-            memcpy(node_name, req->data + 1, nlen);
-            node_name[nlen] = '\0';
-
-            unsigned rarea = 0, rnode = 0;
-            if (sethost_resolve_target(node_name, &rarea, &rnode) != 0) {
-                rsp->status = SS$_NOSUCHDEV;  /* node name not resolvable -- honest */
-                return 0;
-            }
-            const uint8_t *desc = req->data + 1 + nlen;
-            size_t desclen = (size_t)req->datalen - 1 - nlen;
-            if (dnet_engine_link_open(eng, rarea, rnode, 0x2001, desc, desclen,
-                                      1459, 1, DNET_NSP_VER_41,
-                                      frame_out, framecap, &flen, now) != DNET_ENGINE_OK) {
+            int orc = dnet_engine_link_open(eng, rarea, rnode, 0x2001, desc, desclen,
+                                            1459, 1, DNET_NSP_VER_41,
+                                            frame_out, framecap, &flen, now);
+            memset(desc, 0, sizeof desc);
+            if (orc != DNET_ENGINE_OK) {
                 rsp->status = SS$_ABORT;
                 return 0;
             }
@@ -1056,20 +1148,13 @@ static int run_net_service_selftest(void)
     memset(&req, 0, sizeof req);
     req.corr_id = dnet_broker_corr_next(&corr);
     req.op = DNET_BROKER_OP_OPEN;
-    uint8_t desc[192]; size_t dlen = 0;
-    dnet_cterm_sc_connect_build_task("SVCTEST", "OVMXL", 0x021a, 0x2020, "", "", "",
-                                     desc, sizeof desc, &dlen);
-    /* OP_OPEN payload: [node_name_len][node_name][descriptor]. NETACP resolves
-     * the name; "1.11" is the area.node literal sethost_resolve_target accepts
-     * directly (no node-DB entry needed for the host proof); it resolves to the
-     * peer engine R (1.11). */
+    /* OP_OPEN payload: the NCB text. NETACP resolves the node; "1.11" is the
+     * area.node literal sethost_resolve_target accepts directly (no node-DB
+     * entry needed for the host proof); it resolves to the peer engine R. */
     {
-        const char *node = "1.11";
-        uint8_t nlen = (uint8_t)strlen(node);
-        req.data[0] = nlen;
-        memcpy(req.data + 1, node, nlen);
-        memcpy(req.data + 1 + nlen, desc, dlen);
-        req.datalen = (uint16_t)(1 + nlen + dlen);
+        const char *ncb = "1.11::\"TASK=SVCTEST\"";
+        req.datalen = (uint16_t)strlen(ncb);
+        memcpy(req.data, ncb, req.datalen);
     }
     int sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
     NS_CHECK(sr == 0 && rsp.status == SS$_NORMAL && rsp.corr_id == req.corr_id && has == 1,
@@ -1134,11 +1219,11 @@ static int run_net_service_selftest(void)
              "an unknown op is refused (SS$_ILLIOFUNC), no frame, correlation still echoed");
     req.corr_id = dnet_broker_corr_next(&corr);
     req.op = DNET_BROKER_OP_OPEN;
-    req.data[0] = 200; req.datalen = 2;   /* node_name_len=200 over-runs a 2-byte record */
+    req.data[0] = 200; req.data[1] = ':'; req.datalen = 2;   /* not an NCB: no node, no "::" */
     has = 1;
     sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
     NS_CHECK(sr == 0 && rsp.status == SS$_BADPARAM && has == 0,
-             "OP_OPEN whose node-name length over-runs the record is refused (BADPARAM, no over-read)");
+             "OP_OPEN whose NCB is malformed is refused (BADPARAM, no over-read)");
 
     close(sv[0]); close(sv[1]);
     printf("DECNETD-I-NETSERVICE, %d passed, %d failed\n", pass, fail);
@@ -2524,31 +2609,292 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr)
     *usr = u;
 }
 
-/*
- * Try to satisfy one outstanding host read-solicit from the buffered local
- * input queue (rd vms-6165). Returns 1 if a line was dequeued and sent as a
- * CTERM Read Data, 0 if the queue has no complete line yet (the caller should
- * remember the solicit and retry once more input arrives or EOF fires), or -1
- * if the send itself failed (same as any other link-send failure).
- */
-static int sethost_send_queued_line(struct dnet_cterm_session *term,
-                                    struct dnet_cterm_inq *inq,
-                                    struct dnet_engine *eng, int sock,
-                                    unsigned ifindex, dnet_tick_t now,
-                                    uint8_t *cpdu, size_t cpdu_cap)
+/* ---------------------------------------------------------------------------
+ * The $ SET HOST client's link-independent half (rd vms-dda). The CTERM client
+ * FSM, the local terminal channels and the prompt-gated input queue are the
+ * same whichever way the logical link is reached: the standalone engine over
+ * the datalink (a host/lab instrument), or -- the booted runtime -- a _NET:
+ * channel whose link NETACP owns. Only sh_link_send differs.
+ * ------------------------------------------------------------------------- */
+struct netcli;
+static uint32_t netcli_op(struct netcli *c, uint16_t op, const void *in, size_t inlen,
+                          void *out, size_t outcap, size_t *xfer);
+
+struct sh_ctx {
+    struct dnet_cterm_session term;
+    struct dnet_cterm_inq inq;
+    int read_pending, passall_on, session_bound_ever, stdin_eof, rc, done;
+    int skip_lf;                        /* CTERM Write "newline" flag state  */
+    int quiet;                          /* a user's SET HOST: no DECNETD-I chatter */
+    uint16_t ch_in, ch_out;
+    /* the link: the standalone engine (eng/sock/ifindex) OR a _NET: channel */
+    struct dnet_engine *eng;
+    int sock;
+    unsigned ifindex;
+    struct netcli *nc;
+    const char *where;                  /* circuit / "NETACP" for the log lines */
+    uint8_t cpdu[DNET_CTERM_MAX_PDU];
+};
+
+static int sh_link_send(struct sh_ctx *x, const uint8_t *pdu, size_t n)
+{
+    if (x->nc) {
+        size_t xf = 0;
+        return (netcli_op(x->nc, DNET_BROKER_OP_SEND, pdu, n, NULL, 0, &xf) & 1) ? 0 : -1;
+    }
+    return cterm_link_send(x->eng, x->sock, x->ifindex, pdu, n, monotonic_sec());
+}
+
+static int sethost_send_queued_line(struct sh_ctx *x)
 {
     uint8_t line[DNET_CTERM_MAX_DATA];
     size_t linelen = 0;
-    if (!dnet_cterm_inq_dequeue(inq, line, sizeof(line), &linelen))
+    if (!dnet_cterm_inq_dequeue(&x->inq, line, sizeof(line), &linelen))
         return 0;
     size_t clen = 0;
-    if (dnet_cterm_found_read_data_build(line, linelen, 0x0d, cpdu, cpdu_cap,
+    if (dnet_cterm_found_read_data_build(line, linelen, 0x0d, x->cpdu, sizeof x->cpdu,
                                          &clen) != 0)
         return -1;
-    if (cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0)
+    if (sh_link_send(x, x->cpdu, clen) != 0)
         return -1;
-    term->reads_sent++;
+    x->term.reads_sent++;
     return 1;
+}
+
+/* The link is RUN: arm the CTERM client FSM and wait for the host, which
+ * speaks first (rd vms-6165). */
+static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t len);
+
+static void sethost_on_linkup(struct sh_ctx *x)
+{
+    if (dnet_cterm_client_open(&x->term) != 0) {
+        fprintf(stderr, "DECNETD-E-CTERMOPEN, could not arm CTERM client foundation\n");
+        x->rc = 1; x->done = 1;
+    }
+}
+
+/* One CTERM segment from the host. */
+static void sethost_on_data(struct sh_ctx *x, const uint8_t *data, size_t len)
+{
+    size_t clen = 0;
+    if (dnet_cterm_state_of(&x->term) == DNET_CTERM_S_BINDING) {
+        /* FOUNDATION PHASE (rd vms-6165): consume the host's foundation
+         * message, then drain every client reply now due (client seg-1, then
+         * the seg-2/3/4 burst). WIDTH/PAGE are the captured 132/24 so every
+         * emitted byte is oracle-exact. */
+        int prog = 0;
+        if (dnet_cterm_client_found_rx(&x->term, data, len, &prog) != DNET_CTERM_OK)
+            return;
+        for (;;) {
+            int frc = dnet_cterm_client_found_next(&x->term, 132, 24, x->cpdu,
+                                                   sizeof x->cpdu, &clen);
+            if (frc != DNET_CTERM_OK || clen == 0)
+                break;
+            if (sh_link_send(x, x->cpdu, clen) != 0) {
+                fprintf(stderr, "DECNETD-E-FOUND, could not send a CTERM foundation reply\n");
+                x->rc = 1; x->done = 1;
+                break;
+            }
+        }
+        if (!x->done && dnet_cterm_is_bound(&x->term) && !x->session_bound_ever) {
+            x->session_bound_ever = 1;
+            if (!x->quiet) {
+                log_ts(stdout);
+                printf(" DECNETD-I-BOUND, CTERM foundation negotiated -- terminal session"
+                       " BOUND on %s\n", x->where);
+                fflush(stdout);
+            }
+            /* Hand echo/editing to the REMOTE session: pass-all the LOCAL
+             * terminal through the executive driver. */
+            sethost_set_line(x->ch_in, 1);
+            x->passall_on = 1;
+        }
+        return;
+    }
+
+    /* BOUND: real terminal I/O inside 09 Common Data messages. ONE segment
+     * carries SEVERAL CTERM messages, each LENGTH-prefixed (AA-DY89A-TK); a
+     * real VAX packs a whole screen of Writes into one. Each is handled on its
+     * own -- reading the segment as one message put every following LENGTH
+     * word on the screen as a stray character (seen live: OVMX SET HOST VAX1). */
+    struct dnet_cth_cd_iter it;
+    if (dnet_cth_cd_iter_init(&it, data, len) != DNET_CTH_OK)
+        return;
+    const uint8_t *sub;
+    size_t sublen;
+    while (!x->done && dnet_cth_cd_iter_next(&it, &sub, &sublen) == 1) {
+        if (sublen == 0)
+            continue;
+        if (sub[0] == 0x07) {                     /* Write: render it properly */
+            uint8_t shown[DNET_CTERM_MAX_DATA + 512];
+            size_t sn = 0;
+            x->term.writes_recv++;
+            if (dnet_cterm_write_render(sub, sublen, &x->skip_lf, shown,
+                                        sizeof shown, &sn) == 0 && sn) {
+                struct _iosb iosb;
+                (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                               shown, (uint32_t)sn, 0, 0, 0, 0);
+            }
+            continue;
+        }
+        uint8_t one[4 + DNET_CTERM_MAX_DATA + 64];
+        if (sublen + 4 > sizeof one)
+            continue;
+        one[0] = 0x09; one[1] = 0x00;
+        one[2] = (uint8_t)(sublen & 0xff); one[3] = (uint8_t)(sublen >> 8);
+        memcpy(one + 4, sub, sublen);
+        sethost_on_bound_msg(x, one, sublen + 4);
+    }
+}
+
+/* One BOUND-phase CTERM message (re-wrapped in its own 09 envelope). */
+static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t len)
+{
+    size_t clen = 0;
+    enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+    uint8_t txt[DNET_CTERM_MAX_DATA];
+    size_t txtlen = 0;
+    uint8_t rhandle[4] = { 0, 0, 0, 0 };
+    if (dnet_cterm_found_terminal_rx(data, len, &tk, txt, sizeof(txt), &txtlen,
+                                     rhandle) != DNET_CTERM_OK)
+        return;
+    if (tk == DNET_CTERM_TK_WRITE) {
+        x->term.writes_recv++;
+        if (txtlen) {
+            struct _iosb iosb;
+            (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                           txt, (uint32_t)txtlen, 0, 0, 0, 0);
+        }
+    } else if (tk == DNET_CTERM_TK_START_READ) {
+        /* rd vms-6165: a 02-08 is PROMPT-AND-READ -- display the prompt text,
+         * THEN answer with exactly one queued input line. One solicit -> one
+         * line, never more, never before this arrives. If the queue has no
+         * complete line yet, remember the solicit and satisfy it the moment one
+         * becomes available. */
+        x->term.writes_recv++;
+        if (txtlen) {
+            struct _iosb iosb;
+            (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                           txt, (uint32_t)txtlen, 0, 0, 0, 0);
+        }
+        int srr = sethost_send_queued_line(x);
+        if (srr < 0) {
+            fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
+            x->rc = 1; x->done = 1;
+        } else {
+            x->read_pending = (srr == 0);
+        }
+    } else if (tk == DNET_CTERM_TK_READ_ATTR) {
+        /* Host solicited terminal characteristics: answer with the oracle
+         * read-characteristics reply, echoing its handle. */
+        if (dnet_cterm_found_client_readchar_build(rhandle, x->cpdu, sizeof x->cpdu,
+                                                   &clen) == 0)
+            (void)sh_link_send(x, x->cpdu, clen);
+    }
+    /* TK_OTHER / TK_NONE: NSP-ack only, nothing to display or answer. */
+}
+
+/* The local terminal is readable: read it through its VMS channel. */
+static void sethost_on_term_input(struct sh_ctx *x)
+{
+    uint8_t inbuf[DNET_CTERM_MAX_DATA];
+    struct _iosb iosb;
+    /* Read the keystrokes through the VMS terminal channel ($QIO), never a raw
+     * read on fd 0. poll() only told us bytes are ready. */
+    uint32_t rst = sys$qiow(0, x->ch_in, IO$_READVBLK, &iosb, NULL, 0,
+                            inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
+    uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
+    if ((rst & 1) && rn > 0) {
+        /* rd vms-6165: local keystrokes are BUFFERED, never sent immediately --
+         * CTERM input is prompt-gated. */
+        (void)dnet_cterm_inq_feed(&x->inq, inbuf, (size_t)rn);
+    } else {
+        /* Local EOF or a channel error: stop polling for more input but KEEP
+         * THE LINK UP -- whatever is already queued is still dequeued one line
+         * per solicit, and the host's remaining output still drains. The
+         * session ends on the host's Unbind, a link drop, or --duration --
+         * NEVER on stdin EOF by itself (rd vms-6165 lab iter 2). */
+        x->stdin_eof = 1;
+        dnet_cterm_inq_eof(&x->inq);
+        log_ts(stdout);
+        printf(" DECNETD-I-EOF, local input closed -- %zu byte(s) still queued,"
+               " draining remote output on %s\n", x->inq.len, x->where);
+        fflush(stdout);
+    }
+    /* A host solicit may already be waiting on a line that was not available
+     * yet -- satisfy it now if the queue (or EOF) supplied one. */
+    if (x->read_pending) {
+        int srr = sethost_send_queued_line(x);
+        if (srr < 0) {
+            fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
+            x->rc = 1; x->done = 1;
+        } else if (srr == 1) {
+            x->read_pending = 0;
+        }
+    }
+}
+
+/* Assign the LOCAL VMS terminal channels (the anti-LARP core): SYS$INPUT for
+ * keystrokes, SYS$OUTPUT for screen writes. All terminal I/O goes through these
+ * channels via $QIO -- never raw termios on fd 0/1. */
+static int sethost_open_terminal(struct sh_ctx *x)
+{
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct dsc$descriptor_s din, dout;
+    sethost_mkdesc(&din, "SYS$INPUT:");
+    sethost_mkdesc(&dout, "SYS$OUTPUT:");
+    if (!(sys$assign(&din, &x->ch_in, 0, NULL) & 1) ||
+        !(sys$assign(&dout, &x->ch_out, 0, NULL) & 1)) {
+        fprintf(stderr, "DECNETD-E-NOTERMCHAN, could not $ASSIGN the local"
+                        " terminal (SYS$INPUT/SYS$OUTPUT)\n");
+        if (x->ch_in) sys$dassgn(x->ch_in);
+        x->ch_in = 0;
+        return -1;
+    }
+    return 0;
+}
+
+/* Restore the terminal, unbind a bound session, say %REM-S-END. The caller
+ * then releases the link. */
+static void sethost_finish(struct sh_ctx *x, const char *local_node)
+{
+    if (x->passall_on)
+        sethost_set_line(x->ch_in, 0);
+    if (dnet_cterm_is_bound(&x->term)) {
+        size_t clen = 0;
+        if (dnet_cterm_unbind(&x->term, DNET_CTERM_UNBIND_NORMAL, x->cpdu,
+                              sizeof x->cpdu, &clen) == 0)
+            (void)sh_link_send(x, x->cpdu, clen);
+    }
+    /* CONTROL RETURNS with the canonical VMS message (oracle docs/oracle/
+     * vax-sethost-cterm.console.txt): the LOCAL node is the node control
+     * returns to -- only once a session was actually established. */
+    if (x->session_bound_ever) {
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "%%REM-S-END, control returned to node %s::\n", local_node);
+        sethost_term_write(x->ch_out, msg);
+    }
+    if (x->quiet)
+        return;
+    log_ts(stdout);
+    printf(" DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=%lu"
+           " reads_sent=%lu on %s\n", x->term.writes_recv, x->term.reads_sent, x->where);
+    fflush(stdout);
+}
+
+static int sethost_ctx_init(struct sh_ctx *x)
+{
+    memset(x, 0, sizeof *x);
+    if (dnet_cterm_session_init(&x->term, DNET_CTERM_ROLE_TERMINAL) != 0) {
+        fprintf(stderr, "DECNETD-E-CTERMINIT, terminal session init failed\n");
+        return -1;
+    }
+    /* rd vms-6165: CTERM input is PROMPT-DRIVEN -- buffered here, released ONE
+     * LINE PER HOST SOLICIT. */
+    dnet_cterm_inq_init(&x->inq);
+    return 0;
 }
 
 static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
@@ -2560,11 +2906,13 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                         " (1..63 . 1..1023)\n");
         return 1;
     }
-    struct dnet_cterm_session term;
-    if (dnet_cterm_session_init(&term, DNET_CTERM_ROLE_TERMINAL) != 0) {
-        fprintf(stderr, "DECNETD-E-CTERMINIT, terminal session init failed\n");
+    static struct sh_ctx x;
+    if (sethost_ctx_init(&x) != 0)
         return 1;
-    }
+    x.eng = eng; x.sock = sock; x.ifindex = ifindex;
+    static char where[DNET_DEVNAME_MAX + 16];
+    snprintf(where, sizeof where, "circuit %s", eng->circuit);
+    x.where = where;
     /* The access-control username is the explicit --user (VMS SET HOST/USERNAME=
      * analog), defaulting to SYSTEM. It is NEVER read from the process
      * environment (vms-cb5 identity-environment census), and it is proxy /
@@ -2586,39 +2934,19 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
         return 1;
     }
 
-    /* A process context is required for the channel table. An executive-
-     * activated image already holds one; a standalone DECNETD.EXE does not --
-     * establish one before $ASSIGN (the vmssshd/DCL bootstrap). */
-    if (!vms_pcb_get())
-        vms_pcb_init(0);
-
-    /* Assign the LOCAL VMS terminal channels (the anti-LARP core): SYS$INPUT for
-     * keystrokes, SYS$OUTPUT for screen writes. All terminal I/O goes through
-     * these channels via $QIO -- never raw termios on fd 0/1. */
-    uint16_t ch_in = 0, ch_out = 0;
-    struct dsc$descriptor_s din, dout;
-    /* The trailing ':' is what sys$assign's device resolver keys on for the
-     * standard-stream logicals (src/libvms/syssvc/sys_assign.c resolve). */
-    sethost_mkdesc(&din, "SYS$INPUT:");
-    sethost_mkdesc(&dout, "SYS$OUTPUT:");
-    if (!(sys$assign(&din, &ch_in, 0, NULL) & 1) ||
-        !(sys$assign(&dout, &ch_out, 0, NULL) & 1)) {
-        fprintf(stderr, "DECNETD-E-NOTERMCHAN, could not $ASSIGN the local"
-                        " terminal (SYS$INPUT/SYS$OUTPUT)\n");
-        if (ch_in) sys$dassgn(ch_in);
+    if (sethost_open_terminal(&x) != 0)
         return 1;
-    }
-    int term_fd = vms$$chan_to_fd(ch_in);   /* poll() readiness only */
+    int term_fd = vms$$chan_to_fd(x.ch_in);   /* poll() readiness only */
 
-    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], cpdu[DNET_CTERM_MAX_PDU];
-    size_t flen = 0, clen = 0;
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX];
+    size_t flen = 0;
     dnet_tick_t now = monotonic_sec();
     if (dnet_engine_link_open(eng, parea, pnode, 0x2001, sc, sclen, 1459, 1,
                               DNET_NSP_VER_41, frame, sizeof(frame), &flen, now)
             != DNET_ENGINE_OK) {
         fprintf(stderr, "DECNETD-E-NOCONNECT, could not open a logical link"
                         " to %u.%u\n", parea, pnode);
-        sys$dassgn(ch_in); sys$dassgn(ch_out);
+        sys$dassgn(x.ch_in); sys$dassgn(x.ch_out);
         return 1;
     }
     {
@@ -2632,18 +2960,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
            parea, pnode, DNET_CTERM_OBJECT, eng->circuit);
     fflush(stdout);
 
-    int passall_on = 0, stdin_eof = 0, done = 0, rc = 0, session_bound_ever = 0;
-    /* rd vms-6165: CTERM input is PROMPT-DRIVEN. Local stdin is buffered here,
-     * never dumped on BOUND, and released ONE LINE PER HOST SOLICIT (a 02-08
-     * TK_START_READ). `read_pending` remembers a solicit that arrived before
-     * the queue had a complete line, so the next terminal read (or EOF) can
-     * satisfy it immediately instead of waiting for another solicit that will
-     * never come (the host is already blocked in its own read). */
-    struct dnet_cterm_inq inq;
-    dnet_cterm_inq_init(&inq);
-    int read_pending = 0;
-
-    while (!g_stop && !done) {
+    while (!g_stop && !x.done) {
         now = monotonic_sec();
         dnet_periodic(eng, sock, ifindex, now);
 
@@ -2651,20 +2968,20 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
          * bound -- the peer never answered. Report honestly and stop. */
         if (eng->link_active &&
             dnet_link_state_of(&eng->link) == DNET_LINK_CLOSED &&
-            dnet_cterm_state_of(&term) == DNET_CTERM_S_CLOSED) {
+            dnet_cterm_state_of(&x.term) == DNET_CTERM_S_CLOSED) {
             log_ts(stdout);
             printf(" DECNETD-W-UNREACH, peer %u.%u did not answer -- SET HOST"
                    " abandoned\n", parea, pnode);
             fflush(stdout);
             eng->link_active = 0;
-            rc = 1;
+            x.rc = 1;
             break;
         }
 
         struct pollfd pfd[2];
         int nfd = 0;
         pfd[nfd].fd = sock;          pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
-        if (dnet_cterm_is_bound(&term) && !stdin_eof && term_fd >= 0) {
+        if (dnet_cterm_is_bound(&x.term) && !x.stdin_eof && term_fd >= 0) {
             pfd[nfd].fd = term_fd;   pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
         }
         int pr = poll(pfd, (nfds_t)nfd, 1000);
@@ -2672,7 +2989,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             if (errno == EINTR)
                 continue;
             fprintf(stderr, "DECNETD-E-POLL, poll failed: %s\n", strerror(errno));
-            rc = 1;
+            x.rc = 1;
             break;
         }
         if (pr == 0)
@@ -2683,7 +3000,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             if (ev < 0) {
                 fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n",
                         strerror(errno));
-                rc = 1;
+                x.rc = 1;
                 break;
             }
             switch (ev) {
@@ -2696,8 +3013,8 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                 /* rd vms-6165: NSP requires the INITIATOR to send a LINK SERVICE
                  * right after the CC -- it acks the CC + opens the flow-control
                  * window, and ONLY THEN does a real VAX send its foundation
-                 * data. Without it VAX1 loops re-sending the CC (writes_recv=0).
-                 * This is the NSP layer; foundation CONTENT stays host-first. */
+                 * data. This is the NSP layer; foundation CONTENT stays
+                 * host-first. */
                 {
                     uint8_t lsf[DNET_FRAME_MAX];
                     size_t lslen = 0;
@@ -2710,110 +3027,15 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                     } else {
                         fprintf(stderr, "DECNETD-E-LINKSVC, could not send NSP"
                                         " link-service credit grant\n");
-                        rc = 1; done = 1;
+                        x.rc = 1; x.done = 1;
                         break;
                     }
                 }
-                /* Arm the CTERM client FSM and WAIT -- the host sends its
-                 * foundation seg-1; the DATA handler drives the client replies. */
-                if (dnet_cterm_client_open(&term) != 0) {
-                    fprintf(stderr, "DECNETD-E-CTERMOPEN, could not arm CTERM"
-                                    " client foundation\n");
-                    rc = 1; done = 1;
-                }
+                sethost_on_linkup(&x);
                 break;
-            case DNET_LINK_EV_DATA: {
-                if (dnet_cterm_state_of(&term) == DNET_CTERM_S_BINDING) {
-                    /* FOUNDATION PHASE (rd vms-6165): consume the host's
-                     * foundation message, then drain every client reply now due
-                     * (client seg-1, then the seg-2/3/4 burst). WIDTH/PAGE are
-                     * the captured 132/24 so every emitted byte is oracle-exact. */
-                    int prog = 0;
-                    if (dnet_cterm_client_found_rx(&term, eng->rx_data,
-                                                   eng->rx_datalen, &prog)
-                            != DNET_CTERM_OK)
-                        break;
-                    for (;;) {
-                        int frc = dnet_cterm_client_found_next(&term, 132, 24,
-                                                               cpdu, sizeof(cpdu),
-                                                               &clen);
-                        if (frc != DNET_CTERM_OK || clen == 0)
-                            break;
-                        if (cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0) {
-                            fprintf(stderr, "DECNETD-E-FOUND, could not send a"
-                                            " CTERM foundation reply\n");
-                            rc = 1; done = 1;
-                            break;
-                        }
-                    }
-                    if (!done && dnet_cterm_is_bound(&term) && !session_bound_ever) {
-                        session_bound_ever = 1;
-                        log_ts(stdout);
-                        printf(" DECNETD-I-BOUND, CTERM foundation negotiated --"
-                               " terminal session BOUND on circuit %s\n",
-                               eng->circuit);
-                        fflush(stdout);
-                        /* Hand echo/editing to the REMOTE session: pass-all the
-                         * LOCAL terminal through the executive driver. */
-                        sethost_set_line(ch_in, 1);
-                        passall_on = 1;
-                    }
-                    break;
-                }
-
-                /* BOUND: real terminal I/O, all inside 09-envelopes. */
-                enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
-                uint8_t txt[DNET_CTERM_MAX_DATA];
-                size_t txtlen = 0;
-                uint8_t rhandle[4] = { 0, 0, 0, 0 };
-                if (dnet_cterm_found_terminal_rx(eng->rx_data, eng->rx_datalen,
-                                                 &tk, txt, sizeof(txt), &txtlen,
-                                                 rhandle) != DNET_CTERM_OK)
-                    break;
-                if (tk == DNET_CTERM_TK_WRITE) {
-                    term.writes_recv++;
-                    if (txtlen) {
-                        struct _iosb iosb;
-                        (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                                       txt, (uint32_t)txtlen, 0, 0, 0, 0);
-                    }
-                } else if (tk == DNET_CTERM_TK_START_READ) {
-                    /* rd vms-6165: a 02-08 is PROMPT-AND-READ -- display the
-                     * prompt text, THEN answer with exactly one queued input
-                     * line. One solicit -> one line, never more, never before
-                     * this arrives. If the queue has no complete line yet
-                     * (interactive typing still in flight), remember the
-                     * solicit and satisfy it the moment one becomes available. */
-                    term.writes_recv++;
-                    if (txtlen) {
-                        struct _iosb iosb;
-                        (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                                       txt, (uint32_t)txtlen, 0, 0, 0, 0);
-                    }
-                    int srr = sethost_send_queued_line(&term, &inq, eng, sock,
-                                                       ifindex, now, cpdu,
-                                                       sizeof(cpdu));
-                    if (srr < 0) {
-                        fprintf(stderr, "DECNETD-E-READDATA, could not send"
-                                        " CTERM Read Data\n");
-                        rc = 1; done = 1;
-                    } else if (srr == 0) {
-                        read_pending = 1;
-                    } else {
-                        read_pending = 0;
-                    }
-                } else if (tk == DNET_CTERM_TK_READ_ATTR) {
-                    /* Host solicited terminal characteristics: answer with the
-                     * oracle read-characteristics reply, echoing its handle. */
-                    if (dnet_cterm_found_client_readchar_build(rhandle, cpdu,
-                                                               sizeof(cpdu),
-                                                               &clen) == 0)
-                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
-                }
-                /* TK_OTHER / TK_NONE: NSP-ack only (dnet_recv_route already did),
-                 * nothing to display or answer. */
+            case DNET_LINK_EV_DATA:
+                sethost_on_data(&x, eng->rx_data, eng->rx_datalen);
                 break;
-            }
             case DNET_LINK_EV_DISCONNECT:
             case DNET_LINK_EV_DISCONNECT_CONF:
                 log_ts(stdout);
@@ -2821,76 +3043,18 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                        eng->circuit);
                 fflush(stdout);
                 eng->link_active = 0;
-                done = 1;
+                x.done = 1;
                 break;
             default:
                 break;
             }
         }
 
-        if (nfd > 1 && (pfd[1].revents & (POLLIN | POLLHUP))) {
-            uint8_t inbuf[DNET_CTERM_MAX_DATA];
-            struct _iosb iosb;
-            /* Read the keystrokes through the VMS terminal channel ($QIO), never
-             * a raw read on fd 0. poll() above only told us bytes are ready. */
-            uint32_t rst = sys$qiow(0, ch_in, IO$_READVBLK, &iosb, NULL, 0,
-                                    inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
-            uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
-            if ((rst & 1) && rn > 0) {
-                /* rd vms-6165: local keystrokes are BUFFERED, never sent
-                 * immediately -- CTERM input is prompt-gated (see the queue's
-                 * doc comment in dnet_cterm.h). Only actually emit a Read Data
-                 * if a host solicit is already outstanding (read_pending). */
-                (void)dnet_cterm_inq_feed(&inq, inbuf, (size_t)rn);
-            } else {
-                /* Local EOF (SS$_ENDOFFILE) or a channel error: stop polling
-                 * for more input but KEEP THE LINK UP -- whatever is already
-                 * queued (a canned/redirected stdin fully read at once) is
-                 * still dequeued one line per solicit, and the host's
-                 * remaining output still drains. The session ends on the
-                 * host's Unbind, a link drop, or --duration -- NEVER on
-                 * stdin EOF by itself (rd vms-6165 lab iter 2: tearing down
-                 * here is what caused the blast-then-quit bug). */
-                stdin_eof = 1;
-                dnet_cterm_inq_eof(&inq);
-                log_ts(stdout);
-                printf(" DECNETD-I-EOF, local input closed -- %zu byte(s) still"
-                       " queued, draining remote output on circuit %s\n",
-                       inq.len, eng->circuit);
-                fflush(stdout);
-            }
-            /* A host solicit may already be waiting on a line that was not
-             * available yet -- satisfy it now if the queue (or EOF) supplied
-             * one. Loop: EOF can make several trailing lines available, but a
-             * solicit is only EVER outstanding one at a time (the host waits
-             * for our reply before prompting again), so this fires at most
-             * once per solicit. */
-            if (read_pending) {
-                int srr = sethost_send_queued_line(&term, &inq, eng, sock,
-                                                   ifindex, now, cpdu,
-                                                   sizeof(cpdu));
-                if (srr < 0) {
-                    fprintf(stderr, "DECNETD-E-READDATA, could not send"
-                                    " CTERM Read Data\n");
-                    rc = 1; done = 1;
-                } else if (srr == 1) {
-                    read_pending = 0;
-                }
-            }
-        }
+        if (nfd > 1 && (pfd[1].revents & (POLLIN | POLLHUP)))
+            sethost_on_term_input(&x);
     }
 
-    /* Restore the local terminal's interactive line discipline through the
-     * executive ($QIO IO$_SETMODE), before control returns to DCL. */
-    if (passall_on)
-        sethost_set_line(ch_in, 0);
-
-    /* On our way out, release the session + link cleanly if still up. */
-    if (dnet_cterm_is_bound(&term)) {
-        if (dnet_cterm_unbind(&term, DNET_CTERM_UNBIND_NORMAL,
-                              cpdu, sizeof(cpdu), &clen) == 0)
-            cterm_link_send(eng, sock, ifindex, cpdu, clen, monotonic_sec());
-    }
+    sethost_finish(&x, eng->node_name);
     if (eng->link_active &&
         dnet_link_state_of(&eng->link) != DNET_LINK_CLOSED) {
         size_t dl = 0;
@@ -2902,27 +3066,9 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
         }
     }
-
-    /* CONTROL RETURNS with the canonical VMS message (oracle
-     * docs/oracle/vax-sethost-cterm.console.txt): the LOCAL node is the node
-     * control returns to. Written through the terminal's VMS output channel,
-     * only once a session was actually established. */
-    if (session_bound_ever) {
-        char msg[96];
-        snprintf(msg, sizeof(msg),
-                 "%%REM-S-END, control returned to node %s::\n", eng->node_name);
-        sethost_term_write(ch_out, msg);
-    }
-
-    log_ts(stdout);
-    printf(" DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=%lu"
-           " reads_sent=%lu on circuit %s\n",
-           term.writes_recv, term.reads_sent, eng->circuit);
-    fflush(stdout);
-
-    sys$dassgn(ch_in);
-    sys$dassgn(ch_out);
-    return rc;
+    sys$dassgn(x.ch_in);
+    sys$dassgn(x.ch_out);
+    return x.rc;
 }
 
 /*
@@ -4216,11 +4362,14 @@ static int run_copy_transport_selftest(void)
  * from the inherited fd named by --password-fd, never crossing a process
  * boundary in the clear.
  */
-static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
-                         const char *src, const char *dst, int password_fd)
+/* Parse the COPY plan, ENFORCE the credential posture, and read the password
+ * from the inherited fd (never argv). Shared by the standalone datalink client
+ * and the NETACP-brokered _NET: client. password must hold DNET_SC_MAX_STR+1. */
+static int copy_prepare(const char *src, const char *dst, int password_fd,
+                        struct dnet_copy_plan *plan, char *password)
 {
-    struct dnet_copy_plan plan;
-    int r = dnet_copy_plan(src, dst, &plan);
+    memset(password, 0, DNET_SC_MAX_STR + 1);
+    int r = dnet_copy_plan(src, dst, plan);
     if (r != DNET_CTERM_OK) {
         fprintf(stderr, "DECNETD-E-COPYSPEC, could not parse the COPY specs"
                         " (one side must be NODE\"user\"::file; status %d)\n", r);
@@ -4228,14 +4377,14 @@ static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
     }
 
     /* POSTURE: never accept the password on the command line. */
-    if (plan.password[0] != '\0') {
+    if (plan->password[0] != '\0') {
         fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
                         " command line (it would be world-readable in"
                         " /proc/<pid>/cmdline); pass NODE\"username\"::file and"
                         " supply the password on the fd named by --password-fd\n");
         return 1;
     }
-    if (plan.has_access && password_fd < 0) {
+    if (plan->has_access && password_fd < 0) {
         fprintf(stderr, "DECNETD-E-COPYPW, an access-control username was given"
                         " but no --password-fd; refusing (no password source)\n");
         return 1;
@@ -4255,9 +4404,8 @@ static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
      * inbound FAL server (decnet$fal, --fal-accept-test) already has. OVMX's own
      * hardening is orthogonal and present: the password never touches argv (fd
      * handoff), is bounded, and is wiped immediately after the connect is built. */
-    char password[DNET_SC_MAX_STR + 1] = {0};
-    if (plan.has_access && password_fd >= 0) {
-        ssize_t got = read(password_fd, password, sizeof password - 1); // codeql[cpp/cleartext-transmission]
+    if (plan->has_access && password_fd >= 0) {
+        ssize_t got = read(password_fd, password, DNET_SC_MAX_STR); // codeql[cpp/cleartext-transmission]
         if (got < 0) {
             fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
                             " fd %d: %s\n", password_fd, strerror(errno));
@@ -4268,6 +4416,17 @@ static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
         while (pl && (password[pl - 1] == '\n' || password[pl - 1] == '\r'))
             password[--pl] = '\0';
     }
+
+    return 0;
+}
+
+static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
+                         const char *src, const char *dst, int password_fd)
+{
+    struct dnet_copy_plan plan;
+    char password[DNET_SC_MAX_STR + 1];
+    if (copy_prepare(src, dst, password_fd, &plan, password) != 0)
+        return 1;
 
     /* Resolve the remote node NAME -> area.node (the node database the SET HOST
      * client uses too); no address is ever invented (INV-6). */
@@ -4316,6 +4475,270 @@ static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
            " no file transferred (INV-6)\n", plan.is_get ? "GET" : "PUT", status);
     fflush(stdout);
     return 1;
+}
+
+/*
+ * ================== THE _NET: CLIENT (rd vms-dda) ==================
+ *
+ * On a booted node the DCL COPY / SET HOST clients do NOT run a DECnet engine
+ * of their own: NETACP owns the node's NSP address and every logical link, so a
+ * second engine would race it for every inbound segment (and the executive
+ * refuses it the datalink). The client does what a VMS image does instead --
+ * $ASSIGN _NET:, then $QIO IO$_ACCESS (an NCB naming node + object, with the
+ * access control), IO$_WRITEVBLK / IO$_READVBLK, IO$_DEACCESS -- and libvms's
+ * qio_net_op brokers each of those to NETACP (dnet_broker_xfer over the
+ * executive mailboxes).
+ *
+ * struct netcli is that channel. In the host-floor selftest the same calls run
+ * dnet_broker_xfer -- the code qio_net_op runs -- over an in-process queue to a
+ * real NETACP pool instead of over the executive mailboxes.
+ */
+struct netcli {
+    uint16_t chan;                          /* live: the $ASSIGN _NET: channel */
+    struct dnet_broker_chan *bc;            /* selftest: in-process channel ... */
+    const struct dnet_broker_io *io;        /* ... and its transport           */
+};
+
+/* Polls (each followed by an idle) a DAP/CTERM read waits on a silent link
+ * before giving up: ~2 min at the live 5 ms idle, the bound the standalone
+ * datalink client used. */
+#define NETCLI_RECV_IDLE_POLLS 24000u
+
+static uint32_t netcli_op(struct netcli *c, uint16_t op, const void *in, size_t inlen,
+                          void *out, size_t outcap, size_t *xfer)
+{
+    if (xfer) *xfer = 0;
+    if (c->io)
+        return dnet_broker_xfer(c->bc, c->io, op, in, inlen, out, outcap, xfer);
+
+    uint32_t func = 0;
+    void *p1 = NULL;
+    uint32_t p2 = 0;
+    switch (op & DNET_BROKER_OP_MASK) {
+    case DNET_BROKER_OP_OPEN:  func = IO$_ACCESS;    p1 = (void *)in; p2 = (uint32_t)inlen; break;
+    case DNET_BROKER_OP_SEND:  func = IO$_WRITEVBLK; p1 = (void *)in; p2 = (uint32_t)inlen; break;
+    case DNET_BROKER_OP_RECV:
+        func = IO$_READVBLK; p1 = out; p2 = (uint32_t)outcap;
+        if (op & DNET_BROKER_OPF_NOW)
+            func |= IO$M_NOW;
+        break;
+    case DNET_BROKER_OP_CLOSE: func = IO$_DEACCESS;  break;
+    default: return SS$_ILLIOFUNC;
+    }
+    /* How the I/O ENDED, not whether it was queued (dnet_netqio.h, rd vms-d01):
+     * reading only $QIOW's service status took a refused connect for an open
+     * link -- a bad-password COPY then polled a link that never existed. */
+    return dnet_net_qiow(c->chan, func, p1, p2, xfer);
+}
+
+static void netcli_idle(struct netcli *c)
+{
+    if (c->io) {
+        if (c->io->idle) c->io->idle(c->io->ctx);
+        return;
+    }
+    struct timespec ts = { 0, 5 * 1000 * 1000 };
+    nanosleep(&ts, NULL);
+}
+
+/* The DAP presentation transport over a _NET: link (COPY's FAL client). */
+static int netcli_dap_send(void *ctx, const uint8_t *seg, size_t seglen)
+{
+    size_t x = 0;
+    return (netcli_op(ctx, DNET_BROKER_OP_SEND, seg, seglen, NULL, 0, &x) & 1) ? 0 : -1;
+}
+static int netcli_dap_recv(void *ctx, uint8_t *buf, size_t cap, size_t *outlen)
+{
+    for (unsigned i = 0;; i++) {
+        size_t x = 0;
+        uint32_t st = netcli_op(ctx, DNET_BROKER_OP_RECV | DNET_BROKER_OPF_NOW, NULL, 0,
+                                buf, cap, &x);
+        if (st == SS$_ENDOFFILE) {
+            if (i >= NETCLI_RECV_IDLE_POLLS)
+                return -1;                 /* a silent link: give up honestly */
+            netcli_idle(ctx);
+            continue;
+        }
+        if (!(st & 1))
+            return -1;                     /* link aborted / disconnected */
+        *outlen = x;
+        return 0;
+    }
+}
+
+/*
+ * copy_client_run_net - one $ COPY over a NETACP-brokered link: IO$_ACCESS to
+ * the FAL object (17) with the plan's access control in the NCB, the DAP
+ * session, IO$_DEACCESS. Returns the FAL transfer status, or the IO$_ACCESS
+ * failure (SS$_INVLOGIN when the remote refused the credentials, ...).
+ */
+static uint32_t copy_client_run_net(struct netcli *c, const struct dnet_copy_plan *plan,
+                                    const char *password)
+{
+    char ncb[DNET_NSP_MAX_DATA];
+    const char *pw = password ? password : "";
+    /* The NCB access string is blank-separated and quoted: a field that holds a
+     * blank or a quote cannot be carried -- refuse rather than mis-split it. */
+    if (strpbrk(plan->username, " \"") || strpbrk(pw, " \"") ||
+        strpbrk(plan->account, " \"") || (plan->account[0] && !pw[0]))
+        return SS$_BADPARAM;
+    int n;
+    if (plan->has_access)
+        n = snprintf(ncb, sizeof ncb, "%s\"%s%s%s%s%s\"::\"%d=\"", plan->node,
+                     plan->username, pw[0] ? " " : "", pw,
+                     plan->account[0] ? " " : "", plan->account, DNET_FAL_OBJECT);
+    else
+        n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", plan->node, DNET_FAL_OBJECT);
+    if (n < 0 || (size_t)n >= sizeof ncb) {
+        memset(ncb, 0, sizeof ncb);
+        return SS$_BADPARAM;
+    }
+    size_t x = 0;
+    uint32_t st = netcli_op(c, DNET_BROKER_OP_OPEN, ncb, (size_t)n, NULL, 0, &x);
+    memset(ncb, 0, sizeof ncb);            /* it carried the password */
+    if (!(st & 1))
+        return st;
+
+    struct dnet_dap_transport t = { .send = netcli_dap_send, .recv = netcli_dap_recv,
+                                    .ctx = c };
+    uint32_t status = plan->is_get
+        ? dnet_fal_client_get(plan->remote_spec, plan->local_spec, &t)
+        : dnet_fal_client_put(plan->local_spec, plan->remote_spec, &t);
+    (void)netcli_op(c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &x);
+    return status;
+}
+
+/* Is a NETACP serving logical links on this node? (Its request mailbox is
+ * published as DNET$NETACP_REQ.) 1 = yes, 0 = no, -1 = no executive at all. */
+#define NETACP_REQ_LOGNAM "DNET$NETACP_REQ"
+static int netacp_running(void)
+{
+    char dev[64];
+    uint16_t dl = 0;
+    int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, 0, dev,
+                                  sizeof dev - 1, &dl, NULL, NULL);
+    if (r < 0) return -1;
+    return (r == 1 && dl > 0) ? 1 : 0;
+}
+
+static int netcli_assign(struct netcli *c)
+{
+    memset(c, 0, sizeof *c);
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct dsc$descriptor_s d;
+    sethost_mkdesc(&d, "_NET:");
+    uint32_t st = sys$assign(&d, &c->chan, 0, NULL);
+    if (!(st & 1)) {
+        fprintf(stderr, "DECNETD-E-NONET, $ASSIGN _NET: failed (status %08X) -- no"
+                        " DECnet device on this node\n", (unsigned)st);
+        return -1;
+    }
+    return 0;
+}
+
+/* $ COPY through NETACP (the booted runtime). */
+static int run_copy_net(const char *src, const char *dst, int password_fd)
+{
+    struct dnet_copy_plan plan;
+    char password[DNET_SC_MAX_STR + 1];
+    if (copy_prepare(src, dst, password_fd, &plan, password) != 0)
+        return 1;
+    struct netcli c;
+    if (netcli_assign(&c) != 0) {
+        memset(password, 0, sizeof password);
+        return 1;
+    }
+    /* VMS COPY is SILENT on success; on failure it names the file and the
+     * reason (%COPY-E-OPENIN/OPENOUT, then the status, as a continuation
+     * line). The DECNETD-I progress chatter belongs to the standalone/lab
+     * path, never to a user's DCL COPY. */
+    uint32_t status = copy_client_run_net(&c, &plan, password);
+    memset(password, 0, sizeof password);
+    sys$dassgn(c.chan);
+    if (status == SS$_NORMAL)
+        return 0;
+    char why[256] = "";
+    (void)vms_status_string(status, why, sizeof why);
+    if (why[0] == '%') why[0] = '-';
+    if (plan.is_get)
+        printf("%%COPY-E-OPENIN, error opening %s::%s as input\n%s\n",
+               plan.node, plan.remote_spec, why[0] ? why : "");
+    else
+        printf("%%COPY-E-OPENOUT, error opening %s::%s as output\n%s\n"
+               "%%COPY-W-NOTCOPIED, %s not copied\n",
+               plan.node, plan.remote_spec, why[0] ? why : "", plan.local_spec);
+    fflush(stdout);
+    return 1;
+}
+
+/*
+ * $ SET HOST through NETACP (the booted runtime): IO$_ACCESS to the CTERM
+ * object (42) on `target`, then the same CTERM client handlers as the
+ * standalone path, reading the link with IO$_READVBLK|IO$M_NOW between polls of
+ * the local terminal. The connect's source identity is this process's, filled
+ * in by NETACP from the executive (so --user does not apply here); the REMOTE
+ * LOGINOUT authenticates fresh either way.
+ */
+static int run_set_host_net(struct netcli *c, const char *target, const char *local_node)
+{
+    static struct sh_ctx x;
+    if (sethost_ctx_init(&x) != 0)
+        return 1;
+    x.nc = c;
+    x.where = "a NETACP-brokered _NET: link";
+    x.quiet = 1;                        /* VMS SET HOST shows only the remote */
+    if (sethost_open_terminal(&x) != 0)
+        return 1;
+    int term_fd = vms$$chan_to_fd(x.ch_in);
+
+    char ncb[64];
+    int n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", target, DNET_CTERM_OBJECT);
+    size_t xf = 0;
+    uint32_t st = (n > 0 && (size_t)n < sizeof ncb)
+        ? netcli_op(c, DNET_BROKER_OP_OPEN, ncb, (size_t)n, NULL, 0, &xf) : SS$_BADPARAM;
+    if (!(st & 1)) {
+        /* VMS SET HOST reports only the reason the link failed. */
+        char why[256] = "";
+        (void)vms_status_string(st, why, sizeof why);
+        printf("%s\n", why[0] ? why : "%SYSTEM-F-ABORT, abort");
+        fflush(stdout);
+        sys$dassgn(x.ch_in); sys$dassgn(x.ch_out);
+        return 1;
+    }
+    sethost_on_linkup(&x);
+
+    while (!g_stop && !x.done) {
+        for (int k = 0; k < 64 && !x.done; k++) {
+            uint8_t buf[DNET_NSP_MAX_DATA];
+            size_t got = 0;
+            st = netcli_op(c, DNET_BROKER_OP_RECV | DNET_BROKER_OPF_NOW, NULL, 0,
+                           buf, sizeof buf, &got);
+            if (st == SS$_ENDOFFILE)
+                break;
+            if (!(st & 1)) {
+                x.done = 1;
+                break;
+            }
+            sethost_on_data(&x, buf, got);
+        }
+        if (x.done)
+            break;
+        if (dnet_cterm_is_bound(&x.term) && !x.stdin_eof && term_fd >= 0) {
+            struct pollfd pfd = { term_fd, POLLIN, 0 };
+            int pr = poll(&pfd, 1, 20);
+            if (pr > 0 && (pfd.revents & (POLLIN | POLLHUP)))
+                sethost_on_term_input(&x);
+        } else {
+            struct timespec ts = { 0, 20 * 1000 * 1000 };
+            nanosleep(&ts, NULL);
+        }
+    }
+    sethost_finish(&x, local_node);
+    (void)netcli_op(c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &xf);
+    sys$dassgn(x.ch_in);
+    sys$dassgn(x.ch_out);
+    return x.rc;
 }
 
 static void usage(const char *argv0)
@@ -4432,6 +4855,11 @@ static void usage(const char *argv0)
         "                      executive): the real VAX capture replayed through\n"
         "                      NETACP to MAIL_SERVER.EXE, replies byte-exact;\n"
         "                      the message is stored in SYSTEM's mail (vms-47fd)\n"
+        "  --netacp-broker-selftest  run the outbound-links-through-NETACP floor and\n"
+        "                      exit (no executive): _NET: broker records -> NETACP\n"
+        "                      pool -> NSP link; COPY, refusals, bounds (vms-dda)\n"
+        "  --net-loopback-accept-test  run the booted $QIO _NET: proof: COPY 0::\n"
+        "                      through NETACP's loopback to FAL.EXE (vms-dda)\n"
         "  --fal-proc-accept-test  run the FAL server-PROCESS persona proof (booted\n"
         "                      executive): FAL.EXE runs with the authenticated\n"
         "                      user's UIC; GUEST is refused a SYSTEM-only file\n"
@@ -4517,8 +4945,19 @@ static int netacp_pool_size(const struct dnet_executor *x, int *clamped)
     return (int)(want > NETACP_POOL_CAP ? NETACP_POOL_CAP : want);
 }
 
+/* OUTBOUND links (rd vms-dda): a local process's $QIO IO$_ACCESS on _NET:
+ * reaches NETACP as a broker OPEN and becomes a slot in THIS pool -- the same
+ * bounded table, the same per-source discipline (here the source is the
+ * requesting process), and an idle bound so a client that died cannot hold a
+ * slot. Inbound data is queued per link until the client's READVBLK takes it;
+ * a link whose queue overflows is aborted honestly (NSP here does not
+ * retransmit data, so a dropped segment could never be recovered). */
+#define NETACP_OUT_RXQ        32
+#define NETACP_OUT_IDLE_SECS  60
+
 struct netacp_slot {
     int      used;
+    int      outbound;                  /* 1 = a local process's _NET: link   */
     int      object;                    /* 42 = CTERM, 17 = FAL, 27 = MAIL    */
     struct dnet_engine lk;              /* this session's NSP link state       */
     uint16_t peer;                      /* remote node (area<<10|node)         */
@@ -4527,6 +4966,18 @@ struct netacp_slot {
     struct dnet_cth cth;                /* object 42: the CTERM host wire role */
     int      term_recorded;             /* originating terminal on the RTAn:   */
     struct dnet_fal_proc fal;           /* objects 17 + 27: the server process */
+    /* --- outbound (_NET:) links only --- */
+    uint32_t handle;                    /* NETACP-issued link handle (unguessable) */
+    uint32_t owner_pid;                 /* the requesting process              */
+    uint32_t reply_unit;                /* its reply mailbox MBA<unit>:        */
+    uint32_t reply_chan;                /* NETACP's channel to that mailbox    */
+    uint32_t open_corr;                 /* an OPEN awaiting CC/DI (0 = none)   */
+    int      remote_gone;               /* the remote disconnected / aborted   */
+    uint16_t disc_reason;
+    dnet_tick_t last_req;               /* last client request (idle bound)    */
+    unsigned rxq_head, rxq_count;
+    uint16_t rxq_len[NETACP_OUT_RXQ];
+    uint8_t  rxq[NETACP_OUT_RXQ][DNET_NSP_MAX_DATA];
 };
 
 /* How long a session's terminal output must be quiet before the CTERM host
@@ -4539,9 +4990,32 @@ struct netacp_slot {
 static ssize_t (*g_netacp_tx)(int, int, uint16_t, const uint8_t *,
                               const uint8_t *, size_t) = scs_datalink_send;
 
+/* LOCAL LOOPBACK (rd vms-dda). A logical link from this node to ITSELF --
+ * $ COPY 0::file, or NODE:: naming this node, which VMS supports -- never
+ * touches the wire: a frame NETACP addresses to its own DECnet id is queued
+ * here and dispatched as if received, so the outbound slot and the inbound
+ * session it reaches are two slots of the same pool, each running the real NSP
+ * link FSM. Bounded; a full queue drops the frame (counted). */
+#define NETACP_LOOP_MAX 64
+static uint8_t  g_netacp_self[6];
+static int      g_netacp_self_set;
+static uint8_t  g_loopq[NETACP_LOOP_MAX][DNET_FRAME_MAX];
+static size_t   g_loopq_len[NETACP_LOOP_MAX];
+static unsigned g_loopq_head, g_loopq_count;
+static unsigned long g_loopq_dropped;
+
 static void netacp_send(int sock, unsigned ifindex, const uint8_t mac[6],
                         const uint8_t *f, size_t n)
 {
+    if (g_netacp_self_set && n <= DNET_FRAME_MAX && n >= 6 &&
+        memcmp(f, g_netacp_self, 6) == 0) {
+        if (g_loopq_count >= NETACP_LOOP_MAX) { g_loopq_dropped++; return; }
+        unsigned t = (g_loopq_head + g_loopq_count) % NETACP_LOOP_MAX;
+        memcpy(g_loopq[t], f, n);
+        g_loopq_len[t] = n;
+        g_loopq_count++;
+        return;
+    }
     (void)g_netacp_tx(sock, (int)ifindex, DNET_ETHERTYPE, mac, f, n);
 }
 
@@ -4567,6 +5041,8 @@ static void netacp_cterm_feed_terminal(struct netacp_slot *sl)
         (void)dnet_cterm_host_write(&sl->host, in, k);
 }
 
+static void netacp_outbound_release(struct netacp_slot *sl, const char *why);
+
 /* End a session: tell the remote (CTERM unbind / NSP disconnect), release the
  * local side, free the slot. Safe on an unused slot. */
 static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
@@ -4590,6 +5066,10 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
     if (dnet_link_is_up(&sl->lk.link) &&
         dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn, now) == 0)
         netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+    if (sl->outbound) {
+        netacp_outbound_release(sl, why);
+        return;
+    }
     if (sl->object == DNET_CTERM_OBJECT) (void)dnet_cterm_host_close(&sl->host);
     if (sl->object != DNET_CTERM_OBJECT) dnet_fal_proc_close(&sl->fal);
     log_ts(stdout);
@@ -4600,6 +5080,9 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
     fflush(stdout);
     memset(sl, 0, sizeof *sl);
 }
+
+static void netacp_outbound_tick(struct netacp_slot *sl, int sock, unsigned ifindex,
+                                 dnet_tick_t now);
 
 /* Pump every live session's local side once. Returns the number live. */
 static int netacp_service_sessions(struct netacp_slot *slots, int sock,
@@ -4612,6 +5095,10 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
         live++;
         uint8_t buf[DNET_FAL_SEG_MAX], fr[DNET_FRAME_MAX];
         size_t fn = 0;
+        if (sl->outbound) {
+            netacp_outbound_tick(sl, sock, ifindex, now);
+            continue;
+        }
         if (sl->object == DNET_CTERM_OBJECT) {
             /* The CTERM HOST speaks first (rd vms-a70): a real VMS SET HOST
              * client waits for the host's Bind Request. */
@@ -4693,6 +5180,372 @@ static void netacp_refuse(struct dnet_engine *tmp, int sock, unsigned ifindex,
         netacp_send(sock, ifindex, mac, fr, fn);
 }
 
+/*
+ * ============ NETACP: OUTBOUND LINKS BROKERED OVER _NET: (rd vms-dda) ============
+ *
+ * On VMS every logical link -- inbound AND outbound -- belongs to NETACP; a user
+ * process reaches one only through $ASSIGN _NET: + $QIO. The client side of that
+ * (libvms qio_net_op) marshals each $QIO into a broker REQUEST on NETACP's
+ * request mailbox (T1, docs/design-decnet-net-qio-mailbox-seam.md); this is the
+ * NETACP side, run inside the same serve loop as the inbound session pool:
+ *
+ *   OPEN  (IO$_ACCESS)    parse the NCB, resolve the node from NETACP's node
+ *                         database, build the Session Control connect with the
+ *                         REQUESTING process's identity (read from the executive
+ *                         by pid, never from the request), take a pool slot and
+ *                         send the Connect Initiate. The reply is DEFERRED: it is
+ *                         written when the remote answers -- Connect Confirm
+ *                         (NORMAL + the link handle), a Disconnect (refused), or
+ *                         the CI give-up (TIMEOUT).
+ *   SEND  (IO$_WRITEVBLK) one NSP data segment on the link.
+ *   RECV  (IO$_READVBLK)  the oldest queued inbound segment, ENDOFFILE if none
+ *                         (the client re-asks; NETACP itself never blocks), ABORT
+ *                         once the remote has gone and the queue is drained.
+ *   CLOSE (IO$_DEACCESS)  Disconnect Initiate; the slot is freed.
+ *
+ * BOUNDS (vms-6af1 DoS discipline, the pool's own): outbound links share the
+ * NETACP_MAX_SESSIONS slots with inbound sessions; one requesting process holds
+ * at most NETACP_MAX_PER_SOURCE of them; a pool that is full or a requester over
+ * its share is refused EXQUOTA with no link attempted; a link with no client
+ * request for NETACP_OUT_IDLE_SECS (its process died) is disconnected and freed.
+ * A request names its link by the handle NETACP issued at OPEN AND the owner pid
+ * AND the reply unit; any mismatch is FILNOTACC, never another process's link.
+ * Every request is bounds-decoded (dnet_broker_req_decode) before it is seen.
+ */
+static int g_netacp_serve_inbound = 1;   /* accept inbound CIs (object 42/17)   */
+
+static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_engine *node,
+                                  int sock, unsigned ifindex, const uint8_t *rx, size_t n,
+                                  dnet_tick_t now, uint16_t *next_lla);
+
+static int netacp_reply_mbx(struct netacp_slot *sl, uint32_t reply_unit,
+                            const struct dnet_broker_rsp *rsp);
+/* Where NETACP's broker responses go: the client's reply mailbox, or (the host
+ * selftest) a capture standing in for the mailbox seam. */
+static int (*g_netacp_reply)(struct netacp_slot *, uint32_t,
+                             const struct dnet_broker_rsp *) = netacp_reply_mbx;
+
+static int netacp_reply_mbx(struct netacp_slot *sl, uint32_t reply_unit,
+                            const struct dnet_broker_rsp *rsp)
+{
+    uint8_t rec[DNET_BROKER_RSP_MAX];
+    size_t n = 0;
+    if (dnet_broker_rsp_encode(rsp, rec, sizeof rec, &n) != DNET_BROKER_OK)
+        return -1;
+    uint32_t ch = sl ? sl->reply_chan : 0;
+    int transient = 0;
+    if (!ch) {
+        char dev[32];
+        snprintf(dev, sizeof dev, "MBA%u:", (unsigned)reply_unit);
+        if (!(vms_kif_mbx_assign(dev, &ch) & 1))
+            return -1;                       /* the client's mailbox is gone */
+        if (sl) sl->reply_chan = ch; else transient = 1;
+    }
+    /* IO$M_NORSWAIT (rd vms-c6d1): a client that never drains its reply
+     * mailbox gets SS$_MBFULL for its reply -- NETACP's serve loop never
+     * waits on a client. */
+    uint32_t st = vms_kif_mbx_write_ex(ch, rec, (uint32_t)n, 1);
+    if (st == SS$_MBFULL) {
+        /* Dropped, not waited for: say so once per mailbox unit run. */
+        static uint32_t last_full_unit;
+        if (last_full_unit != reply_unit) {
+            last_full_unit = reply_unit;
+            log_ts(stdout);
+            printf(" DECNETD-W-REPLYFULL, reply mailbox MBA%u: is full -- an answer"
+                   " was dropped (the client is not reading it)\n", (unsigned)reply_unit);
+            fflush(stdout);
+        }
+    }
+    if (transient)
+        (void)vms_kif_dassgn(ch);
+    return (st & 1) ? 0 : -1;
+}
+
+static void netacp_respond(struct netacp_slot *sl, uint32_t reply_unit, uint32_t corr,
+                           uint32_t status, const void *data, size_t len)
+{
+    struct dnet_broker_rsp rsp;
+    memset(&rsp, 0, sizeof rsp);
+    rsp.corr_id = corr;
+    rsp.status  = status;
+    if (data && len && len <= DNET_NSP_MAX_DATA) {
+        memcpy(rsp.data, data, len);
+        rsp.datalen = (uint16_t)len;
+    }
+    (void)g_netacp_reply(sl, reply_unit, &rsp);
+}
+
+/* An unguessable, nonzero link handle: a counter mixed with a per-run secret
+ * from the kernel RNG (a guessed handle is still refused unless the owner pid
+ * and reply unit also match). */
+static uint32_t netacp_new_handle(void)
+{
+    static uint64_t key, ctr;
+    static int seeded;
+    if (!seeded) {
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd >= 0) {
+            if (read(fd, &key, sizeof key) != (ssize_t)sizeof key) key = 0;
+            close(fd);
+        }
+        key ^= monotonic_ms() ^ ((uint64_t)getpid() << 32);
+        seeded = 1;
+    }
+    for (;;) {
+        uint64_t z = key + 0x9E3779B97F4A7C15ull * ++ctr;   /* splitmix64 */
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z ^= z >> 31;
+        if ((uint32_t)z != 0) return (uint32_t)z;
+    }
+}
+
+/* Answer a pending OPEN (if any) and free the outbound slot. */
+static void netacp_outbound_release(struct netacp_slot *sl, const char *why)
+{
+    if (sl->open_corr)
+        netacp_respond(sl, sl->reply_unit, sl->open_corr, SS$_ABORT, NULL, 0);
+    if (sl->reply_chan)
+        (void)vms_kif_dassgn(sl->reply_chan);
+    char pa[8];
+    log_ts(stdout);
+    printf(" DECNETD-I-LINKEND, outbound link to %s (object %d) for process %08X"
+           " ended (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa), sl->object,
+           (unsigned)sl->owner_pid, why);
+    fflush(stdout);
+    memset(sl, 0, sizeof *sl);
+}
+
+/* Timers for one outbound slot: CI retransmit / give-up while the OPEN waits,
+ * and the idle bound once the link is the client's. */
+static void netacp_outbound_tick(struct netacp_slot *sl, int sock, unsigned ifindex,
+                                 dnet_tick_t now)
+{
+    if (sl->open_corr) {
+        uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0; int has = 0;
+        if (dnet_engine_link_tick(&sl->lk, now, fr, sizeof fr, &fn, &has) == DNET_ENGINE_OK && has)
+            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        if (dnet_link_state_of(&sl->lk.link) == DNET_LINK_CLOSED) {
+            /* No answer to the Connect Initiate within the give-up budget. */
+            netacp_respond(sl, sl->reply_unit, sl->open_corr, SS$_TIMEOUT, NULL, 0);
+            sl->open_corr = 0;
+            sl->lk.link_active = 0;
+            netacp_outbound_release(sl, "the remote node did not answer the connect");
+        }
+        return;
+    }
+    if (now - sl->last_req > NETACP_OUT_IDLE_SECS)
+        netacp_slot_end(sl, sock, ifindex, now, "no request from its process -- idle bound");
+}
+
+/* A link event on an outbound slot (the frame was already given to its FSM). */
+static void netacp_outbound_event(struct netacp_slot *sl, int sock, unsigned ifindex,
+                                  enum dnet_link_event ev, dnet_tick_t now)
+{
+    uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
+    if (ev == DNET_LINK_EV_CONNECT_CONF && sl->open_corr) {
+        /* NSP: the INITIATOR sends a LINK SERVICE right after the CC (it acks
+         * the CC and opens the flow-control window) -- NETACP's job, not the
+         * client's (rd vms-6165). */
+        if (dnet_engine_link_service(&sl->lk, fr, sizeof fr, &fn, now) == DNET_ENGINE_OK)
+            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        uint8_t h[4] = { (uint8_t)sl->handle, (uint8_t)(sl->handle >> 8),
+                         (uint8_t)(sl->handle >> 16), (uint8_t)(sl->handle >> 24) };
+        netacp_respond(sl, sl->reply_unit, sl->open_corr, SS$_NORMAL, h, sizeof h);
+        sl->open_corr = 0;
+        sl->last_req = now;
+        char pa[8];
+        log_ts(stdout);
+        printf(" DECNETD-I-LINKOUT, outbound link to %s object %d is RUN for process"
+               " %08X\n", dnet_addr_str(sl->peer, pa, sizeof pa), sl->object,
+               (unsigned)sl->owner_pid);
+        fflush(stdout);
+        return;
+    }
+    if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF) {
+        sl->lk.link_active = 0;
+        sl->disc_reason = sl->lk.link.disc_reason;
+        if (sl->open_corr) {
+            /* The remote refused the connect. Access control rejected is the
+             * VMS INVLOGIN; anything else an honest ABORT carrying the reason. */
+            uint8_t r[2] = { (uint8_t)sl->disc_reason, (uint8_t)(sl->disc_reason >> 8) };
+            netacp_respond(sl, sl->reply_unit, sl->open_corr,
+                           sl->disc_reason == DNET_LINK_REASON_ACCESS ? SS$_INVLOGIN
+                                                                     : SS$_ABORT, r, 2);
+            sl->open_corr = 0;
+            netacp_outbound_release(sl, "the remote refused the connect");
+            return;
+        }
+        sl->remote_gone = 1;               /* drained by RECV, freed by CLOSE */
+        return;
+    }
+    if (ev == DNET_LINK_EV_DATA && !sl->remote_gone) {
+        if (sl->rxq_count >= NETACP_OUT_RXQ) {
+            /* The client is not draining its link: abort it rather than lose a
+             * segment NSP here would never retransmit. */
+            if (dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_RESOURCE, fr, sizeof fr,
+                                       &fn, now) == DNET_ENGINE_OK)
+                netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+            sl->lk.link_active = 0;
+            sl->remote_gone = 1;
+            sl->rxq_count = 0;
+            return;
+        }
+        unsigned t = (sl->rxq_head + sl->rxq_count) % NETACP_OUT_RXQ;
+        uint16_t n = sl->lk.rx_datalen > DNET_NSP_MAX_DATA ? DNET_NSP_MAX_DATA
+                                                           : sl->lk.rx_datalen;
+        memcpy(sl->rxq[t], sl->lk.rx_data, n);
+        sl->rxq_len[t] = n;
+        sl->rxq_count++;
+    }
+}
+
+/*
+ * netacp_broker_request - service ONE bounds-decoded broker request. Replies
+ * through g_netacp_reply, at once or (an OPEN) when the remote answers.
+ */
+static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_engine *node,
+                                  int sock, unsigned ifindex,
+                                  const struct dnet_broker_req *req, dnet_tick_t now,
+                                  uint16_t *next_lla)
+{
+    uint16_t base = (uint16_t)(req->op & DNET_BROKER_OP_MASK);
+    char pa[8];
+
+    if (base == DNET_BROKER_OP_OPEN) {
+        int free_i = -1, mine = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
+            if (!slots[i].used) { if (free_i < 0) free_i = i; }
+            else if (slots[i].outbound && slots[i].owner_pid == req->owner_pid) mine++;
+        }
+        if (free_i < 0 || mine >= NETACP_MAX_PER_SOURCE) {
+            netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_EXQUOTA, NULL, 0);
+            log_ts(stdout);
+            printf(" DECNETD-I-LINKREJ, outbound link for process %08X refused (%s)\n",
+                   (unsigned)req->owner_pid,
+                   free_i < 0 ? "all logical links are in use"
+                              : "that process already holds its share of links");
+            fflush(stdout);
+            return;
+        }
+        unsigned ra = 0, rn = 0; int obj = 0;
+        uint8_t desc[192]; size_t dlen = 0;
+        uint32_t st = broker_open_connect(node, req->owner_pid, req->data, req->datalen,
+                                          &ra, &rn, &obj, desc, sizeof desc, &dlen);
+        if (!(st & 1)) {
+            netacp_respond(NULL, req->reply_unit, req->corr_id, st, NULL, 0);
+            return;
+        }
+        struct netacp_slot *sl = &slots[free_i];
+        memset(sl, 0, sizeof *sl);
+        sl->lk = *node;
+        sl->lk.link_active = 0;
+        sl->outbound   = 1;
+        sl->object     = obj;
+        sl->peer       = (uint16_t)(((ra & 0x3fu) << 10) | (rn & 0x3ffu));
+        (void)dnet_id_from_addr(ra, rn, sl->peer_mac);
+        sl->owner_pid  = req->owner_pid;
+        sl->reply_unit = req->reply_unit;
+        sl->handle     = netacp_new_handle();
+        sl->last_req   = now;
+        uint16_t lla = (*next_lla)++;
+        if (*next_lla < 0x2100) *next_lla = 0x2100;
+        uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
+        int orc = dnet_engine_link_open(&sl->lk, ra, rn, lla, desc, dlen, 1459, 1,
+                                        DNET_NSP_VER_41, fr, sizeof fr, &fn, now);
+        memset(desc, 0, sizeof desc);      /* it carried the access-control password */
+        if (orc != DNET_ENGINE_OK) {
+            netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
+            memset(sl, 0, sizeof *sl);
+            return;
+        }
+        sl->used = 1;
+        sl->open_corr = req->corr_id;      /* answered on CC / DI / give-up */
+        log_ts(stdout);
+        printf(" DECNETD-I-LINKCI, process %08X: Connect Initiate to %s object %d\n",
+               (unsigned)req->owner_pid, dnet_addr_str(sl->peer, pa, sizeof pa), obj);
+        fflush(stdout);
+        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        return;
+    }
+
+    /* Every other op names an existing link: handle AND owner AND reply unit. */
+    struct netacp_slot *sl = NULL;
+    for (int i = 0; i < NETACP_MAX_SESSIONS && !sl; i++)
+        if (slots[i].used && slots[i].outbound && req->link_handle != 0 &&
+            slots[i].handle == req->link_handle && slots[i].owner_pid == req->owner_pid &&
+            slots[i].reply_unit == req->reply_unit)
+            sl = &slots[i];
+    if (!sl || sl->open_corr) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id,
+                       base == DNET_BROKER_OP_SEND || base == DNET_BROKER_OP_RECV ||
+                       base == DNET_BROKER_OP_CLOSE ? SS$_FILNOTACC : SS$_ILLIOFUNC,
+                       NULL, 0);
+        return;
+    }
+    sl->last_req = now;
+    uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
+
+    switch (base) {
+    case DNET_BROKER_OP_SEND:
+        if (sl->remote_gone || !dnet_link_is_up(&sl->lk.link)) {
+            netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
+            return;
+        }
+        if (dnet_engine_link_send(&sl->lk, req->data, req->datalen, fr, sizeof fr, &fn,
+                                  now) != DNET_ENGINE_OK) {
+            netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
+            return;
+        }
+        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL, NULL, 0);
+        return;
+
+    case DNET_BROKER_OP_RECV:
+        if (sl->rxq_count) {
+            unsigned h = sl->rxq_head;
+            netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL,
+                           sl->rxq[h], sl->rxq_len[h]);
+            sl->rxq_head = (h + 1) % NETACP_OUT_RXQ;
+            sl->rxq_count--;
+            return;
+        }
+        netacp_respond(sl, sl->reply_unit, req->corr_id,
+                       sl->remote_gone ? SS$_ABORT : SS$_ENDOFFILE, NULL, 0);
+        return;
+
+    case DNET_BROKER_OP_CLOSE:
+        if (!sl->remote_gone && dnet_link_is_up(&sl->lk.link) &&
+            dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn,
+                                   now) == DNET_ENGINE_OK)
+            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        sl->lk.link_active = 0;
+        netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL, NULL, 0);
+        netacp_outbound_release(sl, "its process disconnected");
+        return;
+
+    default:
+        netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ILLIOFUNC, NULL, 0);
+        return;
+    }
+}
+
+/* Drain the loopback queue through the dispatch (frames NETACP sent itself). */
+static void netacp_loop_drain(struct netacp_slot *slots, const struct dnet_engine *node,
+                              int sock, unsigned ifindex, dnet_tick_t now,
+                              uint16_t *next_lla)
+{
+    static uint8_t f[DNET_FRAME_MAX];
+    for (int guard = 0; g_loopq_count && guard < 4 * NETACP_LOOP_MAX; guard++) {
+        unsigned h = g_loopq_head;
+        size_t n = g_loopq_len[h];
+        memcpy(f, g_loopq[h], n);
+        g_loopq_head = (h + 1) % NETACP_LOOP_MAX;
+        g_loopq_count--;
+        netacp_dispatch_frame(slots, node, sock, ifindex, f, n, now, next_lla);
+    }
+}
+
 static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_engine *node,
                                   int sock, unsigned ifindex, const uint8_t *rx, size_t n,
                                   dnet_tick_t now, uint16_t *next_lla)
@@ -4706,6 +5559,16 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         return;
     uint16_t peer = dnet_addr_from_id(src_id);
     const uint8_t *mac = rx + 6;
+    {
+        /* A logical-link frame is for THIS node only if routed to our id --
+         * never act on a frame addressed elsewhere (or on our own transmission
+         * echoed back by the datalink). */
+        uint8_t dst_id[DNET_ADDR_LEN];
+        const uint8_t *p2 = NULL; size_t l2 = 0;
+        if (dnet_engine_parse_data_frame(rx, n, NULL, dst_id, &p2, &l2) != DNET_ENGINE_OK ||
+            memcmp(dst_id, node->my_id, DNET_ADDR_LEN) != 0)
+            return;
+    }
     uint8_t reply[DNET_FRAME_MAX]; size_t rlen = 0; int has = 0;
     enum dnet_link_event ev = DNET_LINK_EV_NONE;
 
@@ -4725,6 +5588,10 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
                                 &has, &ev) != 0)
             return;
         if (has) netacp_send(sock, ifindex, sl->peer_mac, reply, rlen);
+        if (sl->outbound) {
+            netacp_outbound_event(sl, sock, ifindex, ev, now);
+            return;
+        }
         if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF) {
             sl->lk.link_active = 0;
             netacp_slot_end(sl, sock, ifindex, now, "the remote disconnected");
@@ -4764,7 +5631,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         return;
     }
 
-    if (in.type != DNET_NSP_T_CI)
+    if (in.type != DNET_NSP_T_CI || !g_netacp_serve_inbound)
         return;                                 /* not ours: honestly dropped */
 
     /* A NEW Connect Initiate. Decode it on a scratch link first. */
@@ -5381,8 +6248,869 @@ static int run_mail11_accept_test(void)
 #undef M1_CHECK
 }
 
+/*
+ * NETACP's broker request mailbox (rd vms-dda, T1): created at startup and
+ * published as the LNM$SYSTEM logical DNET$NETACP_REQ, which is how a _NET:
+ * $QIO finds the running NETACP (and how a client knows none is running). With
+ * no executive mailbox the broker is honestly NOT offered -- the inbound pool
+ * still serves, and outbound clients get SS$_DEVOFFLINE.
+ */
+/*
+ * The request mailbox's protection (rd vms-c6d1): S:RWLP,O:RWLP,G:,W:W. Every
+ * process may WRITE a request into it; only NETACP itself (its owner, a SYSTEM-
+ * category UIC) -- or a holder of SYSPRV or BYPASS, exactly as real VMS rules a
+ * mailbox (READALL does not open one: oracle mbxprot) -- may READ it, so no client can dequeue another client's request and
+ * the NCB access-control password in it. Enforced by the executive's one
+ * protection decision (src/kernel-core/vms_prot.h), the same one a file gets.
+ */
+#define NETACP_REQ_PROMSK 0xDF00u
+
+static int netacp_broker_start(uint32_t *chan)
+{
+    uint32_t unit = 0;
+    char dev[64] = "";
+    uint32_t st = vms_kif_mbx_create_prot(0, DNET_BROKER_REQ_MAX + 16,
+                                          (DNET_BROKER_REQ_MAX + 16) * 32,
+                                          NETACP_REQ_PROMSK, chan, &unit, dev,
+                                          sizeof dev);
+    if (!(st & 1)) {
+        log_ts(stdout);
+        printf(" DECNETD-W-NOBROKER, could not create the _NET: request mailbox"
+               " (status %08X) -- outbound links are not offered\n", (unsigned)st);
+        fflush(stdout);
+        *chan = 0;
+        return 0;
+    }
+    const char *vals[1] = { dev };
+    st = vms_kif_lnm_define(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, vals, 1, 0,
+                            LNM$C_USER);
+    if (!(st & 1)) {
+        (void)vms_kif_mbx_delmbx(*chan);
+        (void)vms_kif_dassgn(*chan);
+        log_ts(stdout);
+        printf(" DECNETD-W-NOBROKER, could not publish %s (status %08X) -- outbound"
+               " links are not offered\n", NETACP_REQ_LOGNAM, (unsigned)st);
+        fflush(stdout);
+        *chan = 0;
+        return 0;
+    }
+    log_ts(stdout);
+    printf(" DECNETD-I-BROKER, outbound logical links are brokered for local"
+           " processes ($ASSIGN _NET:): request mailbox %s = %s; up to %d links"
+           " in the pool, %d per process\n", dev, NETACP_REQ_LOGNAM,
+           NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
+    fflush(stdout);
+    return 1;
+}
+
+static void netacp_broker_stop(uint32_t chan)
+{
+    (void)vms_kif_lnm_delete(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, LNM$C_USER);
+    (void)vms_kif_mbx_delmbx(chan);
+    (void)vms_kif_dassgn(chan);
+}
+
+/* Take every request waiting in the mailbox (bounded per pass, IO$M_NOW --
+ * NETACP never blocks here) and service it. A record that fails the
+ * bounds-validated decode is dropped: its reply unit is untrusted. */
+static unsigned long g_broker_malformed;
+/* Requests dropped because the executive says their writer is not the process
+ * they claim (owner_pid), or the writer does not hold NETMBX (rd vms-c6d1). */
+static unsigned long g_broker_forged, g_broker_nonetmbx;
+/*
+ * Decode + service one raw broker request record (the mailbox drain and the
+ * host selftest's in-process queue both come through here).
+ *
+ * WHO SENT IT (rd vms-c6d1). `verify` is set for a record read from the
+ * executive mailbox, and `sender_pid` is then the executive's own stamp of the
+ * process that wrote it (the mailbox read's IOSB second longword) -- not
+ * something the writer can assert. A request whose owner_pid is not its writer
+ * is a forgery and is dropped unanswered (its reply unit is the forger's
+ * choice); so is one whose writer does not hold NETMBX, the privilege VMS
+ * requires of every network user (the same one $ASSIGN _NET: demands) -- read
+ * from the executive ($GETJPI of the stamped PID), never from the request. The
+ * host selftest's in-process queue has no executive and passes verify = 0.
+ */
+static void netacp_broker_record(struct netacp_slot *slots, const struct dnet_engine *node,
+                                 int sock, unsigned ifindex, const uint8_t *rec, size_t len,
+                                 int verify, uint32_t sender_pid,
+                                 dnet_tick_t now, uint16_t *next_lla)
+{
+    static struct dnet_broker_req req;
+    if (dnet_broker_req_decode(rec, len, &req) != DNET_BROKER_OK) {
+        g_broker_malformed++;
+        return;                            /* untrusted reply unit: no answer */
+    }
+    if (verify) {
+        struct vms_procinfo pi;
+        if (sender_pid == 0 || req.owner_pid != sender_pid) {
+            g_broker_forged++;
+            return;                        /* not who it says: no answer */
+        }
+        memset(&pi, 0, sizeof pi);
+        if (!(vms_kif_getjpi_pid(sender_pid, &pi) & 1) || pi.redacted ||
+            !(pi.cur_privs & PRV$M_NETMBX)) {
+            g_broker_nonetmbx++;
+            return;                        /* no NETMBX: not a network user */
+        }
+    }
+    netacp_broker_request(slots, node, sock, ifindex, &req, now, next_lla);
+}
+
+static void netacp_broker_drain(uint32_t chan, struct netacp_slot *slots,
+                                const struct dnet_engine *node, int sock,
+                                unsigned ifindex, dnet_tick_t now, uint16_t *next_lla)
+{
+    static uint8_t buf[DNET_BROKER_REQ_MAX + 16];
+    for (int k = 0; k < 32; k++) {
+        uint32_t got = 0, sender = 0;
+        uint32_t st = vms_kif_mbx_read_ex(chan, buf, sizeof buf, &got, 1, &sender);
+        if (!(st & 1))
+            return;                       /* SS$_ENDOFFILE: nothing waiting */
+        netacp_broker_record(slots, node, sock, ifindex, buf,
+                             got > sizeof buf ? sizeof buf : got, 1, sender,
+                             now, next_lla);
+    }
+}
+
+/*
+ * ===================== --netacp-broker-selftest (rd vms-dda) =====================
+ * The HOST FLOOR of outbound links brokered through NETACP: a real NETACP pool
+ * (netacp_broker_request / netacp_dispatch_frame / netacp_service_sessions, the
+ * code the daemon runs) on node 1.10, a second engine on node 1.11 across a
+ * socketpair datalink, and clients that reach NETACP ONLY through broker
+ * records -- dnet_broker_xfer, the same marshalling libvms's qio_net_op runs,
+ * over an in-process queue standing in for the executive mailboxes. No
+ * executive, no CAP_NET_RAW. It proves:
+ *   - $ COPY's FAL client (copy_client_run_net, what DECNETD --copy runs on a
+ *     booted node) opens an object-17 link through NETACP -- the OPEN completes
+ *     only when the remote's Connect Confirm arrives -- drives a DAP session
+ *     both ways over SEND/RECV, and the honest miss round-trips; DEACCESS
+ *     frees the slot;
+ *   - a remote access-control rejection completes the OPEN as SS$_INVLOGIN;
+ *   - a link from this node to ITSELF (0::) goes over NETACP's local loopback
+ *     and reaches its own inbound dispatch (no such object -> refused);
+ *   - bounds: a process over its share and a full pool are refused EXQUOTA
+ *     with no Connect Initiate sent; pending opens are answered on teardown;
+ *   - correlation: a stale / mis-routed / malformed response is dropped by the
+ *     client and only the matching one is delivered; a request naming another
+ *     process's link is refused FILNOTACC; a silent NETACP is DEVOFFLINE.
+ */
+struct nb_rq { uint8_t rec[DNET_BROKER_REQ_MAX]; size_t len; };
+#define NB_QMAX 64
+static struct nb_rq g_nbreq[NB_QMAX];      /* the request "mailbox"           */
+static unsigned g_nbreq_n;
+struct nb_reply { uint32_t unit; uint8_t rec[DNET_BROKER_RSP_MAX]; size_t len; };
+static struct nb_reply g_nbrep[NB_QMAX];   /* responses, routed by reply unit */
+static unsigned g_nbrep_n;
+static unsigned long g_nb_wire;            /* frames NETACP put on the wire   */
+static int g_nb_wire_fd = -1;              /* -1: discard (the bounds tests)  */
+static struct netacp_slot g_nbslots[NETACP_POOL_CAP];
+static struct dnet_engine g_nbnode;
+static uint16_t g_nb_lla = 0x2100;
+
+static ssize_t nb_tx(int fd, int ifx, uint16_t et, const uint8_t *mac,
+                     const uint8_t *f, size_t n)
+{
+    (void)fd; (void)ifx; (void)et; (void)mac;
+    g_nb_wire++;
+    if (g_nb_wire_fd >= 0)
+        return write(g_nb_wire_fd, f, n);
+    return (ssize_t)n;
+}
+static int nb_reply_capture(struct netacp_slot *sl, uint32_t unit,
+                            const struct dnet_broker_rsp *rsp)
+{
+    (void)sl;
+    if (g_nbrep_n >= NB_QMAX) return -1;
+    struct nb_reply *r = &g_nbrep[g_nbrep_n];
+    if (dnet_broker_rsp_encode(rsp, r->rec, sizeof r->rec, &r->len) != DNET_BROKER_OK)
+        return -1;
+    r->unit = unit;
+    g_nbrep_n++;
+    return 0;
+}
+/* Take the oldest captured response for `unit` (0 = none). */
+static int nb_take_reply(uint32_t unit, uint8_t *buf, size_t cap, size_t *len)
+{
+    for (unsigned i = 0; i < g_nbrep_n; i++) {
+        if (g_nbrep[i].unit != unit) continue;
+        if (g_nbrep[i].len > cap) return -1;
+        memcpy(buf, g_nbrep[i].rec, g_nbrep[i].len);
+        *len = g_nbrep[i].len;
+        memmove(&g_nbrep[i], &g_nbrep[i + 1], (g_nbrep_n - i - 1) * sizeof g_nbrep[0]);
+        g_nbrep_n--;
+        return 1;
+    }
+    return 0;
+}
+
+/* One NETACP serve-loop pass: requests, wire frames, loopback, timers. */
+static void nb_pump(void)
+{
+    dnet_tick_t now = monotonic_sec();
+    for (unsigned i = 0; i < g_nbreq_n; i++)
+        netacp_broker_record(g_nbslots, &g_nbnode, g_nb_wire_fd, 0, g_nbreq[i].rec,
+                             g_nbreq[i].len, 0, 0, now, &g_nb_lla);
+    g_nbreq_n = 0;
+    if (g_nb_wire_fd >= 0) {
+        uint8_t f[DNET_FRAME_MAX];
+        ssize_t n;
+        while ((n = recv(g_nb_wire_fd, f, sizeof f, MSG_DONTWAIT)) > 0)
+            netacp_dispatch_frame(g_nbslots, &g_nbnode, g_nb_wire_fd, 0, f, (size_t)n,
+                                  now, &g_nb_lla);
+    }
+    netacp_loop_drain(g_nbslots, &g_nbnode, g_nb_wire_fd, 0, now, &g_nb_lla);
+    (void)netacp_service_sessions(g_nbslots, g_nb_wire_fd, 0, now);
+}
+
+/* The in-process client transport (the stand-in for libvms's mailboxes). */
+struct nb_client { uint32_t unit; };
+static int nb_put(void *ctx, const uint8_t *rec, size_t len)
+{
+    (void)ctx;
+    if (g_nbreq_n >= NB_QMAX || len > DNET_BROKER_REQ_MAX) return -1;
+    memcpy(g_nbreq[g_nbreq_n].rec, rec, len);
+    g_nbreq[g_nbreq_n].len = len;
+    g_nbreq_n++;
+    return 0;
+}
+static int nb_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)
+{
+    return nb_take_reply(((struct nb_client *)ctx)->unit, buf, cap, len);
+}
+static void nb_idle(void *ctx)
+{
+    (void)ctx;
+    nb_pump();
+    struct timespec ts = { 0, 200 * 1000 };   /* let the peer thread run */
+    nanosleep(&ts, NULL);
+}
+
+/* A remote that refuses every connect with access-control-rejected (34). */
+static void *nb_refuser_thread(void *v)
+{
+    struct copy_wire *w = v;
+    for (int i = 0; i < 4096; i++) {
+        int ev = w->rxev(w, cw_now(w));
+        if (ev < 0) return NULL;
+        if (ev == DNET_LINK_EV_CONNECT_IND) {
+            uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+            if (dnet_engine_link_close(w->eng, DNET_LINK_REASON_ACCESS, f, sizeof f, &fl,
+                                       cw_now(w)) == DNET_ENGINE_OK)
+                (void)w->txf(w, f, fl);
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+static int nb_used(void)
+{
+    int u = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++) u += g_nbslots[i].used;
+    return u;
+}
+
+/* Send a raw OPEN request (no waiting) and return its corr id. */
+static uint32_t nb_raw_open(uint32_t pid, uint32_t unit, const char *ncb, uint32_t *corr)
+{
+    struct dnet_broker_req r;
+    memset(&r, 0, sizeof r);
+    r.corr_id = dnet_broker_corr_next(corr);
+    r.owner_pid = pid; r.reply_unit = unit; r.op = DNET_BROKER_OP_OPEN;
+    r.datalen = (uint16_t)strlen(ncb);
+    memcpy(r.data, ncb, r.datalen);
+    uint8_t rec[DNET_BROKER_REQ_MAX]; size_t n = 0;
+    dnet_broker_req_encode(&r, rec, sizeof rec, &n);
+    nb_put(NULL, rec, n);
+    nb_pump();
+    return r.corr_id;
+}
+static uint32_t nb_reply_status(uint32_t unit, uint32_t corr)
+{
+    uint8_t rec[DNET_BROKER_RSP_MAX]; size_t n = 0;
+    struct dnet_broker_rsp rsp;
+    while (nb_take_reply(unit, rec, sizeof rec, &n) == 1)
+        if (dnet_broker_rsp_decode(rec, n, &rsp) == DNET_BROKER_OK && rsp.corr_id == corr)
+            return rsp.status;
+    return 0;                              /* no response (yet) */
+}
+
+/* A transport whose responses are scripted (the correlation-gate proof). */
+struct nb_script { const uint8_t *recs[4]; size_t lens[4]; int n, i; int puts; };
+static int nbs_put(void *ctx, const uint8_t *rec, size_t len)
+{ (void)rec; (void)len; ((struct nb_script *)ctx)->puts++; return 0; }
+static int nbs_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)
+{
+    struct nb_script *s = ctx;
+    if (s->i >= s->n) return 0;
+    if (s->lens[s->i] > cap) return -1;
+    memcpy(buf, s->recs[s->i], s->lens[s->i]);
+    *len = s->lens[s->i];
+    s->i++;
+    return 1;
+}
+
+static int run_netacp_broker_selftest(void)
+{
+    printf("DECNETD-I-NETACPBROKER, outbound links brokered through NETACP: _NET:"
+           " broker records -> NETACP's pool -> NSP link to a peer, correlation-"
+           "gated, bounded (no executive, rd vms-dda)\n");
+    int pass = 0, fail = 0;
+#define NA_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    const uint8_t hwA[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwB[6] = { 0x02,0,0,0,0,0x0b };
+    static struct dnet_engine B;
+    dnet_engine_init(&g_nbnode, 1, 10, "OVMXA", "EWA0", NULL, hwA, 0, 0, 0);
+    memcpy(g_netacp_self, g_nbnode.my_id, 6);
+    g_netacp_self_set = 1;
+    g_netacp_tx = nb_tx;
+    g_netacp_reply = nb_reply_capture;
+    memset(g_nbslots, 0, sizeof g_nbslots);
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-NETACPBROKER, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    g_nb_wire_fd = sv[0];
+
+    struct nb_client cl = { 0x51 };
+    struct dnet_broker_io io = { &cl, nb_put, nb_get, nb_idle, 2000, 20000 };
+    struct dnet_broker_chan bc;
+    memset(&bc, 0, sizeof bc);
+    bc.owner_pid = 0;                       /* no executive: NETACP's own identity */
+    bc.reply_unit = cl.unit;
+    struct netcli nc = { 0, &bc, &io };
+
+    /* (1) $ COPY through NETACP to a FAL peer on 1.11 (test double, no auth). */
+    {
+        struct dnet_copy_plan plan;
+        int rp = dnet_copy_plan("1.11::DKA0:[X]NOPE.TXT", "DKA0:[X]LOCAL.TXT", &plan);
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        struct copy_server_arg sarg;
+        memset(&sarg, 0, sizeof sarg);
+        sarg.w.eng = &B; sarg.w.txf = cw_sp_tx; sarg.w.rxev = cw_sp_rx;
+        sarg.w.sp_wfd = sv[1]; sarg.w.sp_rfd = sv[1]; sarg.w.synthetic = 1; sarg.w.clk = 1000;
+        pthread_t th;
+        int thr = (rp == 0) ? pthread_create(&th, NULL, copy_noauth_server_thread, &sarg) : -1;
+        uint32_t cs = SS$_ABORT;
+        unsigned long wire0 = g_nb_wire;
+        if (thr == 0) {
+            cs = copy_client_run_net(&nc, &plan, "");
+            pthread_join(th, NULL);
+        }
+        NA_CHECK(rp == 0 && thr == 0 && cs == SS$_NOSUCHFILE && sarg.status == SS$_NOSUCHFILE,
+                 "COPY's FAL client opened an object-17 link THROUGH NETACP (broker OPEN completed on the"
+                 " remote's Connect Confirm), drove a DAP session both ways over SEND/RECV, and the honest"
+                 " miss round-trips (client + server both NOSUCHFILE)");
+        NA_CHECK(g_nb_wire > wire0 && bc.handle == 0 && nb_used() == 0,
+                 "the frames went out on NETACP's datalink; DEACCESS disconnected the link and freed its pool slot");
+    }
+
+    /* (2) A remote that rejects the access control: OPEN completes INVLOGIN. */
+    {
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        struct copy_wire w;
+        memset(&w, 0, sizeof w);
+        w.eng = &B; w.txf = cw_sp_tx; w.rxev = cw_sp_rx;
+        w.sp_wfd = sv[1]; w.sp_rfd = sv[1]; w.synthetic = 1; w.clk = 2000;
+        pthread_t th;
+        uint32_t st = SS$_ABORT;
+        if (pthread_create(&th, NULL, nb_refuser_thread, &w) == 0) {
+            const char *ncb = "1.11\"GUEST WRONGPW\"::\"17=\"";
+            size_t x = 0;
+            st = netcli_op(&nc, DNET_BROKER_OP_OPEN, ncb, strlen(ncb), NULL, 0, &x);
+            pthread_join(th, NULL);
+        }
+        NA_CHECK(st == SS$_INVLOGIN && bc.handle == 0 && nb_used() == 0,
+                 "a connect the remote refuses with access-control-rejected completes the OPEN as"
+                 " SS$_INVLOGIN, with no link and no slot left behind");
+    }
+
+    /* (3) This node to ITSELF (0::) -- NETACP's local loopback reaches its own
+     * inbound dispatch, which serves no object named NOSUCHTASK. */
+    {
+        unsigned long wire0 = g_nb_wire;
+        const char *ncb = "0::\"TASK=NOSUCHTASK\"";
+        size_t x = 0;
+        uint32_t st = netcli_op(&nc, DNET_BROKER_OP_OPEN, ncb, strlen(ncb), NULL, 0, &x);
+        NA_CHECK(st == SS$_ABORT && g_nb_wire == wire0 && nb_used() == 0,
+                 "a link to this node itself (0::) runs over NETACP's local loopback -- never the wire --"
+                 " and its own inbound dispatch refuses the unserved object honestly (ABORT)");
+    }
+
+    /* (3b) This node to ITSELF with credentials its inbound FAL refuses: the
+     * loopback refusal must reach the outbound slot, which completes the OPEN
+     * SS$_INVLOGIN -- never a client left waiting (the booted bad-password COPY). */
+    {
+        unsigned long wire0 = g_nb_wire;
+        const char *ncb = "0\"SYSTEM WRONGPW\"::\"17=\"";
+        size_t x = 0;
+        uint32_t st = netcli_op(&nc, DNET_BROKER_OP_OPEN, ncb, strlen(ncb), NULL, 0, &x);
+        printf("  INFO: loopback refused-FAL OPEN -> %08X\n", (unsigned)st);
+        NA_CHECK(st == SS$_INVLOGIN && g_nb_wire == wire0 && nb_used() == 0,
+                 "a link to this node itself whose credentials its own FAL refuses completes the OPEN"
+                 " SS$_INVLOGIN over the loopback, with no slot left behind");
+    }
+
+    /* (4) Honest refusals before any link is attempted. */
+    {
+        size_t x = 0;
+        const char *bad = "NOT AN NCB";
+        uint32_t st = netcli_op(&nc, DNET_BROKER_OP_OPEN, bad, strlen(bad), NULL, 0, &x);
+        NA_CHECK(st == SS$_BADPARAM, "a malformed NCB is refused SS$_BADPARAM");
+        const char *nosuch = "NOSUCHNODE::\"17=\"";
+        st = netcli_op(&nc, DNET_BROKER_OP_OPEN, nosuch, strlen(nosuch), NULL, 0, &x);
+        NA_CHECK(st == SS$_NOSUCHDEV, "an unresolvable node is refused (no address invented)");
+        uint8_t b[16];
+        st = netcli_op(&nc, DNET_BROKER_OP_RECV, NULL, 0, b, sizeof b, &x);
+        NA_CHECK(st == SS$_FILNOTACC, "READVBLK on a channel with no link is SS$_FILNOTACC");
+    }
+
+    /* (5) BOUNDS: a process over its share, then a full pool. Opens to 1.11
+     * stay pending (nobody answers); the wire is discarded. */
+    {
+        g_nb_wire_fd = -1;
+        uint32_t corr = 0;
+        uint32_t cs[NETACP_MAX_PER_SOURCE];
+        for (int i = 0; i < NETACP_MAX_PER_SOURCE; i++)
+            cs[i] = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
+        unsigned long wire0 = g_nb_wire;
+        uint32_t cx = nb_raw_open(0x100, 0x61, "1.11::\"17=\"", &corr);
+        uint32_t sx = nb_reply_status(0x61, cx);   /* consumes unit 0x61's queue */
+        int pending = 1;
+        for (int i = 0; i < NETACP_MAX_PER_SOURCE; i++)
+            pending = pending && nb_reply_status(0x61, cs[i]) == 0;
+        NA_CHECK(sx == SS$_EXQUOTA && pending && g_nb_wire == wire0,
+                 "a process holding its share of links is refused another (EXQUOTA), no Connect Initiate sent");
+        /* Fill the rest of the pool, each process taking at most its share. */
+        int left = NETACP_MAX_SESSIONS - NETACP_MAX_PER_SOURCE;
+        for (uint32_t p = 0x200; left > 0; p++)
+            for (int i = 0; i < NETACP_MAX_PER_SOURCE && left > 0; i++, left--)
+                nb_raw_open(p, 0x62, "1.11::\"17=\"", &corr);
+        int full = nb_used();
+        wire0 = g_nb_wire;
+        uint32_t cf = nb_raw_open(0x300, 0x63, "1.11::\"17=\"", &corr);
+        NA_CHECK(full == NETACP_MAX_SESSIONS && nb_reply_status(0x63, cf) == SS$_EXQUOTA &&
+                 g_nb_wire == wire0,
+                 "the pool holds NETACP_MAX_SESSIONS links and a fresh process is refused once it is full -- bounded");
+        /* A request naming another process's link is refused. */
+        uint32_t h = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            if (g_nbslots[i].used && g_nbslots[i].owner_pid == 0x100) h = g_nbslots[i].handle;
+        struct dnet_broker_req r;
+        memset(&r, 0, sizeof r);
+        r.corr_id = dnet_broker_corr_next(&corr);
+        r.owner_pid = 0x300; r.reply_unit = 0x63; r.link_handle = h;
+        r.op = DNET_BROKER_OP_RECV;
+        uint8_t rec[DNET_BROKER_REQ_MAX]; size_t n = 0;
+        dnet_broker_req_encode(&r, rec, sizeof rec, &n);
+        nb_put(NULL, rec, n);
+        nb_pump();
+        NA_CHECK(h != 0 && nb_reply_status(0x63, r.corr_id) == SS$_FILNOTACC,
+                 "a request naming ANOTHER process's link handle is refused (FILNOTACC) -- never served");
+        g_nbrep_n = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            netacp_slot_end(&g_nbslots[i], -1, 0, monotonic_sec(), "selftest teardown");
+        NA_CHECK(nb_used() == 0 && g_nbrep_n == NETACP_MAX_SESSIONS,
+                 "teardown frees every slot and answers each pending OPEN (no client left waiting)");
+        g_nbrep_n = 0;
+    }
+
+    /* (6) CORRELATION: the client delivers only the matching response. */
+    {
+        struct dnet_broker_req q;
+        memset(&q, 0, sizeof q);
+        q.corr_id = 77; q.op = DNET_BROKER_OP_RECV;
+        struct dnet_broker_rsp a, b2;
+        memset(&a, 0, sizeof a); memset(&b2, 0, sizeof b2);
+        a.corr_id = 76; a.status = SS$_NORMAL; a.datalen = 5; memcpy(a.data, "STALE", 5);
+        b2.corr_id = 77; b2.status = SS$_NORMAL; b2.datalen = 4; memcpy(b2.data, "MINE", 4);
+        uint8_t ra[DNET_BROKER_RSP_MAX], rb[DNET_BROKER_RSP_MAX], junk[9] = { 0x52,0x54,0x45,0x4e, 1,2,3 };
+        size_t la = 0, lb = 0;
+        dnet_broker_rsp_encode(&a, ra, sizeof ra, &la);
+        dnet_broker_rsp_encode(&b2, rb, sizeof rb, &lb);
+        struct nb_script sc = { { ra, junk, rb }, { la, sizeof junk, lb }, 3, 0, 0 };
+        struct dnet_broker_io sio = { &sc, nbs_put, nbs_get, NULL, 10, 10 };
+        struct dnet_broker_rsp got;
+        uint32_t mism = 0;
+        int r = dnet_broker_call(&sio, &q, &got, 10, &mism);
+        NA_CHECK(r == DNET_BROKER_OK && got.corr_id == 77 && got.datalen == 4 &&
+                 memcmp(got.data, "MINE", 4) == 0 && mism == 2,
+                 "a stale (wrong correlation id) and a malformed response are DROPPED; only the matching"
+                 " response is delivered to the waiting request");
+        struct nb_script none = { { 0 }, { 0 }, 0, 0, 0 };
+        struct dnet_broker_io dio = { &none, nbs_put, nbs_get, NULL, 5, 5 };
+        struct dnet_broker_chan dbc;
+        memset(&dbc, 0, sizeof dbc);
+        size_t x = 0;
+        const char *ncb = "1.11::\"17=\"";
+        uint32_t st = dnet_broker_xfer(&dbc, &dio, DNET_BROKER_OP_OPEN, ncb, strlen(ncb),
+                                       NULL, 0, &x);
+        NA_CHECK(st == SS$_DEVOFFLINE && none.puts == 1 && dbc.handle == 0,
+                 "a NETACP that never answers completes the $QIO SS$_DEVOFFLINE -- never a fake success");
+    }
+
+    g_nb_wire_fd = -1;
+    g_netacp_tx = scs_datalink_send;
+    g_netacp_reply = netacp_reply_mbx;
+    g_netacp_self_set = 0;
+    close(sv[0]); close(sv[1]);
+    printf("DECNETD-I-NETACPBROKER, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NETACP-BROKER-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NETACP-BROKER-SELFTEST: FAIL\n");
+    return 1;
+#undef NA_CHECK
+}
+
+/*
+ * ================= --net-loopback-accept-test (rd vms-dda, booted) =================
+ * The BOOTED proof that a $QIO on _NET: reaches a NETACP and a real FAL server
+ * through it: this process runs a NETACP (its broker request mailbox published
+ * as DNET$NETACP_REQ, its pool serving inbound objects) on a thread, and on the
+ * main thread a client does exactly what DECNETD --copy does on a booted node:
+ * $ASSIGN _NET: and COPY 0"SYSTEM MANAGER"::file over $QIO IO$_ACCESS /
+ * WRITEVBLK / READVBLK / DEACCESS -- libvms qio_net_op, the executive
+ * mailboxes, NETACP's outbound slot, the local loopback, NETACP's inbound FAL
+ * dispatch, a FAL.EXE server process running as SYSTEM, and back. The records
+ * are byte-verified through RMS. A bad password completes IO$_ACCESS
+ * SS$_INVLOGIN. Nothing reaches the wire (loopback). If a NETACP is already
+ * serving on this node, the client uses it instead. Needs /dev/vms + the SYSUAF;
+ * with no executive every check FAILS honestly (INV-6) -- run by the booted
+ * battery only.
+ */
+static volatile int g_lb_stop;
+static uint32_t g_lb_chan;
+static void *lb_netacp_thread(void *v)
+{
+    (void)v;
+    while (!g_lb_stop) {
+        dnet_tick_t now = monotonic_sec();
+        netacp_broker_drain(g_lb_chan, g_nbslots, &g_nbnode, -1, 0, now, &g_nb_lla);
+        netacp_loop_drain(g_nbslots, &g_nbnode, -1, 0, now, &g_nb_lla);
+        (void)netacp_service_sessions(g_nbslots, -1, 0, now);
+        netacp_loop_drain(g_nbslots, &g_nbnode, -1, 0, now, &g_nb_lla);
+        struct timespec ts = { 0, 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        netacp_slot_end(&g_nbslots[i], -1, 0, monotonic_sec(), "test NETACP shutdown");
+    return NULL;
+}
+
+
+/*
+ * net_req_probe - the request mailbox's protection and NETACP's sender check,
+ * seen from an UNPRIVILEGED process (rd vms-c6d1). Runs in a forked child, which
+ * the executive registers as a process of its own (kif_bind re-registers a
+ * forked task), dropped to UIC [100,100] holding only SETPRV -- the WORLD
+ * category of NETACP's S:RWLP,O:RWLP,G:,W:W request mailbox. Every verdict is
+ * written to `wfd` for the parent's checks; the child never prints.
+ */
+struct netreq_probe {
+    uint32_t setident;      /* SETIDENT to [100,100]                          */
+    uint32_t assign;        /* $ASSIGN DNET$NETACP_REQ: a channel (W access)  */
+    uint32_t read_unpriv;   /* IO$M_NOW read with no privilege: SS$_NOPRIV    */
+    uint32_t read_readall;  /* the same read with READALL: still SS$_NOPRIV   */
+    uint32_t read_bypass;   /* the same read with BYPASS: allowed             */
+    uint32_t nonetmbx;      /* own-PID request without NETMBX: reply status    */
+    uint32_t forged;        /* request claiming ANOTHER owner_pid: reply status */
+    uint32_t honest;        /* own-PID request with NETMBX: reply status        */
+};
+
+/* Wait up to `ticks` x 10 ms for the reply with correlation id `corr` on `rep`;
+ * 0 = none came. Any OTHER reply seen meanwhile (to a request that must have
+ * been dropped) is recorded in *late. */
+static uint32_t net_req_probe_wait(uint32_t rep, uint32_t corr, uint32_t *late,
+                                   int ticks)
+{
+    for (int k = 0; k < ticks; k++) {
+        uint8_t buf[DNET_BROKER_RSP_MAX + 16];
+        uint32_t got = 0;
+        uint32_t st = vms_kif_mbx_read(rep, buf, sizeof buf, &got, 1);
+        if (st & 1) {
+            struct dnet_broker_rsp rsp;
+            if (dnet_broker_rsp_decode(buf, got > sizeof buf ? sizeof buf : got, &rsp) ==
+                DNET_BROKER_OK) {
+                if (rsp.corr_id == corr)
+                    return rsp.status ? rsp.status : 1u;
+                *late = rsp.corr_id;
+            }
+            continue;
+        }
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+static uint32_t net_req_probe_send(uint32_t req, uint32_t corr, uint32_t owner,
+                                   uint32_t unit)
+{
+    struct dnet_broker_req r;
+    uint8_t rec[DNET_BROKER_REQ_MAX];
+    size_t n = 0;
+    memset(&r, 0, sizeof r);
+    r.corr_id = corr;
+    r.owner_pid = owner;
+    r.link_handle = 0xDEAD0000u | corr;      /* no such link: an honest NETACP says FILNOTACC */
+    r.reply_unit = unit;
+    r.op = DNET_BROKER_OP_CLOSE;
+    if (dnet_broker_req_encode(&r, rec, sizeof rec, &n) != DNET_BROKER_OK)
+        return SS$_BADPARAM;
+    return vms_kif_mbx_write(req, rec, (uint32_t)n);
+}
+
+static void net_req_probe(uint32_t result_unit)
+{
+    struct netreq_probe v;
+    struct vms_procinfo self;
+    char dev[64];
+    uint16_t dl = 0;
+    uint32_t req = 0, rep = 0, unit = 0, late = 0, n = 0;
+    uint8_t buf[DNET_BROKER_REQ_MAX + 16];
+    uint64_t prev = 0;
+
+    memset(&v, 0, sizeof v);
+    memset(&self, 0, sizeof self);
+    /* This process was $CREPRC'd by the test as UIC [100,100] -- the WORLD
+     * category of NETACP's request mailbox -- authorized for exactly the
+     * privileges toggled below. Start with only TMPMBX enabled. */
+    (void)vms_kif_getjpi_self(&self);
+    v.setident = (self.uic == ((100u << 16) | 100u)) ? 1u : 0u;
+    (void)vms_kif_setprv(PRV$M_NETMBX | PRV$M_READALL | PRV$M_BYPASS, 0, 0, &prev);
+    if (vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, 0, dev,
+                              sizeof dev - 1, &dl, NULL, NULL) == 1 && dl > 0) {
+        dev[dl] = '\0';
+        v.assign = vms_kif_mbx_assign(dev, &req);
+    }
+    v.read_unpriv = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
+    {
+        char rdev[64];
+        (void)vms_kif_mbx_create_prot(0, DNET_BROKER_RSP_MAX + 16,
+                                      (DNET_BROKER_RSP_MAX + 16) * 8, 0xFF00u,
+                                      &rep, &unit, rdev, sizeof rdev);
+    }
+    /* 1: our own PID, but no NETMBX -> dropped, no reply. NETACP reads the
+     * writer's privileges when it serves the request, so NETMBX stays off until
+     * this one has had its chance to be (wrongly) answered. */
+    (void)net_req_probe_send(req, 1, self.vms_pid, unit);
+    v.nonetmbx = net_req_probe_wait(rep, 1, &late, 150);
+    (void)vms_kif_setprv(PRV$M_NETMBX, 1, 0, &prev);
+    /* 2: NETMBX, but claiming to be ANOTHER process -> dropped; 3: the truth ->
+     * served (FILNOTACC: no such link). NETACP serves its request mailbox in
+     * order, so once 3 is answered, 2 has been decided: any reply to it would
+     * already be here. */
+    (void)net_req_probe_send(req, 2, self.vms_pid + 1u, unit);
+    (void)net_req_probe_send(req, 3, self.vms_pid, unit);
+    v.honest = net_req_probe_wait(rep, 3, &late, 1000);
+    v.forged = 0;
+    if (late == 1) v.nonetmbx = 0xFFFFFFFFu;     /* a dropped request was answered after all */
+    if (late == 2) v.forged = 0xFFFFFFFFu;
+    (void)vms_kif_setprv(PRV$M_READALL, 1, 0, &prev);
+    v.read_readall = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
+    (void)vms_kif_setprv(PRV$M_READALL, 0, 0, &prev);
+    (void)vms_kif_setprv(PRV$M_BYPASS, 1, 0, &prev);
+    v.read_bypass = vms_kif_mbx_read(req, buf, sizeof buf, &n, 1);
+    (void)vms_kif_setprv(PRV$M_BYPASS, 0, 0, &prev);
+    if (rep) (void)vms_kif_dassgn((uint16_t)rep);
+    if (req) (void)vms_kif_dassgn((uint16_t)req);
+    {
+        char rdev[32];
+        uint32_t rc = 0;
+        snprintf(rdev, sizeof rdev, "MBA%u:", (unsigned)result_unit);
+        if (vms_kif_mbx_assign(rdev, &rc) & 1) {
+            (void)vms_kif_mbx_write(rc, &v, sizeof v);
+            (void)vms_kif_dassgn((uint16_t)rc);
+        }
+    }
+}
+
+/* The probe process's name carries the unit of the mailbox it reports to: the
+ * same rendezvous a FAL.EXE server process uses (dnet_fal_proc.c). */
+#define NETPRB_PRCNAM_FMT "NETPRB%u"
+
+/*
+ * net_req_probe_spawn - $CREPRC this image as a DETACHED process with UIC
+ * [100,100] and only TMPMBX|NETMBX|READALL|BYPASS authorized, the way NETACP
+ * creates a FAL server persona -- never a host fork: a VMS process comes from
+ * $CREPRC. It finds its role from its process name (main, NETPRB<unit>) and
+ * writes its verdicts to MBA<unit>:. Returns 1 with *v filled, 0 otherwise.
+ */
+static int net_req_probe_spawn(struct netreq_probe *v)
+{
+    char img[512], staged[512], prcnam[16], dev[32];
+    uint32_t ch = 0, unit = 0, pid = 0, n = 0;
+    uint64_t privs = PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_READALL | PRV$M_BYPASS;
+
+    if (vmsfs_to_linux_path("SYS$SYSTEM:DECNETD.EXE", img, sizeof img) != 1)
+        return 0;
+    if (ovmx_boot_stage_exec_path(img, staged, sizeof staged) && access(staged, X_OK) == 0)
+        snprintf(img, sizeof img, "%s", staged);
+    if (access(img, X_OK) != 0) {
+        /* No runnable copy: say so rather than $CREPRC a process whose image
+         * activation then fails after the creation reported success. */
+        printf("  NOTE: request-mailbox probe: %s is not executable here (not on the"
+               " boot exec stage)\n", img);
+        return 0;
+    }
+    if (!(vms_kif_mbx_create(0, sizeof *v + 16, (sizeof *v + 16) * 2, &ch, &unit,
+                             dev, sizeof dev) & 1))
+        return 0;
+    snprintf(prcnam, sizeof prcnam, NETPRB_PRCNAM_FMT, (unsigned)unit);
+    struct dsc$descriptor_s img_d = { (uint16_t)strlen(img), DSC$K_DTYPE_T, DSC$K_CLASS_S, img };
+    struct dsc$descriptor_s nam_d = { (uint16_t)strlen(prcnam), DSC$K_DTYPE_T, DSC$K_CLASS_S, prcnam };
+    int ok = 0;
+    uint32_t st = sys$creprc(&pid, &img_d, NULL, NULL, NULL, &privs, NULL, &nam_d, 0,
+                             (100u << 16) | 100u, 0, PRC$M_DETACH);
+    if (st & 1) {
+        for (int k = 0; k < 2000 && !ok; k++) {       /* up to ~20 s */
+            if (vms_kif_mbx_read(ch, v, sizeof *v, &n, 1) & 1)
+                ok = (n == sizeof *v);
+            else {
+                struct timespec ts = { 0, 10 * 1000 * 1000 };
+                nanosleep(&ts, NULL);
+            }
+        }
+    }
+    if (!ok) {
+        struct vms_procinfo pi;
+        memset(&pi, 0, sizeof pi);
+        uint32_t js = pid ? vms_kif_getjpi_pid(pid, &pi) : 0;
+        printf("  NOTE: request-mailbox probe: $CREPRC %s status %08X pid %08X; image %s;"
+               " after the wait the process %s\n", prcnam, (unsigned)st, (unsigned)pid, img,
+               (js & 1) ? "is still alive" : "is gone");
+    }
+    (void)vms_kif_dassgn((uint16_t)ch);
+    return ok;
+}
+
+
+static int run_net_loopback_accept_test(void)
+{
+    dnet_tick_t t0 = monotonic_sec();
+    printf("DECNETD-I-NETLOOP, $QIO on _NET: brokered through NETACP: COPY 0\"SYSTEM\"::"
+           " over the local loopback to a FAL.EXE server process (rd vms-dda)\n");
+    int pass = 0, fail = 0;
+#define NL_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    const char *SRC = "SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT";
+    const char *GOT = "SYS$SYSROOT:[SYSMGR]NETLB_GOT.TXT";
+    static const char *lines[] = { "NETACP-brokered _NET: COPY over the local loopback" };
+    NL_CHECK(rms_textfile_write_line(SRC, lines[0]) == 0,
+             "a SYSTEM-owned source file is laid down via RMS");
+
+    pthread_t th;
+    int own = 0;
+    if (netacp_running() != 1) {
+        unsigned ea = 1, en = 1;
+        if (sethost_source_executor(&ea, &en) != 0)
+            printf("  NOTE: DECnet is not configured here; the test NETACP takes the"
+                   " placeholder address 1.1 -- it never touches the wire (loopback only)\n");
+        const uint8_t hw[6] = { 0x02,0,0,0,0,0x01 };
+        dnet_engine_init(&g_nbnode, ea, en, "OVMXLB", "EWA0", NULL, hw, 0, 0, monotonic_sec());
+        memcpy(g_netacp_self, g_nbnode.my_id, 6);
+        g_netacp_self_set = 1;
+        g_netacp_tx = nb_tx;                        /* counted, never the wire */
+        g_nb_wire_fd = -1;
+        g_nb_wire = 0;
+        memset(g_nbslots, 0, sizeof g_nbslots);
+        own = netacp_broker_start(&g_lb_chan);
+        NL_CHECK(own, "this process's NETACP published its request mailbox as DNET$NETACP_REQ");
+        if (own && pthread_create(&th, NULL, lb_netacp_thread, NULL) != 0)
+            own = 0;
+    } else {
+        printf("  NOTE: a NETACP is already serving on this node -- the client uses it\n");
+    }
+
+
+    struct netcli c;
+    int assigned = netcli_assign(&c) == 0;
+    NL_CHECK(assigned, "$ASSIGN _NET: granted a channel to the DECnet device face");
+    if (assigned) {
+        struct dnet_copy_plan plan;
+        char spec[160];
+        snprintf(spec, sizeof spec, "0\"SYSTEM\"::%s", SRC);
+        int rp = dnet_copy_plan(spec, GOT, &plan);
+        printf("  NOTE: t+%lus: COPY with the right password\n", (unsigned long)(monotonic_sec() - t0));
+        fflush(stdout);
+        uint32_t st = (rp == 0) ? copy_client_run_net(&c, &plan, "MANAGER") : SS$_BADPARAM;
+        NL_CHECK(st == SS$_NORMAL && fal_file_matches(GOT, lines, 1),
+                 "COPY 0\"SYSTEM MANAGER\"::file over $QIO _NET: completed through NETACP, and the"
+                 " records BYTE-MATCH (qio_net_op -> mailboxes -> NETACP -> loopback -> FAL.EXE)");
+        printf("  NOTE: t+%lus: COPY with a bad password\n", (unsigned long)(monotonic_sec() - t0));
+        fflush(stdout);
+        st = (rp == 0) ? copy_client_run_net(&c, &plan, "WRONGPW") : SS$_BADPARAM;
+        printf("  NOTE: t+%lus: bad-password COPY returned %08X\n",
+               (unsigned long)(monotonic_sec() - t0), (unsigned)st);
+        NL_CHECK(st == SS$_INVLOGIN,
+                 "the same COPY with a bad password completes IO$_ACCESS SS$_INVLOGIN -- no link, no file");
+        uint8_t b[8]; size_t x = 0;
+        st = netcli_op(&c, DNET_BROKER_OP_RECV, NULL, 0, b, sizeof b, &x);
+        NL_CHECK(st == SS$_FILNOTACC, "IO$_READVBLK on the channel after DEACCESS is SS$_FILNOTACC");
+        NL_CHECK(sys$dassgn(c.chan) == SS$_NORMAL, "$DASSGN releases the _NET: channel");
+    }
+    /* The request mailbox, from an unprivileged process (rd vms-c6d1). */
+    if (netacp_running() == 1) {
+        struct netreq_probe v;
+        memset(&v, 0, sizeof v);
+        int got = net_req_probe_spawn(&v);
+        NL_CHECK(got && (v.setident & 1),
+                 "an unprivileged probe process ($CREPRC'd as [100,100]) reported");
+        NL_CHECK(v.assign == SS$_NORMAL,
+                 "the unprivileged process may $ASSIGN DNET$NETACP_REQ (W:W -- it can submit requests)");
+        NL_CHECK(v.read_unpriv == SS$_NOPRIV,
+                 "the unprivileged process may NOT read DNET$NETACP_REQ (SS$_NOPRIV) -- no other"
+                 " client's request, NCB password included, is readable");
+        NL_CHECK(v.read_readall == SS$_NOPRIV,
+                 "READALL does not open it either (as on real VMS: oracle mbxprot MBXP.READALL.READ)");
+        NL_CHECK(v.read_bypass != SS$_NOPRIV && v.read_bypass != 0,
+                 "with BYPASS the same read is permitted -- the VMS privilege override, not a"
+                 " special case");
+        NL_CHECK(v.nonetmbx == 0, "a request from a process without NETMBX is dropped unanswered");
+        NL_CHECK(v.forged == 0,
+                 "a request whose owner_pid is not its writer (the executive-stamped sender PID) is"
+                 " dropped unanswered");
+        NL_CHECK(v.honest == SS$_FILNOTACC,
+                 "the same request, truthful and with NETMBX, is served (FILNOTACC: no such link)");
+    }
+
+    if (own) {
+        g_lb_stop = 1;
+        pthread_join(th, NULL);
+        NL_CHECK(g_nb_wire == 0, "nothing was put on the wire -- the link ran over the local loopback");
+        netacp_broker_stop(g_lb_chan);
+    }
+
+    printf("DECNETD-I-NETLOOP, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NET-LOOPBACK-ACCEPT: PASS\n"); return 0; }
+    printf("DECNETD-NET-LOOPBACK-ACCEPT: FAIL\n");
+    return 1;
+#undef NL_CHECK
+}
+
 int main(int argc, char **argv)
 {
+    /* rd vms-c6d1: started by net_req_probe_spawn ($CREPRC, no argv -- VMS
+     * semantics), this process is the request-mailbox probe if its process name
+     * says so. */
+    if (argc == 1) {
+        struct vms_procinfo me;
+        unsigned u = 0;
+        memset(&me, 0, sizeof me);
+        if ((vms_kif_getjpi_self(&me) & 1) &&
+            sscanf(me.prcnam, NETPRB_PRCNAM_FMT, &u) == 1 && u != 0) {
+            net_req_probe(u);
+            return 0;
+        }
+    }
     const char *ifname = DECNETD_DEFAULT_IFACE;
     int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;
@@ -5460,6 +7188,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--fal-proc-accept-test")) fal_proc_accept_test = 1;
         else if (!strcmp(argv[i], "--netacp-pool-selftest")) return run_netacp_pool_selftest();
         else if (!strcmp(argv[i], "--mail11-accept-test")) return run_mail11_accept_test();
+        else if (!strcmp(argv[i], "--netacp-broker-selftest")) return run_netacp_broker_selftest();
+        else if (!strcmp(argv[i], "--net-loopback-accept-test")) return run_net_loopback_accept_test();
         else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
         else if (!strcmp(argv[i], "--copy-accept-test")) copy_accept_test = 1;
         else if (!strcmp(argv[i], "--copy-transport-selftest")) copy_xport_test = 1;
@@ -5528,6 +7258,47 @@ int main(int argc, char **argv)
      * The persistent ENDNODE daemon serves by default (see cterm_server above). */
     if ((router_mode || set_host_to) && !cterm_server_explicit)
         cterm_server = 0;
+
+    /* OUTBOUND CLIENTS GO THROUGH NETACP (rd vms-dda). On VMS every logical link
+     * belongs to NETACP; a COPY / SET HOST image reaches one through $ASSIGN
+     * _NET: + $QIO, never by running a second NSP engine on the node's address
+     * (which would race NETACP for every inbound segment, and which the
+     * executive refuses the datalink anyway). So when a NETACP is serving, the
+     * client is brokered through it. With NO NETACP: on the booted runtime (the
+     * executive datalink backend) that is an honest failure -- DECnet is not
+     * started -- never a private engine; only the host/lab AF_PACKET instrument
+     * build still runs its own engine (it has no NETACP to defer to). */
+    if (copy_src || set_host_to) {
+        int nr = netacp_running();
+        if (nr == 1 && !ifname_explicit) {
+            if (copy_src)
+                return run_copy_net(copy_src, copy_dst, copy_password_fd);
+            struct netcli c;
+            if (netcli_assign(&c) != 0)
+                return 1;
+            struct dnet_executor ex;
+            const char *local = "0";
+            static char lname[DNET_NODEDB_NAMEMAX + 8];
+            if (dnet_store_load_executor(&ex) == DNET_STORE_OK) {
+                if (ex.name[0])
+                    snprintf(lname, sizeof lname, "%s", ex.name);
+                else if (ex.have_addr)
+                    snprintf(lname, sizeof lname, "%u.%u", dnet_area_of(ex.addr),
+                             dnet_node_of(ex.addr));
+                if (lname[0]) local = lname;
+            }
+            int r = run_set_host_net(&c, set_host_to, local);
+            sys$dassgn(c.chan);
+            return r;
+        }
+        if (strcmp(scs_datalink_backend(), "executive") == 0 && !ifname_explicit) {
+            fprintf(stderr, "DECNETD-E-NONETACP, no NETACP is serving logical links"
+                            " on this node (SS$_DEVOFFLINE): outbound DECnet links are"
+                            " brokered through NETACP -- start DECnet with"
+                            " @SYS$MANAGER:STARTNET\n");
+            return 1;
+        }
+    }
 
     /* RESOLVE THE DATALINK INTERFACE. When --iface was not given (the persistent
      * NETACP daemon STARTNET.COM starts with no argv), auto-detect the primary
@@ -5825,11 +7596,17 @@ int main(int argc, char **argv)
     uint8_t frame[DNET_FRAME_MAX];
     uint8_t rxbuf[DNET_FRAME_MAX];
 
-    /* The inbound sessions this node serves: a bounded pool (rd vms-6af1)
-     * of the executor's MAXIMUM LINKS (rd vms-f91). */
+    /* The logical links this node holds -- inbound sessions AND (rd vms-dda)
+     * outbound links local processes open through _NET: -- a bounded pool of
+     * the executor's MAXIMUM LINKS (rd vms-f91). */
     static struct netacp_slot slots[NETACP_POOL_CAP];
     memset(slots, 0, sizeof slots);
     uint16_t next_lla = 0x2100;
+    memcpy(g_netacp_self, eng.my_id, 6);
+    g_netacp_self_set = 1;
+    g_netacp_serve_inbound = cterm_server;
+    uint32_t breq_chan = 0;
+    int broker = router_mode ? 0 : netacp_broker_start(&breq_chan);
 
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
@@ -5880,9 +7657,18 @@ int main(int argc, char **argv)
          * the wire only briefly while sessions are live -- so a session's
          * output is not held back by an idle wire. */
         int live = 0;
-        if (cterm_server)
+        if (cterm_server || broker)
             live = netacp_service_sessions(slots, sock, ifindex, now);
-        (void)scs_datalink_set_recv_timeout_ms(sock, live ? 20 : 250);
+        if (broker)
+            netacp_broker_drain(breq_chan, slots, &eng, sock, ifindex, now, &next_lla);
+        netacp_loop_drain(slots, &eng, sock, ifindex, now, &next_lla);
+        int outbound = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            outbound += slots[i].used && slots[i].outbound;
+        /* A client polls its outbound link through the broker, so while one is
+         * live the wire wait is short; idle, it bounds request latency. */
+        (void)scs_datalink_set_recv_timeout_ms(sock, outbound ? 5 : live ? 20
+                                                     : broker ? 100 : 250);
 
         ssize_t n = scs_datalink_recv(sock, rxbuf, sizeof(rxbuf));
         if (n < 0) {
@@ -5902,9 +7688,10 @@ int main(int argc, char **argv)
          * logical-link address, or -- a Connect Initiate -- offered to a free
          * slot. UNTRUSTED, UNAUTHENTICATED bytes, parsed under bounds; every
          * refusal leaves the peer disconnected rather than admitted (INV-6). */
-        if (cterm_server && rc != 1)
+        if ((cterm_server || broker) && rc != 1)
             netacp_dispatch_frame(slots, &eng, sock, ifindex, rxbuf, (size_t)n,
                                   now, &next_lla);
+        netacp_loop_drain(slots, &eng, sock, ifindex, now, &next_lla);
 
         if (rc == 1) {
             uint16_t na = dnet_addr_from_id(from);
@@ -5925,6 +7712,8 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
         netacp_slot_end(&slots[i], sock, ifindex, monotonic_sec(), "NETACP shutdown");
+    if (broker)
+        netacp_broker_stop(breq_chan);
 
     log_ts(stdout);
     printf(" DECNETD-I-STOPPING, shutting down circuit %s\n", eng.circuit);

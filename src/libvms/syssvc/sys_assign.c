@@ -47,6 +47,9 @@
 #include "vms/pcb.h"
 #include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
+
+/* sys_qio.c: release a _NET: channel's logical link + reply mailbox (vms-dda). */
+extern void vms$$net_chan_release(uint16_t chan);
 #include "ovmx_console.h"   /* vms-948: single OPA0:/TT: -> console resolver */
 #include "ovmx_layout.h"    /* vms-9f5: SYSDISK_DEVICE -- the native boot unit */
 
@@ -798,6 +801,12 @@ uint32_t sys$dassgn(uint16_t chan_arg) {
 
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_IVCHAN;
+
+    /* rd vms-dda: $DASSGN of a _NET: channel disconnects a logical link still
+     * open on it (through NETACP, as on VMS) and returns its reply mailbox --
+     * done before chan_lock is taken, since it waits on NETACP's answer. */
+    if (pcb->channels[chan].in_use && (pcb->channels[chan].flags & PCB_CHAN_NET))
+        vms$$net_chan_release(chan);
 
     pthread_mutex_lock(&pcb->chan_lock);
 

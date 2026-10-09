@@ -36,12 +36,20 @@
  * descriptor). Generous caps with a NUL. */
 #define DNET_NCB_MAXNODE  16
 #define DNET_NCB_MAXTASK  16
+/* Access-control strings (DNA Session Control RQSTRID / PASSWRD / ACCOUNT are
+ * counted fields of at most 39 bytes). */
+#define DNET_NCB_MAXACC   39
 
 struct dnet_ncb {
     char     node[DNET_NCB_MAXNODE + 1];  /* target node NAME or "area.node" literal */
     char     task[DNET_NCB_MAXTASK + 1];  /* named task/object (is_named == 1)       */
     unsigned object;                       /* object NUMBER (is_named == 0)           */
     int      is_named;                     /* 1 = named task (format 1), 0 = number   */
+    /* Optional access control, NODE"user password account"::  (rd vms-dda). */
+    int      has_access;
+    char     user[DNET_NCB_MAXACC + 1];
+    char     password[DNET_NCB_MAXACC + 1];
+    char     account[DNET_NCB_MAXACC + 1];
 };
 
 /*
@@ -49,10 +57,18 @@ struct dnet_ncb {
  * DNET_NCB_EINVAL / ETRUNC (no "::", empty node/object) / EBADLEN (a field over
  * its bound). Never reads past ncb[len-1]; *out is zeroed first.
  *
+ * Node-spec grammar (before "::"):
+ *   <node>                           -> no access control
+ *   <node>"<user> [<password> [<account>]]"
+ *                                    -> access control (has_access = 1), the
+ *                                       quoted string split on blanks
+ *
  * Object-spec grammar (inside the optional quotes after "::"):
  *   TASK=<name> | 0=<name>   -> a NAMED task (is_named = 1, task = <name>)
  *   <digits>                 -> an object NUMBER (is_named = 0, object = value)
+ *   <digits>=                -> an object NUMBER, the documented "17=" form
  *   <name>                   -> a NAMED task (is_named = 1, task = <name>)
+ * An optional "/<connect data>" tail on the object spec is accepted and ignored.
  */
 int dnet_ncb_parse(const char *ncb, size_t len, struct dnet_ncb *out);
 

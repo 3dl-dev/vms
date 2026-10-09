@@ -1290,6 +1290,8 @@ long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid);
+long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
+uint64_t vms_kfe_image_privs(uint64_t dev, uint64_t ino);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);

@@ -247,6 +247,13 @@
  *        executive so the task needs no substrate privilege. 0 or <0.
  *        Linux: prepare_creds/commit_creds. NetBSD: proc_crmod_enter/leave.
  *
+ *   int  exec_file_identity(int fd, uint64_t *dev, uint64_t *ino)
+ *        the substrate's identity (file-system device + file number) of the
+ *        file the CURRENT task's descriptor `fd` refers to; 0, or <0 when `fd`
+ *        names no file. The known-file list (INSTALL, vms-7c64) keys on it.
+ *        Linux: fget + file_inode (s_dev, i_ino). NetBSD: fd_getfile +
+ *        VOP_GETATTR (va_fsid, va_fileid).
+ *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)
  *        the CURRENT host task's REAL user / group id, mapped into the host's

@@ -594,6 +594,8 @@ acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
 subst-uid-may-be-zero
 subst-become-ids-not-set
+kfe-add-cmkrnl-not-checked
+kfe-keyed-on-name
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -1543,6 +1545,44 @@ EOF
         why)          echo "exec_become_substrate_id() sets the task's real/effective/saved/fs uid to the executive-given one. The mutation leaves them alone, so a session LOGINOUT 'dropped' keeps running as substrate root. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 after BECOME the task's real and effective uid and gid are that uid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kfe-add-cmkrnl-not-checked)
+        case "$_f" in
+        facility)     echo "the executive known-file list: INSTALL ADD/REPLACE/REMOVE need CMKRNL (vms-7c64)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_kfe() decides CMKRNL on the caller's own PCB before any change to the known-file list. The mutation lets every caller through, so a process without CMKRNL installs an image (and could later give it privileges). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a process without CMKRNL: ADD is SS$_NOPRIV, FIND still reads the entry
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kfe-keyed-on-name)
+        case "$_f" in
+        facility)     echo "a known-file entry names its file by the substrate's identity of that file (vms-7c64)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "kfe_find() matches an entry on the device and file number the executive read from the caller's descriptor. The mutation matches any entry, so a file that was never installed is reported installed -- with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+another file is not installed: FIND is SS$_NOSUCHFILE
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8178,6 +8218,10 @@ apply_edit() {
         sed -i 's|^        uint32_t cand = OVMX_SUBST_UID_BASE + (vms_subst_next++ % OVMX_SUBST_UID_SPAN);$|        uint32_t cand = (vms_subst_next++ % OVMX_SUBST_UID_SPAN); /* NEGCTL subst-uid-may-be-zero */|' "$_file";;
     subst-become-ids-not-set)
         sed -i 's|^\tnew->uid = new->euid = new->suid = new->fsuid = u;$|\t(void)u; /* NEGCTL subst-become-ids-not-set */|' "$_file";;
+    kfe-add-cmkrnl-not-checked)
+        sed -i 's|^        st = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);$|        st = SS__NORMAL; (void)privs; /* NEGCTL kfe-add-cmkrnl-not-checked */|' "$_file";;
+    kfe-keyed-on-name)
+        sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& vms_kfe_tab\[i\].dev == dev \&\& vms_kfe_tab\[i\].ino == ino)$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)

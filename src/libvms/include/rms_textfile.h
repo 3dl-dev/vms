@@ -72,10 +72,4 @@ int rms_textfile_append_line(const char *vms_spec, const char *line);
  */
 int rms_textfile_write_line(const char *vms_spec, const char *line);
 
-/*
- * Delete a VMS file via RMS $ERASE (LIB$SPAWN's command scratch file, rd
- * vms-003b). Returns 0 on success, -1 on any failure (fail-honest).
- */
-int rms_textfile_delete(const char *vms_spec);
-
 #endif /* RMS_TEXTFILE_H */

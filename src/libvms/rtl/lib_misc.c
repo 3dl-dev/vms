@@ -305,13 +305,6 @@ static struct dsc$descriptor_s spawn_dsc(const char *s)
     return d;
 }
 
-/*
- * The command string's scratch command file (rd vms-003b): a VMS file, created
- * through RMS in SYS$SCRATCH as any VMS program would, named after this process
- * and a sequence number. The subprocess reads it as its SYS$INPUT through RMS
- * ($CREPRC hands the spec on; DCL reads a disk-file SYS$INPUT with RMS). No
- * host path is involved.
- */
 /* The spec with its device logical names translated in THIS process (SYS$SCRATCH
  * may be one of the caller's process logicals, which the subprocess does not
  * inherit), so the subprocess opens the same file. */
@@ -325,12 +318,31 @@ static const char *spawn_full_spec(const char *spec, char *out, size_t outsz)
     return out;
 }
 
-static int spawn_scratch_spec(char *buf, size_t bufsz)
+/*
+ * THE COMMAND STRING (rd vms-003b): on VMS, LIB$SPAWN hands the subprocess's CLI
+ * its command through a mailbox. Here too: a temporary mailbox holds the command
+ * record followed by an end-of-file, and its device name is the subprocess's
+ * SYS$INPUT ($CREPRC defines it; DCL reads a mailbox SYS$INPUT through $QIO).
+ * No file and no host path. The creator keeps its channel until the subprocess
+ * has been waited for (a NOWAIT spawn's channel lives until image exit), so the
+ * temporary mailbox outlives the subprocess's own $ASSIGN.
+ */
+static uint32_t spawn_cmd_mailbox(const char *cmd, uint32_t *chan, char *dev, size_t devsz)
 {
-    static unsigned seq = 0;
-    int n = snprintf(buf, bufsz, "SYS$SCRATCH:OVMX$SPAWN_%X_%u.COM",
-                     (unsigned)getpid(), seq++);
-    return (n > 0 && (size_t)n < bufsz) ? 0 : -1;
+    uint32_t unit = 0;
+    size_t n = strlen(cmd);
+    uint32_t st = vms_kif_mbx_create(0, (uint32_t)(n + 16), (uint32_t)(n + 64),
+                                     chan, &unit, dev, (uint32_t)devsz);
+    if (!(st & 1))
+        return st;
+    st = vms_kif_mbx_write(*chan, cmd, (uint32_t)n);
+    if (st & 1)
+        st = vms_kif_mbx_write_eof(*chan);
+    if (!(st & 1)) {
+        (void)vms_kif_dassgn((uint16_t)*chan);
+        *chan = 0;
+    }
+    return st;
 }
 
 /* Resolve a VMS filespec to a Linux path for open()/freopen(); if translation
@@ -439,19 +451,18 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
      * descriptors as literal paths (no filespec translation of its own), so
      * they are handed already-resolved paths.
      */
-    char cmd_tmp[256]  = "";
+    char cmd_dev[32]   = "";
+    uint32_t cmd_chan  = 0;
     char in_resv[1024] = "";
-    int  have_tmp      = 0;
     const char *in_str = NULL;
 
     if (have_cmd) {
         char cbuf[4096];
         dsc$strncpy(cbuf, command, sizeof(cbuf) - 1);
-        if (spawn_scratch_spec(cmd_tmp, sizeof(cmd_tmp)) != 0 ||
-            rms_textfile_write_line(cmd_tmp, cbuf) != 0)   /* one command, then EOF */
-            return RMS$_CRE;
-        have_tmp = 1;
-        in_str = spawn_full_spec(cmd_tmp, in_resv, sizeof(in_resv));
+        uint32_t mst = spawn_cmd_mailbox(cbuf, &cmd_chan, cmd_dev, sizeof(cmd_dev));
+        if (!(mst & 1))
+            return mst;
+        in_str = cmd_dev;
     } else if (have_in) {
         /*
          * SYS$INPUT FROM A FILE (vms-ccc). The file is read through RMS over the
@@ -515,7 +526,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
          * SS$_NOSUCHDEV with no executive). No fabricated success (INV-6):
          * lib$spawn no longer has an unregistered fork/exec to fall back to.
          */
-        if (have_tmp) (void)rms_textfile_delete(cmd_tmp);
+        if (cmd_chan) (void)vms_kif_dassgn((uint16_t)cmd_chan);
         return cst;
     }
 
@@ -570,10 +581,9 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         }
 
         /*
-         * The scratch SYS$INPUT file, if any, is NOT unlinked here: the
-         * subprocess may not have opened it yet, and lib$spawn has no exit hook
-         * to reclaim it. It is a genuine file left for the subprocess to
-         * consume.
+         * The command mailbox's channel, if any, is kept: the subprocess may
+         * not have assigned the mailbox yet, and a temporary mailbox goes away
+         * with its last channel. Image exit gives it back.
          */
         return SS$_NORMAL;
     }
@@ -611,7 +621,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         *status = SS$_NORMAL;
     }
 
-    if (have_tmp) (void)rms_textfile_delete(cmd_tmp);
+    if (cmd_chan) (void)vms_kif_dassgn((uint16_t)cmd_chan);
     return SS$_NORMAL;
 }
 

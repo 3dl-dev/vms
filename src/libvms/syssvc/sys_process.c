@@ -180,6 +180,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -939,6 +940,17 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
     return SS$_NORMAL;
 }
 
+/* A mailbox device name: MBAn: (with or without the leading underscore). */
+static int creprc_is_mailbox(const char *spec)
+{
+    const char *p = spec[0] == '_' ? spec + 1 : spec;
+    if (strncasecmp(p, "MBA", 3) != 0) return 0;
+    p += 3;
+    if (*p < '0' || *p > '9') return 0;
+    while (*p >= '0' && *p <= '9') p++;
+    return *p == ':' && p[1] == '\0';
+}
+
 /* SYS$INPUT of a new process named by a VMS disk file (rd vms-003b): the
  * process-permanent logical name the CLI opens through RMS. */
 static void creprc_define_sysinput(const char *spec)
@@ -1616,16 +1628,18 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     dup2(fd, STDIN_FILENO); close(fd);
                 } else {
                     /*
-                     * A VMS FILE (rd vms-003b): $CREPRC's input names the
-                     * process's SYS$INPUT, as on VMS. A disk file reachable
-                     * through RMS becomes the subprocess's SYS$INPUT logical
-                     * name (LNM$PROCESS, executive-resident), and the CLI reads
-                     * it through RMS (DCL, dcl_main.c) -- no host copy of the
-                     * file, no host path.
+                     * A VMS DEVICE OR FILE (rd vms-003b): $CREPRC's input names
+                     * the process's SYS$INPUT, as on VMS. A mailbox (MBAn:, the
+                     * command mailbox LIB$SPAWN hands over) or a disk file
+                     * reachable through RMS becomes the process's SYS$INPUT
+                     * logical name (LNM$PROCESS, executive-resident); the CLI
+                     * reads a mailbox through $QIO and a file through RMS
+                     * (DCL, dcl_mbx.c) -- no host copy, no host path.
                      */
-                    rms_textfile_t *tf = rms_textfile_open(path);
-                    if (tf) {
-                        rms_textfile_close(tf);
+                    rms_textfile_t *tf = NULL;
+                    if (creprc_is_mailbox(path) ||
+                        (tf = rms_textfile_open(path)) != NULL) {
+                        if (tf) rms_textfile_close(tf);
                         creprc_define_sysinput(path);
                     }
                     int nfd = open("/dev/null", O_RDONLY);

@@ -54,6 +54,7 @@
 #include <sys/mutex.h>
 #include <sys/queue.h>
 #include <sys/errno.h>
+#include <dev/cons.h>          /* cn_tab: which tty is the console */
 
 #include "vms_internal.h"
 #include "vms_tt.h"
@@ -74,10 +75,32 @@ struct vms_ttport_nb {
 	u_int             rx_head, rx_len;
 	kcondvar_t        owcv;          /* writers waiting for t_outq room */
 	TAILQ_ENTRY(vms_ttport_nb) pend;
+	char              devnam[VMS_DEVNAM_SIZE]; /* the unit it is bound to */
 };
+
+/*
+ * THE CONSOLE OUTLIVES ITS SESSIONS (the Linux port's rule, vms_tt_linux.c).
+ * The console's line can be closed under a live system -- a session whose
+ * controlling terminal it was ends and its vnode is revoked -- and re-opened
+ * by the next one. A VMS console does not hang up because a session ended, so
+ * the console's class-driver instance is PARKED across that close and the next
+ * open of the console line, or the next bind naming the unit, takes it back
+ * (vms_tt_set_port). Only the console: a pty's close is its far end leaving.
+ */
+static kmutex_t vtt_park_lock;
+static struct vms_tt *vtt_parked;              /* referenced */
+static char vtt_parked_devnam[VMS_DEVNAM_SIZE];
+
+static int
+vtt_is_console(struct tty *tp)
+{
+	return cn_tab != NULL && tp->t_dev == cn_tab->cn_dev;
+}
 
 static TAILQ_HEAD(, vms_ttport_nb) vtt_pending = TAILQ_HEAD_INITIALIZER(vtt_pending);
 static void *vtt_sih;
+static void vtt_reclaim(struct vms_ttport_nb *p);
+static struct vms_tt *vtt_unpark(const char *devnam, char *devnam_out);
 
 static void
 port_put(struct vms_ttport_nb *p)
@@ -305,10 +328,32 @@ vtt_open(dev_t dev __unused, struct tty *tp)
 	return 0;
 }
 
+/* The console line re-opened: take its parked binding back. Thread context
+ * (the open path runs at spltty; the take-back waits, so it runs from the
+ * first bind or read instead -- vtt_reclaim). */
+static void
+vtt_reclaim(struct vms_ttport_nb *p)
+{
+	struct vms_tt *tt;
+
+	if (!vtt_is_console(p->tp))
+		return;
+	mutex_enter(&p->bind_lock);
+	if (p->tt == NULL && (tt = vtt_unpark(NULL, p->devnam)) != NULL) {
+		atomic_inc_uint(&p->refs);   /* the class driver's hold */
+		p->tt = tt;
+		mutex_exit(&p->bind_lock);
+		vms_tt_set_port(tt, &vms_ttport_nb_ops, p);
+		return;
+	}
+	mutex_exit(&p->bind_lock);
+}
+
 static int
 vtt_close(struct tty *tp, int flag __unused)
 {
 	struct vms_ttport_nb *p;
+	struct vms_tt *tt;
 
 	mutex_spin_enter(&tty_lock);
 	p = tp->t_sc;
@@ -316,9 +361,54 @@ vtt_close(struct tty *tp, int flag __unused)
 	mutex_spin_exit(&tty_lock);
 	if (p == NULL)
 		return 0;
-	port_kill(p);
+	if (vtt_is_console(tp)) {
+		/* park the console's binding for its next open */
+		mutex_spin_enter(&tty_lock);
+		p->dead = 1;
+		p->rx_len = 0;
+		cv_broadcast(&p->owcv);
+		mutex_spin_exit(&tty_lock);
+		mutex_enter(&p->bind_lock);
+		tt = p->tt;
+		p->tt = NULL;
+		mutex_exit(&p->bind_lock);
+		if (tt != NULL) {
+			mutex_enter(&vtt_park_lock);
+			if (vtt_parked == NULL) {
+				vtt_parked = tt;
+				strlcpy(vtt_parked_devnam, p->devnam, sizeof(vtt_parked_devnam));
+				tt = NULL;
+			}
+			mutex_exit(&vtt_park_lock);
+			if (tt != NULL)
+				vms_tt_detach(tt);
+		}
+	} else {
+		port_kill(p);
+	}
 	port_put(p);                         /* the tty's */
 	return 0;
+}
+
+/* Take back the parked console binding (for unit `devnam`, or any if NULL). */
+static struct vms_tt *
+vtt_unpark(const char *devnam, char *devnam_out)
+{
+	struct vms_tt *tt = NULL;
+	const char *u;
+
+	mutex_enter(&vtt_park_lock);
+	if (vtt_parked != NULL) {
+		u = devnam != NULL && devnam[0] == '_' ? devnam + 1 : devnam;
+		if (u == NULL || strcasecmp(u, vtt_parked_devnam) == 0) {
+			tt = vtt_parked;
+			vtt_parked = NULL;
+			if (devnam_out != NULL)
+				strlcpy(devnam_out, vtt_parked_devnam, VMS_DEVNAM_SIZE);
+		}
+	}
+	mutex_exit(&vtt_park_lock);
+	return tt;
 }
 
 static int
@@ -387,6 +477,7 @@ vtt_read(struct tty *tp, struct uio *uio, int flag __unused)
 
 	if (p == NULL || nr == 0)
 		return 0;
+	vtt_reclaim(p);
 	tt = port_tt_get(p);
 	if (tt == NULL)
 		return EIO;                  /* no terminal row owns this line */
@@ -426,6 +517,7 @@ vtt_write(struct tty *tp, struct uio *uio, int flag __unused)
 
 	if (p == NULL)
 		return EIO;
+	vtt_reclaim(p);
 	tt = port_tt_get(p);
 	while (uio->uio_resid > 0 && rc == 0) {
 		k = uio->uio_resid < sizeof(chunk) ? uio->uio_resid : sizeof(chunk);
@@ -459,8 +551,12 @@ static int
 vtt_poll(struct tty *tp, int events, struct lwp *l)
 {
 	struct vms_ttport_nb *p = tp->t_sc;
-	struct vms_tt *tt = p != NULL ? port_tt_get(p) : NULL;
+	struct vms_tt *tt;
 	int revents = 0;
+
+	if (p != NULL)
+		vtt_reclaim(p);
+	tt = p != NULL ? port_tt_get(p) : NULL;
 
 	if (tt != NULL) {
 		if ((events & (POLLIN | POLLRDNORM)) && vms_tt_readable(tt))
@@ -495,6 +591,7 @@ vtt_ioctl(struct tty *tp, u_long cmd, void *data, int flag __unused,
 		return EPASSTHROUGH;         /* ttioctl: TIOCSLINED & co */
 	if (p == NULL)
 		return EIO;
+	vtt_reclaim(p);
 	/* _IOWR: `data' is the framework's kernel copy of the caller's struct */
 	a = (struct vms_tt_bind_args *)data;
 	a->devnam[sizeof(a->devnam) - 1] = '\0';
@@ -510,10 +607,13 @@ vtt_ioctl(struct tty *tp, u_long cmd, void *data, int flag __unused,
 		atomic_inc_uint(&p->refs);  /* the class driver's hold */
 		a->status = vms_tt_bind(vms_netbsd_proc_current(), a->devnam,
 		    &vms_ttport_nb_ops, p, &tt);
-		if (tt != NULL)
+		if (tt != NULL) {
 			p->tt = tt;
-		else
+			strlcpy(p->devnam, a->devnam[0] == '_' ? a->devnam + 1 : a->devnam,
+			    sizeof(p->devnam));
+		} else {
 			atomic_dec_uint(&p->refs);
+		}
 	}
 	mutex_exit(&p->bind_lock);
 	return 0;
@@ -537,6 +637,7 @@ vms_tt_netbsd_init(void)
 {
 	int error;
 
+	mutex_init(&vtt_park_lock, MUTEX_DEFAULT, IPL_NONE);
 	vtt_sih = softint_establish(SOFTINT_SERIAL | SOFTINT_MPSAFE, vtt_softint, NULL);
 	if (vtt_sih == NULL)
 		return ENOMEM;
@@ -551,9 +652,14 @@ vms_tt_netbsd_init(void)
 void
 vms_tt_netbsd_fini(void)
 {
+	struct vms_tt *tt;
+
 	if (vtt_sih == NULL)
 		return;
+	if ((tt = vtt_unpark(NULL, NULL)) != NULL)
+		vms_tt_detach(tt);
 	(void)ttyldisc_detach(&vms_tt_disc);
 	softint_disestablish(vtt_sih);
 	vtt_sih = NULL;
+	mutex_destroy(&vtt_park_lock);
 }

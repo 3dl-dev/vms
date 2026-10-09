@@ -40,6 +40,8 @@
 #include <pthread.h>
 #include <time.h>
 #include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
 
 #include "vms_kif.h"
 
@@ -337,6 +339,34 @@ int main(void)
     close(s);
     (void)vms_kif_dassgn(chan);
     (void)vms_kif_terminal_delete(devnam);
+
+    /* ---- the console outlives its sessions ----
+     * On Linux a session leader whose controlling terminal is the console
+     * hangs the console up when it exits, and the console's line discipline is
+     * closed and re-opened. OPA0: must stay bound through that, as a VMS
+     * console does (STARTUP binds it once, at boot). */
+    {
+        int cfd = open("/dev/console", O_RDWR | O_NOCTTY);
+        uint32_t ast = cfd >= 0 ? vms_kif_tt_attach(cfd, "OPA0:") : 0;
+        pid_t c;
+
+        CHECK(ast == SS_NORMAL || ast == SS_DEVALLOC, "the console is attached to OPA0: (as STARTUP attaches it)");
+        c = fork();
+        if (c == 0) {
+            int fd;
+            setsid();
+            fd = open("/dev/console", O_RDWR);
+            (void)ioctl(fd, TIOCSCTTY, 1);
+            _exit(0);                       /* a session on the console ends */
+        }
+        waitpid(c, NULL, 0);
+        msleep(300);
+        state = 0;
+        st = vms_kif_tt_sense("OPA0:", &state);
+        /* negctl: tt-console-hangup-unbinds */
+        CHECK((st & 1) && (state & VMS_TT_SENSE_BOUND),
+              "OPA0: is still bound after a session whose controlling terminal it was ends (console hangup)");
+    }
 
     printf("=== test_kmod_tt: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

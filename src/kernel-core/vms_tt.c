@@ -52,6 +52,8 @@ struct vms_tt {
 	struct vms_device *dev;
 	const struct vms_tt_port_ops *ops;
 	void *port;
+	uint32_t port_busy;        /* port ops in flight (vms_tt_set_port waits) */
+	uint32_t port_gen;         /* bumped by every vms_tt_set_port */
 	int refs;                  /* the attach + every caller in vms_tt_read */
 	int detached;
 	int passall;
@@ -86,6 +88,42 @@ struct vms_tt {
 };
 
 /* ------------------------------------------------------------------ */
+
+/*
+ * PORT OPS ARE BRACKETED. The port behind an instance can be REPLACED while it
+ * lives (vms_tt_set_port: the Linux console's line discipline is re-opened when
+ * a session leader exits). Every port op is called between tt_port_enter() and
+ * tt_port_exit(), which pin the (ops, port) pair for the call; the swap waits
+ * until no call is in flight. Never called with tt->lock held.
+ */
+struct tt_portref {
+	const struct vms_tt_port_ops *ops;
+	void *port;
+	uint32_t gen;
+};
+
+static int tt_port_enter(struct vms_tt *tt, struct tt_portref *pr)
+{
+	exec_lock(&tt->lock);
+	if (tt->detached) {
+		exec_unlock(&tt->lock);
+		return 0;
+	}
+	tt->port_busy++;
+	pr->ops = tt->ops;
+	pr->port = tt->port;
+	pr->gen = tt->port_gen;
+	exec_unlock(&tt->lock);
+	return 1;
+}
+
+static void tt_port_exit(struct vms_tt *tt)
+{
+	exec_lock(&tt->lock);
+	if (--tt->port_busy == 0)
+		exec_cv_broadcast(&tt->cv);
+	exec_unlock(&tt->lock);
+}
 
 static uint64_t tt_devchar(struct vms_device *dev)
 {
@@ -126,8 +164,15 @@ static void tt_flush(struct vms_tt *tt)
 		exec_unlock(&tt->lock);
 		if (!n)
 			return;
-		if (tt->ops->xmit)
-			tt->ops->xmit(tt->port, buf, n);
+		{
+			struct tt_portref pr;
+
+			if (tt_port_enter(tt, &pr)) {
+				if (pr.ops->xmit)
+					pr.ops->xmit(pr.port, buf, n);
+				tt_port_exit(tt);
+			}
+		}
 	}
 }
 
@@ -524,12 +569,19 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 	exec_unlock(&tt->lock);
 
 	tt_flush(tt);
-	for (i = 0; i < nflow; i++)
-		if (tt->ops->flow)
-			tt->ops->flow(tt->port, flow[i] == TT_CTRL('S'));
-	for (i = 0; i < nintr; i++)
-		if (tt->ops->interrupt)
-			tt->ops->interrupt(tt->port, intr[i]);
+	if (nflow || nintr) {
+		struct tt_portref pr;
+
+		if (tt_port_enter(tt, &pr)) {
+			for (i = 0; i < nflow; i++)
+				if (pr.ops->flow)
+					pr.ops->flow(pr.port, flow[i] == TT_CTRL('S'));
+			for (i = 0; i < nintr; i++)
+				if (pr.ops->interrupt)
+					pr.ops->interrupt(pr.port, intr[i]);
+			tt_port_exit(tt);
+		}
+	}
 }
 
 int vms_tt_readable(struct vms_tt *tt)
@@ -728,16 +780,61 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 				chunk[k++] = CH_CR;
 			chunk[k++] = buf[i++];
 		}
-		if (tt->ops->write)
-			rc = tt->ops->write(tt->port, chunk, k);
-		else {
-			tt->ops->xmit(tt->port, chunk, k);
-			rc = 0;
+		for (;;) {
+			struct tt_portref pr;
+			int swapped;
+
+			if (!tt_port_enter(tt, &pr))
+				return -EIO;     /* the line went away */
+			if (pr.ops->write) {
+				rc = pr.ops->write(pr.port, chunk, k);
+			} else {
+				pr.ops->xmit(pr.port, chunk, k);
+				rc = 0;
+			}
+			tt_port_exit(tt);
+			/* the port was replaced under this write (its old line
+			 * re-opened): the chunk goes to the new one */
+			exec_lock(&tt->lock);
+			swapped = (rc == -EIO && tt->port_gen != pr.gen && !tt->detached);
+			exec_unlock(&tt->lock);
+			if (!swapped)
+				break;
 		}
 		if (rc)
 			return rc;
 	}
 	return 0;
+}
+
+/*
+ * vms_tt_set_port - the instance's line was re-opened under it: carry on with
+ * the new port. A VMS terminal unit does not hang up because one session on
+ * its line ended -- the Linux console's line discipline is closed and re-opened
+ * whenever a session leader whose controlling terminal it was exits
+ * (__tty_hangup), and OPA0: must survive that with its type-ahead, its
+ * outstanding reads and its binding intact. Waits until no op on the old port
+ * is in flight, then releases it (ops->release). Process context.
+ */
+void vms_tt_set_port(struct vms_tt *tt, const struct vms_tt_port_ops *ops, void *port)
+{
+	const struct vms_tt_port_ops *old_ops;
+	void *old;
+
+	exec_lock(&tt->lock);
+	while (tt->port_busy) {
+		int to = 0;
+		(void)exec_cv_wait_timeout(&tt->cv, &tt->lock, 50, &to);
+	}
+	old_ops = tt->ops;
+	old = tt->port;
+	tt->ops = ops;
+	tt->port = port;
+	tt->port_gen++;
+	exec_unlock(&tt->lock);
+	if (old_ops && old_ops->release)
+		old_ops->release(old);
+	tt_flush(tt);                     /* echo queued meanwhile */
 }
 
 /* ================================================================

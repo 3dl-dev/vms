@@ -48,6 +48,7 @@
 #include "vms_internal.h"
 #include "vms_ioctl.h"
 #include "vms_tt.h"
+#include "vms_prot.h"
 
 #define VMS_N_TT        N_DEVELOPMENT
 #define VMS_PORT_RING   8192
@@ -62,10 +63,12 @@
 struct vms_ttport {
 	struct tty_struct *tty;
 	struct vms_tt *tt;          /* NULL until VMS_TTIOC_BIND; under bind_lock */
+	char devnam[VMS_DEVNAM_SIZE]; /* the unit it is bound to */
 	struct mutex bind_lock;
 	refcount_t refs;
 	spinlock_t olock;
 	int dead;                   /* under olock */
+	int hungup;                 /* hangup came first: a console re-open follows */
 	u8 ring[VMS_PORT_RING];
 	u32 head, len;
 	wait_queue_head_t owq;      /* writers waiting for ring room */
@@ -90,6 +93,84 @@ static struct vms_tt *port_tt_get(struct vms_ttport *p)
 	if (tt)
 		vms_tt_get(tt);
 	mutex_unlock(&p->bind_lock);
+	return tt;
+}
+
+/*
+ * THE CONSOLE OUTLIVES ITS SESSIONS. When a session leader whose controlling
+ * terminal is the console exits, Linux hangs the console up and RE-OPENS its
+ * line discipline (__tty_hangup -> tty_ldisc_hangup(tty, reinit)): our close,
+ * then our open, on the same tty. A VMS terminal unit does not hang up because
+ * one session on it ended, so for a line that is not a pty the class-driver
+ * instance is PARKED across that close (still bound to its unit, its
+ * type-ahead and outstanding reads intact) and the next open of the same line
+ * -- or the next bind naming the unit -- takes it back (vms_tt_set_port).
+ * A pty's hangup is the far end going away: that ends the binding.
+ */
+#define VMS_TT_PARK 8
+static struct {
+	struct tty_driver *driver;
+	int index;
+	struct vms_tt *tt;          /* referenced */
+	char devnam[VMS_DEVNAM_SIZE];
+} vms_tt_parked[VMS_TT_PARK];
+static DEFINE_MUTEX(vms_tt_park_lock);
+
+static int port_is_pty(struct tty_struct *tty)
+{
+	return tty->driver->type == TTY_DRIVER_TYPE_PTY;
+}
+
+/* The unit name as the table keys it: no leading underscore. */
+static const char *port_unit(const char *devnam)
+{
+	return devnam[0] == '_' ? devnam + 1 : devnam;
+}
+
+/* Park `tt` (the attachment's reference moves into the lot). 0 or -ENOSPC. */
+static int port_park(struct tty_struct *tty, struct vms_tt *tt, const char *devnam)
+{
+	int i, rc = -ENOSPC;
+
+	mutex_lock(&vms_tt_park_lock);
+	for (i = 0; i < VMS_TT_PARK; i++) {
+		if (!vms_tt_parked[i].tt) {
+			vms_tt_parked[i].driver = tty->driver;
+			vms_tt_parked[i].index = tty->index;
+			vms_tt_parked[i].tt = tt;
+			strscpy(vms_tt_parked[i].devnam, port_unit(devnam), VMS_DEVNAM_SIZE);
+			rc = 0;
+			break;
+		}
+	}
+	mutex_unlock(&vms_tt_park_lock);
+	return rc;
+}
+
+/* Take back what was parked for this line (by_tty) or for unit `devnam`. */
+static struct vms_tt *port_unpark(struct tty_struct *tty, const char *devnam,
+				  char *devnam_out)
+{
+	struct vms_tt *tt = NULL;
+	int i;
+
+	mutex_lock(&vms_tt_park_lock);
+	for (i = 0; i < VMS_TT_PARK; i++) {
+		if (!vms_tt_parked[i].tt)
+			continue;
+		if ((!tty && !devnam) ||
+		    (tty && vms_tt_parked[i].driver == tty->driver &&
+		     vms_tt_parked[i].index == tty->index) ||
+		    (devnam && strncasecmp(vms_tt_parked[i].devnam, port_unit(devnam),
+					   VMS_DEVNAM_SIZE) == 0)) {
+			tt = vms_tt_parked[i].tt;
+			if (devnam_out)
+				strscpy(devnam_out, vms_tt_parked[i].devnam, VMS_DEVNAM_SIZE);
+			vms_tt_parked[i].tt = NULL;
+			break;
+		}
+	}
+	mutex_unlock(&vms_tt_park_lock);
 	return tt;
 }
 
@@ -233,6 +314,17 @@ static int vms_ldisc_open(struct tty_struct *tty)
 	INIT_WORK(&p->tx_work, vms_ttport_tx_work);
 	tty->disc_data = p;
 	tty->receive_room = 65536;
+
+	/* a console line re-opened after a session hangup: same unit */
+	if (!port_is_pty(tty)) {
+		struct vms_tt *tt = port_unpark(tty, NULL, p->devnam);
+
+		if (tt) {
+			refcount_inc(&p->refs);          /* the class driver's hold */
+			p->tt = tt;
+			vms_tt_set_port(tt, &vms_ttport_ops, p);
+		}
+	}
 	return 0;
 }
 
@@ -254,8 +346,11 @@ static void port_kill(struct vms_ttport *p)
 	tt = p->tt;
 	p->tt = NULL;
 	mutex_unlock(&p->bind_lock);
-	if (tt)
-		vms_tt_detach(tt);           /* drops the class driver's hold
+	if (!tt)
+		return;
+	if (p->hungup && !port_is_pty(p->tty) && port_park(p->tty, tt, p->devnam) == 0)
+		return;                      /* the re-open takes it back */
+	vms_tt_detach(tt);                   /* drops the class driver's hold
 					      * on p via port_release, later */
 }
 
@@ -275,8 +370,15 @@ static void vms_ldisc_hangup(struct tty_struct *tty)
 {
 	struct vms_ttport *p = tty->disc_data;
 
-	if (p)
-		port_kill(p);
+	if (!p)
+		return;
+	if (!port_is_pty(tty)) {        /* a session ended, not the line */
+		/* the close (and re-open) that follows parks and recovers the
+		 * binding */
+		p->hungup = 1;
+		return;
+	}
+	port_kill(p);
 }
 
 static void port_receive(struct vms_ttport *p, struct tty_struct *tty,
@@ -467,10 +569,27 @@ static int vms_ldisc_ioctl(struct tty_struct *tty, unsigned int cmd,
 		refcount_inc(&p->refs);       /* the class driver's hold */
 		a.status = vms_tt_bind(vms_proc_find_or_err(), a.devnam,
 				       &vms_ttport_ops, p, &tt);
-		if (tt)
+		if (a.status == SS__DEVALLOC) {
+			/* the unit's port is parked (its line closed by a
+			 * session hangup and not re-opened): the bind takes it
+			 * over -- with the same privilege bar */
+			struct vms_proc *proc = vms_proc_find_or_err();
+
+			if (proc && (vms_prot_require_priv(proc->cur_privs,
+							   VMS_PRV_M_CMKRNL) & 1)) {
+				tt = port_unpark(NULL, a.devnam, NULL);
+				if (tt) {
+					vms_tt_set_port(tt, &vms_ttport_ops, p);
+					a.status = SS__NORMAL;
+				}
+			}
+		}
+		if (tt) {
 			p->tt = tt;
-		else
+			strscpy(p->devnam, a.devnam, VMS_DEVNAM_SIZE);
+		} else {
 			refcount_dec(&p->refs);
+		}
 	}
 	mutex_unlock(&p->bind_lock);
 	if (copy_to_user((void __user *)arg, &a, sizeof(a)))
@@ -506,5 +625,9 @@ int vms_tt_linux_init(void)
 
 void vms_tt_linux_exit(void)
 {
+	struct vms_tt *tt;
+
+	while ((tt = port_unpark(NULL, NULL, NULL)) != NULL)
+		vms_tt_detach(tt);
 	tty_unregister_ldisc(&vms_tt_ldisc);
 }

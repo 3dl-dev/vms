@@ -104,6 +104,10 @@ uint32_t vms_tt_bind(struct vms_proc *proc, const char *devnam,
                      const struct vms_tt_port_ops *ops, void *port,
                      struct vms_tt **out);
 void vms_tt_detach(struct vms_tt *tt);
+/* The instance's line was re-opened (a console line discipline closed and
+ * re-opened by a session hangup): continue on the new port, releasing the
+ * old. The binding, type-ahead and outstanding reads survive. */
+void vms_tt_set_port(struct vms_tt *tt, const struct vms_tt_port_ops *ops, void *port);
 
 /* Port -> class: received bytes (any context the port's receive runs in). */
 void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n);

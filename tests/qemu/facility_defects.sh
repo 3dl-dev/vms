@@ -623,7 +623,8 @@ rms-dirfind-exact-version-ignored
 getlki-grantcount-not-counted
 tt-typeahead-echoed-on-receipt
 tt-bind-privilege-ignored
-tt-port-input-dropped"
+tt-port-input-dropped
+tt-console-hangup-unbinds"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2098,6 +2099,25 @@ read(2) echoes as it consumes, like any driver read
 EOF
                       ;;
         knock_on_why)  echo "one dropped receive path, every typed-input observation: each case that types at the line and expects a read to consume it sees its read time out with nothing (and no consumption echo). The cases that type nothing -- the bind, the NOECHO sense, the empty timed read, ^X (which expects an empty read anyway), the \$QIO write, the portless unit and the hangup -- stay green.";;
+        esac;;
+
+    tt-console-hangup-unbinds)
+        case "$_f" in
+        facility)     echo "the console outlives its sessions (vms_tt_linux.c, rd vms-f8c): a session-leader exit hangs the Linux console up and re-opens its line discipline; OPA0:'s binding is parked across it and taken back";;
+        targets)      echo "kernel/vms_tt_linux.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ldisc_hangup() treats a hangup of a line that is not a pty as one SESSION ending, not the line (\`if (!port_is_pty(tty)) {        /* a session ended, not the line */\` -- mark hungup, let the close park the binding for the re-open). The mutation drops that branch, so a console hangup kills the port like a pty's far end going away: OPA0: is left unbound after any session leader on the console exits -- every later read on it answers SS\$_DEVOFFLINE, the login loop the first boot of this driver showed. Non-fatal: the ordinary detach path runs. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+OPA0: is still bound after a session whose controlling terminal it was ends (console hangup)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: it is the suite's last observation, and nothing before it hangs the console up.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -8133,6 +8153,9 @@ apply_edit() {
         # Unique text: the error-free run in port_receive() (the flagged-run
         # calls pass cp + start).
         sed -i 's|^\t\tvms_tt_receive(tt, cp, count);$|\t\t(void)cp; /* NEGCTL tt-port-input-dropped */|' "$_file";;
+    tt-console-hangup-unbinds)
+        # Unique text: vms_ldisc_hangup()'s not-a-pty branch.
+        sed -i 's|^\tif (!port_is_pty(tty)) {        /\* a session ended, not the line \*/$|\tif (0) { /* NEGCTL tt-console-hangup-unbinds */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

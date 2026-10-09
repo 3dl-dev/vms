@@ -420,8 +420,20 @@ exec_task_alive(exec_task_ref_t *ref)
 	 * read-side lock (rcu_read_lock around pid_task); match it here so
 	 * liveness is reliable and INV-DRIFT holds (thin-backend specifics only).
 	 */
+	/*
+	 * proc_find_raw, NOT proc_find (rd vms-b869): proc_find() only returns
+	 * SACTIVE/SSTOP processes, so a ZOMBIE -- exited, not yet waited for --
+	 * read as dead and vms_proc_reap_dead() freed its row at once. The Linux
+	 * backend's pid_task() still finds a zombie (the task lives until its
+	 * parent reaps it), and DCL's RUN depends on exactly that: it waits with
+	 * WNOWAIT and reads the child's recorded $EXIT condition by pid BEFORE
+	 * reaping it. With proc_find() the row was already gone, GETEXIT said
+	 * NONEXPR, and $STATUS fell back to the POSIX exit code (the VAX
+	 * status-gate saw SYS$EXIT(%X0FEDC0A9) come out %X00000001). A process
+	 * stays alive here until it is reaped, as on Linux (INV-DRIFT).
+	 */
 	mutex_enter(&proc_lock);
-	alive = (proc_find(ref->pid) != NULL);
+	alive = (proc_find_raw(ref->pid) != NULL);
 	mutex_exit(&proc_lock);
 	return alive;
 }

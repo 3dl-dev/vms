@@ -32,8 +32,18 @@
 #                 defects under a 50m budget, so a full graph rebuild per defect
 #                 would risk the timeout, and only ovmx_mmk_sp.c (in MMK) is ever
 #                 mutated — the shareables never change per-defect.
+#                 Or "graph-only" — build the 7-producer graph and NOTHING else,
+#                 for a consumer other than MMK that needs genuine .vms$sv
+#                 producers to LINK.EXE --use (rd vms-06c: EVACWL.EXE must be
+#                 linked, and mastered onto the ODS-2 system volume, EARLIER in
+#                 tests/qemu/Dockerfile than the initramfs stage that builds the
+#                 graph for MMK -- IMGACT reads a main image over the ACP with no
+#                 POSIX fallback, so an image staged only in the initramfs
+#                 activates to %IMGACT-F-IMGNOTFND). It stays one recipe here
+#                 rather than a second copy of the build_producer_graph env
+#                 setup at the call site.
 #   LINK.EXE      required in mmk-only mode (mk_mmk.sh needs the linker); ignored
-#                 in full mode (build_producer_graph builds its own).
+#                 in full / graph-only mode (build_producer_graph builds its own).
 # Env:  CC (default musl-gcc), ARCH (default from uname -m), WORK (default
 #       /tmp/mmk-staged), LIBC / LIBGCC (auto-detected for the musl toolchain).
 set -e
@@ -89,6 +99,18 @@ LIBGCC=${LIBGCC:-$($CC -print-libgcc-file-name)}
 [ -f "$LIBGCC" ] || { echo "FATAL: no libgcc.a at $LIBGCC" >&2; exit 1; }
 export LIBC LIBGCC
 
+if [ "$MODE" = "graph-only" ]; then
+    echo "--- mk_mmk_native_staged[graph-only]: building the 7-producer graph, no MMK (ARCH=$ARCH, CC=$CC) ---"
+    . "$IMGACT_DIR/test/lib_build_graph.sh"
+    build_producer_graph
+    for s in DECC LIBVMS LIBVMSPROCESS LIBVMSFS LIBVMSLNM LIBVMSRMS LIBVMSSYS; do
+        [ -f "$SYSLIB/$s\$SHR.EXE" ] || {
+            echo "FATAL: graph-only mode did not produce $SYSLIB/$s\$SHR.EXE" >&2; exit 1; }
+    done
+    echo "--- mk_mmk_native_staged[graph-only]: 7 shareables + IMGACT.EXE staged under $SYSEXE / $SYSLIB ---"
+    exit 0
+fi
+
 if [ "$MODE" = "full" ]; then
     echo "--- mk_mmk_native_staged[full]: building the 7-producer graph + activated MMK.EXE (ARCH=$ARCH, CC=$CC) ---"
     # build_producer_graph builds IMGACT.EXE + LINK.EXE + DECC$SHR + the six OVMX
@@ -107,7 +129,7 @@ elif [ "$MODE" = "mmk-only" ]; then
     echo "--- mk_mmk_native_staged[mmk-only]: relinking MMK.EXE only, reusing the staged 7 shareables (ARCH=$ARCH) ---"
     MK_LINK="$LINK_EXE_ARG"
 else
-    echo "FATAL: unknown MODE '$MODE' (expected full|mmk-only)" >&2; exit 2
+    echo "FATAL: unknown MODE '$MODE' (expected full|mmk-only|graph-only)" >&2; exit 2
 fi
 
 echo "--- mk_mmk_native_staged: linking MMK.EXE (mk_mmk.sh: 19 objects, LINK.EXE --executable --use {7 shareables}) ---"

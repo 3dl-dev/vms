@@ -7,10 +7,12 @@
  * shareables}) TWICE, as two genuinely separate processes activated through
  * IMGACT.EXE exactly as a customer's compiled program would be: this harness
  * does not call sys$enq/RMS itself to emulate the workload, it execs the real
- * image. tests/qemu/Dockerfile builds that image straight into the guest's
- * SYS$SYSTEM (/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE), in the same step that
- * stages the shareables it binds to -- .vms$imp binds by symbol-vector index,
- * so the image and the producers it activates against are built together.
+ * image. tests/qemu/Dockerfile builds it into build-static/native, the
+ * directory BOTH staging globs read: the ODS-2 system volume (so the executive
+ * ACP can read the image's section headers -- IMGACT has no POSIX fallback for
+ * a main image when /dev/vms is present) and the initramfs SYS$SYSTEM below
+ * (so the host kernel can execve it). An image staged in only one of the two
+ * execs fine and then dies %IMGACT-F-IMGNOTFND.
  *
  * SETUP: this harness defines the EVAC$DATA logical (LNM$SYSTEM, which is
  * executive-resident and therefore visible to a distinct process, the same

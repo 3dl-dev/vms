@@ -281,6 +281,11 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     cp "/repo/tests/native-images/alpha/$_n.EXE" "$SYSEXE/$_n.EXE"
                 done
                 cp /repo/tests/native-images/alpha/HELLO.MAR "$SYSEXE/NOTIMG.EXE"
+                # The semantic-oracle probes LINKed on the lab node (same MACRO
+                # the goldens were captured from), run unchanged.
+                for _sp in /repo/tests/native-images/alpha/sp/SP_*.EXE; do
+                    [ -f "$_sp" ] && cp "$_sp" "$SYSEXE/$(basename "$_sp")"
+                done
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   NATIVE (vms-3b3f): HELLO/RETST/CSTDIO/MAIN3/MAIN4/MYSHRV2/NOTIMG -> SYS\$SYSTEM; SYS\$PUBLIC_VECTORS + LIBRTL + DECC\$SHR_EV56 + MYSHR + full producer graph -> SYS\$SHARE; NATIVE-proof SYSTARTUP staged"

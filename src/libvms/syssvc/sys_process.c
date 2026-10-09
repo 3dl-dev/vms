@@ -217,6 +217,7 @@
  * the terminal a session is bound to is named in VMS (OPA0:, and RTAn: when
  * vms-515 P2 lands), never as a substrate path. */
 #include "ovmx_console.h"
+#include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
 
 /*
  * sys$exit - Terminate process with a VMS status code.
@@ -307,12 +308,15 @@ uint32_t sys$exit(uint32_t code) {
 static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
 {
     if (linux_pid == (uint32_t)getpid()) {
-        struct rusage ru;
-        getrusage(RUSAGE_SELF, &ru);
-        *out = (uint32_t)(
-            (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
-            (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
-        return SS$_NORMAL;
+        /* User + system CPU of every thread of this process, the figure
+         * getrusage(RUSAGE_SELF) gives; clock_gettime is also a DEC C RTL
+         * entry point, so the OpenVMS-calling-standard build has it too. */
+        struct timespec cpu;
+        if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cpu) == 0) {
+            *out = (uint32_t)((uint64_t)cpu.tv_sec * 100 + (uint64_t)cpu.tv_nsec / 10000000);
+            return SS$_NORMAL;
+        }
+        /* else: measure it the way another process is measured, below */
     }
 
     char path[64];
@@ -1301,9 +1305,12 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     pid_t pid = fork();
     if (pid < 0) {
+        int why = errno;
         close(namefd[0]);
         close(namefd[1]);
-        return SS$_INSFMEM;
+        /* No host fork at all (the OpenVMS-calling-standard build,
+         * ovmx_host_absent.h): the service is not available there. */
+        return why == ENOSYS ? SS$_UNSUPPORTED : SS$_INSFMEM;
     }
 
     if (pid == 0) {

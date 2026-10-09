@@ -47,6 +47,7 @@
 #include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 #include "dcdef.h"
+#include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
 
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
@@ -414,7 +415,130 @@ void vms$$qio_cancel_chan(uint16_t chan)
     sigprocmask(SIG_SETMASK, &old, NULL);
 }
 
-#else  /* !__linux__: no POSIX interval timers/rt signals here -- the read stays synchronous */
+#elif OVMX_HOST_ABSENT
+/*
+ * The OpenVMS-calling-standard build (the OVMX/Alpha shareables a native VMS
+ * image calls; rd vms-3b3f): the same pending-read queue, polled every 5 ms
+ * from the $SETIMR interval timer's SIGALRM (sys_time.c, ovmx$$vt_poll)
+ * because this build has no POSIX timers or realtime signals.
+ */
+int ovmx$$vt_poll(void (*fn)(void));
+uint64_t ovmx$$vt_block(void);
+void ovmx$$vt_restore(uint64_t old);
+
+#define ASYNC_RD_MAX 16
+static struct async_rd {
+    int      in_use;
+    uint16_t chan;
+    uint32_t exec_chan;
+    void    *buf;
+    uint32_t bufsz;
+    struct _iosb *iosb;
+    uint32_t efn;
+    void   (*astadr)(uint32_t);
+    uint32_t astprm;
+} async_rd[ASYNC_RD_MAX];
+
+static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
+{
+    struct _iosb *iosb = r->iosb;
+    void (*ast)(uint32_t) = r->astadr;
+    uint32_t prm = r->astprm, efn = r->efn;
+    r->in_use = 0;
+    if ((st & 1) && actlen > r->bufsz) {          /* IO.MBX.READ.SHORT, vms-542 */
+        actlen = r->bufsz;
+        st = SS$_BUFFEROVF;
+    }
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)st;
+        iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
+        iosb->iosb$l_dev_depend = actlen;
+    }
+    if ((efn & 0xFFu) < 128)
+        (void)sys$setef(efn);
+    if (ast) {
+        if (sys$dclast(ast, prm, 3) & 1)
+            vms$$deliver_pending_asts();
+    }
+}
+
+static void async_rd_poll(void)
+{
+    int pending = 0;
+    for (int i = 0; i < ASYNC_RD_MAX; i++) {
+        struct async_rd *r = &async_rd[i];
+        if (!r->in_use)
+            continue;
+        uint32_t actlen = 0, sender = 0;
+        uint32_t st = vms_kif_mbx_read_ex(r->exec_chan, r->buf, r->bufsz, &actlen, 1,
+                                          &sender);
+        if (st == SS$_ENDOFFILE && sender == 0) {
+            pending = 1;
+            continue;
+        }
+        async_rd_complete(r, st, (st & 1) ? actlen : 0);
+    }
+    if (!pending)
+        (void)ovmx$$vt_poll(NULL);
+}
+
+static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
+                                       uint32_t p2, uint32_t efn,
+                                       void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint64_t old = ovmx$$vt_block();
+    int slot = -1;
+    for (int i = 0; i < ASYNC_RD_MAX; i++)
+        if (!async_rd[i].in_use) { slot = i; break; }
+    if (slot < 0) {
+        ovmx$$vt_restore(old);
+        return SS$_EXQUOTA;
+    }
+    struct async_rd *r = &async_rd[slot];
+    r->chan = chan;
+    r->exec_chan = vms$$chan_exec_chan(chan);
+    r->buf = p1;
+    r->bufsz = p2;
+    r->iosb = (struct _iosb *)iosb_ptr;
+    r->efn = efn;
+    r->astadr = astadr;
+    r->astprm = astprm;
+    if (r->iosb)
+        memset(r->iosb, 0, sizeof *r->iosb);       /* pending: status 0 */
+    if ((efn & 0xFFu) < 128)
+        (void)sys$clref(efn);
+    r->in_use = 1;
+    uint32_t actlen = 0, sender = 0;
+    uint32_t st = vms_kif_mbx_read_ex(r->exec_chan, p1, p2, &actlen, 1, &sender);
+    if (st != SS$_ENDOFFILE || sender != 0)
+        async_rd_complete(r, st, (st & 1) ? actlen : 0);
+    else if (!ovmx$$vt_poll(async_rd_poll)) {
+        r->in_use = 0;
+        ovmx$$vt_restore(old);
+        return SS$_INSFMEM;
+    }
+    ovmx$$vt_restore(old);
+    return SS$_NORMAL;
+}
+
+void vms$$qio_cancel_chan(uint16_t chan)
+{
+    uint64_t old = ovmx$$vt_block();
+    int pending = 0;
+    for (int i = 0; i < ASYNC_RD_MAX; i++) {
+        struct async_rd *r = &async_rd[i];
+        if (!r->in_use)
+            continue;
+        if (r->chan == chan)
+            async_rd_complete(r, SS$_ABORT, 0);
+        else
+            pending = 1;
+    }
+    if (!pending)
+        (void)ovmx$$vt_poll(NULL);
+    ovmx$$vt_restore(old);
+}
+#else  /* no POSIX interval timers/rt signals here -- the read stays synchronous */
 void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
 #endif /* __linux__ */
 
@@ -1313,7 +1437,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_mailbox(chan)) {
         uint32_t bf = func & IO$M_FCODE;
-#if defined(__linux__)
+#if defined(__linux__) || OVMX_HOST_ABSENT
         if ((bf == IO$_READVBLK || bf == IO$_READLBLK || bf == IO$_READPBLK) &&
             !(func & IO$M_NOW) && p1)
             return qio_mailbox_read_async(chan, iosb_ptr, p1, p2, efn,

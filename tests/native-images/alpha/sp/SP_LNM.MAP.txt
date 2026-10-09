@@ -1,0 +1,204 @@
+
+                                                                 9-OCT-2026 13:51        Linker A13-04                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+SP_LNM          V1                  36041 SYS$SYSROOT:[SYSMGR]SP_LNM.OBJ;1      9-OCT-2026 13:51  AMAC V5.0-120-5
+LIBRTL          X01-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      31-MAR-2010 02:04  Linker A13-04
+SYS$PUBLIC_VECTORS             
+                X-125                   0 [SYSLIB]SYS$PUBLIC_VECTORS.EXE;1     31-MAR-2010 02:03  Linker A13-04
+
+SYS$SYSROOT:[SYSMGR]SP_LNM.EXE;1                                 9-OCT-2026 13:51        Linker A13-04                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pglts   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    0     2    00010000          3   0 READ WRITE   NON-SHAREABLE ADDRESS DATA
+                   0    18    00020000          5   0 READ WRITE   COPY ON REF
+                   0    52    00030000         23   0 READ ONLY    EXECUTABLE
+                   0     1    00040000         75   0 READ WRITE   FIXUP VECTORS
+                 253    20    7FFF0000          0   0 READ WRITE   DEMAND ZERO  
+
+LIBRTL             3  1787    00000000-R        0   0 READ ONLY    EXECUTABLE    LIBRTL_001       LESS/EQUAL        1         1
+                   2   123    000E0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_002       LESS/EQUAL        1         1
+                   2    26    000F0000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1         1
+                   3   103    00100000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_004       LESS/EQUAL        1         1
+                   4     1  P-00110000-R        0   0 READ WRITE   COPY ON REF   LIBRTL_005       LESS/EQUAL        1         1
+                   2    20    00120000-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_006       LESS/EQUAL        1         1
+                   2    14    00130000-R        0   0 READ WRITE   FIXUP VECTORS LIBRTL_007       LESS/EQUAL        1         1
+
+SYS$PUBLIC_VECTORS             
+                   2    20    00000000-R        0   0 READ ONLY    EXECUTABLE    SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   1    64    00004000-R        0   0 READ WRITE   COPY ON REF   SYS$PUBLIC_VECTO EQUAL            51  16699012
+                   2     2    0000C000-R        0   0 READ WRITE   FIXUP VECTORS SYS$PUBLIC_VECTO EQUAL            51  16699012
+
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! R  - Relocatable   !
+                ! P  - Protected     !
+                +--------------------+
+
+SYS$SYSROOT:[SYSMGR]SP_LNM.EXE;1                                 9-OCT-2026 13:51        Linker A13-04                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+$LINKAGE                        00010000 000102AF 000002B0 (        688.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,NOEXE,NOWRT,NOVEC,  MOD 
+                SP_LNM          00010000 000102AF 000002B0 (        688.) OCTA  4
+
+SP_DATA                         00020000 00022314 00002315 (       8981.) LONG  2 NOPIC,CON,REL,LCL,NOSHR,NOEXE,  WRT,NOVEC,  MOD 
+                SP_LNM          00020000 00022314 00002315 (       8981.) LONG  2
+
+SP_CODE                         00030000 00036703 00006704 (      26372.) LONG  2 NOPIC,CON,REL,LCL,NOSHR,  EXE,NOWRT,NOVEC,  MOD 
+                SP_LNM          00030000 00036703 00006704 (      26372.) LONG  2
+
+. BLANK .                       00040000 00040000 00000000 (          0.) OCTA  4 NOPIC,CON,REL,LCL,NOSHR,  EXE,  WRT,NOVEC,  MOD 
+                SP_LNM          00040000 00040000 00000000 (          0.) OCTA  4
+
+SYS$SYSROOT:[SYSMGR]SP_LNM.EXE;1                                 9-OCT-2026 13:51        Linker A13-04                    Page    4
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol         Value             Defined By               Referenced By ...
+------         -----             ----------               -----------------
+GUARD_AST      000101F0-R        SP_LNM             
+LIB$PUT_OUTPUT 00000320-RX       LIBRTL                   SP_LNM             
+PR0            00010000-R        SP_LNM             
+PR1            00010050-R        SP_LNM             
+PR10           00010170-R        SP_LNM             
+PR11           00010190-R        SP_LNM             
+PR12           000101B0-R        SP_LNM             
+PR2            00010070-R        SP_LNM             
+PR3            00010090-R        SP_LNM             
+PR4            000100B0-R        SP_LNM             
+PR5            000100D0-R        SP_LNM             
+PR6            000100F0-R        SP_LNM             
+PR7            00010110-R        SP_LNM             
+PR8            00010130-R        SP_LNM             
+PR9            00010150-R        SP_LNM             
+START          00010220-R        SP_LNM             
+SUB_RESET      000101D0-R        SP_LNM             
+SYS$BINTIM     00000120-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$CANTIM     00000140-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$CRELNM     00000A00-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$DELLNM     00000A10-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$EXIT       000002F0-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$FAOL       00000320-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$IMGSTA     00000340-RX       SYS$PUBLIC_VECTORS 
+SYS$SETIMR     000004A0-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+SYS$TRNLNM     00000A20-RX       SYS$PUBLIC_VECTORS       SP_LNM             
+
+SYS$SYSROOT:[SYSMGR]SP_LNM.EXE;1                                 9-OCT-2026 13:51        Linker A13-04                    Page    5
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000120     RX-SYS$BINTIM    
+00000140     RX-SYS$CANTIM    
+000002F0     RX-SYS$EXIT      
+00000320     RX-LIB$PUT_OUTPUT  RX-SYS$FAOL      
+00000340     RX-SYS$IMGSTA    
+000004A0     RX-SYS$SETIMR    
+00000A00     RX-SYS$CRELNM    
+00000A10     RX-SYS$DELLNM    
+00000A20     RX-SYS$TRNLNM    
+00010000      R-PR0           
+00010050      R-PR1           
+00010070      R-PR2           
+00010090      R-PR3           
+000100B0      R-PR4           
+000100D0      R-PR5           
+000100F0      R-PR6           
+00010110      R-PR7           
+00010130      R-PR8           
+00010150      R-PR9           
+00010170      R-PR10          
+00010190      R-PR11          
+000101B0      R-PR12          
+000101D0      R-SUB_RESET     
+000101F0      R-GUARD_AST     
+00010220      R-START         
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! *  - Undefined     !
+                ! A  - Alias Name    !
+                ! I  - Internal Name !
+                ! U  - Universal     !
+                ! R  - Relocatable   !
+                ! X  - External      !
+                ! WK - Weak          !
+                +--------------------+
+
+SYS$SYSROOT:[SYSMGR]SP_LNM.EXE;1                                 9-OCT-2026 13:51        Linker A13-04                    Page    6
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00010000 0004FFFF 00040000 (262144. bytes, 512. pages)
+Stack size:                                             20. pages
+Image header virtual block limits:                       1.        2. (    2. blocks)
+Image binary virtual block limits:                       3.       75. (   73. blocks)
+Image name and identification:                    SP_LNM V1
+Number of files:                                         5.
+Number of modules:                                       3.
+Number of program sections:                              7.
+Number of global symbols:                              437.
+Number of cross references:                             35.
+Number of image sections:                               15.
+User transfer address:                            00010220
+Debugger transfer address:                        00000340
+Number of code references to shareable images:          10.
+Image type:                                       EXECUTABLE.
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]SP_LNM.MAP;1
+Estimated map length:                             76. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults   CPU Time        Elapsed Time
+----------------------                            -----------   --------        ------------
+    Command processing:                                    32   00:00:00.01     00:00:00.01
+    Pass 1:                                               106   00:00:00.09     00:00:00.08
+    Allocation/Relocation:                                 13   00:00:00.00     00:00:00.00
+    Pass 2:                                                13   00:00:00.04     00:00:00.03
+    Map data after object module synopsis:                  3   00:00:00.01     00:00:00.01
+    Symbol table output:                                    0   00:00:00.00     00:00:00.00
+Total run values:                                         167   00:00:00.15     00:00:00.15
+
+Using a working set limited to 6496 pages and 688 pages of data storage (excluding image)
+
+Total number object records read (both passes):   193
+    of which 0 were in libraries and 0 were DEBUG data records containing 0 bytes
+
+Number of modules extracted explicitly             = 0
+    with 0 extracted to resolve undefined symbols
+
+9 library searches were for symbols not in the library searched
+
+A total of 0 global symbol table records was written
+
+LINK/MAP=SP_LNM.MAP/FULL/CROSS SP_LNM

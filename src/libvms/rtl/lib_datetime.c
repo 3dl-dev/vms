@@ -12,6 +12,7 @@
 #include <time.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include "ovmx_utc.h"   /* ovmx_timegm: no C RTL timegm on OpenVMS */
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
@@ -463,7 +464,7 @@ uint32_t lib$cvt_vectim(const uint16_t timvec[7], void *resultant_time) {
     tm_val.tm_min  = min;
     tm_val.tm_sec  = sec;
 
-    time_t t = timegm(&tm_val);
+    time_t t = ovmx_timegm(&tm_val);
     if (t == (time_t)-1) return LIB$_INVARG;
 
     uint64_t vmstime = (uint64_t)t * 10000000ULL
@@ -640,7 +641,7 @@ uint32_t lib$convert_date_string(const struct dsc$descriptor_s *input,
     at.tm_hour = hour;
     at.tm_min  = minute;
     at.tm_sec  = sec;
-    time_t t = timegm(&at);
+    time_t t = ovmx_timegm(&at);
     if (t == (time_t)-1) return LIB$_INVARG;
 
     *out_time = (uint64_t)t * 10000000ULL

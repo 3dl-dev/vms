@@ -2107,7 +2107,33 @@ EOF
     log "step 3: BOOT A -- images LINKed on real OpenVMS Alpha, unchanged, on the REAL executive"
     run_boot_a
     grep -aE "NATIVE-PROOF:|OVMX-NATIVE|OVMX-SEAM:|%DCL-|-CLI-|%IMGACT|-IMGACT|-SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
-    if assert_native "$WORK/modgpA.log"; then
+    # The semantic-oracle probes LINKed on the lab node: each family's
+    # transcript, cut from the console between its SEMPROBE markers, against
+    # the golden that same image printed on OpenVMS Alpha V8.4, under the
+    # native ratchet docs/oracle/semantics/known-diff-native-alpha.txt.
+    _spfams=$(ls "$REPO"/tests/native-images/alpha/sp/SP_*.EXE 2>/dev/null \
+                | sed 's#.*/SP_##; s#\.EXE$##' | tr 'A-Z' 'a-z' | paste -sd, -)
+    _spok=1
+    if [ -n "$_spfams" ]; then
+      for _f in $(echo "$_spfams" | tr , ' '); do
+        _u=$(echo "$_f" | tr 'a-z' 'A-Z')
+        grep -aq "^\$ RUN SYS\$SYSTEM:SP_$_u\$" "$REPO/tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM" \
+          || { echo "  native: SYSTARTUP does not RUN SP_$_u (tests/native-images/alpha/sp has it)" >&2; _spok=0; }
+      done
+      _td=$(mktemp -d)
+      for _f in $(echo "$_spfams" | tr , ' '); do
+        tr -d '\r' < "$WORK/modgpA.log" | awk -v f="$_f" '
+          $0 == "=== SEMPROBE " f " BEGIN ===" { on = 1 }
+          on { print }
+          on && ($0 == "=== SEMPROBE " f " END ===") { exit }' > "$_td/$_f.txt"
+      done
+      python3 "$REPO/tools/oracle/semantic/semantic_diff.py" --selftest >/dev/null \
+        || { echo "  native: semantic_diff selftest failed" >&2; _spok=0; }
+      python3 "$REPO/tools/oracle/semantic/semantic_diff.py" "$_td" \
+          --known "$REPO/docs/oracle/semantics/known-diff-native-alpha.txt" --families "$_spfams" \
+        || _spok=0
+    fi
+    if [ "$_spok" = 1 ] && assert_native "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: HELLO.EXE, LINKed on real OpenVMS Alpha V8.4, ran unchanged; its SYS\$QIOW"
       echo "      and LIB\$PUT_OUTPUT calls reached OVMX through SYS\$PUBLIC_VECTORS/LIBRTL, and"

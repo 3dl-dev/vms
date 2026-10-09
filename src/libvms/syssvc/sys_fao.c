@@ -84,6 +84,7 @@ struct fao {
     int         idx, maxidx;  /* next parameter / one past the furthest used */
     uint64_t    lastnum;      /* the last number converted (!%S) */
     int         ovf;
+    int         vmsabi;       /* !AS descriptors are in the VMS forms (vms-3b3f) */
 };
 
 static uint64_t fao_arg(struct fao *f)
@@ -343,9 +344,34 @@ static uint32_t fao_directive(struct fao *f, const char **pc, const char *end)
         size_t n = 0;
         int af = 0;
         if (z == 'S') {
-            const struct dsc$descriptor_s *d =
-                (const struct dsc$descriptor_s *)(uintptr_t)fao_arg(f);
-            if (d && f->prm) { str = d->dsc$a_pointer; n = d->dsc$w_length; }
+            uintptr_t a = (uintptr_t)fao_arg(f);
+            if (a && f->prm && f->vmsabi) {
+                /* A caller in the VMS argument forms (an image LINKed on
+                 * OpenVMS, vms-3b3f): the 32-bit descriptor (length word,
+                 * type, class, longword address), or the 64-bit form
+                 * recognised by its MBO word 1 and MBMO longword -1. */
+                const unsigned char *b = (const unsigned char *)a;
+                uint16_t w0;
+                int32_t mbmo;
+                memcpy(&w0, b, 2);
+                memcpy(&mbmo, b + 4, 4);
+                if (w0 == 1 && mbmo == -1) {
+                    uint64_t l, pp;
+                    memcpy(&l, b + 8, 8);
+                    memcpy(&pp, b + 16, 8);
+                    n = (size_t)l;
+                    str = (const char *)(uintptr_t)pp;
+                } else {
+                    int32_t p32;
+                    memcpy(&p32, b + 4, 4);
+                    n = w0;
+                    str = (const char *)(intptr_t)p32;
+                }
+            } else if (a && f->prm) {
+                const struct dsc$descriptor_s *d = (const struct dsc$descriptor_s *)a;
+                str = d->dsc$a_pointer;
+                n = d->dsc$w_length;
+            }
         } else if (z == 'D' || z == 'F') {
             n = (size_t)(uint32_t)fao_arg(f);
             str = (const char *)(uintptr_t)fao_arg(f);
@@ -448,6 +474,31 @@ uint32_t sys$faol(
     f.cap = outbuf->dsc$w_length;
     uint32_t st = fao_run(&f, ctrstr->dsc$a_pointer,
                           ctrstr->dsc$a_pointer + ctrstr->dsc$w_length);
+    if (outlen)
+        *outlen = (uint16_t)f.len;
+    return st;
+}
+
+/*
+ * ovmx_fao_vmsabi - the $FAO engine for a caller in the VMS argument forms
+ * (vms-3b3f, SYS$FAO/SYS$FAOL in sys_vmsabi.c): the control string and the
+ * output buffer are given as plain address + length, the parameters as
+ * quadwords (a 32-bit caller's longwords sign-extended by the shim), and an
+ * !AS parameter names a VMS-form descriptor.
+ */
+uint32_t ovmx_fao_vmsabi(const char *ctr, unsigned ctrlen, uint16_t *outlen,
+                         char *out, unsigned outcap, const uint64_t *prm)
+{
+    static const uint64_t noprm[1] = { 0 };
+    if ((!ctr && ctrlen) || !out)
+        return SS$_BADPARAM;
+    struct fao f;
+    memset(&f, 0, sizeof f);
+    f.prm = prm ? prm : noprm;
+    f.vmsabi = 1;
+    f.out = out;
+    f.cap = outcap;
+    uint32_t st = fao_run(&f, ctr, ctr + ctrlen);
     if (outlen)
         *outlen = (uint16_t)f.len;
     return st;

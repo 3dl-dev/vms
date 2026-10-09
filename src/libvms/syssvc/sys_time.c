@@ -93,6 +93,20 @@
 #include "starlet.h"
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
 #include "efndef.h"     /* EFN$C_ENF */
+#include "ovmx_utc.h"   /* ovmx_timegm: no C RTL timegm on OpenVMS */
+
+/* The per-request host timers below are POSIX timers (timer_create), which the
+ * OpenVMS C RTL does not have, and their expiry runs a handler the kernel
+ * enters directly -- not through a procedure descriptor of the OpenVMS Alpha
+ * calling standard. So a build for that standard (the OVMX/Alpha shareables a
+ * native VMS image calls) queues its timer requests on ONE interval timer
+ * instead (vms_timer_* below), whose SIGALRM enters the handler through a
+ * small code thunk that loads the handler's procedure descriptor. */
+#if (defined(__alpha) || defined(__alpha__)) && (defined(__VMS) || defined(__vms) || defined(__VMS__))
+#define OVMX_HOST_POSIX_TIMERS 0
+#else
+#define OVMX_HOST_POSIX_TIMERS 1
+#endif
 
 /* Offset between VMS epoch (Nov 17 1858) and Unix epoch (Jan 1 1970) in 100ns units */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -290,7 +304,7 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf,
     tm_val.tm_min = min;
     tm_val.tm_sec = sec;
 
-    time_t t = timegm(&tm_val);
+    time_t t = ovmx_timegm(&tm_val);
     struct timespec ts = { .tv_sec = t, .tv_nsec = hun * 10000000L };
     *q = unix_to_vms_time(&ts);
 
@@ -299,6 +313,7 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf,
 
 /* ---- Timer management ---- */
 
+#if OVMX_HOST_POSIX_TIMERS
 #define MAX_TIMERS 32
 
 struct timer_entry {
@@ -347,6 +362,177 @@ static void init_timer_signals(void) {
     pthread_once(&timer_once, init_timer_signals_once);
 }
 
+#endif /* OVMX_HOST_POSIX_TIMERS */
+
+#if !OVMX_HOST_POSIX_TIMERS
+/*
+ * The OpenVMS-calling-standard timer queue (rd vms-a06).
+ *
+ * Every request is a slot with an absolute expiry; ITIMER_REAL is armed for
+ * the earliest one. On SIGALRM each expired slot sets its event flag (the
+ * executive's, through $SETEF) and calls its AST routine with the request id,
+ * then the timer is re-armed for the next. Slots change with SIGALRM blocked.
+ *
+ * Entering the handler. Linux/Alpha enters a signal handler with PC = R27 =
+ * the handler address, R16..R18 = signo, siginfo, ucontext, and R26 = the
+ * restorer. A procedure of the OpenVMS calling standard is named by its
+ * procedure descriptor and expects R27 = that descriptor and R25 = the
+ * argument information. So the address given to the kernel is a 4-instruction
+ * thunk followed by the descriptor's address:
+ *     ldq $27,16($27)   R27 = the handler's procedure descriptor
+ *     ldq $1,8($27)     its entry address (PDSC$Q_ENTRY)
+ *     lda $25,3($31)    three integer arguments
+ *     jmp $31,($1)
+ * and the restorer is   mov $30,$16 ; lda $0,351($31) ; callsys
+ * (rt_sigreturn). Encodings checked against alpha-dec-vms-as. The handler is
+ * installed with the raw rt_sigaction call so the restorer reaches the kernel
+ * (Linux/Alpha passes it as rt_sigaction's fifth argument).
+ */
+#include <sys/mman.h>
+
+#define VT_MAX 32
+#define VT_SIGALRM 14                  /* Linux/Alpha */
+#define VT_SA_SIGINFO 0x40u
+#define VT_SA_RESTART 0x2u
+#define VT_NR_RT_SIGACTION 352
+#define VT_NR_RT_SIGPROCMASK 353
+#define VT_NR_SETITIMER 362
+#define VT_SIG_BLOCK 1                 /* Linux/Alpha SIG_BLOCK */
+#define VT_SIG_SETMASK 3               /* Linux/Alpha SIG_SETMASK */
+
+static struct vt_slot {
+    int       active;
+    uint32_t  reqidt;
+    uint32_t  efn;
+    void    (*astadr)(uint32_t);
+    uint64_t  due_ns;                  /* CLOCK_REALTIME */
+} vt[VT_MAX];
+static int vt_installed;
+static void (*vt_poll_fn)(void);       /* a 5 ms poll ($QIO's pending mailbox reads) */
+#define VT_POLL_NS 5000000ULL
+
+static long long vt_syscall(long long n, long long a1, long long a2, long long a3,
+                            long long a4, long long a5)
+{
+    register long long r0  __asm__("$0")  = n;
+    register long long r16 __asm__("$16") = a1;
+    register long long r17 __asm__("$17") = a2;
+    register long long r18 __asm__("$18") = a3;
+    register long long r19 __asm__("$19") = a4;
+    register long long r20 __asm__("$20") = a5;
+    __asm__ __volatile__("callsys"
+                         : "+r"(r0), "+r"(r19)
+                         : "r"(r16), "r"(r17), "r"(r18), "r"(r20)
+                         : "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$21",
+                           "$22", "$23", "$24", "$25", "$27", "$28", "memory");
+    return r19 ? -r0 : r0;
+}
+
+static uint64_t vt_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static uint64_t vt_block(void)
+{
+    uint64_t set = 1ULL << (VT_SIGALRM - 1), old = 0;
+    vt_syscall(VT_NR_RT_SIGPROCMASK, VT_SIG_BLOCK, (long long)(uintptr_t)&set,
+               (long long)(uintptr_t)&old, 8, 0);
+    return old;
+}
+
+static void vt_restore(uint64_t old)
+{
+    vt_syscall(VT_NR_RT_SIGPROCMASK, VT_SIG_SETMASK, (long long)(uintptr_t)&old, 0, 8, 0);
+}
+
+/* Arm ITIMER_REAL for the earliest pending slot, or disarm it. */
+static void vt_arm(void)
+{
+    uint64_t due = 0, now = vt_now();
+    for (int i = 0; i < VT_MAX; i++)
+        if (vt[i].active && (!due || vt[i].due_ns < due))
+            due = vt[i].due_ns;
+    if (vt_poll_fn && (!due || now + VT_POLL_NS < due))
+        due = now + VT_POLL_NS;
+    long long it[4] = { 0, 0, 0, 0 };  /* it_interval {sec,usec}, it_value {sec,usec} */
+    if (due) {
+        uint64_t d = due > now ? due - now : 0;
+        uint64_t us = d / 1000ULL;
+        if (us == 0)
+            us = 1;
+        it[2] = (long long)(us / 1000000ULL);
+        it[3] = (long long)(us % 1000000ULL);
+    }
+    vt_syscall(VT_NR_SETITIMER, 0 /* ITIMER_REAL */, (long long)(uintptr_t)it, 0, 0, 0);
+}
+
+static void vt_alarm(int sig, void *si, void *uc)
+{
+    (void)sig; (void)si; (void)uc;
+    uint64_t now = vt_now();
+    for (int i = 0; i < VT_MAX; i++) {
+        if (!vt[i].active || vt[i].due_ns > now)
+            continue;
+        struct vt_slot s = vt[i];
+        vt[i].active = 0;
+        if ((s.efn & 0xFFu) != EFN$C_ENF)
+            (void)sys$setef(s.efn);
+        if (s.astadr)
+            s.astadr(s.reqidt);
+    }
+    if (vt_poll_fn)
+        vt_poll_fn();
+    vt_arm();
+}
+
+static int vt_install(void)
+{
+    if (vt_installed)
+        return 1;
+    uint32_t *code = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED)
+        return 0;
+    code[0] = 0xA77B0010u;            /* ldq $27,16($27) */
+    code[1] = 0xA43B0008u;            /* ldq $1,8($27)   */
+    code[2] = 0x233F0003u;            /* lda $25,3($31)  */
+    code[3] = 0x6BE10000u;            /* jmp $31,($1)    */
+    void (*h)(int, void *, void *) = vt_alarm;
+    memcpy(&code[4], &h, sizeof h);   /* the procedure descriptor's address */
+    code[8]  = 0x47FE0410u;           /* mov $30,$16     */
+    code[9]  = 0x201F015Fu;           /* lda $0,351($31) */
+    code[10] = 0x00000083u;           /* callsys         */
+    __asm__ __volatile__("call_pal 0x86" ::: "memory");   /* imb */
+    struct { unsigned long long handler, flags, mask; } ka = {
+        (unsigned long long)(uintptr_t)code, VT_SA_SIGINFO | VT_SA_RESTART, 0
+    };
+    if (vt_syscall(VT_NR_RT_SIGACTION, VT_SIGALRM, (long long)(uintptr_t)&ka, 0, 8,
+                   (long long)(uintptr_t)&code[8]) < 0)
+        return 0;
+    vt_installed = 1;
+    return 1;
+}
+
+/* For sys_qio.c: run fn every 5 ms from the same SIGALRM until called with
+ * NULL, and block / restore that signal around shared state. */
+int ovmx$$vt_poll(void (*fn)(void))
+{
+    if (fn && !vt_install())
+        return 0;
+    uint64_t old = vt_block();
+    vt_poll_fn = fn;
+    if (vt_installed)
+        vt_arm();
+    vt_restore(old);
+    return 1;
+}
+uint64_t ovmx$$vt_block(void) { return vt_block(); }
+void ovmx$$vt_restore(uint64_t old) { vt_restore(old); }
+#endif /* !OVMX_HOST_POSIX_TIMERS */
+
 /*
  * sys$setimr - Set timer request.
  *
@@ -362,6 +548,43 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     (void)flags;
 
     if (!daytim) return SS$_BADPARAM;
+#if !OVMX_HOST_POSIX_TIMERS
+    {
+        if ((efn & 0xFFu) != EFN$C_ENF) {
+            uint32_t cst = sys$clref(efn);
+            if (!(cst & 1))
+                return cst;
+        }
+        int64_t t = (int64_t)*daytim;
+        uint64_t due;
+        if (t < 0) {
+            due = vt_now() + (uint64_t)(-t) * 100ULL;
+        } else {
+            struct timespec abs_ts;
+            if (vms_to_unix_time((uint64_t)t, &abs_ts) < 0)
+                return SS$_BADPARAM;
+            due = (uint64_t)abs_ts.tv_sec * 1000000000ULL + (uint64_t)abs_ts.tv_nsec;
+        }
+        if (!vt_install())
+            return SS$_INSFMEM;
+        uint64_t old = vt_block();
+        int slot = -1;
+        for (int i = 0; i < VT_MAX; i++)
+            if (!vt[i].active) { slot = i; break; }
+        if (slot < 0) {
+            vt_restore(old);
+            return SS$_EXQUOTA;
+        }
+        vt[slot].reqidt = reqidt;
+        vt[slot].efn = efn;
+        vt[slot].astadr = astadr;
+        vt[slot].due_ns = due;
+        vt[slot].active = 1;
+        vt_arm();
+        vt_restore(old);
+        return SS$_NORMAL;
+    }
+#else
 
     /* The flag is CLEARED when the request is queued, and an efn that is not
      * one of this process's flags fails the request (SS$_UNASEFC for an
@@ -447,6 +670,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     pthread_mutex_unlock(&timer_mutex);
     return SS$_NORMAL;
+#endif /* OVMX_HOST_POSIX_TIMERS */
 }
 
 /*
@@ -458,6 +682,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
     (void)acmode;
 
+#if OVMX_HOST_POSIX_TIMERS
     pthread_mutex_lock(&timer_mutex);
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (timer_table[i].active &&
@@ -467,6 +692,17 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
         }
     }
     pthread_mutex_unlock(&timer_mutex);
+#else
+    {
+        uint64_t old = vt_block();
+        for (int i = 0; i < VT_MAX; i++)
+            if (vt[i].active && (reqidt == 0 || vt[i].reqidt == reqidt))
+                vt[i].active = 0;
+        if (vt_installed)
+            vt_arm();
+        vt_restore(old);
+    }
+#endif
 
     return SS$_NORMAL;
 }

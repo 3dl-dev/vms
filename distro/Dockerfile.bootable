@@ -540,7 +540,7 @@ RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 RUN set -e; R=/tmp/evrepo; mkdir -p $R/build-static/bin; \
     ln -s /src/src $R/src; ln -s /src/third-party $R/third-party; ln -s /src/tests $R/tests; \
     cp build-static/bin/TCC.EXE /link-native/SYSLIB/*.EXE $R/build-static/bin/; \
-    CC=gcc sh /src/tests/lab/ci6/mk_evacwl_native.sh $R; \
+    CC=musl-gcc sh /src/tests/lab/ci6/mk_evacwl_native.sh $R; \
     cp $R/build-static/native/EVACWL.EXE /link-native/SYSEXE/EVACWL.EXE
 
 # MMK.EXE (vms-fc2 / self-host spine #4): the descrip.mms build driver -- the

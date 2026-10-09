@@ -108,6 +108,7 @@ struct vms_tt {
 		uint8_t  acmode;
 		uint32_t mask;             /* OUTBAND: control characters */
 	} oob[3];                      /* VMS_TT_OOB_CTRLY / _CTRLC / _OUTBAND, minus 1 */
+	int      ctrlo;            /* CTRL/O: output is being discarded */
 	int      rd_astpend;       /* an AST for the reader's process is queued */
 	int      rd_disturbed;     /* output broke through the read: redisplay */
 };
@@ -185,12 +186,16 @@ static uint64_t tt_devchar(struct vms_device *dev)
 #define TT_POS_FRESH 0
 #define TT_POS_CR    1
 #define TT_POS_MID   2
+/* column 0 of an empty line the driver itself opened with an out-of-band
+ * notice (*OUTPUT ON*): the next new line costs nothing (OOB.CTRLO OW2:
+ * "*OUTPUT ON*<CR><LF>LINE 17") */
+#define TT_POS_CLEAN 3
 
 static void tt_track(struct vms_tt *tt, uint8_t c)
 {
 	switch (c) {
 	case CH_CR:
-		if (tt->pos != TT_POS_FRESH)
+		if (tt->pos != TT_POS_FRESH && tt->pos != TT_POS_CLEAN)
 			tt->pos = TT_POS_CR;
 		break;
 	case CH_LF:
@@ -228,6 +233,7 @@ static void tt_nl(struct vms_tt *tt)
 	switch (tt->pos) {
 	case TT_POS_FRESH: tt_out1(tt, CH_CR);       break;
 	case TT_POS_CR:    tt_out1(tt, CH_LF);       break;
+	case TT_POS_CLEAN:                           break;
 	default:           tt_out(tt, "\r\n", 2);    break;
 	}
 }
@@ -714,6 +720,26 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 				}
 				continue;
 			}
+			if (c == TT_CTRL('O')) {
+				/*
+				 * CTRL/O: discard output until the next CTRL/O or
+				 * read (VAX V7.3, OOB.CTRLO: "<LF>*OUTPUT OFF*<CR>
+				 * <LF>" while a procedure writes, "*OUTPUT ON*<CR>
+				 * <LF>" and the output resumes). At a read there is
+				 * no output to stop: it is not data and shows
+				 * nothing (OB.PROMPT O1, OOB.PROMPT O/O2).
+				 */
+				if (!tt->rd_active) {
+					tt->ctrlo = !tt->ctrlo;
+					tt_nl(tt);
+					if (tt->ctrlo)
+						tt_out(tt, "*OUTPUT OFF*\r\n", 14);
+					else
+						tt_out(tt, "*OUTPUT ON*\r\n", 13);
+					tt->pos = TT_POS_CLEAN;
+				}
+				continue;
+			}
 			if (c < 0x20 && tt->oob[VMS_TT_OOB_OUTBAND - 1].proc &&
 			    (tt->oob[VMS_TT_OOB_OUTBAND - 1].mask & (1u << c))) {
 				/* an out-of-band character: never data, never
@@ -893,6 +919,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		if (req->flags & VMS_TT_RD_TIMED)
 			tt->rd_deadline = exec_ticks_ms() + (uint64_t)req->timeout_s * 1000u;
 
+		tt->ctrlo = 0;               /* a read ends CTRL/O */
 		if (req->flags & VMS_TT_RD_PURGE)
 			tt_ta_purge(tt);
 		/* a record's owed line feed is paid by a read that echoes, before
@@ -990,6 +1017,8 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	size_t i = 0;
 
 	tt_flush(tt);                     /* echo queued before this write first */
+	if (READ_ONCE_TT(tt->ctrlo))
+		return 0;                    /* CTRL/O: the output is discarded */
 	while (i < n) {
 		size_t k = 0;
 		int rc;

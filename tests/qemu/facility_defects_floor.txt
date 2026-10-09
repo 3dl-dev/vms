@@ -507,4 +507,5 @@
 # Raised to 197 by the out-of-band set (rd vms-f0fb): tt-ctrly-not-shown,
 # tt-oob-ast-not-queued, tt-outband-ends-read, tt-breakthrough-no-redisplay,
 # tt-oob-survives-deassign (test_kmod_tt).
-197
+# Raised to 198 by tt-ctrlo-not-discarding (rd vms-f0fb; test_kmod_tt).
+198

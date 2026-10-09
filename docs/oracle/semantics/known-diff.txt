@@ -19,4 +19,3 @@ rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O chann
 rms RMS.OPEN  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0
 tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count and where the text lands relative to the next record differ
 tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT -- the written text shares the case line on OVMX (no record boundary), so the line is not read back
-privchk LCK.SYSTEM.SYSLCK  # vms-4c4: lock resources are not yet qualified by UIC group, so an LCK$M_SYSTEM lock and a group lock of one name are one resource

@@ -21,7 +21,7 @@ summary: >
   rejected fail-honest, RMS$_PLG). The C RTL file layer (stdio and descriptors) is an
   RMS client of these same $ entry points, not raw POSIX (vms-b90/9f8e). (Non-ACP/
   POSIX-defer handles hold no lock, honestly documented.)
-last_reviewed: 2026-09-14
+last_reviewed: 2026-10-08
 items:
   # --- Entry points: open/create/erase ---
   - {id: sys$open,       kind: routine, status: implemented, authenticity: real, vms: "Open an existing file", evidence: src/vmsrms/rms_core.c, notes: "executive-present path is $ASSIGN + IO$_ACCESS over the Files-11 ODS-2 ACP (rms_acp_open_file); filespec composes through executive directory/concealed logicals (vms-f05). rms_posix_open is the executive-absent fallback only (vms-5f0)"}
@@ -57,7 +57,7 @@ items:
   - {id: rab,     kind: struct, status: implemented, authenticity: real, vms: "Record Access Block", evidence: src/vmsrms/include/rms/rab.h, notes: "RAB$M_FDL bit defined but no FDL behind it"}
   - {id: nam,     kind: struct, status: implemented, authenticity: real, vms: "Name Block", evidence: src/vmsrms/include/rms/nam.h, notes: "full component pointers + CNCL_DEV/ROOT_DIR/SEARCH_LIST flags; NAM$W_FID/NAM$W_DID (appended -- OVMX's NAM is not the VMS byte layout) filled by $OPEN/$CREATE/$SEARCH, $PARSE fills NAM$W_DID and clears NAM$W_FID (vms-6e28)"}
   - {id: xab$key, kind: struct, status: implemented, authenticity: real, vms: "XAB — key definition", evidence: src/vmsrms/include/rms/xab.h}
-  - {id: xab$dat, kind: struct, status: implemented, authenticity: real, vms: "XAB — date/time", evidence: src/vmsrms/include/rms/xab.h, notes: "vms-5dd2: on the ACP path $DISPLAY fills it from the FH2 ident-area dates IO$_ACCESS returns (previously left untouched there). The ACP does not stamp dates at create yet, so OVMX-created files read zero dates (vms-ab49)"}
+  - {id: xab$dat, kind: struct, status: implemented, authenticity: real, vms: "XAB — date/time", evidence: src/vmsrms/include/rms/xab.h, notes: "vms-5dd2: on the ACP path $DISPLAY fills it from the FH2 ident-area dates IO$_ACCESS returns (previously left untouched there). The ACP stamps creation = revision date at create and, when a file accessed for write is deaccessed, bumps the revision count and date; the boot-image master stamps its mastering time (vms-263e). Expiration/backup dates stay zero, as on a VMS volume without retention."}
   - {id: xab$pro, kind: struct, status: implemented, authenticity: real, vms: "XAB — protection", evidence: src/vmsrms/include/rms/xab.h, notes: "vms-5dd2: on the ACP path $DISPLAY fills protection + owner UIC from the FH2 IO$_ACCESS returns (previously left untouched there)"}
   - {id: xab$fhc, kind: struct, status: implemented, authenticity: real, vms: "XAB — file header characteristics", evidence: src/vmsrms/include/rms/xab.h, notes: "struct XABFHC defined; $OPEN retains the ODS-2 FAT (rfm/rat/lrl/ebk/ffb/hbk/bkz/mrz/dxq/gbc/verlimit) on the handle and $DISPLAY fills it from the real header over the ACP (vms-dfa)"}
   - {id: xab$all, kind: struct, status: implemented, authenticity: real, vms: "XAB — allocation attributes", evidence: src/vmsrms/include/rms/xab.h, notes: "struct XABALL defined; $DISPLAY reports realized allocation (alq=hiblk, bkz, deq) from the ODS-2 FAT over the ACP; create-time input controls (aop/aln/loc) left 0 (honest) (vms-dfa)"}

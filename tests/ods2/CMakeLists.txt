@@ -261,3 +261,13 @@ if(BUILD_TOOLS)
         TIMEOUT 60
     )
 endif()
+
+# vms-263e: file header creation/revision dates and the revision count.
+add_executable(test_ods2_dates test_ods2_dates.c)
+target_include_directories(test_ods2_dates PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_dates PRIVATE ods2)
+add_test(NAME ods2_dates COMMAND test_ods2_dates)
+set_tests_properties(ods2_dates PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

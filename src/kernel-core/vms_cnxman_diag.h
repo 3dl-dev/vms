@@ -258,7 +258,7 @@ enum cnxman_diag_reason {
 /*
  * EMIT gates -- WHY a built body did or did not reach SCS. This enum is the
  * answer to E69's own question ("exactly where the MODEL/PARAMS emit is gated
- * off"), so each value names one concrete precondition of join_emit_cm().
+ * off"), so each value names one concrete precondition of join_emit_to_target().
  */
 enum cnxman_diag_gate {
 	CNXMAN_DIAG_G_SENT    = 0, /* SCS accepted the body                   */

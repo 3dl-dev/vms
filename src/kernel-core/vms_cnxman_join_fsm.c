@@ -353,13 +353,21 @@ static struct vms_csb *join_target_csb(struct cnxman_join *j)
 /* ==========================================================================
  * Sending
  *
- * ONE path out for every `VMS$VAXcluster` body: advance the dialogue counter,
- * stamp body[0:8] from the CSB, hand the 132 bytes to SCS. A build that failed
- * never reaches here, and a send that failed is COUNTED and named.
+ * TWO paths out, and they are not interchangeable (rd vms-e8b):
+ *
+ *   - an ORIGINATION is this node speaking, and it goes to the member this
+ *     join drives through, on the Con.ID this join holds;
+ *   - a RESPONSE goes back on the connection ITS REQUEST ARRIVED ON, stamped
+ *     from that connection's own dialogue counters.
+ *
+ * Either way: advance the dialogue counter, stamp body[0:8] from the CSB, hand
+ * the 132 bytes to SCS. A build that failed never reaches here, and a send that
+ * failed is COUNTED and named.
  * ========================================================================== */
 
 /*
- * WHICH precondition of an origination is unmet. Split out of join_emit_cm()'s
+ * WHICH precondition of an origination is unmet. Split out of
+ * join_emit_to_target()'s
  * one compound test because "the burst did not go out" has three completely
  * different diagnoses -- no CSB to stamp an envelope from, no OPEN
  * VMS$VAXcluster connection to put it on, or no send op bound at all -- and
@@ -408,7 +416,7 @@ static void join_body_kind(const struct cnxman_join *j, uint8_t *cat,
 			       cat, op);
 }
 
-static int join_emit_cm(struct cnxman_join *j, int is_response)
+static int join_emit_to_target(struct cnxman_join *j)
 {
 	struct vms_csb *csb = join_target_csb(j);
 	enum cnxman_diag_gate gate = join_emit_gate(j, csb);
@@ -432,15 +440,14 @@ static int join_emit_cm(struct cnxman_join *j, int is_response)
 	 * repeat or a decrement, and the refusal is counted below.
 	 */
 	/*
-	 * A response echoes the peer's pair; an ORIGINATION from this path is
-	 * always one of the identity records (op-0x14 MODEL, op-0x01 PARAMS,
-	 * op-0x02 CONFIG), and the E85 census measures every real one of those
-	 * at zero -- 203/203, 220/247 and 95/95 -- so it is a NOTIFY and mints
-	 * nothing. The joiner's REQUESTs live in the barrier FSM.
+	 * An ORIGINATION from this path is always one of the identity records
+	 * (op-0x14 MODEL, op-0x01 PARAMS, op-0x02 CONFIG), and the E85 census
+	 * measures every real one of those at zero -- 203/203, 220/247 and
+	 * 95/95 -- so it is a NOTIFY and mints nothing. The joiner's REQUESTs
+	 * live in the barrier FSM, and its RESPONSES go out through
+	 * join_emit_reply() below, never here.
 	 */
-	cnxman_envelope_originate(csb, j->scratch,
-				  is_response ? CNXMAN_ENV_RESPONSE
-					      : CNXMAN_ENV_NOTIFY);
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_NOTIFY);
 
 	rc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,
 			       VMS_CM_BODY_LEN);
@@ -599,7 +606,7 @@ static void join_send_model(struct cnxman_join *j)
 		return;   /* this connection has already carried it */
 	if (join_build_failed(j, join_build_model(j)))
 		return;
-	if (join_emit_cm(j, 0) == 0) {
+	if (join_emit_to_target(j) == 0) {
 		j->model_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_MODEL;
 		join_note_ident(j, csb);
@@ -719,7 +726,7 @@ static void join_send_params(struct cnxman_join *j)
 		return;
 	if (join_build_failed(j, join_build_params(j, csb)))
 		return;
-	if (join_emit_cm(j, 0) == 0) {
+	if (join_emit_to_target(j) == 0) {
 		j->params_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_PARAMS;
 		join_note_ident(j, csb);
@@ -788,7 +795,7 @@ static int join_emit_to_csb(struct cnxman_join *j, struct vms_csb *csb,
 	}
 
 	/* The per-peer advertise beat carries the same identity records as
-	 * join_emit_cm() above, and the census measures them all at zero. */
+	 * join_emit_to_target() above, and the census measures them all at zero. */
 	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_NOTIFY);
 
 	rc = j->ops->send_csb(j->ops->ctx, idx, j->scratch, VMS_CM_BODY_LEN);
@@ -957,7 +964,7 @@ static void join_send_config(struct cnxman_join *j)
 				 NULL);
 	if (join_build_failed(j, st))
 		return;
-	if (join_emit_cm(j, 0) == 0) {
+	if (join_emit_to_target(j) == 0) {
 		j->config_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_CONFIG;
 		join_log_request(j);
@@ -1039,6 +1046,131 @@ typedef enum cnxman_join_rx (*join_handler_t)(struct cnxman_join *,
 static enum cnxman_join_rx join_dispatch(struct cnxman_join *j,
 					 enum cnxman_event ev,
 					 const struct join_ev *e);
+
+/* ==========================================================================
+ * ANSWERING: a RESPONSE GOES BACK WHERE ITS REQUEST CAME FROM (rd vms-e8b)
+ *
+ * THE DEFECT THIS CLOSES, AND WHAT IT COST. Every 0x81 this FSM built used to
+ * leave on `j->cm_conid` -- the connection to the member THIS JOIN DRIVES
+ * THROUGH -- whoever had asked. While the only cat-0x01 requests arriving were
+ * the coordinator's own that was invisible, because the coordinator and the
+ * join target were the same system. They stop being the same system the moment
+ * a THIRD member coordinates anything, and the first thing a departing member
+ * coordinates is its own leave.
+ *
+ * MEASURED TWICE, deterministically, on a real three-node cluster (VAX1 1025 +
+ * VAX2 1026 + OVMXE 1030, cluster group 1; OVMX joined through VAX2, the
+ * highest SCSSYSTEMID, so VAX1 was never the target):
+ * `tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/`. VAX1 ran
+ * `@SYS$SYSTEM:SHUTDOWN` with `REMOVE_NODE` and opened its class-0x04
+ * self-departure transition (spec 4(r)) by sending cat-0x01 op-0x03 to BOTH
+ * other members:
+ *
+ *   m4 #7882  VAX1 -> VAX2   cat 01 op 03 cls 04 txn 5 tok 47903
+ *   m4 #7883  VAX2 -> VAX1   cat 81 op 03 cls 04 txn 5 tok 47903   <- 0.2 ms
+ *   m4 #7884  VAX1 -> OVMXE  cat 01 op 03 cls 04 txn 9 tok 46657
+ *   m4 #7887  OVMXE-> VAX2   cat 81 op 03 cls 04 txn 9 tok 46657   <- WRONG PEER
+ *   m4 #7890  VAX2 -> *      last gasp; console: Fatal BUG CHECK CNXMGRERR
+ *
+ * 193 us (m3) / 378 us (m4) after that frame the real VAX2 took a fatal
+ * `CNXMGRERR, Error detected by VAXcluster Connection Manager`. The BODY was
+ * byte-correct -- it is what VAX2 itself sent VAX1 in #7883 -- and the
+ * ENVELOPE was a valid continuation of the OVMX<->VAX2 dialogue. The only
+ * wrong thing about it was WHO IT WAS SENT TO: a membership-commit response
+ * naming a transaction VAX2 had never opened. VAX1 meanwhile never got its
+ * answer, so its departure transition stalled and it lost quorum.
+ *
+ * It was on the wire fourteen days earlier too, where it was harmless only
+ * because the misdirected frame happened to land on another OVMX node:
+ * `tests/lab/captures/vms-4f0-cn3-relay-20260924/run{1-fixed,2-base-control}/cn3.pcap`
+ * each carry one `cat 81 op 03` from OVMXB to OVMXA answering a request the
+ * real VAXC had sent OVMXB.
+ *
+ * THE RULE, AND IT IS THE SPEC'S OWN. Spec 4(p): "the dialogue rides ONE VC
+ * per peer; ANSWER ON WHICHEVER THE REQUEST ARRIVED ON." The barrier FSM has
+ * always done exactly this (`barrier_respond_echo` stamps from `m->from_csb`
+ * and emits through `ops->respond`); this is the join FSM brought onto the
+ * same rule, so there is now one way to answer in this stack and no way to
+ * answer anywhere else.
+ *
+ * THE DESTINATION AND THE ENVELOPE COME FROM ONE FACT. `e->from_csb` is the
+ * CLUB slot the glue resolved from the Con.ID SCS really delivered on (book
+ * p. 7-23: the CSB IS the connection record), and `ops->respond` is defined as
+ * "answer the request currently being dispatched, ON ITS OWN CONNECTION" --
+ * the glue's `cur_conid`, set from that same `local_conid` immediately before
+ * the body is offered to this FSM. So the counters stamped and the wire the
+ * bytes leave on are the same conversation by construction, not by agreement.
+ *
+ * A request that arrived on NO connection this node holds is NOT ANSWERED
+ * (INV-6): there are no dialogue counters to stamp honestly, and a response
+ * stamped from somebody else's is the defect above.
+ * ========================================================================== */
+
+/* The CSB whose VMS$VAXcluster connection carried this request, or NULL. A slot
+ * that is out of range, not in use, or carries no Con.ID is NULL -- a refusal
+ * to answer, never a substituted destination. Mirrors barrier_csb_at(). */
+static struct vms_csb *join_arrival_csb(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	struct vms_csb *csb;
+
+	if (j->cl == NULL || e->from_csb < 0)
+		return NULL;
+	csb = cnxman_club_csb_at(&j->cl->club, (uint32_t)e->from_csb);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u)
+		return NULL;
+	return csb;
+}
+
+/* Is the request being answered from a member OTHER than the one this join
+ * drives through? Counted, because it is the whole capability this cell adds
+ * and a lab transcript has to be able to show it happening. */
+static int join_reply_is_offtarget(const struct cnxman_join *j,
+				   const struct join_ev *e)
+{
+	return !j->target_valid || e->from_csb != j->target_csb;
+}
+
+/*
+ * Emit the body sitting in `scratch` as the ANSWER to `e`. Returns 0 when SCS
+ * took it.
+ */
+static int join_emit_reply(struct cnxman_join *j, const struct join_ev *e)
+{
+	struct vms_csb *csb = join_arrival_csb(j, e);
+	uint8_t cat, op;
+	int rc;
+
+	join_body_kind(j, &cat, &op);
+	if (csb == NULL) {
+		j->send_failures++;
+		j->replies_unaddressed++;
+		join_diag_emit(j, cat, op, CNXMAN_DIAG_G_NO_CSB, 0, 0u);
+		join_log(j, "%CNXMAN, a VMS$VAXcluster request arrived on no "
+			    "connection this node holds: it is not answered");
+		return -1;
+	}
+	if (j->ops == NULL || j->ops->respond == NULL) {
+		j->send_failures++;
+		join_diag_emit(j, cat, op, CNXMAN_DIAG_G_NO_OPS, 0,
+			       csb->cdt_conid);
+		return -1;
+	}
+
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
+
+	rc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);
+	if (rc != 0) {
+		j->send_failures++;
+		join_diag_emit(j, cat, op, CNXMAN_DIAG_G_REFUSED, (int32_t)rc,
+			       csb->cdt_conid);
+		return -1;
+	}
+	if (join_reply_is_offtarget(j, e))
+		j->replies_offtarget++;
+	join_diag_emit(j, cat, op, CNXMAN_DIAG_G_SENT, 0, csb->cdt_conid);
+	return 0;
+}
 
 /* ==========================================================================
  * Starting: pick the member, declare our directory descriptor, run our own
@@ -2313,7 +2445,7 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 					(uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return CNXMAN_JOIN_RX_CONSUMED;
-	if (join_emit_cm(j, 1) == 0)
+	if (join_emit_reply(j, e) == 0)
 		j->echoes_sent++;
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
@@ -2453,7 +2585,7 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 	if (join_build_failed(j, st))
 		return CNXMAN_JOIN_RX_CONSUMED;
 	j->relays_seen++;
-	if (join_emit_cm(j, 1) == 0)
+	if (join_emit_reply(j, e) == 0)
 		j->echoes_sent++;
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
@@ -2624,7 +2756,7 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 				j->scratch, (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return CNXMAN_JOIN_RX_CONSUMED;
-	if (join_emit_cm(j, 1) == 0)
+	if (join_emit_reply(j, e) == 0)
 		j->closes_answered++;
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
@@ -3176,19 +3308,19 @@ static enum cnxman_join_rx join_h_watch_vc(struct cnxman_join *j,
  *
  * WHAT IT MAY AND MAY NOT RE-OFFER. ONLY a message this node never transmitted
  * ON THE CONNECTION IT HOLDS NOW. `burst_on_conn` is set in join_send_*() ONLY
- * when join_emit_cm() returned 0, i.e. only when SCS took the body, and it is
+ * when join_emit_to_target() returned 0, i.e. only when SCS took the body, and it is
  * cleared the instant the Con.ID changes (join_cm_take) -- so a clear bit is
  * the executive's own record that THIS connection has not carried that message,
  * and a message that DID go down it is never sent twice. (E71: the lifetime
  * `*_sent` counters cannot answer that question. After a reconnect they are
  * nonzero for a dialogue the new connection never had, and reading them here
  * silently stopped the re-offer for good.) Each re-offer is a fresh origination
- * with its own send-msg# (join_emit_cm advances the CSB's dialogue counter),
+ * with its own send-msg# (join_emit_to_target advances the CSB's dialogue counter),
  * which is what spec sec 4(j)'s strictly-monotonic-per-sender rule requires;
  * nothing is retransmitted.
  *
  * It re-offers nothing at all while the VMS$VAXcluster connection is not open:
- * with no connection there is no origination to make, and join_emit_cm()'s own
+ * with no connection there is no origination to make, and join_emit_to_target()'s own
  * gate would refuse it anyway.
  */
 static void join_reoffer_burst(struct cnxman_join *j)
@@ -3430,7 +3562,7 @@ static void join_attempt_exhausted(struct cnxman_join *j)
  * the system id and the Con.ID are that CSB's, and the body goes out stamped
  * from that CSB's own dialogue counters (E77 -- join_cm_take() clears
  * `burst_on_conn`, because a different connection has carried nothing, and
- * join_emit_cm()'s gate refuses to stamp a dialogue that is not on the Con.ID
+ * join_emit_to_target()'s gate refuses to stamp a dialogue that is not on the Con.ID
  * being sent on).
  *
  * The re-ask itself is join_reoffer_burst(): exactly the p. 2-51 re-offer this

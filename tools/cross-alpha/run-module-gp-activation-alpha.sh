@@ -650,21 +650,24 @@ assert_vmsabi() {
   [ -n "$qfid" ] || { echo "  assert_vmsabi: no File ID from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
   printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$qfid" \
     || { echo "  assert_vmsabi: DIRECTORY/FULL does not show the IO\$_ACCESS File ID $qfid" >&2; return 1; }
-  # ATR$C_CREDATE agrees with the creation date the independent reader shows:
-  # "<not recorded>" is a zero quadword in the header, so IO$_ACCESS must read 0;
-  # a recorded date must read back non-zero.
-  local qcre
+  # ATR$C_CREDATE is the file's real creation date (vms-263e): every VMS file
+  # header carries one, so it must be non-zero, and it must be the very date
+  # DIRECTORY/FULL -- DCL's own ACP read, another accessor -- prints on its
+  # Created: line (VMS time: 100 ns since 17-NOV-1858, shown dd-MMM-yyyy
+  # hh:mm:ss.cc; the guest runs on UTC).
+  local qcre cre_dec secs cc want got
   qcre=$(grep -aoE "VMSABI-QIOCRE: %X[0-9A-F]{16}" "$log" | head -1 | sed 's/VMSABI-QIOCRE: %X//')
   [ -n "$qcre" ] || { echo "  assert_vmsabi: no ATR\$C_CREDATE from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
-  if printf '%s\n' "$region" | grep -aq "Created:  <not recorded>"; then
-    [ "$qcre" = "0000000000000000" ] \
-      || { echo "  assert_vmsabi: DIRECTORY/FULL shows no creation date but ATR\$C_CREDATE read %X$qcre" >&2; return 1; }
-  else
-    printf '%s\n' "$region" | grep -aq "Created:" \
-      || { echo "  assert_vmsabi: DIRECTORY/FULL shows no Created: line" >&2; return 1; }
-    [ "$qcre" != "0000000000000000" ] \
-      || { echo "  assert_vmsabi: DIRECTORY/FULL shows a creation date but ATR\$C_CREDATE read 0" >&2; return 1; }
-  fi
+  [ "$qcre" != "0000000000000000" ] \
+    || { echo "  assert_vmsabi: ATR\$C_CREDATE is zero -- the file has no creation date" >&2; return 1; }
+  cre_dec=$(( 16#$qcre ))
+  secs=$(( cre_dec / 10000000 - 3506716800 ))
+  cc=$(( (cre_dec / 100000) % 100 ))
+  want=$(LC_ALL=C TZ=UTC date -u -d "@$secs" "+%e-%b-%Y %H:%M:%S" | tr 'a-z' 'A-Z')
+  want=$(printf '%s.%02d' "$want" "$cc")
+  got=$(printf '%s\n' "$region" | grep -a "Created:" | head -1 | sed -E 's/^.*Created:[[:space:]]+//; s/[[:space:]]*\r?$//')
+  [ "$got" = "$(printf '%s' "$want" | sed -E 's/^[[:space:]]+//')" ] \
+    || { echo "  assert_vmsabi: DIRECTORY/FULL Created: '$got' is not ATR\$C_CREDATE %X$qcre ('$want')" >&2; return 1; }
   return 0
 }
 
@@ -1924,9 +1927,9 @@ EOF
       echo "VMSABI-QIOFID: (34,1,0)"
       echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
       echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
-      echo "VMSABI-QIOCRE: %X0000000000000000"
+      echo "VMSABI-QIOCRE: %X00BC3AB5C5957000"
       echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
-      echo "Created:  <not recorded>"
+      echo "Created:   8-OCT-2026 14:00:00.00"
       echo '   "VMSABI_GATE" = "PROVED_BY_CRELNM" (LNM$SYSTEM_TABLE)'
       echo "VMSABI-PROOF: === END INDEPENDENT READER ==="
     } > "$_st/pass.log"
@@ -1936,10 +1939,10 @@ EOF
     sed 's/VMSABI-QIOFID: (34,1,0)/VMSABI-QIOFID: (36,1,0)/' "$_st/pass.log" > "$_st/qiofid.log"
     grep -v "VMSABI-QIOFID" "$_st/pass.log" > "$_st/noqio.log"
     grep -v "VMSABI-QIOCRE" "$_st/pass.log" > "$_st/nocre.log"
-    sed 's/VMSABI-QIOCRE: %X0000000000000000/VMSABI-QIOCRE: %X00A1B2C3D4E5F607/' "$_st/pass.log" > "$_st/crelie.log"
-    sed 's/Created:  <not recorded>/Created:   8-OCT-2026 14:00:00.00/' "$_st/pass.log" > "$_st/crezero.log"
-    sed 's/VMSABI-QIOCRE: %X0000000000000000/VMSABI-QIOCRE: %X00A1B2C3D4E5F607/' "$_st/crezero.log" > "$_st/credated.log"
-    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "credated:0"; do
+    sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X00BC3AB5CCBC7E00/' "$_st/pass.log" > "$_st/crelie.log"
+    sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X0000000000000000/' "$_st/pass.log" > "$_st/crezero.log"
+    sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X0000000000000000/; s/Created:   8-OCT-2026 14:00:00.00/Created:  <not recorded>/' "$_st/pass.log" > "$_st/notrecorded.log"
+    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "notrecorded:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi

@@ -148,11 +148,9 @@ int main(void)
               "P3/P4 receive the resultant NAME.TYP;VER");
         check(an == strlen(fname) && memcmp(asc, fname, an) == 0 && padded, 43,
               "ATR$C_ASCNAME is NAME.TYP;VER padded with spaces");
-        /* ATR$C_CREDATE is the header's creation date as stored -- the gate checks it
-         * against the date DIRECTORY/FULL shows for the same file (a volume whose
-         * headers carry no date shows "<not recorded>" and must read back 0). */
+        /* The gate checks ATR$C_CREDATE against the date DIRECTORY/FULL shows. */
         printf("VMSABI-QIOCRE: %%X%016llX\n", (unsigned long long)cre);
-        check(recattr.fat$v_rtype != 0 && recattr.fat$w_rsize != 0, 44, "ATR$C_RECATTR is filled");
+        check(cre != 0 && recattr.fat$v_rtype != 0, 44, "ATR$C_CREDATE and ATR$C_RECATTR are filled");
         st = SYS$QIOW(0, chan, IO$_DEACCESS, &iosb, 0, 0, &fibdsc, 0, 0, 0, atr, 0);
         check((st & 1) && (iosb.status & 1), 45, "SYS$QIOW IO$_DEACCESS releases the read access");
         ATRDEF bad[] = { { 4, 99, &uchar }, { 0, 0, 0 } };

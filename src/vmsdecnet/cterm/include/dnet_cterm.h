@@ -428,12 +428,14 @@ int dnet_cterm_found_client_seg3_build(uint8_t *buf, size_t cap, size_t *outlen)
 int dnet_cterm_found_client_seg4_build(uint8_t *buf, size_t cap, size_t *outlen);
 
 /* Client read-characteristics RESPONSE to a host 0f-00 solicit: the fixed
- * 26-byte-body 09-envelope with the host's 2-byte read handle echoed at body
- * offset 2-3 (the ONLY per-solicit-variable field the oracle shows -- #53
- * echoes 04 34, #67 echoes 50 34, #70 echoes 51 34; everything else, WIDTH/PAGE
- * included, is byte-identical). `handle` is the 2 bytes at body offset 2-3 of
- * the host's 0f-00 solicit. Returns DNET_CTERM_OK or DNET_CTERM_ENOSPACE. */
-int dnet_cterm_found_client_readchar_build(const uint8_t handle[2],
+ * 26-byte-body 09-envelope with the host's 4-byte read handle echoed at body
+ * offset 2-5 (the ONLY per-solicit-variable field -- the oracle's #53 echoes
+ * 04 34 00 00, #67 50 34 00 00, #70 51 34 00 00; a live VAX V7.3 host sent
+ * a7 59 01 00 and ignored a reply that dropped the third byte, rd vms-b19;
+ * everything else, WIDTH/PAGE included, is byte-identical). `handle` is the 4
+ * bytes at body offset 2-5 of the host's 0f-00 solicit. Returns DNET_CTERM_OK
+ * or DNET_CTERM_ENOSPACE. */
+int dnet_cterm_found_client_readchar_build(const uint8_t handle[4],
                                            uint8_t *buf, size_t cap,
                                            size_t *outlen);
 
@@ -460,7 +462,7 @@ enum dnet_cterm_found_term_kind {
 /*
  * dnet_cterm_found_terminal_rx - classify one inbound BOUND-phase 09-envelope
  * (the payload delivered out of an NSP data segment) and, for a WRITE, extract
- * the displayable text; for a READ_ATTR, extract the 2-byte read handle.
+ * the displayable text; for a READ_ATTR, extract the 4-byte read handle.
  *
  *   *kind      -> which envelope this is (see enum above).
  *   text / *textlen (WRITE and START_READ, may be NULL) -> the screen bytes to
@@ -470,7 +472,7 @@ enum dnet_cterm_found_term_kind {
  *              WRITE the record markers (07 72 02 01 0d) and NUL separators are
  *              stripped and the readable text copied out (best-effort -- flagged
  *              for lab confirmation).
- *   handle (READ_ATTR only, may be NULL) -> the 2-byte handle to echo back.
+ *   handle (READ_ATTR only, may be NULL) -> the 4-byte handle to echo back.
  *
  * FULLY BOUNDED: never reads past buf[len-1]; a body too short for its declared
  * shape yields DNET_CTERM_TK_OTHER (never an over-read). Returns DNET_CTERM_OK
@@ -480,7 +482,7 @@ enum dnet_cterm_found_term_kind {
 int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
                                  enum dnet_cterm_found_term_kind *kind,
                                  uint8_t *text, size_t textcap, size_t *textlen,
-                                 uint8_t handle[2]);
+                                 uint8_t handle[4]);
 
 /*
  * ---- Terminal-input queue (rd vms-6165: CTERM input is PROMPT-DRIVEN) -----

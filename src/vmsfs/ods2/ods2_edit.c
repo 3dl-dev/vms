@@ -549,7 +549,14 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
 
         memset(id, ' ', 20);
         memcpy(id, idbuf, first_len);
-        ed_put16(id + 20, version);                               /* fi2_revision */
+        /* fi2_revision is the header's REVISION COUNT (times the file was
+         * modified), not the version: 0 for a file just created, bumped at each
+         * deaccess after write access (ods2_fh2_touch_revision). Observed on the
+         * real VAX volume tests/ods2/real_vax_ods2.dsk: CREATE/DIRECTORY leaves 0,
+         * a created-and-written file 1. The dates are the caller's
+         * (ods2_fh2_set_dates); the build leaves them zero. */
+        ed_put16(id + 20, 0);                                     /* fi2_revision */
+        (void)version;
         if (ext_len > 0) {
             uint8_t *ext = id + offsetof(ods2_ident_t, fi2_filenamext);
             memset(ext, ' ', sizeof(((ods2_ident_t *)0)->fi2_filenamext));
@@ -582,8 +589,8 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
  *
  * Every byte written is ods2_fh2_build()'s own ident-area / backlink layout
  * (see its [F2]/[F11] provenance and lines 397-411): fi2_filename[20] holds the
- * space-padded "NAME.TYPE;VERSION" head, fi2_revision the version word, and
- * fi2_filenamext[66] the >20-char overflow. fh2_idoffset is read from the header
+ * space-padded "NAME.TYPE;VERSION" head and fi2_filenamext[66] the >20-char
+ * overflow; the revision count (fi2_revision) and the dates are left as they are. fh2_idoffset is read from the header
  * itself (not the build-time constant) so a header laid down with a different
  * ident offset still renames correctly. ODS2_ERR_ARGS on a bad block/name,
  * ODS2_ERR_FORMAT if the header's ident offset does not fit a 512-byte block.
@@ -611,13 +618,12 @@ ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
     id = h + (size_t)idoff_words * 2u;
 
     /* ident name: "NAME.TYPE;VERSION", space-padded (ods2_fh2_build lines
-     * 397-411). Touch only fi2_filename[20] / fi2_revision / fi2_filenamext[66];
-     * fi2_credate / fi2_revdate etc. (bytes 22..53) are left as they are. */
+     * 397-411). Touch only fi2_filename[20] / fi2_filenamext[66]; the revision
+     * count and fi2_credate / fi2_revdate etc. (bytes 20..53) are left as they are. */
     first_len = (n < 20) ? n : 20;
     ext_len   = (n > 20) ? (n - 20) : 0;
     memset(id, ' ', 20);
     memcpy(id, idbuf, first_len);
-    ed_put16(id + offsetof(ods2_ident_t, fi2_revision), version);
     {
         uint8_t *ext = id + offsetof(ods2_ident_t, fi2_filenamext);
         memset(ext, ' ', sizeof(((ods2_ident_t *)0)->fi2_filenamext));
@@ -934,5 +940,65 @@ ods2_status_t ods2_dir_remove_blocks(const uint8_t *in_blocks, unsigned in_nblk,
             memset(out_blocks + (size_t)bi * ODS2_BLOCK_SIZE, 0xFF, ODS2_BLOCK_SIZE);
         *out_nblk = (in_nblk <= out_nblk_cap) ? in_nblk : out_nblk_cap;
     }
+    return ODS2_OK;
+}
+
+/* Locate a header's ident area, or NULL if fh2_idoffset does not fit. */
+static uint8_t *ed_ident(uint8_t *h)
+{
+    unsigned idoff_words = h[offsetof(ods2_fh2_t, fh2_idoffset)];
+
+    if (idoff_words == 0 ||
+        (size_t)idoff_words * 2u + sizeof(ods2_ident_t) > ODS2_BLOCK_SIZE)
+        return NULL;
+    return h + (size_t)idoff_words * 2u;
+}
+
+/*
+ * ods2_fh2_set_dates - store a header's creation and revision dates (VMS 64-bit
+ * absolute times, 100 ns since 17-NOV-1858) in the ident area. Expiration and
+ * backup dates are not touched: a volume without retention leaves the
+ * expiration date zero ("<None specified>") and only BACKUP records a backup
+ * date, as on the real VAX volume (tests/ods2/real_vax_ods2.dsk). Reseal after.
+ */
+ods2_status_t ods2_fh2_set_dates(void *header_block, uint64_t credate,
+                                 uint64_t revdate)
+{
+    uint8_t *id;
+
+    if (!header_block)
+        return ODS2_ERR_ARGS;
+    id = ed_ident((uint8_t *)header_block);
+    if (!id)
+        return ODS2_ERR_FORMAT;
+    ed_put32(id + offsetof(ods2_ident_t, fi2_credate), (uint32_t)credate);
+    ed_put32(id + offsetof(ods2_ident_t, fi2_credate) + 4, (uint32_t)(credate >> 32));
+    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate), (uint32_t)revdate);
+    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate) + 4, (uint32_t)(revdate >> 32));
+    return ODS2_OK;
+}
+
+/*
+ * ods2_fh2_touch_revision - record one modification of the file: the revision
+ * count goes up by one and the revision date becomes `now`. The file system
+ * does this when a file accessed for write is deaccessed. Reseal after.
+ */
+ods2_status_t ods2_fh2_touch_revision(void *header_block, uint64_t now)
+{
+    uint8_t *id;
+    uint16_t rev;
+
+    if (!header_block)
+        return ODS2_ERR_ARGS;
+    id = ed_ident((uint8_t *)header_block);
+    if (!id)
+        return ODS2_ERR_FORMAT;
+    rev = (uint16_t)(id[offsetof(ods2_ident_t, fi2_revision)] |
+                     (id[offsetof(ods2_ident_t, fi2_revision) + 1] << 8));
+    if (rev != 0xFFFFu)
+        rev++;
+    ed_put16(id + offsetof(ods2_ident_t, fi2_revision), rev);
+    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate), (uint32_t)now);
+    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate) + 4, (uint32_t)(now >> 32));
     return ODS2_OK;
 }

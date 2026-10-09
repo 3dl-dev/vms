@@ -7,6 +7,12 @@
 # Environment variables:
 #   MEMORY     - Guest RAM (default: 512M)
 #   DISK       - Path to system disk image (optional; passed as /dev/vda if set)
+#   OVMX_QEMU_ACCEL - x86_64 only: force the accelerator ("kvm" or "tcg")
+#                instead of auto-detecting /dev/kvm. Forcing tcg on a
+#                KVM-capable host reproduces the software-emulation timing the
+#                browser demo and KVM-less CI runners boot under (rd vms-4ff);
+#                forcing kvm fails loudly if /dev/kvm is unusable. Unset (the
+#                default) keeps the auto-detect below.
 #   BOOT_FLAGS - Conversational boot (vms-b81): "R5,R6" appended to the
 #                kernel cmdline as ovmx.flags=R5,R6. Bit 0 of R6 is the
 #                conversational bit -- BOOT_FLAGS=0,1 halts STARTUP.EXE at
@@ -76,6 +82,9 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     QEMU=qemu-system-aarch64
     MACHINE="-machine virt -cpu cortex-a57"
     CONSOLE="console=ttyAMA0"
+    # x86-only concern: `machine virt` has no 8254 and no IO-APIC, so there is
+    # no check_timer() to skip here (rd vms-4ff).
+    TIMER_CHECK=""
 else
     QEMU=qemu-system-x86_64
     # KVM acceleration (vms-fb8): use hardware virt when the runner exposes a
@@ -84,12 +93,60 @@ else
     # identical behavior, ~10x slower (the boot/e2e wall this change exists to
     # cut). Only x86_64-on-x86_64 can use KVM; the aarch64 guest above is always
     # cross-emulated on our x86_64 runners, so it stays TCG.
-    if [ -w /dev/kvm ]; then
-        MACHINE="-accel kvm -cpu host"
-    else
-        MACHINE="-accel tcg"
+    ACCEL="${OVMX_QEMU_ACCEL:-}"
+    if [ -z "$ACCEL" ]; then
+        if [ -w /dev/kvm ]; then ACCEL=kvm; else ACCEL=tcg; fi
     fi
+    case "$ACCEL" in
+        kvm) MACHINE="-accel kvm -cpu host" ;;
+        tcg) MACHINE="-accel tcg" ;;
+        *)   echo "Error: unknown OVMX_QEMU_ACCEL='$ACCEL' (want: kvm|tcg)" >&2; exit 1 ;;
+    esac
     CONSOLE="console=ttyS0"
+
+    # TCG ONLY: skip the kernel's 8254-to-IO-APIC verification (rd vms-4ff).
+    #
+    # arch/x86/kernel/apic/io_apic.c check_timer() verifies the legacy timer
+    # IRQ by calling timer_irq_works(), which spins in delay_with_tsc() for
+    # 40e9/HZ TSC CYCLES and then demands that jiffies advanced by more than 4.
+    # Under TCG the guest TSC advances at HOST WALL-CLOCK rate while the vCPU
+    # executes orders of magnitude slower than real silicon, so the test asks a
+    # software-emulated CPU to take and service 5 IRQ0 ticks inside ~18 ms of
+    # WALL time. A slowed or descheduled vCPU cannot, and the kernel concludes
+    # its own (perfectly good, fully emulated) timer is broken.
+    #
+    # MEASURED on the shipped V0.7-8 kernel, same image, same arguments, host
+    # qemu 8.2.2 + TCG, qemu pinned to one core shared with N spinners
+    # (tests/lab/captures/vms-4ff-timer-check-20261009/):
+    #   unstarved   -- check passes, IRQ0 stays on IO-APIC pin 2, boots
+    #   ~6x and ~8x -- "..MP-BIOS bug: 8254 timer not connected to IO-APIC",
+    #                  the IO-APIC pin is TORN DOWN and IRQ0 silently falls
+    #                  back to Virtual Wire: a load-dependent interrupt
+    #                  topology from one unchanged image
+    #   ~12x        -- all four routes "failed" -> panic "IO-APIC + timer
+    #                  doesn't work!" at guest t=0.012 s, never boots
+    #   ~12x + this flag -- boots (mount 69 s, STARTUP 108 s)
+    #
+    # This is upstream Linux's own policy for virtual machines, not an OVMX
+    # workaround: arch/x86/kernel/kvm.c and arch/x86/kernel/cpu/vmware.c both
+    # set `no_timer_check = 1` for guests they identify, because the check is
+    # only meaningful on physical hardware. A TCG guest is a virtual machine
+    # Linux cannot identify, so it must be told. Its ONLY consumer is
+    # timer_irq_works() (io_apic.c), so the flag skips the MEASUREMENT and
+    # changes nothing else -- the routing kept is the same IO-APIC pin a
+    # correct measurement keeps.
+    #
+    # Deliberately NOT in distro/kernel/ovmx-x86_64.config: on BARE METAL
+    # (where OVMX also boots) a genuinely miswired 8254 is a real fault and the
+    # kernel must still catch it. It belongs to the emulated machine, which is
+    # what this launcher is.
+    if [ "$ACCEL" = tcg ]; then
+        TIMER_CHECK=" no_timer_check"
+    else
+        # KVM guests get no_timer_check from the kernel itself (kvm.c
+        # paravirt_ops_setup) -- passing it again would assert nothing.
+        TIMER_CHECK=""
+    fi
 fi
 
 # Build disk arguments if DISK is set
@@ -111,7 +168,7 @@ fi
 # CRIT, which is stricter than what "quiet" alone provides, so "quiet" is
 # redundant once the ordering bug is gone -- belt-and-suspenders alongside
 # that userspace mute, not the primary fix.
-APPEND="$CONSOLE loglevel=3"
+APPEND="$CONSOLE loglevel=3$TIMER_CHECK"
 if [ -n "$BOOT_FLAGS" ]; then
     APPEND="$APPEND ovmx.flags=$BOOT_FLAGS"
 fi

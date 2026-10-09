@@ -1,0 +1,136 @@
+[   3.489] c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+[   4.100] iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFCADB0+0EF0ADB0 CA00
+[   4.283] Press Ctrl-B to configure iPXE (PCI 00:03.0)...
+[   4.836] Booting from ROM...
+[   6.796] c[?7l[2J
+[  34.951] [    0.000000] Linux version 6.12.103-ovmx (ovmx@ovmx) (gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #1 SMP PREEMPT_DYNAMIC Thu Jan  1 00:00:00 UTC 1970
+[  34.997] [    0.000000] Command line: console=ttyS0 loglevel=3 ignore_loglevel
+[  34.997] [    0.000000] BIOS-provided physical RAM map:
+[  34.997] [    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[  34.997] [    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[  34.997] [    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[  34.997] [    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000000ffdcfff] usable
+[  35.026] [    0.000000] BIOS-e820: [mem 0x000000000ffdd000-0x000000000fffffff] reserved
+[  35.026] [    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[  35.026] [    0.000000] BIOS-e820: [mem 0x000000fd00000000-0x000000ffffffffff] reserved
+[  35.026] [    0.000000] printk: debug: ignoring loglevel setting.
+[  35.026] [    0.000000] NX (Execute Disable) protection: active
+[  35.026] [    0.000000] APIC: Static calls initialized
+[  35.026] [    0.000000] SMBIOS 3.0.0 present.
+[  35.026] [    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[  35.026] [    0.000000] DMI: Memory slots populated: 1/1
+[  35.026] [    0.000000] e820: update [mem 0x00000000-0x00000fff] usable ==> reserved
+[  35.062] [    0.000000] e820: remove [mem 0x000a0000-0x000fffff] usable
+[  35.062] [    0.000000] last_pfn = 0xffdd max_arch_pfn = 0x400000000
+[  35.062] [    0.000000] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[  35.062] [    0.000000] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT
+[  35.062] [    0.000000] found SMP MP-table at [mem 0x000f5470-0x000f547f]
+[  35.062] [    0.000000] RAMDISK: [mem 0x0ff56000-0x0ffcffff]
+[  35.062] [    0.000000] ACPI: Early table checksum verification disabled
+[  35.062] [    0.000000] ACPI: RSDP 0x00000000000F52A0 000014 (v00 BOCHS )
+[  35.078] [    0.000000] ACPI: RSDT 0x000000000FFE1C58 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[  35.099] [    0.000000] ACPI: FACP 0x000000000FFE1B0C 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[  35.099] [    0.000000] ACPI: DSDT 0x000000000FFE0040 001ACC (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[  35.099] [    0.000000] ACPI: FACS 0x000000000FFE0000 000040
+[  35.099] [    0.000000] ACPI: APIC 0x000000000FFE1B80 000078 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+[  35.099] [    0.000000] ACPI: HPET 0x000000000FFE1BF8 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[  35.099] [    0.000000] ACPI: WAET 0x000000000FFE1C30 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[  35.099] [    0.000000] ACPI: Reserving FACP table memory at [mem 0xffe1b0c-0xffe1b7f]
+[  35.141] [    0.000000] ACPI: Reserving DSDT table memory at [mem 0xffe0040-0xffe1b0b]
+[  35.141] [    0.000000] ACPI: Reserving FACS table memory at [mem 0xffe0000-0xffe003f]
+[  35.141] [    0.000000] ACPI: Reserving APIC table memory at [mem 0xffe1b80-0xffe1bf7]
+[  35.141] [    0.000000] ACPI: Reserving HPET table memory at [mem 0xffe1bf8-0xffe1c2f]
+[  35.141] [    0.000000] ACPI: Reserving WAET table memory at [mem 0xffe1c30-0xffe1c57]
+[  35.141] [    0.000000] No NUMA configuration found
+[  35.141] [    0.000000] Faking a node at [mem 0x0000000000000000-0x000000000ffdcfff]
+[  35.141] [    0.000000] NODE_DATA(0) allocated [mem 0x0ffd9940-0x0ffdcfff]
+[  35.141] [    0.000000] Zone ranges:
+[  35.142] [    0.000000]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[  35.171] [    0.000000]   DMA32    [mem 0x0000000001000000-0x000000000ffdcfff]
+[  35.171] [    0.000000]   Normal   empty
+[  35.171] [    0.000000] Movable zone start for each node
+[  35.171] [    0.000000] Early memory node ranges
+[  35.171] [    0.000000]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[  35.171] [    0.000000]   node   0: [mem 0x0000000000100000-0x000000000ffdcfff]
+[  35.171] [    0.000000] Initmem setup node 0 [mem 0x0000000000001000-0x000000000ffdcfff]
+[  35.171] [    0.000000] On node 0, zone DMA: 1 pages in unavailable ranges
+[  35.171] [    0.000000] On node 0, zone DMA: 97 pages in unavailable ranges
+[  35.171] [    0.000000] On node 0, zone DMA32: 35 pages in unavailable ranges
+[  35.172] [    0.000000] ACPI: PM-Timer IO Port: 0x608
+[  35.206] [    0.000000] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[  35.207] [    0.000000] IOAPIC[0]: apic_id 0, version 32, address 0xfec00000, GSI 0-23
+[  35.207] [    0.000000] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[  35.207] [    0.000000] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[  35.207] [    0.000000] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[  35.211] [    0.000000] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[  35.211] [    0.000000] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[  35.212] [    0.000000] ACPI: Using ACPI (MADT) for SMP configuration information
+[  35.212] [    0.000000] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[  35.212] [    0.000000] CPU topo: Max. logical packages:   1
+[  35.241] [    0.000000] CPU topo: Max. logical dies:       1
+[  35.241] [    0.000000] CPU topo: Max. dies per package:   1
+[  35.242] [    0.000000] CPU topo: Max. threads per core:   1
+[  35.242] [    0.000000] CPU topo: Num. cores per package:     1
+[  35.242] [    0.000000] CPU topo: Num. threads per package:   1
+[  35.243] [    0.000000] CPU topo: Allowing 1 present CPUs plus 0 hotplug CPUs
+[  35.245] [    0.000000] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[  35.245] [    0.000000] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[  35.245] [    0.000000] [mem 0x10000000-0xfffbffff] available for PCI devices
+[  35.282] [    0.000000] Booting paravirtualized kernel on bare hardware
+[  35.282] [    0.000000] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[  35.282] [    0.000000] setup_percpu: NR_CPUS:64 nr_cpumask_bits:1 nr_cpu_ids:1 nr_node_ids:1
+[  35.282] [    0.000000] percpu: Embedded 56 pages/cpu s192216 r8192 d28968 u2097152
+[  35.282] [    0.000000] pcpu-alloc: s192216 r8192 d28968 u2097152 alloc=1*2097152
+[  35.282] [    0.000000] pcpu-alloc: [0] 0
+[  35.282] [    0.000000] Kernel command line: console=ttyS0 loglevel=3 ignore_loglevel
+[  35.282] [    0.000000] Dentry cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[  35.283] [    0.000000] Inode-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[  35.314] [    0.000000] Fallback order for Node 0: 0
+[  35.314] [    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 65403
+[  35.315] [    0.000000] Policy zone: DMA32
+[  35.315] [    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[  35.315] [    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[  35.317] [    0.000000] Dynamic Preempt: voluntary
+[  35.318] [    0.000000] rcu: Preemptible hierarchical RCU implementation.
+[  35.318] [    0.000000] rcu: 	RCU event tracing is enabled.
+[  35.318] [    0.000000] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=1.
+[  35.318] [    0.000000] 	Trampoline variant of Tasks RCU enabled.
+[  35.318] [    0.000000] 	Tracing variant of Tasks RCU enabled.
+[  35.350] [    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[  35.352] [    0.000000] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+[  35.352] [    0.000000] RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[  35.352] [    0.000000] RCU Tasks Trace: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[  35.352] [    0.000000] NR_IRQS: 4352, nr_irqs: 256, preallocated irqs: 16
+[  35.352] [    0.000000] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[  35.353] [    0.000000] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[  35.353] [    0.000000] Console: colour VGA+ 80x25
+[  35.396] [    0.000000] printk: legacy console [ttyS0] enabled
+[  35.431] [    0.000000] ACPI: Core revision 20240827
+[  35.606] [    0.000000] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[  35.792] [    0.003000] APIC: Switch to symmetric I/O mode setup
+[  35.969] [    0.007000] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[  36.044] [    0.009000] ..MP-BIOS bug: 8254 timer not connected to IO-APIC
+[  36.044] [    0.009000] ...trying to set up timer (IRQ0) through the 8259A ...
+[  36.045] [    0.009000] ..... (found apic 0 pin 2) ...
+[  36.079] [    0.009000] ....... failed.
+[  36.080] [    0.009000] ...trying to set up timer as Virtual Wire IRQ...
+[  36.117] [    0.011000] ..... failed.
+[  36.117] [    0.011000] ...trying to set up timer as ExtINT IRQ...
+[  36.325] [    0.012000] ..... failed :
+[  36.327] [    0.012000] Kernel panic - not syncing: IO-APIC + timer doesn't work!  Boot with apic=debug and send a report.  Then try booting with the 'noapic' option.
+[  36.361] [    0.012000] CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.12.103-ovmx #1
+[  36.362] [    0.012000] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[  36.363] [    0.012000] Call Trace:
+[  36.400] [    0.012000]  <TASK>
+[  36.434] [    0.012000]  panic+0x326/0x380
+[  36.434] [    0.012000]  setup_IO_APIC+0x836/0x850
+[  36.435] [    0.012000]  ? __pfx_native_io_apic_read+0x10/0x10
+[  36.435] [    0.012000]  ? clear_IO_APIC_pin+0x167/0x260
+[  36.435] [    0.012000]  apic_intr_mode_init+0x53/0xe0
+[  36.436] [    0.012000]  x86_late_time_init+0x1f/0x40
+[  36.469] [    0.012000]  start_kernel+0x483/0x7d0
+[  36.470] [    0.012000]  x86_64_start_reservations+0x18/0x30
+[  36.470] [    0.012000]  x86_64_start_kernel+0xc5/0xe0
+[  36.471] [    0.012000]  common_startup_64+0x12c/0x138
+[  36.471] [    0.012000]  </TASK>
+[  36.509] [    0.012000] ---[ end Kernel panic - not syncing: IO-APIC + timer doesn't work!  Boot with apic=debug and send a report.  Then try booting with the 'noapic' option. ]---

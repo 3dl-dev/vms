@@ -3691,11 +3691,28 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     args.parent_id = lock->parent_id; /* the lock's PARENT lkid (vms-0dd), 0 if root */
 
     if (lock->resource) {
-        strscpy(args.resnam, lock->resource->name, sizeof(args.resnam));
+        struct vms_lock_resource *res = lock->resource;
+        struct vms_lock_entry *granted;
+        uint32_t n = 0;
+
+        strscpy(args.resnam, res->name, sizeof(args.resnam));
         memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
+
+        /*
+         * LKI$_GRANTCOUNT (vms-b71) -- the resource's granted-queue length,
+         * counted the same way vms_ioctl_get_resmaster's n_granted is: a walk
+         * of res->granted under res->lock, not a cached counter. Real lock
+         * state, not a value plumbed in from the request that got here.
+         */
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(granted, &res->granted, res_granted)
+            n++;
+        exec_unlock(&res->lock);
+        args.grant_count = n;
     } else {
         memset(args.resnam, 0, sizeof(args.resnam));
         memset(args.valblk, 0, LCK_VALBLK_SIZE);
+        args.grant_count = 0;
     }
 
     args.status = SS__NORMAL;

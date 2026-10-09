@@ -268,12 +268,15 @@
 #     uncovered come back UNPROBED -- zero of them are covered in effect
 #     through a shared-code-path mutation on a sibling handler in the same
 #     file; the line-level gap and the behavioural gap are the same gap here.
-#     Of those 24, 8 (setprv, chkpriv, dclast, deliverast, getlki, alloc,
-#     dalloc, ttsetmode) are OVMX-UNWIRED declarations (src/libvmssys/
-#     vms_kif.h) with zero product-tree callers -- exempt under the vms-1e1
-#     ruling, not a gap this file can close without inventing a caller. The
-#     other 16 have a real product-side caller (a DCL command or a sys$
-#     wrapper) and are not exempt. Of those 16, an existing QEMU assertion
+#     Of those 24, 7 (setprv, chkpriv, dclast, deliverast, alloc, dalloc,
+#     ttsetmode) are OVMX-UNWIRED declarations (src/libvmssys/vms_kif.h)
+#     with zero product-tree callers -- exempt under the vms-1e1 ruling, not
+#     a gap this file can close without inventing a caller. getlki is NO
+#     LONGER in this set: vms-b71 wired sys$getlki/sys$getlkiw onto it
+#     (src/libvms/syssvc/sys_lock.c), and getlki-grantcount-not-counted
+#     above is its negctl control. The other 17 have a real product-side
+#     caller (a DCL command or a sys$ wrapper) and are not exempt. Of the
+#     16 that were already covered before vms-b71, an existing QEMU assertion
 #     already checks a real result/side-effect for 14 (ascefc, convert,
 #     dacefc, dassgn, deq, devscan, dlcefc, enq, getdvi, getjpi, procscan,
 #     readef, register, setef) -- a manifest entry for each is mechanical, no
@@ -610,7 +613,8 @@ crtl-feature-unknown-accepted
 crtl-feature-set-ignored
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
-rms-dirfind-exact-version-ignored"
+rms-dirfind-exact-version-ignored
+getlki-grantcount-not-counted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -7707,6 +7711,26 @@ EOF
         knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons. \$SEARCH also returns that same (fabricated) ID in nam\$w_fid (vms-6e28), which DIRECTORY /FULL now prints, so test_syssvc_rms_acp's check that DIRECTORY /FULL's File ID is the one \$CREATE returned reddens too (with its run-time-labelled per-file \$SEARCH-vs-\$CREATE ID assertions).";;
         esac;;
 
+    getlki-grantcount-not-counted)
+        case "$_f" in
+        facility)     echo "SYS\$GETLKI/SYS\$GETLKIW's LKI\$_GRANTCOUNT (vms_ioctl_getlki, vms-b71)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_syssvc_getlki";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_getlki()'s LKI\$_GRANTCOUNT walk drops its own increment ('n++;' inside the 'exec_list_for_each_entry(granted, &res->granted, res_granted)' loop), so grant_count is always reported as 0 regardless of how many locks the resource genuinely has granted -- the resource's REAL granted-queue length is never read, only a constant. The lock's own granted/requested mode, resource name and lock ID (the sibling LKI\$_ items the same ioctl answers) are untouched, so only the GRANTCOUNT assertions redden. Unique statement at this indent inside vms_ioctl_getlki; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+LKI$_GRANTCOUNT reports BOTH holders (2), the resource's real granted-queue length
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+LKI$_GRANTCOUNT reports 1 (this process is the only holder)
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment makes grant_count read 0 regardless of the resource's true holder count, so the single-holder scenario's GRANTCOUNT==1 check reddens alongside the two-holder scenario's GRANTCOUNT==2 check -- one defect, the two scenarios that can observe it.";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -9205,6 +9229,32 @@ apply_edit() {
         # substitution `, user_dest)` is gone -- a second apply is the no-op the
         # idempotency selftest requires.
         sed -i 's|st = rms_stage_over_acp(IMG_SPEC, user_dest);|st = rms_stage_over_acp(IMG_SPEC, shared_dest); /* NEGCTL multiuser-stage-shared-not-peruser */|' "$_file";;
+
+    getlki-grantcount-not-counted)
+        # Range-scoped to vms_ioctl_getlki's own body (same idiom as the
+        # pe-vc-snapshot/scs-cdt-snapshot entries above), so the identically
+        # indented "n++;" inside the OTHER two GETLKI-shaped walks in this file
+        # (vms_ioctl_dlm_member_depart / vms_ioctl_get_resmaster) is untouched.
+        #
+        # THE REPLACEMENT KEEPS ITS OWN TRAILING SEMICOLON (rd vms-b71 CI fix,
+        # measured 2026-10-09). `exec_list_for_each_entry(...)` expands to a
+        # braceless `for (...)`, so its body is whatever ONE statement follows
+        # syntactically -- here, the real source's `n++;`. A comment-only
+        # replacement with NO semicolon leaves the `for` with nothing to
+        # terminate its body, so the compiler attaches the NEXT statement,
+        # `exec_unlock(&res->lock);`, as the loop body instead: exec_unlock then
+        # runs once per granted entry (a harmless no-op double-unlock when
+        # n_granted==1) but NEVER when n_granted==0 (e.g. the DLM cross-node
+        # origin/proxy records test_syssvc_dlm_xnode's GETLKI calls read) --
+        # leaking res->lock held forever and deadlocking the NEXT operation on
+        # that resource. That is a real guest HANG under this defect (CI shards
+        # 17/22 and 19/22, both runs stopping after 55 suites at
+        # test_syssvc_dlm_xnode, whole-VM wall budget fired), not a crash and
+        # not a timing/ordering issue -- a malformed fixture mutation. The
+        # trailing `;` makes the comment an empty statement, so the loop body
+        # stays a no-op and exec_unlock stays OUTSIDE the loop exactly as the
+        # unmutated source has it; grant_count still always reports 0.
+        sed -i '/^long vms_ioctl_getlki(/,/^}/ s|            n++;|            /* NEGCTL getlki-grantcount-not-counted: grant not counted */;|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

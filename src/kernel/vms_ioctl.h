@@ -492,7 +492,13 @@ struct vms_getlki_args {
     char     resnam[32];        /* return: resource name */
     uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
     uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
+    uint32_t grant_count;       /* return: LKI$_GRANTCOUNT -- the resource's
+                                 * granted-queue length, counted under the
+                                 * resource's own lock the same way
+                                 * vms_ioctl_get_resmaster's n_granted is
+                                 * (vms-b71). 0 when the lock has no resource.
+                                 * Was a reserved pad; same size, no ABI
+                                 * change. */
 };
 
 /*

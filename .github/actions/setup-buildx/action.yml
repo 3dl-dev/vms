@@ -8,6 +8,30 @@ description: >-
 runs:
   using: composite
   steps:
+    # The classic docker daemon too (rd vms-d6c). Scripts that run a plain
+    # `docker build` (tools/cross-alpha/*.sh, tools/cross-vax/*.sh, the cut-release
+    # VAX/Alpha artifact builds) use the daemon's own "default" builder, not the
+    # BuildKit builder configured below, so their FROM debian:* went straight to
+    # Docker Hub and failed on its anonymous-pull rate limit (429) -- #1595 run
+    # 37987950134, PR1 run 37991202498. Give the daemon the same mirror.
+    - name: Docker daemon pulls through mirror.gcr.io first
+      shell: bash
+      run: |
+        set -eu
+        f=/etc/docker/daemon.json
+        sudo python3 - "$f" <<'PY'
+        import json, os, sys
+        p = sys.argv[1]
+        cfg = json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}
+        m = cfg.setdefault("registry-mirrors", [])
+        if "https://mirror.gcr.io" not in m:
+            m.insert(0, "https://mirror.gcr.io")
+        json.dump(cfg, open(p, "w"), indent=2)
+        PY
+        sudo systemctl restart docker
+        for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+        docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -q 'mirror.gcr.io' \
+          || { echo "::error::docker daemon did not take the mirror.gcr.io registry mirror"; exit 1; }
     - name: Pick the BuildKit image
       id: bk
       shell: bash

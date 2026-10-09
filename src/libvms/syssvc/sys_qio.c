@@ -47,6 +47,7 @@
 #include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 #include "dcdef.h"
+#include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
 
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
@@ -335,6 +336,14 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
         if (!async_rd[i].in_use) { slot = i; break; }
     if (slot < 0)
         return SS$_EXQUOTA;
+#if OVMX_HOST_ABSENT
+    /* The poll that completes a queued read runs from a host realtime-signal
+     * timer, which a build for the OpenVMS calling standard does not have
+     * (ovmx_host_absent.h): refuse honestly rather than queue a read that
+     * could never complete. */
+    (void)chan; (void)iosb_ptr; (void)p1; (void)p2; (void)efn; (void)astadr; (void)astprm;
+    return SS$_UNSUPPORTED;
+#endif
 
     if (!async_handler_set) {
         struct sigaction sa;

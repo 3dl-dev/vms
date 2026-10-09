@@ -93,6 +93,19 @@
 #include "starlet.h"
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
 #include "efndef.h"     /* EFN$C_ENF */
+#include "ovmx_utc.h"   /* ovmx_timegm: no C RTL timegm on OpenVMS */
+
+/* The per-request host timers below are POSIX timers (timer_create), which the
+ * OpenVMS C RTL does not have, and their expiry runs a handler the kernel
+ * enters directly -- not a procedure descriptor of the OpenVMS Alpha calling
+ * standard. So a build for that standard (the OVMX/Alpha shareables a native
+ * VMS image calls) has no timer to queue: $SETIMR answers SS$_UNSUPPORTED
+ * there instead of calling an unresolved timer_create at address 0. */
+#if (defined(__alpha) || defined(__alpha__)) && (defined(__VMS) || defined(__vms) || defined(__VMS__))
+#define OVMX_HOST_POSIX_TIMERS 0
+#else
+#define OVMX_HOST_POSIX_TIMERS 1
+#endif
 
 /* Offset between VMS epoch (Nov 17 1858) and Unix epoch (Jan 1 1970) in 100ns units */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -290,7 +303,7 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf,
     tm_val.tm_min = min;
     tm_val.tm_sec = sec;
 
-    time_t t = timegm(&tm_val);
+    time_t t = ovmx_timegm(&tm_val);
     struct timespec ts = { .tv_sec = t, .tv_nsec = hun * 10000000L };
     *q = unix_to_vms_time(&ts);
 
@@ -299,6 +312,7 @@ uint32_t sys$bintim(const struct dsc$descriptor_s *timbuf,
 
 /* ---- Timer management ---- */
 
+#if OVMX_HOST_POSIX_TIMERS
 #define MAX_TIMERS 32
 
 struct timer_entry {
@@ -347,6 +361,8 @@ static void init_timer_signals(void) {
     pthread_once(&timer_once, init_timer_signals_once);
 }
 
+#endif /* OVMX_HOST_POSIX_TIMERS */
+
 /*
  * sys$setimr - Set timer request.
  *
@@ -362,6 +378,10 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     (void)flags;
 
     if (!daytim) return SS$_BADPARAM;
+#if !OVMX_HOST_POSIX_TIMERS
+    (void)efn; (void)astadr; (void)reqidt;
+    return SS$_UNSUPPORTED;
+#else
 
     /* The flag is CLEARED when the request is queued, and an efn that is not
      * one of this process's flags fails the request (SS$_UNASEFC for an
@@ -447,6 +467,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     pthread_mutex_unlock(&timer_mutex);
     return SS$_NORMAL;
+#endif /* OVMX_HOST_POSIX_TIMERS */
 }
 
 /*
@@ -458,6 +479,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
     (void)acmode;
 
+#if OVMX_HOST_POSIX_TIMERS
     pthread_mutex_lock(&timer_mutex);
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (timer_table[i].active &&
@@ -467,6 +489,9 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
         }
     }
     pthread_mutex_unlock(&timer_mutex);
+#else
+    (void)reqidt;                      /* no timer can have been queued */
+#endif
 
     return SS$_NORMAL;
 }

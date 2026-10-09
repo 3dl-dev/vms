@@ -332,7 +332,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # l2_datalink, net_qio_status _NET:) run here only with one. -m 2048 gives
     # the larger subject-image initramfs headroom.
     timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none \
-        -netdev user,id=net0 -device e1000,netdev=net0 \
+        -netdev user,id=net0 -device e1000,netdev=net0,romfile= \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
         -drive file=/work/d0.img,format=raw,if=virtio \

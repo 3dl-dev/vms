@@ -29,6 +29,9 @@ $!
 $! Native VAX images LINKed on the lab VAX V7.3 (rd vms-b869), RUN unchanged:
 $! DCL hands a non-ELF image to NATIVEACT.EXE. Expected values are the lab
 $! VAX's own (tests/lab/captures/native-image-vax-20261009/).
+$! OVMX$NATIVEACT_TRACE makes NATIVEACT.EXE print each activation step and
+$! each vector call (%NATIVEACT-I-TRACE lines), so a run that stops shows where.
+$ DEFINE OVMX$NATIVEACT_TRACE YES
 $ WRITE SYS$OUTPUT "STATUS-PROOF: === RUN HELLO ==="
 $ RUN SYS$SYSTEM:HELLO
 $ WRITE SYS$OUTPUT "STATUS-PROOF: HELLO-STATUS=''$STATUS'"

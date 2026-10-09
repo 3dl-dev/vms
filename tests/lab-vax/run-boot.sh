@@ -299,7 +299,7 @@ status_proof_selftest() {
     grep -v "STATUS-PROOF: ${name}-STATUS=" "$st/pass.log" > "$st/nost$i.log"
     _expect fail "${name}-STATUS line missing" "$st/nost$i.log"
     if [ -n "$line" ]; then
-      grep -vF "$line" "$st/pass.log" > "$st/noimg$i.log"
+      grep -vF -e "$line" "$st/pass.log" > "$st/noimg$i.log"
       _expect fail "${name}'s own output line missing (the image never ran)" "$st/noimg$i.log"
     fi
   done

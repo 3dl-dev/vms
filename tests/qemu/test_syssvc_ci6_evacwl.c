@@ -187,6 +187,18 @@ int main(void)
     uint32_t st = def_system("EVAC$DATA", "VDA0:[OVMXDIR]");
     CHECK(st & 1, "parent: EVAC$DATA defined in LNM$SYSTEM");
 
+    /*
+     * MOUNT THE DATA VOLUME, as every other suite that writes VDA0:[OVMXDIR]
+     * does (test_syssvc_spawn_input's own pattern). The mount is
+     * EXECUTIVE-GLOBAL, which is what makes it visible to the EVACWL instances
+     * -- they are separate processes, and their RMS $OPEN of EVAC$DATA:EVAC.DAT
+     * goes through the same ACP. Co-resident suites DISMOUNT it when they are
+     * done ("clean slate"), so this suite cannot assume someone else left it
+     * mounted; it mounts for itself and dismounts at the end.
+     */
+    CHECK(vms_kif_acp_mount(ODS2_UNIT) & 1,
+          "parent: VDA0: mounted executive-global (the volume EVAC$DATA names)");
+
     erase_evac_dat();
 
     const int COUNT_A = 3, COUNT_B = 2;
@@ -297,6 +309,7 @@ int main(void)
           "the first COUNT_A records share one PID, the rest a DIFFERENT one (a real takeover, not one process writing twice)");
 
     erase_evac_dat();
+    (void)vms_kif_acp_dmount(ODS2_UNIT);   /* clean slate for co-resident suites */
 
     printf("=== test_syssvc_ci6_evacwl: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

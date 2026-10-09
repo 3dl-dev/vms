@@ -197,8 +197,11 @@ echo "OK: every ovmx_boot.h op is defined by the NetBSD backend"
 
 # The backend must open the REAL executive device, not a faked descriptor
 # (Rule 9 / INV-6). Assert the literal /dev/vms open is in the source.
-if ! grep -qF 'open("/dev/vms", O_RDWR | O_CLOEXEC)' "$OVMX_INIT/ovmx_boot_netbsd.c"; then
+if ! grep -qE 'int fd = kif_xport_dev_open\(\);' "$OVMX_INIT/ovmx_boot_netbsd.c" \
+   || ! grep -qF 'open(kif_xport_device_path(), O_RDWR | O_CLOEXEC)' "$SRC/src/libvmssys/kif_transport_netbsd.c" \
+   || ! grep -qF 'return "/dev/vms";' "$SRC/src/libvmssys/kif_transport_netbsd.c"; then
     echo "FAIL: ovmx_boot_netbsd.c does not open the real /dev/vms executive device"
+    echo "      (ovmx_boot_open_executive -> kif_xport_dev_open -> open(kif_xport_device_path(), ...) == \"/dev/vms\", rd vms-bbde)"
     exit 1
 fi
 echo "OK: ovmx_boot_open_executive() opens the real /dev/vms (fail-honest)"

@@ -310,6 +310,5 @@ vms_kif_tt_write=PROCEDURE
 vms_kif_tt_setmode=PROCEDURE
 vms_kif_tt_attach=PROCEDURE
 vms_kif_tt_sense=PROCEDURE
-||||||| parent of 70e958128 (vms-046 (wip): $CHECK_ACCESS-shaped executive mailbox decision for another process + VAX golden)
 # A server asks whether a requester could use a mailbox it named (rd vms-046). APPENDED.
 vms_kif_mbx_chkacc=PROCEDURE

@@ -37,6 +37,34 @@ set_tests_properties(dcl-help-engine PROPERTIES
     LABELS "dcl;help;unit"
 )
 
+# Hermetic unit test for the command parser's parameter loop (rd vms-a18): a
+# '@' in a PARAMETER position -- `SPAWN @PROC.COM` -- must reach the parameter
+# it belongs to instead of being dropped. Compiles the parser + lexer sources
+# directly and calls dcl_parse_line(), the same shape as test_help_engine
+# above: no DCL binary, no subprocess, no executive.
+add_executable(test_parse_at_param
+    test_parse_at_param.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_parser.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_lexer.c
+    # str_upcase_copy (the parser upcases every verb through it) -- the real
+    # STR$ routine, compiled in, not a stub: a stub could disagree with the
+    # product's own upcasing and make this test assert something DCL does not do.
+    ${CMAKE_SOURCE_DIR}/src/libvms/rtl/str_util.c
+)
+target_include_directories(test_parse_at_param PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+)
+target_compile_definitions(test_parse_at_param PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+add_test(NAME dcl-parse-at-param COMMAND test_parse_at_param)
+set_tests_properties(dcl-parse-at-param PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;parser;unit"
+)
+
 # Self-test of the harness above (vms-6a7). run_dcl_tests.sh once evaluated
 # dash-leading needles as grep OPTIONS, which made every EXPECT_NOT whose
 # needle starts with a dash pass unconditionally. No product test can detect

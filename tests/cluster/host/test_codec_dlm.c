@@ -1446,6 +1446,16 @@ static void test_queued_convert_answer_is_the_real_one(void)
 	ct_check(vms_dlm_convert_response_build_queued(rep, sizeof(rep), frame,
 						       sizeof(frame), &written) !=
 		 VMS_CODEC_OK, "  ... and a RESPONSE is refused as input");
+
+	/* The LATER grant of that same CONVERT keeps op 0x07: a real master
+	 * grants a conversion as 82/07, never as an ENQ grant 82/01. */
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_response_build_grant(req, sizeof(req), 0x0001abcdu,
+						  NULL, frame, sizeof(frame),
+						  &written) == VMS_CODEC_OK,
+		 "the CONVERT's grant builds");
+	ct_check_eq_u32(frame[VMS_OFF_SYSAP_BODY + 9u], 0x07u,
+			"*** a CONVERT is granted as op 0x07, the request's own op ***");
 }
 
 int main(void)

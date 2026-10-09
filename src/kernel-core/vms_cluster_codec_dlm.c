@@ -329,7 +329,10 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
+	/* body[9], the op, is the REQUEST'S, echoed: a CONVERT's grant is 82/07
+	 * (rd vms-cab: real VAX1 -> VAX2 grant of an op-0x07, lab run ev13
+	 * 13:39:44.798831), an ENQ's 82/01. Forcing 0x01 answered a convert
+	 * with an ENQ grant the requester never asked for. */
 	/* body[20:24]: the handle THIS master assigned. body[24:28] is left as
 	 * the requester's own, echoed -- the correlation. */
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);

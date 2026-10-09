@@ -512,6 +512,14 @@ static __inline int exec_file_is(void *pin, int fd) { return ovmx_file_is(pin, f
 struct proc;
 extern int ovmx_native_page0_allow(struct proc *p, const char *activator);
 
+/* exec_native_page0_lower (exec_kbackend.h section 5): the activator is the
+ * installed NATIVEACT.EXE; anything else is refused. */
+static __inline int
+exec_native_page0_lower(void)
+{
+	return ovmx_native_page0_allow(curproc, "/run/ovmx-boot/NATIVEACT.EXE") == 0 ? 0 : -1;
+}
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {

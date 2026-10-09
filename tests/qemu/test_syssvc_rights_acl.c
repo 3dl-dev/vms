@@ -26,6 +26,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -51,6 +52,19 @@ static void check(int c, const char *m)
 }
 
 /* --- the unprivileged child: answers commands from the parent -------------- */
+/* VMS_IOCTL_NATIVE_PAGE0 (rd vms-b869): ask the executive for virtual page 0,
+ * the way the VAX native image activator does. The answer is the status. */
+static uint32_t page0_ask(void)
+{
+    struct vms_native_page0_args pa;
+    int fd = vms_kif_open();
+
+    memset(&pa, 0, sizeof(pa));
+    if (fd < 0 || ioctl(fd, VMS_IOCTL_NATIVE_PAGE0, &pa) < 0)
+        return 0;
+    return pa.status;
+}
+
 static int run_child(int rfd, int wfd, uint16_t fid)
 {
     uint32_t st = 0, chan = 0;
@@ -75,6 +89,8 @@ static int run_child(int rfd, int wfd, uint16_t fid)
             st = vms_kif_acp_access(&a);
             if (st & 1)
                 (void)vms_kif_acp_deaccess(chan);
+        } else if (cmd == 'p') {
+            st = page0_ask();
         } else {
             uint32_t idq[2] = { TEST_ID, 0 };
             st = sys$grantid(NULL, NULL, idq, NULL, NULL, 0);
@@ -202,6 +218,19 @@ int main(int argc, char **argv)
         /* negctl: rights-grant-cmkrnl-not-checked */
         check(ask('g') == SS$_NOPRIV, "the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV");
         check(ask('o') == SS$_NOPRIV, "...and changes nothing: still refused");
+
+        /* Virtual page 0 is the executive's to grant, per process, only on the
+         * native-image activation path (Baron's ruling on rd vms-b869): CMKRNL
+         * on the caller's own PCB first, so an ordinary process is refused. */
+        /* negctl: page0-ioctl-unprivileged-allowed */
+        check(ask('p') == SS$_NOPRIV, "an ordinary process (no CMKRNL) asking for virtual page 0 is SS$_NOPRIV");
+#ifdef __linux__
+        check(page0_ask() == SS$_UNSUPPORTED,
+              "a CMKRNL process asking for page 0 on Linux (no VAX native-image path) is SS$_UNSUPPORTED");
+#else
+        check(page0_ask() == SS$_NOPRIV,
+              "a CMKRNL process that is not the native image activator is refused page 0: SS$_NOPRIV");
+#endif
     }
     {
         static char nm[] = "OVMX_NO_SUCH_IDENT";

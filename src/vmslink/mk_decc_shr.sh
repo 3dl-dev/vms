@@ -322,6 +322,19 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             *) echo "mk_decc_shr: FAIL decc\$main is not a PROCEDURE universal to rebind" >&2; exit 2;;
         esac
         VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$main=PROCEDURE,/,decc$main\/ovmx_crtl_fd_main=PROCEDURE,/; s/^,//; s/,$//')
+        # vms-45f: DEC C fopen/open/creat take RMS file-attribute keywords
+        # ("rfm=udf", "rat=none", ...) after their standard arguments. Each is
+        # rebound IN PLACE (same sv#, vms-b14) to the layer's wrapper, which
+        # parses them for the $CREATE and calls the C RTL's own function.
+        for _fw in fopen open creat; do
+            case ",$VEC," in
+                *",decc\$$_fw=PROCEDURE,"*) ;;
+                *) echo "mk_decc_shr: FAIL decc\$$_fw is not a PROCEDURE universal to rebind" >&2; exit 2;;
+            esac
+            "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "ovmx_crtl_$_fw" \
+                || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_$_fw" >&2; exit 2; }
+            VEC=$(printf '%s' ",$VEC," | sed "s/,decc\\\$$_fw=PROCEDURE,/,decc\$$_fw\/ovmx_crtl_$_fw=PROCEDURE,/; s/^,//; s/,\$//")
+        done
         ALPHA_VENEER_OBJ="$FD_OBJ"
         # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
         # resultant spec); new to this pass, so it goes at the vector tail.

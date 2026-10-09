@@ -360,6 +360,62 @@ int main(int argc, char **argv)
               "DECC$FILE_SHARING: refused second open for write when off, shared when on");
     }
 
+    /* vms-45f: DEC C fopen/creat/open take RMS file-attribute keywords after
+     * their standard arguments; they describe the file $CREATE makes. The DCL
+     * reader prints F$FILE_ATTRIBUTES of the same files afterwards. */
+    {
+        struct stat us, fs, cs;
+        static char blk[600];
+        memset(blk, 'u', sizeof blk);
+        FILE *uf = fopen(DIRSPEC "CFDUDF.DAT", "wb", "rfm=udf", "rat=none");
+        size_t uw = uf ? fwrite(blk, 1, sizeof blk, uf) : 0;
+        int uc = uf ? fclose(uf) : -1;
+        int usr = stat(DIRSPEC "CFDUDF.DAT", &us);
+        printf("CFD: udf w=%u close=%d stat=%d rfm=%d size=%ld\n", (unsigned)uw, uc, usr,
+               usr == 0 ? (int)us.st_fab_rfm : -1, usr == 0 ? (long)us.st_size : -1L);
+        check(uf != NULL && uw == sizeof blk && uc == 0 && usr == 0 && us.st_fab_rfm == 0 &&
+              us.st_size == (long)sizeof blk, 42,
+              "fopen(\"wb\", \"rfm=udf\", \"rat=none\") creates an undefined-record-format file");
+
+        int cfd = creat(DIRSPEC "CFDFIX.DAT", 0666, "rfm=fix", "mrs=20");
+        int cw = cfd >= 0 ? (int)write(cfd, blk, 40) : -1;
+        int cc = cfd >= 0 ? close(cfd) : -1;
+        int fsr = stat(DIRSPEC "CFDFIX.DAT", &fs);
+        check(cfd >= 0 && cw == 40 && cc == 0 && fsr == 0 && fs.st_fab_rfm == 1 && fs.st_fab_mrs == 20, 43,
+              "creat(..., \"rfm=fix\", \"mrs=20\") creates a fixed 20-byte-record file");
+
+        int ofd = open(DIRSPEC "CFDSLF.DAT", O_WRONLY | O_CREAT | O_TRUNC, 0666, "rfm=stmlf", "rat=none");
+        int ow = ofd >= 0 ? (int)write(ofd, "lf\n", 3) : -1;
+        int oc = ofd >= 0 ? close(ofd) : -1;
+        int csr = stat(DIRSPEC "CFDSLF.DAT", &cs);
+        check(ofd >= 0 && ow == 3 && oc == 0 && csr == 0 && cs.st_fab_rfm == 5 && cs.st_fab_rat == 0, 44,
+              "open(..., mode, \"rfm=stmlf\", \"rat=none\") creates a Stream_LF file with no carriage control");
+
+        struct stat ns;
+        errno = 0;
+        FILE *bf = fopen(DIRSPEC "CFDBAD.DAT", "w", "rfm=bogus");
+        int be = errno;
+        check(bf == NULL && be == EINVAL && stat(DIRSPEC "CFDBAD.DAT", &ns) != 0, 45,
+              "an unknown keyword value is EINVAL and creates nothing");
+        errno = 0;
+        FILE *af = fopen(DIRSPEC "CFDALQ.DAT", "w", "alq=10");
+        int ae = errno;
+        check(af == NULL && ae == EOPNOTSUPP && stat(DIRSPEC "CFDALQ.DAT", &ns) != 0, 46,
+              "a keyword whose effect is not provided (alq) is refused, never ignored");
+
+        FILE *rf = fopen(DIRSPEC "CFDUDF.DAT", "rb", "rfm=var");
+        char rb[8] = "";
+        size_t rr = rf ? fread(rb, 1, 4, rf) : 0;
+        if (rf)
+            fclose(rf);
+        struct stat us2;
+        check(rf != NULL && rr == 4 && memcmp(rb, "uuuu", 4) == 0 &&
+              stat(DIRSPEC "CFDUDF.DAT", &us2) == 0 && us2.st_fab_rfm == 0, 47,
+              "opening an existing file keeps its own record format (keywords describe a creation)");
+        if (bf) fclose(bf);
+        if (af) fclose(af);
+    }
+
     if (fails) {
         printf("OVMX CRTL-FD test: %d check(s) FAILED (first %d)\n", fails, first_fail);
         return first_fail;

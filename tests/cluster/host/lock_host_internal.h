@@ -90,6 +90,7 @@ static inline void strscpy(char *dst, const char *src, size_t size)
 #define SS__BADPARAM    0x00000014
 #define SS__INSFMEM     292          /* SS$_INSFMEM */
 #define SS__NOTQUEUED   2488         /* SS$_NOTQUEUED */
+#define SS__NOSYSLCK    10484        /* SS$_NOSYSLCK */
 #define SS__DEADLOCK    3594         /* SS$_DEADLOCK */
 #define SS__IVLOCKID    8484         /* SS$_IVLOCKID */
 #define SS__SUBLOCKS    8492         /* SS$_SUBLOCKS */
@@ -139,6 +140,8 @@ struct vms_proc {
 	exec_list_head_t     locks;
 	int                  lock_count;
 	exec_lock_t          lock_list_lock;
+
+	uint64_t             cur_privs;     /* SYSLCK for an LCK$M_SYSTEM $ENQ (vms-768) */
 };
 
 /* ================================================================

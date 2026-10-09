@@ -564,6 +564,9 @@ register-subprocess-identity-self-declared
 libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
+enq-syslck-not-checked
+pri-altpri-not-checked
+brk-oper-not-checked
 acp-create-ignores-dfprot
 acp-deaccess-revision-not-recorded
 clrast-no-delivery
@@ -1060,6 +1063,65 @@ EOF
         why)          echo "The ACP's CREATE takes proc->dfprot for an ordinary file with no protection of its own. The mutation leaves it 0, so the file gets the class default (RWED,RWED,RE,RE) whatever the process set. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new file's protection is the process default (0x0F00), not a class default
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    enq-syslck-not-checked)
+        case "$_f" in
+        facility)     echo "a system-wide lock resource (LCK\$M_SYSTEM) needs SYSLCK in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_enq() refuses an LCK\$M_SYSTEM request without SYSLCK. The mutation lets it through, so any process takes system-wide locks. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$ENQW of a system-wide resource without SYSLCK is SS$_NOSYSLCK
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    pri-altpri-not-checked)
+        case "$_f" in
+        facility)     echo "a base priority above the authorized one needs ALTPRI in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_pri() holds a \$SETPRI above the authorized priority at the authorized priority without ALTPRI. The mutation sets whatever is asked. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the base priority stays at the authorized 4
+$SETPRI 10 with ALTPRI
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    brk-oper-not-checked)
+        case "$_f" in
+        facility)     echo "a broadcast to every terminal / every user needs OPER in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_brkauth() refuses BRK\$C_ALLTERMS / ALLUSERS without OPER. The mutation grants them to anyone. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$BRKTHRUW to every terminal without OPER is SS$_NOOPER
+the executive refuses every-user scope without OPER
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -4206,7 +4268,7 @@ A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programma
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
-A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|OPER) that are in VMS_PRV_M_ENFORCED (OPER is not)
+A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in VMS_PRV_M_ENFORCED (EXQUOTA is not)
 A: the executive accepted the identity a privileged writer established
 B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC
@@ -4219,7 +4281,7 @@ C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$
 C: the privilege display shows NETMBX and TMPMBX -- the two privileges the executive granted an unprivileged process, both in VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,ALTPRI,SETPRV,TMPMBX,WORLD,MOUNT,OPER,NETMBX,PHY_IO,SYSPRV,BYPASS,SYSLCK,GRPPRV,READALL), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
@@ -7755,6 +7817,12 @@ apply_edit() {
         sed -i 's#^                ods2_fh2_touch_revision(hdr, exec_time_now_vms()) != ODS2_OK) {$#                0) { /* NEGCTL acp-deaccess-revision-not-recorded */#' "$_file";;
     acp-create-ignores-dfprot)
         sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file";;
+    enq-syslck-not-checked)
+        sed -i 's#^        !(proc->cur_privs \& VMS_PRV_M_SYSLCK)) {$#        0) { /* NEGCTL enq-syslck-not-checked */#' "$_file";;
+    pri-altpri-not-checked)
+        sed -i 's#^        if (pri > args.authpri \&\& !(proc->cur_privs \& VMS_PRV_M_ALTPRI))$#        if (0) /* NEGCTL pri-altpri-not-checked */#' "$_file";;
+    brk-oper-not-checked)
+        sed -i 's#^    if ((args.sndtyp == 3u || args.sndtyp == 4u) \&\& !(proc->cur_privs \& VMS_PRV_M_OPER))$#    if (0) /* NEGCTL brk-oper-not-checked */#' "$_file";;
     setdfprot-not-stored)
         sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)

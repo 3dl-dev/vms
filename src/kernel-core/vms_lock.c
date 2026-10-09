@@ -3114,7 +3114,17 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    /* A system-wide resource (LCK$M_SYSTEM) needs SYSLCK: SS$_NOSYSLCK without
+     * it, no lock created (OpenVMS VAX V7.3, docs/oracle/semantics/privchk;
+     * vms-768). NEGCTL-ANCHORED (enq-syslck-not-checked). */
+    if ((args.flags & LCK_M_SYSTEM) && !(args.flags & LCK_M_CONVERT) &&
+        !(proc->cur_privs & VMS_PRV_M_SYSLCK)) {
+        args.status = SS__NOSYSLCK;
+        args.lkid = 0;
+        goto out;
+    }
     vms_enq_core_ex(proc, &args, NULL);   /* local $ENQ: full deadlock detection */
+out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

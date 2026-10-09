@@ -74,43 +74,43 @@
     }
   ],
   "overall": {
-    "count": 477,
+    "count": 478,
     "by_status": {
       "verified": 24,
-      "implemented": 286,
+      "implemented": 287,
       "partial": 60,
       "stub": 14,
       "designed": 1,
       "absent": 92
     },
     "by_authenticity": {
-      "real": 332,
+      "real": 333,
       "n/a": 93,
       "advisory": 46,
       "facade-risk": 6
     },
-    "met": 310,
+    "met": 311,
     "in_progress": 60,
     "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 431,
+    "count": 432,
     "by_status": {
       "verified": 24,
-      "implemented": 286,
+      "implemented": 287,
       "partial": 58,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 330,
+      "real": 331,
       "n/a": 53,
       "advisory": 44,
       "facade-risk": 4
     },
-    "met": 310,
+    "met": 311,
     "in_progress": 58,
     "not_started": 63,
     "facade_risk": 4
@@ -1192,10 +1192,10 @@
       "vms_ref": "OpenVMS Guide to System Security ch. 3 (Privileges)",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 4,
+        "count": 5,
         "by_status": {
           "verified": 2,
-          "implemented": 1,
+          "implemented": 2,
           "partial": 1,
           "stub": 0,
           "designed": 0,
@@ -1203,9 +1203,9 @@
         },
         "by_authenticity": {
           "n/a": 1,
-          "real": 3
+          "real": 4
         },
-        "met": 3,
+        "met": 4,
         "in_progress": 1,
         "not_started": 0,
         "facade_risk": 0
@@ -5780,6 +5780,21 @@
       "evidence": "src/kernel-core/vms_access.c:320",
       "verified_against": "lab-VAX SDA READ SYS$SYSTEM:SYSDEF.STB (docs/oracle/vax73-privileges.md \u00a72)",
       "notes": "vms_ioctl_setprv; SETPRV can only narrow within the authorized mask, never exceed it. Re-census 2026-09-14: line ref stable (:320).",
+      "plan_ref": "vms-8ad"
+    },
+    {
+      "domain": "system-management",
+      "facility": "privileges",
+      "facility_name": "Privileges (Definition + Enforcement)",
+      "id": "privs$altpri_syslck_oper",
+      "kind": "feature",
+      "vms": "ALTPRI ($SETPRI above the authorized priority), SYSLCK (LCK$M_SYSTEM), OPER ($BRKTHRU to every terminal / user)",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vms_proctab.c",
+      "verified_against": "docs/oracle/semantics/privchk/vax73.txt (OpenVMS VAX V7.3); tests/qemu/test_syssvc_privilege_enforce.c",
+      "notes": "vms-768: without ALTPRI a raise above the authorized priority succeeds at the authorized priority; SS$_NOSYSLCK without SYSLCK; SS$_NOOPER without OPER. Not done: the authorized priority is the DEFPRI default 4 for every process (UAF PRIOR is not read yet); a non-system lock resource is not yet qualified by UIC group, so an LCK$M_SYSTEM lock and a group lock of the same name are one resource.",
       "plan_ref": "vms-8ad"
     },
     {

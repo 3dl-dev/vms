@@ -485,6 +485,12 @@ int main(void)
         CHECK(lpid != 0, "P7: the target resolves to a real Linux pid");
         CHECK(wait_for_exec(lpid, "sh") == 0, "P7: the target reached its sh image");
 
+        /* The caller's own base priority is made 2 first, so a prvpri that
+         * came from the caller (2) is told apart from the target's (its
+         * executive base priority, DEFPRI 4 -- vms-768). */
+        uint32_t own_prev = 0;
+        CHECK(sys$setpri(NULL, NULL, 2, &own_prev) == SS$_NORMAL,
+              "P7: the caller sets its own base priority to 2 first");
         errno = 0;
         int caller_nice_before = getpriority(PRIO_PROCESS, 0);
         if (errno != 0) caller_nice_before = 0;
@@ -504,8 +510,10 @@ int main(void)
         CHECK(caller_nice_after == caller_nice_before,
               "P7: the CALLER's own priority is UNCHANGED -- no facade self-set "
               "(the old code would have moved the caller's nice to 15)");
-        CHECK(prvpri == (uint32_t)(19 - child_nice_before),
-              "P7: prvpri returns the TARGET's prior priority, not the caller's");
+        (void)child_nice_before;
+        CHECK(prvpri == 4u,
+              "P7: prvpri returns the TARGET's prior priority (4), not the caller's (2)");
+        (void)sys$setpri(NULL, NULL, own_prev, NULL);   /* restore the caller */
 
         kill((pid_t)lpid, SIGKILL);
         reap(lpid);

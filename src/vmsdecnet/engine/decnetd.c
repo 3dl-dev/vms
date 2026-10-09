@@ -2765,7 +2765,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                 enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
                 uint8_t txt[DNET_CTERM_MAX_DATA];
                 size_t txtlen = 0;
-                uint8_t rhandle[2] = { 0, 0 };
+                uint8_t rhandle[4] = { 0, 0, 0, 0 };
                 if (dnet_cterm_found_terminal_rx(eng->rx_data, eng->rx_datalen,
                                                  &tk, txt, sizeof(txt), &txtlen,
                                                  rhandle) != DNET_CTERM_OK)

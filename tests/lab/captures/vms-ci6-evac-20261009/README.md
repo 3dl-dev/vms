@@ -55,3 +55,18 @@ Earlier runs on 2026-10-09 found, and #1578/#1582 fixed:
 - OVMX's lock vector left the node itself out at CSV slot 8 or above (1f0469a9).
 - An RCU stall in `$ENQW`'s signal path (82a0bb46).
 - An RCU stall in the deadlock search through the delivery process (fcf4f9a1).
+
+## Run 14 (14:22Z), after the queued-CONVERT answer (#1578 at 0a933743)
+
+Same bed. VAX2's standby EVACWL ran from VAX2's system disk.
+
+- VAX2's standby waited in **LEF**, a normal queued `$ENQW`, instead of RWSCS.
+  The OVMX master answered its CONVERT at once with 0xfb, as a real VAX master
+  does.
+- STOP on VAX1 → OVMX standby **granted EX** (the takeover), again.
+- `DISMOUNT/CLUSTER $2$DUA1:` on VAX1 **never returned**. VAX2's local DISMOUNT
+  succeeded. VAX1 returned to DCL the moment OVMXE left the cluster: the
+  cluster-wide dismount waits on something every member must do, and OVMX does
+  not do it.
+- OVMX DLM counters (CNXTRACE): requests received=4, grants=2, declined=3,
+  deferred grants owed=0. No bugcheck on either VAX; quorum held.

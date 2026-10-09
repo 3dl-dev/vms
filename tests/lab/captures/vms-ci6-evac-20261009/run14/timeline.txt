@@ -1,0 +1,12 @@
+14:22:43 T0 capture ci6-evac-14 (all 0x6007 frames). OVMXE build 6480e043 = origin/main + #1578@0a933743 (+ queued-CONVERT answer 0xfb, convert grant op 0x07) + #1582 + lab-only EVACWL. OVMXE 1030 LOCKDIRWT 1 VOTES 1 EV 3; real VAX1 1025 / VAX2 1026 V7.3 LOCKDIRWT 0 VOTES 1 EV 3; group 1. VAX2's EVACWL runs off its system disk
+14:25:00 OVMXE booted, member, logged in
+14:25:29 STEP 1 OVMXE: EVACWL STANDBY NL=90 -- NL on EVAC$WORKLOAD first (OVMXE = directory + master); CONVERT to EX after 90 s
+14:25:37 STEP 2 VAX1: EVACWL direct EX, forever -- the workload runs on the real VMS node
+14:27:14 T+90 s: OVMXE standby issued CONVERT NL->EX (queues behind VAX1's EX)
+14:27:24 STEP 3 VAX2: EVACWL STANDBY (image on VAX2's system disk; falsifier)
+14:28:11 VAX2's standby waits in LEF (a normal queued $ENQW wait) -- not RWSCS: the master answered its CONVERT 0xfb (queued). SDA VAX1: master CSID 00010008
+14:28:21 STEP 4 EVACUATE: STOP EVACVAX1 on VAX1 -- the workload leaves the VAX; its EX goes back to the master
+14:28:45 TAKEOVER: OVMXE granted EX on VAX1's release ('EVACWL: holding EVAC$WORKLOAD'); VAX2's standby still LEF-queued
+14:28:45 STEP 5 volume handoff: VAX1 DISMOUNT/CLUSTER $2$DUA1:
+14:30:51 FINDING: DISMOUNT/CLUSTER on VAX1 never returns -- it waits for every member's answer to the cluster-wide dismount request, and OVMX does not implement that request (the CLUSTER_SERVER/remote-dismount path). Interrupting; dismounting node by node instead
+14:33:10 STOP run 14: VAX1's DISMOUNT/CLUSTER still hung after VAX2's local DISMOUNT; OVMX CNXTRACE: DLM requests received=4 grants=2 declined=3 owed=0. Saving evidence, then OVMXE killed to release VAX1

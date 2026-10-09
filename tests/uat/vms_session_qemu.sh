@@ -194,43 +194,24 @@ SYSTEM_CMDS+=('IDENT_WORLD2 = F$PRIVILEGE("WORLD")')
 SYSTEM_CMDS+=('SHOW SYMBOL IDENT_WORLD2')
 IDX_WORLD2_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
 
-# DEFECT-1 PROOF, ROUND 5: the report (F$PRIVILEGE) and the GATE (SET
-# PROCESS's own privilege check) must agree about the SAME process at the
-# SAME instant -- round 4 fixed the REPORT (F$PRIVILEGE/SHOW PROCESS/
-# PRIVILEGES all read the executive fresh) but left every DCL privilege
-# GATE reading the RAW, unmasked ctx->privileges the session's identity
-# was given at VMS_IOCTL_SETIDENT time. MEASURED before this fix, on this
-# exact runtime, in this exact SYSTEM session:
-#   $ IDENT_ALTPRI = F$PRIVILEGE("ALTPRI")
-#   $ SHOW SYMBOL IDENT_ALTPRI        -> IDENT_ALTPRI = "FALSE"
-#   $ SET PROCESS/PRIORITY=6          -> AUTHORIZED (no error) -- SAME
-#                                         session, SAME moment the report
-#                                         above said ALTPRI was not held.
-# Root cause: SYSUAF's SYSTEM record authorizes ALL privileges, and
-# VMS_IOCTL_SETIDENT sets cur_privs = the full authorized mask verbatim
-# (OVMX design choice, vms_proctab.c) for a caller with SETPRV -- so
-# ctx->privileges (dcl_main.c, filled from that same read) genuinely
-# contains ALTPRI, even though F$PRIVILEGE and SHOW PROCESS/PRIVILEGES
-# correctly mask it out of what they REPORT (VMS_PRV_M_ENFORCED). The
-# GATE in cmd_set_process (src/vmsdcl/dcl_cmd_set.c) read the unmasked
-# value, so it granted what the masked report had just denied.
-# Fix: every gate in dcl_cmd_set.c now asks enforced_privs_held(), the
-# SAME masked, freshly-read source F$PRIVILEGE and SHOW PROCESS/
-# PRIVILEGES use -- so SET PROCESS/PRIORITY is refused whenever
-# F$PRIVILEGE("ALTPRI") says FALSE, on this SYSTEM session included
-# (ALTPRI is authorized by SYSUAF but not in VMS_PRV_M_ENFORCED, so it is
-# never granted by strength alone until vms-pv1 gives it real
-# enforcement -- Rule 10's HIDE answer, applied to the gate, not just the
-# display).
-# Checked BY POSITION (see the DEFECT-1 round-4 block above for why):
-# IDENT_ALTPRI's text is unique so far in SYSTEM_CMDS, but SET PROCESS is
-# not, and the discipline of anchoring every assertion in this block to a
-# position rather than text is kept uniform rather than mixed per-command.
+# THE REPORT AND THE GATE AGREE, AND BOTH ARE THE EXECUTIVE'S (vms-2b8 round 5,
+# vms-768). F$PRIVILEGE reads the executive's privileges masked to
+# VMS_PRV_M_ENFORCED; ALTPRI and OPER joined that mask in vms-768, so for this
+# SYSTEM session -- SYSUAF privilege ALL, and on real VMS SYSTEM's process
+# privileges include ALTPRI and OPER (docs/oracle/vax73-privileges.md §4) --
+# F$PRIVILEGE("ALTPRI") is TRUE, and SET PROCESS/PRIORITY=6 is $SETPRI in the
+# executive, which grants it: F$GETJPI("","PRIB") then reads 6. (Before vms-768
+# this block pinned the HIDE answer -- ALTPRI FALSE and /PRIORITY refused --
+# because nothing enforced ALTPRI yet.) Checked BY POSITION: SET PROCESS is not
+# unique text in SYSTEM_CMDS.
 SYSTEM_CMDS+=('IDENT_ALTPRI = F$PRIVILEGE("ALTPRI")')
 SYSTEM_CMDS+=('SHOW SYMBOL IDENT_ALTPRI')
 IDX_ALTPRI=$(( ${#SYSTEM_CMDS[@]} - 1 ))
 SYSTEM_CMDS+=('SET PROCESS/PRIORITY=6')
 IDX_PRIORITY_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
+SYSTEM_CMDS+=('SYS_PRIB = F$GETJPI("","PRIB")')
+SYSTEM_CMDS+=('SHOW SYMBOL SYS_PRIB')
+IDX_PRIB_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
 
 # F$GETJPI CURPRIV / AUTHPRIV FORMAT (vms-2b8 round 5). Before this round
 # CURPRIV returned a decimal integer (never pinned to any VMS source) and
@@ -250,20 +231,13 @@ SYSTEM_CMDS+=('SHOW SYMBOL IDENT_CURPRIV')
 SYSTEM_CMDS+=('IDENT_AUTHPRIV = F$GETJPI("","AUTHPRIV")')
 SYSTEM_CMDS+=('SHOW SYMBOL IDENT_AUTHPRIV')
 
-# DEFECT-1 REGRESSION, DISCLOSED (vms-2b8 round 6): SET TIME's gate
-# (OPER||SYSPRV||BYPASS, none of which VMS_PRV_M_ENFORCED names) can no
-# longer be passed by ANY identity, including this SYSTEM session, whose
-# SYSUAF record authorizes privilege ALL. This is the same shape as
-# the ALTPRI/PRIORITY proof above -- a capability that worked before round
-# 5's fix and cannot work now, for anyone, until vms-pv1 -- but SET TIME
-# had no dedicated assertion of its own until this round. It gets one now,
-# for the same reason PRIORITY did: an undisclosed behaviour change is not
-# the same defect as an unenforced privilege, and hiding it from the test
-# suite is exactly the silence Rule 10 forbids. The date is fictional and
-# far enough in the future to not collide with the host clock; if this
-# command somehow succeeded it would visibly jump SHOW TIME on the NEXT
-# command, which nothing here reads, so no side effect is exercised or
-# needed -- the check is purely on this command's own refusal.
+# SET TIME (vms-768): its privilege gate is OPER, which SYSTEM holds, so DCL's
+# gate admits this session. The clock itself is then set with settimeofday(2),
+# which the substrate refuses for the non-root process LOGINOUT dropped to --
+# an honest refusal, but not VMS behaviour (real VMS sets the time). The
+# executive $SETIME that would make it VMS behaviour is rd vms-189;
+# until then this pins the honest refusal AFTER the gate, and GUEST (no OPER)
+# pins the gate's own refusal.
 SYSTEM_CMDS+=('SET TIME 1-JAN-2030:00:00:00')
 IDX_TIME_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
 
@@ -273,6 +247,12 @@ USER_CMDS=(
     'TYPE UATUSER.TXT'
     'COPY SYS$MANAGER:LOGIN.COM SYS$SYSTEM:UATDENY.TXT'
     'TYPE SYS$SYSTEM:UATDENY.TXT'
+    'GUEST_OPER = F$PRIVILEGE("OPER")'
+    'SHOW SYMBOL GUEST_OPER'
+    'SET PROCESS/PRIORITY=7'
+    'GUEST_PRIB = F$GETJPI("","PRIB")'
+    'SHOW SYMBOL GUEST_PRIB'
+    'SET TIME 2-JAN-2030:00:00:00'
 )
 CMD_COUNT=$(( ${#SYSTEM_CMDS[@]} + ${#USER_CMDS[@]} ))
 
@@ -919,23 +899,12 @@ check_response 'SHOW PROCESS' 'Process name: "SYSTEM"'
 # unmasked display.
 check_response_at "$IDX_PRIV_ORIGINAL" '(CMKRNL|CMEXEC|SETPRV|WORLD)'
 
-# F$PRIVILEGE MUST AGREE WITH SHOW PROCESS/PRIVILEGES ABOUT THE SAME
-# PROCESS AT THE SAME MOMENT (vms-2b8 round 3).
-#
-# WHY THIS EXISTS. Measured before this round's fix, on the real runtime:
-# SYSTEM's SYSUAF record authorizes OPER, so SHOW PROCESS /PRIVILEGES
-# above -- masked to VMS_PRV_M_ENFORCED -- correctly showed no OPER
-# anywhere, while `F$PRIVILEGE("OPER")` on the SAME session answered
-# "TRUE", because src/vmsdcl/dcl_lexical.c's lex_privilege() read the
-# executive's RAW cur_privs, unmasked. That is OVMX advertising a
-# privilege it cannot enforce -- Rule 10's illegal third answer -- through
-# a surface DCL scripts branch on (`IF F$PRIVILEGE(...) THEN`), which is
-# worse than a display line: code takes the wrong path, not just a human
-# reading the wrong text. lex_privilege() now masks to
-# VMS_PRV_M_ENFORCED, same as the display above, so OPER (authorized but
-# unenforced) must read FALSE and SETPRV (authorized AND enforced) must
-# read TRUE for the identical session.
-check_response 'SHOW SYMBOL IDENT_OPER' 'IDENT_OPER = "FALSE"'
+# F$PRIVILEGE MUST AGREE WITH SHOW PROCESS/PRIVILEGES ABOUT THE SAME PROCESS
+# AT THE SAME MOMENT (vms-2b8 round 3): both read the executive's privileges
+# masked to VMS_PRV_M_ENFORCED, so neither can claim a privilege OVMX does not
+# enforce. OPER is enforced since vms-768 and SYSTEM holds it, as on real VMS
+# (docs/oracle/vax73-privileges.md §4), so it reads TRUE, like SETPRV.
+check_response 'SHOW SYMBOL IDENT_OPER' 'IDENT_OPER = "TRUE"'
 check_response 'SHOW SYMBOL IDENT_SETPRV' 'IDENT_SETPRV = "TRUE"'
 
 # SET PROCESS/PRIVILEGES MUST NOT BE ABLE TO DESYNCHRONIZE F$PRIVILEGE FROM
@@ -974,16 +943,10 @@ check_response_at "$IDX_PRIV_AFTER_SET" '(CMKRNL|CMEXEC|SETPRV|WORLD)'
 check_response_at "$IDX_SETPRV2_AFTER_SET" 'IDENT_SETPRV2 = "TRUE"'
 check_response_at "$IDX_WORLD2_AFTER_SET" 'IDENT_WORLD2 = "TRUE"'
 
-# DEFECT-1 PROOF, ROUND 5 (see the SYSTEM_CMDS block above for the full
-# measured-before/fixed-after account): the REPORT and the GATE must
-# agree. IDENT_ALTPRI's text is unique in this session so a plain
-# check_response would be safe for it alone, but SET PROCESS/PRIORITY=6
-# prints nothing on success (silently would look identical to "ran and
-# printed nothing yet") and only %SET-E-NOPRIV on refusal, so the
-# by-position anchor matters for THAT check specifically; both are
-# checked the same way for consistency with the rest of this block.
-check_response_at "$IDX_ALTPRI" 'IDENT_ALTPRI = "FALSE"'
-check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
+# THE REPORT AND THE GATE (see the SYSTEM_CMDS block above): ALTPRI is held,
+# and $SETPRI really set the base priority the executive reports.
+check_response_at "$IDX_ALTPRI" 'IDENT_ALTPRI = "TRUE"'
+check_response_at "$IDX_PRIB_AFTER_SET" 'SYS_PRIB = "?6"?( |$)'
 
 # F$GETJPI CURPRIV/AUTHPRIV FORMAT (vms-2b8 round 5, see the SYSTEM_CMDS
 # block above). Ascending bit-position order, matching the oracle's own
@@ -1026,40 +989,29 @@ check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOSETPRV'
 # NOTE (vms-e5d7): SET PROCESS/PRIVILEGES no longer consults
 # enforced_privs_held() -- the executive authorizes it now, and the old DCL
 # pre-gate was removed (it wrongly refused enabling an already-authorized
-# privilege, docs/oracle/vax73-privileges.md §3/§8). The remaining
-# enforced_privs_held() gates are SET PROCESS/PRIORITY and SET TIME, both
-# deny-only on this build (ALTPRI/OPER/SYSPRV/BYPASS are all outside
-# VMS_PRV_M_ENFORCED). VERIFIED NON-VACUOUS BY MUTATION
-# (src/vmsdcl/dcl_cmd_set.c's enforced_privs_held(), rebuilt + re-booted under
-# QEMU): forcing the body to `return ~(uint64_t)0;` (always-grant) reddens
-# IDX_PRIORITY_SET ('NOPRIV' -- SET PROCESS/PRIORITY=6 becomes silently
-# authorized) AND the SET TIME deny assertion below (its gate passes on the
-# forced OPER bit, so cmd_set_time falls through to the real settimeofday(2),
-# which fails with a genuine OS EPERM printing a DIFFERENT message than the
-# gate-refusal text). So a gate that always grants is caught by the deny pair.
+# privilege, docs/oracle/vax73-privileges.md §3/§8). The one remaining
+# enforced_privs_held() gate exercised here is SET TIME's OPER check: SYSTEM
+# passes it, GUEST is refused by it (both asserted below), so a gate that
+# always grants or always refuses reddens one side. SET PROCESS/PRIORITY has
+# no DCL gate since vms-768 -- the executive's $SETPRI decides, and the PRIB
+# readbacks (6 for SYSTEM, clamped 4 for GUEST) prove it decided.
 check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
 
-# DEFECT-1 REGRESSION PROOF, SET TIME (see the SYSTEM_CMDS block above for
-# the full account): OPER/SYSPRV/BYPASS are all outside VMS_PRV_M_ENFORCED,
-# so this SYSTEM session -- SYSUAF-authorized for privilege ALL -- must
-# still be refused. 'SET TIME 1-JAN-2030:00:00:00' is unique text, so a
-# plain check_response is safe.
-#
-# NOT matched on the bare substring 'NOPRIV': cmd_set_time has a SECOND,
-# unrelated failure path below the privilege gate (settimeofday(2)
-# returning EPERM, e.g. if this ever ran as a non-root OS user with the
-# gate somehow passed) that ALSO renders as "%SET-E-NOPRIV, ..." -- same
-# facility/severity/ident, different text. A bare 'NOPRIV' match would be
-# satisfied by either branch and could not tell "the executive-mask gate
-# refused" from "the gate passed and the OS syscall refused instead",
-# which is exactly the kind of assertion Method Requirement 3 rules out.
-# FOUND BY MUTATION, not by inspection: the always-grant mutation
-# described above (enforced_privs_held() forced to `return ~(uint64_t)0`)
-# initially showed this check passing for the wrong reason -- against a
-# bare 'NOPRIV' pattern it was satisfied by the OS EPERM message instead
-# of going red -- before the pattern was narrowed to the gate's own
-# disclosure text, which only the privilege-check branch prints.
-check_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
+# SET TIME for SYSTEM (see the SYSTEM_CMDS block above): the OPER gate admits
+# it (its refusal text must be ABSENT), and the substrate's refusal to set the
+# clock for a non-root process is what remains, reported honestly.
+check_not_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
+check_response 'SET TIME 1-JAN-2030:00:00:00' 'insufficient OS privilege'
+
+# THE OTHER SIDE OF EACH GATE: GUEST (SYSUAF TMPMBX only) holds neither OPER
+# nor ALTPRI. On OpenVMS VAX V7.3 a raise above the authorized priority
+# without ALTPRI SUCCEEDS at the authorized priority, silently
+# (docs/oracle/semantics/privchk PRI.*; the executive clamps, vms-768), and
+# SET TIME without OPER is refused.
+check_response 'SHOW SYMBOL GUEST_OPER' 'GUEST_OPER = "FALSE"'
+check_not_response 'SET PROCESS/PRIORITY=7' 'NOPRIV|ALTPRI|-E-|-F-'
+check_response 'SHOW SYMBOL GUEST_PRIB' 'GUEST_PRIB = "?4"?( |$)'
+check_response 'SET TIME 2-JAN-2030:00:00:00' 'no privilege for SET TIME'
 
 # THE SUBPROCESS INHERITS THE CREATOR'S IDENTITY (vms-19e9).
 #

@@ -1424,6 +1424,17 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
         strncpy(result, info.prcnam, result_size - 1);
     } else if (strcmp(s, "PID") == 0) {
         snprintf(result, result_size, "%08X", (unsigned)info.vms_pid);
+    } else if (strcmp(s, "PRIB") == 0 || strcmp(s, "AUTHPRI") == 0) {
+        /* JPI$_PRIB / JPI$_AUTHPRI: the base and authorized priority the
+         * executive holds for that process (vms-768, VMS_IOCTL_PRI). */
+        uint32_t pri = 0, authpri = 0;
+        uint32_t pst = vms_kif_pri(VMS_PRI_OP_GET, info.vms_pid, &pri, NULL, &authpri);
+        if (!(pst & 1)) {
+            if (ctx) ctx->last_status = pst;
+            return -1;
+        }
+        snprintf(result, result_size, "%u",
+                 (unsigned)(strcmp(s, "PRIB") == 0 ? pri : authpri));
     } else if (strcmp(s, "MODE") == 0) {
         /*
          * JPI$_MODE (INTERACTIVE/BATCH/NETWORK/OTHER) is not carried in the

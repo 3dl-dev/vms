@@ -173,6 +173,9 @@ dlm-hash-empty-name-not-refused
 dlm-hash-coverage-claims-too-much
 dlm-engine-extrapolates-the-hash
 dlm-unroutable-refuses-the-caller
+dlm-grant-handles-swapped
+dlm-grant-record-omitted
+dlm-echo-guard-never-caps
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -597,6 +600,71 @@ the readback reports NO directory rather than a guessed one (INV-6)
 and sends nothing
 *** counted as an uncovered-identity local mastery ***
   with nothing sent
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-handles-swapped)
+        case "$_f" in
+        facility)     echo "THE TWO LOCK HANDLE SLOTS of a DLM request/grant (vms_cluster_codec_dlm.h, rd vms-b5b0): body[20:24] is the MASTER's handle and body[24:28] the REQUESTER's -- a grant that returns them the other way round cannot be correlated by the requester";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.h";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place.";;
+        require_fail) cat <<'EOF'
+  body[20:24] == 0x080001cd, the MASTER's handle -- which is why a release names its lock here: the GRANT assigned this requester
+  body[20:24] == 0x0a0003a4, the MASTER's handle
+  body[20:24] == 0x0a0003af, the MASTER's handle for the resource
+  body[20:24] == the MASTER's handle for the lock being converted (a convert names the lock on the master; slots per rd vms-b5b0)
+  body[20:24] == the MASTER's handle, which the GRANT assigned (rd vms-b5b0 relabelled the slot)
+  body[20:24] echoes the request's own master-slot placeholder UNCHANGED: a deny assigns no handle (slots per rd vms-b5b0)
+  body[20:24] is THE MASTER's handle (rd vms-b5b0 relabelled it; the byte value is the ac4 one)
+  body[20:24]: the master-handle slot, carrying the GROUNDED PID-form placeholder (no master handle yet)
+  body[24:28] == 0x2b000489, the requester's own handle (rd vms-b5b0 relabelled the slot) -- the driving ENQ for 'OVMXLVB3' carried
+  body[24:28] == 0x3a0004eb, the REQUESTER's own handle (rd vms-b5b0 relabelled the slot), the driving ENQ for 'OVMXDEQ1' carried
+  body[24:28] == 0x570001b7, the requester's own handle for 'OVMXLV01', echoed by the grant
+  body[24:28] == 0x590004e3, the holder's own handle (rd vms-b5b0 relabelled the slot) -- the EX holder's ENQ for 'OVMXBLK2' carried
+  body[24:28] == the requester's own handle
+  body[24:28] is THE REQUESTER's own handle
+  body[24:28]: this composed specimen leaves the requester's own slot 0 (a real VAX puts its handle there -- see dlm-real-enq-request)
+*** and carries the handle the MASTER assigned ***
+*** body[20:24] is the MASTER's handle slot, carrying the PID-form placeholder on a fresh ENQ ***
+*** body[24:28] is THE REQUESTER's own handle (0x090003cd -- a value no master ever sent it) ***
+*** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+*** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-record-omitted)
+        case "$_f" in
+        facility)     echo "THE GRANT RECORD a real master's grant always carries (vms_cluster_codec_dlm.c, rd vms-b5b0): body[28]=0x10 and body[32:36]={01 00 fa 00}, whose body[34]=0xfa is the outcome byte every answer is read by";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
+        require_fail) cat <<'EOF'
+*** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-echo-guard-never-caps)
+        case "$_f" in
+        facility)     echo "THE ECHO GUARD (vms_dlm_echo_guard.c, rd vms-b5b0): this node stops answering a system that keeps re-sending one request it has already answered identically";;
+        targets)      echo "kernel-core/vms_dlm_echo_guard.c";;
+        suites_red)   echo "test_dlm_echo_guard";;
+        isolation)    echo "isolated";;
+        why)          echo "the guard is made to admit every answer, so a reply loop runs without end again. The guard is the TEETH that makes the measured storm class self-limiting whatever causes it next: 63.7 s of 1026-frames-per-second against a real VAX ended because a human noticed, not because either executive stopped. OVMX must never be the node that keeps feeding a peer a frame it cannot use (memory ovmx-never-crashes-a-peer).";;
+        require_fail) cat <<'EOF'
+*** ...and the loud system is STILL capped after a crowd of quiet ones passed through: a peer cannot flush the guard by varying who asks ***
+*** every one after that was WITHHELD: 63 s of storm becomes 8 frames ***
+*** exactly VMS_DLM_ECHO_MAX_SAME identical answers went out of a thousand asked for ***
+VAX1's loop is being withheld
+and the console line is flagged exactly ONCE, however long the peer keeps asking (65,000 identical console lines is its own denial of service)
+one conversation hit the bound
+the guard's own counter agrees -- a real number for SHOW CLUSTER/diagnostics, not a log line
+the loud system is capped
 EOF
                       ;;
         esac;;
@@ -1733,6 +1801,24 @@ apply_edit() {
     dlm-hash-coverage-claims-too-much)
         # The mask literal is unique in the header.
         sed -i 's|#define VMS_DLM_HASH_LEN_PROVEN    0xdf7ffffeu|#define VMS_DLM_HASH_LEN_PROVEN    0xfffffffeu /* NEGCTL dlm-hash-coverage-claims-too-much */|' "$_file";;
+
+    dlm-grant-handles-swapped)
+        # The two #define lines are unique; swapping their values is the whole
+        # defect. The replacement text differs from the original, so a second
+        # apply cannot match it.
+        sed -i 's|#define VMS_OFF_DLM_MASTER_LKID    92u|#define VMS_OFF_DLM_MASTER_LKID    96u /* NEGCTL dlm-grant-handles-swapped */|' "$_file"
+        sed -i 's|#define VMS_OFF_DLM_REQ_LKID       96u|#define VMS_OFF_DLM_REQ_LKID       92u /* NEGCTL */|' "$_file";;
+
+    dlm-grant-record-omitted)
+        # The record's two writes in the grant builder. Removing the flag write
+        # removes the anchor, so a second apply cannot match.
+        sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
+        sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+
+    dlm-echo-guard-never-caps)
+        # The one decision this TU makes. Replacing the bound test with an
+        # always-admit removes the anchor.
+        sed -i 's|\tif (s->run >= VMS_DLM_ECHO_MAX_SAME) {|\tif (0) { /* NEGCTL dlm-echo-guard-never-caps */|' "$_file";;
 
     dlm-unroutable-refuses-the-caller)
         # The fallback's own line is unique in vms_lock.c.

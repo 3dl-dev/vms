@@ -234,7 +234,7 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 
 	dq_bzero(&req, (uint32_t)sizeof(req));
 	req.mode            = (uint8_t)p->lkmode;
-	req.req_pid_or_lkid = p->req_lkid;      /* our own executive handle */
+	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
 	req.dir_hash        = p->dir_hash;
 	req.dir_hash_valid  = p->dir_hash_known;
@@ -696,9 +696,17 @@ static void h_grant(struct dlm_req_fsm *f, struct dq_ev *e)
 
 	dq_bzero(&g, (uint32_t)sizeof(g));
 	g.req_lkid     = r->req_lkid;          /* OUR key, not the frame's    */
-	g.master_lkid  = e->rsp->master_lkid;  /* codec body[24:28]           */
+	g.master_lkid  = e->rsp->master_lkid;  /* codec body[20:24]           */
 	g.master_csid  = e->from_csid;         /* the frame's SCA source      */
-	g.granted_mode = e->rsp->granted_mode; /* codec body[30]              */
+	/*
+	 * THE GRANTED MODE IS NOT ON THE WIRE (rd vms-b5b0): 38 of 38 real
+	 * grants clear body[30]. A grant means "the mode you asked for", and
+	 * only the requester's own LKB holds that -- so this is passed through
+	 * as "absent" and the ENGINE grants from the lock. The field is filled
+	 * only for the one shape that does carry a mode.
+	 */
+	g.granted_mode = e->rsp->granted_mode;
+	g.granted_mode_present = e->rsp->granted_mode_present;
 	/*
 	 * THE LVB READ CROSSING (vms-727). When the grant reply carried the
 	 * master's value block (the codec recognised the grounded
@@ -752,6 +760,7 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 	g.master_lkid  = e->rsp->master_lkid;
 	g.master_csid  = e->from_csid;
 	g.granted_mode = e->rsp->granted_mode;
+	g.granted_mode_present = e->rsp->granted_mode_present;
 
 	f->grants_duplicate++;
 	if (f->ops->grant_recv(f->ops->ctx, &g) != 0) {

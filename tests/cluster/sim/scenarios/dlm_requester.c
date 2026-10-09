@@ -231,8 +231,14 @@ static int sender_addressed_the_directory(uint32_t req_lkid)
 	return r != NULL && r->to_directory != 0u;
 }
 
-static uint32_t make_grant_frame(uint8_t *frame, uint32_t req_lkid,
-				 uint32_t master_lkid, uint8_t mode)
+/*
+ * A simulated master's GRANT (rd vms-b5b0): an ECHO OF THE REQUEST it answers,
+ * which is the one shape a real master sends. `reqbody` is the body that
+ * arrived at this simulated system -- so the grant carries the requester's own
+ * handle back by construction rather than by the scenario asserting it.
+ */
+static uint32_t make_grant_frame(uint8_t *frame, const uint8_t *reqbody,
+				 uint32_t reqlen, uint32_t master_lkid)
 {
 	struct vms_cm_link link;
 	uint32_t written = 0;
@@ -240,10 +246,9 @@ static uint32_t make_grant_frame(uint8_t *frame, uint32_t req_lkid,
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
-	(void)vms_dlm_enq_response_build_grant(req_lkid, master_lkid, mode,
-					       frame, VMS_CM_FRAME_LEN,
+	(void)vms_dlm_enq_response_build_grant(reqbody, reqlen, master_lkid,
+					       NULL, frame, VMS_CM_FRAME_LEN,
 					       &written);
-	frame[VMS_OFF_DLM_CAT] = (uint8_t)(VMS_DLM_CAT_REQUEST | 0x80u);
 	return VMS_CM_FRAME_LEN;
 }
 
@@ -303,7 +308,7 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	 * to a MASTER would be asking "are you the directory for a frame nobody
 	 * sent you as a lookup", and its answer means nothing.
 	 */
-	if (sender_addressed_the_directory(req.req_pid_or_lkid)) {
+	if (sender_addressed_the_directory(req.req_lkid)) {
 		if (cnxman_dir_lookup_received(&g_sys[sys].cl.club,
 					       vms_ldwv_key(req.dir_hash),
 					       g_csid[SIM_OVMX],
@@ -316,15 +321,15 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	if (g_csid[sys] == g_sim_master) {
 		/* This system masters the tree: it GRANTS, with a handle of its
 		 * own choosing. */
-		uint32_t rlen = make_grant_frame(rframe, req.req_pid_or_lkid,
-						 g_sim_master_lkid, req.mode);
+		uint32_t rlen = make_grant_frame(rframe, body, len,
+						 g_sim_master_lkid);
 
 		(void)dlm_req_fsm_reply(&g_fsm, g_csid[sys], 0u, rframe, rlen);
 		return;
 	}
 
 	/* It is the directory but not the master: outcome 2. */
-	(void)dlm_req_fsm_redirect(&g_fsm, req.req_pid_or_lkid, g_sim_master);
+	(void)dlm_req_fsm_redirect(&g_fsm, req.req_lkid, g_sim_master);
 }
 
 static int fsm_send(void *ctx, vms_csid_t dst, const uint8_t *body,
@@ -562,7 +567,7 @@ static void wire_teaches_hash(const char *resnam, uint32_t hash)
 
 	memset(&req, 0, sizeof(req));
 	req.mode = VMS_LCK_PR;
-	req.req_pid_or_lkid = 0x5150u;      /* the SENDER's handle, not ours */
+	req.req_lkid = 0x5150u;      /* the SENDER's handle, not ours */
 	req.dir_hash = hash;
 	req.dir_hash_valid = 1u;
 	/* ...and the IDENTITY the value is of (rd vms-b5b0): the domain this
@@ -769,7 +774,7 @@ static void cross_node_enq_resolves_and_grants(void)
 		 "the lookup parses as a cat-02 op-01");
 	ct_check_eq_u32(sent.dir_hash, hash,
 			"*** body[128:132] is the value the WIRE taught us ***");
-	ct_check_eq_u32(sent.req_pid_or_lkid, lkid,
+	ct_check_eq_u32(sent.req_lkid, lkid,
 			"body[20:24] is the executive's own lock handle");
 
 	ct_check_eq_u32(g_wire[1].dst, g_csid[0],

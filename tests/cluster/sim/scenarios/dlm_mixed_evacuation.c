@@ -514,7 +514,7 @@ static int vax_enq_frame(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 
 	memset(&r, 0, sizeof(r));
 	r.mode = mode;
-	r.req_pid_or_lkid = vax_lkid;
+	r.req_lkid = vax_lkid;
 	r.name_len = (uint8_t)strlen(name);
 	memcpy(r.name, name, r.name_len);
 	r.dir_hash = hash;
@@ -572,7 +572,7 @@ static void vax_served(const uint8_t *frame, vms_csid_t from, uint32_t flags,
 	mr.op = (wireop == VMS_DLM_WIREOP_CONVERT) ? VMS_DLM_MREQ_CONVERT :
 						     VMS_DLM_MREQ_ENQ;
 	mr.req_csid = (uint32_t)from;
-	mr.req_lkid = e.req_pid_or_lkid;
+	mr.req_lkid = e.req_lkid;
 	mr.master_lkid = e.master_lkid;
 	mr.lkmode = e.mode;
 	mr.flags = flags;
@@ -585,15 +585,24 @@ static void vax_served(const uint8_t *frame, vms_csid_t from, uint32_t flags,
 	(void)vms_lock_dlm_master_serve(&mr, out);
 }
 
-/* The VMS master's GRANT for a request this node sent it. */
+/*
+ * The VMS master's GRANT for a request this node sent it -- an ECHO of the
+ * frame this node actually put on the wire (rd vms-b5b0), which is what a real
+ * master answers with and what carries this node's own handle back to it.
+ */
 static int vax_grants(uint32_t our_lkid, uint32_t vax_master_lkid, uint8_t mode)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	uint32_t written = 0;
 
+	(void)our_lkid;
+	(void)mode;
+	if (o.n_sent == 0u)
+		return -1;
 	memset(frame, 0, sizeof(frame));
-	if (vms_dlm_enq_response_build_grant(our_lkid, vax_master_lkid, mode,
-					     frame, (uint32_t)sizeof(frame),
+	if (vms_dlm_enq_response_build_grant(o.last, VMS_CM_BODY_LEN,
+					     vax_master_lkid, NULL, frame,
+					     (uint32_t)sizeof(frame),
 					     &written) != VMS_CODEC_OK)
 		return -1;
 	return dlm_req_fsm_reply_body(&o.fsm, (vms_csid_t)CSID_VAX, 0u,
@@ -995,6 +1004,82 @@ static void a_name_ovmx_masters_is_served_to_the_vms_node(void)
 	ovmx_down();
 }
 
+/* ==========================================================================
+ * THE REQUEST STORM, AT THE SIM RUNG (rd vms-b5b0)
+ *
+ * The lab configuration exactly: an OVMX process takes NL on the workload
+ * resource (so OVMX masters it), then the VMS node $ENQWs EX. NL is compatible
+ * with everything, so this is the GRANTABLE case -- the master answers at once,
+ * and the answer has to be one the requester can match to its own lock.
+ *
+ * When it was not, the VMS node re-sent the same request 65,356 times in 63.7 s
+ * and OVMX answered 65,340 of them. This leg asserts the frame OVMX produces
+ * for that exact exchange carries the REQUESTER's own handle back -- built the
+ * way the wire arm builds it, from the master result's handle and the request's
+ * own bytes, and read back with the shipping parser.
+ * ========================================================================== */
+static void a_grantable_remote_request_is_answered_correlatably(void)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN], reply[VMS_CM_FRAME_LEN];
+	struct vms_dlm_master_result res;
+	struct vms_dlm_enq_response parsed;
+	struct vms_resmaster_args rm;
+	uint32_t written = 0, lkid = 0;
+
+	printf("-- the storm's exchange: NL held here, EX asked from the VMS "
+	       "node --\n");
+	sim_clock_init(&g_clock, 9000u);
+	ovmx_up();
+
+	ct_check(do_enq(WL, LCK_K_NLMODE, 0u, &lkid) == SS__NORMAL,
+		 "an OVMX process takes NL on the workload resource");
+	read_resmaster(WL, &rm);
+	ct_check_eq_u32(rm.is_local_master, 1u, "  so OVMX masters it");
+
+	clock_advance(10000u);              /* the lab's ~10 s gap */
+	ct_check(vax_enq_frame(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID,
+			       (uint8_t)LCK_K_EXMODE, WL, WL_HASH) == 0,
+		 "the VMS node's op-0x01 EX is built");
+
+	vax_served(frame, CSID_VAX, 0u, &res);
+	ct_check_eq_u32(res.outcome, (uint32_t)VMS_DLM_MASTER_GRANTED,
+			"*** the engine GRANTS it immediately: NL conflicts "
+			"with nothing, so there is nothing to queue ***");
+	ct_check(res.master_lkid != 0u,
+		 "  and the grant carries a real master handle of ours");
+
+	/* The reply, built the way the wire arm builds it. */
+	memset(reply, 0, sizeof(reply));
+	ct_check(vms_dlm_enq_response_build_grant(body_of(frame),
+						  VMS_CM_BODY_LEN,
+						  res.master_lkid, NULL, reply,
+						  (uint32_t)sizeof(reply),
+						  &written) == VMS_CODEC_OK,
+		 "the grant frame is built from the request and the engine's "
+		 "own handle");
+
+	/* Read back at the BODY level, the way the receiving arm reads a frame
+	 * the connection manager handed it (the builder writes the DLM body;
+	 * the CM owns the envelope). */
+	ct_check(vms_dlm_enq_response_parse_body(body_of(reply),
+						 VMS_CM_BODY_LEN, &parsed) ==
+		 VMS_CODEC_OK,
+		 "and it reads back as an ENQ response");
+	ct_check_eq_u32(parsed.outcome, (uint32_t)VMS_DLM_ENQ_GRANTED,
+			"  a GRANT (the 0xfa outcome byte)");
+	ct_check_eq_u32(parsed.req_lkid, VAX_LKID,
+			"*** carrying THE VMS NODE'S OWN handle back: the "
+			"correlation whose absence caused the storm ***");
+	ct_check_eq_u32(parsed.master_lkid, res.master_lkid,
+			"*** and OUR handle in the master's slot, not in the "
+			"requester's ***");
+	ct_check(parsed.master_lkid != VAX_LKID,
+		 "  the two are not the same value by accident");
+
+	ct_check(do_deq(lkid) == SS__NORMAL, "the OVMX holder releases");
+	ovmx_down();
+}
+
 static void the_vms_node_leaves_and_the_standby_runs(void)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
@@ -1045,6 +1130,7 @@ int main(void)
 	an_ovmx_first_name_goes_to_the_vax_directory();
 	the_workload_lock_moves_vms_to_ovmx();
 	a_name_ovmx_masters_is_served_to_the_vms_node();
+	a_grantable_remote_request_is_answered_correlatably();
 	the_vms_node_leaves_and_the_standby_runs();
 
 	return ct_summary("sim/dlm_mixed_evacuation");

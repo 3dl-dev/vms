@@ -1021,6 +1021,38 @@ Decisions:
   DESTINATION in the connection manager. The op-0x05 BLKAST is still not in
   that set and still gated, for the reason it always was.
 
+- **D-DLM-2.1 — THE ANSWER MUST BE CORRELATABLE, and the reply path has
+  teeth** (rd vms-b5b0, forced by a measured storm on 2026-10-09). A master's
+  grant is **the request, echoed**, with only what a grant owns overwritten:
+  the master's handle at `body[20:24]`, the grant record (`body[28]=0x10`,
+  `body[32:36]={01 00 fa 00}`, whose `body[34]=0xfa` is the outcome byte), the
+  master resource's value block at `body[36:52]`, the mode byte cleared, the
+  identity and name span cleared. **The requester's own handle at
+  `body[24:28]` is echoed unchanged** — that is the correlation, and OVMX had
+  been writing its own handle there (the two slots were swapped relative to
+  what the wire does; see the correction in spec §4(f).1). A real VAX then
+  re-sent one request 65,356 times in 63.7 s and OVMX answered 65,340 of them.
+  Two design consequences:
+
+  1. **BUILD BY ECHOING, not by laying out fields.** Every byte of a reply
+     that is not a field the answer owns is the requester's own byte, handed
+     back. A builder that lays out a frame itself can put a value in the wrong
+     slot; one that echoes cannot. (This also stops OVMX inventing the
+     requester's stale buffer tail, which a real master echoes verbatim.)
+  2. **THE ECHO GUARD** (`vms_dlm_echo_guard.c`, a pure kernel-core TU asked
+     at the ONE place every reply is staged): a reply goes out only while the
+     *(requester, request bytes, answer bytes)* triple keeps CHANGING. Past a
+     bounded number of identical answers in a row this node STOPS ANSWERING
+     that requester's identical request — counted, said once. The bound is an
+     **OVMX design value**, not a VMS one (Rule 8: nothing here is a
+     reverse-engineered VMS limit). It is a *sameness* rule rather than a rate
+     limit because a rate limit must guess what "too fast" is for a VAX on a
+     quiet LAN, while "I have told you this nine times and nothing changed" is
+     a loop by definition. Withholding asserts nothing about another system
+     (INV-6) — the requester's own ladder decides what follows, exactly as if
+     this node had crashed. **OVMX must never be the node that keeps feeding a
+     peer a frame it cannot use.**
+
 - **D-DLM-3 — directory-node role is built anyway** (for LOCKDIRWT>0 later,
   and because the rebuild pushes records at whichever node the cluster
   chooses): a stored directory table, populated from rebuild records and
@@ -1043,8 +1075,12 @@ The cat-02 opcode → operation mapping (op-01 ENQ, op-07 convert, op-03/op-04
 completion/commit, op-0d rebuild record, op-12/op-15 unknown) is GROUNDED for
 shape and INFERRED for semantics (spec §4(f), §5). The 17K-message "grant
 storm" of the daemon experiments (`LNM$CWLOGICALS`/`F11B$aSYSDSK1` re-requested
-35/s after a "grant") is consistent with those op-01s being **directory
-lookups** that OVMX answered as if they were master grants. The executive
+35/s after a "grant") was read as those op-01s being **directory lookups** that
+OVMX answered as if they were master grants. **The 2026-10-09 storm (rd
+vms-b5b0) gives the mechanism directly, measured**: a requester re-sends when it
+cannot CORRELATE the answer -- OVMX's grant carried neither the requester's own
+handle nor an outcome byte -- so "a reply the requester cannot match to its
+lock" is the storm's cause, whatever the opcode's role. See D-DLM-2.1. The executive
 implements the *operations* (lookup / enqueue / convert / dequeue / grant /
 blocking-AST / value-block / directory-entry / rebuild) and binds opcodes to
 them through the codec table, so an opcode re-assignment after §5.4's capture

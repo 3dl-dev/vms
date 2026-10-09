@@ -70,7 +70,6 @@ f4c2703c82eb7b8810170a7710e3fa8dc2d5c19efd77b49b5cb4d911bd3d9cea  tests/lab/capt
 dc5ba1b89fcfcd33bdfbb4e7615247d7012ddbcb6453963e54607f558458872b  tests/lab/captures/vms-fcb-lockdirwt-20261004/fcb-L2-params.pcap
 5083923966d23c01159421bf96229e3b1a828fb362893c92e11415fbf657b1ca  tests/lab/captures/vms-4fb-dir-hash-20261004/dirhash-L1.pcap
 f00cc8a88cb3892d89cbd490cea7bf748c2b22e611b4463bdaee8022779ebf81  tests/lab/captures/vms-8219-dir-role-20261004/dirrole-L1L2.pcap
-||||||| parent of 3282a7ff (vms-f29: OVMX takes its place in a FORMATION-class transition a real VAX coordinates)
 fcd452526c2e55faddd8f496e7c05b422bb4c27f1a4e4119b16a13764aff3876  tests/lab/captures/vms-6d3d-coldform-ev2-20260924/coldform-ev2-formation.pcap
 07d0942bbf8e25db0118f2ea3356091e730989c1e25d44aa6f0144232cf2ebe8  tests/lab/captures/vms-f29-formation-20261005/F29-2-cm.pcap
 c234ecfff984a4cef43426d93bc85e7fd63db32dea24def748a15fb30ffdd2a1  tests/lab/captures/vms-f29-formation-20261005/F29-base-main-cm.pcap
@@ -94,3 +93,4 @@ e304ab12bba078c5c13009f277151917114e0af0a1bad4c96f40e48984338b16  tests/lab/capt
 b3a711c9322939134aa0c97f4422b87d836a0fee8811e25a4e989f2e8d6776ed  tests/lab/captures/vms-f297-open-cells-20261008/XI.pcap
 d39a5b415083ad9f936db79219635bb0f3777b9b07b71e85a2304f7361ab4fe4  tests/lab/captures/vms-f297-open-cells-20261008/XF-barrier.pcap
 5902bee7bb3975cec6f22a82ad77fb3608634dc9ac70d99971b57fe6c3024047  tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/ev2-mixed-refusal.pcap
+249d649cfc959caea6fa2dd884e812914f16fdea18d32b0e20d3bfa459e5ab1d  cluster/captures-lab2/vms-b5b0-storm-window.pcap

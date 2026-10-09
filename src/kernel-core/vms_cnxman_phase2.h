@@ -141,6 +141,41 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 			      const struct cnxman_ops *ops);
 
 /*
+ * cnxman_phase2_local_committed - RE-RUN THE TASKS THAT NEEDED A FACT THE
+ * NODEMAP COULD NOT GIVE US (rd vms-b5b0 follow-on, ev7/int-7).
+ *
+ * p. 7-42's tasks decide this node's membership from the transition's NODEMAP,
+ * and a real VAX always can: it reads the map at full width, so its own bit is
+ * always expressible. This executive has grounded ONE BYTE of that field (sec
+ * 4(p): the true width is undetermined, "do not assume 8 slots"), and a node's
+ * CSV slot climbs with every rejoin (p. 7-25) -- so from the ninth incarnation
+ * on, the map cannot express THIS NODE's slot and Phase 2 correctly leaves its
+ * membership undecided (`local_slot_unexpressible`).
+ *
+ * The executive then learns the same fact a different way, and later: sec
+ * 4(q)'s rule that membership "FOLLOWS FROM THE TRANSITION COMPLETING", which
+ * the join FSM already promotes on (a real op-0x0c #12 and a transition that
+ * did not exclude us). That arrives AFTER the Phase-2 commit, which ran at the
+ * coordinator's GO -- so the tasks that depended on our own membership ran
+ * without it, and the fallout was MEASURED: with slot 8 and then slot 10, this
+ * node's own lock directory weight vector gave it NO entry while both VAXes
+ * directed every lookup at it (a directory split), and `cl->state` never
+ * reached MEMBER, so SHOW CLUSTER and $GETSYI disagreed with the console line
+ * that had just said "this node is now a VAXcluster member".
+ *
+ * This entry point re-runs exactly those tasks, with Phase 2 still their only
+ * owner: the local CSB's MEMBER/SELECTED flags (task 1's answer about US), the
+ * CLUSTER flag (task 4) and the weight vector (task 5). It asserts nothing new
+ * -- the membership decision is the caller's, taken on a real completion -- and
+ * it is idempotent: when the nodemap DID name us, Phase 2 has already set the
+ * flags and this is a no-op walk.
+ *
+ * `cl` or an absent local CSB: does nothing.
+ */
+void cnxman_phase2_local_committed(struct vms_cluster *cl,
+				   const struct cnxman_ops *ops);
+
+/*
  * popcount of the grounded bitmap byte. Exposed because BOTH sides need it and
  * both must get the same answer: the participant counts the bits it received,
  * the coordinator counts the bits it is about to assert.

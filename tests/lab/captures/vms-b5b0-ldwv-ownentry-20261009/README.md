@@ -72,6 +72,31 @@ whose own vector says it is not the directory (member readout above)
 The watchdog is deliberately **not** "own entries == 0": a node at LOCKDIRWT 0
 beside a weighted peer holds none, and that is p. 6-32's own answer.
 
+## int-7 (slot 10): the fix had to go deeper than the vector
+
+Re-fired with the first fix in (`evac/int-7`, `fab7e93d`), this node was assigned
+**slot 10** and the vector line was unchanged: `2 entries over 2 systems, 0 of them this
+node's`. Counting our own committed membership in the vector was necessary and **not
+sufficient** — at a slot the nodemap cannot express, **nothing set the local CSB's MEMBER flag
+at all**:
+
+- Phase 2 reads the map, finds silence about us, and correctly leaves the flags alone.
+- The join FSM's promotion fires on the **completion** (§4(q)) — and used to set only its own
+  FSM state.
+
+So the console said `this node is now a VAXcluster member` while the node's own CSB said
+otherwise, and `cl->state` — what `SHOW CLUSTER` and `$GETSYI` project, and what
+`join_node_already_member()` reads — never reached MEMBER either. That last part means a
+high-slot node also keeps asking to be admitted.
+
+The promotion now hands Phase 2 the fact it was missing
+(`cnxman_phase2_local_committed`), and **Phase 2 stays the owner of all four of its p. 7-42
+tasks**: the local CSB's MEMBER/SELECTED flags, the CLUSTER flag, and a **re-fill of the weight
+vector** (the commit had built it before this node's own membership was known). Counted as
+`club->local_committed_off_map`, so a diagnostic says the map was SILENT rather than implying it
+agreed; idempotent when the map did name us. Proven at **every slot 8..15** plus a control at
+slot 3.
+
 ## Still open (not papered over)
 
 The nodemap's **true width**. Decoding past the grounded byte needs a capture of
@@ -85,7 +110,11 @@ records that name it, and this fix does not reach it.
 
 ## What the lab must show next
 
-A tenth-incarnation OVMX node (slot ≥ 8) whose own readout names itself with
-`entries>=1`, no `DIRECTORY SPLIT` line, SDA `SHOW CLUSTER` on **both** VAXes
-agreeing with that readout member for member, and the evacuation arm's lookups
-answered by the node they were sent to.
+A high-slot OVMX node (slot ≥ 8) that shows, in this order:
+
+1. `%CNXMAN, this node is a member of the cluster` **and** `SHOW CLUSTER` agreeing (not just the
+   join FSM's own line);
+2. its member readout naming itself with `entries>=1`;
+3. no `DIRECTORY SPLIT` line;
+4. SDA `SHOW CLUSTER` on **both** VAXes agreeing with that readout member for member;
+5. the evacuation arm's lookups answered by the node they were sent to.

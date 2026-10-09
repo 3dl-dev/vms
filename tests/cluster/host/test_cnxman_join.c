@@ -1310,6 +1310,148 @@ static void test_membrec_unusable_is_answered_not_adopted(void)
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "no identity taken");
 }
 
+/* ==========================================================================
+ * THE PROMOTION RECORDS THE MEMBERSHIP WHERE THE EXECUTIVE KEEPS IT -- AT ANY
+ * CSV SLOT (rd vms-b5b0 follow-on, ev7/int-7)
+ *
+ * MEASURED TWICE, on a real VAX cluster. A rejoining system gets a NEW CSID
+ * (p. 7-25), so a node's CSV slot climbs with every rejoin; this node's ninth
+ * incarnation was assigned slot 8 and its tenth slot 10, both past the EIGHT
+ * slots this executive has grounded of the transition nodemap (sec 4(p): the
+ * true width is undetermined, "do not assume 8 slots").
+ *
+ * Phase 2 then correctly leaves this node's membership undecided -- silence is
+ * not a refusal -- and the promotion fires on the completion instead, which is
+ * sec 4(q)'s own rule. But the promotion used to set only the join FSM's state:
+ * the console said "this node is now a VAXcluster member" while the node's own
+ * CSB said otherwise, so
+ *
+ *   - its lock directory weight vector gave it NO entry while both VAXes
+ *     directed every directory lookup at it (a DIRECTORY SPLIT), and
+ *   - cl->state never reached MEMBER, which is what SHOW CLUSTER and $GETSYI
+ *     project and what join_node_already_member() reads.
+ *
+ * So the promotion now hands Phase 2 the fact it was missing, and Phase 2 --
+ * still the owner of its four tasks -- records it. This walks EVERY slot from
+ * 8 to 15 (the cluster will keep climbing) plus a control at slot 3, where the
+ * nodemap CAN name us and the call must be an idempotent no-op.
+ * ========================================================================== */
+static void test_promotion_records_membership_at_any_csv_slot(void)
+{
+	uint32_t slot;
+
+	printf("\n-- the promotion records membership at ANY CSV slot "
+	       "(rd vms-b5b0 ev7) --\n");
+
+	for (slot = 3u; slot <= 15u; slot++) {
+		const struct vms_csb *local;
+		char what[180];
+		/*
+		 * The coordinator's nodemap. For the CONTROL (slot 3) it is
+		 * 0x0e = {1,2,3} -- the real cn3 value, which names this node;
+		 * for the cases it is 0x06 = {1,2}, two peers and no bit this
+		 * node could be in even if the field were wider, because slots
+		 * 8..15 are past the byte entirely.
+		 */
+		const uint8_t bitmap = (slot < 8u) ? 0x0eu : 0x06u;
+		int in_map = (slot < 8u) && ((bitmap & (1u << slot)) != 0u);
+
+		if (slot > 3u && slot < 8u)
+			continue;   /* 3 is the control; 8..15 are the case */
+
+		bed_init();
+		bed_set_identity();
+		(void)cnxman_join_start(&g.j);
+		cnxman_join_dir_result(&g.j, MEMBER_SYSID,
+				       cnxman_join_name_mscp_disk, 1);
+		cnxman_join_dir_result(&g.j, MEMBER_SYSID,
+				       cnxman_join_name_vaxcluster, 1);
+		cnxman_join_opened(&g.j, MSCP_CONID);
+		cnxman_join_opened(&g.j, CM_CONID);
+		{
+			uint32_t len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 +
+						    1u));
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u,
+					 VMS_MSCP_ST_OFFLINE);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		}
+
+		/* THE CLUSTER ASSIGNS THIS NODE THE SLOT -- its own membership
+		 * record, the only grounded {SCSSYSTEMID -> CSID} pairing the
+		 * protocol carries. */
+		{
+			uint32_t len = mk_membrec((uint32_t)OWN_SYSID,
+						  0x00010000u | slot);
+
+			(void)join_feed(len);
+		}
+		ct_check_eq_u32(g.cl.club.local_csid, 0x00010000u | slot,
+				"the CLUB took the CSID the cluster assigned");
+
+		/* The transition, and its nodemap. */
+		{
+			uint32_t len = mk_open_add(EPOCH, bitmap);
+
+			(void)join_feed(len);
+			len = mk_go(EPOCH);
+			(void)join_feed(len);
+		}
+
+		snprintf(what, sizeof(what),
+			 "slot %u: this node is a MEMBER (the transition "
+			 "completed and did not exclude it)", (unsigned)slot);
+		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER, what);
+
+		local = cnxman_club_local(&g.cl.club);
+		ct_check(local != NULL, "  the local CSB exists");
+		if (local == NULL)
+			return;
+
+		snprintf(what, sizeof(what),
+			 "*** slot %u: its OWN CSB carries MEMBER -- the fact "
+			 "the vector, the quorum readout and SHOW CLUSTER all "
+			 "read ***", (unsigned)slot);
+		ct_check((local->flags & VMS_CSB_F_MEMBER) != 0u, what);
+		snprintf(what, sizeof(what),
+			 "  slot %u: ... and SELECTED, which the member count "
+			 "and the weight vector are taken from (p. 7-49)",
+			 (unsigned)slot);
+		ct_check((local->flags & VMS_CSB_F_SELECTED) != 0u, what);
+		snprintf(what, sizeof(what),
+			 "  slot %u: and cl->state is MEMBER, so SHOW CLUSTER "
+			 "agrees with the console line", (unsigned)slot);
+		ct_check_eq_u32(g.cl.state, (unsigned long)VMS_CLUSTER_MEMBER,
+				what);
+
+		/*
+		 * And the TRANSCRIPT says which way it was learned, so a
+		 * diagnostic never implies the map corroborated when it was
+		 * silent.
+		 */
+		if (in_map) {
+			snprintf(what, sizeof(what),
+				 "  slot %u (the control): the nodemap NAMED "
+				 "us, so Phase 2 had already set the flags and "
+				 "nothing had to come off the map",
+				 (unsigned)slot);
+			ct_check_eq_u32(g.cl.club.local_committed_off_map, 0u,
+					what);
+		} else {
+			snprintf(what, sizeof(what),
+				 "*** slot %u: the map could not express this "
+				 "slot, and the membership is recorded from "
+				 "the COMPLETION -- counted, not implied ***",
+				 (unsigned)slot);
+			ct_check_eq_u32(g.cl.club.local_committed_off_map, 1u,
+					what);
+		}
+	}
+}
+
 /* The mechanism exists and the table cell is real -- exercised directly so
  * the edge itself is proven independent of the membership-burst path above. */
 static void test_csid_learned_edge_exists(void)
@@ -6662,6 +6804,7 @@ int main(void)
 	test_membrec_readopted_on_a_new_assignment();
 	test_membrec_unusable_is_answered_not_adopted();
 	test_csid_learned_edge_exists();
+	test_promotion_records_membership_at_any_csv_slot();
 	test_lockdirwt_on_the_wire();
 	test_formation_commit_makes_a_founding_member();
 	test_no_invented_connect_data_or_descriptor();

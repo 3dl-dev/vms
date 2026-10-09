@@ -345,6 +345,26 @@ items:
       of the line, and counted (club->ldwv_own_entry_missing). The watchdog is
       deliberately NOT "own entries == 0": a node at LOCKDIRWT 0 beside a
       weighted peer holds none, and that is correct.
+      AND THE FIX HAD TO GO DEEPER THAN THE VECTOR (int-7, slot 10). Counting
+      our own committed membership in the vector is necessary and was not
+      sufficient: at a slot the nodemap cannot express, NOTHING set the local
+      CSB's MEMBER flag at all. Phase 2 reads the map (silence, correctly left
+      alone) and the join FSM's promotion -- which fires on the completion, sec
+      4(q)'s own rule -- used to set only its own FSM state. So the console said
+      "this node is now a VAXcluster member" while the node's own CSB said
+      otherwise, and with it `cl->state` (what SHOW CLUSTER and $GETSYI project,
+      and what join_node_already_member() reads) never reached MEMBER either.
+      The promotion now hands Phase 2 the fact it was missing
+      (cnxman_phase2_local_committed), and PHASE 2 -- still the owner of all
+      four of its p. 7-42 tasks -- records it: the local CSB's MEMBER/SELECTED
+      flags, the CLUSTER flag, and a re-fill of the weight vector, which the
+      commit had built before this node's own membership was known. Counted as
+      club->local_committed_off_map so a diagnostic says the map was SILENT
+      rather than implying it agreed; idempotent when the map did name us.
+      Proven at every slot 8..15 plus a control at slot 3
+      (tests/cluster/host/test_cnxman_join.c
+      test_promotion_records_membership_at_any_csv_slot), with its own negative
+      control (host_defects.sh join-promotion-records-nothing).
       STILL OPEN, AND NOT PAPERED: the nodemap's true width. Decoding more than
       the grounded byte needs a real capture of a transition whose membership
       spans slots above 7 (bit order, offset and length), and inventing it is

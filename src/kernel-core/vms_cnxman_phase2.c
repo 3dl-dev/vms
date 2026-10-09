@@ -272,6 +272,38 @@ static void phase2_commit_ldwv(struct vms_club *club, const struct cnxman_ops *o
  * The five tasks, in the published order
  * ========================================================================== */
 
+void cnxman_phase2_local_committed(struct vms_cluster *cl,
+				   const struct cnxman_ops *ops)
+{
+	struct vms_csb *local;
+
+	if (cl == NULL)
+		return;
+	local = cnxman_club_local(&cl->club);
+	if (local == NULL)
+		return;
+
+	/*
+	 * Task 1's answer ABOUT US, from the completion instead of the map.
+	 * Both flags, because the rest of the executive reads both: MEMBER is
+	 * "a member of the local cluster" (p. 7-23) and SELECTED is what the
+	 * member count and the weight vector are taken from (p. 7-49).
+	 * Counted the first time it has to come from here, so the transcript
+	 * says the map was silent rather than implying it agreed.
+	 */
+	if (!cnxman_csb_is_member(local) ||
+	    (local->flags & VMS_CSB_F_SELECTED) == 0u) {
+		cl->club.local_committed_off_map++;
+		cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+						       VMS_CSB_F_MEMBER));
+	}
+
+	/* Task 4, then task 5 -- in the book's order, through the same code
+	 * the commit path uses. */
+	phase2_commit_local_membership(cl, ops);
+	(void)cnxman_ldwv_rebuild(&cl->club, ops);
+}
+
 uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 			      const struct cnxman_phase2_in *in,
 			      struct cnxman_phase2_stats *st,

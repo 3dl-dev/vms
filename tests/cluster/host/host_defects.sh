@@ -163,6 +163,7 @@ phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
 ldwv-drops-our-own-membership
+join-promotion-records-nothing
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
@@ -415,6 +416,50 @@ EOF
         why)          echo "cnxman_recnx_shutdown()'s 'r->last_gasps++;' is dropped. The CLUB/CSB SHUTDOWN flags are still set and the last-gasp record is still emitted to the caller -- only the counter that tells an operator one was sent goes silent.";;
         require_fail) cat <<'EOF'
 counted once
+EOF
+                      ;;
+        esac;;
+
+    join-promotion-records-nothing)
+        case "$_f" in
+        facility)     echo "THE PROMOTION'S RECORD (join_h_transition_done(), rd vms-b5b0 follow-on): when this node becomes a member off a completed transition, the fact is written where the rest of the executive reads it -- its own CSB's MEMBER/SELECTED flags, cl->state and the lock directory weight vector";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the promotion is put back to setting only the join FSM's own state. MEASURED TWICE on a real VAX cluster: a node's CSV slot climbs with every rejoin (p. 7-25), and at slots 8 and 10 -- past the eight slots this executive has grounded of the transition nodemap -- Phase 2 correctly leaves this node's membership undecided, so NOTHING else recorded it. The console said 'this node is now a VAXcluster member' while the node's own CSB said otherwise: its weight vector gave it no directory entry while both VAXes directed every lookup at it (a directory split), and cl->state never reached MEMBER, so SHOW CLUSTER and \$GETSYI disagreed with the console.";;
+        require_fail) cat <<'EOF'
+  slot 10: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 10: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 11: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 11: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 12: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 12: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 13: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 13: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 14: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 14: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 15: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 15: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 8: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 8: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+  slot 9: ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
+  slot 9: and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
+*** slot 10: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 10: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 11: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 11: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 12: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 12: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 13: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 13: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 14: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 14: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 15: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 15: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 8: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 8: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
+*** slot 9: its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
+*** slot 9: the map could not express this slot, and the membership is recorded from the COMPLETION -- counted, not implied ***
 EOF
                       ;;
         esac;;
@@ -1892,6 +1937,10 @@ apply_edit() {
     dlm-dir-remove-by-anyone)
         # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.
         sed -i 's#if (i < 0 || d->slot\[i\].master != master) {#if (i < 0 || (d->slot[i].master != master \&\& 0)) { /* NEGCTL dlm-dir-remove-by-anyone */#' "$_file";;
+
+    join-promotion-records-nothing)
+        # The one call the promotion makes. Removing it removes the anchor.
+        sed -i 's|\tcnxman_phase2_local_committed(j->cl, j->ops);|\t/* NEGCTL join-promotion-records-nothing */|' "$_file";;
 
     ldwv-drops-our-own-membership)
         # The local-membership arm of the member test. Removing its two lines

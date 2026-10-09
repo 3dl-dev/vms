@@ -201,7 +201,8 @@ static int read_prompt_response(const char *prompt, char *buf, size_t bufsiz,
                               hide ? IO$M_NOECHO : IO$M_PURGE,
                               LOGIN_INPUT_TIMEOUT_SEC);
     } else {
-        fputs(prompt, stdout);
+        /* a plain stream: the prompt text, without its carriage control */
+        fputs(prompt[0] == '\r' && prompt[1] == '\n' ? prompt + 2 : prompt, stdout);
         fflush(stdout);
         rc = login_read_line_timed(STDIN_FILENO, buf, bufsiz, hide,
                                    STDOUT_FILENO, LOGIN_INPUT_TIMEOUT_SEC);
@@ -862,7 +863,7 @@ static int console_login(void)
     while (attempts < MAX_ATTEMPTS) {
         /* Prompt for username. Bounded by the LGI-style idle deadline: on
          * expiry the session is disconnected silently (read_prompt_response). */
-        if (read_prompt_response("Username: ", username, sizeof(username), 0) != LOGIN_READ_OK)
+        if (read_prompt_response("\r\nUsername: ", username, sizeof(username), 0) != LOGIN_READ_OK)
             return 1;  /* EOF, or the idle deadline expired */
         str_upcase(username);
 
@@ -870,7 +871,7 @@ static int console_login(void)
             continue;
 
         /* Prompt for password (echo suppressed), same deadline. */
-        if (read_prompt_response("Password: ", password, sizeof(password), 1) != LOGIN_READ_OK)
+        if (read_prompt_response("\r\nPassword: ", password, sizeof(password), 1) != LOGIN_READ_OK)
             return 1;
 
         /*

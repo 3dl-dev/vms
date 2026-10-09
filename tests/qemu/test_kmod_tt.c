@@ -119,8 +119,17 @@ static void *rd_main(void *arg)
  * needs here; a read the test means to time out passes its own, shorter one. */
 #define BOUND 5
 
+static void rd_start_n(struct rd *r, uint32_t chan, uint32_t flags,
+                       const char *prompt, size_t plen, uint32_t timeout);
+
 static void rd_start(struct rd *r, uint32_t chan, uint32_t flags,
                      const char *prompt, uint32_t timeout)
+{
+    rd_start_n(r, chan, flags, prompt, prompt ? strlen(prompt) : 0, timeout);
+}
+
+static void rd_start_n(struct rd *r, uint32_t chan, uint32_t flags,
+                       const char *prompt, size_t plen, uint32_t timeout)
 {
     if (!(flags & VMS_TT_RD_TIMED)) {
         flags |= VMS_TT_RD_TIMED;
@@ -132,10 +141,12 @@ static void rd_start(struct rd *r, uint32_t chan, uint32_t flags,
     r->a.buf = (uint64_t)(uintptr_t)r->data;
     r->a.bufsz = sizeof(r->data) - 1;
     r->a.timeout = timeout;
-    if (prompt) {
-        snprintf(r->prompt, sizeof(r->prompt), "%s", prompt);
+    if (prompt && plen) {
+        if (plen > sizeof(r->prompt))
+            plen = sizeof(r->prompt);
+        memcpy(r->prompt, prompt, plen);
         r->a.prompt = (uint64_t)(uintptr_t)r->prompt;
-        r->a.promptsz = (uint32_t)strlen(r->prompt);
+        r->a.promptsz = (uint32_t)plen;
     }
     pthread_create(&r->th, NULL, rd_main, r);
 }
@@ -296,6 +307,40 @@ int main(void)
     screen(m, scr, sizeof(scr), 300);
     CHECK(r.st == SS_NORMAL && r.a.term == 26 && r.a.count == 0, "^Z terminates the read");
     CHECK(strstr(scr, "*EXIT*") != NULL, "the driver echoes *EXIT* for ^Z");
+
+    /* ---- carriage control (rd vms-fc4): records and prompts ----
+     * A program's '\n'-terminated output is a run of RECORDS: a new line
+     * before each, a carriage return after, the line feed owed. A read that
+     * echoes pays the owed line feed before its prompt; DCL's prompt starts
+     * with a new line and a fill NUL. Expected bytes are the VAX V7.3
+     * console's for the same sequence (probes CC.EMPTY W2, CC.MIX). */
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "\r");                          /* a command line, echoed: fresh line */
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
+    (void)!write(s, "A\nB\n", 4);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(strcmp(scr, "\rA\r\nB\r") == 0,
+          "two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)");
+    if (strcmp(scr, "\rA\r\nB\r") != 0)
+        printf("      screen was [%s]\n", scr);
+    rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);   /* the NUL is part of it */
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(memcmp(scr, "\n\r", 2) == 0 && scr[2] == '\0' && memcmp(scr + 3, "$ ", 2) == 0,
+          "DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ ");
+    type(m, "\r");
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
+    rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(scr[0] == '\r' && scr[1] == '\0' && memcmp(scr + 2, "$ ", 2) == 0,
+          "DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)");
+    type(m, "\r");
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
 
     /* ---- $QIO write ---- */
     st = vms_kif_tt_write(chan, "xyz", 3);

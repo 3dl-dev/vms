@@ -165,10 +165,6 @@ int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
     fflush(stdout);
     fflush(stderr);
 
-    /* $QIO's P5 is a longword (starlet.h), as on VMS: the prompt must sit at a
-     * 32-bit address. DCL's static data does (the image is activated in P0,
-     * imgact.c); its stack and mmap'd heap need not -- so the prompt is
-     * copied here first. */
     static char pbuf[512];
     size_t plen = 0;
     if (prompt && prompt[0]) {
@@ -183,7 +179,7 @@ int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
         func |= IO$M_TIMED;
     memset(iosb, 0, sizeof iosb);
     st = sys$qiow(0, dcl_tt_chan, func, iosb, NULL, 0, buf, (uint32_t)(bufsz - 1),
-                  timeout_sec, 0, plen ? (uint32_t)(uintptr_t)pbuf : 0, (uint32_t)plen);
+                  timeout_sec, 0, plen ? (uintptr_t)pbuf : 0, (uint32_t)plen);
     if (st & 1)
         st = iosb[0];
     if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN ||

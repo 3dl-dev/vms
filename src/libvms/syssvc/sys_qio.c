@@ -1161,7 +1161,7 @@ static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint1
 static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
                                 const struct vms_devinfo *info, uint32_t func,
                                 void *iosb_ptr, void *p1, uint32_t p2, uint32_t p3,
-                                uint32_t p4, uint32_t p5, uint32_t p6,
+                                uintptr_t p4, uintptr_t p5, uint32_t p6,
                                 uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm,
                                 int *handled)
 {
@@ -1296,7 +1296,7 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
 static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
-                  uint32_t p4, uint32_t p5, uint32_t p6) {
+                  uintptr_t p4, uintptr_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
 
     /* The event flag is cleared when the request is queued, and an efn that is
@@ -1388,7 +1388,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
 static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
                    void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                    void *p1, uint32_t p2, uint32_t p3,
-                   uint32_t p4, uint32_t p5, uint32_t p6) {
+                   uintptr_t p4, uintptr_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
 
     {   /* as for $QIO: clear the flag, refuse a number that is not a flag */
@@ -1519,7 +1519,7 @@ static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
 uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
                  void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                  void *p1, uint32_t p2, uint32_t p3,
-                 uint32_t p4, uint32_t p5, uint32_t p6)
+                 uintptr_t p4, uintptr_t p5, uint32_t p6)
 {
     uint32_t cst = qio_efn_request(efn);   /* refused before anything: IOSB as is */
     if (cst != SS$_NORMAL)
@@ -1531,7 +1531,7 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
 uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
                   void *p1, uint32_t p2, uint32_t p3,
-                  uint32_t p4, uint32_t p5, uint32_t p6)
+                  uintptr_t p4, uintptr_t p5, uint32_t p6)
 {
     uint32_t cst = qio_efn_request(efn);
     if (cst != SS$_NORMAL)

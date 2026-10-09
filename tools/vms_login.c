@@ -154,8 +154,6 @@ static void loginout_attach_terminal(void)
 static int loginout_tt_read(const char *prompt, char *buf, size_t bufsiz,
                             uint32_t modifiers, unsigned timeout_sec)
 {
-    /* P5 is a longword: the prompt must sit at a 32-bit address, which
-     * LOGINOUT's static data does (P0) and its stack need not. */
     static char pbuf[64];
     uint16_t iosb[4];
     uint32_t st, func;
@@ -170,7 +168,7 @@ static int loginout_tt_read(const char *prompt, char *buf, size_t bufsiz,
            (timeout_sec ? IO$M_TIMED : 0);
     memset(iosb, 0, sizeof(iosb));
     st = sys$qiow(0, lgi_tt_chan, func, iosb, NULL, 0, buf, (uint32_t)(bufsiz - 1),
-                  timeout_sec, 0, plen ? (uint32_t)(uintptr_t)pbuf : 0, (uint32_t)plen);
+                  timeout_sec, 0, plen ? (uintptr_t)pbuf : 0, (uint32_t)plen);
     if (st & 1)
         st = iosb[0];
     n = iosb[1] < bufsiz - 1 ? iosb[1] : bufsiz - 1;

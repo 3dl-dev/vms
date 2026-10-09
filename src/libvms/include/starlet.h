@@ -157,13 +157,18 @@ uint32_t sys$qio(
     void (*astadr)(uint32_t),
     uint32_t astprm,
     void *p1, uint32_t p2, uint32_t p3,
-    uint32_t p4, uint32_t p5, uint32_t p6
+    uintptr_t p4, uintptr_t p5, uint32_t p6
 );
 
 /**
  * sys$qiow - Queue I/O request and wait
  *
  * Same parameters as sys$qio.  Blocks until the I/O completes.
+ *
+ * P4 and P5 are address-sized (rd vms-f8c): they carry ADDRESSES -- a
+ * terminal read's terminator descriptor (P4), IO$_READPROMPT's prompt string
+ * (P5) -- and on a 64-bit OVMX image an address need not fit a longword, the
+ * way 64-bit OpenVMS passes every $QIO argument as a quadword.
  */
 uint32_t sys$qiow(
     uint32_t efn,
@@ -173,7 +178,7 @@ uint32_t sys$qiow(
     void (*astadr)(uint32_t),
     uint32_t astprm,
     void *p1, uint32_t p2, uint32_t p3,
-    uint32_t p4, uint32_t p5, uint32_t p6
+    uintptr_t p4, uintptr_t p5, uint32_t p6
 );
 
 /* ================================================================

@@ -25,6 +25,9 @@
 #include "rmsdef.h"
 #include "rms_textfile.h"   /* rms_textfile_open/getline -- SYS$INPUT read through RMS (vms-ccc) */
 #include "vmsfs/filespec.h"  /* vmsfs_to_linux_path — VMS filespec resolver  */
+#if defined(OVMX_HAVE_ACP)
+#include "vmsfs/device.h"   /* vmsfs_resolve_filespec_device: a spawn input spec, fully named */
+#endif
 #include "starlet.h"         /* sys$creprc — the one executive-registered create (B0) */
 #include "vms_kif.h"         /* vms_kif_getjpi_pid, struct vms_procinfo — the wait handle */
 #include <pthread.h>
@@ -303,60 +306,31 @@ static struct dsc$descriptor_s spawn_dsc(const char *s)
 }
 
 /*
- * Create an exclusive scratch file for the subprocess's SYS$INPUT, filling
- * `buf` with its path and returning an open write fd (or -1).
- *
- * WHY NOT mkstemp() (vms-e9a, VMS-native link). The VMS-native LIBVMS$SHR link
- * binds every C-RTL call against DECC$SHR's symbol vector, which exports the
- * bare universals open/close/write/unlink/getpid/snprintf but NOT bare mkstemp
- * (only the decorated decc$mkstemp the GCC port uses) -- so a bare mkstemp()
- * here is an unresolved external that breaks LIBVMS$SHR and every consumer of
- * it. This builds a unique name from getpid() + a counter and opens it
- * O_CREAT|O_EXCL (retrying on a name clash), using only exported universals --
- * the same collision-safe guarantee mkstemp gave, with no unexported symbol.
+ * The command string's scratch command file (rd vms-003b): a VMS file, created
+ * through RMS in SYS$SCRATCH as any VMS program would, named after this process
+ * and a sequence number. The subprocess reads it as its SYS$INPUT through RMS
+ * ($CREPRC hands the spec on; DCL reads a disk-file SYS$INPUT with RMS). No
+ * host path is involved.
  */
-/*
- * The scratch file is a substrate mechanism (a literal path $CREPRC opens), not
- * a C RTL file: it lives under /run, the kernel namespace the C RTL file layer
- * over RMS leaves alone (src/vmsrms/crtl_rms_fd.c kernel_path), so an image with
- * that layer on still hands its subprocess a file the kernel can open. /tmp is
- * the fallback where /run/ovmx-spawn cannot be made (a host test process).
- */
-static const char *spawn_scratch_dir(void)
+/* The spec with its device logical names translated in THIS process (SYS$SCRATCH
+ * may be one of the caller's process logicals, which the subprocess does not
+ * inherit), so the subprocess opens the same file. */
+static const char *spawn_full_spec(const char *spec, char *out, size_t outsz)
 {
-    static const char *dir = NULL;
-    struct stat sd;
-
-    if (dir)
-        return dir;
-    /* /run itself may not exist on a minimal system (the corpus guest's
-     * initramfs has none); without it this fell back to /tmp, which the C RTL
-     * file layer (vms-003b) maps to RMS, so the scratch open failed and
-     * LIB$SPAWN returned SS$_INSFMEM (corpus sys_forcex). /run is the kernel's
-     * namespace on every substrate: make sure it is there. */
-    (void)mkdir("/run", 0755);
-    if ((mkdir("/run/ovmx-spawn", 01777) == 0 || errno == EEXIST) &&
-        stat("/run/ovmx-spawn", &sd) == 0 && S_ISDIR(sd.st_mode) &&
-        access("/run/ovmx-spawn", W_OK) == 0)
-        dir = "/run/ovmx-spawn";
-    else
-        dir = "/tmp";
-    return dir;
+#if defined(OVMX_HAVE_ACP)
+    if (vmsfs_resolve_filespec_device(spec, out, outsz) == SS$_NORMAL && out[0])
+        return out;
+#endif
+    snprintf(out, outsz, "%s", spec);
+    return out;
 }
 
-static int spawn_open_scratch(char *buf, size_t bufsz)
+static int spawn_scratch_spec(char *buf, size_t bufsz)
 {
     static unsigned seq = 0;
-    for (int tries = 0; tries < 4096; tries++) {
-        snprintf(buf, bufsz, "%s/ovmx_spawn_cmd_%d_%u",
-                 spawn_scratch_dir(), (int)getpid(), seq++);
-        int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
-        if (fd >= 0)
-            return fd;
-        if (errno != EEXIST)
-            return -1;             /* a real error, not a name clash */
-    }
-    return -1;
+    int n = snprintf(buf, bufsz, "SYS$SCRATCH:OVMX$SPAWN_%X_%u.COM",
+                     (unsigned)getpid(), seq++);
+    return (n > 0 && (size_t)n < bufsz) ? 0 : -1;
 }
 
 /* Resolve a VMS filespec to a Linux path for open()/freopen(); if translation
@@ -471,22 +445,13 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     const char *in_str = NULL;
 
     if (have_cmd) {
-        int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
-        if (tfd < 0)
-            return SS$_INSFMEM;
-        have_tmp = 1;
         char cbuf[4096];
         dsc$strncpy(cbuf, command, sizeof(cbuf) - 1);
-        size_t clen = strlen(cbuf);
-        cbuf[clen++] = '\n';                 /* one command line, then EOF */
-        for (size_t off = 0; off < clen; ) {
-            ssize_t w = write(tfd, cbuf + off, clen - off);
-            if (w < 0) { if (errno == EINTR) continue; break; }
-            if (w == 0) break;
-            off += (size_t)w;
-        }
-        close(tfd);
-        in_str = cmd_tmp;
+        if (spawn_scratch_spec(cmd_tmp, sizeof(cmd_tmp)) != 0 ||
+            rms_textfile_write_line(cmd_tmp, cbuf) != 0)   /* one command, then EOF */
+            return RMS$_CRE;
+        have_tmp = 1;
+        in_str = spawn_full_spec(cmd_tmp, in_resv, sizeof(in_resv));
     } else if (have_in) {
         /*
          * SYS$INPUT FROM A FILE (vms-ccc). The file is read through RMS over the
@@ -504,25 +469,10 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         dsc$strncpy(raw_in, input_file, sizeof(raw_in));
         rms_textfile_t *tf = rms_textfile_open(raw_in);
         if (tf) {
-            int tfd = spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
-            if (tfd < 0) { rms_textfile_close(tf); return SS$_INSFMEM; }
-            have_tmp = 1;
-            char rec[4096];
-            int too_long = 0, werr = 0;
-            while (rms_textfile_getline(tf, rec, sizeof(rec), &too_long)) {
-                size_t rl = strlen(rec);
-                rec[rl++] = '\n';
-                for (size_t off = 0; off < rl; ) {
-                    ssize_t w = write(tfd, rec + off, rl - off);
-                    if (w < 0) { if (errno == EINTR) continue; werr = 1; break; }
-                    off += (size_t)w;
-                }
-                if (werr) break;
-            }
+            /* An RMS file: the subprocess reads it as SYS$INPUT through RMS
+             * ($CREPRC hands the VMS spec on; rd vms-003b) -- no host copy. */
             rms_textfile_close(tf);
-            close(tfd);
-            if (werr) { unlink(cmd_tmp); return SS$_INSFMEM; }
-            in_str = cmd_tmp;
+            in_str = spawn_full_spec(raw_in, in_resv, sizeof(in_resv));
         } else {
             /* Not reachable through RMS. A caller handing a plain Linux path (host-side
              * tooling) still works when that path is a real regular file; anything
@@ -565,7 +515,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
          * SS$_NOSUCHDEV with no executive). No fabricated success (INV-6):
          * lib$spawn no longer has an unregistered fork/exec to fall back to.
          */
-        if (have_tmp) unlink(cmd_tmp);
+        if (have_tmp) (void)rms_textfile_delete(cmd_tmp);
         return cst;
     }
 
@@ -661,7 +611,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         *status = SS$_NORMAL;
     }
 
-    if (have_tmp) unlink(cmd_tmp);
+    if (have_tmp) (void)rms_textfile_delete(cmd_tmp);
     return SS$_NORMAL;
 }
 

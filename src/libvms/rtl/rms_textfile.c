@@ -58,6 +58,7 @@
 #pragma weak sys$get
 #pragma weak sys$put
 #pragma weak sys$create
+#pragma weak sys$erase
 
 /* True only when LIBVMSRMS is present in this image's link closure. */
 static int rms_services_present(void)
@@ -239,10 +240,23 @@ int rms_textfile_write_line(const char *vms_spec, const char *line)
     return rc;
 }
 
+int rms_textfile_delete(const char *vms_spec)
+{
+    if (!vms_spec || !*vms_spec || !sys$erase)
+        return -1;
+    char spec[512];
+    rmstf_resolve(vms_spec, spec, sizeof(spec));
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    return (sys$erase(&fab, 0, 0) == RMS$_NORMAL) ? 0 : -1;
+}
+
 #else  /* !OVMX_HAVE_ACP : no executive in this link (bare libvms unit build) */
 
 #include <stdio.h>
 #include "vmsfs/filespec.h"
+#include <unistd.h>
 
 struct rms_textfile {
     FILE *fp;
@@ -314,6 +328,15 @@ int rms_textfile_append_line(const char *vms_spec, const char *line)
 int rms_textfile_write_line(const char *vms_spec, const char *line)
 {
     return rmstf_posix_put(vms_spec, line, "w");
+}
+
+int rms_textfile_delete(const char *vms_spec)
+{
+    if (!vms_spec || !*vms_spec)
+        return -1;
+    char linux_path[1024];
+    vmsfs_to_linux_path(vms_spec, linux_path, sizeof(linux_path));
+    return unlink(linux_path) == 0 ? 0 : -1;
 }
 
 #endif /* OVMX_HAVE_ACP */

@@ -193,6 +193,8 @@
 #include <stdio.h>
 #include "ovmx_async.h"
 #include "starlet.h"
+#include "rms_textfile.h"   /* a VMS-file SYS$INPUT is checked through RMS (rd vms-003b) */
+#include "lnmdef.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
 #include "vmsfs/filespec.h"   /* vmsfs_to_linux_path: a VMS image spec */
@@ -937,6 +939,21 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
     return SS$_NORMAL;
 }
 
+/* SYS$INPUT of a new process named by a VMS disk file (rd vms-003b): the
+ * process-permanent logical name the CLI opens through RMS. */
+static void creprc_define_sysinput(const char *spec)
+{
+    static char tab[] = "LNM$PROCESS_TABLE";
+    static char nam[] = "SYS$INPUT";
+    struct dsc$descriptor_s td = { sizeof(tab) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, tab };
+    struct dsc$descriptor_s nd = { sizeof(nam) - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, nam };
+    struct item_list_3 il[2] = {
+        { (uint16_t)strlen(spec), LNM$_STRING, (void *)spec, 0 },
+        { 0, 0, 0, 0 },
+    };
+    (void)sys$crelnm(0, &td, &nd, 0, il);
+}
+
 /*
  * sys$creprc - Create a process.
  *
@@ -1595,7 +1612,25 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 char path[256];
                 dsc$strncpy(path, input, sizeof(path));
                 int fd = open(path, O_RDONLY);
-                if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+                if (fd >= 0) {
+                    dup2(fd, STDIN_FILENO); close(fd);
+                } else {
+                    /*
+                     * A VMS FILE (rd vms-003b): $CREPRC's input names the
+                     * process's SYS$INPUT, as on VMS. A disk file reachable
+                     * through RMS becomes the subprocess's SYS$INPUT logical
+                     * name (LNM$PROCESS, executive-resident), and the CLI reads
+                     * it through RMS (DCL, dcl_main.c) -- no host copy of the
+                     * file, no host path.
+                     */
+                    rms_textfile_t *tf = rms_textfile_open(path);
+                    if (tf) {
+                        rms_textfile_close(tf);
+                        creprc_define_sysinput(path);
+                    }
+                    int nfd = open("/dev/null", O_RDONLY);
+                    if (nfd >= 0) { dup2(nfd, STDIN_FILENO); close(nfd); }
+                }
             } else if (detached) {
                 int fd = open("/dev/null", O_RDONLY);
                 if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }

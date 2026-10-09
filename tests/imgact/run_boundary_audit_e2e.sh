@@ -55,7 +55,7 @@ LOG="$TMP/findings.jsonl"
 # -I paths, so a shared checkout is never mutated (build artifacts stay in TMP).
 IMGACT_CFLAGS="-std=gnu11 -O2 -Wall -Wextra
   -I$IMGACT_DIR/include -I$SRC/src/vmslink/include -I$SRC/src/libvms/include
-  -I$SRC/src/kernel -I$SRC/src/boundary_audit/include -I$SRC/src/libvmssys
+  -I$SRC/src/kernel -I$SRC/src/boundary_audit/include -I$SRC/src/libvmssys -DVMS_SYSCALL_HIDDEN
   -fPIC -fvisibility=hidden -ffreestanding -fno-stack-protector -fno-builtin
   -fno-asynchronous-unwind-tables"
 IMGACT_LDFLAGS="-nostdlib -nostartfiles -shared -Wl,-e,_start -Wl,-z,norelro -Wl,--build-id=none"

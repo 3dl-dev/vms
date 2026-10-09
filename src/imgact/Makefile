@@ -22,7 +22,7 @@ IMGACT_CFLAGS := -std=gnu11 -O2 -Wall -Wextra \
                  -I../libvms/include \
                  -I../kernel \
                  -I../boundary_audit/include \
-                 -I../libvmssys \
+                 -I../libvmssys -DVMS_SYSCALL_HIDDEN \
                  -fPIC -fvisibility=hidden -ffreestanding \
                  -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \

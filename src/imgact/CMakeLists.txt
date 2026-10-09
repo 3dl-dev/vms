@@ -106,6 +106,8 @@ target_include_directories(imgact PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys     # kif_transport.h / kif_calls.h (rd vms-bbde)
     ${CMAKE_SOURCE_DIR}/src/kernel)   # vms_ioctl.h + vms_acp.h (ACP arg structs)
 
+# The transport's raw syscall trampolines bind locally inside IMGACT (rd vms-bbde).
+target_compile_definitions(imgact PRIVATE VMS_SYSCALL_HIDDEN)
 target_compile_options(imgact PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
     -O2 -Wall -Wextra

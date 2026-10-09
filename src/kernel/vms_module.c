@@ -2227,6 +2227,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_enter_image(proc, arg);
     case VMS_IOCTL_IMAGE_RUNDOWN:
         return vms_ioctl_image_rundown(proc, arg);
+    case VMS_IOCTL_NATIVE_PAGE0:     /* rd vms-b869: SS$_UNSUPPORTED on Linux */
+        return vms_ioctl_native_page0(proc, arg);
     case VMS_IOCTL_SETPRV:
         return vms_ioctl_setprv(proc, arg);
     case VMS_IOCTL_CHKPRIV:

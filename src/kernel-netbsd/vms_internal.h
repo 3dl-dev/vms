@@ -646,6 +646,7 @@ struct vms_proc {
 	uint8_t             current_mode;     /* PSL_C_KERNEL..PSL_C_USER */
 	uint8_t             image_active;     /* 1 while a controlled descent is open */
 	uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
+	uint8_t             native_page0;     /* page 0 granted once (vms-b869) */
 	uint64_t            cur_privs;        /* current (temporary) privileges */
 	uint64_t            perm_privs;       /* permanent (authorized) privileges */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
@@ -1020,6 +1021,7 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * MAILBOX facility (MBAn:, P4-A, rd vms-d7a) -- DEFINED in

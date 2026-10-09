@@ -349,6 +349,10 @@ jobs:
               # file (vax-cmake-images job), so its own CMakeLists.txt is a
               # netbsd_vax input too.
               - 'CMakeLists.txt'
+              # rd vms-b869: the $STATUS proof images vax-cmake-images builds
+              # (target ovmx-vax-status-images) and run-boot.sh status-gate RUNs.
+              - 'tests/netbsd/guest/status_exit.c'
+              - 'tests/netbsd/guest/CMakeLists.txt'
               - 'docs/design-ovmx-netbsd-syskrnl.md'
               - 'docs/design-p4-netbsd-vax-boot.md'
               - 'docs/design-unified-cross-build.md'

@@ -222,6 +222,7 @@ PING), `run-eflag.sh`, `run-access.sh`, `run-proctab.sh`, `run-mbx.sh`,
 | `netbsd-vax-boot` | `run-boot.sh prove` then `run-boot.sh negctl` | OVMX `ovmx_init` PID 1 + DUA0: mount. |
 | `netbsd-vax-sysboot` | `run-boot.sh sysboot` / `sysboot-negctl` | OVMX boot to PROVISION.EXE. |
 | `vax-dcl-acceptance` | `run-boot.sh acceptance` | OVMX login + DCL battery. |
+| `vax-status-gate` | `run-boot.sh status-gate` | A proof SYSTARTUP RUNs images from SYS$SYSTEM; asserts each exact `$STATUS`. |
 
 The per-PR gate is the fast `netbsd-vax-vms-crosscompile` compile/width check;
 the boot jobs are scheduled / dispatch.

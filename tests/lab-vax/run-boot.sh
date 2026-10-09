@@ -71,6 +71,15 @@
 # before/after, INV-6 teeth), via tests/lab-vax/drive_install_vax.py:
 #   tests/lab-vax/run-boot.sh install         # 0 = install onto a blank target
 #                                             # succeeded and really wrote bytes
+#
+# vms-b869 (parent vms-3b3f) adds the $STATUS gate -- the VAX analogue of the
+# Alpha native-image gate (tools/cross-alpha/run-module-gp-activation-alpha.sh
+# native-gate). It stages proof images into SYS$SYSTEM on a mastered system
+# volume whose SYSTARTUP_VMS.COM is tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM,
+# boots it, and asserts the exact $STATUS each RUN left on the SIMH console:
+#   tests/lab-vax/run-boot.sh status-gate     # selftest, then boot + assert
+#   tests/lab-vax/run-boot.sh status-selftest # the can-fail selftest alone
+#                                             # (no docker, no boot)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -125,6 +134,15 @@ BLANK_TARGET_IMG="${BLANK_TARGET_IMG:-${CACHE_DIR}/dka100-target.img}"
 # two negative controls cannot perturb each other.
 SYSNEG_IMG="${SYSNEG_IMG:-${CACHE_DIR}/ovmx-sysneg-vax.img}"
 
+# vms-b869: the $STATUS gate's artifacts (status-gate mode only). The proof
+# images (tests/netbsd/guest/status_exit.c -> STSNORM.EXE / STSCOND.EXE) are
+# built into STATUS_PROOF_IMAGES_DIR; stage_sysvol.sh --status-proof stages them
+# into SYS$SYSTEM of STATUS_SYSVOL_IMG with the proof SYSTARTUP; the boot's
+# console is recorded to STATUS_LOG and asserted by assert_status_proof.
+STATUS_PROOF_IMAGES_DIR="${STATUS_PROOF_IMAGES_DIR:-${CACHE_DIR}/status-proof-images}"
+STATUS_SYSVOL_IMG="${STATUS_SYSVOL_IMG:-${CACHE_DIR}/ovmx-status-sysvol-vax.img}"
+STATUS_LOG="${STATUS_LOG:-${CACHE_DIR}/status-gate-console.log}"
+
 # vms-7b15: the SINGLE-disk artifact -- ONE labeled MSCP disk that VMB boots the
 # NetBSD root off partition 'a' AND from which the executive mounts the OVMX
 # ODS-2 system volume off partition 'e' (DUA0: -> ra0e), with NO rq1. The slim
@@ -148,6 +166,153 @@ TIMEOUT_GRACE="${TIMEOUT_GRACE:-30}"
 
 log() { echo "[run-boot] $*"; }
 die() { echo "[run-boot] FATAL: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# vms-b869: what the $STATUS gate requires, one row per RUN in
+# tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM:
+#   <NAME>|<exact $STATUS>|<a line the image itself prints, or empty>
+# The image line proves the image was activated and ran; the status is what
+# DCL's $STATUS held after the RUN.
+#
+# ADDING A NATIVE VAX IMAGE (an IHD .EXE LINKed on real VAX/VMS, e.g.
+# tests/native-images/vax/RETST.EXE on origin/work/vms-b869-vax-ihd): copy the
+# .EXE into STATUS_PROOF_IMAGES_DIR in build_status_proof_images (next to
+# STSNORM/STSCOND -- stage_sysvol.sh --status-proof stages every *.EXE in that
+# dir into SYS$SYSTEM and refuses a proof RUN whose image is missing), add its
+# three-line RUN block to SYSTARTUP_VMS_STATUS_PROOF.COM, and add a row here
+# with the $STATUS (and output line) the same RUN produced on the lab VAX.
+# assert_status_proof and its selftest pick the row up with no other change.
+# ---------------------------------------------------------------------------
+STATUS_PROOF_EXPECT=(
+  "STSNORM|%X00000001|OVMX-STATUS STSNORM: image ran, calling SYS\$EXIT(%X00000001)"
+  "STSCOND|%X0FEDC0A9|OVMX-STATUS STSCOND: image ran, calling SYS\$EXIT(%X0FEDC0A9)"
+)
+
+# assert_status_proof <console-log> -- THE TEETH of the status gate. For every
+# STATUS_PROOF_EXPECT row, in the proof's RUN order: the "=== RUN <NAME> ==="
+# header, then the image's own line (when the row names one), then exactly
+# "STATUS-PROOF: <NAME>-STATUS=<value>" ending the line -- and the proof's END
+# line last, so a boot that stopped part-way cannot pass. Pure function over
+# the log; shared verbatim by the real boot and status_proof_selftest.
+assert_status_proof() {
+  local log="$1" ok=1 norm row name want line hdr_n img_n st_n end_n prev_n=0
+  [ -f "$log" ] || { echo "  assert_status_proof: no console log at $log" >&2; return 1; }
+  norm="$(mktemp)"
+  tr -d '\r' < "$log" > "$norm"
+  # first line number after line $2 whose text CONTAINS the fixed string $1.
+  # A line starting with "$" is a DCL command echoed by SET VERIFY, never the
+  # output of one, so it is skipped.
+  _at() { awk -v s="$1" -v after="$2" 'NR > after && $0 !~ /^[ \t]*\$/ && index($0, s) { print NR; exit }' "$norm"; }
+  for row in "${STATUS_PROOF_EXPECT[@]}"; do
+    IFS='|' read -r name want line <<<"$row"
+    hdr_n="$(_at "STATUS-PROOF: === RUN ${name} ===" "$prev_n")"
+    if [ -z "$hdr_n" ]; then
+      echo "  assert_status_proof: no '=== RUN ${name} ===' header -- the proof did not reach ${name}" >&2
+      ok=0; continue
+    fi
+    img_n="$hdr_n"
+    if [ -n "$line" ]; then
+      img_n="$(_at "$line" "$hdr_n")"
+      if [ -z "$img_n" ]; then
+        echo "  assert_status_proof: ${name} never printed '${line}' -- the image did not run" >&2
+        ok=0; img_n="$hdr_n"
+      fi
+    fi
+    st_n="$(_at "STATUS-PROOF: ${name}-STATUS=" "$hdr_n")"
+    if [ -z "$st_n" ]; then
+      echo "  assert_status_proof: no ${name}-STATUS line after its RUN" >&2
+      ok=0; prev_n="$hdr_n"; continue
+    fi
+    # The value must END the line: %X0FEDC0A90 or %X0FEDC0A9xyz is not a pass.
+    if ! sed -n "${st_n}p" "$norm" | grep -qE "STATUS-PROOF: ${name}-STATUS=${want}[[:space:]]*\$"; then
+      echo "  assert_status_proof: ${name} \$STATUS is not ${want}: $(sed -n "${st_n}p" "$norm")" >&2
+      ok=0
+    fi
+    if [ "$img_n" -gt "$st_n" ]; then
+      echo "  assert_status_proof: ${name}'s own line came after its STATUS line" >&2
+      ok=0
+    fi
+    prev_n="$st_n"
+  done
+  end_n="$(_at "STATUS-PROOF: === END ===" "$prev_n")"
+  [ -n "$end_n" ] || { echo "  assert_status_proof: the proof SYSTARTUP did not run to its END line" >&2; ok=0; }
+  rm -f "$norm"
+  [ "$ok" -eq 1 ]
+}
+
+# status_proof_selftest -- prove assert_status_proof has teeth before any boot
+# (the Alpha native-gate discipline). The GOOD transcript is generated from
+# STATUS_PROOF_EXPECT (so a row added there is covered automatically) in the
+# shape the SIMH console carries it (CRLF line ends, other console lines
+# around it); it must PASS, and each breakage must FAIL: per row a wrong status,
+# a status with an extra digit, the status line missing and the image line
+# missing; then the run truncated after the first status line, the END line
+# missing, and an empty log.
+status_proof_selftest() {
+  local st fails=0 row name want line wrong i n
+  st="$(mktemp -d)"
+  {
+    printf '%%STDRV-I-STARTUP, OpenVMS startup begun\r\n'
+    for row in "${STATUS_PROOF_EXPECT[@]}"; do
+      IFS='|' read -r name want line <<<"$row"
+      printf 'STATUS-PROOF: === RUN %s ===\r\n' "$name"
+      [ -z "$line" ] || printf '%s\r\n' "$line"
+      printf 'STATUS-PROOF: %s-STATUS=%s\r\n' "$name" "$want"
+    done
+    printf 'STATUS-PROOF: === END ===\r\n'
+    printf '%%RUN-S-PROC_ID, identification of created process is 00000204\r\n'
+  } > "$st/pass.log"
+  _expect() {  # <want: pass|fail> <label> <log>
+    local got=fail
+    assert_status_proof "$3" 2>"$st/why" && got=pass
+    if [ "$got" = "$1" ]; then
+      echo "  status selftest: $2 -> ${got} (expected)"
+    else
+      echo "  status selftest: $2 -> ${got} (WRONG, expected $1)"; sed 's/^/    /' "$st/why"
+      fails=$((fails + 1))
+    fi
+  }
+  _expect pass "good transcript" "$st/pass.log"
+  i=0
+  for row in "${STATUS_PROOF_EXPECT[@]}"; do
+    i=$((i + 1))
+    IFS='|' read -r name want line <<<"$row"
+    # SS$_ABORT (%X0000002C) is what a condition value collapsed to a POSIX
+    # exit code shows as -- the exact regression this gate exists to catch.
+    wrong="%X0000002C"; [ "$want" != "$wrong" ] || wrong="%X00000001"
+    sed "s/${name}-STATUS=${want}/${name}-STATUS=${wrong}/" "$st/pass.log" > "$st/wrong$i.log"
+    _expect fail "${name} \$STATUS ${wrong} instead of ${want}" "$st/wrong$i.log"
+    sed "s/${name}-STATUS=${want}/${name}-STATUS=${want}0/" "$st/pass.log" > "$st/long$i.log"
+    _expect fail "${name} \$STATUS ${want}0 (the expected value is only a prefix)" "$st/long$i.log"
+    grep -v "STATUS-PROOF: ${name}-STATUS=" "$st/pass.log" > "$st/nost$i.log"
+    _expect fail "${name}-STATUS line missing" "$st/nost$i.log"
+    if [ -n "$line" ]; then
+      grep -vF "$line" "$st/pass.log" > "$st/noimg$i.log"
+      _expect fail "${name}'s own output line missing (the image never ran)" "$st/noimg$i.log"
+    fi
+  done
+  n="$(grep -n 'STATUS-PROOF: .*-STATUS=' "$st/pass.log" | head -1 | cut -d: -f1)"
+  head -n "$n" "$st/pass.log" > "$st/trunc.log"
+  _expect fail "run truncated after the first STATUS line" "$st/trunc.log"
+  grep -v "=== END ===" "$st/pass.log" > "$st/noend.log"
+  _expect fail "END line missing" "$st/noend.log"
+  : > "$st/empty.log"
+  _expect fail "empty console log" "$st/empty.log"
+  rm -rf "$st"
+  if [ "$fails" -eq 0 ]; then
+    echo "=== status selftest: assert_status_proof has teeth (good passes, every breakage fails) ==="
+    return 0
+  fi
+  echo "=== status selftest FAILED: $fails case(s) wrong -- the status gate cannot be trusted ==="
+  return 1
+}
+
+# The selftest alone needs no docker, no cache and no boot -- run it before the
+# shared build/assemble preamble below (which every booting mode needs).
+if [ "${MODE}" = "status-selftest" ]; then
+  status_proof_selftest && exit 0
+  exit 1
+fi
 
 ensure_images() {
   docker image inspect "${CROSS_IMAGE}" >/dev/null 2>&1 || {
@@ -945,6 +1110,109 @@ run_sysboot_single() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# vms-b869: the $STATUS gate (status-gate mode).
+# ---------------------------------------------------------------------------
+
+# Cross-build the proof images (tests/netbsd/guest/status_exit.c ->
+# STSNORM.EXE / STSCOND.EXE, `cmake --build --target ovmx-vax-status-images',
+# the same toolchain file and CMake graph every shipped VAX image is built
+# with) into STATUS_PROOF_IMAGES_DIR. Rebuilt every run: the images are a few
+# KB and a stale proof image would test stale code.
+#
+# A native VAX image (an IHD .EXE LINKed on real VAX/VMS) joins the proof by
+# being copied into STATUS_PROOF_IMAGES_DIR here, after the cmake build --
+# e.g. `cp "${REPO}/tests/native-images/vax/RETST.EXE" "${STATUS_PROOF_IMAGES_DIR}/"'
+# -- plus its RUN block in SYSTARTUP_VMS_STATUS_PROOF.COM and its row in
+# STATUS_PROOF_EXPECT (see the comment above STATUS_PROOF_EXPECT).
+build_status_proof_images() {
+  rm -rf "${STATUS_PROOF_IMAGES_DIR}"
+  mkdir -p "${STATUS_PROOF_IMAGES_DIR}"
+  log "cross-building the \$STATUS proof images (cmake --target ovmx-vax-status-images)"
+  local cid="ovmx-status-images-$$"; local rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${KBUILD_TIMEOUT}" \
+    docker run --rm --name "${cid}" -v "${REPO}:/src" -w /src -v "${STATUS_PROOF_IMAGES_DIR}:/out" \
+      --entrypoint sh "${CROSS_IMAGE}" -c '
+        set -e
+        cmake -S /src -B /tmp/build-status-vax \
+          -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
+          -DCMAKE_BUILD_TYPE=Release >/tmp/build-status-vax-configure.log 2>&1 \
+          || { tail -40 /tmp/build-status-vax-configure.log; exit 1; }
+        cmake --build /tmp/build-status-vax --target ovmx-vax-status-images -- -j"$(nproc)" \
+          >/tmp/build-status-vax-build.log 2>&1 \
+          || { tail -60 /tmp/build-status-vax-build.log; exit 1; }
+        cp /tmp/build-status-vax/bin/STSNORM.EXE /tmp/build-status-vax/bin/STSCOND.EXE /out/'
+  rc=$?; set -e
+  [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "status proof image build failed/timed out (rc=${rc})"; }
+  for img in STSNORM.EXE STSCOND.EXE; do
+    [ -f "${STATUS_PROOF_IMAGES_DIR}/${img}" ] || die "status proof image ${img} was not produced"
+  done
+  log "status proof images: $(ls "${STATUS_PROOF_IMAGES_DIR}" | tr '\n' ' ')"
+}
+
+# Master the proof SYSTEM volume: the installed tree (stage_sysvol.sh) with the
+# proof SYSTARTUP and the proof images in SYS$SYSTEM (--status-proof). A
+# separate image from SYSVOL_IMG, so the sysboot/acceptance volume never
+# carries the proof startup.
+master_status_volume() {
+  log "mastering the \$STATUS proof SYSTEM volume (stage_sysvol.sh --status-proof + vmsfs_master)"
+  rm -f "${STATUS_SYSVOL_IMG}"
+  local listing
+  listing="$(docker run --rm -v "${REPO}:/src:ro" -v "${SYSVOL_IMAGES_DIR}:/images:ro" \
+    -v "${STATUS_PROOF_IMAGES_DIR}:/proof:ro" \
+    -v "$(dirname "${STATUS_SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+         -I /src/src/vmsfs/include \
+         -o /tmp/vmsfs_master /src/tools/vmsfs_master.c \
+         /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
+         /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
+         /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
+      bash /src/tests/lab-vax/stage_sysvol.sh --status-proof /proof /images /src /tmp/stage
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${STATUS_SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 list /out/'"$(basename "${STATUS_SYSVOL_IMG}")")"
+  echo "${listing}"
+  [ -f "${STATUS_SYSVOL_IMG}" ] || die "status proof volume mastering did not produce ${STATUS_SYSVOL_IMG}"
+  for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR STSNORM.EXE STSCOND.EXE; do
+    echo "${listing}" | grep -qiF "${f}" \
+      || die "mastered status proof volume is MISSING ${f}"
+  done
+  echo "${listing}" | grep -qiE '\]USERS\.DIR' \
+    || die "mastered status proof volume is MISSING [USERS]"
+}
+
+# selftest -> build -> master -> boot -> assert. 0 = every proof RUN left its
+# exact $STATUS on the console.
+run_status_gate() {
+  log "verifying the status gate can fail (selftest) before the boot"
+  status_proof_selftest || die "status selftest failed -- assert_status_proof cannot be trusted; aborting before the boot"
+  build_boot_image_set
+  build_status_proof_images
+  master_status_volume
+  rm -f "${STATUS_LOG}"
+  run_session status-gate /cache/boot-work \
+      -e OVMX_SYSVOL_IMG=/cache/"$(basename "${STATUS_SYSVOL_IMG}")" \
+      -e OVMX_STATUS_LOG=/cache/"$(basename "${STATUS_LOG}")" \
+    || { soft_die "STATUS-GATE: the SIMH boot session failed (harness error, see above)"; return 1; }
+  log "status proof lines on the console:"
+  tr -d '\r' < "${STATUS_LOG}" | grep -aE 'STATUS-PROOF:|OVMX-STATUS |%DCL-|%SYSTEM-' | sed 's/^/    /' || true
+  if assert_status_proof "${STATUS_LOG}"; then
+    log "======================================================================"
+    log "  STATUS-GATE PASSED (vms-b869): OVMX/NetBSD-vax booted under SIMH, the"
+    log "  proof SYSTARTUP RUN each proof image from SYS\$SYSTEM, every image ran,"
+    log "  and DCL's \$STATUS after each RUN was the exact expected value:"
+    local row name want line
+    for row in "${STATUS_PROOF_EXPECT[@]}"; do
+      IFS='|' read -r name want line <<<"$row"
+      log "    ${name}: ${want}"
+    done
+    log "======================================================================"
+    return 0
+  fi
+  soft_die "STATUS-GATE FAILED (vms-b869): a proof RUN did not leave its exact \$STATUS (see above; console log ${STATUS_LOG})"
+}
+
 case "${MODE}" in
   prove)
     if run_session prove /cache/boot-work; then
@@ -1047,5 +1315,13 @@ case "${MODE}" in
     run_install && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install)" ;;
+  status-gate)
+    # vms-b869 (parent vms-3b3f): the $STATUS gate -- the VAX analogue of the
+    # Alpha native-image gate. Selftest, then boot a SYSTEM volume whose
+    # SYSTARTUP RUNs the proof images, and assert each exact $STATUS.
+    #   tests/lab-vax/run-boot.sh status-gate
+    run_status_gate && exit 0
+    exit 1
+    ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-selftest)" ;;
 esac

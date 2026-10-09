@@ -75,8 +75,13 @@
  * `(void)prcnam;`, so a caller that names its target rather than numbering it
  * is silently redirected to itself or to a raw Linux pid.
  *
- * OVMX-USERSPACE: sys$exit (vms-pt1) -- runs the exit handlers held in
- *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
+ * OVMX-PARTIAL: sys$exit (vms-b869) -- exec: the completion condition value
+ *     is recorded in the executive (VMS_IOCTL_SETEXIT) before the process
+ *     ends, so the invoking CLI's $STATUS is the full condition value (proved
+ *     on NetBSD/vax by tests/lab-vax/run-boot.sh status-gate).
+ * OVMX-LOCAL: sys$exit -- the exit handlers it runs first are the ones held
+ *     in pcb->exit_handlers[] in the per-process PCB (see sys$dclexh), and
+ *     the process then ends with _exit().
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
  * OVMX-USERSPACE: sys$canexh (vms-44a) -- removes a block from that same
@@ -213,9 +218,21 @@
 /*
  * sys$exit - Terminate process with a VMS status code.
  *
- * Runs any exit handlers registered via sys$dclexh in LIFO order,
- * then exits. VMS convention: odd status = success (exit code 0),
- * even status = failure (exit code 1).
+ * Runs any exit handlers registered via sys$dclexh in LIFO order, records
+ * `code` as the image's completion status in the executive, then exits.
+ *
+ * $EXIT is the service that sets the completion status the invoking CLI
+ * reports as $STATUS, so the FULL condition value goes to the executive
+ * (VMS_IOCTL_SETEXIT, the same record IMGACT's return path and sys_imgact's
+ * rundown write) before the process ends. DCL's RUN reads it back by the
+ * child's pid (vms_kif_getexit_linux). Without this an explicit
+ * SYS$EXIT(%X0FEDC0A9) reached DCL only as a POSIX exit code and $STATUS
+ * came out %X00000001 (rd vms-b869, caught by run-boot.sh status-gate).
+ *
+ * The POSIX exit code is the executive's own mapping (0 iff the success bit
+ * is set). With no executive nothing is recorded (INV-6) and the same
+ * mapping is applied here; DCL then derives $STATUS from the exit code, as it
+ * does for any image that recorded nothing.
  */
 uint32_t sys$exit(uint32_t code) {
     struct vms_pcb *pcb = vms_pcb_get();
@@ -231,8 +248,11 @@ uint32_t sys$exit(uint32_t code) {
         }
     }
 
-    int exit_code = (code & 1) ? 0 : 1;  /* VMS success -> 0, failure -> 1 */
-    _exit(exit_code);
+    uint32_t exit_code = (code & 1) ? 0 : 1;  /* VMS success -> 0, failure -> 1 */
+    uint32_t mapped = exit_code;
+    if (vms_kif_setexit(code, &mapped) & 1)
+        exit_code = mapped;
+    _exit((int)exit_code);
     return SS$_NORMAL;  /* Never reached */
 }
 

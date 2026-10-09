@@ -74,7 +74,15 @@
 #     caller's step, e.g. tests/lab-vax/run-boot.sh / the two-disk lab harness,
 #     rung G -- this script only produces the staged tree).
 #
-# Usage: stage_sysvol.sh [--distribution --kit <OVMX-OS-VAX.KIT>] \
+#   --status-proof <dir> (rd vms-b869, harness-only) -- the DEFAULT installed
+#     tree, except that SYSTARTUP_VMS.COM is tests/lab-vax/
+#     SYSTARTUP_VMS_STATUS_PROOF.COM (RUNs proof images and WRITEs their
+#     $STATUS to the console) and every *.EXE in <dir> is staged into
+#     SYS$SYSTEM next to the boot images. Used only by run-boot.sh status-gate;
+#     never by a shipped volume. Not combinable with --distribution.
+#
+# Usage: stage_sysvol.sh [--distribution --kit <OVMX-OS-VAX.KIT>]
+#                        [--status-proof <proof-images-dir>] \
 #                        <images-dir> <repo-root> <stage-out-dir>
 #   <images-dir> must contain the six ELF32-vax boot images by name:
 #     DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE
@@ -88,11 +96,13 @@ set -euo pipefail
 
 DISTRIBUTION=0
 KIT=""
+STATUS_PROOF_DIR=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --distribution) DISTRIBUTION=1; shift ;;
         --kit)          KIT="${2:?--kit requires a path to OVMX-OS-VAX.KIT}"; shift 2 ;;
         --kit=*)        KIT="${1#--kit=}"; shift ;;
+        --status-proof) STATUS_PROOF_DIR="${2:?--status-proof requires a proof-images dir}"; shift 2 ;;
         --)             shift; break ;;
         -*)             echo "[stage_sysvol] FATAL: unknown flag: $1" >&2; exit 1 ;;
         *)              break ;;
@@ -106,6 +116,7 @@ STAGE="${3:?usage: $0 [--distribution --kit <kit>] <images-dir> <repo-root> <sta
 ROOTFS="$REPO/distro/rootfs/vms"
 VAX_SYSTARTUP="$REPO/distro/rootfs-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_DISTRIB_SYSTARTUP="$REPO/distro/rootfs-distrib-only-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+VAX_STATUS_PROOF_SYSTARTUP="$REPO/tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM"
 BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE FAL.EXE MAIL_SERVER.EXE MAIL.EXE NCP.EXE"
 KIT_DEST_NAME="OVMX-OS-VAX.KIT"
 
@@ -122,6 +133,12 @@ if [ "$DISTRIBUTION" -eq 1 ]; then
     [ -n "$KIT" ]  || die "--distribution requires --kit <OVMX-OS-VAX.KIT> (build it with tools/cross-vax/build-os-kit-vax.sh)"
     [ -f "$KIT" ]  || die "kit file does not exist: $KIT"
     SYSTARTUP_SRC="$VAX_DISTRIB_SYSTARTUP"
+fi
+if [ -n "$STATUS_PROOF_DIR" ]; then
+    [ "$DISTRIBUTION" -eq 0 ] || die "--status-proof cannot be combined with --distribution"
+    [ -d "$STATUS_PROOF_DIR" ] || die "status-proof images dir does not exist: $STATUS_PROOF_DIR"
+    [ -f "$VAX_STATUS_PROOF_SYSTARTUP" ] || die "status-proof SYSTARTUP missing: $VAX_STATUS_PROOF_SYSTARTUP"
+    SYSTARTUP_SRC="$VAX_STATUS_PROOF_SYSTARTUP"
 fi
 
 rm -rf "$STAGE"
@@ -172,6 +189,24 @@ for img in $BOOT_IMAGES; do
     [ -f "$src" ] || die "boot image missing from images dir: $src"
     cp "$src" "$SYSEXE/$img"
 done
+
+# 3b. --status-proof only: the proof images join SYS$SYSTEM. Every image the
+#     proof SYSTARTUP RUNs must be here, so a missing one fails now rather than
+#     as a %DCL-E-IVIMAGE deep in a SIMH boot.
+if [ -n "$STATUS_PROOF_DIR" ]; then
+    n=0
+    for src in "$STATUS_PROOF_DIR"/*.EXE; do
+        [ -f "$src" ] || continue
+        [ ! -e "$SYSEXE/$(basename "$src")" ] \
+            || die "proof image $(basename "$src") would replace a file already in SYS\$SYSTEM"
+        cp "$src" "$SYSEXE/$(basename "$src")"
+        n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || die "no *.EXE proof images in $STATUS_PROOF_DIR"
+    for name in $(sed -n 's/^\$[[:space:]]*RUN[[:space:]]\{1,\}SYS\$SYSTEM:\([A-Za-z0-9_$]*\).*/\1/p' "$SYSMGR/SYSTARTUP_VMS.COM"); do
+        [ -f "$SYSEXE/$name.EXE" ] || die "proof SYSTARTUP RUNs SYS\$SYSTEM:$name but $name.EXE is not staged"
+    done
+fi
 
 # 4. Sanity: the boot gate marker (DCL.EXE) and the startup image PID 1 execs
 #    (PROVISION.EXE) must be present at the rooted path require_installed_system()
@@ -224,6 +259,8 @@ if [ "$DISTRIBUTION" -eq 1 ]; then
     echo "[stage_sysvol]   MODE: --distribution (installer media)"
     echo "[stage_sysvol]   SYS\$UPDATE:$KIT_DEST_NAME staged (OS kit): $(ls -l "$STAGE/SYS0/SYSCOMMON/SYSUPD/$KIT_DEST_NAME" | awk '{print $5}') bytes"
     echo "[stage_sysvol]   SYSTARTUP_VMS.COM invokes @SYS\$MANAGER:OVMX\$INSTALL.COM (boots into the install menu)"
+elif [ -n "$STATUS_PROOF_DIR" ]; then
+    echo "[stage_sysvol]   MODE: --status-proof (installed tree + \$STATUS proof SYSTARTUP and images)"
 else
     echo "[stage_sysvol]   MODE: default (installed system volume)"
 fi

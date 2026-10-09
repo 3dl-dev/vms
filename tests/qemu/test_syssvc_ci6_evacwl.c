@@ -1,0 +1,345 @@
+/*
+ * test_syssvc_ci6_evacwl.c - the evacuation workload's takeover proof
+ * (vms-06c).
+ *
+ * Runs the REAL, VMS-native EVACWL.EXE (tests/lab/ci6/EVACWL.C, compiled by
+ * OVMX's own TCC.EXE and linked by LINK.EXE --use {DECC$SHR + the five OVMX
+ * shareables}) TWICE, as two genuinely separate processes activated through
+ * IMGACT.EXE exactly as a customer's compiled program would be: this harness
+ * does not call sys$enq/RMS itself to emulate the workload, it execs the real
+ * image. tests/qemu/Dockerfile builds it in the initramfs stage, right after
+ * the shareables it binds to (.vms$imp binds by symbol-vector index, so the
+ * image and its producers come from one graph); this harness then stages it,
+ * and them, onto the system VOLUME before running it -- see the
+ * sysvol_stage_subject call in main, and why it is not optional.
+ *
+ * SETUP: this harness defines the EVAC$DATA logical (LNM$SYSTEM, which is
+ * executive-resident and therefore visible to a distinct process, the same
+ * property test_syssvc_lnm_crossproc.c proves) pointing at VDA0:[OVMXDIR],
+ * the writable ODS-2 scratch directory other RMS suites already use on
+ * this harness's mounted system disk -- so EVACWL's own "EVAC$DATA:
+ * EVAC.DAT" open resolves there with no new volume to mount.
+ *
+ * PROOF: instance A starts directly (no "standby"). B starts in "standby"
+ * (NL then CONVERT to EX) only ONCE A IS OBSERVED TO HOLD THE RESOURCE -- A's
+ * first record read back out of EVAC.DAT, plus a WNOWAIT peek showing A is
+ * still running -- so B's EX conversion genuinely queues behind A's held EX
+ * and is granted only when A's $DEQ runs at exit. (Forking both at once made
+ * the outcome a scheduler coin flip, and the losing side deadlocked; see the
+ * start-order comment in main.) After both exit clean, this harness reads
+ * EVAC.DAT back itself (RMS $GET, the same public API) and asserts:
+ *   - exactly A's record count + B's record count rows exist;
+ *   - SEQ is the unbroken sequence 1..N across BOTH instances (B's first
+ *     record continues at A's last seq + 1 -- the takeover-continuity
+ *     property the item names);
+ *   - every record in the first run of rows carries ONE pid, every record
+ *     in the second run carries a DIFFERENT one (two distinct holders, not
+ *     the same process writing twice).
+ *
+ * NO /dev/vms -> honest SKIP (77): EVACWL.EXE's own $ENQW would fail
+ * SS$_NOSUCHDEV with no executive, so this harness checks that property
+ * directly (via sys$crelnm, the first executive call it makes) rather than
+ * exec a native image that can only fail the same way less legibly.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <stdint.h>
+
+#include "starlet.h"
+#include "descrip.h"
+#include "ssdef.h"
+#include "lnmdef.h"
+#include "vms_kif.h"
+#include "rms.h"
+#include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors (sysvol_stage.h) */
+#include "sysvol_stage.h" /* shared VDA300: mount / write-over-ACP /
+                           * OVMX_SYSDEVICE staging for an ACTIVATED subject */
+
+#define EXIT_SKIP 77
+#define WAIT_TIMEOUT_MS 30000
+#define ODS2_UNIT "VDA0:"
+#define EVACWL_IMAGE "/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE"
+
+#define RECLEN       64
+#define FLD_PID_OFF  16
+#define FLD_PID_LEN  10
+#define FLD_SEQ_OFF  26
+#define FLD_SEQ_LEN  10
+
+static int pass = 0, fail = 0;
+
+#define CHECK(cond, msg) do { \
+    if (cond) { printf("  PASS: %s\n", msg); pass++; } \
+    else { printf("  FAIL: %s\n", msg); fail++; } \
+} while (0)
+
+static int executive_present(void)
+{
+    int fd = vms_kif_open();
+    if (fd < 0) return 0;
+    vms_kif_close();
+    return 1;
+}
+
+static struct dsc$descriptor_s mkdsc(const char *s)
+{
+    struct dsc$descriptor_s d;
+    d.dsc$w_length  = (uint16_t)strlen(s);
+    d.dsc$b_dtype   = DSC$K_DTYPE_T;
+    d.dsc$b_class   = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (char *)s;
+    return d;
+}
+
+/* DEFINE a name in LNM$SYSTEM (the executive-resident table, visible to any
+ * process -- test_syssvc_lnm_crossproc.c's own proof). */
+static uint32_t def_system(const char *name, const char *val)
+{
+    struct dsc$descriptor_s td = mkdsc("LNM$SYSTEM");
+    struct dsc$descriptor_s nd = mkdsc(name);
+    struct item_list_3 il[2];
+    memset(il, 0, sizeof(il));
+    il[0].buflen    = (uint16_t)strlen(val);
+    il[0].item_code = LNM$_STRING;
+    il[0].bufaddr   = (void *)val;
+    return sys$crelnm(NULL, &td, &nd, NULL, il);
+}
+
+static void erase_evac_dat(void)
+{
+    char spec[128];
+    struct FAB fab = cc$rms_fab;
+    snprintf(spec, sizeof(spec), "%s[OVMXDIR]EVAC.DAT", ODS2_UNIT);
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
+/* Read EVAC.DAT back through the public RMS API: *pids receives each
+ * record's PID field, *seqs its SEQ field, up to maxrecs; returns the
+ * count actually read. */
+static int read_evac_dat(unsigned long *pids, unsigned long *seqs, int maxrecs)
+{
+    char spec[128];
+    struct FAB fab = cc$rms_fab;
+    struct RAB rab;
+    int n = 0;
+
+    snprintf(spec, sizeof(spec), "%s[OVMXDIR]EVAC.DAT", ODS2_UNIT);
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_fac = FAB$M_GET;
+    fab.fab$b_shr = FAB$M_GET | FAB$M_PUT;
+
+    if (!(sys$open(&fab, 0, 0) & 1))
+        return -1;
+
+    rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    rab.rab$b_rac = RAB$C_SEQ;
+    if (!(sys$connect(&rab, 0, 0) & 1)) {
+        sys$close(&fab, 0, 0);
+        return -1;
+    }
+
+    while (n < maxrecs) {
+        char rec[RECLEN];
+        rab.rab$l_ubf = rec;
+        rab.rab$w_usz = RECLEN;
+        uint32_t st = sys$get(&rab, 0, 0);
+        if (st == RMS$_EOF)
+            break;
+        if (!(st & 1))
+            break;
+        char pidtxt[FLD_PID_LEN + 1], seqtxt[FLD_SEQ_LEN + 1];
+        memcpy(pidtxt, rec + FLD_PID_OFF, FLD_PID_LEN); pidtxt[FLD_PID_LEN] = '\0';
+        memcpy(seqtxt, rec + FLD_SEQ_OFF, FLD_SEQ_LEN); seqtxt[FLD_SEQ_LEN] = '\0';
+        pids[n] = strtoul(pidtxt, NULL, 10);
+        seqs[n] = strtoul(seqtxt, NULL, 10);
+        n++;
+    }
+
+    sys$disconnect(&rab, 0, 0);
+    sys$close(&fab, 0, 0);
+    return n;
+}
+
+int main(void)
+{
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
+    printf("=== test_syssvc_ci6_evacwl (EVACWL takeover continuity, vms-06c) ===\n");
+
+    if (!executive_present()) {
+        uint32_t st = def_system("EVAC$DATA", "VDA0:[OVMXDIR]");
+        printf("  INFO: sys$crelnm/system with no executive returned status %u\n", st);
+        CHECK(!(st & 1),
+              "parent: sys$crelnm does NOT report success when the executive was never reached");
+        printf("=== test_syssvc_ci6_evacwl: %d passed, %d failed (SKIPPED: no /dev/vms) ===\n",
+               pass, fail);
+        return fail > 0 ? 1 : EXIT_SKIP;
+    }
+
+    uint32_t st = def_system("EVAC$DATA", "VDA0:[OVMXDIR]");
+    CHECK(st & 1, "parent: EVAC$DATA defined in LNM$SYSTEM");
+
+    /*
+     * MOUNT THE DATA VOLUME, as every other suite that writes VDA0:[OVMXDIR]
+     * does (test_syssvc_spawn_input's own pattern). The mount is
+     * EXECUTIVE-GLOBAL, which is what makes it visible to the EVACWL instances
+     * -- they are separate processes, and their RMS $OPEN of EVAC$DATA:EVAC.DAT
+     * goes through the same ACP. Co-resident suites DISMOUNT it when they are
+     * done ("clean slate"), so this suite cannot assume someone else left it
+     * mounted; it mounts for itself and dismounts at the end.
+     */
+    CHECK(vms_kif_acp_mount(ODS2_UNIT) & 1,
+          "parent: VDA0: mounted executive-global (the volume EVAC$DATA names)");
+
+    /*
+     * PUT THE ACTIVATED SUBJECT WHERE IMGACT RESOLVES IT -- the system VOLUME,
+     * not just a POSIX path (the same thing test_syssvc_mmk_drive does for the
+     * activated MMK.EXE, through this same shared helper).
+     *
+     * execv() below makes the Linux kernel map EVACWL.EXE's PT_LOADs and open
+     * its PT_INTERP (IMGACT.EXE) from the initramfs POSIX copy. IMGACT then
+     * re-reads the GENUINE main-image bytes -- its section headers, .vms$imp --
+     * off OVMX_SYSDEVICE over the executive Files-11 ACP, and has NO POSIX
+     * fallback for a main image while /dev/vms is present (imgsrc_open,
+     * src/imgact/imgact.c: the POSIX open is reached only on SS$_NOSUCHDEV,
+     * i.e. no executive at all -- Rule 9 / INV-6). An image that exists only as
+     * a POSIX file therefore execs fine and then dies %IMGACT-F-IMGNOTFND,
+     * which is exactly what this suite's first in-guest run did.
+     *
+     * sysvol_stage_subject mounts VDA300:, writes the image there over the ACP,
+     * and sets OVMX_SYSDEVICE -- which the forked children inherit, so THEIR
+     * activator reads it off that volume. The six shareables EVACWL --uses must
+     * live there too (IMGACT resolves each SONAME off the same volume); only
+     * DECC$SHR.EXE is mastered into the image, so the rest are staged from the
+     * very SYS$LIBRARY copies EVACWL was linked against.
+     */
+    CHECK(sysvol_stage_subject(EVACWL_IMAGE, "EVACWL.EXE") == 0,
+          "parent: EVACWL.EXE staged on " SYSVOL_UNIT " over the ACP (IMGACT reads a main image off the volume, never /vms)");
+    CHECK(sysvol_stage_shareables_from("/vms/SYS0/SYSCOMMON/SYSLIB") >= 0,
+          "parent: the OVMX shareables EVACWL --uses staged on " SYSVOL_UNIT " SYS$LIBRARY");
+
+    erase_evac_dat();
+
+    const int COUNT_A = 3, COUNT_B = 2;
+    char a_count[8], b_count[8];
+    snprintf(a_count, sizeof(a_count), "%d", COUNT_A);
+    snprintf(b_count, sizeof(b_count), "%d", COUNT_B);
+
+    pid_t pid_a = fork();
+    if (pid_a < 0) { printf("  FAIL: fork() for instance A\n"); return 1; }
+    if (pid_a == 0) {
+        char *argv[] = { (char *)EVACWL_IMAGE, a_count, NULL };
+        execv(EVACWL_IMAGE, argv);
+        _exit(127);
+    }
+
+    /*
+     * B STARTS ONCE A IS DEMONSTRABLY THE HOLDER -- not "back to back".
+     *
+     * Forking both at once left which instance reached $ENQW first to the
+     * scheduler, and that is not a 50/50 that merely picks which proof runs:
+     * if the STANDBY won the race it would be granted EX outright (nothing
+     * held the resource yet) and then sit in its own wait-for-the-data-volume
+     * loop -- a standby never starts a fresh EVAC.DAT, by contract -- HOLDING
+     * EX while A queued behind it forever. Both would be killed at the
+     * timeout. A flaky test is a broken test, so the start order is observed,
+     * not assumed: wait until A's FIRST RECORD IS READABLE (real state, read
+     * back through RMS -- A cannot have written it without holding EX and
+     * having created the file), and only then start B.
+     *
+     * This is also the real ci.6 sequence: a standby joins a workload that is
+     * already running, it does not race it from a cold start. The "B genuinely
+     * queued" property is not weakened -- it is ASSERTED below (A is still
+     * running when B starts, so B's EX conversion has to wait for A's $DEQ),
+     * and the unbroken SEQ + distinct-PID assertions still carry the handoff.
+     */
+    int a_records = 0;
+    for (int i = 0; i < WAIT_TIMEOUT_MS / 50 && a_records < 1; i++) {
+        unsigned long p[32], s[32];
+        int got = read_evac_dat(p, s, 32);
+        if (got >= 1) { a_records = got; break; }
+        struct pollfd nothing = { .fd = -1, .events = 0 };
+        poll(&nothing, 1, 50);
+    }
+    CHECK(a_records >= 1,
+          "instance A took EVAC$WORKLOAD EX and its first record is readable from EVAC.DAT");
+    /* WNOWAIT: peek only. A plain waitpid() would REAP A here if it had
+     * already finished, and the exit-code wait below would then never see it. */
+    siginfo_t a_si;
+    memset(&a_si, 0, sizeof a_si);
+    int a_still_running =
+        (waitid(P_PID, (id_t)pid_a, &a_si, WEXITED | WNOWAIT | WNOHANG) == 0 &&
+         a_si.si_pid == 0);
+    CHECK(a_still_running,
+          "instance A still HOLDS EVAC$WORKLOAD when B starts (so B's $ENQW genuinely queues)");
+
+    pid_t pid_b = fork();
+    if (pid_b < 0) { printf("  FAIL: fork() for instance B\n"); kill(pid_a, SIGKILL); return 1; }
+    if (pid_b == 0) {
+        char *argv[] = { (char *)EVACWL_IMAGE, (char *)"standby", b_count, NULL };
+        execv(EVACWL_IMAGE, argv);
+        _exit(127);
+    }
+
+    int rc_a = -1, rc_b = -1;
+    {
+        int ws;
+        for (int i = 0; i < WAIT_TIMEOUT_MS / 50 && (rc_a < 0 || rc_b < 0); i++) {
+            if (rc_a < 0) {
+                pid_t w = waitpid(pid_a, &ws, WNOHANG);
+                if (w == pid_a) rc_a = WIFEXITED(ws) ? WEXITSTATUS(ws) : -1;
+            }
+            if (rc_b < 0) {
+                pid_t w = waitpid(pid_b, &ws, WNOHANG);
+                if (w == pid_b) rc_b = WIFEXITED(ws) ? WEXITSTATUS(ws) : -1;
+            }
+            if (rc_a >= 0 && rc_b >= 0) break;
+            struct pollfd nothing = { .fd = -1, .events = 0 };
+            poll(&nothing, 1, 50);
+        }
+    }
+    if (rc_a < 0) { kill(pid_a, SIGKILL); waitpid(pid_a, NULL, 0); }
+    if (rc_b < 0) { kill(pid_b, SIGKILL); waitpid(pid_b, NULL, 0); }
+
+    CHECK(rc_a == 0, "instance A (direct EX) exited clean");
+    CHECK(rc_b == 0, "instance B (standby NL->EX) exited clean, having waited for A");
+
+    unsigned long pids[32], seqs[32];
+    int n = read_evac_dat(pids, seqs, 32);
+    CHECK(n == COUNT_A + COUNT_B,
+          "EVAC.DAT holds exactly A's + B's record count");
+
+    int seq_ok = (n == COUNT_A + COUNT_B);
+    for (int i = 0; seq_ok && i < n; i++)
+        if (seqs[i] != (unsigned long)(i + 1)) seq_ok = 0;
+    /* negctl: lock-convert-contended-upconvert-granted */
+    CHECK(seq_ok, "SEQ is the unbroken sequence 1..N across both instances (takeover continuity)");
+
+    int holder_ok = (n == COUNT_A + COUNT_B);
+    if (holder_ok) {
+        for (int i = 1; i < COUNT_A; i++)
+            if (pids[i] != pids[0]) holder_ok = 0;
+        for (int i = COUNT_A + 1; i < n; i++)
+            if (pids[i] != pids[COUNT_A]) holder_ok = 0;
+        if (pids[0] == pids[COUNT_A]) holder_ok = 0;
+    }
+    /* negctl-knockon: lock-convert-contended-upconvert-granted */
+    CHECK(holder_ok,
+          "the first COUNT_A records share one PID, the rest a DIFFERENT one (a real takeover, not one process writing twice)");
+
+    erase_evac_dat();
+    (void)vms_kif_acp_dmount(ODS2_UNIT);   /* clean slate for co-resident suites */
+
+    printf("=== test_syssvc_ci6_evacwl: %d passed, %d failed ===\n", pass, fail);
+    return fail > 0 ? 1 : 0;
+}

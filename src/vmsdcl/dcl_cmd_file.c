@@ -63,6 +63,7 @@ struct dir_entry {
     /* vms-b447: the header's record attributes (FAT). */
     uint8_t  rfm, rat;       /* FAB$C_* record format, FAB$M_* attributes */
     uint16_t mrs, lrl;       /* FAT$W_MAXREC (maximum), FAT$W_RSIZE (longest) */
+    uint8_t  fsz;            /* FAT$B_VFCSIZE (VFC fixed-control bytes) */
 };
 
 /* /SIZE[=option] mode. VSI OpenVMS DCL Dictionary, DIRECTORY /SIZE: bare /SIZE
@@ -190,6 +191,49 @@ static int dir_format_vmsbintime(const uint8_t vt[8], char *buf, size_t bufsize)
  * columnar /PROTECTION display decodes — only the presentation differs. A
  * clear bit means the access is ALLOWED (VMS convention).
  */
+/* DIRECTORY/FULL "Record format:" text for a FAT record format (vms-a44),
+ * as OpenVMS VAX V7.3 prints it (vax73-dirfull-recfmt.txt):
+ *   FIX  "Fixed length 20 byte records"
+ *   VAR  "Variable length, maximum 0 bytes, longest 32 bytes"
+ *   VFC  "VFC, 2 byte header, maximum 0 bytes, longest 32 bytes"
+ *   STM / STMLF / STMCR  "Stream" / "Stream_LF" / "Stream_CR", maximum, longest
+ *   UDF  "Undefined, maximum 0 bytes, longest 0 bytes" */
+static void dir_format_recfmt(uint8_t rfm, uint16_t mrs, uint16_t lrl, uint8_t fsz,
+                              char *out, size_t cap)
+{
+    const char *nm;
+    switch (rfm) {
+    case FAB$C_FIX:
+        snprintf(out, cap, "Fixed length %u byte records", (unsigned)mrs);
+        return;
+    case FAB$C_VFC:
+        snprintf(out, cap, "VFC, %u byte header, maximum %u bytes, longest %u bytes",
+                 (unsigned)fsz, (unsigned)mrs, (unsigned)lrl);
+        return;
+    case FAB$C_VAR:   nm = "Variable length"; break;
+    case FAB$C_STM:   nm = "Stream";          break;
+    case FAB$C_STMLF: nm = "Stream_LF";       break;
+    case FAB$C_STMCR: nm = "Stream_CR";       break;
+    default:          nm = "Undefined";       break;
+    }
+    snprintf(out, cap, "%s, maximum %u bytes, longest %u bytes", nm,
+             (unsigned)mrs, (unsigned)lrl);
+}
+
+/* "Record attributes:" text (vms-a44, same capture): the carriage-control
+ * attribute (Fortran / Carriage return / Print file carriage control), then
+ * ", Non-spanned" for BLK; "None" when neither is set. */
+static void dir_format_recattr(uint8_t rat, char *out, size_t cap)
+{
+    const char *cc = (rat & FAB$M_FTN) ? "Fortran carriage control"
+                   : (rat & FAB$M_CR)  ? "Carriage return carriage control"
+                   : (rat & FAB$M_PRN) ? "Print file carriage control" : NULL;
+    if (cc && (rat & FAB$M_BLK))      snprintf(out, cap, "%s, Non-spanned", cc);
+    else if (cc)                      snprintf(out, cap, "%s", cc);
+    else if (rat & FAB$M_BLK)         snprintf(out, cap, "Non-spanned");
+    else                              snprintf(out, cap, "None");
+}
+
 static void dir_format_prot_full(uint16_t prot, char *buf, size_t bufsize)
 {
     static const char *cats[]  = { "System", "Owner", "Group", "World" };
@@ -549,6 +593,7 @@ static int dir_collect_acp(struct dcl_context *ctx, const char *vms_pattern,
             e->revision = at.revision;
             e->rfm = at.rfm; e->rat = at.rat;
             e->mrs = at.mrs; e->lrl = at.lrl;
+            e->fsz = at.vfcsize;
         } else {
             e->st.st_mode = S_IFREG | 0644;
         }
@@ -787,21 +832,16 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
             printf("Expired:  <None specified>\n");
             printf("Backup:   <No backup recorded>\n");
 
-            /* Record format / attributes from the header's FAT (vms-b447).
-             * Only the forms a real VMS has been captured printing are
-             * emitted (docs/oracle/semantics/rights/vax73-rightslist.txt,
-             * tests/ods2/PROVENANCE-real_vax_ods2.md):
-             *   Record format:      Variable length, maximum 64 bytes, longest 0 bytes
-             *   Record attributes:  None | Carriage return carriage control
-             * Other record formats and attribute combinations are omitted
-             * until captured (INV-6: no invented output). */
-            if (e->from_acp && e->rfm == FAB$C_VAR) {
-                printf("Record format:      Variable length, maximum %u bytes, "
-                       "longest %u bytes\n", (unsigned)e->mrs, (unsigned)e->lrl);
-                if (e->rat == 0)
-                    printf("Record attributes:  None\n");
-                else if (e->rat == FAB$M_CR)
-                    printf("Record attributes:  Carriage return carriage control\n");
+            /* Record format / attributes from the header's FAT (vms-b447,
+             * vms-a44), in the words a real OpenVMS VAX V7.3 prints for every
+             * format and attribute (tests/lab/captures/
+             * decnet-live-brackets-20261008/vax73-dirfull-recfmt.txt). */
+            if (e->from_acp) {
+                char fmt[96], attr[96];
+                dir_format_recfmt(e->rfm, e->mrs, e->lrl, e->fsz, fmt, sizeof fmt);
+                dir_format_recattr(e->rat, attr, sizeof attr);
+                printf("Record format:      %s\n", fmt);
+                printf("Record attributes:  %s\n", attr);
             }
 
             /* File protection (long form): the genuine ODS-2 protection word

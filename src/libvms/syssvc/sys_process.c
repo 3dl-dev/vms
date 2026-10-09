@@ -75,8 +75,13 @@
  * `(void)prcnam;`, so a caller that names its target rather than numbering it
  * is silently redirected to itself or to a raw Linux pid.
  *
- * OVMX-USERSPACE: sys$exit (vms-pt1) -- runs the exit handlers held in
- *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
+ * OVMX-PARTIAL: sys$exit (vms-b869) -- exec: the completion condition value
+ *     is recorded in the executive (VMS_IOCTL_SETEXIT) before the process
+ *     ends, so the invoking CLI's $STATUS is the full condition value (proved
+ *     on NetBSD/vax by tests/lab-vax/run-boot.sh status-gate).
+ * OVMX-LOCAL: sys$exit -- the exit handlers it runs first are the ones held
+ *     in pcb->exit_handlers[] in the per-process PCB (see sys$dclexh), and
+ *     the process then ends with _exit().
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
  * OVMX-USERSPACE: sys$canexh (vms-44a) -- removes a block from that same

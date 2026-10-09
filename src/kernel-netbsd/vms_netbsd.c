@@ -122,7 +122,7 @@ uint32_t vms_local_csid = 1;
 /*
  * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facilities
  * need a stable per-process struct across a process's ioctls, keyed by pid; it
- * lives until the facility reaper reclaims it (its backing task has exited) or
+ * lives until its process ends (vms_proc_exithook deletes it, rd vms-9f32) or
  * module unload. Allocation happens OUTSIDE the table lock -- exec_zalloc may
  * sleep -- with a re-check after re-acquiring the lock to resolve a race between
  * two lwps of the same process.
@@ -146,6 +146,25 @@ vms_proc_get(pid_t pid)
 	if (np == NULL)
 		return NULL;
 	np->pid = pid;
+	/* The creator (rd vms-9f32): the VMS process (the real parent's PCB) that
+	 * started this one, told how it ended when it is deleted. Read from the
+	 * table, never from anything the process supplies. */
+	{
+		struct proc *pp = curproc->p_pptr;
+		struct vms_proc *op;
+		int obkt;
+
+		if (pp != NULL) {
+			exec_lock(&vms_proc_hash_lock);
+			exec_hash_for_each(vms_proc_hash, obkt, op, hash_node) {
+				if (op->pid == pp->p_pid) {
+					np->owner_vms_pid = op->vms_pid;
+					break;
+				}
+			}
+			exec_unlock(&vms_proc_hash_lock);
+		}
+	}
 
 	/*
 	 * Executive-resident identity (P4-A proctab, rd vms-ca7). prcnam/username/
@@ -423,7 +442,7 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 }
 
 /*
- * vms_proc_free_claimed - tear down a PCB the facility's reaper has ALREADY
+ * vms_proc_free_claimed - tear down a PCB the process-exit hook has ALREADY
  * unlinked from vms_proc_hash under vms_proc_hash_lock (rd vms-ca7). That unlink
  * is the ownership claim (exactly one caller reaches here per entry), so this
  * runs unlocked and reclaims everything the process owned:
@@ -505,21 +524,18 @@ vms_proc_free_claimed(struct vms_proc *proc)
 }
 
 /*
- * vms_proc_exithook - the process `p' is ending: delete its PCB now (rd vms-003b).
+ * vms_proc_exithook - the process `p' is ending: delete its PCB now (rd vms-003b,
+ * vms-9f32 -- the ONLY place a PCB is deleted on this substrate; there is no
+ * reaper).
  *
  * On VMS a process is deleted when it ends, however it ends, and a creator that
- * armed a /NOWAIT completion on it is notified then. This substrate had no
- * process-end hook at all: a PCB was reclaimed only by the facility's lazy
- * reaper, which runs on PROCESS-TABLE operations -- so a creator waiting on its
- * completion flag ($READEF/$WAITFR are not table operations) never saw a
- * subprocess that ended without recording an $EXIT (a crash, a kill, an image
- * whose main thread returned first). NetBSD calls exit hooks from exit1() after
+ * armed a /NOWAIT completion on it is notified then. NetBSD calls exit hooks from exit1() after
  * exit_lwps() (no other LWP of `p' remains) and fd_free() (no ioctl can reach
  * /dev/vms from it any more), in the exiting process's own context, which may
- * sleep. The claim is the facility's: unlink under vms_proc_hash_lock (a
- * concurrent reaper that already unlinked it leaves nothing to find here),
- * deliver an armed completion under that same lock, then free outside it --
- * the Linux module's vms_proc_free() sequence.
+ * sleep. Unlink under vms_proc_hash_lock (the claim), let the facility tell
+ * the creator how it ended (vms_proc_rundown_locked: termination record +
+ * armed completion) under that same lock, then free outside it -- the same
+ * sequence as the Linux module's exit hook.
  */
 static void *vms_exithook_cookie;
 
@@ -538,7 +554,7 @@ vms_proc_exithook(struct proc *p, void *arg __unused)
 		}
 	}
 	if (victim != NULL)
-		vms_proc_deliver_abnormal_completion(victim);
+		vms_proc_rundown_locked(victim);   /* tell the creator (rd vms-9f32) */
 	exec_unlock(&vms_proc_hash_lock);
 
 	if (victim != NULL)

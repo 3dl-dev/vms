@@ -166,3 +166,22 @@ answer.
   UIC at all. Whether anything else can set them is unknown.
 * **Sub-resources.** Out of scope by construction: a sub-resource's value is a
   property of its parent too (rd vms-4fb finding 3).
+
+## The run (2026-10-09, evacuation lane, pod vaxlab-3)
+
+Real VAX1 (1025) + VAX2 (1026), V7.3, group 1, both LOCKDIRWT 0; OVMXE (main
+5b61777e boot artifacts) LOCKDIRWT 1, so every VAX root lookup and every op-0x0d
+registration went to OVMXE and is on `run-20261009-vaxlab3.pcap` (all 0x6007
+frames on the pod bridge, capture started before pass 1). Predictions were
+committed at 28b06f50f before the run.
+
+* Pass 1 as SYSTEM `[1,4]`; pass 2 as C6E300 `[454,1]`; pass 3 as C6E16382
+  `[37776,1]`. VMS UIC numbers are OCTAL: 454 octal = group 300 and 37776 octal
+  = group 16382, the decimal groups this run pre-registered. All three passes
+  ended `C6EDRV status: %X00000001`.
+* Score (`check_heldout_run.py`, `run-20261009-score.txt`): pre-registered 81 ->
+  **MATCH 55, MISMATCH 0**, ABSENT 26 (18 of them the mode-3 group-0 flavour).
+  Unregistered root values seen on the same wire: **541, every one matching the
+  function**.
+* Open: why the 26 ABSENT triples never reached the wire (the driver's own
+  NGOT count was not printed on the console) -- the next run should print it.

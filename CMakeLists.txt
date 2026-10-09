@@ -626,6 +626,17 @@ if(BUILD_TESTS)
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/messages/gen_msgcat.py --check)
     set_tests_properties(msgcat_generated_current PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+    # rd vms-9c95: the DLM resource-name hash corpus -- every row a value a real
+    # OpenVMS VAX put on the cluster wire itself (Baron's option-C ruling on
+    # vms-dc2). This guards the thing that makes the held-out proof (vms-c6e)
+    # mean anything: the corpus is deduped and conflict-free, no OVMX sender
+    # leaked in (that would be circular), and the derivation/held-out split is
+    # still byte-for-byte the one frozen before any derivation work began.
+    add_test(NAME dlm_hash_corpus_split_frozen
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/cluster/dlm_hash/check_corpus.py
+                --fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/cluster/fixtures)
+    set_tests_properties(dlm_hash_corpus_split_frozen PROPERTIES
+        LABELS "integration;cluster;authenticity" TIMEOUT 60)
 
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
@@ -636,6 +647,15 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_workflow_size_guard.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(workflow_size_guard_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
+    # A PR's green CI is evidence about the merge only while main has not
+    # changed the same files since (#1490 x #1532 broke vms.ko, 2026-10-08):
+    # tools/ci/merge_freshness.sh goes STALE exactly then. Throwaway git repo.
+    add_test(NAME merge_freshness_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_merge_freshness.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(merge_freshness_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
     # Negative controls for the above -- proves the checker actually goes red

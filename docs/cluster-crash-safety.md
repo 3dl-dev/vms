@@ -299,6 +299,52 @@ admitted member's circuit: `%CNXMAN, lost connection to system OVMXJ1`, then
 > post-admission re-discovery above is a **separate** open behaviour recorded
 > here rather than fixed with it. The real-VAX survival proof is the gate.
 
+### C11 — A response sent to a peer that never opened that transaction  ▸ `S16-RESP-PEER-CROSSED`
+
+**Mechanism.** The `VMS$VAXcluster` connection-manager dialogue rides **one VC
+per peer**, and a response correlates to its request by the `(txn, token)` pair
+at `body[4:8]` (spec §4(j)). §4(p) states the destination rule outright:
+*"answer on whichever the request arrived on."* A node that answers on some
+**other** connection hands that peer a membership-commit response naming a
+transaction its own Connection Manager has no record of. Nothing about the
+frame is malformed — body, length, envelope and Con.ID pair are all valid for
+the connection it rode.
+
+**Invariant.** MEASURED over this repo's whole capture library (62 pcaps): of
+**409** judged cat-`0x01` responses, **zero** from any real-VMS responder go to
+a station that did not open the transaction. Scoped to category `0x01` by
+measurement — the DLM's cat-`0x02` reuses small `(txn, token)` pairs freely
+across peers (its real correlation is the §4(f).1 lock-id family), and judging
+cat-`0x02` by this rule produces 26 findings on real-VAX↔real-VAX traffic.
+
+**The observed crash (`vms-e8b`, 2026-10-08, reproduced 2/2).** Three members:
+real VAX1 (1025) + real VAX2 (1026) + booted OVMXE (1030). OVMX joined through
+VAX2 (the highest SCSSYSTEMID, `vms-e88`), so **VAX1 was never its join
+target**. VAX1 left with `@SYS$SYSTEM:SHUTDOWN` / `REMOVE_NODE` and opened its
+class-`0x04` self-departure transition (§4(r)) with a cat-`0x01` op-`0x03`
+COMMIT to each other member. VAX2 answered its copy in 226 µs, on the
+connection it arrived on. OVMX answered **its** copy **to VAX2**:
+
+| capture | VAX1→OVMX commit | OVMX answer → VAX2 | VAX2 last gasp | Δ |
+|---|---|---|---|---|
+| `m3-crashwindow` | 20:55:49.988780 (txn 3, tok 8237) | 20:55:49.989500 | 20:55:49.989693 | **193 µs** |
+| `m4-crashwindow` | 21:13:37.795840 (txn 9, tok 46657) | 21:13:37.797616 | 21:13:37.797994 | **378 µs** |
+
+VAX2's console both times: `**** Fatal BUG CHECK, version = V7.3 CNXMGRERR,
+Error detected by VAXcluster Connection Manager`. VAX1, never answered, declared
+`lost connection to system VAX2` and then `quorum lost, blocking activity`.
+
+The same defect is in two captures **fourteen days older** and was harmless
+only because the misdirected frame landed on another OVMX node:
+`tests/lab/captures/vms-4f0-cn3-relay-20260924/run{1-fixed,2-base-control}/cn3.pcap`,
+one `cat 81 op 03` each from OVMXB to OVMXA answering the real VAXC.
+
+**Fixed at the source**, not by the gate: `join_emit_reply()` in
+`src/kernel-core/vms_cnxman_join_fsm.c` resolves the destination from the CSB
+the request arrived on and transmits through `ops->respond`, which is what the
+barrier FSM has always done. Exhibit + the re-run checklist:
+`tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/README.md`.
+
 ### Classes considered and NOT retained
 
 - **Duplicate / replayed dialogue.** No corpus signature separates a legitimate
@@ -357,8 +403,9 @@ Both WARN classes are fully characterised, which is why they are WARN.
 `--self-test` synthesizes a clean CM dialogue that must produce **zero**
 findings, and one **single-factor** violation fixture per vector that must each
 be detected — so a fixture that stops firing means the *check* broke, not the
-fixture. 14 vectors, all detected, clean fixture clean. This is what CI runs.
+fixture. 15 vectors, all detected, clean fixture clean. This is what CI runs.
 `S15`'s fixture carries a correctly addressed refusal alongside the unaddressed
+one, and `S16`'s carries a correctly addressed response alongside the crossed
 one, so a check that fired unconditionally would fail its own case.
 
 ---
@@ -377,13 +424,14 @@ the in-tree `tests/lab/captures/`):
 | `S10-CONID-ZERO` | 26 | 7 |
 | `S1-ENVELOPE-JUMP` | 5 | 3 |
 
-### The two known crashes are both flagged
+### The known crashes are all flagged
 
 | run | capture | gate output |
 |---|---|---|
 | E75/E76 `CNXMGRERR` | `join-e75refire-1788532514.pcap` | `S1-ENVELOPE-JUMP` ×2 — the two fatal bursts, opening at send-msg# **8** and **13** having sent 2 |
 | E78 `INVEXCEPTN` | `join-e78refire2-1788549071.pcap` | `S3-ACK-COALESCE` ×**253** + `S4-ACK-RATE` — the 1:1 ack flood |
 | (historical) `LOCKMGRERR` | `ovmx-760-lockmgrerr-20260730.pcap` | `S5-ECHO-DLM` ×**8** (exactly the eight replies §4(p) names) + `S6-ECHO-CM` ×4 + `S5B` ×8 |
+| `vms-e8b` `CNXMGRERR` | `vms-e8b-cnxmgrerr-removenode-20261008/m{3,4}-crashwindow.pcap` | `S16-RESP-PEER-CROSSED` x1 each -- and in both it is the LAST frame the crashing VAX received |
 
 ### And it is silent on every run that did NOT crash a peer
 

@@ -1,0 +1,13 @@
+08-Oct-2026 21:39:49 DECNETD-I-SETHOST, $ SET HOST 1.1 -- Connect Initiate sent to CTERM object 42 on circuit EWA-0
+08-Oct-2026 21:39:49 DECNETD-I-LINKUP, logical link to 1.1 is RUN -- sending NSP link-service (credit) then awaiting host foundation
+08-Oct-2026 21:39:49 DECNETD-I-BOUND, CTERM foundation negotiated -- terminal session BOUND on circuit EWA-0
+ VAX/VMS V7.3      node VAX1
+
+
+   8-OCT-2026 21:40:23
+VAX1
+  SYSTEM       logged out at  8-OCT-2026 21:40:44.9808-Oct-2026 21:40:51 DECNETD-I-LINKDOWN, logical link closed on circuit EWA-0
+%REM-S-END, control returned to node OVMX::
+08-Oct-2026 21:40:51 DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=10 reads_sent=5 on circuit EWA-0
+ TIME
+   8-OCT-2026 21:41:04.91

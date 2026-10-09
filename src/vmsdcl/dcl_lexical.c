@@ -916,14 +916,15 @@ static int lex_file_attributes(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%s",
                  fa.org == FAB$C_IDX ? "IDX" : fa.org == FAB$C_REL ? "REL" : "SEQ");
     } else if (strcmp(item, "RAT") == 0) {
-        /* Record attributes from the FAT fat_rattrib bits. */
-        char rbuf[16]; size_t ri = 0;
-        if (fa.rat & 0x02) rbuf[ri++] = 'C';   /* CR  (ODS2_RAT_CR)  */
-        if (fa.rat & 0x01 && ri < sizeof(rbuf) - 1) rbuf[ri++] = 'F'; /* FTN */
-        if (fa.rat & 0x04 && ri < sizeof(rbuf) - 1) rbuf[ri++] = 'P'; /* PRN */
-        if (fa.rat & 0x08 && ri < sizeof(rbuf) - 1) rbuf[ri++] = 'B'; /* BLK */
-        rbuf[ri] = '\0';
-        snprintf(result, result_size, "%s", rbuf);
+        /* Record attributes from the FAT fat_rattrib bits, by the names VMS
+         * returns: a VAX V7.3 answers "PRN" for a print-carriage-control file
+         * and "" for none (tests/lab/captures/decnet-live-brackets-20261008/
+         * vax73-dirfull-recfmt.txt, rd vms-a44); CR and FTN by their FAB
+         * names alike. A BLK (no-span) bit has no captured spelling and is
+         * not rendered (INV-6: no invented output). */
+        snprintf(result, result_size, "%s",
+                 (fa.rat & 0x01) ? "FTN" : (fa.rat & 0x02) ? "CR"
+                 : (fa.rat & 0x04) ? "PRN" : "");
     } else if (strcmp(item, "RFM") == 0) {
         /* Record format from the FAT fat_rtype (FAB$C_* codes). */
         static const char *rfm_name[] = {

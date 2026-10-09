@@ -140,6 +140,7 @@ dlm-own-directory-not-consulted
 dlm-self-claim-answered-you-master
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
+dlm-hash-empty-name-not-refused
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -189,7 +190,8 @@ join-transition-reoffers-burst
 glue-close-abandons-held-transition
 csb-new-incarnation-carried
 barrier-stalled-refuses-new-transition
-barrier-stalled-ignores-new-go"
+barrier-stalled-ignores-new-go
+join-reply-to-the-join-target"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -230,6 +232,7 @@ kernel-core/vms_cnxman_phase2.c
 kernel-core/vms_cnxman_quorum.c
 kernel-core/vms_cnxman_recnx_fsm.c
 kernel-core/vms_dlm_dir.c
+kernel-core/vms_dlm_hash.c
 kernel-core/vms_dlm_ldwv.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
@@ -498,6 +501,20 @@ EOF
                       ;;
         esac;;
 
+    dlm-hash-empty-name-not-refused)
+        case "$_f" in
+        facility)     echo "vms_dlm_name_hash()'s honest refusal of a name the wire cannot carry (rd vms-66fe: a value nobody can compute is never invented, INV-6)";;
+        targets)      echo "kernel-core/vms_dlm_hash.c";;
+        suites_red)   echo "test_dlm_hash";;
+        isolation)    echo "isolated";;
+        why)          echo "the 'name_len == 0u' half of vms_dlm_name_hash()'s range check is dropped, so a ZERO-LENGTH resource name is hashed -- the identity block's own length byte says 1..31 -- and *out is written for an identity the caller never had. The hash itself is untouched: the 1216 captured-value rows stay green, which is the point. A hash that answers for an empty name is exactly the shape of defect that puts a confident number on the wire for a resource that does not exist, and the directory node then masters it to the sender (memory cluster-promotion-gap).";;
+        require_fail) cat <<'EOF'
+a zero-length name is refused
+a refusal writes nothing (INV-6)
+EOF
+                      ;;
+        esac;;
+
     codec-mscp-gus-tail2-invented)
         case "$_f" in
         facility)     echo "vms_mscp_gus_end_build()'s INV-6 honesty rule for the undecoded GUS END tail (body[50:52] must stay the zero the initial put_zero left it, never an invented value)";;
@@ -641,6 +658,27 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[9]: the opcode, echoed
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
+EOF
+                      ;;
+        esac;;
+
+    join-reply-to-the-join-target)
+        case "$_f" in
+        facility)     echo "WHERE a VMS\$VAXcluster 0x81 response goes (spec 4(p): \"the dialogue rides ONE VC per peer -- answer on whichever the request arrived on\"; rd vms-e8b)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_emit_reply() transmits through the join's own jops->send_msg on j->cm_conid instead of ops->respond -- i.e. every answer leaves on the connection to the member THIS JOIN DRIVES THROUGH, whoever asked. That is the shipped behaviour before rd vms-e8b, and it is exactly what put a real VAX1's class-0x04 departure-commit response onto the OVMX<->VAX2 connection: VAX2 took a fatal CNXMGRERR 193 us later, twice out of two attempts (tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/). The envelope is still stamped from the arrival CSB, so this is a single-factor mutation of the DESTINATION alone.";;
+        require_fail) cat <<'EOF'
+nothing goes out on the connection this join still holds ...
+... the answer rides the connection it ARRIVED on (rd vms-e8b)
+... stamped out of THAT connection's dialogue, at 1
+... and the first message on it carries send-msg# 1
+the answer goes to the member that ASKED
+and NOT to the member this join drives through -- the frame that bugchecked VAX2 CNXMGRERR
+... one 132-byte body, on that connection
+... stamped out of THAT connection's dialogue
+... acking what that peer really sent on it
 EOF
                       ;;
         esac;;
@@ -1370,6 +1408,13 @@ apply_edit() {
         # completely alone.
         sed -i 's|c->genesis_refused_noquorum++;|/* NEGCTL coord-genesis-refusal-uncounted: the refusal is not counted */|' "$_file";;
 
+    dlm-hash-empty-name-not-refused)
+        # `name_len == 0u || ` is unique in this file; dropping just that
+        # disjunct leaves the upper bound armed, so the mutated build cannot
+        # read past the test's name buffer -- the red set stays the two
+        # assertions the manifest declares and nothing else.
+        sed -i 's|if (name_len == 0u \|\| name_len > VMS_DLM_HASH_NAME_MAX)|if (name_len > VMS_DLM_HASH_NAME_MAX) /* NEGCTL dlm-hash-empty-name-not-refused */|' "$_file";;
+
     codec-vc-zero-incarnation-not-refused)
         # `if (incarnation == 0u)` is unique in this file (the credit-return
         # gate a few functions down reads `c->incarnation`, a different
@@ -1755,6 +1800,15 @@ apply_edit() {
         # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
+
+    join-reply-to-the-join-target)
+        # The ONE response transmit in this file (grep -c for
+        # `j->ops->respond(` is 1): replaced with the pre-vms-e8b target send.
+        # The envelope stamp above it is untouched, so the mutation changes the
+        # DESTINATION and nothing else. Idempotency-safe: the edit consumes the
+        # pattern, so a second apply matches nothing and cmd_apply reports
+        # BROKEN FIXTURE.
+        sed -i 's|\trc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);|\trc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,\n\t\t\t       VMS_CM_BODY_LEN); /* NEGCTL join-reply-to-the-join-target: every answer leaves on the join target'"'"'s connection, whoever asked */|' "$_file";;
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;

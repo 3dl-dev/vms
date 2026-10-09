@@ -639,7 +639,8 @@ tt-edit-cursor-ignored
 tt-edit-overstrike-ignored
 tt-edit-ctrlj-ignored
 tt-recall-key-not-terminator
-tt-inistr-ignored"
+tt-inistr-ignored
+tt-brkthru-privilege-ignored"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2128,10 +2129,12 @@ the down arrow ends the read with the escape sequence as terminator, echoing not
 the driver echoes *EXIT* for ^Z
 the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up
 the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
+the read the broadcast broke through goes on and returns 'AB'
 the resumed read does not write its prompt a second time
 the same read resumes and completes with the whole line 'ABCD'
 the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)
 two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
 with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT
 with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)
 EOF
@@ -2175,6 +2178,7 @@ EOF
 DCL's prompt after a record: the owed <LF>, then <CR><NUL>$
 DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
 EOF
                       ;;
         knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;
@@ -2257,6 +2261,7 @@ output during the read breaks through and the read is shown again: <CR><LF>STATU
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
 EOF
                       ;;
         knock_on_why)  echo "none: the resumed read still completes with 'ABCD' -- only the screen shows the missing redisplay.";;
@@ -2396,6 +2401,26 @@ the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ W
 EOF
                       ;;
         knock_on_why)  echo "the same ignored string is missing from the screen too.";;
+        esac;;
+
+    tt-brkthru-privilege-ignored)
+        case "$_f" in
+        facility)     echo "a broadcast to a terminal (VMS_IOCTL_TT_BRKTHRU, REPLY/USER) needs OPER, decided by the executive through vms_prot.h (vms_tt.c, rd vms-53a)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_tt_brkthru() asks the executive's protection code for OPER (\`a->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);\`). The mutation grants it to everyone (\`a->status = SS__NORMAL;\`): any process can write to any terminal. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a broadcast to a terminal without OPER is SS$_NOPRIV (the executive decides)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
+EOF
+                      ;;
+        knock_on_why)  echo "the refused write goes out too, so the screen after the privileged one carries the broadcast twice.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8544,6 +8569,8 @@ apply_edit() {
         sed -i "s|^\t\t\t} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {$|\t\t\t} else if (0) { /* NEGCTL tt-recall-key-not-terminator */|" "$_file";;
     tt-inistr-ignored)
         sed -i 's|^\t\tif (req->inistr \&\& req->inisz) {$|\t\tif (0) { /* NEGCTL tt-inistr-ignored */|' "$_file";;
+    tt-brkthru-privilege-ignored)
+        sed -i 's|^\ta->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);$|\ta->status = SS__NORMAL; /* NEGCTL tt-brkthru-privilege-ignored */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

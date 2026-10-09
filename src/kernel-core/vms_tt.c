@@ -1740,3 +1740,46 @@ void vms_tt_chan_gone(struct vms_device *dev, pid_t owner_linux_pid, uint32_t ch
 	exec_unlock(&tt->lock);
 	vms_tt_release(tt);
 }
+
+/*
+ * VMS_IOCTL_TT_BRKTHRU (rd vms-53a): a broadcast written to terminal `devnam`
+ * through its class driver. A read in progress there is broken through and then
+ * shown again (vms_tt_write's breakthrough redisplay; keystroke BC.READ W).
+ * Writing to a terminal is OPER, decided here (vms_prot.h). A row no port is
+ * attached to answers SS$_DEVOFFLINE.
+ */
+long vms_ioctl_tt_brkthru(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_tt_brkthru_args *a;
+	struct vms_tt *tt;
+	long rc = 0;
+
+	a = exec_alloc(sizeof(*a));
+	if (!a)
+		return -ENOMEM;
+	if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
+		exec_free(a);
+		return -EFAULT;
+	}
+	a->devnam[sizeof(a->devnam) - 1] = '\0';
+	a->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);
+	if (!(a->status & 1))
+		goto out;
+	if (a->len > sizeof(a->msg)) {
+		a->status = SS__BADPARAM;
+		goto out;
+	}
+	tt = vms_devtab_tt_by_name(a->devnam);
+	if (!tt) {
+		a->status = SS__DEVOFFLINE;
+		goto out;
+	}
+	a->status = vms_tt_write(tt, (const uint8_t *)a->msg, a->len, 0) ? SS__DEVOFFLINE
+									    : SS__NORMAL;
+	vms_tt_release(tt);
+out:
+	if (exec_copyout((void *)arg, a, sizeof(*a)))
+		rc = -EFAULT;
+	exec_free(a);
+	return rc;
+}

@@ -780,6 +780,9 @@ uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state);
  * control character n. */
 uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
                            uint64_t astprm, uint32_t mask, uint32_t acmode);
+/* Write a broadcast to terminal `devnam` through its class driver, breaking
+ * through a read in progress (rd vms-53a). OPER. */
+uint32_t vms_kif_tt_brkthru(const char *devnam, const void *msg, uint32_t len);
 /* Attach the substrate tty open on `ttyfd` to terminal unit `devnam` as its
  * port (STARTUP for OPA0:, LOGINOUT for its session terminal). CMKRNL. */
 uint32_t vms_kif_tt_attach(int ttyfd, const char *devnam);

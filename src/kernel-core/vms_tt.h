@@ -150,6 +150,7 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_setmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_sense(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_oobast(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_tt_brkthru(struct vms_proc *proc, unsigned long arg);
 
 /* A channel to terminal row `dev` is being deassigned (vms_devtab.c): the
  * out-of-band ASTs armed through it end with it (rd vms-f0fb). */

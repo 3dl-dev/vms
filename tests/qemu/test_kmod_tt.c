@@ -655,6 +655,38 @@ int main(void)
               "the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ WRITE SYS$OUTPUT 6)");
     }
 
+    /* ---- a broadcast breaks through a read (rd vms-53a; BC.READ W) ---- */
+    {
+        static const char bmsg[] = "\r\nHELLO\r\n";
+        static const char want[] = "\r\nHELLO\r\n\r\0$ AB";
+        uint64_t pv = 0;
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        type(m, "AB");
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        (void)vms_kif_setprv(VMS_PRV_M_OPER, 0, 0, &pv);
+        st = vms_kif_tt_brkthru(devnam, bmsg, sizeof bmsg - 1);
+        /* negctl: tt-brkthru-privilege-ignored */
+        CHECK(st == SS_NOPRIV, "a broadcast to a terminal without OPER is SS$_NOPRIV (the executive decides)");
+        (void)vms_kif_setprv(VMS_PRV_M_OPER, 1, 0, &pv);
+        st = vms_kif_tt_brkthru(devnam, bmsg, sizeof bmsg - 1);
+        size_t got = screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-breakthrough-no-redisplay */
+        /* negctl-knockon: tt-newline-ignores-cursor */
+        /* negctl-knockon: tt-port-input-dropped */
+        /* negctl-knockon: tt-brkthru-privilege-ignored */
+        CHECK((st & 1) && got == sizeof want - 1 && memcmp(scr, want, got) == 0,
+              "with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB");
+        type(m, "\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "AB") == 0,
+              "the read the broadcast broke through goes on and returns 'AB'");
+    }
+
     /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */
     (void)screen(m, scr, sizeof(scr), 100);
     (void)!write(s, "A\n", 2);                 /* a record: its line feed owed */

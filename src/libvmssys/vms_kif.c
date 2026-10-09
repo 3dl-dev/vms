@@ -1828,6 +1828,25 @@ uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
     return args.status;
 }
 
+uint32_t vms_kif_tt_brkthru(const char *devnam, const void *msg, uint32_t len)
+{
+    static struct vms_tt_brkthru_args args;   /* 536 bytes: off the stack */
+    uint32_t i;
+
+    vms_memset(&args, 0, sizeof(args));
+    for (i = 0; devnam && devnam[i] && i < sizeof(args.devnam) - 1; i++)
+        args.devnam[i] = devnam[i];
+    if (len > sizeof(args.msg))
+        return 0x00000014; /* SS$_BADPARAM */
+    for (i = 0; i < len; i++)
+        args.msg[i] = ((const char *)msg)[i];
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_BRKTHRU, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state)
 {
     struct vms_tt_sense_args args;

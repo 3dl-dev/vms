@@ -2189,12 +2189,25 @@ struct vms_tt_oobast_args {
     uint32_t pad;
 };
 
+/* VMS_IOCTL_TT_BRKTHRU (rd vms-53a): write a broadcast to terminal `devnam`
+ * through its class driver -- breaking through a read in progress, which is
+ * then shown again ($BRKTHRU's delivery; REPLY/USER). The bytes are written as
+ * they are (the sender frames them). OPER: the executive decides (vms_prot.h). */
+#define VMS_TT_BRKTHRU_MAX    512
+struct vms_tt_brkthru_args {
+    char     devnam[VMS_DEVNAM_SIZE];  /* in: terminal row */
+    char     msg[VMS_TT_BRKTHRU_MAX];  /* in: the bytes */
+    uint32_t len;                      /* in: their count */
+    uint32_t status;                   /* out: SS$_ */
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
 #define VMS_IOCTL_TT_SENSE    _IOWR(VMS_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
 #define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
+#define VMS_IOCTL_TT_BRKTHRU  _IOWR(VMS_IOC_MAGIC, 0xA6, struct vms_tt_brkthru_args)
 
 /* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
  * numbers on ILP32 VAX; these are the reference-build values. */
@@ -2222,6 +2235,10 @@ _Static_assert(sizeof(struct vms_tt_oobast_args) == 40,
                "struct vms_tt_oobast_args changed size");
 _Static_assert(VMS_IOCTL_TT_OOBAST == 0xC02856A5u,
                "VMS_IOCTL_TT_OOBAST encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_brkthru_args) == 536,
+               "struct vms_tt_brkthru_args changed size");
+_Static_assert(VMS_IOCTL_TT_BRKTHRU == 0xC21856A6u,
+               "VMS_IOCTL_TT_BRKTHRU encodes differently here than on the reference build");
 
 /*
  * Resolve a DISK unit to the Linux block device the executive enumerated it

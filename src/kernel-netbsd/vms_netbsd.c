@@ -1435,6 +1435,11 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		if (proc == NULL)
 			return ENOMEM;
 		return vms_facility_errno(vms_ioctl_tt_oobast(proc, (unsigned long)data));
+	case VMS_IOCTL_TT_BRKTHRU:       /* rd vms-53a: broadcast to a terminal */
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		return vms_facility_errno(vms_ioctl_tt_brkthru(proc, (unsigned long)data));
 
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);

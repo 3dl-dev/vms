@@ -81,6 +81,10 @@ accepted.
 
 - **Track work as GitHub Issues; submit changes as pull requests.** You do not need the maintainer's
   personal tooling to contribute.
+- **Green must be current.** A PR's checks tested its merge with main as main was then. Before
+  merging, run `tools/ci/merge_freshness.sh origin/main <pr-head>`; if it reports STALE (main has
+  since changed files the PR changes), update the branch to current main and merge only on the new
+  green result.
 - **CI must be green.** A PR that leaves CI red has shipped nothing. Gates include `Build & Test`,
   the kernel-executive proof against a real `/dev/vms`, and the VMS-native link / self-host jobs.
 - **Tests are mandatory.** No change is complete while a test in any layer it touches is skipped,

@@ -649,6 +649,15 @@ if(BUILD_TESTS)
     set_tests_properties(workflow_size_guard_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # A PR's green CI is evidence about the merge only while main has not
+    # changed the same files since (#1490 x #1532 broke vms.ko, 2026-10-08):
+    # tools/ci/merge_freshness.sh goes STALE exactly then. Throwaway git repo.
+    add_test(NAME merge_freshness_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_merge_freshness.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(merge_freshness_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdint.h>
 #include <time.h>
 #include <inttypes.h>
 
@@ -145,6 +146,23 @@ static int dcl_tt_assign(void)
     if (dcl_tt_state == 0)
         dcl_tt_state = (sys$assign(&td, &dcl_tt_chan, 0, NULL, 0) & 1) ? 1 : -1;
     return dcl_tt_state == 1;
+}
+
+void dcl_tt_arm_oob(void (*yast)(uint32_t), int y_on, void (*tast)(uint32_t), int t_on)
+{
+    uint16_t iosb[4];
+    /* IO$M_OUTBAND's P2: a quadword, first longword 0, second the mask of
+     * control characters -- here CTRL/T (20) */
+    static const uint32_t tmask[2] = { 0, 1u << 20 };
+
+    if (!dcl_tt_assign())
+        return;
+    (void)sys$qiow(0, dcl_tt_chan, IO$_SETMODE | IO$M_CTRLYAST, iosb, NULL, 0,
+                   y_on ? (void *)yast : NULL, 0, 3, 0, 0, 0);
+    /* the mask's address rides P4: P2 is a longword in this ABI and DCL's
+     * data may lie above 4 GB (see sys_qio.c) */
+    (void)sys$qiow(0, dcl_tt_chan, IO$_SETMODE | IO$M_OUTBAND, iosb, NULL, 0,
+                   t_on ? (void *)tast : NULL, 0, 3, (uintptr_t)tmask, 0, 0);
 }
 
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,

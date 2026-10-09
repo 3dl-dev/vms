@@ -40,6 +40,7 @@
 #include "vmsfs/filespec.h"
 /* The executive process table: this process's identity is READ from it. */
 #include "vms_kif.h"
+#include "starlet.h"         /* sys$wake: the CTRL/Y AST ends a WAIT */
 
 /* Global DCL context */
 static struct dcl_context dcl_ctx;
@@ -274,14 +275,13 @@ static void sigint_handler(int sig)
         return;
     }
 
-    /* No child running — cancel current input line */
+    /* No child running: nothing to do here. The terminal driver has shown
+     * *INTERRUPT* and the CTRL/Y AST (dcl_ctrly_ast) tells the command loop
+     * (rd vms-f0fb); the substrate signal only stops an image DCL waits on. */
 #ifdef HAVE_READLINE
-    printf("\n");
     rl_on_new_line();
     rl_replace_line("", 0);
     rl_redisplay();
-#else
-    printf("\n");
 #endif
 }
 
@@ -348,6 +348,113 @@ static int dcl_emit_ctrl_t_status(void)
         return 1;
     }
     return 0;
+}
+
+/*
+ * DCL'S OUT-OF-BAND ASTs (rd vms-f0fb). DCL arms them on its terminal channel
+ * before each command read (dcl_arm_oob): the CTRL/Y AST while CONTROL=Y (a
+ * CTRL/C fires it as well), the CTRL/T out-of-band AST while CONTROL=T. They
+ * are delivered by the executive -- during the terminal read, or in a $HIBER
+ * (WAIT) -- never by a substrate signal.
+ */
+static void dcl_ctrly_ast(uint32_t prm)
+{
+    (void)prm;
+    extern volatile int dcl_in_wait;
+    dcl_ctx.ctrly_pending = 1;
+    if (dcl_in_wait)
+        (void)sys$wake(NULL, NULL);  /* end the WAIT in progress */
+}
+
+/* CTRL/T: the status line, as a record -- written while the command read is
+ * outstanding, it breaks through and the driver shows the read again (probe
+ * OB.PROMPT T2). */
+static void dcl_ctrlt_ast(uint32_t ch)
+{
+    (void)ch;
+    struct vms_procinfo info;
+    char node[64], line[256];
+
+    if (!dcl_ctx.ctrl_t_enabled)
+        return;
+    memset(&info, 0, sizeof(info));
+    if (!(vms_kif_getjpi_self(&info) & 1))
+        return;                      /* no executive -> no line (INV-6) */
+    ovmx_node_name(node, sizeof(node));
+    if (dcl_format_ctrl_t_status(&info, node, "", time(NULL), line, sizeof(line)) & 1) {
+        fputs(line, stdout);
+        fputc('\n', stdout);
+        fflush(stdout);
+    }
+}
+
+void dcl_arm_oob(void)
+{
+    dcl_tt_arm_oob(dcl_ctrly_ast, dcl_ctx.ctrl_y_enabled,
+                   dcl_ctrlt_ast, dcl_ctx.ctrl_t_enabled);
+}
+
+/* DCL's prompt as the terminal driver is handed it (see the REPL below). */
+static size_t dcl_build_prompt(char *pb, size_t cap)
+{
+    size_t pl = strlen(dcl_ctx.prompt);
+
+    if (pl + 3 > cap)
+        pl = cap - 3;
+    if (dcl_ctx.prompt_nocc) {
+        pb[0] = '\0'; pb[1] = '\0';
+    } else {
+        pb[0] = '\r'; pb[1] = '\n';
+    }
+    pb[2] = '\0';
+    memcpy(pb + 3, dcl_ctx.prompt, pl);
+    return pl + 3;
+}
+
+/*
+ * dcl_interrupt_level - a command procedure was interrupted by CTRL/Y (rd
+ * vms-f0fb). DCL prompts at the interactive level with the procedure held:
+ * CONTINUE resumes it where it stopped; STOP (or EXIT) abandons it and every
+ * procedure level below; any other command runs and DCL prompts again (OpenVMS
+ * User's Manual, "Interrupting Command Execution"; keystroke oracle OOB.CTRLY:
+ * ^Y, CONTINUE, ^C, STOP). Returns 0 to resume, 1 to abandon.
+ */
+int dcl_interrupt_level(void)
+{
+    static char ibuf[DCL_MAX_LINE];
+    char pb[DCL_MAX_PROMPT + 3];
+
+    for (;;) {
+        dcl_ctx.ctrly_pending = 0;
+        dcl_arm_oob();
+        dcl_mbx_output_drain_sync();
+        int tn = dcl_tt_read(pb, dcl_build_prompt(pb, sizeof pb), ibuf, sizeof ibuf,
+                             0, 0, NULL);
+        if (tn == DCL_TT_GONE) {
+            dcl_ctx.logout_requested = 1;
+            return 1;
+        }
+        if (tn < 0)
+            continue;                /* ^Y again, ^Z, no driver: prompt again */
+        char *p = ibuf;
+        while (*p == ' ' || *p == '\t' || *p == '$')
+            p++;
+        if (*p == '\0')
+            continue;
+        size_t w = strcspn(p, " \t/");
+        if (w >= 4 && w <= 8 && strncasecmp(p, "CONTINUE", w) == 0)
+            return 0;
+        if ((w >= 4 && w <= 4 && strncasecmp(p, "STOP", w) == 0) ||
+            (w >= 3 && w <= 4 && strncasecmp(p, "EXIT", w) == 0))
+            return 1;
+        (void)dcl_execute_line(p);
+        if (dcl_ctx.logout_requested)
+            return 1;
+        if (dcl_ctx.exit_requested) {
+            dcl_ctx.exit_requested = 0;
+            return 1;
+        }
+    }
 }
 
 #ifdef HAVE_READLINE
@@ -800,15 +907,11 @@ int main(int argc, char *argv[])
              * "<NUL><NUL><NUL>Y> " for a /NOCARRIAGE_CONTROL prompt: probes
              * CC.EMPTY, CC.PROMPT, rd vms-fc4). */
             char pb[DCL_MAX_PROMPT + 3];
-            size_t pl = strlen(dcl_ctx.prompt);
-            if (dcl_ctx.prompt_nocc) {
-                pb[0] = '\0'; pb[1] = '\0';
-            } else {
-                pb[0] = '\r'; pb[1] = '\n';
-            }
-            pb[2] = '\0';
-            memcpy(pb + 3, dcl_ctx.prompt, pl);
-            int tn = dcl_tt_read(pb, pl + 3, tt_buf, sizeof(tt_buf), 0, 0, NULL);
+            size_t pbl = dcl_build_prompt(pb, sizeof pb);
+            dcl_ctx.ctrly_pending = 0;
+            dcl_ctx.abort_procedures = 0;
+            dcl_arm_oob();
+            int tn = dcl_tt_read(pb, pbl, tt_buf, sizeof(tt_buf), 0, 0, NULL);
             if (tn == DCL_TT_EOF) {
                 /*
                  * Ctrl/Z AT THE DCL PROMPT DOES NOT LOG OUT (vms-a70). The

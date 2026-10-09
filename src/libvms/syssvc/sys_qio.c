@@ -1332,8 +1332,12 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
                            : (func & IO$M_CTRLCAST) ? VMS_TT_OOB_CTRLC
                            : VMS_TT_OOB_OUTBAND;
             uint32_t mask = 0;
-            if (which == VMS_TT_OOB_OUTBAND && p2)
-                mask = ((const uint32_t *)(uintptr_t)p2)[1];
+            /* OVMX, labelled (Rule 8): P2 is a longword in OVMX's $QIO, too
+             * narrow for a 64-bit image's address, so the mask quadword may be
+             * named by P4 instead (P4 is address-sized, rd vms-f8c). */
+            uintptr_t mq = p4 ? p4 : (uintptr_t)p2;
+            if (which == VMS_TT_OOB_OUTBAND && mq)
+                mask = ((const uint32_t *)mq)[1];
             uint32_t st = vms_kif_tt_oobast(ec, which, (uint64_t)(uintptr_t)p1,
                                             which == VMS_TT_OOB_OUTBAND ? 0 : p2,
                                             mask, p3 & 3u);

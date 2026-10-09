@@ -52,6 +52,10 @@
  * message-inhibited). */
 #define DCL_STS_M_INHIB_MSG 0x10000000u
 
+/* Nonzero while WAIT hibernates: the CTRL/Y AST wakes only such a wait, so it
+ * never leaves a stray $WAKE pending for a later one. */
+volatile int dcl_in_wait;
+
 int cmd_wait(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
@@ -123,10 +127,24 @@ int cmd_wait(struct dcl_command *cmd)
     }
 
     if (total_seconds > 0 || hundredths > 0) {
-        struct timespec ts = { total_seconds, hundredths * 10000000L };
-        /* an interrupt (^Y) ends the wait, as on VMS; the remainder is not
-         * resumed */
-        (void)nanosleep(&ts, NULL);
+        /* A scheduled wakeup and a $HIBER, so the wait is one an AST can
+         * interrupt: DCL's CTRL/Y AST ends it (rd vms-f0fb), and the procedure
+         * is then interrupted at the command boundary. */
+        int64_t delta = -((int64_t)total_seconds * 10000000LL + (int64_t)hundredths * 100000LL);
+        struct dcl_context *wctx = dcl_get_context();
+        if (wctx->ctrly_pending)
+            return SS$_NORMAL;
+        dcl_in_wait = 1;
+        int waited = 0;
+        if ((sys$schdwk(NULL, NULL, (const uint64_t *)&delta, NULL) & 1)) {
+            waited = (sys$hiber() & 1);
+            (void)sys$canwak(NULL, NULL);
+        }
+        if (!waited) {
+            struct timespec ts = { total_seconds, hundredths * 10000000L };
+            (void)nanosleep(&ts, NULL);   /* no executive: a plain wait */
+        }
+        dcl_in_wait = 0;
     }
 
     return SS$_NORMAL;

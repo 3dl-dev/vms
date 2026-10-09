@@ -165,7 +165,7 @@ static void get_time_string(char *out, size_t outlen)
  * EX holder and is granted only on takeover. Direct (non-standby) requests
  * EX outright; $ENQW blocks (queued, no LCK$M_NOQUEUE) until granted either
  * way, so a second instance legitimately waits for the first to release. */
-static uint32_t take_workload_lock(int standby, uint32_t *lkid_out)
+static uint32_t take_workload_lock(int standby, long nl_hold_s, uint32_t *lkid_out)
 {
     $DESCRIPTOR(resnam, "EVAC$WORKLOAD");
     struct {
@@ -181,6 +181,17 @@ static uint32_t take_workload_lock(int standby, uint32_t *lkid_out)
                       NULL, 0, NULL, 0, 0, 0);
         if (!(st & 1))
             return st;
+        if (nl_hold_s > 0) {
+            /* NL=<s>: hold the NL lock alone for <s> seconds before asking
+             * for EX. A standby started FIRST this way is the resource's
+             * first requester (so its node masters EVAC$WORKLOAD, Davis
+             * p. 6-31) while still letting the primary take EX meanwhile. */
+            int64_t hold = -10000000LL * (int64_t)nl_hold_s;
+            printf("EVACWL: standby holds EVAC$WORKLOAD NL for %ld s\n", nl_hold_s);
+            fflush(stdout);
+            sys$schdwk(0, 0, (uint64_t *)&hold, 0);
+            sys$hiber();
+        }
         st = sys$enqw(EFN$C_ENF, LCK$K_EXMODE, &lksb, LCK$M_CONVERT, NULL,
                       0, NULL, 0, NULL, 0, 0, 0);
     } else {
@@ -218,17 +229,20 @@ int main(int argc, char **argv)
 {
     int standby = 0;
     long count = -1; /* -1 = forever */
+    long nl_hold_s = 0;
     int i;
 
     for (i = 1; i < argc; i++) {
         if (strcasecmp(argv[i], "standby") == 0)
             standby = 1;
+        else if (strncasecmp(argv[i], "nl=", 3) == 0)
+            nl_hold_s = strtol(argv[i] + 3, NULL, 10);
         else
             count = strtol(argv[i], NULL, 10);
     }
 
     uint32_t lkid = 0;
-    uint32_t st = take_workload_lock(standby, &lkid);
+    uint32_t st = take_workload_lock(standby, nl_hold_s, &lkid);
     if (!(st & 1)) {
         fprintf(stderr, "EVACWL: $ENQW failed, status %u\n", st);
         return 1;

@@ -203,6 +203,7 @@ typedef struct _uic UIC;
 #define JPI$_DFDEV          0x011C  /* Default device (string) */
 #define JPI$_DFDIR          0x011D  /* Default directory (string) */
 #define JPI$_PRIB           0x0309  /* Base priority (longword) */
+#define JPI$_AUTHPRI        1048    /* Authorized base priority (longword); STARLET dump */
 #define JPI$_APTCNT         0x030A  /* Active page table count (longword) */
 #define JPI$_ASTLM          0x0409  /* AST limit (longword) */
 #define JPI$_BIOLM          0x0310  /* Buffered I/O limit (longword) */

@@ -171,15 +171,29 @@ static uint8_t dq_wireop(uint32_t post_op)
  * asks for. An ABSENT op reads CLOSED: "nobody told us" and "every member is
  * ours" are different facts and only one may put a new shape on a wire.
  *
+ * ... OR where this node is the SOLE LOCK-DIRECTORY NODE (`mixed_dlm_ok`, rd
+ * vms-025/db2a). In that configuration this arm addresses op-0x01 requests at
+ * the real VMS master its own directory named, and a lock taken there must be
+ * releasable: withholding the release would mean an OVMX $ENQ that can acquire
+ * a cluster-wide lock and never give it back, which is worse for a real VAX
+ * than the frame is. Every field of it is still an executive read and the
+ * grounded field map is unchanged; what differs from op-0x05 is that this shape
+ * has no observed-but-unpinned span to fill with a zero.
+ *
  * RULE C is the OTHER half and it is deliberately not here: the connection
  * manager refuses per DESTINATION on `csb->peer_is_ours` inside ops->send.
  */
 static int dq_new_shape_ok(const struct dlm_req_fsm *f)
 {
-	if (f->ops == (const struct dlm_req_ops *)0 ||
-	    f->ops->all_ovmx == (int (*)(void *))0)
+	if (f->ops == (const struct dlm_req_ops *)0)
 		return 0;
-	return f->ops->all_ovmx(f->ops->ctx) != 0;
+	if (f->ops->all_ovmx != (int (*)(void *))0 &&
+	    f->ops->all_ovmx(f->ops->ctx) != 0)
+		return 1;
+	if (f->ops->mixed_dlm_ok != (int (*)(void *))0 &&
+	    f->ops->mixed_dlm_ok(f->ops->ctx) != 0)
+		return 1;
+	return 0;
 }
 
 /* Hand the built body to the connection manager. The codec wrote FRAME-absolute

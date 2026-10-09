@@ -1390,6 +1390,19 @@ int main(void)
 			 "cm-op0f (op 0x0f, echo not force)");
 	test_echo_recipe("cm-relay-req", "cm-relay-resp", 0x04,
 			 "cm-relay (op 0x12)");
+	/*
+	 * rd vms-e8b -- THE CLASS-0x04 SELF-DEPARTURE COMMIT, and the first
+	 * real specimen of one in this tree. A real OpenVMS VAX V7.3 (VAX1,
+	 * 1025) left a three-node cluster with SHUTDOWN/REMOVE_NODE and opened
+	 * its own class-0x04 transition with a cat-0x01 op-0x03; VAX2 (1026)
+	 * answered 226 us later, and that answer is the response specimen. It
+	 * confirms the three-mutation recipe holds for class 0x04 with NOTHING
+	 * extra -- in particular body[55] is ECHOED (0x6d), not cleared, which
+	 * is op-0x09-specific (spec 4(p)), and body[17] keeps the requester's
+	 * class rather than the responder's (only op-0x12 takes that mutation).
+	 */
+	test_echo_recipe("cm-depart-commit-req", "cm-depart-commit-resp-oracle",
+			 0, "cm-depart-commit (op 0x03, class 0x04)");
 	test_formation();
 	test_close_recipe();
 	test_dlm_op0d_recipe();

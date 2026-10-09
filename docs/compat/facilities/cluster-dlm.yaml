@@ -203,14 +203,66 @@ items:
       rd vms-8219. With every member at the V7.3 default LOCKDIRWT 0 (PARAMS
       body[26:28], rd vms-fcb) p. 6-32 makes every member a directory node, OVMX
       included, so a real VAX sends OVMX lookups, removals and registrations. OVMX
-      keeps the entries for the root resources it directs (keyed by the wire
-      identity: UIC group, access mode, name) and answers from them. NOT served, and
-      said so on the console: a name this node itself holds locks on (that answer is
-      "I am the master", the master role toward a VMS system, a rung of its own), and
-      a lookup the table cannot record. OVMX-ORIGINATED locks in a mixed cluster are
-      still mastered locally (rd vms-dc2, a Rule 8 scope decision); this row is the
-      directory duty a VMS member asks of OVMX, not cluster-wide locking for OVMX's own
-      resources.
+      keeps the entries for the root resources it directs (keyed by the resource
+      NAME, carrying the wire identity -- UIC group, access mode -- and the wire
+      hash as stored facts) and answers from them. NOT served, and said so on the
+      console: a name this node holds locks on but does NOT master (some other
+      system is the master, so "you master it" would be false), and a lookup the
+      table cannot record.
+      UPDATED by rd vms-025/vms-db2a: a name this node MASTERS is no longer refused
+      -- in the sole-directory interim configuration it is RESOLVED as the master
+      (p. 6-31 outcome (a) / p. 6-51), and outside that configuration the refusal
+      stands exactly as before. See the cluster-dlm$mixed-single-master row for what
+      that configuration is, what it opens, and what it still does not.
+  - id: cluster-dlm$mixed-single-master
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Mixed cluster, ONE master per resource: an OVMX $ENQ on a name a real VMS member masters is routed to that master, and a VMS member's $ENQ on a name OVMX masters is served by OVMX (Davis p. 6-31 outcomes (a)/(b), p. 6-51) -- in the SOLE-DIRECTORY interim configuration only"
+    evidence: src/kernel-core/vms_dlm_dir.c
+    verified_against: "tests/cluster/host/test_dlm_mixed_master.c (R1, the widest in the directory: the REAL engine + the REAL CLUB's weight vector + the REAL directory table + the REAL requester FSM + the REAL codec on one path. The VAX-first direction -- the resource's master is the VAX, this node did NOT master it twice, exactly one op-0x01 left addressed to the VAX carrying the hash THE VAX put on the wire, the grant lands and the local process holds EX; the OVMX-first direction -- the mastery is recorded in this node's own directory, the VAX's lookup is answered SELF, its EX queues, NOQUEUE is DENIED, and the local $DEQ leaves the lock granted FOR the VAX's CSID; the departure -- exactly the departed CSID's locks released and the local waiter granted EX. NEGATIVE CONTROLS in the same file: an empty directory still masters locally, DEFAULT WEIGHTS make the whole interim inert, and a directory entry with no wire-learned hash REFUSES the $ENQ (SS$_UNSUPPORTED) with zero frames rather than sending a zero hash. Reverting the engine's directory consultation fails 13 checks, master_csid reading as OVMX -- the two-master hole itself. tests/cluster/sim/scenarios/dlm_mixed_evacuation.c (R2: BOTH systems' independently built vectors resolve all 65536 wire-hash values to the OVMX node, and the evacuation sequence runs on the virtual clock through the shipping FSM's own retransmit beat). tests/cluster/host/test_dlm_dir.c (the table: name-keying, the self-claim, ANSWER_SELF, ambiguity refused, the hashless claim judged on the vector). tests/cluster/host/test_dlm_scs_arm.c (the arm's gate placement and that the BLKAST gate is NOT widened). NOT PROVEN HERE: the real-VAX lab leg (rd vms-025/vms-db2a done-conditions)."
+    notes: >
+      rd vms-025 + vms-db2a + vms-c27 condition 3 (rd vms-4d3). MEASURED HOLE, both
+      horns: vms_lock.c's dir_resolve() answered "this node" for every name while any
+      member was non-OVMX, and the local $ENQ path never consulted the directory
+      entries THIS NODE HOLDS -- so a real VAX that locked a name first (its lookup
+      answered and recorded here, naming the VAX) and a local $ENQ on the same name
+      gave TWO masters for one resource; and the other way round, a VAX's lookup for a
+      name this node already mastered was answered "you master it", making the VAX a
+      second master.
+      THE CONFIGURATION, AND IT IS AN INTERIM ONE, LABELLED: every real VMS member at
+      LOCKDIRWT 0 and the OVMX member above 0 (Davis p. 6-32), which makes the
+      committed Lock Directory Weight Vector consist entirely of OVMX entries. It is
+      DERIVED on every read (vms_ldwv_sole_directory), never configured or remembered:
+      a member joining with a nonzero weight closes it at the next Phase 2 fill. Only
+      in that configuration is a directory decision for a root name possible with NO
+      resource-name hash at all -- which is why it is the Rule-8-clean interim while
+      the general case waits for the hash (rd vms-dc2 / vms-b5b0). Outside it, every
+      path keeps exactly its previous behaviour, proven by a negative control.
+      WHAT IS ASSERTED ON THE WIRE, and all of it is an executive read at the moment
+      of the frame (INV-6): the op-0x01/0x07 request to the master this node's own
+      directory named, carrying the hash the cluster itself put on the wire for that
+      exact name and REFUSED outright when this executive holds none; the GRANT and
+      DENY replies, built from the LKB the engine just stamped; and the directory's
+      own 0xf9/0xf8 answers (the row above). Nothing is echoed frame-to-frame.
+      HONEST GAPS, NOT PAPERED, each with its own counter: (1) the BLOCKING AST
+      (op 0x05) is still NOT emitted at a system that has not proved it runs this
+      implementation -- its mode-context pair at body[30:32] is observed and not
+      pinned, so OVMX would have to write a zero where every real frame carries data;
+      the engine's decision is real and proven, the frame is withheld and counted
+      (blkasts_no_wire_op), and a source-scan assertion keeps the gate from being
+      widened without a capture. (2) A DEFERRED GRANT is not originated: a cat-0x82
+      grant at a system that did not just ask breaks RULE A and no capture grounds an
+      uncorrelated grant (deferred_grants_no_wire_op counts what the master owes). So
+      a VMS member QUEUED at an OVMX master is granted in this executive's lock
+      database and learns of it on its next request, not from an unsolicited frame.
+      (3) The directory consults by NAME across resource domains, because the engine's
+      resource namespace carries no UIC group or access mode; the conflation can only
+      ever conclude that THIS node is the master (which this node can verify and
+      serve) and so can over-serialize but never produce a second master.
+      Every frame this node puts in front of a system it cannot prove runs this
+      implementation is counted separately (cnxman's dlm_mixed_sends), so a transcript
+      says how many and under which configuration.
   - id: cluster-dlm$scs-transport
     kind: feature
     status: implemented

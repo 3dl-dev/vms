@@ -346,6 +346,34 @@ int vms_ldwv_all_ovmx(const struct vms_ldwv *v)
 	return (v->valid && v->n_members > 0u && !v->any_foreign) ? 1 : 0;
 }
 
+/*
+ * THE SOLE-DIRECTORY CONFIGURATION (rd vms-025 / vms-db2a). See the header.
+ *
+ * It is one read of the vector this connection manager BUILT from LOCKDIRWTs it
+ * LEARNED off the wire (PARAMS body[26:28], rd vms-fcb): every entry reads 0,
+ * and p. 6-32 says a system's own entries are the ones that read 0 in its own
+ * copy. So "every entry is mine" is exactly "every root name in this cluster is
+ * directed here", which is what the configuration means and the only thing that
+ * makes a directory decision possible WITHOUT the resource-name hash.
+ *
+ * It is NOT configured, declared or remembered anywhere: it is derived, and it
+ * stops being true the instant a member with a nonzero LOCKDIRWT joins and the
+ * vector is refilled at Phase 2. A vector that is not authoritative right now
+ * (mid-transition, or refused) answers 0, like every other read of it.
+ */
+int vms_ldwv_sole_directory(const struct vms_ldwv *v)
+{
+	uint32_t i;
+
+	if (v == NULL || !v->valid || v->n == 0u)
+		return 0;
+	for (i = 0u; i < v->n; i++) {
+		if (v->entry[i] != 0u)
+			return 0;
+	}
+	return 1;
+}
+
 /* ==========================================================================
  * The index rule (p. 6-31) -- ONE spelling, used by everything
  * ========================================================================== */

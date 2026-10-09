@@ -110,6 +110,8 @@
  * oracle-pinned 1664, vms-2b8). */
 #define SS__BADPARAM   0x00000014  /* SS$_BADPARAM */
 #define SS__NOPRIV     0x00000024  /* SS$_NOPRIV */
+#define SS__NOOPER     10388       /* SS$_NOOPER (STARLET $SSDEF) */
+#define SS__NOSYSLCK   10484       /* SS$_NOSYSLCK (STARLET $SSDEF) */
 #define SS__EXASTLM    0x00002A04  /* SS$_EXASTLM (AST quota exceeded) */
 #define SS__NOTALLPRIV 1665        /* SS$_NOTALLPRIV (not all requested privs authorized; V7.3 $SSDEF, severity S) */
 /* Mailbox subset (P4-A, rd vms-d7a). Values match src/kernel/vms_internal.h. */
@@ -253,12 +255,22 @@
 #ifndef VMS_PRV_M_READALL
 #define VMS_PRV_M_READALL (1ULL << 35)   /* PRV$V_READALL */
 #endif
+#ifndef VMS_PRV_M_ALTPRI
+#define VMS_PRV_M_ALTPRI  (1ULL << 13)   /* PRV$V_ALTPRI  */
+#endif
+#ifndef VMS_PRV_M_OPER
+#define VMS_PRV_M_OPER    (1ULL << 18)   /* PRV$V_OPER    */
+#endif
+#ifndef VMS_PRV_M_SYSLCK
+#define VMS_PRV_M_SYSLCK  (1ULL << 30)   /* PRV$V_SYSLCK  */
+#endif
 #ifndef VMS_PRV_M_ENFORCED
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_ROOT_GRANT | \
                              VMS_PRV_M_TMPMBX | VMS_PRV_M_PRMMBX | \
                              VMS_PRV_M_NETMBX | \
                              VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_READALL | \
-                             VMS_PRV_M_GRPPRV)
+                             VMS_PRV_M_GRPPRV | \
+                             VMS_PRV_M_ALTPRI | VMS_PRV_M_SYSLCK | VMS_PRV_M_OPER)
 #endif
 /* The privileges EVERY VMS process holds by default (TMPMBX + NETMBX), matching
  * src/kernel/vms_internal.h's VMS_DEFAULT_PRIVS. A fresh OVMX process must be
@@ -700,6 +712,9 @@ struct vms_proc {
 	uint32_t            rights_id[VMS_RIGHTS_MAX];
 	uint32_t            rights_attr[VMS_RIGHTS_MAX];
 	uint32_t            rights_n;
+	/* Base priority (VMS_IOCTL_PRI, vms-768); pri_set == 0 reads as VMS_PRI_DEFAULT. */
+	uint8_t             pri_base;
+	uint8_t             pri_set;
 
 	/*
 	 * /NOWAIT subprocess-exit completion registration (vms-e9a B1). Lives on
@@ -1341,6 +1356,8 @@ long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

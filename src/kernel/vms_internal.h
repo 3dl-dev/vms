@@ -75,6 +75,8 @@
 #define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
 #define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
+#define SS__NOOPER      10388       /* SS$_NOOPER (STARLET $SSDEF) */
+#define SS__NOSYSLCK    10484       /* SS$_NOSYSLCK (STARLET $SSDEF) */
 #define SS__ACCVIO      0x0000000C
 /*
  * Event-flag and memory statuses -- ORACLE-PINNED (vms-68c, 2026-07-30),
@@ -960,6 +962,9 @@ struct vms_proc {
     uint32_t            rights_id[VMS_RIGHTS_MAX];
     uint32_t            rights_attr[VMS_RIGHTS_MAX];
     uint32_t            rights_n;
+    /* Base priority (VMS_IOCTL_PRI, vms-768); pri_set == 0 reads as VMS_PRI_DEFAULT. */
+    uint8_t             pri_base;
+    uint8_t             pri_set;
 
     struct rcu_head     rcu;
 };
@@ -1470,6 +1475,8 @@ long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 /* Construct the SYSTEM identity onto the caller (vms-a17e) -- the

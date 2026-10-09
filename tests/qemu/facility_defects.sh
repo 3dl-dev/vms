@@ -567,7 +567,11 @@ register-subprocess-identity-self-declared
 libspawn-prcnam-dropped
 efn0-enqw-not-set
 setdfprot-not-stored
+enq-syslck-not-checked
+pri-altpri-not-checked
+brk-oper-not-checked
 acp-create-ignores-dfprot
+acp-deaccess-revision-not-recorded
 clrast-no-delivery
 mbx-tmpmbx-check-removed
 mbx-prmmbx-check-removed
@@ -583,6 +587,8 @@ acp-acl-not-consulted
 acp-acl-deny-falls-to-world
 acp-acl-control-not-checked
 acp-acl-deleteall-drops-protected
+acp-acl-ext-not-matched
+acp-acl-spill-refused
 sys-parse-acl-drops-access
 rms-set-security-local-applied-early
 chkpro-acl-ignored
@@ -592,6 +598,7 @@ acp-acl-default-not-propagated
 acp-default-protection-ignored
 acp-fat-versions-not-applied
 acp-fat-recattr-not-applied
+acp-create-dates-not-stamped
 libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
@@ -1011,6 +1018,44 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    acp-create-dates-not-stamped)
+        case "$_f" in
+        facility)     echo "IO\$_CREATE stamps the new file header's creation and revision dates (FI2\$Q_CREDATE / FI2\$Q_REVDATE) from the executive clock, so DIRECTORY/FULL and F\$FILE_ATTRIBUTES CDT/RDT read real times (vms-263e, folded in from vms-6f5c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation replaces the create path's ods2_fh2_set_dates(sc->filehdr, now, now) with a no-op, so a new header keeps an all-zero FI2\$Q_CREDATE; F\$FILE_ATTRIBUTES CDT of the file test_syssvc_rms_acp created is empty and its dates assertion reddens. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+vms-263e: a file the executive created has a creation and a revision date (F$FILE_ATTRIBUTES CDT/RDT not empty)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-deaccess-revision-not-recorded)
+        case "$_f" in
+        facility)     echo "IO\$_DEACCESS of a file accessed for write records the modification in its header: revision count +1, revision date = now (vms-263e)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_rw";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_deaccess calls ods2_fh2_touch_revision on the header of a file that was accessed for write. The mutation drops the call, so the header is re-sealed and written back unchanged: the revision count and date stay as mastered. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+DEACCESS after write access: revision count +1, new revision date, creation date kept
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     acp-create-ignores-dfprot)
         case "$_f" in
         facility)     echo "IO\$_CREATE gives an ordinary file that names no protection the creating process's default file protection (\$SETDFPROT / RMS_FILEPROT)";;
@@ -1022,6 +1067,65 @@ EOF
         why)          echo "The ACP's CREATE takes proc->dfprot for an ordinary file with no protection of its own. The mutation leaves it 0, so the file gets the class default (RWED,RWED,RE,RE) whatever the process set. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new file's protection is the process default (0x0F00), not a class default
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    enq-syslck-not-checked)
+        case "$_f" in
+        facility)     echo "a system-wide lock resource (LCK\$M_SYSTEM) needs SYSLCK in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_enq() refuses an LCK\$M_SYSTEM request without SYSLCK. The mutation lets it through, so any process takes system-wide locks. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$ENQW of a system-wide resource without SYSLCK is SS$_NOSYSLCK
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    pri-altpri-not-checked)
+        case "$_f" in
+        facility)     echo "a base priority above the authorized one needs ALTPRI in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_pri() holds a \$SETPRI above the authorized priority at the authorized priority without ALTPRI. The mutation sets whatever is asked. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the base priority stays at the authorized 4
+$SETPRI 10 with ALTPRI
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    brk-oper-not-checked)
+        case "$_f" in
+        facility)     echo "a broadcast to every terminal / every user needs OPER in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_brkauth() refuses BRK\$C_ALLTERMS / ALLUSERS without OPER. The mutation grants them to anyone. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$BRKTHRUW to every terminal without OPER is SS$_NOOPER
+the executive refuses every-user scope without OPER
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1443,6 +1547,49 @@ EOF
         why)          echo "acp_acl_op() refuses an ACL change SS\$_NOPRIV unless acp_has_control(). The mutation removes the check, so a world user changes the ACL of a file it does not own. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 a non-owner without CONTROL may not change ACLF1's ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-ext-not-matched)
+        case "$_f" in
+        facility)     echo "the ACP access check walks an ACL that continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_match() gathers the ACEs of the extension headers after the primary's. The mutation looks at the primary only, so an ACE that lives in the extension header grants nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the [100,100] ACE in the extension header grants [100,100] read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    acp-acl-spill-refused)
+        case "$_f" in
+        facility)     echo "an ACL longer than the primary header continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_store() puts the ACEs the primary header cannot hold in extension headers. The mutation refuses SS\$_ACLFULL instead, so the list stops growing at what the primary holds. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+35 ACEs are accepted (the list outgrows the primary header)
+reading the ACL returns all 35, newest first, [100,100] last
+a 36th ACE goes first; the rest move down the chain
+36 ACEs read back, [100,100] still last
+35 ACEs remain after the delete
+30 ACEs again (a fresh extension header)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -4125,7 +4272,7 @@ A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programma
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
-A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|OPER) that are in VMS_PRV_M_ENFORCED (OPER is not)
+A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in VMS_PRV_M_ENFORCED (EXQUOTA is not)
 A: the executive accepted the identity a privileged writer established
 B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC
@@ -4138,7 +4285,7 @@ C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$
 C: the privilege display shows NETMBX and TMPMBX -- the two privileges the executive granted an unprivileged process, both in VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
-F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,SETPRV,TMPMBX,WORLD,MOUNT,NETMBX,PHY_IO,SYSPRV,BYPASS,GRPPRV,READALL), not merely completes without rendering anything
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,ALTPRI,SETPRV,TMPMBX,WORLD,MOUNT,OPER,NETMBX,PHY_IO,SYSPRV,BYPASS,SYSLCK,GRPPRV,READALL), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
 G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
@@ -7651,11 +7798,15 @@ apply_edit() {
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
-        sed -i 's|^    ace_matched = acp_acl_match(proc, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
+        sed -i 's|^    ace_matched = acp_acl_match(proc, vol, fh, \&ace_access);$|    ace_matched = 0; (void)ace_access; /* NEGCTL acp-acl-not-consulted */|' "$_file";;
     acp-acl-deny-falls-to-world)
         sed -i 's|^    if (!ace_matched) {$|    if (1) { /* NEGCTL acp-acl-deny-falls-to-world */|' "$_file";;
     acp-acl-control-not-checked)
-        sed -i 's|^    if (!acp_has_control(proc, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+        sed -i 's|^    if (!acp_has_control(proc, vol, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file";;
+    acp-acl-ext-not-matched)
+        sed -i 's#^    if (acp_hdr_ext(h) == 0 || !vol)$#    if (1) /* NEGCTL acp-acl-ext-not-matched */#' "$_file";;
+    acp-acl-spill-refused)
+        sed -i 's#^    status = acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx);$#    status = (acp_acl_fit(sc->filehdr, out, n) < n) ? SS__ACLFULL : acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx); /* NEGCTL acp-acl-spill-refused */#' "$_file";;
     acp-acl-deleteall-drops-protected)
         sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file";;
     chkpro-acl-ignored)
@@ -7684,8 +7835,18 @@ apply_edit() {
         sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file";;
     efn0-enqw-not-set)
         sed -i 's|^    if (efn < 128)$|    if (efn != 0 \&\& efn < 128) /* NEGCTL efn0-enqw-not-set */|' "$_file";;
+    acp-create-dates-not-stamped)
+        sed -i 's|^                (void)ods2_fh2_set_dates(sc->filehdr, now, now);$|                (void)now; /* NEGCTL acp-create-dates-not-stamped */|' "$_file";;
+    acp-deaccess-revision-not-recorded)
+        sed -i 's#^                ods2_fh2_touch_revision(hdr, exec_time_now_vms()) != ODS2_OK) {$#                0) { /* NEGCTL acp-deaccess-revision-not-recorded */#' "$_file";;
     acp-create-ignores-dfprot)
         sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file";;
+    enq-syslck-not-checked)
+        sed -i 's#^        !(proc->cur_privs \& VMS_PRV_M_SYSLCK)) {$#        0) { /* NEGCTL enq-syslck-not-checked */#' "$_file";;
+    pri-altpri-not-checked)
+        sed -i 's#^        if (pri > args.authpri \&\& !(proc->cur_privs \& VMS_PRV_M_ALTPRI))$#        if (0) /* NEGCTL pri-altpri-not-checked */#' "$_file";;
+    brk-oper-not-checked)
+        sed -i 's#^    if ((args.sndtyp == 3u || args.sndtyp == 4u) \&\& !(proc->cur_privs \& VMS_PRV_M_OPER))$#    if (0) /* NEGCTL brk-oper-not-checked */#' "$_file";;
     setdfprot-not-stored)
         sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file";;
     libspawn-prcnam-dropped)

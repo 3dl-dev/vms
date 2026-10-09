@@ -94,6 +94,20 @@ target_compile_definitions(test_sim_cnxman_join PRIVATE
 target_include_directories(test_sim_cnxman_join PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# rd vms-e8b's rung-R2 leg: the REAL captured class-0x04 departure commit of a
+# VAX leaving with SHUTDOWN/REMOVE_NODE, replayed as arriving on the DEPARTING
+# member's connection -- the exchange whose answer OVMX used to send to the
+# wrong peer, bugchecking a real VAX2 CNXMGRERR.
+cluster_sim_test(test_sim_cnxman_departing_member
+                 scenarios/cnxman_departing_member.c)
+target_link_libraries(test_sim_cnxman_departing_member PRIVATE
+    cluster_host_cnxman cluster_host_fixture)
+target_compile_definitions(test_sim_cnxman_departing_member PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+target_include_directories(test_sim_cnxman_departing_member PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # rd vms-e88's rung-R2 leg: the real V7.3 trio C3 -- a joiner that can reach one
 # of two members -- replayed at one simulated joiner over five virtual minutes.
 cluster_sim_test(test_sim_cnxman_join_member_count
@@ -237,6 +251,45 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME cluster_sim_test_sim_dlm_requester COMMAND test_sim_dlm_requester)
 set_tests_properties(cluster_sim_test_sim_dlm_requester PROPERTIES
+    LABELS "unit;cluster;cluster_sim;lock;dlm"
+    TIMEOUT 120
+)
+
+# rd vms-025 / vms-db2a / vms-c27(3)'s R2: THE WORKLOAD'S LOCK MOVES between a
+# real-VMS node and the OVMX node with ONE master throughout, and the two
+# things one node cannot show -- that BOTH systems' independently built weight
+# vectors send every root name to the OVMX node (the interim configuration is a
+# property of the CLUSTER, not an assumption of one member), and the evacuation
+# SEQUENCE in time, through the shipping requester FSM's own beat.
+#
+# Same include recipe and same three library recipes as test_sim_dlm_requester
+# above, plus the directory table (which is inside cluster_host_cnxman).
+add_executable(test_sim_dlm_mixed_evacuation
+    scenarios/dlm_mixed_evacuation.c
+)
+target_include_directories(test_sim_dlm_mixed_evacuation BEFORE PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host/lock_shim
+)
+target_include_directories(test_sim_dlm_mixed_evacuation PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host
+)
+target_compile_definitions(test_sim_dlm_mixed_evacuation PRIVATE
+    OVMX_CLUSTER_HOST)
+target_link_libraries(test_sim_dlm_mixed_evacuation PRIVATE
+    cluster_host_dlm
+    cluster_host_cnxman
+    cluster_host_lock
+    cluster_sim_core
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_sim_dlm_mixed_evacuation PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME cluster_sim_test_sim_dlm_mixed_evacuation
+         COMMAND test_sim_dlm_mixed_evacuation)
+set_tests_properties(cluster_sim_test_sim_dlm_mixed_evacuation PROPERTIES
     LABELS "unit;cluster;cluster_sim;lock;dlm"
     TIMEOUT 120
 )

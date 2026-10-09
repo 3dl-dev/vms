@@ -1150,7 +1150,7 @@ static void test_client_response_fuzz(void)
                 mutate(fb, &fl, sizeof(fb), &st);
             }
             enum dnet_cterm_found_term_kind fkind;
-            uint8_t ftext[64]; size_t ftlen = 0; uint8_t fhandle[2];
+            uint8_t ftext[64]; size_t ftlen = 0; uint8_t fhandle[4];
             int frc = dnet_cterm_found_terminal_rx(fb, fl, &fkind, ftext,
                                                    sizeof(ftext), &ftlen, fhandle);
             /* A DEFINED status is any code in the CTERM enum (OK/ETRUNC/EBADLEN/
@@ -1212,6 +1212,15 @@ static const uint8_t k_oracle_found_client_seg4[] = {
  * echoing read handle 04 34. */
 static const uint8_t k_oracle_readattr_solicit[] = {
     0x09, 0x00, 0x18, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x27,
+    0x00, 0x0c, 0x00, 0x04, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x0c, 0x00, 0x00, 0x00
+};
+/* rd vms-b19: the same solicit from a LIVE VAX V7.3 host (VAX1 1.1 -> OVMX
+ * 1.44 $ SET HOST, dnlab-1 2026-10-08, tests/lab/captures/
+ * decnet-sethost-live-20261008/): its handle is a7 59 01 00, and the OVMX
+ * reply that echoed a7 59 00 00 was ignored (no Username: prompt followed). */
+static const uint8_t k_live_readattr_solicit[] = {
+    0x09, 0x00, 0x18, 0x00, 0x0f, 0x00, 0xa7, 0x59, 0x01, 0x00, 0x27,
     0x00, 0x0c, 0x00, 0x04, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
     0x02, 0x00, 0x0c, 0x00, 0x00, 0x00
 };
@@ -1286,7 +1295,7 @@ static void test_client_foundation_fsm(void)
 
     /* Terminal-I/O classifier (BOUND phase). */
     enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
-    uint8_t txt[128]; size_t tl = 0; uint8_t h[2] = { 0, 0 };
+    uint8_t txt[128]; size_t tl = 0; uint8_t h[4] = { 0, 0, 0, 0 };
     check(dnet_cterm_found_terminal_rx(k_oracle_write_username,
               sizeof(k_oracle_write_username), &tk, txt, sizeof(txt), &tl, h)
               == DNET_CTERM_OK && tk == DNET_CTERM_TK_START_READ &&
@@ -1297,13 +1306,27 @@ static void test_client_foundation_fsm(void)
     check(dnet_cterm_found_terminal_rx(k_oracle_readattr_solicit,
               sizeof(k_oracle_readattr_solicit), &tk, NULL, 0, NULL, h)
               == DNET_CTERM_OK && tk == DNET_CTERM_TK_READ_ATTR &&
-          h[0] == 0x04 && h[1] == 0x34,
-          "a 0f-00 host solicit is classified READ_ATTR, handle = 04 34");
+          h[0] == 0x04 && h[1] == 0x34 && h[2] == 0x00 && h[3] == 0x00,
+          "a 0f-00 host solicit is classified READ_ATTR, handle = 04 34 00 00");
     check(dnet_cterm_found_client_readchar_build(h, out, sizeof(out), &n)
               == DNET_CTERM_OK && n == sizeof(k_oracle_readchar_reply) &&
           memcmp(out, k_oracle_readchar_reply, n) == 0,
           "the client's read-characteristics reply echoes handle 04 34,"
           " BYTE-EXACT to the oracle (#53)");
+    {
+        uint8_t lh[4] = { 0, 0, 0, 0 };
+        check(dnet_cterm_found_terminal_rx(k_live_readattr_solicit,
+                  sizeof(k_live_readattr_solicit), &tk, NULL, 0, NULL, lh)
+                  == DNET_CTERM_OK && tk == DNET_CTERM_TK_READ_ATTR &&
+              lh[0] == 0xa7 && lh[1] == 0x59 && lh[2] == 0x01 && lh[3] == 0x00,
+              "rd vms-b19: a live VAX host's solicit handle is four bytes, a7 59 01 00");
+        check(dnet_cterm_found_client_readchar_build(lh, out, sizeof(out), &n)
+                  == DNET_CTERM_OK && n == sizeof(k_oracle_readchar_reply) &&
+              out[6] == 0xa7 && out[7] == 0x59 && out[8] == 0x01 && out[9] == 0x00 &&
+              memcmp(out + 10, k_oracle_readchar_reply + 10, n - 10) == 0 &&
+              memcmp(out, k_oracle_readchar_reply, 6) == 0,
+              "rd vms-b19: the reply echoes all four handle bytes (a7 59 01 00), the rest oracle-exact");
+    }
     check(dnet_cterm_found_read_data_build((const uint8_t *)"SYSTEM", 6, 0x0d,
               out, sizeof(out), &n) == DNET_CTERM_OK &&
           n == sizeof(k_oracle_read_data_system) &&

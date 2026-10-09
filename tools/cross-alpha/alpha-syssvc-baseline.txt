@@ -80,3 +80,6 @@ test_syssvc_initialize       # C: one disk-state/timing assertion flaps pass<->f
 # (pass=2 fail=1 every run). Unbaseline if/when Alpha gains a kprobe/tracepoint
 # path for the fork-hook (rd vms-6b7).
 test_syssvc_bg_fork_close_inherit  # D: eager fork-time BGn: inheritance needs a fork-hook tracepoint/kprobe Alpha's kernel lacks (#847/vms-6b7); listener+accept PASS, deterministic
+test_syssvc_net_qio_status   # C: _NET: absent -- Alpha boots -nic none (same clipper 6-virtio-hang root as getdvi/showdev); the brokered $QIOW IOSB proof is a hard gate on the x86_64 rail -- rd vms-7ee
+test_syssvc_crtl_static      # A: proves the x86_64 STATIC-image C RTL file layer (src/crtl-musl-x86_64, OVMX_CRTLFD_STATIC), which is not built for Alpha -- Alpha's C RTL file layer is DECC$SHR, proven by the alpha crtl_rms/CRTL->RMS gates; SKIPs 77 (0/0) -- N/A on Alpha
+test_syssvc_ci6_evacwl       # C: stages EVACWL.EXE onto a hard-coded VDA300:, but the Alpha harness masters the sysvol as DKA300: (suite cannot start) -- vms-f09

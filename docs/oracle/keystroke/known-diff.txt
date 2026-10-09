@@ -4,7 +4,7 @@
 # tools/oracle/keystroke/ksdiff.py: an unlisted difference fails the gate, and so does
 # a listed step that now matches. Fix the bug, delete the line. Nearly every step
 # also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
-BC.READ W  # vms-53a: broadcast mid-read: no driver redisplay
+BC.READ W  # vms-53a: the driver redisplay and REPLY/USER delivery are in; the case SPAWNs @KSBC, and a SPAWNed procedure here produces no output (rd vms-f37)
 ERR.DCL E1  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E3  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E4  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
@@ -20,11 +20,7 @@ LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT X  # vms-bd71: LOGINOUT console bytes differ
 OOB.PROMPT T  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-RD.EOF Z  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.TIMED W  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.TIMED R2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.TIMED W2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.TIMED S  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
+RD.TIMED S  # vms-c174: SHOW SYMBOL of an undefined symbol says %DCL-W-NOLCL, VMS %DCL-W-UNDSYM (the timed READ itself matches, vms-bc5)
 TA.LOGIN W  # vms-bd71: login banner/last-login bytes differ, and the VAX SYLOGIN SET TERMINAL/INQUIRE consumes the type-ahead (OVMX holds it unechoed and runs it after $ -- vms-d732 met)
 TA.USERNAME U  # vms-bd71: Username: purges type-ahead, then times out
 WRAP.LONG T  # vms-cef: long-line wrap at terminal width

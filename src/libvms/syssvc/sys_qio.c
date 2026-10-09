@@ -701,60 +701,233 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
 }
 
 /*
- * qio_net_op - the DECnet _NET: device $QIO path (rd vms-799, a1-1 SKELETON).
+ * ===================== the DECnet _NET: $QIO path (rd vms-dda) =====================
  *
- * $ASSIGN _NET: resolves the executive DECnet device face (a1-0), and this
- * routes $QIO on that channel away from the fd-based path (its fd is -1). The
- * logical-link data plane -- IO$_ACCESS (open/accept), IO$_READVBLK/WRITEVBLK
- * (task-to-task data), IO$_DEACCESS (disconnect) -- is served by the NETACP
- * broker (Option 1, transport T1), which is NOT wired yet (a1-2, rd vms-22c).
+ * $ASSIGN _NET: resolves the executive DECnet device face (a1-0); a $QIO on that
+ * channel is a LOGICAL-LINK operation, and on VMS every logical link -- inbound
+ * and outbound -- belongs to NETACP. So this path does not run any protocol: it
+ * BROKERS each operation to the running NETACP over the T1 transport (docs/
+ * design-decnet-net-qio-mailbox-seam.md):
  *
- * Until the broker lands this classifies the _NET: channel + its function codes
- * and FAILS HONESTLY: a recognized logical-link function returns SS$_DEVOFFLINE
- * -- the device face exists but its NETACP is not carrying links yet, the honest
- * "resolved device, inactive I/O path" status -- NOT SS$_IVCHAN (which would
- * wrongly claim a bad channel) and NEVER a fabricated transfer (Rule 9/INV-6).
- * An unrecognized function is SS$_ILLIOFUNC. a1-2 fills each function in place.
+ *   NETACP owns ONE request mailbox, published as the LNM$SYSTEM logical
+ *   DNET$NETACP_REQ. Each _NET: channel gets its OWN temporary reply mailbox (a
+ *   mailbox read is destructive, so replies must never share a queue), and
+ *   every request carries that mailbox's unit plus a correlation id; the reply
+ *   is accepted only if its id matches (dnet_broker_call).
+ *
+ * The record codec and the client marshalling (dnet_broker_xfer) are the SAME
+ * source NETACP and its host-floor selftest use, compiled here as a PRIVATE
+ * (static) copy -- one record format, and no new universal in LIBVMS$SHR.
+ *
+ * Function codes (p1/p2 per docs/design-decnet-net-qio-broker-a1-contract.md):
+ *   IO$_ACCESS    p1 = NCB text  NODE"user password account"::"object", p2 = len
+ *   IO$_WRITEVBLK p1 = buffer, p2 = length          (one NSP message)
+ *   IO$_READVBLK  p1 = buffer, p2 = size; waits for a message. With IO$M_NOW it
+ *                 completes at once, SS$_ENDOFFILE when none is buffered.
+ *   IO$_DEACCESS  disconnect.
+ * FAIL-HONEST (Rule 9 / INV-6): no NETACP serving -> SS$_DEVOFFLINE; a NETACP
+ * that stops answering -> SS$_DEVOFFLINE; never a fabricated transfer.
  */
+#include "../../vmsdecnet/nsp/include/dnet_nsp.h"   /* DNET_NSP_MAX_DATA */
+#define DNET_BROKER_API static __attribute__((unused))
+#include "../../vmsdecnet/broker/include/dnet_broker.h"
+#include "../../vmsdecnet/broker/dnet_broker.c"
+#include <time.h>
+
+_Static_assert(DNET_BROKER_ST_NORMAL == SS$_NORMAL &&
+               DNET_BROKER_ST_ENDOFFILE == SS$_ENDOFFILE &&
+               DNET_BROKER_ST_DEVOFFLINE == SS$_DEVOFFLINE &&
+               DNET_BROKER_ST_FILNOTACC == SS$_FILNOTACC &&
+               DNET_BROKER_ST_BADPARAM == SS$_BADPARAM &&
+               DNET_BROKER_ST_ABORT == SS$_ABORT &&
+               DNET_BROKER_ST_EXQUOTA == SS$_EXQUOTA &&
+               DNET_BROKER_ST_ILLIOFUNC == SS$_ILLIOFUNC &&
+               DNET_BROKER_ST_TIMEOUT == SS$_TIMEOUT &&
+               DNET_BROKER_ST_INVLOGIN == SS$_INVLOGIN &&
+               DNET_BROKER_ST_NOSUCHDEV == SS$_NOSUCHDEV,
+               "broker statuses are the VMS SS$_ values");
+
+#define NET_REQ_LOGNAM  "DNET$NETACP_REQ"
+#define NET_POLL_NS     2000000L      /* 2 ms between reply-mailbox polls      */
+#define NET_REPLY_POLLS 5000u         /* ~10 s for NETACP to answer a request   */
+#define NET_OPEN_POLLS  60000u        /* ~120 s for a connect (CI give-up ~45 s) */
+
+struct net_chan_state {
+    int      bound;                   /* reply mailbox + request channel held  */
+    uint32_t exec_chan;               /* the _NET: channel this state belongs to */
+    uint32_t req_chan;                /* channel to NETACP's request mailbox   */
+    uint32_t rep_chan;                /* this channel's own reply mailbox      */
+    struct dnet_broker_chan bc;
+};
+static struct net_chan_state g_netchan[PCB_MAX_CHANNELS];
+static pthread_mutex_t g_netchan_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int net_io_put(void *ctx, const uint8_t *rec, size_t len)
+{
+    struct net_chan_state *ns = ctx;
+    /* Empty this channel's reply mailbox before asking (rd vms-c6d1): NETACP
+     * answers with IO$M_NORSWAIT, so a mailbox still holding answers nobody is
+     * waiting for any more (a completion that arrived after its waiter gave
+     * up) would cost the NEXT request its answer (SS$_MBFULL at NETACP). None
+     * of them can be for the request about to go: its correlation id is new. */
+    for (int k = 0; k < 64; k++) {
+        uint8_t junk[DNET_BROKER_RSP_MAX + 16];
+        uint32_t got = 0;
+        if (!(vms_kif_mbx_read(ns->rep_chan, junk, sizeof junk, &got, 1) & 1))
+            break;
+    }
+    return (vms_kif_mbx_write(ns->req_chan, rec, (uint32_t)len) & 1) ? 0 : -1;
+}
+static int net_io_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)
+{
+    struct net_chan_state *ns = ctx;
+    uint32_t got = 0;
+    uint32_t st = vms_kif_mbx_read(ns->rep_chan, buf, (uint32_t)cap, &got, 1 /*IO$M_NOW*/);
+    if (st == SS$_ENDOFFILE)
+        return 0;
+    if (!(st & 1))
+        return -1;
+    *len = got > cap ? cap : got;
+    return 1;
+}
+static void net_io_idle(void *ctx)
+{
+    (void)ctx;
+    struct timespec ts = { 0, NET_POLL_NS };
+    nanosleep(&ts, NULL);
+}
+
+/* Bind channel `chan` to the running NETACP: find its request mailbox through
+ * the DNET$NETACP_REQ logical and create this channel's reply mailbox. Returns
+ * SS$_NORMAL, or SS$_DEVOFFLINE when no NETACP is serving (no logical, or its
+ * mailbox is gone). Caller holds g_netchan_lock. */
+static uint32_t net_bind(uint16_t chan, struct net_chan_state *ns)
+{
+    uint32_t exec_chan = vms$$chan_exec_chan(chan);
+    if (ns->bound && ns->exec_chan == exec_chan)
+        return SS$_NORMAL;
+    memset(ns, 0, sizeof *ns);
+
+    char dev[64];
+    uint16_t dlen = 0;
+    if (vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NET_REQ_LOGNAM, 0, dev,
+                              sizeof dev - 1, &dlen, NULL, NULL) != 1 || dlen == 0)
+        return SS$_DEVOFFLINE;
+    dev[dlen < sizeof dev ? dlen : sizeof dev - 1] = '\0';
+    if (!(vms_kif_mbx_assign(dev, &ns->req_chan) & 1))
+        return SS$_DEVOFFLINE;        /* stale logical: that NETACP is gone */
+
+    uint32_t unit = 0;
+    char rdev[64];
+    /* The reply mailbox is this process's alone: S:RWLP,O:RWLP,G:,W: (rd
+     * vms-c6d1) -- NETACP (a SYSTEM-category UIC) may write the answer, no other
+     * user may read it, since a reply can carry the link's data. */
+    uint32_t st = vms_kif_mbx_create_prot(0, DNET_BROKER_RSP_MAX + 16,
+                                          (DNET_BROKER_RSP_MAX + 16) * 8, 0xFF00u,
+                                          &ns->rep_chan, &unit, rdev, sizeof rdev);
+    if (!(st & 1)) {
+        (void)vms_kif_dassgn(ns->req_chan);
+        memset(ns, 0, sizeof *ns);
+        return st;
+    }
+    struct vms_procinfo self;
+    if (vms_kif_getjpi_self(&self) & 1)
+        ns->bc.owner_pid = self.vms_pid;
+    ns->bc.reply_unit = unit;
+    ns->exec_chan = exec_chan;
+    ns->bound = 1;
+    return SS$_NORMAL;
+}
+
+static void net_unbind(struct net_chan_state *ns)
+{
+    if (!ns->bound)
+        return;
+    (void)vms_kif_mbx_delmbx(ns->rep_chan);
+    (void)vms_kif_dassgn(ns->rep_chan);
+    (void)vms_kif_dassgn(ns->req_chan);
+    memset(ns, 0, sizeof *ns);
+}
+
+/*
+ * vms$$net_chan_release - $DASSGN of a _NET: channel (called from sys$dassgn
+ * before the executive channel is released): disconnect a link still open on
+ * it, as $DASSGN does on VMS, and give back the reply mailbox.
+ */
+void vms$$net_chan_release(uint16_t chan)
+{
+    uint32_t slot = pcb_chan_to_slot(chan);     /* channel N*16 is slot N */
+    if (chan == 0 || slot >= PCB_MAX_CHANNELS)
+        return;
+    pthread_mutex_lock(&g_netchan_lock);
+    struct net_chan_state *ns = &g_netchan[slot];
+    if (ns->bound && ns->bc.handle != 0) {
+        struct dnet_broker_io io = { ns, net_io_put, net_io_get, net_io_idle,
+                                     NET_REPLY_POLLS, NET_OPEN_POLLS };
+        size_t x = 0;
+        (void)dnet_broker_xfer(&ns->bc, &io, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &x);
+    }
+    net_unbind(ns);
+    pthread_mutex_unlock(&g_netchan_lock);
+}
+
 static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
-                           uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm) {
+                           void *p1, uint32_t p2, uint32_t efn,
+                           void (*astadr)(uint32_t), uint32_t astprm) {
     struct _iosb *iosb = (struct _iosb *)iosb_ptr;
     uint32_t base_func = func & IO$M_FCODE;
     uint32_t st;
-
-    (void)chan;
+    size_t xfer = 0;
+    uint16_t op = 0;
 
     switch (base_func) {
-        case IO$_ACCESS:      /* open (connect) / accept a logical link */
-        case IO$_DEACCESS:    /* disconnect a logical link */
-        case IO$_READVBLK:    /* receive a task-to-task message */
-        case IO$_WRITEVBLK:   /* send a task-to-task message */
-            /* Recognized logical-link functions; the NETACP broker is not wired
-             * yet (a1-2). Fail honest: the device resolved, the I/O path is
-             * inactive (SS$_DEVOFFLINE), never a fake transfer (INV-6/Rule 9). */
+        case IO$_ACCESS:    op = DNET_BROKER_OP_OPEN;  break;  /* connect      */
+        case IO$_WRITEVBLK: op = DNET_BROKER_OP_SEND;  break;  /* send message */
+        case IO$_READVBLK:  op = DNET_BROKER_OP_RECV;  break;  /* receive      */
+        case IO$_DEACCESS:  op = DNET_BROKER_OP_CLOSE; break;  /* disconnect   */
+        default: break;
+    }
+
+    if (base_func == IO$_NOP) {
+        st = SS$_NORMAL;
+    } else if (op == 0) {
+        st = SS$_ILLIOFUNC;
+    } else if (chan == 0 || pcb_chan_to_slot(chan) >= PCB_MAX_CHANNELS) {
+        st = SS$_IVCHAN;
+    } else {
+        /* One request at a time per channel; channels proceed independently
+         * (the lock is dropped while a request waits on its reply). The
+         * state is per channel SLOT: channel numbers are N*16 (rd vms-0a2). */
+        pthread_mutex_lock(&g_netchan_lock);
+        struct net_chan_state *ns = &g_netchan[pcb_chan_to_slot(chan)];
+        uint32_t bst = net_bind(chan, ns);
+        pthread_mutex_unlock(&g_netchan_lock);
+        if (!(bst & 1)) {
+            /* No NETACP is serving logical links on this node: the device face
+             * resolved, its I/O path is inactive. Never a fake (INV-6). */
             st = SS$_DEVOFFLINE;
-            break;
-
-        case IO$_NOP:
-            st = SS$_NORMAL;
-            break;
-
-        default:
-            st = SS$_ILLIOFUNC;
-            break;
+        } else {
+            struct dnet_broker_io io = { ns, net_io_put, net_io_get, net_io_idle,
+                                         NET_REPLY_POLLS, NET_OPEN_POLLS };
+            if (op == DNET_BROKER_OP_RECV && (func & IO$M_NOW))
+                op |= DNET_BROKER_OPF_NOW;
+            st = dnet_broker_xfer(&ns->bc, &io, op,
+                                  (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p1 : NULL,
+                                  (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p2 : 0,
+                                  (base_func == IO$_READVBLK) ? p1 : NULL,
+                                  (base_func == IO$_READVBLK) ? p2 : 0, &xfer);
+        }
     }
 
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
-        iosb->iosb$w_bcnt = 0;
-        iosb->iosb$l_dev_depend = 0;
+        iosb->iosb$w_bcnt = (xfer > 65535) ? 65535 : (uint16_t)xfer;
+        iosb->iosb$l_dev_depend = (uint32_t)xfer;
     }
-
     if (st & 1) {
         if ((efn & 0xFFu) < 128) sys$setef(efn);
         if (astadr) astadr(astprm);
     }
-
     return st;
 }
 
@@ -1141,7 +1314,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     if (vms$$chan_is_net(chan))
-        return qio_net_op(chan, func, iosb_ptr, efn, astadr, astprm);
+        return qio_net_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     {
         uint32_t tec = 0;
@@ -1216,7 +1389,7 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
     if (vms$$chan_is_net(chan))
-        return qio_net_op(chan, func, iosb_ptr, efn, astadr, astprm);
+        return qio_net_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
 
     {
         uint32_t tec = 0;

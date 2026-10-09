@@ -64,6 +64,39 @@ ovmx_netbsd_guest_tool(vmsproctab ${CMAKE_CURRENT_SOURCE_DIR}/vmsproctab.c)
 ovmx_netbsd_guest_tool(vmsmbx     ${CMAKE_CURRENT_SOURCE_DIR}/vmsmbx.c)
 
 # ---------------------------------------------------------------------------
+# The $STATUS proof images (rd vms-b869, parent vms-3b3f) -- STSNORM.EXE and
+# STSCOND.EXE, one source (status_exit.c) built twice. UNLIKE the static harness
+# tools above these are ordinary Decision-A OVMX/VAX images (dynamic, ld.elf_so,
+# statically bound to the OVMX RTL -- the same link shape as AUTHORIZE.EXE), so
+# a DCL RUN of them goes through exactly the activation path any shipped VAX
+# image does. NOT shipped: they never join `ovmx-images'. Built by
+# `cmake --build --target ovmx-vax-status-images' (tools/cross-vax/
+# build-ovmx-images-vax-cmake.sh per PR; tests/lab-vax/run-boot.sh status-gate
+# stages them into SYS$SYSTEM and RUNs them under SIMH).
+# ---------------------------------------------------------------------------
+add_custom_target(ovmx-vax-status-images)
+
+function(ovmx_vax_status_image _target _name _cond)
+    add_executable(${_target} ${CMAKE_CURRENT_SOURCE_DIR}/status_exit.c)
+    target_include_directories(${_target} PRIVATE ${VMS_INCLUDE_DIR})
+    target_compile_definitions(${_target} PRIVATE
+        OVMX_STATUS_NAME="${_name}"
+        OVMX_STATUS_COND=${_cond}
+    )
+    target_compile_options(${_target} PRIVATE -O -Wall -Wextra)
+    target_link_libraries(${_target} PRIVATE
+        vms vmsrms vmsfs vmslnm vmsprocess vmssys)
+    set_target_properties(${_target} PROPERTIES
+        OUTPUT_NAME "${_name}"
+        SUFFIX ".EXE"
+    )
+    add_dependencies(ovmx-vax-status-images ${_target})
+endfunction()
+
+ovmx_vax_status_image(vax_status_stsnorm STSNORM 0x00000001)
+ovmx_vax_status_image(vax_status_stscond STSCOND 0x0FEDC0A9)
+
+# ---------------------------------------------------------------------------
 # Width-safety teeth (negctl), re-expressed as ctest build-negatives.
 #
 # enable_testing() is called here UNCONDITIONALLY (not gated on the

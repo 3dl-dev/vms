@@ -1606,3 +1606,49 @@ const char *dnet_cterm_msgtype_name(enum dnet_cterm_msgtype t)
     default:                            return "?";
     }
 }
+
+/* ---- CTERM Write rendering (client side, AA-DY88A-TK 4.16.8) ------------- */
+static int wr_fix(uint8_t code, uint8_t value, uint8_t *out, size_t cap, size_t *o)
+{
+    if (code == 1) {                          /* NEW-LINES: <CR> + N <LF>      */
+        if (*o + 1u + value > cap) return -1;
+        out[(*o)++] = 0x0d;
+        for (unsigned k = 0; k < value; k++) out[(*o)++] = 0x0a;
+    } else if (code == 2) {                   /* CHARACTER                     */
+        if (*o + 1u > cap) return -1;
+        out[(*o)++] = value;
+    }
+    return 0;
+}
+
+int dnet_cterm_write_render(const uint8_t *msg, size_t mlen, int *skip_lf,
+                            uint8_t *out, size_t cap, size_t *outlen)
+{
+    if (outlen) *outlen = 0;
+    if (!msg || !out || !outlen || mlen < 5 || msg[0] != 0x07) return -1;
+    uint16_t flags = (uint16_t)(msg[1] | (msg[2] << 8));
+    uint8_t pre = msg[3], post = msg[4];
+    uint8_t pp = (uint8_t)((flags >> 6) & 3u), qq = (uint8_t)((flags >> 8) & 3u);
+    const uint8_t *d = msg + 5;
+    size_t dl = mlen - 5, o = 0;
+    int skip = skip_lf ? *skip_lf : 0;
+
+    if (wr_fix(pp, pre, out, cap, &o) != 0) return -1;
+    if (pp != 0) skip = 0;
+    if (skip && dl && d[0] == 0x0a) { d++; dl--; }
+    if (dl) {
+        if (o + dl > cap) return -1;
+        memcpy(out + o, d, dl);
+        o += dl;
+    }
+    if (wr_fix(qq, post, out, cap, &o) != 0) return -1;
+    skip = 0;
+    if (flags & 0x0004u) {                    /* L: the "newline" flag          */
+        if (o + 1 > cap) return -1;
+        out[o++] = 0x0a;
+        skip = 1;
+    }
+    if (skip_lf) *skip_lf = skip;
+    *outlen = o;
+    return 0;
+}

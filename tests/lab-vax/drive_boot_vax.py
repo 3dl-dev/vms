@@ -1222,6 +1222,95 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
     return seen
 
 
+# rd vms-b869: the $STATUS proof SYSTARTUP's last line. Everything the proof
+# prints precedes it; run-boot.sh's assert_status_proof checks the lines.
+MS_STATUS_PROOF_END = "STATUS-PROOF: === END ==="
+
+
+def do_status_gate(a, sysvol_img, boot_deadline):
+    """rd vms-b869: boot the assembled disk with the $STATUS proof SYSTEM
+    volume on rq1 (-> ra1 -> DUA0:) and record the console to OVMX_STATUS_LOG.
+
+    The volume is the installed tree with SYSTARTUP_VMS.COM replaced by
+    tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM, which RUNs the proof images
+    and WRITEs each one's $STATUS. This side makes NO verdict: it copies every
+    console byte to the log until the proof's END line, the login prompt (the
+    startup finished, so the proof is not coming), or the deadline -- and
+    run-boot.sh's assert_status_proof, the function its can-fail selftest
+    exercises, decides from the log. Returns 0 when a log was recorded,
+    HARNESS_ERROR when it could not be."""
+    import pexpect
+
+    log_path = env("OVMX_STATUS_LOG")
+    if not log_path:
+        log("STATUS-GATE: OVMX_STATUS_LOG not set")
+        return HARNESS_ERROR
+    try:
+        log_f = open(log_path, "wb", buffering=0)
+    except OSError as e:
+        log("STATUS-GATE: cannot open %s: %s" % (log_path, e))
+        return HARNESS_ERROR
+
+    vmm_args = ["set rq1 ra92", "attach rq1 " + os.path.abspath(sysvol_img)]
+    log("STATUS-GATE: booting with the $STATUS proof SYSTEM volume on rq1 -> "
+        "DUA0:, console -> %s (deadline %ds)" % (log_path, boot_deadline))
+
+    a.dist.set_workdir(a.workdir)
+    a.n_cdrom = 0
+    child = a.start_simh(vmm_args)
+    seen = b""
+    stop = None
+    deadline = time.time() + boot_deadline
+    end_mark = MS_STATUS_PROOF_END.encode()
+    login_mark = MS_PROVISION_LOGIN.encode()
+    try:
+        child.timeout = boot_deadline
+        child.expect(r">>>")
+        child.send("B/R5:2 DUA0\r")
+        while time.time() < deadline:
+            try:
+                chunk = child.read_nonblocking(size=4096, timeout=1)
+            except pexpect.TIMEOUT:
+                continue
+            except (pexpect.EOF, OSError):
+                stop = "SIMH exited"
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode("latin-1", "replace")
+            log_f.write(chunk)
+            sys.stdout.write(chunk.decode("latin-1", "replace"))
+            sys.stdout.flush()
+            seen = (seen + chunk)[-8192:]
+            if end_mark in seen:
+                stop = "proof END line"
+                break
+            if login_mark in seen:
+                stop = "Username: (startup finished without the proof END line)"
+                break
+        else:
+            stop = "deadline (%ds)" % boot_deadline
+        # Drain briefly so the END line's own CR/LF lands in the log.
+        t_end = time.time() + 3
+        while time.time() < t_end:
+            try:
+                chunk = child.read_nonblocking(size=4096, timeout=0.5)
+            except (pexpect.TIMEOUT, pexpect.EOF, OSError):
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode("latin-1", "replace")
+            log_f.write(chunk)
+    except (pexpect.TIMEOUT, pexpect.EOF, Exception) as e:
+        stop = "%s: %s" % (type(e).__name__, e)
+    finally:
+        try:
+            log_f.flush(); log_f.close()
+        except OSError:
+            pass
+        _hard_kill(child)
+    log("STATUS-GATE: console capture stopped at %s" % stop)
+    return 0
+
+
 def do_acceptance(a, boot_deadline, single_rq0_type):
     """rd vms-f2c (VAX half of co-release acceptance parity). Boot the SLIM
     SINGLE disk EXACTLY as do_sysboot(single=True) does -- ONE `attach rq0'
@@ -1409,6 +1498,14 @@ def main():
             # is the single disk's workdir (/cache/single-work), the same disk
             # sysboot-single builds and boots.
             return do_acceptance(a, boot_deadline, single_rq0_type)
+
+        if mode == "status-gate":
+            # rd vms-b869: the $STATUS proof boot. The verdict is run-boot.sh's
+            # (assert_status_proof over OVMX_STATUS_LOG), not this driver's.
+            if not os.path.isfile(sysvol_img):
+                log("FAIL: status-proof volume not found at %s" % sysvol_img)
+                return HARNESS_ERROR
+            return do_status_gate(a, sysvol_img, boot_deadline)
 
         if mode == "assemble-single":
             # vms-7b15: the shared NetBSD disk is rq0 (its stock init gives a

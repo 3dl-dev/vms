@@ -479,6 +479,18 @@ enum dnet_cterm_found_term_kind {
  * on any well-formed input (kind says what it was), DNET_CTERM_ETRUNC/EINVAL on
  * a null/too-short buffer.
  */
+/*
+ * dnet_cterm_write_render - render ONE CTERM Write message (AA-DY88A-TK
+ * 4.16.8: MSGTYPE 7, FLAGS "TSQQ PPEB DLUU" LE16, PREFIX-VALUE, POSTFIX-VALUE,
+ * DATA) as the bytes a terminal shows: the prefix (NEW-LINES = <CR> then N
+ * <LF>s; CHARACTER = that character), the data, the postfix likewise, and the
+ * "newline" flag (L: a trailing <LF>, after which a leading <LF> in the NEXT
+ * Write is skipped -- *skip_lf carries that state between calls). Returns 0, or
+ * -1 when `msg` is not a Write or `out` is too small (nothing is truncated).
+ */
+int dnet_cterm_write_render(const uint8_t *msg, size_t mlen, int *skip_lf,
+                            uint8_t *out, size_t cap, size_t *outlen);
+
 int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
                                  enum dnet_cterm_found_term_kind *kind,
                                  uint8_t *text, size_t textcap, size_t *textlen,

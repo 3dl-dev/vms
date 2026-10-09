@@ -336,3 +336,110 @@ test('only the OVMX/VAX node is held to the quiet claim', () => {
   assert.deepEqual(R.substrate_noise, {});
   assert.equal(GATE.isQuiet(R), true);
 });
+
+// ---- Node A's own worker state (rd vms-4ff) --------------------------------
+//
+// The two V0.7-7 live failures were both "Node A's console ends right after
+// %OVMX-I-MOUNTED", and that was ALL the run kept -- the gate read Node A's
+// consoleText and none of the worker-level state its node.html wrapper
+// publishes beside it, so a worker that aborted could not be told from a guest
+// still grinding through the ACP staging phase. These tests hold the readings
+// honest: what the node said about itself, never a diagnosis.
+
+const MOUNTED_CONSOLE = [
+  'OVMX/Linux -- SYSKRNL (Linux kernel)',
+  '%OVMX-I-EXEC, VMS executive attached on /dev/vms',
+  '%OVMX-I-SYSDISK, mounting system disk VDA0:',
+  '%OVMX-I-MOUNTED, system disk VDA0: mounted',
+].join('\n') + '\n';
+
+test('Node A worker state is folded monotonically: flags latch, counters grow', () => {
+  const R = newObservations();
+  GATE.observeNodeAWorker(R, { workerSpawned: true, pipeReady: true, firstOut: false,
+                               nicTxCount: 0, nicRxCount: 3 });
+  GATE.observeNodeAWorker(R, { workerSpawned: true, firstOut: true, nicTxCount: 7,
+                               nicRxCount: 1, acpOk: true });
+  // A later poll that reads NOTHING (frame mid-navigation) erases nothing.
+  GATE.observeNodeAWorker(R, null);
+  assert.equal(R.nodeA_worker.firstOut, true);
+  assert.equal(R.nodeA_worker.acpOk, true);
+  assert.equal(R.nodeA_worker.nicTxCount, 7);
+  assert.equal(R.nodeA_worker.nicRxCount, 3, 'a counter that went backwards keeps its high water');
+});
+
+test('a halt Node A reported once is not erased by a later silent poll', () => {
+  const R = newObservations();
+  GATE.observeNodeAWorker(R, { workerSpawned: true, halt: 'OpenVMX stopped unexpectedly.' });
+  GATE.observeNodeAWorker(R, { workerSpawned: true });
+  assert.equal(R.nodeA_worker.halt, 'OpenVMX stopped unexpectedly.');
+});
+
+test('a declared fault outranks the console tail in the reading', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', MOUNTED_CONSOLE);
+  GATE.observeNodeAWorker(R, { workerSpawned: true, pipeReady: true, firstOut: true,
+                               workerError: 'RuntimeError: memory access out of bounds' });
+  assert.match(GATE.nodeAStallWhy(R), /worker declared an error.*memory access out of bounds/);
+  assert.match(verdictOf(R), /no SCA frames from OVMXA.*worker declared an error/s);
+});
+
+test('a worker alive with a console that stopped is reported as exactly that', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', MOUNTED_CONSOLE);
+  GATE.observeNodeAWorker(R, { workerSpawned: true, pipeReady: true, firstOut: true,
+                               acpOk: true, nicTxCount: 0 });
+  const why = GATE.nodeAStallWhy(R);
+  assert.match(why, /console stops after "%OVMX-I-MOUNTED, system disk VDA0: mounted"/);
+  assert.match(why, /no halt and no error/);
+  assert.match(why, /nicTx=0/);
+  // No invented cause: the word the old reports reached for is not in it.
+  assert.doesNotMatch(why, /panic|timer|IO-APIC|wedged|hung/i);
+});
+
+test('a spawned worker whose guest never printed is distinguished from a stopped one', () => {
+  const R = newObservations();
+  GATE.observeNodeAWorker(R, { workerSpawned: true, pipeReady: true, firstOut: false });
+  assert.match(GATE.nodeAStallWhy(R), /never wrote to the console \(pipeReady=true\)/);
+});
+
+test('an unreadable Node A frame is said to be unreadable, not called dead', () => {
+  const R = newObservations();
+  assert.match(GATE.nodeAStallWhy(R), /never readable/);
+});
+
+test('a Node A that is talking has nothing to explain', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', MOUNTED_CONSOLE);
+  GATE.observeNodeAWorker(R, { workerSpawned: true, firstOut: true, nicTxCount: 91 });
+  R.sca = { OVMXA: 91 };
+  assert.equal(GATE.nodeAStallWhy(R), null);
+  assert.ok(!/Node A/.test(verdictOf(R)), 'a working node is not narrated');
+});
+
+test('lastLineOf ignores trailing blanks and the cursor glyph', () => {
+  assert.equal(GATE.lastLineOf('a\nb\n\n'), 'b');
+  assert.equal(GATE.lastLineOf('%OVMX-I-MOUNTED, system disk VDA0: mounted\n█'),
+               '%OVMX-I-MOUNTED, system disk VDA0: mounted');
+  assert.equal(GATE.lastLineOf(''), '');
+});
+
+test('the Node A reading never fabricates a field the node did not publish', () => {
+  // INV-6: a node that published nothing but a spawn flag must not read as
+  // "0 frames sent, ACP seen" -- the counters are absent, not zero-claimed.
+  const R = newObservations();
+  GATE.observeNodeAWorker(R, { workerSpawned: true });
+  assert.deepEqual(R.nodeA_worker, { workerSpawned: true });
+});
+
+test('the worker heartbeat is reported as the WORKER\'s, and absent when not sent', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', MOUNTED_CONSOLE);
+  GATE.observeNodeAWorker(R, { workerSpawned: true, pipeReady: true, firstOut: true });
+  assert.match(GATE.nodeAStallWhy(R), /worker event-loop ticks not reported/,
+               'a pre-vms-4ff deploy sends no heartbeat, and that is said, not zeroed');
+
+  GATE.observeNodeAWorker(R, { workerTicks: 41 });
+  GATE.observeNodeAWorker(R, { workerTicks: 95 });
+  assert.equal(R.nodeA_worker.workerTicks, 95);
+  assert.match(GATE.nodeAStallWhy(R), /worker event-loop ticks=95/);
+});

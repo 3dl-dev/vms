@@ -51,7 +51,7 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
-         silentNeverStarts, isPass, isQuiet } from './gate-eval.mjs';
+         silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -117,6 +117,19 @@ async function samplePanelHealth(page, R) {
       }
     } catch (e) { /* mid-navigation (a watchdog retry reloaded the iframe) -- sample again next tick */ }
   }
+}
+
+// Poll Node A's own node.html wrapper for the worker-level state it publishes
+// (rd vms-4ff). The pcjs nodes have samplePanelHealth above; Node A had no
+// equivalent, so a Node A that stopped left behind a console and no answer to
+// "was the worker still alive?". Same frame consoleText is read from, same
+// monotonic discipline; a frame that answers nothing leaves the fold untouched.
+async function sampleNodeAWorker(page, R) {
+  const f = nodeA(page);
+  if (!f) return;
+  try {
+    observeNodeAWorker(R, await f.evaluate(() => window.__nodeState || null));
+  } catch (e) { /* mid-navigation; sample again next tick */ }
 }
 
 async function rawConsoleOf(page, who) {
@@ -227,6 +240,7 @@ async function oneRun(spec, idx) {
         try { fs.writeFileSync(`${dir}/${w}.console.log`, R.transcript[w] || ''); } catch (e) {}
       }
       await samplePanelHealth(page, R);
+      await sampleNodeAWorker(page, R);
       const health = await page.evaluate(() => ({
         vis: document.visibilityState,
         drift: window.__probe ? window.__probe.worstDriftMs : null,
@@ -237,9 +251,13 @@ async function oneRun(spec, idx) {
                        vaxc_admitted: [...R.vaxc_admitted], lost: { ...R.lost },
                        restarts: { ...R.restarts },
                        vis: health.vis, worstDriftMs: health.drift });
+      // Node A's worker state is logged while it has nothing on the wire --
+      // the window in which "is it dead or still booting?" is the question
+      // (rd vms-4ff), and silent once it starts talking.
+      const aState = hub.OVMXA ? '' : ` nodeA=${JSON.stringify(R.nodeA_worker)}`;
       log(`  t=${el}s vis=${health.vis} drift=${health.drift}ms sca=${JSON.stringify(hub)} ` +
           `added=${JSON.stringify(R.added)} vaxcAdm=${JSON.stringify(R.vaxc_admitted)} ` +
-          `lost=${JSON.stringify(R.lost)} stalls=${JSON.stringify(R.repaint_stalls)}`);
+          `lost=${JSON.stringify(R.lost)} stalls=${JSON.stringify(R.repaint_stalls)}${aState}`);
       fs.writeFileSync(`${dir}/result.json`, asJson(R));
       if (ok) { R.cn3 = true; break; }
       if (Object.keys(R.bugchecks).length) break;
@@ -251,6 +269,7 @@ async function oneRun(spec, idx) {
       fs.writeFileSync(`${dir}/${w}.console.log`, R.transcript[w] || '');
     }
     await samplePanelHealth(page, R);
+    await sampleNodeAWorker(page, R);
     R.verdict = verdictOf(R);
     await page.screenshot({ path: `${dir}/final.png`, fullPage: true }).catch(() => {});
   } finally {
@@ -279,7 +298,8 @@ await (async () => {
                    substrate_noise: r.substrate_noise, quiet: isQuiet(r), pass: isPass(r),
                    worstDriftMs: r.worstDriftMs, froze: r.froze || false,
                    panel_started: r.panel_started, panel_watchdog_fired: r.panel_watchdog_fired,
-                   silent_never_starts: silentNeverStarts(r, ['OVMXB', 'VAXC']) });
+                   silent_never_starts: silentNeverStarts(r, ['OVMXB', 'VAXC']),
+                   nodeA_worker: r.nodeA_worker, nodeA_why: nodeAStallWhy(r) });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }
   const bad = results.filter((r) => !r.pass);

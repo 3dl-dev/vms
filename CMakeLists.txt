@@ -432,6 +432,23 @@ if(BUILD_TESTS)
     set_tests_properties(tcpip_posture_guard PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # rd vms-4ff: an emulated x86 OVMX node must tell the kernel not to verify
+    # the 8254-to-IO-APIC wiring. check_timer()'s timer_irq_works() demands 5
+    # serviced IRQ0 ticks inside a window bounded in TSC CYCLES -- i.e. ~18 ms
+    # of HOST WALL TIME under TCG, where the vCPU runs far slower than silicon.
+    # MEASURED on the shipped kernel (tests/lab/captures/vms-4ff-timer-check-
+    # 20261009/): at ~6x slowdown the kernel tears down the IO-APIC pin and
+    # silently re-routes IRQ0; at ~12x it panics "IO-APIC + timer doesn't work!"
+    # before OVMX prints a line; with no_timer_check the same image boots. This
+    # is upstream's own policy for VMs (kvm.c, cpu/vmware.c set it for guests
+    # they identify). Deterministic text gate over the launcher's dry-run argv
+    # -- no boot, no QEMU, carries its own teeth check.
+    add_test(NAME qemu_timer_check_cmdline
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_qemu_timer_check_cmdline.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(qemu_timer_check_cmdline PROPERTIES
+        LABELS "integration;boot" TIMEOUT 60)
+
     # vms-f394: the TCP/IP Services layered product packs into a DISTINCT product kit
     # (ovmx-tcpip.kit) -- its own kit, separate from the base-OS ovmx-os.kit, as real
     # OpenVMS ships TCP/IP Services as a layered product. Built via the same

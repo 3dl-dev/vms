@@ -438,6 +438,23 @@ static void cdt_learn_peer_min_cr(struct scs_cdt *cdt,
 }
 
 /*
+ * THE PEER'S ACCEPT CONNECT DATA (rd vms-f297), kept verbatim off the op-2
+ * ACCEPT_REQ that answered a connect WE made, for the SYSAP to read at
+ * opened(). The acceptor's side has always been delivered (connect_req's
+ * `conndata`); the initiator's was dropped, and the VMS$VAXcluster SYSAP needs
+ * it to see that a real VAX accepting a re-established connection CONTINUED
+ * the conversation. A frame without the field teaches nothing.
+ */
+static void cdt_learn_accept_conndata(struct scs_cdt *cdt,
+				      const struct vms_scs_ctrl_frame *ctrl)
+{
+	if (ctrl == (const struct vms_scs_ctrl_frame *)0)
+		return;
+	scs_copy(cdt->peer_accept_conndata, ctrl->blank, VMS_SCS_PROCNAME_LEN);
+	cdt->peer_accept_conndata_valid = 1u;
+}
+
+/*
  * THE PEER'S OWN Con.ID, learned from a frame that stated it (SCS$L_SRC_CONID,
  * abs 68). The op-2 ACCEPT_REQ is not the only verb that carries it -- a
  * REJECT_REQUEST does too, and that is the only place this end will ever see
@@ -1216,6 +1233,7 @@ static int h_rx_accept(struct scs_fsm *f, struct scs_cdt *cdt,
 	 * the value is recorded HERE, off the frame that stated it, and read
 	 * back out of the CDT when the confirm is built. */
 	cdt_learn_peer_min_cr(cdt, rx->ctrl);
+	cdt_learn_accept_conndata(cdt, rx->ctrl);
 	cdt_set_state(cdt, VMS_SCS_CDT_ACCEPT_RCVD);
 	return h_send_confirm(f, cdt);
 }

@@ -74,7 +74,8 @@ struct cnxman_phase2_in {
 	uint8_t bitmap;          /* body[55] as sent/received                  */
 	uint8_t bitmap_valid;    /* 0 when the transition carried NO nodemap   */
 	uint8_t bitmap_popcount; /* == the post-transition member count (SS4(p))*/
-	uint8_t pad;
+	uint8_t reconfig;        /* 1 = a REMOVAL: the CLUB's last-reconfig
+				  * pair is re-derived at commit (rd vms-f297) */
 };
 
 /* ==========================================================================

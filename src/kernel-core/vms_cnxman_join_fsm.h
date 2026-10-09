@@ -905,6 +905,9 @@ struct cnxman_join {
 	uint32_t holds_unheard;
 	uint32_t holds_fresh;
 	uint32_t holds_connectivity;
+	uint32_t ident_owed_holds;   /* admission held: a connected peer was
+				      * still owed this node's identity
+				      * records (rd vms-f297)              */
 	uint32_t holds_no_member;
 	uint32_t retargets;
 	uint32_t conn_follows;

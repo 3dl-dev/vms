@@ -80,3 +80,16 @@ d1765c0910291cc8396997a048a20963b32020446ec0f8817c34b071b8356ba7  tests/lab/capt
 a6ed6ed890c0ae34294d28da6585fffafdd591769e52b0c00d873ac99eaaaaf1  tests/lab/captures/vms-629-op08-20261005/cf1-op08.pcap
 58bdd9f99ed157be44c1d3aa2d8678c99d1c6a479bdcb536675a47c6aa1ad743  tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/m3-crashwindow.pcap
 7906f1590a7a8488b20340dc746e67090230782c9089116db0427c692e2b0417  tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/m4-crashwindow.pcap
+8d34fbd6fde381d7b8faac9c032f1faeac5bd5e179fbbfcd8ffe919aa9668fb9  tests/lab/captures/vms-f297-open-cells-20261008/XA.pcap
+b882246288fb15b356f99421d3610a3af70b062ff93bae6866dc0f9c692dbffa  tests/lab/captures/vms-f297-open-cells-20261008/XB.pcap
+2db0db70459aebc89878425cb0668cf47d3ad7b0ce6daa94ddddd89f5bf0498f  tests/lab/captures/vms-f297-open-cells-20261008/XC.pcap
+b27e262e53604ed05dffd4d281c36a13a9e63822acd786c2490903611d0b5be3  tests/lab/captures/vms-f297-open-cells-20261008/XD.pcap
+cb78afdbe1fd3b292fbc3a9317f807a5246ce6374672d284c41e98bbacf890a2  tests/lab/captures/vms-f297-open-cells-20261008/XE.pcap
+47a21fe4ab61f32527699f4be1c15543788e24a1e28548bcd8629f773ccdb177  tests/lab/captures/vms-f297-open-cells-20261008/XF.pcap
+15a11dd8c82a063580fd0739aec700671ce4e99a91b9ff2038c675b5afc4e7d0  tests/lab/captures/vms-f297-open-cells-20261008/XG.pcap
+ed83d8981533b03069e7d1d87cc1f7104b388fb651aba248361ed032463b0eac  tests/lab/captures/vms-f297-open-cells-20261008/FC.pcap
+8ce2f379a512580e1f6a895923a9b9816f1cf38944239ab78f39951be6b63250  tests/lab/captures/vms-f297-open-cells-20261008/FX1.pcap
+e304ab12bba078c5c13009f277151917114e0af0a1bad4c96f40e48984338b16  tests/lab/captures/vms-f297-open-cells-20261008/FX2.pcap
+9d9253e33eb721b7500f00091aff2bf068157526bea26be82d405b8e3c13d074  tests/lab/captures/vms-f297-open-cells-20261008/FX3.pcap
+b3a711c9322939134aa0c97f4422b87d836a0fee8811e25a4e989f2e8d6776ed  tests/lab/captures/vms-f297-open-cells-20261008/XI.pcap
+d39a5b415083ad9f936db79219635bb0f3777b9b07b71e85a2304f7361ab4fe4  tests/lab/captures/vms-f297-open-cells-20261008/XF-barrier.pcap

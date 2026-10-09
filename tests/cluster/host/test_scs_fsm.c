@@ -813,6 +813,45 @@ static void t_e65_initiator_words(void)
 	}
 }
 
+/*
+ * rd vms-f297: THE INITIATOR KEEPS THE PEER'S ACCEPT CONNECT DATA. A real V7.3
+ * VAX accepting a re-dialled VMS$VAXcluster connection states in it how much
+ * of the conversation it had taken (stall-rig arm HM-11: taken 2, then it
+ * continued at send 3); the SYSAP reads it at opened(). SCS keeps the 16 bytes
+ * verbatim and interprets nothing.
+ */
+static void t_f297_initiator_keeps_accept_conndata(void)
+{
+	struct scs_connect_args args;
+	struct scs_cdt *cdt;
+	vms_conid_t a_conid = 0u;
+	uint32_t i, same = 0u;
+
+	printf("-- rd vms-f297: the peer's op 2 connect data is kept for the "
+	       "initiating SYSAP\n");
+	rig(0);                                  /* B accepts immediately */
+	b_sysap.ops.accept_conndata = e31_conndata;
+	args_zero(&args);
+	args.local_name = scsh_name_a;
+	args.remote_name = scsh_name_b;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 6u;
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "A connects; B accepts with its own connect data");
+	(void)scsh_pump();
+	cdt = scsh_cdt(&a_node, a_conid);
+	ct_check(cdt != (struct scs_cdt *)0 && cdt->peer_accept_conndata_valid,
+		 "A's CDT holds the ACCEPT's connect data");
+	if (cdt == (struct scs_cdt *)0)
+		return;
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++)
+		if (cdt->peer_accept_conndata[i] == e31_conndata[i])
+			same++;
+	ct_check_eq_u32(same, VMS_SCS_PROCNAME_LEN,
+			"byte-exact, as the peer sent it");
+}
+
 /* ops 1 and 2: the acceptor's, including the echo's DST_PROC tail. */
 static void t_e65_acceptor_words(void)
 {
@@ -1320,6 +1359,7 @@ int main(void)
 	t_no_edge_and_foreign();
 	t_e65_initiator_words();
 	t_e65_acceptor_words();
+	t_f297_initiator_keeps_accept_conndata();
 	t_e80_accept_conndata();
 	t_e65_refusal_and_teardown_words();
 	t_d7e_reject_response_is_addressed();

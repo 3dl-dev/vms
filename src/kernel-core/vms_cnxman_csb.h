@@ -599,6 +599,45 @@ void cnxman_club_phase1_mark(struct vms_club *club, int bitmap_valid,
 void cnxman_club_phase1_clear(struct vms_club *club);
 
 /*
+ * THE CLUSTER FACTS A TRANSITION OPEN CARRIES (rd vms-f297). A coordinator's
+ * Phase 1 open names the founder, the formation time, the next CSV slot and
+ * -- on a formation or removal -- the member count and votes it leaves
+ * (VMS_OFB_CM_OPEN_*). Every member keeps them, because whichever member
+ * coordinates next has to carry them in ITS open: a real V7.3 member that
+ * joined later and then coordinated carried the founder's id, the formation
+ * time and the slot counter, and -- having seen no formation or removal --
+ * 0 0 for the pair (XA/XE/XF ep4).
+ *
+ * cnxman_club_learn_open -- record them from an open this node received.
+ *   `reconfig` is nonzero for a formation or removal open, the only kind that
+ *   sets the pair. A zero cell is "not carried" and teaches nothing; the slot
+ *   counter only moves forward.
+ * cnxman_club_found -- this node formed the cluster alone: it IS the founder,
+ *   the formation time is `ftime`, the pair is (1, its votes) and the next
+ *   slot follows its own.
+ * cnxman_club_note_slot -- this node assigned CSV slot `slot`.
+ *
+ * A REMOVAL's pair is not trusted to the wire alone: cnxman_club_note_reconfig
+ * below re-derives it at commit from this node's own membership, whichever
+ * side coordinated.
+ */
+struct vms_cm_open_cells;
+void cnxman_club_learn_open(struct vms_club *club, int reconfig,
+			    const struct vms_cm_open_cells *cells);
+void cnxman_club_found(struct vms_club *club, uint64_t ftime,
+		       vms_scs_sysid_t fsysid, uint16_t votes, uint32_t slot);
+void cnxman_club_note_slot(struct vms_club *club, uint32_t slot);
+
+/* rd vms-f297: the ACCEPT half of rd vms-ba4's connect-data resume. */
+void cnxman_csb_note_accept_conndata(struct vms_csb *csb, uint32_t conid,
+				     uint16_t peer_taken);
+void cnxman_csb_note_connect_ack(struct vms_csb *csb, uint16_t ack);
+/* cnxman_club_note_reconfig -- a REMOVAL committed: the pair is this node's
+ * own committed members and their votes. A member whose VOTES were never
+ * learned makes the pair underivable (rc_lost), never a smaller number. */
+void cnxman_club_note_reconfig(struct vms_club *club);
+
+/*
  * TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40). When both ends re-dial inside
  * the same window, each accepts the other's CONNECT and the pair holds two
  * VMS$VAXcluster connections until the peer disconnects one. MEASURED on the

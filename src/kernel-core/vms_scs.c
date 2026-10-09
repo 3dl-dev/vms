@@ -1013,6 +1013,23 @@ int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
 	return SS__NORMAL;
 }
 
+int scs_conid_accept_conndata(struct vms_scs *scs, vms_conid_t local_conid,
+			      uint8_t out[16])
+{
+	struct scs_cdt *cdt;
+
+	if (out == (uint8_t *)0)
+		return SS__BADPARAM;
+	memset(out, 0, 16u);
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	cdt = scs_fsm_cdt_by_conid(&scs->fsm, local_conid);
+	if (cdt == (struct scs_cdt *)0 || !cdt->peer_accept_conndata_valid)
+		return SS__BADPARAM;
+	memcpy(out, cdt->peer_accept_conndata, 16u);
+	return SS__NORMAL;
+}
+
 int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 		   vms_scs_sysid_t *out)
 {

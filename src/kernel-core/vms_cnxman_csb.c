@@ -25,6 +25,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_recnx_fsm.h"   /* the p. 7-30 period arithmetic + constants */
+#include "vms_cluster_codec_cm.h"   /* struct vms_cm_open_cells (rd vms-f297) */
 
 /* ==========================================================================
  * Small shared helpers
@@ -1805,6 +1806,43 @@ static void csb_resume_from_conndata(struct vms_csb *csb)
 	csb->cm_token = csb->cm_prev_token;
 	csb->cm_adopt_pending = 0u;
 	csb->cm_dialogues_adopted++;
+	/* rd vms-f297 (ACCEPT path only): the conversation is the SAME one, so
+	 * what this node already told the peer about itself stands on the new
+	 * connection -- re-introducing itself mid-stream is the frame a real
+	 * VAX bugchecked on (rd vms-8c54 arm F-4). */
+	if (csb->cm_resume_carries_advert)
+		csb->cm_advert_conid = csb->cm_dialogue_conid;
+	csb->cm_resume_carries_advert = 0u;
+}
+
+/*
+ * A CONNECT THIS NODE MADE WAS ACCEPTED, AND THE ACCEPT SAYS HOW MUCH OF OUR
+ * CONVERSATION THE PEER HAD TAKEN (rd vms-f297). The same 16 bytes rd vms-ba4
+ * reads off a peer's CONNECT, read off its ACCEPT: a real V7.3 VAX re-
+ * establishing a connection a joiner re-dialled answered with taken 2 (stall-
+ * rig arm HM-11) and continued at send 3, where this node -- resetting the
+ * dialogue of a system not yet a member -- spoke at send 1, ack 0 and the VAX
+ * bugchecked CNXMGRERR (GM-14, TG-3, HM-11). Zero taken is a fresh peer and
+ * changes nothing. The resume runs now if the block is already on this
+ * connection, else at its bind.
+ */
+void cnxman_csb_note_accept_conndata(struct vms_csb *csb, uint32_t conid,
+				     uint16_t peer_taken)
+{
+	if (csb == NULL || peer_taken == 0u)
+		return;
+	csb->cm_peer_taken = peer_taken;
+	csb->cm_advertised_ack = csb->cm_connect_ack;
+	csb->cm_peer_taken_valid = 1u;
+	csb->cm_resume_carries_advert = 1u;
+	if (csb->cm_dialogue_conid == conid)
+		csb_resume_from_conndata(csb);
+}
+
+void cnxman_csb_note_connect_ack(struct vms_csb *csb, uint16_t ack)
+{
+	if (csb != NULL)
+		csb->cm_connect_ack = ack;
 }
 
 void cnxman_csb_note_peer_conndata(struct vms_csb *csb, uint16_t peer_taken,
@@ -1882,6 +1920,104 @@ void cnxman_club_phase1_clear(struct vms_club *club)
 		return;
 	for (i = 0; i < club->n_csb; i++)
 		club->csb[i].cm_phase1_named = 0u;
+}
+
+/* ---- the cluster facts a transition open carries (rd vms-f297) ---- */
+
+void cnxman_club_note_slot(struct vms_club *club, uint32_t slot)
+{
+	uint32_t next = slot + 1u;
+
+	if (club == NULL || slot == 0u || next > 0xffffu)
+		return;
+	if (club->slot_next_valid && (uint32_t)club->slot_next >= next)
+		return;
+	club->slot_next = (uint16_t)next;
+	club->slot_next_valid = 1u;
+}
+
+void cnxman_club_learn_open(struct vms_club *club, int reconfig,
+			    const struct vms_cm_open_cells *cells)
+{
+	if (club == NULL || cells == NULL)
+		return;
+	if (cells->fsysid != 0u) {
+		club->fsysid = (uint64_t)cells->fsysid;
+		club->fsysid_valid = 1u;
+	}
+	if (cells->ftime != 0u) {
+		club->ftime = cells->ftime;
+		club->ftime_valid = 1u;
+	}
+	if (cells->slot_next > 1u)
+		cnxman_club_note_slot(club, (uint32_t)cells->slot_next - 1u);
+	if (reconfig && cells->rc_members != 0u) {
+		club->rc_members = cells->rc_members;
+		club->rc_votes = cells->rc_votes;
+		club->rc_valid = 1u;
+		club->rc_lost = 0u;
+	}
+}
+
+/* The committed members and their votes, or -1 when one member's VOTES were
+ * never learned and the sum would be a guess. */
+static int club_member_votes(const struct vms_club *club, uint32_t *members,
+			     uint32_t *votes)
+{
+	uint32_t i;
+
+	*members = 0u;
+	*votes = 0u;
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *csb = &club->csb[i];
+
+		if (!csb->in_use || !cnxman_csb_is_member(csb))
+			continue;
+		if (!csb->params_valid)
+			return -1;
+		(*members)++;
+		*votes += csb->votes;
+	}
+	return 0;
+}
+
+void cnxman_club_note_reconfig(struct vms_club *club)
+{
+	uint32_t members, votes;
+
+	if (club == NULL)
+		return;
+	if (club_member_votes(club, &members, &votes) != 0 || members == 0u ||
+	    members > 0xffu || votes > 0xffu) {
+		club->rc_valid = 0u;
+		club->rc_lost = 1u;
+		return;
+	}
+	club->rc_members = (uint8_t)members;
+	club->rc_votes = (uint8_t)votes;
+	club->rc_valid = 1u;
+	club->rc_lost = 0u;
+}
+
+void cnxman_club_found(struct vms_club *club, uint64_t ftime,
+		       vms_scs_sysid_t fsysid, uint16_t votes, uint32_t slot)
+{
+	if (club == NULL)
+		return;
+	if (ftime != 0u) {
+		club->ftime = ftime;
+		club->ftime_valid = 1u;
+	}
+	club->fsysid = (uint64_t)fsysid;
+	club->fsysid_valid = 1u;
+	/* The pair is one byte each on the wire; a sum it cannot hold is left
+	 * unrecorded rather than clipped into a different number. */
+	if (votes <= 0xffu) {
+		club->rc_members = 1u;
+		club->rc_votes = (uint8_t)votes;
+		club->rc_valid = 1u;
+	}
+	cnxman_club_note_slot(club, slot);
 }
 
 /* Is `csb` named by the proposal's nodemap? Only a block whose CSID this node

@@ -26,6 +26,7 @@
 
 struct fake_cnx {
 	uint32_t now_ms;            /* the injected clock */
+	uint64_t now_vms;           /* the injected VMS absolute time */
 	uint32_t timers_armed;
 	uint32_t timers_cancelled;
 	uint32_t last_arm_ms;
@@ -37,6 +38,11 @@ struct fake_cnx {
 static uint32_t fake_now_ms(void *ctx)
 {
 	return ((struct fake_cnx *)ctx)->now_ms;
+}
+
+static uint64_t fake_now_vms(void *ctx)
+{
+	return ((struct fake_cnx *)ctx)->now_vms;
 }
 
 static void fake_arm_timer(void *ctx, enum cnxman_timer which, uint32_t key,
@@ -81,6 +87,7 @@ static void fake_ops_init(struct cnxman_ops *ops, struct fake_cnx *f)
 	ops->arm_timer = fake_arm_timer;
 	ops->cancel_timer = fake_cancel_timer;
 	ops->now_ms = fake_now_ms;
+	ops->now_vms = fake_now_vms;
 	ops->log = fake_log;
 	ops->ctx = f;
 }

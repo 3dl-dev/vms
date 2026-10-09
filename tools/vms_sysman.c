@@ -32,6 +32,7 @@
 #include <limits.h>
 
 #include "sysgen_params.h"
+#include "sysgen_factory.h"
 #include "ovmx_identity.h"   /* ovmx_node_name() -- the real local node name */
 
 /* ------------------------------------------------------------------ */
@@ -438,6 +439,11 @@ static int params_autoload(void)
     if (ws_loaded)
         return 1;
     if (sysgen_load_working(&ws) == 0) {
+        /* The rows this system knows that the stored file does not (rd
+         * vms-025). SYSMAN shares the store with SYSGEN and SYSBOOT, so it
+         * must share their PARAMETER TABLE too, or the same knob is NOSUCHP
+         * in one utility and settable in another. */
+        (void)sysgen_factory_merge(&ws);
         ws_loaded = 1;
         ws_modified = 0;
         return 1;
@@ -507,6 +513,7 @@ static void cmd_parameters_use(const char *rest)
      * separate in-memory active set to load; documented in sysgen_params.h). */
     if (strcasecmp(target, "CURRENT") == 0 || strcasecmp(target, "ACTIVE") == 0) {
         if (sysgen_load_working(&ws) == 0) {
+            (void)sysgen_factory_merge(&ws);   /* rd vms-025, as above */
             ws_loaded = 1;
             ws_modified = 0;
             printf("%%SYSMAN-I-USEPARAM, %u parameters loaded from %s parameter set\n",

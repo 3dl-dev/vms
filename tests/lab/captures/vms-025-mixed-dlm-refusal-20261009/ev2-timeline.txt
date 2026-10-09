@@ -1,0 +1,5 @@
+04:27:27 T0 capture started (all 0x6007 on br0); OVMXE booting: build evac/int-2 0765689 = main(+#1572 e8b,#1568 mixed-DLM,#1575 f297,#1564 GETLKI)+#1571 EVACWL+#1577 SPAWN@; LOCKDIRWT 1, VOTES 1, EV 3; VAX1/VAX2 LOCKDIRWT 0 VOTES 1 EV 3
+04:29:44 OVMXE logged in
+04:30:36 OVMXE: SPAWN/NOWAIT @OVSTBY.COM (EVACWL STANDBY NL=75: NL on EVAC$WORKLOAD now, convert to EX in 75 s)
+04:31:04 VAX1: SPAWN/NOWAIT/PROCESS=EVACVAX1 EVACWL (direct EX, forever)
+04:32:11 FINDING: OVMXE refused VAX1's lock message ('refusing a lock message from a system that has not proved it runs this implementation'); VAX1 EVACWL never granted; OVMX standby converted to EX at T+75s unopposed

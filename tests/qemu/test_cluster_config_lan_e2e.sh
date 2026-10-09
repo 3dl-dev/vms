@@ -236,7 +236,7 @@ if [ "$rc" -eq 0 ]; then
         "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to $NEWNODE"
     check "boot 1: SYSGEN SET SCSSYSTEMID changed 0 -> $NEWSID" \
         "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to $NEWSID"
-    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
+    if waitfor '%SYSGEN-I-WRITTEN, 40 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
         rc=0; else rc=1; fi
     record "boot 1: WRITE CURRENT minted OVMXVMSSYS.PAR;2 (real vmsfs version on the volume)" "$rc"
     check "boot 1: procedure reports 'CHANGE complete ... takes effect on the next reboot'" \

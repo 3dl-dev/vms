@@ -315,9 +315,14 @@ static void cnxtrace_print_dlm(void)
         return;
     }
 
+    /* `dirvec_own` is how many of the lock directory weight vector's entries
+     * are THIS node's, as the executive read them (rd vms-025): 0 means this
+     * node is the directory node for no root resource at all. A lab that can
+     * see this does not have to infer it from a refused lock. */
     printf("%%CNXTRACE-I-DLM, lock-manager wire arm: connected=%u lockdirwt=%u "
-           "gen=%u proxy_lkbs=%u\n",
+           "dirvec_own=%u gen=%u proxy_lkbs=%u\n",
            (unsigned)v->connected, (unsigned)v->lockdirwt,
+           (unsigned)v->directory_vector_own,
            (unsigned)v->rebuild_generation, (unsigned)v->proxy_lkbs);
     printf("%%CNXTRACE-I-DLMREQ, requests sent=%u received=%u grants sent=%u "
            "received=%u declined=%u\n",

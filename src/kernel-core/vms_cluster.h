@@ -884,6 +884,17 @@ struct vms_club {
 	uint32_t ldwv_own_entry_missing;
 
 	/*
+	 * Transitions at which this node's OWN membership had to be taken from
+	 * the completion rather than from the nodemap, because the map could
+	 * not express its CSV slot (rd vms-b5b0 follow-on, ev7/int-7 -- slots 8
+	 * and 10 of an eight-slot grounded byte). Not an error: it is the
+	 * honest substitute sec 4(q) licenses, and it is counted so a
+	 * diagnostic can say the corroboration was MISSING rather than leave
+	 * the reader to assume it was present.
+	 */
+	uint32_t local_committed_off_map;
+
+	/*
 	 * ---- THE GIVE-UP LEDGER (rd vms-0f9) ----
 	 *
 	 * p. 7-24's DEAD state is "a new incarnation of a VAX system has been

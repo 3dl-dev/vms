@@ -345,6 +345,26 @@ items:
       of the line, and counted (club->ldwv_own_entry_missing). The watchdog is
       deliberately NOT "own entries == 0": a node at LOCKDIRWT 0 beside a
       weighted peer holds none, and that is correct.
+      AND THE FIX HAD TO GO DEEPER THAN THE VECTOR (int-7, slot 10). Counting
+      our own committed membership in the vector is necessary and was not
+      sufficient: at a slot the nodemap cannot express, NOTHING set the local
+      CSB's MEMBER flag at all. Phase 2 reads the map (silence, correctly left
+      alone) and the join FSM's promotion -- which fires on the completion, sec
+      4(q)'s own rule -- used to set only its own FSM state. So the console said
+      "this node is now a VAXcluster member" while the node's own CSB said
+      otherwise, and with it `cl->state` (what SHOW CLUSTER and $GETSYI project,
+      and what join_node_already_member() reads) never reached MEMBER either.
+      The promotion now hands Phase 2 the fact it was missing
+      (cnxman_phase2_local_committed), and PHASE 2 -- still the owner of all
+      four of its p. 7-42 tasks -- records it: the local CSB's MEMBER/SELECTED
+      flags, the CLUSTER flag, and a re-fill of the weight vector, which the
+      commit had built before this node's own membership was known. Counted as
+      club->local_committed_off_map so a diagnostic says the map was SILENT
+      rather than implying it agreed; idempotent when the map did name us.
+      Proven at every slot 8..15 plus a control at slot 3
+      (tests/cluster/host/test_cnxman_join.c
+      test_promotion_records_membership_at_any_csv_slot), with its own negative
+      control (host_defects.sh join-promotion-records-nothing).
       STILL OPEN, AND NOT PAPERED: the nodemap's true width. Decoding more than
       the grounded byte needs a real capture of a transition whose membership
       spans slots above 7 (bit order, offset and length), and inventing it is
@@ -355,6 +375,74 @@ items:
       consequence. Until that capture exists, a REMOTE member whose slot is
       above 7 cannot be selected by the nodemap either -- it is admitted by the
       membership records that name it, and this row's fix does not reach it.
+  - id: cluster-dlm$deferred-grant
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "A remote requester QUEUED at an OVMX master is TOLD when the queue advances: the master originates the grant it owes, and a local process's own $ENQW survives a signal instead of spinning"
+    evidence: src/kernel-core/vms_dlm_pending.c
+    verified_against: "tests/cluster/host/test_dlm_pending.c (R1: the unanswered-request table, and THE POINT -- a grant built from a RETAINED request is byte-for-byte the grant the same request would have got at once, all 132 body bytes, carrying the waiter's own handle; plus the refusals: no body, a short body, a zero handle, an unidentified requester, and a FULL table that refuses rather than overwriting another waiter's frame). tests/cluster/host/test_lock_host.c a_signal_ends_the_wait_instead_of_spinning (R1: the interrupted $ENQW and the interrupted $ENQW CONVERT each return -ERESTARTSYS with NO status and the request still queued, the lock still held at its old mode -- each run on a thread JOINED WITH A DEADLINE so the regression is a named failed assertion in seconds rather than a hang; and a positive control on its own resource proving an uninterrupted wait still waits 50 ms and still completes GRANTED). tests/cluster/sim/scenarios/dlm_mixed_evacuation.c a_queued_vms_waiter_is_granted_when_the_holder_releases (R2: queue, keep, release, flip, build -- the frame reads back as a grant naming the waiter's own handle). tests/cluster/host/test_dlm_scs_arm.c (the arm's wiring: keep on QUEUED, take on the flip, build by echoing, count both the sent and the un-sendable, and the old count-and-say-nothing path is gone). Negative controls: tests/cluster/host/host_defects.sh dlm-deferred-grant-not-sent, dlm-pending-overflow-overwrites, lock-interrupted-wait-ignored. NOT PROVEN HERE: the real-VAX lab leg (a VAX $ENQW granted within 1 s of the OVMX $DEQ), and see the honest gap in the notes -- no capture in the corpus contains a cross-node QUEUED waiter."
+    notes: >
+      rd vms-f87, from two measured faults in the 2026-10-09 evacuation runs.
+      (1) THE WAITER NOBODY TOLD (ci6-evac-9, 10:56Z). OVMX held EX on
+      EVAC$WORKLOAD as directory+master; VAX1's $ENQW EX queued at the OVMX
+      master, correctly; OVMX released, the engine flipped VAX1's request to
+      GRANTED for real -- and nothing went on the wire. VAX1's process sat in
+      RWSCS indefinitely and even STOP could not complete it. The arm had
+      counted that as `deferred_grants_owed` and stayed silent, on the
+      reasoning that an uncorrelated cat-0x82 is ungrounded and that the
+      waiter's retransmit would return. The lab falsified the second half: the
+      VAX never asked again.
+      WHAT THE CAPTURES SAY, measured rather than assumed
+      (tools/cluster/dlm_grant_correlation.py, with its own selftest, over the
+      129 real VAX captures in the corpus): a grant is correlated to its
+      request by THE REQUESTER's OWN HANDLE at body[24:28], which the master
+      echoes back -- 27,513 of 27,513 grants in the f03 reference capture
+      matched that way; it need NOT be the next frame on the connection (gaps
+      to 137 ms with other frames in between); and a real VAX master DOES
+      originate grants nobody just asked for -- 139 inside one second of that
+      capture, in exactly the shape every other grant has.
+      HONEST GAP, NOT PAPERED: no capture in the corpus contains a cross-node
+      QUEUED waiter at all, so the CONTEXT "a master sends a grant when its
+      queue advances" is not directly captured. The 139-grant burst is a
+      rebuild, and reading it as a queue advance would be an inference across
+      contexts -- the mistake that produced the "17K grant storm" misreading.
+      What IS grounded is the frame and the correlation. The capture that would
+      close it is specified step by step in
+      tests/lab/captures/vms-f87-deferred-grant-20261009/README.md.
+      HOW THE GRANT IS BUILT, and this is what keeps it honest: the requester's
+      OWN QUEUED FRAME is kept from the moment the engine queues the request
+      (vms_dlm_pending.h) and ECHOED BACK with the handle this engine assigned.
+      It is therefore byte-for-byte the grant that request would have got had it
+      been grantable at once -- which is what the engine's idempotent
+      retransmit path already produces -- and not a frame composed from fields,
+      which is what rd vms-b5b0's 65,000-frame storm was. A flip whose frame is
+      no longer held (the fixed table overflowed, or this master has restarted)
+      sends NOTHING and is counted, exactly as before.
+      (2) THE CPU THAT SPAN (ci6-evac-11, 11:12Z). One step earlier in the same
+      story: the OVMX standby's own $ENQW CONVERT NL->EX, on a resource this
+      node mastered, whose blocker was the remote VAX EX holder. `rcu: INFO:
+      rcu_preempt self-detected stall on CPU 0 (9931 ticks this GP)`, growing to
+      98,763 ticks, while the fork thread on the other CPU served the cluster
+      normally. ROOT CAUSE: exec_cv_wait_timeout does not sleep while a signal
+      is pending (it would be woken again at once) and enq_wait_sync DROPPED
+      that return -- so it re-tested a predicate that was still false and called
+      straight back in: a tight loop taking and dropping res->lock. ANY signal
+      to a process blocked in $ENQW did it, including the STOP sent to recover
+      the process.
+      THE FIX IS THE CONTRACT THE REST OF THIS EXECUTIVE ALREADY USES
+      (vms_eflag.c, vms_mbx.c, $HIBER): the ioctl ends with -ERESTARTSYS and NO
+      status, the request stays queued, and userspace RE-ENTERS the wait
+      (libvmssys' KIF_WAIT_CALL, now used by $ENQ and $CONVERT). That is what
+      VMS does when an AST interrupts a wait -- the AST runs and THE WAIT
+      RESUMES -- and it is why $ENQW has no "your wait was interrupted"
+      condition value to report. The two in-kernel ACP callers re-enter the wait
+      themselves, having no ioctl to restart.
+      The host backend grew its first and only test-only control for this: an
+      INTERRUPT SEAM (exec_host_interrupt_waits) that makes the next N waits
+      report INTERRUPTED without sleeping, which is exactly the Linux behaviour.
+      Without it the facility's handling of that return was untestable on the
+      host -- which is how a facility that ignored it shipped.
   - id: cluster-dlm$grant-correlation
     kind: feature
     status: implemented

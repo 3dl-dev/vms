@@ -68,13 +68,15 @@
  *     op-0x03 from a proven-OVMX peer reaches the engine's master-side door and
  *     really releases the LKB this node holds for that peer (rd vms-c72, "THE
  *     RELEASE'S RECEIVE HALF" below). An inbound op-0x05 likewise reaches the
- *     requester FSM and fires the holder's REAL blocking AST. What is still
- *     owed and counted rather than sent is the DEFERRED GRANT a release earns
- *     for a queued waiter -- see dlm_arm_count_deferred_grant.
- *   - THE VALUE BLOCK has no grounded cat-0x02 BUILDER (op 0x06's body[32:36]
- *     is unpinned), so a write crossing is not transmitted and an inbound grant
- *     is handed to the engine with `valblk_present = 0`, which makes the engine
- *     leave the proxy's own block alone rather than overwrite it with zeros.
+ *     requester FSM and fires the holder's REAL blocking AST. And the DEFERRED
+ *     GRANT a release earns for a queued waiter IS NOW SENT (rd vms-f87): the
+ *     waiter's own queued frame, echoed back with the handle this engine
+ *     assigned -- see dlm_arm_send_deferred_grant. Only a flip whose request
+ *     frame this master no longer holds stays silent, counted.
+ *   - THE VALUE BLOCK rides a real grant's own record (rd vms-b5b0 corrected
+ *     what that record means), so an inbound grant hands the engine the
+ *     master resource's block and the op-0x06 write crossing has its own
+ *     grounded builder.
  *
  * INCLUDES: kernel-core headers only (CI gate
  * tools/ci/cluster_core_includes_gate.sh).
@@ -93,6 +95,7 @@
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_quorum.h"
 #include "vms_dlm_echo_guard.h"
+#include "vms_dlm_pending.h"   /* rd vms-f87: the requests we owe an answer */
 #include "vms_cnxman_quorum.h"
 #include "vms_dlm_scs.h"
 #include "vms_dlm_scs_fsm.h"
@@ -280,6 +283,13 @@ struct vms_dlm_scs {
 	/* THE ECHO GUARD's state (rd vms-b5b0, vms_dlm_echo_guard.h). */
 	struct vms_dlm_echo_guard echo;
 	uint32_t answers_capped;      /* replies withheld by the echo guard   */
+
+	/* THE REQUESTS THIS MASTER OWES AN ANSWER (rd vms-f87,
+	 * vms_dlm_pending.h), and what became of the ones it answered late. */
+	struct vms_dlm_pending pending;
+	uint32_t deferred_grants_sent;    /* originated when a queue advanced */
+	uint32_t deferred_grants_no_body; /* owed, but its frame was not held */
+	uint32_t send_failures;           /* the one way out refused it       */
 };
 
 /* ==========================================================================
@@ -1353,10 +1363,19 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 	case VMS_DLM_MASTER_DENIED:
 		return dlm_arm_reply_deny(d, in, e, reply);
 	case VMS_DLM_MASTER_QUEUED:
-		/* A REAL lock on a REAL waiting queue. The answer is the grant
-		 * that follows when the holder releases, so nothing goes back
-		 * now -- the honest silence vms_dlm_scs.h's reply->len == 0
-		 * names. */
+		/*
+		 * A REAL lock on a REAL waiting queue. Nothing goes back NOW --
+		 * the honest silence vms_dlm_scs.h's reply->len == 0 names --
+		 * but the answer is owed, so THE REQUESTER'S OWN FRAME IS KEPT
+		 * (rd vms-f87, vms_dlm_pending.h). When the queue advances the
+		 * grant is that frame echoed back, byte for byte identical to
+		 * the grant it would get by asking again, rather than one this
+		 * executive composed from fields.
+		 */
+		(void)vms_dlm_pending_keep(&d->pending, (uint32_t)in->from_csid,
+					   res.req_lkid != 0u ? res.req_lkid
+							      : e->req_lkid,
+					   in->body, in->len);
 		dlm_arm_send_blkast(d, &res);
 		d->queued_no_reply++;
 		return 0;
@@ -1480,31 +1499,81 @@ static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
 }
 
 /*
- * THE DEFERRED GRANT THIS RELEASE MAY HAVE EARNED -- OWED, COUNTED, AND NOT
- * ORIGINATED.
+ * THE DEFERRED GRANT THIS RELEASE EARNED -- ORIGINATED, FROM THE REQUESTER'S
+ * OWN FRAME (rd vms-f87).
  *
- * When the release flips a queued cross-node waiter to granted, the engine says
- * so and the flip is REAL: that waiter's lock is on this master's granted queue
- * from this moment. Telling it, though, would mean ORIGINATING a cat-0x82 grant
- * at a system that did not just ask -- and §4(f).1 grounds the grant shape as
- * the ANSWER TO A REQUEST, correlated by the connection manager's own
- * transaction envelope (RULE A). An uncorrelated reply is exactly what a real
- * VAX rejects, so this executive does not invent one.
+ * WHAT THIS USED TO DO, AND WHAT IT COST. When a release flipped a queued
+ * cross-node waiter to granted, this counted the grant as OWED and sent
+ * nothing, on the reasoning that a cat-0x82 at a system that "did not just
+ * ask" is uncorrelated and ungrounded, and that the waiter's own retransmit
+ * ladder would come back and be answered by the idempotent path. The lab
+ * falsified the second half on 2026-10-09: a real VAX whose $ENQW was queued
+ * at an OVMX master never asked again. Its process sat in RWSCS indefinitely
+ * and could not even be STOPped.
  *
- * The waiter is not stranded by that silence: its own request is still
- * outstanding at this master, its retransmit ladder is still running, and the
- * engine's cross-node ENQ is idempotent on (req_csid, req_lkid) -- so the next
- * retransmission finds the lock GRANTED and is answered with a real, correlated
- * grant built from the LKB. If the ladder is spent first, the requester fails
- * its $ENQW with a real status rather than waiting forever. Either way the
- * counter below says how many grants this master owed, which is the measurement
- * the origination rung needs.
+ * AND THE FIRST HALF IS MEASURED NOW, not assumed
+ * (tools/cluster/dlm_grant_correlation.py over 129 real captures):
+ *   - a grant is correlated to its request by THE REQUESTER's OWN HANDLE at
+ *     body[24:28], which the master echoes back -- 27,513 of 27,513 in the f03
+ *     reference capture matched that way;
+ *   - it need not be the next frame on the connection (gaps to 137 ms, with
+ *     other frames in between);
+ *   - and a real VAX master DOES originate grants nobody just asked for: 139
+ *     inside one second of that capture, in exactly the shape every other
+ *     grant has.
+ *
+ * SO THIS SENDS ONE -- and the frame is not composed here. The request the
+ * requester really sent was KEPT when the engine queued it
+ * (vms_dlm_pending.h), so the grant is that frame ECHOED with the handle this
+ * engine assigned: byte for byte the grant it would have received by asking
+ * again. Every asserted value is an executive read (the handles and the mode
+ * come from `r`, which the engine filled off the LKB it just flipped); the
+ * rest are the requester's own bytes.
+ *
+ * WHEN THE FRAME IS NOT HELD (the table overflowed, or this master was
+ * restarted since) NOTHING IS SENT: counted as `deferred_grants_no_body`, and
+ * the pre-existing behaviour stands -- the lock IS granted in this executive's
+ * database and the requester's next ask is answered from it. A grant composed
+ * out of fields to fill the gap is exactly what rd vms-b5b0's storm was.
  */
-static void dlm_arm_count_deferred_grant(struct vms_dlm_scs *d,
-					 const struct vms_dlm_master_result *r)
+static void dlm_arm_send_deferred_grant(struct vms_dlm_scs *d,
+					const struct vms_dlm_master_result *r)
 {
-	if (r->deferred_grant && r->deferred_csid != 0u)
+	uint8_t reqbody[VMS_CM_BODY_LEN];
+	uint32_t n, written = 0;
+
+	if (!r->deferred_grant || r->deferred_csid == 0u ||
+	    r->deferred_master_lkid == 0u)
+		return;
+
+	n = vms_dlm_pending_take(&d->pending, r->deferred_csid,
+				 r->deferred_req_lkid, reqbody,
+				 (uint32_t)sizeof(reqbody));
+	if (n == 0u) {
+		d->deferred_grants_no_body++;
 		d->deferred_grants_no_wire_op++;
+		return;
+	}
+
+	memset(d->txframe, 0, sizeof(d->txframe));
+	if (vms_dlm_enq_response_build_grant(reqbody, n,
+					     r->deferred_master_lkid,
+					     r->valblk_present ? r->valblk
+							       : NULL,
+					     d->txframe,
+					     (uint32_t)sizeof(d->txframe),
+					     &written) != VMS_CODEC_OK) {
+		d->codec_failures++;
+		return;
+	}
+	if (dlm_arm_send(d, (vms_csid_t)r->deferred_csid,
+			 d->txframe + VMS_OFF_SYSAP_BODY,
+			 VMS_CM_BODY_LEN) != 0) {
+		d->send_failures++;
+		d->deferred_grants_no_wire_op++;
+		return;
+	}
+	d->deferred_grants_sent++;
 }
 
 /* One inbound op-0x03 $DEQ, served as the tree's master. It is a CONSUME, not a
@@ -1543,7 +1612,7 @@ static int dlm_arm_serve_deq(struct vms_dlm_scs *d,
 		return -1;
 	}
 	d->releases_received++;
-	dlm_arm_count_deferred_grant(d, &res);
+	dlm_arm_send_deferred_grant(d, &res);
 	return 0;
 }
 
@@ -2327,6 +2396,8 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 	 * but the state is initialised through its own entry point so the TU
 	 * that owns the rule owns the reset too. */
 	vms_dlm_echo_guard_init(&d->echo);
+	/* The requests we owe an answer, empty (rd vms-f87). */
+	vms_dlm_pending_init(&d->pending);
 
 	dlm_arm_bind_req_ops(d);
 	dlm_arm_bind_engine_ops(d);
@@ -2462,6 +2533,7 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->valblk_writes_received = d->valblk_writes_received;
 	out->releases_refused    = d->releases_refused;
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
+	out->deferred_grants_sent = d->deferred_grants_sent;
 	out->queued_no_reply     = d->queued_no_reply;
 	out->unparsed            = d->unparsed;
 	out->foreign_refused     = d->foreign_refused;

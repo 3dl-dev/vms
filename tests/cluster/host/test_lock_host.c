@@ -34,6 +34,12 @@
  * resource database) under real churn, not just a single insert/erase pair.
  */
 
+/* pthread_timedjoin_np (rd vms-f87: the deadline that turns a kernel spin into
+ * a named failed assertion) is a GNU extension, so this has to come first. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "cluster_test.h"
 
 #include "vms_internal.h"     /* -> lock_shim/vms_internal.h -> lock_host_internal.h */
@@ -41,6 +47,7 @@
 #include "vms_dlm_master.h"   /* the MASTER-side door the DLM's wire arm uses */
 
 #include <pthread.h>
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -818,6 +825,281 @@ static void the_ev6_queue_shape_does_not_spin(void)
 	vms_lock_cleanup();
 }
 
+/*
+ * A SIGNAL TO A PROCESS BLOCKED IN $ENQW ENDS THE IOCTL -- IT DOES NOT SPIN A
+ * CPU (rd vms-f87, lab run ci6-evac-11).
+ *
+ * WHAT HAPPENED. An OVMX process converted NL->EX on a resource this node
+ * mastered whose blocker was a remote VAX EX holder. The Linux backend does not
+ * sleep while a signal is pending (it would be woken again at once), and
+ * enq_wait_sync DROPPED that return: it re-tested a predicate that was still
+ * false and called straight back in. The result was a tight loop taking and
+ * dropping res->lock, a CPU that never left the kernel, and `rcu: INFO:
+ * self-detected stall on CPU 0 (9931 ticks this GP)` growing to 98,763 ticks
+ * while the fork thread on the other CPU served the cluster normally. Any
+ * signal did it -- including the STOP sent to recover the process.
+ *
+ * WHAT THIS TEST DOES. The host backend has no signals, so it has an INTERRUPT
+ * SEAM (exec_kbackend_host.h): `exec_host_interrupt_waits` makes the next N
+ * waits report INTERRUPTED without sleeping, which is exactly the Linux
+ * behaviour being modelled. With the fix, the ioctl returns -ERESTARTSYS with
+ * NO status written, so userspace re-enters the wait (libvmssys'
+ * KIF_WAIT_CALL) -- what VMS does when an AST interrupts a wait.
+ *
+ * AND THE TEST BOUNDS THE SPIN ITSELF rather than relying on a harness
+ * timeout: each wait runs on its own thread and is JOINED WITH A DEADLINE, so
+ * the regression shows up as a named FAILED ASSERTION in a few seconds. A test
+ * for an infinite loop that hangs to prove it is a test no mutation gate can
+ * measure.
+ *
+ * Both halves are asserted: the ENQW and the CONVERT, because they are two
+ * separate waits in two separate ioctls and only one of them was in the lab's
+ * stack.
+ */
+struct intr_call {
+	struct vms_proc    *proc;
+	struct vms_enq_args args;
+	long                rc;
+	int                 convert;
+	int                 done;
+};
+
+static void *intr_call_thread(void *arg)
+{
+	struct intr_call *c = arg;
+
+	c->rc = c->convert
+		? vms_ioctl_convert(c->proc, (unsigned long)(void *)&c->args)
+		: vms_ioctl_enq(c->proc, (unsigned long)(void *)&c->args);
+	c->done = 1;
+	return NULL;
+}
+
+/*
+ * Run one ioctl on a thread and join it with a DEADLINE. Returns 1 when it came
+ * back on its own -- 0 means it is still in the kernel, which IS the
+ * regression.
+ *
+ * ON A MISS THE TEST STILL TERMINATES, deliberately: `unblock_lkid` (the
+ * holder's lock) is released so the waiting thread completes and can be joined.
+ * A test for a wait that never ends must not itself never end -- leaving a
+ * detached thread inside the engine makes everything after it meaningless, and
+ * a suite that proves its point by hanging is a suite no mutation gate can
+ * measure.
+ */
+static int run_with_deadline(struct intr_call *c, unsigned int secs,
+			     struct vms_proc *holder, uint32_t unblock_lkid)
+{
+	pthread_t th;
+	struct timespec ts;
+
+	c->done = 0;
+	c->rc = 0;
+	if (pthread_create(&th, NULL, intr_call_thread, c) != 0)
+		return 0;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += (time_t)secs;
+	if (pthread_timedjoin_np(th, NULL, &ts) == 0)
+		return 1;
+
+	/* It did not come back. Let it finish so this suite can. */
+	if (holder != NULL && unblock_lkid != 0u)
+		(void)do_deq(holder, unblock_lkid);
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += (time_t)secs;
+	if (pthread_timedjoin_np(th, NULL, &ts) != 0)
+		(void)pthread_detach(th);   /* nothing left to try */
+	return 0;
+}
+
+static void a_signal_ends_the_wait_instead_of_spinning(void)
+{
+	struct vms_proc holder, waiter;
+	struct intr_call c;
+	struct vms_resmaster_args rm;
+	uint32_t holder_lkid = 0, waiter_lkid = 0;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "signal/wait: vms_lock_init");
+		return;
+	}
+	printf("-- rd vms-f87: a signal ENDS a blocked $ENQW; it does not spin "
+	       "a CPU --\n");
+	proc_init(&holder);
+	proc_init(&waiter);
+
+	ct_check(do_enq(&holder, "F87_WAIT", LCK_K_EXMODE, 0,
+			&holder_lkid) == SS__NORMAL && holder_lkid != 0u,
+		 "a holder takes EX, so the next request must queue");
+
+	/* --- the $ENQW --- */
+	memset(&c, 0, sizeof(c));
+	c.proc = &waiter;
+	c.args.lkmode = LCK_K_EXMODE;
+	c.args.flags = LCK_M_SYNC;
+	strscpy(c.args.resnam, "F87_WAIT", sizeof(c.args.resnam));
+	exec_host_interrupt_waits = 1u;     /* a signal is pending */
+	ct_check(run_with_deadline(&c, 5u, &holder, holder_lkid) == 1,
+		 "*** the interrupted $ENQW COMES BACK (it does not spin in "
+		 "the kernel: the lab's CPU 0 never did) ***");
+	ct_check_eq_u32(exec_host_interrupt_waits, 0u,
+			"the wait really was entered and interrupted once");
+	ct_check_eq_u32((unsigned long)(-c.rc), (unsigned long)ERESTARTSYS,
+			"*** and returns -ERESTARTSYS ***");
+	ct_check_eq_u32(c.args.status, 0u,
+			"*** writing NO status: $ENQW has no 'your wait was "
+			"interrupted' condition value, so userspace re-enters "
+			"the wait and no caller can observe this ***");
+
+	/* The request is STILL QUEUED, which is what makes re-entering correct:
+	 * the lock the caller asked for has not been lost or granted. */
+	ct_check(do_resmaster(&waiter, "F87_WAIT", &rm) == SS__NORMAL &&
+		 rm.found == 1u && rm.n_granted == 1u,
+		 "the resource still has exactly the holder's grant -- the "
+		 "interrupted request neither vanished nor was granted");
+
+	/* --- the same for a CONVERT, the path the lab was actually in --- */
+	ct_check(do_enq(&waiter, "F87_CVT", LCK_K_NLMODE, 0,
+			&waiter_lkid) == SS__NORMAL && waiter_lkid != 0u,
+		 "the waiter takes NL on a second resource");
+	ct_check(do_enq(&holder, "F87_CVT", LCK_K_EXMODE, 0, NULL) ==
+		 SS__NORMAL,
+		 "and the holder takes EX on it (NL conflicts with nothing)");
+
+	memset(&c, 0, sizeof(c));
+	c.proc = &waiter;
+	c.convert = 1;
+	c.args.lkid = waiter_lkid;
+	c.args.lkmode = LCK_K_EXMODE;
+	c.args.flags = LCK_M_SYNC | LCK_M_CONVERT;
+	exec_host_interrupt_waits = 1u;
+	ct_check(run_with_deadline(&c, 5u, &holder, 0u) == 1,
+		 "*** the interrupted $ENQW CONVERT comes back too -- the "
+		 "exact ioctl the lab's stuck CPU was in ***");
+	ct_check_eq_u32((unsigned long)(-c.rc), (unsigned long)ERESTARTSYS,
+			"  with -ERESTARTSYS");
+	ct_check_eq_u32(c.args.status, 0u, "  and no status written");
+	ct_check_eq_u32(lki_mode(waiter_lkid), LCK_K_NLMODE,
+			"*** and the lock is STILL HELD AT ITS OLD MODE: a "
+			"failed convert never loses the lock (VMS semantics) "
+			"***");
+
+	/*
+	 * AND AN UNINTERRUPTED WAIT STILL WAITS AND STILL COMPLETES. On its own
+	 * resource and its own pair of processes, so nothing above can colour
+	 * it: the fix must change what a SIGNAL does and nothing else.
+	 */
+	exec_host_interrupt_waits = 0u;
+	{
+		struct vms_proc h2, w2;
+		pthread_t th;
+		uint32_t h2_lkid = 0;
+
+		proc_init(&h2);
+		proc_init(&w2);
+		ct_check(do_enq(&h2, "F87_OK", LCK_K_EXMODE, 0, &h2_lkid) ==
+			 SS__NORMAL && h2_lkid != 0u,
+			 "a fresh holder takes EX on a fresh resource");
+
+		memset(&c, 0, sizeof(c));
+		c.proc = &w2;
+		c.args.lkmode = LCK_K_EXMODE;
+		c.args.flags = LCK_M_SYNC;
+		strscpy(c.args.resnam, "F87_OK", sizeof(c.args.resnam));
+		c.done = 0;
+		ct_check(pthread_create(&th, NULL, intr_call_thread, &c) == 0,
+			 "a $ENQW blocks for real, with nothing interrupting "
+			 "it");
+		usleep(50000);
+		ct_check_eq_u32((unsigned long)c.done, 0u,
+				"*** it is STILL waiting 50 ms later: the fix "
+				"did not turn every wait into an immediate "
+				"return ***");
+		ct_check(do_deq(&h2, h2_lkid) == SS__NORMAL,
+			 "the holder releases");
+		ct_check(pthread_join(th, NULL) == 0, "the waiter returns");
+		ct_check_eq_u32(c.args.status, SS__NORMAL,
+				"*** GRANTED, through the same wait: the only "
+				"thing that changed is what a SIGNAL does ***");
+		ct_check_eq_u32(c.rc, 0u, "  and the ioctl itself succeeded");
+	}
+
+	vms_lock_cleanup();
+}
+
+/* ev11 (rd vms-ci.6, 2026-10-09 11:12Z): the lab's OVMX node spun CPU 0 with
+ * res->lock held (an RCU stall) the moment a local CONVERT queued behind a
+ * remote EX. check_deadlock() walked the blocker's owner -- the cluster
+ * delivery process, which owns EVERY remote system's lock -- found one of its
+ * OTHER locks waiting behind ANOTHER of its locks (two VAXes contending for
+ * one resource), and re-pushed that pair forever. alarm() turns a regression
+ * back into a hang into a failed test instead of a wedged ctest. */
+
+
+static void the_ev11_remote_contention_does_not_spin_the_deadlock_search(void)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+	struct vms_proc delivery, app;
+	struct vms_enq_args cvt;
+	uint32_t local_lkid = 0;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "ev11: vms_lock_init");
+		return;
+	}
+	printf("-- ev11: a local CONVERT behind a remote EX while two remote "
+	       "systems contend for another resource\n");
+	proc_init(&delivery);
+	proc_init(&app);
+	delivery.current_mode = PSL_C_USER;
+	app.current_mode = MD_PEER_MODE;
+	app.uic = (MD_PEER_GROUP << 16);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* Two remote systems contend on OTHER$NAME: VAX1 EX granted, VAX2 EX
+	 * queued -- both owned here by the delivery process. */
+	ct_check(do_enq(&app, "OTHER$NAME", LCK_K_NLMODE, 0, &local_lkid) ==
+		 SS__NORMAL, "this node masters OTHER$NAME");
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A, LCK_K_EXMODE, 0,
+		"OTHER$NAME");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "VAX1 holds EX on OTHER$NAME");
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_B, MD_LKID_B + 1u, LCK_K_EXMODE, 0,
+		"OTHER$NAME");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED,
+		 "VAX2's EX on OTHER$NAME queues behind VAX1's");
+
+	/* The workload resource: local NL, VAX1 EX, then the local CONVERT. */
+	ct_check(do_enq(&app, "EVAC$WORKLOAD", LCK_K_NLMODE, 0, &local_lkid) ==
+		 SS__NORMAL, "an OVMX process takes NL on EVAC$WORKLOAD");
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A + 2u, LCK_K_EXMODE, 0,
+		"EVAC$WORKLOAD");
+	ct_check(vms_lock_dlm_master_serve(&r, &out) == SS__NORMAL &&
+		 out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "VAX1's EX on EVAC$WORKLOAD is granted");
+
+	memset(&cvt, 0, sizeof(cvt));
+	cvt.lkid = local_lkid;
+	cvt.lkmode = LCK_K_EXMODE;
+	alarm(10);
+	vms_ioctl_convert(&app, (unsigned long)(void *)&cvt);
+	alarm(0);
+	ct_check_eq_u32(cvt.status, SS__NORMAL,
+			"*** the local NL->EX convert QUEUES and returns -- the "
+			"deadlock search does not spin through the delivery "
+			"process ***");
+	ct_check_eq_u32(vms_lock_deadlock_budget_hits(), 0u,
+			"*** and it never needed the step budget: a remote "
+			"holder's other waits are not this request's wait-for "
+			"edges ***");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
@@ -830,5 +1112,7 @@ int main(void)
 	the_namespace_is_qualified();
 	dlksrch_both_initiate_aborts_once();
 	the_ev6_queue_shape_does_not_spin();
+	a_signal_ends_the_wait_instead_of_spinning();
+	the_ev11_remote_contention_does_not_spin_the_deadlock_search();
 	return ct_summary("test_lock_host");
 }

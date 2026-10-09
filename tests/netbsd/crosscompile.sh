@@ -153,6 +153,7 @@ SRCS=(
     # is in src/kernel-netbsd/Makefile's SRCS but still absent from THIS
     # hand-maintained list, a pre-existing hole flagged in the note above.)
     "$CORE/vms_dlm_echo_guard.c"
+    "$CORE/vms_dlm_pending.c"
     "$CORE/vms_cluster_codec_cm.c"
     "$CORE/vms_cnxman_csb.c"
     "$CORE/vms_cnxman_recnx_fsm.c"

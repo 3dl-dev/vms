@@ -194,6 +194,31 @@ static void arm_bindings(void)
 	absent("VMS_DLM_LKID_UNSET, ",
 	       "no builder is ever called with the unset-lock-id sentinel");
 
+	/*
+	 * THE DEFERRED GRANT IS ORIGINATED NOW (rd vms-f87), and from the
+	 * requester's OWN frame. Measured cost of the old silence: a real VAX
+	 * whose $ENQW queued at an OVMX master was never told it had been
+	 * granted, and its process sat in RWSCS unkillable.
+	 */
+	has("vms_dlm_pending_keep(&d->pending",
+	    "a request the engine QUEUED has its frame kept (the answer we owe)");
+	has("dlm_arm_send_deferred_grant(d, &res);",
+	    "*** and the RELEASE path really CALLS the origination -- not just "
+	    "defines it ***");
+	has("vms_dlm_pending_take(&d->pending, r->deferred_csid",
+	    "... and the flip takes that frame back out, keyed by the waiter "
+	    "the ENGINE named");
+	has("vms_dlm_enq_response_build_grant(reqbody, n,",
+	    "... so the deferred grant is the requester's OWN body, echoed -- "
+	    "never a frame composed from fields here");
+	has("d->deferred_grants_sent++",
+	    "... and an originated grant is COUNTED");
+	has("d->deferred_grants_no_body++",
+	    "... while a flip whose frame is NOT held stays silent, counted "
+	    "(INV-6: no invented frame to fill the gap)");
+	absent("dlm_arm_count_deferred_grant",
+	       "*** and the old count-and-say-nothing path is GONE ***");
+
 	/* RULE A: the arm fills a buffer; it never sends a reply. */
 	has("memcpy(reply->body, d->txframe + VMS_OFF_SYSAP_BODY",
 	    "a reply is STAGED into the connection manager's buffer");

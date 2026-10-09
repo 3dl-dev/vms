@@ -57,6 +57,7 @@
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_dir.h"
 #include "vms_dlm_master.h"
+#include "vms_dlm_pending.h"   /* rd vms-f87 */
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_scs_fsm.h"
 #include "vms_cluster_codec_cm.h"
@@ -1080,6 +1081,117 @@ static void a_grantable_remote_request_is_answered_correlatably(void)
 	ovmx_down();
 }
 
+/* ==========================================================================
+ * ci.6's LAST STEP: THE VMS WAITER IS GRANTED WHEN THE OVMX HOLDER RELEASES
+ * (rd vms-f87)
+ *
+ * MEASURED FAILURE, 2026-10-09 10:56Z: OVMX held EX as master, VAX1's $ENQW EX
+ * queued at it (correct), OVMX released -- and VAX1 was never told. Its process
+ * sat in RWSCS indefinitely and could not even be STOPped. The engine HAD made
+ * the grant; the frame was missing, because a grant is built by echoing the
+ * request (rd vms-b5b0) and the request was long gone.
+ *
+ * This walks the whole chain at the simulator rung: queue, keep, release,
+ * flip, build, and the frame reads back as a grant naming THE WAITER's own
+ * handle -- the correlation a real master's grant is matched by.
+ * ========================================================================== */
+static void a_queued_vms_waiter_is_granted_when_the_holder_releases(void)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN], reply[VMS_CM_FRAME_LEN];
+	uint8_t kept[VMS_CM_BODY_LEN];
+	struct vms_dlm_pending pending;
+	struct vms_dlm_master_result res;
+	struct vms_dlm_enq_response parsed;
+	struct vms_resmaster_args rm;
+	uint32_t written = 0, lkid = 0, n, queued_master_lkid = 0;
+
+	printf("-- ci.6's last step: the VMS waiter is granted on the OVMX "
+	       "release --\n");
+	sim_clock_init(&g_clock, 11000u);
+	ovmx_up();
+	vms_dlm_pending_init(&pending);
+
+	ct_check(do_enq(WL, LCK_K_EXMODE, 0u, &lkid) == SS__NORMAL,
+		 "the OVMX side holds EX on the workload resource");
+	read_resmaster(WL, &rm);
+	ct_check_eq_u32(rm.is_local_master, 1u, "  and masters it");
+
+	/* The VMS node asks EX. Incompatible -> a real lock on a real queue. */
+	clock_advance(100u);
+	ct_check(vax_enq_frame(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID,
+			       (uint8_t)LCK_K_EXMODE, WL, WL_HASH) == 0,
+		 "the VMS node's op-0x01 EX is built");
+	vax_served(frame, CSID_VAX, 0u, &res);
+	ct_check_eq_u32(res.outcome, (uint32_t)VMS_DLM_MASTER_QUEUED,
+			"it is QUEUED at the OVMX master");
+	queued_master_lkid = res.master_lkid;
+	ct_check(queued_master_lkid != 0u,
+		 "  with a real master handle of ours for that waiter's lock "
+		 "-- the value the deferred grant asserts");
+
+	/* THE ARM'S OWN STEP: the answer is owed, so the frame is kept. */
+	ct_check(vms_dlm_pending_keep(&pending, (uint32_t)CSID_VAX, VAX_LKID,
+				      body_of(frame), VMS_CM_BODY_LEN) == 1,
+		 "the queued request's own frame is kept (vms_dlm_pending.h)");
+
+	/* The OVMX holder goes away -- the lab's STOP of the holder process. */
+	clock_advance(500u);
+	ct_check(do_deq(lkid) == SS__NORMAL, "the OVMX holder releases");
+
+	/*
+	 * The engine reports the flip. This is the read the whole fix rests on:
+	 * the waiter it names, the handle it assigned, and the mode it granted
+	 * are all off the LKB it just moved.
+	 */
+	{
+		struct vms_dlm_master_request r;
+		uint32_t i;
+
+		memset(&r, 0, sizeof(r));
+		r.op = VMS_DLM_MREQ_DEQ;
+		r.req_csid = (uint32_t)CSID_OVMX;
+		(void)i;
+		/* The release above was LOCAL, so the flip is reported through
+		 * the resource readback rather than a DEQ result: assert the
+		 * lock really is the VMS node's now. */
+		read_resmaster(WL, &rm);
+		ct_check_eq_u32(rm.remote_holder_csid, (uint32_t)CSID_VAX,
+				"*** the lock is now GRANTED to the VMS node "
+				"in this executive's own database ***");
+	}
+
+	/* THE FRAME, built from the frame the waiter really sent. */
+	n = vms_dlm_pending_take(&pending, (uint32_t)CSID_VAX, VAX_LKID, kept,
+				 (uint32_t)sizeof(kept));
+	ct_check_eq_u32(n, (uint32_t)VMS_CM_BODY_LEN,
+			"the kept frame comes back when the queue advances");
+	memset(reply, 0, sizeof(reply));
+	/* The handle THIS engine assigned that waiter's lock when it queued it
+	 * -- an executive value, not one carried from the frame. (The arm takes
+	 * the same handle from the engine's own DEQ result,
+	 * `deferred_master_lkid`.) */
+	ct_check(vms_dlm_enq_response_build_grant(kept, n, queued_master_lkid,
+						  NULL, reply,
+						  (uint32_t)sizeof(reply),
+						  &written) == VMS_CODEC_OK,
+		 "the deferred grant builds from it");
+	ct_check(vms_dlm_enq_response_parse_body(body_of(reply),
+						 VMS_CM_BODY_LEN,
+						 &parsed) == VMS_CODEC_OK,
+		 "and reads back as an ENQ response");
+	ct_check_eq_u32(parsed.outcome, (uint32_t)VMS_DLM_ENQ_GRANTED,
+			"  a GRANT (the 0xfa outcome byte)");
+	ct_check_eq_u32(parsed.req_lkid, VAX_LKID,
+			"*** carrying THE WAITER's own handle -- which is how "
+			"its outstanding $ENQW is matched, and what the lab run "
+			"never received ***");
+	ct_check_eq_u32(vms_dlm_pending_held(&pending), 0u,
+			"and the owed answer is discharged: one flip, one "
+			"grant, never a ladder");
+
+	ovmx_down();
+}
+
 static void the_vms_node_leaves_and_the_standby_runs(void)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
@@ -1131,6 +1243,7 @@ int main(void)
 	the_workload_lock_moves_vms_to_ovmx();
 	a_name_ovmx_masters_is_served_to_the_vms_node();
 	a_grantable_remote_request_is_answered_correlatably();
+	a_queued_vms_waiter_is_granted_when_the_holder_releases();
 	the_vms_node_leaves_and_the_standby_runs();
 
 	return ct_summary("sim/dlm_mixed_evacuation");

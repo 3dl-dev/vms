@@ -727,7 +727,22 @@ uint32_t vms_kif_enq(uint32_t efn, uint32_t lkmode, uint32_t flags,
     if (valblk && (flags & LCK_M_VALBLK))
         vms_memcpy(args.valblk, valblk, LCK_VALBLK_SIZE);
 
-    KIF_CALL(VMS_IOCTL_ENQ, &args);
+    /*
+     * KIF_WAIT_CALL, NOT KIF_CALL (rd vms-f87). A SYNCHRONOUS $ENQ ($ENQW) is a
+     * WAIT, and the executive abandons it with -ERESTARTSYS and NO status when
+     * a signal is pending -- the same contract $WAITFR, $HIBER and a mailbox
+     * read use (see kif_wait_call's header for why re-entering is the faithful
+     * answer and not a swallowed error: on VMS an AST interrupts a wait, runs,
+     * and the wait RESUMES; $ENQW has no "your wait was interrupted" condition
+     * value to report). For an ASYNC $ENQ there is no wait to interrupt, so
+     * this loop degenerates to one round trip.
+     *
+     * Before this, the executive's interrupted return was dropped on the floor
+     * inside enq_wait_sync and spun a CPU into an RCU stall (lab run
+     * ci6-evac-11). Both halves are fixed: the executive returns, and this
+     * re-enters.
+     */
+    KIF_WAIT_CALL(VMS_IOCTL_ENQ, &args);
 
     if (lkid) *lkid = args.lkid;
     if (valblk && (flags & LCK_M_VALBLK))
@@ -766,7 +781,9 @@ uint32_t vms_kif_convert(uint32_t lkid, uint32_t lkmode, uint32_t flags,
     if (valblk && (flags & LCK_M_VALBLK))
         vms_memcpy(args.valblk, valblk, LCK_VALBLK_SIZE);
 
-    KIF_CALL(VMS_IOCTL_CONVERT, &args);
+    /* A synchronous $CONVERT is a wait too -- same contract as $ENQW above
+     * (rd vms-f87). */
+    KIF_WAIT_CALL(VMS_IOCTL_CONVERT, &args);
 
     if (valblk && (flags & LCK_M_VALBLK))
         vms_memcpy(valblk, args.valblk, LCK_VALBLK_SIZE);

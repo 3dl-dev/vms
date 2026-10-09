@@ -70,6 +70,7 @@ SRCS=		vms_netbsd.c \
 		vms_dlm_ldwv.c \
 		vms_dlm_dir.c \
 		vms_dlm_echo_guard.c \
+		vms_dlm_pending.c \
 		vms_dlm_hash.c \
 		vms_cnxman_barrier_fsm.c \
 		vms_cnxman_coord_fsm.c \

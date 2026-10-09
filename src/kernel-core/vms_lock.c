@@ -1729,17 +1729,42 @@ static int lock_compatible(struct vms_lock_resource *res,
  * because false positives just cause SS$_DEADLOCK, which the caller
  * retries or reports).
  */
+static struct vms_proc *dlm_delivery_proc_get(void);
+
+/* Upper bound on wait-for edges one search may visit. The stack bounds DEPTH,
+ * not WORK: a cycle that does not pass through the requester re-pushes the same
+ * locks forever (measured in the lab, rd vms-ci.6 ev11: CPU 0 spun here with
+ * res->lock held -- an RCU stall -- the moment a local CONVERT queued behind a
+ * remote system's EX). */
+#define MAX_DEADLOCK_STEPS 256
+static uint32_t deadlock_budget_hits;   /* searches that ran out of budget */
+
+uint32_t vms_lock_deadlock_budget_hits(void)
+{
+    return deadlock_budget_hits;
+}
+
 static int check_deadlock(struct vms_lock_entry *lock,
                            int depth __attribute__((unused)))
 {
     struct vms_proc *origin_proc = lock->proc;
+    struct vms_proc *delivery = dlm_delivery_proc_get();
     struct vms_lock_entry *stack[MAX_DEADLOCK_DEPTH];
     int sp = 0;
+    int steps = 0;
 
     stack[sp++] = lock;
 
     while (sp > 0) {
         struct vms_lock_entry *cur = stack[--sp];
+
+        /* Out of budget: report no deadlock rather than spin. A real cycle
+         * missed here keeps its waiters waiting -- never a fabricated
+         * SS$_DEADLOCK, and never a wedged CPU. */
+        if (++steps > MAX_DEADLOCK_STEPS) {
+            deadlock_budget_hits++;
+            return 0;
+        }
         struct vms_lock_resource *res = cur->resource;
         struct vms_lock_entry *granted;
 
@@ -1758,6 +1783,19 @@ static int check_deadlock(struct vms_lock_entry *lock,
             /* Direct cycle: blocker is the original requester */
             if (granted->proc == origin_proc)
                 return 1;  /* Deadlock! */
+
+            /* A lock held FOR ANOTHER SYSTEM (the cluster delivery process
+             * owns every remote holder's lock here, FC-P4.4/vms-c27). That
+             * one owner stands for many systems, so its other waiting locks
+             * are NOT this blocker's wait-for edges -- following them would
+             * chain unrelated systems together (and loop: two remote systems
+             * contending for one resource are both "the delivery process").
+             * A cycle through another node is the distributed search's to
+             * find (H11), not this node-local one's. */
+            if (delivery != NULL && granted->proc == delivery)
+                continue;
+            if (granted->proc == NULL)
+                continue;
 
             /* Check if the blocking process has any waiting locks */
             if (!exec_trylock(&granted->proc->lock_list_lock))
@@ -2200,6 +2238,25 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
  * calling process (only that process can DEQ it) and, for CONVERT, an extra
  * find-reference is held by the caller.
  *
+ * `interrupted` (may be NULL): set to 1 when the wait was ABANDONED because a
+ * signal is pending on the calling thread, with the request still queued. The
+ * caller must then write NO status and return -ERESTARTSYS, so the signal is
+ * handled in userspace and the wait is RE-ENTERED (libvmssys' kif_wait_call) --
+ * the contract vms_eflag.c, vms_mbx.c and $HIBER already use, and the faithful
+ * one: on VMS an AST interrupts a wait, runs, and THE WAIT RESUMES, which is
+ * why $ENQW has no "your wait was interrupted" condition value to report.
+ *
+ * IGNORING THIS RETURN SPUN A CPU TO DEATH. In lab run ci6-evac-11 an OVMX
+ * process converted NL->EX on a resource this node mastered whose blocker was a
+ * remote VAX EX holder. exec_cv_wait_timeout does not sleep while a signal is
+ * pending (it would be woken again at once), the loop re-tested a predicate
+ * that was still false, and called straight back in: a tight loop taking and
+ * dropping res->lock, a CPU that never left the kernel, and `rcu: INFO:
+ * self-detected stall on CPU 0 (9931 ticks this GP)` growing to 98,763 ticks
+ * while the fork thread on the other CPU served the cluster normally. Any
+ * signal to a process blocked in $ENQW did it -- including the STOP sent to
+ * get the process back.
+ *
  * Returns:
  *   SS__NORMAL   - granted. try_grant_waiters moved the lock to res->granted,
  *                  set granted_mode, and set grant_state. Entry left intact.
@@ -2244,11 +2301,13 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
  * lock-free READ_ONCE test observe the same transitions.
  */
 static int enq_wait_sync(struct vms_lock_resource *res,
-                         struct vms_lock_entry *lock)
+                         struct vms_lock_entry *lock, int *interrupted)
 {
     int status;
     int timed_out;
 
+    if (interrupted != NULL)
+        *interrupted = 0;
     exec_lock(&res->lock);
     for (;;) {
         /* Predicate has priority (cv contract). Any nonzero grant_state is a
@@ -2268,8 +2327,30 @@ static int enq_wait_sync(struct vms_lock_resource *res,
 
         /* Sleep until woken (grant/signal) or the timeout elapses. res->lock is
          * dropped across the sleep and held again on return. */
-        exec_cv_wait_timeout(&lock->wait_wq, &res->lock,
-                             VMS_DEADLOCK_WAIT_MS, &timed_out);
+        if (exec_cv_wait_timeout(&lock->wait_wq, &res->lock,
+                                 VMS_DEADLOCK_WAIT_MS, &timed_out)) {
+            /*
+             * INTERRUPTED, and this return must be HANDLED rather than
+             * dropped -- see the header comment's measurement. An answer that
+             * already exists outranks the interruption (exec_kbackend.h SS2),
+             * so the predicate is re-tested FIRST; otherwise the wait is
+             * abandoned with the request still queued and the caller writes
+             * no status.
+             */
+            if (lock->grant_state != 0) {
+                status = lock->grant_state;
+                break;
+            }
+            if (!lock->waiting) {
+                lock->grant_state = SS__NORMAL;
+                status = SS__NORMAL;
+                break;
+            }
+            if (interrupted != NULL)
+                *interrupted = 1;
+            status = SS__NORMAL;   /* unused: the caller writes no status */
+            break;
+        }
 
         /*
          * Woke without a grant recorded. On a genuine timeout re-run deadlock
@@ -2419,7 +2500,8 @@ static void dlm_proxy_unwind(struct vms_proc *proc, struct vms_lock_resource *re
  * proxy on success and released on every failure path.
  */
 static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
-                              struct vms_lock_resource *res, uint32_t dst_csid)
+                              struct vms_lock_resource *res, uint32_t dst_csid,
+                              int *intr)
 {
     struct vms_dlm_proxy_post post;
     struct vms_lock_entry *lock;
@@ -2455,7 +2537,12 @@ static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
     }
 
     if (a->flags & LCK_M_SYNC) {
-        st = enq_wait_sync(res, lock);  /* the master's grant wakes us */
+        /* The master's grant wakes us. A SIGNAL abandons the wait with the
+         * request still outstanding AT THE MASTER, and the caller returns
+         * -ERESTARTSYS so userspace re-enters it (lab run ci6-evac-11). */
+        st = (uint32_t)enq_wait_sync(res, lock, intr);
+        if (intr != NULL && *intr)
+            return;
         if (st != SS__NORMAL) {
             dlm_proxy_unwind(proc, res, lock);
             a->lkid = 0;
@@ -2490,7 +2577,8 @@ static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
  */
 static uint32_t convert_proxy_request(struct vms_proc *proc,
                                       struct vms_enq_args *a,
-                                      struct vms_lock_entry *lock)
+                                      struct vms_lock_entry *lock,
+                                      int *intr)
 {
     struct vms_lock_resource *res = lock->resource;
     struct vms_dlm_proxy_post post;
@@ -2522,7 +2610,9 @@ static uint32_t convert_proxy_request(struct vms_proc *proc,
     }
 
     if (a->flags & LCK_M_SYNC) {
-        st = enq_wait_sync(res, lock);
+        st = (uint32_t)enq_wait_sync(res, lock, intr);
+        if (intr != NULL && *intr)
+            return SS__NORMAL;   /* unused: the caller writes no status */
         if (st != SS__NORMAL) {
             exec_lock(&res->lock);
             lock->requested_mode = lock->granted_mode;
@@ -3521,7 +3611,11 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
             goto out;
         }
         if (route == DLM_ROUTE_REMOTE && !xn) {
-            enq_proxy_request(proc, &args, res, dst_csid);
+            int wait_intr = 0;
+
+            enq_proxy_request(proc, &args, res, dst_csid, &wait_intr);
+            if (wait_intr)
+                return -ERESTARTSYS;   /* a signal, not an answer */
             goto out;      /* enq_proxy_request owns `res` from here */
         }
         if (route == DLM_ROUTE_REMOTE) {
@@ -3776,13 +3870,19 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
                 exec_unlock(&res->lock);
 
                 if (args.flags & LCK_M_SYNC) {
+                    int wait_intr = 0;
+                    int wait_st;
+
                     /*
                      * Synchronous $ENQW: block in-kernel until the request
                      * is granted (by another process's DEQ/CONVERT, via
                      * try_grant_waiters) or a deadlock is detected. This
                      * replaces the old userspace GETLKI poll loop.
                      */
-                    if (enq_wait_sync(res, lock) == SS__DEADLOCK) {
+                    wait_st = enq_wait_sync(res, lock, &wait_intr);
+                    if (wait_intr)
+                        return -ERESTARTSYS;  /* a signal, not an answer */
+                    if (wait_st == SS__DEADLOCK) {
                         /* Never granted: unwind the fresh request. */
                         exec_lock(&proc->lock_list_lock);
                         exec_list_del(&lock->proc_list);
@@ -3838,7 +3938,21 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
         args.lkid = 0;
         goto out;
     }
-    vms_enq_core_ex(proc, &args, NULL);   /* local $ENQ: full deadlock detection */
+    {
+        /*
+         * PROPAGATE THE CORE's RETURN (rd vms-f87). It is 0 on every normal
+         * path; a nonzero value is -ERESTARTSYS, meaning a signal abandoned a
+         * $ENQW with the request still queued -- and then NO STATUS IS WRITTEN,
+         * so userspace re-enters the wait (libvmssys' KIF_WAIT_CALL) exactly as
+         * it does for $WAITFR. Dropping this return left the interruption
+         * invisible to the caller, which is half of what spun a CPU into an RCU
+         * stall in lab run ci6-evac-11.
+         */
+        long rc = vms_enq_core_ex(proc, &args, NULL);  /* local $ENQ */
+
+        if (rc != 0)
+            return rc;
+    }
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -4015,7 +4129,16 @@ uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
     a.flags  = LCK_M_SYNC;      /* $ENQW: block in-kernel until granted */
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
-    vms_enq_core_ex(proc, &a, NULL);   /* ACP volume lock: local, full detection */
+    /*
+     * An INTERRUPTED wait (rd vms-f87) is not a status: this caller is an
+     * in-kernel ACP path with no userspace ioctl to restart, so it RE-ENTERS
+     * the wait itself -- the same answer kif_wait_call gives a user service,
+     * and the faithful one (on VMS an AST interrupts a wait, runs, and the wait
+     * resumes). Bounded only by the wait itself completing, exactly like the
+     * uninterrupted case.
+     */
+    while (vms_enq_core_ex(proc, &a, NULL) != 0)
+        ;   /* ACP volume lock: local, full detection */
     /* Whatever lock the $ENQ created is handed back, whatever status it reported,
      * so the caller's single exit releases it: a granted $ENQ may report SS$_SYNCH
      * as well as SS$_NORMAL, and a lock id kept only on SS$_NORMAL would leak the
@@ -4069,7 +4192,10 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
     a.flags  = LCK_M_SYNC;      /* $ENQW; an NL request grants immediately */
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
-    vms_enq_core_ex(proc, &a, NULL);
+    /* Same contract as vms_lock_acp_vol_ex above (rd vms-f87): an interrupted
+     * wait is re-entered here, never reported as a status. */
+    while (vms_enq_core_ex(proc, &a, NULL) != 0)
+        ;
     if (a.status == SS__NORMAL && lkid_out)
         *lkid_out = a.lkid;
     return a.status;
@@ -4110,8 +4236,12 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
      * over the wire, and the caller waits on the same LKB it already holds --
      * the local compatibility matrix has no say over a lock the cluster owns. */
     if (lock->proxy) {
-        args.status = convert_proxy_request(proc, &args, lock);
+        int wait_intr = 0;
+
+        args.status = convert_proxy_request(proc, &args, lock, &wait_intr);
         lock_put(lock);
+        if (wait_intr)
+            return -ERESTARTSYS;       /* a signal, not an answer */
         goto out;
     }
 
@@ -4205,7 +4335,17 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
                      * mode, or a deadlock is detected. On deadlock the lock
                      * retains its original granted mode (VMS semantics --
                      * a failed convert does not lose the held lock). */
-                    if (enq_wait_sync(res, lock) == SS__DEADLOCK) {
+                    int wait_intr = 0;
+                    int wait_st;
+
+                    wait_st = enq_wait_sync(res, lock, &wait_intr);
+                    if (wait_intr) {
+                        /* A signal, not an answer: the convert is still queued
+                         * and the lock still held at its old mode. */
+                        lock_put(lock);
+                        return -ERESTARTSYS;
+                    }
+                    if (wait_st == SS__DEADLOCK) {
                         exec_lock(&res->lock);
                         lock->requested_mode = lock->granted_mode;
                         lock->waiting = 0;
@@ -5529,7 +5669,10 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
          * own frame carried (rd vms-b5b0). Never the delivery process's. */
         xn.res_group = req->res_group;
         xn.res_mode = req->res_mode;
-        vms_enq_core_ex(proc, &a, &xn);
+        /* The cross-node serve never sets LCK_M_SYNC (it must not block the
+         * delivery thread), so there is no wait here to interrupt and the
+         * core's return is 0 by construction (rd vms-f87). */
+        (void)vms_enq_core_ex(proc, &a, &xn);
 
         /*
          * NOT THE MASTER -- the directory REDIRECT (rd vms-b96). The request

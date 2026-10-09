@@ -73,6 +73,11 @@
  *
  * Called from VMS_IOCTL_CLUSTER_START, with that ioctl's own caller.
  */
+/* Node-local deadlock searches that exhausted their step budget (rd vms-ci.6
+ * ev11): answered "no deadlock" rather than spinning. A nonzero value is a
+ * diagnostic, never a fabricated SS$_DEADLOCK. */
+uint32_t vms_lock_deadlock_budget_hits(void);
+
 void vms_lock_dlm_set_delivery_proc(void *proc);
 
 /* Is one registered? The arm's condition-4 gate reads this before it asks the

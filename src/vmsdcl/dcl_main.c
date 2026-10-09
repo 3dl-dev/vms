@@ -441,7 +441,9 @@ int dcl_interrupt_level(void)
             p++;
         if (*p == '\0')
             continue;
-        size_t w = strcspn(p, " \t/");
+        size_t w = 0;                /* the verb's length */
+        while (p[w] && p[w] != ' ' && p[w] != '\t' && p[w] != '/')
+            w++;
         if (w >= 4 && w <= 8 && strncasecmp(p, "CONTINUE", w) == 0)
             return 0;
         if ((w >= 4 && w <= 4 && strncasecmp(p, "STOP", w) == 0) ||

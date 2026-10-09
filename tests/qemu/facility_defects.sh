@@ -6317,7 +6317,7 @@ EOF
         case "$_f" in
         facility)     echo "asynchronous AST delivery interrupting \$HIBER (VMS_IOCTL_HIBER/WAKE + vms_ast_notify_arrival, executive-resident), vms-feb -- the \$HIBER/\$WAKE + write-attention-AST rendezvous MMK's send_cmd_and_wait needs (spine #4, vms-b23)";;
         targets)      echo "kernel-core/vms_ast.c";;
-        suites_red)   echo "test_syssvc_hiber_ast";;
+        suites_red)   echo "test_syssvc_hiber_ast test_syssvc_mmk_build test_syssvc_mmk_drive";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -6328,6 +6328,23 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 the AST that woke A ran with the exact parameter A armed (astprm round-tripped through the executive)
+IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
+MMK.EXE drove the build to completion: its spawned DCL received the action lines and echoed OVMXD1B:COMPILED (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)
+OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF
+OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
+OVMXRT.OLB carries the archived member VMS_STRING -- LIBRARIAN inserted the driven object
+OVMXRT.OLB embeds the runtime symbol vms_strlen -- its member is a compile of the REAL src/libvmssys/vms_string.c
+OVMXRT.OLB is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic archive, zero bash)
+OVMXRT.OLB is a valid ar-format object library (!<arch> magic) -- LIBRARIAN really archived it in QEMU
+VMS_STRING.OBJ is BYTE-IDENTICAL across two independent MMK-driven in-guest builds (deterministic, zero bash)
+the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #1)
+the MMK-driven LIBRARIAN.EXE produced OVMXRT.OLB in the guest (build #2)
+the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
+the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #1)
+the MMK-driven TCC.EXE produced VMS_STRING.OBJ in the guest (build #2)
+the driven object carries the runtime symbol vms_strlen -- it is a compile of the REAL src/libvmssys/vms_string.c, not a stand-in
+the driven object is a valid ELF relocatable (ET_REL) -- TCC really compiled it in QEMU
+MMK.EXE drove a real build: its spawned DCL computed 6*7 and delivered OVMXB23:42 back over the mailbox drive (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -6346,6 +6363,16 @@ passes because vms_ioctl_wake's own broadcast is untouched. test_syssvc_mbx_
 wrtattn stays fully green because it drains its write-attention AST with an
 explicit sys$setast(1) and never hibernates -- it does not depend on the arrival
 wake at all.
+MMK.EXE is this rendezvous's PRODUCT USER (vms-b23, spine #4): its
+send_cmd_and_wait writes an action line to the spawned DCL's mailbox, arms a
+write-attention AST on the reply mailbox and $HIBERs until that AST's arrival
+wakes it. With the arrival wake gone MMK sleeps through DCL's reply, so every
+build step it drives never completes: test_syssvc_mmk_build's two builds produce
+no object, no library and no image (each of its listed checks is that one missing
+product, observed downstream), and test_syssvc_mmk_drive never receives
+OVMXB23:42. Same single root -- a queued AST that does not wake $HIBER -- seen
+through the program that depends on it. Measured identically on #1449/#1588's
+shards (both listed these suites red under this defect).
 EOF
                       ;;
         esac;;

@@ -1276,11 +1276,13 @@ static void scenario_g_unnamed_row_reports_nothing(void)
 
     /* --- LOGOUT (vms-f42d) ------------------------------------------- */
     /* negctl: dcl-logout-user-fabricated */
-    CHECK(strstr(outg, "\n        logged out at ") != NULL,
+    /* the VAX V7.3 logout line is "  %-12s logged out at ..." (keystroke
+     * LOGOUT L: "  SYSTEM       logged out at"), so an empty name is 15 blanks */
+    CHECK(strstr(outg, "\n               logged out at ") != NULL,
           "G/LOGOUT: the logout line names no user, in cmd_logout's own "
-          "\"  %s      logged out at\" format");
+          "\"  %-12s logged out at\" format");
     /* negctl: dcl-logout-user-fabricated */
-    CHECK(strstr(outg, "SYSTEM      logged out at") == NULL,
+    CHECK(strstr(outg, "SYSTEM       logged out at") == NULL,
           "G/LOGOUT: the session is not logged out as SYSTEM");
 
     /* --- THE OPCOM RECORD, read out of the log by a THIRD process ------

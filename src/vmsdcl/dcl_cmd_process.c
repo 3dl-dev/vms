@@ -3185,7 +3185,7 @@ int cmd_logout(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("  %s      logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    printf("  %-12s logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            upper_user, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));

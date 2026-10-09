@@ -5914,7 +5914,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "LOGOUT goes back to announcing \"SYSTEM logged out\" -- on the console AND in the operator log -- for any process the executive has not named. An operator log that records a nameless process as SYSTEM is worse than one that records it as nothing: it is a false audit record, not a missing one.";;
         require_fail) cat <<'EOF'
-G/LOGOUT: the logout line names no user, in cmd_logout's own "  %s      logged out at" format
+G/LOGOUT: the logout line names no user, in cmd_logout's own "  %-12s logged out at" format
 G/LOGOUT: the session is not logged out as SYSTEM
 EOF
                       ;;

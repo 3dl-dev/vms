@@ -63,6 +63,9 @@ struct vms_tt_port_ops {
 	/* An out-of-band ^Y / ^C with no AST armed for it (rd vms-f0fb lands the
 	 * ASTs); the port delivers it as the substrate's interrupt. May be NULL. */
 	void (*interrupt)(void *port, uint8_t ch);
+	/* TTSYNC: hold (stop = 1, ^S) or release (stop = 0, ^Q) the line's
+	 * output, at the port. May be NULL. Called from the receive path. */
+	void (*flow)(void *port, int stop);
 	/* The class driver's last reference is gone: free the port. May be
 	 * NULL (a port that frees itself). Never called with a lock held. */
 	void (*release)(void *port);

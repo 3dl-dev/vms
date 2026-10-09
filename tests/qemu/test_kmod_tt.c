@@ -241,6 +241,15 @@ int main(void)
     CHECK(r.st == SS_NORMAL && strcmp(r.data, "ac") == 0, "DELETE rubs out the last character (data 'ac')");
     CHECK(strcmp(scr, "ab\b \bc\r\n") == 0, "DELETE is echoed as BS SP BS on a scope terminal");
 
+    /* ---- TTSYNC: ^S / ^Q hold and release output, and are never data ---- */
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "a\x13" "b\x11" "\r");
+    rd_wait(&r);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(r.st == SS_NORMAL && strcmp(r.data, "ab") == 0,
+          "^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'");
+
     /* ---- ^Z ---- */
     rd_start(&r, chan, 0, NULL, 0);
     msleep(200);

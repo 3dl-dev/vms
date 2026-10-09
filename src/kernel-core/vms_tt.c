@@ -437,8 +437,8 @@ void vms_tt_set_passall(struct vms_tt *tt, int on)
 void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 {
 	uint64_t dc = tt_devchar(tt->dev);
-	uint8_t intr[8];
-	uint32_t nintr = 0;
+	uint8_t intr[8], flow[8];
+	uint32_t nintr = 0, nflow = 0;
 	size_t i;
 
 	exec_lock(&tt->lock);
@@ -453,6 +453,15 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 				tt_ta_purge(tt);
 				if (nintr < sizeof(intr))
 					intr[nintr++] = c;
+				continue;
+			}
+			if ((dc & VMS_TTC_TTSYNC) &&
+			    (c == TT_CTRL('S') || c == TT_CTRL('Q'))) {
+				/* TTSYNC: ^S holds the terminal's output, ^Q
+				 * releases it; neither is ever data (I/O User's
+				 * Reference, "Terminal/host synchronization"). */
+				if (nflow < sizeof(flow))
+					flow[nflow++] = c;
 				continue;
 			}
 			if (c == TT_CTRL('X')) {
@@ -481,6 +490,9 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 	exec_unlock(&tt->lock);
 
 	tt_flush(tt);
+	for (i = 0; i < nflow; i++)
+		if (tt->ops->flow)
+			tt->ops->flow(tt->port, flow[i] == TT_CTRL('S'));
 	for (i = 0; i < nintr; i++)
 		if (tt->ops->interrupt)
 			tt->ops->interrupt(tt->port, intr[i]);

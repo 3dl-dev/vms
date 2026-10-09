@@ -186,6 +186,19 @@ static void port_interrupt(void *port, uint8_t ch)
 	}
 }
 
+/* TTSYNC ^S / ^Q: the substrate tty's own output stop (stop_tty/start_tty). */
+static void port_flow(void *port, int stop)
+{
+	struct vms_ttport *p = port;
+
+	if (READ_ONCE(p->dead))
+		return;
+	if (stop)
+		stop_tty(p->tty);
+	else
+		start_tty(p->tty);
+}
+
 static void port_release(void *port)
 {
 	port_put(port);
@@ -197,6 +210,7 @@ static const struct vms_tt_port_ops vms_ttport_ops = {
 	.xmit      = port_xmit,
 	.write     = port_write,
 	.interrupt = port_interrupt,
+	.flow      = port_flow,
 	.release   = port_release,
 };
 

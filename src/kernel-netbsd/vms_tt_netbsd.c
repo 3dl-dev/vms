@@ -188,6 +188,24 @@ port_interrupt(void *port, uint8_t ch)
 	mutex_spin_exit(&tty_lock);
 }
 
+/* TTSYNC ^S / ^Q: the tty's output stop flag; ^Q restarts output. */
+static void
+port_flow(void *port, int stop)
+{
+	struct vms_ttport_nb *p = port;
+
+	mutex_spin_enter(&tty_lock);
+	if (!p->dead) {
+		if (stop) {
+			SET(p->tp->t_state, TS_TTSTOP);
+		} else {
+			CLR(p->tp->t_state, TS_TTSTOP);
+			ttstart(p->tp);
+		}
+	}
+	mutex_spin_exit(&tty_lock);
+}
+
 static void
 port_release(void *port)
 {
@@ -198,6 +216,7 @@ static const struct vms_tt_port_ops vms_ttport_nb_ops = {
 	.xmit      = port_xmit,
 	.write     = port_write,
 	.interrupt = port_interrupt,
+	.flow      = port_flow,
 	.release   = port_release,
 };
 

@@ -124,7 +124,6 @@ struct arm {
 	uint32_t posts_refused;
 	uint32_t posts_unqueued;
 
-	int      all_ovmx;      /* vms_ldwv_all_ovmx, as the CM answers it    */
 	int      send_fails;    /* RULE C: the CM refused the destination     */
 	uint32_t now_ms;
 	uint32_t dir_csid;
@@ -172,12 +171,6 @@ static uint32_t arm_dir_generation(void *ctx)
 	return a.dir_gen;
 }
 
-static int arm_all_ovmx(void *ctx)
-{
-	(void)ctx;
-	return a.all_ovmx;
-}
-
 static int arm_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
 			     vms_csid_t master_csid)
 {
@@ -206,10 +199,12 @@ static int arm_blkast(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int arm_learn(void *ctx, const char *resnam, uint32_t hash16)
+static int arm_learn(void *ctx, const char *resnam, uint16_t group,
+		     uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, hash16) == SS__NORMAL ? 0 : -1;
+	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	       SS__NORMAL ? 0 : -1;
 }
 
 static void arm_fail(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why)
@@ -333,7 +328,6 @@ static struct vms_dlm_requester_ops eng_ops;
 static void arm_reset(void)
 {
 	memset(&a, 0, sizeof(a));
-	a.all_ovmx = 1;            /* an OVMX-only cluster, the cleared case  */
 	a.now_ms = 1000u;
 	a.dir_csid = CSID_DIRECTORY;
 	a.dir_gen = 1u;
@@ -345,7 +339,6 @@ static void arm_reset(void)
 	a.ops.refill_post     = arm_refill;
 	a.ops.dir_resolve     = arm_dir_resolve;
 	a.ops.dir_generation  = arm_dir_generation;
-	a.ops.all_ovmx        = arm_all_ovmx;
 	a.ops.record_master   = arm_record_master;
 	a.ops.assume_mastery  = arm_assume;
 	a.ops.grant_recv      = arm_grant_recv;
@@ -420,7 +413,9 @@ static void wire_learn(const char *resnam)
 
 	for (c = resnam; *c != '\0'; c++)
 		h = (uint16_t)((h << 1) ^ (uint8_t)*c);
-	(void)vms_lock_dlm_learn_dir_hash(resnam, h);
+	/* ...under the identity this test's processes enqueue at (uic 0, access
+	 * mode 0): a learned value belongs to an identity (rd vms-b5b0). */
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, h);
 }
 
 static uint32_t do_enq(struct vms_proc *proc, const char *resnam,
@@ -732,22 +727,68 @@ static void expect_nothing_sent(uint32_t n_before, const char *label)
 	ct_check_eq_u32(dlm_relq_pending(&a.relq), 0u, what);
 }
 
-static void test_gate_all_ovmx(void)
+/*
+ * WHICH SHAPES MAY FACE AN UNPROVEN MEMBER (rd vms-b5b0, replacing the retired
+ * all-OVMX gate this test used to drive).
+ *
+ * The op-0x03 release used to be refused unless every member was proven-OVMX
+ * (or this node was the sole directory node): a shape read off a real cluster's
+ * wire and never watched going OUT at one. It is now emittable at any member,
+ * and it HAS to be: once an OVMX $ENQ can take a lock at a real VAX master
+ * (which is what rd vms-b5b0's routing does), withholding the release would
+ * mean taking a cluster-wide lock and never giving it back.
+ *
+ * The decision moved to the CODEC, per SHAPE, applied by the connection manager
+ * per DESTINATION -- so this is where the negative control now has teeth: the
+ * shapes that may NOT face an unproven member must still be refused, and the
+ * one that may must be admitted. (The destination half is test_gate_rule_c
+ * below, unchanged: when the CM refuses, nothing is sent and it is counted.)
+ */
+static void test_shape_fitness_for_an_unproven_member(void)
 {
-	struct vms_proc proc;
-	uint32_t n;
+	uint8_t body[DLM_REQ_BODY_LEN];
 
-	printf("-- NEGATIVE: a release toward a cluster that is not all-OVMX\n");
-	engine_up();
-	proc_init(&proc);
+	printf("-- which cat-0x02 shapes may be addressed at an unproven member\n");
 
-	(void)stage_one_release(&proc, "DEQGATE1", 0x0777u);
-	n = a.n_sent;
-	a.all_ovmx = 0;                  /* a member cannot be proven ours */
-	fork_drain();
-	expect_nothing_sent(n, "the all-OVMX gate (a mixed cluster)");
+	/* op-0x03 DEQ: FIT. The shape this file exists for. */
+	memset(body, 0, sizeof(body));
+	body[8] = (uint8_t)VMS_DLM_CAT_REQUEST;
+	body[9] = (uint8_t)VMS_DLM_WIREOP_DEQ;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) != 0,
+		 "op-0x03 $DEQ is fit to address at a real VAX master");
 
-	engine_down();
+	/* op-0x01/0x07/0x06: FIT -- the request shapes rd vms-b5b0 routes. */
+	body[9] = (uint8_t)VMS_DLM_WIREOP_ENQ;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) != 0,
+		 "op-0x01 ENQ / directory lookup is fit");
+	body[9] = (uint8_t)VMS_DLM_WIREOP_CONVERT;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) != 0,
+		 "op-0x07 CONVERT is fit");
+	body[9] = (uint8_t)VMS_DLM_WIREOP_CONVERT_VALBLK;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) != 0,
+		 "op-0x06 CONVERT-with-value-block is fit");
+
+	/* op-0x05 BLKAST: NOT FIT -- body[30:32] is observed and not pinned. */
+	body[9] = (uint8_t)VMS_DLM_WIREOP_BLKAST;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) == 0,
+		 "op-0x05 BLKAST is NOT fit (its body[30:32] is "
+		 "observed-and-not-pinned)");
+
+	/* op-0x0d REBUILD: NOT FIT -- this node does not originate one. */
+	body[9] = (uint8_t)VMS_DLM_WIREOP_REBUILD;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) == 0,
+		 "op-0x0d registration is NOT fit (never originated here)");
+
+	/* A cat-0x82 REPLY: NOT FIT -- RULE A, an uncorrelated reply. */
+	body[8] = (uint8_t)(VMS_DLM_CAT_REQUEST | VMS_WIRE_RESPONSE_BIT);
+	body[9] = (uint8_t)VMS_DLM_WIREOP_ENQ;
+	ct_check(vms_dlm_shape_fit_for_any_member(body, sizeof(body)) == 0,
+		 "a cat-0x82 reply is NOT fit (RULE A)");
+
+	/* And a body too short to read reads NOT FIT: "nobody told us" and "it
+	 * is safe" are different facts. */
+	ct_check(vms_dlm_shape_fit_for_any_member(body, 2u) == 0,
+		 "a body the codec cannot read is NOT fit");
 }
 
 static void test_gate_rule_c(void)
@@ -914,7 +955,7 @@ int main(void)
 	       "REACHABLE caller) ===\n");
 	test_deq_reaches_the_wire();
 	test_rundown_release_reaches_the_wire();
-	test_gate_all_ovmx();
+	test_shape_fitness_for_an_unproven_member();
 	test_gate_rule_c();
 	test_gate_zero_master_lkid();
 	test_queue_full_is_an_honest_refusal();

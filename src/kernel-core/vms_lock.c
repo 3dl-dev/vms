@@ -44,6 +44,10 @@
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 #include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
 #include "vms_dlm_quorum.h"   /* the QUORUM GATE on the grant decision (FC-P8.1) */
+#include "vms_dlm_hash.h"     /* the VMS resource-name hash, for a resource no
+                               * frame has named yet (rd vms-b5b0). Pure
+                               * arithmetic over fields this file already holds;
+                               * it knows no wire offsets. */
 
 /*
  * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
@@ -285,14 +289,24 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
     strscpy(p->resnam, res->name, sizeof(p->resnam));
     memcpy(p->valblk, lock->valblk, LCK_VALBLK_SIZE);
     /*
-     * The root name's DIRECTORY HASH, off the resource block (FC-P4.6). Never
-     * computed here or anywhere else: this is the value some system in the
-     * cluster put on the wire for this exact name, recorded by
-     * vms_lock_dlm_learn_dir_hash(). The wire arm needs it to address a
-     * directory lookup at all, and this is the only non-deriving source.
+     * The resource's DIRECTORY HASH, off the resource block (FC-P4.6,
+     * rd vms-b5b0). Either the value some system in this cluster put on the
+     * wire for this exact identity (vms_lock_dlm_learn_dir_hash) or the one
+     * this executive computed for it with the proven function (dir_resolve) --
+     * a read either way, never a derivation here, and `hash_known` 0 means this
+     * node holds neither and no lookup may be addressed at all.
      */
     p->dir_hash       = res->dir_hash;
     p->dir_hash_known = res->hash_known ? 1u : 0u;
+    /*
+     * ...and the identity that hash is OF, which the same frame must carry at
+     * body[44:46] and body[46]. Read off the block, like everything else here:
+     * a frame whose hash is of one resource identity and whose identity span
+     * says another would make the directory node scan for a resource nobody
+     * has.
+     */
+    p->res_group      = res->res_group;
+    p->res_acmode     = res->res_mode;
     /*
      * Which of the two things this transmission IS. `dst_csid` is the master
      * when the cluster has named one (the RSB or the LKB carries it) and the
@@ -567,38 +581,103 @@ static uint32_t resource_hash_key(const char *name)
 }
 
 /*
- * A resource is named within its PARENT resource (OpenVMS: a sublock's resource
- * name is interpreted in the tree under the parent lock's resource, so the same
- * name under two different parents is two resources -- observed LOCK.SUB.UNDER.
- * OTHER on VAX V7.3 and Alpha V8.4, rd vms-a3d). `parent` is NULL for a root
- * resource; every cluster/directory path names roots only.
+ * ================================================================
+ * THE RESOURCE IDENTITY (rd vms-b5b0)
+ *
+ * A VMS resource name does not identify a resource by itself. Two $ENQs name
+ * the SAME resource only when they agree on four things (system services
+ * reference, $ENQ; IDSM lock management):
+ *
+ *   the NAME;
+ *   the PARENT resource -- a sublock's name is interpreted in the tree under
+ *     its parent, so one name under two parents is two resources (observed
+ *     LOCK.SUB.UNDER.OTHER on VAX V7.3 and Alpha V8.4, rd vms-a3d);
+ *   the ACCESS MODE the lock was taken at;
+ *   the UIC GROUP of the enqueuing process -- unless LCK$M_SYSTEM was given,
+ *     which makes the name system-wide and its group 0.
+ *
+ * The last two used to be absent from this engine, which conflated two
+ * resource domains that VMS keeps apart and -- the reason it had to be fixed
+ * here -- left a resource block unable to say what its own identity ON THE
+ * WIRE is. The directory hash is a function of exactly (group, mode, length,
+ * name) (vms_dlm_hash.h), so routing a name this node touched first requires
+ * the block to carry them, and carrying them per-REQUEST instead would mean
+ * routing the second domain's lock by the first domain's hash: a lookup at the
+ * wrong directory node, which is the grant storm.
+ *
+ * So every lookup states a full identity. `struct res_key` is that statement,
+ * and the one name-only finder left (resource_find_by_name_any) is marked for
+ * what it is: a diagnostic read that cannot name a domain.
+ * ================================================================
  */
-static struct vms_lock_resource *resource_find_under(const char *name,
-                                                     struct vms_lock_resource *parent)
+struct res_key {
+    const char *name;
+    struct vms_lock_resource *parent;   /* NULL for a root resource */
+    uint16_t    group;                  /* 0 for a LCK$M_SYSTEM name */
+    uint8_t     mode;                   /* PSL_C_* access mode */
+};
+
+static struct vms_lock_resource *resource_find_key(const struct res_key *k)
 {
     struct vms_lock_resource *res;
-    uint32_t key = resource_hash_key(name);
+    uint32_t key = resource_hash_key(k->name);
 
     exec_hash_for_each_possible(vms_res_hash, res, hash_node, key) {
-        if (res->parent == parent && strncmp(res->name, name, 32) == 0)
+        if (res->parent == k->parent && res->res_group == k->group &&
+            res->res_mode == k->mode &&
+            strncmp(res->name, k->name, 32) == 0)
             return res;
     }
     return NULL;
 }
 
-static struct vms_lock_resource *resource_find(const char *name)
+/*
+ * THE FIRST BLOCK OF THIS NAME IN ANY DOMAIN -- a DIAGNOSTIC read only.
+ *
+ * The $DLM readback ioctls take a resource NAME from a caller that has no way
+ * to state a group or an access mode, so they can only ever report on "the
+ * block of that name", and when two domains hold one name they report the
+ * first. That is honest for a readback (it reports a real block's real state)
+ * and it is NOT acceptable for a routing or mastering decision: those take a
+ * `res_key`. Nothing in this file may use this function to decide where a
+ * frame goes.
+ */
+static struct vms_lock_resource *resource_find_by_name_any(const char *name)
 {
-    return resource_find_under(name, NULL);
+    struct vms_lock_resource *res;
+    uint32_t key = resource_hash_key(name);
+
+    exec_hash_for_each_possible(vms_res_hash, res, hash_node, key) {
+        if (res->parent == NULL && strncmp(res->name, name, 32) == 0)
+            return res;
+    }
+    return NULL;
 }
 
-static struct vms_lock_resource *resource_find_or_create_under(const char *name,
-                                                               struct vms_lock_resource *parent)
+/*
+ * THE ROOT-RESOURCE KEY A CROSS-NODE REQUEST NAMES (rd vms-b5b0). The name and
+ * the identity both come off the frame the wire arm parsed; a cross-node
+ * request never names a parent (only a tree's ROOT is looked up, and a
+ * sub-resource's request is addressed to the tree's master by its root).
+ */
+static struct res_key xnode_res_key(const struct vms_dlm_xnode_args *req)
+{
+    struct res_key k;
+
+    k.name = req->resnam;
+    k.parent = NULL;
+    k.group = req->res_group;
+    k.mode = req->res_mode;
+    return k;
+}
+
+static struct vms_lock_resource *resource_find_or_create_key(const struct res_key *k)
 {
     struct vms_lock_resource *res, *new_res;
     uint32_t key;
 
     exec_lock(&vms_res_hash_lock);
-    res = resource_find_under(name, parent);
+    res = resource_find_key(k);
     if (res) {
         res->refcount++;
         exec_unlock(&vms_res_hash_lock);
@@ -611,9 +690,9 @@ static struct vms_lock_resource *resource_find_or_create_under(const char *name,
     if (!new_res)
         return NULL;
 
-    /* Re-check under lock — another thread may have created it */
+    /* Re-check under lock â another thread may have created it */
     exec_lock(&vms_res_hash_lock);
-    res = resource_find_under(name, parent);
+    res = resource_find_key(k);
     if (res) {
         res->refcount++;
         exec_unlock(&vms_res_hash_lock);
@@ -623,7 +702,11 @@ static struct vms_lock_resource *resource_find_or_create_under(const char *name,
         return res;
     }
 
-    strscpy(new_res->name, name, sizeof(new_res->name));
+    strscpy(new_res->name, k->name, sizeof(new_res->name));
+    /* The identity the caller stated, which is the identity this block will
+     * answer for on the wire for as long as it exists (rd vms-b5b0). */
+    new_res->res_group = k->group;
+    new_res->res_mode = k->mode;
     exec_list_head_init(&new_res->granted);
     exec_list_head_init(&new_res->waiting);
     exec_list_head_init(&new_res->proxies);   /* FC-P4.4 */
@@ -632,21 +715,16 @@ static struct vms_lock_resource *resource_find_or_create_under(const char *name,
     new_res->refcount = 1;
     /* A sub-resource keeps its parent resource alive for as long as it exists:
      * it holds one reference on it, given back when it is freed. */
-    new_res->parent = parent;
-    if (parent)
-        parent->refcount++;
+    new_res->parent = k->parent;
+    if (k->parent)
+        k->parent->refcount++;
 
-    key = resource_hash_key(name);
+    key = resource_hash_key(k->name);
     exec_hash_add(vms_res_hash, &new_res->hash_node, key);
     vms_res_blocks++;
     exec_unlock(&vms_res_hash_lock);
 
     return new_res;
-}
-
-static struct vms_lock_resource *resource_find_or_create(const char *name)
-{
-    return resource_find_or_create_under(name, NULL);
 }
 
 static void resource_release(struct vms_lock_resource *res)
@@ -667,15 +745,24 @@ static void resource_release(struct vms_lock_resource *res)
             if (res->valblk[i]) { has_valblk = 1; break; }
         }
         /*
-         * ...and preserve it if the CLUSTER has told us this name's directory
-         * hash (FC-P4.3). The value cannot be recomputed -- it is only ever
-         * read off the wire (Davis p. 6-50) -- so discarding the block that
-         * holds it would guarantee an SS$_UNSUPPORTED the next time this node
-         * touches the name, on exactly the shared resources the cluster talks
-         * about most. This is the resource database keeping what the cluster
-         * told it, which is what VMS's own Resource Hash Table does (p. 6-49).
+         * ...and preserve it if the CLUSTER has told us this resource's
+         * directory hash (FC-P4.3). A LEARNED value cannot be re-derived -- it
+         * is a fact some system put on the wire (Davis p. 6-50) -- so
+         * discarding the block that holds it would guarantee an
+         * SS$_UNSUPPORTED the next time this node touches the resource, on
+         * exactly the shared resources the cluster talks about most. This is
+         * the resource database keeping what the cluster told it, which is
+         * what VMS's own Resource Hash Table does (p. 6-49).
+         *
+         * A COMPUTED VALUE IS NOT A PRESERVATION REASON (rd vms-b5b0). It can
+         * always be recomputed from the identity the next $ENQ states, so a
+         * block holding one is reclaimed like any other idle block -- which
+         * matters: every resource this node is the first to touch gets a
+         * computed value, and preserving all of them would make the resource
+         * database grow without bound for a process that locks many distinct
+         * names.
          */
-        if (!has_valblk && !res->hash_known) {
+        if (!has_valblk && !(res->hash_known && !res->hash_computed)) {
             parent = res->parent;
             exec_hash_del(&res->hash_node);
             vms_res_blocks--;
@@ -711,10 +798,10 @@ static void resource_release(struct vms_lock_resource *res)
  * so the lock manager holds no copy of the cluster's membership and there is
  * no second place for it to drift.
  *
- * THE HASH IS NEVER COMPUTED HERE OR ANYWHERE ELSE.
+ * WHERE THE VALUE COMES FROM, AND WHAT IS STILL REFUSED (rd vms-b5b0).
  *
  * The predecessor of this code was `exec_jhash(name) % n` over a static insmod
- * vector -- an OVMX hash standing in for VMS's, which is a different function.
+ * vector -- an OVMX hash standing in for VMS's, which is a DIFFERENT function.
  * Pointing it at a real cluster caused a reformation (commit 90b3bbbd), and the
  * same class of error with a placeholder hash of 0 produced the campaign's
  * 35-per-second grant storm: a lookup carrying the wrong hash makes the
@@ -722,15 +809,21 @@ static void resource_release(struct vms_lock_resource *res)
  * silently installing the SENDER as master of a resource somebody else already
  * masters (memory cluster-promotion-gap; research note SS3).
  *
- * So the hash is taken off the wire and only off the wire (p. 6-50: every
- * directory lookup carries the sender's own 16-bit hash, and the directory node
- * uses the received value). `res->dir_hash`/`res->hash_known` are written by
- * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame, and a resource
- * with no learned hash is NOT looked up: the enqueue returns SS$_UNSUPPORTED,
- * an honest refusal that costs this node locking on root names it is the first
- * in the cluster to touch (its own private volumes and files) and costs it
- * nothing else -- membership, directory duty, mastering and every shared name
- * are unaffected (design SS3.6, rung A'; the residual's resolution is rung B/C).
+ * So the value is EITHER one the cluster itself put on the wire for this exact
+ * resource identity (p. 6-50: every directory lookup carries the sender's own
+ * value, and the directory node uses the received one), written by
+ * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame, OR the one
+ * vms_dlm_name_hash_proven() computes for the identity -- VMS's own function,
+ * determined BLACK-BOX from the values real VMS nodes broadcast in the clear
+ * and proven on names held out of the determination (Baron's ruling on rd
+ * vms-dc2; src/kernel-core/vms_dlm_hash.h carries the provenance and the
+ * coverage). It is never an OVMX hash standing in for VMS's, and never a
+ * placeholder.
+ *
+ * AND FOR AN IDENTITY OUTSIDE THE PROVEN COVERAGE IT IS NEITHER: the enqueue
+ * returns SS$_UNSUPPORTED and no frame is built. That costs this node locking
+ * on resources at a supervisor-mode access mode, in a UIC group with bit 14 or
+ * 15 set, or with a 23- or 29-byte name -- and costs it nothing else.
  * ================================================================ */
 
 /*
@@ -798,14 +891,14 @@ uint32_t vms_lock_dlm_dir_hash_learn_full(void)
     return n;
 }
 
-/* May the learner keep a hash for `name`? Yes if a block for it already
+/* May the learner keep a hash for this resource? Yes if a block for it already
  * exists, or if the table is under the bound. Otherwise counted, and no. */
-static int dir_hash_learn_room(const char *name)
+static int dir_hash_learn_room(const struct res_key *k)
 {
     int room;
 
     exec_lock(&vms_res_hash_lock);
-    room = resource_find(name) != NULL ||
+    room = resource_find_key(k) != NULL ||
            vms_res_blocks < VMS_DLM_LEARN_RES_CAP;
     if (!room)
         vms_dlm_dir_hash_learn_full++;
@@ -814,15 +907,73 @@ static int dir_hash_learn_room(const char *name)
 }
 
 /*
- * dir_hash_store - record one wire-learned hash on a resource. Caller holds
- * res->lock. Returns SS$_NORMAL when the value is now held, SS$_BADPARAM when a
- * DIFFERENT value was already learned for this name (the caller counts it).
+ * HOW MANY TIMES THE WIRE DISAGREED WITH A VALUE THIS NODE HAD COMPUTED
+ * (rd vms-b5b0) -- the live falsification detector for the resource-name hash.
+ *
+ * The function in vms_dlm_hash.c is a determination from captured values, and
+ * the two proof legs (1216 corpus rows, 55 pre-registered driven triples, 0
+ * mismatches) are evidence, not a theorem. If some VMS component hashes an
+ * identity differently from every one observed, the first frame that names the
+ * same identity will carry a DIFFERENT value than the one this node computed --
+ * and this counter is where that shows up, in production, on the first
+ * occurrence. A rising count means the coverage masks in vms_dlm_hash.h are
+ * claiming too much; nothing silently papers over it.
+ *
+ * The WIRE VALUE WINS in that case: it is the cluster's own fact about its own
+ * resource, and this node's computed value is at best a prediction of it.
+ * Written under res->lock, read under vms_res_hash_lock.
  */
-static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash)
+static uint32_t vms_dlm_dir_hash_computed_wrong;
+
+uint32_t vms_lock_dlm_dir_hash_computed_wrong(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_hash_computed_wrong;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+/*
+ * dir_hash_store - record one directory hash on a resource. Caller holds
+ * res->lock.
+ *
+ * `computed` says where the value came from: 0 for a value a system in this
+ * cluster put ON THE WIRE for this exact identity, 1 for one this node computed
+ * with vms_dlm_name_hash_proven(). Both are values this executive holds, and
+ * both may ride a frame (rd vms-b5b0) -- but they are not the same FACT, so the
+ * provenance is kept:
+ *
+ *   - a LEARNED value replaces a COMPUTED one, and the replacement is counted
+ *     (above) if they differ: the wire is authoritative about its own cluster;
+ *   - a COMPUTED value never replaces a LEARNED one;
+ *   - a resource block is preserved past its last lock only for a LEARNED value
+ *     (resource_release), because a computed one can always be recomputed.
+ *
+ * Returns SS$_NORMAL when the value is now held, SS$_BADPARAM when a DIFFERENT
+ * value was already LEARNED for this identity (the caller counts it).
+ */
+static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash,
+                               int computed)
 {
     if (res->hash_known) {
-        if (res->dir_hash == dir_hash)
+        if (res->dir_hash == dir_hash) {
+            if (!computed)
+                res->hash_computed = 0;   /* now also confirmed by the wire */
             return SS__NORMAL;
+        }
+        if (computed)
+            return SS__BADPARAM;          /* a learned value stands */
+        if (res->hash_computed) {
+            /* THE FUNCTION WAS WRONG ABOUT THIS IDENTITY, and the wire just
+             * said so. Take the wire's value and count it. */
+            vms_dlm_dir_hash_computed_wrong++;
+            res->dir_hash = dir_hash;
+            res->hash_computed = 0;
+            res->dir_valid = 0;
+            return SS__NORMAL;
+        }
         /* The HELD value stands -- routing must not churn on a disagreement.
          * SS$_BADPARAM says "that is not the value this executive holds for
          * that name"; the caller's own counter is what makes it evidence. */
@@ -830,6 +981,7 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash)
     }
     res->dir_hash = dir_hash;
     res->hash_known = 1;
+    res->hash_computed = computed ? 1u : 0u;
     /* A hash learned against the OLD vector says nothing about the new one;
      * the generation check in dir_resolve() re-runs the lookup anyway, but
      * clearing here keeps "cached" and "learned" from ever being confused. */
@@ -837,15 +989,16 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash)
     return SS__NORMAL;
 }
 
-int vms_lock_dlm_name_in_use(const char *resnam)
+int vms_lock_dlm_name_in_use(const char *resnam, uint16_t group, uint8_t mode)
 {
+    struct res_key k = { resnam, NULL, group, mode };
     struct vms_lock_resource *res;
     int busy = 0;
 
     if (resnam == NULL || resnam[0] == '\0')
         return 1;
     exec_lock(&vms_res_hash_lock);
-    res = resource_find(resnam);
+    res = resource_find_key(&k);
     /* The same reads resource_release() makes under the same lock to decide
      * whether a resource is still in use. */
     if (res != NULL && (!exec_list_empty(&res->granted) ||
@@ -873,15 +1026,17 @@ static int dlm_master_is_us(struct vms_lock_resource *res);
  * documents (rd vms-151): a resource mastered before the cluster assigned this
  * node its CSID carries the previous identity, and it is still this node's.
  */
-int vms_lock_dlm_name_mastered_here(const char *resnam)
+int vms_lock_dlm_name_mastered_here(const char *resnam, uint16_t group,
+                                    uint8_t mode)
 {
+    struct res_key k = { resnam, NULL, group, mode };
     struct vms_lock_resource *res;
     int mine = 0;
 
     if (resnam == NULL || resnam[0] == '\0')
         return 0;
     exec_lock(&vms_res_hash_lock);
-    res = resource_find(resnam);
+    res = resource_find_key(&k);
     if (res != NULL) {
         exec_lock(&res->lock);
         mine = (res->master_csid != 0 && dlm_master_is_us(res)) ? 1 : 0;
@@ -891,22 +1046,24 @@ int vms_lock_dlm_name_mastered_here(const char *resnam)
     return mine;
 }
 
-uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
+                                     uint8_t mode, uint32_t dir_hash)
 {
+    struct res_key k = { resnam, NULL, group, mode };
     struct vms_lock_resource *res;
     uint32_t st;
 
     if (resnam == NULL || resnam[0] == '\0')
         return SS__BADPARAM;
-    if (!dir_hash_learn_room(resnam))
+    if (!dir_hash_learn_room(&k))
         return SS__INSFMEM;
 
-    res = resource_find_or_create(resnam);
+    res = resource_find_or_create_key(&k);
     if (res == NULL)
         return SS__INSFMEM;
 
     exec_lock(&res->lock);
-    st = dir_hash_store(res, dir_hash);
+    st = dir_hash_store(res, dir_hash, 0 /* learned off the wire */);
     exec_unlock(&res->lock);
 
     if (st != SS__NORMAL) {
@@ -924,28 +1081,67 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
 }
 
 /*
+ * ==========================================================================
  * dir_resolve - which node is the DIRECTORY for this resource's root name.
  *
- * THE Rule-8 BOUNDARY, in one function. It computes nothing: it hands the
- * cluster's own hash for this name to the cluster's own directory vector.
- * Caller holds res->lock.
+ * THE Rule-8 BOUNDARY, in one function, and rd vms-b5b0 moved it exactly once:
  *
+ *   value     = the hash some system in this cluster put ON THE WIRE for this
+ *               exact resource identity, if this node holds one; ELSE the value
+ *               vms_dlm_name_hash_proven() computes over the identity as it
+ *               rides the wire (group word, access mode, name length, name).
+ *               The function is a BLACK-BOX DETERMINATION from values real VMS
+ *               nodes broadcast in the clear, permitted by Baron's ruling on rd
+ *               vms-dc2 and PROVEN on names held out of the determination
+ *               (vms_dlm_hash.h; 55 of 55 pre-registered triples on a real V7.3
+ *               wire, 0 mismatches, predictions committed first). For an
+ *               identity OUTSIDE that proven coverage it is REFUSED -- never
+ *               extrapolated -- because a wrong value makes the directory node
+ *               scan the wrong chain, miss the name, and install the SENDER as
+ *               master of a resource somebody else already masters: the
+ *               35-per-second grant storm (memory cluster-promotion-gap).
+ *   directory = ldwv[(value >> 16) mod n], through the injected `dir_resolve`
+ *               op -- the connection manager's own Lock Directory Weight Vector
+ *               (Davis p. 6-31/6-32; vms_dlm_ldwv.h). 0 means THIS node.
+ *
+ * WHAT RETIRED WITH IT (rd vms-3e3 conditions, rd vms-025/db2a interim):
+ *
+ *   THE ALL-OVMX GATE on routing (`dir_groundable`) is GONE. It existed because
+ *   the only hash this node could produce for a novel name was OVMX's OWN
+ *   (an FNV-1a spelling, condition 3's clean-room bridge), which must never
+ *   reach a real VAX. There is now ONE function cluster-wide -- VMS's -- so a
+ *   name maps to the same directory node whichever implementation is asking,
+ *   which is the property p. 6-32 actually requires. Keeping a second hash for
+ *   all-OVMX clusters would have made the mastering of every name CHANGE the
+ *   moment a VAX joined (vms-3e3 condition 2 is "deterministic and identical
+ *   across all OVMX nodes" -- one function satisfies it strictly better than
+ *   two), so `dir_ground` and vms_dlm_ovmx_dir_hash() are deleted rather than
+ *   kept behind a gate.
+ *
+ *   THE SOLE-DIRECTORY CONFINEMENT is gone from the routing decision too: the
+ *   vector answers for every configuration now that the value exists for every
+ *   covered identity.
+ *
+ * The rows:
  *   no resolver installed  -> *out_csid = 0 (this node), SS$_NORMAL. A node
  *                             with no cluster stack is alone: it is trivially
  *                             the directory and the master for everything, and
  *                             single-node locking is untouched.
- *   not all-OVMX           -> *out_csid = 0 (this node), SS$_NORMAL. A mixed
- *                             OVMX+VAX cluster (or a vector mid-transition)
- *                             masters locally, exactly as before any resolver
- *                             existed -- the all-OVMX gate (vms-3e3), so no
- *                             interop regression and nothing routed at a system
- *                             we cannot prove runs this implementation.
- *   no wire-learned hash   -> in an all-OVMX cluster, GROUND it with OVMX's own
- *                             directory hash (rung A", design SS3.6) and resolve
- *                             the grounded value; if it cannot be grounded,
- *                             SS$_UNSUPPORTED. Never DEC's function, never a
- *                             probe, never a computed placeholder against a real
- *                             VAX (the whole point; the 90b3bbbd storm).
+ *   a SUB-resource         -> *out_csid = 0 (this node), SS$_NORMAL. Only a
+ *                             tree's ROOT is ever looked up (p. 6-31/6-32), and
+ *                             a resource block has a parent here ONLY when the
+ *                             parent lock is a real LOCAL lock: a $ENQ under a
+ *                             PROXY parent is named at the root instead
+ *                             (vms_enq_core_ex). A local parent lock means this
+ *                             node masters that tree, so it masters the
+ *                             sub-resource -- which is the book's answer, not a
+ *                             shortcut. No hash is computed for one: a
+ *                             sub-resource's value is a property of its parent
+ *                             too (rd vms-4fb finding 3) and none was ever
+ *                             captured.
+ *   no value, and the
+ *     identity is outside
+ *     the proven coverage  -> SS$_UNSUPPORTED. The honest floor.
  *   vector unusable        -> SS$_UNSUPPORTED (mid-transition, or the vector
  *                             was refused; vms_dlm_ldwv.h SS3).
  *   otherwise              -> the vector's answer; 0 means THIS node.
@@ -955,7 +1151,9 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
  * "every rsb->dir_csid is invalidated on a vector change" means here, enforced
  * by construction rather than by remembering to walk the database (Davis
  * p. 6-33; vms_dlm_proxy.h `dir_generation`).
+ * ==========================================================================
  */
+
 /*
  * Is this node in a cluster at all, as far as the DIRECTORY is concerned? With
  * no resolver installed there is no vector and no other member: this node is
@@ -969,6 +1167,46 @@ static int dlm_directory_installed(void)
     return ops.dir_resolve != NULL;
 }
 
+/*
+ * THE VALUE FOR A RESOURCE THIS NODE HOLDS NONE FOR -- computed from the
+ * resource's OWN identity, which is why that identity had to become part of the
+ * resource block (rd vms-b5b0). Caller holds res->lock.
+ *
+ * Every argument is an executive read: the name the block was created with, and
+ * the group and access mode the creating $ENQ (or the parsed frame) stated. The
+ * name is taken as the bytes this executive holds for it; a resource name with
+ * an embedded NUL cannot be represented by this engine's `char name[32]` at all,
+ * so there is no case where the bytes hashed differ from the bytes this node
+ * would put on the wire.
+ */
+static uint32_t dir_hash_compute(const struct vms_lock_resource *res,
+                                 uint32_t *out)
+{
+    uint32_t len = (uint32_t)strnlen(res->name, sizeof(res->name));
+
+    if (res->parent != NULL)
+        return SS__UNSUPPORTED;     /* not a root name: never computed */
+    if (vms_dlm_name_hash_proven(res->res_group, res->res_mode,
+                                 (const uint8_t *)res->name, len,
+                                 out) != VMS_DLM_HASH_OK)
+        return SS__UNSUPPORTED;     /* outside the proven coverage */
+    return SS__NORMAL;
+}
+
+/* The value to route this resource by: held, or computed and then held. Caller
+ * holds res->lock. SS$_UNSUPPORTED when this executive can honestly produce
+ * neither. */
+static uint32_t dir_hash_for_routing(struct vms_lock_resource *res)
+{
+    uint32_t h = 0u;
+
+    if (res->hash_known)
+        return SS__NORMAL;
+    if (dir_hash_compute(res, &h) != SS__NORMAL)
+        return SS__UNSUPPORTED;
+    return dir_hash_store(res, h, 1 /* computed */);
+}
+
 static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
 {
     struct vms_dlm_requester_ops ops = dlm_req_ops_get();
@@ -977,40 +1215,11 @@ static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
     *out_csid = 0;
     if (ops.dir_resolve == NULL)
         return SS__NORMAL;                 /* cluster of one: nothing to resolve */
+    if (res->parent != NULL)
+        return SS__NORMAL;                 /* a sub-resource: see the note above */
 
-    /*
-     * THE ALL-OVMX GATE (vms-3e3, rung A"). Cross-node directory resolution --
-     * and the hash grounding just below -- is live ONLY while every cluster
-     * member is proven-OVMX. When a member cannot be proven ours (a mixed
-     * OVMX+VAX cluster) or the vector is mid-transition, this node masters the
-     * name LOCALLY, exactly as it did before any resolver was installed: no
-     * routing toward a system this executive cannot prove runs this
-     * implementation, and so no interop regression. (RULE C guards the send
-     * side too; this keeps the miss off the wire entirely and returns a real
-     * answer -- "this node" -- rather than a refusal.)
-     */
-    if (ops.dir_groundable != NULL && !ops.dir_groundable(ops.ctx))
-        return SS__NORMAL;                 /* not all-OVMX: this node masters it */
-
-    if (!res->hash_known) {
-        uint32_t h = 0u;
-        /*
-         * No wire-learned hash for this root name (a name OVMX is the first in
-         * the cluster to touch: its own volume/file locks). We are all-OVMX, so
-         * ground it with OVMX's OWN directory hash (rung A", design SS3.6) --
-         * deterministic and identical on every OVMX node, gated so it never
-         * reaches a real VAX. If it cannot be grounded, refuse honestly rather
-         * than fabricate a hash -- never a computed placeholder (the 90b3bbbd
-         * storm). This refusal is unreachable while dir_ground is bound and the
-         * gate held, but it is the honest floor if it ever is not.
-         */
-        if (ops.dir_ground == NULL ||
-            ops.dir_ground(ops.ctx, res->name,
-                           (uint32_t)strnlen(res->name, sizeof(res->name)),
-                           &h) != SS__NORMAL)
-            return SS__UNSUPPORTED;        /* INV-6: wire-learned, OVMX-grounded, or nothing */
-        (void)dir_hash_store(res, h);      /* sets res->dir_hash + hash_known */
-    }
+    if (dir_hash_for_routing(res) != SS__NORMAL)
+        return SS__UNSUPPORTED;            /* learned, proven-computed, or nothing */
 
     gen = (ops.dir_generation != NULL) ? ops.dir_generation(ops.ctx) : 0u;
     if (res->dir_valid && res->dir_gen == gen) {
@@ -1129,25 +1338,33 @@ static int dlm_route_known_master(struct vms_lock_resource *res,
 }
 
 /*
- * THIS NODE'S OWN LOCK DIRECTORY, CONSULTED BEFORE ANYTHING IS MASTERED
- * (rd vms-025 / vms-db2a; vms_dlm_proxy.h `dir_local_lookup`).
+ * THIS NODE'S OWN LOCK DIRECTORY, CONSULTED BEFORE MASTERY IS ASSUMED
+ * (rd vms-025 / vms-db2a / vms-b5b0; vms_dlm_proxy.h `dir_local_lookup`).
  *
- * THE HOLE, MEASURED on origin/main. With a real VAX in the membership the
- * all-OVMX gate makes dir_resolve() answer "this node" for EVERY name, so this
+ * THE HOLE IT CLOSED, MEASURED. With a real VAX in the membership the retired
+ * all-OVMX gate made dir_resolve() answer "this node" for EVERY name, so this
  * engine mastered everything locally -- while the directory entries THIS NODE
  * HOLDS said otherwise. A VAX that locked a name first had its lookup answered
  * here and RECORDED here (rd vms-8219): this node's own directory truthfully
  * named the VAX as the master, and the next local $ENQ for that name mastered it
  * here as well. Two masters for one resource; the first shared file is corrupt.
  *
+ * WHEN IT IS ASKED, AND WHY THAT IS NOW THE GENERAL CASE. The caller has just
+ * resolved the resource's directory node THROUGH THE VECTOR and it came back as
+ * THIS NODE (dlm_resolve_master). So this node is where that name's
+ * name->master mapping lives (p. 6-50), and "my table has no entry for this
+ * resource" really does mean "no system in this cluster masters it" -- which is
+ * p. 6-31's outcome 3. That used to be true only in the interim SOLE-DIRECTORY
+ * configuration, because without a hash the vector could not be consulted per
+ * name; it is now true in EVERY configuration, and the confinement is retired
+ * along with the gate.
+ *
  * WHAT THIS FUNCTION IS. One read of the directory this node already holds,
- * taken before the "master it locally on first use" step, plus the record of
- * this node's own mastery when nobody else has it. No hash is involved in either
- * direction -- which is why it is confined to the SOLE-DIRECTORY configuration,
- * where the vector directs every root name here and a missing entry therefore
- * really does mean "no system in this cluster masters this name". The
- * implementation refuses outside it (vms_ldwv_sole_directory), and then this
- * returns "unsettled" and the pre-existing behaviour stands, unchanged.
+ * plus the record of this node's own mastery when nobody else has it. It is
+ * keyed by the resource's full IDENTITY (name, UIC group, access mode): the
+ * table holds entries for every resource domain this node directs, and
+ * answering across domains would route one domain's lock request at another
+ * domain's master.
  *
  * Caller holds res->lock. Returns 1 when the route is SETTLED.
  */
@@ -1157,6 +1374,7 @@ static int dlm_route_own_directory(struct vms_lock_resource *res,
 {
     struct vms_dlm_requester_ops ops = dlm_req_ops_get();
     struct vms_dlm_dir_local a;
+    struct vms_dlm_dir_ask q;
     uint32_t name_len;
 
     *status = SS__NORMAL;
@@ -1166,9 +1384,19 @@ static int dlm_route_own_directory(struct vms_lock_resource *res,
     if (name_len == 0u)
         return 0;
 
+    memset(&q, 0, sizeof(q));
+    q.name = res->name;
+    q.name_len = name_len;
+    q.group = res->res_group;
+    q.mode = res->res_mode;
+    /* The value this node holds for it, if any: dir_resolve() has just stored
+     * one (learned or computed), and a self-claim recorded WITH it is an entry
+     * a real VAX's later lookup can be answered from completely. */
+    q.hash = res->hash_known ? res->dir_hash : 0u;
+
     memset(&a, 0, sizeof(a));
-    if (ops.dir_local_lookup(ops.ctx, res->name, name_len, &a) != SS__NORMAL)
-        return 0;              /* not the sole directory, or it cannot answer */
+    if (ops.dir_local_lookup(ops.ctx, &q, &a) != SS__NORMAL)
+        return 0;              /* no table, or it cannot answer honestly */
 
     if (a.is_self || a.master_csid == 0u) {
         /*
@@ -1189,7 +1417,7 @@ static int dlm_route_own_directory(struct vms_lock_resource *res,
          * (full_refusals) and this node masters the name, as it always did.
          */
         if (ops.dir_claim_self != NULL)
-            (void)ops.dir_claim_self(ops.ctx, res->name, name_len);
+            (void)ops.dir_claim_self(ops.ctx, &q);
         res->master_csid = vms_local_csid;
         *route = DLM_ROUTE_LOCAL;
         *dst_csid = 0;
@@ -1213,7 +1441,16 @@ static int dlm_route_own_directory(struct vms_lock_resource *res,
      * master, at 35 frames a second.
      */
     if (a.dir_hash_known && a.dir_hash != 0u)
-        (void)dir_hash_store(res, a.dir_hash);
+        (void)dir_hash_store(res, a.dir_hash, 0 /* learned */);
+    /*
+     * ...and if the entry carried none (a registration frame carries no
+     * learnable hash), the value this node routes by is the one it COMPUTED for
+     * this identity -- the same value dir_resolve() just resolved the directory
+     * with, already stored on the block. `hash_known` is therefore set by the
+     * time we get here in every served case; the refusal below is the honest
+     * floor for an identity outside the proven coverage, which is the one way
+     * this node can hold no value at all.
+     */
     if (!res->hash_known) {
         *status = SS__UNSUPPORTED;
         return 1;
@@ -1234,15 +1471,6 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
 
     if (dlm_route_known_master(res, route, dst_csid))
         return SS__NORMAL;
-
-    /*
-     * An INBOUND request is not routed by this node's directory: it arrived
-     * here because the SENDER's cluster addressed it here, and that decision is
-     * a fact this node received (the same reasoning as the refusal below). It
-     * is served, or refused, as the master role decides.
-     */
-    if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))
-        return st;
 
     st = dir_resolve(res, &dir);
     if (st != SS__NORMAL) {
@@ -1267,10 +1495,25 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
         return SS__NORMAL;
     }
 
-    /* We are the directory and nobody masters it yet: master it here
-     * ("simply assumes mastery", p. 6-31). `dir == 0` is the vector's own way
-     * of saying "your entry" (p. 6-32); `dir == vms_local_csid` is the same
-     * fact reached through a resolver that names us explicitly. */
+    /*
+     * THIS NODE IS THE DIRECTORY FOR THIS NAME (`dir == 0` is the vector's own
+     * way of saying "your entry", p. 6-32; `dir == vms_local_csid` is the same
+     * fact through a resolver that names us explicitly) -- so the directory
+     * this node HOLDS is the authority on who masters it, and it is consulted
+     * BEFORE mastery is assumed (rd vms-025/vms-b5b0). An entry naming another
+     * system routes the request there; no entry is p. 6-31's "no master", and
+     * then this node assumes mastery and records the claim.
+     *
+     * An INBOUND request is not routed by this node's directory: it arrived
+     * here because the SENDER's cluster addressed it here, and that decision is
+     * a fact this node received (the same reasoning as the refusal above). It
+     * is served, or refused, as the master role decides.
+     */
+    if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))
+        return st;
+
+    /* Nobody masters it and we are its directory: master it here ("simply
+     * assumes mastery", p. 6-31). */
     res->master_csid = vms_local_csid;
     return SS__NORMAL;
 }
@@ -2499,15 +2742,79 @@ static int dlm_master_request_ok(const struct vms_dlm_master_request *r)
         return 0;
     if (r->req_csid == 0u || r->req_lkid == VMS_DLM_LKID_UNSET)
         return 0;
-    if (r->op != VMS_DLM_MREQ_DEQ && r->resnam[0] == '\0')
+    /*
+     * WHICH RESOURCE, AND HOW IT IS NAMED (rd vms-b5b0).
+     *
+     * A FRESH request (ENQ) names its resource by NAME, and must say WHICH
+     * resource of that name: the UIC group and the access mode that qualify it.
+     * The arm reads both off the frame; without them this door refuses, because
+     * the alternative is to pick a domain and master somebody else's resource.
+     *
+     * A CONVERT names an EXISTING LOCK by the handle THIS NODE minted for it,
+     * and then the resource -- name, group and mode alike -- comes out of the
+     * lock database (dlm_master_ident_of_lkid). That is not a concession: it is
+     * the only honest source, because a real VAX's op-0x07 body carries a STALE
+     * name and identity span (docs/design-dlm-name-hash.md §4a measured two
+     * such frames whose readable name belonged to another resource entirely).
+     * So a convert may arrive with an empty name and no stated identity, and
+     * must then carry a master handle.
+     */
+    if (r->op == VMS_DLM_MREQ_ENQ &&
+        (r->resnam[0] == '\0' || !r->res_ident_valid))
+        return 0;
+    if (r->op == VMS_DLM_MREQ_CONVERT && !r->res_ident_valid &&
+        r->master_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    if (r->op == VMS_DLM_MREQ_CONVERT && r->res_ident_valid &&
+        r->resnam[0] == '\0' && r->master_lkid == VMS_DLM_LKID_UNSET)
         return 0;
     if (r->op == VMS_DLM_MREQ_DEQ && r->master_lkid == VMS_DLM_LKID_UNSET)
         return 0;
     return 1;
 }
 
-static void dlm_master_fill_args(const struct vms_dlm_master_request *r,
-                                 struct vms_dlm_xnode_args *a)
+/*
+ * THE RESOURCE A CONVERT NAMES, read out of the lock database (rd vms-b5b0).
+ *
+ * An inbound op-0x07 identifies the lock by the handle THIS node minted for it,
+ * and that LKB points at its resource block -- so the name, the UIC group and
+ * the access mode all come from here rather than from a frame span a real VAX
+ * leaves stale (docs/design-dlm-name-hash.md §4a measured two such frames whose
+ * readable name belonged to a different resource entirely). Returns 1 when the
+ * handle really names a lock this node holds, 0 otherwise -- and then the
+ * caller must refuse, never guess a domain.
+ */
+static int dlm_master_ident_of_lkid(uint32_t master_lkid, char *name,
+                                    uint32_t name_cap, uint16_t *group,
+                                    uint8_t *mode)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+
+    if (master_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return 0;
+    res = lock->resource;
+    if (res == NULL || lock->proxy) {
+        lock_put(lock);
+        return 0;
+    }
+    exec_lock(&res->lock);
+    strscpy(name, res->name, name_cap);
+    *group = res->res_group;
+    *mode = res->res_mode;
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return 1;
+}
+
+/* Returns 0 when the request cannot be given a resource identity at all, and
+ * then the caller REFUSES it (the honest floor) rather than serving it against
+ * a guessed domain. */
+static int dlm_master_fill_args(const struct vms_dlm_master_request *r,
+                                struct vms_dlm_xnode_args *a)
 {
     memset(a, 0, sizeof(*a));
     a->lkmode      = r->lkmode;
@@ -2516,10 +2823,22 @@ static void dlm_master_fill_args(const struct vms_dlm_master_request *r,
     a->req_lkid    = r->req_lkid;
     a->master_lkid = r->master_lkid;
     strscpy(a->resnam, r->resnam, sizeof(a->resnam));
+    a->res_group = r->res_group;
+    a->res_mode = r->res_mode;
+    /* A convert whose frame identity is stale: take the resource from the lock
+     * the convert names (above). If that handle names no lock of ours there is
+     * nothing to convert and nothing to name -- refuse. */
+    if (r->op == VMS_DLM_MREQ_CONVERT &&
+        (!r->res_ident_valid || r->resnam[0] == '\0') &&
+        !dlm_master_ident_of_lkid(r->master_lkid, a->resnam,
+                                  sizeof(a->resnam), &a->res_group,
+                                  &a->res_mode))
+        return 0;
     if (r->valblk_present) {
         memcpy(a->valblk, r->valblk, LCK_VALBLK_SIZE);
         a->flags |= LCK_M_VALBLK;
     }
+    return 1;
 }
 
 /*
@@ -2666,7 +2985,8 @@ uint32_t vms_lock_dlm_master_serve(const struct vms_dlm_master_request *r,
     if (proc == NULL)
         return SS__NORMAL;   /* out->outcome is REFUSED -- honest, counted */
 
-    dlm_master_fill_args(r, &a);
+    if (!dlm_master_fill_args(r, &a))
+        return SS__NORMAL;   /* out->outcome is REFUSED -- honest, counted */
     a.op = xop;
     status = vms_lock_dlm_xnode_dispatch(proc, &a);
 
@@ -2773,6 +3093,16 @@ struct dlm_xnode_enq_out {
                                     * RSB at the moment of the answer -- 0 when
                                     * it holds none and the answer is the honest
                                     * decline (rd vms-b96). */
+    /*
+     * IN: THE RESOURCE IDENTITY THE REQUESTER'S FRAME CARRIED (rd vms-b5b0) --
+     * body[44:46] UIC group and body[46] access mode, read by the wire arm
+     * through the codec and refused there when unparseable. They name WHICH
+     * resource of that name is meant; they are deliberately NOT the access
+     * mode the master-side LKB is stamped with (that is PSL_C_KERNEL, for the
+     * lifetime reason at the stamp itself).
+     */
+    uint16_t res_group;
+    uint8_t  res_mode;
 };
 
 /*
@@ -2864,6 +3194,49 @@ static void enq_inbound_not_master(struct vms_lock_resource *res,
                        : (uint32_t)SS__UNSUPPORTED;
 }
 
+/*
+ * ==========================================================================
+ * THE IDENTITY THIS REQUEST NAMES (rd vms-b5b0)
+ *
+ * A resource name alone does not name a resource (see `struct res_key`): the
+ * UIC GROUP and the ACCESS MODE qualify it, and the same two values are its
+ * identity on the cluster wire. Both are read from real executive state here,
+ * because an invented one would route a lock request at the wrong directory
+ * node -- the grant storm -- and would master a second copy of somebody
+ * else's resource.
+ *
+ * A LOCAL $ENQ. The group is the enqueuing process's own UIC group, or 0 when
+ * the request carries LCK$M_SYSTEM: that flag is what makes a name system-wide
+ * rather than group-qualified ($ENQ, system services reference), and 0 is the
+ * group a real VAX puts on the wire for such a name (the directory grounding
+ * in vms_cluster_codec_dlm.h: "0 for a system-wide name; 1 on JOB_CONTROL's
+ * QMAN$/JBC$ names", JOB_CONTROL being a UIC group 1 process). The mode is the
+ * caller's current access mode, which is what this engine records on the LKB.
+ *
+ * AN INBOUND CROSS-NODE REQUEST. Both come off the FRAME (`xn`), parsed by the
+ * wire arm through the codec; it refuses a request whose identity it could not
+ * parse, so this path never has to invent one. Taking the delivery process's
+ * UIC and mode instead would be exactly the conflation rd vms-c27 forbids: the
+ * identity belongs to the requesting system, not to STARTUP.
+ * ==========================================================================
+ */
+static void enq_resource_identity(struct vms_proc *proc,
+                                  const struct vms_enq_args *a,
+                                  const struct dlm_xnode_enq_out *xn,
+                                  uint16_t *out_group, uint8_t *out_mode)
+{
+    if (xn != NULL) {
+        *out_group = xn->res_group;
+        *out_mode = xn->res_mode;
+        return;
+    }
+    *out_group = (a->flags & LCK_M_SYSTEM) ? (uint16_t)0
+                                           : (uint16_t)(proc->uic >> 16);
+    exec_lock(&proc->mode_lock);
+    *out_mode = proc->current_mode;
+    exec_unlock(&proc->mode_lock);
+}
+
 static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
                             struct dlm_xnode_enq_out *xn)
 {
@@ -2894,6 +3267,7 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     {
         struct vms_lock_resource *pres = NULL;
         struct vms_lock_entry *plock = NULL;
+        struct res_key k;
 
         if (args.parid != 0 && !xn) {
             plock = lock_find_by_id(args.parid);
@@ -2908,7 +3282,10 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
              * sublock is named at the root, as before. */
             pres = plock->proxy ? NULL : plock->resource;
         }
-        res = resource_find_or_create_under(args.resnam, pres);
+        k.name = args.resnam;
+        k.parent = pres;
+        enq_resource_identity(proc, &args, xn, &k.group, &k.mode);
+        res = resource_find_or_create_key(&k);
         if (plock)
             lock_put(plock);
     }
@@ -4028,7 +4405,7 @@ long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg)
     }
 
     exec_lock(&vms_res_hash_lock);
-    res = resource_find(args.resnam);
+    res = resource_find_by_name_any(args.resnam);
     if (res) {
         struct vms_lock_entry *granted;
         uint32_t n = 0;
@@ -4257,7 +4634,7 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
 
     /* Read the resource block, if one exists, without creating it. */
     exec_lock(&vms_res_hash_lock);
-    res = resource_find(args.resnam);
+    res = resource_find_by_name_any(args.resnam);
     if (res) {
         struct vms_lock_entry *granted;
         uint32_t n = 0;
@@ -4438,7 +4815,11 @@ static struct vms_lock_entry *dlm_proxy_reconstruct(struct vms_dlm_xnode_args *r
     struct vms_lock_entry *lock;
     struct vms_enq_args a;
 
-    res = resource_find_or_create(req->resnam);   /* +1 ref, held by the proxy */
+    {
+        struct res_key k = xnode_res_key(req);
+
+        res = resource_find_or_create_key(&k);   /* +1 ref, held by the proxy */
+    }
     if (!res)
         return NULL;
 
@@ -4694,7 +5075,11 @@ static uint32_t vms_lock_dlm_xnode_rebuild(struct vms_proc *proc,
     if (req->req_csid == 0 || req->req_lkid == 0 || req->lkmode == LCK_K_NLMODE)
         return SS__BADPARAM;
 
-    res = resource_find_or_create(req->resnam);   /* +1 refcount, held by lock */
+    {
+        struct res_key k = xnode_res_key(req);
+
+        res = resource_find_or_create_key(&k);   /* +1 refcount, held by lock */
+    }
     if (!res)
         return SS__INSFMEM;
 
@@ -4763,7 +5148,11 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
     if (req->req_csid == 0 || req->req_lkid == 0)
         return 0;   /* a local ENQ or an unidentified requester: never dedup */
 
-    res = resource_find_or_create(req->resnam);
+    {
+        struct res_key k = xnode_res_key(req);
+
+        res = resource_find_or_create_key(&k);
+    }
     if (!res)
         return 0;   /* let the core report SS$_INSFMEM honestly */
 
@@ -4931,6 +5320,10 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         memset(&xn, 0, sizeof(xn));
         xn.req_lkid = req->req_lkid;    /* stamp the master lock with the
                                          * requester's own handle (H5) */
+        /* WHICH resource of that name the requester means: the identity its
+         * own frame carried (rd vms-b5b0). Never the delivery process's. */
+        xn.res_group = req->res_group;
+        xn.res_mode = req->res_mode;
         vms_enq_core_ex(proc, &a, &xn);
 
         /*

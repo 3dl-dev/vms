@@ -8,12 +8,12 @@
  * ==========================================================================
  * Measured on origin/main, both horns of it:
  *
- *   (a) vms_lock.c's dir_resolve() returns "this node" for EVERY name while
- *       any member is non-OVMX (the all-OVMX gate), and the local $ENQ path
- *       never consulted the directory table THIS NODE HOLDS. So a real VAX
- *       that locked N first -- its lookup answered and RECORDED here, naming
- *       the VAX as N's master (rd vms-8219) -- and a local $ENQ on N gave TWO
- *       masters for one resource.
+ *   (a) vms_lock.c's dir_resolve() returned "this node" for EVERY name while
+ *       any member was non-OVMX (the all-OVMX gate, retired by rd vms-b5b0),
+ *       and the local $ENQ path never consulted the directory table THIS NODE
+ *       HOLDS. So a real VAX that locked N first -- its lookup answered and
+ *       RECORDED here, naming the VAX as N's master (rd vms-8219) -- and a
+ *       local $ENQ on N gave TWO masters for one resource.
  *   (b) The other way round: a VAX's lookup for a name this node already
  *       mastered found no directory entry and was answered "you master it",
  *       so the VAX became a second master of a resource this node masters.
@@ -31,9 +31,10 @@
  *                  master-side dispatch, the same try_grant_waiters.
  *   the CLUB       a real struct vms_club with real CSBs, whose Lock Directory
  *                  Weight Vector is built by the SHIPPING cnxman_ldwv_rebuild
- *                  from LOCKDIRWTs set on those CSBs. "This node is the sole
- *                  directory node" is therefore a REAL READ of a REAL vector
- *                  (vms_ldwv_sole_directory), never a test flag.
+ *                  from LOCKDIRWTs set on those CSBs. "Which node directs this
+ *                  resource" is therefore the REAL vector's own arithmetic over
+ *                  the REAL hash (vms_ldwv_resolve o vms_dlm_name_hash_proven),
+ *                  never a test flag.
  *   the DIRECTORY  src/kernel-core/vms_dlm_dir.c -- the shipping table.
  *   the FSM        src/kernel-core/vms_dlm_scs_fsm.c -- the shipping requester.
  *   the CODEC      src/kernel-core/vms_cluster_codec_dlm.c, both ways. Every
@@ -48,10 +49,22 @@
  * pinned by the source scan in test_dlm_scs_arm.c; this file owns what a scan
  * cannot see: WHAT THE LOCK DATABASE DOES.
  *
+ * WHAT rd vms-b5b0 CHANGED IN THIS FILE. The scenarios used to run inside the
+ * INTERIM CONFIGURATION -- every real VMS member at LOCKDIRWT 0 and this node
+ * above 0, so that the vector directed every root name here and a directory
+ * decision needed no hash. Section 1 now runs at the V7.3 DEFAULT (every member
+ * 0, so about half of all names are directed at the VAX) and asserts the thing
+ * the interim could not do: an OVMX-first $ENQ on a name the vector directs AT
+ * THE VAX leaves as one op-0x01, addressed there, carrying the value the proven
+ * resource-name hash computes. The sections after it keep weights 1/0 -- not as
+ * a gate (there is none any more) but because that vector directs every name
+ * here, which is the configuration those scenarios are about.
+ *
  * EVERY SECTION CARRIES ITS NEGATIVE CONTROL. Reverting the fix has to make a
  * check here fail, so each scenario also asserts the behaviour with the
- * directory entry absent, or with the configuration not held -- which is the
- * old behaviour, and is still the behaviour outside the interim configuration.
+ * directory entry absent -- and section 1's control is the one that keeps a
+ * real VAX safe: an identity outside the PROVEN coverage puts NO frame on the
+ * wire at all.
  */
 #include "cluster_test.h"
 
@@ -67,6 +80,9 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_dlm.h"
+#include "vms_dlm_hash.h"     /* the PROVEN resource-name hash the engine routes
+			       * by for a resource no frame has named (rd
+			       * vms-b5b0) */
 
 #include <stdio.h>
 #include <string.h>
@@ -89,6 +105,16 @@ void vms_ast_notify_arrival(struct vms_proc *proc)
  * goes, and never mints one on its behalf. */
 #define VAX_LKID_1 0x0a0b0001u
 #define VAX_LKID_2 0x0a0b0002u
+
+/*
+ * THE RESOURCE IDENTITY EVERY LOCK IN THIS FILE NAMES (rd vms-b5b0). The local
+ * processes carry uic 0 and run at access mode 0, so the resources they create
+ * are (group 0, mode 0); the scripted VAX's frames carry the SAME identity,
+ * because these scenarios are about ONE resource with two claimants -- which is
+ * only one resource if both sides name the same domain.
+ */
+#define OVMX_RES_GROUP 0u
+#define OVMX_RES_MODE  0u
 
 /* ==========================================================================
  * 0. The harness
@@ -185,30 +211,41 @@ static void club_up(uint8_t ovmx_wt, uint8_t vax_wt)
  * supplies is the glue, because the glue TU does not link on the host.
  * ========================================================================== */
 
-static int sole_directory(void *ctx)
+/* The engine's ask, as a wire identity -- dlm_arm_ask_to_ident. */
+static int ask_to_ident(const struct vms_dlm_dir_ask *q,
+			struct vms_dlm_res_ident *id)
 {
-	(void)ctx;
-	return vms_ldwv_sole_directory(&g.cl.club.ldwv);
+	uint32_t i;
+
+	if (q->name == NULL || q->name_len == 0u ||
+	    q->name_len > VMS_DLM_NAME_MAX)
+		return -1;
+	memset(id, 0, sizeof(*id));
+	id->hash = q->hash;
+	id->group = q->group;
+	id->mode = q->mode;
+	id->name_len = (uint8_t)q->name_len;
+	for (i = 0u; i < q->name_len; i++)
+		id->name[i] = (uint8_t)q->name[i];
+	return 0;
 }
 
-static uint32_t eng_dir_local_lookup(void *ctx, const char *name,
-				     uint32_t name_len,
+static uint32_t eng_dir_local_lookup(void *ctx, const struct vms_dlm_dir_ask *q,
 				     struct vms_dlm_dir_local *out)
 {
-	enum vms_dlm_dir_name_outcome o;
+	struct vms_dlm_res_ident id;
+	enum vms_dlm_dir_ident_outcome o;
 	vms_csid_t master = 0u;
 	uint32_t hash = 0u;
 	uint8_t hash_known = 0u;
 
-	if (name == NULL || out == NULL)
+	(void)ctx;
+	if (q == NULL || out == NULL || ask_to_ident(q, &id) != 0)
 		return SS__BADPARAM;
-	if (!sole_directory(ctx))
+	o = vms_dlm_dir_lookup_ident(&g.dir, &id, &master, &hash, &hash_known);
+	if (o == VMS_DLM_DIR_IDENT_INVAL)
 		return SS__UNSUPPORTED;
-	o = vms_dlm_dir_lookup_name(&g.dir, name, name_len, &master, &hash,
-				    &hash_known);
-	if (o == VMS_DLM_DIR_NAME_INVAL || o == VMS_DLM_DIR_NAME_AMBIGUOUS)
-		return SS__UNSUPPORTED;
-	if (o == VMS_DLM_DIR_NAME_NONE) {
+	if (o == VMS_DLM_DIR_IDENT_NONE) {
 		out->master_csid = 0u;
 		out->is_self = 0u;
 		out->dir_hash_known = 0u;
@@ -221,13 +258,14 @@ static uint32_t eng_dir_local_lookup(void *ctx, const char *name,
 	return SS__NORMAL;
 }
 
-static uint32_t eng_dir_claim_self(void *ctx, const char *name,
-				   uint32_t name_len)
+static uint32_t eng_dir_claim_self(void *ctx, const struct vms_dlm_dir_ask *q)
 {
-	if (!sole_directory(ctx))
-		return SS__UNSUPPORTED;
-	return vms_dlm_dir_claim_self(&g.dir, name, name_len,
-				      (vms_csid_t)CSID_OVMX) == 0 ?
+	struct vms_dlm_res_ident id;
+
+	(void)ctx;
+	if (q == NULL || ask_to_ident(q, &id) != 0)
+		return SS__BADPARAM;
+	return vms_dlm_dir_claim_self(&g.dir, &id, (vms_csid_t)CSID_OVMX) == 0 ?
 	       (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
 }
 
@@ -249,12 +287,40 @@ static uint32_t eng_dir_generation(void *ctx)
 	return vms_ldwv_generation(&g.cl.club.ldwv);
 }
 
-/* The all-OVMX gate, read exactly as production reads it. With a real VAX in
- * the membership it is SHUT for every test in this file. */
-static int eng_dir_groundable(void *ctx)
+/*
+ * WHICH NODE THE VECTOR NAMES FOR A RESOURCE, computed the way the engine
+ * computes it: the PROVEN resource-name hash over the resource's identity, then
+ * the published index rule (rd vms-b5b0). The tests use it to pick names whose
+ * directory is this node and names whose directory is the VAX -- so a routing
+ * assertion is about the real vector's real arithmetic, not a chosen constant.
+ */
+static vms_csid_t dir_node_for(const char *name, uint16_t group, uint8_t mode)
 {
-	(void)ctx;
-	return vms_ldwv_all_ovmx(&g.cl.club.ldwv);
+	vms_csid_t csid = 0;
+	uint32_t h = 0;
+
+	if (vms_dlm_name_hash_proven(group, mode, (const uint8_t *)name,
+				     (uint32_t)strlen(name), &h) !=
+	    VMS_DLM_HASH_OK)
+		return 0;
+	if (vms_ldwv_resolve(&g.cl.club.ldwv, vms_ldwv_key(h), &csid) !=
+	    VMS_LDWV_OK)
+		return 0;
+	return csid == 0u ? (vms_csid_t)CSID_OVMX : csid;
+}
+
+/* The first of `names` whose directory node is `want`, or NULL. */
+static const char *a_name_directed_at(vms_csid_t want, const char *const *names,
+				      uint32_t n)
+{
+	uint32_t i;
+
+	for (i = 0u; i < n; i++) {
+		if (dir_node_for(names[i], OVMX_RES_GROUP, OVMX_RES_MODE) ==
+		    want)
+			return names[i];
+	}
+	return NULL;
 }
 
 /* ==========================================================================
@@ -290,7 +356,6 @@ static int fsm_dir_resolve(void *ctx, uint32_t hash, vms_csid_t *out)
 }
 
 static uint32_t fsm_dir_generation(void *ctx) { return eng_dir_generation(ctx); }
-static int fsm_all_ovmx(void *ctx) { return eng_dir_groundable(ctx); }
 
 static int fsm_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
 			     vms_csid_t master_csid)
@@ -320,10 +385,12 @@ static int fsm_blkast(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_learn(void *ctx, const char *resnam, uint32_t hash)
+static int fsm_learn(void *ctx, const char *resnam, uint16_t group,
+		     uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, hash) == SS__NORMAL ? 0 : -1;
+	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	       SS__NORMAL ? 0 : -1;
 }
 
 static void fsm_fail(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why)
@@ -363,8 +430,6 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.fsm_ops.refill_post    = fsm_refill;
 	g.fsm_ops.dir_resolve    = fsm_dir_resolve;
 	g.fsm_ops.dir_generation = fsm_dir_generation;
-	g.fsm_ops.all_ovmx       = fsm_all_ovmx;
-	g.fsm_ops.mixed_dlm_ok   = sole_directory;
 	g.fsm_ops.record_master  = fsm_record_master;
 	g.fsm_ops.assume_mastery = fsm_assume;
 	g.fsm_ops.grant_recv     = fsm_grant_recv;
@@ -383,7 +448,6 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.eng_ops.post             = eng_post;
 	g.eng_ops.dir_resolve      = eng_dir_resolve;
 	g.eng_ops.dir_generation   = eng_dir_generation;
-	g.eng_ops.dir_groundable   = eng_dir_groundable;
 	g.eng_ops.dir_local_lookup = eng_dir_local_lookup;
 	g.eng_ops.dir_claim_self   = eng_dir_claim_self;
 	g.eng_ops.ctx              = &g;
@@ -431,9 +495,45 @@ static int vax_build_enq(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 	memcpy(r.name, name, r.name_len);
 	r.dir_hash = hash;
 	r.dir_hash_valid = 1u;
+	/* body[44:46] + body[46]: the identity that qualifies the name. The
+	 * builder refuses a frame that does not state it (rd vms-b5b0). */
+	r.res_group = OVMX_RES_GROUP;
+	r.res_acmode = OVMX_RES_MODE;
+	r.res_ident_valid = 1u;
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_enq_request_build(&r, opcode, frame, VMS_CM_FRAME_LEN,
 					 &written) == VMS_CODEC_OK ? 0 : -1;
+}
+
+/*
+ * ONE op-0x07 CONVERT as a real VAX puts it on the wire: it names its lock by
+ * the two handles and carries a STALE identity span -- which is exactly the
+ * measured shape (docs/design-dlm-name-hash.md §4a: 2 of 8 real op-0x07 frames
+ * carried a half-overwritten name whose hash belonged to another resource). So
+ * the builder is told `res_ident_valid = 0` and writes nothing there, and the
+ * parser will not vouch for it either: the engine takes the resource from the
+ * LOCK the convert names.
+ */
+static int vax_build_convert(uint8_t *frame, uint32_t vax_lkid,
+			     uint32_t master_lkid, uint8_t mode)
+{
+	struct vms_dlm_enq_request r;
+	uint32_t written = 0;
+
+	memset(&r, 0, sizeof(r));
+	r.mode = mode;
+	r.req_pid_or_lkid = vax_lkid;
+	r.master_lkid = master_lkid;
+	r.name_len = 0u;
+	r.res_ident_valid = 1u;   /* the BUILDER needs a value to write; the
+				   * PARSER refuses to vouch for an op-0x07's,
+				   * which is the half that matters */
+	r.res_group = OVMX_RES_GROUP;
+	r.res_acmode = OVMX_RES_MODE;
+	memset(frame, 0, VMS_CM_FRAME_LEN);
+	return vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_CONVERT, frame,
+					 VMS_CM_FRAME_LEN, &written) ==
+	       VMS_CODEC_OK ? 0 : -1;
 }
 
 /*
@@ -460,7 +560,7 @@ static enum vms_dlm_dir_outcome vax_lookup(const uint8_t *frame,
 		for (i = 0u; i < id.name_len && id.name[i] != 0u; i++)
 			nm[i] = (char)id.name[i];
 		nm[i] = '\0';
-		(void)vms_lock_dlm_learn_dir_hash(nm, hash);
+		(void)vms_lock_dlm_learn_dir_hash(nm, id.group, id.mode, hash);
 	}
 	return vms_dlm_dir_lookup(&g.dir, &id, from, (vms_csid_t)CSID_OVMX,
 				  out_master);
@@ -493,6 +593,11 @@ static void vax_served_as_master(const uint8_t *frame, vms_csid_t from,
 	mr.master_lkid = e.master_lkid;
 	mr.lkmode = e.mode;
 	mr.flags = flags;
+	/* WHICH resource of that name, off the frame the parser just read
+	 * (rd vms-b5b0). */
+	mr.res_group = e.res_group;
+	mr.res_mode = e.res_acmode;
+	mr.res_ident_valid = e.res_ident_valid;
 	for (i = 0u; i < e.name_len && i < sizeof(mr.resnam) - 1u; i++)
 		mr.resnam[i] = (char)e.name[i];
 	mr.resnam[i] = '\0';
@@ -576,34 +681,132 @@ static uint32_t sent_dir_hash(void)
 }
 
 /* ==========================================================================
- * 1. THE CONFIGURATION IS A READ, NOT A FLAG
+ * 1. THE VECTOR ROUTES, AT THE V7.3 DEFAULT LOCKDIRWT (rd vms-b5b0)
+ *
+ * THE HEADLINE, and the thing the interim could not do. With every member at
+ * LOCKDIRWT 0 -- the default, and what a real cluster looks like unless somebody
+ * sets it -- p. 6-32 gives ONE vector entry per system, so about half of all
+ * root names are directed at the VAX. The interim configuration (every VAX at 0
+ * and this node above 0) existed precisely because that case needs the
+ * resource-name hash; it is now computed and proven, so this test asserts the
+ * general case directly:
+ *
+ *   - the vector is the SHIPPING Phase 2 fill over real CSBs;
+ *   - the directory node for a name is the SHIPPING index rule over the
+ *     SHIPPING hash;
+ *   - and an OVMX-first $ENQ on a name the vector directs AT THE VAX puts one
+ *     frame on the wire, addressed to the VAX, carrying that computed value at
+ *     body[128:132] and the resource's own identity at body[44:48].
  * ========================================================================== */
-static void the_configuration_is_derived(void)
+static void the_vector_routes_at_the_default_lockdirwt(void)
 {
-	printf("-- the sole-directory configuration is the VECTOR's arithmetic "
-	       "--\n");
+	/* Candidates only: WHICH of them is directed at the VAX is the
+	 * vector's arithmetic, and the test asks it rather than assuming. */
+	static const char *const cands[] = {
+		"EVAC$W", "EVAC$WK", "EVAC$WKL", "EVAC$WKLD", "EVAC$WORK",
+		"EVAC$WORKL", "EVAC$WORKLD", "EVAC$JOB", "EVAC$Q",
+		"EVAC$QUEUE", "EVAC$VOL", "EVAC$FILE", "EVAC$DB",
+		"EVAC$IDX", "EVAC$LOG"
+	};
+	const char *n_vax, *n_self;
+	struct vms_resmaster_args rm;
+	struct vms_proc app;
+	uint32_t lkid = 0, expect = 0, st;
 
-	mixed_up(1u, 0u);
-	ct_check(g.cl.club.ldwv.valid && g.cl.club.ldwv.n == 1u,
-		 "LOCKDIRWT 1 here / 0 on the VAX builds a ONE-entry vector "
-		 "(p. 6-32: entries per system = its LOCKDIRWT)");
-	ct_check(sole_directory(NULL) == 1,
-		 "*** and every entry is ours: this node is the SOLE directory "
-		 "node ***");
+	printf("-- rd vms-b5b0: at the DEFAULT LOCKDIRWT the vector routes to "
+	       "the VAX --\n");
+	mixed_up(0u, 0u);                 /* the V7.3 default on both */
+	proc_init(&app);
+
+	ct_check(g.cl.club.ldwv.valid && g.cl.club.ldwv.n == 2u,
+		 "every member at LOCKDIRWT 0 gives ONE entry per system "
+		 "(p. 6-32)");
 	ct_check(vms_ldwv_all_ovmx(&g.cl.club.ldwv) == 0,
-		 "the all-OVMX gate is SHUT throughout (a real VAX is a member)");
-	mixed_down();
+		 "and the VAX is NOT proven to run this implementation");
 
-	mixed_up(1u, 1u);
-	ct_check(g.cl.club.ldwv.n == 2u && sole_directory(NULL) == 0,
-		 "give the VAX a weight and the configuration is GONE -- "
-		 "derived, with no flag to go stale");
-	mixed_down();
+	n_vax = a_name_directed_at((vms_csid_t)CSID_VAX, cands,
+				   (uint32_t)(sizeof(cands) / sizeof(cands[0])));
+	n_self = a_name_directed_at((vms_csid_t)CSID_OVMX, cands,
+				    (uint32_t)(sizeof(cands) / sizeof(cands[0])));
+	ct_check(n_vax != NULL && n_self != NULL,
+		 "the vector directs some root names here and some at the VAX "
+		 "-- which is what a default-weight cluster IS");
+	if (n_vax == NULL || n_self == NULL) {
+		mixed_down();
+		return;
+	}
 
+	/* *** THE $ENQ this item exists for: a name OVMX touches FIRST, whose
+	 * directory is the VAX. *** */
+	ct_check(vms_dlm_name_hash(OVMX_RES_GROUP, OVMX_RES_MODE,
+				   (const uint8_t *)n_vax,
+				   (uint32_t)strlen(n_vax), &expect) ==
+		 VMS_DLM_HASH_OK, "the function answers for it");
+	st = do_enq(&app, n_vax, LCK_K_EXMODE, 0u, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0u,
+		 "the $ENQ is accepted (a proxy LKB exists)");
+	ct_check_eq_u32(g.n_sent, 1u, "exactly one frame left this node");
+	ct_check_eq_u32((uint32_t)g.last_dst, CSID_VAX,
+			"*** addressed to the VAX -- the directory node the "
+			"vector names for that value ***");
+	ct_check_eq_u32((uint32_t)g.last[VMS_OFB_DLM_OP],
+			(uint32_t)VMS_DLM_WIREOP_ENQ, "  as an op-0x01 lookup");
+	ct_check_eq_u32(sent_dir_hash(), expect,
+			"*** carrying the value the PROVEN function computes "
+			"for the resource's identity ***");
+	ct_check_eq_u32((uint32_t)g.last[VMS_OFB_DLM_RES_MODE], OVMX_RES_MODE,
+			"  and the access mode that value is OF (body[46])");
+	ct_check_eq_u32((uint32_t)g.last[VMS_OFB_DLM_RES_GROUP] |
+			((uint32_t)g.last[VMS_OFB_DLM_RES_GROUP + 1] << 8),
+			OVMX_RES_GROUP,
+			"  and the UIC group (body[44:46])");
+	ct_check_eq_u32(lki_granted_mode(&app, lkid), LCK_K_NLMODE,
+			"*** and NOTHING is granted yet: the requester waits "
+			"for the directory's answer ***");
+	read_resmaster(n_vax, &rm);
+	ct_check_eq_u32(rm.dir_csid, CSID_VAX,
+			"  the readback names the VAX as the directory");
+	ct_check_eq_u32(rm.is_local_master, 0u,
+			"*** and this node did NOT master it locally -- the "
+			"interim's behaviour, retired ***");
+
+	/* A name the SAME vector directs HERE still masters locally on first
+	 * use: p. 6-31's "the directory node simply assumes mastery". */
+	g.n_sent = 0u;
+	lkid = 0;
+	ct_check(do_enq(&app, n_self, LCK_K_EXMODE, 0u, &lkid) == SS__NORMAL &&
+		 lkid != 0u, "a name the vector directs HERE is granted");
+	read_resmaster(n_self, &rm);
+	ct_check_eq_u32(rm.is_local_master, 1u,
+			"*** mastered HERE, because this node IS its directory "
+			"and nobody else claims it (p. 6-31) ***");
+	ct_check_eq_u32(g.n_sent, 0u, "  and nothing went on the wire for it");
+	mixed_down();
+}
+
+/*
+ * NEGATIVE CONTROL for §1, and the one that keeps a real VAX safe: an identity
+ * OUTSIDE the proven coverage is refused, and NO frame is built -- so a value
+ * nobody has watched VMS produce can never reach a VAX's directory.
+ */
+static void an_unproven_identity_sends_nothing_at_the_vax(void)
+{
+	struct vms_proc app;
+	uint32_t lkid = 0, st;
+
+	printf("-- negative: an identity outside the proven coverage sends "
+	       "NOTHING --\n");
 	mixed_up(0u, 0u);
-	ct_check(g.cl.club.ldwv.n == 2u && sole_directory(NULL) == 0,
-		 "and the V7.3 default (every member 0) is one entry per "
-		 "system, which is NOT this configuration");
+	proc_init(&app);
+	app.current_mode = PSL_C_SUPER;   /* mode 2: never seen on a wire */
+
+	st = do_enq(&app, "EVAC$SUPER", LCK_K_EXMODE, 0u, &lkid);
+	ct_check_eq_u32(st, SS__UNSUPPORTED,
+			"*** SS$_UNSUPPORTED: supervisor mode is outside the "
+			"coverage the driven run proved ***");
+	ct_check_eq_u32(lkid, 0u, "no lock handle was invented");
+	ct_check_eq_u32(g.n_sent, 0u,
+			"*** and NOT ONE FRAME went at the VAX ***");
 	mixed_down();
 }
 
@@ -714,75 +917,69 @@ static void with_no_entry_the_enq_masters_locally(void)
 	mixed_down();
 }
 
-/* NEGATIVE CONTROL for §2: outside the configuration the directory entry is
- * NOT acted on, and the previous behaviour stands exactly. This is what makes
- * the change safe to land: a default-weight cluster sees no difference. */
-static void outside_the_configuration_nothing_changes(void)
-{
-	const char *N = "EVAC$WORKLOAD";
-	uint8_t frame[VMS_CM_FRAME_LEN];
-	struct vms_resmaster_args rm;
-	struct vms_proc app;
-	vms_csid_t master = 0;
-	uint32_t lkid = 0;
+/*
+ * THE §2 CONTROL THAT RETIRED (rd vms-b5b0): "outside the interim
+ * configuration the directory entry is NOT acted on, and the previous
+ * behaviour -- master it locally -- stands". That WAS the safety argument
+ * while the vector could not be consulted per resource; it is now the hole
+ * (two masters for one resource), and §1 above asserts the replacement: at the
+ * default LOCKDIRWT the vector is consulted per resource and the request goes
+ * where it says. The control that still matters moved with it -- an identity
+ * outside the proven coverage sends nothing at all
+ * (an_unproven_identity_sends_nothing_at_the_vax).
+ */
 
-	printf("-- negative: with default weights the interim is INERT --\n");
-	mixed_up(0u, 0u);                 /* the V7.3 default on both */
-	proc_init(&app);
-
-	ct_check(sole_directory(NULL) == 0, "not the sole directory node");
-	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
-			       (uint8_t)LCK_K_EXMODE, N, 0x5a3c0117u) == 0,
-		 "the VAX's frame is built");
-	(void)vax_lookup(frame, CSID_VAX, &master);
-
-	ct_check(do_enq(&app, N, LCK_K_EXMODE, 0u, &lkid) == SS__NORMAL,
-		 "the local $ENQ is granted");
-	read_resmaster(N, &rm);
-	ct_check_eq_u32(rm.is_local_master, 1u,
-			"*** and masters LOCALLY, exactly as before this item: "
-			"the interim configuration is not in force ***");
-	ct_check_eq_u32(g.n_sent, 0u, "nothing was routed anywhere");
-	mixed_down();
-}
-
-/* A directory entry whose hash this node never learned is a REFUSAL, not a
- * frame with a zero in it (the grant storm) and not a second local master. */
-static void an_entry_without_a_hash_is_refused(void)
+/*
+ * A DIRECTORY ENTRY WITH NO STORED VALUE IS NOW ROUTED, NOT REFUSED (rd
+ * vms-b5b0, closing #1568's own honest gap).
+ *
+ * An op-0x0d registration records a master and carries no value the learner
+ * reads, so this executive held NONE for the name and the $ENQ was REFUSED
+ * (SS$_UNSUPPORTED) -- honest, and a lock OVMX could not take on a resource the
+ * VAX had registered. The value for that identity is now computable and proven,
+ * so the request goes to the registered master carrying the value THIS
+ * EXECUTIVE computed for it -- which is the same value the VAX itself would
+ * compute, that being what "one function cluster-wide" means.
+ */
+static void an_entry_without_a_stored_value_is_routed(void)
 {
 	struct vms_dlm_res_ident id;
 	struct vms_resmaster_args rm;
 	struct vms_proc app;
-	uint32_t lkid = 0, st;
+	uint32_t lkid = 0, st, expect = 0;
 	const char *N = "REGONLY1";
 
-	printf("-- an entry from a REGISTRATION (no learnable hash): refused "
-	       "--\n");
+	printf("-- an entry from a REGISTRATION (no stored value): ROUTED --\n");
 	mixed_up(1u, 0u);
 	proc_init(&app);
 
-	/* An op-0x0d registration records the master. The hash learner does
-	 * not read an op-0x0d (the value is only grounded on op-0x01), so this
-	 * executive holds NO hash for the name. */
 	memset(&id, 0, sizeof(id));
 	id.hash = 0u;                 /* the entry carries none */
-	id.group = 0u;
-	id.mode = 3u;
+	id.group = OVMX_RES_GROUP;
+	id.mode = OVMX_RES_MODE;
 	id.name_len = (uint8_t)strlen(N);
 	memcpy(id.name, N, id.name_len);
 	ct_check(vms_dlm_dir_register(&g.dir, &id, CSID_VAX) == 0,
 		 "the VAX registers itself as the master of " "REGONLY1");
 
+	ct_check(vms_dlm_name_hash(OVMX_RES_GROUP, OVMX_RES_MODE,
+				   (const uint8_t *)N, (uint32_t)strlen(N),
+				   &expect) == VMS_DLM_HASH_OK,
+		 "the function answers for that identity");
+
 	st = do_enq(&app, N, LCK_K_EXMODE, 0u, &lkid);
-	ct_check(st == SS__UNSUPPORTED && lkid == 0u,
-		 "*** the $ENQ is REFUSED honestly: the VAX masters it and "
-		 "this node has no hash to address it with ***");
-	ct_check_eq_u32(g.n_sent, 0u,
-			"  and NOTHING left this node -- never a frame with a "
-			"zero where the hash goes");
+	ct_check(st == SS__NORMAL && lkid != 0u,
+		 "*** the $ENQ is ACCEPTED: the VAX masters it and this node "
+		 "can now address a frame at it ***");
+	ct_check_eq_u32(g.n_sent, 1u, "one frame left this node");
+	ct_check_eq_u32((uint32_t)g.last_dst, CSID_VAX,
+			"  addressed to the master the registration named");
+	ct_check_eq_u32(sent_dir_hash(), expect,
+			"*** carrying the value this executive COMPUTED for the "
+			"identity -- never a zero where the hash goes ***");
 	read_resmaster(N, &rm);
 	ct_check_eq_u32(rm.is_local_master, 0u,
-			"  and it did NOT become a second master instead");
+			"  and it did NOT become a second master");
 	mixed_down();
 }
 
@@ -844,14 +1041,24 @@ static void ovmx_first_then_the_vax_is_served_as_master(void)
 		 lkid != 0u, "a local $ENQ takes EX and masters the name here");
 	read_resmaster(N, &rm);
 	ct_check_eq_u32(rm.is_local_master, 1u, "  this node is the master");
-	ct_check(vms_lock_dlm_name_mastered_here(N) == 1,
+	ct_check(vms_lock_dlm_name_mastered_here(N, OVMX_RES_GROUP,
+						 OVMX_RES_MODE) == 1,
 		 "  and says so through the read the directory role uses");
-	ct_check(vms_dlm_dir_lookup_name(&g.dir, N, (uint32_t)strlen(N),
-					 &master, NULL, NULL) ==
-		 VMS_DLM_DIR_NAME_MASTER && master == CSID_OVMX,
-		 "*** and the mastery is RECORDED in this node's own directory "
-		 "-- which is what stops the next asker being told to master "
-		 "it ***");
+	{
+		struct vms_dlm_res_ident selfid;
+
+		memset(&selfid, 0, sizeof(selfid));
+		selfid.group = OVMX_RES_GROUP;
+		selfid.mode = OVMX_RES_MODE;
+		selfid.name_len = (uint8_t)strlen(N);
+		memcpy(selfid.name, N, selfid.name_len);
+		ct_check(vms_dlm_dir_lookup_ident(&g.dir, &selfid, &master,
+						  NULL, NULL) ==
+			 VMS_DLM_DIR_IDENT_MASTER && master == CSID_OVMX,
+			 "*** and the mastery is RECORDED in this node's own "
+			 "directory -- which is what stops the next asker "
+			 "being told to master it ***");
+	}
 
 	/* *** THE VAX ASKS *** with its own group, its own access mode and its
 	 * own hash, none of which this node holds for the name. */
@@ -946,12 +1153,29 @@ static void a_convert_names_the_blocking_holder(void)
 		 held.granted_mode == LCK_K_EXMODE,
 		 "the VAX is GRANTED EX by this master (NL is compatible)");
 
-	/* A SECOND VMS system now converts its NL to EX: incompatible with the
-	 * VAX's EX, so it queues -- and the master owes the VAX a blocking AST,
-	 * named from the blocking LKB. */
-	ct_check(vax_build_enq(f2, VMS_DLM_WIREOP_CONVERT, VAX_LKID_2,
-			       (uint8_t)LCK_K_EXMODE, N, 0x22334455u) == 0,
-		 "the second system's op-0x07 convert is built");
+	/*
+	 * A SECOND VMS system takes NL (compatible), and then CONVERTS it to
+	 * EX. The convert NAMES ITS LOCK BY OUR HANDLE -- which is what a real
+	 * op-0x07 does, and since rd vms-b5b0 it is also where the engine takes
+	 * the resource's identity from: a real VAX leaves the identity span on
+	 * an op-0x07 STALE (docs/design-dlm-name-hash.md §4a), so the LKB the
+	 * handle names is the only honest source.
+	 */
+	{
+		struct vms_dlm_master_result nl;
+
+		ct_check(vax_build_enq(f2, VMS_DLM_WIREOP_ENQ, VAX_LKID_2,
+				       (uint8_t)LCK_K_NLMODE, N,
+				       0x22334455u) == 0,
+			 "the second system's op-0x01 NL request is built");
+		vax_served_as_master(f2, CSID_VAX2, 0u, &nl);
+		ct_check(nl.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
+			 nl.master_lkid != 0u,
+			 "it is GRANTED NL, with a real handle of ours");
+		ct_check(vax_build_convert(f2, VAX_LKID_2, nl.master_lkid,
+					   (uint8_t)LCK_K_EXMODE) == 0,
+			 "and its op-0x07 convert to EX names that handle");
+	}
 	vax_served_as_master(f2, CSID_VAX2, 0u, &queued);
 	ct_check(queued.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED,
 		 "*** the convert QUEUES behind the VAX's EX ***");
@@ -1065,12 +1289,12 @@ int main(void)
 	printf("=== test_dlm_mixed_master (rd vms-025 / vms-db2a / vms-c27: "
 	       "ONE master per resource in a MIXED cluster, R1) ===\n");
 
-	the_configuration_is_derived();
+	the_vector_routes_at_the_default_lockdirwt();
+	an_unproven_identity_sends_nothing_at_the_vax();
 
 	vax_first_then_ovmx_routes_to_the_vax();
 	with_no_entry_the_enq_masters_locally();
-	outside_the_configuration_nothing_changes();
-	an_entry_without_a_hash_is_refused();
+	an_entry_without_a_stored_value_is_routed();
 	a_full_directory_table_still_locks();
 
 	ovmx_first_then_the_vax_is_served_as_master();

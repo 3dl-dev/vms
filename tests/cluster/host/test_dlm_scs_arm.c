@@ -233,34 +233,27 @@ static void arm_bindings(void)
 	       "before anything is built");
 
 	/*
-	 * THE HASH BOOTSTRAP DEADLOCK IS RESOLVED behind the all-OVMX gate (rung
-	 * A", vms-3e3), pinned as a PROPERTY of the shipped file. The deadlock was:
-	 * installing the resolver turns on vms_lock.c's "no wire-learned hash ->
-	 * SS$_UNSUPPORTED" refusal, and no OVMX-only member can originate the first
-	 * cat-0x02 frame to teach a hash. The resolution: an all-proven-OVMX cluster
-	 * grounds the first hash with OVMX's OWN directory hash -- never DEC's, never
-	 * toward a real VAX -- and a mixed/single configuration masters locally
-	 * exactly as before (no interop regression). All four directory ops are now
-	 * installed unconditionally; the gate that keeps grounding narrow is DYNAMIC.
+	 * THE HASH BOOTSTRAP DEADLOCK IS GONE, AND SO ARE THE TWO OPS THAT
+	 * BRIDGED IT (rd vms-b5b0, retiring rung A"/vms-3e3). The deadlock was:
+	 * installing the resolver turned on vms_lock.c's "no wire-learned hash ->
+	 * SS$_UNSUPPORTED" refusal, and no OVMX-only member could originate the
+	 * first cat-0x02 frame to teach a value. The bridge was OVMX's OWN hash
+	 * behind an all-OVMX gate (`dir_groundable` + `dir_ground`). The VMS
+	 * function is now determined and proven, the engine computes it directly,
+	 * and keeping a second hash would make a name's master change the moment a
+	 * VAX joined -- so both ops are DELETED, which is what these three
+	 * assertions pin.
 	 */
 	has("d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;",
-	    "the engine's directory resolver IS installed (rung A\" resolved)");
-	has("d->eng_ops.dir_groundable = dlm_arm_eng_dir_groundable;",
-	    "... behind the DYNAMIC all-OVMX gate, not a one-shot start switch");
-	has("d->eng_ops.dir_ground     = dlm_arm_eng_dir_ground;",
-	    "... with the gated name->hash grounding op installed too");
-	has("return vms_ldwv_all_ovmx(&d->cl->club.ldwv);",
-	    "the gate reads the connection manager's own vector -- all members "
-	    "proven-OVMX, dynamically");
-	has("if (!dlm_arm_eng_dir_groundable(ctx))\n\t\treturn SS__UNSUPPORTED;",
-	    "dir_ground REFUSES unless the all-OVMX gate holds -- never a name->hash "
-	    "against a real VAX (the 90b3bbbd storm cannot recur)");
-	has("*out_hash = vms_dlm_ovmx_dir_hash(name, name_len);",
-	    "... and the grounded value is OVMX's OWN directory hash, not DEC's");
-	has("h *= 16777619u;           /* FNV-1a prime */",
-	    "OVMX's own hash is FNV-1a over the name bytes, a 32-bit value in "
-	    "the wire's own shape (rd vms-4fb) -- clean-room, deterministic, "
-	    "identical on every OVMX node");
+	    "the engine's directory resolver IS installed");
+	absent("dir_groundable",
+	      "*** the all-OVMX GATE on routing is GONE from this arm "
+	      "(rd vms-b5b0) ***");
+	absent("vms_dlm_ovmx_dir_hash",
+	      "*** and so is OVMX's OWN directory hash: one function "
+	      "cluster-wide, VMS's own ***");
+	absent("16777619u",
+	      "... not even its FNV-1a constant is left in this file");
 	has("d->eng_ops.post           = dlm_arm_post;",
 	    "the engine's POST op is installed too -- the remote route it serves is "
 	    "now reachable behind the gate");
@@ -403,11 +396,18 @@ static void arm_bindings(void)
 	has("dlm_relq_init(&d->relq);",
 	    "... and it starts empty, before the engine's ops are installed");
 
-	/* The requester FSM's own new-shape gate reads the SAME fact. */
-	has("d->req_ops.all_ovmx        = dlm_arm_all_ovmx_op;",
-	    "the requester arm's op-0x03 gate is bound to the same all-OVMX "
-	    "fact (one function, no cached copy), so the release and the "
-	    "BLKAST cannot disagree about who may be emitted at");
+	/* The requester FSM's op-0x03 gate RETIRED with the ops behind it. */
+	absent("d->req_ops.all_ovmx",
+	       "*** the requester arm's op-0x03 membership gate is GONE "
+	       "(rd vms-b5b0): a lock taken at a real VAX master has to be "
+	       "releasable, and which shapes may face an unproven member is "
+	       "now ONE codec predicate applied per destination ***");
+	absent("d->req_ops.mixed_dlm_ok",
+	       "... and so is its sole-directory escape hatch");
+	has("dlm_arm_all_ovmx(d) || dlm_arm_build_blkast(d, r) != 0",
+	    "the all-OVMX read that REMAINS is the op-0x05 BLKAST's, whose "
+	    "body[30:32] is observed-and-not-pinned -- the one shape the codec "
+	    "does not clear for an unproven member either");
 
 	/*
 	 * ===================================================================
@@ -472,22 +472,33 @@ static void arm_bindings(void)
 	before("if (dlm_arm_serve_mixed_held(d, req, reply) == 0)",
 	       "if (!dlm_arm_peer_is_ours(d, req))",
 	       "it sits ABOVE RULE C, deliberately, like the directory role");
-	before("\tif (!dlm_arm_sole_directory(d))\n\t\treturn -1;\n\tif (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)",
-	       "\tif (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)\n\t\treturn dlm_arm_serve_deq(d, req);",
-	       "*** and the SOLE-DIRECTORY gate is evaluated BEFORE any opcode "
-	       "in it: outside that configuration an unproven system's release "
-	       "reaches nothing ***");
-	has("if (!dlm_arm_sole_directory(d))",
-	    "... the gate is the derived configuration, never a flag");
-	has("return vms_ldwv_sole_directory(&d->cl->club.ldwv);",
-	    "... read from the connection manager's own weight vector every "
-	    "time it is asked (no cached copy to go stale)");
+	/*
+	 * THE SOLE-DIRECTORY GATE THAT STOOD HERE IS GONE (rd vms-b5b0), and the
+	 * AUTHORITY it stood in for is pinned instead. The door used to be shut
+	 * unless this node was the cluster's sole lock-directory node; that was
+	 * standing in for "the routing decision is sound", which it had to be
+	 * while the vector could not be consulted per resource. It can now, and
+	 * the authority for every op in this door is an EXECUTIVE FACT about a
+	 * lock -- the LKB's own req_csid tag, which refuses a release or a
+	 * convert of a lock held for anybody else (driven against the real engine
+	 * in test_dlm_recv_arm.c, "a peer may not release another node's lock",
+	 * and in the mixed flows in test_dlm_mixed_master.c).
+	 */
+	absent("dlm_arm_sole_directory",
+	      "*** the SOLE-DIRECTORY configuration gate is GONE from this arm "
+	      "(rd vms-b5b0): the authority is the LKB's own req_csid tag, not a "
+	      "LOCKDIRWT arrangement ***");
+	absent("vms_ldwv_sole_directory",
+	      "... and the vector predicate it read is not called here either");
 	has("d->mixed_served++",
 	    "a request from a real VMS system served as MASTER is counted");
 	has("d->mixed_replies_taken++",
 	    "... and so is an answer from one, matched to a request of ours");
-	has("!req->peer_is_ours && dlm_arm_sole_directory(d)",
-	    "an unproven system's REPLY is taken only in that configuration");
+	has("VMS_WIRE_RESPONSE_BIT) &&\n\t    !req->peer_is_ours) {",
+	    "an unproven system's REPLY is taken in any configuration -- it has "
+	    "to be, since an OVMX $ENQ can now be addressed at its directory -- "
+	    "and the FSM matches it to a request of OURS by a handle this "
+	    "executive minted");
 
 	/* The $DEQ's fields, and where each one comes from (RULE B). */
 	has("vms_dlm_deq_parse_body(in->body, in->len, &q)",
@@ -537,14 +548,23 @@ static void cnxman_legs(void)
 
 	has("int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,",
 	    "the DLM's origination entry exists, addressed by CSID");
-	has("if (!cnxman_dlm_peer_proven(cn, cl, csb))",
-	    "RULE C's EMISSION half: nothing DLM leaves for an unproven system");
+	has("if (!cnxman_dlm_peer_proven(cn, csb, body, len))",
+	    "RULE C's EMISSION half: every origination is gated, per DESTINATION "
+	    "and per FRAME");
+	has("vms_dlm_shape_fit_for_any_member(body, len)",
+	    "... and the per-FRAME half asks the CODEC which shapes may face an "
+	    "unproven member (rd vms-b5b0) -- no byte of a body is read outside "
+	    "the one TU that owns wire offsets");
+	absent("vms_ldwv_sole_directory(&cl->club.ldwv)",
+	    "*** and the CONFIGURATION test that used to let frames past is "
+	    "GONE: a shape is fit or it is not, in any LOCKDIRWT arrangement "
+	    "***");
 	has("cn->dlm_foreign_refused++", "... and that refusal is counted");
 	/* ORDER, because this is the gate under BOTH new emits (rd vms-d7a3):
 	 * the release the requester arm originates and the BLKAST the master
 	 * arm originates both arrive here, and both must be refused before a
 	 * byte reaches the port. */
-	before("if (!cnxman_dlm_peer_proven(cn, cl, csb))",
+	before("if (!cnxman_dlm_peer_proven(cn, csb, body, len))",
 	       "scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx",
 	       "*** RULE C is evaluated BEFORE a byte reaches the port -- the "
 	       "one gate under every DLM origination, old and new ***");

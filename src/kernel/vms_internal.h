@@ -573,6 +573,23 @@ struct vms_lock_entry {
 struct vms_lock_resource {
     struct hlist_node   hash_node;      /* in global resource hash */
     char                name[32];
+    /*
+     * THE REST OF THE RESOURCE'S IDENTITY (rd vms-b5b0). A VMS resource name is
+     * QUALIFIED: two $ENQs name the same resource only if they agree on the
+     * name, the parent, the ACCESS MODE, and the UIC GROUP -- and the group is
+     * 0 for a name enqueued with LCK$M_SYSTEM (system services reference,
+     * $ENQ). The same two values are the resource's identity ON THE WIRE
+     * (body[44:46] group, body[46] mode; vms_cluster_codec_dlm.h), which is why
+     * they must live here and not only on the LKB: the directory hash is a
+     * function of them (src/kernel-core/vms_dlm_hash.h), so a resource block
+     * that did not know its own group and mode could not be routed without
+     * inventing one. Set at creation from a real executive read (the enqueuing
+     * process's UIC and mode, or the parsed identity of an inbound frame) and
+     * never changed; matched on every lookup. Mirror in
+     * src/kernel-netbsd/vms_internal.h.
+     */
+    uint16_t            res_group;
+    uint8_t             res_mode;
     struct list_head    granted;        /* granted lock list */
     struct list_head    waiting;        /* waiting lock list (FIFO) */
     struct list_head    proxies;        /* PROXY LKBs for this resource when it
@@ -617,6 +634,13 @@ struct vms_lock_resource {
      */
     uint32_t            dir_hash;
     uint8_t             hash_known;
+    /* WHERE dir_hash CAME FROM (rd vms-b5b0): 0 = a value some system in this
+     * cluster put on the wire for this exact identity; 1 = a value this node
+     * computed with vms_dlm_name_hash_proven() for an identity no frame has
+     * named yet. Both are held values and both may ride a frame; a learned one
+     * REPLACES a computed one (and the disagreement is counted), and only a
+     * learned one keeps a resource block alive past its last lock. */
+    uint8_t             hash_computed;
     uint8_t             dir_valid;
     uint32_t            dir_gen;
     uint32_t            dir_csid;       /* directory node CSID; 0 = this node */

@@ -91,3 +91,37 @@ enum vms_dlm_hash_status vms_dlm_name_hash(uint16_t group, uint8_t mode,
 			  * VMS_DLM_HASH_MULT);
 	return VMS_DLM_HASH_OK;
 }
+
+/*
+ * The coverage test, one axis at a time, against the three masks in the header.
+ * Nothing is computed: this is a membership test over measured sets.
+ */
+enum vms_dlm_hash_status vms_dlm_name_hash_coverage(uint16_t group, uint8_t mode,
+						    uint32_t name_len)
+{
+	if (name_len == 0u || name_len > VMS_DLM_HASH_NAME_MAX)
+		return VMS_DLM_HASH_E_RANGE;
+	if ((VMS_DLM_HASH_LEN_PROVEN & ((uint32_t)1u << name_len)) == 0u)
+		return VMS_DLM_HASH_E_COVER;
+	if (mode > 7u ||
+	    (VMS_DLM_HASH_MODE_PROVEN & ((uint32_t)1u << mode)) == 0u)
+		return VMS_DLM_HASH_E_COVER;
+	if ((uint32_t)group > VMS_DLM_HASH_GROUP_PROVEN_MAX)
+		return VMS_DLM_HASH_E_COVER;
+	return VMS_DLM_HASH_OK;
+}
+
+enum vms_dlm_hash_status vms_dlm_name_hash_proven(uint16_t group, uint8_t mode,
+						  const uint8_t *name,
+						  uint32_t name_len,
+						  uint32_t *out)
+{
+	enum vms_dlm_hash_status st;
+
+	if (name == (const void *)0 || out == (void *)0)
+		return VMS_DLM_HASH_E_INVAL;
+	st = vms_dlm_name_hash_coverage(group, mode, name_len);
+	if (st != VMS_DLM_HASH_OK)
+		return st;
+	return vms_dlm_name_hash(group, mode, name, name_len, out);
+}

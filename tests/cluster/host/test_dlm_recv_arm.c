@@ -147,7 +147,6 @@ static int h_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 }
 
 static uint32_t h_dir_generation(void *ctx) { (void)ctx; return 1u; }
-static int h_all_ovmx(void *ctx) { (void)ctx; return 1; }
 
 static int h_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
 			   vms_csid_t master_csid)
@@ -184,11 +183,12 @@ static int h_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int h_learn(void *ctx, const char *resnam, uint32_t hash16)
+static int h_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
+		   uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, hash16) == SS__NORMAL ?
-	       0 : -1;
+	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	       SS__NORMAL ? 0 : -1;
 }
 
 static void h_fail(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why)
@@ -234,7 +234,6 @@ static void holder_up(void)
 	h.ops.refill_post     = h_refill;
 	h.ops.dir_resolve     = h_dir_resolve;
 	h.ops.dir_generation  = h_dir_generation;
-	h.ops.all_ovmx        = h_all_ovmx;
 	h.ops.record_master   = h_record_master;
 	h.ops.assume_mastery  = h_assume;
 	h.ops.grant_recv      = h_grant_recv;
@@ -273,7 +272,9 @@ static void wire_learn(const char *resnam)
 
 	for (c = resnam; *c != '\0'; c++)
 		hash = (uint16_t)((hash << 1) ^ (uint8_t)*c);
-	(void)vms_lock_dlm_learn_dir_hash(resnam, hash);
+	/* ...under the identity this test's processes enqueue at (uic 0, access
+	 * mode 0): a learned value belongs to an identity (rd vms-b5b0). */
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, hash);
 }
 
 /*
@@ -536,6 +537,11 @@ static void deq_body_to_master_request(const uint8_t *body, uint32_t from_csid,
 	out->lkmode = q.mode;
 }
 
+/* The resource identity the simulated peer's frames carry (rd vms-b5b0): a
+ * group-qualified user-mode name, the commonest shape on a real wire. */
+#define PEER_RES_GROUP 1u
+#define PEER_RES_MODE  3u
+
 /* Serve one inbound ENQ as the master, exactly as the arm does. */
 static void master_enq(uint32_t csid, uint32_t lkid, uint32_t mode,
 		       uint32_t flags, const char *resnam,
@@ -550,6 +556,12 @@ static void master_enq(uint32_t csid, uint32_t lkid, uint32_t mode,
 	r.lkmode = mode;
 	r.flags = flags;
 	strscpy(r.resnam, resnam, sizeof(r.resnam));
+	/* WHICH resource of that name: the identity the requester's frame
+	 * carried at body[44:46]/body[46] (rd vms-b5b0). The arm reads it off
+	 * the frame through the codec; the door refuses to serve without it. */
+	r.res_group = PEER_RES_GROUP;
+	r.res_mode = PEER_RES_MODE;
+	r.res_ident_valid = 1u;
 	(void)vms_lock_dlm_master_serve(&r, out);
 }
 
@@ -801,6 +813,15 @@ static int build_valblk_convert(uint8_t *frame, uint32_t req_lkid,
 /* Read the master resource's value block back the way the engine hands it out:
  * a LOCAL NL grant with LCK_M_VALBLK (NL is compatible with any held mode, so
  * it is granted at once and copies res->valblk into the caller's LKSB). */
+/*
+ * Read the MASTER resource's value block with a local NL/VALBLK $ENQ.
+ *
+ * `proc` must be in the SAME RESOURCE DOMAIN as the peer whose lock created
+ * the block -- UIC group PEER_RES_GROUP at access mode PEER_RES_MODE (rd
+ * vms-b5b0). A probe from another domain names a DIFFERENT resource of the
+ * same name and would read that one's (empty) block, which is the namespace
+ * working, not a missing write.
+ */
 static void master_read_valblk(struct vms_proc *proc, const char *resnam,
 			       uint8_t out[VMS_DLM_VALBLK_WIRE_LEN])
 {
@@ -835,6 +856,9 @@ static void inbound_valblk_convert_writes_the_master_block(void)
 	}
 	proc_init(&delivery);
 	delivery.current_mode = PSL_C_USER;
+	/* ...in the PEER's resource domain, so the readback below names the
+	 * resource the peer's lock created (rd vms-b5b0). */
+	delivery.uic = ((uint32_t)PEER_RES_GROUP << 16) | 4u;
 	vms_lock_dlm_set_delivery_proc(&delivery);
 
 	master_enq(CSID_PEER_A, PEER_A_LKID, LCK_K_EXMODE, 0u, "RECV_LVB1",

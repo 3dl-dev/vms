@@ -382,6 +382,8 @@ static void remote_lkb_is_outside_image_rundown(void)
 #define MD_PEER_B   0x00010003u
 #define MD_LKID_A   0x0000a1a1u
 #define MD_LKID_B   0x0000b2b2u
+#define MD_PEER_GROUP 1u          /* the requester's UIC group, off its frame */
+#define MD_PEER_MODE  3u          /* ... and its access mode (user)           */
 
 static void md_fill(struct vms_dlm_master_request *r, uint32_t op,
 		    uint32_t csid, uint32_t lkid, uint32_t lkmode,
@@ -394,6 +396,16 @@ static void md_fill(struct vms_dlm_master_request *r, uint32_t op,
 	r->lkmode = lkmode;
 	r->flags = flags;
 	strscpy(r->resnam, resnam, sizeof(r->resnam));
+	/*
+	 * ...and WHICH resource of that name (rd vms-b5b0): the identity the
+	 * requester's own frame carried at body[44:46]/body[46], which the wire
+	 * arm reads through the codec and this door refuses to serve without.
+	 * MD_PEER_GROUP/MD_PEER_MODE stand for one real VMS requester's domain --
+	 * a group-qualified user-mode name, the commonest shape on a real wire.
+	 */
+	r->res_group = MD_PEER_GROUP;
+	r->res_mode = MD_PEER_MODE;
+	r->res_ident_valid = 1u;
 }
 
 /* CONDITION 4 (rd vms-c27): no delivery proc, no service -- and, decisively,
@@ -599,6 +611,102 @@ static void dlksrch_both_initiate_aborts_once(void)
 		 "(SS$_NORMAL, queued=0) -- the victim was aborted EXACTLY once");
 }
 
+/* ================================================================
+ * THE RESOURCE NAMESPACE IS QUALIFIED (rd vms-b5b0)
+ *
+ * $ENQ: two requests name the same resource only if they agree on the name,
+ * the parent, the access mode AND the UIC group -- unless LCK$M_SYSTEM makes
+ * the name system-wide, which puts it in group 0. Before this item the engine
+ * keyed on the name alone, so two UIC groups shared one resource: a
+ * fabrication in the harmless direction locally (one lock too few) and the
+ * reason a resource block could not state its own wire identity at all.
+ * ================================================================ */
+static void the_namespace_is_qualified(void)
+{
+	struct vms_proc g1, g2;
+	uint32_t lkid1 = 0, lkid2 = 0;
+	struct vms_resmaster_args rm;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "namespace: vms_lock_init");
+		return;
+	}
+	printf("-- the resource namespace is qualified by UIC group and mode\n");
+	proc_init(&g1);
+	proc_init(&g2);
+	g1.uic = (11u << 16) | 4u;        /* [11,4] */
+	g2.uic = (22u << 16) | 4u;        /* [22,4] */
+
+	/* TWO GROUPS, ONE NAME: two resources, so BOTH get EX. */
+	ct_check(do_enq(&g1, "QUALNAME", LCK_K_EXMODE, 0, &lkid1) == SS__NORMAL,
+		 "group 11 takes EX on QUALNAME");
+	ct_check(do_enq(&g2, "QUALNAME", LCK_K_EXMODE, LCK_M_NOQUEUE,
+			&lkid2) == SS__NORMAL,
+		 "group 22 takes EX on the SAME NAME -- a different resource, "
+		 "so it is not blocked (the VMS namespace, $ENQ)");
+
+	/* ONE GROUP, ONE NAME, TWO ACCESS MODES: also two resources. */
+	g1.current_mode = PSL_C_SUPER;
+	ct_check(do_enq(&g1, "QUALNAME", LCK_K_EXMODE, LCK_M_NOQUEUE,
+			NULL) == SS__NORMAL,
+		 "the same process at a different ACCESS MODE names a "
+		 "different resource too");
+	g1.current_mode = PSL_C_KERNEL;
+
+	/* LCK$M_SYSTEM puts both groups in group 0: ONE resource, so the
+	 * second request IS blocked. */
+	g1.cur_privs = VMS_PRV_M_SYSLCK;
+	g2.cur_privs = VMS_PRV_M_SYSLCK;
+	ct_check(do_enq(&g1, "SYSQUAL", LCK_K_EXMODE, LCK_M_SYSTEM,
+			NULL) == SS__NORMAL,
+		 "group 11 takes EX on a SYSTEM-WIDE name");
+	ct_check(do_enq(&g2, "SYSQUAL", LCK_K_EXMODE,
+			LCK_M_SYSTEM | LCK_M_NOQUEUE, NULL) == SS__NOTQUEUED,
+		 "group 22's LCK$M_SYSTEM request on that name is BLOCKED -- "
+		 "a system-wide name is one resource, in group 0");
+
+	/* And the blocks really exist, one per domain. */
+	ct_check(do_resmaster(&g1, "QUALNAME", &rm) == SS__NORMAL &&
+		 rm.found == 1u,
+		 "a resource block of that name exists (the readback reports "
+		 "the first domain's, which is all a name-only readback can)");
+
+	vms_lock_cleanup();
+}
+
+/* A master-side request that does not say WHICH resource of that name it means
+ * is refused, and creates nothing (rd vms-b5b0). The wire arm reads the
+ * identity off the frame; a caller that holds none has no honest default. */
+static void master_door_refuses_an_unstated_identity(void)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result res;
+	struct vms_resmaster_args rm;
+	struct vms_proc delivery, probe;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "master door: vms_lock_init");
+		return;
+	}
+	printf("-- NEGATIVE: a cross-node $ENQ with no stated resource identity\n");
+	proc_init(&delivery);
+	proc_init(&probe);
+	delivery.current_mode = PSL_C_USER;
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A, LCK_K_EXMODE, 0,
+		"MD_NOIDENT");
+	r.res_ident_valid = 0u;          /* the codec would not give us one */
+	ct_check(vms_lock_dlm_master_serve(&r, &res) == SS__BADPARAM,
+		 "a peer's $ENQ with no resource identity is REFUSED");
+	ct_check(do_resmaster(&probe, "MD_NOIDENT", &rm) == SS__NORMAL &&
+		 rm.found == 0u,
+		 "... and NO lock state was created for it (INV-6)");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
@@ -606,7 +714,9 @@ int main(void)
 	lock_stress();
 	remote_lkb_is_outside_image_rundown();
 	master_door_refuses_without_a_delivery_proc();
+	master_door_refuses_an_unstated_identity();
 	master_door_reports_what_the_engine_did();
+	the_namespace_is_qualified();
 	dlksrch_both_initiate_aborts_once();
 	return ct_summary("test_lock_host");
 }

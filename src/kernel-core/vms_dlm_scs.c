@@ -46,7 +46,7 @@
  * `csb->peer_is_ours`). The gate has two halves and both are counted: this file
  * refuses to SERVE a request from a system that is not proven ours, and
  * vms_cnxman.c refuses to EMIT to one. Upstream of both, the ALL-OVMX gate
- * (vms_ldwv_all_ovmx(), read through `dir_groundable` and `all_ovmx`) keeps the
+ * (vms_ldwv_all_ovmx(), read by the BLKAST emit below) keeps the
  * lock engine from ROUTING anything off this node while any member cannot be
  * proven ours -- and since rd vms-fcb a mixed cluster's vector BUILDS (a real
  * VAX's LOCKDIRWT is read off its PARAMS), so that gate, not a refused vector,
@@ -233,9 +233,9 @@ struct vms_dlm_scs {
 				       /* that shape is unobserved, not sent   */
 
 	/*
-	 * THE MIXED-CLUSTER MASTER ROLE (rd vms-025 / vms-db2a), live only while
-	 * this node is the SOLE lock-directory node (vms_ldwv_sole_directory).
-	 * Every one of these is a thing that really happened.
+	 * THE MIXED-CLUSTER MASTER ROLE (rd vms-025 / vms-db2a). Every one of
+	 * these is a thing that really happened, in any LOCKDIRWT configuration
+	 * (rd vms-b5b0 retired the sole-directory confinement).
 	 */
 	uint32_t mixed_served;        /* requests from a real VMS system served */
 				       /* as the resource's MASTER (p. 6-51)    */
@@ -339,11 +339,12 @@ static int dlm_arm_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint32_t dir_hash)
+static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint16_t group,
+				  uint8_t mode, uint32_t dir_hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, dir_hash) == SS__NORMAL ?
-	       0 : -1;
+	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, dir_hash) ==
+	       SS__NORMAL ? 0 : -1;
 }
 
 /*
@@ -390,10 +391,13 @@ static int dlm_arm_send(void *ctx, vms_csid_t dst_csid, const uint8_t *body,
 /*
  * THE ALL-OVMX GATE, in ONE place, read from the connection manager's own
  * vector every time it is asked (vms-3e3). Two consumers, one fact: the
- * ENGINE's directory grounding (dlm_arm_eng_dir_groundable, below) and the
- * requester FSM's new-shape gate (`dlm_req_ops.all_ovmx`, rd vms-d7a3). A VAX
- * joining closes both and a VAX leaving reopens both, with no cached copy
- * anywhere to go stale.
+ * op-0x05 BLOCKING AST this master owes a remote holder (dlm_arm_send_blkast),
+ * whose body[30:32] is observed-and-not-pinned. A VAX joining closes it and a
+ * VAX leaving reopens it, with no cached copy anywhere to go stale. It is the
+ * ONE consumer left: rd vms-b5b0 retired the engine's directory grounding and
+ * the requester FSM's op-0x03 gate, because the question they asked ("may this
+ * shape face an unproven member?") is now answered per SHAPE by the codec and
+ * applied per DESTINATION by the connection manager.
  */
 static int dlm_arm_all_ovmx(struct vms_dlm_scs *d)
 {
@@ -402,72 +406,44 @@ static int dlm_arm_all_ovmx(struct vms_dlm_scs *d)
 	return vms_ldwv_all_ovmx(&d->cl->club.ldwv);
 }
 
-static int dlm_arm_all_ovmx_op(void *ctx)
-{
-	return dlm_arm_all_ovmx((struct vms_dlm_scs *)ctx);
-}
-
 /*
  * ===========================================================================
- * THE MIXED-CLUSTER INTERIM GATE (rd vms-025 / vms-db2a), in ONE place.
+ * THE MIXED-CLUSTER POSTURE (rd vms-025 / vms-db2a, generalised by rd
+ * vms-b5b0). What this node will do with, and toward, a system it cannot prove
+ * runs this implementation.
  *
- * It is ONE read of the connection manager's own weight vector: is this node
- * the SOLE lock-directory node of this cluster (vms_ldwv_sole_directory --
- * every entry of the committed LDWV is ours, which in the lab configuration
- * means every real VMS member is at LOCKDIRWT 0 and this node is above 0, Davis
- * p. 6-32)? Derived every time it is asked; a joining member with a nonzero
- * weight closes it at the next Phase 2 fill with no cached copy to go stale,
- * exactly like the all-OVMX gate above.
+ * WHAT USED TO GATE IT. One read of the weight vector: was this node the SOLE
+ * lock-directory node of the cluster -- every entry ours, which is what the
+ * interim lab configuration produced by putting every real VMS member at
+ * LOCKDIRWT 0? (The predicate that answered it is deleted; see
+ * vms_dlm_ldwv.h.) That stood in for "this node's directory is authoritative
+ * for every root name", which was the only way to route an OVMX $ENQ at a real
+ * VMS master without a resource-name hash.
  *
- * WHAT IT OPENS, and every one of these is a cat-0x02 shape whose field map is
- * grounded on REAL VAX<->VAX traffic and whose every asserted value is read
- * from this executive's lock database at the moment of the frame:
+ * WHAT GATES IT NOW. Nothing about the CONFIGURATION, and two things about the
+ * FACTS:
  *
- *   IN   an op-0x01/0x07 ENQ/CONVERT for a resource THIS NODE MASTERS, served
- *        as the master (p. 6-31 outcome (a), p. 6-51 -- the faithful answer,
- *        where "you master it" would make a second master and a redirect to
- *        ourselves would loop); the op-0x03 $DEQ and op-0x06 CONVERT-with-LVB
- *        for a lock this node holds FOR that system (authorized by the LKB's
- *        own req_csid tag, not by the frame); and a cat-0x82 answer matched to
- *        a request of OUR OWN by a handle this executive minted.
- *   OUT  the GRANT and the DENY replies (spec §4(f).1, built from the LKB the
- *        engine just stamped); the op-0x01/0x07 request to a master this node's
- *        own directory named, carrying the WIRE-LEARNED hash and refused
- *        without one; and the op-0x03 release of a lock we hold there.
+ *   TOWARD a real VMS system, per FRAME and per DESTINATION: the codec says
+ *   which REQUEST shapes are fit to face an unproven member
+ *   (vms_dlm_shape_fit_for_any_member -- op-0x01, 0x07, 0x06, 0x03) and the
+ *   connection manager applies it next to `csb->peer_is_ours`
+ *   (cnxman_dlm_peer_proven). The op-0x05 BLKAST is NOT in that list and is
+ *   additionally refused by `dlm_arm_all_ovmx` below, where its
+ *   observed-but-unpinned body[30:32] is the reason.
  *
- * WHAT IT DOES NOT OPEN, and these are honest gaps with their own rungs, NOT
- * oversights (memory ovmx-never-crashes-a-peer):
+ *   FROM a real VMS system, per LOCK: every inbound op this arm acts on names
+ *   either a resource whose directory or master THIS EXECUTIVE really is (the
+ *   engine's own records answer, vms_lock_dlm_name_mastered_here) or a lock
+ *   this node genuinely holds FOR that system (authorised by the LKB's own
+ *   req_csid tag, which the engine checks whether or not this file asks), or a
+ *   cat-0x82 answer the requester FSM matches to an outstanding request of our
+ *   own by a handle THIS executive minted. None of those three depends on a
+ *   configuration, and none of them creates lock state a frame alone asserted.
  *
- *   - THE BLOCKING AST (op 0x05) AT A SYSTEM NOT PROVEN OURS. Its mode-context
- *     pair at body[30:32] is OBSERVED AND NOT PINNED (vms_cluster_codec_dlm.h
- *     says so: three samples across two locks is not a one-variable diff), so
- *     OVMX would have to write a zero where every real frame carries data. A
- *     zero in an ungrounded field is exactly what made a real VAX install OVMX
- *     as master of resources it did not master. It stays behind the all-OVMX
- *     gate and `blkasts_no_wire_op` counts every one this master owed.
- *   - THE DEFERRED GRANT. Originating a cat-0x82 grant at a system that did not
- *     just ask breaks RULE A, and no capture grounds an uncorrelated grant.
- *     `deferred_grants_no_wire_op` counts them.
- *
- * AND IT IS NOT A COMPATIBILITY CLAIM. Outside this configuration every path
- * below keeps exactly the behaviour it had. Routing OVMX's OWN names to the
- * VMS-correct directory node with default weights needs the resource-name hash
- * and is deliberately not attempted here (rd vms-dc2 / vms-b5b0).
+ * `mixed_served` / `mixed_declined` / `mixed_replies_taken` still count every
+ * one, so a transcript says exactly what this node did with a real VAX.
  * ===========================================================================
  */
-static int dlm_arm_sole_directory(struct vms_dlm_scs *d)
-{
-	if (d == NULL || d->cl == NULL)
-		return 0;
-	return vms_ldwv_sole_directory(&d->cl->club.ldwv);
-}
-
-/* The engine's half of the same one fact (the FSM's new-shape gate reads it
- * through `dlm_req_ops.mixed_dlm_ok`). */
-static int dlm_arm_sole_directory_op(void *ctx)
-{
-	return dlm_arm_sole_directory((struct vms_dlm_scs *)ctx);
-}
 
 /* ==========================================================================
  * 3b. THE DIRECTORY TABLE, under its leaf lock
@@ -527,8 +503,6 @@ static void dlm_arm_dir_do_drop_master(struct vms_dlm_scs *d, vms_csid_t csid)
 static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 {
 	d->req_ops.send            = dlm_arm_send;
-	d->req_ops.all_ovmx        = dlm_arm_all_ovmx_op;
-	d->req_ops.mixed_dlm_ok    = dlm_arm_sole_directory_op;
 	d->req_ops.refill_post     = dlm_arm_refill_post;
 	d->req_ops.dir_resolve     = dlm_arm_dir_resolve;
 	d->req_ops.dir_generation  = dlm_arm_dir_generation;
@@ -777,30 +751,25 @@ static void dlm_arm_run_release(struct vms_dlm_scs *d, uint32_t slot,
 static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid);
 static uint32_t dlm_arm_eng_dir_generation(void *ctx);
-static int dlm_arm_eng_dir_groundable(void *ctx);
-static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
-				       uint32_t name_len, uint32_t *out_hash);
-static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx, const char *name,
-					     uint32_t name_len,
+static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
+					     const struct vms_dlm_dir_ask *q,
 					     struct vms_dlm_dir_local *out);
-static uint32_t dlm_arm_eng_dir_claim_self(void *ctx, const char *name,
-					   uint32_t name_len);
+static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
+					   const struct vms_dlm_dir_ask *q);
 
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
 	d->eng_ops.post           = dlm_arm_post;
-	/* All directory ops are installed unconditionally: the all-OVMX gate is
-	 * now DYNAMIC (dir_groundable), checked by the engine at resolve time, not
-	 * a one-shot decision at start. In a mixed or single-node configuration the
-	 * gate reads 0 and the engine masters locally exactly as before -- see the
-	 * long note above dlm_arm_eng_dir_resolve (rung A", vms-3e3). */
+	/* The vector, and its generation. Nothing gates them: the engine decides
+	 * per resource whether it can honestly produce a value to index with
+	 * (vms_lock.c dir_resolve; rd vms-b5b0 retired the all-OVMX gate that
+	 * used to stand here, together with the OVMX-own hash it protected). */
 	d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;
 	d->eng_ops.dir_generation = dlm_arm_eng_dir_generation;
-	d->eng_ops.dir_groundable = dlm_arm_eng_dir_groundable;
-	d->eng_ops.dir_ground     = dlm_arm_eng_dir_ground;
 	/* The engine's read of, and write to, THIS NODE's own lock directory
-	 * (rd vms-025/db2a). Both refuse unless this node is the sole directory
-	 * node, so they are inert in every other configuration. */
+	 * (rd vms-025/db2a). The engine asks them only after the vector has named
+	 * THIS NODE as the resource's directory, which is what makes "no entry"
+	 * mean "no system masters it". */
 	d->eng_ops.dir_local_lookup = dlm_arm_eng_dir_local_lookup;
 	d->eng_ops.dir_claim_self   = dlm_arm_eng_dir_claim_self;
 	d->eng_ops.ctx            = d;
@@ -808,64 +777,49 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 
 /*
  * ===========================================================================
- * THE ENGINE'S DIRECTORY RESOLVER IS NOW INSTALLED, BEHIND THE ALL-OVMX GATE
- * (rung A", design SS3.6; vms-3e3, conductor-ratified). This block records the
- * bootstrap deadlock it resolves and exactly why the resolution is safe.
+ * THE ENGINE'S DIRECTORY RESOLVER, WITH NO GATE ABOVE IT (rd vms-b5b0).
  * ===========================================================================
  *
- * THE DEADLOCK, AS MEASURED. vms_lock.c's dir_resolve() refuses, BEFORE it
- * ever calls this op, when the resource block carries no WIRE-LEARNED hash:
+ * WHAT USED TO BE HERE, AND WHY IT IS NOT. This block carried rung A" (rd
+ * vms-3e3): the resolver was installed behind an ALL-OVMX GATE, and for a root
+ * name no frame had ever named, the engine grounded a value with OVMX'S OWN
+ * directory hash -- an FNV-1a fold, documented as OVMX's own, kept away from
+ * every real VAX by that gate. It existed to break a bootstrap deadlock: a
+ * value could only be LEARNED off a frame somebody else sent, so an OVMX-only
+ * cluster could never originate its first cat-0x02 frame at all, and a mixed
+ * cluster had to master every novel name locally (the two-master hole, rd
+ * vms-025/db2a).
  *
- *     if (!res->hash_known)
- *             return SS__UNSUPPORTED;       // INV-6: wire-learned or nothing
+ * THE DEADLOCK IS GONE because the value is no longer only learnable. VMS's own
+ * resource-name hash was determined BLACK-BOX from the values real VMS nodes
+ * broadcast in the clear (Baron's ruling on rd vms-dc2) and proven on names
+ * held out of the determination -- 55 of 55 pre-registered triples on a real
+ * V7.3 wire with the predictions committed first, 0 mismatches, plus 1216
+ * corpus rows and a 533-key forward prediction (src/kernel-core/vms_dlm_hash.h,
+ * docs/design-dlm-name-hash.md). So the engine computes the value for an
+ * identity inside the PROVEN COVERAGE and REFUSES outside it, and this op is
+ * simply the vector read it has always been.
  *
- * and vms_dlm_proxy.h states the consequence as the design's own rule: "ABSENT
- * (NULL) MEANS 'NO CLUSTER', NOT 'REFUSE' ... It is only when a resolver IS
- * installed that a resource with no wire-learned hash is refused." So
- * installing this op is what turns the refusal on, for EVERY root name this
- * node has never seen on the wire. tests/cluster/host/test_lock_dir.c pins both
- * halves already.
+ * ONE FUNCTION CLUSTER-WIDE, which is the part that matters for a gate. Keeping
+ * OVMX's own hash for all-OVMX clusters would mean a name's directory node --
+ * and so its master -- CHANGING the moment a VAX joined, because the two
+ * functions disagree. vms-3e3's condition 2 is "deterministic and identical
+ * across all OVMX nodes, same name -> same master everywhere"; one function
+ * satisfies it in every membership, two satisfy it only inside one. The
+ * OVMX-own hash is therefore DELETED rather than retained behind the gate, and
+ * conditions 1 and 4 (gate it to all-OVMX; label it a bridge) retire with the
+ * thing they governed. Condition 5 is unchanged: this flips no register row by
+ * itself -- the real-cluster proof does.
  *
- * THE BOOTSTRAP DEADLOCK. A wire-learned hash reaches a resource block from
- * exactly one place: a cat-0x02 frame somebody ELSE sent (Davis p. 6-50,
- * vms_lock_dlm_learn_dir_hash). With a real VAX in the cluster hashes flow, but
- * RULE C forbids routing DLM traffic to a system not proven to run this
- * implementation. In an OVMX-ONLY cluster RULE C permits it, but no member can
- * originate the FIRST cat-0x02 frame: doing so needs a hash, and computing DEC's
- * is Rule-8-forbidden (the function is unpublished, and a wrong value made a
- * real VAX install OVMX as master of resources it did not master -- the 35/s
- * grant storm). Without a source for the first hash, the whole cross-node path
- * dead-ends UPSTREAM of this file, and installing this op naively would refuse
- * EVERY first $ENQ -- the ACP volume lock, RMS, the XQP -- and stop a two-node
- * OVMX cluster from mounting SYS$DISK.
- *
- * THE RESOLUTION -- rung A", ratified (vms-3e3). An all-proven-OVMX cluster has
- * no real VAX to mis-address and no DEC compatibility to honour on its own
- * private names, so it may originate the first hash with OVMX's OWN directory
- * hash (vms_dlm_ovmx_dir_hash above): deterministic, identical on every OVMX
- * node, documented as OVMX's own. Two gates keep it exactly as narrow as the
- * ruling requires:
- *
- *   - dir_groundable (the all-OVMX gate) is DYNAMIC. When any member cannot be
- *     proven OVMX, the engine masters names locally exactly as before any
- *     resolver existed -- so a mixed OVMX+VAX cluster and a node booting alone
- *     see NO change, and nothing is routed at, or grounded toward, a real VAX.
- *     This is the anti-regression guarantee; it is why installing the resolver
- *     no longer breaks SYS$DISK mount.
- *   - dir_ground grounds ONLY names never seen on the wire, and ONLY when the
- *     gate holds. A name WITH a wire-learned hash still routes by the received
- *     value (dir_resolve), never a computed one.
- *
- * This is exactly parallel to the LDWV all-zero fallback (Option-A): that
- * grounds the VECTOR for an all-OVMX cluster; this grounds the HASH. Both are
- * OVMX bridges for all-OVMX clusters; real-VMS DLM-directory interop stays
- * deferred to FC-P3.2 (oracle-grounded), and neither claims it. INV-6.
- *
- * REMAINING HONESTY DEBT: in an all-OVMX cluster the OVMX hash names a single
- * master per name on every node, which IS cluster-wide mastering; but the value
- * is OVMX's own, so it must never be described as VMS-directory-compatible. In a
- * mixed cluster the old floor stands: each node may master a novel name locally
- * (not cluster-wide) -- unchanged, and named, not hidden.
+ * WHAT IS STILL REFUSED, and it is the whole safety argument: an identity
+ * outside the proven coverage (supervisor mode, a UIC group with bit 14 or 15
+ * set, a name of 23 or 29 bytes) yields no value, so no frame is built and the
+ * $ENQ gets SS$_UNSUPPORTED. A WRONG value does not fail locally -- it makes
+ * the directory node scan the wrong chain, miss the name, and install the
+ * SENDER as master of a resource somebody else already masters, at 35 frames a
+ * second (memory cluster-promotion-gap). Refusal is the only honest floor, and
+ * vms_lock.c's `vms_dlm_dir_hash_computed_wrong` counter is the live check that
+ * the coverage masks are not claiming too much.
  */
 static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid)
@@ -884,124 +838,72 @@ static uint32_t dlm_arm_eng_dir_generation(void *ctx)
 }
 
 /*
- * OVMX'S OWN DIRECTORY HASH (rung A", design SS3.6; vms-3e3).
+ * WHAT THIS NODE'S OWN LOCK DIRECTORY SAYS ABOUT A ROOT RESOURCE (rd vms-025,
+ * generalised by rd vms-b5b0; vms_dlm_proxy.h `dir_local_lookup` states the
+ * case in full).
  *
- * This is OVMX's own function, and it is documented as OVMX's own. It is NOT
- * DEC's directory hash -- that function is unpublished and Rule-8-forbidden to
- * reproduce, and it is never needed here because this value NEVER reaches a real
- * VAX (the all-OVMX gate below, plus RULE C on the send side). It is the FNV-1a
- * spelling the lock manager already computes over a resource name for its own
- * hash table (vms_lock.c resource_hash_key: offset basis 2166136261, prime
- * 16777619) -- a public, well-understood function of the NAME BYTES, chosen
- * precisely because it bears no relationship to DEC's.
+ * NO LONGER CONFINED TO THE SOLE-DIRECTORY CONFIGURATION, because the engine
+ * now asks only after the VECTOR has named this node as the resource's
+ * directory. That is what makes "my table has no entry for this resource" mean
+ * "no system in this cluster masters it" (p. 6-31 outcome 3); the interim
+ * confinement was standing in for a per-resource vector read that could not be
+ * done without a hash.
  *
- * It is a 32-bit value in the WIRE's own shape (body[128:132], rd vms-4fb): the
- * vector indexes it exactly as it indexes a learned one, by its high 16 bits
- * (vms_ldwv_key()), so a grounded name and a learned name take one path.
- *
- * The only property that matters for correctness is CONSISTENCY (p. 6-32): every
- * OVMX node must map a given name to the same value, so all members agree on
- * the master. That holds by construction -- every node runs this one function
- * over the same bytes -- with no dependence on byte order (each byte is folded
- * in on its own).
+ * Nothing is computed here: the identity is a key into entries the cluster
+ * itself created. The stored hash travels with the answer because the caller
+ * may put that value on a frame for this resource (Davis p. 6-50).
  */
-static uint32_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
+/*
+ * THE ASK, AS A WIRE IDENTITY. The engine states a resource's identity in its
+ * own vocabulary (struct vms_dlm_dir_ask); the table matches the identity a
+ * FRAME carries (struct vms_dlm_res_ident). This is the one translation, and it
+ * copies -- it derives nothing.
+ */
+static int dlm_arm_ask_to_ident(const struct vms_dlm_dir_ask *q,
+				struct vms_dlm_res_ident *id)
 {
-	uint32_t h = 2166136261u;     /* FNV-1a offset basis */
 	uint32_t i;
 
-	if (name == NULL)
-		return 0u;
-	for (i = 0u; i < len; i++) {
-		h ^= (uint32_t)(unsigned char)name[i];
-		h *= 16777619u;           /* FNV-1a prime */
-	}
-	return h;
+	if (q->name == NULL || q->name_len == 0u ||
+	    q->name_len > VMS_DLM_NAME_MAX)
+		return -1;
+	id->hash = q->hash;
+	id->group = q->group;
+	id->mode = q->mode;
+	id->name_len = (uint8_t)q->name_len;
+	for (i = 0u; i < q->name_len; i++)
+		id->name[i] = (uint8_t)q->name[i];
+	return 0;
 }
 
-/*
- * THE ALL-OVMX GATE, as the engine sees it (vms-3e3). Cross-node resolution and
- * hash grounding are live ONLY while every member is proven-OVMX -- read
- * dynamically from the connection manager's own vector, so a VAX joining turns
- * both off and a VAX leaving turns them back on with no code path to go stale.
- * When this reads 0 the engine masters names locally exactly as an unclustered
- * node does: the anti-regression guarantee for mixed OVMX+VAX clusters.
- */
-static int dlm_arm_eng_dir_groundable(void *ctx)
-{
-	return dlm_arm_all_ovmx((struct vms_dlm_scs *)ctx);
-}
-
-/*
- * GROUND a root name's directory hash -- the deliberately-forbidden name->hash
- * op (vms_dlm_proxy.h), permitted ONLY behind the gate. It refuses unless the
- * cluster is all-proven-OVMX, so the name->hash step never runs with a real VAX
- * present -- the 90b3bbbd storm was a real cluster and this cannot touch one.
- * The value is OVMX's own (above), and it makes no claim of real-VMS directory
- * compatibility (that is FC-P3.2, oracle-grounded). INV-6.
- */
-static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
-				       uint32_t name_len, uint32_t *out_hash)
-{
-	if (out_hash == NULL || name == NULL)
-		return SS__BADPARAM;
-	if (!dlm_arm_eng_dir_groundable(ctx))
-		return SS__UNSUPPORTED;   /* not all-OVMX: never ground here */
-	*out_hash = vms_dlm_ovmx_dir_hash(name, name_len);
-	return SS__NORMAL;
-}
-
-/*
- * WHAT THIS NODE'S OWN LOCK DIRECTORY SAYS ABOUT A ROOT NAME (rd vms-025;
- * vms_dlm_proxy.h `dir_local_lookup` states the case in full).
- *
- * Confined to the SOLE-DIRECTORY configuration, and the confinement is the
- * whole argument: only there does the vector direct EVERY root name here, so
- * only there does "my table has no entry for that name" really mean "no system
- * in this cluster masters it". With another directory node in the cluster the
- * absence proves nothing -- the entry would be on that node -- and answering
- * from it would be a guess, so this refuses and the engine's previous behaviour
- * stands.
- *
- * Nothing is computed from `name`: it is a key into entries the cluster itself
- * created. The WIRE HASH travels with the answer because the caller may put
- * that value, and only that value, on a frame for this name (Davis p. 6-50).
- */
-static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx, const char *name,
-					     uint32_t name_len,
+static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
+					     const struct vms_dlm_dir_ask *q,
 					     struct vms_dlm_dir_local *out)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
-	enum vms_dlm_dir_name_outcome o;
+	struct vms_dlm_res_ident id;
+	enum vms_dlm_dir_ident_outcome o;
 	vms_csid_t master = 0u;
 	uint32_t hash = 0u;
 	uint8_t hash_known = 0u;
 
-	if (d == NULL || name == NULL || out == NULL)
+	if (d == NULL || q == NULL || out == NULL)
 		return SS__BADPARAM;
-	if (!dlm_arm_sole_directory(d))
-		return SS__UNSUPPORTED;
+	memset(&id, 0, sizeof(id));
+	if (dlm_arm_ask_to_ident(q, &id) != 0)
+		return SS__BADPARAM;
 
 	exec_lock(&d->dir_lock);
-	o = vms_dlm_dir_lookup_name(&d->dir, name, name_len, &master, &hash,
-				    &hash_known);
+	o = vms_dlm_dir_lookup_ident(&d->dir, &id, &master, &hash, &hash_known);
 	exec_unlock(&d->dir_lock);
 
-	if (o == VMS_DLM_DIR_NAME_INVAL)
+	if (o == VMS_DLM_DIR_IDENT_INVAL)
 		return SS__UNSUPPORTED;      /* no table: nothing to answer from */
-	if (o == VMS_DLM_DIR_NAME_AMBIGUOUS) {
-		/* Two resource domains of one name, mastered on different
-		 * systems. The engine's resource namespace cannot tell them
-		 * apart, so neither answer can be asserted. Said once. */
-		dlm_arm_dir_say(d, &d->dir_said_mixed,
-			"%DLM, this node's lock directory holds two masters for "
-			"one resource name: a local lock request on it is "
-			"refused rather than routed at one of them");
-		return SS__UNSUPPORTED;
-	}
-	if (o == VMS_DLM_DIR_NAME_NONE) {
+	if (o == VMS_DLM_DIR_IDENT_NONE) {
 		/* The honest "nobody masters it": the engine then masters it and
-		 * records the claim through dir_claim_self below. */
+		 * records the claim through dir_claim_self below. It is the
+		 * truth because the caller resolved THIS NODE as the resource's
+		 * directory before asking (vms_dlm_proxy.h). */
 		out->master_csid = 0u;
 		out->is_self = 0u;
 		out->dir_hash_known = 0u;
@@ -1016,24 +918,27 @@ static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx, const char *name,
 
 /* THIS NODE IS TAKING MASTERY -- record it in its own directory (rd vms-db2a),
  * so the next lookup a real VMS system addresses here is answered "this node
- * masters it" and not "you master it". Same confinement, same reason. */
-static uint32_t dlm_arm_eng_dir_claim_self(void *ctx, const char *name,
-					   uint32_t name_len)
+ * masters it" and not "you master it". Recorded under the resource's full
+ * identity, hash included when the engine holds one (rd vms-b5b0). */
+static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
+					   const struct vms_dlm_dir_ask *q)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	struct vms_dlm_res_ident id;
 	uint32_t me;
 	int rc;
 
-	if (d == NULL || name == NULL)
+	if (d == NULL || q == NULL)
 		return SS__BADPARAM;
-	if (!dlm_arm_sole_directory(d))
-		return SS__UNSUPPORTED;
+	memset(&id, 0, sizeof(id));
+	if (dlm_arm_ask_to_ident(q, &id) != 0)
+		return SS__BADPARAM;
 	me = vms_lock_dlm_local_csid();
 	if (me == 0u)
 		return SS__UNSUPPORTED;   /* no identity: nothing to record */
 
 	exec_lock(&d->dir_lock);
-	rc = vms_dlm_dir_claim_self(&d->dir, name, name_len, (vms_csid_t)me);
+	rc = vms_dlm_dir_claim_self(&d->dir, &id, (vms_csid_t)me);
 	exec_unlock(&d->dir_lock);
 	return rc == 0 ? (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
 }
@@ -1083,6 +988,17 @@ static void dlm_arm_fill_master_req(const struct dlm_scs_request *in,
 		n = (uint32_t)sizeof(out->resnam) - 1u;
 	memcpy(out->resnam, e->name, n);
 	out->resnam[n] = '\0';
+	/*
+	 * WHICH resource of that name (rd vms-b5b0): body[44:46] UIC group and
+	 * body[46] access mode, as the codec read them. `res_ident_valid` is 0
+	 * for an op-0x07 CONVERT, whose identity span is stale buffer on a real
+	 * frame -- the engine then takes the identity off the LOCK the convert
+	 * names, which is an executive read (vms_lock.c). Nothing is defaulted
+	 * here.
+	 */
+	out->res_group = e->res_group;
+	out->res_mode = e->res_acmode;
+	out->res_ident_valid = e->res_ident_valid;
 }
 
 /* Hand the body the codec just built into the CM's reply buffer. The builders
@@ -1152,8 +1068,11 @@ static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
 	uint32_t written = 0;
 
 	memset(d->txframe, 0, sizeof(d->txframe));
+	/* body[46] echoes the DENIED REQUEST's own access mode (rd vms-b5b0):
+	 * this reply is about that requester's resource, in its domain. */
 	if (vms_dlm_enq_response_build_deny(e->req_pid_or_lkid, e->master_lkid,
-					    e->name_len, e->name, d->txframe,
+					    e->res_acmode, e->name_len,
+					    e->name, d->txframe,
 					    (uint32_t)sizeof(d->txframe),
 					    &written) != VMS_CODEC_OK) {
 		d->codec_failures++;
@@ -1357,8 +1276,6 @@ static int dlm_arm_serve_mixed_held(struct vms_dlm_scs *d,
 {
 	if (req->peer_is_ours || req->from_csid == 0u ||
 	    req->category != (uint8_t)VMS_DLM_CAT_REQUEST)
-		return -1;
-	if (!dlm_arm_sole_directory(d))
 		return -1;
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)
 		return dlm_arm_serve_deq(d, req);
@@ -1598,7 +1515,10 @@ static int dlm_arm_dir_name_held(const struct vms_dlm_res_ident *id)
 	nm[i] = '\0';
 	if (i == 0u)
 		return 0;          /* a name that starts with NUL is no engine name */
-	return vms_lock_dlm_name_in_use(nm);
+	/* ...and about the resource the asking frame's own identity names (rd
+	 * vms-b5b0): a lock this node holds on the SAME name in a DIFFERENT
+	 * resource domain is not this resource and must not answer for it. */
+	return vms_lock_dlm_name_in_use(nm, id->group, id->mode);
 }
 
 static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
@@ -1614,21 +1534,20 @@ static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
  * Is `hash` one of THIS node's directory entries by OUR vector? A vector
  * that is not built answers yes: nothing can be judged against it.
  *
- * `hash_known` 0 is an entry THIS node recorded for its own mastery of a name it
- * touched first (rd vms-db2a): it carries no wire hash, so it cannot be judged
- * against a vector index at all. It is kept exactly while this node is the SOLE
- * directory node -- where every root name is directed here by construction and
- * the entry is therefore still ours to hold -- and dropped otherwise, because
- * then its directory may have moved and the honest act is to discard it and let
- * the master re-register (p. 6-33).
+ * `hash_known` 0 is an entry carrying NO value at all -- which, since rd
+ * vms-b5b0 records this node's own claims WITH the value it holds for them, can
+ * only be an entry some frame created without one. It cannot be judged against
+ * a vector index, so it is DROPPED: its directory may have moved, and the
+ * honest act is to discard it and let the master re-register (p. 6-33). Keeping
+ * an unjudgeable entry across a vector change is how a directory ends up
+ * answering for a resource it no longer directs.
  */
 static int dlm_arm_dir_is_ours(void *ctx, uint32_t hash, int hash_known)
 {
-	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
-	const struct vms_ldwv *v = &d->cl->club.ldwv;
+	const struct vms_ldwv *v = &((struct vms_dlm_scs *)ctx)->cl->club.ldwv;
 
 	if (!hash_known)
-		return dlm_arm_sole_directory(d);
+		return 0;
 	if (!v->valid)
 		return 1;
 	return vms_ldwv_is_ours(v, vms_ldwv_key(hash));
@@ -1676,7 +1595,7 @@ static int dlm_arm_dir_name_mastered(const struct vms_dlm_res_ident *id)
 	nm[i] = '\0';
 	if (i == 0u)
 		return 0;
-	return vms_lock_dlm_name_mastered_here(nm);
+	return vms_lock_dlm_name_mastered_here(nm, id->group, id->mode);
 }
 
 /* Forward: the master-role serve, defined with the rest of the inbound paths. */
@@ -1715,12 +1634,6 @@ static int dlm_arm_dir_serve_as_master(struct vms_dlm_scs *d,
 		 * system masters, so this is a path a real capture has never
 		 * shown rather than one being refused in the common case.
 		 */
-		return -1;
-	}
-	if (!dlm_arm_sole_directory(d)) {
-		/* Outside the interim configuration this node does not act as
-		 * master for a system that has not proved it runs this
-		 * implementation -- the behaviour before rd vms-db2a. */
 		return -1;
 	}
 	if (dlm_arm_serve_enq_frame(d, req, reply) != 0) {
@@ -1910,12 +1823,12 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 
 	/*
 	 * THE MASTER ROLE TOWARD A REAL VMS SYSTEM, for the ops that name a lock
-	 * THIS NODE ALREADY HOLDS FOR IT (rd vms-db2a). Above RULE C for the same
-	 * reason the directory role is: the gate it stands behind is the interim
-	 * SOLE-DIRECTORY configuration (dlm_arm_sole_directory, which states the
-	 * whole posture), and the authority is the LKB's own req_csid tag, which
-	 * the engine applies whether or not this file calls it. Anything it does
-	 * not take falls through unchanged.
+	 * THIS NODE ALREADY HOLDS FOR IT (rd vms-db2a). Above RULE C because the
+	 * authority is not a configuration: it is the LKB's own req_csid tag --
+	 * this node really does hold that lock for that system -- which the
+	 * engine applies whether or not this file calls it. The posture note in
+	 * section 3 states the whole rule. Anything it does not take falls
+	 * through unchanged.
 	 */
 	if (dlm_arm_serve_mixed_held(d, req, reply) == 0)
 		return 0;
@@ -1932,7 +1845,7 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	 */
 	if (req->category == (uint8_t)(VMS_DLM_CAT_REQUEST |
 				       VMS_WIRE_RESPONSE_BIT) &&
-	    !req->peer_is_ours && dlm_arm_sole_directory(d)) {
+	    !req->peer_is_ours) {
 		int rc = dlm_arm_handle_reply(d, req);
 
 		if (rc == 0)

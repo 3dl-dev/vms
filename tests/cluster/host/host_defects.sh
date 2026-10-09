@@ -64,7 +64,7 @@
 #   dlm-dir-remove-by-anyone                 vms_dlm_dir.c   (rd vms-8219)
 #   dlm-learner-unbounded                    vms_lock.c      (rd vms-4e9)
 #   dlm-own-directory-not-consulted          vms_lock.c      (rd vms-025)
-#   dlm-self-claim-answered-you-master       vms_dlm_dir.c   (rd vms-db2a)
+#   dlm-dir-matched-by-name-alone            vms_dlm_dir.c   (rd vms-b5b0)
 #
 # (vms_dlm_ldwv.c above -- FC-P4.3's Lock Directory Weight Vector -- was the
 # seventh TU named by the item that grew this manifest; see its own defect
@@ -165,10 +165,12 @@ ldwv-refusal-uncounted
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
-dlm-self-claim-answered-you-master
+dlm-dir-matched-by-name-alone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 dlm-hash-empty-name-not-refused
+dlm-hash-coverage-claims-too-much
+dlm-engine-extrapolates-the-hash
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -446,19 +448,20 @@ EOF
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_dlm_mixed_master";;
         isolation)    echo "isolated";;
-        why)          echo "dlm_resolve_master()'s call to dlm_route_own_directory() is short-circuited, which is EXACTLY the measured origin/main behaviour: with a real VAX in the membership the all-OVMX gate makes dir_resolve() answer 'this node' for every name, so a resource a VAX already masters (its lookup answered and recorded in this node's own directory) is mastered HERE as well -- two masters for one resource, which is a lock manager agreeing that two systems may both grant EX on the same file.";;
+        why)          echo "dlm_resolve_master()'s call to dlm_route_own_directory() is short-circuited, so the engine assumes mastery of every resource the vector directs HERE without ever asking the directory it holds -- and a resource a real VAX already masters (its lookup answered and recorded in this node's own directory, rd vms-8219) is mastered HERE as well. Two masters for one resource, which is a lock manager agreeing that two systems may both grant EX on the same file. It also takes the engine's own claim recording with it, which is the same hole from the other side (rd vms-db2a).";;
         require_fail) cat <<'EOF'
 *** and the resource's MASTER is the VAX -- this node did NOT master it a second time ***
   the engine does not claim mastery
 exactly one frame left this node
 *** addressed to the VAX the directory named ***
-  as an op-0x01 request
 *** carrying the hash the VAX ITSELF put on the wire for that name -- never a computed one ***
   and OUR OWN handle, the one this executive minted
 *** and NOTHING is granted yet: the requester waits for the VAX's master, it does not grant itself ***
 the VAX's grant reply is accepted by the shipping FSM
-*** the $ENQ is REFUSED honestly: the VAX masters it and this node has no hash to address it with ***
-  and it did NOT become a second master instead
+one frame left this node
+  addressed to the master the registration named
+*** carrying the value this executive COMPUTED for the identity -- never a zero where the hash goes ***
+  and it did NOT become a second master
   and the refusals to RECORD are counted, not hidden
 *** and the mastery is RECORDED in this node's own directory -- which is what stops the next asker being told to master it ***
 *** the directory answers THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
@@ -467,18 +470,20 @@ EOF
                       ;;
         esac;;
 
-    dlm-self-claim-answered-you-master)
+    dlm-dir-matched-by-name-alone)
         case "$_f" in
-        facility)     echo "the lock directory's NAME-ONLY self-claim (dir_self_claims(), rd vms-db2a): a VMS system's lookup for a name THIS NODE masters is answered 'this node masters it' (p. 6-51), never 'you master it'";;
+        facility)     echo "the lock directory's EXACT-IDENTITY match (dir_same(), rd vms-b5b0): an entry answers only for the resource it is an entry for -- the same NAME in another UIC group or at another access mode is a DIFFERENT resource";;
         targets)      echo "kernel-core/vms_dlm_dir.c";;
         suites_red)   echo "test_dlm_dir";;
         isolation)    echo "isolated";;
-        why)          echo "vms_dlm_dir_lookup()'s consultation of the name-only self-claim is disarmed. A real VAX's lookup carries ITS group, ITS access mode and ITS hash -- none of which this executive holds for a name it mastered first -- so it finds no exact-identity entry and is answered 'you master it': the VAX becomes a second master of a resource this node already masters.";;
+        why)          echo "dir_same()'s group/mode comparison is disarmed, so the table matches by NAME ALONE across resource domains -- which is what it did before rd vms-b5b0 gave the engine a full resource identity to key on. One system's QMAN$ in UIC group 0 and another's in group 1 then collapse into ONE entry: a lookup for either is answered with the OTHER's master, and the directory routes a lock request at a system that does not master that resource.";;
         require_fail) cat <<'EOF'
-*** the VAX's lookup is answered THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
-  nothing was answered 'you master it'
-  and the outcome is counted
-another resource domain of that name is answered the same way (over-serialize, never two masters)
+*** the same NAME in another UIC group / access mode is NOT this entry: no cross-domain answer ***
+*** and group 1's QMAN$ names VAX2 -- two resources, two masters, no coin toss ***
+another resource domain of that name is a different resource: the asker masters it
+the same name in another GROUP is another resource
+the same name in another ACCESS MODE is another resource
+a departure drops every entry its system mastered
 EOF
                       ;;
         esac;;
@@ -539,6 +544,40 @@ EOF
         require_fail) cat <<'EOF'
 a zero-length name is refused
 a refusal writes nothing (INV-6)
+EOF
+                      ;;
+        esac;;
+
+    dlm-hash-coverage-claims-too-much)
+        case "$_f" in
+        facility)     echo "the PROVEN-COVERAGE masks in vms_dlm_hash.h (rd vms-b5b0): each one is exactly the set of values a real OpenVMS VAX has been WATCHED hashing, derived in the test from the corpus and the driven run -- never widened by hand";;
+        targets)      echo "kernel-core/vms_dlm_hash.h";;
+        suites_red)   echo "test_dlm_hash";;
+        isolation)    echo "isolated";;
+        why)          echo "VMS_DLM_HASH_LEN_PROVEN is widened by hand to every length 1..31, including the two (23 and 29) the driven run pre-registered and the VAX never put on the wire. The arithmetic is untouched -- all 1216 captured rows stay green, which is the point -- but the executive would now ROUTE on a value for an identity no VMS node has been observed producing one for, and a wrong value makes the directory node scan the wrong chain and install the sender as master of somebody else's resource (memory cluster-promotion-gap). The test derives the masks from the two proof artifacts, so a hand-widened constant has nowhere to hide.";;
+        require_fail) cat <<'EOF'
+VMS_DLM_HASH_LEN_PROVEN is exactly the observed lengths
+a 23-byte name is refused (never seen on the wire)
+a 29-byte name is refused (never seen on the wire)
+EOF
+                      ;;
+        esac;;
+
+    dlm-engine-extrapolates-the-hash)
+        case "$_f" in
+        facility)     echo "the ENGINE's refusal to route a resource whose identity is outside the proven coverage (vms_lock.c dir_hash_compute, rd vms-b5b0): learned, or proven-computed, or SS\$_UNSUPPORTED -- never extrapolated";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_dir";;
+        isolation)    echo "isolated";;
+        why)          echo "dir_hash_compute() is pointed at the UNGATED vms_dlm_name_hash() instead of vms_dlm_name_hash_proven(), so the engine computes -- and ROUTES, and puts on the wire -- a value for an identity no VMS node has been watched hashing (supervisor mode; a UIC group in the system range). The value is arithmetically well-defined and that is exactly the danger: it does not fail locally, it makes the receiving directory node scan the wrong chain, miss the name and install OVMX as the master of a resource somebody else already masters, at 35 frames a second (memory cluster-promotion-gap).";;
+        require_fail) cat <<'EOF'
+$ENQ on it -> SS$_UNSUPPORTED, the honest floor
+no lock handle was invented
+and NOTHING was put on the wire (the anti-LARP clause)
+the vector was not consulted: there was no value to index it with
+and the readback reports NO directory rather than a guessed one (INV-6)
+a UIC group with bit 14 set is refused too
+and sends nothing
 EOF
                       ;;
         esac;;
@@ -1648,6 +1687,14 @@ apply_edit() {
         # completely alone.
         sed -i 's|c->genesis_refused_noquorum++;|/* NEGCTL coord-genesis-refusal-uncounted: the refusal is not counted */|' "$_file";;
 
+    dlm-hash-coverage-claims-too-much)
+        # The mask literal is unique in the header.
+        sed -i 's|#define VMS_DLM_HASH_LEN_PROVEN    0xdf7ffffeu|#define VMS_DLM_HASH_LEN_PROVEN    0xfffffffeu /* NEGCTL dlm-hash-coverage-claims-too-much */|' "$_file";;
+
+    dlm-engine-extrapolates-the-hash)
+        # The gated call is unique in vms_lock.c.
+        sed -i 's|if (vms_dlm_name_hash_proven(res->res_group, res->res_mode,|if (vms_dlm_name_hash(res->res_group, res->res_mode, /* NEGCTL dlm-engine-extrapolates-the-hash */|' "$_file";;
+
     dlm-hash-empty-name-not-refused)
         # `name_len == 0u || ` is unique in this file; dropping just that
         # disjunct leaves the upper bound armed, so the mutated build cannot
@@ -1697,9 +1744,9 @@ apply_edit() {
         # is unique in this file.
         sed -i 's|if (!inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st))|if (0 \&\& !inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st)) /* NEGCTL dlm-own-directory-not-consulted */|' "$_file";;
 
-    dlm-self-claim-answered-you-master)
-        # `if (dir_self_claims(d, id, self)) {` is unique in this file.
-        sed -i 's|if (dir_self_claims(d, id, self)) {|if (0 \&\& dir_self_claims(d, id, self)) { /* NEGCTL dlm-self-claim-answered-you-master */|' "$_file";;
+    dlm-dir-matched-by-name-alone)
+        # `if (e->id.group != b->group || e->id.mode != b->mode)` is unique.
+        sed -i 's|if (e->id.group != b->group \|\| e->id.mode != b->mode)|if (0) /* NEGCTL dlm-dir-matched-by-name-alone */|' "$_file";;
 
     dlm-dir-remove-by-anyone)
         # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.

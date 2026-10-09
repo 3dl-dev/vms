@@ -165,6 +165,19 @@ jobs:
 
       - name: NEGATIVE CONTROL -- the gate must reject an injected substrate include
         run: sh tools/ci/cluster_core_includes_gate.sh --self-test
+
+      # rd vms-b5b0: the DLM resource-name hash has an UNGATED entry point (the
+      # arithmetic, which tests and capture scorers must be able to evaluate
+      # for identities the wire has not shown) and a COVERAGE-GATED one. Only
+      # the gated one may produce a value that reaches a frame: a value for an
+      # unobserved identity does not fail locally, it makes the receiving
+      # directory node install the sender as master of somebody else's resource
+      # (the grant storm). This holds the one-caller rule.
+      - name: The executive reaches the DLM name hash only through its gated entry point
+        run: sh tools/ci/cluster_dlm_hash_gate.sh
+
+      - name: NEGATIVE CONTROL -- the gate must reject an injected ungated caller
+        run: sh tools/ci/cluster_dlm_hash_gate.sh --self-test
   # -----------------------------------------------------------------------
   # Job: keystroke oracle self-test (vms-370)
   #

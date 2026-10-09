@@ -9,10 +9,22 @@
 >
 > Verdict up front: **the vector and the index rule are fully published and
 > are implemented from the book (rung A); the hash function is NOT published
-> at the bit level — but the book documents that the 16-bit hash value
-> travels on the wire in every directory lookup, so OVMX takes the value from
-> the wire (rung A′) and never computes it.** Details, residuals and the exact
-> P4.3 contract follow.
+> at the bit level — but the book documents that the hash value travels on the
+> wire in every directory lookup, so OVMX takes the value from the wire
+> (rung A′).** Details, residuals and the exact P4.3 contract follow.
+>
+> **SUPERSEDED IN ONE PLACE (2026-10-09, rd vms-b5b0).** "…and never computes
+> it" was true of this note's own recommendation and is no longer true of the
+> executive. Baron's ruling on rd vms-dc2 (2026-10-08) extended Rule 8's scope
+> to determining THIS ONE FUNCTION black-box from the (name, value) pairs real
+> OpenVMS nodes broadcast in the clear — this note's §4 rung C(i) framing, put
+> to the operator and answered YES — and the function was determined, proven on
+> held-out names and a driven real-VAX run, and wired into `dir_resolve`. See
+> `docs/design-dlm-name-hash.md` (method, every eliminated hypothesis, and the
+> coverage the engine REFUSES outside) and `src/kernel-core/vms_dlm_hash.h`.
+> Everything else in this note — the vector, the index rule, the wire value
+> being authoritative when the cluster supplies one, the self-check — stands
+> unchanged.
 
 ## 1. Vector construction — the Lock Directory Weight Vector (FULLY GROUNDED)
 

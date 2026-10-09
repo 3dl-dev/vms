@@ -90,9 +90,9 @@
 #include "vms_cnxman_recnx_fsm.h"
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_quorum.h"
-#include "vms_dlm_ldwv.h"       /* rd vms-025: vms_ldwv_sole_directory, the one
-				 * read the DLM's emission gate makes of the
-				 * vector this file already owns */
+#include "vms_cluster_codec_dlm.h" /* rd vms-b5b0: vms_dlm_shape_fit_for_any_
+				    * member -- RULE C's per-frame half, asked
+				    * of the layer that owns wire offsets */
 #include "vms_pe.h"             /* E70: pe_send_refusal, the port's own reason */
 #include "vms_pe_fsm.h"         /* ... and struct pe_vc_send_refusal          */
 
@@ -1578,47 +1578,53 @@ static void cnxman_cluexit_clear_on_contact(struct vms_cnxman *cn);
  * LOCKMGRERR on two more. So nothing DLM leaves this node for such a system --
  * counted and logged, never silently dropped and never sent anyway.
  *
- * The all-OVMX gate on the Lock Directory Weight Vector (vms_ldwv_all_ovmx(),
- * vms_dlm_ldwv.h) already stops the ROUTING before a frame is ever built. This
- * is the teeth under it: a gate that is only upstream is a gate that one new
- * call site bypasses.
+ * The arm's own gates stop the shapes it has never been watched emitting before
+ * a frame is ever built (vms_dlm_scs.c's all-OVMX read for the op-0x05 BLKAST).
+ * This is the teeth under them: a gate that is only upstream is a gate that one
+ * new call site bypasses.
  */
 /*
- * ... AND THE ONE CONFIGURATION IN WHICH IT IS NOT THE WHOLE ANSWER (rd
- * vms-025 / vms-db2a; the posture is stated in full at
- * vms_dlm_scs.c's `dlm_arm_sole_directory`).
+ * ... AND WHAT IT IS NOT A BAN ON (rd vms-025 / vms-db2a, generalised by rd
+ * vms-b5b0; the posture is stated in full at vms_dlm_scs.c's resolver note).
  *
- * While this node is the SOLE lock-directory node of the cluster -- every entry
- * of the committed weight vector is ours, which is what the interim mixed-
- * cluster configuration produces -- its own directory is authoritative for every
- * root name, and the cat-0x02 requests it addresses at the master that directory
- * named are the shapes whose field map is grounded on real VAX<->VAX traffic,
- * carrying the WIRE-LEARNED hash (refused without one, upstream in the engine)
- * and no value this executive does not hold. Without this, an OVMX $ENQ for a
- * resource a real VAX masters can only ever be refused -- which is the two-master
- * hole's other horn: the alternative the engine took was to master it locally.
+ * RULE C is about shapes OVMX has never been watched emitting at a real lock
+ * manager -- not about the four REQUEST shapes whose field map is grounded on
+ * real VAX<->VAX traffic and whose every asserted value is an executive read.
+ * Those four (op-0x01 ENQ/lookup, op-0x07 CONVERT, op-0x06 CONVERT-with-value,
+ * op-0x03 DEQ) are what an OVMX $ENQ for a resource a real VAX directs or
+ * masters IS; refusing them does not make the cluster safer, it makes the
+ * two-master hole permanent, because the only alternative the engine has is to
+ * master the name locally as well.
  *
- * The shapes this does NOT clear are blocked UPSTREAM, in the arm and the FSM
- * (the op-0x05 blocking AST, whose body[30:32] is observed-and-not-pinned, and
- * the uncorrelated deferred grant), so this function is not the place to look
- * for them -- and both still count every frame they withheld.
+ * The decision is per FRAME, asked of the CODEC (vms_dlm_shape_fit_for_any_
+ * member) so that no byte of a body is read outside the one translation unit
+ * that owns wire offsets -- and so that a NEW shape is refused by default
+ * rather than admitted by a gate somebody forgot to narrow.
  *
- * Every send under it is counted separately (`dlm_mixed_sends`), so a transcript
- * says exactly how many frames this node put in front of a system it could not
- * prove runs this implementation, and under which configuration.
+ * WHAT WAS HERE BEFORE. A configuration test: this node had to be the cluster's
+ * SOLE lock-directory node (every weight-vector entry ours, i.e. every real VMS
+ * member at LOCKDIRWT 0). That stood in for "the routing decision is sound",
+ * which it was, because without the resource-name hash the vector could not be
+ * consulted per resource at all. The hash is now determined and proven
+ * (src/kernel-core/vms_dlm_hash.h), the engine refuses any identity outside the
+ * proven coverage, and so the configuration test has nothing left to protect.
+ *
+ * The shapes this does NOT clear are ALSO blocked UPSTREAM, in the arm and the
+ * FSM (the op-0x05 blocking AST, whose body[30:32] is observed-and-not-pinned,
+ * and the uncorrelated deferred grant): two gates, two layers, neither a
+ * substitute for the other. Both still count every frame they withheld.
+ *
+ * Every send to an unproven member is counted separately (`dlm_mixed_sends`),
+ * so a transcript says exactly how many frames this node put in front of a
+ * system it could not prove runs this implementation.
  */
-static int cnxman_dlm_mixed_ok(const struct vms_cluster *cl)
-{
-	return vms_ldwv_sole_directory(&cl->club.ldwv);
-}
-
 static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
-				  const struct vms_cluster *cl,
-				  const struct vms_csb *csb)
+				  const struct vms_csb *csb,
+				  const uint8_t *body, uint32_t len)
 {
 	if (csb != NULL && csb->peer_is_ours)
 		return 1;
-	if (csb != NULL && cnxman_dlm_mixed_ok(cl)) {
+	if (csb != NULL && vms_dlm_shape_fit_for_any_member(body, len)) {
 		cn->dlm_mixed_sends++;
 		return 1;
 	}
@@ -1655,7 +1661,7 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 		cn->dlm_sends_refused++;
 		return -1;
 	}
-	if (!cnxman_dlm_peer_proven(cn, cl, csb))
+	if (!cnxman_dlm_peer_proven(cn, csb, body, len))
 		return -1;
 
 	memcpy(cn->dlm_tx, body, VMS_CM_BODY_LEN);

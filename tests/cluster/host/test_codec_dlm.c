@@ -113,12 +113,48 @@ static void test_enq_request_pw(void)
 	ct_check_eq_u32(req.master_lkid, 0, "  master_lkid == 0 (fresh ENQ)");
 	ct_check_eq_u32(req.name_len, 8, "  name_len == 8");
 	ct_check(memcmp(req.name, "OVMXAAAA", 8) == 0, "  name == \"OVMXAAAA\"");
+	/*
+	 * THE IDENTITY THAT QUALIFIES THE NAME, body[44:46] + body[46] (rd
+	 * vms-b5b0). An op-0x01 ROOT request is a trusted carrier of it, so the
+	 * parse VOUCHES for it -- and the values are the capture's own, read
+	 * here so the assertion is about the frame and not about our struct.
+	 */
+	ct_check_eq_u32((unsigned long)req.res_ident_valid, 1u,
+			"  the parse vouches for an op-0x01 ROOT request's "
+			"identity span");
+	ct_check_eq_u32((unsigned long)req.res_acmode,
+			(unsigned long)f->bytes[VMS_OFF_DLM_RES_MODE],
+			"  body[46] parses as the resource's ACCESS MODE -- the "
+			"byte this codec used to write as a constant 0x03");
+	ct_check_eq_u32((unsigned long)req.res_group,
+			(unsigned long)(f->bytes[VMS_OFF_DLM_RES_GROUP] |
+			((uint16_t)f->bytes[VMS_OFF_DLM_RES_GROUP + 1] << 8)),
+			"  body[44:46] parses as the UIC group");
 
 	memset(built, 0xAA, sizeof(built));
 	ct_check(vms_dlm_enq_request_build(&req, opcode, built, sizeof(built),
 					   &written) == VMS_CODEC_OK,
 		 "builds back from the typed struct");
 	assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len, "dlm-enq-request-pw");
+
+	/* AND THE BUILDER REFUSES TO INVENT ONE. A caller with no resource
+	 * identity has no resource; a zero group on a frame for a
+	 * group-qualified name makes the directory scan for a resource nobody
+	 * has -- the same class of error as a zero hash (INV-6). */
+	{
+		struct vms_dlm_enq_request noid = req;
+		uint8_t poison[256];
+
+		noid.res_ident_valid = 0u;
+		memset(poison, 0xAA, sizeof(poison));
+		ct_check(vms_dlm_enq_request_build(&noid, opcode, poison,
+						   sizeof(poison), &written) ==
+			 VMS_CODEC_E_INVAL,
+			 "*** the builder REFUSES a request that does not state "
+			 "the resource's identity ***");
+		ct_check_eq_u32(poison[VMS_OFF_DLM_RES_MODE], 0xAAu,
+				"  and wrote nothing at all");
+	}
 }
 
 static void test_enq_grant(void)
@@ -181,7 +217,13 @@ static void test_enq_deny(void)
 		 "  name == \"OVMXAAAA\", echoed verbatim");
 
 	memset(built, 0xAA, sizeof(built));
+	/* body[46] is the resource's ACCESS MODE and the reply ECHOES it (rd
+	 * vms-b5b0 -- it is not the constant 0x03 this builder used to write).
+	 * The value comes from the captured frame itself, which is what makes
+	 * the byte-for-byte rebuild below evidence rather than agreement with
+	 * our own assumption. */
 	ct_check(vms_dlm_enq_response_build_deny(resp.req_lkid, resp.master_lkid,
+						 f->bytes[VMS_OFF_DLM_RES_MODE],
 						 resp.name_len, resp.name, built,
 						 sizeof(built), &written)
 		 == VMS_CODEC_OK, "builds back from the typed fields");
@@ -213,6 +255,24 @@ static void test_convert_request(void)
 			"  body[20] == the EXISTING local lock-id (not a PID)");
 	ct_check_eq_u32(req.master_lkid, 0x120004B9u,
 			"  master_lkid == the established RSB handle");
+
+	/*
+	 * THE PARSE DOES NOT VOUCH FOR AN op-0x07's IDENTITY SPAN (rd vms-b5b0):
+	 * a real VAX leaves body[44:48] -- and the name beside it -- STALE on a
+	 * convert (docs/design-dlm-name-hash.md §4a measured two such frames
+	 * whose readable name belonged to a different resource), so the parser
+	 * clears `res_ident_valid` and the engine takes a convert's resource
+	 * from the LOCK the convert names instead. To rebuild THIS capture
+	 * byte-for-byte the test therefore states the bytes the capture itself
+	 * carries; the builder refuses to invent them.
+	 */
+	ct_check_eq_u32((unsigned long)req.res_ident_valid, 0u,
+			"  the parse does NOT vouch for an op-0x07's identity "
+			"span (it is stale buffer on a real frame)");
+	req.res_group = (uint16_t)(f->bytes[VMS_OFF_DLM_RES_GROUP] |
+				   ((uint16_t)f->bytes[VMS_OFF_DLM_RES_GROUP + 1] << 8));
+	req.res_acmode = f->bytes[VMS_OFF_DLM_RES_MODE];
+	req.res_ident_valid = 1u;
 
 	memset(built, 0xAA, sizeof(built));
 	ct_check(vms_dlm_enq_request_build(&req, opcode, built, sizeof(built),
@@ -265,9 +325,10 @@ static void test_deq_release(void)
 	 * name span alone. Checked positively, not just by the fixture's
 	 * silence: the poison byte survives where an ENQ would have written
 	 * the 0x03 marker. */
-	ct_check_eq_u32(built[VMS_OFF_DLM_NAME_MARKER], 0xAAu,
-			"*** the builder writes NO name marker: a $DEQ names "
-			"its lock by lock-id, and body[46] is not a field ***");
+	ct_check_eq_u32(built[VMS_OFF_DLM_RES_MODE], 0xAAu,
+			"*** the builder writes NO resource identity: a $DEQ "
+			"names its lock by lock-id, so body[46] is not its "
+			"field to write (rd vms-b5b0) ***");
 }
 
 /*
@@ -317,7 +378,7 @@ static void test_blkast(void)
 				 "dlm-blkast");
 
 	/* *** THE INV-6 GUARD. *** */
-	ct_check_eq_u32(built[VMS_OFF_DLM_NAME_MARKER], 0xAAu,
+	ct_check_eq_u32(built[VMS_OFF_DLM_RES_MODE], 0xAAu,
 			"*** no name marker is built: the reference BLKAST's "
 			"body[48] 'F11B$aSYSDSK1' is STALE BUFFER, not this "
 			"frame's resource ***");

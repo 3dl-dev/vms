@@ -812,6 +812,11 @@ find_package(Threads REQUIRED)
 
 add_library(cluster_host_lock STATIC
     ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_lock.c
+    # rd vms-b5b0: the engine computes a resource's directory hash for an
+    # identity no frame has named yet (vms_lock.c dir_resolve ->
+    # vms_dlm_name_hash_proven). Pure arithmetic, no seam, no kernel header --
+    # so it links into the host lock build on exactly the engine's own terms.
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_hash.c
 )
 target_include_directories(cluster_host_lock PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim

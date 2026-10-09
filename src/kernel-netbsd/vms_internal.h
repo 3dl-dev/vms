@@ -501,6 +501,13 @@ struct vms_lock_entry {
 struct vms_lock_resource {
 	exec_hash_node_t    hash_node;      /* link in the global resource hash */
 	char                name[32];
+	/* The rest of the resource's identity -- UIC group (0 for a
+	 * LCK$M_SYSTEM name) and access mode, the two values that qualify a VMS
+	 * resource name and that the directory hash is computed over (rd
+	 * vms-b5b0). Mirror of the Linux twin (src/kernel/vms_internal.h),
+	 * where the full note lives. */
+	uint16_t            res_group;
+	uint8_t             res_mode;
 	exec_list_head_t    granted;        /* granted lock list */
 	exec_list_head_t    waiting;        /* waiting lock list (FIFO) */
 	exec_list_head_t    proxies;        /* PROXY LKBs when this resource is
@@ -539,6 +546,9 @@ struct vms_lock_resource {
 	 */
 	uint32_t            dir_hash;
 	uint8_t             hash_known;
+	/* Where dir_hash came from: 0 = off the wire, 1 = computed by
+	 * vms_dlm_name_hash_proven() (rd vms-b5b0). Mirror of the Linux twin. */
+	uint8_t             hash_computed;
 	uint8_t             dir_valid;
 	uint32_t            dir_gen;
 	uint32_t            dir_csid;       /* directory node CSID; 0 = this node */

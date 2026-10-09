@@ -34,6 +34,10 @@ static int dlm_class_ok(const struct vms_frame_info *fi)
  * op 0x01 ENQ / op 0x07 CONVERT -- GROUNDED, spec §4(f).1
  * ------------------------------------------------------------------ */
 
+/* Defined with the directory-hash section below (the parent span lives there);
+ * the ENQ parser needs it to tell a ROOT request from a sub-resource one. */
+static int dlm_is_root(vms_wire_view_t *v);
+
 static vms_codec_status_t dlm_name_get(vms_wire_view_t *v, uint8_t *len_out,
 				       uint8_t *name_out)
 {
@@ -81,6 +85,18 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 	 * learned at all, because "0" and "absent" are different facts. */
 	out->dir_hash = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_HASH);
 	out->dir_hash_valid = 1u;
+	/*
+	 * The identity that QUALIFIES the name (rd vms-b5b0). Read for both
+	 * opcodes -- the bytes are there either way -- but marked VALID only for
+	 * an op-0x01 ROOT request: see the struct's note on op-0x07's stale
+	 * name/identity span.
+	 */
+	out->res_group = vms_wire_get_le16(&v, VMS_OFB_DLM_RES_GROUP);
+	out->res_acmode = vms_wire_get_u8(&v, VMS_OFB_DLM_RES_MODE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	out->res_ident_valid = (op == VMS_DLM_WIREOP_ENQ && dlm_is_root(&v))
+			       ? 1u : 0u;
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -105,6 +121,18 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 		return VMS_CODEC_E_INVAL;
 	if (req->name_len > VMS_DLM_NAME_MAX)
 		return VMS_CODEC_E_INVAL;
+	/*
+	 * body[44:48] IS NOT OPTIONAL on a frame that names a resource (rd
+	 * vms-b5b0): the UIC group and the access mode are what say WHICH
+	 * resource of that name is meant, and a zero group on a frame for a
+	 * group-qualified resource makes the receiving directory scan for a
+	 * resource nobody has. The engine always holds both (they are part of
+	 * the key its resource block was created under), so a caller that
+	 * cannot state them is a caller with no resource -- refused here, the
+	 * same shape as the codec's refusal of lock id 0.
+	 */
+	if (!req->res_ident_valid)
+		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
@@ -124,7 +152,14 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 */
 	if (req->dir_hash_valid)
 		vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, req->dir_hash);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
+	/*
+	 * body[44:46] + body[46]: the identity that qualifies the name, and only
+	 * when the caller says it holds one. A zero group on a frame for a
+	 * group-qualified resource would make the directory node scan for a
+	 * resource nobody has -- the same class of error as a zero hash.
+	 */
+	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, req->res_group);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, req->res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, req->name_len, req->name);
 
@@ -317,6 +352,7 @@ vms_codec_status_t vms_dlm_enq_response_build_grant_valblk(uint32_t req_lkid,
 
 vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 						   uint32_t master_lkid,
+						   uint8_t res_acmode,
 						   uint8_t name_len,
 						   const uint8_t *name,
 						   uint8_t *frame, uint32_t cap,
@@ -337,7 +373,11 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_pid_echo);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, 0); /* cleared, spec grounded */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
+	/* body[46]: the ACCESS MODE, echoed from the request this denies (rd
+	 * vms-b5b0 -- it is not the constant 0x03 this used to write). A reply
+	 * that renamed the resource's domain would deny a lock on one resource
+	 * and name another. */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, name_len, name);
 
@@ -424,6 +464,23 @@ static int dlm_names_for_directory(vms_wire_view_t *v, uint8_t op)
 	return op == VMS_DLM_WIREOP_DIR_REMOVE || op == VMS_DLM_WIREOP_REBUILD;
 }
 
+int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return 0;
+	if (cat != VMS_DLM_CAT_REQUEST)
+		return 0;
+	return op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_CONVERT ||
+	       op == VMS_DLM_WIREOP_CONVERT_VALBLK ||
+	       op == VMS_DLM_WIREOP_DEQ;
+}
+
 vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 						uint32_t len,
 						struct vms_dlm_res_ident *out)
@@ -455,6 +512,67 @@ vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	*out = id;
+	return VMS_CODEC_OK;
+}
+
+/* The echoed identity of an ANSWER body: the same four positions a request
+ * carries it in, read without the request-only class checks. */
+static vms_codec_status_t dlm_answer_ident(vms_wire_view_t *v,
+					   struct vms_dlm_res_ident *id)
+{
+	id->group = vms_wire_get_le16(v, VMS_OFB_DLM_RES_GROUP);
+	id->mode = vms_wire_get_u8(v, VMS_OFB_DLM_RES_MODE);
+	id->name_len = vms_wire_get_u8(v, VMS_OFB_DLM_NAME_LEN);
+	id->hash = vms_wire_get_le32(v, VMS_OFB_DLM_DIR_HASH);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (id->name_len == 0u || id->name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_CLASS;
+	vms_wire_get_bytes(v, VMS_OFB_DLM_NAME, id->name_len, id->name);
+	return vms_wire_view_ok(v) ? VMS_CODEC_OK : v->err;
+}
+
+vms_codec_status_t vms_dlm_dir_answer_parse_body(const uint8_t *body,
+						 uint32_t len,
+						 struct vms_dlm_dir_answer *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_dir_answer a;
+	vms_codec_status_t st;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_dir_answer *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (!vms_wire_is_response(cat) ||
+	    (cat & 0x7fu) != VMS_DLM_CAT_REQUEST ||
+	    op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+
+	a.status = vms_wire_get_u8(&v, VMS_OFB_DLM_DIR_STATUS);
+	a.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	a.req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	a.master_csid = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_MASTER);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	/* Signal 1: the outcome byte at body[34]. */
+	if (a.status != VMS_DLM_DIR_YOU_MASTER &&
+	    a.status != VMS_DLM_DIR_REDIRECT)
+		return VMS_CODEC_E_CLASS;
+	/* Signal 2: the NAME is echoed (a grant omits it). */
+	st = dlm_answer_ident(&v, &a.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	/* A redirect that names nobody is not a redirect. */
+	if (a.status == VMS_DLM_DIR_REDIRECT && a.master_csid == 0u)
+		return VMS_CODEC_E_CLASS;
+	if (a.status == VMS_DLM_DIR_YOU_MASTER)
+		a.master_csid = 0u;
+	*out = a;
 	return VMS_CODEC_OK;
 }
 

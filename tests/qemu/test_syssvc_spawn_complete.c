@@ -239,7 +239,6 @@ int main(int argc, char **argv)
             break;          /* one lost completion fails the property; stop waiting 20 s each */
         }
     }
-    /* negctl: spawn-arm-gone-subprocess-not-completed */
     CHECK(lost == 0, "every /NOWAIT lib$spawn of an instantly-finishing command set its completion event flag");
 
     printf("=== %d passed, %d failed ===\n", pass, fail);

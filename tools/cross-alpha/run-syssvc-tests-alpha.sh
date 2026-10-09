@@ -302,7 +302,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     ./scripts/config --enable BLK_DEV_INITRD --set-str INITRAMFS_SOURCE /work/syssvc.list
     # The NIC (rd vms-7ee): an Intel e1000, built in -- the initramfs carries no
     # modules. (A DEC tulip, the Ethernet real Alphas carried, machine-checked
-    # clipper's PCI bus on every boot: runs 37971724686.)
+    # the clipper PCI bus on every boot: runs 37971724686.)
     ./scripts/config --enable NET_VENDOR_INTEL --enable E1000
     make ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- olddefconfig >/dev/null 2>&1
     rm -f usr/initramfs_data.cpio* usr/.initramfs_data.cpio* 2>/dev/null || true

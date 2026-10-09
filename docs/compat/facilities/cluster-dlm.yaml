@@ -299,6 +299,62 @@ items:
       of its parent too, rd vms-4fb finding 3, and none was ever captured).
       Every frame this node puts in front of a system it cannot prove runs this
       implementation is counted separately (cnxman's dlm_mixed_sends).
+  - id: cluster-dlm$own-directory-entry
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "A committed cluster member's own lock directory weight vector gives it the directory entries its LOCKDIRWT entitles it to -- so the node the rest of the cluster directs lookups at agrees that it is the directory"
+    evidence: src/kernel-core/vms_dlm_ldwv.c
+    verified_against: "tests/cluster/host/test_dlm_ldwv.c club_counts_its_own_committed_membership (R1, the ev7 lab shape exactly: this node's CSID at CSV slot 8 -- one past the eight nodemap slots this executive has grounded -- with MEMBER set and SELECTED unset as the undecodable nodemap leaves it, beside two real-VAX CSBs at slots 1/2 with LOCKDIRWT 0 advertised and a VMS software token. The vector builds with all THREE systems represented and the single entry OURS, which is the '1 entries over 3 systems, 1 of them this node's' line the preceding boot printed. NEGATIVE half in the same test: with the MEMBER flag cleared this node is NOT in its own vector -- the fix counts a COMMITTED membership, never a hoped-for one) + club_says_so_when_its_own_entry_is_missing (the DIRECTORY SPLIT console finding fires for a committed member entitled to entries that holds none, and stays SILENT for a member at LOCKDIRWT 0 beside a weighted peer, where holding none is p. 6-32's own answer). Negative control: tests/cluster/host/host_defects.sh ldwv-drops-our-own-membership -- putting the member test back to SELECTED-only reddens exactly the six assertions that describe the split. NOT PROVEN HERE: the real-VAX lab leg (a tenth-incarnation OVMX node whose vector names itself, with SDA on both VAXes agreeing)."
+    notes: >
+      rd vms-b5b0 follow-on, from the 2026-10-09 ev7 lab run. MEASURED, and the
+      cause is a cliff rather than a corner: a rejoining system gets a NEW CSID
+      (p. 7-25), so a node's CSV slot climbs with every rejoin, and on its NINTH
+      rejoin of the same VAX cluster in a day this node was assigned CSID
+      0x00010008 -- slot 8, one past the EIGHT slots this executive has grounded
+      of the transition nodemap (spec sec 4(p): the field's true width is
+      undetermined, "do not assume 8 slots").
+      WHAT THEN HAPPENED, and every step of it was individually correct.
+      cnxman_phase2_commit() answered UNKNOWN for a slot it cannot express and
+      left SELECTED alone, because silence is not a refusal. The cluster
+      admitted the node anyway, off a real op-0x0c transition-done, and said so
+      ("%CNXMAN, this node is now a VAXcluster member"). Both VAXes, at
+      LOCKDIRWT 0, built vectors consisting of the OVMX node alone and directed
+      every directory lookup at it. And the OVMX node's own vector read "2
+      entries over 2 systems, 0 of them this node's" -- because the vector's
+      member test required SELECTED, so the node had omitted ITSELF.
+      A DIRECTORY SPLIT: two answers in one cluster to "who is the directory for
+      this resource", with lookups arriving at a node whose own vector said it
+      was not the directory.
+      THE FIX, and it asserts nothing new. For THE LOCAL CSB the committed
+      MEMBER flag counts as well as SELECTED. Both are real executive state, and
+      for this node its own membership -- set by the join FSM's promotion off a
+      genuine transition-done -- is a more direct read than a bitmap bit about
+      itself. It adds no weight, no entry and no identity that was not already
+      known. SCOPED TO THE LOCAL NODE ON PURPOSE: for a remote system the
+      selection set is what the transition said and this node has no better
+      source, so widening the test there could put a departed system in the
+      vector. We know our own membership; we are told everyone else's.
+      WHAT IS NOW VISIBLE, because this was found by eye after the fact. Every
+      rebuild prints ONE LINE PER MEMBER -- CSID in SDA's eight hex digits, CSV
+      slot, LOCKDIRWT (or "?" when unlearned), entry-run length, "(this node)",
+      "[not this implementation]" -- so a lab comparison against SDA on a VMS
+      member is a line-by-line diff instead of an inference. And a committed
+      member whose own LOCKDIRWT entitles it to entries while its vector gives
+      it none is announced as a DIRECTORY SPLIT with the diagnosis at the head
+      of the line, and counted (club->ldwv_own_entry_missing). The watchdog is
+      deliberately NOT "own entries == 0": a node at LOCKDIRWT 0 beside a
+      weighted peer holds none, and that is correct.
+      STILL OPEN, AND NOT PAPERED: the nodemap's true width. Decoding more than
+      the grounded byte needs a real capture of a transition whose membership
+      spans slots above 7 (bit order, offset and length), and inventing it is
+      exactly the fabrication class INV-6 names. phase2 therefore still records
+      rather than decodes such a map, now counting the case where the slot it
+      cannot express is THIS NODE'S
+      (cnxman_phase2_stats.local_slot_unexpressible), which is the one with a
+      consequence. Until that capture exists, a REMOTE member whose slot is
+      above 7 cannot be selected by the nodemap either -- it is admitted by the
+      membership records that name it, and this row's fix does not reach it.
   - id: cluster-dlm$grant-correlation
     kind: feature
     status: implemented

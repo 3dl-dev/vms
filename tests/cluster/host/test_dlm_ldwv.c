@@ -641,6 +641,226 @@ static void club_local_withhold_refused_when_a_peer_advertised(void)
  * below pins that.
  * ==========================================================================
  */
+/*
+ * A logger that ECHOES every line it is handed, used by the ev7 scenarios: the
+ * per-member readout exists FOR A HUMAN to diff against SDA, so its exact text
+ * belongs in this suite's output where a reviewer sees it, not only in a
+ * last-line buffer.
+ */
+static uint32_t g_echo_logs;
+static char g_echo_last[256];
+
+static void echo_log(void *ctx, const char *msg)
+{
+	(void)ctx;
+	g_echo_logs++;
+	if (msg == NULL)
+		return;
+	printf("     | %s\n", msg);
+	if (strlen(msg) < sizeof(g_echo_last))
+		strcpy(g_echo_last, msg);
+	else {
+		memcpy(g_echo_last, msg, sizeof(g_echo_last) - 1u);
+		g_echo_last[sizeof(g_echo_last) - 1u] = '\0';
+	}
+}
+
+static void echo_ops_init(struct cnxman_ops *ops, struct fake_cnx *f)
+{
+	fake_ops_init(ops, f);
+	ops->log = echo_log;
+	g_echo_logs = 0u;
+	g_echo_last[0] = '\0';
+}
+
+/* ==========================================================================
+ * THE ev7 LAB SHAPE: this node's CSV slot walked off the end of the grounded
+ * nodemap byte, and the vector dropped THIS NODE out (rd vms-b5b0 follow-on,
+ * 2026-10-09).
+ *
+ * MEASURED. On its ninth rejoin of the same real VAX cluster in a day, OVMXE
+ * was assigned CSID 0x00010008 -- CSV slot 8, one past the eight slots this
+ * executive has grounded of the transition nodemap. phase2_csb_in_nodemap()
+ * correctly answered UNKNOWN for that slot and left SELECTED alone (silence is
+ * not a refusal, sec 4(p)), the cluster admitted the node anyway off a real
+ * op-0x0c transition-done, and its own vector then read:
+ *
+ *     %DLM, lock directory weight vector: 2 entries over 2 systems,
+ *           0 of them this node's
+ *
+ * while BOTH VAXes (LOCKDIRWT 0, so their vectors contain OVMX alone) sent
+ * their directory lookups here. A directory split -- and the node had omitted
+ * ITSELF, the one member whose membership it does not need a bitmap to know.
+ *
+ * Two halves below, and the second is why the fix is narrow: a committed LOCAL
+ * member counts, and a local CSB that is NOT a member still does not.
+ * ========================================================================== */
+static void club_counts_its_own_committed_membership(void)
+{
+	struct vms_cluster cl;
+	struct cnxman_ops ops;
+	struct fake_cnx f;
+	struct vms_csb *local, *vax1, *vax2;
+	/* The real CSIDs of the ev7 run: slot 8 for this node, 1 and 2 for the
+	 * VAXes. Slot 8 is the one past the grounded byte. */
+	const vms_csid_t OURS = 0x00010008u;
+	const vms_csid_t V1 = 0x00010001u;
+	const vms_csid_t V2 = 0x00010002u;
+
+	printf("--- rd vms-b5b0 ev7: our CSV slot is past the nodemap byte, so "
+	       "only our MEMBER flag can speak for us ---\n");
+
+	memset(&cl, 0, sizeof(cl));
+	echo_ops_init(&ops, &f);
+	cl.params.lockdirwt = 1u;                  /* SYSBOOT SET LOCKDIRWT 1 */
+	cl.params.scssystemid = (vms_scs_sysid_t)1030;
+	memcpy(cl.params.sw_version, "OVMX0.6", 7);
+	cl.params.sw_version_len = 7u;
+	local = cnxman_club_init(&cl);
+	ct_check(local != NULL, "the CLUB has its local CSB");
+	if (local == NULL)
+		return;
+	cnxman_csb_set_csid(local, OURS);
+	/*
+	 * MEMBER AND NOT SELECTED -- exactly what the transition left behind:
+	 * the join FSM promoted this node off a real transition-done, and
+	 * nothing could set SELECTED because the nodemap byte cannot express
+	 * slot 8.
+	 */
+	cnxman_csb_set_flags(local, (uint16_t)VMS_CSB_F_MEMBER);
+	ct_check_eq_u32((unsigned long)(local->flags & VMS_CSB_F_SELECTED), 0u,
+			"this node is a MEMBER with SELECTED unset, as the "
+			"undecodable nodemap leaves it");
+
+	/* The two real VAXes: LOCKDIRWT 0, advertised; not this implementation. */
+	vax1 = cnxman_club_alloc_csb(&cl.club, (vms_scs_sysid_t)1025, 1);
+	vax2 = cnxman_club_alloc_csb(&cl.club, (vms_scs_sysid_t)1026, 1);
+	ct_check(vax1 != NULL && vax2 != NULL, "both VAXes have CSBs");
+	if (vax1 == NULL || vax2 == NULL)
+		return;
+	cnxman_csb_set_csid(vax1, V1);
+	cnxman_csb_set_csid(vax2, V2);
+	cnxman_csb_set_lockdirwt(vax1, 0u);
+	cnxman_csb_set_lockdirwt(vax2, 0u);
+	cnxman_csb_set_swver(vax1, (const uint8_t *)"VMS V7.3", 8u,
+			     (const uint8_t *)"OVMX0.6", 7u);
+	cnxman_csb_set_swver(vax2, (const uint8_t *)"VMS V7.3", 8u,
+			     (const uint8_t *)"OVMX0.6", 7u);
+	cnxman_csb_set_flags(vax1, (uint16_t)(VMS_CSB_F_SELECTED |
+					      VMS_CSB_F_MEMBER));
+	cnxman_csb_set_flags(vax2, (uint16_t)(VMS_CSB_F_SELECTED |
+					      VMS_CSB_F_MEMBER));
+
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK,
+			"the vector BUILDS (every weight is advertised, so the "
+			"all-zero fallback and its split-brain gate are not in "
+			"play)");
+	ct_check_eq_u32(cl.club.ldwv.n_members, 3u,
+			"*** all THREE systems are represented -- this node is "
+			"no longer missing from its own vector ***");
+	ct_check_eq_u32(cl.club.ldwv.n, 1u,
+			"ONE entry: our LOCKDIRWT 1 against their 0 (p. 6-32), "
+			"which is the '1 entries over 3 systems' line the "
+			"earlier boot printed");
+	ct_check_eq_u32(cl.club.ldwv.entry[0], 0u,
+			"*** and the entry is OURS (an own entry reads 0) -- so "
+			"every lookup the VAXes send here is answered by the "
+			"node they sent it to ***");
+	ct_check(vms_ldwv_directs_everything_here(&cl.club.ldwv) == 1,
+		 "this node is the directory for every value, which is what "
+		 "both VAXes' own vectors say too");
+	ct_check_eq_u32(cl.club.ldwv_own_entry_missing, 0u,
+			"and the directory-split watchdog is silent");
+
+	/*
+	 * THE OTHER HALF: a local CSB that is NOT a member is still not in the
+	 * vector. Silence from the nodemap plus no promotion is not membership,
+	 * and this node must not put itself in a cluster it has not joined.
+	 */
+	cnxman_csb_clear_flags(local, (uint16_t)VMS_CSB_F_MEMBER);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "the vector rebuilds");
+	ct_check_eq_u32(cl.club.ldwv.n_members, 2u,
+			"*** with this node NOT in it: the fix counts a "
+			"COMMITTED membership, never a hoped-for one ***");
+	ct_check_eq_u32(cl.club.ldwv.n, 2u,
+			"and the two VAXes' zero weights give one entry each "
+			"(the all-zero rule over the members that remain)");
+	ct_check_eq_u32(cl.club.ldwv_own_entry_missing, 0u,
+			"the watchdog stays silent for a node that is not a "
+			"member -- holding no entry is correct then");
+}
+
+/*
+ * THE WATCHDOG'S OWN TEETH, and its silence where a zero is legitimate.
+ */
+static void club_says_so_when_its_own_entry_is_missing(void)
+{
+	struct vms_cluster cl;
+	struct cnxman_ops ops;
+	struct fake_cnx f;
+	struct vms_csb *local, *peer;
+
+	printf("--- rd vms-b5b0 ev7: the DIRECTORY SPLIT watchdog ---\n");
+
+	/* --- the legitimate zero: LOCKDIRWT 0 here, 1 on a peer --- */
+	memset(&cl, 0, sizeof(cl));
+	echo_ops_init(&ops, &f);
+	cl.params.lockdirwt = 0u;
+	cl.params.scssystemid = (vms_scs_sysid_t)1025;
+	memcpy(cl.params.sw_version, "OVMX0.6", 7);
+	cl.params.sw_version_len = 7u;
+	local = cnxman_club_init(&cl);
+	if (local == NULL) {
+		ct_check(0, "the CLUB has its local CSB");
+		return;
+	}
+	cnxman_csb_set_csid(local, CSID_A);
+	cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+					       VMS_CSB_F_MEMBER));
+	peer = add_member(&cl, CSID_B, 1u, 1, 0);
+	ct_check(peer != NULL, "a peer at LOCKDIRWT 1");
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "the vector builds");
+	ct_check_eq_u32(cl.club.ldwv.n, 1u, "one entry, the peer's");
+	ct_check_eq_u32(cl.club.ldwv_own_entry_missing, 0u,
+			"*** NO finding: at LOCKDIRWT 0 beside a weighted peer, "
+			"holding no directory entry is p. 6-32's own answer, "
+			"not a split ***");
+
+	/* --- the real thing: entitled to an entry, and has none --- */
+	memset(&cl, 0, sizeof(cl));
+	echo_ops_init(&ops, &f);
+	cl.params.lockdirwt = 1u;
+	cl.params.scssystemid = (vms_scs_sysid_t)1025;
+	memcpy(cl.params.sw_version, "OVMX0.6", 7);
+	cl.params.sw_version_len = 7u;
+	local = cnxman_club_init(&cl);
+	if (local == NULL) {
+		ct_check(0, "the CLUB has its local CSB");
+		return;
+	}
+	cnxman_csb_set_csid(local, CSID_A);
+	/* A MEMBER, with neither SELECTED nor a learned CSID-less excuse... and
+	 * the CSID deliberately left INVALID, which is the one way left to make
+	 * a committed member drop out of its own vector (an unlearned CSID has
+	 * no CSV slot, and that refusal is correct and stays). */
+	cnxman_csb_set_flags(local, (uint16_t)VMS_CSB_F_MEMBER);
+	local->csid_valid = 0u;
+	peer = add_member(&cl, CSID_B, 1u, 1, 0);
+	ct_check(peer != NULL, "a peer at LOCKDIRWT 1");
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "the vector builds");
+	ct_check_eq_u32(cl.club.ldwv_own_entry_missing, 1u,
+			"*** THE FINDING FIRES: a committed member whose own "
+			"LOCKDIRWT entitles it to entries holds none ***");
+	ct_check(g_echo_logs > 0u &&
+		 strstr(g_echo_last, "DIRECTORY SPLIT") != NULL,
+		 "*** and the console says DIRECTORY SPLIT in those words, so "
+		 "the lab sees it at once instead of by eye afterwards ***");
+}
+
 static void club_split_brain_gate_refuses_a_foreign_member(void)
 {
 	struct vms_cluster cl;
@@ -889,6 +1109,8 @@ int main(void)
 	club_local_withhold_builds_when_peers_unknown();
 	club_local_withhold_refused_when_a_peer_advertised();
 	club_split_brain_gate_refuses_a_foreign_member();
+	club_counts_its_own_committed_membership();
+	club_says_so_when_its_own_entry_is_missing();
 	club_mixed_cluster_builds_the_vaxs_vector();
 	all_ovmx_gate_governs_grounding();
 	return ct_summary("test_dlm_ldwv");

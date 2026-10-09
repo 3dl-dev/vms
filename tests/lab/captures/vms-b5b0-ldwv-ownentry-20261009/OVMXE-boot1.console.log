@@ -1,0 +1,211 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCADB0+36F0ADB0 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 1
+%SYSGEN-I-SETPARAM, LOCKDIRWT changed from 0 to 1
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 40 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+     9-OCT-2026 09:58:55.19
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   26.841115] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   26.848966] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  9-OCT-2026 09:58:56.72
+[   26.904452] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: [   29.216999] %PEA0, channel verified
+
+Username: [   29.220375] %PEA0, virtual circuit open
+[   29.925221] %CNXMAN, a connection manager was discovered on the interconnect
+[   29.931074] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   29.941903] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   29.949173] %CNXMAN, waiting for the cluster member to send its cluster parameters before asking for admission
+[   30.258593] %PEA0, channel verified
+[   30.259166] %PEA0, virtual circuit open
+[   30.300155] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   31.013577] %CNXMAN, waiting to form or join an OpenVMS Cluster
+SYSTEM
+Password: [   32.037642] %CNXMAN, sending VAXcluster membership request to the selected member
+[   32.043347] %CNXMAN, the cluster assigned this node a cluster system id
+[   32.045745] %CNXMAN, the cluster assigned this node a cluster system id
+[   32.049071] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   32.076643] %CNXMAN, membership bitmap is wider than the grounded byte; recording, not decoding
+[   32.082420] %CNXMAN, VAXcluster state transition in progress
+[   32.086786] %CNXMAN, this node is now a VAXcluster member
+[   32.088599] %CNXMAN, system 0000000000000401 was added to the cluster
+[   32.090886] %CNXMAN, system 0000000000000402 was added to the cluster
+[   32.092990] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   32.221117] %DLM, a directory lookup arrived for a resource this node's own weight vector does not direct here: answered from this node's entries, as the directory node does
+[   32.228195] %DLM, lock directory weight vector: 2 entries over 2 systems, 0 of them this node's; weights advertised; a member does not run this implementation
+[   32.233238] %CNXMAN, completed VAXcluster state transition
+
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT F$GETSYI("LOCKDIRWT")
+0
+$ RUN SYS$SYSTEM:CNXTRACE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=MEMBER failure=none ignored_events=2 recording=yes
+%CNXTRACE-I-COUNT, held=115 recorded=115 dropped=0
+CNXTRACE seq=00000000 t=00029919 kind=DISPATCH state=IDLE->DIR_ROUND ev=START detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000001 t=00029923 kind=DISPATCH state=DIR_ROUND->DIR_ROUND ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000002 t=00029925 kind=DISPATCH state=DIR_ROUND->MSCP_CONNECT ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000003 t=00029925 kind=ARRIVAL  state=MSCP_CONNECT->MSCP_CONNECT ev=- detail=cdt-closed rx=- rc=3 aux=0x40700005
+CNXTRACE seq=00000004 t=00029930 kind=DISPATCH state=MSCP_CONNECT->VC_CONNECT ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x40700005
+CNXTRACE seq=00000005 t=00029931 kind=ARRIVAL  state=VC_CONNECT->VC_CONNECT ev=- detail=cdt-open rx=- rc=0 aux=0x40700006
+CNXTRACE seq=00000006 t=00029932 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x40700006 cat=0x01 op=0x14
+CNXTRACE seq=00000007 t=00029933 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x40700006 cat=0x01 op=0x01
+CNXTRACE seq=00000008 t=00029937 kind=DISPATCH state=VC_CONNECT->ADMIT ev=CDT_OPEN detail=fired rx=consumed rc=0 aux=0x40700006
+CNXTRACE seq=00000009 t=00029938 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00029939
+CNXTRACE seq=00000010 t=00030283 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=accepted rx=- rc=0 aux=0x00000402
+CNXTRACE seq=00000011 t=00030284 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=cm-accept rx=- rc=0 aux=0x40700009
+CNXTRACE seq=00000012 t=00030289 kind=DISPATCH state=ADMIT->ADMIT ev=CM_ACCEPTED detail=fired rx=consumed rc=0 aux=0x00000402
+CNXTRACE seq=00000013 t=00030289 kind=DISPATCH state=ADMIT->ADMIT ev=CDT_OPEN detail=EMPTY-CELL rx=consumed rc=0 aux=0x40700009
+CNXTRACE seq=00000014 t=00030289 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00030289
+CNXTRACE seq=00000015 t=00030933 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x01 op=0x14
+CNXTRACE seq=00000016 t=00030933 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x01 op=0x01
+CNXTRACE seq=00000017 t=00031000 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000018 t=00032021 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x01 op=0x02
+CNXTRACE seq=00000019 t=00032025 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000020 t=00032025 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000400
+CNXTRACE seq=00000021 t=00032026 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x81 op=0x03
+CNXTRACE seq=00000022 t=00032026 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000023 t=00032027 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x81 op=0x05
+CNXTRACE seq=00000024 t=00032027 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000025 t=00032027 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x81 op=0x05
+CNXTRACE seq=00000026 t=00032027 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000027 t=00032027 kind=DISPATCH state=ADMIT->ADMIT ev=CSID_LEARNED detail=fired rx=consumed rc=0 aux=0x00010008
+CNXTRACE seq=00000028 t=00032029 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x81 op=0x05
+CNXTRACE seq=00000029 t=00032029 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000030 t=00032029 kind=DISPATCH state=ADMIT->ADMIT ev=CSID_LEARNED detail=fired rx=consumed rc=0 aux=0x00010008
+CNXTRACE seq=00000031 t=00032032 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x40700009 cat=0x81 op=0x05
+CNXTRACE seq=00000032 t=00032032 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000033 t=00032032 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000414
+CNXTRACE seq=00000034 t=00032035 kind=DISPATCH state=ADMIT->ADMIT ev=RX_MEMBERSHIP detail=fired rx=consumed rc=0 aux=0x00000000 rep=254 tlast=00032060
+CNXTRACE seq=00000035 t=00032065 kind=DISPATCH state=ADMIT->ADMIT ev=RX_TR_OPEN detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000036 t=00032065 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000406
+CNXTRACE seq=00000037 t=00032070 kind=DISPATCH state=ADMIT->BARRIER ev=RX_TR_GO detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000038 t=00032072 kind=DISPATCH state=BARRIER->MEMBER ev=TRANSITION_DONE detail=fired rx=consumed rc=0 aux=0x00000002
+CNXTRACE seq=00000039 t=00032080 kind=DISPATCH state=MEMBER->MEMBER ev=RX_CLOSE detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000040 t=00032080 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000041 t=00032080 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000042 t=00032080 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000043 t=00032080 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000044 t=00032084 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000045 t=00032084 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000046 t=00032084 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000047 t=00032085 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000048 t=00032086 kind=DISPATCH state=MEMBER->MEMBER ev=RX_REBUILD detail=fired rx=consumed rc=0 aux=0x00000000 rep=8 tlast=00032087
+CNXTRACE seq=00000049 t=00032087 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000050 t=00032087 kind=DISPATCH state=MEMBER->MEMBER ev=RX_REBUILD detail=fired rx=consumed rc=0 aux=0x00000000 rep=143 tlast=00032104
+CNXTRACE seq=00000051 t=00032104 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=peer-ack rx=- rc=0 aux=0x00000400
+CNXTRACE seq=00000052 t=00032104 kind=DISPATCH state=MEMBER->MEMBER ev=RX_REBUILD detail=fired rx=consumed rc=0 aux=0x00000000 rep=530 tlast=00032188
+CNXTRACE seq=00000053 t=00032188 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=peer-ack rx=- rc=0 aux=0x0000040c
+CNXTRACE seq=00000054 t=00032188 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000055 t=00032188 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000056 t=00032189 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000057 t=00032189 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000058 t=00032191 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000059 t=00032191 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000060 t=00032191 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000061 t=00032192 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000062 t=00032200 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000063 t=00032202 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000064 t=00032203 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000065 t=00032204 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00032211
+CNXTRACE seq=00000066 t=00032211 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000067 t=00032211 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000068 t=00032212 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000069 t=00032219 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000070 t=00032219 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000071 t=00032219 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000072 t=00032220 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000073 t=00033045 kind=DISPATCH state=MEMBER->MEMBER ev=TIMER_JOIN detail=EMPTY-CELL rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000074 t=00033383 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00008201
+CNXTRACE seq=00000075 t=00043259 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00043262
+CNXTRACE seq=00000076 t=00043264 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00043265
+CNXTRACE seq=00000077 t=00043462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00043464
+CNXTRACE seq=00000078 t=00043464 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00043465
+CNXTRACE seq=00000079 t=00057293 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000080 t=00057293 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000081 t=00057294 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000082 t=00057299 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204
+CNXTRACE seq=00000083 t=00058258 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00058260
+CNXTRACE seq=00000084 t=00058261 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00058261
+CNXTRACE seq=00000085 t=00058462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00058464
+CNXTRACE seq=00000086 t=00058465 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00058465
+CNXTRACE seq=00000087 t=00073260 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00073263
+CNXTRACE seq=00000088 t=00073264 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00073265
+CNXTRACE seq=00000089 t=00073461 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00073463
+CNXTRACE seq=00000090 t=00073463 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00073464
+CNXTRACE seq=00000091 t=00088258 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00088260
+CNXTRACE seq=00000092 t=00088260 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00088261
+CNXTRACE seq=00000093 t=00088460 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00088462
+CNXTRACE seq=00000094 t=00088463 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00088463
+CNXTRACE seq=00000095 t=00103260 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00103262
+CNXTRACE seq=00000096 t=00103262 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00103263
+CNXTRACE seq=00000097 t=00103462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00103463
+CNXTRACE seq=00000098 t=00103464 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00103465
+CNXTRACE seq=00000099 t=00118259 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00118261
+CNXTRACE seq=00000100 t=00118261 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00118262
+CNXTRACE seq=00000101 t=00118462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00118463
+CNXTRACE seq=00000102 t=00118463 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00118464
+CNXTRACE seq=00000103 t=00133259 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00133262
+CNXTRACE seq=00000104 t=00133262 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00133263
+CNXTRACE seq=00000105 t=00133462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00133463
+CNXTRACE seq=00000106 t=00133463 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00133464
+CNXTRACE seq=00000107 t=00148259 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00148261
+CNXTRACE seq=00000108 t=00148261 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00148262
+CNXTRACE seq=00000109 t=00148462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00148463
+CNXTRACE seq=00000110 t=00148464 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00148464
+CNXTRACE seq=00000111 t=00163258 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00163260
+CNXTRACE seq=00000112 t=00163260 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00163261
+CNXTRACE seq=00000113 t=00163459 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00163461
+CNXTRACE seq=00000114 t=00163461 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000204 rep=2 tlast=00163462
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=1 dirvec_own=0 gen=2 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=1 received=0 grants sent=0 received=0 declined=0
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=0
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=1 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=1 refused=0 frames_rx=82 replies_sent=41 declined=1
+%CNXTRACE-I-END, 115 records printed
+$ 

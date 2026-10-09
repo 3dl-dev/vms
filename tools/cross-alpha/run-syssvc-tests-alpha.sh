@@ -300,9 +300,10 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cd /vmsko/linux-$KV
     KDIR="$(pwd)"
     ./scripts/config --enable BLK_DEV_INITRD --set-str INITRAMFS_SOURCE /work/syssvc.list
-    # The NIC (rd vms-7ee): a DEC 21x4x "tulip", the Ethernet real Alphas carried
-    # (DE435/DE500), built in -- the initramfs carries no modules.
-    ./scripts/config --enable NET_VENDOR_DEC --enable NET_TULIP --enable TULIP
+    # The NIC (rd vms-7ee): an Intel e1000, built in -- the initramfs carries no
+    # modules. (A DEC tulip, the Ethernet real Alphas carried, machine-checked
+    # clipper's PCI bus on every boot: runs 37971724686.)
+    ./scripts/config --enable NET_VENDOR_INTEL --enable E1000
     make ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- olddefconfig >/dev/null 2>&1
     rm -f usr/initramfs_data.cpio* usr/.initramfs_data.cpio* 2>/dev/null || true
     make ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- -j"$(nproc)" vmlinux >/work/kbuild.log 2>&1 \
@@ -324,14 +325,14 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_imgact.img /work/d4.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
-    # THE NIC (rd vms-7ee): a NON-virtio DEC tulip on SLIRP user networking, as
+    # THE NIC (rd vms-7ee): a NON-virtio e1000 on SLIRP user networking, as
     # run_tests.sh gives the x86_64 rig. A virtio-net-pci as a 6th virtio PCI
     # device beside the 5 virtio-blk fixture disks hung clipper before /init
     # (iter-1); the suites that need an Ethernet device (getdvi/showdev ETH0:,
     # l2_datalink, net_qio_status _NET:) run here only with one. -m 2048 gives
     # the larger subject-image initramfs headroom.
     timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none \
-        -netdev user,id=net0 -device tulip,netdev=net0 \
+        -netdev user,id=net0 -device e1000,netdev=net0 \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
         -drive file=/work/d0.img,format=raw,if=virtio \

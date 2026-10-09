@@ -928,8 +928,8 @@ static void the_captured_frame_and_the_held_out_value(void)
 	ct_check_eq_u32(e.mode, LCK_K_EXMODE,
 			"  at EX -- COMPATIBLE with the NL this node held, so "
 			"the faithful answer was a grant");
-	ct_check_eq_u32(e.req_pid_or_lkid, EVAC_VAX_PID,
-			"  carrying VAX1's own requesting PID");
+	ct_check_eq_u32(e.master_lkid, EVAC_VAX_PID,
+			"  carrying VAX1's own requesting PID in the body[20:24] slot the master overwrites");
 	ct_check(e.name_len == (uint8_t)strlen(EVAC_RESNAM) &&
 		 memcmp(e.name, EVAC_RESNAM, e.name_len) == 0,
 		 "  for the resource EVAC$WORKLOAD");
@@ -1010,7 +1010,7 @@ static void lab_arm_a_the_captured_enq_is_served_as_master(void)
 			"got silence ***");
 	ct_check_eq_u32(res.granted_mode, LCK_K_EXMODE,
 			"  at EX, read off the LKB the engine stamped");
-	ct_check_eq_u32(res.req_lkid, EVAC_VAX_PID,
+	ct_check_eq_u32(res.req_lkid, EVAC_VAX_LKID,
 			"  with VAX1's own handle where the requester's handle "
 			"goes");
 	ct_check(res.master_lkid != 0u && res.master_lkid != EVAC_VAX_LKID,

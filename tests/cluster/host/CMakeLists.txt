@@ -61,6 +61,12 @@ set(OVMX_CLUSTER_CLEANROOM_MANIFEST
 # lives with the other cluster fixtures one level up, not in this directory's
 # frame-specimen set.
 set(OVMX_DLM_HASH_DIR "${CMAKE_SOURCE_DIR}/tests/cluster/fixtures")
+# rd vms-c6e leg 2: the driven run's PREDICTION file. Not a fixture of captured
+# values -- it is what this tree says the VAX will do, and this build checks it
+# against the C function so the lab is scored against the product, not a
+# Python lookalike.
+set(OVMX_C6E_RUN_DIR
+    "${CMAKE_SOURCE_DIR}/tests/lab/captures/vms-c6e-heldout-20261008")
 
 function(cluster_host_test name)
     add_executable(${name} ${ARGN})
@@ -72,6 +78,7 @@ function(cluster_host_test name)
         OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
         OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
         OVMX_DLM_HASH_DIR="${OVMX_DLM_HASH_DIR}"
+        OVMX_C6E_RUN_DIR="${OVMX_C6E_RUN_DIR}"
     )
     add_test(NAME cluster_host_${name} COMMAND ${name})
     set_tests_properties(cluster_host_${name} PROPERTIES

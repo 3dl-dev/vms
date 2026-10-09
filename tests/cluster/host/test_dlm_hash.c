@@ -149,7 +149,11 @@ static struct split_result check_split(const char *path)
 	while (fgets(line, sizeof(line), fh) != NULL) {
 		struct hash_row row;
 
-		if (line[0] == '\n' || line[0] == '#')
+		/* Blank, a comment, or a repeated header: the driven-run
+		 * prediction file leads with a four-line provenance comment, so
+		 * the first line is not necessarily the column header. */
+		if (line[0] == '\n' || line[0] == '#' ||
+		    strncmp(line, "name_hex", 8) == 0)
 			continue;
 		if (parse_row(line, &row) != 0) {
 			r.unparsed++;
@@ -170,6 +174,30 @@ static void report(const char *what, const char *path, unsigned long least)
 	ct_check(r.unparsed == 0, "every fixture row parses");
 	ct_check(r.rows >= least, "the split still carries its rows");
 	ct_check(r.matched == r.rows, "every real-VAX wire value is reproduced");
+}
+
+/*
+ * The DRIVEN run's prediction file (rd vms-c6e leg 2). This file holds no
+ * capture: it is what THIS tree says a real VAX will put on the wire for 81
+ * (name, mode, group) triples a lab run is about to drive, committed before
+ * the VAX is asked to lock anything. It is generated on the lab side by
+ * tools/cluster/dlm_hash/gen_heldout_run.py (Python, because the generator
+ * also emits the MACRO-32 driver), so THIS is the check that the number the
+ * lab will be scored against is the PRODUCT's own function and not a Python
+ * lookalike that drifted from it. Same parser, deliberately different
+ * wording: nothing here is evidence about VMS yet.
+ */
+static void report_predictions(const char *what, const char *path,
+			       unsigned long least)
+{
+	struct split_result r = check_split(path);
+
+	printf("%s: %lu rows, %lu agree with vms_dlm_name_hash(), %lu unparsed\n",
+	       what, r.rows, r.matched, r.unparsed);
+	ct_check(r.unparsed == 0, "every prediction row parses");
+	ct_check(r.rows >= least, "the prediction set still carries its rows");
+	ct_check(r.matched == r.rows,
+		  "every committed prediction is what the C function computes");
 }
 
 /* ---------------------------------------------------------------- *
@@ -220,5 +248,7 @@ int main(void)
 	       253);
 	report("FORWARD PREDICTION (m3-soledir, captured after the function was frozen)",
 	       OVMX_DLM_HASH_DIR "/dlm_hash_predicted_m3soledir.tsv", 533);
+	report_predictions("DRIVEN-RUN predictions (rd vms-c6e leg 2, no capture yet)",
+			   OVMX_C6E_RUN_DIR "/predicted.tsv", 81);
 	return ct_summary("test_dlm_hash");
 }

@@ -637,6 +637,20 @@ if(BUILD_TESTS)
                 --fixtures ${CMAKE_CURRENT_SOURCE_DIR}/tests/cluster/fixtures)
     set_tests_properties(dlm_hash_corpus_split_frozen PROPERTIES
         LABELS "integration;cluster;authenticity" TIMEOUT 60)
+    # rd vms-c6e leg 2: the DRIVEN held-out run. Static half only -- the four
+    # lab artifacts are exactly what the generator writes (so the names the
+    # VAX locks cannot drift from the names that were predicted), the
+    # prediction file is exactly the reference hash over them, and the
+    # reference hash still reproduces eight values real OpenVMS VAX nodes put
+    # on the wire. No pcap, no lab: scoring the capture is a separate
+    # invocation (--pcap), run once the lab has driven the names.
+    add_test(NAME dlm_hash_heldout_run_predictions
+        COMMAND python3
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/cluster/dlm_hash/check_heldout_run.py
+                --verify
+                --rundir ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/captures/vms-c6e-heldout-20261008)
+    set_tests_properties(dlm_hash_heldout_run_predictions PROPERTIES
+        LABELS "integration;cluster;authenticity" TIMEOUT 60)
 
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;

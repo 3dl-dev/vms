@@ -463,6 +463,9 @@ one frame left this node
   addressed to the master the registration named
 *** carrying the value this executive COMPUTED for the identity -- never a zero where the hash goes ***
   and it did NOT become a second master
+*** and the MASTER is the VAX -- an uncovered identity is NOT mastered a second time here ***
+  addressed to the VAX
+*** carrying the value THE VAX ITSELF put on the wire for it -- the one value this executive holds ***
   and the refusals to RECORD are counted, not hidden
 *** and the mastery is RECORDED in this node's own directory -- which is what stops the next asker being told to master it ***
 *** the directory answers THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***

@@ -1,6 +1,15 @@
-Built target cluster_host_fixture
-Built target cluster_host_codec
-Built target cluster_host_pe
-Building C object tests/cluster/host/CMakeFiles/test_pe_vc.dir/test_pe_vc.c.o
-Linking C executable ../../../bin/test_pe_vc
-Built target test_pe_vc
+-- libvmssys: building for x86_64 (freestanding)
+-- DECNETD datalink backend: ovmx_datalink
+-- OVMX_LINK_NATIVE off (compiler target 'x86_64-linux-gnu' is not aarch64-musl or x86_64-musl) -- the VMS-native LINK.EXE shareable graph is not built for this configuration. Build inside an aarch64 or x86_64 musl toolchain to produce it (see above).
+-- Configuring done (0.1s)
+-- Generating done (1.2s)
+-- Build files have been written to: /tmp/b5b0/build
+[  0%] Built target cluster_host_lock
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_dlm_hash.c.o
+[  0%] Linking C static library ../../../lib/libcluster_host_codec.a
+[  0%] Built target cluster_host_codec
+[  0%] Built target cluster_host_dlm
+[100%] Built target cluster_host_cnxman
+[100%] Building C object tests/cluster/host/CMakeFiles/test_dlm_mixed_master.dir/test_dlm_mixed_master.c.o
+[100%] Linking C executable ../../../bin/test_dlm_mixed_master
+[100%] Built target test_dlm_mixed_master

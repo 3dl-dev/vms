@@ -148,7 +148,7 @@ static uint64_t tt_devchar(struct vms_device *dev)
  * CARRIAGE CONTROL (rd vms-fc4). What a VMS terminal shows around records and
  * prompts is not the bytes a program wrote but the terminal driver's rendering
  * of a NEW LINE, which depends on where the cursor is. Measured on the real
- * VAX V7.3 console with probe cases (docs/oracle/keystroke/probes/), three
+ * VAX V7.3 console with probe cases (docs/oracle/keystroke-probes/), three
  * positions matter:
  *
  *   TT_POS_FRESH  column 0 of a line nothing has been written on -- just after

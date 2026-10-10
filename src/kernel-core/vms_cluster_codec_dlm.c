@@ -279,6 +279,58 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 	return VMS_CODEC_OK;
 }
 
+vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
+					  uint32_t req_len,
+					  struct vms_dlm_res_ident *id_out,
+					  uint8_t *frame, uint32_t cap,
+					  uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	uint8_t cat, op, len;
+	uint32_t i;
+
+	if (req_body == (const uint8_t *)0 || id_out == (struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	if (req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	len = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_0F)
+		return VMS_CODEC_E_CLASS;
+	if (len == 0u || len > VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_RANGE;
+	id_out->hash = 0u;
+	id_out->group = (uint16_t)(req_body[VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RES_GROUP)] |
+				   (req_body[VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RES_GROUP) + 1u] << 8));
+	id_out->mode = req_body[VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RES_MODE)];
+	id_out->name_len = len;
+	for (i = 0u; i < len; i++)
+		id_out->name[i] = req_body[VMS_OFB_DLM_NAME_LEN + 1u + i];
+
+	if (frame == (uint8_t *)0)
+		return VMS_CODEC_OK;           /* identity only */
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_0F_ACK);
+	for (i = 0u; i < 4u; i++)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + i, 0u);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 						    uint32_t req_len,
 						    uint32_t master_lkid,

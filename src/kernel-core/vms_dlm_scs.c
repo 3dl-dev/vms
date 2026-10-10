@@ -155,7 +155,9 @@ struct vms_dlm_scs {
 	uint32_t grants_sent;         /* grant replies built from a real LKB  */
 	uint32_t denies_sent;
 	uint32_t queued_no_reply;     /* genuinely queued: the grant comes later */
-	uint32_t queued_answered;     /* queued CONVERTs answered 0xfb at once (vms-cab) */
+	uint32_t queued_answered;
+	uint32_t op0f_acked;          /* op-0x0f answered 82/15 (vms-cab)   */
+	uint32_t op0f_withheld_held;  /* op-0x0f for a resource we hold: none */     /* queued CONVERTs answered 0xfb at once (vms-cab) */
 	uint32_t redirects_sent;      /* "the master is X", from a real RSB   */
 	uint32_t blkasts_sent;        /* op-0x05 blocking ASTs really emitted,*/
 				       /* built from the blocking LKB's own two*/
@@ -1969,6 +1971,43 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 		 * node as the resource's directory (rd vms-8219): recorded.
 		 */
 		dlm_arm_dir_register(d, req);
+		return 0;
+	}
+
+	/*
+	 * op 0x0f FROM ANY MEMBER (rd vms-cab). A real VMS member sends it to
+	 * every other member and waits for each answer; left unanswered by an
+	 * OVMX member it stalls the sender's file system after a departure
+	 * (lab run ci6-evac-15: VAX2's DCL hung). The grounded answer is the
+	 * one a member holding NO lock on the resource gives, so it is given
+	 * only when the engine holds none; otherwise the frame is withheld and
+	 * counted. Above RULE C: it creates no lock state for the sender.
+	 */
+	if (req->category == (uint8_t)VMS_DLM_CAT_REQUEST &&
+	    req->opcode == (uint8_t)VMS_DLM_WIREOP_0F) {
+		struct vms_dlm_res_ident id;
+		uint32_t written = 0;
+
+		memset(&id, 0, sizeof(id));
+		if (vms_dlm_op0f_ack_build(req->body, req->len, &id, NULL, 0u,
+					   NULL) != VMS_CODEC_OK) {
+			d->unparsed++;
+			return -1;
+		}
+		if (dlm_arm_dir_name_held(&id)) {
+			d->op0f_withheld_held++;
+			return -1;
+		}
+		memset(d->txframe, 0, sizeof(d->txframe));
+		if (vms_dlm_op0f_ack_build(req->body, req->len, &id, d->txframe,
+					   (uint32_t)sizeof(d->txframe),
+					   &written) != VMS_CODEC_OK) {
+			d->codec_failures++;
+			return -1;
+		}
+		if (dlm_arm_stage_reply(d, req, reply) != 0)
+			return -1;
+		d->op0f_acked++;
 		return 0;
 	}
 

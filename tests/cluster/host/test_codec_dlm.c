@@ -1458,6 +1458,69 @@ static void test_queued_convert_answer_is_the_real_one(void)
 			"*** a CONVERT is granted as op 0x07, the request's own op ***");
 }
 
+/*
+ * rd vms-cab: the answer to an op-0x0f from a member holding no lock on the
+ * resource, against two REAL pairs from lab run ci6-evac-15 (2026-10-10,
+ * 16:45:14.88 VAX2 -> VAX1 F11B$vSYSDSK1 and 16:45:16.17 VAX1 -> VAX2
+ * CACHE$cm..., both during VAX1's REMOVE_NODE departure). Held out from the
+ * 1392-pair corpus scan the rule was read from. body[0:4] is the envelope.
+ */
+static void test_op0f_ack_is_the_real_one(void)
+{
+	static const char *const pair[2][2] = {
+		{
+	    "c7c8c9c70600c2c9020f000001000e0000000000d9040003cd0400030100010001000e00"
+	    "0101011e000000000000001246313142247653595344534b312020202020000000000000"
+	    "010001000000000001000100000000000000000000000000000000000000000000000000"
+	    "0000000000000000ffffffff03000000ffffffff173cc220",
+	    "cac7c7c80600c2c98215000001000e0000000000d9040003cd040003000000000100fa00"
+	    "0101011e000000000000001246313142247653595344534b312020202020000000000000"
+	    "010001000000000001000100000000000000000000000000000000000000000000000000"
+	    "0000000000000000ffffffff03000000ffffffff173cc220" },
+		{
+	    "d1c7ccc80100e0cb020fc90001000e0020040100200cd52d5f3cbc000200010001000e00"
+	    "010000000000000000000018434143484524636d53595344534b31202020202067010000"
+	    "252525202020202800000000206e000065205641583120202061742031302d4f43542d32"
+	    "3032360000000000ffffffff00000000ffffffff5e5e659a",
+	    "cdc8d1c70100e0cb8215c90001000e0020040100200cd52d5f3cbc00000000000100fa00"
+	    "010000000000000000000018434143484524636d53595344534b31202020202067010000"
+	    "252525202020202800000000206e000065205641583120202061742031302d4f43542d32"
+	    "3032360000000000ffffffff00000000ffffffff5e5e659a" },
+	};
+	uint8_t req[132], rep[132], frame[VMS_OFF_SYSAP_BODY + 132];
+	struct vms_dlm_res_ident id;
+	uint32_t p, i, written = 0, diffs;
+
+	for (p = 0; p < 2u; p++) {
+		for (i = 0; i < 132u; i++) {
+			unsigned int x, y;
+			sscanf(&pair[p][0][2 * i], "%2x", &x);
+			sscanf(&pair[p][1][2 * i], "%2x", &y);
+			req[i] = (uint8_t)x;
+			rep[i] = (uint8_t)y;
+		}
+		memset(frame, 0, sizeof(frame));
+		memset(&id, 0, sizeof(id));
+		ct_check(vms_dlm_op0f_ack_build(req, sizeof(req), &id, frame,
+						sizeof(frame), &written) ==
+			 VMS_CODEC_OK, "an op-0x0f answer builds");
+		diffs = 0;
+		for (i = 4u; i < 132u; i++)
+			if (frame[VMS_OFF_SYSAP_BODY + i] != rep[i])
+				diffs++;
+		ct_check_eq_u32(diffs, 0u,
+				"*** the op-0x0f answer equals the real VAX "
+				"member's, byte for byte after the envelope ***");
+		ct_check_eq_u32(id.name_len, req[47],
+				"  ... and the identity names the request's resource");
+		ct_check(memcmp(id.name, &req[48], id.name_len) == 0,
+			 "  ... by the request's own name bytes");
+		ct_check(vms_dlm_op0f_ack_build(rep, sizeof(rep), &id, frame,
+						sizeof(frame), &written) !=
+			 VMS_CODEC_OK, "  ... and a RESPONSE is refused as input");
+	}
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1481,5 +1544,6 @@ int main(void)
 	test_dlksrch_twin();
 
 	test_queued_convert_answer_is_the_real_one();
+	test_op0f_ack_is_the_real_one();
 	return ct_summary("test_codec_dlm");
 }

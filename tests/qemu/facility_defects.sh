@@ -641,7 +641,8 @@ tt-edit-ctrlj-ignored
 tt-recall-key-not-terminator
 tt-inistr-ignored
 tt-brkthru-privilege-ignored
-tt-wrap-ignored"
+tt-wrap-ignored
+jpi-bufio-not-counted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2444,6 +2445,25 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: ^U on a wrapped line decides from the line's length, not from what was drawn, so it still clears the row.";;
+        esac;;
+
+    jpi-bufio-not-counted)
+        case "$_f" in
+        facility)     echo "JPI\$_BUFIO: the executive counts each completed buffered I/O (terminal, mailbox) against the process (vms_mbx.c, vms_tt.c, rd vms-bd71)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_kmod_procacct";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write/read count the completed request (\`__atomic_fetch_add(&proc->io_buffered, ...)\`). The mutation drops both mailbox counts: JPI\$_BUFIO, and the IO= of CTRL/T, stop moving for mailbox I/O while the valid bit still claims a sourced value. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a mailbox write and read add exactly 2 to JPI$_BUFIO
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check reads JPI\$_BUFIO.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8596,6 +8616,8 @@ apply_edit() {
         sed -i 's|^\ta->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);$|\ta->status = SS__NORMAL; /* NEGCTL tt-brkthru-privilege-ignored */|' "$_file";;
     tt-wrap-ignored)
         sed -i 's|^\tif (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)$|\tif (0) /* NEGCTL tt-wrap-ignored */|' "$_file";;
+    jpi-bufio-not-counted)
+        sed -i 's|^    __atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /\* JPI\$_BUFIO (rd vms-bd71) \*/$|    (void)0; /* NEGCTL jpi-bufio-not-counted */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

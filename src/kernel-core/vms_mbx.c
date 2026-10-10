@@ -764,6 +764,7 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
     exec_unlock(&mbx->lock);
 
     a->status = SS__NORMAL;
+    __atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /* JPI$_BUFIO (rd vms-bd71) */
 
 out_copy:
     if (exec_copyout((void *)arg, a, sizeof(*a)))
@@ -888,6 +889,7 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
      * (rd vms-262a); the sender is still reported. */
     a->status = m->eof ? SS__ENDOFFILE : SS__NORMAL;
     exec_free(m);
+    __atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /* JPI$_BUFIO (rd vms-bd71) */
 
 out_copy:
     if (exec_copyout((void *)arg, a, sizeof(*a)))

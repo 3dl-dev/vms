@@ -2879,9 +2879,6 @@ struct vms_procinfo {
      *     cur_pri     JPI$_PRI    } is a SYSUAF attribute VMS's UAF carries
      *                    and OVMX's does not (yet); current priority is a
      *                    scheduler-derived value with no OVMX scheduler.
-     *     dirio       JPI$_DIRIO  } Linux has no VMS direct/buffered I/O
-     *     bufio       JPI$_BUFIO  } split; a syscall count wearing this
-     *                    heading would be a mislabel (the fabrication class).
      *     quota       (see struct vms_jib_quota) -- no quota facility.
      */
     uint32_t fields_valid;   /* VMS_PI_V_* bitmask over the fields below */
@@ -2889,8 +2886,10 @@ struct vms_procinfo {
     uint8_t  base_pri;       /* JPI$_PRIB   (structural) */
     uint8_t  cur_pri;        /* JPI$_PRI    (structural) */
     uint8_t  acct_pad;       /* keep the longwords below 4-aligned */
-    uint32_t dirio;          /* JPI$_DIRIO  (structural) */
-    uint32_t bufio;          /* JPI$_BUFIO  (structural) */
+    uint32_t dirio;          /* JPI$_DIRIO (sourced: the executive counts each
+                              * completed ACP disk request, rd vms-bd71) */
+    uint32_t bufio;          /* JPI$_BUFIO (sourced: each completed terminal and
+                              * mailbox request) */
     uint32_t pageflts;       /* JPI$_PAGEFLTS (sourced) */
     uint32_t pages;          /* JPI$_PPGCNT   (sourced) */
     uint32_t cputim;         /* JPI$_CPUTIM, 10ms units (sourced) */

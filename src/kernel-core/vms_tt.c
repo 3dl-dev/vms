@@ -1605,6 +1605,7 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 	}
 	a.status = r.status;
 	a.count = r.count;
+	__atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /* JPI$_BUFIO (rd vms-bd71) */
 	a.term = r.term;
 	a.termsz = r.termsz;
 	if (r.count && exec_copyout((void *)(uintptr_t)a.buf, line, r.count))
@@ -1658,6 +1659,8 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
 	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
 		a.status = SS__ABORT;
+	if (a.status == SS__NORMAL)
+		__atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /* JPI$_BUFIO (rd vms-bd71) */
 	vms_tt_release(tt);
 out:
 	if (exec_copyout((void *)arg, &a, sizeof(a)))

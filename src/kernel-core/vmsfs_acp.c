@@ -2550,6 +2550,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
     args.new_efblk = snap->efblk;
     args.status = SS__NORMAL;
     exec_free(snap);
+    __atomic_fetch_add(&proc->io_direct, 1u, __ATOMIC_RELAXED);   /* JPI$_DIRIO (rd vms-bd71) */
 
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -2974,6 +2975,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     args.extended  = extended;
     args.status    = SS__NORMAL;
     exec_free(s);
+    __atomic_fetch_add(&proc->io_direct, 1u, __ATOMIC_RELAXED);   /* JPI$_DIRIO (rd vms-bd71) */
 
 out:
     vms_lock_acp_vol_release(proc, wr_lkid);   /* vms-233: release the volume lock (no-op if 0) */

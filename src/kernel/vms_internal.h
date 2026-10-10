@@ -749,6 +749,11 @@ struct vms_proc {
 
     /* Access mode (3a) */
     uint8_t             current_mode;   /* PSL_C_KERNEL..PSL_C_USER */
+    /* JPI$_BUFIO / JPI$_DIRIO (rd vms-bd71): this process's buffered
+     * (terminal, mailbox) and direct (disk, through the ACP) I/O requests,
+     * counted by the executive as each completes. */
+    uint32_t            io_buffered;
+    uint32_t            io_direct;
     uint64_t            cur_privs;      /* current (temporary) privileges */
     uint64_t            perm_privs;     /* permanent privileges */
     spinlock_t          mode_lock;

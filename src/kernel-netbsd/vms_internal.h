@@ -644,6 +644,11 @@ struct vms_proc {
 
 	/* Access-mode + privilege state (src/kernel-core/vms_access.c). */
 	uint8_t             current_mode;     /* PSL_C_KERNEL..PSL_C_USER */
+	/* JPI$_BUFIO / JPI$_DIRIO (rd vms-bd71): this process's buffered
+	 * (terminal, mailbox) and direct (disk, through the ACP) I/O requests,
+	 * counted by the executive as each completes. */
+	uint32_t            io_buffered;
+	uint32_t            io_direct;
 	uint8_t             image_active;     /* 1 while a controlled descent is open */
 	uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
 	uint64_t            cur_privs;        /* current (temporary) privileges */

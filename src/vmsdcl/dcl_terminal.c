@@ -562,8 +562,8 @@ uint32_t dcl_format_ctrl_t_status(const struct vms_procinfo *info,
         len += (size_t)n;
     }
 
-    /* IO deliberately omitted: JPI$_DIRIO/BUFIO are unsourced in OVMX
-     * (valid bit never set). Never fabricate it (INV-6). */
+    /* IO = JPI$_DIRIO + JPI$_BUFIO, the executive's own counts (rd
+     * vms-bd71); shown only when the executive says they are sourced. */
     if (info->fields_valid & (VMS_PI_V_DIRIO | VMS_PI_V_BUFIO)) {
         n = snprintf(out + len, outlen - len, " IO=%" PRIu32,
                      info->dirio + info->bufio);

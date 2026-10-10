@@ -134,7 +134,10 @@ static inline void ovmx_banner_announce(FILE *out)
 static inline void ovmx_banner_welcome(FILE *out)
 {
     char def[OVMX_IDENTITY_MAXLEN + 32];
-    snprintf(def, sizeof(def), "   Welcome to %s", ovmx_product_banner());
+    /* one leading space, as VMS's own default SYS$WELCOME is framed (VAX
+     * V7.3 keystroke LOGIN.BANNER P: " Welcome to ..."); the text is OVMX's
+     * (INV-0) -- rd vms-bd71 */
+    snprintf(def, sizeof(def), " Welcome to %s", ovmx_product_banner());
     ovmx_banner_display("SYS$WELCOME", def, out);
 }
 

@@ -221,9 +221,10 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
 {
     /* SYS$WELCOME (a boot-defined logical), falling back to the built-in
      * badged OVMX identity when undefined -- as LOGINOUT does on VMS. */
-    printf("\n");
+    /* VAX V7.3 frames it with no blank lines: the welcome, then the
+     * last-login block, then the session (keystroke LOGIN.BANNER P) --
+     * rd vms-bd71 */
     ovmx_banner_welcome(stdout);
-    printf("\n");
 
     /*
      * THE OpenVMS LOGINOUT SESSION-INFORMATION BLOCK (vms-417).
@@ -271,7 +272,6 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
     loginout_display_session_info(stdout, last_interactive,
                                   last_noninteractive, login_failures,
                                   new_mail);
-    printf("\n");
 
     /* Record this login now (after showing last, before launching DCL) */
     ovmx_accounting_record_login(rec->username);
@@ -850,6 +850,17 @@ static int console_login(void)
      * architecture this build actually runs on and the product version are
      * read from ovmx_identity.h's accessors. Nothing here knows a version.
      */
+    /* The bell that answers the operator's RETURN at an idle console, before
+     * the identification (VAX V7.3 keystroke LOGIN.BANNER U, LOGOUT R:
+     * "<BEL><LF><CR><LF>VAX/VMS V7.3 ..."). Written raw, so it does not open
+     * a record -- rd vms-bd71. */
+    if (loginout_at_operator_terminal() && loginout_tt_chan()) {
+        static const char bel = '\a';
+        uint16_t biosb[4];
+        fflush(stdout);
+        (void)sys$qiow(0, lgi_tt_chan, IO$_WRITEVBLK, biosb, NULL, 0,
+                       (void *)&bel, 1, 0, 0, 0, 0);
+    }
     loginout_display_system_identification(stdout, OVMX_PRODUCT_NAME,
                                            ovmx_hw_arch(),
                                            ovmx_product_version(),
@@ -863,8 +874,17 @@ static int console_login(void)
     while (attempts < MAX_ATTEMPTS) {
         /* Prompt for username. Bounded by the LGI-style idle deadline: on
          * expiry the session is disconnected silently (read_prompt_response). */
-        if (read_prompt_response("\r\nUsername: ", username, sizeof(username), 0) != LOGIN_READ_OK)
-            return 1;  /* EOF, or the idle deadline expired */
+        {
+            int ur = read_prompt_response("\r\nUsername: ", username, sizeof(username), 0);
+            if (ur == LOGIN_READ_EOF && loginout_tt_chan()) {
+                /* ^Z at Username: -- what LOGINOUT says on VMS before the
+                 * session goes (VAX V7.3 keystroke LOGOUT X), rd vms-bd71 */
+                printf("Error reading command input\nEnd of file detected\n");
+                fflush(stdout);
+            }
+            if (ur != LOGIN_READ_OK)
+                return 1;  /* EOF, or the idle deadline expired */
+        }
         str_upcase(username);
 
         if (username[0] == '\0')

@@ -217,7 +217,9 @@ static void tt_track(struct vms_tt *tt, uint8_t c)
 			tt->pos = TT_POS_FRESH;
 		break;
 	case 0:
-		break;                       /* a fill character moves nothing */
+	case CH_BEL:
+		tt->last = c;
+		return;                      /* a fill or a bell moves nothing */
 	default:
 		tt->pos = TT_POS_MID;
 		break;

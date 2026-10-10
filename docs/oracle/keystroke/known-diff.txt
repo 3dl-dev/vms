@@ -4,7 +4,6 @@
 # tools/oracle/keystroke/ksdiff.py: an unlisted difference fails the gate, and so does
 # a listed step that now matches. Fix the bug, delete the line. Nearly every step
 # also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
-BC.READ S  # vms-53a: broadcast mid-read: no driver redisplay
 BC.READ W  # vms-53a: broadcast mid-read: no driver redisplay
 ERR.DCL E1  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E3  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)

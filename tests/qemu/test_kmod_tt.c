@@ -352,6 +352,18 @@ int main(void)
     st = vms_kif_tt_write(chan, "xyz", 3);
     screen(m, scr, sizeof(scr), 300);
     CHECK((st & 1) && strcmp(scr, "xyz") == 0, "a $QIO write goes out through the driver byte for byte");
+    /* a write with P4 " " carriage control is one record: a new line (mid-
+     * line here: CR LF), the text, a CR with the line feed owed (semantic
+     * oracle TT.WRITE, rd vms-fc4) */
+    st = vms_kif_tt_write_record(chan, "abc", 3);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK((st & 1) && strcmp(scr, "\r\nabc\r") == 0,
+          "a $QIO write with P4 carriage control \" \" is one record: <CR><LF>abc<CR>");
+    (void)!write(s, "d\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(strcmp(scr, "\nd\r") == 0, "the record after it pays the owed line feed: <LF>d<CR>");
+    (void)vms_kif_tt_write(chan, "\r\n", 2);      /* back to a fresh line */
+    (void)screen(m, scr, sizeof(scr), 300);
 
     /* ---- read(2) on the line is a terminal-driver read ---- */
     type(m, "hi\r");

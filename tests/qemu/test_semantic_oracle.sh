@@ -69,7 +69,7 @@ wait_for() {  # pattern limit-seconds since-byte
     done
     return 1
 }
-segment_since() { tail -c "+$(($1 + 1))" "$LOG" 2>/dev/null | tr -d '\r'; }
+segment_since() { tail -c "+$(($1 + 1))" "$LOG" 2>/dev/null | tr -d '\r\000'; }
 die() { echo "FATAL: $1"; echo "--- console log (tail) ---"; tail -c 6000 "$LOG"; exit 1; }
 
 # Boot the probe disk (the SAME disk image each time: a probe's files and names

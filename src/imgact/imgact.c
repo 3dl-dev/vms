@@ -49,7 +49,6 @@
 #include "imgact_xfer.h"  /* .vms$xfer parse: SysV vs. VMS-standard (vms-f60d) */
 #include "imgact_eihd.h"  /* OpenVMS Alpha native image reader (vms-3b3f) */
 #include "ovmx_activation.h" /* VMS image-activation context contract (vms-f60d) */
-#include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 #include "imgact_prodreg.h" /* publish resident producers into LIBVMS$SHR (vms-db2) */
 #include "imgact_acp.h"   /* image reads over the executive Files-11 ACP (vms-3e8e) */
 #include "imgact_boundary_audit.h" /* executive-boundary AUDIT tracer install (vms-617) */
@@ -977,7 +976,6 @@ static struct obj *load_object(const char *soname, const char *path)
  * -------------------------------------------------------------------------- */
 
 #define IMGACT_FALLBACK_SYSLIB   "/vms/SYS0/SYSCOMMON/SYSLIB"
-#define IMGACT_KNOWN_IMAGES_DB   "/vms/SYS0/SYSCOMMON/SYSEXE/VMS$KNOWN_IMAGES.DAT"
 
 static struct obj *find_loaded(const char *soname)
 {
@@ -988,40 +986,14 @@ static struct obj *find_loaded(const char *soname)
 }
 
 /* --------------------------------------------------------------------------
- * Known Image Database (Priority 1 of docs/design-image-activation.md §4).
- *
- * Lazily mmap(MAP_SHARED)'d on first DT_NEEDED lookup (bead vms-30d wiring
- * of the vms-913.5 module) so activations with no DT_NEEDED entries never
- * touch it. A missing/corrupt/absent database (-1) is cached, not retried
- * per soname -- every subsequent lookup falls straight through to the
- * Priority 2 SYS$SHARE fallback below.
+ * Known images (Priority 1 of docs/design-image-activation.md §4): the
+ * executive's known file list, which INSTALL changes under CMKRNL (rd
+ * vms-220). An image not installed falls through to Priority 2 below.
  * -------------------------------------------------------------------------- */
 
-static struct known_images_db g_known_db;
-static int                    g_known_db_state; /* 0=untried 1=open -1=unavailable */
-
-static const struct known_images_db *known_db(void)
-{
-	if (g_known_db_state == 0) {
-		g_known_db_state =
-			known_images_open(&g_known_db, IMGACT_KNOWN_IMAGES_DB) == 0 ? 1 : -1;
-	}
-	return g_known_db_state == 1 ? &g_known_db : 0;
-}
-
-/* Release the KFE mmap/fd once DT_NEEDED resolution is done; nothing past
- * this point in imgact_bootstrap() needs it, and the fd should not leak
- * into the activated program's descriptor table. */
-static void known_db_shutdown(void)
-{
-	if (g_known_db_state == 1)
-		known_images_close(&g_known_db);
-	g_known_db_state = -1;
-}
-
 /* Resolve a SONAME to a path and map it. Search order per design spec §4:
- *   Priority 1: Known Image Database -- O(1) mmap'd hash lookup, no
- *               filesystem search at all on a hit (bead vms-30d).
+ *   Priority 1: the executive's known file list (INSTALL; rd vms-220),
+ *               no filesystem search at all on a hit.
  *   Priority 2: hardcoded SYS$SHARE fallback (vms-913.2; always available,
  *               even before the Known Image DB exists).
  * Priorities 3 (SYS$SHARE logical name, once the logical name tables are
@@ -1034,17 +1006,9 @@ static struct obj *load_needed(const char *soname)
 
 	char path[512];
 
-	const struct known_images_db *kdb = known_db();
-	const struct kfe_entry *kfe = kdb ? known_images_lookup(kdb, soname) : 0;
-	if (kfe) {
-		/* kfe->path is a fixed-size field that may not be NUL-terminated
-		 * if a writer filled all 256 bytes; bound and terminate defensively
-		 * (same idiom known_images.c itself uses for soname). */
-		unsigned long n = sizeof(kfe->path);
-		if (n >= sizeof(path))
-			n = sizeof(path) - 1;
-		memcpy(path, kfe->path, n);
-		path[n] = 0;
+	/* Priority 1: the executive's known file list (INSTALL; rd vms-220). */
+	if (imgact_kfe_find(soname, path, sizeof(path)) & 1) {
+		/* path filled by the executive's entry */
 	} else {
 		path[0] = 0;
 		xstrcat(path, IMGACT_FALLBACK_SYSLIB);
@@ -4078,7 +4042,6 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	/* ---- Load shareable images (recursively). ---- */
 	for (int i = 0; i < g_nobjs; i++)
 		load_deps(&g_objs[i]);
-	known_db_shutdown(); /* KFE lookups are done; release the mmap/fd (vms-30d) */
 
 	/* ---- Assign TLS offsets, relocate (leaves first), init TLS. ---- */
 	assign_tls_offsets();

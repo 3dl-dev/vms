@@ -12,7 +12,8 @@ add_executable(vms_install
 
 target_include_directories(vms_install PRIVATE
     ${VMS_INCLUDE_DIR}
-    ${CMAKE_SOURCE_DIR}/src/imgact
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
+    ${CMAKE_SOURCE_DIR}/src/vmsprocess/include
 )
 
 target_compile_definitions(vms_install PRIVATE
@@ -24,7 +25,7 @@ target_compile_options(vms_install PRIVATE
     -Wall -Wextra
 )
 
-target_link_libraries(vms_install PRIVATE vms)
+target_link_libraries(vms_install PRIVATE vms vmssys)  # vms_kif_kfe: the executive list (vms-220)
 
 set_target_properties(vms_install PROPERTIES
     OUTPUT_NAME "INSTALL"

@@ -723,7 +723,14 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		tt_hc_close(tt);
 		if (c == CH_CR && !(tt->rd_flags & VMS_TT_RD_TRMNOECHO) &&
 		    (tt->rd_dc & VMS_TTC_ECHO)) {
-			tt_nl(tt);             /* the RETURN, echoed */
+			/* the RETURN, echoed. On an empty line it is still a
+			 * whole new line, CR LF (VAX V7.3 keystroke PG.TYPE
+			 * R1: RETURN at "Press RETURN to continue"'s empty
+			 * read) -- rd vms-457 */
+			if (tt->pos == TT_POS_FRESH)
+				tt_out(tt, "\r\n", 2);
+			else
+				tt_nl(tt);
 			/* after a NOECHO read (a password) the next record starts
 			 * where the line feed left it, with no carriage return of
 			 * its own (VAX V7.3 keystroke LOGIN.BANNER P: "Password:

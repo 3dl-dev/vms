@@ -246,6 +246,18 @@ static int port_write(void *port, const uint8_t *buf, size_t n)
 				READ_ONCE(p->len) < VMS_PORT_RING || READ_ONCE(p->dead)))
 			return -EINTR;
 	}
+	/*
+	 * A terminal write completes when its last character has gone out to
+	 * the line, as a VMS terminal write does (a CTRL/S-stopped line holds
+	 * the writer). Otherwise a session that writes and then ends loses the
+	 * tail to the hangup's flush of the line (VAX V7.3 keystroke LOGOUT X:
+	 * LOGINOUT's "End of file detected" arrives whole) -- rd vms-bd71.
+	 */
+	if (wait_event_interruptible(p->owq,
+			READ_ONCE(p->len) == 0 || READ_ONCE(p->dead)))
+		return -EINTR;
+	if (!READ_ONCE(p->dead) && !port_is_pty(p->tty))
+		tty_wait_until_sent(p->tty, 0);
 	return 0;
 }
 

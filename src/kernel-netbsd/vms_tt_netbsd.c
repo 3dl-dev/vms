@@ -194,6 +194,18 @@ port_write(void *port, const uint8_t *buf, size_t n)
 			}
 		}
 	}
+	/* A terminal write completes when its last character has gone out to
+	 * the line, as a VMS terminal write does: a session that writes and
+	 * then ends must not lose the tail to the close (keystroke LOGOUT X,
+	 * rd vms-bd71). */
+	while (!p->dead && p->tp->t_outq.c_cc > 0) {
+		ttstart(p->tp);
+		error = cv_timedwait_sig(&p->owcv, &tty_lock, timo);
+		if (error != 0 && error != EWOULDBLOCK) {
+			mutex_spin_exit(&tty_lock);
+			return -EINTR;
+		}
+	}
 	mutex_spin_exit(&tty_lock);
 	return 0;
 }

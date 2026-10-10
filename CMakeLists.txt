@@ -760,6 +760,13 @@ if(BUILD_TESTS)
         set_tests_properties(vmsfs_master_roundtrip PROPERTIES
             LABELS "integration;tools" TIMEOUT 120)
 
+        # vms-59da: a mastered ODS-2 volume has file headers to spare
+        add_test(NAME vmsfs_master_headroom
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_vmsfs_master_headroom.sh
+                    $<TARGET_FILE:vmsfs_master>)
+        set_tests_properties(vmsfs_master_headroom PROPERTIES
+            LABELS "integration;tools" TIMEOUT 60)
+
         # vms-d9c: the OVMX/NetBSD-vax SYSTEM volume must master to a rooted,
         # bootable [SYS0.SYSCOMMON.SYSEXE] layout (the shape ovmx_init's
         # require_installed_system() / run_startup() resolve), and the staged

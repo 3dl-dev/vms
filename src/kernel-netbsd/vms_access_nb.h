@@ -127,6 +127,7 @@ struct vms_modexfer_args {
 #define VMS_KFE_F_HDRRES    0x0004u
 #define VMS_KFE_F_PRIV      0x0008u
 #define VMS_KFE_NAMELEN     128
+#define VMS_KFE_DIR         "/run/ovmx-boot/k"
 #define VMS_KFE_MAX         64
 struct vms_kfe_args {
 	uint32_t op;

@@ -241,19 +241,17 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
- *   int  exec_file_pin(int fd, void **pin)
+ *   int  exec_kfe_stage(int fd, const char *dst, void **pin)
  *   void exec_file_unpin(void *pin)
  *   int  exec_file_is(void *pin, int fd)
- *        a known-file entry (INSTALL, vms-7c64) PINS the file the CURRENT
- *        task's descriptor `fd` names: a kernel reference to the file object
- *        for the entry's whole life, with writes to it denied (Linux:
- *        fget + deny_write_access; NetBSD: vref + vn_marktext). <0 when `fd`
- *        names no regular file or it is open for write (-ETXTBSY).
- *        exec_file_sealed() is 1 when the pinned file is root-owned with no
- *        write permission at all (an image installed /PRIVILEGED must be).
- *        exec_file_is() is 1 when `fd` names that very object: matching is by
- *        the pinned object, never an inode number or a path, so a deleted
- *        file's reused number is never mistaken for it (Baron, vms-96e7).
+ *        INSTALL (vms-220): the executive's OWN copy of an installed image.
+ *        The file the CURRENT task's `fd` names is copied, as the kernel, to
+ *        a new read-only file `dst` in the executive-only VMS_KFE_DIR, and the
+ *        copy is held for the entry's life with writes to it denied (Linux:
+ *        override_creds + kernel_read/kernel_write + deny_write_access;
+ *        NetBSD: lwp0's credential + vn_rdwr + vn_marktext). exec_file_is()
+ *        is 1 when `fd` names that very copy: matching is by the held object,
+ *        never an inode number or a path (Baron's rulings, vms-96e7, vms-220).
  *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)

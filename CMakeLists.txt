@@ -173,21 +173,9 @@ if(BUILD_TESTS)
     enable_testing()
 endif()
 
-# Known Image Database lookup module (bead vms-913.5) — standalone,
-# mmap(MAP_SHARED)-based O(1) SONAME lookup for IMGACT.EXE's known-image
-# search path (docs/design-image-activation.md section 6). Plain POSIX C,
-# no freestanding/musl constraint, so it builds unconditionally (independent
-# of OVMX_IMGACT) and is exercised by both its own unit test and the
-# INSTALL utility's integration test (src/install/). Wiring
-# known_images_lookup() into src/imgact/imgact.c's activation search path
-# is a deliberate follow-up tracked separately — imgact.c is owned by a
-# concurrent bead (vms-913.11).
-add_library(known_images STATIC src/imgact/known_images.c)
-target_include_directories(known_images PUBLIC src/imgact)
-
 # Shared OVMX kit-container reader (bead vms-df9, docs/design-ovmx-kit-
 # format.md). Plain POSIX C, no freestanding constraint, builds
-# unconditionally like known_images above -- both tools/ovmx_kit_pack
+# unconditionally -- both tools/ovmx_kit_pack
 # (factory build tooling, BUILD_TOOLS-gated) and PRODUCT.EXE (hosted
 # SYS$SYSTEM: utility, also BUILD_TOOLS-gated) link it, so it must exist
 # before either add_subdirectory below.
@@ -198,11 +186,6 @@ target_include_directories(ovmx_kit_reader PUBLIC
 )
 
 if(BUILD_TESTS)
-    add_executable(test_known_images src/imgact/test/test_known_images.c)
-    target_link_libraries(test_known_images PRIVATE known_images)
-    add_test(NAME known_images_unit COMMAND test_known_images)
-    set_tests_properties(known_images_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
-
     # .vms$xfer parse (SysV vs. VMS-standard) + Alpha standard-call AI-register
     # layout (bead vms-f60d). Pure host unit test over imgact_xfer.c; proves the
     # ZERO-REGRESSION fallback to SYSV for every non-.vms$xfer image and the
@@ -244,16 +227,6 @@ if(BUILD_TESTS)
     add_test(NAME imgact_symvec_elf32_unit COMMAND test_symvec_elf32)
     set_tests_properties(imgact_symvec_elf32_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
 
-    # Proves /SHARED images share physical pages across processes via
-    # /proc/PID/smaps (INSTALL done condition #4). See the file header in
-    # test_shared_pages.c for the full verification method.
-    add_executable(test_known_images_shared_pages src/imgact/test/test_shared_pages.c)
-    target_link_libraries(test_known_images_shared_pages PRIVATE known_images)
-    add_test(NAME known_images_shared_pages COMMAND test_known_images_shared_pages)
-    set_tests_properties(known_images_shared_pages PROPERTIES
-        LABELS "unit;imgact"
-        TIMEOUT 30
-    )
 endif()
 
 # Subdirectories (order matters for dependencies)

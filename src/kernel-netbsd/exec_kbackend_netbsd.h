@@ -464,20 +464,18 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
 
-/* exec_file_pin / unpin / is (exec_kbackend.h section 5, rd vms-7c64):
- * vms_blockdev_netbsd.c (vnode TU): vref + vn_marktext. */
-extern int ovmx_file_pin(int fd, void **pin);
+/* exec_kfe_stage / file_unpin / file_is (exec_kbackend.h section 5, rd vms-220):
+ * vms_blockdev_netbsd.c (vnode TU): the executive's copy, vn_marktext'd. */
+extern int ovmx_kfe_stage(int fd, const char *dst, void **pin);
 extern void ovmx_file_unpin(void *pin);
 extern int ovmx_file_is(void *pin, int fd);
 static __inline int
-exec_file_pin(int fd, void **pin)
+exec_kfe_stage(int fd, const char *dst, void **pin)
 {
-	int e = ovmx_file_pin(fd, pin);
+	int e = ovmx_kfe_stage(fd, dst, pin);
 	return e ? -e : 0;
 }
 static __inline void exec_file_unpin(void *pin) { ovmx_file_unpin(pin); }
-extern int ovmx_file_sealed(void *pin);
-static __inline int exec_file_sealed(void *pin) { return ovmx_file_sealed(pin); }
 static __inline int exec_file_is(void *pin, int fd) { return ovmx_file_is(pin, fd); }
 
 static __inline exec_task_pin_t *

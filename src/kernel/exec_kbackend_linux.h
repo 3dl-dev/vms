@@ -279,28 +279,65 @@ typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
 
-/* exec_file_pin / unpin / is (exec_kbackend.h section 5, rd vms-7c64): a
- * known-file entry holds the struct file the caller's `fd` names, with writes
- * to its inode denied (deny_write_access), for the entry's whole life. */
-static inline int exec_file_pin(int fd, void **pin)
+/* exec_kfe_stage (exec_kbackend.h section 5, rd vms-220): copy the file the
+ * caller's `fd` names, AS THE KERNEL, into a new file `dst` (O_EXCL, 0555) in
+ * the executive's own directory, then hold that copy open read-only with
+ * writes to it denied (deny_write_access); *pin is the held copy. */
+static inline int exec_kfe_stage(int fd, const char *dst, void **pin)
 {
-	struct file *f = fget(fd);
-	int e;
-	if (!f)
+	struct file *src, *out, *ro;
+	const struct cred *kc, *old;
+	loff_t ip = 0, op = 0;
+	ssize_t n;
+	void *buf;
+	int e = 0;
+
+	src = fget(fd);
+	if (!src)
 		return -EBADF;
-	e = deny_write_access(f);
-	if (e) {
-		fput(f);
-		return e;            /* -ETXTBSY: someone has it open for write */
+	if (!S_ISREG(file_inode(src)->i_mode) || !(src->f_mode & FMODE_READ)) {
+		fput(src);
+		return -EINVAL;
 	}
-	*pin = f;
-	return 0;
-}
-/* 1 when the pinned file is root-owned with no write permission at all. */
-static inline int exec_file_sealed(void *pin)
-{
-	struct inode *ino = file_inode((struct file *)pin);
-	return uid_eq(ino->i_uid, GLOBAL_ROOT_UID) && !(ino->i_mode & 0222);
+	buf = kmalloc(65536, GFP_KERNEL);
+	kc = prepare_kernel_cred(&init_task);
+	if (!buf || !kc) {
+		kfree(buf);
+		if (kc)
+			put_cred(kc);
+		fput(src);
+		return -ENOMEM;
+	}
+	old = override_creds(kc);
+	out = filp_open(dst, O_WRONLY | O_CREAT | O_EXCL | O_LARGEFILE, 0555);
+	if (IS_ERR(out)) {
+		e = PTR_ERR(out);
+	} else {
+		while ((n = kernel_read(src, buf, 65536, &ip)) > 0) {
+			if (kernel_write(out, buf, n, &op) != n) {
+				e = -EIO;
+				break;
+			}
+		}
+		if (n < 0)
+			e = (int)n;
+		filp_close(out, NULL);
+	}
+	if (!e) {
+		ro = filp_open(dst, O_RDONLY | O_LARGEFILE, 0);
+		if (IS_ERR(ro)) {
+			e = PTR_ERR(ro);
+		} else if ((e = deny_write_access(ro)) != 0) {
+			fput(ro);
+		} else {
+			*pin = ro;
+		}
+	}
+	revert_creds(old);
+	put_cred(kc);
+	kfree(buf);
+	fput(src);
+	return e;
 }
 static inline void exec_file_unpin(void *pin)
 {

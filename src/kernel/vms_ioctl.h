@@ -3793,6 +3793,9 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
 #define VMS_KFE_F_PRIV      0x0008u  /* /PRIVILEGED (privs below) */
 
 #define VMS_KFE_NAMELEN     128
+/* The executive's own directory of installed-image copies (rd vms-220). PID 1
+ * creates it at boot, 0711; only the executive (as the kernel) writes in it. */
+#define VMS_KFE_DIR         "/run/ovmx-boot/k"
 #define VMS_KFE_MAX         64
 
 struct vms_kfe_args {

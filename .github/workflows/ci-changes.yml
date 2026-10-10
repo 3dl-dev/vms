@@ -324,8 +324,6 @@ jobs:
               - 'src/product/**'
               - 'src/apps/parts/**'
               - 'src/vmsfs/ods2/**'
-              - 'src/imgact/known_images.c'
-              - 'src/imgact/known_images.h'
               # vms-8e8f: the vax-acp-read-ilp32 job cross-compiles the shared
               # ACP file-access walk for elf32-vax, so a change to it must
               # re-trigger the VAX ILP32 leg on a PR (it is the SAME TU

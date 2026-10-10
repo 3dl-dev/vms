@@ -68,6 +68,9 @@
 #include <sys/file.h>			/* struct file, fd_getfile/fd_putfile (vms-7c64) */
 #include <sys/filedesc.h>
 #include <sys/kauth.h>
+#include <sys/kmem.h>			/* kmem_alloc (ovmx_kfe_stage) */
+#include <sys/lwp.h>			/* lwp0: the kernel credential */
+#include <sys/uio.h>			/* UIO_READ / UIO_SYSSPACE */
 
 /*
  * QUARANTINE (the vms_lnm_arena_netbsd.c precedent). This TU pulls the heavy
@@ -580,46 +583,103 @@ vms_blockdev_netbsd_release_all(void)
 }
 
 /*
- * ovmx_file_pin / unpin / is (rd vms-7c64): a known-file entry holds a
- * reference on the vnode behind the caller's descriptor `fd`, marked text
- * (vn_marktext: no writer may open it while the reference lives; refused
- * ETXTBSY if one already has). The mark goes with the last reference, as an
- * exec's does. OVMX glue over public NetBSD interfaces (fd_getfile(9),
- * vref(9), vn_marktext), no NetBSD source copied.
+ * ovmx_kfe_stage / ovmx_file_unpin / ovmx_file_is (rd vms-220): the
+ * executive's own copy of an installed image. The bytes of the vnode behind
+ * the caller's descriptor `fd` are copied, AS THE KERNEL (lwp0's credential),
+ * into a new file `dst` (O_EXCL, 0555) in the executive's own directory; the
+ * copy is then held open read-only and marked text (vn_marktext: no writer may
+ * open it while the reference lives). The mark goes with the last reference,
+ * as an exec's does. OVMX glue over public NetBSD interfaces (fd_getfile(9),
+ * vn_open(9), vn_rdwr(9), vn_marktext), no NetBSD source copied.
  */
-int ovmx_file_pin(int fd, void **pin);
+int ovmx_kfe_stage(int fd, const char *dst, void **pin);
 void ovmx_file_unpin(void *pin);
 int ovmx_file_is(void *pin, int fd);
 
+#define OVMX_KFE_CHUNK 16384
+
 int
-ovmx_file_pin(int fd, void **pin)
+ovmx_kfe_stage(int fd, const char *dst, void **pin)
 {
 	file_t *fp;
-	struct vnode *vp;
+	struct vnode *svp, *dvp = NULL, *rvp = NULL;
+	struct pathbuf *pb;
+	kauth_cred_t save, kc = lwp0.l_cred;
+	struct vattr va;
+	off_t off = 0;
+	size_t resid;
+	char *buf;
 	int error;
 
 	if ((fp = fd_getfile(fd)) == NULL)
 		return EBADF;
-	if (fp->f_type != DTYPE_VNODE || (vp = fp->f_vnode) == NULL ||
-	    vp->v_type != VREG) {
+	if (fp->f_type != DTYPE_VNODE || (svp = fp->f_vnode) == NULL ||
+	    svp->v_type != VREG || !(fp->f_flag & FREAD)) {
 		fd_putfile(fd);
 		return EINVAL;
 	}
-	vref(vp);
+	vref(svp);
 	fd_putfile(fd);
-	error = vn_marktext(vp);
+	vn_lock(svp, LK_SHARED | LK_RETRY);
+	error = VOP_GETATTR(svp, &va, kc);
+	VOP_UNLOCK(svp);
 	if (error) {
-		vrele(vp);
+		vrele(svp);
 		return error;
 	}
-	*pin = vp;
-	return 0;
+	buf = kmem_alloc(OVMX_KFE_CHUNK, KM_SLEEP);
+
+	/* vn_open(9) takes the credential of the calling LWP; act as the
+	 * kernel for the copy, then restore. */
+	save = curlwp->l_cred;
+	curlwp->l_cred = kc;
+	pb = pathbuf_create(dst);
+	error = pb ? vn_open(NULL, pb, 0, FWRITE | O_CREAT | O_EXCL, 0555, &dvp, NULL, NULL)
+	           : ENOMEM;
+	if (pb)
+		pathbuf_destroy(pb);
+	while (error == 0 && off < va.va_size) {
+		int len = (va.va_size - off) > OVMX_KFE_CHUNK ? OVMX_KFE_CHUNK
+		                                               : (int)(va.va_size - off);
+		error = vn_rdwr(UIO_READ, svp, buf, len, off, UIO_SYSSPACE, 0, kc,
+		                &resid, curlwp);
+		if (error == 0 && resid != 0)
+			error = EIO;
+		if (error == 0)
+			error = vn_rdwr(UIO_WRITE, dvp, buf, len, off, UIO_SYSSPACE,
+			                IO_NODELOCKED, kc, &resid, curlwp);
+		if (error == 0 && resid != 0)
+			error = EIO;
+		off += len;
+	}
+	if (dvp != NULL) {
+		VOP_UNLOCK(dvp);
+		(void)vn_close(dvp, FWRITE, kc);
+	}
+	if (error == 0) {
+		pb = pathbuf_create(dst);
+		error = pb ? vn_open(NULL, pb, 0, FREAD, 0, &rvp, NULL, NULL) : ENOMEM;
+		if (pb)
+			pathbuf_destroy(pb);
+		if (error == 0) {
+			VOP_UNLOCK(rvp);
+			error = vn_marktext(rvp);
+			if (error)
+				(void)vn_close(rvp, FREAD, kc);
+			else
+				*pin = rvp;
+		}
+	}
+	curlwp->l_cred = save;
+	kmem_free(buf, OVMX_KFE_CHUNK);
+	vrele(svp);
+	return error;
 }
 
 void
 ovmx_file_unpin(void *pin)
 {
-	vrele((struct vnode *)pin);
+	(void)vn_close((struct vnode *)pin, FREAD, lwp0.l_cred);
 }
 
 int
@@ -635,18 +695,3 @@ ovmx_file_is(void *pin, int fd)
 	return same;
 }
 
-/* 1 when the pinned vnode is root-owned with no write permission at all
- * (rd vms-7c64: an image installed /PRIVILEGED). */
-int ovmx_file_sealed(void *pin);
-int
-ovmx_file_sealed(void *pin)
-{
-	struct vnode *vp = pin;
-	struct vattr va;
-	int error;
-
-	vn_lock(vp, LK_SHARED | LK_RETRY);
-	error = VOP_GETATTR(vp, &va, kauth_cred_get());
-	VOP_UNLOCK(vp);
-	return error == 0 && va.va_uid == 0 && (va.va_mode & 0222) == 0;
-}

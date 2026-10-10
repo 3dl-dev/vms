@@ -46,7 +46,7 @@ endif
 # The executive transport seam (rd vms-bbde): IMGACT reaches /dev/vms only
 # through libvmssys's kif_transport_linux.c (+ its raw syscall layer), never an
 # open/ioctl of its own.
-IMGACT_SRC := imgact.c known_images.c imgact_acp.c imgact_xfer.c \
+IMGACT_SRC := imgact.c imgact_acp.c imgact_xfer.c \
               imgact_boundary_audit.c ../boundary_audit/boundary_audit_filter.c \
               ../libvmssys/kif_transport_linux.c ../libvmssys/arch/$(ARCH)/syscall.S \
               $(ARCHDIR)/start.S $(ARCH_EXTRA_SRC)
@@ -54,7 +54,7 @@ IMGACT_SRC := imgact.c known_images.c imgact_acp.c imgact_xfer.c \
 .PHONY: all clean
 all: IMGACT.EXE
 
-IMGACT.EXE: $(IMGACT_SRC) $(ARCHDIR)/imgact_arch.h known_images.h imgact_acp.h imgact_xfer.h imgact_boundary_audit.h ../boundary_audit/include/boundary_audit_filter.h include/ovmx_activation.h
+IMGACT.EXE: $(IMGACT_SRC) $(ARCHDIR)/imgact_arch.h imgact_acp.h imgact_xfer.h imgact_boundary_audit.h ../boundary_audit/include/boundary_audit_filter.h include/ovmx_activation.h
 	$(CC) $(IMGACT_CFLAGS) $(IMGACT_LDFLAGS) -o $@ $(IMGACT_SRC)
 
 clean:

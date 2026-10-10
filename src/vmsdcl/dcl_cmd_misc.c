@@ -3182,9 +3182,9 @@ int cmd_convert(struct dcl_command *cmd)
  *
  * THIS REPLACES an earlier version that maintained its own flat-text list
  * at SYS$MANAGER:INSTALL_LIST.DAT (vms-913.7). That list was never read by
- * anything: IMGACT.EXE's known-image search path (src/imgact/known_images.c)
- * mmaps SYS$SYSTEM:VMS$KNOWN_IMAGES.DAT, the binary KFE database only
- * SYS$SYSTEM:INSTALL.EXE writes. So SYSTARTUP_VMS.COM's `INSTALL ADD`
+ * anything: the known file list INSTALL.EXE maintains is the one IMGACT.EXE
+ * consults (the executive's since rd vms-220; before that an on-disk
+ * database only SYS$SYSTEM:INSTALL.EXE wrote). So SYSTARTUP_VMS.COM's `INSTALL ADD`
  * commands were silently landing in a file nothing consulted, while image
  * activation always fell through to the Priority 2 filesystem-search path
  * (docs/design-image-activation.md section 4) -- functionally harmless

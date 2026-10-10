@@ -1540,10 +1540,9 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "kfe_find() matches an entry by the pinned file object (exec_file_is). The mutation matches any entry, so a file that was never installed is reported installed -- with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
+        why)          echo "kfe_find() matches an entry by the executive's held copy (exec_file_is). The mutation matches any entry, so a file that is not an installed copy -- the caller's own source file included -- is reported installed, with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-another file is not installed: FIND is SS$_NOSUCHFILE
-a new file at the old name is not installed (matched by the pinned file, not a name or number)
+the caller's own source file is not an installed image: FIND is SS$_NOSUCHFILE
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -1560,9 +1559,9 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "exec_file_pin() denies writes to the inode it pins (deny_write_access). The mutation skips the denial, so an installed /PRIVILEGED image can be rewritten after INSTALL and run its new contents with the entry's privileges. Gone after substitution (no-op re-apply).";;
+        why)          echo "exec_kfe_stage() denies writes to the executive's copy it holds (deny_write_access). The mutation skips the denial, so the installed copy -- and with it a /PRIVILEGED image -- could be rewritten after INSTALL (root's DAC override ignores its 0555 mode). Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
-opening an installed image for write is refused (ETXTBSY)
+opening the executive's copy for write is refused (ETXTBSY) -- even by substrate root
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8199,7 +8198,7 @@ apply_edit() {
     kfe-keyed-on-name)
         sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& exec_file_is(vms_kfe_tab\[i\].pin, fd))$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file";;
     kfe-write-not-denied)
-        sed -i 's|^\te = deny_write_access(f);$|\te = 0; /* NEGCTL kfe-write-not-denied */|' "$_file";;
+        sed -i 's|^\t\t} else if ((e = deny_write_access(ro)) != 0) {$|\t\t} else if ((e = 0) != 0) { /* NEGCTL kfe-write-not-denied */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)

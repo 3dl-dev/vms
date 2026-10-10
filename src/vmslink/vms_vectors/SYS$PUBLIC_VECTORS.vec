@@ -32,7 +32,9 @@
 #
 # The rights-database slots (0xA50-0xA70, vms-8b5) are observed in the link map
 # of the rights probe (tests/native-images/alpha/sp/SP_RIGHTS.MAP.txt), $CHKPRO
-# (0xAB0) in that of the $CHKPRO probe (SP_CHKPRO.MAP.txt);
+# (0xAB0) in that of the $CHKPRO probe (SP_CHKPRO.MAP.txt), and the RMS slots
+# (0x6D0-0x860) in that of the RMS probe (SP_RMS.MAP.txt): those go to the
+# VMS-layout FAB/RAB/NAM entry points in LIBVMSRMS$SHR (src/vmsrms/rms_vmsabi.c);
 # $FINISH_RDB is OVMX's own service in LIBVMSRMS$SHR (a context longword's
 # address is its one argument).
 #
@@ -74,6 +76,17 @@
 0x5C0     SYS$GETMSG       SYS$GETMSG
 0x610     SYS$GETJPI       SYS$GETJPI
 0x660     SYS$SETPRV       sys$setprv
+0x6D0     SYS$GET          SYS$GET
+0x6E0     SYS$PUT          SYS$PUT
+0x740     SYS$CLOSE        SYS$CLOSE
+0x750     SYS$CONNECT      SYS$CONNECT
+0x760     SYS$CREATE       SYS$CREATE
+0x770     SYS$DISCONNECT   SYS$DISCONNECT
+0x790     SYS$ERASE        SYS$ERASE
+0x7E0     SYS$OPEN         SYS$OPEN
+0x7F0     SYS$REWIND       SYS$REWIND
+0x830     SYS$PARSE        SYS$PARSE
+0x860     SYS$SEARCH       SYS$SEARCH
 0x910     SYS$ENQ          SYS$ENQ
 0x920     SYS$DEQ          sys$deq
 0x930     SYS$ENQW         SYS$ENQW

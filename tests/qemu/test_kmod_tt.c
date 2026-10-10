@@ -369,8 +369,18 @@ int main(void)
     st = vms_kif_tt_write_noformat(chan, "pq", 2);
     screen(m, scr, sizeof(scr), 300);
     CHECK((st & 1) && strcmp(scr, "pq") == 0, "an IO$M_NOFORMAT write goes out byte for byte");
-    (void)!write(s, "e\n", 2);
-    screen(m, scr, sizeof(scr), 300);
+    {
+        struct vms_procinfo pa, pb;
+        memset(&pa, 0, sizeof pa);
+        (void)vms_kif_getjpi_self(&pa);
+        (void)!write(s, "e\n", 2);
+        screen(m, scr, sizeof(scr), 300);
+        memset(&pb, 0, sizeof pb);
+        (void)vms_kif_getjpi_self(&pb);
+        /* negctl: tt-record-not-bufio */
+        CHECK((pa.fields_valid & VMS_PI_V_BUFIO) && pb.bufio == pa.bufio + 1,
+              "a record written to the terminal is one buffered I/O of the writer's (JPI$_BUFIO)");
+    }
     /* negctl: tt-noformat-moves-cursor */
     CHECK(strcmp(scr, "\ne\r") == 0,
           "after an IO$M_NOFORMAT write the next record starts where the driver last put the cursor: <LF>e<CR>");

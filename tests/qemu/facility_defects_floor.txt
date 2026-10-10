@@ -515,4 +515,5 @@
 # Raised to 205 by tt-wrap-ignored (rd vms-cef; test_kmod_tt).
 # Raised to 206 by jpi-bufio-not-counted (rd vms-bd71; test_kmod_procacct).
 # Raised to 207 by tt-noformat-moves-cursor (rd vms-457; test_kmod_tt).
-207
+# Raised to 208 by tt-record-not-bufio (rd vms-bd71; test_kmod_tt).
+208

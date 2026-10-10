@@ -643,7 +643,8 @@ tt-inistr-ignored
 tt-brkthru-privilege-ignored
 tt-wrap-ignored
 jpi-bufio-not-counted
-tt-noformat-moves-cursor"
+tt-noformat-moves-cursor
+tt-record-not-bufio"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2484,6 +2485,25 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: the later checks start from an explicit CR LF.";;
+        esac;;
+
+    tt-record-not-bufio)
+        case "$_f" in
+        facility)     echo "JPI\$_BUFIO: each record a program writes to its terminal through stdio counts as one buffered I/O (vms_tt.c vms_tt_write, rd vms-bd71; probe Q.IODELTA2 W)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() counts the records of a cooked write against the writer (\`vms_proc_count_bufio_current(recs);\`). The mutation drops the call: terminal output stops moving JPI\$_BUFIO and CTRL/T's IO=. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a record written to the terminal is one buffered I/O of the writer's (JPI$_BUFIO)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check reads JPI\$_BUFIO.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8640,6 +8660,8 @@ apply_edit() {
         sed -i 's|^    __atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /\* JPI\$_BUFIO (rd vms-bd71) \*/$|    (void)0; /* NEGCTL jpi-bufio-not-counted */|' "$_file";;
     tt-noformat-moves-cursor)
         sed -i 's|^\t\t\tif (cooked != 2)$|\t\t\tif (1) /* NEGCTL tt-noformat-moves-cursor */|' "$_file";;
+    tt-record-not-bufio)
+        sed -i 's|^\t\tvms_proc_count_bufio_current(recs);$|\t\t(void)recs; /* NEGCTL tt-record-not-bufio */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

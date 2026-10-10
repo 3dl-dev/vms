@@ -1357,6 +1357,14 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	uint8_t chunk[128];
 	size_t i = 0;
 
+	if (cooked == 1) {
+		/* each record a program writes to its terminal is one buffered
+		 * I/O of that program's (JPI$_BUFIO; rd vms-bd71) */
+		uint32_t recs = 0;
+		for (size_t j = 0; j < n; j++)
+			recs += (buf[j] == '\n');
+		vms_proc_count_bufio_current(recs);
+	}
 	tt_flush(tt);                     /* echo queued before this write first */
 	if (READ_ONCE_TT(tt->ctrlo))
 		return 0;                    /* CTRL/O: the output is discarded */

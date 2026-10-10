@@ -1221,6 +1221,22 @@ struct vms_proc *vms_proc_find(pid_t pid)
  * which is what getpid(2) returns, while current->pid is what gettid(2)
  * returns. So tgid is the key, and task_tgid() is the pinned identity.
  */
+void vms_proc_count_bufio_current(uint32_t n)
+{
+    struct vms_proc *proc;
+
+    if (!n)
+        return;
+    rcu_read_lock();
+    hash_for_each_possible_rcu(vms_proc_hash, proc, hash_node, current->tgid) {
+        if (proc->linux_pid == current->tgid) {
+            __atomic_fetch_add(&proc->io_buffered, n, __ATOMIC_RELAXED);
+            break;
+        }
+    }
+    rcu_read_unlock();
+}
+
 struct vms_proc *vms_proc_find_or_err(void)
 {
     struct vms_proc *proc = vms_proc_find(current->tgid);

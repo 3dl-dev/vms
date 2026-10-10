@@ -1432,4 +1432,10 @@ long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 
+/* JPI$_BUFIO for the calling process: `n` records it wrote to its terminal
+ * through the port's own write path (stdio), one buffered I/O each, as a
+ * record $PUT to a terminal is on VMS (probe Q.IODELTA2 W; rd vms-bd71).
+ * A caller with no executive entry is not counted. */
+void vms_proc_count_bufio_current(uint32_t n);
+
 #endif /* _VMS_INTERNAL_H */

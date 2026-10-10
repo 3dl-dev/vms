@@ -144,7 +144,9 @@ if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
     # vms-692: the VMS-ABI RMS entry points (SYS$PARSE/SYS$SEARCH over the
     # VMS-layout FAB/NAM, src/vmsrms/rms_vmsabi.c) and their engine half; the
     # 32-bit address fields need the port compiler, so Alpha only.
-    ALPHA_LIST="$LIST crtl_features rms_vmsabi_core rms_vmsabi"
+    # vms-8b5: SYS$ADD_IDENT over a VMS descriptor (rights_vmsabi.c), reached
+    # by a native image through SECURESHRP.EXE.
+    ALPHA_LIST="$LIST crtl_features rms_vmsabi_core rms_vmsabi rights_vmsabi"
     ALPHA_INCS="$INCS" ALPHA_DEFS="$DEFS" \
         exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" "$ALPHA_LIST" \
             --use "$DECC_SHR" --use "$VMS_SHR" --use "$FS_SHR" --use "$SYS_SHR" --use "$ALPHA_OTS_USE"

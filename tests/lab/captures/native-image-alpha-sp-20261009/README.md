@@ -7,8 +7,9 @@ rebuilt from that DUMP). Each RUN transcript equals
 `docs/oracle/semantics/<family>/alpha84.txt` (chkpro: `vax73.txt`).
 
 They join the native gate (`tests/native-images/alpha/sp/`) once the services they
-call are vectored for native images: the rights database, RMS and $CHKPRO in the
-VMS-ABI producers (rd vms-8b5, vms-e1a7).
+call are vectored for native images: RMS and $CHKPRO in the VMS-ABI producers
+(rd vms-8b5). SP_RIGHTS has moved there (the rights database through
+SECURESHRP.EXE and SYS$PUBLIC_VECTORS).
 
 SP_PRC ran in the gate briefly: with $CREPRC unavailable in the VMS-ABI build
 (vms-55f6) its later cases act on PID 0, the probe itself, so $SUSPND/$DELPRC

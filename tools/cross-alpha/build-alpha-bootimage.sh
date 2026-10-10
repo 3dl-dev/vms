@@ -272,7 +272,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 # into SYS$SHARE. MYSHRV2.EXE (MYSHR relinked GSMATCH 2.0) goes
                 # to SYS$SYSTEM, reached only through a DEFINE MYSHR. NOTIMG.EXE
                 # is a text file named .EXE (the not-an-image refusal).
-                for _v in SYS\$PUBLIC_VECTORS LIBRTL DECC\$SHR_EV56; do
+                for _v in SYS\$PUBLIC_VECTORS LIBRTL DECC\$SHR_EV56 SECURESHRP; do
                     [ -f "$JOINT/$_v.EXE" ] || { echo "FAIL: NATIVE_PROOF without $JOINT/$_v.EXE"; exit 1; }
                     cp "$JOINT/$_v.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/$_v.EXE"
                 done
@@ -288,7 +288,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 done
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
-                echo "   NATIVE (vms-3b3f): HELLO/RETST/CSTDIO/MAIN3/MAIN4/MYSHRV2/NOTIMG -> SYS\$SYSTEM; SYS\$PUBLIC_VECTORS + LIBRTL + DECC\$SHR_EV56 + MYSHR + full producer graph -> SYS\$SHARE; NATIVE-proof SYSTARTUP staged"
+                echo "   NATIVE (vms-3b3f): HELLO/RETST/CSTDIO/MAIN3/MAIN4/MYSHRV2/NOTIMG -> SYS\$SYSTEM; SYS\$PUBLIC_VECTORS + LIBRTL + DECC\$SHR_EV56 + SECURESHRP + MYSHR + full producer graph -> SYS\$SHARE; NATIVE-proof SYSTARTUP staged"
             elif [ -f "$JOINT/CC1_PROOF" ]; then
                 # vms-9a63: the VMS-hosted GCC compiler proper, run by the
                 # launcher JOINT_E2E (vfork+execv) on a DCL-written source.

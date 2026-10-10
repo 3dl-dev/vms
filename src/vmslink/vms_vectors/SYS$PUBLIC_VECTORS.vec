@@ -28,6 +28,12 @@
 #
 #   gsmatch EQUAL,51,16699012
 #   use     LIBVMS$SHR.EXE
+#   use     LIBVMSRMS$SHR.EXE
+#
+# The rights-database slots (0xA50-0xA70, vms-8b5) are observed in the link map
+# of the rights probe (tests/native-images/alpha/sp/SP_RIGHTS.MAP.txt);
+# $FINISH_RDB is OVMX's own service in LIBVMSRMS$SHR (a context longword's
+# address is its one argument).
 #
 # offset  universal        OVMX target
 0x080     SYS$QIOW         SYS$QIOW
@@ -78,6 +84,9 @@
 0xA00     SYS$CRELNM       SYS$CRELNM
 0xA10     SYS$DELLNM       SYS$DELLNM
 0xA20     SYS$TRNLNM       SYS$TRNLNM
+0xA50     SYS$ASCTOID      SYS$ASCTOID
+0xA60     SYS$FINISH_RDB   sys$finish_rdb
+0xA70     SYS$IDTOASC      SYS$IDTOASC
 0xA90     SYS$GRANTID      SYS$GRANTID
 0xAA0     SYS$REVOKID      SYS$REVOKID
 0xAC0     SYS$BRKTHRUW     SYS$BRKTHRUW

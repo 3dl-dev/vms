@@ -280,10 +280,12 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     # image DECC$SHR_EV56), each symbol vector in the VMS ordinal layout of
     # its manifest (src/vmslink/vms_vectors/), forwarding into LIBVMS$SHR or
     # the final DECC$SHR just built.
-    echo "-- [vms-3b3f] the VMS vector images (SYS\$PUBLIC_VECTORS, LIBRTL, DECC\$SHR_EV56) --"
-    for _vec in SYS\$PUBLIC_VECTORS LIBRTL DECC\$SHR_EV56; do
+    # vms-8b5: SECURESHRP (the rights database) and the rights slots of
+    # SYS$PUBLIC_VECTORS forward into LIBVMSRMS$SHR, which was built into $OUT.
+    echo "-- [vms-3b3f] the VMS vector images (SYS\$PUBLIC_VECTORS, LIBRTL, DECC\$SHR_EV56, SECURESHRP) --"
+    for _vec in SYS\$PUBLIC_VECTORS LIBRTL DECC\$SHR_EV56 SECURESHRP; do
         ALPHA_CC="$ALPHA_CC" sh "$MK/vms_vectors/mk_vms_vector_shr.sh" "$WORK/LINK.EXE" \
-            "$MK/vms_vectors/$_vec.vec" "$OUT/$_vec.EXE" "$WORK"
+            "$MK/vms_vectors/$_vec.vec" "$OUT/$_vec.EXE" "$WORK:$OUT"
     done
 else
     echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"

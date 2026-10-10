@@ -118,6 +118,34 @@ substrate_root_known=(
   "* JOB_CONTROL.EXE # vms-137e (pre-login session creator; LOGINOUT setuid is vms-ac48)"
 )
 
+# rootaudit_check <console segment of RUN SYS$SYSTEM:ROOTAUDIT> -- the vms-251b
+# ratchet over substrate_root_known (ok/bad/note per process). A function so
+# tests/integration/test_rootaudit_ratchet.sh can prove it goes red.
+rootaudit_check() {
+    local SEG="$1"
+    must_match "$SEG" '%ROOTAUDIT-I-SUMMARY, [0-9]+ process' "ROOTAUDIT [vms-251b]: the unprivileged GUEST session read the whole substrate process list"
+    local _ra_arch="${EXPECTED_ARCH_NAME:-unknown}" _ra_seen _ra_name _ra_k _ra_hit
+    _ra_seen=$(printf '%s\n' "$SEG" | sed -n 's/.*%ROOTAUDIT-W-SUBSTRATEROOT, pid [0-9]* \([^ ]*\) uid.*/\1/p' | sort -u)
+    for _ra_name in $_ra_seen; do
+        _ra_hit=
+        for _ra_k in "${substrate_root_known[@]}"; do
+            case "$_ra_k" in "$_ra_arch $_ra_name "*|"* $_ra_name "*) _ra_hit="$_ra_k";; esac
+        done
+        if [ -n "$_ra_hit" ]; then
+            note "ROOTAUDIT [vms-251b]: $_ra_name runs as substrate root on $_ra_arch -- known, removed by ${_ra_hit##*# }"
+        else
+            bad "ROOTAUDIT [vms-251b]: $_ra_name runs as substrate root on $_ra_arch and is not in substrate_root_known (a NEW root process: remove it, never list it without an rd item)"
+        fi
+    done
+    for _ra_k in "${substrate_root_known[@]}"; do
+        case "$_ra_k" in "$_ra_arch "*|"* "*) ;; *) continue;; esac
+        _ra_name=$(printf '%s' "$_ra_k" | awk '{print $2}')
+        if printf '%s\n' "$_ra_seen" | grep -qxF -- "$_ra_name"; then :; else
+            bad "ROOTAUDIT [vms-251b]: substrate_root_known lists $_ra_name on $_ra_arch but it no longer runs as root -- delete the line (the ratchet only shrinks)"
+        fi
+    done
+}
+
 # --- vms-c38: oracle golden-diff gate ------------------------------------------
 # The OVMX side of the oracle program: capture_oracle captured the real-VMS layout
 # golden; tools/oracle/diff_surface.sh applies the SAME NORMALIZE mask to OVMX's
@@ -1743,27 +1771,7 @@ run_dcl_acceptance_battery() {
     # longer runs as root must be deleted from the list (stale). The list only
     # shrinks; the gate passes when it is empty and ROOTAUDIT reports 0.
     run_cmd 'RUN SYS$SYSTEM:ROOTAUDIT'
-    must_match "$SEG" '%ROOTAUDIT-I-SUMMARY, [0-9]+ process' "ROOTAUDIT [vms-251b]: the unprivileged GUEST session read the whole substrate process list"
-    local _ra_arch="${EXPECTED_ARCH_NAME:-unknown}" _ra_seen _ra_name _ra_k _ra_hit
-    _ra_seen=$(printf '%s\n' "$SEG" | sed -n 's/.*%ROOTAUDIT-W-SUBSTRATEROOT, pid [0-9]* \([^ ]*\) uid.*/\1/p' | sort -u)
-    for _ra_name in $_ra_seen; do
-        _ra_hit=
-        for _ra_k in "${substrate_root_known[@]}"; do
-            case "$_ra_k" in "$_ra_arch $_ra_name "*|"* $_ra_name "*) _ra_hit="$_ra_k";; esac
-        done
-        if [ -n "$_ra_hit" ]; then
-            note "ROOTAUDIT [vms-251b]: $_ra_name runs as substrate root on $_ra_arch -- known, removed by ${_ra_hit##*# }"
-        else
-            bad "ROOTAUDIT [vms-251b]: $_ra_name runs as substrate root on $_ra_arch and is not in substrate_root_known (a NEW root process: remove it, never list it without an rd item)"
-        fi
-    done
-    for _ra_k in "${substrate_root_known[@]}"; do
-        case "$_ra_k" in "$_ra_arch "*|"* "*) ;; *) continue;; esac
-        _ra_name=$(printf '%s' "$_ra_k" | awk '{print $2}')
-        if printf '%s\n' "$_ra_seen" | grep -qxF -- "$_ra_name"; then :; else
-            bad "ROOTAUDIT [vms-251b]: substrate_root_known lists $_ra_name on $_ra_arch but it no longer runs as root -- delete the line (the ratchet only shrinks)"
-        fi
-    done
+    rootaudit_check "$SEG"
     negctl     "$SEG" 'ROOTAUDIT' "ROOTAUDIT as GUEST"
 
     return 0

@@ -642,7 +642,8 @@ tt-recall-key-not-terminator
 tt-inistr-ignored
 tt-brkthru-privilege-ignored
 tt-wrap-ignored
-jpi-bufio-not-counted"
+jpi-bufio-not-counted
+tt-noformat-moves-cursor"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2464,6 +2465,25 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: no other check reads JPI\$_BUFIO.";;
+        esac;;
+
+    tt-noformat-moves-cursor)
+        case "$_f" in
+        facility)     echo "IO\$M_NOFORMAT terminal writes leave the class driver's cursor position untouched (vms_tt.c vms_tt_write mode 2, rd vms-457; keystroke PG.DIR C1)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() skips tt_track() for an IO\$M_NOFORMAT write (\`if (cooked != 2)\`). The mutation tracks it (\`if (1)\`): the pq write moves the cursor mid-line and the next record opens with CR LF instead of paying the owed line feed. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+after an IO$M_NOFORMAT write the next record starts where the driver last put the cursor: <LF>e<CR>
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the later checks start from an explicit CR LF.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8618,6 +8638,8 @@ apply_edit() {
         sed -i 's|^\tif (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)$|\tif (0) /* NEGCTL tt-wrap-ignored */|' "$_file";;
     jpi-bufio-not-counted)
         sed -i 's|^    __atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /\* JPI\$_BUFIO (rd vms-bd71) \*/$|    (void)0; /* NEGCTL jpi-bufio-not-counted */|' "$_file";;
+    tt-noformat-moves-cursor)
+        sed -i 's|^\t\t\tif (cooked != 2)$|\t\t\tif (1) /* NEGCTL tt-noformat-moves-cursor */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

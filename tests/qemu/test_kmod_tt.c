@@ -363,6 +363,17 @@ int main(void)
     (void)!write(s, "d\n", 2);
     screen(m, scr, sizeof(scr), 300);
     CHECK(strcmp(scr, "\nd\r") == 0, "the record after it pays the owed line feed: <LF>d<CR>");
+    /* IO$M_NOFORMAT: the bytes go as they are and the driver's idea of the
+     * cursor is left alone -- the record after it still pays the line feed
+     * the record before it owed (rd vms-457; keystroke PG.DIR C1) */
+    st = vms_kif_tt_write_noformat(chan, "pq", 2);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK((st & 1) && strcmp(scr, "pq") == 0, "an IO$M_NOFORMAT write goes out byte for byte");
+    (void)!write(s, "e\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-noformat-moves-cursor */
+    CHECK(strcmp(scr, "\ne\r") == 0,
+          "after an IO$M_NOFORMAT write the next record starts where the driver last put the cursor: <LF>e<CR>");
     (void)vms_kif_tt_write(chan, "\r\n", 2);      /* back to a fresh line */
     (void)screen(m, scr, sizeof(scr), 300);
 

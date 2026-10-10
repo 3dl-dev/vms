@@ -276,6 +276,7 @@ static void test_reader_beside_sharing_writer(void)
     rfab.fab$b_fac = FAB$M_GET;
     rfab.fab$b_shr = DCL_RMS_READ_SHR;
     st = sys$open(&rfab, 0, 0);
+    /* negctl: dcl-type-refuses-sharing-writer */
     check(st == RMS$_NORMAL,
           "*** TYPE's reader (GET, SHR=DCL_RMS_READ_SHR) opens the file the writer holds -> NORMAL ***");
     if (st == RMS$_NORMAL) {

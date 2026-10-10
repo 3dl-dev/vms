@@ -722,8 +722,15 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 	if (tt_is_term(tt, c)) {
 		tt_hc_close(tt);
 		if (c == CH_CR && !(tt->rd_flags & VMS_TT_RD_TRMNOECHO) &&
-		    (tt->rd_dc & VMS_TTC_ECHO))
+		    (tt->rd_dc & VMS_TTC_ECHO)) {
 			tt_nl(tt);             /* the RETURN, echoed */
+			/* after a NOECHO read (a password) the next record starts
+			 * where the line feed left it, with no carriage return of
+			 * its own (VAX V7.3 keystroke LOGIN.BANNER P: "Password:
+			 * <CR><LF> Welcome ...") -- rd vms-bd71 */
+			if (tt->rd_flags & VMS_TT_RD_NOECHO)
+				tt->pos = TT_POS_CLEAN;
+		}
 		else if (c == TT_CTRL('B') && tt_echoing(tt))
 			tt_out1(tt, c);        /* CTRL/B is echoed as itself (RC.RECALL B) */
 		tt_complete(tt, SS__NORMAL, c, 1);

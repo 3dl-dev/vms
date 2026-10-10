@@ -112,7 +112,7 @@ jobs:
             ghcr.io/3dl-dev/ovmx-cross-alpha-vms:${{ steps.srchash.outputs.source_hash }}
             ghcr.io/3dl-dev/ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}  # scope cross-alpha-vms's one writer (rd vms-14da)
 
   # musl port for alpha-dec-vms — RUNG 1 (vms-960).
   #
@@ -184,7 +184,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Fetch musl, overlay alpha-dec-vms arch, build + verify lib/libc.a
         run: |
@@ -310,7 +310,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Include-surface proof (unpatched port source builds against src/libvms/include/vms/)
         run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/include-surface/run_include_surface_proof.sh
@@ -383,7 +383,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Link the real port crt0 against the GENUINE alpha DECC$SHR (OVMX_DECC_ARCH=alpha, strict, zero-deferred)
         run: |
@@ -561,7 +561,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Build the alpha RMS substrate + STRICT-link the proof image (vms-a7a rung-1 gate)
         run: |
@@ -632,7 +632,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}  # scope cross-alpha's one writer (rd vms-14da)
 
       - name: "Login gate — boot qemu-system-alpha, authenticate SYSTEM/MANAGER against the binary SYSUAF over the ACP, land on an interactive DCL $, run SHOW TIME"
         run: tools/cross-alpha/run-boot-alpha.sh login
@@ -710,7 +710,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       # vms-c54: the alpha-dec-vms toolchain that builds the N=3 joint image
       # (joint_main.c return 3 + the SS$_NORMAL control). gha-cached so a cache
@@ -725,7 +725,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "Activation gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, mounts DKA0:, activates the single-proc N=3 image on the real /dev/vms executive over the ODS-2 ACP, asserts $STATUS=%X0035A019 + SS$_NORMAL control (reds on the #853 mount-halt class AND the #921 activation-crash class; runs its own can-fail selftest before the boot)"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
@@ -770,7 +770,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -781,7 +781,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "crtl_rms N=7 gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, activates the crtl_rms port image (heap malloc->mallocng + RMS + stdio) on the real /dev/vms executive over the ODS-2 ACP, asserts the heap+RMS+stdio port-test OK + $STATUS=%X0035A039 (sentinel 7); runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate
@@ -830,7 +830,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -841,7 +841,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "CRTL->RMS veneer gate — qemu-system-alpha boots the veneer-wired crtl_rms image on the real /dev/vms executive; its decc$fopen writes PORTTEST.DAT via sys$create over the ODS-2 ACP, then an INDEPENDENT reader (DCL DIRECTORY/FULL, a different accessor than the writer's CRTL/RMS handle) asserts PORTTEST.DAT;1 with a genuine ODS-2 File ID a ramfs cannot produce; runs a can-fail selftest (incl. the ramfs-rejection case) before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate
@@ -882,7 +882,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -893,7 +893,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "CRTL->RMS file-op veneer gate — independent DIRECTORY reader asserts genuine ODS-2 effects of the port image file-ops; 4-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate
@@ -930,7 +930,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -941,7 +941,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "C RTL file-layer gate — DCL writer + DCL TYPE independent reader; 4-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate
@@ -978,7 +978,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -989,7 +989,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "VMS-ABI RMS gate — DIRECTORY/FULL File ID cross-check; 3-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate
@@ -1023,7 +1023,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1034,7 +1034,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "Native-image gate — rungs 1-3 run, refusals as on VMS; 20-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate
@@ -1081,7 +1081,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1092,7 +1092,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "multi-.o STRICT-link gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, STRICT-links (no --allow-undefined) a real multi-object program (mf_main.obj + mf_util.obj across a .o boundary, cross-.o malloc/free/strlen/strcmp/memcpy resolved incl. the ex-blocker decc$free), activates it on the real /dev/vms executive over the ODS-2 ACP, asserts the cross-.o port-test OK + $STATUS=%X0035A029 (sentinel 5); runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
@@ -1133,7 +1133,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1144,7 +1144,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "LIB$INITIALIZE gate — two longword LIB$INITIALIZE entries run in order before main on the real executive (P0 image); can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh libinit-gate
@@ -1187,7 +1187,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1198,7 +1198,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "anchorless SYS$UNWIND return-to-main gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh invo-gate
@@ -1238,7 +1238,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1249,7 +1249,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "SYS$GL_CALL_HANDL dispatcher-frame gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh chf-gate
@@ -1286,7 +1286,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1297,7 +1297,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "vfork gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh vfork-gate
@@ -1334,7 +1334,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1345,7 +1345,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "P0 heap gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh p0heap-gate
@@ -1382,7 +1382,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1393,7 +1393,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "P1 stack gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh p1stack-gate
@@ -1430,7 +1430,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1441,7 +1441,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "32-bit-pointer program gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh p32-gate
@@ -1483,7 +1483,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1494,7 +1494,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Restore the stage-2 C/C++ toolchain
         uses: actions/cache@v4
@@ -1540,7 +1540,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1551,7 +1551,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Restore the stage-2 C/C++ toolchain
         uses: actions/cache@v4
@@ -1599,7 +1599,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1610,7 +1610,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: Restore the stage-2 C/C++ toolchain
         uses: actions/cache@v4
@@ -1675,7 +1675,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1686,7 +1686,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "Shipped shareable gate — build-alpha-bootimage.sh's OWN packaging (not caller-injection) stages the genuine DECC$SHR + LIBOTS$SHR into SYS$SHARE, qemu-system-alpha boots the assembled runtime, IMGACT activates a shipped consumer image over the real /dev/vms + ODS-2 ACP, asserts $STATUS=%X0035A019; runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate
@@ -1758,7 +1758,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: "Acceptance gate — boot qemu-system-alpha, log in SYSTEM/MANAGER, run the DCL/SHOW battery, assert VMS-faithful output"
         run: tools/cross-alpha/run-boot-alpha.sh acceptance
@@ -1820,7 +1820,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       # The alpha-dec-vms toolchain that builds the joint image (post-revert: cc1
       # back to `.base $27'). Loaded so build-joint-image.sh reuses it (vms-e7c5)
@@ -1834,7 +1834,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=gha,scope=cross-alpha-vms
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha-vms' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
       - name: "N=3 activation gate — build the single-proc image with the (reverted) toolchain, activate it on qemu-system-alpha + real /dev/vms over the ODS-2 ACP, assert $STATUS=%X0035A019 + SS$_NORMAL control + no activation errors"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
@@ -1895,7 +1895,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: "HPARITH gate — boot qemu-system-alpha, FP div0 -> SIGFPE -> sc_fpcr summary -> lib$signal(SS$_HPARITH=1284) -> CHF handler -> $STATUS, under -static"
         run: ONLY_SUITE=test_arith_hparith tools/cross-alpha/run-syssvc-tests-alpha.sh
@@ -1942,7 +1942,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: "ACCVIO gate — boot qemu-system-alpha, wild write -> SIGSEGV -> SS$_ACCVIO via dispatch_condition -> SYS$SETEXV primary vector + frame handler + SYS$UNWIND recovery, under -static"
         run: ONLY_SUITE=test_accvio_dispatch tools/cross-alpha/run-syssvc-tests-alpha.sh
@@ -2001,7 +2001,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: "sys tier gate — boot qemu-system-alpha, run the whole test_syssvc_*/test_imgact_* suite over /dev/vms, assert no NEW failure beyond the documented environmental baseline"
         run: BASELINE=tools/cross-alpha/alpha-syssvc-baseline.txt tools/cross-alpha/run-syssvc-tests-alpha.sh

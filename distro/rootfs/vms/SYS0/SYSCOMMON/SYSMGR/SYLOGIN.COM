@@ -15,4 +15,8 @@ $! -- SYLOGIN.COM is the site login command procedure; the login greeting is
 $! the SYS$WELCOME logical, displayed by LOGINOUT). The duplicate line is
 $! removed; the single SYS$WELCOME remains.
 $!
+$! Turn on the processing of <Control/T>, as VMS's site template does (the
+$! VAX V7.3 node's SYS$MANAGER:SYLOGIN.COM, keystroke probe Q.CTRLT; rd
+$! vms-bd71). CTRL/T then shows a one-line status at an interactive terminal.
+$ IF F$MODE() .EQS. "INTERACTIVE" THEN SET CONTROL=T
 $ EXIT

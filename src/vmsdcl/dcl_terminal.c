@@ -524,7 +524,9 @@ uint32_t dcl_format_ctrl_t_status(const struct vms_procinfo *info,
     localtime_r(&now, &tmv);
 
     /* Leading identity + time + (optional) image, VMS spacing. */
-    int n = snprintf(out, outlen, "%s::%s   %02d:%02d:%02d   ",
+    /* "VAX1::SYSTEM 19:41:08   (DCL)   CPU=..." -- one blank after the user
+     * name (VAX V7.3 keystroke OOB.PROMPT T2; rd vms-bd71) */
+    int n = snprintf(out, outlen, "%s::%s %02d:%02d:%02d   ",
                      nodestr, userstr,
                      tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
     if (n < 0 || (size_t)n >= outlen)

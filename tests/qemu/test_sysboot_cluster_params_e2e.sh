@@ -182,11 +182,35 @@ if [ "$rc" -eq 0 ]; then
     check "SYSBOOT>: SET SCSSYSTEMID (numeric) changed 0 -> 1027" "$POS_LOG" \
         '%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1027'
 
+    # rd vms-025 -- THE PARAMETER TABLE IS THE SYSTEM'S, NOT THE FILE'S.
+    #
+    # On the 2026-10-09 real-VAX mixed-cluster lab run this exact command
+    # answered `%SYSGEN-E-NOSUCHP, no such parameter "LOCKDIRWT"`: SYSBOOT's SET
+    # looked the name up only in the parameter FILE it had loaded, and the
+    # shipped seed was authored before LOCKDIRWT existed. The node therefore
+    # joined at LOCKDIRWT 0, vms_ldwv_sole_directory() read FALSE, and the whole
+    # interim mixed-cluster DLM arm was gated off -- a real VAX's $ENQ went
+    # unanswered. SYSBOOT now MERGES the shared factory table
+    # (src/libvms/include/sysgen_factory.h) into whatever the file carried, so
+    # every parameter the system knows is SHOWable, SETtable and persisted.
+    send 'SET LOCKDIRWT 1'; sleep 1
+    check "SYSBOOT>: SET LOCKDIRWT is NOT %SYSGEN-E-NOSUCHP (rd vms-025)" \
+        "$POS_LOG" 'no such parameter "LOCKDIRWT"' absent
+    check "SYSBOOT>: SET LOCKDIRWT 1 changed 0 -> 1 (the interim sole-directory configuration is reachable)" \
+        "$POS_LOG" '%SYSGEN-I-SETPARAM, LOCKDIRWT changed from 0 to 1'
+
     # Persist: a REAL new vmsfs version ;2 over the seed's ;1 (same primitive
-    # SYSGEN WRITE CURRENT uses). 31 params, matching the seeded set count
-    # (vms-c3b added RECNXINTERVAL to the authored cluster set).
+    # SYSGEN WRITE CURRENT uses).
+    #
+    # THE COUNT IS THE FACTORY TABLE'S SIZE, not the seed's: the seed carries 31
+    # rows and the factory merge (rd vms-025) unions in the 9 the seed predates
+    # (LOCKDIRWT, QDSKVOTES, TIMVCFAIL, CLUSTER_CREDITS, NISCS_MAX_PKTSZ,
+    # MSCP_LOAD, MSCP_SERVE_ALL, DISK_QUORUM, OVMX_CLEAN_DEPART) = 40.
+    # ADDING A SYSGEN PARAMETER REDDENS THIS LINE ON PURPOSE -- update it here
+    # and in tests/ovmx_init/test_sysgen_factory.c's table-size assertion, which
+    # names this file back.
     send 'WRITE'; sleep 1
-    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG"; then
+    if waitfor '%SYSGEN-I-WRITTEN, 40 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG"; then
         rc=0; else rc=1; fi
     record "SYSBOOT>: WRITE minted OVMXVMSSYS.PAR;2 (real vmsfs version)" "$rc"
 

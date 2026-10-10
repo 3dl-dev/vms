@@ -381,7 +381,19 @@ struct vms_dlm_scs_view {
 	uint8_t  lockdirwt;             /* OUR advertised LOCKDIRWT (0 = never directory) */
 	uint8_t  rebuild_phase;         /* enum vms_dlm_rebuild_phase */
 	uint8_t  connected;             /* the VMS$VAXcluster CDT carrying cat-02 is open */
-	uint8_t  pad0;
+	/*
+	 * HOW MANY OF THE WEIGHT VECTOR'S ENTRIES ARE THIS NODE'S OWN
+	 * (rd vms-025). The vector decides which system is each root resource's
+	 * directory node (p. 6-31/6-32), and a real-VAX lab had no way to read
+	 * where this node had landed in it -- so a LOCKDIRWT that never reached
+	 * the executive was invisible. 0 with a valid vector means this node is
+	 * the directory for nothing; `n` entries all its own means it is the
+	 * directory for everything. Took the row's former pad byte, so the wire
+	 * row's size is unchanged. DERIVED from the vector on every projection,
+	 * never a configured flag (INV-6); `directory_vector_entries` below is
+	 * the denominator.
+	 */
+	uint8_t  directory_vector_own;
 	uint32_t rebuild_generation;    /* bumped every transition; invalidates dir caches */
 	uint32_t proxy_lkbs;            /* LKBs mastered ELSEWHERE that we hold */
 	uint32_t mastered_resources;    /* RSBs this node masters */

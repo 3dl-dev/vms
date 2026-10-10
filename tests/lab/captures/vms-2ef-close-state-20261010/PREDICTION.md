@@ -34,3 +34,11 @@ MOUNT/CLUSTER and DISMOUNT/CLUSTER of a DIFFERENT device -- the read-only CD
 `$2$DUA2:` (VAXVMS073) -- from VAX2 and from VAX1, three times each, plus one
 MOUNT/CLUSTER/NOWRITE of VAX1DATA. Any close with body[26] = 6 answered with
 anything but 5 retires the prediction.
+
+## Held-out result (run after the prediction commit 8e3b12b24)
+
+`heldout-cd-and-volume.pcap`, marks `heldout-marks.txt`, table
+`heldout-result.txt`: MOUNT/CLUSTER/NOWRITE and DISMOUNT/CLUSTER of the CD
+`$2$DUA2:` from VAX2 and VAX1 three times each, plus VAX1DATA once.
+**21 of 21** closes carried request body[26] = 6 and were answered body[24] = 5.
+The prediction stands; nothing else is derived.

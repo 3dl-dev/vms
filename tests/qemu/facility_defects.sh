@@ -8379,10 +8379,12 @@ apply_edit() {
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
     creprc-detached-intermediate-not-held)
         # UNIQUE TEXT: where the grandchild takes its end of the intermediate's
-        # release pipe. The mutation drops it at once on the un-ticketed path --
-        # the pre-fix behaviour (the intermediate exits before the grandchild
-        # has registered); the ticketed path is left as it is.
-        sed -i 's|^            ticket_sync = syncfd\[1\];$|            ticket_sync = syncfd[1]; if (!use_ticket) { close(ticket_sync); ticket_sync = -1; } /* NEGCTL creprc-detached-intermediate-not-held */|' "$_file";;
+        # release pipe. The mutation restores the pre-fix state on the
+        # un-ticketed path, deterministically: release the intermediate at once
+        # and enter the table only after it is gone (reparented), which is the
+        # interleaving that copied PID 1's names on the booted node. The
+        # ticketed path is untouched.
+        sed -i 's|^            ticket_sync = syncfd\[1\];$|            ticket_sync = syncfd[1]; if (!use_ticket) { pid_t ip = getppid(); close(ticket_sync); ticket_sync = -1; while (getppid() == ip) usleep(1000); } /* NEGCTL creprc-detached-intermediate-not-held */|' "$_file";;
     release-leader-zombie-pcb-kept)
         sed -i 's|atomic_read(\&current->signal->live) != 0)|!thread_group_empty(current)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file";;
     spawn-arm-gone-subprocess-not-completed)

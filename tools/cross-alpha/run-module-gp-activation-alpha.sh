@@ -924,13 +924,8 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
-      # loglevel=4: the substrate kernel keeps its warnings (unaligned-trap
-      # reports, ratelimit notices) off OPA0:. Since a record leaves its line
-      # feed owed (rd vms-fc4), a kernel line printed after one landed ON the
-      # line of the record and corrupted the transcript the gate parses (rd vms-ab21);
-      # silenced at the source, not filtered.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 loglevel=4 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!

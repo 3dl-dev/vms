@@ -1,0 +1,84 @@
+# keystroke oracle transcript (unmasked) -- case EDT.KEYPAD (OpenVMS VAX V7.3 OPA0:)
+# EDT keypad on a VT100: cursor, DEL C/W/L and UND, SELECT CUT PASTE, FIND and FNDNXT, ADVANCE/BACKUP, ^Z to line mode
+# case-sha256 c6a925b4ec3a5c58977a930540745c7a9d13e7d42af9394e43cbd1f168a95e81
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP V1 quiet
+=== STEP V2 quiet
+=== STEP V3 quiet
+=== STEP V4 quiet
+=== STEP V5 quiet
+=== STEP V6 quiet
+=== STEP V7 quiet
+=== STEP V8 quiet
+=== STEP C
+| CHANGE<CR><LF>
+| <ESC>\<ESC><<ESC>[?6l<ESC>[m<ESC>)0<ESC>[4l<ESC>[H<ESC>[?3l<ESC>[;22r<ESC>[H<ESC>=<ESC>[JALPHA BETA<CR><LF>
+| GAMMA<CR><LF>
+| DELTA EPSILON<CR><LF>
+| [EOB]<ESC>[H
+=== STEP R
+| <ESC>[?8l<ESC>[2C<ESC>[?8h<ESC>[?8l<ESC>[C<ESC>[?8h
+=== STEP X
+| <BS>HA BETA<ESC>[K<ESC>[7D
+=== STEP T
+| ZHA BETA<ESC>[K<ESC>[7D
+=== STEP W
+| <ESC>[?8lBETA<ESC>[K<ESC>[4D<ESC>[?8h
+=== STEP U
+| <ESC>[?8l<ESC>[7m<ESC>[mHA BETA<ESC>[K<ESC>[7D<ESC>[?8h
+=== STEP L
+| <ESC>[?8l<ESC>[2;22r<ESC>[22H<LF>
+| <ESC>[18A<ESC>[J<ESC>[;22r<ESC>[3CGAMMA<ESC>[K<ESC>[4H<ESC>[J<ESC>[;4H<ESC>[?8h
+=== STEP UL
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[2;22r<LF>
+| <ESC>MGAMMA<ESC>[;22r<ESC>[3CHA BETA<ESC>[K<ESC>[7D<ESC>[?8h
+=== STEP CC
+| <ESC>[?8lA BETA<ESC>[K<ESC>[6D<ESC>[?8h
+=== STEP UC
+| <ESC>[?8l<ESC>[7m<ESC>[mHA BETA<ESC>[K<ESC>[7D<ESC>[?8h
+=== STEP D
+| <ESC>[?8l<LF>
+| <ESC>[?8h
+=== STEP S
+| <ESC>[?8l<ESC>[?8h
+=== STEP S2
+| <ESC>[?8l<ESC>[7mM<ESC>[?8h<ESC>[?8lA<ESC>[?8h
+=== STEP CUT
+| <ESC>[?8l<ESC>[m<ESC>[2D<ESC>[K<ESC>[?8h
+=== STEP D2
+| <ESC>[?8l<LF>
+| <ESC>[?8h
+=== STEP P
+| <ESC>[?8l<ESC>[7m<ESC>[m<CR>DELMATA EPSILON<ESC>[K<ESC>[10D<ESC>[?8h
+=== STEP F
+| <ESC>[?8l<ESC>[7m<ESC>[23H<ESC>[KSearch for: 
+=== STEP F2
+| <ESC>[?8hEPS
+=== STEP F3
+| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[3;6H<ESC>[m<ESC>[3C<ESC>[?8h
+=== STEP N
+| <ESC>[?8l<ESC>[?8h<ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mString was not found<ESC>[m<ESC>[3;9H<ESC>[?8h
+=== STEP A
+| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[3;9H<ESC>[?8h<ESC>[?8l<CR><LF>
+| <ESC>[?8h
+=== STEP E
+| <ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mAdvance past bottom of buffer<ESC>[m<ESC>[4H<ESC>[?8h
+=== STEP B
+| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[19A<ESC>[?8h<ESC>[?8l<ESC>[3;16H<ESC>[?8h
+=== STEP Z
+| <ESC>><ESC>[;24r<ESC>[24H<LF>
+| <CR>*
+=== STEP TW
+| TYPE WHOLE<CR><LF>
+| <CR>    1       ALZHA BETA<CR><LF>
+|     2       GAM<CR><LF>
+|     3       DELMATA EPSILON<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP Q
+| QUIT<CR><LF>
+| <CR><LF>
+| <ESC>[m<ESC>)B<ESC>[;r<ESC>[24H<CR><ESC>><CR><LF>
+| <NUL>$ 
+=== STEP V9 quiet

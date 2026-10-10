@@ -45,6 +45,12 @@ CASES = os.path.join(HERE, "cases")
 KEYS = {
     "UP": b"\x1b[A", "DOWN": b"\x1b[B", "RIGHT": b"\x1b[C", "LEFT": b"\x1b[D",
     "CR": b"\r", "LF": b"\n", "DEL": b"\x7f", "ESC": b"\x1b", "TAB": b"\t",
+    # the VT100 keypad in application mode (EDT, rd vms-c37)
+    "PF1": b"\x1bOP", "PF2": b"\x1bOQ", "PF3": b"\x1bOR", "PF4": b"\x1bOS",
+    "KP0": b"\x1bOp", "KP1": b"\x1bOq", "KP2": b"\x1bOr", "KP3": b"\x1bOs",
+    "KP4": b"\x1bOt", "KP5": b"\x1bOu", "KP6": b"\x1bOv", "KP7": b"\x1bOw",
+    "KP8": b"\x1bOx", "KP9": b"\x1bOy", "KPMINUS": b"\x1bOm",
+    "KPCOMMA": b"\x1bOl", "KPDOT": b"\x1bOn", "ENTER": b"\x1bOM",
 }
 
 

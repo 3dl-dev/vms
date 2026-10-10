@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <dirent.h>
 
 #include "ssdef.h"
 #include "vms_kif.h"
@@ -62,6 +63,21 @@ static int same_bytes(const char *a, const char *b)
     if (fa >= 0) close(fa);
     if (fb >= 0) close(fb);
     return n >= 0 && n == m && memcmp(x, y, (size_t)n) == 0;
+}
+
+/* Files in the executive's directory (the copies it holds). */
+static int kfe_dir_count(void)
+{
+    int n = 0;
+    struct dirent *e;
+    DIR *d = opendir(VMS_KFE_DIR);
+    if (!d)
+        return -1;
+    while ((e = readdir(d)) != NULL)
+        if (e->d_name[0] != '.')
+            n++;
+    closedir(d);
+    return n;
 }
 
 /* The [100,100] child: no CMKRNL. Exit code 0 when every expectation held. */
@@ -129,8 +145,11 @@ int main(int argc, char **argv)
     close(w);
     check(!same_bytes(SRC, copy), "the installed copy does not follow the change to the source");
 
+    int before = kfe_dir_count();
     check(kfe(VMS_KFE_OP_ADD, fd, 0, 0, "TEST_SYSSVC_KFE.EXE", NULL) == SS$_DUPLNAM,
           "a second ADD of the same name is a duplicate (SS$_DUPLNAM)");
+    check(before >= 1 && kfe_dir_count() == before,
+          "...and the refused ADD leaves no copy behind in the executive's directory");
     int cfd = open(copy, O_RDONLY);
     check(cfd >= 0 && (kfe(VMS_KFE_OP_FIND, cfd, 0, 0, NULL, &a) & 1) &&
               a.privs == VMS_PRV_M_CMKRNL && (a.flags & VMS_KFE_F_PRIV) &&
@@ -173,12 +192,19 @@ int main(int argc, char **argv)
               "TEST_SYSSVC_KFE.EXE", &a) == SS$_NORMAL &&
               strcmp(a.path, copy) != 0 && same_bytes(SRC, a.path),
           "INSTALL REPLACE takes a new executive copy of the current image");
+    char copy2[256];
+    snprintf(copy2, sizeof copy2, "%s", a.path);
+    check(access(copy, F_OK) != 0 && errno == ENOENT,
+          "...and the executive deletes the copy it replaced");
     check((kfe(VMS_KFE_OP_FIND_NAME, -1, 0, 0, "TEST_SYSSVC_KFE.EXE", &a) & 1) &&
               a.privs == (VMS_PRV_M_CMKRNL | VMS_PRV_M_SYSPRV),
           "...with the new privileges");
     check(kfe(VMS_KFE_OP_REMOVE, -1, 0, 0, "TEST_SYSSVC_KFE.EXE", NULL) == SS$_NORMAL &&
               kfe(VMS_KFE_OP_FIND_NAME, -1, 0, 0, "TEST_SYSSVC_KFE.EXE", NULL) == SS$_NOSUCHFILE,
           "INSTALL REMOVE deletes the entry");
+    /* negctl: kfe-remove-copy-kept */
+    check(access(copy2, F_OK) != 0 && errno == ENOENT,
+          "INSTALL REMOVE also deletes the executive's copy from its directory");
 
     if (cfd >= 0) close(cfd);
     close(fd);

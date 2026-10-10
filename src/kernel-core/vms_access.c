@@ -520,12 +520,17 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
     uint64_t privs;
     void *pin = NULL;
     char copy[256];
+    char *gone;           /* a copy to delete once the lock is dropped (heap:
+                           * the kernel stack frame stays under 1 KB) */
     uint32_t st = SS__NORMAL;
     int i;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
+    gone = exec_zalloc(256);
+    if (!gone)
+        return -ENOMEM;
     args.name[VMS_KFE_NAMELEN - 1] = '\0';
     args.path[sizeof(args.path) - 1] = '\0';
 
@@ -567,12 +572,14 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
     case VMS_KFE_OP_ADD:
         if (kfe_find_name(args.name) >= 0) {
             st = SS__DUPLNAM;
+            memcpy(gone, copy, 256);      /* the refused copy */
             break;
         }
         for (i = 0; i < VMS_KFE_MAX && vms_kfe_tab[i].used; i++)
             ;
         if (i == VMS_KFE_MAX) {
             st = SS__INSFMEM;
+            memcpy(gone, copy, 256);
             break;
         }
         memset(&vms_kfe_tab[i], 0, sizeof(vms_kfe_tab[i]));
@@ -591,8 +598,10 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         i = kfe_find_name(args.name);
         if (i < 0) {
             st = SS__NOSUCHFILE;
+            memcpy(gone, copy, 256);      /* the refused copy */
             break;
         }
+        memcpy(gone, vms_kfe_tab[i].path, 256);   /* the old copy */
         old = vms_kfe_tab[i].pin;
         vms_kfe_tab[i].pin = pin;
         pin = old;                              /* released below, unlocked */
@@ -610,6 +619,7 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
             vms_kfe_tab[i].used = 0;
             pin = vms_kfe_tab[i].pin;          /* released below, unlocked */
             vms_kfe_tab[i].pin = NULL;
+            memcpy(gone, vms_kfe_tab[i].path, 256);
         }
         break;
     case VMS_KFE_OP_FIND:
@@ -643,8 +653,11 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
     exec_mutex_unlock(&vms_kfe_mutex);
     if (pin)              /* a refused ADD's copy, or a removed/replaced one */
         exec_file_unpin(pin);
+    if (gone[0] && exec_kfe_unlink(gone) != 0 && (st & 1))
+        st = SS__ABORT;   /* the entry is gone but its copy could not be deleted */
 
 out:
+    exec_free(gone);
     args.status = st;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

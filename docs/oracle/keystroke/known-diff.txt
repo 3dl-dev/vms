@@ -24,5 +24,4 @@ EDT.SCREEN Q  # vms-f1e: no EDIT/EDT
 HLP.NAV H  # vms-f9e: HELP librarian framing
 HLP.NAV S  # vms-f9e: HELP librarian framing
 HLP.NAV B1  # vms-f9e: HELP librarian framing
-PG.TYPE R1  # vms-457: output paging page size and prompt
 RC.ALL U  # vms-0315: RECALL/ALL order, RECALL n edits not executes

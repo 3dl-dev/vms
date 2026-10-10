@@ -3110,6 +3110,11 @@ int cmd_create(struct dcl_command *cmd)
     dcl_sysinput_setup(ctx, &si);
     if (ctx->interactive || ctx->proc_depth >= 0) {
         char line[4096];
+        /* A ^Z that ended an earlier CREATE left stdin's end-of-file flag
+         * set; a terminal's end of file is per read, so clear it, or every
+         * later CREATE at the terminal reads nothing and writes an empty file
+         * (rd vms-f37: KSBC.COM, keystroke BC.READ) */
+        clearerr(stdin);
         while (1) {
             if (!fgets(line, sizeof(line), stdin)) break;
             size_t ll = strlen(line);
@@ -3117,6 +3122,7 @@ int cmd_create(struct dcl_command *cmd)
                 ll--;
             if (dcl_rms_write_record(w, line, ll) != 0) break;
         }
+        clearerr(stdin);
     }
     dcl_sysinput_restore(&si);
 

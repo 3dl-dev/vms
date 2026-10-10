@@ -2528,6 +2528,26 @@ uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode)
 }
 
 /*
+ * vms_kif_substrate_id - the substrate identity the executive gives this VMS
+ * process (VMS_IOCTL_SUBSTRATE_ID, rd vms-ac48): GET reads it (assigning one
+ * on first use), BECOME makes it this task's uid/gid. *uid receives it.
+ */
+uint32_t vms_kif_substrate_id(uint32_t op, uint32_t *uid)
+{
+    struct vms_substrate_id_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    KIF_CALL(VMS_IOCTL_SUBSTRATE_ID, &args);
+    if (uid)
+        *uid = args.uid;
+    return args.status;
+}
+
+/*
  * vms_kif_p1_protect - NOT an ioctl. See the header comment for why:
  * this wraps a real mprotect(2) on the caller's own address space, the
  * enforced half of the design's critical-P1 mechanism, and it has no

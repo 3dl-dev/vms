@@ -982,6 +982,10 @@ uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
  * v.) */
 uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
 
+/* The substrate identity the executive gives this VMS process (rd vms-ac48):
+ * VMS_SUBST_OP_GET / VMS_SUBST_OP_BECOME. Never 0; carries no VMS meaning. */
+uint32_t vms_kif_substrate_id(uint32_t op, uint32_t *uid);
+
 /*
  * vms_kif_p1_protect - the CRITICAL-P1 MPROTECT MECHANISM (vms-68f.iii,
  * docs/design-in-process-activation.md Part II §A.2.3(b)).

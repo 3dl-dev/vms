@@ -589,6 +589,8 @@ acp-dir-exsz-ignored
 acp-dir-used-blocks-ignore-eof
 acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
+subst-uid-may-be-zero
+subst-become-ids-not-set
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -1499,6 +1501,45 @@ EOF
         require_fail) cat <<'EOF'
 the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV
 ...and changes nothing: still refused
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    subst-uid-may-be-zero)
+        case "$_f" in
+        facility)     echo "the executive gives each VMS process a substrate uid from a dedicated range, never 0 (vms-ac48)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_substrate_id";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "subst_uid_alloc_locked() draws from OVMX_SUBST_UID_BASE upward. The mutation drops the base, so the first VMS process is handed uid 0 -- substrate root -- and the next ones uids that collide with real substrate accounts. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+GET gives this process a substrate uid from the dedicated range, never 0
+another VMS process gets a different substrate uid of its own
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    subst-become-ids-not-set)
+        case "$_f" in
+        facility)     echo "BECOME makes the executive-given uid the task's real and effective identity (vms-ac48)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_substrate_id";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_become_substrate_id() sets the task's real/effective/saved/fs uid to the executive-given one. The mutation leaves them alone, so a session LOGINOUT 'dropped' keeps running as substrate root. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+after BECOME the task's real and effective uid and gid are that uid
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8063,6 +8104,10 @@ apply_edit() {
         sed -i 's|^            if (proc->rights_id\[i\] == id)$|            if (0) /* NEGCTL acp-rights-list-not-consulted */|' "$_file";;
     rights-grant-cmkrnl-not-checked)
         sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file";;
+    subst-uid-may-be-zero)
+        sed -i 's|^        uint32_t cand = OVMX_SUBST_UID_BASE + (vms_subst_next++ % OVMX_SUBST_UID_SPAN);$|        uint32_t cand = (vms_subst_next++ % OVMX_SUBST_UID_SPAN); /* NEGCTL subst-uid-may-be-zero */|' "$_file";;
+    subst-become-ids-not-set)
+        sed -i 's|^\tnew->uid = new->euid = new->suid = new->fsuid = u;$|\t(void)u; /* NEGCTL subst-become-ids-not-set */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)

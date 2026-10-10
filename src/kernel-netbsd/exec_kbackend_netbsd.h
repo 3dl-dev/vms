@@ -88,6 +88,7 @@
                               * rss read is delegated to the dedicated uvm-TU
                               * vms_acct_rss_netbsd.c, rd vms-601). */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
+#include <sys/uio.h>       /* UIO_SYSSPACE (exec_become_substrate_id, vms-ac48) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
@@ -462,6 +463,29 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  * section is then honestly omitted, never a fabricated 0.
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
+
+/* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): set the
+ * current process's real/effective/saved uid and gid to `id`, no groups. The
+ * credential swap is NetBSD's own (proc_crmod_enter/leave, kauth(9)). */
+static __inline int
+exec_become_substrate_id(uint32_t id)
+{
+	kauth_cred_t ocred, ncred;
+
+	ncred = kauth_cred_alloc();
+	proc_crmod_enter();                 /* takes p_lock */
+	ocred = curproc->p_cred;
+	kauth_cred_clone(ocred, ncred);
+	kauth_cred_setuid(ncred, (uid_t)id);
+	kauth_cred_seteuid(ncred, (uid_t)id);
+	kauth_cred_setsvuid(ncred, (uid_t)id);
+	kauth_cred_setgid(ncred, (gid_t)id);
+	kauth_cred_setegid(ncred, (gid_t)id);
+	kauth_cred_setsvgid(ncred, (gid_t)id);
+	(void)kauth_cred_setgroups(ncred, NULL, 0, -1, UIO_SYSSPACE);
+	proc_crmod_leave(ncred, ocred, true);
+	return 0;
+}
 
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)

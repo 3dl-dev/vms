@@ -629,6 +629,7 @@ struct vms_proc {
 	uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
 	uint64_t            cur_privs;        /* current (temporary) privileges */
 	uint64_t            perm_privs;       /* permanent (authorized) privileges */
+	uint32_t            subst_uid;      /* substrate uid the executive gave it, 0 = none (vms-ac48) */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
 
 	/* Authorized JIB quota set (vms-14a) -- byte-twin of the Linux struct
@@ -994,6 +995,8 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid);
 
 /* ----------------------------------------------------------------
  * MAILBOX facility (MBAn:, P4-A, rd vms-d7a) -- DEFINED in

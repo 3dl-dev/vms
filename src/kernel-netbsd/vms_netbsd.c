@@ -159,8 +159,7 @@ vms_proc_get(pid_t pid)
 	 * embedded in the PCB and pid_ref points at it (proc_find(9) takes no ref to
 	 * drop later). The p0/p1 extents and wake_pending come zeroed.
 	 */
-	np->uic = (((uint32_t)exec_current_gid() & 0xFFFFu) << 16) |
-	          ((uint32_t)exec_current_uid() & 0xFFFFu);
+	np->uic = vms_proc_subst_uic(exec_current_uid(), exec_current_gid());
 	np->pid_ref_store.pid = pid;
 	np->pid_ref = &np->pid_ref_store;
 
@@ -1021,6 +1020,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CHKPRIV:
 	case VMS_IOCTL_ENTER_IMAGE:
 	case VMS_IOCTL_IMAGE_RUNDOWN:
+	case VMS_IOCTL_SUBSTRATE_ID:   /* rd vms-ac48 */
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1045,6 +1045,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_enter_image(proc, (unsigned long)uarg);   break;
 		case VMS_IOCTL_IMAGE_RUNDOWN:
 			r = vms_ioctl_image_rundown(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_SUBSTRATE_ID:
+			r = vms_ioctl_substrate_id(proc, (unsigned long)uarg);  break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

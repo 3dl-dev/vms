@@ -87,6 +87,13 @@ struct vms_tt {
 	/* echo bytes waiting for the port (handed over outside the lock) */
 	uint8_t  obuf[VMS_TT_OBUF];
 	uint32_t olen;
+
+	/* WHERE THE CURSOR IS, as the carriage-control rules need it (rd vms-fc4;
+	 * see tt_nl()). Updated for every byte the driver emits -- echo, prompts
+	 * and writes alike -- under tt->lock. */
+	int      pos;              /* TT_POS_FRESH / TT_POS_CR / TT_POS_MID */
+	uint8_t  last;             /* the last byte emitted */
+	int      rec_open;         /* a cooked write's record awaits its '\n' */
 };
 
 /* ------------------------------------------------------------------ */
@@ -137,16 +144,88 @@ static uint64_t tt_devchar(struct vms_device *dev)
 	return dc;
 }
 
+/*
+ * CARRIAGE CONTROL (rd vms-fc4). What a VMS terminal shows around records and
+ * prompts is not the bytes a program wrote but the terminal driver's rendering
+ * of a NEW LINE, which depends on where the cursor is. Measured on the real
+ * VAX V7.3 console with probe cases (docs/oracle/keystroke-probes/), three
+ * positions matter:
+ *
+ *   TT_POS_FRESH  column 0 of a line nothing has been written on -- just after
+ *                 a read's echoed CR terminator ("CR LF"), *EXIT*, ^U.
+ *   TT_POS_CR     column 0 of a line that HAS text: a record was written and
+ *                 ended with its carriage return; the line feed is OWED.
+ *   TT_POS_MID    anywhere else (after a prompt, mid-line).
+ *
+ * and a new line is rendered:  FRESH -> CR,  CR -> LF,  MID -> CR LF  (tt_nl).
+ * A record (one line of a program's output: implied carriage control) is a
+ * new line, the text, and a carriage return that leaves the line feed owed.
+ * A read that ECHOES first pays an owed line feed; a NOECHO read does not --
+ * so on the real console a prompt after a record overprints the record's line
+ * when the terminal is SET TERMINAL/NOECHO (probe CC.MIX N3). A prompt that
+ * begins with CR LF (DCL's "$ ", INQUIRE's) starts with a new line.
+ * Clean-room: observed console bytes only (Rule 8).
+ */
+#define TT_POS_FRESH 0
+#define TT_POS_CR    1
+#define TT_POS_MID   2
+
+static void tt_track(struct vms_tt *tt, uint8_t c)
+{
+	switch (c) {
+	case CH_CR:
+		if (tt->pos != TT_POS_FRESH)
+			tt->pos = TT_POS_CR;
+		break;
+	case CH_LF:
+		if (tt->pos == TT_POS_CR)
+			tt->pos = TT_POS_FRESH;
+		break;
+	case 0:
+		break;                       /* a fill character moves nothing */
+	default:
+		tt->pos = TT_POS_MID;
+		break;
+	}
+	tt->last = c;
+}
+
 static void tt_out(struct vms_tt *tt, const void *p, uint32_t n)
 {
+	const uint8_t *b = p;
+	uint32_t i;
+
 	if (n > VMS_TT_OBUF - tt->olen)
 		n = VMS_TT_OBUF - tt->olen;   /* echo overflow: the tail is lost,
 					       * as an echo is never worth a stall */
 	memcpy(tt->obuf + tt->olen, p, n);
 	tt->olen += n;
+	for (i = 0; i < n; i++)
+		tt_track(tt, b[i]);
 }
 
 static void tt_out1(struct vms_tt *tt, uint8_t c) { tt_out(tt, &c, 1); }
+
+/* A new line, rendered for where the cursor is (see CARRIAGE CONTROL). */
+static void tt_nl(struct vms_tt *tt)
+{
+	switch (tt->pos) {
+	case TT_POS_FRESH: tt_out1(tt, CH_CR);       break;
+	case TT_POS_CR:    tt_out1(tt, CH_LF);       break;
+	default:           tt_out(tt, "\r\n", 2);    break;
+	}
+}
+
+/* A prompt (or its redisplay): a leading CR LF is a new line. */
+static void tt_prompt_out(struct vms_tt *tt, const uint8_t *p, uint32_t n)
+{
+	if (n >= 2 && p[0] == CH_CR && p[1] == CH_LF) {
+		tt_nl(tt);
+		p += 2;
+		n -= 2;
+	}
+	tt_out(tt, p, n);
+}
 
 /* Hand queued echo to the port. Called WITHOUT tt->lock. In small slices so
  * no large buffer sits on the kernel stack. */
@@ -219,9 +298,9 @@ static void tt_hc_close(struct vms_tt *tt)
  * on a hardcopy terminal, which cannot erase what it printed). */
 static void tt_redisplay(struct vms_tt *tt, int with_line)
 {
-	tt_out(tt, "\r\n", 2);
+	tt_nl(tt);
 	if (tt->promptsz)
-		tt_out(tt, tt->prompt, tt->promptsz);
+		tt_prompt_out(tt, tt->prompt, tt->promptsz);
 	if (with_line && tt_echoing(tt))
 		tt_out(tt, tt->line, tt->len);
 }
@@ -328,7 +407,10 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 	if (c == TT_CTRL('Z') && tt_is_term(tt, c)) {
 		/* end of file: the driver says so on the terminal */
 		if (tt_echoing(tt) || (tt->rd_dc & VMS_TTC_ECHO))
-			tt_out(tt, "*EXIT*\r\n", 8);
+			{
+				tt_out(tt, "*EXIT*", 6);
+				tt_nl(tt);
+			}
 		tt_complete(tt, SS__NORMAL, c, 1);
 		return;
 	}
@@ -337,7 +419,7 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		tt_hc_close(tt);
 		if (c == CH_CR && !(tt->rd_flags & VMS_TT_RD_TRMNOECHO) &&
 		    (tt->rd_dc & VMS_TTC_ECHO))
-			tt_out(tt, "\r\n", 2);
+			tt_nl(tt);             /* the RETURN, echoed */
 		tt_complete(tt, SS__NORMAL, c, 1);
 		return;
 	}
@@ -708,9 +790,15 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 
 		if (req->flags & VMS_TT_RD_PURGE)
 			tt_ta_purge(tt);
+		/* a record's owed line feed is paid by a read that echoes, before
+		 * its prompt; a NOECHO read leaves the line where it is (probes
+		 * CC.MIX A2 vs N3) */
+		tt->rec_open = 0;
+		if (tt->pos == TT_POS_CR && tt_echoing(tt))
+			tt_out1(tt, CH_LF);
 		/* the prompt is written BEFORE any type-ahead is consumed and echoed */
 		if (tt->promptsz)
-			tt_out(tt, tt->prompt, tt->promptsz);
+			tt_prompt_out(tt, tt->prompt, tt->promptsz);
 
 		tt->rd_active = 1;
 		tt_drain_typeahead(tt);
@@ -772,14 +860,16 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 }
 
 /*
- * vms_tt_write - output through the class driver. `cooked` converts LF to
- * CR LF for a Unix-style writer arriving on the port's own write path.
+ * vms_tt_write - output through the class driver. `cooked`: the bytes are a
+ * program's records, '\n'-terminated (a writer arriving on the port's own
+ * write path); otherwise they are written as they are ($QIO).
  */
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
 	uint8_t chunk[128];
 	size_t i = 0;
 
+	tt_flush(tt);                     /* echo queued before this write first */
 	while (i < n) {
 		size_t k = 0;
 		int rc;
@@ -787,11 +877,48 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		if (READ_ONCE_TT(tt->detached))
 			return -EIO;             /* the line went away */
 
-		while (i < n && k < sizeof(chunk) - 1) {
-			if (cooked && buf[i] == CH_LF)
-				chunk[k++] = CH_CR;
-			chunk[k++] = buf[i++];
+		/*
+		 * Build the chunk under the lock: the cursor position is driver
+		 * state shared with echo. A COOKED write (a program's output
+		 * through its terminal's descriptor: printf) is a run of
+		 * RECORDS, one per '\n' -- implied carriage control, as the
+		 * CRTL's output is on VMS: a new line before each record
+		 * (rendered for where the cursor is, tt_nl), and a carriage
+		 * return after it that leaves the line feed owed. A raw write
+		 * ($QIO IO$_WRITEVBLK, no carriage control) is the bytes.
+		 */
+		exec_lock(&tt->lock);
+		while (i < n && k < sizeof(chunk) - 4) {
+			uint8_t c = buf[i];
+
+			if (cooked) {
+				if (!tt->rec_open) {
+					uint32_t o0 = tt->olen;
+
+					tt->rec_open = 1;
+					tt_nl(tt);   /* into obuf: move it here */
+					while (tt->olen > o0) {
+						chunk[k++] = tt->obuf[o0];
+						memmove(tt->obuf + o0, tt->obuf + o0 + 1,
+							--tt->olen - o0);
+					}
+				}
+				if (c == CH_LF) {
+					if (tt->last != CH_CR) {
+						chunk[k++] = CH_CR;
+						tt_track(tt, CH_CR);
+					}
+					tt->pos = TT_POS_CR;   /* the LF is owed */
+					tt->rec_open = 0;
+					i++;
+					continue;
+				}
+			}
+			chunk[k++] = c;
+			tt_track(tt, c);
+			i++;
 		}
+		exec_unlock(&tt->lock);
 		for (;;) {
 			struct tt_portref pr;
 			int swapped;
@@ -988,12 +1115,17 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 			a.status = SS__ACCVIO;
 			break;
 		}
-		if (vms_tt_write(tt, chunk, k, 0)) {
+		/* a record (VMS_TT_WR_RECORD): the cooked path's new line before
+		 * and carriage return after; the text itself carries no '\n' */
+		if (vms_tt_write(tt, chunk, k, (a.flags & VMS_TT_WR_RECORD) != 0)) {
 			a.status = SS__ABORT;
 			break;
 		}
 		done += k;
 	}
+	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
+	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
+		a.status = SS__ABORT;
 	vms_tt_release(tt);
 out:
 	if (exec_copyout((void *)arg, &a, sizeof(a)))

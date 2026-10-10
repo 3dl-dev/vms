@@ -3964,6 +3964,16 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 				self_base = at_phdr - sp_ph[i].p_vaddr;
 	}
 	self_relocate(self_base);
+#if defined(__alpha__)
+	/* An unaligned reference is fixed up SILENTLY, as OpenVMS Alpha does by
+	 * default: the substrate kernel's per-trap "unaligned trap at ..."
+	 * report (and its ratelimit notice) went straight to OPA0:, and after a
+	 * record that leaves its line feed owed (rd vms-fc4) it landed on the
+	 * record's own line (rd vms-ab21). prctl(PR_SET_UNALIGN,
+	 * PR_UNALIGN_NOPRINT): the fixup stays, the report goes. */
+	(void)syscall6(SYS_prctl, 6 /* PR_SET_UNALIGN */, 1 /* PR_UNALIGN_NOPRINT */,
+		       0, 0, 0, 0);
+#endif
 	g_auxv  = auxv;
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;

@@ -83,6 +83,7 @@ extern "C" {
 #define IO$M_CVTLOW         0x0100  /*  convert lowercase to uppercase */
 #define IO$M_ESCAPE         0x4000  /*  escape processing enabled */
 #define IO$M_EXTEND         0x8000  /*  extended read */
+#define IO$M_NOFORMAT       0x0100  /*  terminal write: no carriage control (VAX V7.3 IODEF 256) */
 
 /* File system modifiers */
 #define IO$M_ACCESS         0x0040  /* Bit 6: access mode */

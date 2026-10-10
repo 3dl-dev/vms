@@ -492,7 +492,7 @@ int main(void)
                         "loginout_display_system_identification(stdout");
                 /* The prompt is the terminal driver's IO$_READPROMPT P5 now
                  * (rd vms-f8c): LOGINOUT hands "Username: " to the read. */
-                const char *prompt = strstr(login, "read_prompt_response(\"Username: \"");
+                const char *prompt = strstr(login, "read_prompt_response(\"\\r\\nUsername: \"");
                 CHECK(ident != NULL,
                       "vms_login.c: emits the pre-Username system-identification line (vms-3e9 a)");
                 CHECK(prompt != NULL,

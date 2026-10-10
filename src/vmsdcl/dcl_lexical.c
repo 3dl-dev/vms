@@ -1613,6 +1613,13 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
                 }
             }
         }
+    } else if ((strcmp(s, "BUFIO") == 0 &&
+                (info.fields_valid & VMS_PI_V_BUFIO)) ||
+               (strcmp(s, "DIRIO") == 0 &&
+                (info.fields_valid & VMS_PI_V_DIRIO))) {
+        /* JPI$_BUFIO / JPI$_DIRIO: the executive's counts (rd vms-bd71) */
+        snprintf(result, result_size, "%u",
+                 (unsigned)(s[0] == 'B' ? info.bufio : info.dirio));
     } else {
         /* an item F$GETJPI does not know: CLI-W-IVKEYW, no value
          * (observed LEX.GETJPI.BADITEM) */

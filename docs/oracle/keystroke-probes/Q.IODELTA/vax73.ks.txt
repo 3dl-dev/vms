@@ -1,0 +1,49 @@
+# keystroke oracle transcript (unmasked) -- case Q.IODELTA (OpenVMS VAX V7.3 OPA0:)
+# probe: JPI$_BUFIO / JPI$_DIRIO deltas across a fixed command sequence
+# case-sha256 0b19b778ffe366efc9e266f104462d2ee50192fe0af2546126671a84ad7be441
+@start loggedin OK
+=== STEP S0 quiet
+=== STEP A
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP A2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP A3
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>2 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP W1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP W2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP W3
+| WRITE SYS$OUTPUT "X"<CR><LF>
+| <CR>X<CR><LF>
+| <CR><NUL>$ 
+=== STEP W4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>4 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP T1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP T2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP T3
+| TYPE KSPG.COM<CR><LF>
+| <CR>$ OPEN/WRITE F KSPG.TXT<CR><LF>
+| $ I = 0<CR><LF>
+| $ L:<CR><LF>
+| $ I = I + 1<CR><LF>
+| $ WRITE F "PAGE LINE ", I<CR><LF>
+| $ IF I .LT. 40 THEN GOTO L<CR><LF>
+| $ CLOSE F<CR><LF>
+| <CR><NUL>$ 
+=== STEP T4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>24 0<CR><LF>
+| <CR><NUL>$ 

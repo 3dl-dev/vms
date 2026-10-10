@@ -114,7 +114,7 @@ uint32_t ovmx_boot_acp_stage(const char *acp_path, const char *dest)
         off += r;
     }
 
-    fchmod(fd, 0555);   /* read + execute only: sealed (vms-7c64) */
+    fchmod(fd, 0755);
     close(fd);
     imgact_acp_close(&f);
     return rc;

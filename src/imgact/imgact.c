@@ -220,22 +220,11 @@ static char *xstrcat(char *d, const char *s)
 }
 
 /* --------------------------------------------------------------------------
- * Known Image Database libc shim (bead vms-30d).
- *
- * known_images.c (bead vms-913.5) is a small, self-contained POSIX C module
- * -- open()/fstat()/mmap()/munmap()/close()/string.h -- built normally
- * everywhere else in the tree (see the hosted `known_images` CMake target
- * and its unit/integration tests). IMGACT.EXE is -nostdlib/-ffreestanding
- * and links against nothing, so this file's Makefile/CMakeLists.txt compile
- * known_images.c as an extra translation unit of the IMGACT.EXE binary
- * itself; its libc calls come out as undefined external symbols that must
- * be satisfied within this link. These are the freestanding definitions
- * that satisfy them, built on the same raw syscall6() primitive as the rest
- * of this file (memcpy/memset above already follow this pattern). Only the
- * subset known_images.c actually calls is implemented; signatures use
- * plain integer/pointer types (no dependency on host <fcntl.h>/<sys/stat.h>/
- * <sys/mman.h> struct layouts -- fstat()'s statbuf is passed straight
- * through to the kernel, untouched by this file).
+ * Freestanding libc shim: open()/close()/fstat()/mmap()/munmap() on the raw
+ * syscall layer. IMGACT.EXE is -nostdlib/-ffreestanding and links against
+ * nothing, so the few libc calls its translation units make are satisfied
+ * here (first written for the retired on-disk known-image module, bead
+ * vms-30d; the known file list is the executive's since rd vms-220).
  * -------------------------------------------------------------------------- */
 
 #if defined(__aarch64__)

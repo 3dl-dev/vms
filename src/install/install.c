@@ -12,10 +12,11 @@
  * SS$_NOPRIV without CMKRNL, and the list lives in the executive -- there is
  * no on-disk database (the former SYS$SYSTEM:VMS$KNOWN_IMAGES.DAT, which an
  * unprivileged startup could not write and anyone with that file could edit).
- * The executive PINS the image file an entry names and denies writes to it
- * for the entry's life; an entry installed /PRIVILEGED must be root-owned with
- * no write permission (the boot-staged images are), so nothing that runs in
- * OVMX can change it (Baron's ruling, rd vms-96e7).
+ * ADD copies the image: the executive itself copies the file INSTALL holds
+ * open into its own read-only, executive-only directory and holds that copy,
+ * writes denied, for the entry's life; the entry and its privileges name the
+ * copy, so any image can be installed and nothing a process does afterwards
+ * changes an installed one (Baron's rulings, rd vms-96e7, vms-220).
  *
  * Output follows the lab VMS captures (tests/lab/captures/install-priv-
  * 20261009/): LIST prints the entry with its Open/Hdr/Shar/Prv tags; /FULL
@@ -196,7 +197,6 @@ static int add_or_replace(int replace, int argc, char *argv[])
     }
     a.fd = fd;
     snprintf(a.name, sizeof a.name, "%s", soname);
-    snprintf(a.path, sizeof a.path, "%s", path);
     uint32_t st = vms_kif_kfe(&a);
     close(fd);
     if (!(st & 1)) {

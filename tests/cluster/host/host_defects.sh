@@ -2462,8 +2462,13 @@ cmd_apply() {
     [ $# -ge 2 ] || { echo "usage: host_defects.sh apply <defect> <src-root>..." >&2; return 2; }
     _d="$1"; shift
 
-    defect_field "$_d" targets >/dev/null || return 2
-    _targets=$(defect_field "$_d" targets)
+    # One read of the field, into a scratch file and back with the `read`
+    # builtin: a $(...) per read costs a fork, and the self-test calls this
+    # twice for every defect (rd vms-8c59).
+    [ -n "${_hd_scratch:-}" ] || _hd_scratch=$(mktemp) || return 2
+    defect_field "$_d" targets >"$_hd_scratch" || return 2
+    _targets=""
+    read -r _targets <"$_hd_scratch" || :
 
     command -v cmp >/dev/null 2>&1 || {
         echo "FATAL: cmp(1) unavailable -- cannot verify the injection landed" >&2
@@ -2553,8 +2558,14 @@ cmd_selftest() {
     _st_rc=0
 
     for _st_d in $DEFECTS; do
+        # Field reads go through a scratch file and the `read` builtin, not a
+        # $(...) each: six forks per defect were most of this loop's cost on a
+        # loaded host (rd vms-8c59).
         for _st_fld in facility targets suites_red isolation why require_fail; do
-            if [ -z "$(defect_field "$_st_d" "$_st_fld")" ]; then
+            defect_field "$_st_d" "$_st_fld" >"$_st_tmp/field"
+            _st_line=""
+            IFS= read -r _st_line <"$_st_tmp/field" || :
+            if [ -z "$_st_line" ]; then
                 echo "FAIL: $_st_d: metadata field '$_st_fld' is empty"
                 _st_rc=1
             fi
@@ -2573,7 +2584,10 @@ cmd_selftest() {
                 return 2
             fi
         fi
-        for _st_t in $(defect_field "$_st_d" targets); do
+        defect_field "$_st_d" targets >"$_st_tmp/field"
+        _st_targets=""
+        read -r _st_targets <"$_st_tmp/field" || :
+        for _st_t in $_st_targets; do
             cp -p "$_st_root/$_st_t" "$_st_tmp/tree/$_st_t" 2>/dev/null || {
                 echo "FAIL: $_st_d: target $_st_t is not a file under $_st_root"
                 _st_rc=1
@@ -2604,34 +2618,48 @@ cmd_selftest() {
         fi
     done
 
-    rm -rf "$_st_tmp"
 
     # Every require_fail text has to EXIST literally in the suite source, or
     # the driver can never observe it and the manifest entry is a typo, not a
     # property. Loose normalisation (quotes/backslashes stripped, whitespace
     # collapsed) for the same reason facility_defects.sh's selftest does it:
-    # this catches a typo, not a C parse.
+    # this catches a typo, not a C parse. The (suite, defect, text) triples
+    # are gathered with shell builtins and checked by ONE awk, instead of a
+    # printf|tr|tr pipeline per text (rd vms-8c59).
+    : >"$_st_tmp/needles"
     for _st_d in $DEFECTS; do
-        for _st_suite_glob in $(defect_field "$_st_d" suites_red); do
+        defect_field "$_st_d" suites_red >"$_st_tmp/field"
+        _st_suites=""
+        read -r _st_suites <"$_st_tmp/field" || :
+        defect_field "$_st_d" require_fail >"$_st_tmp/rf"
+        for _st_suite_glob in $_st_suites; do
             _st_src="$_st_tests/$_st_suite_glob.c"
             [ -f "$_st_src" ] || { echo "FAIL: $_st_d: suites_red names '$_st_suite_glob' but $_st_src does not exist"; _st_rc=1; continue; }
-            # flattened once per suite, not once per defect naming it
-            [ -n "${_st_flatdir:-}" ] || _st_flatdir=$(mktemp -d)
-            _st_flatf="$_st_flatdir/flat-$_st_suite_glob"
-            [ -f "$_st_flatf" ] ||
-                tr -d '"\\' <"$_st_src" | tr '\n\t' '  ' | tr -s ' ' >"$_st_flatf"
-            _st_flat=$(cat "$_st_flatf")
-            defect_field "$_st_d" require_fail | while IFS= read -r _st_txt; do
+            while IFS= read -r _st_txt; do
                 [ -n "$_st_txt" ] || continue
-                _st_needle=$(printf '%s' "$_st_txt" | tr -d '"\\' | tr -s ' ')
-                case "$_st_flat" in
-                *"$_st_needle"*) : ;;
-                *) echo "FAIL: $_st_d: require_fail text absent from $_st_src: [$_st_txt]";;
-                esac
-            done
+                printf '%s\t%s\t%s\n' "$_st_src" "$_st_d" "$_st_txt"
+            done <"$_st_tmp/rf" >>"$_st_tmp/needles"
         done
     done
-    [ -n "${_st_flatdir:-}" ] && rm -rf "$_st_flatdir"
+    awk -F '\t' '
+        function norm(x) { gsub(/["\\]/, "", x); gsub(/ +/, " ", x); return x }
+        {
+            src = $1
+            if (!(src in flat)) {
+                body = ""
+                while ((getline ln < src) > 0) body = body ln " "
+                close(src)
+                gsub(/\t/, " ", body)
+                flat[src] = norm(body)
+            }
+            if (index(flat[src], norm($3)) == 0) {
+                printf "FAIL: %s: require_fail text absent from %s: [%s]\n", $2, src, $3
+                miss = 1
+            }
+        }
+        END { exit miss }' "$_st_tmp/needles" || _st_rc=1
+
+    rm -rf "$_st_tmp"
 
     # -----------------------------------------------------------------------
     # Negative control for cmd_coverage itself (vms-181, INV-6): a coverage

@@ -1369,7 +1369,7 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
  * (name_off, patch_off = import-GOT cell), then a symbol-name blob. IMGACT
  * resolves each name against the loaded producer set at activation. (vms-5f0) */
 static void vms_wimp_write(uint8_t *img, uint64_t off_wimp, struct import *imp,
-                           int nimp)
+                           int nimp, int is_evax)
 {
     int nweak = import_count_weak(imp, nimp);
     uint64_t hdr = sizeof(struct ovmx_wimp_header);
@@ -1387,7 +1387,13 @@ static void vms_wimp_write(uint8_t *img, uint64_t off_wimp, struct import *imp,
     for (int i = 0; i < nimp; i++) {
         if (!imp[i].is_weak) continue;
         we[o].name_off = names_sz;
-        we[o].reserved = 0;
+        /* The import FORM, encoded exactly as a .vms$imp sv_index's top bits
+         * (EVAX/Alpha only; the ELF path writes 0, byte-identical to before):
+         * IMGACT fills a weak cell with the same imgact_fill_import a strong
+         * one gets, so a weak LINKAGE pair receives <code entry, PV>. (vms-e1a7) */
+        we[o].form = ((is_evax && !imp[i].is_data)    ? OVMX_IMP_LINKAGE  : 0u)
+                   | ((is_evax && imp[i].is_codeaddr) ? OVMX_IMP_CODEADDR : 0u)
+                   | ((is_evax && imp[i].is_long)     ? OVMX_IMP_LONG     : 0u);
         we[o].patch_off = imp[i].got_va;
         size_t l = strlen(imp[i].name) + 1;
         memcpy(nb + names_sz, imp[i].name, l);
@@ -3339,7 +3345,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     /* .vms$wimp: weak-by-name imports; IMGACT binds each by NAME at activation
      * against the loaded producer set (absent -> cell stays 0). (vms-5f0) */
     if (nweak)
-        vms_wimp_write(img, off_wimp, imp, nimp);
+        vms_wimp_write(img, off_wimp, imp, nimp, /*is_evax=*/0);
 
     /* .vms$ehf descriptor: image-relative .eh_frame start + __register_frame
      * addr (both biased by IMGACT). Only emitted when register_frame_va != 0. */
@@ -3682,6 +3688,18 @@ static int evax_find_sym(struct evax_input *in, int nin, const char *name,
     return -1;
 }
 
+/* Does object `o` reference `name` WEAKLY (an undefined ESRF carrying
+ * EGSY$V_WEAK, as `#pragma weak` emits)? (vms-e1a7) */
+static int evax_is_weak_ref(const struct evax_object *o, const char *name)
+{
+    for (int s = 0; s < o->nsym; s++) {
+        const struct evax_symbol *y = &o->sym[s];
+        if (!y->defined && (y->flags & EGSY__V_WEAK) && strcmp(y->name, name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 /* Resolved address of a symbol's VALUE (procedure descriptor for a procedure,
  * plain value otherwise) — section base + section-relative value. */
 static uint64_t evax_sym_value_addr(struct evax_input *in, int di, const struct evax_symbol *s)
@@ -3871,7 +3889,7 @@ static void evax_add_ximport(struct evax_input *in, int ii,
                              struct evax_section *sec, const struct evax_reloc *r,
                              struct producer *producers, int pidx, uint32_t svidx,
                              struct import **imp, int *nimp, int *imp_cap,
-                             int *n_ximport)
+                             int *n_ximport, int weak)
 {
     uint8_t *c = evax_ensure_content(sec);
     if (!c) die("cross-image relocation into a zero-length psect");
@@ -3919,7 +3937,17 @@ static void evax_add_ximport(struct evax_input *in, int ii,
      * (vms-e06: OTS$ZERO/OTS$MOVE arrive as CODEADDR; OTS$HOME_ARGS as REFQUAD.) */
     e->is_codeaddr = (r->type == EVAX_R_CODEADDR);
     e->is_long     = (r->type == EVAX_R_REFLONG);
-    e->is_weak = 0;
+    e->is_weak = weak;
+    if (weak) {
+        /* No --use producer exports it: IMGACT binds it BY NAME against the
+         * loaded producer set (.vms$wimp); absent -> the cell stays 0. */
+        e->pidx = -1; e->svidx = 0;
+        fprintf(stderr, "%%LINK-I-WEAKIMP, EVAX weak reference '%s' bound by name at "
+                "activation, image-relative 0x%llx (%s)\n", r->sym,
+                (unsigned long long)site_va,
+                r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
+        return;
+    }
     (*n_ximport)++;
     fprintf(stderr, "%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "
             "producer %s [sv#%u], IMGACT-filled at image-relative 0x%llx (%s)\n",
@@ -4105,7 +4133,7 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                     return;
                 }
                 evax_add_ximport(in, ii, sec, r, producers, pidx, svidx,
-                                 imp, nimp, imp_cap, n_ximport);
+                                 imp, nimp, imp_cap, n_ximport, /*weak=*/0);
                 return;
             }
             /* Linker-defined section-boundary / _DYNAMIC symbol (vms-838a): not
@@ -4119,6 +4147,19 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
                     S = lv; S_placed = lp; have_code = 0; code_S = 0;
                     goto store_target;
                 }
+            }
+            /* A reference the object marks WEAK (EGSY$V_WEAK on its ESRF, what
+             * `#pragma weak` emits) that nothing here defines and no --use
+             * producer exports: a weak-by-name import IMGACT resolves against
+             * the loaded producer set, as the ELF path does (vms-5f0). This is
+             * how LIBVMS$SHR reaches LIBVMSRMS$SHR (sys$parse/sys$search,
+             * ovmx_rightslist_*) across the layering cycle on Alpha; leaving
+             * the cell 0 at link made LIB$FIND_FILE SS$_NOSUCHDEV and !%I a
+             * bare [g,m] for every Alpha image. (vms-e1a7) */
+            if (evax_is_weak_ref(&in[ii].obj, r->sym)) {
+                evax_add_ximport(in, ii, sec, r, producers, -1, 0,
+                                 imp, nimp, imp_cap, n_ximport, /*weak=*/1);
+                return;
             }
             if (allow_undef) {
                 (*deferred)++;
@@ -4458,7 +4499,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * can exceed any fixed cap — vms-7b96, the 68-slot osec overflowed at 1345
      * members), so it is malloc'd, not a fixed stack array. */
     struct outsec { char name[EVAX_NAME_MAX]; uint64_t addr, size; int nobits; };
-    int osec_cap = 4;
+    int osec_cap = 5;   /* .vms$xfer, .vms$sv, .vms$imp, .vms$wimp, .vms$rel */
     for (int i = 0; i < nin; i++) osec_cap += in[i].obj.nsec;
     struct outsec *osec = calloc((size_t)osec_cap, sizeof *osec);
     if (!osec) die("oom allocating EVAX output-section table");
@@ -4732,7 +4773,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * activation — the SAME table + IMGACT contract the ELF path emits
      * (vms_imp_write). (bead vms-c179) ---- */
     uint64_t off_imp = 0, imp_size = 0;
-    if (nimp > 0) {
+    int nstrong = import_count_strong(imp, nimp), nweak = import_count_weak(imp, nimp);
+    if (nstrong > 0) {
         cur = ALIGN_UP(cur, 8);
         off_imp = cur;
         imp_size = vms_imp_size(nimp, imp, producers, np);
@@ -4740,6 +4782,21 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         int oi = nos++;
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_IMP_SECTION);
         osec[oi].addr = g_evax_vbase + off_imp; osec[oi].size = imp_size; osec[oi].nobits = 0;
+    }
+
+    /* ---- .vms$wimp: weak-by-name imports (EGSY$V_WEAK references nothing at
+     * link time resolves), bound by IMGACT against the loaded producer set --
+     * the same table the ELF path emits, each record carrying its Alpha import
+     * form. Emitted only when there are weak references. (vms-e1a7) ---- */
+    uint64_t off_wimp = 0, wimp_size = 0;
+    if (nweak > 0) {
+        cur = ALIGN_UP(cur, 8);
+        off_wimp = cur;
+        wimp_size = vms_wimp_size(nimp, imp);
+        cur += wimp_size;
+        int oi = nos++;
+        snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_WIMP_SECTION);
+        osec[oi].addr = g_evax_vbase + off_wimp; osec[oi].size = wimp_size; osec[oi].nobits = 0;
     }
 
     /* ---- .vms$rel: the load-bias fixup table. Header + one image-relative u64
@@ -4889,8 +4946,10 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
 
     /* Stamp .vms$imp (cross-image imports). patch_off = imp[i].got_va (the site
      * image-relative address), producer soname + sv index per record. */
-    if (nimp > 0)
+    if (nstrong > 0)
         vms_imp_write(img, off_imp, imp, nimp, producers, np, /*is_evax=*/1);
+    if (nweak > 0)
+        vms_wimp_write(img, off_wimp, imp, nimp, /*is_evax=*/1);
 
     /* Stamp .vms$rel (load-bias fixups): ovmx_rel_header{magic,count} then the
      * image-relative slot offsets. Written little-endian like the rest of the

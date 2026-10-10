@@ -218,7 +218,10 @@ struct ovmx_wimp_header {
 
 struct ovmx_wimp_entry {
     uint32_t name_off;      /* offset into the name blob: universal name     */
-    uint32_t reserved;      /* 0 (alignment / future flags)                  */
+    uint32_t form;          /* Alpha/EVAX: the import FORM bits, as in a      */
+                            /* .vms$imp sv_index (OVMX_IMP_LINKAGE /          */
+                            /* OVMX_IMP_CODEADDR / OVMX_IMP_LONG); 0 on every  */
+                            /* other arch and for a plain data cell (vms-e1a7) */
     uint64_t patch_off;     /* image-relative import-GOT cell to receive the  */
                             /* by-name-resolved address at activation         */
 };

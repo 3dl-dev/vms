@@ -1712,6 +1712,19 @@ static int show_wild_sym_cb(const char *name, const char *value,
  */
 static int cmd_show_symbol(struct dcl_command *cmd)
 {
+    /* SHOW SYMBOL takes /ALL /GLOBAL /LOCAL /LOG and nothing else -- /PAGE is
+     * refused (VAX V7.3 keystroke PG.SHOW; rd vms-457) */
+    for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+        const char *q = cmd->qualifiers[qi].name;
+        if (strcasecmp(q, "ALL") && strcasecmp(q, "GLOBAL") &&
+            strcasecmp(q, "LOCAL") && strcasecmp(q, "LOG") &&
+            strcasecmp(q, "SYMBOL")) {
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement - \\%s\\", q);
+            return SS$_IVQUAL;
+        }
+    }
     if (cmd->param_count >= 2) {
         /* SHOW SYMBOL specific-name */
         const char *name = cmd->params[1];

@@ -2935,6 +2935,34 @@ static uint32_t dcl_mkdir_acp(const char *vspec)
         size_t n = (size_t)(rb - lb - 1);
         if (n < sizeof(dirtree)) { memcpy(dirtree, lb + 1, n); dirtree[n] = '\0'; }
     }
+    /* The device may be a logical name -- a rooted one ("SYS$SYSROOT:" ->
+     * "DKA0:[SYS0.]") puts its root in front of the directory: CREATE
+     * /DIRECTORY [.KSPGD] under SYS$LOGIN (rd vms-457). */
+    for (int depth = 0; depth < 8 && dev[0]; depth++) {
+        char lname[128], eq[256];
+        snprintf(lname, sizeof lname, "%.*s", (int)strlen(dev) - 1, dev);
+        if (dcl_translate_logical(lname, eq, sizeof eq) != 0)
+            break;
+        const char *ec = strchr(eq, ':');
+        if (!ec) break;
+        char ndev[128], root[256] = "";
+        snprintf(ndev, sizeof ndev, "%.*s", (int)(ec - eq) + 1, eq);
+        const char *elb = strchr(ec, '[');
+        const char *erb = elb ? strchr(elb, ']') : NULL;
+        if (elb && erb) {
+            snprintf(root, sizeof root, "%.*s", (int)(erb - elb - 1), elb + 1);
+            size_t rl = strlen(root);
+            while (rl && root[rl - 1] == '.') root[--rl] = '\0';
+            if (strcmp(root, "000000") == 0) root[0] = '\0';
+        }
+        if (root[0]) {
+            char nt[512];
+            snprintf(nt, sizeof nt, "%s%s%s", root, dirtree[0] ? "." : "", dirtree);
+            snprintf(dirtree, sizeof dirtree, "%s", nt);
+        }
+        if (strcasecmp(ndev, dev) == 0) break;
+        snprintf(dev, sizeof dev, "%s", ndev);
+    }
     /* A rooted "[SYS0.]" or trailing dot leaves nothing to create. */
     { size_t dl = strlen(dirtree); while (dl && dirtree[dl - 1] == '.') dirtree[--dl] = '\0'; }
     if (!dev[0] || !dirtree[0])

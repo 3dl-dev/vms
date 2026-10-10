@@ -62,10 +62,10 @@ assert_ident() {
     fi
 }
 
-# Test 1: Invalid command verb -> %DCL-E-IVVERB
+# Test 1: Invalid command verb -> %DCL-W-IVVERB (a warning on VMS: keystroke ERR.DCL E1)
 output=$(echo "XYZZY_INVALID_CMD" | $VMSDCL 2>&1)
 check_vms_format "invalid verb" "$output"
-assert_ident "invalid verb" "%DCL-E-IVVERB" "$output"
+assert_ident "invalid verb" "%DCL-W-IVVERB" "$output"
 
 # Test 2: Missing SHOW keyword -> %DCL-E-NOKEYW
 output=$(echo "SHOW" | $VMSDCL 2>&1)

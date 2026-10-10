@@ -74,6 +74,8 @@ static uint32_t eval_fail_status;
 /* CLI$_EXPSYN "invalid expression syntax", a warning (message catalog
  * 0x00038038, docs/oracle/messages/alpha84-msgcat2.txt). */
 #define DCL_CLI_EXPSYN 0x00038038u
+/* CLI$_IVVERB "unrecognized command verb", a warning (0x00038090, same catalog) */
+#define DCL_CLI_IVVERB 0x00038090u
 
 static void ep_skip_ws(expr_parser_t *ep)
 {
@@ -1672,11 +1674,15 @@ int dcl_execute_command(struct dcl_command *cmd)
      * mistyped command is the classic case where a script does
      * `IF .NOT. $STATUS THEN GOTO err`, and leaving a stale success here is
      * exactly the bug that made that check silently pass (parity-map 9.2). */
-    dcl_error("DCL", 2, "IVVERB",
+    /* A WARNING, as on VMS (keystroke ERR.DCL E1, VAX V7.3: %DCL-W-IVVERB),
+     * with the CLI's own status %X00038090 (the message catalog's IVVERB,
+     * docs/oracle/messages/alpha84-msgcat2.txt) -- rd vms-c174. A procedure
+     * therefore goes on past a mistyped verb unless ON WARNING says otherwise. */
+    dcl_error("DCL", 0, "IVVERB",
               "unrecognized command verb - check validity and spelling\n"
               " \\%s\\", cmd->verb);
-    dcl_set_status(ctx, SS$_IVVERB);
-    return SS$_IVVERB;
+    dcl_set_status(ctx, DCL_CLI_IVVERB);
+    return DCL_CLI_IVVERB;
 }
 
 /*

@@ -11,12 +11,15 @@
 # 0=WARNING, 1=SUCCESS, 2=ERROR, 3=INFO, 4=FATAL(SEVERE). By default a command
 # procedure exits when a command completes with ERROR or SEVERE severity; a
 # WARNING does not stop it. This suite drives two reliable severities:
-#   * SEVERE  — a mistyped verb returns SS$_IVVERB (severity 4)
-#   * WARNING — @ of a missing procedure returns SS$_NOSUCHFILE (severity 0)
+#   * SEVERE  — CALL SEVERE, a subroutine that EXITs with status 4
+#   * WARNING — @ of a missing procedure returns SS$_NOSUCHFILE (severity 0),
+#               and a mistyped verb is %DCL-W-IVVERB, a WARNING as on VMS
+#               (keystroke ERR.DCL E1, VAX V7.3; rd vms-c174)
 #
 # Default: SEVERE aborts the level, WARNING does not.
 # EXPECT: contains:A_START
 # EXPECT: contains:A_PAST_WARN
+# EXPECT: contains:A_PAST_IVVERB
 # EXPECT_NOT: contains:A_SEVERE_LEAK
 # main resumes after a nested level aborted (default action returns to caller).
 # EXPECT: contains:MAIN_AFTER_A
@@ -84,6 +87,8 @@ $   WRITE SYS$OUTPUT "A_START"
 $   @NO_SUCH_PROC_AW
 $   WRITE SYS$OUTPUT "A_PAST_WARN"
 $   ZZBADVERB_A
+$   WRITE SYS$OUTPUT "A_PAST_IVVERB"
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "A_SEVERE_LEAK"
 $ ENDSUBROUTINE
 $!
@@ -91,36 +96,36 @@ $! --- AA: default action, called AFTER B's SET NOON — must still abort,
 $!     proving a sibling level's NOON did not persist to this level ---
 $ AA: SUBROUTINE
 $   WRITE SYS$OUTPUT "AA_START"
-$   ZZBADVERB_AA
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "AA_LEAK"
 $ ENDSUBROUTINE
 $!
 $! --- B: SET NOON continues past a SEVERE error ---
 $ B: SUBROUTINE
 $   SET NOON
-$   ZZBADVERB_B
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "B_NOON_CONT"
 $ ENDSUBROUTINE
 $!
 $! --- C: SET ON restores the default error-stop ---
 $ C: SUBROUTINE
 $   SET NOON
-$   ZZBADVERB_C1
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "C_NOON_MID"
 $   SET ON
-$   ZZBADVERB_C2
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "C_SETON_LEAK"
 $ ENDSUBROUTINE
 $!
 $! --- D: ON ERROR THEN GOTO fires on SEVERE, and re-arms on a fresh ON ---
 $ D: SUBROUTINE
 $   ON ERROR THEN GOTO DH1
-$   ZZBADVERB_D1
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "D_SKIP1"
 $ DH1:
 $   WRITE SYS$OUTPUT "D_H1"
 $   ON ERROR THEN GOTO DH2
-$   ZZBADVERB_D2
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "D_SKIP2"
 $ DH2:
 $   WRITE SYS$OUTPUT "D_H2"
@@ -130,11 +135,11 @@ $! --- E: the ON action is one-shot; a second unhandled error defaults to
 $!     abort rather than re-firing (else this loops and the suite times out) ---
 $ E: SUBROUTINE
 $   ON ERROR THEN GOTO EH
-$   ZZBADVERB_E1
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "E_SKIP"
 $ EH:
 $   WRITE SYS$OUTPUT "E_ONCE"
-$   ZZBADVERB_E2
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "E_LOOP_LEAK"
 $ ENDSUBROUTINE
 $!
@@ -145,7 +150,7 @@ $   ON SEVERE_ERROR THEN GOTO FH
 $   WRITE SYS$OUTPUT "F_START"
 $   @NO_SUCH_PROC_F
 $   WRITE SYS$OUTPUT "F_WARN_CONT"
-$   ZZBADVERB_F
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "F_SKIP"
 $ FH:
 $   WRITE SYS$OUTPUT "F_SEV_CAUGHT"
@@ -161,10 +166,14 @@ $   WRITE SYS$OUTPUT "G_WARN_CAUGHT"
 $ ENDSUBROUTINE
 $!
 $! --- H: ON ERROR THEN EXIT stops the level ---
+$ SEVERE: SUBROUTINE
+$   EXIT 4
+$ ENDSUBROUTINE
+$!
 $ H: SUBROUTINE
 $   ON ERROR THEN EXIT
 $   WRITE SYS$OUTPUT "H_START"
-$   ZZBADVERB_H
+$   CALL SEVERE
 $   WRITE SYS$OUTPUT "H_EXIT_LEAK"
 $ ENDSUBROUTINE
 EOF

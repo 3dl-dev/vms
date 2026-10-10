@@ -2414,6 +2414,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_pri(proc, arg);
     case VMS_IOCTL_BRKAUTH:
         return vms_ioctl_brkauth(proc, arg);
+    case VMS_IOCTL_PROCCTL:           /* rd vms-8e9 */
+        return vms_ioctl_procctl(proc, arg);
 
     /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
     case VMS_IOCTL_SPAWN_NOTIFY:

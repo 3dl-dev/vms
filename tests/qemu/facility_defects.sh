@@ -468,6 +468,7 @@ bind-client-no-register
 creprc-handshake-eintr
 run-detached-name-dropped
 delprc-privcheck-bypassed
+procctl-not-delivered
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
@@ -5155,36 +5156,38 @@ EOF
                       ;;
         esac;;
 
-    delprc-privcheck-bypassed)
+    procctl-not-delivered)
         case "$_f" in
-        facility)     echo "process deletion -- sys\$delprc's own GROUP/WORLD privilege gate for a process target (the DCL STOP command's process-target forms, src/libvms/syssvc/sys_process.c)";;
-        targets)      echo "libvms/syssvc/sys_process.c";;
-        # PRODUCT-half defect, the same class as run-detached-name-dropped and
-        # creprc-handshake-eintr above: the property lives in sys$delprc
-        # (libvms), NOT in vms.ko, so no kernel mutation can reach it.
-        # sys$delprc RESOLVES and AUTHORISES the target THROUGH the executive
-        # (vms_kif_getjpi_prcnam/_pid), then applies the DCL Dictionary's
-        # GROUP/WORLD rule ITSELF before the terminating kill(). This mutation
-        # makes that refusal structurally unreachable -- the always-false
-        # `if (0 ...)` idiom access-mode-escalation and dclast-super-mode-
-        # escalation also use -- so a caller holding NEITHER GROUP nor WORLD is
-        # no longer refused a same-group target: sys$delprc falls through to the
-        # kill and returns SS$_NORMAL.
-        #
-        # MEASURED as isolated to the ONE SS$_NOPRIV assertion (P3), NOT the
-        # sibling "still ALIVE" check in the same block: the target is the
-        # suite's OWN $CREPRC child, so a helper that wrongly kills it only
-        # turns it into a ZOMBIE of the main test process, and kill(zombie, 0)
-        # still returns 0 -- the suite documents exactly this footgun in
-        # wait_and_reap()'s comment. The "still ALIVE" assertion therefore
-        # cannot observe the kill and stays green; only the SS$_NOPRIV status
-        # the privilege-stripped helper reads back changes. P1/P2 (whose caller
-        # holds WORLD, so `authorized` was already true) are untouched.
+        facility)     echo "process control delivered by the executive (vms_ioctl_procctl -> exec_task_signal, kernel-core/vms_proctab.c, rd vms-8e9) -- \$DELPRC/\$FORCEX/\$SUSPND/\$RESUME reach the target from inside the executive, not by a userspace kill() across substrate identities";;
+        targets)      echo "kernel-core/vms_proctab.c";;
         suites_red)   echo "test_syssvc_delprc";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sys\$delprc stops enforcing the DCL Dictionary's GROUP/WORLD rule for a process target: a caller holding NEITHER GROUP nor WORLD is allowed to delete a process in its own UIC group. Resolution, naming, the cross-process kill and the caller==target self-delete path are all untouched -- only the privilege refusal is made unreachable, so a same-group STOP that must be refused SS\$_NOPRIV is reported SS\$_NORMAL instead.";;
+        why)          echo "vms_ioctl_procctl authorizes the request and then reports success without signalling the target: \$DELPRC returns SS\$_NORMAL and the process keeps running. The cross-identity case (P8: a WORLD holder on another substrate uid, which no userspace kill() can reach) is the property; the same-identity STOPs and the \$SUSPND are the same missing delivery seen again. Gone after apply.";;
+        require_fail) cat <<'EOF'
+P8: the other-identity target actually terminated -- the executive delivered the termination
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+P1: the target's Linux process actually terminated (reaped, not merely signalled)
+P1: the executive's table no longer resolves the stopped target ($GETJPI -> SS$_NONEXPR, the same status SHOW SYSTEM reads to decide a row is gone)
+P2: the target's Linux process actually terminated (reaped, not merely signalled)
+P2: the executive's table no longer resolves the stopped target
+P6: the child's REAL Linux process is STOPPED -- SIGSTOP hit the executive-resolved pid, not the mis-cast VMS-pid value
+EOF
+                      ;;
+        knock_on_why)  echo "every one is the same signal the executive no longer sends: STOP by name and by pid leave the target running (so its row also stays), and \$SUSPND leaves it running.";;
+        esac;;
+    delprc-privcheck-bypassed)
+        case "$_f" in
+        facility)     echo "process deletion -- the executive's GROUP/WORLD privilege gate on \$DELPRC/\$FORCEX/\$SUSPND/\$RESUME of another process (vms_ioctl_procctl, kernel-core/vms_proctab.c, rd vms-8e9; the DCL STOP command's process-target forms)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_delprc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The executive stops enforcing the DCL Dictionary's GROUP/WORLD rule for a process target: a caller holding NEITHER GROUP nor WORLD may delete a process in its own UIC group, and the executive delivers the termination. Resolution, naming and the self-delete path are untouched -- only the privilege refusal is made unreachable, so a same-group STOP that must be refused SS\$_NOPRIV is reported SS\$_NORMAL instead.";;
         require_fail) cat <<'EOF'
 P3: sys$delprc refuses a same-group target without GROUP privilege (SS$_NOPRIV, DCL Dictionary STOP)
 EOF
@@ -8608,17 +8611,16 @@ apply_edit() {
         # other argument, and every other line of the command, is untouched.
         sed -i 's|                                 prc_d.dsc\$a_pointer ? \&prc_d : NULL,|                                 NULL, /* NEGCTL run-detached-name-dropped */|' "$_file";;
 
+    procctl-not-delivered)
+        # UNIQUE TEXT: vms_ioctl_procctl's one delivery call.
+        sed -i 's|^    rc = exec_task_signal(ref, sig);$|    rc = 0; (void)ref; (void)sig; /* NEGCTL procctl-not-delivered */|' "$_file";;
     delprc-privcheck-bypassed)
-        # The ONE edit, in libvms/syssvc/sys_process.c. `if (!authorized)` is
-        # UNIQUE in the file -- it is sys$delprc's own GROUP/WORLD privilege
-        # gate, guarding the `return SS$_NOPRIV;` on the next line. Prefixing
-        # it into the always-false `if (0 ...)` makes the refusal structurally
-        # unreachable, so a privilege-stripped same-group STOP falls through to
-        # sys$delprc's terminating kill() and is reported SS$_NORMAL. After
-        # substitution the line reads `if (0 /* ... */)`, so a second apply
-        # finds no `if (!authorized)` left to match -- the idempotent no-op
-        # cmd_selftest requires. Resolution, naming and the kill are untouched.
-        sed -i 's|        if (!authorized)|        if (0 /* NEGCTL delprc-privcheck-bypassed */)|' "$_file";;
+        # The ONE edit, in kernel-core/vms_proctab.c (rd vms-8e9: the executive
+        # authorizes and delivers $DELPRC). `if (!(proc->cur_privs & need)) {` is
+        # unique in the file -- vms_ioctl_procctl's GROUP/WORLD gate. Making it
+        # never-true lets a privilege-stripped same-group STOP through, and the
+        # executive delivers the termination: SS$_NORMAL. Gone after apply.
+        sed -i 's|^        if (!(proc->cur_privs \& need)) {$|        if (0 \&\& !(proc->cur_privs \& need)) { /* NEGCTL delprc-privcheck-bypassed */|' "$_file";;
 
     creprc-detach-intermediate-reaped)
         # The ONE edit: the parent-side reap of the detach intermediate is

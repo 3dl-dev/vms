@@ -870,6 +870,8 @@ uint32_t vms_kif_rights(uint32_t op, uint32_t pid, uint32_t id, uint32_t *attrib
 uint32_t vms_kif_pri(uint32_t op, uint32_t pid, uint32_t *pri, uint32_t *prev,
                      uint32_t *authpri);
 uint32_t vms_kif_brkauth(uint32_t sndtyp);
+/* $DELPRC/$FORCEX/$SUSPND/$RESUME by the executive (rd vms-8e9); op = VMS_PROCCTL_*. */
+uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 

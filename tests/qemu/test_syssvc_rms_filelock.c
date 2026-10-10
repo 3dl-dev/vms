@@ -46,6 +46,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "rms/rms.h"
+#include "dcl/dcl_rms.h"   /* DCL_RMS_READ_SHR: the share intent TYPE/COPY read with (vms-5a0) */
 #include "rms_io.h"   /* rms_file_t + ->access_lkid: the internal handle vms-50e stashes the lkid on */
 
 #define EXIT_SKIP  77
@@ -228,6 +229,88 @@ static void test_compatible_share(void)
     sys$erase(&fab_seed, 0, 0);
 }
 
+/*
+ * 3. TYPE BESIDE A SHARING WRITER (rd vms-5a0). A writer holds the file open
+ *    with FAC=GET|PUT, SHR=GET|PUT -- exactly how the ci.6 workload EVACWL
+ *    opens EVAC.DAT -- and real VMS's TYPE reads it meanwhile (observed,
+ *    OpenVMS VAX V7.3, runs ci6-evac-15/16). The reader opens with DCL's own
+ *    DCL_RMS_READ_SHR (the constant dcl_rms_read_open uses), gets NORMAL and
+ *    $GETs the writer's record; a reader that does not tolerate writers
+ *    (SHR=GET only) is refused with RMS$_SHR, which is what OVMX's TYPE used to
+ *    do (and then misreported as RMS-E-FNF).
+ */
+static void test_reader_beside_sharing_writer(void)
+{
+    char spec[128];
+    struct FAB wfab, rfab, sfab;
+    struct RAB wrab, rrab;
+    char rec[] = "EVAC-RECORD-1";
+    char buf[64];
+    uint32_t st;
+
+    snprintf(spec, sizeof(spec), "%s[OVMXDIR]RMSLOCKC.DAT", ODS2_UNIT);
+
+    wfab = cc$rms_fab;
+    wfab.fab$l_fna = spec;
+    wfab.fab$b_fns = (uint8_t)strlen(spec);
+    wfab.fab$b_org = FAB$C_SEQ;
+    wfab.fab$b_rfm = FAB$C_VAR;
+    wfab.fab$b_fac = FAB$M_GET | FAB$M_PUT;
+    wfab.fab$b_shr = FAB$M_SHRGET | FAB$M_SHRPUT;
+    st = sys$create(&wfab, 0, 0);
+    check(st == RMS$_NORMAL, "writer sys$create RMSLOCKC.DAT (GET|PUT, SHR GET|PUT) -> NORMAL");
+    if (st != RMS$_NORMAL) return;
+    wrab = cc$rms_rab;
+    wrab.rab$l_fab = &wfab;
+    st = sys$connect(&wrab, 0, 0);
+    wrab.rab$l_rbf = rec;
+    wrab.rab$w_rsz = (uint16_t)strlen(rec);
+    if (st == RMS$_NORMAL)
+        st = sys$put(&wrab, 0, 0);
+    check(st == RMS$_NORMAL, "writer $PUT one record and keeps the file open");
+
+    rfab = cc$rms_fab;
+    rfab.fab$l_fna = spec;
+    rfab.fab$b_fns = (uint8_t)strlen(spec);
+    rfab.fab$b_org = FAB$C_SEQ;
+    rfab.fab$b_fac = FAB$M_GET;
+    rfab.fab$b_shr = DCL_RMS_READ_SHR;
+    st = sys$open(&rfab, 0, 0);
+    check(st == RMS$_NORMAL,
+          "*** TYPE's reader (GET, SHR=DCL_RMS_READ_SHR) opens the file the writer holds -> NORMAL ***");
+    if (st == RMS$_NORMAL) {
+        rrab = cc$rms_rab;
+        rrab.rab$l_fab = &rfab;
+        rrab.rab$l_ubf = buf;
+        rrab.rab$w_usz = sizeof(buf);
+        st = sys$connect(&rrab, 0, 0);
+        if (st == RMS$_NORMAL)
+            st = sys$get(&rrab, 0, 0);
+        check(st == RMS$_NORMAL && rrab.rab$w_rsz == strlen(rec) &&
+              memcmp(buf, rec, strlen(rec)) == 0,
+              "  ... and $GETs the writer's record");
+        sys$close(&rfab, 0, 0);
+    }
+
+    sfab = cc$rms_fab;
+    sfab.fab$l_fna = spec;
+    sfab.fab$b_fns = (uint8_t)strlen(spec);
+    sfab.fab$b_org = FAB$C_SEQ;
+    sfab.fab$b_fac = FAB$M_GET;
+    sfab.fab$b_shr = FAB$M_SHRGET;
+    st = sys$open(&sfab, 0, 0);
+    check(st == RMS$_SHR,
+          "  a reader that does not tolerate writers (SHR=GET) is refused RMS$_SHR");
+    if (st == RMS$_NORMAL)
+        sys$close(&sfab, 0, 0);
+
+    sys$close(&wfab, 0, 0);
+    wfab = cc$rms_fab;
+    wfab.fab$l_fna = spec;
+    wfab.fab$b_fns = (uint8_t)strlen(spec);
+    sys$erase(&wfab, 0, 0);
+}
+
 int main(void)
 {
     uint32_t st;
@@ -246,6 +329,7 @@ int main(void)
 
     test_conflicting_share();
     test_compatible_share();
+    test_reader_beside_sharing_writer();
 
     vms_kif_acp_dmount(ODS2_UNIT);
 

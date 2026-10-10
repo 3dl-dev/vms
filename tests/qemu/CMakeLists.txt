@@ -104,8 +104,30 @@ endfunction()
 # to this harness: an in-place `cmake --build` in a build dir that already
 # exists at config time would miss a newly-added file until reconfigured.
 file(GLOB QEMU_SYSSVC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_syssvc_*.c)
+# Two suites are registered only where what they test can exist (below).
+# test_syssvc_crtl_static proves the C RTL file layer of a STATIC image, which
+# exists only where the build links it (OVMX_CRTL_FD_STATIC: tests/qemu/
+# Dockerfile, over the x86_64 musl system-call funnel src/crtl-musl-x86_64). A
+# build without that layer -- the Alpha rig, a host build -- has nothing for the
+# suite to test, so it is not registered there, rather than built to SKIP. The
+# requirement is stated here, in the registration, not in a failure baseline.
+option(OVMX_CRTL_FD_STATIC "link the C RTL file layer over RMS into static C images" OFF)
 foreach(_src ${QEMU_SYSSVC_SOURCES})
     get_filename_component(_name ${_src} NAME_WE)
+    if(_name STREQUAL "test_syssvc_crtl_static" AND NOT OVMX_CRTL_FD_STATIC)
+        continue()
+    endif()
+    # test_syssvc_ci6_evacwl drives EVACWL.EXE, a VMS-native image TCC.EXE
+    # compiles and LINK.EXE links --use the OVMX shareables (tests/lab/ci6/
+    # mk_evacwl_native.sh). LINK.EXE's native backend exists for x86_64 and
+    # aarch64 only (src/vmslink/CMakeLists.txt, OVMX_LINK_NATIVE_ARCH), so on any
+    # other arch the subject image cannot exist and the suite is not registered
+    # (rd vms-f09). TEMPORARY: a capability gap, not a property of the test --
+    # remove this condition when LINK.EXE produces native Alpha images (rd vms-b2b).
+    if(_name STREQUAL "test_syssvc_ci6_evacwl" AND
+       NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
+        continue()
+    endif()
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
@@ -404,7 +426,6 @@ endforeach()
 # turns it on: fopen()/open()/stat()/unlink() of an RMS file go to RMS on the
 # Files-11 volume, as the DEC C RTL's do. Without the funnel (a host libc) the
 # layer cannot be linked and test_syssvc_crtl_static reports an honest SKIP.
-option(OVMX_CRTL_FD_STATIC "link the C RTL file layer over RMS into static C images" OFF)
 if(OVMX_CRTL_FD_STATIC)
     add_library(ovmx_crtl_fd_static OBJECT
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_fd.c

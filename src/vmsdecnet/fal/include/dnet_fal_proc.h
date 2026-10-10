@@ -47,6 +47,10 @@
 extern "C" {
 #endif
 
+/* The image NETACP activates for an inbound object-17 connect: NETACP's object
+ * table (the FAL row of NCP SHOW KNOWN OBJECTS, rd vms-2d0) names this same file. */
+#define DNET_FAL_IMAGE_SPEC    "SYS$SYSTEM:FAL.EXE"
+
 #define DNET_FALP_REC_LINKBLK  'L'   /* NETACP -> FAL: first record, link block  */
 #define DNET_FALP_REC_DATA     'D'   /* either way: one NSP data segment payload  */
 #define DNET_FALP_REC_END      'E'   /* NETACP -> FAL: the link is gone           */

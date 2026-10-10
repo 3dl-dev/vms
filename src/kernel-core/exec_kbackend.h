@@ -241,12 +241,17 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
- *   int  exec_file_identity(int fd, uint64_t *dev, uint64_t *ino)
- *        the substrate's identity (file-system device + file number) of the
- *        file the CURRENT task's descriptor `fd` refers to; 0, or <0 when `fd`
- *        names no file. The known-file list (INSTALL, vms-7c64) keys on it.
- *        Linux: fget + file_inode (s_dev, i_ino). NetBSD: fd_getfile +
- *        VOP_GETATTR (va_fsid, va_fileid).
+ *   int  exec_file_pin(int fd, void **pin)
+ *   void exec_file_unpin(void *pin)
+ *   int  exec_file_is(void *pin, int fd)
+ *        a known-file entry (INSTALL, vms-7c64) PINS the file the CURRENT
+ *        task's descriptor `fd` names: a kernel reference to the file object
+ *        for the entry's whole life, with writes to it denied (Linux:
+ *        fget + deny_write_access; NetBSD: vref + vn_marktext). <0 when `fd`
+ *        names no regular file or it is open for write (-ETXTBSY).
+ *        exec_file_is() is 1 when `fd` names that very object: matching is by
+ *        the pinned object, never an inode number or a path, so a deleted
+ *        file's reused number is never mistaken for it (Baron, vms-96e7).
  *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)

@@ -124,6 +124,43 @@ int main(int argc, char **argv)
     check(WIFEXITED(ws) && WEXITSTATUS(ws) == 0,
           "a process without CMKRNL: ADD is SS$_NOPRIV, FIND still reads the entry");
 
+    /* The entry pins its file and denies writes to it for its whole life
+     * (Baron's ruling, vms-96e7): the contents cannot change underneath it. */
+    {
+        const char *img = "/tmp/test_syssvc_kfe.img";
+        int w = open(img, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+        check(w >= 0 && write(w, "IMAGE", 5) == 5, "a scratch image file is written");
+        close(w);
+        int r = open(img, O_RDONLY);
+        check(kfe(VMS_KFE_OP_ADD, r, 0, VMS_KFE_F_OPEN, "SCRATCH", NULL) == SS$_NORMAL,
+              "INSTALL ADD of the scratch file is SS$_NORMAL");
+        w = open(img, O_WRONLY);
+        /* negctl: kfe-write-not-denied */
+        check(w < 0, "opening an installed image for write is refused (ETXTBSY)");
+        if (w >= 0)
+            close(w);
+        /* Unlinked and replaced by a new file of the same name: the entry
+         * still holds the old file, and the new one is not installed. */
+        check(unlink(img) == 0, "the installed image's name is unlinked");
+        w = open(img, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+        int n = open(img, O_RDONLY);
+        /* negctl: kfe-keyed-on-name */
+        check(w >= 0 && n >= 0 && kfe(VMS_KFE_OP_FIND, n, 0, 0, NULL, NULL) == SS$_NOSUCHFILE,
+              "a new file at the old name is not installed (matched by the pinned file, not a name or number)");
+        check(kfe(VMS_KFE_OP_FIND, r, 0, 0, NULL, NULL) == SS$_NORMAL,
+              "the pinned original is still installed");
+        check(kfe(VMS_KFE_OP_REMOVE, r, 0, 0, NULL, NULL) == SS$_NORMAL,
+              "INSTALL REMOVE of the scratch entry");
+        close(w); close(n); close(r);
+        unlink(img);
+        w = open(img, O_CREAT | O_WRONLY, 0644);
+        r = open(img, O_RDONLY);
+        check(w >= 0 && r >= 0 && kfe(VMS_KFE_OP_ADD, r, 0, 0, "BUSY", NULL) == 2048,
+              "INSTALL ADD of a file open for write is refused SS$_ACCONFLICT");
+        close(w); close(r);
+        unlink(img);
+    }
+
     check(kfe(VMS_KFE_OP_REPLACE, fd, VMS_PRV_M_CMKRNL | VMS_PRV_M_SYSPRV, VMS_KFE_F_PRIV,
               "SYS$SYSTEM:TEST_SYSSVC_KFE.EXE", NULL) == SS$_NORMAL &&
               (kfe(VMS_KFE_OP_FIND, fd, 0, 0, NULL, &a) & 1) &&

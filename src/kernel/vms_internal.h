@@ -266,6 +266,7 @@
  * SS__NOPRIV, already defined above.)
  */
 #define SS__NOSUCHFILE  2320        /* no such file (IO$_ACCESS resolve miss) */
+#define SS__ACCONFLICT  2048        /* file access conflict (INSTALL ADD of a file open for write) */
 #define SS__FILNOTACC   172        /* file not accessed (IO$_DEACCESS w/o access) */
 /*
  * SS__DEVICEFULL (SS$_DEVICEFULL == 2664): a PUBLIC STARLET SYSTEM-facility code
@@ -1288,7 +1289,7 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
-uint64_t vms_kfe_image_privs(uint64_t dev, uint64_t ino);
+uint64_t vms_kfe_image_privs(int fd);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);

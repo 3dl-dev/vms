@@ -594,6 +594,7 @@ acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
 kfe-add-cmkrnl-not-checked
 kfe-keyed-on-name
+kfe-write-not-denied
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -1539,9 +1540,29 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "kfe_find() matches an entry on the device and file number the executive read from the caller's descriptor. The mutation matches any entry, so a file that was never installed is reported installed -- with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
+        why)          echo "kfe_find() matches an entry by the pinned file object (exec_file_is). The mutation matches any entry, so a file that was never installed is reported installed -- with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 another file is not installed: FIND is SS$_NOSUCHFILE
+a new file at the old name is not installed (matched by the pinned file, not a name or number)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kfe-write-not-denied)
+        case "$_f" in
+        facility)     echo "an installed image is write-denied for the life of its known-file entry (Baron, vms-96e7)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_file_pin() denies writes to the inode it pins (deny_write_access). The mutation skips the denial, so an installed /PRIVILEGED image can be rewritten after INSTALL and run its new contents with the entry's privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+opening an installed image for write is refused (ETXTBSY)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8176,7 +8197,9 @@ apply_edit() {
     kfe-add-cmkrnl-not-checked)
         sed -i 's|^        st = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);$|        st = SS__NORMAL; (void)privs; /* NEGCTL kfe-add-cmkrnl-not-checked */|' "$_file";;
     kfe-keyed-on-name)
-        sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& vms_kfe_tab\[i\].dev == dev \&\& vms_kfe_tab\[i\].ino == ino)$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file";;
+        sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& exec_file_is(vms_kfe_tab\[i\].pin, fd))$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file";;
+    kfe-write-not-denied)
+        sed -i 's|^\te = deny_write_access(f);$|\te = 0; /* NEGCTL kfe-write-not-denied */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)

@@ -580,33 +580,57 @@ vms_blockdev_netbsd_release_all(void)
 }
 
 /*
- * ovmx_file_identity (rd vms-7c64): the file system id and file number of the
- * vnode behind the current process's descriptor `fd` -- the identity the
- * executive's known-file list (INSTALL) keys on. 0 or an errno. Lives in this
- * TU because it already speaks vnode(9); OVMX glue over public NetBSD
- * interfaces (fd_getfile(9), VOP_GETATTR(9)), no NetBSD source copied.
+ * ovmx_file_pin / unpin / is (rd vms-7c64): a known-file entry holds a
+ * reference on the vnode behind the caller's descriptor `fd`, marked text
+ * (vn_marktext: no writer may open it while the reference lives; refused
+ * ETXTBSY if one already has). The mark goes with the last reference, as an
+ * exec's does. OVMX glue over public NetBSD interfaces (fd_getfile(9),
+ * vref(9), vn_marktext), no NetBSD source copied.
  */
-int ovmx_file_identity(int fd, uint64_t *dev, uint64_t *ino);
+int ovmx_file_pin(int fd, void **pin);
+void ovmx_file_unpin(void *pin);
+int ovmx_file_is(void *pin, int fd);
+
 int
-ovmx_file_identity(int fd, uint64_t *dev, uint64_t *ino)
+ovmx_file_pin(int fd, void **pin)
 {
 	file_t *fp;
-	struct vattr va;
+	struct vnode *vp;
 	int error;
 
 	if ((fp = fd_getfile(fd)) == NULL)
 		return EBADF;
-	if (fp->f_type != DTYPE_VNODE || fp->f_vnode == NULL) {
+	if (fp->f_type != DTYPE_VNODE || (vp = fp->f_vnode) == NULL ||
+	    vp->v_type != VREG) {
 		fd_putfile(fd);
 		return EINVAL;
 	}
-	vn_lock(fp->f_vnode, LK_SHARED | LK_RETRY);
-	error = VOP_GETATTR(fp->f_vnode, &va, kauth_cred_get());
-	VOP_UNLOCK(fp->f_vnode);
+	vref(vp);
 	fd_putfile(fd);
-	if (error)
+	error = vn_marktext(vp);
+	if (error) {
+		vrele(vp);
 		return error;
-	*dev = (uint64_t)va.va_fsid;
-	*ino = (uint64_t)va.va_fileid;
+	}
+	*pin = vp;
 	return 0;
+}
+
+void
+ovmx_file_unpin(void *pin)
+{
+	vrele((struct vnode *)pin);
+}
+
+int
+ovmx_file_is(void *pin, int fd)
+{
+	file_t *fp;
+	int same;
+
+	if ((fp = fd_getfile(fd)) == NULL)
+		return 0;
+	same = fp->f_type == DTYPE_VNODE && fp->f_vnode == (struct vnode *)pin;
+	fd_putfile(fd);
+	return same;
 }

@@ -423,14 +423,15 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg)
  * under CMKRNL (INSTALL ADD/REPLACE/REMOVE fail %SYSTEM-F-NOCMKRNL without it,
  * observed on the lab Alpha V8.4: tests/lab/captures/install-priv-20261009/).
  * Here too: the list is executive memory, changed only by a CMKRNL caller
- * (vms_prot_require_priv on the caller's own PCB), and an entry names its file
- * by the identity the SUBSTRATE reports for the descriptor the caller holds
- * (exec_file_identity), so the activation-time grant can recognise that very
- * file. LIST is open to every process, as INSTALL LIST is.
+ * (vms_prot_require_priv on the caller's own PCB). An entry PINS its file
+ * (exec_file_pin): a kernel reference for the entry's life, with writes
+ * denied, and it is matched by that object -- never an inode number or a path
+ * (Baron's ruling, rd vms-96e7) -- so the activation-time grant recognises
+ * exactly that file and its contents cannot change underneath the entry. LIST is open to every process, as INSTALL LIST is.
  * ================================================================ */
 struct vms_kfe {
     int      used;
-    uint64_t dev, ino;
+    void    *pin;            /* exec_file_pin: the file, held + write-denied */
     uint64_t privs;
     uint32_t flags;
     uint32_t access;
@@ -439,21 +440,21 @@ struct vms_kfe {
 static struct vms_kfe vms_kfe_tab[VMS_KFE_MAX];
 static EXEC_DEFINE_MUTEX(vms_kfe_mutex);
 
-static int kfe_find(uint64_t dev, uint64_t ino)
+static int kfe_find(int fd)
 {
     for (int i = 0; i < VMS_KFE_MAX; i++)
-        if (vms_kfe_tab[i].used && vms_kfe_tab[i].dev == dev && vms_kfe_tab[i].ino == ino)
+        if (vms_kfe_tab[i].used && exec_file_is(vms_kfe_tab[i].pin, fd))
             return i;
     return -1;
 }
 
-/* For the activation-time grant (vms-bdc1): the privileges an installed image
- * file carries, 0 when it is not installed /PRIVILEGED. */
-uint64_t vms_kfe_image_privs(uint64_t dev, uint64_t ino)
+/* For the activation-time grant (vms-bdc1): the privileges the installed image
+ * open on `fd` carries, 0 when it is not installed /PRIVILEGED. */
+uint64_t vms_kfe_image_privs(int fd)
 {
     uint64_t p = 0;
     exec_mutex_lock(&vms_kfe_mutex);
-    int i = kfe_find(dev, ino);
+    int i = kfe_find(fd);
     if (i >= 0 && (vms_kfe_tab[i].flags & VMS_KFE_F_PRIV)) {
         p = vms_kfe_tab[i].privs;
         vms_kfe_tab[i].access++;
@@ -465,7 +466,8 @@ uint64_t vms_kfe_image_privs(uint64_t dev, uint64_t ino)
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_kfe_args args;
-    uint64_t dev = 0, ino = 0, privs;
+    uint64_t privs;
+    void *pin = NULL;
     uint32_t st = SS__NORMAL;
     int i;
 
@@ -483,15 +485,20 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         if (!(st & 1))
             goto out;
     }
-    if (args.op != VMS_KFE_OP_LIST && exec_file_identity(args.fd, &dev, &ino) != 0) {
-        st = SS__BADPARAM;
-        goto out;
+    if (args.op == VMS_KFE_OP_ADD) {
+        /* Pin before taking the list lock (it may sleep): the file is held
+         * and write-denied from here on, or ADD fails. */
+        int e = exec_file_pin(args.fd, &pin);
+        if (e) {
+            st = e == -ETXTBSY ? SS__ACCONFLICT : SS__BADPARAM;
+            goto out;
+        }
     }
 
     exec_mutex_lock(&vms_kfe_mutex);
     switch (args.op) {
     case VMS_KFE_OP_ADD:
-        if (kfe_find(dev, ino) >= 0) {
+        if (kfe_find(args.fd) >= 0) {
             st = SS__DUPLNAM;
             break;
         }
@@ -503,14 +510,14 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         }
         memset(&vms_kfe_tab[i], 0, sizeof(vms_kfe_tab[i]));
         vms_kfe_tab[i].used = 1;
-        vms_kfe_tab[i].dev = dev;
-        vms_kfe_tab[i].ino = ino;
+        vms_kfe_tab[i].pin = pin;
+        pin = NULL;
         vms_kfe_tab[i].privs = (args.flags & VMS_KFE_F_PRIV) ? args.privs : 0;
         vms_kfe_tab[i].flags = args.flags;
         memcpy(vms_kfe_tab[i].name, args.name, VMS_KFE_NAMELEN);
         break;
     case VMS_KFE_OP_REPLACE:
-        i = kfe_find(dev, ino);
+        i = kfe_find(args.fd);
         if (i < 0) {
             st = SS__NOSUCHFILE;
             break;
@@ -520,16 +527,19 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         memcpy(vms_kfe_tab[i].name, args.name, VMS_KFE_NAMELEN);
         break;
     case VMS_KFE_OP_REMOVE:
-        i = kfe_find(dev, ino);
-        if (i < 0)
+        i = kfe_find(args.fd);
+        if (i < 0) {
             st = SS__NOSUCHFILE;
-        else
+        } else {
             vms_kfe_tab[i].used = 0;
+            pin = vms_kfe_tab[i].pin;          /* released below, unlocked */
+            vms_kfe_tab[i].pin = NULL;
+        }
         break;
     case VMS_KFE_OP_FIND:
     case VMS_KFE_OP_LIST:
         if (args.op == VMS_KFE_OP_FIND) {
-            i = kfe_find(dev, ino);
+            i = kfe_find(args.fd);
         } else {
             for (i = (int)args.index; i < VMS_KFE_MAX && !vms_kfe_tab[i].used; i++)
                 ;
@@ -551,6 +561,8 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         break;
     }
     exec_mutex_unlock(&vms_kfe_mutex);
+    if (pin)                    /* a failed ADD's pin, or a removed entry's */
+        exec_file_unpin(pin);
 
 out:
     args.status = st;

@@ -279,17 +279,40 @@ typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
 
-/* exec_file_identity (exec_kbackend.h section 5): the device and inode number of
- * the file the CURRENT task's descriptor `fd` refers to. */
-static inline int exec_file_identity(int fd, uint64_t *dev, uint64_t *ino)
+/* exec_file_pin / unpin / is (exec_kbackend.h section 5, rd vms-7c64): a
+ * known-file entry holds the struct file the caller's `fd` names, with writes
+ * to its inode denied (deny_write_access), for the entry's whole life. */
+static inline int exec_file_pin(int fd, void **pin)
 {
 	struct file *f = fget(fd);
+	int e;
 	if (!f)
 		return -EBADF;
-	*dev = (uint64_t)file_inode(f)->i_sb->s_dev;
-	*ino = (uint64_t)file_inode(f)->i_ino;
-	fput(f);
+	e = deny_write_access(f);
+	if (e) {
+		fput(f);
+		return e;            /* -ETXTBSY: someone has it open for write */
+	}
+	*pin = f;
 	return 0;
+}
+static inline void exec_file_unpin(void *pin)
+{
+	struct file *f = pin;
+	allow_write_access(f);
+	fput(f);
+}
+/* 1 when `fd` names the very file object `pin` holds (the same inode object,
+ * which the pin keeps alive: never a number or a path). */
+static inline int exec_file_is(void *pin, int fd)
+{
+	struct file *f = fget(fd);
+	int same;
+	if (!f)
+		return 0;
+	same = file_inode(f) == file_inode((struct file *)pin);
+	fput(f);
+	return same;
 }
 
 /* exec_current_uid/gid (vms-31b): the REAL uid/gid of `current`, mapped into the

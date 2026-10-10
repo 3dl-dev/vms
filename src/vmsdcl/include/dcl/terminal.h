@@ -127,6 +127,7 @@ void dcl_tt_arm_oob(void (*yast)(uint32_t), int y_on, void (*tast)(uint32_t), in
 int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
                     char *buf, size_t bufsz, uint16_t *term_out);
 const char *dcl_recall_get(int back);
+int dcl_tt_inquire(char *reply, size_t replysz);
 int dcl_recall_size(void);
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
                 uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out);

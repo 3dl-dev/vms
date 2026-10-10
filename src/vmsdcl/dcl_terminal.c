@@ -275,6 +275,69 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
 }
 
 /*
+ * dcl_tt_inquire - SET TERMINAL/INQUIRE's exchange with the terminal (rd
+ * vms-bd71). The identification requests go out raw, one at a time -- DA
+ * (ESC [ c), then ST + the VT52 identify (ESC \ ESC Z), then DA with a zero
+ * parameter (ESC [ 0 c) -- each followed by a 4-second wait for an answer, as
+ * the VAX V7.3 console shows them (keystroke LOGIN.BANNER P timing). The
+ * answer, read unechoed and unfiltered up to its final 'c' or 'Z', is left in
+ * `reply`. Returns its length, 0 when the terminal never answered, or
+ * DCL_TT_NODRIVER.
+ */
+int dcl_tt_inquire(char *reply, size_t replysz)
+{
+    static const char *const req[] = { "\033[c", "\033\\\033Z", "\033[0c" };
+    static uint32_t mask[8];
+    static const uint32_t td[2] = { 32, 0 };   /* long form: 32-byte mask */
+    uint16_t iosb[4];
+
+    if (!dcl_tt_assign())
+        return DCL_TT_NODRIVER;
+    fflush(stdout);
+    fflush(stderr);
+    memset(mask, 0, sizeof mask);
+    mask['c' >> 5] |= 1u << ('c' & 31);
+    mask['Z' >> 5] |= 1u << ('Z' & 31);
+    for (size_t i = 0; i < sizeof req / sizeof req[0]; i++) {
+        uint32_t st;
+        /* an extended read: unechoed, unfiltered, 4 s, ending on the
+         * answer's final character (TRM$_TERM takes a full 256-bit mask) */
+        struct ovmx_trm_item it[3];
+
+        (void)td;
+        (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                       (void *)req[i], (uint32_t)strlen(req[i]), 0, 0, 0, 0);
+        memset(it, 0, sizeof it);
+        it[0].code = TRM$_MODIFIERS;
+        it[0].val = TRM$M_TM_NOECHO | TRM$M_TM_NOFILTR | TRM$M_TM_TIMED;
+        it[1].code = TRM$_TIMEOUT;
+        it[1].val = 4;
+        it[2].code = TRM$_TERM;
+        it[2].len = (unsigned short)sizeof mask;
+        it[2].val = (uintptr_t)mask;
+        memset(iosb, 0, sizeof iosb);
+        st = sys$qiow(0, dcl_tt_chan, IO$_READVBLK | IO$M_EXTEND, iosb, NULL, 0,
+                      reply, (uint32_t)(replysz - 2), 0, 0, (uintptr_t)it,
+                      (uint32_t)sizeof it);
+        if (st & 1)
+            st = iosb[0];
+        if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN)
+            return DCL_TT_NODRIVER;
+        /* only a terminated answer counts: what timed out unanswered --
+         * type-ahead included -- is consumed and dropped, as on VMS
+         * (keystroke TA.LOGIN W: the VAX's SYLOGIN inquiry eats it) */
+        if ((st & 1) && iosb[3]) {
+            size_t n = iosb[1] < replysz - 2 ? iosb[1] : replysz - 2;
+            reply[n++] = (char)iosb[2];       /* the final character */
+            reply[n] = '\0';
+            return (int)n;
+        }
+    }
+    reply[0] = '\0';
+    return 0;
+}
+
+/*
  * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT
  * from an interactive terminal: through the terminal driver when stdin is
  * that terminal, else (a pipe, a file, or no driver) the plain stream. 0 with

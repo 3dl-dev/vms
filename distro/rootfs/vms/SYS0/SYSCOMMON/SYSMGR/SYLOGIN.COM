@@ -18,5 +18,10 @@ $!
 $! Turn on the processing of <Control/T>, as VMS's site template does (the
 $! VAX V7.3 node's SYS$MANAGER:SYLOGIN.COM, keystroke probe Q.CTRLT; rd
 $! vms-bd71). CTRL/T then shows a one-line status at an interactive terminal.
+$! Identify the terminal, as VMS's site template does: on an interactive login
+$! SET TERMINAL/INQUIRE asks the terminal what it is (a terminal that does not
+$! answer is left as it is, with %SET-W-NOTSET). VAX V7.3 keystroke
+$! LOGIN.BANNER P; rd vms-bd71.
+$ IF F$MODE() .EQS. "INTERACTIVE" THEN SET TERMINAL/INQUIRE
 $ IF F$MODE() .EQS. "INTERACTIVE" THEN SET CONTROL=T
 $ EXIT

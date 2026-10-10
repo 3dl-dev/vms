@@ -435,6 +435,8 @@ static int cmd_set_terminal(struct dcl_command *cmd)
          * (IO$_SETCHAR; rd vms-d900). */
         if (!known && strcasecmp(qname, "PERMANENT") == 0)
             known = 1;
+        if (!known && strcasecmp(qname, "INQUIRE") == 0)
+            known = 1;
         if (!known) {
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
@@ -500,6 +502,42 @@ static int cmd_set_terminal(struct dcl_command *cmd)
             return SS$_BADPARAM;
         }
         changed = 1;
+    }
+
+    /*
+     * /INQUIRE (rd vms-bd71): ask the terminal what it is and set the device
+     * type from its answer. A terminal that does not answer (the console of a
+     * VAX lab node; OVMX's serial console) leaves everything as it was, and
+     * SET says so the way the VAX V7.3 console does (keystroke LOGIN.BANNER P):
+     *     %SET-W-NOTSET, error modifying OPA0:
+     *     -SET-I-UNKTERM, unknown terminal type
+     */
+    if (dcl_has_qualifier(cmd, "INQUIRE")) {
+        char rep[64];
+        int rn = dcl_tt_inquire(rep, sizeof rep);
+        const char *dt = NULL;
+        if (rn > 0) {
+            const char *q = strchr(rep, '?');
+            int ps = q ? atoi(q + 1) : -1;
+            if (rep[rn - 1] == 'Z')            dt = "VT52";
+            else if (ps == 1 || ps == 2 || ps == 6) dt = "VT100";
+            else if (ps == 62)                 dt = "VT200_SERIES";
+            else if (ps == 63)                 dt = "VT300_SERIES";
+            else if (ps == 64)                 dt = "VT400_SERIES";
+            else if (ps >= 65)                 dt = "VT500_SERIES";
+        }
+        if (dt) {
+            snprintf(term->device_type, sizeof(term->device_type), "%s", dt);
+            changed = 1;
+        } else if (rn >= 0) {
+            struct vms_procinfo pi;
+            char dev[64] = "TT:";
+            memset(&pi, 0, sizeof pi);
+            if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0])
+                snprintf(dev, sizeof dev, "%s", pi.terminal[0] == '_' ? pi.terminal + 1 : pi.terminal);
+            dcl_error("SET", 0, "NOTSET", "error modifying %s", dev);
+            fprintf(stderr, "-SET-I-UNKTERM, unknown terminal type\n");
+        }
     }
 
     /* /DEVICE_TYPE=type */

@@ -2137,6 +2137,10 @@ struct vms_tt_write_args {
  * before them, a carriage return after (IO$_WRITEVBLK with P4 carriage control
  * " ", single space) */
 #define VMS_TT_WR_RECORD      0x1u
+/* IO$M_NOFORMAT: the bytes go out uninterpreted and the driver's idea of the
+ * cursor position is left as it was (rd vms-457: the VAX V7.3 console after
+ * DIRECTORY/PAGE's pager, keystroke PG.DIR C1) */
+#define VMS_TT_WR_NOFORMAT    0x2u
 
 #define VMS_TT_MODE_PASSALL   0x1u     /* IO$_SETMODE P2 = IO$K_TT_PASSALL */
 struct vms_tt_mode_args {

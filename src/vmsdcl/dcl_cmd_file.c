@@ -1172,7 +1172,27 @@ static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
     return 1;
 }
 
+static int cmd_directory_list(struct dcl_command *cmd);
+
 int cmd_directory(struct dcl_command *cmd)
+{
+    const struct dcl_qualifier *pq = NULL;
+    for (int i = 0; i < cmd->qualifier_count; i++)
+        if (strcasecmp(cmd->qualifiers[i].name, "PAGE") == 0)
+            pq = &cmd->qualifiers[i];
+    if (pq && !pq->negated) {
+        struct dcl_pager pg;
+        struct dcl_context *ctx = dcl_get_context();
+        if (dcl_page_begin(&pg)) {
+            int st = cmd_directory_list(cmd);
+            dcl_page_end(&pg, ctx ? ctx->terminal.page : 24);
+            return st;
+        }
+    }
+    return cmd_directory_list(cmd);
+}
+
+static int cmd_directory_list(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 

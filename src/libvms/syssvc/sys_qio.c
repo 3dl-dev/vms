@@ -1487,6 +1487,8 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
          * no carriage control, the bytes go as they are. */
         int record = ((p4 & 0xFF) == 0x20) && !(func & IO$M_NOFORMAT);
         uint32_t st = (p1 && p2) ? (record ? vms_kif_tt_write_record(ec, p1, p2)
+                                    : (func & IO$M_NOFORMAT)
+                                           ? vms_kif_tt_write_noformat(ec, p1, p2)
                                            : vms_kif_tt_write(ec, p1, p2))
                                  : SS$_NORMAL;
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }

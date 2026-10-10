@@ -135,6 +135,8 @@ static const struct dcl_qual_def q_directory[] = {
                                                       NULL, NULL },
     { "TRAILING",    CDU_VT_NONE,    CDU_Q_NEGATABLE, NULL, NULL },
     { "COLUMNS",     CDU_VT_VALUE,   0,               NULL, NULL },
+    /* /PAGE: a screen at a time (rd vms-457; keystroke PG.DIR) */
+    { "PAGE",        CDU_VT_VALUE,   CDU_Q_NEGATABLE, NULL, NULL },
     /* vms-7543 coverage additions -- each honoured by cmd_directory():
      *   /PROTECTION  display the file protection column (VMS DCL Dictionary:
      *                DIRECTORY /PROTECTION). Already rendered under /FULL; now

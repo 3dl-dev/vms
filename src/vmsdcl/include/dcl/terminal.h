@@ -128,6 +128,12 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
                     char *buf, size_t bufsz, uint16_t *term_out);
 const char *dcl_recall_get(int back);
 int dcl_tt_inquire(char *reply, size_t replysz);
+
+/* /PAGE: gather a command's output, then show it a screen at a time (rd
+ * vms-457). begin returns 0 when the output is not a terminal (no pager). */
+struct dcl_pager { FILE *tmp; int save; };
+int  dcl_page_begin(struct dcl_pager *pg);
+void dcl_page_end(struct dcl_pager *pg, int page_len);
 int dcl_recall_size(void);
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
                 uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out);

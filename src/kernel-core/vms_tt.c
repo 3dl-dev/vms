@@ -1347,9 +1347,10 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 }
 
 /*
- * vms_tt_write - output through the class driver. `cooked`: the bytes are a
+ * vms_tt_write - output through the class driver. `cooked` 1: the bytes are a
  * program's records, '\n'-terminated (a writer arriving on the port's own
- * write path); otherwise they are written as they are ($QIO).
+ * write path); 0: written as they are ($QIO); 2: written as they are without
+ * moving the driver's idea of the cursor (IO$M_NOFORMAT).
  */
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
@@ -1380,7 +1381,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		while (i < n && k < sizeof(chunk) - 4) {
 			uint8_t c = buf[i];
 
-			if (cooked) {
+			if (cooked == 1) {
 				if (!tt->rec_open) {
 					uint32_t o0 = tt->olen;
 
@@ -1404,7 +1405,8 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 				}
 			}
 			chunk[k++] = c;
-			tt_track(tt, c);
+			if (cooked != 2)
+				tt_track(tt, c);
 			i++;
 		}
 		exec_unlock(&tt->lock);
@@ -1657,7 +1659,9 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 		}
 		/* a record (VMS_TT_WR_RECORD): the cooked path's new line before
 		 * and carriage return after; the text itself carries no '\n' */
-		if (vms_tt_write(tt, chunk, k, (a.flags & VMS_TT_WR_RECORD) != 0)) {
+		if (vms_tt_write(tt, chunk, k,
+				 (a.flags & VMS_TT_WR_RECORD) ? 1 :
+				 (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 0)) {
 			a.status = SS__ABORT;
 			break;
 		}

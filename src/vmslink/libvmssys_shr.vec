@@ -316,3 +316,4 @@ vms_kif_tt_write_record=PROCEDURE
 vms_kif_tt_oobast=PROCEDURE
 # Broadcast to a terminal through its class driver (rd vms-53a). APPENDED.
 vms_kif_tt_brkthru=PROCEDURE
+vms_kif_tt_write_noformat=PROCEDURE

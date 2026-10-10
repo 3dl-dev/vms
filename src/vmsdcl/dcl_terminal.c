@@ -275,6 +275,103 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
 }
 
 /*
+ * The /PAGE pager (rd vms-457), as DIRECTORY/PAGE drives the VAX V7.3 console
+ * (keystroke PG.DIR): the command's output is gathered, then shown a screen
+ * at a time. Output that fills the screen shows the page length less one
+ * line, then the status line
+ *     " RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit"
+ * at the start of the last line, and waits, unechoed, for a key: RETURN or
+ * SPACE shows the next screen, CTRL/Z (or CTRL/Y) ends it. The last screen is
+ * filled out to the page length with empty lines. Everything goes out
+ * IO$M_NOFORMAT, so the terminal driver's idea of the cursor is the one it
+ * had before the pager ran (PG.DIR C1: DCL's next prompt follows the
+ * unechoed RETURN with no new line of its own).
+ */
+static void pg_raw(const char *b, size_t n)
+{
+    uint16_t iosb[4];
+    if (n)
+        (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_NOFORMAT, iosb,
+                       NULL, 0, (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
+int dcl_page_begin(struct dcl_pager *pg)
+{
+    memset(pg, 0, sizeof *pg);
+    pg->save = -1;
+    if (!isatty(STDOUT_FILENO) || !dcl_tt_assign())
+        return 0;                       /* not a terminal: no pager */
+    fflush(stdout);
+    pg->tmp = tmpfile();
+    if (!pg->tmp)
+        return 0;
+    pg->save = dup(STDOUT_FILENO);
+    if (pg->save < 0 || dup2(fileno(pg->tmp), STDOUT_FILENO) < 0) {
+        if (pg->save >= 0) close(pg->save);
+        fclose(pg->tmp);
+        pg->tmp = NULL;
+        pg->save = -1;
+        return 0;
+    }
+    return 1;
+}
+
+void dcl_page_end(struct dcl_pager *pg, int page_len)
+{
+    static const char status[] =
+        "\r RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit";
+    char line[4096];
+    long nlines = 0, shown = 0;
+    int body;
+
+    if (!pg->tmp)
+        return;
+    fflush(stdout);
+    dup2(pg->save, STDOUT_FILENO);
+    close(pg->save);
+    pg->save = -1;
+
+    rewind(pg->tmp);
+    while (fgets(line, sizeof line, pg->tmp))
+        if (strchr(line, '\n')) nlines++;
+    if (page_len < 3)
+        page_len = 24;
+    body = page_len - 1;
+    rewind(pg->tmp);
+
+    while (fgets(line, sizeof line, pg->tmp)) {
+        size_t l = strlen(line);
+        if (l && line[l - 1] == '\n') line[--l] = '\0';
+        line[l++] = '\r';
+        line[l++] = '\n';
+        pg_raw(line, l);
+        shown++;
+        if (shown % page_len == body && nlines - shown > 0) {
+            char k[2];
+            uint16_t t = 0;
+            int r;
+            pg_raw(status, sizeof status - 1);
+            r = dcl_tt_read(NULL, 0, k, sizeof k,
+                            IO$M_NOECHO | IO$M_TRMNOECHO, 0, &t);
+            if (r == DCL_TT_EOF || r == DCL_TT_INTR || r == DCL_TT_GONE ||
+                t == 0x1A || t == 0x19) {
+                fclose(pg->tmp);
+                pg->tmp = NULL;
+                return;
+            }
+            shown++;                    /* the status line's row */
+        }
+    }
+    /* the last screen, filled out with empty lines */
+    while (shown % page_len != 0) {
+        pg_raw("\r\n", 2);
+        shown++;
+    }
+    fclose(pg->tmp);
+    pg->tmp = NULL;
+}
+
+/*
  * dcl_tt_inquire - SET TERMINAL/INQUIRE's exchange with the terminal (rd
  * vms-bd71). The identification requests go out raw, one at a time -- DA
  * (ESC [ c), then ST + the VT52 identify (ESC \ ESC Z), then DA with a zero

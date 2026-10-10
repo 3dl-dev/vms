@@ -182,9 +182,16 @@ static void check(int cond, const char *name)
  * subject is this process's own [gid,uid] UIC -- the mapping the executive
  * makes -- with no privileges and no rights, all three given as CHP$_UIC,
  * CHP$_PRIV and CHP$_RIGHTS so that no executive is needed on the host. */
+/* The subject UIC a synthesized child checks as (rd vms-ac48): the substrate
+ * uid/gid no longer ARE the UIC -- the executive holds it -- so the child
+ * names its synthesized [gid,uid] here, explicitly, as CHP$_UIC. 0 = this
+ * process's own executive UIC. */
+static uint32_t g_subject_uic;
+
 static uint32_t chkpro(uint32_t owner_uic, uint16_t prot, uint16_t access)
 {
-    uint32_t acc = access, own = owner_uic, prt = prot, uic = vms$get_uic();
+    uint32_t acc = access, own = owner_uic, prt = prot,
+             uic = g_subject_uic ? g_subject_uic : vms$get_uic();
     uint32_t priv[2] = { 0, 0 };
     struct { uint16_t len, code; void *buf; uint16_t *ret; } it[] = {
         { 4, 1 /* CHP$_ACCESS */, &acc, 0 }, { 4, 12 /* CHP$_OWNER */, &own, 0 },
@@ -260,6 +267,7 @@ static int fork_and_chkpro_as(int (*synthesize)(gid_t, uid_t),
 
         if (!synthesize(syn_gid, syn_uid)) _exit(97);
         if (getuid() != syn_uid || getgid() != syn_gid) _exit(98);
+        g_subject_uic = ((uint32_t)(syn_gid & 0xFFFFu) << 16) | (uint32_t)(syn_uid & 0xFFFFu);
 
         uint32_t status = chkpro(owner_uic, prot, access);
         if (write(pipefd[1], &status, sizeof(status)) != (ssize_t)sizeof(status))

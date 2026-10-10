@@ -751,6 +751,7 @@ struct vms_proc {
     uint8_t             current_mode;   /* PSL_C_KERNEL..PSL_C_USER */
     uint64_t            cur_privs;      /* current (temporary) privileges */
     uint64_t            perm_privs;     /* permanent privileges */
+    uint32_t            subst_uid;      /* substrate uid the executive gave it, 0 = none (vms-ac48) */
     spinlock_t          mode_lock;
 
     /*
@@ -1287,6 +1288,8 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg);
  * VMS_IOCTL_IMAGE_RUNDOWN comment for why this is not just SETMODE twice. */
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);

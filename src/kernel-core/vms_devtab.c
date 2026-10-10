@@ -1660,22 +1660,14 @@ uint32_t vms_devtab_tt_attach(const char *devnam, struct vms_tt *tt,
 }
 
 /*
- * The caller's UIC, from its host-task credentials.
- *
- * The [group,member] -> UIC packing is the facility's own; only the raw
- * uid/gid read crosses the kernel-backend seam (exec_current_gid/uid, the real
- * not-effective id, mapped into the host's initial id namespace -- Linux
- * from_kgid(&init_user_ns, current_gid()) / from_kuid(&init_user_ns,
- * current_uid())).
- *
- * NOT ORACLE-PINNED, and recorded as such in vms-d0b's findings: it is
- * OVMX's own mapping and no test asserts it. It will have to agree with
- * whatever replaces the VMS_UIC_* environment facade (vms-2b8).
+ * The caller's UIC: the executive's own, from its PCB (rd vms-ac48). A
+ * process's substrate uid/gid carry no VMS meaning -- the executive gives each
+ * VMS process its own from a dedicated range -- so the UIC is never read
+ * from them.
  */
-static uint32_t caller_uic(void)
+static uint32_t caller_uic(const struct vms_proc *proc)
 {
-    return ((exec_current_gid() & 0xFFFFu) << 16) |
-            (exec_current_uid() & 0xFFFFu);
+    return proc->uic;
 }
 
 /* Caller holds dev->lock. Does `pid` still hold a channel to this device? */
@@ -2019,7 +2011,7 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
     if (!dev->shareable && dev->owner_linux_pid == 0) {
         dev->owner_pid = proc->vms_pid;
         dev->owner_linux_pid = proc->linux_pid;
-        dev->owner_uic = caller_uic();
+        dev->owner_uic = caller_uic(proc);
     }
     exec_unlock(&dev->lock);
     exec_unlock(&vms_device_list_lock);
@@ -2162,7 +2154,7 @@ long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
         dev->allocated = 1;
         dev->owner_pid = proc->vms_pid;
         dev->owner_linux_pid = proc->linux_pid;
-        dev->owner_uic = caller_uic();
+        dev->owner_uic = caller_uic(proc);
         dev->refcnt++;
         args.status = SS__NORMAL;
     }

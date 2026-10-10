@@ -339,6 +339,15 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
 void ovmx_boot_power_off(void)
 {
     sync();
+    /* Not substrate root (rd vms-137e): the executive powers off for a caller
+     * holding CMKRNL. */
+    if (geteuid() != 0)
+        (void)vms_kif_power_off();
     reboot(RB_POWER_OFF);
     /* Only reached without CAP_SYS_BOOT; the caller then _exit()s. */
+}
+
+void ovmx_boot_stop_console_log_bridge(void)
+{
+    opcom_kmsg_stop();
 }

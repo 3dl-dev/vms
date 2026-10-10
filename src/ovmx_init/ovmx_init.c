@@ -2005,6 +2005,24 @@ int main(void)
     print_stdrv_begun();
     run_startup();
 
+    /*
+     * LEAVE SUBSTRATE ROOT (rd vms-137e, epic vms-8e6). Startup is complete;
+     * what remains for PID 1 is reaping and, on a fatal condition, powering
+     * off -- which the executive does for it now (VMS_IOCTL_POWER, CMKRNL on
+     * its PCB), not the substrate's CAP_SYS_BOOT. The kmsg reader thread is
+     * ended first: the executive changes identity only for a single-threaded
+     * process, so nothing is left running as root. A PID 1 that cannot leave
+     * root halts rather than stay root.
+     */
+    ovmx_boot_stop_console_log_bridge();
+    {
+        uint32_t subst = 0;
+        if (!(vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst) & 1) || subst == 0 ||
+            !(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1) ||
+            getuid() != (uid_t)subst || geteuid() != (uid_t)subst)
+            ovmx_exec_halt("PID 1 could not leave substrate root", "rd vms-137e");
+    }
+
     /* Step 4: the boot banner already printed (vms-1fb) -- back in
      * bare_metal_init()/the executive gate above, right after SYSBOOT handed
      * over, well before this point. This call is the same idempotent

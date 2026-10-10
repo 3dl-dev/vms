@@ -53,6 +53,7 @@
 #include <linux/timekeeping.h>    /* ktime_get_boottime_ns, ktime_get_real_ts64 */
 /* vms-31b (exec_current_uid/gid + block-device resolution) backing headers. */
 #include <linux/cred.h>           /* current_uid, current_gid */
+#include <linux/reboot.h>         /* kernel_power_off (exec_power_off, vms-137e) */
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev, bdev_open_by_dev/bdev_file_open_by_dev */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
@@ -277,6 +278,9 @@ typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
 
+/* exec_power_off (rd vms-137e): the kernel's own power-off. */
+static inline void exec_power_off(void) { kernel_power_off(); }
+
 /* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): make
  * `id` the CURRENT task's real/effective/saved/fs uid and gid, with no
  * supplementary groups and no capabilities. The executive does it, so the
@@ -290,6 +294,13 @@ static inline int exec_become_substrate_id(uint32_t id)
 
 	if (!new)
 		return -ENOMEM;
+	/* Linux credentials are per thread: changing only this one would leave
+	 * the process's other threads as they were (perhaps root). So only a
+	 * single-threaded process may change identity. */
+	if (!thread_group_empty(current)) {
+		abort_creds(new);
+		return -EBUSY;
+	}
 	if (!uid_valid(u) || !gid_valid(g)) {
 		abort_creds(new);
 		return -EINVAL;

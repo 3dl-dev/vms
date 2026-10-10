@@ -3769,6 +3769,16 @@ struct vms_substrate_id_args {
     uint32_t reserved;
 };
 #define VMS_IOCTL_SUBSTRATE_ID _IOWR(VMS_IOC_MAGIC, 0xB1, struct vms_substrate_id_args)
+
+/* Power the system off (rd vms-137e): the startup process's halt, as an
+ * executive service gated by CMKRNL on the caller's PCB instead of the
+ * substrate's CAP_SYS_BOOT. Does not return when granted. */
+struct vms_power_args {
+    uint32_t op;          /* VMS_POWER_OP_OFF */
+    uint32_t status;      /* return: SS$_NOPRIV / SS$_BADPARAM */
+};
+#define VMS_POWER_OP_OFF  1
+#define VMS_IOCTL_POWER _IOWR(VMS_IOC_MAGIC, 0xB2, struct vms_power_args)
 _Static_assert(sizeof(struct vms_substrate_id_args) == 16,
                "vms_substrate_id_args layout changed: VMS_IOCTL_SUBSTRATE_ID ABI break");
 

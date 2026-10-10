@@ -614,8 +614,16 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
 void ovmx_boot_power_off(void)
 {
     sync();
+    if (geteuid() != 0)
+        (void)vms_kif_power_off();   /* not root (rd vms-137e): the executive does it */
     reboot(RB_HALT | RB_POWERDOWN, NULL);
     /* Only reached without privilege to power off; the caller then _exit()s. */
 }
 
 #endif /* __NetBSD__ */
+
+void ovmx_boot_stop_console_log_bridge(void)
+{
+    /* NetBSD credentials are per process: the klog reader leaves root with
+     * PID 1 (rd vms-137e). Nothing to stop. */
+}

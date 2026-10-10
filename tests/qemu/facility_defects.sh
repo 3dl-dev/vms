@@ -591,6 +591,7 @@ acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
 subst-uid-may-be-zero
 subst-become-ids-not-set
+power-off-cmkrnl-not-checked
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -1540,6 +1541,25 @@ EOF
         why)          echo "exec_become_substrate_id() sets the task's real/effective/saved/fs uid to the executive-given one. The mutation leaves them alone, so a session LOGINOUT 'dropped' keeps running as substrate root. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 after BECOME the task's real and effective uid and gid are that uid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    power-off-cmkrnl-not-checked)
+        case "$_f" in
+        facility)     echo "the executive powers off only for a CMKRNL caller (vms-137e)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_substrate_id";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "fatal";;
+        why)          echo "vms_ioctl_power() decides CMKRNL on the caller's own PCB before it powers the system off. The mutation lets any caller through, so test_syssvc_substrate_id's ordinary uid-100 child powers the guest off. FATAL by construction: the run ends there, and the control asserts the suites ordered before it ran clean and that the guest never reached FINAL RESULTS.";;
+        require_fail) cat <<'EOF'
+an ordinary process (no CMKRNL) asking the executive to power off is SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8108,6 +8128,8 @@ apply_edit() {
         sed -i 's|^        uint32_t cand = OVMX_SUBST_UID_BASE + (vms_subst_next++ % OVMX_SUBST_UID_SPAN);$|        uint32_t cand = (vms_subst_next++ % OVMX_SUBST_UID_SPAN); /* NEGCTL subst-uid-may-be-zero */|' "$_file";;
     subst-become-ids-not-set)
         sed -i 's|^\tnew->uid = new->euid = new->suid = new->fsuid = u;$|\t(void)u; /* NEGCTL subst-become-ids-not-set */|' "$_file";;
+    power-off-cmkrnl-not-checked)
+        sed -i 's|^    args.status = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);$|    args.status = SS__NORMAL; (void)privs; /* NEGCTL power-off-cmkrnl-not-checked */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)

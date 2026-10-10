@@ -281,6 +281,11 @@ static void opcom_kmsg_append_operator_log(const char *line)
     close(fd);
 }
 
+/* Set by opcom_kmsg_stop(); the reader notices within one poll period. */
+static volatile int opcom_kmsg_stop_flag;
+static pthread_t opcom_kmsg_tid;
+static int opcom_kmsg_running;
+
 static void *opcom_kmsg_thread_main(void *arg)
 {
     int kfd;
@@ -300,14 +305,14 @@ static void *opcom_kmsg_thread_main(void *arg)
     /* NO /dev/console fd here -- this bridge never writes to the console
      * (opcom_kmsg.h's top comment). */
 
-    for (;;) {
+    while (!opcom_kmsg_stop_flag) {
         struct pollfd pfd;
         int pr;
         ssize_t n;
 
         pfd.fd = kfd;
         pfd.events = POLLIN;
-        pr = poll(&pfd, 1, 2000);
+        pr = poll(&pfd, 1, 200);
         if (pr < 0) {
             if (errno == EINTR)
                 continue;
@@ -352,12 +357,29 @@ void opcom_kmsg_start(void)
     pthread_attr_t attr;
 
     pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     /* Best-effort: a bridge that fails to start must never block or fail
      * boot -- Rule 9's fail-honest gate is /dev/vms (executive_attach()),
-     * not this operator-visibility aid. */
-    (void)pthread_create(&tid, &attr, opcom_kmsg_thread_main, NULL);
+     * not this operator-visibility aid. Joinable, so opcom_kmsg_stop() can
+     * wait for it (rd vms-137e). */
+    opcom_kmsg_running = pthread_create(&tid, &attr, opcom_kmsg_thread_main, NULL) == 0;
+    opcom_kmsg_tid = tid;
     pthread_attr_destroy(&attr);
+}
+
+/*
+ * opcom_kmsg_stop - end the reader thread and wait for it (rd vms-137e). PID 1
+ * calls it once startup is complete, before it leaves substrate root: the
+ * executive changes a process's substrate identity only when it is single-
+ * threaded, so no thread is left behind as root. The spool it fed has served
+ * its one reader (PROVISION.EXE's seed of OPERATOR.LOG) by then.
+ */
+void opcom_kmsg_stop(void)
+{
+    if (!opcom_kmsg_running)
+        return;
+    opcom_kmsg_stop_flag = 1;
+    (void)pthread_join(opcom_kmsg_tid, NULL);
+    opcom_kmsg_running = 0;
 }
 
 /*

@@ -89,6 +89,7 @@
                               * vms_acct_rss_netbsd.c, rd vms-601). */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/uio.h>       /* UIO_SYSSPACE (exec_become_substrate_id, vms-ac48) */
+#include <sys/reboot.h>    /* kern_reboot, RB_HALT, RB_POWERDOWN (exec_power_off, vms-137e) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
@@ -463,6 +464,9 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  * section is then honestly omitted, never a fabricated 0.
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
+
+/* exec_power_off (rd vms-137e): the kernel's own halt + power-down. */
+static __inline void exec_power_off(void) { kern_reboot(RB_HALT | RB_POWERDOWN, NULL); }
 
 /* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): set the
  * current process's real/effective/saved uid and gid to `id`, no groups. The

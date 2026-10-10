@@ -312,3 +312,5 @@ vms_kif_tt_attach=PROCEDURE
 vms_kif_tt_sense=PROCEDURE
 # The executive-given substrate identity (rd vms-ac48). APPENDED.
 vms_kif_substrate_id=PROCEDURE
+# Executive power-off for an unprivileged startup (rd vms-137e). APPENDED.
+vms_kif_power_off=PROCEDURE

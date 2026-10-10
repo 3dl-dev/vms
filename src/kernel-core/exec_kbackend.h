@@ -241,6 +241,10 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
+ *   void exec_power_off(void)
+ *        power the system off (rd vms-137e); does not return. Linux:
+ *        kernel_power_off. NetBSD: kern_reboot(RB_HALT|RB_POWERDOWN).
+ *
  *   int  exec_become_substrate_id(uint32_t id)
  *        make `id` the CURRENT task's real/effective/saved uid and gid, with
  *        no supplementary groups and no capabilities (rd vms-ac48). Done by the

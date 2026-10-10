@@ -996,6 +996,7 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_power(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid);
 
 /* ----------------------------------------------------------------

@@ -125,6 +125,11 @@ struct vms_substrate_id_args {
 	uint32_t uid;
 	uint32_t reserved;
 };
+struct vms_power_args {
+	uint32_t op;
+	uint32_t status;
+};
+#define VMS_POWER_OP_OFF  1
 
 /* ================================================================
  * Request numbers -- SAME NR bytes, structs, magic and direction class as
@@ -138,5 +143,6 @@ struct vms_substrate_id_args {
 #define VMS_IOCTL_ENTER_IMAGE    _IOWR(VMS_ACCESS_IOC_MAGIC, 0x66, struct vms_modexfer_args)
 #define VMS_IOCTL_IMAGE_RUNDOWN  _IOWR(VMS_ACCESS_IOC_MAGIC, 0x67, struct vms_modexfer_args)
 #define VMS_IOCTL_SUBSTRATE_ID   _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB1, struct vms_substrate_id_args)
+#define VMS_IOCTL_POWER          _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB2, struct vms_power_args)
 
 #endif /* _VMS_ACCESS_NB_H */

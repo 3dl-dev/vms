@@ -1021,6 +1021,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ENTER_IMAGE:
 	case VMS_IOCTL_IMAGE_RUNDOWN:
 	case VMS_IOCTL_SUBSTRATE_ID:   /* rd vms-ac48 */
+	case VMS_IOCTL_POWER:          /* rd vms-137e */
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1047,6 +1048,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_image_rundown(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_SUBSTRATE_ID:
 			r = vms_ioctl_substrate_id(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_POWER:
+			r = vms_ioctl_power(proc, (unsigned long)uarg);         break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

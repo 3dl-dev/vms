@@ -58,6 +58,7 @@
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
 #include <linux/file.h>           /* fget, fput, flush_delayed_fput (exec_kfe_stage, vms-220) */
 #include <linux/workqueue.h>      /* the INSTALL copy worker (vms-220) */
+#include <linux/namei.h>          /* kern_path, lookup_one_len (exec_kfe_unlink) */
 #include <linux/fs.h>             /* file_inode */
 #include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
 #include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
@@ -363,6 +364,63 @@ static inline int exec_kfe_stage(int fd, const char *dst, void **pin)
 		*pin = k.pin;
 	return k.err;
 }
+/* exec_kfe_unlink (rd vms-220): delete the executive's copy `path` in its own
+ * directory, as the kernel (on a kernel worker, so with kernel credentials). */
+struct exec_kfe_unlink_work {
+	struct work_struct work;
+	const char *path;
+	int err;
+};
+
+static inline void exec_kfe_unlink_worker(struct work_struct *w)
+{
+	struct exec_kfe_unlink_work *k = container_of(w, struct exec_kfe_unlink_work, work);
+	const char *slash = strrchr(k->path, '/');
+	char dir[256];
+	struct path parent;
+	struct dentry *d;
+	size_t dl;
+	int e;
+
+	if (!slash || slash == k->path || (dl = (size_t)(slash - k->path)) >= sizeof dir) {
+		k->err = -EINVAL;
+		return;
+	}
+	memcpy(dir, k->path, dl);
+	dir[dl] = '\0';
+	e = kern_path(dir, LOOKUP_DIRECTORY, &parent);
+	if (e) {
+		k->err = e;
+		return;
+	}
+	inode_lock_nested(d_inode(parent.dentry), I_MUTEX_PARENT);
+	d = lookup_one_len(slash + 1, parent.dentry, strlen(slash + 1));
+	if (IS_ERR(d)) {
+		e = PTR_ERR(d);
+	} else {
+		e = d_really_is_positive(d)
+		    ? vfs_unlink(mnt_idmap(parent.mnt), d_inode(parent.dentry), d, NULL)
+		    : -ENOENT;
+		dput(d);
+	}
+	inode_unlock(d_inode(parent.dentry));
+	path_put(&parent);
+	k->err = e;
+}
+
+static inline int exec_kfe_unlink(const char *path)
+{
+	struct exec_kfe_unlink_work k;
+
+	memset(&k, 0, sizeof k);
+	k.path = path;
+	INIT_WORK_ONSTACK(&k.work, exec_kfe_unlink_worker);
+	queue_work(system_unbound_wq, &k.work);
+	flush_work(&k.work);
+	destroy_work_on_stack(&k.work);
+	return k.err;
+}
+
 static inline void exec_file_unpin(void *pin)
 {
 	struct file *f = pin;

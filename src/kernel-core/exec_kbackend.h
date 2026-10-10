@@ -243,6 +243,7 @@
  *
  *   int  exec_kfe_stage(int fd, const char *dst, void **pin)
  *   void exec_file_unpin(void *pin)
+ *   int  exec_kfe_unlink(const char *path)
  *   int  exec_file_is(void *pin, int fd)
  *        INSTALL (vms-220): the executive's OWN copy of an installed image.
  *        The file the CURRENT task's `fd` names is copied, as the kernel, to

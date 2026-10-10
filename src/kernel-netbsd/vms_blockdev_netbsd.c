@@ -71,6 +71,7 @@
 #include <sys/kmem.h>			/* kmem_alloc (ovmx_kfe_stage) */
 #include <sys/lwp.h>			/* lwp0: the kernel credential */
 #include <sys/uio.h>			/* UIO_READ / UIO_SYSSPACE */
+#include <sys/vfs_syscalls.h>		/* do_sys_unlink (ovmx_kfe_unlink) */
 
 /*
  * QUARANTINE (the vms_lnm_arena_netbsd.c precedent). This TU pulls the heavy
@@ -673,6 +674,21 @@ ovmx_kfe_stage(int fd, const char *dst, void **pin)
 	curlwp->l_cred = save;
 	kmem_free(buf, OVMX_KFE_CHUNK);
 	vrele(svp);
+	return error;
+}
+
+/* ovmx_kfe_unlink (rd vms-220): delete the executive's copy `path`, as the
+ * kernel (lwp0's credential, as ovmx_kfe_stage creates it). */
+int ovmx_kfe_unlink(const char *path);
+int
+ovmx_kfe_unlink(const char *path)
+{
+	kauth_cred_t save = curlwp->l_cred;
+	int error;
+
+	curlwp->l_cred = lwp0.l_cred;
+	error = do_sys_unlink(path, UIO_SYSSPACE);
+	curlwp->l_cred = save;
 	return error;
 }
 

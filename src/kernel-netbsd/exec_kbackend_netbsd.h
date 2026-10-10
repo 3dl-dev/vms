@@ -468,6 +468,8 @@ extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
  * vms_blockdev_netbsd.c (vnode TU): the executive's copy, vn_marktext'd. */
 extern int ovmx_kfe_stage(int fd, const char *dst, void **pin);
 extern void ovmx_file_unpin(void *pin);
+extern int ovmx_kfe_unlink(const char *path);
+static __inline int exec_kfe_unlink(const char *path) { int e = ovmx_kfe_unlink(path); return e ? -e : 0; }
 extern int ovmx_file_is(void *pin, int fd);
 static __inline int
 exec_kfe_stage(int fd, const char *dst, void **pin)

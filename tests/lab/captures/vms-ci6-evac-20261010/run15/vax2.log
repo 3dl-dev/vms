@@ -1,0 +1,1235 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-1> attach nvr /lab/k8s-labs/vaxlab-3/vax2/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-18> attach rq0 /lab/k8s-labs/vaxlab-3/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/vaxlab-3/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-19> attach rq1 /lab/k8s-labs/vaxlab-3/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/vaxlab-3/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-20> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-21> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/vaxlab-3/vax2/local.ini-2> at xq tap:tap2
+%SIM-INFO: Eth: opened OS device tap2
+/lab/k8s-labs/vaxlab-3/vax2/local.ini-4> att dz 2002,speed=*32
+%SIM-INFO: Listening on port 2002
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-25> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>^U
+>>>B/R5:10000000 DUA0
+[drv:boot-echo-verified attempt 1 'B/R5:10000000 DUA0']
+
+(BOOT/R5:10000000 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-W-SYSBOOT Can not map SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  now a VAXcluster member -- system VAX2
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  9-OCT-2026 10:48:54.98
+%INSTALL-E-OPENIN, error opening DISK$SYSDSK1:<SYS1.SYSCOMMON.SYSLIB>CXXL$MSG_SHR.EXE; as input
+-RMS-E-FNF, file not found
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20400208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.38  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.38  %%%%%%%%%%%
+Operator status for operator _VAX2$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.38  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX2$OPA0:
+Logfile is VAX2::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;18
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.38  %%%%%%%%%%%
+Operator status for operator VAX2::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;18
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.42  %%%%%%%%%%%
+10:48:53.33 Node VAX2 (csid 00010002) is now a VAXcluster member
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2040020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.67  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.67  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.69  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.69  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.70  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.70  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.71  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.71  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.82  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.82  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.82  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.82  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:48:59.82  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:00.46  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX2.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:00.66  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX2
+Security alarm (SECURITY) and security audit (SECURITY) on VAX2, system id: 1026
+Auditable event:          Audit server starting up
+Event time:                9-OCT-2026 10:49:00.64
+PID:                      20400204        
+Username:                 SYSTEM          
+
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:01.05  %%%%%%%%%%%
+Message from user DECNET on VAX2
+DECnet starting
+
+%RUN-S-PROC_ID, identification of created process is 20400213
+%NCP-I-NOINFO, No information in database
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:01.13  %%%%%%%%%%%
+Message from user DECNET on VAX2
+Error opening permanent proxy database
+
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20400214
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at  9-OCT-2026 10:49:03.71
+%TCPIP-I-NORMAL, timezone information verified
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:03.89  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%RUN-S-PROC_ID, identification of created process is 20400215
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.10  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.26  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.25)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.26  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.25)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.28  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.27)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.29  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.27)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.29  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.28)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.29  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.28)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.30  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.29)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.31  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.29)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%TCPIP-I-SETLOCAL, setting domain and/or local host
+%TCPIP-I-STARTCOMM, starting communication
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.39  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Started
+
+%TCPIP-I-SETPROTP, setting protocol parameters
+%TCPIP-I-DEFINTE, defining interfaces
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.40  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Created INTERnet interface: QE0
+
+%TCPIP-I-STARTNAME, starting name service
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.49  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.48)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.52  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.48)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.53  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.48)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.53  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.52)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.53  %%%%%%%%%%%
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:04.53  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:04.52)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:05.26  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:05.18)
+Message from user SYSTEM on VAX1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:05.49  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:05.47)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server starting up
+Event time:                9-OCT-2026 10:49:05.44
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-I-LOADSERV, loading TCPIP server proxy information
+%TCPIP-I-SERVLOADED, auxiliary server loaded with 0 proxy records
+-TCPIP-I-SERVSKIP, skipped 0 communication proxy records
+-TCPIP-I-SERVTOTAL, total of 0 proxy records read
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:05.88  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:05.88  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%TCPIP-S-STARTDONE, TCPIP$FTP startup completed
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:05.96  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:05.94)
+Message from user DECNET on VAX1
+DECnet starting
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:06.06  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:06.04)
+Message from user DECNET on VAX1
+Error opening permanent proxy database
+
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:06.30  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-S-STARTDONE, TCPIP$TELNET startup completed
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at  9-OCT-2026 10:49:06.41
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+%MOUNT-I-REBUILD, volume was improperly dismounted; rebuild in progress
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:09.56  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:09.47)
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+  SYSTEM       job terminated at  9-OCT-2026 10:49:10.54
+
+  Accounting information:
+  Buffered I/O count:            2729         Peak working set size:    1504
+  Direct I/O count:              2447         Peak page file size:      8712
+  Page faults:                  16440         Mounted volumes:             1
+  Charged CPU time:           0 00:00:02.60   Elapsed time:     0 00:00:15.62
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:10.73  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:10.71)
+Message from user INTERnet on VAX1
+INTERnet Started
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:10.73  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:10.71)
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:10.86  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:10.85)
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:11.00  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:10.98)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1),  9-OCT-2026 10:49:07.78
+Circuit QNA-0
+
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:12.28  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:12.26)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:12.28  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:12.26)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:12.77  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:12.75)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+
+VAX/VMS V7.3      node VAX2
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX2
+    Last interactive login on Friday,  9-OCT-2026 04:26
+    Last non-interactive login on Friday,  9-OCT-2026 01:34[c\Z[0c
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:49:54.77  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:49:55.45)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                9-OCT-2026 10:49:55.44
+PID:                      2020021A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ DEFINE/SYSTEM EVAC$DATA $2$DUA1:[EVAC]
+$ EVACWL :== $$2$DUA1:[EVAC]EVACWL.EXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:50:16.27  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:50:17.00)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                9-OCT-2026 10:50:16.99
+PID:                      2020021B        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:50:35.80  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:50:36.47)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                9-OCT-2026 10:50:36.47
+PID:                      2020021C        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:51:10.34  %%%%%%%%%%%
+10:51:10.34 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:51:10.34  %%%%%%%%%%%
+10:51:10.34 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:51:10.38  %%%%%%%%%%%
+10:51:10.38 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:53:41.92  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:53:42.59)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                9-OCT-2026 10:53:42.59
+PID:                      2020021D        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:54:02.97  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:54:03.64)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                9-OCT-2026 10:54:03.64
+PID:                      2020021E        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:57:19.77  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:57:20.45)
+10:57:20.45 Node VAX1 (csid 00010001) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  lost connection to system OVMXE
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXE          
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:57:19.85  %%%%%%%%%%%
+10:57:19.85 Node VAX2 (csid 00010002) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  removed from VAXcluster system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:57:40.29  %%%%%%%%%%%
+10:57:40.29 Node OVMXE (csid 00010003) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:57:40.29  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:57:40.97)
+10:57:40.97 Node VAX1 (csid 00010001) timed-out lost connection to node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:57:40.29  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:57:40.97)
+10:57:40.97 Node VAX1 (csid 00010001) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 10:57:40.31  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 10:57:40.98)
+10:57:40.97 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ system
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ EVACWL :== $$2$DUA1:[EVAC]EVACWL.EXE
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:00:24.61  %%%%%%%%%%%
+11:00:24.61 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:00:24.61  %%%%%%%%%%%
+11:00:24.61 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:00:24.67  %%%%%%%%%%%
+11:00:24.67 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ SHOW LOGICAL EVAC$DATA
+   "EVAC$DATA" = "$2$DUA1:[EVAC]" (LNM$SYSTEM_TABLE)
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:05:34.29  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 11:05:34.96)
+11:05:34.96 Node VAX1 (csid 00010001) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  lost connection to system OVMXE
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXE          
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:05:34.67  %%%%%%%%%%%
+11:05:34.67 Node VAX2 (csid 00010002) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  removed from VAXcluster system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:05:53.80  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 11:05:54.48)
+11:05:54.48 Node VAX1 (csid 00010001) timed-out lost connection to node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:05:53.80  %%%%%%%%%%%
+11:05:53.80 Node OVMXE (csid 00010004) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:05:53.81  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 11:05:54.48)
+11:05:54.48 Node VAX1 (csid 00010001) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:05:53.82  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 11:05:54.49)
+11:05:54.48 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ SHOW LOGICAL EVAC$DATA
+   "EVAC$DATA" = "$2$DUA1:[EVAC]" (LNM$SYSTEM_TABLE)
+$ SHOW SYMBOL EVACWL
+  EVACWL == "$$2$DUA1:[EVAC]EVACWL.EXE"
+$ SHOW LOGICAL EVAC$DATA
+   "EVAC$DATA" = "$2$DUA1:[EVAC]" (LNM$SYSTEM_TABLE)
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:08:35.19  %%%%%%%%%%%
+11:08:35.19 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:08:35.19  %%%%%%%%%%%
+11:08:35.19 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:08:35.23  %%%%%%%%%%%
+11:08:35.23 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ SPAWN/NOWAIT/PROCESS=EVACVAX2/OUTPUT=SYS$LOGIN:VAX2WL.LOG EVACWL STANDBY
+%DCL-S-SPAWNED, process EVACVAX2 spawned
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=EVAC$WORKLOAD
+Address of RSB:  879BF940  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010005                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      524F5724 43415645   EVAC$WOR  Valblk: 00000000 00000000
+ Length   13   00000044 414F4C4B   KLOAD...          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ Group   001   00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 6D000698  NL 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ 
+%CNXMAN,  lost connection to system OVMXE
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXE          
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:14:11.44  %%%%%%%%%%%
+11:14:11.44 Node VAX2 (csid 00010002) lost connection to node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:14:12.13  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 11:14:12.81)
+11:14:12.81 Node VAX1 (csid 00010001) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  timed-out lost connection to system OVMXE
+$ 
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:14:30.94  %%%%%%%%%%%
+11:14:30.94 Node VAX2 (csid 00010002) timed-out lost connection to node OVMXE
+
+$ 
+%CNXMAN,  removed from VAXcluster system OVMXE
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:14:30.94  %%%%%%%%%%%
+11:14:30.94 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:14:30.94  %%%%%%%%%%%
+11:14:30.94 Node OVMXE (csid 00010005) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 11:14:30.97  %%%%%%%%%%%
+11:14:30.94 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ system
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ DEFINE/SYSTEM EVAC$DATA $2$DUA1:[EVAC]
+%DCL-I-SUPERSEDE, previous value of EVAC$DATA has been superseded
+$ EVACWL :== $$2$DUA1:[EVAC]EVACWL.EXE
+$ SHOW LOGICAL EVAC$DATA
+   "EVAC$DATA" = "$2$DUA1:[EVAC]" (LNM$SYSTEM_TABLE)
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:29:34.70  %%%%%%%%%%%
+13:29:34.70 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:29:34.70  %%%%%%%%%%%
+13:29:34.70 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:29:34.75  %%%%%%%%%%%
+13:29:34.75 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ STOP EVACVAX2
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:32:55.66  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:32:56.29)
+13:32:56.29 Node VAX1 (csid 00010001) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  lost connection to system OVMXE
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXE          
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:32:55.99  %%%%%%%%%%%
+13:32:55.99 Node VAX2 (csid 00010002) lost connection to node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:33:16.16  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:33:16.80)
+13:33:16.80 Node VAX1 (csid 00010001) timed-out lost connection to node OVMXE
+
+%CNXMAN,  removed from VAXcluster system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:33:16.16  %%%%%%%%%%%
+13:33:16.16 Node OVMXE (csid 00010006) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:33:16.16  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:33:16.80)
+13:33:16.80 Node VAX1 (csid 00010001) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:33:16.16  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:33:16.81)
+13:33:16.80 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   9-OCT-2026 13:34:23.00  Uptime  0 02:46:44
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       207    326   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      7      136   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      242   0 00:00:00.07       343    179   
+2040020E AUDIT_SERVER    HIB     10       48   0 00:00:00.00       604    516   
+2040020F JOB_CONTROL     HIB     10       36   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.00       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8      665   0 00:00:00.02       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7      386   0 00:00:00.26      7094    452   
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:35:22.07  %%%%%%%%%%%
+13:35:22.07 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:35:22.07  %%%%%%%%%%%
+13:35:22.07 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:35:22.14  %%%%%%%%%%%
+13:35:22.14 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ SPAWN/NOWAIT/PROCESS=EVACVAX2/OUTPUT=SYS$LOGIN:VAX2WL.LOG EVACWL STANDBY
+%DCL-S-SPAWNED, process EVACVAX2 spawned
+$ TYPE SYS$LOGIN:VAX2WL.LOG
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     2   2
+$ STOP EVACVAX2
+$ COPY $2$DUA1:[EVAC]EVACWL.EXE SYS$SYSROOT:[SYSMGR]EVACWL.EXE
+$ EVACWL :== $SYS$SYSROOT:[SYSMGR]EVACWL.EXE
+$ SPAWN/NOWAIT/PROCESS=EVACVAX2/OUTPUT=SYS$LOGIN:VAX2WL.LOG EVACWL STANDBY
+%SYSTEM-F-DUPLNAM, duplicate name
+$ DISMOUNT $2$DUA1:
+%DISM-W-CANNOTDMT, $2$DUA1: cannot be dismounted
+%DISM-W-USERFILES, 1 user file open on volume
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     2   2
+$ SHOW DEVICE/FILES $2$DUA1:
+
+Files accessed on device $2$DUA1: (VAX2, VAX1) on  9-OCT-2026 13:42:20.21
+
+Process name      PID     File name
+                00000000  [000000]INDEXF.SYS;1
+EVACVAX2        2040021A  [EVAC]EVACWL.EXE;3
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   9-OCT-2026 13:42:26.44  Uptime  0 02:54:47
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.02       212    346   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      7      147   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      251   0 00:00:00.07       343    179   
+2040020E AUDIT_SERVER    HIB     10       48   0 00:00:00.00       604    516   
+2040020F JOB_CONTROL     HIB     10       36   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.00       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8      697   0 00:00:00.02       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7      551   0 00:00:00.26      8083    390   
+2040021A EVACVAX2        RWSCS    6       59   0 00:00:00.00       245    250  S
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ 
+%CNXMAN,  lost connection to system OVMXE
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXE          
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:47:18.99  %%%%%%%%%%%
+13:47:18.99 Node VAX2 (csid 00010002) lost connection to node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:47:19.12  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:47:19.83)
+13:47:19.83 Node VAX1 (csid 00010001) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  removed from VAXcluster system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:47:38.65  %%%%%%%%%%%
+13:47:38.65 Node OVMXE (csid 00010007) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:47:38.66  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:47:39.33)
+13:47:39.33 Node VAX1 (csid 00010001) timed-out lost connection to node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:47:38.67  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:47:39.35)
+13:47:39.33 Node VAX1 (csid 00010001) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 13:47:38.67  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 13:47:39.35)
+13:47:39.33 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ system
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   9-OCT-2026 14:01:35.97  Uptime  0 03:13:57
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       212    346   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      8      167   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      8      272   0 00:00:00.07       343    179   
+2040020E AUDIT_SERVER    HIB     10       48   0 00:00:00.00       604    516   
+2040020F JOB_CONTROL     HIB     10       41   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.00       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8      772   0 00:00:00.05       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7      604   0 00:00:00.26      8337    454   
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     1   2
+$ DIRECTORY SYS$SYSROOT:[SYSMGR]EVACWL.EXE
+
+Directory SYS$SYSROOT:[SYSMGR]
+
+EVACWL.EXE;1        
+
+Total of 1 file.
+$ EVACWL :== $SYS$SYSROOT:[SYSMGR]EVACWL.EXE
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:23:16.02  %%%%%%%%%%%
+14:23:16.02 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:23:16.02  %%%%%%%%%%%
+14:23:16.02 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:23:16.20  %%%%%%%%%%%
+14:23:16.20 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ SPAWN/NOWAIT/PROCESS=EVACVAX2/OUTPUT=SYS$LOGIN:VAX2WL.LOG EVACWL STANDBY
+%DCL-S-SPAWNED, process EVACVAX2 spawned
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   9-OCT-2026 14:27:37.82  Uptime  0 03:39:59
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       212    346   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      7      184   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      281   0 00:00:00.07       343    179   
+2040020E AUDIT_SERVER    HIB     10       48   0 00:00:00.00       604    516   
+2040020F JOB_CONTROL     HIB     10       41   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.04       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8      876   0 00:00:00.05       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7      714   0 00:00:00.26      8903    394   
+2040021B EVACVAX2        LEF      4       57   0 00:00:00.01       245    250  S
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   9-OCT-2026 14:28:35.09  Uptime  0 03:40:56
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       212    346   
+20400207 CONFIGURE       HIB      9       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      7      184   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      281   0 00:00:00.07       343    179   
+2040020E AUDIT_SERVER    HIB     10       48   0 00:00:00.00       604    516   
+2040020F JOB_CONTROL     HIB     10       41   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.04       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8      880   0 00:00:00.05       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7      739   0 00:00:00.26      9005    386   
+2040021B EVACVAX2        LEF      4       57   0 00:00:00.01       245    250  S
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     1   2
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     1   2
+$ DISMOUNT $2$DUA1:
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  (remote mount)                 1
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:33:17.75  %%%%%%%%%%%    (from node VAX1   at  9-OCT-2026 14:33:18.62)
+14:33:18.62 Node VAX1 (csid 00010001) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  lost connection to system OVMXE
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXE          
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:33:18.33  %%%%%%%%%%%
+14:33:18.33 Node VAX2 (csid 00010002) lost connection to node OVMXE
+
+$ 
+%CNXMAN,  timed-out lost connection to system OVMXE
+$ 
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:33:37.83  %%%%%%%%%%%
+14:33:37.83 Node VAX2 (csid 00010002) timed-out lost connection to node OVMXE
+
+$ 
+%CNXMAN,  removed from VAXcluster system OVMXE
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:33:37.83  %%%%%%%%%%%
+14:33:37.83 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:33:37.83  %%%%%%%%%%%
+14:33:37.83 Node OVMXE (csid 00010008) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   9-OCT-2026 14:33:37.83  %%%%%%%%%%%
+14:33:37.83 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Online               0
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     1   2
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ system
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Online               0
+$ MOUNT/CLUSTER $2$DUA1: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+$ DISMOUNT/CLUSTER $2$DUA1:
+$ MOUNT/SYSTEM $2$DUA1: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+$ DISMOUNT $2$DUA1:
+$ 
+$ MOUNT/CLUSTER/NOWRITE $2$DUA2: VAXVMS073
+%MOUNT-I-MOUNTED, VAXVMS073 mounted on _$2$DUA2: (VAX2)
+$ DISMOUNT/CLUSTER $2$DUA2:
+$ MOUNT/CLUSTER/NOWRITE $2$DUA2: VAXVMS073
+%MOUNT-I-MOUNTED, VAXVMS073 mounted on _$2$DUA2: (VAX2)
+$ DISMOUNT/CLUSTER $2$DUA2:
+$ MOUNT/CLUSTER/NOWRITE $2$DUA2: VAXVMS073
+%MOUNT-I-MOUNTED, VAXVMS073 mounted on _$2$DUA2: (VAX2)
+$ DISMOUNT/CLUSTER $2$DUA2:
+$ DISMOUNT/CLUSTER $2$DUA1:
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ system
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2  10-OCT-2026 16:32:45.62  Uptime  1 05:45:06
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     13      121   0 00:00:00.02       328    516   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      8     1217   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      8      377   0 00:00:00.09       343    179   
+2040020E AUDIT_SERVER    HIB     10       64   0 00:00:00.00       636    516   
+2040020F JOB_CONTROL     HIB     10       46   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.24       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8     7136   0 00:00:00.05       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7     1152   0 00:00:00.30     11837    377   
+$ SHOW DEVICE D
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA0:        (VAX2)  Mounted              0  SYSDSK1        1385649   238   2
+$2$DUA1:        (VAX2)  Online               0
+$2$DUA2:        (VAX2)  Online               0
+$2$DUA3:        (VAX2)  Online               0
+$ SHOW LOGICAL EVAC$DATA
+   "EVAC$DATA" = "$2$DUA1:[EVAC]" (LNM$SYSTEM_TABLE)
+$ EVACWL :== $SYS$SYSROOT:[SYSMGR]EVACWL.EXE
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:33:53.60  %%%%%%%%%%%
+16:33:53.60 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:33:53.60  %%%%%%%%%%%
+16:33:53.60 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:33:53.65  %%%%%%%%%%%
+16:33:53.65 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2830365     1   2
+$ SPAWN/NOWAIT/PROCESS=EVACVAX2/OUTPUT=SYS$LOGIN:VAX2WL.LOG EVACWL STANDBY
+%DCL-S-SPAWNED, process EVACVAX2 spawned
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2  10-OCT-2026 16:39:41.32  Uptime  1 05:52:02
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     13      138   0 00:00:00.02       328    516   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       51   0 00:00:00.03       408    516   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      8     1233   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      390   0 00:00:00.09       343    179   
+2040020E AUDIT_SERVER    HIB     10       64   0 00:00:00.00       636    516   
+2040020F JOB_CONTROL     HIB     10       46   0 00:00:00.00       246    405   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.24       818   1028   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.00       351    516   
+20400212 TP_SERVER       HIB      8     7163   0 00:00:00.05       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.01       158    378   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.05       294    237   
+20400216 TCPIP$FTP_1     LEF     10      107   0 00:00:00.17      2141    662  N
+20400218 SYSTEM          CUR      7     1251   0 00:00:00.30     12297    408   
+2040021C EVACVAX2        LEF      4       57   0 00:00:00.02       245    250  S
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Online               0
+$ 
+
+SHUTDOWN message on VAX2 from user SYSTEM at _VAX1$OPA0:   16:44:58
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+CI6-EVACUATION
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:44:58.83  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:44:59.87)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:44:58.84  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:44:59.89)
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:44:58.84  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:44:59.89)
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:44:59.02  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:00.05)
+Message from user DECNET on VAX1
+DECnet shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:00.03  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:01.06)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:               10-OCT-2026 16:45:01.06
+PID:                      2020021F        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:00.35  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:01.38)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASHUTDOWN, breakin detection and evasion processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:00.35  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:01.38)
+Message from user SYSTEM on VAX1
+%SECSRV-I-PROXYSHUTDOWN, proxy processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:00.77  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:01.78)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSHUTDOWN, security server shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:00.97  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:02.01)
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:01.01  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:10.03  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:11.01)
+16:45:11.01 Node VAX1 (csid 00010001) proposed modification of quorum or quorum disk membership
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:10.03  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 16:45:11.02)
+16:45:11.02 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  timed-out lost connection to system VAX1
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:15.03  %%%%%%%%%%%
+16:45:15.03 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:15.03  %%%%%%%%%%%
+16:45:15.03 Node VAX2 (csid 00010002) timed-out lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:15.03  %%%%%%%%%%%
+16:45:15.03 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:15.04  %%%%%%%%%%%
+16:45:15.04 Node VAX1 (csid 00010001) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 16:45:15.04  %%%%%%%%%%%
+16:45:15.04 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ SHOW CLUSTER
+*INTERRUPT*

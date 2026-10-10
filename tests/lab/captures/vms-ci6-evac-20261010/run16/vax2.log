@@ -1,0 +1,1770 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-1> attach nvr /lab/k8s-labs/vaxlab-3/vax2/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-18> attach rq0 /lab/k8s-labs/vaxlab-3/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/vaxlab-3/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-19> attach rq1 /lab/k8s-labs/vaxlab-3/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/vaxlab-3/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-20> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-21> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/vaxlab-3/vax2/local.ini-2> at xq tap:tap2
+%SIM-INFO: Eth: opened OS device tap2
+/lab/k8s-labs/vaxlab-3/vax2/local.ini-4> att dz 2002,speed=*32
+%SIM-INFO: Listening on port 2002
+/lab/k8s-labs/vaxlab-3/vax2/vax.ini-25> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>^U
+>>>B/R5:10000000 DUA0
+[drv:boot-echo-verified attempt 1 'B/R5:10000000 DUA0']
+
+(BOOT/R5:10000000 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-W-SYSBOOT Can not map SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  now a VAXcluster member -- system VAX2
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 10-OCT-2026 17:15:48.96
+%INSTALL-E-OPENIN, error opening DISK$SYSDSK1:<SYS1.SYSCOMMON.SYSLIB>CXXL$MSG_SHR.EXE; as input
+-RMS-E-FNF, file not found
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20400208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.17  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.17  %%%%%%%%%%%
+Operator status for operator _VAX2$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.20  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX2$OPA0:
+Logfile is VAX2::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;19
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.20  %%%%%%%%%%%
+Operator status for operator VAX2::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;19
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.21  %%%%%%%%%%%
+17:15:47.78 Node VAX2 (csid 00010002) is now a VAXcluster member
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2040020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.49  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.49  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.51  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.51  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.52  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.52  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.53  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.53  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.71  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.71  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.71  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.72  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:53.72  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:54.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX2.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:54.51  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX2
+Security alarm (SECURITY) and security audit (SECURITY) on VAX2, system id: 1026
+Auditable event:          Audit server starting up
+Event time:               10-OCT-2026 17:15:54.48
+PID:                      20400204        
+Username:                 SYSTEM          
+
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+%RUN-S-PROC_ID, identification of created process is 20400213
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:54.90  %%%%%%%%%%%
+Message from user DECNET on VAX2
+DECnet starting
+
+%NCP-I-NOINFO, No information in database
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:54.96  %%%%%%%%%%%
+Message from user DECNET on VAX2
+Error opening permanent proxy database
+
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20400214
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at 10-OCT-2026 17:15:58.08
+%TCPIP-I-NORMAL, timezone information verified
+%RUN-S-PROC_ID, identification of created process is 20400215
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.41  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.73  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.10  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.08)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.10  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.08)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.13  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.11)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.13  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.11)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.14  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.12)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.14  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.12)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.15  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.13)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.15  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.13)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.34  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.29)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.35  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.32)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.36  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.32)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.36  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.32)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.37  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:15:59.32)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%TCPIP-I-SETLOCAL, setting domain and/or local host
+%TCPIP-I-STARTCOMM, starting communication
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.67  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Started
+
+%TCPIP-I-SETPROTP, setting protocol parameters
+%TCPIP-I-DEFINTE, defining interfaces
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.67  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Created INTERnet interface: QE0
+
+%TCPIP-I-STARTNAME, starting name service
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.77  %%%%%%%%%%%
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.11  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:00.08)
+Message from user SYSTEM on VAX1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.43  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:00.42)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server starting up
+Event time:               10-OCT-2026 17:16:00.37
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-I-LOADSERV, loading TCPIP server proxy information
+%TCPIP-I-SERVLOADED, auxiliary server loaded with 0 proxy records
+-TCPIP-I-SERVSKIP, skipped 0 communication proxy records
+-TCPIP-I-SERVTOTAL, total of 0 proxy records read
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.86  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:00.85)
+Message from user DECNET on VAX1
+DECnet starting
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.97  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:00.95)
+Message from user DECNET on VAX1
+Error opening permanent proxy database
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.97  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.97  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%TCPIP-S-STARTDONE, TCPIP$FTP startup completed
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:01.37  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-S-STARTDONE, TCPIP$TELNET startup completed
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at 10-OCT-2026 17:16:01.48
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+  SYSTEM       job terminated at 10-OCT-2026 17:16:03.88
+
+  Accounting information:
+  Buffered I/O count:            2714         Peak working set size:    1504
+  Direct I/O count:               975         Peak page file size:      8712
+  Page faults:                  16344         Mounted volumes:             1
+  Charged CPU time:           0 00:00:01.12   Elapsed time:     0 00:00:14.97
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:04.56  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:04.54)
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.75  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:05.73)
+Message from user INTERnet on VAX1
+INTERnet Started
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.76  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:05.74)
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.83  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:05.82)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1), 10-OCT-2026 17:16:02.59
+Circuit QNA-0
+
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.90  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:05.88)
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:07.34  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:07.32)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:07.34  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:07.32)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:07.79  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:07.77)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+
+VAX/VMS V7.3      node VAX2
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX2
+    Last interactive login on Friday,  9-OCT-2026 10:54
+    Last non-interactive login on Friday,  9-OCT-2026 01:34[c\Z[0c
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:52.88  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:16:52.86)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:               10-OCT-2026 17:16:52.86
+PID:                      2020021A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ DEFINE/SYSTEM EVAC$DATA $2$DUA1:[EVAC]
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2829693     1   2
+$ EVACWL :== $SYS$SYSROOT:[SYSMGR]EVACWL.EXE
+$ 
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:19:34.02  %%%%%%%%%%%
+17:19:34.02 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:19:34.03  %%%%%%%%%%%
+17:19:34.02 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:19:34.08  %%%%%%%%%%%
+17:19:34.07 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Mounted              0  VAX1DATA       2829693     1   2
+$ SPAWN/NOWAIT/PROCESS=EVACVAX2/OUTPUT=SYS$LOGIN:VAX2WL.LOG EVACWL STANDBY
+%DCL-S-SPAWNED, process EVACVAX2 spawned
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2  10-OCT-2026 17:25:16.50  Uptime  0 00:10:43
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     13       33   0 00:00:00.01       318    516   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       50   0 00:00:00.03       408    547   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      8       43   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      142   0 00:00:00.00       300    136   
+2040020E AUDIT_SERVER    HIB      9       46   0 00:00:00.03       565    666   
+2040020F JOB_CONTROL     HIB     10       28   0 00:00:00.03       244    403   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.03       790   1178   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.04       351    516   
+20400212 TP_SERVER       HIB      8       46   0 00:00:00.02       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.11       158    376   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.02       294    237   
+20400216 TCPIP$FTP_1     LEF     10      111   0 00:00:00.12      2138    517  N
+20400218 SYSTEM          CUR      7      260   0 00:00:00.16      5815    399   
+20400219 EVACVAX2        LEF      4       58   0 00:00:00.00       245    250  S
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX2)  Online               0
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2  10-OCT-2026 17:27:26.82  Uptime  0 00:12:53
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     12       38   0 00:00:00.01       322    516   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       50   0 00:00:00.03       408    547   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      8       48   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      145   0 00:00:00.00       301    137   
+2040020E AUDIT_SERVER    HIB     10       46   0 00:00:00.03       565    666   
+2040020F JOB_CONTROL     HIB     10       28   0 00:00:00.03       244    403   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.03       790   1178   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.04       351    516   
+20400212 TP_SERVER       HIB      8       55   0 00:00:00.02       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.11       158    376   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.02       294    237   
+20400216 TCPIP$FTP_1     LEF     10      111   0 00:00:00.12      2138    517  N
+20400218 SYSTEM          CUR      7      293   0 00:00:00.17      6066    355   
+20400219 EVACVAX2        LEF      4       58   0 00:00:00.00       245    250  S
+$ 
+
+SHUTDOWN message on VAX2 from user SYSTEM at _VAX1$OPA0:   17:28:52
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+CI6-EVACUATION
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.70  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:28:52.63)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.71  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:28:52.66)
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.71  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:28:52.66)
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:53.12  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:28:53.06)
+Message from user DECNET on VAX1
+DECnet shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:00.19  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:00.13)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:               10-OCT-2026 17:29:00.13
+PID:                      2020021B        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:00.93  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:00.87)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASHUTDOWN, breakin detection and evasion processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:00.93  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:00.87)
+Message from user SYSTEM on VAX1
+%SECSRV-I-PROXYSHUTDOWN, proxy processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.26  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:01.20)
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.29  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.32  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:01.27)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSHUTDOWN, security server shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:10.08  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:10.01)
+17:29:10.01 Node VAX1 (csid 00010001) proposed modification of quorum or quorum disk membership
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:10.09  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:10.01)
+17:29:10.01 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  timed-out lost connection to system VAX1
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.15  %%%%%%%%%%%
+17:29:15.15 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.15  %%%%%%%%%%%
+17:29:15.15 Node VAX2 (csid 00010002) timed-out lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.15  %%%%%%%%%%%
+17:29:15.15 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.18  %%%%%%%%%%%
+17:29:15.18 Node VAX1 (csid 00010001) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.18  %%%%%%%%%%%
+17:29:15.18 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ SHOW CLUSTER
+View of Cluster from system ID 1026  node: VAX2                                                                10-OCT-2026 17:31:03
++-------------------+---------+
+|      SYSTEMS      | MEMBERS |
++--------+----------+---------+
+|  NODE  | SOFTWARE |  STATUS |
++--------+----------+---------+
+| VAX2   | VMS V7.3 | MEMBER  |
+| VAX1   | VMS V7.3 | BRK_NON |
+| OVMXE  | VMX V0.7 | MEMBER  |
++--------+----------+---------+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2  10-OCT-2026 17:31:29.27  Uptime  0 00:16:56
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20400206 CLUSTER_SERVER  HIB     13       38   0 00:00:00.01       324    516   
+20400207 CONFIGURE       HIB     10       11   0 00:00:00.00       130    206   
+20400208 LANACP          HIB     13       50   0 00:00:00.03       408    547   
+2040020A IPCACP          HIB     10        7   0 00:00:00.00        97    183   
+2040020B ERRFMT          HIB      8       48   0 00:00:00.00       150    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      186   0 00:00:00.00       349    185   
+2040020E AUDIT_SERVER    HIB     10       46   0 00:00:00.03       565    666   
+2040020F JOB_CONTROL     HIB     10       32   0 00:00:00.03       284    443   
+20400210 SECURITY_SERVER HIB     10       24   0 00:00:00.03       790   1178   
+20400211 SMISERVER       HIB      9       36   0 00:00:00.04       351    516   
+20400212 TP_SERVER       HIB      8       71   0 00:00:00.02       203    323   
+20400213 NETACP          HIB     10       23   0 00:00:00.11       158    376   
+20400214 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20400215 TCPIP$INETACP   HIB     10       49   0 00:00:00.02       294    237   
+20400216 TCPIP$FTP_1     LEF     10      111   0 00:00:00.12      2138    517  N
+20400218 SYSTEM          CUR      7      342   0 00:00:00.17      6815    312   
+20400219 EVACVAX2        LEF      4       58   0 00:00:00.00       245    250  S
+2040021A QUEUE_MANAGER   HIB     10       56   0 00:00:00.00       754   1157   
+$ MOUNT $2$DUA1: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+$ SEARCH $2$DUA1:[EVAC]EVAC.DAT "VAX1","OVMXE"/MATCH=OR/STATISTICS
+VAX1             538968604         110-OCT-2026 17:23:09.19     
+VAX1             538968604         210-OCT-2026 17:23:10.19     
+VAX1             538968604         310-OCT-2026 17:23:11.19     
+VAX1             538968604         410-OCT-2026 17:23:12.19     
+VAX1             538968604         510-OCT-2026 17:23:13.19     
+VAX1             538968604         610-OCT-2026 17:23:14.19     
+VAX1             538968604         710-OCT-2026 17:23:15.19     
+VAX1             538968604         810-OCT-2026 17:23:16.19     
+VAX1             538968604         910-OCT-2026 17:23:17.19     
+VAX1             538968604        1010-OCT-2026 17:23:18.19     
+VAX1             538968604        1110-OCT-2026 17:23:19.19     
+VAX1             538968604        1210-OCT-2026 17:23:20.19     
+VAX1             538968604        1310-OCT-2026 17:23:21.19     
+VAX1             538968604        1410-OCT-2026 17:23:22.19     
+VAX1             538968604        1510-OCT-2026 17:23:23.19     
+VAX1             538968604        1610-OCT-2026 17:23:24.19     
+VAX1             538968604        1710-OCT-2026 17:23:25.19     
+VAX1             538968604        1810-OCT-2026 17:23:26.19     
+VAX1             538968604        1910-OCT-2026 17:23:27.19     
+VAX1             538968604        2010-OCT-2026 17:23:28.19     
+VAX1             538968604        2110-OCT-2026 17:23:29.19     
+VAX1             538968604        2210-OCT-2026 17:23:30.19     
+VAX1             538968604        2310-OCT-2026 17:23:31.19     
+VAX1             538968604        2410-OCT-2026 17:23:32.19     
+VAX1             538968604        2510-OCT-2026 17:23:33.19     
+VAX1             538968604        2610-OCT-2026 17:23:34.19     
+VAX1             538968604        2710-OCT-2026 17:23:35.19     
+VAX1             538968604        2810-OCT-2026 17:23:36.19     
+VAX1             538968604        2910-OCT-2026 17:23:37.19     
+VAX1             538968604        3010-OCT-2026 17:23:38.19     
+VAX1             538968604        3110-OCT-2026 17:23:39.19     
+VAX1             538968604        3210-OCT-2026 17:23:40.19     
+VAX1             538968604        3310-OCT-2026 17:23:41.19     
+VAX1             538968604        3410-OCT-2026 17:23:42.19     
+VAX1             538968604        3510-OCT-2026 17:23:43.19     
+VAX1             538968604        3610-OCT-2026 17:23:44.19     
+VAX1             538968604        3710-OCT-2026 17:23:45.19     
+VAX1             538968604        3810-OCT-2026 17:23:46.19     
+VAX1             538968604        3910-OCT-2026 17:23:47.19     
+VAX1             538968604        4010-OCT-2026 17:23:48.19     
+VAX1             538968604        4110-OCT-2026 17:23:49.19     
+VAX1             538968604        4210-OCT-2026 17:23:50.19     
+VAX1             538968604        4310-OCT-2026 17:23:51.19     
+VAX1             538968604        4410-OCT-2026 17:23:52.19     
+VAX1             538968604        4510-OCT-2026 17:23:53.19     
+VAX1             538968604        4610-OCT-2026 17:23:54.19     
+VAX1             538968604        4710-OCT-2026 17:23:55.19     
+VAX1             538968604        4810-OCT-2026 17:23:56.19     
+VAX1             538968604        4910-OCT-2026 17:23:57.19     
+VAX1             538968604        5010-OCT-2026 17:23:58.19     
+VAX1             538968604        5110-OCT-2026 17:23:59.19     
+VAX1             538968604        5210-OCT-2026 17:24:00.19     
+VAX1             538968604        5310-OCT-2026 17:24:01.19     
+VAX1             538968604        5410-OCT-2026 17:24:02.19     
+VAX1             538968604        5510-OCT-2026 17:24:03.19     
+VAX1             538968604        5610-OCT-2026 17:24:04.19     
+VAX1             538968604        5710-OCT-2026 17:24:05.19     
+VAX1             538968604        5810-OCT-2026 17:24:06.19     
+VAX1             538968604        5910-OCT-2026 17:24:07.19     
+VAX1             538968604        6010-OCT-2026 17:24:08.19     
+VAX1             538968604        6110-OCT-2026 17:24:09.19     
+VAX1             538968604        6210-OCT-2026 17:24:10.19     
+VAX1             538968604        6310-OCT-2026 17:24:11.19     
+VAX1             538968604        6410-OCT-2026 17:24:12.19     
+VAX1             538968604        6510-OCT-2026 17:24:13.19     
+VAX1             538968604        6610-OCT-2026 17:24:14.19     
+VAX1             538968604        6710-OCT-2026 17:24:15.19     
+VAX1             538968604        6810-OCT-2026 17:24:16.19     
+VAX1             538968604        6910-OCT-2026 17:24:17.19     
+VAX1             538968604        7010-OCT-2026 17:24:18.19     
+VAX1             538968604        7110-OCT-2026 17:24:19.19     
+VAX1             538968604        7210-OCT-2026 17:24:20.19     
+VAX1             538968604        7310-OCT-2026 17:24:21.19     
+VAX1             538968604        7410-OCT-2026 17:24:22.19     
+VAX1             538968604        7510-OCT-2026 17:24:23.19     
+VAX1             538968604        7610-OCT-2026 17:24:24.19     
+VAX1             538968604        7710-OCT-2026 17:24:25.19     
+VAX1             538968604        7810-OCT-2026 17:24:26.19     
+VAX1             538968604        7910-OCT-2026 17:24:27.19     
+VAX1             538968604        8010-OCT-2026 17:24:28.19     
+VAX1             538968604        8110-OCT-2026 17:24:29.19     
+VAX1             538968604        8210-OCT-2026 17:24:30.19     
+VAX1             538968604        8310-OCT-2026 17:24:31.19     
+VAX1             538968604        8410-OCT-2026 17:24:32.19     
+VAX1             538968604        8510-OCT-2026 17:24:33.19     
+VAX1             538968604        8610-OCT-2026 17:24:34.19     
+VAX1             538968604        8710-OCT-2026 17:24:35.19     
+VAX1             538968604        8810-OCT-2026 17:24:36.19     
+VAX1             538968604        8910-OCT-2026 17:24:37.19     
+VAX1             538968604        9010-OCT-2026 17:24:38.19     
+VAX1             538968604        9110-OCT-2026 17:24:39.19     
+VAX1             538968604        9210-OCT-2026 17:24:40.19     
+VAX1             538968604        9310-OCT-2026 17:24:41.19     
+VAX1             538968604        9410-OCT-2026 17:24:42.19     
+VAX1             538968604        9510-OCT-2026 17:24:43.19     
+VAX1             538968604        9610-OCT-2026 17:24:44.19     
+VAX1             538968604        9710-OCT-2026 17:24:45.19     
+VAX1             538968604        9810-OCT-2026 17:24:46.19     
+VAX1             538968604        9910-OCT-2026 17:24:47.19     
+VAX1             538968604       10010-OCT-2026 17:24:48.19     
+VAX1             538968604       10110-OCT-2026 17:24:49.19     
+VAX1             538968604       10210-OCT-2026 17:24:50.19     
+VAX1             538968604       10310-OCT-2026 17:24:51.19     
+VAX1             538968604       10410-OCT-2026 17:24:52.19     
+VAX1             538968604       10510-OCT-2026 17:24:53.19     
+VAX1             538968604       10610-OCT-2026 17:24:54.19     
+VAX1             538968604       10710-OCT-2026 17:24:55.19     
+VAX1             538968604       10810-OCT-2026 17:24:56.19     
+VAX1             538968604       10910-OCT-2026 17:24:57.19     
+VAX1             538968604       11010-OCT-2026 17:24:58.19     
+VAX1             538968604       11110-OCT-2026 17:24:59.19     
+VAX1             538968604       11210-OCT-2026 17:25:00.19     
+VAX1             538968604       11310-OCT-2026 17:25:01.19     
+VAX1             538968604       11410-OCT-2026 17:25:02.19     
+VAX1             538968604       11510-OCT-2026 17:25:03.19     
+VAX1             538968604       11610-OCT-2026 17:25:04.19     
+VAX1             538968604       11710-OCT-2026 17:25:05.19     
+VAX1             538968604       11810-OCT-2026 17:25:06.19     
+VAX1             538968604       11910-OCT-2026 17:25:07.19     
+VAX1             538968604       12010-OCT-2026 17:25:08.19     
+VAX1             538968604       12110-OCT-2026 17:25:09.19     
+VAX1             538968604       12210-OCT-2026 17:25:10.19     
+VAX1             538968604       12310-OCT-2026 17:25:11.19     
+VAX1             538968604       12410-OCT-2026 17:25:12.19     
+VAX1             538968604       12510-OCT-2026 17:25:13.19     
+VAX1             538968604       12610-OCT-2026 17:25:14.19     
+VAX1             538968604       12710-OCT-2026 17:25:15.19     
+VAX1             538968604       12810-OCT-2026 17:25:16.19     
+VAX1             538968604       12910-OCT-2026 17:25:17.19     
+VAX1             538968604       13010-OCT-2026 17:25:18.19     
+VAX1             538968604       13110-OCT-2026 17:25:19.19     
+VAX1             538968604       13210-OCT-2026 17:25:20.19     
+VAX1             538968604       13310-OCT-2026 17:25:21.19     
+VAX1             538968604       13410-OCT-2026 17:25:22.19     
+VAX1             538968604       13510-OCT-2026 17:25:23.19     
+VAX1             538968604       13610-OCT-2026 17:25:24.20     
+VAX1             538968604       13710-OCT-2026 17:25:25.20     
+VAX1             538968604       13810-OCT-2026 17:25:26.20     
+VAX1             538968604       13910-OCT-2026 17:25:27.20     
+VAX1             538968604       14010-OCT-2026 17:25:28.21     
+VAX1             538968604       14110-OCT-2026 17:25:29.21     
+VAX1             538968604       14210-OCT-2026 17:25:30.21     
+VAX1             538968604       14310-OCT-2026 17:25:31.21     
+VAX1             538968604       14410-OCT-2026 17:25:32.21     
+VAX1             538968604       14510-OCT-2026 17:25:33.21     
+VAX1             538968604       14610-OCT-2026 17:25:34.21     
+VAX1             538968604       14710-OCT-2026 17:25:35.21     
+VAX1             538968604       14810-OCT-2026 17:25:36.21     
+VAX1             538968604       14910-OCT-2026 17:25:37.21     
+VAX1             538968604       15010-OCT-2026 17:25:38.21     
+VAX1             538968604       15110-OCT-2026 17:25:39.21     
+VAX1             538968604       15210-OCT-2026 17:25:40.21     
+VAX1             538968604       15310-OCT-2026 17:25:41.21     
+VAX1             538968604       15410-OCT-2026 17:25:42.21     
+VAX1             538968604       15510-OCT-2026 17:25:43.21     
+VAX1             538968604       15610-OCT-2026 17:25:44.21     
+VAX1             538968604       15710-OCT-2026 17:25:45.21     
+VAX1             538968604       15810-OCT-2026 17:25:46.21     
+VAX1             538968604       15910-OCT-2026 17:25:47.21     
+VAX1             538968604       16010-OCT-2026 17:25:48.21     
+VAX1             538968604       16110-OCT-2026 17:25:49.21     
+VAX1             538968604       16210-OCT-2026 17:25:50.21     
+VAX1             538968604       16310-OCT-2026 17:25:51.21     
+VAX1             538968604       16410-OCT-2026 17:25:52.21     
+VAX1             538968604       16510-OCT-2026 17:25:53.21     
+VAX1             538968604       16610-OCT-2026 17:25:54.21     
+VAX1             538968604       16710-OCT-2026 17:25:55.21     
+VAX1             538968604       16810-OCT-2026 17:25:56.21     
+VAX1             538968604       16910-OCT-2026 17:25:57.21     
+VAX1             538968604       17010-OCT-2026 17:25:58.21     
+VAX1             538968604       17110-OCT-2026 17:25:59.21     
+VAX1             538968604       17210-OCT-2026 17:26:00.21     
+VAX1             538968604       17310-OCT-2026 17:26:01.21     
+VAX1             538968604       17410-OCT-2026 17:26:02.21     
+OVMXE            268435461       17510-OCT-2026 17:27:00.85     
+OVMXE            268435461       17610-OCT-2026 17:27:01.85     
+OVMXE            268435461       17710-OCT-2026 17:27:02.85     
+OVMXE            268435461       17810-OCT-2026 17:27:03.86     
+OVMXE            268435461       17910-OCT-2026 17:27:04.86     
+OVMXE            268435461       18010-OCT-2026 17:27:05.87     
+OVMXE            268435461       18110-OCT-2026 17:27:06.87     
+OVMXE            268435461       18210-OCT-2026 17:27:07.87     
+OVMXE            268435461       18310-OCT-2026 17:27:08.88     
+OVMXE            268435461       18410-OCT-2026 17:27:09.88     
+OVMXE            268435461       18510-OCT-2026 17:27:10.88     
+OVMXE            268435461       18610-OCT-2026 17:27:11.89     
+OVMXE            268435461       18710-OCT-2026 17:27:12.89     
+OVMXE            268435461       18810-OCT-2026 17:27:13.89     
+OVMXE            268435461       18910-OCT-2026 17:27:14.90     
+OVMXE            268435461       19010-OCT-2026 17:27:15.90     
+OVMXE            268435461       19110-OCT-2026 17:27:16.90     
+OVMXE            268435461       19210-OCT-2026 17:27:17.91     
+OVMXE            268435461       19310-OCT-2026 17:27:18.91     
+OVMXE            268435461       19410-OCT-2026 17:27:19.91     
+OVMXE            268435461       19510-OCT-2026 17:27:20.92     
+OVMXE            268435461       19610-OCT-2026 17:27:21.92     
+OVMXE            268435461       19710-OCT-2026 17:27:22.92     
+OVMXE            268435461       19810-OCT-2026 17:27:23.93     
+OVMXE            268435461       19910-OCT-2026 17:27:24.93     
+OVMXE            268435461       20010-OCT-2026 17:27:25.93     
+OVMXE            268435461       20110-OCT-2026 17:27:26.94     
+OVMXE            268435461       20210-OCT-2026 17:27:27.94     
+OVMXE            268435461       20310-OCT-2026 17:27:28.95     
+OVMXE            268435461       20410-OCT-2026 17:27:29.95     
+OVMXE            268435461       20510-OCT-2026 17:27:30.95     
+OVMXE            268435461       20610-OCT-2026 17:27:31.96     
+OVMXE            268435461       20710-OCT-2026 17:27:32.96     
+OVMXE            268435461       20810-OCT-2026 17:27:33.96     
+OVMXE            268435461       20910-OCT-2026 17:27:34.97     
+OVMXE            268435461       21010-OCT-2026 17:27:35.97     
+OVMXE            268435461       21110-OCT-2026 17:27:36.97     
+OVMXE            268435461       21210-OCT-2026 17:27:37.98     
+OVMXE            268435461       21310-OCT-2026 17:27:38.98     
+OVMXE            268435461       21410-OCT-2026 17:27:39.98     
+OVMXE            268435461       21510-OCT-2026 17:27:40.99     
+OVMXE            268435461       21610-OCT-2026 17:27:41.99     
+OVMXE            268435461       21710-OCT-2026 17:27:42.99     
+OVMXE            268435461       21810-OCT-2026 17:27:44.00     
+OVMXE            268435461       21910-OCT-2026 17:27:45.00     
+OVMXE            268435461       22010-OCT-2026 17:27:46.00     
+OVMXE            268435461       22110-OCT-2026 17:27:47.00     
+OVMXE            268435461       22210-OCT-2026 17:27:48.01     
+OVMXE            268435461       22310-OCT-2026 17:27:49.01     
+OVMXE            268435461       22410-OCT-2026 17:27:50.01     
+OVMXE            268435461       22510-OCT-2026 17:27:51.02     
+OVMXE            268435461       22610-OCT-2026 17:27:52.02     
+OVMXE            268435461       22710-OCT-2026 17:27:53.02     
+OVMXE            268435461       22810-OCT-2026 17:27:54.03     
+OVMXE            268435461       22910-OCT-2026 17:27:55.03     
+OVMXE            268435461       23010-OCT-2026 17:27:56.03     
+OVMXE            268435461       23110-OCT-2026 17:27:57.04     
+OVMXE            268435461       23210-OCT-2026 17:27:58.04     
+OVMXE            268435461       23310-OCT-2026 17:27:59.05     
+OVMXE            268435461       23410-OCT-2026 17:28:00.05     
+OVMXE            268435461       23510-OCT-2026 17:28:01.05     
+OVMXE            268435461       23610-OCT-2026 17:28:02.06     
+OVMXE            268435461       23710-OCT-2026 17:28:03.06     
+OVMXE            268435461       23810-OCT-2026 17:28:04.06     
+OVMXE            268435461       23910-OCT-2026 17:28:05.07     
+OVMXE            268435461       24010-OCT-2026 17:28:06.07     
+OVMXE            268435461       24110-OCT-2026 17:28:07.08     
+OVMXE            268435461       24210-OCT-2026 17:28:08.08     
+OVMXE            268435461       24310-OCT-2026 17:28:09.08     
+OVMXE            268435461       24410-OCT-2026 17:28:10.08     
+OVMXE            268435461       24510-OCT-2026 17:28:11.09     
+OVMXE            268435461       24610-OCT-2026 17:28:12.09     
+OVMXE            268435461       24710-OCT-2026 17:28:13.09     
+OVMXE            268435461       24810-OCT-2026 17:28:14.10     
+OVMXE            268435461       24910-OCT-2026 17:28:15.10     
+OVMXE            268435461       25010-OCT-2026 17:28:16.10     
+OVMXE            268435461       25110-OCT-2026 17:28:17.11     
+OVMXE            268435461       25210-OCT-2026 17:28:18.11     
+OVMXE            268435461       25310-OCT-2026 17:28:19.11     
+OVMXE            268435461       25410-OCT-2026 17:28:20.12     
+OVMXE            268435461       25510-OCT-2026 17:28:21.12     
+OVMXE            268435461       25610-OCT-2026 17:28:22.12     
+OVMXE            268435461       25710-OCT-2026 17:28:23.13     
+OVMXE            268435461       25810-OCT-2026 17:28:24.13     
+OVMXE            268435461       25910-OCT-2026 17:28:25.14     
+OVMXE            268435461       26010-OCT-2026 17:28:26.14     
+OVMXE            268435461       26110-OCT-2026 17:28:27.14     
+OVMXE            268435461       26210-OCT-2026 17:28:28.15     
+OVMXE            268435461       26310-OCT-2026 17:28:29.15     
+OVMXE            268435461       26410-OCT-2026 17:28:30.15     
+OVMXE            268435461       26510-OCT-2026 17:28:31.16     
+OVMXE            268435461       26610-OCT-2026 17:28:32.16     
+OVMXE            268435461       26710-OCT-2026 17:28:33.17     
+OVMXE            268435461       26810-OCT-2026 17:28:34.17     
+OVMXE            268435461       26910-OCT-2026 17:28:35.17     
+OVMXE            268435461       27010-OCT-2026 17:28:36.18     
+OVMXE            268435461       27110-OCT-2026 17:28:37.18     
+OVMXE            268435461       27210-OCT-2026 17:28:38.18     
+OVMXE            268435461       27310-OCT-2026 17:28:39.18     
+OVMXE            268435461       27410-OCT-2026 17:28:40.19     
+OVMXE            268435461       27510-OCT-2026 17:28:41.20     
+OVMXE            268435461       27610-OCT-2026 17:28:42.20     
+OVMXE            268435461       27710-OCT-2026 17:28:43.20     
+OVMXE            268435461       27810-OCT-2026 17:28:44.21     
+OVMXE            268435461       27910-OCT-2026 17:28:45.21     
+OVMXE            268435461       28010-OCT-2026 17:28:46.21     
+OVMXE            268435461       28110-OCT-2026 17:28:47.22     
+OVMXE            268435461       28210-OCT-2026 17:28:48.23     
+OVMXE            268435461       28310-OCT-2026 17:28:49.23     
+OVMXE            268435461       28410-OCT-2026 17:28:50.23     
+OVMXE            268435461       28510-OCT-2026 17:28:51.24     
+OVMXE            268435461       28610-OCT-2026 17:28:52.24     
+OVMXE            268435461       28710-OCT-2026 17:28:53.24     
+OVMXE            268435461       28810-OCT-2026 17:28:54.25     
+OVMXE            268435461       28910-OCT-2026 17:28:55.25     
+OVMXE            268435461       29010-OCT-2026 17:28:56.26     
+OVMXE            268435461       29110-OCT-2026 17:28:57.27     
+OVMXE            268435461       29210-OCT-2026 17:28:58.27     
+OVMXE            268435461       29310-OCT-2026 17:28:59.27     
+OVMXE            268435461       29410-OCT-2026 17:29:00.27     
+OVMXE            268435461       29510-OCT-2026 17:29:01.28     
+OVMXE            268435461       29610-OCT-2026 17:29:02.28     
+OVMXE            268435461       29710-OCT-2026 17:29:03.29     
+OVMXE            268435461       29810-OCT-2026 17:29:04.30     
+OVMXE            268435461       29910-OCT-2026 17:29:05.30     
+OVMXE            268435461       30010-OCT-2026 17:29:06.31     
+OVMXE            268435461       30110-OCT-2026 17:29:07.31     
+OVMXE            268435461       30210-OCT-2026 17:29:08.31     
+OVMXE            268435461       30310-OCT-2026 17:29:09.32     
+OVMXE            268435461       30410-OCT-2026 17:29:10.32     
+OVMXE            268435461       30510-OCT-2026 17:29:11.32     
+OVMXE            268435461       30610-OCT-2026 17:29:12.33     
+OVMXE            268435461       30710-OCT-2026 17:29:13.34     
+OVMXE            268435461       30810-OCT-2026 17:29:14.34     
+OVMXE            268435461       30910-OCT-2026 17:29:15.34     
+OVMXE            268435461       31010-OCT-2026 17:29:16.35     
+OVMXE            268435461       31110-OCT-2026 17:29:17.35     
+OVMXE            268435461       31210-OCT-2026 17:29:18.35     
+OVMXE            268435461       31310-OCT-2026 17:29:19.36     
+OVMXE            268435461       31410-OCT-2026 17:29:20.37     
+OVMXE            268435461       31510-OCT-2026 17:29:21.37     
+OVMXE            268435461       31610-OCT-2026 17:29:22.37     
+OVMXE            268435461       31710-OCT-2026 17:29:23.38     
+OVMXE            268435461       31810-OCT-2026 17:29:24.38     
+OVMXE            268435461       31910-OCT-2026 17:29:25.38     
+OVMXE            268435461       32010-OCT-2026 17:29:26.39     
+OVMXE            268435461       32110-OCT-2026 17:29:27.39     
+OVMXE            268435461       32210-OCT-2026 17:29:28.40     
+OVMXE            268435461       32310-OCT-2026 17:29:29.40     
+OVMXE            268435461       32410-OCT-2026 17:29:30.41     
+OVMXE            268435461       32510-OCT-2026 17:29:31.41     
+OVMXE            268435461       32610-OCT-2026 17:29:32.41     
+OVMXE            268435461       32710-OCT-2026 17:29:33.42     
+OVMXE            268435461       32810-OCT-2026 17:29:34.42     
+OVMXE            268435461       32910-OCT-2026 17:29:35.43     
+OVMXE            268435461       33010-OCT-2026 17:29:36.44     
+OVMXE            268435461       33110-OCT-2026 17:29:37.44     
+OVMXE            268435461       33210-OCT-2026 17:29:38.45     
+OVMXE            268435461       33310-OCT-2026 17:29:39.45     
+OVMXE            268435461       33410-OCT-2026 17:29:40.46     
+OVMXE            268435461       33510-OCT-2026 17:29:41.46     
+OVMXE            268435461       33610-OCT-2026 17:29:42.47     
+OVMXE            268435461       33710-OCT-2026 17:29:43.47     
+OVMXE            268435461       33810-OCT-2026 17:29:44.48     
+OVMXE            268435461       33910-OCT-2026 17:29:45.48     
+OVMXE            268435461       34010-OCT-2026 17:29:46.49     
+OVMXE            268435461       34110-OCT-2026 17:29:47.49     
+OVMXE            268435461       34210-OCT-2026 17:29:48.50     
+OVMXE            268435461       34310-OCT-2026 17:29:49.50     
+OVMXE            268435461       34410-OCT-2026 17:29:50.50     
+OVMXE            268435461       34510-OCT-2026 17:29:51.51     
+OVMXE            268435461       34610-OCT-2026 17:29:52.52     
+OVMXE            268435461       34710-OCT-2026 17:29:53.52     
+OVMXE            268435461       34810-OCT-2026 17:29:54.53     
+OVMXE            268435461       34910-OCT-2026 17:29:55.53     
+OVMXE            268435461       35010-OCT-2026 17:29:56.53     
+OVMXE            268435461       35110-OCT-2026 17:29:57.54     
+OVMXE            268435461       35210-OCT-2026 17:29:58.54     
+OVMXE            268435461       35310-OCT-2026 17:29:59.54     
+OVMXE            268435461       35410-OCT-2026 17:30:00.55     
+OVMXE            268435461       35510-OCT-2026 17:30:01.56     
+OVMXE            268435461       35610-OCT-2026 17:30:02.56     
+OVMXE            268435461       35710-OCT-2026 17:30:03.56     
+OVMXE            268435461       35810-OCT-2026 17:30:04.57     
+OVMXE            268435461       35910-OCT-2026 17:30:05.57     
+OVMXE            268435461       36010-OCT-2026 17:30:06.57     
+OVMXE            268435461       36110-OCT-2026 17:30:07.57     
+OVMXE            268435461       36210-OCT-2026 17:30:08.59     
+OVMXE            268435461       36310-OCT-2026 17:30:09.59     
+OVMXE            268435461       36410-OCT-2026 17:30:10.59     
+OVMXE            268435461       36510-OCT-2026 17:30:11.59     
+OVMXE            268435461       36610-OCT-2026 17:30:12.60     
+OVMXE            268435461       36710-OCT-2026 17:30:13.60     
+OVMXE            268435461       36810-OCT-2026 17:30:14.60     
+OVMXE            268435461       36910-OCT-2026 17:30:15.61     
+OVMXE            268435461       37010-OCT-2026 17:30:16.61     
+OVMXE            268435461       37110-OCT-2026 17:30:17.62     
+OVMXE            268435461       37210-OCT-2026 17:30:18.62     
+OVMXE            268435461       37310-OCT-2026 17:30:19.63     
+OVMXE            268435461       37410-OCT-2026 17:30:20.63     
+OVMXE            268435461       37510-OCT-2026 17:30:21.63     
+OVMXE            268435461       37610-OCT-2026 17:30:22.64     
+OVMXE            268435461       37710-OCT-2026 17:30:23.64     
+OVMXE            268435461       37810-OCT-2026 17:30:24.65     
+OVMXE            268435461       37910-OCT-2026 17:30:25.65     
+OVMXE            268435461       38010-OCT-2026 17:30:26.65     
+OVMXE            268435461       38110-OCT-2026 17:30:27.66     
+OVMXE            268435461       38210-OCT-2026 17:30:28.66     
+OVMXE            268435461       38310-OCT-2026 17:30:29.66     
+OVMXE            268435461       38410-OCT-2026 17:30:30.67     
+OVMXE            268435461       38510-OCT-2026 17:30:31.67     
+OVMXE            268435461       38610-OCT-2026 17:30:32.68     
+OVMXE            268435461       38710-OCT-2026 17:30:33.68     
+OVMXE            268435461       38810-OCT-2026 17:30:34.68     
+OVMXE            268435461       38910-OCT-2026 17:30:35.69     
+OVMXE            268435461       39010-OCT-2026 17:30:36.69     
+OVMXE            268435461       39110-OCT-2026 17:30:37.69     
+OVMXE            268435461       39210-OCT-2026 17:30:38.70     
+OVMXE            268435461       39310-OCT-2026 17:30:39.70     
+OVMXE            268435461       39410-OCT-2026 17:30:40.71     
+OVMXE            268435461       39510-OCT-2026 17:30:41.71     
+OVMXE            268435461       39610-OCT-2026 17:30:42.71     
+OVMXE            268435461       39710-OCT-2026 17:30:43.72     
+OVMXE            268435461       39810-OCT-2026 17:30:44.72     
+OVMXE            268435461       39910-OCT-2026 17:30:45.72     
+OVMXE            268435461       40010-OCT-2026 17:30:46.73     
+OVMXE            268435461       40110-OCT-2026 17:30:47.73     
+OVMXE            268435461       40210-OCT-2026 17:30:48.74     
+OVMXE            268435461       40310-OCT-2026 17:30:49.74     
+OVMXE            268435461       40410-OCT-2026 17:30:50.74     
+OVMXE            268435461       40510-OCT-2026 17:30:51.75     
+OVMXE            268435461       40610-OCT-2026 17:30:52.75     
+OVMXE            268435461       40710-OCT-2026 17:30:53.75     
+OVMXE            268435461       40810-OCT-2026 17:30:54.76     
+OVMXE            268435461       40910-OCT-2026 17:30:55.76     
+OVMXE            268435461       41010-OCT-2026 17:30:56.77     
+OVMXE            268435461       41110-OCT-2026 17:30:57.77     
+OVMXE            268435461       41210-OCT-2026 17:30:58.77     
+OVMXE            268435461       41310-OCT-2026 17:30:59.78     
+OVMXE            268435461       41410-OCT-2026 17:31:00.78     
+OVMXE            268435461       41510-OCT-2026 17:31:01.78     
+OVMXE            268435461       41610-OCT-2026 17:31:02.79     
+OVMXE            268435461       41710-OCT-2026 17:31:03.80     
+OVMXE            268435461       41810-OCT-2026 17:31:04.80     
+OVMXE            268435461       41910-OCT-2026 17:31:05.81     
+OVMXE            268435461       42010-OCT-2026 17:31:06.81     
+OVMXE            268435461       42110-OCT-2026 17:31:07.81     
+OVMXE            268435461       42210-OCT-2026 17:31:08.81     
+OVMXE            268435461       42310-OCT-2026 17:31:09.82     
+OVMXE            268435461       42410-OCT-2026 17:31:10.82     
+OVMXE            268435461       42510-OCT-2026 17:31:11.82     
+OVMXE            268435461       42610-OCT-2026 17:31:12.83     
+OVMXE            268435461       42710-OCT-2026 17:31:13.83     
+OVMXE            268435461       42810-OCT-2026 17:31:14.83     
+OVMXE            268435461       42910-OCT-2026 17:31:15.84     
+OVMXE            268435461       43010-OCT-2026 17:31:16.84     
+OVMXE            268435461       43110-OCT-2026 17:31:17.84     
+OVMXE            268435461       43210-OCT-2026 17:31:18.85     
+OVMXE            268435461       43310-OCT-2026 17:31:19.85     
+OVMXE            268435461       43410-OCT-2026 17:31:20.86     
+OVMXE            268435461       43510-OCT-2026 17:31:21.86     
+OVMXE            268435461       43610-OCT-2026 17:31:22.87     
+OVMXE            268435461       43710-OCT-2026 17:31:23.87     
+OVMXE            268435461       43810-OCT-2026 17:31:24.87     
+OVMXE            268435461       43910-OCT-2026 17:31:25.88     
+OVMXE            268435461       44010-OCT-2026 17:31:26.88     
+OVMXE            268435461       44110-OCT-2026 17:31:27.88     
+OVMXE            268435461       44210-OCT-2026 17:31:28.89     
+OVMXE            268435461       44310-OCT-2026 17:31:29.89     
+OVMXE            268435461       44410-OCT-2026 17:31:30.89     
+OVMXE            268435461       44510-OCT-2026 17:31:31.90     
+OVMXE            268435461       44610-OCT-2026 17:31:32.90     
+OVMXE            268435461       44710-OCT-2026 17:31:33.90     
+OVMXE            268435461       44810-OCT-2026 17:31:34.91     
+OVMXE            268435461       44910-OCT-2026 17:31:35.91     
+OVMXE            268435461       45010-OCT-2026 17:31:36.92     
+OVMXE            268435461       45110-OCT-2026 17:31:37.92     
+OVMXE            268435461       45210-OCT-2026 17:31:38.92     
+OVMXE            268435461       45310-OCT-2026 17:31:39.93     
+OVMXE            268435461       45410-OCT-2026 17:31:40.93     
+OVMXE            268435461       45510-OCT-2026 17:31:41.94     
+OVMXE            268435461       45610-OCT-2026 17:31:42.94     
+OVMXE            268435461       45710-OCT-2026 17:31:43.95     
+OVMXE            268435461       45810-OCT-2026 17:31:44.95     
+OVMXE            268435461       45910-OCT-2026 17:31:45.96     
+OVMXE            268435461       46010-OCT-2026 17:31:46.96     
+OVMXE            268435461       46110-OCT-2026 17:31:47.97     
+OVMXE            268435461       46210-OCT-2026 17:31:48.97     
+OVMXE            268435461       46310-OCT-2026 17:31:49.97     
+OVMXE            268435461       46410-OCT-2026 17:31:50.98     
+OVMXE            268435461       46510-OCT-2026 17:31:51.98     
+OVMXE            268435461       46610-OCT-2026 17:31:52.99     
+OVMXE            268435461       46710-OCT-2026 17:31:53.99     
+OVMXE            268435461       46810-OCT-2026 17:31:54.99     
+OVMXE            268435461       46910-OCT-2026 17:31:56.00     
+OVMXE            268435461       47010-OCT-2026 17:31:57.00     
+OVMXE            268435461       47110-OCT-2026 17:31:58.00     
+OVMXE            268435461       47210-OCT-2026 17:31:59.01     
+OVMXE            268435461       47310-OCT-2026 17:32:00.01     
+OVMXE            268435461       47410-OCT-2026 17:32:01.02     
+OVMXE            268435461       47510-OCT-2026 17:32:02.02     
+OVMXE            268435461       47610-OCT-2026 17:32:03.02     
+OVMXE            268435461       47710-OCT-2026 17:32:04.03     
+OVMXE            268435461       47810-OCT-2026 17:32:05.03     
+OVMXE            268435461       47910-OCT-2026 17:32:06.03     
+OVMXE            268435461       48010-OCT-2026 17:32:07.04     
+OVMXE            268435461       48110-OCT-2026 17:32:08.04     
+OVMXE            268435461       48210-OCT-2026 17:32:09.05     
+OVMXE            268435461       48310-OCT-2026 17:32:10.05     
+OVMXE            268435461       48410-OCT-2026 17:32:11.05     
+OVMXE            268435461       48510-OCT-2026 17:32:12.05     
+OVMXE            268435461       48610-OCT-2026 17:32:13.06     
+OVMXE            268435461       48710-OCT-2026 17:32:14.06     
+OVMXE            268435461       48810-OCT-2026 17:32:15.06     
+OVMXE            268435461       48910-OCT-2026 17:32:16.07     
+OVMXE            268435461       49010-OCT-2026 17:32:17.07     
+OVMXE            268435461       49110-OCT-2026 17:32:18.08     
+OVMXE            268435461       49210-OCT-2026 17:32:19.08     
+OVMXE            268435461       49310-OCT-2026 17:32:20.08     
+OVMXE            268435461       49410-OCT-2026 17:32:21.09     
+OVMXE            268435461       49510-OCT-2026 17:32:22.09     
+OVMXE            268435461       49610-OCT-2026 17:32:23.09     
+OVMXE            268435461       49710-OCT-2026 17:32:24.10     
+OVMXE            268435461       49810-OCT-2026 17:32:25.10     
+OVMXE            268435461       49910-OCT-2026 17:32:26.11     
+OVMXE            268435461       50010-OCT-2026 17:32:27.11     
+OVMXE            268435461       50110-OCT-2026 17:32:28.12     
+OVMXE            268435461       50210-OCT-2026 17:32:29.12     
+OVMXE            268435461       50310-OCT-2026 17:32:30.12     
+OVMXE            268435461       50410-OCT-2026 17:32:31.13     
+OVMXE            268435461       50510-OCT-2026 17:32:32.13     
+OVMXE            268435461       50610-OCT-2026 17:32:33.14     
+OVMXE            268435461       50710-OCT-2026 17:32:34.14     
+OVMXE            268435461       50810-OCT-2026 17:32:35.14     
+OVMXE            268435461       50910-OCT-2026 17:32:36.15     
+OVMXE            268435461       51010-OCT-2026 17:32:37.15     
+OVMXE            268435461       51110-OCT-2026 17:32:38.15     
+OVMXE            268435461       51210-OCT-2026 17:32:39.16     
+OVMXE            268435461       51310-OCT-2026 17:32:40.16     
+OVMXE            268435461       51410-OCT-2026 17:32:41.17     
+OVMXE            268435461       51510-OCT-2026 17:32:42.17     
+OVMXE            268435461       51610-OCT-2026 17:32:43.17     
+OVMXE            268435461       51710-OCT-2026 17:32:44.18     
+OVMXE            268435461       51810-OCT-2026 17:32:45.18     
+OVMXE            268435461       51910-OCT-2026 17:32:46.18     
+OVMXE            268435461       52010-OCT-2026 17:32:47.19     
+OVMXE            268435461       52110-OCT-2026 17:32:48.19     
+OVMXE            268435461       52210-OCT-2026 17:32:49.20     
+OVMXE            268435461       52310-OCT-2026 17:32:50.20     
+OVMXE            268435461       52410-OCT-2026 17:32:51.20     
+OVMXE            268435461       52510-OCT-2026 17:32:52.21     
+OVMXE            268435461       52610-OCT-2026 17:32:53.21     
+OVMXE            268435461       52710-OCT-2026 17:32:54.21     
+OVMXE            268435461       52810-OCT-2026 17:32:55.22     
+OVMXE            268435461       52910-OCT-2026 17:32:56.22     
+OVMXE            268435461       53010-OCT-2026 17:32:57.23     
+OVMXE            268435461       53110-OCT-2026 17:32:58.23     
+OVMXE            268435461       53210-OCT-2026 17:32:59.24     
+OVMXE            268435461       53310-OCT-2026 17:33:00.24     
+OVMXE            268435461       53410-OCT-2026 17:33:01.25     
+OVMXE            268435461       53510-OCT-2026 17:33:02.25     
+OVMXE            268435461       53610-OCT-2026 17:33:03.25     
+OVMXE            268435461       53710-OCT-2026 17:33:04.26     
+OVMXE            268435461       53810-OCT-2026 17:33:05.27     
+OVMXE            268435461       53910-OCT-2026 17:33:06.27     
+OVMXE            268435461       54010-OCT-2026 17:33:07.27     
+OVMXE            268435461       54110-OCT-2026 17:33:08.28     
+OVMXE            268435461       54210-OCT-2026 17:33:09.28     
+OVMXE            268435461       54310-OCT-2026 17:33:10.28     
+OVMXE            268435461       54410-OCT-2026 17:33:11.29     
+OVMXE            268435461       54510-OCT-2026 17:33:12.29     
+OVMXE            268435461       54610-OCT-2026 17:33:13.30     
+OVMXE            268435461       54710-OCT-2026 17:33:14.30     
+OVMXE            268435461       54810-OCT-2026 17:33:15.31     
+OVMXE            268435461       54910-OCT-2026 17:33:16.31     
+OVMXE            268435461       55010-OCT-2026 17:33:17.31     
+OVMXE            268435461       55110-OCT-2026 17:33:18.31     
+OVMXE            268435461       55210-OCT-2026 17:33:19.32     
+OVMXE            268435461       55310-OCT-2026 17:33:20.32     
+OVMXE            268435461       55410-OCT-2026 17:33:21.33     
+OVMXE            268435461       55510-OCT-2026 17:33:22.33     
+OVMXE            268435461       55610-OCT-2026 17:33:23.33     
+OVMXE            268435461       55710-OCT-2026 17:33:24.33     
+OVMXE            268435461       55810-OCT-2026 17:33:25.34     
+OVMXE            268435461       55910-OCT-2026 17:33:26.34     
+OVMXE            268435461       56010-OCT-2026 17:33:27.34     
+OVMXE            268435461       56110-OCT-2026 17:33:28.35     
+OVMXE            268435461       56210-OCT-2026 17:33:29.35     
+OVMXE            268435461       56310-OCT-2026 17:33:30.36     
+OVMXE            268435461       56410-OCT-2026 17:33:31.36     
+OVMXE            268435461       56510-OCT-2026 17:33:32.37     
+OVMXE            268435461       56610-OCT-2026 17:33:33.37     
+OVMXE            268435461       56710-OCT-2026 17:33:34.37     
+
+Files searched:                 1       Buffered I/O count:       572
+Records searched:             567       Direct I/O count:           8
+Characters searched:        36288       Page faults:              112
+Records matched:              567       Elapsed CPU time:  0 00:00:00.00
+Lines printed:                567       Elapsed time:      0 00:00:00.31
+$ SEARCH $2$DUA1:[EVAC]EVAC.DAT " 17"," 170"," 171"," 172"," 173"," 174"," 175"," 176"," 177"/MATCH=OR
+VAX1             538968604         110-OCT-2026 17:23:09.19     
+VAX1             538968604         210-OCT-2026 17:23:10.19     
+VAX1             538968604         310-OCT-2026 17:23:11.19     
+VAX1             538968604         410-OCT-2026 17:23:12.19     
+VAX1             538968604         510-OCT-2026 17:23:13.19     
+VAX1             538968604         610-OCT-2026 17:23:14.19     
+VAX1             538968604         710-OCT-2026 17:23:15.19     
+VAX1             538968604         810-OCT-2026 17:23:16.19     
+VAX1             538968604         910-OCT-2026 17:23:17.19     
+VAX1             538968604        1010-OCT-2026 17:23:18.19     
+VAX1             538968604        1110-OCT-2026 17:23:19.19     
+VAX1             538968604        1210-OCT-2026 17:23:20.19     
+VAX1             538968604        1310-OCT-2026 17:23:21.19     
+VAX1             538968604        1410-OCT-2026 17:23:22.19     
+VAX1             538968604        1510-OCT-2026 17:23:23.19     
+VAX1             538968604        1610-OCT-2026 17:23:24.19     
+VAX1             538968604        1710-OCT-2026 17:23:25.19     
+VAX1             538968604        1810-OCT-2026 17:23:26.19     
+VAX1             538968604        1910-OCT-2026 17:23:27.19     
+VAX1             538968604        2010-OCT-2026 17:23:28.19     
+VAX1             538968604        2110-OCT-2026 17:23:29.19     
+VAX1             538968604        2210-OCT-2026 17:23:30.19     
+VAX1             538968604        2310-OCT-2026 17:23:31.19     
+VAX1             538968604        2410-OCT-2026 17:23:32.19     
+VAX1             538968604        2510-OCT-2026 17:23:33.19     
+VAX1             538968604        2610-OCT-2026 17:23:34.19     
+VAX1             538968604        2710-OCT-2026 17:23:35.19     
+VAX1             538968604        2810-OCT-2026 17:23:36.19     
+VAX1             538968604        2910-OCT-2026 17:23:37.19     
+VAX1             538968604        3010-OCT-2026 17:23:38.19     
+VAX1             538968604        3110-OCT-2026 17:23:39.19     
+VAX1             538968604        3210-OCT-2026 17:23:40.19     
+VAX1             538968604        3310-OCT-2026 17:23:41.19     
+VAX1             538968604        3410-OCT-2026 17:23:42.19     
+VAX1             538968604        3510-OCT-2026 17:23:43.19     
+VAX1             538968604        3610-OCT-2026 17:23:44.19     
+VAX1             538968604        3710-OCT-2026 17:23:45.19     
+VAX1             538968604        3810-OCT-2026 17:23:46.19     
+VAX1             538968604        3910-OCT-2026 17:23:47.19     
+VAX1             538968604        4010-OCT-2026 17:23:48.19     
+VAX1             538968604        4110-OCT-2026 17:23:49.19     
+VAX1             538968604        4210-OCT-2026 17:23:50.19     
+VAX1             538968604        4310-OCT-2026 17:23:51.19     
+VAX1             538968604        4410-OCT-2026 17:23:52.19     
+VAX1             538968604        4510-OCT-2026 17:23:53.19     
+VAX1             538968604        4610-OCT-2026 17:23:54.19     
+VAX1             538968604        4710-OCT-2026 17:23:55.19     
+VAX1             538968604        4810-OCT-2026 17:23:56.19     
+VAX1             538968604        4910-OCT-2026 17:23:57.19     
+VAX1             538968604        5010-OCT-2026 17:23:58.19     
+VAX1             538968604        5110-OCT-2026 17:23:59.19     
+VAX1             538968604        5210-OCT-2026 17:24:00.19     
+VAX1             538968604        5310-OCT-2026 17:24:01.19     
+VAX1             538968604        5410-OCT-2026 17:24:02.19     
+VAX1             538968604        5510-OCT-2026 17:24:03.19     
+VAX1             538968604        5610-OCT-2026 17:24:04.19     
+VAX1             538968604        5710-OCT-2026 17:24:05.19     
+VAX1             538968604        5810-OCT-2026 17:24:06.19     
+VAX1             538968604        5910-OCT-2026 17:24:07.19     
+VAX1             538968604        6010-OCT-2026 17:24:08.19     
+VAX1             538968604        6110-OCT-2026 17:24:09.19     
+VAX1             538968604        6210-OCT-2026 17:24:10.19     
+VAX1             538968604        6310-OCT-2026 17:24:11.19     
+VAX1             538968604        6410-OCT-2026 17:24:12.19     
+VAX1             538968604        6510-OCT-2026 17:24:13.19     
+VAX1             538968604        6610-OCT-2026 17:24:14.19     
+VAX1             538968604        6710-OCT-2026 17:24:15.19     
+VAX1             538968604        6810-OCT-2026 17:24:16.19     
+VAX1             538968604        6910-OCT-2026 17:24:17.19     
+VAX1             538968604        7010-OCT-2026 17:24:18.19     
+VAX1             538968604        7110-OCT-2026 17:24:19.19     
+VAX1             538968604        7210-OCT-2026 17:24:20.19     
+VAX1             538968604        7310-OCT-2026 17:24:21.19     
+VAX1             538968604        7410-OCT-2026 17:24:22.19     
+VAX1             538968604        7510-OCT-2026 17:24:23.19     
+VAX1             538968604        7610-OCT-2026 17:24:24.19     
+VAX1             538968604        7710-OCT-2026 17:24:25.19     
+VAX1             538968604        7810-OCT-2026 17:24:26.19     
+VAX1             538968604        7910-OCT-2026 17:24:27.19     
+VAX1             538968604        8010-OCT-2026 17:24:28.19     
+VAX1             538968604        8110-OCT-2026 17:24:29.19     
+VAX1             538968604        8210-OCT-2026 17:24:30.19     
+VAX1             538968604        8310-OCT-2026 17:24:31.19     
+VAX1             538968604        8410-OCT-2026 17:24:32.19     
+VAX1             538968604        8510-OCT-2026 17:24:33.19     
+VAX1             538968604        8610-OCT-2026 17:24:34.19     
+VAX1             538968604        8710-OCT-2026 17:24:35.19     
+VAX1             538968604        8810-OCT-2026 17:24:36.19     
+VAX1             538968604        8910-OCT-2026 17:24:37.19     
+VAX1             538968604        9010-OCT-2026 17:24:38.19     
+VAX1             538968604        9110-OCT-2026 17:24:39.19     
+VAX1             538968604        9210-OCT-2026 17:24:40.19     
+VAX1             538968604        9310-OCT-2026 17:24:41.19     
+VAX1             538968604        9410-OCT-2026 17:24:42.19     
+VAX1             538968604        9510-OCT-2026 17:24:43.19     
+VAX1             538968604        9610-OCT-2026 17:24:44.19     
+VAX1             538968604        9710-OCT-2026 17:24:45.19     
+VAX1             538968604        9810-OCT-2026 17:24:46.19     
+VAX1             538968604        9910-OCT-2026 17:24:47.19     
+VAX1             538968604       10010-OCT-2026 17:24:48.19     
+VAX1             538968604       10110-OCT-2026 17:24:49.19     
+VAX1             538968604       10210-OCT-2026 17:24:50.19     
+VAX1             538968604       10310-OCT-2026 17:24:51.19     
+VAX1             538968604       10410-OCT-2026 17:24:52.19     
+VAX1             538968604       10510-OCT-2026 17:24:53.19     
+VAX1             538968604       10610-OCT-2026 17:24:54.19     
+VAX1             538968604       10710-OCT-2026 17:24:55.19     
+VAX1             538968604       10810-OCT-2026 17:24:56.19     
+VAX1             538968604       10910-OCT-2026 17:24:57.19     
+VAX1             538968604       11010-OCT-2026 17:24:58.19     
+VAX1             538968604       11110-OCT-2026 17:24:59.19     
+VAX1             538968604       11210-OCT-2026 17:25:00.19     
+VAX1             538968604       11310-OCT-2026 17:25:01.19     
+VAX1             538968604       11410-OCT-2026 17:25:02.19     
+VAX1             538968604       11510-OCT-2026 17:25:03.19     
+VAX1             538968604       11610-OCT-2026 17:25:04.19     
+VAX1             538968604       11710-OCT-2026 17:25:05.19     
+VAX1             538968604       11810-OCT-2026 17:25:06.19     
+VAX1             538968604       11910-OCT-2026 17:25:07.19     
+VAX1             538968604       12010-OCT-2026 17:25:08.19     
+VAX1             538968604       12110-OCT-2026 17:25:09.19     
+VAX1             538968604       12210-OCT-2026 17:25:10.19     
+VAX1             538968604       12310-OCT-2026 17:25:11.19     
+VAX1             538968604       12410-OCT-2026 17:25:12.19     
+VAX1             538968604       12510-OCT-2026 17:25:13.19     
+VAX1             538968604       12610-OCT-2026 17:25:14.19     
+VAX1             538968604       12710-OCT-2026 17:25:15.19     
+VAX1             538968604       12810-OCT-2026 17:25:16.19     
+VAX1             538968604       12910-OCT-2026 17:25:17.19     
+VAX1             538968604       13010-OCT-2026 17:25:18.19     
+VAX1             538968604       13110-OCT-2026 17:25:19.19     
+VAX1             538968604       13210-OCT-2026 17:25:20.19     
+VAX1             538968604       13310-OCT-2026 17:25:21.19     
+VAX1             538968604       13410-OCT-2026 17:25:22.19     
+VAX1             538968604       13510-OCT-2026 17:25:23.19     
+VAX1             538968604       13610-OCT-2026 17:25:24.20     
+VAX1             538968604       13710-OCT-2026 17:25:25.20     
+VAX1             538968604       13810-OCT-2026 17:25:26.20     
+VAX1             538968604       13910-OCT-2026 17:25:27.20     
+VAX1             538968604       14010-OCT-2026 17:25:28.21     
+VAX1             538968604       14110-OCT-2026 17:25:29.21     
+VAX1             538968604       14210-OCT-2026 17:25:30.21     
+VAX1             538968604       14310-OCT-2026 17:25:31.21     
+VAX1             538968604       14410-OCT-2026 17:25:32.21     
+VAX1             538968604       14510-OCT-2026 17:25:33.21     
+VAX1             538968604       14610-OCT-2026 17:25:34.21     
+VAX1             538968604       14710-OCT-2026 17:25:35.21     
+VAX1             538968604       14810-OCT-2026 17:25:36.21     
+VAX1             538968604       14910-OCT-2026 17:25:37.21     
+VAX1             538968604       15010-OCT-2026 17:25:38.21     
+VAX1             538968604       15110-OCT-2026 17:25:39.21     
+VAX1             538968604       15210-OCT-2026 17:25:40.21     
+VAX1             538968604       15310-OCT-2026 17:25:41.21     
+VAX1             538968604       15410-OCT-2026 17:25:42.21     
+VAX1             538968604       15510-OCT-2026 17:25:43.21     
+VAX1             538968604       15610-OCT-2026 17:25:44.21     
+VAX1             538968604       15710-OCT-2026 17:25:45.21     
+VAX1             538968604       15810-OCT-2026 17:25:46.21     
+VAX1             538968604       15910-OCT-2026 17:25:47.21     
+VAX1             538968604       16010-OCT-2026 17:25:48.21     
+VAX1             538968604       16110-OCT-2026 17:25:49.21     
+VAX1             538968604       16210-OCT-2026 17:25:50.21     
+VAX1             538968604       16310-OCT-2026 17:25:51.21     
+VAX1             538968604       16410-OCT-2026 17:25:52.21     
+VAX1             538968604       16510-OCT-2026 17:25:53.21     
+VAX1             538968604       16610-OCT-2026 17:25:54.21     
+VAX1             538968604       16710-OCT-2026 17:25:55.21     
+VAX1             538968604       16810-OCT-2026 17:25:56.21     
+VAX1             538968604       16910-OCT-2026 17:25:57.21     
+VAX1             538968604       17010-OCT-2026 17:25:58.21     
+VAX1             538968604       17110-OCT-2026 17:25:59.21     
+VAX1             538968604       17210-OCT-2026 17:26:00.21     
+VAX1             538968604       17310-OCT-2026 17:26:01.21     
+VAX1             538968604       17410-OCT-2026 17:26:02.21     
+OVMXE            268435461       17510-OCT-2026 17:27:00.85     
+OVMXE            268435461       17610-OCT-2026 17:27:01.85     
+OVMXE            268435461       17710-OCT-2026 17:27:02.85     
+OVMXE            268435461       17810-OCT-2026 17:27:03.86     
+OVMXE            268435461       17910-OCT-2026 17:27:04.86     
+OVMXE            268435461       18010-OCT-2026 17:27:05.87     
+OVMXE            268435461       18110-OCT-2026 17:27:06.87     
+OVMXE            268435461       18210-OCT-2026 17:27:07.87     
+OVMXE            268435461       18310-OCT-2026 17:27:08.88     
+OVMXE            268435461       18410-OCT-2026 17:27:09.88     
+OVMXE            268435461       18510-OCT-2026 17:27:10.88     
+OVMXE            268435461       18610-OCT-2026 17:27:11.89     
+OVMXE            268435461       18710-OCT-2026 17:27:12.89     
+OVMXE            268435461       18810-OCT-2026 17:27:13.89     
+OVMXE            268435461       18910-OCT-2026 17:27:14.90     
+OVMXE            268435461       19010-OCT-2026 17:27:15.90     
+OVMXE            268435461       19110-OCT-2026 17:27:16.90     
+OVMXE            268435461       19210-OCT-2026 17:27:17.91     
+OVMXE            268435461       19310-OCT-2026 17:27:18.91     
+OVMXE            268435461       19410-OCT-2026 17:27:19.91     
+OVMXE            268435461       19510-OCT-2026 17:27:20.92     
+OVMXE            268435461       19610-OCT-2026 17:27:21.92     
+OVMXE            268435461       19710-OCT-2026 17:27:22.92     
+OVMXE            268435461       19810-OCT-2026 17:27:23.93     
+OVMXE            268435461       19910-OCT-2026 17:27:24.93     
+OVMXE            268435461       20010-OCT-2026 17:27:25.93     
+OVMXE            268435461       20110-OCT-2026 17:27:26.94     
+OVMXE            268435461       20210-OCT-2026 17:27:27.94     
+OVMXE            268435461       20310-OCT-2026 17:27:28.95     
+OVMXE            268435461       20410-OCT-2026 17:27:29.95     
+OVMXE            268435461       20510-OCT-2026 17:27:30.95     
+OVMXE            268435461       20610-OCT-2026 17:27:31.96     
+OVMXE            268435461       20710-OCT-2026 17:27:32.96     
+OVMXE            268435461       20810-OCT-2026 17:27:33.96     
+OVMXE            268435461       20910-OCT-2026 17:27:34.97     
+OVMXE            268435461       21010-OCT-2026 17:27:35.97     
+OVMXE            268435461       21110-OCT-2026 17:27:36.97     
+OVMXE            268435461       21210-OCT-2026 17:27:37.98     
+OVMXE            268435461       21310-OCT-2026 17:27:38.98     
+OVMXE            268435461       21410-OCT-2026 17:27:39.98     
+OVMXE            268435461       21510-OCT-2026 17:27:40.99     
+OVMXE            268435461       21610-OCT-2026 17:27:41.99     
+OVMXE            268435461       21710-OCT-2026 17:27:42.99     
+OVMXE            268435461       21810-OCT-2026 17:27:44.00     
+OVMXE            268435461       21910-OCT-2026 17:27:45.00     
+OVMXE            268435461       22010-OCT-2026 17:27:46.00     
+OVMXE            268435461       22110-OCT-2026 17:27:47.00     
+OVMXE            268435461       22210-OCT-2026 17:27:48.01     
+OVMXE            268435461       22310-OCT-2026 17:27:49.01     
+OVMXE            268435461       22410-OCT-2026 17:27:50.01     
+OVMXE            268435461       22510-OCT-2026 17:27:51.02     
+OVMXE            268435461       22610-OCT-2026 17:27:52.02     
+OVMXE            268435461       22710-OCT-2026 17:27:53.02     
+OVMXE            268435461       22810-OCT-2026 17:27:54.03     
+OVMXE            268435461       22910-OCT-2026 17:27:55.03     
+OVMXE            268435461       23010-OCT-2026 17:27:56.03     
+OVMXE            268435461       23110-OCT-2026 17:27:57.04     
+OVMXE            268435461       23210-OCT-2026 17:27:58.04     
+OVMXE            268435461       23310-OCT-2026 17:27:59.05     
+OVMXE            268435461       23410-OCT-2026 17:28:00.05     
+OVMXE            268435461       23510-OCT-2026 17:28:01.05     
+OVMXE            268435461       23610-OCT-2026 17:28:02.06     
+OVMXE            268435461       23710-OCT-2026 17:28:03.06     
+OVMXE            268435461       23810-OCT-2026 17:28:04.06     
+OVMXE            268435461       23910-OCT-2026 17:28:05.07     
+OVMXE            268435461       24010-OCT-2026 17:28:06.07     
+OVMXE            268435461       24110-OCT-2026 17:28:07.08     
+OVMXE            268435461       24210-OCT-2026 17:28:08.08     
+OVMXE            268435461       24310-OCT-2026 17:28:09.08     
+OVMXE            268435461       24410-OCT-2026 17:28:10.08     
+OVMXE            268435461       24510-OCT-2026 17:28:11.09     
+OVMXE            268435461       24610-OCT-2026 17:28:12.09     
+OVMXE            268435461       24710-OCT-2026 17:28:13.09     
+OVMXE            268435461       24810-OCT-2026 17:28:14.10     
+OVMXE            268435461       24910-OCT-2026 17:28:15.10     
+OVMXE            268435461       25010-OCT-2026 17:28:16.10     
+OVMXE            268435461       25110-OCT-2026 17:28:17.11     
+OVMXE            268435461       25210-OCT-2026 17:28:18.11     
+OVMXE            268435461       25310-OCT-2026 17:28:19.11     
+OVMXE            268435461       25410-OCT-2026 17:28:20.12     
+OVMXE            268435461       25510-OCT-2026 17:28:21.12     
+OVMXE            268435461       25610-OCT-2026 17:28:22.12     
+OVMXE            268435461       25710-OCT-2026 17:28:23.13     
+OVMXE            268435461       25810-OCT-2026 17:28:24.13     
+OVMXE            268435461       25910-OCT-2026 17:28:25.14     
+OVMXE            268435461       26010-OCT-2026 17:28:26.14     
+OVMXE            268435461       26110-OCT-2026 17:28:27.14     
+OVMXE            268435461       26210-OCT-2026 17:28:28.15     
+OVMXE            268435461       26310-OCT-2026 17:28:29.15     
+OVMXE            268435461       26410-OCT-2026 17:28:30.15     
+OVMXE            268435461       26510-OCT-2026 17:28:31.16     
+OVMXE            268435461       26610-OCT-2026 17:28:32.16     
+OVMXE            268435461       26710-OCT-2026 17:28:33.17     
+OVMXE            268435461       26810-OCT-2026 17:28:34.17     
+OVMXE            268435461       26910-OCT-2026 17:28:35.17     
+OVMXE            268435461       27010-OCT-2026 17:28:36.18     
+OVMXE            268435461       27110-OCT-2026 17:28:37.18     
+OVMXE            268435461       27210-OCT-2026 17:28:38.18     
+OVMXE            268435461       27310-OCT-2026 17:28:39.18     
+OVMXE            268435461       27410-OCT-2026 17:28:40.19     
+OVMXE            268435461       27510-OCT-2026 17:28:41.20     
+OVMXE            268435461       27610-OCT-2026 17:28:42.20     
+OVMXE            268435461       27710-OCT-2026 17:28:43.20     
+OVMXE            268435461       27810-OCT-2026 17:28:44.21     
+OVMXE            268435461       27910-OCT-2026 17:28:45.21     
+OVMXE            268435461       28010-OCT-2026 17:28:46.21     
+OVMXE            268435461       28110-OCT-2026 17:28:47.22     
+OVMXE            268435461       28210-OCT-2026 17:28:48.23     
+OVMXE            268435461       28310-OCT-2026 17:28:49.23     
+OVMXE            268435461       28410-OCT-2026 17:28:50.23     
+OVMXE            268435461       28510-OCT-2026 17:28:51.24     
+OVMXE            268435461       28610-OCT-2026 17:28:52.24     
+OVMXE            268435461       28710-OCT-2026 17:28:53.24     
+OVMXE            268435461       28810-OCT-2026 17:28:54.25     
+OVMXE            268435461       28910-OCT-2026 17:28:55.25     
+OVMXE            268435461       29010-OCT-2026 17:28:56.26     
+OVMXE            268435461       29110-OCT-2026 17:28:57.27     
+OVMXE            268435461       29210-OCT-2026 17:28:58.27     
+OVMXE            268435461       29310-OCT-2026 17:28:59.27     
+OVMXE            268435461       29410-OCT-2026 17:29:00.27     
+OVMXE            268435461       29510-OCT-2026 17:29:01.28     
+OVMXE            268435461       29610-OCT-2026 17:29:02.28     
+OVMXE            268435461       29710-OCT-2026 17:29:03.29     
+OVMXE            268435461       29810-OCT-2026 17:29:04.30     
+OVMXE            268435461       29910-OCT-2026 17:29:05.30     
+OVMXE            268435461       30010-OCT-2026 17:29:06.31     
+OVMXE            268435461       30110-OCT-2026 17:29:07.31     
+OVMXE            268435461       30210-OCT-2026 17:29:08.31     
+OVMXE            268435461       30310-OCT-2026 17:29:09.32     
+OVMXE            268435461       30410-OCT-2026 17:29:10.32     
+OVMXE            268435461       30510-OCT-2026 17:29:11.32     
+OVMXE            268435461       30610-OCT-2026 17:29:12.33     
+OVMXE            268435461       30710-OCT-2026 17:29:13.34     
+OVMXE            268435461       30810-OCT-2026 17:29:14.34     
+OVMXE            268435461       30910-OCT-2026 17:29:15.34     
+OVMXE            268435461       31010-OCT-2026 17:29:16.35     
+OVMXE            268435461       31110-OCT-2026 17:29:17.35     
+OVMXE            268435461       31210-OCT-2026 17:29:18.35     
+OVMXE            268435461       31310-OCT-2026 17:29:19.36     
+OVMXE            268435461       31410-OCT-2026 17:29:20.37     
+OVMXE            268435461       31510-OCT-2026 17:29:21.37     
+OVMXE            268435461       31610-OCT-2026 17:29:22.37     
+OVMXE            268435461       31710-OCT-2026 17:29:23.38     
+OVMXE            268435461       31810-OCT-2026 17:29:24.38     
+OVMXE            268435461       31910-OCT-2026 17:29:25.38     
+OVMXE            268435461       32010-OCT-2026 17:29:26.39     
+OVMXE            268435461       32110-OCT-2026 17:29:27.39     
+OVMXE            268435461       32210-OCT-2026 17:29:28.40     
+OVMXE            268435461       32310-OCT-2026 17:29:29.40     
+OVMXE            268435461       32410-OCT-2026 17:29:30.41     
+OVMXE            268435461       32510-OCT-2026 17:29:31.41     
+OVMXE            268435461       32610-OCT-2026 17:29:32.41     
+OVMXE            268435461       32710-OCT-2026 17:29:33.42     
+OVMXE            268435461       32810-OCT-2026 17:29:34.42     
+OVMXE            268435461       32910-OCT-2026 17:29:35.43     
+OVMXE            268435461       33010-OCT-2026 17:29:36.44     
+OVMXE            268435461       33110-OCT-2026 17:29:37.44     
+OVMXE            268435461       33210-OCT-2026 17:29:38.45     
+OVMXE            268435461       33310-OCT-2026 17:29:39.45     
+OVMXE            268435461       33410-OCT-2026 17:29:40.46     
+OVMXE            268435461       33510-OCT-2026 17:29:41.46     
+OVMXE            268435461       33610-OCT-2026 17:29:42.47     
+OVMXE            268435461       33710-OCT-2026 17:29:43.47     
+OVMXE            268435461       33810-OCT-2026 17:29:44.48     
+OVMXE            268435461       33910-OCT-2026 17:29:45.48     
+OVMXE            268435461       34010-OCT-2026 17:29:46.49     
+OVMXE            268435461       34110-OCT-2026 17:29:47.49     
+OVMXE            268435461       34210-OCT-2026 17:29:48.50     
+OVMXE            268435461       34310-OCT-2026 17:29:49.50     
+OVMXE            268435461       34410-OCT-2026 17:29:50.50     
+OVMXE            268435461       34510-OCT-2026 17:29:51.51     
+OVMXE            268435461       34610-OCT-2026 17:29:52.52     
+OVMXE            268435461       34710-OCT-2026 17:29:53.52     
+OVMXE            268435461       34810-OCT-2026 17:29:54.53     
+OVMXE            268435461       34910-OCT-2026 17:29:55.53     
+OVMXE            268435461       35010-OCT-2026 17:29:56.53     
+OVMXE            268435461       35110-OCT-2026 17:29:57.54     
+OVMXE            268435461       35210-OCT-2026 17:29:58.54     
+OVMXE            268435461       35310-OCT-2026 17:29:59.54     
+OVMXE            268435461       35410-OCT-2026 17:30:00.55     
+OVMXE            268435461       35510-OCT-2026 17:30:01.56     
+OVMXE            268435461       35610-OCT-2026 17:30:02.56     
+OVMXE            268435461       35710-OCT-2026 17:30:03.56     
+OVMXE            268435461       35810-OCT-2026 17:30:04.57     
+OVMXE            268435461       35910-OCT-2026 17:30:05.57     
+OVMXE            268435461       36010-OCT-2026 17:30:06.57     
+OVMXE            268435461       36110-OCT-2026 17:30:07.57     
+OVMXE            268435461       36210-OCT-2026 17:30:08.59     
+OVMXE            268435461       36310-OCT-2026 17:30:09.59     
+OVMXE            268435461       36410-OCT-2026 17:30:10.59     
+OVMXE            268435461       36510-OCT-2026 17:30:11.59     
+OVMXE            268435461       36610-OCT-2026 17:30:12.60     
+OVMXE            268435461       36710-OCT-2026 17:30:13.60     
+OVMXE            268435461       36810-OCT-2026 17:30:14.60     
+OVMXE            268435461       36910-OCT-2026 17:30:15.61     
+OVMXE            268435461       37010-OCT-2026 17:30:16.61     
+OVMXE            268435461       37110-OCT-2026 17:30:17.62     
+OVMXE            268435461       37210-OCT-2026 17:30:18.62     
+OVMXE            268435461       37310-OCT-2026 17:30:19.63     
+OVMXE            268435461       37410-OCT-2026 17:30:20.63     
+OVMXE            268435461       37510-OCT-2026 17:30:21.63     
+OVMXE            268435461       37610-OCT-2026 17:30:22.64     
+OVMXE            268435461       37710-OCT-2026 17:30:23.64     
+OVMXE            268435461       37810-OCT-2026 17:30:24.65     
+OVMXE            268435461       37910-OCT-2026 17:30:25.65     
+OVMXE            268435461       38010-OCT-2026 17:30:26.65     
+OVMXE            268435461       38110-OCT-2026 17:30:27.66     
+OVMXE            268435461       38210-OCT-2026 17:30:28.66     
+OVMXE            268435461       38310-OCT-2026 17:30:29.66     
+OVMXE            268435461       38410-OCT-2026 17:30:30.67     
+OVMXE            268435461       38510-OCT-2026 17:30:31.67     
+OVMXE            268435461       38610-OCT-2026 17:30:32.68     
+OVMXE            268435461       38710-OCT-2026 17:30:33.68     
+OVMXE            268435461       38810-OCT-2026 17:30:34.68     
+OVMXE            268435461       38910-OCT-2026 17:30:35.69     
+OVMXE            268435461       39010-OCT-2026 17:30:36.69     
+OVMXE            268435461       39110-OCT-2026 17:30:37.69     
+OVMXE            268435461       39210-OCT-2026 17:30:38.70     
+OVMXE            268435461       39310-OCT-2026 17:30:39.70     
+OVMXE            268435461       39410-OCT-2026 17:30:40.71     
+OVMXE            268435461       39510-OCT-2026 17:30:41.71     
+OVMXE            268435461       39610-OCT-2026 17:30:42.71     
+OVMXE            268435461       39710-OCT-2026 17:30:43.72     
+OVMXE            268435461       39810-OCT-2026 17:30:44.72     
+OVMXE            268435461       39910-OCT-2026 17:30:45.72     
+OVMXE            268435461       40010-OCT-2026 17:30:46.73     
+OVMXE            268435461       40110-OCT-2026 17:30:47.73     
+OVMXE            268435461       40210-OCT-2026 17:30:48.74     
+OVMXE            268435461       40310-OCT-2026 17:30:49.74     
+OVMXE            268435461       40410-OCT-2026 17:30:50.74     
+OVMXE            268435461       40510-OCT-2026 17:30:51.75     
+OVMXE            268435461       40610-OCT-2026 17:30:52.75     
+OVMXE            268435461       40710-OCT-2026 17:30:53.75     
+OVMXE            268435461       40810-OCT-2026 17:30:54.76     
+OVMXE            268435461       40910-OCT-2026 17:30:55.76     
+OVMXE            268435461       41010-OCT-2026 17:30:56.77     
+OVMXE            268435461       41110-OCT-2026 17:30:57.77     
+OVMXE            268435461       41210-OCT-2026 17:30:58.77     
+OVMXE            268435461       41310-OCT-2026 17:30:59.78     
+OVMXE            268435461       41410-OCT-2026 17:31:00.78     
+OVMXE            268435461       41510-OCT-2026 17:31:01.78     
+OVMXE            268435461       41610-OCT-2026 17:31:02.79     
+OVMXE            268435461       41710-OCT-2026 17:31:03.80     
+OVMXE            268435461       41810-OCT-2026 17:31:04.80     
+OVMXE            268435461       41910-OCT-2026 17:31:05.81     
+OVMXE            268435461       42010-OCT-2026 17:31:06.81     
+OVMXE            268435461       42110-OCT-2026 17:31:07.81     
+OVMXE            268435461       42210-OCT-2026 17:31:08.81     
+OVMXE            268435461       42310-OCT-2026 17:31:09.82     
+OVMXE            268435461       42410-OCT-2026 17:31:10.82     
+OVMXE            268435461       42510-OCT-2026 17:31:11.82     
+OVMXE            268435461       42610-OCT-2026 17:31:12.83     
+OVMXE            268435461       42710-OCT-2026 17:31:13.83     
+OVMXE            268435461       42810-OCT-2026 17:31:14.83     
+OVMXE            268435461       42910-OCT-2026 17:31:15.84     
+OVMXE            268435461       43010-OCT-2026 17:31:16.84     
+OVMXE            268435461       43110-OCT-2026 17:31:17.84     
+OVMXE            268435461       43210-OCT-2026 17:31:18.85     
+OVMXE            268435461       43310-OCT-2026 17:31:19.85     
+OVMXE            268435461       43410-OCT-2026 17:31:20.86     
+OVMXE            268435461       43510-OCT-2026 17:31:21.86     
+OVMXE            268435461       43610-OCT-2026 17:31:22.87     
+OVMXE            268435461       43710-OCT-2026 17:31:23.87     
+OVMXE            268435461       43810-OCT-2026 17:31:24.87     
+OVMXE            268435461       43910-OCT-2026 17:31:25.88     
+OVMXE            268435461       44010-OCT-2026 17:31:26.88     
+OVMXE            268435461       44110-OCT-2026 17:31:27.88     
+OVMXE            268435461       44210-OCT-2026 17:31:28.89     
+OVMXE            268435461       44310-OCT-2026 17:31:29.89     
+OVMXE            268435461       44410-OCT-2026 17:31:30.89     
+OVMXE            268435461       44510-OCT-2026 17:31:31.90     
+OVMXE            268435461       44610-OCT-2026 17:31:32.90     
+OVMXE            268435461       44710-OCT-2026 17:31:33.90     
+OVMXE            268435461       44810-OCT-2026 17:31:34.91     
+OVMXE            268435461       44910-OCT-2026 17:31:35.91     
+OVMXE            268435461       45010-OCT-2026 17:31:36.92     
+OVMXE            268435461       45110-OCT-2026 17:31:37.92     
+OVMXE            268435461       45210-OCT-2026 17:31:38.92     
+OVMXE            268435461       45310-OCT-2026 17:31:39.93     
+OVMXE            268435461       45410-OCT-2026 17:31:40.93     
+OVMXE            268435461       45510-OCT-2026 17:31:41.94     
+OVMXE            268435461       45610-OCT-2026 17:31:42.94     
+OVMXE            268435461       45710-OCT-2026 17:31:43.95     
+OVMXE            268435461       45810-OCT-2026 17:31:44.95     
+OVMXE            268435461       45910-OCT-2026 17:31:45.96     
+OVMXE            268435461       46010-OCT-2026 17:31:46.96     
+OVMXE            268435461       46110-OCT-2026 17:31:47.97     
+OVMXE            268435461       46210-OCT-2026 17:31:48.97     
+OVMXE            268435461       46310-OCT-2026 17:31:49.97     
+OVMXE            268435461       46410-OCT-2026 17:31:50.98     
+OVMXE            268435461       46510-OCT-2026 17:31:51.98     
+OVMXE            268435461       46610-OCT-2026 17:31:52.99     
+OVMXE            268435461       46710-OCT-2026 17:31:53.99     
+OVMXE            268435461       46810-OCT-2026 17:31:54.99     
+OVMXE            268435461       46910-OCT-2026 17:31:56.00     
+OVMXE            268435461       47010-OCT-2026 17:31:57.00     
+OVMXE            268435461       47110-OCT-2026 17:31:58.00     
+OVMXE            268435461       47210-OCT-2026 17:31:59.01     
+OVMXE            268435461       47310-OCT-2026 17:32:00.01     
+OVMXE            268435461       47410-OCT-2026 17:32:01.02     
+OVMXE            268435461       47510-OCT-2026 17:32:02.02     
+OVMXE            268435461       47610-OCT-2026 17:32:03.02     
+OVMXE            268435461       47710-OCT-2026 17:32:04.03     
+OVMXE            268435461       47810-OCT-2026 17:32:05.03     
+OVMXE            268435461       47910-OCT-2026 17:32:06.03     
+OVMXE            268435461       48010-OCT-2026 17:32:07.04     
+OVMXE            268435461       48110-OCT-2026 17:32:08.04     
+OVMXE            268435461       48210-OCT-2026 17:32:09.05     
+OVMXE            268435461       48310-OCT-2026 17:32:10.05     
+OVMXE            268435461       48410-OCT-2026 17:32:11.05     
+OVMXE            268435461       48510-OCT-2026 17:32:12.05     
+OVMXE            268435461       48610-OCT-2026 17:32:13.06     
+OVMXE            268435461       48710-OCT-2026 17:32:14.06     
+OVMXE            268435461       48810-OCT-2026 17:32:15.06     
+OVMXE            268435461       48910-OCT-2026 17:32:16.07     
+OVMXE            268435461       49010-OCT-2026 17:32:17.07     
+OVMXE            268435461       49110-OCT-2026 17:32:18.08     
+OVMXE            268435461       49210-OCT-2026 17:32:19.08     
+OVMXE            268435461       49310-OCT-2026 17:32:20.08     
+OVMXE            268435461       49410-OCT-2026 17:32:21.09     
+OVMXE            268435461       49510-OCT-2026 17:32:22.09     
+OVMXE            268435461       49610-OCT-2026 17:32:23.09     
+OVMXE            268435461       49710-OCT-2026 17:32:24.10     
+OVMXE            268435461       49810-OCT-2026 17:32:25.10     
+OVMXE            268435461       49910-OCT-2026 17:32:26.11     
+OVMXE            268435461       50010-OCT-2026 17:32:27.11     
+OVMXE            268435461       50110-OCT-2026 17:32:28.12     
+OVMXE            268435461       50210-OCT-2026 17:32:29.12     
+OVMXE            268435461       50310-OCT-2026 17:32:30.12     
+OVMXE            268435461       50410-OCT-2026 17:32:31.13     
+OVMXE            268435461       50510-OCT-2026 17:32:32.13     
+OVMXE            268435461       50610-OCT-2026 17:32:33.14     
+OVMXE            268435461       50710-OCT-2026 17:32:34.14     
+OVMXE            268435461       50810-OCT-2026 17:32:35.14     
+OVMXE            268435461       50910-OCT-2026 17:32:36.15     
+OVMXE            268435461       51010-OCT-2026 17:32:37.15     
+OVMXE            268435461       51110-OCT-2026 17:32:38.15     
+OVMXE            268435461       51210-OCT-2026 17:32:39.16     
+OVMXE            268435461       51310-OCT-2026 17:32:40.16     
+OVMXE            268435461       51410-OCT-2026 17:32:41.17     
+OVMXE            268435461       51510-OCT-2026 17:32:42.17     
+OVMXE            268435461       51610-OCT-2026 17:32:43.17     
+OVMXE            268435461       51710-OCT-2026 17:32:44.18     
+OVMXE            268435461       51810-OCT-2026 17:32:45.18     
+OVMXE            268435461       51910-OCT-2026 17:32:46.18     
+OVMXE            268435461       52010-OCT-2026 17:32:47.19     
+OVMXE            268435461       52110-OCT-2026 17:32:48.19     
+OVMXE            268435461       52210-OCT-2026 17:32:49.20     
+OVMXE            268435461       52310-OCT-2026 17:32:50.20     
+OVMXE            268435461       52410-OCT-2026 17:32:51.20     
+OVMXE            268435461       52510-OCT-2026 17:32:52.21     
+OVMXE            268435461       52610-OCT-2026 17:32:53.21     
+OVMXE            268435461       52710-OCT-2026 17:32:54.21     
+OVMXE            268435461       52810-OCT-2026 17:32:55.22     
+OVMXE            268435461       52910-OCT-2026 17:32:56.22     
+OVMXE            268435461       53010-OCT-2026 17:32:57.23     
+OVMXE            268435461       53110-OCT-2026 17:32:58.23     
+OVMXE            268435461       53210-OCT-2026 17:32:59.24     
+OVMXE            268435461       53310-OCT-2026 17:33:00.24     
+OVMXE            268435461       53410-OCT-2026 17:33:01.25     
+OVMXE            268435461       53510-OCT-2026 17:33:02.25     
+OVMXE            268435461       53610-OCT-2026 17:33:03.25     
+OVMXE            268435461       53710-OCT-2026 17:33:04.26     
+OVMXE            268435461       53810-OCT-2026 17:33:05.27     
+OVMXE            268435461       53910-OCT-2026 17:33:06.27     
+OVMXE            268435461       54010-OCT-2026 17:33:07.27     
+OVMXE            268435461       54110-OCT-2026 17:33:08.28     
+OVMXE            268435461       54210-OCT-2026 17:33:09.28     
+OVMXE            268435461       54310-OCT-2026 17:33:10.28     
+OVMXE            268435461       54410-OCT-2026 17:33:11.29     
+OVMXE            268435461       54510-OCT-2026 17:33:12.29     
+OVMXE            268435461       54610-OCT-2026 17:33:13.30     
+OVMXE            268435461       54710-OCT-2026 17:33:14.30     
+OVMXE            268435461       54810-OCT-2026 17:33:15.31     
+OVMXE            268435461       54910-OCT-2026 17:33:16.31     
+OVMXE            268435461       55010-OCT-2026 17:33:17.31     
+OVMXE            268435461       55110-OCT-2026 17:33:18.31     
+OVMXE            268435461       55210-OCT-2026 17:33:19.32     
+OVMXE            268435461       55310-OCT-2026 17:33:20.32     
+OVMXE            268435461       55410-OCT-2026 17:33:21.33     
+OVMXE            268435461       55510-OCT-2026 17:33:22.33     
+OVMXE            268435461       55610-OCT-2026 17:33:23.33     
+OVMXE            268435461       55710-OCT-2026 17:33:24.33     
+OVMXE            268435461       55810-OCT-2026 17:33:25.34     
+OVMXE            268435461       55910-OCT-2026 17:33:26.34     
+OVMXE            268435461       56010-OCT-2026 17:33:27.34     
+OVMXE            268435461       56110-OCT-2026 17:33:28.35     
+OVMXE            268435461       56210-OCT-2026 17:33:29.35     
+OVMXE            268435461       56310-OCT-2026 17:33:30.36     
+OVMXE            268435461       56410-OCT-2026 17:33:31.36     
+OVMXE            268435461       56510-OCT-2026 17:33:32.37     
+OVMXE            268435461       56610-OCT-2026 17:33:33.37     
+OVMXE            268435461       56710-OCT-2026 17:33:34.37     
+$ DISMOUNT $2$DUA1:
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ 

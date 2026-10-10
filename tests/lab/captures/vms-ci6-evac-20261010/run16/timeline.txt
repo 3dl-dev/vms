@@ -1,0 +1,21 @@
+17:19:02 T0 capture ci6-evac-16 (all 0x6007 frames). OVMXE build b8174637 = run-15 build (main + #1582 + #1613 + lab-only EVACWL) + #1615 (vms-cab op-0x0f answer). Fresh vaxlab-3 pod. OVMXE 1030 LOCKDIRWT 1 VOTES 1 EV 3; VAX1 1025 / VAX2 1026 OpenVMS VAX V7.3 LOCKDIRWT 0 VOTES 1 EV 3; group 1. VAX1DATA dismounted cluster-wide
+17:21:18 OVMXE booted, member, logged in
+17:21:33 CORRECTION to T0: after the pod restart VAX1DATA was already mounted on VAX1+VAX2 by their startup. So STEP 0a dismounts it cluster-wide with OVMXE a member first
+17:21:33 STEP 0a VAX1: DISMOUNT/CLUSTER $2$DUA1: (OVMXE member, never mounted)
+17:22:03 STEP 0 VAX1: MOUNT/CLUSTER $2$DUA1: VAX1DATA with OVMXE a member
+17:22:46 STEP 0 result: mounted on VAX1+VAX2; OVMXE RMTMNTFAIL/ACCVIO and RMTDSMFAIL/DEVOFFLINE as in run 15 (status field, rd vms-1f64 -- OVMX member answering a close for a volume it never mounted)
+17:23:00 STEP 1 OVMXE: EVACWL STANDBY NL=90 -- NL on EVAC$WORKLOAD first (OVMXE = directory + master)
+17:23:09 STEP 2 VAX1: EVACWL (direct EX, forever) -- the workload runs on the real VMS node
+17:24:51 T+90 s: OVMXE standby issued CONVERT NL->EX (queues behind VAX1's EX)
+17:25:01 STEP 3 VAX2: EVACWL STANDBY (falsifier: must never take EX while another node holds it)
+17:26:02 SNAPSHOT: SDA on VAX1 -- EVAC$WORKLOAD master CSID 00010003 = OVMXE, VAX1's EX granted (030003AC); VAX2 standby LEF; VAX1 at seq 162
+17:26:02 STEP 4 EVACUATE: STOP EVACVAX1 on VAX1
+17:26:17 STEP 5 volume handoff: VAX1 DISMOUNT/CLUSTER $2$DUA1:
+17:27:01 STEP 4 result: OVMXE 'EVACWL: holding EVAC$WORKLOAD, waiting for EVAC$DATA:EVAC.DAT' (EX granted on the VAX's departure). STEP 5 result: dismounted on VAX1+VAX2 (Online), OVMXE RMTDSMFAIL/DEVOFFLINE (vms-1f64)
+17:27:01 STEP 6 OVMXE: MOUNT VDA100: VAX1DATA
+17:27:39 TAKEOVER COMPLETE: 'EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 175'; VAX2 falsifier still LEF
+17:28:59 STEP 7 VAX1 leaves the cluster: SHUTDOWN, REMOVE_NODE
+17:31:28 STEP 7 result: VAX1 SHUTDOWN COMPLETE; VAX2 removed VAX1 (17:29:15); VAX2 Q=2 V=2 N=2; VAX2 SHOW CLUSTER returns promptly (run 15 hung here): VAX2 + OVMXE MEMBER
+17:33:20 END OF WORKLOAD: OVMXE STOP SYSTEM_1 (EVACWL), DISMOUNT VDA100: -- to read the seam back on real VMS
+17:34:21 SEAM read back on real VMS (VAX2 local MOUNT, read-only use, dismounted after): VAX1 seq 160..174 (last 17:26:02.21), then OVMXE seq 175 (17:27:00.85) .. 567, contiguous (SEARCH matched 567 records = seq 1..567, no gap, no duplicate). NOTE: OVMXE still had VDA100 mounted+open -- its STOP SYSTEM_1 did not stop the process (DEVNOTDISM), so this VAX2 mount was outside cluster coherence; reads only
+17:34:55 OVMXE second STOP SYSTEM_1 ended EVACWL (78 blocks), DISMOUNT VDA100: DISMOUNTED. End state: VAX2 + OVMXE MEMBER, Q=2 V=2, no BUG CHECK on any console, no rcu stall/oops on OVMXE

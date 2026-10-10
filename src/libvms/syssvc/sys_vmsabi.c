@@ -328,11 +328,16 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
 
 /* Every other function (a terminal or mailbox read/write, a device
  * function...): P1-P6 are values or buffer addresses, not descriptors, so the
- * request goes to the same $QIO OVMX's own code calls, unchanged (vms-3b3f). */
-static int is_acp_function(unsigned int func)
+ * request goes to the same $QIO OVMX's own code calls, unchanged (vms-3b3f).
+ * IO$_ACCESS/IO$_DEACCESS are ACP functions on a file-structured device; on a
+ * terminal or mailbox the device's own driver answers them (vms-40fb: a
+ * terminal's IO$_ACCESS is refused by the terminal driver, not read as an ACP
+ * request with a missing FIB). */
+static int is_acp_function(unsigned short chan, unsigned int func)
 {
     unsigned fcode = func & IO$M_FCODE;
-    return fcode == IO$_ACCESS || fcode == IO$_DEACCESS;
+    return (fcode == IO$_ACCESS || fcode == IO$_DEACCESS) &&
+           !ovmx_vmsabi_chan_is_record_device(chan);
 }
 
 static int dev_qio(int wait, unsigned int efn, unsigned short chan, unsigned int func,
@@ -350,7 +355,7 @@ int SYS$QIOW(unsigned int efn, unsigned short chan, unsigned int func, void *ios
 {
     va_list ap;
     va_start(ap, iosb);
-    int st = is_acp_function(func) ? acp_qio(efn, chan, func, iosb, ap)
+    int st = is_acp_function(chan, func) ? acp_qio(efn, chan, func, iosb, ap)
                                    : dev_qio(1, efn, chan, func, iosb, ap);
     va_end(ap);
     return st;
@@ -360,7 +365,7 @@ int SYS$QIO(unsigned int efn, unsigned short chan, unsigned int func, void *iosb
 {
     va_list ap;
     va_start(ap, iosb);
-    int st = is_acp_function(func) ? acp_qio(efn, chan, func, iosb, ap)
+    int st = is_acp_function(chan, func) ? acp_qio(efn, chan, func, iosb, ap)
                                    : dev_qio(0, efn, chan, func, iosb, ap);
     va_end(ap);
     return st;

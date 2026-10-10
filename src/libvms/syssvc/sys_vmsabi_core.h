@@ -60,6 +60,11 @@ void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), u
 
 /* $QIO / $QIOW (wait != 0) of any non-ACP function, P1-P6 as the caller
  * passed them (vms-3b3f). */
+/* 1 if `chan` is assigned to a terminal or a mailbox, whose driver answers
+ * IO$_ACCESS/IO$_DEACCESS itself; 0 otherwise (a file-structured device, where
+ * they are ACP functions taking the VMS ACP-QIO arguments, or a channel
+ * $GETDVI cannot describe). */
+int ovmx_vmsabi_chan_is_record_device(uint16_t chan);
 uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,
                          void *iosb, unsigned long long astadr,
                          unsigned long long astprm, const unsigned long long p[6]);

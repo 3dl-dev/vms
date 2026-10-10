@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dcdef.h"
 #include "descrip.h"
 #include "lnmdef.h"
 #include "ssdef.h"
@@ -151,6 +152,24 @@ void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), u
         sys$setef(efn);
     if (astadr)
         astadr(astprm);
+}
+
+extern int vms$$chan_is_mailbox(uint16_t chan);
+
+/* The same classification OVMX's own $QIO makes (sys_qio.c
+ * qio_chan_is_terminal): the executive's device record for the channel. */
+int ovmx_vmsabi_chan_is_record_device(uint16_t chan)
+{
+    if (vms$$chan_is_mailbox(chan))
+        return 1;
+    uint32_t ec = vms$$chan_exec_chan(chan);
+    if (ec == 0)
+        return 0;
+    struct vms_devinfo info;
+    memset(&info, 0, sizeof info);
+    if (!(vms_kif_getdvi_chan(ec, &info) & 1))
+        return 0;
+    return info.devclass == DC$_TERM || info.devclass == DC$_MAILBOX;
 }
 
 uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,

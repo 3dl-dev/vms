@@ -20,7 +20,6 @@ lnm LNM.TRN.TT  # vms-3432: TT attr 0600 vs 0700
 lnm LNM.TRN.LOGIN_SURVIVES  # vms-3432: follows SYS$LOGIN's table (mode 2 vs 1)
 tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count (same as the Linux gate)
 tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT (same as the Linux gate)
-tt TT.ILLFUNC  # vms-40fb: an illegal function through the VMS-ABI $QIOW is SS$_BADPARAM, IOSB untouched
 tt TT.READPROMPT.TIMED0  # vms-40fb: missing from the VMS-ABI terminal path
 tt TT.WRITE.ZERO  # vms-40fb: since the executive terminal driver (#1574) the VMS-ABI path leaves the IOSB status word's high byte unwritten (0xA501)
 tt TT.READ.TIMED0  # vms-40fb: as TT.WRITE.ZERO -- SS$_TIMEOUT (0x22C) reads back as 0xA52C

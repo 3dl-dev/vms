@@ -721,6 +721,7 @@ EOF
         why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
         require_fail) cat <<'EOF'
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+*** the op-0x0f answer equals the real VAX member's, byte for byte after the envelope ***
 EOF
                       ;;
         esac;;

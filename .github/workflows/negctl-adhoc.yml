@@ -63,3 +63,15 @@ jobs:
           printf '%s\n' $DEFECTS | sed 's/^/  /'
           # shellcheck disable=SC2086
           tests/qemu/run_facility_negctl.sh $DEFECTS
+
+      # The console of any defect boot that died or hung (run_facility_negctl.sh
+      # keeps it in $RUNNER_TEMP/negctl-deaths), as the sharded gate uploads it --
+      # an adhoc hang without its console cannot be diagnosed.
+      - name: Keep the guest console of any defect boot that died or hung
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: negctl-adhoc-guest-deaths
+          path: ${{ runner.temp }}/negctl-deaths
+          if-no-files-found: ignore
+          retention-days: 14

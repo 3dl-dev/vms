@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """merge_heavy_gates.py -- did every gate a PR run SKIPPED pass on its head SHA?
 
-usage: tools/ci/merge_heavy_gates.py <pr-number>
+usage: tools/ci/merge_heavy_gates.py <pr-number> [--allow 'WORKFLOW::JOB::FIXED-BY' ...]
+                                     [--table FILE]
 
 The heavy boot/e2e/negctl jobs (the VMS User Acceptance Test, the Persistent
 Boot Smoke Test and its semantic oracle, the per-facility negative controls,
@@ -16,8 +17,17 @@ finished (cancelled runs ignored) must have concluded success. A workflow run
 concludes success only if none of its jobs failed, so the skipped jobs are
 covered by the dispatch run.
 
-Exit 0 when every such workflow passed on the head SHA; 1 when one is missing or
-not green (each is listed with what to do); 2 on a usage or gh error.
+A MAPPED RED (--allow, repeatable) lets a latest run that failed count when
+EVERY failed job in it matches an entry: WORKFLOW is the workflow name exactly,
+JOB a substring of the failed job's name, FIXED-BY the PR or item that fixes it
+(mandatory -- a red with no named fix is not mapped). Use it only for a red the
+same job shows on main, which another PR is landing the fix for; anything else
+is a stop. --table FILE writes the mapping as a Markdown table for the merge
+comment.
+
+Exit 0 when every such workflow passed (or failed only in mapped jobs) on the
+head SHA; 1 when one is missing or not green (each is listed with what to do);
+2 on a usage or gh error.
 """
 import json
 import subprocess
@@ -31,11 +41,34 @@ def gh(args):
     return json.loads(r.stdout or "null")
 
 
+def parse(argv):
+    pr, allows, table = None, [], None
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a == "--allow" and i + 1 < len(argv):
+            parts = argv[i + 1].split("::")
+            if len(parts) != 3 or not all(p.strip() for p in parts):
+                return None
+            allows.append(tuple(p.strip() for p in parts))
+            i += 2
+        elif a == "--table" and i + 1 < len(argv):
+            table = argv[i + 1]
+            i += 2
+        elif a.isdigit() and pr is None:
+            pr = a
+            i += 1
+        else:
+            return None
+    return (pr, allows, table) if pr else None
+
+
 def main(argv):
-    if len(argv) != 2 or not argv[1].isdigit():
+    parsed = parse(argv)
+    if not parsed:
         print(__doc__)
         return 2
-    pr = argv[1]
+    pr, allows, table = parsed
     try:
         info = gh(["pr", "view", pr, "--json", "headRefOid,headRefName,statusCheckRollup"])
     except RuntimeError as e:
@@ -45,6 +78,7 @@ def main(argv):
     branch = info.get("headRefName", "<branch>")
     skipped = sorted({c.get("workflowName") for c in info.get("statusCheckRollup") or []
                       if c.get("conclusion") == "SKIPPED" and c.get("workflowName")})
+    rows = []
     if not skipped:
         print("OK: PR #%s skipped no checks -- its own rollup is the whole evidence" % pr)
         return 0
@@ -63,19 +97,47 @@ def main(argv):
         if not done:
             bad.append("%s: no finished workflow_dispatch run on %s -- run "
                        "`gh workflow run '%s' --ref %s` and wait for it" % (wf, sha[:9], wf, branch))
-        elif done[-1].get("conclusion") != "success":
+            continue
+        last = done[-1]
+        rid = last.get("databaseId")
+        if last.get("conclusion") == "success":
+            print("  ok: %s -- dispatch run %s on %s succeeded" % (wf, rid, sha[:9]))
+            rows.append((wf, rid, "-", "green"))
+            continue
+        if last.get("conclusion") != "failure":
             bad.append("%s: latest dispatch run %s on %s concluded %s" %
-                       (wf, done[-1].get("databaseId"), sha[:9], done[-1].get("conclusion")))
-        else:
-            print("  ok: %s -- dispatch run %s on %s succeeded" % (wf, done[-1].get("databaseId"), sha[:9]))
+                       (wf, rid, sha[:9], last.get("conclusion")))
+            continue
+        try:
+            jobs = (gh(["run", "view", str(rid), "--json", "jobs"]) or {}).get("jobs") or []
+        except RuntimeError as e:
+            print("merge_heavy_gates: %s" % e)
+            return 2
+        failed = [j.get("name", "") for j in jobs
+                  if j.get("conclusion") not in ("success", "skipped", "neutral")]
+        unmapped = []
+        for job in failed:
+            hit = [a for a in allows if a[0] == wf and a[1] in job]
+            if hit:
+                print("  mapped: %s / %s -- red, fixed by %s" % (wf, job, hit[0][2]))
+                rows.append((wf, rid, job, "fixed by " + hit[0][2]))
+            else:
+                unmapped.append(job)
+        if unmapped or not failed:
+            bad.append("%s: latest dispatch run %s on %s concluded failure; unmapped job(s): %s" %
+                       (wf, rid, sha[:9], ", ".join(unmapped) or "(none listed)"))
+    if table:
+        with open(table, "w") as fh:
+            fh.write("| Workflow | Run | Failing job | Status |\n|---|---|---|---|\n")
+            for wf, rid, job, st in rows:
+                fh.write("| %s | %s | %s | %s |\n" % (wf, rid, job, st))
     if bad:
         print("FAIL: PR #%s skipped checks whose workflows have not passed on its head %s:" % (pr, sha[:9]))
         for b in bad:
             print("  " + b)
         return 1
-    print("OK: every workflow PR #%s skipped passed on its head %s" % (pr, sha[:9]))
+    print("OK: every workflow PR #%s skipped passed on its head %s (mapped reds listed above)" % (pr, sha[:9]))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

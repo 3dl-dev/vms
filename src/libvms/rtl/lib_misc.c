@@ -613,12 +613,17 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         }
     } else if (status) {
         /*
-         * Registered, but the executive no longer resolves the pid: the
-         * subprocess already ran to completion between creation and this read.
-         * It genuinely ran (no fabrication); its full $STATUS is unavailable
-         * without B1's exit record, so report normal completion.
+         * The subprocess already ended and was deleted between creation and
+         * this read (rd vms-9f32: a process is deleted when it ends). How it
+         * ended is in the termination record the executive left for its
+         * creator -- this process -- which GETEXIT returns once.
          */
-        *status = SS$_NORMAL;
+        uint32_t cond = 0;
+        int recorded = 0;
+        if ((vms_kif_getexit_pid(vms_pid, &cond, &recorded) & 1) && recorded)
+            *status = cond;
+        else
+            *status = SS$_NORMAL;  /* it ran; it recorded no $STATUS of its own */
     }
 
     if (cmd_chan) (void)vms_kif_dassgn((uint16_t)cmd_chan);

@@ -608,6 +608,25 @@ extern uint32_t vms_local_csid;
  * (exec_* in place of the Linux spinlock_t/wait_queue_head_t/hlist_node/struct
  * pid pointer) so the shared sources compile unchanged.
  */
+/* One ended subprocess's termination record (rd vms-9f32); identical to
+ * src/kernel/vms_internal.h's. */
+#define VMS_TERMREC_MAX 16
+/* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
+struct vms_termination {
+	uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
+	uint8_t  has_status, compl_armed, compl_acmode, pad;
+	uint32_t compl_parent_pid, compl_efn;
+	uint64_t compl_astadr, compl_astprm;
+};
+
+struct vms_termrec {
+	uint32_t vms_pid;
+	uint32_t linux_pid;
+	uint32_t condition;
+	uint8_t  has_status;
+	uint8_t  pad[3];
+};
+
 struct vms_proc {
 	pid_t               pid;   /* proc-table key (NetBSD glue; facility ignores) */
 	exec_hash_node_t    hash_node;  /* link in vms_proc_hash (glue-owned; the
@@ -744,6 +763,13 @@ struct vms_proc {
 	uint32_t            compl_efn;
 	uint64_t            compl_astadr;
 	uint64_t            compl_astprm;
+
+	/* The process lifecycle (rd vms-9f32): the creator, and the termination
+	 * records of this process's ended subprocesses. Same field set and
+	 * meaning as src/kernel/vms_internal.h. Guarded by vms_proc_hash_lock. */
+	uint32_t            owner_vms_pid;
+	struct vms_termrec  termrec[VMS_TERMREC_MAX];
+	uint32_t            termrec_next;
 
 	/*
 	 * Host-task liveness handle (P4-A, rd vms-ca7). The facility tests
@@ -1360,7 +1386,10 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 /* Facility-provided (src/kernel-core/vms_proctab.c). vms_proc_reap_dead and
  * vms_proc_may_read are used cross-file on Linux; here they are simply part of
  * the compiled facility. The ioctl entry points are dispatched by vms_netbsd.c. */
-void vms_proc_reap_dead(void);
+/* The two halves of process deletion around the substrate's release (rd vms-9f32). */
+void vms_proc_termination_capture(const struct vms_proc *victim,
+                                  struct vms_termination *t);
+void vms_proc_termination_post_locked(const struct vms_termination *t);
 
 /* Facility-provided (src/kernel-core/vms_proctab.c): deliver a /NOWAIT spawn
  * completion for a subprocess reclaimed WITHOUT a recorded exit (SIGKILL/crash),

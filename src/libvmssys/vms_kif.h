@@ -1210,6 +1210,12 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
 uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
                                  uint64_t astadr, uint64_t astprm);
 
+/* $CHECK_ACCESS-shaped: may process `target_vms_pid` perform `access`
+ * (VMS_MBX_ACC_READ / VMS_MBX_ACC_WRITE, vms_mbx.h) on mailbox `devnam`? The
+ * executive's own decision for that process's $QIO (rd vms-046). */
+uint32_t vms_kif_mbx_chkacc(const char *devnam, uint32_t target_vms_pid,
+                            uint32_t access);
+
 /* ================================================================
  * INET pseudo-device BGn: (vms-527)
  *

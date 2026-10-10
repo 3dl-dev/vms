@@ -179,6 +179,29 @@ struct vms_mbx_wrtattn_args {
     uint32_t pad;
 };
 
+/*
+ * $CHECK_ACCESS-shaped mailbox access decision for ANOTHER process (rd vms-046):
+ * may the process `target_pid` (a VMS PID) perform `access` (VMS_MBX_ACC_READ /
+ * _WRITE) on the mailbox `devnam`? The executive's one protection decision
+ * (vms_prot.h) over the mailbox's owner UIC + protection mask and the TARGET's
+ * UIC and enabled privileges -- the decision its own $QIO would get. A server
+ * (NETACP) asks it before writing an answer into a mailbox a requester named,
+ * so a requester cannot aim the server's writes at a mailbox it could not use
+ * itself. The caller must be allowed to read the target's identity (the
+ * $GETJPI rule). status: SS$_NORMAL (allowed), SS$_NOPRIV (denied, or the
+ * caller may not ask about that process), SS$_NONEXPR, SS$_NOSUCHDEV,
+ * SS$_BADPARAM.
+ */
+#define VMS_MBX_ACC_READ   0x1u
+#define VMS_MBX_ACC_WRITE  0x2u
+struct vms_mbx_chkacc_args {
+    char     devnam[VMS_DEVNAM_SIZE]; /* in: "MBAn:" */
+    uint32_t target_pid;              /* in: VMS PID whose access is decided */
+    uint32_t access;                  /* in: VMS_MBX_ACC_* */
+    uint32_t status;                  /* out */
+    uint32_t pad;
+};
+
 #define VMS_IOCTL_MBX_CREATE  _IOWR(VMS_IOC_MAGIC, 0x70, struct vms_mbx_create_args)
 #define VMS_IOCTL_MBX_ASSIGN  _IOWR(VMS_IOC_MAGIC, 0x71, struct vms_mbx_assign_args)
 #if defined(__NetBSD__)
@@ -202,6 +225,7 @@ _Static_assert(IOCPARM_LEN(VMS_IOCTL_MBX_WRITE) == 0 && IOCPARM_LEN(VMS_IOCTL_MB
 #endif
 #define VMS_IOCTL_MBX_DELMBX  _IOWR(VMS_IOC_MAGIC, 0x74, struct vms_mbx_delmbx_args)
 #define VMS_IOCTL_MBX_SET_WRTATTN _IOWR(VMS_IOC_MAGIC, 0x75, struct vms_mbx_wrtattn_args)
+#define VMS_IOCTL_MBX_CHKACC  _IOWR(VMS_IOC_MAGIC, 0x76, struct vms_mbx_chkacc_args)
 
 /*
  * $DASSGN for a mailbox channel reuses VMS_IOCTL_DASSGN (vms_ioctl.h,
@@ -228,5 +252,7 @@ _Static_assert(sizeof(struct vms_mbx_read_args) == 28 + VMS_MBX_IOCTL_MAXLEN,
                "vms_mbx_read_args changed size -- VMS_IOCTL_MBX_READ ABI break");
 _Static_assert(sizeof(struct vms_mbx_wrtattn_args) == 32,
                "vms_mbx_wrtattn_args changed size -- VMS_IOCTL_MBX_SET_WRTATTN ABI break");
+_Static_assert(sizeof(struct vms_mbx_chkacc_args) == 32,
+               "vms_mbx_chkacc_args changed size -- VMS_IOCTL_MBX_CHKACC ABI break");
 
 #endif /* _VMS_MBX_H */

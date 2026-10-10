@@ -370,6 +370,40 @@ int main(int argc, char **argv)
         check(v.pid != 0 && sender == v.pid,
               "the request carries the WRITER's VMS PID, stamped by the executive (IOSB second longword)");
     }
+
+    /* $CHECK_ACCESS-shaped (rd vms-046): the executive answers for the CHILD --
+     * still alive, [100,100], no privilege enabled -- exactly what its own $QIOs
+     * just got (docs/oracle/semantics/mbxown/: on VAX V7.3 a non-system user may
+     * WRITE but not READ the W:W request mailbox). A server asks this before it
+     * writes into a mailbox a requester named. */
+    {
+        uint32_t oc = 0;
+        char open_dev[32] = "";
+        (void)mk(0, &oc, open_dev, sizeof(open_dev));
+        /* negctl: mbx-chkacc-read-unchecked */
+        check(vms_kif_mbx_chkacc(nm.request, v.pid, VMS_MBX_ACC_READ) == SS$_NOPRIV,
+              "CHKACC: the unprivileged child may NOT read the W:W request mailbox"
+              " (SS$_NOPRIV, as its own read was)");
+        check(vms_kif_mbx_chkacc(nm.request, v.pid, VMS_MBX_ACC_WRITE) == SS$_NORMAL,
+              "CHKACC: the child may write the W:W request mailbox");
+        check(vms_kif_mbx_chkacc(nm.reader, v.pid, VMS_MBX_ACC_READ) == SS$_NORMAL &&
+              vms_kif_mbx_chkacc(nm.reader, v.pid, VMS_MBX_ACC_WRITE) == SS$_NOPRIV,
+              "CHKACC: on the W:R mailbox the child may read and may not write");
+        check(vms_kif_mbx_chkacc(nm.priv, v.pid, VMS_MBX_ACC_READ | VMS_MBX_ACC_WRITE)
+                  == SS$_NOPRIV,
+              "CHKACC: the child may not use the no-world-access mailbox");
+        check(open_dev[0] && vms_kif_mbx_chkacc(open_dev, v.pid,
+                                                VMS_MBX_ACC_READ | VMS_MBX_ACC_WRITE)
+                  == SS$_NORMAL,
+              "CHKACC: the child may read and write an open (promsk 0) mailbox");
+        check(vms_kif_mbx_chkacc(nm.request, 0x7FFFFFF0u, VMS_MBX_ACC_READ) == SS$_NONEXPR,
+              "CHKACC: no such process is SS$_NONEXPR");
+        check(vms_kif_mbx_chkacc("MBA99999:", v.pid, VMS_MBX_ACC_READ) == SS$_NOSUCHDEV,
+              "CHKACC: no such mailbox is SS$_NOSUCHDEV");
+        check(vms_kif_mbx_chkacc(nm.request, v.pid, 0) == SS$_BADPARAM,
+              "CHKACC: no access asked is SS$_BADPARAM");
+        if (oc) (void)vms_kif_dassgn((uint16_t)oc);
+    }
     (void)!write(p2c[1], "x", 1);
     waitpid(pid, NULL, 0);
 

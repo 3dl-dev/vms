@@ -1,0 +1,22 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod mbxo-046 node VAX1, captured 2026-10-09 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/mbxown.py sha256=f3f35c4f1c252615b7de5eb0f5104aac8cd8e115597b9b77e24c00ae263aec4d
+=== SEMPROBE mbxown BEGIN ===
+MBXO.CREMBX.REQ st=00000001
+MBXO.CREMBX.OPEN st=00000001
+MBXO.DVI.REQ.CHAN st=00000001 pid=self=0 pid=0=1 ownuic=self=1 vprot=0000DF00 refcnt=1
+MBXO.DVI.REQ.NAME st=00000001 pid=self=0 pid=0=1 ownuic=self=1 vprot=0000DF00 refcnt=1
+MBXO.ASSIGN.REQ st=00000001
+MBXO.DVI.REQ.ASSIGNED st=00000001 pid=self=0 pid=0=1 ownuic=self=1 vprot=0000DF00 refcnt=2
+MBXO.DVI.OPEN.CHAN st=00000001 pid=self=0 pid=0=1 ownuic=self=1 vprot=00000000 refcnt=1
+MBXO.CHKACC.REQ.SYS.R st=00000001
+MBXO.CHKACC.REQ.SYS.W st=00000001
+MBXO.CHKACC.REQ.DEF.R st=00000024
+MBXO.CHKACC.REQ.DEF.W st=00000001
+MBXO.CHKACC.OPEN.SYS.R st=00000001
+MBXO.CHKACC.OPEN.SYS.W st=00000001
+MBXO.CHKACC.OPEN.DEF.R st=00000001
+MBXO.CHKACC.OPEN.DEF.W st=00000001
+MBXO.CHKACC.NOSUCHUSER st=000182B2
+=== SEMPROBE mbxown END ===

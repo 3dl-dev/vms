@@ -1084,6 +1084,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_MBX_ASSIGN:
 	case VMS_IOCTL_MBX_DELMBX:
 	case VMS_IOCTL_MBX_SET_WRTATTN:
+	case VMS_IOCTL_MBX_CHKACC:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1098,6 +1099,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_mbx_delmbx(proc, (unsigned long)uarg);      break;
 		case VMS_IOCTL_MBX_SET_WRTATTN:
 			r = vms_ioctl_mbx_set_wrtattn(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_MBX_CHKACC:
+			r = vms_ioctl_mbx_chkacc(proc, (unsigned long)uarg);      break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

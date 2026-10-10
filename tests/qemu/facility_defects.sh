@@ -612,6 +612,7 @@ libcreatedir-protection-ignored
 libcreatedir-rooted-default-unresolved
 net-assign-netmbx-check-removed
 mbx-prot-read-unchecked
+mbx-chkacc-read-unchecked
 mbx-readall-grants-read
 mbx-prot-write-unchecked
 crembx-promsk-dropped
@@ -1327,6 +1328,22 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    mbx-chkacc-read-unchecked)
+        case "$_f" in
+        facility)     echo "the \$CHECK_ACCESS-shaped mailbox decision for another process (VMS_IOCTL_MBX_CHKACC, rd vms-046) -- what NETACP asks before writing into a reply mailbox a requester named";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_chkacc() stops deciding READ access ('0 &&'), so it answers SS\$_NORMAL for a process that may only write a mailbox -- a server would then accept a reply mailbox the requester cannot read, which is how a requester aims the server's writes at someone else's mailbox. The WRITE decisions and the no-world-access verdict (its write half still refuses) stay green; only the request-mailbox READ verdict reddens. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CHKACC: the unprivileged child may NOT read the W:W request mailbox
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
     mbx-prot-read-unchecked)
         case "$_f" in
         facility)     echo "a mailbox read needs read access under the mailbox protection (rd vms-c6d1)";;
@@ -8106,6 +8123,8 @@ apply_edit() {
         sed -i 's#^                (privs \& VMS_PRV_M_SYSPRV) != 0 ||$#                0 || /* NEGCTL acp-sysprv-ignored */#' "$_file";;
     mbx-readall-grants-read)
         sed -i 's|^    uint64_t privs = proc->cur_privs \& ~VMS_PRV_M_READALL;$|    uint64_t privs = proc->cur_privs; /* NEGCTL mbx-readall-grants-read */|' "$_file";;
+    mbx-chkacc-read-unchecked)
+        sed -i 's|^    if (args.access \& VMS_MBX_ACC_READ)$|    if (0 \&\& (args.access \& VMS_MBX_ACC_READ)) /* NEGCTL mbx-chkacc-read-unchecked */|' "$_file";;
     mbx-prot-read-unchecked)
         sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) { /* NEGCTL mbx-prot-read-unchecked */|' "$_file";;
     mbx-prot-write-unchecked)

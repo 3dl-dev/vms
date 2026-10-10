@@ -31,7 +31,8 @@
 #   use     LIBVMSRMS$SHR.EXE
 #
 # The rights-database slots (0xA50-0xA70, vms-8b5) are observed in the link map
-# of the rights probe (tests/native-images/alpha/sp/SP_RIGHTS.MAP.txt);
+# of the rights probe (tests/native-images/alpha/sp/SP_RIGHTS.MAP.txt), $CHKPRO
+# (0xAB0) in that of the $CHKPRO probe (SP_CHKPRO.MAP.txt);
 # $FINISH_RDB is OVMX's own service in LIBVMSRMS$SHR (a context longword's
 # address is its one argument).
 #
@@ -89,4 +90,5 @@
 0xA70     SYS$IDTOASC      SYS$IDTOASC
 0xA90     SYS$GRANTID      SYS$GRANTID
 0xAA0     SYS$REVOKID      SYS$REVOKID
+0xAB0     SYS$CHKPRO       SYS$CHKPRO
 0xAC0     SYS$BRKTHRUW     SYS$BRKTHRUW

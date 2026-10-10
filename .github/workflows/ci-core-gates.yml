@@ -104,6 +104,21 @@ jobs:
   # is not available in GitHub Actions -- that stays a local/checkpoint
   # check, not a CI job).
   # -----------------------------------------------------------------------
+  layer-cache-one-writer:
+    # Every gha layer-cache scope has ONE writer, restricted to main (rd
+    # vms-14da): concurrent writers overwrote one another's index and left it
+    # naming evicted blobs ("blob sha256:... not found"). Runs on every PR.
+    name: Layer-cache scopes have one writer each (rd vms-14da)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install PyYAML
+        run: pip install --disable-pip-version-check pyyaml
+      - name: check_cache_writers.py
+        run: python3 tools/ci/check_cache_writers.py .
+
   compat-surface-drift:
     name: Compat Surface Drift Gate (INV-LEDGER)
     needs: changes
@@ -452,7 +467,7 @@ jobs:
           load: true
           tags: ovmx-aarch64-boot:latest
           cache-from: type=gha,scope=aarch64-boot
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=aarch64-boot' || '' }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=aarch64-boot' || '' }}  # scope aarch64-boot's one writer (rd vms-14da)
 
       - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
         run: |
@@ -1049,7 +1064,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
+          # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Run UAT session on the real runtime (QEMU console)
         timeout-minutes: 10

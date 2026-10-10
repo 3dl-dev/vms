@@ -935,13 +935,24 @@ jobs:
                   changed = {line.strip() for line in cf if line.strip()}
               print(f"PR mode: {len(changed)} changed C/H file(s) drive the filter")
 
+          # ONE run per source file. compile_commands.json lists a file once per
+          # target that compiles it (~20% of its entries are repeats), and
+          # `clang-tidy -p build FILE` analyzes FILE with the same first matching
+          # command whichever entry asked -- so each repeat was a second, identical
+          # analysis. Those repeats pushed the full-tree run past the 30-minute
+          # job cap (cancelled: dispatch runs 38017549482, 38020845735).
           files = []
+          seen = set()
           for entry in db:
               rel = entry["file"].replace(cwd + "/", "")
               if any(rel.startswith(ex) for ex in excluded):
                   continue
               if changed is not None and rel not in changed:
                   continue
+              path = os.path.normpath(os.path.join(entry.get("directory", cwd), entry["file"]))
+              if path in seen:
+                  continue
+              seen.add(path)
               files.append(entry["file"])
 
           if not files:

@@ -1516,6 +1516,69 @@ static void test_conndata_against_real_nodes(void)
 		 "...and a NULL input");
 }
 
+static void hexload(const char *hex, uint8_t *out, uint32_t n)
+{
+	uint32_t i;
+	for (i = 0; i < n; i++) {
+		unsigned int x;
+		sscanf(&hex[2 * i], "%2x", &x);
+		out[i] = (uint8_t)x;
+	}
+}
+
+/*
+ * rd vms-2ef: the close state is answered ONLY where it is grounded. Two real
+ * pairs between two OpenVMS VAX V7.3 nodes: a MOUNT/CLUSTER close from the
+ * HELD-OUT run (close-ho.pcap, request kind 6, answered 5) and a routine close
+ * (ci6-evac-14, kind 5, answered 4 here and 3 elsewhere -- not a function of
+ * the request, so no answer is derived for it).
+ */
+static void test_close_state_grounded_only_for_volume_closes(void)
+{
+	static const char req6[] =
+	    "50c0e2bb0400a1d30600000000000000000008ce0900dccd37080600c80000000000"
+	    "f9e0149a8700000000000000000d535953245f243224445541323a58322020202a00"
+	    "0000000000000400000000000000000000000000000000a012000100000000000000"
+	    "0000c04096870000000000000000ffffffff00000000ffffffff63b6f425";
+	static const char rsp6[] =
+	    "fcbb5fc00400a1d38600000001000d0000000000280800420504003700000100010000"
+	    "000100000001000000000000000000000024736701000044415441202020200a000000"
+	    "000028519e8728519e87000000000000e0ec0000000000000000000000000000000000"
+	    "00000401000000dd9787d8ec978700000000ffffffff4359fe09";
+	static const char req5[] =
+	    "363f8c4e06006bbf06004953000000000000e9cd0900dccd54070500c80100002844"
+	    "f91700000000000000000000001646313142246153595344534b3120202020202a00"
+	    "00000000c40a030000000000000000006c740000000000000000000000000000000000"
+	    "00000000000000010100000000ffffffff00000000ffffffff6d1b5048";
+	uint8_t q6[132], r6[132], q5[132], built[VMS_CM_BODY_LEN];
+	struct vms_cm_node_params np;
+	uint32_t written = 0;
+
+	printf("-- rd vms-2ef: the grounded close state\n");
+	hexload(req6, q6, 132);
+	hexload(rsp6, r6, 132);
+	hexload(req5, q5, 132);
+	ct_check_eq_u32(vms_cm_close_state_for(q6, 132), r6[24],
+			"*** a MOUNT/DISMOUNT/CLUSTER close (request kind 6) is "
+			"answered with the state the real VAX answered: 5 ***");
+	ct_check_eq_u32(vms_cm_close_state_for(q5, 132), 0u,
+			"*** a routine close (kind 5) has NO grounded state: "
+			"nothing is derived for it ***");
+	ct_check_eq_u32(vms_cm_close_state_for(q6, 20u), 0u,
+			"  a short request yields nothing");
+
+	np.param_f1 = 0x00000010u;
+	np.param_f2 = 0x00000001u;
+	memcpy(np.version, "V7.3    ", VMS_CM_VERSION_LEN);
+	ct_check(vms_cm_close_build(q6, 132, &np, vms_cm_close_state_for(q6, 132),
+				    built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "the kind-6 close answer builds");
+	ct_check_eq_u32(built[24], 5u, "  with body[24] = 5");
+	ct_check_eq_u32(built[8], 0x86u, "  as a cat-0x86 response");
+	ct_check_eq_u32(built[4] | (built[5] << 8), q6[4] | (q6[5] << 8),
+			"  echoing the request's transaction id");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1582,5 +1645,6 @@ int main(void)
 
 	test_error_paths();
 
+	test_close_state_grounded_only_for_volume_closes();
 	return ct_summary("test_codec_cm");
 }

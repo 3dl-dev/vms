@@ -94,3 +94,5 @@ b3a711c9322939134aa0c97f4422b87d836a0fee8811e25a4e989f2e8d6776ed  tests/lab/capt
 d39a5b415083ad9f936db79219635bb0f3777b9b07b71e85a2304f7361ab4fe4  tests/lab/captures/vms-f297-open-cells-20261008/XF-barrier.pcap
 249d649cfc959caea6fa2dd884e812914f16fdea18d32b0e20d3bfa459e5ab1d  cluster/captures-lab2/vms-b5b0-storm-window.pcap
 5902bee7bb3975cec6f22a82ad77fb3608634dc9ac70d99971b57fe6c3024047  tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/ev2-mixed-refusal.pcap
+9a5f6d048f53e4f6ecc2ebf836b0142b997154aae0e1070abdf18a17ab87f4ef  tests/lab/captures/vms-2ef-close-state-20261010/derivation-mount-dismount.pcap
+3b0577ca16e8c1d54710bd143ce82b9c21fb58f93f42ae3da9deb3018177e6c3  tests/lab/captures/vms-2ef-close-state-20261010/heldout-cd-and-volume.pcap

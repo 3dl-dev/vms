@@ -544,6 +544,16 @@ vms_codec_status_t vms_cm_relay_response_build(const uint8_t *req_body,
 	return VMS_CODEC_OK;
 }
 
+uint16_t vms_cm_close_state_for(const uint8_t *req_body, uint32_t req_len)
+{
+	if (req_body == (const uint8_t *)0 ||
+	    req_len <= VMS_OFB_CM_CLOSE_REQ_KIND)
+		return 0u;
+	if (req_body[VMS_OFB_CM_CLOSE_REQ_KIND] == VMS_CM_CLOSE_KIND_VOLUME)
+		return VMS_CM_CLOSE_STATE_VOLUME;
+	return 0u;
+}
+
 vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
 				      uint16_t close_state,

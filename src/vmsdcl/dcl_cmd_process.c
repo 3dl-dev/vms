@@ -1478,6 +1478,27 @@ static int dcl_spec_has_type(const char *spec)
  * *acp_usable = 0 when no ACP-mounted SYS$DISK is reachable (no /dev/vms -- the
  * plain host ctest), so the caller runs the legacy /vms resolver unchanged.
  */
+
+/*
+ * dcl_stage_user_dir_ok - this process's private staging directory
+ * (OVMX_BOOT_STAGE_USERS_DIR/<uid>, rd vms-137e): make it 0700 if absent, and
+ * accept it only if it is a real directory owned by this uid with no group or
+ * world access. The users root is sticky and writable by every uid, so another
+ * uid may have pre-created this name: such a directory is refused (the image
+ * then fails to stage, honestly) rather than used.
+ */
+static int dcl_stage_user_dir_ok(char *user_dir, size_t sz)
+{
+    struct stat st;
+    if (!ovmx_boot_stage_user_dir(user_dir, sz, (unsigned long)getuid()))
+        return 0;
+    (void)mkdir(user_dir, 0700);                  /* EEXIST is fine */
+    if (lstat(user_dir, &st) != 0 || !S_ISDIR(st.st_mode) ||
+        st.st_uid != getuid() || (st.st_mode & 077) != 0)
+        return 0;
+    return 1;
+}
+
 static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                                        const char *vms_spec,
                                        const char *linux_path,
@@ -1570,11 +1591,8 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                 }
                 /* Ensure the shared root (best-effort; PID 1 makes it) and the
                  * per-user private subdirectory (0700, owned by this uid). */
-                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* EEXIST/EACCES fine */
-                if (ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir),
-                                             (unsigned long)getuid()))
-                    (void)mkdir(user_dir, 0700);          /* EEXIST is fine */
-                if (dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
+                if (dcl_stage_user_dir_ok(user_dir, sizeof(user_dir)) &&
+                    dcl_rms_stage(ctx, trial, staged) == RMS$_NORMAL &&
                     access(staged, X_OK) == 0) {
                     strncpy(resolved, staged, sz - 1);
                     resolved[sz - 1] = '\0';
@@ -1599,10 +1617,7 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
                     if (*q == '/')
                         base = q + 1;
                 char fiddir[1024];
-                (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);
-                if (ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir),
-                                             (unsigned long)getuid())) {
-                    (void)mkdir(user_dir, 0700);
+                if (dcl_stage_user_dir_ok(user_dir, sizeof(user_dir))) {
                     snprintf(fiddir, sizeof(fiddir), "%s/FID", user_dir);
                     (void)mkdir(fiddir, 0700);
                     snprintf(fiddir, sizeof(fiddir), "%s/FID/%u.%u.%u.%u", user_dir,

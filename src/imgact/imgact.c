@@ -763,6 +763,8 @@ static int imgsrc_staged_fid(const char *path, uint32_t fid[4])
 	if (sp[i] != '\0')
 		return 0;
 	const char *q = path + i;
+	if (q[0] == 'u' && q[1] == '/')          /* OVMX_BOOT_STAGE_USERS_DIR (vms-137e) */
+		q += 2;
 	while (*q >= '0' && *q <= '9')           /* the "<uid>/" component */
 		q++;
 	if (*q == '/')

@@ -94,6 +94,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "ovmx_console.h"
 #include "sysuaf.h"
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -880,6 +881,31 @@ int main(void)
         fprintf(stderr,
                 "%%OVMX-I-STARTUP, handing %s to DCL for ACP resolution\n",
                 VMS_STARTUP_PATH);
+
+    /*
+     * LEAVE SUBSTRATE ROOT (rd vms-137e, epic vms-8e6). Everything above --
+     * establishing the SYSTEM identity, ownership -- was the last of the
+     * startup process's work the substrate kernel reserves to root. STARTUP.COM,
+     * SYSTARTUP_VMS.COM and every process they create run under the
+     * unprivileged substrate identity the executive gives this process; their
+     * power is the SYSTEM identity's VMS privileges, which the executive keeps.
+     * The console the session creator opens for OPA0: is handed to that
+     * identity first (it is root-owned 0600 until now). Failure is fatal: a
+     * startup that cannot leave root does not run SYSTARTUP as root instead.
+     */
+    {
+        uint32_t subst = 0;
+        if (!(vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst) & 1) || subst == 0)
+            provision_halt("the executive gave the startup process no substrate identity",
+                           "rd vms-137e");
+        if (chown(OVMX_CONSOLE_LINUX_PATH, (uid_t)subst, (gid_t)subst) != 0)
+            fprintf(stderr, "%%OVMX-W-CONSOLE, cannot hand %s to the startup identity: %s\n",
+                    OVMX_CONSOLE_LINUX_PATH, strerror(errno));
+        if (!(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1) ||
+            getuid() != (uid_t)subst || geteuid() != (uid_t)subst)
+            provision_halt("the startup process could not leave substrate root",
+                           "rd vms-137e");
+    }
 
     /* Hand DCL the VMS filespec (not the retired /vms path) so it opens the
      * procedure through its own ACP-routed RMS path. */

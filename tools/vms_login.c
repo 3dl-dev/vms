@@ -581,25 +581,16 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
          * plant hole (any user could drop an image others activate) and is
          * forbidden.
          *
-         * So LOGINOUT -- still privileged here, the same window that stamped the
-         * SYSUAF identity -- creates the session's OWN staging directory,
-         * OVMX_BOOT_STAGE_DIR "/<uid>/", 0700 and owned by the authenticated
-         * UIC. The resolver then stages the session's images into a directory
+         * So the session makes its OWN staging directory,
+         * OVMX_BOOT_STAGE_USERS_DIR "/<uid>/", 0700, as its own substrate uid
+         * right after it takes that identity (below; rd vms-137e) -- no
+         * chown, no privilege. The resolver then stages the session's images into a directory
          * it owns; the genuine bytes still come off the ODS-2 volume over the
          * executive ACP (INV-6), only the Linux-exec handoff is per-user-owned.
          * Best-effort: PID 1 already made the parent, and a failure here is not
          * fatal -- an image that then cannot be staged fails honestly at
          * activation with %DCL-E-IVIMAGE, never a fabricated success.
          */
-        {
-            char stage_user_dir[512];
-            (void)mkdir(OVMX_BOOT_STAGE_DIR, 0755);   /* PID 1 makes it; EEXIST fine */
-            if (ovmx_boot_stage_user_dir(stage_user_dir, sizeof(stage_user_dir),
-                                         (unsigned long)want_uid)) {
-                if (mkdir(stage_user_dir, 0700) == 0 || errno == EEXIST)
-                    (void)chown(stage_user_dir, want_uid, want_gid);
-            }
-        }
 
         if (!(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1) ||
             want_uid == 0 ||
@@ -610,6 +601,15 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
                    (unsigned)rec->uic_group, (unsigned)rec->uic_member);
             fflush(stdout);
             _exit(1);
+        }
+        /* The session's private staging directory, made by the session itself
+         * under its own uid (rd vms-137e): no chown, so no privilege needed.
+         * Best-effort -- DCL verifies ownership before it stages into it. */
+        {
+            char stage_user_dir[512];
+            if (ovmx_boot_stage_user_dir(stage_user_dir, sizeof(stage_user_dir),
+                                         (unsigned long)want_uid))
+                (void)mkdir(stage_user_dir, 0700);
         }
     }
 

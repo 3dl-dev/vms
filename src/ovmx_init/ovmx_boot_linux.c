@@ -325,6 +325,14 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
         return -1;
     if (mkdir(dir, 0755) != 0 && errno != EEXIST)
         return -1;
+    /* The per-process private staging root (rd vms-137e): sticky and writable
+     * by every uid, not listable, so a process under its executive-given
+     * unprivileged uid makes its own 0700 directory there. chmod after mkdir:
+     * the umask must not strip the bits. */
+    if (mkdir(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0 && errno != EEXIST)
+        return -1;
+    if (chmod(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0)
+        return -1;
     return 0;
 }
 

@@ -250,6 +250,13 @@
  * boot-path realisation the flip ships.
  */
 #define OVMX_BOOT_STAGE_DIR  "/run/ovmx-boot"
+/* Per-process private staging lives under OVMX_BOOT_STAGE_USERS_DIR (rd
+ * vms-137e): sticky and writable by every substrate uid (01733) so a process
+ * running under the executive-given, unprivileged uid (vms-ac48) makes its own
+ * 0700 subdirectory -- nobody else's can be listed, renamed or removed, and a
+ * subdirectory not owned by the caller is refused at use. The shared
+ * OVMX_BOOT_STAGE_DIR itself stays root-owned 0755 (no plant hole). */
+#define OVMX_BOOT_STAGE_USERS_DIR  OVMX_BOOT_STAGE_DIR "/u"
 
 /*
  * If `in` names a SYS$SYSTEM image (a ".EXE" whose path passes through the
@@ -368,7 +375,7 @@ static inline int ovmx_boot_stage_user_dir(char *out, unsigned long sz,
 {
     if (!out || sz == 0)
         return 0;
-    static const char pre[] = OVMX_BOOT_STAGE_DIR "/";
+    static const char pre[] = OVMX_BOOT_STAGE_USERS_DIR "/";
     unsigned long i = 0, j = 0;
     while (pre[j] && i + 1 < sz)
         out[i++] = pre[j++];

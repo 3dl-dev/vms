@@ -502,4 +502,15 @@
 # Raised to 190 by the terminal class driver's four (rd vms-f8c): tt-typeahead-
 # echoed-on-receipt, tt-bind-privilege-ignored, tt-port-input-dropped,
 # tt-console-hangup-unbinds (test_kmod_tt).
-190
+# Raised to 192 by the carriage-control pair (rd vms-fc4): tt-newline-ignores-
+# cursor, tt-owed-linefeed-unpaid (test_kmod_tt).
+# Raised to 197 by the out-of-band set (rd vms-f0fb): tt-ctrly-not-shown,
+# tt-oob-ast-not-queued, tt-outband-ends-read, tt-breakthrough-no-redisplay,
+# tt-oob-survives-deassign (test_kmod_tt).
+# Raised to 198 by tt-ctrlo-not-discarding (rd vms-f0fb; test_kmod_tt).
+# Raised to 201 by the line-editing three (rd vms-eda8): tt-edit-cursor-ignored,
+# tt-edit-overstrike-ignored, tt-edit-ctrlj-ignored (test_kmod_tt).
+# Raised to 203 by recall (rd vms-eb3d): tt-recall-key-not-terminator, tt-inistr-ignored (test_kmod_tt).
+# Raised to 204 by tt-brkthru-privilege-ignored (rd vms-53a; test_kmod_tt).
+# Raised to 205 by tt-wrap-ignored (rd vms-cef; test_kmod_tt).
+205

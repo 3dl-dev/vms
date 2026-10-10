@@ -1768,6 +1768,21 @@ uint32_t vms_kif_tt_read(struct vms_tt_read_args *a)
     return a->status;
 }
 
+uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len)
+{
+    struct vms_tt_write_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.flags = VMS_TT_WR_RECORD;
+    args.buf = (uint64_t)(uintptr_t)buf;
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_WRITE, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len)
 {
     struct vms_tt_write_args args;
@@ -1791,6 +1806,43 @@ uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode)
     args.mode = mode;
 
     KIF_CALL(VMS_IOCTL_TT_SETMODE, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
+                           uint64_t astprm, uint32_t mask, uint32_t acmode)
+{
+    struct vms_tt_oobast_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.which = which;
+    args.astadr = astadr;
+    args.astprm = astprm;
+    args.mask = mask;
+    args.acmode = acmode;
+
+    KIF_CALL(VMS_IOCTL_TT_OOBAST, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_tt_brkthru(const char *devnam, const void *msg, uint32_t len)
+{
+    static struct vms_tt_brkthru_args args;   /* 536 bytes: off the stack */
+    uint32_t i;
+
+    vms_memset(&args, 0, sizeof(args));
+    for (i = 0; devnam && devnam[i] && i < sizeof(args.devnam) - 1; i++)
+        args.devnam[i] = devnam[i];
+    if (len > sizeof(args.msg))
+        return 0x00000014; /* SS$_BADPARAM */
+    for (i = 0; i < len; i++)
+        args.msg[i] = ((const char *)msg)[i];
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_BRKTHRU, &args);
 
     return args.status;
 }

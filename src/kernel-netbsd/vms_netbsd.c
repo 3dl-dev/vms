@@ -840,9 +840,9 @@ static int
 vms_tt_rw_bounce(struct lwp *l, u_long cmd, void *data)
 {
 	struct vms_proc *proc;
-	void *kbuf = NULL, *kprompt = NULL;
-	uint64_t ubuf, uprompt = 0;
-	uint32_t len, plen = 0;
+	void *kbuf = NULL, *kprompt = NULL, *kini = NULL;
+	uint64_t ubuf, uprompt = 0, uini = 0;
+	uint32_t len, plen = 0, ilen = 0;
 	long r;
 
 	proc = vms_proc_get(l->l_proc->p_pid);
@@ -870,6 +870,19 @@ vms_tt_rw_bounce(struct lwp *l, u_long cmd, void *data)
 			a->prompt = (uint64_t)(uintptr_t)kprompt;
 			a->promptsz = plen;
 		}
+		/* the initial line (TRM$_INISTRNG, rd vms-eb3d) is a third user
+		 * buffer */
+		uini = a->inistr;
+		ilen = a->inisz > VMS_TT_BOUNCE_MAX ? VMS_TT_BOUNCE_MAX : a->inisz;
+		if ((a->flags & VMS_TT_RD_INISTR) && uini != 0 && ilen > 0) {
+			kini = kmem_alloc(ilen, KM_SLEEP);
+			if (copyin((void *)(uintptr_t)uini, kini, ilen)) {
+				r = -EFAULT;
+				goto out_read;
+			}
+			a->inistr = (uint64_t)(uintptr_t)kini;
+			a->inisz = ilen;
+		}
 		r = vms_ioctl_tt_read(proc, (unsigned long)data);
 		if (r == 0 && kbuf != NULL && a->count > 0 &&
 		    copyout(kbuf, (void *)(uintptr_t)ubuf,
@@ -878,10 +891,13 @@ vms_tt_rw_bounce(struct lwp *l, u_long cmd, void *data)
 out_read:
 		a->buf = ubuf;
 		a->prompt = uprompt;
+		a->inistr = uini;
 		if (kbuf != NULL)
 			kmem_free(kbuf, len);
 		if (kprompt != NULL)
 			kmem_free(kprompt, plen);
+		if (kini != NULL)
+			kmem_free(kini, ilen);
 		return vms_facility_errno(r);
 	} else {
 		struct vms_tt_write_args *a = data;
@@ -1414,6 +1430,16 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		if (proc == NULL)
 			return ENOMEM;
 		return vms_facility_errno(vms_ioctl_tt_sense(proc, (unsigned long)data));
+	case VMS_IOCTL_TT_OOBAST:        /* rd vms-f0fb: out-of-band ASTs */
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		return vms_facility_errno(vms_ioctl_tt_oobast(proc, (unsigned long)data));
+	case VMS_IOCTL_TT_BRKTHRU:       /* rd vms-53a: broadcast to a terminal */
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		return vms_facility_errno(vms_ioctl_tt_brkthru(proc, (unsigned long)data));
 
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);

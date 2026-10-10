@@ -650,9 +650,11 @@ int cmd_inquire(struct dcl_command *cmd)
     const char *prompt_text = (cmd->param_count >= 2) ? cmd->params[1] : "";
 
     /* The prompt, written by the terminal driver's IO$_READPROMPT (rd vms-f8c) */
+    /* INQUIRE's prompt starts on a new line (CR LF; the VAX V7.3 console shows
+     * "<CR>Your name: " -- no fill NUL, unlike DCL's own prompt; rd vms-fc4) */
     char pbuf[300];
     if (prompt_text[0]) {
-        snprintf(pbuf, sizeof(pbuf), "%.290s: ", prompt_text);
+        snprintf(pbuf, sizeof(pbuf), "\r\n%.290s: ", prompt_text);
     } else {
         /* Default prompt is symbol name */
         char upper_name[256];
@@ -660,7 +662,7 @@ int cmd_inquire(struct dcl_command *cmd)
         for (i = 0; i < sizeof(upper_name) - 1 && symbol_name[i]; i++)
             upper_name[i] = (char)toupper((unsigned char)symbol_name[i]);
         upper_name[i] = '\0';
-        snprintf(pbuf, sizeof(pbuf), "%s: ", upper_name);
+        snprintf(pbuf, sizeof(pbuf), "\r\n%s: ", upper_name);
     }
 
     char buf[1024];
@@ -819,6 +821,73 @@ int cmd_reply(struct dcl_command *cmd)
         desc.dsc$w_length = (uint16_t)(OPC$K_MS_HDRLEN + n);
         sys$sndopr(&desc, 0);
 
+    } else if (dcl_has_qualifier(cmd, "USER")) {
+        /*
+         * REPLY/USER=name "text" (rd vms-53a): the message is broadcast to
+         * every terminal that user is logged in on, through each terminal's
+         * class driver -- breaking through a read in progress, which is then
+         * shown again. The framing is the VAX V7.3 console's (keystroke
+         * BC.READ W): a blank line, "Reply received on <node> from user <me>
+         * at _<node>$<term>   hh:mm:ss", the text, a blank line. OPER is the
+         * executive's decision (VMS_IOCTL_TT_BRKTHRU).
+         */
+        const char *who = dcl_qualifier_value(cmd, "USER");
+        const char *text = (cmd->param_count >= 1) ? cmd->params[0] : "";
+        char node[64], me_term[64] = "", msg[512], whoU[64];
+        struct vms_procinfo self, pi;
+        uint32_t index = 0, st;
+        char done[32][VMS_DEVNAM_SIZE];
+        int ndone = 0, notified = 0;
+        size_t k;
+
+        if (!who || !who[0]) {
+            dcl_error("DCL", 2, "SYNTAX", "REPLY/USER needs a user name");
+            return SS$_BADPARAM;
+        }
+        for (k = 0; k + 1 < sizeof whoU && who[k]; k++)
+            whoU[k] = (char)toupper((unsigned char)who[k]);
+        whoU[k] = '\0';
+        ovmx_node_name(node, sizeof node);
+        memset(&self, 0, sizeof self);
+        if (vms_kif_getjpi_self(&self) & 1) {
+            const char *t = self.terminal;
+            if (t[0] == '_') t++;
+            const char *d = strrchr(t, '$');
+            snprintf(me_term, sizeof me_term, "_%s$%s", node, d ? d + 1 : t);
+        }
+        time_t now = time(NULL);
+        struct tm tmv;
+        localtime_r(&now, &tmv);
+        int ml = snprintf(msg, sizeof msg,
+                          "\r\n\r\nReply received on %s from user %s at %s   %02d:%02d:%02d\r\n%s\r\n\r\n",
+                          node, username, me_term, tmv.tm_hour, tmv.tm_min, tmv.tm_sec, text);
+        if (ml < 0 || (size_t)ml >= sizeof msg)
+            ml = (int)sizeof msg - 1;
+
+        while ((st = vms_kif_procscan(&index, &pi)) & 1) {
+            if (pi.redacted || !pi.terminal[0] || strcasecmp(pi.username, whoU) != 0)
+                continue;
+            int seen = 0;
+            for (int i = 0; i < ndone; i++)
+                if (strcasecmp(done[i], pi.terminal) == 0) seen = 1;
+            if (seen || ndone >= 32)
+                continue;
+            snprintf(done[ndone++], VMS_DEVNAM_SIZE, "%s", pi.terminal);
+            uint32_t bs = vms_kif_tt_brkthru(pi.terminal, msg, (uint32_t)ml);
+            if (bs == SS$_NOPRIV) {
+                dcl_error("SYSTEM", 2, "NOPRIV", "insufficient privilege or object protection violation");
+                return SS$_NOPRIV;
+            }
+            if (bs & 1)
+                notified++;
+        }
+        if (!notified) {
+            /* nobody to deliver to: the system's own status, not a message
+             * of OVMX's invention */
+            dcl_error("SYSTEM", 0, "NONEXPR", "nonexistent process");
+            return SS$_NONEXPR;
+        }
+        fprintf(stderr, "User %s has been notified on %s.\n", whoU, node);
     } else {
         dcl_error("DCL", 2, "SYNTAX",
                   "REPLY requires /ENABLE, /DISABLE, or /TO qualifier");
@@ -1379,6 +1448,20 @@ void dcl_recall_push(const char *line)
     } else {
         dcl_recall_ring[dcl_recall_count++] = dup;
     }
+}
+
+/* The command `back` places before the newest (1 = the last command), or NULL
+ * past the oldest -- what the recall key (up arrow, CTRL/B) brings back. */
+const char *dcl_recall_get(int back)
+{
+    if (back < 1 || back > dcl_recall_count)
+        return NULL;
+    return dcl_recall_ring[dcl_recall_count - back];
+}
+
+int dcl_recall_size(void)
+{
+    return dcl_recall_count;
 }
 
 void dcl_recall_erase(void)

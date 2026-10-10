@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdint.h>
 #include <time.h>
 #include <inttypes.h>
 
@@ -27,6 +28,7 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "iodef.h"
+#include "trmdef.h"
 
 /* Path to the shared terminal device table */
 #include "ovmx_layout.h"
@@ -147,8 +149,25 @@ static int dcl_tt_assign(void)
     return dcl_tt_state == 1;
 }
 
-int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
-                uint32_t timeout_sec, uint16_t *term_out)
+void dcl_tt_arm_oob(void (*yast)(uint32_t), int y_on, void (*tast)(uint32_t), int t_on)
+{
+    uint16_t iosb[4];
+    /* IO$M_OUTBAND's P2: a quadword, first longword 0, second the mask of
+     * control characters -- here CTRL/T (20) */
+    static const uint32_t tmask[2] = { 0, 1u << 20 };
+
+    if (!dcl_tt_assign())
+        return;
+    (void)sys$qiow(0, dcl_tt_chan, IO$_SETMODE | IO$M_CTRLYAST, iosb, NULL, 0,
+                   y_on ? (void *)yast : NULL, 0, 3, 0, 0, 0);
+    /* the mask's address rides P4: P2 is a longword in this ABI and DCL's
+     * data may lie above 4 GB (see sys_qio.c) */
+    (void)sys$qiow(0, dcl_tt_chan, IO$_SETMODE | IO$M_OUTBAND, iosb, NULL, 0,
+                   t_on ? (void *)tast : NULL, 0, 3, (uintptr_t)tmask, 0, 0);
+}
+
+int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
+                uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out)
 {
     uint16_t iosb[4];
     uint32_t func, st;
@@ -167,8 +186,8 @@ int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
 
     static char pbuf[512];
     size_t plen = 0;
-    if (prompt && prompt[0]) {
-        plen = strlen(prompt);
+    if (prompt && prompt_len) {
+        plen = prompt_len;
         if (plen > sizeof pbuf)
             plen = sizeof pbuf;
         memcpy(pbuf, prompt, plen);
@@ -200,6 +219,61 @@ int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
     return (int)n;
 }
 
+int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
+                    char *buf, size_t bufsz, uint16_t *term_out)
+{
+    uint16_t iosb[4];
+    uint32_t st;
+    size_t n;
+    static char pbuf[512];
+    static char ibuf[512];
+    struct ovmx_trm_item items[2];
+    size_t plen = prompt_len < sizeof pbuf ? prompt_len : sizeof pbuf;
+    size_t ilen = ini ? strlen(ini) : 0;
+
+    if (term_out)
+        *term_out = 0;
+    if (!buf || bufsz < 2)
+        return DCL_TT_GONE;
+    if (!dcl_tt_assign())
+        return DCL_TT_NODRIVER;
+    fflush(stdout);
+    fflush(stderr);
+    if (ilen > sizeof ibuf)
+        ilen = sizeof ibuf;
+    memcpy(pbuf, prompt, plen);
+    memcpy(ibuf, ini ? ini : "", ilen);
+    memset(items, 0, sizeof items);
+    items[0].code = TRM$_PROMPT;
+    items[0].len = (unsigned short)plen;
+    items[0].val = (uintptr_t)pbuf;
+    items[1].code = TRM$_INISTRNG;
+    items[1].len = (unsigned short)ilen;
+    items[1].val = (uintptr_t)ibuf;
+    memset(iosb, 0, sizeof iosb);
+    st = sys$qiow(0, dcl_tt_chan, IO$_READVBLK | IO$M_EXTEND, iosb, NULL, 0,
+                  buf, (uint32_t)(bufsz - 1), 0, 0, (uintptr_t)items,
+                  (uint32_t)(ilen ? sizeof items : sizeof items[0]));
+    if (st & 1)
+        st = iosb[0];
+    if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN ||
+        st == SS$_IVDEVNAM)
+        return DCL_TT_NODRIVER;
+    n = iosb[1] < bufsz - 1 ? iosb[1] : bufsz - 1;
+    buf[n] = '\0';
+    if (term_out)
+        *term_out = iosb[2];
+    if (st == SS$_TIMEOUT)
+        return DCL_TT_TIMEOUT;
+    if (st == SS$_ABORT)
+        return DCL_TT_INTR;
+    if (!(st & 1))
+        return DCL_TT_GONE;
+    if (iosb[3] && iosb[2] == 26 && n == 0)
+        return DCL_TT_EOF;
+    return (int)n;
+}
+
 /*
  * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT
  * from an interactive terminal: through the terminal driver when stdin is
@@ -211,7 +285,7 @@ int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
     size_t len;
 
     if (isatty(STDIN_FILENO)) {
-        int n = dcl_tt_read(prompt, buf, bufsz, 0, 0, NULL);
+        int n = dcl_tt_read(prompt, prompt ? strlen(prompt) : 0, buf, bufsz, 0, 0, NULL);
         if (n >= 0)
             return 0;
         if (n != DCL_TT_NODRIVER)

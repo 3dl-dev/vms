@@ -626,7 +626,22 @@ getlki-grantcount-not-counted
 tt-typeahead-echoed-on-receipt
 tt-bind-privilege-ignored
 tt-port-input-dropped
-tt-console-hangup-unbinds"
+tt-console-hangup-unbinds
+tt-newline-ignores-cursor
+tt-owed-linefeed-unpaid
+tt-ctrly-not-shown
+tt-oob-ast-not-queued
+tt-outband-ends-read
+tt-breakthrough-no-redisplay
+tt-oob-survives-deassign
+tt-ctrlo-not-discarding
+tt-edit-cursor-ignored
+tt-edit-overstrike-ignored
+tt-edit-ctrlj-ignored
+tt-recall-key-not-terminator
+tt-inistr-ignored
+tt-brkthru-privilege-ignored
+tt-wrap-ignored"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2085,19 +2100,47 @@ the read returns the type-ahead 'abc' and the RETURN terminator
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
-a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
-the resumed read does not write its prompt a second time
-a NOECHO read returns what was typed
-IO$M_PURGE discards the type-ahead before reading
-DELETE rubs out the last character (data 'ac')
+CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST
+CTRL/O during a read is neither data nor shown, and does not end the read
+CTRL/O while output runs shows <LF>*OUTPUT OFF*<CR><LF> (the owed line feed first)
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver
+DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 DELETE is echoed as BS SP BS on a scope terminal
+DELETE rubs out the last character (data 'ac')
+IO$M_PURGE discards the type-ahead before reading
+TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')
+^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')
+^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')
+^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
-an escape sequence (up-arrow) neither ends the read nor lands in the line
+^U on a wrapped line clears its last row and leaves the cursor at its start (WRAP.LONG U)
 ^Z terminates the read
-the driver echoes *EXIT* for ^Z
-read(2) on the bound line returns the line with LF for the RETURN
+a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed
+a NOECHO read returns what was typed
+a line longer than the width wraps: CR LF before the character that would pass the last column
+a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)
+a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+after ^U the read returns an empty line
+an AST armed through a channel ends when that channel is deassigned
+an escape sequence (a cursor key with nowhere to move) neither ends the read nor lands in the line
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+output written while CTRL/O is on is discarded
 read(2) echoes as it consumes, like any driver read
+read(2) on the bound line returns the line with LF for the RETURN
+the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)
+the down arrow ends the read with the escape sequence as terminator, echoing nothing (RC.RECALL DN)
+the driver echoes *EXIT* for ^Z
+the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up
+the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
+the read the broadcast broke through goes on and returns 'AB'
+the resumed read does not write its prompt a second time
+the same read resumes and completes with the whole line 'ABCD'
+the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)
+two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
+with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT
+with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)
 EOF
                       ;;
         knock_on_why)  echo "one dropped receive path, every typed-input observation: each case that types at the line and expects a read to consume it sees its read time out with nothing (and no consumption echo). The cases that type nothing -- the bind, the NOECHO sense, the empty timed read, ^X (which expects an empty read anyway), the \$QIO write, the portless unit and the hangup -- stay green.";;
@@ -2120,6 +2163,307 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: it is the suite's last observation, and nothing before it hangs the console up.";;
+        esac;;
+
+    tt-newline-ignores-cursor)
+        case "$_f" in
+        facility)     echo "terminal carriage control (vms_tt.c tt_nl, rd vms-fc4): a NEW LINE is rendered for where the cursor is -- CR at a fresh line, LF where a record left its line feed owed, CR LF mid-line -- as the VAX V7.3 console does (probes docs/oracle/keystroke-probes/CC.*)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_nl() renders a new line at a FRESH cursor as a bare CR (\`case TT_POS_FRESH: tt_out1(tt, CH_CR);       break;\`): the line already advanced. The mutation renders it as CR LF regardless -- the Unix rendering, which double-spaces every record that follows an echoed RETURN (the keystroke oracle's blank lines between a command and its output). Non-fatal: one more byte into the echo buffer. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+DCL's prompt after a record: the owed <LF>, then <CR><NUL>$
+DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
+EOF
+                      ;;
+        knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;
+        esac;;
+
+    tt-ctrly-not-shown)
+        case "$_f" in
+        facility)     echo "the terminal class driver shows CTRL/Y and CTRL/C as <CR><LF>*INTERRUPT*<CR><LF> (vms_tt.c tt_echo_interrupt, rd vms-f0fb; probes OB.PROMPT Y1/Y3/C2/N2 on VAX V7.3)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() echoes *INTERRUPT* for CTRL/Y and CTRL/C (\`tt_echo_interrupt(tt);\`), armed AST or not. The mutation drops the call: the interrupt is silent, as the substrate's n_tty left it. Non-fatal: bytes not queued. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: only the screen check observes the echo; the read and AST checks see the same completions.";;
+        esac;;
+
+    tt-oob-ast-not-queued)
+        case "$_f" in
+        facility)     echo "out-of-band ASTs are queued in the EXECUTIVE's AST queue for the arming process (vms_tt.c tt_oob_fire/tt_queue_ast, rd vms-f0fb)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_oob_fire() queues the armed AST with tt_queue_ast() (\`if (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))\`). The mutation makes every queueing look failed (\`if (1)\`): the AST is never queued and the reader is never let go -- a driver that shows *INTERRUPT* but delivers nothing. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+the same read resumes and completes with the whole line 'ABCD'
+EOF
+                      ;;
+        knock_on_why)  echo "every later check that needs an AST queued fails with it: the CTRL/C-fires-CTRL/Y check finds no AST; with the CTRL/T AST never queued the reader is never let go, so the read takes 'ABC' then times out, and the breakthrough and resume checks see no outstanding read.";;
+        esac;;
+
+    tt-outband-ends-read)
+        case "$_f" in
+        facility)     echo "an out-of-band character (IO\$M_OUTBAND, e.g. CTRL/T) leaves the read outstanding: the reader is let go to deliver the AST and the same read resumes (vms_tt.c, rd vms-f0fb; probe OB.PROMPT T2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() fires the out-of-band AST and nothing else (\`tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);\`). The mutation also ends a read in progress SS\$_ABORT -- the line the user was typing is lost to a CTRL/T, the shape of a driver that treats every out-of-band character as an interrupt. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+the same read resumes and completes with the whole line 'ABCD'
+EOF
+                      ;;
+        knock_on_why)  echo "the read the CTRL/T ended cannot be shown again or resumed: the status line lands with no read outstanding, and the re-issued read starts a NEW read with its own prompt, missing 'ABC'.";;
+        esac;;
+
+    tt-breakthrough-no-redisplay)
+        case "$_f" in
+        facility)     echo "write breakthrough: output written while a read is outstanding is followed by the read shown again -- the owed line feed, the prompt, the line so far (vms_tt.c vms_tt_write, rd vms-f0fb / vms-53a; probe OB.PROMPT T2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() redisplays an outstanding read after the write (\`if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {\`). The mutation never does (\`if (0) {\`): a CTRL/T status line or a broadcast leaves the prompt and the typed line scrolled away. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
+EOF
+                      ;;
+        knock_on_why)  echo "none: the resumed read still completes with 'ABCD' -- only the screen shows the missing redisplay.";;
+        esac;;
+
+    tt-oob-survives-deassign)
+        case "$_f" in
+        facility)     echo "an out-of-band AST ends with the channel it was armed through (vms_tt.c vms_tt_chan_gone, called from vms_devtab.c device_release_channel; rd vms-f0fb)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_chan_gone() clears every out-of-band entry armed through the deassigned channel (\`memset(&tt->oob[i], 0, sizeof(tt->oob[i]));\`). The mutation leaves them armed (\`(void)0;\`): the AST still fires for a channel that is gone -- and, at process exit, for a process that is gone. Non-fatal in the suite: the test's own process is still alive. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an AST armed through a channel ends when that channel is deassigned
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: it is the section's last check.";;
+        esac;;
+
+    tt-ctrlo-not-discarding)
+        case "$_f" in
+        facility)     echo "CTRL/O discards the terminal's output until the next CTRL/O or read (vms_tt.c vms_tt_write, rd vms-f0fb; keystroke oracle OOB.CTRLO)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() drops the bytes while CTRL/O is on (\`return 0;                    /* CTRL/O: the output is discarded */\`). The mutation lets them through: *OUTPUT OFF* is shown but nothing is stopped. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+output written while CTRL/O is on is discarded
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)
+EOF
+                      ;;
+        knock_on_why)  echo "the record let through while CTRL/O was on leaves its line feed owed, so the record after *OUTPUT ON* no longer starts where the notice left the cursor.";;
+        esac;;
+
+    tt-edit-cursor-ignored)
+        case "$_f" in
+        facility)     echo "line editing: a character typed with the cursor moved back (^H ^D <- ...) is INSERTED there (vms_tt.c tt_consume, rd vms-eda8; keystroke LE.CURSOR)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() inserts a data character at the cursor when it is inside the line (\`if (tt->cur < tt->len) {                    /* insert */\`). The mutation never does (\`if (0) {\`): the character lands at the end, as a line editor that tracks no cursor would put it. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up
+EOF
+                      ;;
+        knock_on_why)  echo "the same misplaced character changes the echo: the inserted character is printed alone, with no tail and no backspaces.";;
+        esac;;
+
+    tt-edit-overstrike-ignored)
+        case "$_f" in
+        facility)     echo "line editing: ^A switches the read to overstrike (vms_tt.c, rd vms-eda8; keystroke LE.OVERSTRIKE)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() replaces the character under the cursor in overstrike mode (\`if (tt->cur < tt->len && tt->ovs) {\`). The mutation never overstrikes (\`if (0) {\`): ^A has no effect and the character is inserted. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check uses ^A.";;
+        esac;;
+
+    tt-edit-ctrlj-ignored)
+        case "$_f" in
+        facility)     echo "line editing: LINEFEED (^J) deletes the word left of the cursor (vms_tt.c, rd vms-eda8; keystroke LE.CTRLJ)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() walks back over the word before the cursor (\`while (at && tt->line[at - 1] != ' ')\`). The mutation never does (\`while (0)\`): ^J deletes nothing. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check types ^J.";;
+        esac;;
+
+    tt-recall-key-not-terminator)
+        case "$_f" in
+        facility)     echo "the up arrow is the recall key: it ends the read as CTRL/B, echoed <02> (vms_tt.c, rd vms-eb3d; keystroke RC.RECALL U1/U2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() ends the read on the up arrow as CTRL/B (\`} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {\`). The mutation drops that branch: the key is swallowed and DCL never learns the user asked for the last command. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the down-arrow and initial-line checks use their own keys.";;
+        esac;;
+
+    tt-inistr-ignored)
+        case "$_f" in
+        facility)     echo "an extended read's TRM\$_INISTRNG starts the line with the given characters, shown after the prompt and editable (vms_tt.c, rd vms-eb3d; RC.RECALL U1)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_read() preloads the line from the request's initial string (\`if (req->inistr \&\& req->inisz) {\`). The mutation ignores it (\`if (0) {\`): a recalled command is neither shown nor in the line. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ WRITE SYS$OUTPUT 6)
+EOF
+                      ;;
+        knock_on_why)  echo "the same ignored string is missing from the screen too.";;
+        esac;;
+
+    tt-brkthru-privilege-ignored)
+        case "$_f" in
+        facility)     echo "a broadcast to a terminal (VMS_IOCTL_TT_BRKTHRU, REPLY/USER) needs OPER, decided by the executive through vms_prot.h (vms_tt.c, rd vms-53a)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_tt_brkthru() asks the executive's protection code for OPER (\`a->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);\`). The mutation grants it to everyone (\`a->status = SS__NORMAL;\`): any process can write to any terminal. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a broadcast to a terminal without OPER is SS$_NOPRIV (the executive decides)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
+EOF
+                      ;;
+        knock_on_why)  echo "the refused write goes out too, so the screen after the privileged one carries the broadcast twice.";;
+        esac;;
+
+    tt-wrap-ignored)
+        case "$_f" in
+        facility)     echo "wrap: with the WRAP characteristic a line longer than the terminal width continues on the next row (vms_tt.c tt_out_linech, rd vms-cef; keystroke WRAP.LONG)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_out_linech() writes CR LF before the character that would pass the last column (\`if (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)\`). The mutation never wraps (\`if (0)\`): the terminal is left to do it, or overprint. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a line longer than the width wraps: CR LF before the character that would pass the last column
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: ^U on a wrapped line decides from the line's length, not from what was drawn, so it still clears the row.";;
+        esac;;
+
+    tt-owed-linefeed-unpaid)
+        case "$_f" in
+        facility)     echo "terminal carriage control (vms_tt.c vms_tt_read, rd vms-fc4): a read that echoes first pays the line feed a record left owed, so its prompt starts on the next line; a NOECHO read does not (probes CC.MIX A2 vs N3)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_read() pays an owed line feed before the prompt when the read echoes (\`if (tt->pos == TT_POS_CR && tt_echoing(tt))\`). The mutation never pays it, so a prompt after program output overprints the output's last line (its CR already returned the carriage). Non-fatal: one byte fewer. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ 
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+CTRL/O during a read is neither data nor shown, and does not end the read
+EOF
+                      ;;
+        knock_on_why)  echo "none: the payment happens only at the start of a read after a record, which only the named check observes";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -5570,7 +5914,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "LOGOUT goes back to announcing \"SYSTEM logged out\" -- on the console AND in the operator log -- for any process the executive has not named. An operator log that records a nameless process as SYSTEM is worse than one that records it as nothing: it is a false audit record, not a missing one.";;
         require_fail) cat <<'EOF'
-G/LOGOUT: the logout line names no user, in cmd_logout's own "  %s      logged out at" format
+G/LOGOUT: the logout line names no user, in cmd_logout's own "  %-12s logged out at" format
 G/LOGOUT: the session is not logged out as SYSTEM
 EOF
                       ;;
@@ -8223,6 +8567,38 @@ apply_edit() {
     tt-console-hangup-unbinds)
         # Unique text: vms_ldisc_hangup()'s not-a-pty branch.
         sed -i 's|^\tif (!port_is_pty(tty)) {        /\* a session ended, not the line \*/$|\tif (0) { /* NEGCTL tt-console-hangup-unbinds */|' "$_file";;
+    tt-newline-ignores-cursor)
+        # Unique text: tt_nl()'s FRESH case.
+        sed -i 's|^\tcase TT_POS_FRESH: tt_out1(tt, CH_CR);       break;$|\tcase TT_POS_FRESH: tt_out(tt, "\\r\\n", 2); break; /* NEGCTL tt-newline-ignores-cursor */|' "$_file";;
+    tt-ctrly-not-shown)
+        sed -i 's|^\t\t\t\ttt_echo_interrupt(tt);$|\t\t\t\t(void)0; /* NEGCTL tt-ctrly-not-shown */|' "$_file";;
+    tt-oob-ast-not-queued)
+        sed -i 's|^\tif (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))$|\tif (1) /* NEGCTL tt-oob-ast-not-queued */|' "$_file";;
+    tt-outband-ends-read)
+        sed -i 's|^\t\t\t\ttt_oob_fire(tt, \&tt->oob\[VMS_TT_OOB_OUTBAND - 1\], c);$|\t\t\t\ttt_oob_fire(tt, \&tt->oob[VMS_TT_OOB_OUTBAND - 1], c); if (tt->rd_active) tt_complete(tt, SS__ABORT, 0, 0); /* NEGCTL tt-outband-ends-read */|' "$_file";;
+    tt-breakthrough-no-redisplay)
+        sed -i 's|^\tif (tt->rd_busy \&\& !tt->rd_done \&\& !tt->passall \&\& n) {$|\tif (0) { /* NEGCTL tt-breakthrough-no-redisplay */|' "$_file";;
+    tt-oob-survives-deassign)
+        sed -i 's|^\t\t\tmemset(\&tt->oob\[i\], 0, sizeof(tt->oob\[i\]));$|\t\t\t(void)0; /* NEGCTL tt-oob-survives-deassign */|' "$_file";;
+    tt-ctrlo-not-discarding)
+        sed -i 's|^\t\treturn 0;                    /\* CTRL/O: the output is discarded \*/$|\t\t(void)0; /* NEGCTL tt-ctrlo-not-discarding */|' "$_file";;
+    tt-edit-cursor-ignored)
+        sed -i 's|^\tif (tt->cur < tt->len) {                    /\* insert \*/$|\tif (0) { /* NEGCTL tt-edit-cursor-ignored */|' "$_file";;
+    tt-edit-overstrike-ignored)
+        sed -i 's|^\tif (tt->cur < tt->len \&\& tt->ovs) {$|\tif (0) { /* NEGCTL tt-edit-overstrike-ignored */|' "$_file";;
+    tt-edit-ctrlj-ignored)
+        sed -i "s|^\t\t\twhile (at \&\& tt->line\[at - 1\] != ' ')$|\t\t\twhile (0) /* NEGCTL tt-edit-ctrlj-ignored */|" "$_file";;
+    tt-recall-key-not-terminator)
+        sed -i "s|^\t\t\t} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {$|\t\t\t} else if (0) { /* NEGCTL tt-recall-key-not-terminator */|" "$_file";;
+    tt-inistr-ignored)
+        sed -i 's|^\t\tif (req->inistr \&\& req->inisz) {$|\t\tif (0) { /* NEGCTL tt-inistr-ignored */|' "$_file";;
+    tt-brkthru-privilege-ignored)
+        sed -i 's|^\ta->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);$|\ta->status = SS__NORMAL; /* NEGCTL tt-brkthru-privilege-ignored */|' "$_file";;
+    tt-wrap-ignored)
+        sed -i 's|^\tif (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)$|\tif (0) /* NEGCTL tt-wrap-ignored */|' "$_file";;
+    tt-owed-linefeed-unpaid)
+        # Unique text: vms_tt_read()'s owed-line-feed payment.
+        sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

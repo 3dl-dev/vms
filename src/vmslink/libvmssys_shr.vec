@@ -310,3 +310,9 @@ vms_kif_tt_write=PROCEDURE
 vms_kif_tt_setmode=PROCEDURE
 vms_kif_tt_attach=PROCEDURE
 vms_kif_tt_sense=PROCEDURE
+# A terminal write as one record: IO$_WRITEVBLK P4 carriage control (rd vms-fc4). APPENDED.
+vms_kif_tt_write_record=PROCEDURE
+# Out-of-band terminal ASTs: CTRL/Y, CTRL/C, IO$M_OUTBAND (rd vms-f0fb). APPENDED.
+vms_kif_tt_oobast=PROCEDURE
+# Broadcast to a terminal through its class driver (rd vms-53a). APPENDED.
+vms_kif_tt_brkthru=PROCEDURE

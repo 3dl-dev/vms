@@ -86,6 +86,8 @@ struct vms_tt_read_req {
 	uint32_t termmask[8];        /* with VMS_TT_RD_TERMMASK: bit n = char n */
 	const uint8_t *prompt;       /* kernel copy, or NULL */
 	uint32_t promptsz;
+	const uint8_t *inistr;       /* kernel copy: the initial line, or NULL */
+	uint32_t inisz;
 	const void *owner;           /* who may resume this read after a signal
 				      * (vms_tt_read); NULL: not resumable */
 	int ldisc;                   /* the substrate's read(2) on the line */
@@ -147,5 +149,16 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_setmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_sense(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_tt_oobast(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_tt_brkthru(struct vms_proc *proc, unsigned long arg);
+
+/* A channel to terminal row `dev` is being deassigned (vms_devtab.c): the
+ * out-of-band ASTs armed through it end with it (rd vms-f0fb). */
+void vms_tt_chan_gone(struct vms_device *dev, pid_t owner_linux_pid, uint32_t chan);
+
+/* vms_tt_read's return when it suspended the read so the caller can deliver an
+ * AST the driver queued for it (VMS_TT_RDO_ASTPEND); the same owner's next read
+ * resumes it. */
+#define VMS_TT_READ_ASTPEND 1
 
 #endif /* VMS_TT_H */

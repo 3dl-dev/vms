@@ -52,6 +52,10 @@
  * message-inhibited). */
 #define DCL_STS_M_INHIB_MSG 0x10000000u
 
+/* Nonzero while WAIT hibernates: the CTRL/Y AST wakes only such a wait, so it
+ * never leaves a stray $WAKE pending for a later one. */
+volatile int dcl_in_wait;
+
 int cmd_wait(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
@@ -79,9 +83,20 @@ int cmd_wait(struct dcl_command *cmd)
     strncpy(hms, p, sizeof(hms) - 1);
     hms[sizeof(hms) - 1] = '\0';
 
-    /* Remove fractional seconds */
+    /* Hundredths of a second: SS.cc (OpenVMS DCL Dictionary, delta time). A
+     * WAIT 0:0:0.25 waits a quarter second -- dropping the fraction made it
+     * return at once, and a procedure pacing itself with it spun instead
+     * (the keystroke oracle's KSLOOP flooded the line, rd vms-ef03). */
+    long hundredths = 0;
     char *dot = strchr(hms, '.');
-    if (dot) *dot = '\0';
+    if (dot) {
+        *dot = '\0';
+        if (dot[1] >= '0' && dot[1] <= '9') {
+            hundredths = (dot[1] - '0') * 10;
+            if (dot[2] >= '0' && dot[2] <= '9')
+                hundredths += dot[2] - '0';
+        }
+    }
 
     /* Count colons to determine format */
     int colon_count = 0;
@@ -111,8 +126,25 @@ int cmd_wait(struct dcl_command *cmd)
         return SS$_IVTIME;
     }
 
-    if (total_seconds > 0) {
-        sleep((unsigned int)total_seconds);
+    if (total_seconds > 0 || hundredths > 0) {
+        /* A scheduled wakeup and a $HIBER, so the wait is one an AST can
+         * interrupt: DCL's CTRL/Y AST ends it (rd vms-f0fb), and the procedure
+         * is then interrupted at the command boundary. */
+        int64_t delta = -((int64_t)total_seconds * 10000000LL + (int64_t)hundredths * 100000LL);
+        struct dcl_context *wctx = dcl_get_context();
+        if (wctx->ctrly_pending)
+            return SS$_NORMAL;
+        dcl_in_wait = 1;
+        int waited = 0;
+        if ((sys$schdwk(NULL, NULL, (const uint64_t *)&delta, NULL) & 1)) {
+            waited = (sys$hiber() & 1);
+            (void)sys$canwak(NULL, NULL);
+        }
+        if (!waited) {
+            struct timespec ts = { total_seconds, hundredths * 10000000L };
+            (void)nanosleep(&ts, NULL);   /* no executive: a plain wait */
+        }
+        dcl_in_wait = 0;
     }
 
     return SS$_NORMAL;
@@ -3153,7 +3185,7 @@ int cmd_logout(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("  %s      logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    printf("  %-12s logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            upper_user, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));

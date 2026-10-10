@@ -48,6 +48,7 @@
 #include "vms_kif.h"
 #include "dcdef.h"
 #include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
+#include "trmdef.h"        /* IO$M_EXTEND item list (rd vms-eb3d) */
 
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
@@ -1275,6 +1276,8 @@ static int qio_chan_is_terminal(uint16_t chan, uint32_t *exec_chan_out,
     return 1;
 }
 
+void vms$$deliver_pending_asts(void);        /* sys_ast.c */
+
 static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint16_t w3)
 {
     if (!iosb_ptr) return;
@@ -1320,6 +1323,29 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     }
     case IO$_SETMODE:
     case IO$_SETCHAR: {
+        if (base == IO$_SETMODE && (func & (IO$M_CTRLYAST | IO$M_CTRLCAST | IO$M_OUTBAND))) {
+            /* OUT-OF-BAND ASTs (rd vms-f0fb; I/O User's Reference, "Terminal
+             * Driver"): P1 = the AST routine (0 disarms), P3 = its access
+             * mode; CTRL/Y and CTRL/C: P2 = the AST parameter; OUTBAND: P2 =
+             * the address of a quadword whose second longword is the mask of
+             * control characters, and the AST parameter is the character. */
+            uint32_t which = (func & IO$M_CTRLYAST) ? VMS_TT_OOB_CTRLY
+                           : (func & IO$M_CTRLCAST) ? VMS_TT_OOB_CTRLC
+                           : VMS_TT_OOB_OUTBAND;
+            uint32_t mask = 0;
+            /* OVMX, labelled (Rule 8): P2 is a longword in OVMX's $QIO, too
+             * narrow for a 64-bit image's address, so the mask quadword may be
+             * named by P4 instead (P4 is address-sized, rd vms-f8c). */
+            uintptr_t mq = p4 ? p4 : (uintptr_t)p2;
+            if (which == VMS_TT_OOB_OUTBAND && mq)
+                mask = ((const uint32_t *)mq)[1];
+            uint32_t st = vms_kif_tt_oobast(ec, which, (uint64_t)(uintptr_t)p1,
+                                            which == VMS_TT_OOB_OUTBAND ? 0 : p2,
+                                            mask, p3 & 3u);
+            if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+            tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0);
+            break;
+        }
         if (!p1 || p2 < 8) {
             /* the P2-selector form (vms-f54): IO$K_TT_PASSALL hands every
              * byte through unedited, unechoed (a SET HOST CTERM session);
@@ -1389,7 +1415,61 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
             ra.prompt = (uint64_t)(uintptr_t)p5;
             ra.promptsz = p6;
         }
+        if ((func & IO$M_EXTEND) && base != IO$_READPROMPT) {
+            /* THE EXTENDED READ (I/O User's Reference, "Terminal Driver",
+             * IO$M_EXTEND): P5 = the item list, P6 = its size in bytes; the
+             * entries are ovmx_trm_item (trmdef.h). Supported: MODIFIERS,
+             * TIMEOUT, TERM, PROMPT, INISTRNG; an item the driver does not
+             * implement is refused, not ignored (Rule 9). */
+            const struct ovmx_trm_item *it = (const struct ovmx_trm_item *)p5;
+            size_t nit = p5 ? p6 / sizeof(*it) : 0;
+            for (size_t k = 0; k < nit; k++) {
+                const struct ovmx_trm_item *e = &it[k];
+                switch (e->code) {
+                case TRM$_MODIFIERS:
+                    if (e->val & TRM$M_TM_NOECHO)    ra.flags |= VMS_TT_RD_NOECHO;
+                    if (e->val & TRM$M_TM_TIMED)     ra.flags |= VMS_TT_RD_TIMED;
+                    if (e->val & TRM$M_TM_PURGE)     ra.flags |= VMS_TT_RD_PURGE;
+                    if (e->val & TRM$M_TM_NOFILTR)   ra.flags |= VMS_TT_RD_NOFILTR;
+                    if (e->val & TRM$M_TM_TRMNOECHO) ra.flags |= VMS_TT_RD_TRMNOECHO;
+                    if (e->val & TRM$M_TM_CVTLOW)    ra.flags |= VMS_TT_RD_CVTLOW;
+                    break;
+                case TRM$_TIMEOUT:
+                    ra.timeout = (uint32_t)e->val;
+                    break;
+                case TRM$_TERM: {
+                    uint32_t msz = e->len < sizeof ra.termmask ? e->len : sizeof ra.termmask;
+                    memset(ra.termmask, 0, sizeof ra.termmask);
+                    if (e->val && msz) memcpy(ra.termmask, (const void *)(uintptr_t)e->val, msz);
+                    ra.flags |= VMS_TT_RD_TERMMASK;
+                    break;
+                }
+                case TRM$_PROMPT:
+                    ra.prompt = e->val;
+                    ra.promptsz = e->len;
+                    break;
+                case TRM$_INISTRNG:
+                    ra.inistr = e->val;
+                    ra.inisz = e->len;
+                    ra.flags |= VMS_TT_RD_INISTR;
+                    break;
+                default:
+                    tt_iosb(iosb_ptr, SS$_BADPARAM, 0, 0, 0);
+                    return SS$_BADPARAM;
+                }
+            }
+        }
         uint32_t st = vms_kif_tt_read(&ra);
+        /* An AST the driver queued for this process (an out-of-band
+         * character) is delivered while the read stays outstanding, then the
+         * read goes on where it was (rd vms-f0fb). */
+        while (ra.oflags & VMS_TT_RDO_ASTPEND) {
+            vms$$deliver_pending_asts();
+            ra.oflags = 0;
+            st = vms_kif_tt_read(&ra);
+        }
+        /* an AST that ended the read (CTRL/Y) runs before $QIOW returns */
+        vms$$deliver_pending_asts();
         if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN) {
             tt_iosb(iosb_ptr, st, 0, 0, 0);
             return st;
@@ -1399,10 +1479,18 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     }
     case IO$_WRITEVBLK:
     case IO$_WRITELBLK: {
-        /* Output through the class driver, byte for byte (rd vms-f8c). */
-        uint32_t st = (p1 && p2) ? vms_kif_tt_write(ec, p1, p2) : SS$_NORMAL;
+        /* Output through the class driver (rd vms-f8c). P4 is the carriage
+         * control: " " (single space) makes the text one record -- a new line
+         * before it, a carriage return after -- and the IOSB counts those
+         * three bytes too (VAX V7.3 and Alpha V8.4: 12 bytes written, count
+         * 15; semantic oracle TT.WRITE, rd vms-fc4). With IO$M_NOFORMAT, or
+         * no carriage control, the bytes go as they are. */
+        int record = ((p4 & 0xFF) == 0x20) && !(func & IO$M_NOFORMAT);
+        uint32_t st = (p1 && p2) ? (record ? vms_kif_tt_write_record(ec, p1, p2)
+                                           : vms_kif_tt_write(ec, p1, p2))
+                                 : SS$_NORMAL;
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
-        tt_iosb(iosb_ptr, SS$_NORMAL, (uint16_t)p2, 0, 0);
+        tt_iosb(iosb_ptr, SS$_NORMAL, (uint16_t)(p2 + (record && p2 ? 3 : 0)), 0, 0);
         break;
     }
     case IO$_ACCESS:

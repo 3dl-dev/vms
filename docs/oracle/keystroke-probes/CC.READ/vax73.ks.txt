@@ -1,0 +1,31 @@
+# keystroke oracle transcript (unmasked) -- case CC.READ (OpenVMS VAX V7.3 OPA0:)
+# carriage control probe: READ/PROMPT and records after it
+# case-sha256 1be5aace7a033aefb340fca70d436051ea656aa1ed04be3c014dc9a463aefa05
+@start loggedin OK
+=== STEP R1
+| READ/PROMPT="Z> " SYS$COMMAND X<CR><LF>
+| Z> 
+=== STEP R2
+| abc<CR><LF>
+| <CR><NUL>$ 
+=== STEP R3
+| READ/PROMPT="Z> " SYS$COMMAND X<CR><LF>
+| Z> 
+=== STEP R4
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R5
+| P = F$FAO("!/Q> ")<CR><LF>
+| <CR><NUL>$ 
+=== STEP R6
+| READ/PROMPT='P' SYS$COMMAND X<CR><LF>
+| <CR>Q>
+=== STEP R7
+| x<CR><LF>
+| <CR><NUL>$ 
+=== STEP R8
+| WRITE SYS$OUTPUT F$FAO("!/A!/B")<CR><LF>
+| <CR><LF>
+| A<CR><LF>
+| B<CR><LF>
+| <CR><NUL>$ 

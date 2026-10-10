@@ -76,6 +76,13 @@ static const char *const dir_size_keywords[] = {
     "USED", "ALLOCATION", "ALL", NULL
 };
 
+/* EDIT (rd vms-f1e): EDT is the editor; /READ_ONLY, /OUTPUT=filespec */
+static const struct dcl_qual_def q_edit[] = {
+    { "EDT",       CDU_VT_NONE,  0,               NULL, NULL },
+    { "READ_ONLY", CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "OUTPUT",    CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
+    QUAL_END
+};
 static const struct dcl_qual_def q_type[] = {
     { "PAGE", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
@@ -451,8 +458,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Dismount a volume from a device", q_none },
     { "DUMP",        cmd_dump,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display contents of a file in hexadecimal and ASCII", q_dump },
-    { "EDIT",        cmd_edit,        CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Invoke the EDT text editor", q_none },
+    { "EDIT",        cmd_edit,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
+      "Invoke the EDT text editor", q_edit },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session", q_none },
     { "FTP",         cmd_ftp,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

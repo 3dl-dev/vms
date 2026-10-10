@@ -10,8 +10,10 @@ VDIR="$(echo "$TDIR" | tr a-z A-Z)"
 mkdir -p "/vms/$VDIR"
 
 # Test 1: Create a file via EDIT with INSERT, then EXIT (saves)
-# All commands go through single stdin pipe: DCL commands first, then EDT commands
-printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nEDIT EDTFILE.TXT\nINSERT\nEDT_TEST_LINE_ONE\nEDT_TEST_LINE_TWO\nEDT_TEST_LINE_THREE\n\nEXIT\n' "$VDIR" | $VMSDCL 2>&1
+# All commands go through single stdin pipe: DCL commands first, then EDT commands.
+# As in EDT on VMS, only CTRL/Z ends INSERT (an empty line is an empty line of
+# text): the ^Z line below is a CTRL/Z character (rd vms-f1e).
+printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nEDIT EDTFILE.TXT\nINSERT\nEDT_TEST_LINE_ONE\nEDT_TEST_LINE_TWO\nEDT_TEST_LINE_THREE\n\032\nEXIT\n' "$VDIR" | $VMSDCL 2>&1
 
 # Test 2: Re-open file, delete line 2, substitute on line 1, then EXIT
 printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nEDIT EDTFILE.TXT\nDELETE 2\n1\nSUBSTITUTE /TEST_LINE_ONE/MODIFIED_LINE/\nEXIT\n' "$VDIR" | $VMSDCL 2>&1

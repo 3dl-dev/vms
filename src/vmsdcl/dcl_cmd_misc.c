@@ -3090,13 +3090,14 @@ int cmd_dismount(struct dcl_command *cmd)
 /*                     EDIT Command                                    */
 /* ================================================================== */
 
-/* External EDT editor entry point (dcl_editor.c) */
-extern int edt_run(const char *filepath);
+/* EDT (dcl_editor.c, rd vms-f1e) */
+extern int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
+                   int read_only);
 
 /*
- * EDIT - Launch EDT line-mode editor on a file.
- *
- * Format: EDIT filespec
+ * EDIT [/EDT] filespec -- EDT, the editor EDIT invokes by default. /READ_ONLY
+ * keeps EXIT from writing; /OUTPUT=filespec names the file EXIT writes.
+ * /TPU (EVE) is not part of OVMX and is refused as an unknown qualifier.
  */
 int cmd_edit(struct dcl_command *cmd)
 {
@@ -3106,12 +3107,8 @@ int cmd_edit(struct dcl_command *cmd)
         dcl_error("EDIT", 2, "NOFILE", "missing file specification");
         return SS$_BADPARAM;
     }
-
-    /* Resolve filespec to Linux path (file may not exist yet) */
-    char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
-
-    return edt_run(linux_path);
+    return edt_run(ctx, cmd->params[0], dcl_qualifier_value(cmd, "OUTPUT"),
+                   dcl_has_qualifier(cmd, "READ_ONLY"));
 }
 
 /* ================================================================== */

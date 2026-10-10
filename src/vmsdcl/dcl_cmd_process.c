@@ -3264,15 +3264,4 @@ int cmd_continue(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
-/* ================================================================== */
-/*                     EDIT Command                                    */
-/* ================================================================== */
 
-/* External EDT editor entry point (dcl_editor.c) */
-extern int edt_run(const char *filepath);
-
-/*
- * EDIT - Launch EDT line-mode editor on a file.
- *
- * Format: EDIT filespec
- */

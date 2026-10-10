@@ -1,0 +1,55 @@
+# keystroke oracle transcript (unmasked) -- case HLP.NAV (OpenVMS VAX V7.3 OPA0:)
+# HELP navigation on a 24-line screen: topic, subtopic, back out with RETURN
+# case-sha256 b1225b81ecda535ad319944181a84d23d28f7717fcf475a40f51ee3c5681713b
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP H
+| HELP RECALL<CR><LF>
+| <CR><LF>
+| RECALL<CR><LF>
+| <CR><LF>
+| <CR><LF>
+|      Displays up to 254 previously entered commands on the screen for<CR><LF>
+|      subsequent execution.<CR><LF>
+| <CR><LF>
+|      Format<CR><LF>
+| <CR><LF>
+|        RECALL  [command-specifier]<CR><LF>
+|    <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+|   Additional information available:<CR><LF>
+| <CR><LF>
+|   Parameter  Qualifiers<CR><LF>
+|   /ALL       /ERASE     /INPUT     /OUTPUT    /PAGE<CR><LF>
+|   Examples<CR><LF>
+| <CR><LF>
+| <CR>RECALL Subtopic? 
+=== STEP S
+| /ALL<CR><LF>
+| <CR><LF>
+| RECALL<CR><LF>
+| <CR><LF>
+|   /ALL<CR><LF>
+| <CR><LF>
+|      Displays all the commands (and their numbers) available for<CR><LF>
+|      recall. Do not use the /ALL qualifier with the other RECALL<CR><LF>
+|      qualifiers.<CR><LF>
+| <CR><LF>
+|                                     NOTE<CR><LF>
+| <CR><LF>
+|         The RECALL command is never stored in the recall buffer.<CR><LF>
+|    <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR>RECALL Subtopic? 
+=== STEP B1
+| <CR><LF>
+| <CR>Topic? 
+=== STEP B2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP B3
+| <CR><LF>
+| <CR><NUL>$ 

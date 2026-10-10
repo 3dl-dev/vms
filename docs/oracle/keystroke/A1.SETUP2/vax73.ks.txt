@@ -1,0 +1,16 @@
+# keystroke oracle transcript (unmasked) -- case A1.SETUP2 (OpenVMS VAX V7.3 OPA0:)
+# setup -- KSPG.TXT (40 lines) and an empty slate for KSE.TXT
+# case-sha256 a518a31f2468b47415a46adbd8a51eac5399dc34296cd57b790778426e607f43
+@start loggedin OK
+=== STEP S0 quiet
+=== STEP S1 quiet
+=== STEP S2 quiet
+=== STEP S3 quiet
+=== STEP S4 quiet
+=== STEP S5 quiet
+=== STEP S6 quiet
+=== STEP S7 quiet
+=== STEP S8 quiet
+=== STEP S9 quiet
+=== STEP S10 quiet
+=== STEP S11 quiet

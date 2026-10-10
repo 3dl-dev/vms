@@ -1,0 +1,30 @@
+# keystroke oracle transcript (unmasked) -- case RC.ALL (OpenVMS VAX V7.3 OPA0:)
+# RECALL/ALL lists the recall buffer, RECALL n brings one back for editing, RECALL/ERASE empties it
+# case-sha256 baa77f34d6651f2f9785588734310d136799a0b38fdfc34b0123873a4deaec36
+@start loggedin OK
+=== STEP E0 quiet
+=== STEP C1
+| WRITE SYS$OUTPUT "R1"<CR><LF>
+| <CR>R1<CR><LF>
+| <CR><NUL>$ 
+=== STEP C2
+| WRITE SYS$OUTPUT "R2"<CR><LF>
+| <CR>R2<CR><LF>
+| <CR><NUL>$ 
+=== STEP A
+| RECALL/ALL<CR><LF>
+| <CR>  1 WRITE SYS$OUTPUT "R2"<CR><LF>
+|   2 WRITE SYS$OUTPUT "R1"<CR><LF>
+| <CR><NUL>$ 
+=== STEP N
+| RECALL 2<CR><LF>
+| <CR><NUL>$ WRITE SYS$OUTPUT "R1"
+=== STEP U
+| <CR><LF>
+| <CR><NUL>$                                                                              <BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
+=== STEP E
+| RECALL/ERASE<CR><LF>
+| <CR><NUL>$ 
+=== STEP A2
+| RECALL/ALL<CR><LF>
+| <CR><NUL>$ 

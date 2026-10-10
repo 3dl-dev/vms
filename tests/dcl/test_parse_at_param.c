@@ -81,8 +81,8 @@ int main(void)
                  "SPAWN/NOWAIT/OUTPUT= @SYS$LOGIN:X.COM keeps the '@' on parameter 1");
 
     /* OpenVMS accepts a blank between '@' and the procedure name. */
-    check_param0("SPAWN @ SYS$LOGIN:X.COM", "@SYS$LOGIN:X.COM",
-                 "'@ FILE' (blank after the '@') is ONE parameter, '@FILE'");
+    check_param0("SPAWN @ SYS$LOGIN:X.COM", "@ SYS$LOGIN:X.COM",
+                 "'@ FILE' (blank after the '@') reaches the subprocess as written (rd vms-f37)");
 
     /* A trailing '@' is kept as its own parameter rather than vanishing, so a
      * consumer can report its own error about a command it really received. */
@@ -106,9 +106,25 @@ int main(void)
               "'@FILE' at line start is still the '@' verb with FILE as parameter 1");
     }
 
-    /* A command with no '@' is unchanged. */
-    check_param0("SPAWN SHOW TIME", "SHOW",
-                 "a SPAWN with no '@' parses its parameters unchanged");
+    /* SPAWN's command string is ONE parameter, its own qualifiers included:
+     * SPAWN's qualifiers are only those straight after the verb (rd vms-f37;
+     * OpenVMS DCL Dictionary, SPAWN). */
+    check_param0("SPAWN SHOW TIME", "SHOW TIME",
+                 "a SPAWN command string is one parameter");
+    {
+        struct dcl_command cmd;
+        int rc = dcl_parse_line("SPAWN SHOW PROCESS/PRIVILEGES", &cmd);
+        check(rc == 0 && cmd.param_count == 1 && cmd.qualifier_count == 0 &&
+              strcmp(cmd.params[0], "SHOW PROCESS/PRIVILEGES") == 0,
+              "a qualifier of the SPAWNed command is the command's, not SPAWN's");
+    }
+    {
+        struct dcl_command cmd;
+        int rc = dcl_parse_line("SPAWN/NOWAIT/OUTPUT=F.LOG REPLY/USER=SYSTEM \"HI\"", &cmd);
+        check(rc == 0 && cmd.qualifier_count == 2 && cmd.param_count == 1 &&
+              strcmp(cmd.params[0], "REPLY/USER=SYSTEM \"HI\"") == 0,
+              "SPAWN's own leading qualifiers are SPAWN's; the rest is the command, quotes kept");
+    }
 
     printf("=== test_parse_at_param: %s (%d failure(s)) ===\n",
            failures ? "FAIL" : "PASS", failures);

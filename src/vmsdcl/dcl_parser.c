@@ -284,6 +284,56 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
             cmd->raw_tail[--rl] = '\0';
     }
 
+    /*
+     * SPAWN [/qualifier...] [command-string] (rd vms-f37). SPAWN's qualifiers
+     * are the ones written straight after the verb; from the first parameter
+     * on, the rest of the line is ONE command string for the subprocess, its
+     * own qualifiers included (OpenVMS DCL Dictionary, SPAWN). Parsing on
+     * gave "SPAWN SHOW PROCESS/PRIVILEGES" a %DCL-W-IVQUAL \PRIVILEGES\ as if
+     * the qualifier were SPAWN's. So only SPAWN's leading qualifiers are left
+     * to the token loop, and the command string becomes params[0] verbatim.
+     */
+    char spawn_cmd[DCL_MAX_VALUE];
+    int  spawn_has_cmd = 0;
+    {
+        size_t vl = strlen(cmd->verb);
+        if (vl >= 2 && vl <= 5 && strncasecmp(cmd->verb, "SPAWN", vl) == 0) {
+            const char *base = lex.input;
+            size_t i = lex.pos;
+            for (;;) {
+                while (i < lex.length && (base[i] == ' ' || base[i] == '\t'))
+                    i++;
+                if (i >= lex.length || base[i] != '/')
+                    break;
+                /* one qualifier: up to the next blank or '/', a quoted or
+                 * parenthesised value taken whole */
+                int depth = 0, inq = 0;
+                i++;
+                while (i < lex.length) {
+                    char ch = base[i];
+                    if (inq) { if (ch == '"') inq = 0; }
+                    else if (ch == '"') inq = 1;
+                    else if (ch == '(') depth++;
+                    else if (ch == ')') { if (depth) depth--; }
+                    else if (!depth && (ch == ' ' || ch == '\t' || ch == '/'))
+                        break;
+                    i++;
+                }
+            }
+            if (i < lex.length) {
+                size_t n = lex.length - i;
+                if (n >= sizeof(spawn_cmd)) n = sizeof(spawn_cmd) - 1;
+                memcpy(spawn_cmd, base + i, n);
+                spawn_cmd[n] = '\0';
+                while (n > 0 && (spawn_cmd[n - 1] == ' ' || spawn_cmd[n - 1] == '\t' ||
+                                 spawn_cmd[n - 1] == '\n'))
+                    spawn_cmd[--n] = '\0';
+                spawn_has_cmd = n > 0;
+                lex.length = i;          /* the token loop sees SPAWN's qualifiers only */
+            }
+        }
+    }
+
     /* Parse the rest of the tokens */
     int last_was_param = 0;       /* previous token was a WORD/STRING/NUMBER param */
     int last_param_quoted = 0;    /* ...and that param came from a bare STRING     */
@@ -435,6 +485,12 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
 
     /* Store the whole rest-of-line for commands that need unparsed text */
     /* (This was already done partially; cmd->rest may have been set by PIPE) */
+
+    if (spawn_has_cmd) {                 /* SPAWN's command string (rd vms-f37) */
+        strncpy(cmd->params[0], spawn_cmd, sizeof(cmd->params[0]) - 1);
+        cmd->params[0][sizeof(cmd->params[0]) - 1] = '\0';
+        cmd->param_count = 1;
+    }
 
     return 0;
 }

@@ -137,6 +137,42 @@ static int executive_present(void)
 }
 
 /*
+ * wait_hibernating - block until process `pid` is ASLEEP in its $HIBER wait.
+ *
+ * Why this exists (an intermittent negative control is a bug): A sends 'A' and
+ * then calls sys$hiber(). If B's write lands in the gap -- before A's $HIBER
+ * reaches the executive's wait -- the AST is already deliverable when $HIBER
+ * starts, so $HIBER falls straight through without the arrival wake this
+ * scenario exists to prove (vms_ast_notify_arrival). The scenario then passes
+ * whether or not that wake works, which is how hiber-ast-not-delivered once
+ * left this suite green. So B is released only once A is provably blocked.
+ *
+ * The observation is the Linux task state of A's main thread: after 'A', A's
+ * only remaining step is the $HIBER request, and the executive's hibernate wait
+ * is an INTERRUPTIBLE sleep -- the one place A can be in state 'S' (a pipe write
+ * of one byte does not block; a fault or a lock wait is 'D', a preemption 'R').
+ * Bounded: a timeout is a named FAIL, not a hang.
+ */
+static int wait_hibernating(pid_t pid, int timeout_ms)
+{
+    char path[64], buf[512];
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    for (int waited = 0; waited <= timeout_ms; waited += 5) {
+        FILE *f = fopen(path, "r");
+        if (f) {
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            fclose(f);
+            buf[n] = 0;
+            char *rp = strrchr(buf, ')');      /* comm may hold spaces/parens */
+            if (rp && rp[1] == ' ' && rp[2] == 'S')
+                return 1;
+        }
+        poll(NULL, 0, 5);
+    }
+    return 0;
+}
+
+/*
  * process_b - the WRITER. Assigns the named mailbox (never creates it, never
  * arms any AST, never drains anything) and writes one message when asked. It
  * shares nothing with A but the name.
@@ -320,7 +356,16 @@ int main(int argc, char **argv)
     if (read_bounded(a2c[0], &armed, 1, PEER_TIMEOUT_MS) != 1 || armed != 'A') {
         printf("  FAIL: A never reported arming its write-attention AST\n"); fail++; goto teardown1;
     }
-    CHECK(1, "A: created the named mailbox, published its LNM, armed the write-attention AST and entered $HIBER (no explicit $SETAST drain)");
+    CHECK(1, "A: created the named mailbox, published its LNM and armed the write-attention AST");
+
+    /* Release B only once A is ASLEEP in $HIBER, so B's write queues the AST
+     * into a process that is already waiting -- the AST arrival must WAKE it.
+     * Without this gate the write can land before A's $HIBER starts, and A falls
+     * through on an already-deliverable AST (see wait_hibernating). */
+    if (!wait_hibernating(pa, PEER_TIMEOUT_MS)) {
+        printf("  FAIL: A never went to sleep in $HIBER\n"); fail++; goto teardown1;
+    }
+    CHECK(1, "A is asleep in $HIBER (no explicit $SETAST drain) BEFORE B writes, so only the AST's arrival can wake it");
 
     /* Only now release B to $ASSIGN by name -- the name is guaranteed published. */
     if (send_token(p2c[1], 'S') != 0) {

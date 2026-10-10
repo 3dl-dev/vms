@@ -47,6 +47,7 @@
  */
 
 #include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -205,6 +206,11 @@ static int executive_present(void)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
+    /* A REFUSED session exits without reading the "EXIT\n" run_authorize feeds
+     * it; when it has already exited, that write meets a closed pipe and
+     * SIGPIPE would kill this suite (rc=141, run 37966927758 shard 14) instead
+     * of the write failing EPIPE, which run_authorize ignores. */
+    signal(SIGPIPE, SIG_IGN);
     printf("=== test_syssvc_authorize (AUTHORIZE's SYSPRV check, both directions, vms-4c2) ===\n");
 
     if (!executive_present()) {

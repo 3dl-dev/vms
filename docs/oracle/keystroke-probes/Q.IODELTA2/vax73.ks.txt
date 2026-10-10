@@ -1,0 +1,113 @@
+# keystroke oracle transcript (unmasked) -- case Q.IODELTA2 (OpenVMS VAX V7.3 OPA0:)
+# probe: JPI$_BUFIO / JPI$_DIRIO per operation -- TYPE of 3 and 7 records, OPEN, READ, CLOSE, DIRECTORY, WRITE
+# case-sha256 7d6d89428b2222d201ea82a993776f1f5dbb4e7377b01d489309ba5e4014a4df
+@start loggedin OK
+=== STEP S0 quiet
+=== STEP T1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP T2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP T3
+| TYPE KSE2.TXT<CR><LF>
+| <CR>NEW<CR><LF>
+| ONE<CR><LF>
+| XHREE<CR><LF>
+| <CR><NUL>$ 
+=== STEP T4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>20 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP U1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP U2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP U3
+| TYPE KSPG.COM<CR><LF>
+| <CR>$ OPEN/WRITE F KSPG.TXT<CR><LF>
+| $ I = 0<CR><LF>
+| $ L:<CR><LF>
+| $ I = I + 1<CR><LF>
+| $ WRITE F "PAGE LINE ", I<CR><LF>
+| $ IF I .LT. 40 THEN GOTO L<CR><LF>
+| $ CLOSE F<CR><LF>
+| <CR><NUL>$ 
+=== STEP U4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>24 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP O1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP O2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP O3
+| OPEN F KSPG.COM<CR><LF>
+| <CR><NUL>$ 
+=== STEP O4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>4 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP R1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP R2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP R3
+| READ F X<CR><LF>
+| <CR><NUL>$ 
+=== STEP R4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>3 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP C1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP C2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP C3
+| CLOSE F<CR><LF>
+| <CR><NUL>$ 
+=== STEP C4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>4 0<CR><LF>
+| <CR><NUL>$ 
+=== STEP D1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP D2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP D3
+| DIRECTORY KSPG.COM<CR><LF>
+| <CR><LF>
+| Directory SYS$SYSROOT:[SYSMGR]<CR><LF>
+| <CR><LF>
+| KSPG.COM;1          <CR><LF>
+| <CR><LF>
+| Total of 1 file.<CR><LF>
+| <CR><NUL>$ 
+=== STEP D4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>26 2<CR><LF>
+| <CR><NUL>$ 
+=== STEP W1
+| $ B=F$GETJPI("","BUFIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP W2
+| $ D=F$GETJPI("","DIRIO")<CR><LF>
+| <CR><NUL>$ 
+=== STEP W3
+| WRITE SYS$OUTPUT "X"<CR><LF>
+| <CR>X<CR><LF>
+| <CR><NUL>$ 
+=== STEP W4
+| $ WRITE SYS$OUTPUT F$GETJPI("","BUFIO")-B," ",F$GETJPI("","DIRIO")-D<CR><LF>
+| <CR>4 0<CR><LF>
+| <CR><NUL>$ 

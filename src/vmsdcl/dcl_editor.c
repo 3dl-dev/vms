@@ -34,6 +34,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include "ssdef.h"
 #include "dcl/context.h"
@@ -397,8 +398,67 @@ static void spaint(struct kp *k, int li, int col)
     so(&k->s, "\033[K");
 }
 
+/*
+ * Keep the cursor's line on the screen. Once the screen can move, the cursor
+ * is held between rows 8 and 15; the screen never moves past the point where
+ * [EOB] is on the last row, nor above the first line. A move of less than a
+ * screen scrolls -- up: ESC[22H LF and the new bottom line, a line at a time;
+ * down: ESC M, the new top line and CR, from row 1 (keystroke EDT.KEYPAD2
+ * BOT, TOP, SEC, DN, DN2, UP).
+ */
+static void sfull(struct kp *k);
+#define CUR_TOP 8
+#define CUR_BOT 15
+
+static void sscroll(struct kp *k)
+{
+    int n = k->b->n;
+    int r = row_of(k, k->li);
+    int top = k->s.top;
+    int maxtop = n + 1 - WROWS;
+    if (maxtop < 0) maxtop = 0;
+    if (r > CUR_BOT) top = k->li - (CUR_BOT - 1);
+    else if (r < CUR_TOP) top = k->li - (CUR_TOP - 1);
+    if (top > maxtop) top = maxtop < k->s.top ? k->s.top : maxtop;
+    if (top < 0) top = 0;
+    if (r >= 1 && r <= WROWS && ((r >= CUR_TOP && r <= CUR_BOT) || top == k->s.top))
+        return;
+    int d = top - k->s.top;
+    if (d == 0) return;
+    if (d >= WROWS || -d >= WROWS) {
+        k->s.top = top;
+        sfull(k);
+        return;
+    }
+    if (d > 0) {
+        for (int i = 0; i < d; i++) {
+            k->s.top++;
+            k->s.known = 0;
+            smove(&k->s, WROWS, 1);
+            so(&k->s, "\n");
+            int bl = k->s.top + WROWS - 1;
+            if (bl <= n) {
+                const char *t = bl < n ? k->b->l[bl].text : "[EOB]";
+                stext(&k->s, t, strlen(t));
+            }
+        }
+        k->s.known = 0;
+    } else {
+        smove(&k->s, 1, 1);
+        for (int i = 0; i < -d; i++) {
+            k->s.top--;
+            so(&k->s, "\033M");
+            const char *t = ltext(k, k->s.top);
+            stext(&k->s, t, strlen(t));
+            so(&k->s, "\r");
+            k->s.c = 1;
+        }
+    }
+}
+
 static void scursor(struct kp *k)
 {
+    sscroll(k);
     smove(&k->s, row_of(k, k->li), k->off + 1);
 }
 
@@ -440,14 +500,18 @@ static void sfull(struct kp *k)
     k->s.rev = 0;
     if (k->li < k->s.top || k->li >= k->s.top + WROWS)
         k->s.top = k->li;
+    /* rows 1-21 end with CR LF; the last row is reached with ESC[22H
+     * (keystroke EDT.KEYPAD2 C, W) */
     for (int i = k->s.top, row = 1; row <= WROWS; i++, row++) {
-        if (i < k->b->n) {
-            stext(&k->s, k->b->l[i].text, strlen(k->b->l[i].text));
-            if (row < WROWS) { so(&k->s, "\r\n"); k->s.r++; k->s.c = 1; }
-        } else {
-            stext(&k->s, "[EOB]", 5);
-            break;
+        if (row == WROWS) {
+            if (i > k->b->n) break;
+            k->s.known = 0;
+            smove(&k->s, WROWS, 1);
         }
+        const char *t = i < k->b->n ? k->b->l[i].text : "[EOB]";
+        stext(&k->s, t, strlen(t));
+        if (i >= k->b->n) break;
+        if (row < WROWS - 1) { so(&k->s, "\r\n"); k->s.r++; k->s.c = 1; }
     }
     scursor(k);
 }
@@ -464,16 +528,26 @@ static void sdelete_row(struct kp *k, int li)
     k->s.known = 0;                    /* see below: ESC[22H, absolute */
     smove(&k->s, WROWS, 1);
     so(&k->s, "\n");
-    /* the row that scrolled in at the bottom */
+    /* nothing to bring in at the bottom: what is below [EOB] is erased now;
+     * a line that is there is written once the region is reset (sfill_bottom;
+     * keystroke EDT.KEYPAD L, EDT.KEYPAD2 J) */
+    if (k->s.top + WROWS - 1 > k->b->n)
+        serase_below(k);
+    sregion(&k->s, 1, WROWS);
+}
+
+/* after a row was closed up: the bottom row's new line, or below [EOB] erased */
+static void sfill_bottom(struct kp *k)
+{
     int bl = k->s.top + WROWS - 1;
-    if (bl < k->b->n) {
-        stext(&k->s, k->b->l[bl].text, strlen(k->b->l[bl].text));
-    } else if (bl == k->b->n) {
-        stext(&k->s, "[EOB]", 5);
+    if (bl <= k->b->n) {
+        const char *t = bl < k->b->n ? k->b->l[bl].text : "[EOB]";
+        smove(&k->s, WROWS, 1);
+        stext(&k->s, t, strlen(t));
+        so(&k->s, "\033[K");
     } else {
         serase_below(k);
     }
-    sregion(&k->s, 1, WROWS);
 }
 
 /* the buffer gained line `li`: open a row for it and write it */
@@ -541,7 +615,13 @@ static void ins_text(struct kp *k, const char *t, int after, int whole_line)
         snprintf(line, sizeof line, "%s%s%s", head, t, tail);
         set_text(k, k->li, line);
         int col = whole_line ? 1 : k->off + 1;
-        spaint(k, k->li, col);
+        if (!tail[0] && !whole_line) {
+            /* typed at the end of a line: just the text (EDT.KEYPAD2 T) */
+            smove(&k->s, row_of(k, k->li), col);
+            stext(&k->s, t, strlen(t));
+        } else {
+            spaint(k, k->li, col);
+        }
         if (after) k->off += (int)strlen(t);
         scursor(k);
         return;
@@ -657,16 +737,31 @@ static int kp_key(void)
 #define K_DOT    (0x200 | 'n')
 #define K_ENTER  (0x200 | 'M')
 
+static int kp_prompt(struct kp *k, const char *label, char *out, size_t outsz,
+                     int restore);
+
 /* GOLD FIND: "Search for: " on row 23, the string typed after it */
 static int kp_find_prompt(struct kp *k)
+{
+    char str[256];
+    if (!kp_prompt(k, "Search for: ", str, sizeof str, 1))
+        return 0;
+    if (str[0]) snprintf(k->find, sizeof k->find, "%s", str);
+    return 1;
+}
+
+/* a prompt on row 23 and what is typed after it, echoed by EDT itself; the
+ * ESC[?8h waits for the first echo (keystroke EDT.KEYPAD F, F2). `restore`:
+ * clear the prompt line and put the cursor back afterwards. */
+static int kp_prompt(struct kp *k, const char *label, char *out, size_t outsz,
+                     int restore)
 {
     char str[256];
     size_t n = 0;
     int first = 1;
     smove(&k->s, 23, 1);
     so(&k->s, "\033[K");
-    stext(&k->s, "Search for: ", 12);
-    /* the ESC[?8h waits for the first echo (keystroke EDT.KEYPAD F, F2) */
+    stext(&k->s, label, strlen(label));
     sflush(&k->s);
     for (;;) {
         int c = kp_key();
@@ -693,14 +788,59 @@ static int kp_find_prompt(struct kp *k)
     k->s.known = 0;                     /* EDT does not track the prompt line
                                          * (EDT.KEYPAD F3: ESC[23H, absolute) */
     str[n] = '\0';
-    if (n) snprintf(k->find, sizeof k->find, "%s", str);
+    snprintf(out, outsz, "%s", str);
     so(&k->s, "\033[?8l");
-    /* clear the prompt line, back to where the cursor was */
-    smove(&k->s, 23, 1);
-    so(&k->s, "\033[J");
-    k->s.msg = 0;
-    scursor(k);
+    if (restore) {
+        /* clear the prompt line, back to where the cursor was */
+        smove(&k->s, 23, 1);
+        so(&k->s, "\033[J");
+        k->s.msg = 0;
+        scursor(k);
+    }
     return 1;
+}
+
+static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
+                     const char *p);
+
+/* GOLD COMMAND: a line-mode command typed on row 23, its output on row 24
+ * through the whole-screen region (keystroke EDT.KEYPAD2 CMD..CMD3) */
+static void kp_command_line(struct kp *k)
+{
+    char cmdl[256];
+    if (!kp_prompt(k, "Command: ", cmdl, sizeof cmdl, 0))
+        return;
+    smove(&k->s, 23, 1);
+    sregion(&k->s, 1, 24);
+    smove(&k->s, 24, 1);
+    srend(&k->s, 0);
+    sflush(&k->s);
+    k->b->cur = k->li;
+    struct dcl_pager pg;
+    int cap = dcl_page_begin(&pg);
+    line_cmd(k->b, cmdl, skip(cmdl), skip(cmdl));
+    if (cap) {
+        fflush(stdout);
+        dup2(pg.save, 1);
+        close(pg.save);
+        rewind(pg.tmp);
+        char ln[EDT_LINE_MAX];
+        int first = 1;
+        while (fgets(ln, sizeof ln, pg.tmp)) {
+            size_t l = strlen(ln);
+            if (l && ln[l - 1] == '\n') ln[--l] = '\0';
+            if (!first) dcl_tt_qio_write("\r\n", 2);
+            dcl_tt_qio_write(ln, l);
+            first = 0;
+        }
+        fclose(pg.tmp);
+    }
+    k->s.known = 0;
+    sregion(&k->s, 1, WROWS);
+    k->s.msg = 1;
+    if (k->b->cur != k->li) { k->li = k->b->cur; k->off = 0; }
+    if (k->li > k->b->n) k->li = k->b->n;
+    scursor(k);
 }
 
 static void kp_after_vertical(struct kp *k)
@@ -731,11 +871,22 @@ static int kp_command(struct kp *k, int key, int gold)
         scursor(k);
         return 1;
     }
-    if (!(key == K_PF3 && gold))
-        srend(&k->s, 0);                /* a command: GOLD's reverse ends;
+    if (!((key == K_PF3 || key == K_KP(7)) && gold))
+        srend(&k->s, 0);
+    if (key == K_KP(7) && gold) { kp_command_line(k); return 1; }                /* a command: GOLD's reverse ends;
                                          * FIND's after its prompt */
+    if (key == K_KP(4) && gold) { kp_move(k, b->n, 0); scursor(k); return 1; }  /* BOTTOM */
+    if (key == K_KP(5) && gold) { kp_move(k, 0, 0); scursor(k); return 1; }     /* TOP */
     if (key == K_KP(4)) { k->dir = 1; return 1; }
     if (key == K_KP(5)) { k->dir = -1; return 1; }
+    if (key == K_KP(8) && !gold) {      /* SECT: 16 lines */
+        int t = k->li + (k->dir > 0 ? 16 : -16);
+        if (t > b->n) t = b->n;
+        if (t < 0) t = 0;
+        kp_move(k, t, 0);
+        scursor(k);
+        return 1;
+    }
     if (key == K_DOT) {                 /* SELECT */
         k->sel = 1; k->sel_li = k->li; k->sel_off = k->off;
         return 1;
@@ -780,13 +931,14 @@ static int kp_command(struct kp *k, int key, int gold)
             set_text(k, k->li, nt);
             buf_delete(b, k->li + 1);
             sdelete_row(k, k->li + 1);
+            spaint(k, k->li, k->off + 1);
+            sfill_bottom(k);
         } else {
             char nt[EDT_LINE_MAX];
             snprintf(nt, sizeof nt, "%.*s", k->off, t);
             set_text(k, k->li, nt);
+            spaint(k, k->li, k->off + 1);
         }
-        spaint(k, k->li, k->off + 1);
-        serase_below(k);
         scursor(k);
         return 1;
     }
@@ -906,6 +1058,10 @@ static void kp_run(struct edt_buf *b, struct kp *k)
         }
         int esc = key >= 0x100;
         if (esc) so(&k->s, "\033[?8l");
+        if (k->s.msg) {                 /* the next key clears a message */
+            sclear_msg(k);
+            scursor(k);
+        }
         int gold = 0;
         if (key == K_PF1) {
             srend(&k->s, 1);
@@ -913,13 +1069,28 @@ static void kp_run(struct edt_buf *b, struct kp *k)
             key = kp_key();
             if (key < 0) break;
         }
-        if (k->s.msg) {                 /* the next key clears a message */
-            sclear_msg(k);
-            scursor(k);
-        }
         if (key >= 0x20 && key < 0x7F) {          /* typed text */
             char c[2] = { (char)key, 0 };
             ins_text(k, c, 1, 0);
+        } else if (key == 0x7F && k->off == 0 && k->li > 0 && k->li <= k->b->n) {
+            /* DELETE at the start of a line joins it to the line before
+             * (keystroke EDT.KEYPAD2 J) */
+            int pl = k->li - 1;
+            const char *pt = ltext(k, pl);
+            int plen = (int)strlen(pt);
+            if (k->li < k->b->n) {
+                char nt[EDT_LINE_MAX * 2];
+                snprintf(nt, sizeof nt, "%s%s", pt, k->b->l[k->li].text);
+                set_text(k, pl, nt);
+                buf_delete(k->b, k->li);
+                sdelete_row(k, k->li);
+            }
+            str_set(&k->delc, "\n", 1);
+            k->li = pl;
+            k->off = plen;
+            spaint(k, pl, plen + 1);
+            sfill_bottom(k);
+            scursor(k);
         } else if (key == 0x7F) {                 /* DELETE: the character before */
             if (k->off > 0) {
                 const char *t = ltext(k, k->li);
@@ -933,6 +1104,26 @@ static void kp_run(struct edt_buf *b, struct kp *k)
             }
         } else if (key == '\r') {
             ins_text(k, "\n", 1, 0);
+        } else if (key == 0x08) {                 /* BACKSPACE: the line's start */
+            if (k->off > 0) k->off = 0;
+            else if (k->li > 0) k->li--;
+            scursor(k);
+        } else if (key == 0x15) {                 /* CTRL/U: delete to the line's start */
+            if (k->off > 0) {
+                const char *t = ltext(k, k->li);
+                str_set(&k->delw, t, (size_t)k->off);
+                char nt[EDT_LINE_MAX];
+                snprintf(nt, sizeof nt, "%s", t + k->off);
+                set_text(k, k->li, nt);
+                k->off = 0;
+                spaint(k, k->li, 1);
+                scursor(k);
+            } else if (k->li == 0) {
+                smessage(k, "Backup past top of buffer");
+                scursor(k);
+            }
+        } else if (key == 0x17) {                 /* CTRL/W: the screen again */
+            sfull(k);
         } else {
             kp_command(k, key, gold);
         }
@@ -1015,6 +1206,116 @@ static int write_file(struct dcl_context *ctx, const struct edt_buf *b,
     }
     printf("%s %d line%s\n", full[0] ? full : spec, b->n, b->n == 1 ? "" : "s");
     return 0;
+}
+
+/* one line-mode command (what follows CHANGE/EXIT/QUIT in the loop): INSERT,
+ * FIND, DELETE, SUBSTITUTE, TYPE or a range. Shared by the "*" prompt and
+ * keypad mode's GOLD COMMAND. `cmd` is the command's start in `line`, `p`
+ * the same (nothing consumed yet). */
+static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
+                     const char *p)
+{
+    int nf = 0;
+        if (kw(&p, "INSERT", 1)) {
+            p = skip(p);
+            if (*p && *p != ';') {
+                struct range rg = parse_range(b, &p, &nf);
+                if (nf) { printf("String was not found\n"); return; }
+                b->cur = rg.a;
+                p = skip(p);
+            }
+            if (*p == ';') {
+                long first, step;
+                if (number_run(b, b->cur, 1, &first, &step) == 0 &&
+                    buf_insert(b, b->cur, first, p + 1) == 0)
+                    b->cur++;
+                show_line(b, b->cur);
+            } else {
+                insert_mode(b);
+            }
+            return;
+        }
+        if (kw(&p, "FIND", 1)) {
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            b->cur = rg.a;
+            return;
+        }
+        if (kw(&p, "DELETE", 1)) {
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            int a = rg.a, z = rg.b < b->n ? rg.b : b->n - 1, cnt = 0;
+            for (int i = z; i >= a && a < b->n; i--) { buf_delete(b, i); cnt++; }
+            b->cur = a <= b->n ? a : b->n;
+            printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
+            show_line(b, b->cur);
+            return;
+        }
+        if (kw(&p, "SUBSTITUTE", 1)) {
+            p = skip(p);
+            char dl = *p;
+            if (!dl || isalnum((unsigned char)dl)) {
+                printf(" ^\nUnrecognized command\n");
+                return;
+            }
+            const char *o = p + 1, *oe = strchr(o, dl);
+            if (!oe) { printf("Invalid substitute command\n"); return; }
+            const char *nw = oe + 1, *ne = strchr(nw, dl);
+            size_t ol = (size_t)(oe - o), nl = ne ? (size_t)(ne - nw) : strlen(nw);
+            p = ne ? ne + 1 : nw + nl;
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            int subs = 0, last = -1;
+            for (int i = rg.a; i <= rg.b && i < b->n && ol; i++) {
+                char out[EDT_LINE_MAX];
+                size_t ok = 0;
+                int here = 0;
+                const char *t = b->l[i].text;
+                while (*t && ok + nl + 1 < sizeof out) {
+                    if (strncasecmp(t, o, ol) == 0) {
+                        memcpy(out + ok, nw, nl);
+                        ok += nl;
+                        t += ol;
+                        here++;
+                    } else {
+                        out[ok++] = *t++;
+                    }
+                }
+                out[ok] = '\0';
+                if (here) {
+                    char *d = strdup(out);
+                    if (d) { free(b->l[i].text); b->l[i].text = d; }
+                    show_line(b, i);
+                    subs += here;
+                    last = i;
+                }
+            }
+            if (subs) {
+                b->cur = last;
+                printf("%d substitution%s\n", subs, subs == 1 ? "" : "s");
+            } else {
+                printf("String was not found\n");
+            }
+            return;
+        }
+        if (kw(&p, "TYPE", 1) || (p = cmd, 1)) {
+            const char *before = p;
+            struct range rg = parse_range(b, &p, &nf);
+            if (*skip(p) != '\0' || (!rg.ok)) {
+                /* not a command and not a range */
+                printf("%*s^\nUnrecognized command\n", (int)(before - line) + 1, "");
+                return;
+            }
+            if (nf) {
+                printf("String was not found\n");
+                show_line(b, b->cur);
+                return;
+            }
+            int z = rg.b > b->n ? b->n : rg.b;
+            for (int i = rg.a; i <= z; i++) show_line(b, i);
+            b->cur = rg.a;
+            return;
+        }
 }
 
 /* leaving EDT after keypad mode: the terminal put back (keystroke
@@ -1101,105 +1402,6 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
             buf_free(&b);
             return SS$_NORMAL;
         }
-        if (kw(&p, "INSERT", 1)) {
-            p = skip(p);
-            if (*p && *p != ';') {
-                struct range rg = parse_range(&b, &p, &nf);
-                if (nf) { printf("String was not found\n"); continue; }
-                b.cur = rg.a;
-                p = skip(p);
-            }
-            if (*p == ';') {
-                long first, step;
-                if (number_run(&b, b.cur, 1, &first, &step) == 0 &&
-                    buf_insert(&b, b.cur, first, p + 1) == 0)
-                    b.cur++;
-                show_line(&b, b.cur);
-            } else {
-                insert_mode(&b);
-            }
-            continue;
-        }
-        if (kw(&p, "FIND", 1)) {
-            struct range rg = parse_range(&b, &p, &nf);
-            if (nf) { printf("String was not found\n"); continue; }
-            b.cur = rg.a;
-            continue;
-        }
-        if (kw(&p, "DELETE", 1)) {
-            struct range rg = parse_range(&b, &p, &nf);
-            if (nf) { printf("String was not found\n"); continue; }
-            int a = rg.a, z = rg.b < b.n ? rg.b : b.n - 1, cnt = 0;
-            for (int i = z; i >= a && a < b.n; i--) { buf_delete(&b, i); cnt++; }
-            b.cur = a <= b.n ? a : b.n;
-            printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
-            show_line(&b, b.cur);
-            continue;
-        }
-        if (kw(&p, "SUBSTITUTE", 1)) {
-            p = skip(p);
-            char dl = *p;
-            if (!dl || isalnum((unsigned char)dl)) {
-                printf(" ^\nUnrecognized command\n");
-                continue;
-            }
-            const char *o = p + 1, *oe = strchr(o, dl);
-            if (!oe) { printf("Invalid substitute command\n"); continue; }
-            const char *nw = oe + 1, *ne = strchr(nw, dl);
-            size_t ol = (size_t)(oe - o), nl = ne ? (size_t)(ne - nw) : strlen(nw);
-            p = ne ? ne + 1 : nw + nl;
-            struct range rg = parse_range(&b, &p, &nf);
-            if (nf) { printf("String was not found\n"); continue; }
-            int subs = 0, last = -1;
-            for (int i = rg.a; i <= rg.b && i < b.n && ol; i++) {
-                char out[EDT_LINE_MAX];
-                size_t ok = 0;
-                int here = 0;
-                const char *t = b.l[i].text;
-                while (*t && ok + nl + 1 < sizeof out) {
-                    if (strncasecmp(t, o, ol) == 0) {
-                        memcpy(out + ok, nw, nl);
-                        ok += nl;
-                        t += ol;
-                        here++;
-                    } else {
-                        out[ok++] = *t++;
-                    }
-                }
-                out[ok] = '\0';
-                if (here) {
-                    char *d = strdup(out);
-                    if (d) { free(b.l[i].text); b.l[i].text = d; }
-                    show_line(&b, i);
-                    subs += here;
-                    last = i;
-                }
-            }
-            if (subs) {
-                b.cur = last;
-                printf("%d substitution%s\n", subs, subs == 1 ? "" : "s");
-            } else {
-                printf("String was not found\n");
-            }
-            continue;
-        }
-        if (kw(&p, "TYPE", 1) || (p = cmd, 1)) {
-            const char *before = p;
-            struct range rg = parse_range(&b, &p, &nf);
-            if (*skip(p) != '\0' || (!rg.ok)) {
-                /* not a command and not a range */
-                printf("%*s^\nUnrecognized command\n", (int)(before - line) + 1, "");
-                continue;
-            }
-            if (nf) {
-                printf("String was not found\n");
-                show_line(&b, b.cur);
-                continue;
-            }
-            int z = rg.b > b.n ? b.n : rg.b;
-            for (int i = rg.a; i <= z; i++) show_line(&b, i);
-            b.cur = rg.a;
-            continue;
-        }
+        line_cmd(&b, line, cmd, p);
     }
 }

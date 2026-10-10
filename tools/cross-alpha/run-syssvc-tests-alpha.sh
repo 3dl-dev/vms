@@ -300,6 +300,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cd /vmsko/linux-$KV
     KDIR="$(pwd)"
     ./scripts/config --enable BLK_DEV_INITRD --set-str INITRAMFS_SOURCE /work/syssvc.list
+    ./scripts/config --enable NET_VENDOR_INTEL --enable E1000
     make ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- olddefconfig >/dev/null 2>&1
     rm -f usr/initramfs_data.cpio* usr/.initramfs_data.cpio* 2>/dev/null || true
     make ARCH=alpha CROSS_COMPILE=alpha-linux-gnu- -j"$(nproc)" vmlinux >/work/kbuild.log 2>&1 \
@@ -327,14 +328,20 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # honestly without a NIC -- revisit with a slimmer disk set or a non-virtio
     # NIC rather than break the whole run for it. -m 2048 gives the larger
     # subject-image initramfs headroom.
-    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none -nic none \
+    timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 2048 -vga none \
+        -netdev user,id=net0 -device e1000,netdev=net0,romfile= \
         -kernel /work/vmlinux-syssvc -append "console=ttyS0 panic=-1" \
         -nographic -no-reboot \
-        -drive file=/work/d0.img,format=raw,if=virtio \
-        -drive file=/work/d1.img,format=raw,if=virtio \
-        -drive file=/work/d2.img,format=raw,if=virtio \
-        -drive file=/work/d3.img,format=raw,if=virtio \
-        -drive file=/work/d4.img,format=raw,if=virtio \
+        -drive file=/work/d0.img,format=raw,if=none,id=d0 \
+        -drive file=/work/d1.img,format=raw,if=none,id=d1 \
+        -drive file=/work/d2.img,format=raw,if=none,id=d2 \
+        -drive file=/work/d3.img,format=raw,if=none,id=d3 \
+        -drive file=/work/d4.img,format=raw,if=none,id=d4 \
+        -device virtio-blk-pci,drive=d0,addr=0x3.0x0,multifunction=on \
+        -device virtio-blk-pci,drive=d1,addr=0x3.0x1 \
+        -device virtio-blk-pci,drive=d2,addr=0x3.0x2 \
+        -device virtio-blk-pci,drive=d3,addr=0x3.0x3 \
+        -device virtio-blk-pci,drive=d4,addr=0x3.0x4 \
         2>&1 | tee /work/syssvc-boot.raw \
         | grep -avE "TSUNAMI machine check|tsunami_(read|write)" || true
     grep -avE "TSUNAMI machine check|tsunami_(read|write)" /work/syssvc-boot.raw > /work/syssvc-boot.log || true

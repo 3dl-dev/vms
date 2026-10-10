@@ -7,8 +7,8 @@
  * from VMS privileges the executive checks. This utility measures that rule
  * on a running system, independently of the executive: it walks the
  * substrate's own process list and reports each process -- other than a
- * kernel thread -- whose real, effective, saved or file-system user id is 0,
- * or (Linux) which holds any effective capability.
+ * kernel thread -- any of whose threads has real, effective, saved or
+ * file-system user id 0, or (Linux) holds any effective capability.
  *
  *   $ RUN SYS$SYSTEM:ROOTAUDIT
  *   %ROOTAUDIT-W-SUBSTRATEROOT, pid 1 STARTUP.EXE uid 0/0/0/0 capeff 000001ffffffffff
@@ -94,6 +94,35 @@ static int is_kthread(const char *pid)
     return (flags & PF_KTHREAD_FLAG) != 0;
 }
 
+/* One thread's status: uid fields and CapEff. 0 when readable. */
+static int read_status(const char *path, char *name, size_t nsz, long u[4],
+                       unsigned long long *cap)
+{
+    char line[256];
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (name && !strncmp(line, "Name:", 5))
+            sscanf(line + 5, " %63s", name);
+        else if (!strncmp(line, "Uid:", 4))
+            sscanf(line + 4, " %ld %ld %ld %ld", &u[0], &u[1], &u[2], &u[3]);
+        else if (!strncmp(line, "CapEff:", 7))
+            sscanf(line + 7, " %llx", cap);
+    }
+    fclose(f);
+    (void)nsz;
+    return 0;
+}
+
+static int is_root(const long u[4], unsigned long long cap)
+{
+    return u[0] == 0 || u[1] == 0 || u[2] == 0 || u[3] == 0 || cap != 0;
+}
+
+/* Linux credentials are per THREAD, so every thread of a process is read
+ * (/proc/<pid>/task/<tid>/status): a process whose main thread dropped root
+ * but which kept a root thread is reported. */
 static int scan(void)
 {
     DIR *d = opendir("/proc");
@@ -103,23 +132,33 @@ static int scan(void)
     while ((de = readdir(d)) != NULL) {
         if (!isdigit((unsigned char)de->d_name[0]) || is_kthread(de->d_name))
             continue;
-        char path[300], line[256], name[64] = "?";
+        char path[300], name[64] = "?";
         long u[4] = { -1, -1, -1, -1 };
         unsigned long long cap = 0;
         snprintf(path, sizeof path, "/proc/%s/status", de->d_name);
-        FILE *f = fopen(path, "r");
-        if (!f)
+        if (read_status(path, name, sizeof name, u, &cap) != 0)
             continue;
-        while (fgets(line, sizeof line, f)) {
-            if (!strncmp(line, "Name:", 5))
-                sscanf(line + 5, " %63s", name);
-            else if (!strncmp(line, "Uid:", 4))
-                sscanf(line + 4, " %ld %ld %ld %ld", &u[0], &u[1], &u[2], &u[3]);
-            else if (!strncmp(line, "CapEff:", 7))
-                sscanf(line + 7, " %llx", &cap);
+        int hit = is_root(u, cap);
+        snprintf(path, sizeof path, "/proc/%s/task", de->d_name);
+        DIR *td = hit ? NULL : opendir(path);
+        struct dirent *te;
+        while (td && (te = readdir(td)) != NULL) {
+            if (!isdigit((unsigned char)te->d_name[0]))
+                continue;
+            long tu[4] = { -1, -1, -1, -1 };
+            unsigned long long tcap = 0;
+            char tp[600];
+            snprintf(tp, sizeof tp, "/proc/%s/task/%s/status", de->d_name, te->d_name);
+            if (read_status(tp, NULL, 0, tu, &tcap) == 0 && is_root(tu, tcap)) {
+                memcpy(u, tu, sizeof u);
+                cap = tcap;
+                hit = 1;
+                break;
+            }
         }
-        fclose(f);
-        if (u[0] == 0 || u[1] == 0 || u[2] == 0 || u[3] == 0 || cap != 0)
+        if (td)
+            closedir(td);
+        if (hit)
             report(atol(de->d_name), name, u[0], u[1], u[2], u[3], cap);
     }
     closedir(d);

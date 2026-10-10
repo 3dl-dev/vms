@@ -162,6 +162,10 @@ int SYS$SEARCH(void *fabp, ...)
     }
     struct ovmx_rmsabi_name io;
     memset(&io, 0, sizeof io);
+    io.fna = fab->fab$l_fna;
+    io.fns = fab->fab$b_fns;
+    io.dna = fab->fab$l_dna;
+    io.dns = fab->fab$b_dns;
     uint32_t wcc = nam->nam$l_wcc;
     st = (int)ovmx_rmsabi_search(&wcc, &io);
     nam->nam$l_wcc = wcc;
@@ -169,6 +173,8 @@ int SYS$SEARCH(void *fabp, ...)
     if (st & 1) {
         if (to_nam(nam, nam->nam$l_rsa, nam->nam$b_rss, &nam->nam$b_rsl, &io, 1) < 0)
             st = RMS$_RSS;
+    } else if (io.area == 1) {
+        (void)to_nam(nam, nam->nam$l_esa, nam->nam$b_ess, &nam->nam$b_esl, &io, 0);
     }
     st = complete(fab, st, &c);
     return st;
@@ -373,7 +379,9 @@ static void rab_record(struct rabdef *rab, const struct ovmx_rmsabi_rab *io)
     char *ubf = rab->rab$l_ubf;
     const char *r = io->rbf;
     rab->rab$w_rsz = (unsigned short)io->rsz;
-    if (r && ubf && r >= ubf && r <= ubf + rab->rab$w_usz) {
+    if (!r) {
+        rab->rab$l_rbf = ubf;                /* moved into the user buffer */
+    } else if (ubf && r >= ubf && r <= ubf + rab->rab$w_usz) {
         rab->rab$l_rbf = ubf + (r - ubf);
     } else if (r && ubf) {
         unsigned n = io->rsz < rab->rab$w_usz ? io->rsz : rab->rab$w_usz;

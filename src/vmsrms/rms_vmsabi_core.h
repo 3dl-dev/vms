@@ -29,6 +29,7 @@ struct ovmx_rmsabi_name {
     uint8_t     node_off, node_len, dev_off, dev_len, dir_off, dir_len;
     uint8_t     name_off, name_len, type_off, type_len, ver_off, ver_len;
     uint32_t    stv;
+    int         area;           /* str is: 0 nothing, 1 the expanded, 2 the resultant string */
 };
 
 /* $PARSE: *wcc is the NAM$L_WCC context handle (0 = none); it is (re)set to a
@@ -36,7 +37,9 @@ struct ovmx_rmsabi_name {
 uint32_t ovmx_rmsabi_parse(uint32_t *wcc, struct ovmx_rmsabi_name *io);
 
 /* $SEARCH on the context *wcc names; at the end of the search (RMS$_NMF /
- * RMS$_FNF) the context is released and *wcc set to 0. */
+ * RMS$_FNF) the context is released and *wcc set to 0, and the NAM's
+ * components return to the expanded string (area 1). With no context (no
+ * $PARSE first) the search runs on the FAB's own fna/dna, as RMS does. */
 uint32_t ovmx_rmsabi_search(uint32_t *wcc, struct ovmx_rmsabi_name *io);
 
 /* ---- File and record operations (vms-8b5) ------------------------------

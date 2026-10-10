@@ -26,3 +26,9 @@ tt TT.READ.TIMED0  # vms-40fb: as TT.WRITE.ZERO -- SS$_TIMEOUT (0x22C) reads bac
 tt TT.READ.TIMED0.ZEROLEN  # vms-40fb: as TT.WRITE.ZERO
 rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0 (same as the Linux gate)
 rms RMS.OPEN  # vms-0a2: as RMS.CREATE
+rms RMS.PARSE.NODEFAULT  # vms-3432: with no default spec the device comes from SYS$DISK, which under the booted OVMX/Alpha STARTUP is not the rooted search list it is for a logged-in SYSTEM (FNB lacks ROOT_DIR|SEARCH_LIST, 0x1004 vs 0x3804)
+rms RMS.PARSE.LONGNAME  # vms-3432: as RMS.PARSE.NODEFAULT
+rms RMS.PARSE.BIGVER  # vms-3432: as RMS.PARSE.NODEFAULT
+rms RMS.PARSE.NEGVER  # vms-3432: as RMS.PARSE.NODEFAULT
+rms RMS.PARSE.SYNTAX2  # vms-3432: as RMS.PARSE.NODEFAULT
+rms RMS.PARSE.LOWER  # vms-3432: as RMS.PARSE.NODEFAULT

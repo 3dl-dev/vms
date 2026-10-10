@@ -98,6 +98,30 @@ static void components(struct ovmx_rmsabi_name *io)
     }
 }
 
+/* The components as the RMS engine set them in its NAM, when they all lie in
+ * `base` (the string copied to io->str); otherwise the textual split. */
+static void engine_components(struct ovmx_rmsabi_name *io, const struct NAM *n,
+                              const char *base)
+{
+    const char *p[6] = { n->nam$l_node, n->nam$l_dev, n->nam$l_dir,
+                         n->nam$l_name, n->nam$l_type, n->nam$l_ver };
+    const uint8_t l[6] = { n->nam$b_node, n->nam$b_dev, n->nam$b_dir,
+                           n->nam$b_name, n->nam$b_type, n->nam$b_ver };
+    uint8_t *off[6] = { &io->node_off, &io->dev_off, &io->dir_off,
+                        &io->name_off, &io->type_off, &io->ver_off };
+    uint8_t *len[6] = { &io->node_len, &io->dev_len, &io->dir_len,
+                        &io->name_len, &io->type_len, &io->ver_len };
+    for (int k = 0; k < 6; k++)
+        if (l[k] && (!p[k] || p[k] < base || p[k] + l[k] > base + io->len)) {
+            components(io);
+            return;
+        }
+    for (int k = 0; k < 6; k++) {
+        *off[k] = (uint8_t)(l[k] && p[k] ? p[k] - base : 0);
+        *len[k] = l[k];
+    }
+}
+
 static void dvi_from_dev(struct ovmx_rmsabi_name *io)
 {
     unsigned n = io->dev_len ? io->dev_len - 1u : 0;     /* drop the ':' */
@@ -151,7 +175,8 @@ uint32_t ovmx_rmsabi_parse(uint32_t *wcc, struct ovmx_rmsabi_name *io)
     io->len = c->nam.nam$b_esl;
     memcpy(io->str, c->esa, io->len);
     io->fnb = c->nam.nam$l_fnb;
-    components(io);
+    io->area = 1;
+    engine_components(io, &c->nam, c->esa);
     dvi_from_dev(io);
     memset(io->fid, 0, sizeof io->fid);
     memset(io->did, 0, sizeof io->did);
@@ -162,18 +187,52 @@ uint32_t ovmx_rmsabi_parse(uint32_t *wcc, struct ovmx_rmsabi_name *io)
 uint32_t ovmx_rmsabi_search(uint32_t *wcc, struct ovmx_rmsabi_name *io)
 {
     struct abi_ctx *c = ctx_get(*wcc);
-    if (!c)
-        return RMS$_WCC;
+    if (!c) {
+        /* No $PARSE first: the engine searches the FAB as it stands. */
+        struct abi_ctx t;
+        memset(&t, 0, sizeof t);
+        unsigned fns = io->fns < sizeof t.fna ? io->fns : sizeof t.fna - 1;
+        unsigned dns = io->dns < sizeof t.dna ? io->dns : sizeof t.dna - 1;
+        if (io->fna) memcpy(t.fna, io->fna, fns);
+        if (io->dna) memcpy(t.dna, io->dna, dns);
+        t.fab = cc$rms_fab;
+        t.nam = cc$rms_nam;
+        t.fab.fab$l_fna = t.fna;
+        t.fab.fab$b_fns = (uint8_t)fns;
+        if (dns) {
+            t.fab.fab$l_dna = t.dna;
+            t.fab.fab$b_dns = (uint8_t)dns;
+        }
+        t.fab.fab$l_nam = &t.nam;
+        t.nam.nam$l_esa = t.esa;
+        t.nam.nam$b_ess = 255;
+        t.nam.nam$l_rsa = t.rsa;
+        t.nam.nam$b_rss = 255;
+        uint32_t st = sys$search(&t.fab, 0, 0);
+        io->stv = t.fab.fab$l_stv;
+        rms_search_end(&t.nam);
+        io->area = 0;
+        return st;
+    }
     uint32_t st = sys$search(&c->fab, 0, 0);
     io->stv = c->fab.fab$l_stv;
     if (!(st & 1)) {
+        /* The search is over: the NAM's components return to the expanded
+         * string, as the engine left them. */
+        io->len = c->nam.nam$b_esl;
+        memcpy(io->str, c->esa, io->len);
+        io->fnb = c->nam.nam$l_fnb;
+        io->area = 1;
+        engine_components(io, &c->nam, c->esa);
+        dvi_from_dev(io);
         ctx_release(wcc);                    /* end of search: context gone */
         return st;
     }
     io->len = c->nam.nam$b_rsl;
     memcpy(io->str, c->rsa, io->len);
     io->fnb = c->nam.nam$l_fnb;
-    components(io);
+    io->area = 2;
+    engine_components(io, &c->nam, c->rsa);
     dvi_from_dev(io);
     uint16_t n = 0, sq = 0;
     uint8_t rvn = 0, nmx = 0;
@@ -450,6 +509,8 @@ uint32_t ovmx_rmsabi_record(int op, uint16_t *isi, struct ovmx_rmsabi_rab *io)
         return RMS$_ISI;
     struct RAB *r = &g_strm[s]->rab;
     rab_in(r, io);
+    if (op == OVMX_RMSABI_GET || op == OVMX_RMSABI_FIND)
+        r->rab$l_rbf = NULL;                 /* where the engine puts the record */
     uint32_t st;
     switch (op) {
     case OVMX_RMSABI_GET:        st = sys$get(r, 0, 0); break;

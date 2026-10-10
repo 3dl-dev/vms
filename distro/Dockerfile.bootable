@@ -171,6 +171,23 @@ RUN set -e; \
 #
 # This is BUILD tooling, not a runtime (CLAUDE.md Rule 9): the kernel-build
 # deps live only in this container stage; NOTHING is installed on the host.
+# Module signing key stage (rd vms-146): see the COPY --from=modkey in
+# kernel-build for why the key lives in its own stage.
+FROM ubuntu:24.04 AS modkey
+RUN apt-get update -o Acquire::Retries=5 -qq && DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::Retries=5 -y --no-install-recommends openssl >/dev/null && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=secret,id=ovmx_module_signing_key \
+    mkdir -p /modkey; KEY=/modkey/ovmx-module-signing-key.pem; \
+    if [ -s /run/secrets/ovmx_module_signing_key ]; then \
+        cp /run/secrets/ovmx_module_signing_key "$KEY" && \
+        echo "OVMX module signing: using provided build secret (reproducible across cuts sharing it)"; \
+    else \
+        openssl req -new -nodes -utf8 -sha256 -x509 -newkey rsa:2048 -days 36500 \
+            -subj "/CN=OVMX ephemeral module signing key/" \
+            -keyout "$KEY" -out "$KEY.crt" && \
+        cat "$KEY.crt" >> "$KEY" && rm -f "$KEY.crt" && \
+        echo "OVMX module signing: generated ephemeral key (signatures non-reproducible, verification still holds)"; \
+    fi
+
 FROM ubuntu:24.04 AS kernel-build
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -260,18 +277,17 @@ RUN bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /usr/src/linux /tmp
 #     are still signed + verifiable; only the signature BYTES vary per build, so
 #     an anonymous build is not byte-reproducible (expected, harmless -- SIG_FORCE
 #     is off).
-RUN --mount=type=secret,id=ovmx_module_signing_key \
-    KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
-    if [ -s /run/secrets/ovmx_module_signing_key ]; then \
-        cp /run/secrets/ovmx_module_signing_key "$KEY" && \
-        echo "OVMX module signing: using provided build secret (reproducible across cuts sharing it)"; \
-    else \
-        openssl req -new -nodes -utf8 -sha256 -x509 -newkey rsa:2048 -days 36500 \
-            -subj "/CN=OVMX ephemeral module signing key/" \
-            -keyout "$KEY" -out "$KEY.crt" && \
-        cat "$KEY.crt" >> "$KEY" && rm -f "$KEY.crt" && \
-        echo "OVMX module signing: generated ephemeral key (signatures non-reproducible, verification still holds)"; \
-    fi
+# THE KEY COMES FROM ITS OWN STAGE (rd vms-146). It used to be minted by a RUN
+# in this stage. BuildKit keys a RUN's cache entry by the instruction and its
+# parent's key, never by what the RUN produced, so every run's random key
+# shared ONE cache key -- and a layer cache filled by several runs could
+# assemble a kernel signed by one run's key with a vms.ko signed by another's.
+# finit_module() then fails the signature check and taints the kernel E (seen:
+# "%OVMX-I-TAINTMOD, vms ... (E)" with vms.ko carrying a PKCS#7 signature).
+# COPY --from keys on the copied file's CONTENT, so every layer below now
+# depends on exactly this key: a new key rebuilds them all, and nothing built
+# with one key can be served on top of another.
+COPY --from=modkey /modkey/ovmx-module-signing-key.pem /usr/src/linux/ovmx-module-signing-key.pem
 
 # Curated config: x86_64 defconfig + the OVMX boot fragment, reconciled with
 # olddefconfig. The fragment (distro/kernel/ovmx-x86_64.config) is the

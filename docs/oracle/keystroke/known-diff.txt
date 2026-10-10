@@ -7,21 +7,12 @@
 LOGIN.BANNER U  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
 TA.USERNAME U  # vms-bd71: Username: purges type-ahead, then times out
-EDT.LINE O  # vms-f1e: no EDIT/EDT
-EDT.LINE I  # vms-f1e: no EDIT/EDT
-EDT.LINE A  # vms-f1e: no EDIT/EDT
-EDT.LINE B  # vms-f1e: no EDIT/EDT
-EDT.LINE Z  # vms-f1e: no EDIT/EDT
-EDT.LINE T  # vms-f1e: no EDIT/EDT
-EDT.LINE X  # vms-f1e: no EDIT/EDT
-EDT.SCREEN O  # vms-f1e: no EDIT/EDT
 EDT.SCREEN C  # vms-f1e: no EDIT/EDT
 EDT.SCREEN D  # vms-f1e: no EDIT/EDT
 EDT.SCREEN R  # vms-f1e: no EDIT/EDT
 EDT.SCREEN X  # vms-f1e: no EDIT/EDT
 EDT.SCREEN Z  # vms-f1e: no EDIT/EDT
 EDT.SCREEN Q  # vms-f1e: no EDIT/EDT
-HLP.NAV H  # vms-f9e: HELP librarian framing
-HLP.NAV S  # vms-f9e: HELP librarian framing
-HLP.NAV B1  # vms-f9e: HELP librarian framing
+HLP.NAV H  # vms-f9e: framing matches; the help TEXT is OVMX's own (clean-room), and RECALL has no /INPUT /OUTPUT /PAGE
+HLP.NAV S  # vms-f9e: framing matches; the help TEXT is OVMX's own (clean-room)
 RC.ALL U  # vms-0315: RECALL/ALL order, RECALL n edits not executes

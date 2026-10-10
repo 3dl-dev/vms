@@ -170,6 +170,7 @@ dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
+dlm-mixed-refusal-cause-unnamed
 dlm-dir-matched-by-name-alone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
@@ -521,6 +522,19 @@ EOF
                       ;;
         esac;;
 
+    dlm-mixed-refusal-cause-unnamed)
+        case "$_f" in
+        facility)     echo "WHY a message from a real VMS system was refused (dlm_arm_say_refusal(), rd vms-025): an unanswerable SHAPE, a frame stating no resource identity, and a placeable resource this node neither masters nor holds a directory entry for are three different facts, counted and said apart";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_scs.c is not host-linkable (it names exec_kbackend.h and the fork API), so its properties are proved by a source-scan of the SHIPPING file. The shape test that splits the first cause off is removed from dlm_arm_say_refusal(), which collapses it toward the pre-rd-vms-025 behaviour: ONE line -- 'a system that has not proved it runs this implementation' -- true of every refusal here and therefore naming no cause at all. A real-VAX lab watched exactly that line for a whole run while the actual fault was a LOCKDIRWT that never reached the executive.";;
+        require_fail) cat <<'EOF'
+RULE C's refusal distinguishes a shape this implementation has no grounded answer for
+EOF
+                      ;;
+        esac;;
+
     dlm-learner-unbounded)
         case "$_f" in
         facility)     echo "the DLM directory-hash learner's bound (dir_hash_learn_room(), rd vms-4e9): a learned hash gets a NEW resource block only while the table is under VMS_DLM_LEARN_RES_CAP; a declined learn is counted";;
@@ -562,6 +576,12 @@ one frame left this node
 *** and the mastery is RECORDED in this node's own directory -- which is what stops the next asker being told to master it ***
 *** the directory answers THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
   nothing was answered 'you master it'
+  and the identity that value is OF: group 1 (body[44:46])
+  carrying the value VAX1 ITSELF put on the wire for that name -- the LEARNED one, never a recomputed one
+  the engine claims no mastery
+  user mode (body[46])
+*** addressed to VAX1, the master its own frame told us about ***
+*** and the resource's MASTER is VAX1 -- this node did NOT master it a second time ***
 EOF
                       ;;
         esac;;
@@ -1980,6 +2000,16 @@ apply_edit() {
     recnx-last-gasp-uncounted)
         # `r->last_gasps++;` is unique in this file.
         sed -i 's|r->last_gasps++;|/* NEGCTL recnx-last-gasp-uncounted: the last gasp is not counted */|' "$_file";;
+
+    dlm-mixed-refusal-cause-unnamed)
+        # vms_dlm_scs.c is not host-linkable -- test_dlm_scs_arm.c proves its
+        # properties by SOURCE-SCANNING the shipping file. The line that opens
+        # dlm_arm_say_refusal()'s first cause is unique in the file (the helper
+        # it calls is referenced exactly twice: its definition, and here), so
+        # disarming it collapses the shape cause into the next one and removes
+        # exactly the scanned property. Idempotency-safe: the matched text is
+        # consumed by the edit.
+        sed -i 's|\tif (!dlm_arm_refusal_is_a_servable_shape(req->opcode)) {|\tif (0) { (void)dlm_arm_refusal_is_a_servable_shape; /* NEGCTL dlm-mixed-refusal-cause-unnamed */|' "$_file";;
 
     dlm-learner-unbounded)
         # `vms_res_blocks < VMS_DLM_LEARN_RES_CAP;` is unique in this file.

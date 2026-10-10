@@ -641,6 +641,7 @@ struct dcl_rms_reader *dcl_rms_read_open(struct dcl_context *ctx, const char *sp
     r->fab.fab$b_fns = (uint8_t)strlen(r->spec);
     r->fab.fab$b_org = FAB$C_SEQ;
     r->fab.fab$b_fac = FAB$M_GET;
+    r->fab.fab$b_shr = DCL_RMS_READ_SHR;   /* read beside a sharing writer (vms-5a0) */
     /* Frame records the way the file was written: read the record format from
      * the file's ODS-2 header (rms_file_attr -> FAT) and supply it on $OPEN.
      * (RMS-over-ACP does not yet persist/return RFM through $OPEN itself --

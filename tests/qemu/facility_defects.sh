@@ -620,6 +620,7 @@ mbx-norswait-ignored
 crtl-feature-unknown-accepted
 crtl-feature-set-ignored
 rms-open-no-file-access-enq
+dcl-type-refuses-sharing-writer
 rms-record-lock-not-enqueued
 rms-dirfind-exact-version-ignored
 getlki-grantcount-not-counted
@@ -1968,6 +1969,26 @@ remaining knock-ons). All six texts are the SAME missing assignment, observed
 at every place code reads the field it should have set.
 EOF
                       ;;
+        esac;;
+
+    dcl-type-refuses-sharing-writer)
+        case "$_f" in
+        facility)     echo "DCL TYPE/COPY reading a file another process holds open for write sharing: the share intent dcl_rms_read_open opens with (DCL_RMS_READ_SHR, rd vms-5a0)";;
+        targets)      echo "vmsdcl/include/dcl/dcl_rms.h";;
+        suites_red)   echo "test_syssvc_rms_filelock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "DCL's reader drops SHRPUT from its share intent, so its file-access lock is PR and conflicts with a writer that opened FAC=GET|PUT SHR=GET|PUT (CW): TYPE refuses a file real VMS reads (observed, OpenVMS VAX V7.3, ci6-evac-15/16: TYPE of EVAC.DAT while EVACWL appends). Unique macro definition; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+*** TYPE's reader (GET, SHR=DCL_RMS_READ_SHR) opens the file the writer holds -> NORMAL ***
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+  ... and $GETs the writer's record
+EOF
+                      ;;
+        knock_on_why)  echo "The \$GET assertion is inside the opened branch of the same reader: refused at open, it never reads, so it reports the same root cause.";;
         esac;;
 
     rms-record-lock-not-enqueued)
@@ -8195,6 +8216,10 @@ apply_edit() {
         # Braceless-if success arm: empty {} (not a bare comment) avoids
         # -Werror=empty-body. Unique text; gone after apply (no-op re-apply).
         sed -i 's|        h->access_lkid = lkid;|        { } /* NEGCTL rms-open-no-file-access-enq: lkid not stashed */|' "$_file";;
+    dcl-type-refuses-sharing-writer)
+        # The share-intent macro is defined once, in dcl_rms.h. Gone after
+        # apply (no-op re-apply).
+        sed -i 's|^#define DCL_RMS_READ_SHR  (FAB\$M_SHRGET \| FAB\$M_SHRPUT)$|#define DCL_RMS_READ_SHR  (FAB$M_SHRGET) /* NEGCTL dcl-type-refuses-sharing-writer */|' "$_file";;
     rms-record-lock-not-enqueued)
         # Braceless-if success arm, same idiom as rms-open-no-file-access-enq.
         # Unique text; gone after apply (no-op re-apply).

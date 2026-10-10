@@ -278,7 +278,8 @@ endif()
 # targets above.
 if(TARGET test_syssvc_rms_filelock)
     target_include_directories(test_syssvc_rms_filelock PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+        ${CMAKE_SOURCE_DIR}/src/vmsrms
+        ${CMAKE_SOURCE_DIR}/src/vmsdcl/include)
 endif()
 
 # test_syssvc_rms_reclock (vms-0dd): the record-locking sibling of

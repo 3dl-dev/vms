@@ -1459,11 +1459,11 @@ static void test_queued_convert_answer_is_the_real_one(void)
 }
 
 /*
- * rd vms-cab: the answer to an op-0x0f from a member holding no lock on the
- * resource, against two REAL pairs from lab run ci6-evac-15 (2026-10-10,
+ * rd vms-cab: the NEW MASTER's answer to an op-0x0f (it holds the open 0e for
+ * the tree), against two REAL pairs from lab run ci6-evac-15 (2026-10-10,
  * 16:45:14.88 VAX2 -> VAX1 F11B$vSYSDSK1 and 16:45:16.17 VAX1 -> VAX2
- * CACHE$cm..., both during VAX1's REMOVE_NODE departure). Held out from the
- * 1392-pair corpus scan the rule was read from. body[0:4] is the envelope.
+ * CACHE$cm..., both during VAX1's REMOVE_NODE departure, two-node remasters).
+ * body[0:4] is the envelope.
  */
 static void test_op0f_ack_is_the_real_one(void)
 {
@@ -1501,24 +1501,72 @@ static void test_op0f_ack_is_the_real_one(void)
 		}
 		memset(frame, 0, sizeof(frame));
 		memset(&id, 0, sizeof(id));
-		ct_check(vms_dlm_op0f_ack_build(req, sizeof(req), &id, frame,
+		ct_check(vms_dlm_op0f_ack_build(req, sizeof(req), 1, &id, frame,
 						sizeof(frame), &written) ==
-			 VMS_CODEC_OK, "an op-0x0f answer builds");
+			 VMS_CODEC_OK, "an op-0x0f answer builds (new-master form)");
 		diffs = 0;
 		for (i = 4u; i < 132u; i++)
 			if (frame[VMS_OFF_SYSAP_BODY + i] != rep[i])
 				diffs++;
 		ct_check_eq_u32(diffs, 0u,
-				"*** the op-0x0f answer equals the real VAX "
-				"member's, byte for byte after the envelope ***");
+				"*** the new master's op-0x0f answer equals the real "
+				"VAX's, byte for byte after the envelope ***");
 		ct_check_eq_u32(id.name_len, req[47],
 				"  ... and the identity names the request's resource");
 		ct_check(memcmp(id.name, &req[48], id.name_len) == 0,
 			 "  ... by the request's own name bytes");
-		ct_check(vms_dlm_op0f_ack_build(rep, sizeof(rep), &id, frame,
+		ct_check(vms_dlm_op0f_ack_build(rep, sizeof(rep), 1, &id, frame,
 						sizeof(frame), &written) !=
 			 VMS_CODEC_OK, "  ... and a RESPONSE is refused as input");
 	}
+}
+
+/*
+ * rd vms-cab: every OTHER member's answer to an op-0x0f keeps body[28:32] --
+ * a REAL pair from the three-node VAX-only capture dlmlab E2 (2026-10-10, VAX1
+ * remastering F11B$vSYSDSK1 to VAX3; this is VAX2's answer). This is the form
+ * an OVMX member sends, since it never holds an open remaster.
+ */
+static void test_op0f_member_answer_keeps_state(void)
+{
+	static const char req_hex[] =
+	    "9f294b190500a59a020f0000010003000000020001000100050000000300010001000300"
+	    "e0727a45000000000000001246313142247653595344534b312020202020052c7b3cbc00"
+	    "100000000100000000002b009d00000056372e3320202020000000000000000000000000"
+	    "0000000000000000000000000000000000000000000000173cc220";
+	static const char rep_hex[] =
+	    "4c199f290500a59a8215000001000300000002000100010005000000030001000100fa00"
+	    "e0727a45000000000000001246313142247653595344534b312020202020052c7b3cbc00"
+	    "100000000100000000002b009d00000056372e3320202020000000000000000000000000"
+	    "0000000000000000000000000000000000000000000000173cc220";
+	uint8_t req[132], rep[132], frame[VMS_OFF_SYSAP_BODY + 132];
+	struct vms_dlm_res_ident id;
+	uint32_t i, written = 0, diffs = 0;
+
+	for (i = 0; i < 132u; i++) {
+		unsigned int x, y;
+		sscanf(&req_hex[2 * i], "%2x", &x);
+		sscanf(&rep_hex[2 * i], "%2x", &y);
+		req[i] = (uint8_t)x;
+		rep[i] = (uint8_t)y;
+	}
+	memset(frame, 0, sizeof(frame));
+	memset(&id, 0, sizeof(id));
+	ct_check(vms_dlm_op0f_ack_build(req, sizeof(req), 0, &id, frame,
+					sizeof(frame), &written) == VMS_CODEC_OK,
+		 "an op-0x0f answer builds (member form)");
+	for (i = 4u; i < 132u; i++)
+		if (frame[VMS_OFF_SYSAP_BODY + i] != rep[i])
+			diffs++;
+	ct_check_eq_u32(diffs, 0u,
+			"*** a member's op-0x0f answer equals the real VAX's, "
+			"body[28:32] KEPT ***");
+	memset(frame, 0, sizeof(frame));
+	(void)vms_dlm_op0f_ack_build(req, sizeof(req), 1, &id, frame,
+				     sizeof(frame), &written);
+	ct_check(frame[VMS_OFF_SYSAP_BODY + 28u] == 0u &&
+		 frame[VMS_OFF_SYSAP_BODY + 30u] == 0u,
+		 "  ... and only the new master clears it");
 }
 
 int main(void)
@@ -1545,5 +1593,6 @@ int main(void)
 
 	test_queued_convert_answer_is_the_real_one();
 	test_op0f_ack_is_the_real_one();
+	test_op0f_member_answer_keeps_state();
 	return ct_summary("test_codec_dlm");
 }

@@ -280,7 +280,7 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 }
 
 vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
-					  uint32_t req_len,
+					  uint32_t req_len, int new_master,
 					  struct vms_dlm_res_ident *id_out,
 					  uint8_t *frame, uint32_t cap,
 					  uint32_t *written)
@@ -321,8 +321,9 @@ vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_0F_ACK);
-	for (i = 0u; i < 4u; i++)
-		vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + i, 0u);
+	if (new_master)
+		for (i = 0u; i < 4u; i++)
+			vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + i, 0u);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
 	if (!vms_wire_buf_ok(&w))
 		return w.err;

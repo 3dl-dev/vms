@@ -159,11 +159,8 @@ extern "C" {
 #define VMS_DLM_WIREOP_REBUILD      0x0du  /* join-time lock-resource rebuild rec*/
 #define VMS_DLM_WIREOP_DLKSRCH      0x0eu  /* distributed deadlock search (H11)  */
 /* op 0x0f: sent by a real VMS member to EVERY other member about one resource
- * (seen during a member's departure, e.g. F11B$vSYSDSK1 and CACHE$cm... when
- * the departing node had mastered them), each answering cat 0x82 op 0x15
- * (rd vms-cab). Its meaning is NOT grounded; its answer shape from a member
- * holding no lock on the resource is (1309 of 1392 real pairs, see
- * vms_dlm_op0f_ack_build). */
+ * as one step of lock-tree remastering (rd vms-50d), each answering cat 0x82
+ * op 0x15 (rd vms-cab, see vms_dlm_op0f_ack_build). */
 #define VMS_DLM_WIREOP_0F           0x0fu
 #define VMS_DLM_WIREOP_0F_ACK       0x15u
 
@@ -713,17 +710,19 @@ struct vms_dlm_res_ident {
 };
 
 /*
- * The answer to an op-0x0f from a member that holds NO lock on the named
- * resource (rd vms-cab). Over every real VAX V7.3 pair in the lab captures
- * (1392 op-0x0f / 82-0x15 pairs) the answer is the request ECHOED with
- * category 0x82, opcode 0x15, body[28:32] cleared and body[32:36] = 01 00 fa 00
- * in 1309; the other 83 keep request bytes in body[28:32] (a responder's own
- * per-resource state, ungrounded), so a caller that holds locks on the resource
- * must NOT use this. `id_out` receives the resource identity the request names
- * so the caller can make that check. VMS_CODEC_E_CLASS for any other frame.
+ * The answer to a real VMS member's op-0x0f (rd vms-cab). op 0x0f is one step of
+ * VMS lock-tree remastering (rd vms-50d): the old master sends 0e/0f/10/12../13
+ * to the chosen NEW master and 0f + 11 to every other member. Every answer is
+ * the request ECHOED with category 0x82, opcode 0x15 and body[32:36] =
+ * 01 00 fa 00; body[28:32] is CLEARED by the new master -- the member holding
+ * an open remaster (its 0e) for that tree from that sender -- and KEPT by every
+ * other member. 3299 of 3299 real VAX V7.3 pairs (tests/lab/captures/
+ * vms-cab-op0f-20261010/rule2). `new_master` selects the form; this node can
+ * only pass 1 once it adopts trees (it does not yet). `id_out` receives the
+ * resource identity the request names. VMS_CODEC_E_CLASS for any other frame.
  */
 vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
-					  uint32_t req_len,
+					  uint32_t req_len, int new_master,
 					  struct vms_dlm_res_ident *id_out,
 					  uint8_t *frame, uint32_t cap,
 					  uint32_t *written);

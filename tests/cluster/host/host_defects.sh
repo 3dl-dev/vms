@@ -182,7 +182,7 @@ dlm-grant-record-omitted
 dlm-echo-guard-never-caps
 dlm-deadlock-search-follows-remote-holders
 dlm-queued-convert-answered-as-granted
-dlm-op0f-answer-keeps-request-state
+dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -721,7 +721,8 @@ EOF
         why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
         require_fail) cat <<'EOF'
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
-*** the op-0x0f answer equals the real VAX member's, byte for byte after the envelope ***
+*** the new master's op-0x0f answer equals the real VAX's, byte for byte after the envelope ***
+*** a member's op-0x0f answer equals the real VAX's, body[28:32] KEPT ***
 EOF
                       ;;
         esac;;
@@ -760,15 +761,15 @@ EOF
                       ;;
         esac;;
 
-    dlm-op0f-answer-keeps-request-state)
+    dlm-op0f-member-answers-as-new-master)
         case "$_f" in
-        facility)     echo "the answer to a real VMS member's op-0x0f (vms_cluster_codec_dlm.c vms_dlm_op0f_ack_build, rd vms-cab): the request echoed as 82/15 with body[28:32] cleared and the 01 00 fa 00 record, as a member holding no lock answers (1309/1392 real pairs)";;
+        facility)     echo "the answer to a real VMS member's op-0x0f (vms_cluster_codec_dlm.c vms_dlm_op0f_ack_build, rd vms-cab/vms-50d): the request echoed as 82/15 with the 01 00 fa 00 record; body[28:32] cleared ONLY by the remaster's new master, kept by every other member (3299/3299 real pairs)";;
         targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
-        why)          echo "the answer echoes the sender's own per-resource state back as if it were this member's: a member claiming state on a resource it holds no lock on. Without any answer the sender's file system stalls after a departure (measured, ci6-evac-15).";;
+        why)          echo "a member that is NOT the new master answers in the new master's form -- what OVMX wrongly sent in run ci6-evac-16. Without any answer the sender's file system stalls after a departure (measured, ci6-evac-15).";;
         require_fail) cat <<'EOF'
-*** the op-0x0f answer equals the real VAX member's, byte for byte after the envelope ***
+*** a member's op-0x0f answer equals the real VAX's, body[28:32] KEPT ***
 EOF
                       ;;
         esac;;
@@ -1933,9 +1934,9 @@ apply_edit() {
         sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
         sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
 
-    dlm-op0f-answer-keeps-request-state)
-        # The clearing write is written in exactly one place.
-        sed -i 's|\t\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_FLAG + i, 0u);|\t\t; /* NEGCTL dlm-op0f-answer-keeps-request-state */|' "$_file";;
+    dlm-op0f-member-answers-as-new-master)
+        # The role test guards the clearing write, in exactly one place.
+        sed -i 's|^\tif (new_master)$|\tif (1) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
 
     dlm-queued-convert-answered-as-granted)
         # The queued outcome is written in exactly one place.

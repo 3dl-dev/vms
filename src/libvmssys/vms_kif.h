@@ -99,6 +99,9 @@ uint32_t vms_kif_register_continue(void);
  * executive refuses a non-root self-declared privileged name. This is $CREPRC /
  * SPAWN; image activation (same VMS process, shared PID) uses
  * vms_kif_register_continue() instead. */
+/* OVMX-UNWIRED: vms_kif_register_subprocess (vms-2a5) -- $CREPRC's creator now
+ * creates the PCB (vms_kif_creprc_pcb, rd vms-c43); registration by ioctl is
+ * removed in vms-2a5. */
 uint32_t vms_kif_register_subprocess(void);
 
 /* DETACHED $CREPRC identity, authorized by the CREATOR (rd vms-ff75). The
@@ -110,6 +113,9 @@ uint32_t vms_kif_register_subprocess(void);
  * its ancestors, it becomes a new VMS process (fresh PID, own job) carrying
  * that identity. Replaces the grandchild's self-declared vms_kif_setident(),
  * which a non-root, non-SETPRV fresh row is (rightly) refused. */
+/* OVMX-UNWIRED: vms_kif_creprc_ticket (vms-2a5) -- superseded by
+ * vms_kif_creprc_pcb (rd vms-c43); removed with registration in vms-2a5.
+ * OVMX-UNWIRED: vms_kif_register_detached (vms-2a5) -- likewise. */
 uint32_t vms_kif_creprc_ticket(const char *username, uint32_t uic,
                                uint64_t privs, uint64_t *ticket);
 uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid);
@@ -872,6 +878,9 @@ uint32_t vms_kif_pri(uint32_t op, uint32_t pid, uint32_t *pri, uint32_t *prev,
 uint32_t vms_kif_brkauth(uint32_t sndtyp);
 /* $DELPRC/$FORCEX/$SUSPND/$RESUME by the executive (rd vms-8e9); op = VMS_PROCCTL_*. */
 uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code);
+/* $CREPRC: the creator creates the child's PCB (rd vms-c43); flags = VMS_CREPRC_PCB_*. */
+uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
+                            uint32_t uic, uint64_t privs, uint32_t *vms_pid);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 

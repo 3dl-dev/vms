@@ -1287,13 +1287,6 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     }
 
     const int use_ticket = detached && !loginout && child_username[0] != 0;
-    uint64_t detach_ticket = 0;
-    if (use_ticket) {
-        uint32_t tst = vms_kif_creprc_ticket(child_username, child_uic,
-                                             child_privs, &detach_ticket);
-        if (!(tst & 1))
-            return tst;
-    }
 
     int namefd[2] = { -1, -1 };
     if (pipe(namefd) < 0)
@@ -1303,11 +1296,30 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     fcntl(namefd[0], F_SETFD, FD_CLOEXEC);
     fcntl(namefd[1], F_SETFD, FD_CLOEXEC);
 
+    /*
+     * THE CREATOR CREATES THE NEW PROCESS'S PCB (rd vms-c43, design note 3.1).
+     * The task that will run the image sends its substrate pid on pcbreq and
+     * waits; the creator issues VMS_IOCTL_CREPRC_PCB for it -- identity from
+     * the creator's row (a subprocess) or the identity $CREPRC computed and the
+     * creator may give (a detached process) -- and answers status + VMS PID on
+     * pcbgo. The task never registers itself. A task that will not be made a
+     * VMS process here closes pcbreq unwritten, and the creator reads EOF.
+     */
+    int pcbreq[2] = { -1, -1 }, pcbgo[2] = { -1, -1 };
+    if (pipe(pcbreq) < 0 || pipe(pcbgo) < 0) {
+        close(namefd[0]); close(namefd[1]);
+        if (pcbreq[0] >= 0) { close(pcbreq[0]); close(pcbreq[1]); }
+        return SS$_INSFMEM;
+    }
+    fcntl(pcbreq[0], F_SETFD, FD_CLOEXEC); fcntl(pcbreq[1], F_SETFD, FD_CLOEXEC);
+    fcntl(pcbgo[0], F_SETFD, FD_CLOEXEC);  fcntl(pcbgo[1], F_SETFD, FD_CLOEXEC);
+
     pid_t pid = fork();
     if (pid < 0) {
         int why = errno;
         close(namefd[0]);
         close(namefd[1]);
+        close(pcbreq[0]); close(pcbreq[1]); close(pcbgo[0]); close(pcbgo[1]);
         /* No host fork at all (the OpenVMS-calling-standard build,
          * ovmx_host_absent.h): the service is not available there. */
         return why == ENOSYS ? SS$_UNSUPPORTED : SS$_INSFMEM;
@@ -1319,6 +1331,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * can fail, and tell the creator how it went and what process ID
          * the executive gave it. An unnamed process is expressed by never
          * calling $SETPRN, never by naming it something invented. */
+        close(pcbreq[0]);
+        close(pcbgo[1]);
         struct creprc_report rep = { 0, 0 };
         struct vms_procinfo self_info;
 
@@ -1387,6 +1401,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             if (svc > 0) {
                 char b;
                 close(namefd[1]);
+                close(pcbreq[1]);
+                close(pcbgo[0]);
                 close(syncfd[1]);
                 while (read(syncfd[0], &b, 1) < 0 && errno == EINTR)
                     ;
@@ -1488,6 +1504,22 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * login child printed before this item moved the sequence here, under
          * the OVMX facility because it is OVMX's own condition, not a VMS one.
          */
+        /* THE PCB, FROM THE CREATOR (rd vms-c43): a subprocess, or a detached
+         * process with a creator-given identity, asks its creator to create
+         * its row and waits. Before anything here touches the executive, so
+         * nothing registers this task on its own first. */
+        uint32_t pcb_status = SS$_NORMAL;
+        if (!(engage && child_username[0] == 0) && (!detached || use_ticket)) {
+            uint32_t me = (uint32_t)getpid();
+            uint32_t go[2] = { 0, 0 };
+            if (creprc_write_all(pcbreq[1], &me, sizeof(me)) != (ssize_t)sizeof(me) ||
+                creprc_read_all(pcbgo[0], go, sizeof(go)) != (ssize_t)sizeof(go))
+                pcb_status = SS$_ABORT;
+            else
+                pcb_status = go[0];
+        }
+        close(pcbreq[1]);
+        close(pcbgo[0]);
         if (loginout) {
             uint32_t est = vms_kif_establish_system();
             if (!(est & 1))
@@ -1532,14 +1564,12 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
              * stamp path below, with the identity $CREPRC computed in the
              * creator (child_username/child_uic/child_privs).
              */
-            if (!detached)
-                rep.status = vms_kif_register_subprocess();
-            else if (use_ticket) {
-                /* rd vms-ff75: claim the creator-authorized identity -- a new
-                 * job root with a fresh PID -- then release the intermediate. */
-                rep.status = vms_kif_register_detached(detach_ticket, NULL);
-                close(ticket_sync);
-                ticket_sync = -1;
+            if (!detached || use_ticket) {
+                rep.status = pcb_status;
+                if (ticket_sync >= 0) {     /* the PCB exists: release the intermediate */
+                    close(ticket_sync);
+                    ticket_sync = -1;
+                }
             } else {
                 /* rd vms-fe7: enter the executive's table while the
                  * intermediate is still the real parent (see above), then
@@ -1736,6 +1766,25 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     /* Parent process */
     close(namefd[1]);
+    close(pcbreq[1]);
+    close(pcbgo[0]);
+    {
+        /* Create the new process's PCB when its task asks (rd vms-c43). EOF
+         * means it will not be a VMS process made here (a refused identity
+         * override, or a detached process without a creator-given identity),
+         * or it died first; its report below says which. */
+        uint32_t cpid = 0;
+        if (creprc_read_all(pcbreq[0], &cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) {
+            uint32_t go[2] = { 0, 0 };
+            go[0] = vms_kif_creprc_pcb(cpid,
+                                       detached ? VMS_CREPRC_PCB_DETACHED
+                                                : VMS_CREPRC_PCB_SUBPROCESS,
+                                       child_username, child_uic, child_privs, &go[1]);
+            (void)creprc_write_all(pcbgo[1], go, sizeof(go));
+        }
+        close(pcbreq[0]);
+        close(pcbgo[1]);
+    }
     struct creprc_report rep = { 0, 0 };
     /* Retried on EINTR: see creprc_read_all. A signal caught by the
      * CALLER must not be able to change what $CREPRC says about the

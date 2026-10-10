@@ -450,6 +450,31 @@ struct vms_register_detached_args {
 
 #define VMS_IOCTL_CREPRC_TICKET \
             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4E, struct vms_creprc_ticket_args)
+
+/*
+ * CREATOR-DRIVEN CREATION (rd vms-c43 / vms-9f32, design note 3.1). The
+ * CREATOR of a process issues this for a task it has forked and is holding
+ * before exec: the executive creates that task's PCB, with its identity taken
+ * from the creator's row (SUBPROCESS) or from the creator-supplied identity
+ * the creator is authorized to give (DETACHED: SETPRV, or exactly its own user
+ * name, UIC and a subset of its authorized privileges -- the rule the
+ * creation ticket applied). The task must be the creator's child (SUBPROCESS)
+ * or grandchild through the still-live detach intermediate (DETACHED), and
+ * must have no PCB. The new process's creator of record is the caller.
+ */
+#define VMS_CREPRC_PCB_SUBPROCESS 0u
+#define VMS_CREPRC_PCB_DETACHED   1u
+struct vms_creprc_pcb_args {
+    char     username[VMS_USERNAME_SIZE]; /* in: DETACHED user name            */
+    uint32_t child_pid;                   /* in: the held task (substrate pid) */
+    uint32_t flags;                       /* in: VMS_CREPRC_PCB_*              */
+    uint32_t uic;                         /* in: DETACHED UIC                  */
+    uint32_t vms_pid;                     /* out: the new process's VMS PID    */
+    uint64_t privs;                       /* in: DETACHED privileges           */
+    uint32_t status;                      /* out: SS$_ status                  */
+    uint32_t pad;
+};
+#define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
 #define VMS_IOCTL_REGISTER_DETACHED \
             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x4F, struct vms_register_detached_args)
 
@@ -653,6 +678,8 @@ _Static_assert(sizeof(struct vms_pri_args) == 24,
                "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
 _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
+_Static_assert(sizeof(struct vms_creprc_pcb_args) == 64,
+               "vms_creprc_pcb_args layout changed: VMS_IOCTL_CREPRC_PCB ABI break");
 _Static_assert(sizeof(struct vms_procctl_args) == 16,
                "vms_procctl_args layout changed: VMS_IOCTL_PROCCTL ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,

@@ -2333,6 +2333,30 @@ uint32_t vms_kif_brkauth(uint32_t sndtyp)
     return args.status;
 }
 
+/* $CREPRC's creator creates the new process's PCB (rd vms-c43): `child_pid`
+ * is the substrate pid of the task it forked and holds; flags =
+ * VMS_CREPRC_PCB_SUBPROCESS (identity from the creator) or _DETACHED (the
+ * given user name, UIC and privileges, authorized by the creator's row). */
+uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
+                            uint32_t uic, uint64_t privs, uint32_t *vms_pid)
+{
+    struct vms_creprc_pcb_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.child_pid = child_pid;
+    args.flags = flags;
+    if (username)
+        vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
+    args.uic = uic;
+    args.privs = privs;
+
+    KIF_CALL(VMS_IOCTL_CREPRC_PCB, &args);
+
+    if (vms_pid)
+        *vms_pid = args.vms_pid;
+    return args.status;
+}
+
 /* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
  * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
 uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)

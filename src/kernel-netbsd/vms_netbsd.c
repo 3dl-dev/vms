@@ -315,6 +315,67 @@ vms_proc_get(pid_t pid)
 	return np;
 }
 
+static bool vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
+    bool share_pid);
+
+/*
+ * vms_proc_create_for - creator-driven creation, the NetBSD substrate half
+ * (rd vms-c43; facility half vms_ioctl_creprc_pcb, kernel-core/vms_proctab.c;
+ * Linux twin in src/kernel/vms_module.c). The task must be the creator's child
+ * (or, detached, its grandchild through the detach intermediate) and have no
+ * row. Its identity is the creator's (process name cleared) or the given one;
+ * its creator of record is `creator`.
+ */
+uint32_t
+vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
+    const char *uname, uint32_t uic, uint64_t privs, uint32_t *vms_pid_out)
+{
+	struct proc *cp, *anc;
+	struct vms_proc *proc, *p;
+	bool related = false, found = false;
+	int bkt;
+
+	mutex_enter(&proc_lock);
+	cp = proc_find((pid_t)child_pid);
+	if (cp != NULL) {
+		anc = cp->p_pptr;
+		if (detached && anc != NULL)
+			anc = anc->p_pptr;
+		related = anc != NULL && anc->p_pid == creator->pid;
+	}
+	mutex_exit(&proc_lock);
+	if (cp == NULL)
+		return SS__NONEXPR;
+	if (!related)
+		return SS__NOPRIV;
+
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+		if (p->pid == (pid_t)child_pid) {
+			found = true;
+			break;
+		}
+	}
+	exec_unlock(&vms_proc_hash_lock);
+	if (found)
+		return SS__BADPARAM;            /* it already is a VMS process */
+
+	proc = vms_proc_get((pid_t)child_pid);
+	if (proc == NULL)
+		return SS__INSFMEM;
+	proc->owner_vms_pid = creator->vms_pid;
+	if (!detached) {
+		(void)vms_proc_continue_identity(proc, creator->pid, false);
+		exec_lock(&vms_proc_hash_lock);
+		proc->prcnam[0] = '\0';
+		exec_unlock(&vms_proc_hash_lock);
+	} else {
+		vms_proc_apply_ticket_identity(proc, uname, uic, privs);
+	}
+	*vms_pid_out = proc->vms_pid;
+	return SS__NORMAL;
+}
+
 /*
  * vms_netbsd_proc_current - the calling process's executive entry (find or
  * create), for paths that are not /dev/vms ioctls: the terminal line
@@ -1455,6 +1516,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_PRI:
 	case VMS_IOCTL_BRKAUTH:
 	case VMS_IOCTL_PROCCTL:
+	case VMS_IOCTL_CREPRC_PCB:
 	case VMS_IOCTL_SPAWN_NOTIFY:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
@@ -1499,6 +1561,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_brkauth(proc, (unsigned long)uarg);          break;
 		case VMS_IOCTL_PROCCTL:   /* rd vms-8e9 */
 			r = vms_ioctl_procctl(proc, (unsigned long)uarg);          break;
+		case VMS_IOCTL_CREPRC_PCB:   /* rd vms-c43 */
+			r = vms_ioctl_creprc_pcb(proc, (unsigned long)uarg);       break;
 		/* /NOWAIT subprocess-exit completion arm (vms-e9a B1) */
 		case VMS_IOCTL_SPAWN_NOTIFY:
 			r = vms_ioctl_spawn_notify(proc, (unsigned long)uarg);     break;

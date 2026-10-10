@@ -184,6 +184,7 @@ dlm-grant-record-omitted
 dlm-echo-guard-never-caps
 dlm-deadlock-search-follows-remote-holders
 dlm-queued-convert-answered-as-granted
+dlm-op0f-answer-keeps-request-state
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
 mscp-cl-conn-refusal-uncounted
@@ -775,6 +776,19 @@ EOF
         why)          echo "the search follows the delivery process's other waiting locks as if they were the blocker's own wait-for edges: two VAXes contending for one resource become one owner blocking itself, and without the step budget the search re-pushes them forever with res->lock held -- the lab OVMX node spun CPU 0 into an RCU stall the moment a local CONVERT queued behind a VAX EX (2026-10-09 11:12Z).";;
         require_fail) cat <<'EOF'
 *** and it never needed the step budget: a remote holder's other waits are not this request's wait-for edges ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-op0f-answer-keeps-request-state)
+        case "$_f" in
+        facility)     echo "the answer to a real VMS member's op-0x0f (vms_cluster_codec_dlm.c vms_dlm_op0f_ack_build, rd vms-cab): the request echoed as 82/15 with body[28:32] cleared and the 01 00 fa 00 record, as a member holding no lock answers (1309/1392 real pairs)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer echoes the sender's own per-resource state back as if it were this member's: a member claiming state on a resource it holds no lock on. Without any answer the sender's file system stalls after a departure (measured, ci6-evac-15).";;
+        require_fail) cat <<'EOF'
+*** the op-0x0f answer equals the real VAX member's, byte for byte after the envelope ***
 EOF
                       ;;
         esac;;
@@ -1955,6 +1969,10 @@ apply_edit() {
         # removes the anchor, so a second apply cannot match.
         sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
         sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+
+    dlm-op0f-answer-keeps-request-state)
+        # The clearing write is written in exactly one place.
+        sed -i 's|\t\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_FLAG + i, 0u);|\t\t; /* NEGCTL dlm-op0f-answer-keeps-request-state */|' "$_file";;
 
     dlm-queued-convert-answered-as-granted)
         # The queued outcome is written in exactly one place.

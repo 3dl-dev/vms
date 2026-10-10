@@ -1833,9 +1833,12 @@ static int cmd_show_symbol(struct dcl_command *cmd)
                 printf("  %s = \"%s\"\n", upper_name, value);
             }
         } else {
-            dcl_error("DCL", 0, "NOLCL",
-                      "no symbol \"%s\" found", name);
-            return SS$_NOLOGNAM;
+            /* an undefined symbol, named exactly: %DCL-W-UNDSYM, CLI status
+             * %X00038140 (VAX V7.3 keystroke RD.TIMED S; message catalog) --
+             * rd vms-c174 */
+            dcl_error("DCL", 0, "UNDSYM",
+                      "undefined symbol - check validity and spelling");
+            return 0x00038140;
         }
     } else {
         /* Show all symbols */

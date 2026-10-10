@@ -3,7 +3,8 @@
 #       (LNM$PROCESS), not a DCL symbol, and DEASSIGN removes it
 # EXPECT: contains:"FOO" = "BAR" (LNM$PROCESS_TABLE)
 # EXPECT: contains:X = "BAR"
-# EXPECT: contains:%DCL-W-NOLCL, no symbol "FOO" found
+# SHOW SYMBOL FOO finds no symbol (VAX V7.3: %DCL-W-UNDSYM, rd vms-c174):
+# EXPECT: contains:%DCL-W-UNDSYM, undefined symbol - check validity and spelling
 # EXPECT: contains:%DCL-W-NOLOG, no logical name match
 #
 # THE FINDING THIS GATES (docs/design-dcl-fidelity.md sec 1, TOP LIE #1;

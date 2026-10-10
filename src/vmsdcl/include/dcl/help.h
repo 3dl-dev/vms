@@ -131,4 +131,10 @@ int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out);
 void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
                       FILE *in, FILE *out);
 
+/* How the prompt loop reads a line at a terminal: prompt (with its own
+ * leading CR LF), buffer; 0, or -1 at end of file (CTRL/Z). Unset, the loop
+ * writes the prompt to `out` and reads `in`. rd vms-f9e. */
+typedef int (*help_read_fn)(const char *prompt, char *buf, size_t bufsz);
+void help_set_reader(help_read_fn fn);
+
 #endif /* OVMX_DCL_HELP_H */

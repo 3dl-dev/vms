@@ -1235,17 +1235,41 @@ static void dcl_help_apply_cdu(help_lib_t *lib)
         if (!qnode) qnode = help_node_add_child(vnode, 2, "Qualifiers");
         if (!qnode) continue;
 
-        /* Authoritative rebuild: the table is the single source of truth. */
+        /* Authoritative rebuild: the table is the single source of truth for
+         * WHICH qualifiers exist and their syntax. A description the library
+         * writes for one of them is kept, before the syntax (rd vms-f9e). */
+        enum { KEEP = 64 };
+        char *kname[KEEP], *ktext[KEEP];
+        int nk = 0;
+        for (help_node_t *c = qnode->first_child; c && nk < KEEP; c = c->next_sibling) {
+            if (c->text && c->text[0]) {
+                kname[nk] = strdup(c->name);
+                ktext[nk] = strdup(c->text);
+                if (kname[nk] && ktext[nk]) nk++;
+                else { free(kname[nk]); free(ktext[nk]); }
+            }
+        }
         help_node_clear_children(qnode);
         for (int j = 0; v->quals[j].name; j++) {
             char key[80];
             snprintf(key, sizeof(key), "/%s", v->quals[j].name);
             help_node_t *qn = help_node_add_child(qnode, 3, key);
             if (!qn) continue;
-            char body[256];
+            char body[256], full[2048];
+            const char *lib_text = NULL;
             cdu_qual_body(&v->quals[j], body, sizeof(body));
-            help_node_set_text(qn, body);
+            for (int k = 0; k < nk; k++)
+                if (strcasecmp(kname[k], key) == 0) lib_text = ktext[k];
+            if (lib_text) {
+                size_t lt = strlen(lib_text);
+                while (lt && lib_text[lt - 1] == '\n') lt--;
+                snprintf(full, sizeof full, "%.*s\n\n%s\n", (int)lt, lib_text, body);
+                help_node_set_text(qn, full);
+            } else {
+                help_node_set_text(qn, body);
+            }
         }
+        for (int k = 0; k < nk; k++) { free(kname[k]); free(ktext[k]); }
     }
 }
 
@@ -1372,29 +1396,31 @@ int cmd_help(struct dcl_command *cmd)
         path[npath++] = qual_key[i];
     }
 
-    int status;
-    if (npath > 0) {
-        /*
-         * A topic was named: show that node (text + subtopic listing) ONCE and
-         * return to the DCL prompt. This deliberately does NOT open the
-         * "<topic> Subtopic?" prompt loop, so that (a) HELP always returns to
-         * "$" after a single command -- the contract every scripted/console
-         * session relies on -- and (b) the built-in behaves identically to the
-         * HELP.EXE image, which one-shots when given a topic and is gated on
-         * exactly that (tests/qemu/test_product_install_e2e.sh). The subtopics
-         * are listed under "Additional information available:"; the user drills
-         * in with "HELP <topic> <subtopic>". (Opening the prompt loop even for
-         * a fully-specified topic, as VMS does at a terminal, is a deferred
-         * fidelity item under epic vms-01b.)
-         */
-        status = help_render(lib, path, npath, stdout);
-    } else if (isatty(fileno(stdin))) {
-        /* Bare HELP at a terminal: the interactive Topic? browser. */
-        help_interactive(lib, NULL, 0, stdin, stdout);
-        status = SS$_NORMAL;
+    /*
+     * At a terminal HELP shows the topic and then prompts -- "<TOPIC>
+     * Subtopic? " or "Topic? " -- until RETURN at the top or CTRL/Z, as on
+     * VMS (keystroke HLP.NAV, probe Q.HELP; rd vms-f9e). /NOPROMPT, or input
+     * that is not a terminal, shows it once and returns (Q.HELP F). HELP.EXE
+     * given a topic one-shots the same way.
+     */
+    int status = SS$_NORMAL;
+    int prompting = isatty(fileno(stdin)) && !dcl_has_qualifier(cmd, "NOPROMPT");
+    {
+        /* /NOPROMPT arrives as PROMPT, negated: never a topic key */
+        int k = 0;
+        for (int i = 0; i < npath; i++) {
+            if (strcasecmp(path[i], "/NOPROMPT") == 0) { prompting = 0; continue; }
+            if (strcasecmp(path[i], "/PROMPT") == 0) continue;
+            path[k++] = path[i];
+        }
+        npath = k;
+    }
+    if (prompting) {
+        help_set_reader(dcl_tt_read_line);
+        help_interactive(lib, path, npath, stdin, stdout);
+        help_set_reader(NULL);
     } else {
-        /* Bare HELP, non-interactive input: list the top level once. */
-        status = help_render(lib, NULL, 0, stdout);
+        status = help_render(lib, path, npath, stdout);
     }
 
     help_close(lib);

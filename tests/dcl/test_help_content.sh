@@ -32,8 +32,12 @@ unknown_output=$(printf 'HELP XYZZY_NOT_A_REAL_COMMAND\n' | $VMSDCL 2>&1)
 # The command names must appear (top-level topic listing).
 echo "$toplevel_output"
 
-# Bare HELP lists the top-level topics under the authentic header.
-if echo "$toplevel_output" | grep -q "Information available:"; then
+# Bare HELP shows the HELP topic and then lists every top-level topic under
+# "Additional information available:", as the VAX V7.3 console does (probe
+# Q.HELP E, rd vms-f9e).
+if echo "$toplevel_output" | grep -q "^HELP$" && \
+   echo "$toplevel_output" | grep -q "Additional information available:" && \
+   echo "$toplevel_output" | grep -qE "^  .*COPY"; then
     echo "HELP_TOPLEVEL_LISTS"
 else
     echo "  MISSING top-level 'Information available:' listing"
@@ -60,7 +64,7 @@ else
 fi
 
 # ... and must NOT be indistinguishable from the generic top-level reply.
-if echo "$show_output" | grep -q "Information available:"; then
+if [ "$show_output" = "$toplevel_output" ] || ! echo "$show_output" | grep -q "^SHOW$"; then
     echo "HELP_TOPIC_SAME_AS_GENERIC"
     FAILURES=$((FAILURES + 1))
 fi
@@ -84,7 +88,7 @@ else
     echo "  Unexpected HELP-unknown-topic output: $unknown_output"
     FAILURES=$((FAILURES + 1))
 fi
-if echo "$unknown_output" | grep -q "Information available:"; then
+if [ "$unknown_output" = "$toplevel_output" ]; then
     echo "HELP_TOPIC_SAME_AS_GENERIC"
     FAILURES=$((FAILURES + 1))
 fi

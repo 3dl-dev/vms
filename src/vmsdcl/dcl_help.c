@@ -496,12 +496,27 @@ static help_node_t *child_lookup(help_node_t *parent, const char *query)
     return prefix;
 }
 
+/* A qualifier key ("/ALL") is a subtopic of its command in VMS's listing
+ * ("Parameter  Qualifiers / /ALL /ERASE ... / Examples", keystroke HLP.NAV);
+ * OVMX's library files them under a "Qualifiers" subtopic, so a "/" key not
+ * found directly is looked for there (rd vms-f9e). */
+static help_node_t *key_lookup(help_node_t *parent, const char *query)
+{
+    help_node_t *n = child_lookup(parent, query);
+    if (!n && query[0] == '/') {
+        help_node_t *q = child_lookup(parent, "Qualifiers");
+        if (q && strcasecmp(q->name, "Qualifiers") == 0)
+            n = child_lookup(q, query);
+    }
+    return n;
+}
+
 help_node_t *help_find(help_lib_t *lib, const char *const path[], int n)
 {
     if (!lib) return NULL;
     help_node_t *node = lib->root;
     for (int i = 0; i < n; i++) {
-        node = child_lookup(node, path[i]);
+        node = key_lookup(node, path[i]);
         if (!node) return NULL;
     }
     return (n == 0) ? NULL : node;
@@ -579,69 +594,172 @@ void help_node_remove_child(help_node_t *parent, help_node_t *child)
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Print a set of key names in VMS-style columns. */
+/*
+ * HELP's layout, as the VAX V7.3 console shows it (keystroke HLP.NAV, probe
+ * Q.HELP; rd vms-f9e):
+ *
+ *   - a node is a blank line, then each key of its path on its own line,
+ *     indented two spaces a level and followed by a blank line, then the
+ *     node's text, indented two spaces a level below the first;
+ *   - its subtopics follow two blank lines later under "Additional
+ *     information available:", indented two spaces a level, in 11-character
+ *     columns (a longer key takes as many as it needs); a key starts a new
+ *     line when it would end past column 77, and qualifier keys ("/X") sit
+ *     on lines of their own;
+ *   - a blank line ends the display, before the next prompt.
+ */
+#define HELP_COLW   11
+#define HELP_LIMIT  77
+
+static int listing_slash(const help_node_t *c) { return c->name[0] == '/'; }
+
+/* the keys a node lists: its children, with a "Qualifiers" child's own
+ * children (the qualifiers) listed right after it */
+static int collect_keys(help_node_t *node, help_node_t **keys, int max)
+{
+    int n = 0;
+    for (help_node_t *c = node ? node->first_child : NULL; c && n < max;
+         c = c->next_sibling) {
+        keys[n++] = c;
+        if (strcasecmp(c->name, "Qualifiers") == 0)
+            for (help_node_t *q = c->first_child; q && n < max; q = q->next_sibling)
+                keys[n++] = q;
+    }
+    return n;
+}
+
+static void print_key_columns_at(help_node_t *node, int indent, FILE *out)
+{
+    help_node_t *keys[1024];
+    int n = collect_keys(node, keys, 1024);
+    int pos = -1;                        /* -1: nothing on this line yet */
+    int prev_slash = -1;
+
+    for (int i = 0; i < n; i++) {
+        const char *k = keys[i]->name;
+        int len = (int)strlen(k);
+        int slash = listing_slash(keys[i]);
+        if (pos >= 0 && (slash != prev_slash || pos + len > HELP_LIMIT)) {
+            fputc('\n', out);
+            pos = -1;
+        }
+        if (pos < 0) {
+            fprintf(out, "%*s", indent, "");
+            pos = indent;
+        }
+        fputs(k, out);
+        {
+            int cols = (len + 1 + HELP_COLW - 1) / HELP_COLW;
+            int next = pos + cols * HELP_COLW;
+            /* the padding is written only when another key follows */
+            int more = (i + 1 < n);
+            int nslash = more ? listing_slash(keys[i + 1]) : slash;
+            int nlen = more ? (int)strlen(keys[i + 1]->name) : 0;
+            if (more && nslash == slash && next + nlen <= HELP_LIMIT)
+                fprintf(out, "%*s", next - pos - len, "");
+            pos = next;
+        }
+        prev_slash = slash;
+    }
+    if (pos >= 0)
+        fputc('\n', out);
+}
+
 static void print_key_columns(help_node_t *first, FILE *out)
 {
-    int col = 0;
-    for (help_node_t *c = first; c; c = c->next_sibling) {
-        fprintf(out, "  %-18s", c->name);
-        if (++col == 3) { fputc('\n', out); col = 0; }
+    print_key_columns_at(first ? first->parent : NULL, 2, out);
+}
+
+/* the node's text, each non-empty line indented `indent` more */
+static void print_text(const char *text, int indent, FILE *out)
+{
+    const char *p = text;
+    while (p && *p) {
+        const char *e = strchr(p, '\n');
+        size_t l = e ? (size_t)(e - p) : strlen(p);
+        if (l)
+            fprintf(out, "%*s%.*s", indent, "", (int)l, p);
+        fputc('\n', out);
+        p = e ? e + 1 : p + l;
     }
-    if (col != 0) fputc('\n', out);
+}
+
+static void print_listing(help_node_t *node, int indent, FILE *out)
+{
+    fprintf(out, "\n\n%*sAdditional information available:\n\n", indent, "");
+    print_key_columns_at(node, indent, out);
 }
 
 void help_show_toplevel(help_lib_t *lib, FILE *out)
 {
-    fprintf(out, "\n  Information available:\n\n");
-    if (lib && lib->root->first_child)
-        print_key_columns(lib->root->first_child, out);
-    else
-        fprintf(out, "  (no information available)\n");
+    const char *self[] = { "HELP" };
+    help_node_t *h = lib ? help_find(lib, self, 1) : NULL;
+
+    /* VMS's bare HELP shows the HELP topic, then every topic (probe Q.HELP E) */
+    if (h && strcasecmp(h->name, "HELP") == 0) {
+        fprintf(out, "\nHELP\n\n");
+        if (h->text && h->text[0])
+            print_text(h->text, 0, out);
+        print_listing(lib->root, 2, out);
+    } else if (lib && lib->root->first_child) {
+        fprintf(out, "\n  Information available:\n\n");
+        print_key_columns_at(lib->root, 2, out);
+    } else {
+        fprintf(out, "\n  (no information available)\n");
+    }
 }
 
-/* Build "COPY /LOG" style uppercased path header. */
-static void write_path_header(const char *const path[], int n, FILE *out)
+/* the node at each level of the path, for the header */
+static void write_header(help_lib_t *lib, const char *const path[], int n,
+                         FILE *out)
 {
+    help_node_t *node = lib ? lib->root : NULL;
+    for (int i = 0; i < n; i++) {
+        help_node_t *c = node ? key_lookup(node, path[i]) : NULL;
+        const char *nm = c ? c->name : path[i];
+        fprintf(out, "%*s", 2 * i, "");
+        for (const char *p = nm; *p; p++)
+            fputc(toupper((unsigned char)*p), out);
+        fputs("\n\n", out);
+        node = c;
+    }
+}
+
+static void show_node_lib(help_lib_t *lib, help_node_t *node,
+                          const char *const path[], int n, FILE *out)
+{
+    if (!node) return;
+    fputc('\n', out);
+    write_header(lib, path, n, out);
+    if (node->text && node->text[0])
+        print_text(node->text, n > 1 ? 2 * (n - 1) : 0, out);
+    if (node->first_child)
+        print_listing(node, n > 0 ? 2 * n : 2, out);
+}
+
+static help_lib_t *g_show_lib;
+
+void help_show_node(help_node_t *node, const char *const path[], int n,
+                    FILE *out)
+{
+    show_node_lib(g_show_lib, node, path, n, out);
+}
+
+/* "  Sorry, no documentation on <PATH>", then what the level above offers */
+static void show_nodoc(const char *const path[], int n, FILE *out)
+{
+    fprintf(out, "  Sorry, no documentation on ");
     for (int i = 0; i < n; i++) {
         if (i) fputc(' ', out);
         for (const char *p = path[i]; *p; p++)
             fputc(toupper((unsigned char)*p), out);
     }
-}
-
-void help_show_node(help_node_t *node, const char *const path[], int n,
-                    FILE *out)
-{
-    if (!node) return;
-
-    fputc('\n', out);
-    /* Header: the key path as typed, uppercased (VMS echoes the topic path). */
-    if (path && n > 0) {
-        write_path_header(path, n, out);
-        fputc('\n', out);
-    } else {
-        fprintf(out, "%s\n", node->name);
-    }
-
-    if (node->text && node->text[0])
-        fprintf(out, "%s", node->text);
-
-    if (node->first_child) {
-        fprintf(out, "\n  Additional information available:\n\n");
-        print_key_columns(node->first_child, out);
-    }
-}
-
-/* Print "Sorry, no documentation on <PATH>". */
-static void show_nodoc(const char *const path[], int n, FILE *out)
-{
-    fprintf(out, "\nSorry, no documentation on ");
-    write_path_header(path, n, out);
     fputc('\n', out);
 }
 
 int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out)
 {
+    g_show_lib = lib;
     if (n == 0) {
         help_show_toplevel(lib, out);
         return SS$_NORMAL;
@@ -651,7 +769,7 @@ int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out)
         show_nodoc(path, n, out);
         return SS$_ITEMNOTFOUND;
     }
-    help_show_node(node, path, n, out);
+    show_node_lib(lib, node, path, n, out);
     return SS$_NORMAL;
 }
 
@@ -661,37 +779,65 @@ int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out)
 
 #define HELP_MAX_DEPTH 9
 
-/* Print the prompt for the current level: "Topic? " at the top, or
- * "<KEY1> <KEY2> ... Subtopic? " within a topic (VMS wording). */
-static void print_prompt(char stack[][128], int depth, FILE *out)
+static help_read_fn g_reader;
+
+void help_set_reader(help_read_fn fn)
 {
-    fputc('\n', out);
-    if (depth == 0) {
-        fprintf(out, "Topic? ");
-    } else {
-        for (int i = 0; i < depth; i++) {
-            for (const char *p = stack[i]; *p; p++)
-                fputc(toupper((unsigned char)*p), out);
-            fputc(' ', out);
-        }
-        fprintf(out, "Subtopic? ");
-    }
-    fflush(out);
+    g_reader = fn;
 }
 
-/* Display the node (or top level) for the current stack depth. */
-static void show_current(help_lib_t *lib, char stack[][128], int depth,
-                         FILE *out)
+/* "Topic? " at the top, "<KEY> ... Subtopic? " inside a topic: a prompt on
+ * a new line of its own (no fill), as INQUIRE's is */
+static int read_prompted(char stack[][128], int depth, char *line,
+                         size_t sz, FILE *in, FILE *out)
+{
+    char prompt[HELP_MAX_DEPTH * 130 + 16];
+    size_t pl = 0;
+
+    prompt[pl++] = '\r';
+    prompt[pl++] = '\n';
+    for (int i = 0; i < depth; i++) {
+        for (const char *p = stack[i]; *p && pl < sizeof prompt - 16; p++)
+            prompt[pl++] = (char)toupper((unsigned char)*p);
+        prompt[pl++] = ' ';
+    }
+    memcpy(prompt + pl, depth ? "Subtopic? " : "Topic? ", depth ? 11 : 8);
+    if (g_reader) {
+        fflush(out);
+        return g_reader(prompt, line, sz);
+    }
+    fputs(prompt + 1, out);       /* a plain stream: "\nTopic? " */
+    fflush(out);
+    if (!fgets(line, (int)sz, in))
+        return -1;
+    return 0;
+}
+
+static void show_level(help_lib_t *lib, char stack[][128], int depth,
+                       FILE *out)
 {
     if (depth == 0) {
         help_show_toplevel(lib, out);
-        return;
+    } else {
+        const char *path[HELP_MAX_DEPTH];
+        for (int i = 0; i < depth; i++) path[i] = stack[i];
+        show_node_lib(lib, help_find(lib, path, depth), path, depth, out);
     }
-    const char *path[HELP_MAX_DEPTH];
-    for (int i = 0; i < depth; i++) path[i] = stack[i];
-    help_node_t *node = help_find(lib, path, depth);
-    if (node)
-        help_show_node(node, path, depth, out);
+    fputc('\n', out);             /* the blank line that ends a display */
+}
+
+/* the display after "Sorry": what the level the user is at offers */
+static void show_offer(help_lib_t *lib, char stack[][128], int depth, FILE *out)
+{
+    help_node_t *node = lib->root;
+    if (depth) {
+        const char *path[HELP_MAX_DEPTH];
+        for (int i = 0; i < depth; i++) path[i] = stack[i];
+        node = help_find(lib, path, depth);
+    }
+    if (node && node->first_child)
+        print_listing(node, depth ? 2 * depth : 2, out);
+    fputc('\n', out);
 }
 
 void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
@@ -700,9 +846,7 @@ void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
     char stack[HELP_MAX_DEPTH][128];
     int depth = 0;
 
-    /* Seed the stack from the initial path, descending as far as it resolves.
-     * An initial component that does not resolve prints the not-found message
-     * and leaves us at the last good level (matching VMS). */
+    g_show_lib = lib;
     if (ninit > 0) {
         const char *path[HELP_MAX_DEPTH];
         int want = ninit < HELP_MAX_DEPTH ? ninit : HELP_MAX_DEPTH;
@@ -710,28 +854,25 @@ void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
         help_node_t *node = help_find(lib, path, want);
         if (node) {
             for (int i = 0; i < want; i++) {
-                strncpy(stack[i], initial[i], sizeof(stack[0]) - 1);
-                stack[i][sizeof(stack[0]) - 1] = '\0';
+                snprintf(stack[i], sizeof stack[0], "%s", initial[i]);
             }
-            depth = want;
-            show_current(lib, stack, depth, out);
+            show_level(lib, stack, want, out);
+            /* a topic named on the command line with nothing below it
+             * returns to "Topic? " (probe Q.HELP A) */
+            depth = node->first_child ? want : 0;
         } else {
             show_nodoc(path, want, out);
-            depth = 0;
-            show_current(lib, stack, depth, out);
+            show_offer(lib, stack, 0, out);
         }
     } else {
-        show_current(lib, stack, depth, out);
+        show_level(lib, stack, 0, out);
     }
 
     char line[256];
     for (;;) {
-        print_prompt(stack, depth, out);
+        if (read_prompted(stack, depth, line, sizeof line, in, out) != 0)
+            break;                         /* CTRL/Z or EOF */
 
-        if (!fgets(line, sizeof(line), in))
-            break; /* EOF */
-
-        /* Trim trailing newline/CR and surrounding whitespace. */
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r' ||
                            line[len - 1] == ' ' || line[len - 1] == '\t'))
@@ -740,31 +881,37 @@ void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
         while (*s == ' ' || *s == '\t') s++;
 
         if (*s == '\0') {
-            /* Blank line: pop one level; exit at the top. */
+            /* RETURN: up one level, no redisplay; out at the top */
             if (depth == 0) break;
             depth--;
-            show_current(lib, stack, depth, out);
+            continue;
+        }
+        if (strcmp(s, "?") == 0) {
+            show_level(lib, stack, depth, out);
             continue;
         }
 
-        /* Descend through each whitespace-separated key on the line. */
+        int base = depth;
         char *tok = strtok(s, " \t");
-        while (tok) {
-            if (depth >= HELP_MAX_DEPTH) break;
-            strncpy(stack[depth], tok, sizeof(stack[0]) - 1);
-            stack[depth][sizeof(stack[0]) - 1] = '\0';
+        while (tok && depth < HELP_MAX_DEPTH) {
+            snprintf(stack[depth], sizeof stack[0], "%s", tok);
             depth++;
-
             const char *path[HELP_MAX_DEPTH];
             for (int i = 0; i < depth; i++) path[i] = stack[i];
             help_node_t *node = help_find(lib, path, depth);
             if (!node) {
                 show_nodoc(path, depth, out);
-                depth--; /* stay at last good level */
+                depth = base;
+                show_offer(lib, stack, depth, out);
                 break;
             }
             tok = strtok(NULL, " \t");
-            if (!tok) show_current(lib, stack, depth, out);
+            if (!tok) {
+                show_level(lib, stack, depth, out);
+                /* a key with nothing below it: stay where the user was */
+                if (!node->first_child)
+                    depth = base;
+            }
         }
     }
 }

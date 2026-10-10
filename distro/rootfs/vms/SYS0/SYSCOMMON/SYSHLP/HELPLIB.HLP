@@ -1054,27 +1054,33 @@
  $ CLOSE INP
 
 1 RECALL
- Displays or re-executes commands from the command history.
+ Brings back a command from the recall buffer, the list of commands
+ recently entered at this terminal, so that it can be edited and run.
 
- Format: RECALL [command-number]
+ Format: RECALL [command-specifier]
 
- Without arguments, displays the command history buffer.
- With a number, re-executes the specified command from
- the history.
+ The recalled command is shown after the next prompt, ready to edit;
+ press RETURN to run it. RECALL commands are never kept in the
+ buffer.
 
-2 Parameters
-3 command-number
- The number of a command in the history buffer to
- re-execute.
+2 Parameter
+3 command-specifier
+ A number (1 is the most recent command) or the first characters of
+ a command. With no command-specifier, the most recent command.
 
 2 Qualifiers
 3 /ALL
- Displays the entire command history buffer.
+ Lists every command in the recall buffer with its number, the most
+ recent first.
+
+3 /ERASE
+ Empties the recall buffer.
 
 2 Examples
 
  $ RECALL
  $ RECALL 5
+ $ RECALL SHOW
  $ RECALL/ALL
 
 1 RENAME

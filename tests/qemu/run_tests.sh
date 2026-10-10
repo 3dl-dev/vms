@@ -293,12 +293,20 @@ echo ""
 # suite assertion failure. `|| QEMU_RC=$?` keeps `set -e` from aborting here
 # exactly as the old `|| true` did; there is no pipe, so pipefail is not in play.
 QEMU_RC=0
+# oops=panic (rd vms-14da follow-up, shard 3): a kernel Oops ends the guest at
+# once -- panic=-1 + -no-reboot turn the panic into QEMU exiting -- instead of
+# leaving a half-dead kernel running until the whole-VM wall above fires. The
+# fatal negative control executive-not-pinned Oopses by design at
+# test_syssvc_pin, and waiting out the wall on it cost 30 of shard 3's 50
+# minutes (main 37986886724 finished 5 s inside the job limit; #1602's run
+# 38009997149 did not). An Oops in any other run is a failure either way; this
+# only makes it a prompt one.
 OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     $MACHINE \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY $KCMD_CORPUS" \
+    -append "$CONSOLE panic=-1 oops=panic loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY $KCMD_CORPUS" \
     -m 512M \
     -no-reboot \
     -smp 1 \

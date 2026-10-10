@@ -104,9 +104,10 @@ int main(int argc, char **argv)
     int fd = open(SRC, O_RDONLY);
     struct vms_kfe_args a;
 
-    check(kfe(VMS_KFE_OP_ADD, fd, VMS_PRV_M_CMKRNL, VMS_KFE_F_PRIV | VMS_KFE_F_OPEN,
-              "TEST_SYSSVC_KFE.EXE", &a) == SS$_NORMAL,
-          "INSTALL ADD /PRIVILEGED=CMKRNL of an open file is SS$_NORMAL");
+    uint32_t ast = kfe(VMS_KFE_OP_ADD, fd, VMS_PRV_M_CMKRNL, VMS_KFE_F_PRIV | VMS_KFE_F_OPEN,
+                       "TEST_SYSSVC_KFE.EXE", &a);
+    printf("  (INSTALL ADD status %%X%08X, copy %s)\n", (unsigned)ast, a.path);
+    check(ast == SS$_NORMAL, "INSTALL ADD /PRIVILEGED=CMKRNL of an open file is SS$_NORMAL");
     char copy[256];
     snprintf(copy, sizeof copy, "%s", a.path);
     check(strncmp(copy, VMS_KFE_DIR "/", sizeof(VMS_KFE_DIR)) == 0,

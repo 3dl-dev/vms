@@ -56,7 +56,8 @@
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev, bdev_open_by_dev/bdev_file_open_by_dev */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
-#include <linux/file.h>           /* fget, fput (exec_file_identity, vms-7c64) */
+#include <linux/file.h>           /* fget, fput, flush_delayed_fput (exec_kfe_stage, vms-220) */
+#include <linux/workqueue.h>      /* the INSTALL copy worker (vms-220) */
 #include <linux/fs.h>             /* file_inode */
 #include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
 #include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
@@ -282,38 +283,39 @@ static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMI
 /* exec_kfe_stage (exec_kbackend.h section 5, rd vms-220): copy the file the
  * caller's `fd` names, AS THE KERNEL, into a new file `dst` (O_EXCL, 0555) in
  * the executive's own directory, then hold that copy open read-only with
- * writes to it denied (deny_write_access); *pin is the held copy. */
-static inline int exec_kfe_stage(int fd, const char *dst, void **pin)
+ * writes to it denied (deny_write_access); *pin is the held copy.
+ *
+ * The copy runs on a kernel worker: closing the written copy there releases
+ * its writer count synchronously (flush_delayed_fput), which a close in the
+ * ioctl's own context defers to the return to userspace -- and the denial
+ * that follows needs that count to be zero. The worker's credentials are the
+ * kernel's. */
+struct exec_kfe_work {
+	struct work_struct work;
+	struct file *src;
+	const char *dst;
+	struct file *pin;
+	int err;
+};
+
+static inline void exec_kfe_worker(struct work_struct *w)
 {
-	struct file *src, *out, *ro;
-	const struct cred *kc, *old;
+	struct exec_kfe_work *k = container_of(w, struct exec_kfe_work, work);
+	struct file *out, *ro;
 	loff_t ip = 0, op = 0;
-	ssize_t n;
-	void *buf;
+	ssize_t n = 0;
+	void *buf = kmalloc(65536, GFP_KERNEL);
 	int e = 0;
 
-	src = fget(fd);
-	if (!src)
-		return -EBADF;
-	if (!S_ISREG(file_inode(src)->i_mode) || !(src->f_mode & FMODE_READ)) {
-		fput(src);
-		return -EINVAL;
+	if (!buf) {
+		k->err = -ENOMEM;
+		return;
 	}
-	buf = kmalloc(65536, GFP_KERNEL);
-	kc = prepare_kernel_cred(&init_task);
-	if (!buf || !kc) {
-		kfree(buf);
-		if (kc)
-			put_cred(kc);
-		fput(src);
-		return -ENOMEM;
-	}
-	old = override_creds(kc);
-	out = filp_open(dst, O_WRONLY | O_CREAT | O_EXCL | O_LARGEFILE, 0555);
+	out = filp_open(k->dst, O_WRONLY | O_CREAT | O_EXCL | O_LARGEFILE, 0555);
 	if (IS_ERR(out)) {
 		e = PTR_ERR(out);
 	} else {
-		while ((n = kernel_read(src, buf, 65536, &ip)) > 0) {
+		while ((n = kernel_read(k->src, buf, 65536, &ip)) > 0) {
 			if (kernel_write(out, buf, n, &op) != n) {
 				e = -EIO;
 				break;
@@ -322,22 +324,44 @@ static inline int exec_kfe_stage(int fd, const char *dst, void **pin)
 		if (n < 0)
 			e = (int)n;
 		filp_close(out, NULL);
+		flush_delayed_fput();          /* the writer count is released now */
 	}
 	if (!e) {
-		ro = filp_open(dst, O_RDONLY | O_LARGEFILE, 0);
+		ro = filp_open(k->dst, O_RDONLY | O_LARGEFILE, 0);
 		if (IS_ERR(ro)) {
 			e = PTR_ERR(ro);
 		} else if ((e = deny_write_access(ro)) != 0) {
 			fput(ro);
 		} else {
-			*pin = ro;
+			k->pin = ro;
 		}
 	}
-	revert_creds(old);
-	put_cred(kc);
 	kfree(buf);
+	k->err = e;
+}
+
+static inline int exec_kfe_stage(int fd, const char *dst, void **pin)
+{
+	struct exec_kfe_work k;
+	struct file *src = fget(fd);
+
+	if (!src)
+		return -EBADF;
+	if (!S_ISREG(file_inode(src)->i_mode) || !(src->f_mode & FMODE_READ)) {
+		fput(src);
+		return -EINVAL;
+	}
+	memset(&k, 0, sizeof k);
+	k.src = src;
+	k.dst = dst;
+	INIT_WORK_ONSTACK(&k.work, exec_kfe_worker);
+	queue_work(system_unbound_wq, &k.work);
+	flush_work(&k.work);
+	destroy_work_on_stack(&k.work);
 	fput(src);
-	return e;
+	if (!k.err)
+		*pin = k.pin;
+	return k.err;
 }
 static inline void exec_file_unpin(void *pin)
 {

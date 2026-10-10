@@ -38,3 +38,5 @@ out-of-band handling in `src/kernel-core/vms_tt.c` and DCL:
   does. That is why the ratchet's `OOB.PROMPT T` shows a status line before the case enables
   CTRL/T itself. With `SET NOCONTROL=T`, CTRL/T shows nothing and does not end the read.
 - `Q.SETDEF` (rd vms-c174) shows that SET DEFAULT never checks whether the directory or device exists. SHOW DEFAULT then reports `%DCL-I-INVDEF, ... does not exist`. SET DEFAULT refuses only bad syntax: unbalanced brackets give `%DCL-W-DIRECT`, and more than eight levels gives `%RMS-F-DIR`.
+- `Q.HELP` (rd vms-f9e) is HELP's framing: per-level header and indentation, the 11-column subtopic listing (a key starts a new line when it would end past column 77; qualifier keys sit on lines of their own), the `Topic?` / `<TOPIC> Subtopic?` prompts, RETURN going up a level without redisplay, a leaf named on the command line returning to `Topic?`, and `HELP/NOPROMPT`.
+- `Q.IODELTA` (rd vms-bd71) is the per-command change in `JPI$_BUFIO` / `JPI$_DIRIO`: reading a command line is one buffered I/O, writing a line of output one more.

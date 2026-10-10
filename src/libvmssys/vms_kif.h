@@ -768,6 +768,8 @@ uint32_t vms_kif_setterm(uint32_t chan);
  * no port is attached to answers SS$_DEVOFFLINE. */
 uint32_t vms_kif_tt_read(struct vms_tt_read_args *a);
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len);
+/* The same as one record (VMS_TT_WR_RECORD): IO$_WRITEVBLK with P4 " ". */
+uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len);
 uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode);
 /* What terminal `devnam`'s class driver is doing (VMS_TT_SENSE_*), for a
  * network port relaying its reads -- the DECnet CTERM host. CMKRNL. */

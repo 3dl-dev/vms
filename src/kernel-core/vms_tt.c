@@ -1115,12 +1115,17 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 			a.status = SS__ACCVIO;
 			break;
 		}
-		if (vms_tt_write(tt, chunk, k, 0)) {
+		/* a record (VMS_TT_WR_RECORD): the cooked path's new line before
+		 * and carriage return after; the text itself carries no '\n' */
+		if (vms_tt_write(tt, chunk, k, (a.flags & VMS_TT_WR_RECORD) != 0)) {
 			a.status = SS__ABORT;
 			break;
 		}
 		done += k;
 	}
+	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
+	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
+		a.status = SS__ABORT;
 	vms_tt_release(tt);
 out:
 	if (exec_copyout((void *)arg, &a, sizeof(a)))

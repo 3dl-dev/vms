@@ -6,13 +6,6 @@
 # also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
 BC.READ W  # vms-53a: the driver redisplay and REPLY/USER delivery are in; the case SPAWNs @KSBC, and a SPAWNed procedure here produces no output (rd vms-f37)
 ERR.DCL E1  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E3  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E4  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E6  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E7  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E8  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E9  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E10  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 LOGIN.BANNER U  # vms-bd71: LOGINOUT console bytes differ
 LOGIN.BANNER P  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT L  # vms-bd71: LOGINOUT console bytes differ

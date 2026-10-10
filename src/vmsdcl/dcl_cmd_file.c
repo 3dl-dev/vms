@@ -1412,7 +1412,11 @@ static int cmd_directory_list(struct dcl_command *cmd)
          * from the host path — the host round-trip cannot recover the volume
          * root [000000] from the device-root mount and dropped the real device
          * (vms-272). */
-        dcl_directory_header_spec(ctx->default_dir, use_spec,
+        /* a relative directory ([.SUB], [-]) is named as the merged one */
+        dcl_directory_header_spec(ctx->default_dir,
+                                  (use_spec && (use_spec[0] == '[' || use_spec[0] == '<') &&
+                                   (use_spec[1] == '.' || use_spec[1] == '-') && vms_base[0])
+                                      ? vms_base : use_spec,
                                   vms_dir, sizeof(vms_dir));
         if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
 

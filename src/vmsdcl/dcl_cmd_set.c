@@ -214,7 +214,13 @@ static int cmd_set_default(struct dcl_command *cmd)
         strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     } else if (dirspec[0] == '[') {
-        /* Relative spec — prepend current device */
+        /* A relative directory ([.SUB], [-]) is taken from the current
+         * default (rd vms-457); either way the current device is kept */
+        static char merged[256];
+        if ((dirspec[1] == '.' || dirspec[1] == '-') &&
+            dcl_merge_relative_dir(ctx->default_dir, dirspec, merged,
+                                   sizeof merged) == 0)
+            dirspec = merged;
         char device[128] = "";
         const char *colon = strchr(ctx->default_dir, ':');
         if (colon) {
@@ -392,6 +398,8 @@ static int cmd_set_terminal(struct dcl_command *cmd)
         { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
         { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
         { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
+        /* /HARDCOPY is /NOSCOPE, /NOHARDCOPY /SCOPE (DCL Dictionary) */
+        { "SCOPE",         "HARDCOPY",        TT_SCOPE         },
         { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
         { "TAB",           "NOTAB",           TT_TAB           },
         { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },

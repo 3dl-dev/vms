@@ -35,6 +35,12 @@ struct dcl_context;
 int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
                            char *out, size_t outsz);
 
+/* "[.SUB]NAME" / "[-]" / "[-.SIB]" against a default "DEV:[A.B]" ->
+ * "[A.B.SUB]NAME", "[A]", "[A.SIB]" (no device). 0 on success, -1 when it
+ * cannot be merged (rd vms-457). */
+int dcl_merge_relative_dir(const char *defdir, const char *spec, char *out,
+                           size_t outsz);
+
 /* ---- Sequential record READ (TYPE, COPY source) ---- */
 struct dcl_rms_reader;   /* opaque: FAB+RAB over an RMS $OPEN/$CONNECT */
 /* Open `spec` for sequential $GET. On failure returns NULL and sets *rms_status

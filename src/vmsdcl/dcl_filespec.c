@@ -580,6 +580,46 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
 /* Build the effective VMS filespec (device/dir defaulted) DCL hands to RMS.
  * Same defaulting as dcl_resolve_path, but stops at the VMS spec (no Linux
  * path). A Linux-passthrough spec ('/', './', '../') is returned unchanged. */
+/* "[.SUB]NAME" against a default "DEV:[A.B]" -> "[A.B.SUB]NAME"; each "-"
+ * goes up a level. 0 on success, -1 when it cannot be merged. */
+int dcl_merge_relative_dir(const char *defdir, const char *spec,
+                                  char *out, size_t outsz)
+{
+    const char *ob = strpbrk(defdir, "[<");
+    if (!ob) return -1;
+    char close = (*ob == '[') ? ']' : '>';
+    const char *cb = strchr(ob, close);
+    if (!cb) return -1;
+    char base[512];
+    size_t bl = (size_t)(cb - ob - 1);
+    if (bl >= sizeof base) return -1;
+    memcpy(base, ob + 1, bl);
+    base[bl] = '\0';
+
+    char sclose = (spec[0] == '[') ? ']' : '>';
+    const char *se = strchr(spec, sclose);
+    if (!se) return -1;
+    const char *p = spec + 1;
+    while (*p == '-') {
+        char *dot = strrchr(base, '.');
+        if (dot) *dot = '\0';
+        else if (base[0]) base[0] = '\0';
+        else return -1;                      /* above the top */
+        p++;
+    }
+    char rel[512];
+    size_t rl = (size_t)(se - p);
+    if (rl >= sizeof rel) return -1;
+    memcpy(rel, p, rl);
+    rel[rl] = '\0';                          /* ".SUB" or "" */
+    if (rel[0] && rel[0] != '.') return -1;
+    if (!base[0] && rel[0] == '.')
+        memmove(rel, rel + 1, strlen(rel));  /* [-.X] from the top */
+    if (!base[0] && !rel[0]) return -1;
+    snprintf(out, outsz, "[%s%s]%s", base, rel, se + 1);
+    return 0;
+}
+
 int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
                            char *out, size_t outsz)
 {
@@ -603,6 +643,15 @@ int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
             vmsfs_filespec_t dparts;
             memset(&dparts, 0, sizeof(dparts));
             vmsfs_parse_filespec(ctx->default_dir, &dparts);
+            char merged[1024];
+            /* A relative directory -- "[.SUB]", "[-]", "[-.SIB]" -- is taken
+             * from the default directory (rd vms-457: CREATE/DIRECTORY
+             * [.KSPGD] under SYS$LOGIN, keystroke setup A2.SETUP3). */
+            if ((spec[0] == '[' || spec[0] == '<') &&
+                (spec[1] == '.' || spec[1] == '-') &&
+                dcl_merge_relative_dir(ctx->default_dir, spec, merged,
+                                       sizeof merged) == 0)
+                spec = merged;
             if (dparts.has_device && dparts.device[0])
                 snprintf(out, outsz, "%s:%s", dparts.device, spec);
             else { strncpy(out, spec, outsz - 1); out[outsz - 1] = '\0'; }

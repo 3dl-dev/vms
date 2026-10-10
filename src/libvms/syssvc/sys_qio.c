@@ -1399,10 +1399,18 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     }
     case IO$_WRITEVBLK:
     case IO$_WRITELBLK: {
-        /* Output through the class driver, byte for byte (rd vms-f8c). */
-        uint32_t st = (p1 && p2) ? vms_kif_tt_write(ec, p1, p2) : SS$_NORMAL;
+        /* Output through the class driver (rd vms-f8c). P4 is the carriage
+         * control: " " (single space) makes the text one record -- a new line
+         * before it, a carriage return after -- and the IOSB counts those
+         * three bytes too (VAX V7.3 and Alpha V8.4: 12 bytes written, count
+         * 15; semantic oracle TT.WRITE, rd vms-fc4). With IO$M_NOFORMAT, or
+         * no carriage control, the bytes go as they are. */
+        int record = ((p4 & 0xFF) == 0x20) && !(func & IO$M_NOFORMAT);
+        uint32_t st = (p1 && p2) ? (record ? vms_kif_tt_write_record(ec, p1, p2)
+                                           : vms_kif_tt_write(ec, p1, p2))
+                                 : SS$_NORMAL;
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
-        tt_iosb(iosb_ptr, SS$_NORMAL, (uint16_t)p2, 0, 0);
+        tt_iosb(iosb_ptr, SS$_NORMAL, (uint16_t)(p2 + (record && p2 ? 3 : 0)), 0, 0);
         break;
     }
     case IO$_ACCESS:

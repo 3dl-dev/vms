@@ -1,0 +1,35 @@
+# keystroke oracle transcript (unmasked) -- case Q.SETDEF (OpenVMS VAX V7.3 OPA0:)
+# probe: SET DEFAULT validation
+# case-sha256 6130d5afca6c05814ae12864cc62ba2cb3afe417c9f36b0d84ce91a6f0a2f516
+@start loggedin OK
+=== STEP A
+| SET DEFAULT [.NONEXISTENT_QWERTY_DIR]<CR><LF>
+| <CR><NUL>$ 
+=== STEP B
+| SHOW DEFAULT<CR><LF>
+| <CR>  SYS$SYSROOT:[SYSMGR.NONEXISTENT_QWERTY_DIR]<CR><LF>
+| %DCL-I-INVDEF, SYS$SYSROOT:[SYSMGR.NONEXISTENT_QWERTY_DIR] does not exist<CR><LF>
+| <CR><NUL>$ 
+=== STEP C
+| SET DEFAULT NOSUCHDEV:[X]<CR><LF>
+| <CR><NUL>$ 
+=== STEP D
+| SHOW DEFAULT<CR><LF>
+| <CR>  NOSUCHDEV:[X]<CR><LF>
+| %DCL-I-INVDEF, NOSUCHDEV:[X] does not exist<CR><LF>
+| <CR><NUL>$ 
+=== STEP E
+| SET DEFAULT SYS$LOGIN<CR><LF>
+| <CR><NUL>$ 
+=== STEP F
+| SET DEFAULT [A.B.C.D.E.F.G.H.I]<CR><LF>
+| <CR>%RMS-F-DIR, error in directory name<CR><LF>
+| <CR><NUL>$ 
+=== STEP G
+| SET DEFAULT [<CR><LF>
+| <CR>%DCL-W-DIRECT, invalid directory syntax - check brackets and other delimiters<CR><LF>
+|  \[\<CR><LF>
+| <CR><NUL>$ 
+=== STEP H
+| SET DEFAULT SYS$LOGIN<CR><LF>
+| <CR><NUL>$ 

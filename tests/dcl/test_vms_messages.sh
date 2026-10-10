@@ -48,7 +48,7 @@ assert_ident() {
     local desc="$1"
     local expected="$2"
     local output="$3"
-    if echo "$output" | grep -qF "$expected"; then
+    if echo "$output" | grep -qF -- "$expected"; then
         # Echo the actual raw VMS-format line (not just our own summary
         # prose) so the file-level EXPECT regex above -- which checks the
         # real %FACILITY-SEV-IDENT, comma-terminated shape -- has genuine
@@ -72,11 +72,15 @@ output=$(echo "SHOW" | $VMSDCL 2>&1)
 check_vms_format "show no keyword" "$output"
 assert_ident "show no keyword" "%DCL-E-NOKEYW" "$output"
 
-# Test 3: SET DEFAULT to invalid dir -> %DCL-E-DIRECT (dcl_cmd_set.c
-# cmd_set_default: stat() fails or isn't a dir -> dcl_error("DCL",2,"DIRECT",...))
-output=$(echo "SET DEFAULT [.NONEXISTENT_QWERTY_DIR]" | $VMSDCL 2>&1)
-check_vms_format "set default invalid" "$output"
-assert_ident "set default invalid" "%DCL-E-DIRECT" "$output"
+# Test 3: SET DEFAULT with bad directory SYNTAX -> %DCL-W-DIRECT; a directory
+# that merely does not exist is accepted, and SHOW DEFAULT says
+# %DCL-I-INVDEF (VAX V7.3 probe Q.SETDEF; dcl_cmd_set.c, rd vms-c174)
+output=$(echo "SET DEFAULT [" | $VMSDCL 2>&1)
+check_vms_format "set default bad syntax" "$output"
+assert_ident "set default bad syntax" "%DCL-W-DIRECT, invalid directory syntax" "$output"
+output=$(printf 'SET DEFAULT [.NONEXISTENT_QWERTY_DIR]\nSHOW DEFAULT\n' | $VMSDCL 2>&1)
+check_vms_format "set default nonexistent" "$output"
+assert_ident "set default nonexistent" "%DCL-I-INVDEF" "$output"
 
 # Test 4: DELETE nonexistent file -> %RMS-E-FNF (dcl_cmd_file.c cmd_delete).
 # An explicit version is required (vms-1c6); with one, a missing file is FNF.
@@ -84,10 +88,12 @@ output=$(echo "DELETE NONEXISTENT_FILE_QWERTY.TXT;1" | $VMSDCL 2>&1)
 check_vms_format "delete nonexistent" "$output"
 assert_ident "delete nonexistent" "%RMS-E-FNF" "$output"
 
-# Test 5: TYPE nonexistent file -> %RMS-E-FNF (dcl_cmd_file.c cmd_type)
+# Test 5: TYPE nonexistent file -> %TYPE-W-SEARCHFAIL then -RMS-E-FNF, as VAX
+# V7.3 says it (keystroke ERR.DCL E4; dcl_cmd_file.c cmd_type, rd vms-c174)
 output=$(echo "TYPE NONEXISTENT_FILE_QWERTY.TXT" | $VMSDCL 2>&1)
 check_vms_format "type nonexistent" "$output"
-assert_ident "type nonexistent" "%RMS-E-FNF" "$output"
+assert_ident "type nonexistent" "%TYPE-W-SEARCHFAIL, error searching for" "$output"
+assert_ident "type nonexistent reason" "-RMS-E-FNF, file not found" "$output"
 
 # Test 6: RENAME nonexistent file -> %RMS-E-RNF (dcl_cmd_file.c cmd_rename)
 output=$(echo "RENAME NONEXISTENT_FILE_QWERTY.TXT NEW_QWERTY.TXT" | $VMSDCL 2>&1)

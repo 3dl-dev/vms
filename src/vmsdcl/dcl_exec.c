@@ -71,6 +71,10 @@ typedef struct {
  * assignment does not happen and $STATUS carries the function's error). */
 static uint32_t eval_fail_status;
 
+/* CLI$_EXPSYN "invalid expression syntax", a warning (message catalog
+ * 0x00038038, docs/oracle/messages/alpha84-msgcat2.txt). */
+#define DCL_CLI_EXPSYN 0x00038038u
+
 static void ep_skip_ws(expr_parser_t *ep)
 {
     while (ep->pos < ep->len &&
@@ -446,7 +450,11 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         return make_str(word);
     }
 
-    /* Anything else: return 0/empty */
+    /* Anything else -- the end of the line or an operator where an operand
+     * belongs ("X = 1 +"): invalid expression syntax, as VMS says (keystroke
+     * ERR.DCL E9: %DCL-W-EXPSYN; CLI status %X00038038) -- rd vms-c174. */
+    if (!eval_fail_status)
+        eval_fail_status = DCL_CLI_EXPSYN;
     return make_int(0);
 }
 
@@ -584,6 +592,14 @@ static void eval_expr(struct dcl_context *ctx, const char *expr,
  *   - integer forms -> rendered as their decimal text.
  * Do NOT reimplement expression handling in callers — call this. (vms-65f)
  */
+/* The failure status of the last dcl_eval_expr_string, 0 if it succeeded
+ * (a lexical function that refused its arguments, EXPSYN) -- so a caller
+ * like WRITE can stop instead of writing an empty record (rd vms-c174). */
+uint32_t dcl_eval_last_failure(void)
+{
+    return eval_fail_status;
+}
+
 void dcl_eval_expr_string(struct dcl_context *ctx, const char *expr,
                           char *out, size_t outlen)
 {
@@ -1162,6 +1178,12 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             /* Expression evaluation (arithmetic or string ops) */
             expr_val_t result;
             eval_expr(ctx, trimmed, &result);
+            if (eval_fail_status == DCL_CLI_EXPSYN) {
+                /* the symbol is left as it was, as on VMS */
+                dcl_error("DCL", 0, "EXPSYN",
+                          "invalid expression syntax - check operators and operands");
+                return (int)eval_fail_status;
+            }
             if (eval_fail_status) {
                 dcl_sym_set(cmd->verb, "", scope);
                 return (int)eval_fail_status;

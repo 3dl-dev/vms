@@ -204,7 +204,15 @@ static int cmd_show_acl(struct dcl_command *cmd)
 
 static int cmd_show_time(struct dcl_command *cmd)
 {
-    (void)cmd;
+    /* SHOW TIME takes no qualifiers: VMS says so and shows the first one
+     * (keystroke ERR.DCL E3, VAX V7.3: %DCL-W-NOQUAL ... \BAD\), with the CLI
+     * status %X000380C8 (message catalog NOQUAL) -- rd vms-c174. */
+    if (cmd->qualifier_count > 0) {
+        dcl_error("DCL", 0, "NOQUAL",
+                  "qualifiers not allowed - supply only verb and parameters\n \\%s\\",
+                  cmd->qualifiers[0].name);
+        return 0x000380C8;
+    }
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
@@ -227,6 +235,14 @@ static int cmd_show_default(struct dcl_command *cmd)
     struct dcl_context *ctx = dcl_get_context();
 
     printf("  %s\n", ctx->default_dir);
+    {
+        /* the default need not exist (SET DEFAULT does not check); SHOW
+         * DEFAULT says when it does not (VAX V7.3 probe Q.SETDEF:
+         * %DCL-I-INVDEF, NOSUCHDEV:[X] does not exist) -- rd vms-c174 */
+        extern int set_default_dir_exists(struct dcl_context *, const char *);
+        if (!set_default_dir_exists(ctx, ctx->default_dir))
+            dcl_error("DCL", 3, "INVDEF", "%s does not exist", ctx->default_dir);
+    }
 
     return SS$_NORMAL;
 }

@@ -37,3 +37,4 @@ out-of-band handling in `src/kernel-core/vms_tt.c` and DCL:
 - `Q.CTRLT`: the lab node's `SYLOGIN.COM` turns CTRL/T on (`SET CONTROL=T`), as VMS's site template
   does. That is why the ratchet's `OOB.PROMPT T` shows a status line before the case enables
   CTRL/T itself. With `SET NOCONTROL=T`, CTRL/T shows nothing and does not end the read.
+- `Q.SETDEF` (rd vms-c174) shows that SET DEFAULT never checks whether the directory or device exists. SHOW DEFAULT then reports `%DCL-I-INVDEF, ... does not exist`. SET DEFAULT refuses only bad syntax: unbalanced brackets give `%DCL-W-DIRECT`, and more than eight levels gives `%RMS-F-DIR`.

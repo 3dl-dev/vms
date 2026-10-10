@@ -1593,8 +1593,16 @@ int cmd_type(struct dcl_command *cmd)
                 return SS$_NORMAL;
             }
         }
-        dcl_error("RMS", 2, "FNF",
-                  "file not found - %s", cmd->params[0]);
+        {
+            /* as VMS says it (keystroke ERR.DCL E4): the search failed, and
+             * why, on its own line -- rd vms-c174 */
+            extern void dcl_message_spec(struct dcl_context *, const char *,
+                                         const char *, char *, size_t);
+            char full[1100];
+            dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
+            dcl_error("TYPE", 0, "SEARCHFAIL", "error searching for %s", full);
+            fprintf(stderr, "-RMS-E-FNF, file not found\n");
+        }
         return SS$_NOSUCHFILE;
     }
 

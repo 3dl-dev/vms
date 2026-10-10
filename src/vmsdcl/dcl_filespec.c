@@ -614,6 +614,29 @@ int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
     return 0;
 }
 
+/* The spec as VMS names it in a "not found" message: device and directory
+ * defaulted, `deftype` supplied when the name has no type, and an empty
+ * version (keystroke ERR.DCL E4/E7, VAX V7.3: "<DEV:[DIR]>NOSUCH.TXT;",
+ * "<DEV:[DIR]>NOSUCH.COM;") -- rd vms-c174. */
+void dcl_message_spec(struct dcl_context *ctx, const char *spec, const char *deftype,
+                      char *out, size_t outsz)
+{
+    char eff[1024];
+    const char *name;
+
+    if (dcl_rms_effective_spec(ctx, spec, eff, sizeof eff) != 0) {
+        snprintf(out, outsz, "%s", spec);
+        return;
+    }
+    name = strrchr(eff, ']');
+    name = name ? name + 1 : (strrchr(eff, ':') ? strrchr(eff, ':') + 1 : eff);
+    for (char *q = eff; *q; q++)
+        *q = (char)toupper((unsigned char)*q);
+    snprintf(out, outsz, "%s%s%s", eff,
+             (deftype && !strchr(name, '.')) ? deftype : "",
+             strchr(name, ';') ? "" : ";");
+}
+
 /* ---- Sequential record READ (TYPE, COPY source) ---- */
 
 struct dcl_rms_reader {

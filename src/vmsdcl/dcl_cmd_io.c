@@ -784,6 +784,11 @@ static void write_eval_arglist(struct dcl_context *ctx, const char *arglist,
         val[0] = '\0';
         if (*s)
             dcl_eval_expr_string(ctx, s, val, sizeof(val));
+            {
+                extern uint32_t dcl_eval_last_failure(void);
+                if (dcl_eval_last_failure())
+                    return;            /* the caller sees it and writes nothing */
+            }
 
         size_t vl = strlen(val);
         if (used + vl >= outlen) vl = (outlen > used) ? (outlen - used - 1) : 0;
@@ -823,7 +828,19 @@ int cmd_write(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    if (cmd->param_count < 2) {
+    char prompted[DCL_MAX_VALUE];
+    int have_prompted = 0;
+    if (cmd->param_count == 1 && isatty(STDIN_FILENO)) {
+        /* A required parameter left off at the terminal: DCL asks for it
+         * (keystroke ERR.DCL E6, VAX V7.3: "<CR>_Expression: "); ^Z there
+         * ends the command (E6Z) -- rd vms-c174. */
+        int n = dcl_tt_read("\r\n_Expression: ", 15, prompted, sizeof prompted, 0, 0, NULL);
+        if (n == DCL_TT_EOF || n == DCL_TT_INTR || n == DCL_TT_GONE)
+            return SS$_NORMAL;
+        if (n >= 0)
+            have_prompted = 1;
+    }
+    if (cmd->param_count < 2 && !have_prompted) {
         dcl_error("DCL", 2, "NOKEYW",
                   "missing channel name and/or text");
         return SS$_BADPARAM;
@@ -842,9 +859,14 @@ int cmd_write(struct dcl_command *cmd)
      * F$GETSYI("VERSION") (vms-65f): the old path pushed the tokenized params[]
      * out verbatim and never routed them through the evaluator. */
     char text[DCL_MAX_VALUE];
-    const char *arglist = write_arg_tail(cmd->raw_tail);
+    const char *arglist = have_prompted ? prompted : write_arg_tail(cmd->raw_tail);
     if (arglist) {
+        extern uint32_t dcl_eval_last_failure(void);
         write_eval_arglist(ctx, arglist, text, sizeof(text));
+        /* an expression that failed (its message is out) writes nothing
+         * (keystroke ERR.DCL E10) */
+        if (dcl_eval_last_failure())
+            return (int)dcl_eval_last_failure();
     } else {
         /* No raw tail available (e.g. a synthesized command that only set
          * params[]): fall back to the tokenized params, resolving a bare word

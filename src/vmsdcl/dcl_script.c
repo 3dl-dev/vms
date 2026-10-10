@@ -472,8 +472,14 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     }
 
     if (!fp) {
-        dcl_error("DCL", 2, "OPENIN",
-                  "error opening %s as input", spec);
+        /* keystroke ERR.DCL E7, VAX V7.3: the full spec, default type .COM,
+         * and the RMS reason on its own line -- rd vms-c174 */
+        extern void dcl_message_spec(struct dcl_context *, const char *,
+                                     const char *, char *, size_t);
+        char full[1100];
+        dcl_message_spec(ctx, spec, ".COM", full, sizeof full);
+        dcl_error("DCL", 2, "OPENIN", "error opening %s as input", full);
+        fprintf(stderr, "-RMS-E-FNF, file not found\n");
         return SS$_NOSUCHFILE;
     }
 

@@ -105,7 +105,7 @@ static uint64_t enforced_privs_held(void)
  * name is accepted (resolution is deferred, as on VMS). Returns 1 if the
  * default may be set, 0 if the directory is genuinely absent.
  */
-static int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
+int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
 {
     /* Executive-absent defer (vms-5f0): with no /dev/vms (host ctest / self-host
      * container) the ".DIR-file" ACP model below cannot see a directory that
@@ -180,12 +180,30 @@ static int cmd_set_default(struct dcl_command *cmd)
 
     const char *dirspec = cmd->params[1];
 
-    /* vms-481: the authoritative existence check is the ACP (the real MFD/ODS-2
-     * directory), not stat() on the /vms passthrough. Fail-honest: an absent
-     * directory (or no ACP-mounted SYS$DISK) => %SET-E-... invalid directory. */
-    if (!set_default_dir_exists(ctx, dirspec)) {
-        dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
-        return SS$_NOSUCHFILE;
+    /* SET DEFAULT DOES NOT CHECK THAT THE DIRECTORY EXISTS. VMS takes any
+     * well-formed directory -- on a device that does not exist, a directory
+     * that does not exist -- and only SHOW DEFAULT says so (%DCL-I-INVDEF);
+     * what it refuses is bad SYNTAX: unbalanced brackets (%DCL-W-DIRECT) and
+     * more than eight directory levels (%RMS-F-DIR). VAX V7.3 probe Q.SETDEF
+     * (docs/oracle/keystroke-probes/), keystroke ERR.DCL E8 -- rd vms-c174. */
+    {
+        int depth = 0, open_b = 0, levels = 1;
+        for (const char *q = dirspec; *q; q++) {
+            if (*q == '[' || *q == '<') { depth++; open_b = 1; }
+            else if (*q == ']' || *q == '>') depth--;
+            else if (*q == '.' && depth > 0) levels++;
+            if (depth < 0 || depth > 1) break;
+        }
+        if (depth != 0) {
+            dcl_error("DCL", 0, "DIRECT",
+                      "invalid directory syntax - check brackets and other delimiters\n \\%s\\",
+                      dirspec);
+            return 0x00038030;              /* CLI$_DIRECT */
+        }
+        if (open_b && levels > 8) {
+            dcl_error("RMS", 4, "DIR", "error in directory name");
+            return RMS$_DIR;
+        }
     }
 
     /* Store the VMS dirspec directly — don't round-trip through Linux.

@@ -1,0 +1,722 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/vaxlab-3/vax1/vax.ini-1> attach nvr /lab/k8s-labs/vaxlab-3/vax1/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/vaxlab-3/vax1/vax.ini-18> attach rq0 /lab/k8s-labs/vaxlab-3/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/vaxlab-3/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vaxlab-3/vax1/vax.ini-19> attach rq1 /lab/k8s-labs/vaxlab-3/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/vaxlab-3/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vaxlab-3/vax1/vax.ini-20> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/vaxlab-3/vax1/vax.ini-21> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/vaxlab-3/vax1/local.ini-2> at xq tap:tap1
+%SIM-INFO: Eth: opened OS device tap1
+/lab/k8s-labs/vaxlab-3/vax1/local.ini-4> att dz 2001,speed=*32
+%SIM-INFO: Listening on port 2001
+/lab/k8s-labs/vaxlab-3/vax1/vax.ini-25> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..
+
+?53 2 0A FF 00 0000
+
+P1=00000002  P2=00000028  P3=0000270D  P4=00D40077  P5=00000000
+P6=FFFFFFFF  P7=00000000  P8=00000000  P9=00000000 P10=20051CE0
+r0=00000000  r1=20140110  r2=A1986F54  r3=0003005E  r4=A1986F5E
+r5=2004E8F9  r6=00018678  r7=000186C8  r8=0001ADAD ERF=80000000
+30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Normal operation not possible.
+
+>>>^U
+>>>B DUA0
+[drv:boot-echo-verified attempt 1 'B DUA0']
+
+(BOOT/R5:0 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAX1
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 10-OCT-2026 17:15:53.43
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.67  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.67  %%%%%%%%%%%
+Operator status for operator _VAX1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.69  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX1$OPA0:
+Logfile is VAX1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;46
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.69  %%%%%%%%%%%
+Operator status for operator VAX1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;46
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.70  %%%%%%%%%%%
+17:15:47.78 Node VAX1 (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.70  %%%%%%%%%%%
+17:15:47.78 Node VAX1 (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.70  %%%%%%%%%%%
+17:15:47.78 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:58.70  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.08  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.08  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.11  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.11  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.12  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.12  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.13  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.13  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.29  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.65  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:15:59.67)
+Message from user INTERnet on VAX2
+INTERnet Started
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.66  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:15:59.67)
+Message from user INTERnet on VAX2
+INTERnet ACP Created INTERnet interface: QE0
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:15:59.75  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:15:59.77)
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.08  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.42  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server starting up
+Event time:               10-OCT-2026 17:16:00.37
+PID:                      20200204        
+Username:                 SYSTEM          
+
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+%RUN-S-PROC_ID, identification of created process is 20200214
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.85  %%%%%%%%%%%
+Message from user DECNET on VAX1
+DECnet starting
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.95  %%%%%%%%%%%
+Message from user DECNET on VAX1
+Error opening permanent proxy database
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.97  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:16:00.97)
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:00.97  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:16:00.97)
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:01.39  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:16:01.37)
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20200216
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at 10-OCT-2026 17:16:04.06
+%TCPIP-I-NORMAL, timezone information verified
+%RUN-S-PROC_ID, identification of created process is 20200217
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:04.54  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+%TCPIP-I-SETLOCAL, setting domain and/or local host
+%TCPIP-I-STARTCOMM, starting communication
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.73  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet Started
+
+%TCPIP-I-SETPROTP, setting protocol parameters
+%TCPIP-I-DEFINTE, defining interfaces
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.74  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+%TCPIP-I-STARTNAME, starting name service
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.82  %%%%%%%%%%%
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1), 10-OCT-2026 17:16:02.59
+Circuit QNA-0
+
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:05.88  %%%%%%%%%%%
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-I-LOADSERV, loading TCPIP server proxy information
+%TCPIP-I-SERVLOADED, auxiliary server loaded with 0 proxy records
+-TCPIP-I-SERVSKIP, skipped 0 communication proxy records
+-TCPIP-I-SERVTOTAL, total of 0 proxy records read
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:07.32  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:07.32  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%TCPIP-S-STARTDONE, TCPIP$FTP startup completed
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:07.77  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-S-STARTDONE, TCPIP$TELNET startup completed
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at 10-OCT-2026 17:16:07.89
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX1)
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+  SYSTEM       job terminated at 10-OCT-2026 17:16:12.25
+
+  Accounting information:
+  Buffered I/O count:            2720         Peak working set size:    1558
+  Direct I/O count:               967         Peak page file size:      8712
+  Page faults:                  16238         Mounted volumes:             0
+  Charged CPU time:           0 00:00:00.91   Elapsed time:     0 00:00:18.90
+
+VAX/VMS V7.3      node VAX1
+
+Username: SET TERMINAL/PAGE=0/WIDTH=132
+Too many parameters - reenter command with fewer parameters
+ \TERMINAL\
+Username: 
+Error reading command input
+Timeout period expired
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:16:52.86  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:               10-OCT-2026 17:16:52.86
+PID:                      2020021A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+
+VAX/VMS V7.3      node VAX1
+
+Username: SHOW DEVICE $2$DUA1:
+Too many parameters - reenter command with fewer parameters
+ \DEVICE\
+Username: 
+Username: 
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1
+    Last interactive login on Saturday, 10-OCT-2026 17:16
+    Last non-interactive login on Friday,  9-OCT-2026 01:34[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=2 N=2 LDW=0
+$ DEFINE/SYSTEM EVAC$DATA $2$DUA1:[EVAC]
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX1)  Mounted              0  VAX1DATA       2829693     1   2
+$ EVACWL :== $$2$DUA1:[EVAC]EVACWL.EXE
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:19:34.01  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:19:34.02)
+17:19:34.02 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:19:34.01  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:19:34.03)
+17:19:34.02 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:19:34.05  %%%%%%%%%%%    (from node VAX2   at 10-OCT-2026 17:19:34.08)
+17:19:34.07 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")," LDW=",F$GETSYI(
+"LOCKDIRWT")
+Q=2 V=3 N=3 LDW=0
+$ DISMOUNT/CLUSTER $2$DUA1:
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-GPTFULL, global page table is full
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-DEVOFFLINE, device is not in configuration or not available
+%DISM-W-DSMCLUFAIL, dismount/cluster failed on one or more nodes in the cluster
+$ MOUNT/CLUSTER $2$DUA1: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX1)
+%MOUNT-W-RMTMNTFAIL, _$2$DUA1: failed to mount on node OVMXE
+-JBC-W-ACCVIO, access violation, reason mask=CC, virtual address=000278B4, PC=00000000, PSL=00000000
+$ DELETE $2$DUA1:[EVAC]EVAC.DAT;*
+%DELETE-W-FILNOTDEL, error deleting $2$DUA1:[EVAC]EVAC.DAT;1
+-RMS-E-MKD, ACP could not mark file for deletion
+-SYSTEM-W-BADFILEHDR, bad file header
+$ SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL
+%DCL-S-SPAWNED, process EVACVAX1 spawned
+$ TYPE $2$DUA1:[EVAC]EVAC.DAT
+VAX1             538968604         110-OCT-2026 17:23:09.19     
+VAX1             538968604         210-OCT-2026 17:23:10.19     
+VAX1             538968604         310-OCT-2026 17:23:11.19     
+VAX1             538968604         410-OCT-2026 17:23:12.19     
+VAX1             538968604         510-OCT-2026 17:23:13.19     
+VAX1             538968604         610-OCT-2026 17:23:14.19     
+VAX1             538968604         710-OCT-2026 17:23:15.19     
+VAX1             538968604         810-OCT-2026 17:23:16.19     
+VAX1             538968604         910-OCT-2026 17:23:17.19     
+VAX1             538968604        1010-OCT-2026 17:23:18.19     
+VAX1             538968604        1110-OCT-2026 17:23:19.19     
+VAX1             538968604        1210-OCT-2026 17:23:20.19     
+VAX1             538968604        1310-OCT-2026 17:23:21.19     
+VAX1             538968604        1410-OCT-2026 17:23:22.19     
+VAX1             538968604        1510-OCT-2026 17:23:23.19     
+VAX1             538968604        1610-OCT-2026 17:23:24.19     
+VAX1             538968604        1710-OCT-2026 17:23:25.19     
+VAX1             538968604        1810-OCT-2026 17:23:26.19     
+VAX1             538968604        1910-OCT-2026 17:23:27.19     
+VAX1             538968604        2010-OCT-2026 17:23:28.19     
+VAX1             538968604        2110-OCT-2026 17:23:29.19     
+VAX1             538968604        2210-OCT-2026 17:23:30.19     
+VAX1             538968604        2310-OCT-2026 17:23:31.19     
+VAX1             538968604        2410-OCT-2026 17:23:32.19     
+VAX1             538968604        2510-OCT-2026 17:23:33.19     
+VAX1             538968604        2610-OCT-2026 17:23:34.19     
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=EVAC$WORKLOAD
+Address of RSB:  879CF5C0  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010003                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      524F5724 43415645   EVAC$WOR  Valblk: 00000000 00000000
+ Length   13   00000044 414F4C4B   KLOAD...          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ Group   001   00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 030003AC  EX 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX1  10-OCT-2026 17:25:45.07  Uptime  0 00:11:12
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20200201 SWAPPER         HIB     16        0   0 00:00:00.00         0      0   
+20200206 CLUSTER_SERVER  HIB     14       28   0 00:00:00.02       263    513   
+20200207 CONFIGURE       HIB     10       12   0 00:00:00.00       129    205   
+20200208 LANACP          HIB     13       59   0 00:00:00.01       420    516   
+2020020A IPCACP          HIB     10        7   0 00:00:00.00        96    183   
+2020020B ERRFMT          HIB      8       39   0 00:00:00.00       133    211   
+2020020C CACHE_SERVER    HIB     16        6   0 00:00:00.00        82    141   
+2020020D OPCOM           HIB      7      109   0 00:00:00.03       295    142   
+2020020E AUDIT_SERVER    HIB      9       48   0 00:00:00.00       574    516   
+2020020F JOB_CONTROL     HIB     10       33   0 00:00:00.00       216    402   
+20200210 QUEUE_MANAGER   HIB     10       51   0 00:00:00.00       690   1092   
+20200211 SECURITY_SERVER HIB     10       23   0 00:00:00.00       797   1028   
+20200212 SMISERVER       HIB      9       36   0 00:00:00.05       333    596   
+20200213 TP_SERVER       HIB      8       47   0 00:00:00.02       203    323   
+20200214 NETACP          HIB     10       29   0 00:00:00.09       161    378   
+20200215 EVL             HIB      6       55   0 00:00:00.03       409    507  N
+20200216 REMACP          HIB      8        8   0 00:00:00.00        85     62   
+20200217 TCPIP$INETACP   HIB     10       47   0 00:00:00.00       293    229   
+20200218 TCPIP$FTP_1     LEF     10      103   0 00:00:00.09      2151    662  N
+2020021B SYSTEM          CUR      7      474   0 00:00:00.10      7915    362   
+2020021C EVACVAX1        HIB      5      538   0 00:00:00.03       286    291  S
+$ TYPE $2$DUA1:[EVAC]EVAC.DAT
+VAX1             538968604         110-OCT-2026 17:23:09.19     
+VAX1             538968604         210-OCT-2026 17:23:10.19     
+VAX1             538968604         310-OCT-2026 17:23:11.19     
+VAX1             538968604         410-OCT-2026 17:23:12.19     
+VAX1             538968604         510-OCT-2026 17:23:13.19     
+VAX1             538968604         610-OCT-2026 17:23:14.19     
+VAX1             538968604         710-OCT-2026 17:23:15.19     
+VAX1             538968604         810-OCT-2026 17:23:16.19     
+VAX1             538968604         910-OCT-2026 17:23:17.19     
+VAX1             538968604        1010-OCT-2026 17:23:18.19     
+VAX1             538968604        1110-OCT-2026 17:23:19.19     
+VAX1             538968604        1210-OCT-2026 17:23:20.19     
+VAX1             538968604        1310-OCT-2026 17:23:21.19     
+VAX1             538968604        1410-OCT-2026 17:23:22.19     
+VAX1             538968604        1510-OCT-2026 17:23:23.19     
+VAX1             538968604        1610-OCT-2026 17:23:24.19     
+VAX1             538968604        1710-OCT-2026 17:23:25.19     
+VAX1             538968604        1810-OCT-2026 17:23:26.19     
+VAX1             538968604        1910-OCT-2026 17:23:27.19     
+VAX1             538968604        2010-OCT-2026 17:23:28.19     
+VAX1             538968604        2110-OCT-2026 17:23:29.19     
+VAX1             538968604        2210-OCT-2026 17:23:30.19     
+VAX1             538968604        2310-OCT-2026 17:23:31.19     
+VAX1             538968604        2410-OCT-2026 17:23:32.19     
+VAX1             538968604        2510-OCT-2026 17:23:33.19     
+VAX1             538968604        2610-OCT-2026 17:23:34.19     
+VAX1             538968604        2710-OCT-2026 17:23:35.19     
+VAX1             538968604        2810-OCT-2026 17:23:36.19     
+VAX1             538968604        2910-OCT-2026 17:23:37.19     
+VAX1             538968604        3010-OCT-2026 17:23:38.19     
+VAX1             538968604        3110-OCT-2026 17:23:39.19     
+VAX1             538968604        3210-OCT-2026 17:23:40.19     
+VAX1             538968604        3310-OCT-2026 17:23:41.19     
+VAX1             538968604        3410-OCT-2026 17:23:42.19     
+VAX1             538968604        3510-OCT-2026 17:23:43.19     
+VAX1             538968604        3610-OCT-2026 17:23:44.19     
+VAX1             538968604        3710-OCT-2026 17:23:45.19     
+VAX1             538968604        3810-OCT-2026 17:23:46.19     
+VAX1             538968604        3910-OCT-2026 17:23:47.19     
+VAX1             538968604        4010-OCT-2026 17:23:48.19     
+VAX1             538968604        4110-OCT-2026 17:23:49.19     
+VAX1             538968604        4210-OCT-2026 17:23:50.19     
+VAX1             538968604        4310-OCT-2026 17:23:51.19     
+VAX1             538968604        4410-OCT-2026 17:23:52.19     
+VAX1             538968604        4510-OCT-2026 17:23:53.19     
+VAX1             538968604        4610-OCT-2026 17:23:54.19     
+VAX1             538968604        4710-OCT-2026 17:23:55.19     
+VAX1             538968604        4810-OCT-2026 17:23:56.19     
+VAX1             538968604        4910-OCT-2026 17:23:57.19     
+VAX1             538968604        5010-OCT-2026 17:23:58.19     
+VAX1             538968604        5110-OCT-2026 17:23:59.19     
+VAX1             538968604        5210-OCT-2026 17:24:00.19     
+VAX1             538968604        5310-OCT-2026 17:24:01.19     
+VAX1             538968604        5410-OCT-2026 17:24:02.19     
+VAX1             538968604        5510-OCT-2026 17:24:03.19     
+VAX1             538968604        5610-OCT-2026 17:24:04.19     
+VAX1             538968604        5710-OCT-2026 17:24:05.19     
+VAX1             538968604        5810-OCT-2026 17:24:06.19     
+VAX1             538968604        5910-OCT-2026 17:24:07.19     
+VAX1             538968604        6010-OCT-2026 17:24:08.19     
+VAX1             538968604        6110-OCT-2026 17:24:09.19     
+VAX1             538968604        6210-OCT-2026 17:24:10.19     
+VAX1             538968604        6310-OCT-2026 17:24:11.19     
+VAX1             538968604        6410-OCT-2026 17:24:12.19     
+VAX1             538968604        6510-OCT-2026 17:24:13.19     
+VAX1             538968604        6610-OCT-2026 17:24:14.19     
+VAX1             538968604        6710-OCT-2026 17:24:15.19     
+VAX1             538968604        6810-OCT-2026 17:24:16.19     
+VAX1             538968604        6910-OCT-2026 17:24:17.19     
+VAX1             538968604        7010-OCT-2026 17:24:18.19     
+VAX1             538968604        7110-OCT-2026 17:24:19.19     
+VAX1             538968604        7210-OCT-2026 17:24:20.19     
+VAX1             538968604        7310-OCT-2026 17:24:21.19     
+VAX1             538968604        7410-OCT-2026 17:24:22.19     
+VAX1             538968604        7510-OCT-2026 17:24:23.19     
+VAX1             538968604        7610-OCT-2026 17:24:24.19     
+VAX1             538968604        7710-OCT-2026 17:24:25.19     
+VAX1             538968604        7810-OCT-2026 17:24:26.19     
+VAX1             538968604        7910-OCT-2026 17:24:27.19     
+VAX1             538968604        8010-OCT-2026 17:24:28.19     
+VAX1             538968604        8110-OCT-2026 17:24:29.19     
+VAX1             538968604        8210-OCT-2026 17:24:30.19     
+VAX1             538968604        8310-OCT-2026 17:24:31.19     
+VAX1             538968604        8410-OCT-2026 17:24:32.19     
+VAX1             538968604        8510-OCT-2026 17:24:33.19     
+VAX1             538968604        8610-OCT-2026 17:24:34.19     
+VAX1             538968604        8710-OCT-2026 17:24:35.19     
+VAX1             538968604        8810-OCT-2026 17:24:36.19     
+VAX1             538968604        8910-OCT-2026 17:24:37.19     
+VAX1             538968604        9010-OCT-2026 17:24:38.19     
+VAX1             538968604        9110-OCT-2026 17:24:39.19     
+VAX1             538968604        9210-OCT-2026 17:24:40.19     
+VAX1             538968604        9310-OCT-2026 17:24:41.19     
+VAX1             538968604        9410-OCT-2026 17:24:42.19     
+VAX1             538968604        9510-OCT-2026 17:24:43.19     
+VAX1             538968604        9610-OCT-2026 17:24:44.19     
+VAX1             538968604        9710-OCT-2026 17:24:45.19     
+VAX1             538968604        9810-OCT-2026 17:24:46.19     
+VAX1             538968604        9910-OCT-2026 17:24:47.19     
+VAX1             538968604       10010-OCT-2026 17:24:48.19     
+VAX1             538968604       10110-OCT-2026 17:24:49.19     
+VAX1             538968604       10210-OCT-2026 17:24:50.19     
+VAX1             538968604       10310-OCT-2026 17:24:51.19     
+VAX1             538968604       10410-OCT-2026 17:24:52.19     
+VAX1             538968604       10510-OCT-2026 17:24:53.19     
+VAX1             538968604       10610-OCT-2026 17:24:54.19     
+VAX1             538968604       10710-OCT-2026 17:24:55.19     
+VAX1             538968604       10810-OCT-2026 17:24:56.19     
+VAX1             538968604       10910-OCT-2026 17:24:57.19     
+VAX1             538968604       11010-OCT-2026 17:24:58.19     
+VAX1             538968604       11110-OCT-2026 17:24:59.19     
+VAX1             538968604       11210-OCT-2026 17:25:00.19     
+VAX1             538968604       11310-OCT-2026 17:25:01.19     
+VAX1             538968604       11410-OCT-2026 17:25:02.19     
+VAX1             538968604       11510-OCT-2026 17:25:03.19     
+VAX1             538968604       11610-OCT-2026 17:25:04.19     
+VAX1             538968604       11710-OCT-2026 17:25:05.19     
+VAX1             538968604       11810-OCT-2026 17:25:06.19     
+VAX1             538968604       11910-OCT-2026 17:25:07.19     
+VAX1             538968604       12010-OCT-2026 17:25:08.19     
+VAX1             538968604       12110-OCT-2026 17:25:09.19     
+VAX1             538968604       12210-OCT-2026 17:25:10.19     
+VAX1             538968604       12310-OCT-2026 17:25:11.19     
+VAX1             538968604       12410-OCT-2026 17:25:12.19     
+VAX1             538968604       12510-OCT-2026 17:25:13.19     
+VAX1             538968604       12610-OCT-2026 17:25:14.19     
+VAX1             538968604       12710-OCT-2026 17:25:15.19     
+VAX1             538968604       12810-OCT-2026 17:25:16.19     
+VAX1             538968604       12910-OCT-2026 17:25:17.19     
+VAX1             538968604       13010-OCT-2026 17:25:18.19     
+VAX1             538968604       13110-OCT-2026 17:25:19.19     
+VAX1             538968604       13210-OCT-2026 17:25:20.19     
+VAX1             538968604       13310-OCT-2026 17:25:21.19     
+VAX1             538968604       13410-OCT-2026 17:25:22.19     
+VAX1             538968604       13510-OCT-2026 17:25:23.19     
+VAX1             538968604       13610-OCT-2026 17:25:24.20     
+VAX1             538968604       13710-OCT-2026 17:25:25.20     
+VAX1             538968604       13810-OCT-2026 17:25:26.20     
+VAX1             538968604       13910-OCT-2026 17:25:27.20     
+VAX1             538968604       14010-OCT-2026 17:25:28.21     
+VAX1             538968604       14110-OCT-2026 17:25:29.21     
+VAX1             538968604       14210-OCT-2026 17:25:30.21     
+VAX1             538968604       14310-OCT-2026 17:25:31.21     
+VAX1             538968604       14410-OCT-2026 17:25:32.21     
+VAX1             538968604       14510-OCT-2026 17:25:33.21     
+VAX1             538968604       14610-OCT-2026 17:25:34.21     
+VAX1             538968604       14710-OCT-2026 17:25:35.21     
+VAX1             538968604       14810-OCT-2026 17:25:36.21     
+VAX1             538968604       14910-OCT-2026 17:25:37.21     
+VAX1             538968604       15010-OCT-2026 17:25:38.21     
+VAX1             538968604       15110-OCT-2026 17:25:39.21     
+VAX1             538968604       15210-OCT-2026 17:25:40.21     
+VAX1             538968604       15310-OCT-2026 17:25:41.21     
+VAX1             538968604       15410-OCT-2026 17:25:42.21     
+VAX1             538968604       15510-OCT-2026 17:25:43.21     
+VAX1             538968604       15610-OCT-2026 17:25:44.21     
+VAX1             538968604       15710-OCT-2026 17:25:45.21     
+VAX1             538968604       15810-OCT-2026 17:25:46.21     
+VAX1             538968604       15910-OCT-2026 17:25:47.21     
+VAX1             538968604       16010-OCT-2026 17:25:48.21     
+VAX1             538968604       16110-OCT-2026 17:25:49.21     
+VAX1             538968604       16210-OCT-2026 17:25:50.21     
+$ STOP EVACVAX1
+$ DISMOUNT/CLUSTER $2$DUA1:
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-GPTFULL, global page table is full
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-DEVOFFLINE, device is not in configuration or not available
+%DISM-W-DSMCLUFAIL, dismount/cluster failed on one or more nodes in the cluster
+$ SHOW DEVICE $2$DUA1:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA1:        (VAX1)  Online               0
+$ @SYS$SYSTEM:SHUTDOWN
+
+
+        SHUTDOWN -- Perform an Orderly System Shutdown
+                    on node VAX1
+
+How many minutes until final shutdown [0]: 0
+Reason for shutdown [Standalone]: CI6-EVACUATION
+Do you want to spin down the disk volumes [NO]? NO
+Do you want to invoke the site-specific shutdown procedure [YES]? NO
+Should an automatic system reboot be performed [NO]? NO
+When will the system be rebooted [later]: 
+Shutdown options (enter as a comma-separated list):
+ REMOVE_NODE         Remaining nodes in the cluster should adjust quorum
+ CLUSTER_SHUTDOWN    Entire cluster is shutting down
+ REBOOT_CHECK        Check existence of basic system files
+ SAVE_FEEDBACK       Save AUTOGEN feedback information from this boot
+ DISABLE_AUTOSTART   Disable autostart queues
+
+Shutdown options [NONE]: REMOVE_NODE
+
+%SHUTDOWN-I-OPERATOR, this terminal is now an operator's console
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.12  %%%%%%%%%%%
+Operator status for operator _VAX1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SHUTDOWN-I-DISLOGINS, interactive logins will now be disabled
+%SET-I-INTSET, login interactive limit = 0, current interactive value = 1
+%SHUTDOWN-I-SHUTNET, the DECnet network will now be shut down
+%SHUTDOWN-I-STOPQUEUES, the queues on this node will now be stopped
+
+SHUTDOWN message on VAX1 from user SYSTEM at _VAX1$OPA0:   17:28:52
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+CI6-EVACUATION
+
+1 terminal has been notified on VAX1.
+
+1 terminal has been notified on VAX2.
+%SHUTDOWN-I-STOPUSER, all user processes will now be stopped
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.63  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.66  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.66  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:53.06  %%%%%%%%%%%
+Message from user DECNET on VAX1
+DECnet shutting down
+
+%SHUTDOWN-I-STOPAUDIT, the security auditing subsystem will now be shut down
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:00.13  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:               10-OCT-2026 17:29:00.13
+PID:                      2020021B        
+Username:                 SYSTEM          
+
+%SHUTDOWN-I-STOPSMISRV, the SMI server will now be shut down
+%SHUTDOWN-I-STOPSECSRV, the security server will now be shut down
+%SHUTDOWN-I-REMOVE, all installed images will now be removed
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:00.87  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASHUTDOWN, breakin detection and evasion processing is shutting down
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:00.87  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+%SECSRV-I-PROXYSHUTDOWN, proxy processing is shutting down
+
+%SHUTDOWN-I-DISMOUNT, all volumes will now be dismounted
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.20  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.22  %%%%%%%%%%%
+Logfile was closed by operator _VAX1$OPA0:
+Logfile was VAX1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;46
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.24  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+%CNXMAN,  proposing modification of quorum or quorum disk membership
+%CNXMAN,  completing VAXcluster state transition
+	SYSTEM SHUTDOWN COMPLETE - use console to halt system
+Infinite loop, PC: 86FAB4D3 (BRB 86FAB4D3)
+sim> 

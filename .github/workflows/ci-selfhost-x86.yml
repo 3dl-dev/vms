@@ -341,6 +341,13 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_reflong_import.sh
 
+      # vms-e1a7: an EVAX weak reference (`#pragma weak`, EGSY$V_WEAK) nothing in
+      # the link defines becomes a .vms$wimp weak-by-name import carrying its
+      # Alpha form, not a cell baked to 0; a strong undefined still fails.
+      - name: Prove LINK.EXE binds EVAX weak references by name at activation (vms-e1a7)
+        run: |
+          sh src/vmslink/test/run_evax_weakref.sh
+
       # vms-fd1: ovmx-ld (collect2's ld -> LINK.EXE) searches positional
       # archives (--library) instead of whole-archiving them.
       - name: Prove ovmx-ld maps a GNU ld command line onto LINK.EXE (vms-fd1)

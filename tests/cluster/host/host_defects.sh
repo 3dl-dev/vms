@@ -174,6 +174,7 @@ dlm-dir-matched-by-name-alone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 dlm-hash-empty-name-not-refused
+cm-close-state-volume-wrong
 dlm-hash-coverage-claims-too-much
 dlm-engine-extrapolates-the-hash
 dlm-unroutable-refuses-the-caller
@@ -784,6 +785,20 @@ EOF
         require_fail) cat <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    cm-close-state-volume-wrong)
+        case "$_f" in
+        facility)     echo "the cat-0x86 close answer to a MOUNT/DISMOUNT/CLUSTER close (vms_cluster_codec_cm vms_cm_close_state_for, rd vms-2ef): body[24] = 5, grounded 35/35 on real VAX V7.3 pairs";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "the volume close is answered 4, the routine close's common value: a value no real member ever gave this close (35/35 answered 5). A wrong close state bugchecked a coordinator before (E85).";;
+        require_fail) cat <<'EOF'
+*** a MOUNT/DISMOUNT/CLUSTER close (request kind 6) is answered with the state the real VAX answered: 5 ***
+  with body[24] = 5
 EOF
                       ;;
         esac;;
@@ -1920,6 +1935,9 @@ apply_edit() {
     dlm-hash-coverage-claims-too-much)
         # The mask literal is unique in the header.
         sed -i 's|#define VMS_DLM_HASH_LEN_PROVEN    0xdf7ffffeu|#define VMS_DLM_HASH_LEN_PROVEN    0xfffffffeu /* NEGCTL dlm-hash-coverage-claims-too-much */|' "$_file";;
+
+    cm-close-state-volume-wrong)
+        sed -i 's|\t\treturn VMS_CM_CLOSE_STATE_VOLUME;|\t\treturn 4u; /* NEGCTL cm-close-state-volume-wrong */|' "$_file";;
 
     dlm-grant-handles-swapped)
         # The two #define lines are unique; swapping their values is the whole

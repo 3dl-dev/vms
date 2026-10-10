@@ -209,7 +209,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 RUN n=0; until [ "$n" -ge 3 ]; do \
     apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
-    xz-utils curl ca-certificates kmod cpio \
+    xz-utils curl ca-certificates kmod cpio patch \
     && break; \
     n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
 done; [ "$n" -lt 3 ] && \
@@ -227,6 +227,18 @@ RUN KMAJ=$(echo "$KERNEL_VERSION" | cut -d. -f1) && \
     ln -s "linux-${KERNEL_VERSION}" linux
 
 WORKDIR /usr/src/linux
+
+# OVMX kernel patches (rd vms-9f32): distro/kernel/patches/*.patch, applied in
+# order to the pinned source and FAILING CLOSED if one does not apply. Today one
+# hook: do_exit's task_exit_notifier, from which vms.ko runs process rundown in
+# process context before the process becomes a zombie (the same patch the Alpha
+# kernel carries, tools/cross-alpha/patches/0002).
+COPY distro/kernel/patches /tmp/ovmx-kpatches
+RUN for p in /tmp/ovmx-kpatches/*.patch; do \
+        echo "-- applying kernel patch: $(basename "$p")"; \
+        patch -p1 --forward < "$p" || exit 1; \
+    done && \
+    grep -q 'HAVE_TASK_EXIT_NOTIFIER' include/linux/sched/task.h
 
 # Overlay the OVMX kernel modules IN-TREE (vms-934, parent vms-19e "owns-kernel";
 # generalized into a reusable module home by vms-bae). drivers/ovmx/ is a MENU:

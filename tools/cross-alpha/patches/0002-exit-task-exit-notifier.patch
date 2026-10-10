@@ -1,0 +1,99 @@
+exit: notify in-kernel subsystems when a task exits (task_exit_notifier)
+
+Some in-kernel subsystems keep per-process state outside struct task_struct
+and must learn that a process ended however it ended: an operating-system
+personality's process control block, for example, whose creator has to be
+told the process is gone. Today the supported hook is the sched_process_exit
+tracepoint, which an architecture without CONFIG_TRACEPOINTS cannot offer --
+on alpha, CONFIG_TRACEPOINTS pulls in the event-tracing runtime and a stack
+unwinder alpha does not have. Without a hook, such a subsystem falls back to
+keying the process's lifetime off a file the process happens to hold, which is
+wrong whenever the process never opened that file or a non-leader thread is
+the last to drop it.
+
+Add a blocking notifier chain called from do_exit() at the point
+trace_sched_process_exit() fires, in process context (callbacks may sleep),
+once per exiting thread with the thread group's group_dead flag as the action
+and the exiting task as the data. A subscriber that tracks whole processes
+acts when group_dead is true. Registration is exported GPL-only.
+HAVE_TASK_EXIT_NOTIFIER lets a module select this hook at build time.
+
+OVMX (rd vms-9f32, docs/design-executive-process-lifecycle.md section 3.2):
+the VMS executive (vms.ko) deletes a process's PCB from this hook on the
+OVMX/Linux-Alpha kernel; x86_64/aarch64 use the tracepoint.
+
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -69,6 +69,7 @@
+ #include <linux/rethook.h>
+ #include <linux/sysfs.h>
+ #include <linux/user_events.h>
++#include <linux/notifier.h>
+ 
+ #include <linux/uaccess.h>
+ #include <asm/unistd.h>
+@@ -808,6 +809,32 @@
+ 	spin_unlock_irq(&sighand->siglock);
+ }
+ 
++/*
++ * Process exit notification for in-kernel subsystems that keep per-process
++ * state outside struct task_struct (an executive's process control block, for
++ * example) and must learn that a process ended however it ended -- not only
++ * when it closed a file it happened to hold. Called from do_exit() at the
++ * point trace_sched_process_exit() fires, in process context (callbacks may
++ * sleep), once per exiting thread with the thread group's group_dead flag:
++ * a subscriber that tracks whole processes acts when group_dead is true (the
++ * last thread is leaving; every other thread has already passed this point).
++ * This gives architectures without CONFIG_TRACEPOINTS a supported way to
++ * observe the exit that tracepoint users already have.
++ */
++static BLOCKING_NOTIFIER_HEAD(task_exit_notifier);
++
++int task_exit_notifier_register(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_register(&task_exit_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exit_notifier_register);
++
++int task_exit_notifier_unregister(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_unregister(&task_exit_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exit_notifier_unregister);
++
+ void __noreturn do_exit(long code)
+ {
+ 	struct task_struct *tsk = current;
+@@ -863,6 +890,7 @@
+ 	if (group_dead)
+ 		acct_process();
+ 	trace_sched_process_exit(tsk);
++	blocking_notifier_call_chain(&task_exit_notifier, group_dead, tsk);
+ 
+ 	exit_sem(tsk);
+ 	exit_shm(tsk);
+--- a/include/linux/sched/task.h
++++ b/include/linux/sched/task.h
+@@ -11,6 +11,7 @@
+ #include <linux/uaccess.h>
+ 
+ struct task_struct;
++struct notifier_block;
+ struct rusage;
+ union thread_union;
+ struct css_set;
+@@ -226,4 +227,13 @@
+ 	spin_unlock(&p->alloc_lock);
+ }
+ 
++/*
++ * task_exit_notifier_{register,unregister} - be called (process context) from
++ * do_exit() for every exiting thread; the callback's action argument is the
++ * thread group's group_dead flag, its data the exiting task_struct.
++ */
++#define HAVE_TASK_EXIT_NOTIFIER 1
++extern int task_exit_notifier_register(struct notifier_block *nb);
++extern int task_exit_notifier_unregister(struct notifier_block *nb);
++
+ #endif /* _LINUX_SCHED_TASK_H */

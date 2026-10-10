@@ -2329,9 +2329,18 @@ static void resolve_wimp_for(unsigned long img_base, unsigned long wimp_addr)
 		unsigned long addr = 0;
 		for (int q = 0; q < g_nprods && !addr; q++)
 			addr = sv_find_named(&g_prods[q], sym);
-		if (addr)
-			*(unsigned long *)(img_base + we[k].patch_off) = addr;
-		/* else: no loaded producer exports it -> cell stays 0 (weak-undef) */
+		if (!addr)
+			continue;   /* no loaded producer exports it -> cell stays 0 (weak-undef) */
+#if defined(__alpha__)
+		/* An EVAX-linked image's weak cell has the same FORM as a strong
+		 * import's (LINKAGE pair / CODEADDR / longword / raw PV), so it gets
+		 * the same fill. An ELF-linked image writes form 0: a raw store. */
+		imgact_fill_import(img_base + we[k].patch_off, addr,
+				   (we[k].form & OVMX_IMP_LINKAGE)  != 0,
+				   (we[k].form & OVMX_IMP_CODEADDR) != 0);
+#else
+		*(unsigned long *)(img_base + we[k].patch_off) = addr;
+#endif
 	}
 }
 

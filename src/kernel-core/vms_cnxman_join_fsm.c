@@ -2762,18 +2762,25 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 {
 	struct vms_cm_node_params own;
 	vms_codec_status_t st;
+	uint16_t close_state;
 
 	if (!join_recipe_allowed(e->env.category, e->env.opcode,
 				 (uint16_t)VMS_CM_RECIPE_CLOSE)) {
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	if (!j->cfg.close_state_valid || j->cfg.close_state == 0u) {
+	/* The request's own kind decides first: a MOUNT/DISMOUNT/CLUSTER close
+	 * has a grounded answer (rd vms-2ef). Anything else falls back to a
+	 * configured value, and with none is withheld as before. */
+	close_state = vms_cm_close_state_for(e->body, e->len);
+	if (close_state == 0u && j->cfg.close_state_valid)
+		close_state = j->cfg.close_state;
+	if (close_state == 0u) {
 		(void)join_close_withheld(j);
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	join_own_params(j, &own);
-	st = vms_cm_close_build(e->body, e->len, &own, j->cfg.close_state,
+	st = vms_cm_close_build(e->body, e->len, &own, close_state,
 				j->scratch, (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return CNXMAN_JOIN_RX_CONSUMED;

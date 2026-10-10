@@ -442,6 +442,8 @@ dlm-xnode-redirect-target-dropped
 spawn-input-via-linux-path
 spawn-arm-gone-subprocess-not-completed
 release-leader-zombie-pcb-kept
+creprc-detached-intermediate-not-held
+process-exit-deletion-needs-vms-fd
 setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
@@ -3128,15 +3130,31 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    creprc-detached-intermediate-not-held)
+        case "$_f" in
+        facility)     echo "\$CREPRC of a DETACHED process (sys\$creprc PRC\$M_DETACH, libvms sys_process.c, rd vms-fe7) -- the new process enters the executive's table while its intermediate still links it to the creator, so it starts with no copied process logical names";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_creprc_detached_lnm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The un-ticketed detached path releases the intermediate BEFORE the new process registers, so the intermediate usually exits first: the new process is reparented to the nearest subreaper, which the executive then treats as its fork parent and copies that row's LNM\$PROCESS names into it. On a booted node that is PID 1's plain SYS\$INPUT/OUTPUT/COMMAND (vms-fe7). The suite's creator is the subreaper and holds a marker name; detached subjects now see it. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+no detached process started with a copy of its creator's (or any) process logical names
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
     release-leader-zombie-pcb-kept)
         case "$_f" in
-        facility)     echo "process deletion at the last /dev/vms close (vms_dev_release, the Linux module rind) -- the moment the executive learns a process ended and fires its creator's armed /NOWAIT completion (rd vms-003b)";;
+        facility)     echo "process deletion at process exit (vms_process_ended, the Linux module rind, rd vms-9f32) -- deciding that the PROCESS, not a thread, has ended, when its group leader exits first (rd vms-003b)";;
         targets)      echo "kernel/vms_module.c";;
         suites_red)   echo "test_syssvc_spawn_complete";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_dev_release() goes back to asking thread_group_empty(current) instead of the group's live-thread count. When the last thread to drop /dev/vms is NOT the group leader (the leader exited first -- DCL with its SYS\$INPUT reader thread), thread_group_empty() is false, the PCB is never freed, the zombie leader keeps it alive for the lazy reaper, and the creator's armed completion never fires. The deterministic leader-exits-first assertion reddens; the 200-spawn DCL loop in the same suite may also redden (it hits the same window by scheduling), which the equality reports as a non-gating extra. The live-count text is unique in the file; gone after apply (no-op re-apply).";;
+        why)          echo "vms_process_ended() asks thread_group_empty(p) instead of the group's live-thread count. When the last thread to leave is NOT the group leader (the leader exited first -- DCL with its SYS\$INPUT reader thread), thread_group_empty() is false for it (the zombie leader is still on the thread list), the process is never deleted, and the creator's armed completion never fires. The deterministic leader-exits-first check reddens; the 200-spawn DCL loop may also redden by scheduling (non-gating extra). Gone after apply (no-op re-apply).";;
         require_fail) cat <<'EOF'
 a subprocess whose main thread exits before its last thread still completes:
 EOF
@@ -3144,17 +3162,39 @@ EOF
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
         esac;;
-    spawn-arm-gone-subprocess-not-completed)
+    process-exit-deletion-needs-vms-fd)
         case "$_f" in
-        facility)     echo "LIB\$SPAWN /NOWAIT completion notification (the subprocess-exit event flag, vms-e9a B1 / vms-f45)";;
-        targets)      echo "libvms/rtl/lib_misc.c";;
+        facility)     echo "process deletion at process exit (vms_process_ended, the Linux module rind, rd vms-9f32) -- the executive deletes a process when it ends, however it ends, whatever its image did";;
+        targets)      echo "kernel/vms_module.c";;
         suites_red)   echo "test_syssvc_spawn_complete";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "lib\$spawn no longer completes the caller's request when the completion arm finds the subprocess already gone and reclaimed (SS\$_NONEXPR): the event flag is never set, so a \$WAITFR on it hangs. The suite makes the race certain: a SCHED_FIFO creator on the guest's one CPU spawns a CLI that ends at once, so the subprocess is deleted before the arm runs and the arm always answers SS\$_NONEXPR. (The 200-spawn loop in the same suite may also redden by scheduling -- a non-gating extra.)";;
+        why)          echo "vms_on_process_exit() deletes a process only if it still holds the executive device open as it ends -- the fd-bound deletion vms-9f32 removed. A subprocess that exec's an image which never opens /dev/vms (its creator's open is O_CLOEXEC) is never deleted: its PCB stays, its PID still answers \$GETJPI and its creator's armed completion never fires (vms-d9ab). Processes that end holding the device are deleted as before. Gone after apply (no-op re-apply).";;
         require_fail) cat <<'EOF'
-a /NOWAIT lib$spawn whose subprocess is already gone when the arm runs
+that image ending completes the creator's armed /NOWAIT flag: the executive
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$GETJPI of the ended process is SS$_NONEXPR before its creator
+a subprocess whose main thread exits before its last thread still completes:
+arming the completion of an already-deleted subprocess completes at once:
+the instantly-ending subprocess is already deleted when its completion is armed
+EOF
+                      ;;
+        knock_on_why)  echo "every one of them waits on the deletion this mutation removes.";;
+        esac;;
+    spawn-arm-gone-subprocess-not-completed)
+        case "$_f" in
+        facility)     echo "/NOWAIT completion notification for a subprocess that is already gone when its creator arms it (VMS_IOCTL_SPAWN_NOTIFY over the creator's termination record, vms-e9a B1 / vms-f45 / rd vms-9f32)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_spawn_notify() no longer consults the caller's termination record when the subprocess has already been deleted, so it answers SS\$_NONEXPR instead of completing the arm: the creator's completion flag is never set by the executive. The deterministic check deletes a registered child before arming it (its PID already answers SS\$_NONEXPR). lib\$spawn's own NONEXPR fallback still sets the flag on its path, so the lib\$spawn checks stay green; only the direct arm reddens. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+arming the completion of an already-deleted subprocess completes at once:
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -7185,7 +7225,7 @@ EOF
 
     proc-rundown-locks-not-released)
         case "$_f" in
-        facility)     echo "process rundown: lock/EF/channel release at task death, via BOTH the /dev/vms .release path and the lazy reaper (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8)";;
+        facility)     echo "process rundown: lock/EF/channel release when the process is deleted at its end (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8 / rd vms-9f32)";;
         targets)      echo "kernel/vms_module.c";;
         suites_red)   echo "test_syssvc_rundown_ff8";;
         blind_suites) echo "";;
@@ -7193,14 +7233,14 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "vms_proc_free_claimed() stops calling vms_proc_release_locks(proc), so the locks a dead subject held are NEVER released as its PCB is freed -- neither on the synchronous .release path (a subject that owns its /dev/vms channel exits) nor on the lazy vms_proc_reap_dead() path (a shared-fd subject reaped by a later process-table op). The PCB is still unhashed and freed and the sibling AST / common-EF / channel releases in the same function are untouched, so rundown still 'happens' -- only the dead subject's still-granted lock survives on the resource, so a conflicting \$ENQ from a live process is denied forever. This is the exact rundown-completeness property vms-ff8 characterized: rundown must RELEASE the resources, not merely unhash the entry. Only the two assertions that re-take the resource after the subject dies can tell the difference.";;
         require_fail) cat <<'EOF'
-A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (SYNCHRONOUS .release rundown)
+A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (its deletion at exit released the lock)
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-B2: after an unrelated process-table op reaps the dead subject, the SAME $ENQ is granted (held only until the reap)
+B [vms-9f32]: a shared-fd subject's EX lock is released by its deletion at exit -- the
 EOF
                       ;;
-        knock_on_why)  echo "SAME DEFECT, OBSERVED ON THE OTHER RELEASE PATH. vms_proc_release_locks() is called once, from vms_proc_free_claimed(), which BOTH the synchronous .release (Part A, a fresh-fd subject's own exit) and the lazy reaper (Part B2, a shared-fd subject reaped by a later \$GETJPI) funnel through. With that one call removed, the fresh-fd subject's lock is not released at .release (require_fail) and the shared-fd subject's lock is not released when the reaper frees its PCB (this assertion) -- the two visible faces of the one skipped release, not two independent properties.";;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED FOR THE OTHER fd SHAPE: vms_proc_free_claimed() is the one release funnel of process deletion, so the shared-fd subject's lock is never released either.";;
         esac;;
 
     imgact-p1-not-protected)
@@ -8360,13 +8400,28 @@ apply_edit() {
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
         sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    creprc-detached-intermediate-not-held)
+        # UNIQUE TEXT: where the grandchild takes its end of the intermediate's
+        # release pipe. The mutation restores the pre-fix state on the
+        # un-ticketed path, deterministically: release the intermediate at once
+        # and enter the table only after it is gone (reparented), which is the
+        # interleaving that copied PID 1's names on the booted node. The
+        # ticketed path is untouched.
+        sed -i 's|^            ticket_sync = syncfd\[1\];$|            ticket_sync = syncfd[1]; if (!use_ticket) { pid_t ip = getppid(); close(ticket_sync); ticket_sync = -1; while (getppid() == ip) usleep(1000); } /* NEGCTL creprc-detached-intermediate-not-held */|' "$_file";;
     release-leader-zombie-pcb-kept)
-        sed -i 's|atomic_read(\&current->signal->live) != 0)|!thread_group_empty(current)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file";;
+        sed -i 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (!thread_group_empty(p)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file";;
+    process-exit-deletion-needs-vms-fd)
+        # The vms-d9ab bug class, re-introduced: deletion happens only for a
+        # process still holding the executive device open when it ends -- what
+        # fd-bound release amounted to. A process whose image never opened it
+        # (or exec'd past an O_CLOEXEC open) is never deleted. The probe runs at
+        # sched_process_exit, before exit_files, so p->files is still there.
+        sed -i -e 's|^static void vms_on_process_exit(void \*data, struct task_struct \*p)$|#include <linux/fdtable.h> /* NEGCTL process-exit-deletion-needs-vms-fd */\nstatic const struct file_operations vms_fops;\nstatic int vms_negctl_vmsfd(const void *v, struct file *f, unsigned int fd)\n{ (void)v; (void)fd; return f->f_op == \&vms_fops; }\nstatic void vms_on_process_exit(void *data, struct task_struct *p) /* NEGCTL process-exit-deletion-needs-vms-fd */|' \
+            -e 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (atomic_read(\&p->signal->live) != 0 \|\| !p->files \|\| !iterate_fd(p->files, 0, vms_negctl_vmsfd, NULL)) /* NEGCTL process-exit-deletion-needs-vms-fd */|' "$_file";;
     spawn-arm-gone-subprocess-not-completed)
-        # UNIQUE TEXT: "if (ast == SS$_NONEXPR) {" occurs once, in lib$spawn's NOWAIT arm
-        # handling. Forcing it never-true restores the pre-fix behaviour (the NONEXPR from
-        # the arm is ignored). Gone after apply (no-op re-apply).
-        sed -i 's|if (ast == SS\$_NONEXPR) {|if (0 \&\& ast == SS$_NONEXPR) { /* NEGCTL spawn-arm-gone-subprocess-not-completed */|' "$_file";;
+        # UNIQUE TEXT: the termination-record branch of vms_ioctl_spawn_notify.
+        # Forcing it never-true restores SS$_NONEXPR for a gone subprocess.
+        sed -i 's|^        if (termrec_find(proc, args.child_vms_pid, 0)) {$|        if (0 \&\& termrec_find(proc, args.child_vms_pid, 0)) { /* NEGCTL spawn-arm-gone-subprocess-not-completed */|' "$_file";;
     spawn-input-via-linux-path)
         # UNIQUE TEXT: "rms_textfile_t *tf = rms_textfile_open(raw_in);" occurs once, in lib$spawn's
         # INPUT handling. NULL sends every INPUT spec down the Linux-path fallback. Gone after apply.
@@ -10283,12 +10338,13 @@ cmd_selftest() {
         # executive-resident BGn: device). It was absent from this copy set, so
         # that defect was reported as a dead fixture ("its sed anchor no longer
         # matches") on every selftest run even though its anchor is fine.
-        if ! cp -a "$_st_root/kernel" "$_st_root/kernel-core" \
-                   "$_st_root/libvmssys" "$_st_root/libvms" \
-                   "$_st_root/vmsdcl" "$_st_root/vmsrms" "$_st_root/vmslnm" \
-                   "$_st_root/vmsfs" "$_st_root/vmstcpip" "$_st_root/imgact" \
-                   "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,kernel-core,libvmssys,libvms,vmsdcl,vmsrms,vmslnm,vmsfs,vmstcpip,imgact} for the self-test"
+        # THE WHOLE src/ TREE, not a list of directories (vms-dda): a list goes
+        # stale the moment a defect targets a directory nobody added -- it was
+        # vmstcpip once (vms-6c6), then vmsdecnet (net-client-takes-qio-service-
+        # status reported as a dead fixture though its anchor matched) -- and
+        # every such miss reads as a broken anchor rather than a broken copy.
+        if ! cp -a "$_st_root/." "$_st_tmp/tree/" 2>/dev/null; then
+            echo "FAIL: cannot copy $_st_root for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

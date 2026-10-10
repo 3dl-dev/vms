@@ -656,6 +656,25 @@ struct vms_lock_resource {
 };
 
 /* Per-process VMS state */
+/* One ended subprocess's termination record (rd vms-9f32), kept in its
+ * creator's PCB until the creator collects it. */
+#define VMS_TERMREC_MAX 16
+/* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
+struct vms_termination {
+    uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
+    uint8_t  has_status, compl_armed, compl_acmode, pad;
+    uint32_t compl_parent_pid, compl_efn;
+    uint64_t compl_astadr, compl_astprm;
+};
+
+struct vms_termrec {
+    uint32_t vms_pid;           /* 0 = empty slot */
+    uint32_t linux_pid;
+    uint32_t condition;         /* the recorded $STATUS, or SS$_ABORT */
+    uint8_t  has_status;        /* 1 iff the process recorded one itself */
+    uint8_t  pad[3];
+};
+
 struct vms_proc {
     struct hlist_node   hash_node;      /* in global process hash */
     pid_t               linux_pid;      /* Linux thread-group id == getpid(2)
@@ -955,6 +974,20 @@ struct vms_proc {
     uint64_t            compl_astprm;     /* parameter for the completion AST */
 
     /*
+     * The process lifecycle (rd vms-9f32). owner_vms_pid is the VMS process
+     * that created this one (0: none -- a job root, a detached process).
+     * termrec[] holds how this process's ended subprocesses ended: rundown
+     * posts one record to the OWNER's PCB when a process is deleted, and only
+     * that owner reads it (GETEXIT of its own child, SPAWN_NOTIFY), once. It is
+     * the plumbing behind the creator's completion -- never a way for anyone
+     * to read a process that no longer exists ($GETJPI of a deleted PID is
+     * SS$_NONEXPR). Guarded by vms_proc_hash_lock.
+     */
+    uint32_t            owner_vms_pid;
+    struct vms_termrec  termrec[VMS_TERMREC_MAX];
+    uint32_t            termrec_next;
+
+    /*
      * CLI invocation context -- the executive source for IMGACT's
      * cliflag / cli_util->get_command_line (vms-f60d, ovmx_activation.h).
      * cli_present is the cliflag: 1 iff this image was invoked from a
@@ -1232,7 +1265,10 @@ void vms_proc_free(struct vms_proc *proc);
 void vms_proc_free_claimed(struct vms_proc *proc);
 
 /* Drop table entries whose backing task no longer exists. */
-void vms_proc_reap_dead(void);
+/* The two halves of process deletion around the substrate's release (rd vms-9f32). */
+void vms_proc_termination_capture(const struct vms_proc *victim,
+                                  struct vms_termination *t);
+void vms_proc_termination_post_locked(const struct vms_termination *t);
 
 /* Deliver a /NOWAIT spawn completion for a subprocess reclaimed WITHOUT a
  * recorded exit (SIGKILL/crash), synthesizing an abnormal $STATUS (vms-2a4).

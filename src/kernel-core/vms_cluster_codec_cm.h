@@ -161,6 +161,31 @@ extern "C" {
 				VMS_OFB_CM_CLOSE_STATE)          /* abs 96 */
 
 /*
+ * THE ONE GROUNDED CLOSE STATE (rd vms-2ef, 2026-10-10). The request's
+ * body[26] (VMS_OFB_CM_CLOSE_REQ_KIND) and the response's body[24] were
+ * tabulated over every real pair in the capture library and the lab PVC
+ * (tests/lab/captures/vms-2ef-close-state-20261010/PREDICTION.md):
+ *
+ *   request 5  -> response 4 (264x) or 3 (165x): NOT a function of the request
+ *   request 6  -> response 5, 14 of 14 in the derivation
+ *   request 10 -> response 5 or 3: NOT a function of the request
+ *
+ * Request 6 is the close every MOUNT/CLUSTER and DISMOUNT/CLUSTER sends to
+ * each member, and the evacuation hang was exactly that close left unanswered
+ * by an OVMX member (run ci6-evac-14). The prediction "6 -> 5" was committed
+ * before a held-out run on a different device, from both initiators: 21 of 21.
+ * vms_cm_close_state_for() returns 5 for request kind 6 and 0 -- "no grounded
+ * value, do not answer" -- for everything else.
+ */
+#define VMS_OFB_CM_CLOSE_REQ_KIND        26u
+#define VMS_CM_CLOSE_KIND_VOLUME         6u   /* MOUNT/DISMOUNT/CLUSTER close */
+#define VMS_CM_CLOSE_STATE_VOLUME        5u   /* its answer, 35/35           */
+
+/* The grounded close state for the close in req_body, or 0 when nothing is
+ * grounded for that request (the caller then withholds the answer). */
+uint16_t vms_cm_close_state_for(const uint8_t *req_body, uint32_t req_len);
+
+/*
  * The bitmap NEIGHBOURHOOD, body[52:60] -- the span whose emptiness is the
  * ONLY published evidence about how wide the membership bitmap really is.
  *

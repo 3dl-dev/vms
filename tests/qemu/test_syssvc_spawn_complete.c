@@ -188,6 +188,103 @@ static int gone_before_arm(lnm_manager_t *mgr, const char *self_exe, uint32_t ef
     return set;
 }
 
+/*
+ * AN IMAGE THAT NEVER TOUCHES THE EXECUTIVE STILL ENDS AS A VMS PROCESS (rd
+ * vms-d9ab / vms-9f32). A registered child exec()s an image that never opens
+ * /dev/vms (its registration's descriptor is close-on-exec, so the image holds
+ * none) and exits. The executive must still delete the process and complete the
+ * creator's armed /NOWAIT flag, and the PID must be gone ($GETJPI SS$_NONEXPR)
+ * BEFORE the creator reaps the zombie -- a deleted process cannot be read, as
+ * on VMS. Deterministic: the arm happens before the child is let go.
+ */
+static int noexec_image_completion(uint32_t efn, uint32_t *after_jpi)
+{
+    int up[2], go[2];
+    *after_jpi = 0;
+    if (pipe(up) != 0 || pipe(go) != 0) return -1;
+    pid_t lp = fork();
+    if (lp < 0) return -1;
+    if (lp == 0) {
+        close(up[0]); close(go[1]);
+        vms_kif_close();
+        uint32_t me = 0;
+        if (vms_kif_open() < 0 || !(vms_kif_register(&me) & 1)) me = 0;
+        (void)write(up[1], &me, sizeof me);
+        char c;
+        (void)read(go[0], &c, 1);
+        execl("/proc/self/exe", "d9ab-noexec-image", (char *)NULL);
+        _exit(3);
+    }
+    close(up[1]); close(go[0]);
+    uint32_t child = 0;
+    int ok = read(up[0], &child, sizeof child) == (ssize_t)sizeof child && child != 0;
+    int done = 0;
+    (void)sys$clref(efn);
+    if (ok)
+        ok = (vms_kif_spawn_notify(child, efn, 0, 0, &done) & 1) != 0;
+    (void)write(go[1], "g", 1);
+    close(up[0]); close(go[1]);
+    int set = -1;
+    if (ok) {
+        set = 0;
+        for (int waited = 0; waited < 10000 && !set; waited += 50) {
+            set = (sys$readef(efn, &(uint32_t){0}) == SS$_WASSET);
+            if (!set) { struct pollfd n = { .fd = -1, .events = 0 }; poll(&n, 1, 50); }
+        }
+        struct vms_procinfo pi;
+        memset(&pi, 0, sizeof pi);
+        *after_jpi = vms_kif_getjpi_pid(child, &pi);   /* before waitpid */
+    }
+    int ws;
+    while (waitpid(lp, &ws, 0) < 0 && errno == EINTR)
+        ;
+    return set;
+}
+
+/*
+ * ARMED AFTER THE SUBPROCESS IS ALREADY GONE (rd vms-f45 / vms-9f32). A
+ * registered child ends and is deleted (its PID already answers SS$_NONEXPR)
+ * before the creator arms its /NOWAIT completion. The executive kept the
+ * child's termination record in the creator's PCB, so the arm completes at
+ * once -- the creator's flag is set, never a lost completion.
+ */
+static int gone_child_arm(uint32_t efn)
+{
+    int up[2];
+    if (pipe(up) != 0) return -1;
+    pid_t lp = fork();
+    if (lp < 0) return -1;
+    if (lp == 0) {
+        close(up[0]);
+        vms_kif_close();
+        uint32_t me = 0;
+        if (vms_kif_open() < 0 || !(vms_kif_register(&me) & 1)) me = 0;
+        (void)write(up[1], &me, sizeof me);
+        _exit(0);
+    }
+    close(up[1]);
+    uint32_t child = 0;
+    int ok = read(up[0], &child, sizeof child) == (ssize_t)sizeof child && child != 0;
+    close(up[0]);
+    int gone = 0;
+    for (int waited = 0; ok && waited < 10000 && !gone; waited += 20) {
+        struct vms_procinfo pi;
+        gone = vms_kif_getjpi_pid(child, &pi) == SS$_NONEXPR;
+        if (!gone) { struct pollfd n = { .fd = -1, .events = 0 }; poll(&n, 1, 20); }
+    }
+    int set = -1;
+    if (gone) {
+        int done = 0;
+        (void)sys$clref(efn);
+        uint32_t st = vms_kif_spawn_notify(child, efn, 0, 0, &done);
+        set = (st & 1) && done && sys$readef(efn, &(uint32_t){0}) == SS$_WASSET;
+    }
+    int ws;
+    while (waitpid(lp, &ws, 0) < 0 && errno == EINTR)
+        ;
+    return set;
+}
+
 int main(int argc, char **argv)
 {
     {
@@ -195,6 +292,8 @@ int main(int argc, char **argv)
         b = b ? b + 1 : argv[0];
         if (argc >= 1 && strcasecmp(b, "DCL.EXE") == 0)
             return stub_cli_main();       /* started by lib$spawn as the CLI */
+        if (strcmp(b, "d9ab-noexec-image") == 0)
+            return 0;                     /* an image that never opens /dev/vms */
     }
     printf("=== test_syssvc_spawn_complete (vms-f45: /NOWAIT completion is never lost) ===\n");
 
@@ -216,9 +315,26 @@ int main(int argc, char **argv)
         if (sl > 0) { self[sl] = 0; r = gone_before_arm(mgr, self, COMPLETION_EFN); }
         CHECK(r == 0 || r == 1, "a SCHED_FIFO creator spawns an instantly-ending CLI on one CPU");
         CHECK(r != 2, "the instantly-ending subprocess is already deleted when its completion is armed");
-        /* negctl: spawn-arm-gone-subprocess-not-completed */
         CHECK(r == 1, "a /NOWAIT lib$spawn whose subprocess is already gone when the arm runs"
                       " still sets the creator's completion event flag");
+    }
+    {
+        int r = gone_child_arm(COMPLETION_EFN);
+        CHECK(r != -1, "a registered child ends and its PID is gone before the creator arms");
+        /* negctl: spawn-arm-gone-subprocess-not-completed */
+        CHECK(r == 1, "arming the completion of an already-deleted subprocess completes at once:"
+                      " the creator's flag is set from the termination record the executive kept");
+    }
+    {
+        uint32_t jpi = 0;
+        int r = noexec_image_completion(COMPLETION_EFN, &jpi);
+        CHECK(r != -1, "a registered child is armed and then exec()s an image that never opens /dev/vms");
+        /* negctl: process-exit-deletion-needs-vms-fd */
+        CHECK(r == 1, "that image ending completes the creator's armed /NOWAIT flag: the executive"
+                      " deletes the process whatever the image did (vms-d9ab)");
+        /* negctl-knockon: process-exit-deletion-needs-vms-fd */
+        CHECK(jpi == SS$_NONEXPR, "$GETJPI of the ended process is SS$_NONEXPR before its creator"
+                                  " reaps it: a deleted process cannot be read");
     }
     {
         int r = leader_first_completion(COMPLETION_EFN);

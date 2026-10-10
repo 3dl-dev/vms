@@ -1147,19 +1147,40 @@ static int run_show_system(char *out, size_t outsz)
     close(in_pipe[1]);
 
     size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
+    int timed_out = 0;
+    {
+        /* Bounded (60 s): a DCL that never finishes is this suite's named
+         * FAIL, never a guest hung until the whole-VM wall (a defect that
+         * leaks process rows made SHOW SYSTEM wait forever, negctl
+         * release-leader-zombie-pcb-kept). */
+        struct timespec t0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            struct timespec tn;
+            clock_gettime(CLOCK_MONOTONIC, &tn);
+            long left = 60000 - ((tn.tv_sec - t0.tv_sec) * 1000 +
+                                 (tn.tv_nsec - t0.tv_nsec) / 1000000);
+            struct pollfd pfd = { .fd = out_pipe[0], .events = POLLIN };
+            if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
+                timed_out = 1;
+                kill(pid, SIGKILL);
+                break;
+            }
+            ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+            if (n <= 0) break;
+            used += (size_t)n;
+            if (used >= outsz - 1) break;
+        }
     }
     out[used] = '\0';
     close(out_pipe[0]);
+    if (timed_out)
+        printf("  INFO: DCL.EXE did not finish within 60 s; killed\n");
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
-    return 0;
+    return timed_out ? -1 : 0;
 }
 
 /*
@@ -1267,19 +1288,40 @@ static int run_show_system_unpriv(char *out, size_t outsz)
     close(in_pipe[1]);
 
     size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
+    int timed_out = 0;
+    {
+        /* Bounded (60 s): a DCL that never finishes is this suite's named
+         * FAIL, never a guest hung until the whole-VM wall (a defect that
+         * leaks process rows made SHOW SYSTEM wait forever, negctl
+         * release-leader-zombie-pcb-kept). */
+        struct timespec t0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            struct timespec tn;
+            clock_gettime(CLOCK_MONOTONIC, &tn);
+            long left = 60000 - ((tn.tv_sec - t0.tv_sec) * 1000 +
+                                 (tn.tv_nsec - t0.tv_nsec) / 1000000);
+            struct pollfd pfd = { .fd = out_pipe[0], .events = POLLIN };
+            if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
+                timed_out = 1;
+                kill(pid, SIGKILL);
+                break;
+            }
+            ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+            if (n <= 0) break;
+            used += (size_t)n;
+            if (used >= outsz - 1) break;
+        }
     }
     out[used] = '\0';
     close(out_pipe[0]);
+    if (timed_out)
+        printf("  INFO: DCL.EXE did not finish within 60 s; killed\n");
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
-    return 0;
+    return timed_out ? -1 : 0;
 }
 
 /*

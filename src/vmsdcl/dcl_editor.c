@@ -444,14 +444,12 @@ static void sscroll(struct kp *k)
         }
         k->s.known = 0;
     } else {
-        smove(&k->s, 1, 1);
         for (int i = 0; i < -d; i++) {
             k->s.top--;
+            smove(&k->s, 1, 1);           /* CR between lines (EDT.KEYPAD2 UP) */
             so(&k->s, "\033M");
             const char *t = ltext(k, k->s.top);
             stext(&k->s, t, strlen(t));
-            so(&k->s, "\r");
-            k->s.c = 1;
         }
     }
 }
@@ -1048,6 +1046,10 @@ static void kp_run(struct edt_buf *b, struct kp *k)
         if (key == -2) break;
         if (key < 0) continue;
         if (key == 0x1A) {              /* CTRL/Z: back to line mode */
+            if (k->s.msg) {             /* EDT.KEYPAD2 Z */
+                sclear_msg(k);
+                scursor(k);
+            }
             so(&k->s, "\033>");
             sregion(&k->s, 1, 24);
             k->s.known = 0;

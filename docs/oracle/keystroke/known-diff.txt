@@ -5,9 +5,5 @@
 # a listed step that now matches. Fix the bug, delete the line. Nearly every step
 # also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
 LOGIN.BANNER U  # vms-bd71: LOGINOUT console bytes differ
-LOGIN.BANNER P  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
-OOB.PROMPT T  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT T2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-TA.LOGIN W  # vms-bd71: login banner/last-login bytes differ, and the VAX SYLOGIN SET TERMINAL/INQUIRE consumes the type-ahead (OVMX holds it unechoed and runs it after $ -- vms-d732 met)
 TA.USERNAME U  # vms-bd71: Username: purges type-ahead, then times out

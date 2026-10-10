@@ -26,8 +26,6 @@
 #include "rmsdef.h"
 #include "rms_vmsabi_core.h"
 
-typedef void (*rms_completion)(struct fabdef *);
-
 static int fab_ok(struct fabdef *fab)
 {
     return fab && fab->fab$b_bid == FAB$C_BID && fab->fab$b_bln >= FAB$C_BLN;
@@ -41,15 +39,37 @@ static struct namdef *fab_nam(struct fabdef *fab)
     return nam;
 }
 
-static int complete(struct fabdef *fab, int st, va_list ap)
+/* The optional err/suc completion routines. A caller LINKed on OpenVMS passes
+ * a counted argument list and usually omits them (CALLS #1), so only the
+ * arguments the call passed are read: the count is the low byte of the
+ * argument information (R25) OTS$HOME_ARGS stores two quadwords below where
+ * va_start points for one named argument -- DEC C's va_count, as
+ * src/vmsrms/crtl_rms_fd.c and src/libvms/syssvc/sys_vmsabi.c read it. A
+ * macro used in the variadic function itself (vms-45f). (vms-8b5) */
+struct cmpl {
+    void (*err)(void *);
+    void (*suc)(void *);
+};
+static inline unsigned rms_va_count(const void *apv)
 {
-    rms_completion err = va_arg(ap, rms_completion);
-    rms_completion suc = va_arg(ap, rms_completion);
+    const uint64_t *p = apv;
+    __asm__("" : "+r"(p));              /* opaque to the stdarg pass (vms-45f) */
+    return (unsigned)(p[-2] & 0xFF);
+}
+#define CMPL_TAKE(ap, c)                                                    \
+    do {                                                                    \
+        unsigned n_ = rms_va_count((const void *)(ap));                     \
+        (c).err = n_ >= 2 ? va_arg(ap, void (*)(void *)) : 0;               \
+        (c).suc = n_ >= 3 ? va_arg(ap, void (*)(void *)) : 0;               \
+    } while (0)
+
+static int complete(struct fabdef *fab, int st, const struct cmpl *c)
+{
     fab->fab$l_sts = (unsigned)st;
-    if ((st & 1) && suc)
-        suc(fab);
-    else if (!(st & 1) && err)
-        err(fab);
+    if ((st & 1) && c->suc)
+        c->suc(fab);
+    else if (!(st & 1) && c->err)
+        c->err(fab);
     return st;
 }
 
@@ -90,15 +110,16 @@ int SYS$PARSE(void *fabp, ...)
     struct fabdef *fab = (struct fabdef *)fabp;
     va_list ap;
     va_start(ap, fabp);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
+    va_end(ap);
     int st;
     if (!fab_ok(fab)) {
-        va_end(ap);
         return RMS$_FAB;
     }
     struct namdef *nam = fab_nam(fab);
     if (!nam || nam == (struct namdef *)-1) {
-        st = complete(fab, RMS$_NAM, ap);
-        va_end(ap);
+        st = complete(fab, RMS$_NAM, &c);
         return st;
     }
     struct ovmx_rmsabi_name io;
@@ -118,8 +139,7 @@ int SYS$PARSE(void *fabp, ...)
         else
             memset(nam->nam$w_did, 0, sizeof nam->nam$w_did);
     }
-    st = complete(fab, st, ap);
-    va_end(ap);
+    st = complete(fab, st, &c);
     return st;
 }
 
@@ -128,15 +148,16 @@ int SYS$SEARCH(void *fabp, ...)
     struct fabdef *fab = (struct fabdef *)fabp;
     va_list ap;
     va_start(ap, fabp);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
+    va_end(ap);
     int st;
     if (!fab_ok(fab)) {
-        va_end(ap);
         return RMS$_FAB;
     }
     struct namdef *nam = fab_nam(fab);
     if (!nam || nam == (struct namdef *)-1) {
-        st = complete(fab, RMS$_NAM, ap);
-        va_end(ap);
+        st = complete(fab, RMS$_NAM, &c);
         return st;
     }
     struct ovmx_rmsabi_name io;
@@ -149,8 +170,7 @@ int SYS$SEARCH(void *fabp, ...)
         if (to_nam(nam, nam->nam$l_rsa, nam->nam$b_rss, &nam->nam$b_rsl, &io, 1) < 0)
             st = RMS$_RSS;
     }
-    st = complete(fab, st, ap);
-    va_end(ap);
+    st = complete(fab, st, &c);
     return st;
 }
 
@@ -161,22 +181,18 @@ int SYS$SEARCH(void *fabp, ...)
  * the handles of OVMX's internal blocks (rms_vmsabi_core.c).
  * ====================================================================== */
 
-typedef void (*rab_completion)(struct rabdef *);
-
 static int rab_ok(struct rabdef *rab)
 {
     return rab && rab->rab$b_bid == RAB$C_BID && rab->rab$b_bln >= RAB$C_BLN;
 }
 
-static int rab_complete(struct rabdef *rab, int st, va_list ap)
+static int rab_complete(struct rabdef *rab, int st, const struct cmpl *c)
 {
-    rab_completion err = va_arg(ap, rab_completion);
-    rab_completion suc = va_arg(ap, rab_completion);
     rab->rab$l_sts = (unsigned)st;
-    if ((st & 1) && suc)
-        suc(rab);
-    else if (!(st & 1) && err)
-        err(rab);
+    if ((st & 1) && c->suc)
+        c->suc(rab);
+    else if (!(st & 1) && c->err)
+        c->err(rab);
     return st;
 }
 
@@ -254,14 +270,14 @@ static void fab_attrs(struct fabdef *fab, const struct ovmx_rmsabi_fab *io)
 }
 
 /* $CREATE / $OPEN / $ERASE: op 0 open, 1 create, 2 erase. */
-static int file_op(int op, void *fabp, va_list ap)
+static int file_op(int op, void *fabp, const struct cmpl *c)
 {
     struct fabdef *fab = (struct fabdef *)fabp;
     if (!fab_ok(fab))
         return RMS$_FAB;
     struct namdef *nam = fab_nam(fab);
     if (nam == (struct namdef *)-1)
-        return complete(fab, RMS$_NAM, ap);
+        return complete(fab, RMS$_NAM, c);
     struct ovmx_rmsabi_fab io;
     fab_req(fab, nam, &io);
     uint32_t st;
@@ -278,15 +294,17 @@ static int file_op(int op, void *fabp, va_list ap)
     fab->fab$l_stv = io.stv;
     if (nam)
         nam_fill(nam, &io.n);
-    return complete(fab, (int)st, ap);
+    return complete(fab, (int)st, c);
 }
 
 int SYS$OPEN(void *fabp, ...)
 {
     va_list ap;
     va_start(ap, fabp);
-    int st = file_op(0, fabp, ap);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
     va_end(ap);
+    int st = file_op(0, fabp, &c);
     return st;
 }
 
@@ -294,8 +312,10 @@ int SYS$CREATE(void *fabp, ...)
 {
     va_list ap;
     va_start(ap, fabp);
-    int st = file_op(1, fabp, ap);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
     va_end(ap);
+    int st = file_op(1, fabp, &c);
     return st;
 }
 
@@ -303,8 +323,10 @@ int SYS$ERASE(void *fabp, ...)
 {
     va_list ap;
     va_start(ap, fabp);
-    int st = file_op(2, fabp, ap);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
     va_end(ap);
+    int st = file_op(2, fabp, &c);
     return st;
 }
 
@@ -313,9 +335,11 @@ int SYS$CLOSE(void *fabp, ...)
     struct fabdef *fab = (struct fabdef *)fabp;
     va_list ap;
     va_start(ap, fabp);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
+    va_end(ap);
     int st;
     if (!fab_ok(fab)) {
-        va_end(ap);
         return RMS$_FAB;
     }
     uint16_t ifi = fab->fab$w_ifi;
@@ -325,8 +349,7 @@ int SYS$CLOSE(void *fabp, ...)
         fab->fab$w_ifi = ifi;
         fab->fab$l_stv = stv;
     }
-    st = complete(fab, st, ap);
-    va_end(ap);
+    st = complete(fab, st, &c);
     return st;
 }
 
@@ -365,9 +388,11 @@ int SYS$CONNECT(void *rabp, ...)
     struct rabdef *rab = (struct rabdef *)rabp;
     va_list ap;
     va_start(ap, rabp);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
+    va_end(ap);
     int st;
     if (!rab_ok(rab)) {
-        va_end(ap);
         return RMS$_RAB;
     }
     struct fabdef *fab = (struct fabdef *)rab->rab$l_fab;
@@ -382,12 +407,11 @@ int SYS$CONNECT(void *rabp, ...)
             rab->rab$w_isi = isi;
         rab->rab$l_stv = io.stv;
     }
-    st = rab_complete(rab, st, ap);
-    va_end(ap);
+    st = rab_complete(rab, st, &c);
     return st;
 }
 
-static int record_op(int op, void *rabp, va_list ap)
+static int record_op(int op, void *rabp, const struct cmpl *c)
 {
     struct rabdef *rab = (struct rabdef *)rabp;
     if (!rab_ok(rab))
@@ -402,7 +426,7 @@ static int record_op(int op, void *rabp, va_list ap)
         if (op == OVMX_RMSABI_GET || op == OVMX_RMSABI_FIND)
             rab_record(rab, &io);
     }
-    return rab_complete(rab, st, ap);
+    return rab_complete(rab, st, c);
 }
 
 #define RECORD_SERVICE(NAME, OP)                     \
@@ -410,9 +434,10 @@ static int record_op(int op, void *rabp, va_list ap)
     {                                                \
         va_list ap;                                  \
         va_start(ap, rabp);                          \
-        int st = record_op(OP, rabp, ap);            \
+        struct cmpl c;                               \
+        CMPL_TAKE(ap, c);                            \
         va_end(ap);                                  \
-        return st;                                   \
+        return record_op(OP, rabp, &c);              \
     }
 RECORD_SERVICE(SYS$GET, OVMX_RMSABI_GET)
 RECORD_SERVICE(SYS$PUT, OVMX_RMSABI_PUT)

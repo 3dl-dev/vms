@@ -8416,11 +8416,7 @@ apply_edit() {
         # fd-bound release amounted to. A process whose image never opened it
         # (or exec'd past an O_CLOEXEC open) is never deleted. The probe runs at
         # sched_process_exit, before exit_files, so p->files is still there.
-        sed -i -e '/^static void vms_on_process_exit(void \*data, struct task_struct \*p)$/i\
-#include <linux/fdtable.h> /* NEGCTL process-exit-deletion-needs-vms-fd */\
-static const struct file_operations vms_fops; /* NEGCTL process-exit-deletion-needs-vms-fd */\
-static int vms_negctl_vmsfd(const void *v, struct file *f, unsigned int fd)\
-{ (void)v; (void)fd; return f->f_op == \&vms_fops; }' \
+        sed -i -e 's|^static void vms_on_process_exit(void \*data, struct task_struct \*p)$|#include <linux/fdtable.h> /* NEGCTL process-exit-deletion-needs-vms-fd */\nstatic const struct file_operations vms_fops;\nstatic int vms_negctl_vmsfd(const void *v, struct file *f, unsigned int fd)\n{ (void)v; (void)fd; return f->f_op == \&vms_fops; }\nstatic void vms_on_process_exit(void *data, struct task_struct *p) /* NEGCTL process-exit-deletion-needs-vms-fd */|' \
             -e 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (atomic_read(\&p->signal->live) != 0 \|\| !p->files \|\| !iterate_fd(p->files, 0, vms_negctl_vmsfd, NULL)) /* NEGCTL process-exit-deletion-needs-vms-fd */|' "$_file";;
     spawn-arm-gone-subprocess-not-completed)
         # UNIQUE TEXT: the termination-record branch of vms_ioctl_spawn_notify.

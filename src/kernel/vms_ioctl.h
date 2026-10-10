@@ -232,6 +232,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_PRMMBX    (1ULL << VMS_PRV_V_PRMMBX)
 #define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
 #define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
+#define VMS_PRV_M_GROUP     (1ULL << VMS_PRV_V_GROUP)   /* $DELPRC et al. in-group (vms-8e9) */
 #define VMS_PRV_M_MOUNT     (1ULL << VMS_PRV_V_MOUNT)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
 #define VMS_PRV_M_PHY_IO    (1ULL << VMS_PRV_V_PHY_IO)
@@ -3421,6 +3422,25 @@ struct vms_brkauth_args {
     uint32_t status;    /* out: SS$_NORMAL / SS$_NOOPER                       */
 };
 #define VMS_IOCTL_BRKAUTH   _IOWR(VMS_IOC_MAGIC, 0x98, struct vms_brkauth_args)
+/*
+ * PROCESS CONTROL BY THE EXECUTIVE (rd vms-8e9). $DELPRC, $FORCEX, $SUSPND and
+ * $RESUME on another process are authorized AND delivered here: the executive
+ * resolves the target by VMS pid, checks the caller's VMS privileges (self
+ * always; another process in the caller's UIC group needs GROUP or WORLD, one
+ * outside it WORLD -- OpenVMS DCL Dictionary STOP), and signals the target's
+ * task itself. No userspace kill() across substrate identities.
+ */
+#define VMS_PROCCTL_DELPRC 1u
+#define VMS_PROCCTL_FORCEX 2u
+#define VMS_PROCCTL_SUSPND 3u
+#define VMS_PROCCTL_RESUME 4u
+struct vms_procctl_args {
+    uint32_t op;        /* in:  VMS_PROCCTL_*                                 */
+    uint32_t pid;       /* in:  target VMS pid, 0 = the caller                */
+    uint32_t code;      /* in:  FORCEX exit code (recorded as its $EXIT)       */
+    uint32_t status;    /* out: SS$_NORMAL / NONEXPR / NOPRIV / BADPARAM        */
+};
+#define VMS_IOCTL_PROCCTL   _IOWR(VMS_IOC_MAGIC, 0x99, struct vms_procctl_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */
@@ -3505,6 +3525,8 @@ _Static_assert(sizeof(struct vms_pri_args) == 24,
                "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
 _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
+_Static_assert(sizeof(struct vms_procctl_args) == 16,
+               "vms_procctl_args layout changed: VMS_IOCTL_PROCCTL ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
                "vms_spawn_notify_args layout changed: VMS_IOCTL_SPAWN_NOTIFY ABI break");
 /*

@@ -310,3 +310,4 @@ vms_kif_tt_write=PROCEDURE
 vms_kif_tt_setmode=PROCEDURE
 vms_kif_tt_attach=PROCEDURE
 vms_kif_tt_sense=PROCEDURE
+vms_kif_procctl=PROCEDURE

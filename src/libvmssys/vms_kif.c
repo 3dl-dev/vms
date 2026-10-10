@@ -2333,6 +2333,22 @@ uint32_t vms_kif_brkauth(uint32_t sndtyp)
     return args.status;
 }
 
+/* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
+ * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
+uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)
+{
+    struct vms_procctl_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.pid = pid;
+    args.code = code;
+
+    KIF_CALL(VMS_IOCTL_PROCCTL, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;

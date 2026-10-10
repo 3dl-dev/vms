@@ -317,6 +317,21 @@ static inline exec_task_pin_t *exec_task_pin(exec_task_ref_t *ref)
 
 static inline void exec_task_unpin(exec_task_pin_t *pin) { put_task_struct(pin); }
 
+/* exec_task_signal (rd vms-8e9): deliver a process-control signal to the whole
+ * process behind `ref` from inside the executive, after the executive's own VMS
+ * privilege check -- not a userspace kill() across substrate identities.
+ * 0, or -ESRCH when the process is gone. */
+#define EXEC_SIG_TERM  SIGTERM
+#define EXEC_SIG_FORCE SIGUSR1
+#define EXEC_SIG_STOP  SIGSTOP
+#define EXEC_SIG_CONT  SIGCONT
+static inline int exec_task_signal(exec_task_ref_t *ref, int sig)
+{
+	if (!ref)
+		return -ESRCH;
+	return kill_pid(ref, sig, 1);
+}
+
 /*
  * exec_task_read_acct - the exact reads vms_proctab.c's fill_proc_acct did,
  * moved behind the seam so the facility keeps only the VMS unit/field mapping.

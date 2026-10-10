@@ -1951,6 +1951,67 @@ out:
 }
 
 /*
+ * vms_ioctl_procctl - $DELPRC / $FORCEX / $SUSPND / $RESUME on a process, by the
+ * executive (rd vms-8e9).
+ *
+ * The executive resolves the target by VMS pid (0 = the caller), authorizes by
+ * the caller's VMS privileges alone -- self always; another process in the
+ * caller's UIC group needs GROUP or WORLD, one outside it WORLD (OpenVMS DCL
+ * Dictionary, STOP; the same rule sys$delprc applied in userspace before) --
+ * and delivers the signal to the target's task itself. A caller's substrate
+ * identity plays no part, so a VMS process on its own substrate uid can stop
+ * another with GROUP/WORLD, and nothing else can.
+ */
+long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_procctl_args args;
+    struct vms_proc *t;
+    exec_task_ref_t *ref;
+    int sig, rc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    switch (args.op) {
+    case VMS_PROCCTL_DELPRC: sig = EXEC_SIG_TERM;  break;
+    case VMS_PROCCTL_FORCEX: sig = EXEC_SIG_FORCE; break;
+    case VMS_PROCCTL_SUSPND: sig = EXEC_SIG_STOP;  break;
+    case VMS_PROCCTL_RESUME: sig = EXEC_SIG_CONT;  break;
+    default:
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    t = (args.pid == 0 || args.pid == proc->vms_pid) ? proc : find_by_vms_pid(args.pid);
+    if (!t) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+    if (t != proc) {
+        int same_group = (t->uic >> 16) == (proc->uic >> 16);
+        uint64_t need = same_group ? (VMS_PRV_M_GROUP | VMS_PRV_M_WORLD)
+                                   : VMS_PRV_M_WORLD;
+        /* NEGCTL-ANCHORED (procctl-privilege-not-checked) */
+        if (!(proc->cur_privs & need)) {
+            exec_unlock(&vms_proc_hash_lock);
+            args.status = SS__NOPRIV;
+            goto out;
+        }
+    }
+    ref = t->pid_ref;
+    exec_unlock(&vms_proc_hash_lock);
+    /* The pid_ref is held by the PCB; a PCB deleted after the unlock leaves a
+     * ref whose process is gone, which exec_task_signal reports as -ESRCH. */
+    rc = exec_task_signal(ref, sig);
+    args.status = rc == 0 ? SS__NORMAL : SS__NONEXPR;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_brkauth - may the caller $BRKTHRU to every terminal / every user
  * (vms-768)? Those send types need OPER: SS$_NOOPER without it (OpenVMS VAX
  * V7.3, docs/oracle/semantics/privchk). Any other send type is the caller's own

@@ -1454,6 +1454,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_RIGHTS:
 	case VMS_IOCTL_PRI:
 	case VMS_IOCTL_BRKAUTH:
+	case VMS_IOCTL_PROCCTL:
 	case VMS_IOCTL_SPAWN_NOTIFY:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
@@ -1496,6 +1497,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_pri(proc, (unsigned long)uarg);              break;
 		case VMS_IOCTL_BRKAUTH:
 			r = vms_ioctl_brkauth(proc, (unsigned long)uarg);          break;
+		case VMS_IOCTL_PROCCTL:   /* rd vms-8e9 */
+			r = vms_ioctl_procctl(proc, (unsigned long)uarg);          break;
 		/* /NOWAIT subprocess-exit completion arm (vms-e9a B1) */
 		case VMS_IOCTL_SPAWN_NOTIFY:
 			r = vms_ioctl_spawn_notify(proc, (unsigned long)uarg);     break;

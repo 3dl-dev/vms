@@ -712,6 +712,9 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
     long total_blocks = 0;
     long total_alloc = 0;
     int col = 0;
+    int col_pad = 0;      /* padding owed to the entry before, written only
+                           * when another entry follows on the row (VAX V7.3
+                           * keystroke PG.DIR: no trailing blanks; rd vms-457) */
     int col_width = (o->show_size || o->show_date) ? 0 : (80 / o->columns);
 
     char ver_prev_base[288] = "";
@@ -913,7 +916,10 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                 printf("\n");
                 col = 0;
             }
-            printf("%-*s", cells * col_width, vms_name);
+            if (col > 0)
+                printf("%*s", col_pad, "");
+            printf("%s", vms_name);
+            col_pad = cells * col_width - (int)nlen;
             col += cells;
             if (col >= o->columns) {
                 printf("\n");

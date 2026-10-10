@@ -1349,8 +1349,10 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 /*
  * vms_tt_write - output through the class driver. `cooked` 1: the bytes are a
  * program's records, '\n'-terminated (a writer arriving on the port's own
- * write path); 0: written as they are ($QIO); 2: written as they are without
- * moving the driver's idea of the cursor (IO$M_NOFORMAT).
+ * write path); 0: written as they are (the driver's own output: a broadcast);
+ * 3: a program's $QIO write, as they are -- its own CR LF leaves nothing owed;
+ * 2: as they are without moving the driver's idea of the cursor
+ * (IO$M_NOFORMAT).
  */
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
@@ -1413,8 +1415,17 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 				}
 			}
 			chunk[k++] = c;
-			if (cooked != 2)
+			if (cooked == 3 && c == CH_LF && tt->pos == TT_POS_CR) {
+				/* a program's own CR LF ($QIO, no carriage
+				 * control) leaves an empty line with nothing owed:
+				 * the next prompt starts where it is (VAX V7.3
+				 * keystroke PG.DIR C1, EDT.KEYPAD Q: "<NUL>$ ";
+				 * rd vms-457) */
+				tt->pos = TT_POS_CLEAN;
+				tt->last = c;
+			} else if (cooked != 2) {
 				tt_track(tt, c);
+			}
 			i++;
 		}
 		exec_unlock(&tt->lock);
@@ -1669,7 +1680,7 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 		 * and carriage return after; the text itself carries no '\n' */
 		if (vms_tt_write(tt, chunk, k,
 				 (a.flags & VMS_TT_WR_RECORD) ? 1 :
-				 (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 0)) {
+				 (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 3)) {
 			a.status = SS__ABORT;
 			break;
 		}

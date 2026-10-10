@@ -644,7 +644,8 @@ tt-brkthru-privilege-ignored
 tt-wrap-ignored
 jpi-bufio-not-counted
 tt-noformat-moves-cursor
-tt-record-not-bufio"
+tt-record-not-bufio
+tt-raw-crlf-owes-newline"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2504,6 +2505,25 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: no other check reads JPI\$_BUFIO.";;
+        esac;;
+
+    tt-raw-crlf-owes-newline)
+        case "$_f" in
+        facility)     echo "a program's own CR LF (\$QIO write, no carriage control) leaves nothing owed: the next prompt starts in place (vms_tt.c vms_tt_write mode 3, rd vms-457; keystroke PG.DIR C1, EDT.KEYPAD Q)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() takes a \$QIO write's LF after its CR as leaving the line clean (\`if (cooked == 3 \&\& c == CH_LF\`). The mutation never does (\`if (0 \&\& c == CH_LF\`): DCL's prompt after EDT or the DIRECTORY/PAGE pager starts with a CR VMS does not send. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+after a program's own CR LF, DCL's prompt starts in place: <NUL>$ 
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the checks after it start from an explicit CR LF.";;
         esac;;
 
     tt-owed-linefeed-unpaid)
@@ -8659,9 +8679,11 @@ apply_edit() {
     jpi-bufio-not-counted)
         sed -i 's|^    __atomic_fetch_add(&proc->io_buffered, 1u, __ATOMIC_RELAXED);   /\* JPI\$_BUFIO (rd vms-bd71) \*/$|    (void)0; /* NEGCTL jpi-bufio-not-counted */|' "$_file";;
     tt-noformat-moves-cursor)
-        sed -i 's|^\t\t\tif (cooked != 2)$|\t\t\tif (1) /* NEGCTL tt-noformat-moves-cursor */|' "$_file";;
+        sed -i 's|^\t\t\t} else if (cooked != 2) {$|\t\t\t} else if (1) { /* NEGCTL tt-noformat-moves-cursor */|' "$_file";;
     tt-record-not-bufio)
         sed -i 's|^\t\tvms_proc_count_bufio_current(recs);$|\t\t(void)recs; /* NEGCTL tt-record-not-bufio */|' "$_file";;
+    tt-raw-crlf-owes-newline)
+        sed -i 's|^\t\t\tif (cooked == 3 \&\& c == CH_LF \&\& tt->pos == TT_POS_CR) {$|\t\t\tif (0 \&\& c == CH_LF \&\& tt->pos == TT_POS_CR) { /* NEGCTL tt-raw-crlf-owes-newline */|' "$_file";;
     tt-owed-linefeed-unpaid)
         # Unique text: vms_tt_read()'s owed-line-feed payment.
         sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;

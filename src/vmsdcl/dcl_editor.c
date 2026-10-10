@@ -118,7 +118,7 @@ static int number_run(const struct edt_buf *b, int at, int count, long *first,
         return 0;
     }
     long next = b->l[at].num;
-    for (long s = EDT_SCALE / 10; s >= 1; s /= 10) {
+    for (long s = EDT_SCALE; s >= 1; s /= 10) {
         long base = (prev / s) * s;
         if (base + (long)count * s < next) {
             *first = base + s;
@@ -690,6 +690,8 @@ static int kp_find_prompt(struct kp *k)
         }
     }
     if (first) so(&k->s, "\033[?8h");
+    k->s.known = 0;                     /* EDT does not track the prompt line
+                                         * (EDT.KEYPAD F3: ESC[23H, absolute) */
     str[n] = '\0';
     if (n) snprintf(k->find, sizeof k->find, "%s", str);
     so(&k->s, "\033[?8l");
@@ -1021,7 +1023,7 @@ static void screen_reset(int used)
 {
     static const char r[] = "\r\n\033[m\033)B\033[;r\033[24H\r\033>\r\n";
     if (used)
-        dcl_tt_raw_write(r, sizeof r - 1);
+        dcl_tt_qio_write(r, sizeof r - 1);  /* its CR LF leaves nothing owed */
 }
 
 int edt_run(struct dcl_context *ctx, const char *spec, const char *output,

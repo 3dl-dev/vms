@@ -291,6 +291,16 @@ void dcl_tt_raw_write(const void *b, size_t n)
                    (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
 
+void dcl_tt_qio_write(const void *b, size_t n)
+{
+    uint16_t iosb[4];
+    if (!n || !dcl_tt_assign())
+        return;
+    fflush(stdout);
+    (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                   (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
 int dcl_tt_getc(int poll)
 {
     static uint32_t none[8];
@@ -334,16 +344,16 @@ int dcl_tt_getc(int poll)
  *     " RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit"
  * at the start of the last line, and waits, unechoed, for a key: RETURN or
  * SPACE shows the next screen, CTRL/Z (or CTRL/Y) ends it. The last screen is
- * filled out to the page length with empty lines. Everything goes out
- * IO$M_NOFORMAT, so the terminal driver's idea of the cursor is the one it
- * had before the pager ran (PG.DIR C1: DCL's next prompt follows the
- * unechoed RETURN with no new line of its own).
+ * filled out to the page length with empty lines. The screens go out as
+ * $QIO writes with their own CR LFs, which leave nothing owed (PG.DIR C1:
+ * DCL's next prompt starts in place); output that fits on one screen is
+ * written as records (PG.DIR D).
  */
 static void pg_raw(const char *b, size_t n)
 {
     uint16_t iosb[4];
     if (n)
-        (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_NOFORMAT, iosb,
+        (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb,
                        NULL, 0, (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
 
@@ -390,6 +400,20 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
         page_len = 24;
     body = page_len - 1;
     rewind(pg->tmp);
+
+    /* output that fits on one screen goes out as the records it is, the
+     * screen filled out with empty ones (PG.DIR D: DCL's prompt follows with
+     * its own CR) */
+    if (nlines <= page_len) {
+        while (fgets(line, sizeof line, pg->tmp))
+            fputs(line, stdout);
+        for (long i = nlines; i < page_len; i++)
+            fputc('\n', stdout);
+        fflush(stdout);
+        fclose(pg->tmp);
+        pg->tmp = NULL;
+        return;
+    }
 
     while (fgets(line, sizeof line, pg->tmp)) {
         size_t l = strlen(line);

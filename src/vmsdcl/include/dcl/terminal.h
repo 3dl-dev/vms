@@ -134,7 +134,8 @@ int dcl_tt_inquire(char *reply, size_t replysz);
 struct dcl_pager { FILE *tmp; int save; };
 
 /* screen programs (EDT keypad mode, rd vms-c37): raw output, raw keys */
-void dcl_tt_raw_write(const void *b, size_t n);
+void dcl_tt_raw_write(const void *b, size_t n);     /* IO$M_NOFORMAT */
+void dcl_tt_qio_write(const void *b, size_t n);     /* $QIO, no carriage control */
 int  dcl_tt_getc(int poll);
 int  dcl_page_begin(struct dcl_pager *pg);
 void dcl_page_end(struct dcl_pager *pg, int page_len);

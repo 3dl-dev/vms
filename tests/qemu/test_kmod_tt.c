@@ -384,6 +384,20 @@ int main(void)
     /* negctl: tt-noformat-moves-cursor */
     CHECK(strcmp(scr, "\ne\r") == 0,
           "after an IO$M_NOFORMAT write the next record starts where the driver last put the cursor: <LF>e<CR>");
+    /* a program's own CR LF ($QIO, no carriage control) leaves nothing owed:
+     * DCL's next prompt starts there, <NUL>$ (VAX V7.3 keystroke PG.DIR C1,
+     * EDT.KEYPAD Q; rd vms-457) */
+    (void)vms_kif_tt_write(chan, "zz\r\n", 4);
+    (void)screen(m, scr, sizeof(scr), 300);
+    rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-raw-crlf-owes-newline */
+    CHECK(scr[0] == '\0' && memcmp(scr + 1, "$ ", 2) == 0,
+          "after a program's own CR LF, DCL's prompt starts in place: <NUL>$ ");
+    type(m, "\r");
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
     (void)vms_kif_tt_write(chan, "\r\n", 2);      /* back to a fresh line */
     (void)screen(m, scr, sizeof(scr), 300);
 

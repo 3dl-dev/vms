@@ -1298,6 +1298,49 @@ static uint32_t assign_vms_pid(void)
 }
 
 /*
+ * vms_proc_copy_identity - a new PCB takes its creator's identity: UIC, user
+ * name, process name, terminal, CLI context, defaults, rights, base priority
+ * and both privilege masks (the CURRENT, possibly reduced, ones). Caller holds
+ * vms_proc_hash_lock; `parent` is a live row. Shared by image continuation and
+ * by creator-driven creation (rd vms-c43).
+ */
+static void vms_proc_copy_identity(struct vms_proc *proc, struct vms_proc *parent)
+{
+    proc->uic = parent->uic;
+    memcpy(proc->username, parent->username, sizeof(proc->username));
+    memcpy(proc->prcnam,   parent->prcnam,   sizeof(proc->prcnam));
+    memcpy(proc->terminal, parent->terminal, sizeof(proc->terminal));
+
+    /*
+     * CLI invocation context (vms-f60d): an image inherits the invoking
+     * CLI's command line and cliflag from the CLI's PCB, the same way it
+     * inherits identity. This is what lets DCL set the context once
+     * (VMS_IOCTL_SETCLI) and every image it activates read its OWN
+     * invoking command line back (VMS_IOCTL_GETCLI) from the executive,
+     * never a Linux env-var shim (INV-6). The image's own completion
+     * $STATUS is NOT inherited -- each image records its own via
+     * VMS_IOCTL_SETEXIT -- so exit_status/has_exit_status are left as the
+     * kmem_cache_zalloc zero.
+     */
+    proc->cli_present = parent->cli_present;
+    proc->cli_length  = parent->cli_length;
+    memcpy(proc->cli_command, parent->cli_command, sizeof(proc->cli_command));
+    proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
+    proc->dfprot_set = parent->dfprot_set;
+    memcpy(proc->ddir, parent->ddir, sizeof(proc->ddir)); /* $SETDDIR too */
+    memcpy(proc->rights_id, parent->rights_id, sizeof(proc->rights_id));
+    memcpy(proc->rights_attr, parent->rights_attr, sizeof(proc->rights_attr));
+    proc->rights_n = parent->rights_n;          /* the process rights list (vms-7d5a) */
+    proc->pri_base = parent->pri_base;          /* base priority (vms-768) */
+    proc->pri_set  = parent->pri_set;
+
+    spin_lock(&parent->mode_lock);
+    proc->perm_privs = parent->perm_privs;
+    proc->cur_privs  = parent->cur_privs;
+    spin_unlock(&parent->mode_lock);
+}
+
+/*
  * vms_proc_continue_identity - stamp this task's registered VMS parent's
  * identity onto a not-yet-inserted child PCB (vms-4d7, Option B).
  *
@@ -1373,38 +1416,7 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, bool share_pid,
         if (parent->pid_ref != parent_pid)
             continue;
 
-        proc->uic = parent->uic;
-        memcpy(proc->username, parent->username, sizeof(proc->username));
-        memcpy(proc->prcnam,   parent->prcnam,   sizeof(proc->prcnam));
-        memcpy(proc->terminal, parent->terminal, sizeof(proc->terminal));
-
-        /*
-         * CLI invocation context (vms-f60d): an image inherits the invoking
-         * CLI's command line and cliflag from the CLI's PCB, the same way it
-         * inherits identity. This is what lets DCL set the context once
-         * (VMS_IOCTL_SETCLI) and every image it activates read its OWN
-         * invoking command line back (VMS_IOCTL_GETCLI) from the executive,
-         * never a Linux env-var shim (INV-6). The image's own completion
-         * $STATUS is NOT inherited -- each image records its own via
-         * VMS_IOCTL_SETEXIT -- so exit_status/has_exit_status are left as the
-         * kmem_cache_zalloc zero.
-         */
-        proc->cli_present = parent->cli_present;
-        proc->cli_length  = parent->cli_length;
-        memcpy(proc->cli_command, parent->cli_command, sizeof(proc->cli_command));
-        proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
-        proc->dfprot_set = parent->dfprot_set;
-        memcpy(proc->ddir, parent->ddir, sizeof(proc->ddir)); /* $SETDDIR too */
-        memcpy(proc->rights_id, parent->rights_id, sizeof(proc->rights_id));
-        memcpy(proc->rights_attr, parent->rights_attr, sizeof(proc->rights_attr));
-        proc->rights_n = parent->rights_n;          /* the process rights list (vms-7d5a) */
-        proc->pri_base = parent->pri_base;          /* base priority (vms-768) */
-        proc->pri_set  = parent->pri_set;
-
-        spin_lock(&parent->mode_lock);
-        proc->perm_privs = parent->perm_privs;
-        proc->cur_privs  = parent->cur_privs;
-        spin_unlock(&parent->mode_lock);
+        vms_proc_copy_identity(proc, parent);
 
         /*
          * SHARE the parent's VMS PID only for an image-activation CONTINUE
@@ -1618,6 +1630,83 @@ static void vms_proc_inherit_channels(struct vms_proc *child)
     rcu_read_unlock();
 }
 
+/*
+ * vms_proc_init_state - the per-PCB queues, locks and lists every new PCB
+ * starts with (AST queues, $HIBER, event flags, locks, channels, P0/P1).
+ * Shared by registration and by creator-driven creation (rd vms-c43).
+ */
+static void vms_proc_init_state(struct vms_proc *proc)
+{
+    int i;
+
+    /* image_active/pre_image_mode (vms-68f.iii): kmem_cache_zalloc() above
+     * already zeroed both, so a fresh process starts with no controlled
+     * descent open, exactly what VMS_IOCTL_IMAGE_RUNDOWN's guard needs. */
+    spin_lock_init(&proc->mode_lock);
+
+    /* Initialize AST queues */
+    for (i = 0; i < 4; i++) {
+        INIT_LIST_HEAD(&proc->ast[i].pending);
+        proc->ast[i].count = 0;
+        proc->ast[i].enabled = 1;  /* enabled by default */
+        spin_lock_init(&proc->ast[i].lock);
+    }
+
+    /* Hibernate/wake + async AST-delivery wakeup (vms-feb). wake_pending was
+     * zeroed by kmem_cache_zalloc() above; the wait queue and its paired lock
+     * need explicit init. */
+    init_waitqueue_head(&proc->hiber_wq);
+    spin_lock_init(&proc->hiber_lock);
+
+    /* Initialize event flags */
+    proc->ef.local[0] = 0;
+    proc->ef.local[1] = 0;
+    proc->ef.common[0] = NULL;
+    proc->ef.common[1] = NULL;
+    init_waitqueue_head(&proc->ef.waitq);
+    spin_lock_init(&proc->ef.lock);
+
+    /* Initialize lock list */
+    INIT_LIST_HEAD(&proc->locks);
+    proc->lock_count = 0;
+    spin_lock_init(&proc->lock_list_lock);
+
+    /* Initialize the I/O channel list (device table, vms-d0b) */
+    INIT_LIST_HEAD(&proc->channels);
+    proc->next_chan = 0;
+    spin_lock_init(&proc->chan_lock);
+
+    /* Mailbox channels (vms-d44) -- a separate list, same chan_lock and
+     * next_chan counter as the device channels above (vms_mbx.h). */
+    INIT_LIST_HEAD(&proc->mbx_channels);
+
+    /* INET pseudo-device channels (BGn:, vms-527) -- likewise a separate list
+     * on the same chan_lock and next_chan counter (vms_bg.h). */
+    INIT_LIST_HEAD(&proc->bg_channels);
+
+    /* Files-11 (ODS-2) ACP file-class channels (vms-149) -- likewise a separate
+     * list on the same chan_lock and next_chan counter (vms_acp.h). */
+    INIT_LIST_HEAD(&proc->file_channels);
+
+    /* L2 (raw datalink) socket handles (vms-7eb, auth slice of vms-1e4) -- a
+     * separate list on its OWN dedicated lock, NOT the chan_lock/next_chan
+     * space above (an L2 handle is not a $ASSIGN channel; see vms_l2.h). */
+    INIT_LIST_HEAD(&proc->l2_channels);
+    spin_lock_init(&proc->l2_lock);
+
+    /* P0 program region (vms-68f.i): unmapped until VMS_IOCTL_P0_MAP
+     * records an extent. kmem_cache_zalloc() above already zeroed
+     * p0_base/p0_limit; only the lock needs initializing. */
+    spin_lock_init(&proc->p0_lock);
+
+    /* P1 control region (vms-68f.ii): unregistered until VMS_IOCTL_P1_MAP
+     * records an extent. Separate lock from p0_lock -- see the p1_lock
+     * comment in vms_internal.h for why that separation is the mechanism
+     * behind "P0 deleted on rundown, P1 survives", not decoration.
+     * kmem_cache_zalloc() above already zeroed p1_base/p1_limit. */
+    spin_lock_init(&proc->p1_lock);
+}
+
 struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
                                    bool share_pid)
 {
@@ -1626,7 +1715,6 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
     bool inherited = false;
     uint32_t parent_job_id;
     uint32_t proc_owner_hint;
-    int i;
 
     /*
      * Read before the PCB exists and before any lock this function takes
@@ -1735,72 +1823,7 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
                          : VMS_DEFAULT_PRIVS;
         proc->cur_privs = proc->perm_privs;
     }
-    /* image_active/pre_image_mode (vms-68f.iii): kmem_cache_zalloc() above
-     * already zeroed both, so a fresh process starts with no controlled
-     * descent open, exactly what VMS_IOCTL_IMAGE_RUNDOWN's guard needs. */
-    spin_lock_init(&proc->mode_lock);
-
-    /* Initialize AST queues */
-    for (i = 0; i < 4; i++) {
-        INIT_LIST_HEAD(&proc->ast[i].pending);
-        proc->ast[i].count = 0;
-        proc->ast[i].enabled = 1;  /* enabled by default */
-        spin_lock_init(&proc->ast[i].lock);
-    }
-
-    /* Hibernate/wake + async AST-delivery wakeup (vms-feb). wake_pending was
-     * zeroed by kmem_cache_zalloc() above; the wait queue and its paired lock
-     * need explicit init. */
-    init_waitqueue_head(&proc->hiber_wq);
-    spin_lock_init(&proc->hiber_lock);
-
-    /* Initialize event flags */
-    proc->ef.local[0] = 0;
-    proc->ef.local[1] = 0;
-    proc->ef.common[0] = NULL;
-    proc->ef.common[1] = NULL;
-    init_waitqueue_head(&proc->ef.waitq);
-    spin_lock_init(&proc->ef.lock);
-
-    /* Initialize lock list */
-    INIT_LIST_HEAD(&proc->locks);
-    proc->lock_count = 0;
-    spin_lock_init(&proc->lock_list_lock);
-
-    /* Initialize the I/O channel list (device table, vms-d0b) */
-    INIT_LIST_HEAD(&proc->channels);
-    proc->next_chan = 0;
-    spin_lock_init(&proc->chan_lock);
-
-    /* Mailbox channels (vms-d44) -- a separate list, same chan_lock and
-     * next_chan counter as the device channels above (vms_mbx.h). */
-    INIT_LIST_HEAD(&proc->mbx_channels);
-
-    /* INET pseudo-device channels (BGn:, vms-527) -- likewise a separate list
-     * on the same chan_lock and next_chan counter (vms_bg.h). */
-    INIT_LIST_HEAD(&proc->bg_channels);
-
-    /* Files-11 (ODS-2) ACP file-class channels (vms-149) -- likewise a separate
-     * list on the same chan_lock and next_chan counter (vms_acp.h). */
-    INIT_LIST_HEAD(&proc->file_channels);
-
-    /* L2 (raw datalink) socket handles (vms-7eb, auth slice of vms-1e4) -- a
-     * separate list on its OWN dedicated lock, NOT the chan_lock/next_chan
-     * space above (an L2 handle is not a $ASSIGN channel; see vms_l2.h). */
-    INIT_LIST_HEAD(&proc->l2_channels);
-    spin_lock_init(&proc->l2_lock);
-
-    /* P0 program region (vms-68f.i): unmapped until VMS_IOCTL_P0_MAP
-     * records an extent. kmem_cache_zalloc() above already zeroed
-     * p0_base/p0_limit; only the lock needs initializing. */
-    spin_lock_init(&proc->p0_lock);
-
-    /* P1 control region (vms-68f.ii): unregistered until VMS_IOCTL_P1_MAP
-     * records an extent. Separate lock from p0_lock -- see the p1_lock
-     * comment in vms_internal.h for why that separation is the mechanism
-     * behind "P0 deleted on rundown, P1 survives", not decoration.
-     * kmem_cache_zalloc() above already zeroed p1_base/p1_limit. */
-    spin_lock_init(&proc->p1_lock);
+    vms_proc_init_state(proc);
 
     /*
      * EXECUTIVE FORK/EXEC INHERITANCE OF BG CHANNELS (vms-3bf). Now that the
@@ -1901,6 +1924,96 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
              shared_vms_pid ? "continued" : (inherited ? "subprocess" : "derived"));
 
     return proc;
+}
+
+/*
+ * vms_proc_create_for - creator-driven creation, the Linux substrate half
+ * (rd vms-c43; the facility half is vms_ioctl_creprc_pcb in vms_proctab.c).
+ *
+ * Creates the PCB of the task `child_pid` on behalf of `creator`, before that
+ * task runs its image: it must be the creator's child (or, `detached`, its
+ * grandchild through the detach intermediate, which the creator holds alive),
+ * a whole process, and without a PCB. Its identity is the creator's (a
+ * subprocess, process name cleared -- it names itself with $SETPRN) or the one
+ * given (detached, authorized by the caller); its creator of record is
+ * `creator`; it copies nothing else -- no process logical names, no BG
+ * channels: a $CREPRC'd process starts with none of its creator's (VMS).
+ */
+uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
+                             const char *uname, uint32_t uic, uint64_t privs,
+                             uint32_t *vms_pid_out)
+{
+    struct pid *cpid;
+    struct task_struct *t, *anc;
+    struct vms_proc *proc, *existing;
+    pid_t tgid;
+    bool related;
+
+    cpid = find_get_pid((pid_t)child_pid);
+    if (!cpid)
+        return SS__NONEXPR;
+    rcu_read_lock();
+    t = pid_task(cpid, PIDTYPE_PID);
+    related = false;
+    if (t && task_tgid(t) == cpid) {
+        anc = rcu_dereference(t->real_parent);
+        if (detached && anc)
+            anc = rcu_dereference(anc->real_parent);
+        related = anc && task_tgid(anc) == creator->pid_ref;
+    }
+    rcu_read_unlock();
+    if (!t) {
+        put_pid(cpid);
+        return SS__NONEXPR;
+    }
+    if (!related) {
+        put_pid(cpid);
+        return SS__NOPRIV;
+    }
+    tgid = pid_nr(cpid);
+
+    proc = kmem_cache_zalloc(vms_proc_cache, GFP_KERNEL);
+    if (!proc) {
+        put_pid(cpid);
+        return SS__INSFMEM;
+    }
+    proc->linux_pid = tgid;
+    proc->pid_ref = cpid;               /* the reference find_get_pid took */
+    proc->current_mode = PSL_C_USER;
+    proc->owner_vms_pid = creator->vms_pid;
+    vms_proc_init_state(proc);
+
+    spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible(vms_proc_hash, existing, hash_node, tgid) {
+        if (existing->linux_pid == tgid) {
+            spin_unlock(&vms_proc_hash_lock);
+            put_pid(proc->pid_ref);
+            kmem_cache_free(vms_proc_cache, proc);
+            return SS__BADPARAM;        /* it already is a VMS process */
+        }
+    }
+    if (!detached) {
+        vms_proc_copy_identity(proc, creator);
+        proc->prcnam[0] = '\0';
+    } else {
+        strscpy(proc->username, uname, sizeof(proc->username));
+        proc->uic = uic;
+        proc->perm_privs = privs;
+        proc->cur_privs = privs;
+    }
+    proc->vms_pid = assign_vms_pid();
+    if (proc->vms_pid == 0) {
+        spin_unlock(&vms_proc_hash_lock);
+        put_pid(proc->pid_ref);
+        kmem_cache_free(vms_proc_cache, proc);
+        return SS__INSFMEM;
+    }
+    proc->job_id = detached ? proc->vms_pid
+                            : (creator->job_id ? creator->job_id : creator->vms_pid);
+    hash_add_rcu(vms_proc_hash, &proc->hash_node, tgid);
+    spin_unlock(&vms_proc_hash_lock);
+    *vms_pid_out = proc->vms_pid;
+    return SS__NORMAL;
 }
 
 /*
@@ -2416,6 +2529,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_brkauth(proc, arg);
     case VMS_IOCTL_PROCCTL:           /* rd vms-8e9 */
         return vms_ioctl_procctl(proc, arg);
+    case VMS_IOCTL_CREPRC_PCB:        /* rd vms-c43 */
+        return vms_ioctl_creprc_pcb(proc, arg);
 
     /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
     case VMS_IOCTL_SPAWN_NOTIFY:

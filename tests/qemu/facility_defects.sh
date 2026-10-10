@@ -469,6 +469,8 @@ creprc-handshake-eintr
 run-detached-name-dropped
 delprc-privcheck-bypassed
 procctl-not-delivered
+creprc-pcb-not-a-child
+creprc-pcb-identity-unchecked
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
@@ -5156,6 +5158,38 @@ EOF
                       ;;
         esac;;
 
+    creprc-pcb-not-a-child)
+        case "$_f" in
+        facility)     echo "creator-driven creation (VMS_IOCTL_CREPRC_PCB, vms_proc_create_for in the Linux module rind, rd vms-c43) -- a PCB is made only for the caller's own child (or detached grandchild)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_creprc_pcb";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_create_for stops checking that the target task is the caller's child: any process can make a PCB -- with ITS identity -- for any task without one, so a privileged process could hand its identity to a task it did not create. The sibling case reddens. Gone after apply.";;
+        require_fail) cat <<'EOF'
+CREPRC_PCB for a task that is not the caller's child is refused (SS$_NOPRIV)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+    creprc-pcb-identity-unchecked)
+        case "$_f" in
+        facility)     echo "creator-driven creation of a DETACHED process (vms_ioctl_creprc_pcb, kernel-core/vms_proctab.c, rd vms-c43) -- the identity given must be one the creator may give";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_creprc_pcb";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_creprc_pcb accepts any detached identity: a creator without SETPRV can create a process holding privileges it is not authorized for (here SETPRV itself). Gone after apply.";;
+        require_fail) cat <<'EOF'
+a detached identity with a privilege its creator is not authorized for is refused (SS$_NOPRIV)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
     procctl-not-delivered)
         case "$_f" in
         facility)     echo "process control delivered by the executive (vms_ioctl_procctl -> exec_task_signal, kernel-core/vms_proctab.c, rd vms-8e9) -- \$DELPRC/\$FORCEX/\$SUSPND/\$RESUME reach the target from inside the executive, not by a userspace kill() across substrate identities";;
@@ -8611,6 +8645,10 @@ apply_edit() {
         # other argument, and every other line of the command, is untouched.
         sed -i 's|                                 prc_d.dsc\$a_pointer ? \&prc_d : NULL,|                                 NULL, /* NEGCTL run-detached-name-dropped */|' "$_file";;
 
+    creprc-pcb-not-a-child)
+        sed -i 's|^        related = anc \&\& task_tgid(anc) == creator->pid_ref;$|        related = true; (void)anc; /* NEGCTL creprc-pcb-not-a-child */|' "$_file";;
+    creprc-pcb-identity-unchecked)
+        sed -i 's|^        ok = (proc->cur_privs \& VMS_PRV_M_SETPRV) != 0 \|\|$|        ok = 1 \|\| /* NEGCTL creprc-pcb-identity-unchecked */|' "$_file";;
     procctl-not-delivered)
         # UNIQUE TEXT: vms_ioctl_procctl's one delivery call.
         sed -i 's|^    rc = exec_task_signal(ref, sig);$|    rc = 0; (void)ref; (void)sig; /* NEGCTL procctl-not-delivered */|' "$_file";;
@@ -8743,8 +8781,9 @@ apply_edit() {
         sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file";;
     register-continue-identity-dropped)
         # UNIQUE TEXT: `proc->cur_privs  = parent->cur_privs;` (two spaces
-        # around the second `=`) occurs once, at 8-space indentation inside
-        # vms_proc_continue_identity()'s hash walk -- the UNCONDITIONAL identity/
+        # around the second `=`) occurs once, at 4-space indentation inside
+        # vms_proc_copy_identity() (shared by continuation and, rd vms-c43,
+        # creator-driven creation; formerly inline in vms_proc_continue_identity) -- the UNCONDITIONAL identity/
         # privilege copy an activated image (and a $CREPRC subprocess) inherits
         # from its activator. Zeroing the copy drops the continued/inherited
         # privilege mask at its SOURCE: the image still registers (inherited=
@@ -8756,7 +8795,7 @@ apply_edit() {
         # check and never touched test_syssvc_identcont -- an orphan. After this
         # substitution the `= parent->cur_privs;` text is gone, so a second apply
         # finds no match: the no-op selftest requires.
-        sed -i 's|^        proc->cur_privs  = parent->cur_privs;$|        proc->cur_privs  = 0; /* NEGCTL register-continue-identity-dropped: continued/inherited image loses the parent'"'"'s privilege mask at the copy site */|' "$_file";;
+        sed -i 's|^    proc->cur_privs  = parent->cur_privs;$|    proc->cur_privs  = 0; /* NEGCTL register-continue-identity-dropped: continued/inherited image loses the parent'"'"'s privilege mask at the copy site */|' "$_file";;
     scratch-dir-owner-not-system)
         # Single-line, uniquely-anchored inside test_syssvc_scratch_
         # writable.c's OWN provisioning duplicate (see this defect's

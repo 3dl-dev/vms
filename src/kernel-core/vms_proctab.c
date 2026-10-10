@@ -1951,6 +1951,55 @@ out:
 }
 
 /*
+ * vms_ioctl_creprc_pcb - $CREPRC's creator creates the new process's PCB
+ * (rd vms-c43, design note 3.1). The caller is the creator; the target is a
+ * task it forked and is holding before exec. A DETACHED identity is the one
+ * the creator may give: SETPRV, or exactly its own user name and UIC with a
+ * subset of its authorized privileges (the creation ticket's rule). The
+ * substrate verifies the parentage and creates the row (vms_proc_create_for).
+ */
+long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_creprc_pcb_args args;
+    int detached;
+    bool ok;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+    args.vms_pid = 0;
+    if (args.flags != VMS_CREPRC_PCB_SUBPROCESS && args.flags != VMS_CREPRC_PCB_DETACHED) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    detached = args.flags == VMS_CREPRC_PCB_DETACHED;
+    if (detached) {
+        if (!username_is_valid(args.username)) {
+            args.status = SS__IVLOGNAM;
+            goto out;
+        }
+        exec_lock(&proc->mode_lock);
+        /* NEGCTL-ANCHORED (creprc-pcb-identity-unchecked) */
+        ok = (proc->cur_privs & VMS_PRV_M_SETPRV) != 0 ||
+             ((args.privs & ~proc->perm_privs) == 0 &&
+              args.uic == proc->uic &&
+              strncmp(proc->username, args.username, VMS_USERNAME_SIZE) == 0);
+        exec_unlock(&proc->mode_lock);
+        if (!ok) {
+            args.status = SS__NOPRIV;
+            goto out;
+        }
+    }
+    args.status = vms_proc_create_for(proc, args.child_pid, detached, args.username,
+                                      args.uic, args.privs, &args.vms_pid);
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_procctl - $DELPRC / $FORCEX / $SUSPND / $RESUME on a process, by the
  * executive (rd vms-8e9).
  *

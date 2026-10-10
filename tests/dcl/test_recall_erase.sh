@@ -8,9 +8,12 @@
 # not their own command text, so the strings below can only come from a RECALL
 # listing.) DCL Dictionary, RECALL/ERASE.
 #
-# EXPECT: contains:RECALL/ALL
+# An emptied buffer lists nothing at all -- not even the RECALL/ALL that asked:
+# VMS never records a RECALL command (VAX V7.3 keystroke RC.ALL A2, rd vms-0315).
+# EXPECT: contains:ERASE-LISTED
+# EXPECT_NOT: regex:^ +[0-9]+ 
 # EXPECT_NOT: regex:[[:space:]]+SHOW TIME
 # EXPECT_NOT: regex:[[:space:]]+SHOW USERS
 VMSDCL="${VMSDCL:-vmsdcl}"
 
-printf 'SHOW TIME\nSHOW USERS\nRECALL/ERASE\nRECALL/ALL\n' | $VMSDCL 2>&1
+printf 'SHOW TIME\nSHOW USERS\nRECALL/ERASE\nRECALL/ALL\nWRITE SYS$OUTPUT "ERASE-"+"LISTED"\n' | $VMSDCL 2>&1

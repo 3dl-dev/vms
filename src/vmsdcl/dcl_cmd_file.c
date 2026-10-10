@@ -1524,6 +1524,25 @@ int cmd_directory(struct dcl_command *cmd)
 }
 
 /*
+ * TYPE/PAGE (rd vms-457), as the VAX V7.3 console shows it (keystroke
+ * PG.TYPE): a page is the terminal's page length less two lines, and the
+ * pause is the record "Press RETURN to continue"; RETURN shows the next page.
+ */
+static int type_page_lines(struct dcl_context *ctx)
+{
+    int pg = ctx ? ctx->terminal.page : 0;
+    return pg > 2 ? pg - 2 : 22;
+}
+
+static int type_page_pause(void)
+{
+    char buf[64];
+    printf("Press RETURN to continue\n");
+    fflush(stdout);
+    return fgets(buf, sizeof(buf), stdin) != NULL;
+}
+
+/*
  * TYPE - Display file contents.
  */
 int cmd_type(struct dcl_command *cmd)
@@ -1576,18 +1595,16 @@ int cmd_type(struct dcl_command *cmd)
             FILE *fp = fopen(linux_path, "r");
             if (fp) {
                 int paged = dcl_has_qualifier(cmd, "PAGE");
-                int line_count = 0, page_size = 24;
+                int line_count = 0, page_size = type_page_lines(ctx);
                 char line[4096];
                 while (fgets(line, sizeof(line), fp)) {
-                    fputs(line, stdout);
-                    line_count++;
                     if (paged && line_count >= page_size) {
-                        printf("Press RETURN to continue...");
-                        fflush(stdout);
-                        char buf[64];
-                        if (!fgets(buf, sizeof(buf), stdin)) break;
+                        if (!type_page_pause())
+                            break;
                         line_count = 0;
                     }
+                    fputs(line, stdout);
+                    line_count++;
                 }
                 fclose(fp);
                 return SS$_NORMAL;
@@ -1609,22 +1626,21 @@ int cmd_type(struct dcl_command *cmd)
     /* Check for /PAGE qualifier */
     int paged = dcl_has_qualifier(cmd, "PAGE");
     int line_count = 0;
-    int page_size = 24;
+    int page_size = type_page_lines(ctx);
 
     char line[4096];
     int eof = 0, len;
     while ((len = dcl_rms_read_record(r, line, sizeof(line), &eof)) >= 0) {
+        /* pause only when there is more to show: the last page ends at
+         * DCL's prompt, not at another pause (keystroke PG.TYPE R1) */
+        if (paged && line_count >= page_size) {
+            if (!type_page_pause())
+                break;
+            line_count = 0;
+        }
         fwrite(line, 1, (size_t)len, stdout);
         fputc('\n', stdout);           /* RMS records carry no terminator */
         line_count++;
-
-        if (paged && line_count >= page_size) {
-            printf("Press RETURN to continue...");
-            fflush(stdout);
-            char buf[64];
-            if (!fgets(buf, sizeof(buf), stdin)) break;
-            line_count = 0;
-        }
     }
 
     dcl_rms_read_close(r);

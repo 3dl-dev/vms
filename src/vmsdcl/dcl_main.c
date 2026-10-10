@@ -926,7 +926,10 @@ int main(int argc, char *argv[])
              */
             static int recall_back;      /* 0: not walking the list */
             uint16_t tterm = 0;
-            const char *ini = recall_back ? dcl_recall_get(recall_back) : NULL;
+            extern const char *dcl_recall_pending;   /* RECALL n (vms-0315) */
+            const char *ini = recall_back ? dcl_recall_get(recall_back)
+                                          : dcl_recall_pending;
+            dcl_recall_pending = NULL;
             int tn = dcl_tt_read_ini(pb, pbl, ini, tt_buf, sizeof(tt_buf), &tterm);
             if (tn >= 0 && tterm == 0x02) {          /* up arrow / CTRL/B */
                 if (recall_back < dcl_recall_size())

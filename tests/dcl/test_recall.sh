@@ -6,21 +6,25 @@
 # runtime that has no readline -- driven from DCL's own recall buffer, never
 # reporting "requires readline support" (that facade was the INV-DCL tell). The
 # commands below are fed on a non-tty pipe (readline inactive) and RECALL must
-# still see them. DCL Dictionary, RECALL: the buffer holds the recent commands,
-# RECALL/ALL numbers them 1..N (oldest..newest), RECALL n replays number n.
+# still see them. As the VAX V7.3 console shows it (keystroke RC.ALL, rd
+# vms-0315): RECALL/ALL numbers from the most recent command (1), "%3d %s",
+# and never lists a RECALL command; RECALL n brings the command back to the
+# next command line for editing -- it does not run it.
 #
-# EXPECT: regex:1[[:space:]]+SHOW TIME
-# EXPECT: regex:2[[:space:]]+SHOW DEFAULT
-# EXPECT: contains:RECALL-N-REEXEC-OK
-# EXPECT: contains:%DCL-W-RECALL, no command number 9 in history
+# EXPECT: regex:^  1 SHOW DEFAULT$
+# EXPECT: regex:^  2 SHOW TIME$
+# EXPECT: contains:%DCL-W-CMDNOTFND, command not found - use RECALL/ALL to display saved commands
+# EXPECT: contains:RECALL-COUNT-1
+# EXPECT_NOT: contains:RECALL-COUNT-2
+# EXPECT_NOT: regex:^ +[0-9]+ RECALL
 # EXPECT_NOT: contains:requires readline support
 VMSDCL="${VMSDCL:-vmsdcl}"
 
 echo "--- RECALL/ALL numbered list ---"
 printf 'SHOW TIME\nSHOW DEFAULT\nRECALL/ALL\n' | $VMSDCL 2>&1
 
-echo "--- RECALL n re-executes command number n ---"
-printf 'WRITE SYS$OUTPUT "RECALL-N-REEXEC-OK"\nRECALL 1\n' | $VMSDCL 2>&1
+echo "--- RECALL n does not execute command number n ---"
+printf '$ N = 0\n$ N = N + 1\nRECALL 1\nWRITE SYS$OUTPUT "RECALL-COUNT-", N\n' | $VMSDCL 2>&1
 
 echo "--- RECALL of an out-of-range number ---"
 printf 'SHOW TIME\nRECALL 9\n' | $VMSDCL 2>&1

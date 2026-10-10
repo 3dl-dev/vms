@@ -1434,6 +1434,16 @@ void dcl_recall_push(const char *line)
 {
     if (!line || !line[0])
         return;                  /* VMS does not record an empty line */
+    {
+        /* nor a RECALL command itself (keystroke RC.ALL A, A2; rd vms-0315) */
+        const char *v = line;
+        size_t n = 0;
+        while (*v == ' ' || *v == '\t' || *v == '$') v++;
+        while (v[n] && isalpha((unsigned char)v[n])) n++;
+        if (n >= 3 && n <= 6 && strncasecmp(v, "RECALL", n) == 0 &&
+            (v[n] == '\0' || v[n] == ' ' || v[n] == '\t' || v[n] == '/'))
+            return;
+    }
 
     char *dup = strdup(line);
     if (!dup)
@@ -1482,63 +1492,51 @@ void dcl_recall_erase(void)
  * RECALL n        — re-execute command number n
  * RECALL string   — find and re-execute most recent command matching string
  */
+/*
+ * RECALL (rd vms-0315), as the VAX V7.3 console shows it (keystroke RC.ALL):
+ * the buffer is numbered from the most recent command (1); RECALL/ALL lists
+ * it that way, "%3d %s", and an empty buffer lists nothing; RECALL n, RECALL
+ * string and plain RECALL do not execute -- the command comes back on the
+ * next command line for editing (TRM$_INISTRNG), as the up arrow does.
+ */
+const char *dcl_recall_pending;
+
 int cmd_recall(struct dcl_command *cmd)
 {
     if (dcl_has_qualifier(cmd, "ERASE")) {
-        /* RECALL/ERASE — empty the recall buffer (DCL Dictionary). */
         dcl_recall_erase();
         return SS$_NORMAL;
     }
 
     if (dcl_has_qualifier(cmd, "ALL")) {
-        /* RECALL/ALL — numbered list, oldest (1) to most recent (N). */
-        if (dcl_recall_count == 0) {
-            printf("%%DCL-I-RECALL, no history available\n");
-            return SS$_NORMAL;
-        }
-        for (int i = 0; i < dcl_recall_count; i++)
-            printf("%5d  %s\n", i + 1, dcl_recall_ring[i]);
+        for (int k = 1; k <= dcl_recall_count; k++)
+            printf("%3d %s\n", k, dcl_recall_ring[dcl_recall_count - k]);
         return SS$_NORMAL;
     }
 
+    const char *hit = NULL;
     if (cmd->param_count == 0) {
-        /* RECALL with no args — show the most recent command. */
-        if (dcl_recall_count == 0) {
-            printf("%%DCL-I-RECALL, no history available\n");
-            return SS$_NORMAL;
-        }
-        printf("%s\n", dcl_recall_ring[dcl_recall_count - 1]);
-        return SS$_NORMAL;
-    }
-
-    /* Parameter given — a command number, or a matching-prefix string. */
-    const char *param = cmd->params[0];
-    int is_number = (param[0] != '\0');
-    for (size_t i = 0; param[i]; i++) {
-        if (!isdigit((unsigned char)param[i])) { is_number = 0; break; }
-    }
-
-    if (is_number) {
-        /* RECALL n — re-execute command number n (1..count). */
-        int n = (int)strtol(param, NULL, 10);
-        if (n < 1 || n > dcl_recall_count) {
-            printf("%%DCL-W-RECALL, no command number %d in history\n", n);
-            return SS$_NORMAL;
-        }
-        const char *entry = dcl_recall_ring[n - 1];
-        printf("%s\n", entry);
-        return dcl_execute_line(entry);
-    }
-
-    /* RECALL string — most recent command whose start matches (case-blind). */
-    size_t plen = strlen(param);
-    for (int i = dcl_recall_count - 1; i >= 0; i--) {
-        if (strncasecmp(dcl_recall_ring[i], param, plen) == 0) {
-            printf("%s\n", dcl_recall_ring[i]);
-            return dcl_execute_line(dcl_recall_ring[i]);
+        hit = dcl_recall_get(1);
+    } else {
+        const char *param = cmd->params[0];
+        int is_number = (param[0] != '\0');
+        for (size_t i = 0; param[i]; i++)
+            if (!isdigit((unsigned char)param[i])) { is_number = 0; break; }
+        if (is_number) {
+            hit = dcl_recall_get((int)strtol(param, NULL, 10));
+        } else {
+            size_t plen = strlen(param);
+            for (int k = 1; k <= dcl_recall_count && !hit; k++)
+                if (strncasecmp(dcl_recall_get(k), param, plen) == 0)
+                    hit = dcl_recall_get(k);
         }
     }
-    printf("%%DCL-W-RECALL, no command matching \"%s\" in history\n", param);
+    if (!hit) {
+        dcl_error("DCL", 0, "CMDNOTFND",
+                  "command not found - use RECALL/ALL to display saved commands");
+        return 0x00038238u;            /* CLI$_CMDNOTFND */
+    }
+    dcl_recall_pending = hit;
     return SS$_NORMAL;
 }
 

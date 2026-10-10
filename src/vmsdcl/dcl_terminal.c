@@ -275,6 +275,58 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
 }
 
 /*
+ * Character-at-a-time terminal I/O for screen programs (EDT's keypad mode, rd
+ * vms-c37): dcl_tt_raw_write writes bytes IO$M_NOFORMAT; dcl_tt_getc reads
+ * one character, unechoed and unfiltered, with no terminators -- every key
+ * comes back as itself (escape sequences byte by byte). `poll`: return at
+ * once, -1 when nothing has been typed. -2: the terminal is gone.
+ */
+void dcl_tt_raw_write(const void *b, size_t n)
+{
+    uint16_t iosb[4];
+    if (!n || !dcl_tt_assign())
+        return;
+    fflush(stdout);
+    (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_NOFORMAT, iosb, NULL, 0,
+                   (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
+int dcl_tt_getc(int poll)
+{
+    static uint32_t none[8];
+    struct ovmx_trm_item it[3];
+    uint16_t iosb[4];
+    char c[2];
+    uint32_t st;
+    int k = 0;
+
+    if (!dcl_tt_assign())
+        return -2;
+    memset(it, 0, sizeof it);
+    it[k].code = TRM$_MODIFIERS;
+    it[k++].val = TRM$M_TM_NOECHO | TRM$M_TM_NOFILTR | (poll ? TRM$M_TM_TIMED : 0);
+    it[k].code = TRM$_TERM;
+    it[k].len = (unsigned short)sizeof none;
+    it[k++].val = (uintptr_t)none;
+    if (poll) {
+        it[k].code = TRM$_TIMEOUT;
+        it[k++].val = 0;
+    }
+    memset(iosb, 0, sizeof iosb);
+    st = sys$qiow(0, dcl_tt_chan, IO$_READVBLK | IO$M_EXTEND, iosb, NULL, 0,
+                  c, 1, 0, 0, (uintptr_t)it, (uint32_t)(k * sizeof it[0]));
+    if (st & 1)
+        st = iosb[0];
+    if (iosb[1] == 1)
+        return (unsigned char)c[0];
+    if (iosb[3])
+        return (unsigned char)iosb[2];  /* a terminator after all */
+    if (st == SS$_TIMEOUT)
+        return -1;
+    return (st & 1) ? -1 : -2;
+}
+
+/*
  * The /PAGE pager (rd vms-457), as DIRECTORY/PAGE drives the VAX V7.3 console
  * (keystroke PG.DIR): the command's output is gathered, then shown a screen
  * at a time. Output that fills the screen shows the page length less one

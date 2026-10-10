@@ -132,6 +132,10 @@ int dcl_tt_inquire(char *reply, size_t replysz);
 /* /PAGE: gather a command's output, then show it a screen at a time (rd
  * vms-457). begin returns 0 when the output is not a terminal (no pager). */
 struct dcl_pager { FILE *tmp; int save; };
+
+/* screen programs (EDT keypad mode, rd vms-c37): raw output, raw keys */
+void dcl_tt_raw_write(const void *b, size_t n);
+int  dcl_tt_getc(int poll);
 int  dcl_page_begin(struct dcl_pager *pg);
 void dcl_page_end(struct dcl_pager *pg, int page_len);
 int dcl_recall_size(void);

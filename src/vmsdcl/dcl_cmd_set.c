@@ -1505,27 +1505,14 @@ static int cmd_set_process(struct dcl_command *cmd)
     }
 
     /*
-     * /PRIORITY=n — requires ALTPRI. Gated on enforced_privs_held(), NOT
-     * ctx->privileges (vms-2b8 round 5: see that function's comment for
-     * the measured desync this replaces -- ALTPRI is not in
-     * VMS_PRV_M_ENFORCED, so this now refuses for every identity until
-     * vms-pv1 gives ALTPRI real enforcement to match).
+     * /PRIORITY=n -- $SETPRI on this process. The EXECUTIVE decides (vms-768):
+     * it sets the base priority, and a raise above the authorized priority
+     * without ALTPRI succeeds AT the authorized priority, as OpenVMS VAX V7.3
+     * does (docs/oracle/semantics/privchk, PRI.*). So there is no DCL-side
+     * privilege gate here: a DCL refusal would be wrong for the clamp case.
      */
     const char *pri_val = dcl_qualifier_value(cmd, "PRIORITY");
     if (pri_val && *pri_val) {
-        uint64_t held = enforced_privs_held();
-        if (!(held & PRV$M_ALTPRI)) {
-            /* Same HIDE wording as SET TIME's gate below, for the same
-             * reason (vms-2b8 round 7): this is true for every caller
-             * regardless of what its SYSUAF record authorizes, because
-             * ALTPRI is not in VMS_PRV_M_ENFORCED -- nothing this build
-             * enforces, not something a particular account lacks. */
-            dcl_error("SET", 2, "NOPRIV",
-                      "no privilege for SET PROCESS /PRIORITY -- this "
-                      "privilege is not enforced on this system (vms-pv1); "
-                      "no identity can pass this check until that lands");
-            return SS$_NOPRIV;
-        }
         char *endp;
         int pri = (int)strtol(pri_val, &endp, 10);
         if (endp == pri_val || *endp != '\0' || pri < 0 || pri > 31) {
@@ -1533,12 +1520,19 @@ static int cmd_set_process(struct dcl_command *cmd)
                       "invalid priority \\%d\\ - must be 0-31", pri);
             return SS$_BADPARAM;
         }
-        ctx->process_priority = pri;
-        /* Best-effort: try to set Linux scheduling niceness proportionally */
-        /* VMS pri 0 = lowest, 15 = normal, 31 = highest
-         * Linux nice: -20 (highest) to +19 (lowest) */
-        int nice_val = 19 - (pri * 39) / 31;
-        setpriority(PRIO_PROCESS, 0, nice_val);
+        uint32_t st = sys$setpri(NULL, NULL, (uint32_t)pri, NULL, 0, NULL);
+        if (!(st & 1)) {
+            if (st == SS$_NOPRIV)
+                dcl_error("SYSTEM", 4 /* F */, "NOPRIV",
+                          "insufficient privilege or object protection violation");
+            else
+                dcl_error("OVMX", 2, "SETPRI",
+                          "$SETPRI failed, status %%X%08X", (unsigned)st);
+            return st;
+        }
+        uint32_t cur = (uint32_t)pri;
+        if (vms_kif_pri(VMS_PRI_OP_GET, 0, &cur, NULL, NULL) & 1)
+            ctx->process_priority = (int)cur;
     }
 
     /*
@@ -1911,54 +1905,15 @@ static int cmd_set_time(struct dcl_command *cmd)
     }
 
     /*
-     * Privilege check — required when actually setting the clock.
-     * enforced_privs_held(), not ctx->privileges (vms-2b8 round 5; see
-     * that function's comment).
-     *
-     * REGRESSION, DISCLOSED (vms-2b8 round 6). OPER, SYSPRV and BYPASS
-     * are ALL absent from VMS_PRV_M_ENFORCED, so this gate can no
-     * longer be passed by ANY identity, not just an unprivileged one --
-     * a real change in behaviour from before round 5, when this read
-     * the raw, unmasked ctx->privileges and SYSTEM's SYSUAF record
-     * (authorized for privilege ALL, OPER included) let it through.
-     * MEASURED this round, real podman-built QEMU boot, SYSTEM session
-     * (the maximal-privilege SYSUAF account): SET TIME is refused even
-     * here, so no lesser-privileged identity can succeed either -- the
-     * mask VMS_PRV_M_ENFORCED applies is fixed at compile time, not a
-     * per-session grant a stronger identity could hold. This is Rule
-     * 10's HIDE answer, applied honestly rather than left implicit: a
-     * bare %SET-E-NOPRIV reads as "your account needs OPER, go get it",
-     * which is false on this build -- no account can. Say so in the
-     * message text instead of leaving the reader to infer it. (SET
-     * PROCESS/PRIVILEGES itself is no longer a HIDE stub -- vms-e5d7
-     * wired it to the executive-backed sys$setprv -- but SET TIME stays
-     * HIDE here because OPER is still outside VMS_PRV_M_ENFORCED: OVMX
-     * enforces no priority/time privilege for any account yet, so this
-     * gate can grant to none.)
-     *
-     * ROUND 7: the message this printed named SYSUAF ("OPER is
-     * authorized by SYSUAF but not yet enforced") -- true of SYSTEM and
-     * OPERATOR, whose SYSUAF records do hold OPER, and FALSE of the
-     * other four shipped accounts (GUEST, DEFAULT, USER1, USER2 hold no
-     * OPER at all -- GUEST is TMPMBX only, DEFAULT/USER1/USER2 add
-     * NETMBX, neither is OPER; see distro/rootfs/vms/SYS0/SYSCOMMON/
-     * SYSEXE/SYSUAF.DAT), because this code path (enforced_privs_held()
-     * above) reads the executive's live cur_privs and masks it with
-     * the compile-time-fixed VMS_PRV_M_ENFORCED, which has no OPER bit
-     * at all (src/kernel/vms_ioctl.h) -- the check's answer is the
-     * same for every identity regardless of its SYSUAF record.
-     * A per-caller claim shipped to the console is either true for
-     * every caller that can see it or it does not appear (standing
-     * prose ruling, CLAUDE.md project rule 10). The corrected text
-     * below says only what is true regardless of who is asking: OVMX
-     * does not enforce this privilege yet, for anyone.
+     * Privilege check -- OPER, required when actually setting the clock.
+     * enforced_privs_held() reads the executive's live privileges masked to
+     * VMS_PRV_M_ENFORCED; OPER has been in that mask since vms-768, so this
+     * gate admits exactly the processes that hold OPER (SYSTEM, whose SYSUAF
+     * record authorizes ALL, does; an ordinary user does not).
      */
     uint64_t held = enforced_privs_held();
     if (!(held & PRV$M_OPER)) {
-        dcl_error("SET", 2, "NOPRIV",
-                  "no privilege for SET TIME -- this privilege is not "
-                  "enforced on this system (vms-pv1); no identity can "
-                  "pass this check until that lands");
+        dcl_error("SET", 2, "NOPRIV", "no privilege for SET TIME");
         return SS$_NOPRIV;
     }
 

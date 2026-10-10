@@ -699,6 +699,16 @@ if(BUILD_TESTS)
     set_tests_properties(merge_freshness_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # The checks a PR SKIPS (the heavy boot/e2e/negctl jobs that do not run on
+    # pull_request) must have passed in a workflow_dispatch run on its head SHA
+    # (#1554 merged with the VMS User Acceptance Test never run and left main
+    # red, 2026-10-09): tools/ci/merge_heavy_gates.py. Stub gh; no network.
+    add_test(NAME merge_heavy_gates_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_merge_heavy_gates.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(merge_heavy_gates_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

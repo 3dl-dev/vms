@@ -38,10 +38,6 @@
 #include "exec_hash.h"        /* exec_hash_for_each[_safe] / exec_hash_del_rcu */
 #include "exec_list.h"        /* exec_list_add_tail -- /NOWAIT completion AST queue */
 
-/* Serializes reaping so two callers cannot claim the same victim. Held across
- * the per-victim teardown, which may sleep, so it is an exec_mutex (sleepable),
- * not an exec_lock (non-sleeping). */
-static EXEC_DEFINE_MUTEX(vms_reap_mutex);
 
 /*
  * uic_group - the [group] half of a packed UIC.
@@ -55,87 +51,12 @@ static inline uint32_t uic_group(uint32_t uic)
 }
 
 /*
- * vms_proc_task_alive - does the PROCESS backing this entry still exist?
- *
- * proc->pid_ref is the thread group's pid (task_tgid), so the task it
- * resolves to is the group leader. The kernel does not release the
- * leader while any other thread of the group is still running, so this
- * is a whole-process liveness test, not a per-thread one -- a thread
- * exiting out of a live multithreaded image must not make its process
- * reapable. pid_task() returns NULL once the leader has been released,
- * which is the point at which the VMS process has ceased to exist and
- * its slot may be reused.
+ * There is no reaper (rd vms-9f32). A PCB exists exactly as long as its
+ * process: the substrate's process-exit hook runs vms_proc_rundown_locked()
+ * and frees the row when the process ends (Linux: sched_process_exit, or the
+ * do_exit notifier on Alpha; NetBSD: exithook(9)). Nothing scans the table for
+ * dead rows, and no row outlives the process it describes.
  */
-static bool vms_proc_task_alive(struct vms_proc *proc)
-{
-    if (!proc->pid_ref)
-        return false;
-
-    /* exec_task_alive() does the whole-process liveness test described above
-     * (pid_task under an RCU read section) behind the shim; the RCU is the
-     * backend's concern, not this facility's. */
-    return exec_task_alive(proc->pid_ref);
-}
-
-/*
- * vms_proc_reap_dead - remove entries whose process has exited.
- *
- * The PCB is owned by the process, not by an open /dev/vms channel, so
- * closing the channel does not delete it (see vms_dev_release). Entries
- * are therefore reclaimed here, lazily, on every operation that reads
- * or mutates the table.
- *
- * One victim per pass: the teardown below the hash removal can sleep on
- * nothing but must not run under the hash spinlock, so the scan unlinks
- * one entry and then leaves the lock to tear it down. The table is small
- * (VMS SHOW SYSTEM walks the PCB vector linearly too) and reaping only
- * runs on process table operations.
- *
- * The victim is UNLINKED WHILE THE LOCK IS STILL HELD, and that removal
- * is the ownership claim (see vms_proc_free()). Selecting a victim under
- * the lock and only claiming it afterwards would be a use-after-free: a
- * concurrent vms_dev_release() could claim and kfree_rcu() the same
- * entry in the gap, and the claim itself reads proc->hash_node.
- */
-void vms_proc_reap_dead(void)
-{
-    struct vms_proc *proc, *victim;
-    exec_hash_node_t *tmp;
-    int bkt;
-
-    exec_mutex_lock(&vms_reap_mutex);
-
-    for (;;) {
-        victim = NULL;
-
-        exec_lock(&vms_proc_hash_lock);
-        exec_hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {
-            if (!vms_proc_task_alive(proc)) {
-                exec_hash_del_rcu(&proc->hash_node);
-                victim = proc;
-                break;
-            }
-        }
-        /*
-         * /NOWAIT spawn completion on ABNORMAL subprocess deletion (vms-2a4,
-         * the vms-e9a B1 edge): a subprocess KILLED without recording an exit
-         * ($EXIT/SETEXIT) -- SIGKILL, a crash, a segfault -- is reclaimed here
-         * with its parent's completion still armed. Fire it now (under the SAME
-         * hash_lock that unlinked the victim) so the parent's $WAITFR / AST does
-         * not hang. See vms_proc_deliver_abnormal_completion().
-         */
-        if (victim)
-            vms_proc_deliver_abnormal_completion(victim);
-        exec_unlock(&vms_proc_hash_lock);
-
-        if (!victim)
-            break;
-
-        vms_proc_free_claimed(victim);
-    }
-
-    exec_mutex_unlock(&vms_reap_mutex);
-}
 
 /*
  * vms_proc_may_read - may `caller` read `target`'s identity?
@@ -641,7 +562,6 @@ long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg)
      * the target cannot be reaped between the lookup and the wake. hiber_lock
      * nests INSIDE hash_lock -- a fresh edge (nothing takes hash_lock while
      * holding a hiber_lock). */
-    vms_proc_reap_dead();
     exec_lock(&vms_proc_hash_lock);
     target = find_by_vms_pid(args.vms_pid);
     if (!target) {
@@ -689,7 +609,6 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg)
     }
 
     /* A name freed by an exited process must be available again. */
-    vms_proc_reap_dead();
 
     exec_lock(&vms_proc_hash_lock);
     clash = find_by_name(uic_group(proc->uic), args.prcnam);
@@ -752,7 +671,6 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    vms_proc_reap_dead();
 
     exec_lock(&vms_proc_hash_lock);
     switch (args.select) {
@@ -1279,7 +1197,6 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    vms_proc_reap_dead();
 
     exec_lock(&vms_proc_hash_lock);
     exec_hash_for_each(vms_proc_hash, bkt, cur, hash_node) {
@@ -1408,10 +1325,9 @@ static void spawn_notify_deliver(struct vms_proc *parent, uint32_t efn,
  * AST-queue delivery vms_ioctl_setexit uses.
  *
  * CALLER MUST HOLD vms_proc_hash_lock and must have ALREADY UNLINKED `child`
- * from vms_proc_hash (the ownership claim). Called from exactly the two
- * mid-life reclaim claim points -- the lazy reaper (vms_proc_reap_dead, here)
- * and the channel-release free of an exiting task (vms_proc_free, per backend)
- * -- both of which unlink under this lock. Holding hash_lock keeps the parent
+ * from vms_proc_hash (the ownership claim). Called from
+ * vms_proc_rundown_locked(), the one deletion path: the substrate's
+ * process-exit hook, which unlinks under this lock (rd vms-9f32). Holding hash_lock keeps the parent
  * PCB alive across the lookup + delivery, exactly as vms_ioctl_setexit's in-band
  * delivery relies on. One-shot: compl_armed is cleared as it fires, so whichever
  * claim point reaches the entry first delivers and the other is a no-op -- the
@@ -1448,6 +1364,82 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
 }
 
 /*
+ * Process deletion, the executive's half (rd vms-9f32).
+ *
+ * The substrate's process-exit hook deletes a process that has ended -- however
+ * it ended, whether or not it ever issued a system service -- in three steps:
+ *
+ *   1. under vms_proc_hash_lock: unlink the row (the ownership claim; its PID
+ *      now answers SS$_NONEXPR) and vms_proc_termination_capture() what its
+ *      creator must be told;
+ *   2. unlocked: release everything the process held (vms_proc_free_claimed:
+ *      channels, locks, mailboxes, devices, sockets, LNM$PROCESS ...);
+ *   3. under vms_proc_hash_lock again: vms_proc_termination_post_locked() --
+ *      the termination record in the creator's PCB and the creator's armed
+ *      /NOWAIT completion.
+ *
+ * So, as on VMS, a creator hears that its subprocess ended only after the
+ * subprocess's resources are gone. Both halves are atomic-safe (nothing here
+ * sleeps); step 2 is the substrate's and may sleep.
+ */
+void vms_proc_termination_capture(const struct vms_proc *victim,
+                                  struct vms_termination *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->owner_vms_pid    = victim->owner_vms_pid;
+    t->vms_pid          = victim->vms_pid;
+    t->linux_pid        = (uint32_t)victim->linux_pid;
+    t->condition        = victim->has_exit_status ? victim->exit_status : SS__ABORT;
+    t->has_status       = victim->has_exit_status;
+    t->compl_armed      = victim->compl_armed;
+    t->compl_acmode     = victim->compl_acmode;
+    t->compl_parent_pid = victim->compl_parent_pid;
+    t->compl_efn        = victim->compl_efn;
+    t->compl_astadr     = victim->compl_astadr;
+    t->compl_astprm     = victim->compl_astprm;
+}
+
+void vms_proc_termination_post_locked(const struct vms_termination *t)
+{
+    struct vms_proc *owner = t->owner_vms_pid ? find_by_vms_pid(t->owner_vms_pid) : NULL;
+
+    if (owner) {
+        struct vms_termrec *r = &owner->termrec[owner->termrec_next % VMS_TERMREC_MAX];
+        owner->termrec_next++;
+        r->vms_pid    = t->vms_pid;
+        r->linux_pid  = t->linux_pid;
+        r->condition  = t->condition;
+        r->has_status = t->has_status;
+    }
+    if (t->compl_armed) {
+        struct vms_proc *parent = find_by_vms_pid(t->compl_parent_pid);
+        if (parent)
+            spawn_notify_deliver(parent, t->compl_efn, t->compl_astadr,
+                                 t->compl_astprm, t->compl_acmode);
+    }
+}
+
+
+/*
+ * termrec_find - the caller's own termination record for its ended subprocess
+ * (by VMS PID, or by Linux pid when vms_pid is 0). Caller holds hash_lock.
+ */
+static struct vms_termrec *termrec_find(struct vms_proc *proc, uint32_t vms_pid,
+                                        uint32_t linux_pid)
+{
+    unsigned i;
+
+    for (i = 0; i < VMS_TERMREC_MAX; i++) {
+        struct vms_termrec *r = &proc->termrec[i];
+        if (r->vms_pid == 0)
+            continue;
+        if (vms_pid ? r->vms_pid == vms_pid : r->linux_pid == linux_pid)
+            return r;
+    }
+    return NULL;
+}
+
+/*
  * vms_ioctl_spawn_notify - arm a /NOWAIT subprocess-exit completion (vms-e9a
  * B1). The CALLER is the parent of a subprocess it created via $CREPRC /
  * LIB$SPAWN/NOWAIT; it registers the efn/astadr/astprm completion notification
@@ -1477,11 +1469,20 @@ long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    vms_proc_reap_dead();
 
     exec_lock(&vms_proc_hash_lock);
     child = find_by_vms_pid(args.child_vms_pid);
     if (!child) {
+        /* Already deleted. If it was the caller's own subprocess, its
+         * termination record is here: it has completed, so the completion is
+         * delivered now (rd vms-9f32) -- never a lost notification. */
+        if (termrec_find(proc, args.child_vms_pid, 0)) {
+            spawn_notify_deliver(proc, args.efn, args.astadr, args.astprm, acmode);
+            args.completed = 1;
+            exec_unlock(&vms_proc_hash_lock);
+            args.status = SS__NORMAL;
+            goto out;
+        }
         exec_unlock(&vms_proc_hash_lock);
         args.status = SS__NONEXPR;
         goto out;
@@ -1605,7 +1606,6 @@ long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg)
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    vms_proc_reap_dead();
 
     exec_lock(&vms_proc_hash_lock);
     switch (args.select) {
@@ -1629,6 +1629,23 @@ long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg)
     }
 
     if (!target) {
+        /* The process no longer exists. Only its CREATOR may learn how it
+         * ended, once, from the termination record rundown left in the
+         * creator's own PCB (rd vms-9f32); to anyone else it is SS$_NONEXPR,
+         * as on VMS. */
+        struct vms_termrec *r = (args.select == VMS_JPI_SEL_SELF) ? NULL
+            : termrec_find(proc, args.select == VMS_JPI_SEL_PID ? args.vms_pid : 0,
+                           args.select == VMS_JPI_SEL_LINUX_PID ? args.vms_pid : 0);
+        if (r) {
+            args.condition  = r->condition;
+            args.has_exited = r->has_status;
+            memset(r, 0, sizeof(*r));          /* read once */
+            exec_unlock(&vms_proc_hash_lock);
+            args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);
+            args.severity = (uint8_t)(args.condition & VMS_STS_M_SEVERITY);
+            args.status   = SS__NORMAL;
+            goto out;
+        }
         exec_unlock(&vms_proc_hash_lock);
         args.status = SS__NONEXPR;
         goto out;

@@ -1,6 +1,12 @@
 /*
- * test_syssvc_rundown_ff8.c - process rundown timing is governed by the
- *                             /dev/vms struct-file lifetime (vms-ff8)
+ * test_syssvc_rundown_ff8.c - process rundown happens when the PROCESS ends
+ *                             (vms-ff8, rd vms-9f32)
+ *
+ * SINCE rd vms-9f32 the measured split below is gone: the executive deletes a
+ * process -- and releases its locks/EF/channels -- from the substrate's
+ * process-exit hook, before the process becomes a zombie, whichever files it
+ * held. Part A and Part B now prove the same property for both fd shapes. The
+ * original vms-ff8 measurement follows for the record.
  *
  * vms-ff8 asked: "does the executive run down a $CREPRC subject's process
  * table entry -- and the LOCKS/EF/CHANNELS it holds -- when its Linux backing
@@ -234,14 +240,17 @@ int main(void)
         printf("  INFO: A $ENQ after fresh-fd subject's exit (no table op) returned status %u\n", st);
         /* negctl: proc-rundown-locks-not-released */
         CHECK((st & 1) && lk.lksb$l_lkid != 0,
-              "A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (SYNCHRONOUS .release rundown)");
+              "A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (its deletion at exit released the lock)");
         if (st & 1) sys$deq(lk.lksb$l_lkid, NULL, 0, 0);
     }
 
     /* ============================================================
-     * Part B - SHARED fd: the dead subject's lock is held until a reap.
-     * The subject keeps the parent's inherited fd, so the parent still
-     * references that struct file and .release never fires for the subject.
+     * Part B - SHARED fd: the lock is released when the PROCESS ends, not
+     * when a file is closed (rd vms-9f32). The subject keeps the parent's
+     * inherited /dev/vms fd, so its exit closes no file of its own; it was
+     * still deleted -- and its lock released -- before its parent's wait for
+     * it returned, with no process-table op in between. (Before vms-9f32 the
+     * dead subject's lock blocked until a lazy reaper ran.)
      * ============================================================ */
     {
         const char *RES = "FF8_SHARED_FD";
@@ -249,30 +258,15 @@ int main(void)
         CHECK(held, "B: shared-fd subject took EX, then died with the parent still holding its /dev/vms channel");
 
         struct dsc$descriptor_s resnam = mkdsc(RES);
-
-        /* B1: conflicting EX+NOQUEUE with NO intervening table op. */
         struct lksb_caller lk1 = {0};
         uint32_t st1 = sys$enq(0, LCK$K_EXMODE, &lk1, LCK$M_NOQUEUE,
                                &resnam, 0, NULL, 0, NULL, 0, 0);
-        printf("  INFO: B1 $ENQ before any reap returned status %u (SS$_NOTQUEUED=%u, SS$_NORMAL=%u)\n",
-               st1, (unsigned)SS$_NOTQUEUED, (unsigned)SS$_NORMAL);
-        CHECK(st1 == SS$_NOTQUEUED,
-              "B1 [vms-ff8]: a shared-fd dead subject's EX lock STILL BLOCKS a conflicting $ENQ before any process-table op reaps it");
+        printf("  INFO: B $ENQ after the shared-fd subject's exit (no table op) returned status %u\n", st1);
+        /* negctl-knockon: proc-rundown-locks-not-released */
+        CHECK((st1 & 1) && lk1.lksb$l_lkid != 0,
+              "B [vms-9f32]: a shared-fd subject's EX lock is released by its deletion at exit -- the"
+              " conflicting $ENQ is granted with no process-table op and no file of its own closed");
         if ((st1 & 1) && lk1.lksb$l_lkid) sys$deq(lk1.lksb$l_lkid, NULL, 0, 0);
-
-        /* Trigger the lazy reaper: a single $GETJPI is a process-table op. */
-        struct vms_procinfo info; memset(&info, 0, sizeof(info));
-        uint32_t gst = vms_kif_getjpi_self(&info);
-        CHECK(gst & 1, "B: $GETJPI (a process-table op) succeeded -- runs the lazy reaper");
-
-        /* B2: retry the conflicting $ENQ; the reap should have freed it. */
-        struct lksb_caller lk2 = {0};
-        uint32_t st2 = sys$enq(0, LCK$K_EXMODE, &lk2, LCK$M_NOQUEUE,
-                               &resnam, 0, NULL, 0, NULL, 0, 0);
-        printf("  INFO: B2 $ENQ after a $GETJPI reap returned status %u\n", st2);
-        CHECK((st2 & 1) && lk2.lksb$l_lkid != 0,
-              "B2: after an unrelated process-table op reaps the dead subject, the SAME $ENQ is granted (held only until the reap)");
-        if (st2 & 1) sys$deq(lk2.lksb$l_lkid, NULL, 0, 0);
     }
 
     printf("=== test_syssvc_rundown_ff8: %d passed, %d failed ===\n", pass, fail);

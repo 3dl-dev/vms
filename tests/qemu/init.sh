@@ -170,6 +170,7 @@ SUITE_FIFO=/tmp/suite_fifo.$$
 # shipped). 20s is slack for an ORPHAN to be force-reaped, not for a suite to
 # finish; see below for why that distinction is the whole fix.
 SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
+SUITE_TIMEOUT=${SUITE_TIMEOUT:-300}
 
 # SUITE SHARDING (rd vms-ea7). The ~79-suite run is partitioned across N
 # parallel QEMU VMs, each booting its own guest over a deterministic subset,
@@ -337,8 +338,20 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     # already reach fd 4 before a guest wedge can lose them.
     tee "$SUITE_OUT" >&4 <"$SUITE_FIFO" &
     TEE_PID=$!
-    "$test" >"$SUITE_FIFO" 2>&1
+    # PER-SUITE WATCHDOG (vms-9f32 PR1 negctl): a suite that never returns is
+    # THAT suite's named red, not a guest hung until the whole-VM wall --
+    # which costs every later suite its verdict. A mutation that leaks process
+    # rows made several suites wait forever on a process that had ended
+    # (procnam's SHOW SYSTEM, setname's holder); one hung suite then hid the
+    # rest. Healthy suites finish in seconds, the whole pristine run in ~250 s.
+    rm -f /tmp/.suite_timed_out
+    "$test" >"$SUITE_FIFO" 2>&1 &
+    TEST_PID=$!
+    ( sleep "$SUITE_TIMEOUT"; kill -0 "$TEST_PID" 2>/dev/null && : >/tmp/.suite_timed_out && kill -KILL "$TEST_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+    WATCH_PID=$!
+    wait "$TEST_PID"
     rc=$?
+    kill "$WATCH_PID" 2>/dev/null
     # DRAIN, bounded -- and bounded starting HERE, after "$test" has ALREADY
     # exited and rc is already known, not from the top of the iteration.
     # THIS ORDERING IS THE FIX. The first version of this bound wrapped
@@ -378,6 +391,10 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     done
     wait "$TEE_PID" 2>/dev/null
     rm -f "$SUITE_FIFO"
+    if [ -e /tmp/.suite_timed_out ]; then
+        echo "  FAIL: $name did not finish within ${SUITE_TIMEOUT}s (killed by the per-suite watchdog)" >>"$SUITE_OUT"
+        echo "  FAIL: $name did not finish within ${SUITE_TIMEOUT}s (killed by the per-suite watchdog)" >&4
+    fi
     spass=$(grep -c "^  PASS:" "$SUITE_OUT" 2>/dev/null); spass=${spass:-0}
     sfail=$(grep -c "^  FAIL:" "$SUITE_OUT" 2>/dev/null); sfail=${sfail:-0}
     ASSERT_PASS=$((ASSERT_PASS+spass))

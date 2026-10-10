@@ -26,6 +26,11 @@
 #include <linux/pid.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>     /* current->signal->live */
+#include <linux/sched/task.h>       /* task_exit_notifier (OVMX Alpha kernel) */
+#include <linux/tracepoint.h>       /* sched_process_exit (rd vms-9f32) */
+#include <linux/llist.h>
+#include <linux/workqueue.h>
+#include <linux/notifier.h>
 #include <linux/mm.h>               /* vm_area_struct, vm_flags_clear, PAGE_* (vms_lnm_mmap) */
 #include <linux/vmalloc.h>          /* remap_vmalloc_range (vms_lnm_mmap, vms-d61) */
 
@@ -1620,6 +1625,7 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
     uint32_t shared_vms_pid = 0;
     bool inherited = false;
     uint32_t parent_job_id;
+    uint32_t proc_owner_hint;
     int i;
 
     /*
@@ -1629,12 +1635,20 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
      * uses just below.
      */
     parent_job_id = vms_proc_parent_job_id();
+    /* The creator (rd vms-9f32): the VMS process this task was started by,
+     * which is told how it ended when it is deleted. Read like the job id,
+     * from the real parent's row -- never from anything the task supplies. */
+    {
+        uint32_t owner = vms_proc_parent_vms_pid();
+        proc_owner_hint = owner;
+    }
 
     proc = kmem_cache_zalloc(vms_proc_cache, GFP_KERNEL);
     if (!proc)
         return ERR_PTR(-ENOMEM);
 
     proc->linux_pid = pid;
+    proc->owner_vms_pid = proc_owner_hint;
     proc->current_mode = PSL_C_USER;    /* start in user mode */
 
     /*
@@ -2006,11 +2020,9 @@ static long vms_ioctl_register(unsigned long arg, bool inherit_identity,
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    /*
-     * Clear out entries whose process is gone before claiming a slot,
-     * so a recycled pid never collides with a dead predecessor.
-     */
-    vms_proc_reap_dead();
+    /* No dead predecessor can hold this pid: a PCB is deleted when its
+     * process ends (the exit hook, rd vms-9f32), so the table holds no rows
+     * for processes that no longer exist. */
 
     /*
      * NOTHING FROM args IS READ. The struct is output-only: the privilege
@@ -2102,8 +2114,6 @@ static long vms_ioctl_register_detached(unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
-
-    vms_proc_reap_dead();
 
     rcu_read_lock();
     t = current;
@@ -2522,50 +2532,171 @@ static int vms_dev_open(struct inode *inode, struct file *filp)
 
 static int vms_dev_release(struct inode *inode, struct file *filp)
 {
-    struct vms_proc *proc;
-
     /*
-     * The executive PCB belongs to the PROCESS, not to the channel
-     * (vms-8019). Closing /dev/vms -- including the implicit close of
-     * an inherited descriptor at execve() time -- must not delete the
-     * process from the executive's process table, or the process name
-     * would not survive image activation and would once again be
-     * something only the current image can see.
-     *
-     * So the entry is destroyed here only when the task that owns it is
-     * actually going away. Entries whose task exits without ever
-     * reaching this path (a forked child sharing the parent's struct
-     * file, for instance) are reclaimed by vms_proc_reap_dead().
-     *
-     * AND ONLY WHEN THE WHOLE THREAD GROUP IS GOING AWAY (vms-2b8). The
-     * entry is keyed by tgid and shared by every thread, so an exiting
-     * worker thread that happens to hold a channel must not delete the
-     * PCB out from under the threads still running: on VMS a thread
-     * terminating does not delete the process. The test is the thread
-     * group's LIVE count (signal->live), which every exiting thread
-     * decrements in do_exit() before it drops its files: zero means every
-     * thread of the process is past that point, so the process really is
-     * ending.
-     *
-     * NOT thread_group_empty() (rd vms-003b, the lost /NOWAIT completion).
-     * The group leader stays on the thread list as a zombie until its
-     * parent reaps it, so when a NON-leader thread is the last to drop the
-     * files -- the leader exited first, e.g. DCL with its SYS$INPUT reader
-     * thread -- thread_group_empty() is false for the last thread standing.
-     * The PCB was then never freed, the zombie leader kept it "alive" for
-     * the lazy reaper, and a parent's armed spawn completion never fired
-     * (observed: subprocess DCL.EXE in state Z, its executive row present,
-     * the creator's completion event flag clear after 20 s).
+     * Closing /dev/vms is nothing to the process (rd vms-9f32). /dev/vms is
+     * the system-service gate, not the process: the PCB is deleted when the
+     * PROCESS ends, by the exit hook below (vms_process_ended), however it
+     * ends and whether or not it ever opened this device.
      */
-    if (!(current->flags & PF_EXITING) || atomic_read(&current->signal->live) != 0)
-        return 0;
-
-    proc = vms_proc_find_or_err();
-    if (proc)
-        vms_proc_free(proc);
-
+    (void)inode;
+    (void)filp;
     return 0;
 }
+
+/* ================================================================
+ * Process deletion at process exit (rd vms-9f32)
+ *
+ * On VMS a process is deleted when it ends, however it ends; the executive
+ * owns that, not the image. vms_process_ended() runs in PROCESS CONTEXT in the
+ * exiting task, after its last thread has decremented the thread group's live
+ * count and BEFORE the process becomes a zombie (exit_notify): claim the row
+ * (its PID now answers SS$_NONEXPR), release everything it held, then tell its
+ * creator (termination record + armed /NOWAIT completion). A parent's wait for
+ * the Linux child therefore never returns before the VMS process is gone.
+ *
+ * The hook, chosen at build time:
+ *   - task_exit_notifier: the do_exit notifier the OVMX kernels carry
+ *     (distro/kernel/patches/0001, tools/cross-alpha/patches/0002); called in
+ *     process context with group_dead.
+ *   - otherwise the sched_process_exit tracepoint (attached by name, as
+ *     vms_bg_forkinherit.c does), whose probe cannot sleep: it queues a
+ *     task_work on the exiting task, which do_exit runs at exit_task_work() --
+ *     still in the exiting task, still before exit_notify -- in process context.
+ *     If that cannot be queued, the deletion falls back to a workqueue (the
+ *     process is still deleted; only the ordering against the parent's wait is
+ *     lost) and says so.
+ * ================================================================ */
+static void vms_process_ended(pid_t tgid, struct pid *ref)
+{
+    for (;;) {
+        struct vms_termination t;
+        struct vms_proc *proc, *victim = NULL;
+        struct hlist_node *tmp;
+
+        spin_lock(&vms_proc_hash_lock);
+        hash_for_each_possible_safe(vms_proc_hash, proc, tmp, hash_node, tgid) {
+            if (proc->linux_pid != tgid || proc->pid_ref != ref)
+                continue;
+            hash_del_rcu(&proc->hash_node);          /* the claim */
+            vms_proc_termination_capture(proc, &t);
+            proc->compl_armed = 0;
+            victim = proc;
+            break;
+        }
+        spin_unlock(&vms_proc_hash_lock);
+        if (!victim)
+            return;
+
+        vms_proc_free_claimed(victim);               /* may sleep */
+
+        spin_lock(&vms_proc_hash_lock);
+        vms_proc_termination_post_locked(&t);
+        spin_unlock(&vms_proc_hash_lock);
+    }
+}
+
+#if defined(HAVE_TASK_EXIT_NOTIFIER)
+static int vms_task_exit_notify(struct notifier_block *nb, unsigned long group_dead,
+                                void *data)
+{
+    struct task_struct *p = data;
+
+    (void)nb;
+    if (group_dead)
+        vms_process_ended(task_tgid_nr(p), task_tgid(p));
+    return NOTIFY_OK;
+}
+static struct notifier_block vms_task_exit_nb = { .notifier_call = vms_task_exit_notify };
+
+static int vms_exit_hook_init(void)
+{
+    return task_exit_notifier_register(&vms_task_exit_nb);
+}
+static void vms_exit_hook_exit(void)
+{
+    (void)task_exit_notifier_unregister(&vms_task_exit_nb);
+}
+#elif defined(CONFIG_TRACEPOINTS)
+#include <linux/task_work.h>
+
+struct vms_exit_item {
+    struct callback_head cb;     /* exit_task_work in the exiting task */
+    struct work_struct   work;   /* fallback: a worker */
+    struct pid          *ref;
+    pid_t                tgid;
+};
+static struct tracepoint *vms_tp_exit;
+static struct workqueue_struct *vms_exit_wq;
+
+static void vms_exit_item_run(struct vms_exit_item *it)
+{
+    vms_process_ended(it->tgid, it->ref);
+    put_pid(it->ref);
+    kfree(it);
+}
+static void vms_exit_task_work(struct callback_head *cb)
+{
+    vms_exit_item_run(container_of(cb, struct vms_exit_item, cb));
+}
+static void vms_exit_work(struct work_struct *w)
+{
+    vms_exit_item_run(container_of(w, struct vms_exit_item, work));
+}
+
+static void vms_on_process_exit(void *data, struct task_struct *p)
+{
+    struct vms_exit_item *it;
+
+    (void)data;
+    if (atomic_read(&p->signal->live) != 0)
+        return;                         /* another thread of it is still running */
+    it = kzalloc(sizeof(*it), GFP_ATOMIC);
+    if (!it) {
+        pr_err_ratelimited("vms: no memory to delete process %d -- its PCB is kept\n",
+                           task_tgid_nr(p));
+        return;
+    }
+    it->tgid = task_tgid_nr(p);
+    it->ref  = get_pid(task_tgid(p));
+    init_task_work(&it->cb, vms_exit_task_work);
+    if (p == current && task_work_add(p, &it->cb, TWA_NONE) == 0)
+        return;
+    pr_warn_ratelimited("vms: process %d deleted asynchronously (no task_work)\n", it->tgid);
+    INIT_WORK(&it->work, vms_exit_work);
+    queue_work(vms_exit_wq, &it->work);
+}
+static void vms_find_exit_tp(struct tracepoint *tp, void *priv)
+{
+    (void)priv;
+    if (!strcmp(tp->name, "sched_process_exit"))
+        vms_tp_exit = tp;
+}
+static int vms_exit_hook_init(void)
+{
+    int ret;
+
+    vms_exit_wq = alloc_workqueue("vms_exit", 0, 0);
+    if (!vms_exit_wq)
+        return -ENOMEM;
+    for_each_kernel_tracepoint(vms_find_exit_tp, NULL);
+    if (!vms_tp_exit) {
+        destroy_workqueue(vms_exit_wq);
+        return -ENOENT;
+    }
+    ret = tracepoint_probe_register(vms_tp_exit, (void *)vms_on_process_exit, NULL);
+    if (ret)
+        destroy_workqueue(vms_exit_wq);
+    return ret;
+}
+static void vms_exit_hook_exit(void)
+{
+    tracepoint_probe_unregister(vms_tp_exit, (void *)vms_on_process_exit, NULL);
+    tracepoint_synchronize_unregister();
+    destroy_workqueue(vms_exit_wq);     /* drains any fallback deletion */
+}
+#else
+#error "the VMS executive needs a process-exit hook (rd vms-9f32): a kernel carrying task_exit_notifier (distro/kernel/patches/0001), or CONFIG_TRACEPOINTS"
+#endif
 
 /*
  * vms_lnm_mmap - hand userspace a READ-ONLY view of the executive-resident
@@ -2759,9 +2890,19 @@ static int __init vms_init(void)
     vms_acp_init();
 
     /* Register /dev/vms */
-    ret = misc_register(&vms_misc);
+    /* The process-exit hook comes up BEFORE the device can be opened: no PCB
+     * may exist that its process's end would not delete (rd vms-9f32). */
+    ret = vms_exit_hook_init();
+    if (ret)
+        pr_err("vms: no process-exit hook (%d) -- refusing to load without one\n", ret);
+    else {
+        ret = misc_register(&vms_misc);
+        if (ret) {
+            pr_err("vms: failed to register /dev/vms: %d\n", ret);
+            vms_exit_hook_exit();
+        }
+    }
     if (ret) {
-        pr_err("vms: failed to register /dev/vms: %d\n", ret);
         vms_acp_cleanup();
         vms_mbx_cleanup();
         vms_lnm_cleanup();
@@ -2908,6 +3049,9 @@ static void __exit vms_exit(void)
     /* Unregister device */
     misc_deregister(&vms_misc);
     vms_tt_linux_exit();             /* rd vms-f8c */
+    /* No new deletion can be queued once the hook is gone; finish the queued
+     * ones before the PCBs that remain are freed below. */
+    vms_exit_hook_exit();
 
     /* vms-0cd: stop capturing forks and drain any un-consumed fork-inherit records
      * (dropping the socket refs they hold) BEFORE the PCBs they snapshot are freed. */

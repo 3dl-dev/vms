@@ -1103,6 +1103,7 @@ jobs:
       # driver finds the image present and never installs. restore-only also means
       # a timed-out/failed test job can never save a partial/corrupt image.
       - name: Restore shared NetBSD image (version-keyed, restore-only)
+        id: nbcache1
         uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
@@ -1110,6 +1111,25 @@ jobs:
           restore-keys: |
             netbsd-amd64-install-
           fail-on-cache-miss: false
+      # The prime job (a `needs:' of this one) saved the image moments ago, but
+      # GitHub's cache index is eventually consistent: a job started seconds
+      # after the save can miss it (run 38017551537: two of four sibling jobs
+      # missed a key the prime job had just saved, two hit it). A miss used to
+      # fall through to a full sysinst install, whose own intermittent stall
+      # (vms-7c1) then ate the 90-minute wall. Wait for the saved entry to
+      # become visible; if it never does, fail by name instead of installing.
+      - name: Wait for the prime job's saved image to become visible
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        run: sleep 90
+      - name: Restore shared NetBSD image (after the index caught up)
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: true
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1221,6 +1241,7 @@ jobs:
       # driver finds the image present and never installs. restore-only also means
       # a timed-out/failed test job can never save a partial/corrupt image.
       - name: Restore shared NetBSD image (version-keyed, restore-only)
+        id: nbcache1
         uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
@@ -1228,6 +1249,25 @@ jobs:
           restore-keys: |
             netbsd-amd64-install-
           fail-on-cache-miss: false
+      # The prime job (a `needs:' of this one) saved the image moments ago, but
+      # GitHub's cache index is eventually consistent: a job started seconds
+      # after the save can miss it (run 38017551537: two of four sibling jobs
+      # missed a key the prime job had just saved, two hit it). A miss used to
+      # fall through to a full sysinst install, whose own intermittent stall
+      # (vms-7c1) then ate the 90-minute wall. Wait for the saved entry to
+      # become visible; if it never does, fail by name instead of installing.
+      - name: Wait for the prime job's saved image to become visible
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        run: sleep 90
+      - name: Restore shared NetBSD image (after the index caught up)
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: true
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1353,6 +1393,7 @@ jobs:
       # driver finds the image present and never installs. restore-only also means
       # a timed-out/failed test job can never save a partial/corrupt image.
       - name: Restore shared NetBSD image (version-keyed, restore-only)
+        id: nbcache1
         uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
@@ -1360,6 +1401,25 @@ jobs:
           restore-keys: |
             netbsd-amd64-install-
           fail-on-cache-miss: false
+      # The prime job (a `needs:' of this one) saved the image moments ago, but
+      # GitHub's cache index is eventually consistent: a job started seconds
+      # after the save can miss it (run 38017551537: two of four sibling jobs
+      # missed a key the prime job had just saved, two hit it). A miss used to
+      # fall through to a full sysinst install, whose own intermittent stall
+      # (vms-7c1) then ate the 90-minute wall. Wait for the saved entry to
+      # become visible; if it never does, fail by name instead of installing.
+      - name: Wait for the prime job's saved image to become visible
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        run: sleep 90
+      - name: Restore shared NetBSD image (after the index caught up)
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: true
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6
@@ -1487,6 +1547,7 @@ jobs:
       # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
       # P2a/P2b/P2c jobs, so one install serves all of them.
       - name: Restore shared NetBSD image (version-keyed, restore-only)
+        id: nbcache1
         uses: actions/cache/restore@v4
         with:
           path: .netbsd-cache
@@ -1494,6 +1555,25 @@ jobs:
           restore-keys: |
             netbsd-amd64-install-
           fail-on-cache-miss: false
+      # The prime job (a `needs:' of this one) saved the image moments ago, but
+      # GitHub's cache index is eventually consistent: a job started seconds
+      # after the save can miss it (run 38017551537: two of four sibling jobs
+      # missed a key the prime job had just saved, two hit it). A miss used to
+      # fall through to a full sysinst install, whose own intermittent stall
+      # (vms-7c1) then ate the 90-minute wall. Wait for the saved entry to
+      # become visible; if it never does, fail by name instead of installing.
+      - name: Wait for the prime job's saved image to become visible
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        run: sleep 90
+      - name: Restore shared NetBSD image (after the index caught up)
+        if: steps.nbcache1.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: true
 
       - name: Build NetBSD harness image (gha layer cache)
         uses: docker/build-push-action@v6

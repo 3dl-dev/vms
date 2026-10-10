@@ -436,8 +436,22 @@ struct vms_kfe {
     uint32_t flags;
     uint32_t access;
     char     name[VMS_KFE_NAMELEN];
+    char     path[256];
 };
 static struct vms_kfe vms_kfe_tab[VMS_KFE_MAX];
+
+static int kfe_name_eq(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        char x = *a, y = *b;
+        if (x >= 'a' && x <= 'z') x -= 32;
+        if (y >= 'a' && y <= 'z') y -= 32;
+        if (x != y)
+            return 0;
+        if (!x)
+            return 1;
+    }
+}
 static EXEC_DEFINE_MUTEX(vms_kfe_mutex);
 
 static int kfe_find(int fd)
@@ -446,6 +460,20 @@ static int kfe_find(int fd)
         if (vms_kfe_tab[i].used && exec_file_is(vms_kfe_tab[i].pin, fd))
             return i;
     return -1;
+}
+
+static int kfe_find_name(const char *name)
+{
+    for (int i = 0; i < VMS_KFE_MAX; i++)
+        if (vms_kfe_tab[i].used && kfe_name_eq(vms_kfe_tab[i].name, name))
+            return i;
+    return -1;
+}
+
+/* REPLACE/REMOVE name their entry by the open file, or by name when fd < 0. */
+static int kfe_find_req(const struct vms_kfe_args *a)
+{
+    return a->fd >= 0 ? kfe_find(a->fd) : kfe_find_name(a->name);
 }
 
 /* For the activation-time grant (vms-bdc1): the privileges the installed image
@@ -475,6 +503,7 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.name[VMS_KFE_NAMELEN - 1] = '\0';
+    args.path[sizeof(args.path) - 1] = '\0';
 
     if (args.op == VMS_KFE_OP_ADD || args.op == VMS_KFE_OP_REPLACE ||
         args.op == VMS_KFE_OP_REMOVE) {
@@ -491,6 +520,17 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         int e = exec_file_pin(args.fd, &pin);
         if (e) {
             st = e == -ETXTBSY ? SS__ACCONFLICT : SS__BADPARAM;
+            goto out;
+        }
+        /* An image installed /PRIVILEGED must be one no process can change
+         * or have planted: root-owned, with no write permission at all, so
+         * -- with nothing in OVMX running as substrate root (epic vms-8e6)
+         * and writes denied by the pin -- only the kernel could alter it.
+         * PID 1 stages SYS$SYSTEM/SYS$SHARE images that way at boot. */
+        if ((args.flags & VMS_KFE_F_PRIV) && !exec_file_sealed(pin)) {
+            exec_file_unpin(pin);
+            pin = NULL;
+            st = SS__NOPRIV;
             goto out;
         }
     }
@@ -515,9 +555,10 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         vms_kfe_tab[i].privs = (args.flags & VMS_KFE_F_PRIV) ? args.privs : 0;
         vms_kfe_tab[i].flags = args.flags;
         memcpy(vms_kfe_tab[i].name, args.name, VMS_KFE_NAMELEN);
+        memcpy(vms_kfe_tab[i].path, args.path, sizeof(args.path));
         break;
     case VMS_KFE_OP_REPLACE:
-        i = kfe_find(args.fd);
+        i = kfe_find_req(&args);
         if (i < 0) {
             st = SS__NOSUCHFILE;
             break;
@@ -527,7 +568,7 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         memcpy(vms_kfe_tab[i].name, args.name, VMS_KFE_NAMELEN);
         break;
     case VMS_KFE_OP_REMOVE:
-        i = kfe_find(args.fd);
+        i = kfe_find_req(&args);
         if (i < 0) {
             st = SS__NOSUCHFILE;
         } else {
@@ -537,9 +578,12 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         }
         break;
     case VMS_KFE_OP_FIND:
+    case VMS_KFE_OP_FIND_NAME:
     case VMS_KFE_OP_LIST:
         if (args.op == VMS_KFE_OP_FIND) {
             i = kfe_find(args.fd);
+        } else if (args.op == VMS_KFE_OP_FIND_NAME) {
+            i = kfe_find_name(args.name);
         } else {
             for (i = (int)args.index; i < VMS_KFE_MAX && !vms_kfe_tab[i].used; i++)
                 ;
@@ -555,6 +599,7 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
         args.flags = vms_kfe_tab[i].flags;
         args.access = vms_kfe_tab[i].access;
         memcpy(args.name, vms_kfe_tab[i].name, VMS_KFE_NAMELEN);
+        memcpy(args.path, vms_kfe_tab[i].path, sizeof(args.path));
         break;
     default:
         st = SS__BADPARAM;

@@ -3785,6 +3785,7 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
 #define VMS_KFE_OP_REMOVE   3
 #define VMS_KFE_OP_LIST     4      /* entry `index`; next index returned in `index` */
 #define VMS_KFE_OP_FIND     5      /* the entry for the file `fd` names */
+#define VMS_KFE_OP_FIND_NAME 6     /* the entry whose name is `name` (case-blind) */
 
 #define VMS_KFE_F_OPEN      0x0001u  /* /OPEN */
 #define VMS_KFE_F_SHARED    0x0002u  /* /SHARED */
@@ -3802,10 +3803,11 @@ struct vms_kfe_args {
     uint64_t privs;              /* ADD/REPLACE in, LIST/FIND out: image privileges */
     uint32_t flags;              /* VMS_KFE_F_* */
     uint32_t access;             /* LIST/FIND out: entry access count */
-    char     name[VMS_KFE_NAMELEN]; /* ADD/REPLACE in, LIST/FIND out: the VMS spec */
+    char     name[VMS_KFE_NAMELEN]; /* ADD/REPLACE in, LIST/FIND out: the image name */
+    char     path[256];          /* ADD in, LIST/FIND out: the substrate file activated */
 };
 #define VMS_IOCTL_KFE _IOWR(VMS_IOC_MAGIC, 0xB0, struct vms_kfe_args)
-_Static_assert(sizeof(struct vms_kfe_args) == 160,
+_Static_assert(sizeof(struct vms_kfe_args) == 416,
                "vms_kfe_args layout changed: VMS_IOCTL_KFE ABI break");
 
 /* ================================================================

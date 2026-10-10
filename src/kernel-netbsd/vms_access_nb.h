@@ -121,6 +121,7 @@ struct vms_modexfer_args {
 #define VMS_KFE_OP_REMOVE   3
 #define VMS_KFE_OP_LIST     4
 #define VMS_KFE_OP_FIND     5
+#define VMS_KFE_OP_FIND_NAME 6
 #define VMS_KFE_F_OPEN      0x0001u
 #define VMS_KFE_F_SHARED    0x0002u
 #define VMS_KFE_F_HDRRES    0x0004u
@@ -136,6 +137,7 @@ struct vms_kfe_args {
 	uint32_t flags;
 	uint32_t access;
 	char     name[VMS_KFE_NAMELEN];
+	char     path[256];
 };
 
 /* ================================================================

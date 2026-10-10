@@ -476,6 +476,8 @@ exec_file_pin(int fd, void **pin)
 	return e ? -e : 0;
 }
 static __inline void exec_file_unpin(void *pin) { ovmx_file_unpin(pin); }
+extern int ovmx_file_sealed(void *pin);
+static __inline int exec_file_sealed(void *pin) { return ovmx_file_sealed(pin); }
 static __inline int exec_file_is(void *pin, int fd) { return ovmx_file_is(pin, fd); }
 
 static __inline exec_task_pin_t *

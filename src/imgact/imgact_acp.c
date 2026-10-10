@@ -427,3 +427,31 @@ void imgact_acp_close(struct imgact_acp_file *f)
 	f->accessed = 0;
 	f->chan = 0;
 }
+
+/* imgact_kfe_find - the executive's known-file entry for `name` (rd vms-220). */
+uint32_t imgact_kfe_find(const char *name, char *path, unsigned long sz)
+{
+	struct vms_kfe_args a;
+	unsigned long i;
+	int fd = imgact_acp_dev_open();
+	uint32_t st;
+
+	if (fd < 0)
+		return SS$_NOSUCHDEV;
+	st = acp_register(fd);
+	if (st & 1) {
+		acp_memset(&a, 0, sizeof(a));
+		a.op = VMS_KFE_OP_FIND_NAME;
+		a.fd = -1;
+		for (i = 0; name[i] && i + 1 < sizeof(a.name); i++)
+			a.name[i] = name[i];
+		st = imgact_acp_dev_ioctl(fd, VMS_IOCTL_KFE, &a) < 0 ? SS$_NOSUCHDEV : a.status;
+		if ((st & 1) && sz) {
+			for (i = 0; a.path[i] && i + 1 < sz && i + 1 < sizeof(a.path); i++)
+				path[i] = a.path[i];
+			path[i] = 0;
+		}
+	}
+	imgact_acp_dev_close(fd);
+	return st;
+}

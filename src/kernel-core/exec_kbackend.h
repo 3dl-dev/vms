@@ -249,6 +249,8 @@
  *        for the entry's whole life, with writes to it denied (Linux:
  *        fget + deny_write_access; NetBSD: vref + vn_marktext). <0 when `fd`
  *        names no regular file or it is open for write (-ETXTBSY).
+ *        exec_file_sealed() is 1 when the pinned file is root-owned with no
+ *        write permission at all (an image installed /PRIVILEGED must be).
  *        exec_file_is() is 1 when `fd` names that very object: matching is by
  *        the pinned object, never an inode number or a path, so a deleted
  *        file's reused number is never mistaken for it (Baron, vms-96e7).

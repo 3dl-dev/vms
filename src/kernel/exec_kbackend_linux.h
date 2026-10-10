@@ -296,6 +296,12 @@ static inline int exec_file_pin(int fd, void **pin)
 	*pin = f;
 	return 0;
 }
+/* 1 when the pinned file is root-owned with no write permission at all. */
+static inline int exec_file_sealed(void *pin)
+{
+	struct inode *ino = file_inode((struct file *)pin);
+	return uid_eq(ino->i_uid, GLOBAL_ROOT_UID) && !(ino->i_mode & 0222);
+}
 static inline void exec_file_unpin(void *pin)
 {
 	struct file *f = pin;

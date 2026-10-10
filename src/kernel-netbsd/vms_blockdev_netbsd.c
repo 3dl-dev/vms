@@ -634,3 +634,19 @@ ovmx_file_is(void *pin, int fd)
 	fd_putfile(fd);
 	return same;
 }
+
+/* 1 when the pinned vnode is root-owned with no write permission at all
+ * (rd vms-7c64: an image installed /PRIVILEGED). */
+int ovmx_file_sealed(void *pin);
+int
+ovmx_file_sealed(void *pin)
+{
+	struct vnode *vp = pin;
+	struct vattr va;
+	int error;
+
+	vn_lock(vp, LK_SHARED | LK_RETRY);
+	error = VOP_GETATTR(vp, &va, kauth_cred_get());
+	VOP_UNLOCK(vp);
+	return error == 0 && va.va_uid == 0 && (va.va_mode & 0222) == 0;
+}

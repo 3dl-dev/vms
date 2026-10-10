@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdint.h>
 #include <time.h>
 #include <inttypes.h>
 
@@ -147,8 +148,25 @@ static int dcl_tt_assign(void)
     return dcl_tt_state == 1;
 }
 
-int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
-                uint32_t timeout_sec, uint16_t *term_out)
+void dcl_tt_arm_oob(void (*yast)(uint32_t), int y_on, void (*tast)(uint32_t), int t_on)
+{
+    uint16_t iosb[4];
+    /* IO$M_OUTBAND's P2: a quadword, first longword 0, second the mask of
+     * control characters -- here CTRL/T (20) */
+    static const uint32_t tmask[2] = { 0, 1u << 20 };
+
+    if (!dcl_tt_assign())
+        return;
+    (void)sys$qiow(0, dcl_tt_chan, IO$_SETMODE | IO$M_CTRLYAST, iosb, NULL, 0,
+                   y_on ? (void *)yast : NULL, 0, 3, 0, 0, 0);
+    /* the mask's address rides P4: P2 is a longword in this ABI and DCL's
+     * data may lie above 4 GB (see sys_qio.c) */
+    (void)sys$qiow(0, dcl_tt_chan, IO$_SETMODE | IO$M_OUTBAND, iosb, NULL, 0,
+                   t_on ? (void *)tast : NULL, 0, 3, (uintptr_t)tmask, 0, 0);
+}
+
+int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
+                uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out)
 {
     uint16_t iosb[4];
     uint32_t func, st;
@@ -167,8 +185,8 @@ int dcl_tt_read(const char *prompt, char *buf, size_t bufsz, uint32_t modifiers,
 
     static char pbuf[512];
     size_t plen = 0;
-    if (prompt && prompt[0]) {
-        plen = strlen(prompt);
+    if (prompt && prompt_len) {
+        plen = prompt_len;
         if (plen > sizeof pbuf)
             plen = sizeof pbuf;
         memcpy(pbuf, prompt, plen);
@@ -211,7 +229,7 @@ int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
     size_t len;
 
     if (isatty(STDIN_FILENO)) {
-        int n = dcl_tt_read(prompt, buf, bufsz, 0, 0, NULL);
+        int n = dcl_tt_read(prompt, prompt ? strlen(prompt) : 0, buf, bufsz, 0, 0, NULL);
         if (n >= 0)
             return 0;
         if (n != DCL_TT_NODRIVER)

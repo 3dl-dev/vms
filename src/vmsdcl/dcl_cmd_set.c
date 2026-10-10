@@ -258,19 +258,29 @@ static int cmd_set_default(struct dcl_command *cmd)
 }
 
 /*
- * SET PROMPT - Change the interactive prompt.
+ * SET PROMPT [="string"] [/[NO]CARRIAGE_CONTROL] - change the interactive
+ * prompt. With no string the default "$ " comes back. /CARRIAGE_CONTROL (the
+ * default) puts a new line before the prompt; /NOCARRIAGE_CONTROL does not
+ * (OpenVMS DCL Dictionary, SET PROMPT; observed on the VAX V7.3 console, probe
+ * CC.PROMPT P4: the prompt then starts in place).
  */
 static int cmd_set_prompt(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    if (cmd->param_count < 2) {
-        dcl_error("DCL", 2, "NOKEYW", "missing prompt string");
-        return SS$_BADPARAM;
+    if (cmd->param_count >= 2 && cmd->params[1][0]) {
+        strncpy(ctx->prompt, cmd->params[1], sizeof(ctx->prompt) - 1);
+        ctx->prompt[sizeof(ctx->prompt) - 1] = '\0';
+    } else {
+        strcpy(ctx->prompt, "$ ");
     }
-
-    strncpy(ctx->prompt, cmd->params[1], sizeof(ctx->prompt) - 1);
-    ctx->prompt[sizeof(ctx->prompt) - 1] = '\0';
+    ctx->prompt_nocc = 0;
+    for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+        if (strncasecmp(cmd->qualifiers[qi].name, "CARRIAGE_CONTROL", 4) == 0)
+            ctx->prompt_nocc = cmd->qualifiers[qi].negated ? 1 : 0;
+        else if (strncasecmp(cmd->qualifiers[qi].name, "NOCARRIAGE_CONTROL", 6) == 0)
+            ctx->prompt_nocc = 1;
+    }
 
     return SS$_NORMAL;
 }
@@ -942,7 +952,7 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
     int n;
 
     fflush(stdout);
-    n = dcl_tt_read(NULL, buf, bufsz, IO$M_NOECHO, 0, NULL);
+    n = dcl_tt_read(NULL, 0, buf, bufsz, IO$M_NOECHO, 0, NULL);
     if (n >= 0)
         return 0;
     if (n != DCL_TT_NODRIVER)

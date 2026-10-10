@@ -51,6 +51,7 @@
 #define SS_DEVALLOC   2112
 #define SS_TIMEOUT    556
 #define SS_HANGUP     716
+#define SS_ABORT      44
 
 static int pass = 0, fail = 0;
 
@@ -119,8 +120,17 @@ static void *rd_main(void *arg)
  * needs here; a read the test means to time out passes its own, shorter one. */
 #define BOUND 5
 
+static void rd_start_n(struct rd *r, uint32_t chan, uint32_t flags,
+                       const char *prompt, size_t plen, uint32_t timeout);
+
 static void rd_start(struct rd *r, uint32_t chan, uint32_t flags,
                      const char *prompt, uint32_t timeout)
+{
+    rd_start_n(r, chan, flags, prompt, prompt ? strlen(prompt) : 0, timeout);
+}
+
+static void rd_start_n(struct rd *r, uint32_t chan, uint32_t flags,
+                       const char *prompt, size_t plen, uint32_t timeout)
 {
     if (!(flags & VMS_TT_RD_TIMED)) {
         flags |= VMS_TT_RD_TIMED;
@@ -132,10 +142,12 @@ static void rd_start(struct rd *r, uint32_t chan, uint32_t flags,
     r->a.buf = (uint64_t)(uintptr_t)r->data;
     r->a.bufsz = sizeof(r->data) - 1;
     r->a.timeout = timeout;
-    if (prompt) {
-        snprintf(r->prompt, sizeof(r->prompt), "%s", prompt);
+    if (prompt && plen) {
+        if (plen > sizeof(r->prompt))
+            plen = sizeof(r->prompt);
+        memcpy(r->prompt, prompt, plen);
         r->a.prompt = (uint64_t)(uintptr_t)r->prompt;
-        r->a.promptsz = (uint32_t)strlen(r->prompt);
+        r->a.promptsz = (uint32_t)plen;
     }
     pthread_create(&r->th, NULL, rd_main, r);
 }
@@ -297,10 +309,256 @@ int main(void)
     CHECK(r.st == SS_NORMAL && r.a.term == 26 && r.a.count == 0, "^Z terminates the read");
     CHECK(strstr(scr, "*EXIT*") != NULL, "the driver echoes *EXIT* for ^Z");
 
+    /* ---- carriage control (rd vms-fc4): records and prompts ----
+     * A program's '\n'-terminated output is a run of RECORDS: a new line
+     * before each, a carriage return after, the line feed owed. A read that
+     * echoes pays the owed line feed before its prompt; DCL's prompt starts
+     * with a new line and a fill NUL. Expected bytes are the VAX V7.3
+     * console's for the same sequence (probes CC.EMPTY W2, CC.MIX). */
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "\r");                          /* a command line, echoed: fresh line */
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
+    (void)!write(s, "A\nB\n", 4);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-newline-ignores-cursor */
+    /* negctl-knockon: tt-port-input-dropped */
+    CHECK(strcmp(scr, "\rA\r\nB\r") == 0,
+          "two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)");
+    if (strcmp(scr, "\rA\r\nB\r") != 0)
+        printf("      screen was [%s]\n", scr);
+    rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);   /* the NUL is part of it */
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-owed-linefeed-unpaid */
+    /* negctl-knockon: tt-newline-ignores-cursor */
+    CHECK(memcmp(scr, "\n\r", 2) == 0 && scr[2] == '\0' && memcmp(scr + 3, "$ ", 2) == 0,
+          "DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ ");
+    type(m, "\r");
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
+    rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-newline-ignores-cursor */
+    /* negctl-knockon: tt-port-input-dropped */
+    CHECK(scr[0] == '\r' && scr[1] == '\0' && memcmp(scr + 2, "$ ", 2) == 0,
+          "DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)");
+    type(m, "\r");
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
+
     /* ---- $QIO write ---- */
     st = vms_kif_tt_write(chan, "xyz", 3);
     screen(m, scr, sizeof(scr), 300);
     CHECK((st & 1) && strcmp(scr, "xyz") == 0, "a $QIO write goes out through the driver byte for byte");
+    /* a write with P4 " " carriage control is one record: a new line (mid-
+     * line here: CR LF), the text, a CR with the line feed owed (semantic
+     * oracle TT.WRITE, rd vms-fc4) */
+    st = vms_kif_tt_write_record(chan, "abc", 3);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK((st & 1) && strcmp(scr, "\r\nabc\r") == 0,
+          "a $QIO write with P4 carriage control \" \" is one record: <CR><LF>abc<CR>");
+    (void)!write(s, "d\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK(strcmp(scr, "\nd\r") == 0, "the record after it pays the owed line feed: <LF>d<CR>");
+    (void)vms_kif_tt_write(chan, "\r\n", 2);      /* back to a fresh line */
+    (void)screen(m, scr, sizeof(scr), 300);
+
+    /* ---- out-of-band ASTs (rd vms-f0fb) ----
+     * Expected bytes and behaviour: VAX V7.3 console probes OB.PROMPT/OB.READ
+     * (docs/oracle/keystroke-probes/OB.*). AST routine addresses are opaque
+     * values to the executive; vms_kif_deliverast hands back what was armed. */
+    {
+        uint64_t aa = 0, ap = 0;
+        uint8_t am = 0;
+        int got;
+
+        while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+            ;                                   /* start with an empty queue */
+
+        /* no AST armed: CTRL/Y interrupts nothing -- *INTERRUPT* is shown and
+         * the character ends the read like a terminator, its line intact */
+        rd_start(&r, chan, 0, NULL, 0);
+        msleep(200);
+        type(m, "AB\x19");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-ctrly-not-shown */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(strcmp(scr, "AB\r\n*INTERRUPT*\r\n") == 0,
+              "CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver");
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "AB") == 0 && r.a.term == 0x19,
+              "with no CTRL/Y AST armed, CTRL/Y ends the read with its line ('AB'), not SS$_ABORT");
+
+        /* CTRL/Y AST armed: the read ends SS$_ABORT, the AST is queued in the
+         * executive for this process, and it is spent */
+        st = vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0x1234, 77, 0, 3);
+        CHECK(st & 1, "IO$M_CTRLYAST arms a CTRL/Y AST on the channel");
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        type(m, "AB\x19");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_ABORT, "with the CTRL/Y AST armed, CTRL/Y ends the read SS$_ABORT (the line is gone)");
+        got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+        /* negctl: tt-oob-ast-not-queued */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(got && aa == 0x1234 && ap == 77 && am == 3,
+              "the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)");
+        CHECK(vms_kif_deliverast(&aa, &ap, &am) != 0, "exactly one AST was queued");
+
+        /* spent: the next CTRL/Y finds no AST */
+        rd_start(&r, chan, 0, NULL, 0);
+        msleep(200);
+        type(m, "\x19");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
+              "a CTRL/Y AST fires once: the next CTRL/Y queues nothing until it is re-armed");
+
+        /* CTRL/C with no CTRL/C AST fires the CTRL/Y AST */
+        (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0x2222, 5, 0, 3);
+        rd_start(&r, chan, 0, NULL, 0);
+        msleep(200);
+        type(m, "\x03");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+        /* negctl-knockon: tt-oob-ast-not-queued */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_ABORT && got && aa == 0x2222,
+              "CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST");
+
+        /* an OUT-OF-BAND character (CTRL/T): the read stays outstanding, the
+         * reader is let go to deliver the AST (character as parameter), output
+         * written meanwhile breaks through, and the read resumes with its line
+         * shown again (OB.PROMPT T2) */
+        st = vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0x3333, 0, 1u << 0x14, 3);
+        CHECK(st & 1, "IO$M_OUTBAND arms an out-of-band AST for CTRL/T");
+        {
+            struct vms_tt_read_args ra;
+            char data[64];
+            uint32_t rs;
+
+            memset(&ra, 0, sizeof ra);
+            ra.chan = chan;
+            ra.flags = VMS_TT_RD_TIMED;
+            ra.timeout = BOUND;
+            ra.buf = (uint64_t)(uintptr_t)data;
+            ra.bufsz = sizeof data - 1;
+            ra.prompt = (uint64_t)(uintptr_t)"\r\n\0$ ";
+            ra.promptsz = 5;
+            {
+                pid_t kid = fork();
+                if (kid == 0) {                 /* the keyboard */
+                    msleep(300);
+                    type(m, "ABC\x14");
+                    _exit(0);
+                }
+                rs = vms_kif_tt_read(&ra);
+                waitpid(kid, NULL, 0);
+            }
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            /* negctl: tt-outband-ends-read */
+            /* negctl-knockon: tt-oob-ast-not-queued */
+            /* negctl-knockon: tt-port-input-dropped */
+            CHECK((ra.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x3333 && ap == 0x14,
+                  "CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character");
+            (void)screen(m, scr, sizeof(scr), 300);
+            (void)!write(s, "STATUS\n", 7);      /* the AST's status line */
+            screen(m, scr, sizeof(scr), 300);
+            /* negctl: tt-breakthrough-no-redisplay */
+            /* negctl-knockon: tt-oob-ast-not-queued */
+            /* negctl-knockon: tt-outband-ends-read */
+            /* negctl-knockon: tt-newline-ignores-cursor */
+            /* negctl-knockon: tt-port-input-dropped */
+            CHECK(memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) == 0,
+                  "output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC");
+            if (memcmp(scr, "\r\nSTATUS\r\n\r\0$ ABC", 17) != 0) {
+                printf("      screen was [");
+                for (size_t q = 0; q < 40 && (scr[q] || q < 22); q++)
+                    printf(scr[q] < 32 ? "<%02X>" : "%c", (unsigned char)scr[q]);
+                printf("]\n");
+            }
+            {
+                pid_t kid = fork();
+                if (kid == 0) {
+                    msleep(300);
+                    type(m, "D\r");
+                    _exit(0);
+                }
+                ra.oflags = 0;
+                rs = vms_kif_tt_read(&ra);
+                waitpid(kid, NULL, 0);
+            }
+            /* negctl-knockon: tt-oob-ast-not-queued */
+            /* negctl-knockon: tt-outband-ends-read */
+            /* negctl-knockon: tt-port-input-dropped */
+            CHECK(rs == SS_NORMAL && ra.oflags == 0 && ra.count == 4 && memcmp(data, "ABCD", 4) == 0,
+                  "the same read resumes and completes with the whole line 'ABCD'");
+            (void)screen(m, scr, sizeof(scr), 300);
+        }
+        (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
+        (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0, 0, 0, 3);
+
+        /* the arming channel's deassign ends its AST */
+        {
+            uint32_t chan3 = 0;
+            if (vms_kif_assign(devnam, &chan3) & 1) {
+                (void)vms_kif_tt_oobast(chan3, VMS_TT_OOB_CTRLY, 0x4444, 0, 0, 3);
+                (void)vms_kif_dassgn(chan3);
+            }
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(200);
+            type(m, "\x19");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            /* negctl: tt-oob-survives-deassign */
+            /* negctl-knockon: tt-port-input-dropped */
+            CHECK(chan3 && r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
+                  "an AST armed through a channel ends when that channel is deassigned");
+        }
+    }
+
+    /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */
+    (void)screen(m, scr, sizeof(scr), 100);
+    (void)!write(s, "A\n", 2);                 /* a record: its line feed owed */
+    (void)screen(m, scr, sizeof(scr), 300);
+    type(m, "\x0f");
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-port-input-dropped */
+    CHECK(strcmp(scr, "\n*OUTPUT OFF*\r\n") == 0,
+          "CTRL/O while output runs shows <LF>*OUTPUT OFF*<CR><LF> (the owed line feed first)");
+    (void)!write(s, "B\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-ctrlo-not-discarding */
+    /* negctl-knockon: tt-port-input-dropped */
+    CHECK(scr[0] == '\0', "output written while CTRL/O is on is discarded");
+    type(m, "\x0f");
+    msleep(200);                                /* the receive path runs first */
+    (void)!write(s, "C\n", 2);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-ctrlo-not-discarding */
+    /* negctl-knockon: tt-port-input-dropped */
+    CHECK(strcmp(scr, "*OUTPUT ON*\r\nC\r") == 0,
+          "a second CTRL/O shows *OUTPUT ON*<CR><LF> and output resumes on that line (OOB.CTRLO OW2)");
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "a\x0f" "b\r");
+    rd_wait(&r);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl-knockon: tt-owed-linefeed-unpaid */
+    /* negctl-knockon: tt-port-input-dropped */
+    CHECK(r.st == SS_NORMAL && strcmp(r.data, "ab") == 0 && strcmp(scr, "\nab\r\n") == 0,
+          "CTRL/O during a read is neither data nor shown, and does not end the read");
+    if (strcmp(scr, "\nab\r\n") != 0)
+        printf("      screen was [%s] data [%s] st %u\n", scr, r.data, r.st);
 
     /* ---- read(2) on the line is a terminal-driver read ---- */
     type(m, "hi\r");

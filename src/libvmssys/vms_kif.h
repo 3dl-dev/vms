@@ -768,10 +768,18 @@ uint32_t vms_kif_setterm(uint32_t chan);
  * no port is attached to answers SS$_DEVOFFLINE. */
 uint32_t vms_kif_tt_read(struct vms_tt_read_args *a);
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len);
+/* The same as one record (VMS_TT_WR_RECORD): IO$_WRITEVBLK with P4 " ". */
+uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len);
 uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode);
 /* What terminal `devnam`'s class driver is doing (VMS_TT_SENSE_*), for a
  * network port relaying its reads -- the DECnet CTERM host. CMKRNL. */
 uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state);
+/* Arm (astadr != 0) or disarm an out-of-band AST on a channel to a terminal
+ * (rd vms-f0fb): VMS_TT_OOB_CTRLY / _CTRLC / _OUTBAND -- $QIO IO$_SETMODE with
+ * IO$M_CTRLYAST / IO$M_CTRLCAST / IO$M_OUTBAND. `mask` (OUTBAND only): bit n =
+ * control character n. */
+uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
+                           uint64_t astprm, uint32_t mask, uint32_t acmode);
 /* Attach the substrate tty open on `ttyfd` to terminal unit `devnam` as its
  * port (STARTUP for OPA0:, LOGINOUT for its session terminal). CMKRNL. */
 uint32_t vms_kif_tt_attach(int ttyfd, const char *devnam);

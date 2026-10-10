@@ -4,31 +4,22 @@
 # tools/oracle/keystroke/ksdiff.py: an unlisted difference fails the gate, and so does
 # a listed step that now matches. Fix the bug, delete the line. Nearly every step
 # also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
-BC.READ S  # vms-53a: broadcast mid-read: no driver redisplay
 BC.READ W  # vms-53a: broadcast mid-read: no driver redisplay
-BC.READ R  # vms-53a: broadcast mid-read: no driver redisplay
 ERR.DCL E1  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E2  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E3  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E4  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E5  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E6  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
-ERR.DCL E6Z  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E7  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E8  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E9  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 ERR.DCL E10  # vms-c174: DCL error message differs (and vms-fc4 record carriage control)
 LE.CTRLJ J  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLJ R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CTRLR D  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CTRLR X  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLR R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CTRLU U  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLU R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CTRLW W  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CTRLW R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CTRLX X  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.CTRLX R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CURSOR H  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CURSOR W  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.CURSOR E  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
@@ -41,36 +32,17 @@ LE.CURSOR R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readl
 LE.DEL D1  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.DEL D2  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.DEL F  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
-LE.DEL R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.OVERSTRIKE L1  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.OVERSTRIKE L2  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.OVERSTRIKE A  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LE.OVERSTRIKE R  # vms-eda8: VMS line editing not implemented (substrate n_tty/readline)
 LOGIN.BANNER U  # vms-bd71: LOGINOUT console bytes differ
-LOGIN.BANNER N  # vms-bd71: LOGINOUT console bytes differ
 LOGIN.BANNER P  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT L  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT X  # vms-bd71: LOGINOUT console bytes differ
-OOB.CTRLO OW  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO OW2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLS Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLS X  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY C  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT C  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT O  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT O2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT Y2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-RC.RECALL C1  # vms-eb3d: command recall (up/down/^B) not VMS
-RC.RECALL C2  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL U1  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL U2  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL DN  # vms-eb3d: command recall (up/down/^B) not VMS
@@ -78,25 +50,12 @@ RC.RECALL R1  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL B  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL R2  # vms-eb3d: command recall (up/down/^B) not VMS
 RD.EOF Z  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.NOECHO N  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.NOECHO T  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.NOECHO E  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.PROMPT T  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.PROMPT S  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.PROMPT I  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.PROMPT J  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-RD.PROMPT K  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED W  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED R2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED W2  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
 RD.TIMED S  # vms-bc5: READPROMPT/TIMED/NOECHO/^Z read semantics
-TA.CTRLX D  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
-TA.CTRLX R  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
-TA.LOGIN W  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
+TA.LOGIN W  # vms-bd71: login banner/last-login bytes differ, and the VAX SYLOGIN SET TERMINAL/INQUIRE consumes the type-ahead (OVMX holds it unechoed and runs it after $ -- vms-d732 met)
 TA.USERNAME U  # vms-bd71: Username: purges type-ahead, then times out
-TA.WAIT D  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
-TA.WAIT R  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
-TA.WAIT.CR D  # vms-d732: type-ahead echoed on receipt, not when the read consumes it
 WRAP.LONG T  # vms-cef: long-line wrap at terminal width
 WRAP.LONG X  # vms-cef: long-line wrap at terminal width
 WRAP.LONG U  # vms-cef: long-line wrap at terminal width

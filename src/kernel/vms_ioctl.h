@@ -2111,8 +2111,13 @@ struct vms_tt_read_args {
     uint32_t count;             /* out: data bytes before the terminator */
     uint32_t term;              /* out: the terminator character */
     uint32_t termsz;            /* out: 1 when a terminator ended the read */
-    uint32_t pad;
+    uint32_t oflags;            /* out: VMS_TT_RDO_* */
 };
+/* The read is still OUTSTANDING (suspended in the class driver) and an AST the
+ * driver queued for this process is deliverable: deliver it, then issue the
+ * same read again -- it resumes where it was (rd vms-f0fb). `status` is not
+ * a completion status then. */
+#define VMS_TT_RDO_ASTPEND    0x1u
 
 struct vms_tt_write_args {
     uint32_t chan;              /* in: channel assigned to the terminal */
@@ -2121,6 +2126,11 @@ struct vms_tt_write_args {
     uint32_t len;               /* in: their count (P2) */
     uint32_t status;            /* out: SS$_ */
 };
+
+/* VMS_IOCTL_TT_WRITE flags (rd vms-fc4): the bytes are ONE RECORD -- a new line
+ * before them, a carriage return after (IO$_WRITEVBLK with P4 carriage control
+ * " ", single space) */
+#define VMS_TT_WR_RECORD      0x1u
 
 #define VMS_TT_MODE_PASSALL   0x1u     /* IO$_SETMODE P2 = IO$K_TT_PASSALL */
 struct vms_tt_mode_args {
@@ -2150,11 +2160,35 @@ struct vms_tt_sense_args {
     uint32_t status;                   /* out: SS$_ */
 };
 
+/* VMS_IOCTL_TT_OOBAST (rd vms-f0fb): arm or disarm an OUT-OF-BAND AST on a
+ * terminal channel -- $QIO IO$_SETMODE!IO$M_CTRLYAST / IO$M_CTRLCAST /
+ * IO$M_OUTBAND (OpenVMS I/O User's Reference, "Terminal Driver": CTRL/Y and
+ * CTRL/C ASTs, out-of-band ASTs). astadr 0 disarms. A CTRL/Y or CTRL/C AST is
+ * delivered ONCE and must be re-armed; with no CTRL/C AST armed a CTRL/C fires
+ * the CTRL/Y AST. An out-of-band AST stays armed and fires for every control
+ * character in `mask` (bit n = character n), with the character as the AST
+ * parameter. The AST runs at the less privileged of `acmode` and the caller's
+ * mode. Ends when the channel is deassigned. */
+#define VMS_TT_OOB_CTRLY      1u
+#define VMS_TT_OOB_CTRLC      2u
+#define VMS_TT_OOB_OUTBAND    3u
+struct vms_tt_oobast_args {
+    uint32_t chan;              /* in: channel assigned to the terminal */
+    uint32_t which;             /* in: VMS_TT_OOB_* */
+    uint64_t astadr;            /* in: AST routine (P1), 0 = disarm */
+    uint64_t astprm;            /* in: AST parameter (P2; not OUTBAND) */
+    uint32_t mask;              /* in: OUTBAND: control characters */
+    uint32_t acmode;            /* in: access mode (P3) */
+    uint32_t status;            /* out: SS$_ */
+    uint32_t pad;
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
 #define VMS_IOCTL_TT_SENSE    _IOWR(VMS_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
+#define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
 
 /* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
  * numbers on ILP32 VAX; these are the reference-build values. */
@@ -2178,6 +2212,10 @@ _Static_assert(sizeof(struct vms_tt_sense_args) == 24,
                "struct vms_tt_sense_args changed size");
 _Static_assert(VMS_IOCTL_TT_SENSE == 0xC01856A4u,
                "VMS_IOCTL_TT_SENSE encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_oobast_args) == 40,
+               "struct vms_tt_oobast_args changed size");
+_Static_assert(VMS_IOCTL_TT_OOBAST == 0xC02856A5u,
+               "VMS_IOCTL_TT_OOBAST encodes differently here than on the reference build");
 
 /*
  * Resolve a DISK unit to the Linux block device the executive enumerated it

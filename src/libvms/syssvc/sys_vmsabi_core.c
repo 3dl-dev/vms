@@ -10,7 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dcdef.h"
 #include "descrip.h"
+#include "dvidef.h"
 #include "lnmdef.h"
 #include "ssdef.h"
 #include "starlet.h"
@@ -151,6 +153,18 @@ void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), u
         sys$setef(efn);
     if (astadr)
         astadr(astprm);
+}
+
+int ovmx_vmsabi_chan_is_record_device(uint16_t chan)
+{
+    uint32_t cls = DC$_UNKNOWN;
+    struct item_list_3 il[2];
+    memset(il, 0, sizeof il);
+    il[0].buflen = sizeof cls;
+    il[0].item_code = DVI$_DEVCLASS;
+    il[0].bufaddr = &cls;
+    uint32_t st = sys$getdviw(0, chan, NULL, il, NULL, NULL, 0, 0);
+    return (st & 1) && (cls == DC$_TERM || cls == DC$_MAILBOX);
 }
 
 uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,

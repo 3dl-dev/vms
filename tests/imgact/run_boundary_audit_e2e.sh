@@ -55,13 +55,15 @@ LOG="$TMP/findings.jsonl"
 # -I paths, so a shared checkout is never mutated (build artifacts stay in TMP).
 IMGACT_CFLAGS="-std=gnu11 -O2 -Wall -Wextra
   -I$IMGACT_DIR/include -I$SRC/src/vmslink/include -I$SRC/src/libvms/include
-  -I$SRC/src/kernel -I$SRC/src/boundary_audit/include
+  -I$SRC/src/kernel -I$SRC/src/boundary_audit/include -I$SRC/src/libvmssys -DVMS_SYSCALL_HIDDEN
   -fPIC -fvisibility=hidden -ffreestanding -fno-stack-protector -fno-builtin
   -fno-asynchronous-unwind-tables"
 IMGACT_LDFLAGS="-nostdlib -nostartfiles -shared -Wl,-e,_start -Wl,-z,norelro -Wl,--build-id=none"
 IMGACT_SRCS="$IMGACT_DIR/imgact.c $IMGACT_DIR/known_images.c $IMGACT_DIR/imgact_acp.c
   $IMGACT_DIR/imgact_xfer.c $IMGACT_DIR/imgact_boundary_audit.c
-  $SRC/src/boundary_audit/boundary_audit_filter.c $ARCHDIR/start.S"
+  $SRC/src/boundary_audit/boundary_audit_filter.c
+  $SRC/src/libvmssys/kif_transport_linux.c $SRC/src/libvmssys/arch/x86_64/syscall.S
+  $ARCHDIR/start.S"
 
 say "== build IMGACT.EXE (x86_64, +boundary_audit) =="
 # shellcheck disable=SC2086

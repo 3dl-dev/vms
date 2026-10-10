@@ -29,6 +29,17 @@ endif()
 
 set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
 
+# The executive transport seam (rd vms-bbde) for this substrate: NetBSD/vax
+# reaches its `vms` pseudo-device through kif_transport_netbsd.c; the Linux
+# arches through kif_transport_linux.c over libvmssys's raw syscall layer.
+if(IMGACT_ARCH STREQUAL "vax")
+    set(IMGACT_TRANSPORT_SRC ${CMAKE_SOURCE_DIR}/src/libvmssys/kif_transport_netbsd.c)
+else()
+    set(IMGACT_TRANSPORT_SRC
+        ${CMAKE_SOURCE_DIR}/src/libvmssys/kif_transport_linux.c
+        ${CMAKE_SOURCE_DIR}/src/libvmssys/arch/${IMGACT_ARCH}/syscall.S)
+endif()
+
 # IMGACT.EXE is freestanding (-nostdlib) and must NOT inherit the substrate's
 # common system libraries. On the NetBSD/vax toolchain
 # CMAKE_C_STANDARD_LIBRARIES force-appends "-lpthread -lm -latomic" (Decision-A,
@@ -57,8 +68,7 @@ endif()
 # imgact_acp.c (bead vms-3e8e) is compiled directly as an extra source of THIS
 # freestanding target, the same way known_images.c is: it reads images over the
 # executive Files-11 ACP (IO$_ACCESS + IO$_READVBLK on /dev/vms) instead of
-# open()/pread() on a /vms POSIX path. imgact.c provides its three host
-# primitives (imgact_acp_dev_open/close/ioctl) on the raw syscall layer.
+# open()/pread() on a /vms POSIX path, through the libvmssys transport seam.
 # imgact_xfer.c (bead vms-f60d) is compiled directly as an extra freestanding
 # translation unit here (like known_images.c): a PURE parse of an image's
 # .vms$xfer section (SysV tail-jump vs. VMS-standard call), shared with the host
@@ -76,6 +86,9 @@ add_executable(imgact
     imgact_xfer.c
     imgact_boundary_audit.c
     ${CMAKE_SOURCE_DIR}/src/boundary_audit/boundary_audit_filter.c
+    # The executive transport seam (rd vms-bbde): /dev/vms only through
+    # libvmssys's transport and its raw syscall layer.
+    ${IMGACT_TRANSPORT_SRC}
     ${IMGACT_ARCHDIR}/start.S
     ${IMGACT_ARCH_EXTRA_SRC}
 )
@@ -90,8 +103,11 @@ target_include_directories(imgact PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmslink/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
     ${CMAKE_SOURCE_DIR}/src/boundary_audit/include # boundary_audit_filter.h (vms-617)
+    ${CMAKE_SOURCE_DIR}/src/libvmssys     # kif_transport.h / kif_calls.h (rd vms-bbde)
     ${CMAKE_SOURCE_DIR}/src/kernel)   # vms_ioctl.h + vms_acp.h (ACP arg structs)
 
+# The transport's raw syscall trampolines bind locally inside IMGACT (rd vms-bbde).
+target_compile_definitions(imgact PRIVATE VMS_SYSCALL_HIDDEN)
 target_compile_options(imgact PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
     -O2 -Wall -Wextra

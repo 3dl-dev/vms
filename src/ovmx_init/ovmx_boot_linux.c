@@ -29,6 +29,7 @@
 /* _POSIX_C_SOURCE / _DEFAULT_SOURCE come from the ovmx_init target's own
  * compile definitions (CMakeLists.txt) -- not redefined here. */
 #include "ovmx_boot.h"
+#include "kif_transport.h"   /* the executive transport seam (rd vms-bbde) */
 #include "opcom_kmsg.h"
 #include "vms_kif.h"
 #include "ovmx_layout.h"        /* SYSDISK_DEVICE -- the substrate default unit */
@@ -175,7 +176,12 @@ int ovmx_boot_load_module(const char *name)
 
 int ovmx_boot_open_executive(void)
 {
-    return open("/dev/vms", O_RDWR | O_CLOEXEC);
+    int fd = kif_xport_dev_open();    /* the transport seam (rd vms-bbde) */
+    if (fd < 0) {
+        errno = -fd;                  /* the transport reports a negative errno */
+        return -1;
+    }
+    return fd;
 }
 
 /* Parse an "ovmx.sysdev=<unit>" token from the kernel command line into `out`

@@ -171,6 +171,21 @@ func_body() {
     '
 }
 
+# xport_opens_dev_vms FILE - "yes" iff the transport FILE's kif_xport_dev_open()
+# opens kif_xport_device_path() (or the literal) and kif_xport_device_path()
+# returns exactly "/dev/vms" (rd vms-bbde: the device is the transport's own
+# knowledge, so the backend proof follows it there).
+xport_opens_dev_vms() {
+    _xo=$(func_body "$1" kif_xport_dev_open)
+    _xp=$(func_body "$1" kif_xport_device_path)
+    if printf '%s\n' "$_xo" | grep -qE 'open(at)?[[:space:]]*\([^;]*(kif_xport_device_path[[:space:]]*\([[:space:]]*\)|"/dev/vms")' \
+       && printf '%s\n' "$_xp" | grep -qE 'return[[:space:]]+"/dev/vms"[[:space:]]*;'; then
+        echo yes
+    else
+        echo no
+    fi
+}
+
 # last_top_stmt: read a block (or a single bare statement) on stdin and print
 # its LAST TOP-LEVEL statement, normalised to one line with string literals
 # blanked. "Top-level" means depth 0 relative to the block's own braces, so a
@@ -299,7 +314,11 @@ terminates() {
 #       guard returns/halts before the mknod, so /dev/vms cannot exist without
 #       the real executive (and executive_attach() -- check 3b -- then halts on
 #       the open). Every property has an evasion recorded in the negctl.
-node_files=$(grep -rlE 'mknod[[:space:]]*\([^;]*"/dev/vms"' --include=*.c "$SRC_ROOT/src" 2>/dev/null || true)
+# The node is named by the transport seam (rd vms-bbde): kif_xport_device_path()
+# is "/dev/vms" (verified with check 3b-backend), so a mknod of it is the same
+# node creation and is held to the same three properties.
+NODE_RE='mknod[[:space:]]*\([^;]*("/dev/vms"|kif_xport_device_path[[:space:]]*\([[:space:]]*\))'
+node_files=$(grep -rlE "$NODE_RE" --include=*.c "$SRC_ROOT/src" 2>/dev/null || true)
 node_ok=1
 for nf in $node_files; do
     nsc=$(strip_comments < "$nf")
@@ -314,8 +333,8 @@ for nf in $node_files; do
     fi
     # (b) every mknod("/dev/vms") device number must reference VAR -- reject a
     #     hardcoded/fabricated major.
-    nbad=$(printf '%s\n' "$nsc" | grep -E 'mknod[[:space:]]*\([^;]*"/dev/vms"' \
-           | sed -E 's/.*"\/dev\/vms"//' \
+    nbad=$(printf '%s\n' "$nsc" | grep -E "$NODE_RE" \
+           | sed -E 's/.*("\/dev\/vms"|kif_xport_device_path[[:space:]]*\([[:space:]]*\))//' \
            | grep -vE "(^|[^A-Za-z0-9_])${nvar}([^A-Za-z0-9_]|$)" || true)
     if [ -n "$nbad" ]; then
         echo "FAIL: $nf: mknod(\"/dev/vms\") uses a hardcoded/fabricated major, not the getdevmajor(\"vms\") result ($nvar)"
@@ -589,6 +608,11 @@ else
         status=1
     elif printf '%s\n' "$open_body" | grep -qE 'open[[:space:]]*\([[:space:]]*"/dev/vms"'; then
         echo "  OK: ovmx_boot_open_executive() opens the executive device /dev/vms"
+    elif printf '%s\n' "$open_body" | grep -qE '=[[:space:]]*kif_xport_dev_open[[:space:]]*\([[:space:]]*\)' \
+         && xport_ok=$(xport_opens_dev_vms "$SRC_ROOT/src/libvmssys/kif_transport_linux.c") \
+         && [ "$xport_ok" = yes ]; then
+        echo "  OK: ovmx_boot_open_executive() opens the executive device /dev/vms through the"
+        echo "      transport seam (kif_xport_dev_open opens kif_xport_device_path() == \"/dev/vms\")"
     else
         echo "FAIL: ovmx_boot_open_executive() no longer opens /dev/vms"
         echo "  -> the boot seam's executive-open must open the executive device,"

@@ -37,18 +37,9 @@
 
 #include <stdint.h>
 
-/* --------------------------------------------------------------------------
- * Host primitives (the freestanding/hosted seam). IMGACT.EXE backs these with
- * raw syscall6(); tests/qemu/test_syssvc_imgact_acp.c backs them with libc.
- * -------------------------------------------------------------------------- */
-
-/* Open /dev/vms for read/write; return a descriptor, or -1 on failure. */
-int  imgact_acp_dev_open(void);
-/* Close a descriptor returned by imgact_acp_dev_open(). */
-void imgact_acp_dev_close(int fd);
-/* Issue one ioctl on `fd`; return 0 on success, a negative errno on failure.
- * (The VMS SS$_ status is carried in the arg struct, not this return.) */
-long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg);
+/* The executive is reached through the libvmssys transport seam only
+ * (kif_transport.h: kif_xport_dev_open/close, kif_calls.h: kif_call -- rd
+ * vms-bbde). Every program that links imgact_acp.c links that transport. */
 
 /* --------------------------------------------------------------------------
  * An image file accessed over the Files-11 ACP.

@@ -107,6 +107,10 @@ cp "$MBX_C" "$MBX_ORIG"
 cp "$DEV_C" "$DEV_ORIG"
 cp "$LOG_C" "$LOG_ORIG"
 cp "$MISC_C" "$MISC_ORIG"
+# rd vms-bbde: the transport that names and opens the executive device.
+XPORT_C="$ROOT/src/libvmssys/kif_transport_linux.c"
+XPORT_ORIG="$WORK/kif_transport_linux.c.orig"
+cp "$XPORT_C" "$XPORT_ORIG"
 
 restore() {
     cp "$INIT_ORIG" "$INIT_C"
@@ -118,6 +122,7 @@ restore() {
     cp "$DEV_ORIG" "$DEV_C"
     cp "$LOG_ORIG" "$LOG_C"
     cp "$MISC_ORIG" "$MISC_C"
+    cp "$XPORT_ORIG" "$XPORT_C"
 }
 
 # ---------------------------------------------------------------------------
@@ -157,6 +162,7 @@ pristine_copy_of() {
         "$DEV_C")  echo "$DEV_ORIG" ;;
         "$LOG_C")  echo "$LOG_ORIG" ;;
         "$MISC_C") echo "$MISC_ORIG" ;;
+        "$XPORT_C") echo "$XPORT_ORIG" ;;
         *)         echo "" ;;
     esac
 }
@@ -411,9 +417,17 @@ expect_red "$INIT_C" "3b(h) halt entry point redefined by a macro" \
 # descriptor instead of open("/dev/vms"), and the gate must go red. It mutates a
 # DIFFERENT file than 3b's controls, so it cannot trip a 3b(a)-(h) property --
 # exactly the minimality the forbidden list asserts.
-sed -i 's#^    return open("/dev/vms", O_RDWR | O_CLOEXEC);$#    return 3;#' "$BOOT_LINUX_C"
+sed -i 's#^    int fd = kif_xport_dev_open();    /\* the transport seam (rd vms-bbde) \*/$#    int fd = 3;#' "$BOOT_LINUX_C"
 expect_red "$BOOT_LINUX_C" "3b-backend ovmx_boot_open_executive() fakes a descriptor, never opens /dev/vms" \
     "$R_BACKEND" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
+
+# rd vms-bbde: the device is the transport's own knowledge, so the backend proof
+# follows ovmx_boot_open_executive() into kif_transport_linux.c. A transport that
+# names some other node opens no executive and the gate must go red too.
+sed -i 's#^    return "/dev/vms";$#    return "/dev/null";#' "$XPORT_C"
+expect_red "$XPORT_C" "3b-backend the transport's kif_xport_device_path() names a node that is not the executive" \
+    "$R_BACKEND" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
+restore
 
 # ===========================================================================
 # CHECK 3c -- no per-call executive-presence test. All four shapes below are

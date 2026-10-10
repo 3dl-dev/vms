@@ -19,6 +19,11 @@
 #include "vms_syscall.h"
 #include "vms_types.h"
 
+const char *kif_xport_device_path(void)
+{
+    return "/dev/vms";
+}
+
 int kif_xport_dev_open(void)
 {
     /* AT_FDCWD (-100), O_RDWR (2) | O_CLOEXEC. The device name is the
@@ -40,7 +45,7 @@ int kif_xport_dev_open(void)
      * back. Closing the channel at execve() leaves the PCB owned solely by the
      * image's own channel (which IMGACT closes before SYS$EXIT, not at exit), so
      * the PCB survives to lazy reap and RUN can read the recorded $STATUS. */
-    return vms_sys_openat(VMS_AT_FDCWD, "/dev/vms",
+    return vms_sys_openat(VMS_AT_FDCWD, kif_xport_device_path(),
                           VMS_O_RDWR | VMS_O_CLOEXEC, 0);
 }
 

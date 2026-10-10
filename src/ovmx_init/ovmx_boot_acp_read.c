@@ -28,7 +28,6 @@
  * ovmx_init CMake target, the same as every other file it compiles. */
 #include <fcntl.h>
 #include <stdint.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -45,24 +44,8 @@
  * default (VDA0:) would probe an unmounted device and every image would read as
  * absent -- ovmx_boot_system_disk_unit() returns whatever PID 1 actually mounted. */
 
-/* --------------------------------------------------------------------------
- * imgact_acp.c host primitives, libc-backed (the freestanding/hosted seam).
- * -------------------------------------------------------------------------- */
-int imgact_acp_dev_open(void)
-{
-    return open("/dev/vms", O_RDWR);
-}
-
-void imgact_acp_dev_close(int fd)
-{
-    if (fd >= 0)
-        close(fd);
-}
-
-long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
-{
-    return ioctl(fd, req, arg) < 0 ? -1 : 0;
-}
+/* imgact_acp.c reaches the executive through the libvmssys transport seam
+ * (kif_transport_<substrate>.c, linked into PID 1; rd vms-bbde). */
 
 /* --------------------------------------------------------------------------
  * Presence probe + staging.

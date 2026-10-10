@@ -22,6 +22,7 @@ IMGACT_CFLAGS := -std=gnu11 -O2 -Wall -Wextra \
                  -I../libvms/include \
                  -I../kernel \
                  -I../boundary_audit/include \
+                 -I../libvmssys -DVMS_SYSCALL_HIDDEN \
                  -fPIC -fvisibility=hidden -ffreestanding \
                  -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \
@@ -42,8 +43,12 @@ endif
 # executive-boundary AUDIT tracer installed at the activation site. The shared
 # classifier/finding-format .c lives under src/boundary_audit so the hosted
 # unit-proof library and this freestanding path use the SAME code (no drift).
+# The executive transport seam (rd vms-bbde): IMGACT reaches /dev/vms only
+# through libvmssys's kif_transport_linux.c (+ its raw syscall layer), never an
+# open/ioctl of its own.
 IMGACT_SRC := imgact.c known_images.c imgact_acp.c imgact_xfer.c \
               imgact_boundary_audit.c ../boundary_audit/boundary_audit_filter.c \
+              ../libvmssys/kif_transport_linux.c ../libvmssys/arch/$(ARCH)/syscall.S \
               $(ARCHDIR)/start.S $(ARCH_EXTRA_SRC)
 
 .PHONY: all clean

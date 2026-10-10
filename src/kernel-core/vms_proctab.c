@@ -423,7 +423,6 @@ uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pi
     struct vms_proc *target;
     uint32_t st;
 
-    vms_proc_reap_dead();
     exec_lock(&vms_proc_hash_lock);
     target = find_by_vms_pid(vms_pid);
     if (!target) {

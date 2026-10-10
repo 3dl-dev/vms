@@ -112,7 +112,10 @@ negctl() { local seg="$1" present="$2" desc="$3"
 # ROOTAUDIT block at the end of run_dcl_acceptance_battery: an unlisted root
 # process fails, and so does a listed one that no longer runs as root. Remove a
 # line when its item lands; never add one without an item (epic vms-8e6).
+# Measured 2026-10-10 on X86_64, Alpha and VAX (the same two everywhere):
 substrate_root_known=(
+  "* init # vms-137e (STARTUP, PID 1: drop after the minimal executive bootstrap)"
+  "* JOB_CONTROL.EXE # vms-137e (pre-login session creator; LOGINOUT setuid is vms-ac48)"
 )
 
 # --- vms-c38: oracle golden-diff gate ------------------------------------------

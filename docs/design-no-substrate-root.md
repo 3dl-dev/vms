@@ -33,6 +33,16 @@ process list, not the executive's: Linux `/proc`, NetBSD `kern.proc2`.
 - vms-251b is done when the list is empty.
 - aarch64 has no booted acceptance run yet, so it is not measured.
 
+Measured 2026-10-10, on the first run with an empty list:
+
+- On X86_64, Alpha and VAX alike, exactly two processes run as root after
+  login: `init` (STARTUP, PID 1) and `JOB_CONTROL.EXE`. Both are listed
+  against vms-137e.
+- Sessions already run unprivileged: SYSTEM as uid 4, GUEST as its UIC member.
+- The census only sees processes alive when it runs. A startup image that ran
+  as root and exited is not measured here, and neither is a server the
+  acceptance boot does not start (DECNETD).
+
 ## Substrate identity (vms-ac48, vms-137e)
 
 - **One substrate uid per VMS process,** taken from a dedicated range

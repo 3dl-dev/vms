@@ -1483,13 +1483,16 @@ EOF
     if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
       log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
       mkdir -p "$_tc"
-      docker run --rm -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+      docker run --rm --network none -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
         bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
         || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
     fi
-    log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc)"
+    # Both toolchain builds run with the container's network disabled (vms-388):
+    # every source (GCC, musl, GMP/MPFR/MPC) is vendored and checksummed in the
+    # tree, so a download reintroduced into either script fails here, every run.
+    log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long: GMP/MPFR/MPC + all-gcc, network disabled)"
     mkdir -p "$GATE_ROOT/hostgcc"
-    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
       bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
       || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
     _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"

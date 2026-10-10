@@ -1,0 +1,225 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCADB0+36F0ADB0 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 1
+%SYSGEN-I-SETPARAM, LOCKDIRWT changed from 0 to 1
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 40 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+    10-OCT-2026 16:33:51.20
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   27.379507] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   27.386647] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 10-OCT-2026 16:33:53.26
+[   27.450677] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: [   29.903531] %PEA0, channel verified
+[   29.906416] %PEA0, virtual circuit open
+[   30.431493] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   30.439460] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   30.448010] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   30.453498] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   30.457863] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   30.960643] %PEA0, channel verified
+
+Username: [   30.961892] %PEA0, virtual circuit open
+[   31.526929] %CNXMAN, sending VAXcluster membership request to the selected member
+[   31.533568] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   31.537951] %CNXMAN, the cluster assigned this node a cluster system id
+[   31.542704] %CNXMAN, the cluster assigned this node a cluster system id
+[   31.545316] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   31.578040] %CNXMAN, membership bitmap is wider than the grounded byte; recording, not decoding
+[   31.585028] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   31.592167] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 [not this implementation]
+[   31.594274] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=1 [not this implementation]
+[   31.596966] %CNXMAN, VAXcluster state transition in progress
+[   31.600056] %CNXMAN, this node is now a VAXcluster member
+[   31.602081] %CNXMAN, this node is a member of the cluster
+[   31.603625] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   31.608962] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=0 [not this implementation]
+[   31.611006] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[   31.613178] %CNXMAN,   csid=00010009 slot=9 lockdirwt=1 entries=1 (this node)
+[   31.617971] %CNXMAN, system 0000000000000406 was added to the cluster
+[   31.619576] %CNXMAN, system 0000000000000402 was added to the cluster
+[   31.621279] %CNXMAN, system 0000000000000401 was added to the cluster
+[   31.623701] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   31.753536] %DLM, lock directory weight vector: 1 entries over 3 systems, 1 of them this node's; weights advertised; a member does not run this implementation
+[   31.760884] %CNXMAN, completed VAXcluster state transition
+SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ DEFINE/SYSTEM EVAC$DATA VDA100:[EVAC]
+$ CREATE SYS$LOGIN:OVSTBY.COM
+$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE
+$ EVACWL STANDBY NL=90
+*EXIT*
+$ SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ EVACWL: standby holds EVAC$WORKLOAD NL for 90 s
+SHOW CLUSTER
+View of Cluster from system ID 1030 node: OVMXE    10-OCT-2026 16:40:09
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXE  | 00010009 | VMX V0.7        | MEMBER           |
+| 1026   | 00010002 |                 | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ EVACWL: holding EVAC$WORKLOAD, waiting for EVAC$DATA:EVAC.DAT
+MOUNT VDA100: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _VDA100:
+$ EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 174
+TYPE VDA100:[EVAC]EVAC.DAT
+%RMS-E-FNF, file not found - VDA100:[EVAC]EVAC.DAT
+$ TYPE VDA100:[EVAC]EVAC.DAT
+%RMS-E-FNF, file not found - VDA100:[EVAC]EVAC.DAT
+$ DIRECTORY/SIZE/DATE VDA100:[EVAC]
+
+Directory VDA100:[EVAC]
+
+EVAC.DAT;1                                  31  10-OCT-2026 16:40:25.50
+EVACWL.COM;1                                 3   9-OCT-2026 01:07:35.96
+EVACWL.EXE;3                                 8   9-OCT-2026 01:13:00.51
+EVACWL.EXE;2                                 8   9-OCT-2026 01:10:46.61
+EVACWL.MAR;4                                20   9-OCT-2026 01:12:35.41
+EVACWL.OBJ;4                                 6   9-OCT-2026 01:13:00.39
+EVACWL.OBJ;3                                 6   9-OCT-2026 01:10:46.49
+
+Total of 7 files, 82 blocks.
+$ TYPE EVAC$DATA:EVAC.DAT
+%RMS-E-FNF, file not found - EVAC$DATA:EVAC.DAT
+$ DIRECTORY/SIZE=ALL/DATE=MODIFIED VDA100:[EVAC]EVAC.DAT
+
+Directory VDA100:[EVAC]
+
+EVAC.DAT;1                                    38/38  10-OCT-2026 16:40:25.50
+
+Total of 1 file, 38/38 blocks.
+$ SHOW SYSTEM
+OpenVMX V0.7-8 - OpenVMS-compatible  on node OVMXE  10-OCT-2026 16:43:53.41  Uptime  0 00:10:27
+  Pid    Process Name          CPU         Page flts   Pages
+10000004 SYSTEM             0 00:00:00.57       1120     843
+10000003 JOB_CONTROL        0 00:00:00.34         93     366
+10000001                    0 00:00:01.88         84     358
+10000005 SYSTEM_1           0 00:00:00.63        583     876
+10000005 SYSTEM_1           0 00:00:00.36        387     640
+$ [  704.230366] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  707.657721] %DLM, refusing a lock message from a system that has not proved it runs this implementation: this implementation has no grounded answer for that message shape
+[  707.956316] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[  707.959197] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=0 [not this implementation]
+[  707.961593] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[  707.964124] %CNXMAN,   csid=00010009 slot=9 lockdirwt=1 entries=1 (this node)
+[  707.966278] %DLM, lock directory weight vector: 1 entries over 3 systems, 1 of them this node's; weights advertised; a member does not run this implementation
+[  707.970249] %CNXMAN, completed VAXcluster state transition
+[  709.222257] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  712.944808] %PEA0, peer announced departure, channel closed
+[  712.947158] %PEA0, peer departed, virtual circuit closed
+[  712.948912] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[  712.952505] %CNXMAN, lost connection to a cluster member, reconnecting
+[  712.954255] vms: SCS path lost to system 0:1025 -> SS$ 132
+[  712.958424] %CNXMAN, membership bitmap is wider than the grounded byte; recording, not decoding
+[  712.961470] %CNXMAN, committed member count differs from the transition nodemap
+[  712.966432] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[  712.969076] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[  712.971111] %CNXMAN,   csid=00010009 slot=9 lockdirwt=1 entries=1 (this node)
+[  712.973112] %CNXMAN, system 0000000000000401 was removed from the cluster
+[  733.926117] %CNXMAN, the cluster never admitted this system: giving up its connection and proposing no state transition
+[  740.070154] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  745.061977] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  775.910077] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  780.902184] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  811.750057] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1030 node: OVMXE    10-OCT-2026 16:47:24
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXE  | 00010009 | VMX V0.7        | MEMBER           |
+| 1026   | 00010002 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ [  816.742188] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+DIRECTORY/SIZE=ALL VDA100:[EVAC]EVAC.DAT
+
+Directory VDA100:[EVAC]
+
+EVAC.DAT;1                                    66/66
+
+Total of 1 file, 66/66 blocks.
+$ [  847.590067] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  852.582250] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  883.430048] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  888.422267] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  919.270150] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  924.262310] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  955.110026] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  960.102192] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  990.950363] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  995.942252] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1026.790218] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1031.782224] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1062.630078] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1067.622110] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1098.470314] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1103.462151] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1134.310237] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1139.302180] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1170.150086] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1175.142353] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1205.990085] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1210.982260] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1241.830239] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1246.822061] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1277.670324] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1282.662219] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1313.510025] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1318.502313] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1349.350280] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1354.342161] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1385.190075] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[ 1390.182269] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[ 1421.030212] %SCS-W-DIRNOANSWER, directory inquiry unanswered

@@ -1,0 +1,159 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCADB0+36F0ADB0 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 1
+%SYSGEN-I-SETPARAM, LOCKDIRWT changed from 0 to 1
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 40 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+    10-OCT-2026 17:19:27.16
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   27.119713] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   27.124645] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 10-OCT-2026 17:19:28.99
+[   27.183108] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: [   29.266456] %PEA0, channel verified
+
+Username: [   29.269703] %PEA0, virtual circuit open
+[   29.453084] %PEA0, channel verified
+[   29.455107] %PEA0, virtual circuit open
+[   29.762678] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   30.180661] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   30.189027] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   30.192269] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   30.195709] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   31.205701] %CNXMAN, sending VAXcluster membership request to the selected member
+[   31.209860] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   31.214809] %CNXMAN, the cluster assigned this node a cluster system id
+[   31.217076] %CNXMAN, the cluster assigned this node a cluster system id
+[   31.220652] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   31.251237] %CNXMAN, this node is a member of the cluster
+[   31.253792] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   31.257560] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=0 [not this implementation]
+[   31.260553] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[   31.262982] %CNXMAN,   csid=00010003 slot=3 lockdirwt=1 entries=1 (this node)
+[   31.266021] %CNXMAN, VAXcluster state transition in progress
+[   31.268839] %CNXMAN, this node is now a VAXcluster member
+[   31.270472] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   31.273420] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=0 [not this implementation]
+[   31.276681] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[   31.281472] %CNXMAN,   csid=00010003 slot=3 lockdirwt=1 entries=1 (this node)
+[   31.284356] %CNXMAN, system 0000000000000406 was added to the cluster
+[   31.286875] %CNXMAN, system 0000000000000402 was added to the cluster
+[   31.290243] %CNXMAN, system 0000000000000401 was added to the cluster
+[   31.293423] %CNXMAN, transaction close not answered: this node holds no value for a required field
+SYSTEM
+Password: [   31.424502] %DLM, lock directory weight vector: 1 entries over 3 systems, 1 of them this node's; weights advertised; a member does not run this implementation
+[   31.430731] %CNXMAN, completed VAXcluster state transition
+
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ DEFINE/SYSTEM EVAC$DATA VDA100:[EVAC]
+$ CREATE SYS$LOGIN:OVSTBY.COM
+$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE
+$ EVACWL STANDBY NL=90
+*EXIT*
+$ SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ EVACWL: standby holds EVAC$WORKLOAD NL for 90 s
+EVACWL: holding EVAC$WORKLOAD, waiting for EVAC$DATA:EVAC.DAT
+MOUNT VDA100: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _VDA100:
+$ EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 175
+[  607.261304] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[  607.264448] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=0 [not this implementation]
+[  607.266538] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[  607.268675] %CNXMAN,   csid=00010003 slot=3 lockdirwt=1 entries=1 (this node)
+[  607.270433] %DLM, lock directory weight vector: 1 entries over 3 systems, 1 of them this node's; weights advertised; a member does not run this implementation
+[  607.275991] %CNXMAN, completed VAXcluster state transition
+[  608.307783] %DLM, refusing a lock message from a system that has not proved it runs this implementation: this implementation has no grounded answer for that message shape
+[  608.740537] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  612.326707] %PEA0, peer announced departure, channel closed
+[  612.333509] %PEA0, peer departed, virtual circuit closed
+[  612.336567] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[  612.343847] %CNXMAN, lost connection to a cluster member, reconnecting
+[  612.348516] vms: SCS path lost to system 0:1025 -> SS$ 132
+[  612.352817] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[  612.358263] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=0 [not this implementation]
+[  612.361232] %CNXMAN,   csid=00010003 slot=3 lockdirwt=1 entries=1 (this node)
+[  612.376640] %CNXMAN, system 0000000000000401 was removed from the cluster
+[  612.411349] %DLM, lock directory weight vector: 1 entries over 2 systems, 1 of them this node's; weights advertised; a member does not run this implementation
+[  612.415259] %CNXMAN, completed VAXcluster state transition
+[  613.988650] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  633.316605] %CNXMAN, the cluster never admitted this system: giving up its connection and proposing no state transition
+DIRECTORY/SIZE=ALL VDA100:[EVAC]EVAC.DAT
+
+Directory VDA100:[EVAC]
+
+EVAC.DAT;1                                    56/56
+
+Total of 1 file, 56/56 blocks.
+$ DIRECTORY/SIZE=ALL VDA100:[EVAC]EVAC.DAT
+
+Directory VDA100:[EVAC]
+
+EVAC.DAT;1                                    65/65
+
+Total of 1 file, 65/65 blocks.
+$ TYPE VDA100:[EVAC]EVAC.DAT
+%RMS-E-FNF, file not found - VDA100:[EVAC]EVAC.DAT
+$ STOP SYSTEM_1
+$ DISMOUNT VDA100:
+%DISMOUNT-E-DEVNOTDISM, device cannot be dismounted -- files are still open on - _VDA100:
+$ SHOW SYSTEM
+OpenVMX V0.7-8 - OpenVMS-compatible  on node OVMXE  10-OCT-2026 17:34:20.78  Uptime  0 00:15:18
+  Pid    Process Name          CPU         Page flts   Pages
+10000004 SYSTEM             0 00:00:00.60       1099     808
+10000003 JOB_CONTROL        0 00:00:00.54         95     366
+10000001                    0 00:00:01.88         87     358
+10000005 SYSTEM_1           0 00:00:00.71        388     640
+$ STOP SYSTEM_1
+$ DIRECTORY/SIZE=ALL VDA100:[EVAC]EVAC.DAT
+
+Directory VDA100:[EVAC]
+
+EVAC.DAT;1                                    78/78
+
+Total of 1 file, 78/78 blocks.
+$ DISMOUNT VDA100:
+%DISMOUNT-I-DISMOUNTED, _VDA100: dismounted
+$ 

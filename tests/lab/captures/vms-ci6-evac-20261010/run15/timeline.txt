@@ -1,0 +1,17 @@
+16:33:26 T0 capture ci6-evac-15 (all 0x6007 frames). OVMXE build fa487d04 = origin/main (incl. #1578 #1596) + #1582 (SYSGEN factory) + #1613 (vms-2ef close state) + lab-only EVACWL. OVMXE 1030 LOCKDIRWT 1 VOTES 1 EV 3; real VAX1 1025 / VAX2 1026 OpenVMS VAX V7.3 LOCKDIRWT 0 VOTES 1 EV 3; group 1. VAX1DATA dismounted cluster-wide
+16:35:43 OVMXE booted, member, logged in
+16:35:58 STEP 0 VAX1: MOUNT/CLUSTER $2$DUA1: VAX1DATA with OVMXE a member (a kind-6 close goes to OVMXE)
+16:37:12 STEP 0 result: MOUNT/CLUSTER COMPLETED (mounted on VAX1+VAX2); VAX1 reported '%MOUNT-W-RMTMNTFAIL ... failed to mount on node OVMXE -JBC-W-ACCVIO' -- OVMXE answered the close (5) but does not mount it (honest), and its answer carries no meaningful status (cosmetic, tracked)
+16:37:28 STEP 1 OVMXE: EVACWL STANDBY NL=90 -- NL on EVAC$WORKLOAD first (OVMXE = directory + master)
+16:37:36 STEP 2 VAX1: EVACWL (direct EX, forever) -- the workload runs on the real VMS node
+16:39:20 T+90 s: OVMXE standby issued CONVERT NL->EX (queues behind VAX1's EX)
+16:39:31 STEP 3 VAX2: EVACWL STANDBY from VAX2's system disk (falsifier: must never take EX while another node holds it)
+16:40:22 SNAPSHOT: SDA on VAX1 -- EVAC$WORKLOAD master CSID 00010009 = OVMXE, VAX1's EX granted; VAX2 standby LEF (queued at the master); no stall on OVMXE
+16:40:29 STEP 4 EVACUATE: STOP EVACVAX1 on VAX1 -- the workload leaves the VAX; its EX goes back to the master OVMXE
+16:40:45 STEP 5 volume handoff: VAX1 DISMOUNT/CLUSTER $2$DUA1: (closes go to VAX2 and OVMXE)
+16:41:33 STEP 5 result: DISMOUNT/CLUSTER RETURNED (volume dismounted on VAX1 and VAX2); VAX1 printed '%DISM-W-DSMCLUFAIL ... -SYSTEM-W-DEVOFFLINE' for OVMXE, which never had it mounted
+16:41:40 STEP 6 OVMXE: MOUNT VDA100: VAX1DATA (the data volume arrives on the OVMX node)
+16:42:15 TAKEOVER COMPLETE: 'EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 174' -- the OVMX workload continues the VAX's record sequence on the handed-over volume
+16:44:09 STEP 6 check: EVAC.DAT on VDA100 grows 31 -> 38 blocks in ~2 min (OVMX EVACWL appending 1 record/s); DCL TYPE of the write-shared open file says RMS-E-FNF on OVMX (bug, filed)
+16:45:10 STEP 7 VAX1 leaves the cluster: @SYS$SYSTEM:SHUTDOWN, option REMOVE_NODE, no reboot
+16:47:20 STEP 7 result: VAX1 SYSTEM SHUTDOWN COMPLETE; VAX2 and OVMXE both completed the transition removing VAX1; VAX2 Q=2 V=2 N=2 (no quorum loss)

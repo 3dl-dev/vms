@@ -763,3 +763,31 @@ long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg)
         return -EFAULT;
     return 0;
 }
+
+
+/*
+ * vms_ioctl_power - VMS_IOCTL_POWER (rd vms-137e): power the system off for a
+ * caller whose OWN PCB holds CMKRNL (vms_prot.h), so the startup process can
+ * halt without substrate root. Does not return when granted.
+ */
+long vms_ioctl_power(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_power_args args;
+    uint64_t privs;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    exec_lock(&proc->mode_lock);
+    privs = proc->cur_privs;
+    exec_unlock(&proc->mode_lock);
+    /* NEGCTL-ANCHORED (power-off-cmkrnl-not-checked) */
+    args.status = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);
+    if ((args.status & 1) && args.op != VMS_POWER_OP_OFF)
+        args.status = SS__BADPARAM;
+    if (args.status & 1)
+        exec_power_off();               /* does not return */
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}

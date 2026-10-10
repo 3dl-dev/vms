@@ -1,0 +1,25 @@
+# power-off-cmkrnl-not-checked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive powers off only for a CMKRNL caller (vms-137e)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_substrate_id";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "fatal";;
+        why)          echo "vms_ioctl_power() decides CMKRNL on the caller's own PCB before it powers the system off. The mutation lets any caller through, so test_syssvc_substrate_id's ordinary child powers the guest off. FATAL by construction: the run ends there, and the control asserts the suites ordered before it ran clean and that the guest never reached FINAL RESULTS.";;
+        require_fail) cat <<'EOT'
+an ordinary process (no CMKRNL) asking the executive to power off is SS$_NOPRIV
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i 's|^    args.status = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);$|    args.status = SS__NORMAL; (void)privs; /* NEGCTL power-off-cmkrnl-not-checked */|' "$_file"
+    :
+}

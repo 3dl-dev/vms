@@ -126,6 +126,32 @@ int main(void)
     check(guic == r[4] && guic != 0xFFFFFFFFu,
           "a fork running under that uid that registers on its own takes the same UIC from the executive");
 
+    /* Powering the system off is the executive's, for CMKRNL only (rd
+     * vms-137e): an ordinary process (uid 100, registered without it) is
+     * refused SS$_NOPRIV. Only the refusal is exercised -- a grant would end
+     * this run. */
+    {
+        int q[2];
+        uint32_t pst = 0;
+        if (pipe(q) == 0) {
+            pid_t c = fork();
+            if (c == 0) {
+                close(q[0]);
+                uint32_t r = 0;
+                if (setgid(100) == 0 && setuid(100) == 0 &&
+                    vms_pcb_init(0xFFFFFFFFFFFFFFFFULL))
+                    r = vms_kif_power_off();
+                (void)!write(q[1], &r, sizeof r);
+                _exit(0);
+            }
+            close(q[1]);
+            (void)!read(q[0], &pst, sizeof pst);
+            waitpid(c, NULL, 0);
+        }
+        /* negctl: power-off-cmkrnl-not-checked */
+        check(pst == SS$_NOPRIV, "an ordinary process (no CMKRNL) asking the executive to power off is SS$_NOPRIV");
+    }
+
     printf("=== test_syssvc_substrate_id: %d passed, %d failed ===\n", passed, failed);
     return failed ? 1 : 0;
 }

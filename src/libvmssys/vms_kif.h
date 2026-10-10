@@ -1027,6 +1027,9 @@ uint32_t vms_kif_kfe(struct vms_kfe_args *a);
  * proves the refusal. Delete this line if the census learns the VAX build. */
 uint32_t vms_kif_native_page0(void);
 
+/* Power the system off through the executive (rd vms-137e): CMKRNL. */
+uint32_t vms_kif_power_off(void);
+
 /*
  * vms_kif_p1_protect - the CRITICAL-P1 MPROTECT MECHANISM (vms-68f.iii,
  * docs/design-in-process-activation.md Part II §A.2.3(b)).

@@ -48,12 +48,18 @@ echo "Sandbox: $SB"
 echo ""
 
 # ------------------------------------------------------------------ sandbox --
-mkdir -p "$SB/tests/qemu" "$SB/src/kernel" "$SB/tracking"
+# The sandbox holds everything `facility_defects.sh coverage` reads: the whole
+# product source tree (every executive TU it prices, src/kernel and
+# src/kernel-core alike), the QEMU suites and the defect files, and the R1 host
+# ladder (tests/cluster), whose `owned` list coverage consults (rd vms-c02: the
+# sandbox once lacked it, so the pristine baseline was already red).
+mkdir -p "$SB/tests/qemu" "$SB/tests/cluster" "$SB/tracking"
+cp -r "$ROOT"/src                "$SB/src"
 cp "$ROOT"/tests/qemu/*.c        "$SB/tests/qemu/"  2>/dev/null
 cp "$ROOT"/tests/qemu/*.sh       "$SB/tests/qemu/"  2>/dev/null
 cp "$ROOT"/tests/qemu/facility_defects_floor.txt "$SB/tests/qemu/"
 cp -r "$ROOT"/tests/qemu/defects.d "$SB/tests/qemu/defects.d"
-cp "$ROOT"/src/kernel/*.c        "$SB/src/kernel/"  2>/dev/null
+cp -r "$ROOT"/tests/cluster/host "$SB/tests/cluster/host"
 # vms-165: src/kernel/vmsfs (the retired vmsfs VFS driver) no longer exists.
 
 MF="$SB/tests/qemu/facility_defects.sh"

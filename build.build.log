@@ -1,21 +1,3 @@
-[  0%] Built target cluster_host_fixture
-[  0%] Built target cluster_host_codec
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_csb.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_recnx_fsm.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_quorum.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cluster_api.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cluster_sysgen.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_phase2.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_barrier_fsm.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_coord_fsm.c.o
-[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_join_fsm.c.o
-[100%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_cnxman_diag.c.o
-[100%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_dlm_ldwv.c.o
-[100%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_dlm_dir.c.o
-[100%] Building C object tests/cluster/host/CMakeFiles/cluster_host_cnxman.dir/__/__/__/src/kernel-core/vms_dlm_echo_guard.c.o
-[100%] Linking C static library ../../../lib/libcluster_host_cnxman.a
-[100%] Built target cluster_host_cnxman
-[100%] Building C object tests/cluster/host/CMakeFiles/test_cnxman_join.dir/test_cnxman_join.c.o
-[100%] Building C object tests/cluster/host/CMakeFiles/test_cnxman_join.dir/vms_frame_compose.c.o
-[100%] Linking C executable ../../../bin/test_cnxman_join
-[100%] Built target test_cnxman_join
+Built target cluster_host_codec
+Built target cluster_host_fixture
+Built target test_codec_dlm

@@ -18,6 +18,7 @@
 struct dcl_context {
     /* Prompt */
     char prompt[DCL_MAX_PROMPT];
+    int  prompt_nocc;              /* SET PROMPT/NOCARRIAGE_CONTROL (rd vms-fc4) */
 
     /* Default directory (VMS-style) */
     char default_dir[512];

@@ -768,6 +768,8 @@ uint32_t vms_kif_setterm(uint32_t chan);
  * no port is attached to answers SS$_DEVOFFLINE. */
 uint32_t vms_kif_tt_read(struct vms_tt_read_args *a);
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len);
+/* The same as one record (VMS_TT_WR_RECORD): IO$_WRITEVBLK with P4 " ". */
+uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len);
 uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode);
 /* What terminal `devnam`'s class driver is doing (VMS_TT_SENSE_*), for a
  * network port relaying its reads -- the DECnet CTERM host. CMKRNL. */
@@ -987,6 +989,19 @@ uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
 /* The substrate identity the executive gives this VMS process (rd vms-ac48):
  * VMS_SUBST_OP_GET / VMS_SUBST_OP_BECOME. Never 0; carries no VMS meaning. */
 uint32_t vms_kif_substrate_id(uint32_t op, uint32_t *uid);
+
+/* The executive's known-file list (INSTALL, rd vms-7c64): ADD/REPLACE/REMOVE
+ * need CMKRNL; LIST/FIND are open. Returns the executive's status. */
+uint32_t vms_kif_kfe(struct vms_kfe_args *a);
+
+/* Virtual page 0 for this process (rd vms-b869): CMKRNL, once, native image
+ * activator only. SS$_NORMAL / SS$_NOPRIV / SS$_UNSUPPORTED / SS$_NOSUCHDEV.
+ * OVMX-UNWIRED: vms_kif_native_page0 (vms-b869) -- its one product caller is
+ * NATIVEACT.EXE (src/imgact/native_vax/nativeact.c), which is built only for
+ * NetBSD/VAX, so the host-configured census never compiles it; the VAX
+ * $STATUS gate RUNs it against the real executive, and test_syssvc_rights_acl
+ * proves the refusal. Delete this line if the census learns the VAX build. */
+uint32_t vms_kif_native_page0(void);
 
 /*
  * vms_kif_p1_protect - the CRITICAL-P1 MPROTECT MECHANISM (vms-68f.iii,

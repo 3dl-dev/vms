@@ -82,7 +82,7 @@ fi
 check() {
     local desc="$1" output="$2" pattern="$3" expect="${4:-present}"
     TOTAL=$((TOTAL + 1))
-    if echo "$output" | grep -qF "$pattern"; then
+    if grep -qF "$pattern" <<<"$output"; then
         if [ "$expect" = "present" ]; then
             echo "  PASS: $desc"; PASS=$((PASS + 1))
         else

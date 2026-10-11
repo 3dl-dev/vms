@@ -1,0 +1,23 @@
+# keystroke oracle transcript (unmasked) -- case CC.EMPTY (OpenVMS VAX V7.3 OPA0:)
+# carriage control probe: empty commands, one and two records, a procedure
+# case-sha256 328731cb893c7b2a7445f41e4bde298f053fbd9cdb083ed0b5d9b5b38a539ce3
+@start loggedin OK
+=== STEP E1
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP E2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP W1
+| WRITE SYS$OUTPUT "A"<CR><LF>
+| <CR>A<CR><LF>
+| <CR><NUL>$ 
+=== STEP W2
+| @KSCC2<CR><LF>
+| <CR>A<CR><LF>
+| B<CR><LF>
+| <CR><NUL>$ 
+=== STEP W3
+| WRITE SYS$OUTPUT ""<CR><LF>
+| <CR><LF>
+| <CR><NUL>$ 

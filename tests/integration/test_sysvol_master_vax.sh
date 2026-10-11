@@ -162,6 +162,19 @@ PROOF_IMAGES="$WORK/proof-images"
 mkdir -p "$PROOF_IMAGES"
 printf '\x7f\x45\x4c\x46\x01\x01STSNORM\n' > "$PROOF_IMAGES/STSNORM.EXE"
 printf '\x7f\x45\x4c\x46\x01\x01STSCOND\n' > "$PROOF_IMAGES/STSCOND.EXE"
+# Every other image the proof SYSTARTUP RUNs: the native VAX images (rd
+# vms-b869) from tests/native-images/vax/, NOTIMG.EXE (a text file, as
+# run-boot.sh stages it) and NATIVEACT.EXE (stand-in bytes; the activator).
+for name in $(sed -n 's/^\$[[:space:]]*RUN[[:space:]]\{1,\}SYS\$SYSTEM:\([A-Za-z0-9_$]*\).*/\1/p' \
+                  "$REPO/tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM"); do
+    [ -f "$PROOF_IMAGES/$name.EXE" ] && continue
+    if [ -f "$REPO/tests/native-images/vax/$name.EXE" ]; then
+        cp "$REPO/tests/native-images/vax/$name.EXE" "$PROOF_IMAGES/"
+    else
+        printf 'NOT AN IMAGE %s\n' "$name" > "$PROOF_IMAGES/$name.EXE"
+    fi
+done
+printf '\x7f\x45\x4c\x46\x01\x01NATIVEACT\n' > "$PROOF_IMAGES/NATIVEACT.EXE"
 PSTAGE="$WORK/proof-stage"
 "$STAGE_SCRIPT" --status-proof "$PROOF_IMAGES" "$IMAGES" "$REPO" "$PSTAGE" >/dev/null \
     || fail "stage_sysvol.sh --status-proof exited non-zero"

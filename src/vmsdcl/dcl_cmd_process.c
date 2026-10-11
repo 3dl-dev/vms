@@ -79,9 +79,20 @@ int cmd_wait(struct dcl_command *cmd)
     strncpy(hms, p, sizeof(hms) - 1);
     hms[sizeof(hms) - 1] = '\0';
 
-    /* Remove fractional seconds */
+    /* Hundredths of a second: SS.cc (OpenVMS DCL Dictionary, delta time). A
+     * WAIT 0:0:0.25 waits a quarter second -- dropping the fraction made it
+     * return at once, and a procedure pacing itself with it spun instead
+     * (the keystroke oracle's KSLOOP flooded the line, rd vms-ef03). */
+    long hundredths = 0;
     char *dot = strchr(hms, '.');
-    if (dot) *dot = '\0';
+    if (dot) {
+        *dot = '\0';
+        if (dot[1] >= '0' && dot[1] <= '9') {
+            hundredths = (dot[1] - '0') * 10;
+            if (dot[2] >= '0' && dot[2] <= '9')
+                hundredths += dot[2] - '0';
+        }
+    }
 
     /* Count colons to determine format */
     int colon_count = 0;
@@ -111,8 +122,11 @@ int cmd_wait(struct dcl_command *cmd)
         return SS$_IVTIME;
     }
 
-    if (total_seconds > 0) {
-        sleep((unsigned int)total_seconds);
+    if (total_seconds > 0 || hundredths > 0) {
+        struct timespec ts = { total_seconds, hundredths * 10000000L };
+        /* an interrupt (^Y) ends the wait, as on VMS; the remainder is not
+         * resumed */
+        (void)nanosleep(&ts, NULL);
     }
 
     return SS$_NORMAL;
@@ -2199,7 +2213,12 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                     n++;
                 char **iargv = calloc((size_t)n + 2, sizeof *iargv);
                 if (iargv) {
+#if defined(__vax__)
+                    /* OVMX/VAX: the VAX native image activator (vms-b869). */
+                    iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/NATIVEACT.EXE";
+#else
                     iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/IMGACT.EXE";
+#endif
                     iargv[1] = (char *)linux_path;
                     for (int k = 1; k < n; k++)
                         iargv[k + 1] = argv[k];

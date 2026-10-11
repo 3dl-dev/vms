@@ -1768,6 +1768,21 @@ uint32_t vms_kif_tt_read(struct vms_tt_read_args *a)
     return a->status;
 }
 
+uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len)
+{
+    struct vms_tt_write_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.flags = VMS_TT_WR_RECORD;
+    args.buf = (uint64_t)(uintptr_t)buf;
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_WRITE, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len)
 {
     struct vms_tt_write_args args;
@@ -2560,6 +2575,42 @@ uint32_t vms_kif_substrate_id(uint32_t op, uint32_t *uid)
     KIF_CALL(VMS_IOCTL_SUBSTRATE_ID, &args);
     if (uid)
         *uid = args.uid;
+    return args.status;
+}
+
+/*
+ * vms_kif_kfe - the executive's known-file list (VMS_IOCTL_KFE, rd vms-7c64):
+ * INSTALL ADD/REPLACE/REMOVE (CMKRNL) and LIST/FIND. `a` is in/out; the
+ * executive's status is returned and left in a->status.
+ */
+uint32_t vms_kif_kfe(struct vms_kfe_args *a)
+{
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    KIF_CALL(VMS_IOCTL_KFE, a);
+    return a->status;
+}
+
+/*
+ * vms_kif_native_page0 - ask the executive for virtual page 0 in this process
+ * (VMS_IOCTL_NATIVE_PAGE0, rd vms-b869): the VAX native image activator does,
+ * before it maps an image linked at P0 0x200. The executive decides: CMKRNL,
+ * once, and only on the native-image activation path; SS$_NOPRIV otherwise,
+ * SS$_UNSUPPORTED on a substrate with no such path.
+ */
+uint32_t vms_kif_native_page0(void)
+{
+    struct vms_native_page0_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_NATIVE_PAGE0, &args);
+
     return args.status;
 }
 

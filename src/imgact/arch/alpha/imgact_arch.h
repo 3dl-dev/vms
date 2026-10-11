@@ -41,6 +41,7 @@
 #define SYS_munmap      73
 #define SYS_mincore     375
 #define SYS_exit_group  405
+#define SYS_prctl       348
 
 static inline long syscall6(long n, long a, long b, long c, long d, long e,
 			    long f)

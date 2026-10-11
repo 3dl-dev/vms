@@ -650,9 +650,11 @@ int cmd_inquire(struct dcl_command *cmd)
     const char *prompt_text = (cmd->param_count >= 2) ? cmd->params[1] : "";
 
     /* The prompt, written by the terminal driver's IO$_READPROMPT (rd vms-f8c) */
+    /* INQUIRE's prompt starts on a new line (CR LF; the VAX V7.3 console shows
+     * "<CR>Your name: " -- no fill NUL, unlike DCL's own prompt; rd vms-fc4) */
     char pbuf[300];
     if (prompt_text[0]) {
-        snprintf(pbuf, sizeof(pbuf), "%.290s: ", prompt_text);
+        snprintf(pbuf, sizeof(pbuf), "\r\n%.290s: ", prompt_text);
     } else {
         /* Default prompt is symbol name */
         char upper_name[256];
@@ -660,7 +662,7 @@ int cmd_inquire(struct dcl_command *cmd)
         for (i = 0; i < sizeof(upper_name) - 1 && symbol_name[i]; i++)
             upper_name[i] = (char)toupper((unsigned char)symbol_name[i]);
         upper_name[i] = '\0';
-        snprintf(pbuf, sizeof(pbuf), "%s: ", upper_name);
+        snprintf(pbuf, sizeof(pbuf), "\r\n%s: ", upper_name);
     }
 
     char buf[1024];
@@ -3182,9 +3184,9 @@ int cmd_convert(struct dcl_command *cmd)
  *
  * THIS REPLACES an earlier version that maintained its own flat-text list
  * at SYS$MANAGER:INSTALL_LIST.DAT (vms-913.7). That list was never read by
- * anything: IMGACT.EXE's known-image search path (src/imgact/known_images.c)
- * mmaps SYS$SYSTEM:VMS$KNOWN_IMAGES.DAT, the binary KFE database only
- * SYS$SYSTEM:INSTALL.EXE writes. So SYSTARTUP_VMS.COM's `INSTALL ADD`
+ * anything: the known file list INSTALL.EXE maintains is the one IMGACT.EXE
+ * consults (the executive's since rd vms-220; before that an on-disk
+ * database only SYS$SYSTEM:INSTALL.EXE wrote). So SYSTARTUP_VMS.COM's `INSTALL ADD`
  * commands were silently landing in a file nothing consulted, while image
  * activation always fell through to the Priority 2 filesystem-search path
  * (docs/design-image-activation.md section 4) -- functionally harmless

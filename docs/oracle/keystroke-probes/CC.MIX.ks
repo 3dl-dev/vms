@@ -1,0 +1,15 @@
+@case CC.MIX
+@title carriage control probe: prompts of each kind after a record, echo and noecho
+A1 send "WRITE SYS$OUTPUT \"A\"\r" expect="\$ $"
+A2 send "@KSCC3\r" expect="Z> $"
+A3 send "q\r" expect="\$ $"
+A4 send "@KSCC4\r" expect="name: $"
+A5 send "q\r" expect="\$ $"
+A6 send "WRITE SYS$OUTPUT F$FAO(\"A!/\")\r" expect="\$ $"
+N1 send "SET TERMINAL/NOECHO\r" expect="\$ $"
+N2 send "@KSCC2\r" expect="\$ $"
+N3 send "@KSCC3\r" expect="Z> $"
+N4 send "q\r" expect="\$ $"
+N5 send "@KSCC4\r" expect="name: $"
+N6 send "q\r" expect="\$ $"
+N7 send "SET TERMINAL/ECHO\r" expect="\$ $"

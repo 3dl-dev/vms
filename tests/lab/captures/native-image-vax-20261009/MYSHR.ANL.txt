@@ -1,0 +1,267 @@
+$ TYPE MYSHR.ANL
+
+Analyze Image                                 9-OCT-2026 02:11:08.23   Page 1
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;1
+ANALYZ V07-04
+
+This is an OpenVMS VAX image file
+
+IMAGE HEADER
+
+	Fixed Header Information
+
+		image format major id: 02, minor id: 05
+		header block count: 1
+		image type: shareable (IHD$K_LIM)
+			global section major id: %X'01', minor id: %X'000000'
+			match control: ISD$K_MATLEQ
+		I/O channel count: default
+		I/O page count: default
+		linker flags:
+			(0)  IHD$V_LNKDEBUG   0
+			(1)  IHD$V_LNKNOTFR   1
+			(2)  IHD$V_NOP0BUFS   0
+			(3)  IHD$V_PICIMG     1
+			(4)  IHD$V_P0IMAGE    0
+			(5)  IHD$V_DBGDMT     1
+			(6)  IHD$V_INISHR     0
+			(7)  IHD$V_IHSLONG    1
+			(8)  IHD$V_UPCALLS    0
+
+	Image Activation Information
+
+		first transfer address:  %X'7FFEDF68'
+		second transfer address: %X'00000000'
+		third transfer address:  %X'00000000'
+
+	Global Symbol Table & Debug Symbol Table Information
+
+		debug symbol table VBN:  5, block count: 2
+		global symbol table VBN: 7, record count: 5
+		debug module/psect table VBN: 0, byte count: 0
+
+	Image Identification Information
+
+		image name: "MYSHR"
+		image file identification: "0"
+		link date/time:  9-OCT-2026 02:08:41.66
+		linker identification: "V11-50"
+
+	Patch Information
+
+		There are no patches at this time.
+
+	Image Section Descriptors (ISD)
+
+		1)  image section descriptor (16 bytes)
+			page count: 1
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+
+Analyze Image                                 9-OCT-2026 02:11:08.23   Page 2
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;1
+ANALYZ V07-04
+
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        0
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        0
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_SHRPIC
+			base VBN: 2
+
+		2)  image section descriptor (16 bytes)
+			page count: 1
+			base virtual address: %X'00000200' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        1
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        1
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_PRVPIC
+			base VBN: 3
+
+		3)  image section descriptor (16 bytes)
+			page count: 1
+			base virtual address: %X'00000400' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        1
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        1
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   1
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_PRVFXD
+			base VBN: 4
+
+
+Analyze Image                                 9-OCT-2026 02:11:08.23   Page 3
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;1
+ANALYZ V07-04
+
+		4)  image section descriptor (31 bytes)
+			page count: 265
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        1
+				(1)  ISD$V_CRF        0
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        0
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_SHRPIC
+			base VBN: 0
+			global section major id: %X'01', minor id: %X'00000E'
+			match control: ISD$K_MATLEQ
+			global section name: "LIBRTL_001"
+
+Analyze Image                                 9-OCT-2026 02:11:08.23   Page 4
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;1
+ANALYZ V07-04
+
+SHAREABLE IMAGE - GLOBAL SYMBOL TABLE
+
+
+1.  MODULE HEADER (OBJ$C_HDR_MHD), 47 bytes
+
+	structure level: 0
+	maximum record size: 512
+	module name: "MYSHR"
+	module version: "0"
+	creation   date/time:  9-OCT-2026 02:08
+
+
+2.  LANGUAGE PROCESSOR HEADER (OBJ$C_HDR_LNM), 15 bytes
+
+	Textual information:
+	"Linker V11-50"
+
+
+3.  GLOBAL SYMBOL DIRECTORY (OBJ$C_GSD), 19 bytes
+
+	1)  Program Section Definition (GSD$C_PSC)
+		alignment: 1-byte boundary                       <-- psect 0
+		attribute flags:
+			(0)  GPS$V_PIC        1
+			(1)  GPS$V_LIB        1
+			(2)  GPS$V_OVR        0
+			(3)  GPS$V_REL        0
+			(4)  GPS$V_GBL        0
+			(5)  GPS$V_SHR        0
+			(6)  GPS$V_EXE        0
+			(7)  GPS$V_RD         1
+			(8)  GPS$V_WRT        0
+			(9)  GPS$V_VEC        0
+			(10) GPS$V_COM        0
+			(11) GPS$V_NOMOD      0
+		allocation: 0 (%X'00000000')
+		symbol: ".$$ABS$$."
+
+
+4.  GLOBAL SYMBOL DIRECTORY (OBJ$C_GSD), 45 bytes
+
+	1)  Entry Point Symbol and Mask Definition (GSD$C_EPM)
+		data type: DSC$K_DTYPE_Z (0)
+		symbol flags:
+			(0)  GSY$V_WEAK       0
+			(1)  GSY$V_DEF        1
+			(2)  GSY$V_UNI        1
+			(3)  GSY$V_REL        1
+			(4)  GSY$V_COMM       0
+		psect: 0
+		value: 8 (%X'00000008')
+		entry mask: <>
+		symbol: "MYSHR_GREET"
+
+
+Analyze Image                                 9-OCT-2026 02:11:08.23   Page 5
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;1
+ANALYZ V07-04
+
+	2)  Entry Point Symbol and Mask Definition (GSD$C_EPM)
+		data type: DSC$K_DTYPE_Z (0)
+		symbol flags:
+			(0)  GSY$V_WEAK       0
+			(1)  GSY$V_DEF        1
+			(2)  GSY$V_UNI        1
+			(3)  GSY$V_REL        1
+			(4)  GSY$V_COMM       0
+		psect: 0
+		value: 0 (%X'00000000')
+		entry mask: <>
+		symbol: "MYSHR_ADD"
+
+
+5.  END OF MODULE (OBJ$C_EOM), 2 bytes
+
+	severity: successful (0)
+
+
+
+Analyze Image                                 9-OCT-2026 02:11:08.23   Page 6
+SYS$SYSROOT:[SYSMGR]MYSHR.EXE;1
+ANALYZ V07-04
+
+IMAGE ACTIVATOR FIXUP SECTION
+
+
+	Fixed Information
+
+		Flags:
+			(0)  IAF$V_SHR        1
+		shareable image count: 2
+		extra image count: 0
+
+	Shareable Image List
+
+		0)  this image
+		1)  "LIBRTL"
+
+	G^ Reference Fixups
+
+		1 reference to image 1:
+			  00000478
+
+	.ADDRESS Reference Fixups (relative to %X'00000000')
+
+		1 reference to image 0:
+			  00000204
+
+	Protection Change Fixups (relative to %X'00000000')
+
+		address: %X'00000400', page count: 1
+		protection: PRT$C_UREW
+
+
+
+The analysis uncovered NO errors.
+
+
+ANALYZE/IMAGE/OUTPUT=MYSHR.ANL MYSHR.EXE                                        

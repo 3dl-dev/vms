@@ -1,0 +1,170 @@
+$ LINK/SHAREABLE/MAP/FULL/CROSS/NOEXECUTABLE ORDSV
+%LINK-W-NUDFSYMS, 42 undefined symbols:
+%LINK-I-UDFSYM, 	CLI$COMPILE_CLD 
+%LINK-I-UDFSYM, 	CLI$FREE_CLD 
+%LINK-I-UDFSYM, 	LIB$$SET_CLI_HANDLER 
+%LINK-I-UDFSYM, 	LIB$ANALYZE_SDESC_64 
+%LINK-I-UDFSYM, 	LIB$GET_CURR_INVO_CONTEXT 
+%LINK-I-UDFSYM, 	LIB$GET_INVO_CONTEXT 
+%LINK-I-UDFSYM, 	LIB$GET_INVO_HANDLE 
+%LINK-I-UDFSYM, 	LIB$GET_PREV_INVO_CONTEXT 
+%LINK-I-UDFSYM, 	LIB$GET_PREV_INVO_HANDLE 
+%LINK-I-UDFSYM, 	MTH$ABSF 
+%LINK-I-UDFSYM, 	MTH$ACOSF 
+%LINK-I-UDFSYM, 	MTH$ALOG10F 
+%LINK-I-UDFSYM, 	MTH$ALOGF 
+%LINK-I-UDFSYM, 	MTH$ASINF 
+%LINK-I-UDFSYM, 	MTH$ATAN2F 
+%LINK-I-UDFSYM, 	MTH$ATANF 
+%LINK-I-UDFSYM, 	MTH$CEIL 
+%LINK-I-UDFSYM, 	MTH$COSF 
+%LINK-I-UDFSYM, 	MTH$EXPF 
+%LINK-I-UDFSYM, 	MTH$MAX 
+%LINK-I-UDFSYM, 	MTH$MIN 
+%LINK-I-UDFSYM, 	MTH$MOD 
+%LINK-I-UDFSYM, 	MTH$NINT 
+%LINK-I-UDFSYM, 	MTH$POWER 
+%LINK-I-UDFSYM, 	MTH$POWER_JI 
+%LINK-I-UDFSYM, 	MTH$SINF 
+%LINK-I-UDFSYM, 	MTH$SQRTF 
+%LINK-I-UDFSYM, 	MTH$TANF 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_D 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_F 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_T 
+%LINK-I-UDFSYM, 	OTS$CVT_T_S 
+%LINK-I-UDFSYM, 	OTS$CVT_T_T 
+%LINK-I-UDFSYM, 	OTS$DIVCT_R3 
+%LINK-I-UDFSYM, 	OTS$MULCT_R3 
+%LINK-I-UDFSYM, 	OTS$POWCTCT_R3 
+%LINK-I-UDFSYM, 	OTS$POWCTJ_R3 
+%LINK-I-UDFSYM, 	SYS$CHECK_FEN 
+%LINK-I-UDFSYM, 	SYS$DELTVA_64 
+%LINK-I-UDFSYM, 	SYS$FAO_COUNT_ARGS 
+%LINK-I-UDFSYM, 	SYS$GL_CALL_HANDL 
+%LINK-I-UDFSYM, 	SYS$SUSPEND 
+%LINK-W-USEUNDEF, undefined symbol CLI$COMPILE_CLD referenced
+	in psect ODATA offset %X00000000
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol CLI$FREE_CLD referenced
+	in psect ODATA offset %X00000008
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$$SET_CLI_HANDLER referenced
+	in psect ODATA offset %X00000014
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$ANALYZE_SDESC_64 referenced
+	in psect ODATA offset %X00000034
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_CURR_INVO_CONTEXT referenced
+	in psect ODATA offset %X000000DC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_INVO_CONTEXT referenced
+	in psect ODATA offset %X000000F0
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_INVO_HANDLE referenced
+	in psect ODATA offset %X000000F4
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_PREV_INVO_CONTEXT referenced
+	in psect ODATA offset %X000000FC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_PREV_INVO_HANDLE referenced
+	in psect ODATA offset %X00000100
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ABSF referenced
+	in psect ODATA offset %X000001F8
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ACOSF referenced
+	in psect ODATA offset %X00000200
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOG10F referenced
+	in psect ODATA offset %X0000020C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOGF referenced
+	in psect ODATA offset %X00000214
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ASINF referenced
+	in psect ODATA offset %X0000021C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATAN2F referenced
+	in psect ODATA offset %X00000228
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATANF referenced
+	in psect ODATA offset %X0000022C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$CEIL referenced
+	in psect ODATA offset %X00000230
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$COSF referenced
+	in psect ODATA offset %X0000023C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$EXPF referenced
+	in psect ODATA offset %X00000248
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MAX referenced
+	in psect ODATA offset %X00000250
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MIN referenced
+	in psect ODATA offset %X00000254
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MOD referenced
+	in psect ODATA offset %X00000258
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$NINT referenced
+	in psect ODATA offset %X0000025C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER referenced
+	in psect ODATA offset %X00000260
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER_JI referenced
+	in psect ODATA offset %X00000264
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SINF referenced
+	in psect ODATA offset %X0000027C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SQRTF referenced
+	in psect ODATA offset %X00000288
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$TANF referenced
+	in psect ODATA offset %X00000294
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_D referenced
+	in psect ODATA offset %X0000029C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_F referenced
+	in psect ODATA offset %X000002A0
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_T referenced
+	in psect ODATA offset %X000002A8
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CVT_T_S referenced
+	in psect ODATA offset %X000002E8
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CVT_T_T referenced
+	in psect ODATA offset %X000002EC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$DIVCT_R3 referenced
+	in psect ODATA offset %X000002F4
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$MULCT_R3 referenced
+	in psect ODATA offset %X00000304
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$POWCTCT_R3 referenced
+	in psect ODATA offset %X00000310
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$POWCTJ_R3 referenced
+	in psect ODATA offset %X00000314
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$CHECK_FEN referenced
+	in psect ODATA offset %X000003B0
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$DELTVA_64 referenced
+	in psect ODATA offset %X00000404
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$FAO_COUNT_ARGS referenced
+	in psect ODATA offset %X00000430
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$GL_CALL_HANDL referenced
+	in psect ODATA offset %X00000468
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$SUSPEND referenced
+	in psect ODATA offset %X000004CC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1

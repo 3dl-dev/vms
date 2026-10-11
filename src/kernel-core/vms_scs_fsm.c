@@ -200,8 +200,18 @@ static struct scs_cdt *cdt_alloc(struct scs_fsm *f, int *why)
 		return (struct scs_cdt *)0;
 	}
 
+	/*
+	 * LOWEST FREE SLOT FIRST (rd vms-ci.6 minted-form audit). The slot is
+	 * the Con.ID's low word. Every Con.ID a real VAX V7.3 minted in the lab
+	 * corpus (2,791 connects) has a low word of 0x0007..0x0010 -- a small,
+	 * REUSED index -- and a nonzero high word; this allocator used to walk
+	 * round-robin through the whole CDL, so a long-lived OVMX node minted
+	 * low words up to 0x80, a form no real node sends. The per-slot reuse
+	 * generation in the high word is what keeps a reused slot's Con.ID new
+	 * (SS4(t)), exactly as before.
+	 */
 	for (i = 0; i < f->n_cdl; i++) {
-		slot = (f->conid.next_slot + i) % f->n_cdl;
+		slot = i;
 		if (f->cdl[slot].in_use)
 			continue;
 		cdt = &f->cdl[slot];

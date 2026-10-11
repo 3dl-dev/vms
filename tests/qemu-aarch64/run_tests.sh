@@ -64,7 +64,7 @@ echo "== [1/2] POSITIVE: boot aarch64 /init =="
 POS="$(boot "$INITRD_AARCH64")"
 echo "$POS"
 echo ""
-if echo "$POS" | grep -q "$PASS"; then
+if grep -q "$PASS" <<<"$POS"; then
     echo "  -> positive proof: PASS marker present"
     POS_OK=1
 else
@@ -79,7 +79,7 @@ echo "   (the arm64 kernel must REFUSE to exec an EM_X86_64 init; no PASS marker
 NEG="$(boot "$INITRD_X86")"
 echo "$NEG"
 echo ""
-if echo "$NEG" | grep -q "$PASS"; then
+if grep -q "$PASS" <<<"$NEG"; then
     echo "  -> negative control: PASS marker PRESENT -- INVALID (arm64 boot ran an x86_64 binary?!)"
     NEG_OK=0
 else

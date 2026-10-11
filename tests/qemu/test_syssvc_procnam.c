@@ -1108,6 +1108,85 @@ static int read_full_bounded(int fd, void *buf, size_t n, int timeout_ms)
  *
  * Returns 0 on success with the command's stdout in out.
  */
+
+/*
+ * dump_stuck_task - a DCL that did not finish in time: say where it, and each
+ * task it started, is blocked (state, wchan, kernel stack) before it is
+ * killed, so a hang is diagnosed from the console, not guessed (rd vms-7ce).
+ */
+static void dump_one_task(int tid)
+{
+    char path[64], buf[2048];
+    int fd;
+    ssize_t n;
+    snprintf(path, sizeof path, "/proc/%d/stat", tid);
+    if ((fd = open(path, O_RDONLY)) >= 0) {
+        n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n > 0) { buf[n] = '\0'; printf("  STUCK: stat %s", buf); if (buf[n-1] != '\n') printf("\n"); }
+    }
+    snprintf(path, sizeof path, "/proc/%d/wchan", tid);
+    if ((fd = open(path, O_RDONLY)) >= 0) {
+        n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n > 0) { buf[n] = '\0'; printf("  STUCK: wchan %s\n", buf); }
+    }
+    snprintf(path, sizeof path, "/proc/%d/stack", tid);
+    if ((fd = open(path, O_RDONLY)) >= 0) {
+        while ((n = read(fd, buf, sizeof buf - 1)) > 0) {
+            buf[n] = '\0';
+            printf("%s", buf);
+        }
+        close(fd);
+    }
+}
+
+#include <dirent.h>
+/* Every thread of process `pid` (its /proc/<pid>/task/<tid>). */
+static void dump_threads(int pid)
+{
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", pid);
+    DIR *d = opendir(path);
+    if (!d) { dump_one_task(pid); return; }
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        printf("  STUCK: -- thread %s of %d\n", e->d_name, pid);
+        dump_one_task(atoi(e->d_name));
+    }
+    closedir(d);
+}
+
+static void dump_stuck_task(pid_t pid)
+{
+    printf("  STUCK: DCL.EXE pid %d, and the tasks it started:\n", (int)pid);
+    dump_threads((int)pid);
+    {
+        char path[64], tgt[128];
+        for (int fd = 0; fd < 64; fd++) {
+            snprintf(path, sizeof path, "/proc/%d/fd/%d", (int)pid, fd);
+            ssize_t n = readlink(path, tgt, sizeof tgt - 1);
+            if (n > 0) { tgt[n] = '\0'; printf("  STUCK: fd %d -> %s\n", fd, tgt); }
+        }
+    }
+    for (int t = 2; t < 32768; t++) {
+        char path[64], buf[512];
+        snprintf(path, sizeof path, "/proc/%d/stat", t);
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) continue;
+        ssize_t n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n <= 0) continue;
+        buf[n] = '\0';
+        char *rp = strrchr(buf, ')');
+        int ppid = 0;
+        char st = '?';
+        if (rp && sscanf(rp + 2, "%c %d", &st, &ppid) == 2 && ppid == (int)pid)
+            dump_threads(t);
+    }
+}
+
 static int run_show_system(char *out, size_t outsz)
 {
     int in_pipe[2], out_pipe[2];
@@ -1163,6 +1242,9 @@ static int run_show_system(char *out, size_t outsz)
             struct pollfd pfd = { .fd = out_pipe[0], .events = POLLIN };
             if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
                 timed_out = 1;
+                out[used] = '\0';
+                printf("  STUCK: DCL.EXE wrote %zu bytes before it stopped:\n%s\n", used, out);
+                dump_stuck_task(pid);
                 kill(pid, SIGKILL);
                 break;
             }
@@ -1304,6 +1386,9 @@ static int run_show_system_unpriv(char *out, size_t outsz)
             struct pollfd pfd = { .fd = out_pipe[0], .events = POLLIN };
             if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
                 timed_out = 1;
+                out[used] = '\0';
+                printf("  STUCK: DCL.EXE wrote %zu bytes before it stopped:\n%s\n", used, out);
+                dump_stuck_task(pid);
                 kill(pid, SIGKILL);
                 break;
             }

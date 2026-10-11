@@ -33,17 +33,17 @@ ncp SET OBJECT CTERM NUMBER 42 FILE SYS\$SYSTEM:DECNETD.EXE >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "SET OBJECT CTERM NUMBER 42 FILE ... exits 0" \
                 || bad "SET OBJECT CTERM exit $rc"
 out="$(ncp LIST OBJECT CTERM)"
-echo "$out" | grep -q "42" && echo "$out" | grep -q "DECNETD.EXE" \
+grep -q "42" <<<"$out" && grep -q "DECNETD.EXE" <<<"$out" \
     && ok "LIST OBJECT CTERM (new invocation) shows number 42 + file (persisted)" \
     || bad "LIST OBJECT CTERM missing 42/file: $out"
-echo "$out" | grep -q "Object Permanent Summary" \
+grep -q "Object Permanent Summary" <<<"$out" \
     && ok "LIST OBJECT is titled as the PERMANENT database" || bad "LIST OBJECT title: $out"
 
 ncp SET OBJECT FAL NUMBER 17 >/dev/null
 ncp DEFINE OBJECT TASK NUMBER 25 >/dev/null
 out="$(ncp LIST KNOWN OBJECTS)"
 # ascending-number order: 17 (FAL) before 25 (TASK) before 42 (CTERM)
-if echo "$out" | grep -qE "FAL" && echo "$out" | grep -qE "TASK" && echo "$out" | grep -qE "CTERM"; then
+if grep -qE "FAL" <<<"$out" && grep -qE "TASK" <<<"$out" && grep -qE "CTERM" <<<"$out"; then
     order="$(echo "$out" | grep -oE 'FAL|TASK|CTERM' | tr '\n' ' ')"
     [ "$order" = "FAL TASK CTERM " ] \
         && ok "LIST KNOWN OBJECTS lists all in ascending-number order (FAL,TASK,CTERM)" \
@@ -51,7 +51,7 @@ if echo "$out" | grep -qE "FAL" && echo "$out" | grep -qE "TASK" && echo "$out" 
 else
     bad "LIST KNOWN OBJECTS missing entries: $out"
 fi
-echo "$out" | grep -q "Known Object Permanent Summary" \
+grep -q "Known Object Permanent Summary" <<<"$out" \
     && ok "LIST KNOWN OBJECTS is titled as the PERMANENT database" || bad "LIST KNOWN OBJECTS title: $out"
 
 # --- SHOW reads the RUNNING NETACP: none here, so it fails honestly ----------
@@ -59,8 +59,8 @@ for what in "KNOWN OBJECTS" "OBJECT CTERM" "OBJECT 17" "KNOWN CIRCUITS" "KNOWN L
             "CIRCUIT ETH-0" "LINE ETH-0"; do
     # shellcheck disable=SC2086
     o="$(ncp SHOW $what)"; rc=$?
-    if [ "$rc" -ne 0 ] && echo "$o" | grep -q "^%NCP-F-OPEFAI, Operation failure" \
-       && ! echo "$o" | grep -qE "Volatile Summary|DECNETD.EXE"; then
+    if [ "$rc" -ne 0 ] && grep -q "^%NCP-F-OPEFAI, Operation failure" <<<"$o" \
+       && ! grep -qE "Volatile Summary|DECNETD.EXE" <<<"$o"; then
         ok "SHOW $what with no NETACP fails %NCP-F-OPEFAI (the permanent file is NOT shown as the running network)"
     else
         bad "SHOW $what with no NETACP should fail honestly (rc=$rc): $o"
@@ -70,7 +70,7 @@ done
 # --- DEFINE updates an existing number (file added) ---------------------------
 ncp DEFINE OBJECT FAL NUMBER 17 FILE SYS\$SYSTEM:DECNETD.EXE >/dev/null
 out="$(ncp LIST OBJECT 17)"
-echo "$out" | grep -q "DECNETD.EXE" \
+grep -q "DECNETD.EXE" <<<"$out" \
     && ok "DEFINE OBJECT updates FAL's file; LIST OBJECT <number> reflects it" \
     || bad "update not reflected: $out"
 
@@ -88,7 +88,7 @@ ncp PURGE OBJECT 17 >/dev/null; rc=$?
 err() { # desc, expected-code, args...
     local desc="$1" want="$2"; shift 2
     local o rc; o="$(ncp "$@")"; rc=$?
-    if [ "$rc" -ne 0 ] && echo "$o" | grep -q "$want"; then ok "$desc"; else bad "$desc (rc=$rc: $o)"; fi
+    if [ "$rc" -ne 0 ] && grep -q "$want" <<<"$o"; then ok "$desc"; else bad "$desc (rc=$rc: $o)"; fi
 }
 err "SET OBJECT without NUMBER is refused"          "MISSOBJNUM" SET OBJECT NONUM
 err "SET OBJECT with a bad number is refused"       "INVOBJNUM"  SET OBJECT X NUMBER 999

@@ -59,29 +59,22 @@ if(IMGACT_ARCH STREQUAL "alpha")
     list(APPEND IMGACT_ARCH_EXTRA_SRC ${IMGACT_ARCHDIR}/vms_transfer.S)
 endif()
 
-# known_images.c (bead vms-913.5) is compiled directly as an extra source of
-# THIS freestanding target (not the hosted `known_images` CMake library) so
-# it picks up the same -ffreestanding/-nostdlib flags below; imgact.c
-# provides the libc shim (open/fstat/mmap/munmap/close/strncpy/strncmp) its
-# calls need. Wires known_images_lookup() into the DT_NEEDED search path
-# (bead vms-30d).
 # imgact_acp.c (bead vms-3e8e) is compiled directly as an extra source of THIS
-# freestanding target, the same way known_images.c is: it reads images over the
+# freestanding target: it reads images over the
 # executive Files-11 ACP (IO$_ACCESS + IO$_READVBLK on /dev/vms) instead of
 # open()/pread() on a /vms POSIX path, through the libvmssys transport seam.
 # imgact_xfer.c (bead vms-f60d) is compiled directly as an extra freestanding
-# translation unit here (like known_images.c): a PURE parse of an image's
+# translation unit here: a PURE parse of an image's
 # .vms$xfer section (SysV tail-jump vs. VMS-standard call), shared with the host
 # unit test tests/imgact/test_xfer_parse.c.
 # imgact_boundary_audit.c (bead vms-617) is compiled directly as an extra
-# freestanding translation unit here (like known_images.c / imgact_acp.c): the
+# freestanding translation unit here (like imgact_acp.c): the
 # executive-boundary AUDIT tracer installed at the activation site behind
 # OVMX_BOUNDARY_AUDIT=1. Its shared classifier + JSON finding format live in
 # src/boundary_audit/boundary_audit_filter.c, compiled here too so the hosted
 # unit-proof library and this freestanding path use the SAME code (no drift).
 add_executable(imgact
     imgact.c
-    known_images.c
     imgact_acp.c
     imgact_xfer.c
     imgact_boundary_audit.c

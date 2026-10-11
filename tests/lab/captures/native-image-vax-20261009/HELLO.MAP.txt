@@ -1,0 +1,148 @@
+$ TYPE HELLO.MAP
+
+                                                                 9-OCT-2026 02:03        Linker V11-50                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+HELLO           0                     222 SYS$SYSROOT:[SYSMGR]HELLO.OBJ;1       9-OCT-2026 02:03  VAX MACRO V5.4-3
+SYS$P1_VECTOR   X-4                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     16-MAR-2001 00:59  VAX MACRO V5.4-3
+LIBRTL          V06-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      16-MAR-2001 02:47  Linker V11-38
+
+SYS$SYSROOT:[SYSMGR]HELLO.EXE;1                                  9-OCT-2026 02:03        Linker V11-50                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pages   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    0     1    00000200          2   0 READ WRITE   COPY ON REF
+                   0     1    00000400          3   0 READ ONLY     
+                   0     1    00000600          4   0 READ WRITE   FIXUP VECTORS
+                 253    20    7FFFD800          0   0 READ WRITE   DEMAND ZERO  
+
+LIBRTL             3   265    00000000-R        0   0 READ ONLY                  LIBRTL_001       LESS/EQUAL        1        14
+                   4     6    00021200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_002       LESS/EQUAL        1        14
+                   4     2    00021E00-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1        14
+                   4     8    00022200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_004       LESS/EQUAL        1        14
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! R  - Relocatable   !
+		! P  - Protected     !
+		+--------------------+
+
+SYS$SYSROOT:[SYSMGR]HELLO.EXE;1                                  9-OCT-2026 02:03        Linker V11-50                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+HDATA                           00000200 00000279 0000007A (        122.) QUAD  3 NOPIC,USR,CON,REL,LCL,NOSHR,NOEXE,  RD,  WRT,NOVEC
+                HELLO           00000200 00000279 0000007A (        122.) QUAD  3
+
+HCODE                           00000400 00000463 00000064 (        100.) QUAD  3 NOPIC,USR,CON,REL,LCL,NOSHR,  EXE,  RD,NOWRT,NOVEC
+                HELLO           00000400 00000463 00000064 (        100.) QUAD  3
+
+SYS$SYSROOT:[SYSMGR]HELLO.EXE;1                                  9-OCT-2026 02:03        Linker V11-50                    Page    4
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol         Value           Defined By         Referenced By ...
+------         -----           ----------         -----------------
+HELLO          00000400-R        HELLO         
+LIB$PUT_OUTPUT 00000648-RX       LIBRTL              HELLO         
+SYS$ASSIGN     7FFEDE50          SYS$P1_VECTOR       HELLO         
+SYS$IMGSTA     7FFEDF68          SYS$P1_VECTOR 
+SYS$QIOW       7FFEDE00          SYS$P1_VECTOR       HELLO         
+
+SYS$SYSROOT:[SYSMGR]HELLO.EXE;1                                  9-OCT-2026 02:03        Linker V11-50                    Page    5
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000400      R-HELLO         
+00000648     RX-LIB$PUT_OUTPUT
+7FFEDE00        SYS$QIOW      
+7FFEDE50        SYS$ASSIGN    
+7FFEDF68        SYS$IMGSTA    
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! *  - Undefined     !
+		! A  - Alias Name    !
+		! I  - Internal Name !
+		! U  - Universal     !
+		! R  - Relocatable   !
+		! X  - External      !
+		! WK - Weak          !
+		+--------------------+
+
+SYS$SYSROOT:[SYSMGR]HELLO.EXE;1                                  9-OCT-2026 02:03        Linker V11-50                    Page    6
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000200 000007FF 00000600 (1536. bytes, 3. pages)
+Stack size:                                             20. pages
+Image header virtual block limits:                       1.        1. (    1. block)
+Image binary virtual block limits:                       2.        4. (    3. blocks)
+Image name and identification:                    HELLO 0
+Number of files:                                         4.
+Number of modules:                                       3.
+Number of program sections:                              5.
+Number of global symbols:                              310.
+Number of cross references:                              8.
+Number of image sections:                                8.
+User transfer address:                            00000400
+Debugger transfer address:                        7FFEDF68
+Number of code references to shareable images:           1.
+Image type:                                       EXECUTABLE.
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]HELLO.MAP;1
+Estimated map length:                             55. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults	CPU Time	Elapsed Time
+----------------------                            -----------	--------	------------
+    Command processing:                                    81	00:00:00.00	00:00:00.00
+    Pass 1:                                              1256	00:00:00.03	00:00:00.07
+    Allocation/Relocation:                                 72	00:00:00.00	00:00:00.01
+    Pass 2:                                               734	00:00:00.02	00:00:00.03
+    Map data after object module synopsis:                 46	00:00:00.00	00:00:00.00
+    Symbol table output:                                    9	00:00:00.00	00:00:00.01
+Total run values:                                        2198	00:00:00.05	00:00:00.12
+
+Using a working set limited to 812 pages and 110 pages of data storage (excluding image)
+
+Total number object records read (both passes):   116
+    of which 27 were in libraries and 3 were DEBUG data records containing 74 bytes
+62 bytes of DEBUG data were written,starting at VBN 5 with 1 blocks allocated
+
+Number of modules extracted explicitly             = 0
+    with 1 extracted to resolve undefined symbols
+
+0 library searches were for symbols not in the library searched
+
+A total of 0 global symbol table records was written
+
+LINK/MAP/FULL/CROSS HELLO

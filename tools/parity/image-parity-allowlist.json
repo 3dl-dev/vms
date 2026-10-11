@@ -3,6 +3,12 @@
   "_note": "SINGLE SOURCE for legitimate x86_64<->vax shippable-image differences (rd vms-e1d, INV-LEDGER). Read by tools/parity/image_parity.py. Every entry names the image(s) that legitimately exist on only ONE arch, which side lacks them, and WHY -- the reviewed record of 'why this arch legitimately differs'. A gap NOT listed here is real drift and fails the gate. Do not add an entry just to make the gate pass -- each one needs sign-off that the difference is a deliberate design choice (usually 'Decision A', vms-42d: VAX activates images via NetBSD's own ld.elf_so instead of the custom IMGACT.EXE symbol-vector scheme x86_64 uses), not an unbuilt gap.",
   "entries": [
     {
+      "group": "vax-native-image-activator",
+      "names": ["NATIVEACT.EXE"],
+      "missing_on": "x86_64",
+      "reason": "rd vms-b869 (vms-3b3f): NATIVEACT.EXE activates an image LINKed on real OpenVMS VAX (the IHD format) on OVMX/VAX -- the P1 system service vector, the VAX transfer vectors and the per-process page 0 the executive grants it are VAX facts. An x86_64 OVMX node cannot run a VAX image at all (different instruction set), and on Alpha the native EIHD format is activated by IMGACT.EXE itself (image-activation$native-alpha-eihd). VAX-only by design, not an unbuilt gap."
+    },
+    {
       "group": "link-native-shareables",
       "names": [
         "DECC$SHR.EXE",

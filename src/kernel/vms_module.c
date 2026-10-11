@@ -2231,6 +2231,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_image_rundown(proc, arg);
     case VMS_IOCTL_SUBSTRATE_ID:     /* rd vms-ac48 */
         return vms_ioctl_substrate_id(proc, arg);
+    case VMS_IOCTL_KFE:              /* rd vms-7c64: the known-file list */
+        return vms_ioctl_kfe(proc, arg);
+    case VMS_IOCTL_NATIVE_PAGE0:     /* rd vms-b869: SS$_UNSUPPORTED on Linux */
+        return vms_ioctl_native_page0(proc, arg);
     case VMS_IOCTL_SETPRV:
         return vms_ioctl_setprv(proc, arg);
     case VMS_IOCTL_CHKPRIV:

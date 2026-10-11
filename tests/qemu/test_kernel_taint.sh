@@ -123,7 +123,7 @@ ko_signed_ok() {
     local signer sigid
     signer=$(modinfo -F signer "$1" 2>/dev/null)
     sigid=$(modinfo -F sig_id "$1" 2>/dev/null)
-    [ -n "$signer" ] && echo "$sigid" | grep -qi 'PKCS#7'
+    [ -n "$signer" ] && grep -qi 'PKCS#7' <<<"$sigid"
 }
 
 # When sourced for the pure helpers, stop here -- do not boot QEMU.
@@ -155,7 +155,7 @@ record() {
 check() {
     local desc="$1" output="$2" pattern="$3" expect="${4:-present}"
     TOTAL=$((TOTAL + 1))
-    if echo "$output" | grep -qaiF "$pattern"; then
+    if grep -qaiF "$pattern" <<<"$output"; then
         if [ "$expect" = "present" ]; then echo "  PASS: $desc"; PASS=$((PASS + 1))
         else echo "  FAIL: $desc (found but should be absent: $pattern)"; FAIL=$((FAIL + 1)); fi
     else
@@ -206,7 +206,7 @@ for ko in "${SHIPPED_KOS[@]}"; do
 
     vermagic=$(modinfo -F vermagic "$ko" 2>/dev/null)
     echo "    modinfo -F vermagic ${mod}.ko => '${vermagic}'"
-    echo "$vermagic" | grep -q -- '-ovmx'; record "${mod}.ko vermagic is the OVMX from-source kernel" $?
+    grep -q -- '-ovmx' <<<"$vermagic"; record "${mod}.ko vermagic is the OVMX from-source kernel" $?
 done
 rm -rf "$WORK"
 echo ""

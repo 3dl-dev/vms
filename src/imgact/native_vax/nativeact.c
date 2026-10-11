@@ -141,13 +141,44 @@ static int v_qiow(uint32_t efn, uint16_t chan, uint32_t func, void *iosb, void *
 	TRACE("SYS$QIOW -> %#x", st);
 	return st;
 }
-static int v_assign(void *devnam, uint16_t *chan, uint32_t acmode, void *mbxnam,
-		    uint32_t flags)
+/* A VMS caller may leave trailing optional arguments off (SP_IO CALLs
+ * SYS$ASSIGN with 4 of its 5, SYS$CREMBX with 8 of 9, SP_LOCK SYS$ENQW with
+ * 11 of 12); the service reads the argument count. These entries do the same:
+ * the argument list the image built is the one at AP (the entry is reached by
+ * a JMP past this routine's entry mask, so AP is the caller's), its first
+ * longword the count, and an argument past it is 0, as an omitted one is. */
+#define NATIVE_ARGLIST(ap) uint32_t *ap; __asm__ volatile("movl %%ap,%0" : "=g"(ap))
+#define NARG(ap, i) ((uint32_t)(i) <= ((ap)[0] & 0xFFu) ? (ap)[i] : 0u)
+#define NPTR(ap, i) ((void *)(uintptr_t)NARG(ap, i))
+
+static int v_assign(void)
 {
-	TRACE("SYS$ASSIGN");
-	int st = (int)sys$assign(devnam, chan, acmode, mbxnam, flags);
+	NATIVE_ARGLIST(ap);
+	uint16_t *chan = NPTR(ap, 2);
+	TRACE("SYS$ASSIGN (%u args)", ap[0] & 0xFFu);
+	int st = (int)sys$assign(NPTR(ap, 1), chan, NARG(ap, 3), NPTR(ap, 4), NARG(ap, 5));
 	TRACE("SYS$ASSIGN -> %#x chan=%u", st, chan ? *chan : 0);
 	return st;
+}
+static int v_crembx(void)
+{
+	NATIVE_ARGLIST(ap);
+	return (int)sys$crembx((int)NARG(ap, 1), NPTR(ap, 2), NARG(ap, 3), NARG(ap, 4),
+			       NARG(ap, 5), NARG(ap, 6), NPTR(ap, 7), NARG(ap, 8), NPTR(ap, 9));
+}
+static int v_enq(void)
+{
+	NATIVE_ARGLIST(ap);
+	return (int)sys$enq(NARG(ap, 1), NARG(ap, 2), NPTR(ap, 3), NARG(ap, 4), NPTR(ap, 5),
+			    NARG(ap, 6), NPTR(ap, 7), NARG(ap, 8), NPTR(ap, 9), NARG(ap, 10),
+			    NARG(ap, 11), NPTR(ap, 12));
+}
+static int v_enqw(void)
+{
+	NATIVE_ARGLIST(ap);
+	return (int)sys$enqw(NARG(ap, 1), NARG(ap, 2), NPTR(ap, 3), NARG(ap, 4), NPTR(ap, 5),
+			     NARG(ap, 6), NPTR(ap, 7), NARG(ap, 8), NPTR(ap, 9), NARG(ap, 10),
+			     NARG(ap, 11), NPTR(ap, 12));
 }
 static void v_exit(uint32_t code)
 {
@@ -172,7 +203,7 @@ static const struct vent p1vec[] = {
 	{ 0x7FFEDE60, (rtn_t)sys$cancel,  "SYS$CANCEL"  },
 	{ 0x7FFEDE68, (rtn_t)sys$cantim,  "SYS$CANTIM"  },
 	{ 0x7FFEDE98, (rtn_t)sys$clref,   "SYS$CLREF"   },
-	{ 0x7FFEDEB8, (rtn_t)sys$crembx,  "SYS$CREMBX"  },
+	{ 0x7FFEDEB8, (rtn_t)v_crembx,    "SYS$CREMBX"  },
 	{ 0x7FFEDED0, (rtn_t)sys$dacefc,  "SYS$DACEFC"  },
 	{ 0x7FFEDEE0, (rtn_t)sys$dassgn,  "SYS$DASSGN"  },
 	{ 0x7FFEDF00, (rtn_t)sys$delmbx,  "SYS$DELMBX"  },
@@ -188,9 +219,9 @@ static const struct vent p1vec[] = {
 	{ 0x7FFEE090, (rtn_t)sys$wflor,   "SYS$WFLOR"   },
 	{ 0x7FFEE0B0, (rtn_t)sys$getmsg,  "SYS$GETMSG"  },
 	{ 0x7FFEE0D8, (rtn_t)sys$getjpi,  "SYS$GETJPI"  },
-	{ 0x7FFEE3C0, (rtn_t)sys$enq,     "SYS$ENQ"     },
+	{ 0x7FFEE3C0, (rtn_t)v_enq,       "SYS$ENQ"     },
 	{ 0x7FFEE3C8, (rtn_t)sys$deq,     "SYS$DEQ"     },
-	{ 0x7FFEE3D0, (rtn_t)sys$enqw,    "SYS$ENQW"    },
+	{ 0x7FFEE3D0, (rtn_t)v_enqw,      "SYS$ENQW"    },
 	{ 0x7FFEE3F8, (rtn_t)sys$getsyi,  "SYS$GETSYI"  },
 	{ 0x7FFEE410, (rtn_t)sys$getdvi,  "SYS$GETDVI"  },
 	{ 0x7FFEE418, (rtn_t)sys$getdviw, "SYS$GETDVIW" },

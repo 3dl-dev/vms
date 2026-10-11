@@ -1196,6 +1196,16 @@ if(BUILD_TESTS)
     set_tests_properties(labjoin_booted_negctl PROPERTIES
         LABELS "integration;cluster" TIMEOUT 60)
 
+    # The lab node image's vax.ini keeps SIMH's timer catch-up OFF (rd vms-549c):
+    # with catch-up on, a host stall overflowed the timer calibration (Current
+    # Insts Per Tick went negative), every event went to a negative delay, and
+    # the VAX hung silent. Renders the entrypoint's here-document hermetically;
+    # carries its own negative control.
+    add_test(NAME lab_entrypoint_vaxini
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_entrypoint_vaxini.sh)
+    set_tests_properties(lab_entrypoint_vaxini PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 30)
+
     # x86_64 relocation survey freshness (vms-680, under vms-bdf): the
     # committed docs/design-link-x86_64-relocs.md is GENERATED, not hand-typed
     # -- tools/survey_x86_64_relocs.sh cross-compiles the vms-b65.1-.6 object

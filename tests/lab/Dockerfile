@@ -22,10 +22,11 @@
 # labjoin_booted.sh stages them at runtime via `kubectl cp` into /lab/run-<tag>/
 # and md5-verifies them in-pod. This image only supplies the emulator.
 #
-# Build + push to the k3s registry (from a machine with docker). BUMP THE TAG on
-# every rebuild and update tests/lab/k8s/20-vaxlab.yaml to match (IfNotPresent):
-#   docker build -t 192.168.2.43:30500/ovmx-vaxlab:4 tests/lab
-#   docker push  192.168.2.43:30500/ovmx-vaxlab:4
+# Build + push to the k3s registry ON THE k3s RAIL with
+# tests/lab/k8s/image-build/90-build-vaxlab-image.yaml (kaniko, from a git ref) -- never a
+# docker build on workshop, which is a shared host. BUMP THE TAG on every rebuild
+# and update tests/lab/k8s/20-vaxlab.yaml to match (IfNotPresent). Tag :5 exists
+# in the registry with no record of what built it; do not reuse it.
 
 ARG SIMH_REF=2e0d51e9e97b2c3a28c55261108550d1f533916b
 

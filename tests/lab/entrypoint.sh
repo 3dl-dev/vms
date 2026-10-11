@@ -75,11 +75,37 @@ for n in ${NODES}; do
   # only resolve inside its own tree.
   #   set idle=vms is load-bearing: without it SIMH spins a core forever on the
   #   VMS idle loop and the pod pegs its CPU limit doing nothing.
+  #   set clock nocatchup is load-bearing too (rd vms-549c, 2026-10-11). With
+  #   catch-up on, a host stall (CPU-quota throttling, a busy worker) makes the
+  #   calibrated timer schedule thousands of catch-up ticks, and the calibration
+  #   overflowed: captured live on a hung VAX2, 'Current Insts Per Tick:
+  #   -188,025,796', simulator time negative, every device/timer event at a
+  #   negative delay so none ever fires -- VMS spins at IPL 22, its console goes
+  #   silent, and the other members remove it ("Excessive packet losses"). The
+  #   corrupt calibration survives a SIMH 'boot'; only a fresh simulator clears
+  #   it. Without catch-up, a stall just costs that much simulated time.
+  # ASYM_MSCP=1 (rd vms-b20): the README's "asymmetric disk config for MSCP
+  # serving" variant, selectable per pod instead of hand-editing a config the
+  # next boot regenerates. vax1 gets a disk only it owns on rq2 (RA81,
+  # ${LAB_DIR}/data/d2.dsk, created empty by SIMH on first attach --
+  # INITIALIZE it once from vax1); vax2's rq2/rq3 CD-ROM units are disabled so
+  # DUA2 is unambiguous. vax2 then reaches $2$DUA2 only through vax1's MSCP
+  # server (MSCP_LOAD=1 / MSCP_SERVE_ALL=1 in the golden image). Default: the
+  # stock symmetric config.
+  rq2_set=; rq3_set=; rq2_att=; rq3_att=
+  if [ "${ASYM_MSCP:-0}" = 1 ]; then
+    case "${n}" in
+      vax1) rq2_set="set rq2 ra81"; rq2_att="attach rq2 ${LAB_DIR}/data/d2.dsk" ;;
+      *)    rq2_set="set rq2 disable"; rq3_set="set rq3 disable"
+            rq2_att=";"; rq3_att=";" ;;
+    esac
+  fi
   cat > "${nd}/vax.ini" <<EOF
 attach nvr ${nd}/data/nvram.bin
 set cpu conhalt
 set cpu 128m
 set idle=vms
+set clock nocatchup
 
 set rl disable
 
@@ -90,13 +116,13 @@ set rqd disable
 
 set rq0 ra92
 set rq1 ra92
-set rq2 cdrom
-set rq3 cdrom
+${rq2_set:-set rq2 cdrom}
+${rq3_set:-set rq3 cdrom}
 
 attach rq0 ${LAB_DIR}/data/d0.dsk
 attach rq1 ${LAB_DIR}/data/d1.dsk
-attach -r rq2 ${LAB_ROOT}/media/openvms073.iso
-attach -r rq3 ${LAB_ROOT}/media/openvms-internet-product-suite-v11.iso
+${rq2_att:-attach -r rq2 ${LAB_ROOT}/media/openvms073.iso}
+${rq3_att:-attach -r rq3 ${LAB_ROOT}/media/openvms-internet-product-suite-v11.iso}
 
 do local.ini
 

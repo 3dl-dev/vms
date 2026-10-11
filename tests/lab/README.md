@@ -45,9 +45,11 @@ with a read-only probe pod (`vax1`, `vax2`, `vax-n`, templates, `clean-cluster`,
 ## Deploy
 
 ```bash
-# 1. build + push the node image (from a machine with docker; workshop has it)
-docker build -t 192.168.2.43:30500/ovmx-vaxlab:1 tests/lab
-docker push  192.168.2.43:30500/ovmx-vaxlab:1
+# 1. build + push the node image ON THE k3s RAIL (kaniko from a git ref; never a
+#    docker build on workshop, a shared host). Edit GIT_REF/tag in the file first.
+kubectl -n ovmx-lab apply -f tests/lab/k8s/image-build/90-build-vaxlab-image.yaml
+kubectl -n ovmx-lab logs -f job/build-vaxlab-image
+kubectl -n ovmx-lab delete job build-vaxlab-image
 
 # 2. apply — this starts ONE lab
 kubectl apply -f tests/lab/k8s/
@@ -179,6 +181,13 @@ SCA block-transfer path (§ "Phase D part 1's lab capture" in
 stock config, not a replacement for it — most lab sessions want the stock
 symmetric setup.
 
+**Selectable since image `:7` (rd `vms-b20`):** set the env `ASYM_MSCP=1` on the
+pod and `entrypoint.sh` renders exactly the recipe below -- vax1 gets
+`set rq2 ra81` + `attach rq2 ${LAB_DIR}/data/d2.dsk` (SIMH creates it empty on
+first attach; `INITIALIZE $2$DUA2: <label>` once from vax1), vax2 gets
+`set rq2 disable` / `set rq3 disable`. Default (unset) is the stock symmetric
+config. `ctest -R lab_entrypoint_vaxini` checks both renderings.
+
 **Recipe** (source: `vms-291`'s `vaxlab-9` capture via `vms-76eb`'s closing
 context, grounded against `tests/lab/entrypoint.sh`, 2026-08-06):
 
@@ -219,6 +228,34 @@ A negative control (MOUNT aimed at a nonexistent unit, expected to show zero
 READ/WRITE/block-transfer frames) is worth capturing alongside the positive
 run — it is what makes the mount capture attributable to the asymmetric
 config rather than to something else on the wire.
+
+## SIMH clock: `set clock nocatchup` is load-bearing (`vms-549c`, 2026-10-11)
+
+**Symptom.** A VAX's console goes silent, its simulator sits at 100% CPU, and
+the other members log `Excessive packet losses on LAN Path` and remove it.
+This hit three-VAX dlmlab arms (E5, E5b, C0, F1b, F1d) and a stock two-VAX
+vaxlab-3 with no OVMX on the bridge.
+
+**Diagnose** with `ovmx-lab-console ctrl <pod> <node> E`, then `send ... "show clocks"`
+and `send ... "show queue"`. A hung node shows a NEGATIVE `Current Insts Per
+Tick` (captured: `-188,025,796`), a negative simulator `time`, a large `Catchup
+Ticks Sched`, and every device/timer event at a negative delay -- none ever
+fires, so VMS spins (PC 8712C043, IPL 22). PC `870ADF8D` (`BBC #3,26C(R3)`) is
+the VMS IDLE loop, not a hang signature.
+
+**Cause.** SIMH's timer catch-up: after a host stall (CPU-quota throttling, a
+busy k3s worker) the calibrated timer schedules thousands of catch-up ticks and
+the instructions-per-tick calibration overflowed. The corrupt calibration
+survives a SIMH `boot`; only a fresh simulator clears it.
+
+**Fix (image `:6`, carried forward in `:7`).** `entrypoint.sh` writes `set clock nocatchup` into every
+node's `vax.ini`. A stall then costs that much simulated time instead of a
+backlog. Verify on a running node: `show clocks` lists no `Catchup` lines.
+
+**Proof required after any image change (the soak).** Two VAXes formed, under
+the host's normal load, for at least 2 h (the hangs came within ~20 s to 30 min
+of formation), with `show clocks` sampled on both: `Current Insts Per Tick`
+stays positive and no node is removed. Record the samples in the PR.
 
 ## Things that will bite you
 

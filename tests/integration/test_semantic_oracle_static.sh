@@ -38,3 +38,15 @@ for spec in "$SEM"/specs-dcl/*.py; do
     [ -d "$SRC/docs/oracle/semantics/$fam" ] || { echo "FAIL: DCL spec $fam has no goldens in docs/oracle/semantics/$fam"; exit 1; }
     echo "OK: $fam (DCL) generates its command procedure"
 done
+# 5. The native probe images: each .EXE recovered from the lab node's DUMP
+#    (tests/lab/tools/undump_vms.py) is byte for byte what the capture shows.
+python3 "$SRC/tests/lab/tools/undump_vms.py" --selftest
+for dmp in "$SRC"/tests/lab/captures/native-image-vax-*/*.DMP.txt "$SRC"/tests/lab/captures/native-sp-vax-*/*.DMP.txt; do
+    [ -f "$dmp" ] || continue
+    b=$(basename "$dmp" .DMP.txt)
+    exe=$(ls "$SRC/tests/native-images/vax/$b.EXE" "$SRC/tests/native-images/vax/sp/$b.EXE" 2>/dev/null | head -1)
+    [ -n "$exe" ] || continue
+    python3 "$SRC/tests/lab/tools/undump_vms.py" "$dmp" "$TMP/$b.EXE" >/dev/null
+    cmp -s "$TMP/$b.EXE" "$exe" || { echo "FAIL: $exe is not what $dmp shows"; exit 1; }
+    echo "OK: $b.EXE matches the lab node's DUMP"
+done

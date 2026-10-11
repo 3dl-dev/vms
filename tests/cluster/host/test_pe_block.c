@@ -1453,6 +1453,9 @@ static void test_port_opcodes_on_emitted_frames(void)
 	ct_check(h1.obs_w4 >= 1u && h1.obs_w4 <= PE_BLK_MAX_TAGS &&
 		 h1.obs_w6 != 0u,
 		 "  +4/+6 is a tag this port minted (index 1.., nonzero seq)");
+	ct_check(h1.obs_w4 <= 0x11u && h1.obs_w6 >= 0x0100u,
+		 "  rd vms-ci.6: inside the real initiators' range (+4 1..0x11, "
+		 "+6 >= 0x003a over 4,516 transfers)");
 	ct_check_eq_u32(h1.dest_conid, MSCP_DEST_CONID,
 			"  +0 is the Con.ID the descriptor named");
 	xfer_init(&x, e.sink_name, 256u, 136u, 0u);

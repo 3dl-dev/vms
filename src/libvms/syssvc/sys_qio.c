@@ -49,6 +49,23 @@
 #include "dcdef.h"
 #include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
 
+/*
+ * The caller's IOSB, as this file writes it (rd vms-40fb). A VMS IOSB is a
+ * quadword at ANY address -- VMS never required its alignment, and an image
+ * LINKed on real OpenVMS can place it on an odd byte (SP_TT's IOSB follows a
+ * .LONG after .ASCID strings: address = 7 mod 8). Written through an aligned
+ * struct _iosb, an Alpha build without byte/word stores updated only the quad
+ * the status word starts in, so its high byte was lost (0xA501 for
+ * SS$_NORMAL). Packed, the compiler emits the straddling sequence for every
+ * field, on every architecture. Same layout as struct _iosb (iodef.h).
+ */
+typedef struct __attribute__((packed)) {
+    uint16_t iosb$w_status;
+    uint16_t iosb$w_bcnt;
+    uint32_t iosb$l_dev_depend;
+} qio_iosb_t;
+_Static_assert(sizeof(qio_iosb_t) == sizeof(struct _iosb), "qio_iosb_t is struct _iosb's layout");
+
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
 extern uint32_t vms$$chan_exec_chan(uint16_t chan);
@@ -103,7 +120,7 @@ static int qio_null_writeof(uint16_t chan, uint32_t func, void *iosb_ptr,
     int fd = vms$$chan_to_fd(chan);
     if (fd < 0 || !qio_is_null_device(fd))
         return 0;
-    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
         iosb->iosb$w_bcnt = 0;
@@ -117,7 +134,7 @@ static int qio_null_writeof(uint16_t chan, uint32_t func, void *iosb_ptr,
 static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
                           void *p1, uint32_t p2, uint32_t efn,
                           void (*astadr)(uint32_t), uint32_t astprm) {
-    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     ssize_t result;
 
     switch (base_func) {
@@ -252,7 +269,7 @@ static struct async_rd {
     uint32_t exec_chan;
     void    *buf;
     uint32_t bufsz;
-    struct _iosb *iosb;
+    qio_iosb_t *iosb;
     uint32_t efn;
     void   (*astadr)(uint32_t);
     uint32_t astprm;
@@ -264,7 +281,7 @@ static int async_handler_set;
 
 static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
 {
-    struct _iosb *iosb = r->iosb;
+    qio_iosb_t *iosb = r->iosb;
     void (*ast)(uint32_t) = r->astadr;
     uint32_t prm = r->astprm, efn = r->efn;
     r->in_use = 0;
@@ -365,7 +382,7 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
     r->exec_chan = vms$$chan_exec_chan(chan);
     r->buf = p1;
     r->bufsz = p2;
-    r->iosb = (struct _iosb *)iosb_ptr;
+    r->iosb = (qio_iosb_t *)iosb_ptr;
     r->efn = efn;
     r->astadr = astadr;
     r->astprm = astprm;
@@ -433,7 +450,7 @@ static struct async_rd {
     uint32_t exec_chan;
     void    *buf;
     uint32_t bufsz;
-    struct _iosb *iosb;
+    qio_iosb_t *iosb;
     uint32_t efn;
     void   (*astadr)(uint32_t);
     uint32_t astprm;
@@ -441,7 +458,7 @@ static struct async_rd {
 
 static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
 {
-    struct _iosb *iosb = r->iosb;
+    qio_iosb_t *iosb = r->iosb;
     void (*ast)(uint32_t) = r->astadr;
     uint32_t prm = r->astprm, efn = r->efn;
     r->in_use = 0;
@@ -499,7 +516,7 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
     r->exec_chan = vms$$chan_exec_chan(chan);
     r->buf = p1;
     r->bufsz = p2;
-    r->iosb = (struct _iosb *)iosb_ptr;
+    r->iosb = (qio_iosb_t *)iosb_ptr;
     r->efn = efn;
     r->astadr = astadr;
     r->astprm = astprm;
@@ -566,7 +583,7 @@ static __thread int qio_refused_before_iosb;
 static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                                 void *p1, uint32_t p2, uint32_t efn,
                                 void (*astadr)(uint32_t), uint32_t astprm) {
-    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
     /*
      * The VMS I/O function code is the low SIX bits (IO$M_FCODE == 0x3F); bits
@@ -717,7 +734,7 @@ struct bg_sockaddr_in {
 static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                           void *p1, uint32_t p2, uint32_t p3, uint32_t efn,
                           void (*astadr)(uint32_t), uint32_t astprm) {
-    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
     uint32_t base_func = func & IO$M_FCODE;
     uint32_t st;
@@ -1007,7 +1024,7 @@ void vms$$net_chan_release(uint16_t chan)
 static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                            void *p1, uint32_t p2, uint32_t p3, uint32_t efn,
                            void (*astadr)(uint32_t), uint32_t astprm) {
-    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     uint32_t base_func = func & IO$M_FCODE;
     uint32_t st;
     size_t xfer = 0;
@@ -1108,7 +1125,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
         struct vms_devinfo info;
         uint32_t dvi_st = vms_kif_getdvi_chan(exec_chan, &info);
         if (!(dvi_st & 1)) {
-            struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+            qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
             if (iosb) {
                 iosb->iosb$w_status = (uint16_t)dvi_st;
                 iosb->iosb$w_bcnt = 0;
@@ -1122,7 +1139,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
 
     /* Handle IO$_NOP synchronously */
     if (base_func == IO$_NOP) {
-        struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+        qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
         if (iosb) {
             iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
             iosb->iosb$w_bcnt = 0;
@@ -1148,7 +1165,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
             is_read = 0;
             break;
         default: {
-            struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+            qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
             if (iosb) {
                 iosb->iosb$w_status = (uint16_t)SS$_ILLIOFUNC;
                 iosb->iosb$w_bcnt = 0;
@@ -1160,7 +1177,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
 
     /* Validate buffer */
     if (!p1) {
-        struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+        qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
         if (iosb) {
             iosb->iosb$w_status = (uint16_t)SS$_BADPARAM;
             iosb->iosb$w_bcnt = 0;
@@ -1189,7 +1206,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
 static uint32_t qio_terminal_setmode(int fd, uint32_t p2, void *iosb_ptr,
                                      uint32_t efn, void (*astadr)(uint32_t),
                                      uint32_t astprm) {
-    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     uint32_t st = SS$_NORMAL;
 
     (void)fd; (void)p2;
@@ -1278,8 +1295,9 @@ static int qio_chan_is_terminal(uint16_t chan, uint32_t *exec_chan_out,
 static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint16_t w3)
 {
     if (!iosb_ptr) return;
-    uint16_t *w = (uint16_t *)iosb_ptr;
-    w[0] = (uint16_t)st; w[1] = w1; w[2] = w2; w[3] = w3;
+    /* Four words, at whatever address the caller's IOSB has (see qio_iosb_t). */
+    struct __attribute__((packed)) { uint16_t w[4]; } *b = iosb_ptr;
+    b->w[0] = (uint16_t)st; b->w[1] = w1; b->w[2] = w2; b->w[3] = w3;
 }
 
 static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
@@ -1581,7 +1599,7 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         if (rc == 0) {
             vms_uring_wait_completion();
             if (iosb_ptr) {
-                struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+                qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
                 if (iosb->iosb$w_status == (uint16_t)SS$_ENDOFFILE)
                     return SS$_ENDOFFILE;
                 if (iosb->iosb$w_status == (uint16_t)SS$_ABORT)
@@ -1641,7 +1659,7 @@ static uint32_t qio_service_status(uint32_t st, void *iosb_ptr)
     }
     /* Completed (with whatever I/O status): the IOSB carries it. */
     if (iosb_ptr) {
-        struct _iosb *b = (struct _iosb *)iosb_ptr;
+        qio_iosb_t *b = (qio_iosb_t *)iosb_ptr;
         if (b->iosb$w_status == 0)
             b->iosb$w_status = (uint16_t)st;
     }

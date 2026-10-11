@@ -847,6 +847,39 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
 
 /* Request-layout fields (spec §4(p)). body[12:14] IS a constant invariant;
  * body[14:16] is NOT -- it is the rebuild-TYPE (see below, vms-20c). */
+/*
+ * rd vms-64b: THE DLM HEADER WORDS, body[12:14] and body[14:16], on EVERY DLM
+ * message (cat 0x02 requests and cat 0x82 answers, every op). MEASURED over the
+ * lab corpus: body[12:14] == 0x0001 in every real frame, and body[14:16] == N,
+ * the cluster's DLM rebuild sequence -- one value from every node at a given
+ * moment, stepping by 1 when a transition rebuilds the lock directory (RA4
+ * 2 -> 3 on an LDW-1 join; ds1 3 -> 4 on an LDW-1 removal; no step on an LDW-0
+ * join, r20/ds3; 1 at cold formation). The older names below (REBUILD_INV1/
+ * TYPE, VALBLK_HDR1/HDR2) read the same two words before their meaning was
+ * known; VALBLK_HDR2's 0x0002 was simply the N of the cluster it was measured
+ * on. A sender stamps N from executive state (vms_cnxman.c), never a constant.
+ */
+#define VMS_OFF_DLM_SEQ_ONE         84u /* body[12:14] LE u16, == 0x0001        */
+#define VMS_OFF_DLM_SEQ             86u /* body[14:16] LE u16, the sequence N   */
+#define VMS_DLM_SEQ_ONE_VAL     0x0001u
+
+/*
+ * rd vms-64b: body[124:128] of an op-0x01 ENQ, 0x07 CONVERT and 0x06
+ * CONVERT-with-value-block REQUEST is 0xFFFFFFFF in every real frame of the
+ * lab corpus (27,812 / 8,561 / 9,194 of them). Its meaning is not decoded; it
+ * is a constant of those three request shapes, and OVMX's requests carry it.
+ */
+#define VMS_OFF_DLM_REQ_TAIL       196u /* body[124:128] LE u32                */
+#define VMS_DLM_REQ_TAIL_VAL 0xffffffffu
+
+/* N off a member's DLM body (cat 0x02/0x82 with body[12:14] == 0x0001):
+ * VMS_CODEC_OK with *n set; VMS_CODEC_E_CLASS when it is not a DLM body or
+ * carries no sequence. */
+vms_codec_status_t vms_dlm_seq_get(const uint8_t *body, uint32_t len,
+				   uint16_t *n);
+/* Stamp 0x0001 + N on an outbound DLM body. VMS_CODEC_E_INVAL for N == 0. */
+vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n);
+
 #define VMS_OFF_DLM_REBUILD_INV1    84u /* body[12:14] LE u16, invariant 0x0001 */
 #define VMS_OFF_DLM_REBUILD_TYPE    86u /* body[14:16] LE u16, rebuild-type     */
 #define VMS_OFF_DLM_REBUILD_INV2    VMS_OFF_DLM_REBUILD_TYPE /* legacy spelling  */

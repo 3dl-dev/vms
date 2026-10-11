@@ -1627,3 +1627,26 @@ vms_codec_status_t vms_cm_rdev_answer_in_place(uint8_t *rec, uint32_t len,
 		return w.err;
 	return VMS_CODEC_OK;
 }
+
+vms_codec_status_t vms_cm_open_dlm_seq(const uint8_t *body, uint32_t len,
+				       uint16_t *n)
+{
+	uint16_t a, b, c;
+
+	if (body == (const uint8_t *)0 || n == (uint16_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_OFB_CM_OPEN_DLM_SEQ3 + 2u)
+		return VMS_CODEC_E_CLASS;
+	if (body[VMS_OFB_CM_CATEGORY] != VMS_CM_CAT_CONFIG ||
+	    body[VMS_OFB_CM_OPCODE] != VMS_CM_OP_XITION_ADD)
+		return VMS_CODEC_E_CLASS;
+	a = (uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ];
+	b = (uint16_t)((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ2] |
+		       ((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ2 + 1u] << 8));
+	c = (uint16_t)((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ3] |
+		       ((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ3 + 1u] << 8));
+	if (a == 0u || a != b || a != c)
+		return VMS_CODEC_E_SHORT;
+	*n = a;
+	return VMS_CODEC_OK;
+}

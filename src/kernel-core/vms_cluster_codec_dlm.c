@@ -162,6 +162,10 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, req->res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, req->name_len, req->name);
+	/* rd vms-64b: the measured constant of these request shapes (.h). Laid
+	 * down AFTER the name: a 31-byte name ends at body[79], well short of
+	 * it, so nothing here can be overwritten by it. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_TAIL, VMS_DLM_REQ_TAIL_VAL);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
@@ -1150,6 +1154,7 @@ vms_codec_status_t vms_dlm_valblk_convert_build(const struct vms_dlm_valblk_conv
 	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_TAG2, VMS_DLM_VALBLK_TAG2_VAL);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_PAD, VMS_DLM_VALBLK_PAD_VAL);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_PAD + 1u, VMS_DLM_VALBLK_PAD_VAL);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_TAIL, VMS_DLM_REQ_TAIL_VAL);   /* rd vms-64b */
 	/*
 	 * body[56:88] is uninitialised sender buffer on the real wire, not a
 	 * field. Write clean zeros explicitly (rather than trust a caller-
@@ -1408,5 +1413,42 @@ vms_codec_status_t vms_dlm_dlksrch_build(const struct vms_dlm_dlksrch_record *re
 		return w.err;
 	if (written != (uint32_t *)0)
 		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/* ------------------------------------------------------------------ *
+ * rd vms-64b: the DLM header words (vms_cluster_codec_dlm.h)
+ * ------------------------------------------------------------------ */
+vms_codec_status_t vms_dlm_seq_get(const uint8_t *body, uint32_t len,
+				   uint16_t *n)
+{
+	uint8_t cat;
+
+	if (body == (const uint8_t *)0 || n == (uint16_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_OFF_DLM_SEQ + 2u - VMS_OFF_SYSAP_BODY)
+		return VMS_CODEC_E_SHORT;
+	cat = body[VMS_OFF_DLM_CAT - VMS_OFF_SYSAP_BODY];
+	if ((cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
+		return VMS_CODEC_E_CLASS;
+	if (((uint16_t)body[VMS_OFF_DLM_SEQ_ONE - VMS_OFF_SYSAP_BODY] |
+	     ((uint16_t)body[VMS_OFF_DLM_SEQ_ONE - VMS_OFF_SYSAP_BODY + 1u] << 8))
+	    != VMS_DLM_SEQ_ONE_VAL)
+		return VMS_CODEC_E_CLASS;
+	*n = (uint16_t)((uint16_t)body[VMS_OFF_DLM_SEQ - VMS_OFF_SYSAP_BODY] |
+			((uint16_t)body[VMS_OFF_DLM_SEQ - VMS_OFF_SYSAP_BODY + 1u] << 8));
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n)
+{
+	if (body == (uint8_t *)0 || n == 0u)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_OFF_DLM_SEQ + 2u - VMS_OFF_SYSAP_BODY)
+		return VMS_CODEC_E_SHORT;
+	body[VMS_OFF_DLM_SEQ_ONE - VMS_OFF_SYSAP_BODY] = (uint8_t)(VMS_DLM_SEQ_ONE_VAL & 0xffu);
+	body[VMS_OFF_DLM_SEQ_ONE - VMS_OFF_SYSAP_BODY + 1u] = (uint8_t)(VMS_DLM_SEQ_ONE_VAL >> 8);
+	body[VMS_OFF_DLM_SEQ - VMS_OFF_SYSAP_BODY] = (uint8_t)(n & 0xffu);
+	body[VMS_OFF_DLM_SEQ - VMS_OFF_SYSAP_BODY + 1u] = (uint8_t)(n >> 8);
 	return VMS_CODEC_OK;
 }

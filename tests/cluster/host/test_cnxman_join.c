@@ -6735,7 +6735,8 @@ static void test_e88_a_member_advertises_its_count_to_ours_only(void)
 	ct_check_eq_u32(sent_on_le16(E88_MEMBER_CONID, 1, VMS_OFB_CM_MEMBERS),
 			2u, "... carrying this node's member count");
 	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_MEMBERS),
-			0u, "a foreign connection manager still hears 0");
+			0u, "a foreign connection manager hears 0 while this "
+			"node holds no member state to send beside the count");
 
 	g.cl.club.cluster_nodes = 3u;   /* a transition added a member */
 	cnxman_join_advertise_peers(&g.j);
@@ -6753,6 +6754,49 @@ static void test_e88_a_member_advertises_its_count_to_ours_only(void)
 			"a fellow member is waiting on nobody's count");
 }
 
+
+/*
+ * rd vms-d52c: ...AND THE MEMBER STATE GOES WITH IT, TO EVERY PEER. A booting
+ * real VAX that heard OVMX's member-less PARAMS proposed forming a SECOND
+ * cluster with it (lab lab64b, order 2: a partition). Holding the formation
+ * time, the last transition and its own membership time, a member tells a
+ * foreign connection manager what a real member does.
+ */
+static void test_d52c_a_member_states_its_membership_to_a_vax(void)
+{
+	struct vms_csb *theirs;
+
+	printf("\n-- rd vms-d52c: a member's PARAMS to a foreign peer carries "
+	       "the member state --\n");
+	bed_init();
+	bed_set_identity();
+	bed_make_committed_member(0x00010001u);
+	g.cl.club.cluster_nodes = 1u;
+	theirs = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	bed_peer_connected(theirs, E88_OTHER_CONID);
+	theirs->peer_is_ours = 0u;
+	g.cl.club.ftime = 0x00bc3cf8d1bd3f80ull;
+	g.cl.club.ftime_valid = 1u;
+	g.cl.club.joined_vms = 0x00bc3cf8d1bd3f80ull;
+	g.cl.club.joined_valid = 1u;
+	g.cl.club.last_xition_vms = 0x00bc3cf8d2174660ull;
+	g.cl.club.last_xition_epoch = 4u;
+	g.cl.club.last_xition_valid = 1u;
+
+	cnxman_join_advertise_peers(&g.j);
+	ct_check(sent_on_is(E88_OTHER_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "PARAMS to the foreign system");
+	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_MEMBERS),
+			1u, "*** it carries this node's member count ***");
+	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_PSTATUS),
+			VMS_CM_PSTATUS_MEMBER, "*** the member status word ***");
+	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_PLASTEPOCH),
+			4u, "... the last transition's epoch");
+	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_PFTIME),
+			0x3f80u, "... and the formation time (low word)");
+	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_PJOINED + 6u),
+			0x00bcu, "... and its own membership time (high word)");
+}
 
 /* Trio B, and stall-rig arm E2-1 of this item's own proof: the system the join
  * is driving through says, in its own PARAMS, that it belongs to no cluster --
@@ -7243,6 +7287,7 @@ int main(void)
 	test_e88_no_request_before_the_member_says_what_it_is();
 	test_e88_never_in_the_same_breath();
 	test_e88_asks_on_the_connection_the_member_kept();
+	test_d52c_a_member_states_its_membership_to_a_vax();
 	test_e88_a_member_advertises_its_count_to_ours_only();
 	test_e88_a_system_in_no_cluster_is_not_asked();
 	test_e88_a_declined_member_and_a_joiner_end_the_round();

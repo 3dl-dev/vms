@@ -162,7 +162,54 @@ static const struct vent p1vec[] = {
 	{ 0x7FFEDE50, (rtn_t)v_assign,   "SYS$ASSIGN" },
 	{ 0x7FFEDF40, (rtn_t)v_exit,     "SYS$EXIT"   },
 	{ 0x7FFEDF68, (rtn_t)imgsta,     "SYS$IMGSTA" },
+	/* The services the semantic-oracle probes LINKed on the lab VAX call
+	 * (tests/native-images/vax/sp/): each entry is OVMX's own service, which
+	 * on VAX takes the VMS argument list as it stands (CALLS/CALLG, 32-bit
+	 * addresses, VMS descriptors; an AST routine is CALLed with its
+	 * parameter as on VMS). Addresses: docs/oracle/vax73-symvec-offsets.txt. */
+	{ 0x7FFEDE40, (rtn_t)sys$ascefc,  "SYS$ASCEFC"  },
+	{ 0x7FFEDE58, (rtn_t)sys$bintim,  "SYS$BINTIM"  },
+	{ 0x7FFEDE60, (rtn_t)sys$cancel,  "SYS$CANCEL"  },
+	{ 0x7FFEDE68, (rtn_t)sys$cantim,  "SYS$CANTIM"  },
+	{ 0x7FFEDE98, (rtn_t)sys$clref,   "SYS$CLREF"   },
+	{ 0x7FFEDEB8, (rtn_t)sys$crembx,  "SYS$CREMBX"  },
+	{ 0x7FFEDED0, (rtn_t)sys$dacefc,  "SYS$DACEFC"  },
+	{ 0x7FFEDEE0, (rtn_t)sys$dassgn,  "SYS$DASSGN"  },
+	{ 0x7FFEDF00, (rtn_t)sys$delmbx,  "SYS$DELMBX"  },
+	{ 0x7FFEDF28, (rtn_t)sys$dlcefc,  "SYS$DLCEFC"  },
+	{ 0x7FFEDF50, (rtn_t)sys$fao,     "SYS$FAO"     },
+	{ 0x7FFEDF58, (rtn_t)sys$faol,    "SYS$FAOL"    },
+	{ 0x7FFEDFC8, (rtn_t)sys$qio,     "SYS$QIO"     },
+	{ 0x7FFEDFD0, (rtn_t)sys$readef,  "SYS$READEF"  },
+	{ 0x7FFEE000, (rtn_t)sys$setef,   "SYS$SETEF"   },
+	{ 0x7FFEE020, (rtn_t)sys$setimr,  "SYS$SETIMR"  },
+	{ 0x7FFEE078, (rtn_t)sys$waitfr,  "SYS$WAITFR"  },
+	{ 0x7FFEE088, (rtn_t)sys$wfland,  "SYS$WFLAND"  },
+	{ 0x7FFEE090, (rtn_t)sys$wflor,   "SYS$WFLOR"   },
+	{ 0x7FFEE0B0, (rtn_t)sys$getmsg,  "SYS$GETMSG"  },
+	{ 0x7FFEE0D8, (rtn_t)sys$getjpi,  "SYS$GETJPI"  },
+	{ 0x7FFEE3C0, (rtn_t)sys$enq,     "SYS$ENQ"     },
+	{ 0x7FFEE3C8, (rtn_t)sys$deq,     "SYS$DEQ"     },
+	{ 0x7FFEE3D0, (rtn_t)sys$enqw,    "SYS$ENQW"    },
+	{ 0x7FFEE3F8, (rtn_t)sys$getsyi,  "SYS$GETSYI"  },
+	{ 0x7FFEE410, (rtn_t)sys$getdvi,  "SYS$GETDVI"  },
+	{ 0x7FFEE418, (rtn_t)sys$getdviw, "SYS$GETDVIW" },
+	{ 0x7FFEE420, (rtn_t)sys$getjpiw, "SYS$GETJPIW" },
+	{ 0x7FFEE430, (rtn_t)sys$getsyiw, "SYS$GETSYIW" },
+	{ 0x7FFEE480, (rtn_t)sys$crelnm,  "SYS$CRELNM"  },
+	{ 0x7FFEE488, (rtn_t)sys$dellnm,  "SYS$DELLNM"  },
+	{ 0x7FFEE490, (rtn_t)sys$trnlnm,  "SYS$TRNLNM"  },
 };
+
+/* Bytes from P1VEC_PAGE through the page holding the last entry. */
+static size_t p1vec_len(void)
+{
+	uint32_t hi = 0;
+	for (unsigned k = 0; k < sizeof p1vec / sizeof p1vec[0]; k++)
+		if (p1vec[k].at > hi)
+			hi = p1vec[k].at;
+	return PG_UP(hi + 8) - P1VEC_PAGE;
+}
 
 /* Run-time library transfer vectors (offset from the image base). */
 struct rtlimg { const char *name; const struct vent *e; unsigned n; };
@@ -590,23 +637,25 @@ int main(int argc, char **argv)
 	imgact_acp_close(&f);
 	TRACE("loaded %#x..%#x base %#lx", m->lo, m->hi, (unsigned long)m->base);
 
-	/* The P1 system service vector, below the NetBSD user stack top. */
-	uint8_t *pv = mmap((void *)P1VEC_PAGE, NBPG, PROT_READ | PROT_WRITE,
+	/* The P1 system service vector, below the NetBSD user stack top: the
+	 * pages from P1VEC_PAGE through the highest entry provided. */
+	size_t pvlen = p1vec_len();
+	uint8_t *pv = mmap((void *)P1VEC_PAGE, pvlen, PROT_READ | PROT_WRITE,
 			   MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
 	if (pv != (uint8_t *)P1VEC_PAGE)
 		fail_notimpl(m->name, m->spec, "the P1 system service vector page");
-	memset(pv, 0, NBPG);
+	memset(pv, 0, pvlen);
 	for (unsigned k = 0; k < sizeof p1vec / sizeof p1vec[0]; k++)
 		put_entry(pv + (p1vec[k].at - P1VEC_PAGE), p1vec[k].fn);
-	mprotect(pv, NBPG, PROT_READ | PROT_EXEC);
-	TRACE("P1 vector page mapped at %p", (void *)pv);
+	mprotect(pv, pvlen, PROT_READ | PROT_EXEC);
+	TRACE("P1 vector mapped at %p, %zu bytes", (void *)pv, pvlen);
 
 	/* The transfer vector: SYS$IMGSTA, then the image's own. */
 	static uint32_t xvec[4];
 	unsigned n = 0;
 	for (unsigned k = 0; k < 3 && m->h.tfr[k]; k++) {
 		uint32_t t = m->h.tfr[k];
-		if (t >= P1VEC_BASE && t < P1VEC_PAGE + NBPG) {
+		if (t >= P1VEC_BASE && t < P1VEC_PAGE + p1vec_len()) {
 			int known = 0;
 			for (unsigned j = 0; j < sizeof p1vec / sizeof p1vec[0]; j++)
 				known |= p1vec[j].at == t;

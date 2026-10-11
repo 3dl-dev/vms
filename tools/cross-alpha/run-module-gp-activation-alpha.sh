@@ -878,7 +878,7 @@ build_joint_images() {
     [ -f "$out_n3/VMSABI_PROOF" ] && cp "$out_n3/VMSABI_PROOF" "$WORK/joint/VMSABI_PROOF"
     # vms-3b3f: the VMS vector images (built on every veneer build) and the
     # native-image gate marker.
-    for _v in "SYS\$PUBLIC_VECTORS" LIBRTL "DECC\$SHR_EV56"; do
+    for _v in "SYS\$PUBLIC_VECTORS" LIBRTL "DECC\$SHR_EV56" SECURESHRP; do
       [ -s "$out_n3/$_v.EXE" ] && cp "$out_n3/$_v.EXE" "$WORK/joint/$_v.EXE"
     done
     [ -f "$out_n3/NATIVE_PROOF" ] && cp "$out_n3/NATIVE_PROOF" "$WORK/joint/NATIVE_PROOF"

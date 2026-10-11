@@ -1,0 +1,32 @@
+# SECURESHRP.vec -- OVMX's SECURESHRP.EXE vector image: the rights-database
+# services an image LINKed on real OpenVMS Alpha calls through SECURESHRP
+# rather than SYS$PUBLIC_VECTORS (rd vms-8b5). SINGLE SOURCE for this image's
+# symbol vector; format as in SYS$PUBLIC_VECTORS.vec. Clean-room: every offset
+# is OBSERVED in the link map of our own rights probe, LINKed on the lab
+# OpenVMS Alpha V8.4 node (tests/native-images/alpha/sp/SP_RIGHTS.MAP.txt);
+# nothing comes from a VSI/HPE binary or source.
+#
+# Targets: $ADD_IDENT takes its name as a VMS descriptor, so it goes to the
+# upper-case VMS-ABI entry point (src/vmsrms/rights_vmsabi.c);
+# $CREATE_USER_PROFILE (0xE0, observed in SP_CHKPRO.MAP.txt and in
+# docs/oracle/alpha84-symvec-offsets.txt) takes a descriptor and an item list,
+# so it goes to src/libvms/syssvc/sys_vmsabi.c. Every other
+# argument here is an identifier value or the address of a longword or of the
+# holder quadword, the same layout for a 32-bit-pointer caller, so those slots
+# name OVMX's own service (src/vmsrms/rightslist_live.c).
+#
+# GSMATCH: the probe recorded SECURESHRP ident major 1, minor 4, match LEQUAL
+# (observed in its image section synopsis), so OVMX's carries 1,4.
+#
+#   gsmatch LEQUAL,1,4
+#   use     LIBVMS$SHR.EXE
+#   use     LIBVMSRMS$SHR.EXE
+#
+# offset  universal        OVMX target
+0x000     SYS$ADD_HOLDER   sys$add_holder
+0x010     SYS$ADD_IDENT    SYS$ADD_IDENT
+0x030     SYS$FIND_HELD    sys$find_held
+0x040     SYS$FIND_HOLDER  sys$find_holder
+0x070     SYS$REM_HOLDER   sys$rem_holder
+0x080     SYS$REM_IDENT    sys$rem_ident
+0x0E0     SYS$CREATE_USER_PROFILE SYS$CREATE_USER_PROFILE

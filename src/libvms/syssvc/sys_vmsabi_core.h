@@ -133,6 +133,16 @@ uint32_t ovmx_vmsabi_grantid(int revoke, const uint32_t *pidadr,
                              const struct ovmx_abi_str *prcnam, const uint32_t *id,
                              const struct ovmx_abi_str *name, uint32_t *prvatr,
                              uint32_t segment);
+/* $CHKPRO / $CREATE_USER_PROFILE (vms-8b5): `have_list` is 0 for a null item
+ * list (the service answers it); a profile is a string, by descriptor in
+ * $CHKPRO and by address + length in $CREATE_USER_PROFILE. */
+uint32_t ovmx_vmsabi_chkpro(int have_list, const struct ovmx_abi_item *items, unsigned n,
+                            const struct ovmx_abi_str *objpro,
+                            const struct ovmx_abi_str *subjpro);
+uint32_t ovmx_vmsabi_create_user_profile(const struct ovmx_abi_str *usrnam, int have_list,
+                                         const struct ovmx_abi_item *items, unsigned n,
+                                         uint32_t flags, void *usrpro, uint32_t *usrprolen,
+                                         uint32_t *contxt);
 uint32_t ovmx_vmsabi_sndopr(const struct ovmx_abi_str *msg, uint16_t chan);
 uint32_t ovmx_vmsabi_brkthru(int wait, uint32_t efn, const struct ovmx_abi_str *msg,
                              const struct ovmx_abi_str *sendto, uint32_t sndtyp, void *iosb,

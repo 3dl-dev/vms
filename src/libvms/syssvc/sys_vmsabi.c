@@ -669,6 +669,29 @@ int SYS$REVOKID(unsigned int *pidadr, void *prcnam, unsigned int *id, void *name
                 unsigned int *prvatr, unsigned int segment)
 { return grant(1, pidadr, prcnam, id, name, prvatr, segment); }
 
+/* $CHKPRO: an item list, and the object and subject profiles by descriptor
+ * (vms-8b5). */
+int SYS$CHKPRO(void *itmlst, void *objpro, void *subjpro)
+{
+    struct ovmx_abi_str o, s;
+    ITEMS_OR_BAD(itmlst, items, n);
+    str_arg(objpro, &o);
+    str_arg(subjpro, &s);
+    return (int)ovmx_vmsabi_chkpro(itmlst != 0, items, (unsigned)n, &o, &s);
+}
+
+/* $CREATE_USER_PROFILE: the user name by descriptor, an item list, and the
+ * profile buffer by address with its length by reference (vms-8b5). */
+int SYS$CREATE_USER_PROFILE(void *usrnam, void *itmlst, unsigned int flags, void *usrpro,
+                            unsigned int *usrprolen, unsigned int *contxt)
+{
+    struct ovmx_abi_str u;
+    ITEMS_OR_BAD(itmlst, items, n);
+    str_arg(usrnam, &u);
+    return (int)ovmx_vmsabi_create_user_profile(&u, itmlst != 0, items, (unsigned)n, flags,
+                                                usrpro, usrprolen, contxt);
+}
+
 int SYS$SNDOPR(void *msgbuf, unsigned short chan)
 {
     struct ovmx_abi_str m;

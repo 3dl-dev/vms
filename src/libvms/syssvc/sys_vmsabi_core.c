@@ -369,6 +369,34 @@ uint32_t ovmx_vmsabi_idtoasc(uint32_t id, uint16_t *namlen, char *out, unsigned 
     return sys$idtoasc(id, namlen, out ? &d : NULL, resid, attrib, ctx);
 }
 
+uint32_t ovmx_vmsabi_chkpro(int have_list, const struct ovmx_abi_item *items, unsigned n,
+                            const struct ovmx_abi_str *objpro,
+                            const struct ovmx_abi_str *subjpro)
+{
+    struct dsc$descriptor_s o, s;
+    struct item_list_3 *il = NULL;
+    if (have_list && !(il = items_native(items, n)))
+        return SS$_INSFMEM;
+    uint32_t st = sys$chkpro(il, dsc_of(&o, objpro), dsc_of(&s, subjpro));
+    free(il);
+    return st;
+}
+
+uint32_t ovmx_vmsabi_create_user_profile(const struct ovmx_abi_str *usrnam, int have_list,
+                                         const struct ovmx_abi_item *items, unsigned n,
+                                         uint32_t flags, void *usrpro, uint32_t *usrprolen,
+                                         uint32_t *contxt)
+{
+    struct dsc$descriptor_s u;
+    struct item_list_3 *il = NULL;
+    if (have_list && !(il = items_native(items, n)))
+        return SS$_INSFMEM;
+    uint32_t st = sys$create_user_profile(dsc_of(&u, usrnam), il, flags, usrpro, usrprolen,
+                                          contxt);
+    free(il);
+    return st;
+}
+
 uint32_t ovmx_vmsabi_grantid(int revoke, const uint32_t *pidadr,
                              const struct ovmx_abi_str *prcnam, const uint32_t *id,
                              const struct ovmx_abi_str *name, uint32_t *prvatr,

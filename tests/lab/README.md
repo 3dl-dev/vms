@@ -229,6 +229,35 @@ READ/WRITE/block-transfer frames) is worth capturing alongside the positive
 run — it is what makes the mount capture attributable to the asymmetric
 config rather than to something else on the wire.
 
+## Rolling the lab image (rd `vms-549c`, 2026-10-11)
+
+`tests/lab/k8s/20-vaxlab.yaml` is the truth for the running lab: replicas 5,
+the current image tag, and a partitioned `RollingUpdate`. Never `kubectl edit`,
+`patch` or `set image` the live StatefulSet.
+
+To move the lab to a new image one pod at a time (highest ordinal first):
+
+```bash
+# 1. bump the image in 20-vaxlab.yaml (built per image-build/), commit
+# 2. hold every pod back, then release them one by one
+for p in 5 4 3 2 1 0; do
+  sed "s/partition: 0/partition: $p/" tests/lab/k8s/20-vaxlab.yaml | kubectl apply -f -
+  kubectl -n ovmx-lab rollout status sts/vaxlab --timeout=15m   # waits for the rolled pod
+  # check that pod's two VAXes formed (see "Check the pod is a CLUSTER") before the next step
+done
+```
+
+**Image history.** `:1`-`:4` were docker builds on workshop (now forbidden:
+shared host). `:5` was found running on 2026-10-11 while this file said `:4`: an
+OCI image built 2026-08-31T22:03Z from this directory's Dockerfile (its layer
+history is exactly this Dockerfile's: ubuntu 24.04 + the apt layer +
+qemu-system-x86 + the SIMH build + nodedrv.py/entrypoint.sh), from a commit that
+was not recorded. `:6` and `:7` were built on the k3s rail by
+`image-build/90-build-vaxlab-image.yaml` from `work/vms-549c-simh-nocatchup`.
+The live StatefulSet had also drifted to `updateStrategy: OnDelete` and CPU
+requests of 50m; this file now records both the strategy we roll with and the
+50m request.
+
 ## SIMH clock: `set clock nocatchup` is load-bearing (`vms-549c`, 2026-10-11)
 
 **Symptom.** A VAX's console goes silent, its simulator sits at 100% CPU, and

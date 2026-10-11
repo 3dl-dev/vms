@@ -28,8 +28,19 @@ metadata:
     ovmx.io/item: vms-a5c
 spec:
   serviceName: vaxlab
-  replicas: 1
+  # The lab as it really runs (rd vms-549c, 2026-10-11): five pods. This file is
+  # the truth -- change the lab by changing this file and applying it, never by
+  # editing live state.
+  replicas: 5
   podManagementPolicy: Parallel
+  # Partitioned rolling update: pods with ordinal >= partition take a new
+  # template. Committed at 0 (every pod current). To roll ONE pod at a time,
+  # apply this file with a higher partition and step it down -- see the README
+  # "Rolling the lab image" recipe.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
   selector:
     matchLabels:
       app: vaxlab
@@ -66,7 +77,10 @@ spec:
             # SIMH runs one thread per emulated VAX. 'set idle=vms' (see
             # entrypoint.sh) makes an idle VMS node cost almost nothing; without
             # it each node would sit at 100% of a core forever.
-            requests: { cpu: "500m",  memory: "512Mi" }
+            # requests 50m matches what has really run since the 2026-09
+            # overcommit squeeze; a stall from CPU-quota throttling no longer
+            # hangs a VAX now that the clock runs without catch-up (vms-549c).
+            requests: { cpu: "50m",   memory: "512Mi" }
             limits:   { cpu: "2500m", memory: "2Gi" }
           volumeMounts:
             - { name: vax-lab, mountPath: /lab }

@@ -114,6 +114,33 @@ struct vms_modexfer_args {
 	uint32_t status;        /* return: SS$_ status */
 };
 
+/* Known File Entries (INSTALL, rd vms-7c64): the same struct and number as
+ * src/kernel/vms_ioctl.h. */
+#define VMS_KFE_OP_ADD      1
+#define VMS_KFE_OP_REPLACE  2
+#define VMS_KFE_OP_REMOVE   3
+#define VMS_KFE_OP_LIST     4
+#define VMS_KFE_OP_FIND     5
+#define VMS_KFE_OP_FIND_NAME 6
+#define VMS_KFE_F_OPEN      0x0001u
+#define VMS_KFE_F_SHARED    0x0002u
+#define VMS_KFE_F_HDRRES    0x0004u
+#define VMS_KFE_F_PRIV      0x0008u
+#define VMS_KFE_NAMELEN     128
+#define VMS_KFE_DIR         "/run/ovmx-boot/k"
+#define VMS_KFE_MAX         64
+struct vms_kfe_args {
+	uint32_t op;
+	uint32_t status;
+	int32_t  fd;
+	uint32_t index;
+	uint64_t privs;
+	uint32_t flags;
+	uint32_t access;
+	char     name[VMS_KFE_NAMELEN];
+	char     path[256];
+};
+
 /* ================================================================
  * Request numbers -- SAME NR bytes, structs, magic and direction class as
  * src/kernel/vms_ioctl.h, realized through the substrate's own macros so the
@@ -125,5 +152,6 @@ struct vms_modexfer_args {
 #define VMS_IOCTL_CHKPRIV        _IOWR(VMS_ACCESS_IOC_MAGIC, 0x04, struct vms_priv_args)
 #define VMS_IOCTL_ENTER_IMAGE    _IOWR(VMS_ACCESS_IOC_MAGIC, 0x66, struct vms_modexfer_args)
 #define VMS_IOCTL_IMAGE_RUNDOWN  _IOWR(VMS_ACCESS_IOC_MAGIC, 0x67, struct vms_modexfer_args)
+#define VMS_IOCTL_KFE            _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB0, struct vms_kfe_args)
 
 #endif /* _VMS_ACCESS_NB_H */

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-09",
+    "generated": "2026-10-10",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -77,8 +77,8 @@
     "count": 491,
     "by_status": {
       "verified": 24,
-      "implemented": 293,
-      "partial": 64,
+      "implemented": 292,
+      "partial": 65,
       "stub": 14,
       "designed": 1,
       "absent": 95
@@ -89,8 +89,8 @@
       "advisory": 47,
       "facade-risk": 6
     },
-    "met": 317,
-    "in_progress": 64,
+    "met": 316,
+    "in_progress": 65,
     "not_started": 110,
     "facade_risk": 6
   },
@@ -98,8 +98,8 @@
     "count": 445,
     "by_status": {
       "verified": 24,
-      "implemented": 293,
-      "partial": 62,
+      "implemented": 292,
+      "partial": 63,
       "stub": 10,
       "designed": 1,
       "absent": 55
@@ -110,8 +110,8 @@
       "advisory": 45,
       "facade-risk": 4
     },
-    "met": 317,
-    "in_progress": 62,
+    "met": 316,
+    "in_progress": 63,
     "not_started": 66,
     "facade_risk": 4
   },
@@ -649,8 +649,8 @@
         "count": 6,
         "by_status": {
           "verified": 2,
-          "implemented": 2,
-          "partial": 1,
+          "implemented": 1,
+          "partial": 2,
           "stub": 0,
           "designed": 0,
           "absent": 1
@@ -659,8 +659,8 @@
           "real": 5,
           "n/a": 1
         },
-        "met": 4,
-        "in_progress": 1,
+        "met": 3,
+        "in_progress": 2,
         "not_started": 1,
         "facade_risk": 0
       }
@@ -4183,13 +4183,13 @@
       "facility_name": "Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)",
       "id": "image-activation$known-images",
       "kind": "feature",
-      "vms": "Installed Images (Known Image DB) \u2014 shared/installed image mapping",
-      "status": "implemented",
+      "vms": "Installed Images (known file list) -- shared/installed image mapping",
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/imgact/known_images.c",
+      "evidence": "src/kernel-core/vms_access.c",
       "verified_against": null,
-      "notes": "mmap MAP_SHARED IPC; exercised by src/imgact/test/run_known_images_lookup.sh.",
+      "notes": "rd vms-220. The known file list is the executive's (VMS_IOCTL_KFE, Linux + NetBSD): INSTALL ADD/REPLACE/REMOVE need CMKRNL; ADD has the executive copy the image into its own read-only directory and hold that copy with writes denied; IMGACT's Priority-1 lookup asks the executive. tests/qemu/test_syssvc_kfe.c proves it on a real /dev/vms (negctl kfe-add-cmkrnl-not-checked, kfe-keyed-on-name, kfe-write-not-denied). Partial: /PRIVILEGED is recorded but not yet granted at activation (vms-bdc1); /SHARED and /HEADER_RESIDENT are recorded, not acted on.",
       "plan_ref": "vms-ade"
     },
     {
@@ -9092,9 +9092,9 @@
       "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/vmsdcl/dcl_cmd_misc.c",
+      "evidence": "src/install/install.c",
       "verified_against": null,
-      "notes": "Wired to real KFE VMS$KNOWN_IMAGES.DAT.",
+      "notes": "rd vms-220: ADD/REPLACE/REMOVE/LIST[/FULL] are requests to the executive known file list (CMKRNL to change); the refusals print the lab-observed INSTALL messages. With no executive every request fails NOSUCHDEV (install_utility, dcl-integration).",
       "plan_ref": "vms-8ad"
     },
     {

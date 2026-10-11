@@ -83,4 +83,9 @@ long imgact_acp_pread(struct imgact_acp_file *f, void *buf,
 /* IO$_DEACCESS the file, $DASSGN the channel, and close the /dev/vms fd. */
 void imgact_acp_close(struct imgact_acp_file *f);
 
+/* The executive's known file list (INSTALL, rd vms-220): the substrate file an
+ * installed image `name` (its SONAME) is activated from, into `path`.
+ * SS$_NORMAL, SS$_NOSUCHFILE when not installed, or the device's failure. */
+uint32_t imgact_kfe_find(const char *name, char *path, unsigned long sz);
+
 #endif /* IMGACT_ACP_H */

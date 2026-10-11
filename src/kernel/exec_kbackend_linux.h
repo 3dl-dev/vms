@@ -56,6 +56,10 @@
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev, bdev_open_by_dev/bdev_file_open_by_dev */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
+#include <linux/file.h>           /* fget, fput, flush_delayed_fput (exec_kfe_stage, vms-220) */
+#include <linux/workqueue.h>      /* the INSTALL copy worker (vms-220) */
+#include <linux/namei.h>          /* kern_path, lookup_one_len (exec_kfe_unlink) */
+#include <linux/fs.h>             /* file_inode */
 #include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
 #include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
 /* FC-P0.1 (the cluster seam, SS15/SS16/SS18) backing headers: the TYPES the core
@@ -276,6 +280,165 @@ typedef struct pid          exec_task_ref_t;   /* PCB pid_ref: the tgid's pid */
 typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
+
+/* exec_kfe_stage (exec_kbackend.h section 5, rd vms-220): copy the file the
+ * caller's `fd` names, AS THE KERNEL, into a new file `dst` (O_EXCL, 0555) in
+ * the executive's own directory, then hold that copy open read-only with
+ * writes to it denied (deny_write_access); *pin is the held copy.
+ *
+ * The copy runs on a kernel worker: closing the written copy there releases
+ * its writer count synchronously (flush_delayed_fput), which a close in the
+ * ioctl's own context defers to the return to userspace -- and the denial
+ * that follows needs that count to be zero. The worker's credentials are the
+ * kernel's. */
+struct exec_kfe_work {
+	struct work_struct work;
+	struct file *src;
+	const char *dst;
+	struct file *pin;
+	int err;
+};
+
+static inline void exec_kfe_worker(struct work_struct *w)
+{
+	struct exec_kfe_work *k = container_of(w, struct exec_kfe_work, work);
+	struct file *out, *ro;
+	loff_t ip = 0, op = 0;
+	ssize_t n = 0;
+	void *buf = kmalloc(65536, GFP_KERNEL);
+	int e = 0;
+
+	if (!buf) {
+		k->err = -ENOMEM;
+		return;
+	}
+	out = filp_open(k->dst, O_WRONLY | O_CREAT | O_EXCL | O_LARGEFILE, 0555);
+	if (IS_ERR(out)) {
+		e = PTR_ERR(out);
+	} else {
+		while ((n = kernel_read(k->src, buf, 65536, &ip)) > 0) {
+			if (kernel_write(out, buf, n, &op) != n) {
+				e = -EIO;
+				break;
+			}
+		}
+		if (n < 0)
+			e = (int)n;
+		filp_close(out, NULL);
+		flush_delayed_fput();          /* the writer count is released now */
+	}
+	if (!e) {
+		ro = filp_open(k->dst, O_RDONLY | O_LARGEFILE, 0);
+		if (IS_ERR(ro)) {
+			e = PTR_ERR(ro);
+		} else if ((e = deny_write_access(ro)) != 0) {
+			fput(ro);
+		} else {
+			k->pin = ro;
+		}
+	}
+	kfree(buf);
+	k->err = e;
+}
+
+static inline int exec_kfe_stage(int fd, const char *dst, void **pin)
+{
+	struct exec_kfe_work k;
+	struct file *src = fget(fd);
+
+	if (!src)
+		return -EBADF;
+	if (!S_ISREG(file_inode(src)->i_mode) || !(src->f_mode & FMODE_READ)) {
+		fput(src);
+		return -EINVAL;
+	}
+	memset(&k, 0, sizeof k);
+	k.src = src;
+	k.dst = dst;
+	INIT_WORK_ONSTACK(&k.work, exec_kfe_worker);
+	queue_work(system_unbound_wq, &k.work);
+	flush_work(&k.work);
+	destroy_work_on_stack(&k.work);
+	fput(src);
+	if (!k.err)
+		*pin = k.pin;
+	return k.err;
+}
+/* exec_kfe_unlink (rd vms-220): delete the executive's copy `path` in its own
+ * directory, as the kernel (on a kernel worker, so with kernel credentials). */
+struct exec_kfe_unlink_work {
+	struct work_struct work;
+	const char *path;
+	int err;
+};
+
+static inline void exec_kfe_unlink_worker(struct work_struct *w)
+{
+	struct exec_kfe_unlink_work *k = container_of(w, struct exec_kfe_unlink_work, work);
+	const char *slash = strrchr(k->path, '/');
+	char dir[256];
+	struct path parent;
+	struct dentry *d;
+	size_t dl;
+	int e;
+
+	if (!slash || slash == k->path || (dl = (size_t)(slash - k->path)) >= sizeof dir) {
+		k->err = -EINVAL;
+		return;
+	}
+	memcpy(dir, k->path, dl);
+	dir[dl] = '\0';
+	e = kern_path(dir, LOOKUP_DIRECTORY, &parent);
+	if (e) {
+		k->err = e;
+		return;
+	}
+	inode_lock_nested(d_inode(parent.dentry), I_MUTEX_PARENT);
+	d = lookup_one_len(slash + 1, parent.dentry, strlen(slash + 1));
+	if (IS_ERR(d)) {
+		e = PTR_ERR(d);
+	} else {
+		e = d_really_is_positive(d)
+		    ? vfs_unlink(mnt_idmap(parent.mnt), d_inode(parent.dentry), d, NULL)
+		    : -ENOENT;
+		dput(d);
+	}
+	inode_unlock(d_inode(parent.dentry));
+	path_put(&parent);
+	k->err = e;
+}
+
+static inline int exec_kfe_unlink(const char *path)
+{
+	struct exec_kfe_unlink_work k;
+
+	memset(&k, 0, sizeof k);
+	k.path = path;
+	INIT_WORK_ONSTACK(&k.work, exec_kfe_unlink_worker);
+	queue_work(system_unbound_wq, &k.work);
+	flush_work(&k.work);
+	destroy_work_on_stack(&k.work);
+	return k.err;
+}
+
+static inline void exec_file_unpin(void *pin)
+{
+	struct file *f = pin;
+	allow_write_access(f);
+	fput(f);
+}
+/* 1 when `fd` names the very file object `pin` holds (the same inode object,
+ * which the pin keeps alive: never a number or a path). */
+static inline int exec_file_is(void *pin, int fd)
+{
+	struct file *f = fget(fd);
+	int same;
+	if (!f)
+		return 0;
+	same = file_inode(f) == file_inode((struct file *)pin);
+	fput(f);
+	return same;
+}
 
 /* exec_current_uid/gid (vms-31b): the REAL uid/gid of `current`, mapped into the
  * initial user namespace -- exactly the reads the device table's caller_uic()

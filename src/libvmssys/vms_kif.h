@@ -984,6 +984,10 @@ uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
  * v.) */
 uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
 
+/* The executive's known-file list (INSTALL, rd vms-7c64): ADD/REPLACE/REMOVE
+ * need CMKRNL; LIST/FIND are open. Returns the executive's status. */
+uint32_t vms_kif_kfe(struct vms_kfe_args *a);
+
 /*
  * vms_kif_p1_protect - the CRITICAL-P1 MPROTECT MECHANISM (vms-68f.iii,
  * docs/design-in-process-activation.md Part II §A.2.3(b)).

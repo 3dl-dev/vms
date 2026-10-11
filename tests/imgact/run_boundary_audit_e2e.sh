@@ -59,7 +59,7 @@ IMGACT_CFLAGS="-std=gnu11 -O2 -Wall -Wextra
   -fPIC -fvisibility=hidden -ffreestanding -fno-stack-protector -fno-builtin
   -fno-asynchronous-unwind-tables"
 IMGACT_LDFLAGS="-nostdlib -nostartfiles -shared -Wl,-e,_start -Wl,-z,norelro -Wl,--build-id=none"
-IMGACT_SRCS="$IMGACT_DIR/imgact.c $IMGACT_DIR/known_images.c $IMGACT_DIR/imgact_acp.c
+IMGACT_SRCS="$IMGACT_DIR/imgact.c $IMGACT_DIR/imgact_acp.c
   $IMGACT_DIR/imgact_xfer.c $IMGACT_DIR/imgact_boundary_audit.c
   $SRC/src/boundary_audit/boundary_audit_filter.c
   $SRC/src/libvmssys/kif_transport_linux.c $SRC/src/libvmssys/arch/x86_64/syscall.S

@@ -1045,6 +1045,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CHKPRIV:
 	case VMS_IOCTL_ENTER_IMAGE:
 	case VMS_IOCTL_IMAGE_RUNDOWN:
+	case VMS_IOCTL_KFE:            /* rd vms-7c64: the known-file list */
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1069,6 +1070,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_enter_image(proc, (unsigned long)uarg);   break;
 		case VMS_IOCTL_IMAGE_RUNDOWN:
 			r = vms_ioctl_image_rundown(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_KFE:
+			r = vms_ioctl_kfe(proc, (unsigned long)uarg);           break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

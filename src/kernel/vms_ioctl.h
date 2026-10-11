@@ -3771,6 +3771,49 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
                "VMS_IOCTL_IMAGE_RUNDOWN encodes differently here than on the reference build");
 
 /* ================================================================
+ * Known File Entries (INSTALL, rd vms-7c64 / vms-220).
+ *
+ * The executive's list of installed images: what INSTALL ADD/REPLACE/REMOVE
+ * change (CMKRNL, as on VMS) and INSTALL LIST reads. An entry names the image
+ * file by the substrate's identity of the file the caller holds open (`fd`:
+ * device + file number, read by the executive, not supplied by the caller), so
+ * the activation-time grant (vms-bdc1) can recognise exactly that file. The
+ * VMS file specification is kept for LIST only.
+ * ================================================================ */
+#define VMS_KFE_OP_ADD      1
+#define VMS_KFE_OP_REPLACE  2
+#define VMS_KFE_OP_REMOVE   3
+#define VMS_KFE_OP_LIST     4      /* entry `index`; next index returned in `index` */
+#define VMS_KFE_OP_FIND     5      /* the entry for the file `fd` names */
+#define VMS_KFE_OP_FIND_NAME 6     /* the entry whose name is `name` (case-blind) */
+
+#define VMS_KFE_F_OPEN      0x0001u  /* /OPEN */
+#define VMS_KFE_F_SHARED    0x0002u  /* /SHARED */
+#define VMS_KFE_F_HDRRES    0x0004u  /* /HEADER_RESIDENT */
+#define VMS_KFE_F_PRIV      0x0008u  /* /PRIVILEGED (privs below) */
+
+#define VMS_KFE_NAMELEN     128
+/* The executive's own directory of installed-image copies (rd vms-220). PID 1
+ * creates it at boot, 0711; only the executive (as the kernel) writes in it. */
+#define VMS_KFE_DIR         "/run/ovmx-boot/k"
+#define VMS_KFE_MAX         64
+
+struct vms_kfe_args {
+    uint32_t op;                 /* VMS_KFE_OP_* */
+    uint32_t status;             /* return: SS$_ status */
+    int32_t  fd;                 /* ADD/REPLACE/REMOVE/FIND: the image file, open */
+    uint32_t index;              /* LIST: in = slot to read from; out = next slot */
+    uint64_t privs;              /* ADD/REPLACE in, LIST/FIND out: image privileges */
+    uint32_t flags;              /* VMS_KFE_F_* */
+    uint32_t access;             /* LIST/FIND out: entry access count */
+    char     name[VMS_KFE_NAMELEN]; /* ADD/REPLACE in, LIST/FIND out: the image name */
+    char     path[256];          /* ADD in, LIST/FIND out: the substrate file activated */
+};
+#define VMS_IOCTL_KFE _IOWR(VMS_IOC_MAGIC, 0xB0, struct vms_kfe_args)
+_Static_assert(sizeof(struct vms_kfe_args) == 416,
+               "vms_kfe_args layout changed: VMS_IOCTL_KFE ABI break");
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB).
  *
  * The arena format, the mmap read path and the define/delete ioctls live

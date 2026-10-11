@@ -107,6 +107,7 @@
 #define SS__WASCLR   1             /* SS$_WASCLR (== SS$_NORMAL on VMS) */
 #define SS__WASSET   9             /* SS$_WASSET */
 #define SS__INSFMEM  292           /* SS$_INSFMEM */
+#define SS__DUPLNAM  148           /* SS$_DUPLNAM (INSTALL ADD of an installed file) */
 #define SS__ILLEFC   236           /* SS$_ILLEFC */
 #define SS__UNASEFC  564           /* SS$_UNASEFC */
 /* Access-mode + AST subset (P4-A). Values match src/kernel/vms_internal.h
@@ -181,6 +182,7 @@
 #define SS__ACCVIO      0x0000000C /* SS$_ACCVIO (access violation) */
 #define SS__DEVNOTMOUNT 124       /* SS$_DEVNOTMOUNT (device not mounted / not ODS-2) */
 #define SS__NOSUCHFILE  2320       /* SS$_NOSUCHFILE (IO$_ACCESS resolve miss) */
+#define SS__ACCONFLICT  2048       /* SS$_ACCONFLICT (INSTALL ADD of a file open for write) */
 #define SS__FILNOTACC   172       /* SS$_FILNOTACC (IO$_DEACCESS w/o access) */
 #define SS__DEVICEFULL  2128       /* SS$_DEVICEFULL (extend cannot allocate) */
 /* Access control list statuses (vms-d404), STARLET oracle values. */
@@ -1020,6 +1022,8 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
+uint64_t vms_kfe_image_privs(int fd);
 
 /* ----------------------------------------------------------------
  * MAILBOX facility (MBAn:, P4-A, rd vms-d7a) -- DEFINED in

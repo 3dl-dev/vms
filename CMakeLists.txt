@@ -1342,7 +1342,7 @@ if(BUILD_TOOLS)
         vms_authorize        # AUTHORIZE.EXE
         vms_mail             # MAIL.EXE
         vms_monitor          # MONITOR.EXE
-        vms_rootaudit        # ROOTAUDIT.EXE (vms-251b)
+        vms_rootaudit        # ROOTAUDIT.EXE
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE

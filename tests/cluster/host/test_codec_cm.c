@@ -462,7 +462,7 @@ static void test_remove_open_carries_the_kept_nodemap(void)
 struct f297_open_case {
 	const char *name;
 	uint16_t slot_next, quorum, subj_qdsk, fsysid, subj_cfg, cevotes;
-	uint16_t csv_hwm, csv_top;
+	uint16_t dlm_seq, csv_top;
 	uint8_t  rc_members, rc_votes, rebuild;
 };
 
@@ -494,7 +494,7 @@ static void f297_check_open(const struct f297_open_case *k)
 	ct_check_eq_u32(o.cells.subj_cfg, k->subj_cfg, "  [87:89] the subject's own op-0x02 count");
 	ct_check_eq_u32(o.cells.cevotes, k->cevotes, "  [96:98] post-transition votes");
 	ct_check_eq_u32(o.cells.csv_low, 1u, "  [98:100] lowest slot");
-	ct_check_eq_u32(o.cells.csv_hwm, k->csv_hwm, "  [100:102] CSV high-water");
+	ct_check_eq_u32(o.cells.dlm_seq, k->dlm_seq, "  [100:102] CSV high-water");
 	ct_check_eq_u32(o.cells.csv_top, k->csv_top, "  [104:106] highest slot");
 	ct_check(o.cells.hold == VMS_CM_OPEN_HOLD_DELTA, "  [106:114] the -900 s delta");
 	ct_check(o.cells.ftime != 0u && o.cells.stamp > o.cells.ftime,

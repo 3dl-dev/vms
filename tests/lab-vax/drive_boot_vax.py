@@ -1293,7 +1293,10 @@ def status_sp_session(child, log_f, fams, deadline):
         if not wait("=== SEMPROBE %s END ===" % f, 900):
             if b"=== SEMPROBE aborted END ===" not in buf[0]:
                 note("SP_%s did not reach its END marker" % f.upper())
-                return
+                # the next probe still runs if DCL took the console back
+                if not wait("$ ", 60):
+                    return
+                continue
         wait("$ ", 60)
     child.send("LOGOUT\r")
     pump(3)

@@ -362,6 +362,7 @@ static const struct vent librtl_tv[] = {
 	{ 0x6B8, (rtn_t)str$dupl_char,            "STR$DUPL_CHAR" },
 	{ 0x6C8, (rtn_t)str$find_first_in_set,    "STR$FIND_FIRST_IN_SET" },
 	{ 0x6D0, (rtn_t)str$find_first_not_in_set, "STR$FIND_FIRST_NOT_IN_SET" },
+	{ 0x6E0, (rtn_t)str$free1_dx,             "STR$FREE1_DX" },
 	{ 0x700, (rtn_t)str$left,                 "STR$LEFT" },
 	{ 0x710, (rtn_t)str$len_extr,             "STR$LEN_EXTR" },
 	{ 0x720, (rtn_t)v_str_position,           "STR$POSITION" },

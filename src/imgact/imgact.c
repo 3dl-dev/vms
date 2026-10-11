@@ -778,11 +778,32 @@ static int imgsrc_staged_fid(const char *path, uint32_t fid[4])
 	return 1;
 }
 
+/* An installed image: the executive's own read-only, write-denied copy in
+ * VMS_KFE_DIR (rd vms-220, Baron's ruling on vms-96e7), which the executive's
+ * known file list hands out (imgact_kfe_find) and DCL runs (rd vms-bdc1). Its
+ * bytes ARE the installed image -- the executive copied them off the volume at
+ * INSTALL ADD -- so it is read as it stands, not mapped back to a volume path. */
+static int imgsrc_is_kfe(const char *path)
+{
+	const char *kp = VMS_KFE_DIR "/";
+	unsigned long i = 0;
+	while (kp[i] && path[i] == kp[i])
+		i++;
+	return kp[i] == '\0';
+}
+
 static int imgsrc_open(struct imgsrc *s, const char *path)
 {
 	char mapped[256];
 	uint32_t fid[4];
 	s->posix_fd = -1;
+	if (imgsrc_is_kfe(path)) {
+		long fd = sys_openat(path, O_RDONLY);
+		if (fd < 0)
+			return -1;
+		s->posix_fd = (int)fd;
+		return 0;
+	}
 	if (imgsrc_staged_fid(path, fid)) {
 		uint32_t fst = imgact_acp_open_fid(&s->f, g_acp_sysdevice,
 						   (uint16_t)fid[0], (uint16_t)fid[1],

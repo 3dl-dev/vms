@@ -1,0 +1,70 @@
+exec: notify in-kernel subsystems when a process execs (task_exec_notifier)
+
+Same change as tools/cross-alpha/patches/0003-exec-task-exec-notifier.patch
+(see its header for the rationale), against the distro's pinned 6.12 LTS.
+
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -26,6 +26,7 @@
+ #include <linux/kernel_read_file.h>
+ #include <linux/slab.h>
+ #include <linux/file.h>
++#include <linux/notifier.h>
+ #include <linux/fdtable.h>
+ #include <linux/mm.h>
+ #include <linux/stat.h>
+@@ -1808,6 +1809,31 @@
+ }
+ 
+ /* binfmt handlers will call back into begin_new_exec() on success. */
++/*
++ * Image activation notification for in-kernel subsystems that keep
++ * per-process state outside struct task_struct and must act on every
++ * successful execve() of a process (an executive that grants and drops
++ * per-image privileges, for example). Called from exec_binprm() at the point
++ * trace_sched_process_exec() fires, in process context of the task that
++ * exec'd (callbacks may sleep), with the linux_binprm as the data:
++ * bprm->file is the executable. This gives architectures without
++ * CONFIG_TRACEPOINTS a supported way to observe the exec that tracepoint users
++ * already have.
++ */
++static BLOCKING_NOTIFIER_HEAD(task_exec_notifier);
++
++int task_exec_notifier_register(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_register(&task_exec_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exec_notifier_register);
++
++int task_exec_notifier_unregister(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_unregister(&task_exec_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exec_notifier_unregister);
++
+ static int exec_binprm(struct linux_binprm *bprm)
+ {
+ 	pid_t old_pid, old_vpid;
+@@ -1848,6 +1874,7 @@
+ 
+ 	audit_bprm(bprm);
+ 	trace_sched_process_exec(current, old_pid, bprm);
++	blocking_notifier_call_chain(&task_exec_notifier, 0, bprm);
+ 	ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+ 	proc_exec_connector(current);
+ 	return 0;
+--- a/include/linux/binfmts.h
++++ b/include/linux/binfmts.h
+@@ -140,6 +140,12 @@
+ extern void set_binfmt(struct linux_binfmt *new);
+ extern ssize_t read_code(struct file *, unsigned long, loff_t, size_t);
+ 
++struct notifier_block;
++/* Called from exec_binprm() for every successful exec, data = linux_binprm. */
++#define HAVE_TASK_EXEC_NOTIFIER 1
++extern int task_exec_notifier_register(struct notifier_block *nb);
++extern int task_exec_notifier_unregister(struct notifier_block *nb);
++
+ int kernel_execve(const char *filename,
+ 		  const char *const *argv, const char *const *envp);
+ 

@@ -1404,6 +1404,10 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, bool share_pid,
         spin_lock(&parent->mode_lock);
         proc->perm_privs = parent->perm_privs;
         proc->cur_privs  = parent->cur_privs;
+        /* An image activated in the SAME VMS process runs down the previous
+         * image's installed privileges (vms_proc_image_privs); a subprocess
+         * keeps its creator's current privileges as its own (rd vms-bdc1). */
+        proc->image_privs = share_pid ? parent->image_privs : 0;
         spin_unlock(&parent->mode_lock);
 
         /*
@@ -1617,6 +1621,8 @@ static void vms_proc_inherit_channels(struct vms_proc *child)
     spin_unlock(&vms_proc_hash_lock);
     rcu_read_unlock();
 }
+
+static struct inode *vms_current_exe_inode(void);   /* rd vms-bdc1, below */
 
 struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
                                    bool share_pid)
@@ -1897,6 +1903,18 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
      * dynamic-debug enabled for this module) but does not reach the console.
      * Genuine warnings/errors elsewhere in this module keep pr_warn/pr_err.
      */
+    /* The image this process is running is activated now if the exec hook ran
+     * before the process had a row (rd vms-bdc1). */
+    if (pid == current->tgid) {
+        struct inode *img = vms_current_exe_inode();
+        uint64_t ip = vms_kfe_exec_privs(img);
+
+        if (ip || proc->image_privs)
+            vms_proc_image_privs(proc, ip);
+        if (img)
+            iput(img);
+    }
+
     pr_debug("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] job=0x%08x privs=0x%llx (%s)\n",
              pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
              proc->job_id, proc->perm_privs,
@@ -2708,6 +2726,145 @@ static void vms_exit_hook_exit(void)
 #error "the VMS executive needs a process-exit hook (rd vms-9f32): a kernel carrying task_exit_notifier (distro/kernel/patches/0001), or CONFIG_TRACEPOINTS"
 #endif
 
+/* ================================================================
+ * Image activation: installed-image privileges (rd vms-bdc1)
+ *
+ * Every successful exec of a VMS process is an image activation: a previous
+ * image's installed privileges go, and an image installed /PRIVILEGED gets
+ * its own -- decided here, by the executive, from the file the kernel
+ * actually exec'd (vms_kfe_exec_privs: the executive's own pinned copy, by
+ * object). A process that has not registered yet is decided when it
+ * registers (vms_proc_register). The hook, chosen at build time as for exit:
+ *   - task_exec_notifier (distro/kernel/patches/0002,
+ *     tools/cross-alpha/patches/0003): exec_binprm, process context;
+ *   - otherwise the sched_process_exec tracepoint, whose probe cannot sleep:
+ *     it queues a task_work, which runs before the new image's first
+ *     user-mode instruction.
+ * ================================================================ */
+#include <linux/binfmts.h>
+#include <linux/task_work.h>
+
+static void vms_image_activated(const struct inode *img)
+{
+    struct vms_proc *proc = vms_proc_find_or_err();
+    uint64_t privs;
+
+    if (!proc)
+        return;
+    privs = vms_kfe_exec_privs(img);
+    if (privs || proc->image_privs)
+        vms_proc_image_privs(proc, privs);
+}
+
+/* The inode of the current process's executable (its mm's exe_file), held. */
+static struct inode *vms_current_exe_inode(void)
+{
+    struct inode *ino = NULL;
+    struct file *f;
+
+    if (!current->mm)
+        return NULL;
+    rcu_read_lock();
+    f = rcu_dereference(current->mm->exe_file);
+    if (f) {
+        ino = file_inode(f);
+        ihold(ino);
+    }
+    rcu_read_unlock();
+    return ino;
+}
+
+#if defined(HAVE_TASK_EXEC_NOTIFIER)
+static int vms_task_exec_notify(struct notifier_block *nb, unsigned long action,
+                                void *data)
+{
+    struct linux_binprm *bprm = data;
+
+    (void)nb;
+    (void)action;
+    vms_image_activated(bprm && bprm->file ? file_inode(bprm->file) : NULL);
+    return NOTIFY_OK;
+}
+static struct notifier_block vms_task_exec_nb = { .notifier_call = vms_task_exec_notify };
+
+static int vms_exec_hook_init(void)
+{
+    return task_exec_notifier_register(&vms_task_exec_nb);
+}
+static void vms_exec_hook_exit(void)
+{
+    (void)task_exec_notifier_unregister(&vms_task_exec_nb);
+}
+#elif defined(CONFIG_TRACEPOINTS)
+struct vms_exec_item {
+    struct callback_head cb;
+    struct inode        *img;
+};
+static struct tracepoint *vms_tp_exec;
+
+static void vms_exec_task_work(struct callback_head *cb)
+{
+    struct vms_exec_item *it = container_of(cb, struct vms_exec_item, cb);
+
+    vms_image_activated(it->img);
+    iput(it->img);
+    kfree(it);
+}
+
+static void vms_on_process_exec(void *data, struct task_struct *p, pid_t old_pid,
+                                struct linux_binprm *bprm)
+{
+    struct vms_exec_item *it;
+
+    (void)data;
+    (void)old_pid;
+    if (p != current || !bprm || !bprm->file)
+        return;
+    it = kzalloc(sizeof(*it), GFP_ATOMIC);
+    if (!it) {
+        /* Fail safe: no grant can happen, but a previous image's must still
+         * go -- drop to the process privileges now. */
+        struct vms_proc *proc = vms_proc_find_or_err();
+        pr_err_ratelimited("vms: no memory for the image activation of %d\n",
+                           task_tgid_nr(p));
+        if (proc && proc->image_privs) {
+            spin_lock(&proc->mode_lock);
+            proc->cur_privs = proc->perm_privs;
+            proc->image_privs = 0;
+            spin_unlock(&proc->mode_lock);
+        }
+        return;
+    }
+    it->img = file_inode(bprm->file);
+    ihold(it->img);
+    init_task_work(&it->cb, vms_exec_task_work);
+    if (task_work_add(p, &it->cb, TWA_RESUME) != 0) {
+        iput(it->img);
+        kfree(it);
+    }
+}
+static void vms_find_exec_tp(struct tracepoint *tp, void *priv)
+{
+    (void)priv;
+    if (!strcmp(tp->name, "sched_process_exec"))
+        vms_tp_exec = tp;
+}
+static int vms_exec_hook_init(void)
+{
+    for_each_kernel_tracepoint(vms_find_exec_tp, NULL);
+    if (!vms_tp_exec)
+        return -ENOENT;
+    return tracepoint_probe_register(vms_tp_exec, (void *)vms_on_process_exec, NULL);
+}
+static void vms_exec_hook_exit(void)
+{
+    tracepoint_probe_unregister(vms_tp_exec, (void *)vms_on_process_exec, NULL);
+    tracepoint_synchronize_unregister();
+}
+#else
+#error "the VMS executive needs an image-activation hook (rd vms-bdc1): a kernel carrying task_exec_notifier (distro/kernel/patches/0002), or CONFIG_TRACEPOINTS"
+#endif
+
 /*
  * vms_lnm_mmap - hand userspace a READ-ONLY view of the executive-resident
  * logical-name arena (vms-d37; the CHAR-DEVICE half of the arena seam, vms-d61).
@@ -2906,9 +3063,17 @@ static int __init vms_init(void)
     if (ret)
         pr_err("vms: no process-exit hook (%d) -- refusing to load without one\n", ret);
     else {
+        ret = vms_exec_hook_init();
+        if (ret) {
+            pr_err("vms: no image-activation hook (%d) -- refusing to load without one\n", ret);
+            vms_exit_hook_exit();
+        }
+    }
+    if (!ret) {
         ret = misc_register(&vms_misc);
         if (ret) {
             pr_err("vms: failed to register /dev/vms: %d\n", ret);
+            vms_exec_hook_exit();
             vms_exit_hook_exit();
         }
     }
@@ -3061,6 +3226,7 @@ static void __exit vms_exit(void)
     vms_tt_linux_exit();             /* rd vms-f8c */
     /* No new deletion can be queued once the hook is gone; finish the queued
      * ones before the PCBs that remain are freed below. */
+    vms_exec_hook_exit();
     vms_exit_hook_exit();
 
     /* vms-0cd: stop capturing forks and drain any un-consumed fork-inherit records

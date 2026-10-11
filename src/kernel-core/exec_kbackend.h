@@ -268,6 +268,12 @@
  *        Called only from vms_ioctl_native_page0 after its privilege check.
  *        NetBSD: ovmx_native_page0_allow (uvm). Linux: >0 (no VAX).
  *
+ *   int  exec_pin_is_image(void *pin, const void *img)
+ *        IMAGE PRIVILEGES (vms-bdc1): 1 when `img` -- the substrate's identity
+ *        of the file a process just exec'd (Linux: the struct inode of
+ *        bprm->file; NetBSD: the process's text vnode) -- is the very object
+ *        the pin holds. By object, never number or path, as exec_file_is.
+ *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)
  *        the CURRENT host task's REAL user / group id, mapped into the host's

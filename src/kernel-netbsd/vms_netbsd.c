@@ -380,7 +380,7 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
     bool share_pid)
 {
 	struct vms_proc *p, *parent = NULL;
-	uint64_t parent_perm, parent_cur;
+	uint64_t parent_perm, parent_cur, parent_img;
 	bool inherited = false;
 	int bkt;
 
@@ -417,11 +417,16 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 		exec_lock(&parent->mode_lock);
 		parent_perm = parent->perm_privs;
 		parent_cur  = parent->cur_privs;
+		parent_img  = parent->image_privs;
 		exec_unlock(&parent->mode_lock);
-		/* ...then write the child under the child's mode_lock. */
+		/* ...then write the child under the child's mode_lock. An image
+		 * activated in the SAME VMS process runs down the previous image's
+		 * installed privileges; a subprocess keeps its creator's current
+		 * privileges as its own (rd vms-bdc1, the Linux twin). */
 		exec_lock(&proc->mode_lock);
 		proc->perm_privs = parent_perm;
 		proc->cur_privs  = parent_cur;
+		proc->image_privs = share_pid ? parent_img : 0;
 		exec_unlock(&proc->mode_lock);
 
 		/*
@@ -438,6 +443,36 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 	exec_unlock(&vms_proc_hash_lock);
 
 	return inherited;
+}
+
+/*
+ * vms_proc_exechook - image activation (rd vms-bdc1): every successful exec of
+ * a VMS process runs down the previous image's installed privileges and grants
+ * an image installed /PRIVILEGED its own, decided by the executive from the
+ * text vnode the kernel actually exec'd (vms_kfe_exec_privs: the executive's
+ * own pinned copy, by object). Runs in the exec'ing process, which alone can
+ * delete its row (vms_proc_exithook), so the row stays valid after the lookup.
+ */
+static void
+vms_proc_exechook(struct proc *p, void *arg __unused)
+{
+	struct vms_proc *proc, *row = NULL;
+	uint64_t privs;
+	int bkt;
+
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+		if (proc->pid == p->p_pid) {
+			row = proc;
+			break;
+		}
+	}
+	exec_unlock(&vms_proc_hash_lock);
+	if (row == NULL)
+		return;
+	privs = vms_kfe_exec_privs(p->p_textvp);
+	if (privs || row->image_privs)
+		vms_proc_image_privs(row, privs);
 }
 
 /*
@@ -537,6 +572,7 @@ vms_proc_free_claimed(struct vms_proc *proc)
  * sequence as the Linux module's exit hook.
  */
 static void *vms_exithook_cookie;
+static void *vms_exechook_cookie;   /* rd vms-bdc1 */
 
 static void
 vms_proc_exithook(struct proc *p, void *arg __unused)
@@ -1787,6 +1823,9 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		/* A process ending deletes its PCB at once (rd vms-003b), not only
 		 * when a later table operation happens to reap it. */
 		vms_exithook_cookie = exithook_establish(vms_proc_exithook, NULL);
+		/* An image's installed privileges are granted and run down at
+		 * each exec (rd vms-bdc1). */
+		vms_exechook_cookie = exechook_establish(vms_proc_exechook, NULL);
 		/* rd vms-f8c: the terminal PORT driver -- the executive's line
 		 * discipline "vms_tt". A failure leaves every terminal row portless:
 		 * a terminal $QIO answers SS$_DEVOFFLINE and binding the console
@@ -1805,6 +1844,10 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * harness every process has closed the device before unload, so it is
 		 * not busy and no facility wait is in flight.
 		 */
+		if (vms_exechook_cookie != NULL) {
+			exechook_disestablish(vms_exechook_cookie);
+			vms_exechook_cookie = NULL;
+		}
 		if (vms_exithook_cookie != NULL) {
 			exithook_disestablish(vms_exithook_cookie);
 			vms_exithook_cookie = NULL;

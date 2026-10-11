@@ -4188,7 +4188,7 @@
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_access.c",
       "verified_against": null,
-      "notes": "rd vms-220. The known file list is the executive's (VMS_IOCTL_KFE, Linux + NetBSD): INSTALL ADD/REPLACE/REMOVE need CMKRNL; ADD has the executive copy the image into its own read-only directory and hold that copy with writes denied; IMGACT's Priority-1 lookup asks the executive. tests/qemu/test_syssvc_kfe.c proves it on a real /dev/vms (negctl kfe-add-cmkrnl-not-checked, kfe-keyed-on-name, kfe-write-not-denied). Partial: /PRIVILEGED is recorded but not yet granted at activation (vms-bdc1); /SHARED and /HEADER_RESIDENT are recorded, not acted on.",
+      "notes": "rd vms-220. The known file list is the executive's (VMS_IOCTL_KFE, Linux + NetBSD): INSTALL ADD/REPLACE/REMOVE need CMKRNL; ADD has the executive copy the image into its own read-only directory and hold that copy with writes denied; IMGACT's Priority-1 lookup asks the executive. tests/qemu/test_syssvc_kfe.c proves it on a real /dev/vms (negctl kfe-add-cmkrnl-not-checked, kfe-keyed-on-name, kfe-write-not-denied). /PRIVILEGED privileges are granted by the executive at each image activation (exec) to the executive's own pinned copy only, and run down at the next activation (vms-bdc1: Linux task_exec_notifier or sched_process_exec, NetBSD exechook; DCL runs an installed SYS$SYSTEM image from that copy; tests/qemu/test_syssvc_image_privs.c, negctl image-privs-not-granted, image-privs-not-dropped, image-privs-any-file). Partial: an installed image is never activated in-process (it takes DCL's fork+exec path, where the grant is made); $GETJPI does not report IMAGPRIV; /SHARED and /HEADER_RESIDENT are recorded, not acted on.",
       "plan_ref": "vms-ade"
     },
     {

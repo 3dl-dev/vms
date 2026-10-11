@@ -652,6 +652,7 @@ struct vms_proc {
 	uint64_t            cur_privs;        /* current (temporary) privileges */
 	uint64_t            perm_privs;       /* permanent (authorized) privileges */
 	uint32_t            subst_uid;      /* substrate uid the executive gave it, 0 = none (vms-ac48) */
+	uint64_t            image_privs;      /* the running installed image's (vms-bdc1) */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
 
 	/* Authorized JIB quota set (vms-14a) -- byte-twin of the Linux struct
@@ -1027,7 +1028,9 @@ long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
-uint64_t vms_kfe_image_privs(int fd);
+/* rd vms-bdc1: installed-image privileges at activation (vms_access.c) */
+uint64_t vms_kfe_exec_privs(const void *img);
+void vms_proc_image_privs(struct vms_proc *proc, uint64_t img_privs);
 long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------

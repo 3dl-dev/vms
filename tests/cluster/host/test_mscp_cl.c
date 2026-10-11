@@ -61,6 +61,7 @@
 #include <string.h>
 
 #include "cluster_test.h"
+#include "conformance_dump.h"   /* rd vms-ci.6 frame-conformance gate */
 #include "pe_fake_vc.h"
 #include "vms_mscp_srv_fsm.h"
 #include "vms_mscp_cl_io_fsm.h"
@@ -302,6 +303,15 @@ static int bridge_client_cmd(void *ctx, vms_conid_t conid, const uint8_t *body,
 	struct env *e = (struct env *)ctx;
 
 	ct_check_eq_u32(conid, CL_CONID, "the command went out on OUR Con.ID");
+	{
+		/* rd vms-ci.6: hand the gate every command body the REAL class
+		 * driver emitted, with the executive facts it should carry. */
+		char st[96];
+
+		snprintf(st, sizeof(st), "own_conid=%u,server_conid=%u",
+			 (unsigned)CL_CONID, (unsigned)SRV_CONID);
+		conf_dump("mscp_cmd", 72u, st, body, len);
+	}
 	return mscp_srv_fsm_command(&e->srv, SRV_CONID, body, len);
 }
 

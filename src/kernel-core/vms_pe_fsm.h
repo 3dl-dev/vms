@@ -1899,6 +1899,10 @@ int pe_fsm_peer_incarnation(struct pe_fsm *f, vms_scs_sysid_t sysid,
 
 int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
 		      uint32_t cap, uint8_t *out_len);
+/* rd vms-239: the peer's own SCSNODE off its formation body (blank-trimmed);
+ * -1 when none arrived. */
+int pe_fsm_peer_name(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
+		     uint32_t cap, uint8_t *out_len);
 
 /* Project one circuit into the frozen cross-substrate view (INV-6: what was
  * never learned stays zero with its flag clear). */

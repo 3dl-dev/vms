@@ -2568,6 +2568,20 @@ static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
 		cnxman_csb_set_swver(csb, len ? sw : (const uint8_t *)0, len,
 				     cn->cl->params.sw_version,
 				     cn->cl->params.sw_version_len);
+		/* rd vms-239: and its SCSNODE, from the same formation body.
+		 * The MSCP class driver names a member's served units by it
+		 * (`<SCSNODE>$DUA<n>:`); a CSB that never held one left every
+		 * real VAX's units unnamed. Copied only when the port really
+		 * learned one -- never cleared to a guess. */
+		{
+			uint8_t nm[VMS_SCSNODE_MAX];
+			uint8_t nlen = 0u;
+
+			if (pe_peer_name(cn->cl->pe, csb->sysid, nm,
+					 (uint32_t)sizeof(nm), &nlen) == 0 &&
+			    nlen > 0u)
+				cnxman_csb_set_scsnode(csb, nm, nlen);
+		}
 	}
 }
 

@@ -1911,6 +1911,34 @@ int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
 	return 0;
 }
 
+/* rd vms-239: the SCSNODE `sysid` put in its own START/STACK body (spec
+ * SS4(g)), trailing blanks dropped. -1 when no formation body arrived: the
+ * port was not told, and nothing stands in for it. */
+int pe_fsm_peer_name(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
+		     uint32_t cap, uint8_t *out_len)
+{
+	struct pe_vc *vc = pe_fsm_vc_by_sysid(f, sysid);
+	uint32_t i, n;
+
+	if (out == NULL || out_len == NULL || cap == 0u)
+		return -1;
+	*out_len = 0u;
+	if (vc == NULL || !vc->peer_name_valid)
+		return -1;
+	n = (uint32_t)VMS_SCS_START_NODENAME_LEN;
+	if (n > cap)
+		n = cap;
+	while (n > 0u && (vc->peer_name[n - 1u] == (uint8_t)' ' ||
+			  vc->peer_name[n - 1u] == 0u))
+		n--;
+	if (n == 0u)
+		return -1;
+	for (i = 0; i < n; i++)
+		out[i] = vc->peer_name[i];
+	*out_len = (uint8_t)n;
+	return 0;
+}
+
 static struct pe_vc *vc_by_channel(struct pe_fsm *f, uint32_t ch_index)
 {
 	uint32_t i;

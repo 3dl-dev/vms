@@ -2302,18 +2302,6 @@ void vms_devtab_note_io_error(uint32_t major, uint32_t minor)
     exec_unlock(&vms_device_list_lock);
 }
 
-#ifndef OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
-/*
- * vms_devtab_disk_backing - INTERNAL (non-ioctl) resolve of a DISK unit to its
- * backing (major, minor), for the Files-11 ODS-2 ACP $MOUNT (vms-127). The exact
- * lookup vms_ioctl_disk_resolve() does, minus the copyin/copyout: the caller is
- * IN the executive (vmsfs_acp.c reading the home block/SCB to validate a volume),
- * not a process handing structs across /dev/vms. `devnam` must already be a
- * canonical "DDCU:" name (the ACP normalizes before calling). Returns SS$_NORMAL
- * and fills the major_out and minor_out outputs on a disk unit; SS$_NOSUCHDEV if
- * there is no such unit; SS$_IVDEVNAM if the unit exists but is not a disk (only disk units
- * have a backing block device -- the same category verdict the ioctl gives).
- */
 /*
  * vms_devtab_name_present - does the executive's device table hold a unit by
  * this name? `name`/`len` is a counted (not NUL-terminated) device name as a
@@ -2342,6 +2330,18 @@ int vms_devtab_name_present(const uint8_t *name, uint32_t len)
     return present ? 1 : 0;
 }
 
+#ifndef OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
+/*
+ * vms_devtab_disk_backing - INTERNAL (non-ioctl) resolve of a DISK unit to its
+ * backing (major, minor), for the Files-11 ODS-2 ACP $MOUNT (vms-127). The exact
+ * lookup vms_ioctl_disk_resolve() does, minus the copyin/copyout: the caller is
+ * IN the executive (vmsfs_acp.c reading the home block/SCB to validate a volume),
+ * not a process handing structs across /dev/vms. `devnam` must already be a
+ * canonical "DDCU:" name (the ACP normalizes before calling). Returns SS$_NORMAL
+ * and fills the major_out and minor_out outputs on a disk unit; SS$_NOSUCHDEV if
+ * there is no such unit; SS$_IVDEVNAM if the unit exists but is not a disk (only disk units
+ * have a backing block device -- the same category verdict the ioctl gives).
+ */
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out)
 {

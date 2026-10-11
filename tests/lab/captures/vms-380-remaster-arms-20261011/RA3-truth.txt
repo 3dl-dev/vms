@@ -1,0 +1,8 @@
+RA3 (2026-10-11 ~07:10 UTC) truth BEFORE remaster. RMT3 master = VAX1 (00010001), directory entry on VAX1 (DIRENTR).
+VAX1 own:  RMT3 0700092C PR (VALBLK, LVB written 'RMLVB-0123456789'), S0 16000626 CR
+VAX3 own -> VAX1 master copy:
+  RMT3 050004C3 CR -> 050002D2
+  S0   050000D4 CW -> 0500041B
+  S1   120004CE CW -> 09000932
+  S2   130004CD CW -> 170003EC
+Trigger: VAX2 spawns RMHOLD 012ARMT3 (root NL, subs S0,S1 CR, 300 rounds of NL<->CR converts).

@@ -1,0 +1,10 @@
+RA2 (RMT2) truth, SDA right after the 07:04:14 remaster VAX1 -> VAX2.
+VAX3 own -> NEW master (VAX2, 00010002) copy:
+  RMT2 190004B2 CR -> 010003BA
+  S0   600004AD CW -> 010003BD
+  S1   170004B6 CW -> 010003BC
+  S2   100000C6 CW -> 010003BB
+VAX2 own: RMT2 350003B5 PR (HOLD2), 340003B1 NL (HOLD2B)
+New master RMT2 RSB: GGMODE PR, LVB 'RMLVB-0123456789' seq 1, sub-RSB 3.
+Before: VAX1 created RMT2 (HOLD1 001WRMT2), VAX3 123-RMT2, VAX2 312ARMT2 (activity);
+no remaster while VAX1 held locks; VAX1 STOP HOLD1 at 07:04:09 -> remaster 07:04:14.

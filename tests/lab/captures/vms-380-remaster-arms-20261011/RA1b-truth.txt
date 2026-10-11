@@ -1,0 +1,14 @@
+RA1b ground truth (SDA, 2026-10-11 ~06:50 UTC). RMT1 master = VAX1 (00010001). VAX1 csid 00010001, VAX2 00010002?, VAX3 joined later.
+holder  lock  own-lkid   master-lkid(VAX1)  mode
+VAX1    RMT1  06000118   (local)            NL  LVB "RMLVB-0123456789"
+VAX1    S0    06000681   (local)            NL
+VAX2    RMT1  10000387   05000024           PR
+VAX2    S0    2000038A   0600070A           CR
+VAX2    S1    1A000381   07000069           CR
+VAX3    RMT1  0E00049B   090006FE           CR
+VAX3    S0    33000498   07000145           CW
+VAX3    S1    010004A5   0C0006F3           CW
+VAX3    S2    010004A6   0B0003FF           CW
+Next: STOP HOLD1 on VAX1 (VAX1's own locks go), then SHUTDOWN REMOVE_NODE.
+After STOP HOLD1 (06:52): VAX1 RMT1 RSB still local (CSID 0), granted 090006FE CR, 05000024 PR, LVB unchanged seq 1, sub-RSB 3.
+PREDICTION (before shutdown): RMT1 tree remastered VAX1 -> VAX2 (earliest-joining holder, LDW tie); O>VAX2: 0e 0f 10 then seven 0x12 (one per remote lock: VAX2 RMT1/S0/S1, VAX3 RMT1/S0/S1/S2) then 13; VAX2>VAX1 0x14; VAX3 gets 0f + 11. Each 0x12: body[20:24] = the VAX1 master lkid, body[24:28] = the holder's own lkid (table above).

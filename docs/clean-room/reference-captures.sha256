@@ -98,3 +98,6 @@ d39a5b415083ad9f936db79219635bb0f3777b9b07b71e85a2304f7361ab4fe4  tests/lab/capt
 525b8bbed9b00b8385451dfed54122cba271d41bb9b021ad22d14d69df9098b6  tests/lab/captures/vms-380-remaster-arms-20261011/ra2-rmt2-remaster.pcap
 6fd7ea1d3fa409547072ddc22a5e9b47fc41c7e57f07348f0680dedf3601c20c  tests/lab/captures/vms-1f64-rdev-20261011/heldout-run-rdev1.pcap
 116254a338dfbfdb5254426e9e93429947dfa1041123818e638b2a1b2bb9217c  tests/lab/captures/vms-b20-mscp-read-20261011/mscp-read-write.pcap
+d16acf52432eed64e8def6b5df22259c7c99e4083deca488bfd9d3577db7147d  tests/lab/captures/vms-64b-dlm-seq-20261011/order1-vax-first.pcap
+1d9f10ec987373b73ab89a80da5cc87b6b3fd10016f3f21b68e17c0cc633b8b2  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-control-pre64b.pcap
+453984e6c494d8c458cb9de40db0c3c7666aceb0d8ce369d20d801894a01a85c  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-ovmx-first.pcap

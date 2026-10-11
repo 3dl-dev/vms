@@ -158,6 +158,11 @@ extern "C" {
 #define VMS_DLM_WIREOP_CONVERT      0x07u  /* lock mode CONVERT                 */
 #define VMS_DLM_WIREOP_REBUILD      0x0du  /* join-time lock-resource rebuild rec*/
 #define VMS_DLM_WIREOP_DLKSRCH      0x0eu  /* distributed deadlock search (H11)  */
+/* op 0x0f: sent by a real VMS member to EVERY other member about one resource
+ * as one step of lock-tree remastering (rd vms-50d), each answering cat 0x82
+ * op 0x15 (rd vms-cab, see vms_dlm_op0f_ack_build). */
+#define VMS_DLM_WIREOP_0F           0x0fu
+#define VMS_DLM_WIREOP_0F_ACK       0x15u
 
 /*
  * Opcodes -- GROUNDED by the vms-c03 capture set (see the file doc comment's
@@ -703,6 +708,25 @@ struct vms_dlm_res_ident {
 	uint8_t  name_len;                /* body[47], 1..31                */
 	uint8_t  name[VMS_DLM_NAME_MAX];
 };
+
+/*
+ * The answer to a real VMS member's op-0x0f (rd vms-cab). op 0x0f is one step of
+ * VMS lock-tree remastering (rd vms-50d): the old master sends 0e/0f/10/12../13
+ * to the chosen NEW master and 0f + 11 to every other member. Every answer is
+ * the request ECHOED with category 0x82, opcode 0x15 and body[32:36] =
+ * 01 00 fa 00; body[28:32] is CLEARED by the new master -- the member holding
+ * an open remaster (its 0e) for that tree from that sender -- and KEPT by every
+ * other member. 3299 of 3299 real VAX V7.3 pairs (tests/lab/captures/
+ * vms-cab-op0f-20261010/rule2). `new_master` selects the form; this node can
+ * only pass 1 once it adopts trees (it does not yet). `id_out` receives the
+ * resource identity the request names. VMS_CODEC_E_CLASS for any other frame.
+ */
+vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
+					  uint32_t req_len, int new_master,
+					  struct vms_dlm_res_ident *id_out,
+					  uint8_t *frame, uint32_t cap,
+					  uint32_t *written);
+
 
 /*
  * Read the identity out of a cat-0x02 request that names a resource for a

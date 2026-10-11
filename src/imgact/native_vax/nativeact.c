@@ -67,14 +67,6 @@
 #define P1VEC_BASE    0x7FFEDE00u
 #define P1VEC_PAGE    0x7FFED000u
 
-/* ---- the activator's host primitives for the ACP reader (imgact_acp.c) ---- */
-int imgact_acp_dev_open(void) { return open("/dev/vms", O_RDWR | O_CLOEXEC); }
-void imgact_acp_dev_close(int fd) { close(fd); }
-long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
-{
-	return ioctl(fd, req, arg) < 0 ? -errno : 0;
-}
-
 /* ---- failures, reported as VMS reports them under DCL ---- */
 static void fail(const char *image, const char *l2, const char *d2,
 		 const char *l3, uint32_t cond)

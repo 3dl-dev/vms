@@ -172,6 +172,6 @@ struct vms_native_page0_args {
 #define VMS_IOCTL_IMAGE_RUNDOWN  _IOWR(VMS_ACCESS_IOC_MAGIC, 0x67, struct vms_modexfer_args)
 #define VMS_IOCTL_SUBSTRATE_ID   _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB1, struct vms_substrate_id_args)
 #define VMS_IOCTL_KFE            _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB0, struct vms_kfe_args)
-#define VMS_IOCTL_NATIVE_PAGE0   _IOWR(VMS_ACCESS_IOC_MAGIC, 0x99, struct vms_native_page0_args)
+#define VMS_IOCTL_NATIVE_PAGE0   _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB2, struct vms_native_page0_args)
 
 #endif /* _VMS_ACCESS_NB_H */

@@ -311,3 +311,5 @@ vms_kif_tt_setmode=PROCEDURE
 vms_kif_tt_attach=PROCEDURE
 vms_kif_tt_sense=PROCEDURE
 vms_kif_procctl=PROCEDURE
+# Virtual page 0 for the VAX native image activator (rd vms-b869). APPENDED.
+vms_kif_native_page0=PROCEDURE

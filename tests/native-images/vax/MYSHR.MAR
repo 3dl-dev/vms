@@ -1,0 +1,21 @@
+        .TITLE  MYSHR   OVMX vms-3b3f rung-3 own shareable image (VAX)
+; Our own shareable: two universal procedures reached through a transfer
+; vector at the start of the image, the VAX shareable-image convention.
+        .PSECT  $$$TRANSFER,EXE,NOWRT,PIC,SHR,QUAD
+        .TRANSFER MYSHR_ADD
+        .MASK   MYSHR_ADD
+        JMP     L^MYSHR_ADD+2
+        .TRANSFER MYSHR_GREET
+        .MASK   MYSHR_GREET
+        JMP     L^MYSHR_GREET+2
+        .PSECT  SDATA,WRT,NOEXE,PIC,NOSHR,QUAD
+GMSG:   .ASCID  /OVMX-NATIVE MYSHR: greeting from own shareable/
+        .PSECT  SCODE,EXE,NOWRT,PIC,SHR,QUAD
+        .ENTRY  MYSHR_ADD,^M<>
+        ADDL3   4(AP),8(AP),R0
+        RET
+        .ENTRY  MYSHR_GREET,^M<>
+        PUSHAQ  GMSG
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        RET
+        .END

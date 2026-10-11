@@ -984,6 +984,15 @@ uint32_t vms_kif_enter_image(uint8_t *prev_mode, uint8_t *new_mode);
  * v.) */
 uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode);
 
+/* Virtual page 0 for this process (rd vms-b869): CMKRNL, once, native image
+ * activator only. SS$_NORMAL / SS$_NOPRIV / SS$_UNSUPPORTED / SS$_NOSUCHDEV.
+ * OVMX-UNWIRED: vms_kif_native_page0 (vms-b869) -- its one product caller is
+ * NATIVEACT.EXE (src/imgact/native_vax/nativeact.c), which is built only for
+ * NetBSD/VAX, so the host-configured census never compiles it; the VAX
+ * $STATUS gate RUNs it against the real executive, and test_syssvc_rights_acl
+ * proves the refusal. Delete this line if the census learns the VAX build. */
+uint32_t vms_kif_native_page0(void);
+
 /*
  * vms_kif_p1_protect - the CRITICAL-P1 MPROTECT MECHANISM (vms-68f.iii,
  * docs/design-in-process-activation.md Part II §A.2.3(b)).

@@ -785,6 +785,7 @@ struct vms_proc {
      */
     uint8_t             image_active;     /* 1 while a controlled descent is open */
     uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
+    uint8_t             native_page0;     /* page 0 granted once (vms-b869) */
 
     /* AST state (3b) - one queue per access mode */
     struct vms_ast_state ast[4];
@@ -1287,6 +1288,7 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg);
  * VMS_IOCTL_IMAGE_RUNDOWN comment for why this is not just SETMODE twice. */
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);

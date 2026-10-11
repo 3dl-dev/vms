@@ -2544,6 +2544,28 @@ uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode)
 }
 
 /*
+ * vms_kif_native_page0 - ask the executive for virtual page 0 in this process
+ * (VMS_IOCTL_NATIVE_PAGE0, rd vms-b869): the VAX native image activator does,
+ * before it maps an image linked at P0 0x200. The executive decides: CMKRNL,
+ * once, and only on the native-image activation path; SS$_NOPRIV otherwise,
+ * SS$_UNSUPPORTED on a substrate with no such path.
+ */
+uint32_t vms_kif_native_page0(void)
+{
+    struct vms_native_page0_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    KIF_CALL(VMS_IOCTL_NATIVE_PAGE0, &args);
+
+    return args.status;
+}
+
+/*
  * vms_kif_p1_protect - NOT an ioctl. See the header comment for why:
  * this wraps a real mprotect(2) on the caller's own address space, the
  * enforced half of the design's critical-P1 mechanism, and it has no

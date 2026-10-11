@@ -2199,7 +2199,12 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                     n++;
                 char **iargv = calloc((size_t)n + 2, sizeof *iargv);
                 if (iargv) {
+#if defined(__vax__)
+                    /* OVMX/VAX: the VAX native image activator (vms-b869). */
+                    iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/NATIVEACT.EXE";
+#else
                     iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/IMGACT.EXE";
+#endif
                     iargv[1] = (char *)linux_path;
                     for (int k = 1; k < n; k++)
                         iargv[k + 1] = argv[k];

@@ -1378,6 +1378,14 @@ if(BUILD_TOOLS)
     # cluster daemon in the image at all -- which is exactly what
     # tests/integration/test_no_scsd_image.sh asserts.
 
+    # NATIVEACT.EXE (rd vms-b869): the OpenVMS VAX native image activator.
+    # VAX-only by design: an image LINKed on real OpenVMS VAX runs only on
+    # OVMX/VAX; on Alpha IMGACT.EXE activates the Alpha native format itself.
+    if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "vax")
+        add_subdirectory(src/imgact/native_vax)
+        list(APPEND _OVMX_IMAGES_DEPS vms_nativeact)  # NATIVEACT.EXE
+    endif()
+
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
         # LINK.EXE (vmslink, src/vmslink/link.c): the OVMX-native ELF64
         # LINK.EXE hardcodes AArch64/x86_64 ELF64 relocation handling

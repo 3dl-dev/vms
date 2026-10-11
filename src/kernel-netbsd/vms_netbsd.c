@@ -1045,6 +1045,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CHKPRIV:
 	case VMS_IOCTL_ENTER_IMAGE:
 	case VMS_IOCTL_IMAGE_RUNDOWN:
+	case VMS_IOCTL_NATIVE_PAGE0:   /* rd vms-b869: CMKRNL, once, activator only */
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1069,6 +1070,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_enter_image(proc, (unsigned long)uarg);   break;
 		case VMS_IOCTL_IMAGE_RUNDOWN:
 			r = vms_ioctl_image_rundown(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_NATIVE_PAGE0:
+			r = vms_ioctl_native_page0(proc, (unsigned long)uarg);  break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

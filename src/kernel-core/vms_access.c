@@ -35,6 +35,7 @@
 
 #include "vms_internal.h"
 #include "exec_kbackend.h"
+#include "vms_prot.h"     /* vms_prot_require_priv: the privilege decision */
 
 /*
  * Privilege bits and status codes come from vms_internal.h /
@@ -408,6 +409,52 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NOPRIV;
 
     exec_unlock(&proc->mode_lock);
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_native_page0 - VMS_IOCTL_NATIVE_PAGE0 (rd vms-b869): let the
+ * calling process map virtual page 0, where an OpenVMS VAX native image is
+ * linked (P0 0x200).
+ *
+ * Baron's ruling (2026-10-09): page 0 is allowed per process, and only through
+ * the executive's native-image activation path; the substrate's null-page
+ * defence stays on for everything else. So the executive refuses it unless
+ *   1. the caller's CURRENT privileges (its own PCB, not a value it passes in)
+ *      hold CMKRNL -- the executive's privilege decision, vms_prot.h;
+ *   2. it has not already been granted to this process: once, before the
+ *      activator maps the image, never again (a second call is SS$_NOPRIV);
+ *   3. the substrate confirms the caller IS the native image activator and
+ *      lowers the minimum of that one address space (exec_native_page0_lower).
+ * A substrate with no native VAX path answers SS$_UNSUPPORTED (honest, INV-6).
+ * The change lives in the caller's address space and goes with it at its next
+ * execve; every other process keeps the defence.
+ */
+long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_native_page0_args args;
+    uint32_t st;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.reserved = 0;
+
+    exec_lock(&proc->mode_lock);
+    st = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);
+    if ((st & 1) && proc->native_page0)
+        st = SS__NOPRIV;
+    if (st & 1) {
+        int rc = exec_native_page0_lower();
+        st = rc == 0 ? SS__NORMAL : rc > 0 ? SS__UNSUPPORTED : SS__NOPRIV;
+        if (st & 1)
+            proc->native_page0 = 1;
+    }
+    exec_unlock(&proc->mode_lock);
+    args.status = st;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

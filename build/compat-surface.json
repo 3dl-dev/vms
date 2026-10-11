@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-09",
+    "generated": "2026-10-11",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -78,20 +78,20 @@
     "by_status": {
       "verified": 24,
       "implemented": 293,
-      "partial": 64,
+      "partial": 65,
       "stub": 14,
       "designed": 1,
-      "absent": 95
+      "absent": 94
     },
     "by_authenticity": {
-      "real": 342,
-      "n/a": 96,
+      "real": 343,
+      "n/a": 95,
       "advisory": 47,
       "facade-risk": 6
     },
     "met": 317,
-    "in_progress": 64,
-    "not_started": 110,
+    "in_progress": 65,
+    "not_started": 109,
     "facade_risk": 6
   },
   "overall_in_scope": {
@@ -99,20 +99,20 @@
     "by_status": {
       "verified": 24,
       "implemented": 293,
-      "partial": 62,
+      "partial": 63,
       "stub": 10,
       "designed": 1,
-      "absent": 55
+      "absent": 54
     },
     "by_authenticity": {
-      "real": 340,
-      "n/a": 56,
+      "real": 341,
+      "n/a": 55,
       "advisory": 45,
       "facade-risk": 4
     },
     "met": 317,
-    "in_progress": 62,
-    "not_started": 66,
+    "in_progress": 63,
+    "not_started": 65,
     "facade_risk": 4
   },
   "facilities": [
@@ -650,18 +650,17 @@
         "by_status": {
           "verified": 2,
           "implemented": 2,
-          "partial": 1,
+          "partial": 2,
           "stub": 0,
           "designed": 0,
-          "absent": 1
+          "absent": 0
         },
         "by_authenticity": {
-          "real": 5,
-          "n/a": 1
+          "real": 6
         },
         "met": 4,
-        "in_progress": 1,
-        "not_started": 1,
+        "in_progress": 2,
+        "not_started": 0,
         "facade_risk": 0
       }
     },
@@ -4229,12 +4228,12 @@
       "id": "image-activation$native-vax-isd",
       "kind": "feature",
       "vms": "Activation of an OpenVMS VAX native image (IHD/ISD .EXE LINKed on real VMS) on OVMX/VAX",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "partial",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/imgact/imgact_eihd.h",
+      "evidence": "tests/lab-vax/run-boot.sh",
       "verified_against": null,
-      "notes": "rd vms-3b3f. Not started: Alpha came first, because OVMX/Alpha already runs the Alpha calling standard and its page size matches. A VAX image calls system services at fixed S0 addresses, and these collide with the NetBSD-VAX kernel's own S0 mapping.",
+      "notes": "rd vms-b869 (vms-3b3f). CI vax-status-gate RUNs .EXE files LINKed on the lab VAX V7.3 from our own MACRO-32 sources (tests/native-images/vax/) on the booted OVMX/VAX executive through NATIVEACT.EXE, and asserts the lab VAX's own output and $STATUS for each: SYS$QIOW / LIB$PUT_OUTPUT, DECC$SHR puts/printf, a multi-module image with its own shareable, and the refusals SHRIDMISMAT / IMAGEFNF / BADHDR. System services are reached through the P1 vector (SYS$QIOW 7FFEDE00 ...); only the routines those images call are bound so far (SYS$QIOW, $ASSIGN, $EXIT, $IMGSTA; LIB$PUT_OUTPUT; DECC$SHR puts, printf). Virtual page 0 is granted per process by the executive (VMS_IOCTL_NATIVE_PAGE0: CMKRNL, once, NATIVEACT.EXE only), Baron's ruling; the substrate's null-page defence stays on for every other process.",
       "plan_ref": "vms-ade"
     },
     {

@@ -3441,6 +3441,24 @@ struct vms_procctl_args {
     uint32_t status;    /* out: SS$_NORMAL / NONEXPR / NOPRIV / BADPARAM        */
 };
 #define VMS_IOCTL_PROCCTL   _IOWR(VMS_IOC_MAGIC, 0x99, struct vms_procctl_args)
+
+/*
+ * NATIVE IMAGE PAGE 0 (rd vms-b869). An image LINKed on real OpenVMS VAX is
+ * fixed at P0 0x200, inside the substrate's virtual page 0, which NetBSD keeps
+ * unmappable as a null-dereference defence. Baron's ruling (2026-10-09):
+ * page 0 is allowed PER PROCESS, ONLY through the executive's native-image
+ * activation path. The executive grants it to the calling process alone, and
+ * only when that process is running the native image activator
+ * (OVMX_BOOT_STAGE_DIR "/NATIVEACT.EXE"); the defence stays on system-wide and
+ * for every other process, and goes with the process's address space at its
+ * next image (execve). Refused SS$_NOPRIV otherwise; SS$_UNSUPPORTED on a
+ * substrate that does not provide it.
+ */
+struct vms_native_page0_args {
+    uint32_t status;    /* out: SS$_NORMAL / SS$_NOPRIV / SS$_UNSUPPORTED     */
+    uint32_t reserved;
+};
+#define VMS_IOCTL_NATIVE_PAGE0 _IOWR(VMS_IOC_MAGIC, 0xB2, struct vms_native_page0_args)
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
 #define VMS_IOCTL_SPAWN_NOTIFY _IOWR(VMS_IOC_MAGIC, 0x4D, struct vms_spawn_notify_args)
 /* System-info facility ($GETSYI-style; SHOW MEMORY physical section, vms-a3cd) */

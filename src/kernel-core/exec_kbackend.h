@@ -262,11 +262,15 @@
  *
  *   int  exec_native_page0_lower(void)
  *        lower the minimum address of the CURRENT task's address space to 0 so
- *        it can map virtual page 0 (an OpenVMS VAX native image, rd vms-b869),
- *        provided the current task IS the native image activator. 0 granted,
- *        <0 refused (not the activator), >0 this substrate has no such path.
- *        Called only from vms_ioctl_native_page0 after its privilege check.
+ *        it can map virtual page 0 (an OpenVMS VAX native image, rd vms-b869).
+ *        0 granted, <0 refused, >0 this substrate has no such path. Called only
+ *        from vms_ioctl_native_page0 after its privilege and activator checks.
  *        NetBSD: ovmx_native_page0_allow (uvm). Linux: >0 (no VAX).
+ *
+ *   const void *exec_current_image(void)
+ *        the substrate's identity of the file the CURRENT task exec'd, in the
+ *        form exec_pin_is_image() takes (NetBSD: its text vnode); NULL where the
+ *        substrate has no native-image path (Linux) (rd vms-15c9).
  *
  *   int  exec_pin_is_image(void *pin, const void *img)
  *        IMAGE PRIVILEGES (vms-bdc1): 1 when `img` -- the substrate's identity

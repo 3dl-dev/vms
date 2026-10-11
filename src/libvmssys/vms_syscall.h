@@ -286,6 +286,13 @@
  */
 typedef long long vms_reg_t;
 
+/* A self-relocating freestanding image (IMGACT.EXE, which applies only RELATIVE
+ * relocations to itself) links these trampolines in and must bind them
+ * locally, never through a PLT slot it would not fill: it builds with
+ * VMS_SYSCALL_HIDDEN (rd vms-bbde). */
+#if defined(VMS_SYSCALL_HIDDEN)
+#pragma GCC visibility push(hidden)
+#endif
 extern vms_reg_t __vms_syscall0(vms_reg_t nr);
 extern vms_reg_t __vms_syscall1(vms_reg_t nr, vms_reg_t a1);
 extern vms_reg_t __vms_syscall2(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2);
@@ -293,6 +300,9 @@ extern vms_reg_t __vms_syscall3(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_re
 extern vms_reg_t __vms_syscall4(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3, vms_reg_t a4);
 extern vms_reg_t __vms_syscall5(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3, vms_reg_t a4, vms_reg_t a5);
 extern vms_reg_t __vms_syscall6(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3, vms_reg_t a4, vms_reg_t a5, vms_reg_t a6);
+#if defined(VMS_SYSCALL_HIDDEN)
+#pragma GCC visibility pop
+#endif
 
 /* ================================================================
  * File I/O

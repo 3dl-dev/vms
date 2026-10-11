@@ -129,6 +129,53 @@ never filled with a plausible value. The layouts are those of a real OpenVMS
 VAX V7.3 (`docs/oracle/vax-ncp-show/`). `SHOW NETWORK` in DCL prints a
 `Product:  DECNET` line only while NETACP is serving.
 
+### Circuits, lines and objects
+
+`SHOW KNOWN CIRCUITS`, `SHOW KNOWN LINES` and `SHOW KNOWN OBJECTS` (and
+`SHOW CIRCUIT`, `SHOW LINE`, `SHOW OBJECT`) read the running NETACP the same
+way. NETACP runs one circuit, over the node's primary NIC. Its name follows
+the device-native rule: the executive names that NIC `ETH0:`, so the circuit
+and the line under it are both `ETH-0` (a real VAX names its `QNA0` circuit and
+line `QNA-0`).
+
+```
+$ NCP SHOW KNOWN CIRCUITS
+
+
+Known Circuit Volatile Summary as of  8-OCT-2026 10:02:11
+
+   Circuit          State                   Loopback     Adjacent
+                                              Name      Routing Node
+
+  ETH-0             on
+```
+
+The Adjacent Routing Node column names the designated router NETACP has
+selected on the circuit, and is empty while it has none.
+
+The objects listed are the ones NETACP's inbound dispatch serves: one table
+feeds both the dispatch and `SHOW`, so the list is exactly what a connect can
+reach. FAL (17) runs `FAL.EXE` for each connect; CTERM (42) is served by NETACP
+itself, so its row shows NETACP's PID:
+
+```
+$ NCP SHOW KNOWN OBJECTS
+
+
+Known Object Volatile Summary as of  8-OCT-2026 10:02:14
+
+   Object   Number  File/PID                   User Id          Password
+
+  FAL           17  FAL.EXE
+  CTERM         42  20200216
+```
+
+The User Id and Password columns are always empty: these objects use the
+access control carried by each connect, and NETACP's answer has no field for
+a password. `LIST KNOWN OBJECTS` / `LIST OBJECT` read the permanent object
+database (`NETOBJECT.DAT`); NETACP does not load that file into its object
+table yet, so an object you `DEFINE` appears under `LIST`, not under `SHOW`.
+
 ### The remote-node database
 
 `SET`/`DEFINE NODE` add or update an entry; `LIST KNOWN NODES` / `LIST NODE`
@@ -167,11 +214,14 @@ name — both forms accept either.
   `DEFINE` (permanent, in the permanent database) act on two databases; OVMX
   keeps a single persisted database, so `SET` and `DEFINE` both write the same
   store today.
-- **No circuits, lines, or LOOP.** There is no `SET`/`SHOW CIRCUIT`,
-  `SET`/`SHOW LINE`, or `LOOP` surface. `SHOW EXECUTOR COUNTERS` prints the
-  one executor counter NETACP keeps ("Maximum logical links active"); the
-  routing-loss counters are not kept and not printed. `SHOW OBJECT` still reads
-  the object database file (NETACP has no volatile object view yet).
+- **Circuits and lines are read-only; no LOOP.** `SHOW` prints NETACP's one
+  circuit and line; there is no `SET CIRCUIT`, `SET LINE`, or `LOOP`, and no
+  circuit or line counters. `SHOW EXECUTOR COUNTERS` prints the one executor
+  counter NETACP keeps ("Maximum logical links active"); the routing-loss
+  counters are not kept and not printed.
+- **The object database does not feed NETACP yet.** NETACP serves FAL and
+  CTERM; objects defined with `SET`/`DEFINE OBJECT` are stored and listed by
+  `LIST`, but an inbound connect to them is refused.
 - **NCP is config-only.** It does not itself bring the network up or down —
   it edits the database NETACP and the engine read.
 - **Record layout is OVMX's.** The databases live at their VMS names in
@@ -327,7 +377,7 @@ second ledger).
 | Inbound FAL file server (object 17) | partial | real | §4. Authenticated at the connect (SYSUAF/Purdy + disabled gate, bad password refused before accept); serves/stores via RMS over the ACP. Outbound DCL `COPY` bridge is a follow-on (rd vms-ea8). |
 | DAP codec | implemented | real | §4. Bounded, fuzz-clean; oracle-verified message sequence + carried values, public-spec field framing. |
 | Task-to-task programmatic `$QIO` | **absent** | n/a | Generic user-program logical-link `$QIO` to a DECnet object is not built (distinct from FAL, which is real above). |
-| NCP (node/executor config) | partial | real | §2 above. No circuits/objects/lines/counters/LOOP; single persisted DB; databases at `SYS$SYSTEM:NETNODE_LOCAL.DAT`/`NETNODE_REMOTE.DAT`/`NETOBJECT.DAT` via RMS over the ACP, OVMX text record layout (rd vms-1f69). |
+| NCP (node/executor config) | partial | real | §2 above. SHOW reads the running NETACP (executor, nodes, links, circuits, lines, objects); no SET CIRCUIT/LINE, no LOOP, one executor counter; NETOBJECT.DAT does not feed NETACP's objects; single persisted DB; databases at `SYS$SYSTEM:NETNODE_LOCAL.DAT`/`NETNODE_REMOTE.DAT`/`NETOBJECT.DAT` via RMS over the ACP, OVMX text record layout (rd vms-1f69). |
 | Node database + name↔address resolution | implemented | real | Backs NCP and `SET HOST`/`NODE::` resolution. |
 | Session Control CONNECT codec | verified | real | Oracle byte-identical against a real VAX capture; access-control fields correctly empty for CTERM. |
 | Inbound SET HOST (CTERM session auth) | implemented | real | §3 above. Fresh LOGINOUT auth; one session at a time; no live-VAX bracket proof yet. |

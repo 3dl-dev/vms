@@ -20,6 +20,7 @@
  * every ACP / register / dassgn arg struct + request number (vms_ioctl.h
  * includes vms_lnm.h, vms_mbx.h and vms_acp.h at its foot). */
 #include "vms_ioctl.h"
+#include "kif_calls.h"     /* the executive transport seam (rd vms-bbde) */
 #include "ssdef.h"
 
 #include "imgact_acp.h"
@@ -68,7 +69,7 @@ static uint32_t acp_register(int fd)
 {
 	struct vms_register_args a;
 	acp_memset(&a, 0, sizeof(a));
-	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &a) < 0)
+	if (kif_call(fd, KIF_SVC_REGISTER, &a) < 0)
 		return SS$_NOSUCHDEV;
 	return a.status;
 }
@@ -85,7 +86,7 @@ static uint32_t acp_assign(int fd, const char *dev, uint32_t *chan)
 	struct vms_acp_assign_args a;
 	acp_memset(&a, 0, sizeof(a));
 	acp_strlcpy(a.devnam, dev, sizeof(a.devnam));
-	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_ASSIGN, &a) < 0)
+	if (kif_call(fd, KIF_SVC_ACP_ASSIGN, &a) < 0)
 		return SS$_NOSUCHDEV;
 	if ($VMS_STATUS_SUCCESS(a.status))
 		*chan = a.chan;
@@ -97,7 +98,7 @@ static void acp_dassgn(int fd, uint32_t chan)
 	struct vms_dassgn_args a;
 	acp_memset(&a, 0, sizeof(a));
 	a.chan = chan;
-	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_DASSGN, &a);
+	(void)kif_call(fd, KIF_SVC_DASSGN, &a);
 }
 
 static void acp_deaccess(int fd, uint32_t chan)
@@ -105,7 +106,7 @@ static void acp_deaccess(int fd, uint32_t chan)
 	struct vms_acp_deaccess_args a;
 	acp_memset(&a, 0, sizeof(a));
 	a.chan = chan;
-	(void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_DEACCESS, &a);
+	(void)kif_call(fd, KIF_SVC_ACP_DEACCESS, &a);
 }
 
 /*
@@ -132,7 +133,7 @@ static uint32_t acp_access_name(int fd, uint32_t chan, const char *name,
 	a.did_nmx = did_nmx;
 	acp_strlcpy(a.name, name, sizeof(a.name));
 
-	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_ACCESS, &a) < 0)
+	if (kif_call(fd, KIF_SVC_ACP_ACCESS, &a) < 0)
 		return SS$_NOSUCHDEV;
 
 	if ($VMS_STATUS_SUCCESS(a.status)) {
@@ -192,21 +193,21 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 	acp_memset(f, 0, sizeof(*f));
 	f->dev_fd = -1;
 
-	fd = imgact_acp_dev_open();
+	fd = kif_xport_dev_open();
 	if (fd < 0)
 		return SS$_NOSUCHDEV;
 	f->dev_fd = fd;
 
 	st = acp_register(fd);
 	if (!$VMS_STATUS_SUCCESS(st)) {
-		imgact_acp_dev_close(fd);
+		kif_xport_dev_close(fd);
 		f->dev_fd = -1;
 		return st;
 	}
 
 	st = acp_assign(fd, dev, &f->chan);
 	if (!$VMS_STATUS_SUCCESS(st)) {
-		imgact_acp_dev_close(fd);
+		kif_xport_dev_close(fd);
 		f->dev_fd = -1;
 		return st;
 	}
@@ -227,7 +228,7 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 	 * the LAST component is opened as a file and the rest as directories. */
 	if (next_component(&p, comp, sizeof(comp)) == 0) {
 		acp_dassgn(fd, f->chan);
-		imgact_acp_dev_close(fd);
+		kif_xport_dev_close(fd);
 		f->dev_fd = -1;
 		return SS$_NOSUCHFILE;
 	}
@@ -243,7 +244,7 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 					     0, 0, 0, 0, &f->valid);
 			if (!$VMS_STATUS_SUCCESS(st)) {
 				acp_dassgn(fd, f->chan);
-				imgact_acp_dev_close(fd);
+				kif_xport_dev_close(fd);
 				f->dev_fd = -1;
 				return st;
 			}
@@ -274,7 +275,7 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 					     &fnum, &fseq, &frvn, &fnmx, 0);
 			if (!$VMS_STATUS_SUCCESS(st)) {
 				acp_dassgn(fd, f->chan);
-				imgact_acp_dev_close(fd);
+				kif_xport_dev_close(fd);
 				f->dev_fd = -1;
 				return st;
 			}
@@ -307,7 +308,7 @@ uint32_t imgact_acp_open_fid(struct imgact_acp_file *f, const char *dev,
 
 	acp_memset(f, 0, sizeof(*f));
 	f->dev_fd = -1;
-	fd = imgact_acp_dev_open();
+	fd = kif_xport_dev_open();
 	if (fd < 0)
 		return SS$_NOSUCHDEV;
 	f->dev_fd = fd;
@@ -315,7 +316,7 @@ uint32_t imgact_acp_open_fid(struct imgact_acp_file *f, const char *dev,
 	if ($VMS_STATUS_SUCCESS(st))
 		st = acp_assign(fd, dev, &f->chan);
 	if (!$VMS_STATUS_SUCCESS(st)) {
-		imgact_acp_dev_close(fd);
+		kif_xport_dev_close(fd);
 		f->dev_fd = -1;
 		return st;
 	}
@@ -326,13 +327,13 @@ uint32_t imgact_acp_open_fid(struct imgact_acp_file *f, const char *dev,
 	a.fid_seq = seq;
 	a.fid_rvn = rvn;
 	a.fid_nmx = nmx;
-	if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_ACCESS, &a) < 0)
+	if (kif_call(fd, KIF_SVC_ACP_ACCESS, &a) < 0)
 		st = SS$_NOSUCHDEV;
 	else
 		st = a.status;
 	if (!$VMS_STATUS_SUCCESS(st)) {
 		acp_dassgn(fd, f->chan);
-		imgact_acp_dev_close(fd);
+		kif_xport_dev_close(fd);
 		f->dev_fd = -1;
 		return st;
 	}
@@ -395,7 +396,7 @@ long imgact_acp_pread(struct imgact_acp_file *f, void *buf,
 		r.length = chunk;
 		r.buffer = (uint64_t)(uintptr_t)dst;
 
-		if (imgact_acp_dev_ioctl(f->dev_fd, VMS_IOCTL_ACP_READVBLK, &r) < 0)
+		if (kif_call(f->dev_fd, KIF_SVC_ACP_READVBLK, &r) < 0)
 			return -1;
 		if (r.status == SS$_ENDOFFILE)
 			break;                /* clamped read shouldn't reach here, but stop */
@@ -421,7 +422,7 @@ void imgact_acp_close(struct imgact_acp_file *f)
 		acp_deaccess(f->dev_fd, f->chan);
 	if (f->chan)
 		acp_dassgn(f->dev_fd, f->chan);
-	imgact_acp_dev_close(f->dev_fd);
+	kif_xport_dev_close(f->dev_fd);
 	f->dev_fd = -1;
 	f->accessed = 0;
 	f->chan = 0;

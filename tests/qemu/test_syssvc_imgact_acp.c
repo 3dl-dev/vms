@@ -66,23 +66,9 @@
 #define ODS2_UNIT   "VDA400:"
 #define IMG_PATH    "/IMGACT/TESTIMG.EXE"
 
-/* --------------------------------------------------------------------------
- * Host primitives (the freestanding/hosted seam). IMGACT.EXE backs these with
- * raw syscall6(); here they are libc, so imgact_acp.c runs unchanged.
- * -------------------------------------------------------------------------- */
-int imgact_acp_dev_open(void)
-{
-	return open("/dev/vms", O_RDWR);
-}
-void imgact_acp_dev_close(int fd)
-{
-	if (fd >= 0)
-		close(fd);
-}
-long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
-{
-	return ioctl(fd, req, arg) < 0 ? -1 : 0;
-}
+/* imgact_acp.c reaches the executive through the libvmssys transport seam
+ * (kif_transport_linux.c, linked here through libvmssys) -- the SAME transport
+ * IMGACT.EXE links (rd vms-bbde). */
 
 static int pass = 0;
 static int fail = 0;

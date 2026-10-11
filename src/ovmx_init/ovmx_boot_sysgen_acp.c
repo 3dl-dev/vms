@@ -58,6 +58,7 @@
 /* One include pulls in the _IOWR encoding, VMS_IOC_MAGIC, VMS_DEVNAM_SIZE, and
  * every ACP / register / dassgn arg struct + request number. */
 #include "vms_ioctl.h"
+#include "kif_calls.h"     /* the executive transport seam (rd vms-bbde) */
 #include "ssdef.h"
 #include "vmsfs/ods2.h"      /* ODS2_FK_DATA (RFM=VAR data-file kind for CREATE) */
 #include "ovmx_layout.h"     /* SYSDISK_DEVICE, VMS_SYSTEM_DIR                   */
@@ -183,7 +184,7 @@ static uint32_t boot_acp_register(int fd)
 {
     struct vms_register_args a;
     boot_acp_memset(&a, 0, sizeof(a));
-    if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_REGISTER, &a) < 0)
+    if (kif_call(fd, KIF_SVC_REGISTER, &a) < 0)
         return SS$_NOSUCHDEV;
     return a.status;
 }
@@ -193,7 +194,7 @@ static uint32_t boot_acp_assign(int fd, const char *dev, uint32_t *chan)
     struct vms_acp_assign_args a;
     boot_acp_memset(&a, 0, sizeof(a));
     boot_acp_strlcpy(a.devnam, dev, sizeof(a.devnam));
-    if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_ASSIGN, &a) < 0)
+    if (kif_call(fd, KIF_SVC_ACP_ASSIGN, &a) < 0)
         return SS$_NOSUCHDEV;
     if ($VMS_STATUS_SUCCESS(a.status))
         *chan = a.chan;
@@ -205,7 +206,7 @@ static void boot_acp_dassgn(int fd, uint32_t chan)
     struct vms_dassgn_args a;
     boot_acp_memset(&a, 0, sizeof(a));
     a.chan = chan;
-    (void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_DASSGN, &a);
+    (void)kif_call(fd, KIF_SVC_DASSGN, &a);
 }
 
 static void boot_acp_deaccess(int fd, uint32_t chan)
@@ -213,7 +214,7 @@ static void boot_acp_deaccess(int fd, uint32_t chan)
     struct vms_acp_deaccess_args a;
     boot_acp_memset(&a, 0, sizeof(a));
     a.chan = chan;
-    (void)imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_DEACCESS, &a);
+    (void)kif_call(fd, KIF_SVC_ACP_DEACCESS, &a);
 }
 
 /* IO$_ACCESS one directory component ("NAME.DIR") in DID {d_*}; return its FID
@@ -232,7 +233,7 @@ static uint32_t boot_acp_access_dir(int fd, uint32_t chan, const char *dirname,
     a.did_rvn = d_rvn;
     a.did_nmx = d_nmx;
     boot_acp_strlcpy(a.name, dirname, sizeof(a.name));
-    if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_ACCESS, &a) < 0)
+    if (kif_call(fd, KIF_SVC_ACP_ACCESS, &a) < 0)
         return SS$_NOSUCHDEV;
     if ($VMS_STATUS_SUCCESS(a.status)) {
         if (f_num) *f_num = a.fid_num;
@@ -329,21 +330,21 @@ uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
     if (!db)
         return SS$_BADPARAM;
 
-    fd = imgact_acp_dev_open();
+    fd = kif_xport_dev_open();
     if (fd < 0)
         return SS$_NOSUCHDEV;
 
     st = boot_acp_register(fd);
-    if (!$VMS_STATUS_SUCCESS(st)) { imgact_acp_dev_close(fd); return st; }
+    if (!$VMS_STATUS_SUCCESS(st)) { kif_xport_dev_close(fd); return st; }
 
     st = boot_acp_assign(fd, BOOT_SYSDISK_UNIT, &chan);
-    if (!$VMS_STATUS_SUCCESS(st)) { imgact_acp_dev_close(fd); return st; }
+    if (!$VMS_STATUS_SUCCESS(st)) { kif_xport_dev_close(fd); return st; }
 
     st = boot_acp_resolve_parent(fd, chan, &d_num, &d_seq, &d_rvn, &d_nmx,
                                  fname, sizeof(fname));
     if (!$VMS_STATUS_SUCCESS(st)) {
         boot_acp_dassgn(fd, chan);
-        imgact_acp_dev_close(fd);
+        kif_xport_dev_close(fd);
         return st;
     }
 
@@ -361,15 +362,15 @@ uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
     fop.version   = 0;                        /* highest existing + 1 */
     boot_acp_strlcpy(fop.name, fname, sizeof(fop.name));
 
-    if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_FILEOP, &fop) < 0) {
+    if (kif_call(fd, KIF_SVC_ACP_FILEOP, &fop) < 0) {
         boot_acp_dassgn(fd, chan);
-        imgact_acp_dev_close(fd);
+        kif_xport_dev_close(fd);
         return SS$_NOSUCHDEV;
     }
     if (!$VMS_STATUS_SUCCESS(fop.status)) {
         st = fop.status;
         boot_acp_dassgn(fd, chan);
-        imgact_acp_dev_close(fd);
+        kif_xport_dev_close(fd);
         return st;
     }
 
@@ -389,7 +390,7 @@ uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
             rw.length = (uint32_t)(sizeof(*db) - total);
             rw.buffer = (uint64_t)(uintptr_t)(p + total);
 
-            if (imgact_acp_dev_ioctl(fd, VMS_IOCTL_ACP_WRITEVBLK, &rw) < 0) {
+            if (kif_call(fd, KIF_SVC_ACP_WRITEVBLK, &rw) < 0) {
                 st = SS$_ABORT;
                 break;
             }
@@ -410,6 +411,6 @@ uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
 
     boot_acp_deaccess(fd, chan);
     boot_acp_dassgn(fd, chan);
-    imgact_acp_dev_close(fd);
+    kif_xport_dev_close(fd);
     return st;
 }

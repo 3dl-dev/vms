@@ -12,7 +12,9 @@
 # emits: the cross assembler only resolves "label+8" (the procedure-value half
 # of the linkage pair) against a label of that form.
 #
-# Usage: mk_vms_vector_shr.sh <LINK.EXE> <manifest.vec> <out.EXE> <dir-of-use-images>
+# Usage: mk_vms_vector_shr.sh <LINK.EXE> <manifest.vec> <out.EXE> <dir-of-use-images>[:<dir>...]
+# Each '# use' image is taken from the first of the colon-separated directories
+# that holds it.
 # Env: ALPHA_CC (alpha-dec-vms-gcc).
 set -e
 LINK_EXE=${1:?usage: mk_vms_vector_shr.sh <LINK.EXE> <manifest.vec> <out.EXE> <usedir>}
@@ -90,8 +92,12 @@ done
 
 USE_ARGS=""
 for u in $USES; do
-    [ -f "$USEDIR/$u" ] || { echo "mk_vms_vector_shr: --use image $USEDIR/$u missing" >&2; exit 2; }
-    USE_ARGS="$USE_ARGS --use $USEDIR/$u"
+    f=""
+    for d in $(echo "$USEDIR" | tr ':' ' '); do
+        [ -f "$d/$u" ] && { f="$d/$u"; break; }
+    done
+    [ -n "$f" ] || { echo "mk_vms_vector_shr: --use image $u missing from $USEDIR" >&2; exit 2; }
+    USE_ARGS="$USE_ARGS --use $f"
 done
 # shellcheck disable=SC2086
 "$LINK_EXE" --shareable --symbol-vector "$SV" --gsmatch "$GSMATCH" $USE_ARGS \

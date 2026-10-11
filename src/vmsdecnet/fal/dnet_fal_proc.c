@@ -24,7 +24,7 @@
 #include "vms_kif.h"
 #include "vms/logical.h"     /* lnm_define_login_logicals (SYS$LOGIN)        */
 
-#define FAL_IMAGE_SPEC "SYS$SYSTEM:FAL.EXE"
+#define FAL_IMAGE_SPEC DNET_FAL_IMAGE_SPEC
 
 /* $SETDDIR (src/libvms/syssvc/sys_misc.c). Declared here: starlet.h carries no
  * prototype (a corpus program declares its own, conflicting one), and the

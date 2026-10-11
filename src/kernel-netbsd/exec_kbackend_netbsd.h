@@ -80,6 +80,7 @@
 #include <sys/condvar.h>   /* kcondvar_t, cv_* */
 #include <sys/kmem.h>      /* kmem_alloc/zalloc/free, KM_SLEEP/KM_NOSLEEP */
 #include <sys/proc.h>      /* struct proc, curproc, proc_find, p_pid (Phase F) */
+#include <sys/signalvar.h> /* psignal (exec_task_signal, rd vms-8e9) */
 #include <sys/resourcevar.h> /* calcru, struct pstats {p_ru, p_start} (vms-6cac).
                               * rbtree-CLEAN (pulls only sys/mutex.h + sys/resource.h),
                               * so it is safe in this shared header -- unlike
@@ -581,6 +582,28 @@ exec_task_unpin(exec_task_pin_t *pin)
 	 * there is nothing else to drop. exec_free tolerates NULL.
 	 */
 	exec_free(pin);
+}
+
+/* exec_task_signal (rd vms-8e9): deliver a process-control signal to the
+ * process behind `ref` from inside the executive, after the executive's own VMS
+ * privilege check. psignal(9) wants proc_lock held. 0, or -ESRCH when gone. */
+#define EXEC_SIG_TERM  SIGTERM
+#define EXEC_SIG_FORCE SIGUSR1
+#define EXEC_SIG_STOP  SIGSTOP
+#define EXEC_SIG_CONT  SIGCONT
+static __inline int
+exec_task_signal(exec_task_ref_t *ref, int sig)
+{
+	struct proc *p;
+
+	if (ref == NULL)
+		return -ESRCH;
+	mutex_enter(&proc_lock);
+	p = proc_find(ref->pid);
+	if (p != NULL)
+		psignal(p, sig);
+	mutex_exit(&proc_lock);
+	return p != NULL ? 0 : -ESRCH;
 }
 
 /* ---- 6. RCU-lite deferred reclaim (Phase F; see exec_kbackend.h) ----

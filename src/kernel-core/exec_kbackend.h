@@ -286,6 +286,12 @@
  *
  *   void exec_task_unpin(exec_task_pin_t *pin)   drop the exec_task_pin ref.
  *
+ *   int  exec_task_signal(exec_task_ref_t *ref, int sig)   (rd vms-8e9)
+ *        deliver EXEC_SIG_TERM / _FORCE / _STOP / _CONT to the whole process
+ *        behind `ref`, from inside the executive, after the executive's own
+ *        VMS privilege check. 0, or -ESRCH when the process is gone. Linux:
+ *        kill_pid(ref, sig, 1); NetBSD: psignal(9) under proc_lock.
+ *
  * 6. RCU-lite deferred reclaim  (Phase F). The process hash has LOCKLESS
  *    readers (vms_module.c's vms_proc_find walks it under an RCU read section,
  *    no table lock), so an unlinked PCB must not be freed until every such

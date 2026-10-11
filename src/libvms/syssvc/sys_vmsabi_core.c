@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dcdef.h"
 #include "descrip.h"
 #include "lnmdef.h"
 #include "ssdef.h"
@@ -151,6 +152,24 @@ void ovmx_vmsabi_io_complete(uint32_t efn, void (*astadr)(unsigned long long), u
         sys$setef(efn);
     if (astadr)
         astadr(astprm);
+}
+
+extern int vms$$chan_is_mailbox(uint16_t chan);
+
+/* The same classification OVMX's own $QIO makes (sys_qio.c
+ * qio_chan_is_terminal): the executive's device record for the channel. */
+int ovmx_vmsabi_chan_is_record_device(uint16_t chan)
+{
+    if (vms$$chan_is_mailbox(chan))
+        return 1;
+    uint32_t ec = vms$$chan_exec_chan(chan);
+    if (ec == 0)
+        return 0;
+    struct vms_devinfo info;
+    memset(&info, 0, sizeof info);
+    if (!(vms_kif_getdvi_chan(ec, &info) & 1))
+        return 0;
+    return info.devclass == DC$_TERM || info.devclass == DC$_MAILBOX;
 }
 
 uint32_t ovmx_vmsabi_qio(int wait, uint32_t efn, uint16_t chan, uint32_t func,
@@ -348,6 +367,34 @@ uint32_t ovmx_vmsabi_idtoasc(uint32_t id, uint16_t *namlen, char *out, unsigned 
     struct dsc$descriptor_s d;
     mkdsc(&d, out, cap);
     return sys$idtoasc(id, namlen, out ? &d : NULL, resid, attrib, ctx);
+}
+
+uint32_t ovmx_vmsabi_chkpro(int have_list, const struct ovmx_abi_item *items, unsigned n,
+                            const struct ovmx_abi_str *objpro,
+                            const struct ovmx_abi_str *subjpro)
+{
+    struct dsc$descriptor_s o, s;
+    struct item_list_3 *il = NULL;
+    if (have_list && !(il = items_native(items, n)))
+        return SS$_INSFMEM;
+    uint32_t st = sys$chkpro(il, dsc_of(&o, objpro), dsc_of(&s, subjpro));
+    free(il);
+    return st;
+}
+
+uint32_t ovmx_vmsabi_create_user_profile(const struct ovmx_abi_str *usrnam, int have_list,
+                                         const struct ovmx_abi_item *items, unsigned n,
+                                         uint32_t flags, void *usrpro, uint32_t *usrprolen,
+                                         uint32_t *contxt)
+{
+    struct dsc$descriptor_s u;
+    struct item_list_3 *il = NULL;
+    if (have_list && !(il = items_native(items, n)))
+        return SS$_INSFMEM;
+    uint32_t st = sys$create_user_profile(dsc_of(&u, usrnam), il, flags, usrpro, usrprolen,
+                                          contxt);
+    free(il);
+    return st;
 }
 
 uint32_t ovmx_vmsabi_grantid(int revoke, const uint32_t *pidadr,

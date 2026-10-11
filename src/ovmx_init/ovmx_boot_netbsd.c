@@ -57,6 +57,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
  * _NETBSD_SOURCE; the build passes -D_NETBSD_SOURCE (build-ovmx-init-vax.sh),
  * not redefined here. */
 #include "ovmx_boot.h"
+#include "kif_transport.h"   /* the executive transport seam (rd vms-bbde) */
 #include "ovmx_layout.h"          /* VMS_OPERATOR_LOG */
 #include "vmsfs/filespec.h"       /* vmsfs_to_linux_path for OPERATOR.LOG */
 
@@ -373,7 +374,7 @@ static enum exec_load_mode exec_load_mode(void)
 static int dev_vms_present(void)
 {
     struct stat st;
-    return stat("/dev/vms", &st) == 0 && S_ISCHR(st.st_mode);
+    return stat(kif_xport_device_path(), &st) == 0 && S_ISCHR(st.st_mode);
 }
 
 /*
@@ -426,7 +427,7 @@ static void ensure_exec_node(void)
     cmaj = getdevmajor("vms", S_IFCHR);  /* ask the kernel for the REAL major */
     if (cmaj == NODEVMAJOR)
         return;                          /* driver not registered -> no node */
-    (void)mknod("/dev/vms", S_IFCHR | 0666, makedev(cmaj, 0));
+    (void)mknod(kif_xport_device_path(), S_IFCHR | 0666, makedev(cmaj, 0));
 }
 
 int ovmx_boot_load_module(const char *name)
@@ -478,7 +479,12 @@ int ovmx_boot_load_module(const char *name)
 
 int ovmx_boot_open_executive(void)
 {
-    return open("/dev/vms", O_RDWR | O_CLOEXEC);
+    int fd = kif_xport_dev_open();    /* the transport seam (rd vms-bbde) */
+    if (fd < 0) {
+        errno = -fd;                  /* the transport reports a negative errno */
+        return -1;
+    }
+    return fd;
 }
 
 const char *ovmx_boot_system_disk_dev(void)

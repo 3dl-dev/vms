@@ -679,6 +679,16 @@ if(BUILD_TESTS)
     set_tests_properties(dlm_hash_heldout_run_predictions PROPERTIES
         LABELS "integration;cluster;authenticity" TIMEOUT 60)
 
+    # rd vms-bbde: userspace reaches the executive ONLY through the libvmssys
+    # transport seam -- no VMS_IOCTL_* request and no "/dev/vms" node named in
+    # src/ outside libvmssys and the executive. A code property of the tree
+    # (tools/ci/check_transport_seam.py), with its own negative controls.
+    add_test(NAME transport_seam_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_transport_seam.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(transport_seam_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
     # GitHub ran ZERO jobs with no error anywhere in the UI or API). Pure

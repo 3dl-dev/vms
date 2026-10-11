@@ -1424,6 +1424,7 @@ long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
 

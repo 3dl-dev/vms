@@ -18,7 +18,7 @@ showed (rendered, masked) between that keystroke and the next. A step differs
 when OVMX showed anything else -- an echo that came early, a ^U that printed
 backspaces instead of a fresh prompt, an *INTERRUPT* that never appeared.
 
-It is a RATCHET, like semantic_diff.py: docs/oracle/keystroke/known-diff.txt
+It is a RATCHET, like semantic_diff.py: docs/oracle/keystroke/known-diff.d/
 lists "<CASE> <STEP>  # <rd item>: <why>" lines whose OVMX result is known to
 differ. The gate FAILS when
   * a step differs (or is missing from the OVMX transcript) and is NOT listed,
@@ -30,8 +30,8 @@ So the list can only shrink.
   ksdiff.py <ovmx-transcript-dir> --report      every step, classified, with diffs
   ksdiff.py --selftest                          prove the gate can go red
   ksdiff.py --goldens                           check the goldens are well formed
-  ksdiff.py --known                             check known-diff.txt names real steps + rd items
-  ksdiff.py <dir> --write-known                 (re)write known-diff.txt (keeps reasons)
+  ksdiff.py --known                             check known-diff.d/ names real steps + rd items
+  ksdiff.py <dir> --write-known                 (re)write known-diff.d/ (keeps reasons)
 """
 import difflib
 import os
@@ -43,7 +43,7 @@ sys.path.insert(0, HERE)
 import ksplay  # noqa: E402  (the case language + the symmetric mask)
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 GOLD = os.path.join(ROOT, "docs", "oracle", "keystroke")
-KNOWN = os.path.join(GOLD, "known-diff.txt")
+KNOWN = os.path.join(GOLD, "known-diff.d")
 REF_ORDER = ("alpha84", "vax73")
 STEP_RE = re.compile(r"^=== STEP (\S+)( .*)?$")
 
@@ -86,11 +86,46 @@ def goldens():
     return out
 
 
+# A KNOWN-DIFF LIST IS A DIRECTORY (conflict-free ratchet): <name>.d/ holds one
+# file per entry, named "<a>-<b>", whose one line is the entry itself
+# ("<a> <b>  # <rd item>: <why>"). Two PRs that add or delete different entries
+# touch different files and never conflict. A plain file is still read (an
+# explicit --known FILE). Comment-only files (README) are ignored.
+def _entry_lines(path):
+    if os.path.isdir(path):
+        for fn in sorted(os.listdir(path)):
+            fp = os.path.join(path, fn)
+            if os.path.isfile(fp):
+                for ln in open(fp):
+                    yield ln
+    elif os.path.exists(path):
+        for ln in open(path):
+            yield ln
+
+
+def _write_entries(path, entries):
+    """entries: list of (a, b, line). A directory gets one file per entry (stale
+    entry files removed, README kept); a file is rewritten whole."""
+    if os.path.isdir(path) or path.endswith(".d"):
+        os.makedirs(path, exist_ok=True)
+        want = {}
+        for a, b, line in entries:
+            want["%s-%s" % (a, b)] = line
+        for fn in os.listdir(path):
+            if fn != "README" and fn not in want:
+                os.remove(os.path.join(path, fn))
+        for fn, line in want.items():
+            with open(os.path.join(path, fn), "w") as f:
+                f.write(line + "\n")
+        return
+    with open(path, "w") as f:
+        for _, _, line in entries:
+            f.write(line + "\n")
+
+
 def read_known(path=KNOWN):
     known = {}
-    if not os.path.exists(path):
-        return known
-    for n, ln in enumerate(open(path), 1):
+    for n, ln in enumerate(_entry_lines(path), 1):
         body = ln.split("#", 1)[0].strip()
         if not body:
             continue
@@ -151,10 +186,10 @@ def gate(rows, known, gold=None):
         seen.add((case, step))
         k = (case, step)
         if verdict != "MATCH" and k not in known:
-            errs.append("NEW DIFFERENCE  %s %s (%s) -- fix OVMX, or list it in known-diff.txt with an rd item"
+            errs.append("NEW DIFFERENCE  %s %s (%s) -- fix OVMX, or list it in known-diff.d/ with an rd item"
                         % (case, step, verdict))
         if verdict == "MATCH" and k in known:
-            errs.append("NOW MATCHES     %s %s -- delete its known-diff.txt line (the ratchet only shrinks)"
+            errs.append("NOW MATCHES     %s %s -- delete its known-diff.d/ entry (the ratchet only shrinks)"
                         % (case, step))
     for k in known:
         if k not in seen:
@@ -179,19 +214,22 @@ def report(rows, known):
 
 def write_known(rows, known):
     lines = [
-        "# known-diff.txt - the keystroke-oracle ratchet (rd vms-370).",
+        "# known-diff.d - the keystroke-oracle ratchet (rd vms-370); one file per entry.",
         "# \"<CASE> <STEP>  # <rd item>: <why>\" -- a step whose OVMX terminal output is KNOWN to",
         "# differ from real OpenVMS (docs/oracle/keystroke/<CASE>/). Read by",
         "# tools/oracle/keystroke/ksdiff.py: an unlisted difference fails the gate, and so does",
-        "# a listed step that now matches. Fix the bug, delete the line.",
+        "# a listed step that now matches. Fix the bug, delete the entry's file.",
     ]
+    ents = []
     for case, step, verdict, *_ in rows:
         if verdict != "MATCH":
             why = known.get((case, step), "vms-4eba: OVMX has no VMS terminal driver")
-            lines.append("%s %s  # %s" % (case, step, why))
-    with open(KNOWN, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    print("wrote %s (%d entries)" % (KNOWN, len(lines) - 5))
+            ents.append((case, step, "%s %s  # %s" % (case, step, why)))
+    _write_entries(KNOWN, ents)
+    if os.path.isdir(KNOWN):
+        with open(os.path.join(KNOWN, "README"), "w") as f:
+            f.write("\n".join(lines) + "\n")
+    print("wrote %s (%d entries)" % (KNOWN, len(ents)))
 
 
 def check_goldens():

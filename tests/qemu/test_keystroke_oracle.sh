@@ -6,7 +6,7 @@
 # the same timing the scripts were played into the console of real OpenVMS VAX
 # V7.3 / Alpha V8.4 nodes. Then diffs what the terminal showed, step by step,
 # against those goldens (docs/oracle/keystroke/<CASE>/) through the known-diff
-# ratchet (docs/oracle/keystroke/known-diff.txt): a difference that is not
+# ratchet (docs/oracle/keystroke/known-diff.d/): a difference that is not
 # listed fails, and so does a listed one that now matches.
 #
 # Runs on the CI HOST (python3; stdlib only). The guest runs in the ovmx-boot

@@ -2161,7 +2161,7 @@ EOF
     grep -aE "NATIVE-PROOF:|NATIVE-SP:|OVMX-NATIVE|OVMX-SEAM:|%DCL-|-CLI-|%IMGACT|-IMGACT|-SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     # Each family's transcript, cut from the console between its SEMPROBE
     # markers, against the golden that same image printed on OpenVMS Alpha
-    # V8.4, under the native ratchet docs/oracle/semantics/known-diff-native-alpha.txt.
+    # V8.4, under the native ratchet docs/oracle/semantics/known-diff-native-alpha.d.
     _spok=1
     if grep -aq "^NATIVE-SP:" "$WORK/modgpA.log"; then
       echo "  native: the probe session did not complete:" >&2
@@ -2179,7 +2179,7 @@ EOF
       python3 "$REPO/tools/oracle/semantic/semantic_diff.py" --selftest >/dev/null \
         || { echo "  native: semantic_diff selftest failed" >&2; _spok=0; }
       python3 "$REPO/tools/oracle/semantic/semantic_diff.py" "$_td" \
-          --known "$REPO/docs/oracle/semantics/known-diff-native-alpha.txt" --families "$_spfams" \
+          --known "$REPO/docs/oracle/semantics/known-diff-native-alpha.d" --families "$_spfams" \
         || _spok=0
     fi
     if [ "$_spok" = 1 ] && assert_native "$WORK/modgpA.log"; then

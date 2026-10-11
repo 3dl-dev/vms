@@ -1,0 +1,1 @@
+prc PRC.SELF.COUNT1  # vms-ea42: JPI$_PRCCNT -- the executive row does not record a process's owner, so its subprocesses are not counted

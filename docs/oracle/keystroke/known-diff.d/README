@@ -1,0 +1,7 @@
+# known-diff.d - the keystroke-oracle ratchet (rd vms-370).
+# "<CASE> <STEP>  # <rd item>: <why>" -- a step whose OVMX terminal output is KNOWN to
+# differ from real OpenVMS (docs/oracle/keystroke/<CASE>/). Read by
+# tools/oracle/keystroke/ksdiff.py: an unlisted difference fails the gate, and so does
+# a listed step that now matches. Fix the bug, delete the line. Nearly every step
+# also carries vms-fc4 (VMS record carriage control: <CR><LF><CR><NUL>$ prompts).
+# One file per entry, named "<a>-<b>"; a new or fixed difference touches only its own file.

@@ -1,0 +1,1 @@
+lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job in LNM$JOB

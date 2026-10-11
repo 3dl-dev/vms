@@ -11,7 +11,7 @@
 #      without re-capturing on the real node fails here);
 #   3. every spec generates MACRO-32 and C, and the C compiles against the
 #      OVMX headers (the OVMX probe build in distro/Dockerfile.bootable).
-#   4. known-diff.txt names only cases that exist (via --goldens + selftest).
+#   4. known-diff.d/ names only cases that exist (via --goldens + selftest).
 set -eu
 SRC=${1:-$(cd "$(dirname "$0")/../.." && pwd)}
 SEM="$SRC/tools/oracle/semantic"

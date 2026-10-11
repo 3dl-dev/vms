@@ -1,0 +1,1 @@
+mbxprot MBXP.READALL.READ  # vms-447c: READALL passes VMS's $QIO access check and the mailbox driver refuses after the IOSB is cleared (iosb=0); OVMX refuses before the IOSB (left as it was)

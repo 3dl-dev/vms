@@ -82,8 +82,37 @@ for manifest in "$VECDIR"/*.vec; do
         rc=1; continue
     fi
 
-    APP=$((LN-FN))
-    echo "OK   [$name]: $FN frozen entries intact (append-only), $APP appended, no dups"
+    # (E) THE RELEASED LIST CHANGES ONLY IN A RELEASE CUT. A universal added
+    # between releases is a fragment, <manifest>.d/<NAME> (symvec_emit.sh), so
+    # concurrent additions never conflict; tools/vmslink/vec_release_cut.sh
+    # appends the fragments here AND to the .frozen golden at the cut. An entry
+    # beyond the golden means someone appended to the released list directly.
+    if [ "$LN" -gt "$FN" ]; then
+        echo "FAIL [$name]: $((LN-FN)) entr(ies) appended to the RELEASED list outside a release cut:"
+        tail -n +"$((FN+1))" "$TMP/live" | sed 's/^/    /'
+        echo "    -> add a fragment instead: ${name%.vec}.d/<NAME> holding its CLASS"
+        rc=1; continue
+    fi
+
+    # (D) the fragments assemble: valid classes, no name the released list has.
+    if [ -d "${manifest%.vec}.d" ]; then
+        if ! sh "$VECDIR/symvec_emit.sh" "$manifest" > "$TMP/emit" 2> "$TMP/emit.err"; then
+            echo "FAIL [$name]: its fragments do not assemble:"
+            sed 's/^/    /' "$TMP/emit.err"
+            rc=1; continue
+        fi
+        NF=$(ls "${manifest%.vec}.d" | wc -l | tr -d ' ')
+    else
+        NF=0
+    fi
+    echo "OK   [$name]: $FN released entries intact (append-only, only at a cut), $NF unreleased fragment(s), no dups"
+done
+
+# (F) VMS-ORDINAL VECTORS are pinned to VMS's offsets: no fragments, ever.
+for vd in "$VECDIR"/vms_vectors/*.d; do
+    [ -d "$vd" ] || continue
+    echo "FAIL: $vd -- a VMS-ordinal vector takes no fragments (its entries carry VMS's own offsets)"
+    rc=1
 done
 
 if [ "$found" -eq 0 ]; then
@@ -106,5 +135,5 @@ if [ -d "$TESTDIR" ] || [ -d "$VECDIR" ]; then
     fi
 fi
 
-[ "$rc" -eq 0 ] && echo "PASS: symbol vectors are frozen + append-only + single-sourced"
+[ "$rc" -eq 0 ] && echo "PASS: symbol vectors are frozen + append-only (at release cuts) + single-sourced"
 exit "$rc"

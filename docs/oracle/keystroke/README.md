@@ -29,7 +29,7 @@ line, the login and logout look -- byte for byte.
    and `@squeeze` (collapse a steady stream's repeated lines) are applied to both
    sides at compare time. OVMX is compared with the **Alpha V8.4** golden; VAX is the
    fallback, and steps where VAX and Alpha differ are reported ARCH-DIVERGENT.
-5. **The ratchet** -- `known-diff.txt` lists every step known to differ, each with the
+5. **The ratchet** -- `known-diff.d/` lists every step known to differ, each with the
    rd item that tracks it. An unlisted difference fails; so does a listed step that
    now matches. The list only shrinks.
 

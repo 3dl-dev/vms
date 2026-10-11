@@ -1,0 +1,1 @@
+prc PRC.JPI.SUB  # vms-ea42: JPI$_STATE (no executive scheduler state, the vms-8019 §5.1 ruling), JPI$_OWNER / MASTER_PID (owner and job root not in the executive row), JPI$_PRIB (no OVMX priority)

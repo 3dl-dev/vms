@@ -1,0 +1,6 @@
+# known-diff.d - the semantic-oracle ratchet (rd vms-8d1).
+# "<family> <CASE-ID>  # <rd item>: <why>" -- a case whose OVMX result is KNOWN to
+# differ from real OpenVMS (docs/oracle/semantics/<family>/). Read by
+# tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
+# and so does a listed case that now matches. Fix the bug, delete the line.
+# One file per entry, named "<a>-<b>"; a new or fixed difference touches only its own file.

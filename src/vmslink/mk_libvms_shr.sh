@@ -196,8 +196,12 @@ MANIFEST=${LIBVMS_VEC:-$HERE/libvms_shr.vec}
 [ -s "$WORK/disc.vec" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector (no T/D symbols?)"; exit 1; }
 cut -d= -f1 "$WORK/disc.vec" | sort -u > "$WORK/disc.names"
 
-# Frozen manifest entries in file order (strip `#` comments + whitespace/blanks).
-sed 's/#.*//' "$MANIFEST" | sed 's/[[:space:]]//g' | grep -v '^$' > "$WORK/frozen.vec"
+# The released list in index order, then any unreleased fragments
+# (libvms_shr.d/<NAME>) sorted by name -- the one assembly symvec_emit.sh does.
+# (symvec_emit.sh prints no trailing newline: add one, or the last entry runs
+# into the first appended one when the two lists are concatenated below.)
+{ sh "$HERE/symvec_emit.sh" "$MANIFEST"; echo; } | tr ',' '\n' | grep -v '^$' > "$WORK/frozen.vec"
+[ -s "$WORK/frozen.vec" ] || { echo "mk_libvms_shr: FAIL: manifest did not assemble"; exit 1; }
 cut -d= -f1 "$WORK/frozen.vec" | sort -u > "$WORK/frozen.names"
 
 # Every frozen NON-retired universal must still be defined. A vanished one is
@@ -238,9 +242,13 @@ NAPPEND=$(wc -l < "$WORK/append.vec" | tr -d ' ')
 NPROC=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=PROCEDURE' || true)
 NDATA=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=DATA' || true)
 echo "mk_libvms_shr: symbol vector: $NFROZEN frozen + $NAPPEND appended = $NPROC PROCEDURE + $NDATA DATA universals"
+# The release cut pins these (tools/vmslink/vec_release_cut.sh --libvms-append):
+# they are written beside the image. Between releases their indices are
+# tree-local, like a fragment's.
+cp "$WORK/append.vec" "$OUT.append.vec" 2>/dev/null || true
 if [ "$NAPPEND" -gt 0 ]; then
-    echo "mk_libvms_shr: NOTE: $NAPPEND universal(s) appended BEYOND the frozen manifest."
-    echo "mk_libvms_shr:   Append these lines to $MANIFEST (and libvms_shr.vec.frozen) to lock their indices:"
+    echo "mk_libvms_shr: NOTE: $NAPPEND universal(s) beyond the released list, sorted by name (unreleased;"
+    echo "mk_libvms_shr:   the release cut pins them from $OUT.append.vec):"
     sed 's/^/    /' "$WORK/append.vec"
 fi
 

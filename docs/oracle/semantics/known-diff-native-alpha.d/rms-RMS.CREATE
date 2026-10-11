@@ -1,0 +1,1 @@
+rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0 (same as the Linux gate)

@@ -33,7 +33,7 @@ given input, including the edge and error cases a manual reading gets wrong.
    golden (the newest real system, 64-bit like OVMX's x86_64 runtime; VAX is the
    fallback for a family with no Alpha golden). Cases where VAX and Alpha themselves
    differ are reported as ARCH-DIVERGENT.
-5. **The ratchet** — `known-diff.txt` lists every case known to differ, each with the
+5. **The ratchet** — `known-diff.d/` lists every case known to differ, each with the
    rd item that tracks the bug. An unlisted difference fails the gate; so does a
    listed case that now matches. The list only shrinks.
 

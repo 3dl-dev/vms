@@ -7,8 +7,4 @@
 # tools/oracle/semantic/semantic_diff.py --known: an unlisted difference fails
 # the gate, and so does a listed case that now matches. Fix the bug, delete the
 # line.
-ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS (same as the Linux gate)
-info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive (same as the Linux gate)
-lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job (same as the Linux gate)
-rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0 (same as the Linux gate)
-rms RMS.OPEN  # vms-0a2: as RMS.CREATE
+# One file per entry, named "<a>-<b>"; a new or fixed difference touches only its own file.

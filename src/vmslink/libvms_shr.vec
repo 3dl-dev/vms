@@ -29,10 +29,18 @@
 # (docs/design-link-native-toolchain.md §5, from the public VSI OpenVMS Linker
 # Utility Manual — clean-room, CLAUDE.md Rule 8).
 #
+# RELEASED LIST + FRAGMENTS (conflict-free additions). This file is the RELEASED
+# vector: it changes only in a release cut (tools/vmslink/vec_release_cut.sh),
+# which appends here AND to the .frozen golden. A universal added between
+# releases is one file, libvms_shr.d/<NAME>, holding its CLASS -- a new file never
+# conflicts with another PR's. symvec_emit.sh assembles this list, then the
+# fragments sorted by name; their indices are tree-local until the cut pins them
+# (every image that binds them is built from the same tree).
+#
 # ENFORCEMENT. tests/integration/test_symvec_freeze.sh checks libvms_shr.vec.frozen
 # is still an exact ordered prefix of this file and that no name repeats; the
 # native-link graph (run_libvms_native.sh / link_native_graph) proves the BUILT
-# .vms$sv reproduces this order. Reorder or drop -> RED; append -> GREEN.
+# .vms$sv reproduces this order. Reorder or drop -> RED; an append outside a release cut -> RED.
 #
 # FORMAT: one `NAME=CLASS` per line (CLASS = PROCEDURE|DATA|PRIVATE_PROCEDURE|
 # PRIVATE_DATA). `#` comments and blank lines are ignored.
@@ -474,6 +482,3 @@ sys$format_acl=PROCEDURE
 sys$grantid=PROCEDURE
 sys$revokid=PROCEDURE
 sys$create_user_profile=PROCEDURE
-# vms-b71: SYS$GETLKI/GETLKIW over the executive's GETLKI ioctl. APPENDED.
-sys$getlki=PROCEDURE
-sys$getlkiw=PROCEDURE

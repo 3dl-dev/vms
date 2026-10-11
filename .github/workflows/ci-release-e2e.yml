@@ -112,7 +112,7 @@ jobs:
       # the real executive, and diffs each transcript against the transcript the
       # SAME probe printed on a real OpenVMS node (docs/oracle/semantics/). A
       # ratchet like the constants gate: a difference not in
-      # docs/oracle/semantics/known-diff.txt fails, and so does a listed
+      # docs/oracle/semantics/known-diff.d/ fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Semantic oracle — OVMX services vs real OpenVMS (vms-8d1)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -132,7 +132,7 @@ jobs:
       # real OpenVMS VAX V7.3 / Alpha V8.4 node, and diffs what the terminal
       # showed, step by step, against those goldens (docs/oracle/keystroke/).
       # A ratchet like the semantic oracle: a difference not in
-      # docs/oracle/keystroke/known-diff.txt fails, and so does a listed
+      # docs/oracle/keystroke/known-diff.d/ fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}

@@ -1,0 +1,1 @@
+prc PRC.NOIMAGE.STATE  # vms-ea42: a hibernating process with a missing image is run down at once (OpenVMS keeps it until $WAKE fails activation), and JPI$_STATE

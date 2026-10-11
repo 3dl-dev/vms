@@ -14,7 +14,7 @@ Where VAX and Alpha themselves disagree the case is reported as ARCH-DIVERGENT
 (informational: the reference still decides).
 
 It is a RATCHET, like tools/compat/check_oracle_constants.py:
-docs/oracle/semantics/known-diff.txt lists "<family> <CASE-ID>" lines (with an rd
+docs/oracle/semantics/known-diff.d/ holds "<family> <CASE-ID>" entries, one file each, (with an rd
 item in a trailing comment) whose OVMX result is known to differ from the
 golden. The gate FAILS when
   * a case differs (or is missing from the OVMX transcript) and is NOT listed, or
@@ -26,7 +26,7 @@ So the list can only shrink.
   semantic_diff.py <ovmx-transcript-dir> --report      every case, classified
   semantic_diff.py --selftest                          prove the gate can go red
   semantic_diff.py --goldens                           check goldens are well formed
-  semantic_diff.py <dir> --write-known                 (re)write known-diff.txt
+  semantic_diff.py <dir> --write-known                 (re)write known-diff.d/
   semantic_diff.py <dir> --known FILE --families a,b   another ratchet, these families only
 """
 import hashlib
@@ -37,7 +37,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 GOLD = os.path.join(ROOT, "docs", "oracle", "semantics")
-KNOWN = os.path.join(GOLD, "known-diff.txt")
+KNOWN = os.path.join(GOLD, "known-diff.d")
 CASE_RE = re.compile(r"^([A-Z0-9][A-Z0-9_.$-]*)(?: (.*))?$")
 
 
@@ -83,14 +83,50 @@ def reference(g):
     return g.get("alpha84") or g.get("vax73")
 
 
+# A KNOWN-DIFF LIST IS A DIRECTORY (conflict-free ratchet): <name>.d/ holds one
+# file per entry, named "<a>-<b>", whose one line is the entry itself
+# ("<a> <b>  # <rd item>: <why>"). Two PRs that add or delete different entries
+# touch different files and never conflict. A plain file is still read (an
+# explicit --known FILE). Comment-only files (README) are ignored.
+def _entry_lines(path):
+    if os.path.isdir(path):
+        for fn in sorted(os.listdir(path)):
+            fp = os.path.join(path, fn)
+            if os.path.isfile(fp):
+                for ln in open(fp):
+                    yield ln
+    elif os.path.exists(path):
+        for ln in open(path):
+            yield ln
+
+
+def _write_entries(path, entries):
+    """entries: list of (a, b, line). A directory gets one file per entry (stale
+    entry files removed, README kept); a file is rewritten whole."""
+    if os.path.isdir(path) or path.endswith(".d"):
+        os.makedirs(path, exist_ok=True)
+        want = {}
+        for a, b, line in entries:
+            want["%s-%s" % (a, b)] = line
+        for fn in os.listdir(path):
+            if fn != "README" and fn not in want:
+                os.remove(os.path.join(path, fn))
+        for fn, line in want.items():
+            with open(os.path.join(path, fn), "w") as f:
+                f.write(line + "\n")
+        return
+    with open(path, "w") as f:
+        for _, _, line in entries:
+            f.write(line + "\n")
+
+
 def load_known(path=KNOWN):
     known = {}
-    if os.path.exists(path):
-        for ln in open(path):
-            s = ln.split("#", 1)[0].strip()
-            if s:
-                fam, case = s.split()
-                known[(fam, case)] = ln.rstrip("\n")
+    for ln in _entry_lines(path):
+        s = ln.split("#", 1)[0].strip()
+        if s:
+            fam, case = s.split()
+            known[(fam, case)] = ln.rstrip("\n")
     return known
 
 
@@ -198,19 +234,23 @@ def check_goldens():
 def write_known(tdir):
     rows = classify(tdir)
     old = load_known()
-    with open(KNOWN, "w") as f:
-        f.write(HEADER)
-        for fam, case, verdict, robs, o, v in rows:
-            if verdict != "MATCH":
-                prev = old.get((fam, case))
-                f.write((prev if prev else "%s %s  # %s" % (fam, case, verdict)) + "\n")
+    ents = []
+    for fam, case, verdict, robs, o, v in rows:
+        if verdict != "MATCH":
+            prev = old.get((fam, case))
+            ents.append((fam, case, prev if prev else "%s %s  # %s" % (fam, case, verdict)))
+    _write_entries(KNOWN, ents)
+    if os.path.isdir(KNOWN):
+        with open(os.path.join(KNOWN, "README"), "w") as f:
+            f.write(HEADER)
 
 
-HEADER = """# known-diff.txt - the semantic-oracle ratchet (rd vms-8d1).
+HEADER = """# known-diff.d - the semantic-oracle ratchet (rd vms-8d1).
 # "<family> <CASE-ID>  # <rd item>: <why>" -- a case whose OVMX result is KNOWN to
 # differ from real OpenVMS (docs/oracle/semantics/<family>/). Read by
 # tools/oracle/semantic/semantic_diff.py: an unlisted difference fails the gate,
-# and so does a listed case that now matches. Fix the bug, delete the line.
+# and so does a listed case that now matches. Fix the bug, delete the entry's file.
+# One file per entry: "<family>-<CASE-ID>".
 """
 
 

@@ -251,8 +251,79 @@ static int v_put_output(void *msg)
 	TRACE("LIB$PUT_OUTPUT -> %#x", st);
 	return st;
 }
+/* LIBRTL routines whose optional or counted arguments OVMX's C entry takes
+ * differently: read from the image's argument list (NATIVE_ARGLIST). */
+static int v_get_vm(void)
+{
+	NATIVE_ARGLIST(ap);
+	return (int)lib$get_vm(NPTR(ap, 1), NPTR(ap, 2), (const uint32_t *)NPTR(ap, 3));
+}
+static int v_free_vm(void)
+{
+	NATIVE_ARGLIST(ap);
+	return (int)lib$free_vm(NPTR(ap, 1), NPTR(ap, 2), (const uint32_t *)NPTR(ap, 3));
+}
+static int v_str_position(void)
+{
+	NATIVE_ARGLIST(ap);
+	return (int)str$position(NPTR(ap, 1), NPTR(ap, 2), NPTR(ap, 3));
+}
+/* STR$CONCAT dest, src1 [, src2 ...]: the argument count says how many
+ * sources (up to 254); OVMX's C entry ends its list with a null pointer. */
+static int v_str_concat(void)
+{
+	NATIVE_ARGLIST(ap);
+	unsigned n = ap[0] & 0xFFu;
+	const struct dsc$descriptor_s *s[17];
+	unsigned k = 0;
+	if (n < 2)
+		return 0x110;          /* SS$_INSFARG, insufficient call arguments */
+	if (n - 1 > 16)
+		return SS$_BADPARAM;   /* more sources than OVMX's C entry takes */
+	for (unsigned i = 2; i <= n; i++)
+		s[k++] = NPTR(ap, i);
+	while (k < 17)
+		s[k++] = 0;
+	return (int)(str$concat)(NPTR(ap, 1), s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+				 s[8], s[9], s[10], s[11], s[12], s[13], s[14], s[15], s[16]);
+}
 static const struct vent librtl_tv[] = {
 	{ 0x478, (rtn_t)v_put_output, "LIB$PUT_OUTPUT" },
+	/* The routines the rtl semantic-oracle probe calls; offsets from
+	 * docs/oracle/vax73-symvec-offsets.txt. Where the argument lists agree,
+	 * the entry is OVMX's routine itself. */
+	{ 0x328, (rtn_t)lib$delete_symbol,        "LIB$DELETE_SYMBOL" },
+	{ 0x340, (rtn_t)lib$get_symbol,           "LIB$GET_SYMBOL" },
+	{ 0x350, (rtn_t)lib$set_symbol,           "LIB$SET_SYMBOL" },
+	{ 0x378, (rtn_t)lib$cvt_dtb,              "LIB$CVT_DTB" },
+	{ 0x380, (rtn_t)lib$cvt_htb,              "LIB$CVT_HTB" },
+	{ 0x388, (rtn_t)lib$cvt_otb,              "LIB$CVT_OTB" },
+	{ 0x3F0, (rtn_t)lib$find_file,            "LIB$FIND_FILE" },
+	{ 0x420, (rtn_t)lib$index,                "LIB$INDEX" },
+	{ 0x438, (rtn_t)lib$locc,                 "LIB$LOCC" },
+	{ 0x458, (rtn_t)lib$matchc,               "LIB$MATCHC" },
+	{ 0x4A0, (rtn_t)lib$scopy_dxdx,           "LIB$SCOPY_DXDX" },
+	{ 0x508, (rtn_t)lib$skpc,                 "LIB$SKPC" },
+	{ 0x548, (rtn_t)v_free_vm,                "LIB$FREE_VM" },
+	{ 0x550, (rtn_t)v_get_vm,                 "LIB$GET_VM" },
+	{ 0x670, (rtn_t)str$append,               "STR$APPEND" },
+	{ 0x678, (rtn_t)str$compare,              "STR$COMPARE" },
+	{ 0x688, (rtn_t)str$compare_eql,          "STR$COMPARE_EQL" },
+	{ 0x690, (rtn_t)v_str_concat,             "STR$CONCAT" },
+	{ 0x698, (rtn_t)str$copy_dx,              "STR$COPY_DX" },
+	{ 0x6B8, (rtn_t)str$dupl_char,            "STR$DUPL_CHAR" },
+	{ 0x6C8, (rtn_t)str$find_first_in_set,    "STR$FIND_FIRST_IN_SET" },
+	{ 0x6D0, (rtn_t)str$find_first_not_in_set, "STR$FIND_FIRST_NOT_IN_SET" },
+	{ 0x700, (rtn_t)str$left,                 "STR$LEFT" },
+	{ 0x710, (rtn_t)str$len_extr,             "STR$LEN_EXTR" },
+	{ 0x720, (rtn_t)v_str_position,           "STR$POSITION" },
+	{ 0x730, (rtn_t)str$pos_extr,             "STR$POS_EXTR" },
+	{ 0x7A0, (rtn_t)lib$getdvi,               "LIB$GETDVI" },
+	{ 0x7A8, (rtn_t)lib$getjpi,               "LIB$GETJPI" },
+	{ 0x7B0, (rtn_t)lib$getsyi,               "LIB$GETSYI" },
+	{ 0x8F8, (rtn_t)lib$sys_fao,              "LIB$SYS_FAO" },
+	{ 0xA00, (rtn_t)lib$find_file_end,        "LIB$FIND_FILE_END" },
+	{ 0xAD0, (rtn_t)str$element,              "STR$ELEMENT" },
 };
 static const struct vent decc_tv[] = {
 	{ 0x380, (rtn_t)printf, "DECC$DPRINTF" },   /* D_float printf: NetBSD/vax's own */

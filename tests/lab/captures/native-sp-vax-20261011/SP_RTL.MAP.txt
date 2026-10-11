@@ -1,0 +1,263 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod nexe-vax node VAX1, captured 2026-10-11 by
+#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ SET DEFAULT SYS$LOGIN
+
+
+$ LINK/NOEXECUTABLE/MAP=SP_RTL.MAP/FULL SP_RTL
+
+
+$ TYPE SP_RTL.MAP
+
+NL:                                                             11-OCT-2026 06:04        Linker V11-50                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+SP_RTL          0                   16910 SYS$SYSROOT:[SYSMGR]SP_RTL.OBJ;1     11-OCT-2026 05:59  VAX MACRO V5.4-3
+SYS$P1_VECTOR   X-4                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     16-MAR-2001 00:59  VAX MACRO V5.4-3
+LIBRTL          V06-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      16-MAR-2001 02:47  Linker V11-38
+
+NL:[].EXE;                                                      11-OCT-2026 06:04        Linker V11-50                    Page    2
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pages   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    0    14    00000200          2   0 READ WRITE   COPY ON REF
+                   0    20    00001E00         16   0 READ ONLY     
+                   0     1    00004600         36   0 READ WRITE   FIXUP VECTORS
+                 253    20    7FFFD800          0   0 READ WRITE   DEMAND ZERO  
+
+LIBRTL             3   265    00000000-R        0   0 READ ONLY                  LIBRTL_001       LESS/EQUAL        1        14
+                   4     6    00021200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_002       LESS/EQUAL        1        14
+                   4     2    00021E00-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1        14
+                   4     8    00022200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_004       LESS/EQUAL        1        14
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! R  - Relocatable   !
+                ! P  - Protected     !
+                +--------------------+
+
+NL:[].EXE;                                                      11-OCT-2026 06:04        Linker V11-50                    Page    3
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+SP_DATA                         00000200 00001D5B 00001B5C (       7004.) LONG  2 NOPIC,USR,CON,REL,LCL,NOSHR,NOEXE,  RD,  WRT,NOVEC
+                SP_RTL          00000200 00001D5B 00001B5C (       7004.) LONG  2
+
+SP_CODE                         00001E00 000044B1 000026B2 (       9906.) LONG  2 NOPIC,USR,CON,REL,LCL,NOSHR,  EXE,  RD,NOWRT,NOVEC
+                SP_RTL          00001E00 000044B1 000026B2 (       9906.) LONG  2
+
+NL:[].EXE;                                                      11-OCT-2026 06:04        Linker V11-50                    Page    4
+
+                                                +-----------------+
+                                                ! Symbols By Name !
+                                                +-----------------+
+
+Symbol                          Value       Symbol                          Value       Symbol                          Value       
+------                          -----       ------                          -----       ------                          -----       
+GUARD_AST                       000023CC-R                                              STR$PREFIX                      00004680-RX 
+LIB$CVT_DTB                     000046A4-RX                                             STR$REPLACE                     00004684-RX 
+LIB$CVT_HTB                     000046AC-RX                                             STR$RIGHT                       00004688-RX 
+LIB$CVT_OTB                     000046A8-RX                                             STR$TRANSLATE                   0000468C-RX 
+LIB$DELETE_SYMBOL               00004698-RX                                             STR$TRIM                        00004690-RX 
+LIB$FIND_FILE                   000046B4-RX                                             STR$UPCASE                      00004694-RX 
+LIB$FIND_FILE_END               000046B0-RX                                             SYS$BINTIM                      7FFEDE58    
+LIB$FREE_VM                     000046D4-RX                                             SYS$CANTIM                      7FFEDE68    
+LIB$GETDVI                      000046DC-RX                                             SYS$EXIT                        7FFEDF40    
+LIB$GETJPI                      000046E0-RX                                             SYS$FAOL                        7FFEDF58    
+LIB$GETSYI                      000046E4-RX                                             SYS$IMGSTA                      7FFEDF68    
+LIB$GET_SYMBOL                  000046A0-RX                                             SYS$SETIMR                      7FFEE020    
+LIB$GET_VM                      000046D8-RX                                             
+LIB$INDEX                       000046B8-RX                                             
+LIB$LOCC                        000046BC-RX                                             
+LIB$MATCHC                      000046C0-RX                                             
+LIB$PUT_OUTPUT                  000046C4-RX                                             
+LIB$SCOPY_DXDX                  000046C8-RX                                             
+LIB$SET_SYMBOL                  0000469C-RX                                             
+LIB$SKPC                        000046CC-RX                                             
+LIB$SYS_FAO                     000046D0-RX                                             
+PR0                             00001E00-R                                              
+PR1                             00001E82-R                                              
+PR10                            00002298-R                                              
+PR11                            000022F1-R                                              
+PR12                            00002373-R                                              
+PR2                             00001F0F-R                                              
+PR3                             00001F68-R                                              
+PR4                             00001FCC-R                                              
+PR5                             00002043-R                                              
+PR6                             00002091-R                                              
+PR7                             0000211E-R                                              
+PR8                             000021A0-R                                              
+PR9                             00002222-R                                              
+START                           000023F2-R                                              
+STR$APPEND                      00004648-RX                                             
+STR$COMPARE                     0000464C-RX                                             
+STR$COMPARE_EQL                 00004650-RX                                             
+STR$CONCAT                      00004654-RX                                             
+STR$COPY_DX                     00004658-RX                                             
+STR$DUPL_CHAR                   0000465C-RX                                             
+STR$ELEMENT                     00004660-RX                                             
+STR$FIND_FIRST_IN_SET           00004668-RX                                             
+STR$FIND_FIRST_NOT_IN_SET       00004664-RX                                             
+STR$FREE1_DX                    0000466C-RX                                             
+STR$LEFT                        00004670-RX                                             
+STR$LEN_EXTR                    00004674-RX                                             
+STR$POSITION                    00004678-RX                                             
+STR$POS_EXTR                    0000467C-RX                                             
+
+NL:[].EXE;                                                      11-OCT-2026 06:04        Linker V11-50                    Page    5
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00001E00      R-PR0                      
+00001E82      R-PR1                      
+00001F0F      R-PR2                      
+00001F68      R-PR3                      
+00001FCC      R-PR4                      
+00002043      R-PR5                      
+00002091      R-PR6                      
+0000211E      R-PR7                      
+000021A0      R-PR8                      
+00002222      R-PR9                      
+00002298      R-PR10                     
+000022F1      R-PR11                     
+00002373      R-PR12                     
+000023CC      R-GUARD_AST                
+000023F2      R-START                    
+00004648     RX-STR$APPEND               
+0000464C     RX-STR$COMPARE              
+00004650     RX-STR$COMPARE_EQL          
+00004654     RX-STR$CONCAT               
+00004658     RX-STR$COPY_DX              
+0000465C     RX-STR$DUPL_CHAR            
+00004660     RX-STR$ELEMENT              
+00004664     RX-STR$FIND_FIRST_NOT_IN_SET
+00004668     RX-STR$FIND_FIRST_IN_SET    
+0000466C     RX-STR$FREE1_DX             
+00004670     RX-STR$LEFT                 
+00004674     RX-STR$LEN_EXTR             
+00004678     RX-STR$POSITION             
+0000467C     RX-STR$POS_EXTR             
+00004680     RX-STR$PREFIX               
+00004684     RX-STR$REPLACE              
+00004688     RX-STR$RIGHT                
+0000468C     RX-STR$TRANSLATE            
+00004690     RX-STR$TRIM                 
+00004694     RX-STR$UPCASE               
+00004698     RX-LIB$DELETE_SYMBOL        
+0000469C     RX-LIB$SET_SYMBOL           
+000046A0     RX-LIB$GET_SYMBOL           
+000046A4     RX-LIB$CVT_DTB              
+000046A8     RX-LIB$CVT_OTB              
+000046AC     RX-LIB$CVT_HTB              
+000046B0     RX-LIB$FIND_FILE_END        
+000046B4     RX-LIB$FIND_FILE            
+000046B8     RX-LIB$INDEX                
+000046BC     RX-LIB$LOCC                 
+000046C0     RX-LIB$MATCHC               
+000046C4     RX-LIB$PUT_OUTPUT           
+000046C8     RX-LIB$SCOPY_DXDX           
+000046CC     RX-LIB$SKPC                 
+
+NL:[].EXE;                                                      11-OCT-2026 06:04        Linker V11-50                    Page    6
+
+
+Value                                   Symbols...
+-----                                   ----------
+000046D0     RX-LIB$SYS_FAO              
+000046D4     RX-LIB$FREE_VM              
+000046D8     RX-LIB$GET_VM               
+000046DC     RX-LIB$GETDVI               
+000046E0     RX-LIB$GETJPI               
+000046E4     RX-LIB$GETSYI               
+7FFEDE58        SYS$BINTIM               
+7FFEDE68        SYS$CANTIM               
+7FFEDF40        SYS$EXIT                 
+7FFEDF58        SYS$FAOL                 
+7FFEDF68        SYS$IMGSTA               
+7FFEE020        SYS$SETIMR               
+
+
+
+          Key for special characters above:
+                +--------------------+
+                ! *  - Undefined     !
+                ! A  - Alias Name    !
+                ! I  - Internal Name !
+                ! U  - Universal     !
+                ! R  - Relocatable   !
+                ! X  - External      !
+                ! WK - Weak          !
+                +--------------------+
+
+NL:[].EXE;                                                      11-OCT-2026 06:04        Linker V11-50                    Page    7
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000200 000047FF 00004600 (17920. bytes, 35. pages)
+Stack size:                                             20. pages
+Image header virtual block limits:                       1.        1. (    1. block)
+Image binary virtual block limits:                       2.       36. (   35. blocks)
+Image name and identification:                     0
+Number of files:                                         4.
+Number of modules:                                       3.
+Number of program sections:                              5.
+Number of global symbols:                              327.
+Number of image sections:                                8.
+User transfer address:                            000023F2
+Debugger transfer address:                        7FFEDF68
+Number of code references to shareable images:          40.
+Image type:                                       EXECUTABLE.
+Map format:                                       FULL in file SYS$SYSROOT:[SYSMGR]SP_RTL.MAP;1
+Estimated map length:                             57. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults   CPU Time        Elapsed Time
+----------------------                            -----------   --------        ------------
+    Command processing:                                    72   00:00:00.01     00:00:00.01
+    Pass 1:                                              1465   00:00:00.05     00:00:00.05
+    Allocation/Relocation:                                 94   00:00:00.00     00:00:00.00
+    Pass 2:                                               979   00:00:00.06     00:00:00.06
+    Map data after object module synopsis:                 58   00:00:00.00     00:00:00.00
+    Symbol table output:                                    9   00:00:00.00     00:00:00.00
+Total run values:                                        2677   00:00:00.12     00:00:00.12
+
+Using a working set limited to 662 pages and 1531 pages of data storage (excluding image)
+
+Total number object records read (both passes):   294
+    of which 27 were in libraries and 3 were DEBUG data records containing 298 bytes
+230 bytes of DEBUG data were written,starting at VBN 37 with 1 blocks allocated
+
+Number of modules extracted explicitly             = 0
+    with 1 extracted to resolve undefined symbols
+
+0 library searches were for symbols not in the library searched
+
+A total of 0 global symbol table records was written
+
+LINK/NOEXECUTABLE/MAP=SP_RTL.MAP/FULL SP_RTL

@@ -122,7 +122,7 @@ wait_for() {  # pattern limit-seconds since-byte
     done
     return 1
 }
-segment_since() { tail -c "+$(($1 + 1))" "$LOG" 2>/dev/null | tr -d '\r'; }
+segment_since() { tail -c "+$(($1 + 1))" "$LOG" 2>/dev/null | tr -d '\r\000'; }
 dump_and_die() {
     echo ""; echo "=== FATAL: $1 ==="
     echo "--- full console log (\\r stripped) ---"

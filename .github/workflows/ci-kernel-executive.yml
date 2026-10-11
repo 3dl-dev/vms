@@ -1789,3 +1789,43 @@ jobs:
           path: ${{ runner.temp }}/negctl-deaths
           if-no-files-found: ignore
           retention-days: 14
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: CI / Kernel Executive / NetBSD-amd64"
+    if: ${{ always() }}
+    needs:
+      - changes
+      - kernel-executive-shard
+      - kernel-executive-devtab-terminal
+      - kernel-executive-corpus-runtime
+      - kernel-executive
+      - kernel-executive-negative-control
+      - netbsd-amd64-vms-crosscompile
+      - netbsd-amd64-prime-cache
+      - netbsd-amd64-harness
+      - netbsd-amd64-vms-pseudodev
+      - netbsd-amd64-eflag-facility
+      - netbsd-amd64-p4a-facilities-crossproc
+      - kernel-executive-facility-negative-controls-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

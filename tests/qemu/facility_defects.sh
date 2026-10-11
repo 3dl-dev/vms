@@ -594,6 +594,10 @@ acp-rights-list-not-consulted
 rights-grant-cmkrnl-not-checked
 subst-uid-may-be-zero
 subst-become-ids-not-set
+kfe-add-cmkrnl-not-checked
+kfe-keyed-on-name
+kfe-write-not-denied
+kfe-remove-copy-kept
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -629,7 +633,9 @@ getlki-grantcount-not-counted
 tt-typeahead-echoed-on-receipt
 tt-bind-privilege-ignored
 tt-port-input-dropped
-tt-console-hangup-unbinds"
+tt-console-hangup-unbinds
+tt-newline-ignores-cursor
+tt-owed-linefeed-unpaid"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1551,6 +1557,82 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    kfe-add-cmkrnl-not-checked)
+        case "$_f" in
+        facility)     echo "the executive known-file list: INSTALL ADD/REPLACE/REMOVE need CMKRNL (vms-7c64)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_kfe() decides CMKRNL on the caller's own PCB before any change to the known-file list. The mutation lets every caller through, so a process without CMKRNL installs an image (and could later give it privileges). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a process without CMKRNL: ADD is SS$_NOPRIV, FIND still reads the entry
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kfe-keyed-on-name)
+        case "$_f" in
+        facility)     echo "a known-file entry names its file by the substrate's identity of that file (vms-7c64)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "kfe_find() matches an entry by the executive's held copy (exec_file_is). The mutation matches any entry, so a file that is not an installed copy -- the caller's own source file included -- is reported installed, with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the caller's own source file is not an installed image: FIND is SS$_NOSUCHFILE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kfe-write-not-denied)
+        case "$_f" in
+        facility)     echo "an installed image is write-denied for the life of its known-file entry (Baron, vms-96e7)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_kfe_stage() denies writes to the executive's copy it holds (deny_write_access). The mutation skips the denial, so the installed copy -- and with it a /PRIVILEGED image -- could be rewritten after INSTALL (root's DAC override ignores its 0555 mode). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+opening the executive's copy for write is refused (ETXTBSY) -- even by substrate root
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kfe-remove-copy-kept)
+        case "$_f" in
+        facility)     echo "INSTALL REMOVE deletes the executive's copy of the image (vms-220)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_kfe() records the removed entry's copy and unlinks it in the executive's directory once the list lock is dropped. The mutation stops recording it, so REMOVE releases the copy but leaves the file behind. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+INSTALL REMOVE also deletes the executive's copy from its directory
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
     acp-grpprv-ignored)
         case "$_f" in
         facility)     echo "GRPPRV puts the accessor in the system category for files of its own UIC group (Files-11 ACP protection gate)";;
@@ -2127,19 +2209,21 @@ the read returns the type-ahead 'abc' and the RETURN terminator
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
-a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
-the resumed read does not write its prompt a second time
-a NOECHO read returns what was typed
-IO$M_PURGE discards the type-ahead before reading
-DELETE rubs out the last character (data 'ac')
+DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 DELETE is echoed as BS SP BS on a scope terminal
+DELETE rubs out the last character (data 'ac')
+IO$M_PURGE discards the type-ahead before reading
 ^S and ^Q (TTSYNC) are flow control, not data: the read returns 'ab'
-an escape sequence (up-arrow) neither ends the read nor lands in the line
 ^Z terminates the read
-the driver echoes *EXIT* for ^Z
-read(2) on the bound line returns the line with LF for the RETURN
+a NOECHO read returns what was typed
+a signal mid-read does not end it: the read resumes and returns the whole line 'ok'
+an escape sequence (up-arrow) neither ends the read nor lands in the line
 read(2) echoes as it consumes, like any driver read
+read(2) on the bound line returns the line with LF for the RETURN
+the driver echoes *EXIT* for ^Z
+the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF
+the resumed read does not write its prompt a second time
+two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
 EOF
                       ;;
         knock_on_why)  echo "one dropped receive path, every typed-input observation: each case that types at the line and expects a read to consume it sees its read time out with nothing (and no consumption echo). The cases that type nothing -- the bind, the NOECHO sense, the empty timed read, ^X (which expects an empty read anyway), the \$QIO write, the portless unit and the hangup -- stay green.";;
@@ -2162,6 +2246,46 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "none: it is the suite's last observation, and nothing before it hangs the console up.";;
+        esac;;
+
+    tt-newline-ignores-cursor)
+        case "$_f" in
+        facility)     echo "terminal carriage control (vms_tt.c tt_nl, rd vms-fc4): a NEW LINE is rendered for where the cursor is -- CR at a fresh line, LF where a record left its line feed owed, CR LF mid-line -- as the VAX V7.3 console does (probes docs/oracle/keystroke-probes/CC.*)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_nl() renders a new line at a FRESH cursor as a bare CR (\`case TT_POS_FRESH: tt_out1(tt, CH_CR);       break;\`): the line already advanced. The mutation renders it as CR LF regardless -- the Unix rendering, which double-spaces every record that follows an echoed RETURN (the keystroke oracle's blank lines between a command and its output). Non-fatal: one more byte into the echo buffer. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ 
+DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
+EOF
+                      ;;
+        knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;
+        esac;;
+
+    tt-owed-linefeed-unpaid)
+        case "$_f" in
+        facility)     echo "terminal carriage control (vms_tt.c vms_tt_read, rd vms-fc4): a read that echoes first pays the line feed a record left owed, so its prompt starts on the next line; a NOECHO read does not (probes CC.MIX A2 vs N3)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_read() pays an owed line feed before the prompt when the read echoes (\`if (tt->pos == TT_POS_CR && tt_echoing(tt))\`). The mutation never pays it, so a prompt after program output overprints the output's last line (its CR already returned the carriage). Non-fatal: one byte fewer. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+DCL's prompt after a record: the owed <LF>, then <CR><NUL>$ 
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the payment happens only at the start of a read after a record, which only the named check observes";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -8178,6 +8302,14 @@ apply_edit() {
         sed -i 's|^        uint32_t cand = OVMX_SUBST_UID_BASE + (vms_subst_next++ % OVMX_SUBST_UID_SPAN);$|        uint32_t cand = (vms_subst_next++ % OVMX_SUBST_UID_SPAN); /* NEGCTL subst-uid-may-be-zero */|' "$_file";;
     subst-become-ids-not-set)
         sed -i 's|^\tnew->uid = new->euid = new->suid = new->fsuid = u;$|\t(void)u; /* NEGCTL subst-become-ids-not-set */|' "$_file";;
+    kfe-add-cmkrnl-not-checked)
+        sed -i 's|^        st = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);$|        st = SS__NORMAL; (void)privs; /* NEGCTL kfe-add-cmkrnl-not-checked */|' "$_file";;
+    kfe-keyed-on-name)
+        sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& exec_file_is(vms_kfe_tab\[i\].pin, fd))$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file";;
+    kfe-write-not-denied)
+        sed -i 's|^\t\t} else if ((e = deny_write_access(ro)) != 0) {$|\t\t} else if ((e = 0) != 0) { /* NEGCTL kfe-write-not-denied */|' "$_file";;
+    kfe-remove-copy-kept)
+        sed -i 's|^            memcpy(gone, vms_kfe_tab\[i\].path, 256);$|            (void)0; /* NEGCTL kfe-remove-copy-kept */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)
@@ -8271,6 +8403,12 @@ apply_edit() {
     tt-console-hangup-unbinds)
         # Unique text: vms_ldisc_hangup()'s not-a-pty branch.
         sed -i 's|^\tif (!port_is_pty(tty)) {        /\* a session ended, not the line \*/$|\tif (0) { /* NEGCTL tt-console-hangup-unbinds */|' "$_file";;
+    tt-newline-ignores-cursor)
+        # Unique text: tt_nl()'s FRESH case.
+        sed -i 's|^\tcase TT_POS_FRESH: tt_out1(tt, CH_CR);       break;$|\tcase TT_POS_FRESH: tt_out(tt, "\\r\\n", 2); break; /* NEGCTL tt-newline-ignores-cursor */|' "$_file";;
+    tt-owed-linefeed-unpaid)
+        # Unique text: vms_tt_read()'s owed-line-feed payment.
+        sed -i 's|^\t\tif (tt->pos == TT_POS_CR \&\& tt_echoing(tt))$|\t\tif (0) /* NEGCTL tt-owed-linefeed-unpaid */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

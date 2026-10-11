@@ -1768,6 +1768,21 @@ uint32_t vms_kif_tt_read(struct vms_tt_read_args *a)
     return a->status;
 }
 
+uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len)
+{
+    struct vms_tt_write_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.flags = VMS_TT_WR_RECORD;
+    args.buf = (uint64_t)(uintptr_t)buf;
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_WRITE, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len)
 {
     struct vms_tt_write_args args;
@@ -2561,6 +2576,20 @@ uint32_t vms_kif_substrate_id(uint32_t op, uint32_t *uid)
     if (uid)
         *uid = args.uid;
     return args.status;
+}
+
+/*
+ * vms_kif_kfe - the executive's known-file list (VMS_IOCTL_KFE, rd vms-7c64):
+ * INSTALL ADD/REPLACE/REMOVE (CMKRNL) and LIST/FIND. `a` is in/out; the
+ * executive's status is returned and left in a->status.
+ */
+uint32_t vms_kif_kfe(struct vms_kfe_args *a)
+{
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    KIF_CALL(VMS_IOCTL_KFE, a);
+    return a->status;
 }
 
 /*

@@ -361,9 +361,9 @@ if [ -n "${SUBJECT_IMAGE:-}" ]; then
     SEAM=$(grep -aE "OVMX-SEAM:" "$LOG" | tail -1 || true)
     [ -n "$SEAM" ] || die "no OVMX-SEAM line -- IMGACT.EXE did not activate the subject or did not print (needs the instrumented IMGACT.EXE + OVMX_IMGACT_SEAM=1)"
     echo "  $SEAM"
-    echo "$SEAM" | grep -qE "stdcall_returned=1" \
+    grep -qE "stdcall_returned=1" <<<"$SEAM" \
         || die "OVMX-SEAM: stdcall_returned != 1 -- the VMS-std 6-arg call did not return to IMGACT.EXE"
-    echo "$SEAM" | grep -qE "has_exited=1" \
+    grep -qE "has_exited=1" <<<"$SEAM" \
         || die "OVMX-SEAM: has_exited != 1 -- the executive recorded no completion status for the image"
     GOT=$(printf '%s\n' "$SEAM" | sed -E 's/.*\$STATUS=(0x[0-9a-fA-F]+).*/\1/')
     if [ -n "${SUBJECT_EXPECT_STATUS:-}" ]; then

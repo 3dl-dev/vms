@@ -241,6 +241,12 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
+ *   int  exec_become_substrate_id(uint32_t id)
+ *        make `id` the CURRENT task's real/effective/saved uid and gid, with
+ *        no supplementary groups and no capabilities (rd vms-ac48). Done by the
+ *        executive so the task needs no substrate privilege. 0 or <0.
+ *        Linux: prepare_creds/commit_creds. NetBSD: proc_crmod_enter/leave.
+ *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)
  *        the CURRENT host task's REAL user / group id, mapped into the host's

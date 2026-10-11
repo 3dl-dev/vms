@@ -178,14 +178,14 @@ static int uic_is_system(uint32_t uic)
 }
 
 /*
- * get_uic - Get the current process UIC.
- *
- * Maps Linux UID/GID to VMS [group,member] format.
+ * get_uic - Get the current process UIC: the executive's, from this process's
+ * PCB (rd vms-ac48). The substrate uid/gid carry no VMS meaning. 0 (no UIC)
+ * when the executive cannot answer.
  */
 static uint32_t get_uic(void) {
-    uint16_t group = (uint16_t)(getgid() & 0xFFFF);
-    uint16_t member = (uint16_t)(getuid() & 0xFFFF);
-    return ((uint32_t)group << 16) | (uint32_t)member;
+    struct vms_procinfo pi;
+    memset(&pi, 0, sizeof pi);
+    return (vms_kif_getjpi_self(&pi) & 1) ? pi.uic : 0;
 }
 
 /*

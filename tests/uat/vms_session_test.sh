@@ -78,7 +78,7 @@ FAIL=0
 ERRORS=""
 
 check_contains() {
-    if echo "$OUTPUT" | grep -qi "$1"; then
+    if grep -qi "$1" <<<"$OUTPUT"; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))
@@ -87,7 +87,7 @@ check_contains() {
 }
 
 check_not_contains() {
-    if echo "$OUTPUT" | grep -qi "$1"; then
+    if grep -qi "$1" <<<"$OUTPUT"; then
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  FAIL: output should NOT contain '$1'"
     else
@@ -96,7 +96,7 @@ check_not_contains() {
 }
 
 check_regex() {
-    if echo "$OUTPUT" | grep -qiE "$1"; then
+    if grep -qiE "$1" <<<"$OUTPUT"; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))

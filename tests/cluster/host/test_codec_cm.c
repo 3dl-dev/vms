@@ -1878,10 +1878,64 @@ static void test_0b01_refusals(void)
 		 "rd vms-52d: a 0x8b/0x01 answer is never itself answered");
 }
 
+/*
+ * rd vms-d52c: a REAL member's PARAMS -- VAX1 to OVMXE, lab lab64a order 1
+ * (ts 1791716739.831739; tests/lab/captures/vms-64b-dlm-seq-20261011/). The
+ * member-state fields the builder writes must equal it byte for byte when fed
+ * the same executive facts (formation time, last transition, its epoch, the
+ * sender's own membership time -- VAX1 founded, so that is the formation time).
+ */
+static const uint8_t g_member_params_vax1[132] = {
+	0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
+	0x21, 0x50, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01, 0x00,
+	0x01, 0x00, 0x01, 0x00, 0x80, 0x3f, 0xbd, 0xd1, 0xf8, 0x3c, 0xbc, 0x00,
+	0x60, 0x46, 0x17, 0xd2, 0xf8, 0x3c, 0xbc, 0x00, 0x04, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x25, 0x00, 0x60, 0x00, 0xc0, 0x24, 0xf9, 0x7f,
+	0x7e, 0x00, 0x00, 0x00, 0x80, 0x3f, 0xbd, 0xd1, 0xf8, 0x3c, 0xbc, 0x00,
+	0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2b, 0x00,
+	0x73, 0x00, 0x00, 0x00, 0x56, 0x37, 0x2e, 0x33, 0x20, 0x20, 0x20, 0x20,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static void test_member_params_against_real(void)
+{
+	struct vms_cm_node_params own;
+	struct vms_cm_member_state ms;
+	uint8_t b[VMS_CM_BODY_LEN];
+	const uint8_t *r = g_member_params_vax1;
+	uint32_t written = 0;
+
+	printf("-- rd vms-d52c: a member's PARAMS states its membership\n");
+	memset(&own, 0, sizeof(own));
+	ct_check(vms_cm_params_build(1u, 2u, 1u, &own, b, sizeof(b), &written)
+		 == VMS_CODEC_OK, "the PARAMS builds");
+	memcpy(&ms.ftime, r + VMS_OFB_CM_PFTIME, 8);
+	memcpy(&ms.last_xition, r + VMS_OFB_CM_PLASTXITION, 8);
+	memcpy(&ms.joined, r + VMS_OFB_CM_PJOINED, 8);
+	ms.last_epoch = 4u;
+	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_OK,
+		 "the member state is written");
+	ct_check(memcmp(b + 12, r + 12, 2) == 0,
+		 "*** body[12:14] = the real member status word 0x5021 ***");
+	ct_check(memcmp(b + 28, r + 28, 20) == 0,
+		 "*** body[28:48] = the real formation time, last transition and "
+		 "epoch ***");
+	ct_check(memcmp(b + 64, r + 64, 8) == 0,
+		 "*** body[64:72] = the real own-membership time ***");
+	ct_check(memcmp(b + 18, r + 18, 2) == 0, "body[18:20] the member count");
+	ms.joined = 0u;
+	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_E_INVAL,
+		 "a time not held is never claimed");
+}
+
 int main(void)
 {
 	test_open_dlm_seq();
 	char err[VMS_FIXTURE_ERRLEN];
+
+	test_member_params_against_real();
 
 	printf("test_codec_cm: connection-manager codec entries (FC-P3.1)\n");
 	test_k10_records_against_real_pairs();

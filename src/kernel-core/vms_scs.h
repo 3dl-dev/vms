@@ -271,6 +271,20 @@ struct scs_sysap_ops {
 	 */
 	const uint8_t *accept_conndata;   /* VMS_SCS_PROCNAME_LEN, or NULL */
 
+	/*
+	 * OPTIONAL (may be NULL / 0). The CONNECT-side mirror of the two
+	 * SYSAP-identity facts above (rd vms-239): this SYSAP's OWN 16-byte
+	 * connect data and its Minimum Send Credits (p. 2-44, SCS$W_MIN_CR)
+	 * for a connection it OPENS through scs_connect() without naming
+	 * connect data of its own. Like `accept_conndata` they belong to the
+	 * SYSAP, not the request: every real disk class driver states the
+	 * same two values on every connect it makes, whichever server it
+	 * dials (tests/lab/captures/vms-239-mscp-connect-20261011). NULL / 0
+	 * keeps the old meaning -- blank-filled data, no floor.
+	 */
+	const uint8_t *connect_conndata;  /* VMS_SCS_PROCNAME_LEN, or NULL */
+	uint16_t       connect_min_credits;
+
 	void *ctx;
 };
 

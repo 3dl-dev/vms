@@ -87,6 +87,7 @@ struct blk_upper {
 	uint32_t        last_len;
 	uint32_t        last_remaining;
 	uint32_t        messages;
+	vms_conid_t     msg_conid;     /* rd vms-239: the Con.ID delivered */
 	uint32_t        sent;          /* rd vms-1f64: block_sent upcalls */
 	uint32_t        sent_name;
 };
@@ -96,8 +97,9 @@ static void bu_message(void *ctx, vms_scs_sysid_t from, vms_conid_t conid,
 {
 	struct blk_upper *u = (struct blk_upper *)ctx;
 
-	(void)from; (void)conid; (void)body; (void)len;
+	(void)from; (void)body; (void)len;
 	u->messages++;
+	u->msg_conid = conid;
 }
 
 static void bu_datagram(void *ctx, vms_scs_sysid_t from, const uint8_t *body,
@@ -1716,7 +1718,7 @@ static void test_inbound_mscp_end_is_delivered(void)
 	memset(&sh, 0, sizeof(sh));
 	sh.inner_len = (uint16_t)((VMS_OFF_SYSAP_BODY + sizeof(end_body)) -
 				  (VMS_ETH_HDR_LEN + 44u));
-	sh.mtype = VMS_SCS_MT_MSG;
+	sh.mtype = VMS_SCS_CTRL_APPLICATION;   /* abs 60 == 10, as the real 0x15 */
 	sh.conid_remote = 0x62c50009u;
 	sh.conid_local = 0x33580008u;
 	(void)vms_scs_msg_body_build(&sh, end_body, sizeof(end_body),
@@ -1740,14 +1742,20 @@ static void test_inbound_mscp_end_is_delivered(void)
 	(void)vms_scs_seq_stamp(e.buf, total, &fi, 0u, 1u, e.peer.incarnation);
 	e.buf[VMS_OFF_BLK_PORT_OP] = VMS_BLK_OP_STREAM_END_MSG;
 	rx_frame(&e, total);
-	/* The frame goes the MESSAGE way, exactly as an opcode-0x02 frame of the
-	 * same bytes does: whether its END message then reaches SCS is the
-	 * classifier's call (a frame with a trailer fails M_INNERLEN_SELF today
-	 * -- rd vms-239), not the opcode's. */
+	/* The frame goes the MESSAGE way: the tail lands through the trailer
+	 * arm, and the END message itself reaches SCS with its Con.ID (rd
+	 * vms-239 -- before, a trailer frame failed M_INNERLEN_SELF, classified
+	 * as scs-seq with no Con.ID and was counted vc_rx_undelivered). */
 	ct_check(memcmp(e.sink, tail, sizeof(tail)) == 0,
 		 "*** the piggybacked final chunk landed (message path, not consumed) ***");
 	ct_check_eq_u32(e.fsm.blk_rx_trailer, 1u, "  through the trailer arm");
 	ct_check_eq_u32(e.fsm.blk_rx_unknown_op, 0u, "  0x15 is not an unknown opcode");
+	ct_check_eq_u32(e.upper_rec.messages, 1u,
+			"*** vms-239: the READ END message is delivered upward ***");
+	ct_check_eq_u32(e.upper_rec.msg_conid, sh.conid_remote,
+			"  with the Con.ID its own envelope names");
+	ct_check_eq_u32(e.fsm.vc_rx_undelivered, 0u,
+			"  and nothing is counted undelivered");
 
 	/* An inbound 0x14 stream frame lands and draws no acknowledgement. */
 	open_circuit(&e);

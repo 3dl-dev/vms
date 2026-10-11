@@ -7048,8 +7048,33 @@ static void test_eb3_a_loss_inside_an_answered_transition_is_held(void)
 	ct_check_eq_u32(g.j.cm_lost_in_transition, 0u, "and not counted held");
 }
 
+/*
+ * rd vms-239: the class driver's connect statement is the one every real VAX
+ * class driver makes -- 4,032 of 4,032 VMS$DISK_CL_DRVR -> MSCP$DISK connects
+ * from 19 nodes (tests/lab/captures/vms-239-mscp-connect-20261011): 16 bytes
+ * "V5.0" + 10 blanks + "+ " and SCS$W_MIN_CR 2.
+ */
+static void test_239_disk_class_connect_statement(void)
+{
+	static const uint8_t wire[VMS_SCS_PROCNAME_LEN] = {
+		0x56, 0x35, 0x2e, 0x30, 0x20, 0x20, 0x20, 0x20,
+		0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x2b, 0x20 };
+	uint32_t i, same = 0u;
+
+	printf("-- vms-239: the disk class driver's connect data and MIN_CR\n");
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++) {
+		if (cnxman_join_disk_cl_conndata[i] == wire[i])
+			same++;
+	}
+	ct_check_eq_u32(same, VMS_SCS_PROCNAME_LEN,
+			"the 16 bytes are the real class driver's");
+	ct_check_eq_u32(CNXMAN_DISK_CL_MIN_CREDITS, 2u,
+			"MIN_CR is the real class driver's 2");
+}
+
 int main(void)
 {
+	test_239_disk_class_connect_statement();
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
 
 	test_reference_sequence();

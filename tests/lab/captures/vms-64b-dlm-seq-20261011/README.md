@@ -9,7 +9,7 @@ OVMXE was booted through `tests/lab/tools/ovmx_fire.sh`, which runs the frame-co
 | order 1, order 2 | commit ebda48b04 (branch `evac/int-64b` = this PR + vms-239) | that commit |
 | control | commit 41d4c1fae (vms-239 without this PR) | that commit |
 
-`tools`: `/tmp/evac/vcg/ncheck.py`-style check. For every DLM frame (cat 0x02/0x82), it compares OVMX's body[12:16] with the value the real VAXes last asserted.
+Checker: `tools/cluster/dlm_seq_check.py` (exit 1 on any mismatch). For every DLM frame (cat 0x02/0x82), it compares OVMX's body[12:16] with the value the real VAXes last asserted.
 
 ## Order 1: the VAX pair forms, OVMXE joins (`order1-vax-first.pcap`)
 

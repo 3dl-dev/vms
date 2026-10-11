@@ -7,6 +7,7 @@
 #      (the gate must have checked the code that will run), and
 #   2. the frame-conformance gate passes for every frame type this fire will
 #      send to a real node (tests/cluster/conformance/run_gate.sh).
+# FIRE_EXPVOTES=1 boots it able to found a cluster alone (ovmx_fire_node.sh).
 # Then it stages the artifacts in the pod and starts the node with a capture,
 # console at /lab/k8s-labs/<pod>/logs/ovmxe.log (ovmx-lab-console reads it).
 set -u
@@ -35,4 +36,4 @@ BASE=$(basename "$ART")
 kubectl -n ovmx-lab cp "$ART" "$POD:/lab/$BASE" || exit 1
 kubectl -n ovmx-lab cp "$HERE/ovmx_fire_node.sh" "$POD:/lab/run-evac/ovmx_fire_node.sh" || exit 1
 kubectl -n ovmx-lab cp "$HERE/ovmx_evnode.sh" "$POD:/lab/run-evac/ovmx_evnode.sh" || exit 1
-exec kubectl -n ovmx-lab exec "$POD" -- bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG"
+exec kubectl -n ovmx-lab exec "$POD" -- bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG" "${FIRE_EXPVOTES:-3}"

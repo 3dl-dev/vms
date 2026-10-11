@@ -4626,9 +4626,13 @@ static struct pe_blk_tag *blk_tag_mint(struct pe_fsm *f, uint8_t op,
 
 		if (t->in_use)
 			continue;
+		/* Minted-form audit (rd vms-ci.6): real initiators' +6 tags
+		 * span 0x003a..0xffb2 over 4,516 transfers and +4 1..0x11;
+		 * this sequence starts, and wraps, at 0x0100 so it never
+		 * sends the small values no real node was seen to send. */
 		f->blk_tag_seq++;
-		if (f->blk_tag_seq == 0u)
-			f->blk_tag_seq = 1u;
+		if (f->blk_tag_seq < 0x0100u)
+			f->blk_tag_seq = 0x0100u;
 		pe_bzero(t, (uint32_t)sizeof(*t));
 		t->in_use = 1u;
 		t->op = op;

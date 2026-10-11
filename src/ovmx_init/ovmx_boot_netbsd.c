@@ -606,6 +606,12 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
     if (mount("tmpfs", dir, 0, &ta, sizeof ta) != 0 && errno != EBUSY)
         return -1;
 
+
+    /* The executive's own directory of installed-image copies (rd vms-220):
+     * root-owned, traversable but not writable or listable by any process;
+     * only the executive, acting as the kernel, creates files in it. */
+    if (mkdir(VMS_KFE_DIR, 0711) != 0 && errno != EEXIST)
+        return -1;
     return 0;
 }
 

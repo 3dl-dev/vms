@@ -119,6 +119,40 @@ jobs:
       - name: check_cache_writers.py
         run: python3 tools/ci/check_cache_writers.py .
 
+  no-conflict-markers:
+    # No tracked file carries a merge-conflict marker line. A resolution that
+    # left a diff3 base marker in docs/clean-room/reference-captures.sha256
+    # (#1383) went unnoticed for days. Runs on every PR.
+    name: No merge-conflict markers in tracked files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: check_conflict_markers.py
+        run: |
+          python3 tools/ci/check_conflict_markers.py --self-test
+          python3 tools/ci/check_conflict_markers.py .
+      - name: check_pipefail_grepq.py (no echo-into-grep -q under pipefail)
+        run: python3 tools/ci/check_pipefail_grepq.py .
+
+  merge-queue-gates:
+    # Every gating workflow ends in the merge queue's required `gate` job, and
+    # that job needs every other job in its workflow (a job left out would
+    # never block a merge). Runs on every PR.
+    name: Merge-queue gates cover every job
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install PyYAML
+        run: pip install --disable-pip-version-check pyyaml
+      - name: check_merge_gates.py
+        run: |
+          python3 tools/ci/check_merge_gates.py
+          sh tests/integration/test_check_merge_gates.sh .
+
   negctl-fixtures-selftest:
     # Every per-facility negative control injects its defect with a sed anchor
     # into a source file. When a change moves an anchor, the mutation injects
@@ -1106,3 +1140,48 @@ jobs:
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: CI / Core Gates"
+    if: ${{ always() }}
+    needs:
+      - merge-queue-gates
+      - changes
+      - layer-cache-one-writer
+      - no-conflict-markers
+      - negctl-fixtures-selftest
+      - compat-surface-drift
+      - cluster-core-includes-gate
+      - keystroke-oracle-selftest
+      - vmslink-shell-lint
+      - image-parity-gate
+      - vaxharness-selftest
+      - netbsd-console-selftest
+      - aarch64-system-boot
+      - build-and-test
+      - conformance
+      - corpus-conformance
+      - static-analysis
+      - uat-session
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

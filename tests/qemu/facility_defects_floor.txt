@@ -502,4 +502,6 @@
 # Raised to 190 by the terminal class driver's four (rd vms-f8c): tt-typeahead-
 # echoed-on-receipt, tt-bind-privilege-ignored, tt-port-input-dropped,
 # tt-console-hangup-unbinds (test_kmod_tt).
-190
+# Raised to 192 by the carriage-control pair (rd vms-fc4): tt-newline-ignores-
+# cursor, tt-owed-linefeed-unpaid (test_kmod_tt).
+192

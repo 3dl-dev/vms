@@ -30,13 +30,6 @@ on:
       - '.github/workflows/ledger.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'docs/**'
-      - 'tools/compat/**'
-      - 'tools/roadmap/**'
-      - 'tools/ledger/**'
-      - '**/*.md'
-      - '.github/workflows/ledger.yml'
   merge_group:
   # Scheduled + manual: the ONLY place the live-rd roadmap regen can run (needs
   # `rd` on PATH -- absent on GitHub-hosted runners, so it self-skips there).
@@ -133,3 +126,32 @@ jobs:
           gh pr create --fill \
             --title "ledger: scheduled regen of roadmap + compat derived views" \
             --body "Automated INV-LEDGER (vms-8465) regen from the single source of truth (live rd + docs/compat/*.yaml). Review and merge to keep the derived views current."
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: Ledger drift gates"
+    if: ${{ always() }}
+    needs:
+      - drift-gate
+      - regen
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

@@ -667,7 +667,7 @@ echo "=== End Session Output ==="
 # elsewhere in the log (e.g. LOGOUT's timestamp satisfying a "SHOW TIME
 # printed a date" check even when SHOW TIME itself was rejected by DCL).
 check_not_contains() {
-    if echo "$OUTPUT" | grep -qi "$1"; then
+    if grep -qi "$1" <<<"$OUTPUT"; then
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  FAIL: output should NOT contain '$1'"
     else
@@ -1209,7 +1209,7 @@ check_not_contains 'OVMX-W-OWNER'
 # out at ...'), not the echo of the username we typed at the prompt -- the
 # echo is the bare word, and no command in this script ever sends the string
 # 'logged out'.
-if echo "$OUTPUT" | grep -qE 'GUEST +logged out at'; then
+if grep -qE 'GUEST +logged out at' <<<"$OUTPUT"; then
     PASS=$((PASS + 1))
 else
     FAIL=$((FAIL + 1))
@@ -1399,7 +1399,7 @@ check_response 'HELP SHOW' '(SHOW|Additional information)'
 # above it is not echo-satisfiable. The values are asserted, not just the
 # line: deleting the SETIDENT call leaves the user name empty and the UIC
 # [0,0] (root's derived credentials), and this goes red.
-if echo "$OUTPUT" | grep -qF 'system identity SYSTEM [1,4] established by the executive'; then
+if grep -qF 'system identity SYSTEM [1,4] established by the executive' <<<"$OUTPUT"; then
     PASS=$((PASS + 1))
 else
     FAIL=$((FAIL + 1))

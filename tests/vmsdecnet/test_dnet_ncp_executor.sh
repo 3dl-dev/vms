@@ -36,7 +36,7 @@ ncp() { "$NCP" "$@" 2>&1; }
 
 # --- unconfigured: LIST EXECUTOR says so, never an invented address ----------
 out="$(ncp LIST EXECUTOR)"
-echo "$out" | grep -q "Executor node = not configured" \
+grep -q "Executor node = not configured" <<<"$out" \
     && ok "fresh node: LIST EXECUTOR reports 'not configured' (no invented address)" \
     || bad "fresh node LIST EXECUTOR: $out"
 
@@ -49,12 +49,12 @@ ncp DEFINE EXECUTOR STATE ON >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "DEFINE EXECUTOR STATE ON exits 0" || bad "DEFINE EXECUTOR STATE exit $rc"
 
 out="$(ncp LIST EXECUTOR)"
-echo "$out" | grep -q "Executor node = 1.42 (OVMX)" \
+grep -q "Executor node = 1.42 (OVMX)" <<<"$out" \
     && ok "LIST EXECUTOR (new invocation) shows 1.42 (OVMX) -- all three SETs persisted together" \
     || bad "LIST EXECUTOR missing 1.42 (OVMX): $out"
-echo "$out" | grep -qE "State +=  *on" \
+grep -qE "State +=  *on" <<<"$out" \
     && ok "LIST EXECUTOR shows State = on" || bad "LIST EXECUTOR state: $out"
-echo "$out" | grep -q "Node Permanent Summary" \
+grep -q "Node Permanent Summary" <<<"$out" \
     && ok "LIST EXECUTOR is titled as the PERMANENT database" || bad "LIST EXECUTOR title: $out"
 
 # --- SHOW reads the RUNNING NETACP: none here, so it fails honestly ----------
@@ -62,8 +62,8 @@ for what in "EXECUTOR" "EXECUTOR CHARACTERISTICS" "EXECUTOR COUNTERS" "KNOWN NOD
             "KNOWN LINKS" "NODE 1.42"; do
     # shellcheck disable=SC2086
     out="$(ncp SHOW $what)"; rc=$?
-    if [ "$rc" -ne 0 ] && echo "$out" | grep -q "^%NCP-F-OPEFAI, Operation failure" \
-       && ! echo "$out" | grep -q "Executor node ="; then
+    if [ "$rc" -ne 0 ] && grep -q "^%NCP-F-OPEFAI, Operation failure" <<<"$out" \
+       && ! grep -q "Executor node =" <<<"$out"; then
         ok "SHOW $what with no NETACP fails %NCP-F-OPEFAI (no volatile database; the files are NOT shown as the running network)"
     else
         bad "SHOW $what with no NETACP should fail honestly (rc=$rc): $out"
@@ -76,19 +76,19 @@ grep -q "OVMX layout, not the VMS NETNODE_LOCAL.DAT binary format" "$OVMX_DECNET
 
 # --- honest refusals ----------------------------------------------------------
 out="$(ncp SET EXECUTOR ADDRESS 64.1)"; rc=$?
-[ "$rc" -ne 0 ] && echo "$out" | grep -q "%NCP-E-INVADDR" \
+[ "$rc" -ne 0 ] && grep -q "%NCP-E-INVADDR" <<<"$out" \
     && ok "SET EXECUTOR ADDRESS 64.1 (area out of range) refused %NCP-E-INVADDR" \
     || bad "out-of-range address should be refused (rc=$rc): $out"
 out="$(ncp LIST EXECUTOR)"
-echo "$out" | grep -q "1.42 (OVMX)" \
+grep -q "1.42 (OVMX)" <<<"$out" \
     && ok "a refused SET leaves the persisted executor untouched" \
     || bad "refused SET clobbered the executor: $out"
 
 # a write that cannot land names the file and fails (CFGWRERR), never success
 export OVMX_DECNET_EXECUTOR="$TMP/no-such-dir/netnode_local.dat"
 out="$(ncp SET EXECUTOR ADDRESS 1.43)"; rc=$?
-[ "$rc" -ne 0 ] && echo "$out" | grep -q "%NCP-E-CFGWRERR" \
-              && echo "$out" | grep -q "no-such-dir/netnode_local.dat" \
+[ "$rc" -ne 0 ] && grep -q "%NCP-E-CFGWRERR" <<<"$out" \
+              && grep -q "no-such-dir/netnode_local.dat" <<<"$out" \
     && ok "an unwritable executor database fails %NCP-E-CFGWRERR naming the file" \
     || bad "unwritable executor database should fail honestly (rc=$rc): $out"
 export OVMX_DECNET_EXECUTOR="$TMP/netnode_local.dat"
@@ -96,7 +96,7 @@ export OVMX_DECNET_EXECUTOR="$TMP/netnode_local.dat"
 # --- node database through the same store -------------------------------------
 ncp SET NODE 1.1 NAME VAX1 >/dev/null && ok "SET NODE 1.1 NAME VAX1 exits 0" || bad "SET NODE failed"
 out="$(ncp LIST KNOWN NODES)"
-echo "$out" | grep -qE "^1\.1 +VAX1" \
+grep -qE "^1\.1 +VAX1" <<<"$out" \
     && ok "LIST KNOWN NODES (new invocation) lists 1.1 VAX1" \
     || bad "LIST KNOWN NODES: $out"
 grep -q "OVMX layout, not VMS NETNODE_REMOTE.DAT" "$OVMX_DECNET_NODEDB" \
@@ -105,16 +105,16 @@ grep -q "OVMX layout, not VMS NETNODE_REMOTE.DAT" "$OVMX_DECNET_NODEDB" \
 
 # --- MAXIMUM LINKS (rd vms-f91): VMS default, SET, persistence, refusal --------
 out="$(ncp LIST EXECUTOR CHARACTERISTICS)"
-echo "$out" | grep -qE "^Maximum links +=  *32$" \
+grep -qE "^Maximum links +=  *32$" <<<"$out" \
     && ok "LIST EXECUTOR CHARACTERISTICS (the permanent database) shows the VMS default 'Maximum links = 32' when none is set" \
     || bad "default Maximum links: $out"
 ncp SET EXECUTOR MAXIMUM LINKS 12 >/dev/null; rc=$?
 out="$(ncp LIST EXECUTOR CHARACTERISTICS)"
-[ "$rc" -eq 0 ] && echo "$out" | grep -qE "^Maximum links +=  *12$" && echo "$out" | grep -q "1.42 (OVMX)" \
+[ "$rc" -eq 0 ] && grep -qE "^Maximum links +=  *12$" <<<"$out" && grep -q "1.42 (OVMX)" <<<"$out" \
     && ok "SET EXECUTOR MAXIMUM LINKS 12 persists (new invocation shows 12, address/name kept)" \
     || bad "SET EXECUTOR MAXIMUM LINKS 12: rc=$rc $out"
 out="$(ncp SET EXECUTOR MAXIMUM LINKS 0)"; rc=$?
-[ "$rc" -ne 0 ] && echo "$out" | grep -q "%NCP-E-INVPVA" && ncp LIST EXECUTOR CHARACTERISTICS | grep -qE "^Maximum links +=  *12$" \
+[ "$rc" -ne 0 ] && grep -q "%NCP-E-INVPVA" <<<"$out" && ncp LIST EXECUTOR CHARACTERISTICS | grep -qE "^Maximum links +=  *12$" \
     && ok "SET EXECUTOR MAXIMUM LINKS 0 is refused (INVPVA) and changes nothing" \
     || bad "MAXIMUM LINKS 0 not refused: rc=$rc $out"
 

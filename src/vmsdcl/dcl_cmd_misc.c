@@ -650,9 +650,11 @@ int cmd_inquire(struct dcl_command *cmd)
     const char *prompt_text = (cmd->param_count >= 2) ? cmd->params[1] : "";
 
     /* The prompt, written by the terminal driver's IO$_READPROMPT (rd vms-f8c) */
+    /* INQUIRE's prompt starts on a new line (CR LF; the VAX V7.3 console shows
+     * "<CR>Your name: " -- no fill NUL, unlike DCL's own prompt; rd vms-fc4) */
     char pbuf[300];
     if (prompt_text[0]) {
-        snprintf(pbuf, sizeof(pbuf), "%.290s: ", prompt_text);
+        snprintf(pbuf, sizeof(pbuf), "\r\n%.290s: ", prompt_text);
     } else {
         /* Default prompt is symbol name */
         char upper_name[256];
@@ -660,7 +662,7 @@ int cmd_inquire(struct dcl_command *cmd)
         for (i = 0; i < sizeof(upper_name) - 1 && symbol_name[i]; i++)
             upper_name[i] = (char)toupper((unsigned char)symbol_name[i]);
         upper_name[i] = '\0';
-        snprintf(pbuf, sizeof(pbuf), "%s: ", upper_name);
+        snprintf(pbuf, sizeof(pbuf), "\r\n%s: ", upper_name);
     }
 
     char buf[1024];

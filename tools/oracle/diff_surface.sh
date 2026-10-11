@@ -190,7 +190,7 @@ selftest() {
     # negctl: the classifier is not vacuous -- a MATCH fixture must NOT classify
     # as MISSING/HOLLOW, and the MISSING fixture must NOT classify as MATCH.
     local m; m="$(classify sfc "$tmp/match" "$tmp/golden" "${NORM[@]}")"
-    if echo "$m" | grep -q '^MATCH'; then echo "  PASS: NEGCTL match!=missing/hollow"; else echo "  FAIL: negctl match misclassified [$m]"; fails=$((fails+1)); fi
+    if grep -q '^MATCH' <<<"$m"; then echo "  PASS: NEGCTL match!=missing/hollow"; else echo "  FAIL: negctl match misclassified [$m]"; fails=$((fails+1)); fi
 
     # MAY_OMIT: a 3-section golden (single-digit fields keep the mask widths
     # equal). A DECLARED substrate-absent section (Virtual I/O Cache) omitted by

@@ -700,6 +700,14 @@ if(BUILD_TESTS)
     set_tests_properties(safe_merge_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # Every gating workflow ends in the merge-queue `gate` job, which needs every
+    # other job (tools/ci/check_merge_gates.py). Copies of the workflows.
+    add_test(NAME merge_queue_gates_complete
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_check_merge_gates.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(merge_queue_gates_complete PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

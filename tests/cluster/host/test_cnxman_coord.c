@@ -2159,6 +2159,8 @@ static void f297_params(struct vms_csb *csb, uint16_t votes, uint16_t ev,
 	cnxman_csb_set_lockdirwt(csb, ldw);
 }
 
+#define F297_DLM_SEQ 7u   /* deliberately unlike any slot in this bed */
+
 static struct vms_csb *f297_csb(int32_t i)
 {
 	return cnxman_club_csb_at(&g.cl.club, (uint32_t)i);
@@ -2185,6 +2187,9 @@ static struct vms_csb *f297_bed(void)
 	learned.ftime = F297_FTIME;
 	learned.slot_next = 4u;
 	cnxman_club_learn_open(&g.cl.club, 0, &learned);
+	/* rd vms-64b: the DLM rebuild sequence this member holds (any member
+	 * of a running cluster does: learned at its own join). */
+	cnxman_club_dlm_seq_learn(&g.cl.club, F297_DLM_SEQ);
 	g.fake.now_vms = F297_NOW;
 	return joiner;
 }
@@ -2251,8 +2256,9 @@ static void test_f297_foreign_member_gets_every_cell(void)
 	ct_check_eq_u32(o.cells.cevotes, 6u,
 			"[96:98] CEVOTES: the joiner's EXPECTED_VOTES 6 beats four votes");
 	ct_check_eq_u32(o.cells.csv_low, 1u, "[98:100] lowest slot");
-	ct_check_eq_u32(o.cells.csv_hwm, JOIN_SLOT - 1u,
-			"[100:102] a first admission: one below its slot");
+	ct_check_eq_u32(o.cells.dlm_seq, F297_DLM_SEQ,
+			"*** [92]/[100:102]/[102:104] the DLM rebuild sequence in "
+			"force (rd vms-64b), not a slot ***");
 	ct_check_eq_u32(o.cells.csv_top, JOIN_SLOT, "[104:106] highest slot");
 	ct_check(o.cells.hold == VMS_CM_OPEN_HOLD_DELTA, "[106:114] the -900 s delta");
 	ct_check_eq_u32(g.cl.club.slot_next, JOIN_SLOT + 1u,
@@ -2382,6 +2388,7 @@ static void test_f297_each_missing_fact_refuses(void)
 		{ "no clock",                    CNXMAN_OPEN_GAP_CLOCK },
 		{ "a joiner's weight never learned", CNXMAN_OPEN_GAP_REBUILD },
 		{ "the joiner's PARAMS missing", CNXMAN_OPEN_GAP_SUBJECT },
+		{ "no DLM rebuild sequence held (rd vms-64b)", CNXMAN_OPEN_GAP_DLMSEQ },
 	};
 	uint32_t i;
 
@@ -2395,6 +2402,7 @@ static void test_f297_each_missing_fact_refuses(void)
 		case CNXMAN_OPEN_GAP_FTIME:   g.cl.club.ftime_valid = 0u; break;
 		case CNXMAN_OPEN_GAP_CLOCK:   g.fake.now_vms = 0u; break;
 		case CNXMAN_OPEN_GAP_REBUILD: joiner->lockdirwt_valid = 0u; break;
+		case CNXMAN_OPEN_GAP_DLMSEQ:  g.cl.club.dlm_seq_valid = 0u; break;
 		default:                      joiner->params_valid = 0u; break;
 		}
 		f297_ask(3u);

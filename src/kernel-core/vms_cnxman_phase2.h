@@ -76,6 +76,10 @@ struct cnxman_phase2_in {
 	uint8_t bitmap_popcount; /* == the post-transition member count (SS4(p))*/
 	uint8_t reconfig;        /* 1 = a REMOVAL: the CLUB's last-reconfig
 				  * pair is re-derived at commit (rd vms-f297) */
+	uint8_t rebuild;         /* the open's rebuild type, body[24]
+				  * (VMS_CM_REBUILD_*); 0 = not carried
+				  * (rd vms-64b)                               */
+	uint8_t pad_in[3];
 };
 
 /* ==========================================================================

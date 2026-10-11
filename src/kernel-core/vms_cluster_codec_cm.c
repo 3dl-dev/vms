@@ -148,7 +148,7 @@ static void cm_open_cells_get(vms_wire_view_t *v, struct vms_cm_open_cells *c)
 	c->subj_cfg   = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_SUBJ_CFG);
 	c->cevotes    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CEVOTES);
 	c->csv_low    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CSV_LOW);
-	c->csv_hwm    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CSV_HWM2);
+	c->dlm_seq    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_DLM_SEQ_2);
 	c->csv_top    = vms_wire_get_le16(v, VMS_OFB_CM_OPEN_CSV_TOP);
 	c->pad2       = 0u;
 	c->hold       = cm_get_le64(v, VMS_OFB_CM_OPEN_HOLD);
@@ -159,11 +159,11 @@ static void cm_open_cells_get(vms_wire_view_t *v, struct vms_cm_open_cells *c)
 static void cm_open_csv_put(vms_wire_buf_t *w, const struct vms_cm_open_cells *c)
 {
 	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_SUBJ_CFG, c->subj_cfg);
-	vms_wire_put_u8(w, VMS_OFB_CM_OPEN_CSV_HWM1, (uint8_t)c->csv_hwm);
+	vms_wire_put_u8(w, VMS_OFB_CM_OPEN_DLM_SEQ_1, (uint8_t)c->dlm_seq);
 	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CEVOTES, c->cevotes);
 	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_LOW, c->csv_low);
-	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_HWM2, c->csv_hwm);
-	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_HWM3, c->csv_hwm);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_DLM_SEQ_2, c->dlm_seq);
+	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_DLM_SEQ_3, c->dlm_seq);
 	vms_wire_put_le16(w, VMS_OFB_CM_OPEN_CSV_TOP, c->csv_top);
 	cm_put_le64(w, VMS_OFB_CM_OPEN_HOLD, c->hold);
 }
@@ -1635,18 +1635,36 @@ vms_codec_status_t vms_cm_open_dlm_seq(const uint8_t *body, uint32_t len,
 
 	if (body == (const uint8_t *)0 || n == (uint16_t *)0)
 		return VMS_CODEC_E_INVAL;
-	if (len < VMS_OFB_CM_OPEN_DLM_SEQ3 + 2u)
+	if (len < VMS_OFB_CM_OPEN_DLM_SEQ_3 + 2u)
 		return VMS_CODEC_E_CLASS;
 	if (body[VMS_OFB_CM_CATEGORY] != VMS_CM_CAT_CONFIG ||
 	    body[VMS_OFB_CM_OPCODE] != VMS_CM_OP_XITION_ADD)
 		return VMS_CODEC_E_CLASS;
-	a = (uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ];
-	b = (uint16_t)((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ2] |
-		       ((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ2 + 1u] << 8));
-	c = (uint16_t)((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ3] |
-		       ((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ3 + 1u] << 8));
+	a = (uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ_1];
+	b = (uint16_t)((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ_2] |
+		       ((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ_2 + 1u] << 8));
+	c = (uint16_t)((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ_3] |
+		       ((uint16_t)body[VMS_OFB_CM_OPEN_DLM_SEQ_3 + 1u] << 8));
 	if (a == 0u || a != b || a != c)
 		return VMS_CODEC_E_SHORT;
 	*n = a;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_open_dlm_seq_put(uint8_t *body, uint32_t len,
+					   uint16_t n)
+{
+	if (body == (uint8_t *)0 || n == 0u)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_OFB_CM_OPEN_DLM_SEQ_3 + 2u)
+		return VMS_CODEC_E_SHORT;
+	if (body[VMS_OFB_CM_CATEGORY] != VMS_CM_CAT_CONFIG ||
+	    body[VMS_OFB_CM_OPCODE] != VMS_CM_OP_XITION_ADD)
+		return VMS_CODEC_E_CLASS;
+	body[VMS_OFB_CM_OPEN_DLM_SEQ_1] = (uint8_t)(n & 0xffu);
+	body[VMS_OFB_CM_OPEN_DLM_SEQ_2] = (uint8_t)(n & 0xffu);
+	body[VMS_OFB_CM_OPEN_DLM_SEQ_2 + 1u] = (uint8_t)(n >> 8);
+	body[VMS_OFB_CM_OPEN_DLM_SEQ_3] = (uint8_t)(n & 0xffu);
+	body[VMS_OFB_CM_OPEN_DLM_SEQ_3 + 1u] = (uint8_t)(n >> 8);
 	return VMS_CODEC_OK;
 }

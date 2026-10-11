@@ -420,24 +420,10 @@ struct vms_cnxman {
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
 	uint32_t dlm_sends;            /* originations the arm asked for     */
 	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
-	/*
-	 * rd vms-64b: THE CLUSTER'S DLM REBUILD SEQUENCE. Every real VAX DLM
-	 * message (requests and answers, every op) carries body[12:14] = 0x0001
-	 * and body[14:16] = N, the SAME N from every node at a moment; N steps
-	 * when a transition rebuilds the lock directory. A joiner learns the
-	 * current N from the coordinator's class-0x02 transition OPEN (cat 0x01
-	 * op 0x09, body[92] == body[100:102] == body[102:104]) before its first
-	 * DLM send; every member then asserts it in each DLM header. This node
-	 * records it here, as cluster state, from those two carriers, and stamps
-	 * it on every DLM body it sends; with none recorded it sends no DLM
-	 * message at all rather than a 0 no real node ever sends.
-	 */
-	uint16_t dlm_seq;
-	uint8_t  dlm_seq_valid;
-	uint8_t  dlm_seq_pad;
+	/* rd vms-64b: where the CLUB's DLM rebuild sequence (struct vms_club)
+	 * was learned from, and the sends it held back. */
 	uint32_t dlm_seq_from_open;    /* N recorded off a 0x09 open          */
 	uint32_t dlm_seq_from_dlm;     /* N recorded off a member's DLM header */
-	uint32_t dlm_seq_changes;      /* times the recorded N changed        */
 	uint32_t dlm_seq_open_bad;     /* a 0x09 whose three copies disagreed */
 	uint32_t dlm_sends_no_seq;     /* sends refused: no N recorded yet    */
 	uint32_t dlm_foreign_refused;  /* RULE C: the peer is not proven ours*/
@@ -1762,40 +1748,35 @@ static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
  * answer), i.e. an identity the executive genuinely holds, not one a
  * participant would have to infer (E73).
  */
-/* rd vms-64b: record N (see struct vms_cnxman). */
-static void cnxman_dlm_seq_record(struct vms_cnxman *cn, uint16_t n,
-				  uint32_t *counter)
-{
-	if (n == 0u)
-		return;            /* no real node ever asserts 0 */
-	if (!cn->dlm_seq_valid || cn->dlm_seq != n)
-		cn->dlm_seq_changes++;
-	cn->dlm_seq = n;
-	cn->dlm_seq_valid = 1u;
-	(*counter)++;
-}
-
 /* rd vms-64b: learn N off a body a MEMBER sent us -- the coordinator's 0x09
  * transition open, or any DLM message whose header carries it. The codec owns
  * every offset (design SS3.9 rule 2). */
 static void cnxman_dlm_seq_learn(struct vms_cnxman *cn, const uint8_t *body,
 				 uint32_t len)
 {
+	struct vms_club *club = &cn->cl->club;
 	uint16_t n = 0u;
 
+	/* A member's DLM header -- but not while a transition is in flight:
+	 * a member past its Phase 2 may already assert the stepped value this
+	 * node's own commit is about to compute, and taking it early would
+	 * step it twice. */
 	if (vms_dlm_seq_get(body, len, &n) == VMS_CODEC_OK) {
-		cnxman_dlm_seq_record(cn, n, &cn->dlm_seq_from_dlm);
+		if (!club->transition_active) {
+			cnxman_club_dlm_seq_learn(club, n);
+			cn->dlm_seq_from_dlm++;
+		}
 		return;
 	}
 	switch (vms_cm_open_dlm_seq(body, len, &n)) {
 	case VMS_CODEC_OK:
-		cnxman_dlm_seq_record(cn, n, &cn->dlm_seq_from_open);
+		cn->dlm_seq_from_open++;   /* the barrier records it (Phase 1) */
 		break;
 	case VMS_CODEC_E_SHORT:
-		cn->dlm_seq_open_bad++;   /* a 0x09 whose three copies disagree */
+		cn->dlm_seq_open_bad++;    /* a 0x09 whose three copies disagree */
 		break;
 	default:
-		break;                    /* not a carrier */
+		break;                     /* not a carrier */
 	}
 }
 
@@ -1803,11 +1784,13 @@ static void cnxman_dlm_seq_learn(struct vms_cnxman *cn, const uint8_t *body,
  * recorded (the caller then does not send). */
 static int cnxman_dlm_seq_stamp(struct vms_cnxman *cn, uint8_t *body)
 {
-	if (!cn->dlm_seq_valid) {
+	const struct vms_club *club = &cn->cl->club;
+
+	if (!club->dlm_seq_valid) {
 		cn->dlm_sends_no_seq++;
 		return -1;
 	}
-	return vms_dlm_seq_put(body, VMS_CM_BODY_LEN, cn->dlm_seq) ==
+	return vms_dlm_seq_put(body, VMS_CM_BODY_LEN, club->dlm_seq) ==
 		       VMS_CODEC_OK ? 0 : -1;
 }
 

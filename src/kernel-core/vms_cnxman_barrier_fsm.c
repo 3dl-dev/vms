@@ -494,6 +494,7 @@ static void barrier_commit_phase2(struct cnxman_barrier *b)
 	in.bitmap_popcount = b->bitmap_popcount;
 	in.reconfig = (uint8_t)(b->cl->club.transition_class ==
 				VMS_CM_CLASS_REMOVE);
+	in.rebuild = b->open_rebuild;
 
 	(void)cnxman_phase2_commit(b->cl, &in, &st, b->ops);
 
@@ -585,6 +586,11 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 
 	barrier_start_transition(b, m, &open);
 	barrier_take_bitmap(b, m, &open);
+	/* rd vms-64b: the rebuild type decides a joiner's DLM-sequence step at
+	 * Phase 2, and a 0x09's cells tell it the value in force. */
+	b->open_rebuild = open.has_bitmap ? open.cells.rebuild : 0u;
+	if (open.env.opcode == VMS_CM_OP_XITION_ADD && open.has_bitmap)
+		cnxman_club_dlm_seq_learn(&b->cl->club, open.cells.dlm_seq);
 	cnxman_club_learn_open(&b->cl->club,
 			       open.env.opcode == VMS_CM_OP_XITION_FORM ||
 			       open.env.opcode == VMS_CM_OP_XITION_REM,

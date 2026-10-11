@@ -177,12 +177,18 @@ SUITE_TIMEOUT=${SUITE_TIMEOUT:-300}
 # watchdog before it kills a suite that did not finish (rd vms-7ce).
 dump_stuck_tasks() {
     echo "  STUCK: $1 did not finish; user tasks at the deadline:"
+    # (procfs files report size 0, so "has a cmdline" is read, not -s.)
     for _d in /proc/[0-9]*; do
-        [ -s "$_d/cmdline" ] || continue
-        _st=$(cut -d' ' -f3 "$_d/stat" 2>/dev/null)
+        [ -n "$(tr -d '\0' <"$_d/cmdline" 2>/dev/null | head -c1)" ] || continue
         _pp=$(cut -d' ' -f4 "$_d/stat" 2>/dev/null)
-        echo "  STUCK: pid ${_d#/proc/} ppid $_pp state $_st comm $(cat "$_d/comm" 2>/dev/null) wchan $(cat "$_d/wchan" 2>/dev/null)"
-        sed 's/^/  STUCK:     /' "$_d/stack" 2>/dev/null
+        echo "  STUCK: pid ${_d#/proc/} ppid $_pp comm $(cat "$_d/comm" 2>/dev/null)"
+        for _t in "$_d"/task/[0-9]*; do
+            echo "  STUCK:   thread ${_t##*/} state $(cut -d' ' -f3 "$_t/stat" 2>/dev/null) wchan $(cat "$_t/wchan" 2>/dev/null)"
+            sed 's/^/  STUCK:     /' "$_t/stack" 2>/dev/null
+        done
+        for _f in "$_d"/fd/*; do
+            _l=$(readlink "$_f" 2>/dev/null) && case "$_l" in pipe:*|*vms*) echo "  STUCK:   fd ${_f##*/} -> $_l";; esac
+        done
     done
 }
 

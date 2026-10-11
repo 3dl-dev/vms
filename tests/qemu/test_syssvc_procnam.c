@@ -1141,10 +1141,35 @@ static void dump_one_task(int tid)
     }
 }
 
+#include <dirent.h>
+/* Every thread of process `pid` (its /proc/<pid>/task/<tid>). */
+static void dump_threads(int pid)
+{
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", pid);
+    DIR *d = opendir(path);
+    if (!d) { dump_one_task(pid); return; }
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        printf("  STUCK: -- thread %s of %d\n", e->d_name, pid);
+        dump_one_task(atoi(e->d_name));
+    }
+    closedir(d);
+}
+
 static void dump_stuck_task(pid_t pid)
 {
     printf("  STUCK: DCL.EXE pid %d, and the tasks it started:\n", (int)pid);
-    dump_one_task((int)pid);
+    dump_threads((int)pid);
+    {
+        char path[64], tgt[128];
+        for (int fd = 0; fd < 64; fd++) {
+            snprintf(path, sizeof path, "/proc/%d/fd/%d", (int)pid, fd);
+            ssize_t n = readlink(path, tgt, sizeof tgt - 1);
+            if (n > 0) { tgt[n] = '\0'; printf("  STUCK: fd %d -> %s\n", fd, tgt); }
+        }
+    }
     for (int t = 2; t < 32768; t++) {
         char path[64], buf[512];
         snprintf(path, sizeof path, "/proc/%d/stat", t);
@@ -1158,7 +1183,7 @@ static void dump_stuck_task(pid_t pid)
         int ppid = 0;
         char st = '?';
         if (rp && sscanf(rp + 2, "%c %d", &st, &ppid) == 2 && ppid == (int)pid)
-            dump_one_task(t);
+            dump_threads(t);
     }
 }
 

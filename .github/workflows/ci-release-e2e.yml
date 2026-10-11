@@ -77,6 +77,7 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -98,6 +99,7 @@ jobs:
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Run persistent boot smoke test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_persistent_boot.sh:/test.sh:ro \
@@ -113,6 +115,7 @@ jobs:
       # docs/oracle/semantics/known-diff.txt fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Semantic oracle — OVMX services vs real OpenVMS (vms-8d1)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           mkdir -p semantic-out
           docker run --rm \
@@ -132,6 +135,7 @@ jobs:
       # docs/oracle/keystroke/known-diff.txt fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
 
@@ -146,6 +150,7 @@ jobs:
       # reproduced the halt, and a fail-stop negative control (SYSUAF with no
       # SYSTEM row) proving this rig can still go red.
       - name: Release e2e — boot, provision, boot
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_release_e2e.sh:/test.sh:ro \
@@ -159,6 +164,7 @@ jobs:
       # boot is a negative control — it proves this check can actually go red,
       # which is the only thing that distinguishes a gate from decoration.
       - name: The executive is integral — OVMX must not boot without it
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           IDENTITY=${{ github.workspace }}/src/libvms/include/ovmx_identity.h
           PRODUCT_NAME=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_NAME[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY" | head -1)
@@ -179,6 +185,7 @@ jobs:
       # did. This is the §6 mount-or-halt shape that unblocks stripping install
       # out of PID 1 (vms-2f0).
       - name: Distribution disk boots to login (pre-installed, no self-install)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
@@ -194,6 +201,7 @@ jobs:
       # SYS$MANAGER:OVMX.CONF is verified absent from the booted, mounted
       # system disk (not merely deleted from the source tree).
       - name: STARTUP.COM phase driver — SYS$STARTUP search list, OVMX.CONF gone
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_startup_phase_driver.sh:/test.sh:ro \
@@ -211,6 +219,7 @@ jobs:
       # fixes the §3.7 audit made (%STARTUP-I-SYSDISK/MOUNTED/MODFAIL ->
       # %OVMX-).
       - name: Boot console sequence conformance vs. the OpenVMS oracle
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_boot_conformance.sh:/test.sh:ro \
@@ -230,6 +239,7 @@ jobs:
       # console. This gate authored the mechanism but was never wired into CI
       # until vms-46c; it runs here now.
       - name: SYSBOOT> conversational boot halts pre-banner (vms-b81)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_sysboot_conversational.sh:/test.sh:ro \
@@ -248,6 +258,7 @@ jobs:
       # checks run here too, not just the boot check. This is the LINUX-LAYER
       # NIC only; the VMS device face (EWAn:) is downstream (vms-3be/vms-9d2).
       - name: virtio-net NIC present on the QEMU runtime (vms-7bd)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_virtio_nic.sh:/test.sh:ro \
@@ -267,6 +278,7 @@ jobs:
       # supersedes the former test_intree_modules.sh + test_signed_modules.sh steps
       # (every assertion folded in; coverage strictly increased by the numeric read).
       - name: kernel is taint-clean (numeric /proc/sys/kernel/tainted, no O/E bits)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_kernel_taint.sh:/test.sh:ro \
@@ -280,6 +292,7 @@ jobs:
       # stamp / signature reddens ko_intree_ok / ko_signed_ok -- i.e. a revert to
       # out-of-tree or unsigned modules would turn this gate RED.
       - name: taint gate is two-sided (negative controls)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_kernel_taint.sh:/gate.sh:ro \
@@ -357,10 +370,12 @@ jobs:
       # First independent cut. --no-cache on both cuts is the point: this
       # proves the BUILD is reproducible, not that BuildKit's cache is.
       - name: Cut release A (clean tree, no cache)
+        id: cut_a
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a"
 
       - name: Cut release B (independent clean tree, no cache)
+        id: cut_b
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b"
 
@@ -374,6 +389,7 @@ jobs:
       # SHA256SUMS`) transitively re-verifies these files' bytes too, since
       # cut-release.sh now writes vax/* entries into SHA256SUMS.
       - name: Assert VAX release artifacts are present in the cut bundle
+        if: ${{ !cancelled() && steps.cut_a.outcome == 'success' && steps.cut_b.outcome == 'success' }}
         run: |
           set -euo pipefail
           # vms-88c (epic vms-509 Rung F): the shipped set is DERIVED from
@@ -395,6 +411,7 @@ jobs:
           echo "OK: release-manifest.json carries vax_release_parity + vax_artifacts"
 
       - name: Assert Alpha release artifacts are present in the cut bundle
+        if: ${{ !cancelled() && steps.cut_a.outcome == 'success' && steps.cut_b.outcome == 'success' }}
         run: |
           set -euo pipefail
           # rd vms-233b, epic vms-f10: the shipped Alpha set is DERIVED from each
@@ -427,6 +444,7 @@ jobs:
       # tools/gen_release_notes.py's header) -- it belongs in this same
       # byte-identical set, found by glob since its name is version-suffixed.
       - name: Assert the two cuts are byte-identical
+        if: ${{ !cancelled() && steps.cut_a.outcome == 'success' && steps.cut_b.outcome == 'success' }}
         run: |
           set -euo pipefail
           A="dist/release-a"
@@ -449,6 +467,7 @@ jobs:
       # recompute sha256 directly against the shipped bytes and compare
       # against what release-manifest.json / SHA256SUMS claim.
       - name: Recompute checksums and compare against the emitted manifest
+        if: ${{ !cancelled() && steps.cut_a.outcome == 'success' && steps.cut_b.outcome == 'success' }}
         run: |
           set -euo pipefail
           cd dist/release-a
@@ -470,6 +489,7 @@ jobs:
       # QEMU boot-to-login assertions persistent-boot already runs against a
       # normal (non-cut) build.
       - name: Boot the freshly-cut bundle to a login prompt
+        if: ${{ !cancelled() && steps.cut_a.outcome == 'success' && steps.cut_b.outcome == 'success' }}
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/dist/release-a/vmlinuz:/boot/vmlinuz:ro \
@@ -790,6 +810,7 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Cut the release bundle (tools/cut-release.sh, never hand-built)
+        id: cut
         run: |
           tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/release-acceptance"
 
@@ -798,6 +819,7 @@ jobs:
       # VAX artifact set too -- confirm it landed. R2 scope only (build +
       # publish); no VAX boot proof here, that is R3 vms-065.
       - name: Assert VAX release artifacts are present in the acceptance bundle
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
         run: |
           set -euo pipefail
           # vms-88c (epic vms-509 Rung F): DERIVED from the cut's own
@@ -814,6 +836,7 @@ jobs:
           echo "OK: all $n VAX co-release artifacts present in the acceptance bundle"
 
       - name: Assert Alpha release artifacts are present in the acceptance bundle
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
         run: |
           set -euo pipefail
           # rd vms-233b, epic vms-f10: DERIVED from the cut's own
@@ -830,6 +853,8 @@ jobs:
           echo "OK: all $n Alpha co-release artifacts present in the acceptance bundle"
 
       - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -841,6 +866,7 @@ jobs:
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Release-acceptance gate — boot the cut artifact, run the PARTS scenario, verify the shipped version
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' && steps.build.outcome == 'success' }}
         id: acceptance
         run: |
           set +e
@@ -855,6 +881,7 @@ jobs:
           exit "$rc"
 
       - name: NEGATIVE CONTROL — a wrong expected version must redden the gate
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' && steps.build.outcome == 'success' }}
         run: |
           set +e
           OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \

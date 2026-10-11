@@ -14,6 +14,7 @@
  */
 
 #include "cluster_test.h"
+#include "conformance_dump.h"   /* rd vms-ci.6 frame-conformance gate */
 #include "scs_test_harness.h"
 
 static struct scsh_node a_node;
@@ -1393,6 +1394,11 @@ static void t_239_disk_class_connect_is_byte_exact(void)
 	}
 	ct_check_eq_u32(same, sizeof(real_disk_cl_connect_72_124),
 			"*** abs 72..123 match the real VAX byte for byte ***");
+	/* rd vms-ci.6: the SCS-owned span (abs 56..123) of the class driver's
+	 * CONNECT_REQ, for the frame-conformance gate. */
+	conf_dump("scs_conreq_mscp", 56u, "initial_credits=4",
+		  &a_node.tx_last[SCS_MTYPE_CON_REQ][56],
+		  a_node.tx_last_len[SCS_MTYPE_CON_REQ] - 56u);
 }
 
 int main(void)

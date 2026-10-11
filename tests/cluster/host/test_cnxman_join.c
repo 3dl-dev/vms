@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "cluster_test.h"
+#include "conformance_dump.h"   /* rd vms-ci.6 frame-conformance gate */
 #include "cluster_fixture.h"
 #include "cnxman_fake_ops.h"
 
@@ -206,6 +207,10 @@ static int bed_send_msg(void *ctx, vms_conid_t conid, const uint8_t *body,
 	(void)ctx;
 	if (g.fail_send)
 		return g.fail_send_rc != 0 ? g.fail_send_rc : -1;
+	/* rd vms-ci.6: the join's disk walk (SCC x2 + GUS) is a REAL sender of
+	 * MSCP command bodies on the MSCP$DISK connection. */
+	if (conid == MSCP_CONID)
+		conf_dump("mscp_cmd", 72u, "join_walk=1", body, len);
 	if (g.n_sent < MAX_SENT) {
 		memset(g.sent[g.n_sent].body, 0, VMS_CM_BODY_LEN);
 		memcpy(g.sent[g.n_sent].body, body,

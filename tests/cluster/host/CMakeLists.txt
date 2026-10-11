@@ -1091,6 +1091,21 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
 # peer-crashing vectors by crashing real VAXes, and a gate that can no longer
 # fail would let the third through silently. Pure Python + stdlib, no capture
 # corpus and no lab needed, so it runs everywhere ctest does.
+# rd vms-ci.6: the FRAME-CONFORMANCE GATE. Drives OVMX's real MSCP class-driver,
+# join-walk and SCS CONNECT senders, and fails on any emitted byte that the
+# grounding table (tests/cluster/conformance/frame-grounding.tsv) does not
+# cover or whose value leaves its real-capture envelope; a negative control
+# proves the checker refuses a corrupted field. Lab fires that send these frame
+# types refuse to start unless this passes (tests/lab/tools/fire_gate.sh).
+add_test(NAME cluster_frame_conformance_gate
+    COMMAND bash "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_gate.sh"
+        "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp
+)
+set_tests_properties(cluster_frame_conformance_gate PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety"
+    TIMEOUT 120
+)
+
 add_test(NAME cluster_host_wire_safety_audit
     COMMAND ${CMAKE_COMMAND} -E env
         "${CMAKE_SOURCE_DIR}/tools/ci/cluster_wire_safety_gate.sh"

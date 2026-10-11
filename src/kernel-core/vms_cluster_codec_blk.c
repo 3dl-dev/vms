@@ -273,16 +273,24 @@ int vms_blk_port_op_is_block(uint8_t op)
 	case VMS_BLK_OP_RETURN_MORE:
 	case VMS_BLK_OP_RETURN_LAST:
 	case VMS_BLK_OP_SEND_CONFIRM:
+	case VMS_BLK_OP_STREAM_DATA:
 		return 1;
 	default:
 		return 0;
 	}
 }
 
+int vms_blk_port_op_is_message(uint8_t op)
+{
+	return op == VMS_BLK_OP_MESSAGE || op == VMS_BLK_OP_STREAM_END_MSG;
+}
+
 vms_codec_status_t vms_blk_port_op_put(uint8_t *frame, uint32_t cap,
 				       uint8_t op)
 {
-	if (frame == (uint8_t *)0 || !vms_blk_port_op_is_block(op))
+	if (frame == (uint8_t *)0 ||
+	    (!vms_blk_port_op_is_block(op) &&
+	     op != VMS_BLK_OP_STREAM_END_MSG))
 		return VMS_CODEC_E_INVAL;
 	if (cap <= VMS_OFF_BLK_PORT_OP)
 		return VMS_CODEC_E_SHORT;

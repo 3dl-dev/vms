@@ -284,9 +284,21 @@ vms_codec_status_t vms_blk_trailer_parse(const uint8_t *frame,
  *   0x0f          257   the 8-byte acknowledgement of a SEND DATA (SCA
  *                       content 48), one per 0x05, 257 of 257
  *
- * No other value occurs. This replaces the spec-sec-4(h)(4) reading of abs 54
- * as "constant 0x0200 in 238521/239981": the 1460 frames that census could
- * not explain were these five opcodes.
+ * No other value occurs in that population. This replaces the spec-sec-4(h)(4)
+ * reading of abs 54 as "constant 0x0200 in 238521/239981": the 1460 frames
+ * that census could not explain were these five opcodes.
+ *
+ * MSCP SERVING ADDS TWO (rd vms-b20, capture tests/lab/captures/
+ * vms-b20-mscp-read-20261011, a real VAX1 serving a private RA81 to VAX2):
+ *   0x14    108   a SEND DATA stream frame of an MSCP READ (28-byte header +
+ *                 data, chunk 1426), server -> host
+ *   0x15     23   the READ's MSCP END MESSAGE -- an ordinary SCS message (abs
+ *                 58 == 0x0004 in 23 of 23) -- with the transfer's FINAL chunk
+ *                 piggybacked past its inner length as a 28-byte header +
+ *                 tail; 23 of 23 end their transfer (+8 == tail length)
+ * Neither draws a 0x0f: the END message itself completes the READ. +0 is the
+ * initiator's (server's) own Con.ID on 30 of 30 transfers; the +4/+6 tag is
+ * the same on every frame of one transfer, trailer included.
  *
  * WHAT THE HEADER'S +0/+4/+6 ARE, MEASURED ON THE SAME POPULATION:
  *   +0  the INITIATOR's own Con.ID for the connection (the node that sends
@@ -308,6 +320,8 @@ vms_codec_status_t vms_blk_trailer_parse(const uint8_t *frame,
 #define VMS_BLK_OP_RETURN_MORE       0x0cu
 #define VMS_BLK_OP_RETURN_LAST       0x0du
 #define VMS_BLK_OP_SEND_CONFIRM      0x0fu
+#define VMS_BLK_OP_STREAM_DATA       0x14u   /* MSCP READ stream frame       */
+#define VMS_BLK_OP_STREAM_END_MSG    0x15u   /* END message + final chunk    */
 
 /* The acknowledgement carries the header's first 8 bytes and nothing else. */
 #define VMS_BLK_CONFIRM_LEN          8u
@@ -316,8 +330,13 @@ vms_codec_status_t vms_blk_trailer_parse(const uint8_t *frame,
 /* The opcode at abs 55, or 0 when the frame is too short to carry one. */
 uint8_t vms_blk_port_op(const uint8_t *frame, uint32_t len);
 
-/* 1 iff `op` is one of the five block-transfer opcodes measured above. */
+/* 1 iff `op` is a pure block-transfer opcode measured above (0x05 0x08 0x0c
+ * 0x0d 0x0f 0x14) -- a frame that carries no SCS message. */
 int vms_blk_port_op_is_block(uint8_t op);
+
+/* 1 iff `op` carries an SCS message (0x02, and 0x15 whose message is followed
+ * by a block trailer): such a frame is delivered to SCS. */
+int vms_blk_port_op_is_message(uint8_t op);
 
 /* Write `op` at abs 55. Refuses (VMS_CODEC_E_INVAL) any value that is not a
  * measured block opcode: a frame is never stamped with a guess. */

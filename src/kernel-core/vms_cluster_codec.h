@@ -384,6 +384,16 @@ const struct vms_frame_class_info *vms_frame_class_by_name(const char *name);
 vms_codec_status_t vms_frame_classify(const uint8_t *frame, uint32_t len,
 				      struct vms_frame_info *out);
 
+/*
+ * vms_scs_msg_extent - how many bytes of `frame` the SCS MESSAGE occupies
+ * (rd vms-239). `len` for every frame but a port-opcode-0x15 READ END, whose
+ * message stops at 14 + 44 + its inner length and is followed by a 28-byte
+ * block header and the transfer's final data. The shorter extent is returned
+ * only when it reaches past abs 72 and leaves room for that block header;
+ * otherwise `len`. Never larger than `len`.
+ */
+uint32_t vms_scs_msg_extent(const uint8_t *frame, uint32_t len);
+
 /* ------------------------------------------------------------------ *
  * §4  The shared SCA header -- typed parse / build
  * ------------------------------------------------------------------ */

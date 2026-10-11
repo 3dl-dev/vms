@@ -943,12 +943,18 @@ int scs_connect(struct vms_scs *scs, const uint8_t *local_name,
 	args.dst = dst;
 	args.initial_credits = info.initial_credits;
 	/* p. 2-44's OTHER credit argument. vms_scs.h's frozen CONNECT service
-	 * does not carry it, so the SYSAPs that connect through this entry
-	 * point -- SCS$DIRECTORY's poller, VMS$VAXcluster, the disk class
-	 * driver -- declare no minimum, which is their real requirement: none
-	 * of them reserves a Send Credit for anything. 0 is that answer, not a
-	 * placeholder (INV-6). */
+	 * does not carry it, so it is read off the SYSAP's own registration
+	 * (rd vms-239), exactly like its initial credits above. SCS$DIRECTORY's
+	 * poller and VMS$VAXcluster declare none (0, their real answer); the
+	 * disk class driver declares the floor every real class driver
+	 * states. The same registration supplies the SYSAP's own connect data
+	 * when the caller named none. */
 	args.min_credits = 0u;
+	if (args.sysap != (const struct scs_sysap_ops *)0) {
+		args.min_credits = args.sysap->connect_min_credits;
+		if (conndata == (const uint8_t *)0)
+			args.conndata = args.sysap->connect_conndata;
+	}
 	return (int)scs_glue_status(scs_fsm_connect(&scs->fsm, &args,
 						    out_conid));
 }

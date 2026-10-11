@@ -64,6 +64,12 @@ const uint8_t cnxman_join_name_disk_cl_drvr[VMS_SCS_PROCNAME_LEN] = {
 	'V', 'M', 'S', '$', 'D', 'I', 'S', 'K', '_', 'C', 'L', '_', 'D', 'R',
 	'V', 'R'
 };
+/* rd vms-239: the class driver's connect data, 4,032/4,032 real connects
+ * (vms_cnxman_join_fsm.h). */
+const uint8_t cnxman_join_disk_cl_conndata[VMS_SCS_PROCNAME_LEN] = {
+	'V', '5', '.', '0', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+	'+', ' '
+};
 
 /* ==========================================================================
  * Small shared helpers. This TU calls no library (a pure TU builds on the
@@ -1758,11 +1764,11 @@ static void join_open_mscp(struct cnxman_join *j)
  *      proceeds: a refused disk-client connect is ordinary traffic in this
  *      dialogue, not a verdict.
  *
- *   3. THE REJECT CARRIES NO VERDICT TO READ. Book p. 2-25 / correction D12
- *      makes a REJECT the Connection Managers' judgement on the 16-byte connect
- *      data -- and join_open_mscp() passes `conndata = NULL` on this connect, as
- *      the wire confirms. A connection that asserted no version identity cannot
- *      have had one refused.
+ *   3. THE REJECT IS THE SERVER'S VERDICT ON THE CLASS DRIVER, NOT THE JOIN.
+ *      Book p. 2-25 / correction D12 makes a REJECT a judgement on the 16-byte
+ *      connect data. join_open_mscp() passes `conndata = NULL`, and SCS
+ *      supplies the class driver's own (its SYSAP registration, rd vms-239)
+ *      -- so a refusal is about the disk client, never the membership.
  *
  * WHAT IS HONESTLY LOST, and counted: this node enumerates none of that
  * member's served units. It says so (`mscp_rejected` / `mscp_lost`) instead of

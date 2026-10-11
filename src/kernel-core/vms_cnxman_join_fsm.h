@@ -252,6 +252,22 @@ extern const uint8_t cnxman_join_name_mscp_disk[VMS_SCS_PROCNAME_LEN];
 extern const uint8_t cnxman_join_name_disk_cl_drvr[VMS_SCS_PROCNAME_LEN];
 
 /*
+ * rd vms-239: what the disk class driver SAYS ABOUT ITSELF when it connects to
+ * an MSCP server -- the CONNECT_REQ's 16-byte connect data (spec SS4(N)) and
+ * its SCS$W_MIN_CR (p. 2-44). Measured (Rule 8, the class driver's own
+ * on-wire statement): every VMS$DISK_CL_DRVR -> MSCP$DISK CONNECT_REQ a real
+ * VAX V7.3 put on the wire in the lab corpus -- 4,032 frames from 19 distinct
+ * nodes -- carries exactly these 16 bytes and MIN_CR 2, whatever the server,
+ * the cluster or the boot; a server ACCEPTs every one. OVMX's blank/0 connect
+ * was REJECTED by a real VAX1 serving a disk every ~32 s
+ * (tests/lab/captures/vms-239-mscp-connect-20261011). They are a property of
+ * the class driver's protocol, not of any node, so no node's private value
+ * travels: the census found no variation to copy.
+ */
+#define CNXMAN_DISK_CL_MIN_CREDITS 2u
+extern const uint8_t cnxman_join_disk_cl_conndata[VMS_SCS_PROCNAME_LEN];
+
+/*
  * How often this node NOTICES that a join step is still outstanding. An OVMX
  * DESIGN VALUE, labelled as one: no capture measures a JOINER-side timeout.
  * What it does is bounded on purpose -- it counts, it logs once, and in the

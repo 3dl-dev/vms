@@ -1192,6 +1192,12 @@ build_status_proof_images() {
     cp "${REPO}/tests/native-images/vax/${img}.EXE" "${STATUS_PROOF_IMAGES_DIR}/"
   done
   cp "${REPO}/tests/native-images/vax/HELLO.MAR" "${STATUS_PROOF_IMAGES_DIR}/NOTIMG.EXE"
+  # The semantic-oracle probes LINKed on the lab VAX V7.3 node: RUN after the
+  # boot in a SYSTEM login (status_sp_session) and diffed against vax73.txt.
+  local sp
+  for sp in "${REPO}"/tests/native-images/vax/sp/SP_*.EXE; do
+    [ -f "${sp}" ] && cp "${sp}" "${STATUS_PROOF_IMAGES_DIR}/"
+  done
   for img in STSNORM.EXE STSCOND.EXE NATIVEACT.EXE; do
     [ -f "${STATUS_PROOF_IMAGES_DIR}/${img}" ] || die "status proof image ${img} was not produced"
   done
@@ -1229,6 +1235,33 @@ master_status_volume() {
     || die "mastered status proof volume is MISSING [USERS]"
 }
 
+# status_sp_diff <console-log> <fam,fam,...> -- each probe's transcript, cut
+# from the console between its SEMPROBE markers, against the golden that same
+# image printed on the lab VAX V7.3 node (docs/oracle/semantics/<fam>/vax73.txt),
+# under the native ratchet docs/oracle/semantics/known-diff-native-vax.txt.
+# A "NATIVE-SP:" line (the login or a probe did not complete) fails it.
+status_sp_diff() {
+  local logf="$1" fams="$2" td f ok=0
+  if grep -aq "NATIVE-SP:" "${logf}"; then
+    tr -d '\r' < "${logf}" | grep -a "NATIVE-SP:" | sed 's/^/    /' >&2
+    ok=1
+  fi
+  td=$(mktemp -d)
+  for f in $(echo "${fams}" | tr , ' '); do
+    tr -d '\r\000' < "${logf}" | awk -v f="${f}" '
+      $0 == "=== SEMPROBE " f " BEGIN ===" { on = 1 }
+      on { print }
+      on && ($0 == "=== SEMPROBE " f " END ===" || $0 == "=== SEMPROBE aborted END ===") { exit }' \
+      > "${td}/${f}.txt"
+  done
+  python3 "${REPO}/tools/oracle/semantic/semantic_diff.py" --selftest >/dev/null || ok=1
+  python3 "${REPO}/tools/oracle/semantic/semantic_diff.py" "${td}" \
+      --known "${REPO}/docs/oracle/semantics/known-diff-native-vax.txt" \
+      --families "${fams}" --golden vax73 || ok=1
+  rm -rf "${td}"
+  return "${ok}"
+}
+
 # selftest -> build -> master -> boot -> assert. 0 = every proof RUN left its
 # exact $STATUS on the console.
 run_status_gate() {
@@ -1238,12 +1271,25 @@ run_status_gate() {
   build_status_proof_images
   master_status_volume
   rm -f "${STATUS_LOG}"
-  run_session status-gate /cache/boot-work \
+  # The probe families (tests/native-images/vax/sp/SP_<FAM>.EXE); the negctl
+  # boot asserts the CMKRNL refusal only and runs none.
+  local spfams="" deadline=1800
+  if [ "${OVMX_NEGCTL_NATIVEACT_KEEPS_CMKRNL:-0}" != 1 ]; then
+    spfams=$(ls "${REPO}"/tests/native-images/vax/sp/SP_*.EXE 2>/dev/null \
+               | sed 's#.*/SP_##; s#\.EXE$##' | tr 'A-Z' 'a-z' | paste -sd, -)
+  fi
+  [ -n "${spfams}" ] && deadline=4200
+  SESSION_TIMEOUT=$((deadline + 900)) run_session status-gate /cache/boot-work \
       -e OVMX_SYSVOL_IMG=/cache/"$(basename "${STATUS_SYSVOL_IMG}")" \
       -e OVMX_STATUS_LOG=/cache/"$(basename "${STATUS_LOG}")" \
+      -e OVMX_SP_FAMS="${spfams}" -e NETBSD_BOOT_DEADLINE="${deadline}" \
     || { soft_die "STATUS-GATE: the SIMH boot session failed (harness error, see above)"; return 1; }
   log "status proof lines on the console:"
-  tr -d '\r' < "${STATUS_LOG}" | grep -aE 'STATUS-PROOF:|OVMX-STATUS |%DCL-|%SYSTEM-' | sed 's/^/    /' || true
+  tr -d '\r' < "${STATUS_LOG}" | grep -aE 'STATUS-PROOF:|OVMX-STATUS |NATIVE-SP:|%DCL-|%SYSTEM-' | sed 's/^/    /' || true
+  if [ -n "${spfams}" ] && ! status_sp_diff "${STATUS_LOG}" "${spfams}"; then
+    soft_die "STATUS-GATE FAILED (vms-b869): the native semantic-oracle probes differ from OpenVMS VAX V7.3 beyond docs/oracle/semantics/known-diff-native-vax.txt"
+    return 1
+  fi
   if assert_status_proof "${STATUS_LOG}"; then
     log "======================================================================"
     log "  STATUS-GATE PASSED (vms-b869): OVMX/NetBSD-vax booted under SIMH, the"

@@ -28,6 +28,7 @@ So the list can only shrink.
   semantic_diff.py --goldens                           check goldens are well formed
   semantic_diff.py <dir> --write-known                 (re)write known-diff.txt
   semantic_diff.py <dir> --known FILE --families a,b   another ratchet, these families only
+  semantic_diff.py <dir> ... --golden vax73            against that golden instead of alpha84
 """
 import hashlib
 import os
@@ -77,6 +78,11 @@ def goldens():
         if g:
             out[fam] = g
     return out
+
+
+def only_golden(gold, key):
+    """the families that have golden `key`, each held to that golden alone"""
+    return {f: {key: g[key]} for f, g in gold.items() if key in g}
 
 
 def reference(g):
@@ -244,6 +250,14 @@ def selftest():
     res.append(("a stale listed case fails", run(same, "zz ZZ.B  # x\n") is False))
     res.append(("a missing case fails", run(short, "") is False))
     res.append(("an orphan known line fails", run(same, "zz ZZ.NOPE  # x\n") is False))
+    # --golden vax73: the VAX golden decides, the Alpha one is not consulted
+    open(os.path.join(gd, "vax73.txt"), "w").write(same.replace("x=1", "x=2"))
+    gold["zz"]["vax73"] = os.path.join(gd, "vax73.txt")
+    full = gold
+    gold = only_golden(full, "vax73")
+    res.append(("--golden vax73: the VAX transcript passes", run(diff, "") is True))
+    res.append(("--golden vax73: the Alpha transcript fails", run(same, "") is False))
+    gold = full
     ok = all(r for _, r in res)
     for name, r in res:
         print("%s: %s" % ("PASS" if r else "FAIL", name))
@@ -268,6 +282,10 @@ def main(a):
         if "--families" in rest:
             want = rest[rest.index("--families") + 1].split(",")
             gold = {f: g for f, g in goldens().items() if f in want}
+        # --golden vax73: a probe LINKed on the lab VAX V7.3 node, run on
+        # OVMX/VAX, is held to what that node printed, not to Alpha V8.4.
+        if "--golden" in rest:
+            gold = only_golden(gold or goldens(), rest[rest.index("--golden") + 1])
         return 0 if gate(a[1], report="--report" in rest, known_path=known_path,
                          gold=gold) else 1
     print(__doc__)

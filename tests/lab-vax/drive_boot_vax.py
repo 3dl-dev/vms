@@ -1227,6 +1227,79 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
 MS_STATUS_PROOF_END = "STATUS-PROOF: === END ==="
 
 
+def status_sp_session(child, log_f, fams, deadline):
+    """rd vms-b869: after the proof SYSTARTUP, log SYSTEM in on OPA0: and RUN
+    each semantic-oracle probe LINKed on the lab VAX V7.3 node
+    (SYS$SYSTEM:SP_<FAM>.EXE, tests/native-images/vax/sp/) in that session --
+    the one its golden (docs/oracle/semantics/<fam>/vax73.txt) was printed in:
+    a logged-in SYSTEM on a 511-column unpaged terminal
+    (tools/oracle/semantic/capture.py). Every console byte goes to log_f;
+    run-boot.sh cuts each transcript at its SEMPROBE markers and diffs it. A
+    step that does not complete writes a "NATIVE-SP:" line, which reds the
+    gate there."""
+    import pexpect
+
+    buf = [b""]
+
+    def pump(timeout):
+        try:
+            chunk = child.read_nonblocking(size=4096, timeout=timeout)
+        except pexpect.TIMEOUT:
+            return True
+        except (pexpect.EOF, OSError):
+            return False
+        if isinstance(chunk, str):
+            chunk = chunk.encode("latin-1", "replace")
+        log_f.write(chunk)
+        buf[0] = (buf[0] + chunk)[-65536:]
+        return True
+
+    def wait(pat, secs, feed_cr=False):
+        end = min(time.time() + secs, deadline)
+        nxt = 0
+        while time.time() < end:
+            if pat.encode() in buf[0]:
+                return True
+            if feed_cr and time.time() >= nxt:
+                child.send("\r")
+                nxt = time.time() + 5
+            if not pump(1):
+                return False
+        return pat.encode() in buf[0]
+
+    def note(msg):
+        log_f.write(("\r\nNATIVE-SP: %s\r\n" % msg).encode())
+        log("STATUS-GATE: %s" % msg)
+
+    if not wait("Username:", 600, feed_cr=True):
+        note("no Username: prompt after the proof SYSTARTUP")
+        return
+    buf[0] = b""
+    child.send("SYSTEM\r")
+    if not wait("Password:", 120):
+        note("no Password: prompt")
+        return
+    buf[0] = b""
+    child.send("MANAGER\r")
+    if not wait("Welcome to OpenVMX", 300) or not wait("$ ", 120):
+        note("SYSTEM/MANAGER login did not reach the DCL prompt")
+        return
+    buf[0] = b""
+    child.send("SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP\r")
+    wait("$ ", 120)
+    for f in fams:
+        buf[0] = b""
+        child.send("RUN SYS$SYSTEM:SP_%s\r" % f.upper())
+        if not wait("=== SEMPROBE %s END ===" % f, 900):
+            if b"=== SEMPROBE aborted END ===" not in buf[0]:
+                note("SP_%s did not reach its END marker" % f.upper())
+                return
+        wait("$ ", 60)
+    child.send("LOGOUT\r")
+    pump(3)
+    log("STATUS-GATE: ran %d native probe(s) in a SYSTEM login" % len(fams))
+
+
 def do_status_gate(a, sysvol_img, boot_deadline):
     """rd vms-b869: boot the assembled disk with the $STATUS proof SYSTEM
     volume on rq1 (-> ra1 -> DUA0:) and record the console to OVMX_STATUS_LOG.
@@ -1299,6 +1372,9 @@ def do_status_gate(a, sysvol_img, boot_deadline):
             if isinstance(chunk, str):
                 chunk = chunk.encode("latin-1", "replace")
             log_f.write(chunk)
+        fams = [f for f in env("OVMX_SP_FAMS", "").split(",") if f]
+        if fams and stop == "proof END line":
+            status_sp_session(child, log_f, fams, deadline)
     except (pexpect.TIMEOUT, pexpect.EOF, Exception) as e:
         stop = "%s: %s" % (type(e).__name__, e)
     finally:

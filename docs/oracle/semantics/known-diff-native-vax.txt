@@ -1,0 +1,10 @@
+# known-diff-native-vax.txt - the VAX native-image semantic ratchet (rd vms-b869).
+# "<family> <CASE-ID>  # <rd item>: <why>" -- a case where the semantic-oracle
+# probe image LINKed on the lab OpenVMS VAX V7.3 node, run UNCHANGED on
+# OVMX/VAX through NATIVEACT.EXE (tests/native-images/vax/sp/, the CI VAX
+# $STATUS gate, tests/lab-vax/run-boot.sh status_sp_diff), prints something
+# other than what the same image printed on that node
+# (docs/oracle/semantics/<family>/vax73.txt). Read by
+# tools/oracle/semantic/semantic_diff.py --known ... --golden vax73: an unlisted
+# difference fails the gate, and so does a listed case that now matches. Fix
+# the bug, delete the line.

@@ -7,6 +7,7 @@ add_executable(vms_nativeact nativeact.c ${CMAKE_SOURCE_DIR}/src/imgact/imgact_a
 target_include_directories(vms_nativeact PRIVATE
     ${CMAKE_SOURCE_DIR}/src/imgact
     ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${VMS_INCLUDE_DIR}
 )
 target_compile_definitions(vms_nativeact PRIVATE _NETBSD_SOURCE _DEFAULT_SOURCE)

@@ -1539,6 +1539,29 @@ static int dcl_resolve_activatable_acp(struct dcl_context *ctx,
             char lp[1024];
             snprintf(lp, sizeof(lp), "%s%s", linux_path, exts[e]);
             char staged[1024];
+            /* (0) An INSTALLED SYS$SYSTEM image (rd vms-bdc1): run the
+             * executive's own copy from its known file list, as VMS
+             * activates a known image from the known file entry -- and the
+             * only file the executive grants /PRIVILEGED privileges for at
+             * activation (it matches the exec'd file against the copy it
+             * pins, never a name or a path). */
+            if (ovmx_boot_stage_exec_path(lp, staged, sizeof(staged))) {
+                const char *base = staged;
+                for (const char *q = staged; *q; q++)
+                    if (*q == '/')
+                        base = q + 1;
+                struct vms_kfe_args k;
+                memset(&k, 0, sizeof(k));
+                k.op = VMS_KFE_OP_FIND_NAME;
+                k.fd = -1;
+                snprintf(k.name, sizeof(k.name), "%s", base);
+                if ((vms_kif_kfe(&k) & 1) && (k.status & 1) && k.path[0] &&
+                    access(k.path, X_OK) == 0) {
+                    strncpy(resolved, k.path, sz - 1);
+                    resolved[sz - 1] = '\0';
+                    return 1;
+                }
+            }
             /* (1) Booted runtime: the first-hop SYS$SYSTEM image was already
              * read off the volume over the ACP and staged to a POSIX file by
              * ovmx_init's boot bridge -- use it directly. */
@@ -2113,7 +2136,13 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         const struct imgact_critp1 *cpp = NULL;
         if (dcl_p1_critical_range(&cp1.base, &cp1.limit))
             cpp = &cp1;
-        uint32_t ia = imgact_activate(linux_path, 0, 0, cpp, &image_rc);
+        /* An installed image (the executive's copy, rd vms-bdc1) is activated
+         * by exec, where the executive grants its /PRIVILEGED privileges and
+         * runs them down: in-process activation has no such grant yet, so it
+         * takes the fork()+execve() model below. */
+        uint32_t ia = strncmp(linux_path, VMS_KFE_DIR "/", sizeof(VMS_KFE_DIR)) == 0
+                    ? SS$_UNSUPPORTED
+                    : imgact_activate(linux_path, 0, 0, cpp, &image_rc);
         /*
          * ONLY a genuine in-process run bypasses the fork: SS$_NORMAL (the
          * image ran and returned) or SS$_ACCVIO (it ran, faulted, and was run

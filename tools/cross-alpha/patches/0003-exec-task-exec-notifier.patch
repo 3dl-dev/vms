@@ -1,0 +1,85 @@
+exec: notify in-kernel subsystems when a process execs (task_exec_notifier)
+
+Some in-kernel subsystems keep per-process state outside struct task_struct
+and must act on every successful execve() of a process: an operating-system
+personality that grants an installed image its privileges while it runs and
+takes them away when the next image is activated, for example. Today the
+supported hook is the sched_process_exec tracepoint, which an architecture
+without CONFIG_TRACEPOINTS cannot offer -- on alpha, CONFIG_TRACEPOINTS pulls
+in the event-tracing runtime and a stack unwinder alpha does not have.
+
+Add a blocking notifier chain called from exec_binprm() at the point
+trace_sched_process_exec() fires, in process context of the task that exec'd
+(callbacks may sleep), with the linux_binprm as the data (bprm->file is the
+executable). Registration is exported GPL-only. HAVE_TASK_EXEC_NOTIFIER lets a
+module select this hook at build time.
+
+OVMX (rd vms-bdc1): the VMS executive (vms.ko) grants an installed
+/PRIVILEGED image its privileges at activation and drops a previous image's
+from this hook; x86_64/aarch64 kernels without the patch use the tracepoint.
+
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -26,6 +26,7 @@
+ #include <linux/kernel_read_file.h>
+ #include <linux/slab.h>
+ #include <linux/file.h>
++#include <linux/notifier.h>
+ #include <linux/fdtable.h>
+ #include <linux/mm.h>
+ #include <linux/stat.h>
+@@ -1771,6 +1772,31 @@
+ }
+ 
+ /* binfmt handlers will call back into begin_new_exec() on success. */
++/*
++ * Image activation notification for in-kernel subsystems that keep
++ * per-process state outside struct task_struct and must act on every
++ * successful execve() of a process (an executive that grants and drops
++ * per-image privileges, for example). Called from exec_binprm() at the point
++ * trace_sched_process_exec() fires, in process context of the task that
++ * exec'd (callbacks may sleep), with the linux_binprm as the data:
++ * bprm->file is the executable. This gives architectures without
++ * CONFIG_TRACEPOINTS a supported way to observe the exec that tracepoint users
++ * already have.
++ */
++static BLOCKING_NOTIFIER_HEAD(task_exec_notifier);
++
++int task_exec_notifier_register(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_register(&task_exec_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exec_notifier_register);
++
++int task_exec_notifier_unregister(struct notifier_block *nb)
++{
++	return blocking_notifier_chain_unregister(&task_exec_notifier, nb);
++}
++EXPORT_SYMBOL_GPL(task_exec_notifier_unregister);
++
+ static int exec_binprm(struct linux_binprm *bprm)
+ {
+ 	pid_t old_pid, old_vpid;
+@@ -1811,6 +1837,7 @@
+ 
+ 	audit_bprm(bprm);
+ 	trace_sched_process_exec(current, old_pid, bprm);
++	blocking_notifier_call_chain(&task_exec_notifier, 0, bprm);
+ 	ptrace_event(PTRACE_EVENT_EXEC, old_vpid);
+ 	proc_exec_connector(current);
+ 	return 0;
+--- a/include/linux/binfmts.h
++++ b/include/linux/binfmts.h
+@@ -128,6 +128,12 @@
+ extern void set_binfmt(struct linux_binfmt *new);
+ extern ssize_t read_code(struct file *, unsigned long, loff_t, size_t);
+ 
++struct notifier_block;
++/* Called from exec_binprm() for every successful exec, data = linux_binprm. */
++#define HAVE_TASK_EXEC_NOTIFIER 1
++extern int task_exec_notifier_register(struct notifier_block *nb);
++extern int task_exec_notifier_unregister(struct notifier_block *nb);
++
+ int kernel_execve(const char *filename,
+ 		  const char *const *argv, const char *const *envp);
+ 

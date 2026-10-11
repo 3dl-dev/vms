@@ -91,6 +91,12 @@ accepted.
 - **Never queue a PR stacked on another unmerged PR.** The queue can reorder them and squash the
   base into the stacked PR's commit. Queue the base; once it lands, rebase the stacked PR onto main
   (`git rebase --onto origin/main <old-base>`), let its checks run, and queue it then.
+- **Append-only lists are directories, so concurrent PRs never conflict.** A new LIBVMSSYS$SHR
+  universal is a file `src/vmslink/libvmssys_shr.d/<NAME>` holding its class -- never a line appended
+  to `libvmssys_shr.vec`, which is the RELEASED vector and changes only in a release cut
+  (`tools/vmslink/vec_release_cut.sh`; the freeze gate refuses anything else). VMS-ordinal vectors
+  (`src/vmslink/vms_vectors/`) stay pinned to VMS's offsets and take no fragments. A known-diff
+  entry is a file `docs/oracle/*/known-diff.d/<a>-<b>`.
 - **No mapped reds.** The queue merges only on green. A red on main is fixed first -- by the PR
   that fixes it, which goes through the queue like any other -- never mapped around.
 - **`tools/ci/safe_merge.sh <pr>` is the emergency bypass only** (the queue down, or main red with

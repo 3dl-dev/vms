@@ -3,7 +3,7 @@
 Status: steps 1 and 5 below (core + Linux port + NetBSD port + the console read path, DCL
 and LOGINOUT on $QIO, termios toggles removed) landed together, per the ruling that the
 driver lands on Linux and NetBSD at once. `tests/qemu/test_kmod_tt.c` pins the bytes; the
-keystroke oracle (`docs/oracle/keystroke/known-diff.txt`) measures what remains.
+keystroke oracle (`docs/oracle/keystroke/known-diff.d/`) measures what remains.
 
 **Problem.** OVMX has no VMS terminal driver. Echo, line editing and type-ahead are the
 substrate's Unix line discipline (n_tty); DCL uses readline; ^Y/^C are SIGINT/SIGQUIT. The

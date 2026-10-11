@@ -4651,6 +4651,23 @@ static struct pe_blk_tag *blk_tag_match(struct pe_fsm *f, vms_scs_sysid_t peer,
 	return NULL;
 }
 
+/* The live stream tag of OUR buffer `name` to `peer` (an MSCP READ in flight
+ * between pe_blk_send and pe_blk_send_read_end). */
+static struct pe_blk_tag *blk_tag_by_name(struct pe_fsm *f, vms_scs_sysid_t peer,
+					  uint32_t name, uint8_t op)
+{
+	uint32_t i;
+
+	for (i = 0; i < PE_BLK_MAX_TAGS; i++) {
+		struct pe_blk_tag *t = &f->blk_tag[i];
+
+		if (t->in_use && t->op == op && t->peer == peer &&
+		    t->local_name == name)
+			return t;
+	}
+	return NULL;
+}
+
 static void blk_tag_free(struct pe_blk_tag *t)
 {
 	pe_bzero(t, (uint32_t)sizeof(*t));
@@ -4699,14 +4716,6 @@ static void blk_fill_hdr(const struct pe_fsm *f, const struct pe_vc *vc,
 	h->dst_offset = x->remote_offset + done;
 }
 
-/* The +4/+6 accounting, in one place: a frame built with no observed pair is
- * counted, so "how often did this port emit an honest zero there" is a number
- * and not a belief. */
-static void blk_note_obs(struct pe_fsm *f, const struct pe_vc *vc)
-{
-	if (!vc->obs_valid)
-		f->blk_obs_absent++;
-}
 
 /* ---- one frame out ---- */
 
@@ -4863,6 +4872,7 @@ int pe_blk_send(struct pe_fsm *f, const struct pe_blk_xfer *x,
 {
 	struct blk_setup s;
 	struct vms_blk_hdr h;
+	struct pe_blk_tag *t;
 	uint32_t done = 0u;
 	uint32_t stream;
 	uint32_t frames = 0u;
@@ -4873,6 +4883,20 @@ int pe_blk_send(struct pe_fsm *f, const struct pe_blk_xfer *x,
 	if (rc != PE_BLK_OK)
 		return rc;
 
+	/*
+	 * rd vms-b20: an MSCP READ's stream frames carry opcode 0x14 and ONE tag
+	 * for the whole transfer -- the tag the closing 0x15 trailer
+	 * (pe_blk_send_read_end) carries too (108 + 23 real frames). A stale
+	 * tag for this buffer (a READ whose end never went) is replaced.
+	 */
+	t = blk_tag_by_name(f, x->peer, x->local_name, VMS_BLK_OP_STREAM_DATA);
+	if (t != NULL)
+		blk_tag_free(t);
+	t = blk_tag_mint(f, VMS_BLK_OP_STREAM_DATA, x->dest_conid,
+			 x->local_name, x->peer);
+	if (t == NULL)
+		return PE_BLK_NOSPACE;
+
 	stream = x->length - tail_reserve;
 	while (done < stream) {
 		uint32_t n = stream - done;
@@ -4880,15 +4904,21 @@ int pe_blk_send(struct pe_fsm *f, const struct pe_blk_xfer *x,
 		if (n > s.chunk)
 			n = s.chunk;
 		blk_fill_hdr(f, s.vc, x, s.buf, done, &h);
+		h.obs_w4 = t->idx;
+		h.obs_w6 = t->seq;
 		rc = blk_send_one(f, s.vc, x->peer, &h,
-				  s.buf->base + x->local_offset + done, n, 0u);
+				  s.buf->base + x->local_offset + done, n,
+				  VMS_BLK_OP_STREAM_DATA);
 		if (rc != PE_BLK_OK)
 			break;
-		blk_note_obs(f, s.vc);   /* counted only for a frame that WENT */
 		s.vc->blk_bytes_tx += n;
 		done += n;
 		frames++;
 	}
+	/* No end message will follow a whole-transfer stream (tail 0), and none
+	 * follows a stream that failed part-way: the tag is done either way. */
+	if (rc != PE_BLK_OK || tail_reserve == 0u)
+		blk_tag_free(t);
 	if (frames_out != NULL)
 		*frames_out = frames;
 	return rc;
@@ -4900,6 +4930,7 @@ int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
 {
 	struct blk_setup s;
 	struct vms_blk_hdr h;
+	struct pe_blk_tag *t;
 	uint8_t *frame;
 	uint32_t cap;
 	uint32_t end_len;
@@ -4931,8 +4962,17 @@ int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
 	pe_copy(frame + PE_SEND_BODY_OFF, body, body_len);
 
 	/* The trailer describes the transfer's FINAL chunk: everything before
-	 * it has already been streamed by pe_blk_send(). */
+	 * it has already been streamed by pe_blk_send(), under the tag it
+	 * minted -- which this frame carries too (rd vms-b20). */
+	t = blk_tag_by_name(f, x->peer, x->local_name, VMS_BLK_OP_STREAM_DATA);
+	if (t == NULL)   /* the whole READ fits the tail: no stream went first */
+		t = blk_tag_mint(f, VMS_BLK_OP_STREAM_DATA, x->dest_conid,
+				 x->local_name, x->peer);
+	if (t == NULL)
+		return PE_BLK_NOSPACE;
 	blk_fill_hdr(f, s.vc, x, s.buf, x->length - tail_len, &h);
+	h.obs_w4 = t->idx;
+	h.obs_w6 = t->seq;
 	if (vms_blk_trailer_build(&h, s.buf->base + x->local_offset +
 					(x->length - tail_len),
 				  tail_len, frame, cap, end_len,
@@ -4946,11 +4986,13 @@ int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
 	if (vms_scs_seq_envelope_fixup_len(frame, cap, total) != VMS_CODEC_OK)
 		return PE_BLK_BADFRAME;
 
-	rc = blk_stamp_and_send(f, s.vc, frame, total, 0u);
-	if (rc == PE_BLK_OK) {
-		blk_note_obs(f, s.vc);   /* counted only for a frame that WENT */
+	/* rd vms-b20: the END message + final chunk is opcode 0x15 (23 of 23
+	 * real READ ends); it draws no 0x0f, so the tag is done once it goes. */
+	rc = blk_stamp_and_send(f, s.vc, frame, total,
+				VMS_BLK_OP_STREAM_END_MSG);
+	blk_tag_free(t);
+	if (rc == PE_BLK_OK)
 		s.vc->blk_bytes_tx += tail_len;
-	}
 	return rc;
 }
 
@@ -5304,6 +5346,11 @@ static int blk_rx_by_op(struct pe_fsm *f, struct pe_vc *vc,
 				f->blk_tag_unmatched++;
 		}
 		return 1;
+	case VMS_BLK_OP_STREAM_DATA:
+		/* An MSCP READ stream frame: into the named buffer; no 0x0f --
+		 * the server's END message completes the READ. */
+		(void)blk_rx_take(f, vc, &view);
+		return 1;
 	case VMS_BLK_OP_SEND_DATA:
 	default:
 		if (blk_rx_take(f, vc, &view) == 2)
@@ -5330,6 +5377,11 @@ int pe_blk_rx_try(struct pe_fsm *f, struct pe_vc *vc,
 	 * an SCS message and is never handed to SCS as one.
 	 */
 	op = vms_blk_port_op(frame, len);
+	/* rd vms-b20: 0x15 is an SCS message (an MSCP END) with a block trailer:
+	 * NOT consumed here -- the trailer arm takes its tail and the message
+	 * is delivered upward like any other. */
+	if (op == VMS_BLK_OP_STREAM_END_MSG)
+		return 0;
 	if (op != VMS_BLK_OP_MESSAGE && op != 0u)
 		return blk_rx_by_op(f, vc, fi, frame, len, op);
 

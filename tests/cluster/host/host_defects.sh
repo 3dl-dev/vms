@@ -808,6 +808,9 @@ EOF
 *** with opcode 0x05 (257/257 real SEND DATA) ***
 another SEND DATA went out
 *** the port answers with a 0x0f ***
+stream frames carry opcode 0x14 (108/108 real READ frames)
+*** every stream frame is 0x14 (108/108 real) ***
+*** the END + final chunk frame is 0x15 (23/23 real) ***
 EOF
                       ;;
         esac;;

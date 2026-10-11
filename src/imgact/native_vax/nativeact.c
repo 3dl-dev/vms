@@ -399,6 +399,17 @@ static void load(struct img *m, struct imgact_acp_file *src, int is_main)
 				fail_notimpl(m->name, m->spec,
 					     "virtual page 0 (the executive refused it)");
 		}
+		/* CMKRNL is the installed activator's for page 0 alone (rd
+		 * vms-15c9): it goes before the native image is mapped, so the
+		 * image never runs with it. The executive's own record says. */
+		(void)vms_kif_setprv(VMS_PRV_M_CMKRNL, 0, 0, NULL);
+		{
+			uint8_t md = 0;
+			uint64_t cur = 0, perm = 0;
+			int held = (vms_kif_getmode(&md, &cur, &perm) & 1)
+				 ? (cur & VMS_PRV_M_CMKRNL) != 0 : -1;
+			TRACE("CMKRNL held=%d", held);
+		}
 		map = mmap((void *)PG_DOWN(m->lo), span, PROT_READ | PROT_WRITE,
 			   MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
 		if (map != (void *)PG_DOWN(m->lo))

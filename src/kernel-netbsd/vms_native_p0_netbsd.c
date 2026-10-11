@@ -27,27 +27,16 @@
 #include <uvm/uvm_map.h>
 
 /* Also prototyped in exec_kbackend_netbsd.h (the caller). */
-int ovmx_native_page0_allow(struct proc *p, const char *activator);
+int ovmx_native_page0_allow(struct proc *p);
 
-static int
-path_is(const char *path, const char *want)
-{
-	if (path == NULL)
-		return 0;
-	while (*path && *path == *want) {
-		path++;
-		want++;
-	}
-	return *path == '\0' && *want == '\0';
-}
-
-/* 0 when granted, EPERM when the caller is not the activator. */
+/* 0 when granted. The executive has already confirmed the caller is the
+ * installed native image activator, by its text vnode (rd vms-15c9). */
 int
-ovmx_native_page0_allow(struct proc *p, const char *activator)
+ovmx_native_page0_allow(struct proc *p)
 {
 	struct vm_map *map;
 
-	if (p == NULL || p->p_vmspace == NULL || !path_is(p->p_path, activator))
+	if (p == NULL || p->p_vmspace == NULL)
 		return EPERM;
 	map = &p->p_vmspace->vm_map;
 	vm_map_lock(map);

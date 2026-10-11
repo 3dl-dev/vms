@@ -1025,6 +1025,37 @@ static void stage_boot_images(void)
     }
 
     /*
+     * The VAX native image activator is a KNOWN IMAGE, installed
+     * /PRIVILEGED=CMKRNL at boot (rd vms-15c9): it needs CMKRNL for one thing,
+     * asking the executive for virtual page 0 (VMS_IOCTL_NATIVE_PAGE0), which
+     * the executive grants only to the installed NATIVEACT.EXE, by its pinned
+     * copy. The executive grants CMKRNL to that copy at activation (rd vms-bdc1)
+     * and NATIVEACT drops it before it maps the image, so an unprivileged user
+     * runs a native image without ever holding CMKRNL in the image. PID 1 holds
+     * CMKRNL; the executive stages its own copy of the staged file (rd vms-220).
+     */
+    {
+        char na[512];
+        snprintf(na, sizeof(na), "%s/NATIVEACT.EXE", OVMX_BOOT_STAGE_DIR);
+        int fd = open(na, O_RDONLY);
+        if (fd >= 0) {
+            struct vms_kfe_args k;
+            memset(&k, 0, sizeof(k));
+            k.op = VMS_KFE_OP_ADD;
+            k.fd = fd;
+            k.privs = VMS_PRV_M_CMKRNL;
+            k.flags = VMS_KFE_F_PRIV | VMS_KFE_F_OPEN;
+            snprintf(k.name, sizeof(k.name), "NATIVEACT.EXE");
+            uint32_t kst = vms_kif_kfe(&k);
+            close(fd);
+            if (!$VMS_STATUS_SUCCESS(kst))
+                fprintf(stderr, "%%OVMX-E-INSTALL, NATIVEACT.EXE could not be "
+                        "installed /PRIVILEGED=CMKRNL (status %%X%08X); native VAX "
+                        "images will not activate\n", (unsigned)kst);
+        }
+    }
+
+    /*
      * SYS$SHARE SHAREABLE IMAGES (vms-0cb). SYSTARTUP_VMS.COM runs
      * `INSTALL ADD SYS$SHARE:*$SHR.EXE` to register the shareables every
      * dynamically-activated OVMX image depends on. INSTALL stat()s each one

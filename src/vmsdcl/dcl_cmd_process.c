@@ -2243,8 +2243,18 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                 char **iargv = calloc((size_t)n + 2, sizeof *iargv);
                 if (iargv) {
 #if defined(__vax__)
-                    /* OVMX/VAX: the VAX native image activator (vms-b869). */
-                    iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/NATIVEACT.EXE";
+                    /* OVMX/VAX: the VAX native image activator (vms-b869),
+                     * run as the installed known image (rd vms-15c9): the
+                     * executive grants its /PRIVILEGED=CMKRNL to that copy
+                     * only, and page 0 only to it. */
+                    static struct vms_kfe_args nk;
+                    memset(&nk, 0, sizeof(nk));
+                    nk.op = VMS_KFE_OP_FIND_NAME;
+                    nk.fd = -1;
+                    snprintf(nk.name, sizeof(nk.name), "NATIVEACT.EXE");
+                    iargv[0] = ((vms_kif_kfe(&nk) & 1) && nk.path[0])
+                             ? nk.path
+                             : (char *)OVMX_BOOT_STAGE_DIR "/NATIVEACT.EXE";
 #else
                     iargv[0] = (char *)OVMX_BOOT_STAGE_DIR "/IMGACT.EXE";
 #endif

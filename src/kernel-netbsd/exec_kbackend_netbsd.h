@@ -512,14 +512,21 @@ static __inline int exec_pin_is_image(void *pin, const void *img) { return img !
  * (vms_native_p0_netbsd.c, uvm-only TU). 0 granted, EPERM refused.
  */
 struct proc;
-extern int ovmx_native_page0_allow(struct proc *p, const char *activator);
+extern int ovmx_native_page0_allow(struct proc *p);
 
-/* exec_native_page0_lower (exec_kbackend.h section 5): the activator is the
- * installed NATIVEACT.EXE; anything else is refused. */
+/* exec_native_page0_lower (exec_kbackend.h section 5). The caller has already
+ * been confirmed to be the installed NATIVEACT.EXE, by object (rd vms-15c9). */
 static __inline int
 exec_native_page0_lower(void)
 {
-	return ovmx_native_page0_allow(curproc, "/run/ovmx-boot/NATIVEACT.EXE") == 0 ? 0 : -1;
+	return ovmx_native_page0_allow(curproc) == 0 ? 0 : -1;
+}
+
+/* exec_current_image (rd vms-15c9): the text vnode of the current process. */
+static __inline const void *
+exec_current_image(void)
+{
+	return curproc->p_textvp;
 }
 
 static __inline exec_task_pin_t *

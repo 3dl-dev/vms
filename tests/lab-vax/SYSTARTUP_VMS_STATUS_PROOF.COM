@@ -3,7 +3,7 @@ $!
 $! The VAX analogue of tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM.
 $! Staged in place of the Decision-A SYSTARTUP_VMS.COM only by
 $! tests/lab-vax/run-boot.sh status-gate (stage_sysvol.sh --status-proof);
-$! never shipped. Still Decision A: no INSTALL ADD.
+$! never shipped. No INSTALL ADD here: NATIVEACT.EXE is installed by PID 1.
 $!
 $! Each RUN must leave this exact $STATUS (asserted by the run-boot.sh function
 $! assert_status_proof against the SIMH console):
@@ -60,5 +60,14 @@ $ DEASSIGN MYSHR
 $ WRITE SYS$OUTPUT "STATUS-PROOF: === RUN NOTIMG ==="
 $ RUN SYS$SYSTEM:NOTIMG
 $ WRITE SYS$OUTPUT "STATUS-PROOF: NOTIMG-STATUS=''$STATUS'"
+$!
+$! rd vms-15c9: a native image RUN by a process without CMKRNL. NATIVEACT.EXE is
+$! a known image, installed /PRIVILEGED=CMKRNL at boot; the executive grants
+$! CMKRNL to that copy only for page 0, and NATIVEACT drops it before it maps
+$! the image (its trace prints the executive's record: CMKRNL held=0).
+$ SET PROCESS/PRIVILEGE=NOCMKRNL
+$ WRITE SYS$OUTPUT "STATUS-PROOF: === RUN HELLONOCMK ==="
+$ RUN SYS$SYSTEM:HELLO
+$ WRITE SYS$OUTPUT "STATUS-PROOF: HELLONOCMK-STATUS=''$STATUS'"
 $ WRITE SYS$OUTPUT "STATUS-PROOF: === END ==="
 $ EXIT

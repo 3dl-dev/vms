@@ -502,6 +502,21 @@ uint64_t vms_kfe_exec_privs(const void *img)
     return p;
 }
 
+/* Is `img` (exec_current_image) the executive's pinned copy of the image
+ * installed under `name`? By object, never a path (rd vms-15c9). */
+int vms_kfe_exec_is(const void *img, const char *name)
+{
+    int yes = 0;
+    if (!img)
+        return 0;
+    exec_mutex_lock(&vms_kfe_mutex);
+    int i = kfe_find_name(name);
+    if (i >= 0 && exec_pin_is_image(vms_kfe_tab[i].pin, img))
+        yes = 1;
+    exec_mutex_unlock(&vms_kfe_mutex);
+    return yes;
+}
+
 /* An image was activated in `proc` with installed privileges `img_privs` (0
  * for an ordinary image). A previous image's privileges go first (its
  * rundown: CURPRIV returns to the process privileges), then the new image's
@@ -704,8 +719,11 @@ out:
  *      hold CMKRNL -- the executive's privilege decision, vms_prot.h;
  *   2. it has not already been granted to this process: once, before the
  *      activator maps the image, never again (a second call is SS$_NOPRIV);
- *   3. the substrate confirms the caller IS the native image activator and
- *      lowers the minimum of that one address space (exec_native_page0_lower).
+ *   3. the caller IS the native image activator: the file it exec'd is the
+ *      executive's own pinned copy of the image installed as NATIVEACT.EXE
+ *      (vms_kfe_exec_is, by object -- never a path, rd vms-15c9), and the
+ *      substrate lowers the minimum of that one address space
+ *      (exec_native_page0_lower).
  * A substrate with no native VAX path answers SS$_UNSUPPORTED (honest, INV-6).
  * The change lives in the caller's address space and goes with it at its next
  * execve; every other process keeps the defence.
@@ -720,9 +738,17 @@ long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg)
         return -EFAULT;
     args.reserved = 0;
 
+    /* Decided before mode_lock: the known-file list sleeps (its mutex). A
+     * substrate with no native-image path names no image (Linux) and answers
+     * SS$_UNSUPPORTED below. */
+    const void *img = exec_current_image();
+    int is_activator = !img || vms_kfe_exec_is(img, "NATIVEACT.EXE");
+
     exec_lock(&proc->mode_lock);
     st = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);
     if ((st & 1) && proc->native_page0)
+        st = SS__NOPRIV;
+    if ((st & 1) && !is_activator)
         st = SS__NOPRIV;
     if (st & 1) {
         int rc = exec_native_page0_lower();

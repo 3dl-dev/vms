@@ -198,6 +198,10 @@ STATUS_PROOF_EXPECT=(
   "MAIN4V2|%X00000001|OVMX-NATIVE MAIN3: MYSHR_ADD(2,3)=5 ok"
   "MAIN4NONE|%X100388B2|-CLI-E-IMAGEFNF, image file not found"
   "NOTIMG|%X104D8C84|-IMGACT-F-BADHDR, an error was discovered in the image header"
+  # rd vms-15c9: HELLO again, by a process without CMKRNL. NATIVEACT is the
+  # installed known image (/PRIVILEGED=CMKRNL); it must have dropped CMKRNL
+  # before it mapped the image -- the line is the executive's record of it.
+  "HELLONOCMK|%X00000001|%NATIVEACT-I-TRACE, CMKRNL held=0"
 )
 
 # assert_status_proof <console-log> -- THE TEETH of the status gate. For every
@@ -248,6 +252,11 @@ assert_status_proof() {
   done
   end_n="$(_at "STATUS-PROOF: === END ===" "$prev_n")"
   [ -n "$end_n" ] || { echo "  assert_status_proof: the proof SYSTARTUP did not run to its END line" >&2; ok=0; }
+  # rd vms-15c9: no native image may ever have run holding CMKRNL.
+  if grep -aqF "%NATIVEACT-I-TRACE, CMKRNL held=1" "$norm"; then
+    echo "  assert_status_proof: NATIVEACT kept CMKRNL into a native image (CMKRNL held=1)" >&2
+    ok=0
+  fi
   rm -f "$norm"
   [ "$ok" -eq 1 ]
 }
@@ -310,6 +319,8 @@ status_proof_selftest() {
   _expect fail "END line missing" "$st/noend.log"
   : > "$st/empty.log"
   _expect fail "empty console log" "$st/empty.log"
+  sed 's/CMKRNL held=0/CMKRNL held=1/' "$st/pass.log" > "$st/cmkrnl.log"
+  _expect fail "NATIVEACT kept CMKRNL (held=1)" "$st/cmkrnl.log"
   rm -rf "$st"
   if [ "$fails" -eq 0 ]; then
     echo "=== status selftest: assert_status_proof has teeth (good passes, every breakage fails) ==="
@@ -1149,9 +1160,20 @@ build_status_proof_images() {
   set +e
   timeout --kill-after="${TIMEOUT_GRACE}" "${KBUILD_TIMEOUT}" \
     docker run --rm --name "${cid}" -v "${REPO}:/src" -w /src -v "${STATUS_PROOF_IMAGES_DIR}:/out" \
+      -e OVMX_NEGCTL_NATIVEACT_KEEPS_CMKRNL="${OVMX_NEGCTL_NATIVEACT_KEEPS_CMKRNL:-0}" \
       --entrypoint sh "${CROSS_IMAGE}" -c '
         set -e
-        cmake -S /src -B /tmp/build-status-vax \
+        S=/src
+        if [ "${OVMX_NEGCTL_NATIVEACT_KEEPS_CMKRNL:-0}" = 1 ]; then
+          # negctl (rd vms-15c9): NATIVEACT keeps CMKRNL -- the drop is
+          # removed from a scratch copy of the tree, never /src.
+          cp -a /src /tmp/src-negctl && S=/tmp/src-negctl
+          sed -i "s|^\t\t(void)vms_kif_setprv(VMS_PRV_M_CMKRNL, 0, 0, NULL);\$|\t\t/* NEGCTL nativeact-keeps-cmkrnl */|" \
+            "$S/src/imgact/native_vax/nativeact.c"
+          grep -q "NEGCTL nativeact-keeps-cmkrnl" "$S/src/imgact/native_vax/nativeact.c" \
+            || { echo "negctl nativeact-keeps-cmkrnl did not apply"; exit 1; }
+        fi
+        cmake -S "$S" -B /tmp/build-status-vax \
           -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
           -DCMAKE_BUILD_TYPE=Release >/tmp/build-status-vax-configure.log 2>&1 \
           || { tail -40 /tmp/build-status-vax-configure.log; exit 1; }
@@ -1340,6 +1362,20 @@ case "${MODE}" in
     run_install && exit 0
     exit 1
     ;;
+  status-gate-negctl)
+    # rd vms-15c9: teeth -- the same boot with NATIVEACT built WITHOUT its
+    # CMKRNL drop must FAIL the gate, on exactly the CMKRNL check.
+    export OVMX_NEGCTL_NATIVEACT_KEEPS_CMKRNL=1
+    if run_status_gate 2>"${STATUS_LOG}.why"; then
+      cat "${STATUS_LOG}.why" >&2
+      die "STATUS-GATE NEGCTL FAILED: NATIVEACT kept CMKRNL and the gate still passed"
+    fi
+    cat "${STATUS_LOG}.why" >&2
+    grep -q "NATIVEACT kept CMKRNL into a native image" "${STATUS_LOG}.why" \
+      || die "STATUS-GATE NEGCTL: the gate failed, but not on the CMKRNL check"
+    log "STATUS-GATE NEGCTL PASSED (rd vms-15c9): NATIVEACT keeping CMKRNL reds the gate"
+    exit 0
+    ;;
   status-gate)
     # vms-b869 (parent vms-3b3f): the $STATUS gate -- the VAX analogue of the
     # Alpha native-image gate. Selftest, then boot a SYSTEM volume whose
@@ -1348,5 +1384,5 @@ case "${MODE}" in
     run_status_gate && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-selftest)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-gate-negctl | status-selftest)" ;;
 esac

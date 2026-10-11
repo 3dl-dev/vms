@@ -172,6 +172,20 @@ SUITE_FIFO=/tmp/suite_fifo.$$
 SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
 SUITE_TIMEOUT=${SUITE_TIMEOUT:-300}
 
+# dump_stuck_tasks NAME - every user task's pid, state, wchan and kernel stack
+# (kernel threads, which have no cmdline, are skipped). Used by the per-suite
+# watchdog before it kills a suite that did not finish (rd vms-7ce).
+dump_stuck_tasks() {
+    echo "  STUCK: $1 did not finish; user tasks at the deadline:"
+    for _d in /proc/[0-9]*; do
+        [ -s "$_d/cmdline" ] || continue
+        _st=$(cut -d' ' -f3 "$_d/stat" 2>/dev/null)
+        _pp=$(cut -d' ' -f4 "$_d/stat" 2>/dev/null)
+        echo "  STUCK: pid ${_d#/proc/} ppid $_pp state $_st comm $(cat "$_d/comm" 2>/dev/null) wchan $(cat "$_d/wchan" 2>/dev/null)"
+        sed 's/^/  STUCK:     /' "$_d/stack" 2>/dev/null
+    done
+}
+
 # SUITE SHARDING (rd vms-ea7). The ~79-suite run is partitioned across N
 # parallel QEMU VMs, each booting its own guest over a deterministic subset,
 # so a single whole-VM wall (run_tests.sh TIMEOUT=600s) trivially covers a
@@ -347,7 +361,10 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     rm -f /tmp/.suite_timed_out
     "$test" >"$SUITE_FIFO" 2>&1 &
     TEST_PID=$!
-    ( sleep "$SUITE_TIMEOUT"; kill -0 "$TEST_PID" 2>/dev/null && : >/tmp/.suite_timed_out && kill -KILL "$TEST_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+    # Before the kill, say where every user task is blocked (state, wchan,
+    # kernel stack) on the assertion channel, so a hang is diagnosed from the
+    # console rather than guessed (rd vms-7ce).
+    ( sleep "$SUITE_TIMEOUT"; kill -0 "$TEST_PID" 2>/dev/null && : >/tmp/.suite_timed_out && dump_stuck_tasks "$name" >&4 2>&1; kill -KILL "$TEST_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
     WATCH_PID=$!
     wait "$TEST_PID"
     rc=$?

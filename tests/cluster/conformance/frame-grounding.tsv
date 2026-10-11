@@ -30,7 +30,7 @@ mscp_cmd	*	81	1	const	const:0	real 0x00 in every command (per-field census)
 mscp_cmd	op=04	76	2	const	const:0	SCC addresses the controller: real unit 0 in 245/245
 mscp_cmd	op=04	82	2	const	const:0	real modifiers 0 in 245/245
 mscp_cmd	op=04	84	2	const	const:0	P.VRSN: real 0 in 245/245 (host MUST supply 0, sec 6.16)
-mscp_cmd	op=04	86	2	deviation	const:0	P.CNTF: real {0x00d0, 0xa804} (245); OVMX asks for no controller option. Accepted: SCC END status SUCCESS from real VAX1/VAX2 in lab mscp-239 r15, r17, r19 (/tmp/evac/m239)
+mscp_cmd	op=04	86	2	deviation	const:0	P.CNTF: real {0x00d0, 0xa804} (245); OVMX asks for no controller option, an honest statement of a capability it lacks (no attention-message handling). APPROVED 2026-10-11 (lane conductor). Accepted: SCC END status SUCCESS from real VAX1/VAX2 in lab mscp-239 r15, r17, r19 (/tmp/evac/m239)
 mscp_cmd	op=04	88	2	derived	set:0,1e	P.HTMO: real {0, 0x1e} (245); OVMX 0 or its own declared timeout 0x1e
 mscp_cmd	op=04	90	2	const	const:0	real 0 in 245/245
 mscp_cmd	op=04	92	8	derived	any:clock	P.TIME: this node's own clock (exec_time_now_vms), quadword
@@ -41,7 +41,7 @@ mscp_cmd	op=03	84	24	const	const:0	real 0 in 3,323/3,323
 mscp_cmd	op=09	76	2	copied	any:unit	P.UNIT: a unit the server's own GUS END returned (test_mscp_cl)
 mscp_cmd	op=09	82	2	const	const:0	real modifiers 0 (1/1)
 mscp_cmd	op=09	84	2	const	const:0	real 0 (1/1)
-mscp_cmd	op=09	86	2	deviation	const:0	real 0x8000 in the ONE real ONLINE in the corpus; OVMX sends 0. Accepted: ONLINE END SUCCESS from real VAX2 (r17) and VAX1 (r19)
+mscp_cmd	op=09	86	2	deviation	const:0	real 0x8000 in the ONE real ONLINE in the corpus; OVMX sends 0, declaring no unit flag it does not implement. APPROVED 2026-10-11 (lane conductor). Accepted: ONLINE END SUCCESS from real VAX2 (r17) and VAX1 (r19)
 mscp_cmd	op=09	88	20	const	const:0	real 0 (1/1)
 mscp_cmd	op=21	76	2	copied	any:unit	P.UNIT of the mounted served unit (test_mscp_cl)
 mscp_cmd	op=22	76	2	copied	any:unit	P.UNIT of the mounted served unit (test_mscp_cl)
@@ -63,7 +63,7 @@ mscp_cmd	op=22	104	4	const	const:0	real 0 in 18/18
 scs_conreq_mscp	*	56	2	const	const:42	inner length 66 (content 110): 995/995 real
 scs_conreq_mscp	*	58	2	const	const:4	format word 0x0004: 995/995
 scs_conreq_mscp	*	60	2	const	const:0	ctl op 0 CONNECT_REQ: 995/995
-scs_conreq_mscp	*	62	2	deviation	state:initial_credits	credit: real 0x000a in 995/995; OVMX states its own receive count 4 (CNXMAN_MSCP_CREDITS). Accepted by real VAX1/VAX2 MSCP servers (ACCEPT_REQ) in mscp-239 r15, r17, r19
+scs_conreq_mscp	*	62	2	deviation	state:initial_credits	credit: real 0x000a in 995/995; OVMX states its own receive count 4 (CNXMAN_MSCP_CREDITS), its real buffer capacity. APPROVED 2026-10-11 (lane conductor). Accepted by real VAX1/VAX2 MSCP servers (ACCEPT_REQ) in mscp-239 r15, r17, r19
 scs_conreq_mscp	*	64	4	const	const:0	remote Con.ID 0 on a CONNECT_REQ: 995/995
 scs_conreq_mscp	*	68	4	minted	conid	own Con.ID: 2,791 real hi16 != 0, lo16 small reused index (test_scs_fsm pins)
 scs_conreq_mscp	*	72	2	const	const:2	SCS$W_MIN_CR 2: 4,032/4,032 real class-driver connects

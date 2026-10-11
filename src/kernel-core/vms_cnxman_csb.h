@@ -621,6 +621,15 @@ void cnxman_club_phase1_clear(struct vms_club *club);
  * below re-derives it at commit from this node's own membership, whichever
  * side coordinated.
  */
+/*
+ * rd vms-64b, the CLUB's DLM rebuild sequence (struct vms_club):
+ * cnxman_club_dlm_seq_learn -- a member asserted N (a 0x09 open's cells or a
+ *   DLM header). 0 teaches nothing. Counts a change of a value already held.
+ * cnxman_club_dlm_seq_found -- this node formed the cluster: N = 1.
+ */
+void cnxman_club_dlm_seq_learn(struct vms_club *club, uint16_t n);
+void cnxman_club_dlm_seq_found(struct vms_club *club);
+
 struct vms_cm_open_cells;
 void cnxman_club_learn_open(struct vms_club *club, int reconfig,
 			    const struct vms_cm_open_cells *cells);

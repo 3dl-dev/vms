@@ -260,7 +260,8 @@ enum cnxman_open_gap {
 	CNXMAN_OPEN_GAP_QUORUM   = 6, /* a counted member's PARAMS missing      */
 	CNXMAN_OPEN_GAP_CLOCK    = 7, /* no VMS time source                     */
 	CNXMAN_OPEN_GAP_REBUILD  = 8, /* a weight unknown, or a MERGE (no code) */
-	CNXMAN_OPEN_GAP_CSV      = 9  /* the vector is outside what is grounded */
+	CNXMAN_OPEN_GAP_CSV      = 9, /* the vector is outside what is grounded */
+	CNXMAN_OPEN_GAP_DLMSEQ   = 10 /* the DLM rebuild sequence unknown      */
 };
 
 enum cnxman_coord_refusal {

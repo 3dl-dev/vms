@@ -247,10 +247,13 @@ uint16_t vms_cm_close_state_for(const uint8_t *req_body, uint32_t req_len);
  *   [87:89] SUBJ_CFG   the count the SUBJECT's own op-0x02 carried at its
  *                      body[36:40] (2, 3, 4 from real joiners -- XA/XG 2, XA
  *                      ep4 3; 0 from every OVMX joiner, whose op 0x02 is zero)
- *   [92]    CSV_HWM    == [100:102] == [102:104]: the highest CSV slot already
- *                      in the vector -- the subject's new slot when it is a
- *                      system the cluster has held before (KR-1, fault-f1,
- *                      oracle-return, XG), one below it on a first admission
+ *   [92]    DLM_SEQ    == [100:102] == [102:104]: the cluster's DLM rebuild
+ *                      sequence IN FORCE, the N every DLM header carries at
+ *                      body[14:16] (rd vms-64b: 27 of 28 real opens with a
+ *                      known N; the 28th followed an unobserved removal).
+ *                      First read as the CSV high-water slot, which it equals
+ *                      on the six controlled opens below; real opens with N 1
+ *                      and a third slot (ev16, rdev1, c6e) tell them apart
  *   [96:98] CEVOTES    the proposed CEVOTES, max(EXPECTED_VOTES, votes): two
  *                      votes against an EXPECTED_VOTES of 3 read 3 (XI); four
  *                      against 3 read 4 (XD)
@@ -275,11 +278,11 @@ uint16_t vms_cm_close_state_for(const uint8_t *req_body, uint32_t req_len);
 #define VMS_OFB_CM_OPEN_STAMP       40u   /* LE u64 */
 #define VMS_OFB_CM_OPEN_FSYSID      49u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_SUBJ_CFG    87u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_CSV_HWM1    92u   /* u8     */
+#define VMS_OFB_CM_OPEN_DLM_SEQ_1    92u   /* u8     */
 #define VMS_OFB_CM_OPEN_CEVOTES     96u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_CSV_LOW     98u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_CSV_HWM2   100u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_CSV_HWM3   102u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_DLM_SEQ_2   100u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_DLM_SEQ_3   102u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_CSV_TOP    104u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_HOLD       106u   /* LE u64 */
 #define VMS_CM_OPEN_FSYSID_MAX      0xffffu
@@ -493,11 +496,11 @@ struct vms_cm_membership_rec {
  * else. VMS_CODEC_OK with *n; VMS_CODEC_E_CLASS when the body is not a 0x09
  * open; VMS_CODEC_E_SHORT when its three copies disagree (not trusted).
  */
-#define VMS_OFB_CM_OPEN_DLM_SEQ    92u   /* u8     */
-#define VMS_OFB_CM_OPEN_DLM_SEQ2  100u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_DLM_SEQ3  102u   /* LE u16 */
 vms_codec_status_t vms_cm_open_dlm_seq(const uint8_t *body, uint32_t len,
 				       uint16_t *n);
+/* Write N's three copies into a built 0x09 open body. */
+vms_codec_status_t vms_cm_open_dlm_seq_put(uint8_t *body, uint32_t len,
+					   uint16_t n);
 
 vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_rec *rec,
 					       uint8_t *out_body, uint32_t cap,
@@ -780,7 +783,8 @@ struct vms_cm_open_cells {
 	uint16_t subj_cfg;     /* [87:89]  */
 	uint16_t cevotes;      /* [96:98]  */
 	uint16_t csv_low;      /* [98:100] */
-	uint16_t csv_hwm;      /* [92], [100:102], [102:104] */
+	uint16_t dlm_seq;      /* [92], [100:102], [102:104]: the DLM rebuild
+				* sequence in force (rd vms-64b) */
 	uint16_t csv_top;      /* [104:106] */
 	uint16_t pad2;
 	uint64_t hold;         /* [106:114] */

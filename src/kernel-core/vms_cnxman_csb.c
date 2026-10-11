@@ -1936,6 +1936,24 @@ void cnxman_club_note_slot(struct vms_club *club, uint32_t slot)
 	club->slot_next_valid = 1u;
 }
 
+void cnxman_club_dlm_seq_learn(struct vms_club *club, uint16_t n)
+{
+	if (club == NULL || n == 0u)
+		return;
+	if (club->dlm_seq_valid && club->dlm_seq != n)
+		club->dlm_seq_relearned++;
+	club->dlm_seq = n;
+	club->dlm_seq_valid = 1u;
+}
+
+void cnxman_club_dlm_seq_found(struct vms_club *club)
+{
+	if (club == NULL)
+		return;
+	club->dlm_seq = 1u;
+	club->dlm_seq_valid = 1u;
+}
+
 void cnxman_club_learn_open(struct vms_club *club, int reconfig,
 			    const struct vms_cm_open_cells *cells)
 {

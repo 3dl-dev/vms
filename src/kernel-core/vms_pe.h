@@ -270,6 +270,14 @@ struct pe_upper_ops {
 	void (*block_data)(void *ctx, vms_scs_sysid_t from, uint32_t name,
 			   uint32_t offset, uint32_t len,
 			   uint32_t bytes_remaining);
+
+	/*
+	 * Added by rd vms-1f64, additively at the end. A SEND DATA this port
+	 * initiated (pe_blk_send_data_one) was ACKNOWLEDGED by the peer's port
+	 * (opcode 0x0f, echoing the tag): `name` is OUR source buffer. Raised
+	 * only for a 0x0f whose tag matches a transfer this port really sent.
+	 */
+	void (*block_sent)(void *ctx, vms_scs_sysid_t from, uint32_t name);
 };
 
 /* ==========================================================================
@@ -441,6 +449,15 @@ int pe_send_block(struct vms_pe *pe, const struct pe_blk_xfer *x,
  * involved. One-line dereference into the pure twin, as every entry here is.
  */
 int pe_request_block(struct vms_pe *pe, const struct pe_blk_xfer *x);
+
+/*
+ * SEND DATA as ONE frame (rd vms-1f64): opcode 0x05, a tag this port minted,
+ * and the peer's 0x0f acknowledgement raised as pe_upper_ops.block_sent. A
+ * transfer that does not fit one frame is refused (SS$_ ... from
+ * PE_BLK_TOOBIG): a non-final SEND DATA frame was never observed. One-line
+ * dereference into vms_pe_fsm.h's pe_blk_send_data_one.
+ */
+int pe_send_block_one(struct vms_pe *pe, const struct pe_blk_xfer *x);
 
 /*
  * READ's WHOLE answer in one call (ADDED BY FC-P6.3, the first caller): stream

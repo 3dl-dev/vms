@@ -1579,6 +1579,124 @@ static void test_close_state_grounded_only_for_volume_closes(void)
 			"  echoing the request's transaction id");
 }
 
+
+/*
+ * rd vms-1f64: the kind-6 close's block-transfer descriptor and the remote
+ * device request records, against REAL pairs (dlmlab F1b: VAX1 -> VAX3,
+ * where VAX3 has no $2$DUA1; ci6-evac-16: VAX1 -> OVMXE).
+ */
+static void test_rdev_records_against_real_pairs(void)
+{
+	/* VAX1 -> OVMXE, ci6-evac-16 17:26:17.871 (DISMOUNT/CLUSTER). */
+	static const char cmreq[] =
+	    "4b01cf00050058b106000000000000000200a7be07006f87ad03060088000000"
+	    "0000f90000000000000000000000001646313142246153595344534b31202020"
+	    "20202a000000000000000000000000000000000000000000564d582056302e37"
+	    "00000000000000000000000000000001000000000000000000000000ffffffff"
+	    "6d1b5048";
+	/* The 2ef specimen: a 200-byte (MOUNT) kind-6 close. */
+	static const char req6[] =
+	    "50c0e2bb0400a1d30600000000000000000008ce0900dccd37080600c80000000000"
+	    "f9e0149a8700000000000000000d535953245f243224445541323a58322020202a00"
+	    "0000000000000400000000000000000000000000000000a012000100000000000000"
+	    "0000c04096870000000000000000ffffffff00000000ffffffff63b6f425";
+	/* F1b: a DISMOUNT record VAX1 offered VAX3, and VAX3's answer. */
+	static const char dmreq[] =
+	    "00000000000000008800656406000300010015000000560000000400000056000000"
+	    "174e0000000000000000000000000000000000001a0001000000000000000000ffff"
+	    "ffffffffffff040001000500000000000000c0000000090000000c0000005f243224"
+	    "445541313a00051af4bf000000000000000000000000000000000000000000000000";
+	static const char dmans[] =
+	    "00f6f3ff00f6f3ff8800656406000300010015000000560000000400000056000000"
+	    "174e0000000000000000000000000000000000001a0001000000000000000000ffff"
+	    "ffffffffffff04000100050000000000000008090000090000000c0000005f243224"
+	    "445541313a00051af4bf000000000000000000000000000000000000000000000000";
+	/* F1b: a MOUNT record VAX1 offered VAX3, and VAX3's answer. */
+	static const char mtreq[] =
+	    "0000000000000000c80065640600030001004100000056000000040000005600000073e5"
+	    "0000000000000000000000000000000000001a0001000000000000000000ffffffffffff"
+	    "ffff0400010006000000040001000800040028000000000000000900010030000000"
+	    "000000000800020039000000000000000000000004400020000000005f2432244455"
+	    "41313a5641583144415441525354415254494e47552c20736563757269747920736572"
+	    "766572207374617274696e672075700a0d0000000000000000";
+	static const char mtans[] =
+	    "c01cf5ffc01cf5ffc80065640600030001004100000056000000040000005600000073e5"
+	    "0000000000000000000000000000000000001a0001000000000000000000ffffffffffff"
+	    "ffff0400010006000000040001000100000028000000000000000900010030000000"
+	    "000000000800020039000000000000000000000004400020000000005f2432244455"
+	    "41313a5641583144415441525354415254494e47552c20736563757269747920736572"
+	    "766572207374617274696e672075700a0d0000000000000000";
+	uint8_t body[132], b6[132], rq[200], an[200];
+	struct vms_cm_xfer_desc d;
+	struct vms_cm_rdev_req r;
+
+	printf("-- rd vms-1f64: kind-6 descriptor + remote device records\n");
+	hexload(cmreq, body, 132);
+	ct_check(vms_cm_xfer_desc_parse(body, 132, &d) == VMS_CODEC_OK,
+		 "the real VAX1 -> OVMXE kind-6 close parses");
+	ct_check_eq_u32(d.name, 0xbea70002u, "  buffer name = body[16:20]");
+	ct_check_eq_u32(d.conid, 0x876f0007u,
+			"  +0 Con.ID = body[20:24] = OVMXE's own Con.ID");
+	ct_check_eq_u32(d.len, 136u, "  length = body[28:32] = 136");
+	ct_check_eq_u32(d.kind, VMS_CM_CLOSE_KIND_VOLUME, "  kind 6");
+	hexload(req6, b6, 132);
+	ct_check(vms_cm_xfer_desc_parse(b6, 132, &d) == VMS_CODEC_OK &&
+		 d.len == 200u && d.conid == 0xcddc0009u,
+		 "the 2ef MOUNT specimen: 200 bytes, +0 = the recipient's Con.ID");
+	body[16] = body[17] = body[18] = body[19] = 0;
+	ct_check(vms_cm_xfer_desc_parse(body, 132, &d) == VMS_CODEC_E_CLASS,
+		 "a zero buffer name is refused (nothing honest to name)");
+	ct_check(vms_cm_xfer_desc_parse(body, 20, &d) != VMS_CODEC_OK,
+		 "a short body is refused");
+
+	/* DISMOUNT */
+	hexload(dmreq, rq, 136);
+	hexload(dmans, an, 136);
+	ct_check(vms_cm_rdev_req_parse(rq, 136, &r) == VMS_CODEC_OK,
+		 "VAX1's real DISMOUNT record parses");
+	ct_check_eq_u32(r.kind, VMS_CM_RDEV_DISMOUNT, "  as a DISMOUNT record");
+	ct_check(r.name_len == 9u && memcmp(r.name, "_$2$DUA1:", 9) == 0,
+		 "  naming _$2$DUA1: (len rec[90], offset rec[94] from rec[86])");
+	ct_check_eq_u32(vms_cm_rdev_status_absent(r.kind), 0x908u,
+			"  a member without it answers SS$_NOSUCHDEV (VAX3, 2/2)");
+	ct_check(vms_cm_rdev_answer_in_place(rq, 136, 0x908u) == VMS_CODEC_OK,
+		 "  the answer builds in place");
+	ct_check(memcmp(rq + 8, an + 8, 136 - 8) == 0,
+		 "*** byte-exact with VAX3's real answer at every grounded cell ***");
+	ct_check(rq[0] == 0 && rq[7] == 0 && an[1] != 0,
+		 "  rec[0:8] is left as the requester sent it (ungrounded)");
+
+	/* MOUNT */
+	hexload(mtreq, rq, 200);
+	hexload(mtans, an, 200);
+	ct_check(vms_cm_rdev_req_parse(rq, 200, &r) == VMS_CODEC_OK &&
+		 r.kind == VMS_CM_RDEV_MOUNT,
+		 "VAX1's real MOUNT record parses as a MOUNT record");
+	ct_check(r.name_len == 9u && memcmp(r.name, "_$2$DUA1:", 9) == 0,
+		 "  naming _$2$DUA1: (item code 1 at rec[98])");
+	ct_check_eq_u32(vms_cm_rdev_status_absent(r.kind), 1u,
+			"  a member without it answers 1 (VAX3, 1/1)");
+	ct_check(vms_cm_rdev_answer_in_place(rq, 200, 1u) == VMS_CODEC_OK &&
+		 memcmp(rq + 8, an + 8, 200 - 8) == 0,
+		 "*** byte-exact with VAX3's real MOUNT answer past rec[0:8] ***");
+
+	/* Refusals */
+	hexload(dmreq, rq, 136);
+	ct_check(vms_cm_rdev_req_parse(rq, 200, &r) == VMS_CODEC_E_CLASS,
+		 "a record whose own length disagrees is refused");
+	rq[18] = 0x1a;
+	ct_check(vms_cm_rdev_req_parse(rq, 136, &r) == VMS_CODEC_E_CLASS,
+		 "the other 136-byte record kind (01 00 1a ..) is not decoded");
+	hexload(dmreq, rq, 136);
+	rq[90] = 0x40;
+	ct_check(vms_cm_rdev_req_parse(rq, 136, &r) == VMS_CODEC_E_CLASS,
+		 "a name running past the record is refused");
+	ct_check(vms_cm_rdev_answer_in_place(rq, 136, 0x908u) ==
+		 VMS_CODEC_E_CLASS, "  and no answer is built for it");
+	ct_check_eq_u32(vms_cm_rdev_status_absent(VMS_CM_RDEV_NONE), 0u,
+			"an undecoded kind has no absent-device status");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1646,5 +1764,6 @@ int main(void)
 	test_error_paths();
 
 	test_close_state_grounded_only_for_volume_closes();
+	test_rdev_records_against_real_pairs();
 	return ct_summary("test_codec_cm");
 }

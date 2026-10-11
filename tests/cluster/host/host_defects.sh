@@ -140,6 +140,10 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+blk-port-op-not-stamped
+blk-send-data-not-confirmed
+rdev-dismount-absent-status-wrong
+rdev-answer-before-write-back
 coord-open-cells-not-attached
 coord-open-withhold-disarmed
 club-open-facts-unlearned
@@ -785,6 +789,73 @@ EOF
         require_fail) cat <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    blk-port-op-not-stamped)
+        case "$_f" in
+        facility)     echo "the PORT OPCODE at abs 55 of a block-transfer frame (vms_pe_fsm.c blk_stamp_and_send, rd vms-1f64): 0x08 REQUEST DATA, 0x0c/0x0d its answer, 0x05 SEND DATA, 0x0f its acknowledgement -- measured on every real block frame";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "every block frame leaves with the message opcode 0x02 the sequenced stamp writes, so a real VMS port reads a REQUEST DATA or SEND DATA as an SCS message with a garbage envelope -- a frame class no real node ever sent (1,217,539 of 1,217,539 opcode-0x02 frames carry the SCS format word).";;
+        require_fail) cat <<'EOF'
+*** a REQUEST DATA carries opcode 0x08 (2,759/2,759) ***
+*** every earlier one is 0x0c (39 + 2,758 real) ***
+*** the last answer frame is 0x0d ***
+  and it is 0x0d
+*** with opcode 0x05 (257/257 real SEND DATA) ***
+another SEND DATA went out
+*** the port answers with a 0x0f ***
+stream frames carry opcode 0x14 (108/108 real READ frames)
+*** every stream frame is 0x14 (108/108 real) ***
+*** the END + final chunk frame is 0x15 (23/23 real) ***
+EOF
+                      ;;
+        esac;;
+
+    blk-send-data-not-confirmed)
+        case "$_f" in
+        facility)     echo "the 8-byte 0x0f acknowledgement of a SEND DATA this port received (vms_pe_fsm.c blk_rx_by_op, rd vms-1f64): 257 of 257 real SEND DATA frames drew one";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "the bytes of an inbound SEND DATA land but the port never acknowledges them, so the sending VMS node waits on a transfer that never completes.";;
+        require_fail) cat <<'EOF'
+*** the port answers with a 0x0f ***
+  the acknowledgement is counted (blk_cnf_tx)
+EOF
+                      ;;
+        esac;;
+
+    rdev-dismount-absent-status-wrong)
+        case "$_f" in
+        facility)     echo "the status a member WITHOUT the device writes into a DISMOUNT/CLUSTER request record (vms_cluster_codec_cm.c vms_cm_rdev_status_absent, rd vms-1f64): SS\$_NOSUCHDEV, as real VAX3 wrote 2/2";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "a device-less member writes 0x7c instead of SS\$_NOSUCHDEV: DISMOUNT/CLUSTER on the real VAX prints a secondary no real member without the device ever produced.";;
+        require_fail) cat <<'EOF'
+  a member without it answers SS$_NOSUCHDEV (VAX3, 2/2)
+EOF
+                      ;;
+        esac;;
+
+    rdev-answer-before-write-back)
+        case "$_f" in
+        facility)     echo "the ORDER of a kind-6 close (vms_cnxman_join_fsm.c join_h_close, rd vms-1f64): pull the record, write the answer back, THEN send the cat-0x86 -- a cat-0x86 first leaves the requester reading its own uninitialised buffer (runs ci6-evac-15/16: DEVOFFLINE/GPTFULL/ACCVIO)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "the kind-6 close is answered at once, before the write-back -- the pre-vms-1f64 order that made a real VAX's DISMOUNT/CLUSTER print garbage secondaries for the OVMX member.";;
+        require_fail) cat <<'EOF'
+*** NO cat-0x86 yet: the answer waits for the write-back ***
+  still no cat-0x86
+*** the peer's 0x0f releases the cat-0x86 answer ***
+a stray second 0x0f answers nothing
+  and answered the pre-vms-1f64 way
+then the cat-0x86 goes
 EOF
                       ;;
         esac;;
@@ -1935,6 +2006,18 @@ apply_edit() {
     dlm-hash-coverage-claims-too-much)
         # The mask literal is unique in the header.
         sed -i 's|#define VMS_DLM_HASH_LEN_PROVEN    0xdf7ffffeu|#define VMS_DLM_HASH_LEN_PROVEN    0xfffffffeu /* NEGCTL dlm-hash-coverage-claims-too-much */|' "$_file";;
+
+    blk-port-op-not-stamped)
+        sed -i 's|^\tif (op != 0u \&\&$|\tif (0 \&\& op != 0u \&\& /* NEGCTL blk-port-op-not-stamped */|' "$_file";;
+
+    blk-send-data-not-confirmed)
+        sed -i 's|^\t\tif (blk_rx_take(f, vc, \&view) == 2)$|\t\tif (blk_rx_take(f, vc, \&view) == 3) /* NEGCTL blk-send-data-not-confirmed */|' "$_file";;
+
+    rdev-dismount-absent-status-wrong)
+        sed -i 's|\tcase VMS_CM_RDEV_DISMOUNT: return VMS_CM_RDEV_STATUS_NOSUCHDEV;|\tcase VMS_CM_RDEV_DISMOUNT: return 0x7cu; /* NEGCTL rdev-dismount-absent-status-wrong */|' "$_file";;
+
+    rdev-answer-before-write-back)
+        sed -i 's|\t\t    join_rdev_start(j, e, \&d) == 0)|\t\t    join_rdev_start(j, e, \&d) == 0 \&\& 0) /* NEGCTL rdev-answer-before-write-back */|' "$_file";;
 
     cm-close-state-volume-wrong)
         sed -i 's|\t\treturn VMS_CM_CLOSE_STATE_VOLUME;|\t\treturn 4u; /* NEGCTL cm-close-state-volume-wrong */|' "$_file";;

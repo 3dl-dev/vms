@@ -87,6 +87,8 @@ struct blk_upper {
 	uint32_t        last_len;
 	uint32_t        last_remaining;
 	uint32_t        messages;
+	uint32_t        sent;          /* rd vms-1f64: block_sent upcalls */
+	uint32_t        sent_name;
 };
 
 static void bu_message(void *ctx, vms_scs_sysid_t from, vms_conid_t conid,
@@ -112,6 +114,15 @@ static void bu_vc_up(void *ctx, vms_scs_sysid_t peer)
 static void bu_vc_down(void *ctx, vms_scs_sysid_t peer, uint32_t reason)
 {
 	(void)ctx; (void)peer; (void)reason;
+}
+
+static void bu_sent(void *ctx, vms_scs_sysid_t from, uint32_t name)
+{
+	struct blk_upper *u = (struct blk_upper *)ctx;
+
+	(void)from;
+	u->sent++;
+	u->sent_name = name;
 }
 
 static void bu_block(void *ctx, vms_scs_sysid_t from, uint32_t name,
@@ -201,6 +212,7 @@ static void env_init(struct blk_env *e)
 	e->upper.vc_up = bu_vc_up;
 	e->upper.vc_down = bu_vc_down;
 	e->upper.block_data = bu_block;
+	e->upper.block_sent = bu_sent;
 	e->upper.ctx = &e->upper_rec;
 	pe_fsm_set_upper(&e->fsm, &e->upper);
 
@@ -1011,78 +1023,70 @@ static void test_write_pair_round_trips_through_the_port(void)
 
 static void test_ungrounded_words_are_zero_or_observed(void)
 {
+	/*
+	 * REWRITTEN by rd vms-b20 (was: "+4/+6 are an explicit zero, or the
+	 * last pair this circuit observed, replayed"). Measured since: +4/+6 is
+	 * a tag the INITIATOR mints per transfer -- the same on every frame of
+	 * one transfer (108 MSCP READ stream frames + their 23 END trailers) and
+	 * echoed by a responder, never another transfer's pair replayed. So the
+	 * property asserted here is the grounded one: each transfer this port
+	 * starts carries its OWN nonzero tag on every frame, a second transfer
+	 * a different one, and a pair OBSERVED on the circuit is never put on
+	 * the wire by this port as its own.
+	 */
 	struct blk_env e;
 	struct pe_blk_xfer x;
-	struct vms_blk_hdr h, back;
+	struct vms_blk_hdr h, a0, a1, b0;
 	uint8_t payload[256];
 	uint8_t dst_lavc[6];
-	uint32_t len, i;
+	uint32_t len, i, n;
 
-	printf("-- the +4/+6 words: an explicit counted zero, or a value observed\n");
+	printf("-- the +4/+6 tag: minted per transfer, constant within it, never replayed\n");
 	open_circuit(&e);
 
-	/* (a) Nothing observed yet: an explicit ZERO, and it is COUNTED. */
-	xfer_init(&x, e.vol_name, 0u, 512u, 512u);
-	ct_check_eq_u32((unsigned long)pe_blk_send(&e.fsm, &x, 0u, NULL),
-			PE_BLK_OK, "a transfer with no observed pair still goes");
-	ct_check_eq_u32((unsigned long)vms_blk_hdr_parse(e.fake.frame[0].b,
-							 e.fake.frame[0].len,
-							 &back),
-			VMS_CODEC_OK, "the emitted header parses");
-	ct_check_eq_u32(back.obs_w4, 0u, "+4 is an explicit zero, never a 9 or 13");
-	ct_check_eq_u32(back.obs_w6, 0u, "+6 is an explicit zero");
-	ct_check_eq_u32(e.fsm.blk_obs_absent, 1u,
-			"and the honest absence is COUNTED, not hidden");
-	ct_check_eq_u32((unsigned long)the_vc(&e)->obs_valid, 0u,
-			"the circuit still claims no observed pair");
-
-	/* (b) A real frame arrives carrying a pair. The port LEARNS it. */
+	/* A peer frame carrying a pair arrives first: the port records it... */
 	for (i = 0; i < sizeof(payload); i++)
 		payload[i] = (uint8_t)(0xb0u + i);
 	memset(&h, 0, sizeof(h));
 	h.dest_conid = MSCP_DEST_CONID;
-	h.obs_w4 = 0x000du;      /* whatever the peer put there -- opaque */
+	h.obs_w4 = 0x000du;
 	h.obs_w6 = 0x0007u;
 	h.bytes_remaining = sizeof(payload);
 	h.src_name = PEER_BUF_NAME;
-	h.src_offset = 0u;
 	h.dst_name = e.sink_name;
 	h.dst_offset = 64u;
-
 	ovmx_lavc(dst_lavc);
 	len = fake_peer_block(&e.peer, ovmx_hw, dst_lavc, 1u, &h, payload,
 			      sizeof(payload), e.buf, sizeof(e.buf));
 	ct_check(len != 0, "the peer's block-transfer frame was built");
-	fake_pe_clear_frames(&e.fake);
 	rx_frame(&e, len);
-
 	ct_check_eq_u32((unsigned long)the_vc(&e)->obs_valid, 1u,
-			"the circuit now HAS an observed pair");
-	ct_check_eq_u32(the_vc(&e)->obs_w4, 0x000du, "+4 learned verbatim");
-	ct_check_eq_u32(the_vc(&e)->obs_w6, 0x0007u, "+6 learned verbatim");
+			"the circuit recorded the peer's pair");
 
-	/* (c) The next frame this port emits carries exactly those bytes, and
-	 * the honest-absence counter does NOT advance. */
-	{
-		uint32_t before = e.fsm.blk_obs_absent;
-		uint32_t idx;
+	/* ...and a two-frame transfer of ours carries ITS OWN tag on both. */
+	fake_pe_clear_frames(&e.fake);
+	xfer_init(&x, e.vol_name, 0u, 1024u, 512u);
+	ct_check_eq_u32((unsigned long)pe_blk_send(&e.fsm, &x, 0u, &n),
+			PE_BLK_OK, "a two-frame transfer goes out");
+	ct_check_eq_u32(n, 2u, "  as two frames");
+	(void)vms_blk_hdr_parse(e.fake.frame[0].b, e.fake.frame[0].len, &a0);
+	(void)vms_blk_hdr_parse(e.fake.frame[1].b, e.fake.frame[1].len, &a1);
+	ct_check(a0.obs_w4 != 0u && a0.obs_w6 != 0u,
+		 "+4/+6 is a nonzero tag this port minted");
+	ct_check(a0.obs_w4 == a1.obs_w4 && a0.obs_w6 == a1.obs_w6,
+		 "the SAME tag on every frame of one transfer");
+	ct_check(!(a0.obs_w4 == 0x000du && a0.obs_w6 == 0x0007u),
+		 "the circuit's observed pair is NOT replayed as ours");
+	ct_check_eq_u32(e.fake.frame[0].b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_STREAM_DATA,
+			"stream frames carry opcode 0x14 (108/108 real READ frames)");
 
-		fake_pe_clear_frames(&e.fake);
-		ct_check_eq_u32((unsigned long)pe_blk_send(&e.fsm, &x, 0u,
-							   NULL),
-				PE_BLK_OK, "a second transfer goes out");
-		idx = e.fake.n_frames - 1u;
-		ct_check_eq_u32((unsigned long)vms_blk_hdr_parse(
-					e.fake.frame[idx].b,
-					e.fake.frame[idx].len, &back),
-				VMS_CODEC_OK, "it parses");
-		ct_check_eq_u32(back.obs_w4, 0x000du,
-				"+4 is the OBSERVED value, carried through unchanged");
-		ct_check_eq_u32(back.obs_w6, 0x0007u,
-				"+6 likewise");
-		ct_check_eq_u32(e.fsm.blk_obs_absent, before,
-				"and no further honest-absence was counted");
-	}
+	/* A second transfer: a different tag. */
+	fake_pe_clear_frames(&e.fake);
+	(void)pe_blk_send(&e.fsm, &x, 0u, NULL);
+	(void)vms_blk_hdr_parse(e.fake.frame[0].b, e.fake.frame[0].len, &b0);
+	ct_check(b0.obs_w6 != a0.obs_w6,
+		 "the next transfer carries a different tag");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1355,6 +1359,406 @@ static void test_failed_transmit_leaves_no_sequence_hole(void)
 			"and the circuit's sequence did not advance");
 }
 
+
+/* ------------------------------------------------------------------ *
+ * 9. rd vms-1f64: the port opcode at abs 55, the initiator's tag, and the
+ *    SEND DATA acknowledgement -- against what real VMS ports put there
+ * ------------------------------------------------------------------ */
+
+/* A peer frame of block opcode `op`: the shared builder, then abs 55. */
+static uint32_t peer_block_op(struct blk_env *e, const struct vms_blk_hdr *h,
+			      const uint8_t *data, uint32_t n, uint8_t op)
+{
+	uint8_t dst_lavc[6];
+	uint32_t len;
+
+	ovmx_lavc(dst_lavc);
+	len = fake_peer_block(&e->peer, ovmx_hw, dst_lavc,
+			      (uint16_t)(the_vc(e)->recv_seq + 1u), h, data, n,
+			      e->buf, sizeof(e->buf));
+	if (len != 0)
+		e->buf[VMS_OFF_BLK_PORT_OP] = op;
+	return len;
+}
+
+/* The peer's 8-byte acknowledgement (opcode 0x0f, SCA content 48). */
+static uint32_t peer_confirm(struct blk_env *e, const struct vms_blk_hdr *h)
+{
+	struct vms_scs_seq_envelope env;
+	struct vms_frame_info fi;
+	uint8_t dst_lavc[6];
+	uint16_t seq = (uint16_t)(the_vc(e)->recv_seq + 1u);
+	uint8_t *out = e->buf;
+	const uint32_t cap = sizeof(e->buf);
+
+	memset(out, 0, cap);
+	ovmx_lavc(dst_lavc);
+	memset(&env, 0, sizeof(env));
+	fake_vc_addr(&env.addr, &e->peer, ovmx_hw, dst_lavc);
+	env.msgtype = VMS_SCS_MT_MSG;
+	env.send_seq = seq;
+	if (vms_scs_seq_envelope_build(&env, out, cap, NULL) != VMS_CODEC_OK ||
+	    vms_blk_confirm_build(h, out, cap) != VMS_CODEC_OK ||
+	    vms_scs_seq_envelope_fixup_len(out, cap,
+					   VMS_BLK_CONFIRM_FRAME_LEN) !=
+	    VMS_CODEC_OK ||
+	    vms_frame_classify(out, VMS_BLK_CONFIRM_FRAME_LEN, &fi) !=
+	    VMS_CODEC_OK ||
+	    vms_scs_seq_stamp(out, VMS_BLK_CONFIRM_FRAME_LEN, &fi, 0u, seq,
+			      e->peer.incarnation) != VMS_CODEC_OK)
+		return 0;
+	out[VMS_OFF_BLK_PORT_OP] = VMS_BLK_OP_SEND_CONFIRM;
+	return VMS_BLK_CONFIRM_FRAME_LEN;
+}
+
+/* The index of the first emitted frame carrying opcode `op`, or -1. */
+static int emitted_with_op(const struct blk_env *e, uint8_t op)
+{
+	uint32_t i;
+
+	for (i = 0; i < e->fake.n_frames; i++) {
+		if (e->fake.frame[i].len > VMS_OFF_BLK_PORT_OP &&
+		    e->fake.frame[i].b[VMS_OFF_BLK_PORT_OP] == op)
+			return (int)i;
+	}
+	return -1;
+}
+
+static void test_port_opcodes_on_emitted_frames(void)
+{
+	struct blk_env e;
+	struct pe_blk_xfer x;
+	struct vms_blk_hdr h1, h2;
+	uint32_t i, n;
+
+	printf("-- vms-1f64: abs 55 carries the measured block opcode\n");
+	open_circuit(&e);
+
+	/* REQUEST DATA: 0x08, and a tag this port MINTED. */
+	xfer_init(&x, e.sink_name, 0u, 136u, 0u);
+	ct_check_eq_u32((unsigned long)pe_blk_send_request(&e.fsm, &x),
+			PE_BLK_OK, "a request goes out");
+	ct_check_eq_u32(e.fake.frame[0].b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_REQUEST_DATA,
+			"*** a REQUEST DATA carries opcode 0x08 (2,759/2,759) ***");
+	ct_check_eq_u32(e.fake.frame[0].len, VMS_BLK_DATA_OFF,
+			"  header only (SCA content 68, as every real 0x08)");
+	(void)vms_blk_hdr_parse(e.fake.frame[0].b, e.fake.frame[0].len, &h1);
+	ct_check(h1.obs_w4 >= 1u && h1.obs_w4 <= PE_BLK_MAX_TAGS &&
+		 h1.obs_w6 != 0u,
+		 "  +4/+6 is a tag this port minted (index 1.., nonzero seq)");
+	ct_check_eq_u32(h1.dest_conid, MSCP_DEST_CONID,
+			"  +0 is the Con.ID the descriptor named");
+	xfer_init(&x, e.sink_name, 256u, 136u, 0u);
+	(void)pe_blk_send_request(&e.fsm, &x);
+	(void)vms_blk_hdr_parse(e.fake.frame[1].b, e.fake.frame[1].len, &h2);
+	ct_check(h2.obs_w4 != h1.obs_w4 || h2.obs_w6 != h1.obs_w6,
+		 "  a second live transfer carries a DIFFERENT tag");
+	ct_check(h2.obs_w6 != h1.obs_w6, "  and the sequence advanced");
+
+	/* The answer to a peer's REQUEST DATA: 0x0c ... 0x0d. */
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, e.vol_name, 0u, 3000u, 0x0003u,
+				     0xda12u));
+	n = answers(&e);
+	ct_check(n > 1u, "a 3000-byte request is answered in several frames");
+	for (i = 0; i < n; i++)
+		ct_check_eq_u32(answer(&e, i)->b[VMS_OFF_BLK_PORT_OP],
+				i + 1u == n ? VMS_BLK_OP_RETURN_LAST
+					    : VMS_BLK_OP_RETURN_MORE,
+				i + 1u == n
+				? "*** the last answer frame is 0x0d ***"
+				: "*** every earlier one is 0x0c (39 + 2,758 real) ***");
+	open_circuit(&e);
+	rx_frame(&e, rx_request_data(&e, e.vol_name, 0u, 136u, 0x0001u,
+				     0xd528u));
+	ct_check_eq_u32(answers(&e), 1u, "a 136-byte request: one answer frame");
+	ct_check_eq_u32(answer(&e, 0)->b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_RETURN_LAST, "  and it is 0x0d");
+}
+
+static void test_request_data_with_real_opcode(void)
+{
+	struct blk_env e;
+	struct vms_blk_hdr h;
+	uint32_t l;
+
+	printf("-- vms-1f64: a real-opcode 0x08 is answered; 0x0d completes ours\n");
+	open_circuit(&e);
+	memset(&h, 0, sizeof(h));
+	h.dest_conid = 0xe2560009u;   /* F1b: VAX1's own Con.ID           */
+	h.obs_w4 = 0x0001u;           /* F1b: the tag VAX1 minted          */
+	h.obs_w6 = 0xd528u;
+	h.bytes_remaining = 136u;
+	h.src_name = e.vol_name;
+	h.dst_name = PEER_BUF_NAME;
+	l = peer_block_op(&e, &h, NULL, 0u, VMS_BLK_OP_REQUEST_DATA);
+	rx_frame(&e, l);
+	ct_check_eq_u32(answers(&e), 1u, "a 0x08 for our buffer is answered");
+	ct_check(answer(&e, 0)->b[VMS_BLK_HDR_OFF + 4] == 0x01 &&
+		 answer(&e, 0)->b[VMS_BLK_HDR_OFF + 6] == 0x28 &&
+		 answer(&e, 0)->b[VMS_BLK_HDR_OFF + 7] == 0xd5,
+		 "  echoing the requester's +4/+6 tag");
+	ct_check_eq_u32(e.upper_rec.messages, 0u, "  never an SCS message");
+
+	/* Our own request, then the peer's 0x0d echo of it. */
+	{
+		struct pe_blk_xfer x;
+		struct vms_blk_hdr q;
+		uint8_t rec[136];
+		uint32_t i, tags = 0;
+
+		open_circuit(&e);
+		xfer_init(&x, e.sink_name, 0u, 136u, 0u);
+		(void)pe_blk_send_request(&e.fsm, &x);
+		(void)vms_blk_hdr_parse(e.fake.frame[0].b, e.fake.frame[0].len,
+					&q);
+		for (i = 0; i < sizeof(rec); i++)
+			rec[i] = (uint8_t)(0x40u + i);
+		rx_frame(&e, peer_block_op(&e, &q, rec, sizeof(rec),
+					   VMS_BLK_OP_RETURN_LAST));
+		ct_check(memcmp(e.sink, rec, sizeof(rec)) == 0,
+			 "the 0x0d's bytes land in our named buffer");
+		ct_check_eq_u32(e.upper_rec.blocks, 1u, "  reported once");
+		ct_check_eq_u32(e.upper_rec.last_remaining, 136u,
+				"  as the final frame (remaining == len)");
+		for (i = 0; i < PE_BLK_MAX_TAGS; i++)
+			tags += e.fsm.blk_tag[i].in_use;
+		ct_check_eq_u32(tags, 0u, "  and our tag is released");
+		ct_check_eq_u32(e.fsm.blk_tag_unmatched, 0u, "  it matched");
+	}
+}
+
+static void test_send_data_one_and_its_confirm(void)
+{
+	struct blk_env e;
+	struct pe_blk_xfer x;
+	struct vms_blk_hdr h, bad;
+	int idx;
+
+	printf("-- vms-1f64: SEND DATA is one 0x05 frame; the peer's 0x0f "
+	       "completes it\n");
+	open_circuit(&e);
+	xfer_init(&x, e.vol_name, 0u, 136u, 0u);
+	ct_check_eq_u32((unsigned long)pe_blk_send_data_one(&e.fsm, &x),
+			PE_BLK_OK, "a 136-byte SEND DATA goes out");
+	ct_check_eq_u32(e.fake.n_frames, 1u, "  as ONE frame");
+	ct_check_eq_u32(e.fake.frame[0].b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_SEND_DATA,
+			"*** with opcode 0x05 (257/257 real SEND DATA) ***");
+	ct_check(memcmp(e.fake.frame[0].b + VMS_BLK_DATA_OFF, e.vol, 136u) == 0,
+		 "  carrying our buffer's real bytes");
+	(void)vms_blk_hdr_parse(e.fake.frame[0].b, e.fake.frame[0].len, &h);
+	ct_check_eq_u32(h.dst_name, PEER_BUF_NAME, "  into the peer's buffer");
+	ct_check(h.obs_w4 != 0u && h.obs_w6 != 0u, "  under a minted tag");
+
+	/* An acknowledgement that echoes some OTHER tag completes nothing. */
+	bad = h;
+	bad.obs_w6 = (uint16_t)(h.obs_w6 + 1u);
+	rx_frame(&e, peer_confirm(&e, &bad));
+	ct_check_eq_u32(e.upper_rec.sent, 0u, "a 0x0f with a foreign tag: no upcall");
+	ct_check_eq_u32(e.fsm.blk_tag_unmatched, 1u, "  counted as unmatched");
+	ct_check_eq_u32(e.upper_rec.messages, 0u, "  never an SCS message");
+
+	rx_frame(&e, peer_confirm(&e, &h));
+	ct_check_eq_u32(e.upper_rec.sent, 1u,
+			"*** the echoing 0x0f raises block_sent ***");
+	ct_check_eq_u32(e.upper_rec.sent_name, e.vol_name,
+			"  naming OUR source buffer");
+	ct_check_eq_u32(e.fsm.blk_cnf_rx, 1u, "  counted");
+	rx_frame(&e, peer_confirm(&e, &h));
+	ct_check_eq_u32(e.upper_rec.sent, 1u,
+			"a repeat of it finds the tag already released");
+
+	/* One frame or none: a non-final SEND DATA opcode was never seen. */
+	xfer_init(&x, e.vol_name, 0u, VMS_BLK_DATA_MAX + 1u, 0u);
+	ct_check(pe_blk_send_data_one(&e.fsm, &x) == PE_BLK_TOOBIG,
+		 "a SEND DATA past one frame is REFUSED, never split");
+
+	/* Releasing the buffer drops a tag still naming it. */
+	xfer_init(&x, e.vol_name, 0u, 64u, 0u);
+	(void)pe_blk_send_data_one(&e.fsm, &x);
+	idx = emitted_with_op(&e, VMS_BLK_OP_SEND_DATA);
+	ct_check(idx >= 0, "another SEND DATA went out");
+	(void)pe_blk_buf_release(&e.fsm, e.vol_name);
+	{
+		uint32_t i, tags = 0;
+
+		for (i = 0; i < PE_BLK_MAX_TAGS; i++)
+			tags += e.fsm.blk_tag[i].in_use;
+		ct_check_eq_u32(tags, 0u,
+				"releasing the buffer releases its tag");
+	}
+}
+
+static void test_inbound_send_data_is_confirmed_byte_exact(void)
+{
+	/* F1b, VAX1(b1db) -> VAX3(5077): 0x05 then 5077's 0x0f, abs 56..63. */
+	static const uint8_t real_cnf[8] = {
+		0x09, 0x00, 0x56, 0xe2, 0x01, 0x00, 0x48, 0xd3
+	};
+	struct blk_env e;
+	struct vms_blk_hdr h;
+	uint8_t data[136];
+	int idx;
+	uint32_t i;
+
+	printf("-- vms-1f64: an inbound 0x05 lands and is ACKNOWLEDGED 0x0f\n");
+	open_circuit(&e);
+	for (i = 0; i < sizeof(data); i++)
+		data[i] = (uint8_t)(0x90u + i);
+	memset(&h, 0, sizeof(h));
+	h.dest_conid = 0xe2560009u;
+	h.obs_w4 = 0x0001u;
+	h.obs_w6 = 0xd348u;
+	h.bytes_remaining = sizeof(data);
+	h.src_name = PEER_BUF_NAME;
+	h.dst_name = e.sink_name;
+	rx_frame(&e, peer_block_op(&e, &h, data, sizeof(data),
+				   VMS_BLK_OP_SEND_DATA));
+	ct_check(memcmp(e.sink, data, sizeof(data)) == 0,
+		 "the 0x05's bytes land in the named buffer");
+	idx = emitted_with_op(&e, VMS_BLK_OP_SEND_CONFIRM);
+	ct_check(idx >= 0, "*** the port answers with a 0x0f ***");
+	if (idx >= 0) {
+		ct_check_eq_u32(e.fake.frame[idx].len, VMS_BLK_CONFIRM_FRAME_LEN,
+				"  64 bytes (SCA content 48, as every real one)");
+		ct_check(memcmp(e.fake.frame[idx].b + VMS_BLK_HDR_OFF, real_cnf,
+				8) == 0,
+			 "*** abs 56..63 byte-exact with VAX3's real 0x0f ***");
+	}
+	ct_check_eq_u32(e.fsm.blk_cnf_tx, 1u,
+			"  the acknowledgement is counted (blk_cnf_tx)");
+
+	/* A 0x05 naming no buffer of ours: consumed, NOT acknowledged. */
+	open_circuit(&e);
+	h.dst_name = 0xdeadbeefu;
+	rx_frame(&e, peer_block_op(&e, &h, data, sizeof(data),
+				   VMS_BLK_OP_SEND_DATA));
+	ct_check(emitted_with_op(&e, VMS_BLK_OP_SEND_CONFIRM) < 0,
+		 "a 0x05 for a buffer we never named is not acknowledged");
+	ct_check_eq_u32(e.upper_rec.messages, 0u, "  nor handed to SCS");
+
+	/* An opcode outside the measured five: consumed and counted. */
+	open_circuit(&e);
+	h.dst_name = e.sink_name;
+	rx_frame(&e, peer_block_op(&e, &h, data, sizeof(data), 0x04u));
+	ct_check_eq_u32(e.fsm.blk_rx_unknown_op, 1u,
+			"an unmeasured opcode is counted");
+	ct_check_eq_u32(e.upper_rec.messages + e.upper_rec.blocks, 0u,
+			"  and neither delivered nor taken into a buffer");
+}
+
+
+/* rd vms-b20: an MSCP READ as a real VAX server sends it -- 0x14 stream
+ * frames, then the END message (0x15) with the final chunk piggybacked. */
+static void test_mscp_read_stream_opcodes(void)
+{
+	struct blk_env e;
+	struct pe_blk_xfer x;
+	struct vms_blk_hdr s0, tr;
+	uint8_t body[64];
+	uint32_t i, inner = 0;
+	int last;
+
+	printf("-- vms-b20: MSCP READ = 0x14 stream frames + 0x15 END with the tail\n");
+	open_circuit(&e);
+	memset(body, 0, sizeof(body));
+	xfer_init(&x, e.vol_name, 0u, 3000u, 0u);
+	ct_check_eq_u32((unsigned long)pe_blk_send(&e.fsm, &x, 3000u % VMS_BLK_DATA_MAX,
+						   NULL), PE_BLK_OK,
+			"the stream half goes out");
+	ct_check_eq_u32((unsigned long)pe_blk_send_read_end(&e.fsm, &x,
+						    3000u % VMS_BLK_DATA_MAX,
+						    body, 32u), PE_BLK_OK,
+			"the END half goes out");
+	last = (int)e.fake.n_frames - 1;
+	ct_check(last >= 1, "at least one stream frame and the end frame");
+	for (i = 0; i + 1 < e.fake.n_frames; i++)
+		ct_check_eq_u32(e.fake.frame[i].b[VMS_OFF_BLK_PORT_OP],
+				VMS_BLK_OP_STREAM_DATA,
+				"*** every stream frame is 0x14 (108/108 real) ***");
+	ct_check_eq_u32(e.fake.frame[last].b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_STREAM_END_MSG,
+			"*** the END + final chunk frame is 0x15 (23/23 real) ***");
+	(void)vms_blk_hdr_parse(e.fake.frame[0].b, e.fake.frame[0].len, &s0);
+	inner = e.fake.frame[last].len - VMS_BLK_HDR_LEN -
+		(3000u % VMS_BLK_DATA_MAX);
+	(void)vms_blk_hdr_parse_at(e.fake.frame[last].b, e.fake.frame[last].len,
+				   inner, &tr);
+	ct_check(tr.obs_w4 == s0.obs_w4 && tr.obs_w6 == s0.obs_w6 &&
+		 s0.obs_w6 != 0u,
+		 "  the trailer carries the stream's own tag");
+	ct_check_eq_u32(tr.bytes_remaining, 3000u % VMS_BLK_DATA_MAX,
+			"  and +8 == the tail it carries");
+}
+
+static void test_inbound_mscp_end_is_delivered(void)
+{
+	struct blk_env e;
+	struct vms_blk_hdr h;
+	struct vms_frame_info fi;
+	struct vms_scs_seq_envelope env;
+	struct vms_scs_hdr sh;
+	uint8_t dst_lavc[6], tail[76], end_body[32];
+	uint32_t total = 0, i, inner;
+
+	printf("-- vms-b20: an inbound 0x15 delivers its message AND lands its tail\n");
+	open_circuit(&e);
+	ovmx_lavc(dst_lavc);
+	memset(e.buf, 0, sizeof(e.buf));
+	memset(&env, 0, sizeof(env));
+	fake_vc_addr(&env.addr, &e.peer, ovmx_hw, dst_lavc);
+	env.msgtype = VMS_SCS_MT_MSG;
+	env.send_seq = 1u;
+	(void)vms_scs_seq_envelope_build(&env, e.buf, sizeof(e.buf), NULL);
+	memset(end_body, 0, sizeof(end_body));
+	memset(&sh, 0, sizeof(sh));
+	sh.inner_len = (uint16_t)((VMS_OFF_SYSAP_BODY + sizeof(end_body)) -
+				  (VMS_ETH_HDR_LEN + 44u));
+	sh.mtype = VMS_SCS_MT_MSG;
+	sh.conid_remote = 0x62c50009u;
+	sh.conid_local = 0x33580008u;
+	(void)vms_scs_msg_body_build(&sh, end_body, sizeof(end_body),
+				     e.buf + VMS_OFF_SCSCTRL_INNERLEN,
+				     VMS_SCS_HDR_LEN + sizeof(end_body));
+	inner = VMS_OFF_SYSAP_BODY + sizeof(end_body);
+	for (i = 0; i < sizeof(tail); i++)
+		tail[i] = (uint8_t)(0x30u + i);
+	memset(&h, 0, sizeof(h));
+	h.dest_conid = 0x2f52000bu;
+	h.obs_w4 = 5u;
+	h.obs_w6 = 0x2295u;
+	h.bytes_remaining = sizeof(tail);
+	h.src_name = 0x2f890000u;
+	h.dst_name = e.sink_name;
+	ct_check(vms_blk_trailer_build(&h, tail, sizeof(tail), e.buf,
+				       sizeof(e.buf), inner, &total) ==
+		 VMS_CODEC_OK, "the END + trailer frame is built");
+	(void)vms_scs_seq_envelope_fixup_len(e.buf, sizeof(e.buf), total);
+	(void)vms_frame_classify(e.buf, total, &fi);
+	(void)vms_scs_seq_stamp(e.buf, total, &fi, 0u, 1u, e.peer.incarnation);
+	e.buf[VMS_OFF_BLK_PORT_OP] = VMS_BLK_OP_STREAM_END_MSG;
+	rx_frame(&e, total);
+	/* The frame goes the MESSAGE way, exactly as an opcode-0x02 frame of the
+	 * same bytes does: whether its END message then reaches SCS is the
+	 * classifier's call (a frame with a trailer fails M_INNERLEN_SELF today
+	 * -- rd vms-239), not the opcode's. */
+	ct_check(memcmp(e.sink, tail, sizeof(tail)) == 0,
+		 "*** the piggybacked final chunk landed (message path, not consumed) ***");
+	ct_check_eq_u32(e.fsm.blk_rx_trailer, 1u, "  through the trailer arm");
+	ct_check_eq_u32(e.fsm.blk_rx_unknown_op, 0u, "  0x15 is not an unknown opcode");
+
+	/* An inbound 0x14 stream frame lands and draws no acknowledgement. */
+	open_circuit(&e);
+	rx_frame(&e, peer_block_op(&e, &h, tail, sizeof(tail),
+				   VMS_BLK_OP_STREAM_DATA));
+	ct_check(memcmp(e.sink, tail, sizeof(tail)) == 0,
+		 "an inbound 0x14 lands in the named buffer");
+	ct_check(emitted_with_op(&e, VMS_BLK_OP_SEND_CONFIRM) < 0,
+		 "  and draws no 0x0f (the END message completes a READ)");
+}
+
 int main(void)
 {
 	test_block_header_is_byte_exact();
@@ -1375,5 +1779,11 @@ int main(void)
 	test_named_buffers();
 	test_inv6_refusals();
 	test_failed_transmit_leaves_no_sequence_hole();
+	test_port_opcodes_on_emitted_frames();
+	test_request_data_with_real_opcode();
+	test_send_data_one_and_its_confirm();
+	test_inbound_send_data_is_confirmed_byte_exact();
+	test_mscp_read_stream_opcodes();
+	test_inbound_mscp_end_is_delivered();
 	return ct_summary("test_pe_block");
 }

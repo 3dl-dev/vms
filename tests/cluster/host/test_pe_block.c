@@ -1258,6 +1258,10 @@ static void test_named_buffers(void)
 				 &names[0]);
 	ct_check_eq_u32((unsigned long)rc, PE_BLK_OK, "register succeeds");
 	ct_check(names[0] != 0u, "a live name is never 0");
+	ct_check((names[0] >> 16) != 0u && (names[0] & 0xffffu) == 0u,
+		 "*** rd vms-239: the wire's form -- high 16 bits nonzero, low "
+		 "16 bits 0 (67,494/67,494 real names; 0x00000101 halted a "
+		 "real VAX2 with VAXPORT) ***");
 	ct_check(pe_blk_buf_lookup(&e.fsm, names[0]) != NULL,
 		 "and it resolves");
 

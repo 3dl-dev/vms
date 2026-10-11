@@ -212,6 +212,14 @@ __BANNER__
 __USERNAME__
 EOF
 
+# A successful INSTALL ADD is silent on VMS (vms-220): no %INSTALL-I-ADDED in
+# the boot console at all, so a return to a chatty INSTALL fails here.
+if printf '%s\n' "$CLEAN" | grep -qF '%INSTALL-I-ADDED'; then
+    bad "the boot console carries %INSTALL-I-ADDED (INSTALL ADD is silent on success)"
+else
+    pass "INSTALL ADD during startup is silent (no %INSTALL-I-ADDED)"
+fi
+
 if [ "$SEQ" = "$EXPECTED" ]; then
     pass "boot facility+ident sequence matches the pinned oracle-derived shape"
 else

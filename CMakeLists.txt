@@ -802,6 +802,15 @@ if(BUILD_TESTS)
             LABELS "integration;netbsd-vax" TIMEOUT 60)
     endif()
 
+    # rd vms-251b: ROOTAUDIT.EXE names root processes, and the DCL acceptance
+    # battery's substrate-root ratchet goes red on a new or a stale one.
+    if(BUILD_TOOLS)
+        add_test(NAME rootaudit_ratchet
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rootaudit_ratchet.sh
+                    $<TARGET_FILE:vms_rootaudit> ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(rootaudit_ratchet PROPERTIES LABELS "integration;authenticity" TIMEOUT 60)
+    endif()
+
     # vms-0b6: the OVMX kit packer (tools/ovmx_kit_pack.c) must produce a kit
     # file that reads back byte-exact. Packs a synthetic SYSEXE/SYSLIB/SYSMGR/
     # SYSHLP tree (nested subdir, empty dir, empty file, binary file, a
@@ -1333,6 +1342,7 @@ if(BUILD_TOOLS)
         vms_authorize        # AUTHORIZE.EXE
         vms_mail             # MAIL.EXE
         vms_monitor          # MONITOR.EXE
+        vms_rootaudit        # ROOTAUDIT.EXE
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE

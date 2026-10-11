@@ -2314,6 +2314,34 @@ void vms_devtab_note_io_error(uint32_t major, uint32_t minor)
  * there is no such unit; SS$_IVDEVNAM if the unit exists but is not a disk (only disk units
  * have a backing block device -- the same category verdict the ioctl gives).
  */
+/*
+ * vms_devtab_name_present - does the executive's device table hold a unit by
+ * this name? `name`/`len` is a counted (not NUL-terminated) device name as a
+ * peer sent it -- e.g. "_$2$DUA1:" from a cluster member's remote MOUNT/
+ * DISMOUNT request (rd vms-1f64). 1 = present, 0 = no such device, -1 = the
+ * bytes are not a device name at all (no answer can honestly be given).
+ */
+int vms_devtab_name_present(const uint8_t *name, uint32_t len)
+{
+    char raw[VMS_DEVNAM_SIZE + 2];
+    char norm[VMS_DEVNAM_SIZE + 2];
+    uint32_t i;
+    int present;
+
+    if (!name || len == 0 || len > VMS_DEVNAM_SIZE)
+        return -1;
+    for (i = 0; i < len; i++)
+        raw[i] = (char)name[i];
+    raw[len] = '\0';
+    if (normalize_devnam(raw, norm, sizeof(norm)) != SS__NORMAL)
+        return -1;
+
+    exec_lock(&vms_device_list_lock);
+    present = devtab_lookup_locked(norm) != NULL;
+    exec_unlock(&vms_device_list_lock);
+    return present ? 1 : 0;
+}
+
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out)
 {

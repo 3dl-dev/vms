@@ -41,22 +41,8 @@ LOGIN.BANNER P  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT L  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT R  # vms-bd71: LOGINOUT console bytes differ
 LOGOUT X  # vms-bd71: LOGINOUT console bytes differ
-OOB.CTRLO OW  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO OW2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLO S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLS Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLS X  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY C  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.CTRLY S  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT Y  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT C  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 OOB.PROMPT T2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT O  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT O2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
-OOB.PROMPT Y2  # vms-f0fb: out-of-band ^Y ^C ^T ^O ^S/^Q not delivered by a VMS driver
 RC.RECALL U1  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL U2  # vms-eb3d: command recall (up/down/^B) not VMS
 RC.RECALL DN  # vms-eb3d: command recall (up/down/^B) not VMS

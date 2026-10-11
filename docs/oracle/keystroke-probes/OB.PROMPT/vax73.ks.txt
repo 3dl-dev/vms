@@ -1,0 +1,77 @@
+# keystroke oracle transcript (unmasked) -- case OB.PROMPT (OpenVMS VAX V7.3 OPA0:)
+# OOB probe: ^Y/^C/^O/^T at a prompt, mid-line, after a record, and with CONTROL disabled
+# case-sha256 555694bf30a501b5448383d79d59aae9c1fbce3ed1b6606bf2861f344e649596
+@start loggedin OK
+=== STEP Y1
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP W1
+| WRITE SYS$OUTPUT "A"<CR><LF>
+| <CR>A<CR><LF>
+| <CR><NUL>$ 
+=== STEP Y2
+| ABC
+=== STEP Y3
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP E1
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP C1
+| ABC
+=== STEP C2
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP T0
+| SET CONTROL=T<CR><LF>
+| <CR><NUL>$ 
+=== STEP T1
+| ABC
+=== STEP T2
+| <CR><LF>
+| VAX1::SYSTEM 15:58:14   (DCL)   CPU=00:00:02.91 PF=5875 IO=424 MEM=316<CR><LF>
+| <CR><NUL>$ ABC
+=== STEP T3
+| D<CR><LF>
+| <CR>%DCL-W-IVVERB, unrecognized command verb - check validity and spelling<CR><LF>
+|  \ABCD\<CR><LF>
+| <CR><NUL>$ 
+=== STEP O1
+=== STEP O2
+| WRITE SYS$OUTPUT "B"<CR><LF>
+| <CR>B<CR><LF>
+| <CR><NUL>$ 
+=== STEP O3
+=== STEP O4
+| WRITE SYS$OUTPUT "C"<CR><LF>
+| <CR>C<CR><LF>
+| <CR><NUL>$ 
+=== STEP N0
+| SET NOCONTROL=Y<CR><LF>
+| <CR><NUL>$ 
+=== STEP N1
+| AB
+=== STEP N2
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| %DCL-W-IVVERB, unrecognized command verb - check validity and spelling<CR><LF>
+|  \AB\<CR><LF>
+| <CR><NUL>$ 
+=== STEP N3
+| <CR><LF>
+| *INTERRUPT*<CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP N4
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP N5
+| SET CONTROL=(Y,T)<CR><LF>
+| <CR><NUL>$ 

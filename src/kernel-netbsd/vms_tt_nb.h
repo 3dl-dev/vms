@@ -50,8 +50,9 @@ struct vms_tt_read_args {
 	uint32_t count;
 	uint32_t term;
 	uint32_t termsz;
-	uint32_t pad;
+	uint32_t oflags;
 };
+#define VMS_TT_RDO_ASTPEND    0x1u
 
 struct vms_tt_write_args {
 	uint32_t chan;
@@ -90,11 +91,26 @@ struct vms_tt_sense_args {
 	uint32_t status;
 };
 
+#define VMS_TT_OOB_CTRLY      1u
+#define VMS_TT_OOB_CTRLC      2u
+#define VMS_TT_OOB_OUTBAND    3u
+struct vms_tt_oobast_args {
+	uint32_t chan;
+	uint32_t which;
+	uint64_t astadr;
+	uint64_t astprm;
+	uint32_t mask;
+	uint32_t acmode;
+	uint32_t status;
+	uint32_t pad;
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_TT_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_TT_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_TT_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_TT_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
 #define VMS_IOCTL_TT_SENSE    _IOWR(VMS_TT_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
+#define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_TT_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
 
 _Static_assert(sizeof(struct vms_tt_read_args) == 88,
                "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
@@ -116,5 +132,9 @@ _Static_assert(sizeof(struct vms_tt_sense_args) == 24,
                "struct vms_tt_sense_args changed size");
 _Static_assert(VMS_IOCTL_TT_SENSE == 0xC01856A4u,
                "VMS_IOCTL_TT_SENSE encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_oobast_args) == 40,
+               "struct vms_tt_oobast_args changed size");
+_Static_assert(VMS_IOCTL_TT_OOBAST == 0xC02856A5u,
+               "VMS_IOCTL_TT_OOBAST encodes differently here than on the reference build");
 
 #endif /* OVMX_VMS_TT_NB_H */

@@ -504,4 +504,8 @@
 # tt-console-hangup-unbinds (test_kmod_tt).
 # Raised to 192 by the carriage-control pair (rd vms-fc4): tt-newline-ignores-
 # cursor, tt-owed-linefeed-unpaid (test_kmod_tt).
-192
+# Raised to 197 by the out-of-band set (rd vms-f0fb): tt-ctrly-not-shown,
+# tt-oob-ast-not-queued, tt-outband-ends-read, tt-breakthrough-no-redisplay,
+# tt-oob-survives-deassign (test_kmod_tt).
+# Raised to 198 by tt-ctrlo-not-discarding (rd vms-f0fb; test_kmod_tt).
+198

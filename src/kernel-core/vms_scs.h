@@ -539,12 +539,20 @@ int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
 typedef void (*vms_scs_block_cb)(void *ctx, uint32_t name, uint32_t offset,
 				 uint32_t len, uint32_t bytes_remaining);
 
-/* The MSCP server and the MSCP disk class driver. Two, because that is how
- * many SYSAPs in this executive own named buffers; a third is a design
- * question for whoever adds one, not a number to grow speculatively. */
-#define VMS_SCS_MAX_BLOCK_CONSUMERS 2u
+/* The MSCP server, the MSCP disk class driver, and (rd vms-1f64) the
+ * connection manager's remote-request service, which pulls a member's
+ * MOUNT/DISMOUNT request record and writes its answer back by block transfer.
+ * Three SYSAPs own named buffers; the table is exactly that size. */
+#define VMS_SCS_MAX_BLOCK_CONSUMERS 3u
 
 int vms_scs_set_block_consumer(struct vms_cluster *cl, vms_scs_block_cb cb,
 			       void *cb_ctx);
+
+/* rd vms-1f64: a SEND DATA this node initiated from buffer `name` was
+ * acknowledged by the peer's port. Attached to an already-registered
+ * consumer (same `cb_ctx`); withdrawn with it. */
+typedef void (*vms_scs_block_sent_cb)(void *ctx, uint32_t name);
+int vms_scs_set_block_sent(struct vms_cluster *cl, vms_scs_block_sent_cb cb,
+			   void *cb_ctx);
 
 #endif /* OVMX_VMS_SCS_H */

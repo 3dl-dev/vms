@@ -847,6 +847,34 @@ enum pe_blk_status {
 };
 
 /*
+ * THE INITIATOR'S TRANSFER TAG (rd vms-1f64; vms_cluster_codec_blk.h sec 5).
+ *
+ * Every REQUEST DATA (0x08) and SEND DATA (0x05) a real VMS port initiates
+ * carries a tag at header +4/+6 -- a small index and a sequence -- that the
+ * responder echoes byte for byte in its 0x0c/0x0d answer or its 0x0f
+ * acknowledgement (2,759 + 257 of 2,759 + 257 in the lab captures). The tag is
+ * the INITIATOR's: the responder never interprets it. So this port mints its
+ * own for the transfers it initiates, from this table, and finds the transfer
+ * again by the echo. The minting rule (lowest free slot from 1, one port-wide
+ * sequence that advances per transfer and is never 0) is OVMX's own choice,
+ * labelled as one, exactly as its Con.ID and buffer-name assignments are; it
+ * reproduces the observed shape (index 1..17, sequence advancing between
+ * transfers) and nothing in it is copied from a capture.
+ */
+#define PE_BLK_MAX_TAGS 8u
+
+struct pe_blk_tag {
+	uint8_t         in_use;
+	uint8_t         op;          /* VMS_BLK_OP_REQUEST_DATA / _SEND_DATA */
+	uint16_t        idx;         /* +4, 1..PE_BLK_MAX_TAGS               */
+	uint16_t        seq;         /* +6                                   */
+	uint16_t        pad;
+	uint32_t        conid;       /* +0 as sent                           */
+	uint32_t        local_name;  /* OUR buffer the transfer reads/fills  */
+	vms_scs_sysid_t peer;
+};
+
+/*
  * ONE BLOCK TRANSFER, as the SYSAP describes it to the port.
  *
  * EVERY REMOTE-SIDE FIELD IS READ, NEVER CHOSEN. `dest_conid`, `remote_name`
@@ -1422,6 +1450,18 @@ struct pe_fsm {
 				    * legal SOURCE, the span falls outside it,
 				    * or the transmit failed part-way -- never
 				    * clamped and never partially claimed      */
+
+	/* ---- rd vms-1f64: the port opcode + the initiator's tag ---- */
+	struct pe_blk_tag blk_tag[PE_BLK_MAX_TAGS];
+	uint16_t blk_tag_seq;      /* the port-wide tag sequence, never 0       */
+	uint16_t pad_tag;
+	uint32_t blk_tag_no_slot;  /* an initiation refused: no free tag        */
+	uint32_t blk_tag_unmatched;/* a 0x0d/0x0f echoing no tag of ours        */
+	uint32_t blk_cnf_tx;       /* 0x0f acknowledgements this port sent      */
+	uint32_t blk_cnf_rx;       /* 0x0f acknowledgements matched to a SEND   */
+	uint32_t blk_rx_unknown_op;/* a frame whose abs 55 is neither 0x02 nor a
+				    * measured block opcode: consumed and
+				    * counted, never handed to SCS as a message */
 
 	/* ---- E82: THE EMIT-TIME WIRE-SAFETY GUARD, port-wide ----
 	 *
@@ -2024,6 +2064,21 @@ int pe_blk_send_read_end(struct pe_fsm *f, const struct pe_blk_xfer *x,
  * header byte for byte.
  */
 int pe_blk_send_request(struct pe_fsm *f, const struct pe_blk_xfer *x);
+
+/*
+ * pe_blk_send_data_one - SEND DATA as the ONE frame every real 0x05 is
+ * (257 of 257 in the lab captures; a non-final SEND DATA frame was never
+ * observed and its opcode is ungrounded, so a transfer that does not fit one
+ * frame is REFUSED with PE_BLK_TOOBIG rather than split).
+ *
+ * `x` is read as for pe_blk_send: `local_name` is OUR registered SOURCE,
+ * `remote_name`/`remote_offset` the peer's buffer from its own message, and
+ * `dest_conid` the header's +0 -- the value the peer's descriptor named, which
+ * is the initiator's (this node's) own Con.ID. The frame carries opcode 0x05
+ * and a tag minted from blk_tag[]; the peer's 0x0f echo of it is reported
+ * upward through pe_upper_ops.block_sent with `local_name`.
+ */
+int pe_blk_send_data_one(struct pe_fsm *f, const struct pe_blk_xfer *x);
 
 /*
  * pe_blk_rx_try - the receive path's block-transfer arm, called from the VC's

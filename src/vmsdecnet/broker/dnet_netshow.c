@@ -70,7 +70,8 @@ static int ns_get_str(const uint8_t *p, char *out, size_t slot)
 static int ns_entity_ok(uint8_t e)
 {
     return e == DNET_NETSHOW_ENT_EXECUTOR || e == DNET_NETSHOW_ENT_NODES ||
-           e == DNET_NETSHOW_ENT_LINKS;
+           e == DNET_NETSHOW_ENT_LINKS || e == DNET_NETSHOW_ENT_CIRCUITS ||
+           e == DNET_NETSHOW_ENT_LINES || e == DNET_NETSHOW_ENT_OBJECTS;
 }
 
 /* ------------------------------ request ------------------------------ */
@@ -113,12 +114,18 @@ DNET_NETSHOW_API int dnet_netshow_req_decode(const uint8_t *buf, size_t len,
 static size_t ns_entry_len(uint8_t entity)
 {
     return entity == DNET_NETSHOW_ENT_NODES ? DNET_NETSHOW_NODE_LEN
-         : entity == DNET_NETSHOW_ENT_LINKS ? DNET_NETSHOW_LINK_LEN : 0;
+         : entity == DNET_NETSHOW_ENT_LINKS ? DNET_NETSHOW_LINK_LEN
+         : entity == DNET_NETSHOW_ENT_CIRCUITS ? DNET_NETSHOW_CIRC_LEN
+         : entity == DNET_NETSHOW_ENT_LINES ? DNET_NETSHOW_LINE_LEN
+         : entity == DNET_NETSHOW_ENT_OBJECTS ? DNET_NETSHOW_OBJ_LEN : 0;
 }
 static unsigned ns_entry_max(uint8_t entity)
 {
     return entity == DNET_NETSHOW_ENT_NODES ? DNET_NETSHOW_NODES_PER
-         : entity == DNET_NETSHOW_ENT_LINKS ? DNET_NETSHOW_LINKS_PER : 0;
+         : entity == DNET_NETSHOW_ENT_LINKS ? DNET_NETSHOW_LINKS_PER
+         : entity == DNET_NETSHOW_ENT_CIRCUITS ? DNET_NETSHOW_CIRCS_PER
+         : entity == DNET_NETSHOW_ENT_LINES ? DNET_NETSHOW_LINES_PER
+         : entity == DNET_NETSHOW_ENT_OBJECTS ? DNET_NETSHOW_OBJS_PER : 0;
 }
 
 DNET_NETSHOW_API int dnet_netshow_rsp_encode(const struct dnet_netshow_rsp *r,
@@ -173,6 +180,27 @@ DNET_NETSHOW_API int dnet_netshow_rsp_encode(const struct dnet_netshow_rsp *r,
             p[0] = n->adj_state;                               p += 1;
             ns_put16(p, n->active_links);                      p += 2;
             ns_put16(p, n->next_node);                         p += 2;
+        } else if (r->entity == DNET_NETSHOW_ENT_CIRCUITS) {
+            const struct dnet_netshow_circuit *c = &r->u.circ[i];
+            if (ns_put_str(p, c->name, DNET_NETSHOW_CIRCMAX)) return DNET_NETSHOW_EBADLEN;
+            p += 1 + DNET_NETSHOW_CIRCMAX;
+            p[0] = c->state_on ? 1 : 0;                        p += 1;
+            ns_put16(p, c->adj_addr);                          p += 2;
+            if (ns_put_str(p, c->adj_name, DNET_NETSHOW_NAMEMAX)) return DNET_NETSHOW_EBADLEN;
+            p += 1 + DNET_NETSHOW_NAMEMAX;
+        } else if (r->entity == DNET_NETSHOW_ENT_LINES) {
+            const struct dnet_netshow_line *ln = &r->u.line[i];
+            if (ns_put_str(p, ln->name, DNET_NETSHOW_CIRCMAX)) return DNET_NETSHOW_EBADLEN;
+            p += 1 + DNET_NETSHOW_CIRCMAX;
+            p[0] = ln->state_on ? 1 : 0;                       p += 1;
+        } else if (r->entity == DNET_NETSHOW_ENT_OBJECTS) {
+            const struct dnet_netshow_object *o = &r->u.obj[i];
+            if (ns_put_str(p, o->name, DNET_NETSHOW_OBJNAMEMAX)) return DNET_NETSHOW_EBADLEN;
+            p += 1 + DNET_NETSHOW_OBJNAMEMAX;
+            p[0] = o->number;                                  p += 1;
+            if (ns_put_str(p, o->file, DNET_NETSHOW_FILEMAX)) return DNET_NETSHOW_EBADLEN;
+            p += 1 + DNET_NETSHOW_FILEMAX;
+            ns_put32(p, o->pid);                               p += 4;
         } else {
             const struct dnet_netshow_link *l = &r->u.link[i];
             ns_put16(p, l->local_link);                        p += 2;
@@ -261,6 +289,31 @@ DNET_NETSHOW_API int dnet_netshow_rsp_decode(const uint8_t *buf, size_t len,
                 return DNET_NETSHOW_EINVAL;
             n->active_links = ns_get16(p);                     p += 2;
             n->next_node = ns_get16(p);                        p += 2;
+        } else if (entity == DNET_NETSHOW_ENT_CIRCUITS) {
+            struct dnet_netshow_circuit *c = &r.u.circ[i];
+            if ((rc = ns_get_str(p, c->name, DNET_NETSHOW_CIRCMAX)) != 0) return rc;
+            p += 1 + DNET_NETSHOW_CIRCMAX;
+            if (p[0] > 1)
+                return DNET_NETSHOW_EINVAL;
+            c->state_on = p[0];                                p += 1;
+            c->adj_addr = ns_get16(p);                         p += 2;
+            if ((rc = ns_get_str(p, c->adj_name, DNET_NETSHOW_NAMEMAX)) != 0) return rc;
+            p += 1 + DNET_NETSHOW_NAMEMAX;
+        } else if (entity == DNET_NETSHOW_ENT_LINES) {
+            struct dnet_netshow_line *ln = &r.u.line[i];
+            if ((rc = ns_get_str(p, ln->name, DNET_NETSHOW_CIRCMAX)) != 0) return rc;
+            p += 1 + DNET_NETSHOW_CIRCMAX;
+            if (p[0] > 1)
+                return DNET_NETSHOW_EINVAL;
+            ln->state_on = p[0];                               p += 1;
+        } else if (entity == DNET_NETSHOW_ENT_OBJECTS) {
+            struct dnet_netshow_object *o = &r.u.obj[i];
+            if ((rc = ns_get_str(p, o->name, DNET_NETSHOW_OBJNAMEMAX)) != 0) return rc;
+            p += 1 + DNET_NETSHOW_OBJNAMEMAX;
+            o->number = p[0];                                  p += 1;
+            if ((rc = ns_get_str(p, o->file, DNET_NETSHOW_FILEMAX)) != 0) return rc;
+            p += 1 + DNET_NETSHOW_FILEMAX;
+            o->pid = ns_get32(p);                              p += 4;
         } else {
             struct dnet_netshow_link *l = &r.u.link[i];
             l->local_link = ns_get16(p);                       p += 2;
@@ -312,6 +365,18 @@ DNET_NETSHOW_API uint32_t dnet_netshow_fetch(dnet_netshow_query_fn query, void *
                 if (v->nnodes >= DNET_NETSHOW_MAX_NODES)
                     return DNET_NETSHOW_ST_BADREC;
                 v->nodes[v->nnodes++] = r.u.node[i];
+            } else if (entity == DNET_NETSHOW_ENT_CIRCUITS) {
+                if (v->ncircs >= DNET_NETSHOW_MAX_CIRCS)
+                    return DNET_NETSHOW_ST_BADREC;
+                v->circs[v->ncircs++] = r.u.circ[i];
+            } else if (entity == DNET_NETSHOW_ENT_LINES) {
+                if (v->nlines >= DNET_NETSHOW_MAX_LINES)
+                    return DNET_NETSHOW_ST_BADREC;
+                v->lines[v->nlines++] = r.u.line[i];
+            } else if (entity == DNET_NETSHOW_ENT_OBJECTS) {
+                if (v->nobjs >= DNET_NETSHOW_MAX_OBJS)
+                    return DNET_NETSHOW_ST_BADREC;
+                v->objs[v->nobjs++] = r.u.obj[i];
             } else {
                 if (v->nlinks >= DNET_NETSHOW_MAX_LINKS)
                     return DNET_NETSHOW_ST_BADREC;
@@ -552,6 +617,123 @@ DNET_NETSHOW_API void dnet_netshow_fmt_known_links(const struct dnet_netshow_vie
         emit(ctx, line);
     }
     emit(ctx, "");
+}
+
+/* Trim trailing blanks and emit. */
+static void ns_emit_row(char *row, dnet_netshow_emit_fn emit, void *ctx)
+{
+    size_t end = strlen(row);
+    while (end > 0 && row[end - 1] == ' ')
+        row[--end] = '\0';
+    emit(ctx, row);
+}
+
+static void ns_blank_row(char *row, size_t cap)
+{
+    memset(row, ' ', cap - 1);
+    row[cap - 1] = '\0';
+}
+
+/* KNOWN CIRCUITS (rd vms-2d0). Columns measured on the oracle
+ * (MCR_NCP_SHOW_KNOWN_CIRCUITS.txt):
+ *   "   Circuit          State                   Loopback     Adjacent"
+ *   "                                              Name      Routing Node"
+ *   "  QNA-0             on"
+ * circuit name at 2, state at 20. The reference node had no adjacent routing
+ * node, so the oracle shows that column EMPTY; OVMX places a known one under
+ * "Adjacent" (column 57) -- that position is OVMX's until a capture with a
+ * populated column pins it. Loopback name: NETACP keeps none, so it is blank. */
+DNET_NETSHOW_API void dnet_netshow_fmt_circuits(const struct dnet_netshow_view *v,
+                                                const struct dnet_netshow_circuit *c,
+                                                dnet_netshow_emit_fn emit, void *ctx)
+{
+    ns_header(v, c ? "Circuit Volatile Summary" : "Known Circuit Volatile Summary",
+              emit, ctx);
+    if (!c && v->ncircs == 0) {
+        emit(ctx, "No information in database");
+        emit(ctx, "");
+        return;
+    }
+    emit(ctx, "   Circuit          State                   Loopback     Adjacent");
+    emit(ctx, "                                              Name      Routing Node");
+    emit(ctx, "");
+    for (unsigned i = 0; i < (c ? 1u : v->ncircs); i++) {
+        const struct dnet_netshow_circuit *e = c ? c : &v->circs[i];
+        char row[112], id[24];
+        ns_blank_row(row, sizeof row);
+        ns_place(row, sizeof row, 2, e->name);
+        ns_place(row, sizeof row, 20, e->state_on ? "on" : "off");
+        if (e->adj_addr) {
+            ns_node_id(e->adj_addr, e->adj_name, id, sizeof id);
+            ns_place(row, sizeof row, 57, id);
+        }
+        ns_emit_row(row, emit, ctx);
+    }
+}
+
+/* KNOWN LINES: "   Line             State" / "  QNA-0             on" (oracle
+ * MCR_NCP_SHOW_KNOWN_LINES.txt): line name at 2, state at 20. */
+DNET_NETSHOW_API void dnet_netshow_fmt_lines(const struct dnet_netshow_view *v,
+                                             const struct dnet_netshow_line *l,
+                                             dnet_netshow_emit_fn emit, void *ctx)
+{
+    ns_header(v, l ? "Line Volatile Summary" : "Known Line Volatile Summary", emit, ctx);
+    if (!l && v->nlines == 0) {
+        emit(ctx, "No information in database");
+        emit(ctx, "");
+        return;
+    }
+    emit(ctx, "   Line             State");
+    emit(ctx, "");
+    for (unsigned i = 0; i < (l ? 1u : v->nlines); i++) {
+        const struct dnet_netshow_line *e = l ? l : &v->lines[i];
+        char row[64];
+        ns_blank_row(row, sizeof row);
+        ns_place(row, sizeof row, 2, e->name);
+        ns_place(row, sizeof row, 20, e->state_on ? "on" : "off");
+        ns_emit_row(row, emit, ctx);
+    }
+}
+
+/* KNOWN OBJECTS. Columns measured on the oracle
+ * (MCR_NCP_SHOW_KNOWN_OBJECTS.txt):
+ *   "   Object   Number  File/PID                   User Id          Password"
+ *   "  FAL           17  FAL.EXE"
+ *   "  CTERM         42  20200216"
+ * name at 2, the number right-aligned ending at column 17, File/PID at 20,
+ * User Id at 47, Password at 64. A served-in-place object shows the serving
+ * process's PID (8 hex digits) where an activated one shows its file. The
+ * record carries no user and no password (see dnet_netshow_object), so those
+ * columns stay blank: nothing to print, and so nothing to mask. */
+DNET_NETSHOW_API void dnet_netshow_fmt_objects(const struct dnet_netshow_view *v,
+                                               const struct dnet_netshow_object *o,
+                                               dnet_netshow_emit_fn emit, void *ctx)
+{
+    ns_header(v, o ? "Object Volatile Summary" : "Known Object Volatile Summary", emit, ctx);
+    if (!o && v->nobjs == 0) {
+        emit(ctx, "No information in database");
+        emit(ctx, "");
+        return;
+    }
+    emit(ctx, "   Object   Number  File/PID                   User Id          Password");
+    emit(ctx, "");
+    for (unsigned i = 0; i < (o ? 1u : v->nobjs); i++) {
+        const struct dnet_netshow_object *e = o ? o : &v->objs[i];
+        char row[112], tmp[16];
+        ns_blank_row(row, sizeof row);
+        ns_place(row, sizeof row, 2, e->name);
+        /* A name too long for its column pushes the rest right (never overlaps). */
+        size_t shift = strlen(e->name) > 12 ? strlen(e->name) - 12 : 0;
+        snprintf(tmp, sizeof tmp, "%3u", (unsigned)e->number);
+        ns_place(row, sizeof row, 15 + shift, tmp);
+        if (e->file[0])
+            ns_place(row, sizeof row, 20 + shift, e->file);
+        else if (e->pid) {
+            snprintf(tmp, sizeof tmp, "%08X", (unsigned)e->pid);
+            ns_place(row, sizeof row, 20 + shift, tmp);
+        }
+        ns_emit_row(row, emit, ctx);
+    }
 }
 
 /* "Product:  DECNET        Node:  VAX1                 Address(es):  1.1"

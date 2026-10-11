@@ -16,8 +16,8 @@ endif()
 
 # ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
 # images off the genuine ODS-2 boot volume THROUGH the executive ACP. The ACP
-# file-access walk is the SAME imgact_acp.c IMGACT.EXE and the QEMU test use --
-# ovmx_boot_acp_read.c only backs its three host primitives with libc.
+# file-access walk is the SAME imgact_acp.c IMGACT.EXE and the QEMU test use, and
+# it reaches the executive through libvmssys's transport seam (rd vms-bbde).
 #
 # EVERY RUNTIME SUBSTRATE (vms-329, the coupled VAX cutover). This used to be
 # Linux-only while the NetBSD-vax boot path still VFS-mounted SYS$DISK. It no

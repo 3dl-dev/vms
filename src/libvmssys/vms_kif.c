@@ -2333,6 +2333,22 @@ uint32_t vms_kif_brkauth(uint32_t sndtyp)
     return args.status;
 }
 
+/* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
+ * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
+uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)
+{
+    struct vms_procctl_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.pid = pid;
+    args.code = code;
+
+    KIF_CALL(VMS_IOCTL_PROCCTL, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_setcli(uint32_t cliflag, const char *command)
 {
     struct vms_setcli_args args;
@@ -2524,6 +2540,26 @@ uint32_t vms_kif_image_rundown(uint8_t *prev_mode, uint8_t *new_mode)
 
     if (prev_mode) *prev_mode = args.prev_mode;
     if (new_mode) *new_mode = args.new_mode;
+    return args.status;
+}
+
+/*
+ * vms_kif_substrate_id - the substrate identity the executive gives this VMS
+ * process (VMS_IOCTL_SUBSTRATE_ID, rd vms-ac48): GET reads it (assigning one
+ * on first use), BECOME makes it this task's uid/gid. *uid receives it.
+ */
+uint32_t vms_kif_substrate_id(uint32_t op, uint32_t *uid)
+{
+    struct vms_substrate_id_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    KIF_CALL(VMS_IOCTL_SUBSTRATE_ID, &args);
+    if (uid)
+        *uid = args.uid;
     return args.status;
 }
 

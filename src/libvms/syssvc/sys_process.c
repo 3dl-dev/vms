@@ -1914,43 +1914,17 @@ uint32_t (sys$delprc)(const uint32_t *pidadr,
     if (!(status & 1))
         return status;
 
-    status = vms_kif_getjpi_self(&self_info);
-    if (!(status & 1))
-        return status;
-
-    if (target.vms_pid != self_info.vms_pid) {
-        int same_group = ((target.uic >> 16) == (self_info.uic >> 16));
-        /* WORLD is the BROADER privilege ("affect any process, any group")
-         * and so authorizes a same-group delete too, same as it authorizes
-         * everything GROUP does; GROUP alone does not reach outside the
-         * caller's own group. A same-group target is therefore authorized
-         * by EITHER bit, a cross-group one by WORLD alone -- caught live by
-         * tests/qemu/test_syssvc_delprc.c P1/P2, whose caller holds WORLD
-         * (the executive's default privileged-registration grant,
-         * VMS_PRV_M_ENFORCED) but not GROUP (granted to nobody by default;
-         * nothing enforced it before this item). Requiring GROUP outright
-         * for the same-group case -- this function's first version --
-         * refused that caller's own same-group STOP with SS$_NOPRIV. */
-        uint64_t authorized = self_info.cur_privs &
-            (same_group ? (PRV$M_GROUP | PRV$M_WORLD) : PRV$M_WORLD);
-        if (!authorized)
-            return SS$_NOPRIV;
-    }
-
+    (void)self_info;
     /*
-     * THE TERMINATION ITSELF REMAINS SIGTERM-BY-LINUX-PID (OVMX design
-     * choice, Rule 8): OVMX has no executive-side "delete this PCB"
-     * primitive distinct from the process actually dying, the same way
-     * sys$exit() above is _exit() rather than a call into the executive.
-     * What vms-1a8 changes is WHOSE Linux pid this is -- the row the
-     * executive resolved and authorized above, not an unchecked caller
-     * argument. A race where the target exits between resolution and this
-     * kill() is reported the same way VMS reports "not there any more":
-     * SS$_NONEXPR.
+     * THE EXECUTIVE AUTHORIZES AND DELIVERS (rd vms-8e9). The rule is the one
+     * this function used to apply here -- self always; another process in the
+     * caller's UIC group needs GROUP or WORLD, one outside it WORLD -- but it is
+     * now decided on the caller's executive row and the termination is sent by
+     * the executive, so it needs no substrate privilege: each VMS process can
+     * run under its own substrate uid (vms-ac48), where a userspace kill() of
+     * another one would be EPERM. A target gone in between is SS$_NONEXPR.
      */
-    if (kill((pid_t)target.linux_pid, SIGTERM) < 0)
-        return SS$_NONEXPR;
-    return SS$_NORMAL;
+    return vms_kif_procctl(VMS_PROCCTL_DELPRC, target.vms_pid, 0);
 }
 
 /*
@@ -2065,17 +2039,15 @@ static uint32_t resolve_control_target(const uint32_t *pidadr,
 
 static uint32_t signal_target_process(const uint32_t *pidadr,
                                       const struct dsc$descriptor_s *prcnam,
-                                      int sig) {
+                                      uint32_t op) {
     struct vms_procinfo target;
     uint32_t status = resolve_control_target(pidadr, prcnam, &target);
     if (!(status & 1))
         return status;
 
-    /* A race where the target exits between resolution and this kill() is
-     * reported the way VMS reports "not there any more": SS$_NONEXPR. */
-    if (kill((pid_t)target.linux_pid, sig) < 0)
-        return SS$_NONEXPR;
-    return SS$_NORMAL;
+    /* The executive re-authorizes on its own row and delivers (rd vms-8e9);
+     * a target gone in between is SS$_NONEXPR. */
+    return vms_kif_procctl(op, target.vms_pid, 0);
 }
 
 /*
@@ -2094,7 +2066,7 @@ uint32_t sys$forcex(const uint32_t *pidadr,
     }
 
     /* Force the RESOLVED target's real Linux pid, not a mis-cast VMS pid. */
-    return signal_target_process(pidadr, prcnam, SIGUSR1);
+    return signal_target_process(pidadr, prcnam, VMS_PROCCTL_FORCEX);
 }
 
 /*
@@ -2112,7 +2084,7 @@ uint32_t (sys$suspnd)(const uint32_t *pidadr,
     (void)flags;   /* SUSP$M_ALERT / SUSP$M_KERNEL: Linux SIGSTOP has one mode */
     /* Suspend the RESOLVED target's real Linux pid, not a mis-cast VMS pid
      * (vms-904); no pidadr/prcnam resolves to self. */
-    return signal_target_process(pidadr, prcnam, SIGSTOP);
+    return signal_target_process(pidadr, prcnam, VMS_PROCCTL_SUSPND);
 }
 
 /*
@@ -2135,7 +2107,7 @@ uint32_t sys$resume(const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam) {
     /* Resume the RESOLVED target's real Linux pid, not a mis-cast VMS pid
      * (vms-904); no pidadr/prcnam resolves to self. */
-    return signal_target_process(pidadr, prcnam, SIGCONT);
+    return signal_target_process(pidadr, prcnam, VMS_PROCCTL_RESUME);
 }
 
 /*

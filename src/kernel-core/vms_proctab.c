@@ -1951,6 +1951,67 @@ out:
 }
 
 /*
+ * vms_ioctl_procctl - $DELPRC / $FORCEX / $SUSPND / $RESUME on a process, by the
+ * executive (rd vms-8e9).
+ *
+ * The executive resolves the target by VMS pid (0 = the caller), authorizes by
+ * the caller's VMS privileges alone -- self always; another process in the
+ * caller's UIC group needs GROUP or WORLD, one outside it WORLD (OpenVMS DCL
+ * Dictionary, STOP; the same rule sys$delprc applied in userspace before) --
+ * and delivers the signal to the target's task itself. A caller's substrate
+ * identity plays no part, so a VMS process on its own substrate uid can stop
+ * another with GROUP/WORLD, and nothing else can.
+ */
+long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_procctl_args args;
+    struct vms_proc *t;
+    exec_task_ref_t *ref;
+    int sig, rc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    switch (args.op) {
+    case VMS_PROCCTL_DELPRC: sig = EXEC_SIG_TERM;  break;
+    case VMS_PROCCTL_FORCEX: sig = EXEC_SIG_FORCE; break;
+    case VMS_PROCCTL_SUSPND: sig = EXEC_SIG_STOP;  break;
+    case VMS_PROCCTL_RESUME: sig = EXEC_SIG_CONT;  break;
+    default:
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    t = (args.pid == 0 || args.pid == proc->vms_pid) ? proc : find_by_vms_pid(args.pid);
+    if (!t) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NONEXPR;
+        goto out;
+    }
+    if (t != proc) {
+        int same_group = (t->uic >> 16) == (proc->uic >> 16);
+        uint64_t need = same_group ? (VMS_PRV_M_GROUP | VMS_PRV_M_WORLD)
+                                   : VMS_PRV_M_WORLD;
+        /* NEGCTL-ANCHORED (procctl-privilege-not-checked) */
+        if (!(proc->cur_privs & need)) {
+            exec_unlock(&vms_proc_hash_lock);
+            args.status = SS__NOPRIV;
+            goto out;
+        }
+    }
+    ref = t->pid_ref;
+    exec_unlock(&vms_proc_hash_lock);
+    /* The pid_ref is held by the PCB; a PCB deleted after the unlock leaves a
+     * ref whose process is gone, which exec_task_signal reports as -ESRCH. */
+    rc = exec_task_signal(ref, sig);
+    args.status = rc == 0 ? SS__NORMAL : SS__NONEXPR;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_brkauth - may the caller $BRKTHRU to every terminal / every user
  * (vms-768)? Those send types need OPER: SS$_NOOPER without it (OpenVMS VAX
  * V7.3, docs/oracle/semantics/privchk). Any other send type is the caller's own
@@ -1967,6 +2028,95 @@ long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg)
     /* NEGCTL-ANCHORED (brk-oper-not-checked) */
     if ((args.sndtyp == 3u || args.sndtyp == 4u) && !(proc->cur_privs & VMS_PRV_M_OPER))
         args.status = SS__NOOPER;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+
+/* ================================================================
+ * Substrate identity (rd vms-ac48, epic vms-8e6).
+ *
+ * Nothing in OVMX runs as substrate root, and a VMS process's power comes only
+ * from the executive. So the substrate identity a process runs under carries
+ * no VMS meaning at all: the executive gives every VMS process its own uid
+ * (== gid) from a dedicated range, OVMX_SUBST_UID_BASE.. -- never 0, never the
+ * UIC -- and the process becomes it through the executive (BECOME), needing no
+ * substrate privilege. One uid per VMS process keeps the substrate's same-uid
+ * powers (signals, ptrace, /proc) from reaching another VMS process.
+ * ================================================================ */
+static uint32_t vms_subst_next;
+
+/* Under vms_proc_hash_lock: a range uid no live PCB holds. 0 if none free. */
+static uint32_t subst_uid_alloc_locked(void)
+{
+    for (uint32_t n = 0; n < OVMX_SUBST_UID_SPAN; n++) {
+        uint32_t cand = OVMX_SUBST_UID_BASE + (vms_subst_next++ % OVMX_SUBST_UID_SPAN);
+        struct vms_proc *p;
+        int bkt, taken = 0;
+        exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+            if (p->subst_uid == cand) {
+                taken = 1;
+                break;
+            }
+        }
+        if (!taken)
+            return cand;
+    }
+    return 0;
+}
+
+/*
+ * vms_proc_subst_uic - the UIC a FRESH registration takes. A task whose
+ * substrate uid is one the executive gave a VMS process is that process's
+ * (a fork of it): it takes that process's UIC. Any other task keeps today's
+ * [gid,uid] derivation. Takes vms_proc_hash_lock itself.
+ */
+uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid)
+{
+    uint32_t uic = ((gid & 0xFFFFu) << 16) | (uid & 0xFFFFu);
+    struct vms_proc *p;
+    int bkt;
+
+    if (uid < OVMX_SUBST_UID_BASE || uid >= OVMX_SUBST_UID_BASE + OVMX_SUBST_UID_SPAN)
+        return uic;
+    exec_lock(&vms_proc_hash_lock);
+    exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+        if (p->subst_uid == uid) {
+            uic = p->uic;
+            break;
+        }
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    return uic;
+}
+
+long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_substrate_id_args args;
+    uint32_t uid;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    if (args.op != VMS_SUBST_OP_GET && args.op != VMS_SUBST_OP_BECOME) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    if (proc->subst_uid == 0)
+        proc->subst_uid = subst_uid_alloc_locked();
+    uid = proc->subst_uid;
+    exec_unlock(&vms_proc_hash_lock);
+    if (uid == 0) {
+        args.status = SS__INSFMEM;
+        goto out;
+    }
+    args.uid = uid;
+    args.status = SS__NORMAL;
+    if (args.op == VMS_SUBST_OP_BECOME && exec_become_substrate_id(uid) != 0)
+        args.status = SS__ABORT;
+out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

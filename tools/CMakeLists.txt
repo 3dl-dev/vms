@@ -287,6 +287,14 @@ set_target_properties(vms_monitor PROPERTIES
 )
 install(TARGETS vms_monitor RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# ROOTAUDIT.EXE (rd vms-251b, epic vms-8e6): lists every process that runs as
+# the substrate superuser, read from the substrate's own process list. The
+# DCL acceptance battery runs it as GUEST on every booted arch.
+add_executable(vms_rootaudit vms_rootaudit.c)
+target_compile_options(vms_rootaudit PRIVATE -Wall -Wextra)
+set_target_properties(vms_rootaudit PROPERTIES OUTPUT_NAME "ROOTAUDIT" SUFFIX ".EXE")
+install(TARGETS vms_rootaudit RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
 add_executable(vms_initialize
     vms_initialize.c
 )

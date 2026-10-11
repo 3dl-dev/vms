@@ -80,6 +80,7 @@
 #include <sys/condvar.h>   /* kcondvar_t, cv_* */
 #include <sys/kmem.h>      /* kmem_alloc/zalloc/free, KM_SLEEP/KM_NOSLEEP */
 #include <sys/proc.h>      /* struct proc, curproc, proc_find, p_pid (Phase F) */
+#include <sys/signalvar.h> /* psignal (exec_task_signal, rd vms-8e9) */
 #include <sys/resourcevar.h> /* calcru, struct pstats {p_ru, p_start} (vms-6cac).
                               * rbtree-CLEAN (pulls only sys/mutex.h + sys/resource.h),
                               * so it is safe in this shared header -- unlike
@@ -88,6 +89,7 @@
                               * rss read is delegated to the dedicated uvm-TU
                               * vms_acct_rss_netbsd.c, rd vms-601). */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
+#include <sys/uio.h>       /* UIO_SYSSPACE (exec_become_substrate_id, vms-ac48) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
@@ -463,6 +465,29 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
 
+/* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): set the
+ * current process's real/effective/saved uid and gid to `id`, no groups. The
+ * credential swap is NetBSD's own (proc_crmod_enter/leave, kauth(9)). */
+static __inline int
+exec_become_substrate_id(uint32_t id)
+{
+	kauth_cred_t ocred, ncred;
+
+	ncred = kauth_cred_alloc();
+	proc_crmod_enter();                 /* takes p_lock */
+	ocred = curproc->p_cred;
+	kauth_cred_clone(ocred, ncred);
+	kauth_cred_setuid(ncred, (uid_t)id);
+	kauth_cred_seteuid(ncred, (uid_t)id);
+	kauth_cred_setsvuid(ncred, (uid_t)id);
+	kauth_cred_setgid(ncred, (gid_t)id);
+	kauth_cred_setegid(ncred, (gid_t)id);
+	kauth_cred_setsvgid(ncred, (gid_t)id);
+	(void)kauth_cred_setgroups(ncred, NULL, 0, -1, UIO_SYSSPACE);
+	proc_crmod_leave(ncred, ocred, true);
+	return 0;
+}
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {
@@ -581,6 +606,28 @@ exec_task_unpin(exec_task_pin_t *pin)
 	 * there is nothing else to drop. exec_free tolerates NULL.
 	 */
 	exec_free(pin);
+}
+
+/* exec_task_signal (rd vms-8e9): deliver a process-control signal to the
+ * process behind `ref` from inside the executive, after the executive's own VMS
+ * privilege check. psignal(9) wants proc_lock held. 0, or -ESRCH when gone. */
+#define EXEC_SIG_TERM  SIGTERM
+#define EXEC_SIG_FORCE SIGUSR1
+#define EXEC_SIG_STOP  SIGSTOP
+#define EXEC_SIG_CONT  SIGCONT
+static __inline int
+exec_task_signal(exec_task_ref_t *ref, int sig)
+{
+	struct proc *p;
+
+	if (ref == NULL)
+		return -ESRCH;
+	mutex_enter(&proc_lock);
+	p = proc_find(ref->pid);
+	if (p != NULL)
+		psignal(p, sig);
+	mutex_exit(&proc_lock);
+	return p != NULL ? 0 : -ESRCH;
 }
 
 /* ---- 6. RCU-lite deferred reclaim (Phase F; see exec_kbackend.h) ----

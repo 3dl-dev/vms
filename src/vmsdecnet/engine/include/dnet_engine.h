@@ -272,6 +272,10 @@ int dnet_engine_set_router(struct dnet_engine *e, uint8_t priority);
 /* 1 if this engine is running as a router (node_type == L1 router), else 0. */
 int dnet_engine_is_router(const struct dnet_engine *e);
 
+/* The LAN line name for the engine's device ("ETH0" -> "ETH-0"): the shape the
+ * engine also derives its default circuit name with (rd vms-2d0). */
+void dnet_engine_line_name(const struct dnet_engine *e, char *out, size_t cap);
+
 /*
  * dnet_engine_build_router_hello_frame - assemble the complete on-wire Phase IV
  * ROUTER-HELLO Ethernet frame into `frame_out` (rd vms-0a9): a 14-byte Ethernet

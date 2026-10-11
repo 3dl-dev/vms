@@ -328,11 +328,16 @@ static int acp_qio(unsigned int efn, unsigned short chan, unsigned int func,
 
 /* Every other function (a terminal or mailbox read/write, a device
  * function...): P1-P6 are values or buffer addresses, not descriptors, so the
- * request goes to the same $QIO OVMX's own code calls, unchanged (vms-3b3f). */
-static int is_acp_function(unsigned int func)
+ * request goes to the same $QIO OVMX's own code calls, unchanged (vms-3b3f).
+ * IO$_ACCESS/IO$_DEACCESS are ACP functions on a file-structured device; on a
+ * terminal or mailbox the device's own driver answers them (vms-40fb: a
+ * terminal's IO$_ACCESS is refused by the terminal driver, not read as an ACP
+ * request with a missing FIB). */
+static int is_acp_function(unsigned short chan, unsigned int func)
 {
     unsigned fcode = func & IO$M_FCODE;
-    return fcode == IO$_ACCESS || fcode == IO$_DEACCESS;
+    return (fcode == IO$_ACCESS || fcode == IO$_DEACCESS) &&
+           !ovmx_vmsabi_chan_is_record_device(chan);
 }
 
 static int dev_qio(int wait, unsigned int efn, unsigned short chan, unsigned int func,
@@ -350,7 +355,7 @@ int SYS$QIOW(unsigned int efn, unsigned short chan, unsigned int func, void *ios
 {
     va_list ap;
     va_start(ap, iosb);
-    int st = is_acp_function(func) ? acp_qio(efn, chan, func, iosb, ap)
+    int st = is_acp_function(chan, func) ? acp_qio(efn, chan, func, iosb, ap)
                                    : dev_qio(1, efn, chan, func, iosb, ap);
     va_end(ap);
     return st;
@@ -360,7 +365,7 @@ int SYS$QIO(unsigned int efn, unsigned short chan, unsigned int func, void *iosb
 {
     va_list ap;
     va_start(ap, iosb);
-    int st = is_acp_function(func) ? acp_qio(efn, chan, func, iosb, ap)
+    int st = is_acp_function(chan, func) ? acp_qio(efn, chan, func, iosb, ap)
                                    : dev_qio(0, efn, chan, func, iosb, ap);
     va_end(ap);
     return st;
@@ -663,6 +668,29 @@ int SYS$GRANTID(unsigned int *pidadr, void *prcnam, unsigned int *id, void *name
 int SYS$REVOKID(unsigned int *pidadr, void *prcnam, unsigned int *id, void *name,
                 unsigned int *prvatr, unsigned int segment)
 { return grant(1, pidadr, prcnam, id, name, prvatr, segment); }
+
+/* $CHKPRO: an item list, and the object and subject profiles by descriptor
+ * (vms-8b5). */
+int SYS$CHKPRO(void *itmlst, void *objpro, void *subjpro)
+{
+    struct ovmx_abi_str o, s;
+    ITEMS_OR_BAD(itmlst, items, n);
+    str_arg(objpro, &o);
+    str_arg(subjpro, &s);
+    return (int)ovmx_vmsabi_chkpro(itmlst != 0, items, (unsigned)n, &o, &s);
+}
+
+/* $CREATE_USER_PROFILE: the user name by descriptor, an item list, and the
+ * profile buffer by address with its length by reference (vms-8b5). */
+int SYS$CREATE_USER_PROFILE(void *usrnam, void *itmlst, unsigned int flags, void *usrpro,
+                            unsigned int *usrprolen, unsigned int *contxt)
+{
+    struct ovmx_abi_str u;
+    ITEMS_OR_BAD(itmlst, items, n);
+    str_arg(usrnam, &u);
+    return (int)ovmx_vmsabi_create_user_profile(&u, itmlst != 0, items, (unsigned)n, flags,
+                                                usrpro, usrprolen, contxt);
+}
 
 int SYS$SNDOPR(void *msgbuf, unsigned short chan)
 {

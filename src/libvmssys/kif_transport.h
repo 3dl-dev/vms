@@ -42,12 +42,22 @@
 /*
  * kif_xport_dev_open - open the executive device.
  *
- * Returns a descriptor >= 0 on success, or a negative value on failure (the
- * raw open(2) return; the policy layer treats any negative as "no device").
+ * Returns a descriptor >= 0 on success, or a NEGATIVE ERRNO on failure (the
+ * policy layer treats any negative as "no device"; a caller that reports a
+ * host errno takes it from here).
  * Takes no arguments: the device name is the transport's own knowledge, not
  * the policy layer's.
  */
 int kif_xport_dev_open(void);
+
+/*
+ * kif_xport_device_path - the name of the executive's device node on this
+ * substrate ("/dev/vms" today), for the two places that must name it without
+ * opening it: PID 1 provisioning the node at boot, and the executive-boundary
+ * audit tracer recognising an open of it. Nothing else may spell it (rd
+ * vms-bbde; tools/ci/check_transport_seam.py).
+ */
+const char *kif_xport_device_path(void);
 
 /*
  * kif_xport_dev_close - close a descriptor returned by kif_xport_dev_open.

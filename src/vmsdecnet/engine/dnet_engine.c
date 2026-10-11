@@ -52,6 +52,33 @@ const char *dnet_addr_str(uint16_t addr, char *buf, size_t cap)
     return buf;
 }
 
+/* OVMX design choice (LABELLED): the LAN line -- and, unless --circuit names
+ * it otherwise, the circuit -- is named after the device by inserting a dash
+ * before the trailing unit digits, the DEC Ethernet naming shape (the real VAX
+ * names its QNA0 line and circuit both "QNA-0", docs/oracle/vax-ncp-show), so
+ * the executive's ETH0: gives "ETH-0". Not presented as VMS-authentic beyond
+ * that shape. */
+void dnet_engine_line_name(const struct dnet_engine *e, char *out, size_t cap)
+{
+    char buf[DNET_DEVNAME_MAX + 1];
+    size_t n = strlen(e->device);
+    size_t i = n;
+    while (i > 0 && e->device[i - 1] >= '0' && e->device[i - 1] <= '9')
+        i--;
+    if (i > 0 && i < n && i < DNET_DEVNAME_MAX) {
+        memcpy(buf, e->device, i);
+        buf[i] = '-';
+        size_t k = i + 1;
+        for (size_t j = i; j < n && k < DNET_DEVNAME_MAX; j++)
+            buf[k++] = e->device[j];
+        buf[k] = '\0';
+    } else {
+        snprintf(buf, sizeof buf, "%s", e->device);
+    }
+    if (cap)
+        snprintf(out, cap, "%s", buf);
+}
+
 int dnet_engine_init(struct dnet_engine *e, unsigned area, unsigned node,
                      const char *node_name, const char *device,
                      const char *circuit, const uint8_t hw_mac[DNET_ADDR_LEN],
@@ -79,23 +106,7 @@ int dnet_engine_init(struct dnet_engine *e, unsigned area, unsigned node,
         strncpy(e->circuit, circuit, DNET_DEVNAME_MAX);
         e->circuit[DNET_DEVNAME_MAX] = '\0';
     } else {
-        /* OVMX design choice (LABELLED): derive the circuit name from the
-         * device by inserting a dash before the trailing unit digits, the DEC
-         * Ethernet-circuit naming shape (e.g. "EWA0" -> "EWA-0"). Not presented
-         * as VMS-authentic beyond that shape. */
-        size_t n = strlen(e->device);
-        size_t i = n;
-        while (i > 0 && e->device[i - 1] >= '0' && e->device[i - 1] <= '9')
-            i--;
-        if (i > 0 && i < n && i < DNET_DEVNAME_MAX) {
-            memcpy(e->circuit, e->device, i);
-            e->circuit[i] = '-';
-            strncpy(e->circuit + i + 1, e->device + i, DNET_DEVNAME_MAX - i - 1);
-            e->circuit[DNET_DEVNAME_MAX] = '\0';
-        } else {
-            strncpy(e->circuit, e->device, DNET_DEVNAME_MAX);
-            e->circuit[DNET_DEVNAME_MAX] = '\0';
-        }
+        dnet_engine_line_name(e, e->circuit, sizeof e->circuit);
     }
 
     if (hw_mac)

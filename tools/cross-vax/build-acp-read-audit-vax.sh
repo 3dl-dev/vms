@@ -257,11 +257,12 @@ check_defines imgact_acp.o      imgact_acp_open
 check_defines imgact_acp.o      imgact_acp_pread
 check_defines imgact_acp.o      imgact_acp_close
 
-# PID 1's staging bridge + its libc-backed host primitives.
+# PID 1's staging bridge. The ACP walk reaches the executive through the
+# libvmssys transport seam (rd vms-bbde), never an open/ioctl of its own.
 check_defines ovmx_boot_acp_read.o  ovmx_boot_acp_present
 check_defines ovmx_boot_acp_read.o  ovmx_boot_acp_stage
-check_defines ovmx_boot_acp_read.o  imgact_acp_dev_open
-check_defines ovmx_boot_acp_read.o  imgact_acp_dev_ioctl
+check_refs    imgact_acp.o          kif_xport_dev_open
+check_refs    imgact_acp.o          kif_xport_ioctl
 
 # OVMXVMSSYS.PAR over the ACP -- the STRONG side of the weak seam.
 check_defines ovmx_boot_sysgen_acp.o ovmx_sysgen_acp_read

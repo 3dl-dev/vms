@@ -68,6 +68,7 @@ static int fail = 0;
 #define TARGET3_NAME    "OVMX1A8TGT3"   /* P3: privless refusal target */
 #define TARGET_SIG_NAME "OVMX904SIG"    /* P6: suspnd/resume/forcex by VMS pid */
 #define TARGET_PRI_NAME "OVMXDFF7PRI"   /* P7: setpri by VMS pid */
+#define TARGET_XID_NAME "OVMX8E9XID"    /* P8: across substrate identities */
 #define ABSENT_NAME     "OVMX1A8NONE"   /* never created */
 
 static struct dsc$descriptor_s str_dsc(const char *s)
@@ -517,6 +518,71 @@ int main(void)
 
         kill((pid_t)lpid, SIGKILL);
         reap(lpid);
+    }
+
+    /* ---- P8 (rd vms-8e9): STOP across SUBSTRATE identities. The caller holds
+     * WORLD in its executive row but runs under a different, unprivileged
+     * substrate uid than the target (as every VMS process will, each on its own
+     * executive-given uid, vms-ac48). A userspace kill() from it is EPERM --
+     * which the old sys$delprc reported as SS$_NONEXPR -- so the target is only
+     * stopped if the EXECUTIVE delivers the termination after its own VMS
+     * privilege check. ---- */
+    {
+        uint32_t vms_pid = 0, lpid = 0;
+        uint32_t cst = spawn_named(TARGET_XID_NAME, &vms_pid);
+        CHECK(cst & 1, "P8: $CREPRC creates the cross-identity target");
+        lpid = linux_pid_of(vms_pid);
+        CHECK(lpid != 0, "P8: the target resolves to a real Linux pid");
+        CHECK(wait_for_exec(lpid, "sh") == 0, "P8: the target reached its sh image");
+
+        int pipefd[2];
+        if (pipe(pipefd) != 0) {
+            CHECK(0, "P8: pipe() for the other-uid caller");
+        } else {
+            pid_t hp = fork();
+            if (hp == 0) {
+                close(pipefd[0]);
+                struct vms_procinfo me;
+                uint32_t res[2] = { 0, 0 };
+                /* Enter the executive's table (with this root process's VMS
+                 * privileges, WORLD among them) BEFORE dropping the substrate
+                 * identity, then become an unprivileged substrate user. */
+                if (!(vms_kif_getjpi_self(&me) & 1) || !(me.cur_privs & VMS_PRV_M_WORLD) ||
+                    setgid(4242) != 0 || setuid(4242) != 0) {
+                    (void)!write(pipefd[1], res, sizeof(res));
+                    _exit(1);
+                }
+                res[0] = 1;
+                /* The substrate itself refuses this process a signal to the target. */
+                res[1] = (kill((pid_t)lpid, 0) < 0 && errno == EPERM) ? 1u : 0u;
+                struct dsc$descriptor_s nd = str_dsc(TARGET_XID_NAME);
+                uint32_t dst = sys$delprc(NULL, &nd);
+                (void)!write(pipefd[1], res, sizeof(res));
+                (void)!write(pipefd[1], &dst, sizeof(dst));
+                _exit(0);
+            }
+            close(pipefd[1]);
+            uint32_t res[2] = { 0, 0 }, dst = 0;
+            ssize_t r1 = read(pipefd[0], res, sizeof(res));
+            ssize_t r2 = read(pipefd[0], &dst, sizeof(dst));
+            close(pipefd[0]);
+            int hst;
+            while (waitpid(hp, &hst, 0) < 0 && errno == EINTR)
+                ;
+            CHECK(r1 == (ssize_t)sizeof(res) && res[0] == 1,
+                  "P8: the caller holds WORLD in its executive row and runs as substrate uid 4242");
+            CHECK(res[1] == 1,
+                  "P8: the substrate refuses that caller a signal to the target (kill() is EPERM)");
+            CHECK(r2 == (ssize_t)sizeof(dst) && dst == SS$_NORMAL,
+                  "P8: sys$delprc of the other-identity target returns SS$_NORMAL -- the executive authorized it by VMS privilege");
+            int reaped = (wait_and_reap(lpid) == 0);
+            /* negctl: procctl-not-delivered */
+            CHECK(reaped, "P8: the other-identity target actually terminated -- the executive delivered the termination");
+            if (!reaped) {
+                kill((pid_t)lpid, SIGKILL);
+                reap(lpid);
+            }
+        }
     }
 
     /* ---- P8 (vms-dff7): sys$setpri on a NONEXISTENT VMS pid is the honest

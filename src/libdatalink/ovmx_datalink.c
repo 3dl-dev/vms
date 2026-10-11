@@ -125,8 +125,8 @@ int scs_datalink_primary_iface(char *out, size_t n)
 
 /* ---- EXECUTIVE backend: the raw L2 wire routes through /dev/vms ---------- */
 
-#include "vms_ioctl.h"   /* VMS_IOCTL_L2_* + struct vms_l2_*_args + VMS_IOCTL_REGISTER */
-#include <fcntl.h>
+#include "vms_ioctl.h"   /* struct vms_l2_*_args + struct vms_register_args */
+#include "kif_calls.h"   /* the executive transport seam (rd vms-bbde) */
 
 /* SCSD opens exactly one datalink for its whole run; a small fd->handle table
  * (sized like the NetBSD bpf table) keeps the executive handle + recv timeout
@@ -171,17 +171,19 @@ int scs_datalink_open(const char *ifname, uint16_t ethertype)
 int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
                               const uint8_t station[6])
 {
-    int fd = open("/dev/vms", O_RDWR);
-    if (fd < 0)
-        return -1;                     /* no executive -> honest failure, never
+    int fd = kif_xport_dev_open();
+    if (fd < 0) {                      /* no executive -> honest failure, never
                                         * a silent AF_PACKET fallback: that code
                                         * is not compiled into this binary. */
+        errno = -fd;
+        return -1;
+    }
     /* The executive resolves the caller's process (vms_proc_find_or_err) from
      * its registration, then gates L2_OPEN on PHY_IO -- register first, exactly
      * as a caller's own request/response path does. */
     struct vms_register_args reg;
     memset(&reg, 0, sizeof(reg));
-    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) < 0) { close(fd); return -1; }
+    if (kif_call(fd, KIF_SVC_REGISTER, &reg) < 0) { kif_xport_dev_close(fd); return -1; }
 
     struct vms_l2_open_args a;
     memset(&a, 0, sizeof(a));
@@ -190,12 +192,13 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
     if (station)                       /* rd vms-1f69: the executive validates
                                         * it and owns every send's source */
         memcpy(a.station, station, sizeof(a.station));
-    if (ioctl(fd, VMS_IOCTL_L2_OPEN, &a) < 0) { int e = errno; close(fd); errno = e; return -1; }
+    long orc = kif_call(fd, KIF_SVC_L2_OPEN, &a);
+    if (orc < 0) { kif_xport_dev_close(fd); errno = (int)-orc; return -1; }
     if (a.status != 1u) {          /* SS$_NORMAL == 1; anything else is honest
                                     * refusal (SS$_NOPRIV 36 without PHY_IO,
                                     * SS$_NOSUCHDEV 2312 for an absent iface,
                                     * SS$_BADPARAM 20 for a refused station). */
-        close(fd);
+        kif_xport_dev_close(fd);
         g_l2_last_status = a.status;
         g_l2_last_stv = a.stv;
         errno = (a.status == 2312u) ? ENODEV
@@ -203,7 +206,7 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
               : (a.status == 36u)   ? EACCES : EIO;
         return -1;
     }
-    if (l2_alloc(fd, a.handle) == NULL) { close(fd); errno = ENOMEM; return -1; }
+    if (l2_alloc(fd, a.handle) == NULL) { kif_xport_dev_close(fd); errno = ENOMEM; return -1; }
     return fd;
 }
 
@@ -214,10 +217,10 @@ void scs_datalink_close(int fd)
         struct vms_l2_close_args a;
         memset(&a, 0, sizeof(a));
         a.handle = s->handle;
-        (void)ioctl(fd, VMS_IOCTL_L2_CLOSE, &a);
+        (void)kif_call(fd, KIF_SVC_L2_CLOSE, &a);
         memset(s, 0, sizeof(*s));
     }
-    close(fd);
+    kif_xport_dev_close(fd);
 }
 
 ssize_t scs_datalink_send(int fd, int ifindex, uint16_t ethertype,
@@ -235,7 +238,8 @@ ssize_t scs_datalink_send(int fd, int ifindex, uint16_t ethertype,
     memcpy(a.dst_mac, dst_mac, 6);
     a.len = (uint32_t)len;
     memcpy(a.data, frame, len);
-    if (ioctl(fd, VMS_IOCTL_L2_SEND, &a) < 0) return -1;
+    long r = kif_call(fd, KIF_SVC_L2_SEND, &a);
+    if (r < 0) { errno = (int)-r; return -1; }
     if (a.status != 1u) { errno = EIO; return -1; }
     return (ssize_t)a.len;
 }
@@ -248,7 +252,8 @@ ssize_t scs_datalink_recv(int fd, uint8_t *buf, size_t buf_len)
     memset(&a, 0, sizeof(a));
     a.handle = s->handle;
     a.timeout_ms = s->timeout_ms;
-    if (ioctl(fd, VMS_IOCTL_L2_RECV, &a) < 0) return -1;
+    long r = kif_call(fd, KIF_SVC_L2_RECV, &a);
+    if (r < 0) { errno = (int)-r; return -1; }
     if (a.status != 1u) { errno = EAGAIN; return -1; }  /* nothing before the
                                         * timeout -> the same "come back later"
                                         * the AF_PACKET recv() path signals. */

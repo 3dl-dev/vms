@@ -241,6 +241,12 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
+ *   int  exec_become_substrate_id(uint32_t id)
+ *        make `id` the CURRENT task's real/effective/saved uid and gid, with
+ *        no supplementary groups and no capabilities (rd vms-ac48). Done by the
+ *        executive so the task needs no substrate privilege. 0 or <0.
+ *        Linux: prepare_creds/commit_creds. NetBSD: proc_crmod_enter/leave.
+ *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)
  *        the CURRENT host task's REAL user / group id, mapped into the host's
@@ -285,6 +291,12 @@
  *        remap_vmalloc_range) that vms_lnm.c waits on -- a different, later seam.
  *
  *   void exec_task_unpin(exec_task_pin_t *pin)   drop the exec_task_pin ref.
+ *
+ *   int  exec_task_signal(exec_task_ref_t *ref, int sig)   (rd vms-8e9)
+ *        deliver EXEC_SIG_TERM / _FORCE / _STOP / _CONT to the whole process
+ *        behind `ref`, from inside the executive, after the executive's own
+ *        VMS privilege check. 0, or -ESRCH when the process is gone. Linux:
+ *        kill_pid(ref, sig, 1); NetBSD: psignal(9) under proc_lock.
  *
  * 6. RCU-lite deferred reclaim  (Phase F). The process hash has LOCKLESS
  *    readers (vms_module.c's vms_proc_find walks it under an RCU read section,

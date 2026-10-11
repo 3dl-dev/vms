@@ -679,6 +679,16 @@ if(BUILD_TESTS)
     set_tests_properties(dlm_hash_heldout_run_predictions PROPERTIES
         LABELS "integration;cluster;authenticity" TIMEOUT 60)
 
+    # rd vms-bbde: userspace reaches the executive ONLY through the libvmssys
+    # transport seam -- no VMS_IOCTL_* request and no "/dev/vms" node named in
+    # src/ outside libvmssys and the executive. A code property of the tree
+    # (tools/ci/check_transport_seam.py), with its own negative controls.
+    add_test(NAME transport_seam_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_transport_seam.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(transport_seam_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
     # GitHub ran ZERO jobs with no error anywhere in the UI or API). Pure
@@ -790,6 +800,15 @@ if(BUILD_TESTS)
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab-vax/run-boot.sh status-selftest)
         set_tests_properties(vax_status_gate_selftest PROPERTIES
             LABELS "integration;netbsd-vax" TIMEOUT 60)
+    endif()
+
+    # rd vms-251b: ROOTAUDIT.EXE names root processes, and the DCL acceptance
+    # battery's substrate-root ratchet goes red on a new or a stale one.
+    if(BUILD_TOOLS)
+        add_test(NAME rootaudit_ratchet
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rootaudit_ratchet.sh
+                    $<TARGET_FILE:vms_rootaudit> ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(rootaudit_ratchet PROPERTIES LABELS "integration;authenticity" TIMEOUT 60)
     endif()
 
     # vms-0b6: the OVMX kit packer (tools/ovmx_kit_pack.c) must produce a kit
@@ -1323,6 +1342,7 @@ if(BUILD_TOOLS)
         vms_authorize        # AUTHORIZE.EXE
         vms_mail             # MAIL.EXE
         vms_monitor          # MONITOR.EXE
+        vms_rootaudit        # ROOTAUDIT.EXE
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE

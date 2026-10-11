@@ -52,22 +52,31 @@
 #define DNET_NETSHOW_EINVAL  (-4)   /* null argument / unknown entity / bad byte    */
 #define DNET_NETSHOW_ENOSPACE (-5)  /* output buffer too small                       */
 
-#define DNET_NETSHOW_VERSION   1u
+/* 2: adds the CIRCUITS / LINES / OBJECTS entities (rd vms-2d0). */
+#define DNET_NETSHOW_VERSION   2u
 
 /* What is being asked for (the NCP entity). */
 #define DNET_NETSHOW_ENT_EXECUTOR 1u
 #define DNET_NETSHOW_ENT_NODES    2u
 #define DNET_NETSHOW_ENT_LINKS    3u
+#define DNET_NETSHOW_ENT_CIRCUITS 4u   /* NETACP's circuit (its datalink)        */
+#define DNET_NETSHOW_ENT_LINES    5u   /* the line under that circuit            */
+#define DNET_NETSHOW_ENT_OBJECTS  6u   /* the objects NETACP serves (volatile DB)*/
 
 /* Field bounds (fixed-width slots in the record). */
 #define DNET_NETSHOW_NAMEMAX   6    /* DNA Phase IV node name                     */
 #define DNET_NETSHOW_IDENTMAX  32   /* executor Identification                     */
 #define DNET_NETSHOW_CIRCMAX   15   /* circuit name (DNET_DEVNAME_MAX)              */
+#define DNET_NETSHOW_OBJNAMEMAX 16  /* DNA object name (DNET_OBJECTDB_NAMEMAX)      */
+#define DNET_NETSHOW_FILEMAX   39   /* object image file as NCP prints it           */
 
 /* Entries per record (a page); the client walks pages by cursor. Chosen so a
  * full page fits DNET_NSP_MAX_DATA (1024) with room to spare. */
 #define DNET_NETSHOW_NODES_PER 48
 #define DNET_NETSHOW_LINKS_PER 32
+#define DNET_NETSHOW_CIRCS_PER 8
+#define DNET_NETSHOW_LINES_PER 8
+#define DNET_NETSHOW_OBJS_PER  12
 
 /* Wire sizes. */
 #define DNET_NETSHOW_REQ_LEN   4u   /* version, entity, cursor(2)                  */
@@ -75,8 +84,13 @@
 #define DNET_NETSHOW_EXEC_LEN  75u
 #define DNET_NETSHOW_NODE_LEN  15u
 #define DNET_NETSHOW_LINK_LEN  20u
+#define DNET_NETSHOW_CIRC_LEN  26u  /* name(1+15) state(1) adj addr(2) adj name(1+6) */
+#define DNET_NETSHOW_LINE_LEN  17u  /* name(1+15) state(1)                           */
+#define DNET_NETSHOW_OBJ_LEN   62u  /* name(1+16) number(1) file(1+39) pid(4)        */
+/* The largest page of any entity (12 objects = 744 > 48 nodes = 720 bytes). */
+#define DNET_NETSHOW_PAGE_MAX  (DNET_NETSHOW_OBJS_PER * DNET_NETSHOW_OBJ_LEN)
 #define DNET_NETSHOW_RSP_MAX   (DNET_NETSHOW_HDR_LEN + DNET_NETSHOW_EXEC_LEN + \
-                                DNET_NETSHOW_NODES_PER * DNET_NETSHOW_NODE_LEN)
+                                DNET_NETSHOW_PAGE_MAX)
 
 /* Node-entry flags. */
 #define DNET_NETSHOW_NF_INDB     0x01u  /* in the node database NETACP resolves by */
@@ -134,6 +148,37 @@ struct dnet_netshow_link {
     uint8_t  running;                       /* 1 = link up (RUN), 0 = connecting   */
 };
 
+/* A circuit NETACP runs (rd vms-2d0). Its name is the engine's circuit, named
+ * after the VMS device NETACP's datalink rides (device-native naming, vms-47d:
+ * the executive's ETH0: -> circuit ETH-0). The adjacent ROUTING node is the
+ * designated router an endnode NETACP has selected on it; 0 = none known
+ * (NETACP's adjacency table does not record whether a neighbour is a router,
+ * so a routing NETACP reports none rather than guess). */
+struct dnet_netshow_circuit {
+    char     name[DNET_NETSHOW_CIRCMAX + 1];
+    uint8_t  state_on;                      /* the datalink is open            */
+    uint16_t adj_addr;                      /* adjacent routing node; 0 = none */
+    char     adj_name[DNET_NETSHOW_NAMEMAX + 1];
+};
+
+/* The line under a circuit (on a LAN, VMS names it like the circuit). */
+struct dnet_netshow_line {
+    char     name[DNET_NETSHOW_CIRCMAX + 1];
+    uint8_t  state_on;
+};
+
+/* An object NETACP serves: the table its inbound-connect dispatch consults.
+ * File = the image a connect activates; pid = the process that serves it
+ * in-place (a declared object), 0 = none. The record carries NO user or
+ * password: NETACP's objects use the connect's own access control, and a
+ * password never crosses this record. */
+struct dnet_netshow_object {
+    char     name[DNET_NETSHOW_OBJNAMEMAX + 1];
+    uint8_t  number;
+    char     file[DNET_NETSHOW_FILEMAX + 1];
+    uint32_t pid;
+};
+
 struct dnet_netshow_rsp {
     uint8_t  version;
     uint8_t  entity;
@@ -145,6 +190,9 @@ struct dnet_netshow_rsp {
     union {
         struct dnet_netshow_node node[DNET_NETSHOW_NODES_PER];
         struct dnet_netshow_link link[DNET_NETSHOW_LINKS_PER];
+        struct dnet_netshow_circuit circ[DNET_NETSHOW_CIRCS_PER];
+        struct dnet_netshow_line line[DNET_NETSHOW_LINES_PER];
+        struct dnet_netshow_object obj[DNET_NETSHOW_OBJS_PER];
     } u;
 };
 
@@ -173,6 +221,9 @@ typedef uint32_t (*dnet_netshow_query_fn)(void *ctx, const uint8_t *req, size_t 
 
 #define DNET_NETSHOW_MAX_NODES 512
 #define DNET_NETSHOW_MAX_LINKS 256
+#define DNET_NETSHOW_MAX_CIRCS 16
+#define DNET_NETSHOW_MAX_LINES 16
+#define DNET_NETSHOW_MAX_OBJS  128
 
 struct dnet_netshow_view {
     uint32_t as_of;
@@ -181,6 +232,12 @@ struct dnet_netshow_view {
     struct dnet_netshow_node nodes[DNET_NETSHOW_MAX_NODES];
     unsigned nlinks;
     struct dnet_netshow_link links[DNET_NETSHOW_MAX_LINKS];
+    unsigned ncircs;
+    struct dnet_netshow_circuit circs[DNET_NETSHOW_MAX_CIRCS];
+    unsigned nlines;
+    struct dnet_netshow_line lines[DNET_NETSHOW_MAX_LINES];
+    unsigned nobjs;
+    struct dnet_netshow_object objs[DNET_NETSHOW_MAX_OBJS];
 };
 
 /* Status for a snapshot that failed the bounds-validated decode or a page walk
@@ -220,6 +277,18 @@ DNET_NETSHOW_API void dnet_netshow_fmt_node(const struct dnet_netshow_view *v,
 /* NCP SHOW KNOWN LINKS. */
 DNET_NETSHOW_API void dnet_netshow_fmt_known_links(const struct dnet_netshow_view *v,
                                                    dnet_netshow_emit_fn emit, void *ctx);
+/* NCP SHOW KNOWN CIRCUITS / SHOW CIRCUIT <c> (`c` = the entry; NULL = all). */
+DNET_NETSHOW_API void dnet_netshow_fmt_circuits(const struct dnet_netshow_view *v,
+                                                const struct dnet_netshow_circuit *c,
+                                                dnet_netshow_emit_fn emit, void *ctx);
+/* NCP SHOW KNOWN LINES / SHOW LINE <l>. */
+DNET_NETSHOW_API void dnet_netshow_fmt_lines(const struct dnet_netshow_view *v,
+                                             const struct dnet_netshow_line *l,
+                                             dnet_netshow_emit_fn emit, void *ctx);
+/* NCP SHOW KNOWN OBJECTS / SHOW OBJECT <o>. */
+DNET_NETSHOW_API void dnet_netshow_fmt_objects(const struct dnet_netshow_view *v,
+                                               const struct dnet_netshow_object *o,
+                                               dnet_netshow_emit_fn emit, void *ctx);
 /* The DCL SHOW NETWORK DECNET product line (no newline). */
 DNET_NETSHOW_API void dnet_netshow_fmt_network_line(const struct dnet_netshow_exec *ex,
                                                     char *buf, size_t cap);

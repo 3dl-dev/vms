@@ -1105,6 +1105,24 @@ int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 	return SS__NORMAL;
 }
 
+int scs_conid_remote(struct vms_scs *scs, vms_conid_t local_conid,
+		     vms_conid_t *out)
+{
+	struct scs_cdt *cdt;
+
+	if (out == (vms_conid_t *)0)
+		return SS__BADPARAM;
+	*out = 0u;
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	cdt = scs_fsm_cdt_by_conid(&scs->fsm, local_conid);
+	if (cdt == (struct scs_cdt *)0 || !cdt->remote_conid_valid ||
+	    cdt->remote_conid == 0u)
+		return SS__BADPARAM;
+	*out = cdt->remote_conid;
+	return SS__NORMAL;
+}
+
 int scs_dir_lookup(struct vms_scs *scs, vms_scs_sysid_t dst,
 		   const uint8_t *name, scs_dir_result_cb cb, void *cb_ctx)
 {

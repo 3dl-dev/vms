@@ -165,6 +165,16 @@ static int cl_op_buf_register(void *ctx, uint8_t *base, uint32_t len,
 			       name_out) == (int)SS__NORMAL ? 0 : -1;
 }
 
+static int cl_op_remote_conid(void *ctx, vms_conid_t conid, vms_conid_t *out)
+{
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
+
+	if (c->cl->scs == NULL)
+		return -1;
+	return scs_conid_remote(c->cl->scs, conid, out) == (int)SS__NORMAL
+		       ? 0 : -1;
+}
+
 static void cl_op_buf_release(void *ctx, uint32_t name)
 {
 	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
@@ -258,6 +268,7 @@ static void cl_ops_bind(struct vms_mscp_cl *c)
 	c->ops.send_cmd = cl_op_send_cmd;
 	c->ops.buf_register = cl_op_buf_register;
 	c->ops.buf_release = cl_op_buf_release;
+	c->ops.remote_conid = cl_op_remote_conid;
 	c->ops.unit_ready = cl_op_unit_ready;
 	c->ops.unit_gone = cl_op_unit_gone;
 	c->ops.io_done = cl_op_io_done;

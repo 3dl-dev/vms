@@ -440,6 +440,18 @@ int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 		   vms_scs_sysid_t *out);
 
 /*
+ * THE PEER'S OWN CON.ID for the connection behind `local_conid` (rd vms-239):
+ * the value its CONNECT/ACCEPT really carried, learned off the wire. A SYSAP
+ * whose protocol names the PEER's connection in a message body needs it -- an
+ * MSCP class driver's READ/WRITE buffer descriptor carries the SERVER's
+ * Con.ID (71/71 real descriptors). SS$_NORMAL with *out set; SS$_BADPARAM when
+ * no live CDT or the peer's Con.ID was never learned (never a 0); SS$_NOSUCHDEV
+ * with no SCS.
+ */
+int scs_conid_remote(struct vms_scs *scs, vms_conid_t local_conid,
+		     vms_conid_t *out);
+
+/*
  * The 16 connect-data bytes the PEER's ACCEPT carried on a connection this node
  * initiated (rd vms-f297), verbatim. SS$_NORMAL with `out` filled; SS$_BADPARAM
  * when the Con.ID names no live CDT or no ACCEPT carried any; SS$_NOSUCHDEV

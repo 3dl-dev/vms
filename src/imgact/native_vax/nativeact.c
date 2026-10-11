@@ -148,10 +148,16 @@ static int v_qiow(uint32_t efn, uint16_t chan, uint32_t func, void *iosb, void *
  * a JMP past this routine's entry mask, so AP is the caller's), its first
  * longword the count, and an argument past it is 0, as an omitted one is. */
 #define NATIVE_ARGLIST(ap) uint32_t *ap; __asm__ volatile("movl %%ap,%0" : "=g"(ap))
+/* noipa: an entry must read the AP it was JMPed into, so GCC may not fold
+ * two identical entries into one that CALLS the other (whose AP would be
+ * the fold's empty list). A separate LIB$SYS_FAO entry identical to SYS$FAO's
+ * returned SS$_BADPARAM with its outlen unwritten on the VAX gate; it now
+ * uses SYS$FAO's entry, the argument lists being the same. */
+#define NATIVE_ENTRY static __attribute__((noipa)) int
 #define NARG(ap, i) ((uint32_t)(i) <= ((ap)[0] & 0xFFu) ? (ap)[i] : 0u)
 #define NPTR(ap, i) ((void *)(uintptr_t)NARG(ap, i))
 
-static int v_assign(void)
+NATIVE_ENTRY v_assign(void)
 {
 	NATIVE_ARGLIST(ap);
 	uint16_t *chan = NPTR(ap, 2);
@@ -175,7 +181,7 @@ static int fao_params(const struct dsc$descriptor_s *ctr, const uint32_t *src,
 		prm[i] = (uint64_t)(int64_t)(int32_t)((unsigned)i < avail ? src[i] : 0u);
 	return need;
 }
-static int v_fao(void)
+NATIVE_ENTRY v_fao(void)
 {
 	NATIVE_ARGLIST(ap);
 	uint64_t prm[256];
@@ -186,7 +192,7 @@ static int v_fao(void)
 	fao_params(ctr, &ap[4], n > 3 ? n - 3 : 0, prm);
 	return (int)sys$faol(ctr, NPTR(ap, 2), NPTR(ap, 3), prm);
 }
-static int v_faol(void)
+NATIVE_ENTRY v_faol(void)
 {
 	NATIVE_ARGLIST(ap);
 	uint64_t prm[256];
@@ -197,31 +203,20 @@ static int v_faol(void)
 	fao_params(ctr, lst, lst ? 256u : 0u, prm);
 	return (int)sys$faol(ctr, NPTR(ap, 2), NPTR(ap, 3), prm);
 }
-static int v_sys_fao(void)
-{
-	NATIVE_ARGLIST(ap);
-	uint64_t prm[256];
-	unsigned n = ap[0] & 0xFFu;
-	const struct dsc$descriptor_s *ctr = NPTR(ap, 1);
-	if (!ctr)
-		return SS$_BADPARAM;
-	fao_params(ctr, &ap[4], n > 3 ? n - 3 : 0, prm);
-	return (int)sys$faol(ctr, NPTR(ap, 2), NPTR(ap, 3), prm);
-}
-static int v_crembx(void)
+NATIVE_ENTRY v_crembx(void)
 {
 	NATIVE_ARGLIST(ap);
 	return (int)sys$crembx((int)NARG(ap, 1), NPTR(ap, 2), NARG(ap, 3), NARG(ap, 4),
 			       NARG(ap, 5), NARG(ap, 6), NPTR(ap, 7), NARG(ap, 8), NPTR(ap, 9));
 }
-static int v_enq(void)
+NATIVE_ENTRY v_enq(void)
 {
 	NATIVE_ARGLIST(ap);
 	return (int)sys$enq(NARG(ap, 1), NARG(ap, 2), NPTR(ap, 3), NARG(ap, 4), NPTR(ap, 5),
 			    NARG(ap, 6), NPTR(ap, 7), NARG(ap, 8), NPTR(ap, 9), NARG(ap, 10),
 			    NARG(ap, 11), NPTR(ap, 12));
 }
-static int v_enqw(void)
+NATIVE_ENTRY v_enqw(void)
 {
 	NATIVE_ARGLIST(ap);
 	return (int)sys$enqw(NARG(ap, 1), NARG(ap, 2), NPTR(ap, 3), NARG(ap, 4), NPTR(ap, 5),
@@ -301,24 +296,24 @@ static int v_put_output(void *msg)
 }
 /* LIBRTL routines whose optional or counted arguments OVMX's C entry takes
  * differently: read from the image's argument list (NATIVE_ARGLIST). */
-static int v_get_vm(void)
+NATIVE_ENTRY v_get_vm(void)
 {
 	NATIVE_ARGLIST(ap);
 	return (int)lib$get_vm(NPTR(ap, 1), NPTR(ap, 2), (const uint32_t *)NPTR(ap, 3));
 }
-static int v_free_vm(void)
+NATIVE_ENTRY v_free_vm(void)
 {
 	NATIVE_ARGLIST(ap);
 	return (int)lib$free_vm(NPTR(ap, 1), NPTR(ap, 2), (const uint32_t *)NPTR(ap, 3));
 }
-static int v_str_position(void)
+NATIVE_ENTRY v_str_position(void)
 {
 	NATIVE_ARGLIST(ap);
 	return (int)str$position(NPTR(ap, 1), NPTR(ap, 2), NPTR(ap, 3));
 }
 /* STR$CONCAT dest, src1 [, src2 ...]: the argument count says how many
  * sources (up to 254); OVMX's C entry ends its list with a null pointer. */
-static int v_str_concat(void)
+NATIVE_ENTRY v_str_concat(void)
 {
 	NATIVE_ARGLIST(ap);
 	unsigned n = ap[0] & 0xFFu;
@@ -378,7 +373,7 @@ static const struct vent librtl_tv[] = {
 	{ 0x7A0, (rtn_t)lib$getdvi,               "LIB$GETDVI" },
 	{ 0x7A8, (rtn_t)lib$getjpi,               "LIB$GETJPI" },
 	{ 0x7B0, (rtn_t)lib$getsyi,               "LIB$GETSYI" },
-	{ 0x8F8, (rtn_t)v_sys_fao,                "LIB$SYS_FAO" },
+	{ 0x8F8, (rtn_t)v_fao,                    "LIB$SYS_FAO" },
 	{ 0xA00, (rtn_t)lib$find_file_end,        "LIB$FIND_FILE_END" },
 	{ 0xAD0, (rtn_t)str$element,              "STR$ELEMENT" },
 };

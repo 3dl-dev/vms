@@ -100,3 +100,6 @@ d39a5b415083ad9f936db79219635bb0f3777b9b07b71e85a2304f7361ab4fe4  tests/lab/capt
 116254a338dfbfdb5254426e9e93429947dfa1041123818e638b2a1b2bb9217c  tests/lab/captures/vms-b20-mscp-read-20261011/mscp-read-write.pcap
 bcc4ad9ed4c2c90cc33df03c042d6abfee12892061420cb8f41bbb67fcd77ac8  tests/lab/captures/vms-239-mscp-connect-20261011/connects.pcap
 4e54a7a2dff18976fcea4fdadbbe7c392601d0b69f06536c1609b0b7125f2782  tests/lab/captures/vms-4822-mscp-mount-20261011/mount-type-over-mscp.pcap
+d16acf52432eed64e8def6b5df22259c7c99e4083deca488bfd9d3577db7147d  tests/lab/captures/vms-64b-dlm-seq-20261011/order1-vax-first.pcap
+1d9f10ec987373b73ab89a80da5cc87b6b3fd10016f3f21b68e17c0cc633b8b2  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-control-pre64b.pcap
+453984e6c494d8c458cb9de40db0c3c7666aceb0d8ce369d20d801894a01a85c  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-ovmx-first.pcap

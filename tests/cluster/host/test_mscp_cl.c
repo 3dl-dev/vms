@@ -82,8 +82,8 @@ static const uint8_t group1[6]  = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
 
 /* The two ends of the one `MSCP$DISK` connection. Both are values a real
  * allocator would mint; the test plays SCS for them. */
-#define CL_CONID  0x00020007u   /* OUR local Con.ID -- goes in P.BUFF   */
-#define SRV_CONID 0x00010005u   /* the server's own local Con.ID        */
+#define CL_CONID  0x00020007u   /* OUR local Con.ID                     */
+#define SRV_CONID 0x00010005u   /* the server's own Con.ID -- in P.BUFF */
 
 /* The serving node's own advertised SCSNODE, as the connection manager records
  * it on that node's CSB. The client's glue reads it there; this test hands the
@@ -827,6 +827,17 @@ static void env_add_unit(struct env *e, uint16_t unit, uint32_t nblocks,
 		u->data[i] = (uint8_t)(i * 7u + unit + 3u);
 }
 
+/* rd vms-239: the server's own Con.ID for the connection, as SCS learned it
+ * off the server's ACCEPT. */
+static int cl_remote_conid(void *ctx, vms_conid_t conid, vms_conid_t *out)
+{
+	(void)ctx;
+	if (conid != CL_CONID)
+		return -1;
+	*out = SRV_CONID;
+	return 0;
+}
+
 static void env_bind(struct env *e)
 {
 	memset(&e->srv_ops, 0, sizeof(e->srv_ops));
@@ -845,6 +856,7 @@ static void env_bind(struct env *e)
 	e->cl_ops.send_cmd = bridge_client_cmd;
 	e->cl_ops.buf_register = cl_buf_register;
 	e->cl_ops.buf_release = cl_buf_release;
+	e->cl_ops.remote_conid = cl_remote_conid;
 	e->cl_ops.unit_ready = cl_unit_ready;
 	e->cl_ops.unit_gone = cl_unit_gone;
 	e->cl_ops.io_done = cl_io_done;
@@ -1150,8 +1162,9 @@ static void test_write_moves_real_bytes(void)
 			"and OUR port really held that name when it did");
 	ct_check_eq_u32(e.fake.write_src_access, (unsigned)PE_BLK_ACC_SRC,
 			"...as a SOURCE its request could be answered from");
-	ct_check_eq_u32(e.fake.write_desc_conid, CL_CONID,
-			"...beside OUR OWN local Con.ID, from the connection");
+	ct_check_eq_u32(e.fake.write_desc_conid, SRV_CONID,
+			"*** rd vms-239: ...beside the SERVER's Con.ID (71/71 real "
+			"descriptors; OUR own there halted two real VAXes) ***");
 
 	/* E41: the SERVER asks, and the CLIENT'S PORT answers by itself. */
 	ct_check_eq_u32(e.fake.requests_issued, 1u,

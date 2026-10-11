@@ -603,13 +603,29 @@ static int cl_issue_xfer(struct mscp_cl_fsm *f, struct mscp_cl_cddb *c,
 	uint8_t access = r->opcode == VMS_MSCP_OP_READ
 			 ? (uint8_t)MSCP_CL_BUF_IN : (uint8_t)MSCP_CL_BUF_OUT;
 
+	vms_conid_t server_conid = 0u;
+
+	/*
+	 * rd vms-239: the descriptor's last longword is the SERVER's Con.ID --
+	 * the connection the server initiates the block transfer on (71/71 real
+	 * READ/WRITE descriptors carry the command frame's destination Con.ID).
+	 * This used to carry OUR local Con.ID, and two real VAXes that looked it
+	 * up halted with VAXPORT fatal bugchecks (lab mscp-239 r17, r19). Read
+	 * from the executive's own CDT; without it the transfer is refused.
+	 */
+	if (f->ops == NULL || f->ops->remote_conid == NULL ||
+	    f->ops->remote_conid(f->ops->ctx, c->conid, &server_conid) != 0 ||
+	    server_conid == 0u) {
+		f->send_failures++;
+		return -1;
+	}
 	if (cl_name_buffer(f, r, access) != 0)
 		return -1;
 
 	cl_bzero(&desc, (uint32_t)sizeof(desc));
 	desc.offset = 0u;             /* the whole registration is this request */
 	desc.name = r->buf_name;      /* the name OUR port really minted        */
-	desc.conid = (uint32_t)c->conid; /* OUR local Con.ID for this CDT       */
+	desc.conid = (uint32_t)server_conid; /* the SERVER's Con.ID (above)    */
 
 	cl_bzero(&cmd, (uint32_t)sizeof(cmd));
 	cmd.hdr.cmd_ref = cl_next_ref(&c->xfer_msgid, MSCP_CL_XFER_CLASS);

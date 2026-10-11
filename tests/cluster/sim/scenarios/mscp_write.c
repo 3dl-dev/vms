@@ -625,12 +625,23 @@ static void bind_srv_ops(struct env *e)
 	e->srv_ops.ctx = e;
 }
 
+/* rd vms-239: the server's Con.ID, as SCS learned it off its ACCEPT. */
+static int cl_op_remote_conid(void *ctx, vms_conid_t conid, vms_conid_t *out)
+{
+	(void)ctx;
+	if (conid != CL_CONID)
+		return -1;
+	*out = SRV_CONID;
+	return 0;
+}
+
 static void bind_cl_ops(struct env *e)
 {
 	memset(&e->cl_ops, 0, sizeof(e->cl_ops));
 	e->cl_ops.send_cmd = cl_op_send_cmd;
 	e->cl_ops.buf_register = cl_op_buf_register;
 	e->cl_ops.buf_release = cl_op_buf_release;
+	e->cl_ops.remote_conid = cl_op_remote_conid;
 	e->cl_ops.unit_ready = cl_op_unit_ready;
 	e->cl_ops.unit_gone = cl_op_unit_gone;
 	e->cl_ops.io_done = cl_op_io_done;

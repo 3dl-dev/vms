@@ -1530,6 +1530,39 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  *
  * STAMP with is_response=0.
  */
+/*
+ * WHAT A MEMBER'S PARAMS SAYS ABOUT ITS MEMBERSHIP (rd vms-d52c). MEASURED on
+ * 384 real PARAMS (161 from members -- body[18:20] != 0 -- and 223 from systems
+ * in no cluster):
+ *   body[12:14]  0x5021 from 156 of 161 members (0x5001 from the other 5);
+ *                never 0x21 from a system in no cluster
+ *   body[28:36]  the cluster's formation time (60/60 where checkable)
+ *   body[36:44]  the time of the last committed transition
+ *   body[44:48]  that transition's epoch (56/60)
+ *   body[64:72]  the sender's own membership time (the formation time from
+ *                the founder)
+ * A booting real VAX that hears a PARAMS without them from a system with a
+ * connection manager treats that system as clusterless and proposes FORMING
+ * a cluster with it (lab lab64b, order 2) -- so a member that cannot fill
+ * every one of them does not claim membership at all.
+ */
+#define VMS_OFB_CM_PSTATUS      12u   /* LE u16 */
+#define VMS_CM_PSTATUS_MEMBER   0x5021u
+#define VMS_OFB_CM_PFTIME       28u   /* LE u64 */
+#define VMS_OFB_CM_PLASTXITION  36u   /* LE u64 */
+#define VMS_OFB_CM_PLASTEPOCH   44u   /* LE u32 */
+#define VMS_OFB_CM_PJOINED      64u   /* LE u64 */
+struct vms_cm_member_state {
+	uint64_t ftime;
+	uint64_t last_xition;
+	uint64_t joined;
+	uint32_t last_epoch;
+};
+/* Write the member state into a PARAMS body vms_cm_params_build made.
+ * VMS_CODEC_E_INVAL when a time is 0 (nothing held is ever claimed). */
+vms_codec_status_t vms_cm_params_member_put(uint8_t *body, uint32_t cap,
+					    const struct vms_cm_member_state *ms);
+
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       uint16_t lockdirwt,
 				       const struct vms_cm_node_params *own_params,

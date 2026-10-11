@@ -1668,3 +1668,32 @@ vms_codec_status_t vms_cm_open_dlm_seq_put(uint8_t *body, uint32_t len,
 	body[VMS_OFB_CM_OPEN_DLM_SEQ_3 + 1u] = (uint8_t)(n >> 8);
 	return VMS_CODEC_OK;
 }
+
+static void cm_put_le_n(uint8_t *b, uint32_t off, uint64_t v, uint32_t n)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++)
+		b[off + i] = (uint8_t)((v >> (8u * i)) & 0xffu);
+}
+
+vms_codec_status_t vms_cm_params_member_put(uint8_t *body, uint32_t cap,
+					    const struct vms_cm_member_state *ms)
+{
+	if (body == (uint8_t *)0 || ms == (const struct vms_cm_member_state *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	if (body[VMS_OFB_CM_CATEGORY] != VMS_CM_CAT_CONFIG ||
+	    body[VMS_OFB_CM_OPCODE] != VMS_CM_OP_PARAMS)
+		return VMS_CODEC_E_CLASS;
+	if (ms->ftime == 0u || ms->last_xition == 0u || ms->joined == 0u)
+		return VMS_CODEC_E_INVAL;
+	cm_put_le_n(body, VMS_OFB_CM_PSTATUS, VMS_CM_PSTATUS_MEMBER, 2u);
+	cm_put_le_n(body, VMS_OFB_CM_PFTIME, ms->ftime, 8u);
+	cm_put_le_n(body, VMS_OFB_CM_PLASTXITION, ms->last_xition, 8u);
+	cm_put_le_n(body, VMS_OFB_CM_PLASTEPOCH, ms->last_epoch, 4u);
+	cm_put_le_n(body, VMS_OFB_CM_PJOINED, ms->joined, 8u);
+	return VMS_CODEC_OK;
+}
+

@@ -326,6 +326,7 @@ static void test_founds_and_becomes_member(void)
 			"before: this node holds NO cluster system id");
 	ct_check(g.cl.state != VMS_CLUSTER_MEMBER, "before: not a member");
 
+	g.fake.now_vms = 0x00bc3cf8d1bd3f80ull;   /* a VMS clock (rd vms-d52c) */
 	rc = cnxman_coord_found(&g.c, NULL);
 	ct_check_eq_u32((unsigned long)rc, 0u, "cnxman_coord_found() founds");
 
@@ -377,6 +378,16 @@ static void test_founds_and_becomes_member(void)
 	ct_check_eq_u32(g.cl.club.dlm_seq, 1u, "... and it is 1, as a formation leaves it");
 	ct_check_eq_u32(g.cl.club.dlm_seq_vsig_valid, 1u,
 			"... with the founding vector recorded for the next commit");
+
+	/* rd vms-d52c: the member state every later PARAMS carries. */
+	ct_check_eq_u32(g.cl.club.joined_valid, 1u,
+			"*** the founder holds its own membership time ***");
+	ct_check(g.cl.club.ftime_valid && g.cl.club.joined_vms == g.cl.club.ftime,
+		 "... and it is the formation time, as a real founder's is");
+	ct_check_eq_u32(g.cl.club.last_xition_valid, 1u,
+			"... and the time and epoch of the founding transition");
+	ct_check_eq_u32(g.cl.club.last_xition_epoch, g.cl.club.epoch,
+			"... the epoch it committed at");
 
 	/* AND NOTHING WENT ON THE WIRE. */
 	ct_check_eq_u32(g.sends, 0u, "no frame was sent: there is nobody to send to");

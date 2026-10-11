@@ -2031,14 +2031,28 @@ static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
 	struct vms_mscp_cl_unit unit;
 	int terminator = 0;
 	vms_codec_status_t st;
+	/* rd vms-239: SCS hands a SYSAP its BODY (frame-absolute 72 onward);
+	 * the discovery FSM classifies and parses a FRAME. Rebuilt here around
+	 * the bytes that really arrived (vms_mscp_end_frame_from_body), exactly
+	 * as the class driver's own splice does. Before, the body went in as a
+	 * frame, never classified, and against a real VAX the walk stopped at
+	 * the first SET CONTROLLER CHARACTERISTICS end -- and the join with it. */
+	uint8_t frame[VMS_MSCP_END_FRAME_LEN(VMS_MSCP_END_BODY_MAX)];
+	uint32_t flen = 0u;
 
 	if (e->conid != j->mscp_conid || e->body == NULL) {
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	j->mscp_ends++;
+	if (vms_mscp_end_frame_from_body(e->body, e->len, frame,
+					 (uint32_t)sizeof(frame), &flen) !=
+	    VMS_CODEC_OK) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
 
-	st = vms_mscp_cl_fsm_on_scc_end(&j->mscp, e->body, e->len);
+	st = vms_mscp_cl_fsm_on_scc_end(&j->mscp, frame, flen);
 	if (st == VMS_CODEC_OK) {
 		if (j->mscp.state == VMS_MSCP_CL_ST_SCC1_DONE)
 			join_mscp_send_scc(j);   /* SET CONTROLLER, twice */
@@ -2047,7 +2061,7 @@ static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 
-	st = vms_mscp_cl_fsm_on_gus_end(&j->mscp, e->body, e->len, &unit,
+	st = vms_mscp_cl_fsm_on_gus_end(&j->mscp, frame, flen, &unit,
 					&terminator);
 	if (st != VMS_CODEC_OK) {
 		j->ignored_events++;

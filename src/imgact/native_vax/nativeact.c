@@ -367,6 +367,14 @@ static const struct vent librtl_tv[] = {
 	{ 0x710, (rtn_t)str$len_extr,             "STR$LEN_EXTR" },
 	{ 0x720, (rtn_t)v_str_position,           "STR$POSITION" },
 	{ 0x730, (rtn_t)str$pos_extr,             "STR$POS_EXTR" },
+	/* not in vax73-symvec-offsets.txt: the offsets SP_RTL's own fixup
+	 * cells hold (tests/lab/captures/native-sp-vax-20261011/SP_RTL.*) */
+	{ 0x740, (rtn_t)str$prefix,               "STR$PREFIX" },
+	{ 0x748, (rtn_t)str$replace,              "STR$REPLACE" },
+	{ 0x758, (rtn_t)str$right,                "STR$RIGHT" },
+	{ 0x768, (rtn_t)str$translate,            "STR$TRANSLATE" },
+	{ 0x770, (rtn_t)str$trim,                 "STR$TRIM" },
+	{ 0x778, (rtn_t)str$upcase,               "STR$UPCASE" },
 	{ 0x7A0, (rtn_t)lib$getdvi,               "LIB$GETDVI" },
 	{ 0x7A8, (rtn_t)lib$getjpi,               "LIB$GETJPI" },
 	{ 0x7B0, (rtn_t)lib$getsyi,               "LIB$GETSYI" },

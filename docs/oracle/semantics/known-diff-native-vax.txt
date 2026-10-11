@@ -8,3 +8,42 @@
 # tools/oracle/semantic/semantic_diff.py --known ... --golden vax73: an unlisted
 # difference fails the gate, and so does a listed case that now matches. Fix
 # the bug, delete the line.
+ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS (same as the Linux gate)
+ef EF.WFLAND.128  # vms-394: VAX V7.3 returns 1 for efn 128; OVMX/VAX answers as Alpha (SS$_ILLEFC)
+fao FAO.UIC.ID  # vms-0e3: !%I prints [1,4]; VMS prints the identifier [SYSTEM]
+fao FAO.BUFFEROVF  # vms-394: VAX V7.3 leaves the buffer untouched on SS$_BUFFEROVF; OVMX/VAX fills it as Alpha does
+fao MSG.ACCVIO.ALL  # vms-394: the VAX SS$_ACCVIO text (!XL, PSL); OVMX/VAX has the Alpha text (!XH, PS)
+fao MSG.ACCVIO.TEXT  # vms-394: as MSG.ACCVIO.ALL
+fao MSG.ACCVIO.FLAGS0  # vms-394: as MSG.ACCVIO.ALL
+fao MSG.ACCVIO.SEV_TEXT  # vms-394: as MSG.ACCVIO.ALL
+fao MSG.WASSET  # vms-394: as MSG.ACCVIO.ALL
+fao MSG.SEV_CHANGED  # vms-394: as MSG.ACCVIO.ALL
+fao MSG.FAO_INTO  # vms-394: as MSG.ACCVIO.ALL
+info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive (same as the Linux gate)
+info JPI.ASYNC.EFN0  # vms-01f3: an asynchronous $GETJPI with an AST returns 0 on OVMX/VAX
+info JPI.ASYNC.EFN0.DONE  # vms-01f3: its AST is never delivered
+info JPI.ASYNC.EFN5  # vms-01f3: as JPI.ASYNC.EFN0
+info JPI.ASYNC.EFN5.DONE  # vms-01f3: as JPI.ASYNC.EFN0.DONE
+info SYI.NOSUCHCSID  # vms-394: VAX V7.3 returns 0x28C; OVMX/VAX answers as Alpha (0xA00)
+info SYI.ASYNC  # vms-01f3: as JPI.ASYNC.EFN0, for $GETSYI
+info SYI.ASYNC.DONE  # vms-01f3: as JPI.ASYNC.EFN0.DONE
+info DVI.ASYNC  # vms-01f3: as JPI.ASYNC.EFN0, for $GETDVI
+info DVI.ASYNC.DONE  # vms-01f3: as JPI.ASYNC.EFN0.DONE
+io IO.NL.ILLFUNC  # vms-394: VAX V7.3 leaves the IOSB unwritten; OVMX/VAX writes it as Alpha does
+io IO.NL.SENSEMODE  # vms-394: as IO.NL.ILLFUNC
+io IO.MBX.READ.PEND  # vms-01f3: a pending mailbox $QIO read blocks (HUNG) on OVMX/VAX
+io IO.CANCEL  # vms-01f3: not reached -- the probe stops at IO.MBX.READ.PEND
+io IO.CANCEL.WAIT  # vms-01f3: as IO.CANCEL
+io IO.CANCEL.DONE  # vms-01f3: as IO.CANCEL
+io IO.CANCEL.BADCHAN  # vms-01f3: as IO.CANCEL
+io IO.DASSGN.MBX2  # vms-01f3: as IO.CANCEL
+io IO.DELMBX  # vms-01f3: as IO.CANCEL
+io IO.DASSGN.MBX  # vms-01f3: as IO.CANCEL
+io IO.ASSIGN.MBX.GONE  # vms-01f3: as IO.CANCEL
+lnm LNM.TRN.SYSLOGIN  # vms-0e3: SYS$LOGIN is a LNM$SYSTEM name under the OVMX/VAX login, not the job table's
+lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job (same as the Linux gate)
+lnm LNM.TRN.LOGIN_SURVIVES  # vms-0e3: follows SYS$LOGIN's table (mode 2 vs 1)
+tt TT.SENSEMODE  # vms-394: the IOSB speed is 6 on the lab VAX console, 15 on OVMX/VAX (as Alpha)
+tt TT.SENSECHAR  # vms-394: as TT.SENSEMODE
+tt TT.SENSEMODE.SHORT  # vms-394: as TT.SENSEMODE
+tt TT.SETMODE.SAME  # vms-394: as TT.SENSEMODE

@@ -36,6 +36,14 @@ int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
                            char *out, size_t outsz);
 
 /* ---- Sequential record READ (TYPE, COPY source) ---- */
+/* The SHARE intent the reader opens with (rd vms-5a0): it tolerates other
+ * accessors that read AND write. Observed on real VMS (OpenVMS VAX V7.3, lab
+ * runs ci6-evac-15/16): TYPE reads EVAC.DAT while EVACWL holds it open with
+ * FAC=GET|PUT, SHR=GET|PUT and keeps appending -- which RMS allows only if
+ * the reader's SHR admits the writer's PUT. Without SHRPUT the reader's
+ * file-access lock (PR, rms_fileshare_mode) conflicts with the writer's CW
+ * and OVMX's TYPE refused the file. */
+#define DCL_RMS_READ_SHR  (FAB$M_SHRGET | FAB$M_SHRPUT)
 struct dcl_rms_reader;   /* opaque: FAB+RAB over an RMS $OPEN/$CONNECT */
 /* Open `spec` for sequential $GET. On failure returns NULL and sets *rms_status
  * (if non-NULL) to the RMS error (e.g. RMS$_FNF). */

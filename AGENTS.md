@@ -88,6 +88,9 @@ accepted.
   do not run on `pull_request` but do run in the queue. A PR is therefore fresh by construction and
   cannot be starved by other merges. Each gating workflow ends in a `gate` job that needs every other
   job (`tools/ci/check_merge_gates.py` fails a job left out of it).
+- **Never queue a PR stacked on another unmerged PR.** The queue can reorder them and squash the
+  base into the stacked PR's commit. Queue the base; once it lands, rebase the stacked PR onto main
+  (`git rebase --onto origin/main <old-base>`), let its checks run, and queue it then.
 - **No mapped reds.** The queue merges only on green. A red on main is fixed first -- by the PR
   that fixes it, which goes through the queue like any other -- never mapped around.
 - **`tools/ci/safe_merge.sh <pr>` is the emergency bypass only** (the queue down, or main red with

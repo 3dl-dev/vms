@@ -1,0 +1,69 @@
+:37:04.80)
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 01:37:06.74  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 01:37:06.74)
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 01:37:06.74  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 01:37:06.74)
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 01:37:07.37  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 01:37:07.36)
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 01:58:09.14  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 01:58:09.13)
+01:58:09.13 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 01:58:09.14  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 01:58:09.13)
+01:58:09.13 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 01:58:09.18  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 01:58:09.16)
+01:58:09.16 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+
+VAX/VMS V7.3      node VAX1
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1
+    Last interactive login on Saturday, 10-OCT-2026 18:10
+    Last non-interactive login on Friday,  9-OCT-2026 01:34[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SHOW CLUSTER
+View of Cluster from system ID 1025  node: VAX1                                                                11-OCT-2026 01:58:47
++-------------------+---------+
+|      SYSTEMS      | MEMBERS |
++--------+----------+---------+
+|  NODE  | SOFTWARE |  STATUS |
++--------+----------+---------+
+| VAX1   | VMS V7.3 | MEMBER  |
+| VAX2   | VMS V7.3 | MEMBER  |
+| OVMXE  | VMX V0.7 | MEMBER  |
++--------+----------+---------+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+$ DISMOUNT/CLUSTER $2$DUA1:
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-NOSUCHDEV, no such device available
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-NOSUCHDEV, no such device available
+%DISM-W-DSMCLUFAIL, dismount/cluster failed on one or more nodes in the cluster
+$ MOUNT/CLUSTER $2$DUA1: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX1)
+$ 

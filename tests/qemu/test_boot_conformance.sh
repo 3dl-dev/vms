@@ -183,11 +183,12 @@ SEQ=$(printf '%s\n' "$RAW_SEQ" | sed -n '1,/^__USERNAME__$/p')
 # be faking a facility OVMX does not have (Rule 10 in reverse). The SECOND
 # %OVMX-I-EXEC (PROVISION.EXE's "system identity ... established by the
 # executive", src/ovmx_provision/ovmx_provision.c -- a different message
-# under the same OVMX-EXEC ident, not a repeat of the first) and the seven
-# %INSTALL-I-ADDED lines (SYSTARTUP_VMS.COM's INSTALL ADD of every OVMX
-# shareable, src/vmsdcl -- one line per shareable) are real, both outside
+# under the same OVMX-EXEC ident, not a repeat of the first) is real, outside
 # ovmx_init.c's own audit scope (§3.7) but part of the actual console
-# transcript this test pins.
+# transcript this test pins. SYSTARTUP_VMS.COM's INSTALL ADDs print nothing:
+# a successful INSTALL ADD is silent on VMS, and the %INSTALL-I-ADDED line the
+# old INSTALL stub printed went with it (vms-220, #1612) -- the seven lines
+# this sequence used to pin no longer exist.
 #
 # ORDERING (vms-2a9): %RUN-S-PROC_ID (JOB_CONTROL's creation) still prints
 # AFTER the %INSTALL-I-ADDED block, unchanged from before vms-2a9. JOB_
@@ -207,16 +208,17 @@ __BANNER__
 %OVMX-I-SCSNODE
 %STDRV-I-STARTUP
 %OVMX-I-EXEC
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
 %RUN-S-PROC_ID
 __USERNAME__
 EOF
+
+# A successful INSTALL ADD is silent on VMS (vms-220): no %INSTALL-I-ADDED in
+# the boot console at all, so a return to a chatty INSTALL fails here.
+if printf '%s\n' "$CLEAN" | grep -qF '%INSTALL-I-ADDED'; then
+    bad "the boot console carries %INSTALL-I-ADDED (INSTALL ADD is silent on success)"
+else
+    pass "INSTALL ADD during startup is silent (no %INSTALL-I-ADDED)"
+fi
 
 if [ "$SEQ" = "$EXPECTED" ]; then
     pass "boot facility+ident sequence matches the pinned oracle-derived shape"

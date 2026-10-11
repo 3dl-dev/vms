@@ -793,7 +793,22 @@ int main(int argc, char *argv[])
              * the prompt -- and ends the read on a terminator.
              */
             static char tt_buf[DCL_MAX_LINE];
-            int tn = dcl_tt_read(dcl_ctx.prompt, tt_buf, sizeof(tt_buf), 0, 0, NULL);
+            /* DCL's prompt as the terminal driver is handed it: two bytes of
+             * carriage control -- CR LF, a new line; NUL NUL under SET
+             * PROMPT/NOCARRIAGE_CONTROL -- and a fill NUL before the text
+             * (the VAX V7.3 console shows "<CR><NUL>$ " after a command and
+             * "<NUL><NUL><NUL>Y> " for a /NOCARRIAGE_CONTROL prompt: probes
+             * CC.EMPTY, CC.PROMPT, rd vms-fc4). */
+            char pb[DCL_MAX_PROMPT + 3];
+            size_t pl = strlen(dcl_ctx.prompt);
+            if (dcl_ctx.prompt_nocc) {
+                pb[0] = '\0'; pb[1] = '\0';
+            } else {
+                pb[0] = '\r'; pb[1] = '\n';
+            }
+            pb[2] = '\0';
+            memcpy(pb + 3, dcl_ctx.prompt, pl);
+            int tn = dcl_tt_read(pb, pl + 3, tt_buf, sizeof(tt_buf), 0, 0, NULL);
             if (tn == DCL_TT_EOF) {
                 /*
                  * Ctrl/Z AT THE DCL PROMPT DOES NOT LOG OUT (vms-a70). The
@@ -861,7 +876,7 @@ int main(int argc, char *argv[])
                 if (dcl_ctx.interactive) {
                     static char ccbuf[DCL_MAX_LINE];
                     dcl_mbx_output_drain_sync();  /* vms-195: prompt before echo */
-                    int cn = dcl_tt_read("_$ ", ccbuf, sizeof(ccbuf), 0, 0, NULL);
+                    int cn = dcl_tt_read("\r\n_$ ", 5, ccbuf, sizeof(ccbuf), 0, 0, NULL);
                     if (cn >= 0) {
                         cont = strdup(ccbuf);
                     } else if (cn == DCL_TT_NODRIVER) {

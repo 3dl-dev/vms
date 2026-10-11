@@ -1,0 +1,30 @@
+# keystroke oracle transcript (unmasked) -- case CC.PROMPT (OpenVMS VAX V7.3 OPA0:)
+# carriage control probe: SET PROMPT with and without carriage control
+# case-sha256 3bc47c55307b1daccdaba30e17ea912c06600652534e530edf2c3f2ec1cb779e
+@start loggedin OK
+=== STEP P1
+| SET PROMPT="X> "<CR><LF>
+| <CR><NUL>X> 
+=== STEP P2
+| <CR><LF>
+| <CR><NUL>X> 
+=== STEP P3
+| WRITE SYS$OUTPUT "A"<CR><LF>
+| <CR>A<CR><LF>
+| <CR><NUL>X> 
+=== STEP P4
+| SET PROMPT="Y> "/NOCARRIAGE_CONTROL<CR><LF>
+| <NUL><NUL><NUL>Y> 
+=== STEP P5
+| <CR><LF>
+| <NUL><NUL><NUL>Y> 
+=== STEP P6
+| WRITE SYS$OUTPUT "A"<CR><LF>
+| <CR>A<CR><LF>
+| <NUL><NUL><NUL>Y> 
+=== STEP P7
+| SET PROMPT<CR><LF>
+| <CR><NUL>$ 
+=== STEP P8
+| <CR><LF>
+| <CR><NUL>$ 

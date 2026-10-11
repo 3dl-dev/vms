@@ -4531,20 +4531,30 @@ const struct pe_blk_buf *pe_blk_buf_lookup(const struct pe_fsm *f,
 }
 
 /*
- * Mint the next name for slot `slot`: a monotone generation in the high bits
- * and the slot in the low 8, never 0. OVMX's own rule (SS3c) -- the wire
- * grounds only that the token is 32 bits both ends agree on. The generation is
- * what stops a released name from being handed straight back out, so a stale
- * transfer naming a dead buffer MISSES instead of landing in whatever took the
- * slot.
+ * Mint the next name for slot `slot`.
+ *
+ * THE FORM IS THE WIRE'S, MEASURED (rd vms-239). Every buffer name a real VAX
+ * V7.3 put on the wire in the lab corpus -- 67,494 of them, in MSCP READ/WRITE
+ * buffer descriptors and in block-transfer headers, VAX to VAX -- has a
+ * NONZERO high 16 bits (a 0x2fxx-style sequence) and a low 16 bits of 0..3
+ * (0 in every MSCP buffer descriptor). OVMX used to mint `gen << 8 | slot`,
+ * whose high word is 0 for its first 65,535 names: lab run mscp-239 r17 put
+ * one (0x00000101) in a READ's buffer descriptor and the serving VAX2 halted
+ * at once with a VAXPORT fatal bugcheck. So the name is now the generation in
+ * the high word, never 0, and 0 in the low word -- the commonest observed
+ * form, and the one every real MSCP buffer carries. The generation is what
+ * stops a released name being handed straight back out, so a stale transfer
+ * naming a dead buffer MISSES instead of landing in whatever took the slot.
+ * `slot` no longer appears in the name: the lookup is by the whole name.
  */
 static uint32_t blk_name_mint(struct pe_fsm *f, uint32_t slot)
 {
 	uint32_t name;
 
+	(void)slot;
 	do {
 		f->blk_name_gen++;
-		name = (f->blk_name_gen << 8) | ((slot + 1u) & 0xffu);
+		name = (f->blk_name_gen & 0xffffu) << 16;
 	} while (name == 0u || pe_blk_buf_lookup(f, name) != NULL);
 	return name;
 }

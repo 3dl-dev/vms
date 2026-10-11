@@ -823,6 +823,23 @@ struct vms_club {
 	 * (`dlm_seq_valid` 0) and sends no DLM message until a member's header
 	 * re-teaches it -- never a guess.
 	 */
+	/*
+	 * WHAT A MEMBER SAYS ABOUT ITS MEMBERSHIP IN EVERY PARAMS (rd vms-d52c).
+	 * MEASURED over the lab corpus, on 161 PARAMS (cat 0x01 op 0x01) real
+	 * members sent: body[28:36] is the cluster's formation time (60/60 where
+	 * an open in the same capture names it), body[36:44] the time of the last
+	 * committed transition, body[44:48] that transition's epoch (56/60;
+	 * the rest followed transitions not captured), and body[64:72] the
+	 * sender's own membership time (equal to the formation time when the
+	 * sender founded the cluster). Recorded here at Phase 2 / founding, from
+	 * this node's own clock, so the PARAMS builder reads executive state.
+	 */
+	uint64_t last_xition_vms;    /* VMS time this node committed the last one */
+	uint64_t joined_vms;         /* VMS time this node became a member       */
+	uint32_t last_xition_epoch;  /* that transition's epoch                  */
+	uint8_t  last_xition_valid;
+	uint8_t  joined_valid;
+	uint8_t  pad_member[2];
 	uint16_t dlm_seq;
 	uint8_t  dlm_seq_valid;
 	uint8_t  dlm_seq_vsig_valid;

@@ -1,0 +1,89 @@
+TLOCAL, setting domain and/or local host
+%TCPIP-I-STARTCOMM, starting communication
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:34.87  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Started
+
+%TCPIP-I-SETPROTP, setting protocol parameters
+%TCPIP-I-DEFINTE, defining interfaces
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:34.87  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Created INTERnet interface: QE0
+
+%TCPIP-I-STARTNAME, starting name service
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:34.92  %%%%%%%%%%%    (from node VAX1   at 11-OCT-2026 09:22:35.53)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1), 11-OCT-2026 09:22:32.27
+Circuit QNA-0
+
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:34.94  %%%%%%%%%%%
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:35.28  %%%%%%%%%%%    (from node VAX1   at 11-OCT-2026 09:22:35.92)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:35.28  %%%%%%%%%%%    (from node VAX1   at 11-OCT-2026 09:22:35.92)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:35.52  %%%%%%%%%%%    (from node VAX1   at 11-OCT-2026 09:22:36.26)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-I-LOADSERV, loading TCPIP server proxy information
+%TCPIP-I-SERVLOADED, auxiliary server loaded with 0 proxy records
+-TCPIP-I-SERVSKIP, skipped 0 communication proxy records
+-TCPIP-I-SERVTOTAL, total of 0 proxy records read
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:36.07  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:36.08  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%TCPIP-S-STARTDONE, TCPIP$FTP startup completed
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:22:37.17  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-S-STARTDONE, TCPIP$TELNET startup completed
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at 11-OCT-2026 09:22:37.41
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+%MOUNT-I-REBUILD, volume was improperly dismounted; rebuild in progress
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 11-OCT-2026 09:22:42.46
+
+  Accounting information:
+  Buffered I/O count:            2426         Peak working set size:    1558
+  Direct I/O count:               951         Peak page file size:      8712
+  Page faults:                  13210         Mounted volumes:             1
+  Charged CPU time:           0 00:00:07.18   Elapsed time:     0 00:00:19.20
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%CNXMAN,  proposing addition of system OVMXE
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:23:30.73  %%%%%%%%%%%
+09:23:30.73 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:23:30.74  %%%%%%%%%%%
+09:23:30.73 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+%CNXMAN,  completing VAXcluster state transition
+%%%%%%%%%%%  OPCOM  11-OCT-2026 09:23:30.74  %%%%%%%%%%%
+09:23:30.74 Node VAX2 (csid 00010002) completed VAXcluster state transition
+

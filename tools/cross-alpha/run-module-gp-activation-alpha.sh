@@ -938,6 +938,47 @@ run_boot_a() {
           sleep 2; W=$((W + 2))
           [ "$W" -ge "$BT" ] && break
       done
+      # NATIVE_SP_FAMS (the native-image gate only): log in SYSTEM/MANAGER on
+      # OPA0: and RUN each semantic-oracle probe SYS$SYSTEM:SP_<FAM> in that
+      # interactive session -- the context its golden was printed in on the
+      # lab node (a logged-in SYSTEM on a 511-column unpaged terminal,
+      # tools/oracle/semantic/capture.py), as tests/qemu/test_semantic_oracle.sh
+      # does on Linux. Each probe is done at its own END marker.
+      SPF="'"${NATIVE_SP_FAMS:-}"'"
+      if [ -n "$SPF" ] && grep -qaF "Username:" modgpA.raw 2>/dev/null; then
+          send()    { printf "%s\r" "$1" >&6 2>/dev/null || true; }
+          waitpat() {
+              local pat="$1" lim="$2" since="${3:-0}" w=0
+              while [ "$w" -lt "$lim" ]; do
+                  tail -c "+$((since + 1))" modgpA.raw 2>/dev/null | grep -qaF -- "$pat" && return 0
+                  kill -0 "$QP" 2>/dev/null || return 1
+                  sleep 1; w=$((w + 1))
+              done
+              return 1
+          }
+          waitpat "NATIVE-PROOF: === END ===" 120 0 || true   # SYSTARTUP done
+          OFF=$(wc -c < modgpA.raw)
+          send SYSTEM
+          waitpat "Password:" 30 "$OFF" && send MANAGER
+          if waitpat "Welcome to OpenVMX" 60 "$OFF"; then
+              waitpat "\$ " 30 "$OFF" || true
+              sleep 2
+              OFF=$(wc -c < modgpA.raw)
+              send "SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP"
+              waitpat "\$ " 30 "$OFF" || true
+              for f in $(echo "$SPF" | tr , " "); do
+                  U=$(echo "$f" | tr a-z A-Z)
+                  OFF=$(wc -c < modgpA.raw)
+                  send "RUN SYS\$SYSTEM:SP_$U"
+                  waitpat "=== SEMPROBE $f END ===" 300 "$OFF" \
+                    || waitpat "=== SEMPROBE aborted END ===" 1 "$OFF" \
+                    || { echo "NATIVE-SP: SP_$U did not reach its END marker" >> modgpA.raw; break; }
+              done
+              send LOGOUT
+          else
+              echo "NATIVE-SP: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
+          fi
+      fi
       exec 6>&-
       sleep 3            # let STDRV/LOGINOUT flush the last seam + prompt
       kill "$QP" 2>/dev/null || true
@@ -2107,22 +2148,27 @@ EOF
     [ -s "$WORK/joint/NATIVE_PROOF" ] || [ -f "$WORK/joint/NATIVE_PROOF" ] \
       || die "the veneer build did not drop the NATIVE_PROOF marker"
     assemble_boot_image
-    log "step 3: BOOT A -- images LINKed on real OpenVMS Alpha, unchanged, on the REAL executive"
-    run_boot_a
-    grep -aE "NATIVE-PROOF:|OVMX-NATIVE|OVMX-SEAM:|%DCL-|-CLI-|%IMGACT|-IMGACT|-SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
-    # The semantic-oracle probes LINKed on the lab node: each family's
-    # transcript, cut from the console between its SEMPROBE markers, against
-    # the golden that same image printed on OpenVMS Alpha V8.4, under the
-    # native ratchet docs/oracle/semantics/known-diff-native-alpha.txt.
+    # The semantic-oracle probes LINKed on the lab node (tests/native-images/
+    # alpha/sp/, staged into SYS$SYSTEM) are RUN after the boot, in a SYSTEM
+    # login on OPA0: -- the session their goldens were printed in (rd vms-3432).
     _spfams=$(ls "$REPO"/tests/native-images/alpha/sp/SP_*.EXE 2>/dev/null \
                 | sed 's#.*/SP_##; s#\.EXE$##' | tr 'A-Z' 'a-z' | paste -sd, -)
+    export NATIVE_SP_FAMS="$_spfams"
+    # boot + STARTUP + login + eleven probes under TCG
+    BOOT_TIMEOUT="${NATIVE_BOOT_TIMEOUT:-1200}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    log "step 3: BOOT A -- images LINKed on real OpenVMS Alpha, unchanged, on the REAL executive"
+    run_boot_a
+    grep -aE "NATIVE-PROOF:|NATIVE-SP:|OVMX-NATIVE|OVMX-SEAM:|%DCL-|-CLI-|%IMGACT|-IMGACT|-SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    # Each family's transcript, cut from the console between its SEMPROBE
+    # markers, against the golden that same image printed on OpenVMS Alpha
+    # V8.4, under the native ratchet docs/oracle/semantics/known-diff-native-alpha.txt.
     _spok=1
+    if grep -aq "^NATIVE-SP:" "$WORK/modgpA.log"; then
+      echo "  native: the probe session did not complete:" >&2
+      grep -a "^NATIVE-SP:" "$WORK/modgpA.log" | sed 's/^/    /' >&2
+      _spok=0
+    fi
     if [ -n "$_spfams" ]; then
-      for _f in $(echo "$_spfams" | tr , ' '); do
-        _u=$(echo "$_f" | tr 'a-z' 'A-Z')
-        grep -aq "^\$ RUN SYS\$SYSTEM:SP_$_u\$" "$REPO/tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM" \
-          || { echo "  native: SYSTARTUP does not RUN SP_$_u (tests/native-images/alpha/sp has it)" >&2; _spok=0; }
-      done
       _td=$(mktemp -d)
       for _f in $(echo "$_spfams" | tr , ' '); do
         tr -d '\r' < "$WORK/modgpA.log" | awk -v f="$_f" '

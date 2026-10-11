@@ -1,0 +1,38 @@
+# Build + push the ovmx-vaxlab node image ON THE k3s RAIL (rd vms-549c).
+#
+# No docker build on workshop (a shared host). This Job runs kaniko in the
+# ovmx-lab namespace, builds tests/lab/ straight from a git ref, and pushes to
+# the in-cluster registry. requests == limits, like every extra lab pod.
+#
+#   1. set GIT_REF (a branch or tag that carries the change) and the image tag
+#      below -- BUMP the tag on every rebuild, never reuse one
+#   2. kubectl -n ovmx-lab apply -f tests/lab/k8s/image-build/90-build-vaxlab-image.yaml
+#   3. kubectl -n ovmx-lab logs -f job/build-vaxlab-image
+#   4. kubectl -n ovmx-lab delete job build-vaxlab-image
+#   5. bump the image in 20-vaxlab.yaml and roll the pods one at a time
+# Kept in image-build/ so `kubectl apply -f tests/lab/k8s/` never starts a build.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-vaxlab-image
+  namespace: ovmx-lab
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --context=git://github.com/3dl-dev/vms.git#refs/heads/work/vms-549c-simh-nocatchup
+            - --context-sub-path=tests/lab
+            - --dockerfile=Dockerfile
+            - --destination=192.168.2.43:30500/ovmx-vaxlab:6
+            - --insecure
+            - --skip-tls-verify
+            - --single-snapshot
+          resources:
+            requests: { cpu: "2", memory: "4Gi" }
+            limits:   { cpu: "2", memory: "4Gi" }

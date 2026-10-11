@@ -75,11 +75,21 @@ for n in ${NODES}; do
   # only resolve inside its own tree.
   #   set idle=vms is load-bearing: without it SIMH spins a core forever on the
   #   VMS idle loop and the pod pegs its CPU limit doing nothing.
+  #   set clock nocatchup is load-bearing too (rd vms-549c, 2026-10-11). With
+  #   catch-up on, a host stall (CPU-quota throttling, a busy worker) makes the
+  #   calibrated timer schedule thousands of catch-up ticks, and the calibration
+  #   overflowed: captured live on a hung VAX2, 'Current Insts Per Tick:
+  #   -188,025,796', simulator time negative, every device/timer event at a
+  #   negative delay so none ever fires -- VMS spins at IPL 22, its console goes
+  #   silent, and the other members remove it ("Excessive packet losses"). The
+  #   corrupt calibration survives a SIMH 'boot'; only a fresh simulator clears
+  #   it. Without catch-up, a stall just costs that much simulated time.
   cat > "${nd}/vax.ini" <<EOF
 attach nvr ${nd}/data/nvram.bin
 set cpu conhalt
 set cpu 128m
 set idle=vms
+set clock nocatchup
 
 set rl disable
 

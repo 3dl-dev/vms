@@ -622,6 +622,14 @@ for defect in $DEFECT_LIST; do
     #    infrastructure failure, not a verdict about '$defect'. Skipped for
     #    `fatal`, which is EXPECTED to stop the run partway through (check 3
     #    below judges that case with EXEC_ORDER + stop_at).
+    # rd vms-7ce: a suite the per-suite watchdog killed printed where every
+    # task was blocked (STUCK lines) on the guest console. Keep that console,
+    # as for a death, so the hang is diagnosed from it.
+    if grep -q 'killed by the per-suite watchdog' "$OUTFILE" 2>/dev/null; then
+        _ddir="${NEGCTL_DEATH_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/negctl-deaths}"
+        mkdir -p "$_ddir" 2>/dev/null && cp "$OUTFILE" "$_ddir/$defect.watchdog.console.txt" 2>/dev/null \
+            && echo "  a suite was killed by the per-suite watchdog; console (with STUCK task dumps) kept in $_ddir/$defect.watchdog.console.txt"
+    fi
     # shellcheck disable=SC2086
     if [ "$isolation" != "fatal" ] && \
        [ "$(fnd_all_suites_missing "$OUTFILE" $EXEC_ORDER)" = "1" ]; then

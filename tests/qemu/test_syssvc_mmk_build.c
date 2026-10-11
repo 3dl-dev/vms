@@ -1278,6 +1278,23 @@ int main(int argc, char **argv)
 
     free(obj1); free(obj2); free(olb1); free(olb2); free(exe1); free(exe2);
 
+    /* TAKE BACK THE SYSTEM-WIDE NAMES (rd vms-7ce). MMK.EXE's subprocess bridge
+     * created its two mailboxes as SYS$INPUT / SYS$OUTPUT, which OVMX's $CREMBX
+     * publishes in LNM$SYSTEM -- so every later DCL.EXE on this boot translates
+     * them. They go with the mailboxes; but anything that keeps a mailbox alive
+     * (the spawned DCL's row surviving it, negctl release-leader-zombie-pcb-kept)
+     * left every later suite's DCL reading a mailbox no one writes. Deleting the
+     * names keeps this suite's state to this suite. */
+    {
+        struct dsc$descriptor_s systab = mkdsc("LNM$SYSTEM");
+        struct dsc$descriptor_s n_in = mkdsc("SYS$INPUT"), n_out = mkdsc("SYS$OUTPUT");
+        uint32_t d1 = sys$dellnm(&systab, &n_in, NULL);
+        uint32_t d2 = sys$dellnm(&systab, &n_out, NULL);
+        CHECK((d1 == SS$_NORMAL || d1 == SS$_NOLOGNAM) &&
+              (d2 == SS$_NORMAL || d2 == SS$_NOLOGNAM),
+              "no SYS$INPUT/SYS$OUTPUT of MMK's is left in LNM$SYSTEM when the suite ends");
+    }
+
     printf("=== test_syssvc_mmk_build: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

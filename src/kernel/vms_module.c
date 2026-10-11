@@ -1663,8 +1663,10 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
      * JPI$_UIC item returns, with OVMX's [gid,uid] mapping.
      */
     proc->prcnam[0] = '\0';
-    proc->uic = (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
-                ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
+    /* A task running under a substrate uid the executive gave a VMS process
+     * (vms-ac48) is that process's: it takes its UIC. */
+    proc->uic = vms_proc_subst_uic((uint32_t)from_kuid(&init_user_ns, current_uid()),
+                                   (uint32_t)from_kgid(&init_user_ns, current_gid()));
 
     /*
      * No user name yet (vms-2b8). A registered process is not an
@@ -2227,6 +2229,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_enter_image(proc, arg);
     case VMS_IOCTL_IMAGE_RUNDOWN:
         return vms_ioctl_image_rundown(proc, arg);
+    case VMS_IOCTL_SUBSTRATE_ID:     /* rd vms-ac48 */
+        return vms_ioctl_substrate_id(proc, arg);
     case VMS_IOCTL_SETPRV:
         return vms_ioctl_setprv(proc, arg);
     case VMS_IOCTL_CHKPRIV:

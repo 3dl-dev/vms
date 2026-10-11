@@ -114,6 +114,18 @@ struct vms_modexfer_args {
 	uint32_t status;        /* return: SS$_ status */
 };
 
+/* Substrate identity (rd vms-ac48): same struct and number as vms_ioctl.h. */
+#define OVMX_SUBST_UID_BASE   0x40000u
+#define OVMX_SUBST_UID_SPAN   0x10000u
+#define VMS_SUBST_OP_GET      1
+#define VMS_SUBST_OP_BECOME   2
+struct vms_substrate_id_args {
+	uint32_t op;
+	uint32_t status;
+	uint32_t uid;
+	uint32_t reserved;
+};
+
 /* ================================================================
  * Request numbers -- SAME NR bytes, structs, magic and direction class as
  * src/kernel/vms_ioctl.h, realized through the substrate's own macros so the
@@ -125,5 +137,6 @@ struct vms_modexfer_args {
 #define VMS_IOCTL_CHKPRIV        _IOWR(VMS_ACCESS_IOC_MAGIC, 0x04, struct vms_priv_args)
 #define VMS_IOCTL_ENTER_IMAGE    _IOWR(VMS_ACCESS_IOC_MAGIC, 0x66, struct vms_modexfer_args)
 #define VMS_IOCTL_IMAGE_RUNDOWN  _IOWR(VMS_ACCESS_IOC_MAGIC, 0x67, struct vms_modexfer_args)
+#define VMS_IOCTL_SUBSTRATE_ID   _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB1, struct vms_substrate_id_args)
 
 #endif /* _VMS_ACCESS_NB_H */

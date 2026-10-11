@@ -311,3 +311,5 @@ vms_kif_tt_setmode=PROCEDURE
 vms_kif_tt_attach=PROCEDURE
 vms_kif_tt_sense=PROCEDURE
 vms_kif_procctl=PROCEDURE
+# The executive-given substrate identity (rd vms-ac48). APPENDED.
+vms_kif_substrate_id=PROCEDURE

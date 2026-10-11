@@ -886,19 +886,24 @@ static void drive_to_admit(void)
 	cnxman_join_opened(&g.j, CM_CONID);
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	bed_member_has_spoken();
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 2u), 3u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 }
 
 static void test_reference_sequence(void)
@@ -962,20 +967,24 @@ static void test_reference_sequence(void)
 	{
 		uint32_t len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		ct_check_eq_u32(g.j.mscp_cmds_sent, 2u,
 				"SET CONTROLLER CHARACTERISTICS, twice");
 		len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		ct_check_eq_u32(g.j.mscp_cmds_sent, 3u,
 				"then the first GET UNIT STATUS");
 
 		len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u,
 				 VMS_MSCP_ST_AVAILABLE);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 				 VMS_MSCP_ST_AVAILABLE);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		ct_check_eq_u32(g.j.units_found, 2u,
 				"two served units enumerated from the PEER's "
 				"own answers");
@@ -987,7 +996,8 @@ static void test_reference_sequence(void)
 		bed_member_has_spoken();
 		len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 2u), 3u,
 				 VMS_MSCP_ST_OFFLINE);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	}
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"step 6: the OFFLINE terminator releases op 0x02");
@@ -1376,13 +1386,16 @@ static void test_promotion_records_membership_at_any_csv_slot(void)
 		{
 			uint32_t len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 
-			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 			len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 +
 						    1u));
-			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 			len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u,
 					 VMS_MSCP_ST_OFFLINE);
-			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		}
 
 		/* THE CLUSTER ASSIGNS THIS NODE THE SLOT -- its own membership
@@ -2430,11 +2443,14 @@ static void drive_to_state(enum cnxman_join_state s)
 		return;
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	if (s == CNXMAN_JOIN_ADMIT)
 		return;
 
@@ -2482,7 +2498,8 @@ static enum cnxman_join_rx fire(enum cnxman_event ev)
 		break;
 	case CNXMAN_EV_MSCP_END:
 		len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		break;
 	case CNXMAN_EV_TIMER_JOIN:
 		cnxman_join_timer(&g.j);
@@ -2838,15 +2855,19 @@ static void drive_to_admit_member_dialled(void)
 	cnxman_join_opened(&g.j, MSCP_CONID);
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	bed_member_has_spoken();
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 3u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 }
 
 static void test_member_dialled_connection_still_promotes(void)
@@ -2909,11 +2930,14 @@ static void test_member_dialled_connection_still_promotes(void)
 	 * disk walk is untouched: SET CONTROLLER twice, then the NEXT-UNIT
 	 * walk to the peer's own Unit-Offline terminator. */
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the disk walk's own terminator starts admission");
 	ct_check(!sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
@@ -3517,11 +3541,14 @@ static void drive_the_rest_to_admission(void)
 	cnxman_join_opened(&g.j, MSCP_CONID);
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 }
 
 static void test_rejoin_admission_rides_the_member_initiated_connection(void)
@@ -7072,9 +7099,49 @@ static void test_239_disk_class_connect_statement(void)
 			"MIN_CR is the real class driver's 2");
 }
 
+/*
+ * rd vms-239: the walk advances on a REAL VAX's SET CONTROLLER CHARACTERISTICS
+ * end, delivered the way SCS delivers it -- the 28-byte SYSAP body. Captured
+ * from VAX2 (V7.3) answering OVMXE's first SCC, lab run mscp-239
+ * 2026-10-11 07:37:11.605956 (tests/lab/captures/vms-239-mscp-connect-
+ * 20261011): P.CRF 0x81a30002 echoes the command's, P.OPCD 0x84, P.STS 0.
+ * Before the fix the body was parsed as a frame, never classified, and the
+ * real join stopped here with OVMXE stuck as NEW.
+ */
+static void test_239_real_scc_end_body_advances_the_walk(void)
+{
+	static const uint8_t vax2_scc_end_body[VMS_MSCP_SCC_END_LEN] = {
+		0x02, 0x00, 0xa3, 0x81, 0x02, 0x00, 0x00, 0x00,
+		0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xa0,
+		0x14, 0x00, 0x47, 0x05, 0x02, 0x04, 0x00, 0x00,
+		0x00, 0x00, 0x04, 0x01 };
+
+	printf("-- vms-239: a real VAX's SCC end BODY advances the disk walk\n");
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+	cnxman_join_opened(&g.j, CM_CONID);
+	ct_check_eq_u32(g.j.mscp_cmds_sent, 1u, "the first SCC went out");
+	ct_check_eq_u32(VMS_MSCP_CL_CMD_REF(VMS_MSCP_CL_SCC_CLASS,
+					    VMS_MSCP_CL_SCC_MSGID0),
+			0x81a30002u,
+			"  its P.CRF is the one the real VAX echoed");
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, vax2_scc_end_body,
+			    sizeof(vax2_scc_end_body));
+	ct_check_eq_u32(g.j.mscp_cmds_sent, 2u,
+			"*** the real end advances the walk: SCC #2 goes out ***");
+	ct_check_eq_u32(g.j.ignored_events, 0u, "  nothing was ignored");
+}
+
 int main(void)
 {
 	test_239_disk_class_connect_statement();
+	test_239_real_scc_end_body_advances_the_walk();
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
 
 	test_reference_sequence();

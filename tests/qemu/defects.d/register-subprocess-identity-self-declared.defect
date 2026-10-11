@@ -1,0 +1,34 @@
+# register-subprocess-identity-self-declared -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC/SPAWN SUBPROCESS identity-by-continuation (VMS_IOCTL_REGISTER_SUBPROCESS, vms-19e9)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_creprc_inherit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dev_ioctl()'s REGISTER_SUBPROCESS dispatch calls 'vms_ioctl_register(arg, true, false)' (inherit_identity=true, share_pid=false); the mutation flips inherit_identity to false, so a subprocess registers exactly like a bare REGISTER -- no UIC/username/privilege continuation from its real_parent. The subprocess still gets a genuinely FRESH, distinct VMS PID (share_pid was already false) and VMS_IOCTL_REGISTER_SUBPROCESS itself still returns SS\$_NORMAL, so the PID-freshness and registration-accepted assertions stay green; only the inherited-identity fields (user name, UIC, privilege mask) read the pre-continuation (unnamed/unprivileged) defaults instead of the creator's row. The security-half guard (a non-root self-declared SYSTEM identity is refused) is a completely different code path (vms_ioctl_setident) and is untouched. Unique call-site text; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A: the subprocess INHERITED the creator's user name (SYSTEM) -- a readback, not a self-declaration
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A: the subprocess inherited the creator's UIC [1,4]
+A: the subprocess inherited the creator's privilege mask, SETPRV/SYSPRV included
+EOF
+                      ;;
+        knock_on_why)  echo "the same inherit_identity=false flip means EVERY field continuation was supposed to carry from the creator's row -- user name, UIC, and privilege mask -- reads the fresh-registration default instead; all three are the same single property (identity continuation disabled), not three separate defects.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique call-site text (REGISTER_SUBPROCESS's own dispatch); flips
+        # inherit_identity true->false so a subprocess registers like a bare
+        # REGISTER (share_pid stays false -- the PID is still genuinely fresh).
+        # Gone after apply (no-op re-apply).
+        sed -i 's|return vms_ioctl_register(arg, true, false);|return vms_ioctl_register(arg, false, false); /* NEGCTL register-subprocess-identity-self-declared */|' "$_file"
+    :
+}

@@ -1,0 +1,101 @@
+# scratch-dir-owner-not-system -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "PID 1 boot-time VMS directory provisioning (SYS\$SCRATCH:/SYS\$LOGIN:, src/ovmx_init/ovmx_init.c provision_writable_dir())";;
+        # NOT src/ovmx_init/ovmx_init.c. test_syssvc_scratch_writable.c runs
+        # in the kernel-executive QEMU rig (tests/qemu/Dockerfile + init.sh),
+        # which insmods vms.ko and drives the public sys$ API directly --
+        # PID 1 / STARTUP.EXE never boots there, so ovmx_init.c is never
+        # linked into this suite's binary and a mutation to it CANNOT reach
+        # this suite (MEASURED: qemu_syssvc_tests links against libvms only,
+        # not ovmx_init). The suite therefore carries its OWN duplicate of
+        # provision_writable_dir()'s recipe
+        # (provision_writable_dir_for_test(), with its own header explaining
+        # the duplication) so it can stand up [SYSTMP]/[USERS] itself before
+        # probing them -- and THAT is the copy an sed mutation has to reach
+        # for "detection" to be a true claim rather than a decorative one.
+        # ../ is relative to the src-root cmd_apply is given (src/), which
+        # is always a sibling of tests/ in every checkout this runs
+        # against -- the real driver's /src/repo/src (inject_and_run.sh,
+        # facility_attribution_negctl.sh) and this file's own cmd_selftest
+        # (which stages tests/qemu next to its src/ copy for exactly this).
+        targets)      echo "../tests/qemu/test_syssvc_scratch_writable.c";;
+        # This is NOT an executive/vms.ko facility -- it is PID 1's own
+        # userspace boot-time provisioning, outside the "every wired
+        # EXECUTIVE facility" scope this manifest otherwise covers (see the
+        # SCOPE, DECLARED header). It is admitted here, alongside the
+        # kernel-facility defects, only because
+        # tests/qemu/test_syssvc_scratch_writable.c is discovered by the same
+        # test_syssvc_* glob cmd_coverage floors, and the coverage check
+        # draws no distinction between "executive" and "PID 1 boot" for that
+        # floor -- so this suite needs a real anchor or the floor is wrong
+        # about it, not vice versa (vms-e5c).
+        suites_red)   echo "test_syssvc_scratch_writable";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        # MEASURED, not reasoned (vms-e5c, corrected vms-9b7 follow-up).
+        # provision_writable_dir_for_test() chowns [SYSTMP]/[USERS] to SYSTEM's
+        # FULL UIC (both fields) before this suite's credential-drop probes
+        # run. This mutation drops only the MEMBER half of that ONE chown call
+        # to root (0), leaving the GROUP half alone -- so the directories end
+        # up root-owned but still SYSTEM-group-owned, exactly the "chown the
+        # group only" shape an earlier draft of the real fix
+        # (src/ovmx_init/ovmx_init.c) shipped and then measured broken.
+        #
+        # WHAT ACTUALLY GATES THE PROBE, STATED HONESTLY. The A1/A2 assertions
+        # are a raw open(2) on the vmsfs_to_linux_path()-resolved BACKING PATH,
+        # not a call into vmsfs's own SOGW check: SYSDISK_MOUNT ("/vms") is a
+        # plain rootfs directory in THIS rig, not a vmsfs mount (tests/qemu/
+        # init.sh mounts vmsfs only at /mnt/vmsfs), so the Linux VFS's ordinary
+        # owner/group/other DAC on that path is what admits or refuses the
+        # create. That is why test_syssvc_scratch_writable.c provisions these
+        # directories at 0755, NOT the product's 0775: at 0775 the group WRITE
+        # bit alone would grant the SYSTEM probe (whose credential drop uses
+        # SYSTEM_UIC_GROUP, this directory's group) the create no matter who
+        # owns it, so dropping the owner would change nothing observable and
+        # the suite would pass with the defect injected -- an assertion that
+        # cannot fail, which is precisely the LARP this whole file exists to
+        # kill (it was live on the tree until vms-9b7). At 0755 the group
+        # category is r-x with no write, so the create succeeds for SYSTEM only
+        # through the OWNER category -- both UIC fields matching -- and dropping
+        # the MEMBER half to root removes exactly that, refusing SYSTEM's create
+        # just as an unrelated account is refused. The probes themselves are
+        # untouched (SYSTEM_UIC_MEMBER, used by try_create_as(), is a different
+        # symbol from the literal this mutation edits), so this defect reddens
+        # test_syssvc_scratch_writable's positive (A1/A2) assertions and only
+        # those. An EARLIER draft of this entry claimed the gate was vmsfs's
+        # SOGW decision (vmsfs_blkdev_permission / VMSFS_PROT_DEFAULT); that was
+        # wrong for this rig -- the open never reaches vmsfs -- and believing it
+        # is why the 0775 masking went unnoticed.
+        why)          echo "provision_writable_dir_for_test() stops making its SYSTEM probe's UIC the actual OWNER of [SYSTMP]/[USERS] (only the UIC GROUP field still matches, the MEMBER field reverts to root/0). The A1/A2 probe is a raw open(2) under Linux DAC on the /vms backing path (not a vmsfs mount in this rig), and the suite provisions these directories 0755 -- no group write -- so SYSTEM's sys\$create-equivalent open() under SYS\$SCRATCH:/SYS\$LOGIN: can succeed only through the OWNER category; with the owner reverted to root it is refused exactly as it was before vms-e5c's fix to the real product code.";;
+        require_fail) cat <<'EOF'
+SYSTEM's sys$create-equivalent open() succeeds under SYS$SCRATCH:
+SYSTEM's sys$create-equivalent open() succeeds under SYS$LOGIN:
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Single-line, uniquely-anchored inside test_syssvc_scratch_
+        # writable.c's OWN provisioning duplicate (see this defect's
+        # `targets`/`why` for why the real product file cannot be the
+        # target). The exact call exists once; after substitution the OLD
+        # text ("(uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)")
+        # is gone, so a second apply finds no match -- the no-op selftest
+        # requires. Drops only the MEMBER half of the chown to root (0); the
+        # GROUP half is untouched, and SYSTEM_UIC_MEMBER (a different
+        # symbol) still drives try_create_as()'s own credential drop
+        # unmutated -- reproducing "group matches, owner does not" without
+        # also turning the SYSTEM probe into literal root, which would
+        # bypass the property being tested instead of failing it.
+        sed -i 's|    if (chown(path, (uid_t)SYSTEM_UIC_MEMBER, (gid_t)SYSTEM_UIC_GROUP) != 0)|    if (chown(path, (uid_t)0, (gid_t)SYSTEM_UIC_GROUP) != 0) /* NEGCTL scratch-dir-owner-not-system: SYSTEM no longer owns [SYSTMP]/[USERS], only shares their group */|' "$_file"
+
+    :
+}

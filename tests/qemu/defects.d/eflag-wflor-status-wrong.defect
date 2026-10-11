@@ -1,0 +1,46 @@
+# eflag-wflor-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags -- \$WFLOR's own success status (VMS_IOCTL_WFLOR)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # vms-2ed. MEASURED at the 9-of-33 audit: no existing mutation hunk
+        # sits inside vms_ioctl_wflor's own body -- eflag-waitfr-eintr-normal's
+        # own apply_edit comment explicitly notes its range-anchor excludes
+        # WFLOR's copy of the same "args.status = SS_NORMAL;" text. This is
+        # the first defect anchored inside \$WFLOR itself, made possible by
+        # vms-2ed's new test_syssvc_ef_mproc.c scenario -- before that, no
+        # suite in the tree called sys\$wflor at all.
+        #
+        # THE WAIT PREDICATE ITSELF IS LEFT UNTOUCHED ON PURPOSE.
+        # wait_event_interruptible()'s mask comparison still runs and still
+        # wakes correctly -- only the post-wait STATUS WORD is corrupted.
+        # Corrupting the underlying wait/bit state was tried and rejected
+        # for the sibling lock-enq defect this session: it can HANG the
+        # guest. RANGE-ANCHORED to vms_ioctl_wflor's own body: this exact
+        # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr (4-space,
+        # earlier in the file) and vms_ioctl_wfland (4-space, later).
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$WFLOR reports SS\$_ILLEFC instead of SS\$_NORMAL after its wait predicate is genuinely satisfied (at least one mask flag set) -- the wait itself resolved correctly, only the caller-visible confirmation of it did not.";;
+        require_fail) cat <<'EOF'
+parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_wflor's own body. This exact 4-space
+        # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr
+        # (earlier in the file) and vms_ioctl_wfland (later); vms_ioctl_wflor
+        # is defined between them, so the range excludes both.
+        sed -i '/^long vms_ioctl_wflor/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__ILLEFC; /* NEGCTL eflag-wflor-status-wrong */|' "$_file"
+    :
+}

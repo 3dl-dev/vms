@@ -1,0 +1,33 @@
+# acp-acl-spill-refused -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an ACL longer than the primary header continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_store() puts the ACEs the primary header cannot hold in extension headers. The mutation refuses SS\$_ACLFULL instead, so the list stops growing at what the primary holds. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+35 ACEs are accepted (the list outgrows the primary header)
+reading the ACL returns all 35, newest first, [100,100] last
+a 36th ACE goes first; the rest move down the chain
+36 ACEs read back, [100,100] still last
+35 ACEs remain after the delete
+30 ACEs again (a fresh extension header)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^    status = acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx);$#    status = (acp_acl_fit(sc->filehdr, out, n) < n) ? SS__ACLFULL : acp_acl_store(vol, sc, sc->filehdr, file_fidnum, out, n, xf, nx); /* NEGCTL acp-acl-spill-refused */#' "$_file"
+    :
+}

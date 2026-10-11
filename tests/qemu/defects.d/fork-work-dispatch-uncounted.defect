@@ -1,0 +1,31 @@
+# fork-work-dispatch-uncounted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "cluster fork work-dispatch accounting (cf_deliver_work, FC-P6, vms-ci)";;
+        targets)      echo "kernel-core/vms_cluster_fork.c";;
+        suites_red)   echo "test_kmod_cluster_fork_hammer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cf_deliver_work() drops 'f->st.work_dispatched++', so the executive's OWN drain-convergence rule (work_dispatched >= work_posted) never converges: WORK_DISPATCHED stays 0 while WORK_POSTED climbs. A value-not-decision mutation (precedent: the kstat-*-mismapped entries). The frames are still delivered -- RX_DISPATCHED is a different counter and stays correct -- so only the work-accounting assertions redden, not the rx-frame one (minimality). The increment text is unique; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+every posted work item was dispatched exactly once (no lost wakeup, no stuck poster)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+cf_stats converged (dispatched >= enqueued/posted) within the 2s bound -- no lost wakeup
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment makes DRAIN_OK (the dispatched>=posted convergence) fail alongside the exact-once work-dispatch count.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique increment; dropping it leaves the counter at 0 (convergence
+        # never reached). Gone after apply, so a 2nd apply is a no-op (selftest).
+        sed -i 's|f->st.work_dispatched++;|/* NEGCTL fork-work-dispatch-uncounted: increment dropped */|' "$_file"
+    :
+}

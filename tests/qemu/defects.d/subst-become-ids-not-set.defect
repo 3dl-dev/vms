@@ -1,0 +1,28 @@
+# subst-become-ids-not-set -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "BECOME makes the executive-given uid the task's real and effective identity (vms-ac48)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_substrate_id";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_become_substrate_id() sets the task's real/effective/saved/fs uid to the executive-given one. The mutation leaves them alone, so a session LOGINOUT 'dropped' keeps running as substrate root. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+after BECOME the task's real and effective uid and gid are that uid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\tnew->uid = new->euid = new->suid = new->fsuid = u;$|\t(void)u; /* NEGCTL subst-become-ids-not-set */|' "$_file"
+    :
+}

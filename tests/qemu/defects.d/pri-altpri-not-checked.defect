@@ -1,0 +1,29 @@
+# pri-altpri-not-checked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a base priority above the authorized one needs ALTPRI in the executive (vms-768)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_pri() holds a \$SETPRI above the authorized priority at the authorized priority without ALTPRI. The mutation sets whatever is asked. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the base priority stays at the authorized 4
+$SETPRI 10 with ALTPRI
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^        if (pri > args.authpri \&\& !(proc->cur_privs \& VMS_PRV_M_ALTPRI))$#        if (0) /* NEGCTL pri-altpri-not-checked */#' "$_file"
+    :
+}

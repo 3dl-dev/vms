@@ -1,0 +1,47 @@
+# proctab-terminal-redaction-bypassed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process table, terminal field on a redacted row (proc_fill_info(), vms-d0b)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        # This is proc_fill_info()'s OWN clause, not vms_proc_may_read()'s:
+        # the caller's authorisation is untouched, so vms_ioctl_getjpi()'s
+        # direct refusal (SS$_NOPRIV, no row at all) never calls
+        # proc_fill_info() with full=false in the first place and cannot
+        # observe this defect. Only vms_ioctl_procscan() calls it that way
+        # (SHOW SYSTEM / PROCSCAN enumeration), so test_kmod_ident's scan_d
+        # check -- the only assertion in the tree that binds a real terminal
+        # to a process it then reads back through a redacted PROCSCAN row --
+        # is the only place this can go red. MEASURED: the full 25-suite
+        # sweep with the mutation applied reddened exactly this one
+        # assertion, nothing in test_syssvc_showproc or test_syssvc_procnam
+        # (both drive $GETJPI, which never reaches the mutated line).
+        suites_red)   echo "test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "proc_fill_info() copies proc->terminal into the redacted branch, BEFORE the early return that withholds the rest of the identity (linux_pid, uic, privileges, username). vms_pid and prcnam are legitimately copied before that return too (the oracle shows SHOW SYSTEM naming every process including cross-group ones), but terminal is identity data the oracle refused with everything else (docs/oracle/vax73-privileges.md §5) -- so copying it before the return, rather than after with username, hands an enumerating caller a fact about a process it may not \$GETJPI.";;
+        require_fail) cat <<'EOF'
+TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # `info->redacted = 1;` is the only such statement in the file (the
+        # sole write to that field), so anchoring on it directly is
+        # unambiguous. The replacement (note: "1U;", not "1;" -- that is
+        # what makes the anchor disappear after one application, so a
+        # second apply finds no match and is the no-op the selftest
+        # requires) copies proc->terminal into the redacted branch, ahead
+        # of the early return -- exactly the hoist this control exists to
+        # catch -- while leaving the return itself, the redacted flag's
+        # value, and every other withheld field untouched.
+        sed -i "s|        info->redacted = 1;|        info->redacted = 1U; memcpy(info->terminal, proc->terminal, VMS_DEVNAM_SIZE); info->terminal[VMS_DEVNAM_SIZE - 1] = '\\\\0'; /* NEGCTL proctab-terminal-redaction-bypassed */|" "$_file"
+    :
+}

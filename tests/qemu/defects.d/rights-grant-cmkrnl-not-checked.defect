@@ -1,0 +1,29 @@
+# rights-grant-cmkrnl-not-checked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$GRANTID / \$REVOKID need CMKRNL in the executive (vms-7d5a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_rights() refuses GRANT/REVOKE SS\$_NOPRIV without CMKRNL. The mutation drops the check, so an unprivileged process grants itself an identifier and then opens the file the ACE protects. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the child's own $GRANTID (no CMKRNL) is SS$_NOPRIV
+...and changes nothing: still refused
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (args.op != VMS_RIGHTS_OP_LIST \&\& !(proc->cur_privs \& VMS_PRV_M_CMKRNL)) {$|    if (0) { /* NEGCTL rights-grant-cmkrnl-not-checked */|' "$_file"
+    :
+}

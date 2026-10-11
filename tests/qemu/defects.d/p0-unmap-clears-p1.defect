@@ -1,0 +1,75 @@
+# p0-unmap-clears-p1 -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "P1 control-region persistence -- P0 deleted on rundown, P1 survives (vms-68f.ii -- increment (ii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
+        targets)      echo "kernel/vms_p0.c";;
+        suites_red)   echo "test_syssvc_p1";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_p0_unmap() (kernel/vms_p0.c) -- the executive's half of image rundown -- ADDITIONALLY clears proc->p1_base/p1_limit right after it clears proc->p0_base/p0_limit, as if P0 teardown and P1 teardown were the same event. This is exactly the defect the P0/P1 SEPARATION exists to make structurally impossible: on the real design (§A.1.1) P1 is process-permanent and has no rundown counterpart at all, so nothing may clear it from image rundown's code path. The mutation puts that missing distinction back in, sharing P0_UNMAP's clear path with fields P0_UNMAP has no business touching.";;
+        require_fail) cat <<'EOF'
+P1-SURVIVES: GETJPI still reflects the SAME P1 extent after this P0 teardown -- the property this increment exists to prove, not just once but across a repeated P0 map/unmap cycle
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+after P0_MAP: P1 extent still matches what was registered before any P0 activity, and P0 is now also present
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED ON THE NEXT CYCLE. test_syssvc_p1.c registers one P1
+extent, then cycles VMS_IOCTL_P0_MAP/P0_UNMAP three times, checking after
+EVERY unmap that P1 is unchanged (this is require_fail, and it goes red on
+the FIRST cycle's unmap: the mutation zeroes p1_base/p1_limit right then).
+Once p1_base/p1_limit are zero, the NEXT cycle's post-P0_MAP assertion --
+which checks P1 still matches the extent registered before any P0 activity
+at all, alongside P0's own now-mapped extent -- has nothing left to match
+against, so it goes red too on cycles 2 and 3. One deleted-boundary mutation
+in vms_ioctl_p0_unmap, observed as two distinct assertion texts because one
+fires on unmap and the other on the following map, not two independent
+properties.
+
+WHAT STAYS GREEN, AND WHY. Every assertion before the P0/P1 cycle loop
+(the fresh-process check, the three degenerate-extent refusals, the
+post-refusal GETJPI check, the initial P1_MAP registration and its GETJPI
+readback, and the A-WRITES/B-READS cross-process pair) completes before
+vms_ioctl_p0_unmap is ever called in this suite, so none of them can reach
+the mutated code path. VMS_IOCTL_P0_MAP's own status and the
+"P0-DELETED-ON-RUNDOWN" GETJPI-shows-no-P0-extent check are unaffected in
+every cycle: the mutation adds clears, it does not remove the ones already
+there, so P0's own bookkeeping is exactly as correct as it was in
+p0-map-not-recorded's absence. test_syssvc_p0.c -- the OTHER suite exercising
+VMS_IOCTL_P0_MAP/P0_UNMAP -- never registers or reads a P1 extent at all,
+so it has nothing in its own assertions this mutation's added clears could
+ever touch; it stays fully green.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_p0_unmap's own body: `proc->p0_base = 0;`
+        # immediately followed by `proc->p0_limit = 0;` occurs exactly once in
+        # the file (vms_ioctl_p0_map only ever ASSIGNS p0_base/p0_limit FROM
+        # args, never to the literal 0, so there is no second occurrence to
+        # disambiguate against). Appending two more clears -- of p1_base and
+        # p1_limit -- right after P0_UNMAP's own clears, still inside the same
+        # spin_lock(&proc->p0_lock)/spin_unlock() pair that is this ioctl's
+        # whole body, makes image rundown's P0 teardown silently wipe the
+        # process-permanent P1 extent too: exactly the missing P0/P1
+        # separation this increment exists to make structurally impossible.
+        # After substitution the matched line itself carries a trailing
+        # comment, so it no longer matches "proc->p0_limit = 0;$" (end of
+        # line right after the semicolon) -- and the two newly-inserted
+        # lines name p1_base/p1_limit, not p0_limit, so neither matches
+        # either. A second apply therefore finds nothing left to match --
+        # the no-op selftest requires.
+        sed -i '/^long vms_ioctl_p0_unmap/,/^}$/ {
+            s|^    proc->p0_limit = 0;$|    proc->p0_limit = 0; /* NEGCTL p0-unmap-clears-p1 */\n    proc->p1_base = 0;\n    proc->p1_limit = 0;|
+        }' "$_file"
+
+    :
+}

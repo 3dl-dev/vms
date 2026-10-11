@@ -1,0 +1,37 @@
+# image-rundown-without-entry -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_modeswitch";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_image_rundown() stops requiring proc->image_active before restoring current_mode, so a caller that never went through a matching VMS_IOCTL_ENTER_IMAGE -- current_mode is PSL_C_USER by default at registration, image_active is 0, pre_image_mode is whatever kmem_cache_zalloc() left it (PSL_C_KERNEL, 0) -- can call the RETURN leg of the controlled transition cold and have the executive move it to pre_image_mode anyway. This is the exact 'cannot raise its own mode except via the controlled transition' property the design's negative control (§A.5 item 5) and this item's own task both name: the guard, not current_mode, is what makes RUNDOWN a paired return instead of a second SETMODE.";;
+        require_fail) cat <<'EOF'
+IMAGE_RUNDOWN refused with no active image entry
+... and the mode is still USER after the refused IMAGE_RUNDOWN -- no door reaches Supervisor without the controlled transition
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT, no range anchor needed: this exact guard occurs once
+        # in the file -- vms_ioctl_image_rundown's own image_active check.
+        # `0 &&` is the same always-false idiom access-mode-escalation and
+        # lock-valblk-grant-not-delivered already use in this file: the
+        # guard's THEN-branch (the refusal) becomes structurally
+        # unreachable rather than deleted, so nothing after it shifts.
+        # vms_ioctl_enter_image's own body (the ONLY other place
+        # image_active is touched) is a plain assignment, never an `if`
+        # naming it, so this pattern cannot match there.
+        sed -i 's|^    if (!proc->image_active) {$|    if (0 \&\& !proc->image_active) { /* NEGCTL image-rundown-without-entry */|' "$_file"
+
+    :
+}

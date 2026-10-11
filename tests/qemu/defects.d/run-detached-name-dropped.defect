@@ -1,0 +1,58 @@
+# run-detached-name-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the process NAME on the way from the user-visible command to the executive (DCL RUN/DETACHED -> \$CREPRC, src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN/DETACHED stops passing /PROCESS_NAME to $CREPRC. The service is still
+created, still detached, still reparented, and the command still prints
+%RUN-S-PROC_ID with a real executive-assigned process ID -- it is simply
+NAMELESS in the executive's table.
+THIS IS THE EXACT FACADE SHAPE vms-47b EXISTS TO PREVENT, and the reason the
+mutation is a one-argument edit rather than a deleted feature: everything a
+single-process test can see stays true. The command succeeds, the process
+exists, the process ID resolves. Only the property that makes the name mean
+anything -- that ANOTHER process can find the service by it -- disappears. A
+suite that asserted "RUN/DETACHED reported success" would stay green through
+this, which is why it does not assert that.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the executive resolves the service BY NAME after its creator exited
+SHOW SYSTEM, in a different process, lists the service by its VMS process name
+starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
+vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+All three are P10 cases that create a NAMED detached process and then resolve
+it out of the executive by that name. They are the same defect seen again, one
+spelling further on: P10 exists to prove that an ABBREVIATED qualifier is the
+same qualifier, so it necessarily drives the same name-to-executive path this
+mutation cuts. There is nothing finer available -- the mutation is already a
+single argument, and the only way these could stay green would be for P10 to
+stop checking the executive, which is the property.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # The ONE edit: RUN/DETACHED hands $CREPRC no process name. Every
+        # other argument, and every other line of the command, is untouched.
+        sed -i 's|                                 prc_d.dsc\$a_pointer ? \&prc_d : NULL,|                                 NULL, /* NEGCTL run-detached-name-dropped */|' "$_file"
+
+    :
+}

@@ -1,0 +1,902 @@
+# bind-client-no-register -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "kernel-interface binding in the PRODUCT (vms_kif kif_bind -> vms_kif_register)";;
+        targets)      echo "libvmssys/vms_kif.c";;
+        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam,
+        # and -- since vms-6a7 -- test_syssvc_showproc, and -- since vms-fb9 --
+        # test_syssvc_showdev.
+        # Round 1 also listed the suites in blind_suites below, which permitted
+        # four suite groups to redden while only one could; those are now
+        # declared as what they are: BLIND. test_syssvc_procnam is the
+        # opposite case and is here on measurement, not permission: it is the
+        # FIRST public-API suite that does NOT hand-register, so it is the
+        # first one that can see this defect at all.
+        # test_syssvc_showproc is the SECOND such suite, and it was added to
+        # this list the way the method requires: not predicted, but read off a
+        # run. It landed declaring only proctab-crossgroup-identity, and the
+        # first CI run after it merged reddened it here -- one suite outside
+        # the declared set, one assertion outside the named set. Both directions
+        # of the equality check firing at once is the check working, not a
+        # coarse mutation, and the honest fix is to DECLARE the dependency
+        # rather than narrow a suite whose whole value is that it drives the
+        # user-visible command through the entire stack.
+        # test_syssvc_ef_mproc and test_syssvc_ef_local are the THIRD and
+        # FOURTH, added by vms-2a8, and they arrive the same way: not
+        # predicted, READ OFF A RUN. The first CI run after sys_event.c became
+        # a reader of the executive reddened test_syssvc_ef_mproc here, one
+        # suite outside the declared set and 27 assertions outside the named
+        # set; the local rerun that produced the lists below reddened
+        # test_syssvc_ef_local too, for 16 more. That is the same forcing
+        # function firing for the same reason as vms-6a7's: wiring a facility
+        # to the executive makes its suites depend on the bind, and the
+        # manifest has to SAY so.
+        # test_syssvc_showdev is the FIFTH, added by vms-fb9 (this item) when
+        # SHOW DEVICE became a reader of the executive device table. Same
+        # arrival as the others -- NOT predicted, READ OFF A RUN of THIS
+        # dispatch's own tests/qemu/run_facility_negctl.sh
+        # bind-client-no-register (the full proof-set re-run vms-fb9 r6 was
+        # asked to do): it landed on an earlier round declaring only
+        # devtab-alloc-not-recorded/devtab-owner-not-recorded, and this run
+        # is the first time this facility's negative control was actually
+        # executed end-to-end since -- the cheap host-side
+        # facility_negctl_manifest ctest checks anchors and literal text, not
+        # which suites a mutation reaches, so it could not have caught a
+        # missing suite. Reddened here, one suite outside the declared set
+        # and 3 assertions outside the named set -- test_syssvc_showdev.c
+        # does not hand-register (it opens /dev/vms only to decide
+        # skip-vs-run, same counter-example shape as procnam/showproc), so it
+        # was never a candidate for the blind_suites set below.
+        # WHY THESE THREE ARE NOT A WIDENING OF THE BLIND SET BELOW: none
+        # hand-register. Each opens /dev/vms only to decide skip-vs-run and
+        # then uses the public sys$ API, which is what a product image does --
+        # the counter-example property the blind_why paragraph names.
+        # test_syssvc_showdev (vms-fb9) and test_syssvc_startup_service
+        # (vms-47b) both join on the same basis: each drives the REAL DCL.EXE,
+        # a product image that binds the way a product image binds -- through
+        # kif_bind() -- so deleting that call takes the whole command layer
+        # away from the executive. The two arrived on separate branches; this
+        # list is the UNION, re-derived by running the control on the merged
+        # tree rather than kept from either side of the rebase conflict.
+        # test_syssvc_showterm is the SIXTH, added by vms-d0b, and it arrived
+        # the same way every one of the others did -- NOT PREDICTED, READ OFF
+        # A RUN. The full sweep this dispatch required reported it as one
+        # suite outside the declared set and 9 assertions outside the named
+        # set, which is both directions of the equality check firing at once,
+        # which is the check working. It belongs here for the same reason
+        # test_syssvc_showdev does: it drives the REAL DCL.EXE, a product
+        # image that binds the way a product image binds, so deleting
+        # kif_bind()'s registration takes the whole command away from the
+        # executive. It is not a candidate for the blind set below -- it
+        # hand-registers nothing.
+        #
+        # test_syssvc_ident is the SEVENTH, added by vms-2b8 when SHOW
+        # PROCESS/SHOW PROCESS_PRIVILEGES became readers of the executive's
+        # identity row. Same arrival as the others -- NOT predicted, READ OFF
+        # A RUN of this dispatch's own run_facility_negctl.sh
+        # bind-client-no-register: it landed declaring only
+        # ident-username-unguarded (via blind_suites), and this is the first
+        # time this facility's control ran end-to-end since. Reddened here,
+        # one suite outside the declared set and 14 assertions outside the
+        # named set -- test_syssvc_ident.c drives DCL.EXE exactly as
+        # test_syssvc_showdev and test_syssvc_startup_service do (real
+        # product image, kif_bind()-mediated), so it was never a candidate
+        # for the blind_suites set below either.
+        #
+        # ROUND 9 (vms-2b8): test_syssvc_ident.c's scenario F was rewritten
+        # (its old assertion only checked that a marker printed after
+        # F$GETJPI CURPRIV, not that CURPRIV rendered content -- see that
+        # scenario's own comment) and it drives the same DCL.EXE/kif_bind()
+        # path as the rest of this suite, so it was never a blind_suites
+        # candidate either. RE-MEASURED against real QEMU rather than
+        # assumed: the rewrite adds exactly two new reds here, both
+        # scenario F's own assertions ("F: the executive accepted the
+        # SYSTEM/ALL identity..." and "F: F\$GETJPI CURPRIV renders...").
+        # run_facility_negctl.sh bind-client-no-register named exactly
+        # these two as unnamed before this entry was corrected, and zero
+        # after -- nothing else in this suite or any other moved.
+        #
+        # test_syssvc_lock_status is the EIGHTH, added by vms-2e5 when the
+        # kstat_to_ss() public-status-mapping suite was written -- and it
+        # arrived the SAME way every other addition above did: NOT predicted,
+        # READ OFF the first full run of THIS control against the tree that
+        # added it. Like test_syssvc_procnam/showdev, it does not hand-register
+        # (see its bootstrap()'s own comment) -- it opens /dev/vms only to
+        # decide skip-vs-run, then drives sys$enq/enqw/deq, the public API --
+        # so it is a genuine detector of this defect, not a widening of the
+        # blind set below. See knock_on_why for what it reddens; its declared
+        # set grew from three to eleven when #182 (vms-86a) made the suite
+        # ignore SIGPIPE and run to completion instead of dying rc=141.
+        #
+        # All three (showterm, ident, lock_status) arrived on separate
+        # branches; this list is the UNION, re-derived by running the control
+        # on the merged tree rather than kept from one side of the merge.
+        #
+        # test_syssvc_setname is the NINTH, added by vms-fbe round 4, and it
+        # arrived the way every one above it did -- NOT PREDICTED, READ OFF A
+        # RUN of this control. Rounds 1-3 of that item verified
+        # proctab-duplicate-name exactly and never ran this control at all, so
+        # CI's attribution job was the first thing to execute it against the
+        # new suite: it reported test_syssvc_setname(rc=141) as a suite OUTSIDE
+        # this facility plus three unnamed assertions. BOTH halves of that were
+        # this suite's own defects, and both are fixed rather than declared
+        # away -- see knock_on_why. It does not hand-register (it opens
+        # /dev/vms only to decide skip-vs-run, then drives the real DCL.EXE),
+        # so it is a genuine detector of the same missing bind, not a widening
+        # of blind_suites.
+        # test_syssvc_authorize is the TENTH, added by vms-4c2, and it arrived
+        # the way every one above it did -- NOT PREDICTED, READ OFF A RUN. It
+        # was written to prove AUTHORIZE's SYSPRV check has a positive
+        # control (a real /dev/vms, not the dev-host-only refusal PR #76
+        # left unproven), and its helper stamps an identity with a BARE
+        # vms_kif_setident() -- no vms_kif_register() first, the exact
+        # counter-example shape test_syssvc_procnam/showdev/showproc/
+        # lock_status establish -- so it was never a blind_suites candidate.
+        # The first per-facility CI run after it merged reddened it here:
+        # one suite outside the declared set and seven assertions outside
+        # the named set.
+        # test_syssvc_setuai is the ELEVENTH, added by vms-cb5, and it arrived
+        # the way every one above it did -- NOT PREDICTED, READ OFF A RUN --
+        # except that the run in question did not happen until rd vms-570
+        # (the aggregate-verification rework): vms-cb5 added the suite and
+        # this facility's committed execution record was never regenerated
+        # against it, so the gap sat undetected until the first REAL full
+        # driver run against the merged tree (2026-08-07) reddened it here --
+        # one suite outside the declared set and eight assertions outside the
+        # named set, all in test_syssvc_setuai. It does not hand-register (it
+        # opens /dev/vms only to decide skip-vs-run, then stamps identity
+        # through the public sys$ API, same counter-example shape as
+        # procnam/showdev/showproc/lock_status/authorize), so it is a genuine
+        # detector of the same missing bind, not a widening of blind_suites.
+        # test_syssvc_ast is the TWELFTH, added by #170 (vms-as1), which
+        # rewrote src/libvms/syssvc/sys_ast.c into a pure translation layer
+        # over /dev/vms: sys$setast now reaches the executive through the
+        # same kif_bind() -> vms_kif_register() auto-bind path as the suites
+        # above, so this defect reaches it too. #170 added it to
+        # ast-setast-disable's suites_red but missed this one -- same
+        # counter-example shape as procnam/showdev/showproc/lock_status/
+        # authorize/setuai (it opens /dev/vms only to decide skip-vs-run,
+        # then drives the public sys$ API), so it is a genuine detector, not
+        # a widening of blind_suites.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname test_syssvc_authorize test_syssvc_setuai test_syssvc_ast test_syssvc_getdvi";;
+        # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
+        # same run: it stayed rc=0 with the defect injected, because
+        # open_and_register() hand-registers exactly like test_kmod_devtab
+        # and test_kmod_procnam beside it. That is the pattern the blind_why
+        # paragraph below says is still spreading -- and it spread again.
+        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock test_kmod_setterm";;
+        blind_why)    cat <<'EOF'
+The suites named in blind_suites above drive the product's own vms_kif
+client, so restoring the vms-9fc defect (kif_bind() no longer calling
+vms_kif_register()) SHOULD turn them red. It does not: each calls
+vms_kif_open() and vms_kif_register() BY HAND before using a facility
+(test_syssvc_lock.c:136-140, test_kmod_ident.c:306/364-367/541-544/588-593),
+supplying the exact product step kif_bind() exists to perform. MEASURED, not
+argued -- with the defect injected, every suite in blind_suites stays rc=0.
+They are therefore structurally blind to the entire auto-bind defect class,
+which is how vms-9fc survived to be found by inspection rather than by CI.
+test_kmod_ident is the newest of them (vms-2b8), which is the point of pinning
+this as an asserted fact rather than a note: the pattern is still SPREADING,
+and the gate now says so on every run.
+Tracked as rd item vms-f27. Do NOT fix it by widening suites_red: that would
+re-hide the gap behind a set the control merely permits to redden.
+THE COUNTER-EXAMPLE, added by vms-8019 and worth keeping in view: a further
+client suite, test_syssvc_procnam, does NOT hand-register -- it opens
+/dev/vms and then uses the public sys$ API, which is what a product image
+does -- and it goes red immediately. So the blindness above is not a property
+of driving vms_kif; it is a property of hand-registering first.
+EOF
+                      ;;
+        isolation)    echo "isolated";;
+        # `why`'s count and enumeration are DERIVED from suites_red, not
+        # hand-recited: a rebase (or any future edit) that changes suites_red
+        # without touching this line used to leave a sentence that quietly
+        # disagreed with the field beside it -- exactly what happened across
+        # the vms-47b/vms-6a7/vms-2a8 rebase, where suites_red was correctly
+        # re-derived to six suites but this text was kept from one side of
+        # the conflict and still said "Five suites" while naming only five.
+        # The equality check in run_facility_negctl.sh keys on suites_red, so
+        # that drift never weakened the gate -- but the printed evidence was
+        # false. Computing _n/_list from suites_red here makes that specific
+        # disagreement structurally impossible: change suites_red and this
+        # sentence's count and list change with it, in the same run.
+        # SAME FIX APPLIED TO THE BLIND-SUITES CLAUSE (vms-47b round 4): the
+        # sentence used to hand-recite "The four client suites", read off
+        # blind_suites at the time it was written rather than derived from
+        # it -- a third instance of the identical drift class, just not yet
+        # tripped (blind_suites is still four entries, so it was true by
+        # coincidence, not by construction). _blind_n is now computed from
+        # defect_field "$_d" blind_suites the same way _n is computed from
+        # suites_red, so the count in the sentence and the blind_suites
+        # field above it cannot disagree.
+        why)
+            _suites_red=$(defect_field "$_d" suites_red)
+            _n=$(set -- $_suites_red; echo $#)
+            _list=$(echo "$_suites_red" | sed 's/ /, /g')
+            _blind_suites=$(defect_field "$_d" blind_suites)
+            _blind_n=$(set -- $_blind_suites; echo $#)
+            echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. $_n suites detect it (through the public sys\$ API, or test_kmod_bind directly): $_list. The $_blind_n client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer."
+            ;;
+        require_fail) cat <<'EOF'
+vms_kif_open() then a BARE vms_kif_setident() reaches the executive with no explicit register
+$SETEF reaches the executive with no explicit register
+$GETJPI(self) resolves the auto-bound process
+the caller has a row in the executive's process table
+parent: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)
+child: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)
+sys$setef(1) set the flag
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$READEF sees the flag this process just set
+cluster state carries the flag bit
+the executive entry is this process's own
+$ENQ EX granted through /dev/vms
+$ENQ returned a lock id
+$DEQ released the lock
+forked child's $SETEF reaches the executive
+forked child is not rejected as an unregistered task
+forked child resolves itself in the process table
+child's executive entry is the CHILD's, not the parent's
+the executive assigned the caller a VMS process ID
+sys$creprc created the subject process
+sys$creprc returned the subject's pid
+sys$creprc returned the subject's VMS process ID
+the startup procedure announced the created process with %RUN-S-PROC_ID
+the executive resolves the service BY NAME after its creator exited
+SHOW SYSTEM, in a different process, lists the service by its VMS process name
+starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+sys$creprc PRC$M_DETACH created the probe's process
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
+vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
+vms-69e: and says NOTHING about the priority it discarded (this is the defect, asserted so it cannot be fixed silently)
+child: a LOCAL flag set by the parent is NOT visible here (local clusters stay per-process)
+child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
+child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)
+child: sys$ascefc joined the named common cluster
+child: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
+child: sys$setef on the associated common cluster reported success
+parent: a PERMANENT cluster survived losing its last association (its flags are still set)
+parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads, public API)
+parent: sys$ascefc after the deletion created a cluster of that name again
+parent: sys$ascefc created a PERMANENT common cluster
+parent: sys$ascefc created/joined the named common cluster
+parent: sys$ascefc joined the cluster the WFLOR/WFLAND measurement uses
+parent: sys$ascefc joined the cluster the interrupted-wait measurement uses
+parent: sys$ascefc re-joined the permanent cluster by name
+parent: sys$clref on the associated common cluster reported success
+parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
+parent: sys$dacefc released the last association to the permanent cluster
+parent: sys$dacefc released the marked cluster
+parent: sys$dlcefc accepted the permanent cluster by name
+parent: sys$dlcefc really deleted the cluster (the re-created one is FRESH, not the old flags)
+parent: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
+parent: sys$setef on the associated common cluster reported success
+parent: sys$setef on the permanent cluster reported success
+parent: sys$setef released the waiter's flag
+parent: sys$setef sets the flag $WFLOR will find already satisfied
+parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND
+parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+parent: wfland child never reported it was ready to block
+sys$clref(1) cleared the flag
+sys$clref(1) reported WASSET for the previously-set flag
+sys$clref(1) succeeded on the set flag
+sys$readef(1) reported WASCLR after the clear
+sys$readef(1) reported WASCLR for the cleared flag
+sys$readef(1) reported WASSET after the flag was set
+sys$readef(1) succeeded after the flag was set
+sys$readef(1) succeeded on the cleared flag
+sys$setef(1) on an already-set flag reported WASSET
+sys$setef(1) reported a documented previous state (WASCLR or WASSET)
+sys$setef(1) succeeded on the already-set flag
+sys$waitfr(1) left the flag SET -- it is not a counting semaphore
+sys$waitfr(1) returned for the already-set flag
+the cluster state word agrees with the status: flag 1's bit is CLEAR
+the cluster state word agrees with the status: flag 1's bit is SET
+the second process allocated OPA0: through the executive ($ALLOC)
+A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+the listing carries the oracle's column header (section 4)
+SHOW DEVICE OPA0: resolves the name through the executive and prints its row
+the console is still listed once the other process is gone
+...and refuses it with the oracle's own message (section 6)
+a second process put the console in a known state through the executive (IO$_SETMODE)
+SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+the characteristics heading is printed (oracle section 2)
+grid row 1 is byte-for-byte the V7.3 capture
+grid row 2 is byte-for-byte the V7.3 capture
+grid row 4 is byte-for-byte the V7.3 capture
+grid row 10 is byte-for-byte the V7.3 capture
+the last row carries the single remaining characteristic, unpadded
+could not tell the second process to change the console
+could not tell the second process to restore the console
+...and the cleared Echo bit, in the grid cell the oracle prints it in
+...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+...and grid row 1 is the oracle's bytes again, so neither is the grid
+this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system
+A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programmatic path reads the same source the display does
+A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
+A: SHOW PROCESS reports the UIC the EXECUTIVE holds
+A: SHOW PROCESS reports the user name the EXECUTIVE holds
+A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in VMS_PRV_M_ENFORCED (EXQUOTA is not)
+A: the executive accepted the identity a privileged writer established
+B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
+B: SHOW PROCESS reports B's UIC
+B: SHOW PROCESS reports B's user name
+B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the process-privileges block too
+B: the authorized-privileges grid shows EXACTLY NETMBX, TMPMBX and WORLD -- the bits of B's mask that are in VMS_PRV_M_ENFORCED -- not the whole mask and not nothing
+C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
+C: SHOW PROCESS reports the UIC the executive derived from real credentials
+C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$_NOPRIV)
+C: the privilege display shows NETMBX and TMPMBX -- the two privileges the executive granted an unprivileged process, both in VMS_PRV_M_ENFORCED
+D: the session established its authenticated identity
+F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,ALTPRI,SETPRV,TMPMBX,WORLD,MOUNT,OPER,NETMBX,PHY_IO,SYSPRV,BYPASS,SYSLCK,GRPPRV,READALL), not merely completes without rendering anything
+G: the session established an authenticated identity
+G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
+G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
+G/OPCOM+: EVERY header names SHIPPING -- the executive's row DOES reach sys$sndopr's user field, so the empty field above is this process being unnamed and not the field being dead
+parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
+parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
+sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+child: EX granted on SYSSVC_STATUS_DLY (public API)
+child: blocked EX on SYSSVC_STATUS_DLX granted after parent releases X (public API)
+parent: EX granted on SYSSVC_STATUS_DLX (public API)
+parent: child (CVTUNGRANT holder) exited clean
+parent: child (deadlock) exited clean
+parent: child's report after the deadlock/release sequence has no failures
+parent: released X (should unblock the child)
+parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
+the executive's process table row for the holder became named
+a SECOND DCL.EXE's SHOW SYSTEM named the holder, which it did not create
+SET PROCESS/NAME for a name already held refuses with the oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
+the executive's process table row for the second holder became named
+the 15-char boundary-legal name (VMS_PRCNAM_SIZE-1) was accepted
+the 16-char oversized name is refused with the oracle's two-line %SET-E-NOTSET / -SYSTEM-F-IVLOGNAM shape, now that upname is sized VMS_PRCNAM_XFER and reaches the executive intact
+after the refused rename, SHOW SYSTEM still names this process with its PRE-EXISTING boundary name -- left UNCHANGED by the refusal, exactly as the oracle transcript shows
+A: the executive accepted the SYSPRV identity
+A: the executive's own row holds exactly the SYSPRV mask this run stamped -- not a claim, a readback
+A: AUTHORIZE printed its version banner -- the SYSPRV holder was ADMITTED
+A: the SYSPRV holder was never refused
+A: AUTHORIZE exited 0 for the admitted session
+B: the executive accepted the non-SYSPRV identity
+B: the executive's own row holds exactly the OPER|WORLD mask this run stamped, with SYSPRV genuinely absent
+1: the executive's row for it does not hold SYSPRV
+2: the executive accepted the non-SYSPRV identity
+2: the executive's row holds exactly the OPER|WORLD mask, no SYSPRV
+3: the executive's row for it still does not hold SYSPRV
+4: $SETUAI serves a SYSPRV identity -- the refusals are not blanket
+4: the executive accepted the SYSPRV identity
+4: the executive's row for it holds SYSPRV
+4: the parent process reads the new default directory in the file
+sys$dclast reported success declaring an AST
+the AST declared through the PUBLIC sys$dclast is in the EXECUTIVE queue (a per-process fake would be invisible to the kernel reader)
+the executive round-tripped the astprm the public sys$dclast declared
+the executive round-tripped the astadr the public sys$dclast declared
+the executive round-tripped the access mode the public sys$dclast declared
+sys$dclast queued an AST while delivery was disabled
+sys$setast(1) delivered the queued AST through the public API
+the delivered AST ran with the astprm sys$dclast declared
+disable again: prev state was disabled
+SETAST(enable) returns WASCLR (== prev state was disabled)
+device scan lists the console terminal
+device scan terminates with SS$_NOMOREDEV
+this process can still read the device
+the console is not allocated before any process allocates it
+B sees that A allocated the device
+the allocation is gone once the other process exits (not a constant)
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+Assertions across six suites go red, and that IS the defect rather than
+evidence against it: the mutation deletes the ONE call that binds a process to the executive,
+and a process with no PCB can use no facility. Round 1's own framing of
+this ("only test_kmod_bind goes red") was narrow: true at suite
+granularity and misleading at property granularity -- the exact thing the
+equality check exists to stop. The reddened assertions fall into groups,
+all the same missing bind (the exact
+set is the require_fail/knock_on_fail arrays above, not a count restated
+here -- see METHOD 4: a tally a human must remember to update will drift):
+  suite 0, setident (1)   -- (vms-fb9 r6) vms_kif_setident() now reaches
+                             kif_bind(), so the
+                             same deleted register() call leaves it unbound
+                             too; named directly in require_fail because it
+                             is its own minimal mutation's property, not a
+                             downstream read of suite 1's;
+  suite 1, auto-bind (5)  -- $SETEF/$READEF/$GETJPI from a process that never
+                             registered; the two named in require_fail are the
+                             property, the other three read back what those
+                             calls failed to do;
+  suite 2, lock manager (3) -- $ENQ/$DEQ through the same unbound process;
+  suite 3, fork (4)       -- the child re-binds through the same deleted call,
+                             so it is unbound too.
+Two assertions in the SAME suite stay green and are what keep this from being
+a blunderbuss: "$SETEF does not report the caller's parameters as bad" (the
+failure is SS$_BUGCHECK, not the SS$_BADPARAM mistranslation vms-9fc also
+fixed) and "module rejects an unregistered task with -ESRCH" (the executive
+side is untouched and still refuses correctly). Suites 4-6 stay green too --
+they register explicitly, which is precisely why the four blind_suites below
+cannot see this defect at all.
+The last three, in test_syssvc_procnam, are the same missing bind arriving at
+the PUBLIC API (vms-8019). "the caller has a row in the executive's process
+table" is $GETJPI(self) from an unbound process -- the same property as the
+require_fail entry above, one layer up, which is why it is in require_fail and
+not here. "the executive assigned the caller a VMS process ID" reads the pid
+out of the row that call failed to return. "sys$creprc created the subject
+process" and "sys$creprc returned the subject's pid" are the forked CHILD
+failing to bind, exactly as suite 3 does one layer down: with no registration
+the child cannot report a process ID, so the creation handshake fails and
+$CREPRC reports the child lost. That suite then stops, by design, rather than
+asserting about a subject it knows was not created -- which is why exactly
+four of its assertions appear here and none of the rest of the suite, however
+many it has grown to. (The count is deliberately not written down: it was, and
+adding an assertion to the suite silently rotted it. The require_fail set is
+the machine-checked statement; this paragraph is the reasoning.)
+
+THE LAST ONE, "sys$creprc returned the subject's VMS process ID", is
+test_syssvc_showproc reaching the identical wall one suite later (vms-6a7).
+That suite exists to prove SHOW SYSTEM and SHOW PROCESS are READERS of the
+executive's process table, so its very first act is $GETJPI(self) and its
+second is a $CREPRC of the subject it will then go looking for. With the bind
+deleted, both fail for the reason suite 3 above already gives -- the child
+cannot register, so it cannot report a process ID, so the handshake fails --
+and the suite stops before it ever runs DCL. That is why it contributes only
+THREE reds and why two of the three are texts this manifest already names:
+"the caller has a row in the executive's process table" is the same assertion
+test_syssvc_procnam makes, word for word, and so is "sys$creprc created the
+subject process". Only the pid assertion is worded differently ("VMS process
+ID" rather than "pid"), which is the whole of the delta this entry gained.
+
+DECLARED, NOT NARROWED, AND THE REASON MATTERS. The alternative fix was to
+make test_syssvc_showproc insensitive to anything outside its own subject --
+to stop it touching registration, the process table and $CREPRC. That would
+mean not driving the real DCL.EXE end to end, which is the only thing that
+makes it evidence about a user-visible command at all (CLAUDE.md Rule 11's
+corollary: the command is a reader of the facility). A suite that drives the
+whole stack SHOULD be sensitive to the whole stack; the defect was that the
+manifest did not SAY so, and an undeclared red is indistinguishable from a
+non-minimal mutation. Saying so is the fix.
+
+MEASURED ON BOTH ARCHITECTURES, because the red set did not have to agree.
+The x86_64 CI runner (run 30598269086, SHA 5ef2b65) and an aarch64 host under
+pure TCG produced the SAME stray suite and the SAME single unnamed assertion,
+byte for byte. There is no ending-picks-itself race here of the kind
+creprc-handshake-eintr has: test_syssvc_showproc.c:574-582 evaluates both
+$CREPRC assertions before its early return, so the three reds are the same
+three whichever way the scheduler runs.
+
+THE EVENT FLAG SUITES: 43 MORE, AND EVERY ONE OF THEM IS THE SAME MISSING
+BIND (vms-2a8). Until this item, src/libvms/syssvc/sys_event.c named no
+vms_kif_* symbol at all -- it kept 128 event flags in per-process memory --
+so test_syssvc_ef_mproc could not see this defect and there was nothing to
+declare. Wiring it to /dev/vms makes every sys$ event-flag call a bound call,
+and the equality check said so on the first CI run afterwards (27 unnamed
+assertions in test_syssvc_ef_mproc) and again locally once the conformance
+move added test_syssvc_ef_local (16 more). The lists above are that run's
+output, not a prediction.
+  test_syssvc_ef_mproc (27) -- the process never registers, so the FIRST
+    sys$setef fails, and every A-writes/B-reads assertion downstream of it is
+    reading back a write that never happened. Its one require_fail entry per
+    process, "sys$setef on a LOCAL flag succeeds (baseline: ...)", is the
+    property: a local flag needs no cluster association and no privilege, so
+    if even that fails the facility is not operative in this process AT ALL.
+    Every remaining red -- the $ASCEFC joins, the shared-flag reads, the
+    permanent-cluster lifetime round trip, the interrupted-wait block -- is
+    downstream of that one.
+  test_syssvc_ef_local (16) -- the whole suite, and it is the whole suite for
+    a structural reason worth stating: this suite has no early exit. It is
+    the relocated conformance program, sixteen straight-line checks with no
+    branch that skips the rest, so an unbound process fails all sixteen
+    rather than stopping at the first. "sys$setef(1) set the flag" is in
+    require_fail as its baseline; the other fifteen read back what that call
+    failed to do.
+NOTE WHICH ASSERTION IS *NOT* SILENT HERE: "sys$setef on an UNASSOCIATED
+common flag is refused WHILE a local flag succeeds (not merely 'every call
+fails')" goes red, in both processes. That assertion exists precisely to
+refuse to be satisfied by a facility that does nothing, and with the bind
+deleted the facility does nothing -- so it fails, exactly as designed. A
+manifest that named only the "succeeds" assertions and not this one would be
+describing a different, kinder defect.
+
+FOUR MORE IN test_syssvc_ef_mproc, ADDED vms-2ed -- SAME MISSING BIND, READ
+OFF A RUN OF THIS CONTROL AGAINST THE NEW $WFLOR/$WFLAND SCENARIO, NOT
+PREDICTED. That scenario is a THIRD process pair in the same suite (the
+first two are the interrupted-wait pair above and the plain shared-flag
+pair before it), so it needs its own $ASCEFC/$SETEF to stand the cluster up
+before $WFLOR/$WFLAND can be exercised at all -- an unbound parent fails
+that setup exactly as it fails the other two pairs' setup, and the two
+assertions that read the setup back ("parent: sys$ascefc joined the cluster
+the WFLOR/WFLAND measurement uses", "parent: sys$setef sets the flag
+$WFLOR will find already satisfied") go red for the same reason
+test_syssvc_ef_mproc's other require_fail/knock_on_fail entries do. The
+remaining two are the scenario's own two properties failing to be reached
+at all: "parent: sys$wflor returned with only ONE of the two mask flags
+set -- OR, not AND" never gets a real $WFLOR call to observe (the setup
+that would satisfy its predicate never ran), and "parent: wfland child
+never reported it was ready to block" is the forked WFLAND child never
+reaching its own readiness marker, one layer down, same shape as suite 3's
+forked child above. None of this is the eflag-wflor-status-wrong or
+eflag-wfland-status-wrong DEFECT itself -- those mutate vms_ioctl_wflor/
+wfland's own status word and are unreachable from an unbound process in
+the first place, which is exactly why bind-client-no-register's own red
+set is these four setup/reachability assertions and not those two.
+
+TEST_SYSSVC_SHOWDEV, THE SIXTH SUITE, ADDED vms-fb9 r6 -- READ OFF THE PROOF
+RE-RUN THIS ITEM WAS ASKED TO DO, NOT PREDICTED. test_syssvc_showdev.c
+exists to prove SHOW DEVICE is a READER of the executive device table
+(vms-fb9), so it $CREPRCs a second process and has it $ALLOC the console
+while the first process's SHOW DEVICE watches for the change (A-writes,
+B-reads, Rule 11). Its reds fall into three groups, none hand-recited as a
+count (see the set itself, above `knock_on_fail)`, not a tally here):
+  - "the caller has a row in the executive's process table", "sys$creprc
+    created the subject process" and "sys$creprc returned the subject's VMS
+    process ID" are the SAME missing-bind failure test_syssvc_showproc
+    already declares, word for word, so they need no second entry -- the
+    equality check compares a SET, not a per-suite tally;
+  - "the second process allocated OPA0: ...", "A-WRITES/B-READS: DCL's SHOW
+    DEVICE reports the console allocated ..." and "the bare listing shows it
+    too, ..." are downstream of that same handshake failure: with the
+    subject process unable to register, its $ALLOC of OPA0: never happens,
+    so the parent's SHOW DEVICE never observes an allocated row;
+  - "bare SHOW DEVICE lists OPA0: ...", "the listing carries the oracle's
+    column header ...", "SHOW DEVICE OPA0: resolves the name ...", "the
+    console is still listed once the other process is gone" and "...and
+    refuses it with the oracle's own message ..." are a THIRD mechanism,
+    found this round (vms-d0b r4) -- see below.
+
+WHY THIS WAS RED ON THE TREE BEFORE THIS ROUND, AND WHY THAT IS NOT AN
+EXCUSE. test_syssvc_showdev.c does not hand-register -- open /dev/vms only
+to decide skip-vs-run, then use the public sys$ API, the same counter-example
+shape as procnam/showproc -- so it was a client of this bind from the day it
+landed (vms-fb9, before this round). It stayed undeclared because
+tests/qemu/run_facility_negctl.sh's bind-client-no-register control is
+expensive (a full container rebuild and QEMU boot) and, unlike
+facility_negctl_manifest (the cheap host-side ctest that only checks anchors
+and literal text), nothing had actually EXECUTED it end to end since
+test_syssvc_showdev landed. Declared here the moment that execution happened,
+per CLAUDE.md Rule 9 -- a pre-existing gap discovered while re-running the
+full proof set is still owned by whoever's push would otherwise carry it red.
+
+THE THIRD GROUP, AND A SEPARATE INFRASTRUCTURE DEFECT THIS ROUND FOUND AND
+FIXED (vms-d0b r4). tests/qemu/inject_and_run.sh re-stages the rebuilt
+DCL.EXE into the initramfs at ONE path, /initramfs/bin/DCL.EXE -- but
+tests/qemu/Dockerfile stages it at TWO, because test_syssvc_showdev.c and
+test_syssvc_showterm.c both default DCL_PATH to /tests/DCL.EXE (overridable
+via OVMX_DCL), not /bin/DCL.EXE. Every defect whose target is under
+src/vmsdcl, or reaches DCL.EXE through a library it links (as this one does,
+through libvmssys), was therefore driving a STALE, unmutated DCL.EXE at that
+second path -- a facility control with no teeth for exactly the assertions
+that read DCL's OWN output, discovered when showterm-width-page-fabricated
+(added this round, target src/vmsdcl/dcl_cmd_show.c) rebuilt and linked
+correctly (confirmed with `strings` on the fresh build-static/bin/DCL.EXE)
+but produced zero observable effect through /tests/DCL.EXE. Fixed by copying
+the same freshly-built binary to both paths. The fix makes DCL.EXE's OWN
+vms_kif calls (inside cmd_show_device(), reached through libvms) subject to
+this mutation for the FIRST time in a full sweep, which is why these five are
+new: they are the SHOW DEVICE READER path failing to bind, not the $ALLOC
+writer path the second group above already covers. Measured, not predicted --
+tests/qemu/run_facility_negctl.sh's own equality check named exactly these
+five as extra reds on the first full sweep run after the inject_and_run.sh
+fix, and they are added here rather than the harness fix being reverted,
+because the fix is a genuine coverage improvement (this control now proves
+more than it did before) and reverting it to keep this list short would be
+re-hiding a gap the file's own header calls the one thing it is not allowed
+to do.
+THE LAST NINE, in test_syssvc_startup_service, are the same missing bind
+arriving at the USER-VISIBLE COMMAND (vms-47b). DCL.EXE is a product image and
+binds like one -- through kif_bind() -- so with that call deleted RUN/DETACHED
+cannot create a named process, SHOW SYSTEM cannot read the table, the DUPLNAM
+clash never arises because the first creation never happened, and even the
+vms-69e pair goes red because RUN reports %RUN-F-CREPRC where the pinned
+behaviour is a silent success. Not one of them is a separate defect: they are
+what "the command layer has no executive" looks like from the command layer,
+which is exactly the property the require_fail entries name one and two layers
+down. This entry was ABSENT while that suite existed -- the branch that added
+the suite never ran the whole sweep -- so the control was failing on an
+unnamed red set rather than passing on a named one.
+TEST_SYSSVC_SHOWTERM, THE SEVENTH SUITE (vms-d0b) -- READ OFF THE FULL SWEEP
+THAT ITEM WAS REQUIRED TO RUN, NOT PREDICTED, and it arrived on the very first
+execution after the suite was written. It drives the real DCL.EXE too, so it
+reaches the same wall from a seventh door, and its nine reds split in two:
+  - "a second process put the console in a known state through the executive
+    (IO$_SETMODE)" is the wall itself. That process cannot register, so its
+    $ASSIGN of the console fails and the IO$_SETMODE that follows has no
+    channel.
+  - the other eight are all one consequence of one line. cmd_show_terminal
+    asks the executive which terminal this job is on BEFORE anything else,
+    and prints nothing at all when it gets no answer -- so with no bind the
+    entire SHOW TERMINAL output disappears and every assertion about its
+    content goes with it: the header, the four pinned grid rows, the last
+    row, and the width/page line.
+The remaining eight are the rest of that same collapse, and they are here
+because of a MEASUREMENT MISTAKE WORTH RECORDING RATHER THAN QUIETLY FIXING.
+The first sweep saw only nine reds from this suite -- because the suite DIED
+at that point. Its writer process could not register, exited, and the parent's
+next write to the gate pipe killed the program with SIGPIPE (rc=141), so the
+whole second half of the suite never ran and could not be observed. The fix
+for that (ignoring SIGPIPE so the writes fail into their checked branches)
+made the suite run to completion under the mutation and reveal eight further
+reds -- the two "could not tell the second process ..." pipe writes, the three
+A-writes/B-reads reads of a change that was never made, the two restore-side
+reads, and the final check, which is $GETJPI(self) and fails like every other
+bound call. So the DECLARED SET GREW BECAUSE THE OBSERVATION GOT BETTER, not
+because the defect changed. This is the shape the equality check exists to
+force: a truncated observation produces a truncated declaration, and only
+running it again catches that.
+What stays GREEN in that suite is what keeps this from looking like a
+blunderbuss: its unbound run still correctly names no terminal.
+Its sibling test_kmod_setterm stays green entirely and is declared in
+blind_suites for the reason the paragraph above gives: it hand-registers.
+MERGED (vms-47b round 5, rebase onto main after vms-6a7/vms-2a8): this defect's
+declaration forked into two branches that each added a suite without seeing
+the other's addition -- main gained test_syssvc_showproc and the two event-flag
+suites, this branch gained test_syssvc_startup_service. Both sets are kept;
+neither is a substitute for the other, and the combined suites_red/knock_on_fail
+lists above were re-verified by running the mutation on the rebased tree (see
+the item's progress notes), not by picking a side of the git conflict.
+
+TEST_SYSSVC_IDENT, THE SEVENTH SUITE, ADDED vms-2b8 (this round) -- READ OFF A
+RUN, NOT PREDICTED. test_syssvc_ident.c exists to prove SHOW PROCESS and SHOW
+PROCESS/PRIVILEGES are READERS of the executive's identity row rather than of
+the process's own environment (vms-2b8), so every one of its scenarios execs a
+real DCL.EXE and reads its SHOW PROCESS output. DCL.EXE binds the way every
+product image binds -- through src/vmsdcl/dcl_main.c's dcl_context_init(),
+which now calls vms_kif_getjpi_self() unconditionally at startup (the reader
+half of this item) -- so with kif_bind()'s register call deleted, that startup
+read fails and every downstream assertion about what it returned fails with
+it. The 14 reds this manifest names span scenarios A through D: 5 in A (the
+harness's own vms_kif_setident() call, which ALSO binds through the same
+deleted register() step, plus the four SHOW PROCESS reads of what it should
+have established), 4 in B (SHOW PROCESS's user name/UIC plus the two
+privilege-grid assertions this round's VMS_PRV_M_ENFORCED filter added), 4 in
+C (the refusal status plus the three identity-not-claimed reads), and D's
+first assertion ("the session established its authenticated identity") --
+exactly the 14 lines above, observed by running this mutation once and
+capturing the delta; nothing past D's first line or in scenario E is claimed
+here, named, or reasoned about, because the run this entry is built from did
+not print anything further to reason from.
+FOUR MORE ADDED (vms-cb5/vms-f39/vms-f42d) -- READ OFF THE DRIVER'S OWN
+"does NOT name them" LIST, TWICE, WHICH IS THE POINT OF THIS PARAGRAPH.
+  - Two are scenario G's preconditions: "G: the session established an
+    authenticated identity" is a vms_kif_setident() through the deleted
+    register step (the same property as the require_fail entry, one scenario
+    further on), and "G: the executive HOLDS that name and reads it back" is
+    the vms_kif_getjpi_self() that reads it back.
+  - Two are OLDER than scenario G and were red on this branch before it:
+    scenario A's and scenario B's F$GETJPI assertions, added when this suite
+    gained programmatic-reader coverage. They are the same startup read
+    failing, seen through the lexical function instead of through SHOW
+    PROCESS, and they had simply never been declared -- this control is
+    expensive, so nothing had executed it since that coverage landed.
+THE MISTAKE WORTH RECORDING: the first re-run named all four and only two were
+added, because the extra reds were INFERRED from a scrolled log rather than
+read off the driver's explicit list. The second run named the remaining two
+and refused to pass, which is exactly what the equality check is for.
+TWO MORE, AND THE SAME MISTAKE A THIRD TIME (vms-cb5 r4). Scenario G grew an
+OPCOM+ half -- the same command sequence re-run in a process the executive HAS
+named, which exists to prove sys$sndopr's user field is populated at all and
+not merely always-empty -- and its two executive-dependent assertions were not
+declared here. CI's attribution job read them off its own "does NOT name them"
+list:
+  - "G/OPCOM+: the named run established its identity through the executive" is
+    a vms_kif_setident() through the deleted register step. It is the SAME
+    property as scenario G's own precondition two lines above, and as the
+    require_fail entry, observed once more in the scenario's second run.
+  - "G/OPCOM+: EVERY header names SHIPPING ..." reads back, out of the operator
+    log, the name that setident never recorded. It is a read of the write the
+    line above failed to make -- the identical shape as every other pair in
+    this manifest.
+This is the third arrival of the same lesson in this one entry, which is why it
+is written down rather than quietly appended: an assertion added to a suite
+already in suites_red still has to be declared, because the equality check is
+at PROPERTY granularity and the suite list is not what it compares.
+WHAT STAYED GREEN IN THE OPCOM+ HALF, and it is what keeps this from being a
+blunderbuss: the other TWO assertions of the same block pass. "the named
+process's REPLY and LOGOUT records reached the operator log" stays green
+because writing the record is OVMX-LOCAL -- sys$sndopr appends the line itself,
+so an unbound process still logs, and only the user FIELD goes empty. "and it
+is not SYSTEM" stays green because the empty field is empty, not fabricated --
+the vms-f42d property this round landed is untouched by the missing bind. So
+the mutation reddens exactly the two assertions that depend on the executive
+and neither of the two that do not, which is the attribution this control
+exists to make.
+WHAT STAYED GREEN, and it matters: scenario G's assertions about SUBMIT,
+PRINT, ACCOUNTING, REPLY, LOGOUT and F$USER all PASS under this mutation --
+their property is that DCL prints NO user name when the executive holds none,
+and an unbound DCL holds none for a second reason. That is not a weakness of
+those assertions; it is why each of them has its own minimal mutation, the
+dcl-*-fabricated controls below.
+THE EIGHTH SUITE, test_syssvc_lock_status, ADDED vms-2e5 -- READ OFF THE FIRST
+FULL RUN OF THIS CONTROL AGAINST THE TREE THAT ADDED IT, not predicted. Its
+bootstrap() does not hand-register (see the comment at its definition in
+tests/qemu/test_syssvc_lock_status.c) -- it opens /dev/vms only to decide
+skip-vs-run, exactly test_syssvc_procnam/showdev's shape, so it is a genuine
+new detector of the SAME missing bind, not a widening of blind_suites.
+ELEVEN assertions go red, and THE DECLARED SET GREW FROM THREE TO ELEVEN
+BECAUSE THE OBSERVATION GOT BETTER, NOT BECAUSE THE DEFECT CHANGED -- the same
+shape recorded for test_syssvc_showterm and test_syssvc_setname above. On the
+run that first added this suite (vms-2e5), the process DIED BY SIGNAL (rc=141,
+SIGPIPE) after only three reds: its writer/child failed the missing bind,
+exited, and the parent's next write to a now-readerless pipe raised the default
+SIGPIPE, so the whole back half of the suite never ran and could not be
+observed. #182 (vms-86a) taught test_syssvc_lock_status.c to ignore SIGPIPE so
+a dead IPC peer becomes a NAMED FAIL instead of rc=141 -- exactly the remedy
+test_syssvc_showterm and test_syssvc_setname record above -- so the suite now
+runs to completion under this mutation and the eight further reds it always
+produced become visible and nameable. READ OFF THE DRIVER'S OWN "does NOT name
+them" LIST (shard 0/6 of the d2d76fc..87d7fda main-red run), NOT PREDICTED.
+The three original reds, still red, and traced not guessed:
+  1. scenario_ivlockid's sys$deq(0xDEADBEEF) reaches kif_call() -> kif_bind(),
+     which (with vms_kif_register() deleted from kif_bind()) never registers;
+     the kernel's per-call check rejects the unbound task with -ESRCH, which
+     vms_kif_kerr_to_ss() maps to SS$_BUGCHECK, not SS$_IVLOCKID -- so "sys$deq
+     on an unknown lock ID reports SS$_IVLOCKID" reddens. That exact
+     assertion text is named twice in this manifest -- by this defect's
+     require_fail and by bind-client-no-register's knock_on_fail, both
+     against test_syssvc_lock_status. A DIFFERENT defect reaching the SAME
+     assertion text is not a collision; it is two mutations exercising the
+     same call from different angles. (Verify with: facility_defects.sh
+     field <defect> <list> | grep IVLOCKID -- do not take this from the
+     comment.)
+  2. scenario_cvtungrant forks a child that also cannot register; the child's
+     own sys$enqw(EX) fails, so "parent: child took EX before the CVTUNGRANT
+     probe" reddens (this assertion is explicitly labelled setup-not-property
+     in its own text for exactly this reason: a registration failure trips the
+     SETUP check, not the CVTUNGRANT mapping the scenario exists to probe).
+  3. The parent's own sys$enq(CR) in the same scenario also fails to register,
+     so lksb_q.lksb$l_lkid stays 0 and "parent: sys$enq CR queues behind the
+     child's EX and still returns a real lock ID" reddens too. Because that
+     CHECK's condition is false, the `if ((st & 1) && lkid != 0)` guard around
+     the CONVERT probe never executes, so SS$_CVTUNGRANT itself is never
+     asked about under THIS mutation -- consistent with vms-2e5's own point:
+     the registration wall is upstream of the mapping this suite exists to
+     assert, so a registration defect masks the mapping property rather than
+     exercising it.
+THE EIGHT NOW-VISIBLE reds, every one the same unbound process failing every
+lock op it attempts, once SIGPIPE no longer truncates the suite:
+  - "parent: child (CVTUNGRANT holder) exited clean" -- the very check step 2
+     above noted "never runs" under the old rc=141 crash; it runs now, and the
+     child (which failed its setup $ENQ) did NOT exit clean, so it reddens.
+  - scenario_deadlock's own setup grants, "child: EX granted on
+     SYSSVC_STATUS_DLY (public API)", "parent: EX granted on SYSSVC_STATUS_DLX
+     (public API)" and "child: blocked EX on SYSSVC_STATUS_DLX granted after
+     parent releases X (public API)", are uncontended $ENQ/$ENQW from an
+     unbound process -- they never get their lock, so each reddens.
+  - "parent: released X (should unblock the child)" and "parent: sync sys$enqw
+     closing the cycle rejected SS$_DEADLOCK (public API)" are the deadlock
+     sequence's own release and cycle-closing steps failing the same wall.
+  - "parent: child (deadlock) exited clean" and "parent: child's report after
+     the deadlock/release sequence has no failures" are the parent reading
+     back that the forked child DID fail -- the same one-layer-down shape as
+     suite 3's forked-child reds above.
+None of these is a new defect: they are the whole of scenario_deadlock and the
+tail of scenario_cvtungrant reaching the identical missing-bind wall the three
+original reds hit, now that the suite survives long enough to assert about it.
+
+THE NINTH SUITE, test_syssvc_setname, ADDED vms-fbe ROUND 4 -- and it arrived
+as TWO defects in the suite itself, not as a discovery about this mutation.
+Rounds 1-3 of that item verified proctab-duplicate-name exactly and NEVER RAN
+THIS CONTROL, so CI's attribution job executed it first and reported:
+  FAIL: suites OUTSIDE this facility failed: test_syssvc_setname(rc=141)
+  FAIL: these assertions went red and the manifest does NOT name them: (three)
+Both halves were fixed rather than declared away, and the order matters:
+
+  1. rc=141 WAS SIGPIPE IN THE SUITE, NOT A PROPERTY OF THIS DEFECT. The suite
+     forks a DCL.EXE and writes a script into a pipe it reads from. With the
+     bind deleted, DCL.EXE cannot register at startup and exits at once, so the
+     write landed on a pipe with no reader and the DEFAULT SIGPIPE disposition
+     killed the suite. Its verdict became a signal number, which attributes
+     nothing -- the identical failure, under the identical control, that
+     test_syssvc_showterm hit and recorded above. The identical remedy was
+     applied (signal(SIGPIPE, SIG_IGN) in main(), see that file's comment), and
+     the identical thing happened next: THE DECLARED SET GREW BECAUSE THE
+     OBSERVATION GOT BETTER. The suite now runs to completion under this
+     mutation -- 8 passed, 7 failed, rc=1 -- and the three reds CI could see
+     before it died are seven. Nothing about the defect changed; the truncated
+     observation did.
+
+  2. THE SEVEN ARE ALL ONE MISSING BIND, REACHING THE COMMAND LAYER. Every
+     assertion in this suite is about what SET PROCESS/NAME put in the
+     executive's process table, and DCL.EXE reaches that table only through
+     kif_bind(). With the register call deleted, vms_kif_setprn() is rejected
+     as an unregistered task, so no name is ever recorded and nothing
+     downstream can read one back: the two "process table row ... became named"
+     assertions are the write failing, "a SECOND DCL.EXE's SHOW SYSTEM named
+     the holder" and the P6 "left UNCHANGED by the refusal" assertion are reads
+     of a name that was never written, and the DUPLNAM, IVLOGNAM and 15-char
+     assertions are refusals-and-acceptances the executive was never asked to
+     make. The suite's own output shows the mechanism directly rather than
+     leaving it to be argued: SET PROCESS/NAME prints
+     "%OVMX-E-SETPRNFAIL, SET PROCESS/NAME could not reach the executive
+     (status %X000002A4)" -- the honest unreachable-executive report from
+     src/vmsdcl/dcl_cmd_set.c, the same one the executive-absent negative
+     control observes, arriving here because an unbound process is as unable to
+     reach the executive as an absent one.
+     What keeps this from being a blunderbuss: EIGHT assertions in the suite
+     stay GREEN, including "the truncated form of the oversized name never
+     appears anywhere in the output" -- the round-1 defect this suite was
+     written to catch is still correctly absent under an unrelated mutation --
+     and all five "a DCL.EXE ran ..." harness checks, which prove the suite is
+     still running the command rather than failing to start it.
+     "SET PROCESS/NAME for a name already held refuses ... DUPLNAM shape" is
+     named by proctab-duplicate-name's knock_on_fail as well. That is the same
+     two-defects-one-assertion-text case the lock_status paragraph above
+     records, not a collision: a clash test that is short-circuited and a clash
+     test that is never reached both leave the refusal unprinted.
+     DECLARED, NOT NARROWED, for the reason the showproc paragraph gives: the
+     whole value of this suite is that it drives the real DCL.EXE end to end,
+     so it SHOULD be sensitive to the whole stack beneath the command.
+
+EIGHT MORE IN test_syssvc_setuai, THE ELEVENTH SUITE -- SAME MISSING BIND,
+READ OFF THE FIRST REAL FULL DRIVER RUN AGAINST THE MERGED TREE (rd vms-570,
+2026-08-07), NOT PREDICTED. test_syssvc_setuai.c exists to prove $SETUAI's
+SYSPRV test is the EXECUTIVE's, not the caller's own PCB mask (vms-cb5): its
+probe stamps an identity, calls $SETUAI, then reads the identity's row back
+through the SAME executive path every other suite here depends on. With the
+bind deleted the stamped identity never lands in a row the executive holds,
+so every "the executive's row for it ..." and "the executive accepted ..."
+readback in scenarios 1-4 observes an unbound caller instead of the identity
+the test just stamped -- the identical shape as authorize's "A:"/"B:" reds
+one suite up, on the same $SETUAI/$GETUAI row. "4: the parent process reads
+the new default directory in the file" is scenario 4's own downstream check
+(the SYSPRV-served write actually landed), one layer further from the same
+unbound row. Two of scenario 3's own assertions stay GREEN ("1: the probe
+genuinely had NO PCB" and "3: the probe's OWN PCB really does carry SYSPRV")
+because they read the PROBE's own memory, not the executive's row -- the
+same distinction that keeps this suite meaningful rather than a duplicate of
+the bind check itself.
+TEN MORE IN test_syssvc_ast, THE TWELFTH SUITE -- SAME MISSING BIND, READ OFF
+THE DRIVER'S OWN "does NOT name them" LIST, NOT PREDICTED. #170 (vms-as1)
+rewrote src/libvms/syssvc/sys_ast.c into a pure translation layer over
+/dev/vms: sys$dclast and sys$setast now reach the executive through the SAME
+kif_bind() -> vms_kif_register() auto-bind path every public-API suite here
+depends on, so deleting that register call takes the AST facility away from an
+unbound process exactly as it takes $SETEF/$GETJPI/$ENQ away. test_syssvc_ast.c
+does not hand-register (it opens /dev/vms only to decide skip-vs-run, then
+drives the public sys$ API), so it is a genuine new detector of this defect,
+not a widening of blind_suites. #170 correctly added it to ast-setast-disable's
+suites_red for its OWN minimal mutation, and #176 added it to THIS defect's
+suites_red so the suite is permitted to redden -- but neither declared the
+assertion texts, so the equality check (which is at PROPERTY granularity, not
+suite granularity) kept failing on an unnamed red set. The ten reds split into
+two groups, none a separate property:
+  - PART 1/2, executive residency and end-to-end delivery (eight): "sys$dclast
+    reported success declaring an AST" is the wall itself -- an unbound process
+    cannot reach the executive, so the very first declare fails. Every other
+    assertion in these parts reads back what that failed declare never put in
+    the executive queue: the residency readback and the three astprm/astadr/
+    acmode round-trips are the AST that is not there, "sys$dclast queued an AST
+    while delivery was disabled" is the same declare failing a second time, and
+    "sys$setast(1) delivered the queued AST" / "the delivered AST ran with the
+    astprm" read back a delivery of an AST that was never queued.
+  - PART 3, the SETAST previous-state return (two): "disable again: prev state
+    was disabled" and "SETAST(enable) returns WASCLR" are sys$setast reaching
+    the executive from the same unbound process -- the prev-state word comes
+    back wrong because the call never lands. (These are the ast-setast-disable
+    property observed a second time from a different angle: that defect mutates
+    the kernel's own prev-state word, this one denies the call a PCB at all.)
+WHAT STAYS GREEN, and it keeps this from being a blunderbuss: "the AST is NOT
+delivered while AST delivery is disabled" passes, because an AST that was never
+queued is trivially not delivered (g_fired stays 0) -- so the mutation reddens
+the properties that depend on the bind and leaves the one that does not.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # Re-anchored after vms-2b8 changed the registration ABI: vms_pid is
+        # OUTPUT-ONLY now and vms_kif_register() takes a pointer, so the old
+        # anchor `vms_kif_register((uint32_t)vms_sys_getpid(), 0)` is gone.
+        # The manifest self-test caught this in 0.2s as BROKEN FIXTURE, which
+        # is the failure mode it exists for -- a dead anchor injects nothing
+        # and the QEMU control then certifies a defect never applied.
+        sed -i 's|(void)vms_kif_register(NULL);|/* NEGCTL bind-client-no-register: the vms-9fc defect, restored */|' "$_file"
+    :
+}

@@ -1,0 +1,26 @@
+# kstat-ivlockid-mismapped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive's SS__IVLOCKID condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields for a lock ID that does not exist (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SS__IVLOCKID is 2488 (SS\$_NOTQUEUED) instead of 8484 (SS\$_IVLOCKID) -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
+        require_fail) cat <<'EOF'
+sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|#define SS__IVLOCKID    8484|#define SS__IVLOCKID    2488 /* NEGCTL kstat-ivlockid-mismapped */|' "$_file"
+    :
+}

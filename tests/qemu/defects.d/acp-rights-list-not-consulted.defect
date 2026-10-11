@@ -1,0 +1,28 @@
+# acp-rights-list-not-consulted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the ACP ACL check matches a general-identifier ACE against the executive process rights list (vms-7d5a)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_proc_holds() finds a general identifier in proc->rights_id. The mutation never finds it, so a process granted %X80012345 by \$GRANTID is still refused a file whose ACE grants that identifier read. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+holding %X80012345 the child opens RGTF.DAT: the grant changed the ACL decision
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            if (proc->rights_id\[i\] == id)$|            if (0) /* NEGCTL acp-rights-list-not-consulted */|' "$_file"
+    :
+}

@@ -1,0 +1,88 @@
+# eflag-waitfr-eintr-normal -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flag WAITS (VMS_IOCTL_WAITFR/WFLOR/WFLAND), interrupted-wait path";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local";;
+        blind_why)    cat <<'EOF'
+Neither raw-ioctl event flag suite arranges a signal, so neither can observe
+what a wait reports when one arrives. That is not a gap to close by adding a
+signal to them: the property is about what the PUBLIC service returns to its
+caller, and both halves of the fix live on that path (the executive writing no
+status, and libvmssys re-entering the wait). test_syssvc_ef_mproc is where a
+caller exists to be lied to.
+test_syssvc_ef_local is blind for a second, different reason and is declared
+here rather than left silent: its $WAITFR call is on a flag that is ALREADY
+SET, so it returns without ever blocking and there is no wait for a signal to
+interrupt. It stays green with this defect injected -- MEASURED on this host,
+not assumed -- and the honest statement is that it drives $WAITFR without
+covering this property at all.
+EOF
+                      ;;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+WAITFR answers SS$_NORMAL when wait_event_interruptible() returns because a
+signal was pending -- "the flag is set" about a flag that is still clear, with
+rc=0/errno=0 so the caller cannot detect it. This is the code as it actually
+shipped for one round of vms-2a8, restored verbatim.
+IT IS THE SAME DEFECT CLASS AS creprc-handshake-eintr BELOW, one layer down: a
+signal delivered to the CALLER decides what a system service reports about the
+world. VMS has no status for it to report -- HELP $WAITFR says the process
+waits "until the event flag is set" and has no Condition Values topic at all,
+HELP $HIBER says a wait is interrupted by ASTs and then continues, and a SEARCH
+of $SSDEF for WAIT/INTERRUPT/ABORTED finds no such condition
+(docs/oracle/vax73-event-flags.md §4). So the correct code makes the condition
+unreachable rather than handling it, and this mutation is exactly the illegal
+third answer put back.
+IT ALSO REDDENS IF ONLY HALF THE FIX IS PRESENT. With the executive corrected
+but libvmssys not re-entering the wait, the ioctl surfaces -EINTR, which
+vms_kif_kerr_to_ss maps to SS$_BUGCHECK -- an even status -- so the same
+assertion fails. One control, both halves.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Same single defect, seen one step earlier. The waiter's interval timer keeps
+firing for as long as it is genuinely waiting, so the parent counts three
+interrupts before releasing the flag. A WAITFR that returns on the first
+interrupt never gets interrupted a second time, so the interrupt count
+collapses to one and this assertion goes red as a direct consequence of the
+same return -- it is the cause, and the require_fail line is the effect.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED and therefore IDEMPOTENT. The interrupted-wait bail
+        # `return -ERESTARTSYS;` appears in all three wait handlers (WAITFR,
+        # WFLOR, WFLAND), so the range narrows it to WAITFR's: it opens at
+        # `^long vms_ioctl_waitfr` and closes at that function's own `out:`
+        # label, and the replaced line is the 12-space `return -ERESTARTSYS;`
+        # inside WAITFR's `if (exec_cv_wait(...))` interrupted branch. Injecting
+        # the defect makes an interrupted wait FABRICATE SS$_NORMAL (report the
+        # flag set) and fall through to `out:` instead of re-entering the wait
+        # -- the exact vms-2a8 fiction this facility deletes. A second apply
+        # finds no `return -ERESTARTSYS;` left inside the range -- the first
+        # replaced it -- so it is the no-op `selftest` requires, instead of
+        # walking on to WFLOR's like a first-match address would.
+        #
+        # RE-ANCHORED in Phase B (rd vms-ec4): the previous anchor still named
+        # `wait_event_interruptible(...)`/`return ret;`, which Phase A (rd
+        # vms-adb) had already replaced with the exec_cv_wait cv-idiom and
+        # `return -ERESTARTSYS;` -- so this fixture was a dead anchor (BROKEN
+        # FIXTURE) on main until now.
+        sed -i '/^long vms_ioctl_waitfr/,/^out:$/ s|^            return -ERESTARTSYS;$|            { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file"
+    :
+}

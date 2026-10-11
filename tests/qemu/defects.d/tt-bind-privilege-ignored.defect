@@ -1,0 +1,31 @@
+# tt-bind-privilege-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "binding a substrate line to a terminal unit (vms_tt_bind, rd vms-f8c, Baron's ruling 2): the executive requires CMKRNL through vms_prot.h, never a substrate capability";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_bind() asks the executive's protection code whether the caller's ENABLED privileges include CMKRNL (\`st = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);\`) and refuses with SS\$_NOPRIV otherwise. The mutation replaces the decision with SS\$_NORMAL, so any process may make itself the port of any terminal unit. The suite disables CMKRNL and binds: the bind now SUCCEEDS. Non-fatal: the bind completes normally. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+binding a line to a terminal unit WITHOUT CMKRNL is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with CMKRNL the line is bound to the unit (SS$_NORMAL)
+EOF
+                      ;;
+        knock_on_why)  echo "the unprivileged bind went through, so the line is already bound when the suite binds it again WITH CMKRNL: that second bind answers SS\$_DEVALLOC instead of SS\$_NORMAL. Everything after runs on the (wrongly) bound line and stays green.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique text: vms_tt_bind()'s CMKRNL decision (the sense ioctl's own
+        # check is spelled `a.status = ...`).
+        sed -i 's|^\tst = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);$|\tst = SS__NORMAL; /* NEGCTL tt-bind-privilege-ignored */|' "$_file"
+    :
+}

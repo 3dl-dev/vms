@@ -1,0 +1,34 @@
+# eihd-spec-no-default-type -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "OpenVMS Alpha native image activation, SHAREABLE FILE RESOLUTION (rd vms-3b3f rung 2/3): after the logical-name translation of a shareable's name (DECC\$SHR -> SYS\$SHARE:DECC\$SHR_EV56 on OpenVMS Alpha; a DEFINE MYSHR SYS\$SYSTEM:MYSHRV2) the activator applies the defaults SYS\$SHARE: and .EXE (src/imgact/imgact_eihd.h eihd_spec_to_file, used by IMGACT.EXE)";;
+        targets)      echo "imgact/imgact_eihd.h";;
+        suites_red)   echo "test_imgact_eihd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "eihd_spec_to_file() stops appending the default .EXE type to the VOLUME PATH (its first if (!has_type) block is disabled), so a translated spec with no type -- exactly what the DECC\$SHR system logical and a DEFINE to SYS\$SYSTEM:MYSHRV2 produce -- names a file that does not exist and the activation would fail -CLI-E-IMAGEFNF. The message spec keeps its .EXE (the second block), and a spec that carries its own type or names another device is untouched, so only the three assertions that read the resolved path back for a typeless spec go red -- the same single missing default.";;
+        require_fail) cat <<'EOF'
+DECC$SHR's system-logical equivalence resolves to SYS$SHARE:DECC$SHR_EV56.EXE
+a shareable defined to SYS$SYSTEM:MYSHRV2 resolves to SYS$SYSTEM:MYSHRV2.EXE
+an untranslated shareable name defaults to SYS$SHARE:<name>.EXE
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the volume path's default-type block in
+        # eihd_spec_to_file carries its own comment (the message spec's block
+        # does not). Disabling it leaves a typeless translation naming NAME (no
+        # .EXE) on the volume. After substitution the text is gone, so a
+        # second apply matches nothing.
+        sed -i 's|	if (!has_type) {   /\* the volume path.s default type \*/|	if (0) {   /* NEGCTL eihd-spec-no-default-type: the volume path gets no default .EXE type */|' "$_file"
+
+    :
+}

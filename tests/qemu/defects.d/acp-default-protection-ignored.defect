@@ -1,0 +1,29 @@
+# acp-default-protection-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a directory's DEFAULT_PROTECTION ACE gives a file created in it its protection (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_CREATE with no protection of its own takes the directory's DEFAULT_PROTECTION. The mutation ignores it, so the file gets the process default (RWED,RWED,RE,) instead of the directory's (RWED,RWED,R,R). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A.TXT's protection is the DEFAULT_PROTECTION ACE's (RWED,RWED,R,R)
+B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^            else if (have_dprot)$#            else if (0 \&\& have_dprot) /* NEGCTL acp-default-protection-ignored */#' "$_file"
+    :
+}

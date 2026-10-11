@@ -1,0 +1,28 @@
+# tt-oob-survives-deassign -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an out-of-band AST ends with the channel it was armed through (vms_tt.c vms_tt_chan_gone, called from vms_devtab.c device_release_channel; rd vms-f0fb)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_chan_gone() clears every out-of-band entry armed through the deassigned channel (\`memset(&tt->oob[i], 0, sizeof(tt->oob[i]));\`). The mutation leaves them armed (\`(void)0;\`): the AST still fires for a channel that is gone -- and, at process exit, for a process that is gone. Non-fatal in the suite: the test's own process is still alive. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an AST armed through a channel ends when that channel is deassigned
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: it is the section's last check.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t\tmemset(\&tt->oob\[i\], 0, sizeof(tt->oob\[i\]));$|\t\t\t(void)0; /* NEGCTL tt-oob-survives-deassign */|' "$_file"
+    :
+}

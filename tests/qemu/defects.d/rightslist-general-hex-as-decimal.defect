@@ -1,0 +1,83 @@
+# rightslist-general-hex-as-decimal -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the rights database's GENERAL identifiers -- the binary \$RDBDEF identifier VALUE decoded from RIGHTSLIST.DAT and returned by the executive \$ASCTOID (rightslist_live_asctoid_rf in src/vmsrms/rightslist_live.c), vms-2f8/vms-f15a";;
+        targets)      echo "vmsrms/rightslist_live.c";;
+        # test_syssvc_ident.c's own LOCAL assertion (a GENERAL identifier,
+        # same reader, same %X notation) is a genuine, measured knock-on --
+        # see knock_on_why. Nothing else in this manifest's known suites
+        # reads a general (non-UIC) rights-database identifier: rightslist
+        # UIC checks (DEFAULT/SYSTEM/GUEST) and test_syssvc_sysuaf_uic_base
+        # go through sysuaf_lookup()'s OCTAL branch of the SAME parse_value(),
+        # a completely separate code path this mutation does not touch (see
+        # sysuaf-uic-radix-decimal, which targets that branch instead).
+        suites_red)   echo "test_syssvc_rightslist test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "RE-ANCHORED (vms-f15a flipped RIGHTSLIST to the binary \$RDBDEF; parse_value()'s ASCII %Xnnnnnnnn branch this defect used to mutate was DELETED with the ASCII reader). It now guards the equivalent binary-path invariant: the identifier VALUE the executive \$ASCTOID returns must be the exact 32-bit value stored in the \$RDBDEF record. rightslist_live_asctoid_rf() copies out rdb_ident_value(&rec) after a NAME-key hit; the mutation masks off bit 31 (\`& 0x7FFFFFFFu\`) on that egress, so every GENERAL identifier -- all of which are 0x8000000n (BATCH..REMOTE) -- resolves to a wrong, sign-bit-cleared value (0x80000004 -> 4) while the record is still FOUND (the NAME-key lookup and the case-insensitive upcase are untouched) and the UIC path (derived from SYSUAF, a completely separate reader) is not reached by this edit at all.";;
+        require_fail) cat <<'EOF'
+oracle: DCL prints -2147483644
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+oracle: DCL prints -2147483647
+oracle: absent from OVMX entirely before vms-2f8
+oracle: DCL prints -2147483645
+oracle: DCL prints -2147483643
+oracle: DCL prints -2147483642
+reverse resolves (oracle round-trips it)
+lookup is case-insensitive ("local" resolves like "LOCAL")
+holdable by no hardcode and derivable from no account's UIC
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME PARSE, OBSERVED AT EVERY GENERAL-IDENTIFIER READER. All six general
+identifiers RIGHTSLIST.DAT carries (BATCH, DIALUP, INTERACTIVE, LOCAL,
+NETWORK, REMOTE) are written in the same %Xnnnnnnnn notation, so every one
+of test_syssvc_rightslist.c's six check_roundtrip() calls exercises the
+mutated branch -- both directions (name->value, then the now-orphaned
+value's reverse lookup) -- not LOCAL alone. require_fail names LOCAL's own
+value-mismatch text (the anchor's statement); knock_on_fail's first five
+lines are the other five identifiers' own oracle notes (each fires the same
+value-mismatch shape LOCAL's does), the sixth is the shared reverse-lookup
+failure text every one of the six hits once its mutated value stops
+matching any row, and the seventh is the case-insensitive "local" lookup,
+which resolves through the identical mutated branch. test_syssvc_ident.c's
+own F$IDENTIFIER("LOCAL", ...) assertion (eighth line, a substring of its
+message) reddens too -- LOCAL is the one general identifier that suite
+drives through the real DCL.EXE (see that suite's own comment: "the one
+that cannot be faked by the old shape") -- a second suite reached through
+the exact same reader, not a second defect. A full run of
+run_facility_negctl.sh is what confirms the complete red set, exactly as
+vms-6bdf's resdir control was verified.
+
+WHAT STAYS GREEN, AND WHY. rightslist.c's UIC checks (DEFAULT/SYSTEM/GUEST)
+and every check_miss_value() call are untouched: they never pass through
+the %X branch this edit mutates (misses 1..5, 1000, 0, 77777, 196609 are
+not valid %Xnnnnnnnn rows to begin with, and 0x80010004 is asserted absent
+either way). test_syssvc_sysuaf_uic_base.c does not call
+rightslist_name_to_value()/rightslist_value_to_name() at all.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RE-ANCHORED (vms-f15a): the ASCII parse_value() %Xnnnnnnnn branch this
+        # used to mutate was DELETED with the ASCII rights reader when RIGHTSLIST
+        # flipped to the binary $RDBDEF. UNIQUE TEXT: the sole
+        # `*value = rdb_ident_value(&rec);` egress of rightslist_live_asctoid_rf()
+        # in rightslist_live.c -- where the executive $ASCTOID hands back the
+        # binary $RDBDEF identifier value after a NAME-key hit. Masking off bit 31
+        # turns every GENERAL identifier (all 0x8000000n) into a wrong value
+        # (0x80000004 -> 4) while the record is still FOUND. Idempotent: after the
+        # edit the `(&rec);` this pattern matches is gone (now
+        # `(&rec) & 0x7FFFFFFFu;`), so a second apply is a no-op.
+        sed -i 's|\*value = rdb_ident_value(&rec);|*value = rdb_ident_value(\&rec) \& 0x7FFFFFFFu; /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file"
+
+    :
+}

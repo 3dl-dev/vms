@@ -1,0 +1,31 @@
+# scs-cdt-snapshot-fabricates-connection -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SCS CDT diagnostic snapshot (VMS_CLUSTER_DIAG_CONN_CDT, vms-ci)";;
+        targets)      echo "kernel-core/vms_scs.c";;
+        suites_red)   echo "test_kmod_cluster_conn_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_scs_cdt_snapshot()'s 'cl->scs == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV (range-scoped, only that one return), so every CDL index answers SS__NORMAL -- a placeholder connection reported as live. memset(out,0) precedes the guard, so rows read back all-zero: an index far past any CDL reports SS__NORMAL, and the projected rows carry local_conid==0 (the wire's 'not bound yet' value) reported as real. INV-6 fabrication. After apply the return is SS__NORMAL, gone from the function (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+row CDT, index far past any CDL: SS$_NOSUCHDEV, not a crash
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+every projected CDT row carries a real minted Local Con.ID, never 0 (the wire's own 'not bound yet' value)
+EOF
+                      ;;
+        knock_on_why)  echo "the same always-NORMAL guard both answers a far-past index SS__NORMAL (require_fail) AND projects zero-conid rows as live (the walk sees 'live' rows with local_conid==0).";;
+        esac
+
+}
+
+defect_apply() {
+        # Range-scoped to vms_scs_cdt_snapshot (single SS__NOSUCHDEV at :750);
+        # after apply it is SS__NORMAL, so a 2nd apply finds none (no-op selftest).
+        sed -i '/^int vms_scs_cdt_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL scs-cdt-snapshot-fabricates-connection */|' "$_file"
+    :
+}

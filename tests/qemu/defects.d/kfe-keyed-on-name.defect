@@ -1,0 +1,28 @@
+# kfe-keyed-on-name -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a known-file entry names its file by the substrate's identity of that file (vms-7c64)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "kfe_find() matches an entry by the executive's held copy (exec_file_is). The mutation matches any entry, so a file that is not an installed copy -- the caller's own source file included -- is reported installed, with the privileges of whatever was. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the caller's own source file is not an installed image: FIND is SS$_NOSUCHFILE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& exec_file_is(vms_kfe_tab\[i\].pin, fd))$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file"
+    :
+}

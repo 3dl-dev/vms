@@ -1,0 +1,30 @@
+# sys-parse-acl-drops-access -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$PARSE_ACL encodes the ACCESS= keywords into ACE\$L_ACCESS (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ace_parse_bits() sets one bit per access keyword. The mutation sets none, so (identifier=[1,4], access=r+w) parses to an ACE granting nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$PARSE_ACL (identifier=[1,4], access=r+w) is the oracle's bytes
+$FORMAT_ACL prints (IDENTIFIER=<[1,4]>,ACCESS=READ+WRITE)
+DCL SET ACL then SHOW ACL prints the ACE as VMS does
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^            if (ace_abbrev(w, names\[k\])) { \*mask |= 1u << k; hit = 1; }$#            if (ace_abbrev(w, names[k])) { hit = 1; } /* NEGCTL sys-parse-acl-drops-access */#' "$_file"
+    :
+}

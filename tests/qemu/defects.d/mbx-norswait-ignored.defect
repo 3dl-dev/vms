@@ -1,0 +1,28 @@
+# mbx-norswait-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "IO\$M_NORSWAIT: a write to a full mailbox completes at once with SS\$_MBFULL (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() returns SS\$_MBFULL instead of waiting for room when the write carries VMS_MBX_WRITE_NORSWAIT. The mutation makes that branch unreachable ('0 &&'), so the write waits for a reader; the suite's 10 s alarm turns the wait into this named FAIL and ends the suite. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an IO$M_NORSWAIT write to a full mailbox completes at once (SS$_MBFULL), never waits for a reader
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        if (a->flags \& VMS_MBX_WRITE_NORSWAIT) {$|        if (0 \&\& (a->flags \& VMS_MBX_WRITE_NORSWAIT)) { /* NEGCTL mbx-norswait-ignored */|' "$_file"
+    :
+}

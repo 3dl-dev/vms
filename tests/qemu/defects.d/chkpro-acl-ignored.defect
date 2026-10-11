@@ -1,0 +1,29 @@
+# chkpro-acl-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CHKPRO applies the object's ACL (CHP\$_ACL) to the subject (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rightslist test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "chk_decide() looks for the first identifier ACE the subject holds. The mutation never finds one, so an ACE granting read to [200,200] or to a general identifier the caller holds changes nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: an ACE (IDENTIFIER=[200,200],ACCESS=READ) grants DEFAULT read (UP.ACL.GRANT)
+$CHKPRO: holding %X80012345 the caller is granted read by the ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^    matched = chk_acl_match(s, acl, acl_len, \&ace_access);$#    matched = 0 \&\& chk_acl_match(s, acl, acl_len, \&ace_access); /* NEGCTL chkpro-acl-ignored */#' "$_file"
+    :
+}

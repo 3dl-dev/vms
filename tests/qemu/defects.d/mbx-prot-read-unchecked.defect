@@ -1,0 +1,31 @@
+# mbx-prot-read-unchecked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a mailbox read needs read access under the mailbox protection (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_read() refuses SS\$_NOPRIV before dequeuing when vms_prot_check() denies the caller read access. The mutation makes that refusal unreachable ('0 &&'), so any client holding a channel to NETACP's W:W request mailbox could dequeue another client's request. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unprivileged client may NOT READ the W:W request mailbox (SS$_NOPRIV) -- no other client's request is readable
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+an unprivileged READ of a no-world-access mailbox is SS$_NOPRIV
+READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)
+BYPASS off again: the read is refused
+EOF
+                      ;;
+        knock_on_why)  echo "the same missing read refusal observed on the no-world-access mailbox, under READALL (which must not open it) and after BYPASS is switched back off.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_READ) != SS__NORMAL) { /* NEGCTL mbx-prot-read-unchecked */|' "$_file"
+    :
+}

@@ -1,0 +1,32 @@
+# tt-oob-ast-not-queued -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "out-of-band ASTs are queued in the EXECUTIVE's AST queue for the arming process (vms_tt.c tt_oob_fire/tt_queue_ast, rd vms-f0fb)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_oob_fire() queues the armed AST with tt_queue_ast() (\`if (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))\`). The mutation makes every queueing look failed (\`if (1)\`): the AST is never queued and the reader is never let go -- a driver that shows *INTERRUPT* but delivers nothing. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the CTRL/Y AST is in the executive's queue for this process (routine 1234, parameter 77, user mode)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+the same read resumes and completes with the whole line 'ABCD'
+EOF
+                      ;;
+        knock_on_why)  echo "every later check that needs an AST queued fails with it: the CTRL/C-fires-CTRL/Y check finds no AST; with the CTRL/T AST never queued the reader is never let go, so the read takes 'ABC' then times out, and the breakthrough and resume checks see no outstanding read.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\tif (!tt_queue_ast(o->proc, o->astadr, astprm, o->acmode))$|\tif (1) /* NEGCTL tt-oob-ast-not-queued */|' "$_file"
+    :
+}

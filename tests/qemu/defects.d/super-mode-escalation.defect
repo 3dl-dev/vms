@@ -1,0 +1,36 @@
+# super-mode-escalation -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "access-mode transition + boundary enforcement (VMS_IOCTL_SETMODE/ENTER_IMAGE/IMAGE_RUNDOWN, vms-68f.iii -- increment (iii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II §A.2.3)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_modeswitch";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_setmode()'s raise-to-SUPER branch stops requiring CMEXEC/CMKRNL, reverting to this item's pre-fix behaviour (\"to super mode: from user only, no special priv\") where SUPER (2) is a MORE privileged mode than USER (3) by the function's own numbering, so an unprivileged caller could self-promote into the mode the design reserves for DCL's command loop. One disjunct removed from one condition, mirroring exactly how access-mode-escalation inverts the KERNEL-mode check.";;
+        require_fail) cat <<'EOF'
+SUPER mode DENIED without CMEXEC/CMKRNL (SS$_NOPRIV)
+... and the mode is still USER after the denied SUPER escalation
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT, no range anchor needed: this exact disjunction (EXEC
+        # OR SUPER) occurs once in the file -- vms_ioctl_setmode's own
+        # raise-mode branch. Dropping "|| args.mode == PSL_C_SUPER" reverts
+        # SUPER to this item's pre-fix behaviour while leaving KERNEL's own
+        # branch (a few lines above, a different `if`) and EXEC's own
+        # privilege check (still reached for args.mode == PSL_C_EXEC)
+        # completely untouched -- a caller requesting EXEC is unaffected;
+        # only a caller requesting SUPER stops being checked at all.
+        sed -i 's|^        } else if (args\.mode == PSL_C_EXEC \|\| args\.mode == PSL_C_SUPER) {$|        } else if (args.mode == PSL_C_EXEC) { /* NEGCTL super-mode-escalation: SUPER no longer requires privilege */|' "$_file"
+
+    :
+}

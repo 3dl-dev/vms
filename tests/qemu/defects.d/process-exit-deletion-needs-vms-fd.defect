@@ -1,0 +1,37 @@
+# process-exit-deletion-needs-vms-fd -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process deletion at process exit (vms_process_ended, the Linux module rind, rd vms-9f32) -- the executive deletes a process when it ends, however it ends, whatever its image did";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_on_process_exit() deletes a process only if it still holds the executive device open as it ends -- the fd-bound deletion vms-9f32 removed. A subprocess that exec's an image which never opens /dev/vms (its creator's open is O_CLOEXEC) is never deleted: its PCB stays, its PID still answers \$GETJPI and its creator's armed completion never fires (vms-d9ab). Processes that end holding the device are deleted as before. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+that image ending completes the creator's armed /NOWAIT flag: the executive
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$GETJPI of the ended process is SS$_NONEXPR before its creator
+a subprocess whose main thread exits before its last thread still completes:
+arming the completion of an already-deleted subprocess completes at once:
+the instantly-ending subprocess is already deleted when its completion is armed
+EOF
+                      ;;
+        knock_on_why)  echo "every one of them waits on the deletion this mutation removes.";;
+        esac
+}
+
+defect_apply() {
+        # The vms-d9ab bug class, re-introduced: deletion happens only for a
+        # process still holding the executive device open when it ends -- what
+        # fd-bound release amounted to. A process whose image never opened it
+        # (or exec'd past an O_CLOEXEC open) is never deleted. The probe runs at
+        # sched_process_exit, before exit_files, so p->files is still there.
+        sed -i -e 's|^static void vms_on_process_exit(void \*data, struct task_struct \*p)$|#include <linux/fdtable.h> /* NEGCTL process-exit-deletion-needs-vms-fd */\nstatic const struct file_operations vms_fops;\nstatic int vms_negctl_vmsfd(const void *v, struct file *f, unsigned int fd)\n{ (void)v; (void)fd; return f->f_op == \&vms_fops; }\nstatic void vms_on_process_exit(void *data, struct task_struct *p) /* NEGCTL process-exit-deletion-needs-vms-fd */|' \
+            -e 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (atomic_read(\&p->signal->live) != 0 \|\| !p->files \|\| !iterate_fd(p->files, 0, vms_negctl_vmsfd, NULL)) /* NEGCTL process-exit-deletion-needs-vms-fd */|' "$_file"
+    :
+}

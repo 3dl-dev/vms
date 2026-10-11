@@ -1,0 +1,30 @@
+# cnxman-csb-snapshot-fabricates-member -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "CNXMAN CSB membership diagnostic snapshot (VMS_CLUSTER_DIAG_CSB_CSB, vms-ci)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_kmod_cluster_membership_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_get_csb()'s 'cl->cnxman == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV, so an index far past the club's high-water mark answers SS__NORMAL -- a member row the executive does not hold, reported live. memset(out,0) precedes the guard so the row reads all-zero (only the STATUS lies); the CLUB path (cnxman_club_csb_at, the ternary's second SS__NOSUCHDEV) is untouched, so the all-zero-row check and CLUB assertions stay green (minimality). The sed matches only the guard's standalone return statement, not the ternary; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an index far past the high-water mark refuses (SS$_NOSUCHDEV), never a wrapped/aliased row
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Range-scoped to cnxman_get_csb. The function has TWO (int)SS__NOSUCHDEV
+        # returns; the exact standalone `return (int)SS__NOSUCHDEV;` matches ONLY
+        # the cl->cnxman==NULL guard, not the `? SS__NORMAL : (int)SS__NOSUCHDEV`
+        # ternary (different surrounding text). Gone after apply (no-op re-apply).
+        sed -i '/^int cnxman_get_csb(/,/^}/ s|return (int)SS__NOSUCHDEV;|return (int)SS__NORMAL; /* NEGCTL cnxman-csb-snapshot-fabricates-member */|' "$_file"
+    :
+}

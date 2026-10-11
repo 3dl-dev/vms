@@ -1,0 +1,43 @@
+# dcl-fuser-system-fabricated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "F\$USER() / F\$GETJPI(\"\",\"USERNAME\"), the PROGRAMMATIC reader of the executive's user name (src/vmsdcl/dcl_lexical.c lex_user) -- its literal-SYSTEM branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lex_user() renders SYSTEM's UIC instead of this process's own -- the vms-cb5 defect in its F\$USER-is-a-UIC form, found because SHOW PROCESS (a display) and F\$GETJPI (a lexical function) read the SAME field of the SAME row and disagreed: the display printed nothing and the programmatic path invented the most privileged name on the system for the one process that had just been REFUSED it.";;
+        require_fail) cat <<'EOF'
+G/F$USER: answers this process's own UIC in named form -- not the host Linux login name, not SYSTEM's
+G/F$USER: does not answer with SYSTEM
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+C: F$GETJPI("","USERNAME") reports NO name for a process the executive refused to name -- it does not fall back to a Linux account name or to SYSTEM
+C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Scenario C is the SAME function answering the same question one scenario
+earlier, and it is where this defect was originally measured: an unprivileged
+process whose bid to become SYSTEM the executive had just refused with
+SS$_NOPRIV. Its two reds are one property seen twice -- the first is C's own
+direct check on lex_user's answer, and the second is C's blanket "SYSTEM
+appears nowhere in this scenario's output", which the first one's fabricated
+value necessarily also trips. There is nothing finer available: the mutation
+is already a single branch of a single function, and C and G both exist
+deliberately, because C exercises the EXECUTIVE-REFUSED unnamed process and G
+exercises the NEVER-NAMED subprocess -- different routes into the one state.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/^static int lex_user(/,/^}$/ s|^    uint32_t uic = info.uic;$|    uint32_t uic = 0x00010004u; /* NEGCTL dcl-fuser-system-fabricated */|' "$_file"
+    :
+}

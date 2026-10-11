@@ -1,0 +1,50 @@
+# rms-open-no-file-access-enq -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "RMS file-level share arbitration behind the real DLM: the sys\$open/sys\$create file-access \$ENQ seam (rms_file_lock_acquire, vms-50e)";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_rms_filelock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_file_lock_acquire() still issues the REAL vms_kif_enq() for the file-access lock -- so DLM grant/conflict arbitration between two opens of the same file is completely untouched -- but the mutation empties its 'h->access_lkid = lkid;' success arm (braceless-if, replaced with an empty compound statement to avoid -Werror=empty-body), so the GRANTED lock ID is never stashed on the handle. The handle-visible lkid is therefore always 0: unintrospectable via GETLKI, indistinguishable from a second concurrent holder's own lkid, and never \$DEQ'd by sys\$close (whose release path also reads h->access_lkid) -- so the real DLM lock LEAKS past close. Unique statement; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+open#1 holds a real file-access lkid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+GETLKI: open#1's lock is a REAL granted EX lock on the FID resource
+open#2 (PR) now succeeds once open#1's EX lock is released
+open#2 holds its OWN distinct lkid (two real locks, not one shared flag)
+GETLKI: open#1's lock still granted PR while open#2's PR coexists
+GETLKI: open#2's lock is a REAL, independently granted PR lock
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+ONE ROOT CAUSE, MEASURED THROUGH EVERY READER of h->access_lkid. The real DLM
+grant/conflict decisions are untouched (open#2's genuine RMS$_SHR refusal while
+open#1 holds EX, and its retry once released relative to the ACTUAL lock, are
+never asked here) -- what breaks is every consumer of the NEVER-STASHED lkid:
+GETLKI on it reads an always-invalid id instead of the real grant (first
+knock-on); sys$close's own release path reads the same always-zero field, so
+it never $DEQs the real lock, which LEAKS -- so the retry that real VMS closes
+out (open#2 (PR) now succeeds once open#1's EX lock is released) still
+conflicts against the leaked lock (second knock-on); and Test B's two
+concurrent PR holders both read lkid 0 (indistinguishable, and GETLKI on
+either finds no real record), reddening its own three assertions (the
+remaining knock-ons). All six texts are the SAME missing assignment, observed
+at every place code reads the field it should have set.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # Braceless-if success arm: empty {} (not a bare comment) avoids
+        # -Werror=empty-body. Unique text; gone after apply (no-op re-apply).
+        sed -i 's|        h->access_lkid = lkid;|        { } /* NEGCTL rms-open-no-file-access-enq: lkid not stashed */|' "$_file"
+    :
+}

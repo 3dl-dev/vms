@@ -1,0 +1,52 @@
+# rms-record-lock-not-enqueued -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "RMS RECORD-level locking behind the real DLM: the default \$get locking-read seam (rms_reclock_after_locate, vms-0dd)";;
+        targets)      echo "vmsrms/rms_record.c";;
+        suites_red)   echo "test_syssvc_rms_reclock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_reclock_after_locate() still issues the REAL vms_kif_enq() for the per-record EX lock on a default (locking) \$get -- so a SECOND stream's conflicting \$get still gets the genuine RMS\$_RLK/RMS\$_OK_RLK/NORMAL answers the RAB\$M_NLK/RAB\$M_RLK read-modifier table specifies -- but the mutation empties its 'rab->_rec_lock_lkid = lkid;' success arm (braceless-if, replaced with an empty compound statement), so the HOLDING stream never remembers its own granted record lkid. Braceless-if empty-body substitution, same idiom as rms-open-no-file-access-enq; unique statement, gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+rab1 stashed a real record lkid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+GETLKI: rab1's record lock is a REAL granted EX lock
+GETLKI: record lock's parent_id == the file-access lock (vms-0dd half a)
+rab1 holds a fresh record lkid on rrn=1
+rab1 (holder) sys$update(rrn=1) -> NORMAL
+rab1 (holder) sys$delete(rrn=1) -> NORMAL
+rab2 default $get(rrn=0), refused earlier with RMS$_RLK, now succeeds
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+ONE ROOT CAUSE, MEASURED THROUGH EVERY READER of rab->_rec_lock_lkid. The real
+DLM conflict/read-through/dirty-read behaviour for the SECOND stream (rab2) is
+completely untouched -- its own lkid tracking and every RMS$_RLK / RMS$_OK_RLK
+/ NORMAL answer it gets are unaffected and stay green. What breaks is every
+place rab1 (the holder) consults its OWN never-stashed lkid: GETLKI on it
+(always invalid instead of the real EX grant) and the parent-linkage check
+(the same call); the SAME empty arm fires again on rab1's next $get(rrn=1),
+so its fresh lkid is ALSO never stashed; $UPDATE/$DELETE's own
+rms_reclock_require_held() gate reads that same always-zero field and refuses
+both with RMS$_CUR instead of granting them; and because rms_impl_get's own
+release-before-relocate step ALSO reads the never-stashed field, the real
+rrn=0 lock is never $DEQ'd when rab1 moves to rrn=1 -- it leaks, so rab2's
+later retry (which real VMS's release would have let through) still conflicts.
+Six symptoms, one dropped assignment.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # Braceless-if success arm, same idiom as rms-open-no-file-access-enq.
+        # Unique text; gone after apply (no-op re-apply).
+        sed -i 's|        rab->_rec_lock_lkid = lkid;|        { } /* NEGCTL rms-record-lock-not-enqueued: lkid not stashed */|' "$_file"
+    :
+}

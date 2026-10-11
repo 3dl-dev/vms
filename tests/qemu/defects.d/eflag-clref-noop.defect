@@ -1,0 +1,48 @@
+# eflag-clref-noop -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags (VMS_IOCTL_SETEF/CLREF/READEF/WAITFR/WFLOR/WFLAND/ASCEFC/DACEFC)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # test_syssvc_ef_mproc MOVED HERE FROM blind_suites BY vms-2a8, which
+        # is the change the old blind_why entry named as the condition:
+        # "Move this suite into suites_red once sys_event.c calls the
+        # executive." src/libvms/syssvc/sys_event.c is now a translation
+        # layer over /dev/vms and holds no flag state of its own, so a defect
+        # injected into kernel/vms_eflag.c reaches the PUBLIC sys$ API too.
+        # This suite is no longer blind to the executive, and the entry below
+        # proves it by naming the assertion it loses.
+        #
+        # test_syssvc_ef_local arrives with vms-2a8's conformance MOVE (it is
+        # tests/conformance/vms_programs/test_event_flags.c, relocated off a
+        # host that has no /dev/vms). It is DERIVED FROM A RUN, not reasoned
+        # into place: with this defect injected it goes rc=1 on exactly one
+        # assertion, "sys$readef(1) reported WASCLR after the clear", which is
+        # the same read-back-after-clear property as test_kmod_eflag's
+        # "readef(5) after clear returns WASCLR" one layer down. Its other
+        # fifteen assertions stay green, which is what keeps this mutation
+        # minimal rather than a blunderbuss on the new suite.
+        suites_red)   echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_mproc test_syssvc_ef_local";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$CLREF stops clearing the bit. It still REPORTS the correct previous state, so only the assertions that read the flag back afterwards can see it -- which is exactly the shape of a facade that reports success while changing nothing.";;
+        require_fail) cat <<'EOF'
+readef(5) after clear returns WASCLR
+cluster has flags 0,3,7,31 set
+child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
+child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
+sys$readef(1) reported WASCLR after the clear
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|\*flags \&= ~(1U << bit);|/* NEGCTL eflag-clref-noop: the bit is not cleared */|' "$_file"
+    :
+}

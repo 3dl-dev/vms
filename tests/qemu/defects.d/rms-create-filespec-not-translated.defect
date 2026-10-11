@@ -1,0 +1,65 @@
+# rms-create-filespec-not-translated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "RMS VMS-filespec translation on create -- rms_acp_spec_parse() (src/vmsrms/rms_core.c), which splits a filespec (VDA0:[OVMXDIR]VMS221.DAT) into device / directory / ODS-2 name before the Files-11 ACP \$CREATE. RE-ANCHORED from resolve_filename() (retired with the POSIX \$CREATE by the vms-401/vms-5f0 flip); the Rule-9 ACP create path is the live consumer of this translation, the same product-half class as the dcl-fident-*/dcl-fuser-* entries above, not a vms.ko-dispatched ioctl";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_rms_scratch_create";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_acp_spec_parse() stops taking the ODS-2 NAME.TYP component from the post-split remainder \`p\` (device and [directory] already stripped) and takes the whole undivided filespec \`spec\` instead -- so VDA0:[OVMXDIR]VMS221.DAT resolves to a name of \"VDA0:[OVMXDIR]VMS221.DAT\" rather than \"VMS221.DAT\". This is the live-ACP shape of the exact vms-221 regression: a VMS filespec treated as a LITERAL instead of being translated/split. rms_impl_create copies that name into BOTH fab->_resolved_path (the RESOLVED_PATH the suite reads back) AND fop.name (the actual IO\$_CREATE target), so it is a genuine create-path defect, not a decorative echo. The old mutation reverted resolve_filename()'s \`== 0\` check, but with /dev/vms present and VDA0: mounted the create path is ACP-only (rms_acp_absent()==0) and never reaches resolve_filename(), so it could no longer redden the flip-rewritten suite.";;
+        require_fail) cat <<'EOF'
+sys$create() did NOT fall back to treating the raw VMS spec string as a literal path (no './' prefix, no undivided 'VDA0:...' device left glued to the name)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+sys$create() parsed the filespec through the Files-11 ACP path (rms_acp_specs_from_fab): the device (VDA0:) and directory ([OVMXDIR]) were split off and the ODS-2 file name resolved to VMS221.DAT -- NOT treated as a literal Linux/relative path. The vms-221 regression (resolve_filename() checking vmsfs_to_linux_path()'s VMS status code with `== 0`, so odd=success never matched and every VMS spec fell through to a literal path) belongs to the retired POSIX $CREATE (rms_posix_create); the Rule-9 runtime creates on the mounted volume over the ACP, which is what this proves.
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+ONE PROPERTY -- "the VMS filespec is TRANSLATED (device/dir/name split off),
+not treated as a raw literal" -- read through BOTH of the suite's RESOLVED_PATH
+echoes. require_fail reads it one way: the resolved path must NOT be the
+undivided "VDA0:..." literal. This knock-on reads the SAME corrupted
+fab->_resolved_path the other way: it must positively equal "VMS221.DAT", the
+split-off ODS-2 name. With rms_acp_spec_parse() taking the whole spec as the
+name, _resolved_path becomes "VDA0:[OVMXDIR]VMS221.DAT" -- so the "== VMS221.DAT"
+check fails at the same instant the "no VDA0: literal" check does. It is one
+mis-split observed twice, not a second defect. (The downstream create/connect/
+put/close/readback stages may also redden if the ACP rejects the malformed
+name; per vms-49f the exact red-set equality is a non-gating lint and the
+runtime teeth are check 4 -- this facility's own suite reddened.)
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RE-ANCHORED (vms-401/vms-5f0 atomic flip retired the POSIX $CREATE
+        # this defect used to mutate). The old mutation reverted
+        # resolve_filename()'s vmsfs_to_linux_path() `== 0` check in
+        # rms_posix_create() -- but the Rule-9 runtime, with /dev/vms present
+        # and VDA0: mounted, ALWAYS takes the Files-11 ACP create path
+        # (rms_impl_create, rms_acp_absent()==0), which never calls
+        # resolve_filename() at all, so the mutation could no longer redden
+        # the rewritten suite. It now mutates the EQUIVALENT live invariant:
+        # rms_acp_spec_parse()'s NAME component (rms_core.c) must be the
+        # post-split remainder of the filespec -- the device (VDA0:) and
+        # directory ([OVMXDIR]) split off, only the ODS-2 file name left --
+        # NOT the raw undivided literal. Taking the whole `spec` as the name
+        # instead of the split `p` is the exact vms-221 shape on the live
+        # ACP path: the VMS filespec treated as a literal, never translated.
+        # rms_impl_create copies sp.name into both fab->_resolved_path (the
+        # RESOLVED_PATH the suite asserts on) AND fop.name (the ACP create
+        # target), so the corruption is a genuine create-path defect, not a
+        # decorative echo. UNIQUE TEXT: `strncpy(rest, p, sizeof(rest) - 1);`
+        # occurs once, in rms_acp_spec_parse()'s NAME.TYP;VER split; a second
+        # apply finds no `strncpy(rest, p, ...)` left and is the no-op selftest
+        # requires.
+        sed -i 's|strncpy(rest, p, sizeof(rest) - 1);|strncpy(rest, spec, sizeof(rest) - 1); /* NEGCTL rms-create-filespec-not-translated: filespec taken undivided, not split/translated */|' "$_file"
+
+    :
+}

@@ -1,0 +1,58 @@
+# dcl-submit-owner-fabricated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+    # -----------------------------------------------------------------------
+    # THE SIX USER-NAME FABRICATIONS (vms-cb5 / vms-f39 / vms-f42d)
+    #
+    # These are NOT executive facilities. They are the READER half of one
+    # (CLAUDE.md Rule 11's corollary: a user-visible VMS command is a reader of
+    # an executive facility, never a thing that fabricates its own answer), and
+    # each restores ONE deleted fallback verbatim:
+    #
+    #     const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+    #
+    # ctx->username is seeded in src/vmsdcl/dcl_main.c from the executive's
+    # process table and from nowhere else, so the `else` branch is taken
+    # exactly when the executive holds no name for this process -- the state
+    # any SPAWNed subprocess is in (vms_proc_register() zeroes the username of
+    # every new task and inherits nothing from the parent). Restored, the
+    # command names that process after the most privileged account on the
+    # system. Each defect is one line in one command, so each names exactly
+    # its own site's assertions.
+    # -----------------------------------------------------------------------
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SUBMIT's job OWNER, on the way from the executive's process table to the queue entry (src/vmsdcl/dcl_cmd_process.c cmd_submit)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SUBMIT goes back to writing the literal \"SYSTEM\" into the queue entry for any process the executive has not named. The submission still succeeds, the entry still exists, SHOW QUEUE still lists it -- only its OWNER is a fabrication, and it is a fabrication that degrades UPWARD: the batch job of a process that holds no identity at all is recorded as belonging to the system account.";;
+        require_fail) cat <<'EOF'
+G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner
+G/SUBMIT: the batch job is NOT owned by SYSTEM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+
+    # The six user-name fabrications. Each restores ONE deleted fallback.
+    # RANGE-ANCHORED to the function that owns the site: `const char *user =
+    # ctx->username;` appears in cmd_submit AND cmd_print, and `const char
+    # *username = ctx->username;` in cmd_reply AND cmd_accounting, so a
+    # first-match address would silently mutate whichever came first and both
+    # controls would name the same site. The ranges open on the function's own
+    # definition line and close on its closing brace in column 0.
+    # IDEMPOTENT BY CONSTRUCTION: the replacement no longer ends in
+    # `ctx->username;`, so a second apply matches nothing and cmd_apply
+    # reports BROKEN FIXTURE, which is what selftest requires.
+defect_apply() {
+        sed -i '/^int cmd_submit(/,/^}$/ s|^    const char \*user = ctx->username;$|    const char *user = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-submit-owner-fabricated */|' "$_file"
+    :
+}

@@ -52,6 +52,7 @@ mkdir -p "$SB/tests/qemu" "$SB/src/kernel" "$SB/tracking"
 cp "$ROOT"/tests/qemu/*.c        "$SB/tests/qemu/"  2>/dev/null
 cp "$ROOT"/tests/qemu/*.sh       "$SB/tests/qemu/"  2>/dev/null
 cp "$ROOT"/tests/qemu/facility_defects_floor.txt "$SB/tests/qemu/"
+cp -r "$ROOT"/tests/qemu/defects.d "$SB/tests/qemu/defects.d"
 cp "$ROOT"/src/kernel/*.c        "$SB/src/kernel/"  2>/dev/null
 # vms-165: src/kernel/vmsfs (the retired vmsfs VFS driver) no longer exists.
 
@@ -132,7 +133,8 @@ SYNTH_TEXT="negctl fixture assertion zzq that no suite prints"
 for _n in "$SYNTH_DEFECT" "$SYNTH_TEXT"; do
     if grep -rqF "$_n" "$ROOT/src" 2>/dev/null \
        || grep -qF "$_n" "$ROOT"/tests/qemu/test_*.c 2>/dev/null \
-       || grep -qF "$_n" "$ROOT/tests/qemu/facility_defects.sh" 2>/dev/null; then
+       || grep -qF "$_n" "$ROOT/tests/qemu/facility_defects.sh" 2>/dev/null \
+       || grep -rqF "$_n" "$ROOT/tests/qemu/defects.d" 2>/dev/null; then
         echo "  FAIL: BROKEN FIXTURE: '$_n' already occurs in the tree, so a control"
         echo "        using it would be measuring real state. Rename it; do NOT relax"
         echo "        the gate."
@@ -143,6 +145,7 @@ done
 # --------------------------------------------------------------- the harness --
 restore() {
     cp "$ROOT/tests/qemu/facility_defects.sh" "$MF"
+    rm -r "$SB/tests/qemu/defects.d" && cp -r "$ROOT/tests/qemu/defects.d" "$SB/tests/qemu/defects.d"
     cp "$ROOT/tests/qemu/facility_negctl_record.sh" "$LIB"
     cp "$ROOT/tests/qemu/facility_defects_floor.txt" "$FLOOR"
     cp "$ROOT"/tests/qemu/test_kmod_*.c "$ROOT"/tests/qemu/test_syssvc_*.c "$SB/tests/qemu/"
@@ -150,18 +153,13 @@ restore() {
 }
 
 # del_defect <name> -- the complete deletion, as an adversary would do it:
-# the DEFECTS entry, BOTH case arms, every anchor in every suite source, and
-# the declared count floor lowered to match. Nothing here special-cases a
-# name: the arms are found by the same `^    <name>)$` shape section 5 of
-# coverage already scans for, and the anchors by the same comment shape
-# section 4 already parses.
+# its defect file (tests/qemu/defects.d/<name>.defect: the list entry and both
+# halves at once), every anchor in every suite source, and the declared count
+# floor lowered to match. Nothing here special-cases a name: the anchors are
+# found by the same comment shape section 4 of coverage already parses.
 del_defect() {
     _dd="$1"
-    awk -v d="$_dd" '$0 == d { next } { print }' "$MF" >"$SB/t" && mv "$SB/t" "$MF"
-    awk -v d="$_dd" '
-        $0 ~ ("^    " d "\\)$") { skip = 1; next }
-        skip && /^    [a-z0-9][a-z0-9-]*\)$/ { skip = 0 }
-        !skip { print }' "$MF" >"$SB/t" && mv "$SB/t" "$MF"
+    rm -f "$SB/tests/qemu/defects.d/$_dd.defect"
     sed -i "/negctl\(-knockon\)\{0,1\}: $_dd \*\//d" \
         "$SB"/tests/qemu/test_kmod_*.c "$SB"/tests/qemu/test_syssvc_*.c
     printf '%s\n' "$((N_RUN - 1))" >"$FLOOR"

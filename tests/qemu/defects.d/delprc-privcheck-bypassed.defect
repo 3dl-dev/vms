@@ -1,0 +1,32 @@
+# delprc-privcheck-bypassed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process deletion -- the executive's GROUP/WORLD privilege gate on \$DELPRC/\$FORCEX/\$SUSPND/\$RESUME of another process (vms_ioctl_procctl, kernel-core/vms_proctab.c, rd vms-8e9; the DCL STOP command's process-target forms)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_delprc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The executive stops enforcing the DCL Dictionary's GROUP/WORLD rule for a process target: a caller holding NEITHER GROUP nor WORLD may delete a process in its own UIC group, and the executive delivers the termination. Resolution, naming and the self-delete path are untouched -- only the privilege refusal is made unreachable, so a same-group STOP that must be refused SS\$_NOPRIV is reported SS\$_NORMAL instead.";;
+        require_fail) cat <<'EOF'
+P3: sys$delprc refuses a same-group target without GROUP privilege (SS$_NOPRIV, DCL Dictionary STOP)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # The ONE edit, in kernel-core/vms_proctab.c (rd vms-8e9: the executive
+        # authorizes and delivers $DELPRC). `if (!(proc->cur_privs & need)) {` is
+        # unique in the file -- vms_ioctl_procctl's GROUP/WORLD gate. Making it
+        # never-true lets a privilege-stripped same-group STOP through, and the
+        # executive delivers the termination: SS$_NORMAL. Gone after apply.
+        sed -i 's|^        if (!(proc->cur_privs \& need)) {$|        if (0 \&\& !(proc->cur_privs \& need)) { /* NEGCTL delprc-privcheck-bypassed */|' "$_file"
+
+    :
+}

@@ -1,0 +1,32 @@
+# bgsock-poll-always-ready -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- the executive readiness POLL FD (vms_bg_pollfd.c, VMS_IOCTL_BG_POLLFD, vms-22a). vms.ko hands userspace a real, readiness-ONLY Linux pollable fd whose .poll delegates to the executive socket's own poll, so an event loop (OpenSSH's clientloop/serverloop) can poll()/select() on the BGn: connection while data still moves only through IO\$_READVBLK / IO\$_WRITEVBLK. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "kernel/vms_bg_pollfd.c";;
+        suites_red)   echo "test_syssvc_bgsock_poll";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_bg_pollfd_poll() delegates to the host socket's own poll so the fd reports readable ONLY when the socket really is. The mutation returns EPOLLIN|EPOLLOUT unconditionally (ignoring the socket state), so poll() reports the fd readable BEFORE any data has arrived -- reddening exactly the 'NOT readable before any data' assertion, while the readable-after-send poll and the byte-exact read stay green (data still flows). One return replaced. RE-ANCHORED (vms-387): the readiness-poll fd was split out of vms_bg.c into its own Linux-only rind file kernel/vms_bg_pollfd.c (vms-9951, core/rind split); vms_bg_pollfd_poll's own body and its pre-existing NEGCTL marker are unchanged, so only 'targets' below was corrected.";;
+        require_fail) cat <<'EOF'
+poll() reports NOT readable before any data arrives (readiness reflects the socket)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Make the readiness fd's .poll report readable unconditionally, anchored
+        # on its own NEGCTL comment: the sock->ops->poll delegation ->
+        # (EPOLLIN|EPOLLOUT). poll() then reports readable before any data, so the
+        # "not readable before data" assertion reddens. After substitution the
+        # delegating call with that comment is gone, so a second apply is a no-op.
+        sed -i 's@return sock->ops->poll(file, sock, wait);  /\* NEGCTL bgsock-poll-always-ready \*/@return (EPOLLIN | EPOLLOUT); /* NEGCTL bgsock-poll-always-ready */@' "$_file"
+
+    :
+}

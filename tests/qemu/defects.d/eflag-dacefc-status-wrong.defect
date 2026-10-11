@@ -1,0 +1,43 @@
+# eflag-dacefc-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags -- \$DACEFC's own success status (VMS_IOCTL_DACEFC)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # vms-177. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_dacefc's own body. RANGE-ANCHORED to
+        # vms_ioctl_dacefc's own body: "args.status = SS_NORMAL;" at this
+        # exact 4-space indentation also appears in vms_ioctl_waitfr,
+        # vms_ioctl_wflor, vms_ioctl_wfland (already covered by
+        # eflag-waitfr-eintr-normal's sibling scope) and vms_ioctl_ascefc's
+        # create path -- vms_ioctl_dacefc is defined between ascefc and
+        # dlcefc, so the range excludes all of them.
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DACEFC reports SS\$_UNASEFC -- \"you were never associated with this cluster\" -- for a disassociation that actually happened (proc->ef.common[idx] cleared, the cluster's refcount dropped and freed if it hit zero and was not permanent). The caller is told its own real disassociation never took place.";;
+        require_fail) cat <<'EOF'
+parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: sys$dacefc released the last association to the permanent cluster
+parent: sys$dacefc released the marked cluster
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second and third time: both released-cluster assertions depend on \$DACEFC succeeding on this same call, and this mutation is the ONLY thing that changed.";;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_dacefc's own body. This exact 4-space
+        # "args.status = SS_NORMAL;" also appears in vms_ioctl_waitfr,
+        # vms_ioctl_wflor, vms_ioctl_wfland and vms_ioctl_ascefc's create
+        # path; vms_ioctl_dacefc is defined between ascefc and dlcefc, so
+        # the range excludes all of them.
+        sed -i '/^long vms_ioctl_dacefc/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__UNASEFC; /* NEGCTL eflag-dacefc-status-wrong */|' "$_file"
+    :
+}

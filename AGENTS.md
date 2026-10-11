@@ -105,6 +105,9 @@ accepted.
 - **Tests are mandatory.** No change is complete while a test in any layer it touches is skipped,
   failing, or absent — and don't weaken a test to make a task pass.
 - Match the surrounding code's style, naming, and conventions.
+- A facility negative control is one file, `tests/qemu/defects.d/<name>.defect` (its metadata,
+  `defect_meta`, and its mutation, `defect_apply`); `tests/qemu/facility_defects.sh` lists the
+  directory, so two PRs adding controls never conflict.
 
 ## Lab consoles
 

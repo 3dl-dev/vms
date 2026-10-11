@@ -1,0 +1,76 @@
+# register-continue-identity-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "image-activation identity continuation (VMS_IOCTL_REGISTER_CONTINUE, src/kernel/vms_module.c vms_proc_continue_identity) -- OVMX's fork-per-image made invisible to VMS (vms-4d7, Option B)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_identcont test_syssvc_creprc_inherit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_continue_identity() zeroes the UNCONDITIONAL privilege copy at its source (\`proc->cur_privs = 0\` instead of \`= parent->cur_privs\`, inside the parent->mode_lock), so an activated image (REGISTER_CONTINUE, share_pid) and a \$CREPRC subprocess (REGISTER_SUBPROCESS) both register successfully (inherited=true, CONTINUE_STATUS=1) but carry privs 0 instead of the privilege mask the executive should have carried forward from their activator/creator. This RE-ANCHORS the defect at the identity/privilege copy SITE itself (vms-387 FINDING 1): the prior \`shared_vms_pid = 0\` mutation left the identity copy fully intact and only stopped PID sharing, so it reddened test_kmod_exit's PID-share check and never touched test_syssvc_identcont -- leaving identcont ORPHANED with no can-fail anchor. Because the copy is shared by both the image-continue and the subprocess-inherit entry points (share_pid is the ONLY branch that differs, and it is forbidden as a re-anchor -- it is a PID lie, not an identity one), the honest can-fail set is BOTH consumers: test_syssvc_identcont (its SYSPRV parent's image loses SYSPRV; its FIELD parent's image loses the reduced mask) AND test_syssvc_creprc_inherit (its non-root subprocess loses the SYS_PRIVS mask it should have inherited from the executive, not from capable()). The register/subprocess ioctls still return SS\$_NORMAL, which is why the CONTINUE_STATUS / REGISTER_SUBPROCESS-accepted / user-name / UIC assertions all stay green -- only the PRIVILEGE half of the continued identity is gone.";;
+        require_fail) cat <<'EOF'
+A: the continued image holds the PARENT's SYSPRV mask -- a readback, not a claim, and it never called setident
+A: the subprocess inherited the creator's privilege mask, SETPRV/SYSPRV included
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A: AUTHORIZE printed its banner -- the continued image was ADMITTED
+A: the continued image was never refused
+A: AUTHORIZE exited 0 for the admitted session
+B: the continued image holds the PARENT's REDUCED mask, with SYSPRV genuinely absent -- privileges did not reappear
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+ONE PROPERTY -- "a continued/inherited image carries its activator's privilege
+mask from the executive, never derived from capable()" -- read at two entry
+points that share the SAME copy site.
+
+test_syssvc_identcont exercises the image-CONTINUE entry (share_pid). Its
+require_fail readback ("the continued image holds the PARENT's SYSPRV mask")
+goes red because cur_privs is now 0, and three dependent A observations follow
+from that one missing mask: with no SYSPRV the continued RUN AUTHORIZE cannot
+open SYSUAF, so its admission banner is absent, the %UAF-E-NAOFIL refusal
+appears (the "never refused" check flips), and AUTHORIZE exits 1 not 0 -- the
+three knock-ons above. Scenario B reads the same property downward: a parent
+that setident'd DOWN to FIELD must have its image inherit the REDUCED mask, so
+B's SELF_PRIVS readback (knock-on) moves off FIELD_PRIVS to 0. B's REFUSAL
+assertions (NAOFIL/PRV, banner-absent, rc=1) stay GREEN -- a zero mask lacks
+SYSPRV just as FIELD does, so AUTHORIZE refuses either way.
+
+test_syssvc_creprc_inherit exercises the subprocess-INHERIT entry (share_pid
+false, REGISTER_SUBPROCESS). Its require_fail readback ("the subprocess
+inherited the creator's privilege mask, SETPRV/SYSPRV included") goes red for
+the same reason: the child dropped to a non-root Linux credential, so its only
+possible source of SYS_PRIVS is the executive copy this defect zeroed. Its
+user-name, UIC, VMS-PID-distinct and REGISTER_SUBPROCESS-accepted assertions
+stay GREEN (username/uic are copied on separate lines, untouched; the ioctl
+still succeeds), and Scenario B (a non-root child still cannot self-declare a
+privileged name -> SS\$_NOPRIV) is unaffected because that guard is elsewhere.
+MEASURED red set is exactly the two require_fail readbacks plus the four
+knock-ons above, and no others.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: `proc->cur_privs  = parent->cur_privs;` (two spaces
+        # around the second `=`) occurs once, at 8-space indentation inside
+        # vms_proc_continue_identity()'s hash walk -- the UNCONDITIONAL identity/
+        # privilege copy an activated image (and a $CREPRC subprocess) inherits
+        # from its activator. Zeroing the copy drops the continued/inherited
+        # privilege mask at its SOURCE: the image still registers (inherited=
+        # true, CONTINUE_STATUS=1) but carries privs 0 instead of the parent's,
+        # so it fails EXACTLY where the executive should have carried SYSPRV.
+        # This re-anchors the defect at the copy SITE itself (vms-387 FINDING 1):
+        # the prior `shared_vms_pid = 0` mutation left the identity copy intact
+        # and only stopped PID sharing, so it reddened test_kmod_exit's PID-share
+        # check and never touched test_syssvc_identcont -- an orphan. After this
+        # substitution the `= parent->cur_privs;` text is gone, so a second apply
+        # finds no match: the no-op selftest requires.
+        sed -i 's|^        proc->cur_privs  = parent->cur_privs;$|        proc->cur_privs  = 0; /* NEGCTL register-continue-identity-dropped: continued/inherited image loses the parent'"'"'s privilege mask at the copy site */|' "$_file"
+    :
+}

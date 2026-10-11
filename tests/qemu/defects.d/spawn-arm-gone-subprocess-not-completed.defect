@@ -1,0 +1,28 @@
+# spawn-arm-gone-subprocess-not-completed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "/NOWAIT completion notification for a subprocess that is already gone when its creator arms it (VMS_IOCTL_SPAWN_NOTIFY over the creator's termination record, vms-e9a B1 / vms-f45 / rd vms-9f32)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_spawn_notify() no longer consults the caller's termination record when the subprocess has already been deleted, so it answers SS\$_NONEXPR instead of completing the arm: the creator's completion flag is never set by the executive. The deterministic check deletes a registered child before arming it (its PID already answers SS\$_NONEXPR). lib\$spawn's own NONEXPR fallback still sets the flag on its path, so the lib\$spawn checks stay green; only the direct arm reddens. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+arming the completion of an already-deleted subprocess completes at once:
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the termination-record branch of vms_ioctl_spawn_notify.
+        # Forcing it never-true restores SS$_NONEXPR for a gone subprocess.
+        sed -i 's|^        if (termrec_find(proc, args.child_vms_pid, 0)) {$|        if (0 \&\& termrec_find(proc, args.child_vms_pid, 0)) { /* NEGCTL spawn-arm-gone-subprocess-not-completed */|' "$_file"
+    :
+}

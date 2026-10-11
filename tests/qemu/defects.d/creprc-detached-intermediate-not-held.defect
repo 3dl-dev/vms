@@ -1,0 +1,31 @@
+# creprc-detached-intermediate-not-held -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC of a DETACHED process (sys\$creprc PRC\$M_DETACH, libvms sys_process.c, rd vms-fe7) -- the new process enters the executive's table while its intermediate still links it to the creator, so it starts with no copied process logical names";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_creprc_detached_lnm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The un-ticketed detached path releases the intermediate BEFORE the new process registers, so the intermediate usually exits first: the new process is reparented to the nearest subreaper, which the executive then treats as its fork parent and copies that row's LNM\$PROCESS names into it. On a booted node that is PID 1's plain SYS\$INPUT/OUTPUT/COMMAND (vms-fe7). The suite's creator is the subreaper and holds a marker name; detached subjects now see it. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+no detached process started with a copy of its creator's (or any) process logical names
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        # UNIQUE TEXT: where the grandchild takes its end of the intermediate's
+        # release pipe. The mutation restores the pre-fix state on the
+        # un-ticketed path, deterministically: release the intermediate at once
+        # and enter the table only after it is gone (reparented), which is the
+        # interleaving that copied PID 1's names on the booted node. The
+        # ticketed path is untouched.
+        sed -i 's|^            ticket_sync = syncfd\[1\];$|            ticket_sync = syncfd[1]; if (!use_ticket) { pid_t ip = getppid(); close(ticket_sync); ticket_sync = -1; while (getppid() == ip) usleep(1000); } /* NEGCTL creprc-detached-intermediate-not-held */|' "$_file"
+    :
+}

@@ -1,0 +1,28 @@
+# chkpro-self-rights-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CHKPRO with no profile takes the caller's rights list from the executive (vms-d404 over vms-7d5a)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "chk_self() reads the calling process's rights list with vms_kif_rights_list(). The mutation leaves it empty, so an identifier the caller was granted by \$GRANTID never satisfies an ACE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: holding %X80012345 the caller is granted read by the ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^        uint32_t n = 0, st = vms_kif_rights_list(0, s->rights, NULL, CHKPRO_RIGHTS_MAX, \&n);$#        uint32_t n = 0, st = SS$_NORMAL; /* NEGCTL chkpro-self-rights-ignored */#' "$_file"
+    :
+}

@@ -1,0 +1,47 @@
+# devtab-devscan-found-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "device table -- \$DEVICE_SCAN's own success status when a row IS found (VMS_IOCTL_DEVSCAN)";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        # vms-2e7. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_devscan's own body. The only
+        # "args.status = SS_NORMAL;" in this function, so a plain
+        # range-anchor to vms_ioctl_devscan's own body (for consistency
+        # with its siblings, though a bare text anchor would also be
+        # unambiguous here) is enough.
+        # MEASURED (not the entry's first guess): SHOW DEVICE with no
+        # argument drives DEVSCAN too (the "bare listing"), so this
+        # reaches test_syssvc_showdev as well as test_kmod_devtab.
+        # test_syssvc_getdvi (vms-dv1) drives sys$device_scan directly, whose
+        # loop ends the moment DEVSCAN's first row returns the wrong status.
+        suites_red)   echo "test_kmod_devtab test_syssvc_showdev test_syssvc_getdvi";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DEVICE_SCAN reports SS\$_NOSUCHDEV -- a real but wrong refusal -- for the FIRST row it finds, even though it filled in a real device's info first. Every caller here loops \"while status == SS\$_NORMAL\", so a wrong status on the very first hit ends the scan immediately: it never sees a second device and never reaches the real SS\$_NOMOREDEV terminator either.";;
+        require_fail) cat <<'EOF'
+device scan terminates with SS$_NOMOREDEV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+device scan lists the console terminal
+bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+the listing carries the oracle's column header (section 4)
+the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through fifth time: every one of these assertions depends on \$DEVICE_SCAN succeeding on its first row, and this mutation is the ONLY thing that changed.";;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_devscan's own body for consistency
+        # with its siblings above -- the only "args.status = SS_NORMAL;" in
+        # this function, so the range is not load-bearing for uniqueness,
+        # only for the naming convention this file's devtab-* entries share.
+        sed -i '/^long vms_ioctl_devscan/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__NOSUCHDEV; /* NEGCTL devtab-devscan-found-status-wrong */|' "$_file"
+    :
+}

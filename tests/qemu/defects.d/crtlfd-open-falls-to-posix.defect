@@ -1,0 +1,31 @@
+# crtlfd-open-falls-to-posix -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a static C image's open() of an RMS file goes to RMS through the C RTL file layer (vms-003b)";;
+        targets)      echo "vmsrms/crtl_rms_fd.c";;
+        suites_red)   echo "test_syssvc_crtl_static";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The file layer serves openat() of an RMS file specification. The mutation leaves it to the kernel, so fopen() makes a POSIX file named after the spec in the current directory and nothing reaches the Files-11 volume. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the ACP finds CRTLFD.TXT in [OVMXDIR] on the volume
+stat() reports the byte count written
+unlink() deletes it
+no POSIX file of that name was ever made in the cwd
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^        return do_openat(a1, (const char \*)(uintptr_t)a2, a3, handled);$#        return 0; /* NEGCTL crtlfd-open-falls-to-posix */#' "$_file"
+    :
+}

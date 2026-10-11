@@ -1,0 +1,71 @@
+# kstat-deadlock-mismapped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+    # getjpi-curpriv-name-coverage EXISTED (rounds 7-8) as a QEMU negative
+    # control for a runtime abort() guard in dcl_lexical.c. That guard was
+    # deleted round 9 -- the fact it protected (every VMS_PRV_M_ENFORCED bit
+    # has a row in vms_priv_names[]) is compile-time-determinable, so it is
+    # now a _Static_assert in src/libvms/prv_agreement.c with its own
+    # negative control (documented there, run by hand the same way the
+    # bit-position asserts above it are). There is no longer a way to inject
+    # this defect and boot QEMU to observe it go red: the SAME sed this
+    # entry used to apply (OR (1ULL << 40) into VMS_PRV_M_ENFORCED) now
+    # fails the BUILD at src/libvms/prv_agreement.c, before the container
+    # rebuild step this harness depends on can produce a bootable image --
+    # which this control's own driver (run_facility_negctl.sh) treats as a
+    # BROKEN HARNESS (RUN_RC=4), not a verdict, for every defect in this
+    # file. Keeping the entry would make this control permanently "bad" on
+    # every run, which is worse than deleting it: an eternally-red gate
+    # trains readers to ignore it. test_syssvc_ident.c's scenario F is now a
+    # plain functional proof that CURPRIV renders real content (see its own
+    # comment), not a negative control for this manifest.
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive's SS__DEADLOCK condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields to a caller it aborted for deadlock (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
+        suites_red)   echo "test_kmod_lock_sync test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SS__DEADLOCK is 2488 (SS\$_NOTQUEUED) instead of 3594 (SS\$_DEADLOCK) -- a request the executive rejected FOR DEADLOCK reports to the caller as merely 'not queued'. Since vms-82a the executive yields the VMS condition value itself, so this attacks the executive rather than a userspace mapping: the kernel's DECISION to abort for deadlock is untouched, only the value it answers with changes.";;
+        require_fail) cat <<'EOF'
+parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: sync ENQ closing the cycle rejected SS$_DEADLOCK
+parent: child (completion AST) exited clean
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME DEFECT SEEN FROM THE OTHER SIDE, and its appearance here is a
+consequence of vms-82a rather than a coarse mutation.
+
+Before vms-82a this control mutated kstat_to_ss() in src/libvms/syssvc/
+sys_lock.c -- a userspace mapping only the PUBLIC sys$ path went through. So
+only test_syssvc_lock_status could see it, and test_kmod_lock_sync, which
+reaches the lock manager through raw ioctls, could not.
+
+The executive now yields the VMS condition value itself, so there is exactly
+ONE place the deadlock status exists and BOTH paths read it. test_kmod_lock_sync
+asserts the raw status is SS$_DEADLOCK; test_syssvc_lock_status asserts the
+public API reports SS$_DEADLOCK. One mutated constant, two observations of the
+one defect -- which is the thing the change was for.
+
+The second assertion follows from the first in that suite: the parent decides
+the child exited clean by checking the deadlock status it got, so once the
+status is wrong the parent's own verdict on the child goes with it. There is
+no finer mutation available -- the constant is a single #define, and splitting
+it would mean inventing a second deadlock value the executive does not have
+(the illegal third answer, Rule 10).
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|#define SS__DEADLOCK    3594|#define SS__DEADLOCK    2488 /* NEGCTL kstat-deadlock-mismapped */|' "$_file"
+    :
+}

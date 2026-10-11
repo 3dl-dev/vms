@@ -1,0 +1,42 @@
+# dlm-xnode-redirect-target-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "distributed lock manager -- the DIRECTORY REDIRECT of a mis-addressed cross-node ENQ (vms_lock.c enq_inbound_not_master, rd vms-b96)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        # `xn->redirect_csid = target;` occurs ONCE in the file --
+        # enq_inbound_not_master()'s sole report of the redirect target -- so
+        # no range anchor is needed. Reached by exactly one suite:
+        # test_syssvc_dlm_xnode drives VMS_IOCTL_DLM_XNODE, and no other suite
+        # does (the cross-node handler has no public sys\$ entry point).
+        suites_red)   echo "test_syssvc_dlm_xnode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The engine still DECIDES to redirect a mis-addressed cross-node \$ENQ, but stops REPORTING which node to redirect to: enq_inbound_not_master() reports 0 instead of the master CSID it just read off the resource block, so the dispatch answers VMS_DLM_STS_REDIRECT with master_csid == 0 -- a redirect that names nobody. That is precisely the ungrounded answer INV-6 exists to stop: the wire arm would build a reply with no object behind it, and the requester would be told to re-address a request to node zero. The DECISION is untouched (the status is still REDIRECT) and so are the loop guard and the no-master decline, both of which report 0 legitimately -- so only the assertion about the target moves.";;
+        require_fail) cat <<'EOF'
+the redirect names the master the executive genuinely holds
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
+        # occurs once in the file -- enq_inbound_not_master()'s sole report of
+        # the redirect target. Replacing the value with 0 leaves the DECISION
+        # intact (a->status is still derived from `target`, so the dispatch
+        # still answers VMS_DLM_STS_REDIRECT) and destroys only the ANSWER's
+        # content: a redirect naming nobody. After substitution the line reads
+        # `xn->redirect_csid = 0;`, which no longer contains the anchor text, so
+        # a second apply finds nothing -- the no-op selftest requires. The loop
+        # guard and the no-master decline both report 0 legitimately and are
+        # unaffected, so ONLY "the redirect names the master the executive
+        # genuinely holds" reddens.
+        sed -i 's|    xn->redirect_csid = target;|    xn->redirect_csid = 0; /* NEGCTL dlm-xnode-redirect-target-dropped */|' "$_file"
+    :
+}

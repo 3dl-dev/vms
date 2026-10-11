@@ -1,0 +1,29 @@
+# crtl-feature-unknown-accepted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DEC C feature lookup refuses a name the table does not carry";;
+        targets)      echo "vmsrms/crtl_features.c";;
+        suites_red)   echo "test_syssvc_crtl_features";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "decc\$feature_get_index matches a name against the table with strcmp. The mutation drops the comparison, so any name is accepted and answers the first feature -- the accept-and-ignore the honest rule forbids. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unknown feature name is -1/EINVAL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a real DEC C feature OVMX does not implement is -1/EINVAL (never accepted and ignored)
+EOF
+                      ;;
+        knock_on_why)  echo "the same single mutation also changes what the dependent assertion reads.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        if (features\[i\].name \&\& strcmp(features\[i\].name, name) == 0)$|        if (features[i].name) /* NEGCTL crtl-feature-unknown-accepted */|' "$_file"
+    :
+}

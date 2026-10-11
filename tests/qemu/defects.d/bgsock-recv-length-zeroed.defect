@@ -1,0 +1,32 @@
+# bgsock-recv-length-zeroed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- the ovmx_recv() receive path of the OVMX sockets veneer (src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/send()/recv() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
+        targets)      echo "vmstcpip/sockets/vms_bgsock.c";;
+        suites_red)   echo "test_syssvc_bgsock_echo";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_recv() does one blocking IO\$_READVBLK and returns the IOSB byte count. The mutation zeroes it ('n = got;' -> 'n = 0;'), so recv reports EOF (0) and the reader thread receives nothing while the send, connect and socket-open all stay green -- only the byte-exact full-duplex echo assertion reddens. One assignment zeroed.";;
+        require_fail) cat <<'EOF'
+the reader thread received the echoed message BYTE-EXACT concurrently with the send (full-duplex)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Zero the received byte count in ovmx_recv(), anchored on its own NEGCTL
+        # comment so the text is unique: 'n = iosb$w_bcnt;' -> 'n = 0;'. recv then
+        # reports EOF and the reader gets nothing. After substitution no
+        # 'n = iosb$w_bcnt;' with that comment is left, so a second apply is the
+        # no-op the selftest requires.
+        sed -i 's|n = got;                            /\* NEGCTL bgsock-recv-length-zeroed \*/|n = 0; /* NEGCTL bgsock-recv-length-zeroed */|' "$_file"
+
+    :
+}

@@ -1,0 +1,42 @@
+# kif-setmode-always-kernel -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "access-mode marshalling in libvmssys (vms_kif_setmode, src/libvmssys/vms_kif.c) -- OVMX-UNWIRED (vms-pv1): this wrapper has NO product caller today, only this test suite";;
+        targets)      echo "libvmssys/vms_kif.c";;
+        suites_red)   echo "test_kmod_access";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_kif_setmode() writes args.mode as a fixed PSL_C_KERNEL (0) instead of the caller's requested mode, so a caller asking to drop to USER has the ioctl sent asking for KERNEL instead -- and it still reports SS\$_NORMAL, because a process already in KERNEL mode staying in KERNEL mode is unremarkable to the executive.";;
+        require_fail) echo "... and the mode really returned to USER";;
+        knock_on_fail) echo "";;
+        knock_on_why) cat <<'EOF'
+KNOWN NEGATIVE: this mutation is NOT a blunderbuss on top of
+access-mode-escalation even though both touch VMS_IOCTL_SETMODE. It forces
+args.mode to PSL_C_KERNEL (0) UNCONDITIONALLY, so the parent's first setmode
+call (already requesting PSL_C_KERNEL) is byte-for-byte unaffected -- "KERNEL
+mode ALLOWED with CMKRNL" and "... and the mode really changed" both stay
+green. The unprivileged child's escalation attempt (also requesting
+PSL_C_KERNEL) is likewise unaffected by this defect, so "KERNEL mode DENIED
+without CMKRNL (SS\$_NOPRIV)" and "... and the mode is still USER after the
+denied escalation" stay green too -- the child never calls setmode(USER), so
+this defect never reaches it. Only the parent's PSL_C_USER request is
+silently rewritten to PSL_C_KERNEL, and only "... and the mode really
+returned to USER" -- the GETMODE re-read added for vms-0e4 -- can see that
+the mode never moved; "returning to USER mode is always allowed" (the
+vms_kif_setmode() return-status check) cannot, because the callee reports
+SS$_NORMAL either way. The knock_on_fail set for THIS defect is MEASURED
+EMPTY: a run with this defect injected produces exactly one FAIL line in
+test_kmod_access, confirming the mutation is already as fine as it can be.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|    args.mode = mode;|    args.mode = 0; /* NEGCTL kif-setmode-always-kernel */|' "$_file"
+    :
+}

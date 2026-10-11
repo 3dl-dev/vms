@@ -1,0 +1,29 @@
+# libcreatedir-rooted-default-unresolved -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "LIB\$CREATE_DIR composes a logical (concealed rooted search-list) device to the on-volume member the directory is made in";;
+        targets)      echo "libvms/rtl/lib_dir.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$create_dir() calls pick_candidate() to compose the device through LNM\$FILE_DEV. The mutation drops the call, so a relative spec under the default CDIR\$ROOT:[RSUB] is \$ASSIGNed on the logical name itself and fails. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+LIB$CREATE_DIR [.LEAF] under a rooted default is SS$_CREATED
+LEAF.DIR is in [OVMXDIR.RSUB], the member that exists
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    pick_candidate(dev, sizeof(dev), tree, sizeof(tree));$|    /* NEGCTL libcreatedir-rooted-default-unresolved */|' "$_file"
+    :
+}

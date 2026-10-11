@@ -1,0 +1,42 @@
+# dcl-acp-search-fid-fabricated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL file access via RMS/\$QIO-to-ACP: DCL DIRECTORY /FULL and the F\$SEARCH lexical reach files through RMS \$SEARCH, which returns each wildcard match's GENUINE ODS-2 File ID from the executive directory context (rms_search_fid over vms_kif_acp_acpcontrol; src/vmsrms/rms_search.c, consumed by src/vmsdcl/dcl_filespec.c dcl_rms_dir_*), vms-481, epic vms-208";;
+        targets)      echo "vmsrms/rms_search.c";;
+        suites_red)   echo "test_syssvc_dcl_acp test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_impl_search() records the match's File ID number the ACP directory search returned (\`ctx->fid_num = a.fid_num;\`) so rms_search_fid() can hand DIRECTORY /FULL the REAL id. The mutation adds one (\`ctx->fid_num = a.fid_num + 1;\`), so every File ID F\$SEARCH/DIRECTORY reports is fabricated one too high while the match NAME, VERSION and iteration ORDER (from the resultant name + out_version, untouched) stay correct. Only the assertions that check the File ID against the codec-deterministic fixture (A.TXT;3=14, ;2=13, ;1=12, B.TXT;1=16) redden; the RMS\$_NMF exhaustion, the SET DEFAULT directory check and the byte-exact TYPE/COPY/CREATE round-trips all read a DIFFERENT source (rms_file_attr / rms_io) and stay green -- which is exactly the point: the search FID is not synthesized, it is the on-disk one (INV-6). After substitution the original text is gone, so a second apply matches nothing (the no-op selftest requires).";;
+        require_fail) cat <<'EOF'
+F$SEARCH/DIRECTORY match 1 = A.TXT version 3, real File ID 14 (highest first)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+F$SEARCH match 2 = A.TXT version 2, real File ID 13 (versions descending)
+F$SEARCH match 3 = A.TXT version 1, real File ID 12
+F$SEARCH match 4 = B.TXT version 1, real File ID 16 (B.LOG excluded by .TXT)
+vms-6e28: DIRECTORY/FULL's "File ID:" is the nam$w_fid $CREATE returned
+EOF
+                      ;;
+        knock_on_why)  echo "the same fabricated-FID mutation shifts every match's reported File ID, so all four *.TXT matches read one too high; match 1 is the require_fail, the rest are its knock-ons. \$SEARCH also returns that same (fabricated) ID in nam\$w_fid (vms-6e28), which DIRECTORY /FULL now prints, so test_syssvc_rms_acp's check that DIRECTORY /FULL's File ID is the one \$CREATE returned reddens too (with its run-time-labelled per-file \$SEARCH-vs-\$CREATE ID assertions).";;
+        esac
+
+}
+
+defect_apply() {
+        # ANCHORED to the single match-FID record in rms_impl_search:
+        # `ctx->fid_num = a.fid_num;` occurs exactly once in rms_search.c.
+        # Adding one fabricates every File ID F$SEARCH/DIRECTORY reports (one too
+        # high), while the match name/version/order (resultant name + out_version,
+        # untouched) stay correct -- so only the fixture-FID assertions in
+        # test_syssvc_dcl_acp redden, and rms_file_attr / the byte-exact
+        # round-trips (a different source) stay green. After substitution no
+        # `= a.fid_num;` is left (now `= a.fid_num + 1;`) -- the no-op the
+        # idempotency selftest requires.
+        sed -i 's|ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;|ctx->fid_num = a.fid_num + 1; ctx->fid_seq = a.fid_seq; /* NEGCTL dcl-acp-search-fid-fabricated */|' "$_file"
+
+    :
+}

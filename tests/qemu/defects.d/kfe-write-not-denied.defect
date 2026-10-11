@@ -1,0 +1,28 @@
+# kfe-write-not-denied -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an installed image is write-denied for the life of its known-file entry (Baron, vms-96e7)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_kfe_stage() denies writes to the executive's copy it holds (deny_write_access). The mutation skips the denial, so the installed copy -- and with it a /PRIVILEGED image -- could be rewritten after INSTALL (root's DAC override ignores its 0555 mode). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+opening the executive's copy for write is refused (ETXTBSY) -- even by substrate root
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t} else if ((e = deny_write_access(ro)) != 0) {$|\t\t} else if ((e = 0) != 0) { /* NEGCTL kfe-write-not-denied */|' "$_file"
+    :
+}

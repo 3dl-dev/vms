@@ -1,0 +1,84 @@
+# ident-username-unguarded -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_kmod_ident";;
+        blind_suites) echo "test_syssvc_ident";;
+        blind_why)    cat <<'EOF'
+test_syssvc_ident.c (vms-2b8) drives VMS_IOCTL_SETIDENT through DCL.EXE
+rather than raw ioctls, but MEASURED, not assumed, to stay green under this
+mutation (run_facility_negctl.sh ident-username-unguarded, coverage gap
+found and closed vms-2b8 this round): every one of its scenarios that
+attempts an identity a caller is NOT entitled to (C: unprivileged claimant,
+D: session subprocess) sets BOTH a UIC that is not its own AND a mask that
+is not a subset of its authorized one, so the UIC clause or the mask-subset
+clause -- both left intact by this mutation, which disables only the name
+clause -- still refuses the call and the suite's assertions do not move.
+Its two scenarios that DO succeed (A, B) run as a privileged writer holding
+SETPRV, which skips the whole guarded block (including the name clause)
+regardless of this mutation. So no scenario in this suite isolates the name
+clause alone; test_kmod_ident's own USER NAME CLAUSE ISOLATED cases
+(same UIC, same mask, different name) are what this defect actually
+exercises. Closing this gap means adding a test_syssvc_ident scenario that,
+like test_kmod_ident's, holds the UIC and mask clauses constant and varies
+only the name -- tracked under vms-2b8, not fixed here.
+EOF
+                      ;;
+        isolation)    echo "isolated";;
+        why)          echo "\$SETIDENT stops guarding the USER NAME for a caller without SETPRV: the name clause of the one-way-drop rule is short-circuited, while the UIC clause and the authorized-mask subset clause are left intact. This is the vms-2b8 round-3 defect exactly -- the version that guarded the two fields nobody displays and left the one every reader shows unprotected, so an unprivileged process could stamp itself \"SYSTEM\" and \$GETJPI would report it to everyone.";;
+        require_fail) cat <<'EOF'
+USER NAME CLAUSE ISOLATED: own UIC, own mask, name "SYSTEM" -> SS$_NOPRIV
+USER NAME CLAUSE ISOLATED: same UIC, same mask, different name -> SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+... and the process is STILL UNNAMED (a process cannot name itself a user)
+an UNNAMED process cannot stamp an identity at all -- there is no name it is allowed to hold constant
+... and the executive still holds the name it authenticated
+the refused climb-back changed nothing
+A WRITES the user name, B READS it (identity is executive-resident)
+B resolves A BY NAME within the UIC group and sees the same identity
+the scan returns a SAME-GROUP row in full (no privilege needed)
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+NINE reds, one removed guard, and the size of the blast radius IS the argument
+for the guard. test_kmod_ident is sequential and shares one executive row per
+process, so the moment a rename that should have been refused succeeds, every
+later READ of that row in the same suite is reading a name the process gave
+itself:
+  the two require_fail entries are the refusals themselves, from both sides
+    -- an unnamed process stamping "SYSTEM" (l.815) and a named process
+    changing to a different name (l.913);
+  "... and the process is STILL UNNAMED" and "an UNNAMED process cannot stamp
+    an identity at all" are the same refusal read back on the unnamed caller
+    (l.817, l.835) -- with the guard gone it now has a name;
+  "... and the executive still holds the name it authenticated" (l.919) and
+    "the refused climb-back changed nothing" (l.966) are process A's own row
+    after its rename wrongly succeeded;
+  "A WRITES the user name, B READS it", "B resolves A BY NAME ..." and "the
+    scan returns a SAME-GROUP row in full" (l.992, l.999, l.1033) are Rule 11's
+    A-writes/B-reads checks -- a second process, and a PROCSCAN, reading the
+    corrupted name out of the executive. Those three are the most valuable reds
+    in the set: they show the defect is executive-resident, not local to the
+    liar.
+There is no finer edit inside this clause: it is a single `if`. A DIFFERENT
+clause of the same rule (the UIC test, or the authorized-mask subset test)
+would give a smaller red set, and the suite has "CLAUSE ISOLATED" assertions
+for each -- but the name clause is the one vms-2b8 round 3 had to add, because
+the earlier version guarded the two fields nobody displays and left the one
+every reader shows unprotected. Controlling the clause that matters least
+would be tidier and worth less.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|if (strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) {|if (0 \&\& strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) { /* NEGCTL ident-username-unguarded */|' "$_file"
+    :
+}

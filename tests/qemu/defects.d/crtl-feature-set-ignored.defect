@@ -1,0 +1,28 @@
+# crtl-feature-set-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DEC C decc\$feature_set_value stores the value";;
+        targets)      echo "vmsrms/crtl_features.c";;
+        suites_red)   echo "test_syssvc_crtl_features";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "decc\$feature_set_value stores a current value with 'f->cur = value;'. The mutation turns the store into a self-assignment, so the set is accepted and lost. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+get_value reads back what set_value stored, default untouched
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        f->cur = value;$|        f->cur = f->cur; /* NEGCTL crtl-feature-set-ignored */|' "$_file"
+    :
+}

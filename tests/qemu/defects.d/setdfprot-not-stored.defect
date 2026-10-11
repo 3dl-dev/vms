@@ -1,0 +1,30 @@
+# setdfprot-not-stored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$SETDFPROT default-protection attribute is held per process in the executive (vms-44a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_setdfprot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_dfprot() stores a new default protection with 'proc->dfprot = (uint16_t)(args.newprot & 0xFFFFu);'. The mutation replaces that store with a self-assignment, so the set flag flips but the value never lands: the next read returns the initial default instead of what was set, a REGISTER_CONTINUE child inherits the initial default, and the previous-value return of a second set is wrong. Unique line in the file; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a later read returns what was set
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a REGISTER_CONTINUE child (activated image) inherits it from the executive
+setting returns the previous value
+EOF
+                      ;;
+        knock_on_why)  echo "all three assertions read back the stored value; with the store dropped each sees the initial default.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        proc->dfprot = (uint16_t)(args.newprot \& 0xFFFFu);$|        proc->dfprot = proc->dfprot; /* NEGCTL setdfprot-not-stored */|' "$_file"
+    :
+}

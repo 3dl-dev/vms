@@ -134,6 +134,10 @@ struct vms_scs {
 	 * what actually happened on it -- counted here, where it happens. */
 	vms_scs_block_cb block_cb[VMS_SCS_MAX_BLOCK_CONSUMERS];
 	void            *block_ctx[VMS_SCS_MAX_BLOCK_CONSUMERS];
+	/* rd vms-1f64: the same consumer's "your SEND DATA was acknowledged"
+	 * routine, slot for slot with block_cb (vms_scs_set_block_sent). */
+	vms_scs_block_sent_cb block_sent_cb[VMS_SCS_MAX_BLOCK_CONSUMERS];
+	uint32_t         block_sends_confirmed;
 	uint32_t         block_completions;
 	uint32_t         block_unclaimed;
 };
@@ -433,6 +437,25 @@ static void scs_upper_block_data(void *ctx, vms_scs_sysid_t from, uint32_t name,
 		scs->block_unclaimed++;
 }
 
+/* rd vms-1f64: a SEND DATA this node initiated was acknowledged (0x0f). The
+ * same exact fan-out as block_data: each consumer recognises its own name. */
+static void scs_upper_block_sent(void *ctx, vms_scs_sysid_t from, uint32_t name)
+{
+	struct vms_scs *scs = (struct vms_scs *)ctx;
+	uint32_t i, delivered = 0u;
+
+	(void)from;
+	scs->block_sends_confirmed++;
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (scs->block_sent_cb[i] == (vms_scs_block_sent_cb)0)
+			continue;
+		scs->block_sent_cb[i](scs->block_ctx[i], name);
+		delivered++;
+	}
+	if (delivered == 0u)
+		scs->block_unclaimed++;
+}
+
 static void scs_upper_bind(struct vms_scs *scs)
 {
 	scs->upper.message = scs_upper_message;
@@ -446,6 +469,7 @@ static void scs_upper_bind(struct vms_scs *scs)
 	 * forwarder is a no-op -- which is the legitimate NULL case the port
 	 * itself documents. */
 	scs->upper.block_data = scs_upper_block_data;
+	scs->upper.block_sent = scs_upper_block_sent;
 }
 
 /* ==========================================================================
@@ -773,8 +797,36 @@ static void scs_block_withdraw(struct vms_scs *scs, void *cb_ctx)
 		if (cb_ctx != (void *)0 && scs->block_ctx[i] != cb_ctx)
 			continue;
 		scs->block_cb[i] = (vms_scs_block_cb)0;
+		scs->block_sent_cb[i] = (vms_scs_block_sent_cb)0;
 		scs->block_ctx[i] = (void *)0;
 	}
+}
+
+/*
+ * vms_scs_set_block_sent - vms_scs.h SS9. Attach the acknowledgement routine
+ * to a consumer ALREADY registered under `cb_ctx` by vms_scs_set_block_
+ * consumer; SS$_IVCHAN-style refusal (SS$_BADPARAM) when there is none, so an
+ * acknowledgement can never be routed to a SYSAP that owns no buffers.
+ */
+int vms_scs_set_block_sent(struct vms_cluster *cl, vms_scs_block_sent_cb cb,
+			   void *cb_ctx)
+{
+	struct vms_scs *scs;
+	uint32_t i;
+
+	if (cl == (struct vms_cluster *)0 || cb_ctx == (void *)0)
+		return SS__BADPARAM;
+	scs = cl->scs;
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (scs->block_ctx[i] == cb_ctx &&
+		    scs->block_cb[i] != (vms_scs_block_cb)0) {
+			scs->block_sent_cb[i] = cb;
+			return SS__NORMAL;
+		}
+	}
+	return SS__BADPARAM;
 }
 
 /*

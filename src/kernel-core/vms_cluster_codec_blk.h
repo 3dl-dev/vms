@@ -263,6 +263,74 @@ vms_codec_status_t vms_blk_trailer_parse(const uint8_t *frame,
 					 uint32_t inner_frame_len,
 					 struct vms_blk_view *out);
 
+/* ------------------------------------------------------------------ *
+ * sec 5  The port opcode at abs 55 (rd vms-1f64, 2026-10-11)
+ * ------------------------------------------------------------------ */
+
+/*
+ * ABS 55 IS THE PORT OPCODE OF A SEQUENCED FRAME, and it is what names the
+ * block-transfer class -- positively, not by the negative format-word test
+ * above. MEASURED over every 0x4b/0x5b/0x7b frame in the lab captures on hand
+ * (dlmlab C/D/E/F/R arms, rm-A, close-exp/-ho, op0f-ho1/2, oracle-dmt, the
+ * ci6-evac-2..16 wires; script /tmp/evac census, re-derivable with any pcap
+ * reader):
+ *
+ *   abs 55  frames      shape
+ *   0x02    1,217,539   an SCS message: abs 58 == 0x0004 in EVERY one
+ *   0x08        2,759   REQUEST DATA: header only, SCA content 68 in every one
+ *   0x0c           39   a NON-FINAL frame answering a REQUEST DATA
+ *   0x0d        2,758   the FINAL (or only) frame answering a REQUEST DATA
+ *   0x05          257   SEND DATA: header + data, one frame in every one
+ *   0x0f          257   the 8-byte acknowledgement of a SEND DATA (SCA
+ *                       content 48), one per 0x05, 257 of 257
+ *
+ * No other value occurs. This replaces the spec-sec-4(h)(4) reading of abs 54
+ * as "constant 0x0200 in 238521/239981": the 1460 frames that census could
+ * not explain were these five opcodes.
+ *
+ * WHAT THE HEADER'S +0/+4/+6 ARE, MEASURED ON THE SAME POPULATION:
+ *   +0  the INITIATOR's own Con.ID for the connection (the node that sends
+ *       the 0x08 or the 0x05): 4,827 of 4,827 initiated frames, against the
+ *       Con.ID pairs the same two nodes' 0x02 messages carry. The responder
+ *       echoes it.
+ *   +4/+6  a tag the initiator mints per transfer (a small index, 1..17
+ *       observed, and a sequence that advances between transfers); the
+ *       responder echoes all three fields byte for byte in its 0x0c/0x0d or
+ *       0x0f. The tag is the initiator's own and opaque to the responder.
+ *
+ * A NON-FINAL SEND DATA frame was never observed (every 0x05 was a single
+ * frame), so its opcode is UNGROUNDED and this codec names none for it.
+ */
+#define VMS_OFF_BLK_PORT_OP          55u
+#define VMS_BLK_OP_MESSAGE           0x02u
+#define VMS_BLK_OP_SEND_DATA         0x05u
+#define VMS_BLK_OP_REQUEST_DATA      0x08u
+#define VMS_BLK_OP_RETURN_MORE       0x0cu
+#define VMS_BLK_OP_RETURN_LAST       0x0du
+#define VMS_BLK_OP_SEND_CONFIRM      0x0fu
+
+/* The acknowledgement carries the header's first 8 bytes and nothing else. */
+#define VMS_BLK_CONFIRM_LEN          8u
+#define VMS_BLK_CONFIRM_FRAME_LEN    (VMS_BLK_HDR_OFF + VMS_BLK_CONFIRM_LEN)
+
+/* The opcode at abs 55, or 0 when the frame is too short to carry one. */
+uint8_t vms_blk_port_op(const uint8_t *frame, uint32_t len);
+
+/* 1 iff `op` is one of the five block-transfer opcodes measured above. */
+int vms_blk_port_op_is_block(uint8_t op);
+
+/* Write `op` at abs 55. Refuses (VMS_CODEC_E_INVAL) any value that is not a
+ * measured block opcode: a frame is never stamped with a guess. */
+vms_codec_status_t vms_blk_port_op_put(uint8_t *frame, uint32_t cap,
+				       uint8_t op);
+
+/* The 8-byte acknowledgement: +0/+4/+6 of `h` at abs 56..63, nothing else. */
+vms_codec_status_t vms_blk_confirm_build(const struct vms_blk_hdr *h,
+					 uint8_t *frame, uint32_t cap);
+/* Its mirror; every other field of *out is zeroed. */
+vms_codec_status_t vms_blk_confirm_parse(const uint8_t *frame, uint32_t len,
+					 struct vms_blk_hdr *out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1494,6 +1494,9 @@ long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
  * backing (major,minor) so it can read the home block/SCB and validate the
  * volume. SS$_NORMAL / SS$_NOSUCHDEV / SS$_IVDEVNAM. Defined in kernel-core.
  */
+/* rd vms-1f64: 1 if the device table holds a unit by this counted name,
+ * 0 if not, -1 if the bytes are not a device name (vms_devtab.c). */
+int vms_devtab_name_present(const uint8_t *name, uint32_t len);
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
 /*

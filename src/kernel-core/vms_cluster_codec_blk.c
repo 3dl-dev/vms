@@ -253,3 +253,80 @@ vms_codec_status_t vms_blk_trailer_parse(const uint8_t *frame,
 	}
 	return VMS_CODEC_OK;
 }
+
+/* ------------------------------------------------------------------ *
+ * The port opcode (vms_cluster_codec_blk.h sec 5)
+ * ------------------------------------------------------------------ */
+
+uint8_t vms_blk_port_op(const uint8_t *frame, uint32_t len)
+{
+	if (frame == (const uint8_t *)0 || len <= VMS_OFF_BLK_PORT_OP)
+		return 0u;
+	return frame[VMS_OFF_BLK_PORT_OP];
+}
+
+int vms_blk_port_op_is_block(uint8_t op)
+{
+	switch (op) {
+	case VMS_BLK_OP_SEND_DATA:
+	case VMS_BLK_OP_REQUEST_DATA:
+	case VMS_BLK_OP_RETURN_MORE:
+	case VMS_BLK_OP_RETURN_LAST:
+	case VMS_BLK_OP_SEND_CONFIRM:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+vms_codec_status_t vms_blk_port_op_put(uint8_t *frame, uint32_t cap,
+				       uint8_t op)
+{
+	if (frame == (uint8_t *)0 || !vms_blk_port_op_is_block(op))
+		return VMS_CODEC_E_INVAL;
+	if (cap <= VMS_OFF_BLK_PORT_OP)
+		return VMS_CODEC_E_SHORT;
+	frame[VMS_OFF_BLK_PORT_OP] = op;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_blk_confirm_build(const struct vms_blk_hdr *h,
+					 uint8_t *frame, uint32_t cap)
+{
+	vms_wire_buf_t w;
+
+	if (h == (const struct vms_blk_hdr *)0 || frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_BLK_CONFIRM_FRAME_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_buf_init(&w, frame, cap);
+	vms_wire_put_le32(&w, VMS_OFF_BLK_DEST_CONID, h->dest_conid);
+	vms_wire_put_le16(&w, VMS_OFF_BLK_OBS_W4, h->obs_w4);
+	vms_wire_put_le16(&w, VMS_OFF_BLK_OBS_W6, h->obs_w6);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_blk_confirm_parse(const uint8_t *frame, uint32_t len,
+					 struct vms_blk_hdr *out)
+{
+	vms_wire_view_t v;
+	uint8_t *p;
+	uint32_t i;
+
+	if (frame == (const uint8_t *)0 || out == (struct vms_blk_hdr *)0)
+		return VMS_CODEC_E_INVAL;
+	p = (uint8_t *)out;
+	for (i = 0; i < (uint32_t)sizeof(*out); i++)
+		p[i] = 0;
+	if (len < VMS_BLK_CONFIRM_FRAME_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, frame, len);
+	out->dest_conid = vms_wire_get_le32(&v, VMS_OFF_BLK_DEST_CONID);
+	out->obs_w4 = vms_wire_get_le16(&v, VMS_OFF_BLK_OBS_W4);
+	out->obs_w6 = vms_wire_get_le16(&v, VMS_OFF_BLK_OBS_W6);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	return VMS_CODEC_OK;
+}

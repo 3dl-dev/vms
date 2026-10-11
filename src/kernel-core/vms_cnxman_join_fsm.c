@@ -2757,6 +2757,234 @@ static int join_close_withheld(struct cnxman_join *j)
  * was running. A fixed-width body cannot express "omitted", so the omission has
  * to move up a level: no grounded value, no response.
  */
+/* ==========================================================================
+ * rd vms-1f64: the kind-6 close -- pull the requester's record, write the
+ * answer back into its buffer, THEN answer on the connection
+ * (vms_cluster_codec_cm.h, "THE BLOCK-TRANSFER DESCRIPTOR")
+ * ========================================================================== */
+
+static int join_rdev_ops_ok(const struct cnxman_join *j)
+{
+	const struct cnxman_join_ops *o = j->jops;
+
+	return o != NULL && o->blk_register != NULL &&
+	       o->blk_release != NULL && o->blk_request != NULL &&
+	       o->blk_send != NULL && o->device_present != NULL &&
+	       o->send_msg != NULL;
+}
+
+static void join_rdev_free(struct cnxman_join *j, struct cnxman_rdev *r)
+{
+	if (r->local_name != 0u)
+		(void)j->jops->blk_release(j->jops->ctx, r->local_name);
+	join_bzero(r, (uint32_t)sizeof(*r));
+}
+
+static struct cnxman_rdev *join_rdev_by_name(struct cnxman_join *j,
+					     uint32_t name)
+{
+	uint32_t i;
+
+	if (name == 0u)
+		return NULL;
+	for (i = 0; i < CNXMAN_RDEV_MAX; i++) {
+		if (j->rdev[i].state != (uint8_t)CNXMAN_RDEV_FREE &&
+		    j->rdev[i].local_name == name)
+			return &j->rdev[i];
+	}
+	return NULL;
+}
+
+/* A free slot, reclaiming one that has gone stale (its peer never finished
+ * the transfer). Every reclaim is counted. */
+static struct cnxman_rdev *join_rdev_slot(struct cnxman_join *j)
+{
+	uint32_t i, now = join_now_ms(j);
+
+	for (i = 0; i < CNXMAN_RDEV_MAX; i++) {
+		struct cnxman_rdev *r = &j->rdev[i];
+
+		if (r->state != (uint8_t)CNXMAN_RDEV_FREE &&
+		    (now - r->started_ms) >= CNXMAN_RDEV_STALE_MS) {
+			j->rdev_reclaimed++;
+			join_rdev_free(j, r);
+		}
+		if (r->state == (uint8_t)CNXMAN_RDEV_FREE)
+			return r;
+	}
+	return NULL;
+}
+
+/*
+ * Answer the request held in `req` on its connection, now. The body is the
+ * same cat-0x86 vms_cm_close_build makes for the immediate answer; only its
+ * MOMENT moved, to after the write-back.
+ */
+static int join_rdev_answer(struct cnxman_join *j, struct cnxman_rdev *r)
+{
+	struct vms_cm_node_params own;
+	struct vms_csb *csb;
+	uint16_t close_state;
+
+	csb = (j->cl == NULL || r->from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)r->from_csb);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid != r->conid) {
+		j->send_failures++;
+		j->replies_unaddressed++;
+		return -1;
+	}
+	close_state = vms_cm_close_state_for(r->req, VMS_CM_BODY_LEN);
+	if (close_state == 0u)
+		return -1;
+	join_own_params(j, &own);
+	if (vms_cm_close_build(r->req, VMS_CM_BODY_LEN, &own, close_state,
+			       j->scratch, (uint32_t)sizeof(j->scratch),
+			       NULL) != VMS_CODEC_OK)
+		return -1;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
+	if (j->jops->send_msg(j->jops->ctx, r->conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	j->closes_answered++;
+	return 0;
+}
+
+/* Give up on the write-back and answer the pre-vms-1f64 way. Counted. */
+static void join_rdev_unanswerable(struct cnxman_join *j,
+				   struct cnxman_rdev *r)
+{
+	j->rdev_unanswerable++;
+	(void)join_rdev_answer(j, r);
+	join_rdev_free(j, r);
+}
+
+/*
+ * Start a kind-6 close. 0 when the pull is under way and the answer will come
+ * from cnxman_join_blk_sent(); -1 when this request takes the immediate path.
+ */
+static int join_rdev_start(struct cnxman_join *j, const struct join_ev *e,
+			   const struct vms_cm_xfer_desc *d)
+{
+	struct vms_csb *csb = join_arrival_csb(j, e);
+	struct cnxman_rdev *r;
+
+	if (csb == NULL || e->len < VMS_CM_BODY_LEN)
+		return -1;
+	/* +0 is the RECIPIENT's own Con.ID (3,158 of 3,158): a descriptor
+	 * naming any other is not one this node can honour. */
+	if (d->conid != csb->cdt_conid) {
+		j->rdev_conid_mismatch++;
+		return -1;
+	}
+	r = join_rdev_slot(j);
+	if (r == NULL)
+		return -1;
+	join_bzero(r, (uint32_t)sizeof(*r));
+	r->from_csb = e->from_csb;
+	r->conid = csb->cdt_conid;
+	r->desc = *d;
+	r->started_ms = join_now_ms(j);
+	join_bcopy(r->req, e->body, VMS_CM_BODY_LEN);
+	if (j->jops->blk_register(j->jops->ctx, r->rec, d->len,
+				  &r->local_name) != 0 ||
+	    r->local_name == 0u) {
+		join_bzero(r, (uint32_t)sizeof(*r));
+		return -1;
+	}
+	if (j->jops->blk_request(j->jops->ctx, r->conid, d->conid, d->name,
+				 r->local_name, d->len) != 0) {
+		join_rdev_free(j, r);
+		return -1;
+	}
+	r->state = (uint8_t)CNXMAN_RDEV_PULLING;
+	j->rdev_started++;
+	return 0;
+}
+
+void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
+			  uint32_t offset, uint32_t len,
+			  uint32_t bytes_remaining)
+{
+	struct cnxman_rdev *r;
+	struct vms_cm_rdev_req req;
+	uint32_t status;
+	int present;
+
+	(void)offset;
+	if (j == NULL || !join_rdev_ops_ok(j))
+		return;
+	r = join_rdev_by_name(j, name);
+	if (r == NULL || r->state != (uint8_t)CNXMAN_RDEV_PULLING)
+		return;
+	/* The down-counter includes this frame: equal means the last one. */
+	if (bytes_remaining != len)
+		return;
+
+	if (vms_cm_rdev_req_parse(r->rec, r->desc.len, &req) !=
+	    VMS_CODEC_OK) {
+		join_rdev_unanswerable(j, r);
+		return;
+	}
+	present = j->jops->device_present(j->jops->ctx, req.name,
+					  req.name_len);
+	if (present != 0) {
+		/* Present: answering would mean performing the remote
+		 * MOUNT/DISMOUNT, which this node does not do; unknown: no
+		 * honest status to write. Neither is invented. */
+		join_rdev_unanswerable(j, r);
+		return;
+	}
+	/* Absent: the status a real member without the device writes for this
+	 * record kind (vms_cluster_codec_cm.h) -- read off the device table,
+	 * never assumed. */
+	status = vms_cm_rdev_status_absent(req.kind);
+	if (status == 0u ||
+	    vms_cm_rdev_answer_in_place(r->rec, r->desc.len, status) !=
+	    VMS_CODEC_OK ||
+	    j->jops->blk_send(j->jops->ctx, r->conid, r->desc.conid,
+			      r->desc.name, r->local_name,
+			      r->desc.len) != 0) {
+		join_rdev_unanswerable(j, r);
+		return;
+	}
+	r->state = (uint8_t)CNXMAN_RDEV_WRITING;
+}
+
+void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name)
+{
+	struct cnxman_rdev *r;
+
+	if (j == NULL || !join_rdev_ops_ok(j))
+		return;
+	r = join_rdev_by_name(j, name);
+	if (r == NULL || r->state != (uint8_t)CNXMAN_RDEV_WRITING)
+		return;
+	if (join_rdev_answer(j, r) == 0) {
+		j->rdev_answered++;
+		if (r->desc.len == VMS_CM_RDEV_DISMOUNT_LEN)
+			j->rdev_nosuchdev++;
+		else
+			j->rdev_mount_normal++;
+	}
+	join_rdev_free(j, r);
+}
+
+/* A connection went away: its requests can no longer be answered. */
+static void join_rdev_conn_closed(struct cnxman_join *j, vms_conid_t conid)
+{
+	uint32_t i;
+
+	if (!join_rdev_ops_ok(j))
+		return;
+	for (i = 0; i < CNXMAN_RDEV_MAX; i++) {
+		if (j->rdev[i].state != (uint8_t)CNXMAN_RDEV_FREE &&
+		    j->rdev[i].conid == conid)
+			join_rdev_free(j, &j->rdev[i]);
+	}
+}
+
 static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 					const struct join_ev *e)
 {
@@ -2769,6 +2997,21 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
+	/* rd vms-1f64: a kind-6 close moves a record first, by block transfer,
+	 * and is answered when that is done (cnxman_join_blk_sent). */
+	{
+		struct vms_cm_xfer_desc d;
+
+		if (join_rdev_ops_ok(j) &&
+		    vms_cm_xfer_desc_parse(e->body, e->len, &d) ==
+			    VMS_CODEC_OK &&
+		    d.kind == (uint8_t)VMS_CM_CLOSE_KIND_VOLUME &&
+		    (d.len == VMS_CM_RDEV_DISMOUNT_LEN ||
+		     d.len == VMS_CM_RDEV_MOUNT_LEN) &&
+		    join_rdev_start(j, e, &d) == 0)
+			return CNXMAN_JOIN_RX_CONSUMED;
+	}
+
 	/* The request's own kind decides first: a MOUNT/DISMOUNT/CLUSTER close
 	 * has a grounded answer (rd vms-2ef). Anything else falls back to a
 	 * configured value, and with none is withheld as before. */
@@ -4695,6 +4938,7 @@ void cnxman_join_closed(struct cnxman_join *j, vms_conid_t conid,
 	join_bzero(&e, (uint32_t)sizeof(e));
 	e.conid = conid;
 	e.reason = reason;
+	join_rdev_conn_closed(j, conid);
 	(void)join_dispatch(j, CNXMAN_EV_CDT_CLOSED, &e);
 }
 

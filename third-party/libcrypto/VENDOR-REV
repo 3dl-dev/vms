@@ -4,7 +4,7 @@ Primary URL:       https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.1.2.t
 Mirror URL:        https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.1.2.tar.gz
 Pinned version:    4.1.2   (stable 4.1 branch release)
 Tarball SHA256:    fba4e2fa2a7f52306df7a389970a10e98b97eb0edb299a9fdb9dbf49999c61e1
-Vendored:          2026-08-14
+Vendored:          2026-08-14 (the tarball itself in-tree since 2026-10-11, rd vms-f273)
 License:           ISC (LibreSSL's own code) + the historical dual
                    OpenSSL/original-SSLeay licenses for the inherited legacy
                    files (see COPYING in the extracted tree). All OSI-approved

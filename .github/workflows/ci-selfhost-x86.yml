@@ -1385,14 +1385,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch pinned LibreSSL, build static libcrypto.a (musl), run hello-crypto KAT
+      - name: Pinned LibreSSL (vendored, no download), build static libcrypto.a (musl), run hello-crypto KAT
         run: |
           docker run --rm --platform linux/amd64 \
             -v "${{ github.workspace }}":/src -w /src \
             docker.io/library/alpine:3.20 sh -c '
               set -e
               apk add --no-cache gcc musl-dev make perl curl file binutils >/dev/null
-              export CC=gcc WORK=/tmp/ovmx-libcrypto
+              export CC=gcc WORK=/tmp/ovmx-libcrypto OVMX_LIBRESSL_OFFLINE=1
               sh /src/third-party/libcrypto/test/run_hello_crypto.sh
             '
 

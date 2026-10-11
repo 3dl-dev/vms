@@ -31,6 +31,12 @@ TARBALL="libressl-${LIBRESSL_VERSION}.tar.gz"
 URL_PRIMARY="${OVMX_LIBRESSL_URL:-https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/${TARBALL}}"
 URL_MIRROR="https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/${TARBALL}"
 
+# The pinned tarball is vendored beside this script (rd vms-f273): CI builds
+# from it with no network; the download below is only for a tree without it,
+# and OVMX_LIBRESSL_OFFLINE=1 (set in CI) refuses that download outright.
+HERE=$(cd "$(dirname "$0")" && pwd)
+VENDORED="$HERE/$TARBALL"
+
 WORK="${WORK:-/tmp/ovmx-libcrypto}"
 CC="${CC:-gcc}"
 
@@ -49,6 +55,14 @@ fetch() {
     fi
 }
 
+if [ ! -f "$TARBALL" ] && [ -f "$VENDORED" ]; then
+    echo "== vendored $TARBALL =="
+    cp "$VENDORED" "$TARBALL"
+fi
+if [ ! -f "$TARBALL" ] && [ "${OVMX_LIBRESSL_OFFLINE:-0}" = 1 ]; then
+    echo "FAIL: $TARBALL is not vendored at $VENDORED and OVMX_LIBRESSL_OFFLINE=1 forbids a download" >&2
+    exit 1
+fi
 if [ ! -f "$TARBALL" ]; then
     echo "== fetch $TARBALL =="
     fetch "$URL_PRIMARY" "$TARBALL" || fetch "$URL_MIRROR" "$TARBALL" || {

@@ -656,6 +656,9 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     cp build-static/bin/AUTHORIZE.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MAIL.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MONITOR.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # ROOTAUDIT.EXE (vms-251b): the DCL acceptance gate runs it to prove no
+    # process runs as substrate root -- NOT best-effort.
+    cp build-static/bin/ROOTAUDIT.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/INITIALIZE.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/INSTALL.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # SYSGEN.EXE (vms-d34): `$ SYSGEN` (src/vmsdcl/dcl_cmd_misc.c cmd_sysgen)

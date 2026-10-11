@@ -118,6 +118,7 @@ VAX_SYSTARTUP="$REPO/distro/rootfs-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.C
 VAX_DISTRIB_SYSTARTUP="$REPO/distro/rootfs-distrib-only-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_STATUS_PROOF_SYSTARTUP="$REPO/tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM"
 BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE FAL.EXE MAIL_SERVER.EXE MAIL.EXE NCP.EXE"
+OPTIONAL_IMAGES="ROOTAUDIT.EXE"
 KIT_DEST_NAME="OVMX-OS-VAX.KIT"
 
 die() { echo "[stage_sysvol] FATAL: $*" >&2; exit 1; }
@@ -188,6 +189,12 @@ for img in $BOOT_IMAGES; do
     src="$IMAGES_DIR/$img"
     [ -f "$src" ] || die "boot image missing from images dir: $src"
     cp "$src" "$SYSEXE/$img"
+done
+# ...and the SYSEXE utilities a booted gate runs when they were built:
+# ROOTAUDIT.EXE (rd vms-251b; the DCL acceptance battery RUNs it, and fails
+# on its absence there rather than here).
+for img in $OPTIONAL_IMAGES; do
+    [ -f "$IMAGES_DIR/$img" ] && cp "$IMAGES_DIR/$img" "$SYSEXE/$img"
 done
 
 # 3b. --status-proof only: the proof images join SYS$SYSTEM. Every image the

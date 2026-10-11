@@ -277,6 +277,39 @@ typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
 
+/* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): make
+ * `id` the CURRENT task's real/effective/saved/fs uid and gid, with no
+ * supplementary groups and no capabilities. The executive does it, so the
+ * task needs no privilege of its own. */
+static inline int exec_become_substrate_id(uint32_t id)
+{
+	struct cred *new = prepare_creds();
+	struct group_info *gi;
+	kuid_t u = make_kuid(&init_user_ns, id);
+	kgid_t g = make_kgid(&init_user_ns, id);
+
+	if (!new)
+		return -ENOMEM;
+	if (!uid_valid(u) || !gid_valid(g)) {
+		abort_creds(new);
+		return -EINVAL;
+	}
+	gi = groups_alloc(0);
+	if (!gi) {
+		abort_creds(new);
+		return -ENOMEM;
+	}
+	set_groups(new, gi);
+	put_group_info(gi);
+	new->uid = new->euid = new->suid = new->fsuid = u;
+	new->gid = new->egid = new->sgid = new->fsgid = g;
+	cap_clear(new->cap_inheritable);
+	cap_clear(new->cap_permitted);
+	cap_clear(new->cap_effective);
+	cap_clear(new->cap_ambient);
+	return commit_creds(new);
+}
+
 /* exec_current_uid/gid (vms-31b): the REAL uid/gid of `current`, mapped into the
  * initial user namespace -- exactly the reads the device table's caller_uic()
  * did before this seam existed, so the module is behaviour-identical. */

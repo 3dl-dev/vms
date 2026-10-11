@@ -2630,10 +2630,6 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr)
         g = (uint16_t)(pi.uic >> 16);      /* UIC group  */
         u = (uint16_t)(pi.uic & 0xFFFF);   /* UIC member */
     }
-    if (g == 0 && u == 0) {
-        g = (uint16_t)(getgid() & 0xFFFF);
-        u = (uint16_t)(getuid() & 0xFFFF);
-    }
     /* Never emit the zero/zero pair VMS discards. */
     if (g == 0) g = (uint16_t)(((unsigned)getpid()        & 0x7FFF) | 1);
     if (u == 0) u = (uint16_t)((((unsigned)getpid() >> 15) & 0x7FFF) | 1);

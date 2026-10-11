@@ -3771,6 +3771,30 @@ _Static_assert(VMS_IOCTL_IMAGE_RUNDOWN == 0xC0085667u,
                "VMS_IOCTL_IMAGE_RUNDOWN encodes differently here than on the reference build");
 
 /* ================================================================
+ * Substrate identity (rd vms-ac48, epic vms-8e6: nothing runs as substrate
+ * root). The executive gives each VMS process its own unprivileged substrate
+ * uid/gid from a dedicated range, never derived from the UIC and never 0; the
+ * VMS identity (UIC, privileges, rights) lives only in the PCB.
+ *   GET    -- the process's substrate uid (assigned on first use)
+ *   BECOME -- make it the calling task's real/effective/saved/fs uid and gid,
+ *             with no supplementary groups and no capabilities; done by the
+ *             executive, so the caller needs no substrate privilege
+ * ================================================================ */
+#define OVMX_SUBST_UID_BASE   0x40000u    /* 262144: above any login uid range */
+#define OVMX_SUBST_UID_SPAN   0x10000u
+#define VMS_SUBST_OP_GET      1
+#define VMS_SUBST_OP_BECOME   2
+struct vms_substrate_id_args {
+    uint32_t op;
+    uint32_t status;      /* return: SS$_ status */
+    uint32_t uid;         /* return: the substrate uid (== gid) */
+    uint32_t reserved;
+};
+#define VMS_IOCTL_SUBSTRATE_ID _IOWR(VMS_IOC_MAGIC, 0xB1, struct vms_substrate_id_args)
+_Static_assert(sizeof(struct vms_substrate_id_args) == 16,
+               "vms_substrate_id_args layout changed: VMS_IOCTL_SUBSTRATE_ID ABI break");
+
+/* ================================================================
  * Logical name tables (executive-resident LNM$SYSTEM/GROUP/JOB).
  *
  * The arena format, the mmap read path and the define/delete ioctls live

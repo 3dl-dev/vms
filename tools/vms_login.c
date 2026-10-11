@@ -528,19 +528,17 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
      * executive's refusal was real but it protected exactly one task,
      * and a privilege reduction survived only until the next fork.
      *
-     * The UIC is [gid,uid] throughout OVMX -- the executive derives
-     * proc->uic that way, and src/vmsrms/rms_core.c enforces file
-     * protection against the same pair. Before this call those two
-     * disagreed for every session: the executive reported the SYSUAF
-     * UIC while RMS saw root's [0,0]. After it they are the same UIC by
-     * construction, because there is only one.
-     *
-     * THIS IS NOT A NEW VMS BEHAVIOUR AND IS NOT PRESENTED AS ONE
-     * (CLAUDE.md Rule 8/10). OpenVMS has no Linux credentials; the
-     * uid/gid pair is OVMX's stand-in for the UIC. What changes here
-     * is only that the stand-in is made to agree with the identity the
-     * executive was already enforcing, so the enforcement is not
-     * layered over a process that could sidestep it by forking.
+     * THE SUBSTRATE IDENTITY IS NOT THE UIC (rd vms-ac48, epic vms-8e6).
+     * It used to be: the session became uid = UIC member, gid = UIC group,
+     * so an account whose member was 0 ran as substrate ROOT. Now the
+     * executive gives each VMS process its own uid (== gid) from a dedicated
+     * range (OVMX_SUBST_UID_BASE, never 0) and makes it the task's identity
+     * itself (VMS_IOCTL_SUBSTRATE_ID BECOME), so LOGINOUT calls no setuid().
+     * The UIC, privileges and rights live only in the executive's PCB, and
+     * every reader takes them from there ($GETJPI, the device table, the
+     * ACP), never from getuid(). One uid per VMS process also keeps the
+     * substrate's same-uid powers (signals, ptrace) from reaching another
+     * VMS process.
      *
      * ORDER MATTERS. It runs AFTER VMS_IOCTL_SETIDENT (which needs the
      * SETPRV that root-derived registration granted), after the SYS$LOGIN
@@ -554,8 +552,19 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
      * (Rule 10): the condition is made unreachable.
      */
     {
-        uid_t want_uid = (uid_t)rec->uic_member;
-        gid_t want_gid = (gid_t)rec->uic_group;
+        /* The substrate identity is the EXECUTIVE's, not the UIC (rd vms-ac48,
+         * epic vms-8e6: nothing runs as substrate root). It gives this VMS
+         * process its own uid (== gid) from a dedicated range, never 0; the
+         * UIC, privileges and rights stay in the PCB, stamped by SETIDENT. */
+        uint32_t subst = 0;
+        if (!(vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst) & 1) || subst == 0) {
+            printf("%%OVMX-F-NOSUBST, the executive gave user %s no substrate identity\n",
+                   rec->username);
+            fflush(stdout);
+            _exit(1);
+        }
+        uid_t want_uid = (uid_t)subst;
+        gid_t want_gid = (gid_t)subst;
 
         /*
          * PER-USER PRIVATE IMAGE-STAGING DIRECTORY (vms-a86f).
@@ -592,15 +601,13 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
             }
         }
 
-        if (setgroups(0, NULL) != 0 ||
-            setgid(want_gid) != 0 ||
-            setuid(want_uid) != 0 ||
+        if (!(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1) ||
+            want_uid == 0 ||
             getuid()  != want_uid || geteuid() != want_uid ||
             getgid()  != want_gid || getegid() != want_gid) {
-            printf("%%OVMX-F-NOUIC, could not become UIC [%o,%o] for user "
-                   "%s: %s\n", (unsigned)rec->uic_group,
-                   (unsigned)rec->uic_member, rec->username,
-                   strerror(errno));
+            printf("%%OVMX-F-NOUIC, could not take substrate identity %lu for user "
+                   "%s (UIC [%o,%o])\n", (unsigned long)want_uid, rec->username,
+                   (unsigned)rec->uic_group, (unsigned)rec->uic_member);
             fflush(stdout);
             _exit(1);
         }

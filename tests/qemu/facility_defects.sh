@@ -598,6 +598,7 @@ kfe-add-cmkrnl-not-checked
 kfe-keyed-on-name
 kfe-write-not-denied
 kfe-remove-copy-kept
+page0-ioctl-unprivileged-allowed
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -1625,6 +1626,25 @@ EOF
         why)          echo "vms_ioctl_kfe() records the removed entry's copy and unlinks it in the executive's directory once the list lock is dropped. The mutation stops recording it, so REMOVE releases the copy but leaves the file behind. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 INSTALL REMOVE also deletes the executive's copy from its directory
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    page0-ioctl-unprivileged-allowed)
+        case "$_f" in
+        facility)     echo "virtual page 0 is granted only to a CMKRNL caller on the native-image activation path (vms-b869)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_rights_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_native_page0() decides CMKRNL on the caller's own PCB (vms_prot_require_priv) before it asks the substrate to lower the address-space minimum. The mutation makes every caller pass the privilege check, so an ordinary process reaches the substrate (Linux answers SS\$_UNSUPPORTED instead of SS\$_NOPRIV) -- on NetBSD only the activator-path check would stand between it and page 0. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an ordinary process (no CMKRNL) asking for virtual page 0 is SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8310,6 +8330,8 @@ apply_edit() {
         sed -i 's|^\t\t} else if ((e = deny_write_access(ro)) != 0) {$|\t\t} else if ((e = 0) != 0) { /* NEGCTL kfe-write-not-denied */|' "$_file";;
     kfe-remove-copy-kept)
         sed -i 's|^            memcpy(gone, vms_kfe_tab\[i\].path, 256);$|            (void)0; /* NEGCTL kfe-remove-copy-kept */|' "$_file";;
+    page0-ioctl-unprivileged-allowed)
+        sed -i 's|^    st = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL);$|    st = SS__NORMAL; /* NEGCTL page0-ioctl-unprivileged-allowed */|' "$_file";;
     acp-grpprv-ignored)
         sed -i 's|^                ((privs \& VMS_PRV_M_GRPPRV) != 0 \&\& acc_group == own_group);$|                0; /* NEGCTL acp-grpprv-ignored */|' "$_file";;
     acp-acl-not-consulted)

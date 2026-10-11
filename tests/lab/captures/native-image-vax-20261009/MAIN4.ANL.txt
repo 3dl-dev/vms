@@ -1,0 +1,226 @@
+$ TYPE MAIN4.ANL
+
+Analyze Image                                 9-OCT-2026 02:10:54.58   Page 1
+SYS$SYSROOT:[SYSMGR]MAIN4.EXE;1
+ANALYZ V07-04
+
+This is an OpenVMS VAX image file
+
+IMAGE HEADER
+
+	Fixed Header Information
+
+		image format major id: 02, minor id: 05
+		header block count: 1
+		image type: executable (IHD$K_EXE)
+		I/O channel count: default
+		I/O page count: default
+		linker flags:
+			(0)  IHD$V_LNKDEBUG   0
+			(1)  IHD$V_LNKNOTFR   0
+			(2)  IHD$V_NOP0BUFS   0
+			(3)  IHD$V_PICIMG     1
+			(4)  IHD$V_P0IMAGE    0
+			(5)  IHD$V_DBGDMT     1
+			(6)  IHD$V_INISHR     0
+			(7)  IHD$V_IHSLONG    1
+			(8)  IHD$V_UPCALLS    0
+
+	Image Activation Information
+
+		first transfer address:  %X'7FFEDF68'
+		second transfer address: %X'00000410'
+		third transfer address:  %X'00000000'
+
+	Global Symbol Table & Debug Symbol Table Information
+
+		debug symbol table VBN:  5, block count: 1
+		global symbol table VBN: 0, record count: 0
+		debug module/psect table VBN: 0, byte count: 0
+
+	Image Identification Information
+
+		image name: "MAIN4"
+		image file identification: "0"
+		link date/time:  9-OCT-2026 02:08:57.47
+		linker identification: "V11-50"
+
+	Patch Information
+
+		There are no patches at this time.
+
+	Image Section Descriptors (ISD)
+
+		1)  image section descriptor (16 bytes)
+			page count: 1
+			base virtual address: %X'00000200' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        1
+				(2)  ISD$V_DZRO       0
+
+Analyze Image                                 9-OCT-2026 02:10:54.58   Page 2
+SYS$SYSROOT:[SYSMGR]MAIN4.EXE;1
+ANALYZ V07-04
+
+				(3)  ISD$V_WRT        1
+				(7)  ISD$V_LASTCLU    1
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_NORMAL
+			base VBN: 2
+
+		2)  image section descriptor (16 bytes)
+			page count: 1
+			base virtual address: %X'00000400' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        0
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        0
+				(7)  ISD$V_LASTCLU    1
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_NORMAL
+			base VBN: 3
+
+		3)  image section descriptor (16 bytes)
+			page count: 1
+			base virtual address: %X'00000600' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        1
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        1
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   1
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_NORMAL
+			base VBN: 4
+
+		4)  image section descriptor (12 bytes)
+			page count: 20
+			base virtual address: %X'7FFFD800' (P1 space)
+			page fault cluster size: default
+
+Analyze Image                                 9-OCT-2026 02:10:54.58   Page 3
+SYS$SYSROOT:[SYSMGR]MAIN4.EXE;1
+ANALYZ V07-04
+
+			ISD flags:
+				(0)  ISD$V_GBL        0
+				(1)  ISD$V_CRF        0
+				(2)  ISD$V_DZRO       1
+				(3)  ISD$V_WRT        1
+				(7)  ISD$V_LASTCLU    1
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_USRSTACK
+
+		5)  image section descriptor (30 bytes)
+			page count: 1
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        1
+				(1)  ISD$V_CRF        0
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        0
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_SHRPIC
+			base VBN: 0
+			global section major id: %X'02', minor id: %X'000000'
+			match control: ISD$K_MATLEQ
+			global section name: "MYSHR_001"
+
+		6)  image section descriptor (31 bytes)
+			page count: 265
+			base virtual address: %X'00000000' (P0 space)
+			page fault cluster size: default
+			ISD flags:
+				(0)  ISD$V_GBL        1
+				(1)  ISD$V_CRF        0
+				(2)  ISD$V_DZRO       0
+				(3)  ISD$V_WRT        0
+				(7)  ISD$V_LASTCLU    0
+				(8)  ISD$V_INITALCODE 0
+				(9)  ISD$V_BASED      0
+				(10) ISD$V_FIXUPVEC   0
+				(11) ISD$V_RESIDENT   0
+				(17) ISD$V_VECTOR     0
+				(18) ISD$V_PROTECT    0
+			section type: ISD$K_SHRPIC
+			base VBN: 0
+			global section major id: %X'01', minor id: %X'00000E'
+
+Analyze Image                                 9-OCT-2026 02:10:54.58   Page 4
+SYS$SYSROOT:[SYSMGR]MAIN4.EXE;1
+ANALYZ V07-04
+
+			match control: ISD$K_MATLEQ
+			global section name: "LIBRTL_001"
+
+Analyze Image                                 9-OCT-2026 02:10:54.58   Page 5
+SYS$SYSROOT:[SYSMGR]MAIN4.EXE;1
+ANALYZ V07-04
+
+IMAGE ACTIVATOR FIXUP SECTION
+
+
+	Fixed Information
+
+		Flags:
+			(0)  IAF$V_SHR        0
+		shareable image count: 3
+		extra image count: 0
+
+	Shareable Image List
+
+		0)  this image
+		1)  "MYSHR"
+		2)  "LIBRTL"
+
+	G^ Reference Fixups
+
+		2 references to image 1:
+			  00000008  00000000
+
+		1 reference to image 2:
+			  00000478
+
+	Protection Change Fixups (relative to %X'00000200')
+
+		address: %X'00000400', page count: 1
+		protection: PRT$C_UREW
+
+
+
+The analysis uncovered NO errors.
+
+
+ANALYZE/IMAGE/OUTPUT=MAIN4.ANL MAIN4.EXE                                        

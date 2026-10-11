@@ -504,6 +504,22 @@ exec_kfe_stage(int fd, const char *dst, void **pin)
 static __inline void exec_file_unpin(void *pin) { ovmx_file_unpin(pin); }
 static __inline int exec_file_is(void *pin, int fd) { return ovmx_file_is(pin, fd); }
 
+/*
+ * ovmx_native_page0_allow (rd vms-b869): lower the minimum address of the
+ * caller's map to 0 when the caller is the native image activator
+ * (vms_native_p0_netbsd.c, uvm-only TU). 0 granted, EPERM refused.
+ */
+struct proc;
+extern int ovmx_native_page0_allow(struct proc *p, const char *activator);
+
+/* exec_native_page0_lower (exec_kbackend.h section 5): the activator is the
+ * installed NATIVEACT.EXE; anything else is refused. */
+static __inline int
+exec_native_page0_lower(void)
+{
+	return ovmx_native_page0_allow(curproc, "/run/ovmx-boot/NATIVEACT.EXE") == 0 ? 0 : -1;
+}
+
 static __inline exec_task_pin_t *
 exec_task_pin(exec_task_ref_t *ref)
 {

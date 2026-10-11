@@ -787,6 +787,7 @@ struct vms_proc {
      */
     uint8_t             image_active;     /* 1 while a controlled descent is open */
     uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
+    uint8_t             native_page0;     /* page 0 granted once (vms-b869) */
 
     /* AST state (3b) - one queue per access mode */
     struct vms_ast_state ast[4];
@@ -1293,6 +1294,7 @@ long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
 uint64_t vms_kfe_image_privs(int fd);
+long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);

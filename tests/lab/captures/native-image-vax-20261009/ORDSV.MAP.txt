@@ -1,0 +1,1053 @@
+$ TYPE ORDSV.MAP
+
+NL:                                                              9-OCT-2026 02:05        Linker V11-50                    Page    1
+
+                                             +------------------------+
+                                             ! Object Module Synopsis !
+                                             +------------------------+
+%LINK-W-NUDFSYMS, 42 undefined symbols:
+%LINK-I-UDFSYM, 	CLI$COMPILE_CLD 
+%LINK-I-UDFSYM, 	CLI$FREE_CLD 
+%LINK-I-UDFSYM, 	LIB$$SET_CLI_HANDLER 
+%LINK-I-UDFSYM, 	LIB$ANALYZE_SDESC_64 
+%LINK-I-UDFSYM, 	LIB$GET_CURR_INVO_CONTEXT 
+%LINK-I-UDFSYM, 	LIB$GET_INVO_CONTEXT 
+%LINK-I-UDFSYM, 	LIB$GET_INVO_HANDLE 
+%LINK-I-UDFSYM, 	LIB$GET_PREV_INVO_CONTEXT 
+%LINK-I-UDFSYM, 	LIB$GET_PREV_INVO_HANDLE 
+%LINK-I-UDFSYM, 	MTH$ABSF 
+%LINK-I-UDFSYM, 	MTH$ACOSF 
+%LINK-I-UDFSYM, 	MTH$ALOG10F 
+%LINK-I-UDFSYM, 	MTH$ALOGF 
+%LINK-I-UDFSYM, 	MTH$ASINF 
+%LINK-I-UDFSYM, 	MTH$ATAN2F 
+%LINK-I-UDFSYM, 	MTH$ATANF 
+%LINK-I-UDFSYM, 	MTH$CEIL 
+%LINK-I-UDFSYM, 	MTH$COSF 
+%LINK-I-UDFSYM, 	MTH$EXPF 
+%LINK-I-UDFSYM, 	MTH$MAX 
+%LINK-I-UDFSYM, 	MTH$MIN 
+%LINK-I-UDFSYM, 	MTH$MOD 
+%LINK-I-UDFSYM, 	MTH$NINT 
+%LINK-I-UDFSYM, 	MTH$POWER 
+%LINK-I-UDFSYM, 	MTH$POWER_JI 
+%LINK-I-UDFSYM, 	MTH$SINF 
+%LINK-I-UDFSYM, 	MTH$SQRTF 
+%LINK-I-UDFSYM, 	MTH$TANF 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_D 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_F 
+%LINK-I-UDFSYM, 	OTS$CNVOUT_T 
+%LINK-I-UDFSYM, 	OTS$CVT_T_S 
+%LINK-I-UDFSYM, 	OTS$CVT_T_T 
+%LINK-I-UDFSYM, 	OTS$DIVCT_R3 
+%LINK-I-UDFSYM, 	OTS$MULCT_R3 
+%LINK-I-UDFSYM, 	OTS$POWCTCT_R3 
+%LINK-I-UDFSYM, 	OTS$POWCTJ_R3 
+%LINK-I-UDFSYM, 	SYS$CHECK_FEN 
+%LINK-I-UDFSYM, 	SYS$DELTVA_64 
+%LINK-I-UDFSYM, 	SYS$FAO_COUNT_ARGS 
+%LINK-I-UDFSYM, 	SYS$GL_CALL_HANDL 
+%LINK-I-UDFSYM, 	SYS$SUSPEND 
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+ORDSV           0                    1276 SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1       9-OCT-2026 02:05  VAX MACRO V5.4-3
+%LINK-W-USEUNDEF, undefined symbol CLI$COMPILE_CLD referenced
+	in psect ODATA offset %X00000000
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol CLI$FREE_CLD referenced
+	in psect ODATA offset %X00000008
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+
+NL:                                                              9-OCT-2026 02:05        Linker V11-50                    Page    2
+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+%LINK-W-USEUNDEF, undefined symbol LIB$$SET_CLI_HANDLER referenced
+	in psect ODATA offset %X00000014
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$ANALYZE_SDESC_64 referenced
+	in psect ODATA offset %X00000034
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_CURR_INVO_CONTEXT referenced
+	in psect ODATA offset %X000000DC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_INVO_CONTEXT referenced
+	in psect ODATA offset %X000000F0
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_INVO_HANDLE referenced
+	in psect ODATA offset %X000000F4
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_PREV_INVO_CONTEXT referenced
+	in psect ODATA offset %X000000FC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol LIB$GET_PREV_INVO_HANDLE referenced
+	in psect ODATA offset %X00000100
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ABSF referenced
+	in psect ODATA offset %X000001F8
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ACOSF referenced
+	in psect ODATA offset %X00000200
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOG10F referenced
+	in psect ODATA offset %X0000020C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ALOGF referenced
+	in psect ODATA offset %X00000214
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ASINF referenced
+	in psect ODATA offset %X0000021C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATAN2F referenced
+	in psect ODATA offset %X00000228
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$ATANF referenced
+	in psect ODATA offset %X0000022C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$CEIL referenced
+	in psect ODATA offset %X00000230
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$COSF referenced
+	in psect ODATA offset %X0000023C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$EXPF referenced
+	in psect ODATA offset %X00000248
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MAX referenced
+
+NL:                                                              9-OCT-2026 02:05        Linker V11-50                    Page    3
+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+	in psect ODATA offset %X00000250
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MIN referenced
+	in psect ODATA offset %X00000254
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$MOD referenced
+	in psect ODATA offset %X00000258
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$NINT referenced
+	in psect ODATA offset %X0000025C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER referenced
+	in psect ODATA offset %X00000260
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$POWER_JI referenced
+	in psect ODATA offset %X00000264
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SINF referenced
+	in psect ODATA offset %X0000027C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$SQRTF referenced
+	in psect ODATA offset %X00000288
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol MTH$TANF referenced
+	in psect ODATA offset %X00000294
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_D referenced
+	in psect ODATA offset %X0000029C
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_F referenced
+	in psect ODATA offset %X000002A0
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CNVOUT_T referenced
+	in psect ODATA offset %X000002A8
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CVT_T_S referenced
+	in psect ODATA offset %X000002E8
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$CVT_T_T referenced
+	in psect ODATA offset %X000002EC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$DIVCT_R3 referenced
+	in psect ODATA offset %X000002F4
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$MULCT_R3 referenced
+	in psect ODATA offset %X00000304
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$POWCTCT_R3 referenced
+	in psect ODATA offset %X00000310
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol OTS$POWCTJ_R3 referenced
+	in psect ODATA offset %X00000314
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+
+NL:                                                              9-OCT-2026 02:05        Linker V11-50                    Page    4
+
+
+Module Name     Ident              Bytes      File                                Creation Date      Creator
+-----------     -----              -----      -----                               -------------      -------
+%LINK-W-USEUNDEF, undefined symbol SYS$CHECK_FEN referenced
+	in psect ODATA offset %X000003B0
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$DELTVA_64 referenced
+	in psect ODATA offset %X00000404
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$FAO_COUNT_ARGS referenced
+	in psect ODATA offset %X00000430
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$GL_CALL_HANDL referenced
+	in psect ODATA offset %X00000468
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+%LINK-W-USEUNDEF, undefined symbol SYS$SUSPEND referenced
+	in psect ODATA offset %X000004CC
+	in module ORDSV file SYS$SYSROOT:[SYSMGR]ORDSV.OBJ;1
+CLI$INTERFACE   X-3                   543 SYS$COMMON:[SYSLIB]STARLET.OLB;1     16-Mar-2001 00:26  VAX Bliss-32 V4.7-999
+CLI$GLOBALS     X-1                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     16-MAR-2001 00:17  VAX MACRO V5.4-3
+STR$MSGDEF      X-3                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     15-MAR-2001 23:56  Message T02-12
+SYS$P1_VECTOR   X-4                     0 SYS$COMMON:[SYSLIB]STARLET.OLB;1     16-MAR-2001 00:59  VAX MACRO V5.4-3
+LIBRTL          V06-001                 0 SYS$COMMON:[SYSLIB]LIBRTL.EXE;1      16-MAR-2001 02:47  Linker V11-38
+LIBRTL2         V05-000                 0 SYS$COMMON:[SYSLIB]LIBRTL2.EXE;1     16-MAR-2001 02:47  Linker V11-38
+UVMTHRTL        VMS V6-002              0 SYS$COMMON:[SYSLIB]UVMTHRTL.EXE;1    16-MAR-2001 02:49  Linker V11-38
+SECURESHR       X-7                     0 SYS$COMMON:[SYSLIB]SECURESHR.EXE;1   16-MAR-2001 02:53  Linker V11-38
+SECURESHRP      X-7                     0 SYS$COMMON:[SYSLIB]SECURESHRP.EXE;1  16-MAR-2001 02:53  Linker V11-38
+
+                                     +---------------------------------------+
+                                     ! Module Relocatable Reference Synopsis !
+                                     +---------------------------------------+
+
+Module Name                        Number  Module Name                        Number  Module Name                        Number
+-----------                        ------  -----------                        ------  -----------                        ------
+ORDSV                                 195  
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page    5
+
+                                             +------------------------+
+                                             ! Image Section Synopsis !
+                                             +------------------------+
+
+   Cluster      Type Pages   Base Addr  Disk VBN PFC Protection and Paging      Global Sec. Name   Match     Majorid   Minorid
+   -------      ---- -----   ---------  -------- --- ---------------------      ----------------   -----     -------   -------
+
+DEFAULT_CLUSTER    2     3    00000000-R        2   0 READ WRITE   COPY ON REF
+                   2     2    00000600-R        5   0 READ ONLY     
+                   2     5    00000A00-R        7   0 READ WRITE   FIXUP VECTORS
+
+LIBRTL             3   265    00000000-R        0   0 READ ONLY                  LIBRTL_001       LESS/EQUAL        1        14
+                   4     6    00021200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_002       LESS/EQUAL        1        14
+                   4     2    00021E00-R        0   0 READ WRITE   COPY ON REF   LIBRTL_003       LESS/EQUAL        1        14
+                   4     8    00022200-R        0   0 READ WRITE   DEMAND ZERO   LIBRTL_004       LESS/EQUAL        1        14
+
+LIBRTL2            3    65    00000000-R        0   0 READ ONLY                  LIBRTL2_001      LESS/EQUAL        1        12
+                   4     1    00008200-R        0   0 READ WRITE   COPY ON REF   LIBRTL2_002      LESS/EQUAL        1        12
+                   2     1    00008400-R        0   0 READ WRITE   FIXUP VECTORS LIBRTL2_003      LESS/EQUAL        1        12
+
+MTHRTL             3   337    00000000-R        0   0 READ ONLY                  MTHRTL_001       LESS/EQUAL      129     32781
+                   2     1    0002A200-R        0   0 READ WRITE   FIXUP VECTORS MTHRTL_002       LESS/EQUAL      129     32781
+
+SECURESHR          3     2    00000000-R        0   0 READ ONLY                  SECURESHR_001    LESS/EQUAL        1         2
+                   3    18    00000400-R        0   0 READ WRITE   COPY ON REF   SECURESHR_002    LESS/EQUAL        1         2
+                   3    85    00002800-R        0   0 READ ONLY                  SECURESHR_003    LESS/EQUAL        1         2
+                   2     1    0000D200-R        0   0 READ WRITE   COPY ON REF   SECURESHR_004    LESS/EQUAL        1         2
+                   4     6    0000D400-R        0   0 READ WRITE   COPY ON REF   SECURESHR_005    LESS/EQUAL        1         2
+                   2     6    0000E000-R        0   0 READ WRITE   FIXUP VECTORS SECURESHR_006    LESS/EQUAL        1         2
+
+SECURESHRP         3     2  P-00000000-R        0   0 READ ONLY                  SECURESHRP_001   LESS/EQUAL        1         2
+                   3     1  P-00000400-R        0   0 READ ONLY                  SECURESHRP_002   LESS/EQUAL        1         2
+                   2     1  P-00000600-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_003   LESS/EQUAL        1         2
+                   3    14  P-00000800-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_004   LESS/EQUAL        1         2
+                   3   104  P-00002400-R        0   0 READ ONLY                  SECURESHRP_005   LESS/EQUAL        1         2
+                   2     1  P-0000F400-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_006   LESS/EQUAL        1         2
+                   4    11  P-0000F600-R        0   0 READ WRITE   COPY ON REF   SECURESHRP_007   LESS/EQUAL        1         2
+                   2     5  P-00010C00-R        0   0 READ WRITE   FIXUP VECTORS SECURESHRP_008   LESS/EQUAL        1         2
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! R  - Relocatable   !
+		! P  - Protected     !
+		+--------------------+
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page    6
+
+                                            +--------------------------+
+                                            ! Program Section Synopsis !
+                                            +--------------------------+
+
+Psect Name      Module Name       Base     End           Length            Align                 Attributes
+----------      -----------       ----     ---           ------            -----                 ----------
+
+ODATA                           00000000 000004FB 000004FC (       1276.) LONG  2 NOPIC,USR,CON,REL,LCL,NOSHR,NOEXE,  RD,  WRT,NOVEC
+                ORDSV           00000000 000004FB 000004FC (       1276.) LONG  2
+
+$CODE$                          00000600 0000081E 0000021F (        543.) LONG  2 NOPIC,USR,CON,REL,LCL,NOSHR,  EXE,  RD,NOWRT,NOVEC
+                CLI$INTERFACE   00000600 0000081E 0000021F (        543.) LONG  2
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page    7
+
+                                             +------------------------+
+                                             ! Symbol Cross Reference !
+                                             +------------------------+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+CLI$COMPILE_CLD             00000000-*                            ORDSV         
+CLI$DCL_PARSE               000006EA-R        CLI$INTERFACE       ORDSV         
+CLI$DISPATCH                0000079B-R        CLI$INTERFACE 
+CLI$FREE_CLD                00000000-*                            ORDSV         
+CLI$GET_VALUE               00000643-R        CLI$INTERFACE       ORDSV         
+CLI$NEXT_QUAL               000007DC-R        CLI$INTERFACE 
+CLI$PRESENT                 00000600-R        CLI$INTERFACE       ORDSV         
+CLI$_ABSENT                 000381F0          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_COMMA                  0003FD39          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_CONCAT                 0003FD29          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_DEFAULTED              0003FD21          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_LOCNEG                 00038230          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_LOCPRES                0003FD31          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_NEGATED                000381F8          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_NOCOMD                 000380B0          CLI$GLOBALS         CLI$INTERFACE 
+CLI$_PRESENT                0003FD19          CLI$GLOBALS         CLI$INTERFACE 
+LIB$$SET_CLI_HANDLER        00000000-*                            ORDSV         
+LIB$AB_ASC_EBC              00000CB0-RX       LIBRTL              ORDSV         
+LIB$AB_EBC_ASC              00000CAC-RX       LIBRTL              ORDSV         
+LIB$AB_UPCASE               00000CA8-RX       LIBRTL              ORDSV         
+LIB$ADAWI                   00000B00-RX       LIBRTL              ORDSV         
+LIB$ADDX                    00000B04-RX       LIBRTL              ORDSV         
+LIB$ADD_TIMES               00000B68-RX       LIBRTL              ORDSV         
+LIB$ANALYZE_SDESC           00000B0C-RX       LIBRTL              ORDSV         
+LIB$ANALYZE_SDESC_64        00000000-*                            ORDSV         
+LIB$BBCCI                   00000B10-RX       LIBRTL              ORDSV         
+LIB$BBSSI                   00000B14-RX       LIBRTL              ORDSV         
+LIB$CHAR                    00000B24-RX       LIBRTL              ORDSV         
+LIB$CONVERT_DATE_STRING     00000B80-RX       LIBRTL              ORDSV         
+LIB$CRC                     00000B44-RX       LIBRTL              ORDSV         
+LIB$CRC_TABLE               00000B48-RX       LIBRTL              ORDSV         
+LIB$CREATE_VM_ZONE          00000C84-RX       LIBRTL              ORDSV         
+LIB$CURRENCY                00000B54-RX       LIBRTL              ORDSV         
+LIB$CVT_DTB                 00000B58-RX       LIBRTL              ORDSV         
+LIB$CVT_DX_DX               00000CBC-RX       LIBRTL2             ORDSV         
+LIB$CVT_FROM_INTERNAL_TIME  00000B6C-RX       LIBRTL              ORDSV         
+LIB$CVT_HTB                 00000B60-RX       LIBRTL              ORDSV         
+LIB$CVT_OTB                 00000B5C-RX       LIBRTL              ORDSV         
+LIB$CVT_VECTIM              00000B70-RX       LIBRTL              ORDSV         
+LIB$DATE_TIME               00000B84-RX       LIBRTL              ORDSV         
+LIB$DAY                     00000B88-RX       LIBRTL              ORDSV         
+LIB$DAY_OF_WEEK             00000B8C-RX       LIBRTL              ORDSV         
+LIB$DELETE_LOGICAL          00000B28-RX       LIBRTL              ORDSV         
+LIB$DELETE_SYMBOL           00000B30-RX       LIBRTL              ORDSV         
+LIB$DELETE_VM_ZONE          00000C7C-RX       LIBRTL              ORDSV         
+LIB$DIGIT_SEP               00000B50-RX       LIBRTL              ORDSV         
+LIB$EDIV                    00000B90-RX       LIBRTL              ORDSV         
+LIB$EMUL                    00000BA0-RX       LIBRTL              ORDSV         
+LIB$ESTABLISH               00000BA4-RX       LIBRTL              ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page    8
+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+LIB$EXTV                    00000BA8-RX       LIBRTL              ORDSV         
+LIB$EXTZV                   00000BAC-RX       LIBRTL              ORDSV         
+LIB$FFC                     00000BB0-RX       LIBRTL              ORDSV         
+LIB$FFS                     00000BB4-RX       LIBRTL              ORDSV         
+LIB$FIND_FILE               00000BBC-RX       LIBRTL              ORDSV         
+LIB$FIND_FILE_END           00000BB8-RX       LIBRTL              ORDSV         
+LIB$FIND_VM_ZONE            00000CC8-RX       LIBRTL2             ORDSV         
+LIB$FORMAT_DATE_TIME        00000B78-RX       LIBRTL              ORDSV         
+LIB$FREE_EF                 00000B98-RX       LIBRTL              ORDSV         
+LIB$FREE_TIMER              00000C60-RX       LIBRTL              ORDSV         
+LIB$FREE_VM                 00000C88-RX       LIBRTL              CLI$INTERFACE       ORDSV         
+LIB$FREE_VM_PAGE            00000C94-RX       LIBRTL              ORDSV         
+LIB$GETDVI                  00000C9C-RX       LIBRTL              ORDSV         
+LIB$GETJPI                  00000CA0-RX       LIBRTL              ORDSV         
+LIB$GETSYI                  00000CA4-RX       LIBRTL              ORDSV         
+LIB$GET_COMMAND             00000BC4-RX       LIBRTL              ORDSV         
+LIB$GET_COMMON              00000B3C-RX       LIBRTL              ORDSV         
+LIB$GET_CURR_INVO_CONTEXT   00000000-*                            ORDSV         
+LIB$GET_DATE_FORMAT         00000B7C-RX       LIBRTL              ORDSV         
+LIB$GET_EF                  00000B94-RX       LIBRTL              ORDSV         
+LIB$GET_FOREIGN             00000BC0-RX       LIBRTL              ORDSV         
+LIB$GET_INPUT               00000BC8-RX       LIBRTL              ORDSV         
+LIB$GET_INVO_CONTEXT        00000000-*                            ORDSV         
+LIB$GET_INVO_HANDLE         00000000-*                            ORDSV         
+LIB$GET_MAXIMUM_DATE_LENGTH 00000B74-RX       LIBRTL              ORDSV         
+LIB$GET_PREV_INVO_CONTEXT   00000000-*                            ORDSV         
+LIB$GET_PREV_INVO_HANDLE    00000000-*                            ORDSV         
+LIB$GET_SYMBOL              00000B38-RX       LIBRTL              ORDSV         
+LIB$GET_USERS_LANGUAGE      00000BCC-RX       LIBRTL              ORDSV         
+LIB$GET_VM                  00000C8C-RX       LIBRTL              CLI$INTERFACE       ORDSV         
+LIB$GET_VM_PAGE             00000C90-RX       LIBRTL              ORDSV         
+LIB$ICHAR                   00000BD0-RX       LIBRTL              ORDSV         
+LIB$INDEX                   00000BD4-RX       LIBRTL              ORDSV         
+LIB$INIT_TIMER              00000C6C-RX       LIBRTL              ORDSV         
+LIB$INSERT_TREE             00000B20-RX       LIBRTL              ORDSV         
+LIB$INSQHI                  00000BD8-RX       LIBRTL              ORDSV         
+LIB$INSQTI                  00000BDC-RX       LIBRTL              ORDSV         
+LIB$INSV                    00000BE0-RX       LIBRTL              ORDSV         
+LIB$LEN                     00000BE4-RX       LIBRTL              ORDSV         
+LIB$LOCC                    00000BE8-RX       LIBRTL              ORDSV         
+LIB$LOOKUP_KEY              00000BEC-RX       LIBRTL              ORDSV         
+LIB$LOOKUP_TREE             00000B1C-RX       LIBRTL              ORDSV         
+LIB$LP_LINES                00000BF0-RX       LIBRTL              ORDSV         
+LIB$MATCHC                  00000BF4-RX       LIBRTL              ORDSV         
+LIB$MATCH_COND              00000A48-RX       LIBRTL              CLI$INTERFACE 
+LIB$MOVC3                   00000BF8-RX       LIBRTL              ORDSV         
+LIB$MOVC5                   00000BFC-RX       LIBRTL              ORDSV         
+LIB$MOVTC                   00000C00-RX       LIBRTL              ORDSV         
+LIB$PUT_COMMON              00000B40-RX       LIBRTL              ORDSV         
+LIB$PUT_OUTPUT              00000C04-RX       LIBRTL              ORDSV         
+LIB$RADIX_POINT             00000B4C-RX       LIBRTL              ORDSV         
+LIB$REMQHI                  00000C08-RX       LIBRTL              ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page    9
+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+LIB$REMQTI                  00000C0C-RX       LIBRTL              ORDSV         
+LIB$RESERVE_EF              00000B9C-RX       LIBRTL              ORDSV         
+LIB$RESET_VM_ZONE           00000C80-RX       LIBRTL              ORDSV         
+LIB$REVERT                  00000C10-RX       LIBRTL              ORDSV         
+LIB$SCANC                   00000C14-RX       LIBRTL              ORDSV         
+LIB$SCOPY_DXDX              00000C1C-RX       LIBRTL              ORDSV         
+LIB$SCOPY_R_DX              00000C18-RX       LIBRTL              ORDSV         
+LIB$SET_LOGICAL             00000B2C-RX       LIBRTL              ORDSV         
+LIB$SET_SYMBOL              00000B34-RX       LIBRTL              ORDSV         
+LIB$SFREE1_DD               00000C24-RX       LIBRTL              ORDSV         
+LIB$SFREEN_DD               00000C20-RX       LIBRTL              ORDSV         
+LIB$SGET1_DD                00000C28-RX       LIBRTL              ORDSV         
+LIB$SHOW_TIMER              00000C68-RX       LIBRTL              ORDSV         
+LIB$SHOW_VM                 00000C48-RX       LIBRTL              ORDSV         
+LIB$SHOW_VM_ZONE            00000CC4-RX       LIBRTL2             ORDSV         
+LIB$SIGNAL                  00000C30-RX       LIBRTL              ORDSV         
+LIB$SIG_TO_RET              00000C34-RX       LIBRTL              ORDSV         
+LIB$SKPC                    00000C38-RX       LIBRTL              ORDSV         
+LIB$SPANC                   00000C3C-RX       LIBRTL              ORDSV         
+LIB$SPAWN                   00000C40-RX       LIBRTL              ORDSV         
+LIB$STAT_TIMER              00000C64-RX       LIBRTL              ORDSV         
+LIB$STAT_VM                 00000C44-RX       LIBRTL              ORDSV         
+LIB$STOP                    00000C2C-RX       LIBRTL              ORDSV         
+LIB$SUBX                    00000B08-RX       LIBRTL              ORDSV         
+LIB$SUB_TIMES               00000B64-RX       LIBRTL              ORDSV         
+LIB$SYS_ASCTIM              00000C4C-RX       LIBRTL              ORDSV         
+LIB$SYS_FAO                 00000C50-RX       LIBRTL              ORDSV         
+LIB$SYS_FAOL                00000C54-RX       LIBRTL              ORDSV         
+LIB$SYS_GETMSG              00000C58-RX       LIBRTL              ORDSV         
+LIB$TABLE_PARSE             00000C5C-RX       LIBRTL              ORDSV         
+LIB$TPARSE                  00000C70-RX       LIBRTL              ORDSV         
+LIB$TRAVERSE_TREE           00000B18-RX       LIBRTL              ORDSV         
+LIB$TRA_ASC_EBC             00000C74-RX       LIBRTL              ORDSV         
+LIB$TRA_EBC_ASC             00000C78-RX       LIBRTL              ORDSV         
+LIB$VERIFY_VM_ZONE          00000CC0-RX       LIBRTL2             ORDSV         
+LIB$WAIT                    00000C98-RX       LIBRTL              ORDSV         
+MTH$ABS                     00000CE8-RX       UVMTHRTL            ORDSV         
+MTH$ABSF                    00000000-*                            ORDSV         
+MTH$ACOS                    00000CEC-RX       UVMTHRTL            ORDSV         
+MTH$ACOSF                   00000000-*                            ORDSV         
+MTH$ALOG                    00000CF0-RX       UVMTHRTL            ORDSV         
+MTH$ALOG10                  00000CF4-RX       UVMTHRTL            ORDSV         
+MTH$ALOG10F                 00000000-*                            ORDSV         
+MTH$ALOG2                   00000CF8-RX       UVMTHRTL            ORDSV         
+MTH$ALOGF                   00000000-*                            ORDSV         
+MTH$ASIN                    00000CFC-RX       UVMTHRTL            ORDSV         
+MTH$ASINF                   00000000-*                            ORDSV         
+MTH$ATAN                    00000D00-RX       UVMTHRTL            ORDSV         
+MTH$ATAN2                   00000D04-RX       UVMTHRTL            ORDSV         
+MTH$ATAN2F                  00000000-*                            ORDSV         
+MTH$ATANF                   00000000-*                            ORDSV         
+MTH$CEIL                    00000000-*                            ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   10
+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+MTH$COS                     00000D24-RX       UVMTHRTL            ORDSV         
+MTH$COSD                    00000D2C-RX       UVMTHRTL            ORDSV         
+MTH$COSF                    00000000-*                            ORDSV         
+MTH$COSH                    00000D08-RX       UVMTHRTL            ORDSV         
+MTH$EXP                     00000D0C-RX       UVMTHRTL            ORDSV         
+MTH$EXPF                    00000000-*                            ORDSV         
+MTH$FLOOR                   00000D10-RX       UVMTHRTL            ORDSV         
+MTH$MAX                     00000000-*                            ORDSV         
+MTH$MIN                     00000000-*                            ORDSV         
+MTH$MOD                     00000000-*                            ORDSV         
+MTH$NINT                    00000000-*                            ORDSV         
+MTH$POWER                   00000000-*                            ORDSV         
+MTH$POWER_JI                00000000-*                            ORDSV         
+MTH$RANDOM                  00000D14-RX       UVMTHRTL            ORDSV         
+MTH$SIGN                    00000D18-RX       UVMTHRTL            ORDSV         
+MTH$SIN                     00000D20-RX       UVMTHRTL            ORDSV         
+MTH$SINCOS                  00000D1C-RX       UVMTHRTL            ORDSV         
+MTH$SIND                    00000D28-RX       UVMTHRTL            ORDSV         
+MTH$SINF                    00000000-*                            ORDSV         
+MTH$SINH                    00000D30-RX       UVMTHRTL            ORDSV         
+MTH$SQRT                    00000D34-RX       UVMTHRTL            ORDSV         
+MTH$SQRTF                   00000000-*                            ORDSV         
+MTH$TAN                     00000D38-RX       UVMTHRTL            ORDSV         
+MTH$TAND                    00000D3C-RX       UVMTHRTL            ORDSV         
+MTH$TANF                    00000000-*                            ORDSV         
+MTH$TANH                    00000D40-RX       UVMTHRTL            ORDSV         
+OTS$CNVOUT_D                00000000-*                            ORDSV         
+OTS$CNVOUT_F                00000000-*                            ORDSV         
+OTS$CNVOUT_G                00000AB8-RX       LIBRTL              ORDSV         
+OTS$CNVOUT_T                00000000-*                            ORDSV         
+OTS$CVT_L_TB                00000AC4-RX       LIBRTL              ORDSV         
+OTS$CVT_L_TI                00000AC8-RX       LIBRTL              ORDSV         
+OTS$CVT_L_TL                00000AD0-RX       LIBRTL              ORDSV         
+OTS$CVT_L_TO                00000ABC-RX       LIBRTL              ORDSV         
+OTS$CVT_L_TU                00000ACC-RX       LIBRTL              ORDSV         
+OTS$CVT_L_TZ                00000AC0-RX       LIBRTL              ORDSV         
+OTS$CVT_TB_L                00000AEC-RX       LIBRTL              ORDSV         
+OTS$CVT_TI_L                00000ADC-RX       LIBRTL              ORDSV         
+OTS$CVT_TL_L                00000AE0-RX       LIBRTL              ORDSV         
+OTS$CVT_TO_L                00000AE4-RX       LIBRTL              ORDSV         
+OTS$CVT_TU_L                00000AD8-RX       LIBRTL              ORDSV         
+OTS$CVT_TZ_L                00000AE8-RX       LIBRTL              ORDSV         
+OTS$CVT_T_D                 00000AF4-RX       LIBRTL              ORDSV         
+OTS$CVT_T_F                 00000AD4-RX       LIBRTL              ORDSV         
+OTS$CVT_T_G                 00000AF0-RX       LIBRTL              ORDSV         
+OTS$CVT_T_S                 00000000-*                            ORDSV         
+OTS$CVT_T_T                 00000000-*                            ORDSV         
+OTS$DIVCG_R3                00000CD4-RX       UVMTHRTL            ORDSV         
+OTS$DIVCT_R3                00000000-*                            ORDSV         
+OTS$MOVE3                   00000AF8-RX       LIBRTL              ORDSV         
+OTS$MOVE5                   00000AFC-RX       LIBRTL              ORDSV         
+OTS$MULCG_R3                00000CD8-RX       UVMTHRTL            ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   11
+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+OTS$MULCT_R3                00000000-*                            ORDSV         
+OTS$POWCGCG_R3              00000CDC-RX       UVMTHRTL            ORDSV         
+OTS$POWCGJ_R3               00000CE0-RX       UVMTHRTL            ORDSV         
+OTS$POWCTCT_R3              00000000-*                            ORDSV         
+OTS$POWCTJ_R3               00000000-*                            ORDSV         
+OTS$POWJJ                   00000CE4-RX       UVMTHRTL            ORDSV         
+STR$ANALYZE_SDESC           00000A4C-RX       LIBRTL              CLI$INTERFACE       ORDSV         
+STR$APPEND                  00000A50-RX       LIBRTL              ORDSV         
+STR$CASE_BLIND_COMPARE      00000A58-RX       LIBRTL              ORDSV         
+STR$COMPARE                 00000A54-RX       LIBRTL              ORDSV         
+STR$COMPARE_EQL             00000A5C-RX       LIBRTL              ORDSV         
+STR$COMPARE_MULTI           00000A94-RX       LIBRTL              ORDSV         
+STR$CONCAT                  00000A60-RX       LIBRTL              ORDSV         
+STR$COPY_DX                 00000A68-RX       LIBRTL              CLI$INTERFACE       ORDSV         
+STR$COPY_R                  00000A64-RX       LIBRTL              ORDSV         
+STR$DUPL_CHAR               00000A6C-RX       LIBRTL              ORDSV         
+STR$ELEMENT                 00000A70-RX       LIBRTL              ORDSV         
+STR$FIND_FIRST_IN_SET       00000A78-RX       LIBRTL              ORDSV         
+STR$FIND_FIRST_NOT_IN_SET   00000A74-RX       LIBRTL              ORDSV         
+STR$FIND_FIRST_SUBSTRING    00000A7C-RX       LIBRTL              ORDSV         
+STR$FREE1_DX                00000A80-RX       LIBRTL              ORDSV         
+STR$GET1_DX                 00000A84-RX       LIBRTL              ORDSV         
+STR$LEFT                    00000A88-RX       LIBRTL              ORDSV         
+STR$LEN_EXTR                00000A8C-RX       LIBRTL              ORDSV         
+STR$MATCH_WILD              00000A90-RX       LIBRTL              ORDSV         
+STR$POSITION                00000A98-RX       LIBRTL              ORDSV         
+STR$POS_EXTR                00000A9C-RX       LIBRTL              ORDSV         
+STR$PREFIX                  00000AA0-RX       LIBRTL              ORDSV         
+STR$REPLACE                 00000AA4-RX       LIBRTL              ORDSV         
+STR$RIGHT                   00000AA8-RX       LIBRTL              ORDSV         
+STR$TRANSLATE               00000AAC-RX       LIBRTL              ORDSV         
+STR$TRIM                    00000AB0-RX       LIBRTL              ORDSV         
+STR$UPCASE                  00000AB4-RX       LIBRTL              ORDSV         
+STR$_TRU                    00248200          STR$MSGDEF          CLI$INTERFACE 
+SYS$ASCEFC                  7FFEDE40          SYS$P1_VECTOR       ORDSV         
+SYS$ASCTIM                  7FFEDE48          SYS$P1_VECTOR       ORDSV         
+SYS$ASCUTC                  7FFEE590          SYS$P1_VECTOR       ORDSV         
+SYS$ASSIGN                  7FFEDE50          SYS$P1_VECTOR       ORDSV         
+SYS$AUDIT_EVENTW            7FFEE8B0          SYS$P1_VECTOR       ORDSV         
+SYS$BINTIM                  7FFEDE58          SYS$P1_VECTOR       ORDSV         
+SYS$BINUTC                  7FFEE588          SYS$P1_VECTOR       ORDSV         
+SYS$BRKTHRUW                7FFEE4E8          SYS$P1_VECTOR       ORDSV         
+SYS$CANCEL                  7FFEDE60          SYS$P1_VECTOR       ORDSV         
+SYS$CANTIM                  7FFEDE68          SYS$P1_VECTOR       ORDSV         
+SYS$CHECK_FEN               00000000-*                            ORDSV         
+SYS$CHECK_PRIVILEGEW        7FFEE8D0          SYS$P1_VECTOR       ORDSV         
+SYS$CHKPRO                  7FFEE4E0          SYS$P1_VECTOR       ORDSV         
+SYS$CLI                     7FFEDE18          SYS$P1_VECTOR       CLI$INTERFACE 
+SYS$CLRAST                  7FFEE108          SYS$P1_VECTOR       ORDSV         
+SYS$CLRCLUEVT               7FFEE820          SYS$P1_VECTOR       ORDSV         
+SYS$CLREF                   7FFEDE98          SYS$P1_VECTOR       ORDSV         
+SYS$CREATE_UID              7FFEE788          SYS$P1_VECTOR       ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   12
+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+SYS$CREATE_USER_PROFILE     00000D5C-RX       SECURESHR           ORDSV         
+SYS$CRELNM                  7FFEE480          SYS$P1_VECTOR       ORDSV         
+SYS$CREMBX                  7FFEDEB8          SYS$P1_VECTOR       ORDSV         
+SYS$CREPRC                  7FFEDEC0          SYS$P1_VECTOR       ORDSV         
+SYS$CRETVA                  7FFEDEC8          SYS$P1_VECTOR       ORDSV         
+SYS$CRMPSC                  7FFEDE78          SYS$P1_VECTOR       ORDSV         
+SYS$DACEFC                  7FFEDED0          SYS$P1_VECTOR       ORDSV         
+SYS$DASSGN                  7FFEDEE0          SYS$P1_VECTOR       ORDSV         
+SYS$DCLAST                  7FFEDEE8          SYS$P1_VECTOR       ORDSV         
+SYS$DCLEXH                  7FFEDEF0          SYS$P1_VECTOR       ORDSV         
+SYS$DELLNM                  7FFEE488          SYS$P1_VECTOR       ORDSV         
+SYS$DELMBX                  7FFEDF00          SYS$P1_VECTOR       ORDSV         
+SYS$DELPRC                  7FFEDF08          SYS$P1_VECTOR       ORDSV         
+SYS$DELTVA                  7FFEDF10          SYS$P1_VECTOR       ORDSV         
+SYS$DELTVA_64               00000000-*                            ORDSV         
+SYS$DEQ                     7FFEE3C8          SYS$P1_VECTOR       ORDSV         
+SYS$DEVICE_SCAN             7FFEE518          SYS$P1_VECTOR       ORDSV         
+SYS$DGBLSC                  7FFEDF18          SYS$P1_VECTOR       ORDSV         
+SYS$DLCEFC                  7FFEDF28          SYS$P1_VECTOR       ORDSV         
+SYS$ENQ                     7FFEE3C0          SYS$P1_VECTOR       ORDSV         
+SYS$ENQW                    7FFEE3D0          SYS$P1_VECTOR       ORDSV         
+SYS$EXIT                    7FFEDF40          SYS$P1_VECTOR       ORDSV         
+SYS$EXPREG                  7FFEDF48          SYS$P1_VECTOR       ORDSV         
+SYS$FAO                     7FFEDF50          SYS$P1_VECTOR       ORDSV         
+SYS$FAOL                    7FFEDF58          SYS$P1_VECTOR       ORDSV         
+SYS$FAO_COUNT_ARGS          00000000-*                            ORDSV         
+SYS$FILESCAN                7FFEE278          SYS$P1_VECTOR       ORDSV         
+SYS$FORCEX                  7FFEDF60          SYS$P1_VECTOR       ORDSV         
+SYS$FORMAT_ACL              00000D4C-RX       SECURESHR           ORDSV         
+SYS$GETDVI                  7FFEE410          SYS$P1_VECTOR       ORDSV         
+SYS$GETDVIW                 7FFEE418          SYS$P1_VECTOR       ORDSV         
+SYS$GETJPI                  7FFEE0D8          SYS$P1_VECTOR       ORDSV         
+SYS$GETJPIW                 7FFEE420          SYS$P1_VECTOR       ORDSV         
+SYS$GETMSG                  7FFEE0B0          SYS$P1_VECTOR       ORDSV         
+SYS$GETSYI                  7FFEE3F8          SYS$P1_VECTOR       ORDSV         
+SYS$GETSYIW                 7FFEE430          SYS$P1_VECTOR       ORDSV         
+SYS$GETTIM                  7FFEDF78          SYS$P1_VECTOR       ORDSV         
+SYS$GETUAI                  00000D58-RX       SECURESHR           ORDSV         
+SYS$GETUTC                  7FFEE578          SYS$P1_VECTOR       ORDSV         
+SYS$GL_CALL_HANDL           00000000-*                            ORDSV         
+SYS$GRANTID                 7FFEE4D0          SYS$P1_VECTOR       ORDSV         
+SYS$HIBER                   7FFEDF88          SYS$P1_VECTOR       ORDSV         
+SYS$IMGSTA                  7FFEDF68          SYS$P1_VECTOR       ORDSV         
+SYS$LKWSET                  7FFEDFA0          SYS$P1_VECTOR       ORDSV         
+SYS$NUMTIM                  7FFEDFB8          SYS$P1_VECTOR       ORDSV         
+SYS$NUMUTC                  7FFEE580          SYS$P1_VECTOR       ORDSV         
+SYS$PARSE_ACL               00000D50-RX       SECURESHR           ORDSV         
+SYS$PURGWS                  7FFEDFB0          SYS$P1_VECTOR       ORDSV         
+SYS$PUTMSG                  7FFEE0E0          SYS$P1_VECTOR       ORDSV         
+SYS$QIO                     7FFEDFC8          SYS$P1_VECTOR       ORDSV         
+SYS$QIOW                    7FFEDE00          SYS$P1_VECTOR       ORDSV         
+SYS$READEF                  7FFEDFD0          SYS$P1_VECTOR       ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   13
+
+
+Symbol                      Value           Defined By         Referenced By ...
+------                      -----           ----------         -----------------
+SYS$RESUME                  7FFEDFD8          SYS$P1_VECTOR       ORDSV         
+SYS$REVOKID                 7FFEE4D8          SYS$P1_VECTOR       ORDSV         
+SYS$SETAST                  7FFEDFF8          SYS$P1_VECTOR       ORDSV         
+SYS$SETCLUEVT               7FFEE810          SYS$P1_VECTOR       ORDSV         
+SYS$SETDDIR                 7FFEE250          SYS$P1_VECTOR       ORDSV         
+SYS$SETDFPROT               7FFEE258          SYS$P1_VECTOR       ORDSV         
+SYS$SETEF                   7FFEE000          SYS$P1_VECTOR       ORDSV         
+SYS$SETEXV                  7FFEE008          SYS$P1_VECTOR       ORDSV         
+SYS$SETIMR                  7FFEE020          SYS$P1_VECTOR       ORDSV         
+SYS$SETPRI                  7FFEE028          SYS$P1_VECTOR       ORDSV         
+SYS$SETPRV                  7FFEE100          SYS$P1_VECTOR       ORDSV         
+SYS$SETUAI                  00000D54-RX       SECURESHR           ORDSV         
+SYS$SNDOPR                  7FFEDFC0          SYS$P1_VECTOR       ORDSV         
+SYS$SUSPEND                 00000000-*                            ORDSV         
+SYS$SUSPND                  7FFEE050          SYS$P1_VECTOR       ORDSV         
+SYS$SYNCH                   7FFEE440          SYS$P1_VECTOR       ORDSV         
+SYS$TIMCON                  7FFEE570          SYS$P1_VECTOR       ORDSV         
+SYS$TRNLNM                  7FFEE490          SYS$P1_VECTOR       ORDSV         
+SYS$ULWSET                  7FFEE068          SYS$P1_VECTOR       ORDSV         
+SYS$UNWIND                  7FFEE070          SYS$P1_VECTOR       ORDSV         
+SYS$WAITFR                  7FFEE078          SYS$P1_VECTOR       ORDSV         
+SYS$WAKE                    7FFEE080          SYS$P1_VECTOR       ORDSV         
+SYS$WFLAND                  7FFEE088          SYS$P1_VECTOR       ORDSV         
+SYS$WFLOR                   7FFEE090          SYS$P1_VECTOR       ORDSV         
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   14
+
+                                                +------------------+
+                                                ! Symbols By Value !
+                                                +------------------+
+
+Value                                   Symbols...
+-----                                   ----------
+00000600      R-CLI$PRESENT                
+00000643      R-CLI$GET_VALUE              
+000006EA      R-CLI$DCL_PARSE              
+0000079B      R-CLI$DISPATCH               
+000007DC      R-CLI$NEXT_QUAL              
+00000A48     RX-LIB$MATCH_COND             
+00000A4C     RX-STR$ANALYZE_SDESC          
+00000A50     RX-STR$APPEND                 
+00000A54     RX-STR$COMPARE                
+00000A58     RX-STR$CASE_BLIND_COMPARE     
+00000A5C     RX-STR$COMPARE_EQL            
+00000A60     RX-STR$CONCAT                 
+00000A64     RX-STR$COPY_R                 
+00000A68     RX-STR$COPY_DX                
+00000A6C     RX-STR$DUPL_CHAR              
+00000A70     RX-STR$ELEMENT                
+00000A74     RX-STR$FIND_FIRST_NOT_IN_SET  
+00000A78     RX-STR$FIND_FIRST_IN_SET      
+00000A7C     RX-STR$FIND_FIRST_SUBSTRING   
+00000A80     RX-STR$FREE1_DX               
+00000A84     RX-STR$GET1_DX                
+00000A88     RX-STR$LEFT                   
+00000A8C     RX-STR$LEN_EXTR               
+00000A90     RX-STR$MATCH_WILD             
+00000A94     RX-STR$COMPARE_MULTI          
+00000A98     RX-STR$POSITION               
+00000A9C     RX-STR$POS_EXTR               
+00000AA0     RX-STR$PREFIX                 
+00000AA4     RX-STR$REPLACE                
+00000AA8     RX-STR$RIGHT                  
+00000AAC     RX-STR$TRANSLATE              
+00000AB0     RX-STR$TRIM                   
+00000AB4     RX-STR$UPCASE                 
+00000AB8     RX-OTS$CNVOUT_G               
+00000ABC     RX-OTS$CVT_L_TO               
+00000AC0     RX-OTS$CVT_L_TZ               
+00000AC4     RX-OTS$CVT_L_TB               
+00000AC8     RX-OTS$CVT_L_TI               
+00000ACC     RX-OTS$CVT_L_TU               
+00000AD0     RX-OTS$CVT_L_TL               
+00000AD4     RX-OTS$CVT_T_F                
+00000AD8     RX-OTS$CVT_TU_L               
+00000ADC     RX-OTS$CVT_TI_L               
+00000AE0     RX-OTS$CVT_TL_L               
+00000AE4     RX-OTS$CVT_TO_L               
+00000AE8     RX-OTS$CVT_TZ_L               
+00000AEC     RX-OTS$CVT_TB_L               
+00000AF0     RX-OTS$CVT_T_G                
+00000AF4     RX-OTS$CVT_T_D                
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   15
+
+
+Value                                   Symbols...
+-----                                   ----------
+00000AF8     RX-OTS$MOVE3                  
+00000AFC     RX-OTS$MOVE5                  
+00000B00     RX-LIB$ADAWI                  
+00000B04     RX-LIB$ADDX                   
+00000B08     RX-LIB$SUBX                   
+00000B0C     RX-LIB$ANALYZE_SDESC          
+00000B10     RX-LIB$BBCCI                  
+00000B14     RX-LIB$BBSSI                  
+00000B18     RX-LIB$TRAVERSE_TREE          
+00000B1C     RX-LIB$LOOKUP_TREE            
+00000B20     RX-LIB$INSERT_TREE            
+00000B24     RX-LIB$CHAR                   
+00000B28     RX-LIB$DELETE_LOGICAL         
+00000B2C     RX-LIB$SET_LOGICAL            
+00000B30     RX-LIB$DELETE_SYMBOL          
+00000B34     RX-LIB$SET_SYMBOL             
+00000B38     RX-LIB$GET_SYMBOL             
+00000B3C     RX-LIB$GET_COMMON             
+00000B40     RX-LIB$PUT_COMMON             
+00000B44     RX-LIB$CRC                    
+00000B48     RX-LIB$CRC_TABLE              
+00000B4C     RX-LIB$RADIX_POINT            
+00000B50     RX-LIB$DIGIT_SEP              
+00000B54     RX-LIB$CURRENCY               
+00000B58     RX-LIB$CVT_DTB                
+00000B5C     RX-LIB$CVT_OTB                
+00000B60     RX-LIB$CVT_HTB                
+00000B64     RX-LIB$SUB_TIMES              
+00000B68     RX-LIB$ADD_TIMES              
+00000B6C     RX-LIB$CVT_FROM_INTERNAL_TIME 
+00000B70     RX-LIB$CVT_VECTIM             
+00000B74     RX-LIB$GET_MAXIMUM_DATE_LENGTH
+00000B78     RX-LIB$FORMAT_DATE_TIME       
+00000B7C     RX-LIB$GET_DATE_FORMAT        
+00000B80     RX-LIB$CONVERT_DATE_STRING    
+00000B84     RX-LIB$DATE_TIME              
+00000B88     RX-LIB$DAY                    
+00000B8C     RX-LIB$DAY_OF_WEEK            
+00000B90     RX-LIB$EDIV                   
+00000B94     RX-LIB$GET_EF                 
+00000B98     RX-LIB$FREE_EF                
+00000B9C     RX-LIB$RESERVE_EF             
+00000BA0     RX-LIB$EMUL                   
+00000BA4     RX-LIB$ESTABLISH              
+00000BA8     RX-LIB$EXTV                   
+00000BAC     RX-LIB$EXTZV                  
+00000BB0     RX-LIB$FFC                    
+00000BB4     RX-LIB$FFS                    
+00000BB8     RX-LIB$FIND_FILE_END          
+00000BBC     RX-LIB$FIND_FILE              
+00000BC0     RX-LIB$GET_FOREIGN            
+00000BC4     RX-LIB$GET_COMMAND            
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   16
+
+
+Value                                   Symbols...
+-----                                   ----------
+00000BC8     RX-LIB$GET_INPUT              
+00000BCC     RX-LIB$GET_USERS_LANGUAGE     
+00000BD0     RX-LIB$ICHAR                  
+00000BD4     RX-LIB$INDEX                  
+00000BD8     RX-LIB$INSQHI                 
+00000BDC     RX-LIB$INSQTI                 
+00000BE0     RX-LIB$INSV                   
+00000BE4     RX-LIB$LEN                    
+00000BE8     RX-LIB$LOCC                   
+00000BEC     RX-LIB$LOOKUP_KEY             
+00000BF0     RX-LIB$LP_LINES               
+00000BF4     RX-LIB$MATCHC                 
+00000BF8     RX-LIB$MOVC3                  
+00000BFC     RX-LIB$MOVC5                  
+00000C00     RX-LIB$MOVTC                  
+00000C04     RX-LIB$PUT_OUTPUT             
+00000C08     RX-LIB$REMQHI                 
+00000C0C     RX-LIB$REMQTI                 
+00000C10     RX-LIB$REVERT                 
+00000C14     RX-LIB$SCANC                  
+00000C18     RX-LIB$SCOPY_R_DX             
+00000C1C     RX-LIB$SCOPY_DXDX             
+00000C20     RX-LIB$SFREEN_DD              
+00000C24     RX-LIB$SFREE1_DD              
+00000C28     RX-LIB$SGET1_DD               
+00000C2C     RX-LIB$STOP                   
+00000C30     RX-LIB$SIGNAL                 
+00000C34     RX-LIB$SIG_TO_RET             
+00000C38     RX-LIB$SKPC                   
+00000C3C     RX-LIB$SPANC                  
+00000C40     RX-LIB$SPAWN                  
+00000C44     RX-LIB$STAT_VM                
+00000C48     RX-LIB$SHOW_VM                
+00000C4C     RX-LIB$SYS_ASCTIM             
+00000C50     RX-LIB$SYS_FAO                
+00000C54     RX-LIB$SYS_FAOL               
+00000C58     RX-LIB$SYS_GETMSG             
+00000C5C     RX-LIB$TABLE_PARSE            
+00000C60     RX-LIB$FREE_TIMER             
+00000C64     RX-LIB$STAT_TIMER             
+00000C68     RX-LIB$SHOW_TIMER             
+00000C6C     RX-LIB$INIT_TIMER             
+00000C70     RX-LIB$TPARSE                 
+00000C74     RX-LIB$TRA_ASC_EBC            
+00000C78     RX-LIB$TRA_EBC_ASC            
+00000C7C     RX-LIB$DELETE_VM_ZONE         
+00000C80     RX-LIB$RESET_VM_ZONE          
+00000C84     RX-LIB$CREATE_VM_ZONE         
+00000C88     RX-LIB$FREE_VM                
+00000C8C     RX-LIB$GET_VM                 
+00000C90     RX-LIB$GET_VM_PAGE            
+00000C94     RX-LIB$FREE_VM_PAGE           
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   17
+
+
+Value                                   Symbols...
+-----                                   ----------
+00000C98     RX-LIB$WAIT                   
+00000C9C     RX-LIB$GETDVI                 
+00000CA0     RX-LIB$GETJPI                 
+00000CA4     RX-LIB$GETSYI                 
+00000CA8     RX-LIB$AB_UPCASE              
+00000CAC     RX-LIB$AB_EBC_ASC             
+00000CB0     RX-LIB$AB_ASC_EBC             
+00000CBC     RX-LIB$CVT_DX_DX              
+00000CC0     RX-LIB$VERIFY_VM_ZONE         
+00000CC4     RX-LIB$SHOW_VM_ZONE           
+00000CC8     RX-LIB$FIND_VM_ZONE           
+00000CD4     RX-OTS$DIVCG_R3               
+00000CD8     RX-OTS$MULCG_R3               
+00000CDC     RX-OTS$POWCGCG_R3             
+00000CE0     RX-OTS$POWCGJ_R3              
+00000CE4     RX-OTS$POWJJ                  
+00000CE8     RX-MTH$ABS                    
+00000CEC     RX-MTH$ACOS                   
+00000CF0     RX-MTH$ALOG                   
+00000CF4     RX-MTH$ALOG10                 
+00000CF8     RX-MTH$ALOG2                  
+00000CFC     RX-MTH$ASIN                   
+00000D00     RX-MTH$ATAN                   
+00000D04     RX-MTH$ATAN2                  
+00000D08     RX-MTH$COSH                   
+00000D0C     RX-MTH$EXP                    
+00000D10     RX-MTH$FLOOR                  
+00000D14     RX-MTH$RANDOM                 
+00000D18     RX-MTH$SIGN                   
+00000D1C     RX-MTH$SINCOS                 
+00000D20     RX-MTH$SIN                    
+00000D24     RX-MTH$COS                    
+00000D28     RX-MTH$SIND                   
+00000D2C     RX-MTH$COSD                   
+00000D30     RX-MTH$SINH                   
+00000D34     RX-MTH$SQRT                   
+00000D38     RX-MTH$TAN                    
+00000D3C     RX-MTH$TAND                   
+00000D40     RX-MTH$TANH                   
+00000D4C     RX-SYS$FORMAT_ACL             
+00000D50     RX-SYS$PARSE_ACL              
+00000D54     RX-SYS$SETUAI                 
+00000D58     RX-SYS$GETUAI                 
+00000D5C     RX-SYS$CREATE_USER_PROFILE    
+000380B0        CLI$_NOCOMD                
+000381F0        CLI$_ABSENT                
+000381F8        CLI$_NEGATED               
+00038230        CLI$_LOCNEG                
+0003FD19        CLI$_PRESENT               
+0003FD21        CLI$_DEFAULTED             
+0003FD29        CLI$_CONCAT                
+0003FD31        CLI$_LOCPRES               
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   18
+
+
+Value                                   Symbols...
+-----                                   ----------
+0003FD39        CLI$_COMMA                 
+00248200        STR$_TRU                   
+7FFEDE00        SYS$QIOW                   
+7FFEDE18        SYS$CLI                    
+7FFEDE40        SYS$ASCEFC                 
+7FFEDE48        SYS$ASCTIM                 
+7FFEDE50        SYS$ASSIGN                 
+7FFEDE58        SYS$BINTIM                 
+7FFEDE60        SYS$CANCEL                 
+7FFEDE68        SYS$CANTIM                 
+7FFEDE78        SYS$CRMPSC                 
+7FFEDE98        SYS$CLREF                  
+7FFEDEB8        SYS$CREMBX                 
+7FFEDEC0        SYS$CREPRC                 
+7FFEDEC8        SYS$CRETVA                 
+7FFEDED0        SYS$DACEFC                 
+7FFEDEE0        SYS$DASSGN                 
+7FFEDEE8        SYS$DCLAST                 
+7FFEDEF0        SYS$DCLEXH                 
+7FFEDF00        SYS$DELMBX                 
+7FFEDF08        SYS$DELPRC                 
+7FFEDF10        SYS$DELTVA                 
+7FFEDF18        SYS$DGBLSC                 
+7FFEDF28        SYS$DLCEFC                 
+7FFEDF40        SYS$EXIT                   
+7FFEDF48        SYS$EXPREG                 
+7FFEDF50        SYS$FAO                    
+7FFEDF58        SYS$FAOL                   
+7FFEDF60        SYS$FORCEX                 
+7FFEDF68        SYS$IMGSTA                 
+7FFEDF78        SYS$GETTIM                 
+7FFEDF88        SYS$HIBER                  
+7FFEDFA0        SYS$LKWSET                 
+7FFEDFB0        SYS$PURGWS                 
+7FFEDFB8        SYS$NUMTIM                 
+7FFEDFC0        SYS$SNDOPR                 
+7FFEDFC8        SYS$QIO                    
+7FFEDFD0        SYS$READEF                 
+7FFEDFD8        SYS$RESUME                 
+7FFEDFF8        SYS$SETAST                 
+7FFEE000        SYS$SETEF                  
+7FFEE008        SYS$SETEXV                 
+7FFEE020        SYS$SETIMR                 
+7FFEE028        SYS$SETPRI                 
+7FFEE050        SYS$SUSPND                 
+7FFEE068        SYS$ULWSET                 
+7FFEE070        SYS$UNWIND                 
+7FFEE078        SYS$WAITFR                 
+7FFEE080        SYS$WAKE                   
+7FFEE088        SYS$WFLAND                 
+7FFEE090        SYS$WFLOR                  
+7FFEE0B0        SYS$GETMSG                 
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   19
+
+
+Value                                   Symbols...
+-----                                   ----------
+7FFEE0D8        SYS$GETJPI                 
+7FFEE0E0        SYS$PUTMSG                 
+7FFEE100        SYS$SETPRV                 
+7FFEE108        SYS$CLRAST                 
+7FFEE250        SYS$SETDDIR                
+7FFEE258        SYS$SETDFPROT              
+7FFEE278        SYS$FILESCAN               
+7FFEE3C0        SYS$ENQ                    
+7FFEE3C8        SYS$DEQ                    
+7FFEE3D0        SYS$ENQW                   
+7FFEE3F8        SYS$GETSYI                 
+7FFEE410        SYS$GETDVI                 
+7FFEE418        SYS$GETDVIW                
+7FFEE420        SYS$GETJPIW                
+7FFEE430        SYS$GETSYIW                
+7FFEE440        SYS$SYNCH                  
+7FFEE480        SYS$CRELNM                 
+7FFEE488        SYS$DELLNM                 
+7FFEE490        SYS$TRNLNM                 
+7FFEE4D0        SYS$GRANTID                
+7FFEE4D8        SYS$REVOKID                
+7FFEE4E0        SYS$CHKPRO                 
+7FFEE4E8        SYS$BRKTHRUW               
+7FFEE518        SYS$DEVICE_SCAN            
+7FFEE570        SYS$TIMCON                 
+7FFEE578        SYS$GETUTC                 
+7FFEE580        SYS$NUMUTC                 
+7FFEE588        SYS$BINUTC                 
+7FFEE590        SYS$ASCUTC                 
+7FFEE788        SYS$CREATE_UID             
+7FFEE810        SYS$SETCLUEVT              
+7FFEE820        SYS$CLRCLUEVT              
+7FFEE8B0        SYS$AUDIT_EVENTW           
+7FFEE8D0        SYS$CHECK_PRIVILEGEW       
+
+
+
+	  Key for special characters above:
+		+--------------------+
+		! *  - Undefined     !
+		! A  - Alias Name    !
+		! I  - Internal Name !
+		! U  - Universal     !
+		! R  - Relocatable   !
+		! X  - External      !
+		! WK - Weak          !
+		+--------------------+
+
+NL:[].EXE;                                                       9-OCT-2026 02:05        Linker V11-50                    Page   20
+
+                                                 +----------------+
+                                                 ! Image Synopsis !
+                                                 +----------------+
+
+Virtual memory allocated:                         00000000 000013FF 00001400 (5120. bytes, 10. pages)
+Stack size:                                              0. pages
+Image header virtual block limits:                       1.        1. (    1. block)
+Image binary virtual block limits:                       2.        9. (    8. blocks)
+Image name and identification:                     0
+Number of files:                                         8.
+Number of modules:                                      10.
+Number of program sections:                              9.
+Number of global symbols:                              927.
+Including undefined count of:                           42.
+Number of cross references:                            626.
+Number of image sections:                               26.
+Debugger transfer address:                        7FFEDF68
+Number of address fixups:                              194.
+Number of code references to shareable images:         192.
+Image type:                                         PIC, SHAREABLE. Global Section Match=EQUAL, Ident, Major=59, Minor=1778713
+Map format:                                       FULL WITH CROSS REFERENCE in file SYS$SYSROOT:[SYSMGR]ORDSV.MAP;1
+Estimated map length:                             172. blocks
+                                              +---------------------+
+                                              ! Link Run Statistics !
+                                              +---------------------+
+
+Performance Indicators                            Page Faults	CPU Time	Elapsed Time
+----------------------                            -----------	--------	------------
+    Command processing:                                   104	00:00:00.01	00:00:00.01
+    Pass 1:                                              2416	00:00:00.13	00:00:00.20
+    Allocation/Relocation:                                 94	00:00:00.00	00:00:00.01
+    Pass 2:                                               780	00:00:00.04	00:00:00.12
+    Map data after object module synopsis:                 65	00:00:00.03	00:00:00.04
+    Symbol table output:                                   19	00:00:00.00	00:00:00.00
+Total run values:                                        3478	00:00:00.21	00:00:00.38
+
+Using a working set limited to 1262 pages and 846 pages of data storage (excluding image)
+
+Total number object records read (both passes):   293
+    of which 80 were in libraries and 2 were DEBUG data records containing 37 bytes
+32 bytes of DEBUG data were written,starting at VBN 12 with 2 blocks allocated
+
+Number of modules extracted explicitly             = 0
+    with 4 extracted to resolve undefined symbols
+
+42 library searches were for symbols not in the library searched
+
+A total of 4 global symbol table records was written
+
+LINK/SHAREABLE/MAP/FULL/CROSS/NOEXECUTABLE ORDSV

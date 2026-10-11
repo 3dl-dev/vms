@@ -473,6 +473,9 @@ static inline int exec_file_is(void *pin, int fd)
 	return same;
 }
 
+/* No OpenVMS VAX native-image path on Linux (vms-b869): honestly unsupported. */
+static inline int exec_native_page0_lower(void) { return 1; }
+
 /* exec_current_uid/gid (vms-31b): the REAL uid/gid of `current`, mapped into the
  * initial user namespace -- exactly the reads the device table's caller_uic()
  * did before this seam existed, so the module is behaviour-identical. */

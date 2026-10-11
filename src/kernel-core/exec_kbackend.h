@@ -260,6 +260,14 @@
  *        is 1 when `fd` names that very copy: matching is by the held object,
  *        never an inode number or a path (Baron's rulings, vms-96e7, vms-220).
  *
+ *   int  exec_native_page0_lower(void)
+ *        lower the minimum address of the CURRENT task's address space to 0 so
+ *        it can map virtual page 0 (an OpenVMS VAX native image, rd vms-b869),
+ *        provided the current task IS the native image activator. 0 granted,
+ *        <0 refused (not the activator), >0 this substrate has no such path.
+ *        Called only from vms_ioctl_native_page0 after its privilege check.
+ *        NetBSD: ovmx_native_page0_allow (uvm). Linux: >0 (no VAX).
+ *
  *   uint32_t exec_current_uid(void)
  *   uint32_t exec_current_gid(void)
  *        the CURRENT host task's REAL user / group id, mapped into the host's

@@ -41,6 +41,7 @@ SRCS=		vms_netbsd.c \
 		vms_lnm_arena_netbsd.c \
 		vms_acct_rss_netbsd.c \
 		vms_sysmem_netbsd.c \
+		vms_native_p0_netbsd.c \
 		exec_list_netbsd.c \
 		exec_hash_netbsd.c \
 		exec_rbtree_netbsd.c \

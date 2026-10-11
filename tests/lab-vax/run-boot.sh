@@ -568,7 +568,7 @@ master_system_volume() {
   # this rail's runtime must fail HERE too, not surface as a silent skip deep
   # in the battery.
   for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR DECNETD.EXE; do
-    echo "${listing}" | grep -qiF "${f}" \
+    grep -qiF "${f}" <<<"${listing}" \
       || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da / vms-c1f)"
   done
   # vms-329: [USERS] must be on the volume or PROVISION's home-directory pass has
@@ -578,7 +578,7 @@ master_system_volume() {
   # x86_64 distribution image on the same "]USERS.DIR;" line; this is its vax
   # twin, so a stage_sysvol.sh regression fails HERE and not three minutes into
   # a SIMH boot.
-  echo "${listing}" | grep -qiE '\]USERS\.DIR' \
+  grep -qiE '\]USERS\.DIR' <<<"${listing}" \
     || die "mastered system volume is MISSING [USERS] -- PROVISION cannot create the account home directories over the ACP (vms-329)"
   log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR + [USERS]"
 }
@@ -700,7 +700,7 @@ master_distribution_volume() {
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${DISTRIB_IMG}")")"
   echo "${listing}"
   [ -f "${DISTRIB_IMG}" ] || die "distribution-volume mastering did not produce ${DISTRIB_IMG}"
-  echo "${listing}" | grep -qiF "OVMX-OS-VAX.KIT" \
+  grep -qiF "OVMX-OS-VAX.KIT" <<<"${listing}" \
     || die "mastered distribution volume is MISSING OVMX-OS-VAX.KIT (staging regression, rd vms-d0e5)"
   log "mastered distribution volume carries OVMX-OS-VAX.KIT (boots into OVMX\$INSTALL.COM)"
 }
@@ -1179,10 +1179,10 @@ master_status_volume() {
   echo "${listing}"
   [ -f "${STATUS_SYSVOL_IMG}" ] || die "status proof volume mastering did not produce ${STATUS_SYSVOL_IMG}"
   for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR STSNORM.EXE STSCOND.EXE; do
-    echo "${listing}" | grep -qiF "${f}" \
+    grep -qiF "${f}" <<<"${listing}" \
       || die "mastered status proof volume is MISSING ${f}"
   done
-  echo "${listing}" | grep -qiE '\]USERS\.DIR' \
+  grep -qiE '\]USERS\.DIR' <<<"${listing}" \
     || die "mastered status proof volume is MISSING [USERS]"
 }
 

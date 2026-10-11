@@ -133,6 +133,8 @@ jobs:
         run: |
           python3 tools/ci/check_conflict_markers.py --self-test
           python3 tools/ci/check_conflict_markers.py .
+      - name: check_pipefail_grepq.py (no echo-into-grep -q under pipefail)
+        run: python3 tools/ci/check_pipefail_grepq.py .
 
   merge-queue-gates:
     # Every gating workflow ends in the merge queue's required `gate` job, and

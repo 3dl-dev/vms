@@ -279,8 +279,13 @@ static uint32_t cl_next_ref(uint16_t *msgid, uint16_t class_token)
 {
 	uint16_t id = *msgid;
 
-	if (id == 0u)
-		id = 1u;
+	/* rd vms-239 minted-form audit: every P.CRF a real VAX class driver put
+	 * on the wire (3,637 in the lab corpus) has a high word in
+	 * [0x0079, 0xffdc] and a low word in [0x0001, 0x0038]; this counter used
+	 * to start at 1, a high word no real node sends. It starts at the
+	 * walk's own grounded seed and never drops below 0x0100 on wrap. */
+	if (id < 0x0100u)
+		id = (uint16_t)VMS_MSCP_CL_SCC_MSGID0;
 	*msgid = (uint16_t)(id + 1u);
 	return VMS_MSCP_CL_CMD_REF(class_token, id);
 }

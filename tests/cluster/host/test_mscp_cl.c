@@ -980,6 +980,13 @@ static void test_read_end_to_end(void)
 	ct_check_eq_u32(e.cl.ucb[0].unit_size, 32u,
 			"...and it is the volume's real block count");
 	ct_check_eq_u32(e.cl.reads_issued, 1u, "then the READ command went out");
+	/* rd vms-239 minted-form audit: real class drivers' P.CRF high words
+	 * lie in [0x0079, 0xffdc] (3,637 commands); the READ's and the
+	 * ONLINE's message ids were minted inside that range. */
+	ct_check(e.cl.cddb[0].xfer_msgid > 0x0079u && e.cl.cddb[0].online_msgid > 0x0079u &&
+		 (uint16_t)(e.cl.cddb[0].xfer_msgid - 1u) >= 0x0079u &&
+		 (uint16_t)(e.cl.cddb[0].online_msgid - 1u) >= 0x0079u,
+		 "the P.CRF high words OVMX minted are inside the real range");
 
 	ct_check_eq_u32(e.fake.reads, 1u,
 			"the server really read its block device");

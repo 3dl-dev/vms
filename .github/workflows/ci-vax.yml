@@ -2226,3 +2226,50 @@ jobs:
           echo "$RAW" | grep -qF "ALL PROOFS PASSED: the VMS ACP-read code path compiles ILP32-clean for vax--netbsdelf" \
             || { echo "FAIL: did not see the ACP-read audit PASS banner"; exit 1; }
           echo "PASS: the VMS ACP-read path (RMS ACP arm + imgact_acp + PID 1 staging bridge + OVMXVMSSYS.PAR-over-ACP + the NetBSD boot backend) cross-compiles ILP32-clean for elf32-vax with OVMX_HAVE_ACP; every tooth fired"
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: CI / VAX / NetBSD-vax"
+    if: ${{ always() }}
+    needs:
+      - changes
+      - netbsd-vax-simh
+      - netbsd-vax-substrate-prime
+      - vax-toolchain-image
+      - netbsd-vax-devvms
+      - netbsd-vax-eflag
+      - netbsd-vax-access
+      - netbsd-vax-proctab
+      - netbsd-vax-mbx
+      - netbsd-vax-boot
+      - netbsd-vax-sysboot
+      - vax-dcl-acceptance
+      - vax-status-gate
+      - netbsd-vax-vms-crosscompile
+      - netbsd-vax-facility-tools-crosscompile
+      - vmslink-vax
+      - vmslink-vax-exec
+      - vax-shipped-shareable-packaging
+      - vax-cmake-images
+      - vax-acp-read-ilp32
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

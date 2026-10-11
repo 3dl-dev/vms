@@ -45,23 +45,9 @@ $ WRITE SYS$OUTPUT "NATIVE-PROOF: === RUN NOTIMG (a text file) ==="
 $ RUN SYS$SYSTEM:NOTIMG
 $ WRITE SYS$OUTPUT "NATIVE-PROOF: NOTIMG-STATUS=''$STATUS'"
 $!
-$! The semantic-oracle probes LINKed on the lab Alpha V8.4 node (the very
-$! programs docs/oracle/semantics/<family>/alpha84.txt was printed by), run
-$! unchanged; each prints its own "=== SEMPROBE <family> BEGIN/END ===".
-$! One RUN per image in tests/native-images/alpha/sp/ (the gate checks the
-$! two lists agree). The terminal is set as the goldens were captured
-$! (tools/oracle/semantic/capture.py; tests/qemu/test_semantic_oracle.sh).
-$ SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP
-$ RUN SYS$SYSTEM:SP_EF
-$ RUN SYS$SYSTEM:SP_FAO
-$ RUN SYS$SYSTEM:SP_TT
-$ RUN SYS$SYSTEM:SP_IO
-$ RUN SYS$SYSTEM:SP_LNM
-$ RUN SYS$SYSTEM:SP_INFO
-$ RUN SYS$SYSTEM:SP_LOCK
-$ RUN SYS$SYSTEM:SP_RTL
-$ RUN SYS$SYSTEM:SP_RIGHTS
-$ RUN SYS$SYSTEM:SP_CHKPRO
-$ RUN SYS$SYSTEM:SP_RMS
+$! The semantic-oracle probes (tests/native-images/alpha/sp/, staged into
+$! SYS$SYSTEM) are not RUN here: the gate RUNs them after the boot, in a
+$! SYSTEM login on OPA0:, the session their goldens were printed in (rd
+$! vms-3432; tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate).
 $ WRITE SYS$OUTPUT "NATIVE-PROOF: === END ==="
 $ EXIT

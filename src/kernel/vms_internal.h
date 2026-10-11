@@ -1297,6 +1297,7 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
 /* rd vms-bdc1: installed-image privileges at activation (vms_access.c) */
 uint64_t vms_kfe_exec_privs(const void *img);
 void vms_proc_image_privs(struct vms_proc *proc, uint64_t img_privs);
+int vms_kfe_exec_is(const void *img, const char *name);   /* rd vms-15c9 */
 long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg);

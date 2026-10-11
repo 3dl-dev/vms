@@ -1399,6 +1399,14 @@ jobs:
           LAB_IMAGE: ovmx-vax-lab
         run: tests/lab-vax/run-boot.sh status-gate
 
+      # rd vms-15c9 negctl nativeact-keeps-cmkrnl: the same boot with NATIVEACT
+      # built WITHOUT its CMKRNL drop must red the gate on the CMKRNL check.
+      - name: "$STATUS gate negctl — NATIVEACT keeping CMKRNL reds the gate (vms-15c9)"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+        run: tests/lab-vax/run-boot.sh status-gate-negctl
+
       - name: Upload the status gate console log
         if: always()
         uses: actions/upload-artifact@v4

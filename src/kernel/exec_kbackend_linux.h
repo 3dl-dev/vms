@@ -475,6 +475,8 @@ static inline int exec_file_is(void *pin, int fd)
 
 /* No OpenVMS VAX native-image path on Linux (vms-b869): honestly unsupported. */
 static inline int exec_native_page0_lower(void) { return 1; }
+/* rd vms-15c9: no native VAX activator on Linux, so no image to name. */
+static inline const void *exec_current_image(void) { return NULL; }
 
 /* rd vms-bdc1: `img` is the struct inode of the file a process exec'd. */
 static inline int exec_pin_is_image(void *pin, const void *img)

@@ -45,7 +45,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: vaxlab
-          image: 192.168.2.43:30500/ovmx-vaxlab:6   # :6 = :4 (qemu-system-x86, vms-bd3) + SIMH "set clock nocatchup" (vms-549c); built by image-build/90-build-vaxlab-image.yaml
+          image: 192.168.2.43:30500/ovmx-vaxlab:7   # :7 = :4 (qemu-system-x86, vms-bd3) + SIMH "set clock nocatchup" (vms-549c) + opt-in ASYM_MSCP (vms-b20); built by image-build/90-build-vaxlab-image.yaml
           imagePullPolicy: IfNotPresent
           env:
             - name: POD_NAME

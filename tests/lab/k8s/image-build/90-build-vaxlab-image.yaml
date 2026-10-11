@@ -29,7 +29,7 @@ spec:
             - --context=git://github.com/3dl-dev/vms.git#refs/heads/work/vms-549c-simh-nocatchup
             - --context-sub-path=tests/lab
             - --dockerfile=Dockerfile
-            - --destination=192.168.2.43:30500/ovmx-vaxlab:6
+            - --destination=192.168.2.43:30500/ovmx-vaxlab:7
             - --insecure
             - --skip-tls-verify
             - --single-snapshot

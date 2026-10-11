@@ -181,6 +181,13 @@ SCA block-transfer path (§ "Phase D part 1's lab capture" in
 stock config, not a replacement for it — most lab sessions want the stock
 symmetric setup.
 
+**Selectable since image `:7` (rd `vms-b20`):** set the env `ASYM_MSCP=1` on the
+pod and `entrypoint.sh` renders exactly the recipe below -- vax1 gets
+`set rq2 ra81` + `attach rq2 ${LAB_DIR}/data/d2.dsk` (SIMH creates it empty on
+first attach; `INITIALIZE $2$DUA2: <label>` once from vax1), vax2 gets
+`set rq2 disable` / `set rq3 disable`. Default (unset) is the stock symmetric
+config. `ctest -R lab_entrypoint_vaxini` checks both renderings.
+
 **Recipe** (source: `vms-291`'s `vaxlab-9` capture via `vms-76eb`'s closing
 context, grounded against `tests/lab/entrypoint.sh`, 2026-08-06):
 
@@ -241,7 +248,7 @@ busy k3s worker) the calibrated timer schedules thousands of catch-up ticks and
 the instructions-per-tick calibration overflowed. The corrupt calibration
 survives a SIMH `boot`; only a fresh simulator clears it.
 
-**Fix (image `:6`).** `entrypoint.sh` writes `set clock nocatchup` into every
+**Fix (image `:6`, carried forward in `:7`).** `entrypoint.sh` writes `set clock nocatchup` into every
 node's `vax.ini`. A stall then costs that much simulated time instead of a
 backlog. Verify on a running node: `show clocks` lists no `Catchup` lines.
 

@@ -16,11 +16,15 @@ EP="${1:-$SELF_DIR/../entrypoint.sh}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-render() {   # render <entrypoint> -> stdout: the vax.ini a node would get
-	local body
+render() {   # render <entrypoint> [node] [ASYM_MSCP] -> the vax.ini a node gets
+	local body sel n=${2:-vax1} ASYM_MSCP=${3:-0}
+	local rq2_set= rq3_set= rq2_att= rq3_att=
 	body=$(sed -n '/cat > "${nd}\/vax.ini" <<EOF/,/^EOF$/p' "$1" | sed '1d;$d')
 	[ -n "$body" ] || return 1
-	nd=/n LAB_DIR=/l LAB_ROOT=/r eval "cat <<EOF
+	sel=$(sed -n '/^  rq2_set=; rq3_set=/,/^  fi$/p' "$1")
+	local nd=/n LAB_DIR=/l LAB_ROOT=/r
+	[ -n "$sel" ] && eval "$sel"
+	eval "cat <<EOF
 $body
 EOF"
 }
@@ -43,6 +47,20 @@ if check "$TMP/vax.ini"; then
 	echo "ok: the generated vax.ini sets idle=vms and clock nocatchup before booting"
 else
 	echo "FAIL: the generated vax.ini is missing a load-bearing SIMH setting"; rc=1
+fi
+
+# ASYM_MSCP=1 (rd vms-b20): vax1 owns an RA81 on rq2 (d2.dsk), vax2's rq2/rq3
+# are disabled; the default keeps both nodes' CD-ROMs.
+render "$EP" vax1 1 > "$TMP/a1.ini"; render "$EP" vax2 1 > "$TMP/a2.ini"
+render "$EP" vax2 0 > "$TMP/s2.ini"
+if grep -qx 'set rq2 ra81' "$TMP/a1.ini" && grep -qx 'attach rq2 /l/data/d2.dsk' "$TMP/a1.ini" &&
+   grep -qx 'set rq2 disable' "$TMP/a2.ini" && grep -qx 'set rq3 disable' "$TMP/a2.ini" &&
+   ! grep -q 'attach.* rq2 ' "$TMP/a2.ini" &&
+   grep -qx 'set rq2 cdrom' "$TMP/s2.ini" && check "$TMP/a1.ini" >/dev/null &&
+   check "$TMP/a2.ini" >/dev/null; then
+	echo "ok: ASYM_MSCP=1 gives vax1 a private RA81 on rq2 and frees vax2's rq2/rq3; default unchanged"
+else
+	echo "FAIL: ASYM_MSCP rendering is wrong"; rc=1
 fi
 
 grep -v -x -F 'set clock nocatchup' "$EP" > "$TMP/ep-neg.sh"

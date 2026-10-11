@@ -46,13 +46,13 @@
  * WHAT THIS LAYER DOES NOT DO, AND WHY IT IS SAID HERE
  * ------------------------------------------------------------------------
  * It does NOT plug served units into `exec_blockdev_read_block` /
- * `_write_block`. That seam is SYNCHRONOUS by contract (exec_kbackend.h SS8),
- * and an MSCP transfer completes asynchronously on a peer's end message; a
- * synchronous wrapper would have to block the cluster fork thread that also
- * has to run the completion, which deadlocks by construction. So this layer
- * exposes the driver's own ASYNCHRONOUS service (SS3 below) and the ACP bridge
- * is left to the item that owns the ACP's own waiting discipline (FC-P7.2).
- * Nothing here pretends to a synchronous read.
+ * `_write_block`: an MSCP transfer completes asynchronously on a peer's end
+ * message, on the cluster fork thread. A wait ON that thread would deadlock by
+ * construction. The ACP's bridge (rd vms-4822, SS4 below) therefore waits on
+ * the CALLER's thread -- process context, the only place the ACP runs -- and
+ * the fork thread only wakes it. Served units reach it through the ACP's own
+ * block chokepoint (vmsfs_acp.c acp_bdev_read/_write), keyed by the row's
+ * (VMS_DEVTAB_SERVED_MAJOR, id) pair.
  *
  * INCLUDES: kernel-core headers only (CI gate
  * tools/ci/cluster_core_includes_gate.sh).
@@ -113,5 +113,23 @@ int vms_mscp_cl_write(struct vms_cluster *cl, const char *devnam, uint32_t lbn,
 		      uint32_t nblocks, uint8_t *buf, uint32_t buf_len,
 		      uint32_t handle, vms_mscp_cl_done_cb done,
 		      void *done_ctx);
+
+/* ==========================================================================
+ * 4. The SYNCHRONOUS block service (rd vms-4822)
+ *
+ * Read or write `len` bytes (a whole number of 512-byte blocks) at `lbn` of
+ * the served unit `devnam`, and WAIT for the server's answer on the calling
+ * thread. PROCESS CONTEXT ONLY -- never the cluster fork thread. `buf` is
+ * named to the serving node for the life of the request.
+ *
+ * SS$_NORMAL: the server answered success and moved exactly `len` bytes.
+ * SS$_DEVOFFLINE: no class driver, no path, the request was refused, or the
+ * unit is offline/not online. SS$_ABORT: anything else the server answered,
+ * a short transfer, or the request deadline. SS$_INSFMEM: too many requests
+ * already waiting. SS$_BADPARAM for a bad argument.
+ * ========================================================================== */
+uint32_t vms_mscp_cl_io_wait(struct vms_cluster *cl, const char *devnam,
+			     uint32_t lbn, uint8_t *buf, uint32_t len,
+			     int is_write);
 
 #endif /* OVMX_VMS_MSCP_CL_H */

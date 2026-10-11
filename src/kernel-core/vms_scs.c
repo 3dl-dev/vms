@@ -134,6 +134,10 @@ struct vms_scs {
 	 * what actually happened on it -- counted here, where it happens. */
 	vms_scs_block_cb block_cb[VMS_SCS_MAX_BLOCK_CONSUMERS];
 	void            *block_ctx[VMS_SCS_MAX_BLOCK_CONSUMERS];
+	/* rd vms-1f64: the same consumer's "your SEND DATA was acknowledged"
+	 * routine, slot for slot with block_cb (vms_scs_set_block_sent). */
+	vms_scs_block_sent_cb block_sent_cb[VMS_SCS_MAX_BLOCK_CONSUMERS];
+	uint32_t         block_sends_confirmed;
 	uint32_t         block_completions;
 	uint32_t         block_unclaimed;
 };
@@ -433,6 +437,25 @@ static void scs_upper_block_data(void *ctx, vms_scs_sysid_t from, uint32_t name,
 		scs->block_unclaimed++;
 }
 
+/* rd vms-1f64: a SEND DATA this node initiated was acknowledged (0x0f). The
+ * same exact fan-out as block_data: each consumer recognises its own name. */
+static void scs_upper_block_sent(void *ctx, vms_scs_sysid_t from, uint32_t name)
+{
+	struct vms_scs *scs = (struct vms_scs *)ctx;
+	uint32_t i, delivered = 0u;
+
+	(void)from;
+	scs->block_sends_confirmed++;
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (scs->block_sent_cb[i] == (vms_scs_block_sent_cb)0)
+			continue;
+		scs->block_sent_cb[i](scs->block_ctx[i], name);
+		delivered++;
+	}
+	if (delivered == 0u)
+		scs->block_unclaimed++;
+}
+
 static void scs_upper_bind(struct vms_scs *scs)
 {
 	scs->upper.message = scs_upper_message;
@@ -446,6 +469,7 @@ static void scs_upper_bind(struct vms_scs *scs)
 	 * forwarder is a no-op -- which is the legitimate NULL case the port
 	 * itself documents. */
 	scs->upper.block_data = scs_upper_block_data;
+	scs->upper.block_sent = scs_upper_block_sent;
 }
 
 /* ==========================================================================
@@ -773,8 +797,36 @@ static void scs_block_withdraw(struct vms_scs *scs, void *cb_ctx)
 		if (cb_ctx != (void *)0 && scs->block_ctx[i] != cb_ctx)
 			continue;
 		scs->block_cb[i] = (vms_scs_block_cb)0;
+		scs->block_sent_cb[i] = (vms_scs_block_sent_cb)0;
 		scs->block_ctx[i] = (void *)0;
 	}
+}
+
+/*
+ * vms_scs_set_block_sent - vms_scs.h SS9. Attach the acknowledgement routine
+ * to a consumer ALREADY registered under `cb_ctx` by vms_scs_set_block_
+ * consumer; SS$_IVCHAN-style refusal (SS$_BADPARAM) when there is none, so an
+ * acknowledgement can never be routed to a SYSAP that owns no buffers.
+ */
+int vms_scs_set_block_sent(struct vms_cluster *cl, vms_scs_block_sent_cb cb,
+			   void *cb_ctx)
+{
+	struct vms_scs *scs;
+	uint32_t i;
+
+	if (cl == (struct vms_cluster *)0 || cb_ctx == (void *)0)
+		return SS__BADPARAM;
+	scs = cl->scs;
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	for (i = 0; i < VMS_SCS_MAX_BLOCK_CONSUMERS; i++) {
+		if (scs->block_ctx[i] == cb_ctx &&
+		    scs->block_cb[i] != (vms_scs_block_cb)0) {
+			scs->block_sent_cb[i] = cb;
+			return SS__NORMAL;
+		}
+	}
+	return SS__BADPARAM;
 }
 
 /*
@@ -891,12 +943,18 @@ int scs_connect(struct vms_scs *scs, const uint8_t *local_name,
 	args.dst = dst;
 	args.initial_credits = info.initial_credits;
 	/* p. 2-44's OTHER credit argument. vms_scs.h's frozen CONNECT service
-	 * does not carry it, so the SYSAPs that connect through this entry
-	 * point -- SCS$DIRECTORY's poller, VMS$VAXcluster, the disk class
-	 * driver -- declare no minimum, which is their real requirement: none
-	 * of them reserves a Send Credit for anything. 0 is that answer, not a
-	 * placeholder (INV-6). */
+	 * does not carry it, so it is read off the SYSAP's own registration
+	 * (rd vms-239), exactly like its initial credits above. SCS$DIRECTORY's
+	 * poller and VMS$VAXcluster declare none (0, their real answer); the
+	 * disk class driver declares the floor every real class driver
+	 * states. The same registration supplies the SYSAP's own connect data
+	 * when the caller named none. */
 	args.min_credits = 0u;
+	if (args.sysap != (const struct scs_sysap_ops *)0) {
+		args.min_credits = args.sysap->connect_min_credits;
+		if (conndata == (const uint8_t *)0)
+			args.conndata = args.sysap->connect_conndata;
+	}
 	return (int)scs_glue_status(scs_fsm_connect(&scs->fsm, &args,
 						    out_conid));
 }
@@ -1044,6 +1102,24 @@ int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 	if (cdt == (struct scs_cdt *)0 || cdt->peer_sysid == 0u)
 		return SS__BADPARAM;
 	*out = cdt->peer_sysid;
+	return SS__NORMAL;
+}
+
+int scs_conid_remote(struct vms_scs *scs, vms_conid_t local_conid,
+		     vms_conid_t *out)
+{
+	struct scs_cdt *cdt;
+
+	if (out == (vms_conid_t *)0)
+		return SS__BADPARAM;
+	*out = 0u;
+	if (scs == (struct vms_scs *)0)
+		return SS__NOSUCHDEV;
+	cdt = scs_fsm_cdt_by_conid(&scs->fsm, local_conid);
+	if (cdt == (struct scs_cdt *)0 || !cdt->remote_conid_valid ||
+	    cdt->remote_conid == 0u)
+		return SS__BADPARAM;
+	*out = cdt->remote_conid;
 	return SS__NORMAL;
 }
 

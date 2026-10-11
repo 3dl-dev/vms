@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "cluster_test.h"
+#include "conformance_dump.h"   /* rd vms-ci.6 frame-conformance gate */
 #include "cluster_fixture.h"
 #include "cnxman_fake_ops.h"
 
@@ -206,6 +207,10 @@ static int bed_send_msg(void *ctx, vms_conid_t conid, const uint8_t *body,
 	(void)ctx;
 	if (g.fail_send)
 		return g.fail_send_rc != 0 ? g.fail_send_rc : -1;
+	/* rd vms-ci.6: the join's disk walk (SCC x2 + GUS) is a REAL sender of
+	 * MSCP command bodies on the MSCP$DISK connection. */
+	if (conid == MSCP_CONID)
+		conf_dump("mscp_cmd", 72u, "join_walk=1", body, len);
 	if (g.n_sent < MAX_SENT) {
 		memset(g.sent[g.n_sent].body, 0, VMS_CM_BODY_LEN);
 		memcpy(g.sent[g.n_sent].body, body,
@@ -886,19 +891,24 @@ static void drive_to_admit(void)
 	cnxman_join_opened(&g.j, CM_CONID);
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	bed_member_has_spoken();
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 2u), 3u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 }
 
 static void test_reference_sequence(void)
@@ -962,20 +972,24 @@ static void test_reference_sequence(void)
 	{
 		uint32_t len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		ct_check_eq_u32(g.j.mscp_cmds_sent, 2u,
 				"SET CONTROLLER CHARACTERISTICS, twice");
 		len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		ct_check_eq_u32(g.j.mscp_cmds_sent, 3u,
 				"then the first GET UNIT STATUS");
 
 		len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u,
 				 VMS_MSCP_ST_AVAILABLE);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 				 VMS_MSCP_ST_AVAILABLE);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		ct_check_eq_u32(g.j.units_found, 2u,
 				"two served units enumerated from the PEER's "
 				"own answers");
@@ -987,7 +1001,8 @@ static void test_reference_sequence(void)
 		bed_member_has_spoken();
 		len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 2u), 3u,
 				 VMS_MSCP_ST_OFFLINE);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	}
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"step 6: the OFFLINE terminator releases op 0x02");
@@ -1376,13 +1391,16 @@ static void test_promotion_records_membership_at_any_csv_slot(void)
 		{
 			uint32_t len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 
-			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 			len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 +
 						    1u));
-			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 			len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u,
 					 VMS_MSCP_ST_OFFLINE);
-			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+			cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		}
 
 		/* THE CLUSTER ASSIGNS THIS NODE THE SLOT -- its own membership
@@ -1979,6 +1997,270 @@ static void test_watchdog(void)
  * 7. The hand-off contract, both wirings
  * ========================================================================== */
 
+
+/* ==========================================================================
+ * rd vms-1f64: a kind-6 close pulls the requester's record, writes the answer
+ * back into its buffer, and only then answers -- with the status a member that
+ * lacks the device really writes (dlmlab F1b: VAX3, no $2$DUA1).
+ * ========================================================================== */
+
+static struct {
+	uint8_t  *reg_buf;
+	uint32_t  reg_len;
+	uint32_t  n_reg, n_rel, n_req, n_send;
+	uint32_t  req_conid, req_xfer, req_remote, req_local, req_len;
+	uint32_t  send_xfer, send_remote, send_local, send_len;
+	uint8_t   sent_rec[200];
+	int       present;   /* what device_present answers */
+	int       fail_request;
+} rb;
+
+static int rb_register(void *ctx, uint8_t *buf, uint32_t len, uint32_t *name)
+{
+	(void)ctx;
+	rb.reg_buf = buf;
+	rb.reg_len = len;
+	rb.n_reg++;
+	*name = 0x00001101u;
+	return 0;
+}
+static int rb_release(void *ctx, uint32_t name)
+{
+	(void)ctx; (void)name;
+	rb.n_rel++;
+	return 0;
+}
+static int rb_request(void *ctx, vms_conid_t conid, uint32_t xfer,
+		      uint32_t remote, uint32_t local, uint32_t len)
+{
+	(void)ctx;
+	rb.n_req++;
+	rb.req_conid = conid; rb.req_xfer = xfer; rb.req_remote = remote;
+	rb.req_local = local; rb.req_len = len;
+	return rb.fail_request ? -1 : 0;
+}
+static int rb_send(void *ctx, vms_conid_t conid, uint32_t xfer,
+		   uint32_t remote, uint32_t local, uint32_t len)
+{
+	(void)ctx; (void)conid;
+	rb.n_send++;
+	rb.send_xfer = xfer; rb.send_remote = remote; rb.send_local = local;
+	rb.send_len = len;
+	memcpy(rb.sent_rec, rb.reg_buf, len > 200u ? 200u : len);
+	return 0;
+}
+static int rb_present(void *ctx, const uint8_t *name, uint32_t len)
+{
+	(void)ctx;
+	return (len == 9u && memcmp(name, "_$2$DUA1:", 9) == 0) ? rb.present
+								 : 0;
+}
+
+/* F1b's real DISMOUNT record (VAX1 -> VAX3) and VAX3's real answer. */
+static const char rdev_dm_req[] =
+    "00000000000000008800656406000300010015000000560000000400000056000000"
+    "174e0000000000000000000000000000000000001a0001000000000000000000ffff"
+    "ffffffffffff040001000500000000000000c0000000090000000c0000005f243224"
+    "445541313a00051af4bf000000000000000000000000000000000000000000000000";
+static const char rdev_dm_ans[] =
+    "00f6f3ff00f6f3ff8800656406000300010015000000560000000400000056000000"
+    "174e0000000000000000000000000000000000001a0001000000000000000000ffff"
+    "ffffffffffff04000100050000000000000008090000090000000c0000005f243224"
+    "445541313a00051af4bf000000000000000000000000000000000000000000000000";
+
+static void rb_hex(const char *h, uint8_t *o, uint32_t n)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++) {
+		unsigned int x;
+
+		sscanf(h + 2 * i, "%2x", &x);
+		o[i] = (uint8_t)x;
+	}
+}
+
+/* A member's kind-6 close naming its buffer 0xbea70002, length `len`. */
+static uint32_t mk_kind6(uint32_t len, uint32_t xfer_conid)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE, 0x0061);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_NAME,
+			  0xbea70002u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_CONID,
+			  xfer_conid);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_CLOSE_REQ_KIND,
+			VMS_CM_CLOSE_KIND_VOLUME);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_LEN, len);
+	return n;
+}
+
+static void rb_bed(void)
+{
+	uint32_t len;
+
+	bed_init();
+	memset(&rb, 0, sizeof(rb));
+	g.jops.blk_register = rb_register;
+	g.jops.blk_release = rb_release;
+	g.jops.blk_request = rb_request;
+	g.jops.blk_send = rb_send;
+	g.jops.device_present = rb_present;
+	bed_set_identity();
+	drive_to_admit();
+	len = mk_go(EPOCH);
+	(void)join_feed(len);
+}
+
+static void test_rdev_kind6_close_writes_back_then_answers(void)
+{
+	uint32_t sent_before, conid;
+	uint8_t want[136];
+
+	printf("\n-- vms-1f64: kind-6 close -- pull, write back, THEN answer --\n");
+	rb_bed();
+	conid = g.member_csb->cdt_conid;
+	sent_before = g.n_sent;
+	ct_check_eq_u32(join_feed(mk_kind6(136u, conid)),
+			CNXMAN_JOIN_RX_CONSUMED, "the kind-6 close is taken");
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"*** NO cat-0x86 yet: the answer waits for the write-back ***");
+	ct_check_eq_u32(rb.n_req, 1u, "a REQUEST DATA was issued");
+	ct_check_eq_u32(rb.req_remote, 0xbea70002u,
+			"  for the requester's buffer (body[16:20])");
+	ct_check_eq_u32(rb.req_xfer, conid,
+			"  with +0 = this node's own Con.ID (body[20:24])");
+	ct_check_eq_u32(rb.req_len, 136u, "  136 bytes (body[28:32])");
+	ct_check_eq_u32(rb.req_conid, conid,
+			"  on the connection the request arrived on");
+	ct_check_eq_u32(g.j.rdev_started, 1u, "  counted");
+
+	/* The record arrives (one final frame), naming a device we lack. */
+	rb_hex(rdev_dm_req, rb.reg_buf, 136);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 136u, 136u);
+	ct_check_eq_u32(rb.n_send, 1u, "the answer is written back by SEND DATA");
+	ct_check_eq_u32(rb.send_remote, 0xbea70002u,
+			"  into the SAME requester buffer");
+	ct_check_eq_u32(rb.send_len, 136u, "  136 bytes");
+	rb_hex(rdev_dm_ans, want, 136);
+	ct_check(memcmp(rb.sent_rec + 8, want + 8, 128) == 0,
+		 "*** the record written back is VAX3's real answer, byte for "
+		 "byte past rec[0:8] (status SS$_NOSUCHDEV) ***");
+	ct_check_eq_u32(g.n_sent, sent_before, "  still no cat-0x86");
+
+	cnxman_join_blk_sent(&g.j, 0x00001101u);
+	ct_check_eq_u32(g.n_sent, sent_before + 1u,
+			"*** the peer's 0x0f releases the cat-0x86 answer ***");
+	ct_check(sent_is(n_cm_sent() - 1u,
+			 (uint8_t)(VMS_CM_CAT_MEMBERSHIP | 0x80u),
+			 VMS_CM_OP_CLOSE),
+		 "  it is the cat-0x86 op-0x00 close answer");
+	ct_check_eq_u32(sent_le16(n_cm_sent() - 1u, VMS_OFB_CM_CLOSE_STATE),
+			VMS_CM_CLOSE_STATE_VOLUME,
+			"  with the grounded close state 5 (rd vms-2ef)");
+	ct_check_eq_u32(g.sent[g.n_sent - 1u].conid, conid,
+			"  on the request's own connection");
+	ct_check_eq_u32(g.j.rdev_answered, 1u, "  counted answered");
+	ct_check_eq_u32(g.j.rdev_nosuchdev, 1u, "  as SS$_NOSUCHDEV");
+	ct_check_eq_u32(rb.n_rel, 1u, "  and our buffer name is released");
+	cnxman_join_blk_sent(&g.j, 0x00001101u);
+	ct_check_eq_u32(g.n_sent, sent_before + 1u,
+			"a stray second 0x0f answers nothing");
+}
+
+static void test_rdev_kind6_refusals_fall_back(void)
+{
+	uint32_t sent_before, conid;
+
+	printf("\n-- vms-1f64: what the write-back refuses to do --\n");
+
+	/* A device this node HAS: answering would mean doing the remote
+	 * DISMOUNT; no status is invented, the old answer goes out. */
+	rb_bed();
+	rb.present = 1;
+	conid = g.member_csb->cdt_conid;
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind6(136u, conid));
+	rb_hex(rdev_dm_req, rb.reg_buf, 136);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 136u, 136u);
+	ct_check_eq_u32(rb.n_send, 0u, "a present device: NO record written back");
+	ct_check_eq_u32(g.j.rdev_unanswerable, 1u, "  counted unanswerable");
+	ct_check_eq_u32(g.n_sent, sent_before + 1u,
+			"  and answered the pre-vms-1f64 way");
+
+	/* A +0 that is not this node's Con.ID. */
+	rb_bed();
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind6(136u, 0x12345678u));
+	ct_check_eq_u32(rb.n_req, 0u, "a foreign +0 Con.ID is not pulled");
+	ct_check_eq_u32(g.j.rdev_conid_mismatch, 1u, "  counted");
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "  answered as before");
+
+	/* A record of another kind. */
+	rb_bed();
+	(void)join_feed(mk_kind6(136u, g.member_csb->cdt_conid));
+	rb_hex(rdev_dm_req, rb.reg_buf, 136);
+	rb.reg_buf[18] = 0x1a;
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 136u, 136u);
+	ct_check_eq_u32(rb.n_send, 0u, "an undecoded record: nothing written");
+	ct_check_eq_u32(g.j.rdev_unanswerable, 1u, "  counted");
+
+	/* A partial frame does not complete the pull. */
+	rb_bed();
+	(void)join_feed(mk_kind6(136u, g.member_csb->cdt_conid));
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 100u, 136u);
+	ct_check_eq_u32(rb.n_send, 0u, "a non-final frame completes nothing");
+
+	/* Without the block ops (a glue that bound none) nothing changes. */
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	(void)join_feed(mk_go(EPOCH));
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind6(136u, g.member_csb->cdt_conid));
+	ct_check_eq_u32(g.n_sent, sent_before + 1u,
+			"no block ops bound: answered immediately, as before");
+	ct_check_eq_u32(g.j.rdev_started, 0u, "  and nothing was pulled");
+}
+
+
+static void test_rdev_kind6_mount_record(void)
+{
+	static const char mreq[] =
+	    "0000000000000000c80065640600030001004100000056000000040000005600000073e5"
+	    "0000000000000000000000000000000000001a0001000000000000000000ffffffffffff"
+	    "ffff0400010006000000040001000800040028000000000000000900010030000000"
+	    "000000000800020039000000000000000000000004400020000000005f2432244455"
+	    "41313a5641583144415441525354415254494e47552c20736563757269747920736572"
+	    "766572207374617274696e672075700a0d0000000000000000";
+	static const char mans[] =
+	    "c01cf5ffc01cf5ffc80065640600030001004100000056000000040000005600000073e5"
+	    "0000000000000000000000000000000000001a0001000000000000000000ffffffffffff"
+	    "ffff0400010006000000040001000100000028000000000000000900010030000000"
+	    "000000000800020039000000000000000000000004400020000000005f2432244455"
+	    "41313a5641583144415441525354415254494e47552c20736563757269747920736572"
+	    "766572207374617274696e672075700a0d0000000000000000";
+	uint8_t want[200];
+	uint32_t sent_before;
+
+	printf("\n-- vms-1f64: a MOUNT record (200 bytes) is answered 1 --\n");
+	rb_bed();
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind6(200u, g.member_csb->cdt_conid));
+	ct_check_eq_u32(rb.req_len, 200u, "the 200-byte record is pulled");
+	rb_hex(mreq, rb.reg_buf, 200);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 200u, 200u);
+	rb_hex(mans, want, 200);
+	ct_check(rb.n_send == 1u && memcmp(rb.sent_rec + 8, want + 8, 192) == 0,
+		 "*** written back byte-exact with VAX3's real MOUNT answer "
+		 "past rec[0:8] (status 1) ***");
+	cnxman_join_blk_sent(&g.j, 0x00001101u);
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "then the cat-0x86 goes");
+	ct_check_eq_u32(g.j.rdev_mount_normal, 1u, "  counted as a MOUNT answer");
+}
+
 static void test_handoff_without_a_barrier(void)
 {
 	uint32_t len;
@@ -2166,11 +2448,14 @@ static void drive_to_state(enum cnxman_join_state s)
 		return;
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	if (s == CNXMAN_JOIN_ADMIT)
 		return;
 
@@ -2218,7 +2503,8 @@ static enum cnxman_join_rx fire(enum cnxman_event ev)
 		break;
 	case CNXMAN_EV_MSCP_END:
 		len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 		break;
 	case CNXMAN_EV_TIMER_JOIN:
 		cnxman_join_timer(&g.j);
@@ -2574,15 +2860,19 @@ static void drive_to_admit_member_dialled(void)
 	cnxman_join_opened(&g.j, MSCP_CONID);
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	bed_member_has_spoken();
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 3u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 }
 
 static void test_member_dialled_connection_still_promotes(void)
@@ -2645,11 +2935,14 @@ static void test_member_dialled_connection_still_promotes(void)
 	 * disk walk is untouched: SET CONTROLLER twice, then the NEXT-UNIT
 	 * walk to the peer's own Unit-Offline terminator. */
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the disk walk's own terminator starts admission");
 	ct_check(!sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
@@ -3253,11 +3546,14 @@ static void drive_the_rest_to_admission(void)
 	cnxman_join_opened(&g.j, MSCP_CONID);
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 }
 
 static void test_rejoin_admission_rides_the_member_initiated_connection(void)
@@ -6784,8 +7080,73 @@ static void test_eb3_a_loss_inside_an_answered_transition_is_held(void)
 	ct_check_eq_u32(g.j.cm_lost_in_transition, 0u, "and not counted held");
 }
 
+/*
+ * rd vms-239: the class driver's connect statement is the one every real VAX
+ * class driver makes -- 4,032 of 4,032 VMS$DISK_CL_DRVR -> MSCP$DISK connects
+ * from 19 nodes (tests/lab/captures/vms-239-mscp-connect-20261011): 16 bytes
+ * "V5.0" + 10 blanks + "+ " and SCS$W_MIN_CR 2.
+ */
+static void test_239_disk_class_connect_statement(void)
+{
+	static const uint8_t wire[VMS_SCS_PROCNAME_LEN] = {
+		0x56, 0x35, 0x2e, 0x30, 0x20, 0x20, 0x20, 0x20,
+		0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x2b, 0x20 };
+	uint32_t i, same = 0u;
+
+	printf("-- vms-239: the disk class driver's connect data and MIN_CR\n");
+	for (i = 0; i < VMS_SCS_PROCNAME_LEN; i++) {
+		if (cnxman_join_disk_cl_conndata[i] == wire[i])
+			same++;
+	}
+	ct_check_eq_u32(same, VMS_SCS_PROCNAME_LEN,
+			"the 16 bytes are the real class driver's");
+	ct_check_eq_u32(CNXMAN_DISK_CL_MIN_CREDITS, 2u,
+			"MIN_CR is the real class driver's 2");
+}
+
+/*
+ * rd vms-239: the walk advances on a REAL VAX's SET CONTROLLER CHARACTERISTICS
+ * end, delivered the way SCS delivers it -- the 28-byte SYSAP body. Captured
+ * from VAX2 (V7.3) answering OVMXE's first SCC, lab run mscp-239
+ * 2026-10-11 07:37:11.605956 (tests/lab/captures/vms-239-mscp-connect-
+ * 20261011): P.CRF 0x81a30002 echoes the command's, P.OPCD 0x84, P.STS 0.
+ * Before the fix the body was parsed as a frame, never classified, and the
+ * real join stopped here with OVMXE stuck as NEW.
+ */
+static void test_239_real_scc_end_body_advances_the_walk(void)
+{
+	static const uint8_t vax2_scc_end_body[VMS_MSCP_SCC_END_LEN] = {
+		0x02, 0x00, 0xa3, 0x81, 0x02, 0x00, 0x00, 0x00,
+		0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xa0,
+		0x14, 0x00, 0x47, 0x05, 0x02, 0x04, 0x00, 0x00,
+		0x00, 0x00, 0x04, 0x01 };
+
+	printf("-- vms-239: a real VAX's SCC end BODY advances the disk walk\n");
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+	cnxman_join_opened(&g.j, CM_CONID);
+	ct_check_eq_u32(g.j.mscp_cmds_sent, 1u, "the first SCC went out");
+	ct_check_eq_u32(VMS_MSCP_CL_CMD_REF(VMS_MSCP_CL_SCC_CLASS,
+					    VMS_MSCP_CL_SCC_MSGID0),
+			0x81a30002u,
+			"  its P.CRF is the one the real VAX echoed");
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, vax2_scc_end_body,
+			    sizeof(vax2_scc_end_body));
+	ct_check_eq_u32(g.j.mscp_cmds_sent, 2u,
+			"*** the real end advances the walk: SCC #2 goes out ***");
+	ct_check_eq_u32(g.j.ignored_events, 0u, "  nothing was ignored");
+}
+
 int main(void)
 {
+	test_239_disk_class_connect_statement();
+	test_239_real_scc_end_body_advances_the_walk();
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
 
 	test_reference_sequence();
@@ -6813,6 +7174,9 @@ int main(void)
 	test_0f9_a_given_up_incarnation_is_refused();
 	test_watchdog();
 	test_handoff_without_a_barrier();
+	test_rdev_kind6_close_writes_back_then_answers();
+	test_rdev_kind6_refusals_fall_back();
+	test_rdev_kind6_mount_record();
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();
 	test_member_dialled_reaches_the_barrier();

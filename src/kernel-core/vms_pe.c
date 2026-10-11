@@ -760,6 +760,14 @@ int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
 	return pe_fsm_peer_swver(&pe->fsm, sysid, out, cap, out_len);
 }
 
+int pe_peer_name(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		 uint32_t cap, uint8_t *out_len)
+{
+	if (pe == (struct vms_pe *)0)
+		return -1;
+	return pe_fsm_peer_name(&pe->fsm, sysid, out, cap, out_len);
+}
+
 int pe_peer_incarnation(struct vms_pe *pe, vms_scs_sysid_t sysid,
 			uint64_t *out)
 {
@@ -885,6 +893,13 @@ int pe_request_block(struct vms_pe *pe, const struct pe_blk_xfer *x)
 	if (pe == (struct vms_pe *)0)
 		return SS__NOSUCHDEV;
 	return (int)pe_blk_status(pe_blk_send_request(&pe->fsm, x));
+}
+
+int pe_send_block_one(struct vms_pe *pe, const struct pe_blk_xfer *x)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	return (int)pe_blk_status(pe_blk_send_data_one(&pe->fsm, x));
 }
 
 int pe_send_block_read_end(struct vms_pe *pe, const struct pe_blk_xfer *x,

@@ -41,6 +41,7 @@
 #include "exec_list.h"
 #include "vms_acp_serve.h"   /* FC-P6.3: the MSCP server's read-only view */
 #include "vms_prot.h"        /* vms_prot_check: the executive's one protection decision */
+#include "vms_mscp_cl.h"     /* rd vms-4822: served units' blocks, from the class driver */
 
 /* The served-volume projection restates the unit-name width so it can compile
  * in the host rung too (vms_acp_serve.h's own note). THIS file sees both, so
@@ -480,6 +481,28 @@ static int acp_fault_take(uint32_t major, uint32_t minor)
 }
 #endif /* OVMX_KTEST_FAULT_INJECT */
 
+/*
+ * rd vms-4822: a SERVED unit's blocks. Its row's backing pair is
+ * (VMS_DEVTAB_SERVED_MAJOR, id) -- no local block device has that major -- and
+ * its bytes are on the cluster member that serves it, reached through the MSCP
+ * disk class driver. The ACP runs in process context, which is the only place
+ * vms_mscp_cl_io_wait() may wait. A unit whose row is gone (the path to its
+ * server was lost) is an I/O error, never a read of something else.
+ */
+static int acp_served_io(uint32_t id, uint64_t lbn, void *buf, size_t buflen,
+                         int is_write)
+{
+    char devnam[VMS_DEVNAM_SIZE];
+
+    if (lbn > 0xffffffffull || buflen > 0xffffffffu ||
+        vms_devtab_served_name(id, devnam, (uint32_t)sizeof(devnam)) != 0)
+        return -1;
+    return vms_mscp_cl_io_wait(vms_cluster_node(), devnam, (uint32_t)lbn,
+                               (uint8_t *)buf, (uint32_t)buflen, is_write) ==
+                   (uint32_t)SS__NORMAL
+               ? 0 : -1;
+}
+
 static int acp_bdev_read(uint32_t major, uint32_t minor, uint64_t lbn,
                          void *buf, size_t buflen)
 {
@@ -490,6 +513,9 @@ static int acp_bdev_read(uint32_t major, uint32_t minor, uint64_t lbn,
         rc = -1;                        /* test scaffold: simulate a bad read */
     else
 #endif
+    if (major == VMS_DEVTAB_SERVED_MAJOR)
+        rc = acp_served_io(minor, lbn, buf, buflen, 0);
+    else
         rc = exec_blockdev_read_block(major, minor, lbn, buf, buflen);
 
     if (rc != 0)
@@ -507,6 +533,9 @@ static int acp_bdev_write(uint32_t major, uint32_t minor, uint64_t lbn,
         rc = -1;                        /* test scaffold: simulate a bad write */
     else
 #endif
+    if (major == VMS_DEVTAB_SERVED_MAJOR)
+        rc = acp_served_io(minor, lbn, (void *)buf, buflen, 1);
+    else
         rc = exec_blockdev_write_block(major, minor, lbn, buf, buflen);
 
     if (rc != 0)

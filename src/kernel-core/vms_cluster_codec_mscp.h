@@ -355,6 +355,21 @@ vms_codec_status_t vms_mscp_link_build(const struct vms_mscp_link *l,
 				       uint8_t *frame, uint32_t cap,
 				       uint32_t *written);
 
+/*
+ * vms_mscp_end_frame_from_body - rebuild a classifiable END frame around the
+ * SYSAP BODY SCS delivered (byte 0 == frame-absolute 72), so the per-class
+ * parsers -- which address an MSCP message frame-absolutely and classify it
+ * first -- can read it (rd vms-239). The envelope is an all-zero link built
+ * by vms_mscp_link_build with the SCA content length the received body
+ * implies; nothing is asserted that did not arrive, and the frame built here
+ * is NEVER transmitted. `body_len` above VMS_MSCP_END_BODY_MAX is
+ * VMS_CODEC_E_INVAL (no END is longer); *written is the frame length.
+ */
+vms_codec_status_t vms_mscp_end_frame_from_body(const uint8_t *body,
+						uint32_t body_len,
+						uint8_t *frame, uint32_t cap,
+						uint32_t *written);
+
 /* ------------------------------------------------------------------ *
  * sec 6  Commands: the shared 12-byte header plus each opcode's own
  * Table A-6 parameter area.

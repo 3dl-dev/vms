@@ -186,6 +186,136 @@ extern "C" {
 uint16_t vms_cm_close_state_for(const uint8_t *req_body, uint32_t req_len);
 
 /*
+ * THE BLOCK-TRANSFER DESCRIPTOR A cat-0x06 CLOSE CARRIES (rd vms-1f64).
+ *
+ * A cat-0x06 op-0x00 request names a buffer in the REQUESTER's memory that the
+ * recipient is to move by block transfer before it answers:
+ *
+ *   body[16:20]  the requester's buffer NAME
+ *   body[20:24]  the Con.ID the recipient puts at the block header's +0 --
+ *                the RECIPIENT's own Con.ID for this connection
+ *   body[26]     the kind (VMS_OFB_CM_CLOSE_REQ_KIND)
+ *   body[28:32]  the transfer length
+ *
+ * MEASURED: in every case where the recipient then issued its REQUEST DATA
+ * (opcode 0x08), the 0x08's source name, +0 and length were exactly these
+ * three fields -- kind 5: 2,941 of 2,941; kind 6: 133 of 133; kind 10: 84 of
+ * 84 (lab dlmlab/evac captures plus the reference library).
+ *
+ * Kind 6 is the MOUNT/DISMOUNT/CLUSTER request: the recipient PULLS the
+ * requester's record (0x08 -> 0x0d), writes its answer back into the SAME
+ * requester buffer (0x05, acknowledged 0x0f), and only then sends its cat-0x86
+ * answer. A cat-0x86 sent without the write-back leaves the requester reading
+ * its own uninitialised buffer -- the RMTDSMFAIL/RMTMNTFAIL "DEVOFFLINE",
+ * "GPTFULL", "ACCVIO" secondaries of runs ci6-evac-15/16.
+ */
+#define VMS_OFB_CM_XFER_NAME   16u
+#define VMS_OFB_CM_XFER_CONID  20u
+#define VMS_OFB_CM_XFER_LEN    28u
+
+struct vms_cm_xfer_desc {
+	uint32_t name;     /* the requester's buffer name   */
+	uint32_t conid;    /* +0 of the recipient's frames  */
+	uint32_t len;      /* bytes to move                 */
+	uint8_t  kind;     /* body[26]                      */
+	uint8_t  pad[3];
+};
+
+/* The descriptor of a cat-0x06 op-0x00 request. VMS_CODEC_E_CLASS for any
+ * other body, and for a descriptor with a zero name, Con.ID or length (there
+ * is then nothing honest to name in a block header). */
+vms_codec_status_t vms_cm_xfer_desc_parse(const uint8_t *req_body,
+					  uint32_t req_len,
+					  struct vms_cm_xfer_desc *out);
+
+/*
+ * THE REMOTE DEVICE REQUEST RECORDS a kind-6 close moves. Two were measured,
+ * each with its answer, over every pair in the lab captures and the reference
+ * library (the 0x0d that delivered the request, matched to the 0x05 that
+ * wrote the answer into the same buffer):
+ *
+ *   DISMOUNT record, 136 bytes -- sent to every member by DISMOUNT/CLUSTER
+ *   (runs ci6-evac-15/16 STEP 0a/5, dlmlab F1b):
+ *     rec[8:10]   0x0088 (its own length)    rec[10:12] 65 64
+ *     rec[16:24]  01 00 15 00 00 00 56 00
+ *     rec[86:90]  request: c0000000 / 80000000; answer: the status
+ *     rec[90:94]  the device name's length
+ *     rec[94:98]  the device name's offset FROM rec[86] (12, so rec[98])
+ *
+ *   MOUNT record, 200 bytes -- sent to every member by MOUNT/CLUSTER (run
+ *   ci6-evac-16 STEP 0, dlmlab C/E/F/R arms):
+ *     rec[8:10]   0x00c8                     rec[10:12] 65 64
+ *     rec[16:24]  01 00 41 00 00 00 56 00
+ *     rec[86:90]  request: 00040008; answer: the status
+ *     rec[98:106] an item: length (u16), code 1 (u16), offset FROM rec[86]
+ *                 (u32) -- the device name ("_$2$DUA1:" at rec[134])
+ *
+ * IN EVERY PAIR the answer is the request byte for byte except rec[86:90]
+ * and rec[0:8]: DISMOUNT 44 of 44, MOUNT 100 of 100. rec[0:8] is zero in
+ * every request and a nonzero quadword of two equal longwords in every
+ * answer; what it is is NOT grounded, so this codec does not write it.
+ *
+ * THE STATUS A MEMBER WITHOUT THE DEVICE WRITES (dlmlab F1b, VAX3 with no
+ * $2$DUA1, the only such member ever captured): DISMOUNT 00000908
+ * (SS$_NOSUCHDEV), 2 of 2; MOUNT 00000001, 1 of 1 (its MOUNT/CLUSTER
+ * completed with VAX3 silently skipped). A member that HAS the device writes
+ * the result of really doing it, which this codec has no part in.
+ *
+ * A third value, 01 00 42 00 00 00 56 00 (200 bytes), was seen only from
+ * members that had the device; this codec does not decode it.
+ */
+#define VMS_CM_RDEV_OFF_RECLEN       8u
+#define VMS_CM_RDEV_OFF_TAG         10u
+#define VMS_CM_RDEV_OFF_CLASS       16u
+#define VMS_CM_RDEV_CLASS_LEN        8u
+#define VMS_CM_RDEV_OFF_STATUS      86u   /* also the base of every offset */
+#define VMS_CM_RDEV_TAG         0x6465u   /* bytes 65 64 */
+
+#define VMS_CM_RDEV_DISMOUNT_LEN   136u
+#define VMS_CM_RDEV_DM_OFF_NAMELEN  90u
+#define VMS_CM_RDEV_DM_OFF_NAMEOFF  94u
+
+#define VMS_CM_RDEV_MOUNT_LEN      200u
+#define VMS_CM_RDEV_MT_OFF_ITEM     98u   /* len u16, code u16, offset u32 */
+#define VMS_CM_RDEV_MT_ITEM_DEVNAM   1u
+
+#define VMS_CM_RDEV_REC_MAX        VMS_CM_RDEV_MOUNT_LEN
+
+#define VMS_CM_RDEV_STATUS_NOSUCHDEV 0x00000908u  /* VAX3's DISMOUNT answer */
+#define VMS_CM_RDEV_STATUS_NORMAL    0x00000001u  /* VAX3's MOUNT answer    */
+
+enum vms_cm_rdev_kind {
+	VMS_CM_RDEV_NONE = 0,
+	VMS_CM_RDEV_DISMOUNT,
+	VMS_CM_RDEV_MOUNT
+};
+
+extern const uint8_t vms_cm_rdev_class_dismount[VMS_CM_RDEV_CLASS_LEN];
+extern const uint8_t vms_cm_rdev_class_mount[VMS_CM_RDEV_CLASS_LEN];
+
+struct vms_cm_rdev_req {
+	uint8_t        kind;        /* enum vms_cm_rdev_kind              */
+	uint8_t        pad[3];
+	uint32_t       op;          /* rec[86:90] as the requester sent it */
+	uint32_t       name_len;
+	const uint8_t *name;        /* points into the record              */
+};
+
+/* Decode a pulled record of `len` bytes. VMS_CODEC_E_CLASS for a record that
+ * is neither measured kind, or whose device name falls outside it. */
+vms_codec_status_t vms_cm_rdev_req_parse(const uint8_t *rec, uint32_t len,
+					 struct vms_cm_rdev_req *out);
+
+/* The status a member WITHOUT the device writes for this kind (above), or 0
+ * for a kind with none measured. */
+uint32_t vms_cm_rdev_status_absent(uint8_t kind);
+
+/* Turn the pulled record, in place, into its answer: rec[86:90] = status and
+ * nothing else changed. Refuses a record vms_cm_rdev_req_parse refuses. */
+vms_codec_status_t vms_cm_rdev_answer_in_place(uint8_t *rec, uint32_t len,
+					       uint32_t status);
+
+/*
  * The bitmap NEIGHBOURHOOD, body[52:60] -- the span whose emptiness is the
  * ONLY published evidence about how wide the membership bitmap really is.
  *

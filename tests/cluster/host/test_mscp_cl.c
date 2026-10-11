@@ -61,6 +61,7 @@
 #include <string.h>
 
 #include "cluster_test.h"
+#include "conformance_dump.h"   /* rd vms-ci.6 frame-conformance gate */
 #include "pe_fake_vc.h"
 #include "vms_mscp_srv_fsm.h"
 #include "vms_mscp_cl_io_fsm.h"
@@ -82,8 +83,8 @@ static const uint8_t group1[6]  = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
 
 /* The two ends of the one `MSCP$DISK` connection. Both are values a real
  * allocator would mint; the test plays SCS for them. */
-#define CL_CONID  0x00020007u   /* OUR local Con.ID -- goes in P.BUFF   */
-#define SRV_CONID 0x00010005u   /* the server's own local Con.ID        */
+#define CL_CONID  0x00020007u   /* OUR local Con.ID                     */
+#define SRV_CONID 0x00010005u   /* the server's own Con.ID -- in P.BUFF */
 
 /* The serving node's own advertised SCSNODE, as the connection manager records
  * it on that node's CSB. The client's glue reads it there; this test hands the
@@ -302,6 +303,15 @@ static int bridge_client_cmd(void *ctx, vms_conid_t conid, const uint8_t *body,
 	struct env *e = (struct env *)ctx;
 
 	ct_check_eq_u32(conid, CL_CONID, "the command went out on OUR Con.ID");
+	{
+		/* rd vms-ci.6: hand the gate every command body the REAL class
+		 * driver emitted, with the executive facts it should carry. */
+		char st[96];
+
+		snprintf(st, sizeof(st), "own_conid=%u,server_conid=%u",
+			 (unsigned)CL_CONID, (unsigned)SRV_CONID);
+		conf_dump("mscp_cmd", 72u, st, body, len);
+	}
 	return mscp_srv_fsm_command(&e->srv, SRV_CONID, body, len);
 }
 
@@ -827,6 +837,17 @@ static void env_add_unit(struct env *e, uint16_t unit, uint32_t nblocks,
 		u->data[i] = (uint8_t)(i * 7u + unit + 3u);
 }
 
+/* rd vms-239: the server's own Con.ID for the connection, as SCS learned it
+ * off the server's ACCEPT. */
+static int cl_remote_conid(void *ctx, vms_conid_t conid, vms_conid_t *out)
+{
+	(void)ctx;
+	if (conid != CL_CONID)
+		return -1;
+	*out = SRV_CONID;
+	return 0;
+}
+
 static void env_bind(struct env *e)
 {
 	memset(&e->srv_ops, 0, sizeof(e->srv_ops));
@@ -845,6 +866,7 @@ static void env_bind(struct env *e)
 	e->cl_ops.send_cmd = bridge_client_cmd;
 	e->cl_ops.buf_register = cl_buf_register;
 	e->cl_ops.buf_release = cl_buf_release;
+	e->cl_ops.remote_conid = cl_remote_conid;
 	e->cl_ops.unit_ready = cl_unit_ready;
 	e->cl_ops.unit_gone = cl_unit_gone;
 	e->cl_ops.io_done = cl_io_done;
@@ -980,6 +1002,13 @@ static void test_read_end_to_end(void)
 	ct_check_eq_u32(e.cl.ucb[0].unit_size, 32u,
 			"...and it is the volume's real block count");
 	ct_check_eq_u32(e.cl.reads_issued, 1u, "then the READ command went out");
+	/* rd vms-239 minted-form audit: real class drivers' P.CRF high words
+	 * lie in [0x0079, 0xffdc] (3,637 commands); the READ's and the
+	 * ONLINE's message ids were minted inside that range. */
+	ct_check(e.cl.cddb[0].xfer_msgid > 0x0079u && e.cl.cddb[0].online_msgid > 0x0079u &&
+		 (uint16_t)(e.cl.cddb[0].xfer_msgid - 1u) >= 0x0079u &&
+		 (uint16_t)(e.cl.cddb[0].online_msgid - 1u) >= 0x0079u,
+		 "the P.CRF high words OVMX minted are inside the real range");
 
 	ct_check_eq_u32(e.fake.reads, 1u,
 			"the server really read its block device");
@@ -1143,8 +1172,9 @@ static void test_write_moves_real_bytes(void)
 			"and OUR port really held that name when it did");
 	ct_check_eq_u32(e.fake.write_src_access, (unsigned)PE_BLK_ACC_SRC,
 			"...as a SOURCE its request could be answered from");
-	ct_check_eq_u32(e.fake.write_desc_conid, CL_CONID,
-			"...beside OUR OWN local Con.ID, from the connection");
+	ct_check_eq_u32(e.fake.write_desc_conid, SRV_CONID,
+			"*** rd vms-239: ...beside the SERVER's Con.ID (71/71 real "
+			"descriptors; OUR own there halted two real VAXes) ***");
 
 	/* E41: the SERVER asks, and the CLIENT'S PORT answers by itself. */
 	ct_check_eq_u32(e.fake.requests_issued, 1u,
@@ -1443,6 +1473,61 @@ static void test_glue_source(void)
 		 "from values this file read out of the executive");
 }
 
+/*
+ * rd vms-4822: a SERVED unit's blocks reach the ACP through the class driver,
+ * waiting on the CALLER's thread. The glue is not host-linkable, so this is
+ * the source-scan half; the booted half is the lab run where OVMX MOUNTs a
+ * disk a real VAX serves and TYPEs a multi-block file.
+ */
+static void test_acp_served_route(void)
+{
+	char *s = slurp(OVMX_KCORE_DIR "/vms_mscp_cl.c");
+
+	printf("-- vms-4822: the ACP's served-unit route, read out of the glue\n");
+	ct_check(s != NULL, "vms_mscp_cl.c is readable");
+	if (s == NULL)
+		return;
+	ct_check(strstr(s, "uint32_t vms_mscp_cl_io_wait(") != NULL,
+		 "the synchronous service exists");
+	ct_check(strstr(s, "vms_cluster_fork_enter(cl);") != NULL &&
+		 strstr(s, "vms_cluster_fork_leave(cl);\n\n\texec_lock(&w.lk);")
+			 != NULL,
+		 "the request is TAKEN under the fork mutex and the wait is "
+		 "OUTSIDE it (the fork thread runs the completion)");
+	ct_check(strstr(s, "c->sync[slot] = NULL;      /* before the wake") !=
+			 NULL,
+		 "the slot is cleared before the waiter is woken");
+	ct_check(strstr(s, "while (!w.done)") != NULL,
+		 "the wait has no abandonment path (the buffer stays named "
+		 "until the driver completes the request)");
+	ct_check(strstr(s, "(uint16_t)VMS_MSCP_ST_ABORTED, 0u);") != NULL,
+		 "stop completes every waiter with Command Aborted");
+
+	s = slurp(OVMX_KCORE_DIR "/vmsfs_acp.c");
+	ct_check(s != NULL, "vmsfs_acp.c is readable");
+	if (s == NULL)
+		return;
+	ct_check(strstr(s, "if (major == VMS_DEVTAB_SERVED_MAJOR)\n"
+			   "        rc = acp_served_io(minor, lbn, buf, buflen, 0);")
+			 != NULL,
+		 "the ACP's ONE read chokepoint routes the served pair");
+	ct_check(strstr(s, "if (major == VMS_DEVTAB_SERVED_MAJOR)\n"
+			   "        rc = acp_served_io(minor, lbn, (void *)buf, "
+			   "buflen, 1);") != NULL,
+		 "... and its ONE write chokepoint");
+	ct_check(strstr(s, "vms_devtab_served_name(id, devnam,") != NULL,
+		 "the unit is found by its id in the device table, never "
+		 "by a name the ACP composes");
+
+	s = slurp(OVMX_KCORE_DIR "/vms_devtab.c");
+	ct_check(s != NULL, "vms_devtab.c is readable");
+	if (s == NULL)
+		return;
+	ct_check(strstr(s, "disk->backing_major = VMS_DEVTAB_SERVED_MAJOR;\n"
+			   "    disk->backing_minor = served_id_mint();") != NULL,
+		 "a served row's backing pair is the served major + a minted id");
+}
+
 /* ------------------------------------------------------------------ *
  * 9.12 The devtab row: served, and with NO local backing
  * ------------------------------------------------------------------ */
@@ -1486,6 +1571,7 @@ int main(void)
 	test_unit_naming();
 	test_empty_cell_is_counted();
 	test_glue_source();
+	test_acp_served_route();
 	test_devtab_served_row_source();
 	return ct_summary("test_mscp_cl");
 }

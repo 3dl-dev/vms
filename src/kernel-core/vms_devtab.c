@@ -487,10 +487,12 @@ int vms_devtab_add_disk(const char *devnam, const char *backing,
  * WHAT IS DIFFERENT ABOUT A SERVED UNIT, and it is the whole point: it has NO
  * BACKING BLOCK DEVICE ON THIS NODE. The bytes live on another cluster member
  * and reach this one through the MSCP disk class driver's named-buffer
- * transfers (vms_mscp_cl.c). So `backing` stays empty and backing_major/minor
- * stay zero -- deliberately, because a served unit resolving to a local
- * (major, minor) would be a device that reads the WRONG disk. Whoever asks
- * this row for I/O gets it from the class driver or not at all.
+ * transfers (vms_mscp_cl.c). So `backing` stays empty, and the backing pair is
+ * (VMS_DEVTAB_SERVED_MAJOR, a served-unit id minted here) -- a pair no local
+ * block device can have (rd vms-4822, vms_internal.h), because a served unit
+ * resolving to a local (major, minor) would be a device that reads the WRONG
+ * disk. The ACP's block-I/O chokepoint routes that pair to the class driver:
+ * whoever asks this row for I/O gets it from the class driver or not at all.
  *
  * `mscp_served` is the row's own record of that fact, and it is what
  * DVI$_MSCP_SERVED (dvidef.h 0x0073, "Device is MSCP served") reads: real
@@ -512,6 +514,54 @@ int vms_devtab_add_disk(const char *devnam, const char *backing,
  * remove: 0, or -ENODEV when no such served row exists. A row that is NOT
  * mscp_served is never removed by this path: it belongs to another driver.
  */
+/* rd vms-4822: the served-unit ids. Monotonic and never 0, so a withdrawn
+ * unit's id is never handed to the next one (a volume still naming it then
+ * finds no row, never the wrong disk). Called with the new row's lock held;
+ * the counter has its own lock. */
+static exec_lock_t served_id_lock;
+static int         served_id_lock_ready;
+static uint32_t    served_id_last;
+
+static uint32_t served_id_mint(void)
+{
+    uint32_t id;
+
+    if (!served_id_lock_ready) {
+        exec_lock_init(&served_id_lock);
+        served_id_lock_ready = 1;
+    }
+    exec_lock(&served_id_lock);
+    if (++served_id_last == 0u)
+        served_id_last = 1u;
+    id = served_id_last;
+    exec_unlock(&served_id_lock);
+    return id;
+}
+
+int vms_devtab_served_name(uint32_t id, char *out, uint32_t outsz)
+{
+    struct vms_device *dev;
+    int rc = -ENODEV;
+
+    if (!out || outsz == 0u || id == 0u)
+        return -EINVAL;
+    exec_lock(&vms_device_list_lock);
+    exec_list_for_each_entry(dev, &vms_device_list, list) {
+        exec_lock(&dev->lock);
+        if (dev->mscp_served && !dev->withdrawn &&
+            dev->backing_major == VMS_DEVTAB_SERVED_MAJOR &&
+            dev->backing_minor == id) {
+            strscpy(out, dev->devnam, outsz);
+            rc = 0;
+        }
+        exec_unlock(&dev->lock);
+        if (rc == 0)
+            break;
+    }
+    exec_unlock(&vms_device_list_lock);
+    return rc;
+}
+
 int vms_devtab_add_served_disk(const char *devnam)
 {
     struct vms_device *disk;
@@ -542,6 +592,8 @@ int vms_devtab_add_served_disk(const char *devnam)
 
     exec_lock(&disk->lock);
     disk->mscp_served = 1;
+    disk->backing_major = VMS_DEVTAB_SERVED_MAJOR;
+    disk->backing_minor = served_id_mint();
     exec_unlock(&disk->lock);
 
     pr_info("vms: served disk unit %s (MSCP served, no local backing)\n",
@@ -2296,6 +2348,34 @@ void vms_devtab_note_io_error(uint32_t major, uint32_t minor)
         break;                  /* one unit per backing dev_t */
     }
     exec_unlock(&vms_device_list_lock);
+}
+
+/*
+ * vms_devtab_name_present - does the executive's device table hold a unit by
+ * this name? `name`/`len` is a counted (not NUL-terminated) device name as a
+ * peer sent it -- e.g. "_$2$DUA1:" from a cluster member's remote MOUNT/
+ * DISMOUNT request (rd vms-1f64). 1 = present, 0 = no such device, -1 = the
+ * bytes are not a device name at all (no answer can honestly be given).
+ */
+int vms_devtab_name_present(const uint8_t *name, uint32_t len)
+{
+    char raw[VMS_DEVNAM_SIZE + 2];
+    char norm[VMS_DEVNAM_SIZE + 2];
+    uint32_t i;
+    int present;
+
+    if (!name || len == 0 || len > VMS_DEVNAM_SIZE)
+        return -1;
+    for (i = 0; i < len; i++)
+        raw[i] = (char)name[i];
+    raw[len] = '\0';
+    if (normalize_devnam(raw, norm, sizeof(norm)) != SS__NORMAL)
+        return -1;
+
+    exec_lock(&vms_device_list_lock);
+    present = devtab_lookup_locked(norm) != NULL;
+    exec_unlock(&vms_device_list_lock);
+    return present ? 1 : 0;
 }
 
 #ifndef OVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE

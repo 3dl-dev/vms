@@ -913,6 +913,101 @@ static uint64_t cnxman_jop_time_now(void *ctx)
 	return 0u;
 }
 
+/* ---- rd vms-1f64: the kind-6 close's block transfers ---- */
+
+static int cnxman_jop_blk_register(void *ctx, uint8_t *buf, uint32_t len,
+				   uint32_t *name_out)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+
+	if (cn->cl->pe == NULL)
+		return -1;
+	return cnxman_fsm_rc(pe_buf_register(cn->cl->pe, buf, len,
+					     PE_BLK_ACC_SRC | PE_BLK_ACC_DST,
+					     name_out));
+}
+
+static int cnxman_jop_blk_release(void *ctx, uint32_t name)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+
+	if (cn->cl->pe == NULL)
+		return -1;
+	return cnxman_fsm_rc(pe_buf_release(cn->cl->pe, name));
+}
+
+/* The transfer descriptor, with the peer resolved from the connection the
+ * request ARRIVED on -- the executive's own CDT, never a value off the wire. */
+static int cnxman_blk_xfer(struct vms_cnxman *cn, vms_conid_t conid,
+			   uint32_t xfer_conid, uint32_t remote_name,
+			   uint32_t local_name, uint32_t len,
+			   struct pe_blk_xfer *x)
+{
+	vms_scs_sysid_t peer = 0;
+
+	if (cn->cl->pe == NULL || cn->cl->scs == NULL)
+		return -1;
+	if (scs_conid_peer(cn->cl->scs, conid, &peer) != (int)SS__NORMAL)
+		return -1;
+	memset(x, 0, sizeof(*x));
+	x->peer = peer;
+	x->dest_conid = xfer_conid;
+	x->local_name = local_name;
+	x->remote_name = remote_name;
+	x->length = len;
+	return 0;
+}
+
+static int cnxman_jop_blk_request(void *ctx, vms_conid_t conid,
+				  uint32_t xfer_conid, uint32_t remote_name,
+				  uint32_t local_name, uint32_t len)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	struct pe_blk_xfer x;
+
+	if (cnxman_blk_xfer(cn, conid, xfer_conid, remote_name, local_name,
+			    len, &x) != 0)
+		return -1;
+	return cnxman_fsm_rc(pe_request_block(cn->cl->pe, &x));
+}
+
+static int cnxman_jop_blk_send(void *ctx, vms_conid_t conid,
+			       uint32_t xfer_conid, uint32_t remote_name,
+			       uint32_t local_name, uint32_t len)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	struct pe_blk_xfer x;
+
+	if (cnxman_blk_xfer(cn, conid, xfer_conid, remote_name, local_name,
+			    len, &x) != 0)
+		return -1;
+	return cnxman_fsm_rc(pe_send_block_one(cn->cl->pe, &x));
+}
+
+static int cnxman_jop_device_present(void *ctx, const uint8_t *name,
+				     uint32_t len)
+{
+	(void)ctx;
+	return vms_devtab_name_present(name, len);
+}
+
+/* SCS block-consumer thunks: the fan-out is exact, so a name that is not one
+ * of the join's own is ignored inside cnxman_join_blk_*. */
+static void cnxman_blk_data_cb(void *ctx, uint32_t name, uint32_t offset,
+			       uint32_t len, uint32_t bytes_remaining)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+
+	cnxman_join_blk_data(&cn->join, name, offset, len, bytes_remaining);
+}
+
+static void cnxman_blk_sent_cb(void *ctx, uint32_t name)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+
+	cnxman_join_blk_sent(&cn->join, name);
+}
+
 static void cnxman_jops_bind(struct vms_cnxman *cn)
 {
 	cn->jops.dir_inquire = cnxman_jop_dir_inquire;
@@ -922,6 +1017,11 @@ static void cnxman_jops_bind(struct vms_cnxman *cn)
 	cn->jops.set_dir_data = cnxman_jop_set_dir_data;
 	cn->jops.time_now = cnxman_jop_time_now;
 	cn->jops.ctx = cn;
+	cn->jops.blk_register = cnxman_jop_blk_register;
+	cn->jops.blk_release = cnxman_jop_blk_release;
+	cn->jops.blk_request = cnxman_jop_blk_request;
+	cn->jops.blk_send = cnxman_jop_blk_send;
+	cn->jops.device_present = cnxman_jop_device_present;
 }
 
 /* ==========================================================================
@@ -2397,6 +2497,12 @@ static void cnxman_mscp_sysap_bind(struct vms_cnxman *cn)
 	cn->mscp_sysap.message = cnxman_mscp_message;
 	cn->mscp_sysap.closed = cnxman_mscp_closed;
 	cn->mscp_sysap.send_failed = NULL;
+	/* rd vms-239: the class driver's own connect statement, on every
+	 * connect it opens (the join's MSCP leg and cnxman_disk_client_connect
+	 * both reach scs_connect() with NULL connect data). */
+	cn->mscp_sysap.connect_conndata = cnxman_join_disk_cl_conndata;
+	cn->mscp_sysap.connect_min_credits =
+		(uint16_t)CNXMAN_DISK_CL_MIN_CREDITS;
 	cn->mscp_sysap.ctx = cn;
 }
 
@@ -2524,6 +2630,20 @@ static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
 		cnxman_csb_set_swver(csb, len ? sw : (const uint8_t *)0, len,
 				     cn->cl->params.sw_version,
 				     cn->cl->params.sw_version_len);
+		/* rd vms-239: and its SCSNODE, from the same formation body.
+		 * The MSCP class driver names a member's served units by it
+		 * (`<SCSNODE>$DUA<n>:`); a CSB that never held one left every
+		 * real VAX's units unnamed. Copied only when the port really
+		 * learned one -- never cleared to a guess. */
+		{
+			uint8_t nm[VMS_SCSNODE_MAX];
+			uint8_t nlen = 0u;
+
+			if (pe_peer_name(cn->cl->pe, csb->sysid, nm,
+					 (uint32_t)sizeof(nm), &nlen) == 0 &&
+			    nlen > 0u)
+				cnxman_csb_set_scsnode(csb, nm, nlen);
+		}
 	}
 }
 
@@ -3615,6 +3735,20 @@ int vms_cnxman_start(struct vms_cluster *cl)
 				  cn);
 
 	cl->cnxman = cn;
+	/* rd vms-1f64: the kind-6 close's block-transfer completions. Without a
+	 * consumer slot the join still answers those closes the old way
+	 * (cnxman_join_ops.blk_* unbound), so a refusal here is logged, not
+	 * fatal. */
+	if (vms_scs_set_block_consumer(cl, cnxman_blk_data_cb, cn) !=
+		    (int)SS__NORMAL ||
+	    vms_scs_set_block_sent(cl, cnxman_blk_sent_cb, cn) !=
+		    (int)SS__NORMAL) {
+		(void)vms_scs_set_block_consumer(cl, NULL, cn);
+		cn->jops.blk_register = NULL;
+		cnxman_ops_log(cn, "%CNXMAN, no block-transfer consumer slot: "
+				   "remote MOUNT/DISMOUNT requests are answered "
+				   "without a status record");
+	}
 	cnxman_recnx_start(&cn->recnx);
 
 	cnxman_start_join_or_wait(cn);
@@ -3877,6 +4011,7 @@ void vms_cnxman_stop(struct vms_cluster *cl)
 		(void)pe_send_last_gasp(cl->pe);
 	}
 
+	(void)vms_scs_set_block_consumer(cl, NULL, cn);
 	if (cl->scs != NULL) {
 		(void)scs_sysap_unlisten(cl->scs, cnxman_join_name_disk_cl_drvr);
 		(void)scs_sysap_unlisten(cl->scs, cnxman_join_name_vaxcluster);
@@ -4100,10 +4235,10 @@ int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
 	if (cl->cnxman == NULL || cl->scs == NULL)
 		return (int)SS__NOSUCHDEV;
 	/* The two names are vms_cnxman_join_fsm.c's, which is where the ONE
-	 * spelling of each lives; no caller re-types them. NULL conndata: E31
-	 * grounds the VMS$VAXcluster CM version quad only -- MSCP$DISK's own
-	 * connect data is a different, ungrounded field this glue must not
-	 * invent. */
+	 * spelling of each lives; no caller re-types them. NULL conndata here:
+	 * the class driver's own connect data and MIN_CR come from its SYSAP
+	 * registration (cnxman_mscp_sysap_bind, rd vms-239), so this path and
+	 * the join's MSCP leg state the same thing. */
 	return scs_connect(cl->scs, cnxman_join_name_disk_cl_drvr,
 			   cnxman_join_name_mscp_disk, dst, NULL, out_conid);
 }

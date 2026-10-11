@@ -1495,6 +1495,139 @@ vms_codec_status_t vms_cm_conndata_peer_taken(const uint8_t *cd, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+/* ------------------------------------------------------------------ *
+ * rd vms-1f64: the cat-0x06 block-transfer descriptor and the remote
+ * device request record (vms_cluster_codec_cm.h)
+ * ------------------------------------------------------------------ */
+
+const uint8_t vms_cm_rdev_class_dismount[VMS_CM_RDEV_CLASS_LEN] = {
+	0x01, 0x00, 0x15, 0x00, 0x00, 0x00, 0x56, 0x00
+};
+
+const uint8_t vms_cm_rdev_class_mount[VMS_CM_RDEV_CLASS_LEN] = {
+	0x01, 0x00, 0x41, 0x00, 0x00, 0x00, 0x56, 0x00
+};
+
+vms_codec_status_t vms_cm_xfer_desc_parse(const uint8_t *req_body,
+					  uint32_t req_len,
+					  struct vms_cm_xfer_desc *out)
+{
+	struct vms_cm_envelope env;
+	vms_wire_view_t v;
+	vms_codec_status_t st;
+
+	if (req_body == (const uint8_t *)0 ||
+	    out == (struct vms_cm_xfer_desc *)0)
+		return VMS_CODEC_E_INVAL;
+	out->name = out->conid = out->len = 0u;
+	out->kind = 0u;
+	st = vms_cm_envelope_parse(req_body, req_len, &env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = cm_recipe_allowed(&env, VMS_CM_RECIPE_CLOSE);
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (req_len < VMS_OFB_CM_XFER_LEN + 4u)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	out->name = vms_wire_get_le32(&v, VMS_OFB_CM_XFER_NAME);
+	out->conid = vms_wire_get_le32(&v, VMS_OFB_CM_XFER_CONID);
+	out->len = vms_wire_get_le32(&v, VMS_OFB_CM_XFER_LEN);
+	out->kind = req_body[VMS_OFB_CM_CLOSE_REQ_KIND];
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (out->name == 0u || out->conid == 0u || out->len == 0u)
+		return VMS_CODEC_E_CLASS;
+	return VMS_CODEC_OK;
+}
+
+static int rdev_class_is(const uint8_t *rec, const uint8_t *cls)
+{
+	uint32_t i;
+
+	for (i = 0; i < VMS_CM_RDEV_CLASS_LEN; i++) {
+		if (rec[VMS_CM_RDEV_OFF_CLASS + i] != cls[i])
+			return 0;
+	}
+	return 1;
+}
+
+vms_codec_status_t vms_cm_rdev_req_parse(const uint8_t *rec, uint32_t len,
+					 struct vms_cm_rdev_req *out)
+{
+	vms_wire_view_t v;
+	uint32_t nlen, noff;
+
+	if (rec == (const uint8_t *)0 || out == (struct vms_cm_rdev_req *)0)
+		return VMS_CODEC_E_INVAL;
+	out->kind = (uint8_t)VMS_CM_RDEV_NONE;
+	out->op = 0u;
+	out->name_len = 0u;
+	out->name = (const uint8_t *)0;
+	if (len != VMS_CM_RDEV_DISMOUNT_LEN && len != VMS_CM_RDEV_MOUNT_LEN)
+		return VMS_CODEC_E_CLASS;
+	vms_wire_view_init(&v, rec, len);
+	if (vms_wire_get_le16(&v, VMS_CM_RDEV_OFF_RECLEN) != len ||
+	    vms_wire_get_le16(&v, VMS_CM_RDEV_OFF_TAG) != VMS_CM_RDEV_TAG)
+		return VMS_CODEC_E_CLASS;
+
+	if (len == VMS_CM_RDEV_DISMOUNT_LEN &&
+	    rdev_class_is(rec, vms_cm_rdev_class_dismount)) {
+		out->kind = (uint8_t)VMS_CM_RDEV_DISMOUNT;
+		nlen = vms_wire_get_le32(&v, VMS_CM_RDEV_DM_OFF_NAMELEN);
+		noff = vms_wire_get_le32(&v, VMS_CM_RDEV_DM_OFF_NAMEOFF);
+	} else if (len == VMS_CM_RDEV_MOUNT_LEN &&
+		   rdev_class_is(rec, vms_cm_rdev_class_mount)) {
+		out->kind = (uint8_t)VMS_CM_RDEV_MOUNT;
+		nlen = vms_wire_get_le16(&v, VMS_CM_RDEV_MT_OFF_ITEM);
+		if (vms_wire_get_le16(&v, VMS_CM_RDEV_MT_OFF_ITEM + 2u) !=
+		    VMS_CM_RDEV_MT_ITEM_DEVNAM)
+			return VMS_CODEC_E_CLASS;
+		noff = vms_wire_get_le32(&v, VMS_CM_RDEV_MT_OFF_ITEM + 4u);
+	} else {
+		return VMS_CODEC_E_CLASS;
+	}
+	out->op = vms_wire_get_le32(&v, VMS_CM_RDEV_OFF_STATUS);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	/* The name lies wholly inside the record, past the status longword. */
+	if (nlen == 0u || noff < 4u ||
+	    noff > len - VMS_CM_RDEV_OFF_STATUS ||
+	    nlen > len - VMS_CM_RDEV_OFF_STATUS - noff) {
+		out->kind = (uint8_t)VMS_CM_RDEV_NONE;
+		return VMS_CODEC_E_CLASS;
+	}
+	out->name_len = nlen;
+	out->name = rec + VMS_CM_RDEV_OFF_STATUS + noff;
+	return VMS_CODEC_OK;
+}
+
+uint32_t vms_cm_rdev_status_absent(uint8_t kind)
+{
+	switch (kind) {
+	case VMS_CM_RDEV_DISMOUNT: return VMS_CM_RDEV_STATUS_NOSUCHDEV;
+	case VMS_CM_RDEV_MOUNT:    return VMS_CM_RDEV_STATUS_NORMAL;
+	default:                   return 0u;
+	}
+}
+
+vms_codec_status_t vms_cm_rdev_answer_in_place(uint8_t *rec, uint32_t len,
+					       uint32_t status)
+{
+	struct vms_cm_rdev_req req;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	st = vms_cm_rdev_req_parse(rec, len, &req);
+	if (st != VMS_CODEC_OK)
+		return st;
+	vms_wire_buf_init(&w, rec, len);
+	vms_wire_put_le32(&w, VMS_CM_RDEV_OFF_STATUS, status);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_cm_open_dlm_seq(const uint8_t *body, uint32_t len,
 				       uint16_t *n)
 {

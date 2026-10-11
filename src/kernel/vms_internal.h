@@ -1499,6 +1499,9 @@ long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
  * backing (major,minor) so it can read the home block/SCB and validate the
  * volume. SS$_NORMAL / SS$_NOSUCHDEV / SS$_IVDEVNAM. Defined in kernel-core.
  */
+/* rd vms-1f64: 1 if the device table holds a unit by this counted name,
+ * 0 if not, -1 if the bytes are not a device name (vms_devtab.c). */
+int vms_devtab_name_present(const uint8_t *name, uint32_t len);
 uint32_t vms_devtab_disk_backing(const char *devnam,
                                  uint32_t *major_out, uint32_t *minor_out);
 /*
@@ -1767,6 +1770,18 @@ int vms_devtab_add_disk(const char *devnam, const char *backing,
  */
 int vms_devtab_add_served_disk(const char *devnam);
 int vms_devtab_remove_served_disk(const char *devnam);
+
+/*
+ * rd vms-4822: a served row's block identity. Its backing pair is
+ * (VMS_DEVTAB_SERVED_MAJOR, a served-unit id this table mints, never 0), so
+ * the ACP's one block-I/O chokepoint routes it to the MSCP class driver.
+ * 0xFFFFFFFF is no block major on either substrate (Linux majors are 12 bits;
+ * NetBSD's bdevsw is indexed far below it), so the pair can never name -- and
+ * so never read -- a LOCAL disk. vms_devtab_served_name() hands back the row's
+ * device name for an id: 0, or -ENODEV when no served row holds it.
+ */
+#define VMS_DEVTAB_SERVED_MAJOR 0xFFFFFFFFu
+int vms_devtab_served_name(uint32_t id, char *out, uint32_t outsz);
 
 /*
  * Enter / withdraw ONE dynamic RTAn: terminal unit (rd vms-f881, design

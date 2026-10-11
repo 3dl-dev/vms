@@ -252,6 +252,22 @@ extern const uint8_t cnxman_join_name_mscp_disk[VMS_SCS_PROCNAME_LEN];
 extern const uint8_t cnxman_join_name_disk_cl_drvr[VMS_SCS_PROCNAME_LEN];
 
 /*
+ * rd vms-239: what the disk class driver SAYS ABOUT ITSELF when it connects to
+ * an MSCP server -- the CONNECT_REQ's 16-byte connect data (spec SS4(N)) and
+ * its SCS$W_MIN_CR (p. 2-44). Measured (Rule 8, the class driver's own
+ * on-wire statement): every VMS$DISK_CL_DRVR -> MSCP$DISK CONNECT_REQ a real
+ * VAX V7.3 put on the wire in the lab corpus -- 4,032 frames from 19 distinct
+ * nodes -- carries exactly these 16 bytes and MIN_CR 2, whatever the server,
+ * the cluster or the boot; a server ACCEPTs every one. OVMX's blank/0 connect
+ * was REJECTED by a real VAX1 serving a disk every ~32 s
+ * (tests/lab/captures/vms-239-mscp-connect-20261011). They are a property of
+ * the class driver's protocol, not of any node, so no node's private value
+ * travels: the census found no variation to copy.
+ */
+#define CNXMAN_DISK_CL_MIN_CREDITS 2u
+extern const uint8_t cnxman_join_disk_cl_conndata[VMS_SCS_PROCNAME_LEN];
+
+/*
  * How often this node NOTICES that a join step is still outstanding. An OVMX
  * DESIGN VALUE, labelled as one: no capture measures a JOINER-side timeout.
  * What it does is bounded on purpose -- it counts, it logs once, and in the
@@ -553,6 +569,60 @@ struct cnxman_join_ops {
 	uint64_t (*time_now)(void *ctx);
 
 	void *ctx;
+
+	/*
+	 * rd vms-1f64: the BLOCK TRANSFERS a kind-6 close needs (vms_cluster_
+	 * codec_cm.h, "THE BLOCK-TRANSFER DESCRIPTOR"). All five are added at
+	 * the end and may be NULL; with any of them NULL a kind-6 close is
+	 * answered exactly as before (no pull, no write-back).
+	 *
+	 *   blk_register  name `buf` for the port, as a destination AND a
+	 *                 source (production: pe_buf_register)
+	 *   blk_release   drop the name (pe_buf_release)
+	 *   blk_request   REQUEST DATA on the connection `conid` arrived on:
+	 *                 fill our `local_name` from the peer's `remote_name`,
+	 *                 `len` bytes, header +0 = `xfer_conid`
+	 *                 (pe_request_block)
+	 *   blk_send      SEND DATA, one frame, our `local_name` into the peer's
+	 *                 `remote_name` (pe_send_block_one)
+	 *   device_present 1 when this node's executive has a device by that
+	 *                 name, 0 when it has none, negative when it cannot say
+	 */
+	int (*blk_register)(void *ctx, uint8_t *buf, uint32_t len,
+			    uint32_t *name_out);
+	int (*blk_release)(void *ctx, uint32_t name);
+	int (*blk_request)(void *ctx, vms_conid_t conid, uint32_t xfer_conid,
+			   uint32_t remote_name, uint32_t local_name,
+			   uint32_t len);
+	int (*blk_send)(void *ctx, vms_conid_t conid, uint32_t xfer_conid,
+			uint32_t remote_name, uint32_t local_name,
+			uint32_t len);
+	int (*device_present)(void *ctx, const uint8_t *name, uint32_t len);
+};
+
+/*
+ * rd vms-1f64: one kind-6 close in flight -- pulled, answered into the
+ * requester's buffer, and only then answered on the connection.
+ */
+#define CNXMAN_RDEV_MAX       4u
+#define CNXMAN_RDEV_STALE_MS  30000u   /* a slot this old is reclaimed */
+
+enum cnxman_rdev_state {
+	CNXMAN_RDEV_FREE = 0,
+	CNXMAN_RDEV_PULLING,    /* REQUEST DATA out, record not all in   */
+	CNXMAN_RDEV_WRITING     /* answer sent by SEND DATA, awaiting 0x0f */
+};
+
+struct cnxman_rdev {
+	uint8_t                 state;
+	uint8_t                 pad[3];
+	int32_t                 from_csb;
+	vms_conid_t             conid;        /* OUR Con.ID it arrived on   */
+	uint32_t                local_name;   /* our named buffer: rec[]    */
+	uint32_t                started_ms;
+	struct vms_cm_xfer_desc desc;
+	uint8_t                 req[VMS_CM_BODY_LEN];
+	uint8_t                 rec[VMS_CM_RDEV_REC_MAX];
 };
 
 /* ==========================================================================
@@ -991,6 +1061,25 @@ struct cnxman_join {
 	 * node has ever put on this wire.
 	 */
 	uint32_t closes_withheld;
+	/*
+	 * rd vms-1f64: kind-6 (MOUNT/DISMOUNT/CLUSTER) closes. `rdev_started`
+	 * pulled the record; `rdev_answered` wrote the answer back and then
+	 * sent the cat-0x86 (`rdev_nosuchdev` DISMOUNT records answered
+	 * SS$_NOSUCHDEV, `rdev_mount_normal` MOUNT records answered 1).
+	 * `rdev_unanswerable` were answered the pre-vms-1f64 way (no
+	 * write-back) because the record is not the decoded kind, or names a
+	 * device this node HAS (a remote mount it does not perform), or the
+	 * port refused a transfer; `rdev_conid_mismatch` named a +0 that is not
+	 * the Con.ID the request arrived on; `rdev_reclaimed` went stale.
+	 */
+	uint32_t rdev_started;
+	uint32_t rdev_answered;
+	uint32_t rdev_nosuchdev;
+	uint32_t rdev_mount_normal;
+	uint32_t rdev_unanswerable;
+	uint32_t rdev_conid_mismatch;
+	uint32_t rdev_reclaimed;
+	struct cnxman_rdev rdev[CNXMAN_RDEV_MAX];
 	uint32_t mscp_cmds_sent;
 	uint32_t mscp_ends;
 	uint32_t peer_adverts;       /* the member's own 0x14/0x01/0x02       */
@@ -1447,6 +1536,16 @@ void cnxman_join_target_released(struct cnxman_join *j, vms_scs_sysid_t sysid);
  * the outstanding inquiry -- p. 2-51's own recovery. It expires nothing.
  */
 void cnxman_join_timer(struct cnxman_join *j);
+
+/*
+ * rd vms-1f64: the port's block-transfer completions, for the kind-6 closes
+ * this join pulled (cnxman_join_ops.blk_*). `name` is OUR buffer name; a name
+ * that is not one of this join's is ignored (the SCS fan-out is exact).
+ */
+void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
+			  uint32_t offset, uint32_t len,
+			  uint32_t bytes_remaining);
+void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name);
 
 /* ==========================================================================
  * 8. Readback

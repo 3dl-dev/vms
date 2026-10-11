@@ -271,6 +271,20 @@ struct scs_sysap_ops {
 	 */
 	const uint8_t *accept_conndata;   /* VMS_SCS_PROCNAME_LEN, or NULL */
 
+	/*
+	 * OPTIONAL (may be NULL / 0). The CONNECT-side mirror of the two
+	 * SYSAP-identity facts above (rd vms-239): this SYSAP's OWN 16-byte
+	 * connect data and its Minimum Send Credits (p. 2-44, SCS$W_MIN_CR)
+	 * for a connection it OPENS through scs_connect() without naming
+	 * connect data of its own. Like `accept_conndata` they belong to the
+	 * SYSAP, not the request: every real disk class driver states the
+	 * same two values on every connect it makes, whichever server it
+	 * dials (tests/lab/captures/vms-239-mscp-connect-20261011). NULL / 0
+	 * keeps the old meaning -- blank-filled data, no floor.
+	 */
+	const uint8_t *connect_conndata;  /* VMS_SCS_PROCNAME_LEN, or NULL */
+	uint16_t       connect_min_credits;
+
 	void *ctx;
 };
 
@@ -426,6 +440,18 @@ int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 		   vms_scs_sysid_t *out);
 
 /*
+ * THE PEER'S OWN CON.ID for the connection behind `local_conid` (rd vms-239):
+ * the value its CONNECT/ACCEPT really carried, learned off the wire. A SYSAP
+ * whose protocol names the PEER's connection in a message body needs it -- an
+ * MSCP class driver's READ/WRITE buffer descriptor carries the SERVER's
+ * Con.ID (71/71 real descriptors). SS$_NORMAL with *out set; SS$_BADPARAM when
+ * no live CDT or the peer's Con.ID was never learned (never a 0); SS$_NOSUCHDEV
+ * with no SCS.
+ */
+int scs_conid_remote(struct vms_scs *scs, vms_conid_t local_conid,
+		     vms_conid_t *out);
+
+/*
  * The 16 connect-data bytes the PEER's ACCEPT carried on a connection this node
  * initiated (rd vms-f297), verbatim. SS$_NORMAL with `out` filled; SS$_BADPARAM
  * when the Con.ID names no live CDT or no ACCEPT carried any; SS$_NOSUCHDEV
@@ -539,12 +565,20 @@ int vms_scs_peer_at(struct vms_cluster *cl, uint32_t index,
 typedef void (*vms_scs_block_cb)(void *ctx, uint32_t name, uint32_t offset,
 				 uint32_t len, uint32_t bytes_remaining);
 
-/* The MSCP server and the MSCP disk class driver. Two, because that is how
- * many SYSAPs in this executive own named buffers; a third is a design
- * question for whoever adds one, not a number to grow speculatively. */
-#define VMS_SCS_MAX_BLOCK_CONSUMERS 2u
+/* The MSCP server, the MSCP disk class driver, and (rd vms-1f64) the
+ * connection manager's remote-request service, which pulls a member's
+ * MOUNT/DISMOUNT request record and writes its answer back by block transfer.
+ * Three SYSAPs own named buffers; the table is exactly that size. */
+#define VMS_SCS_MAX_BLOCK_CONSUMERS 3u
 
 int vms_scs_set_block_consumer(struct vms_cluster *cl, vms_scs_block_cb cb,
 			       void *cb_ctx);
+
+/* rd vms-1f64: a SEND DATA this node initiated from buffer `name` was
+ * acknowledged by the peer's port. Attached to an already-registered
+ * consumer (same `cb_ctx`); withdrawn with it. */
+typedef void (*vms_scs_block_sent_cb)(void *ctx, uint32_t name);
+int vms_scs_set_block_sent(struct vms_cluster *cl, vms_scs_block_sent_cb cb,
+			   void *cb_ctx);
 
 #endif /* OVMX_VMS_SCS_H */

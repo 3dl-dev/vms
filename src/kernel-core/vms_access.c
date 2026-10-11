@@ -474,19 +474,46 @@ static int kfe_find_name(const char *name)
 }
 
 
-/* For the activation-time grant (vms-bdc1): the privileges the installed image
- * open on `fd` carries, 0 when it is not installed /PRIVILEGED. */
-uint64_t vms_kfe_image_privs(int fd)
+/*
+ * IMAGE PRIVILEGES (rd vms-bdc1). An image installed /PRIVILEGED=(...) runs
+ * with those privileges added to the process's current privileges, and they
+ * go when the image does (VMS: at image rundown CURPRIV returns to the
+ * process privileges). The executive decides at image activation from the
+ * file the substrate actually exec'd, never from what the process says: the
+ * exec'd file must be the executive's own pinned copy of an installed image
+ * (exec_pin_is_image; a different file -- the original, a file reusing its
+ * inode number, a copy -- is not). `img` is the substrate's identity of the
+ * exec'd file (Linux: its inode; NetBSD: its text vnode).
+ */
+uint64_t vms_kfe_exec_privs(const void *img)
 {
     uint64_t p = 0;
+    if (!img)
+        return 0;
     exec_mutex_lock(&vms_kfe_mutex);
-    int i = kfe_find(fd);
-    if (i >= 0 && (vms_kfe_tab[i].flags & VMS_KFE_F_PRIV)) {
-        p = vms_kfe_tab[i].privs;
-        vms_kfe_tab[i].access++;
-    }
+    for (int i = 0; i < VMS_KFE_MAX; i++)
+        if (vms_kfe_tab[i].used && (vms_kfe_tab[i].flags & VMS_KFE_F_PRIV) &&
+            exec_pin_is_image(vms_kfe_tab[i].pin, img)) {
+            p = vms_kfe_tab[i].privs;
+            vms_kfe_tab[i].access++;
+            break;
+        }
     exec_mutex_unlock(&vms_kfe_mutex);
     return p;
+}
+
+/* An image was activated in `proc` with installed privileges `img_privs` (0
+ * for an ordinary image). A previous image's privileges go first (its
+ * rundown: CURPRIV returns to the process privileges), then the new image's
+ * are added for as long as it runs. */
+void vms_proc_image_privs(struct vms_proc *proc, uint64_t img_privs)
+{
+    exec_lock(&proc->mode_lock);
+    if (proc->image_privs)
+        proc->cur_privs = proc->perm_privs;
+    proc->image_privs = img_privs;
+    proc->cur_privs |= img_privs;
+    exec_unlock(&proc->mode_lock);
 }
 
 /* The executive's copy of an installed image (rd vms-220, Baron's ruling on

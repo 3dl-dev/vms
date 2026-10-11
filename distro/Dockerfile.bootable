@@ -229,16 +229,19 @@ RUN KMAJ=$(echo "$KERNEL_VERSION" | cut -d. -f1) && \
 WORKDIR /usr/src/linux
 
 # OVMX kernel patches (rd vms-9f32): distro/kernel/patches/*.patch, applied in
-# order to the pinned source and FAILING CLOSED if one does not apply. Today one
-# hook: do_exit's task_exit_notifier, from which vms.ko runs process rundown in
+# order to the pinned source and FAILING CLOSED if one does not apply. Two
+# hooks: do_exit's task_exit_notifier, from which vms.ko runs process rundown in
 # process context before the process becomes a zombie (the same patch the Alpha
-# kernel carries, tools/cross-alpha/patches/0002).
+# kernel carries, tools/cross-alpha/patches/0002), and exec_binprm's
+# task_exec_notifier, from which it grants and runs down installed-image
+# privileges at each image activation (rd vms-bdc1, tools/cross-alpha/patches/0003).
 COPY distro/kernel/patches /tmp/ovmx-kpatches
 RUN for p in /tmp/ovmx-kpatches/*.patch; do \
         echo "-- applying kernel patch: $(basename "$p")"; \
         patch -p1 --forward < "$p" || exit 1; \
     done && \
-    grep -q 'HAVE_TASK_EXIT_NOTIFIER' include/linux/sched/task.h
+    grep -q 'HAVE_TASK_EXIT_NOTIFIER' include/linux/sched/task.h && \
+    grep -q 'HAVE_TASK_EXEC_NOTIFIER' include/linux/binfmts.h
 
 # Overlay the OVMX kernel modules IN-TREE (vms-934, parent vms-19e "owns-kernel";
 # generalized into a reusable module home by vms-bae). drivers/ovmx/ is a MENU:

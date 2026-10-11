@@ -503,6 +503,8 @@ exec_kfe_stage(int fd, const char *dst, void **pin)
 }
 static __inline void exec_file_unpin(void *pin) { ovmx_file_unpin(pin); }
 static __inline int exec_file_is(void *pin, int fd) { return ovmx_file_is(pin, fd); }
+/* rd vms-bdc1: `img` is the text vnode of the process that exec'd. */
+static __inline int exec_pin_is_image(void *pin, const void *img) { return img != NULL && pin == img; }
 
 /*
  * ovmx_native_page0_allow (rd vms-b869): lower the minimum address of the

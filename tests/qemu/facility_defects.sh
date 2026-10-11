@@ -599,6 +599,9 @@ kfe-keyed-on-name
 kfe-write-not-denied
 kfe-remove-copy-kept
 page0-ioctl-unprivileged-allowed
+image-privs-not-granted
+image-privs-not-dropped
+image-privs-any-file
 acp-grpprv-ignored
 acp-acl-not-consulted
 acp-acl-deny-falls-to-world
@@ -1608,6 +1611,65 @@ EOF
         why)          echo "exec_kfe_stage() denies writes to the executive's copy it holds (deny_write_access). The mutation skips the denial, so the installed copy -- and with it a /PRIVILEGED image -- could be rewritten after INSTALL (root's DAC override ignores its 0555 mode). Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 opening the executive's copy for write is refused (ETXTBSY) -- even by substrate root
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    image-privs-not-granted)
+        case "$_f" in
+        facility)     echo "an image installed /PRIVILEGED runs with its installed privileges, granted by the executive at activation (vms-bdc1)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_image_privs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_kfe_exec_privs() gives the exec'd file the privileges of the installed entry whose pinned copy it is. The mutation gives nothing, so an installed /PRIVILEGED image runs with only the process privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the installed image runs with its installed privileges (SYSNAM, OPER) in an unprivileged process
+the next image activated in that process no longer holds them
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    image-privs-not-dropped)
+        case "$_f" in
+        facility)     echo "an installed image's privileges go when the next image is activated (vms-bdc1)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_image_privs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_image_privs() returns CURPRIV to the process privileges before the next image's are added (image rundown). The mutation keeps them, so every image the process runs after a privileged one inherits its privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the next image activated in that process no longer holds them
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac;;
+
+    image-privs-any-file)
+        case "$_f" in
+        facility)     echo "installed-image privileges go only to the executive's own pinned copy, by object (vms-bdc1)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_image_privs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_pin_is_image() matches the exec'd file's inode to the installed copy's. The mutation matches any exec'd file, so the file the image was installed from -- or any program at all -- gets the installed privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the file the image was installed from is not the installed image: no privileges
+a new file (possibly reusing the removed copy's inode) gets no privileges
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -8349,6 +8411,12 @@ apply_edit() {
         sed -i 's|^        if (vms_kfe_tab\[i\].used \&\& exec_file_is(vms_kfe_tab\[i\].pin, fd))$|        if (vms_kfe_tab[i].used) /* NEGCTL kfe-keyed-on-name */|' "$_file";;
     kfe-write-not-denied)
         sed -i 's|^\t\t} else if ((e = deny_write_access(ro)) != 0) {$|\t\t} else if ((e = 0) != 0) { /* NEGCTL kfe-write-not-denied */|' "$_file";;
+    image-privs-not-granted)
+        sed -i 's|^            p = vms_kfe_tab\[i\].privs;$|            p = 0; /* NEGCTL image-privs-not-granted */|' "$_file";;
+    image-privs-not-dropped)
+        sed -i 's|^        proc->cur_privs = proc->perm_privs;$|        (void)0; /* NEGCTL image-privs-not-dropped */|' "$_file";;
+    image-privs-any-file)
+        sed -i 's|^\treturn img \&\& file_inode((struct file \*)pin) == (const struct inode \*)img;$|\treturn img != NULL; /* NEGCTL image-privs-any-file */|' "$_file";;
     kfe-remove-copy-kept)
         sed -i 's|^            memcpy(gone, vms_kfe_tab\[i\].path, 256);$|            (void)0; /* NEGCTL kfe-remove-copy-kept */|' "$_file";;
     page0-ioctl-unprivileged-allowed)

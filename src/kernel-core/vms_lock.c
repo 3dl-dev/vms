@@ -459,12 +459,69 @@ static void lock_put(struct vms_lock_entry *entry)
     exec_unlock(&vms_lock_id_lock);
 }
 
+/*
+ * THE LOCK ID'S FORM IS THE WIRE'S, MEASURED (rd vms-ci.6 minted-form audit).
+ * A lock id leaves this node in every cross-node request (the requester's own
+ * handle) and every grant (the master's), and a real VAX keeps it and hands
+ * it back. Every lock id a real VAX V7.3 put on the wire in the lab corpus
+ * (8,713 requester handles in ops 0x01/0x07, 13,750 holder handles in 0x12)
+ * has the same shape: a sequence byte 0x01..0x7f in bits 31:24, ZERO in bits
+ * 23:16, and an index in bits 15:0 (at most 0x09f5 observed). OVMX minted a
+ * bare counter (0x00000345), whose top byte is 0 -- a form no real node
+ * sends, and the shape of value whose sibling (a port buffer name with a zero
+ * high word) halted a real VAX2 with a VAXPORT bugcheck (rd vms-239).
+ *
+ * So: index 1..LKID_INDEX_MAX, cycling; the sequence byte 1..0x7f advances
+ * each time the index wraps; a candidate already in the tree is skipped, so
+ * an id is never handed out twice while it lives. Caller holds
+ * vms_lock_id_lock.
+ */
+#define LKID_SEQ_SHIFT   24u
+#define LKID_SEQ_MAX     0x7fu
+#define LKID_INDEX_MAX   0x0fffu
+static uint32_t vms_lkid_seq = 1u;
+
+static int lock_id_taken_locked(uint32_t lkid)
+{
+    exec_rbtree_node_t *n = *exec_rbtree_root_link(&vms_lock_id_tree);
+
+    while (n) {
+        struct vms_lock_entry *e = exec_rb_entry(n, struct vms_lock_entry, rb_node);
+
+        if (lkid < e->lkid)
+            n = *exec_rb_left_link(n);
+        else if (lkid > e->lkid)
+            n = *exec_rb_right_link(n);
+        else
+            return 1;
+    }
+    return 0;
+}
+
+static uint32_t lock_id_mint_locked(void)
+{
+    uint32_t tries, lkid;
+
+    for (tries = 0; tries < LKID_SEQ_MAX * LKID_INDEX_MAX; tries++) {
+        if (vms_next_lock_id == 0u || vms_next_lock_id > LKID_INDEX_MAX) {
+            vms_next_lock_id = 1u;
+            vms_lkid_seq = (vms_lkid_seq >= LKID_SEQ_MAX) ? 1u
+                                                         : vms_lkid_seq + 1u;
+        }
+        lkid = (vms_lkid_seq << LKID_SEQ_SHIFT) | vms_next_lock_id;
+        vms_next_lock_id++;
+        if (!lock_id_taken_locked(lkid))
+            return lkid;
+    }
+    return 0u;   /* every id in the space is live: refused by the caller */
+}
+
 static void lock_insert_id(struct vms_lock_entry *entry)
 {
     exec_rbtree_node_t **p, *parent = NULL;
 
     exec_lock(&vms_lock_id_lock);
-    entry->lkid = vms_next_lock_id++;
+    entry->lkid = lock_id_mint_locked();
 
     p = exec_rbtree_root_link(&vms_lock_id_tree);
     while (*p) {
@@ -491,8 +548,7 @@ static void lock_insert_id(struct vms_lock_entry *entry)
  *
  * Returns 0 on success, or -1 if that id is already taken (the caller then
  * refuses the message rather than minting a second lock under one handle).
- * On success vms_next_lock_id is advanced past `lkid`, so a later local $ENQ
- * can never collide with it.
+ * A later local $ENQ can never collide with it: the minter skips live ids.
  */
 static int lock_insert_id_at(struct vms_lock_entry *entry, uint32_t lkid)
 {
@@ -516,8 +572,8 @@ static int lock_insert_id_at(struct vms_lock_entry *entry, uint32_t lkid)
         }
     }
     entry->lkid = lkid;
-    if (lkid >= vms_next_lock_id)
-        vms_next_lock_id = lkid + 1;
+    /* No counter to advance: lock_id_mint_locked() skips any id the tree
+     * already holds, this one included. */
     exec_rb_link_node(&entry->rb_node, parent, p);
     exec_rb_insert_color(&entry->rb_node, &vms_lock_id_tree);
     exec_unlock(&vms_lock_id_lock);

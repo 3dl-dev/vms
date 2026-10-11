@@ -153,6 +153,14 @@ static void lock_basic(void)
 	status = do_enq(&proc_a, "LOCK_HOST_TEST1", LCK_K_EXMODE, 0, &lkid_a);
 	ct_check(status == SS__NORMAL && lkid_a != 0,
 		 "proc_a: EX granted, real lock ID (vms_ioctl_enq, real engine)");
+	/* rd vms-ci.6 minted-form audit: a lock id leaves this node on every
+	 * cross-node request and grant. Every real VAX lock id in the lab
+	 * corpus (22,463) has a sequence byte 0x01..0x7f in bits 31:24, zero in
+	 * bits 23:16 and an index in bits 15:0. */
+	ct_check((lkid_a >> 24) >= 0x01u && (lkid_a >> 24) <= 0x7fu &&
+		 ((lkid_a >> 16) & 0xffu) == 0u &&
+		 (lkid_a & 0xffffu) != 0u && (lkid_a & 0xffffu) <= 0x0fffu,
+		 "the lock id has the wire's form: seq<<24 | index");
 
 	/* 2a. proc_b: EX+NOQUEUE denied while proc_a holds EX. */
 	status = do_enq(&proc_b, "LOCK_HOST_TEST1", LCK_K_EXMODE, LCK_M_NOQUEUE, NULL);
@@ -349,6 +357,9 @@ static void remote_lkb_is_outside_image_rundown(void)
 	ct_check(status == SS__NORMAL && master_lkid != 0,
 		 "vms-c27 cond.1: cross-node $ENQ granted on the delivery proc "
 		 "(real vms_lock_dlm_xnode_dispatch)");
+	ct_check((master_lkid >> 24) >= 0x01u && (master_lkid >> 24) <= 0x7fu &&
+		 ((master_lkid >> 16) & 0xffu) == 0u,
+		 "the MASTER's lock id it hands a real VAX has the wire's form");
 
 	status = do_resmaster(&delivery, "C27_REMOTE_RES", &rm);
 	ct_check(status == SS__NORMAL && rm.found &&

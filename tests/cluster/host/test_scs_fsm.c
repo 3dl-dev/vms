@@ -75,23 +75,21 @@ static void t_conid_allocator(void)
 		 "the CDL resolves it");
 
 	/*
-	 * Release the slot and go all the way round the CDL until the SAME
-	 * slot comes up again: SS4(t)'s "a real node never repeats a Con.ID".
-	 * (The allocator hands out slots round-robin, so a freed slot is NOT
-	 * the next one taken -- which is itself the property that keeps a
-	 * stale Con.ID from landing on a live connection while the ring is
-	 * still turning.)
+	 * Release the slot: the NEXT connect takes it straight back (lowest
+	 * free slot first -- rd vms-ci.6 minted-form audit: real VAXes' Con.ID
+	 * low words are small reused indices, 0x0007..0x0010 over 2,791
+	 * connects) and SS4(t)'s "a real node never repeats a Con.ID" is kept
+	 * by the reuse generation in the high word.
 	 */
 	scs_fsm_vc_down(&n.fsm, 0x0404u, 0u);
 	ct_check(scs_fsm_cdt_by_conid(&n.fsm, first) == (struct scs_cdt *)0,
 		 "a STALE Con.ID resolves to nothing after the slot is freed");
 
-	for (i = 0; i < SCSH_CDL; i++) {
+	{
 		vms_conid_t id = 0u;
 
-		if (scs_fsm_connect(&n.fsm, &args, &id) != SCS_OK)
-			break;
-		if ((id & 0xffffu) == (first & 0xffffu))
+		if (scs_fsm_connect(&n.fsm, &args, &id) == SCS_OK &&
+		    (id & 0xffffu) == (first & 0xffffu))
 			second = id;
 	}
 	ct_check(second != 0u, "the freed CDL slot comes round and is reused");

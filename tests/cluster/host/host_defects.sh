@@ -307,6 +307,15 @@ cmd_owned() { echo "$HOST_OWNED_UNITS"; }
 #                observed red set, and the ONLY texts that may -- run_host_
 #                negctl.sh asserts the two sets are EQUAL.
 # ---------------------------------------------------------------------------
+# hd_lines - copy stdin to stdout with shell builtins only. defect_field's
+# require_fail texts are here-documents; reading them through cat(1) was an
+# exec per read, twice per defect in the self-test (rd vms-7a8e).
+hd_lines() {
+    while IFS= read -r _hl || [ -n "$_hl" ]; do
+        printf '%s\n' "$_hl"
+    done
+}
+
 defect_field() {
     _d="$1"; _f="$2"
     case "$_d" in
@@ -318,7 +327,7 @@ defect_field() {
         suites_red)   echo "test_cnxman_genesis";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_quorum_form_set() sums only the LOCAL CSB's votes, so a peer whose PARAMS really arrived over a really-open circuit contributes nothing -- the pre-vms-6d3d rule that a node may found only a cluster its OWN votes already carry. Every refusal still refuses; what stops forming is the documented two-node VMScluster (VOTES=1/EXPECTED_VOTES=2 on both), which two real OpenVMS VAX V7.3 systems do form.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 VOTES=1/EV=2 + a seen VOTES=1/EV=2 peer: FOUNDS on 2 votes
 a peer expecting 3 votes: quorum 2, and 2 votes meet it
 VOTES=2 + a seen VOTES=1/EV=5 peer: 3 votes meet quorum 3
@@ -341,7 +350,7 @@ EOF
         suites_red)   echo "test_cnxman_genesis_negctl";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_coord_found()'s NO_QUORUM branch stops incrementing genesis_refused_noquorum. The refusal itself (rc, last_refusal, state, and the byte-for-byte CLUB) is untouched -- only the count of how many times the node refused to found goes silent, so a node that should show N counted refusals shows one fewer than it really performed.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the refusal is COUNTED (the anti-LARP tripwire)
 counted
 every attempt was refused, and counted
@@ -356,7 +365,7 @@ EOF
         suites_red)   echo "test_codec_vc";;
         isolation)    echo "isolated";;
         why)          echo "vms_scs_seq_stamp()'s 'incarnation == 0 -> VMS_CODEC_E_INVAL' refusal is disabled, so a zero incarnation -- which appears in 0 of 239,981 reference frames -- is stamped onto the wire like any other value instead of being refused.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a zero incarnation is REFUSED, never written
 and the refused frame's span was not touched at all
 EOF
@@ -370,7 +379,7 @@ EOF
         suites_red)   echo "test_codec_cm";;
         isolation)    echo "isolated";;
         why)          echo "vms_cm_body_build()'s 'body_len != VMS_CM_BODY_LEN -> VMS_CODEC_E_INVAL' refusal is disabled, so a body one byte short of the 132-byte SYSAP body is wrapped and sent anyway instead of being refused.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
   a short body is rejected rather than tail-padded with whatever the caller's buffer held
 EOF
                       ;;
@@ -383,7 +392,7 @@ EOF
         suites_red)   echo "test_pe_block";;
         isolation)    echo "isolated";;
         why)          echo "vms_blk_trailer_parse()'s early 'frame_len <= inner_frame_len -> VMS_CODEC_OK, no trailer' return is disabled, so the exact-length case that legitimately carries no piggyback falls through to the length arithmetic below and is refused VMS_CODEC_E_SHORT instead of being answered as the common, honest, no-trailer case. (A real READ end message always carries at least the 28-byte header, so this path is only exercised by TRAP 1's own synthetic case -- a receiver bounding the frame at the message's OWN declared length, which never sees the trailer at all.)";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 parsing with the DECLARED bound is not an error
 EOF
                       ;;
@@ -396,7 +405,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "the barrier's 'b->bitmap_bit0++;' instrumentation, taken when an OPEN/ADD's nodemap byte has the impossible bit 0 set, is dropped. The bitmap is still read and processed identically -- only the counter that tells an operator the impossible bit fired goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the impossible bit is counted
 EOF
                       ;;
@@ -409,7 +418,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "phase2_commit_count()'s 'st->count_mismatch++;' is dropped from the branch that fires when the committed member count differs from the transition's own nodemap popcount. The count itself (and the %CNXMAN log line) is still computed and logged correctly -- only the counter an operator or a later test reads back goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and the disagreement with the nodemap is COUNTED -- which is exactly the width tell
 counted
 EOF
@@ -423,7 +432,7 @@ EOF
         suites_red)   echo "test_cnxman_recnx";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_recnx_shutdown()'s 'r->last_gasps++;' is dropped. The CLUB/CSB SHUTDOWN flags are still set and the last-gasp record is still emitted to the caller -- only the counter that tells an operator one was sent goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 counted once
 EOF
                       ;;
@@ -436,7 +445,7 @@ EOF
         suites_red)   echo "test_lock_host";;
         isolation)    echo "isolated";;
         why)          echo "the backend's INTERRUPTED return is dropped again, exactly as it was before rd vms-f87. MEASURED in lab run ci6-evac-11: the Linux backend does not sleep while a signal is pending, so the loop re-tested a predicate that was still false and called straight back in -- a tight loop taking and dropping res->lock, a CPU that never left the kernel, and 'rcu: INFO: self-detected stall on CPU 0 (9931 ticks this GP)' growing to 98,763 ticks while the fork thread on the other CPU served the cluster normally. The host bed reproduces it through the backend's interrupt seam, and the suite's own ctest timeout is what catches the spin.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
   with -ERESTARTSYS
 *** and returns -ERESTARTSYS ***
 *** the interrupted $ENQW COMES BACK (it does not spin in the kernel: the lab's CPU 0 never did) ***
@@ -455,7 +464,7 @@ EOF
         suites_red)   echo "test_dlm_scs_arm";;
         isolation)    echo "isolated";;
         why)          echo "the origination is removed and the flip goes back to being counted in silence, which is what shipped before. MEASURED COST, 2026-10-09 10:56Z on vaxlab-3: an OVMX master held EX on EVAC\$WORKLOAD, VAX1's \$ENQW EX queued at it correctly, OVMX released -- and VAX1 was never told. Its process sat in RWSCS indefinitely and could not even be STOPped. The engine HAD granted the lock; only the frame was missing. This is ci.6's last step.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** and the RELEASE path really CALLS the origination -- not just defines it ***
 EOF
                       ;;
@@ -468,7 +477,7 @@ EOF
         suites_red)   echo "test_dlm_pending";;
         isolation)    echo "isolated";;
         why)          echo "the full-table refusal is turned into an overwrite of slot 0. The frames in this table are what the deferred grants are BUILT from, so handing one waiter another waiter's frame would send a grant naming the wrong lock to the wrong node -- a fabricated completion of exactly the class INV-6 names, and the class that put a real VAX into a 65,000-frame storm (rd vms-b5b0). A full table has an honest answer already: refuse, count it, and let the requester's next ask be answered from the lock database.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** one more is REFUSED, not silently dropped on top of another waiter's frame ***
 and counted
 EOF
@@ -482,7 +491,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "the promotion is put back to setting only the join FSM's own state. MEASURED TWICE on a real VAX cluster: a node's CSV slot climbs with every rejoin (p. 7-25), and at slots 8 and 10 -- past the eight slots this executive has grounded of the transition nodemap -- Phase 2 correctly leaves this node's membership undecided, so NOTHING else recorded it. The console said 'this node is now a VAXcluster member' while the node's own CSB said otherwise: its weight vector gave it no directory entry while both VAXes directed every lookup at it (a directory split), and cl->state never reached MEMBER, so SHOW CLUSTER and \$GETSYI disagreed with the console.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
   ... and SELECTED, which the member count and the weight vector are taken from (p. 7-49)
   and cl->state is MEMBER, so SHOW CLUSTER agrees with the console line
 *** its OWN CSB carries MEMBER -- the fact the vector, the quorum readout and SHOW CLUSTER all read ***
@@ -498,7 +507,7 @@ EOF
         suites_red)   echo "test_dlm_ldwv";;
         isolation)    echo "isolated";;
         why)          echo "the member test is put back to SELECTED-only, which is what shipped before the 2026-10-09 ev7 lab run. On its NINTH rejoin of the same real VAX cluster in a day this node was assigned CSID 0x00010008 -- CSV slot 8, one past the eight slots this executive has grounded of the nodemap byte -- so nothing could set its SELECTED flag, and its own vector read '2 entries over 2 systems, 0 of them this node's' while BOTH VAXes directed every directory lookup at it. A DIRECTORY SPLIT in which the node had omitted ITSELF, the one member whose membership it does not need a bitmap to know. The slot climbs with every rejoin (p. 7-25), so this is a cliff any cluster walks off, not a corner case.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** all THREE systems are represented -- this node is no longer missing from its own vector ***
 *** and the entry is OURS (an own entry reads 0) -- so every lookup the VAXes send here is answered by the node they sent it to ***
 ONE entry: our LOCKDIRWT 1 against their 0 (p. 6-32), which is the '1 entries over 3 systems' line the earlier boot printed
@@ -516,7 +525,7 @@ EOF
         suites_red)   echo "test_dlm_ldwv";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_ldwv_rebuild()'s 'club->ldwv_build_refused++;' in the survey-verdict refusal branch (VMS_LDWV_E_WEIGHTS/VMS_LDWV_E_FOREIGN) is dropped -- range-anchored to that FIRST refusal site only, leaving the second (ldwv_fill_club's own VMS_LDWV_E_TOOBIG path) untouched. The refusal itself (no vector left behind, the %CNXMAN log line) still fires -- only the count goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and counted in the CLUB
 the refusal is counted
 EOF
@@ -530,7 +539,7 @@ EOF
         suites_red)   echo "test_lock_dir";;
         isolation)    echo "isolated";;
         why)          echo "the learner's bound is disarmed, so every distinct root name a VMS member puts on the wire leaves a preserved resource block behind for good -- the unbounded growth of a long-lived mixed cluster the bound exists to stop.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the learner keeps exactly its bound of new names
 and counts every name it declined
 EOF
@@ -544,7 +553,7 @@ EOF
         suites_red)   echo "test_dlm_mixed_master";;
         isolation)    echo "isolated";;
         why)          echo "dlm_resolve_master()'s call to dlm_route_own_directory() is short-circuited, so the engine assumes mastery of every resource the vector directs HERE without ever asking the directory it holds -- and a resource a real VAX already masters (its lookup answered and recorded in this node's own directory, rd vms-8219) is mastered HERE as well. Two masters for one resource, which is a lock manager agreeing that two systems may both grant EX on the same file. It also takes the engine's own claim recording with it, which is the same hole from the other side (rd vms-db2a).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** and the resource's MASTER is the VAX -- this node did NOT master it a second time ***
   the engine does not claim mastery
 exactly one frame left this node
@@ -575,7 +584,7 @@ EOF
         suites_red)   echo "test_dlm_dir";;
         isolation)    echo "isolated";;
         why)          echo "dir_same()'s group/mode comparison is disarmed, so the table matches by NAME ALONE across resource domains -- which is what it did before rd vms-b5b0 gave the engine a full resource identity to key on. One system's QMAN$ in UIC group 0 and another's in group 1 then collapse into ONE entry: a lookup for either is answered with the OTHER's master, and the directory routes a lock request at a system that does not master that resource.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** the same NAME in another UIC group / access mode is NOT this entry: no cross-domain answer ***
 *** and group 1's QMAN$ names VAX2 -- two resources, two masters, no coin toss ***
 another resource domain of that name is a different resource: the asker masters it
@@ -593,7 +602,7 @@ EOF
         suites_red)   echo "test_dlm_dir";;
         isolation)    echo "isolated";;
         why)          echo "vms_dlm_dir_remove()'s master check is disarmed, so a VMS system's op-0x04 removal deletes ANOTHER system's directory entry; the next lookup is answered 'you master it' and the resource has two masters -- the data-integrity failure the directory exists to prevent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a removal from a system that is not the master removes nothing
 the master's removal does
 EOF
@@ -607,7 +616,7 @@ EOF
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
         why)          echo "dlm_lkid_pair_put()'s shared guard ('req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET -> VMS_CODEC_E_INVAL'), which both vms_dlm_deq_build() and vms_dlm_blkast_build() call before writing a single byte, is disarmed. A $DEQ or BLKAST naming lock-id 0 -- the exact fc8540ae shape -- is built and sent instead of refused.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
   master_lkid==0 REFUSED on $DEQ (0x03)
   req_lkid==0 REFUSED on $DEQ (0x03)
   both lock ids 0 REFUSED (they do not cancel out)
@@ -625,7 +634,7 @@ EOF
         suites_red)   echo "test_dlm_requester";;
         isolation)    echo "isolated";;
         why)          echo "dq_route_check()'s 'f->hash_unknown_refused++;' in the to-directory/no-known-hash branch is dropped -- range-anchored to that FIRST site only, leaving the second (the redirect-resolve path's own copy) untouched. The refusal itself (DLM_REQ_E_NOHASH, nothing sent) still fires -- only the count goes silent. This route check is the SAME one both a fresh post AND every retransmit of an already-outstanding request run through, so both scenarios in the suite redden -- MEASURED, not merely the one the docstring first names.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 counted
 every refused attempt was counted
 EOF
@@ -639,7 +648,7 @@ EOF
         suites_red)   echo "test_dlm_hash";;
         isolation)    echo "isolated";;
         why)          echo "the 'name_len == 0u' half of vms_dlm_name_hash()'s range check is dropped, so a ZERO-LENGTH resource name is hashed -- the identity block's own length byte says 1..31 -- and *out is written for an identity the caller never had. The hash itself is untouched: the 1216 captured-value rows stay green, which is the point. A hash that answers for an empty name is exactly the shape of defect that puts a confident number on the wire for a resource that does not exist, and the directory node then masters it to the sender (memory cluster-promotion-gap).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a zero-length name is refused
 a refusal writes nothing (INV-6)
 EOF
@@ -653,7 +662,7 @@ EOF
         suites_red)   echo "test_dlm_hash";;
         isolation)    echo "isolated";;
         why)          echo "VMS_DLM_HASH_LEN_PROVEN is widened by hand to every length 1..31, including the two (23 and 29) the driven run pre-registered and the VAX never put on the wire. The arithmetic is untouched -- all 1216 captured rows stay green, which is the point -- but the executive would now ROUTE on a value for an identity no VMS node has been observed producing one for, and a wrong value makes the directory node scan the wrong chain and install the sender as master of somebody else's resource (memory cluster-promotion-gap). The test derives the masks from the two proof artifacts, so a hand-widened constant has nowhere to hide.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 VMS_DLM_HASH_LEN_PROVEN is exactly the observed lengths
 a 23-byte name is refused (never seen on the wire)
 a 29-byte name is refused (never seen on the wire)
@@ -668,7 +677,7 @@ EOF
         suites_red)   echo "test_lock_dir";;
         isolation)    echo "isolated";;
         why)          echo "dir_hash_compute() is pointed at the UNGATED vms_dlm_name_hash() instead of vms_dlm_name_hash_proven(), so the engine computes -- and ROUTES, and puts on the wire -- a value for an identity no VMS node has been watched hashing (supervisor mode; a UIC group in the system range). The value is arithmetically well-defined and that is exactly the danger: it does not fail locally, it makes the receiving directory node scan the wrong chain, miss the name and install OVMX as the master of a resource somebody else already masters, at 35 frames a second (memory cluster-promotion-gap).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** and NOTHING was put on the wire (the anti-LARP clause) ***
 the vector was not consulted: there was no value to index it with
 *** and the local-only mastery is COUNTED, not silent ***
@@ -688,7 +697,7 @@ EOF
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
         why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
   body[20:24] == 0x080001cd, the MASTER's handle -- which is why a release names its lock here: the GRANT assigned this requester
   body[20:24] == 0x0a0003a4, the MASTER's handle
   body[20:24] == 0x0a0003af, the MASTER's handle for the resource
@@ -720,7 +729,7 @@ EOF
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
         why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
 *** the new master's op-0x0f answer equals the real VAX's, byte for byte after the envelope ***
 *** a member's op-0x0f answer equals the real VAX's, body[28:32] KEPT ***
@@ -735,7 +744,7 @@ EOF
         suites_red)   echo "test_dlm_echo_guard";;
         isolation)    echo "isolated";;
         why)          echo "the guard is made to admit every answer, so a reply loop runs without end again. The guard is the TEETH that makes the measured storm class self-limiting whatever causes it next: 63.7 s of 1026-frames-per-second against a real VAX ended because a human noticed, not because either executive stopped. OVMX must never be the node that keeps feeding a peer a frame it cannot use (memory ovmx-never-crashes-a-peer).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** ...and the loud system is STILL capped after a crowd of quiet ones passed through: a peer cannot flush the guard by varying who asks ***
 *** and the run is still capped: capping the compared length does not cost the guard its teeth ***
 *** every one after that was WITHHELD: 63 s of storm becomes 8 frames ***
@@ -756,7 +765,7 @@ EOF
         suites_red)   echo "test_lock_host";;
         isolation)    echo "isolated";;
         why)          echo "the search follows the delivery process's other waiting locks as if they were the blocker's own wait-for edges: two VAXes contending for one resource become one owner blocking itself, and without the step budget the search re-pushes them forever with res->lock held -- the lab OVMX node spun CPU 0 into an RCU stall the moment a local CONVERT queued behind a VAX EX (2026-10-09 11:12Z).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** and it never needed the step budget: a remote holder's other waits are not this request's wait-for edges ***
 EOF
                       ;;
@@ -782,7 +791,7 @@ EOF
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
         why)          echo "the queued answer claims GRANTED (0xfa): the VAX would believe it holds a mode it does not -- two holders of one EX. Without any answer at all the VAX process waits in RWSCS for ever (measured, ci6-evac-13).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
 EOF
@@ -796,7 +805,7 @@ EOF
         suites_red)   echo "test_codec_cm";;
         isolation)    echo "isolated";;
         why)          echo "the volume close is answered 4, the routine close's common value: a value no real member ever gave this close (35/35 answered 5). A wrong close state bugchecked a coordinator before (E85).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** a MOUNT/DISMOUNT/CLUSTER close (request kind 6) is answered with the state the real VAX answered: 5 ***
   with body[24] = 5
 EOF
@@ -810,7 +819,7 @@ EOF
         suites_red)   echo "test_lock_dir";;
         isolation)    echo "isolated";;
         why)          echo "the DLM_DIR_UNROUTABLE arm of dlm_resolve_master() is turned back into a refusal (SS\$_UNSUPPORTED to the caller) -- which is EXACTLY the measured PR #1578 lab regression: a booted node with a cluster stack bound failed 74 ACP/RMS file operations with 3658 and STARTUP.COM died on '%RMS-E-FNF, error opening SYS\$STARTUP:VMS\$VMS.DAT', looping until DCL was OOM-killed. Baron's ruling on rd vms-dc2 had already judged this answer -- option (B), refusing, is 'NEVER' -- and the resource is mastered locally instead. CI never boots a clustered node, which is why only the lab caught it; this defect is what makes the host bed catch it.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** all 124 (length, access mode) combinations LOCK -- a clustered node can still open its own files ***
 *** the $ENQ is GRANTED -- a caller that cannot be refused (the ACP) keeps working ***
 ...and says plainly that THIS node masters it
@@ -834,7 +843,7 @@ EOF
         suites_red)   echo "test_codec_mscp";;
         isolation)    echo "isolated";;
         why)          echo "an extra vms_wire_put_le16() is inserted right after the OBSERVED body[48:50] tail write, stamping a fabricated 0xBEEF into body[50:52] -- the second half of the tail the header doc comment says must stay zero because it is undecoded, never invented.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 body[50:52] is left zero, never invented
 EOF
                       ;;
@@ -847,7 +856,7 @@ EOF
         suites_red)   echo "test_mscp_cl";;
         isolation)    echo "isolated";;
         why)          echo "vms_mscp_cl.c is not host-linkable (it names exec_kbackend.h), so its properties are proved by a source-scan of the SHIPPING file; a '$DUA' literal is inserted into the file, which is exactly the property test_glue_source()'s negative half exists to catch -- the glue spelling a device name instead of reading one the pure driver already derived.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and it spells NO device name -- the pure driver derives it from values this file read out of the executive
 EOF
                       ;;
@@ -860,7 +869,7 @@ EOF
         suites_red)   echo "test_mscp_cl_conn";;
         isolation)    echo "isolated";;
         why)          echo "h_present_sweep()'s 'c->connect_refusals++;' in the ops->connect()-returned-failure branch is dropped -- range-anchored to that SECOND site only, leaving the first (ops/ops->connect == NULL) untouched. The refusal itself (the leg goes back to IDLE, no conid is kept) still fires -- only the count an operator or a later retry-backoff check reads goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the refusal is counted
 the next beat does NOT retry a second later
 EOF
@@ -874,7 +883,7 @@ EOF
         suites_red)   echo "test_mscp_cl_fsm";;
         isolation)    echo "isolated";;
         why)          echo "vms_mscp_cl_fsm_on_gus_end()'s 'f->units_found++;' is dropped. The walk cursor (f->next_unit, read from the peer's own answer) still advances correctly and the caller's unit struct is still filled in -- only the running count of units discovered goes silent, in EVERY test that walks more than one unit -- MEASURED: the suite's own multi-unit walk asserts the final tally by name, not merely the single-unit case the docstring first names.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 one unit counted
 exactly the two AVAILABLE units were counted, not the OFFLINE terminator
 EOF
@@ -888,7 +897,7 @@ EOF
         suites_red)   echo "test_mscp_cl";;
         isolation)    echo "isolated";;
         why)          echo "cl_dispatch()'s 'f->ignored_events++;' in the empty-table-cell branch (a valid state/event pair with no handler) is dropped -- range-anchored to that site only, leaving the out-of-range guard's own copy above it untouched. The event is still discarded (no handler is invoked) -- only the count goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and the empty cell was COUNTED
 EOF
                       ;;
@@ -901,7 +910,7 @@ EOF
         suites_red)   echo "test_mscp_srv";;
         isolation)    echo "isolated";;
         why)          echo "vms_mscp_srv.c is not host-linkable (it names exec_kbackend.h), so its properties are proved by a source-scan of the SHIPPING file; an '_end_build' literal is inserted into the file, which is exactly the property test_glue_source()'s negative half exists to catch -- the glue composing an end message instead of handing the transfer to the pure server that does.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and it builds NO end message
 EOF
                       ;;
@@ -914,7 +923,7 @@ EOF
         suites_red)   echo "test_mscp_srv";;
         isolation)    echo "isolated";;
         why)          echo "the WRITE-opcode branch's 'f->write_protect_refusals++;' is dropped. The refusal itself (status 0x2006/WRITE_PROT, zero bytes claimed, no buffer named, nothing written) still fires exactly as Table B-2 requires -- only the count an operator reads back goes silent.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the refusal is counted
 EOF
                       ;;
@@ -927,7 +936,7 @@ EOF
         suites_red)   echo "test_mscp_srv";;
         isolation)    echo "isolated";;
         why)          echo "vms_mscp_srv_io.c is not host-linkable (it names exec_kbackend.h), so its properties are proved by a source-scan of the SHIPPING file; a 'cf_set_work_handler' literal is inserted into the file, which is exactly the property test_glue_source()'s negative half exists to catch -- the worker TU registering a fork-context handler, which design SS3.2.6 forbids for anything that calls the blocking block seam.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and the worker TU registers NO fork-context handler, so it cannot become fork-context code
 EOF
                       ;;
@@ -940,7 +949,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_open_cm()'s 'if (join_cm_take_held(j)) return;' -- the read of the target CSB's own cdt_conid before step 4 dials -- is disarmed, so this node opens its OWN VMS\$VAXcluster connect even when the executive already holds the pair's one. The glue binds cdt_conid the instant SCS mints an outbound Con.ID, so that second connect also re-binds the executive's record away from the live member-initiated CDT and the op-0x02 that starts admission never reaches it: exactly the sec 4(O.11) rejoin failure. The first-join arm is untouched (nothing is dialling an unknown system, so cdt_conid is 0 and both behaviours are identical).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 this node opens NO VMS$VAXcluster connect of its own when the executive already holds the pair's one
 ... its whole outbound census is the MSCP$DISK disk-client leg
 ... and the suppression is COUNTED, once
@@ -964,7 +973,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_h_relay() still SEES the coordinator's relay and still counts it, but returns before building the answer, so the member emits nothing. That is the pre-vms-4f0 behaviour in one property: measured against a real OpenVMS VAX V7.3 an unanswered relay made the VAX log a third node's membership request ~30 times without ever proposing it, and then stop transmitting altogether. The response recipe, the allowlist row and the table cells are untouched -- only the answer.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 EXACTLY ONE frame went back -- the answer the coordinator's whole admission gates on
 every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[9]: the opcode, echoed
@@ -982,7 +991,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_emit_reply() transmits through the join's own jops->send_msg on j->cm_conid instead of ops->respond -- i.e. every answer leaves on the connection to the member THIS JOIN DRIVES THROUGH, whoever asked. That is the shipped behaviour before rd vms-e8b, and it is exactly what put a real VAX1's class-0x04 departure-commit response onto the OVMX<->VAX2 connection: VAX2 took a fatal CNXMGRERR 193 us later, twice out of two attempts (tests/lab/captures/vms-e8b-cnxmgrerr-removenode-20261008/). The envelope is still stamped from the arrival CSB, so this is a single-factor mutation of the DESTINATION alone. The same mutation reopens stall-rig arm DX-1 (rd vms-f297): a member whose connection closed during its admission and came back as a NEW Con.ID answers on the dead handle the join is still holding, is refused (no-open-vc), and the real VAX coordinator never proposes the next joiner.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 nothing goes out on the connection this join still holds ...
 ... the answer rides the connection it ARRIVED on (rd vms-e8b)
 ... stamped out of THAT connection's dialogue, at 1
@@ -1004,7 +1013,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "coord_claim_club() advances the epoch again, as it did before rd vms-1ac, so the op-0x12 RELAY goes out at N+1 instead of N. Everything downstream still reads N+1 and still agrees with itself -- which is exactly why this went unnoticed against OVMX peers and only showed up when a real OpenVMS VAX answered the relay with ITS OWN epoch N and every answer was counted as an epoch_mismatch.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 op-0x12 RELAY carries the epoch the cluster is at
 ...and the CLUB has not moved yet either
 EOF
@@ -1018,7 +1027,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "coord_send_membrec() stops filling rec.epoch, so every membership record goes out with body[12:16] zero -- the shipped behaviour before rd vms-1ac. The records are otherwise complete and correct, which is the point: a receiver cannot place them in any transition, and a real OpenVMS VAX V7.3 handed them took a fatal CNXMGRERR.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 EVERY op-0x05 record carries the transition's epoch -- the field OVMX used to leave at zero
 EOF
                       ;;
@@ -1031,7 +1040,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_coord_select()'s coord_outranked_for_admission() call is disarmed with '0 &&', so this node takes EVERY op-0x02 it is handed and appoints itself transition coordinator even when another member outranks it. That is the shipped behaviour before rd vms-1ac, and on the lab rig it is how a sitting OVMX member came to drive a transition at a real OpenVMS VAX V7.3 that the VAX bugchecked on.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 NOT the selected coordinator: no relay
 ...and not one frame of any kind: the op-0x02 is DISCARDED, which is what a real non-coordinator does
 the discard is COUNTED
@@ -1049,7 +1058,7 @@ EOF
         suites_red)   echo "test_pe_vc";;
         isolation)    echo "isolated";;
         why)          echo "vc_hold() refuses every frame, so OVMX is back to the window-1 receiver that discards a reordered frame and makes a real VAX wait ~3 s to re-send it -- 44 of 94 back-to-back pairs on the stall rig's jittered tap (tests/lab/captures/vms-ec2-vc-reorder-20261005).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ...and KEPT, inside the window it granted
 6 filled the hole: OPEN circuit acknowledges 7 (highest contiguous)
 6 filled the hole: and the WIRE carries 7
@@ -1073,7 +1082,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "the block keeps the dead Con.ID at NEW, join_reach_ours() never dials it again, and a joiner stalled mid-connect waits forever for connectivity to a member -- stall-rig arms K-5/K-11.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 *** and it claims NO connection, so it is dialled again ***
 EOF
                       ;;
@@ -1086,7 +1095,7 @@ EOF
         suites_red)   echo "test_pe_vc";;
         isolation)    echo "isolated";;
         why)          echo "h_vc_rx_start()'s own-START is disarmed, so a re-forming circuit whose channel was ALREADY back answers the peer's START with a STACK and nothing else -- h_vc_own_start() cannot help, because the CHANNEL_UP it needs was spent before the START arrived. MEASURED consequence, rig arm D-5: the real OpenVMS VAX V7.3 discarded the late START, re-STARTed every 5 s for the rest of the run, and 20 s later each side removed the other. The FIRST-formation case is untouched (the same verifies>1 guard).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ...and, because this is a RE-formation, answering it ALSO starts one from this side -- the frame the real VAX waits for and never got
 and it answered with TWO 0x41 frames, not one
 EOF
@@ -1100,7 +1109,7 @@ EOF
         suites_red)   echo "test_pe_vc";;
         isolation)    echo "isolated";;
         why)          echo "h_vc_rx_start() no longer takes the echo from its channel, so a circuit re-formed by the PEER'S START keeps stamping the number the previous generation was formed with. MEASURED consequence, rig arm M2-19: the real OpenVMS VAX V7.3 advertised 2, its START beat its b4 to the circuit, this node answered START+STACK stamped 1, and the VAX discarded both and re-STARTed every 5 s until each side removed the other. CHANNEL_UP's own take is untouched, which is why the b4-first order (arm M2-7) still passes.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 every 0x41 in answer carries 2, the number the peer advertises now -- never the dead generation's 1 the real VAX discarded for 20 s
 and the circuit keeps stamping 2 on everything after
 EOF
@@ -1114,7 +1123,7 @@ EOF
         suites_red)   echo "test_cnxman_recnx";;
         isolation)    echo "isolated";;
         why)          echo "recnx_tick_one()'s in-flight guard is disarmed, so the beat issues a new VMS\$VAXcluster CONNECT_REQ every second whether or not the previous one is still being answered. MEASURED consequence, rig arm P-9: a node woken from a 20 s stall answered ~1 s late, every ACCEPT arrived after the block had been re-bound to a newer attempt, six CONNECT_REQs went out, the peer accepted five, the block owned none, and the window ran out with a member removed. Attempts that ENDED (failed, no path) still re-fire once a second -- only the held beat goes.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 t=2000: NO second CONNECT over the one being answered
 t=3000: still none
 one attempt, not three
@@ -1130,7 +1139,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_outranks() answers yes to every later candidate, so the member asked is the last askable block in CLUB (discovery) order -- the p. 7-38 queue-tail rule this code ran before rd vms-e88. MEASURED consequence, rig arm S-1: the joining OVMX node discovered the other OVMX node 2 s before the real VAX, asked it -- an outranked member that discards the request by design -- and was never admitted.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 trio A/A2 order: the higher member is asked though the lower was discovered last (nearest the CLUB tail)
 nobody has spoken: the drive starts toward the highest
 a connected system that has said nothing moves nothing
@@ -1147,7 +1156,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_admission_held() no longer holds a request while the members advertise more members than this node has connectivity with, so the join asks the one member it can see. MEASURED consequence, rig arm S-1: that member was the outranked OVMX node, which discards the request by design (rd vms-1ac), and the joiner was never admitted.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... a RETARGET, not a decline: nobody had been asked
 ... the third is op-0x02
 MODEL, PARAMS, then the request, on ITS connection
@@ -1172,7 +1181,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_admission_held() no longer waits for the member being asked to send its own PARAMS; a member that has said nothing is treated as one that said 'no cluster'. MEASURED consequence, rig arm T-15: the join acted on the real VAX before the VAX had said a word on that connection, and the VAX never answered the request.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... held as UNHEARD
 a member that has sent no PARAMS is not asked
 and said on the console
@@ -1193,7 +1202,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_admission_held() no longer waits one beat after this node's own MODEL/PARAMS, so MODEL, PARAMS and CONFIG leave in one burst. MEASURED consequence, rig arm T-15: exactly that three-frame burst went to the real VAX and the VAX never acknowledged the request.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... and the re-offer counter does not move
 ... but NOT op-0x02 in the same breath (rd vms-e88; spec sec 4(o): 0x02 inside the identity burst leaves the peer silent)
 ... re-offered on that beat, once
@@ -1212,7 +1221,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_admission_held() no longer moves the join onto the CSB's own Con.ID, so after a crossing the join keeps the connection the real VAX abandons; its E77 gate then refuses to stamp there and no request reaches any connection.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 E77: the kept connection's dialogue opens at 1
 on the kept connection, after this node's identity there
 one request in the world
@@ -1228,7 +1237,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_members_for() drops the peer_is_ours test, so a foreign connection manager is sent a member-form count beside the zero member-only fields OVMX cannot ground: a record in a shape no real node writes.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a foreign connection manager still hears 0
 and nothing new goes to the foreign one
 EOF
@@ -1242,7 +1251,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_admission_held() asks the member it is driving through even when that member's PARAMS carried a member count of 0 -- a system that is joining too and cannot admit anybody. MEASURED consequence, rig arm E2-1 (the first build of this item): the joining OVMX node's first request went to the other OVMX node while it was still being admitted, went unanswered for five seconds, and admission waited for the re-issue.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... and not one request went out
 ... as an exhausted round, the fact the founding election reads
 ... said on the console
@@ -1267,7 +1276,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_hold() no longer dials, so a join held for connectivity waits for a connection nobody will make: an OVMX member dials nobody its own join is not driving through, and the joiner is driving through the real VAX. MEASURED consequence, stall-rig arm M-8 of this item: OVMXB held 'waiting for connectivity to every cluster member' for the whole run, the VAX counting two members and OVMXB reaching one.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... that system
 and not again while that connect stands
 so it dials the OVMX system nobody had connected, once
@@ -1282,7 +1291,7 @@ EOF
         suites_red)   echo "test_cnxman_genesis_negctl";;
         isolation)    echo "isolated";;
         why)          echo "coord_peer_in_cluster() no longer reads what the system advertised in its op-0x01 PARAMS, so only a CSID this node learned or a MEMBER flag bars founding. MEASURED consequence, stall-rig arm N-3 of this item: a voting OVMX node beside the real VAX -- which had said it was a member -- founded a cluster of its own with the other OVMX node, and the real VAX admitted that node into a second cluster.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... because that system belongs to a cluster
 EOF
         ;;
@@ -1295,7 +1304,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_backoff_pending() no longer ends a no-member back-off when a system says it is a member, so the joiner sits out the whole RECNXINTERVAL. MEASURED consequence, stall-rig arm N-3 of this item: the joiner found only the other joining OVMX node, backed off 20 s, and while it waited that node founded a cluster of its own.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a member appearing: the next start runs, a second later, not twenty
 ... counted as a back-off cut short
 EOF
@@ -1309,7 +1318,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_drive_to_member() never moves the drive, so a join that started toward another joining system waits in VC CONNECT for a connect that system never accepts. MEASURED consequence, stall-rig arm P-2 of this item: the joiner drove toward the other OVMX node (the highest SCSSYSTEMID at CLUSTER_START) while it was being admitted, and sat in VC CONNECT for the rest of the run beside a real VAX that had dialled it and said it was a member.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 its PARAMS says it is a member: the drive moves to it
 ... that system
 ... straight to ADMIT, where every hold still applies
@@ -1327,7 +1336,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "csb_dialogue_may_continue() ignores cm_phase1_named, so before Phase 2 has set SELECTED a lost connection to the coordinator restarts its dialogue at 1/0. MEASURED consequence, stall-rig arm P-3: the joiner, frozen between its Phase-1 answer and the GO, re-sent MODEL/PARAMS at send-msg# 1 on the connection the real VAX was re-establishing as a member's, and the VAX bugchecked CNXMGRERR.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and the send side
 counted as CARRIED
 not SELECTED yet, but in the answered transition: the re-established connection carries the ack (F5: 266)
@@ -1342,7 +1351,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "barrier_h_open() no longer records the coordinator and the nodemap's systems on their CSBs, so nothing entitles a connection lost before the GO to carry its dialogue -- the P-3 CNXMGRERR shape.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and the member the nodemap names
 it stands through the GO and the barrier
 the coordinator's block is named at Phase 1
@@ -1358,7 +1367,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "barrier_phase1_clear() clears nothing, so a system stays entitled to carry its dialogue after the transition that named it has ended -- a later, unrelated loss would carry a dialogue E77 says must restart.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 an abandoned transition un-names too
 and ends with the transition
 and so does one whose coordinator was lost for good
@@ -1373,7 +1382,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_cm_connection_gone() no longer holds an ADMIT join whose transition is open, so the loss sends it to VC CONNECT and it re-drives MODEL/PARAMS and a second request. MEASURED consequence, stall-rig arm P-3: the real VAX, re-establishing the joiner as a member, bugchecked CNXMGRERR on the fresh identity burst.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ... and said on the console
 ... it is held, counted
 no MODEL, no PARAMS and no second request on the re-established connection (F5/F6: none)
@@ -1390,7 +1399,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "join_reoffer_burst() re-offers the identity burst and the membership request on a re-established connection while the transition runs, because the burst mask is per-Con.ID. A real V7.3 joiner re-offered nothing there (oracle F5/F6).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 no MODEL, no PARAMS and no second request on the re-established connection (F5/F6: none)
 with exactly the one membership request it made
 EOF
@@ -1404,7 +1413,7 @@ EOF
         suites_red)   echo "test_cnxman_glue";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_transition_peer_lost() abandons the participant's barrier on every close again, so a joiner that loses its coordinator's connection across the GO drops the transition the coordinator is about to re-send -- the P-3 CNXMGRERR shape.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 vms-c06: the participant half fires only for the block the barrier is taking its transition FROM
 EOF
         ;;
@@ -1417,7 +1426,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "csb_dialogue_may_continue() ignores cm_new_incarnation, so a member re-establishes a re-incarnated system's connection as the old conversation, with the 'already introduced' mask. MEASURED consequence, stall-rig arm F-13: the joiner, removed after a 30 s stall and back after CLUEXIT, never heard the OVMX member's PARAMS and waited for connectivity for the rest of the run.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a NEW incarnation is a new conversation: 1/0 (p. 7-25)
 and nothing is recorded as already said to it -- this node introduces itself again
 the fresh bind ends the record
@@ -1432,7 +1441,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "barrier_h_reopen() refuses a new epoch while a barrier is committed. MEASURED consequence, stall-rig arms F-13/H-13: an OVMX member stuck in the addition barrier of a joiner the real VAX had timed out refused the VAX's removal, and the VAX later timed the member out too.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ...and is now the transition
 the removal supersedes the stalled barrier
 EOF
@@ -1446,7 +1455,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "barrier_h_go_in_step() treats every GO in STEP as a repeat, so a class-0x03 removal that starts at op 0x0a never reaches a member whose barrier stalled.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a bare removal GO supersedes it too, and its barrier starts
 EOF
         ;;
@@ -1459,7 +1468,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "the resume from the connect data is disarmed, so a node that accepts a real VAX's re-establishing connect (cd[12:14] = 3) opens at send 1 / ack 0 -- the CNXMGRERR of stall-rig arm N2-4.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the next origination is 4 -- what the VAX waits for
 and it acks the 3 this node advertised, not 0
 the next origination is 3 -- where the VAX continues
@@ -1477,7 +1486,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "the adoption is disarmed, so a pre-admission joiner answers a real VAX that continued the dialogue (send 3, ack 2) with send 1, ack 0 -- the CNXMGRERR measured on stall-rig arms L-3 and L-9.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the peer continued: this node resumes from its ack, so the next origination is 3, not the 1 that bugchecked it
 the transaction id carries
 counted
@@ -1495,7 +1504,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_csb_second_closed() no longer recognises the pair's spare connection, so the peer disconnecting the redundant half of a crossing falls through to the ordinary remote-disconnect path: this node stops asking and the window ends in a removal while the connection the peer kept stands open. MEASURED consequence, rig arm Q-2: both ends re-dialled, both accepted, the real OpenVMS VAX V7.3 dropped the one it had initiated and kept this node's, and this node removed the VAX from its cluster.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the peer closing the spare is NOT a loss of the system
 the spare is gone
 EOF
@@ -1509,7 +1518,7 @@ EOF
         suites_red)   echo "test_pe_vc";;
         isolation)    echo "isolated";;
         why)          echo "vc_log_start_refused() returns before saying anything, so vc_begin_formation() puts the circuit back in CLOSED with nothing on the console -- the state that looks exactly like a node that never rejoins ('%PEA0, channel verified' and then silence). The counters are untouched, so the INV-6 accounting is unaffected: only the line goes.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and it is SAID on the console, not only counted
 ...naming WHICH read came back empty
 EOF
@@ -1524,7 +1533,7 @@ EOF
         suites_red)   echo "test_codec_cm";;
         isolation)    echo "isolated";;
         why)          echo "vms_cm_conndata_build() writes 0 into content[106:108] instead of the caller's peer_ack_msg, so the two bytes that follow it collapse to the short form as well. The four rd vms-b87 rows are all ack-0 and stay green; only the rd vms-8c54 oracle rows -- two real OpenVMS VAX V7.3 members reconnecting, whose connects carry 14811 and 10249 -- go red. MEASURED consequence, rig arms N-6 and V-1: a zero there says 'I have taken nothing from you' to a peer that holds this node as a member, and the real VAX's connection manager bugchecked CNXMGRERR in the same millisecond as its own ACCEPT_RSP.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 VAX1 re-establishing: it carries the 14811 it had TAKEN from VAX2
 VAX2 accepting it: its own 10249, not VAX1's number
 VAX1 -> VAX3: 1798, NOT the 1799 VAX3 kept retransmitting unanswered
@@ -1540,7 +1549,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_csb_dialogue_acked() takes the peer's position but never applies it, so a re-established connection resumes from this node's own last send. The arming, the one-frame scope and the never-forward rule are all untouched -- only the rewind itself goes. MEASURED consequence, rig arm M2-5: this node sent send=103 twice on the old Con.ID pair, the real OpenVMS VAX V7.3 re-established and acked 102 having never seen 103, this node's next frame carried 104, and the VAX bugchecked CNXMGRERR.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
 a LATER ack does not walk the counter back: the resume is armed for exactly one frame
 an ack AHEAD of this node's own send is refused
@@ -1557,7 +1566,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "csb_dialogue_may_continue() is disarmed to return 0, so cnxman_csb_bind_reconnect() always falls through to the E77 reset and a re-established connection restarts at send-msg# 1 / ack 0. Every NOT-entitled case still resets, so nothing about E77 changes -- only the entitled one, which is the case both real OpenVMS VAX V7.3 members took when they continued 10249 -> 10250 and 14811 -> 14812 across a new Con.ID pair.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 ...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
 ...which is the cell the connect data carries
 a LATER ack does not walk the counter back: the resume is armed for exactly one frame
@@ -1592,7 +1601,7 @@ EOF
         suites_red)   echo "test_pe_vc";;
         isolation)    echo "isolated";;
         why)          echo "pe_frame_reaches_port() accepts every Ethernet destination ('1 ||'), so a frame a flooding hub or a promiscuous adapter delivers -- VAX1 talking to ANOTHER node -- is bound to this node's circuit by its source address alone: the foreign START re-forms our OPEN circuit (SCS told it went down, a STACK sent back) and the foreign sequenced messages are taken as ours, which is exactly the in-browser L2 hub's flood (tools/cluster-web-demo/l2/hub.mjs) the item names.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a START for another station does not re-form our circuit
 a sequenced message for another station is not taken
 and SCS is told nothing went down
@@ -1612,7 +1621,7 @@ EOF
         suites_red)   echo "test_codec_cm";;
         isolation)    echo "isolated";;
         why)          echo "vms_cm_open_carries_nodemap() answers yes for op 0x09 only, so the REMOVE open is read as carrying no nodemap -- the pre-af4 reading. A participant then commits a removal with membership untouched and keeps the removed system SELECTED: MEASURED on the rig, a member SIGKILLed and booted again stayed a MEMBER row on the surviving OVMX node with its old CSID for 300 s and the returning node was never readmitted.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and it carries a nodemap
 body[55] == the slots the removal keeps
 its span is readable
@@ -1627,7 +1636,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_club_find_sysid() matches a DEAD block, so every lookup by SCSSYSTEMID -- the accept path's csb_ensure(), the discovery sweep, the join -- lands on the old incarnation's block and the new incarnation is driven through a dead one: the REACCEPT-into-the-old-block failure the rig measured.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and it is what the system is found as from now on
 the SCSSYSTEMID no longer finds the old incarnation
 EOF
@@ -1641,7 +1650,7 @@ EOF
         suites_red)   echo "test_pe_vc";;
         isolation)    echo "isolated";;
         why)          echo "pe_channel_expire_if_due() is disarmed at its first line, so a receive path refreshes a deadline that has ALREADY passed and the channel is never declared lost. The tick still finds it on the next beat, so nothing about an ordinary timeout changes -- only the stalled-guest case, where the frames were DEFERRED rather than destroyed and arrive before any beat. MEASURED consequence, rig arm N-1: the woken member wrote sequenced traffic on a circuit the real OpenVMS VAX V7.3 had closed 8.2 s earlier and answered its fresh START with a STACK from a circuit it still believed was OPEN; 20 s later each side removed the other.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the deferred beat ran: the channel went, not the circuit's own TIMVCFAIL
 and SCS was told the circuit is gone
 the circuit is NOT still open on a channel that timed out
@@ -1658,7 +1667,7 @@ EOF
         suites_red)   echo "test_pe_formation";;
         isolation)    echo "isolated";;
         why)          echo "pe_gasp_already_sent() is reverted to the once-per-PORT rule by returning 1 for any port that has ever gasped. A real node reboots between departures and so gets a fresh port each time; OVMX's CLUEXIT does not, so under this defect the SECOND and every later re-incarnation announces NOTHING and every peer keeps a CSB for a node that has already thrown its cluster state away -- the state the measured E81 CNXMGRERR family lives in. The last gasp is still built, still counted and still correct for the FIRST departure, so nothing but the per-incarnation property goes red.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a re-incarnated node ANNOUNCES ITS DEPARTURE AGAIN
 and it is the same b1 marker, not some other frame
 both are counted
@@ -1674,7 +1683,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_coord_select()'s DEPARTURE branch has its coord_open_is_grounded_for() call disarmed with '0 &&', so a survivor opens a class-0x03 removal toward a system that has NOT proved it runs this implementation -- putting an op-0x08 with 44 zero bytes where a real coordinator writes two VMS absolute-time quadwords and four longwords. MEASURED consequence, jittered three-node rig arm V2-1: the real OpenVMS VAX V7.3 put its last-gasp datagram on the multicast in the SAME millisecond.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the removal is REFUSED, not driven
 ...and named OPEN_UNGROUNDED
 ...and counted, so the gap is visible without a capture
@@ -1691,7 +1700,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "coord_send_open() never attaches the cells it filled, so the open a real VAX member would receive is the zero-celled one that bugchecked a real V7.3 (rd vms-1ac) -- and the send-time withhold then keeps it off the wire, so an admission a real VAX takes part in never completes.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the foreign member got its op 0x09
 [20:22] the slot after the joiner's (4 -> 5)
 [22:24] quorum: (CEVOTES + 2) / 2 = (6 + 2) / 2
@@ -1719,7 +1728,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "a fact lost between the gate and the send (the clock, here) no longer withholds the open: a real VAX member receives an op 0x09 with zeros where its own coordinator writes facts -- the frame after which a real V7.3 bugchecked CNXMGRERR (rd vms-1ac).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the foreign member is sent no open at all
 withheld from every participant alike, and counted
 EOF
@@ -1733,7 +1742,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "barrier_h_open() no longer records them, so an OVMX member admitted by a real VAX holds no founder or formation time and can never coordinate the next admission -- the vms-f297 stall (the VAX defers to the higher-numbered OVMX member, which refuses) comes back for good.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the founder's SCSSYSTEMID is kept
 and the formation time
 and the slot counter
@@ -1748,7 +1757,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "a member's status-00 answer to a membership record is taken as an acknowledgement and the open follows it -- the exact sequence after which a real OpenVMS VAX V7.3 bugchecked CNXMGRERR on lab arms PF-3 and PK-1.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 no open goes out after a rejection
 the rejection is counted
 and the transition is abandoned
@@ -1764,7 +1773,7 @@ EOF
         suites_red)   echo "test_scs_fsm";;
         isolation)    echo "isolated";;
         why)          echo "h_rx_accept() drops the accept's connect data, so the VMS\$VAXcluster SYSAP cannot see that a real VAX accepting a re-dialled connection CONTINUED the conversation -- the CNXMGRERR of stall-rig arms GM-14, TG-3 and HM-11.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 A's CDT holds the ACCEPT's connect data
 EOF
                       ;;
@@ -1777,7 +1786,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_csb_note_accept_conndata() ignores the ACCEPT's count: this node speaks at send 1 / ack 0 on a connection a real VAX has just re-established at send 3 -- CNXMGRERR (GM-14, TG-3, HM-11).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the next origination is 3 -- where the VAX continues
 and it acks the 2 our CONNECT advertised
 what this node said about itself stands on the new connection: nothing is re-introduced
@@ -1793,7 +1802,7 @@ EOF
         suites_red)   echo "test_cnxman_csb";;
         isolation)    echo "isolated";;
         why)          echo "the resume leaves the advert mask on the dead connection, so this node re-introduces itself (MODEL/PARAMS) mid-stream on the continued conversation -- the frame a real VAX bugchecked on (rd vms-8c54 arm F-4).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 what this node said about itself stands on the new connection: nothing is re-introduced
 EOF
                       ;;
@@ -1806,7 +1815,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "the request goes out while a connected member has not been sent this node's MODEL/PARAMS: on lab arm PK-1 the coordinator's record about OVMXB reached a real VAX holding no PARAMS for it, which answered status 00 and bugchecked CNXMGRERR on the open.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the request is held while the other member is owed this node's identity
 and the hold is counted
 ...which goes out to it at once
@@ -1829,7 +1838,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "coord_enter_open() sends the open in the same instant as the records: a real OpenVMS VAX V7.3 member, sent op 05 and op 09 together by an OVMX coordinator, bugchecked CNXMGRERR (lab arm PF-3), where its own coordinator always sends op 05, takes the answer, then op 09 (lab run XF).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 and NO open yet: their answers come first
 the coordinator waits in RECORDS
 each 0x81/0x05 consumed and counted, none unrouted
@@ -1848,7 +1857,7 @@ EOF
         suites_red)   echo "test_codec_cm";;
         isolation)    echo "isolated";;
         why)          echo "vms_cm_step_ack_build() drops the response marker at body[18]: the ack goes out 10 02 00, which OVMX's own participant never reads -- and a real OpenVMS VAX V7.3 member, sent such an ack by an OVMX coordinator, re-sent its step and bugchecked CNXMGRERR (lab arm PF-2).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
   byte-identical to the real ack after the stamp
   body[18] = the response marker
 EOF
@@ -1862,7 +1871,7 @@ EOF
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
         why)          echo "the join FSM swallows every op-0x0b in [MEMBER], so a node that was itself admitted and then coordinates never sees its participants' step reports: the real VAX member of lab arm PF-1 reported step 1 and was never released.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 a step REPORT is not the join's or the participant's: it is handed on
 and is not counted as delivered to the participant
 EOF
@@ -1876,7 +1885,7 @@ EOF
         suites_red)   echo "test_cnxman_barrier";;
         isolation)    echo "isolated";;
         why)          echo "cnxman_phase2_commit() skips cnxman_club_note_reconfig(), so after a removal this node's next ADD open still carries the pair from before it -- a different number from the one a real V7.3 member puts there (KR-1: 01 01 before the removal, 02 02 after).";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 the pair is held
 its members: the two the removal keeps
 its votes: theirs, 2 + 1
@@ -1891,7 +1900,7 @@ EOF
         suites_red)   echo "test_cnxman_coord";;
         isolation)    echo "isolated";;
         why)          echo "coord_admit_foreign()'s gap test is disarmed with '1 ||', so this node opens a class-0x02 transition toward a system that does not run this implementation even when it holds no founder, formation time or clock -- the relay and commit go out, and only the send-time withhold stands between a real VAX and the zero-celled op 0x09 after which a real OpenVMS VAX V7.3 bugchecked CNXMGRERR 1.3 ms later.";;
-        require_fail) cat <<'EOF'
+        require_fail) hd_lines <<'EOF'
 nothing is originated: no relay, no commit, and above all no op-0x09 this node cannot build faithfully
 the refusal is COUNTED
 ...and named
@@ -2624,13 +2633,17 @@ cmd_selftest() {
             continue
         fi
 
-        if _st_out=$(cmd_apply "$_st_d" "$_st_tmp/tree" 2>&1); then
+        # The re-apply's output goes to a scratch file and is matched with
+        # shell builtins: a $(...) capture plus an echo|grep was a fork and
+        # an exec per defect (rd vms-7a8e).
+        if cmd_apply "$_st_d" "$_st_tmp/tree" >"$_st_tmp/reapply" 2>&1; then
             echo "FAIL: $_st_d: applying it TWICE succeeded. Either the mutation is repeatable"
             echo "      (so it is not the single minimal edit it claims to be) or the"
             echo "      injection-landed check never fires -- in which case a dead anchor"
             echo "      would be reported as a caught defect."
             _st_rc=1
-        elif echo "$_st_out" | grep -qF 'BROKEN FIXTURE'; then
+        elif _st_out=""; IFS= read -r -d '' _st_out <"$_st_tmp/reapply" || :
+             case "$_st_out" in *'BROKEN FIXTURE'*) true;; *) false;; esac; then
             echo "  ok: $_st_d: a no-op re-apply is reported as BROKEN FIXTURE (the check has teeth)"
         else
             echo "FAIL: $_st_d: re-apply failed, but not with BROKEN FIXTURE: $_st_out"
@@ -2708,7 +2721,7 @@ $_st_bogus"; cmd_coverage) 2>&1 )
 
     if [ "$_st_rc" -eq 0 ]; then
         echo "PASS: every defect's sed mutation injects into the current tree (executed,"
-        echo "      real sed + cmp against a throwaway copy), its injection-landed check"
+        echo "      real sed, before/after bytes compared, on a throwaway copy), its injection-landed check"
         echo "      demonstrably fires on a no-op re-apply, every require_fail text"
         echo "      appears literally in its suite's source (a text search, not a run --"
         echo "      only run_host_negctl.sh actually builds and runs anything), and"

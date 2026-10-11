@@ -339,8 +339,7 @@ int dcl_tt_getc(int poll)
 /*
  * The /PAGE pager (rd vms-457), as DIRECTORY/PAGE drives the VAX V7.3 console
  * (keystroke PG.DIR): the command's output is gathered, then shown a screen
- * at a time. Output that fills the screen shows the page length less one
- * line, then the status line
+ * at a time. A screen is the page length in lines, then the status line
  *     " RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit"
  * at the start of the last line, and waits, unechoed, for a key: RETURN or
  * SPACE shows the next screen, CTRL/Z (or CTRL/Y) ends it. The last screen is
@@ -384,7 +383,6 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
         "\r RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit";
     char line[4096];
     long nlines = 0, shown = 0;
-    int body;
 
     if (!pg->tmp)
         return;
@@ -398,7 +396,6 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
         if (strchr(line, '\n')) nlines++;
     if (page_len < 3)
         page_len = 24;
-    body = page_len - 1;
     rewind(pg->tmp);
 
     /* output that fits on one screen goes out as the records it is, the
@@ -422,7 +419,7 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
         line[l++] = '\n';
         pg_raw(line, l);
         shown++;
-        if (shown % page_len == body && nlines - shown > 0) {
+        if (shown % page_len == 0 && nlines - shown > 0) {
             char k[2];
             uint16_t t = 0;
             int r;
@@ -435,7 +432,6 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
                 pg->tmp = NULL;
                 return;
             }
-            shown++;                    /* the status line's row */
         }
     }
     /* the last screen, filled out with empty lines */

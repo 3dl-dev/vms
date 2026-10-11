@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case EDT.KEYPAD (OpenVMS VAX V7.3 OPA0:)
 # EDT keypad on a VT100: cursor, DEL C/W/L and UND, SELECT CUT PASTE, FIND and FNDNXT, ADVANCE/BACKUP, ^Z to line mode
-# case-sha256 c6a925b4ec3a5c58977a930540745c7a9d13e7d42af9394e43cbd1f168a95e81
+# case-sha256 7279f6bc7d5c5aaae0f0cee02e40b1245465deb4ebbb076bf943214ce18ce049
 @start loggedin OK
 === STEP V0 quiet
 === STEP V1 quiet
@@ -17,8 +17,12 @@
 | GAMMA<CR><LF>
 | DELTA EPSILON<CR><LF>
 | [EOB]<ESC>[H
-=== STEP R
-| <ESC>[?8l<ESC>[2C<ESC>[?8h<ESC>[?8l<ESC>[C<ESC>[?8h
+=== STEP R1
+| <ESC>[?8l<ESC>[C<ESC>[?8h
+=== STEP R2
+| <ESC>[?8l<ESC>[C<ESC>[?8h
+=== STEP R3
+| <ESC>[?8l<ESC>[C<ESC>[?8h
 === STEP X
 | <BS>HA BETA<ESC>[K<ESC>[7D
 === STEP T

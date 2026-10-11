@@ -11,7 +11,9 @@ V6 type "DELTA EPSILON\r" gap=0.05 settle=0.5 quiet
 V7 send "^Z" expect="\*$" quiet
 V8 send "1\r" expect="\*$" quiet
 C send "CHANGE\r" settle=3
-R send "{RIGHT}{RIGHT}{RIGHT}" settle=1
+R1 send "{RIGHT}" settle=1
+R2 send "{RIGHT}" settle=1
+R3 send "{RIGHT}" settle=1
 X send "{DEL}" settle=1
 T type "Z" settle=1
 W send "{KPMINUS}" settle=1

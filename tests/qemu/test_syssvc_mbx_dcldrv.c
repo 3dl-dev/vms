@@ -361,6 +361,22 @@ int main(int argc, char **argv)
     (void)sys$dassgn(in_chan);
     (void)sys$dassgn(out_chan);
 
+    /* TAKE BACK THE SYSTEM-WIDE NAMES (rd vms-7ce). SYS$INPUT and SYS$OUTPUT
+     * were published in LNM$SYSTEM, so EVERY later DCL.EXE on this boot
+     * translates them. They normally go with the mailboxes, but anything that
+     * keeps a mailbox alive -- the DCL child's row surviving its kill (negctl
+     * release-leader-zombie-pcb-kept) -- left every later suite's DCL reading
+     * its commands from a mailbox no one writes, and they hung. Deleting the
+     * names here keeps this suite's state to this suite. */
+    {
+        struct dsc$descriptor_s systab = mkdsc("LNM$SYSTEM");
+        uint32_t d1 = sys$dellnm(&systab, &indsc, NULL);
+        uint32_t d2 = sys$dellnm(&systab, &outdsc, NULL);
+        CHECK((d1 == SS$_NORMAL || d1 == SS$_NOLOGNAM) &&
+              (d2 == SS$_NORMAL || d2 == SS$_NOLOGNAM),
+              "the suite's SYS$INPUT/SYS$OUTPUT are gone from LNM$SYSTEM when it ends");
+    }
+
     printf("=== test_syssvc_mbx_dcldrv: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

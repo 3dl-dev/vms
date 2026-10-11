@@ -482,6 +482,23 @@ struct vms_cm_membership_rec {
  *
  * STAMP with is_response=0.
  */
+/*
+ * rd vms-64b: THE DLM REBUILD SEQUENCE A JOINER IS TOLD. The coordinator's
+ * class-0x02 transition OPEN (cat 0x01 op 0x09) carries the cluster's current
+ * DLM rebuild sequence N three times: body[92] (u8), body[100:102] and
+ * body[102:104] (LE u16). MEASURED: in both LDW-0 joins on hand (a real VAX2,
+ * ds3; OVMXE, r20) the joiner's FIRST DLM send carried exactly this N and no
+ * DLM frame reached it before; across the corpus the next DLM header equals it
+ * (6) or it + 1 when the transition rebuilt the directory (20), never anything
+ * else. VMS_CODEC_OK with *n; VMS_CODEC_E_CLASS when the body is not a 0x09
+ * open; VMS_CODEC_E_SHORT when its three copies disagree (not trusted).
+ */
+#define VMS_OFB_CM_OPEN_DLM_SEQ    92u   /* u8     */
+#define VMS_OFB_CM_OPEN_DLM_SEQ2  100u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_DLM_SEQ3  102u   /* LE u16 */
+vms_codec_status_t vms_cm_open_dlm_seq(const uint8_t *body, uint32_t len,
+				       uint16_t *n);
+
 vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_rec *rec,
 					       uint8_t *out_body, uint32_t cap,
 					       uint32_t *written);

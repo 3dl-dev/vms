@@ -420,6 +420,26 @@ struct vms_cnxman {
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
 	uint32_t dlm_sends;            /* originations the arm asked for     */
 	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
+	/*
+	 * rd vms-64b: THE CLUSTER'S DLM REBUILD SEQUENCE. Every real VAX DLM
+	 * message (requests and answers, every op) carries body[12:14] = 0x0001
+	 * and body[14:16] = N, the SAME N from every node at a moment; N steps
+	 * when a transition rebuilds the lock directory. A joiner learns the
+	 * current N from the coordinator's class-0x02 transition OPEN (cat 0x01
+	 * op 0x09, body[92] == body[100:102] == body[102:104]) before its first
+	 * DLM send; every member then asserts it in each DLM header. This node
+	 * records it here, as cluster state, from those two carriers, and stamps
+	 * it on every DLM body it sends; with none recorded it sends no DLM
+	 * message at all rather than a 0 no real node ever sends.
+	 */
+	uint16_t dlm_seq;
+	uint8_t  dlm_seq_valid;
+	uint8_t  dlm_seq_pad;
+	uint32_t dlm_seq_from_open;    /* N recorded off a 0x09 open          */
+	uint32_t dlm_seq_from_dlm;     /* N recorded off a member's DLM header */
+	uint32_t dlm_seq_changes;      /* times the recorded N changed        */
+	uint32_t dlm_seq_open_bad;     /* a 0x09 whose three copies disagreed */
+	uint32_t dlm_sends_no_seq;     /* sends refused: no N recorded yet    */
 	uint32_t dlm_foreign_refused;  /* RULE C: the peer is not proven ours*/
 	uint32_t dlm_mixed_sends;      /* ... and the ones sent anyway because */
 				       /* this node is the SOLE lock-directory */
@@ -1642,6 +1662,55 @@ static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
  * answer), i.e. an identity the executive genuinely holds, not one a
  * participant would have to infer (E73).
  */
+/* rd vms-64b: record N (see struct vms_cnxman). */
+static void cnxman_dlm_seq_record(struct vms_cnxman *cn, uint16_t n,
+				  uint32_t *counter)
+{
+	if (n == 0u)
+		return;            /* no real node ever asserts 0 */
+	if (!cn->dlm_seq_valid || cn->dlm_seq != n)
+		cn->dlm_seq_changes++;
+	cn->dlm_seq = n;
+	cn->dlm_seq_valid = 1u;
+	(*counter)++;
+}
+
+/* rd vms-64b: learn N off a body a MEMBER sent us -- the coordinator's 0x09
+ * transition open, or any DLM message whose header carries it. The codec owns
+ * every offset (design SS3.9 rule 2). */
+static void cnxman_dlm_seq_learn(struct vms_cnxman *cn, const uint8_t *body,
+				 uint32_t len)
+{
+	uint16_t n = 0u;
+
+	if (vms_dlm_seq_get(body, len, &n) == VMS_CODEC_OK) {
+		cnxman_dlm_seq_record(cn, n, &cn->dlm_seq_from_dlm);
+		return;
+	}
+	switch (vms_cm_open_dlm_seq(body, len, &n)) {
+	case VMS_CODEC_OK:
+		cnxman_dlm_seq_record(cn, n, &cn->dlm_seq_from_open);
+		break;
+	case VMS_CODEC_E_SHORT:
+		cn->dlm_seq_open_bad++;   /* a 0x09 whose three copies disagree */
+		break;
+	default:
+		break;                    /* not a carrier */
+	}
+}
+
+/* rd vms-64b: stamp the recorded N on an outbound DLM body. -1 when none is
+ * recorded (the caller then does not send). */
+static int cnxman_dlm_seq_stamp(struct vms_cnxman *cn, uint8_t *body)
+{
+	if (!cn->dlm_seq_valid) {
+		cn->dlm_sends_no_seq++;
+		return -1;
+	}
+	return vms_dlm_seq_put(body, VMS_CM_BODY_LEN, cn->dlm_seq) ==
+		       VMS_CODEC_OK ? 0 : -1;
+}
+
 int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 		    const uint8_t *body, uint32_t len)
 {
@@ -1665,6 +1734,10 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 		return -1;
 
 	memcpy(cn->dlm_tx, body, VMS_CM_BODY_LEN);
+	if (cnxman_dlm_seq_stamp(cn, cn->dlm_tx) != 0) {
+		cn->dlm_sends_refused++;
+		return -1;
+	}
 	/* An origination the peer WILL answer, so this dialogue mints a fresh
 	 * transaction token for it (E85) and assigns the next send-msg#. */
 	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST);
@@ -1729,6 +1802,8 @@ static int cnxman_dlm_rx(struct vms_cnxman *cn, const struct vms_cm_envelope *en
 			      (uint32_t)sizeof(cn->dlm_tx),
 			      &written) != VMS_CODEC_OK)
 		return 1;
+	if (cnxman_dlm_seq_stamp(cn, cn->dlm_tx) != 0)
+		return 1;   /* never an answer carrying a sequence nobody holds */
 	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_RESPONSE);
 	if (cnxman_ops_respond(cn, cn->dlm_tx, written) == 0)
 		cn->dlm_replies_sent++;
@@ -1781,6 +1856,10 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 * lower number cannot walk it back.
 	 */
 	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
+	/* rd vms-64b: a member's 0x09 open or DLM header names the cluster's
+	 * DLM rebuild sequence; record it before anything answers. */
+	if (csb != NULL && env_ok)
+		cnxman_dlm_seq_learn(cn, body, len);
 	if (csb != NULL && env_ok) {
 		/* rd vms-ba4: a peer continuing a dialogue this node reset. */
 		cnxman_csb_dialogue_adopt(csb, env.send_msg, env.ack_msg);

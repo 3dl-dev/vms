@@ -760,6 +760,14 @@ int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
 	return pe_fsm_peer_swver(&pe->fsm, sysid, out, cap, out_len);
 }
 
+int pe_peer_name(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		 uint32_t cap, uint8_t *out_len)
+{
+	if (pe == (struct vms_pe *)0)
+		return -1;
+	return pe_fsm_peer_name(&pe->fsm, sysid, out, cap, out_len);
+}
+
 int pe_peer_incarnation(struct vms_pe *pe, vms_scs_sysid_t sysid,
 			uint64_t *out)
 {

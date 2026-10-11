@@ -35,6 +35,7 @@
 
 #include "vms_internal.h"
 #include "exec_kbackend.h"
+#include "vms_prot.h"     /* vms_prot_require_priv: the known-file list is CMKRNL's */
 
 /*
  * Privilege bits and status codes come from vms_internal.h /
@@ -409,6 +410,255 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg)
 
     exec_unlock(&proc->mode_lock);
 
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/* ================================================================
+ * Known File Entries -- the executive's list of INSTALLed images
+ * (VMS_IOCTL_KFE, rd vms-7c64 / vms-220).
+ *
+ * On VMS the known file list lives in the executive and INSTALL changes it
+ * under CMKRNL (INSTALL ADD/REPLACE/REMOVE fail %SYSTEM-F-NOCMKRNL without it,
+ * observed on the lab Alpha V8.4: tests/lab/captures/install-priv-20261009/).
+ * Here too: the list is executive memory, changed only by a CMKRNL caller
+ * (vms_prot_require_priv on the caller's own PCB). An entry names the
+ * executive's OWN copy of the image (exec_kfe_stage): copied by the kernel
+ * into the executive-only VMS_KFE_DIR, read-only, and pinned -- a kernel
+ * reference for the entry's life, with writes denied -- and it is matched by
+ * that object, never an inode number or a path (Baron's rulings, rd vms-96e7,
+ * vms-220), so the activation-time grant recognises exactly that copy and
+ * nothing a process does can change it. LIST is open to every process, as INSTALL LIST is.
+ * ================================================================ */
+struct vms_kfe {
+    int      used;
+    void    *pin;            /* exec_kfe_stage: the executive copy, held + write-denied */
+    uint64_t privs;
+    uint32_t flags;
+    uint32_t access;
+    char     name[VMS_KFE_NAMELEN];
+    char     path[256];
+};
+static struct vms_kfe vms_kfe_tab[VMS_KFE_MAX];
+
+static int kfe_name_eq(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        char x = *a, y = *b;
+        if (x >= 'a' && x <= 'z') x -= 32;
+        if (y >= 'a' && y <= 'z') y -= 32;
+        if (x != y)
+            return 0;
+        if (!x)
+            return 1;
+    }
+}
+static EXEC_DEFINE_MUTEX(vms_kfe_mutex);
+
+static int kfe_find(int fd)
+{
+    for (int i = 0; i < VMS_KFE_MAX; i++)
+        if (vms_kfe_tab[i].used && exec_file_is(vms_kfe_tab[i].pin, fd))
+            return i;
+    return -1;
+}
+
+static int kfe_find_name(const char *name)
+{
+    for (int i = 0; i < VMS_KFE_MAX; i++)
+        if (vms_kfe_tab[i].used && kfe_name_eq(vms_kfe_tab[i].name, name))
+            return i;
+    return -1;
+}
+
+
+/* For the activation-time grant (vms-bdc1): the privileges the installed image
+ * open on `fd` carries, 0 when it is not installed /PRIVILEGED. */
+uint64_t vms_kfe_image_privs(int fd)
+{
+    uint64_t p = 0;
+    exec_mutex_lock(&vms_kfe_mutex);
+    int i = kfe_find(fd);
+    if (i >= 0 && (vms_kfe_tab[i].flags & VMS_KFE_F_PRIV)) {
+        p = vms_kfe_tab[i].privs;
+        vms_kfe_tab[i].access++;
+    }
+    exec_mutex_unlock(&vms_kfe_mutex);
+    return p;
+}
+
+/* The executive's copy of an installed image (rd vms-220, Baron's ruling on
+ * vms-96e7): VMS_KFE_DIR/<gen>-<NAME>. Only [A-Za-z0-9$_.-] of the name is kept. */
+static uint32_t vms_kfe_gen;
+
+static void kfe_copy_path(char *out, unsigned sz, uint32_t gen, const char *name)
+{
+    static const char dir[] = VMS_KFE_DIR "/";
+    unsigned i = 0, j;
+    char num[12];
+    int n = 0;
+    for (j = 0; dir[j] && i + 1 < sz; j++)
+        out[i++] = dir[j];
+    do { num[n++] = (char)('0' + gen % 10); gen /= 10; } while (gen && n < 11);
+    while (n && i + 1 < sz)
+        out[i++] = num[--n];
+    if (i + 1 < sz)
+        out[i++] = '-';
+    for (j = 0; name[j] && i + 1 < sz; j++) {
+        char c = name[j];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '$' || c == '_' || c == '.' || c == '-')
+            out[i++] = c;
+    }
+    out[i] = '\0';
+}
+
+long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_kfe_args args;
+    uint64_t privs;
+    void *pin = NULL;
+    char copy[256];
+    char *gone;           /* a copy to delete once the lock is dropped (heap:
+                           * the kernel stack frame stays under 1 KB) */
+    uint32_t st = SS__NORMAL;
+    int i;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    gone = exec_zalloc(256);
+    if (!gone)
+        return -ENOMEM;
+    args.name[VMS_KFE_NAMELEN - 1] = '\0';
+    args.path[sizeof(args.path) - 1] = '\0';
+
+    if (args.op == VMS_KFE_OP_ADD || args.op == VMS_KFE_OP_REPLACE ||
+        args.op == VMS_KFE_OP_REMOVE) {
+        exec_lock(&proc->mode_lock);
+        privs = proc->cur_privs;
+        exec_unlock(&proc->mode_lock);
+        st = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);
+        if (!(st & 1))
+            goto out;
+    }
+    if (args.op == VMS_KFE_OP_ADD || args.op == VMS_KFE_OP_REPLACE) {
+        /*
+         * The executive takes its OWN copy of the image the caller holds open
+         * (rd vms-220): it copies the bytes, as the kernel, into its
+         * executive-only directory, read-only, and pins that copy with writes
+         * denied for the entry's life. The entry -- and any privilege it
+         * carries -- names the copy, never the caller's file, so nothing the
+         * caller does to its file afterwards reaches an installed image, and
+         * any image can be installed, as on VMS.
+         */
+        uint32_t gen;
+        int e;
+        exec_mutex_lock(&vms_kfe_mutex);
+        gen = ++vms_kfe_gen;
+        exec_mutex_unlock(&vms_kfe_mutex);
+        kfe_copy_path(copy, sizeof(copy), gen, args.name);
+        e = exec_kfe_stage(args.fd, copy, &pin);
+        if (e) {
+            st = e == -EBADF || e == -EINVAL ? SS__BADPARAM :
+                 e == -ENOENT ? SS__NOSUCHFILE : SS__ABORT;
+            goto out;
+        }
+    }
+
+    exec_mutex_lock(&vms_kfe_mutex);
+    switch (args.op) {
+    case VMS_KFE_OP_ADD:
+        if (kfe_find_name(args.name) >= 0) {
+            st = SS__DUPLNAM;
+            memcpy(gone, copy, 256);      /* the refused copy */
+            break;
+        }
+        for (i = 0; i < VMS_KFE_MAX && vms_kfe_tab[i].used; i++)
+            ;
+        if (i == VMS_KFE_MAX) {
+            st = SS__INSFMEM;
+            memcpy(gone, copy, 256);
+            break;
+        }
+        memset(&vms_kfe_tab[i], 0, sizeof(vms_kfe_tab[i]));
+        vms_kfe_tab[i].used = 1;
+        vms_kfe_tab[i].pin = pin;
+        pin = NULL;
+        vms_kfe_tab[i].privs = (args.flags & VMS_KFE_F_PRIV) ? args.privs : 0;
+        vms_kfe_tab[i].flags = args.flags;
+        memcpy(vms_kfe_tab[i].name, args.name, VMS_KFE_NAMELEN);
+        memcpy(vms_kfe_tab[i].path, copy, sizeof(copy));
+        memcpy(args.path, copy, sizeof(copy));
+        break;
+    case VMS_KFE_OP_REPLACE: {
+        /* A new copy of the (possibly new) image; the old one is released. */
+        void *old;
+        i = kfe_find_name(args.name);
+        if (i < 0) {
+            st = SS__NOSUCHFILE;
+            memcpy(gone, copy, 256);      /* the refused copy */
+            break;
+        }
+        memcpy(gone, vms_kfe_tab[i].path, 256);   /* the old copy */
+        old = vms_kfe_tab[i].pin;
+        vms_kfe_tab[i].pin = pin;
+        pin = old;                              /* released below, unlocked */
+        vms_kfe_tab[i].privs = (args.flags & VMS_KFE_F_PRIV) ? args.privs : 0;
+        vms_kfe_tab[i].flags = args.flags;
+        memcpy(vms_kfe_tab[i].path, copy, sizeof(copy));
+        memcpy(args.path, copy, sizeof(copy));
+        break;
+    }
+    case VMS_KFE_OP_REMOVE:
+        i = kfe_find_name(args.name);
+        if (i < 0) {
+            st = SS__NOSUCHFILE;
+        } else {
+            vms_kfe_tab[i].used = 0;
+            pin = vms_kfe_tab[i].pin;          /* released below, unlocked */
+            vms_kfe_tab[i].pin = NULL;
+            memcpy(gone, vms_kfe_tab[i].path, 256);
+        }
+        break;
+    case VMS_KFE_OP_FIND:
+    case VMS_KFE_OP_FIND_NAME:
+    case VMS_KFE_OP_LIST:
+        if (args.op == VMS_KFE_OP_FIND) {
+            i = kfe_find(args.fd);
+        } else if (args.op == VMS_KFE_OP_FIND_NAME) {
+            i = kfe_find_name(args.name);
+        } else {
+            for (i = (int)args.index; i < VMS_KFE_MAX && !vms_kfe_tab[i].used; i++)
+                ;
+            if (i >= VMS_KFE_MAX)
+                i = -1;
+        }
+        if (i < 0) {
+            st = SS__NOSUCHFILE;
+            break;
+        }
+        args.index = (uint32_t)i + 1;
+        args.privs = vms_kfe_tab[i].privs;
+        args.flags = vms_kfe_tab[i].flags;
+        args.access = vms_kfe_tab[i].access;
+        memcpy(args.name, vms_kfe_tab[i].name, VMS_KFE_NAMELEN);
+        memcpy(args.path, vms_kfe_tab[i].path, sizeof(args.path));
+        break;
+    default:
+        st = SS__BADPARAM;
+        break;
+    }
+    exec_mutex_unlock(&vms_kfe_mutex);
+    if (pin)              /* a refused ADD's copy, or a removed/replaced one */
+        exec_file_unpin(pin);
+    if (gone[0] && exec_kfe_unlink(gone) != 0 && (st & 1))
+        st = SS__ABORT;   /* the entry is gone but its copy could not be deleted */
+
+out:
+    exec_free(gone);
+    args.status = st;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

@@ -34,5 +34,5 @@ spec:
             - --skip-tls-verify
             - --single-snapshot
           resources:
-            requests: { cpu: "2", memory: "4Gi" }
-            limits:   { cpu: "2", memory: "4Gi" }
+            requests: { cpu: "1", memory: "3Gi" }
+            limits:   { cpu: "1", memory: "3Gi" }

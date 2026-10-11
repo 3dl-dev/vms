@@ -160,6 +160,54 @@ static int v_assign(void)
 	TRACE("SYS$ASSIGN -> %#x chan=%u", st, chan ? *chan : 0);
 	return st;
 }
+/* $FAO/$FAOL: a VMS parameter is a longword; OVMX's $FAOL engine takes
+ * quadwords. The entries widen (sign-extending, as the VMS-ABI shim on
+ * Alpha does) exactly the parameters the control string consumes. */
+int sys$fao_count_args(const char *ctrl, uint16_t len);
+static int fao_params(const struct dsc$descriptor_s *ctr, const uint32_t *src,
+		      unsigned avail, uint64_t *prm)
+{
+	int need = ctr && ctr->dsc$a_pointer ?
+		   sys$fao_count_args(ctr->dsc$a_pointer, ctr->dsc$w_length) : 0;
+	if (need > 256)
+		need = 256;
+	for (int i = 0; i < need; i++)
+		prm[i] = (uint64_t)(int64_t)(int32_t)((unsigned)i < avail ? src[i] : 0u);
+	return need;
+}
+static int v_fao(void)
+{
+	NATIVE_ARGLIST(ap);
+	uint64_t prm[256];
+	unsigned n = ap[0] & 0xFFu;
+	const struct dsc$descriptor_s *ctr = NPTR(ap, 1);
+	if (!ctr)
+		return SS$_BADPARAM;
+	fao_params(ctr, &ap[4], n > 3 ? n - 3 : 0, prm);
+	return (int)sys$faol(ctr, NPTR(ap, 2), NPTR(ap, 3), prm);
+}
+static int v_faol(void)
+{
+	NATIVE_ARGLIST(ap);
+	uint64_t prm[256];
+	const struct dsc$descriptor_s *ctr = NPTR(ap, 1);
+	const uint32_t *lst = NPTR(ap, 4);
+	if (!ctr)
+		return SS$_BADPARAM;
+	fao_params(ctr, lst, lst ? 256u : 0u, prm);
+	return (int)sys$faol(ctr, NPTR(ap, 2), NPTR(ap, 3), prm);
+}
+static int v_sys_fao(void)
+{
+	NATIVE_ARGLIST(ap);
+	uint64_t prm[256];
+	unsigned n = ap[0] & 0xFFu;
+	const struct dsc$descriptor_s *ctr = NPTR(ap, 1);
+	if (!ctr)
+		return SS$_BADPARAM;
+	fao_params(ctr, &ap[4], n > 3 ? n - 3 : 0, prm);
+	return (int)sys$faol(ctr, NPTR(ap, 2), NPTR(ap, 3), prm);
+}
 static int v_crembx(void)
 {
 	NATIVE_ARGLIST(ap);
@@ -208,8 +256,8 @@ static const struct vent p1vec[] = {
 	{ 0x7FFEDEE0, (rtn_t)sys$dassgn,  "SYS$DASSGN"  },
 	{ 0x7FFEDF00, (rtn_t)sys$delmbx,  "SYS$DELMBX"  },
 	{ 0x7FFEDF28, (rtn_t)sys$dlcefc,  "SYS$DLCEFC"  },
-	{ 0x7FFEDF50, (rtn_t)sys$fao,     "SYS$FAO"     },
-	{ 0x7FFEDF58, (rtn_t)sys$faol,    "SYS$FAOL"    },
+	{ 0x7FFEDF50, (rtn_t)v_fao,       "SYS$FAO"     },
+	{ 0x7FFEDF58, (rtn_t)v_faol,      "SYS$FAOL"    },
 	{ 0x7FFEDFC8, (rtn_t)sys$qio,     "SYS$QIO"     },
 	{ 0x7FFEDFD0, (rtn_t)sys$readef,  "SYS$READEF"  },
 	{ 0x7FFEE000, (rtn_t)sys$setef,   "SYS$SETEF"   },
@@ -321,7 +369,7 @@ static const struct vent librtl_tv[] = {
 	{ 0x7A0, (rtn_t)lib$getdvi,               "LIB$GETDVI" },
 	{ 0x7A8, (rtn_t)lib$getjpi,               "LIB$GETJPI" },
 	{ 0x7B0, (rtn_t)lib$getsyi,               "LIB$GETSYI" },
-	{ 0x8F8, (rtn_t)lib$sys_fao,              "LIB$SYS_FAO" },
+	{ 0x8F8, (rtn_t)v_sys_fao,                "LIB$SYS_FAO" },
 	{ 0xA00, (rtn_t)lib$find_file_end,        "LIB$FIND_FILE_END" },
 	{ 0xAD0, (rtn_t)str$element,              "STR$ELEMENT" },
 };

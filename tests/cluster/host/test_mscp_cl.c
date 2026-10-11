@@ -1443,6 +1443,61 @@ static void test_glue_source(void)
 		 "from values this file read out of the executive");
 }
 
+/*
+ * rd vms-4822: a SERVED unit's blocks reach the ACP through the class driver,
+ * waiting on the CALLER's thread. The glue is not host-linkable, so this is
+ * the source-scan half; the booted half is the lab run where OVMX MOUNTs a
+ * disk a real VAX serves and TYPEs a multi-block file.
+ */
+static void test_acp_served_route(void)
+{
+	char *s = slurp(OVMX_KCORE_DIR "/vms_mscp_cl.c");
+
+	printf("-- vms-4822: the ACP's served-unit route, read out of the glue\n");
+	ct_check(s != NULL, "vms_mscp_cl.c is readable");
+	if (s == NULL)
+		return;
+	ct_check(strstr(s, "uint32_t vms_mscp_cl_io_wait(") != NULL,
+		 "the synchronous service exists");
+	ct_check(strstr(s, "vms_cluster_fork_enter(cl);") != NULL &&
+		 strstr(s, "vms_cluster_fork_leave(cl);\n\n\texec_lock(&w.lk);")
+			 != NULL,
+		 "the request is TAKEN under the fork mutex and the wait is "
+		 "OUTSIDE it (the fork thread runs the completion)");
+	ct_check(strstr(s, "c->sync[slot] = NULL;      /* before the wake") !=
+			 NULL,
+		 "the slot is cleared before the waiter is woken");
+	ct_check(strstr(s, "while (!w.done)") != NULL,
+		 "the wait has no abandonment path (the buffer stays named "
+		 "until the driver completes the request)");
+	ct_check(strstr(s, "(uint16_t)VMS_MSCP_ST_ABORTED, 0u);") != NULL,
+		 "stop completes every waiter with Command Aborted");
+
+	s = slurp(OVMX_KCORE_DIR "/vmsfs_acp.c");
+	ct_check(s != NULL, "vmsfs_acp.c is readable");
+	if (s == NULL)
+		return;
+	ct_check(strstr(s, "if (major == VMS_DEVTAB_SERVED_MAJOR)\n"
+			   "        rc = acp_served_io(minor, lbn, buf, buflen, 0);")
+			 != NULL,
+		 "the ACP's ONE read chokepoint routes the served pair");
+	ct_check(strstr(s, "if (major == VMS_DEVTAB_SERVED_MAJOR)\n"
+			   "        rc = acp_served_io(minor, lbn, (void *)buf, "
+			   "buflen, 1);") != NULL,
+		 "... and its ONE write chokepoint");
+	ct_check(strstr(s, "vms_devtab_served_name(id, devnam,") != NULL,
+		 "the unit is found by its id in the device table, never "
+		 "by a name the ACP composes");
+
+	s = slurp(OVMX_KCORE_DIR "/vms_devtab.c");
+	ct_check(s != NULL, "vms_devtab.c is readable");
+	if (s == NULL)
+		return;
+	ct_check(strstr(s, "disk->backing_major = VMS_DEVTAB_SERVED_MAJOR;\n"
+			   "    disk->backing_minor = served_id_mint();") != NULL,
+		 "a served row's backing pair is the served major + a minted id");
+}
+
 /* ------------------------------------------------------------------ *
  * 9.12 The devtab row: served, and with NO local backing
  * ------------------------------------------------------------------ */
@@ -1486,6 +1541,7 @@ int main(void)
 	test_unit_naming();
 	test_empty_cell_is_counted();
 	test_glue_source();
+	test_acp_served_route();
 	test_devtab_served_row_source();
 	return ct_summary("test_mscp_cl");
 }

@@ -1706,3 +1706,48 @@ jobs:
             exit 1
           fi
           exit "$rc"
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: CI / Release / E2E"
+    if: ${{ always() }}
+    needs:
+      - changes
+      - persistent-boot
+      - cut-release-reproducible
+      - upgrade-e2e
+      - install-boot-e2e
+      - release-install-e2e
+      - release-acceptance-e2e
+      - tcpip-daytime-boot-e2e
+      - dcl-acceptance-e2e
+      - console-newline-spam-e2e
+      - device-discovery-alternate-disk-e2e
+      - cut-release-vax-gate
+      - cut-release-alpha-gate
+      - parts-demo-e2e
+      - boot-scsnode-hostname-e2e
+      - sysboot-cluster-params-e2e
+      - cluster-config-lan-e2e
+      - cluster-config-lan-2node-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

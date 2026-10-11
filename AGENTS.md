@@ -81,15 +81,22 @@ accepted.
 
 - **Track work as GitHub Issues; submit changes as pull requests.** You do not need the maintainer's
   personal tooling to contribute.
-- **Merge only with `tools/ci/safe_merge.sh <pr>`.** It is the one way a PR lands on main: it
-  refuses unless the PR is fresh against main (`tools/ci/merge_freshness.sh`: main has not changed a
-  file the PR changes since its checks ran), its own checks are all green, and every heavy workflow it
-  SKIPPED (the boot/e2e/negative-control jobs that do not run on `pull_request`) has passed in a
-  `gh workflow run <file> --ref <branch>` dispatch on its head SHA (`tools/ci/merge_heavy_gates.py`).
-  A red that main itself carries and another PR is landing the fix for may be mapped with
-  `--allow 'WORKFLOW::JOB::FIXED-BY'` -- check the failing assertions match before mapping; anything
-  unmapped is a stop. It then merges pinned to the head it checked (`--match-head-commit`) and posts
-  the mapping as the merge comment. Never call `gh pr merge` directly.
+- **Merge through the merge queue.** Main is gated by GitHub's merge queue: `gh pr merge <pr>
+  --squash --auto` (or "Merge when ready" in the PR) puts a PR in the queue, which gates main + the
+  PR, one group at a time, exactly as it will land, and merges it only when every gating workflow's
+  `Merge gate: <workflow>` check is green -- the heavy boot/e2e/negative-control jobs included, which
+  do not run on `pull_request` but do run in the queue. A PR is therefore fresh by construction and
+  cannot be starved by other merges. Each gating workflow ends in a `gate` job that needs every other
+  job (`tools/ci/check_merge_gates.py` fails a job left out of it).
+- **No mapped reds.** The queue merges only on green. A red on main is fixed first -- by the PR
+  that fixes it, which goes through the queue like any other -- never mapped around.
+- **`tools/ci/safe_merge.sh <pr>` is the emergency bypass only** (the queue down, or main red with
+  its fix itself blocked). It refuses unless the PR is fresh against main, its own checks are green,
+  and every heavy workflow it skipped passed in a `gh workflow run <file> --ref <branch>` dispatch on
+  its head SHA (`tools/ci/merge_heavy_gates.py`); `--allow 'WORKFLOW::JOB::FIXED-BY'` maps a red main
+  carries to the PR fixing it and is refused when that red skipped steps main has not passed. It
+  merges pinned to the head it checked and posts its evidence as the merge comment. Never call
+  `gh pr merge` without `--auto` (the queue) outside this script.
 - **CI must be green.** A PR that leaves CI red has shipped nothing. Gates include `Build & Test`,
   the kernel-executive proof against a real `/dev/vms`, and the VMS-native link / self-host jobs.
 - **Tests are mandatory.** No change is complete while a test in any layer it touches is skipped,

@@ -2005,3 +2005,62 @@ jobs:
 
       - name: "sys tier gate — boot qemu-system-alpha, run the whole test_syssvc_*/test_imgact_* suite over /dev/vms, assert no NEW failure beyond the documented environmental baseline"
         run: BASELINE=tools/cross-alpha/alpha-syssvc-baseline.txt tools/cross-alpha/run-syssvc-tests-alpha.sh
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: CI / Alpha"
+    if: ${{ always() }}
+    needs:
+      - changes
+      - alpha-toolchain-image
+      - musl-alpha-vms
+      - gcc-port-include-surface
+      - joint-e2e-alpha-crt0
+      - alpha-rms-substrate
+      - alpha-boot-login
+      - alpha-boot-mount
+      - alpha-crtl-rms-n7
+      - alpha-crtl-rms-veneer
+      - alpha-crtl-rms-fileop
+      - alpha-crtl-fd
+      - alpha-vmsabi-rms
+      - alpha-native-image
+      - alpha-mf-multifile
+      - alpha-libinit
+      - alpha-invo
+      - alpha-chf
+      - alpha-vfork
+      - alpha-p0heap
+      - alpha-p1stack
+      - alpha-p32
+      - alpha-cxx
+      - alpha-cxx32
+      - alpha-cc1
+      - alpha-shipped-shareable-activation
+      - alpha-activation-selftest
+      - alpha-dcl-acceptance
+      - alpha-module-gp-activation
+      - alpha-arith-hparith
+      - alpha-accvio-dispatch
+      - alpha-syssvc-suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

@@ -1886,3 +1886,72 @@ jobs:
               export CC=gcc WORK=/tmp/mmk-link-selfhost-build LINK_SELFHOST_EXPECT=1
               sh /src/tests/toolchain/run_mmk_link_selfhost_build.sh
             '
+
+  # THE MERGE-QUEUE GATE (required check on main). Waits on every job above and
+  # is red when any of them failed or was cancelled; a job skipped by its own
+  # condition or path filter counts as passed. tools/ci/check_merge_gates.py
+  # fails a job left out of `needs`.
+  gate:
+    name: "Merge gate: CI / Self-Host / x86_64 toolchain"
+    if: ${{ always() }}
+    needs:
+      - changes
+      - imgact-proof
+      - imgact-build-mode
+      - imgact-x86_64
+      - vmslink-mvp
+      - vmslink-x86_64
+      - decc-shr
+      - link-native-cmake
+      - link-native-cmake-x86_64
+      - imgact-symvec
+      - imgact-vms-std-alpha
+      - imgact-vax-backend
+      - libvmssys-native
+      - decc-shr-activate
+      - shareable-import-activate
+      - tls-producer-over-crtl
+      - weak-import-activate
+      - vmsprocess-native
+      - vmslnm-native
+      - vmsfs-native
+      - libvms-native
+      - vmsrms-native
+      - multiobj-exec
+      - multiobj-exec-x86_64
+      - lib-initialize-x86_64
+      - rodata-reloc-x86_64
+      - exec-tls
+      - dcl-native
+      - dcl-native-x86_64
+      - login-native
+      - libcrypto-static-musl
+      - tcc-object-native
+      - tcc-native
+      - mmk-native
+      - tcc-rms
+      - tcc-selfhost
+      - link-native
+      - link-native-x86_64
+      - librarian-olb-native-x86_64
+      - librarian-native-x86_64
+      - olb-symvec-native-x86_64
+      - mmk-link-selfhost-fixpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          bad = sorted(j for j, v in needs.items() if v.get("result") in ("failure", "cancelled"))
+          for j, v in sorted(needs.items()):
+              print("%-40s %s" % (j, v.get("result")))
+          if bad:
+              print("RED: " + ", ".join(bad))
+              sys.exit(1)
+          print("ok: every job passed or was skipped")
+          PY

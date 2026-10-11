@@ -654,6 +654,20 @@ static void test_glue_bindings(void)
 	check_has("cn->mscp_sysap.connect_min_credits =\n"
 		  "\t\t(uint16_t)CNXMAN_DISK_CL_MIN_CREDITS;",
 		  "rd vms-239: ... and its Minimum Send Credits");
+	/* rd vms-64b: the cluster's DLM rebuild sequence is RECORDED off the
+	 * members' own carriers and STAMPED on every DLM body this node sends
+	 * -- originations and answers -- and a send with none recorded does
+	 * not happen. */
+	check_has("cnxman_dlm_seq_learn(cn, body, len);",
+		  "rd vms-64b: every member body is offered to the recorder");
+	check_has("vms_cm_open_dlm_seq(body, len, &n)",
+		  "rd vms-64b: ... the 0x09 open is one carrier");
+	check_has("vms_dlm_seq_get(body, len, &n)",
+		  "rd vms-64b: ... a member's DLM header is the other");
+	check_has("if (cnxman_dlm_seq_stamp(cn, cn->dlm_tx) != 0) {\n\t\tcn->dlm_sends_refused++;",
+		  "rd vms-64b: an origination is stamped, or refused");
+	check_has("if (cnxman_dlm_seq_stamp(cn, cn->dlm_tx) != 0)\n\t\treturn 1;",
+		  "rd vms-64b: an answer is stamped, or withheld");
 	/*
 	 * ...AND SO DOES THE JOIN'S OWN COPY. MEASURED: the first live arm of
 	 * this code filled `cn->conndata` and left `cfg.conndata` at the

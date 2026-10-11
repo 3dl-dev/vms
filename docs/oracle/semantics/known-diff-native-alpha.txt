@@ -10,11 +10,5 @@
 ef EF.SETEF.31  # vms-dd5a: system-reserved EF 31 is set in a fresh DCL image on real VMS (same as the Linux gate)
 info JPI.SELF.W  # vms-bd30: JPI$_MASTER_PID / OWNER need the job root + owner in the executive (same as the Linux gate)
 lnm LNM.TRN.SYSSCR  # vms-62f: SYS$SCRATCH is a LNM$SYSTEM name; VMS defines it per job (same as the Linux gate)
-tt TT.WRITE  # vms-d900: a formatted IO$_WRITEVBLK (P4 carriage control) -- the IOSB count (same as the Linux gate)
-tt TT.WRITE.NOFORMAT  # vms-d900: IO$_WRITEVBLK|IO$M_NOFORMAT (same as the Linux gate)
-tt TT.READPROMPT.TIMED0  # vms-40fb: missing from the VMS-ABI terminal path
-tt TT.WRITE.ZERO  # vms-40fb: since the executive terminal driver (#1574) the VMS-ABI path leaves the IOSB status word's high byte unwritten (0xA501)
-tt TT.READ.TIMED0  # vms-40fb: as TT.WRITE.ZERO -- SS$_TIMEOUT (0x22C) reads back as 0xA52C
-tt TT.READ.TIMED0.ZEROLEN  # vms-40fb: as TT.WRITE.ZERO
 rms RMS.CREATE  # vms-0a2: FAB$L_STV after $CREATE/$OPEN is the file's I/O channel (0x50 on both systems); OVMX leaves 0 (same as the Linux gate)
 rms RMS.OPEN  # vms-0a2: as RMS.CREATE

@@ -1,0 +1,29 @@
+# tt-recall-key-not-terminator -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the up arrow is the recall key: it ends the read as CTRL/B, echoed <02> (vms_tt.c, rd vms-eb3d; keystroke RC.RECALL U1/U2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() ends the read on the up arrow as CTRL/B (\`} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {\`). The mutation drops that branch: the key is swallowed and DCL never learns the user asked for the last command. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the down-arrow and initial-line checks use their own keys.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i "s|^\t\t\t} else if (c == 'A' \&\& tt_is_term(tt, TT_CTRL('B'))) {$|\t\t\t} else if (0) { /* NEGCTL tt-recall-key-not-terminator */|" "$_file"
+    :
+}

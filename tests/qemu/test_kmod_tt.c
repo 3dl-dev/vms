@@ -160,7 +160,7 @@ static void rd_wait(struct rd *r)
 
 int main(void)
 {
-    char devnam[32] = "", devnam2[32] = "", scr[512];
+    char devnam[32] = "", devnam2[32] = "", scr[2048];
     uint32_t st, chan = 0, chan2 = 0, state = 0;
     uint64_t prev = 0;
     int m, s;
@@ -294,11 +294,11 @@ int main(void)
     /* ---- a cursor key is one key, not data, and does not end the read ---- */
     rd_start(&r, chan, 0, NULL, 0);
     msleep(200);
-    type(m, "ab\x1b[Ac\r");
+    type(m, "ab\x1b[Cc\r");                 /* -> at the end of the line: nowhere to go */
     rd_wait(&r);
     screen(m, scr, sizeof(scr), 300);
     CHECK(r.st == SS_NORMAL && strcmp(r.data, "abc") == 0 && r.a.term == 13,
-          "an escape sequence (up-arrow) neither ends the read nor lands in the line");
+          "an escape sequence (a cursor key with nowhere to move) neither ends the read nor lands in the line");
 
     /* ---- ^Z ---- */
     rd_start(&r, chan, 0, NULL, 0);
@@ -523,6 +523,211 @@ int main(void)
             CHECK(chan3 && r.st == SS_NORMAL && vms_kif_deliverast(&aa, &ap, &am) != 0,
                   "an AST armed through a channel ends when that channel is deassigned");
         }
+    }
+
+    /* ---- line editing (rd vms-eda8): the VAX V7.3 bytes of LE.CURSOR,
+     * LE.OVERSTRIKE and LE.CTRLJ ---- */
+    {
+        /* A screen with no escape sequences: the driver erases to the end
+         * of the line by printing blanks out to the last column but one and
+         * backing up (LE.* captured with SET TERMINAL/NOHARDCOPY). The column
+         * count is the unit's width; the prompt "$ " starts the line at 2. */
+        char want_cursor[1024];
+        size_t wl = 0;
+        unsigned wdt = 80, last, k;
+        struct vms_devinfo wi;
+
+        memset(&wi, 0, sizeof wi);
+        if ((vms_kif_getdvi_devnam(devnam, &wi) & 1) && wi.width)
+            wdt = wi.width;
+        last = wdt - 1;
+#define WANT(str, n) do { memcpy(want_cursor + wl, (str), (n)); wl += (n); } while (0)
+#define WANTC(ch, n) do { for (k = 0; k < (n); k++) want_cursor[wl++] = (ch); } while (0)
+        WANT("RITE SYS$OUTPUT 13", 18);
+        WANT("\r\0$ ", 4);                              /* ^H */
+        WANT("WRITE SYS$OUTPUT 13", 19);                 /* W inserted, the rest after it */
+        WANTC(' ', last - (2 + 19)); WANTC('\b', last - (2 + 19) + 18);
+        WANT("RITE SYS$OUTPUT 13", 18);                  /* ^E */
+        WANT("\b", 1);                                   /* ^D */
+        WANT("23", 2);                                   /* 2 inserted */
+        WANTC(' ', last - (2 + 20)); WANTC('\b', last - (2 + 20) + 1);
+        WANT("\b", 1);                                   /* <- */
+        WANT("2", 1);                                    /* -> */
+        WANT("3", 1);                                    /* ^F */
+        WANT("\r\n", 2);                                 /* RETURN */
+#undef WANT
+#undef WANTC
+        size_t got;
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "RITE SYS$OUTPUT 13\x08W\x05\x04" "2\x1b[D\x1b[C\x06\r");
+        rd_wait(&r);
+        got = screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-edit-cursor-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
+              "^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')");
+        /* negctl-knockon: tt-edit-cursor-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(got == wl && memcmp(scr, want_cursor, got) == 0,
+              "the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up");
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "WRITE SYS$OUTPUT 1X3\x04\x04\x01" "2\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-edit-overstrike-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 123") == 0,
+              "^A switches to overstrike: the 2 replaces the X (data 'WRITE SYS$OUTPUT 123')");
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "WRITE SYS$OUTPUT 1 BOGUS\n\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-edit-ctrlj-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "WRITE SYS$OUTPUT 1 ") == 0,
+              "^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')");
+    }
+
+    /* ---- recall keys and the initial line (rd vms-eb3d; RC.RECALL) ---- */
+    {
+        struct vms_tt_read_args ra;
+        char data[64];
+        uint32_t rs;
+        static const char ini[] = "WRITE SYS$OUTPUT 6";
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "\x1b[A");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-recall-key-not-terminator */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && r.a.term == 0x02 && strcmp(scr, "\x02") == 0,
+              "the up arrow ends the read as CTRL/B, echoed <02> (RC.RECALL U1)");
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, "\x1b[B");
+        rd_wait(&r);
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && (r.a.term & 0xFF) == 0x1B && scr[0] == '\0',
+              "the down arrow ends the read with the escape sequence as terminator, echoing nothing (RC.RECALL DN)");
+
+        memset(&ra, 0, sizeof ra);
+        ra.chan = chan;
+        ra.flags = VMS_TT_RD_TIMED | VMS_TT_RD_INISTR;
+        ra.timeout = BOUND;
+        ra.buf = (uint64_t)(uintptr_t)data;
+        ra.bufsz = sizeof data - 1;
+        ra.prompt = (uint64_t)(uintptr_t)"\r\n\0$ ";
+        ra.promptsz = 5;
+        ra.inistr = (uint64_t)(uintptr_t)ini;
+        ra.inisz = sizeof ini - 1;
+        {
+            pid_t kid = fork();
+            if (kid == 0) {
+                msleep(300);
+                type(m, "\x7f" "7\r");
+                _exit(0);
+            }
+            rs = vms_kif_tt_read(&ra);
+            waitpid(kid, NULL, 0);
+        }
+        screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-inistr-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(rs == SS_NORMAL && ra.count == 18 && memcmp(data, "WRITE SYS$OUTPUT 7", 18) == 0,
+              "TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')");
+        /* negctl-knockon: tt-inistr-ignored */
+        CHECK(memcmp(scr, "\r\n\0$ WRITE SYS$OUTPUT 6", 23) == 0,
+              "the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ WRITE SYS$OUTPUT 6)");
+    }
+
+    /* ---- a broadcast breaks through a read (rd vms-53a; BC.READ W) ---- */
+    {
+        static const char bmsg[] = "\r\nHELLO\r\n";
+        static const char want[] = "\r\nHELLO\r\n\r\0$ AB";
+        uint64_t pv = 0;
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        type(m, "AB");
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        (void)vms_kif_setprv(VMS_PRV_M_OPER, 0, 0, &pv);
+        st = vms_kif_tt_brkthru(devnam, bmsg, sizeof bmsg - 1);
+        /* negctl: tt-brkthru-privilege-ignored */
+        CHECK(st == SS_NOPRIV, "a broadcast to a terminal without OPER is SS$_NOPRIV (the executive decides)");
+        (void)vms_kif_setprv(VMS_PRV_M_OPER, 1, 0, &pv);
+        st = vms_kif_tt_brkthru(devnam, bmsg, sizeof bmsg - 1);
+        size_t got = screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-breakthrough-no-redisplay */
+        /* negctl-knockon: tt-newline-ignores-cursor */
+        /* negctl-knockon: tt-port-input-dropped */
+        /* negctl-knockon: tt-brkthru-privilege-ignored */
+        CHECK((st & 1) && got == sizeof want - 1 && memcmp(scr, want, got) == 0,
+              "with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB");
+        type(m, "\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && strcmp(r.data, "AB") == 0,
+              "the read the broadcast broke through goes on and returns 'AB'");
+    }
+
+    /* ---- wrap (rd vms-cef; WRAP.LONG at 80 columns) ---- */
+    {
+        struct vms_devinfo wi;
+        unsigned wdt = 80, k2;
+        char typed[300], want[700];
+        size_t wl2 = 0, nt;
+
+        memset(&wi, 0, sizeof wi);
+        if ((vms_kif_getdvi_devnam(devnam, &wi) & 1) && wi.width)
+            wdt = wi.width;
+        nt = (wdt - 2) + 5;                       /* past the first row by 5 */
+        for (k2 = 0; k2 < nt; k2++)
+            typed[k2] = (char)('0' + k2 % 10);
+        typed[nt] = '\0';
+        for (k2 = 0; k2 < wdt - 2; k2++) want[wl2++] = typed[k2];
+        want[wl2++] = '\r'; want[wl2++] = '\n';
+        for (; k2 < nt; k2++) want[wl2++] = typed[k2];
+
+        rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+        msleep(200);
+        (void)screen(m, scr, sizeof(scr), 300);
+        type(m, typed);
+        size_t got2 = screen(m, scr, sizeof(scr), 300);
+        /* negctl: tt-wrap-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
+              "a line longer than the width wraps: CR LF before the character that would pass the last column");
+        type(m, "\x15");                          /* ^U across the wrap */
+        got2 = screen(m, scr, sizeof(scr), 300);
+        wl2 = 0;
+        want[wl2++] = '\r';
+        for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = ' ';
+        for (k2 = 0; k2 < wdt - 1; k2++) want[wl2++] = '\b';
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(got2 == wl2 && memcmp(scr, want, wl2) == 0,
+              "^U on a wrapped line clears its last row and leaves the cursor at its start (WRAP.LONG U)");
+        type(m, "\r");
+        rd_wait(&r);
+        (void)screen(m, scr, sizeof(scr), 300);
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(r.st == SS_NORMAL && r.a.count == 0, "after ^U the read returns an empty line");
     }
 
     /* ---- CTRL/O discards output (OOB.CTRLO, OB.PROMPT O1) ---- */

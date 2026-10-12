@@ -1,1 +1,1 @@
-BC.READ W  # vms-53a: broadcast mid-read: no driver redisplay
+BC.READ W  # vms-53a: the driver redisplay and REPLY/USER delivery are in; the case SPAWNs @KSBC, and a SPAWNed procedure here produces no output (rd vms-f37)

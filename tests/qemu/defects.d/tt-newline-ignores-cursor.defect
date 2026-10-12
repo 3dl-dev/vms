@@ -18,6 +18,7 @@ EOF
 DCL's prompt after a record: the owed <LF>, then <CR><NUL>$
 DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
 output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
 EOF
                       ;;
         knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;

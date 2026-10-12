@@ -1,0 +1,30 @@
+# tt-brkthru-privilege-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a broadcast to a terminal (VMS_IOCTL_TT_BRKTHRU, REPLY/USER) needs OPER, decided by the executive through vms_prot.h (vms_tt.c, rd vms-53a)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_tt_brkthru() asks the executive's protection code for OPER (\`a->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);\`). The mutation grants it to everyone (\`a->status = SS__NORMAL;\`): any process can write to any terminal. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a broadcast to a terminal without OPER is SS$_NOPRIV (the executive decides)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
+EOF
+                      ;;
+        knock_on_why)  echo "the refused write goes out too, so the screen after the privileged one carries the broadcast twice.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\ta->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);$|\ta->status = SS__NORMAL; /* NEGCTL tt-brkthru-privilege-ignored */|' "$_file"
+    :
+}

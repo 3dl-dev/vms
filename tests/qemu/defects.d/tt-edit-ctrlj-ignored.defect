@@ -1,0 +1,29 @@
+# tt-edit-ctrlj-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "line editing: LINEFEED (^J) deletes the word left of the cursor (vms_tt.c, rd vms-eda8; keystroke LE.CTRLJ)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() walks back over the word before the cursor (\`while (at && tt->line[at - 1] != ' ')\`). The mutation never does (\`while (0)\`): ^J deletes nothing. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^J deletes the word left of the cursor (data 'WRITE SYS$OUTPUT 1 ')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check types ^J.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i "s|^\t\t\twhile (at \&\& tt->line\[at - 1\] != ' ')$|\t\t\twhile (0) /* NEGCTL tt-edit-ctrlj-ignored */|" "$_file"
+    :
+}

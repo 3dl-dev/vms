@@ -606,9 +606,24 @@ int cmd_read(struct dcl_command *cmd)
     const char *prompt = dcl_qualifier_value(cmd, "PROMPT");
     if (prompt) {
         char buf[4096];
+        /* /TIME_OUT=n: IO$M_TIMED (rd vms-bc5) */
+        const char *tos = dcl_qualifier_value(cmd, "TIME_OUT");
+        uint32_t tmo = tos ? (uint32_t)strtoul(tos, NULL, 10) : 0;
         /* IO$_READPROMPT through the terminal driver (rd vms-f8c) */
-        if (dcl_tt_read_line(prompt, buf, sizeof(buf)) != 0) {
-            return SS$_ENDOFFILE;
+        int n = isatty(STDIN_FILENO)
+              ? dcl_tt_read(prompt, strlen(prompt), buf, sizeof(buf), 0, tmo, NULL)
+              : DCL_TT_NODRIVER;
+        if (n == DCL_TT_NODRIVER)
+            n = dcl_tt_read_line(prompt, buf, sizeof(buf)) == 0 ? (int)strlen(buf) : DCL_TT_EOF;
+        /* No /END_OF_FILE or /ERROR label: the condition is reported and the
+         * symbol is left alone (RD.EOF Z, RD.TIMED W/W2/S on VAX V7.3). */
+        if (n == DCL_TT_TIMEOUT) {
+            dcl_error("RMS", 0, "TMO", "timeout period expired");
+            return RMS$_TMO;
+        }
+        if (n < 0) {
+            dcl_error("RMS", 2, "EOF", "end of file detected");
+            return RMS$_EOF;
         }
         dcl_sym_set(symbol_name, buf, DCL_SYM_LOCAL);
         return SS$_NORMAL;

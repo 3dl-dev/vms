@@ -1,7 +1,8 @@
 # keystroke oracle transcript (unmasked) -- case LE.CTRLW (OpenVMS VAX V7.3 OPA0:)
 # line editing: ^W at the prompt
-# case-sha256 f1545309d41f6b43cfc2ded3ae9d4b779f53203dbf1a2d70fdf62b58538f5558
+# case-sha256 8e9b79208a51cf9dc5193cfaea0ba63240d61cfbac3a9f922eda7178bc0e1daa
 @start loggedin OK
+=== STEP V0 quiet
 === STEP T
 | WRITE SYS$OUTPUT 1
 === STEP W

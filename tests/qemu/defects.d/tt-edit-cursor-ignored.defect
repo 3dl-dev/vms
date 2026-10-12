@@ -1,0 +1,30 @@
+# tt-edit-cursor-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "line editing: a character typed with the cursor moved back (^H ^D <- ...) is INSERTED there (vms_tt.c tt_consume, rd vms-eda8; keystroke LE.CURSOR)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_consume() inserts a data character at the cursor when it is inside the line (\`if (tt->cur < tt->len) {                    /* insert */\`). The mutation never does (\`if (0) {\`): the character lands at the end, as a line editor that tracks no cursor would put it. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+^H ^E ^D ^F and the arrow keys move the cursor; typing inserts there (data 'WRITE SYS$OUTPUT 123')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the editing echo is the VAX's: <CR><NUL>$ for ^H, an insert prints the rest of the line, erases to the end and backs up
+EOF
+                      ;;
+        knock_on_why)  echo "the same misplaced character changes the echo: the inserted character is printed alone, with no tail and no backspaces.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\tif (tt->cur < tt->len) {                    /\* insert \*/$|\tif (0) { /* NEGCTL tt-edit-cursor-ignored */|' "$_file"
+    :
+}

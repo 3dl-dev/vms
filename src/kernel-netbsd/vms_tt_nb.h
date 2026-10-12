@@ -36,6 +36,7 @@
 #define VMS_TT_RD_TRMNOECHO   0x0010u  /* IO$M_TRMNOECHO */
 #define VMS_TT_RD_CVTLOW      0x0020u  /* IO$M_CVTLOW    */
 #define VMS_TT_RD_TERMMASK    0x0100u  /* termmask[] is the caller's (P4) */
+#define VMS_TT_RD_INISTR      0x0200u  /* inistr/inisz: the initial line (TRM$_INISTRNG) */
 
 struct vms_tt_read_args {
 	uint32_t chan;
@@ -51,6 +52,9 @@ struct vms_tt_read_args {
 	uint32_t term;
 	uint32_t termsz;
 	uint32_t oflags;
+	uint64_t inistr;
+	uint32_t inisz;
+	uint32_t pad2;
 };
 #define VMS_TT_RDO_ASTPEND    0x1u
 
@@ -105,14 +109,23 @@ struct vms_tt_oobast_args {
 	uint32_t pad;
 };
 
+#define VMS_TT_BRKTHRU_MAX    512
+struct vms_tt_brkthru_args {
+	char     devnam[VMS_DEVNAM_SIZE];
+	char     msg[VMS_TT_BRKTHRU_MAX];
+	uint32_t len;
+	uint32_t status;
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_TT_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_TT_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_TT_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
 #define VMS_TTIOC_BIND        _IOWR(VMS_TT_IOC_MAGIC, 0xA3, struct vms_tt_bind_args)
 #define VMS_IOCTL_TT_SENSE    _IOWR(VMS_TT_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
 #define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_TT_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
+#define VMS_IOCTL_TT_BRKTHRU  _IOWR(VMS_TT_IOC_MAGIC, 0xA6, struct vms_tt_brkthru_args)
 
-_Static_assert(sizeof(struct vms_tt_read_args) == 88,
+_Static_assert(sizeof(struct vms_tt_read_args) == 104,
                "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_tt_write_args) == 24,
                "struct vms_tt_write_args changed size");
@@ -120,7 +133,7 @@ _Static_assert(sizeof(struct vms_tt_mode_args) == 16,
                "struct vms_tt_mode_args changed size");
 _Static_assert(sizeof(struct vms_tt_bind_args) == 24,
                "struct vms_tt_bind_args changed size");
-_Static_assert(VMS_IOCTL_TT_READ == 0xC05856A0u,
+_Static_assert(VMS_IOCTL_TT_READ == 0xC06856A0u,
                "VMS_IOCTL_TT_READ encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TT_WRITE == 0xC01856A1u,
                "VMS_IOCTL_TT_WRITE encodes differently here than on the reference build");
@@ -136,5 +149,9 @@ _Static_assert(sizeof(struct vms_tt_oobast_args) == 40,
                "struct vms_tt_oobast_args changed size");
 _Static_assert(VMS_IOCTL_TT_OOBAST == 0xC02856A5u,
                "VMS_IOCTL_TT_OOBAST encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_brkthru_args) == 536,
+               "struct vms_tt_brkthru_args changed size");
+_Static_assert(VMS_IOCTL_TT_BRKTHRU == 0xC21856A6u,
+               "VMS_IOCTL_TT_BRKTHRU encodes differently here than on the reference build");
 
 #endif /* OVMX_VMS_TT_NB_H */

@@ -1,0 +1,30 @@
+# tt-inistr-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an extended read's TRM\$_INISTRNG starts the line with the given characters, shown after the prompt and editable (vms_tt.c, rd vms-eb3d; RC.RECALL U1)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_read() preloads the line from the request's initial string (\`if (req->inistr \&\& req->inisz) {\`). The mutation ignores it (\`if (0) {\`): a recalled command is neither shown nor in the line. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+TRM$_INISTRNG: the read starts with the recalled line, editable (DEL 6, type 7 -> 'WRITE SYS$OUTPUT 7')
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the initial line is shown right after the prompt (RC.RECALL U1: <CR><LF><NUL>$ WRITE SYS$OUTPUT 6)
+EOF
+                      ;;
+        knock_on_why)  echo "the same ignored string is missing from the screen too.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\tif (req->inistr \&\& req->inisz) {$|\t\tif (0) { /* NEGCTL tt-inistr-ignored */|' "$_file"
+    :
+}

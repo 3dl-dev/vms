@@ -15,6 +15,7 @@ output during the read breaks through and the read is shown again: <CR><LF>STATU
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+with OPER the broadcast is written and the read is shown again: <CR><LF>HELLO<CR><LF><CR><NUL>$ AB
 EOF
                       ;;
         knock_on_why)  echo "none: the resumed read still completes with 'ABCD' -- only the screen shows the missing redisplay.";;

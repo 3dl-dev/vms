@@ -331,6 +331,7 @@ static const struct dcl_qual_def q_reply[] = {
     { "ENABLE",  CDU_VT_VALUE, 0, NULL, NULL },
     { "DISABLE", CDU_VT_NONE,  0, NULL, NULL },
     { "TO",      CDU_VT_VALUE, 0, NULL, NULL },
+    { "USER",    CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },  /* rd vms-53a */
     QUAL_END
 };
 static const struct dcl_qual_def q_recall[] = {

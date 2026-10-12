@@ -19,3 +19,5 @@ a file is not defined on VAX V7.3 (several constants in the corpus are Alpha/Ita
 additions); those need an Alpha/I64 oracle (`tests/lab-alpha`).
 
 `TTDEF.txt` and `TT2DEF.txt` came from the same command on node VAX1 (lab pod `dnlab-1`) on 2026-10-08 (rd vms-14b).
+
+`TRMDEF.txt` came from the same command on node VAX1 (lab pod `kslab-f8c`) on 2026-10-09 (rd vms-eb3d).

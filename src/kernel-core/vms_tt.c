@@ -81,6 +81,10 @@ struct vms_tt {
 	uint32_t promptsz;
 	uint8_t  line[VMS_TT_LINE_MAX];
 	uint32_t len;
+	uint32_t cur;              /* line editing: the cursor, 0..len (rd vms-eda8) */
+	uint32_t rd_pcol;          /* the column the line starts at (after the prompt) */
+	uint32_t rd_width;         /* the terminal's width at read start */
+	int      ovs;              /* overstrike (^A toggles; INSERT_EDITING default) */
 	int      hc_del;           /* hardcopy: inside a \...\ rubout run */
 	int      esc;              /* inside an escape sequence: 1 after ESC, 2 after CSI/SS3 */
 	struct vms_tt_read_result res;
@@ -149,6 +153,16 @@ static void tt_port_exit(struct vms_tt *tt)
 	if (--tt->port_busy == 0)
 		exec_cv_broadcast(&tt->cv);
 	exec_unlock(&tt->lock);
+}
+
+static uint32_t tt_devwidth(struct vms_device *dev)
+{
+	uint32_t w;
+
+	exec_lock(&dev->lock);
+	w = dev->width;
+	exec_unlock(&dev->lock);
+	return w ? w : 80;
 }
 
 static uint64_t tt_devchar(struct vms_device *dev)
@@ -327,22 +341,193 @@ static void tt_redisplay(struct vms_tt *tt, int with_line)
 		tt_out(tt, tt->line, tt->len);
 }
 
-/* Rub out the whole line (^U; ^X during a read). */
+static void tt_bs(struct vms_tt *tt, uint32_t n);
+static int tt_line_wrapped(const struct vms_tt *tt);
+static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad);
+static void tt_redraw_in_place(struct vms_tt *tt);
+static void tt_prompt_cr(struct vms_tt *tt);
+
+/* Rub out the line (^X during a read: all of it; ^U: from the cursor back to
+ * the start). */
 static void tt_kill_line(struct vms_tt *tt)
+{
+	uint32_t i, keep = tt->len - tt->cur;
+
+	tt_hc_close(tt);
+	if (tt_echoing(tt) && tt->cur) {
+		if (tt_hardcopy(tt)) {
+			memmove(tt->line, tt->line + tt->cur, keep);
+			tt->len = keep;
+			tt->cur = 0;
+			tt_redisplay(tt, keep != 0);
+			tt_bs(tt, keep);
+			return;
+		}
+		/* a screen: the prompt again in place, what is left after it,
+		 * the rest of the line erased (LE.CTRLU / LE.CTRLX). A line that
+		 * has wrapped cannot be reached above its last row: that row is
+		 * cleared and the cursor left at its start (WRAP.LONG U). */
+		(void)i;
+		if (keep == 0 && tt_line_wrapped(tt)) {
+			uint32_t w = tt->rd_width - 1;
+
+			tt_out1(tt, CH_CR);
+			for (i = 0; i < w; i++)
+				tt_out1(tt, ' ');
+			tt_bs(tt, w);
+			tt->len = 0;
+			tt->cur = 0;
+			return;
+		}
+		memmove(tt->line, tt->line + tt->cur, keep);
+		tt->len = keep;
+		tt->cur = 0;
+		tt_redraw_in_place(tt);
+		return;
+	}
+	memmove(tt->line, tt->line + tt->cur, keep);
+	tt->len = keep;
+	tt->cur = 0;
+}
+
+/*
+ * LINE EDITING (rd vms-eda8). The read keeps a cursor inside its line; the
+ * editing keys move it and the echo keeps the terminal in step using only
+ * what every terminal does -- print, backspace, carriage return -- as the VAX
+ * V7.3 console shows (keystroke cases LE.CURSOR, LE.OVERSTRIKE, LE.CTRLJ):
+ *   ^H     to the start: CR and the prompt again ("<CR><NUL>$ ")
+ *   ^E     to the end: the rest of the line printed
+ *   ^D, <- one left: BS          ^F, -> one right: the character printed
+ *   ^A     insert/overstrike for the rest of this read
+ *   ^J     delete the word left of the cursor
+ * Inserting mid-line prints the character, the rest of the line, and
+ * backspaces to just after it ("23<BS>").
+ */
+static void tt_bs(struct vms_tt *tt, uint32_t n)
+{
+	while (n--)
+		tt_out1(tt, CH_BS);
+}
+
+/*
+ * ERASE TO THE END OF THE LINE, the way the VAX V7.3 driver does on a video
+ * terminal it knows no escape sequences for (OPA0:, "Unknown" type; keystroke
+ * LE.* captured with SET TERMINAL/NOHARDCOPY): blanks out to the last column
+ * but one, then back. `col` is where the cursor stands; returns the blanks
+ * written.
+ */
+/*
+ * WRAP (rd vms-cef). With the terminal's WRAP characteristic a line longer
+ * than the width continues on the next row: the driver writes CR LF before the
+ * character that would fall past the last column (keystroke WRAP.LONG, VAX
+ * V7.3 at 80 columns: "$ WRITE ...<60 digits><CR><LF><the rest>").
+ */
+static int tt_wraps(const struct vms_tt *tt)
+{
+	return (tt->rd_dc & VMS_TTC_WRAP) && tt->rd_width;
+}
+
+/* Echo line[i] at its place in the line, wrapping first if it starts a row. */
+static void tt_out_linech(struct vms_tt *tt, uint32_t i)
+{
+	uint32_t at = tt->rd_pcol + i;
+
+	if (tt_wraps(tt) && at && at % tt->rd_width == 0)
+		tt_out(tt, "\r\n", 2);
+	tt_out1(tt, tt->line[i]);
+}
+
+static void tt_out_line(struct vms_tt *tt, uint32_t from, uint32_t to)
 {
 	uint32_t i;
 
-	tt_hc_close(tt);
-	if (tt_echoing(tt) && tt->len) {
-		if (tt_hardcopy(tt)) {
-			tt->len = 0;
-			tt_redisplay(tt, 0);
-			return;
-		}
-		for (i = 0; i < tt->len; i++)
-			tt_out(tt, "\b \b", 3);
+	for (i = from; i < to; i++)
+		tt_out_linech(tt, i);
+}
+
+/* The column the line's position `i` is shown at (on its row). */
+static uint32_t tt_col(const struct vms_tt *tt, uint32_t i)
+{
+	uint32_t at = tt->rd_pcol + i;
+
+	if (!tt_wraps(tt))
+		return at;
+	return at && at % tt->rd_width == 0 ? tt->rd_width : at % tt->rd_width;
+}
+
+/* Does the line occupy more than its first row? */
+static int tt_line_wrapped(const struct vms_tt *tt)
+{
+	return tt_wraps(tt) && tt->rd_pcol + tt->len > tt->rd_width;
+}
+
+static uint32_t tt_erase_eol(struct vms_tt *tt, uint32_t col)
+{
+	uint32_t last = tt->rd_width ? tt->rd_width - 1 : 79;
+	uint32_t n = col < last ? last - col : 0, i;
+
+	for (i = 0; i < n; i++)
+		tt_out1(tt, ' ');
+	return n;
+}
+
+/* Show line[from..len) then come back to the cursor; on paper, `pad` blanks
+ * cover characters removed from the end, on a screen the rest of the line is
+ * erased. */
+static void tt_echo_tail(struct vms_tt *tt, uint32_t from, uint32_t pad)
+{
+	uint32_t i;
+
+	if (!tt_echoing(tt))
+		return;
+	tt_out_line(tt, from, tt->len);
+	if (!tt_hardcopy(tt)) {
+		uint32_t e = tt_erase_eol(tt, tt_col(tt, tt->len));
+		tt_bs(tt, e + tt->len - tt->cur);
+		return;
 	}
-	tt->len = 0;
+	for (i = 0; i < pad; i++)
+		tt_out1(tt, ' ');
+	tt_bs(tt, tt->len - tt->cur + pad);
+}
+
+/* The prompt again from the start of its line, without its new line (^H, and
+ * a screen's ^U / ^X / ^R). */
+static void tt_prompt_cr(struct vms_tt *tt)
+{
+	const uint8_t *pp = tt->prompt;
+	uint32_t pn = tt->promptsz;
+
+	tt_out1(tt, CH_CR);
+	if (pn >= 2 && pp[0] == CH_CR && pp[1] == CH_LF) {
+		pp += 2;
+		pn -= 2;
+	}
+	tt_out(tt, pp, pn);
+}
+
+/* A screen's redisplay: the line drawn again in place, the rest erased, the
+ * cursor put back (^R; ^U and ^X with what is left of the line). */
+static void tt_redraw_in_place(struct vms_tt *tt)
+{
+	uint32_t e;
+
+	tt_prompt_cr(tt);
+	tt_out_line(tt, 0, tt->len);
+	e = tt_erase_eol(tt, tt_col(tt, tt->len));
+	tt_bs(tt, e + tt->len - tt->cur);
+}
+
+/* Remove line[at..at+n) with the cursor at `at` (already moved there on the
+ * terminal), and show the result. */
+static void tt_delete_at(struct vms_tt *tt, uint32_t at, uint32_t n)
+{
+	memmove(tt->line + at, tt->line + at + n, tt->len - at - n);
+	tt->len -= n;
+	tt->cur = at;
+	if (tt_hardcopy(tt) && at == tt->len)
+		return;                     /* paper: nothing to erase */
+	tt_echo_tail(tt, at, n);
 }
 
 static void tt_complete(struct vms_tt *tt, uint32_t status, uint8_t term, uint32_t termsz)
@@ -387,8 +572,36 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		if (tt->esc == 2 && c >= 0x20 && c < 0x40)
 			return;                  /* parameter / intermediate bytes */
 		tt->esc = 0;
-		if (c >= 0x40 && c < 0x7F)
-			return;                  /* the final byte ends the sequence */
+		if (c >= 0x40 && c < 0x7F) {
+			/* the final byte ends the sequence: <- and -> move the
+			 * cursor (^D / ^F); the others belong to recall */
+			if (c == 'D' && tt->cur > 0) {
+				tt_hc_close(tt);
+				tt->cur--;
+				if (tt_echoing(tt))
+					tt_out1(tt, CH_BS);
+			} else if (c == 'C' && tt->cur < tt->len) {
+				tt_hc_close(tt);
+				if (tt_echoing(tt))
+					tt_out1(tt, tt->line[tt->cur]);
+				tt->cur++;
+			} else if (c == 'A' && tt_is_term(tt, TT_CTRL('B'))) {
+				/* up arrow: the recall key, as CTRL/B (RC.RECALL U1
+				 * shows the same <02> echo for both) */
+				tt_hc_close(tt);
+				if (tt_echoing(tt))
+					tt_out1(tt, TT_CTRL('B'));
+				tt_complete(tt, SS__NORMAL, TT_CTRL('B'), 1);
+			} else if (c == 'B' && tt_is_term(tt, 0x1B)) {
+				/* down arrow: ends the read, the sequence reported
+				 * as the terminator (the caller walks its recall
+				 * list forward; RC.RECALL DN echoes nothing) */
+				tt_hc_close(tt);
+				tt_complete(tt, SS__NORMAL, 0x1B, 3);
+				tt->res.term = 0x1B | ((uint32_t)'B' << 8);
+			}
+			return;
+		}
 		/* not a sequence after all: treat c normally */
 	}
 	if (filter && c == 0x1B && !(tt->rd_flags & VMS_TT_RD_TERMMASK)) {
@@ -398,10 +611,18 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 
 	if (filter) {
 		switch (c) {
-		case CH_DEL:                        /* rub out the last character */
-			if (!tt->len)
+		case CH_DEL:                        /* rub out the character left of the cursor */
+			if (!tt->cur)
 				return;
+			if (tt->cur < tt->len) {
+				tt_hc_close(tt);
+				if (tt_echoing(tt))
+					tt_out1(tt, CH_BS);
+				tt_delete_at(tt, tt->cur - 1, 1);
+				return;
+			}
 			tt->len--;
+			tt->cur--;
 			if (!tt_echoing(tt))
 				return;
 			if (tt_hardcopy(tt)) {
@@ -419,7 +640,66 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 			return;
 		case TT_CTRL('R'):                  /* redisplay prompt + line */
 			tt_hc_close(tt);
-			tt_redisplay(tt, 1);
+			if (tt_hardcopy(tt)) {
+				tt_redisplay(tt, 1);
+				if (tt_echoing(tt))
+					tt_bs(tt, tt->len - tt->cur);
+			} else if (tt_echoing(tt)) {
+				tt_redraw_in_place(tt);
+			}
+			return;
+		case CH_BS:                         /* ^H: to the start of the line */
+			tt_hc_close(tt);
+			if (tt->cur && tt_echoing(tt))
+				tt_prompt_cr(tt);
+			tt->cur = 0;
+			return;
+		case TT_CTRL('E'):                  /* to the end of the line */
+			tt_hc_close(tt);
+			if (tt_echoing(tt))
+				tt_out(tt, tt->line + tt->cur, tt->len - tt->cur);
+			tt->cur = tt->len;
+			return;
+		case TT_CTRL('D'):                  /* one character left */
+			tt_hc_close(tt);
+			if (tt->cur) {
+				tt->cur--;
+				if (tt_echoing(tt))
+					tt_out1(tt, CH_BS);
+			}
+			return;
+		case TT_CTRL('F'):                  /* one character right */
+			tt_hc_close(tt);
+			if (tt->cur < tt->len) {
+				if (tt_echoing(tt))
+					tt_out1(tt, tt->line[tt->cur]);
+				tt->cur++;
+			}
+			return;
+		case TT_CTRL('A'):                  /* insert <-> overstrike */
+			tt->ovs = !tt->ovs;
+			return;
+		case CH_LF: {                       /* ^J: delete the word to the left */
+			uint32_t at = tt->cur;
+
+			tt_hc_close(tt);
+			while (at && tt->line[at - 1] == ' ')
+				at--;
+			while (at && tt->line[at - 1] != ' ')
+				at--;
+			if (at == tt->cur)
+				return;
+			if (tt_echoing(tt))
+				tt_bs(tt, tt->cur - at);
+			{
+				uint32_t n = tt->cur - at;
+
+				tt->cur = at + n;   /* tt_delete_at removes [at, at+n) */
+				tt_delete_at(tt, at, n);
+			}
+			return;
+		}
+		case TT_CTRL('W'):                  /* refresh: nothing to redraw on this terminal */
 			return;
 		default:
 			break;
@@ -442,17 +722,36 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		if (c == CH_CR && !(tt->rd_flags & VMS_TT_RD_TRMNOECHO) &&
 		    (tt->rd_dc & VMS_TTC_ECHO))
 			tt_nl(tt);             /* the RETURN, echoed */
+		else if (c == TT_CTRL('B') && tt_echoing(tt))
+			tt_out1(tt, c);        /* CTRL/B is echoed as itself (RC.RECALL B) */
 		tt_complete(tt, SS__NORMAL, c, 1);
 		return;
 	}
 
-	/* a data character */
+	/* a data character, at the cursor */
 	if ((tt->rd_flags & VMS_TT_RD_CVTLOW) && c >= 'a' && c <= 'z')
 		c = (uint8_t)(c - 'a' + 'A');
 	tt_hc_close(tt);
-	tt->line[tt->len++] = c;
-	if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
-		tt_out1(tt, c);
+	if (tt->cur < tt->len && tt->ovs) {
+		tt->line[tt->cur++] = c;            /* overstrike */
+		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
+			tt_out1(tt, c);
+		return;
+	}
+	if (tt->cur < tt->len) {                    /* insert */
+		memmove(tt->line + tt->cur + 1, tt->line + tt->cur, tt->len - tt->cur);
+		tt->line[tt->cur++] = c;
+		tt->len++;
+		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB)) {
+			tt_out1(tt, c);
+			tt_echo_tail(tt, tt->cur, 0);
+		}
+	} else {
+		tt->line[tt->len++] = c;
+		tt->cur = tt->len;
+		if (tt_echoing(tt) && (c >= 0x20 || c == CH_TAB))
+			tt_out_linech(tt, tt->len - 1);
+	}
 	if (tt->len >= tt->rd_cap)              /* buffer full ends the read */
 		tt_complete(tt, SS__NORMAL, 0, 0);
 }
@@ -762,6 +1061,7 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 				tt_ta_purge(tt);
 				if (tt->rd_active) {
 					tt->rd_dc = dc;
+					tt->cur = tt->len;   /* all of it */
 					tt_kill_line(tt);
 				}
 				continue;
@@ -901,7 +1201,10 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		tt->rd_flags = req->flags;
 		tt->rd_cap = req->bufsz < VMS_TT_LINE_MAX ? req->bufsz : VMS_TT_LINE_MAX;
 		tt->rd_dc = dc;
+		tt->rd_width = tt_devwidth(tt->dev);
 		tt->len = 0;
+		tt->cur = 0;
+		tt->ovs = !(dc & VMS_TTC_INSERT_EDITING);
 		tt->hc_del = 0;
 		tt->esc = 0;
 		memset(&tt->res, 0, sizeof(tt->res));
@@ -910,10 +1213,20 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		else
 			tt_std_mask(tt->rd_mask);
 		tt->promptsz = 0;
+		tt->rd_pcol = 0;
 		if (req->prompt && req->promptsz) {
+			uint32_t q;
+
 			tt->promptsz = req->promptsz < VMS_TT_PROMPT_MAX ? req->promptsz
 									 : VMS_TT_PROMPT_MAX;
 			memcpy(tt->prompt, req->prompt, tt->promptsz);
+			for (q = 0; q < tt->promptsz; q++) {
+				uint8_t pc = tt->prompt[q];
+				if (pc == CH_CR || pc == CH_LF)
+					tt->rd_pcol = 0;
+				else if (pc >= 0x20)
+					tt->rd_pcol++;
+			}
 		}
 		tt->rd_deadline = 0;
 		if (req->flags & VMS_TT_RD_TIMED)
@@ -931,6 +1244,17 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		/* the prompt is written BEFORE any type-ahead is consumed and echoed */
 		if (tt->promptsz)
 			tt_prompt_out(tt, tt->prompt, tt->promptsz);
+		/* TRM$_INISTRNG: the line starts with these characters, shown
+		 * after the prompt, the cursor after them (a recalled command,
+		 * RC.RECALL U1) */
+		if (req->inistr && req->inisz) {
+			uint32_t ni = req->inisz < tt->rd_cap ? req->inisz : tt->rd_cap;
+
+			memcpy(tt->line, req->inistr, ni);
+			tt->len = tt->cur = ni;
+			if (tt_echoing(tt))
+				tt_out(tt, tt->line, ni);
+		}
 
 		tt->rd_active = 1;
 		tt_drain_typeahead(tt);
@@ -1198,7 +1522,7 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 	struct vms_tt_read_req rq;
 	struct vms_tt_read_result r;
 	struct vms_tt *tt;
-	uint8_t *line = NULL, *prompt = NULL;
+	uint8_t *line = NULL, *prompt = NULL, *ini = NULL;
 	uint32_t st = SS__NORMAL;
 
 	memset(&a, 0, sizeof(a));
@@ -1228,6 +1552,19 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 		}
 		rq.prompt = prompt;
 	}
+	if ((a.flags & VMS_TT_RD_INISTR) && a.inistr && a.inisz) {
+		rq.inisz = a.inisz < rq.bufsz ? a.inisz : rq.bufsz;
+		ini = rq.inisz ? exec_alloc(rq.inisz) : NULL;
+		if (rq.inisz && !ini) {
+			a.status = SS__INSFMEM;
+			goto out_rel;
+		}
+		if (rq.inisz && exec_copyin(ini, (const void *)(uintptr_t)a.inistr, rq.inisz)) {
+			a.status = SS__ACCVIO;
+			goto out_rel;
+		}
+		rq.inistr = ini;
+	}
 	line = exec_alloc(VMS_TT_LINE_MAX);
 	if (!line) {
 		a.status = SS__INSFMEM;
@@ -1244,6 +1581,8 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 			exec_free(line);
 			if (prompt)
 				exec_free(prompt);
+			if (ini)
+				exec_free(ini);
 			return -ERESTARTSYS;    /* no status written: re-enter */
 		}
 		a.oflags = 0;
@@ -1269,6 +1608,8 @@ out:
 		exec_free(line);
 	if (prompt)
 		exec_free(prompt);
+	if (ini)
+		exec_free(ini);
 	if (exec_copyout((void *)arg, &a, sizeof(a)))
 		return -EFAULT;
 	return 0;
@@ -1457,4 +1798,47 @@ void vms_tt_chan_gone(struct vms_device *dev, pid_t owner_linux_pid, uint32_t ch
 			memset(&tt->oob[i], 0, sizeof(tt->oob[i]));
 	exec_unlock(&tt->lock);
 	vms_tt_release(tt);
+}
+
+/*
+ * VMS_IOCTL_TT_BRKTHRU (rd vms-53a): a broadcast written to terminal `devnam`
+ * through its class driver. A read in progress there is broken through and then
+ * shown again (vms_tt_write's breakthrough redisplay; keystroke BC.READ W).
+ * Writing to a terminal is OPER, decided here (vms_prot.h). A row no port is
+ * attached to answers SS$_DEVOFFLINE.
+ */
+long vms_ioctl_tt_brkthru(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_tt_brkthru_args *a;
+	struct vms_tt *tt;
+	long rc = 0;
+
+	a = exec_alloc(sizeof(*a));
+	if (!a)
+		return -ENOMEM;
+	if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
+		exec_free(a);
+		return -EFAULT;
+	}
+	a->devnam[sizeof(a->devnam) - 1] = '\0';
+	a->status = vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_OPER);
+	if (!(a->status & 1))
+		goto out;
+	if (a->len > sizeof(a->msg)) {
+		a->status = SS__BADPARAM;
+		goto out;
+	}
+	tt = vms_devtab_tt_by_name(a->devnam);
+	if (!tt) {
+		a->status = SS__DEVOFFLINE;
+		goto out;
+	}
+	a->status = vms_tt_write(tt, (const uint8_t *)a->msg, a->len, 0) ? SS__DEVOFFLINE
+									    : SS__NORMAL;
+	vms_tt_release(tt);
+out:
+	if (exec_copyout((void *)arg, a, sizeof(*a)))
+		rc = -EFAULT;
+	exec_free(a);
+	return rc;
 }

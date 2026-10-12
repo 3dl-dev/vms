@@ -1,0 +1,29 @@
+# tt-wrap-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "wrap: with the WRAP characteristic a line longer than the terminal width continues on the next row (vms_tt.c tt_out_linech, rd vms-cef; keystroke WRAP.LONG)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_out_linech() writes CR LF before the character that would pass the last column (\`if (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)\`). The mutation never wraps (\`if (0)\`): the terminal is left to do it, or overprint. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a line longer than the width wraps: CR LF before the character that would pass the last column
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: ^U on a wrapped line decides from the line's length, not from what was drawn, so it still clears the row.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\tif (tt_wraps(tt) \&\& at \&\& at % tt->rd_width == 0)$|\tif (0) /* NEGCTL tt-wrap-ignored */|' "$_file"
+    :
+}

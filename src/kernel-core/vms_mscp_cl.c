@@ -55,6 +55,25 @@
  * 1. The object
  * ========================================================================== */
 
+/*
+ * rd vms-4822: one synchronous request in flight. Lives on the WAITER's stack
+ * for exactly the life of the request: the slot that points at it is cleared
+ * under the fork mutex BEFORE the waiter is woken, so nothing touches it after
+ * the waiter returns. The predicate `done` is guarded by `lk`, and the waker
+ * holds `lk` while it sets it (exec_kbackend.h SS2's contract).
+ */
+struct cl_sync_waiter {
+	exec_lock_t lk;
+	exec_cv_t   cv;
+	int         done;
+	uint16_t    mscp_status;
+	uint32_t    bytes;
+};
+
+#define MSCP_CL_SYNC_MAX 8u          /* OVMX design value: concurrent ACP
+				      * block requests this driver will hold */
+#define MSCP_CL_SYNC_TAG 0x80000000u /* handle bit: a synchronous request   */
+
 struct vms_mscp_cl {
 	struct vms_cluster   *cl;
 	struct mscp_cl_fsm    fsm;
@@ -79,6 +98,16 @@ struct vms_mscp_cl {
 	 * back through. A second call replaces it; NULL withdraws it. */
 	vms_mscp_cl_done_cb   done_cb;
 	void                 *done_ctx;
+
+	/* rd vms-4822: the SYNCHRONOUS callers (the ACP, process context) wait
+	 * here, one slot per request in flight. A slot points at the waiter on
+	 * the caller's own stack; its handle carries MSCP_CL_SYNC_TAG so its
+	 * completion is told apart from the asynchronous callers' above. */
+	struct cl_sync_waiter *sync[MSCP_CL_SYNC_MAX];
+	uint32_t               sync_gen;
+	uint32_t               sync_gen_of[MSCP_CL_SYNC_MAX];
+	uint32_t               sync_refused;    /* no free slot              */
+	uint32_t               sync_completed;
 
 	/* Real events counted HERE because here is where they happen. The
 	 * connect/refuse/close tallies live in `cadm` now, where those events
@@ -136,6 +165,16 @@ static int cl_op_buf_register(void *ctx, uint8_t *base, uint32_t len,
 			       name_out) == (int)SS__NORMAL ? 0 : -1;
 }
 
+static int cl_op_remote_conid(void *ctx, vms_conid_t conid, vms_conid_t *out)
+{
+	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
+
+	if (c->cl->scs == NULL)
+		return -1;
+	return scs_conid_remote(c->cl->scs, conid, out) == (int)SS__NORMAL
+		       ? 0 : -1;
+}
+
 static void cl_op_buf_release(void *ctx, uint32_t name)
 {
 	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
@@ -177,6 +216,27 @@ static void cl_op_io_done(void *ctx, uint32_t handle, uint16_t status,
 {
 	struct vms_mscp_cl *c = (struct vms_mscp_cl *)ctx;
 
+	if ((handle & MSCP_CL_SYNC_TAG) != 0u) {
+		uint32_t slot = handle & 0xffu;
+		struct cl_sync_waiter *w;
+
+		if (slot >= MSCP_CL_SYNC_MAX || c->sync[slot] == NULL ||
+		    ((handle >> 8) & 0x7fffffu) !=
+			    (c->sync_gen_of[slot] & 0x7fffffu)) {
+			c->completions_dropped++;
+			return;
+		}
+		w = c->sync[slot];
+		c->sync[slot] = NULL;      /* before the wake: see the struct */
+		c->sync_completed++;
+		exec_lock(&w->lk);
+		w->mscp_status = status;
+		w->bytes = bytes;
+		w->done = 1;
+		exec_cv_broadcast(&w->cv);
+		exec_unlock(&w->lk);
+		return;
+	}
 	if (c->done_cb == (vms_mscp_cl_done_cb)0) {
 		c->completions_dropped++;
 		return;
@@ -208,6 +268,7 @@ static void cl_ops_bind(struct vms_mscp_cl *c)
 	c->ops.send_cmd = cl_op_send_cmd;
 	c->ops.buf_register = cl_op_buf_register;
 	c->ops.buf_release = cl_op_buf_release;
+	c->ops.remote_conid = cl_op_remote_conid;
 	c->ops.unit_ready = cl_op_unit_ready;
 	c->ops.unit_gone = cl_op_unit_gone;
 	c->ops.io_done = cl_op_io_done;
@@ -526,6 +587,16 @@ void vms_mscp_cl_stop(struct vms_cluster *cl)
 			mscp_cl_fsm_conn_closed(&c->fsm,
 						c->cadm_peers[i].conid);
 	}
+	/* rd vms-4822: and no synchronous caller is left waiting on a driver
+	 * that is going away -- each is told Command Aborted (Table B-1), the
+	 * same real status the deadline would have given it. */
+	for (i = 0; i < MSCP_CL_SYNC_MAX; i++) {
+		if (c->sync[i] != NULL)
+			cl_op_io_done(c, MSCP_CL_SYNC_TAG |
+					 ((c->sync_gen_of[i] & 0x7fffffu) << 8) |
+					 i,
+				      (uint16_t)VMS_MSCP_ST_ABORTED, 0u);
+	}
 
 	if (cl->fork != NULL) {
 		cf_timer_cancel(cl->fork, CF_OWNER_MSCP_CL, MSCP_CL_TIMER_BEAT,
@@ -606,4 +677,109 @@ int vms_mscp_cl_write(struct vms_cluster *cl, const char *devnam, uint32_t lbn,
 {
 	return cl_io_entry(cl, devnam, lbn, nblocks, buf, buf_len, handle, done,
 			   done_ctx, 1);
+}
+
+/* ==========================================================================
+ * 9. The SYNCHRONOUS block service (rd vms-4822)
+ *
+ * The ACP reads and writes a volume one block request at a time and waits for
+ * each, in PROCESS context. The class driver's completion runs on the cluster
+ * fork thread. So the wait is here, on the caller's own thread, and the fork
+ * thread only wakes it: the fork mutex is held to TAKE the request and dropped
+ * before the wait, and the waker takes only the waiter's own lock. Never call
+ * this from the fork thread (it would wait on itself): the ACP never runs
+ * there.
+ *
+ * The wait has no abandonment path. The port names the caller's buffer to the
+ * serving node, and the server writes into it whenever its data arrives; a
+ * waiter that left early would leave that buffer named. The driver's own
+ * request deadline (vms_mscp_cl_io_fsm.h, the controller's declared timeout)
+ * and vms_mscp_cl_stop() both complete every request, so the wait always ends.
+ * ========================================================================== */
+
+/* The server's answer as the SS$ status the caller sees. The ACP turns any
+ * failure into its own device-error path (it counts it against the unit), so
+ * only the distinction that is real here is kept: the unit is not reachable
+ * (Unit-Offline / Available-but-not-online, Table B-1) versus the transfer did
+ * not complete (anything else, or a successful end that moved fewer bytes
+ * than asked -- never reported as success). */
+static uint32_t cl_sync_status(uint16_t mscp_status, uint32_t bytes,
+			       uint32_t want)
+{
+	switch (mscp_status & VMS_MSCP_ST_MASK) {
+	case VMS_MSCP_ST_SUCCESS:
+		return bytes == want ? (uint32_t)SS__NORMAL
+				     : (uint32_t)SS__ABORT;
+	case VMS_MSCP_ST_OFFLINE:
+	case VMS_MSCP_ST_AVAILABLE:
+		return (uint32_t)SS__DEVOFFLINE;
+	default:
+		return (uint32_t)SS__ABORT;
+	}
+}
+
+uint32_t vms_mscp_cl_io_wait(struct vms_cluster *cl, const char *devnam,
+			     uint32_t lbn, uint8_t *buf, uint32_t len,
+			     int is_write)
+{
+	struct cl_sync_waiter w;
+	struct vms_mscp_cl *c;
+	uint32_t slot, handle = 0u;
+	int rc, timed_out = 0;
+
+	if (cl == NULL || devnam == NULL || buf == NULL || len == 0u ||
+	    (len % 512u) != 0u)
+		return (uint32_t)SS__BADPARAM;
+
+	exec_lock_init(&w.lk);
+	exec_cv_init(&w.cv);
+	w.done = 0;
+	w.mscp_status = 0u;
+	w.bytes = 0u;
+
+	vms_cluster_fork_enter(cl);
+	c = cl->mscp_cl;
+	if (c == NULL) {
+		vms_cluster_fork_leave(cl);
+		exec_cv_destroy(&w.cv);
+		exec_lock_destroy(&w.lk);
+		return (uint32_t)SS__DEVOFFLINE;   /* no class driver: no path */
+	}
+	for (slot = 0; slot < MSCP_CL_SYNC_MAX; slot++) {
+		if (c->sync[slot] == NULL)
+			break;
+	}
+	if (slot == MSCP_CL_SYNC_MAX) {
+		c->sync_refused++;
+		vms_cluster_fork_leave(cl);
+		exec_cv_destroy(&w.cv);
+		exec_lock_destroy(&w.lk);
+		return (uint32_t)SS__INSFMEM;
+	}
+	c->sync_gen++;
+	c->sync_gen_of[slot] = c->sync_gen;
+	handle = MSCP_CL_SYNC_TAG | ((c->sync_gen & 0x7fffffu) << 8) | slot;
+	c->sync[slot] = &w;
+	rc = is_write ? mscp_cl_fsm_write(&c->fsm, devnam, lbn, len / 512u,
+					  buf, len, handle)
+		      : mscp_cl_fsm_read(&c->fsm, devnam, lbn, len / 512u, buf,
+					 len, handle);
+	if (rc != 0) {
+		/* Refused synchronously: io_done will NOT be called. */
+		c->sync[slot] = NULL;
+		vms_cluster_fork_leave(cl);
+		exec_cv_destroy(&w.cv);
+		exec_lock_destroy(&w.lk);
+		return (uint32_t)SS__DEVOFFLINE;
+	}
+	vms_cluster_fork_leave(cl);
+
+	exec_lock(&w.lk);
+	while (!w.done)
+		(void)exec_cv_wait_timeout(&w.cv, &w.lk, 1000u, &timed_out);
+	exec_unlock(&w.lk);
+	exec_cv_destroy(&w.cv);
+	exec_lock_destroy(&w.lk);
+
+	return cl_sync_status(w.mscp_status, w.bytes, len);
 }

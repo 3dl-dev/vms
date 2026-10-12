@@ -386,6 +386,10 @@ int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi);
 int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
 		  uint32_t cap, uint8_t *out_len);
 
+/* The SCSNODE `sysid` really advertised (vms_pe_fsm.h). rd vms-239. */
+int pe_peer_name(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		 uint32_t cap, uint8_t *out_len);
+
 /* The incarnation `sysid` really advertised (vms_pe_fsm.h). rd vms-0f9. */
 int pe_peer_incarnation(struct vms_pe *pe, vms_scs_sysid_t sysid,
 			uint64_t *out);

@@ -164,6 +164,8 @@ SCSH_UNUSED static struct scs_sysap_ops scsdh_stub_ops = {
 	(void (*)(void *, vms_conid_t, uint32_t))0,
 	(void (*)(void *, vms_conid_t, uint32_t))0,
 	(const uint8_t *)0,   /* accept_conndata: this stub declares none */
+	(const uint8_t *)0,   /* connect_conndata: none either */
+	0u,                   /* connect_min_credits: no floor */
 	(void *)0
 };
 

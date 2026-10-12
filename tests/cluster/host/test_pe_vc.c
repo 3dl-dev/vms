@@ -608,6 +608,20 @@ static void test_formation_member_path(void)
 		 "the peer's node name was LEARNED from its body");
 	ct_check_eq_u32((uint32_t)vc->peer_sysid, VAX1_SYSID,
 			"and its SCSSYSTEMID with it");
+	{
+		uint8_t nm[8];
+		uint8_t len = 0u;
+
+		ct_check(pe_fsm_peer_name(&g_env.fsm, VAX1_SYSID, nm,
+					  (uint32_t)sizeof(nm), &len) == 0 &&
+			 len == 4u && memcmp(nm, "VAX1", 4) == 0,
+			 "rd vms-239: pe_fsm_peer_name hands it back, blanks "
+			 "trimmed (the CSB's SCSNODE source)");
+		ct_check(pe_fsm_peer_name(&g_env.fsm, VAX1_SYSID + 1u, nm,
+					  (uint32_t)sizeof(nm), &len) != 0 &&
+			 len == 0u,
+			 "  and a system with no circuit has none");
+	}
 }
 
 /*

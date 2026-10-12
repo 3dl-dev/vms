@@ -156,6 +156,9 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
 int dcl_pcb_hold_open(int fds[2]);
 void dcl_pcb_hold_wait(int fds[2]);
 uint32_t dcl_pcb_hold_release(int fds[2], int child_pid);
+/* The same, making the held task a NEW VMS process of the given kind
+ * (VMS_CREPRC_PCB_SUBPROCESS: a PIPE segment, rd vms-1f8). */
+uint32_t dcl_pcb_hold_release_kind(int fds[2], int child_pid, uint32_t kind);
 void dcl_sysinput_restore(struct dcl_sysinput *si);
 
 /* P1 control-region establishment (vms-68f.v, in-process image activation).

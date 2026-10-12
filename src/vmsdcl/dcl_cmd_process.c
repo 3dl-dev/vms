@@ -2080,12 +2080,17 @@ void dcl_pcb_hold_wait(int fds[2])
 /* Parent: make the held task DCL's own VMS process, then release it. */
 uint32_t dcl_pcb_hold_release(int fds[2], int child_pid)
 {
+    return dcl_pcb_hold_release_kind(fds, child_pid, VMS_CREPRC_PCB_CONTINUE);
+}
+
+/* Parent: make the held task a VMS process of `kind`, then release it. */
+uint32_t dcl_pcb_hold_release_kind(int fds[2], int child_pid, uint32_t kind)
+{
     uint32_t st = SS$_ABORT;
     ssize_t n;
     close(fds[0]);
     if (child_pid > 0)
-        st = vms_kif_creprc_pcb((uint32_t)child_pid, VMS_CREPRC_PCB_CONTINUE,
-                                NULL, 0, 0, NULL);
+        st = vms_kif_creprc_pcb((uint32_t)child_pid, kind, NULL, 0, 0, NULL);
     do { n = write(fds[1], "g", 1); } while (n < 0 && errno == EINTR);
     close(fds[1]);
     return st;
@@ -2965,15 +2970,23 @@ static const char *pipe_get_self_exe(void)
  */
 int cmd_pipe(struct dcl_command *cmd)
 {
-    /* Reconstruct the entire command line after PIPE */
+    /* The pipeline is the command line after PIPE, VERBATIM (raw_tail): the
+     * old reconstruction from parsed parameters dropped quotes and moved
+     * qualifiers, so `PIPE WRITE SYS$OUTPUT "x"` wrote the symbol x and
+     * `PIPE SHOW PROCESS/PRIVILEGES` was IVQUAL in the segment (found by
+     * test_syssvc_dcl_pipe, rd vms-1f8). The reconstruction stays only for a
+     * command structure built without the raw tail. */
     char pipeline[DCL_MAX_LINE] = {0};
+    if (cmd->raw_tail[0]) {
+        strncpy(pipeline, cmd->raw_tail, sizeof(pipeline) - 1);
+    } else
     for (int i = 0; i < cmd->param_count; i++) {
         if (i > 0) strncat(pipeline, " ",
                             sizeof(pipeline) - strlen(pipeline) - 1);
         strncat(pipeline, cmd->params[i],
                 sizeof(pipeline) - strlen(pipeline) - 1);
     }
-    if (cmd->rest[0]) {
+    if (!cmd->raw_tail[0] && cmd->rest[0]) {
         if (pipeline[0]) strncat(pipeline, " | ",
                                   sizeof(pipeline) - strlen(pipeline) - 1);
         strncat(pipeline, cmd->rest,
@@ -3036,7 +3049,28 @@ int cmd_pipe(struct dcl_command *cmd)
             return SS$_BADPARAM;
         }
 
+        /* Each segment is a SUBPROCESS of this DCL, as PIPE's are on VMS
+         * (rd vms-1f8): DCL makes its PCB while it waits, before it runs. */
+        int pcb_hold[2];
+        if (dcl_pcb_hold_open(pcb_hold) != 0) {
+            dcl_error("DCL", 4, "CREPRC", "cannot create process");
+            for (int j = 0; j < nseg - 1; j++) {
+                close(pipefds[j][0]);
+                close(pipefds[j][1]);
+            }
+            for (int j = 0; j < i; j++)
+                waitpid(pids[j], NULL, 0);
+            return SS$_INSFMEM;
+        }
         pid_t pid = fork();
+        /* The segment is released whether or not its PCB was made, exactly as
+         * an activated image is (dcl_pcb_hold_release): with no executive (a
+         * host DCL) there is none to make, and the segment's own service calls
+         * then fail honestly. vms-2a5 decides what a task without a PCB may do
+         * once self-registration is gone. */
+        if (pid != 0)
+            (void)dcl_pcb_hold_release_kind(pcb_hold, (int)pid,
+                                            VMS_CREPRC_PCB_SUBPROCESS);
         if (pid < 0) {
             dcl_error("DCL", 4, "CREPRC", "cannot create process");
             /* Clean up */
@@ -3069,7 +3103,8 @@ int cmd_pipe(struct dcl_command *cmd)
                 close(pipefds[j][1]);
             }
 
-            /* Exec vmsdcl -c "segment" */
+            /* A VMS process once DCL has made its PCB; then exec vmsdcl -c. */
+            dcl_pcb_hold_wait(pcb_hold);
             execl(dcl_exe, "vmsdcl", "-c", segments[i], (char *)NULL);
             fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
             _exit(127);

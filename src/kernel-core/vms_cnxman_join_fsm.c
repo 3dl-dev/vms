@@ -780,6 +780,14 @@ static vms_codec_status_t join_build_params(struct cnxman_join *j,
 	if (st == VMS_CODEC_OK && members != 0u && join_member_state(j, &ms))
 		st = vms_cm_params_member_put(j->scratch,
 					      (uint32_t)sizeof(j->scratch), &ms);
+	/* ...and its quorum and QDSKVOTES, from the executive's own SYSGEN
+	 * (a real VAX echoes the QDSKVOTES into every open it sends us). No
+	 * EXPECTED_VOTES held: the two words stay 0 and that is counted. */
+	if (st == VMS_CODEC_OK && j->cl != NULL &&
+	    vms_cm_params_quorum_put(j->scratch, (uint32_t)sizeof(j->scratch),
+				     j->cl->params.expected_votes,
+				     j->cl->params.qdskvotes) != VMS_CODEC_OK)
+		j->node_params_omitted++;
 	return st;
 }
 

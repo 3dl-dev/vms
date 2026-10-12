@@ -1309,7 +1309,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "join_members_for() drops the member-state test, so a foreign connection manager is sent a member-form count while this node holds no formation/transition/membership time to send beside it: a record in a shape no real node writes.";;
         require_fail) hd_lines <<'EOF'
-a foreign connection manager still hears 0
+a foreign connection manager hears 0 while this node holds no member state to send beside the count
 and nothing new goes to the foreign one
 EOF
         ;;

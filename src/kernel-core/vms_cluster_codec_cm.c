@@ -1697,3 +1697,21 @@ vms_codec_status_t vms_cm_params_member_put(uint8_t *body, uint32_t cap,
 	return VMS_CODEC_OK;
 }
 
+vms_codec_status_t vms_cm_params_quorum_put(uint8_t *body, uint32_t cap,
+					    uint16_t expected_votes,
+					    uint16_t qdskvotes)
+{
+	if (body == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	if (body[VMS_OFB_CM_CATEGORY] != VMS_CM_CAT_CONFIG ||
+	    body[VMS_OFB_CM_OPCODE] != VMS_CM_OP_PARAMS)
+		return VMS_CODEC_E_CLASS;
+	if (expected_votes == 0u)
+		return VMS_CODEC_E_INVAL;
+	cm_put_le_n(body, VMS_OFB_CM_PQUORUM,
+		    (uint64_t)(((uint32_t)expected_votes + 2u) / 2u), 2u);
+	cm_put_le_n(body, VMS_OFB_CM_QDSKVOTES, (uint64_t)qdskvotes, 2u);
+	return VMS_CODEC_OK;
+}

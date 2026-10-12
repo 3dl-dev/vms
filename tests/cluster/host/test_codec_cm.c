@@ -1785,6 +1785,18 @@ static void test_member_params_against_real(void)
 	ms.joined = 0u;
 	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_E_INVAL,
 		 "a time not held is never claimed");
+	/* VAX1 ran EXPECTED_VOTES 1 (body[76:80]) and the default QDSKVOTES. */
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 1u, 1u) == VMS_CODEC_OK,
+		 "the quorum words are written");
+	ct_check(memcmp(b + 20, r + 20, 2) == 0,
+		 "*** body[20:22] = the real quorum (EV 1 -> 1) ***");
+	ct_check(memcmp(b + 24, r + 24, 2) == 0,
+		 "*** body[24:26] = the real QDSKVOTES the VAXes echo in opens ***");
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 3u, 2u) == VMS_CODEC_OK &&
+		 b[20] == 2u && b[24] == 2u,
+		 "EV 3 -> quorum 2; QDSKVOTES 2 -> 2 (rd vms-f297 arms)");
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 0u, 1u) ==
+		 VMS_CODEC_E_INVAL, "no EXPECTED_VOTES held: nothing claimed");
 }
 
 int main(void)

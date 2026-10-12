@@ -962,6 +962,72 @@ out:
     return 0;
 }
 
+/*
+ * vms_ioctl_mbx_chkacc - may ANOTHER process perform `access` on a mailbox?
+ * (rd vms-046; contract in vms_mbx.h). The SAME decision mbx_access() makes
+ * for that process's own $QIO: its UIC and enabled privileges (READALL
+ * withheld, as there) against the mailbox's owner UIC and protection mask,
+ * through vms_prot_check(). Measured shape (docs/oracle/semantics/mbxown/,
+ * VAX V7.3 $CHECK_ACCESS ACL$C_DEVICE): a non-system user may WRITE but not
+ * READ an S:RWLP,O:RWLP,G:,W:W mailbox (MBXO.CHKACC.REQ.DEF.R = SS$_NOPRIV,
+ * .W = SS$_NORMAL), and may do both on an open one.
+ */
+long vms_ioctl_mbx_chkacc(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_mbx_chkacc_args args;
+    struct vms_mailbox *mbx;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t uic = 0, owner = 0, status;
+    uint64_t privs = 0;
+    uint16_t prot = 0;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    if (args.access == 0 || (args.access & ~(VMS_MBX_ACC_READ | VMS_MBX_ACC_WRITE))) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    status = mbx_normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+    status = vms_proc_access_identity(proc, args.target_pid, &uic, &privs);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_mbx_list_lock);
+    mbx = mbx_find_locked(devnam);
+    if (mbx) {
+        owner = mbx->owner_uic;
+        prot  = mbx->prot;
+    }
+    exec_unlock(&vms_mbx_list_lock);
+    if (!mbx) {
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+
+    status = SS__NORMAL;
+    if (args.access & VMS_MBX_ACC_READ)
+        status = vms_prot_check(uic, privs & ~VMS_PRV_M_READALL, owner, prot,
+                                VMS_PROT_ACC_READ);
+    if (status == SS__NORMAL && (args.access & VMS_MBX_ACC_WRITE))
+        status = vms_prot_check(uic, privs & ~VMS_PRV_M_READALL, owner, prot,
+                                VMS_PROT_ACC_WRITE);
+    args.status = status;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 /* ================================================================
  * $DASSGN fallback and process teardown -- called from vms_devtab.c
  * ================================================================ */

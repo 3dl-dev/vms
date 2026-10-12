@@ -1,0 +1,29 @@
+# tt-raw-crlf-owes-newline -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a program's own CR LF (\$QIO write, no carriage control) leaves nothing owed: the next prompt starts in place (vms_tt.c vms_tt_write mode 3, rd vms-457; keystroke PG.DIR C1, EDT.KEYPAD Q)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() takes a \$QIO write's LF after its CR as leaving the line clean (\`if (cooked == 3 \&\& c == CH_LF\`). The mutation never does (\`if (0 \&\& c == CH_LF\`): DCL's prompt after EDT or the DIRECTORY/PAGE pager starts with a CR VMS does not send. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+after a program's own CR LF, DCL's prompt starts in place: <NUL>$ 
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the checks after it start from an explicit CR LF.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t\tif (cooked == 3 \&\& c == CH_LF \&\& tt->pos == TT_POS_CR) {$|\t\t\tif (0 \&\& c == CH_LF \&\& tt->pos == TT_POS_CR) { /* NEGCTL tt-raw-crlf-owes-newline */|' "$_file"
+    :
+}

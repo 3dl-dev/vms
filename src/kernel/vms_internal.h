@@ -750,6 +750,11 @@ struct vms_proc {
 
     /* Access mode (3a) */
     uint8_t             current_mode;   /* PSL_C_KERNEL..PSL_C_USER */
+    /* JPI$_BUFIO / JPI$_DIRIO (rd vms-bd71): this process's buffered
+     * (terminal, mailbox) and direct (disk, through the ACP) I/O requests,
+     * counted by the executive as each completes. */
+    uint32_t            io_buffered;
+    uint32_t            io_direct;
     uint64_t            cur_privs;      /* current (temporary) privileges */
     uint64_t            perm_privs;     /* permanent privileges */
     uint32_t            subst_uid;      /* substrate uid the executive gave it, 0 = none (vms-ac48) */
@@ -1852,5 +1857,14 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
 void vms_lnm_forget_device(const char *devnam);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
+
+/* JPI$_BUFIO for the calling process: `n` records it wrote to its terminal
+ * through the port's own write path (stdio), one buffered I/O each, as a
+ * record $PUT to a terminal is on VMS (probe Q.IODELTA2 W; rd vms-bd71).
+ * A caller with no executive entry is not counted. */
+void vms_proc_count_bufio_current(uint32_t n);
+/* add to a process I/O counter (JPI$_BUFIO/DIRIO): the substrate's own
+ * atomic add -- VAX has no compiler atomics a kernel module may call */
+#define VMS_IO_COUNT(p, n) __atomic_fetch_add((p), (n), __ATOMIC_RELAXED)
 
 #endif /* _VMS_INTERNAL_H */

@@ -457,7 +457,7 @@ fi
 OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
 wait_for 'Password:' 20 "$OFF" && send "$INSTALL_PW"
-if wait_for 'Welcome to OpenVMX' 30 "$OFF"; then
+if wait_for 'Welcome to OpenVMX' 30 "$OFF" && wait_for '$ ' 90 "$OFF"; then
     ok "SYSTEM logs in with the INSTALL-SET password from the booted target (not the kit default)"
 else
     dump_and_die "SYSTEM login with the install-set password failed -- the install-set password did not persist to the target"

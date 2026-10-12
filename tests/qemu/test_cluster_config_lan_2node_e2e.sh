@@ -279,7 +279,7 @@ record "node A boot1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&4; sleep 1
     printf 'MANAGER\r' >&4; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$A_LOG1" "$qp"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$A_LOG1" "$qp" && waitfor '$ ' 90 "$A_LOG1" "$qp"; then rc=0; else rc=1; fi
     record "node A boot1: SYSTEM logs in" "$rc"
 fi
 if [ "$rc" -eq 0 ]; then
@@ -311,7 +311,7 @@ record "node B boot1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&6; sleep 1
     printf 'MANAGER\r' >&6; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$B_LOG1" "$qp"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$B_LOG1" "$qp" && waitfor '$ ' 90 "$B_LOG1" "$qp"; then rc=0; else rc=1; fi
     record "node B boot1: SYSTEM logs in" "$rc"
 fi
 if [ "$rc" -eq 0 ]; then
@@ -351,7 +351,7 @@ check "node A boot2: %OVMX-I-SCSNODE console line names the authored $NODE_A" \
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&4; sleep 1
     printf 'MANAGER\r' >&4; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$A_LOG2" "$AP" && waitfor '$ ' 90 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
     record "node A boot2: SYSTEM logs in" "$rc"
 
     printf 'HOSTA = F$GETSYI("NODENAME")\r' >&4; sleep 1
@@ -434,7 +434,7 @@ check "node B boot2: %OVMX-I-SCSNODE console line names the authored $NODE_B" \
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&6; sleep 1
     printf 'MANAGER\r' >&6; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$B_LOG2" "$BP" && waitfor '$ ' 90 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
     record "node B boot2: SYSTEM logs in" "$rc"
 
     printf 'HOSTB = F$GETSYI("NODENAME")\r' >&6; sleep 1

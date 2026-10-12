@@ -1,0 +1,101 @@
+# keystroke oracle transcript (unmasked) -- case PG.DIR (OpenVMS VAX V7.3 OPA0:)
+# output paging: DIRECTORY/PAGE of 30 files on a 24-line screen
+# case-sha256 34e477214f05ee9c10d257cd9a81f1c91430dbb6d24e4367942ba2084ac64b1e
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP D
+| DIRECTORY/PAGE [.KSPGD]<CR><LF>
+| <CR><LF>
+| Directory SYS$SYSROOT:[SYSMGR.KSPGD]<CR><LF>
+| <CR><LF>
+| F1.TXT;1            F10.TXT;1           F11.TXT;1           F12.TXT;1<CR><LF>
+| F13.TXT;1           F14.TXT;1           F15.TXT;1           F16.TXT;1<CR><LF>
+| F17.TXT;1           F18.TXT;1           F19.TXT;1           F2.TXT;1<CR><LF>
+| F20.TXT;1           F21.TXT;1           F22.TXT;1           F23.TXT;1<CR><LF>
+| F24.TXT;1           F25.TXT;1           F26.TXT;1           F27.TXT;1<CR><LF>
+| F28.TXT;1           F29.TXT;1           F3.TXT;1            F30.TXT;1<CR><LF>
+| F4.TXT;1            F5.TXT;1            F6.TXT;1            F7.TXT;1<CR><LF>
+| F8.TXT;1            F9.TXT;1<CR><LF>
+| <CR><LF>
+| Total of 30 files.<CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R1
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R3
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP C
+| DIRECTORY/PAGE/COLUMNS=1 [.KSPGD]<CR><LF>
+| <CR><LF>
+| Directory SYS$SYSROOT:[SYSMGR.KSPGD]<CR><LF>
+| <CR><LF>
+| F1.TXT;1<CR><LF>
+| F10.TXT;1<CR><LF>
+| F11.TXT;1<CR><LF>
+| F12.TXT;1<CR><LF>
+| F13.TXT;1<CR><LF>
+| F14.TXT;1<CR><LF>
+| F15.TXT;1<CR><LF>
+| F16.TXT;1<CR><LF>
+| F17.TXT;1<CR><LF>
+| F18.TXT;1<CR><LF>
+| F19.TXT;1<CR><LF>
+| F2.TXT;1<CR><LF>
+| F20.TXT;1<CR><LF>
+| F21.TXT;1<CR><LF>
+| F22.TXT;1<CR><LF>
+| F23.TXT;1<CR><LF>
+| F24.TXT;1<CR><LF>
+| F25.TXT;1<CR><LF>
+| F26.TXT;1<CR><LF>
+| F27.TXT;1<CR><LF>
+| F28.TXT;1<CR><LF>
+| <CR> RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit
+=== STEP C1
+| F29.TXT;1<CR><LF>
+| F3.TXT;1<CR><LF>
+| F30.TXT;1<CR><LF>
+| F4.TXT;1<CR><LF>
+| F5.TXT;1<CR><LF>
+| F6.TXT;1<CR><LF>
+| F7.TXT;1<CR><LF>
+| F8.TXT;1<CR><LF>
+| F9.TXT;1<CR><LF>
+| <CR><LF>
+| Total of 30 files.<CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <NUL>$ 
+=== STEP C2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP C3
+| <CR><LF>
+| <CR><NUL>$ 

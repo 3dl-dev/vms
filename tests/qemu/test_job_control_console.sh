@@ -305,7 +305,7 @@ fi
 LOGIN_OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
 wait_for 'Password:' "$CMD_TIMEOUT" "$LOGIN_OFF" && send 'MANAGER'
-if wait_for 'Welcome to OpenVMX' "$CMD_TIMEOUT" "$LOGIN_OFF"; then
+if wait_for 'Welcome to OpenVMX' "$CMD_TIMEOUT" "$LOGIN_OFF" && wait_for '$ ' 90 "$LOGIN_OFF"; then
     ok "SYSTEM logs in through the JOB_CONTROL-created session (LOGINOUT.EXE activated)"
 else
     dump_and_die "SYSTEM login failed"

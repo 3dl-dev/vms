@@ -381,7 +381,9 @@ static void dcl_ctrlt_ast(uint32_t ch)
     if (!(vms_kif_getjpi_self(&info) & 1))
         return;                      /* no executive -> no line (INV-6) */
     ovmx_node_name(node, sizeof(node));
-    if (dcl_format_ctrl_t_status(&info, node, "", time(NULL), line, sizeof(line)) & 1) {
+    /* at the DCL level no image runs, and VMS names the CLI there: "(DCL)"
+     * (VAX V7.3 keystroke OOB.PROMPT T/T2) */
+    if (dcl_format_ctrl_t_status(&info, node, "(DCL)", time(NULL), line, sizeof(line)) & 1) {
         fputs(line, stdout);
         fputc('\n', stdout);
         fflush(stdout);
@@ -924,7 +926,10 @@ int main(int argc, char *argv[])
              */
             static int recall_back;      /* 0: not walking the list */
             uint16_t tterm = 0;
-            const char *ini = recall_back ? dcl_recall_get(recall_back) : NULL;
+            extern const char *dcl_recall_pending;   /* RECALL n (vms-0315) */
+            const char *ini = recall_back ? dcl_recall_get(recall_back)
+                                          : dcl_recall_pending;
+            dcl_recall_pending = NULL;
             int tn = dcl_tt_read_ini(pb, pbl, ini, tt_buf, sizeof(tt_buf), &tterm);
             if (tn >= 0 && tterm == 0x02) {          /* up arrow / CTRL/B */
                 if (recall_back < dcl_recall_size())

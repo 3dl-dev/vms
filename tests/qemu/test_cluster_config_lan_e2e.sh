@@ -179,7 +179,7 @@ record "boot 1: pre-installed disk boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG1" && waitfor '$ ' 90 "$POS_LOG1"; then rc=0; else rc=1; fi
     record "boot 1: SYSTEM logs in" "$rc"
 
     # Baseline: the seed carries SCSNODE=OVMX, and boot 1's OWN PID 1 already
@@ -276,7 +276,7 @@ check "boot 2: NO honest-halt warning (a good, present .PAR does not warn)" \
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG2"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG2" && waitfor '$ ' 90 "$POS_LOG2"; then rc=0; else rc=1; fi
     record "boot 2: SYSTEM logs in" "$rc"
 
     # ADOPTION PROOF #2: the LIVE running system's hostname. F$GETSYI("NODENAME")

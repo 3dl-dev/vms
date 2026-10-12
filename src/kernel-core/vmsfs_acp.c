@@ -2148,6 +2148,10 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
     args.status = SS__DEVNOTMOUNT;
 #endif /* OVMX_ODS2_KERNEL */
 
+    /* an ACP function is one buffered I/O of the caller's, as an XQP call is
+     * on VMS (VAX V7.3 probe Q.IODELTA2: OPEN 1, CLOSE 1; rd vms-ae8) */
+    if (args.status & 1)
+        VMS_IO_COUNT(&proc->io_buffered, 1u);
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -2227,6 +2231,10 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
 #endif
 
     args.status = status;
+    /* an ACP function is one buffered I/O of the caller's, as an XQP call is
+     * on VMS (VAX V7.3 probe Q.IODELTA2: OPEN 1, CLOSE 1; rd vms-ae8) */
+    if (args.status & 1)
+        VMS_IO_COUNT(&proc->io_buffered, 1u);
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
@@ -2579,6 +2587,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
     args.new_efblk = snap->efblk;
     args.status = SS__NORMAL;
     exec_free(snap);
+    VMS_IO_COUNT(&proc->io_direct, 1u);   /* JPI$_DIRIO (rd vms-bd71) */
 
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -3003,6 +3012,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     args.extended  = extended;
     args.status    = SS__NORMAL;
     exec_free(s);
+    VMS_IO_COUNT(&proc->io_direct, 1u);   /* JPI$_DIRIO (rd vms-bd71) */
 
 out:
     vms_lock_acp_vol_release(proc, wr_lkid);   /* vms-233: release the volume lock (no-op if 0) */
@@ -4613,6 +4623,10 @@ free_sc:
     args.status = SS__DEVNOTMOUNT;           /* no codec: nothing mountable here */
 #endif /* OVMX_ODS2_KERNEL */
 
+    /* an ACP function is one buffered I/O of the caller's, as an XQP call is
+     * on VMS (VAX V7.3 probe Q.IODELTA2: OPEN 1, CLOSE 1; rd vms-ae8) */
+    if (args.status & 1)
+        VMS_IO_COUNT(&proc->io_buffered, 1u);
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

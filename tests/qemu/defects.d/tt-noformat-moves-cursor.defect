@@ -1,0 +1,29 @@
+# tt-noformat-moves-cursor -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "IO\$M_NOFORMAT terminal writes leave the class driver's cursor position untouched (vms_tt.c vms_tt_write mode 2, rd vms-457; keystroke PG.DIR C1)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() skips tt_track() for an IO\$M_NOFORMAT write (\`if (cooked != 2)\`). The mutation tracks it (\`if (1)\`): the pq write moves the cursor mid-line and the next record opens with CR LF instead of paying the owed line feed. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+after an IO$M_NOFORMAT write the next record starts where the driver last put the cursor: <LF>e<CR>
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the later checks start from an explicit CR LF.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t\t} else if (cooked != 2) {$|\t\t\t} else if (1) { /* NEGCTL tt-noformat-moves-cursor */|' "$_file"
+    :
+}

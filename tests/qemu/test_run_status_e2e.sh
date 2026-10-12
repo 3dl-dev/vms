@@ -116,7 +116,7 @@ ok "runtime boots to the login prompt"
 LOGIN_OFF=$(wc -c <"$LOG")
 send 'SYSTEM'
 wait_for 'Password:' 30 "$LOGIN_OFF" && send 'MANAGER'
-wait_for 'Welcome to OpenVMX' 30 "$LOGIN_OFF" || dump_and_die "SYSTEM login failed"
+wait_for 'Welcome to OpenVMX' 30 "$LOGIN_OFF" && wait_for '$ ' 90 "$LOGIN_OFF" || dump_and_die "SYSTEM login failed"
 ok "SYSTEM logs in (LOGINOUT.EXE -> DCL.EXE off the mounted ODS-2 disk)"
 wait_for '$ ' 20 "$LOGIN_OFF"
 

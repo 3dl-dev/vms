@@ -1209,6 +1209,19 @@ static int do_master_ods2(const char *image, const char *label,
     if (total_blocks < (uint32_t)MIN_BLOCKS)
         total_blocks = (uint32_t)MIN_BLOCKS;
 
+    /* A volume of a given size gets file headers to go with it: the booted
+     * system creates files (logs, a user's work), and a header cap of a quarter
+     * more than the mastered tree ran out after ~25 new files (rd vms-59da).
+     * One header per 64 blocks of volume on top of the tree, while the header
+     * area still leaves room for the data. */
+    if (size_mb > 0) {
+        uint64_t want = (uint64_t)needed_files + total_blocks / 64u;
+        if (want > 65535u) want = 65535u;
+        if (want > maxfiles &&
+            (uint64_t)want + data_needed + 256u < total_blocks)
+            maxfiles = (uint32_t)want;
+    }
+
     /* ---- Create + size the image, then format it as a genuine ODS-2 volume
      * directly on the fd (block-device-backed writer, no whole-image buffer). */
     int fd = open(image, O_RDWR | O_CREAT | O_TRUNC, 0644);

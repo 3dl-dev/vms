@@ -1,447 +1,1560 @@
 /*
- * dcl_editor.c - EDT-compatible Line Editor
+ * dcl_editor.c - EDT, line mode (rd vms-f1e / vms-d442).
  *
- * Implements a minimal EDT line-mode editor for the DCL EDIT command.
- * Supports INSERT, TYPE, DELETE, SUBSTITUTE, WRITE, EXIT, QUIT, HELP,
- * and line number navigation.
+ * Clean-room: built from the public EDT Reference Manual and the observed
+ * behaviour of the VAX V7.3 console (keystroke cases EDT.LINE, EDT.LINE2;
+ * goldens docs/oracle/keystroke/EDT.LINE*). Nothing here comes from VSI/HPE
+ * source or binaries.
  *
- * EDT prompt is '*'. Insert mode ends on Ctrl+Z (EOF) or empty line.
+ * What the console shows, and this reproduces:
+ *   - EDIT/EDT of a new file: "Input file does not exist", then [EOB]; of an
+ *     existing file, its first line, numbered. The prompt is "*" on a new line.
+ *   - A line is shown as its number -- the whole part right-justified in five
+ *     columns, then any fraction ".n" -- padded to column 12, then the text
+ *     ("    1       ONE", "    0.1     NEW"); the end of the buffer is [EOB].
+ *   - INSERT inserts before the current line; with ";text" it inserts that one
+ *     line, otherwise it prompts with twelve spaces until CTRL/Z. Lines added
+ *     at the end of the buffer are numbered on from the last whole number;
+ *     lines added between two others take tenths (then hundredths ...).
+ *     Afterwards the current line is shown.
+ *   - RETURN at "*" moves to the next line and shows it; a range alone shows
+ *     that range (TYPE); TYPE leaves the current line at the range's first.
+ *   - FIND moves; "String was not found" when a search fails.
+ *   - SUBSTITUTE/old/new/ [range] shows each changed line, then
+ *     "n substitutions".
+ *   - DELETE [range]: "n line(s) deleted", then the new current line.
+ *   - An unknown command: " ^" under it, then "Unrecognized command".
+ *   - EXIT writes a new version and says "DEV:[DIR]NAME.TYP;v n lines";
+ *     QUIT leaves without writing.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <errno.h>
+#include <stdint.h>
+#include <strings.h>
+#include <unistd.h>
 
 #include "ssdef.h"
+#include "dcl/context.h"
+#include "dcl/dcl_rms.h"
+#include "dcl/terminal.h"
 
-/* Maximum lines and line length */
-#define EDT_MAX_LINES   65536
-#define EDT_MAX_LINE    1024
+#define EDT_LINE_MAX  4096
+#define EDT_SCALE     100000L        /* line numbers carry five decimals */
 
-/* Editor buffer */
-struct edt_buffer {
-    char **lines;       /* Array of line pointers */
-    int    count;       /* Number of lines */
-    int    capacity;    /* Allocated capacity */
-    int    dot;         /* Current line (1-based, 0 = before first line) */
-    char   filename[1024];
-    int    modified;    /* Buffer has unsaved changes */
+struct edt_line {
+    long  num;                      /* line number * EDT_SCALE */
+    char *text;
 };
 
-static int edt_init(struct edt_buffer *buf)
+struct edt_buf {
+    struct edt_line *l;
+    int    n, cap;
+    int    cur;                     /* current line index; n = [EOB] */
+};
+
+/* ---------------------------------------------------------------- */
+
+static int buf_insert(struct edt_buf *b, int at, long num, const char *text)
 {
-    buf->capacity = 256;
-    buf->lines = calloc(buf->capacity, sizeof(char *));
-    if (!buf->lines) return 0;
-    buf->count = 0;
-    buf->dot = 0;
-    buf->modified = 0;
-    buf->filename[0] = '\0';
-    return 1;
+    if (b->n == b->cap) {
+        int nc = b->cap ? b->cap * 2 : 64;
+        struct edt_line *nl = realloc(b->l, (size_t)nc * sizeof *nl);
+        if (!nl) return -1;
+        b->l = nl;
+        b->cap = nc;
+    }
+    char *t = strdup(text);
+    if (!t) return -1;
+    memmove(b->l + at + 1, b->l + at, (size_t)(b->n - at) * sizeof *b->l);
+    b->l[at].num = num;
+    b->l[at].text = t;
+    b->n++;
+    return 0;
 }
 
-static void edt_free(struct edt_buffer *buf)
+static void buf_delete(struct edt_buf *b, int at)
 {
-    for (int i = 0; i < buf->count; i++)
-        free(buf->lines[i]);
-    free(buf->lines);
-    buf->lines = NULL;
-    buf->count = 0;
-    buf->capacity = 0;
+    free(b->l[at].text);
+    memmove(b->l + at, b->l + at + 1, (size_t)(b->n - at - 1) * sizeof *b->l);
+    b->n--;
 }
 
-static int edt_grow(struct edt_buffer *buf)
+static void buf_free(struct edt_buf *b)
 {
-    if (buf->count < buf->capacity) return 1;
-    int new_cap = buf->capacity * 2;
-    if (new_cap > EDT_MAX_LINES) new_cap = EDT_MAX_LINES;
-    if (new_cap <= buf->capacity) return 0;
-    char **new_lines = realloc(buf->lines, new_cap * sizeof(char *));
-    if (!new_lines) return 0;
-    buf->lines = new_lines;
-    buf->capacity = new_cap;
-    return 1;
+    for (int i = 0; i < b->n; i++) free(b->l[i].text);
+    free(b->l);
+    memset(b, 0, sizeof *b);
 }
 
-/* Insert a line after position pos (0 = before first line) */
-static int edt_insert_line(struct edt_buffer *buf, int pos, const char *text)
+/* "    1       ONE", "    0.1     NEW", "[EOB]" */
+static void show_line(const struct edt_buf *b, int i)
 {
-    if (!edt_grow(buf)) return 0;
-    if (pos < 0) pos = 0;
-    if (pos > buf->count) pos = buf->count;
-
-    /* Shift lines down */
-    for (int i = buf->count; i > pos; i--)
-        buf->lines[i] = buf->lines[i - 1];
-
-    buf->lines[pos] = strdup(text);
-    if (!buf->lines[pos]) return 0;
-    buf->count++;
-    buf->modified = 1;
-    return 1;
+    if (i >= b->n) {
+        printf("[EOB]\n");
+        return;
+    }
+    char field[32];
+    long w = b->l[i].num / EDT_SCALE, f = b->l[i].num % EDT_SCALE;
+    int k = snprintf(field, sizeof field, "%5ld", w);
+    if (f) {
+        char fr[8];
+        snprintf(fr, sizeof fr, "%05ld", f);
+        for (int j = 4; j > 0 && fr[j] == '0'; j--) fr[j] = '\0';
+        k += snprintf(field + k, sizeof field - (size_t)k, ".%s", fr);
+    }
+    printf("%-12s%s\n", field, b->l[i].text);
 }
 
-/* Load file into buffer */
-static int edt_load(struct edt_buffer *buf, const char *path)
+/* numbers for `count` lines inserted before index `at` */
+static int number_run(const struct edt_buf *b, int at, int count, long *first,
+                      long *step)
 {
-    FILE *fp = fopen(path, "r");
-    if (!fp) return 0;
-
-    char line[EDT_MAX_LINE];
-    while (fgets(line, sizeof(line), fp)) {
-        /* Strip trailing newline */
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
-        if (!edt_insert_line(buf, buf->count, line)) {
-            fclose(fp);
+    long prev = at > 0 ? b->l[at - 1].num : 0;
+    if (at >= b->n) {                         /* at the end: whole numbers */
+        *first = (prev / EDT_SCALE + 1) * EDT_SCALE;
+        *step = EDT_SCALE;
+        return 0;
+    }
+    long next = b->l[at].num;
+    for (long s = EDT_SCALE; s >= 1; s /= 10) {
+        long base = (prev / s) * s;
+        if (base + (long)count * s < next) {
+            *first = base + s;
+            *step = s;
             return 0;
         }
     }
-    fclose(fp);
-    buf->modified = 0;
-    if (buf->count > 0) buf->dot = 1;
+    return -1;
+}
+
+/* ---------------------------------------------------------------- */
+/* ranges                                                             */
+
+struct range { int a, b; int ok; };          /* indices; b inclusive */
+
+static const char *skip(const char *p)
+{
+    while (*p == ' ' || *p == '\t') p++;
+    return p;
+}
+
+static int kw(const char **pp, const char *word, size_t minlen)
+{
+    const char *p = *pp;
+    size_t n = 0;
+    while (isalpha((unsigned char)p[n])) n++;
+    if (n < minlen || n > strlen(word) || strncasecmp(p, word, n) != 0)
+        return 0;
+    *pp = p + n;
     return 1;
 }
 
-/* Save buffer to file */
-static int edt_save(struct edt_buffer *buf, const char *path)
+/* the index of line number `num` (or of the first line after it) */
+static int index_of(const struct edt_buf *b, long num, int exact)
 {
-    FILE *fp = fopen(path, "w");
-    if (!fp) {
-        fprintf(stderr, "%%EDT-E-WRITEERR, error writing %s - %s\n",
-                path, strerror(errno));
+    for (int i = 0; i < b->n; i++) {
+        if (b->l[i].num == num) return i;
+        if (b->l[i].num > num) return exact ? -1 : i;
+    }
+    return b->n;
+}
+
+static int search(const struct edt_buf *b, int from, const char *s, size_t sl)
+{
+    for (int i = from; i < b->n; i++) {
+        const char *t = b->l[i].text;
+        size_t tl = strlen(t);
+        for (size_t j = 0; j + sl <= tl; j++)
+            if (strncasecmp(t + j, s, sl) == 0) return i;
+    }
+    return -1;
+}
+
+static int parse_number(const char **pp, long *num)
+{
+    const char *p = *pp;
+    if (!isdigit((unsigned char)*p)) return 0;
+    long w = 0, f = 0, scale = EDT_SCALE / 10;
+    while (isdigit((unsigned char)*p)) w = w * 10 + (*p++ - '0');
+    if (*p == '.' && isdigit((unsigned char)p[1])) {
+        p++;
+        while (isdigit((unsigned char)*p)) {
+            if (scale) { f += (*p - '0') * scale; scale /= 10; }
+            p++;
+        }
+    }
+    *num = w * EDT_SCALE + f;
+    *pp = p;
+    return 1;
+}
+
+/* one end of a range: a number, ., BEGIN, END, "string" */
+static int parse_point(const struct edt_buf *b, const char **pp, int *idx,
+                       int *notfound)
+{
+    const char *p = skip(*pp);
+    long num;
+    if (parse_number(&p, &num)) {
+        *idx = index_of(b, num, 0);
+    } else if (*p == '.') {
+        p++;
+        *idx = b->cur;
+    } else if (*p == '"' || *p == '\'') {
+        char q = *p++;
+        const char *e = strchr(p, q);
+        size_t sl = e ? (size_t)(e - p) : strlen(p);
+        int f = search(b, b->cur, p, sl);
+        p += sl + (e ? 1 : 0);
+        if (f < 0) { *notfound = 1; *idx = b->cur; }
+        else *idx = f;
+    } else if (kw(&p, "BEGIN", 1)) {
+        *idx = 0;
+    } else if (kw(&p, "END", 1)) {
+        *idx = b->n;
+    } else {
         return 0;
     }
-    for (int i = 0; i < buf->count; i++)
-        fprintf(fp, "%s\n", buf->lines[i]);
-    fclose(fp);
-    buf->modified = 0;
+    *pp = p;
     return 1;
 }
 
-/* Parse a range string. Supports:
- *   ""      -> current line
- *   "n"     -> line n
- *   "n:m"   -> lines n through m
- *   "."     -> current line
- *   "*"     -> all lines
- *   "REST"  -> current through end
- * Returns 1 on success, 0 on error. Sets start/end (1-based).
- */
-static int edt_parse_range(const struct edt_buffer *buf, const char *range,
-                           int *start, int *end)
+/* a range, or the current line when none is given */
+static struct range parse_range(const struct edt_buf *b, const char **pp,
+                                int *notfound)
 {
-    if (!range || !range[0] || strcmp(range, ".") == 0) {
-        *start = *end = buf->dot;
-        return (*start >= 1 && *start <= buf->count);
-    }
-    if (strcmp(range, "*") == 0) {
-        *start = 1;
-        *end = buf->count;
-        return (buf->count > 0);
-    }
-    if (strcasecmp(range, "REST") == 0) {
-        *start = buf->dot;
-        *end = buf->count;
-        return (*start >= 1);
-    }
+    struct range r = { b->cur, b->cur, 1 };
+    const char *p = skip(*pp);
+    const char *save = p;
 
-    /* Try n:m */
-    const char *colon = strchr(range, ':');
-    if (colon) {
-        *start = (int)strtol(range, NULL, 10);
-        *end = (int)strtol(colon + 1, NULL, 10);
+    if (kw(&p, "WHOLE", 1)) {
+        r.a = 0; r.b = b->n;                  /* through [EOB] */
+    } else if (kw(&p, "REST", 1)) {
+        r.a = b->cur; r.b = b->n;
     } else {
-        *start = *end = (int)strtol(range, NULL, 10);
+        p = save;
+        int a;
+        if (parse_point(b, &p, &a, notfound)) {
+            r.a = r.b = a;
+            const char *q = skip(p);
+            const char *q2 = q;
+            if (*q == ':' || (kw(&q2, "THRU", 3) && (q = q2))) {
+                if (*q == ':') q++;
+                int c;
+                if (parse_point(b, &q, &c, notfound)) {
+                    r.b = c;
+                    p = q;
+                } else {
+                    r.ok = 0;
+                }
+            }
+        } else {
+            p = save;
+        }
     }
-
-    if (*start < 1) *start = 1;
-    if (*end > buf->count) *end = buf->count;
-    return (*start <= *end && *start >= 1);
+    *pp = p;
+    return r;
 }
 
-/* Skip whitespace */
-static const char *skip_ws(const char *s)
+/* ---------------------------------------------------------------- */
+
+/* ================================================================ */
+/* keypad (screen) mode, CHANGE -- rd vms-c37                        */
+/*                                                                  */
+/* What the VAX V7.3 console shows on a VT100 (keystroke EDT.SCREEN,  */
+/* EDT.KEYPAD) and this reproduces:                                   */
+/*  - entry: ESC \ ESC < ESC[?6l ESC[m ESC)0 ESC[4l ESC[H ESC[?3l     */
+/*    ESC[;22r ESC[H ESC= ESC[J, the lines from the top ("text CR LF",  */
+/*    [EOB] last), then the cursor; rows 1-22 are the text, 23 the      */
+/*    prompt line, 24 the message line;                                 */
+/*  - a key that arrives as an escape sequence is processed between     */
+/*    ESC[?8l and ESC[?8h (GOLD and the key it prefixes, once);         */
+/*  - cursor motion is the shortest of: CR (to column 1), BS (one left),*/
+/*    ESC[nC / ESC[nD on the row, LF (one down) or ESC[nA (up) in the   */
+/*    column, CR LF (next row, column 1), else ESC[r;cH with r or c     */
+/*    left out when 1; after ESC[t;br the cursor is home;               */
+/*  - an edit rewrites the line from the change: the text, ESC[K, then  */
+/*    back to the cursor; PASTE rewrites the whole line;                */
+/*  - removing a row: ESC[r;22r ESC[22H LF, then what is below [EOB]    */
+/*    erased (ESC[J), ESC[;22r; adding one: ESC[r;22r LF ESC M text     */
+/*    ESC[;22r;                                                         */
+/*  - GOLD shows ESC[7m, the next command ESC[m; a SELECT range is in    */
+/*    reverse video; a message is BEL ESC[24H ESC[K ESC[7m text ESC[m,  */
+/*    and the next key clears rows 23-24 (ESC[23H ESC[J).               */
+/* ================================================================ */
+
+#define WROWS 22
+
+struct scr {
+    char   out[16384];
+    size_t on;
+    int    r, c, known;               /* the terminal's cursor */
+    int    rev;                       /* reverse video is on */
+    int    top;                       /* buffer index on row 1 */
+    int    msg;                       /* rows 23-24 hold something */
+    int    eob_row;                   /* row [EOB] is shown on */
+};
+
+static void so(struct scr *s, const char *t)
 {
-    while (*s && isspace((unsigned char)*s)) s++;
-    return s;
+    size_t l = strlen(t);
+    if (s->on + l >= sizeof s->out) { dcl_tt_raw_write(s->out, s->on); s->on = 0; }
+    memcpy(s->out + s->on, t, l);
+    s->on += l;
 }
 
-/* Get the next word from the command line, return pointer past it */
-static const char *next_word(const char *s, char *word, size_t word_size)
+static void sflush(struct scr *s)
 {
-    s = skip_ws(s);
-    size_t i = 0;
-    while (*s && !isspace((unsigned char)*s) && i < word_size - 1)
-        word[i++] = *s++;
-    word[i] = '\0';
-    return s;
+    dcl_tt_raw_write(s->out, s->on);
+    s->on = 0;
+}
+
+/* text written at the cursor moves it */
+static void stext(struct scr *s, const char *t, size_t n)
+{
+    char b[EDT_LINE_MAX + 1];
+    if (n > EDT_LINE_MAX) n = EDT_LINE_MAX;
+    memcpy(b, t, n);
+    b[n] = '\0';
+    so(s, b);
+    s->c += (int)n;
+}
+
+static void srend(struct scr *s, int rev)
+{
+    if (rev == s->rev) return;
+    so(s, rev ? "\033[7m" : "\033[m");
+    s->rev = rev;
+}
+
+static void smove(struct scr *s, int r, int c)
+{
+    char b[32];
+    if (s->known && r == s->r && c == s->c) return;
+    if (s->known && r == s->r) {
+        if (c > s->c) {
+            if (c - s->c == 1) so(s, "\033[C");
+            else { snprintf(b, sizeof b, "\033[%dC", c - s->c); so(s, b); }
+        } else if (c == 1) {
+            so(s, "\r");
+        } else if (s->c - c == 1) {
+            so(s, "\b");
+        } else {
+            snprintf(b, sizeof b, "\033[%dD", s->c - c); so(s, b);
+        }
+    } else if (s->known && c == s->c && r == s->r + 1) {
+        so(s, "\n");
+    } else if (s->known && c == s->c && r > s->r + 1) {
+        snprintf(b, sizeof b, "\033[%dB", r - s->r);   /* EDT.KEYPAD3 RP */
+        so(s, b);
+    } else if (s->known && c == s->c && r < s->r) {
+        if (s->r - r == 1) so(s, "\033[A");
+        else { snprintf(b, sizeof b, "\033[%dA", s->r - r); so(s, b); }
+    } else if (s->known && c == 1 && r == s->r + 1) {
+        so(s, "\r\n");
+    } else {
+        if (r == 1 && c == 1) snprintf(b, sizeof b, "\033[H");
+        else if (c == 1) snprintf(b, sizeof b, "\033[%dH", r);
+        else if (r == 1) snprintf(b, sizeof b, "\033[;%dH", c);
+        else snprintf(b, sizeof b, "\033[%d;%dH", r, c);
+        so(s, b);
+    }
+    s->r = r; s->c = c; s->known = 1;
+}
+
+static void sregion(struct scr *s, int t, int b)
+{
+    char x[32];
+    if (t == 1) snprintf(x, sizeof x, "\033[;%dr", b);
+    else snprintf(x, sizeof x, "\033[%d;%dr", t, b);
+    so(s, x);
+    s->r = 1; s->c = 1; s->known = 1;  /* DECSTBM homes the cursor */
+}
+
+struct kp {
+    struct edt_buf *b;
+    struct scr s;
+    int li, off;                       /* the cursor in the buffer */
+    int dir;                           /* 1 advance, -1 backup */
+    int sel, sel_li, sel_off;          /* SELECT range start */
+    char *delw, *delc, *dell, *paste;  /* the delete buffers, PASTE */
+    int delc_back;                     /* DEL C came from DELETE (to the left) */
+    int fresh_li;                      /* a line just opened, its row not written */
+    char find[256];
+};
+
+static int row_of(const struct kp *k, int li) { return li - k->s.top + 1; }
+
+static const char *ltext(const struct kp *k, int li)
+{
+    return li < k->b->n ? k->b->l[li].text : "";
+}
+
+/* rewrite row `li` from column `col`: the text, then ESC[K */
+static void spaint(struct kp *k, int li, int col)
+{
+    const char *t = ltext(k, li);
+    size_t len = strlen(t);
+    smove(&k->s, row_of(k, li), col);
+    if ((size_t)(col - 1) < len)
+        stext(&k->s, t + col - 1, len - (size_t)(col - 1));
+    so(&k->s, "\033[K");
 }
 
 /*
- * edt_run - Main EDT line-mode editor loop
- *
- * Called from cmd_edit in dcl_builtin.c with the resolved file path.
- * Returns SS$_NORMAL on success.
+ * Keep the cursor's line on the screen. Once the screen can move, the cursor
+ * is held between rows 8 and 15; the screen never moves past the point where
+ * [EOB] is on the last row, nor above the first line. A move of less than a
+ * screen scrolls -- up: ESC[22H LF and the new bottom line, a line at a time;
+ * down: ESC M, the new top line and CR, from row 1 (keystroke EDT.KEYPAD2
+ * BOT, TOP, SEC, DN, DN2, UP).
  */
-int edt_run(const char *filepath)
+static void sfull(struct kp *k);
+#define CUR_TOP 8
+#define CUR_BOT 15
+
+static void sscroll(struct kp *k)
 {
-    struct edt_buffer buf;
-    if (!edt_init(&buf)) {
-        fprintf(stderr, "%%EDT-F-INITERR, cannot initialize editor buffer\n");
-        return SS$_ABORT;
+    int n = k->b->n;
+    int r = row_of(k, k->li);
+    int top = k->s.top;
+    int maxtop = n + 1 - WROWS;
+    if (maxtop < 0) maxtop = 0;
+    if (r > CUR_BOT) top = k->li - (CUR_BOT - 1);
+    else if (r < CUR_TOP) top = k->li - (CUR_TOP - 1);
+    if (top > maxtop) top = maxtop < k->s.top ? k->s.top : maxtop;
+    if (top < 0) top = 0;
+    if (r >= 1 && r <= WROWS && ((r >= CUR_TOP && r <= CUR_BOT) || top == k->s.top))
+        return;
+    int d = top - k->s.top;
+    if (d == 0) return;
+    if (d >= WROWS || -d >= WROWS) {
+        k->s.top = top;
+        sfull(k);
+        return;
     }
-
-    strncpy(buf.filename, filepath, sizeof(buf.filename) - 1);
-    buf.filename[sizeof(buf.filename) - 1] = '\0';
-
-    /* Try to load existing file */
-    if (edt_load(&buf, filepath)) {
-        printf("  %d lines read from %s\n", buf.count, filepath);
+    if (d > 0) {
+        for (int i = 0; i < d; i++) {
+            k->s.top++;
+            k->s.known = 0;
+            smove(&k->s, WROWS, 1);
+            so(&k->s, "\n");
+            int bl = k->s.top + WROWS - 1;
+            if (bl <= n) {
+                const char *t = bl < n ? k->b->l[bl].text : "[EOB]";
+                stext(&k->s, t, strlen(t));
+            }
+        }
+        k->s.known = 0;
     } else {
-        printf("  Input file does not exist.  Creating new file.\n");
-        printf("  [EOB]\n");
+        for (int i = 0; i < -d; i++) {
+            k->s.top--;
+            smove(&k->s, 1, 1);           /* CR between lines (EDT.KEYPAD2 UP) */
+            so(&k->s, "\033M");
+            const char *t = ltext(k, k->s.top);
+            stext(&k->s, t, strlen(t));
+        }
     }
+}
 
-    /* Main command loop */
-    char cmdline[EDT_MAX_LINE];
+static void scursor(struct kp *k)
+{
+    sscroll(k);
+    smove(&k->s, row_of(k, k->li), k->off + 1);
+}
+
+static void sclear_msg(struct kp *k)
+{
+    if (!k->s.msg) return;
+    k->s.known = 0;                    /* rows 23-24 are reached absolutely */
+    smove(&k->s, 23, 1);
+    so(&k->s, "\033[J");
+    k->s.msg = 0;
+}
+
+static void smessage(struct kp *k, const char *m)
+{
+    so(&k->s, "\a");
+    k->s.known = 0;
+    smove(&k->s, 24, 1);
+    so(&k->s, "\033[K");
+    srend(&k->s, 1);
+    stext(&k->s, m, strlen(m));
+    if (!k->sel)                        /* a SELECT range keeps it (EDT.KEYPAD3 S3) */
+        srend(&k->s, 0);
+    k->s.msg = 1;
+}
+
+/* below [EOB]: erased, from the row after it */
+static void serase_below(struct kp *k)
+{
+    int er = row_of(k, k->b->n) + 1;
+    if (er <= WROWS) {
+        smove(&k->s, er, 1);
+        so(&k->s, "\033[J");
+    }
+}
+
+static void sfull(struct kp *k)
+{
+    so(&k->s, "\033\\\033<\033[?6l\033[m\033)0\033[4l\033[H\033[?3l");
+    sregion(&k->s, 1, WROWS);
+    so(&k->s, "\033[H\033=\033[J");
+    k->s.r = 1; k->s.c = 1; k->s.known = 1;
+    k->s.rev = 0;
+    if (k->li < k->s.top || k->li >= k->s.top + WROWS)
+        k->s.top = k->li;
+    /* rows 1-21 end with CR LF; the last row is reached with ESC[22H
+     * (keystroke EDT.KEYPAD2 C, W) */
+    for (int i = k->s.top, row = 1; row <= WROWS; i++, row++) {
+        if (row == WROWS) {
+            if (i > k->b->n) break;
+            k->s.known = 0;
+            smove(&k->s, WROWS, 1);
+        }
+        const char *t = i < k->b->n ? k->b->l[i].text : "[EOB]";
+        stext(&k->s, t, strlen(t));
+        if (i >= k->b->n) break;
+        if (row < WROWS - 1) { so(&k->s, "\r\n"); k->s.r++; k->s.c = 1; }
+    }
+    scursor(k);
+}
+
+/* the buffer lost the row for line `li` (still on the screen): close it up */
+static void sdelete_row(struct kp *k, int li)
+{
+    int r = row_of(k, li);
+    char x[32];
+    if (r < 1 || r > WROWS) return;
+    if (r == 1) snprintf(x, sizeof x, "\033[;%dr", WROWS);
+    else snprintf(x, sizeof x, "\033[%d;%dr", r, WROWS);
+    so(&k->s, x);
+    k->s.known = 0;                    /* see below: ESC[22H, absolute */
+    smove(&k->s, WROWS, 1);
+    so(&k->s, "\n");
+    /* nothing to bring in at the bottom: what is below [EOB] is erased now;
+     * a line that is there is written once the region is reset (sfill_bottom;
+     * keystroke EDT.KEYPAD L, EDT.KEYPAD2 J) */
+    if (k->s.top + WROWS - 1 > k->b->n)
+        serase_below(k);
+    sregion(&k->s, 1, WROWS);
+}
+
+/* after a row was closed up: the bottom row's new line, or below [EOB] erased */
+static void sfill_bottom(struct kp *k)
+{
+    int bl = k->s.top + WROWS - 1;
+    if (bl <= k->b->n) {
+        const char *t = bl < k->b->n ? k->b->l[bl].text : "[EOB]";
+        smove(&k->s, WROWS, 1);
+        stext(&k->s, t, strlen(t));
+        so(&k->s, "\033[K");
+    } else {
+        serase_below(k);
+    }
+}
+
+/* the buffer gained line `li`: open a row for it and write it */
+static void sinsert_row(struct kp *k, int li)
+{
+    int r = row_of(k, li);
+    if (r < 1 || r > WROWS) return;
+    if (r > 1) {
+        sregion(&k->s, r, WROWS);
+        /* sregion homed the cursor to (1,1); the region's top is row r */
+        smove(&k->s, r, 1);
+    }
+    so(&k->s, "\033M");
+    stext(&k->s, ltext(k, li), strlen(ltext(k, li)));
+    sregion(&k->s, 1, WROWS);
+}
+
+static int is_word_sep(int c) { return c == ' ' || c == '\t'; }
+
+/* end of the word at `off`: through the word and the spaces after it */
+static int word_end(const char *t, int off)
+{
+    int n = (int)strlen(t), i = off;
+    if (i >= n) return n;
+    while (i < n && !is_word_sep((unsigned char)t[i])) i++;
+    while (i < n && is_word_sep((unsigned char)t[i])) i++;
+    return i;
+}
+
+static void set_text(struct kp *k, int li, const char *t)
+{
+    if (li < 0 || li >= k->b->n)
+        return;                         /* [EOB] holds no text */
+    char *d = strdup(t);
+    if (!d) return;
+    free(k->b->l[li].text);
+    k->b->l[li].text = d;
+}
+
+static void str_set(char **dst, const char *t, size_t n)
+{
+    char *d = malloc(n + 1);
+    if (!d) return;
+    memcpy(d, t, n);
+    d[n] = '\0';
+    free(*dst);
+    *dst = d;
+}
+
+/* insert `t` (may hold '\n') at the cursor; the cursor stays before it unless
+ * `after` */
+static void ins_text(struct kp *k, const char *t, int after, int whole_line)
+{
+    if (k->li >= k->b->n && !strchr(t, '\n')) {
+        /* text put in at [EOB] is a new line before it (EDT.KEYPAD3 RP) */
+        long first, step;
+        if (number_run(k->b, k->b->n, 1, &first, &step) != 0) return;
+        buf_insert(k->b, k->b->n, first, t);
+        k->off = 0;
+        sinsert_row(k, k->li);
+        if (after) k->off = (int)strlen(t);
+        scursor(k);
+        return;
+    }
+    if (k->li >= k->b->n) {
+        long first, step;
+        if (number_run(k->b, k->b->n, 1, &first, &step) != 0) return;
+        buf_insert(k->b, k->b->n, first, "");
+        k->off = 0;
+    }
+    const char *cur = k->b->l[k->li].text;
+    char head[EDT_LINE_MAX], tail[EDT_LINE_MAX];
+    snprintf(head, sizeof head, "%.*s", k->off, cur);
+    snprintf(tail, sizeof tail, "%s", cur + k->off);
+    const char *nl = strchr(t, '\n');
+    if (!nl) {
+        char line[EDT_LINE_MAX * 2];
+        snprintf(line, sizeof line, "%s%s%s", head, t, tail);
+        set_text(k, k->li, line);
+        int col = whole_line ? 1 : k->off + 1;
+        if (!tail[0] && !whole_line && k->fresh_li == k->li && !head[0]) {
+            /* the first text on a line just opened: EDT writes the row
+             * (Q.EDTNUM K3: "P<ESC>[K") */
+            k->fresh_li = -1;
+            spaint(k, k->li, col);
+        } else if (!tail[0] && !whole_line) {
+            /* typed at the end of a line: just the text (EDT.KEYPAD2 T),
+             * written as the terminal's own echo would be -- the driver sees
+             * the line move on (EDT.KEYPAD2/3 Z: "<CR><LF>*" afterwards) */
+            smove(&k->s, row_of(k, k->li), col);
+            sflush(&k->s);
+            dcl_tt_qio_write(t, strlen(t));
+            k->s.c += (int)strlen(t);
+        } else {
+            spaint(k, k->li, col);
+        }
+        if (after) k->off += (int)strlen(t);
+        scursor(k);
+        return;
+    }
+    /* one line break: head+first piece, then the rest + tail as a new line */
+    char a[EDT_LINE_MAX * 2], bb[EDT_LINE_MAX * 2];
+    snprintf(a, sizeof a, "%s%.*s", head, (int)(nl - t), t);
+    snprintf(bb, sizeof bb, "%s%s", nl + 1, tail);
+    set_text(k, k->li, a);
+    long first, step;
+    if (number_run(k->b, k->li + 1, 1, &first, &step) == 0)
+        buf_insert(k->b, k->li + 1, first, bb);
+    sinsert_row(k, k->li + 1);
+    if (tail[0] || (t[0] != '\n'))
+        spaint(k, k->li, k->off + 1);   /* broken at the end: the line is as it was
+                                         * (Q.EDTNUM K2) */
+    if (after) { k->li++; k->off = (int)strlen(nl + 1); }
+    if (!bb[0]) k->fresh_li = k->li + (after ? 0 : 1);
+    scursor(k);
+}
+
+static void kp_move(struct kp *k, int li, int off)
+{
+    k->li = li;
+    k->off = off;
+}
+
+/* one cursor step right/left, crossing line ends */
+static int step_right(struct kp *k)
+{
+    int len = (int)strlen(ltext(k, k->li));
+    if (k->li >= k->b->n) return 0;
+    if (k->off < len) k->off++;
+    else { k->li++; k->off = 0; }
+    return 1;
+}
+
+static int step_left(struct kp *k)
+{
+    if (k->off > 0) { k->off--; return 1; }
+    if (k->li == 0) return 0;
+    k->li--;
+    k->off = (int)strlen(ltext(k, k->li));
+    return 1;
+}
+
+static void sel_paint_step(struct kp *k, int from_li, int from_off)
+{
+    /* moving forward inside a SELECT range: the text passed is shown in
+     * reverse (keystroke EDT.KEYPAD S2, EDT.KEYPAD3 S2) */
+    if (k->li == from_li && k->off > from_off) {
+        smove(&k->s, row_of(k, from_li), from_off + 1);
+        srend(&k->s, 1);
+        stext(&k->s, ltext(k, from_li) + from_off, (size_t)(k->off - from_off));
+    }
+}
+
+static int kp_search(struct kp *k, int dir, int *fli, int *foff)
+{
+    size_t sl = strlen(k->find);
+    if (!sl) return 0;
+    int li = k->li, off = k->off;
+    if (dir > 0) {
+        off++;
+        for (; li < k->b->n; li++, off = 0) {
+            const char *t = k->b->l[li].text;
+            int n = (int)strlen(t);
+            for (int j = off; j + (int)sl <= n; j++)
+                if (strncasecmp(t + j, k->find, sl) == 0) { *fli = li; *foff = j; return 1; }
+        }
+    } else {
+        off--;
+        for (; li >= 0; li--) {
+            const char *t = li < k->b->n ? k->b->l[li].text : "";
+            int n = (int)strlen(t);
+            if (li != k->li) off = n - (int)sl;
+            for (int j = off; j >= 0; j--)
+                if (j + (int)sl <= n && strncasecmp(t + j, k->find, sl) == 0) {
+                    *fli = li; *foff = j; return 1;
+                }
+        }
+    }
+    return 0;
+}
+
+/* read a key: a character, or an escape sequence as 0x100 + its final byte
+ * (CSI) or 0x200 + its final byte (SS3: the keypad) */
+static int kp_key(void)
+{
+    int c = dcl_tt_getc(0);
+    if (c != 0x1B) return c;
+    int c2 = dcl_tt_getc(0);
+    if (c2 == '[') {
+        int f;
+        do { f = dcl_tt_getc(0); } while (f >= 0 && f < 0x40);
+        return 0x100 | (f & 0xFF);
+    }
+    if (c2 == 'O') {
+        int f = dcl_tt_getc(0);
+        return 0x200 | (f & 0xFF);
+    }
+    return c2 < 0 ? 0x1B : 0x300 | (c2 & 0xFF);
+}
+
+#define K_UP     (0x100 | 'A')
+#define K_DOWN   (0x100 | 'B')
+#define K_RIGHT  (0x100 | 'C')
+#define K_LEFT   (0x100 | 'D')
+#define K_PF1    (0x200 | 'P')
+#define K_PF2    (0x200 | 'Q')
+#define K_PF3    (0x200 | 'R')
+#define K_PF4    (0x200 | 'S')
+#define K_KP(n)  (0x200 | ('p' + (n)))
+#define K_MINUS  (0x200 | 'm')
+#define K_COMMA  (0x200 | 'l')
+#define K_DOT    (0x200 | 'n')
+#define K_ENTER  (0x200 | 'M')
+
+static int kp_prompt(struct kp *k, const char *label, char *out, size_t outsz,
+                     int restore);
+
+/* GOLD FIND: "Search for: " on row 23, the string typed after it */
+static int kp_find_prompt(struct kp *k)
+{
+    char str[256];
+    if (!kp_prompt(k, "Search for: ", str, sizeof str, 1))
+        return 0;
+    if (str[0]) snprintf(k->find, sizeof k->find, "%s", str);
+    return 1;
+}
+
+/* a prompt on row 23 and what is typed after it, echoed by EDT itself; the
+ * ESC[?8h waits for the first echo (keystroke EDT.KEYPAD F, F2). `restore`:
+ * clear the prompt line and put the cursor back afterwards. */
+static int kp_prompt(struct kp *k, const char *label, char *out, size_t outsz,
+                     int restore)
+{
+    char str[256];
+    size_t n = 0;
+    int first = 1;
+    k->s.known = 0;
+    smove(&k->s, 23, 1);
+    so(&k->s, "\033[K");
+    stext(&k->s, label, strlen(label));
+    sflush(&k->s);
     for (;;) {
-        printf("*");
-        fflush(stdout);
-
-        if (!fgets(cmdline, sizeof(cmdline), stdin))
+        int c = kp_key();
+        if (c == K_ENTER || c == K_KP(4) || c == K_KP(5) || c == '\r') {
+            if (c == K_KP(4)) k->dir = 1;
+            if (c == K_KP(5)) k->dir = -1;
             break;
+        }
+        if (c < 0 || c == 0x1A) return 0;
+        if (c >= 0x20 && c < 0x7F && n + 1 < sizeof str) {
+            if (first) { so(&k->s, "\033[?8h"); first = 0; }
+            char e[2] = { (char)c, 0 };
+            stext(&k->s, e, 1);
+            str[n++] = (char)c;
+            sflush(&k->s);
+        } else if (c == 0x7F && n) {
+            n--;
+            so(&k->s, "\b \b");
+            k->s.c--;
+            sflush(&k->s);
+        }
+    }
+    if (first) so(&k->s, "\033[?8h");
+    k->s.known = 0;                     /* EDT does not track the prompt line
+                                         * (EDT.KEYPAD F3: ESC[23H, absolute) */
+    str[n] = '\0';
+    snprintf(out, outsz, "%s", str);
+    so(&k->s, "\033[?8l");
+    if (restore) {
+        /* clear the prompt line, back to where the cursor was */
+        smove(&k->s, 23, 1);
+        so(&k->s, "\033[J");
+        k->s.msg = 0;
+        scursor(k);
+    }
+    return 1;
+}
 
-        /* Strip trailing newline */
-        size_t len = strlen(cmdline);
-        if (len > 0 && cmdline[len - 1] == '\n')
-            cmdline[len - 1] = '\0';
+static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
+                     const char *p);
 
-        /* Skip empty lines */
-        const char *p = skip_ws(cmdline);
-        if (!*p) continue;
+/* GOLD COMMAND: a line-mode command typed on row 23, its output on row 24
+ * through the whole-screen region (keystroke EDT.KEYPAD2 CMD..CMD3) */
+static void kp_command_line(struct kp *k)
+{
+    char cmdl[256];
+    if (!kp_prompt(k, "Command: ", cmdl, sizeof cmdl, 0))
+        return;
+    smove(&k->s, 23, 1);
+    sregion(&k->s, 1, 24);
+    k->s.known = 0;                     /* the region's last row: ESC[24H (EDT.KEYPAD2 CMD3) */
+    smove(&k->s, 24, 1);
+    srend(&k->s, 0);
+    sflush(&k->s);
+    k->b->cur = k->li;
+    struct dcl_pager pg;
+    int cap = dcl_page_begin(&pg);
+    line_cmd(k->b, cmdl, skip(cmdl), skip(cmdl));
+    if (cap) {
+        fflush(stdout);
+        dup2(pg.save, 1);
+        close(pg.save);
+        rewind(pg.tmp);
+        char ln[EDT_LINE_MAX];
+        int first = 1;
+        while (fgets(ln, sizeof ln, pg.tmp)) {
+            size_t l = strlen(ln);
+            if (l && ln[l - 1] == '\n') ln[--l] = '\0';
+            if (!first) dcl_tt_qio_write("\r\n", 2);
+            dcl_tt_qio_write(ln, l);
+            first = 0;
+        }
+        fclose(pg.tmp);
+    }
+    k->s.known = 0;
+    sregion(&k->s, 1, WROWS);
+    k->s.msg = 1;
+    if (k->b->cur != k->li) { k->li = k->b->cur; k->off = 0; }
+    if (k->li > k->b->n) k->li = k->b->n;
+    scursor(k);
+}
 
-        /* Parse command word */
-        char verb[64];
-        p = next_word(p, verb, sizeof(verb));
+static void kp_after_vertical(struct kp *k)
+{
+    int len = (int)strlen(ltext(k, k->li));
+    if (k->off > len) k->off = len;
+    if (k->li >= k->b->n) k->off = 0;
+}
 
-        /* Check if it's a line number */
-        if (isdigit((unsigned char)verb[0])) {
-            int line_no = (int)strtol(verb, NULL, 10);
-            if (line_no >= 1 && line_no <= buf.count) {
-                buf.dot = line_no;
-                printf("  %d\t%s\n", buf.dot, buf.lines[buf.dot - 1]);
+/* returns 0 to go back to line mode */
+static int kp_command(struct kp *k, int key, int gold)
+{
+    struct edt_buf *b = k->b;
+    const char *t = ltext(k, k->li);
+    int len = (int)strlen(t);
+
+    if (key == K_RIGHT || key == K_LEFT) {
+        int fl = k->li, fo = k->off;
+        if (key == K_RIGHT) step_right(k); else step_left(k);
+        if (k->sel && key == K_RIGHT) sel_paint_step(k, fl, fo);
+        scursor(k);
+        return 1;
+    }
+    if (key == K_UP || key == K_DOWN) {
+        if (key == K_UP && k->li > 0) k->li--;
+        if (key == K_DOWN && k->li < b->n) k->li++;
+        kp_after_vertical(k);
+        scursor(k);
+        return 1;
+    }
+    if (!((key == K_PF3 || key == K_KP(7)) && gold))
+        srend(&k->s, 0);
+    if (key == K_KP(7) && gold) { kp_command_line(k); return 1; }                /* a command: GOLD's reverse ends;
+                                         * FIND's after its prompt */
+    if (key == K_KP(4) && gold) { kp_move(k, b->n, 0); scursor(k); return 1; }  /* BOTTOM */
+    if (key == K_KP(5) && gold) { kp_move(k, 0, 0); scursor(k); return 1; }     /* TOP */
+    if (key == K_KP(4)) { k->dir = 1; return 1; }
+    if (key == K_KP(5)) { k->dir = -1; return 1; }
+    if (key == K_KP(8) && !gold) {      /* SECT: 16 lines */
+        int t = k->li + (k->dir > 0 ? 16 : -16);
+        if (t > b->n) t = b->n;
+        if (t < 0) t = 0;
+        kp_move(k, t, 0);
+        scursor(k);
+        return 1;
+    }
+    if (key == K_DOT) {                 /* SELECT */
+        k->sel = 1; k->sel_li = k->li; k->sel_off = k->off;
+        return 1;
+    }
+    if (key == K_MINUS && !gold) {      /* DEL W */
+        int e = word_end(t, k->off);
+        if (k->off >= len) return 1;
+        str_set(&k->delw, t + k->off, (size_t)(e - k->off));
+        char nt[EDT_LINE_MAX];
+        snprintf(nt, sizeof nt, "%.*s%s", k->off, t, t + e);
+        set_text(k, k->li, nt);
+        spaint(k, k->li, k->off + 1);
+        scursor(k);
+        return 1;
+    }
+    if (key == K_MINUS && gold) {       /* UND W */
+        if (k->delw) ins_text(k, k->delw, 0, 0);
+        return 1;
+    }
+    if (key == K_COMMA && !gold) {      /* DEL C */
+        if (k->off >= len) return 1;
+        str_set(&k->delc, t + k->off, 1);
+        k->delc_back = 0;
+        char nt[EDT_LINE_MAX];
+        snprintf(nt, sizeof nt, "%.*s%s", k->off, t, t + k->off + 1);
+        set_text(k, k->li, nt);
+        spaint(k, k->li, k->off + 1);
+        scursor(k);
+        return 1;
+    }
+    if (key == K_COMMA && gold) {       /* UND C */
+        /* back where it came from: after it when DELETE took it (EDT.KEYPAD3 UC) */
+        if (k->delc) ins_text(k, k->delc, k->delc_back, 0);
+        return 1;
+    }
+    if (key == K_PF4 && !gold) {        /* DEL L: to the end of the line, with its end */
+        if (k->li >= b->n) return 1;
+        char saved[EDT_LINE_MAX + 2];
+        snprintf(saved, sizeof saved, "%s\n", t + k->off);
+        str_set(&k->dell, saved, strlen(saved));
+        if (k->li + 1 < b->n) {
+            char nt[EDT_LINE_MAX * 2];
+            snprintf(nt, sizeof nt, "%.*s%s", k->off, t, b->l[k->li + 1].text);
+            set_text(k, k->li, nt);
+            buf_delete(b, k->li + 1);
+            sdelete_row(k, k->li + 1);
+            spaint(k, k->li, k->off + 1);
+            sfill_bottom(k);
+        } else {
+            char nt[EDT_LINE_MAX];
+            snprintf(nt, sizeof nt, "%.*s", k->off, t);
+            set_text(k, k->li, nt);
+            spaint(k, k->li, k->off + 1);
+        }
+        scursor(k);
+        return 1;
+    }
+    if (key == K_KP(2) && gold) {       /* DEL EOL: to the line's end; at the
+                                         * end, through the next line's end */
+        if (k->li >= b->n) return 1;
+        if (k->off < len) {
+            str_set(&k->dell, t + k->off, (size_t)(len - k->off));
+            char nt[EDT_LINE_MAX];
+            snprintf(nt, sizeof nt, "%.*s", k->off, t);
+            set_text(k, k->li, nt);
+            spaint(k, k->li, k->off + 1);
+        } else if (k->li + 1 < b->n) {
+            char saved[EDT_LINE_MAX + 2];
+            snprintf(saved, sizeof saved, "\n%s", b->l[k->li + 1].text);
+            str_set(&k->dell, saved, strlen(saved));
+            buf_delete(b, k->li + 1);
+            sdelete_row(k, k->li + 1);
+            spaint(k, k->li, k->off + 1);
+            sfill_bottom(k);
+        }
+        scursor(k);
+        return 1;
+    }
+    if (key == K_KP(0) && gold) {       /* OPEN LINE: break here, stay here */
+        ins_text(k, "\n", 0, 0);
+        return 1;
+    }
+    if ((key == K_KP(9) && !gold) || (key == K_KP(9) && gold)) {
+        /* APPEND (the range to the paste buffer, then removed) and REPLACE
+         * (the range removed, the paste buffer put in its place) */
+        if (!k->sel) {
+            if (!gold) { smessage(k, "No select range active"); scursor(k); return 1; }
+        } else {
+            int a_li = k->sel_li, a_off = k->sel_off, z_li = k->li, z_off = k->off;
+            if (z_li < a_li || (z_li == a_li && z_off < a_off)) {
+                int x = a_li; a_li = z_li; z_li = x; x = a_off; a_off = z_off; z_off = x;
+            }
+            k->sel = 0;
+            if (a_li == z_li && a_li < b->n) {
+                const char *lt = ltext(k, a_li);
+                if (!gold) {
+                    size_t ol = k->paste ? strlen(k->paste) : 0;
+                    char *np = malloc(ol + (size_t)(z_off - a_off) + 1);
+                    if (np) {
+                        if (ol) memcpy(np, k->paste, ol);
+                        memcpy(np + ol, lt + a_off, (size_t)(z_off - a_off));
+                        np[ol + (size_t)(z_off - a_off)] = '\0';
+                        free(k->paste);
+                        k->paste = np;
+                    }
+                }
+                if (z_off > a_off) {
+                    char nt[EDT_LINE_MAX];
+                    snprintf(nt, sizeof nt, "%.*s%s", a_off, lt, lt + z_off);
+                    set_text(k, a_li, nt);
+                    k->li = a_li; k->off = a_off;
+                    scursor(k);
+                    spaint(k, a_li, a_off + 1);
+                    scursor(k);
+                }
+            }
+        }
+        if (gold && k->paste)
+            ins_text(k, k->paste, 1, 0);
+        return 1;
+    }
+    if (key == K_PF4 && gold) {         /* UND L */
+        if (k->dell) ins_text(k, k->dell, 0, 0);
+        return 1;
+    }
+    if (key == K_KP(6) && !gold) {      /* CUT */
+        if (!k->sel) { smessage(k, "No select range active"); scursor(k); return 1; }
+        int a_li = k->sel_li, a_off = k->sel_off, z_li = k->li, z_off = k->off;
+        if (z_li < a_li || (z_li == a_li && z_off < a_off)) {
+            int x = a_li; a_li = z_li; z_li = x; x = a_off; a_off = z_off; z_off = x;
+        }
+        k->sel = 0;
+        if (a_li == z_li && a_li < b->n) {
+            const char *lt = ltext(k, a_li);
+            str_set(&k->paste, lt + a_off, (size_t)(z_off - a_off));
+            char nt[EDT_LINE_MAX];
+            snprintf(nt, sizeof nt, "%.*s%s", a_off, lt, lt + z_off);
+            set_text(k, a_li, nt);
+            k->li = a_li; k->off = a_off;
+            scursor(k);
+            spaint(k, a_li, a_off + 1);
+            scursor(k);
+        }
+        return 1;
+    }
+    if (key == K_KP(6) && gold) {       /* PASTE */
+        if (k->paste) ins_text(k, k->paste, 1, 1);
+        return 1;
+    }
+    if (key == K_PF3) {                 /* FIND (GOLD), FNDNXT */
+        if (gold && !kp_find_prompt(k)) return 1;
+        int fli, foff;
+        if (kp_search(k, k->dir, &fli, &foff)) {
+            if (gold) srend(&k->s, 0);
+            kp_move(k, fli, foff);
+            scursor(k);
+        } else {
+            smessage(k, "String was not found");
+            scursor(k);
+        }
+        return 1;
+    }
+    if (key == K_KP(0)) {               /* LINE */
+        if (k->dir > 0) {
+            if (k->li >= b->n) { smessage(k, "Advance past bottom of buffer"); scursor(k); return 1; }
+            k->li++; k->off = 0;
+        } else {
+            if (k->off > 0) k->off = 0;
+            else if (k->li > 0) k->li--;
+            else { smessage(k, "Backup past top of buffer"); scursor(k); return 1; }
+        }
+        scursor(k);
+        return 1;
+    }
+    if (key == K_KP(2)) {               /* EOL */
+        if (k->dir > 0) {
+            if (k->li >= b->n) { smessage(k, "Advance past bottom of buffer"); scursor(k); return 1; }
+            if (k->off < len) k->off = len;
+            else { k->li++; k->off = (int)strlen(ltext(k, k->li)); }
+        } else {
+            if (k->li == 0) { smessage(k, "Backup past top of buffer"); scursor(k); return 1; }
+            k->li--; k->off = (int)strlen(ltext(k, k->li));
+        }
+        scursor(k);
+        return 1;
+    }
+    if (key == K_KP(1) && gold) {       /* CHNGCASE */
+        int fl = k->li, fo = k->off;
+        if (k->sel) {
+            int a_li = k->sel_li, a_off = k->sel_off, z_li = k->li, z_off = k->off;
+            if (z_li < a_li || (z_li == a_li && z_off < a_off)) {
+                int x = a_li; a_li = z_li; z_li = x; x = a_off; a_off = z_off; z_off = x;
+            }
+            k->sel = 0;
+            for (int i = a_li; i <= z_li && i < b->n; i++) {
+                char nt[EDT_LINE_MAX];
+                snprintf(nt, sizeof nt, "%s", b->l[i].text);
+                int from = i == a_li ? a_off : 0;
+                int to = i == z_li ? z_off : (int)strlen(nt);
+                for (int j = from; j < to && nt[j]; j++)
+                    nt[j] = isupper((unsigned char)nt[j]) ? (char)tolower((unsigned char)nt[j])
+                                                          : (char)toupper((unsigned char)nt[j]);
+                set_text(k, i, nt);
+                spaint(k, i, from + 1);
+            }
+            scursor(k);
+            return 1;
+        }
+        if (k->li < b->n && k->off < len) {
+            char nt[EDT_LINE_MAX];
+            snprintf(nt, sizeof nt, "%s", t);
+            char c = nt[k->off];
+            nt[k->off] = isupper((unsigned char)c) ? (char)tolower((unsigned char)c)
+                                                   : (char)toupper((unsigned char)c);
+            set_text(k, k->li, nt);
+        }
+        if (k->dir > 0) step_right(k); else step_left(k);
+        /* the lines it went over, from where it started (EDT.KEYPAD3 CH) */
+        spaint(k, fl, fo + 1);
+        if (k->li != fl && k->li <= b->n)
+            spaint(k, k->li, 1);
+        scursor(k);
+        return 1;
+    }
+    if (key == K_KP(1)) {               /* WORD */
+        if (k->dir > 0) {
+            if (k->li >= b->n) { smessage(k, "Advance past bottom of buffer"); scursor(k); return 1; }
+            if (k->off >= len) { k->li++; k->off = 0; }
+            else {
+                int fo = k->off;
+                k->off = word_end(t, k->off);
+                if (k->sel) sel_paint_step(k, k->li, fo);
+            }
+        } else {
+            if (k->off == 0) {
+                if (k->li == 0) { smessage(k, "Backup past top of buffer"); scursor(k); return 1; }
+                k->li--; k->off = (int)strlen(ltext(k, k->li));
             } else {
-                printf("%%EDT-E-INVRANGE, invalid line number %d\n", line_no);
+                int i = k->off;
+                while (i > 0 && is_word_sep((unsigned char)t[i - 1])) i--;
+                while (i > 0 && !is_word_sep((unsigned char)t[i - 1])) i--;
+                k->off = i;
             }
-            continue;
         }
+        scursor(k);
+        return 1;
+    }
+    if (key == K_KP(3)) {               /* CHAR */
+        if (k->dir > 0) step_right(k); else step_left(k);
+        scursor(k);
+        return 1;
+    }
+    return 1;
+}
 
-        /* Uppercase the verb for matching */
-        for (int i = 0; verb[i]; i++)
-            verb[i] = toupper((unsigned char)verb[i]);
-
-        /*
-         * INSERT (I) - Enter insert mode
-         */
-        if (strcmp(verb, "INSERT") == 0 || strcmp(verb, "I") == 0) {
-            printf("  [Inserting after line %d.  Enter Ctrl+Z or empty line to exit insert mode.]\n",
-                   buf.dot);
-            char ins_line[EDT_MAX_LINE];
-            while (1) {
-                if (!fgets(ins_line, sizeof(ins_line), stdin))
-                    break;  /* EOF / Ctrl+Z */
-                len = strlen(ins_line);
-                if (len > 0 && ins_line[len - 1] == '\n')
-                    ins_line[len - 1] = '\0';
-                if (ins_line[0] == '\0')
-                    break;  /* Empty line exits insert mode */
-                edt_insert_line(&buf, buf.dot, ins_line);
-                buf.dot++;
+/* CHANGE: keypad editing until CTRL/Z */
+static void kp_run(struct edt_buf *b, struct kp *k)
+{
+    k->b = b;
+    k->li = b->cur;
+    k->off = 0;
+    k->dir = 1;
+    k->fresh_li = -1;
+    sfull(k);
+    sflush(&k->s);
+    for (;;) {
+        int key = kp_key();
+        if (key == -2) break;
+        if (key < 0) continue;
+        if (key == 0x1A) {              /* CTRL/Z: back to line mode */
+            if (k->s.msg) {             /* EDT.KEYPAD2 Z */
+                sclear_msg(k);
+                scursor(k);
             }
-            printf("  [EOI]\n");
-            continue;
+            so(&k->s, "\033>");
+            sregion(&k->s, 1, 24);
+            k->s.known = 0;
+            smove(&k->s, 24, 1);
+            so(&k->s, "\n");
+            sflush(&k->s);
+            break;
         }
-
-        /*
-         * TYPE (T) [range] - Display lines
-         */
-        if (strcmp(verb, "TYPE") == 0 || strcmp(verb, "T") == 0) {
-            char range_str[64];
-            p = next_word(p, range_str, sizeof(range_str));
-            int start, end;
-            if (!range_str[0]) {
-                /* No range: type current line */
-                start = end = buf.dot;
-            } else if (!edt_parse_range(&buf, range_str, &start, &end)) {
-                printf("%%EDT-E-INVRANGE, invalid range\n");
-                continue;
-            }
-            if (start < 1 || buf.count == 0) {
-                printf("%%EDT-E-NOLINES, buffer is empty\n");
-                continue;
-            }
-            for (int i = start; i <= end; i++)
-                printf("  %d\t%s\n", i, buf.lines[i - 1]);
-            buf.dot = end;
-            continue;
+        int esc = key >= 0x100;
+        if (esc) so(&k->s, "\033[?8l");
+        if (k->s.msg) {                 /* the next key clears a message */
+            sclear_msg(k);
+            scursor(k);
         }
-
-        /*
-         * DELETE (D) [range] - Delete lines
-         */
-        if (strcmp(verb, "DELETE") == 0 || strcmp(verb, "D") == 0) {
-            char range_str[64];
-            p = next_word(p, range_str, sizeof(range_str));
-            int start, end;
-            if (!range_str[0])
-                start = end = buf.dot;
-            else if (!edt_parse_range(&buf, range_str, &start, &end)) {
-                printf("%%EDT-E-INVRANGE, invalid range\n");
-                continue;
-            }
-            if (start < 1 || start > buf.count) {
-                printf("%%EDT-E-NOLINES, no lines to delete\n");
-                continue;
-            }
-            int del_count = end - start + 1;
-            for (int i = start - 1; i < end; i++)
-                free(buf.lines[i]);
-            /* Shift remaining lines up */
-            for (int i = start - 1; i < buf.count - del_count; i++)
-                buf.lines[i] = buf.lines[i + del_count];
-            buf.count -= del_count;
-            buf.modified = 1;
-            printf("  %d line%s deleted\n", del_count, del_count > 1 ? "s" : "");
-            if (buf.dot > buf.count) buf.dot = buf.count;
-            if (buf.dot < 1 && buf.count > 0) buf.dot = 1;
-            continue;
+        int gold = 0;
+        if (key == K_PF1) {
+            srend(&k->s, 1);
+            gold = 1;
+            key = kp_key();
+            if (key < 0) break;
         }
-
-        /*
-         * SUBSTITUTE (S) /old/new/ - Replace text on current line
-         */
-        if (strcmp(verb, "SUBSTITUTE") == 0 || strcmp(verb, "S") == 0) {
-            p = skip_ws(p);
-            if (!*p || buf.dot < 1 || buf.dot > buf.count) {
-                printf("%%EDT-E-INVSUBST, invalid substitution\n");
-                continue;
+        if (key >= 0x20 && key < 0x7F) {          /* typed text */
+            char c[2] = { (char)key, 0 };
+            ins_text(k, c, 1, 0);
+        } else if (key == 0x7F && k->off == 0 && k->li > 0 && k->li <= k->b->n) {
+            /* DELETE at the start of a line joins it to the line before
+             * (keystroke EDT.KEYPAD2 J) */
+            int pl = k->li - 1;
+            const char *pt = ltext(k, pl);
+            int plen = (int)strlen(pt);
+            if (k->li < k->b->n) {
+                char nt[EDT_LINE_MAX * 2];
+                snprintf(nt, sizeof nt, "%s%s", pt, k->b->l[k->li].text);
+                set_text(k, pl, nt);
+                buf_delete(k->b, k->li);
+                sdelete_row(k, k->li);
             }
-            char delim = *p++;
-            const char *old_start = p;
-            const char *old_end = strchr(p, delim);
-            if (!old_end) {
-                printf("%%EDT-E-INVSUBST, missing delimiter in substitution\n");
-                continue;
+            str_set(&k->delc, "\n", 1);
+            k->li = pl;
+            k->off = plen;
+            spaint(k, pl, plen + 1);
+            sfill_bottom(k);
+            scursor(k);
+        } else if (key == 0x7F) {                 /* DELETE: the character before */
+            if (k->off > 0) {
+                const char *t = ltext(k, k->li);
+                str_set(&k->delc, t + k->off - 1, 1);
+                k->delc_back = 1;
+                char nt[EDT_LINE_MAX];
+                snprintf(nt, sizeof nt, "%.*s%s", k->off - 1, t, t + k->off);
+                set_text(k, k->li, nt);
+                k->off--;
+                spaint(k, k->li, k->off + 1);
+                scursor(k);
             }
-            size_t old_len = old_end - old_start;
-            char old_str[EDT_MAX_LINE];
-            if (old_len >= sizeof(old_str)) old_len = sizeof(old_str) - 1;
-            memcpy(old_str, old_start, old_len);
-            old_str[old_len] = '\0';
+        } else if (key == '\r') {
+            ins_text(k, "\n", 1, 0);
+        } else if (key == 0x08) {                 /* BACKSPACE: the line's start */
+            if (k->off > 0) k->off = 0;
+            else if (k->li > 0) k->li--;
+            scursor(k);
+        } else if (key == 0x15) {                 /* CTRL/U: delete to the line's start */
+            if (k->off > 0) {
+                const char *t = ltext(k, k->li);
+                str_set(&k->delw, t, (size_t)k->off);
+                char nt[EDT_LINE_MAX];
+                snprintf(nt, sizeof nt, "%s", t + k->off);
+                set_text(k, k->li, nt);
+                k->off = 0;
+                spaint(k, k->li, 1);
+                scursor(k);
+            } else if (k->li == 0) {
+                smessage(k, "Backup past top of buffer");
+                scursor(k);
+            }
+        } else if (key == 0x17) {                 /* CTRL/W: the screen again */
+            sfull(k);
+        } else {
+            kp_command(k, key, gold);
+        }
+        if (esc) so(&k->s, "\033[?8h");
+        sflush(&k->s);
+    }
+    b->cur = k->li;
+}
 
-            p = old_end + 1;
-            const char *new_start = p;
-            const char *new_end = strchr(p, delim);
-            size_t new_len;
-            char new_str[EDT_MAX_LINE];
-            if (new_end) {
-                new_len = new_end - new_start;
+static int read_cmd(char *buf, size_t sz)
+{
+    int r = dcl_tt_read_line("\r\n*", buf, sz);
+    if (r != 0) return -1;
+    if (buf[0] == 0x1A && buf[1] == '\0') return -1;
+    return 0;
+}
+
+static void insert_mode(struct edt_buf *b)
+{
+    char line[EDT_LINE_MAX];
+    char **acc = NULL;
+    int na = 0, ca = 0;
+
+    for (;;) {
+        if (dcl_tt_read_line("\r\n            ", line, sizeof line) != 0)
+            break;                           /* CTRL/Z */
+        if (line[0] == 0x1A && line[1] == '\0')
+            break;                           /* a CTRL/Z line from a procedure */
+        if (na == ca) {
+            ca = ca ? ca * 2 : 16;
+            char **t = realloc(acc, (size_t)ca * sizeof *t);
+            if (!t) break;
+            acc = t;
+        }
+        acc[na] = strdup(line);
+        if (!acc[na]) break;
+        na++;
+    }
+    if (na) {
+        long first, step;
+        if (number_run(b, b->cur, na, &first, &step) != 0) {
+            printf("Line number would exceed maximum\n");
+        } else {
+            for (int i = 0; i < na; i++)
+                if (buf_insert(b, b->cur + i, first + step * i, acc[i]) != 0) break;
+            b->cur += na;
+        }
+    }
+    for (int i = 0; i < na; i++) free(acc[i]);
+    free(acc);
+    show_line(b, b->cur);
+}
+
+static int write_file(struct dcl_context *ctx, const struct edt_buf *b,
+                      const char *spec)
+{
+    uint32_t st = 0;
+    struct dcl_rms_writer *w = dcl_rms_write_create(ctx, spec, FAB$C_VAR,
+                                                    FAB$M_CR, 0, &st);
+    if (!w) {
+        printf("Error opening output file %s\n", spec);
+        return -1;
+    }
+    for (int i = 0; i < b->n; i++)
+        if (dcl_rms_write_record(w, b->l[i].text, strlen(b->l[i].text)) != 0)
+            break;
+    dcl_rms_write_close(w);
+
+    /* the new version's full name */
+    char full[1100] = "", pat[1100];
+    snprintf(pat, sizeof pat, "%s", spec);
+    char *semi = strrchr(pat, ';');
+    if (semi) *semi = '\0';
+    strncat(pat, ";*", sizeof pat - strlen(pat) - 1);
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, pat);
+    if (d) {
+        if (!dcl_rms_dir_next(d, full, sizeof full, NULL, NULL, NULL))
+            full[0] = '\0';
+        dcl_rms_dir_close(d);
+    }
+    printf("%s %d line%s\n", full[0] ? full : spec, b->n, b->n == 1 ? "" : "s");
+    return 0;
+}
+
+/* one line-mode command (what follows CHANGE/EXIT/QUIT in the loop): INSERT,
+ * FIND, DELETE, SUBSTITUTE, TYPE or a range. Shared by the "*" prompt and
+ * keypad mode's GOLD COMMAND. `cmd` is the command's start in `line`, `p`
+ * the same (nothing consumed yet). */
+static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
+                     const char *p)
+{
+    int nf = 0;
+        if (kw(&p, "INSERT", 1)) {
+            p = skip(p);
+            if (*p && *p != ';') {
+                struct range rg = parse_range(b, &p, &nf);
+                if (nf) { printf("String was not found\n"); return; }
+                b->cur = rg.a;
+                p = skip(p);
+            }
+            if (*p == ';') {
+                long first, step;
+                if (number_run(b, b->cur, 1, &first, &step) == 0 &&
+                    buf_insert(b, b->cur, first, p + 1) == 0)
+                    b->cur++;
+                show_line(b, b->cur);
             } else {
-                new_len = strlen(new_start);
+                insert_mode(b);
             }
-            if (new_len >= sizeof(new_str)) new_len = sizeof(new_str) - 1;
-            memcpy(new_str, new_start, new_len);
-            new_str[new_len] = '\0';
-
-            /* Perform substitution on current line */
-            char *line = buf.lines[buf.dot - 1];
-            char *found = strstr(line, old_str);
-            if (!found) {
-                printf("%%EDT-E-STRNOTFND, string \"%s\" not found\n", old_str);
-                continue;
+            return;
+        }
+        if (kw(&p, "FIND", 1)) {
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            b->cur = rg.a;
+            return;
+        }
+        if (kw(&p, "DELETE", 1)) {
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            int a = rg.a, z = rg.b < b->n ? rg.b : b->n - 1, cnt = 0;
+            for (int i = z; i >= a && a < b->n; i--) { buf_delete(b, i); cnt++; }
+            b->cur = a <= b->n ? a : b->n;
+            printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
+            show_line(b, b->cur);
+            return;
+        }
+        if (kw(&p, "SUBSTITUTE", 1)) {
+            p = skip(p);
+            char dl = *p;
+            if (!dl || isalnum((unsigned char)dl)) {
+                printf(" ^\nUnrecognized command\n");
+                return;
             }
-
-            char result[EDT_MAX_LINE * 2];
-            size_t prefix_len = (size_t)(found - line);
-            size_t suffix_len = strlen(found + old_len);
-            size_t total_len = prefix_len + new_len + suffix_len;
-            if (total_len >= sizeof(result)) {
-                printf("%%EDT-E-TOOLONG, substitution result exceeds maximum line length\n");
-                continue;
+            const char *o = p + 1, *oe = strchr(o, dl);
+            if (!oe) { printf("Invalid substitute command\n"); return; }
+            const char *nw = oe + 1, *ne = strchr(nw, dl);
+            size_t ol = (size_t)(oe - o), nl = ne ? (size_t)(ne - nw) : strlen(nw);
+            p = ne ? ne + 1 : nw + nl;
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            int subs = 0, last = -1;
+            for (int i = rg.a; i <= rg.b && i < b->n && ol; i++) {
+                char out[EDT_LINE_MAX];
+                size_t ok = 0;
+                int here = 0;
+                const char *t = b->l[i].text;
+                while (*t && ok + nl + 1 < sizeof out) {
+                    if (strncasecmp(t, o, ol) == 0) {
+                        memcpy(out + ok, nw, nl);
+                        ok += nl;
+                        t += ol;
+                        here++;
+                    } else {
+                        out[ok++] = *t++;
+                    }
+                }
+                out[ok] = '\0';
+                if (here) {
+                    char *d = strdup(out);
+                    if (d) { free(b->l[i].text); b->l[i].text = d; }
+                    show_line(b, i);
+                    subs += here;
+                    last = i;
+                }
             }
-            memcpy(result, line, prefix_len);
-            memcpy(result + prefix_len, new_str, new_len);
-            memcpy(result + prefix_len + new_len, found + old_len, suffix_len + 1);
-
-            free(buf.lines[buf.dot - 1]);
-            buf.lines[buf.dot - 1] = strdup(result);
-            buf.modified = 1;
-            printf("  %d\t%s\n", buf.dot, buf.lines[buf.dot - 1]);
-            continue;
-        }
-
-        /*
-         * WRITE (W) - Save buffer to file
-         */
-        if (strcmp(verb, "WRITE") == 0 || strcmp(verb, "W") == 0) {
-            if (edt_save(&buf, buf.filename))
-                printf("  %d lines written to %s\n", buf.count, buf.filename);
-            continue;
-        }
-
-        /*
-         * EXIT - Save and exit
-         */
-        if (strcmp(verb, "EXIT") == 0 || strcmp(verb, "EX") == 0) {
-            if (buf.modified) {
-                if (edt_save(&buf, buf.filename))
-                    printf("  %d lines written to %s\n", buf.count, buf.filename);
+            if (subs) {
+                b->cur = last;
+                printf("%d substitution%s\n", subs, subs == 1 ? "" : "s");
+            } else {
+                printf("String was not found\n");
             }
-            edt_free(&buf);
-            return SS$_NORMAL;
+            return;
         }
-
-        /*
-         * QUIT - Exit without saving
-         */
-        if (strcmp(verb, "QUIT") == 0 || strcmp(verb, "Q") == 0) {
-            if (buf.modified)
-                printf("  [Buffer has been modified; changes discarded]\n");
-            edt_free(&buf);
-            return SS$_NORMAL;
+        if (kw(&p, "RESEQUENCE", 3)) {     /* whole numbers from 1 (Q.EDTNUM R1) */
+        for (int i = 0; i < b->n; i++)
+            b->l[i].num = (long)(i + 1) * EDT_SCALE;
+        printf("%d line%s resequenced\n", b->n, b->n == 1 ? "" : "s");
+        return;
+    }
+    if (kw(&p, "TYPE", 1) || (p = cmd, 1)) {
+            const char *before = p;
+            struct range rg = parse_range(b, &p, &nf);
+            if (*skip(p) != '\0' || (!rg.ok)) {
+                /* not a command and not a range */
+                printf("%*s^\nUnrecognized command\n", (int)(before - line) + 1, "");
+                return;
+            }
+            if (nf) {
+                printf("String was not found\n");
+                show_line(b, b->cur);
+                return;
+            }
+            int z = rg.b > b->n ? b->n : rg.b;
+            for (int i = rg.a; i <= z; i++) show_line(b, i);
+            b->cur = rg.a;
+            return;
         }
+}
 
-        /*
-         * HELP - Show available commands
-         */
-        if (strcmp(verb, "HELP") == 0 || strcmp(verb, "H") == 0) {
-            printf("  EDT Line-Mode Commands:\n");
-            printf("    INSERT (I)             Enter insert mode (end with empty line or Ctrl+Z)\n");
-            printf("    TYPE (T) [range]       Display lines\n");
-            printf("    DELETE (D) [range]     Delete lines\n");
-            printf("    SUBSTITUTE (S) /old/new/  Replace text on current line\n");
-            printf("    WRITE (W)              Save buffer to file\n");
-            printf("    EXIT (EX)              Save and exit\n");
-            printf("    QUIT (Q)               Exit without saving\n");
-            printf("    HELP (H)               Show this help\n");
-            printf("    <number>               Go to line number\n");
-            printf("\n");
-            printf("  Ranges: n (line n), n:m (lines n to m), * (all), . (current), REST\n");
-            continue;
-        }
+/* leaving EDT after keypad mode: the terminal put back (keystroke
+ * EDT.SCREEN/EDT.KEYPAD Q) */
+static void screen_reset(int used)
+{
+    static const char r[] = "\r\n\033[m\033)B\033[;r\033[24H\r\033>\r\n";
+    if (used)
+        dcl_tt_qio_write(r, sizeof r - 1);  /* its CR LF leaves nothing owed */
+}
 
-        printf("%%EDT-E-UNKCMD, unknown command \"%s\"\n", verb);
+int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
+            int read_only)
+{
+    int screen_used = 0;
+    struct edt_buf b;
+    char line[EDT_LINE_MAX];
+    uint32_t rst = 0;
+
+    memset(&b, 0, sizeof b);
+    struct dcl_rms_reader *r = dcl_rms_read_open(ctx, spec, &rst);
+    if (r) {
+        int eof = 0, len, k = 0;
+        while ((len = dcl_rms_read_record(r, line, sizeof line, &eof)) >= 0)
+            if (buf_insert(&b, b.n, (long)(++k) * EDT_SCALE, line) != 0) break;
+        dcl_rms_read_close(r);
+        b.cur = 0;
+        show_line(&b, b.cur);
+    } else {
+        printf("Input file does not exist\n");
+        show_line(&b, 0);
     }
 
-    /* EOF on input — treat like EXIT */
-    if (buf.modified) {
-        if (edt_save(&buf, buf.filename))
-            printf("  %d lines written to %s\n", buf.count, buf.filename);
+    for (;;) {
+        if (read_cmd(line, sizeof line) != 0) {
+            if (feof(stdin)) {                /* input exhausted: as QUIT */
+                buf_free(&b);
+                return SS$_NORMAL;
+            }
+            continue;                         /* CTRL/Z at "*" does nothing */
+        }
+        const char *p = skip(line);
+
+        if (*p == '\0') {                     /* RETURN: the next line */
+            if (b.cur < b.n) b.cur++;
+            show_line(&b, b.cur);
+            continue;
+        }
+
+        const char *cmd = p;
+        int nf = 0;
+
+        if (kw(&p, "CHANGE", 1)) {
+            struct dcl_context *c = ctx;
+            if (!c || (strncasecmp(c->terminal.device_type, "VT1", 3) != 0 &&
+                       strncasecmp(c->terminal.device_type, "VT2", 3) != 0 &&
+                       strncasecmp(c->terminal.device_type, "VT3", 3) != 0 &&
+                       strncasecmp(c->terminal.device_type, "VT4", 3) != 0 &&
+                       strncasecmp(c->terminal.device_type, "VT5", 3) != 0)) {
+                printf("Screen editing is supported only on a VT100-class terminal\n");
+                continue;
+            }
+            static struct kp k;
+            memset(&k, 0, sizeof k);
+            kp_run(&b, &k);
+            screen_used = 1;
+            free(k.delw); free(k.delc); free(k.dell); free(k.paste);
+            continue;
+        }
+        if (kw(&p, "EXIT", 2)) {
+            const char *f = skip(p);
+            if (read_only && !*f) {
+                screen_reset(screen_used);
+                buf_free(&b);
+                return SS$_NORMAL;
+            }
+            screen_reset(screen_used);
+            write_file(ctx, &b, *f ? f : (output && *output ? output : spec));
+            buf_free(&b);
+            return SS$_NORMAL;
+        }
+        if (kw(&p, "QUIT", 4)) {
+            screen_reset(screen_used);
+            buf_free(&b);
+            return SS$_NORMAL;
+        }
+        line_cmd(&b, line, cmd, p);
     }
-    edt_free(&buf);
-    return SS$_NORMAL;
 }

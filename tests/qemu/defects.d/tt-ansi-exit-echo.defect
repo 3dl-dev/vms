@@ -1,0 +1,29 @@
+# tt-ansi-exit-echo -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "CTRL/Z on an ANSI CRT echoes a reverse-video ' Exit ' with the cursor saved and put back (vms_tt.c, rd vms-c37; keystroke Q.EDTNUM V7)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "the CTRL/Z terminator echo picks ' Exit ' for an ANSI CRT (\`if (tt->rd_dc \& VMS_TTC_ANSI_CRT)\`). The mutation never does (\`if (0)\`): a VT100 shows *EXIT* where VMS shows the reverse-video word. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/Z on an ANSI CRT echoes a reverse-video ' Exit ' with the cursor put back
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check sets ANSI_CRT.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t\t\tif (tt->rd_dc \& VMS_TTC_ANSI_CRT)$|\t\t\t\tif (0) /* NEGCTL tt-ansi-exit-echo */|' "$_file"
+    :
+}

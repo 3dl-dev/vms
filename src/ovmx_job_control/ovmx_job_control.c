@@ -421,9 +421,9 @@ int main(void)
         if (!(cst & 1))
             usleep(100000);
 
-        /* Print blank line between sessions (like real VMS console) */
-        printf("\n");
-        fflush(stdout);
+        /* No blank line between sessions: the VAX V7.3 console shows none --
+         * the logout line ends with its carriage return and the console waits
+         * (keystroke LOGOUT L/X) -- rd vms-bd71. */
     }
 
     return 0;

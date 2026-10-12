@@ -1,0 +1,1 @@
+EDT.KEYPAD3 TW  # vms-c37: VAX EDT uninitialised-read bug -- do not reproduce. VAX EDT numbers a line PASTE/REPLACE opens at [EOB] with 6 bytes of its own buffer memory read as the number -- 1576.44393 = 0x09657669 = "ive" + 0x09 (the end of the line before it and its length), Q.EDTNUM2 T1 likewise ("ur\n" = 6.84661); reproducible on the VAX, not a numbering rule

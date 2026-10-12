@@ -1,0 +1,270 @@
+# keystroke oracle transcript (unmasked) -- case Q.HELP (OpenVMS VAX V7.3 OPA0:)
+# probe: HELP framing -- top level, a multi-level path, no-documentation, column layout, prompts
+# case-sha256 89cc9d5c2493aaccfdeb89f3297a358b53264b75a74a074aaf982fc4abff00d6
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP A
+| HELP RECALL /ALL<CR><LF>
+| <CR><LF>
+| RECALL<CR><LF>
+| <CR><LF>
+|   /ALL<CR><LF>
+| <CR><LF>
+|      Displays all the commands (and their numbers) available for<CR><LF>
+|      recall. Do not use the /ALL qualifier with the other RECALL<CR><LF>
+|      qualifiers.<CR><LF>
+| <CR><LF>
+|                                     NOTE<CR><LF>
+| <CR><LF>
+|         The RECALL command is never stored in the recall buffer.<CR><LF>
+|    <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR>Topic? 
+=== STEP A1
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP A2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP A3
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP B
+| HELP NOSUCHTOPICQ<CR><LF>
+| <CR>  Sorry, no documentation on NOSUCHTOPICQ<CR><LF>
+| <CR><LF>
+| <CR><LF>
+|   Additional information available:<CR><LF>
+| <CR><LF>
+|   :=         =          @          ACCOUNTING ACL_Editor ALLOCATE   ANALYZE<CR><LF>
+|   APPEND     ASSIGN     ATTACH     AUTHORIZE  AUTOGEN    BACKUP_API<CR><LF>
+|   BACKUP_Command        CALL       CANCEL     CLI_Routines          CLOSE<CR><LF>
+|   CONFIGURE  CONNECT    CONTINUE   CONV$_Routines        CONVERT    COPY<CR><LF>
+|   CQUAL_Routines        CREATE     DCL_Tips   DCX_Routines          DEALLOCATE<CR><LF>
+|   DEASSIGN   DEBUG      DECK       DECthreads DECTPU     DEFINE     DELETE<CR><LF>
+|   DEPOSIT    DIFFERENCES           DIRECTORY  DISABLE    DISCONNECT DISMOUNT<CR><LF>
+|   DSR        DUMP       EDIT       EDT_Routines          ENABLE<CR><LF>
+|   ENDSUBROUTINE         EOD        EOJ        Errors     EXAMINE    EXCHANGE<CR><LF>
+|   EXIT       Ext_File_Specs        FDL_Files  FDL_Routines          FINGER<CR><LF>
+|   FONT       FTP        GENCAT     GOSUB      GOTO       HELP       Hints<CR><LF>
+|   ICONV      IF         INITIALIZE INQUIRE    INSTALL    Instructions<CR><LF>
+|   JAVA       JOB        LANCP      LATCP      LBR_Routines          Lexicals<CR><LF>
+|   LGI_Routines          LIBRARY    LICENSE    Line_editing          LINK<CR><LF>
+|   LMCP       LOCALE     LOGIN      LOGOUT     LPQ        LPRM       MACRO<CR><LF>
+|   MAIL_Command          MAIL_Routines         MERGE      MESSAGE    MIBCOMP<CR><LF>
+|   MIME       MONITOR    MOUNT      NCP        NCS_Command<CR><LF>
+|   NCS_Routines          ON         OPEN       PASSWORD   PATCH      PHONE<CR><LF>
+|   PIPE       POLYCENTER POSIX_Threads         PRINT      PRODUCT<CR><LF>
+|   PSM_Routines          PURGE      Queues     RCP        READ       RECALL<CR><LF>
+|   RECOVER    RENAME     REPLY      REQUEST    RETURN     REXEC      RLOGIN<CR><LF>
+|   RMS        RPC        RPCGEN     RSH        RTL_Routines          RUN<CR><LF>
+|   RUNOFF     SCACP      SEARCH     SET        SHOW       SMB_Routines<CR><LF>
+|   SORT       SOR_Routines          SPAWN      START      STOP       SUBMIT<CR><LF>
+|   SUBROUTINE Symbol_Assign         SYNCHRONIZE           SYSGEN     SYSMAN<CR><LF>
+|   System_Services       Sys_Files  Sys_Parameters        TCPIP_Services<CR><LF>
+|   TCPTRACE   TELNET     TFF        TN3270     TYPE       UIL        UNLOCK<CR><LF>
+|   V73_Features          VIEW       WAIT       WRITE<CR><LF>
+| <CR><LF>
+| <CR>Topic? 
+=== STEP B1
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP C
+| HELP SHOW<CR><LF>
+| <CR><LF>
+| SHOW<CR><LF>
+| <CR><LF>
+|      Displays information about the current status of a process, the<CR><LF>
+|      system, or devices in the system.<CR><LF>
+| <CR><LF>
+|      Format<CR><LF>
+| <CR><LF>
+|        SHOW  option<CR><LF>
+|    <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+|   Additional information available:<CR><LF>
+| <CR><LF>
+|   Description           ACCOUNTING AUDIT      BROADCAST  CLUSTER    CPU<CR><LF>
+|   DEFAULT    DEVICES    DISPLAY    ENTRY      ERROR      INTRUSION  KEY<CR><LF>
+|   LICENSE    LOGICAL    MEMORY     NETWORK    PRINTER    PROCESS<CR><LF>
+|   PROTECTION QUEUE      QUOTA      RMS_DEFAULT           SECURITY   SERVER<CR><LF>
+|   STATUS     SYMBOL     SYSTEM     TERMINAL   TIME       TRANSLATION<CR><LF>
+|   USERS      WORKING_SET           ZONE<CR><LF>
+| <CR><LF>
+| <CR>SHOW Subtopic? 
+=== STEP C1
+| TIME<CR><LF>
+| <CR><LF>
+| SHOW<CR><LF>
+| <CR><LF>
+|   TIME<CR><LF>
+| <CR><LF>
+|        Displays the current date and time.<CR><LF>
+| <CR><LF>
+|        Format<CR><LF>
+| <CR><LF>
+|          SHOW [DAY]TIME<CR><LF>
+|      <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+|     Additional information available:<CR><LF>
+| <CR><LF>
+|     Example<CR><LF>
+| <CR><LF>
+| <CR>SHOW TIME Subtopic? 
+=== STEP C2
+| *EXIT*<CR><LF>
+| <CR><NUL>$ 
+=== STEP D
+| HELP SET TERMINAL<CR><LF>
+=== STEP D1
+| <CR><LF>
+| SET<CR><LF>
+| <CR><LF>
+|   TERMINAL<CR><LF>
+| <CR><LF>
+|        Sets the characteristics of a terminal. Entering a qualifier<CR><LF>
+|        changes a characteristic; omitting a qualifier leaves the<CR><LF>
+|        characteristic unchanged.<CR><LF>
+| <CR><LF>
+|        Format<CR><LF>
+| <CR><LF>
+|          SET TERMINAL  [device-name[:]]<CR><LF>
+|      <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+|     Additional information available:<CR><LF>
+| <CR><LF>
+|     Parameter  Qualifiers<CR><LF>
+|     /ADVANCED_VIDEO       /ALTYPEAHD /ANSI_CRT  /APPLICATION_KEYPAD<CR><LF>
+|     /AUTOBAUD  /BLOCK_MODE           /BRDCSTMBX /BROADCAST /COLOR<CR><LF>
+|     /COMMSYNC  /CRFILL    /DEC_CRT   /DEVICE_TYPE          /DIALUP<CR><LF>
+|     /DISCONNECT           /DISMISS   /DMA       /ECHO      /EDIT_MODE<CR><LF>
+|     /EIGHT_BIT /ESCAPE    /FALLBACK  /FORM      /FRAME     /FULLDUP<CR><LF>
+|     /HALFDUP   /HANGUP    /HARDCOPY  /HOSTSYNC  /INQUIRE   /INSERT    /LFFILL<CR><LF>
+|     /LINE_EDITING         /LOCAL_ECHO           /LOWERCASE /MANUAL    /MODEM<CR><LF>
+|     /NUMERIC_KEYPAD       /OVERSTRIKE           /PAGE      /PARITY<CR><LF>
+|     /PASTHRU   /PERMANENT /PRINTER_PORT         /PROTOCOL  /READSYNC  /REGIS<CR><LF>
+|     /SCOPE     /SECURE_SERVER        /SET_SPEED /SIXEL_GRAPHICS<CR><LF>
+|     /SOFT_CHARACTERS      /SPEED     /SWITCH    /SYSPASSWORD          /TAB<CR><LF>
+|     /TTSYNC    /TYPE_AHEAD           /UNKNOWN   /UPPERCASE /WIDTH     /WRAP<CR><LF>
+|     Examples<CR><LF>
+| <CR><LF>
+| <CR>SET TERMINAL Subtopic? *EXIT*<CR><LF>
+| <CR><NUL>$ 
+=== STEP E
+| HELP<CR><LF>
+| <CR><LF>
+| HELP<CR><LF>
+| <CR><LF>
+|    The   HELP   command   invokes   the  HELP  Facility  to  display<CR><LF>
+|    information about a command or topic.  In response to the "Topic?"<CR><LF>
+|    prompt, you can:<CR><LF>
+| <CR><LF>
+|       o Type  the  name of the command  or topic for which you need help.<CR><LF>
+| <CR><LF>
+|       o Type  INSTRUCTIONS  for more detailed  instructions on how to use<CR><LF>
+|         HELP.<CR><LF>
+| <CR><LF>
+|       o Type  HINTS  if you are not  sure of the  name  of the command or<CR><LF>
+|         topic for which you need help.<CR><LF>
+| <CR><LF>
+|       o Type HELP/MESSAGE for help with the HELP/MESSAGE command.<CR><LF>
+| <CR><LF>
+|       o Type a question mark (?) to redisplay the most recently requested<CR><LF>
+|         text.<CR><LF>
+| <CR><LF>
+|       o Press the Return key one or more times to exit from HELP.<CR><LF>
+| <CR><LF>
+|    You  can  abbreviate any  topic name, although ambiguous abbreviations<CR><LF>
+|    result in all matches being displayed.<CR><LF>
+| <CR><LF>
+| <CR><LF>
+|   Additional information available:<CR><LF>
+| <CR><LF>
+|   :=         =          @          ACCOUNTING ACL_Editor ALLOCATE   ANALYZE<CR><LF>
+|   APPEND     ASSIGN     ATTACH     AUTHORIZE  AUTOGEN    BACKUP_API<CR><LF>
+|   BACKUP_Command        CALL       CANCEL     CLI_Routines          CLOSE<CR><LF>
+|   CONFIGURE  CONNECT    CONTINUE   CONV$_Routines        CONVERT    COPY<CR><LF>
+|   CQUAL_Routines        CREATE     DCL_Tips   DCX_Routines<CR><LF>
+|   DEALLOCATE DEASSIGN   DEBUG      DECK       DECthreads DECTPU     DEFINE<CR><LF>
+|   DELETE     DEPOSIT    DIFFERENCES           DIRECTORY  DISABLE<CR><LF>
+|   DISCONNECT DISMOUNT   DSR        DUMP       EDIT       EDT_Routines<CR><LF>
+|   ENABLE     ENDSUBROUTINE         EOD        EOJ        Errors     EXAMINE<CR><LF>
+|   EXCHANGE   EXIT       Ext_File_Specs        FDL_Files  FDL_Routines<CR><LF>
+|   FINGER     FONT       FTP        GENCAT     GOSUB      GOTO       HELP<CR><LF>
+|   Hints      ICONV      IF         INITIALIZE INQUIRE    INSTALL<CR><LF>
+|   Instructions          JAVA       JOB        LANCP      LATCP<CR><LF>
+|   LBR_Routines          Lexicals   LGI_Routines          LIBRARY    LICENSE<CR><LF>
+|   Line_editing          LINK       LMCP       LOCALE     LOGIN      LOGOUT<CR><LF>
+|   LPQ        LPRM       MACRO      MAIL_Command          MAIL_Routines<CR><LF>
+|   MERGE      MESSAGE    MIBCOMP    MIME       MONITOR    MOUNT      NCP<CR><LF>
+|   NCS_Command           NCS_Routines          ON         OPEN       PASSWORD<CR><LF>
+|   PATCH      PHONE      PIPE       POLYCENTER POSIX_Threads         PRINT<CR><LF>
+|   PRODUCT    PSM_Routines          PURGE      Queues     RCP        READ<CR><LF>
+|   RECALL     RECOVER    RENAME     REPLY      REQUEST    RETURN     REXEC<CR><LF>
+|   RLOGIN     RMS        RPC        RPCGEN     RSH        RTL_Routines<CR><LF>
+|   RUN        RUNOFF     SCACP      SEARCH     SET        SHOW<CR><LF>
+|   SMB_Routines          SORT       SOR_Routines          SPAWN      START<CR><LF>
+|   STOP       SUBMIT     SUBROUTINE Symbol_Assign         SYNCHRONIZE<CR><LF>
+|   SYSGEN     SYSMAN     System_Services       Sys_Files  Sys_Parameters<CR><LF>
+|   TCPIP_Services        TCPTRACE   TELNET     TFF        TN3270     TYPE<CR><LF>
+|   UIL        UNLOCK     V73_Features          VIEW       WAIT       WRITE<CR><LF>
+| <CR><LF>
+| <CR>Topic? 
+=== STEP E1
+| LOGOUT<CR><LF>
+| <CR><LF>
+| LOGOUT<CR><LF>
+| <CR><LF>
+|      Terminates an interactive terminal session.<CR><LF>
+| <CR><LF>
+|      Format<CR><LF>
+| <CR><LF>
+|        LOGOUT<CR><LF>
+|    <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+|   Additional information available:<CR><LF>
+| <CR><LF>
+|   Qualifiers<CR><LF>
+|   /BRIEF     /FULL      /HANGUP<CR><LF>
+|   Examples<CR><LF>
+| <CR><LF>
+| <CR>LOGOUT Subtopic? 
+=== STEP E2
+| <CR><LF>
+| <CR>Topic? 
+=== STEP E3
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP F
+| HELP/NOPROMPT RECALL<CR><LF>
+| <CR><LF>
+| RECALL<CR><LF>
+| <CR><LF>
+| <CR><LF>
+|      Displays up to 254 previously entered commands on the screen for<CR><LF>
+|      subsequent execution.<CR><LF>
+| <CR><LF>
+|      Format<CR><LF>
+| <CR><LF>
+|        RECALL  [command-specifier]<CR><LF>
+|    <CR><LF>
+| <CR><LF>
+| <CR><LF>
+| <CR><LF>
+|   Additional information available:<CR><LF>
+| <CR><LF>
+|   Parameter  Qualifiers<CR><LF>
+|   /ALL       /ERASE     /INPUT     /OUTPUT    /PAGE<CR><LF>
+|   Examples<CR><LF>
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP V1 quiet

@@ -646,6 +646,11 @@ struct vms_proc {
 
 	/* Access-mode + privilege state (src/kernel-core/vms_access.c). */
 	uint8_t             current_mode;     /* PSL_C_KERNEL..PSL_C_USER */
+	/* JPI$_BUFIO / JPI$_DIRIO (rd vms-bd71): this process's buffered
+	 * (terminal, mailbox) and direct (disk, through the ACP) I/O requests,
+	 * counted by the executive as each completes. */
+	uint32_t            io_buffered;
+	uint32_t            io_direct;
 	uint8_t             image_active;     /* 1 while a controlled descent is open */
 	uint8_t             pre_image_mode;   /* mode to restore on IMAGE_RUNDOWN */
 	uint8_t             native_page0;     /* page 0 granted once (vms-b869) */
@@ -1460,5 +1465,15 @@ long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
 long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
+
+/* JPI$_BUFIO for the calling process: `n` records it wrote to its terminal
+ * through the port's own write path (stdio), one buffered I/O each, as a
+ * record $PUT to a terminal is on VMS (probe Q.IODELTA2 W; rd vms-bd71).
+ * A caller with no executive entry is not counted. */
+void vms_proc_count_bufio_current(uint32_t n);
+/* add to a process I/O counter (JPI$_BUFIO/DIRIO): the substrate's own
+ * atomic add -- VAX has no compiler atomics a kernel module may call */
+#include <sys/atomic.h>
+#define VMS_IO_COUNT(p, n) atomic_add_32((volatile uint32_t *)(p), (n))
 
 #endif /* _VMS_INTERNAL_H */

@@ -1,0 +1,112 @@
+# keystroke oracle transcript (unmasked) -- case EDT.LINE2 (OpenVMS VAX V7.3 OPA0:)
+# EDT line mode: line numbers after INSERT, RETURN and a number at *, TYPE ranges, FIND, SUBSTITUTE, DELETE, errors, EXIT of an existing file
+# case-sha256 2c3ee4ca1f600cd38f7a531e9272429a5f1e86f7caf036c1f00e8c1caeb8d869
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP V1 quiet
+=== STEP O
+| EDIT/EDT KSE2.TXT<CR><LF>
+| <CR>Input file does not exist<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP I
+| INSERT<CR><LF>
+| <CR>            
+=== STEP A
+| ONE<CR><LF>
+| <CR>            
+=== STEP B
+| TWO<CR><LF>
+| <CR>            
+=== STEP C
+| THREE<CR><LF>
+| <CR>            
+=== STEP Z
+| *EXIT*<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP X
+| EXIT<CR><LF>
+| <CR>SYS$SYSROOT:[SYSMGR]KSE2.TXT;1 3 lines<CR><LF>
+| <CR><NUL>$ 
+=== STEP O2
+| EDIT/EDT KSE2.TXT<CR><LF>
+| <CR>    1       ONE<CR><LF>
+| <CR>*
+=== STEP R1
+| <CR><LF>
+| <CR>    2       TWO<CR><LF>
+| <CR>*
+=== STEP R2
+| <CR><LF>
+| <CR>    3       THREE<CR><LF>
+| <CR>*
+=== STEP R3
+| <CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP R4
+| <CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP N1
+| 1<CR><LF>
+| <CR>    1       ONE<CR><LF>
+| <CR>*
+=== STEP I2
+| INSERT;NEW<CR><LF>
+| <CR>    1       ONE<CR><LF>
+| <CR>*
+=== STEP T1
+| TYPE WHOLE<CR><LF>
+| <CR>    0.1     NEW<CR><LF>
+|     1       ONE<CR><LF>
+|     2       TWO<CR><LF>
+|     3       THREE<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP T2
+| TYPE 2:3<CR><LF>
+| <CR>    2       TWO<CR><LF>
+|     3       THREE<CR><LF>
+| <CR>*
+=== STEP T3
+| TYPE 9<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP F1
+| FIND "THR"<CR><LF>
+| <CR>String was not found<CR><LF>
+| <CR>*
+=== STEP F2
+| "NOPE"<CR><LF>
+| <CR>String was not found<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP S1
+| SUBSTITUTE/T/X/ WHOLE<CR><LF>
+| <CR>    2       XWO<CR><LF>
+|     3       XHREE<CR><LF>
+| 2 substitutions<CR><LF>
+| <CR>*
+=== STEP D1
+| DELETE 2<CR><LF>
+| <CR>1 line deleted<CR><LF>
+|     3       XHREE<CR><LF>
+| <CR>*
+=== STEP T4
+| T W<CR><LF>
+| <CR>    0.1     NEW<CR><LF>
+|     1       ONE<CR><LF>
+|     3       XHREE<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP E1
+| FROB<CR><LF>
+| <CR> ^<CR><LF>
+| Unrecognized command<CR><LF>
+| <CR>*
+=== STEP X2
+| EXIT<CR><LF>
+| <CR>SYS$SYSROOT:[SYSMGR]KSE2.TXT;2 3 lines<CR><LF>
+| <CR><NUL>$ 

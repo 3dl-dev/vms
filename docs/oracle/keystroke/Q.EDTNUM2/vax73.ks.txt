@@ -1,0 +1,108 @@
+# keystroke oracle transcript (unmasked) -- case Q.EDTNUM2 (OpenVMS VAX V7.3 OPA0:)
+# probe: EDT numbers for text put in at [EOB] from the PASTE buffer (CUT/APPEND then PASTE/REPLACE), twice
+# case-sha256 d34cdf4bc0f84768599328983cfcb510557acf3f2e3e70ac5399d01dcd7efe12
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP V1 quiet
+=== STEP V2
+| EDIT/EDT KSE6.TXT<CR><LF>
+| <CR>Input file does not exist<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP V3
+| INSERT<CR><LF>
+| <CR>            
+=== STEP V4
+| one two<CR><LF>
+| <CR>            
+=== STEP V5
+| three four<CR><LF>
+| <CR>            
+=== STEP V7
+| <ESC>7<ESC>[7m Exit <ESC>[m<ESC>8<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP C1
+| 1<CR><LF>
+| <CR>    1       one two<CR><LF>
+| <CR>*
+=== STEP C
+| CHANGE<CR><LF>
+| <ESC>\<ESC><<ESC>[?6l<ESC>[m<ESC>)0<ESC>[4l<ESC>[H<ESC>[?3l<ESC>[;22r<ESC>[H<ESC>=<ESC>[Jone two<CR><LF>
+| three four<CR><LF>
+| [EOB]<ESC>[H
+=== STEP S
+| <ESC>[?8l<ESC>[?8h
+=== STEP S1
+| <ESC>[?8l<ESC>[7mone <ESC>[?8h
+=== STEP X
+| <ESC>[?8l<ESC>[m<CR>two<ESC>[K<CR><ESC>[?8h
+=== STEP B
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[2B<ESC>[?8h
+=== STEP P
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[3;22r<ESC>[2B<ESC>Mone <ESC>[;22r<ESC>[3;5H<ESC>[?8h
+=== STEP P2
+| <ESC>[?8l<ESC>[7m<ESC>[m<CR>one one <ESC>[K<ESC>[?8h
+=== STEP U
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[H<ESC>[?8h
+=== STEP S2
+| <ESC>[?8l<ESC>[?8h
+=== STEP S3
+| <ESC>[?8l<ESC>[7mtwo<ESC>[?8h
+=== STEP A
+| <ESC>[?8l<ESC>[m<CR><ESC>[K<ESC>[?8h
+=== STEP B2
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[3B<ESC>[?8h
+=== STEP P3
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[4;22r<ESC>[3B<ESC>Mone two<ESC>[;22r<ESC>[4;8H<ESC>[?8h
+=== STEP KZ
+| <ESC>><ESC>[;24r<ESC>[24H<LF>
+| <CR>*
+=== STEP T1
+| TYPE WHOLE<CR><LF>
+| <CR>    1       <CR><LF>
+|     2       three four<CR><LF>
+|     6.84661 one one <CR><LF>
+|  114867054.85856 one two<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP Q
+| QUIT<CR><LF>
+| <CR><LF>
+| <ESC>[m<ESC>)B<ESC>[;r<ESC>[24H<CR><ESC>><CR><LF>
+| <NUL>$ 
+=== STEP R1
+| EDIT/EDT KSE6.TXT<CR><LF>
+| <CR>Input file does not exist<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP R2
+| 1<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP R3
+| CHANGE<CR><LF>
+| <ESC>\<ESC><<ESC>[?6l<ESC>[m<ESC>)0<ESC>[4l<ESC>[H<ESC>[?3l<ESC>[;22r<ESC>[H<ESC>=<ESC>[J[EOB]<CR>
+=== STEP R4
+| <ESC>[?8l<ESC>[?8h
+=== STEP R4A
+| <ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mAdvance past bottom of buffer<ESC>[H<ESC>[?8h
+=== STEP R4B
+| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[22A<ESC>[m<ESC>[?8h
+=== STEP R4C
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[?8h
+=== STEP R4D
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[?8h
+=== STEP R5
+| <ESC>><ESC>[;24r<ESC>[24H<LF>
+| <CR>*
+=== STEP R6
+| TYPE WHOLE<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP R7
+| QUIT<CR><LF>
+| <CR><LF>
+| <ESC>[m<ESC>)B<ESC>[;r<ESC>[24H<CR><ESC>><CR><LF>
+| <NUL>$ 
+=== STEP V9 quiet

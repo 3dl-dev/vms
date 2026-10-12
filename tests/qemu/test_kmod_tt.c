@@ -349,6 +349,22 @@ int main(void)
     rd_wait(&r);
     (void)screen(m, scr, sizeof(scr), 300);
 
+    /* ---- CTRL/Z on an ANSI CRT (rd vms-c37): a reverse-video " Exit " with
+     * the cursor saved and put back, then the new line (VAX V7.3 keystroke
+     * Q.EDTNUM V7); elsewhere *EXIT* ---- */
+    st = vms_kif_ttsetmode(chan, VMS_TTSET_CHAR, VMS_TTC_ANSI_CRT, 0, 0, 0);
+    rd_start(&r, chan, 0, NULL, 0);
+    msleep(200);
+    type(m, "\032");
+    rd_wait(&r);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-ansi-exit-echo */
+    CHECK((st & 1) && strstr(scr, "\0337\033[7m Exit \033[m\0338") != NULL,
+          "CTRL/Z on an ANSI CRT echoes a reverse-video ' Exit ' with the cursor put back");
+    (void)vms_kif_ttsetmode(chan, VMS_TTSET_CHAR, 0, VMS_TTC_ANSI_CRT, 0, 0);
+    (void)vms_kif_tt_write(chan, "\r\n", 2);
+    (void)screen(m, scr, sizeof(scr), 300);
+
     /* ---- $QIO write ---- */
     st = vms_kif_tt_write(chan, "xyz", 3);
     screen(m, scr, sizeof(scr), 300);
@@ -363,6 +379,41 @@ int main(void)
     (void)!write(s, "d\n", 2);
     screen(m, scr, sizeof(scr), 300);
     CHECK(strcmp(scr, "\nd\r") == 0, "the record after it pays the owed line feed: <LF>d<CR>");
+    /* IO$M_NOFORMAT: the bytes go as they are and the driver's idea of the
+     * cursor is left alone -- the record after it still pays the line feed
+     * the record before it owed (rd vms-457; keystroke PG.DIR C1) */
+    st = vms_kif_tt_write_noformat(chan, "pq", 2);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK((st & 1) && strcmp(scr, "pq") == 0, "an IO$M_NOFORMAT write goes out byte for byte");
+    {
+        struct vms_procinfo pa, pb;
+        memset(&pa, 0, sizeof pa);
+        (void)vms_kif_getjpi_self(&pa);
+        (void)!write(s, "e\n", 2);
+        screen(m, scr, sizeof(scr), 300);
+        memset(&pb, 0, sizeof pb);
+        (void)vms_kif_getjpi_self(&pb);
+        /* negctl: tt-record-not-bufio */
+        CHECK((pa.fields_valid & VMS_PI_V_BUFIO) && pb.bufio == pa.bufio + 1,
+              "a record written to the terminal is one buffered I/O of the writer's (JPI$_BUFIO)");
+    }
+    /* negctl: tt-noformat-moves-cursor */
+    CHECK(strcmp(scr, "\ne\r") == 0,
+          "after an IO$M_NOFORMAT write the next record starts where the driver last put the cursor: <LF>e<CR>");
+    /* a program's own CR LF ($QIO, no carriage control) leaves nothing owed:
+     * DCL's next prompt starts there, <NUL>$ (VAX V7.3 keystroke PG.DIR C1,
+     * EDT.KEYPAD Q; rd vms-457) */
+    (void)vms_kif_tt_write(chan, "zz\r\n", 4);
+    (void)screen(m, scr, sizeof(scr), 300);
+    rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+    msleep(200);
+    screen(m, scr, sizeof(scr), 300);
+    /* negctl: tt-raw-crlf-owes-newline */
+    CHECK(scr[0] == '\0' && memcmp(scr + 1, "$ ", 2) == 0,
+          "after a program's own CR LF, DCL's prompt starts in place: <NUL>$ ");
+    type(m, "\r");
+    rd_wait(&r);
+    (void)screen(m, scr, sizeof(scr), 300);
     (void)vms_kif_tt_write(chan, "\r\n", 2);      /* back to a fresh line */
     (void)screen(m, scr, sizeof(scr), 300);
 

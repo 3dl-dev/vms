@@ -39,7 +39,7 @@ OVMXE admitted both VAXes:
 
 The OPCOM traffic between VAX1 and VAX2 shows they are in the same cluster.
 
-**P3 held** (CN=3 with OVMXE as founder and coordinator), as did P1, P2, P4 and P5. 0 bugchecks.
+**P3 held in part.** CN=3 formed, with OVMXE as founder and coordinator. `F$GETSYI("CLUSTER_NODES")` could not be read on a VAX, because no login was possible (see below). P1, P2, P4 and P5 held. 0 bugchecks.
 
 The lost and re-established VC between VAX1 and VAX2 at 18:39:55 came from the SIMH ^E pauses this run took to sample VAX1's PC. They were operator-induced.
 

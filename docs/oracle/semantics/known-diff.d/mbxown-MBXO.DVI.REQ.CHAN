@@ -1,0 +1,1 @@
+mbxown MBXO.DVI.REQ.CHAN  # vms-7ea: $GETDVI does not reach the executive mailbox table (SS$_NOSUCHDEV by channel, 0x144 by name); VMS answers PID 0, OWNUIC, VPROT, REFCNT

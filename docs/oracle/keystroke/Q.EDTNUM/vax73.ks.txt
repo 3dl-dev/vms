@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case Q.EDTNUM (OpenVMS VAX V7.3 OPA0:)
 # probe: EDT line numbers for inserted lines -- line mode INSERT between lines, repeated, keypad RETURN, text at [EOB], RESEQUENCE
-# case-sha256 1b8bc6e416027cec7f35f9cb3bcb96d21e57862805bf6b145cea702f7cce1021
+# case-sha256 ff509f25634efa73fc90687cca0a46d5937df08d7b870c2f0f2e1fc5ff34ffb5
 @start loggedin OK
 === STEP V0 quiet
 === STEP V1 quiet

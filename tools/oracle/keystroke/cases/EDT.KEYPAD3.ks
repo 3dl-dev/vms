@@ -19,11 +19,14 @@ S send "{KPDOT}" settle=1
 S2 send "{KP1}" settle=1
 AP send "{KP9}" settle=1
 D send "{DOWN}" settle=1
-S3 send "{KPDOT}{KP1}" settle=1
+S3 send "{KPDOT}" settle=1
+S3a send "{KP1}" settle=1
 RP send "{PF1}{KP9}" settle=1
-B send "{KP5}{KP0}" settle=1
+B send "{KP5}" settle=1
+Ba send "{KP0}" settle=1
 B2 send "{KP0}" settle=1
-CR send "{KP4}{KP3}" settle=1
+CR send "{KP4}" settle=1
+CRa send "{KP3}" settle=1
 DL send "\x7f" settle=1
 UC send "{PF1}{KPCOMMA}" settle=1
 E send "{KP2}" settle=1
@@ -31,4 +34,4 @@ T type "!" settle=1
 Z send "^Z" expect="\*$" settle=2
 TW send "TYPE WHOLE\r" expect="\*$"
 Q send "QUIT\r" expect="\$ $" timeout=30
-V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN\r" expect="\$ $" quiet
+V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN/LINE_EDITING\r" expect="\$ $" quiet

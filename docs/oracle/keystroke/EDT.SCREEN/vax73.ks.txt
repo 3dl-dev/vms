@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case EDT.SCREEN (OpenVMS VAX V7.3 OPA0:)
 # EDT keypad (screen) mode on a VT100: CHANGE, arrows, insert, back to line mode, QUIT
-# case-sha256 5fa23a7a0af5f4d9b3df77ea5fb1e1c2c1fb388aebd963c79cfca3c13d064224
+# case-sha256 5d68b8aac8bf3f51b96bd9cf02a0a98b38aa36467a70a0b8b6e9a4dcb2976e13
 @start loggedin OK
 === STEP V0 quiet
 === STEP O

@@ -10,16 +10,26 @@
 # Distinct bogus tokens so each verb is proven individually (populated tables:
 # ASSIGN/DEASSIGN/DEFINE/OPEN/SPAWN/CONVERT/INQUIRE/RECALL; empty tables:
 # WAIT/CLOSE).
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQASSIGN\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQDEASSIGN\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQDEFINE\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQOPEN\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQSPAWN\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQCONVERT\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQINQUIRE\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQRECALL\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQWAIT\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQCLOSE\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQASSIGN\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQDEASSIGN\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQDEFINE\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQOPEN\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQSPAWN\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQCONVERT\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQINQUIRE\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQRECALL\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQWAIT\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQCLOSE\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 #

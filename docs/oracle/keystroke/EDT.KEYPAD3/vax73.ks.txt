@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case EDT.KEYPAD3 (OpenVMS VAX V7.3 OPA0:)
 # EDT keypad on a VT100: OPEN LINE, DEL EOL, CHNGCASE, APPEND, REPLACE, WORD, LINE backward, CHAR, UND C after DELETE
-# case-sha256 4630263585d971cb0596a9d89de9edf710a82ccc6b24090320e9936126b5e929
+# case-sha256 8ed879d4f11eadff6a8ee70a7cb7ea7bcba9776e9a68759b4e43d1e52e5bfa19
 @start loggedin OK
 === STEP V0 quiet
 === STEP V1 quiet
@@ -38,15 +38,21 @@
 | <ESC>[?8l<LF>
 | <ESC>[?8h
 === STEP S3
-| <ESC>[?8l<ESC>[?8h<ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mAdvance past bottom of buffer<ESC>[3H<ESC>[?8h
+| <ESC>[?8l<ESC>[?8h
+=== STEP S3a
+| <ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mAdvance past bottom of buffer<ESC>[3H<ESC>[?8h
 === STEP RP
 | <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[20A<ESC>[m<ESC>[3;22r<ESC>[2B<ESC>Mfour <ESC>[;22r<ESC>[3;6H<ESC>[?8h
 === STEP B
-| <ESC>[?8l<ESC>[?8h<ESC>[?8l<CR><ESC>[?8h
+| <ESC>[?8l<ESC>[?8h
+=== STEP Ba
+| <ESC>[?8l<CR><ESC>[?8h
 === STEP B2
 | <ESC>[?8l<ESC>[A<ESC>[?8h
 === STEP CR
-| <ESC>[?8l<ESC>[?8h<ESC>[?8l<ESC>[C<ESC>[?8h
+| <ESC>[?8l<ESC>[?8h
+=== STEP CRa
+| <ESC>[?8l<ESC>[C<ESC>[?8h
 === STEP DL
 | <CR>ive<ESC>[K<CR>
 === STEP UC

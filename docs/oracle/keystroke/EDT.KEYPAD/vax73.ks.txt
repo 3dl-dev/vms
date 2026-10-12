@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case EDT.KEYPAD (OpenVMS VAX V7.3 OPA0:)
 # EDT keypad on a VT100: cursor, DEL C/W/L and UND, SELECT CUT PASTE, FIND and FNDNXT, ADVANCE/BACKUP, ^Z to line mode
-# case-sha256 7279f6bc7d5c5aaae0f0cee02e40b1245465deb4ebbb076bf943214ce18ce049
+# case-sha256 d97c77775cde1514c848c0fb051082f041b70a31d4414e104d25ec7b85826be4
 @start loggedin OK
 === STEP V0 quiet
 === STEP V1 quiet
@@ -47,7 +47,9 @@
 === STEP S
 | <ESC>[?8l<ESC>[?8h
 === STEP S2
-| <ESC>[?8l<ESC>[7mM<ESC>[?8h<ESC>[?8lA<ESC>[?8h
+| <ESC>[?8l<ESC>[7mM<ESC>[?8h
+=== STEP S2a
+| <ESC>[?8lA<ESC>[?8h
 === STEP CUT
 | <ESC>[?8l<ESC>[m<ESC>[2D<ESC>[K<ESC>[?8h
 === STEP D2
@@ -62,14 +64,20 @@
 === STEP F3
 | <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[3;6H<ESC>[m<ESC>[3C<ESC>[?8h
 === STEP N
-| <ESC>[?8l<ESC>[?8h<ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mString was not found<ESC>[m<ESC>[3;9H<ESC>[?8h
+| <ESC>[?8l<ESC>[?8h
+=== STEP Na
+| <ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mString was not found<ESC>[m<ESC>[3;9H<ESC>[?8h
 === STEP A
-| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[3;9H<ESC>[?8h<ESC>[?8l<CR><LF>
+| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[3;9H<ESC>[?8h
+=== STEP Aa
+| <ESC>[?8l<CR><LF>
 | <ESC>[?8h
 === STEP E
 | <ESC>[?8l<BEL><ESC>[24H<ESC>[K<ESC>[7mAdvance past bottom of buffer<ESC>[m<ESC>[4H<ESC>[?8h
 === STEP B
-| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[19A<ESC>[?8h<ESC>[?8l<ESC>[3;16H<ESC>[?8h
+| <ESC>[?8l<ESC>[23H<ESC>[J<ESC>[19A<ESC>[?8h
+=== STEP Ba
+| <ESC>[?8l<ESC>[3;16H<ESC>[?8h
 === STEP Z
 | <ESC>><ESC>[;24r<ESC>[24H<LF>
 | <CR>*

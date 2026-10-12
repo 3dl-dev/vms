@@ -1,8 +1,10 @@
 #!/bin/bash
 # TEST: Phase 0 gate (vms-6f4) - SET TERMINAL rejects an unknown qualifier
 #       with the authentic VMS error instead of silently succeeding
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \FDAFS\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \FDAFS\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \BOGUS\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 #

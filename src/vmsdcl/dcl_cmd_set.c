@@ -448,7 +448,7 @@ static int cmd_set_terminal(struct dcl_command *cmd)
         if (!known) {
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
-                      "and placement - \\%s\\", qname);
+                      "and placement\n \\%s\\", qname);
             return SS$_IVQUAL;
         }
     }

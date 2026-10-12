@@ -16,7 +16,8 @@
 # EXPECT: contains:-RMS-E-FNF, file not found
 #
 # --- an unimplemented COPY qualifier -> %DCL-W-IVQUAL (structural, q_copy) ---
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \CONTIGUOUS\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \CONTIGUOUS\
 #
 # THE FINDING THIS GATES (docs/design-vms-parity-map.md sec 3): COPY carried 1
 # of ~20 Dictionary qualifiers and accepted any other silently. TRIPWIRE:

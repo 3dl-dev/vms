@@ -1,0 +1,111 @@
+# keystroke oracle transcript (unmasked) -- case EDT.LINE3 (OpenVMS VAX V7.3 OPA0:)
+# EDT line mode: COPY, MOVE, WRITE, INCLUDE, TYPE ranges (BEGIN/END/REST/.), FIND, SET NUMBERS, SHOW BUFFER, an out-of-range line
+# case-sha256 63239bc0c205900e01fd9391f8e2daa2b1460049eff8b589a40dd3f98166d970
+@start loggedin OK
+=== STEP V1 quiet
+=== STEP O
+| EDIT/EDT KSE7.TXT<CR><LF>
+| <CR>Input file does not exist<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP I
+| INSERT<CR><LF>
+| <CR>            
+=== STEP A
+| ONE<CR><LF>
+| <CR>            
+=== STEP B
+| TWO<CR><LF>
+| <CR>            
+=== STEP C
+| THREE<CR><LF>
+| <CR>            
+=== STEP D
+| FOUR<CR><LF>
+| <CR>            
+=== STEP Z
+| *EXIT*<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP CP
+| COPY 1:2 TO END<CR><LF>
+| <CR>2 lines copied<CR><LF>
+| <CR>*
+=== STEP T1
+| TYPE WHOLE<CR><LF>
+| <CR>    1       ONE<CR><LF>
+|     2       TWO<CR><LF>
+|     3       THREE<CR><LF>
+|     4       FOUR<CR><LF>
+|     5       ONE<CR><LF>
+|     6       TWO<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP MV
+| MOVE 3 TO BEGIN<CR><LF>
+| <CR>1 line moved<CR><LF>
+| <CR>*
+=== STEP T2
+| TYPE WHOLE<CR><LF>
+| <CR>    0.1     THREE<CR><LF>
+|     1       ONE<CR><LF>
+|     2       TWO<CR><LF>
+|     4       FOUR<CR><LF>
+|     5       ONE<CR><LF>
+|     6       TWO<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP WR
+| WRITE KSE8.TXT 1:2<CR><LF>
+| <CR>SYS$SYSROOT:[SYSMGR]KSE8.TXT;1 2 lines<CR><LF>
+| <CR>*
+=== STEP IN
+| INCLUDE KSE8.TXT END<CR><LF>
+| <CR>*
+=== STEP T3
+| TYPE BEGIN:3<CR><LF>
+| <CR>    0.1     THREE<CR><LF>
+|     1       ONE<CR><LF>
+|     2       TWO<CR><LF>
+| <CR>*
+=== STEP T4
+| TYPE REST<CR><LF>
+| <CR>    0.1     THREE<CR><LF>
+|     1       ONE<CR><LF>
+|     2       TWO<CR><LF>
+|     4       FOUR<CR><LF>
+|     5       ONE<CR><LF>
+|     6       TWO<CR><LF>
+|     7       ONE<CR><LF>
+|     8       TWO<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP T5
+| TYPE .<CR><LF>
+| <CR>    0.1     THREE<CR><LF>
+| <CR>*
+=== STEP F1
+| FIND BEGIN<CR><LF>
+| <CR>*
+=== STEP F2
+| "FOUR"<CR><LF>
+| <CR>    4       FOUR<CR><LF>
+| <CR>*
+=== STEP X1
+| TYPE 99<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP X2
+| DELETE 99<CR><LF>
+| <CR>No lines deleted<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP SB
+| SHOW BUFFER<CR><LF>
+| <CR>=MAIN   8       lines<CR><LF>
+|  PASTE  No      lines<CR><LF>
+| <CR>*
+=== STEP Q
+| QUIT<CR><LF>
+| <CR><LF>
+| <CR><NUL>$ 

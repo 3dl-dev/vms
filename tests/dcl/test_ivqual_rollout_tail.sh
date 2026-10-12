@@ -12,18 +12,30 @@
 # ANALYZE/LINK/PRODUCT/MOUNT/BACKUP. Empty tables (q_none): DISMOUNT/EDIT/
 # REQUEST/ACCOUNTING/MONITOR/SYSGEN/SYSMAN. Validation short-circuits before the
 # handler, so no MOUNT/DISMOUNT/exec side effect is reached on these lines.
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQANALYZE\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQLINK\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQPRODUCT\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQMOUNT\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQBACKUP\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQDISMOUNT\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQEDIT\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQREQUEST\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQACCOUNTING\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQMONITOR\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQSYSGEN\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZQSYSMAN\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQANALYZE\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQLINK\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQPRODUCT\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQMOUNT\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQBACKUP\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQDISMOUNT\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQEDIT\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQREQUEST\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQACCOUNTING\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQMONITOR\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQSYSGEN\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZQSYSMAN\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 #

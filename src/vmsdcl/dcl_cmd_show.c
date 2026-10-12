@@ -1721,7 +1721,7 @@ static int cmd_show_symbol(struct dcl_command *cmd)
             strcasecmp(q, "SYMBOL")) {
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
-                      "and placement - \\%s\\", q);
+                      "and placement\n \\%s\\", q);
             return SS$_IVQUAL;
         }
     }

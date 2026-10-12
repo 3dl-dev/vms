@@ -18,6 +18,7 @@
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_quorum.h"   /* task 2: the admitted node's own arithmetic */
 #include "vms_dlm_ldwv.h"   /* task 5: the lock directory weight vector */
+#include "vms_cluster_codec_cm.h"   /* rd vms-64b: VMS_CM_REBUILD_* */
 
 /* ==========================================================================
  * Small shared helpers (this TU calls no library: a pure TU builds on the host
@@ -227,6 +228,32 @@ static uint32_t phase2_commit_count(struct vms_club *club,
  * only from the LOCAL CSB actually carrying MEMBER -- never from "a transition
  * happened".
  */
+static uint64_t phase2_now_vms(const struct cnxman_ops *ops)
+{
+	if (ops != NULL && ops->now_vms != NULL)
+		return ops->now_vms(ops->ctx);
+	return 0u;
+}
+
+/* rd vms-d52c: the member-state times every PARAMS a member sends carries
+ * (struct vms_club). 0 from the clock records nothing. */
+static void phase2_note_member_times(struct vms_cluster *cl,
+				     const struct cnxman_ops *ops)
+{
+	struct vms_club *club = &cl->club;
+	uint64_t now = phase2_now_vms(ops);
+
+	if (now == 0u || cl->state != VMS_CLUSTER_MEMBER)
+		return;
+	club->last_xition_vms = now;
+	club->last_xition_epoch = club->epoch;
+	club->last_xition_valid = 1u;
+	if (!club->joined_valid) {
+		club->joined_vms = now;
+		club->joined_valid = 1u;
+	}
+}
+
 static void phase2_commit_local_membership(struct vms_cluster *cl,
 					   const struct cnxman_ops *ops)
 {
@@ -268,6 +295,114 @@ static void phase2_commit_ldwv(struct vms_club *club, const struct cnxman_ops *o
 	(void)cnxman_ldwv_rebuild(club, ops);
 }
 
+/*
+ * rd vms-64b: THE DLM REBUILD SEQUENCE AT COMMIT (struct vms_club). Runs after
+ * task 5 has rebuilt the weight vector from the committed membership.
+ *
+ * A node that held a vector before this commit compares the two: changed ->
+ * step, unchanged -> keep. A node taking part in its FIRST commit (a joiner)
+ * has no earlier vector; the open's rebuild type decides (FULL/DIRECTORY step,
+ * MERGE keeps), and an open without one is read the way the coordinator
+ * decides it, with this node as the subject (phase2_joiner_rebuild). A
+ * FORMATION is 1 whatever came before. A commit that leaves no valid vector
+ * cannot be decided, and the value is forgotten rather than guessed.
+ */
+static int phase2_ldwv_sig(const struct vms_club *club, uint32_t *sig)
+{
+	const struct vms_ldwv *v = &club->ldwv;
+	uint32_t h = 2166136261u, i;
+
+	if (!v->valid || v->n == 0u)
+		return 0;
+	for (i = 0; i < v->n; i++) {
+		uint32_t e = v->entry[i];
+
+		h = (h ^ (e & 0xffu)) * 16777619u;
+		h = (h ^ ((e >> 8) & 0xffu)) * 16777619u;
+		h = (h ^ ((e >> 16) & 0xffu)) * 16777619u;
+		h = (h ^ (e >> 24)) * 16777619u;
+	}
+	*sig = h ^ v->n;
+	return 1;
+}
+
+/*
+ * A joiner's own reading of the rebuild type its admission needed, when the
+ * open did not carry one: the coordinator's rule (vms_cnxman_coord_fsm.c
+ * coord_open_rebuild, book p. 7-40) with THIS node as the subject -- a joiner
+ * that weighs 0 among weighted members is a MERGE, anything else a DIRECTORY
+ * rebuild. -1 when a weight was never learned.
+ */
+static int phase2_joiner_rebuild(const struct vms_club *club, uint8_t *rb)
+{
+	const struct vms_csb *local;
+	uint32_t i, others_nonzero = 0u;
+
+	if (club->local_csb < 0 || (uint32_t)club->local_csb >= club->n_csb)
+		return -1;
+	local = &club->csb[club->local_csb];
+	if (!local->lockdirwt_valid)
+		return -1;
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *m = &club->csb[i];
+
+		if (m == local || !m->in_use ||
+		    (m->flags & VMS_CSB_F_SELECTED) == 0u)
+			continue;
+		if (!m->lockdirwt_valid)
+			return -1;
+		if (m->lockdirwt != 0u)
+			others_nonzero++;
+	}
+	*rb = (local->lockdirwt == 0u && others_nonzero != 0u)
+		      ? (uint8_t)VMS_CM_REBUILD_MERGE
+		      : (uint8_t)VMS_CM_REBUILD_DIRECTORY;
+	return 0;
+}
+
+static void phase2_dlm_seq_step(struct vms_club *club)
+{
+	if (!club->dlm_seq_valid)
+		return;
+	club->dlm_seq = (uint16_t)(club->dlm_seq + 1u);
+	if (club->dlm_seq == 0u)
+		club->dlm_seq = 1u;
+	club->dlm_seq_steps++;
+}
+
+static void phase2_commit_dlm_seq(struct vms_club *club,
+				  const struct cnxman_phase2_in *in)
+{
+	uint32_t sig = 0u;
+	int have = phase2_ldwv_sig(club, &sig);
+	uint8_t rb = in->rebuild;
+
+	if (rb == VMS_CM_REBUILD_FULL) {
+		cnxman_club_dlm_seq_found(club);
+	} else if (club->dlm_seq_vsig_valid) {
+		/* a member before this commit: its own two vectors decide */
+		if (!have) {
+			club->dlm_seq_valid = 0u;
+			club->dlm_seq_lost++;
+		} else if (sig != club->dlm_seq_vsig) {
+			phase2_dlm_seq_step(club);
+		}
+	} else if (rb != 0u || phase2_joiner_rebuild(club, &rb) == 0) {
+		/* this node's first commit: the rebuild type decides */
+		if (rb == VMS_CM_REBUILD_DIRECTORY)
+			phase2_dlm_seq_step(club);
+		else if (rb != VMS_CM_REBUILD_MERGE && club->dlm_seq_valid) {
+			club->dlm_seq_valid = 0u;   /* a type no capture holds */
+			club->dlm_seq_lost++;
+		}
+	} else if (club->dlm_seq_valid) {
+		club->dlm_seq_valid = 0u;
+		club->dlm_seq_lost++;
+	}
+	club->dlm_seq_vsig = sig;
+	club->dlm_seq_vsig_valid = (uint8_t)(have ? 1u : 0u);
+}
+
 /* ==========================================================================
  * The five tasks, in the published order
  * ========================================================================== */
@@ -302,6 +437,8 @@ void cnxman_phase2_local_committed(struct vms_cluster *cl,
 	 * the commit path uses. */
 	phase2_commit_local_membership(cl, ops);
 	(void)cnxman_ldwv_rebuild(&cl->club, ops);
+	if (!cl->club.joined_valid)
+		phase2_note_member_times(cl, ops);
 }
 
 uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
@@ -362,6 +499,8 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 		cnxman_club_note_reconfig(club);
 
 	phase2_commit_ldwv(club, ops);
+	phase2_commit_dlm_seq(club, in);
+	phase2_note_member_times(cl, ops);
 
 	club->last_transition_ms = phase2_now(ops);
 	return members;

@@ -1,0 +1,100 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCAE00+36F0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 1
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 1
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+    11-OCT-2026 11:23:50.11
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR[   23.994823] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   24.002050] %CNXMAN, waiting to form or join an OpenVMS Cluster
+
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 11-OCT-2026 11:23:51.84[   24.060405] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: 
+Username: SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ [   44.488817] %CNXMAN, the systems this node can see have quorum: forming an OpenVMS Cluster
+[   44.499416] %CNXMAN, this node is a member of the cluster
+[   44.502203] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   44.508862] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 (this node)
+[   44.512403] %CNXMAN, completed VAXcluster state transition
+[   44.515926] %CNXMAN, this node is now a VAXcluster member
+SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ [  321.988212] %PEA0, channel verified
+[  321.991065] %PEA0, virtual circuit open
+[  322.058126] %CNXMAN, a connection manager was discovered on the interconnect
+[  322.062057] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  322.071756] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[  322.080837] %CNXMAN, this node is already a member of this cluster: it introduces itself to the new system and asks nobody to admit it
+[  322.822025] %PEA0, channel verified
+[  322.822644] %PEA0, virtual circuit open
+[  323.079906] %CNXMAN, a connection manager was discovered on the interconnect
+[  323.143982] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[  323.694132] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[  382.663027] %CNXMAN, a cluster member proposed forming a cluster with this node as a founding member
+[  382.667101] %CNXMAN, a cluster system id was offered to this node while it already holds one as a member: it keeps the one the cluster assigned it
+[  382.672607] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[  382.675194] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 (this node)
+[  382.677823] %CNXMAN, VAXcluster state transition in progress
+[  382.679409] %CNXMAN, this node is now a VAXcluster member
+[  382.681015] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[  382.683840] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 (this node)
+[  382.685863] %CNXMAN, system 0000000000000401 was added to the cluster
+[  382.700630] %CNXMAN, completed VAXcluster state transition
+[  385.832087] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[  385.835459] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[  418.312863] vms: MSCP class driver: controller online, discovering
+[  418.318434] vms: served disk VAX2$DUA16384: (unit 16384, served by a cluster member)
+[  418.321325] vms: served disk VAX2$DUA16385: (unit 16385, served by a cluster member)
+[  423.367937] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  428.680180] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  459.207960] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  464.519700] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  495.047669] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  500.359878] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  530.887894] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  536.199850] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  566.727841] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  572.039765] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  602.567825] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  607.879878] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  638.407706] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  643.719853] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  674.247869] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  679.559728] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  710.087842] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  715.399842] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  745.928048] %SCS-W-DIRNOANSWER, directory inquiry unanswered

@@ -462,7 +462,7 @@ static void test_remove_open_carries_the_kept_nodemap(void)
 struct f297_open_case {
 	const char *name;
 	uint16_t slot_next, quorum, subj_qdsk, fsysid, subj_cfg, cevotes;
-	uint16_t csv_hwm, csv_top;
+	uint16_t dlm_seq, csv_top;
 	uint8_t  rc_members, rc_votes, rebuild;
 };
 
@@ -494,7 +494,7 @@ static void f297_check_open(const struct f297_open_case *k)
 	ct_check_eq_u32(o.cells.subj_cfg, k->subj_cfg, "  [87:89] the subject's own op-0x02 count");
 	ct_check_eq_u32(o.cells.cevotes, k->cevotes, "  [96:98] post-transition votes");
 	ct_check_eq_u32(o.cells.csv_low, 1u, "  [98:100] lowest slot");
-	ct_check_eq_u32(o.cells.csv_hwm, k->csv_hwm, "  [100:102] CSV high-water");
+	ct_check_eq_u32(o.cells.dlm_seq, k->dlm_seq, "  [100:102] CSV high-water");
 	ct_check_eq_u32(o.cells.csv_top, k->csv_top, "  [104:106] highest slot");
 	ct_check(o.cells.hold == VMS_CM_OPEN_HOLD_DELTA, "  [106:114] the -900 s delta");
 	ct_check(o.cells.ftime != 0u && o.cells.stamp > o.cells.ftime,
@@ -1770,9 +1770,114 @@ static void test_k10_records_against_real_pairs(void)
 		 "a length other than 136: refused");
 }
 
+/*
+ * rd vms-64b: the coordinator's class-0x02 transition OPEN to the joiner
+ * OVMXE, lab run mscp-239 r20 (ts 1791710610.787184): it carries the cluster's
+ * DLM rebuild sequence N = 2 at body[92], body[100:102] and body[102:104],
+ * before OVMXE's first DLM send -- and the real VAXes' own DLM headers in the
+ * same run carry 2.
+ */
+static const uint8_t g_open09_r20[132] = {
+	0x08, 0x01, 0x5a, 0x00, 0x09, 0x00, 0xb0, 0x53, 0x01, 0x09, 0x00, 0x00,
+	0x05, 0x00, 0x00, 0x00, 0x40, 0x02, 0x00, 0x00, 0x04, 0x00, 0x02, 0x00,
+	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xb5, 0xe7, 0x7b,
+	0xea, 0x3c, 0xbc, 0x00, 0x40, 0x7f, 0xda, 0xa4, 0xea, 0x3c, 0xbc, 0x00,
+	0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+	0x02, 0x00, 0x01, 0x00, 0x02, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x60,
+	0xee, 0x78, 0xde, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
+};
+
+static void test_open_dlm_seq(void)
+{
+	uint8_t b[132];
+	uint16_t n = 0u;
+
+	printf("-- vms-64b: the 0x09 open names the cluster's DLM sequence\n");
+	memcpy(b, g_open09_r20, sizeof(b));
+	ct_check(vms_cm_open_dlm_seq(b, sizeof(b), &n) == VMS_CODEC_OK &&
+		 n == 2u, "*** the real open's three copies give N = 2 ***");
+	b[100] = 3u;
+	ct_check(vms_cm_open_dlm_seq(b, sizeof(b), &n) == VMS_CODEC_E_SHORT,
+		 "copies that disagree are not trusted");
+	b[100] = 2u; b[9] = 0x08u;
+	ct_check(vms_cm_open_dlm_seq(b, sizeof(b), &n) == VMS_CODEC_E_CLASS,
+		 "an op-0x08 open is not this carrier");
+}
+
+/*
+ * rd vms-d52c: a REAL member's PARAMS -- VAX1 to OVMXE, lab lab64a order 1
+ * (ts 1791716739.831739; tests/lab/captures/vms-64b-dlm-seq-20261011/). The
+ * member-state fields the builder writes must equal it byte for byte when fed
+ * the same executive facts (formation time, last transition, its epoch, the
+ * sender's own membership time -- VAX1 founded, so that is the formation time).
+ */
+static const uint8_t g_member_params_vax1[132] = {
+	0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
+	0x21, 0x50, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01, 0x00,
+	0x01, 0x00, 0x01, 0x00, 0x80, 0x3f, 0xbd, 0xd1, 0xf8, 0x3c, 0xbc, 0x00,
+	0x60, 0x46, 0x17, 0xd2, 0xf8, 0x3c, 0xbc, 0x00, 0x04, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x25, 0x00, 0x60, 0x00, 0xc0, 0x24, 0xf9, 0x7f,
+	0x7e, 0x00, 0x00, 0x00, 0x80, 0x3f, 0xbd, 0xd1, 0xf8, 0x3c, 0xbc, 0x00,
+	0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2b, 0x00,
+	0x73, 0x00, 0x00, 0x00, 0x56, 0x37, 0x2e, 0x33, 0x20, 0x20, 0x20, 0x20,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static void test_member_params_against_real(void)
+{
+	struct vms_cm_node_params own;
+	struct vms_cm_member_state ms;
+	uint8_t b[VMS_CM_BODY_LEN];
+	const uint8_t *r = g_member_params_vax1;
+	uint32_t written = 0;
+
+	printf("-- rd vms-d52c: a member's PARAMS states its membership\n");
+	memset(&own, 0, sizeof(own));
+	ct_check(vms_cm_params_build(1u, 2u, 1u, &own, b, sizeof(b), &written)
+		 == VMS_CODEC_OK, "the PARAMS builds");
+	memcpy(&ms.ftime, r + VMS_OFB_CM_PFTIME, 8);
+	memcpy(&ms.last_xition, r + VMS_OFB_CM_PLASTXITION, 8);
+	memcpy(&ms.joined, r + VMS_OFB_CM_PJOINED, 8);
+	ms.last_epoch = 4u;
+	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_OK,
+		 "the member state is written");
+	ct_check(memcmp(b + 12, r + 12, 2) == 0,
+		 "*** body[12:14] = the real member status word 0x5021 ***");
+	ct_check(memcmp(b + 28, r + 28, 20) == 0,
+		 "*** body[28:48] = the real formation time, last transition and "
+		 "epoch ***");
+	ct_check(memcmp(b + 64, r + 64, 8) == 0,
+		 "*** body[64:72] = the real own-membership time ***");
+	ct_check(memcmp(b + 18, r + 18, 2) == 0, "body[18:20] the member count");
+	ms.joined = 0u;
+	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_E_INVAL,
+		 "a time not held is never claimed");
+	/* VAX1 ran EXPECTED_VOTES 1 (body[76:80]) and the default QDSKVOTES. */
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 1u, 1u) == VMS_CODEC_OK,
+		 "the quorum words are written");
+	ct_check(memcmp(b + 20, r + 20, 2) == 0,
+		 "*** body[20:22] = the real quorum (EV 1 -> 1) ***");
+	ct_check(memcmp(b + 24, r + 24, 2) == 0,
+		 "*** body[24:26] = the real QDSKVOTES the VAXes echo in opens ***");
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 3u, 2u) == VMS_CODEC_OK &&
+		 b[20] == 2u && b[24] == 2u,
+		 "EV 3 -> quorum 2; QDSKVOTES 2 -> 2 (rd vms-f297 arms)");
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 0u, 1u) ==
+		 VMS_CODEC_E_INVAL, "no EXPECTED_VOTES held: nothing claimed");
+}
+
 int main(void)
 {
+	test_open_dlm_seq();
 	char err[VMS_FIXTURE_ERRLEN];
+
+	test_member_params_against_real();
 
 	printf("test_codec_cm: connection-manager codec entries (FC-P3.1)\n");
 	test_k10_records_against_real_pairs();

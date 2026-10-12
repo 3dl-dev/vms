@@ -1,0 +1,40 @@
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-S-STARTDONE, TCPIP$TELNET startup completed
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at 11-OCT-2026 11:05:15.68
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+%MOUNT-I-REBUILD, volume was improperly dismounted; rebuild in progress
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 11-OCT-2026 11:05:20.84
+
+  Accounting information:
+  Buffered I/O count:            2426         Peak working set size:    1743
+  Direct I/O count:               990         Peak page file size:      8712
+  Page faults:                  12779         Mounted volumes:             1
+  Charged CPU time:           0 00:00:08.70   Elapsed time:     0 00:00:20.89
+%CNXMAN,  received VAXcluster membership request from system OVMXE
+%%%%%%%%%%%  OPCOM  11-OCT-2026 11:05:42.51  %%%%%%%%%%%
+11:05:42.51 Node VAX2 (csid 00010002) received VAXcluster membership request from node OVMXE
+
+%CNXMAN,  proposing addition of system OVMXE
+%%%%%%%%%%%  OPCOM  11-OCT-2026 11:05:42.51  %%%%%%%%%%%
+11:05:42.51 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+%CNXMAN,  completing VAXcluster state transition
+%%%%%%%%%%%  OPCOM  11-OCT-2026 11:05:42.52  %%%%%%%%%%%
+11:05:42.52 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 11:06:25.92  %%%%%%%%%%%    (from node VAX1   at 11-OCT-2026 11:06:26.39)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:               11-OCT-2026 11:06:26.39
+PID:                      2020021A        
+Process name:             _OPA0:          
+Username:                 SYSTEM          
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-INVPWD, invalid password

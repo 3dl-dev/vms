@@ -46,6 +46,7 @@
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cnxman_join_fsm.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_cluster_codec_dlm.h"   /* rd vms-64b */
 
 /* ==========================================================================
  * The two nodes
@@ -630,6 +631,62 @@ static void test_reporting_the_same_loss_twice_is_harmless(void)
 			"and was not then abandoned on top of completing");
 }
 
+/*
+ * rd vms-64b: FOUNDER -> JOINER, ONE DLM REBUILD SEQUENCE ON BOTH SIDES. A holds
+ * what founding leaves it (N = 1). Its admission open must tell B that N, and
+ * the commit must step both sides alike: an all-OVMX pair weighs 0 everywhere,
+ * so the vector changes on the admission (a DIRECTORY rebuild, as on real
+ * all-zero clusters: 266/266 steps), and both end at 2. A DLM message either
+ * node then sends carries that 2.
+ */
+static void test_founder_and_joiner_agree_on_the_dlm_sequence(void)
+{
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint16_t n = 0u;
+
+	printf("\n-- rd vms-64b: founder and joiner hold one DLM rebuild sequence --\n");
+	bed_init();
+	/* What each side's PARAMS exchange leaves (vms-fcb): every weight
+	 * learned, all 0 -- OVMX's default LOCKDIRWT. */
+	cnxman_csb_set_lockdirwt(cnxman_club_local(&g.a.cl.club), 0u);
+	cnxman_csb_set_lockdirwt(cnxman_club_local(&g.b.cl.club), 0u);
+	{
+		uint32_t i;
+
+		for (i = 0; i < g.a.cl.club.n_csb; i++)
+			if (g.a.cl.club.csb[i].in_use)
+				cnxman_csb_set_lockdirwt(&g.a.cl.club.csb[i], 0u);
+		for (i = 0; i < g.b.cl.club.n_csb; i++)
+			if (g.b.cl.club.csb[i].in_use)
+				cnxman_csb_set_lockdirwt(&g.b.cl.club.csb[i], 0u);
+	}
+	cnxman_club_dlm_seq_found(&g.a.cl.club);
+	ct_check_eq_u32(g.b.cl.club.dlm_seq_valid, 0u,
+			"before: the joiner holds no sequence (it sends no DLM)");
+	drive_admission();
+	ct_check_eq_u32(g.coord.transitions_completed, 1, "the admission completed");
+	ct_check_eq_u32(g.barrier.transitions_completed, 1, "... on both sides");
+	/* This bed's A holds no formation time or founder (it was made a member
+	 * by hand), so its open goes out WITHOUT the Phase 1 cells -- the
+	 * all-OVMX path. The sequence must still reach B. */
+	ct_check_eq_u32(g.coord.open_cells_omitted, 1u,
+			"A's open went without its Phase 1 cells (all-OVMX path)");
+	ct_check_eq_u32(g.b.cl.club.dlm_seq_valid, 1u,
+			"*** the joiner learned the sequence from A's open ***");
+	ct_check_eq_u32(g.a.cl.club.dlm_seq, g.b.cl.club.dlm_seq,
+			"*** founder and joiner hold the SAME value ***");
+	ct_check_eq_u32(g.a.cl.club.dlm_seq, 2u,
+			"... stepped once by the all-zero-weight admission (1 -> 2)");
+	ct_check_eq_u32(g.a.cl.club.dlm_seq_lost + g.b.cl.club.dlm_seq_lost, 0u,
+			"neither side failed to decide the step");
+	memset(body, 0, sizeof(body));
+	body[VMS_OFB_CM_CATEGORY] = VMS_DLM_CAT_REQUEST;
+	ct_check(vms_dlm_seq_put(body, sizeof(body), g.b.cl.club.dlm_seq) ==
+			 VMS_CODEC_OK &&
+		 vms_dlm_seq_get(body, sizeof(body), &n) == VMS_CODEC_OK &&
+		 n == 2u, "a DLM body stamped from the joiner's CLUB reads back 2");
+}
+
 int main(void)
 {
 	test_two_node_add_runs_the_barrier_to_completion();
@@ -638,5 +695,6 @@ int main(void)
 	test_loss_before_the_go_abandons_the_transition();
 	test_loss_inside_the_barrier_drops_it_and_finishes();
 	test_reporting_the_same_loss_twice_is_harmless();
+	test_founder_and_joiner_agree_on_the_dlm_sequence();
 	return ct_summary("test_cnxman_barrier_loop");
 }

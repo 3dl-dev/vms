@@ -680,21 +680,46 @@ static int join_node_already_member(const struct cnxman_join *j);
  * CLUB's own count of committed members while this node is one, 0 while it is
  * not -- exactly what a real joiner and a real member send (VMS_OFF_CM_MEMBERS).
  *
- * ONLY TO A PEER RUNNING THIS IMPLEMENTATION (`peer_is_ours`). A real member's
- * PARAMS carries more member-only state beside the count -- body[12], two VMS
- * time quadwords at body[28:44] and body[44] -- none of which OVMX grounds, so
- * the count alone in front of a foreign connection manager would be a member
- * record in a shape no real node writes: the rd vms-1ac rule (an admission's
- * ungrounded op-0x09 bytes are symmetric between two OVMX nodes and a
- * bugcheck risk in front of a VAX), applied to this record. A foreign peer
- * keeps getting the 0 OVMX has always sent there.
+ * A real member's PARAMS carries more member-only state beside the count --
+ * body[12:14], the formation and last-transition times at body[28:44], the
+ * last epoch at body[44:48] and its own membership time at body[64:72] (rd
+ * vms-d52c grounded all of them, vms_cluster_codec_cm.h). Sent to a foreign
+ * connection manager WITHOUT them, the count would be a member record in a
+ * shape no real node writes (the rd vms-1ac rule) -- and WITHHELD, the 0 made
+ * a booting real VAX take this node for a clusterless one and propose forming
+ * a SECOND cluster with it (lab lab64b: a partition). So the count goes to a
+ * foreign peer exactly when this node holds every member-state field, and the
+ * fields go with it (join_build_params); to a peer running this
+ * implementation it goes as before.
  */
+static int join_member_state(const struct cnxman_join *j,
+			     struct vms_cm_member_state *ms)
+{
+	const struct vms_club *club;
+
+	if (j->cl == NULL)
+		return 0;
+	club = &j->cl->club;
+	if (!club->ftime_valid || !club->last_xition_valid ||
+	    !club->joined_valid)
+		return 0;
+	ms->ftime = club->ftime;
+	ms->last_xition = club->last_xition_vms;
+	ms->joined = club->joined_vms;
+	ms->last_epoch = club->last_xition_epoch;
+	return 1;
+}
+
 static uint16_t join_members_for(const struct cnxman_join *j,
 				 const struct vms_csb *csb)
 {
 	uint32_t n;
 
-	if (csb == NULL || !csb->peer_is_ours || !join_node_already_member(j))
+	struct vms_cm_member_state ms;
+
+	if (csb == NULL || !join_node_already_member(j))
+		return 0u;
+	if (!csb->peer_is_ours && !join_member_state(j, &ms))
 		return 0u;
 	n = j->cl->club.cluster_nodes;
 	return (uint16_t)(n > 0xffffu ? 0xffffu : n);
@@ -741,11 +766,29 @@ static vms_codec_status_t join_build_params(struct cnxman_join *j,
 	if (j->cl != NULL)
 		votes = j->cl->params.votes;
 
+	struct vms_cm_member_state ms;
+	vms_codec_status_t st;
+	uint16_t members;
+
 	join_own_params(j, &own);
-	return vms_cm_params_build(votes, join_members_for(j, csb),
-				   join_own_lockdirwt(j), &own,
-				   j->scratch, (uint32_t)sizeof(j->scratch),
-				   NULL);
+	members = join_members_for(j, csb);
+	st = vms_cm_params_build(votes, members, join_own_lockdirwt(j), &own,
+				 j->scratch, (uint32_t)sizeof(j->scratch),
+				 NULL);
+	/* rd vms-d52c: a member count goes out with the member state, never
+	 * alone -- to every peer, so OVMX and VAX hear the same record. */
+	if (st == VMS_CODEC_OK && members != 0u && join_member_state(j, &ms))
+		st = vms_cm_params_member_put(j->scratch,
+					      (uint32_t)sizeof(j->scratch), &ms);
+	/* ...and its quorum and QDSKVOTES, from the executive's own SYSGEN
+	 * (a real VAX echoes the QDSKVOTES into every open it sends us). No
+	 * EXPECTED_VOTES held: the two words stay 0 and that is counted. */
+	if (st == VMS_CODEC_OK && j->cl != NULL &&
+	    vms_cm_params_quorum_put(j->scratch, (uint32_t)sizeof(j->scratch),
+				     j->cl->params.expected_votes,
+				     j->cl->params.qdskvotes) != VMS_CODEC_OK)
+		j->node_params_omitted++;
+	return st;
 }
 
 static void join_send_params(struct cnxman_join *j)

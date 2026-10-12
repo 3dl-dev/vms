@@ -1,0 +1,40 @@
+11:05:42.51 Node VAX2 (csid 00010002) proposed addition of node OVMXE
+
+%%%%%%%%%%%  OPCOM  11-OCT-2026 11:05:42.97  %%%%%%%%%%%    (from node VAX2   at 11-OCT-2026 11:05:42.52)
+11:05:42.52 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+
+VAX/VMS V7.3      node VAX1
+
+Username: SYSTEM
+Password: 
+%%%%%%%%%%%  OPCOM  11-OCT-2026 11:06:26.39  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:               11-OCT-2026 11:06:26.39
+PID:                      2020021A        
+Process name:             _OPA0:          
+Username:                 SYSTEM          
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-INVPWD, invalid password
+
+User authorization failure
+
+VAX/VMS V7.3      node VAX1
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1
+    Last interactive login on Thursday, 30-JUL-2026 09:00
+        1 failure since last successful login[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ INITIALIZE $2$DUA2: DATA2
+$ MOUNT $2$DUA2: DATA2
+%MOUNT-I-MOUNTED, DATA2 mounted on _$2$DUA2: (VAX1)
+$ DIRECTORY/OUTPUT=$2$DUA2:[000000]LIST.TXT SYS$SYSTEM:
+$ DISMOUNT $2$DUA2:
+$ WRITE SYS$OUTPUT "CN_"+F$STRING(F$GETSYI("CLUSTER_NODES"))
+CN_3
+$ 

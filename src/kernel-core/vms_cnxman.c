@@ -420,6 +420,12 @@ struct vms_cnxman {
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
 	uint32_t dlm_sends;            /* originations the arm asked for     */
 	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
+	/* rd vms-64b: where the CLUB's DLM rebuild sequence (struct vms_club)
+	 * was learned from, and the sends it held back. */
+	uint32_t dlm_seq_from_open;    /* N recorded off a 0x09 open          */
+	uint32_t dlm_seq_from_dlm;     /* N recorded off a member's DLM header */
+	uint32_t dlm_seq_open_bad;     /* a 0x09 whose three copies disagreed */
+	uint32_t dlm_sends_no_seq;     /* sends refused: no N recorded yet    */
 	uint32_t dlm_foreign_refused;  /* RULE C: the peer is not proven ours*/
 	uint32_t dlm_mixed_sends;      /* ... and the ones sent anyway because */
 				       /* this node is the SOLE lock-directory */
@@ -1742,6 +1748,52 @@ static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
  * answer), i.e. an identity the executive genuinely holds, not one a
  * participant would have to infer (E73).
  */
+/* rd vms-64b: learn N off a body a MEMBER sent us -- the coordinator's 0x09
+ * transition open, or any DLM message whose header carries it. The codec owns
+ * every offset (design SS3.9 rule 2). */
+static void cnxman_dlm_seq_learn(struct vms_cnxman *cn, const uint8_t *body,
+				 uint32_t len)
+{
+	struct vms_club *club = &cn->cl->club;
+	uint16_t n = 0u;
+
+	/* A member's DLM header -- but not while a transition is in flight:
+	 * a member past its Phase 2 may already assert the stepped value this
+	 * node's own commit is about to compute, and taking it early would
+	 * step it twice. */
+	if (vms_dlm_seq_get(body, len, &n) == VMS_CODEC_OK) {
+		if (!club->transition_active) {
+			cnxman_club_dlm_seq_learn(club, n);
+			cn->dlm_seq_from_dlm++;
+		}
+		return;
+	}
+	switch (vms_cm_open_dlm_seq(body, len, &n)) {
+	case VMS_CODEC_OK:
+		cn->dlm_seq_from_open++;   /* the barrier records it (Phase 1) */
+		break;
+	case VMS_CODEC_E_SHORT:
+		cn->dlm_seq_open_bad++;    /* a 0x09 whose three copies disagree */
+		break;
+	default:
+		break;                     /* not a carrier */
+	}
+}
+
+/* rd vms-64b: stamp the recorded N on an outbound DLM body. -1 when none is
+ * recorded (the caller then does not send). */
+static int cnxman_dlm_seq_stamp(struct vms_cnxman *cn, uint8_t *body)
+{
+	const struct vms_club *club = &cn->cl->club;
+
+	if (!club->dlm_seq_valid) {
+		cn->dlm_sends_no_seq++;
+		return -1;
+	}
+	return vms_dlm_seq_put(body, VMS_CM_BODY_LEN, club->dlm_seq) ==
+		       VMS_CODEC_OK ? 0 : -1;
+}
+
 int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 		    const uint8_t *body, uint32_t len)
 {
@@ -1765,6 +1817,10 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 		return -1;
 
 	memcpy(cn->dlm_tx, body, VMS_CM_BODY_LEN);
+	if (cnxman_dlm_seq_stamp(cn, cn->dlm_tx) != 0) {
+		cn->dlm_sends_refused++;
+		return -1;
+	}
 	/* An origination the peer WILL answer, so this dialogue mints a fresh
 	 * transaction token for it (E85) and assigns the next send-msg#. */
 	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST);
@@ -1829,6 +1885,8 @@ static int cnxman_dlm_rx(struct vms_cnxman *cn, const struct vms_cm_envelope *en
 			      (uint32_t)sizeof(cn->dlm_tx),
 			      &written) != VMS_CODEC_OK)
 		return 1;
+	if (cnxman_dlm_seq_stamp(cn, cn->dlm_tx) != 0)
+		return 1;   /* never an answer carrying a sequence nobody holds */
 	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_RESPONSE);
 	if (cnxman_ops_respond(cn, cn->dlm_tx, written) == 0)
 		cn->dlm_replies_sent++;
@@ -1881,6 +1939,10 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 * lower number cannot walk it back.
 	 */
 	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
+	/* rd vms-64b: a member's 0x09 open or DLM header names the cluster's
+	 * DLM rebuild sequence; record it before anything answers. */
+	if (csb != NULL && env_ok)
+		cnxman_dlm_seq_learn(cn, body, len);
 	if (csb != NULL && env_ok) {
 		/* rd vms-ba4: a peer continuing a dialogue this node reset. */
 		cnxman_csb_dialogue_adopt(csb, env.send_msg, env.ack_msg);
@@ -2684,8 +2746,22 @@ static void cnxman_sync_peer_incarnation(struct vms_cnxman *cn)
 
 		if (!csb->in_use || !csb->sysid_valid)
 			continue;
-		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
-			continue;   /* our own incarnation is not learned */
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u) {
+			/* Our own incarnation is not LEARNED -- it is the
+			 * port's own (pe_incarnation, the abs-80 quadword every
+			 * START/STACK we send carries). rd vms-d52c: the op-0x05
+			 * record a coordinator sends about ITSELF carries it at
+			 * body[28:36]; a real VAX answered OVMXE's zero-timed
+			 * self-record 0x81/0x05 with status 0 and abandoned the
+			 * admission (lab labd52c). Not held: "not told". */
+			uint32_t lo, hi;
+
+			if (pe_incarnation(cn->cl->pe, &lo, &hi) ==
+			    (int)SS__NORMAL)
+				cnxman_csb_set_incarnation(club, csb,
+					((uint64_t)hi << 32) | (uint64_t)lo, 1);
+			continue;
+		}
 		if (csb->state == (uint8_t)VMS_CNXMAN_CSB_DEAD)
 			continue;   /* an old incarnation learns nothing new */
 		(void)cnxman_track_incarnation(cn, csb);

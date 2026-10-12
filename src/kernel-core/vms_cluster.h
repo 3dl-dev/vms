@@ -803,6 +803,50 @@ struct vms_club {
 	uint8_t  rc_lost;   /* a removal committed whose pair this node could
 			     * not derive: no open of ours may carry one */
 	uint8_t  pad2;
+	/*
+	 * THE CLUSTER'S DLM REBUILD SEQUENCE (rd vms-64b). Every real VAX DLM
+	 * message carries it at body[14:16] (with 0x0001 at body[12:14]): one
+	 * value from every member at a given moment. MEASURED over the lab
+	 * corpus: a FORMATION leaves it 1 (38/38); a committed transition steps
+	 * it by 1 exactly when the lock-directory weight vector changes -- an
+	 * addition or removal of a system that holds directory entries (op-0x09
+	 * rebuild 3: 266 of 266 once a coordinator's own pre-commit send is set
+	 * aside; op-0x08: 19/19) -- and leaves it alone when it does not (a
+	 * zero-LOCKDIRWT joiner among weighted members, rebuild 1: 31/31). A
+	 * joiner is told the value in force by the coordinator's 0x09 open
+	 * (body[92] == [100:102] == [102:104]) before its first DLM send.
+	 *
+	 * So: SET by founding (1), LEARNED from a 0x09 open or a member's DLM
+	 * header, STEPPED at Phase 2 from this node's own weight vector
+	 * (`dlm_seq_vsig` is the signature of the vector the last commit left).
+	 * A node that cannot decide the step forgets the value
+	 * (`dlm_seq_valid` 0) and sends no DLM message until a member's header
+	 * re-teaches it -- never a guess.
+	 */
+	/*
+	 * WHAT A MEMBER SAYS ABOUT ITS MEMBERSHIP IN EVERY PARAMS (rd vms-d52c).
+	 * MEASURED over the lab corpus, on 161 PARAMS (cat 0x01 op 0x01) real
+	 * members sent: body[28:36] is the cluster's formation time (60/60 where
+	 * an open in the same capture names it), body[36:44] the time of the last
+	 * committed transition, body[44:48] that transition's epoch (56/60;
+	 * the rest followed transitions not captured), and body[64:72] the
+	 * sender's own membership time (equal to the formation time when the
+	 * sender founded the cluster). Recorded here at Phase 2 / founding, from
+	 * this node's own clock, so the PARAMS builder reads executive state.
+	 */
+	uint64_t last_xition_vms;    /* VMS time this node committed the last one */
+	uint64_t joined_vms;         /* VMS time this node became a member       */
+	uint32_t last_xition_epoch;  /* that transition's epoch                  */
+	uint8_t  last_xition_valid;
+	uint8_t  joined_valid;
+	uint8_t  pad_member[2];
+	uint16_t dlm_seq;
+	uint8_t  dlm_seq_valid;
+	uint8_t  dlm_seq_vsig_valid;
+	uint32_t dlm_seq_vsig;
+	uint32_t dlm_seq_steps;      /* Phase-2 steps taken                    */
+	uint32_t dlm_seq_lost;       /* commits whose step could not be decided */
+	uint32_t dlm_seq_relearned;  /* a member asserted a different value    */
 	uint32_t last_transition_ms; /* when the last state transition occurred */
 
 	/* ---- the transition in progress (p. 7-26: coordinator identity, the

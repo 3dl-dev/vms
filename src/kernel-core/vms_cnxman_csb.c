@@ -1936,6 +1936,24 @@ void cnxman_club_note_slot(struct vms_club *club, uint32_t slot)
 	club->slot_next_valid = 1u;
 }
 
+void cnxman_club_dlm_seq_learn(struct vms_club *club, uint16_t n)
+{
+	if (club == NULL || n == 0u)
+		return;
+	if (club->dlm_seq_valid && club->dlm_seq != n)
+		club->dlm_seq_relearned++;
+	club->dlm_seq = n;
+	club->dlm_seq_valid = 1u;
+}
+
+void cnxman_club_dlm_seq_found(struct vms_club *club)
+{
+	if (club == NULL)
+		return;
+	club->dlm_seq = 1u;
+	club->dlm_seq_valid = 1u;
+}
+
 void cnxman_club_learn_open(struct vms_club *club, int reconfig,
 			    const struct vms_cm_open_cells *cells)
 {
@@ -2007,6 +2025,10 @@ void cnxman_club_found(struct vms_club *club, uint64_t ftime,
 	if (ftime != 0u) {
 		club->ftime = ftime;
 		club->ftime_valid = 1u;
+		/* rd vms-d52c: a real founder's PARAMS body[64:72] equals the
+		 * formation time -- it became a member when it formed it. */
+		club->joined_vms = ftime;
+		club->joined_valid = 1u;
 	}
 	club->fsysid = (uint64_t)fsysid;
 	club->fsysid_valid = 1u;

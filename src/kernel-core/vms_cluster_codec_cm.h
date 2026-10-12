@@ -412,10 +412,13 @@ uint16_t vms_cm_close_state_after_writeback(uint8_t kind);
  *   [87:89] SUBJ_CFG   the count the SUBJECT's own op-0x02 carried at its
  *                      body[36:40] (2, 3, 4 from real joiners -- XA/XG 2, XA
  *                      ep4 3; 0 from every OVMX joiner, whose op 0x02 is zero)
- *   [92]    CSV_HWM    == [100:102] == [102:104]: the highest CSV slot already
- *                      in the vector -- the subject's new slot when it is a
- *                      system the cluster has held before (KR-1, fault-f1,
- *                      oracle-return, XG), one below it on a first admission
+ *   [92]    DLM_SEQ    == [100:102] == [102:104]: the cluster's DLM rebuild
+ *                      sequence IN FORCE, the N every DLM header carries at
+ *                      body[14:16] (rd vms-64b: 27 of 28 real opens with a
+ *                      known N; the 28th followed an unobserved removal).
+ *                      First read as the CSV high-water slot, which it equals
+ *                      on the six controlled opens below; real opens with N 1
+ *                      and a third slot (ev16, rdev1, c6e) tell them apart
  *   [96:98] CEVOTES    the proposed CEVOTES, max(EXPECTED_VOTES, votes): two
  *                      votes against an EXPECTED_VOTES of 3 read 3 (XI); four
  *                      against 3 read 4 (XD)
@@ -440,11 +443,11 @@ uint16_t vms_cm_close_state_after_writeback(uint8_t kind);
 #define VMS_OFB_CM_OPEN_STAMP       40u   /* LE u64 */
 #define VMS_OFB_CM_OPEN_FSYSID      49u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_SUBJ_CFG    87u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_CSV_HWM1    92u   /* u8     */
+#define VMS_OFB_CM_OPEN_DLM_SEQ_1    92u   /* u8     */
 #define VMS_OFB_CM_OPEN_CEVOTES     96u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_CSV_LOW     98u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_CSV_HWM2   100u   /* LE u16 */
-#define VMS_OFB_CM_OPEN_CSV_HWM3   102u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_DLM_SEQ_2   100u   /* LE u16 */
+#define VMS_OFB_CM_OPEN_DLM_SEQ_3   102u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_CSV_TOP    104u   /* LE u16 */
 #define VMS_OFB_CM_OPEN_HOLD       106u   /* LE u64 */
 #define VMS_CM_OPEN_FSYSID_MAX      0xffffu
@@ -647,6 +650,23 @@ struct vms_cm_membership_rec {
  *
  * STAMP with is_response=0.
  */
+/*
+ * rd vms-64b: THE DLM REBUILD SEQUENCE A JOINER IS TOLD. The coordinator's
+ * class-0x02 transition OPEN (cat 0x01 op 0x09) carries the cluster's current
+ * DLM rebuild sequence N three times: body[92] (u8), body[100:102] and
+ * body[102:104] (LE u16). MEASURED: in both LDW-0 joins on hand (a real VAX2,
+ * ds3; OVMXE, r20) the joiner's FIRST DLM send carried exactly this N and no
+ * DLM frame reached it before; across the corpus the next DLM header equals it
+ * (6) or it + 1 when the transition rebuilt the directory (20), never anything
+ * else. VMS_CODEC_OK with *n; VMS_CODEC_E_CLASS when the body is not a 0x09
+ * open; VMS_CODEC_E_SHORT when its three copies disagree (not trusted).
+ */
+vms_codec_status_t vms_cm_open_dlm_seq(const uint8_t *body, uint32_t len,
+				       uint16_t *n);
+/* Write N's three copies into a built 0x09 open body. */
+vms_codec_status_t vms_cm_open_dlm_seq_put(uint8_t *body, uint32_t len,
+					   uint16_t n);
+
 vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_rec *rec,
 					       uint8_t *out_body, uint32_t cap,
 					       uint32_t *written);
@@ -928,7 +948,8 @@ struct vms_cm_open_cells {
 	uint16_t subj_cfg;     /* [87:89]  */
 	uint16_t cevotes;      /* [96:98]  */
 	uint16_t csv_low;      /* [98:100] */
-	uint16_t csv_hwm;      /* [92], [100:102], [102:104] */
+	uint16_t dlm_seq;      /* [92], [100:102], [102:104]: the DLM rebuild
+				* sequence in force (rd vms-64b) */
 	uint16_t csv_top;      /* [104:106] */
 	uint16_t pad2;
 	uint64_t hold;         /* [106:114] */
@@ -1544,6 +1565,53 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  *
  * STAMP with is_response=0.
  */
+/*
+ * WHAT A MEMBER'S PARAMS SAYS ABOUT ITS MEMBERSHIP (rd vms-d52c). MEASURED on
+ * 384 real PARAMS (161 from members -- body[18:20] != 0 -- and 223 from systems
+ * in no cluster):
+ *   body[12:14]  0x5021 from 156 of 161 members (0x5001 from the other 5);
+ *                never 0x21 from a system in no cluster
+ *   body[28:36]  the cluster's formation time (60/60 where checkable)
+ *   body[36:44]  the time of the last committed transition
+ *   body[44:48]  that transition's epoch (56/60)
+ *   body[64:72]  the sender's own membership time (the formation time from
+ *                the founder)
+ * A booting real VAX that hears a PARAMS without them from a system with a
+ * connection manager treats that system as clusterless and proposes FORMING
+ * a cluster with it (lab lab64b, order 2) -- so a member that cannot fill
+ * every one of them does not claim membership at all.
+ */
+#define VMS_OFB_CM_PSTATUS      12u   /* LE u16 */
+#define VMS_CM_PSTATUS_MEMBER   0x5021u
+#define VMS_OFB_CM_PFTIME       28u   /* LE u64 */
+#define VMS_OFB_CM_PLASTXITION  36u   /* LE u64 */
+#define VMS_OFB_CM_PLASTEPOCH   44u   /* LE u32 */
+#define VMS_OFB_CM_PJOINED      64u   /* LE u64 */
+struct vms_cm_member_state {
+	uint64_t ftime;
+	uint64_t last_xition;
+	uint64_t joined;
+	uint32_t last_epoch;
+};
+/* Write the member state into a PARAMS body vms_cm_params_build made.
+ * VMS_CODEC_E_INVAL when a time is 0 (nothing held is ever claimed). */
+vms_codec_status_t vms_cm_params_member_put(uint8_t *body, uint32_t cap,
+					    const struct vms_cm_member_state *ms);
+/*
+ * rd vms-d52c (the [26]=0 finding): write the sender's quorum
+ * (EXPECTED_VOTES + 2) / 2 at body[20:22] and its SYSGEN QDSKVOTES at
+ * body[24:26] (both grounded by rd vms-f297's controlled reconfiguration)
+ * into a PARAMS body vms_cm_params_build made. Real VAXes copy a peer's
+ * advertised QDSKVOTES into the opens they send it (op 0x07/0x08/0x09
+ * body[26]): 11 of 11 opens to OVMX carried 0 while OVMX's PARAMS left
+ * [24:26] zero, every open to a VAX carried that VAX's value. An
+ * EXPECTED_VOTES of 0 is not a configuration this node can hold, so
+ * VMS_CODEC_E_INVAL and nothing is written.
+ */
+vms_codec_status_t vms_cm_params_quorum_put(uint8_t *body, uint32_t cap,
+					    uint16_t expected_votes,
+					    uint16_t qdskvotes);
+
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       uint16_t lockdirwt,
 				       const struct vms_cm_node_params *own_params,

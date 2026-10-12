@@ -137,6 +137,10 @@ jobs:
         run: |
           python3 tools/ci/check_pipefail_grepq.py --selftest
           python3 tools/ci/check_pipefail_grepq.py .
+      - name: check_docker_mirror.py (no job pulls through the docker daemon without the registry mirror)
+        run: |
+          python3 tools/ci/check_docker_mirror.py --selftest
+          python3 tools/ci/check_docker_mirror.py .
 
   merge-queue-gates:
     # Every gating workflow ends in the merge queue's required `gate` job, and
@@ -771,6 +775,9 @@ jobs:
       # explicitly allows in Docker; it is reproduced here with a plain
       # ubuntu:24.04 container and the checked-out workspace bind-mounted at
       # /src, so no image tied to the retired root Dockerfile is built at all.
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build OVMX + run conformance tests (tooling container, not a runtime image)
         run: |
           docker run --rm \
@@ -830,6 +837,9 @@ jobs:
       # build environment (Rule 9 build/test TOOLING), reproduced here with a
       # plain ubuntu:24.04 container. Build/apt noise is redirected to stderr
       # so only run_corpus.sh's JSON reaches stdout / corpus_report.json.
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build OVMX + run corpus conformance harness (tooling container, not a runtime image)
         run: |
           docker run --rm \

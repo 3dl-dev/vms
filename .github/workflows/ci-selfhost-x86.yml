@@ -76,6 +76,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build + activate IMGACT.EXE in Alpine (musl, arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -126,6 +129,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Configure + build + verify OVMX_IMGACT (arm64 musl)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -169,6 +175,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build + verify + activate OVMX_IMGACT (native x86_64 musl)
         run: |
           docker run --rm --platform linux/amd64 \
@@ -210,6 +219,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Build LINK.EXE + link an OVMX shareable image (arm64)
         run: |
@@ -439,6 +451,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build LINK.EXE + link DECC$SHR from whole musl libc.a + libgcc.a (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -482,6 +497,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: cmake -B build && cmake --build build (arm64 musl) -- assert the shipped graph is LINK.EXE-native
         run: |
@@ -528,6 +546,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: cmake -B build && cmake --build build (x86_64 musl) -- assert the shipped graph is LINK.EXE-native
         run: |
@@ -579,6 +600,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Activate a VMS-native image through the real IMGACT.EXE (arm64)
         run: |
@@ -744,6 +768,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link + activate real libvmssys with LINK.EXE + IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -786,6 +813,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Activate DECC$SHR + drive musl init through IMGACT.EXE (arm64)
         run: |
@@ -830,6 +860,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Bind a lib shareable's imports to DECC$SHR through IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -858,6 +891,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Activate a TLS-bearing lib shareable coexisting with DECC$SHR through IMGACT.EXE (arm64)
         run: |
@@ -888,6 +924,9 @@ jobs:
       # ACP (INV-6: IMGACT has no POSIX image-read fallback), which this container
       # lacks by construction — that half is proven by the boot-to-DCL login
       # (uat-session), so the script runs the LINK assertions and notes the split.
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Record + bind a weak cross-image reference through LINK.EXE/.vms$wimp (x86_64)
         run: |
           docker run --rm \
@@ -934,6 +973,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link the real src/vmsprocess VMS-native + activate a consumer through IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -962,6 +1004,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Link the real src/vmslnm VMS-native + activate a consumer through IMGACT.EXE (arm64)
         run: |
@@ -992,6 +1037,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link the real src/vmsfs VMS-native (over DECC$SHR + LIBVMSLNM$SHR) + activate a consumer through IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1021,6 +1069,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link the real src/libvms VMS-native (over DECC$SHR + LIBVMSPROCESS$SHR + LIBVMSSYS$SHR + LIBVMSFS$SHR) + activate a consumer through IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1049,6 +1100,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Link the real src/vmsrms VMS-native (over DECC$SHR + LIBVMS$SHR + LIBVMSFS$SHR) + activate a consumer through IMGACT.EXE (arm64)
         run: |
@@ -1089,6 +1143,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Link + activate a multi-object main() program through IMGACT.EXE (arm64)
         run: |
@@ -1131,6 +1188,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link + activate a multi-object main() program through IMGACT.EXE (native x86_64)
         run: |
           docker run --rm --platform linux/amd64 \
@@ -1161,6 +1221,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Compile with tcc, link with LINK.EXE, run under IMGACT.EXE
         run: |
@@ -1203,6 +1266,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link + activate a jump-table-bearing image against real musl DECC$SHR (x86_64)
         run: |
           docker run --rm --platform linux/amd64 \
@@ -1231,6 +1297,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Link + activate an executable with its OWN __thread/TLSDESC var through IMGACT.EXE (arm64)
         run: |
@@ -1271,6 +1340,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1306,6 +1378,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (x86_64)
         run: |
@@ -1350,6 +1425,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Link LOGINOUT.EXE VMS-native + activate through IMGACT.EXE, authenticate against real SYSUAF (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1384,6 +1462,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Pinned LibreSSL (vendored, no download), build static libcrypto.a (musl), run hello-crypto KAT
         run: |
@@ -1444,6 +1525,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build stock tcc, compile hello.c + cross-TU objects, LINK.EXE --executable + IMGACT activation (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1497,6 +1581,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Build TCC.EXE VMS-native, activate it, compile hello.c -> hello.o, round-trip through LINK.EXE + IMGACT.EXE (arm64)
         run: |
@@ -1553,6 +1640,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build MMK.EXE VMS-native, activate it, resolve a real multi-TU descrip.mms through IMGACT.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1593,6 +1683,9 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Build TCC.EXE with RMS I/O, activate it, compile hello.c -> hello.o via sys$open/$get + sys$create/$put, round-trip through LINK.EXE + IMGACT.EXE (arm64)
         run: |
@@ -1652,6 +1745,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: gen-1 seed TCC.EXE -> gen-1 compiles all tcc TUs under IMGACT -> gen-2 TCC.EXE -> gen-2 compiles+runs hello -> gen-2==gen-3 byte-identity (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1704,6 +1800,9 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Self-link link.c into a native LINK.EXE, activate it, link hello.o -> HELLO.EXE via RMS, activate HELLO.EXE (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
@@ -1731,6 +1830,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: Self-link link.c into a native LINK.EXE, activate it, link hello.o -> HELLO.EXE via RMS, activate HELLO.EXE (x86_64)
         run: |
@@ -1761,6 +1863,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: LIBRARIAN builds an .OLB, LINK selectively pulls a member, IMGACT activates the result (x86_64)
         run: |
@@ -1799,6 +1904,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: IMGACT activates native LIBRARIAN.EXE; it /CREATEs an .OLB via RMS, /LIST reads it back, LINK pulls a member (x86_64)
         run: |
           docker run --rm --platform linux/amd64 \
@@ -1832,6 +1940,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: LINK.EXE --shareable rooted at --symbol-vector selectively pulls from the .OLB (2 of 3), IMGACT activates a consumer (x86_64)
         run: |
@@ -1875,6 +1986,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
 
       - name: MMK-planned LINK.EXE fixpoint — the real LINK.EXE links LINK.EXE twice and asserts gen2==gen3 (amd64 musl)
         run: |

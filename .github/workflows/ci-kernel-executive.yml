@@ -666,6 +666,9 @@ jobs:
       - name: Enable KVM
         uses: ./.github/actions/enable-kvm
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build kernel executive test image WITHOUT loading vms.ko
         run: |
           docker build -f tests/qemu/Dockerfile \

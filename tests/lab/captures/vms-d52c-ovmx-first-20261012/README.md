@@ -49,3 +49,11 @@ During startup, each VAX sent OVMXE a cat-0x06 close of kind 10. Its record name
 Neither VAX reached `Username:` for more than 20 minutes. Both stayed idle at IPL 3 with live VCs, so this is a process-level hang that OVMX causes. VAX-first orders don't show it, because the VAXes finish startup before OVMXE joins.
 
 Files: `r2-*`, `r3-*` (pcaps and consoles).
+
+### Correction (after rd vms-db1 fires db1-r1 and db1-r2)
+The run-3 startup hang had at least **three** withheld OVMXE answers, not one:
+- the kind-10 close
+- a kind-5 close
+- a cat-0x0b op-0x01
+
+rd vms-db1 (#1655) answers the first two on the wire. The third is rd vms-52d.

@@ -1,0 +1,30 @@
+# setident-cmkrnl-unchecked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process identity stamp (VMS_IOCTL_SETIDENT, vms_ioctl_setident in kernel-core/vms_proctab.c) -- requires CMKRNL, as LOGINOUT writing the PCB in kernel mode does on VMS";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_setident_cmkrnl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_setident no longer requires CMKRNL: a process holding only SETPRV (or only its own authorized mask) can stamp a user name, UIC and privileges onto itself -- the identity change VMS reserves to LOGINOUT in kernel mode. Gone after apply.";;
+        require_fail) cat <<'EOF'
+without CMKRNL enabled, stamping even its own identity is refused SS$_NOPRIV (SETPRV is not enough)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the refused stamp left the row unchanged
+EOF
+                      ;;
+        knock_on_why)  echo "the stamp the executive should have refused is the one that changed the row.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL) != SS__NORMAL) {$|    if (0) { /* NEGCTL setident-cmkrnl-unchecked */|' "$_file"
+    :
+}

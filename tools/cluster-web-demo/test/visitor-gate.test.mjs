@@ -36,6 +36,18 @@ function cn3Observations() {
   return R;
 }
 
+// Every node offers Username:, the gate logs in, and DCL answers (rd vms-db1).
+function loggedInEverywhere(R, at = 600) {
+  for (const w of GATE.NODES) {
+    observe(R, w, 'Username: ');
+    GATE.observeLogin(R, w, at - 60);
+    R.login_sent[w] = R.transcript[w].length;
+    observe(R, w, 'SYSTEM\nPassword:\n Welcome to OpenVMS\n$ ');
+    GATE.observeLogin(R, w, at);
+  }
+  return R;
+}
+
 test('a scrollback that scrolls does not un-join a node', () => {
   const R = newObservations();
   observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c5'));
@@ -109,6 +121,7 @@ test('CN=3 needs BOTH OVMX nodes naming all three AND the real VAX admitting bot
   const R = cn3Observations();
   assert.equal(isCN3(R), true);
   R.cn3 = true;
+  loggedInEverywhere(R);
   assert.equal(verdictOf(R), 'CN=3');
 
   const noVaxc = cn3Observations();
@@ -319,7 +332,8 @@ test('a noisy console fails the run even when the cluster formed', () => {
   observe(R, 'VAXC', VAXC_ADMITS);
   R.sca = { OVMXA: 1, OVMXB: 1, VAXC: 1 };
   R.cn3 = true;
-  assert.equal(GATE.isPass(R), true, 'quiet and clustered passes');
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), true, 'quiet, clustered and logged in everywhere passes');
 
   observe(R, 'OVMXB', '\n[   1.0000000] total memory = 16328 KB\n');
   assert.equal(GATE.isQuiet(R), false);
@@ -442,4 +456,101 @@ test('the worker heartbeat is reported as the WORKER\'s, and absent when not sen
   GATE.observeNodeAWorker(R, { workerTicks: 95 });
   assert.equal(R.nodeA_worker.workerTicks, 95);
   assert.match(GATE.nodeAStallWhy(R), /worker event-loop ticks=95/);
+});
+
+// ---- rd vms-db1: CN=3 is not the end of a visitor's run ---------------------
+
+test('a member real VAX that never offers Username: fails the run (rd vms-db1)', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  for (const w of ['OVMXA', 'OVMXB']) {
+    observe(R, w, 'Username: ');
+    GATE.observeLogin(R, w, 400);
+    R.login_sent[w] = R.transcript[w].length;
+    observe(R, w, 'SYSTEM\nPassword:\n$ ');
+    GATE.observeLogin(R, w, 420);
+  }
+  // The VAX is a member (it admitted both) and its startup stops.
+  observe(R, 'VAXC', '%STDRV-I-STARTUP, OpenVMS startup begun\n');
+  GATE.observeLogin(R, 'VAXC', 1200);
+  assert.equal(isCN3(R), true, 'membership alone reads CN=3');
+  assert.equal(GATE.isPass(R), false, 'but the run fails: a visitor sees a dead console');
+  assert.match(verdictOf(R),
+    /^CN=3 but NOT EVERY NODE AT DCL: VAXC never offered Username: \(last line "%STDRV-I-STARTUP, OpenVMS startup begun"\)/);
+});
+
+test('Username: alone is not enough: a logged-in DCL $ must follow', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  const R2 = cn3Observations();
+  R2.cn3 = true;
+  observe(R2, 'VAXC', 'Username: ');
+  GATE.observeLogin(R2, 'VAXC', 300);
+  R2.login_sent.VAXC = R2.transcript.VAXC.length;
+  observe(R2, 'VAXC', 'SYSTEM\nPassword:\n');
+  GATE.observeLogin(R2, 'VAXC', 900);
+  assert.equal(R2.dcl_at.VAXC, undefined);
+  assert.match(verdictOf(R2), /VAXC offered Username: at t=300s but never showed a DCL \$ after login/);
+  assert.equal(GATE.isPass(R), true);
+});
+
+test('a $ printed before the login was sent does not count as logged in', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', '$ @SYS$STARTUP:STARTUP\nUsername: ');
+  GATE.observeLogin(R, 'OVMXA', 10);
+  observe(R, 'OVMXA', '$ ');
+  GATE.observeLogin(R, 'OVMXA', 20);
+  assert.equal(R.dcl_at.OVMXA, undefined, 'no login was sent yet');
+});
+
+test('a refused login is reported as such, not as a hang', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  delete R.dcl_at.VAXC;
+  R.login_sent.VAXC = R.transcript.VAXC.length;
+  observe(R, 'VAXC', 'User authorization failure\nUsername: ');
+  GATE.observeLogin(R, 'VAXC', 700);
+  assert.equal(R.login_failed.VAXC, true);
+  assert.match(verdictOf(R), /VAXC refused the login \(User authorization failure\)/);
+});
+
+test('the bound is enforced: DCL reached too late fails', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R, 2000);
+  R.login_bound_s = 1500;
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R), /reached DCL at t=2000s, past the 1500s bound/);
+});
+
+test('nothing is typed before the cluster forms; then wake until Username:, then log in', () => {
+  const R = newObservations();
+  observe(R, 'VAXC', 'booting\n');
+  assert.equal(GATE.loginAction(R, 'VAXC'), null, 'membership forms with nobody typing');
+  R.cn3 = true;
+  assert.equal(GATE.loginAction(R, 'VAXC'), 'wake', 'a VMS console offers Username: when asked');
+  observe(R, 'VAXC', 'Username: ');
+  GATE.observeLogin(R, 'VAXC', 50);
+  assert.equal(GATE.loginAction(R, 'VAXC'), 'login');
+  R.login_sent.VAXC = R.transcript.VAXC.length;
+  assert.equal(GATE.loginAction(R, 'VAXC'), null, 'one login, not a stream of them');
+});
+
+test('the matrix boots Node C after an OVMX node is up (rd vms-db1)', () => {
+  const held = MATRIX.filter((r) => r.after && r.after.C && r.after.C.startsWith('OVMX'));
+  assert.ok(held.length >= 1, 'a row holds C until an OVMX node is up');
+  for (const r of held) {
+    assert.ok(r.order.indexOf('C') > r.order.indexOf(r.after.C.slice(-1)),
+      `${r.label}: the node C waits for is clicked before C`);
+  }
+});
+
+test('the OVMX login is read from the hint the site publishes, or not at all', () => {
+  const html = '<figcaption class="logintip">Log in with username <b>SYSTEM</b>, password <b>MANAGER</b>\n' +
+               '<span class="alt">(or <b>GUEST</b> / <b>GUEST</b>)</span></figcaption>';
+  assert.deepEqual(GATE.parseLoginHint(html), { user: 'SYSTEM', pass: 'MANAGER' });
+  assert.equal(GATE.parseLoginHint('<p>no hint here</p>'), null, 'no hint: the gate refuses, never guesses');
+  assert.equal(GATE.parseLoginHint(''), null);
 });

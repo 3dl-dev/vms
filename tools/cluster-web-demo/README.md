@@ -79,10 +79,15 @@ should be driven against this generator's bundle, not reimplemented.
 
 Run it against the bundle (or the live page) **before and after every redeploy**. It drives the page the
 way a visitor does and nothing else: no query parameters, a fresh profile and cold cache per run, and it
-**types nothing** — membership must form with nobody touching a console.
+**types nothing until the cluster has formed** — membership must form with nobody touching a console.
+After CN=3 it does what a visitor does next: strikes RETURN at a console that has not offered `Username:`,
+and logs in where it has. The OVMX nodes' login is the one the site publishes to visitors (the homepage's
+"Log in with username … password …" hint, read at start-up from `DEMO_LOGIN_HINT_URL`, default the demo
+origin's `/`). The real VAX's password is not published: it comes only from `DEMO_PASS_VAXC` (in CI, the
+repository Actions secret `OVMX_DEMO_VAXC_PASSWORD`). The gate refuses to start without either.
 
 ```
-DEMO_URL=http://localhost:8110/index.html OUT_DIR=/out/gate node visitor-gate.mjs
+DEMO_PASS_VAXC=... DEMO_LOGIN_HINT_URL=https://openvmx.3dl.dev/ DEMO_URL=http://localhost:8110/index.html OUT_DIR=/out/gate node visitor-gate.mjs
 CASE=c-first-legacy node visitor-gate.mjs        # re-run one row of the matrix
 FREEZE_MS=45000     node visitor-gate.mjs        # suspend the tab mid-formation (rd vms-8c54)
 REVEAL=1            node visitor-gate.mjs        # scroll each panel in before reading it
@@ -106,7 +111,12 @@ rd vms-553 silenced the substrate at the source (an `OVMX_QUIET` kernel option p
 bootstrap) and the pcjs page filters nothing, so the raw console is the claim: an OpenVMX/VAX node shows
 the VMS personality and nothing else. `netbsdNoise()` names which markers appeared; the positive control
 is this repo's own V0.7-2 Node B console, and OVMX's substrate announcement, the KA655 ROM banner and the
-executive's bracketed-uptime operator lines are all deliberately not matched. `gate-eval.mjs` holds every judgement the gate makes as pure functions
+executive's bracketed-uptime operator lines are all deliberately not matched. **And** every node, the real
+VAX included, must offer `Username:` and then show a logged-in DCL `$` within `LOGIN_BOUND_S` of the first
+click (rd vms-db1): a real VAX can be admitted, so every console reads CN=3, and still hang in its own startup
+and never offer `Username:` — a dead console to a visitor. The matrix's `c-after-a-up` and
+`c-last-after-a-up` rows hold Node C's click until Node A has offered `Username:`, because a VAX booting
+after an OVMX node is up is the order that hung, and visitors choose the order. `gate-eval.mjs` holds every judgement the gate makes as pure functions
 over console text, unit-tested by `test/visitor-gate.test.mjs` without a browser — the gate has twice been
 wrong about a run (it failed a healthy cluster whose console had scrolled, and it named a cause its
 evidence did not carry), and a grader that lies in either direction is worse than no grader.

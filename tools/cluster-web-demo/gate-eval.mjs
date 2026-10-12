@@ -26,7 +26,19 @@ export const MATRIX = [
   { label: 'b-first',                order: ['B', 'A', 'C'], gap: 3000, throttle: 1 },
   { label: 'c-first-legacy',         order: ['C', 'A', 'B'], gap: 5000, throttle: 1 },
   { label: 'all-at-once-throttled2', order: ['A', 'B', 'C'], gap: 500,  throttle: 2 },
+  // Node C boots AFTER an OVMX node is already up (rd vms-db1): a booting real
+  // VAX then sends that node its system-disk closes, and a node that does not
+  // answer them leaves the VAX hung in startup -- a member that never offers
+  // Username:. Visitors choose the order, so the matrix does too. `after`
+  // holds a click until the named node's own console has offered Username:
+  // (Node A's page strikes its OPA0 RETURN itself; nothing is typed).
+  { label: 'c-after-a-up',           order: ['A', 'C', 'B'], gap: 3000, throttle: 1, after: { C: 'OVMXA' } },
+  { label: 'c-last-after-a-up',      order: ['A', 'B', 'C'], gap: 3000, throttle: 1, after: { C: 'OVMXA' } },
 ];
+
+// How long a held click waits for its node before it is made anyway (and the
+// wait recorded) -- a node that never comes up must not stall the matrix.
+export const AFTER_WAIT_MS = 1200000;
 
 // The three system ids the roster declares (mk_democonfig.py DEMO_ROSTER).
 export const WANT = ['0x7c3', '0x7c4', '0x7c5'];
@@ -245,6 +257,10 @@ export const newObservations = () => ({
   // evidence, which is why two V0.7-7 failures could not be root-caused from
   // what the run kept. Observed, monotonic, never inferred.
   nodeA_worker: {},
+  // rd vms-db1: per node, when (seconds since the first click) it first offered
+  // Username:, when the gate sent its login (the transcript length at that
+  // moment), whether the login was refused, and when a DCL `$` followed.
+  username_at: {}, login_sent: {}, login_failed: {}, dcl_at: {},
 });
 
 // A SILENT never-start: the raw console stayed empty (nothing to show a
@@ -333,11 +349,92 @@ export function nodeAStallWhy(R) {
 // Is the OVMX/VAX node's raw console free of NetBSD boot output (rd vms-553)?
 export const isQuiet = (R) => !Object.keys(R.substrate_noise || {}).length;
 
-// The run's pass bar: the cluster formed AND the console a visitor reads shows
-// the VMS personality only. Membership alone is no longer enough -- V0.7-6
-// claims the substrate is silent at the source, and this is where that claim is
-// either true in public or not.
-export const isPass = (R) => !!R.cn3 && isQuiet(R);
+// ---- Every node reaches a logged-in DCL prompt (rd vms-db1 / vms-52d) -------
+//
+// CN=3 is not the end of a visitor's run. A real VAX can be admitted, so the
+// cluster reads CN=3 on every console, and still hang in its own startup and
+// never offer Username: -- measured when Node C boots after an OVMX node and
+// asks it to serve its system-disk closes (rd vms-db1). A visitor sees a dead
+// console. So the run passes only if EVERY node, the real VAX included, offers
+// Username: and then, logged in, a DCL `$`.
+//
+// The gate still types nothing until the cluster has formed (the membership
+// claim stays "with nobody touching a console"); after CN=3 it does what a
+// visitor does: strikes RETURN on a console that has not offered Username:,
+// and logs in where it has.
+export const USERNAME = /Username:/;
+export const AUTH_FAIL = /User authorization failure/i;
+
+// The OVMX login the site publishes to visitors -- the ONE source the gate
+// reads it from, so there is nothing to supply by hand and nothing to drift.
+// The homepage's figcaption reads: "Log in with username <b>SYSTEM</b>,
+// password <b>MANAGER</b>". Returns {user, pass} or null when the page does
+// not say (then the gate refuses to run rather than guess).
+export function parseLoginHint(html) {
+  const m = /Log in with username\s*<b>\s*([A-Za-z0-9$_]+)\s*<\/b>\s*,?\s*password\s*<b>\s*([^<\s]+)\s*<\/b>/i
+    .exec(String(html || ''));
+  return m ? { user: m[1], pass: m[2] } : null;
+}
+
+// The node's last printed line is a bare DCL prompt.
+export const atDcl = (text) => lastLineOf(text).trim() === '$';
+
+// Fold one node's login progress into the observations, in place, at elapsed
+// time `el` (seconds since the first click). Monotonic like everything else:
+// the first time a node offered Username: and the first time it showed a DCL
+// prompt AFTER the gate sent its password are kept.
+export function observeLogin(R, who, el) {
+  const t = String((R.transcript || {})[who] || '');
+  R.username_at = R.username_at || {};
+  R.dcl_at = R.dcl_at || {};
+  R.login_sent = R.login_sent || {};
+  R.login_failed = R.login_failed || {};
+  if (R.username_at[who] === undefined && USERNAME.test(t)) R.username_at[who] = el;
+  const sent = R.login_sent[who];
+  if (sent !== undefined && R.dcl_at[who] === undefined) {
+    const after = t.slice(sent);
+    if (AUTH_FAIL.test(after)) R.login_failed[who] = true;
+    else if (after.length && atDcl(t)) R.dcl_at[who] = el;
+  }
+  return R;
+}
+
+// What the gate should do at a node's console now, or null. 'wake' = strike
+// RETURN (a VMS console offers Username: only when asked), 'login' = type the
+// user name and password. Nothing is typed before the cluster formed.
+export function loginAction(R, who) {
+  if (!R.cn3) return null;
+  if ((R.dcl_at || {})[who] !== undefined || (R.login_failed || {})[who]) return null;
+  if ((R.login_sent || {})[who] !== undefined) return null;
+  if ((R.username_at || {})[who] === undefined) return 'wake';
+  return USERNAME.test(lastLineOf((R.transcript || {})[who])) ? 'login' : 'wake';
+}
+
+// Every node showed a logged-in DCL prompt within the bound (seconds since the
+// first click; Infinity = no bound beyond the run's own length).
+export const allAtDcl = (R, boundS = Infinity) =>
+  NODES.every((w) => (R.dcl_at || {})[w] !== undefined && R.dcl_at[w] <= boundS);
+
+// The run's pass bar: the cluster formed, the console a visitor reads shows the
+// VMS personality only, AND every node -- the real VAX included -- reached
+// Username: and a logged-in DCL prompt within the bound. Membership alone has
+// not been the bar since V0.7-6 (quiet), nor since V0.7-9 (rd vms-db1: a real
+// VAX that is a member and never offers Username: is a dead demo).
+export const isPass = (R, boundS = R.login_bound_s ?? Infinity) =>
+  !!R.cn3 && isQuiet(R) && allAtDcl(R, boundS);
+
+// Why a clustered run did not reach DCL everywhere, in observed terms.
+function loginWhy(R, boundS) {
+  const why = [];
+  for (const w of NODES) {
+    const u = (R.username_at || {})[w], d = (R.dcl_at || {})[w];
+    if ((R.login_failed || {})[w]) why.push(`${w} refused the login (User authorization failure)`);
+    else if (u === undefined) why.push(`${w} never offered Username: (last line ${JSON.stringify(lastLineOf((R.transcript || {})[w]))})`);
+    else if (d === undefined) why.push(`${w} offered Username: at t=${u}s but never showed a DCL $ after login`);
+    else if (d > boundS) why.push(`${w} reached DCL at t=${d}s, past the ${boundS}s bound`);
+  }
+  return why.join('; ');
+}
 
 // How a console that is not quiet is said, once, in one place.
 const noiseWhy = (R) =>
@@ -351,7 +448,11 @@ export function verdictOf(R) {
            `-- the OVMX nodes must be NON-VOTING (rd vms-1a1)`;
   }
   if (Object.keys(R.bugchecks || {}).length) return `BUGCHECK: ${JSON.stringify(R.bugchecks)}`;
-  if (R.cn3) return isQuiet(R) ? 'CN=3' : `CN=3 but NOT QUIET: ${noiseWhy(R)}`;
+  if (R.cn3) {
+    if (!isQuiet(R)) return `CN=3 but NOT QUIET: ${noiseWhy(R)}`;
+    const boundS = R.login_bound_s ?? Infinity;
+    return allAtDcl(R, boundS) ? 'CN=3' : `CN=3 but NOT EVERY NODE AT DCL: ${loginWhy(R, boundS)}`;
+  }
   const why = [];
   for (const w of NODES.slice(0, 2)) {
     const miss = WANT.filter((id) => !(R.added[w] || []).includes(id));

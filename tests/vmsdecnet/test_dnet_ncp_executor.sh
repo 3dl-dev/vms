@@ -114,7 +114,7 @@ out="$(ncp LIST EXECUTOR CHARACTERISTICS)"
     && ok "SET EXECUTOR MAXIMUM LINKS 12 persists (new invocation shows 12, address/name kept)" \
     || bad "SET EXECUTOR MAXIMUM LINKS 12: rc=$rc $out"
 out="$(ncp SET EXECUTOR MAXIMUM LINKS 0)"; rc=$?
-[ "$rc" -ne 0 ] && grep -q "%NCP-E-INVPVA" <<<"$out" && ncp LIST EXECUTOR CHARACTERISTICS | grep -qE "^Maximum links +=  *12$" \
+[ "$rc" -ne 0 ] && grep -q "%NCP-E-INVPVA" <<<"$out" && ncp LIST EXECUTOR CHARACTERISTICS | grep >/dev/null -E "^Maximum links +=  *12$" \
     && ok "SET EXECUTOR MAXIMUM LINKS 0 is refused (INVPVA) and changes nothing" \
     || bad "MAXIMUM LINKS 0 not refused: rc=$rc $out"
 

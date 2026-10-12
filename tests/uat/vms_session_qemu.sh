@@ -335,7 +335,7 @@ send() { printf '%s\r' "$1" >&3; }
 wait_for() {
     local pattern="$1" limit="${2:-$STEP_TIMEOUT}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep -qF "$pattern"; then
+        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep >/dev/null -F "$pattern"; then
             return 0
         fi
         if ! kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -431,7 +431,7 @@ wait_for 'Username:' "$STEP_TIMEOUT" "$BADPW_OFFSET" \
     || fail_with_console "ERROR: no reprompt after a wrong password -- did it succeed?"
 BADPW_SEGMENT=$(tail -c "+$((BADPW_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
 
-if printf '%s' "$BADPW_SEGMENT" | grep -qF 'User authorization failure'; then
+if printf '%s' "$BADPW_SEGMENT" | grep >/dev/null -F 'User authorization failure'; then
     PASS=$((PASS + 1))
 else
     FAIL=$((FAIL + 1))
@@ -440,7 +440,7 @@ fi
 # The refusal must be a REFUSAL, not incidental text alongside a session
 # that was granted anyway -- checked on the SAME segment as the positive
 # check above so this cannot pass by printing both.
-if printf '%s' "$BADPW_SEGMENT" | grep -qF 'Welcome to OpenVMX'; then
+if printf '%s' "$BADPW_SEGMENT" | grep >/dev/null -F 'Welcome to OpenVMX'; then
     FAIL=$((FAIL + 1))
     ERRORS="${ERRORS}\n  FAIL: a wrong password reached a session anyway ('Welcome to OpenVMX' present)"
 else
@@ -592,7 +592,7 @@ wait_for 'Username:' "$STEP_TIMEOUT" "$OPBADPW_OFFSET" \
     || fail_with_console "ERROR: no reprompt after OPERATOR + a wrong password -- did it succeed?"
 OPBADPW_SEGMENT=$(tail -c "+$((OPBADPW_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
 
-if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'User authorization failure'; then
+if printf '%s' "$OPBADPW_SEGMENT" | grep >/dev/null -F 'User authorization failure'; then
     PASS=$((PASS + 1))
 else
     FAIL=$((FAIL + 1))
@@ -601,7 +601,7 @@ fi
 # Same shape as the SYSTEM check above: the refusal must be a REFUSAL, not
 # incidental text alongside a session granted anyway -- checked on the
 # SAME segment so this cannot pass by printing both.
-if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'Welcome to OpenVMX'; then
+if printf '%s' "$OPBADPW_SEGMENT" | grep >/dev/null -F 'Welcome to OpenVMX'; then
     FAIL=$((FAIL + 1))
     ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password reached a session anyway ('Welcome to OpenVMX' present)"
 else
@@ -680,7 +680,7 @@ check_not_contains() {
 # echo of any command's input, including its own.
 check_response() {
     local cmd="$1" pattern="$2"
-    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep -qiE "$pattern"; then
+    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep >/dev/null -iE "$pattern"; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))
@@ -703,7 +703,7 @@ check_response() {
 # the owning item named in the failure message.
 check_known_divergence() {
     local cmd="$1" pattern="$2" item="$3" what="$4"
-    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep -qiE "$pattern"; then
+    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep >/dev/null -iE "$pattern"; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))
@@ -717,7 +717,7 @@ check_known_divergence() {
 # to print the string.
 check_not_response() {
     local cmd="$1" pattern="$2"
-    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep -qiE "$pattern"; then
+    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep >/dev/null -iE "$pattern"; then
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  FAIL: response to '$cmd' should NOT contain '$pattern' (got: $(printf '%s' "${CMD_OUTPUT[$cmd]}" | tr '\n' ' '))"
     else
@@ -738,7 +738,7 @@ check_response_at() {
     local idx="$1" pattern="$2" label out
     label="${CMD_SEQ_LABEL[$idx]}"
     out="${CMD_OUTPUT_SEQ[$idx]}"
-    if printf '%s' "$out" | grep -qiE "$pattern"; then
+    if printf '%s' "$out" | grep >/dev/null -iE "$pattern"; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))

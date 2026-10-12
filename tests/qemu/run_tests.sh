@@ -349,7 +349,7 @@ ASSERT_BANNER='--- assertion channel: /dev/ttyS1 (separate from console) ---'
 # transcript rather than drop it. Either way say what happened, so a lost
 # transcript is never silent.
 ASSERT_BYTES=$(wc -c < "$ASSERT_TRANSCRIPT" 2>/dev/null || echo 0)
-if printf '%s\n' "$OUTPUT" | grep -qF -- "$ASSERT_BANNER"; then
+if printf '%s\n' "$OUTPUT" | grep >/dev/null -F -- "$ASSERT_BANNER"; then
     OUTPUT=$(printf '%s\n' "$OUTPUT" | awk -v bannerfile="$ASSERT_TRANSCRIPT" -v banner="$ASSERT_BANNER" '
         { print }
         index($0, banner) > 0 && !done {

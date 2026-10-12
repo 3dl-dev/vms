@@ -78,12 +78,12 @@ waitfor() { local pat="$1" lim="${2:-60}" log="$3" w=0
 # (only output AFTER the command is searched, so an earlier match cannot satisfy it)
 run_seg() { local o w=0; o=$(wc -c <"$2"); send "$1"
     while [ $w -lt $(( ${4:-20} * 4 )) ]; do
-        tail -c "+$((o + 1))" "$2" | grep -qaF -- "$3" && break
+        tail -c "+$((o + 1))" "$2" | grep >/dev/null -aF -- "$3" && break
         kill -0 "$qp" 2>/dev/null || break
         sleep 0.25; w=$((w+1))
     done
     sleep 2; seg=$(tail -c "+$((o + 1))" "$2" | tr -d '\r'); }
-has() { printf '%s\n' "$seg" | grep -qF -- "$1"; }
+has() { printf '%s\n' "$seg" | grep >/dev/null -F -- "$1"; }
 frames_with() { [ -s "$2" ] || { echo 0; return; }
     od -An -v -tx1 "$2" | tr -d ' \n' | grep -o "$1" | wc -l; }
 
@@ -190,9 +190,9 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     off=$(wc -c <"$LOG2")
     send 'SHOW SYSTEM'; sleep 4
     seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
-    if printf '%s\n' "$seg" | grep -qE '(^|[[:space:]])NETACP([[:space:]]|$)'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -E '(^|[[:space:]])NETACP([[:space:]]|$)'; then rc=0; else rc=1; fi
     record "boot 2: SHOW SYSTEM lists a RUNNING NETACP ${NETACP_SETTLE}s after boot (it exits on any datalink failure)" "$rc"
-    if printf '%s\n' "$seg" | grep -qF 'Process Name'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'Process Name'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
     netacp_pid=$(printf '%s\n' "$seg" | grep -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
 
@@ -210,11 +210,11 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
         send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 8
     fi
     seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
-    if printf '%s\n' "$seg" | grep -qF 'DECNETD-NET-LOOPBACK-ACCEPT: PASS'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-NET-LOOPBACK-ACCEPT: PASS'; then rc=0; else rc=1; fi
     record "boot 2: a \$QIO _NET: link is brokered through the RUNNING NETACP -- COPY 0:: to FAL.EXE and back, byte-verified (vms-dda)" "$rc"
-    if printf '%s\n' "$seg" | grep -qF 'completes IO$_ACCESS SS$_INVLOGIN'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'completes IO$_ACCESS SS$_INVLOGIN'; then rc=0; else rc=1; fi
     record "boot 2: a bad password is refused at IO\$_ACCESS (INVLOGIN) through NETACP" "$rc"
-    if printf '%s\n' "$seg" | grep -qF 'DECNETD-I-NETLOOP'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-NETLOOP'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the brokered-link segment is real output (the test's banner is present)" "$rc"
 
     # (d) NCP SHOW + SHOW NETWORK read the RUNNING NETACP (rd vms-30e).
@@ -230,12 +230,12 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
        && has 'Type                     = nonrouting IV'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW EXECUTOR CHARACTERISTICS prints NETACP's NSP/routing versions, pool size and type" "$rc"
     run_seg 'NCP SHOW EXECUTOR COUNTERS' "$LOG2" 'Maximum logical links active' 30
-    if printf '%s\n' "$seg" | grep -qE '^ +[0-9]+  Maximum logical links active$'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -E '^ +[0-9]+  Maximum logical links active$'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW EXECUTOR COUNTERS prints NETACP's counted 'Maximum logical links active' in the VAX column" "$rc"
     run_seg 'NCP SHOW KNOWN NODES' "$LOG2" '1.1 (VAX1)' 30
     if has 'Known Node Volatile Summary as of ' \
        && has '    Node           State      Active  Delay   Circuit     Next node' \
-       && printf '%s\n' "$seg" | grep -qE '^ 1\.1 \(VAX1\) +[A-Z0-9]+-[0-9]+ +0$'; then rc=0; else rc=1; fi
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^ 1\.1 \(VAX1\) +[A-Z0-9]+-[0-9]+ +0$'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW KNOWN NODES lists 1.1 (VAX1) from NETACP's node database on its circuit, in the VAX table columns" "$rc"
     run_seg 'NCP SHOW KNOWN LINKS' "$LOG2" 'Known Link Volatile Summary' 30
     if has 'No information in database'; then rc=0; else rc=1; fi
@@ -250,22 +250,22 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if has 'Known Circuit Volatile Summary as of ' \
        && has '   Circuit          State                   Loopback     Adjacent' \
        && has '                                              Name      Routing Node' \
-       && printf '%s\n' "$seg" | grep -qE '^  ETH-0             on( |$)'; then rc=0; else rc=1; fi
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^  ETH-0             on( |$)'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW KNOWN CIRCUITS prints NETACP's circuit ETH-0 (the executive's ETH0:), state on, in the VAX columns" "$rc"
     run_seg 'NCP SHOW KNOWN LINES' "$LOG2" 'Known Line Volatile Summary' 30
     if has '   Line             State' \
-       && printf '%s\n' "$seg" | grep -qE '^  ETH-0             on$'; then rc=0; else rc=1; fi
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^  ETH-0             on$'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW KNOWN LINES prints the line ETH-0, state on, in the VAX columns" "$rc"
     run_seg 'NCP SHOW KNOWN OBJECTS' "$LOG2" 'CTERM' 30
     if has 'Known Object Volatile Summary as of ' \
        && has '   Object   Number  File/PID                   User Id          Password' \
-       && printf '%s\n' "$seg" | grep -qxF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
+       && printf '%s\n' "$seg" | grep >/dev/null -xF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW KNOWN OBJECTS lists NETACP's FAL 17 FAL.EXE (byte-identical to the real VAX row) under the VAX heading" "$rc"
     cterm_pid=$(printf '%s\n' "$seg" | grep -oE '^  CTERM         42  [0-9A-F]{8}$' | cut -c21-28)
     if [ -n "$cterm_pid" ] && [ -n "${netacp_pid:-}" ] && [ "$cterm_pid" = "$netacp_pid" ]; then rc=0; else rc=1; fi
     record "boot 2: SHOW KNOWN OBJECTS' CTERM 42 row carries the PID of the NETACP serving it ($cterm_pid), the PID SHOW SYSTEM lists for NETACP (${netacp_pid:-none})" "$rc"
     run_seg 'NCP SHOW OBJECT FAL' "$LOG2" 'Object Volatile Summary' 30
-    if printf '%s\n' "$seg" | grep -qxF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -xF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW OBJECT FAL reads the same NETACP entry" "$rc"
 
     if grep -qaF '%NCP-F-' <(tail -c "+$((off + 1))" "$LOG2"); then rc=1; else rc=0; fi

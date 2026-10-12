@@ -157,7 +157,7 @@ send_to() { printf '%s\r' "$2" >&"$1"; }
 wait_for_in() {
     local log="$1" pat="$2" limit="${3:-30}" since="${4:-0}" pid="$5" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$pid" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done

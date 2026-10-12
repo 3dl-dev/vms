@@ -321,7 +321,7 @@ run_case() {
     fi
     record "$tag boot 2: SYSTEM [1,4] established by the executive" "$rc"
 
-    if [ "$rc" -ne 0 ] || grep -qF '%OVMX-F-EXECINIT' "$log2"; then
+    if [ "$rc" -ne 0 ] || grep >/dev/null -F '%OVMX-F-EXECINIT' "$log2"; then
         echo "--- $tag boot 2 log ---"
         cat "$log2"
     fi

@@ -92,7 +92,7 @@ trap cleanup EXIT
 # test_distrib_boot.sh.
 SLIM_LISTING=$(zcat "$SLIM_INITRD" | cpio -t 2>/dev/null || true)
 slim_absent() {
-    if printf '%s\n' "$SLIM_LISTING" | grep -qF "$2"; then
+    if printf '%s\n' "$SLIM_LISTING" | grep >/dev/null -F "$2"; then
         bad "slim initramfs unexpectedly carries $2 (would invalidate the BOOT 2 proof)"
     else
         ok "slim initramfs is bootstrap-only: no $2"
@@ -115,7 +115,7 @@ wake_login() {
 wait_for() {  # pattern  limit-seconds  since-byte  log-file
     local pat="$1" limit="${2:-30}" since="${3:-0}" log="${4:-$LOG}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -189,7 +189,7 @@ else
     dump_and_die "PRODUCT INSTALL did not reach %PCSI-I-DONE within ${RUN_TIMEOUT}s"
 fi
 INSTALL_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$INSTALL_SEG" | grep -qiE '%PCSI-[EF]-'; then
+if printf '%s\n' "$INSTALL_SEG" | grep >/dev/null -iE '%PCSI-[EF]-'; then
     bad "PRODUCT INSTALL transcript carries a PCSI error despite DONE"
     echo "$INSTALL_SEG"
 else
@@ -207,8 +207,8 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]DCL.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qF 'DCL.EXE;' \
-    && printf '%s\n' "$SEG" | grep -qE 'Total of [1-9]'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'DCL.EXE;' \
+    && printf '%s\n' "$SEG" | grep >/dev/null -E 'Total of [1-9]'; then
     ok "install landed DCL.EXE at rooted VDA100:[SYS0.SYSCOMMON.SYSEXE]"
 else
     bad "rooted VDA100:[SYS0.SYSCOMMON.SYSEXE]DCL.EXE not listed"
@@ -223,9 +223,9 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY VDA100:[SYSEXE]DCL.EXE'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qE '%RMS-E-DNF|%RMS-E-FNF|no such file|not found'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -E '%RMS-E-DNF|%RMS-E-FNF|no such file|not found'; then
     ok "old flat VDA100:[SYSEXE]DCL.EXE is correctly ABSENT (rooted, not flat)"
-elif printf '%s\n' "$SEG" | grep -qE 'Total of [1-9]'; then
+elif printf '%s\n' "$SEG" | grep >/dev/null -E 'Total of [1-9]'; then
     bad "flat VDA100:[SYSEXE]DCL.EXE resolves -- install wrote the flat layout"
     echo "$SEG"
 else
@@ -272,7 +272,7 @@ send 'SHOW TIME'
 if wait_for '$' 20 "$OFF" "$LOG"; then
     SEG=$(segment_since "$OFF")
     CURYEAR=$(date +%Y)
-    if printf '%s' "$SEG" | grep -qF "$CURYEAR"; then
+    if printf '%s' "$SEG" | grep >/dev/null -F "$CURYEAR"; then
         ok "DCL.EXE activated from the INSTALLED disk (SHOW TIME returns the real date)"
     else
         bad "SHOW TIME did not return the current year from the installed disk"
@@ -291,7 +291,7 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY SYS$SYSTEM:DCL.EXE'
 wait_for 'Total of' 20 "$OFF" "$LOG"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qF 'DCL.EXE;' && printf '%s\n' "$SEG" | grep -qE 'Total of [1-9]'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'DCL.EXE;' && printf '%s\n' "$SEG" | grep >/dev/null -E 'Total of [1-9]'; then
     ok "SYS\$SYSTEM: on the booted installed disk lists DCL.EXE (rooted SYS\$SYSTEM resolves)"
 else
     bad "SYS\$SYSTEM: on the booted installed disk does not list the login chain"

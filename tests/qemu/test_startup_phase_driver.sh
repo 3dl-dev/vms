@@ -122,7 +122,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {
     local pattern="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep -qF "$pattern"; then
+        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep >/dev/null -F "$pattern"; then
             return 0
         fi
         if ! kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -179,9 +179,9 @@ if [ "$OK" -eq 1 ]; then
 
     if [ "$rc" -eq 0 ]; then
         SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
-        if printf '%s' "$SEG" | grep -qF 'SYS$STARTUP'; then r1=0; else r1=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'SYS$STARTUP'; then r1=0; else r1=1; fi
         record "SHOW LOGICAL SYS\$STARTUP names the logical" "$r1"
-        if printf '%s' "$SEG" | grep -qF 'SYS$MANAGER'; then r2=0; else r2=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'SYS$MANAGER'; then r2=0; else r2=1; fi
         record "SYS\$STARTUP search list carries SYS\$MANAGER as an element (vms-420 multi-value)" "$r2"
     fi
 fi
@@ -195,9 +195,9 @@ if [ "$OK" -eq 1 ]; then
 
     if [ "$rc" -eq 0 ]; then
         SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
-        if printf '%s' "$SEG" | grep -qF 'VMS$PHASES.DAT'; then r1=0; else r1=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'VMS$PHASES.DAT'; then r1=0; else r1=1; fi
         record "SYS\$STARTUP: carries VMS\$PHASES.DAT on the booted disk" "$r1"
-        if printf '%s' "$SEG" | grep -qF 'VMS$VMS.DAT'; then r2=0; else r2=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'VMS$VMS.DAT'; then r2=0; else r2=1; fi
         record "SYS\$STARTUP: carries VMS\$VMS.DAT on the booted disk" "$r2"
     fi
 fi
@@ -211,13 +211,13 @@ if [ "$OK" -eq 1 ]; then
 
     if [ "$rc" -eq 0 ]; then
         SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
-        if printf '%s' "$SEG" | grep -qF 'SYCONFIG.COM'; then r1=0; else r1=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'SYCONFIG.COM'; then r1=0; else r1=1; fi
         record "SYS\$MANAGER: carries SYCONFIG.COM" "$r1"
-        if printf '%s' "$SEG" | grep -qF 'SYLOGICALS.COM'; then r2=0; else r2=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'SYLOGICALS.COM'; then r2=0; else r2=1; fi
         record "SYS\$MANAGER: carries SYLOGICALS.COM" "$r2"
         # STARTNET.COM (rd vms-a70): the DECnet Phase IV startup procedure the
         # LPBETA VMS$VMS.DAT component runs is really on the booted disk.
-        if printf '%s' "$SEG" | grep -qF 'STARTNET.COM'; then r3=0; else r3=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -F 'STARTNET.COM'; then r3=0; else r3=1; fi
         record "SYS\$MANAGER: carries STARTNET.COM (DECnet Phase IV startup)" "$r3"
     fi
 fi
@@ -237,7 +237,7 @@ if [ "$OK" -eq 1 ]; then
     if [ "$rc" -eq 0 ]; then
         SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
         # A phase line naming both the LPBETA phase and STARTNET.COM.
-        if printf '%s' "$SEG" | grep -qiE 'LPBETA[[:space:]].*STARTNET'; then r1=0; else r1=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -iE 'LPBETA[[:space:]].*STARTNET'; then r1=0; else r1=1; fi
         record "VMS\$VMS.DAT registers @SYS\$MANAGER:STARTNET at the LPBETA phase" "$r1"
     fi
 fi
@@ -257,7 +257,7 @@ if [ "$OK" -eq 1 ]; then
         # trailer. Either is proof the file is absent; a PRESENT OVMX.CONF would
         # instead list the name with "Total of 1 file.", so this stays
         # discriminating.
-        if printf '%s' "$SEG" | grep -qE '%DIRECT-W-NOFILES|Total of 0 file'; then r1=0; else r1=1; fi
+        if printf '%s' "$SEG" | grep >/dev/null -E '%DIRECT-W-NOFILES|Total of 0 file'; then r1=0; else r1=1; fi
         record "OVMX.CONF does not exist on the booted, mounted system disk" "$r1"
     fi
 fi
@@ -271,17 +271,17 @@ echo ""
 # command that legitimately expects a "0 files" no-match) so a later,
 # intentional absence-check can never be mistaken for a boot-time failure.
 echo "--- Boot console checks (from the same boot, pre-login) ---"
-if printf '%s' "$BOOT_LOG" | grep -qF 'The OVMX system is now executing the site-specific startup commands.'; then
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'The OVMX system is now executing the site-specific startup commands.'; then
     rc=0
 else
     rc=1
 fi
 record "LPMAIN-phase site announcement appears (SYSTARTUP_VMS.COM ran from inside the phase driver)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep -qF '%RMS-E-FNF'; then rc=1; else rc=0; fi
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F '%RMS-E-FNF'; then rc=1; else rc=0; fi
 record "no %RMS-E-FNF during boot (phase driver's OPENs all found their files)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep -qF '%DCL-E-OPENIN'; then rc=1; else rc=0; fi
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F '%DCL-E-OPENIN'; then rc=1; else rc=0; fi
 record "no %DCL-E-OPENIN during boot" "$rc"
 
 # --- DECnet STARTNET at LPBETA is a faithful SILENT no-op when UNCONFIGURED ----
@@ -299,16 +299,16 @@ record "no %DCL-E-OPENIN during boot" "$rc"
 # %DECNET-I-STARTNET announcement, no NETACP %RUN-S-PROC_ID, no %DCL abort, and
 # no %DECNETD-E-NOADDRESS. A foreground DECNETD probe whose nonzero exit DCL would
 # render as %DCL-E-ABORT is exactly the pollution this guards against (vms-a70).
-if printf '%s' "$BOOT_LOG" | grep -qF 'DECnet Phase IV -- Startup (STARTNET)'; then rc=1; else rc=0; fi
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'DECnet Phase IV -- Startup (STARTNET)'; then rc=1; else rc=0; fi
 record "STARTNET is SILENT on an unconfigured boot (no DECnet startup announcement -- faithful: real VMS runs no STARTNET unconfigured)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep -qF '%DECNET-I-STARTNET'; then rc=1; else rc=0; fi
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F '%DECNET-I-STARTNET'; then rc=1; else rc=0; fi
 record "STARTNET launches NO NETACP on an unconfigured boot (no %DECNET-I-STARTNET on the console)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep -qE '%DCL-[EF]-ABORT'; then rc=1; else rc=0; fi
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -E '%DCL-[EF]-ABORT'; then rc=1; else rc=0; fi
 record "STARTNET leaves NO %DCL-E-ABORT on the boot console (config check is a DCL F\$SEARCH, not a foreground probe)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep -qF 'DECNETD-E-NOADDRESS'; then rc=1; else rc=0; fi
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'DECNETD-E-NOADDRESS'; then rc=1; else rc=0; fi
 record "STARTNET leaves NO %DECNETD-E-NOADDRESS on the boot console (unconfigured = clean no-op, not an error)" "$rc"
 
 echo ""

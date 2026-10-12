@@ -87,7 +87,7 @@ test -f "$PARTS_EXE"; check "PARTS.EXE present under SYS\$UPDATE:" $?
 test -f "$SETUP_COM"; check "PARTS_SETUP.COM present under SYS\$UPDATE:" $?
 
 if [ -f "$PARTS_EXE" ]; then
-    readelf -h "$PARTS_EXE" 2>/dev/null | grep -q "Machine:.*X86-64"
+    readelf -h "$PARTS_EXE" 2>/dev/null | grep >/dev/null "Machine:.*X86-64"
     check "PARTS.EXE is EM_X86_64" $?
 
     N=$(readelf -d "$PARTS_EXE" 2>/dev/null | grep -c NEEDED || true)
@@ -98,7 +98,7 @@ if [ -f "$PARTS_EXE" ]; then
     [ "${H:-1}" -eq 0 ]
     check "PARTS.EXE has zero DT_HASH entries" $?
 
-    readelf -l "$PARTS_EXE" 2>/dev/null | grep -q INTERP
+    readelf -l "$PARTS_EXE" 2>/dev/null | grep >/dev/null INTERP
     check "PARTS.EXE carries PT_INTERP (IMGACT-activated)" $?
 fi
 

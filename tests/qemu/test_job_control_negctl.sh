@@ -109,7 +109,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern  limit-seconds  since-byte
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -154,7 +154,7 @@ fi
 #        anywhere in this boot: JOB_CONTROL was the only RUN/DETACHED call
 #        this boot would ever make. --------------------------------------
 FULL_LOG=$(tr -d '\r' <"$LOG")
-if printf '%s' "$FULL_LOG" | grep -qF '%RUN-S-PROC_ID'; then
+if printf '%s' "$FULL_LOG" | grep >/dev/null -F '%RUN-S-PROC_ID'; then
     bad "%RUN-S-PROC_ID appeared -- something was still RUN/DETACHED'd during this boot"
 else
     ok "no %RUN-S-PROC_ID anywhere in the boot console -- JOB_CONTROL (or anything else) was never created"

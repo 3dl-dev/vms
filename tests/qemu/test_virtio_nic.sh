@@ -89,49 +89,49 @@ else
 
     # Default = user mode.
     DEF="$(joined)"
-    if printf '%s' "$DEF" | grep -q -- '-device virtio-net-pci,netdev=net0,romfile='; then rc=0; else rc=1; fi
+    if printf '%s' "$DEF" | grep >/dev/null -- '-device virtio-net-pci,netdev=net0,romfile='; then rc=0; else rc=1; fi
     record "default: attaches virtio-net-pci (netdev=net0, PXE ROM disabled)" "$rc"
 
-    if printf '%s' "$DEF" | grep -q -- '-netdev user,id=net0'; then rc=0; else rc=1; fi
+    if printf '%s' "$DEF" | grep >/dev/null -- '-netdev user,id=net0'; then rc=0; else rc=1; fi
     record "default: user-mode NAT (SLIRP), zero host config" "$rc"
 
     # No inbound by default (no hostfwd).
-    if printf '%s' "$DEF" | grep -q 'hostfwd'; then rc=1; else rc=0; fi
+    if printf '%s' "$DEF" | grep >/dev/null 'hostfwd'; then rc=1; else rc=0; fi
     record "default: NO inbound (no hostfwd)" "$rc"
 
     # -nic none is gone from the default; -nodefaults preserved.
-    if printf '%s' "$DEF" | grep -q -- '-nic none'; then rc=1; else rc=0; fi
+    if printf '%s' "$DEF" | grep >/dev/null -- '-nic none'; then rc=1; else rc=0; fi
     record "default: legacy '-nic none' removed" "$rc"
 
-    if printf '%s' "$DEF" | grep -q -- '-nodefaults'; then rc=0; else rc=1; fi
+    if printf '%s' "$DEF" | grep >/dev/null -- '-nodefaults'; then rc=0; else rc=1; fi
     record "default: -nodefaults preserved" "$rc"
 
     # Opt-in user-mode inbound forwarding.
     FWD="$(joined OVMX_NET_HOSTFWD=tcp::2223-:23)"
-    if printf '%s' "$FWD" | grep -q 'hostfwd=tcp::2223-:23'; then rc=0; else rc=1; fi
+    if printf '%s' "$FWD" | grep >/dev/null 'hostfwd=tcp::2223-:23'; then rc=0; else rc=1; fi
     record "OVMX_NET_HOSTFWD: opt-in inbound forwarding" "$rc"
 
     # tap mode.
     TAP="$(joined OVMX_NET_MODE=tap OVMX_NET_TAP=tap9)"
-    if printf '%s' "$TAP" | grep -q -- '-netdev tap,id=net0,ifname=tap9,script=no,downscript=no'; then rc=0; else rc=1; fi
+    if printf '%s' "$TAP" | grep >/dev/null -- '-netdev tap,id=net0,ifname=tap9,script=no,downscript=no'; then rc=0; else rc=1; fi
     record "tap mode: attaches to pre-existing tap, script=no (no host mutation)" "$rc"
-    if printf '%s' "$TAP" | grep -q -- '-device virtio-net-pci,netdev=net0'; then rc=0; else rc=1; fi
+    if printf '%s' "$TAP" | grep >/dev/null -- '-device virtio-net-pci,netdev=net0'; then rc=0; else rc=1; fi
     record "tap mode: still a virtio-net-pci device" "$rc"
 
     # bridge mode.
     BR="$(joined OVMX_NET_MODE=bridge OVMX_NET_BRIDGE=br9)"
-    if printf '%s' "$BR" | grep -q -- '-netdev bridge,id=net0,br=br9'; then rc=0; else rc=1; fi
+    if printf '%s' "$BR" | grep >/dev/null -- '-netdev bridge,id=net0,br=br9'; then rc=0; else rc=1; fi
     record "bridge mode: attaches to existing host bridge" "$rc"
 
     # none escape hatch.
     NONE="$(joined OVMX_NET_MODE=none)"
-    if printf '%s' "$NONE" | grep -q -- '-nic none'; then rc=0; else rc=1; fi
-    if printf '%s' "$NONE" | grep -q 'virtio-net'; then rc=1; fi
+    if printf '%s' "$NONE" | grep >/dev/null -- '-nic none'; then rc=0; else rc=1; fi
+    if printf '%s' "$NONE" | grep >/dev/null 'virtio-net'; then rc=1; fi
     record "none mode: no NIC (legacy behavior restored)" "$rc"
 
     # explicit MAC.
     MAC="$(joined OVMX_NET_MAC=52:54:00:12:34:56)"
-    if printf '%s' "$MAC" | grep -q 'mac=52:54:00:12:34:56'; then rc=0; else rc=1; fi
+    if printf '%s' "$MAC" | grep >/dev/null 'mac=52:54:00:12:34:56'; then rc=0; else rc=1; fi
     record "OVMX_NET_MAC: honored" "$rc"
 
     # bad mode is rejected.
@@ -210,7 +210,7 @@ else
     # Guest kernel enumerated a virtio Ethernet controller (class 0x020000,
     # vendor 1af4 device 1000 legacy or 1041 modern).
     if grep -aE '1af4:(1000|1041).*class 0x020000|class 0x020000.*1af4:(1000|1041)' "$CONSOLE_LOG" >/dev/null \
-       || grep -aE '\[1af4:(1000|1041)\]' "$CONSOLE_LOG" | grep -aq 'class 0x020000'; then rc=0; else rc=1; fi
+       || grep -aE '\[1af4:(1000|1041)\]' "$CONSOLE_LOG" | grep >/dev/null -a 'class 0x020000'; then rc=0; else rc=1; fi
     record "guest kernel enumerates the virtio-net Ethernet controller (PCI 1af4, class 0x020000)" "$rc"
     if [ "$rc" -ne 0 ]; then
         echo "    --- PCI/virtio lines seen ---"

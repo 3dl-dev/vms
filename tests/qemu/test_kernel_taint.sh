@@ -188,7 +188,7 @@ fi
 mapfile -t SHIPPED_KOS < <(find "$WORK" -name '*.ko' | sort)
 record "at least one kernel module shipped in boot initramfs" $([ "${#SHIPPED_KOS[@]}" -gt 0 ] && echo 0 || echo 1)
 for req in vms; do
-    find "$WORK" -name "${req}.ko" | grep -q .; record "${req}.ko present in boot initramfs (required)" $?
+    find "$WORK" -name "${req}.ko" | grep >/dev/null .; record "${req}.ko present in boot initramfs (required)" $?
 done
 
 for ko in "${SHIPPED_KOS[@]}"; do

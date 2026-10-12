@@ -73,7 +73,7 @@ docker run --rm \
         cat $W/link.err
 
         # (e) ASSERT: no OTS$ left deferred
-        if grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | grep -q "OTS\$"; then
+        if grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | grep >/dev/null "OTS\$"; then
             echo "PROOF FAIL: an OTS\$ symbol is still deferred:"
             grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | grep "OTS\$" | sort -u
             exit 4

@@ -139,7 +139,7 @@ wake_login() {
 wait_for() {  # pattern  limit-seconds  since-byte  log-file
     local pat="$1" limit="${2:-30}" since="${3:-0}" log="${4:-$LOG}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -197,7 +197,7 @@ OFF=$(wc -c <"$LOG")
 send 'PRODUCT CONFIGURE FOO'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qF '%PCSI-W-NOTIMPL'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F '%PCSI-W-NOTIMPL'; then
     ok "PRODUCT CONFIGURE (still unimplemented) honestly reports %PCSI-W-NOTIMPL"
 else
     bad "PRODUCT CONFIGURE did not report %PCSI-W-NOTIMPL"
@@ -213,7 +213,7 @@ else
     dump_and_die "PRODUCT INSTALL did not reach %PCSI-I-DONE within ${RUN_TIMEOUT}s"
 fi
 INSTALL_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$INSTALL_SEG" | grep -qiE '%PCSI-[EF]-'; then
+if printf '%s\n' "$INSTALL_SEG" | grep >/dev/null -iE '%PCSI-[EF]-'; then
     bad "PRODUCT INSTALL's transcript contains a PCSI error despite reporting DONE"
     echo "$INSTALL_SEG"
 else
@@ -231,8 +231,8 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
-    && printf '%s\n' "$SEG" | grep -qF 'HELP.EXE'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -E 'Total of [1-9][0-9]* files?[.,]' \
+    && printf '%s\n' "$SEG" | grep >/dev/null -F 'HELP.EXE'; then
     ok "DIRECTORY independently confirms VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE exists"
 else
     bad "DIRECTORY does not confirm HELP.EXE landed on VDA100:"
@@ -259,7 +259,7 @@ OFF=$(wc -c <"$LOG")
 send 'RUNHELP MOUNT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 RUN_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$RUN_SEG" | grep -qiE 'Segmentation|cannot execute|%DCL-.*IVIMAGE|%SYSTEM-.*ACCVIO'; then
+if printf '%s\n' "$RUN_SEG" | grep >/dev/null -iE 'Segmentation|cannot execute|%DCL-.*IVIMAGE|%SYSTEM-.*ACCVIO'; then
     bad "the installed HELP.EXE crashed or failed to activate: $RUN_SEG"
 elif [ -n "$(printf '%s' "$RUN_SEG" | grep -vF 'RUNHELP' | tr -d '[:space:]')" ]; then
     ok "the installed HELP.EXE executes non-interactively and prints real output from the target"
@@ -274,8 +274,8 @@ OFF=$(wc -c <"$LOG")
 send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'  # GUIDE-STEP (docs/install-guide.md, tools/check_guide_drift.py)
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SHOW_SEG_BEFORE=$(segment_since "$OFF")
-if printf '%s\n' "$SHOW_SEG_BEFORE" | grep -qiE 'X86VMS VMS' \
-    && printf '%s\n' "$SHOW_SEG_BEFORE" | grep -qF 'Installed'; then
+if printf '%s\n' "$SHOW_SEG_BEFORE" | grep >/dev/null -iE 'X86VMS VMS' \
+    && printf '%s\n' "$SHOW_SEG_BEFORE" | grep >/dev/null -F 'Installed'; then
     ok "PRODUCT SHOW PRODUCT /DESTINATION=VDA100: lists the kit's own product name as Installed"
 else
     bad "PRODUCT SHOW PRODUCT /DESTINATION=VDA100: does not list the installed kit"
@@ -309,8 +309,8 @@ wait_for 'File protection' "$RUN_TIMEOUT" "$OFF"
 PROT_SEG=$(segment_since "$OFF")
 PROT_LINE=$(printf '%s\n' "$PROT_SEG" | grep 'File protection')
 echo "installed PROOFPROT.DAT header protection: $PROT_LINE"
-if printf '%s\n' "$PROT_LINE" | grep -qF 'Group:, World:' \
-    && ! printf '%s\n' "$PROT_LINE" | grep -qF 'World:RE'; then
+if printf '%s\n' "$PROT_LINE" | grep >/dev/null -F 'Group:, World:' \
+    && ! printf '%s\n' "$PROT_LINE" | grep >/dev/null -F 'World:RE'; then
     ok "installed file's ODS-2 fh2_fileprot is the kit's divergent 0xFF00 (S:RWED,O:RWED,G:,W:), NOT the class default World:RE"
 else
     bad "installed file's protection did not match the kit's ke_protection (expected G:,W: empty; got: $PROT_LINE)"
@@ -326,7 +326,7 @@ wait_for 'File protection' "$RUN_TIMEOUT" "$OFF"
 HPROT_SEG=$(segment_since "$OFF")
 HPROT_LINE=$(printf '%s\n' "$HPROT_SEG" | grep 'File protection')
 echo "installed HELP.EXE header protection: $HPROT_LINE"
-if printf '%s\n' "$HPROT_LINE" | grep -qF 'World:RE'; then
+if printf '%s\n' "$HPROT_LINE" | grep >/dev/null -F 'World:RE'; then
     ok "installed ordinary image HELP.EXE reads back its kit ke_protection (World:RE), never world-writable"
 else
     bad "installed HELP.EXE protection unexpected (expected World:RE; got: $HPROT_LINE)"
@@ -361,8 +361,8 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY VDA100:[SYS0.SYSCOMMON.SYSEXE]HELP.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
-    && printf '%s\n' "$SEG" | grep -qF 'HELP.EXE'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -E 'Total of [1-9][0-9]* files?[.,]' \
+    && printf '%s\n' "$SEG" | grep >/dev/null -F 'HELP.EXE'; then
     ok "installed HELP.EXE survives a full QEMU restart"
 else
     bad "installed HELP.EXE did not survive the QEMU restart"
@@ -376,7 +376,7 @@ OFF=$(wc -c <"$LOG")
 send 'RUNHELP MOUNT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 RUN_SEG2=$(segment_since "$OFF")
-if printf '%s\n' "$RUN_SEG2" | grep -qiE 'Segmentation|cannot execute|%DCL-.*IVIMAGE|%SYSTEM-.*ACCVIO'; then
+if printf '%s\n' "$RUN_SEG2" | grep >/dev/null -iE 'Segmentation|cannot execute|%DCL-.*IVIMAGE|%SYSTEM-.*ACCVIO'; then
     bad "the installed HELP.EXE crashed after restart: $RUN_SEG2"
 elif [ -n "$(printf '%s' "$RUN_SEG2" | grep -vF 'RUNHELP' | tr -d '[:space:]')" ]; then
     ok "the installed HELP.EXE still executes correctly after a full QEMU restart"
@@ -388,7 +388,7 @@ OFF=$(wc -c <"$LOG")
 send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qiE 'X86VMS VMS' && printf '%s\n' "$SEG" | grep -qF 'Installed'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -iE 'X86VMS VMS' && printf '%s\n' "$SEG" | grep >/dev/null -F 'Installed'; then
     ok "the product database survives a full QEMU restart (disk, not tmpfs)"
 else
     bad "the product database did not survive the QEMU restart"

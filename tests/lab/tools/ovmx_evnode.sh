@@ -44,7 +44,7 @@ PROMPT='^\$( |$)'
 last_prompt() { tr -d '\r\000' < "$OUT" | grep -aoE "Username:|Password:|$PROMPT" | tail -1; }
 w=0; until grep -qaF 'Username:' "$OUT" || [ $w -ge 2400 ]; do kill -0 $QP || break; send ''; sleep 2; w=$((w+2)); done
 for a in 1 2 3 4 5; do
-  last_prompt | grep -qE "$PROMPT" && break
+  last_prompt | grep >/dev/null -E "$PROMPT" && break
   u=$(cnt 'Username:'); send ''; wait_more 'Username:' "$u" 30 || continue
   p=$(cnt 'Password:'); sleep 1; send 'SYSTEM'; wait_more 'Password:' "$p" 30 || continue
   d=$(cnt "$PROMPT"); sleep 1; send 'MANAGER'; wait_more "$PROMPT" "$d" 90 || continue

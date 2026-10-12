@@ -225,7 +225,7 @@ echo ""
 # these become the negative-control guards that catch a fake one.)
 echo "--- FIRST-BOOT COMPLETION (vms-649): the installed system's first boot is a justified no-op ---"
 FBRE='AUTOGEN|GETDATA phase|GENPARAMS phase|GENFILES phase|SETPARAMS phase|first[ -]?boot|FIRSTBOOT|one-time completion'
-if printf '%s' "$OUT_POS" | grep -qaiE "$FBRE"; then rc=1; else rc=0; fi
+if printf '%s' "$OUT_POS" | grep >/dev/null -aiE "$FBRE"; then rc=1; else rc=0; fi
 record "first-boot: the installed system's FIRST boot runs NO AUTOGEN/first-boot completion phase (vms-649 no-op)" "$rc"
 
 # Boot the SAME persistent disk a second time. First-boot completion, such as
@@ -234,7 +234,7 @@ record "first-boot: the installed system's FIRST boot runs NO AUTOGEN/first-boot
 OUT_POS2=$(run_qemu "$INITRD" "$POS_DISK")
 check "second boot: reaches the login prompt again (first boot consumed no one-shot)" "$OUT_POS2" "Username:"
 check "second boot: %STDRV-I-STARTUP begun printed again"                             "$OUT_POS2" "%STDRV-I-STARTUP, OpenVMX startup begun"
-if printf '%s' "$OUT_POS2" | grep -qaiE "$FBRE"; then rc=1; else rc=0; fi
+if printf '%s' "$OUT_POS2" | grep >/dev/null -aiE "$FBRE"; then rc=1; else rc=0; fi
 record "second boot: runs NO AUTOGEN/first-boot completion phase (identical to boot 1 -- no boot-1-only phase)" "$rc"
 echo ""
 

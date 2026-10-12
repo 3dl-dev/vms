@@ -123,7 +123,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern  limit-seconds  since-byte
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -169,7 +169,7 @@ fi
 # banner (before vms-1fb the banner printed after STARTUP_OFF; now it prints
 # well before it).
 PRE_STDRV_LOG=$(tr -d '\r' <"$LOG")
-if printf '%s' "$PRE_STDRV_LOG" | grep -qE 'OpenVMX V[0-9]'; then
+if printf '%s' "$PRE_STDRV_LOG" | grep >/dev/null -E 'OpenVMX V[0-9]'; then
     ok "boot identification banner printed"
 else
     dump_and_die "boot identification banner never printed"
@@ -187,7 +187,7 @@ fi
 # before presenting Username:. Prove it: Username: is STILL absent even
 # though the banner (and everything else in the boot) has already printed --
 # the prompt is waiting behind the CR.
-if tr -d '\r' <"$LOG" | grep -qF 'Username:'; then
+if tr -d '\r' <"$LOG" | grep >/dev/null -F 'Username:'; then
     bad "Username: appeared BEFORE the operator pressed RETURN -- OPA0: did not wait (defect 3)"
 else
     ok "OPA0: waited: boot banner is out but Username: is not shown before RETURN (defect 3)"
@@ -209,7 +209,7 @@ else
     bad "banner-before-prompt ordering wrong (banner@${BPOS:-none} prompt@${UPOS:-none}) (defect 2)"
 fi
 # DEFECT 4: no routine kernel-driver printk on the user console.
-if printf '%s\n' "$FID_FULL" | grep -q 'vms: registered process'; then
+if printf '%s\n' "$FID_FULL" | grep >/dev/null 'vms: registered process'; then
     bad "kernel printk 'vms: registered process ...' leaked onto the console (defect 4)"
 else
     ok "no 'vms: registered process' kernel chatter on the user console (defect 4)"
@@ -237,7 +237,7 @@ fi
 # lines DO reach OPERATOR.LOG -- this file's job is the console's silence.)
 for IDENT_PAT in '^%OVMX-[A-Z]-DEVTAB, ' '^%OVMX-[A-Z]-LNM, ' '^%OVMX-[A-Z]-MBX, ' \
                   '^%OVMX-[A-Z]-VMSFS, ' '^%SYSKRNL-'; do
-    if printf '%s\n' "$FID_FULL" | grep -qE "$IDENT_PAT"; then
+    if printf '%s\n' "$FID_FULL" | grep >/dev/null -E "$IDENT_PAT"; then
         bad "a kmsg-bridge line matching '$IDENT_PAT' reached the console -- the bridge must be OPERATOR.LOG-only (vms-32a round 3 / PR #365)"
     else
         ok "no kmsg-bridge line matching '$IDENT_PAT' reached the console (vms-32a round 3)"
@@ -247,12 +247,12 @@ done
 # console user, but KMOD needs the message TEXT to distinguish the bridge's
 # own idents from anything else that might legitimately share the facility
 # (nothing does today, but the check is written to survive that changing).
-if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-[A-Z]-SYSID, '; then
+if printf '%s\n' "$FID_FULL" | grep >/dev/null -E '^%OVMX-[A-Z]-SYSID, '; then
     bad "a %OVMX-*-SYSID line (kmsg bridge) reached the console -- must be OPERATOR.LOG-only"
 else
     ok "no %OVMX-*-SYSID line on the console (vms-32a round 3)"
 fi
-if printf '%s\n' "$FID_FULL" | grep -qE '^%OVMX-[A-Z]-KMOD, '; then
+if printf '%s\n' "$FID_FULL" | grep >/dev/null -E '^%OVMX-[A-Z]-KMOD, '; then
     bad "a %OVMX-*-KMOD line (kmsg bridge -- vms.ko lifecycle or the kernel's own taint-warning collision) reached the console -- must be OPERATOR.LOG-only"
 else
     ok "no %OVMX-*-KMOD line on the console -- including the kernel's own module-taint warning, which the bridge now logs, never broadcasts (vms-32a round 3)"
@@ -261,7 +261,7 @@ fi
 # (the specific strings CI's failure quoted, from either bridge facility).
 for NOISE in 'Loaded X.509 cert' 'Key type' '_CPC object is not present' \
              'hrtimer: interrupt took' 'taints kernel' 'tainting kernel'; do
-    if printf '%s\n' "$FID_FULL" | grep -qF "$NOISE"; then
+    if printf '%s\n' "$FID_FULL" | grep >/dev/null -F "$NOISE"; then
         bad "kernel-substrate noise ('$NOISE') reached the console in ANY form -- must be OPERATOR.LOG-only (PR #365)"
     else
         ok "no '$NOISE' noise on the console (absent this run, or correctly routed to OPERATOR.LOG only)"
@@ -416,7 +416,7 @@ OPLOG_SEG=$(segment_since "$TYPE_OFF")
 # Banner: exactly eleven '%', two spaces, OPCOM, two spaces, the timestamp
 # (DD-MMM-YYYY HH:MM:SS.ss, month upper-case 3-letter), two spaces, eleven
 # '%' -- oracle-exact per the lab-Alpha capture in the design doc.
-if printf '%s\n' "$OPLOG_SEG" | grep -qE '^%%%%%%%%%%%  OPCOM  [0-9]{2}-[A-Z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}  %%%%%%%%%%%$'; then
+if printf '%s\n' "$OPLOG_SEG" | grep >/dev/null -E '^%%%%%%%%%%%  OPCOM  [0-9]{2}-[A-Z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{2}  %%%%%%%%%%%$'; then
     ok "OPERATOR.LOG's OPCOM banner is oracle-exact (eleven '%', boxed timestamp)"
 else
     bad "OPERATOR.LOG's OPCOM banner did not match the oracle-exact shape"
@@ -427,7 +427,7 @@ fi
 # reached through ovmx_node_name()/SCSNODE, not a string constant baked into
 # sys_operator.c (see the design doc sec6 for why that distinction matters
 # on a clustered node with a real configured name).
-if printf '%s\n' "$OPLOG_SEG" | grep -qE '^Request [0-9]+, from user SYSTEM on OVMX$'; then
+if printf '%s\n' "$OPLOG_SEG" | grep >/dev/null -E '^Request [0-9]+, from user SYSTEM on OVMX$'; then
     ok "OPERATOR.LOG's Request line names the real SCSNODE (SYSTEM on OVMX), not a hardcoded literal"
 else
     bad "OPERATOR.LOG's Request line did not match 'Request N, from user SYSTEM on OVMX'"
@@ -446,7 +446,7 @@ fi
 # intermittently missing -- that flake is what the seed-from-spool fix removed.
 for MUST_HAVE in '^%OVMX-I-SYSID, ' '^%OVMX-I-LNM, ' '^%OVMX-I-MBX, ' \
                   '^%OVMX-I-VMSFS, '; do
-    if printf '%s\n' "$OPLOG_SEG" | grep -qE "$MUST_HAVE"; then
+    if printf '%s\n' "$OPLOG_SEG" | grep >/dev/null -E "$MUST_HAVE"; then
         ok "OPERATOR.LOG contains the kmsg-bridge line matching '$MUST_HAVE' (vms-32a round 3)"
     else
         bad "OPERATOR.LOG is missing the kmsg-bridge line matching '$MUST_HAVE' -- the bridge did not reach the real file"

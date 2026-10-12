@@ -106,7 +106,7 @@ OTS_BLOCK_CF="$CF -fcall-saved-0"
 # GUARD: the runtime objects must not reference any OTS$/decc$ symbol themselves
 # (no self-recursion, no accidental CRTL dependency).
 if "${TARGET}-nm" -u "$OUT/ots_runtime.o" "$OUT/ots_block.o" "$OUT/ots_home_args.o" \
-     | grep -qiE 'OTS\$|decc\$'; then
+     | grep >/dev/null -iE 'OTS\$|decc\$'; then
     echo "build-libots: FAIL — OTS runtime references an OTS\$/decc\$ symbol (self-dep)" >&2
     "${TARGET}-nm" -u "$OUT/ots_runtime.o" "$OUT/ots_block.o" "$OUT/ots_home_args.o" | grep -iE 'OTS\$|decc\$' >&2
     exit 2

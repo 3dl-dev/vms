@@ -169,7 +169,7 @@ wake_login() {
 wait_for() {  # pattern  limit-seconds  since-byte  log-file
     local pat="$1" limit="${2:-30}" since="${3:-0}" log="${4:-$LOG}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -237,7 +237,7 @@ else
     dump_and_die "PRODUCT INSTALL (BASELINE) did not reach %PCSI-I-DONE within ${RUN_TIMEOUT}s"
 fi
 BASE_INSTALL_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$BASE_INSTALL_SEG" | grep -qiE '%PCSI-[EF]-'; then
+if printf '%s\n' "$BASE_INSTALL_SEG" | grep >/dev/null -iE '%PCSI-[EF]-'; then
     dump_and_die "PRODUCT INSTALL (BASELINE) reported a PCSI error despite DONE: $BASE_INSTALL_SEG"
 fi
 
@@ -246,7 +246,7 @@ send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 BASE_SHOW=$(segment_since "$OFF")
 echo "$BASE_SHOW"
-if printf '%s\n' "$BASE_SHOW" | grep -qF 'V0.1'; then
+if printf '%s\n' "$BASE_SHOW" | grep >/dev/null -F 'V0.1'; then
     ok "PRODUCT SHOW PRODUCT reports the BASELINE version (V0.1) after the first install"
 else
     bad "PRODUCT SHOW PRODUCT does not report the BASELINE version after the first install"
@@ -257,7 +257,7 @@ OFF=$(wc -c <"$LOG")
 send 'CREATE/DIRECTORY VDA100:[USER]'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qiE '%CREATE-[EF]-|%DCL-[EF]-|%RMS-[EF]-'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -iE '%CREATE-[EF]-|%DCL-[EF]-|%RMS-[EF]-'; then
     dump_and_die "CREATE/DIRECTORY VDA100:[USER] failed: $SEG"
 fi
 
@@ -276,7 +276,7 @@ send 'TYPE VDA100:[USER]DATA.TXT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 USER_CMD='TYPE VDA100:[USER]DATA.TXT'
 USER_BEFORE=$(segment_since "$OFF" | grep -vF "$USER_CMD")
-if printf '%s' "$USER_BEFORE" | grep -qF "$USER_DATA_CONTENT"; then
+if printf '%s' "$USER_BEFORE" | grep >/dev/null -F "$USER_DATA_CONTENT"; then
     ok "VDA100:[USER]DATA.TXT carries the expected content before the upgrade"
 else
     dump_and_die "VDA100:[USER]DATA.TXT does not carry the expected content before the upgrade: $USER_BEFORE"
@@ -298,7 +298,7 @@ send 'TYPE VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SITE_CMD='TYPE VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 SITE_BEFORE=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
-if printf '%s' "$SITE_BEFORE" | grep -qF "$SITE_MARKER"; then
+if printf '%s' "$SITE_BEFORE" | grep >/dev/null -F "$SITE_MARKER"; then
     ok "VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM carries the site marker before the upgrade"
 else
     dump_and_die "site marker did not land in SYSTARTUP_VMS.COM before the upgrade: $SITE_BEFORE"
@@ -315,7 +315,7 @@ else
     dump_and_die "PRODUCT INSTALL (UPGRADE) did not reach %PCSI-I-DONE within ${RUN_TIMEOUT}s"
 fi
 UPG_INSTALL_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$UPG_INSTALL_SEG" | grep -qiE '%PCSI-[EF]-'; then
+if printf '%s\n' "$UPG_INSTALL_SEG" | grep >/dev/null -iE '%PCSI-[EF]-'; then
     dump_and_die "PRODUCT INSTALL (UPGRADE) reported a PCSI error despite DONE: $UPG_INSTALL_SEG"
 fi
 
@@ -325,7 +325,7 @@ send 'TYPE VDA100:[USER]DATA.TXT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 USER_AFTER=$(segment_since "$OFF" | grep -vF "$USER_CMD")
 if [ "$(printf '%s' "$USER_AFTER" | tr -d '[:space:]')" = "$(printf '%s' "$USER_BEFORE" | tr -d '[:space:]')" ] \
-    && printf '%s' "$USER_AFTER" | grep -qF "$USER_DATA_CONTENT"; then
+    && printf '%s' "$USER_AFTER" | grep >/dev/null -F "$USER_DATA_CONTENT"; then
     ok "(a) VDA100:[USER]DATA.TXT survives the upgrade byte-identical"
 else
     dump_and_die "(a) VDA100:[USER]DATA.TXT did NOT survive the upgrade identically -- before: $USER_BEFORE / after: $USER_AFTER"
@@ -336,7 +336,7 @@ OFF=$(wc -c <"$LOG")
 send 'TYPE VDA100:[SYS0.SYSCOMMON.SYSMGR]SYSTARTUP_VMS.COM'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SITE_AFTER=$(segment_since "$OFF" | grep -vF "$SITE_CMD")
-if printf '%s' "$SITE_AFTER" | grep -qF "$SITE_MARKER"; then
+if printf '%s' "$SITE_AFTER" | grep >/dev/null -F "$SITE_MARKER"; then
     ok "(b) the site customization marker survives the upgrade"
 else
     bad "(b) the site customization marker did NOT survive the upgrade -- PRODUCT INSTALL clobbered SYS\$MANAGER:SYSTARTUP_VMS.COM (vms-2c9 seed-once preservation regressed -- see OVMX_KIT_ENTRY_FLAG_SEED_ONCE in src/libvms/include/ovmx_kit_format.h and do_install() in src/product/product.c)"
@@ -348,7 +348,7 @@ send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'  # GUIDE-STEP (docs/upgrade-gui
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 UPG_SHOW=$(segment_since "$OFF")
 echo "$UPG_SHOW"
-if printf '%s\n' "$UPG_SHOW" | grep -qF "$EXPECTED_UPGRADE_VERSION" && ! printf '%s\n' "$UPG_SHOW" | grep -qF "$EXPECTED_BASELINE_VERSION"; then
+if printf '%s\n' "$UPG_SHOW" | grep >/dev/null -F "$EXPECTED_UPGRADE_VERSION" && ! printf '%s\n' "$UPG_SHOW" | grep >/dev/null -F "$EXPECTED_BASELINE_VERSION"; then
     ok "(c) PRODUCT SHOW PRODUCT reports the UPGRADE version ($EXPECTED_UPGRADE_VERSION), not the baseline ($EXPECTED_BASELINE_VERSION)"
 else
     dump_and_die "(c) PRODUCT SHOW PRODUCT does not show the advanced version after the upgrade: $UPG_SHOW"
@@ -386,7 +386,7 @@ send 'TYPE VDA100:[USER]DATA.TXT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 USER_RESTART=$(segment_since "$OFF" | grep -vF "$USER_CMD")
 if [ "$(printf '%s' "$USER_RESTART" | tr -d '[:space:]')" = "$(printf '%s' "$USER_BEFORE" | tr -d '[:space:]')" ] \
-    && printf '%s' "$USER_RESTART" | grep -qF "$USER_DATA_CONTENT"; then
+    && printf '%s' "$USER_RESTART" | grep >/dev/null -F "$USER_DATA_CONTENT"; then
     ok "(a) VDA100:[USER]DATA.TXT survives a full QEMU restart after the upgrade"
 else
     dump_and_die "(a) VDA100:[USER]DATA.TXT did NOT survive the QEMU restart: $USER_RESTART"
@@ -396,7 +396,7 @@ OFF=$(wc -c <"$LOG")
 send 'PRODUCT SHOW PRODUCT /DESTINATION=VDA100:'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qF "$EXPECTED_UPGRADE_VERSION"; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F "$EXPECTED_UPGRADE_VERSION"; then
     ok "(c) the advanced version persists across a full QEMU restart (disk, not tmpfs)"
 else
     dump_and_die "(c) the advanced version did not persist across the QEMU restart: $SEG"

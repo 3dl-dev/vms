@@ -149,7 +149,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern  limit-seconds  since-byte
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -197,12 +197,12 @@ if [ "$SKIP_PARTS_SCENARIO" != "1" ]; then
         dump_and_die "PARTS_SETUP.COM did not reach %PARTS-I-DONE within ${SETUP_TIMEOUT}s"
     fi
     SETUP_SEG=$(segment_since "$SETUP_OFF")
-    check_setup() { if printf '%s\n' "$SETUP_SEG" | grep -qF "$1"; then ok "$2"; else bad "$2"; fi; }
+    check_setup() { if printf '%s\n' "$SETUP_SEG" | grep >/dev/null -F "$1"; then ok "$2"; else bad "$2"; fi; }
     check_setup '%PARTS-I-SETUP' "install procedure announced itself"
     check_setup '%PARTS-I-COPY'  "install procedure staged the COPY step"
     check_setup '%PARTS-I-DEFINE, defining PARTS :== $SYS$SYSTEM:PARTS.EXE' \
                 "install procedure defined the PARTS foreign command"
-    if printf '%s\n' "$SETUP_SEG" | grep -qiE '%COPY-[EF]-|%RMS-[EF]-|%DCL-[EF]-'; then
+    if printf '%s\n' "$SETUP_SEG" | grep >/dev/null -iE '%COPY-[EF]-|%RMS-[EF]-|%DCL-[EF]-'; then
         bad "PARTS_SETUP.COM's COPY step reported no fatal/error condition"
     else
         ok "PARTS_SETUP.COM's COPY step reported no fatal/error condition"
@@ -217,16 +217,16 @@ if [ "$SKIP_PARTS_SCENARIO" != "1" ]; then
         dump_and_die "\$ PARTS did not reach %PARTS-S-DONE within ${RUN_TIMEOUT}s"
     fi
     RUN_SEG=$(segment_since "$RUN_OFF")
-    check_run() { if printf '%s\n' "$RUN_SEG" | grep -qF "$1"; then ok "$2"; else bad "$2"; fi; }
+    check_run() { if printf '%s\n' "$RUN_SEG" | grep >/dev/null -F "$1"; then ok "$2"; else bad "$2"; fi; }
     check_run '%PARTS-I-BEGIN' "\$ PARTS activated (foreign-command dispatch)"
     check_run '%PARTS-I-CREATE, created indexed file SYS$SCRATCH:PARTS.DAT' \
         "created the RMS indexed file at SYS\$SCRATCH:PARTS.DAT (a VMS filespec, first candidate, no fallback)"
-    if printf '%s\n' "$RUN_SEG" | grep -qF '%PARTS-I-TRYCRE'; then
+    if printf '%s\n' "$RUN_SEG" | grep >/dev/null -F '%PARTS-I-TRYCRE'; then
         bad "no fallback attempts (%PARTS-I-TRYCRE absent) -- SYS\$SCRATCH: worked on the first try"
     else
         ok "no fallback attempts (%PARTS-I-TRYCRE absent) -- SYS\$SCRATCH: worked on the first try"
     fi
-    if printf '%s\n' "$RUN_SEG" | grep -qF '/tmp/'; then
+    if printf '%s\n' "$RUN_SEG" | grep >/dev/null -F '/tmp/'; then
         bad "no Unix path (/tmp/) anywhere in the PARTS transcript"
     else
         ok "no Unix path (/tmp/) anywhere in the PARTS transcript"
@@ -237,7 +237,7 @@ if [ "$SKIP_PARTS_SCENARIO" != "1" ]; then
     check_run 'PN000001'        "the first loaded part (PN000001) was found by keyed lookup"
     check_run '%PARTS-W-NOTFOUND, no part with key PN999999' \
         "a key that was never loaded (PN999999) correctly reported NOTFOUND (RMS\$_RNF)"
-    if printf '%s\n' "$RUN_SEG" | grep -qF '%PARTS-E-VERIFY'; then
+    if printf '%s\n' "$RUN_SEG" | grep >/dev/null -F '%PARTS-E-VERIFY'; then
         bad "no wrong-record from a keyed lookup (%PARTS-E-VERIFY absent)"
     else
         ok "no wrong-record from a keyed lookup (%PARTS-E-VERIFY absent)"
@@ -250,8 +250,8 @@ if [ "$SKIP_PARTS_SCENARIO" != "1" ]; then
     wait_for 'Total of' 20 "$DIR_OFF"
     DIR_SEG=$(segment_since "$DIR_OFF")
     DIR_BODY=$(printf '%s\n' "$DIR_SEG" | grep -vF "$DIR_CMD")
-    if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?[.,]' \
-        && printf '%s\n' "$DIR_BODY" | grep -qF 'PARTS.DAT'; then
+    if printf '%s\n' "$DIR_BODY" | grep >/dev/null -E 'Total of [1-9][0-9]* files?[.,]' \
+        && printf '%s\n' "$DIR_BODY" | grep >/dev/null -F 'PARTS.DAT'; then
         ok "\$ DIRECTORY SYS\$SCRATCH:PARTS.DAT independently confirms the file exists"
     else
         bad "\$ DIRECTORY SYS\$SCRATCH:PARTS.DAT independently confirms the file exists"

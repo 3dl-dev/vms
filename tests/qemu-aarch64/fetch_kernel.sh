@@ -30,7 +30,7 @@ SRC="$(ls "$TMP"/x/boot/vmlinuz-* | head -1)"
 [ -n "$SRC" ] || { echo "fetch_kernel.sh: no vmlinuz in $KPKG" >&2; exit 3; }
 cp "$SRC" "$OUT"
 
-file "$OUT" | grep -qi 'ARM64 boot executable Image' || {
+file "$OUT" | grep >/dev/null -i 'ARM64 boot executable Image' || {
     echo "fetch_kernel.sh: FAIL $OUT is not an ARM64 boot Image" >&2
     file "$OUT" >&2
     exit 4

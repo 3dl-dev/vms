@@ -576,7 +576,7 @@ assert_veneer() {
   # never reaches the ACP directory and draws %DIRECT-W-NOFILES instead.
   local region fid_line fid_num=0 reader_ok=0 nofiles=0 size_line size_blocks=0
   region=$(awk '/VENEER-PROOF: === INDEPENDENT READER/{f=1} f{print} /VENEER-PROOF: DIR-STATUS/{f=0}' "$log")
-  printf '%s' "$region" | grep -qaE "%DIRECT-W-NOFILES" && nofiles=1
+  printf '%s' "$region" | grep >/dev/null -aE "%DIRECT-W-NOFILES" && nofiles=1
   fid_line=$(printf '%s' "$region" | grep -aoE "PORTTEST\.DAT;1[^A-Za-z]*File ID:[[:space:]]*\([0-9]+,[0-9]+,[0-9]+\)" | tail -1)
   # CONTENT proof (vms-f49): DIRECTORY/FULL prints "Size: <used>/<alloc>" in
   # ODS-2 blocks. PT_SIZE=8192 bytes == 16 x 512-byte blocks, so the independent
@@ -640,16 +640,16 @@ assert_vmsabi() {
   fid=$(grep -aoE "VMSABI-FID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-FID: //')
   [ -n "$fid" ] || { echo "  assert_vmsabi: no File ID from SYS\$SEARCH" >&2; return 1; }
   region=$(awk '/VMSABI-PROOF: === INDEPENDENT READER/{f=1} f{print} /VMSABI-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
-  printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$fid" \
+  printf '%s\n' "$region" | grep -a "File ID" | grep >/dev/null -aF "$fid" \
     || { echo "  assert_vmsabi: DIRECTORY/FULL does not show File ID $fid" >&2; return 1; }
-  printf '%s\n' "$region" | grep -a "VMSABI_GATE" | grep -aq "PROVED_BY_CRELNM" \
+  printf '%s\n' "$region" | grep -a "VMSABI_GATE" | grep >/dev/null -a "PROVED_BY_CRELNM" \
     || { echo "  assert_vmsabi: SHOW LOGICAL does not see the name SYS\$CRELNM defined" >&2; return 1; }
   # vms-38b: the File ID SYS$QIOW IO$_ACCESS put in the FIB is the one the
   # independent reader shows.
   local qfid
   qfid=$(grep -aoE "VMSABI-QIOFID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-QIOFID: //')
   [ -n "$qfid" ] || { echo "  assert_vmsabi: no File ID from SYS\$QIOW IO\$_ACCESS" >&2; return 1; }
-  printf '%s\n' "$region" | grep -a "File ID" | grep -aqF "$qfid" \
+  printf '%s\n' "$region" | grep -a "File ID" | grep >/dev/null -aF "$qfid" \
     || { echo "  assert_vmsabi: DIRECTORY/FULL does not show the IO\$_ACCESS File ID $qfid" >&2; return 1; }
   # ATR$C_CREDATE is the file's real creation date (vms-263e): every VMS file
   # header carries one, so it must be non-zero, and it must be the very date
@@ -686,16 +686,16 @@ assert_crtlfd() {
   grep -aq "OVMX CRTL-FD test: OK" "$log" || { echo "  assert_crtlfd: the image did not report every check OK" >&2; return 1; }
   grep -aqE "%DCL-F-ABORT|terminated abnormally" "$log" && { echo "  assert_crtlfd: the image crashed" >&2; return 1; }
   region=$(awk '/CRTLFD-PROOF: === INDEPENDENT READER/{f=1} f{print} /CRTLFD-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
-  printf '%s\n' "$region" | grep -aq "line 001 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the first line" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aq "line 120 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the last line" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aq "APPENDED BY THE C RTL" || { echo "  assert_crtlfd: TYPE did not show the appended line" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aqE "TYPE-STATUS=%X[0-9A-F]*[13579BDF]( |$)" || { echo "  assert_crtlfd: TYPE did not succeed" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -a "line 001 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the first line" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -a "line 120 of the OVMX C RTL file layer over RMS" || { echo "  assert_crtlfd: TYPE did not show the last line" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -a "APPENDED BY THE C RTL" || { echo "  assert_crtlfd: TYPE did not show the appended line" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -aE "TYPE-STATUS=%X[0-9A-F]*[13579BDF]( |$)" || { echo "  assert_crtlfd: TYPE did not succeed" >&2; return 1; }
   # vms-45f: the RMS keywords given to fopen/creat/open are the attributes DCL
   # reads back from the file headers (console lines end in CR LF: strip the CR).
   region=$(printf '%s\n' "$region" | tr -d '\r')
-  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDUDF.DAT RFM=UDF" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDFIX.DAT RFM=FIX MRS=20" >&2; return 1; }
-  printf '%s\n' "$region" | grep -aqE "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=\.$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDSLF.DAT RFM=STMLF with no record attributes" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -aE "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDUDF.DAT RFM=UDF" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -aE "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDFIX.DAT RFM=FIX MRS=20" >&2; return 1; }
+  printf '%s\n' "$region" | grep >/dev/null -aE "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=\.$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDSLF.DAT RFM=STMLF with no record attributes" >&2; return 1; }
   return 0
 }
 
@@ -740,10 +740,10 @@ assert_fileop() {
   local cre_fid dst_fid cre_ok=0 dst_ok=0 del_ok=0 src_ok=0
   cre_fid=$(printf '%s' "$cre_reg" | grep -aoE "FOPCRE\.DAT;[0-9]+[^A-Za-z]*File ID:[[:space:]]*\([0-9]+" | grep -oE '\([0-9]+' | tr -d '(' | tail -1)
   dst_fid=$(printf '%s' "$dst_reg" | grep -aoE "FOPDST\.DAT;[0-9]+[^A-Za-z]*File ID:[[:space:]]*\([0-9]+" | grep -oE '\([0-9]+' | tr -d '(' | tail -1)
-  [ -n "$cre_fid" ] && [ "$cre_fid" -gt 0 ] && ! printf '%s' "$cre_reg" | grep -qaE "%DIRECT-W-NOFILES" && cre_ok=1
-  [ -n "$dst_fid" ] && [ "$dst_fid" -gt 0 ] && ! printf '%s' "$dst_reg" | grep -qaE "%DIRECT-W-NOFILES" && dst_ok=1
-  printf '%s' "$del_reg" | grep -qaE "%DIRECT-W-NOFILES" && del_ok=1
-  printf '%s' "$src_reg" | grep -qaE "%DIRECT-W-NOFILES" && src_ok=1
+  [ -n "$cre_fid" ] && [ "$cre_fid" -gt 0 ] && ! printf '%s' "$cre_reg" | grep >/dev/null -aE "%DIRECT-W-NOFILES" && cre_ok=1
+  [ -n "$dst_fid" ] && [ "$dst_fid" -gt 0 ] && ! printf '%s' "$dst_reg" | grep >/dev/null -aE "%DIRECT-W-NOFILES" && dst_ok=1
+  printf '%s' "$del_reg" | grep >/dev/null -aE "%DIRECT-W-NOFILES" && del_ok=1
+  printf '%s' "$src_reg" | grep >/dev/null -aE "%DIRECT-W-NOFILES" && src_ok=1
 
   # (c) activation-LOAD failure only (a post-landing crash is not fatal here).
   local errs err_ok=1
@@ -780,7 +780,7 @@ assert_native() {
   _need "^OVMX-NATIVE QIOW: hello from a VMS-linked image" "no SYS\$QIOW line from HELLO"
   _need "^OVMX-NATIVE LIB\$PUT_OUTPUT: hello" "no LIB\$PUT_OUTPUT line from HELLO"
   _need "NATIVE-PROOF: HELLO-STATUS=%X00000001" "HELLO \$STATUS is not %X00000001"
-  grep -aE "OVMX-SEAM: image=HELLO.EXE " "$log" | grep -aq '\$STATUS=0x00000001' \
+  grep -aE "OVMX-SEAM: image=HELLO.EXE " "$log" | grep >/dev/null -a '\$STATUS=0x00000001' \
     || { echo "  assert_native: the executive did not record HELLO's completion status" >&2; ok=0; }
   _need "NATIVE-PROOF: RETST-STATUS=%X0FEDC0A9" "RETST \$STATUS is not %X0FEDC0A9"
   # rung 2
@@ -950,7 +950,7 @@ run_boot_a() {
           waitpat() {
               local pat="$1" lim="$2" since="${3:-0}" w=0
               while [ "$w" -lt "$lim" ]; do
-                  tail -c "+$((since + 1))" modgpA.raw 2>/dev/null | grep -qaF -- "$pat" && return 0
+                  tail -c "+$((since + 1))" modgpA.raw 2>/dev/null | grep >/dev/null -aF -- "$pat" && return 0
                   kill -0 "$QP" 2>/dev/null || return 1
                   sleep 1; w=$((w + 1))
               done

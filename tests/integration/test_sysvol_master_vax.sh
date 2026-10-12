@@ -186,7 +186,7 @@ done
 [ -f "$PSTAGE/$ROOTED/DCL.EXE" ] || fail "--status-proof dropped the boot images"
 PIMG="$WORK/proof.img"
 "$MASTER" master "$PIMG" OVMXSYS "$PSTAGE" 32 >/dev/null || fail "vmsfs_master could not master the --status-proof tree"
-"$MASTER" list "$PIMG" | grep -qiF 'STSCOND.EXE' || fail "mastered --status-proof volume lacks STSCOND.EXE"
+"$MASTER" list "$PIMG" | grep >/dev/null -iF 'STSCOND.EXE' || fail "mastered --status-proof volume lacks STSCOND.EXE"
 echo "PASS: --status-proof stages the proof SYSTARTUP + proof images and masters"
 
 # Teeth: a proof image the SYSTARTUP RUNs but that is not supplied is refused.

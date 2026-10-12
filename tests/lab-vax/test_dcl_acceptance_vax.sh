@@ -174,7 +174,7 @@ send()    { printf "%s\r" "$1" >&6 2>/dev/null || true; }
 wait_for() {
     local pat="$1" lim="${2:-30}" since="${3:-0}" w=0
     while [ "$w" -lt "$lim" ]; do
-        tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaF -- "$pat" && return 0
+        tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep >/dev/null -aF -- "$pat" && return 0
         kill -0 "$QP" 2>/dev/null || return 1
         sleep 1; w=$((w + 1))
     done

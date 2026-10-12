@@ -207,7 +207,7 @@ for n in ${NODES}; do
       if [ -n "${SYSBOOT_PARAMS:-}" ]; then
         got=""
         for _ in $(seq 1 120); do
-          if tail -c 600 "${clog}" 2>/dev/null | grep -aq 'SYSBOOT>'; then got=1; break; fi
+          if tail -c 600 "${clog}" 2>/dev/null | grep >/dev/null -a 'SYSBOOT>'; then got=1; break; fi
           sleep 1
         done
         if [ -n "${got}" ]; then
@@ -224,7 +224,7 @@ for n in ${NODES}; do
 
       for _ in $(seq 1 120); do
         grep -aq 'Username:' "${clog}" 2>/dev/null && break
-        if tail -c 400 "${clog}" | grep -aq 'enter date and time'; then
+        if tail -c 400 "${clog}" | grep >/dev/null -a 'enter date and time'; then
           echo "[alpha:${LAB_NAME}] ${n}: setting VMS clock from the host"
           printf '%s\n' "$(date -u '+%d-%b-%Y %H:%M' | tr '[:lower:]' '[:upper:]')" > "${fifo}"
           break

@@ -115,7 +115,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern  limit-seconds  since-byte
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -167,7 +167,7 @@ else
     dump_and_die "process A's WRITE CURRENT never printed %SYSGEN-I-WRITTEN"
 fi
 A_SEG=$(segment_since "$A_OFF")
-check_a() { if printf '%s\n' "$A_SEG" | grep -qF "$1"; then ok "$2"; else bad "$2"; fi; }
+check_a() { if printf '%s\n' "$A_SEG" | grep >/dev/null -F "$1"; then ok "$2"; else bad "$2"; fi; }
 check_a '%SYSGEN-I-DEFLOADED' "USE DEFAULT loaded the compiled-in factory defaults"
 check_a '%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to TESTND' \
     "SET SCSNODE changed the value away from the seed's OVMX"
@@ -191,12 +191,12 @@ else
     dump_and_die "process B's SHOW SCSNODE never showed TESTND"
 fi
 B_SEG=$(segment_since "$B_OFF")
-check_b() { if printf '%s\n' "$B_SEG" | grep -qF "$1"; then ok "$2"; else bad "$2"; fi; }
+check_b() { if printf '%s\n' "$B_SEG" | grep >/dev/null -F "$1"; then ok "$2"; else bad "$2"; fi; }
 check_b '%SYSGEN-I-LOADED, 31 parameters loaded from' \
     "USE CURRENT loaded a real file (not the NOCURRENT/factory-default fallback)"
 check_b 'ovmxvmssys.par;2' \
     "USE CURRENT read the HIGHEST version (;2), matching the oracle's USE-reads-highest behavior"
-if printf '%s\n' "$B_SEG" | grep -qF 'ovmxvmssys.par;1'; then
+if printf '%s\n' "$B_SEG" | grep >/dev/null -F 'ovmxvmssys.par;1'; then
     bad "USE CURRENT did NOT read the stale ;1 (it read a path naming ;1)"
 else
     ok "USE CURRENT did NOT read the stale ;1"
@@ -209,17 +209,17 @@ send "$DIR_CMD"
 wait_for 'Total of' 20 "$DIR_OFF"
 DIR_SEG=$(segment_since "$DIR_OFF")
 DIR_BODY=$(printf '%s\n' "$DIR_SEG" | grep -vF "$DIR_CMD")
-if printf '%s\n' "$DIR_BODY" | grep -qiF 'OVMXVMSSYS.PAR;1'; then
+if printf '%s\n' "$DIR_BODY" | grep >/dev/null -iF 'OVMXVMSSYS.PAR;1'; then
     ok "DIRECTORY SYS\$SYSTEM:*.PAR shows OVMXVMSSYS.PAR;1 (the seeded version)"
 else
     bad "DIRECTORY SYS\$SYSTEM:*.PAR shows OVMXVMSSYS.PAR;1 (the seeded version)"
 fi
-if printf '%s\n' "$DIR_BODY" | grep -qiF 'OVMXVMSSYS.PAR;2'; then
+if printf '%s\n' "$DIR_BODY" | grep >/dev/null -iF 'OVMXVMSSYS.PAR;2'; then
     ok "DIRECTORY SYS\$SYSTEM:*.PAR shows OVMXVMSSYS.PAR;2 (process A's write)"
 else
     bad "DIRECTORY SYS\$SYSTEM:*.PAR shows OVMXVMSSYS.PAR;2 (process A's write)"
 fi
-if printf '%s\n' "$DIR_BODY" | grep -qE 'Total of [1-9][0-9]* files?[.,]'; then
+if printf '%s\n' "$DIR_BODY" | grep >/dev/null -E 'Total of [1-9][0-9]* files?[.,]'; then
     ok "DIRECTORY reported a nonzero file count (not an empty/broken listing)"
 else
     bad "DIRECTORY reported a nonzero file count (not an empty/broken listing)"

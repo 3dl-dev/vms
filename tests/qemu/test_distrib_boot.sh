@@ -93,7 +93,7 @@ SLIM_LISTING=$(zcat "$SLIM_INITRD" | cpio -t 2>/dev/null || true)
 slim_absent() {
     local desc="$1" pat="$2"
     TOTAL=$((TOTAL + 1))
-    if printf '%s\n' "$SLIM_LISTING" | grep -qF "$pat"; then
+    if printf '%s\n' "$SLIM_LISTING" | grep >/dev/null -F "$pat"; then
         echo "  FAIL: $desc (present but should be absent: $pat)"
         FAIL=$((FAIL + 1))
     else
@@ -170,7 +170,7 @@ wake_login() {
 wait_for() {
     local pattern="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep -qF "$pattern"; then
+        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep >/dev/null -F "$pattern"; then
             return 0
         fi
         if ! kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -227,7 +227,7 @@ if [ "$OK" -eq 1 ]; then
     if [ "$rc" -eq 0 ]; then
         SEGMENT=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
         CURYEAR=$(date +%Y)
-        if printf '%s' "$SEGMENT" | grep -qF "$CURYEAR"; then crc=0; else crc=1; fi
+        if printf '%s' "$SEGMENT" | grep >/dev/null -F "$CURYEAR"; then crc=0; else crc=1; fi
         record "SHOW TIME returns the real date (shareables loaded from disk SYS\$LIBRARY)" "$crc"
     fi
 fi
@@ -242,9 +242,9 @@ if [ "$OK" -eq 1 ]; then
 
     if [ "$rc" -eq 0 ]; then
         DIRSEG=$(tail -c "+$((DIR_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
-        if printf '%s' "$DIRSEG" | grep -qF 'DCL.EXE'; then drc=0; else drc=1; fi
+        if printf '%s' "$DIRSEG" | grep >/dev/null -F 'DCL.EXE'; then drc=0; else drc=1; fi
         record "DIRECTORY SYS\$SYSTEM: lists DCL.EXE (from the mastered disk)" "$drc"
-        if printf '%s' "$DIRSEG" | grep -qF 'LOGINOUT.EXE'; then lrc=0; else lrc=1; fi
+        if printf '%s' "$DIRSEG" | grep >/dev/null -F 'LOGINOUT.EXE'; then lrc=0; else lrc=1; fi
         record "DIRECTORY SYS\$SYSTEM: lists LOGINOUT.EXE (from the mastered disk)" "$lrc"
     fi
 fi

@@ -74,7 +74,7 @@ case "$ARCH" in
     aarch64) want="AArch64" ;;
     x86_64)  want="X86-64" ;;
 esac
-$READELF -h "$WORK/init" | grep -q "Machine:.*$want" || {
+$READELF -h "$WORK/init" | grep >/dev/null "Machine:.*$want" || {
     echo "build_init.sh: FAIL $ARCH init is not EM_$want" >&2
     $READELF -h "$WORK/init" | grep Machine >&2
     exit 3

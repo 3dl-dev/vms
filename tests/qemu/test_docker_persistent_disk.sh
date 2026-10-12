@@ -121,7 +121,7 @@ fi
 # Stop within a couple seconds of the prompt -- no generous settle time.
 docker stop "$CONTAINER1" > /dev/null 2>&1
 wait "$BOOT1_RUNPID" 2>/dev/null || true
-while docker ps -a --filter "name=^${CONTAINER1}\$" --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER1}\$"; do
+while docker ps -a --filter "name=^${CONTAINER1}\$" --format '{{.Names}}' 2>/dev/null | grep >/dev/null "^${CONTAINER1}\$"; do
     sleep 0.5
 done
 

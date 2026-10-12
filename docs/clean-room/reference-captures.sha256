@@ -111,3 +111,5 @@ e106bcd28691e583af11a4c730fa9997db867d912e0159cc28802dd054b7f84d  tests/lab/capt
 618971f8aa9451f8db14dc7295a9891999259c04d58e582ee4e9164fa1eff2c8  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-ds3-cat0b.pcap
 80aef16a0b3f545c457a0d7deb805d167332b99e8fe24bf662d098a1e27aeb90  tests/lab/captures/vms-52d-0b01-oracle-20261013/f1-ovmx-first-cm.pcap
 e7c42f1430ae0d05dfa011a8848a0f40c076d3b94989642955116024653173bb  tests/lab/captures/vms-d52c-ovmx-first-20261012/r1-ovmx-first.pcap
+e20a567e73622a4c3a7107c77bcebcdbe3cc5602278369cb183b8d38f043a838  tests/lab/captures/vms-d52c-ovmx-first-20261012/r2-ovmx-first.pcap
+d3d032bbc67e1e40d52bd96926c58cd40b7affe2d2565f4dcffec1a6700ee3a7  tests/lab/captures/vms-d52c-ovmx-first-20261012/r3-ovmx-first.pcap

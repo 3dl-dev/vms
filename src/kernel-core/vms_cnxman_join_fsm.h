@@ -1076,6 +1076,11 @@ struct cnxman_join {
 	uint32_t rdev_answered;
 	uint32_t rdev_nosuchdev;
 	uint32_t rdev_mount_normal;
+	/* rd vms-db1: kind-10 closes answered by the measured write-back and
+	 * state 5, and pulled records that were not the measured shape
+	 * (withheld, counted). */
+	uint32_t k10_answered;
+	uint32_t k10_refused;
 	uint32_t rdev_unanswerable;
 	uint32_t rdev_conid_mismatch;
 	uint32_t rdev_reclaimed;

@@ -7,7 +7,7 @@ The rule below was derived black-box (Rule 8) from real VAX-to-VAX pairs in the 
 
 A kind-10 close is a cat-0x06 op-0x00 with body[26] = 10 and length 0x88. It moves one 136-byte record. That record had a constant shape in 79 of 79 pulls:
 - rec[8:12] = `88 00 65 64`
-- rec[16:32] = `01 00 1a 00 00 00 52 00 1a 00 00 00 52 00 00 00`
+- rec[16:32] = `01 00 1a 00 00 00 52 00 00 00 1a 00 00 00 52 00`
 - rec[80:84] = 0
 
 The answer state follows one rule, with 162 of 166 consistent:

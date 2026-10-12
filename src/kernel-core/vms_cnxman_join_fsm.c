@@ -2853,7 +2853,11 @@ static int join_rdev_answer(struct cnxman_join *j, struct cnxman_rdev *r)
 		j->replies_unaddressed++;
 		return -1;
 	}
-	close_state = vms_cm_close_state_for(r->req, VMS_CM_BODY_LEN);
+	/* Only reached after the record went back (or on the unanswerable
+	 * path, where a kind-10 record gets nothing: 0 withholds). */
+	close_state = (r->state == (uint8_t)CNXMAN_RDEV_WRITING) ?
+		vms_cm_close_state_after_writeback(r->desc.kind) :
+		vms_cm_close_state_for(r->req, VMS_CM_BODY_LEN);
 	if (close_state == 0u)
 		return -1;
 	join_own_params(j, &own);
@@ -2942,6 +2946,22 @@ void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 	if (bytes_remaining != len)
 		return;
 
+	/* rd vms-db1: a kind-10 record is answered by the measured write-back
+	 * (vms_cm_k10_answer_in_place); a record of any other shape is not. */
+	if (r->desc.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10) {
+		if (vms_cm_k10_answer_in_place(r->rec, r->desc.len) !=
+		    VMS_CODEC_OK ||
+		    j->jops->blk_send(j->jops->ctx, r->conid, r->desc.conid,
+				      r->desc.name, r->local_name,
+				      r->desc.len) != 0) {
+			j->k10_refused++;
+			join_rdev_unanswerable(j, r);
+			return;
+		}
+		r->state = (uint8_t)CNXMAN_RDEV_WRITING;
+		return;
+	}
+
 	if (vms_cm_rdev_req_parse(r->rec, r->desc.len, &req) !=
 	    VMS_CODEC_OK) {
 		join_rdev_unanswerable(j, r);
@@ -2983,7 +3003,9 @@ void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name)
 		return;
 	if (join_rdev_answer(j, r) == 0) {
 		j->rdev_answered++;
-		if (r->desc.len == VMS_CM_RDEV_DISMOUNT_LEN)
+		if (r->desc.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10)
+			j->k10_answered++;
+		else if (r->desc.len == VMS_CM_RDEV_DISMOUNT_LEN)
 			j->rdev_nosuchdev++;
 		else
 			j->rdev_mount_normal++;
@@ -3025,9 +3047,11 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 		if (join_rdev_ops_ok(j) &&
 		    vms_cm_xfer_desc_parse(e->body, e->len, &d) ==
 			    VMS_CODEC_OK &&
-		    d.kind == (uint8_t)VMS_CM_CLOSE_KIND_VOLUME &&
-		    (d.len == VMS_CM_RDEV_DISMOUNT_LEN ||
-		     d.len == VMS_CM_RDEV_MOUNT_LEN) &&
+		    ((d.kind == (uint8_t)VMS_CM_CLOSE_KIND_VOLUME &&
+		      (d.len == VMS_CM_RDEV_DISMOUNT_LEN ||
+		       d.len == VMS_CM_RDEV_MOUNT_LEN)) ||
+		     (d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10 &&
+		      d.len == VMS_CM_K10_REC_LEN)) &&
 		    join_rdev_start(j, e, &d) == 0)
 			return CNXMAN_JOIN_RX_CONSUMED;
 	}

@@ -1735,12 +1735,86 @@ static void test_open_dlm_seq(void)
 		 "an op-0x08 open is not this carrier");
 }
 
+/*
+ * rd vms-db1: the kind-10 close record and its answer, against REAL pairs
+ * (a 3-node lab run, C2: VAX dfa5 -> b1db; a 2-node one, E5: 5077 -> 0104):
+ * the record a member pulled and the record it wrote back.
+ */
+static void test_k10_records_against_real_pairs(void)
+{
+	static const char *const pairs[2][2] = { {
+	    "0000000000000000880065640a00010001001a000000520000001a0000005200"
+	    "000051ba008700000000c09e9b8700000000001f000006000100000000000000"
+	    "0000ffffffffffffffff04000100000000000000000002004d10140000001000"
+	    "0000000000000200000000000000200000000000000000000000000000000000"
+	    "0000000000000000",
+	    "009bebff009bebff880065640a00010001001a000000520000001a0000005200"
+	    "000051ba008700000000c09e9b8700000000001f000006000100000000000000"
+	    "0000ffffffffffffffff04000100000000000100000002004d10140000001000"
+	    "0000000000000200000008000000200000000000000000000000000000000000"
+	    "0000000000000000" }, {
+	    "0000000000000000880065640a00010001001a000000520000001a0000005200"
+	    "000051ba00870000000080e29b8700000000001f000006000100000000000000"
+	    "0000ffffffffffffffff04000100000000000000000002004d10140000001000"
+	    "0000000000003800000000000000200000000000000000000000000000000000"
+	    "0000000000000000",
+	    "8038edff8038edff880065640a00010001001a000000520000001a0000005200"
+	    "000051ba00870000000080e29b8700000000001f000006000100000000000000"
+	    "0000ffffffffffffffff04000100000000000100000002004d10140000001000"
+	    "0000000000000200000008000000200000000000000000000000000000000000"
+	    "0000000000000000" } };
+	uint8_t rec[136], ans[136];
+	uint32_t i;
+
+	printf("-- rd vms-db1: kind-10 close records against real pairs\n");
+	for (i = 0; i < 2u; i++) {
+		hexload(pairs[i][0], rec, 136);
+		hexload(pairs[i][1], ans, 136);
+		ct_check(vms_cm_k10_answer_in_place(rec, 136) == VMS_CODEC_OK,
+			 "a real pulled kind-10 record is the measured shape");
+		ct_check(memcmp(rec + 8, ans + 8, 128) == 0,
+			 i == 0u ? "*** byte-exact with the real 3-node write-back "
+				   "past rec[0:8] ***"
+				 : "*** byte-exact with the real 2-node write-back "
+				   "past rec[0:8] ***");
+		ct_check(rec[0] == 0u && rec[7] == 0u,
+			 "  rec[0:8] stays as the requester sent it");
+	}
+	ct_check_eq_u32(vms_cm_close_state_after_writeback(10u), 5u,
+			"after the write-back a kind-10 close is answered 5");
+	ct_check_eq_u32(vms_cm_close_state_after_writeback(6u), 5u,
+			"  (kind 6 unchanged: 5)");
+	ct_check_eq_u32(vms_cm_close_state_after_writeback(5u), 0u,
+			"  any other kind: withheld");
+	{
+		uint8_t b[132];
+
+		memset(b, 0, sizeof(b));
+		b[8] = 0x06; b[26] = 10u;
+		ct_check_eq_u32(vms_cm_close_state_for(b, sizeof(b)), 0u,
+				"*** a kind-10 close is never answered without "
+				"the write-back ***");
+	}
+	hexload(pairs[0][0], rec, 136);
+	rec[18] = 0x15;
+	ct_check(vms_cm_k10_answer_in_place(rec, 136) == VMS_CODEC_E_CLASS &&
+		 rec[82] == 0u, "a record of another class: refused, untouched");
+	hexload(pairs[0][0], rec, 136);
+	rec[82] = 1u;
+	ct_check(vms_cm_k10_answer_in_place(rec, 136) == VMS_CODEC_E_CLASS,
+		 "a record already answered (rec[80:84] != 0): refused");
+	hexload(pairs[0][0], rec, 136);
+	ct_check(vms_cm_k10_answer_in_place(rec, 135) == VMS_CODEC_E_CLASS,
+		 "a length other than 136: refused");
+}
+
 int main(void)
 {
 	test_open_dlm_seq();
 	char err[VMS_FIXTURE_ERRLEN];
 
 	printf("test_codec_cm: connection-manager codec entries (FC-P3.1)\n");
+	test_k10_records_against_real_pairs();
 	g_n = vms_fixture_load_all(OVMX_FIXTURE_DIR, OVMX_CLEANROOM_MANIFEST,
 				   g_fx, VMS_FIXTURE_MAX_FILES,
 				   err, sizeof(err));

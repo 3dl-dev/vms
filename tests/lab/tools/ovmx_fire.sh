@@ -1,5 +1,5 @@
 #!/bin/bash
-# ovmx_fire.sh <pod> <artifacts-dir> <tag> <build-dir> <frame-type>... -- boot ONE
+# [OVMX_FIRE_EXPVOTES=n] ovmx_fire.sh <pod> <artifacts-dir> <tag> <build-dir> <frame-type>... -- boot ONE
 # OVMX node onto a lab pod's bridge, GATED (rd vms-ci.6).
 #
 # Refuses to start unless:
@@ -35,4 +35,6 @@ BASE=$(basename "$ART")
 kubectl -n ovmx-lab cp "$ART" "$POD:/lab/$BASE" || exit 1
 kubectl -n ovmx-lab cp "$HERE/ovmx_fire_node.sh" "$POD:/lab/run-evac/ovmx_fire_node.sh" || exit 1
 kubectl -n ovmx-lab cp "$HERE/ovmx_evnode.sh" "$POD:/lab/run-evac/ovmx_evnode.sh" || exit 1
-exec kubectl -n ovmx-lab exec "$POD" -- bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG"
+# OVMX_FIRE_EXPVOTES: OVMXE's EXPECTED_VOTES (default 3). 1 lets OVMXE found a
+# cluster alone before any VAX boots (the OVMX-first order, rd vms-d52c).
+exec kubectl -n ovmx-lab exec "$POD" -- bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG" "${OVMX_FIRE_EXPVOTES:-3}"

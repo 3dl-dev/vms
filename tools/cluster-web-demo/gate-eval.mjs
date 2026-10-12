@@ -365,6 +365,17 @@ export const isQuiet = (R) => !Object.keys(R.substrate_noise || {}).length;
 export const USERNAME = /Username:/;
 export const AUTH_FAIL = /User authorization failure/i;
 
+// The OVMX login the site publishes to visitors -- the ONE source the gate
+// reads it from, so there is nothing to supply by hand and nothing to drift.
+// The homepage's figcaption reads: "Log in with username <b>SYSTEM</b>,
+// password <b>MANAGER</b>". Returns {user, pass} or null when the page does
+// not say (then the gate refuses to run rather than guess).
+export function parseLoginHint(html) {
+  const m = /Log in with username\s*<b>\s*([A-Za-z0-9$_]+)\s*<\/b>\s*,?\s*password\s*<b>\s*([^<\s]+)\s*<\/b>/i
+    .exec(String(html || ''));
+  return m ? { user: m[1], pass: m[2] } : null;
+}
+
 // The node's last printed line is a bare DCL prompt.
 export const atDcl = (text) => lastLineOf(text).trim() === '$';
 

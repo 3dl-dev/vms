@@ -33,7 +33,8 @@
 //     nobody touching a console. (A grader that logs in also keeps the main
 //     threads hot, which is another thing a visitor does not do.) After CN=3 it
 //     does what a visitor does next: strikes RETURN at a console that has not
-//     offered Username:, and logs in where it has (DEMO_USER, DEMO_PASS).
+//     offered Username:, and logs in where it has (the published OVMX login;
+//     the real VAX's from DEMO_PASS_VAXC).
 //
 // PASS BAR: every run in the matrix reaches CN=3 -- both OVMX nodes' own CNXMAN
 // naming all three systems AND the real VAX admitting both in its own words --
@@ -52,8 +53,10 @@
 //                                              # (diagnosing rd vms-0bc only:
 //                                              #  it starves node A)
 //   DEMO_URL=... OUT_DIR=... node visitor-gate.mjs
-//   DEMO_PASS=... [DEMO_USER=SYSTEM] [DEMO_PASS_VAXC=...] [LOGIN_BOUND_S=...]
-//                                              # required: the login every node gets
+//   DEMO_PASS_VAXC=... [DEMO_USER_VAXC=SYSTEM] [DEMO_LOGIN_HINT_URL=...] [LOGIN_BOUND_S=...]
+//                                              # the OVMX login is read from the site's
+//                                              # published hint; the real VAX's comes
+//                                              # from the env (secret OVMX_DEMO_VAXC_PASSWORD)
 //
 // Needs: playwright, and a host that can carry three emulators (the browser
 // runs qemu-wasm + two pcjs VAXen). Use k3s-worker, not a small dev host.
@@ -61,7 +64,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
          silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
-         observeLogin, loginAction, allAtDcl, USERNAME, AFTER_WAIT_MS } from './gate-eval.mjs';
+         observeLogin, loginAction, allAtDcl, USERNAME, AFTER_WAIT_MS, parseLoginHint } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -69,11 +72,16 @@ const RUN_MS = +(process.env.RUN_MS || 2400000);
 // rd vms-db1: every node, the real VAX included, must reach Username: and a
 // logged-in DCL `$` within this many seconds of the first click.
 const LOGIN_BOUND_S = +(process.env.LOGIN_BOUND_S || RUN_MS / 1000);
-// The demo's login. The account is the one a visitor is told to use; the
-// password is an operator fact and comes from the environment, never this file.
-// DEMO_PASS_<NODE> overrides it for one node (the real VAX's SYSUAF is its own).
-const DEMO_USER = process.env.DEMO_USER || 'SYSTEM';
-const passFor = (w) => process.env[`DEMO_PASS_${w}`] || process.env.DEMO_PASS || '';
+// The logins. The OVMX nodes' login is the one the site PUBLISHES to visitors
+// (the homepage's "Log in with username ... password ..." hint), read from the
+// page at start-up -- one source, nothing to supply by hand. The real VAX's
+// SYSUAF is its own and its password is not published: it comes ONLY from the
+// environment, DEMO_PASS_VAXC (in CI, the repository Actions secret
+// OVMX_DEMO_VAXC_PASSWORD), never from this repo.
+const HINT_URL = process.env.DEMO_LOGIN_HINT_URL || new URL('/', URL_).href;
+const CREDS = {};
+const userFor = (w) => (CREDS[w] || {}).user;
+const passFor = (w) => (CREDS[w] || {}).pass || '';
 // A console that has not offered Username: gets a RETURN at most this often.
 const WAKE_EVERY_S = +(process.env.WAKE_EVERY_S || 20);
 const ONLY = process.env.RUNS ? +process.env.RUNS : 0;
@@ -189,8 +197,8 @@ async function driveLogins(page, R, el, lastWake) {
       await typeTo(page, w, '\r');
     } else if (act === 'login') {
       R.login_sent[w] = (R.transcript[w] || '').length;
-      log(`  ${w}: offered Username: -- logging in as ${DEMO_USER}`);
-      await typeTo(page, w, DEMO_USER + '\r');
+      log(`  ${w}: offered Username: -- logging in as ${userFor(w)}`);
+      await typeTo(page, w, userFor(w) + '\r');
       await sleep(2500);
       await typeTo(page, w, passFor(w) + '\r');
     }
@@ -361,10 +369,20 @@ async function oneRun(spec, idx) {
 }
 
 await (async () => {
-  if (!passFor('OVMXA') || !passFor('OVMXB') || !passFor('VAXC')) {
-    console.error('DEMO_PASS (or DEMO_PASS_<NODE>) is not set: the pass bar logs in on every node (rd vms-db1)');
+  // The pass bar logs in on every node (rd vms-db1): no credentials, no run.
+  let hint = null;
+  try { hint = parseLoginHint(await (await fetch(HINT_URL)).text()); } catch (e) { /* reported below */ }
+  if (!hint) {
+    console.error(`no published login hint at ${HINT_URL} ("Log in with username <b>U</b>, password <b>P</b>")`);
     process.exit(2);
   }
+  CREDS.OVMXA = hint; CREDS.OVMXB = hint;
+  if (!process.env.DEMO_PASS_VAXC) {
+    console.error('DEMO_PASS_VAXC is not set (the real VAX\'s password; Actions secret OVMX_DEMO_VAXC_PASSWORD)');
+    process.exit(2);
+  }
+  CREDS.VAXC = { user: process.env.DEMO_USER_VAXC || 'SYSTEM', pass: process.env.DEMO_PASS_VAXC };
+  log(`logins: OVMX nodes as ${hint.user} (published at ${HINT_URL}), VAXC as ${CREDS.VAXC.user} (DEMO_PASS_VAXC)`);
   fs.mkdirSync(OUT, { recursive: true });
   const rows = CASE.length ? MATRIX.filter((m) => CASE.includes(m.label))
                            : (ONLY ? MATRIX.slice(0, ONLY) : MATRIX);

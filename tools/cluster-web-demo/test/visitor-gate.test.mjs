@@ -546,3 +546,11 @@ test('the matrix boots Node C after an OVMX node is up (rd vms-db1)', () => {
       `${r.label}: the node C waits for is clicked before C`);
   }
 });
+
+test('the OVMX login is read from the hint the site publishes, or not at all', () => {
+  const html = '<figcaption class="logintip">Log in with username <b>SYSTEM</b>, password <b>MANAGER</b>\n' +
+               '<span class="alt">(or <b>GUEST</b> / <b>GUEST</b>)</span></figcaption>';
+  assert.deepEqual(GATE.parseLoginHint(html), { user: 'SYSTEM', pass: 'MANAGER' });
+  assert.equal(GATE.parseLoginHint('<p>no hint here</p>'), null, 'no hint: the gate refuses, never guesses');
+  assert.equal(GATE.parseLoginHint(''), null);
+});

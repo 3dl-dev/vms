@@ -81,11 +81,13 @@ Run it against the bundle (or the live page) **before and after every redeploy**
 way a visitor does and nothing else: no query parameters, a fresh profile and cold cache per run, and it
 **types nothing until the cluster has formed** — membership must form with nobody touching a console.
 After CN=3 it does what a visitor does next: strikes RETURN at a console that has not offered `Username:`,
-and logs in where it has (`DEMO_USER`, default `SYSTEM`, and `DEMO_PASS` or `DEMO_PASS_<NODE>` from the
-environment; the gate refuses to start without them).
+and logs in where it has. The OVMX nodes' login is the one the site publishes to visitors (the homepage's
+"Log in with username … password …" hint, read at start-up from `DEMO_LOGIN_HINT_URL`, default the demo
+origin's `/`). The real VAX's password is not published: it comes only from `DEMO_PASS_VAXC` (in CI, the
+repository Actions secret `OVMX_DEMO_VAXC_PASSWORD`). The gate refuses to start without either.
 
 ```
-DEMO_PASS=... DEMO_URL=http://localhost:8110/index.html OUT_DIR=/out/gate node visitor-gate.mjs
+DEMO_PASS_VAXC=... DEMO_LOGIN_HINT_URL=https://openvmx.3dl.dev/ DEMO_URL=http://localhost:8110/index.html OUT_DIR=/out/gate node visitor-gate.mjs
 CASE=c-first-legacy node visitor-gate.mjs        # re-run one row of the matrix
 FREEZE_MS=45000     node visitor-gate.mjs        # suspend the tab mid-formation (rd vms-8c54)
 REVEAL=1            node visitor-gate.mjs        # scroll each panel in before reading it

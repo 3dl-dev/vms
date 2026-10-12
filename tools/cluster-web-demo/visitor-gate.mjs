@@ -29,13 +29,20 @@
 //     frame in this demo crosses FOUR main threads (node worker -> node iframe ->
 //     PARENT page's L2 hub -> node iframe -> worker), so main-thread starvation
 //     is latency on every frame, and an SCS virtual circuit dies on latency.
-//   * it TYPES NOTHING. Membership must form with nobody touching a console.
-//     (A grader that logs in also keeps the main threads hot, which is another
-//     thing a visitor does not do.)
+//   * it TYPES NOTHING UNTIL THE CLUSTER HAS FORMED. Membership must form with
+//     nobody touching a console. (A grader that logs in also keeps the main
+//     threads hot, which is another thing a visitor does not do.) After CN=3 it
+//     does what a visitor does next: strikes RETURN at a console that has not
+//     offered Username:, and logs in where it has (DEMO_USER, DEMO_PASS).
 //
 // PASS BAR: every run in the matrix reaches CN=3 -- both OVMX nodes' own CNXMAN
 // naming all three systems AND the real VAX admitting both in its own words --
-// with no bugcheck and no lost connection.
+// with no bugcheck, a quiet OVMX/VAX console, AND every node, the real VAX
+// included, offering Username: and then a logged-in DCL `$` within
+// LOGIN_BOUND_S of the first click (rd vms-db1: a real VAX can be a member and
+// still hang in its startup, a dead console to a visitor). The matrix includes
+// runs that boot Node C only after an OVMX node is up, since visitors choose
+// the order and that is the order that hung.
 //
 // Usage:
 //   node visitor-gate.mjs                      # the full matrix
@@ -45,17 +52,30 @@
 //                                              # (diagnosing rd vms-0bc only:
 //                                              #  it starves node A)
 //   DEMO_URL=... OUT_DIR=... node visitor-gate.mjs
+//   DEMO_PASS=... [DEMO_USER=SYSTEM] [DEMO_PASS_VAXC=...] [LOGIN_BOUND_S=...]
+//                                              # required: the login every node gets
 //
 // Needs: playwright, and a host that can carry three emulators (the browser
 // runs qemu-wasm + two pcjs VAXen). Use k3s-worker, not a small dev host.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
-         silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy } from './gate-eval.mjs';
+         silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
+         observeLogin, loginAction, allAtDcl, USERNAME, AFTER_WAIT_MS } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
-const RUN_MS = +(process.env.RUN_MS || 1200000);
+const RUN_MS = +(process.env.RUN_MS || 2400000);
+// rd vms-db1: every node, the real VAX included, must reach Username: and a
+// logged-in DCL `$` within this many seconds of the first click.
+const LOGIN_BOUND_S = +(process.env.LOGIN_BOUND_S || RUN_MS / 1000);
+// The demo's login. The account is the one a visitor is told to use; the
+// password is an operator fact and comes from the environment, never this file.
+// DEMO_PASS_<NODE> overrides it for one node (the real VAX's SYSUAF is its own).
+const DEMO_USER = process.env.DEMO_USER || 'SYSTEM';
+const passFor = (w) => process.env[`DEMO_PASS_${w}`] || process.env.DEMO_PASS || '';
+// A console that has not offered Username: gets a RETURN at most this often.
+const WAKE_EVERY_S = +(process.env.WAKE_EVERY_S || 20);
 const ONLY = process.env.RUNS ? +process.env.RUNS : 0;
 // CASE=<label>[,<label>] re-runs named rows of the matrix (to re-examine one
 // failure without paying for the other five).
@@ -141,6 +161,42 @@ async function rawConsoleOf(page, who) {
   return f ? f.evaluate(() => { const e = document.getElementById('screen'); return e ? e.textContent : ''; }).catch(() => '') : '';
 }
 
+// Type into a node's console as a visitor would: Node A through its own
+// node.html worker input (what its terminal's onData does), a pcjs node by
+// focusing its screen and using the keyboard.
+async function typeTo(page, who, text) {
+  if (who === 'OVMXA') {
+    const f = nodeA(page);
+    if (!f) return false;
+    return f.evaluate((t) => { try { window.__nodeWorker.postMessage({ t: 'in', d: t }); return true; }
+                               catch (e) { return false; } }, text).catch(() => false);
+  }
+  const f = pcjs(page, who === 'OVMXB' ? '0B' : '0C');
+  if (!f) return false;
+  await f.locator('#screen').click().catch(() => {});
+  const body = text.replace(/\r$/, '');
+  if (body) await page.keyboard.type(body, { delay: 40 }).catch(() => {});
+  if (text.endsWith('\r')) await page.keyboard.press('Enter').catch(() => {});
+  return true;
+}
+
+// One login step per node per poll (rd vms-db1). Nothing before CN=3.
+async function driveLogins(page, R, el, lastWake) {
+  for (const w of NODES) {
+    const act = loginAction(R, w);
+    if (act === 'wake' && el - (lastWake[w] ?? -1e9) >= WAKE_EVERY_S) {
+      lastWake[w] = el;
+      await typeTo(page, w, '\r');
+    } else if (act === 'login') {
+      R.login_sent[w] = (R.transcript[w] || '').length;
+      log(`  ${w}: offered Username: -- logging in as ${DEMO_USER}`);
+      await typeTo(page, w, DEMO_USER + '\r');
+      await sleep(2500);
+      await typeTo(page, w, passFor(w) + '\r');
+    }
+  }
+}
+
 // Bring a panel into the viewport. A pcjs panel below the fold STOPS
 // REPAINTING -- Chromium throttles rendering in an offscreen cross-origin
 // iframe and the terminal writes its DOM text on the render tick -- so its
@@ -190,7 +246,9 @@ async function oneRun(spec, idx) {
   const dir = `${OUT}/${String(idx).padStart(2, '0')}-${spec.label}`;
   fs.mkdirSync(dir, { recursive: true });
   const R = { ...spec, order: spec.order.join(','), url: URL_, samples: [],
-              verdict: null, lastSeen: {}, ...newObservations() };
+              verdict: null, lastSeen: {}, ...newObservations(), login_bound_s: LOGIN_BOUND_S,
+              after_waited: {} };
+  const lastWake = {};
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   const ctx = await browser.newContext();                 // fresh profile, cold cache
   const page = await ctx.newPage();
@@ -207,7 +265,24 @@ async function oneRun(spec, idx) {
 
     const btn = { A: '#bootbtn-a', B: '#bootbtn-b', C: '#bootbtn-c' };
     const t0 = Date.now();
-    for (const n of spec.order) { await page.click(btn[n]); await sleep(spec.gap); }
+    for (const n of spec.order) {
+      // `after`: hold this click until the named node has offered Username:
+      // (rd vms-db1 -- Node C booting after an OVMX node is up). Observed from
+      // that node's own console; nothing is typed.
+      const dep = (spec.after || {})[n];
+      if (dep) {
+        const w0 = Date.now();
+        while (Date.now() - w0 < AFTER_WAIT_MS) {
+          observe(R, dep, await consoleOf(page, dep, R));
+          if (USERNAME.test(R.transcript[dep] || '')) break;
+          await sleep(10000);
+        }
+        R.after_waited[n] = { node: dep, s: Math.round((Date.now() - w0) / 1000),
+                              ready: USERNAME.test(R.transcript[dep] || '') };
+        log(`  clicking ${n} after ${dep}: ${JSON.stringify(R.after_waited[n])}`);
+      }
+      await page.click(btn[n]); await sleep(spec.gap);
+    }
 
     if (FREEZE_MS > 0) {
       setTimeout(async () => {
@@ -237,6 +312,7 @@ async function oneRun(spec, idx) {
         // twenty minutes of cluster messages. Keep everything ever seen, and
         // judge from that.
         observe(R, w, await consoleOf(page, w, R));
+        observeLogin(R, w, el);
         try { fs.writeFileSync(`${dir}/${w}.console.log`, R.transcript[w] || ''); } catch (e) {}
       }
       await samplePanelHealth(page, R);
@@ -246,7 +322,7 @@ async function oneRun(spec, idx) {
         drift: window.__probe ? window.__probe.worstDriftMs : null,
       })).catch(() => ({}));
       R.worstDriftMs = health.drift; R.vis = health.vis; R.sca = hub;
-      const ok = isCN3(R);
+      if (isCN3(R)) R.cn3 = true;
       R.samples.push({ t: el, sca: hub, member: { ...R.member }, added: { ...R.added },
                        vaxc_admitted: [...R.vaxc_admitted], lost: { ...R.lost },
                        restarts: { ...R.restarts },
@@ -257,15 +333,20 @@ async function oneRun(spec, idx) {
       const aState = hub.OVMXA ? '' : ` nodeA=${JSON.stringify(R.nodeA_worker)}`;
       log(`  t=${el}s vis=${health.vis} drift=${health.drift}ms sca=${JSON.stringify(hub)} ` +
           `added=${JSON.stringify(R.added)} vaxcAdm=${JSON.stringify(R.vaxc_admitted)} ` +
-          `lost=${JSON.stringify(R.lost)} stalls=${JSON.stringify(R.repaint_stalls)}${aState}`);
+          `lost=${JSON.stringify(R.lost)} stalls=${JSON.stringify(R.repaint_stalls)}${aState}` +
+          (R.cn3 ? ` username=${JSON.stringify(R.username_at)} dcl=${JSON.stringify(R.dcl_at)}` : ''));
       fs.writeFileSync(`${dir}/result.json`, asJson(R));
-      if (ok) { R.cn3 = true; break; }
+      if (R.cn3 && allAtDcl(R)) break;
       if (Object.keys(R.bugchecks).length) break;
+      if (Object.keys(R.login_failed).length) break;
+      await driveLogins(page, R, el, lastWake);
       await sleep(15000);
     }
 
+    const elEnd = Math.round((Date.now() - t0) / 1000);
     for (const w of NODES) {
       observe(R, w, await consoleOf(page, w, R));
+      observeLogin(R, w, elEnd);
       fs.writeFileSync(`${dir}/${w}.console.log`, R.transcript[w] || '');
     }
     await samplePanelHealth(page, R);
@@ -280,6 +361,10 @@ async function oneRun(spec, idx) {
 }
 
 await (async () => {
+  if (!passFor('OVMXA') || !passFor('OVMXB') || !passFor('VAXC')) {
+    console.error('DEMO_PASS (or DEMO_PASS_<NODE>) is not set: the pass bar logs in on every node (rd vms-db1)');
+    process.exit(2);
+  }
   fs.mkdirSync(OUT, { recursive: true });
   const rows = CASE.length ? MATRIX.filter((m) => CASE.includes(m.label))
                            : (ONLY ? MATRIX.slice(0, ONLY) : MATRIX);
@@ -299,7 +384,9 @@ await (async () => {
                    worstDriftMs: r.worstDriftMs, froze: r.froze || false,
                    panel_started: r.panel_started, panel_watchdog_fired: r.panel_watchdog_fired,
                    silent_never_starts: silentNeverStarts(r, ['OVMXB', 'VAXC']),
-                   nodeA_worker: r.nodeA_worker, nodeA_why: nodeAStallWhy(r) });
+                   nodeA_worker: r.nodeA_worker, nodeA_why: nodeAStallWhy(r),
+                   username_at: r.username_at, dcl_at: r.dcl_at, login_failed: r.login_failed,
+                   after_waited: r.after_waited });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }
   const bad = results.filter((r) => !r.pass);

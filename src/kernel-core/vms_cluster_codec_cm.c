@@ -1710,3 +1710,9 @@ uint16_t vms_cm_close_state_after_writeback(uint8_t kind)
 	default:                       return 0u;
 	}
 }
+
+uint16_t vms_cm_close_state_after_pull(uint8_t kind)
+{
+	return kind == (uint8_t)VMS_CM_CLOSE_KIND_K5 ?
+		(uint16_t)VMS_CM_CLOSE_STATE_K5_PULLED : 0u;
+}

@@ -351,6 +351,21 @@ vms_codec_status_t vms_cm_k10_answer_in_place(uint8_t *rec, uint32_t len);
 uint16_t vms_cm_close_state_after_writeback(uint8_t kind);
 
 /*
+ * THE KIND-5 CLOSE (rd vms-db1), the commonest: its record (136 + 64n bytes,
+ * 1480 the largest measured) is PULLED and never written back, then answered
+ * 4 -- 3,069 of 3,313 real answers. 3, with no pull, came only from a node
+ * still to send its own (172/172, all 136-byte records), the kind-10 rule;
+ * OVMX never sends one. Withheld, it is the second close that kept a real
+ * VAX's startup waiting on an OVMX member (labd52c, db1-r1).
+ */
+#define VMS_CM_CLOSE_KIND_K5          5u
+#define VMS_CM_CLOSE_STATE_K5_PULLED  4u
+
+/* The close state a member sends once it has pulled (and not written back) a
+ * record of this kind: 4 for kind 5, 0 (withhold) for anything else. */
+uint16_t vms_cm_close_state_after_pull(uint8_t kind);
+
+/*
  * The bitmap NEIGHBOURHOOD, body[52:60] -- the span whose emptiness is the
  * ONLY published evidence about how wide the membership bitmap really is.
  *

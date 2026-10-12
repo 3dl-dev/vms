@@ -2736,7 +2736,8 @@ static void cnxman_sync_peer_incarnation(struct vms_cnxman *cn)
 			 * admission (lab labd52c). Not held: "not told". */
 			uint32_t lo, hi;
 
-			if (pe_incarnation(cn->cl->pe, &lo, &hi) == 0)
+			if (pe_incarnation(cn->cl->pe, &lo, &hi) ==
+			    (int)SS__NORMAL)
 				cnxman_csb_set_incarnation(club, csb,
 					((uint64_t)hi << 32) | (uint64_t)lo, 1);
 			continue;

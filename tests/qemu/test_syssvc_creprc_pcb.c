@@ -12,7 +12,8 @@
  * caller's child, refuses a second PCB for the same task, and refuses a
  * detached identity its caller may not give.
  *
- * negctl: creprc-pcb-not-a-child, creprc-pcb-identity-unchecked
+ * negctl: creprc-pcb-not-a-child, creprc-pcb-identity-unchecked,
+ *         creprc-pcb-continue-not-shared
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,6 +186,26 @@ int main(void)
         /* negctl: creprc-pcb-identity-unchecked */
         CHECK(res == SS$_NOPRIV,
               "a detached identity with a privilege its creator is not authorized for is refused (SS$_NOPRIV)");
+    }
+
+    /* 4. CONTINUE (rd vms-e50): DCL's image task is DCL's own VMS process.
+     *    The creator names itself, holds a child, and makes it a CONTINUE:
+     *    the same VMS PID, identity and process name, before the child runs. */
+    {
+        int go_w, rep_r;
+        pid_t c = held_child(&go_w, &rep_r);
+        uint32_t vpid = 0, child_view = 0;
+        uint32_t st = vms_kif_creprc_pcb((uint32_t)c, VMS_CREPRC_PCB_CONTINUE,
+                                         NULL, 0, 0, &vpid);
+        /* negctl: creprc-pcb-continue-not-shared */
+        CHECK(st == SS$_NORMAL && vpid == me.vms_pid,
+              "CONTINUE makes the held task the creator's own VMS process (the creator's VMS PID)");
+        CHECK(vms_kif_creprc_pcb((uint32_t)c, VMS_CREPRC_PCB_CONTINUE, NULL, 0, 0, NULL) ==
+                  SS$_BADPARAM,
+              "the task's row exists before it runs (a second CONTINUE is refused)");
+        release_and_reap(c, go_w, rep_r, &child_view);
+        CHECK(child_view == me.vms_pid,
+              "the task, reaching the executive, runs as the creator's VMS process");
     }
 
     printf("=== test_syssvc_creprc_pcb: %d passed, %d failed ===\n", pass, fail);

@@ -1580,7 +1580,7 @@ long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
-uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
+uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
                              const char *uname, uint32_t uic, uint64_t privs,
                              uint32_t *vms_pid_out);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */
@@ -1762,6 +1762,7 @@ int  vms_proc_capture_channels_for_task(struct task_struct *parent_task,
 int  vms_bg_forkinherit_init(void);              /* register the fork/exit hooks */
 void vms_bg_forkinherit_exit(void);              /* unregister + drain pending records */
 int  vms_bg_forkinherit_consume(struct vms_proc *child);  /* adopt this task's fork record, if any */
+int  vms_bg_forkinherit_consume_for(struct vms_proc *child, pid_t tgid, struct pid *pidref);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

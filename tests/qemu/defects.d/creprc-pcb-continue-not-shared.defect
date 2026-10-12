@@ -1,0 +1,30 @@
+# creprc-pcb-continue-not-shared -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "creator-driven creation of DCL's image task (VMS_CREPRC_PCB_CONTINUE, vms_proc_create_for in the Linux module rind, rd vms-e50) -- the task is DCL's own VMS process";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_creprc_pcb";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_create_for mints a fresh VMS PID for a CONTINUE instead of the creator's: an image DCL activates becomes a second VMS process, so \$GETJPI, \$STATUS and the process's logical names no longer follow it as they follow an image running in the CLI's process on VMS. Gone after apply.";;
+        require_fail) cat <<'EOF'
+CONTINUE makes the held task the creator's own VMS process (the creator's VMS PID)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the task, reaching the executive, runs as the creator's VMS process
+EOF
+                      ;;
+        knock_on_why)  echo "the same fresh PID seen from the task itself once released.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    proc->vms_pid = cont ? creator->vms_pid : assign_vms_pid();$|    proc->vms_pid = assign_vms_pid(); (void)cont; /* NEGCTL creprc-pcb-continue-not-shared */|' "$_file"
+    :
+}

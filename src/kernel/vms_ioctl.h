@@ -3126,6 +3126,7 @@ struct vms_creprc_ticket_args {
  */
 #define VMS_CREPRC_PCB_SUBPROCESS 0u
 #define VMS_CREPRC_PCB_DETACHED   1u
+#define VMS_CREPRC_PCB_CONTINUE   2u   /* DCL's image task: the SAME VMS process (rd vms-e50) */
 struct vms_creprc_pcb_args {
     char     username[VMS_USERNAME_SIZE]; /* in: DETACHED user name            */
     uint32_t child_pid;                   /* in: the held task (substrate pid) */

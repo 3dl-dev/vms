@@ -2054,6 +2054,43 @@ static void dcl_exec_handshake_open(int fds[2])
     }
 }
 
+/* The image task's PCB, from DCL (rd vms-e50): see dcl_cmd.h. */
+int dcl_pcb_hold_open(int fds[2])
+{
+    if (pipe(fds) != 0) {
+        fds[0] = fds[1] = -1;
+        return -1;
+    }
+    (void)fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    return 0;
+}
+
+/* Child: wait until DCL has made this task its VMS process (or has given up:
+ * end-of-file). Nothing here touches the executive. */
+void dcl_pcb_hold_wait(int fds[2])
+{
+    char b;
+    ssize_t n;
+    close(fds[1]);
+    do { n = read(fds[0], &b, 1); } while (n < 0 && errno == EINTR);
+    close(fds[0]);
+}
+
+/* Parent: make the held task DCL's own VMS process, then release it. */
+uint32_t dcl_pcb_hold_release(int fds[2], int child_pid)
+{
+    uint32_t st = SS$_ABORT;
+    ssize_t n;
+    close(fds[0]);
+    if (child_pid > 0)
+        st = vms_kif_creprc_pcb((uint32_t)child_pid, VMS_CREPRC_PCB_CONTINUE,
+                                NULL, 0, 0, NULL);
+    do { n = write(fds[1], "g", 1); } while (n < 0 && errno == EINTR);
+    close(fds[1]);
+    return st;
+}
+
 /* Child side, after a failed execv: record the errno and leave. Never returns. */
 static void dcl_exec_handshake_fail(int wfd, int err)
 {
@@ -2212,7 +2249,18 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
     int exec_pipe[2] = { -1, -1 };
     dcl_exec_handshake_open(exec_pipe);
 
+    int pcb_hold[2];
+    if (dcl_pcb_hold_open(pcb_hold) != 0) {
+        if (exec_pipe[0] >= 0) { close(exec_pipe[0]); close(exec_pipe[1]); }
+        if (cli_sv[0] >= 0) close(cli_sv[0]);
+        if (cli_sv[1] >= 0) close(cli_sv[1]);
+        dcl_error("DCL", 4, "CREPRC", "cannot activate %s", display_name);
+        return SS$_INSFMEM;
+    }
+
     pid_t pid = fork();
+    if (pid != 0)
+        (void)dcl_pcb_hold_release(pcb_hold, (int)pid);
     if (pid == 0) {
         /* Child */
         if (cli_sv[1] >= 0) {
@@ -2224,22 +2272,18 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             }
         }
         /*
-         * IMAGE ACTIVATION CONTINUES THIS PROCESS'S IDENTITY (vms-4d7,
-         * Option B). On OpenVMS, RUN / a foreign command / a DCL utility
-         * activates the image IN the current process -- same PID, same
-         * UIC, same privileges. OVMX fork()s+execve()s instead, so without
-         * this the image would auto-register a fresh PCB and derive its own
-         * privilege mask (that is why SYSTEM could not RUN AUTHORIZE: the
-         * child never held SYSPRV). We are still DCL here -- the fork has
-         * not yet been replaced -- so our real_parent is DCL and the
-         * executive can share DCL's VMS PID, UIC, user name and privileges
-         * onto this task. The PCB is keyed on the thread group and survives
-         * the execve below, so the activated image inherits it.
+         * IMAGE ACTIVATION CONTINUES THIS PROCESS (vms-4d7; rd vms-e50). On
+         * OpenVMS, RUN / a foreign command / a DCL utility activates the image
+         * IN the current process -- same PID, same UIC, same privileges. OVMX
+         * fork()s+execve()s instead, so DCL makes this task its own VMS process
+         * (VMS_CREPRC_PCB_CONTINUE) while it waits here, before the execve;
+         * the PCB is keyed on the thread group and survives the execve, so the
+         * activated image runs as DCL's VMS process without doing anything.
          *
          * This is ONLY for image activation. SPAWN / RUN/DETACHED / $CREPRC
-         * create genuinely new VMS processes and do not call this.
+         * create genuinely new VMS processes ($CREPRC makes their PCBs).
          */
-        (void)vms_kif_register_continue();
+        dcl_pcb_hold_wait(pcb_hold);
         if (exec_pipe[0] >= 0)
             close(exec_pipe[0]);
         execv(linux_path, argv);

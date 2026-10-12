@@ -81,34 +81,34 @@ dryrun_cmdline() { dryrun "$RUN_QEMU" "$1" | awk '/^-append$/ { getline; print; 
 check_tcg_arm_has_flag() {
     local cmdline; cmdline="$(dryrun_cmdline tcg)"
     echo "    tcg cmdline: $cmdline"
-    printf '%s' "$cmdline" | grep -qw 'no_timer_check'
+    printf '%s' "$cmdline" | grep >/dev/null -w 'no_timer_check'
     record "x86_64 TCG arm passes no_timer_check" $?
-    printf '%s' "$(dryrun_argv tcg)" | grep -q -- '-accel tcg'
+    printf '%s' "$(dryrun_argv tcg)" | grep >/dev/null -- '-accel tcg'
     record "x86_64 TCG arm really selects TCG" $?
 }
 
 check_kvm_arm_omits_flag() {
     local cmdline; cmdline="$(dryrun_cmdline kvm)"
     echo "    kvm cmdline: $cmdline"
-    if printf '%s' "$cmdline" | grep -qw 'no_timer_check'; then
+    if printf '%s' "$cmdline" | grep >/dev/null -w 'no_timer_check'; then
         record "x86_64 KVM arm leaves the flag to the kernel (kvm.c sets it)" 1
     else
         record "x86_64 KVM arm leaves the flag to the kernel (kvm.c sets it)" 0
     fi
-    printf '%s' "$(dryrun_argv kvm)" | grep -q -- '-accel kvm'
+    printf '%s' "$(dryrun_argv kvm)" | grep >/dev/null -- '-accel kvm'
     record "x86_64 KVM arm really selects KVM" $?
 }
 
 check_console_untouched() {
     # The flag is an ADDITION: the console + loglevel contract (vms-300) stands.
-    printf '%s' "$(dryrun_cmdline tcg)" | grep -q 'console=ttyS0 loglevel=3'
+    printf '%s' "$(dryrun_cmdline tcg)" | grep >/dev/null 'console=ttyS0 loglevel=3'
     record "console=ttyS0 loglevel=3 contract intact on the TCG arm" $?
 }
 
 check_unknown_accel_refused() {
     local out rc
     out="$(dryrun "$RUN_QEMU" nitrous)"; rc=$?
-    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'unknown OVMX_QEMU_ACCEL'; then
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep >/dev/null 'unknown OVMX_QEMU_ACCEL'; then
         record "an unknown OVMX_QEMU_ACCEL is refused loudly" 0
     else
         record "an unknown OVMX_QEMU_ACCEL is refused loudly (got rc=$rc)" 1
@@ -123,7 +123,7 @@ check_gate_has_teeth() {
     sed 's/ no_timer_check"/"/' "$RUN_QEMU" >"$stripped"
     local cmdline
     cmdline="$(dryrun "$stripped" tcg | awk '/^-append$/ { getline; print; exit }')"
-    if printf '%s' "$cmdline" | grep -qw 'no_timer_check'; then
+    if printf '%s' "$cmdline" | grep >/dev/null -w 'no_timer_check'; then
         record "teeth: a launcher without the flag is detected" 1
     else
         record "teeth: a launcher without the flag is detected" 0

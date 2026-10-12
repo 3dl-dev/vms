@@ -125,7 +125,7 @@ boot_and_assert() {
   # In-guest assertion: print the real uname (for the transcript), then demand
   # an EXACT-line match of $want. `grep -qx` sets anita's exit status, because
   # anita's `boot --run` exits with the guest command's $?.
-  local runcmd="uname -srm; uname -srm | grep -qx '${want}'"
+  local runcmd="uname -srm; uname -srm | grep >/dev/null -x '${want}'"
 
   log "booting cached disk; asserting uname == '${want}' (hard cap ${BOOT_TIMEOUT}s)"
   local rc=0

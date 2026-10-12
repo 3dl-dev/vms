@@ -170,7 +170,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern  limit-seconds  since-byte
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -250,7 +250,7 @@ if [ "$MODE" = "install" ]; then
     else
         dump_and_die "install menu never appeared within ${BOOT_TIMEOUT}s"
     fi
-    if printf '%s\n' "$(segment_since 0)" | grep -qF 'Username:'; then
+    if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F 'Username:'; then
         bad "a login prompt preceded the install menu (should be menu-first)"
     else
         ok "no login prompt precedes the install menu"
@@ -284,7 +284,7 @@ if [ "$MODE" = "install" ]; then
     wait_for '%PCSI-I-DONE' "$RUN_TIMEOUT" "$OFF" \
         || dump_and_die "PRODUCT INSTALL did not reach %PCSI-I-DONE"
     ok "real PRODUCT INSTALL onto the target reports %PCSI-I-DONE"
-    if printf '%s\n' "$(segment_since "$OFF")" | grep -qiE '%PCSI-[EF]-|%MOUNT-[EF]-'; then
+    if printf '%s\n' "$(segment_since "$OFF")" | grep >/dev/null -iE '%PCSI-[EF]-|%MOUNT-[EF]-'; then
         bad "install transcript carries a MOUNT/PCSI error despite DONE"
     else
         ok "install transcript carries no MOUNT/PCSI error"
@@ -330,7 +330,7 @@ if [ "$MODE" = "install" ]; then
         dump_and_die "AUTHORIZE did not report %UAF-I-SAVED -- the install-set password did not persist to the target SYSUAF"
     fi
     AUTHSEG=$(segment_since "$OFF")
-    if printf '%s\n' "$AUTHSEG" | grep -qiE '%UAF-E-NOSUCHUSER|%UAF-E-WRITEFAIL|%UAF-E-SAVEFAIL'; then
+    if printf '%s\n' "$AUTHSEG" | grep >/dev/null -iE '%UAF-E-NOSUCHUSER|%UAF-E-WRITEFAIL|%UAF-E-SAVEFAIL'; then
         bad "AUTHORIZE reported a UAF error writing the target SYSUAF"
         printf '%s\n' "$AUTHSEG" | grep -iE '%UAF-E-'
     else
@@ -347,7 +347,7 @@ if [ "$MODE" = "install" ]; then
     # gaps). It affects neither the write above nor the login in `verify`, and is
     # outside vms-37f's outcome, so this gate CAPTURES it for the record rather
     # than scoring it.
-    if printf '%s\n' "$AUTHSEG" | grep -qF "$INSTALL_PW"; then
+    if printf '%s\n' "$AUTHSEG" | grep >/dev/null -F "$INSTALL_PW"; then
         echo "  NOTE (not scored): the SYSTEM password was echoed on the console -- known vms-dcf SET TERMINAL/NOECHO display gap, not owned/fixed by vms-37f"
     else
         echo "  NOTE (not scored): the SYSTEM password was not echoed (vms-dcf NOECHO display gap appears resolved)"
@@ -383,7 +383,7 @@ if [ "$MODE" = "install" ]; then
         dump_and_die "SYSGEN did not report %SYSGEN-I-WRITTEN -- the inline SYS\$INPUT never configured the node"
     fi
     SCS_SEG=$(segment_since "$SCS_OFF")
-    if printf '%s\n' "$SCS_SEG" | grep -qE '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'; then
+    if printf '%s\n' "$SCS_SEG" | grep >/dev/null -E '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'; then
         bad "the SCS/SYSGEN segment carries an IVIMAGE or a SYSGEN error"
         printf '%s\n' "$SCS_SEG" | grep -E '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'
     else
@@ -423,7 +423,7 @@ if wait_for 'Username:' "$BOOT_TIMEOUT" 0; then
 else
     dump_and_die "the installed target never reached a login prompt -- install did not cross the container boundary"
 fi
-if printf '%s\n' "$(segment_since 0)" | grep -qF 'OVMX$INSTALL Option'; then
+if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F 'OVMX$INSTALL Option'; then
     bad "the booted target re-ran the install menu (SYSTARTUP variant leaked onto the target)"
 else
     ok "the booted target does NOT re-run the install menu"
@@ -436,14 +436,14 @@ fi
 # proves the install's SCS configuration reached and persisted to the target's
 # own parameter file across the container boundary. This is the assertion the
 # old gate skipped entirely by answering SCSNODE blank.
-if printf '%s\n' "$(segment_since 0)" | grep -qF "node name $R1_SCSNODE"; then
+if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F "node name $R1_SCSNODE"; then
     ok "the install-set SCSNODE ($R1_SCSNODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
 else
     bad "the install-set SCSNODE ($R1_SCSNODE) did NOT appear on the target's boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
 fi
 # First-boot completion is a justified no-op for OVMX (vms-649): the target
 # must NOT run any self-install phase on this boot.
-if printf '%s\n' "$(segment_since 0)" | grep -qF '%STARTUP-I-INSTALL'; then
+if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F '%STARTUP-I-INSTALL'; then
     bad "the booted target ran a self-install phase (PID 1 must mount-or-halt, not install)"
 else
     ok "the booted target ran no self-install phase (mount-or-halt, vms-2f0/vms-649)"
@@ -470,7 +470,7 @@ OFF=$(wc -c <"$LOG")
 send 'PRODUCT SHOW PRODUCT'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qiE 'X86VMS VMS' && printf '%s\n' "$SEG" | grep -qF 'Installed'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -iE 'X86VMS VMS' && printf '%s\n' "$SEG" | grep >/dev/null -F 'Installed'; then
     ok "PRODUCT SHOW PRODUCT on the booted target lists the OS kit as Installed"
 else
     bad "PRODUCT SHOW PRODUCT did not list the installed OS kit"
@@ -482,7 +482,7 @@ OFF=$(wc -c <"$LOG")
 send 'DIRECTORY SYS$SYSTEM:DCL.EXE'
 wait_for 'Total of' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep -qF 'DCL.EXE;' && printf '%s\n' "$SEG" | grep -qE 'Total of [1-9]'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'DCL.EXE;' && printf '%s\n' "$SEG" | grep >/dev/null -E 'Total of [1-9]'; then
     ok "DIRECTORY SYS\$SYSTEM: on the booted target lists DCL.EXE (rooted SYS\$SYSTEM resolves)"
 else
     bad "DIRECTORY SYS\$SYSTEM: did not list DCL.EXE on the booted target"

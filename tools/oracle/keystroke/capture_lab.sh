@@ -42,7 +42,7 @@ for f in "$HERE"/cases/*.ks; do kubectl cp "$f" "$NS/$POD:/tmp/ks/cases/$(basena
 if [ "$ARCH" = vax ]; then
   # Only if ^E actually reached sim> (a pod started with wru=1c already set
   # passes ^E to VMS, where it is harmless at an empty DCL line).
-  kx "printf '\005' > $LOG.raw; sleep 2; if tail -c 20 $LOG | grep -q 'sim> \$'; then \
+  kx "printf '\005' > $LOG.raw; sleep 2; if tail -c 20 $LOG | grep >/dev/null 'sim> \$'; then \
       printf 'set console wru=1c\r' > $LOG.raw; sleep 1; printf 'cont\r' > $LOG.raw; sleep 2; \
       else printf '\025' > $LOG.raw; fi"
 fi

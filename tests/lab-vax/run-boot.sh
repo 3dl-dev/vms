@@ -240,7 +240,7 @@ assert_status_proof() {
       ok=0; prev_n="$hdr_n"; continue
     fi
     # The value must END the line: %X0FEDC0A90 or %X0FEDC0A9xyz is not a pass.
-    if ! sed -n "${st_n}p" "$norm" | grep -qE "STATUS-PROOF: ${name}-STATUS=${want}[[:space:]]*\$"; then
+    if ! sed -n "${st_n}p" "$norm" | grep >/dev/null -E "STATUS-PROOF: ${name}-STATUS=${want}[[:space:]]*\$"; then
       echo "  assert_status_proof: ${name} \$STATUS is not ${want}: $(sed -n "${st_n}p" "$norm")" >&2
       ok=0
     fi

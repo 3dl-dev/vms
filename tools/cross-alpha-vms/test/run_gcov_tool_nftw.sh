@@ -38,7 +38,7 @@ for hn in ftw.h:ftw stdlib.h:qsort stdlib.h:bsearch; do
     [ "$(guarded "$h" "$n")" = no ] && pass "<$h> $n (a DEC C RTL function) stays declared" \
         || fail "<$h> $n was hidden though DECC\$SHR exports it"
 done
-grep -qE '^void \(\*signal\(' "$INC/signal.h" && ! grep -B1 -E '^void \(\*signal\(' "$INC/signal.h" | grep -q vms-fe03 \
+grep -qE '^void \(\*signal\(' "$INC/signal.h" && ! grep -B1 -E '^void \(\*signal\(' "$INC/signal.h" | grep >/dev/null vms-fe03 \
     && pass "<signal.h> signal (returns a function pointer) is not misread and stays declared" \
     || fail "<signal.h> signal was misread by the filter"
 

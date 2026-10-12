@@ -236,7 +236,7 @@ if [ -n "$LGOBJS" ]; then
   perl "$AR_NOINDEX" rc "${PREFIX}/lib/libgcc.a" $LGOBJS
   echo "== libgcc.a hand-assembled (System V no-index) at ${PREFIX}/lib/libgcc.a ($(echo $LGOBJS | wc -w) C-RTL builtin objects; gcov/crt/unwind/emutls/_eprintf excluded) =="
   # Sanity: it must be a System V ar (`!<arch>`), the container LINK.EXE walks.
-  head -c 8 "${PREFIX}/lib/libgcc.a" | grep -q '!<arch>' \
+  head -c 8 "${PREFIX}/lib/libgcc.a" | grep >/dev/null '!<arch>' \
     && echo "== libgcc.a is a System V ar container (LINK.EXE-readable) ==" \
     || { echo "== FAIL: libgcc.a is not a System V ar container ==" >&2; exit 5; }
 else

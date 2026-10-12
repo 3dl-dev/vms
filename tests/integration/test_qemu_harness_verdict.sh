@@ -60,6 +60,7 @@ fi
 
 # --- 1b. DISPROOF: the old form must still get this wrong -------------------
 # Proves control 1 is load-bearing rather than passing for an unrelated reason.
+# pipefail-grepq: deliberate (this IS the old piped form, kept to prove it fails)
 ( set -o pipefail; echo "$(cat "$WORK/big_zero")" | grep -qE "$HARNESS_VERDICT_ZERO_RE" ) \
     >/dev/null 2>&1
 old_status=$?

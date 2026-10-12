@@ -114,7 +114,7 @@ send() { printf '%s\r' "$1" >&3; }
 wait_for() {
     local pattern="$1" limit="${2:-$STEP_TIMEOUT}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep -qF "$pattern"; then
+        if tail -c "+$((since + 1))" "$CONSOLE_LOG" 2>/dev/null | grep >/dev/null -F "$pattern"; then
             return 0
         fi
         if ! kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -180,7 +180,7 @@ attempt_login() {
     local proc_out
     proc_out=$(run_cmd 'SHOW PROCESS')
     LAST_USER_LINE["$label"]=$(printf '%s' "$proc_out" | grep -F 'User:' || true)
-    if printf '%s' "${LAST_USER_LINE[$label]}" | grep -qE 'User: +GUEST\b'; then
+    if printf '%s' "${LAST_USER_LINE[$label]}" | grep >/dev/null -E 'User: +GUEST\b'; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))
@@ -193,7 +193,7 @@ attempt_login() {
 if attempt_login 'guest' 'GUEST' 'lowercase'; then
     run_cmd 'COPY SYS$MANAGER:LOGIN.COM CASE962.TXT' >/dev/null
     dir_out=$(run_cmd 'DIRECTORY')
-    if printf '%s' "$dir_out" | grep -qF 'CASE962.TXT'; then
+    if printf '%s' "$dir_out" | grep >/dev/null -F 'CASE962.TXT'; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))
@@ -208,7 +208,7 @@ wait_for 'Username:' "$STEP_TIMEOUT" "$off" || echo "WARN: no reprompt after low
 # --- Round 2: 'Guest' (title case) logs in, sees the SAME home directory --
 if attempt_login 'Guest' 'GUEST' 'titlecase'; then
     dir_out=$(run_cmd 'DIRECTORY')
-    if printf '%s' "$dir_out" | grep -qF 'CASE962.TXT'; then
+    if printf '%s' "$dir_out" | grep >/dev/null -F 'CASE962.TXT'; then
         PASS=$((PASS + 1))
     else
         FAIL=$((FAIL + 1))

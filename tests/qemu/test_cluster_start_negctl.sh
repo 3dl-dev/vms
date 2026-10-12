@@ -134,7 +134,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done

@@ -141,7 +141,7 @@ if [ "$STDRV_COUNT" -eq 1 ]; then
 else
     bad "%STDRV-I-STARTUP printed $STDRV_COUNT times (expected exactly 1)"
 fi
-if printf '%s' "$CLEAN" | grep -qi 'startup completed'; then
+if printf '%s' "$CLEAN" | grep >/dev/null -i 'startup completed'; then
     bad "an invented STDRV/STARTUP 'completed' line is present (vms-2f0 regression)"
 else
     pass "no invented 'startup completed' line anywhere in the transcript"
@@ -156,7 +156,7 @@ if printf '%s' "$CLEAN" | \
 else
     bad "STDRV timestamp shape does not match the oracle's ' D-MON-YYYY HH:MM:SS.CC' form"
 fi
-if printf '%s' "$CLEAN" | grep -qE '%STDRV-I-STARTUP,.*startup begun at 0[1-9]-'; then
+if printf '%s' "$CLEAN" | grep >/dev/null -E '%STDRV-I-STARTUP,.*startup begun at 0[1-9]-'; then
     bad "STDRV day field is ZERO-padded (e.g. '07-'); the oracle is SPACE-padded (' 7-')"
 else
     pass "STDRV day field is not zero-padded"
@@ -214,7 +214,7 @@ EOF
 
 # A successful INSTALL ADD is silent on VMS (vms-220): no %INSTALL-I-ADDED in
 # the boot console at all, so a return to a chatty INSTALL fails here.
-if printf '%s\n' "$CLEAN" | grep -qF '%INSTALL-I-ADDED'; then
+if printf '%s\n' "$CLEAN" | grep >/dev/null -F '%INSTALL-I-ADDED'; then
     bad "the boot console carries %INSTALL-I-ADDED (INSTALL ADD is silent on success)"
 else
     pass "INSTALL ADD during startup is silent (no %INSTALL-I-ADDED)"
@@ -251,12 +251,12 @@ fi
 # (the exact shape opcom_kmsg_classify() recognizes as an OVMX kernel-module
 # record -- see src/ovmx_init/opcom_kmsg.c -- which belongs in
 # SYS$MANAGER:OPERATOR.LOG, never verbatim on the console).
-if printf '%s\n' "$CLEAN" | grep -qE '\[[[:space:]]*[0-9]+\.[0-9]+\]'; then
+if printf '%s\n' "$CLEAN" | grep >/dev/null -E '\[[[:space:]]*[0-9]+\.[0-9]+\]'; then
     bad "a kernel-timestamped line (e.g. '[   41.332690]') reached the console -- raw dmesg leak (vms-300)"
 else
     pass "no kernel-timestamped '[ NNN.NNN]' line on the console (vms-300)"
 fi
-if printf '%s\n' "$CLEAN" | grep -qE '^vms: '; then
+if printf '%s\n' "$CLEAN" | grep >/dev/null -E '^vms: '; then
     bad "a raw 'vms:' kernel-module line reached the console verbatim -- must be OPERATOR.LOG-only via the kmsg bridge (vms-300)"
 else
     pass "no raw 'vms:' kernel-module line on the console (vms-300)"

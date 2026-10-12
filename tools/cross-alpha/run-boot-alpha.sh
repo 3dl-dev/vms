@@ -199,7 +199,7 @@ run_login_boot() {
       waitpat() {
           local pat="$1" lim="$2" since="${3:-0}" w=0
           while [ "$w" -lt "$lim" ]; do
-              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaF "$pat" && return 0
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep >/dev/null -aF "$pat" && return 0
               kill -0 "$QP" 2>/dev/null || return 1
               sleep 1; w=$((w + 1))
           done
@@ -209,7 +209,7 @@ run_login_boot() {
       waitpat_re() {
           local pat="$1" lim="$2" since="${3:-0}" w=0
           while [ "$w" -lt "$lim" ]; do
-              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaE "$pat" && return 0
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep >/dev/null -aE "$pat" && return 0
               kill -0 "$QP" 2>/dev/null || return 1
               sleep 1; w=$((w + 1))
           done
@@ -377,7 +377,7 @@ run_acceptance_boot() {
       wait_for() {
           local pat="$1" lim="${2:-30}" since="${3:-0}" w=0
           while [ "$w" -lt "$lim" ]; do
-              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep -qaF -- "$pat" && return 0
+              tail -c "+$((since + 1))" "$RAW" 2>/dev/null | grep >/dev/null -aF -- "$pat" && return 0
               kill -0 "$QP" 2>/dev/null || return 1
               sleep 1; w=$((w + 1))
           done

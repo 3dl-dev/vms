@@ -117,7 +117,7 @@ fi
 for f in libgcc.a crt0.o crtbegin.o crtend.o vms-dwarf2eh.o; do
     [ -f "$LGDIR/$f" ] || { echo "FAIL: libgcc did not install $f"; exit 1; }
 done
-ar t "$LGDIR/libgcc.a" | grep -q '^unwind-dw2.o$' || { echo "FAIL: libgcc.a has no EH unwinder"; exit 1; }
+ar t "$LGDIR/libgcc.a" | grep >/dev/null '^unwind-dw2.o$' || { echo "FAIL: libgcc.a has no EH unwinder"; exit 1; }
 cd /tmp/cxx
 
 echo "== [6/6] libstdc++-v3 over the OVMX C RTL (configure link tests via OVMX LINK.EXE) =="

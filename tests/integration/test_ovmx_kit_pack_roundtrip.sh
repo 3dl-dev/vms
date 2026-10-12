@@ -94,11 +94,11 @@ prot_line() { grep -F "$1" "$MANIFEST" | head -1; }
 DCL_PROT="$(prot_line 'DCL.EXE')"
 UAF_PROT="$(prot_line 'SYSUAF.DAT')"
 RL_PROT="$(prot_line 'RIGHTSLIST.DAT')"
-printf '%s\n' "$DCL_PROT" | grep -qF '(S:RWED,O:RWED,G:RE,W:RE)' \
+printf '%s\n' "$DCL_PROT" | grep >/dev/null -F '(S:RWED,O:RWED,G:RE,W:RE)' \
     || fail "ordinary image DCL.EXE not World:RE per-file protection: $DCL_PROT"
-printf '%s\n' "$UAF_PROT" | grep -qF '(S:RWE,O:RWE,G:,W:)' \
+printf '%s\n' "$UAF_PROT" | grep >/dev/null -F '(S:RWE,O:RWE,G:,W:)' \
     || fail "SYSUAF.DAT not World-denied per-file protection (flat default leak?): $UAF_PROT"
-printf '%s\n' "$RL_PROT" | grep -qF '(S:RWED,O:RWED,G:R,W:R)' \
+printf '%s\n' "$RL_PROT" | grep >/dev/null -F '(S:RWED,O:RWED,G:R,W:R)' \
     || fail "RIGHTSLIST.DAT not World:R per-file protection: $RL_PROT"
 echo "PASS: packer records genuine per-file protection (World:RE / World-denied / World:R), not a flat default"
 

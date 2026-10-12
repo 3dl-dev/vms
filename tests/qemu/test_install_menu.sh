@@ -182,7 +182,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern  limit-seconds  since-byte  log-file
     local pat="$1" limit="${2:-30}" since="${3:-0}" log="${4:-$LOG}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep -qF "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$log" 2>/dev/null | grep >/dev/null -F "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -221,14 +221,14 @@ else
     dump_and_die "the install menu never appeared within ${BOOT_TIMEOUT}s"
 fi
 BOOT_SEG=$(segment_since 0)
-if printf '%s\n' "$BOOT_SEG" | grep -qF 'Username:'; then
+if printf '%s\n' "$BOOT_SEG" | grep >/dev/null -F 'Username:'; then
     bad "a login prompt appeared BEFORE the install menu (should be menu-first, oracle sec3a)"
 else
     ok "no login prompt precedes the install menu"
 fi
 for item in '1)  Install or reconfigure OVMX' '4)  Show installed products' \
             '8)  Execute DCL commands and procedures' '9)  Shut down this system'; do
-    if printf '%s\n' "$BOOT_SEG" | grep -qF "$item"; then
+    if printf '%s\n' "$BOOT_SEG" | grep >/dev/null -F "$item"; then
         ok "menu offers: $item"
     else
         bad "menu missing: $item"
@@ -238,7 +238,7 @@ done
 # install/reconfigure/remove, patches/PAKs) must NOT appear -- OVMX has none
 # of those facilities.
 for absent in 'layered products' 'patches' 'Product Authorization'; do
-    if printf '%s\n' "$BOOT_SEG" | grep -qiF "$absent"; then
+    if printf '%s\n' "$BOOT_SEG" | grep >/dev/null -iF "$absent"; then
         bad "menu offers something OVMX cannot honor: $absent"
     else
         ok "menu correctly omits: $absent"
@@ -280,7 +280,7 @@ else
     dump_and_die "did not reach the confirmation gate"
 fi
 GATE_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$GATE_SEG" | grep -qF 'VDA100:'; then
+if printf '%s\n' "$GATE_SEG" | grep >/dev/null -F 'VDA100:'; then
     ok "the confirmation gate names the target device (naming the operation, per item spec)"
 else
     bad "the confirmation gate does not name the target device"
@@ -300,7 +300,7 @@ else
     dump_and_die "PRODUCT INSTALL did not reach %PCSI-I-DONE"
 fi
 INSTALL_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$INSTALL_SEG" | grep -qiE '%PCSI-[EF]-|%MOUNT-[EF]-'; then
+if printf '%s\n' "$INSTALL_SEG" | grep >/dev/null -iE '%PCSI-[EF]-|%MOUNT-[EF]-'; then
     bad "install transcript contains an error despite reporting DONE"
     echo "$INSTALL_SEG"
 else
@@ -345,7 +345,7 @@ else
     dump_and_die "AUTHORIZE did not report %UAF-I-SAVED -- the install-set password did not persist to the target SYSUAF"
 fi
 UAF_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$UAF_SEG" | grep -qE '%UAF-E-'; then
+if printf '%s\n' "$UAF_SEG" | grep >/dev/null -E '%UAF-E-'; then
     bad "AUTHORIZE reported a UAF error writing the target SYSUAF"
     echo "$UAF_SEG"
 else
@@ -369,7 +369,7 @@ segment_since "$OFF"
 
 # --- SYSTEM password prompts: never echoed --------------------------------
 PW_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$PW_SEG" | grep -qF "$NEW_PASSWORD"; then
+if printf '%s\n' "$PW_SEG" | grep >/dev/null -F "$NEW_PASSWORD"; then
     bad "THE PLAINTEXT PASSWORD WAS ECHOED TO THE CONSOLE -- SET TERMINAL/NOECHO did not suppress it (a further gap this item found and reported, see PR body)"
 else
     ok "the SYSTEM password was never echoed to the console"
@@ -436,7 +436,7 @@ else
     dump_and_die "did not dismount the target after the SYSGEN step"
 fi
 SCS_SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SCS_SEG" | grep -qE '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'; then
+if printf '%s\n' "$SCS_SEG" | grep >/dev/null -E '%DCL-E-IVIMAGE|%SYSGEN-[EF]-'; then
     bad "the SCS/SYSGEN segment carries an IVIMAGE or a SYSGEN error"
     echo "$SCS_SEG"
 else
@@ -469,7 +469,7 @@ else
     dump_and_die "the installed target never reached a login prompt"
 fi
 TB=$(segment_since 0)
-if printf '%s\n' "$TB" | grep -qF 'OVMX$INSTALL Option'; then
+if printf '%s\n' "$TB" | grep >/dev/null -F 'OVMX$INSTALL Option'; then
     bad "the installed TARGET's own boot ran the install menu (SYSTARTUP_VMS.COM variant leaked onto the target)"
 else
     ok "the installed target's own SYSTARTUP_VMS.COM does NOT run the install menu (two-variant staging, sec3.3)"
@@ -481,7 +481,7 @@ fi
 # SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing the operator-chosen $SCS_NODE (not the
 # OVMX kit default) proves the install's SCS configuration reached and
 # persisted to the target's own parameter file.
-if printf '%s\n' "$TB" | grep -qF "node name $SCS_NODE"; then
+if printf '%s\n' "$TB" | grep >/dev/null -F "node name $SCS_NODE"; then
     ok "the install-set SCSNODE ($SCS_NODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
 else
     bad "the install-set SCSNODE ($SCS_NODE) did NOT appear on the target's own boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"

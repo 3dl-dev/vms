@@ -83,7 +83,7 @@ send() { printf '%s\r' "$1" >&4; }
 wait_for() {  # pattern limit-seconds since-byte
     local pat="$1" limit="${2:-30}" since="${3:-0}" waited=0
     while [ "$waited" -lt "$((limit * 4))" ]; do
-        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep -qaF -- "$pat"; then return 0; fi
+        if tail -c "+$((since + 1))" "$LOG" 2>/dev/null | grep >/dev/null -aF -- "$pat"; then return 0; fi
         kill -0 "$QPID" 2>/dev/null || return 1
         sleep 0.25; waited=$((waited + 1))
     done
@@ -128,7 +128,7 @@ printf '%s\n' "$RUN_SEG"
 echo "--------------------------------------------"
 
 # 1. OUTPUT ROUTING: the activated image's stdout reached the console.
-if printf '%s\n' "$RUN_SEG" | grep -qF 'RC3: image output reached SYS$OUTPUT'; then
+if printf '%s\n' "$RUN_SEG" | grep >/dev/null -F 'RC3: image output reached SYS$OUTPUT'; then
     ok "RUN routes the activated image's stdout to the console (vms-707 output half)"
 else
     bad "RUN did NOT route the image's stdout to the console (the RC3 line is absent)"
@@ -144,13 +144,13 @@ echo "------------------------------------------"
 #    RC3 exits cleanly, so the faithful status is SS$_NORMAL (%X00000001) -- read
 #    back through the new waitid-peek/getexit path, proving it runs end-to-end on
 #    the real runtime and reports the right value (never a hang or wrong status).
-if printf '%s\n' "$STATUS_SEG" | grep -qiE '\$STATUS[^0-9A-Fa-f]*"?%X00000001'; then
+if printf '%s\n' "$STATUS_SEG" | grep >/dev/null -iE '\$STATUS[^0-9A-Fa-f]*"?%X00000001'; then
     ok "SHOW SYMBOL \$STATUS reports SS\$_NORMAL (%X00000001) for the clean exit, via the reworked readback path"
 else
     bad "SHOW SYMBOL \$STATUS is not SS\$_NORMAL for a successful RUN -- the reworked RUN path regressed"
 fi
 # The RUN must not have reported an error for an image that exited cleanly.
-if printf '%s\n' "$RUN_SEG" | grep -qiE '%DCL-.-ABORT|error status'; then
+if printf '%s\n' "$RUN_SEG" | grep >/dev/null -iE '%DCL-.-ABORT|error status'; then
     bad "RUN reported an error for RC3.EXE which exited cleanly (spurious failure)"
 else
     ok "RUN reported no error for the clean exit (no spurious %DCL-*-ABORT)"
@@ -165,14 +165,14 @@ ANY_SEG="$SEG"
 echo "----- verbatim: RUN SYS\$LOGIN:RC3LOGIN.EXE -----"
 printf '%s\n' "$ANY_SEG"
 echo "-----------------------------------------------"
-if printf '%s\n' "$ANY_SEG" | grep -qF 'RC3: image output reached SYS$OUTPUT'; then
+if printf '%s\n' "$ANY_SEG" | grep >/dev/null -F 'RC3: image output reached SYS$OUTPUT'; then
     ok "RUN activates an image outside SYS\$SYSTEM: (SYS\$LOGIN:RC3LOGIN.EXE, vms-73e)"
 else
     bad "RUN of SYS\$LOGIN:RC3LOGIN.EXE did not run the image (vms-73e)"
 fi
 run_cmd 'SET DEFAULT SYS$LOGIN'
 run_cmd 'RUN RC3LOGIN'
-if printf '%s\n' "$SEG" | grep -qF 'RC3: image output reached SYS$OUTPUT'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'RC3: image output reached SYS$OUTPUT'; then
     ok "RUN of a bare name finds the image in the default directory (vms-73e)"
 else
     bad "RUN RC3LOGIN from SYS\$LOGIN: did not run the image (vms-73e)"
@@ -187,7 +187,7 @@ CLI_SEG="$SEG"
 echo "----- verbatim: RUN SYS\$SYSTEM:SYMSET.EXE -----"
 printf '%s\n' "$CLI_SEG"
 echo "-----------------------------------------------"
-if printf '%s\n' "$CLI_SEG" | grep -qF 'SYMSET: OVMX_CLI_IN="from dcl" table=1'; then
+if printf '%s\n' "$CLI_SEG" | grep >/dev/null -F 'SYMSET: OVMX_CLI_IN="from dcl" table=1'; then
     ok "LIB\$GET_SYMBOL in an image reads DCL's local symbol (vms-cded)"
 else
     bad "LIB\$GET_SYMBOL in an image did not see DCL's OVMX_CLI_IN (vms-cded)"
@@ -195,13 +195,13 @@ fi
 # (SHOW SYMBOL's "=" vs "==" for a global is DCL's own display, tracked apart;
 #  what this asserts is that the image's symbol reached DCL's table.)
 run_cmd 'SHOW SYMBOL OVMX_CLI_GLOBAL'
-if printf '%s\n' "$SEG" | grep -qE 'OVMX_CLI_GLOBAL ==? "set by image"'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -E 'OVMX_CLI_GLOBAL ==? "set by image"'; then
     ok "LIB\$SET_SYMBOL from an image left a GLOBAL symbol in DCL (vms-cded)"
 else
     bad "the image's global symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"
 fi
 run_cmd 'SHOW SYMBOL OVMX_CLI_LOCAL'
-if printf '%s\n' "$SEG" | grep -qF 'OVMX_CLI_LOCAL = "local from image"'; then
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'OVMX_CLI_LOCAL = "local from image"'; then
     ok "LIB\$SET_SYMBOL from an image left a LOCAL symbol in DCL (vms-cded)"
 else
     bad "the image's local symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"

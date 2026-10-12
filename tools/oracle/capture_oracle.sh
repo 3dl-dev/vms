@@ -204,8 +204,8 @@ wait_boot() {  # pod node  (up to ~7 min)
     local pod="$1" node="$2" i t
     for i in $(seq 1 42); do
         t="$(console_tail "$pod" "$node" 15)"
-        if printf '%s' "$t" | grep -qE 'Username:|job terminated'; then return 0; fi
-        if printf '%s' "$t" | grep -qE 'Bugcheck'; then die "node $node bugchecked during boot"; fi
+        if printf '%s' "$t" | grep >/dev/null -E 'Username:|job terminated'; then return 0; fi
+        if printf '%s' "$t" | grep >/dev/null -E 'Bugcheck'; then die "node $node bugchecked during boot"; fi
         # The Alpha SRM prompt 'P00>>>' is TRANSIENT during a normal boot -- SRM
         # auto-boots past it within seconds -- so it must NOT fast-fail a booting
         # node (an eager die here killed a healthy Alpha whose first console read
@@ -213,7 +213,7 @@ wait_boot() {  # pod node  (up to ~7 min)
         # in <~90s and returns above; only a node still sitting at 'P00>>>' past
         # the grace window (~2 min) is genuinely halted at SRM (auto_action=HALT /
         # boot failure), so gate the SRM-halt die on that.
-        if [ "$i" -ge 12 ] && printf '%s' "$t" | grep -qE 'P00>>>'; then
+        if [ "$i" -ge 12 ] && printf '%s' "$t" | grep >/dev/null -E 'P00>>>'; then
             die "node $node halted at the SRM console (P00>>>) -- did not auto-boot"
         fi
         sleep 10
@@ -224,7 +224,7 @@ wait_boot() {  # pod node  (up to ~7 min)
 wait_pat() {  # pod node pattern [maxsecs]  -- poll the console tail for a regex
     local pod="$1" node="$2" pat="$3" max="${4:-40}" i
     for ((i = 0; i < max; i += 2)); do
-        console_tail "$pod" "$node" 8 | grep -qE "$pat" && return 0
+        console_tail "$pod" "$node" 8 | grep >/dev/null -E "$pat" && return 0
         sleep 2
     done
     return 1
@@ -300,7 +300,7 @@ log "using isolated replica $POD (was $_PREV_REPLICAS)"
 
 # wait Running, then boot
 for i in $(seq 1 30); do
-    kubectl -n "$NS" get pod "$POD" 2>/dev/null | grep -q 'Running' && break; sleep 4
+    kubectl -n "$NS" get pod "$POD" 2>/dev/null | grep >/dev/null 'Running' && break; sleep 4
 done
 wait_boot "$POD" "$NODE"
 login "$POD" "$NODE" "$USER" "$PASS"

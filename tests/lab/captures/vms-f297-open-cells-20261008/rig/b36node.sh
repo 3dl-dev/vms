@@ -71,8 +71,8 @@ wait_more() { local pat=$1 base=$2 lim=$3 i
 # lines to it ("$ [ 31.15] %CNXMAN, ..." in arm IM-2), so it need not end there.
 PROMPT='^\$( |$)'
 last_prompt() { tr -d '\r\000' < "$OUT" | grep -aoE "Username:|Password:|$PROMPT" | tail -1; }
-last_prompt_is_username() { last_prompt | grep -q 'Username:'; }
-at_dcl() { last_prompt | grep -qE "$PROMPT"; }
+last_prompt_is_username() { last_prompt | grep >/dev/null 'Username:'; }
+at_dcl() { last_prompt | grep >/dev/null -E "$PROMPT"; }
 login() { local a u p d
     for a in 1 2 3 4 5; do
         at_dcl && break

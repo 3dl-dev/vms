@@ -1,0 +1,73 @@
+# frame-grounding.tsv -- the frame-conformance gate's grounding table (rd vms-ci.6).
+#
+# One row per FIELD of a frame type OVMX sends to a real node. Every byte of
+# every frame the gate's host tests emit must be covered by exactly one row
+# that applies to it; tools/cluster/frame_conformance.py fails on an uncovered
+# byte, on a value outside its rule, and on a row with no evidence.
+#
+# columns (TAB-separated):
+#   type      frame type, as the emitting test names it (conformance_dump.h)
+#   select    which frames the row applies to: * or op=<hex> (MSCP opcode, abs 80)
+#   off,len   ABSOLUTE frame offset and length (little-endian value)
+#   class     const | copied | derived | minted | deviation
+#   rule      const:<hex> (LE value; 0 = all-zero for spans > 8)  bytes:<hex>  set:<hex>,<hex>..  state:<key> (equals the emitting
+#             test's executive fact)  crf (hi16 0x0079..0xffdc, lo16 0x0001..
+#             0x0038)  bufname (hi16 != 0, lo16 == 0)  conid (hi16 != 0,
+#             lo16 0x0001..0x0010)  any:<why> (a value with no envelope of
+#             its own, checked by the named test)
+#   evidence  the census / capture / test that grounds it. A `deviation` row
+#             is an OVMX value OUTSIDE the real envelope that real VAXes are
+#             recorded accepting; the gate reports every one it passes.
+#
+# Real envelopes: tools/cluster/minted_form_census.py and the per-field census
+# (tests/cluster/conformance/README.md) over tests/lab/captures + lane captures.
+#
+# ---- MSCP command SYSAP body (abs 72..107), class driver + join walk -------
+mscp_cmd	*	72	4	minted	crf	3,637 real P.CRF: hi16 0x0079..0xffdc lo16 0x0001..0x0038 (minted_form_census); test_mscp_cl pins
+mscp_cmd	*	78	2	const	const:0	real 0x0000 in every command, all opcodes (per-field census)
+mscp_cmd	*	80	1	derived	set:03,04,09,21,22	P.OPCD: the command this request is (AA-L619A Table A-1)
+mscp_cmd	*	81	1	const	const:0	real 0x00 in every command (per-field census)
+mscp_cmd	op=04	76	2	const	const:0	SCC addresses the controller: real unit 0 in 245/245
+mscp_cmd	op=04	82	2	const	const:0	real modifiers 0 in 245/245
+mscp_cmd	op=04	84	2	const	const:0	P.VRSN: real 0 in 245/245 (host MUST supply 0, sec 6.16)
+mscp_cmd	op=04	86	2	deviation	const:0	P.CNTF: real {0x00d0, 0xa804} (245); OVMX asks for no controller option, an honest statement of a capability it lacks (no attention-message handling). APPROVED 2026-10-11 (lane conductor). Accepted: SCC END status SUCCESS from real VAX1/VAX2 in lab mscp-239 r15, r17, r19 (/tmp/evac/m239)
+mscp_cmd	op=04	88	2	derived	set:0,1e	P.HTMO: real {0, 0x1e} (245); OVMX 0 or its own declared timeout 0x1e
+mscp_cmd	op=04	90	2	const	const:0	real 0 in 245/245
+mscp_cmd	op=04	92	8	derived	any:clock	P.TIME: this node's own clock (exec_time_now_vms), quadword
+mscp_cmd	op=04	100	8	const	const:0	real 0 in 245/245
+mscp_cmd	op=03	76	2	copied	any:walk	P.UNIT: seed 1, then the server's own previous GUS END unit (test_mscp_cl_fsm, test_cnxman_join)
+mscp_cmd	op=03	82	2	const	const:1	MD.NXU: real {0,1}, the NEXT-UNIT walk sends 1 (607 real)
+mscp_cmd	op=03	84	24	const	const:0	real 0 in 3,323/3,323
+mscp_cmd	op=09	76	2	copied	any:unit	P.UNIT: a unit the server's own GUS END returned (test_mscp_cl)
+mscp_cmd	op=09	82	2	const	const:0	real modifiers 0 (1/1)
+mscp_cmd	op=09	84	2	const	const:0	real 0 (1/1)
+mscp_cmd	op=09	86	2	deviation	const:0	real 0x8000 in the ONE real ONLINE in the corpus; OVMX sends 0, declaring no unit flag it does not implement. APPROVED 2026-10-11 (lane conductor). Accepted: ONLINE END SUCCESS from real VAX2 (r17) and VAX1 (r19)
+mscp_cmd	op=09	88	20	const	const:0	real 0 (1/1)
+mscp_cmd	op=21	76	2	copied	any:unit	P.UNIT of the mounted served unit (test_mscp_cl)
+mscp_cmd	op=22	76	2	copied	any:unit	P.UNIT of the mounted served unit (test_mscp_cl)
+mscp_cmd	op=21	82	2	const	const:0	real modifiers 0 in 53/53 READs
+mscp_cmd	op=22	82	2	derived	set:0,4000	real {0x4000, 0} in 18 WRITEs
+mscp_cmd	op=21	84	4	derived	any:bcnt	P.BCNT: the caller's request (test_mscp_cl asserts bytes)
+mscp_cmd	op=22	84	4	derived	any:bcnt	P.BCNT: the caller's request
+mscp_cmd	op=21	88	4	const	const:0	descriptor offset: real 0 in 53/53
+mscp_cmd	op=22	88	4	const	const:0	descriptor offset: real 0 in 18/18
+mscp_cmd	op=21	92	4	minted	bufname	descriptor name: 67,494 real names hi16 != 0, MSCP lo16 == 0 (test_pe_block pins)
+mscp_cmd	op=22	92	4	minted	bufname	descriptor name (as above)
+mscp_cmd	op=21	96	4	derived	state:server_conid	descriptor Con.ID == the SERVER's Con.ID: 53/53 real READs (OUR own halted VAX2 r17, VAX1 r19)
+mscp_cmd	op=22	96	4	derived	state:server_conid	descriptor Con.ID == the SERVER's Con.ID: 18/18 real WRITEs
+mscp_cmd	op=21	100	4	derived	any:lbn	P.LBN: the caller's request
+mscp_cmd	op=22	100	4	derived	any:lbn	P.LBN: the caller's request
+mscp_cmd	op=21	104	4	const	const:0	real 0 in 53/53
+mscp_cmd	op=22	104	4	const	const:0	real 0 in 18/18
+# ---- SCS CONNECT_REQ, the SCS-owned span abs 56..123, MSCP$DISK -----------
+scs_conreq_mscp	*	56	2	const	const:42	inner length 66 (content 110): 995/995 real
+scs_conreq_mscp	*	58	2	const	const:4	format word 0x0004: 995/995
+scs_conreq_mscp	*	60	2	const	const:0	ctl op 0 CONNECT_REQ: 995/995
+scs_conreq_mscp	*	62	2	deviation	state:initial_credits	credit: real 0x000a in 995/995; OVMX states its own receive count 4 (CNXMAN_MSCP_CREDITS), its real buffer capacity. APPROVED 2026-10-11 (lane conductor). Accepted by real VAX1/VAX2 MSCP servers (ACCEPT_REQ) in mscp-239 r15, r17, r19
+scs_conreq_mscp	*	64	4	const	const:0	remote Con.ID 0 on a CONNECT_REQ: 995/995
+scs_conreq_mscp	*	68	4	minted	conid	own Con.ID: 2,791 real hi16 != 0, lo16 small reused index (test_scs_fsm pins)
+scs_conreq_mscp	*	72	2	const	const:2	SCS$W_MIN_CR 2: 4,032/4,032 real class-driver connects
+scs_conreq_mscp	*	74	2	const	const:1	SCS$W_STATUS 1: 995/995
+scs_conreq_mscp	*	76	16	const	bytes:4d534350244449534b20202020202020	MSCP$DISK, blank-padded: 995/995
+scs_conreq_mscp	*	92	16	const	bytes:564d53244449534b5f434c5f44525652	VMS$DISK_CL_DRVR: 995/995
+scs_conreq_mscp	*	108	16	const	bytes:56352e30202020202020202020202b20	connect data: 4,032/4,032 real

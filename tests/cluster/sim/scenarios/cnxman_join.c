@@ -526,11 +526,14 @@ static void replay(void)
 	(void)feed_fixture("cm-params-sole-member-oracle");
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	/* The walk takes real time on the wire -- the e88 trios measured
 	 * 0.7..1.9 s from the joiner's own PARAMS to its op-0x02 -- and the
 	 * virtual clock moves with it. No timer fires: the terminator below
@@ -538,7 +541,8 @@ static void replay(void)
 	g.clock.now_ms += CNXMAN_JOIN_WATCH_MS;
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 
 	/* sec 4(o) rows 5-10, from the manifest-hashed specimens. */
 	(void)feed_fixture("cm-commit-req");
@@ -680,15 +684,19 @@ static void replay_through_a_transient(uint32_t *timers_fired)
 	(void)feed_fixture("cm-params-sole-member-oracle");   /* rd vms-e88 */
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	g.clock.now_ms += CNXMAN_JOIN_WATCH_MS;   /* the walk takes time (rd vms-e88) */
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 
 	(void)feed_fixture("cm-commit-req");
 	(void)feed_fixture("cm-dlm-op0d-req");
@@ -813,15 +821,19 @@ static void replay_rejoin(void)
 	(void)feed_fixture("cm-params-sole-member-oracle");   /* rd vms-e88 */
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 	g.clock.now_ms += CNXMAN_JOIN_WATCH_MS;   /* the walk takes time (rd vms-e88) */
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_OFFLINE);
-	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp + VMS_OFF_SYSAP_BODY,
+			    len - VMS_OFF_SYSAP_BODY);   /* SCS delivers the BODY */
 
 	(void)feed_fixture("cm-commit-req");
 	(void)feed_fixture("cm-dlm-op0d-req");

@@ -300,7 +300,6 @@ static int srv_op_send_read_data(void *ctx, vms_conid_t conid,
 	uint32_t name = 0u;
 	int rc;
 
-	(void)conid;
 	if (s->cl->pe == NULL)
 		return -1;
 	/* The bytes are in our staging buffer; name it for the port to read
@@ -313,7 +312,11 @@ static int srv_op_send_read_data(void *ctx, vms_conid_t conid,
 
 	memset(&x, 0, sizeof(x));
 	x.peer = peer;
-	x.dest_conid = desc->conid;      /* the host's own connection id  */
+	/* rd vms-239: +0 is the INITIATOR's own Con.ID (4,827/4,827 measured,
+	 * vms_cluster_codec_blk.h sec 5) -- this server's, read off its own
+	 * connection, which is also what a real client puts in its descriptor
+	 * (71/71). Never copied from the client's bytes. */
+	x.dest_conid = (uint32_t)conid;
 	x.local_name = name;
 	x.local_offset = 0u;
 	x.remote_name = desc->name;      /* the host's own buffer name    */
@@ -368,13 +371,16 @@ static int srv_op_request_write_data(void *ctx, vms_conid_t conid,
 	struct vms_mscp_srv *s = (struct vms_mscp_srv *)ctx;
 	struct pe_blk_xfer x;
 
-	(void)conid;
 	if (s->cl->pe == NULL)
 		return -1;
 
 	memset(&x, 0, sizeof(x));
 	x.peer = peer;
-	x.dest_conid = desc->conid;      /* the host's own connection id  */
+	/* rd vms-239: +0 is the INITIATOR's own Con.ID (4,827/4,827 measured,
+	 * vms_cluster_codec_blk.h sec 5) -- this server's, read off its own
+	 * connection, which is also what a real client puts in its descriptor
+	 * (71/71). Never copied from the client's bytes. */
+	x.dest_conid = (uint32_t)conid;
 	x.local_name = local_name;       /* OUR destination, just minted  */
 	x.local_offset = 0u;
 	x.remote_name = desc->name;      /* the host's own buffer name    */

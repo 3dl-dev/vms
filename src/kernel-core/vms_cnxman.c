@@ -2435,6 +2435,12 @@ static void cnxman_mscp_sysap_bind(struct vms_cnxman *cn)
 	cn->mscp_sysap.message = cnxman_mscp_message;
 	cn->mscp_sysap.closed = cnxman_mscp_closed;
 	cn->mscp_sysap.send_failed = NULL;
+	/* rd vms-239: the class driver's own connect statement, on every
+	 * connect it opens (the join's MSCP leg and cnxman_disk_client_connect
+	 * both reach scs_connect() with NULL connect data). */
+	cn->mscp_sysap.connect_conndata = cnxman_join_disk_cl_conndata;
+	cn->mscp_sysap.connect_min_credits =
+		(uint16_t)CNXMAN_DISK_CL_MIN_CREDITS;
 	cn->mscp_sysap.ctx = cn;
 }
 
@@ -2562,6 +2568,20 @@ static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
 		cnxman_csb_set_swver(csb, len ? sw : (const uint8_t *)0, len,
 				     cn->cl->params.sw_version,
 				     cn->cl->params.sw_version_len);
+		/* rd vms-239: and its SCSNODE, from the same formation body.
+		 * The MSCP class driver names a member's served units by it
+		 * (`<SCSNODE>$DUA<n>:`); a CSB that never held one left every
+		 * real VAX's units unnamed. Copied only when the port really
+		 * learned one -- never cleared to a guess. */
+		{
+			uint8_t nm[VMS_SCSNODE_MAX];
+			uint8_t nlen = 0u;
+
+			if (pe_peer_name(cn->cl->pe, csb->sysid, nm,
+					 (uint32_t)sizeof(nm), &nlen) == 0 &&
+			    nlen > 0u)
+				cnxman_csb_set_scsnode(csb, nm, nlen);
+		}
 	}
 }
 
@@ -4153,10 +4173,10 @@ int cnxman_disk_client_connect(struct vms_cluster *cl, vms_scs_sysid_t dst,
 	if (cl->cnxman == NULL || cl->scs == NULL)
 		return (int)SS__NOSUCHDEV;
 	/* The two names are vms_cnxman_join_fsm.c's, which is where the ONE
-	 * spelling of each lives; no caller re-types them. NULL conndata: E31
-	 * grounds the VMS$VAXcluster CM version quad only -- MSCP$DISK's own
-	 * connect data is a different, ungrounded field this glue must not
-	 * invent. */
+	 * spelling of each lives; no caller re-types them. NULL conndata here:
+	 * the class driver's own connect data and MIN_CR come from its SYSAP
+	 * registration (cnxman_mscp_sysap_bind, rd vms-239), so this path and
+	 * the join's MSCP leg state the same thing. */
 	return scs_connect(cl->scs, cnxman_join_name_disk_cl_drvr,
 			   cnxman_join_name_mscp_disk, dst, NULL, out_conid);
 }

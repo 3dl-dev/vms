@@ -645,6 +645,15 @@ static void test_glue_bindings(void)
 		  "votes, quorum and members is one a real VAX refuses");
 	check_has("cn->vc_sysap.accept_conndata = cn->conndata;",
 		  "rd vms-b87: the ACCEPT offers the live buffer");
+	/* rd vms-239: the disk class driver states its own connect data and
+	 * MIN_CR on every connect it opens (both paths reach scs_connect()
+	 * with NULL connect data, and vms_scs.c reads these two off the
+	 * SYSAP's registration). */
+	check_has("cn->mscp_sysap.connect_conndata = cnxman_join_disk_cl_conndata;",
+		  "rd vms-239: the class driver's SYSAP carries its connect data");
+	check_has("cn->mscp_sysap.connect_min_credits =\n"
+		  "\t\t(uint16_t)CNXMAN_DISK_CL_MIN_CREDITS;",
+		  "rd vms-239: ... and its Minimum Send Credits");
 	/*
 	 * ...AND SO DOES THE JOIN'S OWN COPY. MEASURED: the first live arm of
 	 * this code filled `cn->conndata` and left `cfg.conndata` at the

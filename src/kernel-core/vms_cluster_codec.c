@@ -15,6 +15,8 @@
  */
 
 #include "vms_cluster_codec.h"
+#include "vms_cluster_codec_blk.h"   /* abs-55 port opcode + block header
+					* geometry (macros only, rd vms-239) */
 
 /* ------------------------------------------------------------------ *
  * Local byte moves (no libc, no kernel string.h)
@@ -582,7 +584,8 @@ static int rule_matches(const struct frame_class_rule *r,
 			return 0;
 	}
 	if (r->match & M_INNERLEN_SELF) {
-		uint16_t got;
+		uint16_t got, msg_content;
+		uint32_t ext;
 
 		if (c->content < VMS_SCS_INNER_LEN_BIAS)
 			return 0;
@@ -591,10 +594,50 @@ static int rule_matches(const struct frame_class_rule *r,
 			c->v->err = VMS_CODEC_OK;
 			return 0;
 		}
-		if (got != (uint16_t)(c->content - VMS_SCS_INNER_LEN_BIAS))
+		/* rd vms-239: a READ END (port op 0x15) is the same message with
+		 * the transfer's final chunk piggybacked past its inner length;
+		 * its inner length is self-consistent with the MESSAGE it
+		 * declares, not with the frame (vms_scs_msg_extent). */
+		ext = vms_scs_msg_extent(c->v->b, c->v->len);
+		msg_content = (ext < c->v->len)
+				      ? (uint16_t)(ext - VMS_ETH_HDR_LEN)
+				      : c->content;
+		if (got != (uint16_t)(msg_content - VMS_SCS_INNER_LEN_BIAS))
 			return 0;
 	}
 	return 1;
+}
+
+/*
+ * rd vms-239. Measured on a real VAX1 serving MSCP to VAX2 (capture
+ * tests/lab/captures/vms-b20-mscp-read-20261011, 53 of 53 opcode-0x15
+ * frames): port opcode 0x15 (abs 55) is an ordinary SCS message -- format
+ * word 0x0004, message type 10, inner length 46 for the 32-byte READ END --
+ * followed, past the length that inner header declares, by a 28-byte block
+ * header and the transfer's last data. The message itself therefore ends at
+ * 14 + 44 + inner_len. Any other frame's message is the whole frame.
+ *
+ * The extent is handed out only when it is a real one: the inner message
+ * reaches its SYSAP body (abs 72) and the bytes past it hold at least the
+ * 28-byte block header. Otherwise the frame is reported whole, which no
+ * application-message class then accepts as a trailer frame.
+ */
+uint32_t vms_scs_msg_extent(const uint8_t *frame, uint32_t len)
+{
+	vms_wire_view_t v;
+	uint32_t inner;
+	uint8_t op;
+	uint16_t il;
+
+	vms_wire_view_init(&v, frame, len);
+	op = vms_wire_get_u8(&v, VMS_OFF_BLK_PORT_OP);
+	il = vms_wire_get_le16(&v, VMS_OFF_SCS_INNER_LEN);
+	if (!vms_wire_view_ok(&v) || op != VMS_BLK_OP_STREAM_END_MSG)
+		return len;
+	inner = (uint32_t)VMS_ETH_HDR_LEN + VMS_SCS_INNER_LEN_BIAS + il;
+	if (inner <= VMS_OFF_SYSAP_BODY || inner + VMS_BLK_HDR_LEN > len)
+		return len;
+	return inner;
 }
 
 /* Decide the family and read the family's discriminator byte. */

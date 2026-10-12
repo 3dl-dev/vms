@@ -271,6 +271,20 @@ struct scs_sysap_ops {
 	 */
 	const uint8_t *accept_conndata;   /* VMS_SCS_PROCNAME_LEN, or NULL */
 
+	/*
+	 * OPTIONAL (may be NULL / 0). The CONNECT-side mirror of the two
+	 * SYSAP-identity facts above (rd vms-239): this SYSAP's OWN 16-byte
+	 * connect data and its Minimum Send Credits (p. 2-44, SCS$W_MIN_CR)
+	 * for a connection it OPENS through scs_connect() without naming
+	 * connect data of its own. Like `accept_conndata` they belong to the
+	 * SYSAP, not the request: every real disk class driver states the
+	 * same two values on every connect it makes, whichever server it
+	 * dials (tests/lab/captures/vms-239-mscp-connect-20261011). NULL / 0
+	 * keeps the old meaning -- blank-filled data, no floor.
+	 */
+	const uint8_t *connect_conndata;  /* VMS_SCS_PROCNAME_LEN, or NULL */
+	uint16_t       connect_min_credits;
+
 	void *ctx;
 };
 
@@ -424,6 +438,18 @@ int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
  */
 int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
 		   vms_scs_sysid_t *out);
+
+/*
+ * THE PEER'S OWN CON.ID for the connection behind `local_conid` (rd vms-239):
+ * the value its CONNECT/ACCEPT really carried, learned off the wire. A SYSAP
+ * whose protocol names the PEER's connection in a message body needs it -- an
+ * MSCP class driver's READ/WRITE buffer descriptor carries the SERVER's
+ * Con.ID (71/71 real descriptors). SS$_NORMAL with *out set; SS$_BADPARAM when
+ * no live CDT or the peer's Con.ID was never learned (never a 0); SS$_NOSUCHDEV
+ * with no SCS.
+ */
+int scs_conid_remote(struct vms_scs *scs, vms_conid_t local_conid,
+		     vms_conid_t *out);
 
 /*
  * The 16 connect-data bytes the PEER's ACCEPT carried on a connection this node

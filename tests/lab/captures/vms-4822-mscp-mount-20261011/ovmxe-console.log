@@ -1,0 +1,206 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCAE00+36F0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+    11-OCT-2026 09:23:23.03
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   25.041707] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   25.047471] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 11-OCT-2026 09:23:24.91
+[   25.104891] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: 
+Username: [   27.656179] %PEA0, channel verified
+[   27.659179] %PEA0, virtual circuit open
+[   27.998991] %PEA0, channel verified
+[   28.000888] %PEA0, virtual circuit open
+[   28.136030] %CNXMAN, a connection manager was discovered on the interconnect
+[   28.139494] %CNXMAN, a connection manager was discovered on the interconnect
+[   28.142437] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   28.477301] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+SYSTEM
+Password: [   29.224369] %CNXMAN, sending VAXcluster membership request to system VAX2
+[   29.229649] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   29.233963] %CNXMAN, the cluster assigned this node a cluster system id
+[   29.235888] %CNXMAN, the cluster assigned this node a cluster system id
+[   29.238999] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   29.271431] %CNXMAN, this node is a member of the cluster
+[   29.273907] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   29.277385] %CNXMAN,   csid=00010001 slot=1 lockdirwt=1 entries=1 [not this implementation]
+[   29.279998] %CNXMAN,   csid=00010002 slot=2 lockdirwt=1 entries=1 [not this implementation]
+[   29.285507] %CNXMAN,   csid=00010003 slot=3 lockdirwt=0 entries=0 (this node)
+[   29.288168] %CNXMAN, VAXcluster state transition in progress
+[   29.289952] %CNXMAN, this node is now a VAXcluster member
+[   29.291525] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   29.294280] %CNXMAN,   csid=00010001 slot=1 lockdirwt=1 entries=1 [not this implementation]
+[   29.296394] %CNXMAN,   csid=00010002 slot=2 lockdirwt=1 entries=1 [not this implementation]
+[   29.298946] %CNXMAN,   csid=00010003 slot=3 lockdirwt=0 entries=0 (this node)
+[   29.301250] %CNXMAN, system 0000000000000406 was added to the cluster
+[   29.303222] %CNXMAN, system 0000000000000401 was added to the cluster
+[   29.304946] %CNXMAN, system 0000000000000402 was added to the cluster
+[   29.307141] %CNXMAN, transaction close not answered: this node holds no value for a required field
+
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+[   31.211209] vms: MSCP class driver: controller online, discovering
+[   31.217237] vms: served disk VAX1$DUA16384: (unit 16384, served by a cluster member)
+[   31.223477] vms: served disk VAX1$DUA16385: (unit 16385, served by a cluster member)
+[   31.226522] vms: served disk VAX1$DUA16386: (unit 16386, served by a cluster member)
+[   31.229398] vms: served disk VAX1$DUA16387: (unit 16387, served by a cluster member)
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ MOUNT VAX1$DUA16386: DATA2
+%MOUNT-I-MOUNTED, DATA2 mounted on _VAX1$DUA16386:
+$ TYPE VAX1$DUA16386:[000000]LIST.TXT
+
+Directory SYS$COMMON:[SYSEXE]
+
+ACC.EXE;1           ACLEDT.EXE;1        AGEN$FEEDBACK.EXE;1 AMDS$RMCP.EXE;1    
+ANALAUDIT.EXE;1     ANALIMDMP.EXE;1     ANALYZBAD.EXE;1     ANALYZOBJ.EXE;1    
+ANALYZRMS.EXE;1     AUDIT_SERVER.EXE;1  AUTHORIZE.EXE;1     BACKUP$MANAGER.EXE;1
+BACKUP.EXE;1        BADBLOCK.EXE;1      BOOT58.EXE;1        BOOTBLOCK.EXE;1    
+CDA$CONVERT.EXE;1   CDA$PACK.EXE;1      CDA$UNPACK.EXE;1    CDU.EXE;1          
+CHECKSUM.EXE;1      CIA.EXE;1           CLUE.EXE;1          CONFIGURE.EXE;1    
+CONVERT.EXE;1       CONVERT_OLD.EXE;1   CONVERT_PROXY.EXE;1 COPY.EXE;1         
+CREATE.EXE;1        CREATEFDL.EXE;1     CSP.EXE;1           CVTNAFV5.EXE;1     
+CWLOGINIT.EXE;1     DBLMSGMGR.EXE;1     DCE$ADD_ID.EXE;1    DCE$DCED.EXE;1     
+DCE$RPCCP.EXE;1     DCE$RPCPERF_CLIENT.EXE;1                DCE$RPCPERF_SERVER.EXE;1
+DCL.EXE;1           DDIF$VIEW.EXE;1     DECSOUND.EXE;1      DECW$BOOKREADER.EXE;1
+DECW$CALC.EXE;1     DECW$CALENDAR.EXE;1 DECW$CARDFILER.EXE;1
+DECW$CBI.EXE;1      DECW$CLOCK.EXE;1    DECW$DWT_DECNET.EXE;1
+DECW$DWT_FONT_DAEMON.EXE;1              DECW$DWT_STARTXTDRIVER.EXE;1
+DECW$ENDSESSION.EXE;1                   DECW$FONTCOMPILER.EXE;1
+DECW$MAIL.EXE;1     DECW$MESSAGEPANEL.EXE;1                 DECW$MKFONTDIR.EXE;1
+DECW$MWM.EXE;1      DECW$NOTEPAD.EXE;1  DECW$PAINT.EXE;1    DECW$PAUSESESSION.EXE;1
+DECW$PRINTSCREEN.EXE;1                  DECW$PUZZLE.EXE;1   DECW$SERVER_MAIN.EXE;1
+DECW$SESSION.EXE;1  DECW$SETSHODIS.EXE;1                    DECW$STARTLOGIN.EXE;1
+DECW$TERMINAL.EXE;1 DECW$TERMINAL_CREATE.EXE;1              DECW$UILMOTIF.EXE;1
+DECW$WAITFORSM.EXE;1                    DECW$WINMGR.EXE;1   DECW$WML.EXE;1     
+DECW$WSCUST.EXE;1   DECW$WSINIT.EXE;1   DELETE.EXE;1        DIFF.EXE;1         
+DIRECTORY.EXE;1     DISKQUOTA.EXE;1     DISMOUNT.EXE;1      DNS$ADVER.EXE;1    
+DNS$ANALYZE.EXE;1   DNS$SOLICIT.EXE;1   DSRINDEX.EXE;1      DSRTOC.EXE;1       
+DTEPAD.EXE;1        DTRECV.EXE;1        DTSEND.EXE;1        DUMP.EXE;1         
+EDF.EXE;1           EDF_OLD.EXE;1       EDT.EXE;1           ERF.EXE;1          
+ERFADPTR.EXE;1      ERFBRIEF.EXE;1      ERFBUS.EXE;1        ERFCNTRL.EXE;1     
+ERFCVAX.EXE;1       ERFDISK.EXE;1       ERFDISK2.EXE;1      ERFMISC.EXE;1      
+ERFMSCP.EXE;1       ERFNVAX.EXE;1       ERFRLTIM.EXE;1      ERFSCSI.EXE;1      
+ERFSUMM.EXE;1       ERFTAPE.EXE;1       ERFUVAX.EXE;1       ERFV14.EXE;1       
+ERFV9000.EXE;1      ERFVAX7XX.EXE;1     ERFVX8200.EXE;1     ERFVX8600.EXE;1    
+ERFVX87XX.EXE;1     ERFXRP.EXE;1        ERRFMT.EXE;1        ERRSNAP.EXE;1      
+ESS$ISL_VMSLOAD.EXE;1                   ESS$LADCP.EXE;1     ESS$LASTCP.EXE;1   
+EVL.EXE;1           EXCHANGE$NETWORK.EXE;1                  EXCHANGE.EXE;1     
+F11AACP.EXE;1       F11CACP.EXE;1       F11DACP.EXE;1       FAL.EXE;1          
+FILESERV.EXE;1      GENCAT.EXE;1        HLD.EXE;1           HLP2HTML.EXE;1     
+HSCPAD.EXE;1        ICONV.EXE;1         ICONVC.EXE;1        INIT.EXE;1         
+INPSMB.EXE;1        INSTALL.EXE;1       IPCACP.EXE;1        JBC$COMMAND.EXE;1  
+JBC$JOB_CONTROL.EXE;1                   LALOAD.EXE;1        LALOADER.EXE;1     
+LANACP.EXE;1        LANCP.EXE;1         LATACP.EXE;1        LATCP.EXE;1        
+LATSYM.EXE;1        LDLOCALE.EXE;1      LIBRARIAN.EXE;1     LINK.EXE;1         
+LMCP.EXE;1          LMF.EXE;1           LOAD_UNICODE_TABLE.EXE;1
+LOCALE.EXE;1        LOCALEDEF.EXE;1     LOGINOUT.EXE;1      LTPAD.EXE;1        
+MACRO32.EXE;1       MAIL.EXE;1          MAIL_OLD.EXE;1      MAIL_SERVER.EXE;1  
+MESSAGE.EXE;1       MIME.EXE;1          MIRROR.EXE;1        MOM.EXE;1          
+MONITOR.EXE;1       MSCP.EXE;1          MSGHLP$MAIN.EXE;1   MTAAACP.EXE;1      
+NCP.EXE;1           NCS.EXE;1           NET$NAME_SERVER.EXE;1
+NETACP.EXE;1        NETSERVER.EXE;1     NETWRK$NETWORK.EXE;1
+NICONFIG.EXE;1      NML.EXE;1           OPCCRASH.EXE;1      OPCOM.EXE;1        
+OPENVMS$FTP.EXE;1   OPENVMS$FTPDIR.EXE;1                    OPENVMS$RCP.EXE;1  
+OPENVMS$RLOGIN.EXE;1                    OPENVMS$TELNET.EXE;1
+OPENVMS$TN3270.EXE;1                    PATCH.EXE;1         PCSI$MAIN.EXE;1    
+PHONE.EXE;1         PRTSMB.EXE;1        QMAN$QUEUE_MANAGER.EXE;1
+QUEMAN.EXE;1        RECLAIM.EXE;1       RECOVER.EXE;1       REMACP.EXE;1       
+RENAME.EXE;1        REPLY.EXE;1         REQUEST.EXE;1       RMSREC$SERVER.EXE;1
+RTB.EXE;1           RTPAD.EXE;1         RUNDET.EXE;1        RUNOFF.EXE;1       
+SCACP.EXE;1         SDA.EXE;1           SDLNPARSE.EXE;1     SEARCH.EXE;1       
+SECURITY_SERVER.EXE;1                   SET.EXE;1           SETAUDIT.EXE;1     
+SETFILENOMOVE.EXE;1 SETFILENOSHELV.EXE;1                    SETP0.EXE;1        
+SETPREFER.EXE;1     SETRIGHTS.EXE;1     SETSHOSECUR.EXE;1   SETSHOSERVER.EXE;1 
+SETWATCH.EXE;1      SHADOW_SERVER.EXE;1 SHOW.EXE;1          SHWCLSTR.EXE;1     
+SMGBLDTRM.EXE;1     SMGMAPTRM.EXE;1     SMISERVER.EXE;1     SMPUTIL.EXE;1      
+SORTMERGE.EXE;1     STABACCOP.EXE;1     STABACKUP.EXE;1     STACONFIG.EXE;1    
+STANDCONF.EXE;1     STASYSGEN.EXE;1     STOPREM.EXE;1       SUBMIT.EXE;1       
+SUMSLP.EXE;1        SYSBOOT.EXE;1       SYSBOOT_XDELTA.EXE;1
+SYSGEN.EXE;1        SYSINIT.EXE;1       SYSMAN.EXE;1        TCPIP$ARP.EXE;1    
+TCPIP$BIND_SERVER.EXE;1                 TCPIP$BIND_SERVER_CONTROL.EXE;1
+TCPIP$BIND_SERVER_XFER.EXE;1            TCPIP$BOOTP.EXE;1   TCPIP$DHCP_BPASCIITODBMOD.EXE;1
+TCPIP$DHCP_BPISAMTOASCII.EXE;1          TCPIP$DHCP_CLIENT.EXE;1
+TCPIP$DHCP_CLIENT_CONF.EXE;1            TCPIP$DHCP_CLIENT_SHOWDHC.EXE;1
+TCPIP$DHCP_DBDUMP.EXE;1                 TCPIP$DHCP_DBMODIFY.EXE;1
+TCPIP$DHCP_DBREGISTER.EXE;1             TCPIP$DHCP_DBSHOW.EXE;1
+TCPIP$DHCP_GUI.EXE;1                    TCPIP$DHCP_SERVER.EXE;1
+TCPIP$DHCP_SHOWDBS.EXE;1                TCPIP$DHCP_SIGNAL.EXE;1
+TCPIP$DIG.EXE;1     TCPIP$DNFSACP.EXE;1 TCPIP$DNFSDISMOUNT.EXE;1
+TCPIP$DNFSMOUNT.EXE;1                   TCPIP$ECHO_SERVER_PLUS.EXE;1
+TCPIP$ESNMP_SERVER.EXE;1                TCPIP$FINGER.EXE;1  TCPIP$FINGER_SERVER.EXE;1
+TCPIP$FTP_CHILD.EXE;1                   TCPIP$FTP_CLIENT.EXE;1
+TCPIP$FTP_SERVER.EXE;1                  TCPIP$GATED.EXE;1   TCPIP$HR_MIB.EXE;1 
+TCPIP$IFCONFIG.EXE;1                    TCPIP$INETACP.EXE;1 TCPIP$IP6RTRD.EXE;1
+TCPIP$IP6_TESTADDR.EXE;1                TCPIP$IPTUNNEL.EXE;1
+TCPIP$LBROKER.EXE;1 TCPIP$LOCKD.EXE;1   TCPIP$LPD_RCV.EXE;1 TCPIP$LPD_SMB.EXE;1
+TCPIP$LPQ.EXE;1     TCPIP$LPRM.EXE;1    TCPIP$LPRSETUP.EXE;1
+TCPIP$METRIC.EXE;1  TCPIP$METRICVIEW.EXE;1                  TCPIP$MIBCOMP.EXE;1
+TCPIP$MOSY.EXE;1    TCPIP$MOUNTD.EXE;1  TCPIP$ND6HOST.EXE;1 TCPIP$NETSTAT.EXE;1
+TCPIP$NFSSTAT.EXE;1 TCPIP$NFS_SERVER.EXE;1                  TCPIP$NSLOOKUP.EXE;1
+TCPIP$NSUPDATE.EXE;1                    TCPIP$NTP.EXE;1     TCPIP$NTPDATE.EXE;1
+TCPIP$NTPDC.EXE;1   TCPIP$NTPQ.EXE;1    TCPIP$NTPTRACE.EXE;1
+TCPIP$NTP_RES_CHILD.EXE;1               TCPIP$OS_MIBS.EXE;1 TCPIP$PCNFSD.EXE;1 
+TCPIP$PING.EXE;1    TCPIP$POP_SERVER.EXE;1                  TCPIP$PORTMAPPER.EXE;1
+TCPIP$PWIPACP.EXE;1 TCPIP$PWIPSHUT.EXE;1                    TCPIP$RCP.EXE;1    
+TCPIP$RIPQUERY.EXE;1                    TCPIP$RLOGIN.EXE;1  TCPIP$RMT.EXE;1    
+TCPIP$ROUTE.EXE;1   TCPIP$ROUTED.EXE;1  TCPIP$RPCGEN.EXE;1  TCPIP$RPCINFO.EXE;1
+TCPIP$RSH.EXE;1     TCPIP$SERVICE_START.EXE;1               TCPIP$SMTP_RECEIVER.EXE;1
+TCPIP$SMTP_SFF.EXE;1                    TCPIP$SMTP_SYMBIONT.EXE;1
+TCPIP$SNMPI.EXE;1   TCPIP$SNMP_REQUEST.EXE;1                TCPIP$SNMP_TRAPRCV.EXE;1
+TCPIP$SNMP_TRAPSND.EXE;1                TCPIP$STATD.EXE;1   TCPIP$SYSCONFIG.EXE;1
+TCPIP$TELNET.EXE;1  TCPIP$TELNETSYM.EXE;1                   TCPIP$TFTP.EXE;1   
+TCPIP$TRACE.EXE;1   TCPIP$TRACEROUTE.EXE;1                  TCPIP$TTCP.EXE;1   
+TCPIP$UCP.EXE;1     TCPIP$UUDECODE.EXE;1                    TCPIP$UUENCODE.EXE;1
+TCPIP$VERSIONS.EXE;1                    TCPIP$XDM.EXE;1     TCPIP$XDMW.EXE;1   
+TECO32.EXE;1        TERMTABLE.EXE;1     TERTIARY_VMB.EXE;1  TFU.EXE;1          
+TMSCP.EXE;1         TNT$HELPER.EXE;1    TNT$SERVER.EXE;1    TNT$UTILITY.EXE;1  
+TPSERV.EXE;1        TPU.EXE;1           TYPE.EXE;1          UCX$TELNETSYM.EXE;1
+UCX$UCP.EXE;1       UNLOCK.EXE;1        UTC$CONFIGURE_TDF.EXE;1
+VERIFY.EXE;1        VMB.EXE;1           VMB9AQ.EXE;1        VMOUNT.EXE;1       
+VMSHELP.EXE;1       VPM.EXE;1           VPM_SERVER.EXE;1    VUE$MASTER.EXE;1   
+WP.EXE;1            WRITEBOOT.EXE;1     XFLOADER.EXE;1      ZIC.EXE;1          
+
+Total of 362 files.
+$ 

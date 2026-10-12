@@ -1181,6 +1181,13 @@ static enum cnxman_open_gap coord_open_csv(const struct cnxman_coord *c,
 		return gap;
 	if (!subject->cfg_count_valid || subject->cfg_count > 0xffffu)
 		return CNXMAN_OPEN_GAP_SUBJECT;
+	/* rd vms-64b: body[92]/[100:102]/[102:104] are the cluster's DLM
+	 * rebuild sequence in force, not a slot (27 of 28 real opens; the
+	 * earlier slot reading coincided with it on the six it was taken
+	 * from). An open this node cannot fill with it is not proposed --
+	 * asked at the gate, before any slot is assigned. */
+	if (!c->cl->club.dlm_seq_valid)
+		return CNXMAN_OPEN_GAP_DLMSEQ;
 	if (!assigned)
 		return CNXMAN_OPEN_GAP_NONE;   /* gate: the rest follows the slot */
 	coord_open_census(c, &low, &top);
@@ -1189,7 +1196,7 @@ static enum cnxman_open_gap coord_open_csv(const struct cnxman_coord *c,
 		return CNXMAN_OPEN_GAP_CSV;
 	out->subj_cfg = (uint16_t)subject->cfg_count;
 	out->csv_low = (uint16_t)low;
-	out->csv_hwm = (uint16_t)(c->subject_rejoined ? slot : slot - 1u);
+	out->dlm_seq = c->cl->club.dlm_seq;
 	out->csv_top = (uint16_t)top;
 	out->hold = VMS_CM_OPEN_HOLD_DELTA;
 	return CNXMAN_OPEN_GAP_NONE;
@@ -1278,6 +1285,14 @@ static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, transition proposal could not be built");
 		return;
 	}
+	/* rd vms-64b: an ADD that went without its cells goes only to systems
+	 * running this implementation (gate 2 above); the joiner still needs
+	 * the DLM rebuild sequence before its first DLM send, so the three
+	 * copies a real open carries are written whenever this node holds it. */
+	if (cp == NULL && c->tr_class == VMS_CM_CLASS_ADD &&
+	    coord_club(c)->dlm_seq_valid)
+		(void)vms_cm_open_dlm_seq_put(c->scratch, written,
+					      coord_club(c)->dlm_seq);
 	/* A REQUEST: 97/97 real op-0x09 originations carry a nonzero pair. */
 	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_REQUEST);
 	coord_emit(c, dst, written);
@@ -1393,6 +1408,19 @@ static void coord_commit_phase2(struct cnxman_coord *c)
 	in.bitmap_valid = c->bitmap_valid;
 	in.bitmap_popcount = c->bitmap_popcount;
 	in.reconfig = (uint8_t)(c->tr_class == VMS_CM_CLASS_REMOVE);
+	/* rd vms-64b: the rebuild type this ADD's open carries. A member that
+	 * held a vector before decides the DLM-sequence step from its own two
+	 * vectors and never reads this; it matters for a coordinator taking
+	 * part in its first commit since founding. */
+	in.rebuild = 0u;
+	if (c->tr_class == VMS_CM_CLASS_ADD && c->subject_csb >= 0 &&
+	    (uint32_t)c->subject_csb < c->cl->club.n_csb) {
+		uint8_t rb = 0u;
+
+		if (coord_open_rebuild(c, &c->cl->club.csb[c->subject_csb], &rb)
+		    == CNXMAN_OPEN_GAP_NONE)
+			in.rebuild = rb;
+	}
 
 	(void)cnxman_phase2_commit(c->cl, &in, &st, c->ops);
 
@@ -1760,7 +1788,7 @@ static int coord_take_nodemap(struct cnxman_coord *c, uint8_t tr_class,
 	 * before this call. */
 	if (tr_class == VMS_CM_CLASS_ADD && subject != NULL) {
 		/* A block that still carries a CSID is a system this cluster
-		 * has held before: its open says so (VMS_OFB_CM_OPEN_CSV_HWM*). */
+		 * has held before. */
 		c->subject_rejoined = subject->csid_valid;
 		coord_assign_slot(c, subject, subject_slot);
 	}
@@ -2735,6 +2763,9 @@ int cnxman_coord_found(struct cnxman_coord *c,
 	 * it, so it can no more be said without a membership than the joiner's.
 	 */
 	coord_log(c, "%CNXMAN, this node is now a VAXcluster member");
+	/* rd vms-64b: a formation leaves the DLM rebuild sequence at 1 (38/38
+	 * real formations), and the founder is the one node nobody tells. */
+	cnxman_club_dlm_seq_found(club);
 	/* ...and this node now holds what every later open carries: it is the
 	 * founder, now is the formation time, the cluster it formed is one
 	 * system with its votes (rd vms-f297). */

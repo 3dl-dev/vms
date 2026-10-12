@@ -369,6 +369,15 @@ static void test_founds_and_becomes_member(void)
 			"the coordinator lock was released (p. 7-42)");
 	ct_check_eq_u32(g.c.genesis_opens, 1u, "one founding transition counted");
 
+	/* rd vms-64b: a formation leaves the cluster's DLM rebuild sequence at
+	 * 1 (38/38 real formations), and the founder is the one node no open
+	 * tells -- so founding sets it, and its first DLM send carries it. */
+	ct_check_eq_u32(g.cl.club.dlm_seq_valid, 1u,
+			"*** the founder holds the DLM rebuild sequence ***");
+	ct_check_eq_u32(g.cl.club.dlm_seq, 1u, "... and it is 1, as a formation leaves it");
+	ct_check_eq_u32(g.cl.club.dlm_seq_vsig_valid, 1u,
+			"... with the founding vector recorded for the next commit");
+
 	/* AND NOTHING WENT ON THE WIRE. */
 	ct_check_eq_u32(g.sends, 0u, "no frame was sent: there is nobody to send to");
 	ct_check_eq_u32(g.responds, 0u, "... and nothing was responded to");

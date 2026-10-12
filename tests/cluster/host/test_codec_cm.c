@@ -462,7 +462,7 @@ static void test_remove_open_carries_the_kept_nodemap(void)
 struct f297_open_case {
 	const char *name;
 	uint16_t slot_next, quorum, subj_qdsk, fsysid, subj_cfg, cevotes;
-	uint16_t csv_hwm, csv_top;
+	uint16_t dlm_seq, csv_top;
 	uint8_t  rc_members, rc_votes, rebuild;
 };
 
@@ -494,7 +494,7 @@ static void f297_check_open(const struct f297_open_case *k)
 	ct_check_eq_u32(o.cells.subj_cfg, k->subj_cfg, "  [87:89] the subject's own op-0x02 count");
 	ct_check_eq_u32(o.cells.cevotes, k->cevotes, "  [96:98] post-transition votes");
 	ct_check_eq_u32(o.cells.csv_low, 1u, "  [98:100] lowest slot");
-	ct_check_eq_u32(o.cells.csv_hwm, k->csv_hwm, "  [100:102] CSV high-water");
+	ct_check_eq_u32(o.cells.dlm_seq, k->dlm_seq, "  [100:102] CSV high-water");
 	ct_check_eq_u32(o.cells.csv_top, k->csv_top, "  [104:106] highest slot");
 	ct_check(o.cells.hold == VMS_CM_OPEN_HOLD_DELTA, "  [106:114] the -900 s delta");
 	ct_check(o.cells.ftime != 0u && o.cells.stamp > o.cells.ftime,
@@ -1697,8 +1697,47 @@ static void test_rdev_records_against_real_pairs(void)
 			"an undecoded kind has no absent-device status");
 }
 
+/*
+ * rd vms-64b: the coordinator's class-0x02 transition OPEN to the joiner
+ * OVMXE, lab run mscp-239 r20 (ts 1791710610.787184): it carries the cluster's
+ * DLM rebuild sequence N = 2 at body[92], body[100:102] and body[102:104],
+ * before OVMXE's first DLM send -- and the real VAXes' own DLM headers in the
+ * same run carry 2.
+ */
+static const uint8_t g_open09_r20[132] = {
+	0x08, 0x01, 0x5a, 0x00, 0x09, 0x00, 0xb0, 0x53, 0x01, 0x09, 0x00, 0x00,
+	0x05, 0x00, 0x00, 0x00, 0x40, 0x02, 0x00, 0x00, 0x04, 0x00, 0x02, 0x00,
+	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xb5, 0xe7, 0x7b,
+	0xea, 0x3c, 0xbc, 0x00, 0x40, 0x7f, 0xda, 0xa4, 0xea, 0x3c, 0xbc, 0x00,
+	0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+	0x02, 0x00, 0x01, 0x00, 0x02, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x60,
+	0xee, 0x78, 0xde, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
+};
+
+static void test_open_dlm_seq(void)
+{
+	uint8_t b[132];
+	uint16_t n = 0u;
+
+	printf("-- vms-64b: the 0x09 open names the cluster's DLM sequence\n");
+	memcpy(b, g_open09_r20, sizeof(b));
+	ct_check(vms_cm_open_dlm_seq(b, sizeof(b), &n) == VMS_CODEC_OK &&
+		 n == 2u, "*** the real open's three copies give N = 2 ***");
+	b[100] = 3u;
+	ct_check(vms_cm_open_dlm_seq(b, sizeof(b), &n) == VMS_CODEC_E_SHORT,
+		 "copies that disagree are not trusted");
+	b[100] = 2u; b[9] = 0x08u;
+	ct_check(vms_cm_open_dlm_seq(b, sizeof(b), &n) == VMS_CODEC_E_CLASS,
+		 "an op-0x08 open is not this carrier");
+}
+
 int main(void)
 {
+	test_open_dlm_seq();
 	char err[VMS_FIXTURE_ERRLEN];
 
 	printf("test_codec_cm: connection-manager codec entries (FC-P3.1)\n");

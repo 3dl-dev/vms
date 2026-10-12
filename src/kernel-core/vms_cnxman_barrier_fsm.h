@@ -237,6 +237,8 @@ struct cnxman_barrier {
 	uint8_t  bitmap;            /* body[55] as received; 0 unless valid    */
 	uint8_t  bitmap_valid;      /* only an op-0x09 ADD open carries one    */
 	uint8_t  bitmap_popcount;   /* == the post-transition member count     */
+	uint8_t  open_rebuild;      /* the open's body[24], 0 = not carried
+				     * (rd vms-64b)                            */
 	uint8_t  pad[3];
 
 	/* ---- what this node has done, all counted from real dispatches ---- */

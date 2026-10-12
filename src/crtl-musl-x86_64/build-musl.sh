@@ -15,10 +15,26 @@ MUSL_VER=1.2.4
 MUSL_SHA256=7a35eae33d5372a7c0da1188de798726f68825513b7ae3ebe97aaaa52114f039
 
 rm -rf "$W"; mkdir -p "$W"; cd "$W"
-if command -v wget >/dev/null 2>&1; then
-    wget -q "https://musl.libc.org/releases/musl-${MUSL_VER}.tar.gz"
+# musl source, pinned + checksum-verified. The VENDORED copy beside this script
+# comes first, so the build is hermetic: a fetch from musl.libc.org failed a
+# merge-queue negative-control shard with "Could not resolve host" (rd vms-244d
+# made the alpha musl build hermetic for the same reason). A network fetch is
+# the fallback for a tree without the blob: both published hosts, retried with
+# backoff. The checksum is enforced whichever way the bytes arrived.
+if [ -f "$HERE/musl-${MUSL_VER}.tar.gz" ]; then
+    cp "$HERE/musl-${MUSL_VER}.tar.gz" .
 else
-    curl -sSfL -o "musl-${MUSL_VER}.tar.gz" "https://musl.libc.org/releases/musl-${MUSL_VER}.tar.gz"
+    n=0
+    until [ "$n" -ge 4 ]; do
+        for host in musl.libc.org www.musl-libc.org; do
+            curl -sSfL --connect-timeout 30 -o "musl-${MUSL_VER}.tar.gz" \
+                "https://${host}/releases/musl-${MUSL_VER}.tar.gz" &&
+                echo "${MUSL_SHA256}  musl-${MUSL_VER}.tar.gz" | sha256sum -c - >/dev/null 2>&1 &&
+                break 2
+            rm -f "musl-${MUSL_VER}.tar.gz"
+        done
+        n=$((n + 1)); sleep $((n * 10))
+    done
 fi
 echo "${MUSL_SHA256}  musl-${MUSL_VER}.tar.gz" | sha256sum -c -
 tar xzf "musl-${MUSL_VER}.tar.gz"

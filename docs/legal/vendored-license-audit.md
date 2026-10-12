@@ -33,6 +33,7 @@ Redistribution obligations attach only to what is **redistributed**. A **build-o
 | **GCC** (cross alpha/vax) | GPL-3.0-or-later + Runtime Library Exception | `tools/cross-alpha-vms/gcc-14.2.0.tar.xz` (committed) | **BUILD-ONLY** cross-compiler; output not in x86_64 image. But the **pristine source tarball is committed** → redistributed as source in the git repo | No (pristine) | Copyleft source obligation **self-satisfied** (pristine upstream source is what's redistributed). Flag as bundled source |
 | **binutils** (cross) | GPL-3.0-or-later | `tools/cross-vax/binutils-2.42.tar.xz`, `tools/cross-alpha-vms/binutils-2.43.tar.xz` (committed) | **BUILD-ONLY**; pristine source tarballs committed/redistributed in-repo | No | Same as GCC — self-satisfied |
 | **musl** (cross src) | MIT | `tools/cross-alpha-vms/musl-arch/musl-1.2.5.tar.gz` (committed) | **BUILD-ONLY** cross-build source | No | Permissive |
+| **musl** (x86_64 C RTL base src) | MIT | `src/crtl-musl-x86_64/musl-1.2.4.tar.gz` (committed, pristine upstream, sha256-pinned) | **BUILD-ONLY** source of the QEMU harness's C RTL base (tests/qemu/Dockerfile, `build-musl.sh`) | No (pristine tarball; the funnel overlay is OVMX's own) | Permissive |
 
 ---
 

@@ -1757,3 +1757,9 @@ vms_codec_status_t vms_cm_params_quorum_put(uint8_t *body, uint32_t cap,
 	cm_put_le_n(body, VMS_OFB_CM_QDSKVOTES, (uint64_t)qdskvotes, 2u);
 	return VMS_CODEC_OK;
 }
+
+uint16_t vms_cm_close_state_after_pull(uint8_t kind)
+{
+	return kind == (uint8_t)VMS_CM_CLOSE_KIND_K5 ?
+		(uint16_t)VMS_CM_CLOSE_STATE_K5_PULLED : 0u;
+}

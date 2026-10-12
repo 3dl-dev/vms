@@ -2336,6 +2336,52 @@ static void test_k10_close_writes_back_then_answers(void)
 	ct_check_eq_u32(g.n_sent, sent_before, "  and no answer invented");
 }
 
+/*
+ * rd vms-db1: a kind-5 close (3,069 of 3,313 real answers: pull, then 4) is
+ * read and answered 4 -- nothing is written back. Withheld, it was the second
+ * close that kept a real VAX's startup waiting (labd52c db1-r1).
+ */
+static uint32_t mk_kind5(uint32_t len, uint32_t xfer_conid)
+{
+	uint32_t n = mk_kind6(len, xfer_conid);
+
+	g_frame[VMS_OFF_SYSAP_BODY + VMS_OFB_CM_CLOSE_REQ_KIND] =
+		(uint8_t)VMS_CM_CLOSE_KIND_K5;
+	return n;
+}
+
+static void test_k5_close_pulls_then_answers_4(void)
+{
+	uint32_t sent_before, conid;
+
+	printf("\n-- vms-db1: kind-5 close -- pull, answer 4, write nothing --\n");
+	rb_bed();
+	conid = g.member_csb->cdt_conid;
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind5(456u, conid));
+	ct_check_eq_u32(g.j.closes_withheld, 0u,
+			"*** a kind-5 close is NOT withheld ***");
+	ct_check_eq_u32(rb.req_len, 456u,
+			"its record is pulled whole (456 bytes, the commonest size)");
+	ct_check_eq_u32(g.n_sent, sent_before, "  no answer before the record is in");
+	if (rb.reg_buf != NULL)
+		cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 456u, 456u);
+	ct_check_eq_u32(rb.n_send, 0u, "*** nothing is written back ***");
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "the cat-0x86 goes once it is read");
+	ct_check_eq_u32(g.n_sent > sent_before ?
+			sent_le16(n_cm_sent() - 1u, VMS_OFB_CM_CLOSE_STATE) : 0u,
+			VMS_CM_CLOSE_STATE_K5_PULLED, "  with state 4");
+	ct_check_eq_u32(g.j.k5_answered, 1u, "  counted");
+	ct_check_eq_u32(rb.n_rel, 1u, "  and the buffer name is released");
+
+	/* Larger than the buffer: not pulled, not truncated, withheld. */
+	rb_bed();
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind5(CNXMAN_RDEV_BUF + 64u, g.member_csb->cdt_conid));
+	ct_check_eq_u32(rb.n_req, 0u, "an oversize record is not pulled");
+	ct_check_eq_u32(g.j.k5_oversize, 1u, "  counted oversize");
+}
+
 static void test_handoff_without_a_barrier(void)
 {
 	uint32_t len;
@@ -7297,6 +7343,7 @@ int main(void)
 	test_rdev_kind6_refusals_fall_back();
 	test_rdev_kind6_mount_record();
 	test_k10_close_writes_back_then_answers();
+	test_k5_close_pulls_then_answers_4();
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();
 	test_member_dialled_reaches_the_barrier();

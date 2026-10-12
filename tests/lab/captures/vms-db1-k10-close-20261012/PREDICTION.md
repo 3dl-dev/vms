@@ -29,3 +29,16 @@ OVMX never sends a kind-10 close of its own, so it is always in the "already don
 - **Q3.** 0 bugchecks. No VC between any two nodes drops while no SIMH pause is in progress.
 
 Falsifier: a VAX that retries the kind-10 close after a state-5 answer, or that never reaches `Username:`.
+
+## Addendum: kind 5 (registered 2026-10-12, after fire db1-r1 and before db1-r2)
+
+Fire db1-r1 confirmed Q1. Each VAX's kind-10 close got state 5 within 40 ms. Both VAXes then sent OVMXE a kind-5 close (136 bytes), which this build withheld, and VAX1 still had no `Username:`.
+
+Real kind-5 pairs in the corpus: 3,313 answers.
+- **4** after a pull, with nothing written back: 3,069.
+- **3** with no pull: 172. Every one came from a node that still had its own close to send, the same rule as kind 10.
+- Records are 136 + 64n bytes. The largest measured is 1,480.
+
+OVMX's rule: pull the record whole, write nothing back, answer 4. A record larger than OVMX's 2,048-byte buffer is not pulled; that case is counted and withheld.
+
+- **Q4 (db1-r2).** Every kind-5 and kind-10 close a VAX sends OVMXE is answered: 4 after a pull, or 5 after the measured write-back. Both VAXes reach `Username:`, and `CLUSTER_NODES` = 3. 0 bugchecks.

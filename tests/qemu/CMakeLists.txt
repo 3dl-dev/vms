@@ -391,6 +391,13 @@ qemu_syssvc_add_test(test_corpus_sys_device_scan
 qemu_syssvc_add_test(corpus_seed_lnm
     ${CMAKE_SOURCE_DIR}/tests/qemu/corpus_seed_lnm.c)
 
+# ovmx_boot_task -- the harness's boot task (rd vms-3fa): becomes SYSTEM once and
+# creates every suite init.sh runs as a SUBPROCESS (VMS_IOCTL_CREPRC_PCB), so
+# no suite runs as a process the executive did not create. A FIXTURE, not a
+# suite (no test_ prefix).
+qemu_syssvc_add_test(ovmx_boot_task
+    ${CMAKE_SOURCE_DIR}/tests/qemu/ovmx_boot_task.c)
+
 # ---------------------------------------------------------------------------
 # CORPUS RUNTIME COLUMN (vms-44a, roadmap R2.3).
 #

@@ -29,6 +29,7 @@
 #include "lkidef.h"
 #include "iledef.h"   /* ILE3 / ILE3_TERMINATOR */
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 struct lksb_caller {
     uint16_t lksb$w_status;
@@ -182,7 +183,7 @@ static void scenario_two_holders(void)
         return;
     }
 
-    pid_t child_pid = fork();
+    pid_t child_pid = ovmx_fork_subprocess(); /* a VMS subprocess of this suite (rd vms-3fa) */
     if (child_pid < 0) {
         printf("  FAIL: fork()\n");
         fail++;

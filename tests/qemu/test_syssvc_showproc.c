@@ -32,10 +32,9 @@
  * stdin redirected to a script that sleeps, so the running image is /bin/sh
  * -- a program that knows nothing about VMS and never opens /dev/vms. When
  * DCL then reports it BY NAME, the name can only have come from the
- * executive's table. The cross-group subject is a fork()ed helper that
- * setgid()s BEFORE its first kernel-interface call (the executive derives
- * the UIC from the task's credentials at registration, so it cannot declare
- * one later) and then names itself.
+ * executive's table. The cross-group subject is a subprocess this suite
+ * creates as a DETACHED process in another UIC group ($CREPRC uic, rd
+ * vms-3fa), which then names itself.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms. If /dev/vms cannot be opened
  * -- which happens ONLY in the CI negative-control rig, never in the product
@@ -62,6 +61,7 @@
 #include "ssdef.h"
 #include "jpidef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -312,8 +312,8 @@ static uint32_t pid_on_line(const char *line, int col)
  * place SHOW SYSTEM and SHOW PROCESS can be proven: they are readers of the
  * executive's process table, and ctest never runs anywhere one exists.
  *
- * `uic_group` >= 0 makes the child setgid() into that group and drop WORLD
- * from its own executive-held privilege mask BEFORE exec'ing DCL, so it
+ * `uic_group` >= 0 makes DCL a DETACHED process created in that UIC group with
+ * WORLD (and SETPRV) left out of its privileges ($CREPRC uic), so it
  * becomes a caller the executive will refuse cross-group identity reads for.
  * WORLD is the only privilege that authorises such a read (oracle-pinned,
  * docs/oracle/vax73-privileges.md Section 5.4); SETPRV is dropped with it so
@@ -347,7 +347,21 @@ static int run_dcl(const char *script, int uic_group, const char *prcnam,
      */
     fflush(NULL);
 
-    pid_t pid = fork();
+    /* DCL.EXE runs as a process this suite creates (rd vms-3fa): a subprocess,
+     * or -- for another UIC group -- a DETACHED process with that UIC and WORLD
+     * and SETPRV left out of its privileges ($CREPRC's uic argument). */
+    pid_t pid;
+    if (uic_group >= 0) {
+        struct vms_procinfo me;
+        pid = -1;
+        if (vms_kif_getjpi_self(&me) & 1)
+            pid = ovmx_fork_detached_st("OVMXDCLR",
+                                        ((uint32_t)uic_group << 16) | (me.uic & 0xFFFFu),
+                                        me.perm_privs & ~(uint64_t)(VMS_PRV_M_WORLD | VMS_PRV_M_SETPRV),
+                                        NULL);
+    } else {
+        pid = ovmx_fork_subprocess();
+    }
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -359,30 +373,13 @@ static int run_dcl(const char *script, int uic_group, const char *prcnam,
 
         if (uic_group >= 0) {
             struct vms_procinfo info;
-            uint32_t st;
-
-            if (setgid((gid_t)uic_group) != 0) {
-                printf(SETUP_FAIL_MARK " setgid\n"); fflush(stdout); _exit(126);
-            }
-            st = vms_kif_getjpi_self(&info);        /* first call: registers */
-            if (!(st & 1)) {
-                printf(SETUP_FAIL_MARK " register %08X\n", st);
-                fflush(stdout); _exit(126);
-            }
             if (prcnam && !(vms_kif_setprn(prcnam) & 1)) {
                 printf(SETUP_FAIL_MARK " setprn\n"); fflush(stdout); _exit(126);
             }
-            st = vms_kif_setident("OVMXDCLR", info.uic,
-                                  info.perm_privs &
-                                  ~(uint64_t)(VMS_PRV_M_WORLD |
-                                              VMS_PRV_M_SETPRV));
-            if (!(st & 1)) {
-                printf(SETUP_FAIL_MARK " setident %08X\n", st);
-                fflush(stdout); _exit(126);
-            }
             if (!(vms_kif_getjpi_self(&info) & 1) ||
-                (info.cur_privs & VMS_PRV_M_WORLD) != 0) {
-                printf(SETUP_FAIL_MARK " world-still-held\n");
+                (info.cur_privs & VMS_PRV_M_WORLD) != 0 ||
+                (info.uic >> 16) != (uint32_t)uic_group) {
+                printf(SETUP_FAIL_MARK " identity\n");
                 fflush(stdout); _exit(126);
             }
         }
@@ -486,9 +483,8 @@ static int wait_for_exec(uint32_t pid, const char *want)
 /*
  * xgrp_helper - a NAMED process in a UIC group of its own. Never returns.
  *
- * setgid()s BEFORE its first vms_kif_* call: the executive derives the UIC
- * from the task's credentials AT REGISTRATION, so a process cannot declare
- * one later. It stays uid 0 so it keeps the privilege to open /dev/vms.
+ * A DETACHED process this suite creates in its own UIC group ($CREPRC uic,
+ * rd vms-3fa).
  */
 static void xgrp_helper(int cmdfd, int repfd)
 {
@@ -497,10 +493,6 @@ static void xgrp_helper(int cmdfd, int repfd)
 
     memset(&rep, 0, sizeof(rep));
 
-    if (setgid(XGRP_UIC_GROUP) != 0) {
-        (void)write_full(repfd, &rep, sizeof(rep));
-        _exit(1);
-    }
     if (!(vms_kif_getjpi_self(&info) & 1)) {
         (void)write_full(repfd, &rep, sizeof(rep));
         _exit(1);
@@ -896,8 +888,8 @@ int main(void)
      *                                is group-scoped: not found at all)
      *       by PID,  out of group -> %SYSTEM-F-NOPRIV
      *
-     *     Both are run by a DCL.EXE that setgid()s into its own UIC group
-     *     and drops WORLD from its executive-held mask before exec, so
+     *     Both are run by a DCL.EXE created in its own UIC group with WORLD
+     *     left out of its privileges ($CREPRC uic), so
      *     the refusal comes from the executive and not from anything the
      *     test arranged in userspace.
      *
@@ -920,7 +912,14 @@ int main(void)
         if (pipe(cmdp) != 0 || pipe(repp) != 0) {
             CHECK(0, "pipes for the cross-group helper");
         } else {
-            pid_t hp = fork();
+            pid_t hp = -1;
+            {
+                struct vms_procinfo me;
+                if (vms_kif_getjpi_self(&me) & 1)
+                    hp = ovmx_fork_detached_st("OVMXXGRP",
+                                               ((uint32_t)XGRP_UIC_GROUP << 16) | (me.uic & 0xFFFFu),
+                                               me.perm_privs, NULL);
+            }
             if (hp == 0) {
                 close(cmdp[1]); close(repp[0]);
                 xgrp_helper(cmdp[0], repp[1]);

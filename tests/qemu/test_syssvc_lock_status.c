@@ -70,6 +70,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /* Caller-allocated Lock Status Block -- see test_syssvc_lock.c's file header
  * for why there is no shared public lksdef.h (Rule 8: no VMS-published byte
@@ -215,7 +216,7 @@ static void scenario_cvtungrant(void)
         return;
     }
 
-    pid_t child_pid = fork();
+    pid_t child_pid = ovmx_fork_subprocess(); /* a VMS subprocess of this suite (rd vms-3fa) */
     if (child_pid < 0) {
         printf("  FAIL: fork()\n");
         fail++;
@@ -377,7 +378,7 @@ static void scenario_deadlock(void)
         fail++;
         return;
     }
-    pid_t child_pid = fork();
+    pid_t child_pid = ovmx_fork_subprocess(); /* a VMS subprocess of this suite (rd vms-3fa) */
     if (child_pid < 0) {
         printf("  FAIL: fork()\n");
         fail++;

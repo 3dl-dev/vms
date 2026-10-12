@@ -49,6 +49,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -340,35 +341,34 @@ int main(void)
               "P3: the target has actually exec'd its image");
 
         /*
-         * Neither the target nor the helper below calls setgid(): both stay
-         * in group 0, the root parent's own UIC group -- exactly the
+         * The target ($CREPRC) and the helper (a subprocess, ovmx_test_fork.h)
+         * both carry this suite's own UIC, so they share its group -- exactly the
          * SAME-GROUP arrangement the Dictionary's GROUP-privilege rule
          * covers (the cross-group/WORLD case is already exercised
          * indirectly: vms_kif_getjpi_pid/prcnam refuse a cross-group
          * resolution outright, before sys$delprc's own check ever runs --
          * see that function's comment). Only the HELPER's own privilege
-         * mask changes, by vms_kif_setident() below; the target's mask is
+         * mask changes, by $SETPRV below; the target's mask is
          * irrelevant to a check that gates the CALLER, not the victim.
          */
         int pipefd[2];
         if (pipe(pipefd) != 0) {
             CHECK(0, "P3: pipe() for the privilege-stripped helper");
         } else {
-            pid_t hp = fork();
+            pid_t hp = ovmx_fork_subprocess(); /* a subprocess of this suite (rd vms-3fa) */
             if (hp == 0) {
-                /* Child: strip GROUP and WORLD from its own privilege mask
-                 * under a NEW username (identity-establishment requires one;
-                 * this process's own PCB-less row has none yet), then try to
-                 * delete TARGET3. */
+                /* Child: give up GROUP and WORLD, then try to delete TARGET3. */
                 close(pipefd[0]);
                 struct vms_procinfo self_info;
                 uint32_t st = vms_kif_getjpi_self(&self_info);
                 if (!(st & 1)) { uint32_t z = 0; write(pipefd[1], &z, 4); _exit(1); }
 
-                uint64_t stripped = self_info.perm_privs &
-                    ~(VMS_PRV_M_WORLD | (1ULL << VMS_PRV_V_GROUP));
-                st = vms_kif_setident("OVMX1A8HELP", self_info.uic, stripped);
+                /* $SETPRV: disable GROUP and WORLD, permanently, in this
+                 * process (System Services Reference, $SETPRV). */
+                uint64_t drop = VMS_PRV_M_WORLD | (1ULL << VMS_PRV_V_GROUP);
+                st = sys$setprv(0, &drop, 1, NULL);
                 if (!(st & 1)) { uint32_t z = 0; write(pipefd[1], &z, 4); _exit(1); }
+                (void)self_info;
 
                 struct dsc$descriptor_s nd = str_dsc(TARGET3_NAME);
                 uint32_t dst = sys$delprc(NULL, &nd);
@@ -539,14 +539,13 @@ int main(void)
         if (pipe(pipefd) != 0) {
             CHECK(0, "P8: pipe() for the other-uid caller");
         } else {
-            pid_t hp = fork();
+            pid_t hp = ovmx_fork_subprocess(); /* a subprocess of this suite (rd vms-3fa) */
             if (hp == 0) {
                 close(pipefd[0]);
                 struct vms_procinfo me;
                 uint32_t res[2] = { 0, 0 };
-                /* Enter the executive's table (with this root process's VMS
-                 * privileges, WORLD among them) BEFORE dropping the substrate
-                 * identity, then become an unprivileged substrate user. */
+                /* A VMS process already (its creator's privileges, WORLD among
+                 * them); now an unprivileged substrate user. */
                 if (!(vms_kif_getjpi_self(&me) & 1) || !(me.cur_privs & VMS_PRV_M_WORLD) ||
                     setgid(4242) != 0 || setuid(4242) != 0) {
                     (void)!write(pipefd[1], res, sizeof(res));

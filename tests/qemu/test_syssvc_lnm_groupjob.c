@@ -18,37 +18,29 @@
  *
  * FOUR PROCESSES, ONE SCOPE VARIABLE EACH:
  *
- *   A (this binary's own top-level process) DEFINE/GROUP's and
- *   DEFINE/JOB's a name. Being the top of a fresh process tree (its real
- *   parent -- the QEMU init harness that execs it -- never registers with
- *   vms.ko), A is its own JOB ROOT (vms_module.c's vms_proc_parent_job_id()):
- *   its job_id becomes its own vms_pid.
+ *   A is this suite's own process -- a SUBPROCESS the harness boot task
+ *   created (rd vms-3fa), SYSTEM's identity -- DEFINE/GROUP's and DEFINE/JOB's
+ *   a name. Every process here is one the executive CREATED (VMS_IOCTL_CREPRC_
+ *   PCB through tests/qemu/ovmx_test_fork.h); its UIC and job come from the
+ *   executive, never from substrate credentials or fork position.
  *
- *   B is fork()'d from A, no credential change: SAME UIC group (derived
- *   from the same real uid/gid) and, because A is already a registered VMS
- *   process by the time B forks, SAME job (B inherits A's job_id) --
- *   exactly how SPAWN's child stays in the parent's job on real VMS (DCL
- *   Dictionary, SPAWN). B must see BOTH names.
+ *   B is a SUBPROCESS of A: same UIC group, same job (a subprocess stays in its
+ *   creator's job, DCL Dictionary SPAWN). B must see BOTH names.
  *
- *   C is also fork()'d from A, but setgid()s to a different UIC group
- *   BEFORE its first executive call (same technique as
- *   tests/qemu/test_kmod_procnam.c's ALT_UIC_GROUP case: uid stays 0, so
- *   CAP_SYS_ADMIN to open /dev/vms survives, but the derived UIC group
- *   changes). C is still a direct child of A, so it still inherits A's job.
- *   C must see the JOB name (job matches) but NOT the GROUP name (group
- *   does not).
+ *   C is a DETACHED process A creates in ANOTHER UIC group -- $CREPRC's uic
+ *   argument (System Services Reference, $CREPRC: a uic makes the process
+ *   detached). Different group and, being detached, a different job: C must
+ *   see NEITHER name. (A process of another UIC in A's own job is not
+ *   something a VMS program can create: a subprocess always carries its
+ *   creator's UIC.)
  *
- *   D is fork()'d directly from the ORIGINAL harness process, BEFORE A ever
- *   touches vms_kif -- a sibling of A, not a descendant, so D's own real
- *   parent (the harness) is unregistered and D becomes its OWN job root,
- *   distinct from A's. D never setgid()s, so it shares A's default UIC
- *   group. D must see the GROUP name (group matches) but NOT the JOB name
- *   (job does not).
+ *   D is a DETACHED process A creates with A's own identity: a new job, the
+ *   same UIC group. D must see the GROUP name but NOT the JOB name.
  *
- * Together B/C/D exercise every combination this design has: same+same,
- * same-job+diff-group, diff-job+same-group. (diff+diff is not additionally
- * informative once the other three hold, and would need a fifth process
- * tree with no shared ancestor -- not worth the harness complexity here.)
+ * Together B/C/D exercise every combination a VMS program can create:
+ * same group + same job (a subprocess), same group + different job (a detached
+ * process with the creator's UIC), different group + different job (a
+ * detached process with another UIC).
  *
  * NO STATUS CONSTANT IS ASSERTED BY VALUE for the success path (VMS odd/even
  * convention only), matching test_syssvc_lnm_crossproc.c's / test_syssvc_
@@ -79,6 +71,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"
 
 #define EXIT_SKIP 77
@@ -169,8 +162,8 @@ static int executive_present(void)
 }
 
 /*
- * run_b - same UIC group (no setgid), same job (direct child of an already-
- * registered A). Must see BOTH names.
+ * run_b - same UIC group, same job (a subprocess A created). Must see BOTH
+ * names.
  */
 static int run_b(int in_fd, int out_fd)
 {
@@ -196,9 +189,8 @@ static int run_b(int in_fd, int out_fd)
 }
 
 /*
- * run_c - DIFFERENT UIC group (setgid before the first executive call),
- * SAME job (still a direct child of A). Must see the JOB name, must NOT
- * see the GROUP name.
+ * run_c - DIFFERENT UIC group and DIFFERENT job ($CREPRC uic: detached).
+ * Must see neither name.
  */
 static int run_c(int in_fd, int out_fd)
 {
@@ -208,16 +200,6 @@ static int run_c(int in_fd, int out_fd)
     uint32_t attrs = 0;
     uint32_t st;
 
-    /* setgid() only, before touching vms_kif at all: staying uid 0 keeps
-     * CAP_SYS_ADMIN (needed to open /dev/vms), while the UIC group this
-     * registration derives moves to ALT_UIC_GROUP (same technique as
-     * tests/qemu/test_kmod_procnam.c). */
-    if (setgid(ALT_UIC_GROUP) != 0) {
-        printf("  FAIL: C: setgid(%d) failed\n", ALT_UIC_GROUP);
-        fail++;
-        return report_and_exit(out_fd);
-    }
-
     mgr = lnm_get_manager();
     if (!wait_for_token(in_fd, "C")) return report_and_exit(out_fd);
 
@@ -225,49 +207,27 @@ static int run_c(int in_fd, int out_fd)
     printf("  INFO: C: lnm_translate(LNM$GROUP, %s) status=%u value=\"%s\"\n", GRP_NAME, st, val);
     /* negctl: lnm-group-scope-collapsed */
     CHECK(st == SS$_NOLOGNAM,
-          "C (different group, same job): does NOT see the GROUP-scoped name A defined");
+          "C (different group, different job): does NOT see the GROUP-scoped name A defined");
 
     st = lnm_translate(mgr, LNM_JOB_TABLE, JOB_NAME, val, sizeof(val), &rlen, &attrs);
     printf("  INFO: C: lnm_translate(LNM$JOB, %s) status=%u value=\"%s\"\n", JOB_NAME, st, val);
-    CHECK(st == SS$_NORMAL && strcmp(val, JOB_VAL) == 0,
-          "C (different group, same job): still sees the JOB-scoped name (job is shared)");
+    CHECK(st == SS$_NOLOGNAM,
+          "C (different group, different job): does NOT see the JOB-scoped name either");
 
     return report_and_exit(out_fd);
 }
 
 /*
- * run_d - SAME UIC group as A (no setgid, same default creds), DIFFERENT
- * job: forked from the harness process before A ever registers, so D's own
- * real parent is unregistered and D is its own job root. Must see the
- * GROUP name, must NOT see the JOB name.
- *
- * REGISTRATION ORDER IS THE WHOLE POINT, AND IT IS NOT A SCHEDULING ACCIDENT
- * (round 1 of this test learned that the hard way -- it relied on fork()
- * order alone and D inherited A's job anyway). vms_module.c's
- * vms_proc_parent_job_id() looks at whether the CALLER'S real_parent is
- * ALREADY registered at the moment the CALLER itself first reaches vms.ko --
- * not at which process forked first. Being forked before A touches vms_kif
- * only matters if D also REGISTERS before A does, and fork() gives no
- * ordering guarantee over which of a parent/child pair runs first. So D
- * forces its own registration with a throwaway LNM$SYSTEM translate (any
- * table triggers vms_kif's kif_bind()) and only THEN tells A it is safe to
- * touch vms_kif at all -- A's negative-control checks, a few lines into
- * main(), are themselves executive calls and would otherwise race this.
+ * run_d - SAME UIC group as A, DIFFERENT job: a DETACHED process A created
+ * with A's identity. Must see the GROUP name, must NOT see the JOB name.
  */
-static int run_d(int reg_fd, int in_fd, int out_fd)
+static int run_d(int in_fd, int out_fd)
 {
     lnm_manager_t *mgr = lnm_get_manager();
     char val[256];
     uint16_t rlen = 0;
     uint32_t attrs = 0;
     uint32_t st;
-
-    /* Force registration NOW, deterministically before A's first executive
-     * call: this is what makes D a job root rather than an inheritor. The
-     * result of this throwaway translate is irrelevant. */
-    (void)lnm_translate(mgr, LNM_SYSTEM_TABLE, "OVMXABA$D_EARLY_TOUCH",
-                        val, sizeof(val), &rlen, &attrs);
-    if (send_token(reg_fd, 'R') < 0) { fail++; return report_and_exit(out_fd); }
 
     if (!wait_for_token(in_fd, "D")) return report_and_exit(out_fd);
 
@@ -310,38 +270,7 @@ int main(void)
         return fail > 0 ? 1 : EXIT_SKIP;
     }
 
-    /* Fork D FIRST, before this process (soon to be "A") ever calls a
-     * vms_kif function -- D's real parent is this harness process, which
-     * never registers, so D becomes its own job root PROVIDED D actually
-     * registers with vms.ko before A does (see run_d's header comment: fork
-     * order alone does not guarantee that). d_reg is the barrier that makes
-     * it deterministic: A blocks on it below before its own first executive
-     * call (the negative-control translates just past this block). */
-    int d_reg[2], d_go[2], d_done[2];
-    if (pipe(d_reg) < 0 || pipe(d_go) < 0 || pipe(d_done) < 0) {
-        printf("  FAIL: pipe() failed\n"); return 1;
-    }
-    pid_t d_pid = fork();
-    if (d_pid < 0) { printf("  FAIL: fork() for D failed\n"); return 1; }
-    if (d_pid == 0) {
-        close(d_reg[0]); close(d_go[1]); close(d_done[0]);
-        _exit(run_d(d_reg[1], d_go[0], d_done[1]));
-    }
-    close(d_reg[1]); close(d_go[0]); close(d_done[1]);
-
-    /* Block here until D confirms it has ALREADY registered with vms.ko.
-     * Nothing below this line may be this process's first vms_kif call --
-     * that ordering, not fork() order, is what makes D a job root instead
-     * of an inheritor (see run_d's header comment). */
-    {
-        char tok;
-        if (read_bounded(d_reg[0], &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'R') {
-            printf("  FAIL: A: never saw D's registration-complete token\n");
-            fail++;
-        }
-    }
-
-    /* This process is now "A". */
+    /* This process is "A". */
     mgr = lnm_get_manager();
 
     /* Negative control WITH an executive: a never-defined name is absent
@@ -369,13 +298,28 @@ int main(void)
     CHECK(st == SS$_NORMAL && strcmp(val, JOB_VAL) == 0,
           "A: JOB name resolves through the default LNM$FILE_DEV search list");
 
-    /* Now that both names are defined, release D. */
+    /* D: a DETACHED process with A's identity -- a new job, the same group. */
+    int d_go[2], d_done[2];
+    if (pipe(d_go) < 0 || pipe(d_done) < 0) { printf("  FAIL: pipe() failed\n"); return 1; }
+    pid_t d_pid = -1;
+    {
+        struct vms_procinfo me;
+        uint32_t dst = 0;
+        if (vms_kif_getjpi_self(&me) & 1)
+            d_pid = ovmx_fork_detached_st(me.username, me.uic, me.perm_privs, &dst);
+        if (d_pid == 0) {
+            close(d_go[1]); close(d_done[0]);
+            _exit(run_d(d_go[0], d_done[1]));
+        }
+        if (d_pid < 0) { printf("  FAIL: A could not create the detached D (%08X)\n", (unsigned)dst); fail++; }
+    }
+    close(d_go[0]); close(d_done[1]);
     if (send_token(d_go[1], 'G') < 0) fail++;
 
-    /* Fork B: no credential change. */
+    /* B: a subprocess of A, no identity change. */
     int b_go[2], b_done[2];
     if (pipe(b_go) < 0 || pipe(b_done) < 0) { printf("  FAIL: pipe() failed\n"); fail++; }
-    pid_t b_pid = fork();
+    pid_t b_pid = ovmx_fork_subprocess();
     if (b_pid < 0) { printf("  FAIL: fork() for B failed\n"); fail++; }
     if (b_pid == 0) {
         close(b_go[1]); close(b_done[0]);
@@ -384,11 +328,18 @@ int main(void)
     close(b_go[0]); close(b_done[1]);
     if (send_token(b_go[1], 'G') < 0) fail++;
 
-    /* Fork C: setgid happens INSIDE run_c, before its first executive call. */
+    /* C: a DETACHED process in another UIC group ($CREPRC uic). */
     int c_go[2], c_done[2];
     if (pipe(c_go) < 0 || pipe(c_done) < 0) { printf("  FAIL: pipe() failed\n"); fail++; }
-    pid_t c_pid = fork();
-    if (c_pid < 0) { printf("  FAIL: fork() for C failed\n"); fail++; }
+    pid_t c_pid = -1;
+    {
+        struct vms_procinfo me;
+        uint32_t cst = 0;
+        if (vms_kif_getjpi_self(&me) & 1)
+            c_pid = ovmx_fork_detached_st("OVMXABAC", ((uint32_t)ALT_UIC_GROUP << 16) | 1u,
+                                          me.perm_privs, &cst);
+        if (c_pid < 0) { printf("  FAIL: A could not create C in UIC group %d (%08X)\n", ALT_UIC_GROUP, (unsigned)cst); fail++; }
+    }
     if (c_pid == 0) {
         close(c_go[1]); close(c_done[0]);
         _exit(run_c(c_go[0], c_done[1]));

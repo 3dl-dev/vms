@@ -1745,7 +1745,10 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
     # held the literal `fork()` and silently satisfied this gate; the raw grep
     # also matched substrings like `vfork(` inside an unrelated token. Reading
     # the scanner's call edges fixes both (vms-f28).
-    if ! grep -qxE 'v?fork' "$WORK/callcache/$_pk"; then
+    # ovmx_fork_subprocess/_st and ovmx_fork_detached_st (tests/qemu/
+    # ovmx_test_fork.h, rd vms-3fa) fork the second process -- as a VMS process
+    # the executive created -- inside the header, so the proof calls them.
+    if ! grep -qxE 'v?fork|ovmx_fork_subprocess(_st)?|ovmx_fork_detached_st' "$WORK/callcache/$_pk"; then
         printf 'EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
         printf '  -> proof=%s never forks, so it cannot be an A-writes/B-reads proof.\n' "$pproof" >> "$WORK/errors"
         printf '     A per-process fake can pass every single-process test perfectly.\n' >> "$WORK/errors"

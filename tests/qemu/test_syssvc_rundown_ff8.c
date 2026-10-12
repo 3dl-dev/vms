@@ -77,6 +77,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /* Caller-allocated Lock Status Block; mirrors sys_lock.c's private layout,
  * exactly as test_syssvc_lock.c declares it (no public lksdef.h, Rule 8). */
@@ -182,7 +183,9 @@ static int spawn_dead_holder(const char *who, const char *resource, int fresh_fd
     int c2p[2];
     if (pipe(c2p) < 0) { printf("  FAIL: pipe(%s)\n", who); return 0; }
 
-    pid_t pid = fork();
+    /* A subprocess of this suite (rd vms-3fa): the same UIC group, so its lock
+     * and the parent's $ENQ name the same resource. */
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) { printf("  FAIL: fork(%s)\n", who); return 0; }
     if (pid == 0) {
         close(c2p[0]);

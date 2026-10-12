@@ -109,7 +109,11 @@
 /* OPER is deliberately NOT in the mask registration grants, so
  * stamping it proves SETPRV is what permits exceeding an authorization
  * (docs/oracle/vax73-privileges.md §3). */
-#define A_PRIVS  (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX | (1ULL << 18))
+/* A_PRIVS holds CMKRNL but not SETPRV: stamping an identity needs CMKRNL
+ * (vms_ioctl_setident, as LOGINOUT does on VMS in kernel mode), so section 4c's
+ * allowed re-stamp and its refused name change differ in the NAME only -- not
+ * in whether the caller may stamp at all. */
+#define A_PRIVS  (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX | (1ULL << 18) | VMS_PRV_M_CMKRNL)
 
 /* SYSPRV: never granted to anyone here, so it is a clean probe for
  * "did the executive hand out something it should not have". */

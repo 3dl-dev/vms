@@ -36,6 +36,7 @@
                                * the C-string + fixed-width vocabulary */
 #include "exec_kbackend.h"    /* exec_lock/copy/current/task/rcu/mutex */
 #include "exec_hash.h"        /* exec_hash_for_each[_safe] / exec_hash_del_rcu */
+#include "vms_prot.h"         /* vms_prot_require_priv -- SETIDENT needs CMKRNL */
 #include "exec_list.h"        /* exec_list_add_tail -- /NOWAIT completion AST queue */
 
 
@@ -834,6 +835,24 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
      */
     exec_lock(&vms_proc_hash_lock);
     exec_lock(&proc->mode_lock);
+
+    /*
+     * CMKRNL, FIRST. Stamping a process's user name,
+     * UIC and privilege masks is what LOGINOUT does on VMS by writing the PCB
+     * and JIB in KERNEL MODE -- LOGINOUT is installed with CMKRNL for exactly
+     * that, and no system service lets a program change its own identity.
+     * So the executive requires CMKRNL among the caller's ENABLED privileges
+     * before any of the rules below: a process without it is refused
+     * SS$_NOPRIV even to re-stamp its own identity, and even if it holds
+     * SETPRV (which on VMS would first have to enable CMKRNL to do this).
+     * NEGCTL-ANCHORED (setident-cmkrnl-unchecked).
+     */
+    if (vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL) != SS__NORMAL) {
+        exec_unlock(&proc->mode_lock);
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
 
     has_setprv = (proc->cur_privs & VMS_PRV_M_SETPRV) != 0;
     authorized = proc->perm_privs;

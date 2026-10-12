@@ -2855,9 +2855,12 @@ static int join_rdev_answer(struct cnxman_join *j, struct cnxman_rdev *r)
 	}
 	/* Only reached after the record went back (or on the unanswerable
 	 * path, where a kind-10 record gets nothing: 0 withholds). */
-	close_state = (r->state == (uint8_t)CNXMAN_RDEV_WRITING) ?
-		vms_cm_close_state_after_writeback(r->desc.kind) :
-		vms_cm_close_state_for(r->req, VMS_CM_BODY_LEN);
+	if (r->state == (uint8_t)CNXMAN_RDEV_WRITING)
+		close_state = vms_cm_close_state_after_writeback(r->desc.kind);
+	else if (r->state == (uint8_t)CNXMAN_RDEV_PULLED)
+		close_state = vms_cm_close_state_after_pull(r->desc.kind);
+	else
+		close_state = vms_cm_close_state_for(r->req, VMS_CM_BODY_LEN);
 	if (close_state == 0u)
 		return -1;
 	join_own_params(j, &own);
@@ -2896,6 +2899,10 @@ static int join_rdev_start(struct cnxman_join *j, const struct join_ev *e,
 
 	if (csb == NULL || e->len < VMS_CM_BODY_LEN)
 		return -1;
+	if (d->len > (uint32_t)CNXMAN_RDEV_BUF) {
+		j->k5_oversize++;
+		return -1;
+	}
 	/* +0 is the RECIPIENT's own Con.ID (3,158 of 3,158): a descriptor
 	 * naming any other is not one this node can honour. */
 	if (d->conid != csb->cdt_conid) {
@@ -2946,6 +2953,15 @@ void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 	if (bytes_remaining != len)
 		return;
 
+	/* rd vms-db1: a kind-5 record is read and answered 4; nothing is
+	 * written back (3,069 of 3,069 real pulls). */
+	if (r->desc.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) {
+		r->state = (uint8_t)CNXMAN_RDEV_PULLED;
+		if (join_rdev_answer(j, r) == 0)
+			j->k5_answered++;
+		join_rdev_free(j, r);
+		return;
+	}
 	/* rd vms-db1: a kind-10 record is answered by the measured write-back
 	 * (vms_cm_k10_answer_in_place); a record of any other shape is not. */
 	if (r->desc.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10) {
@@ -3051,7 +3067,8 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 		      (d.len == VMS_CM_RDEV_DISMOUNT_LEN ||
 		       d.len == VMS_CM_RDEV_MOUNT_LEN)) ||
 		     (d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10 &&
-		      d.len == VMS_CM_K10_REC_LEN)) &&
+		      d.len == VMS_CM_K10_REC_LEN) ||
+		     d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&
 		    join_rdev_start(j, e, &d) == 0)
 			return CNXMAN_JOIN_RX_CONSUMED;
 	}

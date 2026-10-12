@@ -161,10 +161,13 @@ jobs:
       # dispatch. Provisioning that token is a credential/security-posture
       # decision reserved to the operator, not made here.
       - name: Notify openvmx-site (repository_dispatch release-tagged) — off critical path
-        if: always() && steps.tag.outputs.tag != ''
+        # Only a release that actually PUBLISHED is announced: the site must not
+        # build a demo for a tag whose cut or publish failed.
+        if: success() && steps.tag.outputs.tag != ''
         continue-on-error: true
         env:
           SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           if [ -z "${SITE_DISPATCH_TOKEN:-}" ]; then
             echo "no secrets.SITE_DISPATCH_TOKEN provisioned -- skipping (openvmx-site falls back to its own poll/manual dispatch)."
@@ -174,4 +177,4 @@ jobs:
             -H "Authorization: token ${SITE_DISPATCH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/3dl-dev/openvmx-site/dispatches \
-            -d "$(printf '{"event_type":"release-tagged","client_payload":{"tag":"%s"}}' '${{ steps.tag.outputs.tag }}')"
+            -d "$(printf '{"event_type":"release-tagged","client_payload":{"tag":"%s"}}' "$TAG")"

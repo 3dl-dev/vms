@@ -3,7 +3,8 @@
 #       dead per-process bool; it flips a real, persisted, system-wide flag
 #       SHOW ACCOUNTING reads back, and /ENABLE=(class) granularity draws
 #       an honest refusal instead of silent acceptance
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \BOGUS\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT: contains:%SET-W-NOTIMPL, per-class accounting (/ENABLE=(class,...) or /DISABLE=(class,...)) is not implemented in OVMX - no state changed
 # EXPECT: contains:$STATUS = "%X00000E4A"

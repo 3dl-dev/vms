@@ -24,18 +24,22 @@ CC send "{KPCOMMA}" settle=1
 UC send "{PF1}{KPCOMMA}" settle=1
 D send "{DOWN}" settle=1
 S send "{KPDOT}" settle=1
-S2 send "{RIGHT}{RIGHT}" settle=1
+S2 send "{RIGHT}" settle=1
+S2a send "{RIGHT}" settle=1
 CUT send "{KP6}" settle=1
 D2 send "{DOWN}" settle=1
 P send "{PF1}{KP6}" settle=1
 F send "{PF1}{PF3}" settle=2
 F2 type "EPS" settle=1
 F3 send "{ENTER}" settle=2
-N send "{KP5}{PF3}" settle=2
-A send "{KP4}{KP0}" settle=1
+N send "{KP5}" settle=2
+Na send "{PF3}" settle=2
+A send "{KP4}" settle=1
+Aa send "{KP0}" settle=1
 E send "{KP2}" settle=1
-B send "{KP5}{KP1}" settle=1
+B send "{KP5}" settle=1
+Ba send "{KP1}" settle=1
 Z send "^Z" expect="\*$" settle=2
 TW send "TYPE WHOLE\r" expect="\*$"
 Q send "QUIT\r" expect="\$ $" timeout=30
-V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN\r" expect="\$ $" quiet
+V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN/LINE_EDITING\r" expect="\$ $" quiet

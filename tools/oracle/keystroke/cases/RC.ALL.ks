@@ -1,5 +1,6 @@
 @case RC.ALL
 @title RECALL/ALL lists the recall buffer, RECALL n brings one back for editing, RECALL/ERASE empties it
+V0 send "SET TERMINAL/LINE_EDITING/NOHARDCOPY/WIDTH=80\r" expect="\$ $" quiet
 E0 send "RECALL/ERASE\r" expect="\$ $" quiet
 C1 send "WRITE SYS$OUTPUT \"R1\"\r" expect="\$ $"
 C2 send "WRITE SYS$OUTPUT \"R2\"\r" expect="\$ $"

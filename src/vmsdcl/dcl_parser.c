@@ -611,7 +611,7 @@ int dcl_validate_qualifiers(const struct dcl_verb *verb,
                 snprintf(shown, sizeof(shown), "%s", q->name);
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
-                      "and placement - \\%s\\", shown);
+                      "and placement\n \\%s\\", shown);
             return SS$_IVQUAL;
         }
 
@@ -619,7 +619,7 @@ int dcl_validate_qualifiers(const struct dcl_verb *verb,
         if (negated && !(def->qflags & CDU_Q_NEGATABLE)) {
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
-                      "and placement - \\NO%s\\", def->name);
+                      "and placement\n \\NO%s\\", def->name);
             return SS$_IVQUAL;
         }
 

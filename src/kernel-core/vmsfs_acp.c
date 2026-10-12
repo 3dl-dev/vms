@@ -173,6 +173,7 @@ struct vms_acp_chan {
     /* accessed-file state (all zero until IO$_ACCESS opens a file) */
     uint8_t          file_accessed;     /* 1 while a file is accessed here */
     uint8_t          acc_write;         /* opened for write (acctl&WRITE) */
+    uint8_t          acc_counted;       /* the access was charged as a buffered I/O */
     uint16_t         acc_version;       /* resolved version */
     uint16_t         acc_fid_num;
     uint16_t         acc_fid_seq;
@@ -2099,6 +2100,10 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
         }
         ch->file_accessed = 1;
         ch->acc_write     = want_write ? 1 : 0;
+        /* RMS's walk down the directories is not a user I/O on VMS (the XQP
+         * does it inside the one IO$_ACCESS): only opening the file itself is
+         * charged (probe Q.IODELTA2: OPEN 1; rd vms-ae8) */
+        ch->acc_counted   = !(s->fh.fh2_filechar & ODS2_FH2_M_DIRECTORY);
         ch->acc_version   = out_version;
         ch->acc_fid_num   = file_fid.fid_num;
         ch->acc_fid_seq   = file_fid.fid_seq;
@@ -2148,10 +2153,19 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
     args.status = SS__DEVNOTMOUNT;
 #endif /* OVMX_ODS2_KERNEL */
 
-    /* an ACP function is one buffered I/O of the caller's, as an XQP call is
-     * on VMS (VAX V7.3 probe Q.IODELTA2: OPEN 1, CLOSE 1; rd vms-ae8) */
-    if (args.status & 1)
-        VMS_IO_COUNT(&proc->io_buffered, 1u);
+    /* opening a file is one buffered I/O of the caller's, as the XQP's
+     * IO$_ACCESS is on VMS; a directory on the way is not (probe Q.IODELTA2:
+     * OPEN 1; rd vms-ae8) */
+    if (args.status & 1) {
+        int counted = 0;
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (ch && ch->file_accessed)
+            counted = ch->acc_counted;
+        exec_unlock(&proc->chan_lock);
+        if (counted)
+            VMS_IO_COUNT(&proc->io_buffered, 1u);
+    }
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -2175,7 +2189,7 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
     struct vms_acp_deaccess_args args;
     struct vms_acp_chan *ch;
     uint32_t status;
-    int was_write = 0;
+    int was_write = 0, was_counted = 0;
     uint32_t fid_num = 0, hdr_lbn = 0, bmaj = 0, bmin = 0;
 
     memset(&args, 0, sizeof(args));
@@ -2196,8 +2210,10 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
             bmaj = ch->vol->backing_major;
             bmin = ch->vol->backing_minor;
         }
+        was_counted = ch->acc_counted;
         ch->file_accessed = 0;
         ch->acc_write = 0;
+        ch->acc_counted = 0;
         ch->win_n = 0;
         status = SS__NORMAL;
     }
@@ -2231,9 +2247,9 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
 #endif
 
     args.status = status;
-    /* an ACP function is one buffered I/O of the caller's, as an XQP call is
-     * on VMS (VAX V7.3 probe Q.IODELTA2: OPEN 1, CLOSE 1; rd vms-ae8) */
-    if (args.status & 1)
+    /* closing a file is one buffered I/O of the caller's (probe Q.IODELTA2:
+     * CLOSE 1; rd vms-ae8) -- closing a directory walked on the way is not */
+    if ((args.status & 1) && was_counted)
         VMS_IO_COUNT(&proc->io_buffered, 1u);
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -3503,6 +3519,7 @@ static uint32_t acp_access_from_header(struct vms_proc *proc, uint32_t chan,
     }
     ch->file_accessed = 1;
     ch->acc_write     = want_write ? 1 : 0;
+    ch->acc_counted   = 1;               /* a file created and opened: its close is charged */
     ch->acc_version   = version;
     ch->acc_fid_num   = fid.fid_num;
     ch->acc_fid_seq   = fid.fid_seq;
@@ -4623,8 +4640,8 @@ free_sc:
     args.status = SS__DEVNOTMOUNT;           /* no codec: nothing mountable here */
 #endif /* OVMX_ODS2_KERNEL */
 
-    /* an ACP function is one buffered I/O of the caller's, as an XQP call is
-     * on VMS (VAX V7.3 probe Q.IODELTA2: OPEN 1, CLOSE 1; rd vms-ae8) */
+    /* creating or deleting a file is one buffered I/O of the caller's, as
+     * the XQP call is on VMS (rd vms-ae8) */
     if (args.status & 1)
         VMS_IO_COUNT(&proc->io_buffered, 1u);
 out:

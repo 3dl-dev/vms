@@ -41,7 +41,8 @@
 # --- a STOP qualifier this file does not implement (/QUEUE belongs to the
 #     SEPARATE STOP/QUEUE Dictionary entry, never implemented here) draws
 #     the authentic IVQUAL rather than silent acceptance ---
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \QUEUE\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \QUEUE\
 # --- bare STOP (no target): UNCHANGED -- still cleanly ends the session,
 #     and nothing after it executes ---
 # EXPECT: contains:before-bare-stop

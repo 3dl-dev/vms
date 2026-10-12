@@ -1,6 +1,6 @@
 # keystroke oracle transcript (unmasked) -- case Q.EDTNUM2 (OpenVMS VAX V7.3 OPA0:)
 # probe: EDT numbers for text put in at [EOB] from the PASTE buffer (CUT/APPEND then PASTE/REPLACE), twice
-# case-sha256 d34cdf4bc0f84768599328983cfcb510557acf3f2e3e70ac5399d01dcd7efe12
+# case-sha256 acad3d70c574d1df8e235f9cf2dea966f1f7d2acf15d264a58f931ab9e9a6adb
 @start loggedin OK
 === STEP V0 quiet
 === STEP V1 quiet

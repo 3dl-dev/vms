@@ -35,4 +35,4 @@ T3 send "TYPE WHOLE\r" expect="\*$"
 R1 send "RESEQUENCE\r" expect="\*$"
 T4 send "TYPE WHOLE\r" expect="\*$"
 Q send "QUIT\r" expect="\$ $" timeout=30
-V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN\r" expect="\$ $" quiet
+V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN/LINE_EDITING\r" expect="\$ $" quiet

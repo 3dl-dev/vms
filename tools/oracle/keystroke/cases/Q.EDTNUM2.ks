@@ -36,4 +36,4 @@ R4D send "{PF1}{KP6}" settle=1
 R5 send "^Z" expect="\*$" settle=2
 R6 send "TYPE WHOLE\r" expect="\*$"
 R7 send "QUIT\r" expect="\$ $" timeout=30
-V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN\r" expect="\$ $" quiet
+V9 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN/LINE_EDITING\r" expect="\$ $" quiet

@@ -243,7 +243,17 @@ static struct range parse_range(const struct edt_buf *b, const char **pp,
             if (*q == ':' || (kw(&q2, "THRU", 3) && (q = q2))) {
                 if (*q == ':') q++;
                 int c;
-                if (parse_point(b, &q, &c, notfound)) {
+                const char *qs = skip(q);
+                long endnum;
+                if (parse_number(&qs, &endnum)) {
+                    /* the range ends at the last line numbered up to it
+                     * (EDT.LINE3 T3: BEGIN:3 stops at 2 when there is no 3) */
+                    int e = index_of(b, endnum, 0);
+                    if (e < b->n && b->l[e].num == endnum) c = e;
+                    else c = e - 1;
+                    r.b = c;
+                    p = qs;
+                } else if (parse_point(b, &q, &c, notfound)) {
                     r.b = c;
                     p = q;
                 } else {
@@ -349,7 +359,9 @@ static void smove(struct scr *s, int r, int c)
     } else if (s->known && c == s->c && r > s->r + 1) {
         snprintf(b, sizeof b, "\033[%dB", r - s->r);   /* EDT.KEYPAD3 RP */
         so(s, b);
-    } else if (s->known && c == s->c && r < s->r) {
+    } else if (s->known && c == s->c && r < s->r && !(s->r > WROWS && r == WROWS)) {
+        /* (back into the window's last row from rows 23-24 is absolute:
+         * EDT.KEYPAD4 EN) */
         if (s->r - r == 1) so(s, "\033[A");
         else { snprintf(b, sizeof b, "\033[%dA", s->r - r); so(s, b); }
     } else if (s->known && c == 1 && r == s->r + 1) {
@@ -393,13 +405,40 @@ static const char *ltext(const struct kp *k, int li)
 }
 
 /* rewrite row `li` from column `col`: the text, then ESC[K */
+/* the screen column (0-based) offset `off` of text `t` is shown at: a TAB
+ * takes the line to the next multiple of 8 (EDT.KEYPAD4 T) */
+static int vcol(const char *t, int off)
+{
+    int c = 0;
+    for (int i = 0; i < off && t[i]; i++)
+        c = (t[i] == '\t') ? (c / 8 + 1) * 8 : c + 1;
+    return c;
+}
+
+/* t[from..to) as the screen shows it, TABs as spaces, from the cursor */
+static void sexp(struct kp *k, const char *t, int from, int to)
+{
+    int c = vcol(t, from);
+    for (int i = from; i < to && t[i]; i++) {
+        if (t[i] == '\t') {
+            int n = (c / 8 + 1) * 8 - c;
+            for (int j = 0; j < n; j++) stext(&k->s, " ", 1);
+            c += n;
+        } else {
+            stext(&k->s, t + i, 1);
+            c++;
+        }
+    }
+}
+
+/* rewrite row `li` from offset col-1: the text, then ESC[K */
 static void spaint(struct kp *k, int li, int col)
 {
     const char *t = ltext(k, li);
-    size_t len = strlen(t);
-    smove(&k->s, row_of(k, li), col);
-    if ((size_t)(col - 1) < len)
-        stext(&k->s, t + col - 1, len - (size_t)(col - 1));
+    int len = (int)strlen(t), off = col - 1;
+    smove(&k->s, row_of(k, li), vcol(t, off) + 1);
+    if (off < len)
+        sexp(k, t, off, len);
     so(&k->s, "\033[K");
 }
 
@@ -444,7 +483,7 @@ static void sscroll(struct kp *k)
             int bl = k->s.top + WROWS - 1;
             if (bl <= n) {
                 const char *t = bl < n ? k->b->l[bl].text : "[EOB]";
-                stext(&k->s, t, strlen(t));
+                sexp(k, t, 0, (int)strlen(t));
             }
         }
         k->s.known = 0;
@@ -454,7 +493,7 @@ static void sscroll(struct kp *k)
             smove(&k->s, 1, 1);           /* CR between lines (EDT.KEYPAD2 UP) */
             so(&k->s, "\033M");
             const char *t = ltext(k, k->s.top);
-            stext(&k->s, t, strlen(t));
+            sexp(k, t, 0, (int)strlen(t));
         }
     }
 }
@@ -462,7 +501,7 @@ static void sscroll(struct kp *k)
 static void scursor(struct kp *k)
 {
     sscroll(k);
-    smove(&k->s, row_of(k, k->li), k->off + 1);
+    smove(&k->s, row_of(k, k->li), vcol(ltext(k, k->li), k->off) + 1);
 }
 
 static void sclear_msg(struct kp *k)
@@ -515,7 +554,7 @@ static void sfull(struct kp *k)
             smove(&k->s, WROWS, 1);
         }
         const char *t = i < k->b->n ? k->b->l[i].text : "[EOB]";
-        stext(&k->s, t, strlen(t));
+        sexp(k, t, 0, (int)strlen(t));
         if (i >= k->b->n) break;
         if (row < WROWS - 1) { so(&k->s, "\r\n"); k->s.r++; k->s.c = 1; }
     }
@@ -549,7 +588,7 @@ static void sfill_bottom(struct kp *k)
     if (bl <= k->b->n) {
         const char *t = bl < k->b->n ? k->b->l[bl].text : "[EOB]";
         smove(&k->s, WROWS, 1);
-        stext(&k->s, t, strlen(t));
+        sexp(k, t, 0, (int)strlen(t));
         so(&k->s, "\033[K");
     } else {
         serase_below(k);
@@ -567,7 +606,7 @@ static void sinsert_row(struct kp *k, int li)
         smove(&k->s, r, 1);
     }
     so(&k->s, "\033M");
-    stext(&k->s, ltext(k, li), strlen(ltext(k, li)));
+    sexp(k, ltext(k, li), 0, (int)strlen(ltext(k, li)));
     sregion(&k->s, 1, WROWS);
 }
 
@@ -643,10 +682,16 @@ static void ins_text(struct kp *k, const char *t, int after, int whole_line)
             /* typed at the end of a line: just the text (EDT.KEYPAD2 T),
              * written as the terminal's own echo would be -- the driver sees
              * the line move on (EDT.KEYPAD2/3 Z: "<CR><LF>*" afterwards) */
-            smove(&k->s, row_of(k, k->li), col);
-            sflush(&k->s);
-            dcl_tt_qio_write(t, strlen(t));
-            k->s.c += (int)strlen(t);
+            smove(&k->s, row_of(k, k->li), vcol(line, k->off) + 1);
+            if (strchr(t, '\t')) {
+                /* a TAB is written out by EDT (EDT.KEYPAD4 T) */
+                sexp(k, line, k->off, k->off + (int)strlen(t));
+                so(&k->s, "\033[K");
+            } else {
+                sflush(&k->s);
+                dcl_tt_qio_write(t, strlen(t));
+                k->s.c += (int)strlen(t);
+            }
         } else {
             spaint(k, k->li, col);
         }
@@ -701,9 +746,9 @@ static void sel_paint_step(struct kp *k, int from_li, int from_off)
     /* moving forward inside a SELECT range: the text passed is shown in
      * reverse (keystroke EDT.KEYPAD S2, EDT.KEYPAD3 S2) */
     if (k->li == from_li && k->off > from_off) {
-        smove(&k->s, row_of(k, from_li), from_off + 1);
+        smove(&k->s, row_of(k, from_li), vcol(ltext(k, from_li), from_off) + 1);
         srend(&k->s, 1);
-        stext(&k->s, ltext(k, from_li) + from_off, (size_t)(k->off - from_off));
+        sexp(k, ltext(k, from_li), from_off, k->off);
     }
 }
 
@@ -1082,6 +1127,24 @@ static int kp_command(struct kp *k, int key, int gold)
         }
         return 1;
     }
+    if (key == K_ENTER) return 1;      /* ENTER alone: nothing to do */
+    if (key == K_KP(7) && !gold) {      /* PAGE: to the next page mark, else the end */
+        int t = -1;
+        if (k->dir > 0) {
+            for (int i = k->li + 1; i < b->n; i++)
+                if (b->l[i].text[0] == '\f') { t = i; break; }
+            if (t < 0) t = b->n;
+            if (k->li >= b->n) { smessage(k, "Advance past bottom of buffer"); scursor(k); return 1; }
+        } else {
+            for (int i = k->li - 1; i >= 0; i--)
+                if (b->l[i].text[0] == '\f') { t = i; break; }
+            if (t < 0) t = 0;
+            if (k->li == 0 && k->off == 0) { smessage(k, "Backup past top of buffer"); scursor(k); return 1; }
+        }
+        kp_move(k, t, 0);
+        scursor(k);
+        return 1;
+    }
     if (key == K_KP(0)) {               /* LINE */
         if (k->dir > 0) {
             if (k->li >= b->n) { smessage(k, "Advance past bottom of buffer"); scursor(k); return 1; }
@@ -1215,7 +1278,7 @@ static void kp_run(struct edt_buf *b, struct kp *k)
             key = kp_key();
             if (key < 0) break;
         }
-        if (key >= 0x20 && key < 0x7F) {          /* typed text */
+        if ((key >= 0x20 && key < 0x7F) || key == '\t') {   /* typed text, TAB */
             char c[2] = { (char)key, 0 };
             ins_text(k, c, 1, 0);
         } else if (key == 0x7F && k->off == 0 && k->li > 0 && k->li <= k->b->n) {
@@ -1251,6 +1314,20 @@ static void kp_run(struct edt_buf *b, struct kp *k)
             }
         } else if (key == '\r') {
             ins_text(k, "\n", 1, 0);
+        } else if (key == 0x0A) {                 /* LINEFEED: delete the word before */
+            const char *t = ltext(k, k->li);
+            int i = k->off;
+            while (i > 0 && is_word_sep((unsigned char)t[i - 1])) i--;
+            while (i > 0 && !is_word_sep((unsigned char)t[i - 1])) i--;
+            if (i < k->off) {
+                str_set(&k->delw, t + i, (size_t)(k->off - i));
+                char nt[EDT_LINE_MAX];
+                snprintf(nt, sizeof nt, "%.*s%s", i, t, t + k->off);
+                set_text(k, k->li, nt);
+                k->off = i;
+                spaint(k, k->li, k->off + 1);   /* EDT.KEYPAD4 J: ESC[2D ESC[K */
+                scursor(k);
+            }
         } else if (key == 0x08) {                 /* BACKSPACE: the line's start */
             if (k->off > 0) k->off = 0;
             else if (k->li > 0) k->li--;
@@ -1324,17 +1401,28 @@ static void insert_mode(struct edt_buf *b)
     show_line(b, b->cur);
 }
 
+static int write_file_range(struct dcl_context *ctx, const struct edt_buf *b,
+                            const char *spec, int a, int z);
+
 static int write_file(struct dcl_context *ctx, const struct edt_buf *b,
                       const char *spec)
 {
+    return write_file_range(ctx, b, spec, 0, b->n - 1);
+}
+
+/* lines a..z (indices) to a new version of spec; "DEV:[DIR]NAME;v n lines" */
+static int write_file_range(struct dcl_context *ctx, const struct edt_buf *b,
+                            const char *spec, int a, int z)
+{
     uint32_t st = 0;
+    int cnt = 0;
     struct dcl_rms_writer *w = dcl_rms_write_create(ctx, spec, FAB$C_VAR,
                                                     FAB$M_CR, 0, &st);
     if (!w) {
         printf("Error opening output file %s\n", spec);
         return -1;
     }
-    for (int i = 0; i < b->n; i++)
+    for (int i = a; i <= z && i < b->n; i++, cnt++)
         if (dcl_rms_write_record(w, b->l[i].text, strlen(b->l[i].text)) != 0)
             break;
     dcl_rms_write_close(w);
@@ -1351,7 +1439,23 @@ static int write_file(struct dcl_context *ctx, const struct edt_buf *b,
             full[0] = '\0';
         dcl_rms_dir_close(d);
     }
-    printf("%s %d line%s\n", full[0] ? full : spec, b->n, b->n == 1 ? "" : "s");
+    printf("%s %d line%s\n", full[0] ? full : spec, cnt, cnt == 1 ? "" : "s");
+    return 0;
+}
+
+static struct dcl_context *g_edt_ctx;   /* for WRITE and INCLUDE */
+
+/* copies of `texts` put in before index `at`, numbered as INSERT numbers them */
+static int insert_texts(struct edt_buf *b, int at, char **texts, int n)
+{
+    long first, step;
+    if (n <= 0) return 0;
+    if (number_run(b, at, n, &first, &step) != 0) {
+        printf("Line number would exceed maximum\n");
+        return -1;
+    }
+    for (int i = 0; i < n; i++)
+        if (buf_insert(b, at + i, first + step * i, texts[i]) != 0) return -1;
     return 0;
 }
 
@@ -1394,7 +1498,10 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             int a = rg.a, z = rg.b < b->n ? rg.b : b->n - 1, cnt = 0;
             for (int i = z; i >= a && a < b->n; i--) { buf_delete(b, i); cnt++; }
             b->cur = a <= b->n ? a : b->n;
-            printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
+            if (cnt)
+                printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
+            else
+                printf("No lines deleted\n");   /* EDT.LINE3 X2 */
             show_line(b, b->cur);
             return;
         }
@@ -1445,6 +1552,92 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             }
             return;
         }
+        if (kw(&p, "COPY", 2) || kw(&p, "MOVE", 1)) {
+            /* COPY|MOVE range TO range: "n lines copied|moved" (EDT.LINE3) */
+            int moving = (toupper((unsigned char)cmd[0]) == 'M');
+            struct range rg = parse_range(b, &p, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            const char *q = skip(p);
+            if (!kw(&q, "TO", 2)) { printf("%*s^\nUnrecognized command\n", (int)(q - line) + 1, ""); return; }
+            struct range to = parse_range(b, &q, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            int a = rg.a, z = rg.b < b->n ? rg.b : b->n - 1, n = z - a + 1;
+            if (n <= 0) { printf("No lines %s\n", moving ? "moved" : "copied"); return; }
+            char **t = calloc((size_t)n, sizeof *t);
+            if (!t) return;
+            for (int i = 0; i < n; i++) t[i] = strdup(b->l[a + i].text);
+            int dest = to.a;
+            if (moving) {
+                for (int i = z; i >= a; i--) buf_delete(b, i);
+                if (dest > z) dest -= n;
+                else if (dest > a) dest = a;
+            }
+            if (insert_texts(b, dest, t, n) == 0) {
+                b->cur = dest;
+                printf("%d line%s %s\n", n, n == 1 ? "" : "s", moving ? "moved" : "copied");
+            }
+            for (int i = 0; i < n; i++) free(t[i]);
+            free(t);
+            return;
+        }
+        if (kw(&p, "WRITE", 2)) {          /* WRITE file [range] (EDT.LINE3 WR) */
+            const char *q = skip(p);
+            char fname[512];
+            size_t fl = 0;
+            while (q[fl] && q[fl] != ' ' && q[fl] != '\t' && fl + 1 < sizeof fname) fl++;
+            snprintf(fname, sizeof fname, "%.*s", (int)fl, q);
+            q += fl;
+            struct range rg = { 0, b->n - 1, 1 };
+            if (*skip(q)) rg = parse_range(b, &q, &nf);
+            if (nf) { printf("String was not found\n"); return; }
+            if (g_edt_ctx && fname[0])
+                write_file_range(g_edt_ctx, b, fname, rg.a, rg.b < b->n ? rg.b : b->n - 1);
+            return;
+        }
+        if (kw(&p, "INCLUDE", 3)) {        /* INCLUDE file [range]: no message */
+            const char *q = skip(p);
+            char fname[512];
+            size_t fl = 0;
+            while (q[fl] && q[fl] != ' ' && q[fl] != '\t' && fl + 1 < sizeof fname) fl++;
+            snprintf(fname, sizeof fname, "%.*s", (int)fl, q);
+            q += fl;
+            int at = b->cur;
+            if (*skip(q)) {
+                struct range rg = parse_range(b, &q, &nf);
+                if (nf) { printf("String was not found\n"); return; }
+                at = rg.a;
+            }
+            uint32_t rst = 0;
+            struct dcl_rms_reader *r = g_edt_ctx ? dcl_rms_read_open(g_edt_ctx, fname, &rst) : NULL;
+            if (!r) { printf("Input file does not exist\n"); return; }
+            char **t = NULL;
+            int n = 0, cap = 0, eof = 0, len;
+            char rec[EDT_LINE_MAX];
+            while ((len = dcl_rms_read_record(r, rec, sizeof rec, &eof)) >= 0) {
+                if (n == cap) {
+                    cap = cap ? cap * 2 : 16;
+                    char **nt = realloc(t, (size_t)cap * sizeof *nt);
+                    if (!nt) break;
+                    t = nt;
+                }
+                t[n++] = strdup(rec);
+            }
+            dcl_rms_read_close(r);
+            insert_texts(b, at, t, n);
+            for (int i = 0; i < n; i++) free(t[i]);
+            free(t);
+            return;
+        }
+        if (kw(&p, "SHOW", 2)) {           /* SHOW BUFFER (EDT.LINE3 SB) */
+            const char *q = skip(p);
+            if (kw(&q, "BUFFER", 1)) {
+                char cnt[16];
+                snprintf(cnt, sizeof cnt, "%d", b->n);
+                printf("=%-6s %-8slines\n", "MAIN", b->n ? cnt : "No");
+                printf(" %-6s %-8slines\n", "PASTE", "No");
+                return;
+            }
+        }
         if (kw(&p, "RESEQUENCE", 3)) {     /* whole numbers from 1 (Q.EDTNUM R1) */
         for (int i = 0; i < b->n; i++)
             b->l[i].num = (long)(i + 1) * EDT_SCALE;
@@ -1485,6 +1678,7 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
 {
     int screen_used = 0;
     struct edt_buf b;
+    g_edt_ctx = ctx;
     char line[EDT_LINE_MAX];
     uint32_t rst = 0;
 
@@ -1551,6 +1745,8 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
             return SS$_NORMAL;
         }
         if (kw(&p, "QUIT", 4)) {
+            if (!screen_used)
+                printf("\n");                /* EDT.LINE3 Q: a blank line */
             screen_reset(screen_used);
             buf_free(&b);
             return SS$_NORMAL;

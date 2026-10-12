@@ -15,7 +15,8 @@
 #
 # --- /COPIES has no backing queue-entry field -> %DCL-W-IVQUAL, not silently
 #     dropped (structural, q_print) ---
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \COPIES\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \COPIES\
 #
 # THE FINDING THIS GATES (docs/design-vms-parity-map.md sec 3): PRINT carried 1
 # of ~40 Dictionary qualifiers and accepted any other silently. TRIPWIRE: drop

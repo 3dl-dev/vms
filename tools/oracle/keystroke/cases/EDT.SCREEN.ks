@@ -9,4 +9,4 @@ R send "{RIGHT}" settle=1
 X type "X" settle=1
 Z send "^Z" expect="\*$" settle=2
 Q send "QUIT\r" expect="\$ $" timeout=30
-V1 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN\r" expect="\$ $" quiet
+V1 send "SET TERMINAL/DEVICE_TYPE=UNKNOWN/LINE_EDITING\r" expect="\$ $" quiet

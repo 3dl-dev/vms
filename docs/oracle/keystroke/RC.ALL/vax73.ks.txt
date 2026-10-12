@@ -1,7 +1,8 @@
 # keystroke oracle transcript (unmasked) -- case RC.ALL (OpenVMS VAX V7.3 OPA0:)
 # RECALL/ALL lists the recall buffer, RECALL n brings one back for editing, RECALL/ERASE empties it
-# case-sha256 baa77f34d6651f2f9785588734310d136799a0b38fdfc34b0123873a4deaec36
+# case-sha256 8a4ce404d21fa07ff87725a0142c37b28efe23652c72e59ffe54ae563d8b4519
 @start loggedin OK
+=== STEP V0 quiet
 === STEP E0 quiet
 === STEP C1
 | WRITE SYS$OUTPUT "R1"<CR><LF>
@@ -20,7 +21,6 @@
 | RECALL 2<CR><LF>
 | <CR><NUL>$ WRITE SYS$OUTPUT "R1"
 === STEP U
-| <CR><LF>
 | <CR><NUL>$                                                                              <BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS><BS>
 === STEP E
 | RECALL/ERASE<CR><LF>

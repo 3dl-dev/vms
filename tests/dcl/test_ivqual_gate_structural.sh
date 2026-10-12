@@ -7,10 +7,14 @@
 #       qualifier not in the verb's table BEFORE the handler runs.
 #
 # --- Unknown qualifiers on retrofit verbs -> %DCL-W-IVQUAL ($STATUS=2288) ---
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \ZZZ\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \FROBNICATE\
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \NOTAREALQUAL\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \BOGUS\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \ZZZ\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \FROBNICATE\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \NOTAREALQUAL\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 #

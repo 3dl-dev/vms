@@ -5,7 +5,8 @@
 #       DISMOUNT use) and rejects a bogus qualifier structurally
 #       (%DCL-W-IVQUAL), instead of the old unconditional SS$_NORMAL.
 # EXPECT: contains:DCL-ALIVE
-# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
+# EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+# EXPECT: contains: \BOGUS\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _VDA300:
 # EXPECT: contains:$STATUS = "%X0000007C"

@@ -1,0 +1,32 @@
+# acp-acl-default-not-propagated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the ACP gives a new file its directory's DEFAULT ACEs, a new directory its parent's ACL, a new version the previous version's ACL (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_CREATE composes the inherited ACEs (acp_acl_inherit) and writes them into the new header. The mutation never writes them, so files and directories are born with no ACL whatever their directory or previous version carries. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A.TXT inherits the DEFAULT ACEs, DEFAULT cleared, NOPROPAGATE kept; not the plain ACE
+SUB.DIR inherits PROPD.DIR's ACL as it is, except the NOPROPAGATE ACE
+B.TXT inherits SUB.DIR's DEFAULT ACE, DEFAULT cleared
+B.TXT's protection comes from the DEFAULT_PROTECTION SUB.DIR inherited
+A.TXT;2 inherits A.TXT;1's ACL less its NOPROPAGATE ACE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^            if (acl_len > 0) {$#            if (0 \&\& acl_len > 0) { /* NEGCTL acp-acl-default-not-propagated */#' "$_file"
+    :
+}

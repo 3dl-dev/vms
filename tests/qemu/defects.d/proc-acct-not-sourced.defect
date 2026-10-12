@@ -1,0 +1,87 @@
+# proc-acct-not-sourced -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process table, per-process accounting sourced from the Linux task (fill_proc_acct(), vms-a7e)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        # The executive sources CPU time / page faults / resident pages /
+        # login time from the task it pins by pid_ref, in fill_proc_acct(),
+        # and vms_ioctl_getjpi()/vms_ioctl_procscan() call it after dropping
+        # the hash lock. This mutation removes BOTH calls, so no row carries
+        # accounting (every VMS_PI_V_* accounting bit stays clear and every
+        # field stays 0) -- the pre-vms-a7e state. Three suites read that
+        # accounting: test_kmod_procacct at the raw ioctl (its whole point),
+        # test_syssvc_showproc as SHOW SYSTEM's Page-flts/Pages columns, and
+        # test_syssvc_procnam block P12 as the CPU figure on a redacted row.
+        suites_red)   echo "test_kmod_procacct test_syssvc_showproc test_syssvc_procnam";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "fill_proc_acct() is where the executive reads the real Linux task's CPU time, page faults, resident pages and creation time into the process row (struct vms_procinfo.cputim/pageflts/pages/logintim + the VMS_PI_V_* validity bits). Removing its two call sites is the whole facility gone: rows come back with the accounting bits clear and the fields zero, exactly as they did before vms-a7e. Identity, redaction, naming, scanning and the P0/P1 extents are untouched.";;
+        require_fail) cat <<'EOF'
+PROCSCAN rows carry the same executive accounting GETJPI does -- this is the exact path SHOW SYSTEM's columns read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+page faults are sourced and non-zero (a live process has faulted its image in) -- JPI$_PAGEFLTS from the executive
+resident pages are sourced and non-zero (a live user process has an address space) -- JPI$_PPGCNT from the executive
+CPU time is sourced (valid bit set) -- JPI$_CPUTIM from the executive
+login time is sourced (valid bit set) -- JPI$_LOGINTIM from the executive
+after burning CPU, JPI$_CPUTIM reports a non-zero figure -- the executive is measuring real consumed CPU, not reporting a stuck 0
+A-BURNS/B-READS: B reads A's real page-fault and resident-page counts out of A's executive row -- accounting a per-process fake could not show for another process
+B reads A's non-zero CPU time out of A's row (A had burned CPU) -- sourced from the task the executive pins, not from B's own state
+the subject's Page flts (42-51) and Pages (53-59) fields carry real digits at VMS geometry -- the executive sourced them
+the CPU field starts at column 25, so the Process Name field is 15 columns wide
+the readable row carries a CPU figure
+the UNREADABLE row carries XGRP's own REAL (non-zero) CPU figure -- accounting rides through identity redaction, matching the oracle, not a fabricated zero
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+EVERY RED IS THE SAME FACILITY SEEN FROM A DIFFERENT READER, not a second
+property, and the set was MEASURED by injecting this mutation and reading the
+harness, not predicted. fill_proc_acct() is the single source of all four
+accounting fields, so removing it clears them for every reader at once:
+
+  - test_kmod_procacct is the dedicated raw-ioctl suite; its page-fault,
+    resident-page, CPU-time, login-time, burn-registers-CPU, A-BURNS/B-READS
+    and PROCSCAN-parity assertions all read the fields this mutation stops
+    the executive from setting. (Its "honestly absent" assertions for state/
+    priority/I-O/quota STAY GREEN -- those bits are supposed to be clear, and
+    this mutation does not touch them; and "the figures B reports for A are
+    A's magnitude" stays green because both sides read zero, 0 >= 0.)
+  - test_syssvc_showproc reads the same fields as SHOW SYSTEM's CPU, Page
+    flts and Pages columns; with nothing sourced they all render blank, so
+    BOTH the Page-flts/Pages digit assertion AND the CPU-field-at-column-25
+    geometry assertion (which expects digits in the CPU field) fail.
+  - test_syssvc_procnam reads the CPU figure on TWO rows: its own readable
+    row and a cross-group (redacted) one. The whole point of vms-a7e is that
+    accounting rides through identity redaction, so with the source gone
+    BOTH rows' CPU fields are blank -- "the readable row carries a CPU
+    figure" and the redacted-row assertion (P12) both fail.
+
+The by-name and identity paths are untouched: this mutation is under the
+ACCOUNTING source, not the authorisation clause proctab-crossgroup-identity
+mutates, so SHOW SYSTEM still lists every process and $GETJPI identity is
+still refused/allowed exactly as before.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # Both call sites are the identical text "fill_proc_acct(acct_task,
+        # &args.info);" (vms_ioctl_getjpi and vms_ioctl_procscan), each on
+        # its own line, so this single substitution removes BOTH -- sed
+        # applies to every line. The replacement is a bare `;` plus the
+        # marker, which leaves the surrounding `if (acct_task) { ...
+        # put_task_struct(acct_task); }` valid and makes the anchor vanish
+        # after one apply (a second apply finds no match: the idempotence the
+        # selftest requires). fill_proc_acct() then goes uncalled -- only a
+        # -Wunused-function warning, not an error, for an external module
+        # build (verified: vms.ko still links), which is the point: the
+        # accounting facility is gone and every reader sees the fields clear.
+        sed -i 's|fill_proc_acct(acct_task, &args.info);|/* NEGCTL proc-acct-not-sourced */;|' "$_file"
+    :
+}

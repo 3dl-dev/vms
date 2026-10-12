@@ -1,0 +1,25 @@
+# release-leader-zombie-pcb-kept -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process deletion at process exit (vms_process_ended, the Linux module rind, rd vms-9f32) -- deciding that the PROCESS, not a thread, has ended, when its group leader exits first (rd vms-003b)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_spawn_complete";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_process_ended() asks thread_group_empty(p) instead of the group's live-thread count. When the last thread to leave is NOT the group leader (the leader exited first -- DCL with its SYS\$INPUT reader thread), thread_group_empty() is false for it (the zombie leader is still on the thread list), the process is never deleted, and the creator's armed completion never fires. The deterministic leader-exits-first check reddens; the 200-spawn DCL loop may also redden by scheduling (non-gating extra). Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a subprocess whose main thread exits before its last thread still completes:
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i 's|^    if (atomic_read(\&p->signal->live) != 0)$|    if (!thread_group_empty(p)) /* NEGCTL release-leader-zombie-pcb-kept */|' "$_file"
+    :
+}

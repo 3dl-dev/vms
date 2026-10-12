@@ -1,0 +1,57 @@
+# eflag-setef-status-inverted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags -- \$SETEF's own WASSET/WASCLR discrimination (VMS_IOCTL_SETEF)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # vms-177 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_setef's own body --
+        # eflag-clref-noop mutates \$CLREF, a different handler in the same
+        # file. RANGE-ANCHORED to vms_ioctl_setef's own body: the target
+        # text "args.status = prev ? SS\$_WASSET : SS\$_WASCLR;" is
+        # DUPLICATED verbatim in vms_ioctl_clref, immediately below it in
+        # the file.
+        #
+        # THE REAL BIT-SET IS LEFT UNTOUCHED ON PURPOSE. *flags |= (1U <<
+        # bit) still runs and still wakes waiters -- only the discriminating
+        # STATUS WORD is inverted. Corrupting the bit-set itself was tried
+        # and rejected for the sibling lock-enq defect this session: it can
+        # HANG the guest, because blocked WAITFR/WFLOR/WFLAND callers rely
+        # on the bit actually flipping, not on what SETEF reports about it.
+        # MEASURED (not the entry's first guess): the ORIGINAL require_fail
+        # below, "sys$setef(1) set the flag", checks $VMS_STATUS_SUCCESS(),
+        # which is true for BOTH WASSET and WASCLR (both are success
+        # codes) -- so an inverted discrimination cannot make that specific
+        # assertion fail, and a real run confirmed it stayed green. The
+        # discriminating assertions are the ones that compare against a
+        # SPECIFIC one of the two values, in this suite and in
+        # test_kmod_eflag.
+        suites_red)   echo "test_syssvc_ef_local test_kmod_eflag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$SETEF reports the OPPOSITE of the flag's real previous state -- WASCLR when it was set, WASSET when it was clear. The flag itself is still set correctly (wake_up_interruptible still fires on the real bit), so this is purely a caller-visible lie about history, not a functional break -- but only assertions that check the SPECIFIC previous-state value can see it; \$VMS_STATUS_SUCCESS() alone cannot, since both values are success codes.";;
+        require_fail) cat <<'EOF'
+sys$setef(1) on an already-set flag reported WASSET
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+setef(5) returns WASCLR
+setef(5) again returns WASSET
+setef(40) in cluster 1 returns WASCLR
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through fourth time: every one of these assertions checks SETEF's returned previous-state value against a specific WASSET/WASCLR expectation, and this mutation is the ONLY thing that changed.";;
+        esac
+
+}
+
+defect_apply() {
+        # `args.status = prev ? SS_WASSET : SS_WASCLR;` is duplicated
+        # verbatim in vms_ioctl_clref immediately below. RANGE-ANCHORED to
+        # vms_ioctl_setef's own body so the range closes before clref's
+        # copy is reached.
+        sed -i '/^long vms_ioctl_setef/,/^}$/ s|^    args\.status = prev ? SS__WASSET : SS__WASCLR;$|    args.status = prev ? SS__WASCLR : SS__WASSET; /* NEGCTL eflag-setef-status-inverted */|' "$_file"
+    :
+}

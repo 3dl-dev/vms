@@ -1,0 +1,28 @@
+# mbx-prmmbx-check-removed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREMBX requires PRMMBX for a permanent mailbox";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_kmod_mbx test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "mbx_priv_check() tests PRMMBX for a permanent mailbox with 'permanent ? (cur_privs & VMS_PRV_M_PRMMBX) != 0'. The mutation replaces that test with 'true', so any process may create a permanent mailbox. test_kmod_mbx's own permanent-needs-PRMMBX assertion reddens too. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+\$CREMBX (permanent) without PRMMBX is SS\$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    bool ok = permanent ? (cur_privs \& VMS_PRV_M_PRMMBX) != 0$|    bool ok = permanent ? true /* NEGCTL mbx-prmmbx-check-removed */|' "$_file"
+    :
+}

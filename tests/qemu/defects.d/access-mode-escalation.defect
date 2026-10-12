@@ -1,0 +1,50 @@
+# access-mode-escalation -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "access modes and privileges (VMS_IOCTL_SETMODE/GETMODE/SETPRV/CHKPRIV)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_kmod_access";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$SETMOD to KERNEL mode stops requiring CMKRNL: the executive lets a process escalate its own access mode. One condition, inverted.";;
+        require_fail) cat <<'EOF'
+KERNEL mode DENIED without CMKRNL (SS$_NOPRIV)
+... and the mode is still USER after the denied escalation
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+an unprivileged process cannot $SETPRV itself CMKRNL
+... and still does not hold CMKRNL afterwards
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+THE TWO EXTRAS ARE THE REASON THE GUARD EXISTS, not evidence the mutation is
+coarse. vms_access.c:168 computes
+    may_exceed = (proc->current_mode == PSL_C_KERNEL) || (cur_privs & SETPRV)
+so KERNEL access mode IS the authority to exceed the authorized mask. The
+unprivileged child (test_kmod_access.c:100-121) escalates, then immediately
+tries to $SETPRV itself CMKRNL; with the escalation wrongly allowed it is now
+in KERNEL mode when it asks, so it gets the privilege and holds it afterwards.
+One inverted condition, one process, one straight line: a defect that lets a
+process into KERNEL mode does not stop at the mode. Naming only the two
+setmode assertions would describe the smaller half of what the mutation
+actually proves.
+These reds appeared when vms-2b8 landed -- before it, $SETPRV had no
+mode-derived authority. The equality check caught the change on the first run
+after the rebase and named both extras with their suite; the previous
+allowlist would have passed silently, which is precisely the failure this
+round was re-dispatched to fix.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|if (!(proc->cur_privs \& PRV_M_CMKRNL)) {|if (0 /* NEGCTL access-mode-escalation */) {|' "$_file"
+    :
+}

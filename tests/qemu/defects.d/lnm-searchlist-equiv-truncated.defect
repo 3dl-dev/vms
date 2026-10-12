@@ -1,0 +1,76 @@
+# lnm-searchlist-equiv-truncated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+    # -------------------------------------------------------------------
+    # vms-6d6: the three suites #284/#272 (vms-420, vms-d37) left with NO
+    # per-facility negative control at all -- the same coverage-gate hole
+    # vms-6bdf/#293 just closed for test_kmod_resdir. Baselined before this
+    # change: `coverage` named all three in both "NAMED BY NO defect's
+    # suites_red" and "in-scope suite(s) with NO anchor at all".
+    # -------------------------------------------------------------------
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "executive-resident multi-value (search-list) logical names -- the stored equivalence COUNT (VMS_IOCTL_LNM_DEFINE's num_equiv field, kernel-core/vms_lnm.c), vms-420";;
+        targets)      echo "kernel-core/vms_lnm.c";;
+        # No other suite in this manifest's known set calls lnm_create_multi
+        # or reads a logical at any equivalence index above 0 (grep across
+        # tests/qemu confirms it: test_syssvc_lnm_privilege is the only other
+        # vms_kif_lnm_translate() caller with an explicit index argument, and
+        # it always passes 0). A single-value DEFINE always carries
+        # a->num_equiv == 1, so pinning the stored count to 1 is a no-op for
+        # every one of them.
+        suites_red)   echo "test_syssvc_lnm_searchlist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_lnm_define()'s NEW-ENTRY branch (the fresh-arena-slot path; the SUPERSEDE branch a few lines above it, taken only when the name is already defined, is untouched) pins the stored e->num_equiv to 1 regardless of how many equivalence strings the caller's DEFINE/SYSTEM actually supplied. The full equiv[] array is still memcpy'd into the entry whole -- every value the caller wrote is genuinely IN the arena -- but the entry's own recorded COUNT says there is only one, so every reader that trusts that count (the mmap TRANSLATE-by-index path, lnm_translate_values(), SHOW LOGICAL's enumerate) sees a one-value logical no matter how many were defined. This is the vms-420 defect itself (DEFINE FOO BAR,BAZ silently dropping BAZ) reintroduced at the one call site that stores the count -- test_syssvc_lnm_searchlist.c exists specifically to catch a regression here, and its TEST_NAME is namespaced so this suite's DEFINE always lands on the NEW-ENTRY branch, never SUPERSEDE.";;
+        require_fail) cat <<'EOF'
+child: equivalence index 1 (previously dropped, vms-420) matches the parent's define
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: reads its own multi-value SYSTEM define back with both values, in order
+child: the parent's SYSTEM search-list logical reports BOTH equivalence strings here
+child: equivalence index 0 matches the parent's define
+child: vms_kif_lnm_translate index 0 matches and reports num_equiv=2
+child: vms_kif_lnm_translate index 1 matches and reports num_equiv=2
+child: vms_kif_lnm_translate index 2 (past the end) reports "no more", not a fabricated third value
+child: SHOW LOGICAL's enumerate path lists BOTH equivalence strings for the parent's SYSTEM search list
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED AT EVERY READER OF THE SAME COUNT. num_equiv is the
+single field every consumer of a multi-value logical trusts to know how many
+equivalence strings exist: lnm_translate_values() (what SHOW LOGICAL and
+F$TRNLNM sit on top of), the raw vms_kif_lnm_translate() index walk, and
+lnm_enumerate()'s listing path all read it, and all three stop believing a
+second value exists once it is pinned to 1 -- one corrupted count, observed
+at every place this suite reads it back, not several independent defects.
+That is why they are named here as knock-on rather than split into
+per-reader entries.
+
+WHAT STAYS GREEN, AND WHY. The negative control ("a never-defined name is
+absent") never touches the mutated branch. "parent: lnm_create_multi ...
+reported success" stays green too: the ioctl still returns SS$_NORMAL --
+only the stored count is wrong, not the status the caller sees.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED: `e->num_equiv = a->num_equiv;` appears twice in
+        # vms_ioctl_lnm_define -- once in the SUPERSEDE branch, once in the
+        # NEW-ENTRY branch this defect targets. `e->scope_key = scope_key;`
+        # is written only in the NEW-ENTRY branch (SUPERSEDE never re-derives
+        # it), so it is the unambiguous start of the range; `e->name_length`
+        # (also NEW-ENTRY-only) closes it. Idempotent: after the edit the
+        # range no longer contains the literal `a->num_equiv` text, so a
+        # second apply is a no-op -- BROKEN FIXTURE, as selftest requires.
+        sed -i '/^    e->scope_key = scope_key;$/,/^    e->name_length/ s|^    e->num_equiv = a->num_equiv;$|    e->num_equiv = 1; /* NEGCTL lnm-searchlist-equiv-truncated */|' "$_file"
+
+    :
+}

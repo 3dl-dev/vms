@@ -1,0 +1,39 @@
+# proc-rundown-locks-not-released -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process rundown: lock/EF/channel release when the process is deleted at its end (vms_proc_free_claimed -> vms_proc_release_locks, vms-ff8 / rd vms-9f32)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_rundown_ff8";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_free_claimed() stops calling vms_proc_release_locks(proc), so the locks a dead subject held are NEVER released as its PCB is freed -- neither on the synchronous .release path (a subject that owns its /dev/vms channel exits) nor on the lazy vms_proc_reap_dead() path (a shared-fd subject reaped by a later process-table op). The PCB is still unhashed and freed and the sibling AST / common-EF / channel releases in the same function are untouched, so rundown still 'happens' -- only the dead subject's still-granted lock survives on the resource, so a conflicting \$ENQ from a live process is denied forever. This is the exact rundown-completeness property vms-ff8 characterized: rundown must RELEASE the resources, not merely unhash the entry. Only the two assertions that re-take the resource after the subject dies can tell the difference.";;
+        require_fail) cat <<'EOF'
+A: after a fresh-fd subject's exit, EX+NOQUEUE granted with NO table op (its deletion at exit released the lock)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+B [vms-9f32]: a shared-fd subject's EX lock is released by its deletion at exit -- the
+EOF
+                      ;;
+        knock_on_why)  echo "SAME DEFECT, OBSERVED FOR THE OTHER fd SHAPE: vms_proc_free_claimed() is the one release funnel of process deletion, so the shared-fd subject's lock is never released either.";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT, no range anchor needed: vms_proc_release_locks(proc) is
+        # called exactly once in kernel/vms_module.c -- the release block of
+        # vms_proc_free_claimed(), the single teardown funnel reached by BOTH
+        # vms_dev_release() (synchronous .release) and vms_proc_reap_dead()
+        # (the lazy reaper). Replacing that one call with a comment leaves the
+        # sibling AST/common-EF/channel releases and the kfree_rcu untouched,
+        # so the PCB is still freed and unhashed; only the dead subject's locks
+        # stop being released. The definition in kernel/vms_lock.c is a
+        # different file, never $_file for this defect (targets kernel/vms_module.c).
+        sed -i 's|    vms_proc_release_locks(proc);|    /* NEGCTL proc-rundown-locks-not-released: dead proc locks not released */|' "$_file"
+
+    :
+}

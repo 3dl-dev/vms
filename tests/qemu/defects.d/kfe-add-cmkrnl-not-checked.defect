@@ -1,0 +1,28 @@
+# kfe-add-cmkrnl-not-checked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive known-file list: INSTALL ADD/REPLACE/REMOVE need CMKRNL (vms-7c64)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_kfe() decides CMKRNL on the caller's own PCB before any change to the known-file list. The mutation lets every caller through, so a process without CMKRNL installs an image (and could later give it privileges). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a process without CMKRNL: ADD is SS$_NOPRIV, FIND still reads the entry
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        st = vms_prot_require_priv(privs, VMS_PRV_M_CMKRNL);$|        st = SS__NORMAL; (void)privs; /* NEGCTL kfe-add-cmkrnl-not-checked */|' "$_file"
+    :
+}

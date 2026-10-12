@@ -1,0 +1,29 @@
+# dcl-fident-name2num-host-passwd -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(name,\"NAME_TO_NUMBER\"), the identifier-to-UIC conversion (src/vmsdcl/dcl_lexical.c lex_identifier) -- its getpwnam() branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The reverse direction goes back to building a VMS UIC out of a passwd entry's uid and gid, so F\$IDENTIFIER(\"baron\",\"NAME_TO_NUMBER\") answers with the developer's Linux account expressed as a UIC. Separate from the NUMBER_TO_NAME control because it is a separate branch: deleting one leaves the other, which is exactly how this class kept surviving rounds that fixed it.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the host passwd entry's uid/gid for that account
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+G/F$IDENTIFIER: NAME_TO_NUMBER answers 0 for a name OVMX holds no identifier for, in SHOW SYMBOL's own integer format
+EOF
+                      ;;
+        knock_on_why)  echo "MEASURED: this control's red set is 2, not the 1 round 3 declared, and it was 2 before round 4 touched anything -- the omission is round 3's, found by running the control rather than reasoning about it. The mutation restores the passwd lookup AT the miss, the only place it ever was, so the miss stops being 0 and becomes the UIC built from the passwd entry. The require_fail line names that fabricated UIC; this line is the oracle-pinned miss value failing on the same answer. One behaviour, both ends -- there is no finer mutation, because the deleted lookup and the miss value are the same branch.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file"
+    :
+}

@@ -1,0 +1,28 @@
+# acp-acl-ext-not-matched -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the ACP access check walks an ACL that continues in extension headers (vms-a88c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_match() gathers the ACEs of the extension headers after the primary's. The mutation looks at the primary only, so an ACE that lives in the extension header grants nothing. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the [100,100] ACE in the extension header grants [100,100] read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^    if (acp_hdr_ext(h) == 0 || !vol)$#    if (1) /* NEGCTL acp-acl-ext-not-matched */#' "$_file"
+    :
+}

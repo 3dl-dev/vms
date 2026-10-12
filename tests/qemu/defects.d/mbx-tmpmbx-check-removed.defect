@@ -1,0 +1,28 @@
+# mbx-tmpmbx-check-removed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREMBX requires TMPMBX for a temporary mailbox";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_privilege_enforce";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "mbx_priv_check() tests TMPMBX for a temporary mailbox with ': (cur_privs & VMS_PRV_M_TMPMBX) != 0;'. The mutation replaces that arm with 'true', so a process that has switched TMPMBX off can still create a temporary mailbox. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+\$CREMBX (temporary) without TMPMBX is SS\$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^                         : (cur_privs \& VMS_PRV_M_TMPMBX) != 0;$|                         : true; /* NEGCTL mbx-tmpmbx-check-removed */|' "$_file"
+    :
+}

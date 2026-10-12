@@ -1,0 +1,28 @@
+# acp-acl-deleteall-drops-protected -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "deleting a file's ACL keeps the ACEs marked OPTIONS=PROTECTED (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_op()'s DELETEALL drops an ACE only when it is not PROTECTED. The mutation drops every ACE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the PROTECTED ACE survives deleting the ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            drop = !(flags \& ACP_ACE_M_PROTECTED);$|            drop = 1; /* NEGCTL acp-acl-deleteall-drops-protected */|' "$_file"
+    :
+}

@@ -1,0 +1,29 @@
+# image-privs-not-granted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an image installed /PRIVILEGED runs with its installed privileges, granted by the executive at activation (vms-bdc1)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_image_privs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_kfe_exec_privs() gives the exec'd file the privileges of the installed entry whose pinned copy it is. The mutation gives nothing, so an installed /PRIVILEGED image runs with only the process privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the installed image runs with its installed privileges (SYSNAM, OPER) in an unprivileged process
+the next image activated in that process no longer holds them
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            p = vms_kfe_tab\[i\].privs;$|            p = 0; /* NEGCTL image-privs-not-granted */|' "$_file"
+    :
+}

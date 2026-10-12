@@ -1,0 +1,32 @@
+# devtab-io-error-not-charged -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "device error accounting: SHOW ERROR / F\$GETDVI(...,\"ERRCNT\") sourced from the executive's real ACP block-I/O error path (vms_devtab_note_io_error, vms-5f82)";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        suites_red)   echo "test_kmod_errcnt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_devtab_note_io_error() drops its own increment ('dev->errcnt++;'), so a genuine ACP block-read failure on the unit's backing device is never charged to it -- the writer side of the SHOW ERROR / \$GETDVI ERRCNT field goes silent while the reader keeps working. The unique increment text is gone after substitution (no-op re-apply). Baseline readability, the mount-refusal status, and the INV-6 no-speculative-bump assertion (a SUCCESSFUL read must not move the count) all read other paths and stay green -- only the count-moved-by-one/two assertions redden.";;
+        require_fail) cat <<'EOF'
+one genuine ACP block-read failure incremented VDA100: ERRCNT by exactly one
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a second block-read failure moved VDA100: ERRCNT to +2 (a real counter)
+$DEVICE_SCAN reports VDA100: with the same non-zero ERRCNT SHOW ERROR would print
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment means the count never leaves zero across BOTH injected failures, so the second-failure assertion (which checks it moved to +2) reddens identically, and \$DEVICE_SCAN's projection of that same field (cmd_show_error's own reader) reports the same wrong (zero) value.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique increment (vms_devtab_note_io_error's own errcnt bump); dropping
+        # it leaves the counter unmoved. Gone after apply (no-op re-apply).
+        sed -i 's|dev->errcnt++;|/* NEGCTL devtab-io-error-not-charged: increment dropped */|' "$_file"
+    :
+}

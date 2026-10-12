@@ -1,0 +1,34 @@
+# mmk-drive-command-not-sent -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the MMK exec-drive: the shipped MMK.EXE drives a real build through its persistent mailbox-driven DCL subprocess (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_sp.c sp_open/sp_send/sp_receive, vms-b23) -- composing lib\$spawn + mailbox IPC + write-attention AST + \$HIBER + IO\$M_NOW into MMK's send_cmd_and_wait, self-host spine #4";;
+        targets)      echo "../tests/corpus/tier3-mmk/ovmx/ovmx_mmk_sp.c";;
+        suites_red)   echo "test_syssvc_mmk_drive";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sp_send is the ONE step that copies each resolved command line (its action command plus the three end-of-command-marker commands) into the SYS\$INPUT mailbox the spawned DCL reads. The mutation forces the record length it writes to zero (len = 0), so sp_send drains MMK's command stream but delivers EMPTY records -- the DCL receives no `ANSWER = 6 * 7`, no WRITE, and no marker command, so it computes nothing, delivers no OVMXB23:42 over SYS\$OUTPUT, and never writes the MMK____status= marker MMK's \$HIBER waits on. MMK's own \$CREMBX of both mailboxes, the write-attention-AST arm, and the lib\$spawn of DCL all still succeed -- ONLY the command CONTENT is dropped, the A-writes-nothing / B-reads-nothing shape INV-6/Rule 11 exists to catch.";;
+        require_fail) cat <<'EOF'
+MMK.EXE drove a real build: its spawned DCL computed 6*7 and delivered OVMXB23:42 back over the mailbox drive (spawn + mailbox + write-attention AST + $HIBER + IO$M_NOW + $STATUS marker)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT, no range anchor needed: `uint16_t len = d->dsc$w_length;`
+        # occurs exactly once in ovmx_mmk_sp.c -- sp_send's per-record length (the
+        # count of command bytes it writes into the SYS$INPUT mailbox with
+        # IO$_WRITEVBLK). Forcing it to zero makes sp_send drain MMK's command
+        # stream but deliver EMPTY records, so the driven DCL receives no command
+        # and no end-of-command marker. After substitution the text no longer
+        # matches, so a second apply is a no-op (the selftest requires).
+        sed -i 's|    uint16_t len = d->dsc$w_length;|    uint16_t len = 0; /* NEGCTL mmk-drive-command-not-sent */|' "$_file"
+
+    :
+}

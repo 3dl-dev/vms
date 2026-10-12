@@ -1,0 +1,46 @@
+# devtab-dassgn-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "device table -- \$DASSGN's own success status (VMS_IOCTL_DASSGN)";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        # vms-2e7 (vms-2b2 follow-up). MEASURED at the 9-of-33 audit: no
+        # existing mutation hunk sits inside vms_ioctl_dassgn's own body --
+        # devtab-owner-not-recorded and devtab-alloc-not-recorded both
+        # mutate devinfo_fill()/the \$ASSIGN owner write, neither of which
+        # is inside \$DASSGN. RANGE-ANCHORED to vms_ioctl_dassgn's own body:
+        # this exact 8-space "args.status = SS_NORMAL;" also appears in
+        # \$ALLOC (twice) and \$DALLOC, all defined nearby in the same file.
+        # MEASURED (not the entry's first guess): dassgn is called as
+        # cleanup by suites outside test_kmod_devtab too. Real
+        # run_facility_negctl.sh output, not a static guess, is what fixed
+        # this suites_red/require_fail/knock_on_fail set.
+        suites_red)   echo "test_kmod_devtab test_kmod_setterm test_syssvc_qio_terminal";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DASSGN reports SS\$_IVCHAN -- \"no such channel\" -- for a channel it actually found and released (removed from the process's channel list, device_release_channel() run, the entry freed). The deassignment happens; only the caller-visible confirmation of it does not.";;
+        require_fail) cat <<'EOF'
+channel deassigned
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+last channel deassigned
+B returns its channel
+parent: sys$dassgn("TT:" channel) succeeded (public API)
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second and third time: every one of these assertions depends on \$DASSGN succeeding as its own cleanup/release step, and this mutation is the ONLY thing that changed -- nothing about the channel table's real bookkeeping was touched.";;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_dassgn's own body. This exact 8-space
+        # "args.status = SS_NORMAL;" also appears in $ALLOC (twice) and
+        # $DALLOC, all defined nearby in the same file; vms_ioctl_dassgn is
+        # the first of them, so the range closes at its own `}`.
+        sed -i '/^long vms_ioctl_dassgn/,/^}$/ s|^        args\.status = SS__NORMAL;$|        args.status = SS__IVCHAN; /* NEGCTL devtab-dassgn-status-wrong */|' "$_file"
+    :
+}

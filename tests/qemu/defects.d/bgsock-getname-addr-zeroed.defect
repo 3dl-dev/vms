@@ -1,0 +1,43 @@
+# bgsock-getname-addr-zeroed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- getsockname/getpeername (vms_ioctl_bg_getname, VMS_IOCTL_BG_GETNAME, IO\$_SENSEMODE) in the executive BGn: driver (src/kernel-core/vms_bg.c, OpenSSH de-veneer Tier A vms-4bf). The executive reads the connected socket's local/peer address STRAIGHT FROM THE HOST KERNEL SOCKET (kernel_getsockname/kernel_getpeername), so an unmodified OpenSSH getpeername() records the TRUE remote IP for known_hosts, never an AF_UNIX socketpair peer. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bgsock_peername";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_getname() copies the kernel socket's sin_addr into the answer the veneer hands getpeername/getsockname. The mutation zeroes it, so getpeername/getsockname report 0.0.0.0 -- reddening exactly the 'returns the REAL remote IP' and 'local 127.0.0.1' address assertions, while the port, sockopt round-trips and non-blocking EAGAIN stay green (family and port are still copied). One field zeroed. RE-ANCHORED (vms-387): the seam refactor (exec_kbackend) moved the raw 'sin->sin_addr.s_addr' copy INTO the shared exec_socket_getname() helper, used by three other call sites (bind-time getname, accept, and vms_bg_datafd.c's [bgconn] getname -- the latter already has its own isolated defect, bgconn-getname-addr-zeroed) -- mutating the seam would blow this defect's 'isolated' scope. vms_ioctl_bg_getname() itself moved from kernel/vms_bg.c to kernel-core/vms_bg.c (vms-9951 core/rind split) and now zeroes args.sin_addr itself, right after exec_socket_getname fills it and before the status write, so only this ioctl's own answer is corrupted.";;
+        require_fail) cat <<'EOF'
+getpeername() returns the REAL remote IP 127.0.0.1 (known_hosts sees the true host, not an AF_UNIX peer)
+ovmx_getsockname() returns the local 127.0.0.1:<ephemeral> endpoint
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # RE-ANCHORED (vms-387): the raw 'sin_addr = sin->sin_addr.s_addr'
+        # copy moved OUT of vms_ioctl_bg_getname() and into the shared
+        # exec_socket_getname() seam helper (exec_kbackend_linux.h), used by
+        # three other call sites -- mutating it there would blow this
+        # defect's 'isolated' scope. vms_ioctl_bg_getname()'s own body now
+        # only sets args.status after the call, still carrying its original
+        # NEGCTL placeholder comment (`args.status = rc ? SS__ABORT :
+        # SS__NORMAL;   /* NEGCTL bgsock-getname-addr-zeroed */`, UNIQUE in
+        # the file). Anchored on that exact line, insert a zeroing of
+        # args.sin_addr (already filled by exec_socket_getname above) ahead
+        # of it -- the same "zero after the seam call, before status" idiom
+        # bgconn-getname-addr-zeroed already uses in vms_bg_datafd.c. After
+        # substitution the anchor text no longer starts at 4-space indent
+        # (it now follows "args.sin_addr = 0; "), so a second apply is the
+        # no-op the selftest requires.
+        sed -i 's|    args\.status = rc ? SS__ABORT : SS__NORMAL;   /\* NEGCTL bgsock-getname-addr-zeroed \*/|    args.sin_addr = 0; args.status = rc ? SS__ABORT : SS__NORMAL;   /* NEGCTL bgsock-getname-addr-zeroed */|' "$_file"
+
+    :
+}

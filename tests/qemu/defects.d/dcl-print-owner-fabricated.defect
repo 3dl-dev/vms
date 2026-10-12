@@ -1,0 +1,27 @@
+# dcl-print-owner-fabricated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "PRINT's job OWNER, the same executive-to-queue-entry path SUBMIT uses (src/vmsdcl/dcl_cmd_process.c cmd_print)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "PRINT goes back to writing the literal \"SYSTEM\" as the print job's owner. It is a SEPARATE control from SUBMIT's, in the same file and the same shape, because they are separate call sites: fixing one and leaving the other is exactly how five of these six survived the round that deleted the sixth.";;
+        require_fail) cat <<'EOF'
+G/PRINT: SHOW QUEUE shows the print job with an EMPTY owner, in cmd_show_queue's own column format
+G/PRINT: the print job is NOT owned by SYSTEM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/^int cmd_print(/,/^}$/ s|^    const char \*user = ctx->username;$|    const char *user = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-print-owner-fabricated */|' "$_file"
+    :
+}

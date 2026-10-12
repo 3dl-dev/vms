@@ -1,0 +1,33 @@
+# procctl-not-delivered -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process control delivered by the executive (vms_ioctl_procctl -> exec_task_signal, kernel-core/vms_proctab.c, rd vms-8e9) -- \$DELPRC/\$FORCEX/\$SUSPND/\$RESUME reach the target from inside the executive, not by a userspace kill() across substrate identities";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_delprc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_procctl authorizes the request and then reports success without signalling the target: \$DELPRC returns SS\$_NORMAL and the process keeps running. The cross-identity case (P8: a WORLD holder on another substrate uid, which no userspace kill() can reach) is the property; the same-identity STOPs and the \$SUSPND are the same missing delivery seen again. Gone after apply.";;
+        require_fail) cat <<'EOF'
+P8: the other-identity target actually terminated -- the executive delivered the termination
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+P1: the target's Linux process actually terminated (reaped, not merely signalled)
+P1: the executive's table no longer resolves the stopped target ($GETJPI -> SS$_NONEXPR, the same status SHOW SYSTEM reads to decide a row is gone)
+P2: the target's Linux process actually terminated (reaped, not merely signalled)
+P2: the executive's table no longer resolves the stopped target
+P6: the child's REAL Linux process is STOPPED -- SIGSTOP hit the executive-resolved pid, not the mis-cast VMS-pid value
+EOF
+                      ;;
+        knock_on_why)  echo "every one is the same signal the executive no longer sends: STOP by name and by pid leave the target running (so its row also stays), and \$SUSPND leaves it running.";;
+        esac
+}
+
+defect_apply() {
+        # UNIQUE TEXT: vms_ioctl_procctl's one delivery call.
+        sed -i 's|^    rc = exec_task_signal(ref, sig);$|    rc = 0; (void)ref; (void)sig; /* NEGCTL procctl-not-delivered */|' "$_file"
+    :
+}

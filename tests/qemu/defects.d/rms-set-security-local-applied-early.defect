@@ -1,0 +1,28 @@
+# rms-set-security-local-applied-early -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$SET_SECURITY holds OSS\$M_LOCAL edits in the context until OSS\$M_RELCTX (vms-d404)";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$set_security() applies its held ACL edits only without OSS\$M_LOCAL, on OSS\$M_RELCTX, or with no context. The mutation applies them at once, so a LOCAL edit is visible in the file before the context is released. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+...and the file's ACL is unchanged until the context is released
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^    if (!(flags \& RMS_OSS_M_LOCAL) || (flags \& RMS_OSS_M_RELCTX) || !contxt) {$#    if (1) { /* NEGCTL rms-set-security-local-applied-early */#' "$_file"
+    :
+}

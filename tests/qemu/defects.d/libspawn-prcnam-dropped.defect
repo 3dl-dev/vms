@@ -1,0 +1,34 @@
+# libspawn-prcnam-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "LIB\$SPAWN's \$CREPRC child names itself under the caller's requested prcnam (vms-e9a B0)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_libspawn_reg";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$creprc()'s created-process body only calls 'vms_kif_setprn(child_prcnam)' 'if ((rep.status & 1) && child_prcnam[0])'; the mutation prefixes that guard with '0 &&', so \$SETPRN is never issued and the subprocess registers (vms_kif_register_subprocess, untouched) but stays UNNAMED in the executive's table. rep.status and the minted VMS pid are unaffected (the guard change only skips the naming call), so lib\$spawn/NOWAIT itself still reports success with a real pid; only every BY-NAME reader of that subprocess -- \$GETJPI-by-prcnam directly, and \$GETJPI-by-pid's own prcnam field readback -- finds nothing to report. Unique guard text; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the lib$spawn'd subprocess is EXECUTIVE-REGISTERED (resolvable BY prcnam)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the subprocess carries the requested prcnam
+$GETJPI-by-name and lib$spawn agree on the executive VMS pid
+$GETJPI-by-pid resolves the same registered subprocess
+EOF
+                      ;;
+        knock_on_why)  echo "the same skipped \$SETPRN means the subprocess is unnamed everywhere: the by-name lookup that anchors require_fail fails outright, so the two assertions that read fields off ITS result (the prcnam string, the cross-check pid) fail with it, and the separate by-VMS-pid lookup finds a real PCB but with no prcnam ever stamped on it, so its own prcnam comparison also reddens -- one missing \$SETPRN call, four readers of its effect.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique guard (sys$creprc's own $SETPRN gate); '0 &&' makes it
+        # structurally unreachable so the created subprocess never gets named.
+        # Gone after apply (no-op re-apply).
+        sed -i 's|if ((rep.status \& 1) \&\& child_prcnam\[0\])|if (0 \&\& (rep.status \& 1) \&\& child_prcnam[0]) /* NEGCTL libspawn-prcnam-dropped */|' "$_file"
+    :
+}

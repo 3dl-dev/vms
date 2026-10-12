@@ -1,0 +1,55 @@
+# pcb-per-thread -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "PCB identity: one executive process per THREAD GROUP, shared by its threads";;
+        targets)      echo "kernel/vms_module.c";;
+        # MEASURED after vms-2b8: test_kmod_ident grew its own thread section
+        # (l.878-887) and detects this too. It was NOT in this list, and the
+        # red-set equality check named the three new assertions on the first
+        # run after the rebase. Both suites belong here -- two independent
+        # suites catching one defect is coverage, not a blunderbuss.
+        suites_red)   echo "test_kmod_bind test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_find_or_err() keys the PCB on current->pid (the Linux TID) instead of current->tgid, so a sibling thread of one image no longer resolves to its process's PCB. Invisible to every single-threaded suite -- tgid == pid there -- which is precisely why it needs a control.";;
+        require_fail) cat <<'EOF'
+sibling thread resolves in the process table
+sibling thread sees the process name the main thread set
+sibling thread sees the event flag the main thread set
+sibling thread can $DEQ the lock the main thread took
+a second thread of the process is known to the executive
+... as the SAME process, not a second one (one PCB per process)
+... and sees the identity the other thread stamped
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+sibling thread got the PROCESS's entry, not one of its own
+sibling thread's cluster state carries the flag bit
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+Both are DOWNSTREAM READS of a resolution that already failed, in the same
+report struct, at test_kmod_bind.c:611 and :619. The sibling thread fills
+trep.linux_pid from its $GETJPI and trep.readef_state from its $READEF; when
+the PCB lookup misses, neither call writes its field, so the two assertions
+that inspect those fields go red as a consequence of the one that already did.
+This is the honest reading of the defect, not a coarse mutation: a thread that
+cannot resolve its process's PCB legitimately fails everything downstream of
+the lookup, and there is no finer edit -- vms_module.c:86 is the single
+tgid-vs-pid site (the register path at :317 is untouched). What DOES stay
+green is the guard "the sibling really is a second Linux task", which is what
+proves the six reds are about PCB identity and not about the thread never
+having run.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|vms_proc_find(current->tgid)|vms_proc_find(current->pid) /* NEGCTL pcb-per-thread */|' "$_file"
+    :
+}

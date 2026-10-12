@@ -1,0 +1,38 @@
+# register-adopt-pid-not-reported -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process registration / adoption (VMS_IOCTL_REGISTER, src/kernel/vms_module.c vms_ioctl_register)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_kmod_setterm";;
+        blind_suites) echo "test_kmod_bind";;
+        blind_why)    echo "test_kmod_bind.c's own re-exec/adoption scenario calls vms_kif_register(NULL) -- the output pointer is NULL, so the adopted vms_pid this defect stops writing is never read back through REGISTER at all. That scenario's own identity checks (status, getjpi, prcnam, privs, uic, username) all go through a SEPARATE later vms_kif_getjpi_self() call, which reads proc->vms_pid straight out of the table -- a field this defect never touches, only the register ioctl's own reply copy of it. MEASURED: a run of this defect named only test_kmod_bind's assertion in require_fail and it came back green while an unnamed suite (test_kmod_setterm) went red instead -- the ignored-call trap this file's own header warns about, caught by running it rather than by re-reading the call site.";;
+        isolation)    echo "isolated";;
+        why)          echo "REGISTER on a process that already has an executive entry (the post-execve() adopt path, vms-9fc) stops copying the adopted process's own vms_pid into the reply. Status is still reported SS\$_NORMAL and the process is still genuinely adopted (the hash-table entry is unchanged) -- only the ANSWER the caller is given about which VMS process ID it now has is missing, the same facade shape as setterm-binding-not-recorded and devtab-owner-not-recorded: the operation happens, only the record of it going back to the caller does not. test_kmod_setterm.c's own re-exec scenario passes a non-NULL output pointer to vms_kif_register() on both the pre-exec (fresh, line 438, untouched) and post-exec (adopt, line 412, mutated) calls, and compares the two -- the one place in the suite set that reads REGISTER's own reply rather than re-deriving the pid through GETJPI.";;
+        require_fail) cat <<'EOF'
+and it is the same VMS process, so the binding was not re-made
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Range-anchored to the ADOPT branch only (`if (proc) { ... return 0; }`
+        # right after the first vms_proc_find_or_err() call). The FRESH
+        # registration path lower in the same function has its own, textually
+        # identical `args.vms_pid = proc->vms_pid;` write; a bare match (no
+        # range) would hit both and trip two properties (adoption AND fresh
+        # registration) at once. The range opens at the first
+        # `proc = vms_proc_find_or_err();` in the file and closes at the
+        # adopt branch's own `return 0;` -- the first such line after it --
+        # so it cannot reach the fresh-registration branch's write, which
+        # comes later in the function. The write disappears after one
+        # application (replaced by a comment), so a second apply finds no
+        # match inside the range and is the no-op selftest requires.
+        sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file"
+    :
+}

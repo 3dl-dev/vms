@@ -1,0 +1,31 @@
+# mbx-prot-write-unchecked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a mailbox write needs write access under the mailbox protection (rd vms-c6d1)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() refuses SS\$_NOPRIV when vms_prot_check() denies the caller write access. The mutation makes that refusal unreachable ('0 &&'), so a process may write into a mailbox whose protection grants it read only. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an unprivileged WRITE to the W:R mailbox is SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+an unprivileged WRITE to a no-world-access mailbox is SS$_NOPRIV
+the promsk given to sys$crembx is enforced: an unprivileged $QIOW write through sys$assign is SS$_NOPRIV
+SYSPRV off again: the write is refused
+EOF
+                      ;;
+        knock_on_why)  echo "the same missing write refusal observed on the no-world-access mailbox, through the public sys\$qiow path, and after SYSPRV is switched back off.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) {$|    if (0 \&\& mbx_access(proc, mbx, VMS_PROT_ACC_WRITE) != SS__NORMAL) { /* NEGCTL mbx-prot-write-unchecked */|' "$_file"
+    :
+}

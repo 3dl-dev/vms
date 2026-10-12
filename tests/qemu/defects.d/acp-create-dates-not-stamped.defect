@@ -1,0 +1,28 @@
+# acp-create-dates-not-stamped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "IO\$_CREATE stamps the new file header's creation and revision dates (FI2\$Q_CREDATE / FI2\$Q_REVDATE) from the executive clock, so DIRECTORY/FULL and F\$FILE_ATTRIBUTES CDT/RDT read real times (vms-263e, folded in from vms-6f5c)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation replaces the create path's ods2_fh2_set_dates(sc->filehdr, now, now) with a no-op, so a new header keeps an all-zero FI2\$Q_CREDATE; F\$FILE_ATTRIBUTES CDT of the file test_syssvc_rms_acp created is empty and its dates assertion reddens. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+vms-263e: a file the executive created has a creation and a revision date (F$FILE_ATTRIBUTES CDT/RDT not empty)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^                (void)ods2_fh2_set_dates(sc->filehdr, now, now);$|                (void)now; /* NEGCTL acp-create-dates-not-stamped */|' "$_file"
+    :
+}

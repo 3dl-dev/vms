@@ -1,0 +1,36 @@
+# lock-compat-ex-cr -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "distributed lock manager (VMS_IOCTL_ENQ/DEQ/CONVERT/GETLKI)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        # MEASURED, and deliberately narrower than "the lock suites". The
+        # matrix is indexed compat[requested][granted] (vms_lock.c:288), so
+        # flipping compat[EX][CR] changes exactly one direction: EX requested
+        # while CR is held. test_kmod_lock_mproc and test_syssvc_lock assert
+        # the OTHER direction (CR or EX requested while EX is held ->
+        # compat[*][EX]), and test_kmod_lock_sync waits on an EX->EX conflict.
+        # None of them touch the flipped entry, so none of them can detect it
+        # and none of them is "blind" -- they test a different property. Round
+        # 1 listed all four here, which let the printed attribution claim cover
+        # three suites that could not have contributed to it.
+        suites_red)   echo "test_kmod_lock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "compat[EX][CR] flipped 0 -> 1: an exclusive request is granted against a held concurrent-read lock. THE vms-e4d PRECEDENT, mechanised -- one entry of one matrix, nothing else.";;
+        require_fail) cat <<'EOF'
+ENQ EX+NOQUEUE denied (CR held)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file"
+    :
+}

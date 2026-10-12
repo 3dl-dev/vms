@@ -1,0 +1,34 @@
+# setexit-status-not-recorded -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$EXIT/\$STATUS cross-process readback (VMS_IOCTL_GETEXIT by VMS PID / by Linux pid, vms-707/vms-e9a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_kmod_exit test_syssvc_spawn_pipeline";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_getexit()'s 'args.condition = target->exit_status;' (the shared read after the SELF/PID/LINUX_PID selector switch) is narrowed to a ternary that passes the SELF case through untouched but masks every CROSS-PROCESS read (SEL_PID, SEL_LINUX_PID) down to VMS_STS_M_SUCCESS -- only the success/fail bit survives, the rest of the condition value is fabricated zero. A same-process \$STATUS round-trip (test_kmod_exit's self checks) is completely unaffected (SEL_SELF is untouched), and any cross-process read whose real condition happens to collapse to exactly 0 or 1 under that mask reads back correctly by construction -- which is why only the specific non-trivial test vectors below redden, not every cross-process assertion in the file. One line replaced by a different one-line expression; the original assignment text is gone, so a second apply is a no-op (selftest).";;
+        require_fail) cat <<'EOF'
+B reads back the EXACT condition value A recorded
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RUN reads back the EXACT recorded condition value (0x0035A019, NOT a POSIX-collapsed 0x1)
+the failing stage's actual $STATUS (SS$_ABORT) is surfaced
+EOF
+                      ;;
+        knock_on_why)  echo "the same success-bit-only mask reddens every cross-process \$STATUS reader whose real condition value is not exactly 0 or 1: test_kmod_exit's own SEL_PID cross-process check (require_fail, COND_CHILD) and its SEL_LINUX_PID RUN-fork-path check (COND_RUN3, a knock-on in the SAME suite), and test_syssvc_spawn_pipeline's SEL_PID readback of the failing stage's SS\$_ABORT status (a knock-on in the WIDENED suite). Every other assertion in both suites -- the self round-trip in test_kmod_exit Part 1, the pipeline's pass/fail branch decision (which only consults the preserved success bit), and the happy-path pipeline stages (whose real condition is exactly SS\$_NORMAL=1, which the mask reproduces exactly) -- reads a value the mask does not disturb and stays green.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique line (vms_ioctl_getexit's shared post-switch read); narrowed to
+        # a ternary that passes SEL_SELF through and masks every cross-process
+        # read (SEL_PID/SEL_LINUX_PID) to just the success bit. The original
+        # unconditional assignment text is gone after apply (no-op re-apply).
+        sed -i 's|    args.condition  = target->exit_status;|    args.condition  = (args.select == VMS_JPI_SEL_SELF) ? target->exit_status : (target->exit_status \& VMS_STS_M_SUCCESS); /* NEGCTL setexit-status-not-recorded */|' "$_file"
+    :
+}

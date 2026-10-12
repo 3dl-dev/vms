@@ -1,0 +1,58 @@
+# proctab-procscan-nonexpr-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process table -- \$PROCSCAN's own terminator status when the scan is exhausted (VMS_IOCTL_PROCSCAN)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        # vms-68e. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_procscan's own body.
+        #
+        # ROUND 1 of this defect corrupted PROCSCAN's own SUCCESS path (the
+        # one "args.status = SS_NORMAL;" every found row returns through)
+        # instead of this terminator path, mirroring the mistake ROUND 1 of
+        # proctab-getjpi made and for the identical reason: SHOW SYSTEM
+        # (every caller here loops "while status == SS_NORMAL") is as
+        # foundational to process-identity tests as \$GETJPI is, so
+        # corrupting the shared success status reddened 6 suites and ~21
+        # assertions -- not a scoped property of PROCSCAN, the whole
+        # enumeration primitive. WORSE: the chosen wrong value (SS_NONEXPR)
+        # happened to equal the CORRECT terminator value this same entry's
+        # own require_fail checks for, so that assertion passed by
+        # COINCIDENCE and never actually exercised the mutation at all --
+        # caught by the real run, not by re-reading the code. This
+        # replacement targets the NARROWER terminator path instead: the
+        # "table exhausted, no more rows" branch, reached only by a scan
+        # that runs to completion. RANGE-ANCHORED to vms_ioctl_procscan's
+        # own body: this exact "args.status = SS_NONEXPR;" also appears in
+        # vms_ioctl_getjpi's own not-found path (a DIFFERENT defect's
+        # target, above).
+        # MEASURED (not the entry's first guess): test_kmod_ident also runs
+        # a full-table scan to its terminator, independent of
+        # test_kmod_procnam's own.
+        suites_red)   echo "test_kmod_procnam test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$PROCSCAN reports SS\$_NOPRIV instead of SS\$_NONEXPR when the table is genuinely exhausted -- a scan that ran off the end is told it was refused by privilege, not that there was nothing left to enumerate. args.info stays whatever the last found row left it (the memset ahead of this line, like GETJPI's, is untouched), so this is purely the wrong flavor of \"no more\", not a fabricated row.";;
+        require_fail) cat <<'EOF'
+process scan terminates with SS$_NONEXPR
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the unprivileged scan terminates with SS$_NONEXPR
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second time: test_kmod_ident's own scan also depends on reaching this identical terminator line.";;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_procscan's own body. This exact
+        # "args.status = SS_NONEXPR;" also appears in vms_ioctl_getjpi's
+        # own not-found path; vms_ioctl_procscan is defined after
+        # vms_ioctl_getjpi in this file, so the range excludes getjpi's.
+        sed -i '/^long vms_ioctl_procscan/,/^}$/ s|^        args\.status = SS__NONEXPR;$|        args.status = SS__NOPRIV; /* NEGCTL proctab-procscan-nonexpr-status-wrong */|' "$_file"
+    :
+}

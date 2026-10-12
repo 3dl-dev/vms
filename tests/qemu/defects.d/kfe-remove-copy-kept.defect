@@ -1,0 +1,28 @@
+# kfe-remove-copy-kept -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "INSTALL REMOVE deletes the executive's copy of the image (vms-220)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_kfe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_kfe() records the removed entry's copy and unlinks it in the executive's directory once the list lock is dropped. The mutation stops recording it, so REMOVE releases the copy but leaves the file behind. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+INSTALL REMOVE also deletes the executive's copy from its directory
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            memcpy(gone, vms_kfe_tab\[i\].path, 256);$|            (void)0; /* NEGCTL kfe-remove-copy-kept */|' "$_file"
+    :
+}

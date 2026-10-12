@@ -1,0 +1,31 @@
+# dcl-type-refuses-sharing-writer -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL TYPE/COPY reading a file another process holds open for write sharing: the share intent dcl_rms_read_open opens with (DCL_RMS_READ_SHR, rd vms-5a0)";;
+        targets)      echo "vmsdcl/include/dcl/dcl_rms.h";;
+        suites_red)   echo "test_syssvc_rms_filelock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "DCL's reader drops SHRPUT from its share intent, so its file-access lock is PR and conflicts with a writer that opened FAC=GET|PUT SHR=GET|PUT (CW): TYPE refuses a file real VMS reads (observed, OpenVMS VAX V7.3, ci6-evac-15/16: TYPE of EVAC.DAT while EVACWL appends). Unique macro definition; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+*** TYPE's reader (GET, SHR=DCL_RMS_READ_SHR) opens the file the writer holds -> NORMAL ***
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+  ... and $GETs the writer's record
+EOF
+                      ;;
+        knock_on_why)  echo "The \$GET assertion is inside the opened branch of the same reader: refused at open, it never reads, so it reports the same root cause.";;
+        esac
+
+}
+
+defect_apply() {
+        # The share-intent macro is defined once, in dcl_rms.h. Gone after
+        # apply (no-op re-apply).
+        sed -i 's|^#define DCL_RMS_READ_SHR  (FAB\$M_SHRGET \| FAB\$M_SHRPUT)$|#define DCL_RMS_READ_SHR  (FAB$M_SHRGET) /* NEGCTL dcl-type-refuses-sharing-writer */|' "$_file"
+    :
+}

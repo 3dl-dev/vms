@@ -1,0 +1,30 @@
+# acp-dir-used-blocks-ignore-eof -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a directory insert works on the blocks in use (VBN 1 to end of file) and grows into the directory's preallocated blocks";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_create_dir";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_dir_used_blocks() returns the directory's used blocks from its FAT end of file. The mutation returns the whole allocation, so a directory created with 200 blocks is treated as 200 blocks in use, beyond the 64-block working bound, and every insert into it fails SS\$_DEVICEFULL. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+30 directories are entered in BIGD.DIR (the index file grows to hold their headers)
+every one of them is found again by name
+BIGD.DIR grew past its first block
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    return (used == 0 \|\| used > alloc) ? alloc : used;$|    return (used == 0 \|\| used > alloc) ? alloc : alloc; /* NEGCTL acp-dir-used-blocks-ignore-eof */|' "$_file"
+    :
+}

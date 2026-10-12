@@ -1,0 +1,28 @@
+# tt-ctrly-not-shown -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the terminal class driver shows CTRL/Y and CTRL/C as <CR><LF>*INTERRUPT*<CR><LF> (vms_tt.c tt_echo_interrupt, rd vms-f0fb; probes OB.PROMPT Y1/Y3/C2/N2 on VAX V7.3)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() echoes *INTERRUPT* for CTRL/Y and CTRL/C (\`tt_echo_interrupt(tt);\`), armed AST or not. The mutation drops the call: the interrupt is silent, as the substrate's n_tty left it. Non-fatal: bytes not queued. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/Y is shown as <CR><LF>*INTERRUPT*<CR><LF> by the driver
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: only the screen check observes the echo; the read and AST checks see the same completions.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t\t\ttt_echo_interrupt(tt);$|\t\t\t\t(void)0; /* NEGCTL tt-ctrly-not-shown */|' "$_file"
+    :
+}

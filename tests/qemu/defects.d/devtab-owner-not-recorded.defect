@@ -1,0 +1,59 @@
+# devtab-owner-not-recorded -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "device table (VMS_IOCTL_ASSIGN/DASSGN/GETDVI/DEVSCAN/TTSETMODE/ALLOC/DALLOC)";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        suites_red)   echo "test_kmod_devtab";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$ASSIGN stops recording the owning process in the shared device entry (the FIRST of the two owner_pid writes; \$ALLOC's is left alone). The channel is still created and still costs a reference, so only the A-writes/B-reads ownership assertions can see it -- Rule 11's decisive test, negatively.";;
+        require_fail) cat <<'EOF'
+oracle: $ASSIGN to a non-shareable device nobody owns makes the caller its owner
+B sees the ownership A took with a channel alone (A writes, B reads)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the refused $ALLOC neither took ownership nor allocated anything
+oracle: a channel to the free console makes us its owner, unallocated (TTA0: l.1136-1138)
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+All four reds are the SAME missing write observed at four points in
+test_kmod_devtab.c, and every one of them is an owner_pid == <pid> read taken
+after an $ASSIGN:
+  l.300  process A reads its own ownership straight after assigning;
+  l.309  process B reads A's ownership (the A-writes/B-reads check);
+  l.329  the owner is still recorded after a $ALLOC that was correctly
+         REFUSED -- the refusal itself is unaffected and stays green
+         ("oracle: $ALLOC is refused while another process owns the device by
+         channel alone"), which is what shows this is the ownership write and
+         not the allocation logic;
+  l.477  a later, fresh $ASSIGN to the now-free console records the owner.
+There is no finer mutation available: the executive records ownership on
+$ASSIGN in exactly one place, so any defect in it is visible everywhere the
+suite reads owner_pid back. The alternative -- naming two of the four and
+calling the other two strays -- is the allowlist that was deleted.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # Range-anchored, NOT `0,/re/` (first-match). There are two
+        # `dev->owner_pid =` writes -- $ASSIGN's implicit ownership and
+        # $ALLOC's -- and mutating both would trip two properties at once.
+        # First-match addressing picks the right one but is IDEMPOTENT-UNSAFE:
+        # applied twice it silently moves on to $ALLOC's write, which would
+        # defeat the `selftest` double-apply check below. Anchoring to the
+        # unique `if (!dev->shareable ...)` line that opens the implicit-
+        # ownership block makes the edit unrepeatable, so a second apply is
+        # the no-op the self-test requires it to be.
+        # Range-end anchor is exec_unlock (not spin_unlock) since vms-31b moved
+        # this facility onto the kernel-backend shim in src/kernel-core/.
+        sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    exec_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file"
+    :
+}

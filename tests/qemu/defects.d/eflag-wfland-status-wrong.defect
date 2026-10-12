@@ -1,0 +1,45 @@
+# eflag-wfland-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags -- \$WFLAND's own success status (VMS_IOCTL_WFLAND)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # vms-2ed. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_wfland's own body, for the same reason as
+        # eflag-wflor-status-wrong above. Made possible by the same new
+        # test_syssvc_ef_mproc.c scenario, which is the only place in the
+        # tree that genuinely BLOCKS a process in \$WFLAND (proven via a
+        # bounded-silence check with only one of two required flags set)
+        # before releasing the second flag and expecting it to unblock --
+        # so this is the one suite that can tell "wait resolved, status
+        # lied" apart from "wait never resolved at all".
+        #
+        # THE WAIT PREDICATE ITSELF IS LEFT UNTOUCHED, same reasoning as
+        # \$WFLOR's sibling entry. RANGE-ANCHORED to vms_ioctl_wfland's own
+        # body: this exact "args.status = SS_NORMAL;" also appears in
+        # vms_ioctl_waitfr and vms_ioctl_wflor (both 4-space, earlier in
+        # the file).
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$WFLAND reports SS\$_ILLEFC instead of SS\$_NORMAL after its wait predicate is genuinely satisfied (every mask flag set) -- the blocked process is really released by the second sys\$setef (the child's own read-back at that point still shows both bits set), only the caller-visible confirmation of success does not survive.";;
+        require_fail) cat <<'EOF'
+parent: sys$wfland unblocked only once BOTH mask flags were set (AND, not OR)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_wfland's own body, same reasoning as
+        # its WFLOR sibling above -- this exact "args.status = SS_NORMAL;"
+        # also appears in vms_ioctl_waitfr and vms_ioctl_wflor, both earlier
+        # in the file.
+        sed -i '/^long vms_ioctl_wfland/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__ILLEFC; /* NEGCTL eflag-wfland-status-wrong */|' "$_file"
+    :
+}

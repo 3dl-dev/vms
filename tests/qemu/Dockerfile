@@ -922,6 +922,9 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
 # tests/qemu/run_facility_negctl.sh drives the whole set; the ci.yml job
 # "Kernel Executive - Per-Facility Negative Controls" runs that.
 COPY tests/qemu/facility_defects.sh /src/tests/qemu/facility_defects.sh
+# The manifest sources each control from defects.d/ beside it; without the
+# directory every `apply` answers "unknown defect" and no injection lands.
+COPY tests/qemu/defects.d /src/tests/qemu/defects.d
 COPY tests/qemu/inject_and_run.sh /inject_and_run.sh
 RUN chmod +x /inject_and_run.sh /src/tests/qemu/facility_defects.sh
 

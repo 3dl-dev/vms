@@ -1,0 +1,75 @@
+# p1-map-not-recorded -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "P1 control-region bookkeeping (VMS_IOCTL_P1_MAP, vms-68f.ii -- increment (ii) of the Option A in-process image activation design, docs/design-in-process-activation.md Part II)";;
+        targets)      echo "kernel/vms_p1.c";;
+        suites_red)   echo "test_syssvc_p1";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_p1_map() validates the extent, then SKIPS the two stores under proc->p1_lock (proc->p1_base = args.base; proc->p1_limit = args.limit;) while still returning SS\$_NORMAL -- the same INV-6 shape p0-map-not-recorded catches on the P0 side: the ioctl REPORTS success without the executive actually holding the fact. Every validation-only assertion (the three degenerate-extent refusals, and the post-refusal GETJPI check) is untouched, because none of them ever reaches the deleted stores; only the assertions that read the extent BACK after a claimed-successful MAP can tell the difference -- and because this suite's whole P0/P1-persistence section compares AGAINST that never-stored extent, the miss propagates through every later P1 check in the suite, not just the first one.";;
+        require_fail) cat <<'EOF'
+GETJPI reflects the registered P1 extent: p1_base/p1_limit match what VMS_IOCTL_P1_MAP just registered
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A-WRITES/B-READS: B reads A's registered P1 extent out of A's row -- a fact a per-process notion of P1 could not show
+after P0_MAP: P1 extent still matches what was registered before any P0 activity, and P0 is now also present
+P1-SURVIVES: GETJPI still reflects the SAME P1 extent after this P0 teardown -- the property this increment exists to prove, not just once but across a repeated P0 map/unmap cycle
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED EVERYWHERE ELSE IN THE SUITE THAT READS P1. proc->
+p1_base/p1_limit never leave zero after the deleted stores, so every LATER
+comparison against the real (non-zero) window this suite registered comes
+back false: process B's cross-process GETJPI(PID=A) sees no extent (the
+p1_base/p1_limit copied into struct vms_procinfo by proc_fill_info() are
+the same zeroed fields the mutation left behind); the post-P0_MAP check in
+the P0/P1 cycle loop, which compares P1 against the extent registered
+BEFORE any P0 activity, has nothing but zero on the executive's side to
+compare against; and the "P1-SURVIVES" check, which is really asking
+"is P1 still what VMS_IOCTL_P1_MAP registered", is asking about a fact
+that was never true even once. One deleted pair of stores, four
+assertions naming the same missing fact from four different call sites
+across the whole suite -- not four independent properties, and not the
+same set p0-unmap-clears-p1 reddens: that defect leaves the FIRST cycle's
+post-P0_MAP check green (P1 was genuinely registered, and P0_UNMAP had not
+yet run), where this defect fails it on every cycle from the very first,
+because P1 was never registered at all.
+
+WHAT STAYS GREEN, AND WHY. The three degenerate-extent refusals and the
+post-refusal GETJPI check never reach vms_ioctl_p1_map's success path at
+all. VMS_IOCTL_P1_MAP's own reported status stays SS$_NORMAL (the mutation
+never touches args.status), so "VMS_IOCTL_P1_MAP registers the window"
+stays green -- it is exactly the fabricated-success half of INV-6 this
+entry exists to catch. B's own row (no P1 extent) is unaffected -- B never
+calls P1_MAP on itself. Every P0-only assertion (VMS_IOCTL_P0_MAP's own
+status, VMS_IOCTL_P0_UNMAP's status and its "P0-DELETED-ON-RUNDOWN" GETJPI
+check) is unaffected: this mutation never touches proc->p0_base/p0_limit
+or vms_p0.c at all.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_p1_map's own body: `proc->p1_base =
+        # args.base;` immediately followed by `proc->p1_limit = args.limit;`
+        # occurs exactly once in the file -- same shape as p0-map-not-
+        # recorded's own anchor in vms_p0.c, mirrored here for vms_p1.c.
+        # Deleting the two stores and leaving `args.status = SS__NORMAL;`
+        # right after them makes P1_MAP report success while the executive
+        # keeps recording no extent at all -- INV-6's exact shape. After
+        # substitution neither deleted assignment's text remains, so a
+        # second apply finds nothing left to match -- the no-op selftest
+        # requires.
+        sed -i '/^long vms_ioctl_p1_map/,/^}$/ {
+            s|^    proc->p1_base = args.base;$|    /* NEGCTL p1-map-not-recorded: extent not stored */|
+            s|^    proc->p1_limit = args.limit;$||
+        }' "$_file"
+
+    :
+}

@@ -1,0 +1,131 @@
+# mbx-not-shared -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "mailboxes (VMS_IOCTL_MBX_CREATE/ASSIGN/WRITE/READ/DELMBX, executive-resident MBAn:), vms-d44 + named-mailbox rendezvous by logical name, vms-mb1 + bidirectional command/response streaming to a spawned child, vms-e0b";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_kmod_mbx test_syssvc_mbx_crossproc test_syssvc_mbx_cmdresp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$ASSIGN's mailbox lookup (vms_ioctl_mbx_assign()) gains a check that the caller's Linux pid matches the mailbox's CREATOR, so a mailbox is only ever reachable by the process that \$CREMBX'd it. That is precisely the AF_UNIX-socketpair shape this item replaced (see vms_mbx.h's header): every single-process assertion -- A's own \$CREMBX, its own write, the malformed-name and never-created-unit negative controls -- stays green, because A always IS its own mailbox's creator. Only a SECOND, unrelated process's \$ASSIGN can see the difference, which is exactly the A-writes/B-reads shape CLAUDE.md rule 11 exists to catch.";;
+        require_fail) cat <<'EOF'
+B: $ASSIGN to A's mailbox by device name succeeds (cross-process rendezvous)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+B: mailbox read succeeds on A's mailbox
+B reads the EXACT message A wrote (byte-exact, right length)
+IO$M_NOW read of an EMPTY mailbox returns SS$_ENDOFFILE immediately (a blocking read would hang -> the suite timeout catches a regression)
+B: write a message to drain with IO$M_NOW
+IO$M_NOW read WITH a queued message returns that message immediately (byte-exact), not SS$_ENDOFFILE
+B: a second $ASSIGN to the same mailbox succeeds
+temporary mailbox SURVIVES its creator's $DASSGN while another process (B) still holds a channel to it
+B: $DELMBX succeeds
+oracle: $DELMBX alone does not deassign or delete -- the mailbox is still assignable immediately afterward
+B: $DASSGN channel 1
+B: $DASSGN channel 2
+B: $DASSGN channel 3 (the last one)
+reader: $ASSIGN by LOGICAL NAME reaches the creator's mailbox cross-process (sys$assign translates the name through LNM$SYSTEM to MBAn:)
+reader: $QIO READVBLK returns the EXACT message the creator wrote (byte-exact, right length) -- named-mailbox message delivery through the executive
+child: $ASSIGN of the command mailbox BY NAME reaches the parent's mailbox cross-process
+child: $ASSIGN of the result mailbox BY NAME reaches the parent's mailbox cross-process
+parent: all 8 streamed commands come back TRANSFORMED and byte-exact from the spawned child -- NOT REACHED because the child could not assign the mailboxes cross-process
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+SAME DEFECT, OBSERVED DOWNSTREAM OF ITS ONE ROOT, NOT NINE SEPARATE
+PROPERTIES. test_kmod_mbx.c's process B never obtains a valid mailbox
+channel from its first $ASSIGN (chan_b1 stays its zero-initialized value),
+and every knock-on assertion above is B doing something with a channel it
+was never actually given: reading and comparing a message on chan_b1,
+the IO$M_NOW non-blocking reads and the interposed write that all issue on
+that same phantom chan_b1 (each returning SS$_IVCHAN instead of the
+SS$_ENDOFFILE / SS$_NORMAL the assertion expects -- they fail FAST, never
+hang, because a zero channel is rejected before any wait), taking a
+"second" channel (chan_b2, equally refused since B is still not the
+creator), surviving-dassgn and $DELMBX checks against the same
+never-obtained channels, and finally three $DASSGN calls on channel
+numbers B never held. MEASURED against a real /dev/vms (rebuilt vms.ko,
+reloaded, re-run): this mutation reddens exactly these thirteen "  FAIL:"
+lines and no others -- 9 passed, 13 failed, out of 22 total assertions.
+
+WHAT STAYS GREEN, AND WHY. A's own four assertions ($CREMBX temporary,
+the PRMMBX-privilege refusal, A's write, A's device-name shape) are
+untouched: A is always its own mailbox's creator, so the added check
+never fires for anything A does to its own mailbox, including A's own
+$DASSGN of its own channel. The three negative controls at the bottom
+(malformed device name, a never-created MBA999999: unit, and $DASSGN of a
+channel never held) are also untouched: none of them names a real
+mailbox another process created, so the mutation has nothing to
+discriminate on and the executive's existing SS$_IVDEVNAM/SS$_NOSUCHDEV/
+SS$_IVCHAN answers are unchanged. The final "mailbox is GONE" assertion
+also stays green -- B's phantom channels were never real references, so
+the mailbox's refcnt reached zero and it was freed exactly as it would be
+if B had genuinely never touched it at all, which is a coincidentally
+correct answer to a differently-broken question, not evidence the defect
+is narrower than claimed.
+
+THE SAME ONE ROOT, OBSERVED IN test_syssvc_mbx_crossproc TOO (vms-mb1).
+That suite proves the by-NAME half: the creator (process A) $CREMBXes a
+mailbox WITH a logical name -- published in the executive-resident
+LNM$SYSTEM (vms-d37) -- and an unrelated reader (process B) reaches it with
+sys$assign(NAME), which translates the name through LNM$SYSTEM to the
+"MBAn:" unit. The name resolves fine (LNM is a different facility); it is
+the executive's mailbox $ASSIGN of that unit, by a caller that is not the
+creator, that this same creator-pid check refuses. So the reader's by-name
+$ASSIGN goes red, and the delivery read that depends on the channel it
+never got goes red with it (the read is issued unconditionally on the
+would-be channel precisely so it reddens BY NAME under this defect rather
+than being skipped). The creator's own $CREMBX and $QIO WRITEVBLK to its
+OWN mailbox stay green (A is always its own mailbox's creator), and the
+never-defined-name control stays green (it names no mailbox, so the check
+has nothing to discriminate on). Two suites, one root: a mailbox reachable
+only by its creator is the exact socketpair facade the executive replaced,
+whether the second process reaches for it by unit (test_kmod_mbx) or by
+name (test_syssvc_mbx_crossproc).
+
+THE SAME ONE ROOT, OBSERVED IN test_syssvc_mbx_cmdresp TOO (vms-e0b). That
+suite proves the MMK command/response shape: a parent $CREMBXes two named
+mailboxes and streams commands to a spawned child over one while reading the
+child's transformed results back over the other. The child -- which created
+neither mailbox -- reaches both only by sys$assign(NAME), so this same
+creator-pid check refuses BOTH of its $ASSIGNs; the child then reports two
+failed assigns and the parent's whole command/response loop cannot run, so
+the two "child: $ASSIGN ... reaches the parent's mailbox cross-process"
+assertions and the "NOT REACHED because the child could not assign the
+mailboxes cross-process" round-trip assertion all redden. The parent's own
+two $CREMBX assertions stay green (the parent is always its own mailboxes'
+creator). Three suites, one root: a mailbox reachable only by its creator is
+the exact socketpair facade the executive replaced, whether the second
+process reaches for it by unit (test_kmod_mbx), by name for a one-shot read
+(test_syssvc_mbx_crossproc), or by name for a streamed command/response
+exchange (test_syssvc_mbx_cmdresp).
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # RANGE-ANCHORED to vms_ioctl_mbx_assign()'s own body: "if (!mbx) {"
+        # (the device-name lookup's not-found branch) is NOT unique in this
+        # file -- vms_ioctl_mbx_delmbx/_write/_read each have an identical
+        # line testing a per-process CHANNEL lookup's result -- so the
+        # address range confines the substitution to $ASSIGN's own
+        # not-found check, immediately after the device-name lookup that is
+        # the ONLY thing standing between an unrelated process and a
+        # mailbox it did not $CREMBX. Widening the refusal to "not found OR
+        # not the creator" makes $ASSIGN refuse (SS$_NOSUCHDEV) every
+        # mailbox this caller did not itself create -- MEASURED against a
+        # real /dev/vms (build, insmod, run, rmmod): reddens exactly the
+        # thirteen assertions this defect's require_fail/knock_on_fail name, 9
+        # of test_kmod_mbx's 22 assertions staying green. The replacement
+        # text does not contain the original "if (!mbx) {" as a substring
+        # (it reads "if (!mbx ||" instead), so a second apply finds nothing
+        # left to match -- the no-op selftest requires.
+        sed -i '/^long vms_ioctl_mbx_assign/,/^}$/ s|    if (!mbx) {|    if (!mbx \|\| mbx->owner_linux_pid != proc->linux_pid) { /* NEGCTL mbx-not-shared */|' "$_file"
+
+    :
+}

@@ -1,0 +1,30 @@
+# tt-outband-ends-read -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an out-of-band character (IO\$M_OUTBAND, e.g. CTRL/T) leaves the read outstanding: the reader is let go to deliver the AST and the same read resumes (vms_tt.c, rd vms-f0fb; probe OB.PROMPT T2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_receive() fires the out-of-band AST and nothing else (\`tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);\`). The mutation also ends a read in progress SS\$_ABORT -- the line the user was typing is lost to a CTRL/T, the shape of a driver that treats every out-of-band character as an interrupt. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+CTRL/T lets the reader go with the read still outstanding (ASTPEND), its AST carrying the character
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+the same read resumes and completes with the whole line 'ABCD'
+EOF
+                      ;;
+        knock_on_why)  echo "the read the CTRL/T ended cannot be shown again or resumed: the status line lands with no read outstanding, and the re-issued read starts a NEW read with its own prompt, missing 'ABC'.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\t\t\ttt_oob_fire(tt, \&tt->oob\[VMS_TT_OOB_OUTBAND - 1\], c);$|\t\t\t\ttt_oob_fire(tt, \&tt->oob[VMS_TT_OOB_OUTBAND - 1], c); if (tt->rd_active) tt_complete(tt, SS__ABORT, 0, 0); /* NEGCTL tt-outband-ends-read */|' "$_file"
+    :
+}

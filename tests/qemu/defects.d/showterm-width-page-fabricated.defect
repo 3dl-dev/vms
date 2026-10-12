@@ -1,0 +1,45 @@
+# showterm-width-page-fabricated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SHOW TERMINAL renderer, Width/Page absence (show_terminal_render(), vms-d0b)";;
+        # DCL, not vms.ko -- the absence is a DISPLAY choice, not an
+        # executive fact (Width/Page are already A-writes/B-reads proven
+        # at the kernel layer by test_kmod_devtab.c). One of the entries
+        # whose property lives in the product half of the interface; see
+        # the "outside vms.ko" note near the top of this file for the set
+        # (not a position within it -- that note names them, it does not
+        # number them, and neither does this one).
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "show_terminal_render() prints a fabricated Width/Page line -- exactly the ONE-LINE layout vms-d0b deleted because docs/oracle/vax73-terminal-device.md never shows it (section 2 puts Width and Page on separate lines, each sharing the line with fields OVMX cannot source). Nothing else in the renderer changes: the header, the characteristic grid and every other row print exactly as before, so only the three assertions that require a Width/Page VALUE'S absence -- not one particular line's absence, see showterm-width-page-oracle-shaped below for why that distinction has its own defect -- can see this.";;
+        require_fail) cat <<'EOF'
+SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # The ONE edit: restore a Width/Page line ahead of the characteristic
+        # grid, exactly the one-line layout vms-d0b deleted as an invented
+        # oracle format. Anchored on the exact original statement
+        # (printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the replacement swaps that trailing printf() for a
+        # behaviourally identical puts() -- same bytes on stdout, since the
+        # format string carries no conversion and puts() supplies its own
+        # newline -- so the literal anchor text does not survive the edit and
+        # a second apply finds no match, which is the no-op the selftest
+        # requires.
+        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Width:%4u      Page:%5u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-fabricated: restores the deleted one-line layout */ puts("Terminal Characteristics:");|' "$_file"
+    :
+}

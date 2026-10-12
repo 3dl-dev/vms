@@ -1,0 +1,31 @@
+# spawn-notify-flag-not-set -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC/LIB\$SPAWN /NOWAIT immediate completion delivery (vms_ioctl_spawn_notify's already-exited branch, vms-e9a B1)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_kmod_spawn_notify";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_spawn_notify()'s ARM-AFTER-EXIT branch calls 'spawn_notify_deliver(proc, args.efn, args.astadr, args.astprm, acmode);' when the child already recorded its exit; the mutation substitutes VMS_EF_NONE for args.efn on THIS call site only, so spawn_notify_deliver's own 'if (efn != VMS_EF_NONE)' guard skips setting the parent's completion event flag for the immediate-delivery path. The completion AST (unconditional on astadr, untouched) still queues, and the ARM-BEFORE-EXIT path (setexit's OWN call site to the same shared function, a few lines away in a different function) is a DIFFERENT call and keeps its real efn -- so \$WAITFR-based delivery (Path 1) is completely unaffected and never blocks. Only the immediate-completion READEF check reddens. Call-site-scoped substitution; the original argument is gone at that one call, so a second apply is a no-op (selftest).";;
+        require_fail) cat <<'EOF'
+the executive SET the completion flag immediately
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Call-site-scoped: only the ARM-AFTER-EXIT (already-exited) branch's
+        # own spawn_notify_deliver() call substitutes VMS_EF_NONE for args.efn,
+        # so its shared 'if (efn != VMS_EF_NONE)' guard skips the flag-set for
+        # THIS call only. The ARM-BEFORE-EXIT path's own (different) call site
+        # is untouched. Original argument gone after apply (no-op re-apply).
+        sed -i 's|spawn_notify_deliver(proc, args.efn, args.astadr, args.astprm, acmode);|spawn_notify_deliver(proc, VMS_EF_NONE, args.astadr, args.astprm, acmode); /* NEGCTL spawn-notify-flag-not-set */|' "$_file"
+    :
+}

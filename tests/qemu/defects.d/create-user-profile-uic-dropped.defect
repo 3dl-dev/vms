@@ -1,0 +1,29 @@
+# create-user-profile-uic-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREATE_USER_PROFILE carries the user's UIC from SYSUAF.DAT into the profile (vms-d404)";;
+        targets)      echo "libvms/syssvc/sys_security.c";;
+        suites_red)   echo "test_syssvc_rightslist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$create_user_profile() stores the UIC \$GETUAI returned. The mutation stores [0,0], a system-category UIC, so DEFAULT's profile reads a world-denied object and is refused the one it owns. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$CHKPRO: DEFAULT is world to a [1,4] S:RWED,O:RWED,G,W object -- read refused (UP.WORLD.NONE.READ)
+$CHKPRO: DEFAULT owns a [200,200] S,O:RWED,G,W object -- read granted (UP.OWNER.RWED.READ)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^    up.uic = uic;$#    up.uic = 0; /* NEGCTL create-user-profile-uic-dropped */#' "$_file"
+    :
+}

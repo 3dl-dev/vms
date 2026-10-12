@@ -1,0 +1,29 @@
+# image-privs-any-file -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "installed-image privileges go only to the executive's own pinned copy, by object (vms-bdc1)";;
+        targets)      echo "kernel/exec_kbackend_linux.h";;
+        suites_red)   echo "test_syssvc_image_privs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_pin_is_image() matches the exec'd file's inode to the installed copy's. The mutation matches any exec'd file, so the file the image was installed from -- or any program at all -- gets the installed privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the file the image was installed from is not the installed image: no privileges
+a new file (possibly reusing the removed copy's inode) gets no privileges
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\treturn img \&\& file_inode((struct file \*)pin) == (const struct inode \*)img;$|\treturn img != NULL; /* NEGCTL image-privs-any-file */|' "$_file"
+    :
+}

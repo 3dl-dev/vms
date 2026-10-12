@@ -1,0 +1,33 @@
+# fork-worker-start-reports-success-unstarted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "cluster fork served-I/O worker start (vms_cluster_fork_worker_start, FC-P6.6, vms-ci)";;
+        targets)      echo "kernel-core/vms_cluster_fork_bind.c";;
+        suites_red)   echo "test_kmod_cluster_fork_hammer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cluster_fork_worker_start() short-circuits its exec_kthread_create with '0 &&', so status stays 0 (success), ioworker_started is set and it returns SS__NORMAL -- but the FC-P6.6 I/O worker kthread is NEVER spawned. The 'reports success while doing nothing' class: WORKER_START=1, IO_HANDLER_CALLS=0. Submissions are still accepted (cf_io_post queues them, io_sub stays green), but no worker runs the blocking callback, so the fork thread has nothing to dispatch alongside. Create call is unique; short-circuited text differs after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the WORKER kthread really ran the blocking I/O callback (this is where exec_blockdev_read_block sits on a served unit)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+THE FIX, MEASURED: the fork thread kept dispatching WHILE a served I/O was blocking on the worker -- it is no longer behind the disk
+every ACCEPTED submission is accounted for exactly once: completed, or abandoned by the worker stop
+EOF
+                      ;;
+        knock_on_why)  echo "with no worker kthread running the blocking I/O, there is no in-flight served I/O for the fork thread to dispatch alongside (WORK_DURING_IO stays 0), and the accepted submissions are never completed nor abandoned-by-worker-stop, so the accounting assertion also reddens.";;
+        esac
+
+}
+
+defect_apply() {
+        # Short-circuit the (unique) ioworker exec_kthread_create with 0 && so
+        # status stays 0 (success) but the create is never evaluated -> no kthread.
+        # After apply the LHS text differs, so a 2nd apply is a no-op (selftest).
+        sed -i 's|status = exec_kthread_create(\&b->ioworker, cfb_io_thread, b,|status = 0 \&\& exec_kthread_create(\&b->ioworker, cfb_io_thread, b, /* NEGCTL fork-worker-start-reports-success-unstarted */|' "$_file"
+    :
+}

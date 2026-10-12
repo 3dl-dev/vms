@@ -1,0 +1,53 @@
+# getmode-buffer-not-written -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "access modes and privileges (VMS_IOCTL_SETMODE/GETMODE/SETPRV/CHKPRIV)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_kmod_access test_kmod_bind";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_getmode() returns before ever calling copy_to_user(), so the ioctl succeeds from the kernel's side (return 0) but the caller's struct vms_getmode_args is left exactly as the caller supplied it -- every call site memset()s that buffer to 0 first, and 0 is PSL_C_KERNEL, so a GETMODE that wrote nothing at all reads back as a process genuinely in KERNEL mode.";;
+        require_fail) cat <<'EOF'
+a process starts in USER mode
+... and the mode really changed
+... and the mode really returned to USER
+... and the mode is still USER after the denied escalation
+EOF
+                      ;;
+        knock_on_fail) echo "adoption preserved the privilege mask SETIDENT established";;
+        knock_on_why) cat <<'EOF'
+NOT a blunderbuss: this is ONE mutation to the ONE function (vms_ioctl_getmode)
+every one of these five assertions ultimately depends on -- four in
+test_kmod_access.c re-read VMS_IOCTL_GETMODE directly, and test_kmod_bind.c's
+"adoption preserved the privilege mask SETIDENT established" calls
+vms_kif_getmode() (src/libvmssys/vms_kif.c:207/577) to read cur_privs after
+SETIDENT/adoption. vms_kif_getmode()'s KIF_CALL macro returns the mapped
+error status the instant the ioctl fails, BEFORE the `*cur_privs = args.cur_privs`
+assignment runs -- so under this defect the caller's cur/perm variables are
+never updated, and the post-adoption comparison against the pre-adoption
+snapshot mismatches. Same single function, same single fault, one more
+consumer.
+MEASURED (vms-0e4 round 2): before this round's fix, "... and the mode really
+changed" alone did NOT appear in the test_kmod_access set -- it stayed green
+under this exact mutation, because it checked gm.mode == PSL_C_KERNEL (0)
+without checking the ioctl's own return value, and 0 is indistinguishable from
+the memset(0) default a totally silent GETMODE leaves behind. That was the
+audit gap this round closed: the KERNEL-direction sibling test_kmod_access.c's
+USER-direction fix (vms-0e4 round 1) was modelled on had the exact defect the
+round-1 fix was written to catch, just aimed at the ioctl's return value
+instead of the mode's numeric identity with the zeroed default. All four
+GETMODE re-reads in test_kmod_access.c now check the ioctl's return value;
+this defect is the regression control for that.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/^long vms_ioctl_getmode/,/^}$/ s|if (exec_copyout(|if (1 \|\| exec_copyout(|' "$_file"
+    :
+}

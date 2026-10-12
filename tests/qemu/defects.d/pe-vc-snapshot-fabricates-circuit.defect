@@ -1,0 +1,29 @@
+# pe-vc-snapshot-fabricates-circuit -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "PE port VC diagnostic snapshot (VMS_CLUSTER_DIAG_PORT_VC, vms-ci)";;
+        targets)      echo "kernel-core/vms_pe.c";;
+        suites_red)   echo "test_kmod_cluster_vc_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_pe_vc_snapshot()'s 'cl->pe == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV, so a VC row the executive does not hold (an index far past the table, or no port up) is reported as a live circuit -- the INV-6 fabrication class (a placeholder reported real). The all-zero row is untouched, so only the STATUS lies; the index-0 real-VC and no-circuit-all-zero branches read other paths and stay green. Range-scoped substitution: only the one return in vms_pe_vc_snapshot changes, gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+row VC, index far past any table: SS$_NOSUCHDEV, not a crash
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Range-scoped to vms_pe_vc_snapshot so the file's other SS__NOSUCHDEV
+        # returns are untouched; after apply that return is SS__NORMAL, so a 2nd
+        # apply finds no SS__NOSUCHDEV in that function (no-op selftest).
+        sed -i '/^int vms_pe_vc_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL pe-vc-snapshot-fabricates-circuit */|' "$_file"
+    :
+}

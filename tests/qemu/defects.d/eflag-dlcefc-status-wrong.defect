@@ -1,0 +1,33 @@
+# eflag-dlcefc-status-wrong -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags -- \$DLCEFC's own success status (VMS_IOCTL_DLCEFC)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # vms-177. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_dlcefc's own body. The target text's 8-space
+        # indentation is the only occurrence at that depth in the file, so
+        # this is a plain ^-anchored text match, no range needed.
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$DLCEFC reports SS\$_UNASEFC -- the pre-set default it never overwrites -- for a permanent cluster it actually found and marked for deletion (perm cleared, freed immediately if nothing else is associated). The deletion happens; only the caller-visible confirmation of it does not.";;
+        require_fail) cat <<'EOF'
+parent: sys$dlcefc accepted the permanent cluster by name
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # 8-space indentation is the only occurrence at that depth in the
+        # file -- dlcefc's own found-and-marked success, inside its
+        # list_for_each_entry_safe loop.
+        sed -i 's|^        args\.status = SS__NORMAL;$|        args.status = SS__UNASEFC; /* NEGCTL eflag-dlcefc-status-wrong */|' "$_file"
+    :
+}

@@ -1,0 +1,29 @@
+# acp-acl-deny-falls-to-world -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a matching ACE that does not grant the access is final for the group and world categories (vms-d404)";;
+        targets)      echo "kernel-core/vms_prot.h";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "After a matching ACE that does not grant the wanted access, vms_prot_check_acl() -- the executive's shared protection decision acp_check_access() hands the ACL verdict to (vms_prot.h) -- lets only the system and owner fields grant ('if (!ace_matched) {' guards group and world). The mutation makes that guard always true, so world RE grants what the NONE ACE denied. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+F2: the matching NONE ACE denies the read world allows
+F5: IDENTIFIER=* denies [100,100] the world read
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (!ace_matched) {$|    if (1) { /* NEGCTL acp-acl-deny-falls-to-world */|' "$_file"
+    :
+}

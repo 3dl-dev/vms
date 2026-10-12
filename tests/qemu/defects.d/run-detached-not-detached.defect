@@ -1,0 +1,57 @@
+# run-detached-not-detached -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "PRC\$M_DETACH itself in \$CREPRC (src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC goes back to accepting PRC$M_DETACH and discarding it -- literally
+the pre-vms-47b line, `(void)stsflg;`. Nothing is created differently: the
+process is still created, still named in the executive, still announced with
+%RUN-S-PROC_ID, still outlives the DCL that created it, and SHOW SYSTEM in
+another process still lists it. It is simply a SUBPROCESS wearing the word
+"detached".
+THIS CONTROL EXISTS BECAUSE AN ADVERSARY APPLIED IT BY HAND AND THE SUITE
+ALMOST MISSED IT. Of thirteen assertions, exactly one went red. In particular
+"the service's parent is init, not the DCL that created it" stayed GREEN --
+the creating DCL exits before anything is observed, and Linux reparents any
+orphan to init whether or not it was ever detached. A reparent check is a
+necessary consequence of detachment and not a test of it, and it was being
+read as one.
+Naming this mutation forces the discriminating assertions to be listed below.
+Both are properties a subprocess cannot have: the created process is in a
+session of its own (setsid()), and the creator has nothing left to wait for.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the service left the session its creator ran in
+the creator of a detached process has no child to wait for
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # The ONE edit, and it is the pre-vms-47b source line restored:
+        # PRC$M_DETACH is read and thrown away. `(void)stsflg;` keeps the
+        # parameter used so the mutation is about behaviour, not warnings.
+        # RE-ANCHORED (vms-387): the source since grew an INTERACTIVE-implies-
+        # detached path (`|| interactive`), and `interactive` (itself derived
+        # from stsflg) is read again further down this function, so blanket
+        # `(void)stsflg;` is gone -- stsflg is still live via `interactive`/
+        # `loginout`. Drop only PRC$M_DETACH's own contribution, leaving
+        # `interactive` as the sole source of detached-ness, so a bare
+        # PRC$M_DETACH request (interactive false) no longer detaches while
+        # $RUN/interactive activation is untouched.
+        sed -i 's@^    const int detached    = ((stsflg & PRC\$M_DETACH) != 0) || interactive;$@    const int detached    = interactive; /* NEGCTL run-detached-not-detached: PRC$M_DETACH no longer detaches */@' "$_file"
+
+    :
+}

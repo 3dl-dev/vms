@@ -1,0 +1,28 @@
+# mbx-sender-pid-not-stamped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "every mailbox message carries the writer's VMS PID, stamped by the executive (rd vms-c6d1 / vms-4a69)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write() stamps each queued message with the writing process's VMS PID (the reader's IOSB second longword). The mutation stamps 0, so a reader can no longer tell -- from the executive -- who wrote a message. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the request carries the WRITER's VMS PID, stamped by the executive (IOSB second longword)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    m->sender_pid = proc->vms_pid;$|    m->sender_pid = 0; /* NEGCTL mbx-sender-pid-not-stamped */|' "$_file"
+    :
+}

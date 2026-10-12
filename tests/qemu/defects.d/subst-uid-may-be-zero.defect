@@ -1,0 +1,29 @@
+# subst-uid-may-be-zero -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive gives each VMS process a substrate uid from a dedicated range, never 0 (vms-ac48)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_substrate_id";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "subst_uid_alloc_locked() draws from OVMX_SUBST_UID_BASE upward. The mutation drops the base, so the first VMS process is handed uid 0 -- substrate root -- and the next ones uids that collide with real substrate accounts. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+GET gives this process a substrate uid from the dedicated range, never 0
+another VMS process gets a different substrate uid of its own
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        uint32_t cand = OVMX_SUBST_UID_BASE + (vms_subst_next++ % OVMX_SUBST_UID_SPAN);$|        uint32_t cand = (vms_subst_next++ % OVMX_SUBST_UID_SPAN); /* NEGCTL subst-uid-may-be-zero */|' "$_file"
+    :
+}

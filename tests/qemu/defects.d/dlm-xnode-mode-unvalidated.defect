@@ -1,0 +1,56 @@
+# dlm-xnode-mode-unvalidated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "distributed lock manager -- the shared \$ENQ core's lock-mode bound (vms_enq_core_ex, VMS_IOCTL_DLM_XNODE's cross-node ENQ marshals into it, vms-94c rung 1 / vms-17c)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        # RE-ANCHORED (vms-e7d CI red, 2026-09-24): vms_lock_dlm_xnode_dispatch()
+        # used to carry its OWN front-door `if (req->lkmode > LCK_K_EXMODE)
+        # return SS__BADPARAM;` copy, but that copy was provably unreachable in
+        # isolation -- the ENQ op (the only one that reads req->lkmode) marshals
+        # it into vms_enq_core_ex, which already refuses the identical bound.
+        # Mutating the front door alone left the harness green because the
+        # downstream copy still caught it; the front door was removed as dead
+        # duplication rather than kept as untested decoration. This control now
+        # targets vms_enq_core_ex's own `if (args.lkmode > LCK_K_EXMODE) {`
+        # check directly -- RANGE-ANCHORED to that function, since
+        # vms_ioctl_convert's local $CVT carries the identical text (same
+        # idiom as lock-convert-mode-not-updated's own range anchor below).
+        # vms_enq_core_ex is also reached by the LOCAL $ENQ ioctl and by the
+        # ACP's fixed-EXMODE volume lock, but no suite drives a bad lkmode
+        # through either of those paths (grepped tests/qemu/*.c for
+        # LCK_K_EXMODE+1: test_syssvc_dlm_xnode is the only hit), so isolation
+        # holds -- exactly one suite's own bad-lockmode assertion still reddens.
+        suites_red)   echo "test_syssvc_dlm_xnode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_enq_core_ex() stops bounds-checking the decoded request's lock mode: its 'args.lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM -- it falls through into the resource lookup and grant/queue logic with an out-of-range mode. For the cross-node \$ENQ that test_syssvc_dlm_xnode drives (VMS_IOCTL_DLM_XNODE marshals req->lkmode into this same core), that is now the SOLE guard, so the suite's own 'bad lock mode -> SS\$_BADPARAM' assertion reddens. The local \$ENQ ioctl and vms_ioctl_convert's \$CVT path share this core but no suite drives a bad mode through either, so nothing else reddens.";;
+        require_fail) cat <<'EOF'
+bad lock mode -> SS$_BADPARAM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # RE-ANCHORED (vms-e7d CI red, 2026-09-24). vms_lock_dlm_xnode_dispatch's
+        # OWN front-door `if (req->lkmode > LCK_K_EXMODE) return SS__BADPARAM;`
+        # copy was removed as dead duplication: the ENQ op (the only one that
+        # reads req->lkmode) marshals it into vms_enq_core_ex, which carries the
+        # identical bound -- mutating the front door alone left this suite green
+        # because the downstream copy still caught it. This control now targets
+        # vms_enq_core_ex's OWN check directly. RANGE-ANCHORED to that function:
+        # `if (args.lkmode > LCK_K_EXMODE) {` also occurs verbatim in
+        # vms_ioctl_convert (lock-convert-mode-not-updated's own target, same
+        # idiom as that control's range anchor), so an unanchored sed would hit
+        # both. vms_enq_core_ex is defined before vms_ioctl_convert in this file,
+        # so the range closes at the first following top-level `}` and leaves
+        # vms_ioctl_convert's copy untouched.
+        sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file"
+    :
+}

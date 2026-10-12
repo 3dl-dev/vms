@@ -1,0 +1,37 @@
+# sysuaf-uic-writeback-decimal -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK -- sysuaf_view_to_raw()'s pack of the UIC_GROUP/UIC_MEMBER view fields into the binary \$UAFDEF uaf\$l_uic longword (src/libvms/rtl/sysuaf.c, vms-e60/vms-d92). The WRITER half: a record's UIC round-trips only if the writer packs the same group/member the reader unpacked.";;
+        targets)      echo "libvms/rtl/sysuaf.c";;
+        suites_red)   echo "test_syssvc_setuai";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "RE-ANCHORED (vms-d92 flipped SYSUAF to the binary \$UAFDEF; the ASCII sysuaf_format_record() %o UIC formatting this defect used to flip to %u was DELETED with the ASCII writer). It now guards the equivalent binary-path invariant: sysuaf_view_to_raw() must pack the account's own uic_group/uic_member back into uaf\$l_uic as ((group<<16)|member). \$SETUAI folds its text edits into the binary record through sysuaf_view_to_raw() before the ACP write-back (src/libvms/syssvc/sys_uai.c), so scenario 4's rewrite of USER1 rides it. The mutation SWAPS the two fields (packs ((member<<16)|group)), so USER1's struct 128|130 (which the shipped SYSUAF carries as octal 200|202) is written back with group and member exchanged -- the read-back then reports group 202 / member 200, reddening the suite's two field-text assertions (\"still reads 200\" / \"still reads 202\") exactly. Only \$SETUAI's UIC write-back reaches sysuaf_view_to_raw() and reads a UIC field back afterward, so the mutation reddens nothing outside test_syssvc_setuai. NOTE (teeth caveat, for CI/run_facility_negctl.sh): test_syssvc_setuai reads SYSUAF via the /vms passthrough while \$SETUAI now writes the binary record over the ACP -- if that passthrough-vs-ACP convergence is not what the suite fixture exercises, this control's end-to-end bite must be confirmed in CI (see vms-5f0 report).";;
+        require_fail) cat <<'EOF'
+4: the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
+4: the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # RE-ANCHORED (vms-d92): the ASCII sysuaf_format_record() %o UIC writer
+        # this used to flip to %u was DELETED with the ASCII writer when SYSUAF
+        # flipped to the binary $UAFDEF. UNIQUE TEXT: the sole UIC pack in
+        # sysuaf_view_to_raw() -- `((rec->uic_group & 0xffffu) << 16) |
+        # (rec->uic_member & 0xffffu))` occurs once in the file. Swapping the two
+        # fields writes the account's UIC back with group and member exchanged,
+        # so USER1's 200|202 read-back reports 202|200. Idempotent: after the edit
+        # the group-first pattern is gone (member is now the high half), so a
+        # second apply matches nothing -- BROKEN FIXTURE, as selftest requires.
+        sed -i 's@((rec->uic_group & 0xffffu) << 16) | (rec->uic_member & 0xffffu));@((rec->uic_member \& 0xffffu) << 16) | (rec->uic_group \& 0xffffu)); /* NEGCTL sysuaf-uic-writeback-decimal */@' "$_file"
+
+    :
+}

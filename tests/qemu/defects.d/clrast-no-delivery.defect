@@ -1,0 +1,28 @@
+# clrast-no-delivery -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CLRAST lets the next queued AST be delivered inside the running AST routine (vms-44a)";;
+        targets)      echo "libvms/syssvc/sys_ast.c";;
+        suites_red)   echo "test_syssvc_clrast";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$clrast() clears the in-progress marker and then drains the executive's AST queue with 'vms\$\$deliver_pending_asts();' so an AST queued inside the routine runs before \$CLRAST returns. The mutation deletes that drain (the marker is still cleared, status still SS\$_NORMAL), so the queued AST waits until the routine returns -- the ordering \$CLRAST exists to change. The 8-space-indented call line is unique in sys_ast.c; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+with $CLRAST it ran before the first AST returned (delivered by $CLRAST)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        vms\$\$deliver_pending_asts();$|        /* NEGCTL clrast-no-delivery */|' "$_file"
+    :
+}

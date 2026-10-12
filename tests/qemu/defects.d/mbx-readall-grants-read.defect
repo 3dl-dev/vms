@@ -1,0 +1,28 @@
+# mbx-readall-grants-read -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "READALL does not open a read-denied mailbox (rd vms-c6d1, oracle mbxprot MBXP.READALL.READ)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "mbx_access() withholds READALL from the privileges it hands vms_prot_check(), because real VAX V7.3 and Alpha V8.4 refuse a READALL-only process the read of a read-denied mailbox. The mutation passes cur_privs whole, so READALL opens the mailbox as it would a file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+READALL alone does NOT open a read-denied mailbox (SS$_NOPRIV, as on real VAX V7.3 and Alpha V8.4)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    uint64_t privs = proc->cur_privs \& ~VMS_PRV_M_READALL;$|    uint64_t privs = proc->cur_privs; /* NEGCTL mbx-readall-grants-read */|' "$_file"
+    :
+}

@@ -1,0 +1,44 @@
+# p3-index-child-pointer-offbyone -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "RMS Prolog-3 indexed READ engine's index descent -- p3_descend() picks the data bucket for a keyed \$GET by following each index record's 2-byte child pointer down the on-disk ISAM index (src/vmsrms/rms_prolog3.c, the keyed read path under the Files-11 ODS-2 ACP), vms-045, epic vms-208";;
+        targets)      echo "vmsrms/rms_prolog3.c";;
+        suites_red)   echo "test_syssvc_rms_p3_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "p3_descend() decodes each index record's child pointer as p3_le16(bkt + off) -- the 2-byte VBN of the subtree to follow to the data level. Reading it ONE BYTE too high (bkt + off + 1) yields a mis-aligned, garbage VBN, so rms_p3_get_by_key descends to the wrong data bucket and the keyed read-back cannot resolve the record. test_syssvc_rms_p3_acp authors a genuine Prolog-3 indexed file, \$PUTs NREC records forcing real data-bucket SPLITs, then reads EVERY record back BY KEY across the split -- so the corrupted descent reddens the byte-exact keyed read-back, and the durability re-read (same descent, rebuilt window) reddens with it. The \$PUT/\$CREATE writes and the 'a genuine bucket SPLIT occurred' bucket-count assertion do not descend the index to verify and stay green. Only keyed reads through this descent can tell; test_syssvc_rms_acp is a SEQUENTIAL RMS suite (sys\$put/sys\$get, no P3 index) and never reaches p3_descend, so nothing outside test_syssvc_rms_p3_acp reddens.";;
+        require_fail) cat <<'EOF'
+every record reads back BY KEY over the ACP, byte-exact, across splits
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+records survive DEACCESS+re-ACCESS (durable on the volume)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME CORRUPTED DESCENT, SEEN AT THE DURABILITY RE-READ. After DEACCESS +
+re-ACCESS the suite rebinds the prologue from the on-disk image and calls
+read_all_by_key() a second time -- the same rms_p3_get_by_key index descent,
+still reading the child pointer one byte too high -- so the durable-volume
+re-read reddens with the first keyed read-back. The re-bind of the prologue and
+the split bucket-count check do not descend the index and stay green.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: `p3_le16(bkt + off);` is the index-descent child-pointer
+        # decode in p3_descend() -- the only bare `p3_le16(bkt + off)` (all other
+        # sites carry a `+ P3_...` field offset). Reading `bkt + off + 1` mis-aligns
+        # the 2-byte child VBN, so the descent follows a garbage pointer and keyed
+        # reads miss. After substitution no `p3_le16(bkt + off);` is left (now
+        # `p3_le16(bkt + off + 1);`) -- the no-op the idempotency selftest requires.
+        sed -i 's|uint32_t child = p3_le16(bkt + off);|uint32_t child = p3_le16(bkt + off + 1); /* NEGCTL p3-index-child-pointer-offbyone */|' "$_file"
+
+    :
+}

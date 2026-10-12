@@ -1,0 +1,27 @@
+# kstat-cvtungrant-mismapped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive's SS__CANCELGRANT condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields for a queued conversion it could not grant (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SS__CANCELGRANT is 2488 (SS\$_NOTQUEUED) instead of 8508 (SS\$_CVTUNGRANT) -- an ungrantable conversion is reported as a plain 'not queued'.";;
+        require_fail) cat <<'EOF'
+sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|#define SS__CANCELGRANT 8508|#define SS__CANCELGRANT 2488 /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file"
+
+    :
+}

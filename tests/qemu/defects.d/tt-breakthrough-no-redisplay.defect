@@ -1,0 +1,28 @@
+# tt-breakthrough-no-redisplay -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "write breakthrough: output written while a read is outstanding is followed by the read shown again -- the owed line feed, the prompt, the line so far (vms_tt.c vms_tt_write, rd vms-f0fb / vms-53a; probe OB.PROMPT T2)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_write() redisplays an outstanding read after the write (\`if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {\`). The mutation never does (\`if (0) {\`): a CTRL/T status line or a broadcast leaves the prompt and the typed line scrolled away. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the resumed read still completes with 'ABCD' -- only the screen shows the missing redisplay.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\tif (tt->rd_busy \&\& !tt->rd_done \&\& !tt->passall \&\& n) {$|\tif (0) { /* NEGCTL tt-breakthrough-no-redisplay */|' "$_file"
+    :
+}

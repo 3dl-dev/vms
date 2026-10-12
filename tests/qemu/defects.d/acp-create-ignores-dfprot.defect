@@ -1,0 +1,28 @@
+# acp-create-ignores-dfprot -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "IO\$_CREATE gives an ordinary file that names no protection the creating process's default file protection (\$SETDFPROT / RMS_FILEPROT)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_setdfprot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The ACP's CREATE takes proc->dfprot for an ordinary file with no protection of its own. The mutation leaves it 0, so the file gets the class default (RWED,RWED,RE,RE) whatever the process set. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the new file's protection is the process default (0x0F00), not a class default
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's#^                fileprot = proc->dfprot_set ? proc->dfprot : (uint16_t)VMS_DFPROT_INITIAL;$#                fileprot = 0; /* NEGCTL acp-create-ignores-dfprot */#' "$_file"
+    :
+}

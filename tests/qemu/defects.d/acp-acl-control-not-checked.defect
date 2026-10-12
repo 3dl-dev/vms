@@ -1,0 +1,28 @@
+# acp-acl-control-not-checked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "changing a file's ACL requires CONTROL access (owner, system, BYPASS/SYSPRV, or an ACE granting CONTROL) (vms-d404)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_acl_op() refuses an ACL change SS\$_NOPRIV unless acp_has_control(). The mutation removes the check, so a world user changes the ACL of a file it does not own. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a non-owner without CONTROL may not change ACLF1's ACL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (!acp_has_control(proc, vol, \&sc->fh))$|    if (0) /* NEGCTL acp-acl-control-not-checked */|' "$_file"
+    :
+}

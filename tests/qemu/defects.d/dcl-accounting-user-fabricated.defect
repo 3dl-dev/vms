@@ -1,0 +1,27 @@
+# dcl-accounting-user-fabricated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the account ACCOUNTING reports on, which also selects the last-login record it reads (src/vmsdcl/dcl_cmd_misc.c cmd_accounting)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ACCOUNTING goes back to reporting on \"SYSTEM\" for an unnamed process. This one is not only a wrong label: the same string picks the FILE the login history is read from (ovmx_accounting_get_lastlogin), so an unnamed process is shown SYSTEM's login history under SYSTEM's name.";;
+        require_fail) cat <<'EOF'
+G/ACCOUNTING: names no account for an unnamed process
+G/ACCOUNTING: does not report SYSTEM's login history to an unnamed process
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/^int cmd_accounting(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-accounting-user-fabricated */|' "$_file"
+    :
+}

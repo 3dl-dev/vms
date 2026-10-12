@@ -1,0 +1,48 @@
+# initialize-home-magic-not-written -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+    # -------------------------------------------------------------------
+    # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
+    # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
+    # kernel-resident ODS-2 content read control (ods2-read-content-vbn) were
+    # RETIRED with the vmsfs VFS driver: their anchor suites
+    # (test_kmod_vmsfs_mountvis, test_kmod_ods2_codec) are deleted, and the
+    # mount-visibility path they exercised is moot now that no unit can mount as
+    # a `vmsfs' type. The genuine ODS-2 content-read correctness is still
+    # POSITIVELY proven by the surviving test_syssvc_acp_* suites (acp_rw /
+    # acp_search read [OVMXDIR]HELLO.TXT through the executive ACP and byte-
+    # compare against the committed golden); re-adding an explicit fault-injection
+    # facility control anchored to those ACP suites is a tracked follow-up.
+    # -------------------------------------------------------------------
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "INITIALIZE writing a VALID vmsfs home block to the executive-RESOLVED real backing device (format_volume, tools/vms_initialize.c, vms-cf62). INITIALIZE.EXE resolves VDA100: through the executive (vms_kif_disk_resolve, the same authoritative path MOUNT uses) to its backing block device and formats THAT store -- the anti-facade property (INV-6, CLAUDE.md Rule 9): the real device is actually formatted, not merely reported so. A userspace consumer of the executive disk-resolution facility, the same product-half class as the devtab entries.";;
+        targets)      echo "../tools/vms_initialize.c";;
+        suites_red)   echo "test_syssvc_initialize";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "format_volume() writes the vmsfs home block to LBN 1 of the resolved backing device with \`hb.hb_magic = VMSFS_HOME_MAGIC;\`. The mutation zeroes it (\`hb.hb_magic = 0;\`), so INITIALIZE still exits 0 (the block is written and its checksum recomputed over it) but the REAL device carries NO valid home block -- it reports success while the store is unformatted, the exact fake-success class vms-cf62 exists to kill. Only the A/B \"after INITIALIZE the backing device carries a home block\" assertion reads hb_magic and reddens; the label field is still written correctly (the volname assertion stays green), the command's own rc stays 0, and the BOGUS999: honest-failure negative control is untouched. One constant zeroed.";;
+        require_fail) cat <<'EOF'
+after INITIALIZE, the REAL backing device carries a vmsfs home block
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the home-block magic write in format_volume
+        # (`hb.hb_magic        = VMSFS_HOME_MAGIC;`) is the only occurrence of
+        # that assignment in the file. Zeroing it leaves a written-but-invalid
+        # home block on the real device. After substitution no
+        # `hb.hb_magic        = VMSFS_HOME_MAGIC;` is left -- the no-op selftest
+        # requires.
+        sed -i 's|hb.hb_magic        = VMSFS_HOME_MAGIC;|hb.hb_magic        = 0; /* NEGCTL initialize-home-magic-not-written */|' "$_file"
+
+    :
+}

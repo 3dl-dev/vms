@@ -1,0 +1,32 @@
+# tt-newline-ignores-cursor -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "terminal carriage control (vms_tt.c tt_nl, rd vms-fc4): a NEW LINE is rendered for where the cursor is -- CR at a fresh line, LF where a record left its line feed owed, CR LF mid-line -- as the VAX V7.3 console does (probes docs/oracle/keystroke-probes/CC.*)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_nl() renders a new line at a FRESH cursor as a bare CR (\`case TT_POS_FRESH: tt_out1(tt, CH_CR);       break;\`): the line already advanced. The mutation renders it as CR LF regardless -- the Unix rendering, which double-spaces every record that follows an echoed RETURN (the keystroke oracle's blank lines between a command and its output). Non-fatal: one more byte into the echo buffer. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+two records after an echoed RETURN: <CR>A<CR> <LF>B<CR> (the line feed stays owed)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+DCL's prompt after a record: the owed <LF>, then <CR><NUL>$
+DCL's prompt after an echoed RETURN: <CR><NUL>$ (the line already advanced)
+output during the read breaks through and the read is shown again: <CR><LF>STATUS<CR><LF><CR><NUL>$ ABC
+EOF
+                      ;;
+        knock_on_why)  echo "the same CR-LF-everywhere rendering reaches the two prompt checks that follow: each prompt begins with a new line, so after the mutated echo the screen carries an extra line feed in front of the expected <CR><NUL>$ bytes";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique text: tt_nl()'s FRESH case.
+        sed -i 's|^\tcase TT_POS_FRESH: tt_out1(tt, CH_CR);       break;$|\tcase TT_POS_FRESH: tt_out(tt, "\\r\\n", 2); break; /* NEGCTL tt-newline-ignores-cursor */|' "$_file"
+    :
+}

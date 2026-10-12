@@ -1,0 +1,46 @@
+# creprc-detach-intermediate-reaped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "detachment in \$CREPRC's PRC\$M_DETACH path (src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC stops reaping the detach intermediate, so the creator of a "detached"
+process is left with a child it can wait for. The created process itself is
+untouched: it is still setsid'd, still reparented, still named, still visible
+to every other process. What is lost is the half of "detached" that only the
+CREATOR can observe -- that after $CREPRC returns there is nothing in its job
+tree belonging to that call.
+This is the finest available edit for that property. Removing the second
+fork() instead would be coarser AND unusable: $CREPRC's own reap would then
+wait on the service, and the call would not return for the lifetime of the
+image -- a hang is not a verdict, and a control that hangs is a flaky gate.
+Disabling only the reap leaves every other suite byte-identical in behaviour,
+because no other suite creates a process with PRC$M_DETACH at all, so the
+mutated block is one nothing else enters.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the creator of a detached process has no child to wait for
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # The ONE edit: the parent-side reap of the detach intermediate is
+        # not entered, so the creator keeps a waitable child. Anchored on the
+        # 4-space `if (detached) {` -- the child-side occurrences of the same
+        # condition are indented 8, inside `if (pid == 0) {`.
+        sed -i 's|^    if (detached) {$|    if (0) { /* NEGCTL creprc-detach-intermediate-reaped */|' "$_file"
+
+    :
+}

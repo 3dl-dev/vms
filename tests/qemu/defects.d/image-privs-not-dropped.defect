@@ -1,0 +1,28 @@
+# image-privs-not-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an installed image's privileges go when the next image is activated (vms-bdc1)";;
+        targets)      echo "kernel-core/vms_access.c";;
+        suites_red)   echo "test_syssvc_image_privs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_image_privs() returns CURPRIV to the process privileges before the next image's are added (image rundown). The mutation keeps them, so every image the process runs after a privileged one inherits its privileges. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the next image activated in that process no longer holds them
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        proc->cur_privs = proc->perm_privs;$|        (void)0; /* NEGCTL image-privs-not-dropped */|' "$_file"
+    :
+}

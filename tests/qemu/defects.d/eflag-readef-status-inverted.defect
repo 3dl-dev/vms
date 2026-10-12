@@ -1,0 +1,46 @@
+# eflag-readef-status-inverted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "event flags -- \$READEF's own WASSET/WASCLR discrimination (VMS_IOCTL_READEF)";;
+        targets)      echo "kernel-core/vms_eflag.c";;
+        # vms-177. MEASURED, same audit: no existing mutation hunk sits
+        # inside vms_ioctl_readef's own body. The target text is unique in
+        # the file (readef's cluster-state-word comparison, not shared with
+        # any other handler), so this is a plain text anchor, no range
+        # needed.
+        # MEASURED (not the entry's first guess): READEF is the standard
+        # way every eflag test reads back a flag's state, so a wrong
+        # discrimination reaches beyond test_syssvc_ef_local.
+        suites_red)   echo "test_syssvc_ef_local test_kmod_bind test_kmod_eflag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$READEF reports the OPPOSITE of the flag's real current state in args.state's own bit -- WASCLR when the cluster word says set, WASSET when it says clear. args.state itself (the full cluster word) is untouched, so a check that compares the discriminating status against the state word directly catches the lie -- but READEF is the standard way every eflag test reads a flag's state back, so this one status word gates a wide surface.";;
+        require_fail) cat <<'EOF'
+sys$readef(1) reported WASCLR for the cleared flag
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$READEF sees the flag this process just set
+sibling thread sees the event flag the main thread set
+readef(5) returns WASSET
+readef(5) after clear returns WASCLR
+sys$readef(1) reported WASCLR after the clear
+the cluster state word agrees with the status: flag 1's bit is CLEAR
+sys$readef(1) reported WASSET after the flag was set
+sys$waitfr(1) left the flag SET -- it is not a counting semaphore
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME defect, observed a second through ninth time: every one of these assertions reads a flag's state back through READEF's own WASSET/WASCLR discrimination, and this mutation is the ONLY thing that changed.";;
+        esac
+
+}
+
+defect_apply() {
+        # Unique text in the file -- readef's own state/bit comparison,
+        # shared with no other handler.
+        sed -i 's|^    args\.status = (args\.state \& (1U << bit)) ? SS__WASSET : SS__WASCLR;$|    args.status = (args.state \& (1U << bit)) ? SS__WASCLR : SS__WASSET; /* NEGCTL eflag-readef-status-inverted */|' "$_file"
+    :
+}

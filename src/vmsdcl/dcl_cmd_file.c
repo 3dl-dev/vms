@@ -712,6 +712,9 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
     long total_blocks = 0;
     long total_alloc = 0;
     int col = 0;
+    int col_pad = 0;      /* padding owed to the entry before, written only
+                           * when another entry follows on the row (VAX V7.3
+                           * keystroke PG.DIR: no trailing blanks; rd vms-457) */
     int col_width = (o->show_size || o->show_date) ? 0 : (80 / o->columns);
 
     char ver_prev_base[288] = "";
@@ -913,7 +916,10 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                 printf("\n");
                 col = 0;
             }
-            printf("%-*s", cells * col_width, vms_name);
+            if (col > 0)
+                printf("%*s", col_pad, "");
+            printf("%s", vms_name);
+            col_pad = cells * col_width - (int)nlen;
             col += cells;
             if (col >= o->columns) {
                 printf("\n");
@@ -1172,7 +1178,27 @@ static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
     return 1;
 }
 
+static int cmd_directory_list(struct dcl_command *cmd);
+
 int cmd_directory(struct dcl_command *cmd)
+{
+    const struct dcl_qualifier *pq = NULL;
+    for (int i = 0; i < cmd->qualifier_count; i++)
+        if (strcasecmp(cmd->qualifiers[i].name, "PAGE") == 0)
+            pq = &cmd->qualifiers[i];
+    if (pq && !pq->negated) {
+        struct dcl_pager pg;
+        struct dcl_context *ctx = dcl_get_context();
+        if (dcl_page_begin(&pg)) {
+            int st = cmd_directory_list(cmd);
+            dcl_page_end(&pg, ctx ? ctx->terminal.page : 24);
+            return st;
+        }
+    }
+    return cmd_directory_list(cmd);
+}
+
+static int cmd_directory_list(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
@@ -1392,7 +1418,11 @@ int cmd_directory(struct dcl_command *cmd)
          * from the host path — the host round-trip cannot recover the volume
          * root [000000] from the device-root mount and dropped the real device
          * (vms-272). */
-        dcl_directory_header_spec(ctx->default_dir, use_spec,
+        /* a relative directory ([.SUB], [-]) is named as the merged one */
+        dcl_directory_header_spec(ctx->default_dir,
+                                  (use_spec && (use_spec[0] == '[' || use_spec[0] == '<') &&
+                                   (use_spec[1] == '.' || use_spec[1] == '-') && vms_base[0])
+                                      ? vms_base : use_spec,
                                   vms_dir, sizeof(vms_dir));
         if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
 
@@ -1524,6 +1554,25 @@ int cmd_directory(struct dcl_command *cmd)
 }
 
 /*
+ * TYPE/PAGE (rd vms-457), as the VAX V7.3 console shows it (keystroke
+ * PG.TYPE): a page is the terminal's page length less two lines, and the
+ * pause is the record "Press RETURN to continue"; RETURN shows the next page.
+ */
+static int type_page_lines(struct dcl_context *ctx)
+{
+    int pg = ctx ? ctx->terminal.page : 0;
+    return pg > 2 ? pg - 2 : 22;
+}
+
+static int type_page_pause(void)
+{
+    char buf[64];
+    printf("Press RETURN to continue\n");
+    fflush(stdout);
+    return fgets(buf, sizeof(buf), stdin) != NULL;
+}
+
+/*
  * TYPE - Display file contents.
  */
 int cmd_type(struct dcl_command *cmd)
@@ -1576,47 +1625,52 @@ int cmd_type(struct dcl_command *cmd)
             FILE *fp = fopen(linux_path, "r");
             if (fp) {
                 int paged = dcl_has_qualifier(cmd, "PAGE");
-                int line_count = 0, page_size = 24;
+                int line_count = 0, page_size = type_page_lines(ctx);
                 char line[4096];
                 while (fgets(line, sizeof(line), fp)) {
-                    fputs(line, stdout);
-                    line_count++;
                     if (paged && line_count >= page_size) {
-                        printf("Press RETURN to continue...");
-                        fflush(stdout);
-                        char buf[64];
-                        if (!fgets(buf, sizeof(buf), stdin)) break;
+                        if (!type_page_pause())
+                            break;
                         line_count = 0;
                     }
+                    fputs(line, stdout);
+                    line_count++;
                 }
                 fclose(fp);
                 return SS$_NORMAL;
             }
         }
-        dcl_error("RMS", 2, "FNF",
-                  "file not found - %s", cmd->params[0]);
+        {
+            /* as VMS says it (keystroke ERR.DCL E4): the search failed, and
+             * why, on its own line -- rd vms-c174 */
+            extern void dcl_message_spec(struct dcl_context *, const char *,
+                                         const char *, char *, size_t);
+            char full[1100];
+            dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
+            dcl_error("TYPE", 0, "SEARCHFAIL", "error searching for %s", full);
+            fprintf(stderr, "-RMS-E-FNF, file not found\n");
+        }
         return SS$_NOSUCHFILE;
     }
 
     /* Check for /PAGE qualifier */
     int paged = dcl_has_qualifier(cmd, "PAGE");
     int line_count = 0;
-    int page_size = 24;
+    int page_size = type_page_lines(ctx);
 
     char line[4096];
     int eof = 0, len;
     while ((len = dcl_rms_read_record(r, line, sizeof(line), &eof)) >= 0) {
+        /* pause only when there is more to show: the last page ends at
+         * DCL's prompt, not at another pause (keystroke PG.TYPE R1) */
+        if (paged && line_count >= page_size) {
+            if (!type_page_pause())
+                break;
+            line_count = 0;
+        }
         fwrite(line, 1, (size_t)len, stdout);
         fputc('\n', stdout);           /* RMS records carry no terminator */
         line_count++;
-
-        if (paged && line_count >= page_size) {
-            printf("Press RETURN to continue...");
-            fflush(stdout);
-            char buf[64];
-            if (!fgets(buf, sizeof(buf), stdin)) break;
-            line_count = 0;
-        }
     }
 
     dcl_rms_read_close(r);
@@ -2887,6 +2941,34 @@ static uint32_t dcl_mkdir_acp(const char *vspec)
         size_t n = (size_t)(rb - lb - 1);
         if (n < sizeof(dirtree)) { memcpy(dirtree, lb + 1, n); dirtree[n] = '\0'; }
     }
+    /* The device may be a logical name -- a rooted one ("SYS$SYSROOT:" ->
+     * "DKA0:[SYS0.]") puts its root in front of the directory: CREATE
+     * /DIRECTORY [.KSPGD] under SYS$LOGIN (rd vms-457). */
+    for (int depth = 0; depth < 8 && dev[0]; depth++) {
+        char lname[128], eq[256];
+        snprintf(lname, sizeof lname, "%.*s", (int)strlen(dev) - 1, dev);
+        if (dcl_translate_logical(lname, eq, sizeof eq) != 0)
+            break;
+        const char *ec = strchr(eq, ':');
+        if (!ec) break;
+        char ndev[128], root[256] = "";
+        snprintf(ndev, sizeof ndev, "%.*s", (int)(ec - eq) + 1, eq);
+        const char *elb = strchr(ec, '[');
+        const char *erb = elb ? strchr(elb, ']') : NULL;
+        if (elb && erb) {
+            snprintf(root, sizeof root, "%.*s", (int)(erb - elb - 1), elb + 1);
+            size_t rl = strlen(root);
+            while (rl && root[rl - 1] == '.') root[--rl] = '\0';
+            if (strcmp(root, "000000") == 0) root[0] = '\0';
+        }
+        if (root[0]) {
+            char nt[512];
+            snprintf(nt, sizeof nt, "%s%s%s", root, dirtree[0] ? "." : "", dirtree);
+            snprintf(dirtree, sizeof dirtree, "%s", nt);
+        }
+        if (strcasecmp(ndev, dev) == 0) break;
+        snprintf(dev, sizeof dev, "%s", ndev);
+    }
     /* A rooted "[SYS0.]" or trailing dot leaves nothing to create. */
     { size_t dl = strlen(dirtree); while (dl && dirtree[dl - 1] == '.') dirtree[--dl] = '\0'; }
     if (!dev[0] || !dirtree[0])
@@ -3102,6 +3184,11 @@ int cmd_create(struct dcl_command *cmd)
     dcl_sysinput_setup(ctx, &si);
     if (ctx->interactive || ctx->proc_depth >= 0) {
         char line[4096];
+        /* A ^Z that ended an earlier CREATE left stdin's end-of-file flag
+         * set; a terminal's end of file is per read, so clear it, or every
+         * later CREATE at the terminal reads nothing and writes an empty file
+         * (rd vms-f37: KSBC.COM, keystroke BC.READ) */
+        clearerr(stdin);
         while (1) {
             if (!fgets(line, sizeof(line), stdin)) break;
             size_t ll = strlen(line);
@@ -3109,6 +3196,7 @@ int cmd_create(struct dcl_command *cmd)
                 ll--;
             if (dcl_rms_write_record(w, line, ll) != 0) break;
         }
+        clearerr(stdin);
     }
     dcl_sysinput_restore(&si);
 

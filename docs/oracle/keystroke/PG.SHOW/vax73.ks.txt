@@ -1,0 +1,20 @@
+# keystroke oracle transcript (unmasked) -- case PG.SHOW (OpenVMS VAX V7.3 OPA0:)
+# output paging: SHOW SYMBOL/ALL/PAGE of 30 global symbols on a 24-line screen
+# case-sha256 a0cf67b683abdb379e283268f0963108590113b4d1cc796f0677f8d2c190d802
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP V2 quiet
+=== STEP S
+| SHOW SYMBOL/GLOBAL/PAGE KSPG*<CR><LF>
+| <CR>%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement<CR><LF>
+|  \PAGE\<CR><LF>
+| <CR><NUL>$ 
+=== STEP R1
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R3
+| <CR><LF>
+| <CR><NUL>$ 

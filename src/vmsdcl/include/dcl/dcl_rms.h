@@ -35,6 +35,12 @@ struct dcl_context;
 int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
                            char *out, size_t outsz);
 
+/* "[.SUB]NAME" / "[-]" / "[-.SIB]" against a default "DEV:[A.B]" ->
+ * "[A.B.SUB]NAME", "[A]", "[A.SIB]" (no device). 0 on success, -1 when it
+ * cannot be merged (rd vms-457). */
+int dcl_merge_relative_dir(const char *defdir, const char *spec, char *out,
+                           size_t outsz);
+
 /* ---- Sequential record READ (TYPE, COPY source) ---- */
 /* The SHARE intent the reader opens with (rd vms-5a0): it tolerates other
  * accessors that read AND write. Observed on real VMS (OpenVMS VAX V7.3, lab

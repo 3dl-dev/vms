@@ -204,7 +204,15 @@ static int cmd_show_acl(struct dcl_command *cmd)
 
 static int cmd_show_time(struct dcl_command *cmd)
 {
-    (void)cmd;
+    /* SHOW TIME takes no qualifiers: VMS says so and shows the first one
+     * (keystroke ERR.DCL E3, VAX V7.3: %DCL-W-NOQUAL ... \BAD\), with the CLI
+     * status %X000380C8 (message catalog NOQUAL) -- rd vms-c174. */
+    if (cmd->qualifier_count > 0) {
+        dcl_error("DCL", 0, "NOQUAL",
+                  "qualifiers not allowed - supply only verb and parameters\n \\%s\\",
+                  cmd->qualifiers[0].name);
+        return 0x000380C8;
+    }
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
@@ -227,6 +235,14 @@ static int cmd_show_default(struct dcl_command *cmd)
     struct dcl_context *ctx = dcl_get_context();
 
     printf("  %s\n", ctx->default_dir);
+    {
+        /* the default need not exist (SET DEFAULT does not check); SHOW
+         * DEFAULT says when it does not (VAX V7.3 probe Q.SETDEF:
+         * %DCL-I-INVDEF, NOSUCHDEV:[X] does not exist) -- rd vms-c174 */
+        extern int set_default_dir_exists(struct dcl_context *, const char *);
+        if (!set_default_dir_exists(ctx, ctx->default_dir))
+            dcl_error("DCL", 3, "INVDEF", "%s does not exist", ctx->default_dir);
+    }
 
     return SS$_NORMAL;
 }
@@ -1696,6 +1712,19 @@ static int show_wild_sym_cb(const char *name, const char *value,
  */
 static int cmd_show_symbol(struct dcl_command *cmd)
 {
+    /* SHOW SYMBOL takes /ALL /GLOBAL /LOCAL /LOG and nothing else -- /PAGE is
+     * refused (VAX V7.3 keystroke PG.SHOW; rd vms-457) */
+    for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+        const char *q = cmd->qualifiers[qi].name;
+        if (strcasecmp(q, "ALL") && strcasecmp(q, "GLOBAL") &&
+            strcasecmp(q, "LOCAL") && strcasecmp(q, "LOG") &&
+            strcasecmp(q, "SYMBOL")) {
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement - \\%s\\", q);
+            return SS$_IVQUAL;
+        }
+    }
     if (cmd->param_count >= 2) {
         /* SHOW SYMBOL specific-name */
         const char *name = cmd->params[1];
@@ -1817,9 +1846,12 @@ static int cmd_show_symbol(struct dcl_command *cmd)
                 printf("  %s = \"%s\"\n", upper_name, value);
             }
         } else {
-            dcl_error("DCL", 0, "NOLCL",
-                      "no symbol \"%s\" found", name);
-            return SS$_NOLOGNAM;
+            /* an undefined symbol, named exactly: %DCL-W-UNDSYM, CLI status
+             * %X00038140 (VAX V7.3 keystroke RD.TIMED S; message catalog) --
+             * rd vms-c174 */
+            dcl_error("DCL", 0, "UNDSYM",
+                      "undefined symbol - check validity and spelling");
+            return 0x00038140;
         }
     } else {
         /* Show all symbols */

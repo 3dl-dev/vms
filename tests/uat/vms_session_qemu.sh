@@ -126,7 +126,7 @@ SYSTEM_CMDS=(
     'SHOW DEVICE'
     'SHOW DEVICE VDA0:'
     'SHOW DEVICE/FULL VDA0:'
-    'HELP SHOW'
+    'HELP/NOPROMPT SHOW'
 )
 
 # Index of the ORIGINAL 'SHOW PROCESS /PRIVILEGES' occurrence above, found
@@ -363,7 +363,10 @@ wait_login_prompt() {
     rel=$(tail -c "+$((since + 1))" "$CONSOLE_LOG" | tr -d '\r' | grep -bo 'Welcome to OpenVMX' | head -1 | cut -d: -f1)
     [ -n "$rel" ] || return 1
     local w="Welcome to OpenVMX"; banner_end=$((since + rel + ${#w}))
-    wait_for '$ ' "$COMMAND_TIMEOUT" "$banner_end"
+    # the first prompt follows SYLOGIN, whose SET TERMINAL/INQUIRE waits for
+    # a terminal that does not answer (QEMU's serial line) about 12 s, as VMS
+    # does -- a login-flow step, not a command (rd vms-bd71)
+    wait_for '$ ' "$STEP_TIMEOUT" "$banner_end"
 }
 
 fail_with_console() {
@@ -1364,11 +1367,12 @@ check_response 'SHOW DEVICE/FULL VDA0:' 'Volume label +OVMXSYS'
 check_response 'SHOW DEVICE/FULL VDA0:' 'Free blocks +[0-9]'
 check_response 'SHOW DEVICE/FULL VDA0:' 'Maximum blocks +[0-9]'
 
-# HELP should produce output. Anchored to HELP SHOW's own response (not the
+# HELP should produce output. /NOPROMPT: at a terminal HELP otherwise stays at
+# its 'SHOW Subtopic?' prompt, as on VMS (rd vms-f9e). Anchored to HELP SHOW's own response (not the
 # whole log) because the command text itself contains 'SHOW' -- an unanchored
 # scan would pass on the echo alone regardless of whether HELP.EXE printed
 # anything real.
-check_response 'HELP SHOW' '(SHOW|Additional information)'
+check_response 'HELP/NOPROMPT SHOW' '(SHOW|Additional information)'
 
 # THE SYSTEM IDENTITY IS ESTABLISHED BY THE EXECUTIVE, not declared
 # (vms-2b8; the process it is established ON changed in vms-9b7).

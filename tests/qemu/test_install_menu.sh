@@ -498,7 +498,7 @@ else
     dump_and_die "the booted target gave no Password: prompt after Username SYSTEM"
 fi
 send "$NEW_PASSWORD"
-if wait_for 'Welcome to OpenVMX' "$BOOT_TIMEOUT" "$OFF2"; then
+if wait_for 'Welcome to OpenVMX' "$BOOT_TIMEOUT" "$OFF2" && wait_for '$ ' 90 "$OFF2"; then
     ok "SYSTEM logs in on the booted target with the INSTALL-SET password, not the kit default (vms-963 end-to-end)"
 else
     dump_and_die "SYSTEM could not log in with the install-set password -- it did not persist to the booted target"

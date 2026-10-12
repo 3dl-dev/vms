@@ -70,6 +70,7 @@ extern "C" {
 #define RMS$_IOP            99700   /* Illegal operation */
 #define RMS$_RER            114932  /* File read error */
 #define RMS$_EOF            98938   /* End of file */
+#define RMS$_DIR            99532   /* Error in directory name (VAX V7.3 RMSDEF) */
 #define RMS$_TMO            98736   /* Timeout period expired (VAX V7.3 RMSDEF) */
 #define RMS$_KEY            99732   /* Key value error / invalid key */
 #define RMS$_MRN            99788   /* Record number exceeds maximum */

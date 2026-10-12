@@ -1235,17 +1235,41 @@ static void dcl_help_apply_cdu(help_lib_t *lib)
         if (!qnode) qnode = help_node_add_child(vnode, 2, "Qualifiers");
         if (!qnode) continue;
 
-        /* Authoritative rebuild: the table is the single source of truth. */
+        /* Authoritative rebuild: the table is the single source of truth for
+         * WHICH qualifiers exist and their syntax. A description the library
+         * writes for one of them is kept, before the syntax (rd vms-f9e). */
+        enum { KEEP = 64 };
+        char *kname[KEEP], *ktext[KEEP];
+        int nk = 0;
+        for (help_node_t *c = qnode->first_child; c && nk < KEEP; c = c->next_sibling) {
+            if (c->text && c->text[0]) {
+                kname[nk] = strdup(c->name);
+                ktext[nk] = strdup(c->text);
+                if (kname[nk] && ktext[nk]) nk++;
+                else { free(kname[nk]); free(ktext[nk]); }
+            }
+        }
         help_node_clear_children(qnode);
         for (int j = 0; v->quals[j].name; j++) {
             char key[80];
             snprintf(key, sizeof(key), "/%s", v->quals[j].name);
             help_node_t *qn = help_node_add_child(qnode, 3, key);
             if (!qn) continue;
-            char body[256];
+            char body[256], full[2048];
+            const char *lib_text = NULL;
             cdu_qual_body(&v->quals[j], body, sizeof(body));
-            help_node_set_text(qn, body);
+            for (int k = 0; k < nk; k++)
+                if (strcasecmp(kname[k], key) == 0) lib_text = ktext[k];
+            if (lib_text) {
+                size_t lt = strlen(lib_text);
+                while (lt && lib_text[lt - 1] == '\n') lt--;
+                snprintf(full, sizeof full, "%.*s\n\n%s\n", (int)lt, lib_text, body);
+                help_node_set_text(qn, full);
+            } else {
+                help_node_set_text(qn, body);
+            }
         }
+        for (int k = 0; k < nk; k++) { free(kname[k]); free(ktext[k]); }
     }
 }
 
@@ -1372,29 +1396,31 @@ int cmd_help(struct dcl_command *cmd)
         path[npath++] = qual_key[i];
     }
 
-    int status;
-    if (npath > 0) {
-        /*
-         * A topic was named: show that node (text + subtopic listing) ONCE and
-         * return to the DCL prompt. This deliberately does NOT open the
-         * "<topic> Subtopic?" prompt loop, so that (a) HELP always returns to
-         * "$" after a single command -- the contract every scripted/console
-         * session relies on -- and (b) the built-in behaves identically to the
-         * HELP.EXE image, which one-shots when given a topic and is gated on
-         * exactly that (tests/qemu/test_product_install_e2e.sh). The subtopics
-         * are listed under "Additional information available:"; the user drills
-         * in with "HELP <topic> <subtopic>". (Opening the prompt loop even for
-         * a fully-specified topic, as VMS does at a terminal, is a deferred
-         * fidelity item under epic vms-01b.)
-         */
-        status = help_render(lib, path, npath, stdout);
-    } else if (isatty(fileno(stdin))) {
-        /* Bare HELP at a terminal: the interactive Topic? browser. */
-        help_interactive(lib, NULL, 0, stdin, stdout);
-        status = SS$_NORMAL;
+    /*
+     * At a terminal HELP shows the topic and then prompts -- "<TOPIC>
+     * Subtopic? " or "Topic? " -- until RETURN at the top or CTRL/Z, as on
+     * VMS (keystroke HLP.NAV, probe Q.HELP; rd vms-f9e). /NOPROMPT, or input
+     * that is not a terminal, shows it once and returns (Q.HELP F). HELP.EXE
+     * given a topic one-shots the same way.
+     */
+    int status = SS$_NORMAL;
+    int prompting = isatty(fileno(stdin)) && !dcl_has_qualifier(cmd, "NOPROMPT");
+    {
+        /* /NOPROMPT arrives as PROMPT, negated: never a topic key */
+        int k = 0;
+        for (int i = 0; i < npath; i++) {
+            if (strcasecmp(path[i], "/NOPROMPT") == 0) { prompting = 0; continue; }
+            if (strcasecmp(path[i], "/PROMPT") == 0) continue;
+            path[k++] = path[i];
+        }
+        npath = k;
+    }
+    if (prompting) {
+        help_set_reader(dcl_tt_read_line);
+        help_interactive(lib, path, npath, stdin, stdout);
+        help_set_reader(NULL);
     } else {
-        /* Bare HELP, non-interactive input: list the top level once. */
-        status = help_render(lib, NULL, 0, stdout);
+        status = help_render(lib, path, npath, stdout);
     }
 
     help_close(lib);
@@ -1434,6 +1460,16 @@ void dcl_recall_push(const char *line)
 {
     if (!line || !line[0])
         return;                  /* VMS does not record an empty line */
+    {
+        /* nor a RECALL command itself (keystroke RC.ALL A, A2; rd vms-0315) */
+        const char *v = line;
+        size_t n = 0;
+        while (*v == ' ' || *v == '\t' || *v == '$') v++;
+        while (v[n] && isalpha((unsigned char)v[n])) n++;
+        if (n >= 3 && n <= 6 && strncasecmp(v, "RECALL", n) == 0 &&
+            (v[n] == '\0' || v[n] == ' ' || v[n] == '\t' || v[n] == '/'))
+            return;
+    }
 
     char *dup = strdup(line);
     if (!dup)
@@ -1482,63 +1518,51 @@ void dcl_recall_erase(void)
  * RECALL n        — re-execute command number n
  * RECALL string   — find and re-execute most recent command matching string
  */
+/*
+ * RECALL (rd vms-0315), as the VAX V7.3 console shows it (keystroke RC.ALL):
+ * the buffer is numbered from the most recent command (1); RECALL/ALL lists
+ * it that way, "%3d %s", and an empty buffer lists nothing; RECALL n, RECALL
+ * string and plain RECALL do not execute -- the command comes back on the
+ * next command line for editing (TRM$_INISTRNG), as the up arrow does.
+ */
+const char *dcl_recall_pending;
+
 int cmd_recall(struct dcl_command *cmd)
 {
     if (dcl_has_qualifier(cmd, "ERASE")) {
-        /* RECALL/ERASE — empty the recall buffer (DCL Dictionary). */
         dcl_recall_erase();
         return SS$_NORMAL;
     }
 
     if (dcl_has_qualifier(cmd, "ALL")) {
-        /* RECALL/ALL — numbered list, oldest (1) to most recent (N). */
-        if (dcl_recall_count == 0) {
-            printf("%%DCL-I-RECALL, no history available\n");
-            return SS$_NORMAL;
-        }
-        for (int i = 0; i < dcl_recall_count; i++)
-            printf("%5d  %s\n", i + 1, dcl_recall_ring[i]);
+        for (int k = 1; k <= dcl_recall_count; k++)
+            printf("%3d %s\n", k, dcl_recall_ring[dcl_recall_count - k]);
         return SS$_NORMAL;
     }
 
+    const char *hit = NULL;
     if (cmd->param_count == 0) {
-        /* RECALL with no args — show the most recent command. */
-        if (dcl_recall_count == 0) {
-            printf("%%DCL-I-RECALL, no history available\n");
-            return SS$_NORMAL;
-        }
-        printf("%s\n", dcl_recall_ring[dcl_recall_count - 1]);
-        return SS$_NORMAL;
-    }
-
-    /* Parameter given — a command number, or a matching-prefix string. */
-    const char *param = cmd->params[0];
-    int is_number = (param[0] != '\0');
-    for (size_t i = 0; param[i]; i++) {
-        if (!isdigit((unsigned char)param[i])) { is_number = 0; break; }
-    }
-
-    if (is_number) {
-        /* RECALL n — re-execute command number n (1..count). */
-        int n = (int)strtol(param, NULL, 10);
-        if (n < 1 || n > dcl_recall_count) {
-            printf("%%DCL-W-RECALL, no command number %d in history\n", n);
-            return SS$_NORMAL;
-        }
-        const char *entry = dcl_recall_ring[n - 1];
-        printf("%s\n", entry);
-        return dcl_execute_line(entry);
-    }
-
-    /* RECALL string — most recent command whose start matches (case-blind). */
-    size_t plen = strlen(param);
-    for (int i = dcl_recall_count - 1; i >= 0; i--) {
-        if (strncasecmp(dcl_recall_ring[i], param, plen) == 0) {
-            printf("%s\n", dcl_recall_ring[i]);
-            return dcl_execute_line(dcl_recall_ring[i]);
+        hit = dcl_recall_get(1);
+    } else {
+        const char *param = cmd->params[0];
+        int is_number = (param[0] != '\0');
+        for (size_t i = 0; param[i]; i++)
+            if (!isdigit((unsigned char)param[i])) { is_number = 0; break; }
+        if (is_number) {
+            hit = dcl_recall_get((int)strtol(param, NULL, 10));
+        } else {
+            size_t plen = strlen(param);
+            for (int k = 1; k <= dcl_recall_count && !hit; k++)
+                if (strncasecmp(dcl_recall_get(k), param, plen) == 0)
+                    hit = dcl_recall_get(k);
         }
     }
-    printf("%%DCL-W-RECALL, no command matching \"%s\" in history\n", param);
+    if (!hit) {
+        dcl_error("DCL", 0, "CMDNOTFND",
+                  "command not found - use RECALL/ALL to display saved commands");
+        return 0x00038238u;            /* CLI$_CMDNOTFND */
+    }
+    dcl_recall_pending = hit;
     return SS$_NORMAL;
 }
 
@@ -3066,13 +3090,14 @@ int cmd_dismount(struct dcl_command *cmd)
 /*                     EDIT Command                                    */
 /* ================================================================== */
 
-/* External EDT editor entry point (dcl_editor.c) */
-extern int edt_run(const char *filepath);
+/* EDT (dcl_editor.c, rd vms-f1e) */
+extern int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
+                   int read_only);
 
 /*
- * EDIT - Launch EDT line-mode editor on a file.
- *
- * Format: EDIT filespec
+ * EDIT [/EDT] filespec -- EDT, the editor EDIT invokes by default. /READ_ONLY
+ * keeps EXIT from writing; /OUTPUT=filespec names the file EXIT writes.
+ * /TPU (EVE) is not part of OVMX and is refused as an unknown qualifier.
  */
 int cmd_edit(struct dcl_command *cmd)
 {
@@ -3082,12 +3107,8 @@ int cmd_edit(struct dcl_command *cmd)
         dcl_error("EDIT", 2, "NOFILE", "missing file specification");
         return SS$_BADPARAM;
     }
-
-    /* Resolve filespec to Linux path (file may not exist yet) */
-    char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
-
-    return edt_run(linux_path);
+    return edt_run(ctx, cmd->params[0], dcl_qualifier_value(cmd, "OUTPUT"),
+                   dcl_has_qualifier(cmd, "READ_ONLY"));
 }
 
 /* ================================================================== */

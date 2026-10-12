@@ -1,0 +1,57 @@
+# keystroke oracle transcript (unmasked) -- case PG.TYPE (OpenVMS VAX V7.3 OPA0:)
+# output paging: TYPE/PAGE of a 40-line file on a 24-line screen, RETURN for the next page
+# case-sha256 a0de6ec91bb0a2c60f8aa281c62fe8fabed8e2bb0a223326a3417f1ee55dff05
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP T
+| TYPE/PAGE KSPG.TXT<CR><LF>
+| <CR>PAGE LINE 1<CR><LF>
+| PAGE LINE 2<CR><LF>
+| PAGE LINE 3<CR><LF>
+| PAGE LINE 4<CR><LF>
+| PAGE LINE 5<CR><LF>
+| PAGE LINE 6<CR><LF>
+| PAGE LINE 7<CR><LF>
+| PAGE LINE 8<CR><LF>
+| PAGE LINE 9<CR><LF>
+| PAGE LINE 10<CR><LF>
+| PAGE LINE 11<CR><LF>
+| PAGE LINE 12<CR><LF>
+| PAGE LINE 13<CR><LF>
+| PAGE LINE 14<CR><LF>
+| PAGE LINE 15<CR><LF>
+| PAGE LINE 16<CR><LF>
+| PAGE LINE 17<CR><LF>
+| PAGE LINE 18<CR><LF>
+| PAGE LINE 19<CR><LF>
+| PAGE LINE 20<CR><LF>
+| PAGE LINE 21<CR><LF>
+| PAGE LINE 22<CR><LF>
+| Press RETURN to continue<CR><LF>
+=== STEP R1
+| <CR><LF>
+| <CR>PAGE LINE 23<CR><LF>
+| PAGE LINE 24<CR><LF>
+| PAGE LINE 25<CR><LF>
+| PAGE LINE 26<CR><LF>
+| PAGE LINE 27<CR><LF>
+| PAGE LINE 28<CR><LF>
+| PAGE LINE 29<CR><LF>
+| PAGE LINE 30<CR><LF>
+| PAGE LINE 31<CR><LF>
+| PAGE LINE 32<CR><LF>
+| PAGE LINE 33<CR><LF>
+| PAGE LINE 34<CR><LF>
+| PAGE LINE 35<CR><LF>
+| PAGE LINE 36<CR><LF>
+| PAGE LINE 37<CR><LF>
+| PAGE LINE 38<CR><LF>
+| PAGE LINE 39<CR><LF>
+| PAGE LINE 40<CR><LF>
+| <CR><NUL>$ 
+=== STEP R2
+| <CR><LF>
+| <CR><NUL>$ 
+=== STEP R3
+| <CR><LF>
+| <CR><NUL>$ 

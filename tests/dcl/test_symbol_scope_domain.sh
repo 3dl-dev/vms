@@ -32,7 +32,7 @@
 # EXPECT: contains:AL_GEN=<>
 # EXPECT_NOT: contains:AL_GEN=<barval>
 # EXPECT_NOT: contains:AL_VERB_RAN
-# EXPECT: contains:%DCL-E-IVVERB
+# EXPECT: contains:%DCL-W-IVVERB
 # EXPECT: contains:%DCL-W-IVQUAL
 # EXPECT: contains:\GLOBAL\
 # EXPECT: contains:\LOCAL\

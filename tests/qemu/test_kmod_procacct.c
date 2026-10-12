@@ -205,8 +205,28 @@ int main(void)
           "scheduler state is honestly absent (no VMS scheduler) -- valid bit clear");
     CHECK(!(info.fields_valid & (VMS_PI_V_PRI | VMS_PI_V_PRIB)),
           "priority is honestly absent (no VMS priority) -- valid bits clear");
-    CHECK(!(info.fields_valid & (VMS_PI_V_DIRIO | VMS_PI_V_BUFIO)),
-          "direct/buffered I/O is honestly absent (no VMS I/O split) -- clear");
+    /* ---- JPI$_BUFIO / JPI$_DIRIO are the executive's own counts (rd
+     * vms-bd71): a mailbox write and read are two buffered I/Os ---- */
+    CHECK((info.fields_valid & (VMS_PI_V_DIRIO | VMS_PI_V_BUFIO)) ==
+          (VMS_PI_V_DIRIO | VMS_PI_V_BUFIO),
+          "buffered and direct I/O counts are sourced by the executive (valid bits set)");
+    {
+        uint32_t mch = 0, unit = 0, got = 0, b0 = info.bufio;
+        char dn[32] = "", buf[8];
+        struct vms_procinfo after;
+        uint32_t mst = vms_kif_mbx_create(0, 64, 256, &mch, &unit, dn, sizeof dn);
+        if (mst & 1) {
+            (void)vms_kif_mbx_write(mch, "io", 2);
+            (void)vms_kif_mbx_read(mch, buf, sizeof buf, &got, 1);
+        }
+        memset(&after, 0, sizeof after);
+        (void)vms_kif_getjpi_self(&after);
+        /* negctl: jpi-bufio-not-counted */
+        CHECK((mst & 1) && after.bufio == b0 + 2,
+              "a mailbox write and read add exactly 2 to JPI$_BUFIO");
+        if (mst & 1)
+            (void)vms_kif_mbx_delmbx(mch);
+    }
     CHECK(!(info.fields_valid & VMS_PI_V_QUOTA),
           "the quota block is honestly absent (no quota facility) -- clear");
 

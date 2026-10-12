@@ -94,7 +94,7 @@ boot_login() {
     off=$(wc -c <"$LOG")
     send 'SYSTEM'
     wait_for 'Password:' 30 "$off" && send 'MANAGER'
-    wait_for 'Welcome to OpenVMX' 30 "$off" || die "SYSTEM login failed"
+    wait_for 'Welcome to OpenVMX' 30 "$off" && wait_for '$ ' 90 "$off" || die "SYSTEM login failed"
     wait_for '$ ' 20 "$off"
     sleep 2
 }

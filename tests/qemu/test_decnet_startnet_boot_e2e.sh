@@ -106,7 +106,7 @@ wake_login() { local logf="$1" w=0
     until grep -qaF 'Username:' "$logf" 2>/dev/null || [ "$w" -ge 150 ]; do send ''; sleep 1; w=$((w+1)); done; }
 login_system() { local logf="$1"
     send 'SYSTEM'; sleep 1; send 'MANAGER'; sleep 1
-    waitfor 'Welcome to OpenVMX' 45 "$logf"; }
+    waitfor 'Welcome to OpenVMX' 45 "$logf" && waitfor '$ ' 90 "$logf"; }
 
 # --- Boot 1: configure the executor (NIC present, DECnet NOT yet configured) ---
 # shellcheck disable=SC2086

@@ -22,7 +22,7 @@
 #
 # EXPECT: contains:OVMXB23:42
 # EXPECT: contains:MMK____status=1
-# EXPECT_NOT: contains:%DCL-E-IVVERB
+# EXPECT_NOT: contains:-IVVERB,
 # EXPECT_NOT: contains:%RMS-E-FNF
 # EXPECT_NOT: contains:MMK____status=0
 VMSDCL="${VMSDCL:-vmsdcl}"

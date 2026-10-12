@@ -105,7 +105,7 @@ static uint64_t enforced_privs_held(void)
  * name is accepted (resolution is deferred, as on VMS). Returns 1 if the
  * default may be set, 0 if the directory is genuinely absent.
  */
-static int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
+int set_default_dir_exists(struct dcl_context *ctx, const char *dirspec)
 {
     /* Executive-absent defer (vms-5f0): with no /dev/vms (host ctest / self-host
      * container) the ".DIR-file" ACP model below cannot see a directory that
@@ -180,12 +180,30 @@ static int cmd_set_default(struct dcl_command *cmd)
 
     const char *dirspec = cmd->params[1];
 
-    /* vms-481: the authoritative existence check is the ACP (the real MFD/ODS-2
-     * directory), not stat() on the /vms passthrough. Fail-honest: an absent
-     * directory (or no ACP-mounted SYS$DISK) => %SET-E-... invalid directory. */
-    if (!set_default_dir_exists(ctx, dirspec)) {
-        dcl_error("DCL", 2, "DIRECT", "invalid directory - \\%s\\", dirspec);
-        return SS$_NOSUCHFILE;
+    /* SET DEFAULT DOES NOT CHECK THAT THE DIRECTORY EXISTS. VMS takes any
+     * well-formed directory -- on a device that does not exist, a directory
+     * that does not exist -- and only SHOW DEFAULT says so (%DCL-I-INVDEF);
+     * what it refuses is bad SYNTAX: unbalanced brackets (%DCL-W-DIRECT) and
+     * more than eight directory levels (%RMS-F-DIR). VAX V7.3 probe Q.SETDEF
+     * (docs/oracle/keystroke-probes/), keystroke ERR.DCL E8 -- rd vms-c174. */
+    {
+        int depth = 0, open_b = 0, levels = 1;
+        for (const char *q = dirspec; *q; q++) {
+            if (*q == '[' || *q == '<') { depth++; open_b = 1; }
+            else if (*q == ']' || *q == '>') depth--;
+            else if (*q == '.' && depth > 0) levels++;
+            if (depth < 0 || depth > 1) break;
+        }
+        if (depth != 0) {
+            dcl_error("DCL", 0, "DIRECT",
+                      "invalid directory syntax - check brackets and other delimiters\n \\%s\\",
+                      dirspec);
+            return 0x00038030;              /* CLI$_DIRECT */
+        }
+        if (open_b && levels > 8) {
+            dcl_error("RMS", 4, "DIR", "error in directory name");
+            return RMS$_DIR;
+        }
     }
 
     /* Store the VMS dirspec directly — don't round-trip through Linux.
@@ -196,7 +214,13 @@ static int cmd_set_default(struct dcl_command *cmd)
         strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
         ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     } else if (dirspec[0] == '[') {
-        /* Relative spec — prepend current device */
+        /* A relative directory ([.SUB], [-]) is taken from the current
+         * default (rd vms-457); either way the current device is kept */
+        static char merged[256];
+        if ((dirspec[1] == '.' || dirspec[1] == '-') &&
+            dcl_merge_relative_dir(ctx->default_dir, dirspec, merged,
+                                   sizeof merged) == 0)
+            dirspec = merged;
         char device[128] = "";
         const char *colon = strchr(ctx->default_dir, ':');
         if (colon) {
@@ -374,6 +398,8 @@ static int cmd_set_terminal(struct dcl_command *cmd)
         { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
         { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
         { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
+        /* /HARDCOPY is /NOSCOPE, /NOHARDCOPY /SCOPE (DCL Dictionary) */
+        { "SCOPE",         "HARDCOPY",        TT_SCOPE         },
         { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
         { "TAB",           "NOTAB",           TT_TAB           },
         { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },
@@ -416,6 +442,8 @@ static int cmd_set_terminal(struct dcl_command *cmd)
         /* /PERMANENT: the change goes to the permanent characteristics too
          * (IO$_SETCHAR; rd vms-d900). */
         if (!known && strcasecmp(qname, "PERMANENT") == 0)
+            known = 1;
+        if (!known && strcasecmp(qname, "INQUIRE") == 0)
             known = 1;
         if (!known) {
             dcl_error("DCL", 0, "IVQUAL",
@@ -484,10 +512,49 @@ static int cmd_set_terminal(struct dcl_command *cmd)
         changed = 1;
     }
 
+    /*
+     * /INQUIRE (rd vms-bd71): ask the terminal what it is and set the device
+     * type from its answer. A terminal that does not answer (the console of a
+     * VAX lab node; OVMX's serial console) leaves everything as it was, and
+     * SET says so the way the VAX V7.3 console does (keystroke LOGIN.BANNER P):
+     *     %SET-W-NOTSET, error modifying OPA0:
+     *     -SET-I-UNKTERM, unknown terminal type
+     */
+    int devtype_set = 0;
+    if (dcl_has_qualifier(cmd, "INQUIRE")) {
+        char rep[64];
+        int rn = dcl_tt_inquire(rep, sizeof rep);
+        const char *dt = NULL;
+        if (rn > 0) {
+            const char *q = strchr(rep, '?');
+            int ps = q ? atoi(q + 1) : -1;
+            if (rep[rn - 1] == 'Z')            dt = "VT52";
+            else if (ps == 1 || ps == 2 || ps == 6) dt = "VT100";
+            else if (ps == 62)                 dt = "VT200_SERIES";
+            else if (ps == 63)                 dt = "VT300_SERIES";
+            else if (ps == 64)                 dt = "VT400_SERIES";
+            else if (ps >= 65)                 dt = "VT500_SERIES";
+        }
+        if (dt) {
+            snprintf(term->device_type, sizeof(term->device_type), "%s", dt);
+            devtype_set = 1;
+            changed = 1;
+        } else if (rn >= 0) {
+            struct vms_procinfo pi;
+            char dev[64] = "TT:";
+            memset(&pi, 0, sizeof pi);
+            if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0])
+                snprintf(dev, sizeof dev, "%s", pi.terminal[0] == '_' ? pi.terminal + 1 : pi.terminal);
+            dcl_error("SET", 0, "NOTSET", "error modifying %s", dev);
+            fprintf(stderr, "-SET-I-UNKTERM, unknown terminal type\n");
+        }
+    }
+
     /* /DEVICE_TYPE=type */
     const char *devtype_val = dcl_qualifier_value(cmd, "DEVICE_TYPE");
     if (!devtype_val) devtype_val = dcl_qualifier_value(cmd, "DEVICE");
     if (devtype_val && *devtype_val) {
+        devtype_set = 1;
         strncpy(term->device_type, devtype_val, sizeof(term->device_type) - 1);
         term->device_type[sizeof(term->device_type) - 1] = '\0';
         /* Uppercase the device type */
@@ -570,6 +637,16 @@ static int cmd_set_terminal(struct dcl_command *cmd)
                 else
                     exec_clr |= drv[d].exec;
             }
+        }
+        /* the device type names what the terminal can do: a VT-series
+         * terminal is an ANSI and DEC CRT, which is what the driver looks at
+         * (its CTRL/Z echo is a reverse-video " Exit " there: keystroke
+         * Q.EDTNUM V7; rd vms-c37) */
+        if (devtype_set) {
+            const char *dt = term->device_type;
+            int vt = (dt[0] == 'V' && dt[1] == 'T' && dt[2] >= '1' && dt[2] <= '5');
+            if (vt) exec_set |= VMS_TTC_ANSI_CRT | VMS_TTC_DEC_CRT;
+            else    exec_clr |= VMS_TTC_ANSI_CRT | VMS_TTC_DEC_CRT;
         }
         if (exec_set | exec_clr)
             (void)dcl_tt_set_characteristics(exec_set, exec_clr);

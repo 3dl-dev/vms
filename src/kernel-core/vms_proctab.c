@@ -120,6 +120,12 @@ static void proc_fill_info(const struct vms_proc *proc,
 {
     memset(info, 0, sizeof(*info));
     info->vms_pid      = proc->vms_pid;
+    /* JPI$_BUFIO / JPI$_DIRIO: the executive's own counts of this process's
+     * completed buffered (terminal, mailbox) and direct (ACP disk) requests
+     * (rd vms-bd71). Like PAGEFLTS, not withheld from an unprivileged row. */
+    info->bufio = proc->io_buffered;
+    info->dirio = proc->io_direct;
+    info->fields_valid |= VMS_PI_V_BUFIO | VMS_PI_V_DIRIO;
     memcpy(info->prcnam, proc->prcnam, VMS_PRCNAM_SIZE);
     info->prcnam[VMS_PRCNAM_SIZE - 1] = '\0';
 

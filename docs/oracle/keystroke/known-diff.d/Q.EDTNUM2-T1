@@ -1,0 +1,1 @@
+Q.EDTNUM2 T1  # vms-c37: VAX EDT uninitialised-read bug -- do not reproduce. Same artefact -- 6.84661 = "ur\n", 114867054.85856 = " \x08\0ur\n", bytes of the neighbouring line's text and length

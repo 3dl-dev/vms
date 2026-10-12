@@ -381,6 +381,26 @@ vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
  * discipline's VMS_TTIOC_BIND (vms_tt_netbsd.c, rd vms-f8c), whose privilege
  * check needs the caller's enabled privileges.
  */
+void
+vms_proc_count_bufio_current(uint32_t n)
+{
+	struct vms_proc *p;
+	int bkt;
+	pid_t pid = curlwp->l_proc->p_pid;
+
+	if (n == 0)
+		return;
+	(void)bkt;
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+		if (p->pid == pid) {
+			VMS_IO_COUNT(&p->io_buffered, n);
+			break;
+		}
+	}
+	exec_unlock(&vms_proc_hash_lock);
+}
+
 struct vms_proc *
 vms_netbsd_proc_current(void)
 {

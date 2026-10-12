@@ -106,7 +106,7 @@ record "boot 1: TCP/IP image boots to login" "$rc"
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$LOG1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$LOG1" && waitfor '$ ' 90 "$LOG1"; then rc=0; else rc=1; fi
     record "boot 1: SYSTEM logs in (privileged)" "$rc"
 
     send "TCPIP SET ROUTE /DEFAULT /GATEWAY=$GW"; sleep 2
@@ -155,7 +155,7 @@ check "boot 2: TCPIP REAPPLY read the store and reapplied the route (%TCPIP-I-RE
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$LOG2"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$LOG2" && waitfor '$ ' 90 "$LOG2"; then rc=0; else rc=1; fi
     record "boot 2: SYSTEM logs in" "$rc"
 
     # TEETH (b): the store did NOT grow -- the record still appears exactly once.

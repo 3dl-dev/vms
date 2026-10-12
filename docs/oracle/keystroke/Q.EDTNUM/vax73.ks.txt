@@ -1,0 +1,163 @@
+# keystroke oracle transcript (unmasked) -- case Q.EDTNUM (OpenVMS VAX V7.3 OPA0:)
+# probe: EDT line numbers for inserted lines -- line mode INSERT between lines, repeated, keypad RETURN, text at [EOB], RESEQUENCE
+# case-sha256 1b8bc6e416027cec7f35f9cb3bcb96d21e57862805bf6b145cea702f7cce1021
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP V1 quiet
+=== STEP V2
+| EDIT/EDT KSE5.TXT<CR><LF>
+| <CR>Input file does not exist<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP V3
+| INSERT<CR><LF>
+| <CR>            
+=== STEP V4
+| A<CR><LF>
+| <CR>            
+=== STEP V5
+| B<CR><LF>
+| <CR>            
+=== STEP V6
+| C<CR><LF>
+| <CR>            
+=== STEP V7
+| <ESC>7<ESC>[7m Exit <ESC>[m<ESC>8<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP I1
+| INSERT 2;X1<CR><LF>
+| <CR>    2       B<CR><LF>
+| <CR>*
+=== STEP I2
+| INSERT 2;X2<CR><LF>
+| <CR>    2       B<CR><LF>
+| <CR>*
+=== STEP I3
+| INSERT 2;X3<CR><LF>
+| <CR>    2       B<CR><LF>
+| <CR>*
+=== STEP I4
+| INSERT 2<CR><LF>
+| <CR>            
+=== STEP I5
+| Y1<CR><LF>
+| <CR>            
+=== STEP I6
+| Y2<CR><LF>
+| <CR>            
+=== STEP I7
+| <ESC>7<ESC>[7m Exit <ESC>[m<ESC>8<CR><LF>
+| <CR>    2       B<CR><LF>
+| <CR>*
+=== STEP T1
+| TYPE WHOLE<CR><LF>
+| <CR>    1       A<CR><LF>
+|     1.1     X1<CR><LF>
+|     1.2     X2<CR><LF>
+|     1.3     X3<CR><LF>
+|     1.4     Y1<CR><LF>
+|     1.5     Y2<CR><LF>
+|     2       B<CR><LF>
+|     3       C<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP E1
+| INSERT END;Z1<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP T2
+| TYPE WHOLE<CR><LF>
+| <CR>    1       A<CR><LF>
+|     1.1     X1<CR><LF>
+|     1.2     X2<CR><LF>
+|     1.3     X3<CR><LF>
+|     1.4     Y1<CR><LF>
+|     1.5     Y2<CR><LF>
+|     2       B<CR><LF>
+|     3       C<CR><LF>
+|     4       Z1<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP C1
+| 1<CR><LF>
+| <CR>    1       A<CR><LF>
+| <CR>*
+=== STEP C
+| CHANGE<CR><LF>
+| <ESC>\<ESC><<ESC>[?6l<ESC>[m<ESC>)0<ESC>[4l<ESC>[H<ESC>[?3l<ESC>[;22r<ESC>[H<ESC>=<ESC>[JA<CR><LF>
+| X1<CR><LF>
+| X2<CR><LF>
+| X3<CR><LF>
+| Y1<CR><LF>
+| Y2<CR><LF>
+| B<CR><LF>
+| C<CR><LF>
+| Z1<CR><LF>
+| [EOB]<ESC>[H
+=== STEP K1
+| <ESC>[?8l<ESC>[C<ESC>[?8h
+=== STEP K2
+| <ESC>[2;22r<LF>
+| <ESC>M<ESC>[;22r<LF>
+=== STEP K3
+| P<ESC>[K
+=== STEP K4
+| <ESC>[3;22r<ESC>[2B<ESC>M<ESC>[;22r<ESC>[2B
+=== STEP K5
+| Q<ESC>[K
+=== STEP K6
+| <ESC>[?8l<ESC>[7m<ESC>[m<ESC>[12H<ESC>[?8h
+=== STEP K7
+| <ESC>[12;22r<ESC>[11B<ESC>MR<ESC>[;22r<ESC>[12;2H
+=== STEP K8
+| <ESC>[13;22r<ESC>[12B<ESC>M<ESC>[;22r<ESC>[12B
+=== STEP K9
+| S<ESC>[K
+=== STEP KZ
+| <ESC>><ESC>[;24r<ESC>[24H<LF>
+| <CR>*
+=== STEP T3
+| TYPE WHOLE<CR><LF>
+| <CR>    1       A<CR><LF>
+|     1.01    P<CR><LF>
+|     1.02    Q<CR><LF>
+|     1.1     X1<CR><LF>
+|     1.2     X2<CR><LF>
+|     1.3     X3<CR><LF>
+|     1.4     Y1<CR><LF>
+|     1.5     Y2<CR><LF>
+|     2       B<CR><LF>
+|     3       C<CR><LF>
+|     4       Z1<CR><LF>
+|     5       R<CR><LF>
+|     6       S<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP R1
+| RESEQUENCE<CR><LF>
+| <CR>13 lines resequenced<CR><LF>
+| <CR>*
+=== STEP T4
+| TYPE WHOLE<CR><LF>
+| <CR>    1       A<CR><LF>
+|     2       P<CR><LF>
+|     3       Q<CR><LF>
+|     4       X1<CR><LF>
+|     5       X2<CR><LF>
+|     6       X3<CR><LF>
+|     7       Y1<CR><LF>
+|     8       Y2<CR><LF>
+|     9       B<CR><LF>
+|    10       C<CR><LF>
+|    11       Z1<CR><LF>
+|    12       R<CR><LF>
+|    13       S<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP Q
+| QUIT<CR><LF>
+| <CR><LF>
+| <ESC>[m<ESC>)B<ESC>[;r<ESC>[24H<CR><ESC>><CR><LF>
+| <NUL>$ 
+=== STEP V9 quiet

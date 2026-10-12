@@ -211,7 +211,7 @@ boot_and_login() {
     local off1; off1=$(wc -c <"$log")
     send_to "$fd" 'SYSTEM'
     wait_for_in "$log" 'Password:' 30 "$off1" "${QPID_[$key]}" && send_to "$fd" 'MANAGER'
-    wait_for_in "$log" 'Welcome to OpenVMX' 30 "$off1" "${QPID_[$key]}" \
+    wait_for_in "$log" 'Welcome to OpenVMX' 30 "$off1" "${QPID_[$key]}" && wait_for_in "$log" '$ ' 90 "$off1" "${QPID_[$key]}" \
         || dump_and_die "node $key: SYSTEM login failed"
 
     # Author + WRITE CURRENT, then reboot -- across-reboot adoption, the same
@@ -252,7 +252,7 @@ boot_and_login() {
     local off3; off3=$(wc -c <"$log")
     send_to "$fd" 'SYSTEM'
     wait_for_in "$log" 'Password:' 30 "$off3" "${QPID_[$key]}" && send_to "$fd" 'MANAGER'
-    wait_for_in "$log" 'Welcome to OpenVMX' 30 "$off3" "${QPID_[$key]}" \
+    wait_for_in "$log" 'Welcome to OpenVMX' 30 "$off3" "${QPID_[$key]}" && wait_for_in "$log" '$ ' 90 "$off3" "${QPID_[$key]}" \
         || dump_and_die "node $key: boot2 SYSTEM login failed"
     ok "node $key: rebooted with SCSNODE=$scsnode SCSSYSTEMID=$sysid VAXCLUSTER=2 (adopted from WRITE CURRENT)"
 }

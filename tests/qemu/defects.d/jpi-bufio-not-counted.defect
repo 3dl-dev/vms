@@ -1,0 +1,29 @@
+# jpi-bufio-not-counted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "JPI\$_BUFIO: the executive counts each completed buffered I/O (terminal, mailbox) against the process (vms_mbx.c, vms_tt.c, rd vms-bd71)";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_kmod_procacct";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_write/read count the completed request (\`VMS_IO_COUNT(\&proc->io_buffered, 1u)\`). The mutation drops both mailbox counts: JPI\$_BUFIO, and the IO= of CTRL/T, stop moving for mailbox I/O while the valid bit still claims a sourced value. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a mailbox write and read add exactly 2 to JPI$_BUFIO
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: no other check reads JPI\$_BUFIO.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    VMS_IO_COUNT(\&proc->io_buffered, 1u);   /\* JPI\$_BUFIO (rd vms-bd71) \*/$|    (void)0; /* NEGCTL jpi-bufio-not-counted */|' "$_file"
+    :
+}

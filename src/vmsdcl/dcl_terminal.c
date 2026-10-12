@@ -275,6 +275,244 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
 }
 
 /*
+ * Character-at-a-time terminal I/O for screen programs (EDT's keypad mode, rd
+ * vms-c37): dcl_tt_raw_write writes bytes IO$M_NOFORMAT; dcl_tt_getc reads
+ * one character, unechoed and unfiltered, with no terminators -- every key
+ * comes back as itself (escape sequences byte by byte). `poll`: return at
+ * once, -1 when nothing has been typed. -2: the terminal is gone.
+ */
+void dcl_tt_raw_write(const void *b, size_t n)
+{
+    uint16_t iosb[4];
+    if (!n || !dcl_tt_assign())
+        return;
+    fflush(stdout);
+    (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_NOFORMAT, iosb, NULL, 0,
+                   (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
+void dcl_tt_qio_write(const void *b, size_t n)
+{
+    uint16_t iosb[4];
+    if (!n || !dcl_tt_assign())
+        return;
+    fflush(stdout);
+    (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                   (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
+int dcl_tt_getc(int poll)
+{
+    static uint32_t none[8];
+    struct ovmx_trm_item it[3];
+    uint16_t iosb[4];
+    char c[2];
+    uint32_t st;
+    int k = 0;
+
+    if (!dcl_tt_assign())
+        return -2;
+    memset(it, 0, sizeof it);
+    it[k].code = TRM$_MODIFIERS;
+    it[k++].val = TRM$M_TM_NOECHO | TRM$M_TM_NOFILTR | (poll ? TRM$M_TM_TIMED : 0);
+    it[k].code = TRM$_TERM;
+    it[k].len = (unsigned short)sizeof none;
+    it[k++].val = (uintptr_t)none;
+    if (poll) {
+        it[k].code = TRM$_TIMEOUT;
+        it[k++].val = 0;
+    }
+    memset(iosb, 0, sizeof iosb);
+    st = sys$qiow(0, dcl_tt_chan, IO$_READVBLK | IO$M_EXTEND, iosb, NULL, 0,
+                  c, 1, 0, 0, (uintptr_t)it, (uint32_t)(k * sizeof it[0]));
+    if (st & 1)
+        st = iosb[0];
+    if (iosb[1] == 1)
+        return (unsigned char)c[0];
+    if (iosb[3])
+        return (unsigned char)iosb[2];  /* a terminator after all */
+    if (st == SS$_TIMEOUT)
+        return -1;
+    return (st & 1) ? -1 : -2;
+}
+
+/*
+ * The /PAGE pager (rd vms-457), as DIRECTORY/PAGE drives the VAX V7.3 console
+ * (keystroke PG.DIR): the command's output is gathered, then shown a screen
+ * at a time. A screen is the page length in lines, then the status line
+ *     " RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit"
+ * at the start of the last line, and waits, unechoed, for a key: RETURN or
+ * SPACE shows the next screen, CTRL/Z (or CTRL/Y) ends it. The last screen is
+ * filled out to the page length with empty lines. The screens go out as
+ * $QIO writes with their own CR LFs, which leave nothing owed (PG.DIR C1:
+ * DCL's next prompt starts in place); output that fits on one screen is
+ * written as records (PG.DIR D).
+ */
+static void pg_raw(const char *b, size_t n)
+{
+    uint16_t iosb[4];
+    if (n)
+        (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb,
+                       NULL, 0, (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
+int dcl_page_begin(struct dcl_pager *pg)
+{
+    memset(pg, 0, sizeof *pg);
+    pg->save = -1;
+    if (!isatty(STDOUT_FILENO) || !dcl_tt_assign())
+        return 0;                       /* not a terminal: no pager */
+    fflush(stdout);
+    pg->tmp = tmpfile();
+    if (!pg->tmp)
+        return 0;
+    pg->save = dup(STDOUT_FILENO);
+    if (pg->save < 0 || dup2(fileno(pg->tmp), STDOUT_FILENO) < 0) {
+        if (pg->save >= 0) close(pg->save);
+        fclose(pg->tmp);
+        pg->tmp = NULL;
+        pg->save = -1;
+        return 0;
+    }
+    return 1;
+}
+
+void dcl_page_end(struct dcl_pager *pg, int page_len)
+{
+    static const char status[] =
+        "\r RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit";
+    char line[4096];
+    long nlines = 0, shown = 0;
+
+    if (!pg->tmp)
+        return;
+    fflush(stdout);
+    dup2(pg->save, STDOUT_FILENO);
+    close(pg->save);
+    pg->save = -1;
+
+    rewind(pg->tmp);
+    while (fgets(line, sizeof line, pg->tmp))
+        if (strchr(line, '\n')) nlines++;
+    if (page_len < 3)
+        page_len = 24;
+    rewind(pg->tmp);
+
+    /* output that fits on one screen goes out as the records it is, the
+     * screen filled out with empty ones (PG.DIR D: DCL's prompt follows with
+     * its own CR) */
+    if (nlines <= page_len) {
+        while (fgets(line, sizeof line, pg->tmp))
+            fputs(line, stdout);
+        for (long i = nlines; i < page_len; i++)
+            fputc('\n', stdout);
+        fflush(stdout);
+        fclose(pg->tmp);
+        pg->tmp = NULL;
+        return;
+    }
+
+    /* the first screen holds the page length; each later one starts on the
+     * status line's row and holds one more (PG.DIR C1: 9 + 1 + 1 + 14) */
+    long screen = 0, cap = page_len;
+    while (fgets(line, sizeof line, pg->tmp)) {
+        size_t l = strlen(line);
+        if (l && line[l - 1] == '\n') line[--l] = '\0';
+        line[l++] = '\r';
+        line[l++] = '\n';
+        pg_raw(line, l);
+        shown++;
+        screen++;
+        if (screen == cap && nlines - shown > 0) {
+            screen = 0;
+            cap = page_len + 1;
+            char k[2];
+            uint16_t t = 0;
+            int r;
+            pg_raw(status, sizeof status - 1);
+            r = dcl_tt_read(NULL, 0, k, sizeof k,
+                            IO$M_NOECHO | IO$M_TRMNOECHO, 0, &t);
+            if (r == DCL_TT_EOF || r == DCL_TT_INTR || r == DCL_TT_GONE ||
+                t == 0x1A || t == 0x19) {
+                fclose(pg->tmp);
+                pg->tmp = NULL;
+                return;
+            }
+        }
+    }
+    /* the last screen, filled out with empty lines */
+    while (screen < cap) {
+        pg_raw("\r\n", 2);
+        screen++;
+    }
+    fclose(pg->tmp);
+    pg->tmp = NULL;
+}
+
+/*
+ * dcl_tt_inquire - SET TERMINAL/INQUIRE's exchange with the terminal (rd
+ * vms-bd71). The identification requests go out raw, one at a time -- DA
+ * (ESC [ c), then ST + the VT52 identify (ESC \ ESC Z), then DA with a zero
+ * parameter (ESC [ 0 c) -- each followed by a 4-second wait for an answer, as
+ * the VAX V7.3 console shows them (keystroke LOGIN.BANNER P timing). The
+ * answer, read unechoed and unfiltered up to its final 'c' or 'Z', is left in
+ * `reply`. Returns its length, 0 when the terminal never answered, or
+ * DCL_TT_NODRIVER.
+ */
+int dcl_tt_inquire(char *reply, size_t replysz)
+{
+    static const char *const req[] = { "\033[c", "\033\\\033Z", "\033[0c" };
+    static uint32_t mask[8];
+    static const uint32_t td[2] = { 32, 0 };   /* long form: 32-byte mask */
+    uint16_t iosb[4];
+
+    if (!dcl_tt_assign())
+        return DCL_TT_NODRIVER;
+    fflush(stdout);
+    fflush(stderr);
+    memset(mask, 0, sizeof mask);
+    mask['c' >> 5] |= 1u << ('c' & 31);
+    mask['Z' >> 5] |= 1u << ('Z' & 31);
+    for (size_t i = 0; i < sizeof req / sizeof req[0]; i++) {
+        uint32_t st;
+        /* an extended read: unechoed, unfiltered, 4 s, ending on the
+         * answer's final character (TRM$_TERM takes a full 256-bit mask) */
+        struct ovmx_trm_item it[3];
+
+        (void)td;
+        (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                       (void *)req[i], (uint32_t)strlen(req[i]), 0, 0, 0, 0);
+        memset(it, 0, sizeof it);
+        it[0].code = TRM$_MODIFIERS;
+        it[0].val = TRM$M_TM_NOECHO | TRM$M_TM_NOFILTR | TRM$M_TM_TIMED;
+        it[1].code = TRM$_TIMEOUT;
+        it[1].val = 4;
+        it[2].code = TRM$_TERM;
+        it[2].len = (unsigned short)sizeof mask;
+        it[2].val = (uintptr_t)mask;
+        memset(iosb, 0, sizeof iosb);
+        st = sys$qiow(0, dcl_tt_chan, IO$_READVBLK | IO$M_EXTEND, iosb, NULL, 0,
+                      reply, (uint32_t)(replysz - 2), 0, 0, (uintptr_t)it,
+                      (uint32_t)sizeof it);
+        if (st & 1)
+            st = iosb[0];
+        if (st == SS$_DEVOFFLINE || st == SS$_NOSUCHDEV || st == SS$_IVCHAN)
+            return DCL_TT_NODRIVER;
+        /* only a terminated answer counts: what timed out unanswered --
+         * type-ahead included -- is consumed and dropped, as on VMS
+         * (keystroke TA.LOGIN W: the VAX's SYLOGIN inquiry eats it) */
+        if ((st & 1) && iosb[3]) {
+            size_t n = iosb[1] < replysz - 2 ? iosb[1] : replysz - 2;
+            reply[n++] = (char)iosb[2];       /* the final character */
+            reply[n] = '\0';
+            return (int)n;
+        }
+    }
+    reply[0] = '\0';
+    return 0;
+}
+
+/*
  * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT
  * from an interactive terminal: through the terminal driver when stdin is
  * that terminal, else (a pipe, a file, or no driver) the plain stream. 0 with
@@ -307,8 +545,8 @@ int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
  * dcl_tt_set_characteristics - SET TERMINAL's characteristics, in the
  * executive's device row (IO$_SENSEMODE, then IO$_SETMODE with the
  * characteristics buffer -- rd vms-d900's path), so the terminal driver acts
- * on them. `set`/`clr` are VMS_TTC_* bits within the buffer's first three
- * characteristic bytes. SS$ status.
+ * on them. `set`/`clr` are VMS_TTC_* bits: the buffer's first three
+ * characteristic bytes and its extended longword (bits 32-63). SS$ status.
  */
 uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr)
 {
@@ -323,11 +561,16 @@ uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr)
     st = sys$qiow(0, dcl_tt_chan, IO$_SENSEMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
     if (!(st & 1) || !(iosb[0] & 1))
         return (st & 1) ? iosb[0] : st;
-    chars = (uint64_t)cb[4] | ((uint64_t)cb[5] << 8) | ((uint64_t)cb[6] << 16);
+    uint32_t ext;
+    memcpy(&ext, cb + 8, 4);
+    chars = (uint64_t)cb[4] | ((uint64_t)cb[5] << 8) | ((uint64_t)cb[6] << 16) |
+            ((uint64_t)ext << 32);
     chars = (chars | set) & ~clr;
     cb[4] = (uint8_t)(chars & 0xFF);
     cb[5] = (uint8_t)((chars >> 8) & 0xFF);
     cb[6] = (uint8_t)((chars >> 16) & 0xFF);
+    ext = (uint32_t)(chars >> 32);           /* the extended characteristics */
+    memcpy(cb + 8, &ext, 4);
     st = sys$qiow(0, dcl_tt_chan, IO$_SETMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
     if (!(st & 1))
         return st;
@@ -524,7 +767,9 @@ uint32_t dcl_format_ctrl_t_status(const struct vms_procinfo *info,
     localtime_r(&now, &tmv);
 
     /* Leading identity + time + (optional) image, VMS spacing. */
-    int n = snprintf(out, outlen, "%s::%s   %02d:%02d:%02d   ",
+    /* "VAX1::SYSTEM 19:41:08   (DCL)   CPU=..." -- one blank after the user
+     * name (VAX V7.3 keystroke OOB.PROMPT T2; rd vms-bd71) */
+    int n = snprintf(out, outlen, "%s::%s %02d:%02d:%02d   ",
                      nodestr, userstr,
                      tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
     if (n < 0 || (size_t)n >= outlen)
@@ -560,8 +805,8 @@ uint32_t dcl_format_ctrl_t_status(const struct vms_procinfo *info,
         len += (size_t)n;
     }
 
-    /* IO deliberately omitted: JPI$_DIRIO/BUFIO are unsourced in OVMX
-     * (valid bit never set). Never fabricate it (INV-6). */
+    /* IO = JPI$_DIRIO + JPI$_BUFIO, the executive's own counts (rd
+     * vms-bd71); shown only when the executive says they are sourced. */
     if (info->fields_valid & (VMS_PI_V_DIRIO | VMS_PI_V_BUFIO)) {
         n = snprintf(out + len, outlen - len, " IO=%" PRIu32,
                      info->dirio + info->bufio);

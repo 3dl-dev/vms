@@ -213,7 +213,7 @@ fi
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$POS_LOG" && waitfor '$ ' 90 "$POS_LOG"; then rc=0; else rc=1; fi
     record "login: SYSTEM logs in" "$rc"
 
     # STRING param in effect: the real Linux hostname follows the SYSBOOT> SET.
@@ -278,7 +278,7 @@ check "bracket: the authored CLUX from CASE 1 never appears (separate disk)" "$D
 if [ "$rc" -eq 0 ]; then
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 1
-    if waitfor 'Welcome to OpenVMX' 30 "$DEF_LOG"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 30 "$DEF_LOG" && waitfor '$ ' 90 "$DEF_LOG"; then rc=0; else rc=1; fi
     record "bracket: SYSTEM logs in" "$rc"
 
     send 'HOSTD = F$GETSYI("NODENAME")'; sleep 1

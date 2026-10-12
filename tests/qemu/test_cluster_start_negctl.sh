@@ -175,7 +175,7 @@ boot_node() {
     local off; off=$(wc -c <"$LOG")
     send 'SYSTEM'
     wait_for 'Password:' 30 "$off" && send 'MANAGER'
-    if wait_for 'Welcome to OpenVMX' 30 "$off"; then
+    if wait_for 'Welcome to OpenVMX' 30 "$off" && wait_for '$ ' 90 "$off"; then
         ok "$tap: SYSTEM logs in"
     else
         dump_and_die "$tap: SYSTEM login failed"

@@ -193,7 +193,7 @@ login_system() {
     off=$(wc -c <"$log")
     send_to "$fd" 'SYSTEM'
     wait_for_in "$log" 'Password:' 30 "$off" "${QPID_[$key]}" && send_to "$fd" 'MANAGER'
-    wait_for_in "$log" 'Welcome to OpenVMX' 30 "$off" "${QPID_[$key]}"
+    wait_for_in "$log" 'Welcome to OpenVMX' 30 "$off" "${QPID_[$key]}" && wait_for_in "$log" '$ ' 90 "$off" "${QPID_[$key]}"
 }
 
 # boot_and_login <key> <tap> <disk> <scsnode> <sysid> -- SETs SCSNODE/

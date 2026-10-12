@@ -217,7 +217,9 @@ static void tt_track(struct vms_tt *tt, uint8_t c)
 			tt->pos = TT_POS_FRESH;
 		break;
 	case 0:
-		break;                       /* a fill character moves nothing */
+	case CH_BEL:
+		tt->last = c;
+		return;                      /* a fill or a bell moves nothing */
 	default:
 		tt->pos = TT_POS_MID;
 		break;
@@ -710,7 +712,12 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 		/* end of file: the driver says so on the terminal */
 		if (tt_echoing(tt) || (tt->rd_dc & VMS_TTC_ECHO))
 			{
-				tt_out(tt, "*EXIT*", 6);
+				/* on an ANSI CRT, a reverse-video " Exit " with the
+				 * cursor put back (VAX V7.3 keystroke Q.EDTNUM V7) */
+				if (tt->rd_dc & VMS_TTC_ANSI_CRT)
+					tt_out(tt, "\0337\033[7m Exit \033[m\0338", 17);
+				else
+					tt_out(tt, "*EXIT*", 6);
 				tt_nl(tt);
 			}
 		tt_complete(tt, SS__NORMAL, c, 1);
@@ -720,8 +727,22 @@ static void tt_consume(struct vms_tt *tt, uint8_t c)
 	if (tt_is_term(tt, c)) {
 		tt_hc_close(tt);
 		if (c == CH_CR && !(tt->rd_flags & VMS_TT_RD_TRMNOECHO) &&
-		    (tt->rd_dc & VMS_TTC_ECHO))
-			tt_nl(tt);             /* the RETURN, echoed */
+		    (tt->rd_dc & VMS_TTC_ECHO)) {
+			/* the RETURN, echoed. On an empty line it is still a
+			 * whole new line, CR LF (VAX V7.3 keystroke PG.TYPE
+			 * R1: RETURN at "Press RETURN to continue"'s empty
+			 * read) -- rd vms-457 */
+			if (tt->pos == TT_POS_FRESH)
+				tt_out(tt, "\r\n", 2);
+			else
+				tt_nl(tt);
+			/* after a NOECHO read (a password) the next record starts
+			 * where the line feed left it, with no carriage return of
+			 * its own (VAX V7.3 keystroke LOGIN.BANNER P: "Password:
+			 * <CR><LF> Welcome ...") -- rd vms-bd71 */
+			if (tt->rd_flags & VMS_TT_RD_NOECHO)
+				tt->pos = TT_POS_CLEAN;
+		}
 		else if (c == TT_CTRL('B') && tt_echoing(tt))
 			tt_out1(tt, c);        /* CTRL/B is echoed as itself (RC.RECALL B) */
 		tt_complete(tt, SS__NORMAL, c, 1);
@@ -1331,15 +1352,26 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 }
 
 /*
- * vms_tt_write - output through the class driver. `cooked`: the bytes are a
+ * vms_tt_write - output through the class driver. `cooked` 1: the bytes are a
  * program's records, '\n'-terminated (a writer arriving on the port's own
- * write path); otherwise they are written as they are ($QIO).
+ * write path); 0: written as they are (the driver's own output: a broadcast);
+ * 3: a program's $QIO write, as they are -- its own CR LF leaves nothing owed;
+ * 2: as they are without moving the driver's idea of the cursor
+ * (IO$M_NOFORMAT).
  */
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
 	uint8_t chunk[128];
 	size_t i = 0;
 
+	if (cooked == 1) {
+		/* each record a program writes to its terminal is one buffered
+		 * I/O of that program's (JPI$_BUFIO; rd vms-bd71) */
+		uint32_t recs = 0;
+		for (size_t j = 0; j < n; j++)
+			recs += (buf[j] == '\n');
+		vms_proc_count_bufio_current(recs);
+	}
 	tt_flush(tt);                     /* echo queued before this write first */
 	if (READ_ONCE_TT(tt->ctrlo))
 		return 0;                    /* CTRL/O: the output is discarded */
@@ -1364,7 +1396,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		while (i < n && k < sizeof(chunk) - 4) {
 			uint8_t c = buf[i];
 
-			if (cooked) {
+			if (cooked == 1) {
 				if (!tt->rec_open) {
 					uint32_t o0 = tt->olen;
 
@@ -1388,7 +1420,17 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 				}
 			}
 			chunk[k++] = c;
-			tt_track(tt, c);
+			if (cooked == 3 && c == CH_LF && tt->pos == TT_POS_CR) {
+				/* a program's own CR LF ($QIO, no carriage
+				 * control) leaves an empty line with nothing owed:
+				 * the next prompt starts where it is (VAX V7.3
+				 * keystroke PG.DIR C1, EDT.KEYPAD Q: "<NUL>$ ";
+				 * rd vms-457) */
+				tt->pos = TT_POS_CLEAN;
+				tt->last = c;
+			} else if (cooked != 2) {
+				tt_track(tt, c);
+			}
 			i++;
 		}
 		exec_unlock(&tt->lock);
@@ -1596,6 +1638,7 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 	}
 	a.status = r.status;
 	a.count = r.count;
+	VMS_IO_COUNT(&proc->io_buffered, 1u);   /* JPI$_BUFIO (rd vms-bd71) */
 	a.term = r.term;
 	a.termsz = r.termsz;
 	if (r.count && exec_copyout((void *)(uintptr_t)a.buf, line, r.count))
@@ -1640,7 +1683,9 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 		}
 		/* a record (VMS_TT_WR_RECORD): the cooked path's new line before
 		 * and carriage return after; the text itself carries no '\n' */
-		if (vms_tt_write(tt, chunk, k, (a.flags & VMS_TT_WR_RECORD) != 0)) {
+		if (vms_tt_write(tt, chunk, k,
+				 (a.flags & VMS_TT_WR_RECORD) ? 1 :
+				 (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 3)) {
 			a.status = SS__ABORT;
 			break;
 		}
@@ -1649,6 +1694,8 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
 	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
 		a.status = SS__ABORT;
+	if (a.status == SS__NORMAL)
+		VMS_IO_COUNT(&proc->io_buffered, 1u);   /* JPI$_BUFIO (rd vms-bd71) */
 	vms_tt_release(tt);
 out:
 	if (exec_copyout((void *)arg, &a, sizeof(a)))

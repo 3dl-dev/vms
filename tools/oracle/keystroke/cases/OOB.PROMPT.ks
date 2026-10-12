@@ -2,7 +2,7 @@
 @title out-of-band characters at an idle prompt: ^Y ^C ^T (default and SET CONTROL=T) ^O
 @mask "CPU=[0-9:.]+ PF=[0-9]+ IO=[0-9]+ MEM=[0-9]+" "CPU=<n> PF=<n> IO=<n> MEM=<n>"
 @mask "[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{2})?" "<TIME>"
-@mask "^| [A-Z0-9]+::" "| <NODE>::"
+@mask "[A-Z0-9]+::SYSTEM " "<NODE>::SYSTEM "
 Y send "^Y"
 C send "^C"
 T send "^T"

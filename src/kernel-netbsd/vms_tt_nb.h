@@ -70,6 +70,7 @@ struct vms_tt_write_args {
  * before them, a carriage return after (IO$_WRITEVBLK with P4 carriage control
  * " ", single space) */
 #define VMS_TT_WR_RECORD      0x1u
+#define VMS_TT_WR_NOFORMAT    0x2u   /* IO$M_NOFORMAT: the cursor position untouched (rd vms-457) */
 
 #define VMS_TT_MODE_PASSALL   0x1u
 struct vms_tt_mode_args {

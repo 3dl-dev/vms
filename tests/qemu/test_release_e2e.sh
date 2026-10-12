@@ -202,7 +202,7 @@ run_case() {
     # --- Provision: a real SYSTEM session edits the real SYSUAF ---
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 3
-    if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 60 "$log1" && waitfor '$ ' 90 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
     # AUTHORIZE, the SUPPORTED SYSUAF editor, over the interactive terminal
@@ -413,7 +413,7 @@ run_provision_missing_case() {
 
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 3
-    if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 60 "$log1" && waitfor '$ ' 90 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
     # An explicit version (here ;* = all versions) is REQUIRED on DELETE --
@@ -569,7 +569,7 @@ run_norecord_case() {
 
     send 'SYSTEM'; sleep 1
     send 'MANAGER'; sleep 3
-    if waitfor 'Welcome to OpenVMX' 60 "$log1"; then rc=0; else rc=1; fi
+    if waitfor 'Welcome to OpenVMX' 60 "$log1" && waitfor '$ ' 90 "$log1"; then rc=0; else rc=1; fi
     record "$tag boot 1: SYSTEM logs in" "$rc"
 
     # AUTHORIZE over the interactive terminal: a RUN'd image's SYS$INPUT is the

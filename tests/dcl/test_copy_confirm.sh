@@ -7,10 +7,13 @@
 # (cmd_copy reads the Y/N from stdin, exactly as DELETE/CONFIRM does). We probe
 # the OUTCOME with TYPE rather than the prompt text (the prompt echoes the
 # destination name, so a name-substring check would be ambiguous):
-#   - answered N -> NOPE.TXT was NOT created -> TYPE NOPE.TXT fails with FNF
+#   - answered N -> NOPE.TXT was NOT created -> TYPE NOPE.TXT fails (SEARCHFAIL / FNF)
 #   - answered Y -> YEP.TXT WAS created      -> TYPE YEP.TXT prints PAYLOAD
 # EXPECT: contains:PAYLOAD
-# EXPECT: contains:file not found - NOPE.TXT
+# TYPE of the file that was NOT created fails the VMS way (keystroke ERR.DCL E4):
+# EXPECT: contains:%TYPE-W-SEARCHFAIL, error searching for
+# EXPECT: contains:NOPE.TXT;
+# EXPECT: contains:-RMS-E-FNF, file not found
 #
 # --- an unimplemented COPY qualifier -> %DCL-W-IVQUAL (structural, q_copy) ---
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \CONTIGUOUS\

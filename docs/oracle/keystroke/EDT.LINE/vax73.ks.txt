@@ -1,0 +1,33 @@
+# keystroke oracle transcript (unmasked) -- case EDT.LINE (OpenVMS VAX V7.3 OPA0:)
+# EDT line mode: a new file, INSERT, TYPE WHOLE, EXIT
+# case-sha256 d224dd5b25344a8e94a46b0b9b0b1f0837d7bcb9a1de8b5713aeaf50ab4e940f
+@start loggedin OK
+=== STEP V0 quiet
+=== STEP O
+| EDIT/EDT KSE.TXT<CR><LF>
+| <CR>Input file does not exist<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP I
+| INSERT<CR><LF>
+| <CR>            
+=== STEP A
+| ALPHA<CR><LF>
+| <CR>            
+=== STEP B
+| BETA<CR><LF>
+| <CR>            
+=== STEP Z
+| *EXIT*<CR><LF>
+| <CR>[EOB]<CR><LF>
+| <CR>*
+=== STEP T
+| TYPE WHOLE<CR><LF>
+| <CR>    1       ALPHA<CR><LF>
+|     2       BETA<CR><LF>
+| [EOB]<CR><LF>
+| <CR>*
+=== STEP X
+| EXIT<CR><LF>
+| <CR>SYS$SYSROOT:[SYSMGR]KSE.TXT;1 2 lines<CR><LF>
+| <CR><NUL>$ 

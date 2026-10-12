@@ -1613,6 +1613,13 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
                 }
             }
         }
+    } else if ((strcmp(s, "BUFIO") == 0 &&
+                (info.fields_valid & VMS_PI_V_BUFIO)) ||
+               (strcmp(s, "DIRIO") == 0 &&
+                (info.fields_valid & VMS_PI_V_DIRIO))) {
+        /* JPI$_BUFIO / JPI$_DIRIO: the executive's counts (rd vms-bd71) */
+        snprintf(result, result_size, "%u",
+                 (unsigned)(s[0] == 'B' ? info.bufio : info.dirio));
     } else {
         /* an item F$GETJPI does not know: CLI-W-IVKEYW, no value
          * (observed LEX.GETJPI.BADITEM) */
@@ -2355,6 +2362,15 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
          * genuinely records for OVMX's console and disks (it does not model a
          * VT-model or an RA-model), NOT the old fabricated DT$_VT100/DT$_RA92. */
         snprintf(result, result_size, "%u", info.devtype);
+    } else if (strcmp(item, "TT_PHYDEVNAM") == 0) {
+        /* a terminal's physical device name, "_OPA0:" (rd vms-bd71: the
+         * VMS site template's SYLOGIN keys /INQUIRE on its 2-letter prefix) */
+        if (info.devclass == 66 /* DC$_TERM */)
+            snprintf(result, result_size, "_%s", info.devnam);
+    } else if (strcmp(item, "DEVBUFSIZ") == 0) {
+        /* a terminal's buffer size is its width (I/O User's Reference) */
+        if (info.devclass == 66 /* DC$_TERM */)
+            snprintf(result, result_size, "%u", info.width);
     } else if (strcmp(item, "TT_PAGE") == 0) {
         /* Terminal page length (DCL Dictionary F$GETDVI TT_PAGE), from the
          * executive's row -- on an RTAn:, the originating terminal's, as the

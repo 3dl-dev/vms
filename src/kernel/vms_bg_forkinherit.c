@@ -193,9 +193,14 @@ static void vms_on_exit(void *data, struct task_struct *p)
  */
 int vms_bg_forkinherit_consume(struct vms_proc *child)
 {
+    return vms_bg_forkinherit_consume_for(child, current->tgid, task_tgid(current));
+}
+
+/* The same, for a task other than the caller: creator-driven creation of an
+ * image task (rd vms-e50) takes the fork record of the task it creates. */
+int vms_bg_forkinherit_consume_for(struct vms_proc *child, pid_t tgid, struct pid *pidref)
+{
     struct vms_bg_pending *pend = NULL, *cur;
-    pid_t tgid = current->tgid;
-    struct pid *pidref = task_tgid(current);
 
     spin_lock(&fork_pending_lock);
     hash_for_each_possible(fork_pending_hash, cur, node, tgid) {

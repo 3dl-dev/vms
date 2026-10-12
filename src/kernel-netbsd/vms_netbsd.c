@@ -323,12 +323,16 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
  * Linux twin in src/kernel/vms_module.c). The task must be the creator's child
  * (or, detached, its grandchild through the detach intermediate) and have no
  * row. Its identity is the creator's (process name cleared) or the given one;
- * its creator of record is `creator`.
+ * its creator of record is `creator`. CONTINUE (rd vms-e50): DCL's image task,
+ * the creator's own VMS process -- its VMS PID and identity, process name
+ * included (the REGISTER_CONTINUE result, made by the creator).
  */
 uint32_t
-vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
+vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
     const char *uname, uint32_t uic, uint64_t privs, uint32_t *vms_pid_out)
 {
+	const bool detached = kind == VMS_CREPRC_PCB_DETACHED;
+	const bool cont = kind == VMS_CREPRC_PCB_CONTINUE;
 	struct proc *cp, *anc;
 	struct vms_proc *proc, *p;
 	bool related = false, found = false;
@@ -363,7 +367,9 @@ vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
 	if (proc == NULL)
 		return SS__INSFMEM;
 	proc->owner_vms_pid = creator->vms_pid;
-	if (!detached) {
+	if (cont) {
+		(void)vms_proc_continue_identity(proc, creator->pid, true);
+	} else if (!detached) {
 		(void)vms_proc_continue_identity(proc, creator->pid, false);
 		exec_lock(&vms_proc_hash_lock);
 		proc->prcnam[0] = '\0';

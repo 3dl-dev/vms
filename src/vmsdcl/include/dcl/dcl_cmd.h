@@ -144,6 +144,18 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
 struct dcl_context;
 struct dcl_sysinput { int saved_fd0; };
 void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
+
+/*
+ * DCL CREATES ITS IMAGE TASK'S PCB (rd vms-e50, design note 3.1). An image DCL
+ * activates runs, on VMS, in DCL's own process; OVMX runs it in a forked task,
+ * which DCL makes that same VMS process (VMS_CREPRC_PCB_CONTINUE) while the
+ * task waits, before it can exec. Open before fork() (returns 0, or -1 with
+ * nothing open); the child calls dcl_pcb_hold_wait() before exec; the parent
+ * calls dcl_pcb_hold_release() at once after fork() and gets the status.
+ */
+int dcl_pcb_hold_open(int fds[2]);
+void dcl_pcb_hold_wait(int fds[2]);
+uint32_t dcl_pcb_hold_release(int fds[2], int child_pid);
 void dcl_sysinput_restore(struct dcl_sysinput *si);
 
 /* P1 control-region establishment (vms-68f.v, in-process image activation).

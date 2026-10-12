@@ -1461,7 +1461,7 @@ long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
-uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
+uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
                              const char *uname, uint32_t uic, uint64_t privs,
                              uint32_t *vms_pid_out);
 /* /NOWAIT subprocess-exit completion arm (vms-e9a B1). */

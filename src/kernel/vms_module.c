@@ -1959,11 +1959,19 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
  * given (detached, authorized by the caller); its creator of record is
  * `creator`; it copies nothing else -- no process logical names, no BG
  * channels: a $CREPRC'd process starts with none of its creator's (VMS).
+ *
+ * CONTINUE (rd vms-e50): DCL's image task. OVMX runs an image in a forked task
+ * where VMS runs it in the process itself, so the task IS the creator's VMS
+ * process: it shares the creator's VMS PID, job and identity (process name
+ * included), uses the creator's process logical-name table, and takes the
+ * creator's open BG channels, as the image would hold them in one process.
  */
-uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int detached,
+uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
                              const char *uname, uint32_t uic, uint64_t privs,
                              uint32_t *vms_pid_out)
 {
+    const bool detached = kind == VMS_CREPRC_PCB_DETACHED;
+    const bool cont = kind == VMS_CREPRC_PCB_CONTINUE;
     struct pid *cpid;
     struct task_struct *t, *anc;
     struct vms_proc *proc, *existing;
@@ -2003,17 +2011,27 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int d
     proc->current_mode = PSL_C_USER;
     proc->owner_vms_pid = creator->vms_pid;
     vms_proc_init_state(proc);
+    if (cont && !vms_bg_forkinherit_consume_for(proc, tgid, cpid)) {
+        spin_lock(&vms_proc_hash_lock);
+        vms_bg_inherit(proc, creator);
+        spin_unlock(&vms_proc_hash_lock);
+    }
 
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible(vms_proc_hash, existing, hash_node, tgid) {
         if (existing->linux_pid == tgid) {
             spin_unlock(&vms_proc_hash_lock);
+            vms_bg_release_all(proc);
             put_pid(proc->pid_ref);
             kmem_cache_free(vms_proc_cache, proc);
             return SS__BADPARAM;        /* it already is a VMS process */
         }
     }
-    if (!detached) {
+    if (cont) {
+        /* The same VMS process as DCL: it keeps DCL's installed image
+         * privileges as an activated image does (rd vms-bdc1). */
+        vms_proc_copy_identity(proc, creator, true);
+    } else if (!detached) {
         vms_proc_copy_identity(proc, creator, false);
         proc->prcnam[0] = '\0';
     } else {
@@ -2022,9 +2040,10 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, int d
         proc->perm_privs = privs;
         proc->cur_privs = privs;
     }
-    proc->vms_pid = assign_vms_pid();
+    proc->vms_pid = cont ? creator->vms_pid : assign_vms_pid();
     if (proc->vms_pid == 0) {
         spin_unlock(&vms_proc_hash_lock);
+        vms_bg_release_all(proc);
         put_pid(proc->pid_ref);
         kmem_cache_free(vms_proc_cache, proc);
         return SS__INSFMEM;

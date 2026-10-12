@@ -2006,6 +2006,9 @@ out:
  * the creator may give: SETPRV, or exactly its own user name and UIC with a
  * subset of its authorized privileges (the creation ticket's rule). The
  * substrate verifies the parentage and creates the row (vms_proc_create_for).
+ * CONTINUE (rd vms-e50) is DCL's image task: the same VMS process as its
+ * creator -- its VMS PID, identity and process name -- so it needs no
+ * authorization beyond being the caller's own child.
  */
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
 {
@@ -2018,7 +2021,8 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
         return -EFAULT;
     args.username[VMS_USERNAME_SIZE - 1] = '\0';
     args.vms_pid = 0;
-    if (args.flags != VMS_CREPRC_PCB_SUBPROCESS && args.flags != VMS_CREPRC_PCB_DETACHED) {
+    if (args.flags != VMS_CREPRC_PCB_SUBPROCESS && args.flags != VMS_CREPRC_PCB_DETACHED &&
+        args.flags != VMS_CREPRC_PCB_CONTINUE) {
         args.status = SS__BADPARAM;
         goto out;
     }
@@ -2040,7 +2044,7 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
             goto out;
         }
     }
-    args.status = vms_proc_create_for(proc, args.child_pid, detached, args.username,
+    args.status = vms_proc_create_for(proc, args.child_pid, args.flags, args.username,
                                       args.uic, args.privs, &args.vms_pid);
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))

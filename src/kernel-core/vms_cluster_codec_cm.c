@@ -1627,3 +1627,45 @@ vms_codec_status_t vms_cm_rdev_answer_in_place(uint8_t *rec, uint32_t len,
 		return w.err;
 	return VMS_CODEC_OK;
 }
+
+/* rd vms-db1: the kind-10 close record and its answer (header). */
+const uint8_t vms_cm_k10_class[16] = {
+	0x01, 0x00, 0x1a, 0x00, 0x00, 0x00, 0x52, 0x00,
+	0x00, 0x00, 0x1a, 0x00, 0x00, 0x00, 0x52, 0x00
+};
+
+vms_codec_status_t vms_cm_k10_answer_in_place(uint8_t *rec, uint32_t len)
+{
+	uint32_t i;
+
+	if (rec == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len != VMS_CM_K10_REC_LEN)
+		return VMS_CODEC_E_CLASS;
+	if (rec[VMS_CM_RDEV_OFF_RECLEN] != (uint8_t)VMS_CM_K10_REC_LEN ||
+	    rec[VMS_CM_RDEV_OFF_RECLEN + 1u] != 0u ||
+	    rec[VMS_CM_RDEV_OFF_TAG] != (uint8_t)(VMS_CM_RDEV_TAG & 0xffu) ||
+	    rec[VMS_CM_RDEV_OFF_TAG + 1u] != (uint8_t)(VMS_CM_RDEV_TAG >> 8))
+		return VMS_CODEC_E_CLASS;
+	for (i = 0; i < 16u; i++) {
+		if (rec[VMS_CM_RDEV_OFF_CLASS + i] != vms_cm_k10_class[i])
+			return VMS_CODEC_E_CLASS;
+	}
+	for (i = 80u; i < 84u; i++) {
+		if (rec[i] != 0u)
+			return VMS_CODEC_E_CLASS;
+	}
+	rec[VMS_CM_K10_OFF_DONE] = 1u;
+	rec[VMS_CM_K10_OFF_B102] = 2u;
+	rec[VMS_CM_K10_OFF_B106] = 8u;
+	return VMS_CODEC_OK;
+}
+
+uint16_t vms_cm_close_state_after_writeback(uint8_t kind)
+{
+	switch (kind) {
+	case VMS_CM_CLOSE_KIND_VOLUME: return VMS_CM_CLOSE_STATE_VOLUME;
+	case VMS_CM_CLOSE_KIND_K10:    return VMS_CM_CLOSE_STATE_K10;
+	default:                       return 0u;
+	}
+}

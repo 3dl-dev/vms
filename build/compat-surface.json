@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-11",
+    "generated": "2026-10-12",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -77,42 +77,42 @@
     "count": 491,
     "by_status": {
       "verified": 24,
-      "implemented": 292,
-      "partial": 66,
+      "implemented": 295,
+      "partial": 65,
       "stub": 14,
       "designed": 1,
-      "absent": 94
+      "absent": 92
     },
     "by_authenticity": {
-      "real": 343,
-      "n/a": 95,
-      "advisory": 47,
+      "real": 346,
+      "n/a": 93,
+      "advisory": 46,
       "facade-risk": 6
     },
-    "met": 316,
-    "in_progress": 66,
-    "not_started": 109,
+    "met": 319,
+    "in_progress": 65,
+    "not_started": 107,
     "facade_risk": 6
   },
   "overall_in_scope": {
     "count": 445,
     "by_status": {
       "verified": 24,
-      "implemented": 292,
-      "partial": 64,
+      "implemented": 295,
+      "partial": 63,
       "stub": 10,
       "designed": 1,
-      "absent": 54
+      "absent": 52
     },
     "by_authenticity": {
-      "real": 341,
-      "n/a": 55,
-      "advisory": 45,
+      "real": 344,
+      "n/a": 53,
+      "advisory": 44,
       "facade-risk": 4
     },
-    "met": 316,
-    "in_progress": 64,
-    "not_started": 65,
+    "met": 319,
+    "in_progress": 63,
+    "not_started": 63,
     "facade_risk": 4
   },
   "facilities": [
@@ -359,19 +359,18 @@
         "count": 13,
         "by_status": {
           "verified": 3,
-          "implemented": 8,
+          "implemented": 9,
           "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 1
+          "absent": 0
         },
         "by_authenticity": {
-          "real": 12,
-          "n/a": 1
+          "real": 13
         },
-        "met": 11,
+        "met": 12,
         "in_progress": 1,
-        "not_started": 1,
+        "not_started": 0,
         "facade_risk": 0
       }
     },
@@ -1630,20 +1629,20 @@
         "count": 12,
         "by_status": {
           "verified": 0,
-          "implemented": 6,
-          "partial": 2,
+          "implemented": 8,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 4
+          "absent": 3
         },
         "by_authenticity": {
-          "advisory": 5,
-          "real": 3,
-          "n/a": 4
+          "advisory": 4,
+          "real": 5,
+          "n/a": 3
         },
-        "met": 6,
-        "in_progress": 2,
-        "not_started": 4,
+        "met": 8,
+        "in_progress": 1,
+        "not_started": 3,
         "facade_risk": 0
       }
     },
@@ -3058,12 +3057,12 @@
       "id": "connection-manager$real-vax-join",
       "kind": "feature",
       "vms": "A booted OVMX node is a counted member of a real VMScluster",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
-      "verified_against": null,
-      "notes": "THE OPEN END OF THIS FACILITY, given its own row so no reader has to infer it from the rows above. No booted OVMX node has joined a real VAX VMScluster as a counted member. Three things stand between the built stack and that outcome, all named in docs/cluster-integration-notes.md: E30 (the op-0x06 SCSSYSTEMID/CSID layout -- one lab capture), E31 (an operator ruling on what OVMX declares as its cluster-protocol version identity in the 16-byte VMS$VAXcluster connect data, since a real member may REJECT a counted zero), and the other half of E36 (a second node actually appearing). The R5 lab run that would grade it is FC-P3.11/FC-P3.13. A previous revision of this register described a hand-launched userspace probe joining a lab VAX. That probe is deleted; whatever it demonstrated was never a booted node, and is not carried forward as a claim.\n",
+      "evidence": "src/kernel-core/vms_cnxman_coord_fsm.c",
+      "verified_against": "Lab, real OpenVMS VAX V7.3 under SIMH: tests/lab/captures/vms-ci6-evac-20261010 run16 (VAX2 SHOW CLUSTER lists OVMXE MEMBER; OVMXE masters EVAC$WORKLOAD per SDA on VAX1; quorum never lost; no bugcheck) and the 3-node CN=3 captures tests/lab/captures/vms-e18e-cn3-live-v072-20260926, vms-1ac-cn3-achieved-20260925 (OVMX x86 + OVMX VAX + real VAX V7.3).",
+      "notes": "A booted OVMX node joins a real VAX V7.3 VMScluster as a counted member, holds and masters DLM locks for real VAX processes, and survives a real member leaving with REMOVE_NODE. Not an oracle byte-gate, hence implemented rather than verified. Open, tracked under vms-ci.6: OVMX adopting a lock tree a departing VAX remasters to it (vms-50d), OVMX founding a cluster a real VAX then joins (vms-d52c), and the remaining demo-path frame cells (vms-562ac).\n",
       "plan_ref": "vms-694"
     },
     {
@@ -7828,12 +7827,12 @@
       "id": "tt$out-of-band",
       "kind": "feature",
       "vms": "Out-of-band ^Y ^C ^O ^T delivered as ASTs ($QIO IO$_SETMODE IO$M_CTRLYAST / CTRLCAST / OUTBAND)",
-      "status": "partial",
-      "authenticity": "advisory",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_tt.c",
-      "verified_against": null,
-      "notes": "rd vms-f0fb. The DRIVER acts on ^Y/^C when typed (type-ahead discarded, an outstanding read ended SS$_ABORT) and raises the substrate interrupt DCL takes them as (SIGINT / SIGQUIT to the line's foreground group) -- not yet an AST. ^O and ^T are not out-of-band yet.",
+      "verified_against": "#1603 (rd vms-f0fb): docs/oracle/keystroke/ OOB.* cases vs the VAX V7.3 console; tests/qemu/test_kmod_tt.c",
+      "notes": "rd vms-f0fb. The executive delivers ^Y/^C/^T/^O as ASTs to the process that enabled them; write breakthrough. The ^T status line has no faithful IO= source on every path (keystroke known-diff OOB.PROMPT).",
       "plan_ref": "vms-801"
     },
     {
@@ -7843,12 +7842,12 @@
       "id": "tt$carriage-control",
       "kind": "feature",
       "vms": "VMS record carriage control on terminal output (implied-CC prefix/suffix, the <CR><NUL> prompt forms the console shows)",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
-      "verified_against": null,
-      "notes": "rd vms-fc4: nearly every keystroke-oracle step still differs here; needs lab $QIO probes to pin each rule, not inference",
+      "evidence": "src/kernel-core/vms_tt.c",
+      "verified_against": "#1579 (rd vms-fc4): docs/oracle/keystroke/ cases byte-match the VAX V7.3 console; semantic tt family 15/15",
+      "notes": "rd vms-fc4. Records start on a new line and owe their line feed as on VMS; IO$M_NOFORMAT writes leave the cursor position alone.",
       "plan_ref": "vms-801"
     },
     {

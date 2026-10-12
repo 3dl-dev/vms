@@ -346,19 +346,16 @@ items:
 
   - id: connection-manager$real-vax-join
     kind: feature
-    status: absent
-    authenticity: n/a
+    status: implemented
+    authenticity: real
     vms: "A booted OVMX node is a counted member of a real VMScluster"
+    evidence: src/kernel-core/vms_cnxman_coord_fsm.c
+    verified_against: "Lab, real OpenVMS VAX V7.3 under SIMH: tests/lab/captures/vms-ci6-evac-20261010 run16 (VAX2 SHOW CLUSTER lists OVMXE MEMBER; OVMXE masters EVAC$WORKLOAD per SDA on VAX1; quorum never lost; no bugcheck) and the 3-node CN=3 captures tests/lab/captures/vms-e18e-cn3-live-v072-20260926, vms-1ac-cn3-achieved-20260925 (OVMX x86 + OVMX VAX + real VAX V7.3)."
     notes: >
-      THE OPEN END OF THIS FACILITY, given its own row so no reader has to infer
-      it from the rows above. No booted OVMX node has joined a real VAX
-      VMScluster as a counted member. Three things stand between the built stack
-      and that outcome, all named in docs/cluster-integration-notes.md: E30 (the
-      op-0x06 SCSSYSTEMID/CSID layout -- one lab capture), E31 (an operator
-      ruling on what OVMX declares as its cluster-protocol version identity in
-      the 16-byte VMS$VAXcluster connect data, since a real member may REJECT a
-      counted zero), and the other half of E36 (a second node actually
-      appearing). The R5 lab run that would grade it is FC-P3.11/FC-P3.13.
-      A previous revision of this register described a hand-launched userspace
-      probe joining a lab VAX. That probe is deleted; whatever it demonstrated
-      was never a booted node, and is not carried forward as a claim.
+      A booted OVMX node joins a real VAX V7.3 VMScluster as a counted member,
+      holds and masters DLM locks for real VAX processes, and survives a real
+      member leaving with REMOVE_NODE. Not an oracle byte-gate, hence
+      implemented rather than verified. Open, tracked under vms-ci.6: OVMX
+      adopting a lock tree a departing VAX remasters to it (vms-50d), OVMX
+      founding a cluster a real VAX then joins (vms-d52c), and the remaining
+      demo-path frame cells (vms-562ac).

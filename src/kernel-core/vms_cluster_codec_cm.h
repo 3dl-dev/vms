@@ -1650,6 +1650,20 @@ struct vms_cm_member_state {
  * VMS_CODEC_E_INVAL when a time is 0 (nothing held is ever claimed). */
 vms_codec_status_t vms_cm_params_member_put(uint8_t *body, uint32_t cap,
 					    const struct vms_cm_member_state *ms);
+/*
+ * rd vms-d52c (the [26]=0 finding): write the sender's quorum
+ * (EXPECTED_VOTES + 2) / 2 at body[20:22] and its SYSGEN QDSKVOTES at
+ * body[24:26] (both grounded by rd vms-f297's controlled reconfiguration)
+ * into a PARAMS body vms_cm_params_build made. Real VAXes copy a peer's
+ * advertised QDSKVOTES into the opens they send it (op 0x07/0x08/0x09
+ * body[26]): 11 of 11 opens to OVMX carried 0 while OVMX's PARAMS left
+ * [24:26] zero, every open to a VAX carried that VAX's value. An
+ * EXPECTED_VOTES of 0 is not a configuration this node can hold, so
+ * VMS_CODEC_E_INVAL and nothing is written.
+ */
+vms_codec_status_t vms_cm_params_quorum_put(uint8_t *body, uint32_t cap,
+					    uint16_t expected_votes,
+					    uint16_t qdskvotes);
 
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       uint16_t lockdirwt,

@@ -87,6 +87,9 @@ static int load_module(const char *path)
  * ASSERT tally) while ALSO forwarding every byte to the console. Returns the
  * child's exit code (or -1 on a harness error).
  */
+/* This init's own row: the boot task, SYSTEM (rd vms-3fa). */
+static struct vms_procinfo g_self;
+
 static int run_suite(const char *name, int *out_pass, int *out_fail)
 {
     char path[512];
@@ -102,9 +105,40 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     int pfd[2];
     if (pipe(pfd) != 0) { printf("SYSSVC-ALPHA: pipe failed for %s\n", name); return -1; }
 
-    pid_t pid = fork();
-    if (pid < 0) { printf("SYSSVC-ALPHA: fork failed for %s\n", name); close(pfd[0]); close(pfd[1]); return -1; }
-    if (pid == 0) {
+    /*
+     * THE SUITE IS A PROCESS THE EXECUTIVE CREATED (rd vms-3fa): a DETACHED
+     * process with SYSTEM's identity, its own job, made in $CREPRC's detached
+     * shape -- an intermediate forks the suite and holds it until
+     * VMS_IOCTL_CREPRC_PCB has made its PCB; only then is it released to exec.
+     * The intermediate then exits, so the suite is reparented to this init,
+     * which reaps it below as before.
+     */
+    int gp[2], hold[2];
+    if (pipe(gp) != 0 || pipe(hold) != 0) {
+        printf("SYSSVC-ALPHA: pipe failed for %s\n", name);
+        close(pfd[0]); close(pfd[1]);
+        return -1;
+    }
+    pid_t inter = fork();
+    if (inter < 0) { printf("SYSSVC-ALPHA: fork failed for %s\n", name); close(pfd[0]); close(pfd[1]); return -1; }
+    if (inter == 0) {
+        char hb = 0;
+        close(gp[0]); close(hold[1]);
+        pid_t g = fork();
+        if (g != 0) {
+            int32_t gpid = (int32_t)g;
+            (void)!write(gp[1], &gpid, sizeof gpid);
+            close(gp[1]);
+            while (read(hold[0], &hb, 1) < 0 && errno == EINTR)   /* alive until released */
+                ;
+            _exit(0);
+        }
+        close(gp[1]);
+        while (read(hold[0], &hb, 1) < 0 && errno == EINTR)
+            ;
+        close(hold[0]);
+        if (hb != 'g')
+            _exit(125);                 /* never runs as a process the executive did not create */
         dup2(pfd[1], 1);
         dup2(pfd[1], 2);
         close(pfd[0]); close(pfd[1]);
@@ -139,6 +173,25 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
         _exit(127);
     }
     close(pfd[1]);
+    close(gp[1]); close(hold[0]);
+    int32_t gpid = -1;
+    ssize_t gr;
+    do { gr = read(gp[0], &gpid, sizeof gpid); } while (gr < 0 && errno == EINTR);
+    close(gp[0]);
+    uint32_t pcb_st = 0;
+    if (gr == (ssize_t)sizeof gpid && gpid > 0)
+        pcb_st = vms_kif_creprc_pcb((uint32_t)gpid, VMS_CREPRC_PCB_DETACHED, g_self.username,
+                                    g_self.uic, g_self.perm_privs, NULL);
+    (void)!write(hold[1], (pcb_st & 1) ? "gg" : "xx", 2);
+    close(hold[1]);
+    while (waitpid(inter, NULL, 0) < 0 && errno == EINTR)
+        ;
+    if (!(pcb_st & 1)) {
+        printf("  FAIL: %s was not run: the executive did not create it (CREPRC_PCB status %08X)\n",
+               name, (unsigned)pcb_st);
+        (*out_fail)++;
+    }
+    pid_t pid = (pid_t)gpid;
 
     /* Arm the per-suite watchdog: SIGALRM kills a hung child so the drain
      * loop below sees EOF and this suite is scored a failure, not a hang. */
@@ -227,6 +280,14 @@ int main(void)
 
     if (access("/dev/vms", F_OK) == 0) {
         printf("SYSSVC-ALPHA: /dev/vms PRESENT\n");
+        /* THE BOOT TASK (rd vms-3fa): this init becomes SYSTEM, once, and
+         * creates every suite through VMS_IOCTL_CREPRC_PCB (run_suite). */
+        if (vms_kif_open() < 0 || !(vms_kif_establish_system() & 1) ||
+            !(vms_kif_getjpi_self(&g_self) & 1)) {
+            printf("SYSSVC-ALPHA: FATAL the boot task could not become SYSTEM\n");
+            printf("=== FINAL RESULTS: 0 suites passed, 1 suites failed ===\n");
+            goto out;
+        }
     } else {
         printf("SYSSVC-ALPHA: /dev/vms ABSENT -- executive did not register\n");
         printf("=== FINAL RESULTS: 0 suites passed, 1 suites failed ===\n");

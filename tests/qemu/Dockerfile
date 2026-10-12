@@ -598,6 +598,9 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/corpus_seed_lnm /initramfs/tests/corpus_seed_lnm || \
       { echo "FATAL: corpus_seed_lnm was not built into the static tree -- lib_getdvi's SYS\$SYSDEVICE lookup would go unseeded"; exit 1; }; } && \
     chmod +x /initramfs/tests/corpus_seed_lnm && \
+    { cp /src/repo/build-static/bin/ovmx_boot_task /initramfs/tests/ovmx_boot_task || \
+      { echo "FATAL: ovmx_boot_task was not built into the static tree -- no suite could run as a process the executive created"; exit 1; }; } && \
+    chmod +x /initramfs/tests/ovmx_boot_task && \
     # The shipped DCL image, staged at BOTH paths its two sets of consumers
     # expect: /bin/DCL.EXE (vms-8019's test_syssvc_procnam.c and
     # test_syssvc_showproc.c hard-code execl("/bin/DCL.EXE", ...)) and

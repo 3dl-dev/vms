@@ -323,6 +323,36 @@ if [ "$CORPUS_RT" = "1" ]; then
     echo "=== CORPUS-RT DONE: $n_corpus_rt programs ===" >&4
 fi
 
+# THE HARNESS BOOT TASK (rd vms-3fa). Every test_syssvc_/test_imgact_/
+# test_corpus_ suite runs as a process the executive CREATED: ovmx_boot_task
+# becomes SYSTEM once and makes each suite a DETACHED process with SYSTEM's
+# identity, its own job (VMS_IOCTL_CREPRC_PCB for the held task, then exec), as
+# $CREPRC does on a booted system -- no suite registers itself. test_kmod_* still run directly: they drive the
+# registration ioctls themselves, which vms-2a5 retires.
+# With NO executive (/dev/vms absent -- the gate's own negative control) there
+# are no VMS processes to create: suites run directly, so their device-absent
+# branches prove they skip honestly (77). That is not a fallback: a suite that
+# needs the executive can only skip there.
+BOOT_CTL=/tmp/.boot_ctl BOOT_REPLY=/tmp/.boot_reply BOOT_OK=0 NO_EXEC=0
+[ -c /dev/vms ] || NO_EXEC=1
+if [ "$NO_EXEC" = 1 ]; then
+    echo "  no executive (/dev/vms absent): suites run directly, to prove they skip honestly" >&4
+elif [ -x /tests/ovmx_boot_task ]; then
+    rm -f "$BOOT_CTL" "$BOOT_REPLY"
+    mknod "$BOOT_CTL" p && mknod "$BOOT_REPLY" p
+    exec 7<>"$BOOT_REPLY" 8<>"$BOOT_CTL"
+    /tests/ovmx_boot_task "$BOOT_CTL" "$BOOT_REPLY" </dev/null >&4 2>&4 &
+    BOOT_PID=$!
+    if read -t 30 -r _ready <&7 && [ "$_ready" = READY ]; then
+        BOOT_OK=1
+        echo "  boot task up (pid $BOOT_PID): each suite runs as a DETACHED process SYSTEM created" >&4
+    else
+        echo "  FATAL: the harness boot task did not come up -- no suite can run as a process the executive created" >&4
+    fi
+else
+    echo "  FATAL: /tests/ovmx_boot_task is missing -- no suite can run as a process the executive created" >&4
+fi
+
 for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
@@ -365,15 +395,36 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     # (procnam's SHOW SYSTEM, setname's holder); one hung suite then hid the
     # rest. Healthy suites finish in seconds, the whole pristine run in ~250 s.
     rm -f /tmp/.suite_timed_out
-    "$test" >"$SUITE_FIFO" 2>&1 &
-    TEST_PID=$!
+    case "$name" in test_kmod_*) via_boot=0 ;; *) via_boot=1 ;; esac
+    [ "$NO_EXEC" = 1 ] && via_boot=0
+    PCB_ST=
+    if [ "$via_boot" = 1 ]; then
+        if [ "$BOOT_OK" = 1 ]; then
+            echo "RUN $test $SUITE_FIFO" >&8
+            read -r _tag TEST_PID PCB_ST <&7
+        else
+            TEST_PID=0
+        fi
+    else
+        "$test" >"$SUITE_FIFO" 2>&1 &
+        TEST_PID=$!
+    fi
     # Before the kill, say where every user task is blocked (state, wchan,
     # kernel stack) on the assertion channel, so a hang is diagnosed from the
     # console rather than guessed (rd vms-7ce).
-    ( sleep "$SUITE_TIMEOUT"; kill -0 "$TEST_PID" 2>/dev/null && : >/tmp/.suite_timed_out && dump_stuck_tasks "$name" >&4 2>&1; kill -KILL "$TEST_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+    [ "$TEST_PID" != 0 ] && ( sleep "$SUITE_TIMEOUT"; kill -0 "$TEST_PID" 2>/dev/null && : >/tmp/.suite_timed_out && dump_stuck_tasks "$name" >&4 2>&1; kill -KILL "$TEST_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
     WATCH_PID=$!
-    wait "$TEST_PID"
-    rc=$?
+    if [ "$via_boot" = 1 ]; then
+        if [ "$TEST_PID" != 0 ]; then
+            read -r _tag rc <&7
+        else
+            : >"$SUITE_FIFO" 2>/dev/null &   # let tee see EOF
+            rc=126
+        fi
+    else
+        wait "$TEST_PID"
+        rc=$?
+    fi
     kill "$WATCH_PID" 2>/dev/null
     # DRAIN, bounded -- and bounded starting HERE, after "$test" has ALREADY
     # exited and rc is already known, not from the top of the iteration.
@@ -414,6 +465,10 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     done
     wait "$TEE_PID" 2>/dev/null
     rm -f "$SUITE_FIFO"
+    if [ "$via_boot" = 1 ] && { [ "$BOOT_OK" != 1 ] || [ "$((${PCB_ST:-0} & 1))" != 1 ]; }; then
+        echo "  FAIL: $name was not run: the executive did not create it (boot task up=$BOOT_OK, CREPRC_PCB status ${PCB_ST:-none})" >>"$SUITE_OUT"
+        echo "  FAIL: $name was not run: the executive did not create it (boot task up=$BOOT_OK, CREPRC_PCB status ${PCB_ST:-none})" >&4
+    fi
     if [ -e /tmp/.suite_timed_out ]; then
         echo "  FAIL: $name did not finish within ${SUITE_TIMEOUT}s (killed by the per-suite watchdog)" >>"$SUITE_OUT"
         echo "  FAIL: $name did not finish within ${SUITE_TIMEOUT}s (killed by the per-suite watchdog)" >&4
@@ -436,6 +491,7 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     fi
     echo "=== SUITE $name rc=$rc ===" >&4
 done
+[ "$BOOT_OK" = 1 ] && { echo EXIT >&8; wait "$BOOT_PID" 2>/dev/null; }
 rm -f "$SUITE_OUT" "$SUITE_FIFO"
 exec 4>&-
 

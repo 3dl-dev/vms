@@ -81,6 +81,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -268,9 +269,8 @@ static void session_child(int in_fd, int repfd)
     uint32_t chan = 0;
     memset(&rep, 0, sizeof(rep));
 
-    /* FIRST vms_kif_* call binds + registers this task (kif_bind). Because
-     * main is still unregistered, this task's real parent has no PCB, so the
-     * executive makes it a job root (job_id == its own vms_pid). */
+    /* A DETACHED process main created, so a job root (job_id == its own
+     * vms_pid). */
     rep.setprn  = vms_kif_setprn(ROOT_NAME);
     rep.assign  = vms_kif_assign(CONSOLE, &chan);
     rep.setterm = (rep.assign & 1) ? vms_kif_setterm(chan) : rep.assign;
@@ -316,21 +316,21 @@ static void registered_creator_login_scenario(void)
         return;
     }
 
-    pid_t creator = fork();
+    pid_t creator = ovmx_fork_subprocess();   /* a subprocess of this suite (rd vms-3fa) */
     if (creator < 0) {
         printf("  (vms-01f: fork() failed -- SKIP)\n");
         close(rep_pipe[0]); close(rep_pipe[1]);
         return;
     }
     if (creator == 0) {
-        /* CREATOR: register (first vms_kif_* call binds a PCB), so this task
-         * -- the login child's real parent -- is a REGISTERED process, exactly
-         * as JOB_CONTROL is on the real boot. It binds NO terminal. */
+        /* CREATOR: a VMS process (a subprocess this suite created), the login
+         * child's creator, exactly as JOB_CONTROL is on the real boot. It binds
+         * NO terminal. */
         close(rep_pipe[0]);
         struct vms_procinfo ci;
-        (void)vms_kif_getjpi_self(&ci);          /* bind + register the creator */
+        (void)vms_kif_getjpi_self(&ci);
 
-        pid_t login = fork();
+        pid_t login = ovmx_fork_subprocess();   /* the creator's subprocess, as JOB_CONTROL $CREPRCs the login */
         if (login == 0) {
             /* LOGIN CHILD: name itself, bind the console terminal, report, then
              * stay alive (blocked) for the read below. This is the LOGINOUT/DCL
@@ -429,9 +429,17 @@ int main(void)
         return 1;
     }
 
-    pid_t child = fork();
+    /* The interactive session is a DETACHED process this suite creates with
+     * its own identity -- a job root, as LOGINOUT's interactive job is (rd
+     * vms-3fa); not a fork() that registers itself. */
+    pid_t child = -1;
+    {
+        struct vms_procinfo me;
+        if (vms_kif_getjpi_self(&me) & 1)
+            child = ovmx_fork_detached_st(me.username, me.uic, me.perm_privs, NULL);
+    }
     if (child < 0) {
-        printf("  FAIL: fork()\n");
+        printf("  FAIL: could not create the interactive session process\n");
         printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n",
                pass, fail + 1);
         return 1;
@@ -475,9 +483,7 @@ int main(void)
      * subprocess was alive, so the flushed transcript still shows both rows. */
     int have_transcript = 0;
 
-    /* Now this process may register (its first vms_kif_* call): the child's
-     * job_id was already derived while main was unregistered, so this changes
-     * nothing about the subject. Read the executive rows while root and
+    /* Read the executive rows while root and
      * subprocess are BOTH still alive. */
     struct vms_procinfo root_info, sub_info, self_info;
     /* The root registered synchronously (session_child reported setprn/$ASSIGN/

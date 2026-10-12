@@ -79,6 +79,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /*
  * Lock Status Block. Declared BY THE CALLER, deliberately -- there is no
@@ -331,7 +332,7 @@ int main(void)
         return 1;
     }
 
-    pid_t child_pid = fork();
+    pid_t child_pid = ovmx_fork_subprocess(); /* a VMS subprocess of this suite (rd vms-3fa) */
     if (child_pid < 0) {
         printf("  FAIL: fork()\n");
         return 1;

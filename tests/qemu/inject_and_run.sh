@@ -233,6 +233,10 @@ chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done
+# The harness's boot task (rd vms-3fa) links the same libvms/libvmssys a defect
+# may mutate: re-stage it with the suites, never the pristine image-build copy.
+cp /src/repo/build-static/bin/ovmx_boot_task /initramfs/tests/ovmx_boot_task || exit 4
+chmod +x /initramfs/tests/ovmx_boot_task || exit 4
 n_syssvc=0
 for f in /src/repo/build-static/bin/test_syssvc_*; do
     [ -x "$f" ] || continue

@@ -77,6 +77,7 @@
 #include "prcdef.h"
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -376,6 +377,8 @@ static void clear_touch(void)
  * Returns the creator's pid (already reaped) or -1; its exit status goes
  * in *exit_st.
  */
+static int g_dcl_unnamed = 0;
+
 static pid_t run_dcl(const char *procedure, char *out, size_t outsz,
                      int *exit_st)
 {
@@ -385,7 +388,12 @@ static pid_t run_dcl(const char *procedure, char *out, size_t outsz,
     if (exit_st) *exit_st = -1;
     if (pipe(pfd) < 0) return -1;
 
-    pid_t pid = fork();
+    /* A subprocess this suite creates (rd vms-3fa) -- except for the one phase
+     * that needs an UNNAMED creator (g_dcl_unnamed): a raw fork that registers
+     * itself, the only way an unnamed process still arises. vms-2a5 retires
+     * self-registration, and with it that phase (every process the executive
+     * creates carries its creator's name). */
+    pid_t pid = g_dcl_unnamed ? fork() : ovmx_fork_subprocess();
     if (pid < 0) { close(pfd[0]); close(pfd[1]); return -1; }
 
     if (pid == 0) {
@@ -430,7 +438,7 @@ static int run_show_system(char *out, size_t outsz)
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a subprocess this suite creates (rd vms-3fa) */
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -989,7 +997,7 @@ int main(void)
         if (pipe(pfd) < 0) {
             CHECK(0, "the detached-creation probe could be started");
         } else {
-            pid_t probe = fork();
+            pid_t probe = ovmx_fork_subprocess();   /* a subprocess of this suite (rd vms-3fa) */
             if (probe < 0) {
                 close(pfd[0]); close(pfd[1]);
                 CHECK(0, "the detached-creation probe could be started");
@@ -1099,7 +1107,9 @@ int main(void)
         char out7[65536];
         int n7 = 0;
 
+        g_dcl_unnamed = 1;
         run_dcl(UIC_COM, out7, sizeof(out7), &exit_st);
+        g_dcl_unnamed = 0;
         printf("  (RUN/DETACHED/UIC=[300,1] from an unnamed DCL)\n%s\n", out7);
 
         /* The /UIC override cannot be stamped by a nameless creator, so the

@@ -374,6 +374,14 @@ struct mscp_cl_ops {
 			    uint8_t access, uint32_t *name_out);
 	void (*buf_release)(void *ctx, uint32_t name);
 
+	/* rd vms-239: the SERVER's own Con.ID for the connection `conid` names
+	 * (the value its ACCEPT carried) -- what a READ/WRITE buffer descriptor
+	 * carries in its last longword (71/71 real descriptors). 0 and the
+	 * Con.ID filled, or nonzero when the executive never learned one: then
+	 * the transfer is refused, never sent with our own Con.ID in its place
+	 * (that halted two real VAXes with VAXPORT bugchecks). */
+	int  (*remote_conid)(void *ctx, vms_conid_t conid, vms_conid_t *out);
+
 	/*
 	 * A served unit became real / went away. The glue enters and removes
 	 * the `<SCSNODE>$DUA<unit>:` row in vms_devtab with DVI$_MSCP_SERVED

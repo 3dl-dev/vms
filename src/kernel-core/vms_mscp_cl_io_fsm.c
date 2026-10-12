@@ -279,8 +279,13 @@ static uint32_t cl_next_ref(uint16_t *msgid, uint16_t class_token)
 {
 	uint16_t id = *msgid;
 
-	if (id == 0u)
-		id = 1u;
+	/* rd vms-239 minted-form audit: every P.CRF a real VAX class driver put
+	 * on the wire (3,637 in the lab corpus) has a high word in
+	 * [0x0079, 0xffdc] and a low word in [0x0001, 0x0038]; this counter used
+	 * to start at 1, a high word no real node sends. It starts at the
+	 * walk's own grounded seed and never drops below 0x0100 on wrap. */
+	if (id < 0x0100u)
+		id = (uint16_t)VMS_MSCP_CL_SCC_MSGID0;
 	*msgid = (uint16_t)(id + 1u);
 	return VMS_MSCP_CL_CMD_REF(class_token, id);
 }
@@ -598,13 +603,29 @@ static int cl_issue_xfer(struct mscp_cl_fsm *f, struct mscp_cl_cddb *c,
 	uint8_t access = r->opcode == VMS_MSCP_OP_READ
 			 ? (uint8_t)MSCP_CL_BUF_IN : (uint8_t)MSCP_CL_BUF_OUT;
 
+	vms_conid_t server_conid = 0u;
+
+	/*
+	 * rd vms-239: the descriptor's last longword is the SERVER's Con.ID --
+	 * the connection the server initiates the block transfer on (71/71 real
+	 * READ/WRITE descriptors carry the command frame's destination Con.ID).
+	 * This used to carry OUR local Con.ID, and two real VAXes that looked it
+	 * up halted with VAXPORT fatal bugchecks (lab mscp-239 r17, r19). Read
+	 * from the executive's own CDT; without it the transfer is refused.
+	 */
+	if (f->ops == NULL || f->ops->remote_conid == NULL ||
+	    f->ops->remote_conid(f->ops->ctx, c->conid, &server_conid) != 0 ||
+	    server_conid == 0u) {
+		f->send_failures++;
+		return -1;
+	}
 	if (cl_name_buffer(f, r, access) != 0)
 		return -1;
 
 	cl_bzero(&desc, (uint32_t)sizeof(desc));
 	desc.offset = 0u;             /* the whole registration is this request */
 	desc.name = r->buf_name;      /* the name OUR port really minted        */
-	desc.conid = (uint32_t)c->conid; /* OUR local Con.ID for this CDT       */
+	desc.conid = (uint32_t)server_conid; /* the SERVER's Con.ID (above)    */
 
 	cl_bzero(&cmd, (uint32_t)sizeof(cmd));
 	cmd.hdr.cmd_ref = cl_next_ref(&c->xfer_msgid, MSCP_CL_XFER_CLASS);

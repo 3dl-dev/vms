@@ -203,6 +203,45 @@ vms_codec_status_t vms_mscp_link_build(const struct vms_mscp_link *l,
 	return VMS_CODEC_OK;
 }
 
+vms_codec_status_t vms_mscp_end_frame_from_body(const uint8_t *body,
+						uint32_t body_len,
+						uint8_t *frame, uint32_t cap,
+						uint32_t *written)
+{
+	struct vms_mscp_link link;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint32_t total;
+
+	if (body == (const uint8_t *)0 || frame == (uint8_t *)0 ||
+	    body_len == 0u || body_len > VMS_MSCP_END_BODY_MAX)
+		return VMS_CODEC_E_INVAL;
+	total = VMS_MSCP_END_FRAME_LEN(body_len);
+	if (cap < total)
+		return VMS_CODEC_E_SHORT;
+
+	{
+		uint32_t i;
+		uint8_t *p = (uint8_t *)&link;
+
+		for (i = 0; i < (uint32_t)sizeof(link); i++)
+			p[i] = 0u;
+		for (i = 0; i < total; i++)
+			frame[i] = 0u;
+	}
+	st = vms_mscp_link_build(&link, VMS_MSCP_END_SCA_LEN(body_len), frame,
+				 cap, (uint32_t *)0);
+	if (st != VMS_CODEC_OK)
+		return st;
+	vms_wire_buf_init(&w, frame, cap);
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, body_len, body);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = total;
+	return VMS_CODEC_OK;
+}
+
 /* ------------------------------------------------------------------ *
  * sec 6  Commands
  * ------------------------------------------------------------------ */

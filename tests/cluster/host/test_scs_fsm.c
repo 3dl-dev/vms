@@ -14,6 +14,7 @@
  */
 
 #include "cluster_test.h"
+#include "conformance_dump.h"   /* rd vms-ci.6 frame-conformance gate */
 #include "scs_test_harness.h"
 
 static struct scsh_node a_node;
@@ -1338,6 +1339,68 @@ static void t_f3ec_reject_leaves_membership_cdt_alone(void)
 			"and none landed on the wrong CDT");
 }
 
+/*
+ * rd vms-239: a disk class driver's CONNECT_REQ, byte for byte against a REAL
+ * one. VAX1 (V7.3) opening VMS$DISK_CL_DRVR -> MSCP$DISK, frame captured
+ * 2026-10-11 (tests/lab/captures/vms-239-mscp-connect-20261011/connects.pcap,
+ * ts 1791697655.396254), abs 72..123: SCS$W_MIN_CR 2, SCS$W_STATUS 1, the two
+ * SYSAP names, and the class driver's 16-byte connect data. The census over
+ * the lab corpus finds these 52 bytes in 4,032 of 4,032 real class-driver
+ * connects from 19 nodes; OVMX's old 0 / blank version was REJECTED (status
+ * 0x2c) by both real VAXes it dialled. SCS passes the SYSAP's statement
+ * through: given the class driver's two values, the bytes must be the VAX's.
+ */
+static const uint8_t real_disk_cl_connect_72_124[52] = {
+	0x02, 0x00, 0x01, 0x00, 0x4d, 0x53, 0x43, 0x50, 0x24, 0x44, 0x49, 0x53,
+	0x4b, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x56, 0x4d, 0x53, 0x24,
+	0x44, 0x49, 0x53, 0x4b, 0x5f, 0x43, 0x4c, 0x5f, 0x44, 0x52, 0x56, 0x52,
+	0x56, 0x35, 0x2e, 0x30, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+	0x20, 0x20, 0x2b, 0x20,
+};
+
+static void t_239_disk_class_connect_is_byte_exact(void)
+{
+	static const uint8_t disk_cl[VMS_SCS_PROCNAME_LEN] = {
+		'V', 'M', 'S', '$', 'D', 'I', 'S', 'K', '_', 'C', 'L', '_',
+		'D', 'R', 'V', 'R' };
+	static const uint8_t mscp_disk[VMS_SCS_PROCNAME_LEN] = {
+		'M', 'S', 'C', 'P', '$', 'D', 'I', 'S', 'K', ' ', ' ', ' ',
+		' ', ' ', ' ', ' ' };
+	struct scs_connect_args args;
+	vms_conid_t a_conid = 0u;
+	uint32_t i, same = 0u;
+
+	printf("-- vms-239: the disk class driver's CONNECT_REQ abs 72..123 is "
+	       "byte-exact with a real VAX's\n");
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+
+	args_zero(&args);
+	args.local_name = disk_cl;
+	args.remote_name = mscp_disk;
+	args.sysap = &a_sysap.ops;
+	args.dst = b_node.sysid;
+	args.initial_credits = 4u;
+	args.min_credits = 2u;                          /* the class driver's */
+	args.conndata = &real_disk_cl_connect_72_124[36]; /* its 16 bytes   */
+	ct_check(scs_fsm_connect(&a_node.fsm, &args, &a_conid) == SCS_OK,
+		 "the class driver's connect goes out");
+	ct_check_eq_u32(a_node.tx_last_len[SCS_MTYPE_CON_REQ], 124u,
+			"  as a 110-content op 0 (124 bytes), as the VAX's");
+	for (i = 0; i < sizeof(real_disk_cl_connect_72_124); i++) {
+		if (a_node.tx_last[SCS_MTYPE_CON_REQ][72u + i] ==
+		    real_disk_cl_connect_72_124[i])
+			same++;
+	}
+	ct_check_eq_u32(same, sizeof(real_disk_cl_connect_72_124),
+			"*** abs 72..123 match the real VAX byte for byte ***");
+	/* rd vms-ci.6: the SCS-owned span (abs 56..123) of the class driver's
+	 * CONNECT_REQ, for the frame-conformance gate. */
+	conf_dump("scs_conreq_mscp", 56u, "initial_credits=4",
+		  &a_node.tx_last[SCS_MTYPE_CON_REQ][56],
+		  a_node.tx_last_len[SCS_MTYPE_CON_REQ] - 56u);
+}
+
 int main(void)
 {
 	t_conid_allocator();
@@ -1359,6 +1422,7 @@ int main(void)
 	t_e65_acceptor_words();
 	t_f297_initiator_keeps_accept_conndata();
 	t_e80_accept_conndata();
+	t_239_disk_class_connect_is_byte_exact();
 	t_e65_refusal_and_teardown_words();
 	t_d7e_reject_response_is_addressed();
 	t_f3ec_reject_leaves_membership_cdt_alone();

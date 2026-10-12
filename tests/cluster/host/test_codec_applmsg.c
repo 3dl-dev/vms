@@ -329,6 +329,76 @@ static void test_block_transfer_unaffected(void)
 		 "...and still carries NO Con.ID capability");
 }
 
+/*
+ * rd vms-239: a REAL VAX1's MSCP READ END, port opcode 0x15, captured serving
+ * $2$DUA2: to VAX2 (tests/lab/captures/vms-b20-mscp-read-20261011,
+ * mscp-read-write.pcap, ts 1791697744.917481 -- the smallest of the capture's
+ * 53 opcode-0x15 frames). SCA content 118 = the 90-content END message (inner
+ * length 46, abs 56) + a 28-byte block header (abs 104..131) with no tail.
+ * Byte for byte as it crossed the wire.
+ */
+static const uint8_t g_vax_read_end_0x15[132] = {
+	0x08, 0x00, 0x2b, 0x58, 0xe6, 0xf1, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+	0x60, 0x07, 0x74, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+	0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x5b, 0x13, 0xe9, 0x34, 0x07, 0x24,
+	0x01, 0x00, 0x12, 0x00, 0xe9, 0x34, 0x00, 0x00, 0x07, 0x24, 0x00, 0x00,
+	0xe9, 0x34, 0x00, 0x00, 0x01, 0x00, 0x00, 0x15, 0x2e, 0x00, 0x04, 0x00,
+	0x0a, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x53, 0x2f, 0x0b, 0x00, 0x52, 0x2f,
+	0x09, 0x00, 0xa8, 0x1e, 0x02, 0x40, 0x00, 0x00, 0xa1, 0x00, 0x00, 0x00,
+	0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e, 0x2f,
+	0x0b, 0x00, 0x52, 0x2f, 0x2a, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x52, 0x2f,
+	0x05, 0x00, 0x1a, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x2f,
+	0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x4e, 0x2f, 0x00, 0x80, 0x00, 0x00,
+};
+
+static void test_real_read_end_with_trailer(void)
+{
+	uint8_t frame[sizeof(g_vax_read_end_0x15)];
+	const uint8_t *body = (const uint8_t *)0;
+	uint32_t body_len = 0u;
+	struct vms_frame_info fi;
+	struct vms_scs_hdr sh;
+
+	printf("-- vms-239: a real VAX's 0x15 READ END (message + block "
+	       "trailer) is an application message with its Con.ID\n");
+	memcpy(frame, g_vax_read_end_0x15, sizeof(frame));
+
+	ct_check_eq_u32(vms_scs_msg_extent(frame, sizeof(frame)), 104u,
+			"the message stops at 14 + 44 + inner length 46 = 104");
+	fi = classify(frame, sizeof(frame));
+	ct_check(fi.cls == VMS_FCLS_SCS_APPLMSG,
+		 "*** classifies VMS_FCLS_SCS_APPLMSG (was SCS_SEQ) ***");
+	ct_check((fi.caps & VMS_FCAP_CONID) != 0u,
+		 "*** ...with VMS_FCAP_CONID, so the port delivers it ***");
+	ct_check_eq_u32(fi.sca_content, 118u,
+			"the frame's own SCA content is still reported whole");
+	ct_check(vms_scs_hdr_parse_frame(frame, sizeof(frame), &sh) ==
+			 VMS_CODEC_OK &&
+		 sh.conid_remote == 0x2f53000bu,
+		 "the envelope's destination Con.ID is the client's 0x2f53000b");
+	ct_check(vms_scs_msg_body(frame, sizeof(frame), &body, &body_len) ==
+			 VMS_CODEC_OK &&
+		 body == frame + VMS_OFF_SYSAP_BODY,
+		 "the SYSAP body starts at abs 72");
+	ct_check_eq_u32(body_len, 32u,
+			"*** the SYSAP gets the 32-byte END, not the trailer ***");
+
+	/* Falsifiers: the SAME bytes under the message opcode 0x02 are not a
+	 * trailer frame (no grounded rule lets a 0x02 frame carry one), and a
+	 * 0x15 frame whose bytes past the message cannot hold a block header
+	 * is not handed a short extent. */
+	frame[55] = 0x02u;
+	ct_check_eq_u32(vms_scs_msg_extent(frame, sizeof(frame)),
+			sizeof(frame), "opcode 0x02: the message is the frame");
+	fi = classify(frame, sizeof(frame));
+	ct_check(fi.cls == VMS_FCLS_SCS_SEQ &&
+		 (fi.caps & VMS_FCAP_CONID) == 0u,
+		 "opcode 0x02 with a short inner length stays SCS_SEQ, no Con.ID");
+	frame[55] = 0x15u;
+	ct_check_eq_u32(vms_scs_msg_extent(frame, 104u + 27u), 104u + 27u,
+			"a 27-byte remainder is no block header: whole frame");
+}
+
 int main(void)
 {
 	printf("test_codec_applmsg: length-generic SCS_APPLMSG classify "
@@ -336,5 +406,6 @@ int main(void)
 	test_five_end_lengths();
 	test_190_content_still_scs_msg();
 	test_block_transfer_unaffected();
+	test_real_read_end_with_trailer();
 	return ct_summary("test_codec_applmsg");
 }

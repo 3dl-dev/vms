@@ -376,6 +376,9 @@ vms_codec_status_t vms_scs_msg_body(const uint8_t *frame, uint32_t len,
 		return VMS_CODEC_E_INVAL;
 	if (len <= SCSBODY_ABS_OFF)
 		return VMS_CODEC_E_SHORT;
+	/* rd vms-239: a READ END's body stops where its own inner length says;
+	 * the block trailer past it is the port's, never the SYSAP's. */
+	len = vms_scs_msg_extent(frame, len);
 	*body = frame + SCSBODY_ABS_OFF;
 	*body_len = len - SCSBODY_ABS_OFF;
 	return VMS_CODEC_OK;

@@ -365,7 +365,9 @@ vms_codec_status_t vms_scs_inner_frame_len(const uint8_t *frame, uint32_t len,
  * vms_scs_msg_body - point `*body` at the SYSAP's own bytes of a received
  * application message (frame-absolute 72 onward, design SS3.2.4's
  * "72-203 -> the emitting FSM/role") and set `*body_len` to how many are
- * present. VMS_CODEC_E_SHORT if the frame does not reach abs 72. No copy.
+ * present -- bounded by vms_scs_msg_extent(), so a READ END's piggybacked
+ * block trailer is not handed to the SYSAP (rd vms-239). VMS_CODEC_E_SHORT
+ * if the frame does not reach abs 72. No copy.
  */
 vms_codec_status_t vms_scs_msg_body(const uint8_t *frame, uint32_t len,
 				    const uint8_t **body, uint32_t *body_len);

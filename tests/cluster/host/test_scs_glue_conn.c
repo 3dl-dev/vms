@@ -201,6 +201,8 @@ static struct scs_sysap_ops mute_dir_ops = {
 	(void (*)(void *, vms_conid_t, uint32_t))0,
 	(void (*)(void *, vms_conid_t, uint32_t))0,
 	(const uint8_t *)0,   /* accept_conndata: this stub declares none */
+	(const uint8_t *)0,   /* connect_conndata: none either */
+	0u,                   /* connect_min_credits: no floor */
 	(void *)0
 };
 
@@ -531,6 +533,13 @@ static void test_glue_bindings(void)
 		       "... and vc_down is really in the upper ops table");
 	check_glue_has("pe_set_upper(cl->pe, &scs->upper)",
 		       "the port is really told about that table at start");
+
+	/* rd vms-239: CONNECT reads the SYSAP's own MIN_CR and connect data off
+	 * its registration (the frozen service carries neither). */
+	check_glue_has("args.min_credits = args.sysap->connect_min_credits;",
+		       "scs_connect takes MIN_CR from the SYSAP's registration");
+	check_glue_has("args.conndata = args.sysap->connect_conndata;",
+		       "... and its connect data when the caller named none");
 
 	/* The path-lost status the break is REPORTED with. */
 	check_glue_has("case SCS_CLOSE_PATHLOST: return SS__DEVOFFLINE",

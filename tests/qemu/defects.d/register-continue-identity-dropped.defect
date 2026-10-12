@@ -58,8 +58,9 @@ EOF
 
 defect_apply() {
         # UNIQUE TEXT: `proc->cur_privs  = parent->cur_privs;` (two spaces
-        # around the second `=`) occurs once, at 8-space indentation inside
-        # vms_proc_continue_identity()'s hash walk -- the UNCONDITIONAL identity/
+        # around the second `=`) occurs once, at 4-space indentation inside
+        # vms_proc_copy_identity() (shared by continuation and, rd vms-c43,
+        # creator-driven creation; formerly inline in vms_proc_continue_identity) -- the UNCONDITIONAL identity/
         # privilege copy an activated image (and a $CREPRC subprocess) inherits
         # from its activator. Zeroing the copy drops the continued/inherited
         # privilege mask at its SOURCE: the image still registers (inherited=
@@ -71,6 +72,6 @@ defect_apply() {
         # check and never touched test_syssvc_identcont -- an orphan. After this
         # substitution the `= parent->cur_privs;` text is gone, so a second apply
         # finds no match: the no-op selftest requires.
-        sed -i 's|^        proc->cur_privs  = parent->cur_privs;$|        proc->cur_privs  = 0; /* NEGCTL register-continue-identity-dropped: continued/inherited image loses the parent'"'"'s privilege mask at the copy site */|' "$_file"
+        sed -i 's|^    proc->cur_privs  = parent->cur_privs;$|    proc->cur_privs  = 0; /* NEGCTL register-continue-identity-dropped: continued/inherited image loses the parent'"'"'s privilege mask at the copy site */|' "$_file"
     :
 }

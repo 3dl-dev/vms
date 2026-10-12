@@ -12,7 +12,8 @@ defect_meta() {
         why)          cat <<'EOF'
 $CREPRC's handshake read goes back to a bare read(2), so a signal delivered to
 the CALLER through a handler without SA_RESTART returns EINTR and the service
-reads that as "the child died before reporting". This is the vms-8019 round-4
+misreads the child (since rd vms-c43 the first such read is the child's PCB
+request: the request is lost, no PCB is made, and the child reports failure). This is the vms-8019 round-4
 defect exactly, and it is not a theoretical one: DCL installs its interactive
 SIGINT/SIGQUIT handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is
 what calls $CREPRC, so a Ctrl-C in the handshake window is the production
@@ -48,7 +49,10 @@ defect_apply() {
         # round: the creation handshake's read is a bare read(2) again. It
         # changes nothing except what happens when a signal is delivered to
         # the CALLER while it waits -- which is the whole property.
-        sed -i 's|ssize_t r = creprc_read_all(namefd\[0\], \&rep, sizeof(rep));|ssize_t r = read(namefd[0], \&rep, sizeof(rep)); /* NEGCTL creprc-handshake-eintr */|' "$_file"
-
+        # rd vms-c43: the handshake's FIRST blocking read is now the creator
+        # waiting for the child's PCB request (pcbreq) -- where the signal
+        # lands. A bare read() there loses the request on EINTR, so no PCB is
+        # made and the child reports failure for a process the caller did fork.
+        sed -i 's|        if (creprc_read_all(pcbreq\[0\], \&cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) {|        if (read(pcbreq[0], \&cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) { /* NEGCTL creprc-handshake-eintr */|' "$_file"
     :
 }

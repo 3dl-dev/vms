@@ -24,3 +24,28 @@ body[28:36] is the member's incarnation. In the lab corpus, 0 of 176 real record
 The fix is the commit "the coordinator's own membership record carries its incarnation". Run 2 is the proof.
 
 Files: `r1-ovmx-first.pcap` (every 0x6007 frame on br0), `r1-ovmxe-console.log`, `r1-vax1-console.log`, `r1-vax2-console.log`.
+
+## Run 2 (artifacts `evac/int-d52c2` 5f8c04ce7)
+
+Run 2 added the PARAMS quorum and QDSKVOTES commit plus the local-incarnation fix. OVMXE's PARAMS now carried quorum 1 and QDSKVOTES 1. Its self-record still had body[28:36] = 0, and both VAXes refused it again.
+
+The cause was that `pe_incarnation()` answers SS$_NORMAL (1), and the new caller tested `== 0`. This is the E67 family. 0 bugchecks.
+
+## Run 3 (artifacts `evac/int-d52c2` with the SS$_NORMAL fix)
+
+OVMXE admitted both VAXes:
+- `system 0000000000000401 was added to the cluster`
+- `system 0000000000000402 was added`
+
+The OPCOM traffic between VAX1 and VAX2 shows they are in the same cluster.
+
+**P3 held** (CN=3 with OVMXE as founder and coordinator), as did P1, P2, P4 and P5. 0 bugchecks.
+
+The lost and re-established VC between VAX1 and VAX2 at 18:39:55 came from the SIMH ^E pauses this run took to sample VAX1's PC. They were operator-induced.
+
+### New finding, filed as rd vms-db1 (p0)
+During startup, each VAX sent OVMXE a cat-0x06 close of kind 10. Its record names the F11B$a / CACHE$cm SYSDSK1 resources. OVMXE has no grounded answer for kind 10 and withheld one: `transaction close not answered: this node holds no value for a required field`.
+
+Neither VAX reached `Username:` for more than 20 minutes. Both stayed idle at IPL 3 with live VCs, so this is a process-level hang that OVMX causes. VAX-first orders don't show it, because the VAXes finish startup before OVMXE joins.
+
+Files: `r2-*`, `r3-*` (pcaps and consoles).

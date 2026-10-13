@@ -129,7 +129,18 @@ static uint32_t tab_attr(int t)
  * Resolve a table-name argument into the ordered list of tables it denotes.
  * Returns the count (0 = no such table).
  */
-static int resolve_tables(const char *t, int out[4])
+/* rd vms-94a: LNM$SYSCLUSTER_TABLE as a TAB_CL value, or 0 when the
+ * executive holds no such table. */
+static int syscl_tab(void)
+{
+    uint32_t w = 0;
+
+    if (!vms_kif_lnm_cluster_table("LNM$SYSCLUSTER_TABLE", &w))
+        return 0;
+    return TAB_CL + (int)VMS_LNM_TBL_CLKEY(w);
+}
+
+static int resolve_tables(const char *t, int out[6])
 {
     char buf[64];
     uint32_t key = 0;
@@ -137,8 +148,19 @@ static int resolve_tables(const char *t, int out[4])
     if (!strcmp(t, "LNM$PROCESS_TABLE") || !strcmp(t, "LNM$PROCESS")) {
         out[0] = TAB_PROC; return 1;
     }
-    if (!strcmp(t, "LNM$SYSTEM_TABLE") || !strcmp(t, "LNM$SYSTEM")) {
+    if (!strcmp(t, "LNM$SYSTEM_TABLE")) {
         out[0] = TAB_SYS; return 1;
+    }
+    /* Real V7.3 (rd vms-94a lab94ag): "LNM$SYSTEM" = "LNM$SYSTEM_TABLE",
+     * "LNM$SYSCLUSTER" in LNM$SYSTEM_DIRECTORY. */
+    if (!strcmp(t, "LNM$SYSTEM")) {
+        int c = syscl_tab();
+
+        out[0] = TAB_SYS;
+        if (!c)
+            return 1;
+        out[1] = c;
+        return 2;
     }
     if (!strcmp(t, "LNM$JOB")) { out[0] = TAB_JOB; return 1; }
     if (!strcmp(t, "LNM$GROUP")) { out[0] = TAB_GROUP; return 1; }
@@ -153,8 +175,13 @@ static int resolve_tables(const char *t, int out[4])
         return 0;
     }
     if (!strcmp(t, "LNM$FILE_DEV") || !strcmp(t, "LNM$DCL_LOGICAL")) {
+        int c = syscl_tab();
+
         out[0] = TAB_PROC; out[1] = TAB_JOB; out[2] = TAB_GROUP; out[3] = TAB_SYS;
-        return 4;
+        if (!c)
+            return 4;
+        out[4] = c;            /* LNM$SYSTEM's second table (rd vms-94a) */
+        return 5;
     }
     /* rd vms-94a: the clusterwide tables, as the executive holds them. */
     {
@@ -223,8 +250,21 @@ static int dir_lookup(int dir, const char *name, int case_blind,
         if (!eq(name, "LNM$SYSTEM_TABLE") || !eq(name, jobt) || !eq(name, grpt)) {
             h->attributes = LNM$M_TABLE | LNM$M_NO_ALIAS; h->acmode = PSL$C_KERNEL;
         } else if (!eq(name, "LNM$SYSTEM")) {
-            h->acmode = PSL$C_KERNEL; h->nvals = 1;
+            /* Real V7.3: = "LNM$SYSTEM_TABLE", "LNM$SYSCLUSTER" (rd vms-94a). */
+            h->acmode = PSL$C_KERNEL; h->nvals = syscl_tab() ? 2 : 1;
             strcpy(h->vals[0], "LNM$SYSTEM_TABLE");
+            strcpy(h->vals[1], "LNM$SYSCLUSTER");
+        } else if (!eq(name, "LNM$SYSCLUSTER") && syscl_tab()) {
+            h->acmode = PSL$C_KERNEL; h->nvals = 1;
+            h->attributes = LNM$M_NO_ALIAS;
+            strcpy(h->vals[0], "LNM$SYSCLUSTER_TABLE");
+        } else if (!eq(name, "LNM$CLUSTER") && syscl_tab()) {
+            h->acmode = PSL$C_KERNEL; h->nvals = 1;
+            h->attributes = LNM$M_NO_ALIAS;
+            strcpy(h->vals[0], "LNM$CLUSTER_TABLE");
+        } else if (vms_kif_lnm_cluster_table(name, &(uint32_t){0})) {
+            /* every clusterwide table is named here, kernel, a table */
+            h->attributes = LNM$M_TABLE | LNM$M_NO_ALIAS; h->acmode = PSL$C_KERNEL;
         } else if (!eq(name, "LNM$FILE_DEV")) {
             h->acmode = PSL$C_SUPER; h->nvals = 4;
             strcpy(h->vals[0], "LNM$PROCESS"); strcpy(h->vals[1], "LNM$JOB");
@@ -413,7 +453,7 @@ uint32_t sys$crelnm(const uint32_t *attr,
     const char *vals[LNM_MAXVAL];
     uint16_t vlens[LNM_MAXVAL];
     uint32_t eattr = 0, cattr = 0;
-    int tabs[4], nt, nl;
+    int tabs[6], nt, nl;
     uint8_t nv = 0;
 
     if (dsc_text(tabnam, table, sizeof table) < 0)
@@ -468,7 +508,7 @@ uint32_t sys$dellnm(const struct dsc$descriptor_s *tabnam,
                     const uint8_t *acmode)
 {
     char table[LNM$C_TABNAMLEN + 1], name[LNM$C_NAMLENGTH + 1];
-    int tabs[4], nl;
+    int tabs[6], nl;
 
     if (dsc_text(tabnam, table, sizeof table) < 0)
         return SS$_BADPARAM;
@@ -488,7 +528,7 @@ uint32_t sys$trnlnm(const uint32_t *attr,
                     const struct item_list_3 *itmlst)
 {
     char table[LNM$C_TABNAMLEN + 1], name[LNM$C_NAMLENGTH + 1];
-    int tabs[4], nt, nl, i;
+    int tabs[6], nt, nl, i;
     uint32_t req_index = 0;
     struct lnm_hit h;
     int found = 0;

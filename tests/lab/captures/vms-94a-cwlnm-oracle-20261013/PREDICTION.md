@@ -99,3 +99,35 @@ and joins (EXPECTED_VOTES 3).
 Oracle captured on VAX1 during G (`g1-vax1-console.log`): LNM$SYSTEM is a search list,
 "LNM$SYSTEM_TABLE" then "LNM$SYSCLUSTER". LNM$SYSCLUSTER is "LNM$SYSCLUSTER_TABLE"
 [kernel,no_alias] in LNM$SYSTEM_DIRECTORY.
+
+## Demo topology (pods labdemo1, labdemo2; build lab/int-94c = this branch + vms-c1d + vms-cd8), registered before they run
+
+These runs reproduce the web demo's three nodes: two OVMX nodes and one real VAX, which is Node C.
+- Node C is the golden V7.3 VAX1 (1025).
+- OVMXA (1021) and OVMXB (1022) are x86 OVMX nodes. In the browser demo, Node B is the OVMX-VAX
+  build. The lab has no rail for that build, so this run uses x86 for B.
+- The OVMX SCSSYSTEMIDs sit below 1025 so that, as in the demo (1987/1988/1989), the real VAX
+  has the highest ID.
+- Group 1 is the lab's group. The demo uses 257.
+
+As in the demo grader, the VAX is never logged in to.
+
+**DC1, C first.** VAX1 boots conversationally with `SET EXPECTED_VOTES 1` and forms alone.
+OVMXA then joins (EXPECTED_VOTES 3), and after it OVMXB (EXPECTED_VOTES 3).
+- D1: VAX1 forms and offers `Username:`.
+- D2: when each OVMX node becomes a member, it sends one 0b/05 to VAX1 and pulls the 0b/06 it
+  gets back.
+- D3: VAX1 reads CN=3 (SHOW CLUSTER on an OVMX node lists all three) and offers `Username:` again.
+- D4: no request is left unanswered (`unans.py`), no CM dialogue from an OVMX node to VAX1
+  skips a send-msg# (`trimcm.py`), and there are 0 bugchecks.
+
+**DC2, C last.** VAX1 is held at `SYSBOOT>`. OVMXA founds alone (EXPECTED_VOTES 1) and OVMXB
+joins (EXPECTED_VOTES 3). Then VAX1 continues with the golden parameters.
+- L1: VAX1 joins the cluster the OVMX nodes formed, without forming its own, reaches CN=3 and
+  offers `Username:`.
+- L2: VAX1's 0b/01 to each OVMX node is answered 8b/01, with [28:32] and [36:40] = 1, because
+  both became members first.
+- L3: VAX1 sends no 0b/05 to an OVMX node. This is grounded on F3: in an OVMX-first cluster,
+  the first VAX to join sent none. If it does send one, OVMX has no answer for it yet, and L1
+  fails on a startup hang.
+- L4: as D4.

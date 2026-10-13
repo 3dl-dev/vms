@@ -37,4 +37,9 @@ kubectl -n ovmx-lab cp "$HERE/ovmx_fire_node.sh" "$POD:/lab/run-evac/ovmx_fire_n
 kubectl -n ovmx-lab cp "$HERE/ovmx_evnode.sh" "$POD:/lab/run-evac/ovmx_evnode.sh" || exit 1
 # OVMX_FIRE_EXPVOTES: OVMXE's EXPECTED_VOTES (default 3). 1 lets OVMXE found a
 # cluster alone before any VAX boots (the OVMX-first order, rd vms-d52c).
-exec kubectl -n ovmx-lab exec "$POD" -- bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG" "${OVMX_FIRE_EXPVOTES:-3}"
+# OVMX_NODE / OVMX_SYSID / OVMX_MAC / OVMX_TAP / OVMX_NOCAP boot a second OVMX
+# node in the same pod (the demo topology, rd vms-94a); see ovmx_fire_node.sh.
+exec kubectl -n ovmx-lab exec "$POD" -- env OVMX_NODE="${OVMX_NODE:-OVMXE}" \
+	OVMX_SYSID="${OVMX_SYSID:-1030}" OVMX_MAC="${OVMX_MAC:-52:54:00:00:e5:01}" \
+	OVMX_TAP="${OVMX_TAP:-tap3}" OVMX_NOCAP="${OVMX_NOCAP:-0}" \
+	bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG" "${OVMX_FIRE_EXPVOTES:-3}"

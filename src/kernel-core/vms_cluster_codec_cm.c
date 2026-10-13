@@ -1415,6 +1415,13 @@ static const struct vms_wire_allow_entry g_cm_allow_rows[] = {
 	  "tests/lab/captures/vms-52d-0b01-oracle-20261013: 31 real pairs, "
 	  "verbatim echo + body[28:32] = body[36:40] = answerer-is-older" },
 
+	/* cat 0x0b op 0x04: a clusterwide logical-name operation, answered
+	 * after the record is pulled and applied (rd vms-94a). */
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_0B, VMS_CM_OP_0B_LNM,
+	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_LNM_ANSWER,
+	  "tests/lab/captures/vms-94a-cwlnm-oracle-20261013: pulled, applied, "
+	  "then 0x8b/0x04 with the txn/token, zero elsewhere" },
+
 	/* cat 0x06: closes the transaction (sec 4(p)/(q)). */
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE,
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_CLOSE,
@@ -1806,5 +1813,246 @@ vms_codec_status_t vms_cm_params_quorum_put(uint8_t *body, uint32_t cap,
 	cm_put_le_n(body, VMS_OFB_CM_PQUORUM,
 		    (uint64_t)(((uint32_t)expected_votes + 2u) / 2u), 2u);
 	cm_put_le_n(body, VMS_OFB_CM_QDSKVOTES, (uint64_t)qdskvotes, 2u);
+	return VMS_CODEC_OK;
+}
+
+/* ==========================================================================
+ * rd vms-94a -- the clusterwide logical-name operation (cat 0x0b op 0x04).
+ * The layout and its grounding are in vms_cluster_codec_cm.h.
+ * ========================================================================== */
+
+vms_codec_status_t vms_cm_lnm_desc_parse(const uint8_t *req_body,
+					 uint32_t req_len,
+					 struct vms_cm_xfer_desc *out)
+{
+	struct vms_cm_envelope env;
+	vms_wire_view_t v;
+	vms_codec_status_t st;
+
+	if (req_body == (const uint8_t *)0 ||
+	    out == (struct vms_cm_xfer_desc *)0)
+		return VMS_CODEC_E_INVAL;
+	out->name = out->conid = out->len = 0u;
+	out->kind = 0u;
+	st = vms_cm_envelope_parse(req_body, req_len, &env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = cm_recipe_allowed(&env, VMS_CM_RECIPE_LNM_ANSWER);
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (req_len < VMS_OFB_CM_LNM_LEN + 4u)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	out->name = vms_wire_get_le32(&v, VMS_OFB_CM_XFER_NAME);
+	out->conid = vms_wire_get_le32(&v, VMS_OFB_CM_XFER_CONID);
+	out->len = vms_wire_get_le32(&v, VMS_OFB_CM_LNM_LEN);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (out->name == 0u || out->conid == 0u || out->len == 0u)
+		return VMS_CODEC_E_CLASS;
+	return VMS_CODEC_OK;
+}
+
+static uint32_t lnm_u32(const uint8_t *r, uint32_t o)
+{
+	return (uint32_t)r[o] | (uint32_t)r[o + 1u] << 8 |
+	       (uint32_t)r[o + 2u] << 16 | (uint32_t)r[o + 3u] << 24;
+}
+
+static uint16_t lnm_u16(const uint8_t *r, uint32_t o)
+{
+	return (uint16_t)(r[o] | r[o + 1u] << 8);
+}
+
+/* A B-relative pointer -> a record offset with `need` bytes behind it. */
+static int lnm_off(uint32_t base, uint32_t ptr, uint32_t need, uint32_t len,
+		   uint32_t *off)
+{
+	uint32_t o;
+
+	if (ptr < base)
+		return 0;
+	o = ptr - base;
+	if (o > len || need > len - o)
+		return 0;
+	*off = o;
+	return 1;
+}
+
+/* Copy `n` bytes at record offset `o` into s, 1..255 bytes. */
+static int lnm_str(const uint8_t *r, uint32_t len, uint32_t o, uint32_t n,
+		   struct vms_cm_lnm_str *s)
+{
+	uint32_t i;
+
+	if (n == 0u || n > VMS_CM_LNM_MAX_STR || o > len || n > len - o)
+		return 0;
+	for (i = 0; i < n; i++)
+		s->s[i] = (char)r[o + i];
+	s->s[n] = '\0';
+	s->len = (uint16_t)n;
+	return 1;
+}
+
+/* A descriptor argument {u32 length, u32 pointer} at B-relative `ptr`. */
+static int lnm_desc(const uint8_t *r, uint32_t len, uint32_t base,
+		    uint32_t ptr, struct vms_cm_lnm_str *s)
+{
+	uint32_t o, so;
+
+	if (!lnm_off(base, ptr, 8u, len, &o))
+		return 0;
+	if (!lnm_off(base, lnm_u32(r, o + 4u), 1u, len, &so))
+		return 0;
+	return lnm_str(r, len, so, lnm_u32(r, o), s);
+}
+
+/* A longword value argument at B-relative `ptr`. */
+static int lnm_val(const uint8_t *r, uint32_t len, uint32_t base,
+		   uint32_t ptr, uint32_t *v)
+{
+	uint32_t o;
+
+	if (!lnm_off(base, ptr, 4u, len, &o))
+		return 0;
+	*v = lnm_u32(r, o);
+	return 1;
+}
+
+vms_codec_status_t vms_cm_lnm_rec_parse(const uint8_t *rec, uint32_t len,
+					struct vms_cm_lnm_op *out)
+{
+	uint32_t fn, base, n, i, want, p[9], v;
+
+	if (rec == (const uint8_t *)0 || out == (struct vms_cm_lnm_op *)0)
+		return VMS_CODEC_E_INVAL;
+	for (i = 0; i < (uint32_t)sizeof(*out); i++)
+		((uint8_t *)out)[i] = 0u;
+	if (len < 12u)
+		return VMS_CODEC_E_SHORT;
+	if (lnm_u16(rec, 0) != len)
+		return VMS_CODEC_E_CLASS;   /* the record states its own length */
+	fn = lnm_u16(rec, 2);
+	base = lnm_u32(rec, 4);
+	n = lnm_u32(rec, 8);
+	switch (fn) {
+	case VMS_CM_LNM_FN_CRELNM: want = 5u; break;
+	case VMS_CM_LNM_FN_CRELNT: want = 9u; break;
+	case VMS_CM_LNM_FN_DELLNM: want = 3u; break;
+	default: return VMS_CODEC_E_CLASS;
+	}
+	if (n != want || len < 12u + 4u * n)
+		return VMS_CODEC_E_CLASS;
+	for (i = 0; i < n; i++)
+		p[i] = lnm_u32(rec, 12u + 4u * i);
+	out->fn = (uint8_t)fn;
+
+	if (fn == VMS_CM_LNM_FN_DELLNM) {
+		if (!lnm_desc(rec, len, base, p[0], &out->table) ||
+		    !lnm_val(rec, len, base, p[2], &v) || v > 3u)
+			return VMS_CODEC_E_RANGE;
+		out->acmode = (uint8_t)v;
+		if (p[1] != 0u) {
+			if (!lnm_desc(rec, len, base, p[1], &out->name))
+				return VMS_CODEC_E_RANGE;
+			out->has_name = 1u;
+		}
+		return VMS_CODEC_OK;
+	}
+	if (fn == VMS_CM_LNM_FN_CRELNT) {
+		if ((p[0] != 0u && !lnm_val(rec, len, base, p[0], &out->attr)) ||
+		    (p[3] != 0u && !lnm_val(rec, len, base, p[3], &out->quota)) ||
+		    !lnm_desc(rec, len, base, p[5], &out->table) ||
+		    !lnm_desc(rec, len, base, p[6], &out->parent) ||
+		    !lnm_val(rec, len, base, p[7], &v) || v > 3u)
+			return VMS_CODEC_E_RANGE;
+		out->acmode = (uint8_t)v;
+		if (p[4] != 0u) {
+			if (!lnm_val(rec, len, base, p[4], &out->promsk))
+				return VMS_CODEC_E_RANGE;
+			out->has_promsk = 1u;
+		}
+		return VMS_CODEC_OK;
+	}
+
+	/* $CRELNM */
+	if ((p[0] != 0u && !lnm_val(rec, len, base, p[0], &out->attr)) ||
+	    !lnm_desc(rec, len, base, p[1], &out->table) ||
+	    !lnm_desc(rec, len, base, p[2], &out->name) ||
+	    !lnm_val(rec, len, base, p[3], &v) || v > 3u)
+		return VMS_CODEC_E_RANGE;
+	out->acmode = (uint8_t)v;
+	out->has_name = 1u;
+	if (p[4] != 0u) {
+		uint32_t o, cur = 0u;
+
+		if (!lnm_off(base, p[4], 4u, len, &o))
+			return VMS_CODEC_E_RANGE;
+		for (;;) {
+			uint16_t bl, code;
+			uint32_t bo;
+
+			if (o > len || len - o < 4u)
+				return VMS_CODEC_E_RANGE;
+			if (lnm_u32(rec, o) == 0u)
+				break;          /* the terminating longword */
+			if (len - o < 12u)
+				return VMS_CODEC_E_RANGE;
+			bl = lnm_u16(rec, o);
+			code = lnm_u16(rec, o + 2u);
+			if (code == VMS_CM_LNM_ITEM_ATTR) {
+				if (bl != 4u ||
+				    !lnm_val(rec, len, base,
+					     lnm_u32(rec, o + 4u), &cur))
+					return VMS_CODEC_E_RANGE;
+			} else if (code == VMS_CM_LNM_ITEM_STRING) {
+				struct vms_cm_lnm_str *e;
+
+				if (out->n_equiv >= VMS_CM_LNM_MAX_EQUIV ||
+				    !lnm_off(base, lnm_u32(rec, o + 4u), bl,
+					     len, &bo))
+					return VMS_CODEC_E_RANGE;
+				e = &out->equiv[out->n_equiv];
+				if (!lnm_str(rec, len, bo, bl, e))
+					return VMS_CODEC_E_RANGE;
+				e->attr = cur;
+				out->n_equiv++;
+			} else {
+				return VMS_CODEC_E_CLASS;   /* not measured */
+			}
+			o += 12u;
+		}
+	}
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_lnm_answer_build(const uint8_t *req_body,
+					   uint32_t req_len,
+					   uint8_t *out_body, uint32_t cap,
+					   uint32_t *written)
+{
+	struct vms_cm_envelope req_env;
+	vms_codec_status_t st;
+	uint32_t i;
+
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_LNM_ANSWER);
+	if (st != VMS_CODEC_OK)
+		return st;
+	for (i = 0; i < VMS_CM_BODY_LEN; i++)
+		out_body[i] = 0u;
+	for (i = VMS_OFB_CM_TXN; i < VMS_OFB_CM_TXN + 4u; i++)
+		out_body[i] = req_body[i];          /* txn + token */
+	out_body[VMS_OFB_CM_CATEGORY] =
+		vms_wire_response_category(req_env.category);
+	out_body[VMS_OFB_CM_OPCODE] = req_env.opcode;
+	if (written != (uint32_t *)0)
+		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }

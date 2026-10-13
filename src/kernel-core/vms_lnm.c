@@ -86,7 +86,8 @@ int vms_lnm_init(void)
 
     pr_info("vms: logical-name arena ready (%u entries, %u bytes)\n",
             lnm_arena->max_entries, lnm_arena->arena_size);
-    return 0;
+    /* rd vms-94a: LNM$CLUSTER_TABLE and LNM$SYSCLUSTER_TABLE. */
+    return vms_lnm_cluster_init();
 }
 
 void vms_lnm_cleanup(void)
@@ -611,4 +612,225 @@ long vms_ioctl_lnm_getscope(struct vms_proc *proc, unsigned long arg)
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
+}
+
+/* ==========================================================================
+ * CLUSTERWIDE LOGICAL NAMES (rd vms-94a)
+ *
+ * The clusterwide tables are LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE (the
+ * table LNM$SYSCLUSTER names) and any table a member creates under them. A
+ * member that changes one sends the change to every other member, and each
+ * applies it to its own copy (vms_cluster_codec_cm.h, cat 0x0b op 0x04). These
+ * functions are that apply, for this node's executive.
+ *
+ * OVMX LAYOUT (Rule 8, the same terms as the rest of this arena): a
+ * clusterwide TABLE is an entry in VMS_LNM_TBL_CLUSTER_DIR whose scope_key is
+ * the table's id, equiv[0] its parent's name, acmode its access mode,
+ * attributes LNM_ATTR_TABLE plus the $CRELNT attr, and pad the protection
+ * mask. A NAME in a clusterwide table is an entry in VMS_LNM_TBL_CLUSTER keyed
+ * by that id. Each equivalence keeps its own translation attributes
+ * (CONCEALED, TERMINAL) in equiv[i].pad as bits 8..15 of LNM$_ATTRIBUTES. The
+ * entry's own attributes are the name attributes plus equiv[0]'s, which is
+ * what the existing single-attribute readers expect.
+ *
+ * The two built-in tables exist from vms_lnm_cluster_init() on. That is a
+ * fact about this node's executive, not about any cluster: a VMS node has
+ * them whether or not it is a member.
+ * ========================================================================== */
+
+#define LNM_CL_ATTR_TABLE   0x08u                /* LNM$M_TABLE           */
+#define LNM_CL_TRANS_MASK   0x0000ff00u          /* CONCEALED, TERMINAL   */
+
+static struct vms_lnm_entry *lnm_cl_table(const char *tab)
+{
+    uint32_t i;
+
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+            strcmp(e->name, tab) == 0)
+            return e;
+    }
+    return NULL;
+}
+
+static uint32_t lnm_cl_next_id(void)
+{
+    uint32_t i, id = 0;
+
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        const struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+            e->scope_key > id)
+            id = e->scope_key;
+    }
+    return id + 1u;
+}
+
+static void lnm_cl_copy(char *dst, const char *src, uint32_t max)
+{
+    uint32_t n = (uint32_t)strnlen(src, max);
+
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+/* Caller holds lnm_write_lock inside a write section. */
+static uint32_t lnm_cl_create_table(const char *tab, const char *parent,
+                                    uint32_t attr, uint8_t acmode,
+                                    uint32_t promsk)
+{
+    struct vms_lnm_entry *e;
+
+    e = lnm_alloc_slot();
+    if (!e)
+        return SS__EXLNMQUOTA;
+    memset(e, 0, sizeof(*e));
+    e->table = VMS_LNM_TBL_CLUSTER_DIR;
+    e->scope_key = lnm_cl_next_id();
+    e->attributes = LNM_CL_ATTR_TABLE | attr;
+    e->acmode = acmode;
+    e->pad = promsk;
+    lnm_cl_copy(e->name, tab, VMS_LNM_MAX_NAME);
+    e->name_length = (uint16_t)strnlen(e->name, VMS_LNM_MAX_NAME);
+    if (parent) {
+        lnm_cl_copy(e->equiv[0].value, parent, VMS_LNM_MAX_VALUE);
+        e->equiv[0].length = (uint16_t)strnlen(e->equiv[0].value,
+                                               VMS_LNM_MAX_VALUE);
+        e->num_equiv = 1;
+    }
+    e->in_use = 1;
+    lnm_arena->entry_count++;
+    return SS__NORMAL;
+}
+
+int vms_lnm_cluster_init(void)
+{
+    uint32_t st;
+
+    if (!lnm_arena)
+        return -ENOMEM;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    st = SS__NORMAL;
+    if (!lnm_cl_table("LNM$CLUSTER_TABLE"))
+        st = lnm_cl_create_table("LNM$CLUSTER_TABLE", "LNM$SYSTEM_DIRECTORY",
+                                 0, PSL_C_KERNEL, 0);
+    if ((st & 1u) && !lnm_cl_table("LNM$SYSCLUSTER_TABLE"))
+        st = lnm_cl_create_table("LNM$SYSCLUSTER_TABLE", "LNM$CLUSTER_TABLE",
+                                 0, PSL_C_KERNEL, 0);
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+    return (st & 1u) ? 0 : -ENOMEM;
+}
+
+uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
+                                uint32_t attr, uint8_t acmode, uint32_t promsk)
+{
+    uint32_t st;
+
+    if (!lnm_arena || !tab || !tab[0] || !parent || acmode > PSL_C_USER)
+        return SS__BADPARAM;
+    exec_lock(&lnm_write_lock);
+    if (lnm_cl_table(tab)) {
+        /* Already there: the member's CREATE_IF finds it too. */
+        exec_unlock(&lnm_write_lock);
+        return SS__NORMAL;
+    }
+    if (!lnm_cl_table(parent)) {
+        exec_unlock(&lnm_write_lock);
+        return SS__NOLOGTAB;
+    }
+    lnm_write_begin();
+    st = lnm_cl_create_table(tab, parent, attr, acmode, promsk);
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+    return st;
+}
+
+uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
+                                uint32_t attr, uint8_t acmode, uint8_t nequiv,
+                                const struct vms_lnm_equiv *eq)
+{
+    struct vms_lnm_entry *t, *e;
+    uint32_t key, st = SS__NORMAL;
+    uint8_t i;
+
+    if (!lnm_arena || !tab || !name || !name[0] || acmode > PSL_C_USER ||
+        nequiv > VMS_LNM_MAX_EQUIV || (nequiv && !eq))
+        return SS__BADPARAM;
+    exec_lock(&lnm_write_lock);
+    t = lnm_cl_table(tab);
+    if (!t) {
+        exec_unlock(&lnm_write_lock);
+        return SS__NOLOGTAB;
+    }
+    key = t->scope_key;
+    e = lnm_find(VMS_LNM_TBL_CLUSTER, key, name, acmode);
+    if (e) {
+        st = SS__SUPERSEDE;
+    } else {
+        e = lnm_alloc_slot();
+        if (!e) {
+            exec_unlock(&lnm_write_lock);
+            return SS__EXLNMQUOTA;
+        }
+    }
+    lnm_write_begin();
+    if (st != SS__SUPERSEDE) {
+        memset(e, 0, sizeof(*e));
+        e->table = VMS_LNM_TBL_CLUSTER;
+        e->scope_key = key;
+        lnm_cl_copy(e->name, name, VMS_LNM_MAX_NAME);
+        e->name_length = (uint16_t)strnlen(e->name, VMS_LNM_MAX_NAME);
+        e->in_use = 1;
+        lnm_arena->entry_count++;
+    }
+    e->acmode = acmode;
+    e->num_equiv = nequiv;
+    memset(e->equiv, 0, sizeof(e->equiv));
+    for (i = 0; i < nequiv; i++) {
+        e->equiv[i] = eq[i];
+        e->equiv[i].index = i;
+        e->equiv[i].value[VMS_LNM_MAX_VALUE] = '\0';
+    }
+    e->attributes = (attr & ~LNM_CL_TRANS_MASK) |
+                    (nequiv ? ((uint32_t)eq[0].pad << 8) : 0u);
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+    return st;
+}
+
+uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
+                                uint8_t acmode)
+{
+    struct vms_lnm_entry *t;
+    uint32_t key, i, n = 0;
+
+    if (!lnm_arena || !tab || acmode > PSL_C_USER)
+        return SS__BADPARAM;
+    exec_lock(&lnm_write_lock);
+    t = lnm_cl_table(tab);
+    if (!t) {
+        exec_unlock(&lnm_write_lock);
+        return SS__NOLOGTAB;
+    }
+    key = t->scope_key;
+    lnm_write_begin();
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (!e->in_use || e->table != VMS_LNM_TBL_CLUSTER ||
+            e->scope_key != key || e->acmode < acmode)
+            continue;
+        if (name && strcmp(e->name, name) != 0)
+            continue;
+        lnm_free_entry(e);
+        n++;
+    }
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+    return (n || !name) ? SS__NORMAL : SS__NOLOGNAM;
 }

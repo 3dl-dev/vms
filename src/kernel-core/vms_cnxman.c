@@ -417,6 +417,10 @@ struct vms_cnxman {
 
 	uint32_t dlm_frames_rx;        /* cat-0x02 bodies routed to the arm  */
 	uint32_t dlm_replies_sent;     /* answers the arm produced, sent     */
+	/* rd vms-94a: the equivalence strings of one propagated $CRELNM, in
+	 * the executive's own form. In the context: this runs on a kernel
+	 * stack and the array is ~2 KB. */
+	struct vms_lnm_equiv lnm_eq[VMS_LNM_MAX_EQUIV];
 	uint32_t q0b01_answered;       /* rd vms-52d: 0x8b/0x01 answers sent */
 	uint32_t q0b01_declined;       /* ...requests left unanswered        */
 	uint32_t sends_rolled_back;    /* rd vms-cd8: refused, number returned */
@@ -1023,6 +1027,47 @@ static int cnxman_jop_device_present(void *ctx, const uint8_t *name,
 	return vms_devtab_name_present(name, len);
 }
 
+/*
+ * rd vms-94a: apply one propagated clusterwide logical-name operation to this
+ * node's executive tables (vms_lnm.c). A $DELLNM of a name this node does not
+ * hold leaves the table exactly as the record says it should be, so its
+ * NOLOGNAM is reported as done. Every other even status is returned, and the
+ * operation goes unanswered.
+ */
+static uint32_t cnxman_jop_lnm_apply(void *ctx, const struct vms_cm_lnm_op *op)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	uint32_t st, i;
+
+	switch (op->fn) {
+	case VMS_CM_LNM_FN_CRELNT:
+		return vms_lnm_cluster_crelnt(op->table.s, op->parent.s,
+					      op->attr, op->acmode,
+					      op->has_promsk ? op->promsk : 0u);
+	case VMS_CM_LNM_FN_DELLNM:
+		st = vms_lnm_cluster_dellnm(op->table.s,
+					    op->has_name ? op->name.s : NULL,
+					    op->acmode);
+		return st == SS__NOLOGNAM ? SS__NORMAL : st;
+	case VMS_CM_LNM_FN_CRELNM:
+		if (op->n_equiv > VMS_LNM_MAX_EQUIV)
+			return SS__BADPARAM;
+		memset(cn->lnm_eq, 0, sizeof(cn->lnm_eq));
+		for (i = 0; i < op->n_equiv; i++) {
+			cn->lnm_eq[i].length = op->equiv[i].len;
+			cn->lnm_eq[i].pad =
+				(uint8_t)((op->equiv[i].attr >> 8) & 0xffu);
+			memcpy(cn->lnm_eq[i].value, op->equiv[i].s,
+			       op->equiv[i].len);
+		}
+		return vms_lnm_cluster_crelnm(op->table.s, op->name.s, op->attr,
+					      op->acmode, op->n_equiv,
+					      cn->lnm_eq);
+	default:
+		return SS__BADPARAM;
+	}
+}
+
 /* SCS block-consumer thunks: the fan-out is exact, so a name that is not one
  * of the join's own is ignored inside cnxman_join_blk_*. */
 static void cnxman_blk_data_cb(void *ctx, uint32_t name, uint32_t offset,
@@ -1054,6 +1099,7 @@ static void cnxman_jops_bind(struct vms_cnxman *cn)
 	cn->jops.blk_request = cnxman_jop_blk_request;
 	cn->jops.blk_send = cnxman_jop_blk_send;
 	cn->jops.device_present = cnxman_jop_device_present;
+	cn->jops.lnm_apply = cnxman_jop_lnm_apply;
 }
 
 /* ==========================================================================
@@ -2093,6 +2139,11 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	}
 
 	if (env_ok && cnxman_0b01_rx(cn, &env, body, len, csb) != 0) {
+		cnxman_notify_membership_changes(cn, before);
+		return 0;
+	}
+	/* rd vms-94a: a member's clusterwide logical-name operation. */
+	if (env_ok && cnxman_join_rx_lnm(&cn->join, body, len, from_csb) != 0) {
 		cnxman_notify_membership_changes(cn, before);
 		return 0;
 	}

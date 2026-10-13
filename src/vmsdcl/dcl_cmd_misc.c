@@ -2312,6 +2312,7 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
     int privileged = 1;
     int applied = 0;
     const char *why = "";
+    int apply_failed = 0;
     {
         uint32_t st = SS$_UNSUPPORTED;
         int err = 0;
@@ -2351,6 +2352,9 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
             }
         } else {
             printf("%%TCPIP-E-ROUTEERR, could not add route: %s\n", strerror(err));
+            privileged = 0;            /* report as not applied, below */
+            apply_failed = 1;
+            why = strerror(err);
         }
     }
 
@@ -2394,7 +2398,7 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         else
             printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s) and "
                    "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n", why);
-        return SS$_NOPRIV;
+        return apply_failed ? SS$_ABORT : SS$_NOPRIV;
     }
     return SS$_ABORT;                   /* privileged, but the substrate apply failed */
 }

@@ -374,6 +374,7 @@
  */
 #define SS__SUPERSEDE   1585
 #define SS__NOLOGNAM    444
+#define SS__NOLOGTAB    8852        /* SS$_NOLOGTAB (src/libvms/include/ssdef.h) */
 #define SS__EXLNMQUOTA  8780        /* oracle-pinned lab-1 F$MESSAGE (design §4.2, vms-556) */
 
 /*
@@ -1862,6 +1863,16 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
 /* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
  * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
 void vms_lnm_forget_device(const char *devnam);
+/* rd vms-94a: the clusterwide tables (vms_lnm.c). Each applies one $CRELNT,
+ * $CRELNM or $DELLNM a cluster member propagated, and returns its VMS status. */
+int vms_lnm_cluster_init(void);
+uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
+                                uint32_t attr, uint8_t acmode, uint32_t promsk);
+uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
+                                uint32_t attr, uint8_t acmode, uint8_t nequiv,
+                                const struct vms_lnm_equiv *eq);
+uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
+                                uint8_t acmode);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 

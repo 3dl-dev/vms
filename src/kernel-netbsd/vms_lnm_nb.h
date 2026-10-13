@@ -100,6 +100,16 @@
  */
 #define VMS_LNM_TBL_PROCESS 4
 
+/*
+ * The CLUSTERWIDE tables (rd vms-94a). VMS_LNM_TBL_CLUSTER holds the names,
+ * keyed by their table's id; VMS_LNM_TBL_CLUSTER_DIR holds one entry per
+ * clusterwide table (LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE and every table
+ * a member creates under them), whose scope_key IS that id. The executive
+ * applies the changes members propagate (vms_lnm_cluster_*). OVMX layout.
+ */
+#define VMS_LNM_TBL_CLUSTER     5
+#define VMS_LNM_TBL_CLUSTER_DIR 6
+
 #define VMS_LNM_MAX_NAME    255     /* == LNM_MAX_NAME (vms/logical.h) */
 #define VMS_LNM_MAX_VALUE   255     /* == LNM_MAX_VALUE */
 #define VMS_LNM_MAX_EQUIV   8       /* inline equivalence strings per entry */

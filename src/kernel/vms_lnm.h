@@ -68,6 +68,16 @@
 #define VMS_LNM_TBL_PROCESS 4
 
 /*
+ * The CLUSTERWIDE tables (rd vms-94a). VMS_LNM_TBL_CLUSTER holds the names,
+ * keyed by their table's id; VMS_LNM_TBL_CLUSTER_DIR holds one entry per
+ * clusterwide table (LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE and every table
+ * a member creates under them), whose scope_key IS that id. The executive
+ * applies the changes members propagate (vms_lnm_cluster_*). OVMX layout.
+ */
+#define VMS_LNM_TBL_CLUSTER     5
+#define VMS_LNM_TBL_CLUSTER_DIR 6
+
+/*
  * Sizing. OVMX design choices (Rule 8) -- these are OVMX limits, not VMS
  * values. Real VMS sizes its logical-name hash tables from SYSGEN
  * parameters (LNMSHASHTBL class -- names pending operator sign-off, design

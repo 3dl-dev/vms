@@ -112,3 +112,5 @@ d3d032bbc67e1e40d52bd96926c58cd40b7affe2d2565f4dcffec1a6700ee3a7  tests/lab/capt
 c2791dd6f49617e07957dffbe69920dc1f08172f0071f8a254952e7cb449223f  tests/lab/captures/vms-52d-0b01-oracle-20261013/armB-cm.pcap
 e106bcd28691e583af11a4c730fa9997db867d912e0159cc28802dd054b7f84d  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-cat0b.pcap
 618971f8aa9451f8db14dc7295a9891999259c04d58e582ee4e9164fa1eff2c8  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-ds3-cat0b.pcap
+780d0b8330ea5c433f82bc2a6936db59b0ccf96a1aeab34dc4db0983b7fca9ba  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/lnm1-cwlnm.pcap
+63c9bb3643a459b4ffac18fd0e5cb05835380faaadc714f1f03cfa4189482de8  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/armB-cwlnm.pcap

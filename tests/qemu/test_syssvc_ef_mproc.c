@@ -88,6 +88,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 #define PEER_TIMEOUT_MS 20000
@@ -474,7 +475,7 @@ int main(void)
         return 1;
     }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) {
         printf("  FAIL: fork() failed\n");
         return 1;
@@ -709,7 +710,7 @@ int main(void)
         if (pipe(w2p) < 0) {
             printf("  FAIL: parent: pipe() for the waiter failed\n");
             fail++;
-        } else if ((wpid = fork()) < 0) {
+        } else if ((wpid = ovmx_fork_subprocess()) < 0) {
             printf("  FAIL: parent: fork() for the waiter failed\n");
             fail++;
         } else if (wpid == 0) {
@@ -839,7 +840,7 @@ int main(void)
         if (pipe(c2p2) < 0) {
             printf("  FAIL: parent: pipe() for the wfland child failed\n");
             fail++;
-        } else if ((cpid = fork()) < 0) {
+        } else if ((cpid = ovmx_fork_subprocess()) < 0) {
             printf("  FAIL: parent: fork() for the wfland child failed\n");
             fail++;
             close(c2p2[0]);

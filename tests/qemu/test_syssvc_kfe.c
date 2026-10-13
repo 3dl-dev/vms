@@ -24,6 +24,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -175,7 +176,7 @@ int main(int argc, char **argv)
         check(seen, "INSTALL LIST walks the list and finds the entry");
     }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_unprivileged(UNPRIV_GID, UNPRIV_UID);
     if (pid == 0) {
         if (setgid(UNPRIV_GID) != 0 || setuid(UNPRIV_UID) != 0)
             _exit(3);

@@ -81,6 +81,7 @@
 #include "iosbdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -291,7 +292,7 @@ int main(int argc, char **argv)
     /* Launch the shipped DCL.EXE as the driven subprocess. Plain invocation
      * (no -c, no script) so it takes the persistent-REPL path where dcl_mbx.c
      * binds SYS$INPUT/SYS$OUTPUT to the mailboxes we published. */
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
     if (pid == 0) {
         /* Child = the shipped DCL. It shares nothing with us but the two

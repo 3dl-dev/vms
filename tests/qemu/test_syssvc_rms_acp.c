@@ -55,6 +55,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "rms/rms.h"
 #include "rms/nam.h"
 #include "rms/rab.h"
@@ -455,7 +456,7 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     if (pipe(in_pipe) < 0) return -1;
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
     fflush(NULL);
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) return -1;
     if (pid == 0) {
         dup2(in_pipe[0], STDIN_FILENO);
@@ -647,12 +648,12 @@ int main(void)
         int pp[2];
         uint32_t rep[2] = { 0, 0 };
         if (pipe(pp) == 0) {
-            pid_t k = fork();
+            pid_t k = ovmx_fork_continue();   /* the suite's image task, as DCL makes one (rd vms-e50) */
             if (k == 0) {
                 close(pp[0]);
                 uint32_t r[2] = { 0, 0 };
                 vms_kif_close();
-                if (vms_kif_open() >= 0 && (vms_kif_register_continue() & 1)) {
+                if (vms_kif_open() >= 0 && (ovmx_test_self(NULL) & 1)) {
                     char cd[256] = "";
                     r[0] = ((vms_kif_ddir(NULL, cd, sizeof cd) & 1) && strcmp(cd, dd) == 0);
                     struct FAB f2 = cc$rms_fab;

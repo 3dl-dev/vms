@@ -75,6 +75,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -187,7 +188,7 @@ static int run_dcl(const char *cmdline, const char *bind, char *out, size_t outs
         return -1;
     }
 
-    pid = fork();
+    pid = ovmx_fork_subprocess();
     if (pid == 0) {
         int devnull;
 
@@ -461,7 +462,7 @@ int main(void)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();
     if (child == 0) {
         close(pipefd[0]);
         close(stopfd[1]);

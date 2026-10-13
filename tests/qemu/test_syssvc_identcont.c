@@ -254,7 +254,7 @@ int main(void)
         if (pipe(relay) < 0) {
             CHECK(0, "B: pipe()");
         } else {
-            pid_t p = fork();
+            pid_t p = ovmx_fork_subprocess();   /* a process this suite creates */
             if (p < 0) {
                 CHECK(0, "B: fork()");
                 close(relay[0]); close(relay[1]);

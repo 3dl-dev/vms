@@ -1023,10 +1023,10 @@ int main(void)
         CHECK(n7 == 1, "exactly one created process is announced");
 
         /* Read by the announced PID: a process name is scoped to its own UIC
-         * group (300), and this suite (SYSTEM) holds WORLD for the read. */
+         * group (octal 300), and this suite (SYSTEM) holds WORLD for the read. */
         memset(&info, 0, sizeof(info));
         st = vms_kif_getjpi_pid(pid7, &info);
-        CHECK(st == SS$_NORMAL && info.uic == ((300u << 16) | 1u) &&
+        CHECK(st == SS$_NORMAL && info.uic == ((0300u << 16) | 1u) &&
               strcmp(info.prcnam, UIC_NAME) == 0,
               "the created process holds UIC [300,1] and its name in the executive");
         if (st == SS$_NORMAL && info.linux_pid)

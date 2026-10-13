@@ -125,3 +125,55 @@ poker, so the tree moves), and start VAX3's held-NL cached requester only once t
 naming F7ROOT has been seen. Its requests will then go to the cached master VAX2. Then drive
 the tree back to VAX1 with VAX1 mode-B activity while VAX2 releases its locks, so that
 VAX3's cached requests race the second move.
+
+## Run 4, registered 2026-10-13 before it runs: the last arm (time-boxed by the conductor)
+
+Same pod layout: VAX1, VAX2 and VAX3 on the golden 3-node volume. Fresh capture `f7r4`.
+
+1. **Move the tree to VAX2**, exactly as run 2 did. VAX1 runs `RMH 110-F7ROOT`. VAX3 runs
+   the paced fresh-lookup poker (`RMP 1F7ROOT` with `WAIT 0:0:2`). VAX2 runs `RMH 114BF7ROOT`.
+   Wait until a 02/14 naming F7ROOT is on the wire (VAX2 -> VAX1), at most 5 min.
+2. **Switch VAX3 to the cached requester.** Stop VAX3's poker and stop VAX1's holder. VAX3
+   starts `@CACHE` with `RMC 1F7ROOT` and `WAIT 0:0:3`. Its held NL lock caches VAX2 as master.
+3. **Drive the tree back.** Stop VAX2's holder, so the master holds no own lock (RA2's
+   condition). VAX1 runs `RMH 114BF7ROOT`. Wait up to 5 min for a 02/14 naming F7ROOT from
+   VAX1, or for any 0xf7.
+
+- F1: at least one 82/01 with body[34] = 0xf7 from the former master (VAX2, or VAX1 after
+  step 1) to VAX3 for F7ROOT.
+- F2 and F3 are as registered above.
+- If F1 does not hold, vms-657 is parked: "not elicited under 3 pre-registered designs". OVMX
+  keeps sending no 0xf7 (honest omission).
+
+## Run 4 (pod labf7d, 2026-10-13 18:16–18:50): F1 NOT observed; vms-657 parked
+
+Capture on the lab PVC at `/lab/run-oracle/f7r4.pcap`. Node mapping from HELLO frames:
+VAX1 0104/a469, VAX2 b04a, VAX3 93e2.
+
+- **Step 1 held as registered.** F7ROOT moved VAX1 -> VAX2 at capture-relative 1550.31 s (02/0e,
+  0f, 10, 12, 13 -> 02/14, each answered 82/15). VAX3's fresh-lookup poker made 4093 lookups at
+  directory node VAX2. Every one was answered 0xf8, and every request went to the current
+  master.
+- **Steps 2–3.** VAX3's poker and VAX1's holder were stopped and VAX3's cached requester started
+  (18:42:38). VAX2's holder was stopped and VAX1 began mode-B activity (18:42:48).
+- **The tree did not move back; it was freed and recreated.** Stopping VAX2's holder left no
+  lock on F7ROOT except VAX3's, so the resource died with its last lock:
+  - 1577.607 s: VAX3's next lookup got 0xf9, so VAX3 mastered it.
+  - 1577.629 s: VAX3 sent 02/04, removing the directory entry.
+  - 1577.659 s: VAX1's lookup got 0xf9, so VAX1 mastered the new resource.
+
+  From then on every request went to whichever node was named master at that moment. No
+  request ever reached a node that had stopped mastering the resource.
+- **0 answers with body[34] = 0xf7** (95,091 F7ROOT requests from VAX3 to VAX1, 10,095 to VAX2).
+
+**Parked: not elicited under 3 pre-registered designs** (runs 2, 3, 4, plus run 1's baseline).
+- Fresh-lookup requester (runs 1, 2): the directory names the new master in the same exchange
+  as the remaster.
+- Cached requester holding its own lock (run 3): the tree does not move off a master the
+  requester keeps busy.
+- Move first, then cache (run 4): releasing the old master's locks frees and recreates the
+  tree instead of moving it.
+
+The 5 0xf7 frames in L2 remain the only real specimens, all during a CACHE$ file-system tree
+remaster. OVMX keeps sending no 0xf7 for a resource it does not master. That is an honest
+omission: the request goes unanswered, which is what OVMX does today.

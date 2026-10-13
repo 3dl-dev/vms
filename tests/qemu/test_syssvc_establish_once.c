@@ -40,9 +40,9 @@ int main(void)
     memset(&after, 0, sizeof(after));
     CHECK(vms_kif_getjpi_self(&before) & 1, "this process has a row its creator made");
 
-    /* negctl: establish-system-not-once */
     uint32_t st = vms_kif_establish_system();
     printf("  second ESTABLISH_SYSTEM: status %08X\n", (unsigned)st);
+    /* negctl: establish-system-not-once */
     CHECK(st == SS$_NOPRIV,
           "a second ESTABLISH_SYSTEM (the boot task already made the one call) is refused SS$_NOPRIV");
 

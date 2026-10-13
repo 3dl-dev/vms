@@ -31,7 +31,7 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "SUBMIT goes back to writing the literal \"SYSTEM\" into the queue entry for any process the executive has not named. The submission still succeeds, the entry still exists, SHOW QUEUE still lists it -- only its OWNER is a fabrication, and it is a fabrication that degrades UPWARD: the batch job of a process that holds no identity at all is recorded as belonging to the system account.";;
         require_fail) cat <<'EOF'
-G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner
+G/SUBMIT: SHOW QUEUE shows the batch job owned by SHIPPING
 G/SUBMIT: the batch job is NOT owned by SYSTEM
 EOF
                       ;;
@@ -53,6 +53,6 @@ EOF
     # `ctx->username;`, so a second apply matches nothing and cmd_apply
     # reports BROKEN FIXTURE, which is what selftest requires.
 defect_apply() {
-        sed -i '/^int cmd_submit(/,/^}$/ s|^    const char \*user = ctx->username;$|    const char *user = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-submit-owner-fabricated */|' "$_file"
+        sed -i '/^int cmd_submit(/,/^}$/ s|^    const char \*user = ctx->username;$|    const char *user = "SYSTEM"; /* NEGCTL dcl-submit-owner-fabricated */|' "$_file"
     :
 }

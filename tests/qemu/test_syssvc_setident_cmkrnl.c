@@ -25,6 +25,7 @@
 #include "ssdef.h"
 #include "starlet.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -72,7 +73,7 @@ int main(void)
     }
     int p[2];
     if (pipe(p) != 0) { printf("  FAIL: pipe\n"); return 1; }
-    pid_t c = fork();
+    pid_t c = ovmx_fork_subprocess();
     if (c == 0) {
         close(p[0]);
         child(p[1]);

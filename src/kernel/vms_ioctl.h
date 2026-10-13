@@ -1678,137 +1678,14 @@ _Static_assert(VMS_IOCTL_CLUSTER_STOP == 0xC010566Fu,
                "VMS_IOCTL_CLUSTER_STOP encodes differently than the reference build");
 
 /* ================================================================
- * Process registration
+ * Process creation (rd vms-9f32 / vms-2a5)
+ *
+ * There is no registration. A process's PCB is made by its CREATOR, before the
+ * process runs, with VMS_IOCTL_CREPRC_PCB (below); the boot task's, once, by
+ * VMS_IOCTL_ESTABLISH_SYSTEM. A task the executive did not create has no PCB
+ * and every service refuses it (-ESRCH, SS$_NONEXPR). The request numbers
+ * 0x40-0x42, 0x4E and 0x4F that registration used are retired.
  * ================================================================ */
-
-/*
- * Registration carries NO privilege request (vms-2b8).
- *
- * It used to carry an init_privs quadword: the process told the
- * executive which privileges it had. That is an honor system, not an
- * access control system -- the thing being asked to enforce the mask
- * was taking the mask from the party it was enforcing against. The
- * field is GONE, not ignored, so no caller can keep passing it and no
- * reader can be tempted to trust it.
- *
- * The executive now derives the authorized mask from the task's real
- * credentials at registration (vms_proc_register), the same way it
- * already derived the UIC. A process cannot change what it gets by
- * asking differently, because it is no longer asked.
- *
- * THE VMS PROCESS ID IS ASSIGNED BY THE EXECUTIVE, NOT REQUESTED
- * (vms-2b8, round 3). vms_pid used to be an INPUT: the process told the
- * executive which VMS process ID to file it under, and nothing checked
- * that the value was not already in use. Two processes could therefore
- * hold one VMS PID, and $GETJPI by that PID resolved to whichever row
- * the hash walk reached first -- so an unprivileged process could make
- * a privileged process's identity answer to a key it chose. That is the
- * same defect shape as the deleted init_privs field, one field along:
- * the process telling the executive what it is.
- *
- * The field is now OUTPUT-ONLY. Whatever userspace puts here is
- * overwritten before the executive looks at anything.
- *
- * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the VALUE. OpenVMS composes a
- * process ID from a PCB-vector index plus a sequence number so that a
- * reused slot never yields a repeated PID, and the extended PID adds
- * cluster node information; no public document publishes that layout
- * byte for byte, so OVMX does not pretend to reproduce it. What OVMX
- * reproduces is the PROPERTY: the ID is assigned by the executive,
- * unique among live processes, and not immediately reused after a
- * process exits. See assign_vms_pid() in vms_module.c.
- */
-struct vms_register_args {
-    uint32_t vms_pid;           /* return: the VMS process ID assigned */
-    uint32_t status;            /* return: SS$_ status */
-};
-
-#define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
-
-/*
- * VMS_IOCTL_REGISTER_CONTINUE - register a task that is CONTINUING an
- * already-registered VMS process's identity, not starting a new one
- * (vms-4d7, "Option B": the fork-per-image model made invisible to VMS).
- *
- * WHY THIS EXISTS. On OpenVMS, activating an image (RUN, a foreign
- * command, a DCL utility) does NOT create a process -- the image is mapped
- * into the CURRENT process and runs with its UIC, username and privileges;
- * image rundown returns to DCL in the same process. OVMX instead fork()s +
- * execve()s a fresh Linux process for every image, so without this the
- * image would auto-register a BRAND NEW PCB and derive its own privilege
- * mask from capable(CAP_SYS_ADMIN) -- which is why SYSTEM could not RUN
- * AUTHORIZE (the child never held SYSPRV, though its DCL did).
- *
- * This ioctl tells the executive "the process you already have for my
- * PARENT is the process I am continuing." The executive VALIDATES that
- * relationship itself -- it reads the identity from the parent's PCB in
- * the task hierarchy, never from anything the caller declares -- and
- * shares the parent's VMS PID, UIC, user name and privilege masks onto
- * this task. NOTHING is read from args (output-only, exactly like
- * VMS_IOCTL_REGISTER); the struct returns the shared VMS PID.
- *
- * DISTINCT FROM A NEW PROCESS. SPAWN, RUN/DETACHED and $CREPRC create a
- * genuinely new VMS process and use VMS_IOCTL_REGISTER (new PID, derived
- * identity). Only image activation continues the caller's identity, and
- * only DCL's image-activation path (src/vmsdcl/dcl_cmd_process.c) signals
- * it -- see kif_bind() in src/libvmssys/vms_kif.c.
- *
- * SECURITY. The shared identity is the parent's CURRENT identity: a
- * context that setident'd DOWN to an unprivileged UIC has reduced masks,
- * so continuing it CANNOT resurrect a privilege. The caller cannot pick
- * its parent (the executive reads real_parent), so this is not a path to
- * borrow an unrelated privileged process's identity.
- */
-#define VMS_IOCTL_REGISTER_CONTINUE \
-                            _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_register_args)
-
-/*
- * VMS_IOCTL_REGISTER_SUBPROCESS - register a GENUINELY NEW VMS process that
- * INHERITS its creator's executive identity (vms-19e9, "$CREPRC identity
- * propagation").
- *
- * WHY THIS EXISTS, and why it is NOT VMS_IOCTL_REGISTER_CONTINUE. SPAWN /
- * $CREPRC create a SUBPROCESS: a genuinely new VMS process, with its OWN
- * distinct VMS PID, that inherits the CREATOR's UIC, user name and privileges
- * (OpenVMS System Services Reference, $CREPRC: the created process gets the
- * creator's privileges/UIC/user name by default). OVMX fork()s the child, and
- * the child touches the executive BEFORE image activation -- so it used to
- * register via VMS_IOCTL_REGISTER (a fresh, capable()-DERIVED identity: empty
- * user name, no SETPRV), then try to STAMP the creator's identity onto itself
- * with VMS_IOCTL_SETIDENT. That stamp is a self-declaration, and the setident
- * guard correctly REFUSES it for a non-root child (the runtime's interactive
- * DCL runs at the user's UIC after LOGINOUT's credential drop): SS$_NOPRIV,
- * surfaced as %DCL-F-CREPRC. SPAWN was dead in the booted runtime.
- *
- * The fix is inheritance by CONTINUATION, not by self-declaration: the
- * executive derives the child's identity from its UNFORGEABLE real_parent (the
- * SPAWNing DCL) -- exactly as VMS_IOCTL_REGISTER_CONTINUE does for image
- * activation -- so no privileged name is ever self-declared. The ONE
- * difference from _CONTINUE, and the reason this is a separate opcode: a
- * subprocess is a DISTINCT VMS process, so it is MINTED A FRESH VMS PID rather
- * than sharing its parent's. Sharing the PID (as _CONTINUE does, because DCL
- * and the image it activates ARE one VMS process) would make $GETJPI-by-PID
- * ambiguous between DCL and its subprocess -- which is precisely what
- * lib$spawn's wait resolves the child's backing Linux pid through.
- *
- * NOTHING is read from args (output-only, like VMS_IOCTL_REGISTER); the struct
- * returns the FRESH VMS PID.
- *
- * SECURITY. Identical posture to _CONTINUE: the identity is the parent's
- * CURRENT masks (a setident'd-DOWN parent cannot resurrect a privilege in its
- * child), and the caller cannot pick its parent -- the executive reads
- * real_parent, never anything the caller declares. This is not a path to
- * borrow an unrelated privileged process's identity, and it does NOT weaken
- * the VMS_IOCTL_SETIDENT guard, which still refuses a self-declared privileged
- * name (test_syssvc_creprc_inherit.c pins both halves).
- *
- * NR 0x42 with the 8-byte struct -> command word 0xC0085642, distinct from
- * VMS_IOCTL_GETJPI's 0xC1205642 (same NR, larger struct): the same NR-sharing
- * the register family already carries (REGISTER_CONTINUE 0x41 shares its NR
- * with SETPRN), the encoded size keeping the words apart.
- */
-#define VMS_IOCTL_REGISTER_SUBPROCESS \
-                            _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_register_args)
 
 /* ================================================================
  * Device table (executive-resident I/O database)
@@ -3071,56 +2948,13 @@ struct vms_ident_args {
 };
 
 /*
- * DETACHED-PROCESS IDENTITY, AUTHORIZED BY THE CREATOR (rd vms-ff75).
- *
- * $CREPRC PRC$M_DETACH creates a process that is NOT in its creator's job and
- * whose identity ($CREPRC uic / prvadr, defaulting to the creator's) is
- * authorized by the CREATOR -- on VMS a creator holding SETPRV may give the
- * new process any UIC and privileges; without it, no more than its own
- * (System Services Reference, $CREPRC). OVMX creates it with fork(): the
- * detached process is a GRANDCHILD (setsid+fork, so the creator cannot wait
- * on it), whose real parent is a short-lived intermediate with no executive
- * row, so continuation from the creator is impossible. Before this, the
- * grandchild registered fresh from its own Linux credentials and then
- * self-declared the identity with SETIDENT, which the executive rightly
- * refuses a non-root, non-SETPRV row -- so RUN/DETACHED from an interactive
- * (non-root) session failed %RUN-F-CREPRC -SYSTEM-F-NOPRIV for every image.
- *
- * THE TWO STEPS.
- *   VMS_IOCTL_CREPRC_TICKET  -- the CREATOR, before it forks, asks the
- *     executive to record the identity the new process will have. The
- *     executive authorizes it against the CREATOR's row with exactly the
- *     SETIDENT rule (SETPRV, or a subset of the creator's own identity:
- *     same user name, same UIC, privileges within its authorized mask) and
- *     returns a single-use ticket. A refused identity is refused HERE, before
- *     any process exists.
- *   VMS_IOCTL_REGISTER_DETACHED -- the GRANDCHILD, as its first executive
- *     call, presents the ticket. The executive honours it only if the ticket's
- *     creator (still registered, same PID) is one of the caller's ANCESTORS
- *     (the substrate walks the caller's real parent chain), consumes it, and
- *     registers the caller as a NEW JOB ROOT with a fresh VMS PID carrying the
- *     ticketed identity. A ticket cannot be replayed, used by an unrelated
- *     process, or used to exceed what the creator could grant. The SETIDENT
- *     guard is unchanged.
- * Tickets expire unclaimed after VMS_CREPRC_TICKET_TTL_SECS (OVMX design
- * choice, Rule 8); the table is small and bounded.
- */
-struct vms_creprc_ticket_args {
-    char     username[VMS_USERNAME_SIZE]; /* in: the new process's user name   */
-    uint32_t uic;                         /* in: (group << 16) | member          */
-    uint32_t status;                      /* out: SS$_ status                     */
-    uint64_t privs;                       /* in: the new process's privileges     */
-    uint64_t ticket;                      /* out: single-use ticket               */
-};
-
-/*
  * CREATOR-DRIVEN CREATION (rd vms-c43 / vms-9f32, design note 3.1). The
  * CREATOR of a process issues this for a task it has forked and is holding
  * before exec: the executive creates that task's PCB, with its identity taken
  * from the creator's row (SUBPROCESS) or from the creator-supplied identity
  * the creator is authorized to give (DETACHED: SETPRV, or exactly its own user
- * name, UIC and a subset of its authorized privileges -- the rule the
- * creation ticket applied). The task must be the creator's child, or for
+ * name, UIC and a subset of its authorized privileges). The task must be the
+ * creator's child, or for
  * DETACHED also its grandchild through the still-live detach intermediate, and
  * must have no PCB. The new process's creator of record is the caller.
  */
@@ -3139,18 +2973,6 @@ struct vms_creprc_pcb_args {
 };
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
 
-struct vms_register_detached_args {
-    uint64_t ticket;                      /* in: from VMS_IOCTL_CREPRC_TICKET     */
-    uint32_t vms_pid;                     /* out: the new process's VMS PID       */
-    uint32_t status;                      /* out: SS$_ status                     */
-};
-
-#define VMS_CREPRC_TICKET_TTL_SECS 60u
-
-#define VMS_IOCTL_CREPRC_TICKET \
-            _IOWR(VMS_IOC_MAGIC, 0x4E, struct vms_creprc_ticket_args)
-#define VMS_IOCTL_REGISTER_DETACHED \
-            _IOWR(VMS_IOC_MAGIC, 0x4F, struct vms_register_detached_args)
 
 /*
  * Construct the SYSTEM identity onto the calling process (vms-a17e).
@@ -3609,8 +3431,6 @@ _Static_assert(sizeof(struct vms_ident_args) == 104,
                "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
 _Static_assert(sizeof(struct vms_establish_system_args) == 8,
                "vms_establish_system_args layout changed: VMS_IOCTL_ESTABLISH_SYSTEM ABI break");
-_Static_assert(sizeof(struct vms_register_args) == 8,
-               "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
 _Static_assert(sizeof(struct vms_exit_args) == 16,
                "vms_exit_args layout changed: VMS_IOCTL_SETEXIT ABI break");
 _Static_assert(sizeof(struct vms_getexit_args) == 20,
@@ -3659,20 +3479,6 @@ _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
                "VMS_IOCTL_SETTERM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ESTABLISH_SYSTEM == 0xC0085646u,
                "VMS_IOCTL_ESTABLISH_SYSTEM encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
-               "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_REGISTER_CONTINUE == 0xC0085641u,
-               "VMS_IOCTL_REGISTER_CONTINUE encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_REGISTER_SUBPROCESS == 0xC0085642u,
-               "VMS_IOCTL_REGISTER_SUBPROCESS encodes differently here than on the reference build");
-_Static_assert(sizeof(struct vms_creprc_ticket_args) == 56,
-               "vms_creprc_ticket_args layout changed: VMS_IOCTL_CREPRC_TICKET ABI break");
-_Static_assert(sizeof(struct vms_register_detached_args) == 16,
-               "vms_register_detached_args layout changed: VMS_IOCTL_REGISTER_DETACHED ABI break");
-_Static_assert(VMS_IOCTL_CREPRC_TICKET == 0xC038564Eu,
-               "VMS_IOCTL_CREPRC_TICKET encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_REGISTER_DETACHED == 0xC010564Fu,
-               "VMS_IOCTL_REGISTER_DETACHED encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_getsyi_mem_args) == 32,
                "vms_getsyi_mem_args layout changed: VMS_IOCTL_GETSYIMEM ABI break");
 _Static_assert(VMS_IOCTL_GETSYIMEM == 0xC0205668u,

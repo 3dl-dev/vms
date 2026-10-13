@@ -76,6 +76,7 @@
 #include "lnmdef.h"          /* struct item_list_3 */
 #include "vms/pcb.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "ovmx_layout.h"
 #include "sysuaf.h"          /* sysuaf_lookup + sysuaf_record_t (binary $UAFDEF) */
 #include "vms/logical.h"
@@ -134,20 +135,23 @@ struct probe_result {
  * binary $UAFDEF record off the mounted platter via RMS-over-ACP rather than a
  * /vms POSIX passthrough (vms-586). SYS$SYSDEVICE is a DEVICE unit, not a Linux
  * directory, so the resolution never touches vmsfs_to_linux_path().
+ * They go in LNM$JOB, which the probes (subprocesses of this suite, so in its
+ * job) share; a subprocess starts with no LNM$PROCESS names of its creator's
+ * (rd vms-2a5).
  */
 static void seed_system_logicals(lnm_manager_t *mgr)
 {
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
     static const char *sysroot[] = {
         "SYS$SYSDEVICE:[SYS0.]",
         "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
     };
-    lnm_create_multi(mgr, LNM_PROCESS_TABLE, "SYS$SYSROOT", sysroot, 2,
+    lnm_create_multi(mgr, LNM_JOB_TABLE, "SYS$SYSROOT", sysroot, 2,
                      LNM_ATTR_CONCEALED, LNM_MODE_EXEC);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
 }
 
 /*
@@ -168,7 +172,7 @@ static int run_probe(unsigned stage, const char *name, uint32_t uic,
     if (pipe(fds) < 0)
         return -1;
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) {
         close(fds[0]); close(fds[1]);
         return -1;
@@ -185,8 +189,18 @@ static int run_probe(unsigned stage, const char *name, uint32_t uic,
         close(fds[0]);
         memset(&r, 0, sizeof(r));
 
-        if (stage & STAGE_IDENTITY)
+        if (stage & STAGE_IDENTITY) {
             r.setident_status = vms_kif_setident(name, uic, privs);
+        } else {
+            /* This probe is a subprocess of the suite, which is SYSTEM and so
+             * holds SYSPRV (rd vms-2a5: its creator made its row). The stages
+             * that establish no identity need an executive row WITHOUT
+             * SYSPRV, so it gives the privilege up -- current and authorized
+             * -- through the executive, the only place that decides it. */
+            uint64_t pv = 0;
+            (void)vms_kif_setprv(PRV$M_SYSPRV, 0, 1, &pv);
+            (void)vms_kif_setprv(PRV$M_SYSPRV, 0, 0, &pv);
+        }
 
         if (stage & STAGE_PCB_SYSPRV) {
             /* The honor-system route, staged deliberately: a process

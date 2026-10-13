@@ -38,6 +38,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /*
  * Status values are ORACLE-PINNED (vms-8019) on the reference lab
@@ -108,8 +109,8 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register(NULL) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(NULL) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         return -1;
     }
     return 0;
@@ -158,9 +159,9 @@ static int child_after_exec(int wfd)
 /*
  * alt_group_helper - the other half of the UIC-group scoping case.
  *
- * Runs in a DIFFERENT UIC group from the parent (setgid before
- * registering, so the executive derives the new group from our
- * credentials -- we never get to declare it). It then does the two
+ * Runs in a DIFFERENT UIC group from the parent (the parent creates it
+ * detached with that UIC, and the executive checks the parent may give it
+ * -- the helper never gets to declare it, rd vms-2a5). It then does the two
  * things that a group-blind implementation cannot do:
  *
  *   - takes a process name the parent's group already holds, which
@@ -188,7 +189,7 @@ static void alt_group_helper(int wfd)
     vms_kif_close();
     if (vms_kif_open() < 0)
         _exit(81);
-    if (vms_kif_register(NULL) != SS_NORMAL)
+    if (ovmx_test_self(NULL) != SS_NORMAL)
         _exit(82);
 
     memset(&info, 0, sizeof(info));
@@ -251,7 +252,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();   /* process A: a VMS subprocess of this suite (rd vms-2a5) */
     if (child < 0) {
         printf("  FAIL: fork()\n");
         return 1;
@@ -267,7 +268,7 @@ int main(int argc, char **argv)
         vms_kif_close();
         if (vms_kif_open() < 0)
             _exit(70);
-        if (vms_kif_register(NULL) != SS_NORMAL)
+        if (ovmx_test_self(NULL) != SS_NORMAL)
             _exit(71);
         if (vms_kif_setprn(CHILD_NAME) != SS_NORMAL)
             _exit(72);
@@ -404,7 +405,17 @@ int main(int argc, char **argv)
             goto done;
         }
 
-        helper = fork();
+        /* The helper is a VMS process in ANOTHER UIC group: this suite
+         * creates it detached with that UIC (rd vms-2a5 -- the executive
+         * makes its row; it no longer derives the group from a setgid). */
+        {
+            struct vms_procinfo me;
+            memset(&me, 0, sizeof(me));
+            (void)vms_kif_getjpi_self(&me);
+            helper = ovmx_fork_detached_st(me.username,
+                                           ((uint32_t)ALT_UIC_GROUP << 16) | (me.uic & 0xFFFFu),
+                                           me.perm_privs, NULL);
+        }
         if (helper < 0) {
             printf("  FAIL: fork() for group helper\n");
             fail++;

@@ -47,6 +47,13 @@
 #include <linux/loop.h>
 #include <linux/reboot.h>
 
+#include "vms_ioctl.h"   /* ESTABLISH_SYSTEM + CREPRC_PCB (rd vms-2a5) */
+
+/* This init is the boot task (rd vms-2a5): it makes the executive's one
+ * ESTABLISH_SYSTEM call, and each suite is a process it creates through
+ * VMS_IOCTL_CREPRC_PCB -- a task the executive did not create is refused. */
+static int g_vms_fd = -1;
+
 static int load_module(const char *path)
 {
     int fd = open(path, O_RDONLY);
@@ -79,9 +86,17 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
     int pfd[2];
     if (pipe(pfd) != 0) { printf("OVMX-ALPHA-KE: pipe failed for %s\n", name); return -1; }
 
+    int hold[2];
+    if (pipe(hold) != 0) { close(pfd[0]); close(pfd[1]); return -1; }
     pid_t pid = fork();
     if (pid < 0) { printf("OVMX-ALPHA-KE: fork failed for %s\n", name); close(pfd[0]); close(pfd[1]); return -1; }
     if (pid == 0) {
+        char go = 0;
+        close(hold[1]);
+        while (read(hold[0], &go, 1) < 0 && errno == EINTR)
+            ;
+        if (go != 'g')
+            _exit(125);                 /* the executive did not create it */
         close(pfd[0]);
         dup2(pfd[1], 1);
         dup2(pfd[1], 2);
@@ -93,6 +108,18 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
         _exit(127);
     }
     close(pfd[1]);
+    close(hold[0]);
+    {
+        struct vms_creprc_pcb_args a;
+        memset(&a, 0, sizeof(a));
+        a.child_pid = (uint32_t)pid;
+        a.flags = VMS_CREPRC_PCB_SUBPROCESS;
+        if (g_vms_fd < 0 || ioctl(g_vms_fd, VMS_IOCTL_CREPRC_PCB, &a) != 0 || !(a.status & 1))
+            printf("OVMX-ALPHA-KE: the executive did not create %s (status %u)\n",
+                   name, (unsigned)a.status);
+        (void)!write(hold[1], (a.status & 1) ? "g" : "x", 1);
+        close(hold[1]);
+    }
 
     /* Drain the pipe line-by-line: echo to console, tally PASS/FAIL. */
     char buf[4096];
@@ -172,7 +199,15 @@ int main(void)
      * vmsfs.ko VFS module to load. */
 
     if (access("/dev/vms", F_OK) == 0) {
+        struct vms_establish_system_args est;
         printf("OVMX-ALPHA-KE: /dev/vms PRESENT\n");
+        g_vms_fd = open("/dev/vms", O_RDWR);
+        memset(&est, 0, sizeof(est));
+        if (g_vms_fd < 0 || ioctl(g_vms_fd, VMS_IOCTL_ESTABLISH_SYSTEM, &est) != 0 ||
+            !(est.status & 1)) {
+            printf("OVMX-ALPHA-KE: FATAL the boot task could not become SYSTEM\n");
+            goto out;
+        }
     } else {
         printf("OVMX-ALPHA-KE: /dev/vms ABSENT -- executive did not register\n");
         goto out;

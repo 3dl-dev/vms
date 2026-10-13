@@ -90,10 +90,14 @@ int main(void)
         return 1;
     }
 
-    struct vms_register_args reg = {0};
-    reg.vms_pid = (uint32_t)getpid();
-    ioctl(fd, VMS_IOCTL_REGISTER, &reg);
-    CHECK(reg.status == SS_NORMAL, "register");
+    /* This process is one the executive created (the harness boot task or its
+     * creator made its row, rd vms-2a5): it is already in the process table, so
+     * nothing registers -- $GETJPI reads the row back. */
+    struct vms_getjpi_args reg;
+    memset(&reg, 0, sizeof(reg));
+    reg.select = VMS_JPI_SEL_SELF;
+    ioctl(fd, VMS_IOCTL_GETJPI, &reg);
+    CHECK(reg.status == SS_NORMAL, "this suite has the row its creator made");
 
     struct vms_resmaster_args rm;
 

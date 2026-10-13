@@ -116,13 +116,6 @@ static int fail = 0;
 #define PRIV_NAME       "OVMX47BPRV"
 #define OVR_NAME        "OVMX47BOVR"
 
-/* P12's names (vms-bbd): the UNAUTHENTICATED-creator /UIC probe. UNAUTH_PLAIN
- * is a plain detached create that MUST still succeed with no executive user
- * name (the boot's RUN/DETACHED path); UNAUTH_UICOVR asks for an explicit
- * /UIC override the creator cannot stamp and MUST fail honestly (nothing may
- * persist under it). */
-#define UNAUTH_PLAIN_NAME "OVMX47BUP0"
-#define UNAUTH_UICOVR_NAME "OVMX47BUP1"
 
 #define HOLD_SCRIPT     "/tmp/ovmx47b_hold.sh"
 #define SVC_LOG         "/tmp/ovmx47b_svc.log"
@@ -213,9 +206,9 @@ static int write_fixtures(void)
                    "touch " TOUCH_MARK "\n", 0755) != 0)
         return -1;
 
-    /* P7's procedure: RUN/DETACHED with a UIC the executive cannot be
-     * given. Written exactly as an operator would type it, INCLUDING the
-     * comma, because the comma is half the defect this refuses. */
+    /* P7's procedure: RUN/DETACHED with a UIC. Written exactly as an
+     * operator would type it, INCLUDING the comma, because the comma is half
+     * of what the lexer must get right. */
     if (write_file(UIC_COM,
                    "$! /UIC is now honoured on the detached path (vms-d31d).\n"
                    "$! Written with the comma an operator types, so the DCL\n"
@@ -377,8 +370,6 @@ static void clear_touch(void)
  * Returns the creator's pid (already reaped) or -1; its exit status goes
  * in *exit_st.
  */
-static int g_dcl_unnamed = 0;
-
 static pid_t run_dcl(const char *procedure, char *out, size_t outsz,
                      int *exit_st)
 {
@@ -388,12 +379,8 @@ static pid_t run_dcl(const char *procedure, char *out, size_t outsz,
     if (exit_st) *exit_st = -1;
     if (pipe(pfd) < 0) return -1;
 
-    /* A subprocess this suite creates (rd vms-3fa) -- except for the one phase
-     * that needs an UNNAMED creator (g_dcl_unnamed): a raw fork that registers
-     * itself, the only way an unnamed process still arises. vms-2a5 retires
-     * self-registration, and with it that phase (every process the executive
-     * creates carries its creator's name). */
-    pid_t pid = g_dcl_unnamed ? fork() : ovmx_fork_subprocess();
+    /* A subprocess this suite creates (rd vms-3fa / vms-2a5). */
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) { close(pfd[0]); close(pfd[1]); return -1; }
 
     if (pid == 0) {
@@ -682,72 +669,6 @@ static void priv_prop_probe(int fd)
     _exit(0);
 }
 
-/*
- * The UNAUTHENTICATED-creator /UIC probe (vms-bbd).
- *
- * P11 proved RUN /UIC//PRIVILEGES is honoured when the creator has an
- * executive user name to stamp the override under (its probe becomes SYSTEM
- * first). This probe covers the hole #760 left CLAIMED-BUT-INEFFECTIVE: a
- * creator that never authenticated -- the boot STARTUP-DCL context, vms-a2d1
- * -- has an EMPTY executive user name (a freshly registered process starts
- * unnamed, src/kernel/vms_module.c), so an explicit /UIC override CANNOT be
- * stamped onto the created process's executive row (vms_kif_setident refuses
- * an empty name). Before vms-bbd, $CREPRC reported %RUN-S-PROC_ID and
- * silently dropped the UIC; now it fails honestly (SS$_NOPRIV).
- *
- * The probe deliberately does NOT call setident, so its own executive user
- * name is empty (asserted as a precondition). It then creates:
- *   (a) a PLAIN detached process (no uic, no prvadr) -- MUST still SUCCEED,
- *       so the fix cannot have broken the boot's RUN/DETACHED path; and
- *   (b) a detached process with an EXPLICIT /UIC override -- MUST FAIL,
- *       because the override cannot reach the executive row.
- */
-struct uic_unauth_report {
-    uint32_t self_status;        /* $GETJPI on self */
-    int      self_username_empty;/* precondition: creator is unnamed */
-    uint32_t plain_status;       /* $CREPRC (plain detached) -- must succeed */
-    uint32_t plain_vms_pid;
-    uint32_t ovr_status;         /* $CREPRC (explicit /UIC) -- must fail */
-    uint32_t ovr_vms_pid;
-};
-
-static void uic_unauth_probe(int fd)
-{
-    struct uic_unauth_report rep;
-    struct vms_procinfo self;
-
-    memset(&rep, 0, sizeof(rep));
-
-    /* Do NOT setident: a fresh registration has an empty executive user
-     * name. Confirm that, so the phase genuinely tests the no-name case. */
-    memset(&self, 0, sizeof(self));
-    rep.self_status = vms_kif_getjpi_self(&self);
-    rep.self_username_empty = (rep.self_status & 1) && self.username[0] == '\0';
-
-    /* (a) PLAIN detached: inherits, nothing to stamp -- must SUCCEED. */
-    {
-        struct dsc$descriptor_s img = str_dsc(SUBJECT_IMAGE);
-        struct dsc$descriptor_s in  = str_dsc(HOLD_SCRIPT);
-        struct dsc$descriptor_s nd  = str_dsc(UNAUTH_PLAIN_NAME);
-        rep.plain_status = sys$creprc(&rep.plain_vms_pid, &img, &in, NULL, NULL,
-                                      NULL, NULL, &nd, 0, 0, 0, PRC$M_DETACH);
-    }
-
-    /* (b) EXPLICIT /UIC=[300,1] override with no user name to stamp it
-     * under -- must FAIL honestly, not silently drop the UIC. */
-    {
-        struct dsc$descriptor_s img = str_dsc(SUBJECT_IMAGE);
-        struct dsc$descriptor_s in  = str_dsc(HOLD_SCRIPT);
-        struct dsc$descriptor_s nd  = str_dsc(UNAUTH_UICOVR_NAME);
-        rep.ovr_status = sys$creprc(&rep.ovr_vms_pid, &img, &in, NULL, NULL,
-                                    NULL, NULL, &nd, 0, PRIV_OVR_UIC,
-                                    0, PRC$M_DETACH);
-    }
-
-    ssize_t w = write(fd, &rep, sizeof(rep));
-    (void)w;
-    _exit(0);
-}
 
 /*
  * Checks that run when there is NO executive. Nothing may report success.
@@ -832,7 +753,6 @@ int main(void)
         printf("  (startup procedure output)\n%s\n", out);
 
     announced = proc_id_of(out, &announced_n);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(announced_n == 1 && announced != 0,
           "the startup procedure announced the created process with %RUN-S-PROC_ID");
 
@@ -846,7 +766,6 @@ int main(void)
     memset(&info, 0, sizeof(info));
     st = vms_kif_getjpi_prcnam(SVC_NAME, &info);
     /* negctl: run-detached-name-dropped */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st == SS$_NORMAL,
           "the executive resolves the service BY NAME after its creator exited");
 
@@ -933,7 +852,6 @@ int main(void)
         if (!row_found)
             printf("  (SHOW SYSTEM output follows)\n%s\n", show);
         /* negctl: run-detached-name-dropped */
-        /* negctl-knockon: bind-client-no-register */
         CHECK(row_found,
               "SHOW SYSTEM, in a different process, lists the service by its VMS process name");
     }
@@ -964,7 +882,6 @@ int main(void)
                       (strstr(out2, "-SYSTEM-F-DUPLNAM, duplicate name")
                        != NULL);
         /* negctl: run-detached-name-dropped */
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: proctab-duplicate-name */
         CHECK(refused,
               "starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM");
@@ -1015,7 +932,6 @@ int main(void)
                 while (waitpid(probe, &pst, 0) < 0 && errno == EINTR)
                     ;
 
-                /* negctl-knockon: bind-client-no-register */
                 CHECK(r == (ssize_t)sizeof(rep) && (rep.status & 1),
                       "sys$creprc PRC$M_DETACH created the probe's process");
 
@@ -1070,73 +986,49 @@ int main(void)
     }
 
     /* ---------------------------------------------------------------
-     * P7. /UIC ON THE DETACHED PATH IS PARSED AND FORWARDED, THEN REFUSED
-     *     HONESTLY WHEN THE CREATOR CANNOT STAMP IT (vms-d31d, vms-bbd).
+     * P7. /UIC ON THE DETACHED PATH IS PARSED, FORWARDED AND HONOURED
+     *     (vms-d31d, vms-bbd, rd vms-2a5).
      *
      * ORACLE-PINNED. HELP RUN Process /UIC on the reference lab (VAX2,
      * OpenVMS VAX V7.3, 2026-07-31) says /UIC "Specifies that the created
-     * process be a detached process and assigns it a user identification
-     * code (UIC)". #760 (vms-d31d) closed the DCL front half: RUN parses
-     * /UIC (past the lexer's comma split of "[300,1]") and forwards it to
-     * $CREPRC's uic argument, which stamps it onto the created process's
-     * EXECUTIVE row via vms_kif_setident() -- and it genuinely lands when
-     * the creator has an executive user name to stamp it under (proven by
-     * P11, which becomes SYSTEM first).
+     * process is to be a detached process", and $CREPRC gives the new process
+     * the requested UIC when the creator may (SETPRV). The DCL here is a
+     * subprocess of this suite, so it is SYSTEM and holds SETPRV: the line an
+     * operator types -- comma and all -- creates the process in UIC [300,1].
      *
-     * BUT run_dcl's DCL registers with NO executive user name (it never
-     * authenticated), and a caller-chosen UIC can reach the executive row
-     * ONLY through vms_kif_setident(), which by design refuses an empty
-     * user name (SS$_IVLOGNAM). So from an UNNAMED creator -- which is
-     * exactly the boot STARTUP-DCL situation (vms-a2d1) -- the requested
-     * UIC CANNOT be placed on the row.
-     *
-     * #760 originally reported %RUN-S-PROC_ID here and SILENTLY DROPPED the
-     * UIC (this phase asserted that success and never checked the UIC
-     * landed -- the claimed-but-ineffective LARP vms-bbd names). The fix
-     * (vms-bbd, src/libvms/syssvc/sys_process.c) makes $CREPRC FAIL
-     * HONESTLY instead: an explicit /UIC (or /PRIVILEGES) override that
-     * cannot be stamped is %RUN-F-CREPRC / -SYSTEM-F-NOPRIV, and NO process
-     * is created. So THIS phase now proves the honest refusal from the
-     * unnamed DCL context; P11 proves the honouring from a NAMED creator;
-     * P12 proves the same refusal at the $CREPRC layer directly. When
-     * vms-a2d1 gives the boot STARTUP-DCL a SYSTEM user name, RUN/UIC from
-     * it flips to the P11 success path -- that is the remaining half of the
-     * feature, not a regression here.
+     * (This phase used to run from an UNNAMED DCL and assert an honest
+     * refusal, the boot STARTUP-DCL's state before it had a user name. Since
+     * rd vms-a2c/vms-2a5 every process is created with an identity, so no
+     * creator is unnamed; P11 proves the same honouring at the $CREPRC layer.)
      * --------------------------------------------------------------- */
     {
         char out7[65536];
         int n7 = 0;
 
-        g_dcl_unnamed = 1;
         run_dcl(UIC_COM, out7, sizeof(out7), &exit_st);
-        g_dcl_unnamed = 0;
-        printf("  (RUN/DETACHED/UIC=[300,1] from an unnamed DCL)\n%s\n", out7);
+        printf("  (RUN/DETACHED/UIC=[300,1] from a SYSTEM DCL)\n%s\n", out7);
 
-        /* The /UIC override cannot be stamped by a nameless creator, so the
-         * creation is REFUSED honestly -- never a fabricated %RUN-S-PROC_ID
-         * with the UIC quietly discarded (vms-bbd LARP guard, INV-6). */
-        CHECK(strstr(out7, "%RUN-F-CREPRC") != NULL &&
-              strstr(out7, "-SYSTEM-F-NOPRIV") != NULL,
-              "RUN/DETACHED/UIC from an unnamed creator is REFUSED honestly "
-              "with %RUN-F-CREPRC / -SYSTEM-F-NOPRIV, not silently dropped");
-        /* The retired refusal status is gone (the UIC is no longer refused
-         * on its mere PRESENCE -- it is parsed and forwarded; the refusal
-         * now comes from the executive being unable to stamp it). */
+        CHECK(strstr(out7, "%RUN-S-PROC_ID") != NULL,
+              "RUN/DETACHED/UIC from a creator that may give the UIC announces "
+              "the created process (%RUN-S-PROC_ID)");
+        CHECK(strstr(out7, "%RUN-F-CREPRC") == NULL,
+              "... and is not refused");
         CHECK(strstr(out7, "-OVMX-F-NOPRCUIC,") == NULL,
               "the mere-presence /UIC refusal (-OVMX-F-NOPRCUIC) is retired");
         CHECK(strstr(out7, "IVIMAGE") == NULL,
               "the image is resolved past the lexer's [g,m] comma split, "
               "not reported as a missing image named '1]'");
-        CHECK(strstr(out7, "%RUN-S-PROC_ID") == NULL,
-              "no created-process ID is announced for the refused /UIC");
 
-        (void)proc_id_of(out7, &n7);
-        CHECK(n7 == 0, "the refused /UIC start announced no process");
+        uint32_t pid7 = proc_id_of(out7, &n7);
+        CHECK(n7 == 1, "exactly one created process is announced");
 
+        /* Read by the announced PID: a process name is scoped to its own UIC
+         * group (octal 300), and this suite (SYSTEM) holds WORLD for the read. */
         memset(&info, 0, sizeof(info));
-        st = vms_kif_getjpi_prcnam(UIC_NAME, &info);
-        CHECK(st != SS$_NORMAL,
-              "no process persists in the executive under the refused /UIC name");
+        st = vms_kif_getjpi_pid(pid7, &info);
+        CHECK(st == SS$_NORMAL && info.uic == ((0300u << 16) | 1u) &&
+              strcmp(info.prcnam, UIC_NAME) == 0,
+              "the created process holds UIC [300,1] and its name in the executive");
         if (st == SS$_NORMAL && info.linux_pid)
             kill((pid_t)info.linux_pid, SIGKILL);
     }
@@ -1347,12 +1239,10 @@ int main(void)
         st = vms_kif_getjpi_prcnam(DETABBR_NAME, &info);
         ab_lpid = info.linux_pid;
         /* negctl: run-qualifier-not-abbreviated */
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: run-detached-name-dropped */
         CHECK(nA == 1 && st == SS$_NORMAL && ab_lpid != 0,
               "RUN/DETACH/PROC= creates a detached process the executive knows by name");
         /* negctl: run-qualifier-not-abbreviated */
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: run-detached-name-dropped */
         CHECK(st == SS$_NORMAL && ab_announced != 0 &&
               ab_announced == info.vms_pid,
@@ -1394,12 +1284,10 @@ int main(void)
             st = vms_kif_getjpi_prcnam(DETPRIO_NAME, &info);
             dp_lpid = info.linux_pid;
 
-            /* negctl-knockon: bind-client-no-register */
             /* negctl-knockon: run-detached-name-dropped */
             CHECK(nP == 1 && st == SS$_NORMAL,
                   "vms-69e: /DETACHED with /PRIORITY still creates the process "
                   "and announces success");
-            /* negctl-knockon: bind-client-no-register */
             CHECK(strstr(outA, "PRIORITY") == NULL &&
                   strstr(outA, "NOSUBPRC") == NULL &&
                   strstr(outA, "CREPRC") == NULL,
@@ -1458,7 +1346,7 @@ int main(void)
         if (pipe(pfd) < 0) {
             CHECK(0, "the identity-propagation probe could be started");
         } else {
-            pid_t probe = fork();
+            pid_t probe = ovmx_fork_subprocess();
             if (probe < 0) {
                 close(pfd[0]); close(pfd[1]);
                 CHECK(0, "the identity-propagation probe could be started");
@@ -1535,93 +1423,6 @@ int main(void)
                     if (st == SS$_NORMAL && info.linux_pid)
                         kill((pid_t)info.linux_pid, SIGKILL);
                 }
-            }
-        }
-    }
-
-    /* ---------------------------------------------------------------
-     * P12. RUN /UIC FROM AN UNAUTHENTICATED CREATOR FAILS HONESTLY
-     *      (vms-bbd).
-     *
-     * P11 proved /UIC//PRIVILEGES is honoured when the creator has an
-     * executive user name (its probe becomes SYSTEM first). This phase
-     * closes the claimed-but-ineffective hole #760 left: a creator with NO
-     * executive user name -- the boot STARTUP-DCL context (vms-a2d1), and
-     * any freshly registered process, which starts unnamed -- cannot stamp
-     * an explicit /UIC onto the created process's EXECUTIVE row, because
-     * vms_kif_setident() refuses an empty user name. Before vms-bbd $CREPRC
-     * announced %RUN-S-PROC_ID and silently dropped the UIC (the LARP INV-6
-     * exists to kill); now it fails honestly.
-     *
-     * The fix is SURGICAL: an explicit /UIC (or /PRIVILEGES) override is
-     * refused, while a PLAIN RUN/DETACHED from the same unnamed creator --
-     * the boot's actual path -- still succeeds. Both halves are asserted so
-     * the guard cannot regress into over-refusal.
-     * --------------------------------------------------------------- */
-    {
-        int pfd[2];
-        struct uic_unauth_report rep;
-
-        memset(&rep, 0, sizeof(rep));
-        if (pipe(pfd) < 0) {
-            CHECK(0, "the unauthenticated-/UIC probe could be started");
-        } else {
-            pid_t probe = fork();
-            if (probe < 0) {
-                close(pfd[0]); close(pfd[1]);
-                CHECK(0, "the unauthenticated-/UIC probe could be started");
-            } else if (probe == 0) {
-                close(pfd[0]);
-                uic_unauth_probe(pfd[1]);
-                _exit(0);   /* not reached */
-            } else {
-                ssize_t r;
-                int pst;
-
-                close(pfd[1]);
-                r = read(pfd[0], &rep, sizeof(rep));
-                close(pfd[0]);
-                while (waitpid(probe, &pst, 0) < 0 && errno == EINTR)
-                    ;
-
-                CHECK(r == (ssize_t)sizeof(rep),
-                      "the unauthenticated-/UIC probe reported back");
-
-                /* Precondition: the creator genuinely has NO executive user
-                 * name, so this phase tests the no-name case and not some
-                 * other one. */
-                CHECK(rep.self_username_empty,
-                      "the probe's creator has an empty executive user name "
-                      "(unauthenticated, as the boot STARTUP-DCL context is)");
-
-                /* (a) PLAIN detached still SUCCEEDS -- the boot path is not
-                 * broken by the guard. */
-                CHECK(rep.plain_status & 1,
-                      "a PLAIN RUN/DETACHED from an unnamed creator still "
-                      "creates the process (the boot's own path)");
-                if (rep.plain_status & 1) {
-                    memset(&info, 0, sizeof(info));
-                    st = vms_kif_getjpi_pid(rep.plain_vms_pid, &info);
-                    if (st == SS$_NORMAL && info.linux_pid)
-                        kill((pid_t)info.linux_pid, SIGKILL);
-                }
-
-                /* (b) EXPLICIT /UIC override FAILS honestly -- not a silent
-                 * %RUN-S-PROC_ID with the UIC dropped. */
-                CHECK(!(rep.ovr_status & 1),
-                      "RUN/UIC from an unnamed creator FAILS honestly -- the "
-                      "override is not silently dropped under a fake success "
-                      "(vms-bbd LARP guard)");
-                CHECK(rep.ovr_status == SS$_NOPRIV,
-                      "the refused /UIC reports SS$_NOPRIV -- the process "
-                      "could not be given the requested identity");
-
-                /* Nothing may persist under the refused name: a failed
-                 * override must not have left a live process behind. */
-                memset(&info, 0, sizeof(info));
-                st = vms_kif_getjpi_prcnam(UNAUTH_UICOVR_NAME, &info);
-                CHECK(!(st & 1),
-                      "no process persists under the refused /UIC name");
             }
         }
     }

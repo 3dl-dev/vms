@@ -3,23 +3,20 @@
  * none of anyone's process logical names (rd vms-fe7).
  *
  * On OpenVMS a process created by $CREPRC starts with an empty LNM$PROCESS
- * table of its own; the creator's process names are not copied into it (only a
- * SPAWNed subprocess is given copies, and OVMX's subprocess path is a separate
- * registration). OVMX's executive gives a copy of the real parent's
- * LNM$PROCESS names to a process it registers on its own, because that is what
- * a fork()ed child inherits. A detached process is created by a short-lived
- * intermediate: if the intermediate had already exited when the new process
- * entered the executive's table, the new process had been reparented to the
- * nearest subreaper (PID 1 on a booted system), and took ITS names. On the
- * booted system that is how JOB_CONTROL, and through it every login, came up
- * with PID 1's plain SYS$INPUT/SYS$OUTPUT/SYS$COMMAND = "TT:" (7 of 16 boots;
- * the semantic oracle's LNM.TRN.SYSIN/SYSOUT/SYSCMD).
+ * table of its own; the creator's process names are not copied into it. OVMX
+ * once gave a copy of the real parent's LNM$PROCESS names to a process that
+ * registered on its own, and a detached process whose intermediate had already
+ * exited was reparented to the nearest subreaper (PID 1 on a booted system)
+ * and took ITS names: that is how JOB_CONTROL, and through it every login,
+ * came up with PID 1's plain SYS$INPUT/SYS$OUTPUT/SYS$COMMAND = "TT:" (7 of 16
+ * boots; the semantic oracle's LNM.TRN.SYSIN/SYSOUT/SYSCMD). Since rd vms-2a5
+ * the creator has the executive make the new process's PCB (CREPRC_PCB), and
+ * no names are copied.
  *
- * The scenario here is that shape, made observable on the test rig:
- *   - a CREATOR process with no user name of its own (so $CREPRC takes the
- *     un-ticketed detached path, as the boot's startup DCL did) and marked a
- *     child subreaper (so an orphaned grandchild is reparented to IT, the
- *     analogue of PID 1),
+ * The scenario here keeps that shape observable on the test rig:
+ *   - a CREATOR process (a subprocess this suite creates) marked a child
+ *     subreaper (so an orphaned grandchild is reparented to IT, the analogue
+ *     of PID 1),
  *   - defines FE7$MARK in its own LNM$PROCESS,
  *   - and creates ITERATIONS detached processes running this same binary in
  *     subject mode, each of which translates FE7$MARK in its own LNM$PROCESS
@@ -28,7 +25,7 @@
  * once, the race went the wrong way for a large share of creations, and a
  * subject reported the creator's value.
  *
- * negctl: creprc-detached-intermediate-not-held
+ * negctl: creprc-detached-copies-creator-lnm
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +46,7 @@
 #include "prcdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"
 
 #define EXIT_SKIP   77
@@ -163,8 +161,8 @@ static int count_results(int *copied, int *clean, char *first_copy, size_t fcsz)
     return n;
 }
 
-/* CREATOR MODE: runs in its own forked process so its executive row has no
- * user name (a fresh registration) and it can be the subreaper. */
+/* CREATOR MODE: runs in its own process (a subprocess this suite created) so
+ * it can be the subreaper. */
 static int creator_main(int report_fd)
 {
     int r[4] = { 0, 0, 0, 0 };     /* define st, creations ok, copied, clean */
@@ -249,7 +247,7 @@ int main(int argc, char **argv)
 
     int pfd[2];
     if (pipe(pfd) < 0) { printf("  FAIL: pipe\n"); return 1; }
-    pid_t c = fork();
+    pid_t c = ovmx_fork_subprocess();   /* the creator: a subprocess of this suite */
     if (c == 0) {
         close(pfd[0]);
         _exit(creator_main(pfd[1]));
@@ -268,13 +266,13 @@ int main(int argc, char **argv)
     CHECK(ok, "the creator reported back");
     CHECK(r[0] == SS$_NORMAL || r[0] == SS$_SUPERSEDE,
           "the creator defined " MARK_NAME " in its own LNM$PROCESS");
-    CHECK(user[0] == '\0',
-          "the creator has no executive user name, so $CREPRC took the un-ticketed detached path (the boot's startup-DCL shape)");
+    CHECK(user[0] != '\0',
+          "the creator has an executive user name to give, so each detached process gets its PCB from it (CREPRC_PCB)");
     CHECK(r[1] == ITERATIONS, "every detached $CREPRC succeeded");
     CHECK(r[2] + r[3] == r[1], "every created subject reported what its LNM$PROCESS held");
     if (r[2] > 0)
         printf("  INFO: %d of %d subjects saw the creator's name; first: %s", r[2], r[1], first_copy);
-    /* negctl: creprc-detached-intermediate-not-held */
+    /* negctl: creprc-detached-copies-creator-lnm */
     CHECK(r[2] == 0,
           "no detached process started with a copy of its creator's (or any) process logical names");
 

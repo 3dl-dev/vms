@@ -1818,6 +1818,9 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 	}
 
 	coord_claim_club(c);
+	/* This node's own class is now the one it is driving (rd vms-6ec): a
+	 * later op-0x12 relay from another coordinator is answered with it. */
+	c->cl->club.own_tr_class = tr_class;
 	c->transitions_driven++;
 	coord_dlm_begin(c);
 	return 0;

@@ -2473,13 +2473,10 @@ static unsigned int imgact_query_cli_context(void)
 	int fd = kif_xport_dev_open();
 	if (fd < 0)
 		return 0;               /* no executive => truthfully no CLI */
-	/* Adopt (register-continue) this process's executive PCB, then read the
-	 * invoking CLI context DCL recorded with vms_kif_setcli and this image
-	 * inherited at REGISTER_CONTINUE time (vms-f60d). The executive owns the
+	/* Read the invoking CLI context DCL recorded with vms_kif_setcli, which
+	 * this image task's PCB took from DCL's when DCL made it (CREPRC_PCB
+	 * CONTINUE, vms-f60d / rd vms-2a5). The executive owns the
 	 * process/CLI relationship, so cliflag comes from there, never an env var. */
-	struct vms_register_args reg;
-	memset(&reg, 0, sizeof(reg));
-	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_getcli_args g;
 	memset(&g, 0, sizeof(g));
 	unsigned int cliflag = 0;
@@ -2506,10 +2503,7 @@ static uint32_t imgact_cli_get_command_line(struct dsc$descriptor_s *out)
 	if (fd < 0)
 		return SS$_NOSUCHDEV;   /* no executive => fail honest */
 	/* Read the invoking command line the executive holds for this process
-	 * (vms-f60d): register-continue to adopt the PCB, then GETCLI. */
-	struct vms_register_args reg;
-	memset(&reg, 0, sizeof(reg));
-	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
+	 * (vms-f60d): GETCLI on the PCB DCL made for this image task (rd vms-2a5). */
 	struct vms_getcli_args g;
 	memset(&g, 0, sizeof(g));
 	long rc = kif_call(fd, KIF_SVC_GETCLI, &g);
@@ -2581,9 +2575,6 @@ static void imgact_vms_exit(unsigned long cond)
 	 * exit code we then pass to exit_group. This is SYS$EXIT's authoritative
 	 * behavior -- never a bare exit_group(cond & 1 ? 0 : 1) that would drop the
 	 * VMS condition value DCL's $STATUS observes (INV-6). */
-	struct vms_register_args reg;
-	memset(&reg, 0, sizeof(reg));
-	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_exit_args e;
 	memset(&e, 0, sizeof(e));
 	e.condition = (uint32_t)cond;
@@ -3455,9 +3446,6 @@ static int eihd_lnm_translate(const char *name, char *out, unsigned long outsz)
 	int fd = kif_xport_dev_open();
 	if (fd < 0)
 		return -1;
-	struct vms_register_args reg;
-	memset(&reg, 0, sizeof reg);
-	(void)kif_call(fd, KIF_SVC_REGISTER, &reg);
 	struct vms_lnm_scope_args sc;
 	memset(&sc, 0, sizeof sc);
 	if (kif_call(fd, KIF_SVC_LNM_GETSCOPE, &sc) < 0 || !(sc.status & 1)) {

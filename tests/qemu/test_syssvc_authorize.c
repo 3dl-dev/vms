@@ -59,6 +59,7 @@
 #include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 
 #define EXIT_SKIP 77
@@ -126,7 +127,7 @@ static int run_authorize(const char *username, uint32_t uic, uint64_t privs,
      */
     fflush(NULL);
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -239,7 +240,7 @@ int main(void)
      */
     {
         uint32_t vpid = 0;
-        (void)vms_kif_register(&vpid);       /* job_id for the LNM$JOB scope   */
+        (void)ovmx_test_self(&vpid);       /* job_id for the LNM$JOB scope   */
         lnm_manager_t *mgr = lnm_get_manager();
         uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
         CHECK($VMS_STATUS_SUCCESS(mst),
@@ -265,26 +266,22 @@ int main(void)
         CHECK(0, "A: could not run the SYSPRV-holder subprocess");
     } else {
         dump("A: SYSPRV holder", outA);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outA, "SETIDENT_STATUS=1\n") != NULL,
               "A: the executive accepted the SYSPRV identity");
         {
             char want[64];
             snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
                      (unsigned long long)(uint64_t)A_PRIVS);
-            /* negctl-knockon: bind-client-no-register */
             CHECK(strstr(outA, want) != NULL,
                   "A: the executive's own row holds exactly the SYSPRV mask "
                   "this run stamped -- not a claim, a readback");
         }
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outA, "%UAF-I-AUTHVERSION") != NULL,
               "A: AUTHORIZE printed its version banner -- the SYSPRV holder "
               "was ADMITTED");
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outA, "%UAF-F-NOAUTH") == NULL,
               "A: the SYSPRV holder was never refused");
-        /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: acp-sysprv-ignored */
         CHECK(rcA == 0,
               "A: AUTHORIZE exited 0 for the admitted session");
     }
@@ -295,14 +292,12 @@ int main(void)
         CHECK(0, "B: could not run the non-SYSPRV subprocess");
     } else {
         dump("B: non-SYSPRV (OPER|WORLD, no SYSPRV)", outB);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outB, "SETIDENT_STATUS=1\n") != NULL,
               "B: the executive accepted the non-SYSPRV identity");
         {
             char want[64];
             snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
                      (unsigned long long)(uint64_t)B_PRIVS);
-            /* negctl-knockon: bind-client-no-register */
             CHECK(strstr(outB, want) != NULL,
                   "B: the executive's own row holds exactly the OPER|WORLD "
                   "mask this run stamped, with SYSPRV genuinely absent");

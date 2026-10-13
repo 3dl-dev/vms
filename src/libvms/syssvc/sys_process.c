@@ -1572,11 +1572,13 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     ticket_sync = -1;
                 }
             } else {
-                /* rd vms-fe7: enter the executive's table while the
-                 * intermediate is still the real parent (see above), then
-                 * release it. Any service registers the caller; this one is
-                 * read-only. */
-                (void)vms_kif_getjpi_self(&self_info);
+                /* A detached process whose creator has no user name to give it
+                 * has no PCB: the executive makes one only for its creator, and
+                 * a task does not enter the table on its own (rd vms-2a5). Every
+                 * process descends from the boot task's SYSTEM identity, so this
+                 * is not reached on a booted system; if it is, the creation fails
+                 * honestly rather than run an image as no VMS process. */
+                rep.status = SS$_NOPRIV;
                 close(ticket_sync);
                 ticket_sync = -1;
             }

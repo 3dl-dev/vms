@@ -416,6 +416,20 @@ vms_netbsd_proc_current(void)
 }
 
 /*
+ * vms_proc_create_boot_task - the boot task's PCB (rd vms-2a5), for
+ * ESTABLISH_SYSTEM's one call. On this substrate every ioctl still
+ * find-or-creates the caller's row (vms_proc_get) -- its removal, with the
+ * NetBSD guest harnesses moved onto a creator, is the second half of vms-2a5
+ * -- so the caller already has a row here and this is reached only through
+ * that path's equivalent.
+ */
+struct vms_proc *
+vms_proc_create_boot_task(void)
+{
+	return vms_proc_get(curlwp->l_proc->p_pid);
+}
+
+/*
  * vms_proc_continue_identity - stamp the calling task's REAL PARENT's executive
  * identity onto `proc' (a child PCB vms_proc_get() has just created and seeded
  * fresh) for VMS_IOCTL_REGISTER_CONTINUE. This is the NetBSD twin of
@@ -1345,141 +1359,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
-	 * VMS_IOCTL_REGISTER (vms-329): adopt-or-create this process's executive
-	 * PCB, FRESH-SEEDED. Every other ioctl path here does that implicitly
-	 * through vms_proc_get(), which is why the op was never wired -- but the
-	 * SHARED userspace ACP client (src/imgact/imgact_acp.c, used by IMGACT.EXE,
-	 * the RMS ACP arm and PID 1's boot bridge) opens every file with
-	 * acp_register() and treats a failure as fatal. Unanswered, it returned
-	 * ENOTTY -> SS$_NOSUCHDEV and NO ACP file open could ever succeed on this
-	 * substrate. This creates no new policy: it returns the PCB vms_proc_get()
-	 * builds anyway, matching the Linux twin's "hand back the process that
-	 * already exists" (vms_module.c). _IOWR, 8 bytes: `data' is the kernel
-	 * copy, answered in place.
-	 */
-	case VMS_IOCTL_REGISTER: {
-		struct vms_register_args *ra = (struct vms_register_args *)data;
-
-		proc = vms_proc_get(l->l_proc->p_pid);
-		if (proc == NULL)
-			return ENOMEM;
-		ra->vms_pid = proc->vms_pid;
-		ra->status  = SS__NORMAL;
-		return 0;
-	}
-
-	/*
-	 * VMS_IOCTL_REGISTER_CONTINUE (vms-381): register this task as a
-	 * CONTINUATION of its parent's VMS process, NOT a fresh identity. DCL
-	 * fork()s + execv()s to activate an image and the child calls this before
-	 * execv while it is still DCL's child; the activated image must run as the
-	 * SAME VMS process -- same UIC, user name, CLI context and, decisively, the
-	 * parent's CURRENT privilege masks (SYSPRV/BYPASS granted to SYSTEM's DCL
-	 * via $SETIDENT), so it can open the World-denied SYSUAF.DAT that AUTHORIZE
-	 * and LOGINOUT need. This case used to be folded in with REGISTER above and
-	 * fresh-seeded identically, so the child NEVER inherited SYSPRV/BYPASS and
-	 * install failed with %UAF-E-NAOFIL / -RMS-E-PRV. It now genuinely continues
-	 * the parent, mirroring src/kernel/vms_module.c's vms_proc_continue_identity
-	 * (INV-6: this REMOVES the fresh-seed fabrication on the continue path).
-	 *
-	 * The parent is the calling task's real parent, p_pptr->p_pid. If it has no
-	 * registered VMS PCB there is nothing to continue: fail honestly (ESRCH,
-	 * leaving vms_proc_get()'s fresh seed as this child's own top-level
-	 * identity) rather than pretend a continuation happened. REGISTER (above),
-	 * not _CONTINUE, is the fresh-seed path.
-	 */
-	case VMS_IOCTL_REGISTER_CONTINUE: {
-		struct vms_register_args *ra = (struct vms_register_args *)data;
-		struct proc *pp;
-		pid_t parent_pid;
-
-		proc = vms_proc_get(l->l_proc->p_pid);
-		if (proc == NULL)
-			return ENOMEM;
-
-		pp = l->l_proc->p_pptr;
-		parent_pid = (pp != NULL) ? pp->p_pid : 0;
-		/* share_pid = true: DCL and the image it activated are ONE VMS
-		 * process, so the child adopts the parent's VMS PID. */
-		if (!vms_proc_continue_identity(proc, parent_pid, true))
-			return ESRCH;   /* no registered VMS parent to continue */
-
-		ra->vms_pid = proc->vms_pid;   /* == the shared parent VMS PID */
-		ra->status  = SS__NORMAL;
-		return 0;
-	}
-
-	/*
-	 * VMS_IOCTL_REGISTER_SUBPROCESS (vms-19e9): SPAWN/$CREPRC. A genuinely
-	 * new VMS process that INHERITS the creator's identity by continuation
-	 * from its real parent but KEEPS the fresh VMS PID vms_proc_get() minted
-	 * -- a distinct VMS process, unlike _CONTINUE. Mirrors the Linux twin
-	 * (src/kernel/vms_module.c). Unlike _CONTINUE, a task with no registered
-	 * VMS parent does NOT fail: it keeps vms_proc_get()'s fresh, honestly
-	 * credential-derived identity (a top-level process), so SPAWN never
-	 * fails merely because the creator was not registered.
-	 */
-	case VMS_IOCTL_REGISTER_SUBPROCESS: {
-		struct vms_register_args *ra = (struct vms_register_args *)data;
-		struct proc *pp;
-		pid_t parent_pid;
-
-		proc = vms_proc_get(l->l_proc->p_pid);
-		if (proc == NULL)
-			return ENOMEM;
-
-		pp = l->l_proc->p_pptr;
-		parent_pid = (pp != NULL) ? pp->p_pid : 0;
-		/* share_pid = false: inherit identity, keep the fresh VMS PID. */
-		(void)vms_proc_continue_identity(proc, parent_pid, false);
-
-		ra->vms_pid = proc->vms_pid;   /* the FRESH, distinct VMS PID */
-		ra->status  = SS__NORMAL;
-		return 0;
-	}
-
-	/*
-	 * VMS_IOCTL_REGISTER_DETACHED (rd vms-ff75): the detached grandchild of a
-	 * $CREPRC PRC$M_DETACH claims the identity its CREATOR had the executive
-	 * authorize (VMS_IOCTL_CREPRC_TICKET). Mirrors the Linux twin
-	 * (src/kernel/vms_module.c vms_ioctl_register_detached): the ancestry is
-	 * read from the real parent chain (p_pptr, up to three levels), the ticket is honoured only if its creator is among them, and
-	 * the caller's own (fresh, job-root) row is stamped by the executive. A
-	 * refused ticket answers SS$_NOPRIV and stamps nothing.
-	 */
-	case VMS_IOCTL_REGISTER_DETACHED: {
-		struct vms_register_detached_args *da =
-		    (struct vms_register_detached_args *)data;
-		struct proc *pp;
-		uint32_t anc[3] = { 0, 0, 0 };
-		char uname[VMS_USERNAME_SIZE];
-		uint32_t duic = 0;
-		uint64_t dprivs = 0;
-		int i;
-
-		pp = l->l_proc->p_pptr;   /* same unlocked read as _SUBPROCESS */
-		for (i = 0; i < 3 && pp != NULL; i++) {
-			anc[i] = (uint32_t)pp->p_pid;
-			pp = pp->p_pptr;
-		}
-
-		memset(uname, 0, sizeof(uname));
-		da->vms_pid = 0;
-		if (vms_proc_creprc_ticket_claim(da->ticket, anc, 3, uname,
-		    &duic, &dprivs) != 0) {
-			da->status = SS__NOPRIV;
-			return 0;
-		}
-		proc = vms_proc_get(l->l_proc->p_pid);
-		if (proc == NULL)
-			return ENOMEM;
-		vms_proc_apply_ticket_identity(proc, uname, duic, dprivs);
-		da->vms_pid = proc->vms_pid;
-		da->status  = SS__NORMAL;
-		return 0;
-	}
-
-	/*
 	 * DEVICE-TABLE facility (src/kernel-core/vms_devtab.c) -- rd vms-618, the
 	 * LAST executive facility to join this module. Same dispatch shape as every
 	 * other facility above: find-or-create the caller's proc, hand the
@@ -1609,7 +1488,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_GETJPI:
 	case VMS_IOCTL_PROCSCAN:
 	case VMS_IOCTL_SETIDENT:
-	case VMS_IOCTL_CREPRC_TICKET:
 	case VMS_IOCTL_ESTABLISH_SYSTEM:
 	case VMS_IOCTL_HIBER:
 	case VMS_IOCTL_WAKE:
@@ -1639,8 +1517,6 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_procscan(proc, (unsigned long)uarg);         break;
 		case VMS_IOCTL_SETIDENT:
 			r = vms_ioctl_setident(proc, (unsigned long)uarg);         break;
-		case VMS_IOCTL_CREPRC_TICKET:   /* rd vms-ff75 */
-			r = vms_ioctl_creprc_ticket(proc, (unsigned long)uarg);    break;
 		case VMS_IOCTL_ESTABLISH_SYSTEM:
 			r = vms_ioctl_establish_system(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_HIBER:

@@ -11,22 +11,23 @@
  * SYSPRV. So SYSTEM, whose SYSPRV was stamped onto its DCL by LOGINOUT,
  * lost it the instant DCL forked AUTHORIZE, and AUTHORIZE refused SYSTEM.
  *
- * The fix: DCL calls vms_kif_register_continue() in the forked child before
- * execve (src/vmsdcl/dcl_cmd_process.c). That issues VMS_IOCTL_REGISTER_
- * CONTINUE, and the executive (src/kernel/vms_module.c) shares the parent's
- * VMS PID, UIC, user name and privileges onto the child instead of deriving
- * a fresh mask. This suite drives that exact path: a helper process
- * continues its parent's identity WITHOUT calling vms_kif_setident() itself,
- * then execs the real AUTHORIZE.EXE.
+ * The fix: DCL makes the forked child's PCB itself, before the child runs, as
+ * the SAME VMS process -- VMS_IOCTL_CREPRC_PCB with CONTINUE (rd vms-e50; the
+ * child's own REGISTER_CONTINUE before it, removed with registration in rd
+ * vms-2a5). The executive (src/kernel/vms_module.c, vms_proc_create_for)
+ * shares the parent's VMS PID, UIC, user name and privileges onto the child.
+ * This suite drives that exact path: it creates the child the way DCL does,
+ * the child never calls vms_kif_setident(), then it execs the real
+ * AUTHORIZE.EXE.
  *
- *   A) A parent holding SYSPRV activates AUTHORIZE via register_continue.
+ *   A) A parent holding SYSPRV activates AUTHORIZE as its image task (CREPRC_PCB CONTINUE).
  *      The image inherits SYSPRV it never asked for and is ADMITTED.
  *      This is what test_syssvc_authorize.c could NOT prove: that suite
  *      setident()s the child itself before exec, so it never exercised
  *      inheritance across the activation fork.
  *
  *   B) A parent that setident'd DOWN to an unprivileged identity (FIELD,
- *      [200,10], no SYSPRV) activates AUTHORIZE via register_continue. The
+ *      [200,10], no SYSPRV) activates AUTHORIZE as its image task (CREPRC_PCB CONTINUE). The
  *      image inherits the REDUCED identity and is REFUSED. Privileges do
  *      NOT reappear across the activation fork -- the security half.
  *
@@ -35,7 +36,7 @@
  *
  * Requires a real, insmod'd vms.ko at /dev/vms. With no executive (the CI
  * executive-absent negative-control rig, vms-0ff) it exits EXIT_SKIP (77),
- * never a fake pass: register_continue cannot share an identity that was
+ * never a fake pass: an image task cannot continue an identity that was
  * never established, so neither direction is provable.
  */
 
@@ -51,6 +52,7 @@
 #include "prvdef.h"
 #include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-739 ACP mount)     */
 
 #define EXIT_SKIP 77
@@ -84,9 +86,10 @@ static char *const authorize_env[] = {
 /*
  * activate_authorize - fork an IMAGE ACTIVATION of AUTHORIZE.
  *
- * The child does what DCL's dcl_activate_image does: it calls
- * vms_kif_register_continue() (NOT setident) so the executive shares the
- * CALLING process's identity onto it, then execs the real AUTHORIZE.EXE.
+ * The child is made the way DCL's dcl_activate_image makes one: the caller
+ * has the executive create its PCB as the SAME VMS process (CREPRC_PCB
+ * CONTINUE, never setident), sharing the CALLING process's identity, then the
+ * child execs the real AUTHORIZE.EXE.
  * The identity being continued is whatever the CALLER of this function has
  * already established for itself.
  *
@@ -104,7 +107,7 @@ static int activate_authorize(char *out, size_t outsz, int *exit_code)
 
     fflush(NULL);   /* vms-cdb: never splice an inherited stdio buffer into the child */
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_continue();   /* DCL's image task (rd vms-e50) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -120,8 +123,8 @@ static int activate_authorize(char *out, size_t outsz, int *exit_code)
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
 
-        /* THE PATH UNDER TEST: continue the parent's identity, no setident. */
-        uint32_t st = vms_kif_register_continue();
+        /* THE PATH UNDER TEST: the row the creator made, no setident. */
+        uint32_t st = ovmx_test_self(NULL);
         printf("CONTINUE_STATUS=%u\n", (unsigned)st);
 
         memset(&self, 0, sizeof(self));
@@ -196,8 +199,6 @@ int main(void)
      * but the 8-shard grouping did not. Self-contained now, passes in ANY cohort.
      * Mirrors the proven test_syssvc_authorize.c precondition block. */
     {
-        uint32_t vpid = 0;
-        (void)vms_kif_register(&vpid);       /* job_id for the LNM$JOB scope   */
         lnm_manager_t *mgr = lnm_get_manager();
         uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
         CHECK($VMS_STATUS_SUCCESS(mst),
@@ -210,50 +211,19 @@ int main(void)
     static char outA[8192], outB[8192];
     int rcA = -1, rcB = -1;
 
-    /* --- A: a SYSPRV parent's activated image is ADMITTED ------------- */
-    /* THIS process becomes SYSTEM (SYSPRV), then activates AUTHORIZE. The
-     * image never setident's -- it inherits SYSPRV purely by continuing
-     * this process across the activation fork. */
-    {
-        uint32_t ist = vms_kif_setident(SYS_NAME, SYS_UIC, SYS_PRIVS);
-        CHECK(ist == 1, "A: this process established the SYSTEM/SYSPRV identity to be continued");
-    }
-
-    if (activate_authorize(outA, sizeof(outA), &rcA) != 0) {
-        CHECK(0, "A: could not activate AUTHORIZE");
-    } else {
-        dump("A: SYSPRV parent, image continues identity", outA);
-        CHECK(strstr(outA, "CONTINUE_STATUS=1\n") != NULL,
-              "A: the executive accepted the continue-identity registration");
-        {
-            char want[64];
-            snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
-                     (unsigned long long)(uint64_t)SYS_PRIVS);
-            /* negctl: register-continue-identity-dropped */
-            CHECK(strstr(outA, want) != NULL,
-                  "A: the continued image holds the PARENT's SYSPRV mask -- a "
-                  "readback, not a claim, and it never called setident");
-        }
-        /* negctl: register-continue-identity-dropped */
-        CHECK(strstr(outA, "%UAF-I-AUTHVERSION") != NULL,
-              "A: AUTHORIZE printed its banner -- the continued image was ADMITTED");
-        /* negctl: register-continue-identity-dropped */
-        CHECK(strstr(outA, "%UAF-E-NAOFIL") == NULL,
-              "A: the continued image was never refused");
-        /* negctl: register-continue-identity-dropped */
-        CHECK(rcA == 0, "A: AUTHORIZE exited 0 for the admitted session");
-    }
-
     /* --- B: a setident'd-DOWN parent's activated image is REFUSED ----- */
     /* A child process drops to FIELD (no SYSPRV) and THEN activates
      * AUTHORIZE. Privileges must not reappear across the activation fork.
-     * Done in a subprocess so this main (SYSTEM) is not itself reduced. */
+     * Done in a subprocess so this main (SYSTEM) is not itself reduced, and
+     * before A: the subprocess takes this suite's identity, and only the
+     * suite's own SYSTEM identity (CMKRNL, SETPRV) may stamp FIELD -- A's
+     * SYSPRV-only identity may not (rd vms-2a5). */
     {
         int relay[2];
         if (pipe(relay) < 0) {
             CHECK(0, "B: pipe()");
         } else {
-            pid_t p = fork();
+            pid_t p = ovmx_fork_subprocess();   /* a process this suite creates */
             if (p < 0) {
                 CHECK(0, "B: fork()");
                 close(relay[0]); close(relay[1]);
@@ -292,7 +262,7 @@ int main(void)
 
         dump("B: FIELD parent (no SYSPRV), image continues identity", outB);
         CHECK(strstr(outB, "CONTINUE_STATUS=1\n") != NULL,
-              "B: the executive accepted the continue-identity registration");
+              "B: the image task has the row its creator made (CREPRC_PCB CONTINUE)");
         {
             char want[64];
             snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
@@ -307,6 +277,40 @@ int main(void)
         CHECK(strstr(outB, "%UAF-I-AUTHVERSION") == NULL,
               "B: the continued unprivileged image never saw the banner");
         CHECK(rcB == 1, "B: AUTHORIZE exited 1 for the refused session");
+    }
+
+    /* --- A: a SYSPRV parent's activated image is ADMITTED ------------- */
+    /* THIS process becomes SYSTEM (SYSPRV), then activates AUTHORIZE. The
+     * image never setident's -- it inherits SYSPRV purely by continuing
+     * this process across the activation fork. */
+    {
+        uint32_t ist = vms_kif_setident(SYS_NAME, SYS_UIC, SYS_PRIVS);
+        CHECK(ist == 1, "A: this process established the SYSTEM/SYSPRV identity to be continued");
+    }
+
+    if (activate_authorize(outA, sizeof(outA), &rcA) != 0) {
+        CHECK(0, "A: could not activate AUTHORIZE");
+    } else {
+        dump("A: SYSPRV parent, image continues identity", outA);
+        CHECK(strstr(outA, "CONTINUE_STATUS=1\n") != NULL,
+              "A: the image task has the row its creator made (CREPRC_PCB CONTINUE)");
+        {
+            char want[64];
+            snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
+                     (unsigned long long)(uint64_t)SYS_PRIVS);
+            /* negctl: register-continue-identity-dropped */
+            CHECK(strstr(outA, want) != NULL,
+                  "A: the continued image holds the PARENT's SYSPRV mask -- a "
+                  "readback, not a claim, and it never called setident");
+        }
+        /* negctl: register-continue-identity-dropped */
+        CHECK(strstr(outA, "%UAF-I-AUTHVERSION") != NULL,
+              "A: AUTHORIZE printed its banner -- the continued image was ADMITTED");
+        /* negctl: register-continue-identity-dropped */
+        CHECK(strstr(outA, "%UAF-E-NAOFIL") == NULL,
+              "A: the continued image was never refused");
+        /* negctl: register-continue-identity-dropped */
+        CHECK(rcA == 0, "A: AUTHORIZE exited 0 for the admitted session");
     }
 
     printf("=== test_syssvc_identcont: %d passed, %d failed ===\n", pass, fail);

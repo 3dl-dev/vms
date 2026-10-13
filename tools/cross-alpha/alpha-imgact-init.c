@@ -37,6 +37,9 @@
 #include <sys/syscall.h>
 #include <sys/reboot.h>
 #include <linux/reboot.h>
+#include <sys/ioctl.h>
+
+#include "vms_ioctl.h"   /* ESTABLISH_SYSTEM + CREPRC_PCB (rd vms-2a5) */
 
 static int load_module(const char *path)
 {
@@ -60,18 +63,35 @@ int main(void)
 
     printf("OVMX-ALPHA-IMGACT: init up\n");
 
-    /* Bring the executive up so the proof runs on a live /dev/vms kernel. */
-    if (load_module("/vms.ko") == 0 && access("/dev/vms", F_OK) == 0)
-        printf("OVMX-ALPHA-IMGACT: /dev/vms PRESENT\n");
-    else
+    /* Bring the executive up so the proof runs on a live /dev/vms kernel. This
+     * init is the boot task (rd vms-2a5): it makes the one ESTABLISH_SYSTEM
+     * call, and the image runs in a process it creates (CREPRC_PCB). */
+    int vfd = -1;
+    if (load_module("/vms.ko") == 0 && access("/dev/vms", F_OK) == 0) {
+        struct vms_establish_system_args est;
+        memset(&est, 0, sizeof(est));
+        vfd = open("/dev/vms", O_RDWR);
+        if (vfd >= 0 && ioctl(vfd, VMS_IOCTL_ESTABLISH_SYSTEM, &est) == 0 && (est.status & 1))
+            printf("OVMX-ALPHA-IMGACT: /dev/vms PRESENT; boot task is SYSTEM\n");
+        else
+            printf("OVMX-ALPHA-IMGACT: /dev/vms PRESENT but ESTABLISH_SYSTEM failed (status %u)\n",
+                   (unsigned)est.status);
+    } else {
         printf("OVMX-ALPHA-IMGACT: /dev/vms ABSENT (proof continues; IMGACT does not require it)\n");
+    }
 
     /* Activate a REAL VMS-native Alpha image via IMGACT.EXE (PT_INTERP). */
     printf("OVMX-ALPHA-IMGACT: activating VMS-native image via IMGACT.EXE\n");
     fflush(stdout);
     int rc = -1;
+    int hold[2] = { -1, -1 };
+    (void)!pipe(hold);
     pid_t pid = fork();
     if (pid == 0) {
+        char go = 0;
+        close(hold[1]);
+        while (read(hold[0], &go, 1) < 0 && errno == EINTR)
+            ;
         char *argv[] = { (char *)"/imgact-proof/test_prog_alpha", NULL };
         char *envp[] = { NULL };
         execve("/imgact-proof/test_prog_alpha", argv, envp);
@@ -79,6 +99,18 @@ int main(void)
         _exit(127);
     } else if (pid > 0) {
         int status = 0;
+        close(hold[0]);
+        if (vfd >= 0) {
+            struct vms_creprc_pcb_args a;
+            memset(&a, 0, sizeof(a));
+            a.child_pid = (uint32_t)pid;
+            a.flags = VMS_CREPRC_PCB_SUBPROCESS;
+            if (ioctl(vfd, VMS_IOCTL_CREPRC_PCB, &a) != 0 || !(a.status & 1))
+                printf("OVMX-ALPHA-IMGACT: the executive did not create the image's process (status %u)\n",
+                       (unsigned)a.status);
+        }
+        (void)!write(hold[1], "g", 1);
+        close(hold[1]);
         if (waitpid(pid, &status, 0) >= 0 && WIFEXITED(status))
             rc = WEXITSTATUS(status);
     }

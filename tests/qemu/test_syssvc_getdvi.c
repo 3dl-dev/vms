@@ -59,6 +59,7 @@
 #include "lnmdef.h"       /* struct item_list_3 */
 #include "starlet.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -171,18 +172,15 @@ int main(void)
     /* ---- 1. The executive's real device is enumerated and readable ---- */
     int term = 0;
     /* negctl-knockon: devtab-devscan-found-status-wrong */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(scan_finds_opa0(&term),
           "device scan lists the console terminal");
     /* negctl: devtab-devscan-found-status-wrong */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(term,
           "device scan terminates with SS$_NOMOREDEV");
 
     uint32_t devclass = 0;
     uint32_t gst = getdvi_l("OPA0:", (uint16_t)DVI$_DEVCLASS, &devclass);
     /* negctl-knockon: devtab-getdvi-devnam-status-wrong */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(gst == SS$_NORMAL && devclass == DC$_TERM,
           "this process can still read the device");
 
@@ -209,7 +207,6 @@ int main(void)
     int alloc_before = 0;
     uint32_t st_before = opa0_alloc_state(&alloc_before);
     /* negctl-knockon: devtab-getdvi-devnam-status-wrong */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st_before == SS$_NORMAL && !alloc_before,
           "the console is not allocated before any process allocates it");
 
@@ -220,7 +217,7 @@ int main(void)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();
     if (child == 0) {
         /*
          * PROCESS A. A distinct Linux process, therefore a distinct process to
@@ -252,7 +249,6 @@ int main(void)
         struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
         char verdict = '?';
         int pr = poll(&pfd, 1, REPORT_TIMEOUT_MS);
-        /* negctl-knockon: bind-client-no-register */
         if (pr > 0 && read(pipefd[0], &verdict, 1) == 1)
             CHECK(verdict == 'Y',
                   "the second process allocated OPA0: through the executive ($ALLOC)");
@@ -266,7 +262,6 @@ int main(void)
     /* negctl: devtab-alloc-not-recorded */
     /* negctl: devtab-getdvi-userspace-alloc-dropped */
     /* negctl-knockon: devtab-getdvi-devnam-status-wrong */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st_during == SS$_NORMAL && alloc_during,
           "B sees that A allocated the device");
 
@@ -278,7 +273,6 @@ int main(void)
     int alloc_after = 0;
     uint32_t st_after = opa0_alloc_state(&alloc_after);
     /* negctl-knockon: devtab-getdvi-devnam-status-wrong */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st_after == SS$_NORMAL && !alloc_after,
           "the allocation is gone once the other process exits (not a constant)");
 

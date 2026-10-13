@@ -57,6 +57,7 @@
 #include "ssdef.h"
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -282,7 +283,7 @@ int main(int argc, char **argv)
     }
 
     if (pipe(p2c) < 0 || pipe(c2p) < 0) { printf("  FAIL: pipe()\n"); return 1; }
-    pid = fork();
+    pid = ovmx_fork_subprocess();
     if (pid < 0) { printf("  FAIL: fork()\n"); return 1; }
     if (pid == 0) {
         char r[16], w[16];

@@ -70,6 +70,8 @@
 #include "rms/rms.h"          /* rms_stage_over_acp, RMS$_NORMAL, SS$_ABORT   */
 #include "vms_kif.h"          /* vms_kif_open, vms_kif_acp_mount/_dmount      */
 #include "ovmx_layout.h"      /* OVMX_BOOT_STAGE_DIR                          */
+#include "vms_kif.h"
+#include "ovmx_test_fork.h"   /* children are processes the suite creates (rd vms-2a5) */
 
 #define EXIT_SKIP 77
 
@@ -226,7 +228,7 @@ int main(void)
         }
     }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_unprivileged(NONROOT_GID, NONROOT_UID);
     if (pid < 0) {
         check(0, "fork a non-root session");
         return 1;

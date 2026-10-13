@@ -59,17 +59,18 @@ static void acp_strlcpy(char *dst, const char *src, unsigned long cap)
  * ACP primitives -- one thin wrapper per ioctl the activator needs.
  * -------------------------------------------------------------------------- */
 
-/* Register (adopt-or-create) this process's executive PCB. The executive keys
- * the PCB on the thread group and it survives execve, so when IMGACT runs as
- * the interpreter of an image DCL activated (register-continue), this ADOPTS
- * the existing row (vms_module.c: "register a process that already exists ->
- * hand back the process that already exists"); in a fresh process (the test)
- * it creates one. Either way the ACP ioctls that follow have a process. */
-static uint32_t acp_register(int fd)
+/* Confirm this process has its executive PCB. Its creator made the PCB before
+ * the process ran (rd vms-2a5: DCL for an image task, $CREPRC for a new
+ * process), and the PCB survives execve, so IMGACT -- the interpreter of the
+ * image being activated -- reads its own row back here. Nothing registers: a
+ * task the executive did not create has no PCB, and the ACP ioctls that follow
+ * would be refused anyway. */
+static uint32_t acp_self(int fd)
 {
-	struct vms_register_args a;
+	struct vms_getjpi_args a;
 	acp_memset(&a, 0, sizeof(a));
-	if (kif_call(fd, KIF_SVC_REGISTER, &a) < 0)
+	a.select = VMS_JPI_SEL_SELF;
+	if (kif_call(fd, KIF_SVC_GETJPI, &a) < 0)
 		return SS$_NOSUCHDEV;
 	return a.status;
 }
@@ -198,7 +199,7 @@ uint32_t imgact_acp_open(struct imgact_acp_file *f, const char *dev,
 		return SS$_NOSUCHDEV;
 	f->dev_fd = fd;
 
-	st = acp_register(fd);
+	st = acp_self(fd);
 	if (!$VMS_STATUS_SUCCESS(st)) {
 		kif_xport_dev_close(fd);
 		f->dev_fd = -1;
@@ -312,7 +313,7 @@ uint32_t imgact_acp_open_fid(struct imgact_acp_file *f, const char *dev,
 	if (fd < 0)
 		return SS$_NOSUCHDEV;
 	f->dev_fd = fd;
-	st = acp_register(fd);
+	st = acp_self(fd);
 	if ($VMS_STATUS_SUCCESS(st))
 		st = acp_assign(fd, dev, &f->chan);
 	if (!$VMS_STATUS_SUCCESS(st)) {
@@ -438,7 +439,7 @@ uint32_t imgact_kfe_find(const char *name, char *path, unsigned long sz)
 
 	if (fd < 0)
 		return SS$_NOSUCHDEV;
-	st = acp_register(fd);
+	st = acp_self(fd);
 	if (st & 1) {
 		acp_memset(&a, 0, sizeof(a));
 		a.op = VMS_KFE_OP_FIND_NAME;

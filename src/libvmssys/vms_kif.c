@@ -84,14 +84,13 @@ static __thread vms_pid_t vms_bound_pid = 0;
  * -EAGAIN never reaches here: it is only ever returned by DELIVERAST, and
  * vms_kif_deliverast consumes it in band as "no AST pending".
  *
- * -ESRCH ("this task has no entry in the executive's process table") is
- * deliberately NOT given a status of its own. VMS is never in that state:
- * a process always has a PCB. Under CLAUDE.md Rule 10 the answer to a
- * condition VMS never faces is to make it unreachable rather than to hand
- * it a plausible-looking status, and kif_bind() below is what makes it
- * unreachable. If it is ever observed anyway, the executive has lost a PCB
- * it is required to hold, which is exactly SS$_BUGCHECK -- "internal
- * consistency failure" -- and not something the caller did wrong.
+ *         3 -> %SYSTEM-W-NONEXPR, nonexistent process
+ *
+ * -ESRCH means "this task has no entry in the executive's process table":
+ * the executive did not create it (rd vms-2a5). Every VMS process has its PCB
+ * from its creator before it runs, so a task with none is not a VMS process,
+ * and every facility refuses it with SS$_NONEXPR. Nothing in this layer makes
+ * a PCB for it (design note 3.1).
  */
 uint32_t vms_kif_kerr_to_ss(int err)
 {
@@ -99,6 +98,7 @@ uint32_t vms_kif_kerr_to_ss(int err)
     case VMS_EFAULT:  return SS$_ACCVIO;
     case VMS_ENOMEM:  return SS$_INSFMEM;
     case VMS_ENOTTY:  return SS$_ILLIOFUNC;
+    case VMS_ESRCH:   return SS$_NONEXPR;
     default:          return SS$_BUGCHECK;
     }
 }
@@ -122,176 +122,48 @@ void vms_kif_close(void)
 }
 
 /*
- * kif_register_req - issue ONE registration ioctl (REGISTER or the
- * image-activation REGISTER_CONTINUE) and record the binding.
- *
- * No "executive absent" check. The executive is INTEGRAL: PID 1 refuses to
- * bring the system up unless /dev/vms is open, and holds it open for the
- * life of the system (src/ovmx_init/ovmx_init.c, executive_attach), so no
- * caller can observe its absence. See CLAUDE.md Rule 9.
- *
- * NO privilege argument and NO process-ID argument (vms-2b8), and none for
- * REGISTER_CONTINUE either (vms-4d7): the executive derives or continues
- * the identity from the task hierarchy, never from anything the caller
- * hands it. The assigned/shared VMS PID comes back out.
- */
-static uint32_t kif_register_req(unsigned long req, uint32_t *vms_pid)
-{
-    struct vms_register_args args;
-    int rc;
-
-    vms_memset(&args, 0, sizeof(args));
-
-    rc = kif_xport_ioctl(vms_dev_fd, req, &args);
-    if (rc < 0)
-        return vms_kif_kerr_to_ss(rc);
-
-    /* Remember which process this registration belongs to, so an explicit
-     * open+register (the sequence vms_kif.h documents, and the one the
-     * kernel tests drive) satisfies kif_bind() without a second round trip. */
-    if (args.status & 1)
-        vms_bound_pid = vms_sys_getpid();
-
-    if (vms_pid)
-        *vms_pid = args.vms_pid;
-
-    return args.status;
-}
-
-uint32_t vms_kif_register(uint32_t *vms_pid)
-{
-    return kif_register_req(VMS_IOCTL_REGISTER, vms_pid);
-}
-
-/*
- * vms_kif_register_continue - register the CALLING task as a continuation
- * of its VMS parent's process, not as a new one (vms-4d7, Option B).
- *
- * DCL calls this in the forked child of an image activation, BEFORE execve
- * replaces the image (src/vmsdcl/dcl_cmd_process.c, dcl_activate_image).
- * At that instant the child's real_parent is still DCL, so the executive
- * can read DCL's identity and share its VMS PID, UIC, user name and
- * privileges onto this task -- which is why SYSTEM's RUN AUTHORIZE now
- * holds SYSPRV. The PCB is keyed on the thread group and survives the
- * execve, so the activated image inherits the continued identity without
- * doing anything itself (its own first kif call ADOPTS the existing row).
- *
- * The /dev/vms descriptor found in TLS here belongs to the PARENT (it was
- * dup'd across fork), so it is dropped and a fresh one taken, exactly as
- * kif_bind() does -- this child is accounted separately even though it
- * shares the parent's VMS identity.
- *
- * Returns the registration status; on success vms_bound_pid is set so the
- * post-execve image's kif_bind() is a no-op adopt.
+ * The registration entry points (rd vms-2a5). The executive no longer has a
+ * registration service: a process's PCB is made by its creator
+ * (VMS_IOCTL_CREPRC_PCB) before it runs, or -- for the boot task only -- by
+ * ESTABLISH_SYSTEM. These four stay only because LIBVMSSYS$SHR's released
+ * symbol vector names them at fixed positions; each answers what the
+ * executive answers an unknown service, SS$_ILLIOFUNC, and does nothing.
  */
 uint32_t vms_kif_register_continue(void)
 {
-    if (vms_dev_fd >= 0) {
-        kif_xport_dev_close(vms_dev_fd);
-        vms_dev_fd = -1;
-    }
-    vms_bound_pid = 0;
-
-    (void)vms_kif_open();
-    return kif_register_req(VMS_IOCTL_REGISTER_CONTINUE, (uint32_t *)0);
+    return SS$_ILLIOFUNC;
 }
 
-/*
- * vms_kif_register_subprocess - register the CALLING task as a genuinely NEW
- * VMS process that INHERITS its creator's executive identity (vms-19e9).
- *
- * $CREPRC's forked child (src/libvms/syssvc/sys_process.c) calls this BEFORE it
- * touches any other executive facility and before it execs its image, while its
- * real_parent is still the CREATOR (the SPAWNing DCL). The executive reads the
- * creator's row and copies its UIC, user name and privileges onto this task --
- * so a subprocess of the interactive SYSTEM session IS SYSTEM in the executive
- * table -- but mints this task a FRESH, distinct VMS PID (a subprocess is a new
- * VMS process, unlike an image activation, which shares the PID via
- * vms_kif_register_continue()). Identity is parent-DERIVED, never self-declared:
- * this is what a non-root child could NOT achieve with vms_kif_setident(), which
- * the executive correctly refuses a non-root self-declared privileged name
- * (CLAUDE.md Rule 10 / INV-6).
- *
- * Same fd discipline as vms_kif_register_continue(): the /dev/vms descriptor in
- * TLS belongs to the PARENT (dup'd across fork), so it is dropped and a fresh
- * one taken -- this child is accounted separately even though it inherits the
- * parent's identity. The O_CLOEXEC creation-handshake pipe $CREPRC uses to
- * report back is a DIFFERENT descriptor and is untouched here.
- *
- * Returns the registration status; on success vms_bound_pid is set so a
- * subsequent kif_bind() (e.g. inside vms_kif_setprn) is a no-op adopt.
- */
 uint32_t vms_kif_register_subprocess(void)
 {
-    if (vms_dev_fd >= 0) {
-        kif_xport_dev_close(vms_dev_fd);
-        vms_dev_fd = -1;
-    }
-    vms_bound_pid = 0;
-
-    (void)vms_kif_open();
-    return kif_register_req(VMS_IOCTL_REGISTER_SUBPROCESS, (uint32_t *)0);
+    return SS$_ILLIOFUNC;
 }
 
-/*
- * vms_kif_register_detached - register the CALLING task (the detached
- * grandchild of $CREPRC PRC$M_DETACH) as a new VMS process -- a fresh PID, its
- * own job -- carrying the identity its creator's ticket authorized (rd
- * vms-ff75). Must be the task's FIRST executive call. Same fd discipline as
- * vms_kif_register_subprocess(): the descriptor in TLS was inherited across
- * fork() from the creator and is dropped for a fresh one. The executive
- * honours the ticket only if its creator is one of this task's ancestors;
- * otherwise SS$_NOPRIV and nothing is registered or stamped.
- */
 uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid)
 {
-    struct vms_register_detached_args args;
-    int rc;
-
-    if (vms_dev_fd >= 0) {
-        kif_xport_dev_close(vms_dev_fd);
-        vms_dev_fd = -1;
-    }
-    vms_bound_pid = 0;
-    (void)vms_kif_open();
-
-    vms_memset(&args, 0, sizeof(args));
-    args.ticket = ticket;
-    rc = kif_xport_ioctl(vms_dev_fd, VMS_IOCTL_REGISTER_DETACHED, &args);
-    if (rc < 0)
-        return vms_kif_kerr_to_ss(rc);
-    if (args.status & 1) {
-        vms_bound_pid = vms_sys_getpid();
-        if (vms_pid)
-            *vms_pid = args.vms_pid;
-    }
-    return args.status;
+    (void)ticket;
+    if (vms_pid)
+        *vms_pid = 0;
+    return SS$_ILLIOFUNC;
 }
 
 /*
- * kif_bind - complete the documented open -> register sequence for the
- * calling task, once, before any ioctl that needs a registered process.
+ * kif_bind - give the calling PROCESS its own /dev/vms descriptor, once.
  *
- * THIS IS THE DEFECT vms-9fc EXISTS TO FIX. vms_kif.h has always
- * documented the protocol ("1. open /dev/vms  2. call vms_kif_register()"),
- * vms_kif_register() has always existed -- and NOTHING in the product ever
- * called it. src/kernel/vms_module.c routes every ioctl except REGISTER
- * through vms_proc_find_or_err(), which returns -ESRCH for an unregistered
- * task, so EVERY /dev/vms call made by the product failed. That included
- * sys$ENQ/$DEQ, the one facility the executive-retrofit design named as
- * "already wired" and told every other implementer to copy.
+ * A descriptor found in TLS may belong to another process: this thread's TLS
+ * was inherited across fork(), and the descriptor is a dup of that process's
+ * channel. So the first call in a new process drops it and opens its own, and
+ * the process is recorded as bound. Nothing is registered (rd vms-2a5): the
+ * process's PCB was made by its creator before it ran (VMS_IOCTL_CREPRC_PCB),
+ * or it is not a VMS process and the executive refuses every service with
+ * SS$_NONEXPR. (vms-9fc introduced this bind because nothing in the product
+ * ever registered; now nothing needs to.)
  *
- * The fix belongs here and only here: binding once at the kernel-interface
- * layer is what makes every facility built on it inherit a registered
- * process, instead of each caller remembering a step that four separate
- * callers had already forgotten.
- *
- * Nothing is reported if the bind cannot be completed. That is deliberate
- * and must not be "fixed" by returning a status: the only way to fail here
- * is for the executive to be unreachable, and OVMX does not run without the
- * executive (CLAUDE.md Rules 9 and 10 -- PID 1 refuses to boot). A failed
- * ioctl on the unopened descriptor still yields an honest status through
- * vms_kif_kerr_to_ss(); what it must never yield is a fake success.
+ * The open result is deliberately not tested here. The only way it can fail is
+ * for the executive to be absent, and every ioctl on the unopened descriptor
+ * then yields an honest status through vms_kif_kerr_to_ss() -- never a fake
+ * success (CLAUDE.md Rules 9 and 10; tests/integration/test_runtime_target.sh
+ * rejects a branch on it).
  */
 static void kif_bind(void)
 {
@@ -299,45 +171,13 @@ static void kif_bind(void)
 
     if (vms_bound_pid == pid)
         return;
-
-    /*
-     * Any descriptor found here belongs to another PROCESS -- this
-     * thread's TLS was inherited across fork(). It is a dup of that
-     * process's channel, so drop it and take our own rather than sharing
-     * a lifetime with a process the executive accounts for separately.
-     * (A sibling thread of the SAME process never gets here with a
-     * descriptor: TLS starts fresh at -1, and the register below is
-     * adopted onto the process's existing PCB.)
-     */
     if (vms_dev_fd >= 0) {
         kif_xport_dev_close(vms_dev_fd);
         vms_dev_fd = -1;
     }
-
-    /*
-     * Opened unconditionally, and the result is deliberately NOT tested.
-     * The only way it can fail is for the executive to be absent, and
-     * OVMX is never in that state -- PID 1 refuses to bring the system up
-     * without /dev/vms and holds the descriptor for the life of the
-     * system. Branching on it would be handling a condition VMS never
-     * faces (Rule 10), which is why tests/integration/test_runtime_target.sh
-     * rejects the branch. If a descriptor somehow is not available the
-     * REGISTER below fails and vms_bound_pid stays 0, so nothing is ever
-     * told it is bound when it is not.
-     */
     (void)vms_kif_open();
-
-    /*
-     * NOTHING IS PASSED. A process does not get to declare its own
-     * privileges or its own process ID: on VMS both come from the
-     * executive (the authorization record and $SETPRV for one, the
-     * process database for the other), never from the image asking. This
-     * call used to hand over getpid() and an init_privs quadword, and the
-     * arguments are gone rather than zeroed (vms-2b8), so no caller can
-     * reintroduce the self-declared-identity facade the VMS_PRIVILEGES
-     * environment variable already is.
-     */
-    (void)vms_kif_register(NULL);
+    if (vms_dev_fd >= 0)
+        vms_bound_pid = pid;
 }
 
 /*
@@ -2071,32 +1911,17 @@ uint32_t vms_kif_setident(const char *username, uint32_t uic,
 }
 
 /*
- * vms_kif_creprc_ticket - ask the executive to authorize, against the CALLING
- * (creator's) row, the identity a detached process is about to be created with
- * (rd vms-ff75). Issued by $CREPRC PRC$M_DETACH in the creator BEFORE it forks,
- * so a refused identity (SS$_NOPRIV: no SETPRV and not a subset of the
- * creator's own identity) creates nothing. On success *ticket is the
- * single-use ticket the detached grandchild presents to
- * vms_kif_register_detached().
+ * vms_kif_creprc_ticket - gone with registration (rd vms-2a5): a detached
+ * process's identity is given by its creator through VMS_IOCTL_CREPRC_PCB.
+ * Kept only for its position in LIBVMSSYS$SHR's released symbol vector.
  */
 uint32_t vms_kif_creprc_ticket(const char *username, uint32_t uic,
                                uint64_t privs, uint64_t *ticket)
 {
-    struct vms_creprc_ticket_args args;
-
-    if (!username || !ticket)
-        return 0x00000014; /* SS$_BADPARAM */
-    vms_memset(&args, 0, sizeof(args));
-    vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
-    args.username[VMS_USERNAME_SIZE - 1] = '\0';
-    args.uic = uic;
-    args.privs = privs;
-
-    KIF_CALL(VMS_IOCTL_CREPRC_TICKET, &args);
-
-    if (args.status & 1)
-        *ticket = args.ticket;
-    return args.status;
+    (void)username; (void)uic; (void)privs;
+    if (ticket)
+        *ticket = 0;
+    return SS$_ILLIOFUNC;
 }
 
 /*
@@ -2997,6 +2822,11 @@ static int vms_kif_lnm_scope_of(uint32_t table, uint32_t *scope_key)
         *scope_key = 0u;
         return 1;
     }
+    /* rd vms-94a: a clusterwide table names its own id (vms_lnm.h). */
+    if (VMS_LNM_TBL_BASE(table) == VMS_LNM_TBL_CLUSTER) {
+        *scope_key = VMS_LNM_TBL_CLKEY(table);
+        return *scope_key != 0u;
+    }
     if (!vms_kif_lnm_myscope(&g, &j, &pk))
         return 0;
     *scope_key = table == VMS_LNM_TBL_GROUP ? g
@@ -3009,6 +2839,84 @@ int vms_kif_lnm_scope_key(uint32_t table, uint32_t *key)
     if (!key || !vms_kif_lnm_arena())
         return 0;
     return vms_kif_lnm_scope_of(table, key);
+}
+
+#define LNM_READ_TRIES_DIR 65536
+
+/*
+ * rd vms-94a: the table word of the clusterwide table called `name`
+ * (LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE, or one a member created), read
+ * from the executive's own directory entries in the arena. 1 found, 0 not.
+ */
+int vms_kif_lnm_cluster_table(const char *name, uint32_t *table_word)
+{
+    struct vms_lnm_arena *a = vms_kif_lnm_arena();
+    int tries;
+
+    if (!a || !name || !table_word)
+        return 0;
+    for (tries = 0; tries < LNM_READ_TRIES_DIR; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max, key = 0;
+
+        if (g0 & 1ULL)
+            continue;
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+        for (i = 0; i < max; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+
+            if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+                vms_strcasecmp(e->name, name) == 0) {
+                key = e->scope_key;
+                break;
+            }
+        }
+        if (lnm_gen_load(a) != g0)
+            continue;
+        if (key == 0u)
+            return 0;
+        *table_word = VMS_LNM_TBL_CLUSTER_OF(key);
+        return 1;
+    }
+    return 0;
+}
+
+/* rd vms-94a: the name of clusterwide table `key` (its directory entry). */
+int vms_kif_lnm_cluster_name(uint32_t key, char *out, uint32_t outsz)
+{
+    struct vms_lnm_arena *a = vms_kif_lnm_arena();
+    int tries;
+
+    if (!a || !out || outsz == 0u || key == 0u)
+        return 0;
+    for (tries = 0; tries < LNM_READ_TRIES_DIR; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max;
+        int found = 0;
+
+        if (g0 & 1ULL)
+            continue;
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+        for (i = 0; i < max; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+
+            if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+                e->scope_key == key) {
+                vms_strncpy(out, e->name, outsz - 1u);
+                out[outsz - 1u] = '\0';
+                found = 1;
+                break;
+            }
+        }
+        if (lnm_gen_load(a) != g0)
+            continue;
+        return found;
+    }
+    return 0;
 }
 
 int vms_kif_lnm_present(void)
@@ -3077,7 +2985,8 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
          * returns the outermost of the rest (rd vms-ef21). */
         for (i = 0; i < max; i++) {
             const struct vms_lnm_entry *e = &a->entries[i];
-            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+            if (!e->in_use || e->table != VMS_LNM_TBL_BASE(table) ||
+                e->scope_key != scope_key)
                 continue;
             if (e->acmode > max_acmode || !lnm_name_eq(e->name, name, case_blind))
                 continue;
@@ -3224,7 +3133,8 @@ int vms_kif_lnm_enumerate(uint32_t table,
             const struct vms_lnm_entry *e = &a->entries[i];
             uint8_t nv, k;
 
-            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+            if (!e->in_use || e->table != VMS_LNM_TBL_BASE(table) ||
+                e->scope_key != scope_key)
                 continue;
             if (e->num_equiv == 0)
                 continue;

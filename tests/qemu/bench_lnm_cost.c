@@ -249,18 +249,19 @@ int main(int argc, char **argv)
             printf("FAIL: bench_lnm_cost\n");
             return 1;
         }
-        /* The executive requires the caller to register a PCB before any
-         * other ioctl; every non-REGISTER ioctl returns -ESRCH otherwise.
-         * That registration is a per-process one-off, NOT a per-translation
-         * cost, so it is done here and excluded from every timed loop. */
-        /* REGISTER takes no input on current main: the executive assigns
-         * the VMS pid and derives privileges from the task's credentials
-         * (vms-2b8 removed the init_privs and input-vms_pid fields). vms_pid
-         * is output-only; a zeroed struct is the whole request. */
-        struct vms_register_args reg;
-        memset(&reg, 0, sizeof(reg));
-        if (ioctl(vmsfd, VMS_IOCTL_REGISTER, &reg) != 0) {
-            printf("  FAIL: VMS_IOCTL_REGISTER rejected (%s)\n", strerror(errno));
+        /* The executive answers only a process it created (rd vms-2a5). This
+         * bench is run by hand, as the first process on a freshly loaded
+         * executive, so it makes the boot task's one ESTABLISH_SYSTEM call
+         * itself, which gives it its PCB -- a per-process one-off, NOT a
+         * per-translation cost, done here and excluded from every timed loop.
+         * Anywhere else (a booted system, where the call is already made) it
+         * is refused, and the bench says so rather than invent a number. */
+        struct vms_establish_system_args est;
+        memset(&est, 0, sizeof(est));
+        if (ioctl(vmsfd, VMS_IOCTL_ESTABLISH_SYSTEM, &est) != 0 || !(est.status & 1)) {
+            printf("  FAIL: this process has no PCB and could not become the boot task "
+                   "(ESTABLISH_SYSTEM: %s, status %u) -- run it as the first process "
+                   "on a freshly loaded executive\n", strerror(errno), (unsigned)est.status);
             printf("FAIL: bench_lnm_cost\n");
             close(vmsfd);
             return 1;

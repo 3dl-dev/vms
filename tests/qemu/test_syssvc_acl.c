@@ -42,6 +42,7 @@
 #include "ssdef.h"
 #include "ossdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -284,7 +285,7 @@ static uint32_t as_child(const char *self, char mode, uint16_t fid)
     if (pipe(p) < 0)
         return 0;
     fflush(NULL);
-    pid = fork();
+    pid = ovmx_fork_unprivileged(UNPRIV_GID, UNPRIV_UID);
     if (pid == 0) {
         char wfd[16], fs[16], md[2] = { mode, 0 };
         close(p[0]);
@@ -324,7 +325,7 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0)
         return -1;
     fflush(NULL);
-    pid = fork();
+    pid = ovmx_fork_subprocess();
     if (pid == 0) {
         dup2(in_pipe[0], 0); dup2(out_pipe[1], 1); dup2(out_pipe[1], 2);
         close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]);

@@ -37,12 +37,12 @@
  * register itself through kif_bind(); it does not need the manual step
  * below any more.
  *
- * This test still calls vms_kif_open()/vms_kif_register() explicitly,
+ * This test still calls vms_kif_open()/ovmx_test_self() explicitly,
  * before touching sys$enqw, exactly as facility_defects.sh's
  * bind-client-no-register control documents it (see that manifest entry's
  * blind_why): that is what makes this suite BLIND to the kif_bind-removed
  * defect the control restores -- if kif_bind() stopped calling
- * vms_kif_register(), this program's own explicit call would still
+ * ovmx_test_self(), this program's own explicit call would still
  * register it, and the suite would stay green. It does not touch or
  * bypass sys_lock.c's do_enq/sys$deq, which still make the exact ioctl
  * calls every caller uses.
@@ -142,9 +142,9 @@ static int bootstrap(const char *who)
      * one. This call used to ask for all 64 bits, which is a process naming
      * its own privileges. The executive DERIVES the mask from the task's
      * real credentials now; $ENQ/$DEQ need no privilege either way. */
-    uint32_t st = vms_kif_register(NULL);
+    uint32_t st = ovmx_test_self(NULL);
     if (!(st & 1)) {
-        printf("  FAIL: %s: vms_kif_register status=%u\n", who, st);
+        printf("  FAIL: %s: no row of its own (status %u)\n", who, st);
         return -1;
     }
     return 0;

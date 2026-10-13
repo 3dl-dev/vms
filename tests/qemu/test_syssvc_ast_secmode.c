@@ -56,6 +56,8 @@
 #include "starlet.h"
 #include "ssdef.h"
 #include "vms_kif.h"        /* pulls in vms_ioctl.h: PSL_C_*, VMS_PRV_M_* */
+#include "vms_kif.h"
+#include "ovmx_test_fork.h"   /* children are processes the suite creates (rd vms-2a5) */
 
 #define EXIT_SKIP 77
 
@@ -200,7 +202,7 @@ int main(void)
         printf("  FAIL: pipe() failed\n");
         fail++;
     } else {
-        pid_t pid = fork();
+        pid_t pid = ovmx_fork_unprivileged(C_GID, C_UID);
         if (pid < 0) {
             printf("  FAIL: fork() failed\n");
             fail++;

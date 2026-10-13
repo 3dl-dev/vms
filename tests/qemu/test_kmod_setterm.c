@@ -50,6 +50,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /*
  * Status values. SS$_NORMAL is 1 in $SSDEF on the reference lab
@@ -101,8 +102,8 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register(NULL) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(NULL) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         return -1;
     }
     return 0;
@@ -127,7 +128,7 @@ static void bound_child(int wfd, int gfd, const char *self, int phase)
     memset(&rep, 0, sizeof(rep));
     rep.phase = (uint32_t)phase;
 
-    if (vms_kif_open() < 0 || vms_kif_register(&rep.vms_pid) != SS_NORMAL)
+    if (vms_kif_open() < 0 || ovmx_test_self(&rep.vms_pid) != SS_NORMAL)
         _exit(3);
 
     if (phase == 0) {
@@ -260,7 +261,7 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (child < 0) {
         printf("  FAIL: fork()\n");
         fail++;
@@ -336,7 +337,6 @@ int main(int argc, char **argv)
     CHECK(strcmp(execed.terminal, CONSOLE_DEVNAM) == 0,
           "the freshly activated image still finds its terminal -- nothing "
           "was carried across execve() in userspace");
-    /* negctl: register-adopt-pid-not-reported */
     CHECK(execed.vms_pid == pre.vms_pid,
           "and it is the same VMS process, so the binding was not re-made");
 

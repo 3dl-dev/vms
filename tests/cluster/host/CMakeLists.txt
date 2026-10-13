@@ -1132,3 +1132,27 @@ set_tests_properties(cluster_host_scs_join_timeline PROPERTIES
     LABELS "unit;cluster;cluster_host;scs"
     TIMEOUT 60
 )
+
+# ---- rd vms-94a: the executive's CLUSTERWIDE logical-name tables -----------
+# src/kernel-core/vms_lnm.c compiled UNCHANGED on the host, the way vms_lock.c
+# is above: lnm_shim/ FIRST redirects its "vms_internal.h" to
+# lnm_host_internal.h and its backend to exec_kbackend_host.h; src/kernel
+# supplies the portable vms_ioctl.h / vms_lnm.h.
+add_executable(test_lnm_cluster test_lnm_cluster.c
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_lnm.c
+    exec_kbackend_host.c)
+target_include_directories(test_lnm_cluster PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lnm_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_lnm_cluster PRIVATE Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_lnm_cluster PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME cluster_host_test_lnm_cluster COMMAND test_lnm_cluster)
+set_tests_properties(cluster_host_test_lnm_cluster PROPERTIES
+    LABELS "unit;cluster;cluster_host;lnm"
+    TIMEOUT 30
+)

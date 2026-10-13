@@ -34,6 +34,7 @@
 #include <sys/sysmacros.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL       1
 #define SS_IVDEVNAM     324
@@ -78,8 +79,8 @@ int main(void)
         printf("=== test_kmod_disk: 0 passed, 1 failed ===\n");
         return 1;
     }
-    if (vms_kif_register(NULL) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(NULL) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         printf("=== test_kmod_disk: 0 passed, 1 failed ===\n");
         return 1;
     }

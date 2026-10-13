@@ -52,6 +52,7 @@
 #include "ssdef.h"
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL  SS$_NORMAL
 #define DCL_PATH   "/bin/DCL.EXE"
@@ -112,7 +113,7 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
     fflush(NULL);
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -202,7 +203,7 @@ int main(void)
      * Do NOT close(fd): vms_kif_open() caches it in the static vms_dev_fd,
      * and every vms_kif_* call below (in this process and, by inheritance,
      * in the forked A and the exec'd DCL) reuses that cached descriptor.
-     * Closing it here left A's vms_kif_register() with a stale fd -- the
+     * Closing it here left A's ovmx_test_self() with a stale fd -- the
      * pristine positive control's "process A never published its VMS PID".
      */
 
@@ -217,7 +218,7 @@ int main(void)
     }
 
     fflush(NULL);
-    pid_t a_pid = fork();
+    pid_t a_pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (a_pid < 0) {
         printf("  FAIL: could not fork process A\n");
         printf("=== test_syssvc_getjpi_pidarg: %d passed, %d failed ===\n", pass, fail + 1);
@@ -227,7 +228,7 @@ int main(void)
         uint32_t vpid = 0;
         char go;
         close(a_out[0]); close(a_hold[1]);
-        if (vms_kif_register(&vpid) != SS_NORMAL) _exit(2);
+        if (ovmx_test_self(&vpid) != SS_NORMAL) _exit(2);
         if (!(vms_kif_setident(A_USER, (A_GRP << 16) | A_MEM, A_PRIVS) & 1)) _exit(3);
         if (!(vms_kif_setprn(A_PRCNAM) & 1)) _exit(4);
         /* Publish ONLY the executive PID. B must obtain A's name and user

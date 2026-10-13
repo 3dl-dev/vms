@@ -40,6 +40,7 @@ docker build -t "$IMG" "$HERE" >/dev/null
 
 docker run --rm --memory=8g --cpus="$(nproc)" \
   -v "$HERE":/tools:ro \
+  -v "$(cd "$HERE/../.." && pwd)":/repo:ro \
   -v "$VMSKO_WORK":/vmsko \
   -v "$WORK":/work "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"; BT="'"$BOOT_TIMEOUT"'"
@@ -123,7 +124,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # (/imgact-proof/test_prog_alpha); BOTH producers in SYSLIB (the port musl
     # needs LIBOTS_SHR.EXE AND DECC$SHR.EXE staged in SYS$SHARE, the IMGACT
     # compiled-in fallback path /vms/SYS0/SYSCOMMON/SYSLIB).
-    $CC -static -O2 -Wall /tools/alpha-imgact-init.c -o /work/imgact-init
+    $CC -static -O2 -Wall -I/repo/src/kernel /tools/alpha-imgact-init.c -o /work/imgact-init
     alpha-linux-gnu-strip /work/imgact-init
 
     test -f "$JOINT/joint_e2e.exe"   || { echo "FATAL: $JOINT/joint_e2e.exe missing -- copy build-joint-image.sh output into WORK/joint"; exit 1; }

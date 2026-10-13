@@ -86,6 +86,7 @@
 #include "rmsdef.h"
 #include "rms/rms.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors (used by sysvol_stage.h) */
 #include "sysvol_stage.h" /* shared VDA300: mount/write-over-ACP/OVMX_SYSDEVICE
@@ -349,7 +350,7 @@ int main(int argc, char **argv)
     int outpipe[2];
     if (pipe(outpipe) < 0) { printf("  FAIL: pipe() failed\n"); return 1; }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
     if (pid == 0) {
         /* Child = the shipped MMK. Lead our OWN process group so that if MMK

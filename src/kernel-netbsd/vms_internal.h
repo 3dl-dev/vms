@@ -163,7 +163,8 @@
  * ORACLE-PINNED (lab-1 F$MESSAGE, design docs/design-logical-name-placement.md
  * §4.2, vms-556) exactly as src/kernel/vms_internal.h pins it. */
 #define SS__SUPERSEDE   1585        /* SS$_SUPERSEDE (a name was superseded) */
-#define SS__NOLOGNAM    444        /* SS$_NOLOGNAM (no such logical name) */
+#define SS__NOLOGNAM    444
+#define SS__NOLOGTAB    8852        /* SS$_NOLOGTAB (src/libvms/include/ssdef.h) */        /* SS$_NOLOGNAM (no such logical name) */
 #define SS__EXLNMQUOTA  8780       /* oracle-pinned lab-1 F$MESSAGE (arena full) */
 /*
  * Files-11 (ODS-2) ACP subset (rd vms-6a7f, epic vms-208): the six SS$ codes
@@ -1013,9 +1014,20 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * every outer mode; vms_lnm_proc_gone applies image rundown (user mode) or
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
-/* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
+/* vms_lnm_forget_device deletes the LNM$SYSTEM and LNM$JOB names whose one equivalence is
  * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
 void vms_lnm_forget_device(const char *devnam);
+/* rd vms-94a: the clusterwide tables (vms_lnm.c). Each applies one $CRELNT,
+ * $CRELNM or $DELLNM a cluster member propagated, and returns its VMS status. */
+int vms_lnm_cluster_init(void);
+uint32_t vms_lnm_cluster_other_members(void);   /* vms_devtab.c */
+uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
+                                uint32_t attr, uint8_t acmode, uint32_t promsk);
+uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
+                                uint32_t attr, uint8_t acmode, uint8_t nequiv,
+                                const struct vms_lnm_equiv *eq);
+uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
+                                uint8_t acmode);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);
@@ -1443,14 +1455,16 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
-/* rd vms-ff75: creator-authorized detached-process identity (vms_proctab.c) */
-long vms_ioctl_creprc_ticket(struct vms_proc *proc, unsigned long arg);
-int  vms_proc_creprc_ticket_claim(uint64_t id, const uint32_t *ancestors, int n,
-                                  char *username /* VMS_USERNAME_SIZE bytes */,
-                                  uint32_t *uic, uint64_t *privs);
+/* A creator-given DETACHED identity, stamped by the executive (vms_proctab.c) */
 void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
                                     uint32_t uic, uint64_t privs);
 long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
+/*
+ * The boot task's PCB (rd vms-2a5): made only by ESTABLISH_SYSTEM's one call,
+ * for a task with none (proc NULL); every other PCB is made by its creator
+ * (vms_proc_create_for). Substrate half; returns NULL on allocation failure.
+ */
+struct vms_proc *vms_proc_create_boot_task(void);
 long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);
 /* $EXIT/$STATUS + CLI invocation context (vms-f60d), shared facility in

@@ -11,7 +11,7 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "sys\$sndopr goes back to naming the requester from getpwuid(getuid()) when the executive's row holds no name, so the operator log records the HOST Linux account as the VMS user who made the request -- measured as 'request 1 from user baron on node OVMX' after a plain LOGOUT. This is the AUDIT half of the class and it lives in a different library from the DCL sites, which is what a per-site round cannot reach: LOGOUT's own user name was fixed in dcl_cmd_process.c while this field, in the same record, stayed host-derived.";;
         require_fail) cat <<'EOF'
-G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
+G/OPCOM: EVERY header's user field is SHIPPING, the executive's name for the process -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database
 G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
 EOF
                       ;;
@@ -22,6 +22,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    if (!info.username[0]) { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file"
+        sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file"
     :
 }

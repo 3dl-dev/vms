@@ -219,7 +219,7 @@ static int device_absent_checks(void)
     } else {
         int in_pipe[2], out_pipe[2];
         if (pipe(in_pipe) == 0 && pipe(out_pipe) == 0) {
-            pid_t pid = fork();
+            pid_t pid = ovmx_fork_subprocess();
             if (pid == 0) {
                 dup2(in_pipe[0], STDIN_FILENO);
                 dup2(out_pipe[1], STDOUT_FILENO);

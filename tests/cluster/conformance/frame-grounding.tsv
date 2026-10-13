@@ -82,3 +82,37 @@ cm_0b01_ans	*	100	4	derived	state:older	body[28:32] = 1 if the requester was adm
 cm_0b01_ans	*	104	4	copied	any:echo	body[32:36] echoed verbatim (31/31)
 cm_0b01_ans	*	108	4	derived	state:older	body[36:40] = body[28:32] in every real answer (31/31)
 cm_0b01_ans	*	112	92	copied	any:echo	body[40:132] echoed verbatim (31/31)
+# ---- cat 0x8b op 0x04: the answer to a member's clusterwide logical-name operation (rd vms-94a) ----
+cm_lnm_ans	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+cm_lnm_ans	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_lnm_ans	*	76	4	copied	any:echo	txn/token: the requester's own (every real 0x8b/0x04 carries its request's; test_cnxman_join pins)
+cm_lnm_ans	*	80	1	const	const:8b	category 0x0b | 0x80, the response (vms-94a-cwlnm-oracle, every answer)
+cm_lnm_ans	*	81	1	const	const:4	op 0x04 (every real answer to an op-0x04)
+cm_lnm_ans	*	82	122	const	const:0	zero: two real answers are zero past the header (rm380 137.965, both recipients); the rest carry only buffer residue
+# ---- cat 0x0b op 0x05: this node asks a member for the clusterwide logical-name database (rd vms-94a) ----
+cm_lnm_dbreq	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+cm_lnm_dbreq	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_lnm_dbreq	*	76	4	minted	any:envelope	txn/token: minted for a REQUEST by cnxman_envelope_originate (E85), as every origination
+cm_lnm_dbreq	*	80	1	const	const:b	category 0x0b (12/12 real requests)
+cm_lnm_dbreq	*	81	1	const	const:5	op 0x05 (12/12)
+cm_lnm_dbreq	*	82	2	const	const:0	zero in 12/12 real requests
+cm_lnm_dbreq	*	84	4	derived	any:csid	the requester's own CSID, high word then low word (12/12: VAX2 csid 00010002 sends 01 00 02 00); test_cnxman_join pins it from this node's CSID
+cm_lnm_dbreq	*	88	16	const	const:0	body[16:32]: leftover buffer contents in real requests (varies request to request), sent as zero
+cm_lnm_dbreq	*	104	4	const	const:91e8	body[32:36] = 0x000091e8 in 12 of 12 real requests
+cm_lnm_dbreq	*	108	96	const	const:0	body[36:132]: zero in 11 of 12 real requests, leftover contents in the twelfth; sent as zero
+# ---- rd vms-e09: the master's directory-entry removal, cat-0x02 op-0x04 (8106 real removals:
+#      L1 4881, L2 245, lnm1 2980; tests/lab/captures/vms-e09-dir-remove-20261013/PREDICTION.md) ----
+dlm_dir_remove	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+dlm_dir_remove	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_dir_remove	*	76	4	const	const:0	txn/token: none, a notification (R3): 0 in 8106/8106 real removals, none ever answered
+dlm_dir_remove	*	80	1	const	const:2	category 0x02 (8106/8106)
+dlm_dir_remove	*	81	1	const	const:4	op 0x04 (8106/8106)
+dlm_dir_remove	*	82	2	const	const:0	body[10:12]: stale buffer, 0 in 6734/8106 real removals
+dlm_dir_remove	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 8106/8106
+dlm_dir_remove	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM rebuild sequence from executive state; equals the 0xf9 lookup's in every removal whose lookup is in the capture (R1: 100% in L1, L2, lnm1)
+dlm_dir_remove	*	88	28	const	const:0	body[16:44]: stale buffer, NOT an entry identifier (237 values over 394 removals of one entry); all-zero in 272 real removals
+dlm_dir_remove	*	116	2	copied	any:identity	body[44:46] UIC group: equals the 0xf9 lookup's in every removal whose lookup is in the capture (R1); read off the resource block
+dlm_dir_remove	*	118	1	copied	any:identity	body[46] access mode: as above (R1)
+dlm_dir_remove	*	119	1	copied	any:identity	body[47] name length: as above (R1)
+dlm_dir_remove	*	120	80	copied	any:name	body[48:48+L] the resource name (R1), then zero to body[128]: the stale tail is all-zero in 340 real removals
+dlm_dir_remove	*	200	4	copied	any:hash	body[128:132] directory hash: equals the 0xf9 lookup's in every removal whose lookup is in the capture (R1: 100% in L1, L2, lnm1); res->dir_hash

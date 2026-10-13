@@ -110,9 +110,9 @@ static int bootstrap(const char *who)
         printf("  FAIL: %s: cannot open /dev/vms\n", who);
         return -1;
     }
-    uint32_t st = vms_kif_register(NULL);   /* NO privilege arg (vms-2b8) */
+    uint32_t st = ovmx_test_self(NULL);   /* NO privilege arg (vms-2b8) */
     if (!(st & 1)) {
-        printf("  FAIL: %s: vms_kif_register status=%u\n", who, st);
+        printf("  FAIL: %s: no row of its own (status %u)\n", who, st);
         return -1;
     }
     return 0;

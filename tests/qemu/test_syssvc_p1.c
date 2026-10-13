@@ -35,6 +35,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /*
  * Status values. SS$_NORMAL is 1 in $SSDEF on the reference lab (OpenVMS
@@ -79,8 +80,8 @@ static int open_and_register(uint32_t *vms_pid)
 {
     if (vms_kif_open() < 0)
         return EXIT_SKIP;
-    if (vms_kif_register(vms_pid) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(vms_pid) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         return -1;
     }
     return 0;
@@ -88,7 +89,7 @@ static int open_and_register(uint32_t *vms_pid)
 
 /*
  * Process B. A separate Linux process, registered as a SEPARATE VMS
- * process (plain vms_kif_register(), not REGISTER_CONTINUE) -- it knows A
+ * process (plain ovmx_test_self(), not REGISTER_CONTINUE) -- it knows A
  * only by the VMS process id A already registered its P1 extent under,
  * sent down via a pipe. It has no access to A's memory.
  */
@@ -99,7 +100,7 @@ static void cross_reader(int wfd, uint32_t a_vms_pid)
 
     memset(&rep, 0, sizeof(rep));
 
-    if (vms_kif_open() < 0 || vms_kif_register(NULL) != SS_NORMAL)
+    if (vms_kif_open() < 0 || ovmx_test_self(NULL) != SS_NORMAL)
         _exit(3);
 
     memset(&info, 0, sizeof(info));
@@ -194,7 +195,7 @@ int main(void)
         CHECK(0, "pipe()");
         goto cycle_p0;
     }
-    child = fork();
+    child = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (child < 0) {
         CHECK(0, "fork()");
         close(pipefd[0]); close(pipefd[1]);

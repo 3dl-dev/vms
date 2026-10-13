@@ -84,6 +84,7 @@
 #include "jpidef.h"
 #include "lib$routines.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "ptrace_hold.h"
 
 #define EXIT_SKIP 77
@@ -367,6 +368,20 @@ static void burn_cpu(void)
         for (int i = 0; i < 20000; i++)
             sink += (unsigned long)i;
     } while (clock() - start < (clock_t)BURN_CLOCKS);
+}
+
+/*
+ * procnam_fork_in_group - a helper process in UIC group `grp` (member 0, the
+ * suite's user name and privileges), created detached by this suite (rd
+ * vms-2a5: the executive makes its row from what its creator may give; the
+ * helper no longer registers with a UIC derived from a setgid).
+ */
+static pid_t procnam_fork_in_group(uint32_t grp)
+{
+    struct vms_procinfo me;
+    memset(&me, 0, sizeof(me));
+    (void)vms_kif_getjpi_self(&me);
+    return ovmx_fork_detached_st(me.username, (grp & 0xFFFFu) << 16, me.perm_privs, NULL);
 }
 
 /*
@@ -741,7 +756,7 @@ static void sigprobe_tracer(int repfd)
         _exit(1);
     }
 
-    probe = fork();
+    probe = ovmx_fork_subprocess();
     if (probe < 0) {
         (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
         _exit(1);
@@ -1205,7 +1220,7 @@ static int run_show_system(char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -1311,7 +1326,7 @@ static int run_show_system_unpriv(char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -1587,10 +1602,8 @@ int main(void)
      */
     struct vms_procinfo selfinfo;
     uint32_t st = vms_kif_getjpi_self(&selfinfo);
-    /* negctl: bind-client-no-register */
     CHECK(st & 1, "the caller has a row in the executive's process table");
     uint32_t selfpid = selfinfo.vms_pid;
-    /* negctl-knockon: bind-client-no-register */
     CHECK(selfpid != 0, "the executive assigned the caller a VMS process ID");
 
     /* ---------------------------------------------------------------
@@ -1598,7 +1611,6 @@ int main(void)
      *     requested name, and the name survives image activation.
      * --------------------------------------------------------------- */
     st = spawn_named(SUBJECT_NAME, &subject);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "sys$creprc created the subject process");
     /* The pairing matters as much as either half. $CREPRC used to have a
      * path that returned SS$_NORMAL with *pidadr left at zero -- success
@@ -1607,7 +1619,6 @@ int main(void)
      * OVMX$_PRCLOST (src/libvms/include/ovmx_status.h) and reaps the
      * child, and the only success return left in sys$creprc is
      * structurally downstream of a process ID the executive assigned. */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(subject != 0, "sys$creprc returned the subject's pid");
 
     if (!(st & 1) || subject == 0) {
@@ -1858,7 +1869,7 @@ int main(void)
 
     if (pipe(cmdfd) != 0 || pipe(repfd) != 0) {
         CHECK(0, "P11: pipes for the cross-UIC-group helper");
-    } else if ((helper = fork()) < 0) {
+    } else if ((helper = procnam_fork_in_group(ALT_UIC_GROUP)) < 0) {
         CHECK(0, "P11: fork of the cross-UIC-group helper");
     } else if (helper == 0) {
         close(cmdfd[1]);
@@ -2019,7 +2030,7 @@ int main(void)
 
     if (pipe(xcmd) != 0 || pipe(xrep) != 0) {
         CHECK(0, "P12: pipes for the unreadable-row subject");
-    } else if ((xproc = fork()) < 0) {
+    } else if ((xproc = procnam_fork_in_group(XGRP_UIC_GROUP)) < 0) {
         CHECK(0, "P12: fork of the unreadable-row subject");
     } else if (xproc == 0) {
         close(xcmd[1]);
@@ -2158,7 +2169,7 @@ int main(void)
 
         if (pipe(prep) != 0) {
             CHECK(0, "P13: pipe for the signal probe");
-        } else if ((probe = fork()) < 0) {
+        } else if ((probe = ovmx_fork_subprocess()) < 0) {
             CHECK(0, "P13: fork of the signal probe");
         } else if (probe == 0) {
             close(prep[0]);
@@ -2279,7 +2290,7 @@ int main(void)
 
         if (pipe(tcmd) != 0 || pipe(trep) != 0 || pipe(pcpu) != 0) {
             CHECK(0, "P14: pipes for the vanishing-target probe");
-        } else if ((target = fork()) < 0) {
+        } else if ((target = ovmx_fork_subprocess()) < 0) {
             CHECK(0, "P14: fork of the vanishing target");
         } else if (target == 0) {
             close(tcmd[1]);
@@ -2298,7 +2309,7 @@ int main(void)
                   "P14: a target process registered with the executive");
         }
 
-        if (trp.ok == 1 && (cprobe = fork()) == 0) {
+        if (trp.ok == 1 && (cprobe = ovmx_fork_subprocess()) == 0) {
             close(trep[0]);
             close(tcmd[1]);
             close(pcpu[0]);

@@ -88,6 +88,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 #define PEER_TIMEOUT_MS 20000
@@ -186,12 +187,10 @@ static int run_child(int c2p_write, int p2c_read)
     uint32_t st_local = sys$setef(LOCAL_EFN_CHILD);
     printf("  INFO: child: sys$setef(%d) [LOCAL cluster 0] returned status %u\n",
            LOCAL_EFN_CHILD, st_local);
-    /* negctl: bind-client-no-register */
     CHECK(st_local & 1,
           "child: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)");
 
     st = sys$setef(CLUSTER_EFN_A);
-    /* negctl-knockon: bind-client-no-register */
     CHECK((st_local & 1) && !(st & 1),
           "child: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')");
 
@@ -211,7 +210,6 @@ static int run_child(int c2p_write, int p2c_read)
 
     st = sys$ascefc(COMMON_BASE, &clusnam, 0, 0);
     printf("  INFO: child: sys$ascefc returned status %u\n", st);
-    /* negctl-knockon: bind-client-no-register */
     /* negctl: eflag-ascefc-reassoc-status-wrong */
     CHECK(st & 1, "child: sys$ascefc joined the named common cluster");
 
@@ -226,13 +224,11 @@ static int run_child(int c2p_write, int p2c_read)
         st = sys$readef(CLUSTER_EFN_A, &state);
         printf("  INFO: child: sys$readef(%d) status=%u cluster-state=0x%08x (expect bit %d set)\n",
                CLUSTER_EFN_A, st, state, CLUSTER_EFN_A - COMMON_BASE);
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && (state & (1u << (CLUSTER_EFN_A - COMMON_BASE))),
               "child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)");
     }
 
     st = sys$setef(CLUSTER_EFN_B);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "child: sys$setef on the associated common cluster reported success");
     if (send_token(c2p_write, 'C') < 0)
         fail++;
@@ -244,14 +240,12 @@ static int run_child(int c2p_write, int p2c_read)
         state = 0;
         st = sys$readef(CLUSTER_EFN_A, &state);
         /* negctl: eflag-clref-noop */
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && !(state & (1u << (CLUSTER_EFN_A - COMMON_BASE))),
               "child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)");
 
         /* Discriminator: local clusters are per-process on VMS too. */
         state = 0;
         st = sys$readef(LOCAL_EFN, &state);
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && !(state & (1u << LOCAL_EFN)),
               "child: a LOCAL flag set by the parent is NOT visible here (local clusters stay per-process)");
     }
@@ -474,7 +468,7 @@ int main(void)
         return 1;
     }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) {
         printf("  FAIL: fork() failed\n");
         return 1;
@@ -508,21 +502,18 @@ int main(void)
     uint32_t st_local = sys$setef(LOCAL_EFN);
     printf("  INFO: sys$setef(%d) [LOCAL cluster 0] returned status %u\n",
            LOCAL_EFN, st_local);
-    /* negctl: bind-client-no-register */
     CHECK(st_local & 1,
           "parent: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)");
 
     st = sys$setef(CLUSTER_EFN_A);
     printf("  INFO: sys$setef(%d) [COMMON, not yet associated] returned status %u\n",
            CLUSTER_EFN_A, st);
-    /* negctl-knockon: bind-client-no-register */
     CHECK((st_local & 1) && !(st & 1),
           "parent: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')");
 
     st = sys$ascefc(COMMON_BASE, &clusnam, 0, 0);
     printf("  INFO: sys$ascefc(%d, \"OVMX$F1F_SVC\") returned status %u\n",
            COMMON_BASE, st);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "parent: sys$ascefc created/joined the named common cluster");
 
     /* Tell B the cluster now exists, so B's own sys$ascefc (below, via the
@@ -539,7 +530,6 @@ int main(void)
     st = sys$setef(CLUSTER_EFN_A);
     printf("  INFO: sys$setef(%d) [COMMON, after $ASCEFC] returned status %u\n",
            CLUSTER_EFN_A, st);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "parent: sys$setef on the associated common cluster reported success");
     if (send_token(p2c[1], 'B') < 0)
         fail++;
@@ -550,7 +540,6 @@ int main(void)
     } else {
         uint32_t state = 0;
         st = sys$readef(CLUSTER_EFN_B, &state);
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && (state & (1u << (CLUSTER_EFN_B - COMMON_BASE))),
               "parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads, public API)");
     }
@@ -558,7 +547,6 @@ int main(void)
     st = sys$clref(CLUSTER_EFN_A);
     printf("  INFO: sys$clref(%d) [COMMON, after $ASCEFC] returned status %u\n",
            CLUSTER_EFN_A, st);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "parent: sys$clref on the associated common cluster reported success");
     /* The LOCAL flag the child must NOT see was set at the top of main(),
      * as the baseline half of the negative control. */
@@ -598,7 +586,6 @@ int main(void)
     st = sys$dacefc(CLUSTER_EFN_A);
     printf("  INFO: sys$dacefc(%d) [non-base flag number] returned status %u\n",
            CLUSTER_EFN_A, st);
-    /* negctl-knockon: bind-client-no-register */
     /* negctl: eflag-dacefc-status-wrong */
     CHECK(st & 1,
           "parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base");
@@ -632,49 +619,40 @@ int main(void)
         st = sys$ascefc(PERM_EFN, &permnam, 0, 1 /* perm */);
         printf("  INFO: sys$ascefc(%d, \"OVMX$2A8_PERM\", perm=1) returned status %u\n",
                PERM_EFN, st);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$ascefc created a PERMANENT common cluster");
 
         st = sys$setef(PERM_EFN);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$setef on the permanent cluster reported success");
 
         st = sys$dacefc(PERM_EFN);
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: eflag-dacefc-status-wrong */
         CHECK(st & 1, "parent: sys$dacefc released the last association to the permanent cluster");
 
         st = sys$ascefc(PERM_EFN, &permnam, 0, 0);
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
         CHECK(st & 1, "parent: sys$ascefc re-joined the permanent cluster by name");
         state = 0;
         st = sys$readef(PERM_EFN, &state);
         printf("  INFO: after re-join, sys$readef(%d) status=%u state=0x%08x\n",
                PERM_EFN, st, state);
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && (state & (1u << (PERM_EFN - COMMON_BASE_3))),
               "parent: a PERMANENT cluster survived losing its last association (its flags are still set)");
 
         st = sys$dlcefc(&permnam);
         printf("  INFO: sys$dlcefc(\"OVMX$2A8_PERM\") returned status %u\n", st);
-        /* negctl-knockon: bind-client-no-register */
         /* negctl: eflag-dlcefc-status-wrong */
         CHECK(st & 1, "parent: sys$dlcefc accepted the permanent cluster by name");
 
         st = sys$dacefc(PERM_EFN);
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: eflag-dacefc-status-wrong */
         CHECK(st & 1, "parent: sys$dacefc released the marked cluster");
 
         st = sys$ascefc(PERM_EFN, &permnam, 0, 0);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$ascefc after the deletion created a cluster of that name again");
         state = 0;
         st = sys$readef(PERM_EFN, &state);
         printf("  INFO: after $DLCEFC + re-create, sys$readef(%d) status=%u state=0x%08x (expect 0)\n",
                PERM_EFN, st, state);
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && !(state & (1u << (PERM_EFN - COMMON_BASE_3))),
               "parent: sys$dlcefc really deleted the cluster (the re-created one is FRESH, not the old flags)");
 
@@ -703,13 +681,12 @@ int main(void)
         st = sys$ascefc(COMMON_BASE, &waitnam, 0, 0);
         printf("  INFO: sys$ascefc(%d, \"OVMX$2A8_WAIT\") returned status %u\n",
                COMMON_BASE, st);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$ascefc joined the cluster the interrupted-wait measurement uses");
 
         if (pipe(w2p) < 0) {
             printf("  FAIL: parent: pipe() for the waiter failed\n");
             fail++;
-        } else if ((wpid = fork()) < 0) {
+        } else if ((wpid = ovmx_fork_subprocess()) < 0) {
             printf("  FAIL: parent: fork() for the waiter failed\n");
             fail++;
         } else if (wpid == 0) {
@@ -745,7 +722,6 @@ int main(void)
 
             printf("  INFO: parent: waiter reported %d signal interrupt(s) before the flag was set\n",
                    alarms);
-            /* negctl-knockon: bind-client-no-register */
             /* negctl-knockon: eflag-waitfr-eintr-normal */
             /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
             CHECK(alarms >= WAIT_SIGNAL_ROUNDS,
@@ -758,7 +734,6 @@ int main(void)
              */
             sst = sys$setef(WAIT_EFN);
             printf("  INFO: parent: sys$setef(%d) returned status %u\n", WAIT_EFN, sst);
-            /* negctl-knockon: bind-client-no-register */
             CHECK(sst & 1, "parent: sys$setef released the waiter's flag");
 
             /* PHASE 2 -- the verdict, if the waiter has not produced one. */
@@ -776,7 +751,6 @@ int main(void)
                    verdict ? verdict : '?');
 
             /* negctl: eflag-waitfr-eintr-normal */
-            /* negctl-knockon: bind-client-no-register */
             /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
             CHECK(verdict == 'S',
                   "parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag");
@@ -810,7 +784,6 @@ int main(void)
         st = sys$ascefc(COMMON_BASE_3, &wfnam, 0, 0);
         printf("  INFO: parent: sys$ascefc(%d, \"OVMX$2ED_WF\") returned status %u\n",
                COMMON_BASE_3, st);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$ascefc joined the cluster the WFLOR/WFLAND measurement uses");
 
         (void)sys$clref(WFLAND_EFN_A);
@@ -819,7 +792,6 @@ int main(void)
         st = sys$setef(WFLAND_EFN_A);
         printf("  INFO: parent: sys$setef(%d) [WFLOR setup] returned status %u\n",
                WFLAND_EFN_A, st);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(st & 1, "parent: sys$setef sets the flag $WFLOR will find already satisfied");
 
         state = 0;
@@ -829,7 +801,6 @@ int main(void)
                "(only bit %d of the mask is set)\n",
                WFLAND_EFN_A, mask, st, state, WFLAND_EFN_A - COMMON_BASE_3);
         /* negctl: eflag-wflor-status-wrong */
-        /* negctl-knockon: bind-client-no-register */
         CHECK((st & 1) && (state & (1u << (WFLAND_EFN_A - COMMON_BASE_3))),
               "parent: sys$wflor returned with only ONE of the two mask flags set -- OR, not AND");
 
@@ -839,7 +810,7 @@ int main(void)
         if (pipe(c2p2) < 0) {
             printf("  FAIL: parent: pipe() for the wfland child failed\n");
             fail++;
-        } else if ((cpid = fork()) < 0) {
+        } else if ((cpid = ovmx_fork_subprocess()) < 0) {
             printf("  FAIL: parent: fork() for the wfland child failed\n");
             fail++;
             close(c2p2[0]);
@@ -855,7 +826,6 @@ int main(void)
             close(c2p2[1]);
 
             if (read_bounded(c2p2[0], &tok, 1, PEER_TIMEOUT_MS) != 1 || tok != 'R') {
-                /* negctl-knockon: bind-client-no-register */
                 /* negctl-knockon: eflag-ascefc-reassoc-status-wrong */
                 printf("  FAIL: parent: wfland child never reported it was ready to block\n");
                 fail++;

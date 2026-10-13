@@ -46,3 +46,30 @@ answered 1.
 `tests/cluster/host/fixtures/cm-0b01-{req,resp}-{older,newer}-oracle.spec` (`mkspec0b.py`):
 - older: arm B, VAX3 answers VAX1 with 1.
 - newer: rm380 ds3, VAX2 answers VAX1 with 0.
+
+## Fire F1 (pod lab52dfa, build lab/int-52d 02f5785c9, artifacts run 38346183373)
+
+The topology was OVMX first: OVMXE (1030, EXPECTED_VOTES 1) founded alone, and VAX1 and VAX2
+booted 300 s later. OVMXE admitted both VAXes, giving CN = 3. 0 bugchecks.
+
+| prediction | result |
+|---|---|
+| F1: each 0b/01 is answered with 1 | **held**. VAX2's 0b/01 was answered in 2 ms with body[28:32] = body[36:40] = 1. Its kind-10 and kind-5 closes were also answered (5 and 4). |
+| F2: both VAXes finish startup | **failed** at the point registered as F3 |
+| F3: a cat-0x0b op-0x04 to OVMXE goes unanswered | **happened**. VAX2 sent OVMXE one 0b/04 3 s after the 0b/01 answer, which was OVMX's one unroutable frame. VAX2 got as far as DECnet and CSP. VAX1 never reached its own 0b/01. Both stopped at 04:43:57 with no Username:. |
+
+`unans.py` shows that VAX2's 0b/04 to OVMXE was the only request left unanswered in the
+whole capture.
+
+### What op 0x04 is (`xfer04.py`, `rec04.py` on the full arm A/B pcaps)
+
+Op 0x04 is a CLUSTERWIDE LOGICAL NAME. The request names a 232-byte buffer ([16:24] the
+buffer descriptor, [32:36] the length 0xe8 or 0xf8). Every real answerer first REQUEST
+DATAs it (SCA 0x08, then DATA 0x0d) and only then sends 0x8b/0x04. The record is a
+logical-name definition for `LNM$CLUSTER_TABLE`. During startup each VAX defines
+`CLU$ICC_ORBS_<node>` there, which carries the text `..._INTRUSION_`. So cat 0x0b is the
+clusterwide logical-name service. Op 0x01 is the startup query to every older member, and
+op 0x04 propagates one definition to every member. OVMX has no clusterwide logical-name
+table (compat row cluster-logicals: absent). That is the next rung: rd vms-52d stays open.
+
+Files: `f1-ovmx-first-cm.pcap` (cat 0x01/0x06/0x0b), `f1-{ovmxe,vax1,vax2}-console.log`.

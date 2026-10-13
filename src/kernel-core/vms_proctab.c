@@ -1177,10 +1177,22 @@ void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
  * itself. A caller without it gets SS$_NOPRIV, the same status
  * vms_ioctl_setident() returns for the analogous refusal.
  *
+ * ONCE PER BOOT (rd vms-a2c, design note 3.1's bootstrap exception). VMS
+ * system initialization creates the one system process; it does not hand
+ * the system identity to whoever asks later. So does this: the boot task
+ * (PID 1, ovmx_init) calls it once, before it creates anything, and every
+ * later process gets its identity from its creator ($CREPRC, CREPRC_PCB).
+ * A second call -- by anyone, the boot task included -- is refused
+ * SS$_NOPRIV and changes nothing. The flag lives with the process table and
+ * is set under the same hash_lock as the stamp, so two racing first calls
+ * cannot both win.
+ *
  * Locking mirrors vms_ioctl_setident(): hash_lock outer, mode_lock inner,
  * both held across the whole read-decide-write so no concurrent caller on
  * this same process can interleave with the write.
  */
+static bool vms_system_established;
+
 long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_establish_system_args args;
@@ -1195,6 +1207,13 @@ long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg)
     }
 
     exec_lock(&vms_proc_hash_lock);
+    /* NEGCTL-ANCHORED (establish-system-not-once) */
+    if (vms_system_established) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    vms_system_established = true;
     exec_lock(&proc->mode_lock);
 
     memset(proc->username, 0, VMS_USERNAME_SIZE);

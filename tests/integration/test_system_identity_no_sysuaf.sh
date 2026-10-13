@@ -99,6 +99,9 @@ PROVISION_C="$SRC_ROOT/src/ovmx_provision/ovmx_provision.c"
 INTERNAL_H="$SRC_ROOT/src/kernel/vms_internal.h"
 PROCTAB_C="$SRC_ROOT/src/kernel-core/vms_proctab.c"
 IOCTL_H="$SRC_ROOT/src/kernel/vms_ioctl.h"
+INIT_C="$SRC_ROOT/src/ovmx_init/ovmx_init.c"
+JOBCTL_C="$SRC_ROOT/src/ovmx_job_control/ovmx_job_control.c"
+SYSPROC_C="$SRC_ROOT/src/libvms/syssvc/sys_process.c"
 
 # --- 1. PROVISION.EXE no longer reads SYSUAF for identity ---------------
 scan_absent "PROVISION.EXE does not call sysuaf_lookup() (the SYSTEM-record read)" \
@@ -106,13 +109,17 @@ scan_absent "PROVISION.EXE does not call sysuaf_lookup() (the SYSTEM-record read
 scan_absent "PROVISION.EXE does not call vms_kif_setident() (LOGINOUT's ioctl)" \
     'vms_kif_setident(' "$PROVISION_C"
 
-# --- 2. ...and DOES construct identity through the new, argument-free call
-# The absence checks above are satisfiable by deleting identity establishment
-# outright. This is the paired positive.
-scan_present "PROVISION.EXE calls vms_kif_establish_system() to become SYSTEM" \
-    'vms_kif_establish_system()' "$PROVISION_C"
+# --- 2. ...and the identity IS constructed, through the argument-free call,
+# ONCE, by the boot task (rd vms-a2c). The absence checks above are satisfiable
+# by deleting identity establishment outright. This is the paired positive.
+scan_present "the boot task (ovmx_init) calls vms_kif_establish_system() to become SYSTEM" \
+    'vms_kif_establish_system()' "$INIT_C"
+scan_absent "no other product image asks for the SYSTEM identity (it comes from the creator)" \
+    'vms_kif_establish_system(' "$PROVISION_C" "$JOBCTL_C" "$SYSPROC_C"
 scan_present "PROVISION.EXE still reads its identity back via \$GETJPI(self)" \
     'vms_kif_getjpi_self(' "$PROVISION_C"
+scan_present "vms.ko refuses a second ESTABLISH_SYSTEM (once per boot)" \
+    'vms_system_established' "$PROCTAB_C"
 
 # --- 3. The executive owns the SYSTEM identity as its own constants -----
 scan_present "vms.ko defines the SYSTEM UIC as its own constant" \

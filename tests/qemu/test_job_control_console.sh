@@ -370,9 +370,9 @@ fi
 #         interactive SYSTEM session appear at different pids). Previously
 #         OVMX's login child called vms_kif_register_continue() and so SHARED
 #         JOB_CONTROL's vms_pid -- SHOW SYSTEM listed a JOB_CONTROL row and a
-#         SYSTEM row at the SAME pid. The child now registers FRESH (its own
-#         vms_pid) and re-establishes the SYSTEM identity via
-#         vms_kif_establish_system(), so the two are two processes at two pids.
+#         SYSTEM row at the SAME pid. The session is now a process of its own
+#         (its own vms_pid), whose PCB $CREPRC makes with JOB_CONTROL's SYSTEM
+#         identity (rd vms-a2c), so the two are two processes at two pids.
 #
 #         This session logged in as SYSTEM, so its OWN row is named SYSTEM
 #         (tools/vms_login.c $SETPRN's the account username, oracle-confirmed).

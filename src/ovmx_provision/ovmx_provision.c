@@ -44,28 +44,23 @@
  * ============================================================================
  * WHY THIS IMAGE IS THE STARTUP PROCESS, AND NOT SOMETHING STARTUP.COM CALLS
  * ============================================================================
- * vms_kif_establish_system() (formerly vms_kif_setident()'s job, see
- * vms-a17e above) stamps THE CALLING PROCESS. An identity established by a
- * short-lived helper invoked from a DCL procedure would evaporate when the
- * helper exited, leaving nothing on the node holding SYSTEM.
+ * The SYSTEM identity is constructed once per boot, for the boot task (PID 1
+ * calls vms_kif_establish_system() before it creates anything, rd vms-a2c;
+ * the executive refuses any later call). This image runs as PID 1's
+ * subprocess, so the executive made its PCB with that identity before its
+ * first instruction. An identity held by a short-lived helper invoked from a
+ * DCL procedure would evaporate when the helper exited, leaving nothing on
+ * the node holding SYSTEM below PID 1.
  *
  * So PID 1 execs THIS image where it used to exec DCL.EXE, and this image
  * execs DCL.EXE on SYS$MANAGER:STARTUP.COM when it is done. exec(2) preserves
  * the process, so the executive's row -- SYSTEM, [1,4], the SYSTEM privilege
- * mask -- carries into the DCL that runs STARTUP.COM and SYSTARTUP_VMS.COM.
- * That is LOGINOUT's shape one step further corrected (ask the executive to
- * construct the identity, exec the CLI -- there is no record left for this
- * image to read first), run for the startup process, and it is what
- * OpenVMS does: STARTUP runs under username SYSTEM.
+ * mask -- carries into the DCL that runs STARTUP.COM and SYSTARTUP_VMS.COM,
+ * and from it, as the creator, into every RUN/DETACHED process STARTUP
+ * starts. That is what OpenVMS does: STARTUP runs under username SYSTEM.
  *
- * It also answers the ordering question the design left open -- "the identity
- * must be established before STARTUP.COM can act as SYSTEM" -- in the only way
- * that needs no new mechanism: it happens in the same process, immediately
- * before.
- *
- * PID 1 KEEPS ITS OWN IDENTITY OUT OF THIS. Whatever the executive derived for
- * PID 1 from its real credentials at registration is what PID 1 holds. It
- * declares nothing about itself, which is the whole of Rule 11.
+ * This image declares nothing about itself: it reads the identity it was
+ * created with and halts if that is not SYSTEM (Rule 11).
  *
  * ============================================================================
  * ONE READER -- AND, AS OF vms-a17e, ONE FEWER JOB FOR IT TO DO
@@ -237,7 +232,7 @@ static void provision_halt(const char *what, const char *detail)
  * cannot.
  *
  * WHICH UIC IS NOT HARDCODED HERE -- it is `info.uic`, read back from the
- * executive after vms_kif_establish_system() (vms-a17e), not from SYSUAF. It
+ * executive (the identity PID 1's ESTABLISH_SYSTEM built, vms-a17e/a2c), not SYSUAF. It
  * IS hardcoded one level up, in vms.ko's VMS_SYSTEM_UIC (vms_internal.h) --
  * but that constant and SYSUAF's SYSTEM row are oracle-pinned to the SAME fact
  * ([1,4], docs/oracle/vax73-authorize-privilege.md), not read from one
@@ -792,37 +787,36 @@ int main(void)
                        "no session could ever authenticate as SYSTEM");
 
     /*
-     * ASK THE EXECUTIVE TO CONSTRUCT THE IDENTITY (vms-a17e). NO SYSUAF READ
-     * PRECEDES THIS. SYSTEM/[1,4]/ALL are no longer values this process
-     * reads out of SYS$SYSTEM:SYSUAF.DAT and hands to the executive -- they
-     * are constants vms.ko owns from module init (VMS_SYSTEM_UIC /
-     * VMS_PRV_M_SYSTEM_ALL, src/kernel/vms_internal.h), constructed the same
-     * way OPA0: is: by the executive itself, before any process asks. This
-     * is the OpenVMS shape restored -- EXEC_INIT constructs the system
-     * process's identity; LOGINOUT (tools/vms_login.c) is SYSUAF's FIRST
-     * reader, not this image.
+     * THE IDENTITY THIS PROCESS WAS CREATED WITH (vms-a17e, rd vms-a2c). NO
+     * SYSUAF READ DECIDES IT. SYSTEM/[1,4]/ALL are constants vms.ko owns
+     * (VMS_SYSTEM_UIC / VMS_PRV_M_SYSTEM_ALL, src/kernel/vms_internal.h),
+     * constructed once per boot for the boot task (ovmx_init's
+     * ESTABLISH_SYSTEM call, the executive refuses any later one), and this
+     * image runs as the boot task's subprocess, whose PCB the executive made
+     * with its creator's identity before this image's first instruction. This
+     * is the OpenVMS shape: system initialization constructs the system
+     * process's identity; LOGINOUT is SYSUAF's first reader, not this image.
      *
-     * The refusal path is unchanged: vms_kif_establish_system() can still
-     * say no (SS$_NOPRIV, if this process somehow lacks CAP_SYS_ADMIN),
-     * which is still the difference between an identity and a claim
-     * (Rule 11) -- there is just nothing left for THIS process to claim.
+     * So this image asks for nothing. It reads its row back out of the
+     * executive and reports THAT, and halts if it is not SYSTEM: a
+     * STARTUP that would run under any other identity is the claim-not-
+     * identity case (Rule 11), and must stop the boot rather than continue.
      */
-    uint32_t st = vms_kif_establish_system();
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t st = vms_kif_getjpi_self(&info);
     if (!(st & 1)) {
         char detail[64];
         snprintf(detail, sizeof(detail), "SS$ status %u", (unsigned)st);
-        provision_halt("the executive refused to construct the system process's identity",
+        provision_halt("the executive holds no row for the system process", detail);
+    }
+    if (strncmp(info.username, "SYSTEM", sizeof(info.username)) != 0) {
+        char detail[96];
+        snprintf(detail, sizeof(detail), "created as %.12s [%o,%o]", info.username,
+                 (unsigned)((info.uic >> 16) & 0xFFFFu), (unsigned)(info.uic & 0xFFFFu));
+        provision_halt("the system process was not created with the SYSTEM identity",
                        detail);
     }
-
-    /* Read the row back out of the executive and report THAT, never what we
-     * asked for. The values printed are the executive's verdict. */
-    struct vms_procinfo info;
-    memset(&info, 0, sizeof(info));
-    st = vms_kif_getjpi_self(&info);
-    if (!(st & 1))
-        provision_halt("the executive holds no row for the system process",
-                       "identity was stamped but cannot be read back");
 
     printf("%%OVMX-I-EXEC, system identity %s [%o,%o] established by the executive\n",
            info.username, (unsigned)((info.uic >> 16) & 0xFFFFu),
@@ -831,7 +825,7 @@ int main(void)
 
     /*
      * PROVISION NOW, AS SYSTEM (vms-4ac). Both steps write ODS-2 ownership over
-     * the ACP, and both run here -- after vms_kif_establish_system() -- so they
+     * the ACP, and both run here -- under the SYSTEM identity checked above -- so they
      * carry the SYSTEM identity (and its BYPASS) needed to create in [USERS] and
      * stamp an arbitrary owner. Home directories FIRST, then the system tree
      * LAST: the system-tree walk is the last writer of ownership for [SYS0], so

@@ -211,44 +211,13 @@ int main(void)
     static char outA[8192], outB[8192];
     int rcA = -1, rcB = -1;
 
-    /* --- A: a SYSPRV parent's activated image is ADMITTED ------------- */
-    /* THIS process becomes SYSTEM (SYSPRV), then activates AUTHORIZE. The
-     * image never setident's -- it inherits SYSPRV purely by continuing
-     * this process across the activation fork. */
-    {
-        uint32_t ist = vms_kif_setident(SYS_NAME, SYS_UIC, SYS_PRIVS);
-        CHECK(ist == 1, "A: this process established the SYSTEM/SYSPRV identity to be continued");
-    }
-
-    if (activate_authorize(outA, sizeof(outA), &rcA) != 0) {
-        CHECK(0, "A: could not activate AUTHORIZE");
-    } else {
-        dump("A: SYSPRV parent, image continues identity", outA);
-        CHECK(strstr(outA, "CONTINUE_STATUS=1\n") != NULL,
-              "A: the image task has the row its creator made (CREPRC_PCB CONTINUE)");
-        {
-            char want[64];
-            snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
-                     (unsigned long long)(uint64_t)SYS_PRIVS);
-            /* negctl: register-continue-identity-dropped */
-            CHECK(strstr(outA, want) != NULL,
-                  "A: the continued image holds the PARENT's SYSPRV mask -- a "
-                  "readback, not a claim, and it never called setident");
-        }
-        /* negctl: register-continue-identity-dropped */
-        CHECK(strstr(outA, "%UAF-I-AUTHVERSION") != NULL,
-              "A: AUTHORIZE printed its banner -- the continued image was ADMITTED");
-        /* negctl: register-continue-identity-dropped */
-        CHECK(strstr(outA, "%UAF-E-NAOFIL") == NULL,
-              "A: the continued image was never refused");
-        /* negctl: register-continue-identity-dropped */
-        CHECK(rcA == 0, "A: AUTHORIZE exited 0 for the admitted session");
-    }
-
     /* --- B: a setident'd-DOWN parent's activated image is REFUSED ----- */
     /* A child process drops to FIELD (no SYSPRV) and THEN activates
      * AUTHORIZE. Privileges must not reappear across the activation fork.
-     * Done in a subprocess so this main (SYSTEM) is not itself reduced. */
+     * Done in a subprocess so this main (SYSTEM) is not itself reduced, and
+     * before A: the subprocess takes this suite's identity, and only the
+     * suite's own SYSTEM identity (CMKRNL, SETPRV) may stamp FIELD -- A's
+     * SYSPRV-only identity may not (rd vms-2a5). */
     {
         int relay[2];
         if (pipe(relay) < 0) {
@@ -308,6 +277,40 @@ int main(void)
         CHECK(strstr(outB, "%UAF-I-AUTHVERSION") == NULL,
               "B: the continued unprivileged image never saw the banner");
         CHECK(rcB == 1, "B: AUTHORIZE exited 1 for the refused session");
+    }
+
+    /* --- A: a SYSPRV parent's activated image is ADMITTED ------------- */
+    /* THIS process becomes SYSTEM (SYSPRV), then activates AUTHORIZE. The
+     * image never setident's -- it inherits SYSPRV purely by continuing
+     * this process across the activation fork. */
+    {
+        uint32_t ist = vms_kif_setident(SYS_NAME, SYS_UIC, SYS_PRIVS);
+        CHECK(ist == 1, "A: this process established the SYSTEM/SYSPRV identity to be continued");
+    }
+
+    if (activate_authorize(outA, sizeof(outA), &rcA) != 0) {
+        CHECK(0, "A: could not activate AUTHORIZE");
+    } else {
+        dump("A: SYSPRV parent, image continues identity", outA);
+        CHECK(strstr(outA, "CONTINUE_STATUS=1\n") != NULL,
+              "A: the image task has the row its creator made (CREPRC_PCB CONTINUE)");
+        {
+            char want[64];
+            snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
+                     (unsigned long long)(uint64_t)SYS_PRIVS);
+            /* negctl: register-continue-identity-dropped */
+            CHECK(strstr(outA, want) != NULL,
+                  "A: the continued image holds the PARENT's SYSPRV mask -- a "
+                  "readback, not a claim, and it never called setident");
+        }
+        /* negctl: register-continue-identity-dropped */
+        CHECK(strstr(outA, "%UAF-I-AUTHVERSION") != NULL,
+              "A: AUTHORIZE printed its banner -- the continued image was ADMITTED");
+        /* negctl: register-continue-identity-dropped */
+        CHECK(strstr(outA, "%UAF-E-NAOFIL") == NULL,
+              "A: the continued image was never refused");
+        /* negctl: register-continue-identity-dropped */
+        CHECK(rcA == 0, "A: AUTHORIZE exited 0 for the admitted session");
     }
 
     printf("=== test_syssvc_identcont: %d passed, %d failed ===\n", pass, fail);

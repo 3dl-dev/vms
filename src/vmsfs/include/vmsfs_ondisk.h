@@ -8,7 +8,7 @@
  * with real ODS-2.
  *
  * Consumed by the userspace host tools only (INITIALIZE.EXE / ANALYZE /
- * vmsfs_master / vms_mount_helper). Relocated here from src/kernel/vmsfs/ by
+ * vmsfs_master). Relocated here from src/kernel/vmsfs/ by
  * vms-165, which retired the vmsfs VFS kernel driver that formerly shared it.
  *
  * Volume layout (512-byte blocks):

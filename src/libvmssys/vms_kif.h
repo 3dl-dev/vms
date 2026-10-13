@@ -88,6 +88,10 @@ uint32_t vms_kif_register(uint32_t *vms_pid);
  * the activated image runs with DCL's identity -- SYSTEM's RUN AUTHORIZE
  * holds SYSPRV. Not for SPAWN / RUN/DETACHED / $CREPRC, which are genuinely
  * new VMS processes and use vms_kif_register(). */
+/* OVMX-UNWIRED: vms_kif_register_continue (vms-2a5) -- its last product caller,
+ * the retired vmsfs's setuid mount helper, was removed (vms-1f8); DCL's image
+ * task is now created by DCL (CREPRC_PCB CONTINUE), and registration by ioctl
+ * is removed in vms-2a5. */
 uint32_t vms_kif_register_continue(void);
 
 /* Register the CALLING task as a genuinely NEW VMS process (a fresh, distinct

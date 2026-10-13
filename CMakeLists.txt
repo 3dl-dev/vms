@@ -1322,8 +1322,8 @@ endif()
 # through it for every arch -- tracked as a Rung C/E/F follow-up, not done
 # by this rung). `cmake --build <dir> --target ovmx-images` builds the whole
 # shipped set for whatever arch/toolchain is configured, and NOTHING else
-# (no tests, no host factory tooling like vmsfs_master/ovmx_kit_pack, no
-# vms_mount_helper). Porting a new image for a substrate = adding its target
+# (no tests, no host factory tooling like vmsfs_master/ovmx_kit_pack).
+# Porting a new image for a substrate = adding its target
 # here, never a new tools/cross-vax/build-*.sh script (operator freeze).
 if(BUILD_TOOLS)
     set(_OVMX_IMAGES_DEPS

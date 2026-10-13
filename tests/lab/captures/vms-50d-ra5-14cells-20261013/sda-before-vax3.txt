@@ -1,0 +1,20 @@
+SDA> SHOW RESOURCE/NAME=RMT5
+Address of RSB:  879B33C0  GGMODE:       NL  Status: DIRENTR VALID           
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 35544D52   RMT5....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 110000CE  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***

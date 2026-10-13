@@ -2377,7 +2377,10 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
      * apply failed or was skipped for lack of privilege, and never claim it was
      * "recorded" when the ACP write did not land or was skipped by /REAPPLY). */
     if (applied) {
-        printf("%%TCPIP-I-INFO, route added\n");
+        if (rt_recorded)
+            printf("%%TCPIP-I-INFO, route added; recorded in TCPIP$ROUTE.DAT (reapplied at boot)\n");
+        else
+            printf("%%TCPIP-I-INFO, route added\n");
         return SS$_NORMAL;
     }
     if (!privileged) {

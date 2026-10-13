@@ -51,6 +51,7 @@
 #include <sys/syscall.h>
 #include <sys/reboot.h>
 #include <dirent.h>
+#include <time.h>
 
 void ovmx_boot_announce_syskrnl(const char *banner)
 {
@@ -360,9 +361,35 @@ void ovmx_boot_power_off(void)
     /* Only reached without CAP_SYS_BOOT; the caller then _exit()s. */
 }
 
+/* The number of threads in this process (/proc/self/task), or -1. */
+static int self_thread_count(void)
+{
+    DIR *d = opendir("/proc/self/task");
+    struct dirent *e;
+    int n = 0;
+
+    if (!d)
+        return -1;
+    while ((e = readdir(d)) != NULL)
+        if (e->d_name[0] != '.')
+            n++;
+    closedir(d);
+    return n;
+}
+
 void ovmx_boot_stop_console_log_bridge(void)
 {
     opcom_kmsg_stop();
+    /* pthread_join returns once the reader has cleared its tid, a moment
+     * before the kernel removes the exiting thread from this thread group --
+     * and the executive changes identity only for a single-threaded process
+     * (rd vms-137e: PID 1 was refused with the reader's tid still listed).
+     * Wait for that removal itself, the condition BECOME tests, bounded at
+     * 5 s; a thread that never goes is reported by PID 1's halt. */
+    for (int i = 0; i < 500 && self_thread_count() > 1; i++) {
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
 }
 
 void ovmx_boot_note_threads(char *buf, size_t bufsz)
@@ -373,7 +400,7 @@ void ovmx_boot_note_threads(char *buf, size_t bufsz)
     if (!d)
         return;
     while ((e = readdir(d)) != NULL) {
-        char path[64], name[32] = "?";
+        char path[300], name[32] = "?";
         size_t used = strlen(buf);
         FILE *f;
 

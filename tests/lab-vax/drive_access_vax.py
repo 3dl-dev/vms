@@ -166,7 +166,7 @@ def build_source_iso(artifacts_dir, out_iso):
     boot as a second CD (rq2). Always carries vms.kmod + vmsaccess; also
     carries the custom MODULAR kernel (netbsd-OVMX) when present, for the
     install-kernel session. The guest mounts it and copies them out."""
-    for f in ("vms.kmod", "vmsaccess"):
+    for f in ("vms.kmod", "vmsaccess", "vmscreator"):
         p = os.path.join(artifacts_dir, f)
         if not os.path.isfile(p):
             raise RuntimeError("missing cross-built artifact: %s" % p)
@@ -362,12 +362,12 @@ def main():
                       "  test -e $dev || continue; "
                       "  if mount_cd9660 $dev /mnt 2>/dev/null; then "
                       "    if test -f /mnt/vms.kmod; then ok=$dev; "
-                      "      cp /mnt/vms.kmod /mnt/vmsaccess /root/ovmx/ && "
-                      "      umount /mnt && chmod +x /root/ovmx/vmsaccess && break; "
+                      "      cp /mnt/vms.kmod /mnt/vmsaccess /mnt/vmscreator /root/ovmx/ && "
+                      "      umount /mnt && chmod +x /root/ovmx/vmsaccess /root/ovmx/vmscreator && break; "
                       "    else umount /mnt 2>/dev/null; fi; "
                       "  fi; done; "
                       "echo \"OVMX module CD = $ok\"; ls -l /root/ovmx; "
-                      "test -f /root/ovmx/vms.kmod && test -x /root/ovmx/vmsaccess",
+                      "test -f /root/ovmx/vms.kmod && test -x /root/ovmx/vmsaccess && test -x /root/ovmx/vmscreator",
                       cmd_timeout)
         proof.record("stage-artifacts", rc == 0,
                       detail="mount OVMX CD, copy vms.kmod+vmsaccess")
@@ -443,6 +443,18 @@ def main():
                 return proof.exit_code()
             proof.record("modload", True)
             log("OK: module loaded and /dev/vms created on NetBSD/vax")
+            # The creator (rd vms-6ed): every tool from here on is a VMS
+            # process the creator daemon makes; a shell-started one is not.
+            rc, out = run(child, netbsd_console.creator_start_cmd("/root/ovmx/vmscreator"),
+                          cmd_timeout)
+            if phase_token(out, "CREATOR") != "OK":
+                log("FAIL: the creator daemon did not start (ESTABLISH_SYSTEM)")
+                proof.record("creator", False, detail="vmscreator -d did not start")
+                proof.emit_result_line()
+                return proof.exit_code()
+            proof.record("creator", True)
+            log("OK: the creator daemon holds this boot's ESTABLISH_SYSTEM")
+            AC = netbsd_console.created("/root/ovmx/vmscreator", AC)
 
         # =====================================================================
         # ACCESS: intra-process round trip (SETMODE/GETMODE/ENTER_IMAGE/
@@ -618,6 +630,7 @@ def main():
                    "cat /tmp/acc_tx 2>/dev/null; echo '=== END ==='", cmd_timeout)
 
         # ---- cleanup ----------------------------------------------------
+        run(child, netbsd_console.CREATOR_STOP_CMD, cmd_timeout)
         run(child, "modunload vms 2>/dev/null; true", cmd_timeout)
         try:
             child.sendline("halt")

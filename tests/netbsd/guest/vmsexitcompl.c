@@ -66,8 +66,8 @@ main(void)
 	ea.efn = EFN;
 	(void)kif_xport_ioctl(fd, VMS_IOCTL_CLREF, &ea);     /* this process's PCB */
 
-	int up[2], go[2];
-	if (pipe(up) != 0 || pipe(go) != 0) {
+	int hold[2], up[2], go[2];
+	if (pipe(hold) != 0 || pipe(up) != 0 || pipe(go) != 0) {
 		printf("EXITCOMPL SETUPFAIL pipe\n");
 		return 5;
 	}
@@ -77,7 +77,12 @@ main(void)
 		return 5;
 	}
 	if (child == 0) {
-		close(up[0]); close(go[1]);
+		char h = 0;
+		close(hold[1]); close(up[0]); close(go[1]);
+		/* Held until this creator has made it a VMS process (rd vms-6ed): a
+		 * task the executive did not create has no PCB. */
+		if (read(hold[0], &h, 1) != 1 || h != 'g')
+			_exit(125);
 		struct vms_ef_args c;
 		memset(&c, 0, sizeof(c));
 		c.efn = 1;
@@ -90,7 +95,19 @@ main(void)
 			_exit(2);
 		pthread_exit(NULL);        /* the main thread ends first */
 	}
-	close(up[1]); close(go[0]);
+	close(hold[0]); close(up[1]); close(go[0]);
+	/* $CREPRC: the executive makes the child's PCB, this process its creator. */
+	struct vms_creprc_pcb_args cp;
+	memset(&cp, 0, sizeof(cp));
+	cp.child_pid = (uint32_t)child;
+	cp.flags = VMS_CREPRC_PCB_SUBPROCESS;
+	int crc = kif_xport_ioctl(fd, VMS_IOCTL_CREPRC_PCB, &cp);
+	(void)write(hold[1], (crc >= 0 && (cp.status & 1u)) ? "g" : "x", 1);
+	if (crc < 0 || !(cp.status & 1u)) {
+		printf("EXITCOMPL SETUPFAIL creprc_pcb rc=%d status=%u\n", crc, cp.status);
+		(void)waitpid(child, NULL, 0);
+		return 5;
+	}
 	char r = 0;
 	if (read(up[0], &r, 1) != 1 || r != 'u') {
 		printf("EXITCOMPL SETUPFAIL child registration\n");
@@ -98,7 +115,7 @@ main(void)
 	}
 	struct vms_spawn_notify_args sn;
 	memset(&sn, 0, sizeof(sn));
-	sn.child_vms_pid = (uint32_t)child;   /* VMS PID == pid on this substrate */
+	sn.child_vms_pid = cp.vms_pid;        /* the PCB the executive made */
 	sn.efn = EFN;
 	int arc = kif_xport_ioctl(fd, VMS_IOCTL_SPAWN_NOTIFY, &sn);
 	(void)write(go[1], "g", 1);

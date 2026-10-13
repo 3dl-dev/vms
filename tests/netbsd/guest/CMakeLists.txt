@@ -62,6 +62,8 @@ ovmx_netbsd_guest_tool(vmseflag   ${CMAKE_CURRENT_SOURCE_DIR}/vmseflag.c)
 ovmx_netbsd_guest_tool(vmsaccess  ${CMAKE_CURRENT_SOURCE_DIR}/vmsaccess.c)
 ovmx_netbsd_guest_tool(vmsproctab ${CMAKE_CURRENT_SOURCE_DIR}/vmsproctab.c)
 ovmx_netbsd_guest_tool(vmsmbx     ${CMAKE_CURRENT_SOURCE_DIR}/vmsmbx.c)
+# The creator of VMS processes the drivers run every tool through (rd vms-6ed).
+ovmx_netbsd_guest_tool(vmscreator ${CMAKE_CURRENT_SOURCE_DIR}/vmscreator.c)
 
 # ---------------------------------------------------------------------------
 # The $STATUS proof images (rd vms-b869, parent vms-3b3f) -- STSNORM.EXE and

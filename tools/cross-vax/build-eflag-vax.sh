@@ -195,6 +195,17 @@ echo "=== build the event-flag guest tool (static elf32-vax) ==="
 echo "  OK: vmseflag (static elf32-vax)"
 echo
 
+echo "=== build the guest creator of VMS processes (static elf32-vax, rd vms-6ed) ==="
+# A shell-started tool is not a VMS process: the driver runs each one through
+# vmscreator, which holds this boot's ESTABLISH_SYSTEM and creates the tool with $CREPRC.
+"$CC" -O -Wall -Wextra -static \
+    -I"$LIBVMSSYS" -I"$KMOD" \
+    -o "$OUT/vmscreator" \
+    "$PROBE/vmscreator.c" "$LIBVMSSYS/kif_transport_netbsd.c"
+"$OBJDUMP" -f "$OUT/vmscreator" | grep -qiF 'file format elf32-vax' || { echo "FAIL: vmscreator not elf32-vax"; exit 1; }
+echo "  OK: vmscreator (static elf32-vax)"
+echo
+
 echo "=== ARTIFACTS ==="
 ls -l "$OUT/vms.kmod" "$OUT/vmseflag"
 echo "=== build-eflag-vax.sh: DONE (both elf32-vax artifacts ready for SIMH) ==="

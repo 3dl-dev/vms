@@ -238,6 +238,32 @@ static uint32_t phase2_commit_count(struct vms_club *club,
  * only from the LOCAL CSB actually carrying MEMBER -- never from "a transition
  * happened".
  */
+static uint64_t phase2_now_vms(const struct cnxman_ops *ops)
+{
+	if (ops != NULL && ops->now_vms != NULL)
+		return ops->now_vms(ops->ctx);
+	return 0u;
+}
+
+/* rd vms-d52c: the member-state times every PARAMS a member sends carries
+ * (struct vms_club). 0 from the clock records nothing. */
+static void phase2_note_member_times(struct vms_cluster *cl,
+				     const struct cnxman_ops *ops)
+{
+	struct vms_club *club = &cl->club;
+	uint64_t now = phase2_now_vms(ops);
+
+	if (now == 0u || cl->state != VMS_CLUSTER_MEMBER)
+		return;
+	club->last_xition_vms = now;
+	club->last_xition_epoch = club->epoch;
+	club->last_xition_valid = 1u;
+	if (!club->joined_valid) {
+		club->joined_vms = now;
+		club->joined_valid = 1u;
+	}
+}
+
 static void phase2_commit_local_membership(struct vms_cluster *cl,
 					   const struct cnxman_ops *ops)
 {
@@ -421,6 +447,8 @@ void cnxman_phase2_local_committed(struct vms_cluster *cl,
 	 * the commit path uses. */
 	phase2_commit_local_membership(cl, ops);
 	(void)cnxman_ldwv_rebuild(&cl->club, ops);
+	if (!cl->club.joined_valid)
+		phase2_note_member_times(cl, ops);
 }
 
 uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
@@ -482,6 +510,7 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 
 	phase2_commit_ldwv(club, ops);
 	phase2_commit_dlm_seq(club, in);
+	phase2_note_member_times(cl, ops);
 
 	club->last_transition_ms = phase2_now(ops);
 	return members;

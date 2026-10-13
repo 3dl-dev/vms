@@ -2027,6 +2027,10 @@ void cnxman_club_found(struct vms_club *club, uint64_t ftime,
 	if (ftime != 0u) {
 		club->ftime = ftime;
 		club->ftime_valid = 1u;
+		/* rd vms-d52c: a real founder's PARAMS body[64:72] equals the
+		 * formation time -- it became a member when it formed it. */
+		club->joined_vms = ftime;
+		club->joined_valid = 1u;
 	}
 	club->fsysid = (uint64_t)fsysid;
 	club->fsysid_valid = 1u;

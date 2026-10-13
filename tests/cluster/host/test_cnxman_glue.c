@@ -654,6 +654,14 @@ static void test_glue_bindings(void)
 	check_has("cn->mscp_sysap.connect_min_credits =\n"
 		  "\t\t(uint16_t)CNXMAN_DISK_CL_MIN_CREDITS;",
 		  "rd vms-239: ... and its Minimum Send Credits");
+	/* rd vms-d52c: the local CSB holds the port's own incarnation, so the
+	 * op-0x05 record a coordinator sends about itself is not zero-timed
+	 * (a real VAX refused that record and abandoned the admission). */
+	check_has("if (pe_incarnation(cn->cl->pe, &lo, &hi) ==\n"
+		  "\t\t\t    (int)SS__NORMAL)\n"
+		  "\t\t\t\tcnxman_csb_set_incarnation(club, csb,",
+		  "rd vms-d52c: the local CSB carries this port's own incarnation "
+		  "(pe_incarnation answers SS$_NORMAL, the E67 family)");
 	/* rd vms-64b: the cluster's DLM rebuild sequence is RECORDED off the
 	 * members' own carriers and STAMPED on every DLM body this node sends
 	 * -- originations and answers -- and a send with none recorded does

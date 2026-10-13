@@ -138,9 +138,20 @@ int main(void)
             if (c == 0) {
                 close(q[0]);
                 uint32_t r = 0;
+                struct vms_procinfo me;
                 if (setgid(100) == 0 && setuid(100) == 0 &&
-                    vms_pcb_init(0xFFFFFFFFFFFFFFFFULL))
-                    r = vms_kif_power_off();
+                    vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
+                    /* Ask only when this process really lacks CMKRNL: a
+                     * defect elsewhere that hands it CMKRNL (an image-
+                     * privilege one, say) must turn this check red, not
+                     * power the guest off under every later suite. */
+                    memset(&me, 0, sizeof me);
+                    if ((vms_kif_getjpi_self(&me) & 1) &&
+                        !(me.cur_privs & VMS_PRV_M_CMKRNL))
+                        r = vms_kif_power_off();
+                    else
+                        r = 0xFFFFFFFFu;    /* held CMKRNL: not asked */
+                }
                 (void)!write(q[1], &r, sizeof r);
                 _exit(0);
             }

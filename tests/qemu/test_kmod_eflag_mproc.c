@@ -55,6 +55,8 @@
 #include <sys/wait.h>
 #include <stdint.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -114,9 +116,13 @@ static int bootstrap(const char *who)
         printf("  FAIL: %s: cannot open /dev/vms\n", who);
         return -1;
     }
-    struct vms_register_args reg = {0};
-    reg.vms_pid = (uint32_t)getpid();
-    ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+    /* This process is one the executive created (the harness boot task or its
+     * creator made its row, rd vms-2a5): it is already in the process table, so
+     * nothing registers -- $GETJPI reads the row back. */
+    struct vms_getjpi_args reg;
+    memset(&reg, 0, sizeof(reg));
+    reg.select = VMS_JPI_SEL_SELF;
+    ioctl(fd, VMS_IOCTL_GETJPI, &reg);
     if (!(reg.status & 1)) {
         printf("  FAIL: %s: VMS_IOCTL_REGISTER status=%u\n", who, reg.status);
         close(fd);
@@ -301,7 +307,7 @@ int main(void)
         return 1;
     }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         printf("  FAIL: fork() failed\n");
         return 1;

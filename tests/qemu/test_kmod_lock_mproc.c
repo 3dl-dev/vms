@@ -43,6 +43,7 @@
 #include <sys/wait.h>
 #include "vms_ioctl.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL       1
 /* ssdef.h SS$_NOTQUEUED -- see vms-82a; the private 40 is gone. */
@@ -71,14 +72,13 @@ static int open_and_register(void)
     if (fd < 0)
         return -1;
 
-    struct vms_register_args reg = {0};
-    reg.vms_pid = (uint32_t)getpid();
-    /* NO init_privs (vms-2b8): VMS_IOCTL_REGISTER no longer carries a
-     * privilege mask. It used to, and this line asked for all 64 bits --
-     * a process declaring its own privileges, which is the honor system
-     * that item removed. The executive now DERIVES the mask from the
-     * task's real credentials, and nothing below needs a privilege. */
-    ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+    /* This process is one the executive created (the harness boot task or its
+     * creator made its row, rd vms-2a5): it is already in the process table, so
+     * nothing registers -- $GETJPI reads the row back. */
+    struct vms_getjpi_args reg;
+    memset(&reg, 0, sizeof(reg));
+    reg.select = VMS_JPI_SEL_SELF;
+    ioctl(fd, VMS_IOCTL_GETJPI, &reg);
     if (reg.status != SS_NORMAL) {
         close(fd);
         return -1;
@@ -208,7 +208,7 @@ int main(void)
         return 1;
     }
 
-    pid_t child_pid = fork();
+    pid_t child_pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (child_pid < 0) {
         printf("  FAIL: fork()\n");
         return 1;

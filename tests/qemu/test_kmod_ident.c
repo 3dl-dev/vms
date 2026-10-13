@@ -623,7 +623,7 @@ int main(void)
         return 1;
     }
     if (vms_kif_register(&reg_vms_pid) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+        printf("  FAIL: this process has no row its creator made\n");
         printf("=== test_kmod_ident: 0 passed, 1 failed ===\n");
         return 1;
     }

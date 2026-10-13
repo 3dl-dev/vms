@@ -146,14 +146,10 @@ int main(void)
     }
 
     /* 3. The executive must still be serving after the refused unload. */
-    struct vms_register_args reg;
+    struct vms_getjpi_args reg;
     memset(&reg, 0, sizeof(reg));
-    reg.vms_pid = (uint32_t)getpid();
-    /* NO init_privs (vms-2b8): VMS_IOCTL_REGISTER no longer carries a
-     * privilege mask. A process naming its own privileges is the honor
-     * system that item removed, in either direction. The executive now
-     * DERIVES the mask from the task's real credentials. */
-    int irc = ioctl(fd, VMS_IOCTL_REGISTER, &reg);
+    reg.select = VMS_JPI_SEL_SELF;
+    int irc = ioctl(fd, VMS_IOCTL_GETJPI, &reg);
     CHECK(irc == 0 && reg.status == SS_NORMAL,
           "the executive still serves ioctls after the refused unload");
 

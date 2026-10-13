@@ -59,6 +59,7 @@
 #include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 
 #define EXIT_SKIP 77
@@ -126,7 +127,7 @@ static int run_authorize(const char *username, uint32_t uic, uint64_t privs,
      */
     fflush(NULL);
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -239,7 +240,7 @@ int main(void)
      */
     {
         uint32_t vpid = 0;
-        (void)vms_kif_register(&vpid);       /* job_id for the LNM$JOB scope   */
+        (void)ovmx_test_self(&vpid);       /* job_id for the LNM$JOB scope   */
         lnm_manager_t *mgr = lnm_get_manager();
         uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
         CHECK($VMS_STATUS_SUCCESS(mst),

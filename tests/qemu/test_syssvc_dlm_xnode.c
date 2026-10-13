@@ -112,11 +112,14 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    struct vms_register_args reg;
+    /* This process is one the executive created (the harness boot task or its
+     * creator made its row, rd vms-2a5): it is already in the process table, so
+     * nothing registers -- $GETJPI reads the row back. */
+    struct vms_getjpi_args reg;
     memset(&reg, 0, sizeof(reg));
-    reg.vms_pid = (uint32_t)getpid();
-    ioctl(fd, VMS_IOCTL_REGISTER, &reg);
-    CHECK(reg.status == SS_NORMAL, "register");
+    reg.select = VMS_JPI_SEL_SELF;
+    ioctl(fd, VMS_IOCTL_GETJPI, &reg);
+    CHECK(reg.status == SS_NORMAL, "this suite has the row its creator made");
 
     const char *res = "DLMXNODE1";
     const uint32_t REQ_CSID_A = 1025u;   /* the first remote requester's CSID  */

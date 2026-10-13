@@ -260,7 +260,7 @@ int main(int argc, char **argv)
         struct vms_register_args reg;
         memset(&reg, 0, sizeof(reg));
         if (ioctl(vmsfd, VMS_IOCTL_REGISTER, &reg) != 0) {
-            printf("  FAIL: VMS_IOCTL_REGISTER rejected (%s)\n", strerror(errno));
+            printf("  FAIL: this process has no row its creator made (%s)\n", strerror(errno));
             printf("FAIL: bench_lnm_cost\n");
             close(vmsfd);
             return 1;

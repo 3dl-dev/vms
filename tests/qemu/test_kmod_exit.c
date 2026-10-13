@@ -51,6 +51,8 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL   1
 
@@ -84,16 +86,20 @@ static int pass = 0, fail = 0;
     else { printf("  FAIL: %s\n", msg); fail++; } \
 } while (0)
 
-/* Register the calling task and return its assigned VMS PID, or 0 on error. */
+/* The calling process's VMS PID, from the row its creator made, or 0 on
+ * error. Nothing registers itself (rd vms-2a5): the suite's row comes from the
+ * harness boot task, a subprocess's (ovmx_fork_subprocess) and an image task's
+ * (ovmx_fork_continue, which shares the creator's VMS PID) from the suite.
+ * `continue_identity` only documents which of the two the caller is. */
 static uint32_t do_register(int fd, int continue_identity)
 {
-    struct vms_register_args reg;
+    struct vms_getjpi_args reg;
+    (void)continue_identity;
     memset(&reg, 0, sizeof(reg));
-    unsigned long cmd = continue_identity ? VMS_IOCTL_REGISTER_CONTINUE
-                                          : VMS_IOCTL_REGISTER;
-    if (ioctl(fd, cmd, &reg) != 0 || reg.status != SS_NORMAL)
+    reg.select = VMS_JPI_SEL_SELF;
+    if (ioctl(fd, VMS_IOCTL_GETJPI, &reg) != 0 || reg.status != SS_NORMAL)
         return 0;
-    return reg.vms_pid;
+    return reg.info.vms_pid;
 }
 
 /* SETEXIT(cond) on the calling process; fills *out with the reply. */
@@ -250,7 +256,7 @@ int main(void)
         if (pipe(r2c) != 0 || pipe(c2r) != 0) {
             CHECK(0, "pipe() for cross-process exit test");
         } else {
-            pid_t kid = fork();
+            pid_t kid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
             if (kid == 0) {
                 /* CHILD (process A): own PCB, record COND_CHILD, then block
                  * until the parent has read it so the PCB is not reaped. */
@@ -345,7 +351,7 @@ int main(void)
         if (pipe(c2r) != 0) {
             CHECK(0, "pipe() for CLI-inheritance test");
         } else {
-            pid_t kid = fork();
+            pid_t kid = ovmx_fork_continue();   /* this suite's image task, as DCL makes one (rd vms-e50) */
             if (kid == 0) {
                 /* CHILD: the activated image. Continue the parent's identity
                  * and read the command line it inherited. */
@@ -399,7 +405,7 @@ int main(void)
         if (pipe(c2r) != 0) {
             CHECK(0, "pipe() for RUN fork-path exit test");
         } else {
-            pid_t kid = fork();
+            pid_t kid = ovmx_fork_continue();   /* this suite's image task, as DCL makes one (rd vms-e50) */
             if (kid == 0) {
                 /* CHILD: the activated image. Continue the CLI's identity (so it
                  * shares the CLI's VMS PID), record a completion condition value,

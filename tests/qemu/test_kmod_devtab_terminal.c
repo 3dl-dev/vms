@@ -61,6 +61,7 @@
 #include <termios.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL       1
 #define SS_IVCHAN       316
@@ -146,7 +147,7 @@ static int process_a(int wfd)
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
-    if (vms_kif_register(&rep.own_vms_pid) != SS_NORMAL) {
+    if (ovmx_test_self(&rep.own_vms_pid) != SS_NORMAL) {
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
@@ -198,7 +199,7 @@ static int process_holder(int wfd, int rfd, const char *devnam)
     char op;
 
     memset(&rep, 0, sizeof(rep));
-    if (vms_kif_open() < 0 || vms_kif_register(&own_pid) != SS_NORMAL) {
+    if (vms_kif_open() < 0 || ovmx_test_self(&own_pid) != SS_NORMAL) {
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
@@ -238,7 +239,7 @@ static pid_t spawn_holder(const char *self, const char *devnam,
 
     if (pipe(up) < 0 || pipe(down) < 0)
         return -1;
-    pid = fork();
+    pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0)
         return -1;
     if (pid == 0) {
@@ -301,8 +302,8 @@ int main(int argc, char **argv)
         printf("=== test_kmod_devtab_terminal: 0 passed, 1 failed ===\n");
         return 1;
     }
-    if (vms_kif_register(&self_vms_pid) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(&self_vms_pid) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         printf("=== test_kmod_devtab_terminal: 0 passed, 1 failed ===\n");
         return 1;
     }
@@ -435,7 +436,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (child < 0) {
         printf("  FAIL: fork()\n");
         printf("=== test_kmod_devtab_terminal: %d passed, %d failed ===\n", pass, fail + 1);

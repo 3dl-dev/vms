@@ -1143,6 +1143,21 @@ static enum cnxman_open_gap coord_open_rebuild(const struct cnxman_coord *c,
 	return CNXMAN_OPEN_GAP_NONE;
 }
 
+/* Is the transition in progress an ADD whose open carries the MERGE rebuild
+ * type? The same derivation the open's body[24] came from (rd vms-6e3). */
+static int coord_is_merge(const struct cnxman_coord *c)
+{
+	uint8_t rb = 0u;
+
+	if (c->tr_class != VMS_CM_CLASS_ADD || c->subject_csb < 0 ||
+	    (uint32_t)c->subject_csb >= c->cl->club.n_csb)
+		return 0;
+	if (coord_open_rebuild(c, &c->cl->club.csb[c->subject_csb], &rb) !=
+	    CNXMAN_OPEN_GAP_NONE)
+		return 0;
+	return rb == VMS_CM_REBUILD_MERGE;
+}
+
 /* The lowest / highest slot in the post-transition nodemap. */
 static void coord_open_census(const struct cnxman_coord *c, uint32_t *low,
 			      uint32_t *top)
@@ -1699,6 +1714,19 @@ static void coord_try_go(struct cnxman_coord *c)
 	 * (spec SS4(p)), so nothing is awaited here. */
 	coord_fanout(c, coord_send_go);
 	coord_commit_phase2(c);
+
+	/*
+	 * A MERGE REBUILD HAS NO BARRIER (rd vms-6e3; the participant side's
+	 * note in vms_cnxman_barrier_fsm.c barrier_h_go() carries the census).
+	 * No real participant reports a step in one and no real coordinator
+	 * releases one, so a coordinator that waited for step 1 here would
+	 * hold the transition -- and the coordinator lock -- forever.
+	 */
+	if (coord_is_merge(c)) {
+		c->merges_completed++;
+		coord_finish(c);
+		return;
+	}
 
 	c->state = (uint8_t)CNXMAN_COORD_BARRIER;
 	c->step = 1u;

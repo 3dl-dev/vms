@@ -1142,11 +1142,37 @@ static void test_e8b_a_response_rides_its_own_connection(void)
 		  "are one fact");
 }
 
+/*
+ * rd vms-52d -- A BOOTING MEMBER'S cat-0x0b op-0x01 IS ANSWERED, ON ITS OWN
+ * CONNECTION, FROM ITS CSB, BEFORE THE "unroutable" FALLBACK. The answer itself
+ * is proven as behaviour in test_codec_cm.c (two real pairs) and
+ * test_cnxman_coord.c (the CSB flag that Phase 2 sets). What only the shipping
+ * source can show is that the glue really routes the frame there.
+ */
+static void test_52d_startup_query_is_routed(void)
+{
+	printf("-- rd vms-52d: the cat-0x0b op-0x01 startup query is routed --\n");
+	if (read_glue("vms_cnxman.c") != 0) {
+		ct_check(0, "could not open vms_cnxman.c");
+		return;
+	}
+	check_has("cnxman_csb_0b01_answer(csb, cn->cl->state == VMS_CLUSTER_MEMBER,",
+		  "the answer is built from the requester's CSB and this node's "
+		  "own membership");
+	check_has("cnxman_ops_respond(cn, cn->dlm_tx, written) == 0)\n\t\tcn->q0b01_answered++",
+		  "... and goes back on the request's own connection");
+	check_before("cnxman_0b01_rx(cn, &env, body, len, csb)",
+		     "an unroutable VMS$VAXcluster frame was ",
+		     "... before the frame could be logged as unroutable");
+}
+
 int main(void)
 {
 	printf("FC-P3.8 R1: the CNXMAN glue's algorithm + its shipped "
 	       "bindings\n\n");
 	test_e8b_a_response_rides_its_own_connection();
+	printf("\n");
+	test_52d_startup_query_is_routed();
 	printf("\n");
 	test_open_preload_go_stays_new();
 	printf("\n");

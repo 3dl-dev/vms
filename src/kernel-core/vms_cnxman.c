@@ -417,6 +417,8 @@ struct vms_cnxman {
 
 	uint32_t dlm_frames_rx;        /* cat-0x02 bodies routed to the arm  */
 	uint32_t dlm_replies_sent;     /* answers the arm produced, sent     */
+	uint32_t q0b01_answered;       /* rd vms-52d: 0x8b/0x01 answers sent */
+	uint32_t q0b01_declined;       /* ...requests left unanswered        */
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
 	uint32_t dlm_sends;            /* originations the arm asked for     */
 	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
@@ -1893,6 +1895,40 @@ static int cnxman_dlm_rx(struct vms_cnxman *cn, const struct vms_cm_envelope *en
 	return 1;
 }
 
+/*
+ * A BOOTING MEMBER'S CAT-0x0b OP-0x01 (rd vms-52d). Every real V7.3 sends one
+ * to each member that was already a member when it booted, and goes no further
+ * in startup until all of them answer: OVMX's silence held every VAX short of
+ * Username:. The answer's one value is an executive fact read off the
+ * requester's CSB: whether this node was already a member when that system
+ * was admitted (vms_cm_0b01_answer_build has the measurement). A request from
+ * a system this node does not hold as a member gets no answer. That is honest
+ * silence, counted, never a guess.
+ *
+ * Returns 1 when the body was this request (answered or declined), 0 otherwise.
+ */
+static int cnxman_0b01_rx(struct vms_cnxman *cn,
+			  const struct vms_cm_envelope *env,
+			  const uint8_t *body, uint32_t len,
+			  struct vms_csb *csb)
+{
+	uint32_t written = 0;
+
+	if (env->category != (uint8_t)VMS_CM_CAT_0B ||
+	    env->opcode != (uint8_t)VMS_CM_OP_0B_QUERY)
+		return 0;
+	if (cnxman_csb_0b01_answer(csb, cn->cl->state == VMS_CLUSTER_MEMBER,
+				   body, len, cn->dlm_tx, &written) != 0) {
+		cn->q0b01_declined++;
+		cnxman_ops_log(cn, "%CNXMAN, a startup query from a system that "
+				   "is not a member was not answered");
+		return 1;
+	}
+	if (cnxman_ops_respond(cn, cn->dlm_tx, written) == 0)
+		cn->q0b01_answered++;
+	return 1;
+}
+
 static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			   const uint8_t *body, uint32_t len)
 {
@@ -2024,6 +2060,11 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			cnxman_notify_membership_changes(cn, before);
 			return drx < 0 ? 1 : 0;
 		}
+	}
+
+	if (env_ok && cnxman_0b01_rx(cn, &env, body, len, csb) != 0) {
+		cnxman_notify_membership_changes(cn, before);
+		return 0;
 	}
 
 	/* No FSM claimed it: an out-of-sequence or ungrounded frame. Counted,

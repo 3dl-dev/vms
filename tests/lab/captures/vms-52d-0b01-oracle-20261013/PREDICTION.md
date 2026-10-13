@@ -60,3 +60,22 @@ member; then VAX1 and VAX2 (1026) boot with the golden parameters.
 - B1: each of VAX1 and VAX2 sends VAX3 one 0b/01, and VAX3 answers each with 8b/01.
 - B2 under R-old: VAX3's answers carry (1, 1). Under R-id: (0, 0).
 - B3: every VAX reaches `Username:`, with 0 bugchecks.
+
+## Arm B result (recorded before the OVMX fire is registered or run)
+
+B1 held: VAX1 and VAX2 each sent VAX3 one 0b/01, and VAX3 answered each. B2: both answers carry
+(1, 1), so **R-old holds and R-id is refuted**. B3 held: 3 members, 0 bugchecks.
+
+## Fire F (pod lab52dfa): OVMX-first, the labd52c topology, build lab/int-52d
+
+The build is main + vms-db1 (#1655) + vms-d52c (#1667) + this fix. OVMXE (1030, EXPECTED_VOTES 1)
+founds alone. VAX1 and VAX2 (golden V7.3, ASYM_MSCP) boot 300 s after the pod starts.
+
+- F1: OVMXE answers each VAX's 0b/01 with 0x8b/0x01 whose body[28:32] = body[36:40] = 1.
+  OVMXE logs no "unroutable" line for it.
+- F2: both VAXes reach the end of startup (`Username:` / `job terminated` on the console),
+  with CN = 3 and 0 bugchecks on either VAX.
+- F3 (the risk, stated in advance): every all-VAX run follows the 0b/01 answers with a
+  cat-0x0b op-0x04 (volume SYSDSK1) to each member. OVMX has no answer for op 0x04. If a VAX
+  sends one to OVMXE and waits on it, F2 fails at that point, and op 0x04 becomes the next
+  item. That would not refute F1.

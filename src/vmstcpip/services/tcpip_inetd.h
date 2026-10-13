@@ -37,10 +37,12 @@
  * proof were retired as LARP, vms-d916; the mechanism proven here is real and
  * is exercised for real by the inetd path itself.)
  *
- * fork()+execv() OF THE CONFIGURED SERVICE IMAGE IS THE inetd CONTRACT, NOT A
- * HOST SHELL-OUT. The auxiliary server creates a process running the VMS image
- * named in the service database (the OVMX analogue of $CREPRC of the service
- * image); it does NOT shell out to a host networking tool, and it never
+ * CREATING THE SERVICE PROCESS IS THE inetd CONTRACT, NOT A HOST SHELL-OUT. The
+ * auxiliary server creates a process running the VMS image named in the service
+ * database, as $CREPRC does: it forks and holds the task, and the executive
+ * creates its PCB (VMS_IOCTL_CREPRC_PCB, DETACHED, with the service account's
+ * identity) before it runs the image (rd vms-1f8). It does NOT shell out to a
+ * host networking tool, and it never
  * fabricates a per-process socket. If /dev/vms is absent the veneer's
  * ovmx_socket()/ovmx_bind() fail honestly (SS$_NOSUCHDEV -> ENODEV) and the
  * auxiliary server cannot start -- it reports that, never a fake (Rule 9 /
@@ -69,8 +71,9 @@
  * services named in TCPIP$SERVICE.DAT; one accepted connection dispatched to
  * the configured image at a time per listener (the classic inetd wait model).
  * SINCE SHIPPED (R4, no longer deferred): per-service run-as identity -- each
- * spawned service drops to its configured SYSUAF account before execv,
- * fail-closed (rd vms-8bd, tcpip_inetd_ident.c); and a concurrency cap --
+ * service process is created DETACHED with its configured SYSUAF account,
+ * resolved by the auxiliary server, fail-closed (rd vms-8bd / vms-1f8,
+ * tcpip_inetd_ident.c); and a concurrency cap --
  * TCPIP_INETD_MAXCHILD with accept back-pressure (rd vms-bb4).
  * DEFERRED honestly to later rungs (NOT faked here): the persistent binary
  * service database (#878), UDP/dgram services, the "nowait" concurrent model,
@@ -99,6 +102,8 @@
                               * path (the shared stager DCL RUN + PID1 use) */
 #include "vms_bgsock.h"      /* the PROVEN server veneer: ovmx_bind/listen/accept
                               * + ovmx_materialize_fd + ovmx_socket_close */
+#include "vms_kif.h"         /* vms_kif_creprc_pcb: the creator makes the service's
+                              * process (rd vms-1f8); vms_kif_substrate_id */
 
 /* ---- Service database record ---------------------------------------------
  *
@@ -314,30 +319,60 @@ static inline int tcpip_inetd_preflight(const struct tcpip_service *svc)
     return 0;
 }
 
-/* Per-service identity establishment, run in the forked child before execv
- * (rd vms-8bd, R4 G1). It must drop the child from INETD's SYSTEM/all-privs
- * identity to the service's configured run-as account and return 0, or return
- * <0 to FAIL-CLOSED (the child then _exit()s WITHOUT execv -- the service is not
- * launched, and NEVER inherits SYSTEM). The production image passes the real
- * establisher (tcpip_inetd_establish_service_identity, tcpip_inetd_ident.c); a
- * transport test may pass NULL to skip the drop (identity is proven separately by
- * the ident unit test + the booted-runtime e2e, not the transport round-trip). */
-typedef int (*tcpip_inetd_identity_fn)(const struct tcpip_service *svc);
+/* A service's run-as identity, as the auxiliary server gives it to the process
+ * it creates for the service (rd vms-8bd R4 G1; vms-1f8). */
+struct tcpip_inetd_identity {
+    char     username[VMS_USERNAME_SIZE];   /* SYSUAF user name */
+    uint32_t uic;                           /* (group << 16) | member */
+    uint64_t privs;                         /* the account's authorized privileges */
+};
 
-/* Spawn the configured service image on an ALREADY-ACCEPTED connection handle:
- * materialize the accepted BG channel as a real executive-backed fd, then
- * fork()+execv() the service image with that fd as its SYS$INPUT (stdin) and
- * SYS$OUTPUT (stdout) -- the inetd contract. In the child, before execv, drop to
- * the service's run-as identity via `identity_fn` (fail-closed: if it returns <0
- * the service is NOT launched, R4 G1); NULL skips the drop (transport tests only).
- * The parent closes its copy of the accepted handle (the connection stays alive on
- * the child's materialized fd, whose last-reference $DASSGN drives the FIN,
- * vms-0cd) and returns the child pid (> 0), or -1 with errno on failure. */
+/* Per-service identity RESOLVER, run in the auxiliary server (the creator)
+ * before it creates the service process (rd vms-8bd R4 G1, vms-1f8). It fills
+ * *id with the service's configured run-as account and returns 0, or returns <0
+ * to FAIL-CLOSED: no process is created and the service is not launched -- it
+ * NEVER inherits INETD's SYSTEM/all-privs identity. The production image passes
+ * tcpip_inetd_resolve_service_identity (tcpip_inetd_ident.c, SYSUAF); a
+ * transport test may pass NULL, and the service is then a SUBPROCESS carrying
+ * the creator's identity. */
+typedef int (*tcpip_inetd_identity_fn)(const struct tcpip_service *svc,
+                                       struct tcpip_inetd_identity *id);
+
+/* Spawn the configured service image on an ALREADY-ACCEPTED connection handle,
+ * the way the auxiliary server does on VMS: it CREATES the service's process
+ * ($CREPRC, rd vms-1f8 / vms-9f32), with the service's own identity, and that
+ * process runs the image with the connection as SYS$INPUT and SYS$OUTPUT.
+ *
+ * 1. Materialize the accepted BG channel as a real executive-backed fd.
+ * 2. Resolve the run-as identity HERE, in the creator (`identity_fn`); a
+ *    refusal launches nothing (fail-closed, R4 G1).
+ * 3. Fork the child and HOLD it before it runs anything; the executive creates
+ *    its PCB (VMS_IOCTL_CREPRC_PCB): DETACHED with the resolved user name, UIC
+ *    and privileges (the executive checks INETD may give them -- SETPRV, or a
+ *    subset of its own identity), or a SUBPROCESS with INETD's identity when
+ *    identity_fn is NULL (transport tests only).
+ * 4. Refused -> the child is released to _exit(125) without running the image,
+ *    the client gets a generic "service unavailable", the operator log gets the
+ *    detail. Created -> the child takes the substrate identity the executive
+ *    gives its new process (VMS_SUBST_OP_BECOME, never root, never the UIC) and
+ *    execv()s the image. It establishes no VMS identity itself: that is the
+ *    PCB its creator had made.
+ *
+ * The parent closes its copy of the accepted handle (the connection stays alive
+ * on the child's materialized fd, whose last-reference $DASSGN drives the FIN,
+ * vms-0cd) and returns the child pid (> 0) -- which it reaps -- or -1 with errno
+ * when no process was forked. */
 static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service *svc,
                                       tcpip_inetd_identity_fn identity_fn)
 {
+    static const char nosvc[] = "%OVMX-F-NOSVC, service unavailable\n";
+    struct tcpip_inetd_identity id;
     int rfd;
+    int hold[2];
     pid_t pid;
+    uint32_t st, vpid = 0;
+    char go;
+    ssize_t n;
     char argbuf[TCPIP_INETD_ARGS_MAX];
     char *argv[16];
     int argc = 0;
@@ -377,33 +412,63 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
     }
     const char *exec_path = staged;
 
+    /* R4 G1: the run-as identity is resolved by the creator, before any process
+     * exists. FAIL-CLOSED: no account, an unknown account or an unreadable
+     * SYSUAF launches nothing (the resolver logged why). The client is told only
+     * that the service is unavailable. */
+    memset(&id, 0, sizeof(id));
+    if (identity_fn != NULL && identity_fn(svc, &id) != 0) {
+        (void)!write(rfd, nosvc, sizeof(nosvc) - 1);
+        close(rfd);
+        ovmx_socket_close(accepted_h);
+        errno = EACCES;
+        return -1;
+    }
+
+    if (pipe(hold) != 0) {
+        int e = errno; close(rfd); ovmx_socket_close(accepted_h); errno = e; return -1;
+    }
+    (void)fcntl(hold[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(hold[1], F_SETFD, FD_CLOEXEC);
+
     pid = fork();
     if (pid < 0) {
-        int e = errno; close(rfd); errno = e; return -1;
+        int e = errno;
+        close(hold[0]); close(hold[1]); close(rfd); ovmx_socket_close(accepted_h);
+        errno = e;
+        return -1;
     }
     if (pid == 0) {
-        /* Child: the accepted connection becomes the service image's SYS$INPUT
-         * and SYS$OUTPUT. Both fds are the materialized [bgconn] fd, so the
+        /* Child: held until its creator has made it a VMS process (or refused
+         * to). Nothing here touches the executive before the release. */
+        close(hold[1]);
+        go = 0;
+        do { n = read(hold[0], &go, 1); } while (n < 0 && errno == EINTR);
+        close(hold[0]);
+        if (go != 'g')
+            _exit(125);                         /* fail-closed: no process was made */
+        /* The accepted connection becomes the service image's SYS$INPUT and
+         * SYS$OUTPUT. Both fds are the materialized [bgconn] fd, so the
          * service's read()/write() transit the executive socket. */
         dup2(rfd, STDIN_FILENO);
         if (dup2(rfd, STDOUT_FILENO) != STDOUT_FILENO) _exit(126); /* NEGCTL tcpip-inetd-reply-not-connected */
         if (rfd > STDERR_FILENO)
             close(rfd);
-        /* R4 G1: drop from INETD's SYSTEM/all-privs identity to the service's
-         * configured run-as account BEFORE execv. FAIL-CLOSED -- if the identity
-         * cannot be established (no account, unknown account, executive refused,
-         * or the credential drop failed) the service is NOT launched; it never
-         * runs as SYSTEM. (identity_fn NULL = transport test, no drop.) */
-        if (identity_fn != NULL && identity_fn(svc) != 0)
-            _exit(125);                         /* fail-closed: identity not established */
+        /* The service's substrate identity is the one the executive gives its
+         * new process (rd vms-ac48): never INETD's, never root. FAIL-CLOSED. */
+        if (identity_fn != NULL && !(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1)) {
+            static const char nosub[] =
+                "%OVMX-F-NOSUBST, the executive gave the service no substrate identity\n";
+            (void)!write(STDERR_FILENO, nosub, sizeof(nosub) - 1);
+            (void)!write(STDOUT_FILENO, nosvc, sizeof(nosvc) - 1);
+            _exit(125);
+        }
         execv(exec_path, argv);
         /* execv returned -> it FAILED. Two sinks, asymmetric (R4 posture, #1168):
          * the FULL detail (which image, errno) to stderr -> SYS$MANAGER:TCPIP$INETD.LOG
          * (an operator record), and a GENERIC "service unavailable" to the accepted
          * socket (STDOUT, dup2'd above) -- an unauthenticated client is not told the
-         * image path or errno. Distinguishes an execv failure from an identity
-         * refusal in the operator log without leaking internals to the client
-         * (rd vms-8bd). */
+         * image path or errno. */
         {
             char eb[256];
             int en = snprintf(eb, sizeof(eb),
@@ -413,14 +478,40 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
                 size_t el = (en < (int)sizeof(eb)) ? (size_t)en : sizeof(eb) - 1;
                 (void)!write(STDERR_FILENO, eb, el);
             }
-            static const char generic[] = "%OVMX-F-NOSVC, service unavailable\n";
-            (void)!write(STDOUT_FILENO, generic, sizeof(generic) - 1);
+            (void)!write(STDOUT_FILENO, nosvc, sizeof(nosvc) - 1);
         }
         _exit(127);                             /* execv failed */
     }
 
-    /* Parent: drop our copies. Closing the materialized fd and the accepted BG
-     * handle here does NOT tear the connection down -- the child holds the live
+    /* Creator: make the held child the service's VMS process. */
+    close(hold[0]);
+    if (identity_fn != NULL)
+        st = vms_kif_creprc_pcb((uint32_t)pid, VMS_CREPRC_PCB_DETACHED, id.username,
+                                id.uic, id.privs, &vpid);
+    else
+        st = vms_kif_creprc_pcb((uint32_t)pid, VMS_CREPRC_PCB_SUBPROCESS,
+                                (const char *)0, 0, 0, &vpid);
+    /* A refused identity has NO fallback (never INETD's own): NEGCTL tcpip-inetd-refused-identity-launched */
+    if (!(st & 1u)) {
+        go = 'x';
+        char eb[160];
+        int en = snprintf(eb, sizeof(eb),
+                          "%%OVMX-F-NOIDENT, executive refused run-as identity "
+                          "'%s' [%o,%o] (status %#x) -- not launched\n",
+                          id.username, (unsigned)(id.uic >> 16),
+                          (unsigned)(id.uic & 0xFFFFu), (unsigned)st);
+        if (en > 0)
+            (void)!write(STDERR_FILENO, eb,
+                         (en < (int)sizeof(eb)) ? (size_t)en : sizeof(eb) - 1);
+        (void)!write(rfd, nosvc, sizeof(nosvc) - 1);
+    } else {
+        go = 'g';
+    }
+    do { n = write(hold[1], &go, 1); } while (n < 0 && errno == EINTR);
+    close(hold[1]);
+
+    /* Drop our copies. Closing the materialized fd and the accepted BG handle
+     * here does NOT tear the connection down -- the child holds the live
      * reference (ovmx_socket_close drops a ref, the FIN is at the last one). */
     close(rfd);
     ovmx_socket_close(accepted_h);
@@ -428,8 +519,8 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
 }
 
 /* Accept one inbound connection on a listening handle and dispatch it to the
- * configured service image, dropping to the service's run-as identity in the
- * spawned child via `identity_fn` (fail-closed, R4 G1; NULL = transport test).
+ * configured service image, creating the service process with its run-as identity (resolved by
+ * `identity_fn`, fail-closed, R4 G1; NULL = transport test).
  * Blocks in ovmx_accept() until a client connects. On success returns the
  * spawned service's pid (> 0) and, if `peer` is non-NULL, fills it with the
  * client's address. Returns -1 with errno on failure (ENODEV = no /dev/vms). */

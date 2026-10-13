@@ -1,0 +1,32 @@
+# tcpip-inetd-refused-identity-launched -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "TCP/IP Services AUXILIARY SERVER (TCPIP\$INETD-equivalent) -- creation of the service process (tcpip_inetd_spawn, src/vmstcpip/services/tcpip_inetd.h, rd vms-8bd R4 G1 / vms-1f8): the auxiliary server forks and holds the service task, and the executive creates its PCB DETACHED with the service account's identity (VMS_IOCTL_CREPRC_PCB) before the task runs the service image. If the executive refuses that identity, the held task is released only to exit -- the image never runs.";;
+        targets)      echo "vmstcpip/services/tcpip_inetd.h";;
+        suites_red)   echo "test_syssvc_tcpip_inetd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_inetd_spawn() has no fallback when the executive refuses the service's run-as identity: the held child is released only to _exit(125). The mutation adds the fallback the R4 G1 hole is made of -- on a refused DETACHED identity, create the child as a SUBPROCESS with the auxiliary server's own identity -- so the service image runs as INETD (SYSTEM). The suite's refused case then receives the service's report line and an exit status of 0 instead of the generic refusal, so both refused-identity assertions redden; the transport round-trip and the given-identity case (whose identity the executive accepts, so the fallback never fires) stay green. One added line.";;
+        require_fail) cat <<'EOF'
+R4 G1: an identity the executive refuses launches NOTHING (fail-closed, the image never runs)
+R4 G1: the refused client is told only that the service is unavailable
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Give a refused run-as identity the auxiliary server's own as a
+        # fallback. Anchored on its own NEGCTL comment line, which the
+        # substitution replaces, so a second apply is the no-op the selftest
+        # requires.
+        sed -i 's|^    /\* A refused identity has NO fallback (never INETD.s own): NEGCTL tcpip-inetd-refused-identity-launched \*/$|    if (!(st \& 1u)) st = vms_kif_creprc_pcb((uint32_t)pid, VMS_CREPRC_PCB_SUBPROCESS, (const char *)0, 0, 0, \&vpid); /* NEGCTL tcpip-inetd-refused-identity-launched */|' "$_file"
+
+    :
+}

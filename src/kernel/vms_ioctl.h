@@ -3120,8 +3120,8 @@ struct vms_creprc_ticket_args {
  * from the creator's row (SUBPROCESS) or from the creator-supplied identity
  * the creator is authorized to give (DETACHED: SETPRV, or exactly its own user
  * name, UIC and a subset of its authorized privileges -- the rule the
- * creation ticket applied). The task must be the creator's child (SUBPROCESS)
- * or grandchild through the still-live detach intermediate (DETACHED), and
+ * creation ticket applied). The task must be the creator's child, or for
+ * DETACHED also its grandchild through the still-live detach intermediate, and
  * must have no PCB. The new process's creator of record is the caller.
  */
 #define VMS_CREPRC_PCB_SUBPROCESS 0u

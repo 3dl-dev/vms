@@ -283,7 +283,7 @@ int main(int argc, char **argv)
     }
 
     if (pipe(p2c) < 0 || pipe(c2p) < 0) { printf("  FAIL: pipe()\n"); return 1; }
-    pid = ovmx_fork_subprocess();
+    pid = ovmx_fork_login();
     if (pid < 0) { printf("  FAIL: fork()\n"); return 1; }
     if (pid == 0) {
         char r[16], w[16];

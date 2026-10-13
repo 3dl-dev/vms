@@ -2971,6 +2971,16 @@ struct vms_ident_args {
 #define VMS_CREPRC_PCB_SUBPROCESS 0u
 #define VMS_CREPRC_PCB_DETACHED   1u
 #define VMS_CREPRC_PCB_CONTINUE   2u   /* DCL's image task: the SAME VMS process (rd vms-e50) */
+/* OR'd into flags (rd vms-a2c): the new process is a LOGIN process -- its
+ * creator ($CREPRC PRC$M_LOGINOUT) is starting LOGINOUT in it. Only such a
+ * process may stamp an identity (SETIDENT), and only until the image after
+ * LOGINOUT is activated. SUBPROCESS and DETACHED only. */
+#define VMS_CREPRC_PCB_F_LOGIN    0x100u
+/* OR'd into flags with SUBPROCESS (rd vms-a2c): the subprocess takes the
+ * given identity (username/uic/privs) instead of its creator's -- $CREPRC's
+ * explicit uic/prvadr -- under the rule DETACHED applies. */
+#define VMS_CREPRC_PCB_F_IDENTITY 0x200u
+#define VMS_CREPRC_PCB_KIND(f)    ((f) & 0xFFu)
 struct vms_creprc_pcb_args {
     char     username[VMS_USERNAME_SIZE]; /* in: DETACHED user name            */
     uint32_t child_pid;                   /* in: the held task (substrate pid) */

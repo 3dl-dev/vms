@@ -1061,8 +1061,8 @@ static int run_process_qualifier_count(const struct dcl_command *cmd)
 static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
 {
     /* /UIC IS NOW HONOURED on the detached path (vms-d31d): $CREPRC
-     * stamps the created process's executive row with the requested UIC
-     * (and /PRIVILEGES) via vms_kif_setident(), so a UIC handed to
+     * gives the created process's executive row the requested UIC
+     * (and /PRIVILEGES) when the executive creates it, so a UIC handed to
      * $CREPRC now changes what every other process sees -- the exact
      * observability that once made refusing it the honest answer. /UIC
      * (like /DETACHED) creates a DETACHED process, so cmd_run routes it to

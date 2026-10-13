@@ -115,7 +115,7 @@ static uint32_t do_define(const char *ident, uint32_t uic, uint64_t privs,
     int p[2];
     if (pipe(p) < 0) { perror("pipe"); exit(1); }
     fflush(NULL);
-    pid_t pid = ovmx_fork_subprocess();
+    pid_t pid = ovmx_fork_login();   /* stamps an identity: a login process (rd vms-a2c) */
     if (pid < 0) { perror("fork"); exit(1); }
     if (pid == 0) {
         close(p[0]);
@@ -150,7 +150,7 @@ static uint32_t do_delete(const char *ident, uint32_t uic, uint64_t privs,
     int p[2];
     if (pipe(p) < 0) { perror("pipe"); exit(1); }
     fflush(NULL);
-    pid_t pid = ovmx_fork_subprocess();
+    pid_t pid = ovmx_fork_login();   /* stamps an identity: a login process (rd vms-a2c) */
     if (pid < 0) { perror("fork"); exit(1); }
     if (pid == 0) {
         close(p[0]);
@@ -199,7 +199,7 @@ static int do_translate(uint32_t table, const char *name, uint32_t reader_uic,
     int p[2];
     if (pipe(p) < 0) { perror("pipe"); exit(1); }
     fflush(NULL);
-    pid_t pid = ovmx_fork_subprocess();
+    pid_t pid = ovmx_fork_login();   /* stamps an identity: a login process (rd vms-a2c) */
     if (pid < 0) { perror("fork"); exit(1); }
     if (pid == 0) {
         close(p[0]);
@@ -388,7 +388,7 @@ static void run_job(void)
     int p[2];
     if (pipe(p) < 0) { perror("pipe"); exit(1); }
     fflush(NULL);
-    pid_t pid = ovmx_fork_subprocess();
+    pid_t pid = ovmx_fork_login();   /* stamps an identity: a login process (rd vms-a2c) */
     if (pid < 0) { perror("fork"); exit(1); }
     if (pid == 0) {
         close(p[0]);

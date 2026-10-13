@@ -348,7 +348,7 @@ int main(int argc, char **argv)
             goto done;
         }
 
-        c = ovmx_fork_subprocess();
+        c = ovmx_fork_login();
         if (c < 0) {
             printf("  FAIL: fork()\n");
             fail++;
@@ -566,7 +566,7 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    child = ovmx_fork_subprocess();
+    child = ovmx_fork_login();
     if (child < 0) {
         printf("  FAIL: fork()\n");
         fail++;

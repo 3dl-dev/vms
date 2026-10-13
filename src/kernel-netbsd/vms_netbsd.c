@@ -574,8 +574,7 @@ vms_proc_exechook(struct proc *p, void *arg __unused)
 	if (row == NULL)
 		return;
 	privs = vms_kfe_exec_privs(p->p_textvp);
-	if (privs || row->image_privs)
-		vms_proc_image_privs(row, privs);
+	vms_proc_image_activated(row, privs);
 }
 
 /*

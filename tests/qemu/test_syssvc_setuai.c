@@ -172,7 +172,7 @@ static int run_probe(unsigned stage, const char *name, uint32_t uic,
     if (pipe(fds) < 0)
         return -1;
 
-    pid_t pid = ovmx_fork_subprocess();
+    pid_t pid = ((stage & STAGE_IDENTITY) ? ovmx_fork_login() : ovmx_fork_subprocess());
     if (pid < 0) {
         close(fds[0]); close(fds[1]);
         return -1;

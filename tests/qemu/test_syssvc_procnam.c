@@ -381,7 +381,9 @@ static pid_t procnam_fork_in_group(uint32_t grp)
     struct vms_procinfo me;
     memset(&me, 0, sizeof(me));
     (void)vms_kif_getjpi_self(&me);
-    return ovmx_fork_detached_st(me.username, (grp & 0xFFFFu) << 16, me.perm_privs, NULL);
+    /* A login process: the P11 helper stamps its own identity (rd vms-a2c). */
+    return ovmx_fork_detached_flags_st(me.username, (grp & 0xFFFFu) << 16, me.perm_privs,
+                                       VMS_CREPRC_PCB_F_LOGIN, NULL);
 }
 
 /*
@@ -1326,7 +1328,7 @@ static int run_show_system_unpriv(char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t pid = ovmx_fork_subprocess();
+    pid_t pid = ovmx_fork_login();
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -1572,6 +1574,10 @@ int main(void)
     if (devfd < 0)
         return device_absent_checks();
     close(devfd);
+
+    /* This suite stamps its own identity (section P11's caller), which only a
+     * login process may (rd vms-a2c): run the rest as one. */
+    ovmx_become_login();
 
     /* The subject's script. It must block, or the subject exits before it
      * can be observed; `sleep` is a busybox applet installed by init.sh. */

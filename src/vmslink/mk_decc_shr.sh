@@ -224,9 +224,25 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # -O2 (vms-e839): at -O0 the port compiler leaves a varargs function's
     # second named argument in the stack word OTS$HOME_ARGS writes the argument
     # count to, so decc$$execl32 & co. would read their arg0 as the count.
+    # vms-1f8: the created task is made a subprocess by the EXECUTIVE before it
+    # runs (KIF_SVC_CREPRC_PCB), reached through libvmssys's transport seam --
+    # kif_transport_linux.c over the EVAX-native callsys trampolines
+    # (arch/alpha/syscall_vms.c), the same two TUs LIBVMSSYS$SHR builds for
+    # alpha. They define no decc$ universal, so the vector is unchanged.
+    LIBVMSSYS_DIR_VF="$(CDPATH= cd "$(dirname "$0")/../libvmssys" && pwd)"
     "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
-        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -o "$ALPHA_VFORK_OBJ" \
+        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
+    ALPHA_KIFX_OBJ="$ALPHA_BOOT_DIR/kif_transport_linux.o"
+    ALPHA_KIFS_OBJ="$ALPHA_BOOT_DIR/syscall_vms.o"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -fno-builtin -fno-stack-protector -mpointer-size=64 -g0 \
+        -U_FORTIFY_SOURCE -D__OVMX_LIBC_BUILD $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" \
+        -o "$ALPHA_KIFX_OBJ" "$LIBVMSSYS_DIR_VF/kif_transport_linux.c"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -fno-builtin -fno-stack-protector -mpointer-size=64 -g0 \
+        -U_FORTIFY_SOURCE -D__OVMX_LIBC_BUILD $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" \
+        -o "$ALPHA_KIFS_OBJ" "$LIBVMSSYS_DIR_VF/arch/alpha/syscall_vms.c"
     # vms-28d part 2: the DEC C struct stat entries (decc$$stat/fstat/lstat/
     # fstatat) a DEC C client's default <sys/stat.h> binds; 64-bit, against the
     # musl headers like ovmx_decc_crtl.c.
@@ -507,7 +523,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
     [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"

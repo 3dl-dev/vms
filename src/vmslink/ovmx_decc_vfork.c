@@ -13,9 +13,11 @@
  *                decc$$vfork_setjmp(decc$$vfork_jmpbuf()) (the C RTL's setjmp
  *                on the context's jump buffer, in the CALLER's frame, so it
  *                can return a second time).
- *   exec*()   -> in a vfork context: fork() a process that inherits the
- *                creator's executive identity (the OVMX subprocess path, as
- *                $CREPRC's), which execve()s IMGACT.EXE with the image spec and
+ *   exec*()   -> in a vfork context: create a SUBPROCESS the way $CREPRC
+ *                does (rd vms-1f8): fork the task and hold it, have the
+ *                executive create its PCB (the creator's identity, a VMS PID
+ *                of its own; KIF_SVC_CREPRC_PCB), then release it to
+ *                execve() IMGACT.EXE with the image spec and
  *                arguments; IMGACT activates the image off the ODS-2 volume
  *                through the ACP (imgact.c, vms-fb4 launcher) and decc$main
  *                hands the arguments to its main(). The parent's descriptor
@@ -47,7 +49,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include "ovmx_layout.h"               /* OVMX_BOOT_STAGE_DIR */
+#include "kif_calls.h"                 /* the executive, through the transport seam */
 
 #define OVMX_IMGACT_LAUNCHER  OVMX_BOOT_STAGE_DIR "/IMGACT.EXE"
 extern char **__environ;
@@ -112,6 +116,25 @@ static char *p32(unsigned int a)
     return (char *)(unsigned long)(int)a;    /* sign-extended longword */
 }
 
+/* Make the held task `pid` a subprocess of the caller: the executive creates
+ * its PCB (rd vms-1f8 / vms-9f32). Returns the executive's VMS status;
+ * SS$_NOSUCHDEV (0x908) when there is no executive to ask. */
+static unsigned int vfork_create_subprocess(pid_t pid)
+{
+    struct vms_creprc_pcb_args a;
+    int h = kif_xport_dev_open();
+    if (h < 0)
+        return 0x908u;                  /* SS$_NOSUCHDEV */
+    memset(&a, 0, sizeof a);
+    a.child_pid = (unsigned int)pid;
+    a.flags = VMS_CREPRC_PCB_SUBPROCESS;
+    a.status = 0x2Cu;                   /* SS$_ABORT unless the executive answers */
+    if (kif_call(h, KIF_SVC_CREPRC_PCB, &a) < 0)
+        a.status = 0x908u;
+    kif_xport_dev_close(h);
+    return a.status;
+}
+
 /* Run `spec` with arguments args[0..nargs) and environment `envp`. */
 static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **envp)
 {
@@ -135,18 +158,55 @@ static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **e
         errno = e;
         return -1;
     }
+    /* The new process exists in the executive before it runs anything: the
+     * task is held on `hold` until its PCB is made (or refused). */
+    int hold[2];
+    if (pipe(hold) != 0) {
+        int e = errno;
+        free(av);
+        vfork_restore_fds();
+        vblk.active = 0;
+        errno = e;
+        return -1;
+    }
+    (void)fcntl(hold[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(hold[1], F_SETFD, FD_CLOEXEC);
     pid_t pid = fork();
     if (pid == 0) {
+        char go = 0;
+        ssize_t n;
+        close(hold[1]);
+        do { n = read(hold[0], &go, 1); } while (n < 0 && errno == EINTR);
+        close(hold[0]);
+        if (go != 'g')
+            _exit(125);                 /* not made a VMS process: never runs */
         execve(OVMX_IMGACT_LAUNCHER, av, envp);
         _exit(127);
     }
     int e = errno;
+    close(hold[0]);
+    unsigned int st = 0;
+    if (pid > 0) {
+        char go;
+        ssize_t n;
+        st = vfork_create_subprocess(pid);
+        go = (st & 1u) ? 'g' : 'x';
+        do { n = write(hold[1], &go, 1); } while (n < 0 && errno == EINTR);
+    }
+    close(hold[1]);
     free(av);
     vfork_restore_fds();
     vblk.active = 0;
     if (pid < 0) {
         errno = e;
         return -1;                      /* no subprocess: exec*() fails */
+    }
+    if (!(st & 1u)) {
+        /* The executive made no process: reap the held task, exec*() fails. */
+        while (waitpid(pid, 0, 0) < 0 && errno == EINTR)
+            ;
+        errno = (st == 0x908u) ? ENODEV : EPERM;
+        return -1;
     }
     longjmp(vblk.jb, (int)pid);         /* back to the vfork() point */
 }

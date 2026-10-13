@@ -1,4 +1,5 @@
-[  0%] Built target cluster_host_fixture
 [  0%] Built target cluster_host_codec
+[  0%] Built target cluster_host_fixture
 [100%] Built target cluster_host_cnxman
+[100%] Linking C executable ../../../bin/test_cnxman_coord
 [100%] Built target test_cnxman_coord

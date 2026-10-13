@@ -959,6 +959,15 @@ static void test_reference_sequence(void)
 			"step 5: the VC is up and the burst went out");
 	ct_check(sent_is(0, VMS_CM_CAT_CONFIG, VMS_CM_OP_MODEL),
 		 "burst #1 is cat 0x01 op 0x14 (model), sec 4(o) row 1");
+	/* rd vms-562ac: the model record is this node's configured model as a
+	 * counted string at body[16], zero after it. */
+	ct_check_eq_u32(nth_sent(0)->body[VMS_OFB_CM_MODEL_LEN], 11u,
+			"  model length 11 at body[16]");
+	ct_check(memcmp(nth_sent(0)->body + VMS_OFB_CM_MODEL_NAME,
+			"OVMX x86_64", 11) == 0,
+		 "  the configured model text at body[17]");
+	conf_dump("cm_model", 72u, "mlen=11", nth_sent(0)->body,
+		  VMS_CM_BODY_LEN);
 	ct_check(sent_is(1, VMS_CM_CAT_CONFIG, VMS_CM_OP_PARAMS),
 		 "burst #2 is cat 0x01 op 0x01 (parameters), sec 4(o) row 2");
 	ct_check_eq_u32(sent_le16(1, VMS_OFB_CM_VOTES), 0u,

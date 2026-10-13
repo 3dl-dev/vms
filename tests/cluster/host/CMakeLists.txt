@@ -1099,7 +1099,7 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
 # types refuse to start unless this passes (tests/lab/tools/fire_gate.sh).
 add_test(NAME cluster_frame_conformance_gate
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_gate.sh"
-        "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp
+        "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"

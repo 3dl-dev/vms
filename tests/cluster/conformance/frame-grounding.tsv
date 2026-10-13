@@ -100,3 +100,27 @@ cm_lnm_dbreq	*	84	4	derived	any:csid	the requester's own CSID, high word then lo
 cm_lnm_dbreq	*	88	16	const	const:0	body[16:32]: leftover buffer contents in real requests (varies request to request), sent as zero
 cm_lnm_dbreq	*	104	4	const	const:91e8	body[32:36] = 0x000091e8 in 12 of 12 real requests
 cm_lnm_dbreq	*	108	96	const	const:0	body[36:132]: zero in 11 of 12 real requests, leftover contents in the twelfth; sent as zero
+
+# ---- cat 0x01 op 0x03: the coordinator's membership COMMIT (rd vms-562ac; census: every real op 0x03 in tests/lab/captures, n=228) ----
+cm_commit	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+cm_commit	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_commit	*	76	4	minted	any:envelope	txn/token: minted for a REQUEST by cnxman_envelope_originate (E85); 228/228 real commits carry a nonzero pair
+cm_commit	*	80	1	const	const:1	category 0x01 (228/228)
+cm_commit	*	81	1	const	const:3	op 0x03 (228/228)
+cm_commit	*	82	2	const	const:0	body[10:12]: zero in 155/228, buffer residue in the rest; sent zero
+cm_commit	*	84	4	derived	state:epoch	the epoch the transition goes to, advanced once at the commit (rd vms-1ac: 133/133 relay->commit pairs +1); test_cnxman_coord pins
+cm_commit	*	88	1	const	const:20	role slot 0x20 (spec sec 4(r), 228/228)
+cm_commit	*	89	1	derived	state:class	the transition class (02 on every real admission commit)
+cm_commit	*	90	2	const	const:0	body[18:20] zero in 228/228
+cm_commit	*	92	8	derived	state:xtime	body[20:28]: the coordinator's VMS time at the transition's first commit, one value for every recipient and retransmission (41 real commits with a later open: 0 with two values, 0..70 ms before that open's STAMP); test_cnxman_coord test_commit_carries_one_transition_time pins
+cm_commit	*	100	104	const	const:0	body[28:132]: buffer residue in 200/228 real commits, zero in 28; sent zero
+
+# ---- cat 0x01 op 0x14: this node's model record (rd vms-562ac; census n=292; honest-identity ruling) ----
+cm_model	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (spec sec 4(j))
+cm_model	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_model	*	76	4	const	const:0	txn/token zero in 292/292 real model records
+cm_model	*	80	1	const	const:1	category 0x01 (292/292)
+cm_model	*	81	1	const	const:14	op 0x14 (292/292)
+cm_model	*	82	6	const	const:0	body[10:16] zero in 291/292
+cm_model	*	88	1	derived	state:mlen	body[16]: the model text's length (292/292 a counted string, 21 = "VAXserver 3900 Series"); the text is exec_hw_model(), this node's real hardware
+cm_model	*	89	115	derived	any:model	body[17..]: the model text, then zero (real records carry buffer residue past the text in 84/292); test_cnxman_join and test_codec_cm pin the counted string

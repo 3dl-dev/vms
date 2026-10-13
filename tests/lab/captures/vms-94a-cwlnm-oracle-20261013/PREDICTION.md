@@ -76,3 +76,26 @@ and joins (EXPECTED_VOTES 3).
   %SYSTEM-F-UNSUPPORTED, because origination is not built and VAX1 must not diverge.
   VAX1 never sees an OVMX_G4.
 - H5: 0 bugchecks, CN = 3 on VAX1.
+
+## Fire G result (artifacts /tmp/evac/art-int94b, lab/int-94a 5357c045)
+
+- H1 **held**. OVMXE sent one 0b/05, to VAX1 (send 3). VAX1 answered 8b/05 (its send 3) and
+  pushed 0b/06 (its send 4, 1876 bytes). OVMXE pulled the database and answered 8b/04 (its
+  send 4). Nothing "was not answered". `g1-cwlnm.pcap` has the six frames.
+- H2 **held**, checked with F$TRNLNM rather than SHOW LOGICAL. On OVMXE,
+  `F$TRNLNM("OVMX_G1","LNM$SYSCLUSTER")` with indexes 0 and 1 gave VAL_A and VAL_B, and
+  OVMX_G2 gave VAL_C. These two names reached OVMX only in the pushed database.
+- H3 **not run**. VAX1 crashed (H5) before OVMX_G3 could be typed.
+- H4 **failed as registered, but held in substance**. On OVMXE,
+  `DEFINE/TABLE=LNM$SYSCLUSTER OVMX_G4 "X"` was refused at DCL's parser with %DCL-W-IVQUAL,
+  because OVMX's DEFINE has no /TABLE. It never reached the executive's SS$_UNSUPPORTED check.
+  VAX1 saw no OVMX_G4. The DCL gap is tracked as rd vms-aae.
+- H5 **FAILED**. VAX1 took a fatal CNXMGRERR bugcheck (`g1-vax1-console.log`) at OVMXE's
+  86/00. `g1-vax1-ovmxe-cm.pcap` (`trimcm.py`) shows OVMXE's send-msg# going from 4 to 6.
+  Cause: the emit guard's view of what the peer had sent left out category 0x0b. A DLM frame
+  acking VAX1's send 4 was therefore refused as ack-unbacked, and it had already taken send 5.
+  Fixed in rd vms-cd8. G is re-run on an integration build that includes it.
+
+Oracle captured on VAX1 during G (`g1-vax1-console.log`): LNM$SYSTEM is a search list,
+"LNM$SYSTEM_TABLE" then "LNM$SYSCLUSTER". LNM$SYSCLUSTER is "LNM$SYSCLUSTER_TABLE"
+[kernel,no_alias] in LNM$SYSTEM_DIRECTORY.

@@ -408,13 +408,13 @@ int main(int argc, char **argv)
 
         /* The authority is the VMS privilege, never the substrate credential
          * (rd vms-a2c): this process is still host-privileged, but with
-         * SETPRV disabled on its PCB the executive refuses it. negctl:
-         * term-setlogin-not-vms-priv */
+         * SETPRV disabled on its PCB the executive refuses it. */
         {
             uint64_t prev = 0;
             uint32_t off = vms_kif_setprv(VMS_PRV_M_SETPRV, 0, 0, &prev);
             status = vms_kif_terminal_setlogin(RTA_DEV, "INTRUDER");
             uint32_t on = vms_kif_setprv(VMS_PRV_M_SETPRV, 1, 0, &prev);
+            /* negctl: term-setlogin-not-vms-priv */
             CHECK((off & 1) && status == SS_NOPRIV && (on & 1),
                   "SETLOGIN without SETPRV on the caller's PCB is refused SS$_NOPRIV, host credentials notwithstanding");
         }

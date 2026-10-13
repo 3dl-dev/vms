@@ -75,6 +75,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -309,7 +310,15 @@ void ovmx_boot_start_console_log_bridge(void)
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     /* Best-effort: a bridge that fails to start must never block or fail boot
      * -- Rule 9's fail-honest gate is /dev/vms, not this visibility aid. */
+    /* The bridge takes no signals: PID 1's handlers (SIGCHLD's reaper above
+     * all) must run on PID 1's own thread, which can hold SIGCHLD while it
+     * waits for a child -- a signal this thread took would run the reaper
+     * behind that hold and steal the child's status (rd vms-a2c). */
+    sigset_t all, prev;
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, &prev);
     (void)pthread_create(&tid, &attr, klog_thread_main, NULL);
+    pthread_sigmask(SIG_SETMASK, &prev, NULL);
     pthread_attr_destroy(&attr);
 }
 

@@ -1762,7 +1762,10 @@ static void run_startup(void)
      * "%OVMX-F-EXECINIT, the startup process did not complete" (measured on
      * NetBSD/vax: the wait status read was the child's own pid). So SIGCHLD is
      * held while PROVISION runs; orphans that end meanwhile are reaped by the
-     * handler as soon as it is released.
+     * handler as soon as it is released. The hold covers this thread only, so
+     * PID 1's helper threads (the console/OPCOM bridges) are started with
+     * every signal blocked -- otherwise SIGCHLD is delivered to one of them and
+     * the reaper runs there, behind this hold (the NetBSD klog bridge did).
      */
     sigset_t chld, prev;
     sigemptyset(&chld);
@@ -1784,9 +1787,15 @@ static void run_startup(void)
         pid_t w;
         do { w = waitpid(pid, &s, 0); } while (w < 0 && errno == EINTR);
         sigprocmask(SIG_SETMASK, &prev, NULL);
-        if (w != pid)
-            ovmx_exec_halt("the startup process could not be waited for",
-                           "SYS$SYSTEM:PROVISION.EXE's status was lost");
+        if (w != pid) {
+            /* The reason goes on the %OVMX-F- line itself: halt_now() can
+             * power off before a second console line drains. */
+            char what[200];
+            snprintf(what, sizeof what,
+                     "the startup process could not be waited for (pid %d: %s)",
+                     (int)pid, w < 0 ? strerror(errno) : "another task was returned");
+            ovmx_exec_halt(what, "SYS$SYSTEM:PROVISION.EXE's status was lost");
+        }
         /*
          * PROVISION.EXE powers the machine off itself on the conditions that
          * are fatal by design (no SYSTEM record, executive refusal), so

@@ -66,6 +66,7 @@
 #define SS_IVCHAN       316
 #define SS_IVDEVNAM     324
 #define SS_NOSUCHDEV    2312
+#define SS_NOPRIV       36
 
 #define DC_TERM         66      /* DC$_TERM */
 
@@ -404,6 +405,19 @@ int main(int argc, char **argv)
         status = vms_kif_terminal_setlogin(RTA_DEV, "SYSTEM");
         CHECK(status == SS_NORMAL,
               "VMS_IOCTL_TERM_SETLOGIN stamps the pre-authenticated user onto RTA0:");
+
+        /* The authority is the VMS privilege, never the substrate credential
+         * (rd vms-a2c): this process is still host-privileged, but with
+         * SETPRV disabled on its PCB the executive refuses it. */
+        {
+            uint64_t prev = 0;
+            uint32_t off = vms_kif_setprv(VMS_PRV_M_SETPRV, 0, 0, &prev);
+            status = vms_kif_terminal_setlogin(RTA_DEV, "INTRUDER");
+            uint32_t on = vms_kif_setprv(VMS_PRV_M_SETPRV, 1, 0, &prev);
+            /* negctl: term-setlogin-not-vms-priv */
+            CHECK((off & 1) && status == SS_NOPRIV && (on & 1),
+                  "SETLOGIN without SETPRV on the caller's PCB is refused SS$_NOPRIV, host credentials notwithstanding");
+        }
 
         /* Read it back, same process, THROUGH /dev/vms (not process memory). */
         memset(note, 0, sizeof(note));

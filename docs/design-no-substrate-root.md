@@ -40,8 +40,8 @@ Measured 2026-10-10, on the first run with an empty list:
   against vms-137e.
 - Sessions already run unprivileged: SYSTEM as uid 4, GUEST as its UIC member.
 - After vms-137e (STARTUP leaves root once its bootstrap is done, and the
-  startup process before SYSTARTUP), ROOTAUDIT reports 0 processes on X86_64
-  and Alpha, and the list is empty.
+  startup process before SYSTARTUP), ROOTAUDIT reports 0 processes on X86_64,
+  Alpha and VAX, and the list is empty.
 - The census only sees processes alive when it runs. A startup image that ran
   as root and exited is not measured here, and neither is a server the
   acceptance boot does not start (DECNETD).

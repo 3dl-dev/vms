@@ -11,12 +11,12 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 346 |
-| 🟢 implemented | 294 | | n/a | 93 |
-| 🟡 partial | 66 | | advisory | 46 |
+| ✅ verified | 24 | | real | 347 |
+| 🟢 implemented | 294 | | n/a | 92 |
+| 🟡 partial | 67 | | advisory | 46 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 92 | |  |  |
+| ⬜ absent | 91 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **445 committed** — **318 met** (implemented/verified), 64 in progress (partial), 63 not started (absent/stub/designed).
+- **445 committed** — **318 met** (implemented/verified), 65 in progress (partial), 62 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
@@ -882,7 +882,7 @@ Full UAF account record storage and Purdy/hashed password authentication are rea
 
 _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡⬜⬜⬜`  —  36 surfaces catalogued (30 met · 2 in progress · 4 not started) · V1: 35 committed, 30 met
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜`  —  36 surfaces catalogued (30 met · 3 in progress · 3 not started) · V1: 35 committed, 30 met
 
 ### cluster-dlm — Cluster-wide Distributed Lock Manager
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services · reviewed 2026-09-14</sub>
@@ -919,16 +919,16 @@ NOT YET RE-PROVEN end-to-end (implemented, not verified): the MULTI-NODE rungs -
  |
 
 ### cluster-logicals — Cluster-wide logical names / global sections
-<sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$CRMPSC · reviewed 2026-08-31</sub>
+<sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$CRMPSC · reviewed 2026-10-13</sub>
 
-Not separately evidenced as built. Cluster-wide logical-name scope degrades to system-wide; cluster-wide global sections are absent. (The executive logical-name store itself is real but node-local — see kernel-executive$logical-name-store.)
+The executive holds LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE and the tables members create under them (rd vms-94a). A member's propagated $CRELNM, $CRELNT and $DELLNM is pulled, applied and only then answered, and a late joiner pulls the whole clusterwide database. $CRELNM/$TRNLNM/$DELLNM work locally against these tables. This node does not yet send its own changes to the other members, so a local change while it shares a cluster is refused (SS$_UNSUPPORTED). Cluster-wide global sections are absent.
 
 
-<sub>2 items · 0 met · 0 in progress · 2 not started</sub>
+<sub>2 items · 0 met · 1 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| ⬜ | `cluster-logicals$clusterwide-logical-names` | feature | LNM$M_CLUSTERWIDE table replication across cluster members | absent | n/a | in | `src/kernel-core/vms_lnm.c` — Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built — grep of vms_lnm.c on origin/main finds no CLUSTERWIDE path. |
+| 🟡 | `cluster-logicals$clusterwide-logical-names` | feature | LNM$M_CLUSTERWIDE table replication across cluster members | partial | real | in | `src/kernel-core/vms_lnm.c, src/kernel-core/vms_cnxman_join_fsm.c, tests/lab/captures/vms-94a-cwlnm-oracle-20261013` — RECEIVE and LOCAL are built (rd vms-94a). A member's cat-0x0b op-0x04 ($CRELNM/$CRELNT/$DELLNM records, grounded against real V7.3 DEFINE/DEASSIGN/CREATE NAME_TABLE) is pulled, applied to the executive's clusterwide tables and answered. A late joiner pulls the database (op 0x05/0x06). Local $CRELNM/$TRNLNM/$DELLNM on LNM$SYSCLUSTER/LNM$CLUSTER_TABLE work on a node in no cluster. NOT built: originating this node's own changes to the other members. A local change while sharing a cluster is refused SS$_UNSUPPORTED rather than made unannounced. Also not built: answering a member's database request (op 0x05) and LNM$SYSTEM's search through LNM$SYSCLUSTER. |
 | ⬜ | `cluster-logicals$global-sections` | feature | Cluster-wide global sections ($MGBLSC / $CRMPSC with cluster scope) | absent | n/a | in | Absent; not evidenced in the current tree. |
 
 ### connection-manager — Connection manager / membership / quorum / rejoin

@@ -1,0 +1,23 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod mbxl-7dd node VAX1, captured 2026-10-13 by
+#   tools/oracle/semantic/capture.py: spgen.py --mar, the node's own MACRO + LINK, RUN as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs/mbxlnm.py sha256=9d36cc27606a6a889727d07eaaddf7006c234c21ea2be94aa03d1f713f77b47c
+=== SEMPROBE mbxlnm BEGIN ===
+MBXL.DIR.TEMPORARY.SDIR st=00000001 str="LNM$JOB" attr=00010400 mode=0 table="LNM$SYSTEM_DIRECTORY"
+MBXL.DIR.TEMPORARY.PDIR st=000001BC str="" attr=A5A5A5A5 mode=238 table=""
+MBXL.DIR.PERMANENT.SDIR st=00000001 str="LNM$SYSTEM" attr=00010400 mode=0 table="LNM$SYSTEM_DIRECTORY"
+MBXL.DIR.PERMANENT.PDIR st=000001BC str="" attr=A5A5A5A5 mode=238 table=""
+MBXL.CREMBX.TMP st=00000001
+MBXL.TRN.TMP.FILEDEV st=00000001 head=4D4241 attr=00010600 mode=3 table="LNM$JOB_"
+MBXL.TRN.TMP.JOB st=00000001 head=4D4241 attr=00010600 mode=3 table="LNM$JOB_"
+MBXL.TRN.TMP.SYSTEM st=000001BC head=5A5A5A attr=A5A5A5A5 mode=238 table=""
+MBXL.CREMBX.PRM st=00000001
+MBXL.TRN.PRM.FILEDEV st=00000001 head=4D4241 attr=00010600 mode=3 table="LNM$SYST"
+MBXL.TRN.PRM.SYSTEM st=00000001 head=4D4241 attr=00010600 mode=3 table="LNM$SYST"
+MBXL.TRN.PRM.JOB st=000001BC head=5A5A5A attr=A5A5A5A5 mode=238 table=""
+MBXL.DASSGN.TMP st=00000001
+MBXL.TRN.TMP.GONE st=000001BC head=5A5A5A attr=A5A5A5A5 mode=238 table=""
+MBXL.DELMBX.PRM st=00000001
+MBXL.DASSGN.PRM st=00000001
+MBXL.TRN.PRM.GONE st=000001BC head=5A5A5A attr=A5A5A5A5 mode=238 table=""
+=== SEMPROBE mbxlnm END ===

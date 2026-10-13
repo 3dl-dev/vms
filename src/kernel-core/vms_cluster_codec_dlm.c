@@ -627,9 +627,62 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 		return 0;
 	if (cat != VMS_DLM_CAT_REQUEST)
 		return 0;
+	/* rd vms-e09: the NAMED op-0x04 removal, grounded on 8106 real frames
+	 * (R1); an unnamed op 0x04 is a different message and stays refused. */
+	if (op == VMS_DLM_WIREOP_DIR_REMOVE)
+		return dlm_names_for_directory(&v, op) &&
+		       vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN) != 0u &&
+		       vms_wire_view_ok(&v);
 	return op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_CONVERT ||
 	       op == VMS_DLM_WIREOP_CONVERT_VALBLK ||
 	       op == VMS_DLM_WIREOP_DEQ;
+}
+
+int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op, nlen;
+
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+	if (!vms_wire_view_ok(&v))
+		return 0;
+	return cat == VMS_DLM_CAT_REQUEST && op == VMS_DLM_WIREOP_DIR_REMOVE &&
+	       nlen != 0u;
+}
+
+vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
+					    uint8_t *frame, uint32_t cap,
+					    uint32_t *written)
+{
+	vms_wire_buf_t w;
+	uint32_t i;
+
+	if (id == (const struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	if (id->name_len == 0u || id->name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/* Every byte the removal does not carry is a zero THIS builder wrote. */
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + i, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_DIR_REMOVE);
+	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, id->group);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, id->mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, id->name_len);
+	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, id->name_len, id->name);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN;
+	return VMS_CODEC_OK;
 }
 
 vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,

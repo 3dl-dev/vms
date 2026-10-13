@@ -116,6 +116,11 @@ struct arm {
 	struct arm_frame    sent[ARM_SENT_MAX];
 	uint32_t            n_sent;
 
+	/* rd vms-e09: the glue's staged directory removals (dlm_arm_post_dir_remove) */
+	struct vms_dlm_proxy_post dirrm[8];
+	uint32_t            dirrm_seq[8];
+	uint32_t            dirrm_next;
+
 	/* the glue's own counters, mirrored so this file can assert them */
 	uint32_t releases_staged;
 	uint32_t releases_no_slot;
@@ -268,9 +273,29 @@ static uint32_t arm_post_release(const struct vms_dlm_proxy_post *p)
 	return SS__NORMAL;
 }
 
+/* rd vms-e09: dlm_arm_post_dir_remove(), with cf_post replaced. The post is
+ * the engine's read of a resource block it is freeing, so it is kept. */
+static uint32_t arm_post_dir_remove(const struct vms_dlm_proxy_post *p)
+{
+	uint32_t i;
+
+	for (i = 0u; i < 8u; i++)
+		if (a.dirrm_seq[i] == 0u)
+			break;
+	if (i == 8u)
+		return SS__INSFMEM;
+	a.dirrm[i] = *p;
+	a.dirrm_seq[i] = ++a.dirrm_next;
+	return arm_fork_post((uint16_t)VMS_DLM_POST_DIR_REMOVE, i,
+			     a.dirrm_seq[i]) == 0 ? (uint32_t)SS__NORMAL
+						  : (uint32_t)SS__INSFMEM;
+}
+
 static uint32_t arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 {
 	(void)ctx;
+	if (p != NULL && p->op == VMS_DLM_POST_DIR_REMOVE)
+		return arm_post_dir_remove(p);
 	if (p == NULL || p->req_lkid == VMS_DLM_LKID_UNSET)
 		return SS__BADPARAM;
 	if (p->op == VMS_DLM_POST_DEQ)
@@ -312,7 +337,17 @@ static void fork_drain(void)
 	for (i = 0; i < n; i++) {
 		if (a.work[i].kind == (uint16_t)VMS_DLM_POST_DEQ)
 			arm_run_release(a.work[i].arg0, a.work[i].arg1);
-		else
+		else if (a.work[i].kind == (uint16_t)VMS_DLM_POST_DIR_REMOVE) {
+			uint32_t sl = a.work[i].arg0;
+
+			if (sl < 8u && a.dirrm_seq[sl] == a.work[i].arg1) {
+				a.dirrm_seq[sl] = 0u;
+				if (dlm_req_fsm_dir_remove(&a.fsm,
+							   &a.dirrm[sl]) !=
+				    DLM_REQ_OK)
+					a.posts_refused++;
+			}
+		} else
 			arm_run_post(a.work[i].kind, a.work[i].arg0,
 				     a.work[i].arg1);
 	}
@@ -949,6 +984,92 @@ static void test_a_claim_happens_once(void)
 	engine_down();
 }
 
+/* $ENQ with no learned hash: the engine computes the proven one, so the block
+ * is reclaimed at its last lock (rd vms-b5b0) -- the case DC1b's
+ * F11B$sOVMXSYS was. */
+static uint32_t do_enq_computed(struct vms_proc *proc, const char *resnam,
+				uint32_t lkmode, uint32_t *lkid_out)
+{
+	struct vms_enq_args e;
+
+	memset(&e, 0, sizeof(e));
+	e.lkmode = lkmode;
+	strscpy(e.resnam, resnam, sizeof(e.resnam));
+	vms_ioctl_enq(proc, (unsigned long)(void *)&e);
+	if (lkid_out)
+		*lkid_out = e.lkid;
+	return e.status;
+}
+
+/*
+ * rd vms-e09, end to end through the shipping engine, FSM and codec: a lookup
+ * goes to the remote directory, the directory answers 0xf9, this node masters
+ * the resource, the last lock goes -- and a named op-0x04 for the SAME
+ * identity and hash reaches the send door, addressed to that directory node.
+ */
+static void test_e09_removal_reaches_the_wire(void)
+{
+	struct vms_proc proc;
+	struct vms_dlm_res_ident look, rm;
+	uint8_t ans[VMS_OFF_SYSAP_BODY + DLM_REQ_BODY_LEN];
+	uint32_t lkid = 0u, n0, written = 0u;
+	const struct arm_frame *f;
+
+	printf("--- rd vms-e09: a freed mastered resource's directory entry is "
+	       "removed on the wire ---\n");
+	engine_up();
+	proc_init(&proc);
+
+	ct_check(do_enq_computed(&proc, "F11B$sE09WIRE", LCK_K_EXMODE, &lkid) ==
+		 SS__NORMAL && lkid != 0u, "$ENQ for a remotely-directed name");
+	fork_drain();
+	ct_check(a.n_sent == 1u && a.sent[0].dst == CSID_DIRECTORY &&
+		 a.sent[0].body[9] == 0x01u,
+		 "the lookup (op 0x01) went to the directory node");
+	if (a.n_sent != 1u) {
+		engine_down();
+		return;
+	}
+	ct_check(vms_dlm_res_ident_parse_body(a.sent[0].body, DLM_REQ_BODY_LEN,
+					      &look) == VMS_CODEC_OK,
+		 "and it names a resource for a directory");
+
+	/* The directory node answers "nobody masters it -- you do". */
+	ct_check(vms_dlm_dir_answer_build(a.sent[0].body, DLM_REQ_BODY_LEN,
+					  VMS_DLM_DIR_YOU_MASTER, 0u, ans,
+					  sizeof(ans), &written) == VMS_CODEC_OK,
+		 "the directory's 0xf9 answer is built from that lookup");
+	ct_check(dlm_req_fsm_reply_body(&a.fsm, (vms_csid_t)CSID_DIRECTORY,
+					lkid, ans + VMS_OFF_SYSAP_BODY,
+					DLM_REQ_BODY_LEN) == DLM_REQ_OK,
+		 "this node assumes mastery on it");
+
+	n0 = a.n_sent;
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the last lock goes");
+	fork_drain();
+	ct_check_eq_u32(a.n_sent, n0 + 1u,
+			"*** exactly one frame left: the removal ***");
+	if (a.n_sent != n0 + 1u) {
+		engine_down();
+		return;
+	}
+	f = &a.sent[n0];
+	ct_check_eq_u32(f->dst, CSID_DIRECTORY,
+			"*** addressed to the directory node holding the entry ***");
+	ct_check(f->body[8] == 0x02u && f->body[9] == 0x04u,
+		 "*** a cat-0x02 op-0x04 ***");
+	ct_check(vms_dlm_body_is_notification(f->body, DLM_REQ_BODY_LEN),
+		 "a notification: it opens no transaction (R3)");
+	ct_check(vms_dlm_res_ident_parse_body(f->body, DLM_REQ_BODY_LEN, &rm) ==
+		 VMS_CODEC_OK &&
+		 rm.hash == look.hash && rm.group == look.group &&
+		 rm.mode == look.mode && rm.name_len == look.name_len &&
+		 memcmp(rm.name, look.name, rm.name_len) == 0,
+		 "*** for exactly the identity and hash the lookup carried (R1) ***");
+	ct_check_eq_u32(a.fsm.dir_removes_sent, 1u, "counted as sent");
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -960,5 +1081,6 @@ int main(void)
 	test_gate_zero_master_lkid();
 	test_queue_full_is_an_honest_refusal();
 	test_a_claim_happens_once();
+	test_e09_removal_reaches_the_wire();
 	return ct_summary("test_dlm_deq_reachable");
 }

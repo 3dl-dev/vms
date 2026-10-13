@@ -109,6 +109,8 @@
 #define DLM_ARM_BEAT_MS   500u
 #define DLM_ARM_TIMER_BEAT 1u
 
+#define DLM_ARM_DIRRM_SLOTS 8u   /* rd vms-e09: staged directory removals */
+
 struct vms_dlm_scs {
 	struct vms_cluster          *cl;
 
@@ -137,6 +139,17 @@ struct vms_dlm_scs {
 	 */
 	struct dlm_relq              relq;
 	exec_lock_t                  relq_lock;
+	/*
+	 * THE DIRECTORY-ENTRY REMOVALS WAITING FOR THE FORK THREAD (rd vms-e09).
+	 * Staged under relq_lock for the same reason a release is: the engine
+	 * posts one as it FREES the resource block, so the post is the last
+	 * executive read of that resource and is kept, not re-read later.
+	 */
+	struct {
+		struct vms_dlm_proxy_post p;
+		uint32_t seq;          /* generation; 0 = free */
+	} dirrm[DLM_ARM_DIRRM_SLOTS];
+	uint32_t                     dirrm_next_seq;
 	struct vms_dlm_requester_ops eng_ops;  /* the engine's door to us     */
 	struct dlm_scs_role_ops      role;     /* the CM's door to us         */
 
@@ -192,6 +205,9 @@ struct vms_dlm_scs {
 	/* The RELEASE path's own three (rd vms-49f8). A release is staged, not
 	 * rebuilt, so it fails in different places than a request does. */
 	uint32_t releases_staged;     /* snapshotted from a live proxy LKB    */
+	uint32_t dir_removes_staged;  /* rd vms-e09: removals queued          */
+	uint32_t dir_removes_no_slot; /* ...not queued: every slot busy      */
+	uint32_t dir_removes_stale;   /* a work item naming no staged removal */
 	uint32_t releases_no_slot;    /* the queue was full: NOTHING staged,  */
 				       /* and the releaser is told so          */
 	uint32_t releases_stale;      /* a work item naming no staged release */
@@ -550,6 +566,7 @@ static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 #define DLM_ARM_WORK_POST_ENQ     1u
 #define DLM_ARM_WORK_POST_CONVERT 2u
 #define DLM_ARM_WORK_POST_DEQ     3u
+#define DLM_ARM_WORK_DIR_REMOVE   4u   /* rd vms-e09: arg0 slot, arg1 generation */
 
 static uint32_t dlm_arm_work_kind_to_op(uint16_t kind)
 {
@@ -672,6 +689,64 @@ static uint32_t dlm_arm_post_release(struct vms_dlm_scs *d,
 }
 
 /*
+ * A DIRECTORY-ENTRY REMOVAL, STAGED (rd vms-e09). The engine posts it from
+ * resource_release() as the block it names is freed; the post is kept here and
+ * the fork thread emits from the kept copy. Nothing about it can be re-read
+ * later: the resource is gone, which is the whole reason the removal exists.
+ */
+static uint32_t dlm_arm_post_dir_remove(struct vms_dlm_scs *d,
+					const struct vms_dlm_proxy_post *p)
+{
+	uint32_t i, seq = 0u;
+
+	exec_lock(&d->relq_lock);
+	for (i = 0u; i < DLM_ARM_DIRRM_SLOTS; i++)
+		if (d->dirrm[i].seq == 0u)
+			break;
+	if (i < DLM_ARM_DIRRM_SLOTS) {
+		d->dirrm[i].p = *p;
+		if (++d->dirrm_next_seq == 0u)
+			d->dirrm_next_seq = 1u;
+		d->dirrm[i].seq = seq = d->dirrm_next_seq;
+		d->dir_removes_staged++;
+	} else {
+		d->dir_removes_no_slot++;
+	}
+	exec_unlock(&d->relq_lock);
+	if (seq == 0u)
+		return SS__INSFMEM;
+	if (dlm_arm_queue_work(d, DLM_ARM_WORK_DIR_REMOVE, i, seq) != 0) {
+		exec_lock(&d->relq_lock);
+		if (d->dirrm[i].seq == seq)
+			d->dirrm[i].seq = 0u;
+		exec_unlock(&d->relq_lock);
+		return SS__INSFMEM;
+	}
+	return SS__NORMAL;
+}
+
+/* The fork-thread half: claim the kept post (once) and hand it to the FSM. */
+static void dlm_arm_run_dir_remove(struct vms_dlm_scs *d, uint32_t slot,
+				   uint32_t seq)
+{
+	struct vms_dlm_proxy_post p;
+	int have = 0;
+
+	exec_lock(&d->relq_lock);
+	if (slot < DLM_ARM_DIRRM_SLOTS && seq != 0u && d->dirrm[slot].seq == seq) {
+		p = d->dirrm[slot].p;
+		d->dirrm[slot].seq = 0u;
+		have = 1;
+	}
+	exec_unlock(&d->relq_lock);
+	if (!have) {
+		d->dir_removes_stale++;
+		return;
+	}
+	(void)dlm_req_fsm_dir_remove(&d->req, &p);
+}
+
+/*
  * THE ENGINE POSTED A REQUEST, FROM PROCESS CONTEXT ($ENQ's own thread).
  *
  * It is QUEUED to the fork thread and nothing else happens here: vms_dlm_scs.h
@@ -704,6 +779,10 @@ static uint32_t dlm_arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 
 	if (d == NULL || d->cl == NULL || p == NULL)
 		return SS__BADPARAM;
+	/* rd vms-e09: a removal names a resource, not a lock, so it carries no
+	 * lock id and takes its own staged path. */
+	if (p->op == VMS_DLM_POST_DIR_REMOVE)
+		return dlm_arm_post_dir_remove(d, p);
 	if (p->req_lkid == VMS_DLM_LKID_UNSET)
 		return SS__BADPARAM;   /* never a placeholder handle */
 	kind = dlm_arm_op_to_work_kind(p->op);
@@ -2256,6 +2335,10 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 	 * value carried across the context switch. */
 	if (w->kind == (uint16_t)DLM_ARM_WORK_POST_DEQ) {
 		dlm_arm_run_release(d, w->arg0, w->arg1);
+		return;
+	}
+	if (w->kind == (uint16_t)DLM_ARM_WORK_DIR_REMOVE) {
+		dlm_arm_run_dir_remove(d, w->arg0, w->arg1);
 		return;
 	}
 	dlm_arm_run_post(d, w->kind, w->arg0, w->arg1);

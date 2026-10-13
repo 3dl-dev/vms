@@ -922,12 +922,12 @@ out:
  * its own protocol against the SAME SYSUAF authority, and vouches that here so
  * LOGINOUT does not re-challenge on a session it created for that terminal.
  *
- * PRIVILEGED: only a caller holding CAP_SYS_ADMIN/SETPRV (a not-yet-dropped
- * network daemon -- the same authority that establishes a run-as identity) may
- * vouch, exactly like vms_ioctl_establish_system. The note is a NAME, never a
- * credential, and only a dynamic terminal (an RTAn:, never OPA0:) may carry
- * one. LOGINOUT still builds the persona from the binary SYSUAF record and
- * grants nothing beyond it.
+ * PRIVILEGED: only a caller whose VMS process holds SETPRV (the network
+ * daemon STARTUP created as SYSTEM) may vouch. The executive authorizes by the
+ * caller's PCB alone; its substrate credentials play no part (rd vms-a2c). The
+ * note is a NAME, never a credential, and only a dynamic terminal (an RTAn:,
+ * never OPA0:) may carry one. LOGINOUT still builds the persona from the
+ * binary SYSUAF record and grants nothing beyond it.
  */
 long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg)
 {
@@ -936,15 +936,14 @@ long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg)
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
 
-    (void)proc;
-
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
     args.username[VMS_USERNAME_SIZE - 1] = '\0';
 
-    if (!exec_current_is_privileged()) {
+    /* NEGCTL-ANCHORED (term-setlogin-not-vms-priv) */
+    if (!(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
         args.status = SS__NOPRIV;
         goto out;
     }
@@ -1045,7 +1044,7 @@ out:
  * vms_ioctl_term_setrpi / _getrpi - an RTAn:'s remote port information (rd
  * vms-2166): the node::user the CTERM host recorded when the remote terminal
  * connected, read back by SHOW TERMINAL / SHOW PROCESS / F$GETDVI
- * TT_ACCPORNAM. SET is privileged (exec_current_is_privileged, as SETLOGIN):
+ * TT_ACCPORNAM. SET is privileged (SETPRV on the caller's PCB, as SETLOGIN):
  * only the network daemon that minted the terminal may vouch for where it
  * comes from. GET is an ordinary read; "" = no remote port. Only a
  * dynamically-minted RTAn: carries one (IVDEVNAM otherwise).
@@ -1065,11 +1064,11 @@ static long term_rpi(struct vms_proc *proc, unsigned long arg, int set)
     if (!set)
         memset(args.rpi, 0, sizeof(args.rpi));
 
-    /* Who may vouch for a terminal's remote port: the substrate superuser (the
-     * boot-started NETACP) or a VMS process holding SETPRV -- the same
-     * authority VMS gives a privileged network ACP over a UCB. */
-    if (set && !exec_current_is_privileged() &&
-        !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
+    /* Who may vouch for a terminal's remote port: a VMS process holding
+     * SETPRV (the boot-started NETACP is SYSTEM) -- the same authority VMS
+     * gives a privileged network ACP over a UCB. Substrate credentials play
+     * no part (rd vms-a2c). */
+    if (set && !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
         args.status = SS__NOPRIV;
         goto out;
     }
@@ -1121,7 +1120,7 @@ long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg)
  * width, page length and conveyed characteristics on an RTAn: (rd vms-14b). The CTERM host that minted
  * the unit calls it with what the remote VAX conveyed in its CTERM Initiate;
  * $GETDVI (vms_devinfo devtype/width/page), SHOW TERMINAL and F$GETDVI read the
- * row back. Same gate as TERM_SETRPI: substrate superuser or SETPRV, and only
+ * row back. Same gate as TERM_SETRPI: SETPRV on the caller's PCB, and only
  * a dynamically-minted RTAn: (a local terminal is never redefined here). Each
  * field applies only under its flag; out-of-range values (or a characteristic
  * bit outside VMS_TTC_*) are SS$_BADPARAM.
@@ -1138,8 +1137,7 @@ long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg)
         return -EFAULT;
     args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
-    if (!exec_current_is_privileged() &&
-        !(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
+    if (!(proc && (proc->cur_privs & VMS_PRV_M_SETPRV))) {
         args.status = SS__NOPRIV;
         goto out;
     }
@@ -2810,6 +2808,17 @@ static struct vms_cluster vms_cluster_node_singleton;
 struct vms_cluster *vms_cluster_node(void)
 {
     return &vms_cluster_node_singleton;
+}
+
+/* rd vms-94a: how many OTHER systems share this node's cluster, read from the
+ * CLUB's committed member count (0 when this node is in no cluster). */
+uint32_t vms_lnm_cluster_other_members(void)
+{
+    const struct vms_cluster *cl = &vms_cluster_node_singleton;
+
+    if (cl->state != VMS_CLUSTER_MEMBER || cl->club.cluster_nodes < 2u)
+        return 0u;
+    return cl->club.cluster_nodes - 1u;
 }
 
 /*

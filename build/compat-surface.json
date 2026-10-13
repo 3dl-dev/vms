@@ -78,20 +78,20 @@
     "by_status": {
       "verified": 24,
       "implemented": 294,
-      "partial": 66,
+      "partial": 67,
       "stub": 14,
       "designed": 1,
-      "absent": 92
+      "absent": 91
     },
     "by_authenticity": {
-      "real": 346,
-      "n/a": 93,
+      "real": 347,
+      "n/a": 92,
       "advisory": 46,
       "facade-risk": 6
     },
     "met": 318,
-    "in_progress": 66,
-    "not_started": 107,
+    "in_progress": 67,
+    "not_started": 106,
     "facade_risk": 6
   },
   "overall_in_scope": {
@@ -99,20 +99,20 @@
     "by_status": {
       "verified": 24,
       "implemented": 294,
-      "partial": 64,
+      "partial": 65,
       "stub": 10,
       "designed": 1,
-      "absent": 52
+      "absent": 51
     },
     "by_authenticity": {
-      "real": 344,
-      "n/a": 53,
+      "real": 345,
+      "n/a": 52,
       "advisory": 44,
       "facade-risk": 4
     },
     "met": 318,
-    "in_progress": 64,
-    "not_started": 63,
+    "in_progress": 65,
+    "not_started": 62,
     "facade_risk": 4
   },
   "facilities": [
@@ -297,23 +297,24 @@
       "tier": null,
       "plan_ref": "vms-694",
       "vms_ref": "OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$CRMPSC",
-      "last_reviewed": "2026-08-31",
+      "last_reviewed": "2026-10-13",
       "rollup": {
         "count": 2,
         "by_status": {
           "verified": 0,
           "implemented": 0,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 2
+          "absent": 1
         },
         "by_authenticity": {
-          "n/a": 2
+          "real": 1,
+          "n/a": 1
         },
         "met": 0,
-        "in_progress": 0,
-        "not_started": 2,
+        "in_progress": 1,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -2652,12 +2653,12 @@
       "id": "cluster-logicals$clusterwide-logical-names",
       "kind": "feature",
       "vms": "LNM$M_CLUSTERWIDE table replication across cluster members",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "partial",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/kernel-core/vms_lnm.c",
+      "evidence": "src/kernel-core/vms_lnm.c, src/kernel-core/vms_cnxman_join_fsm.c, tests/lab/captures/vms-94a-cwlnm-oracle-20261013",
       "verified_against": null,
-      "notes": "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built \u2014 grep of vms_lnm.c on origin/main finds no CLUSTERWIDE path.",
+      "notes": "RECEIVE and LOCAL are built (rd vms-94a). A member's cat-0x0b op-0x04 ($CRELNM/$CRELNT/$DELLNM records, grounded against real V7.3 DEFINE/DEASSIGN/CREATE NAME_TABLE) is pulled, applied to the executive's clusterwide tables and answered. A late joiner pulls the database (op 0x05/0x06). Local $CRELNM/$TRNLNM/$DELLNM on LNM$SYSCLUSTER/LNM$CLUSTER_TABLE work on a node in no cluster. NOT built: originating this node's own changes to the other members. A local change while sharing a cluster is refused SS$_UNSUPPORTED rather than made unannounced. Also not built: answering a member's database request (op 0x05) and LNM$SYSTEM's search through LNM$SYSCLUSTER.",
       "plan_ref": "vms-694"
     },
     {

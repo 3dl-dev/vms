@@ -680,21 +680,46 @@ static int join_node_already_member(const struct cnxman_join *j);
  * CLUB's own count of committed members while this node is one, 0 while it is
  * not -- exactly what a real joiner and a real member send (VMS_OFF_CM_MEMBERS).
  *
- * ONLY TO A PEER RUNNING THIS IMPLEMENTATION (`peer_is_ours`). A real member's
- * PARAMS carries more member-only state beside the count -- body[12], two VMS
- * time quadwords at body[28:44] and body[44] -- none of which OVMX grounds, so
- * the count alone in front of a foreign connection manager would be a member
- * record in a shape no real node writes: the rd vms-1ac rule (an admission's
- * ungrounded op-0x09 bytes are symmetric between two OVMX nodes and a
- * bugcheck risk in front of a VAX), applied to this record. A foreign peer
- * keeps getting the 0 OVMX has always sent there.
+ * A real member's PARAMS carries more member-only state beside the count --
+ * body[12:14], the formation and last-transition times at body[28:44], the
+ * last epoch at body[44:48] and its own membership time at body[64:72] (rd
+ * vms-d52c grounded all of them, vms_cluster_codec_cm.h). Sent to a foreign
+ * connection manager WITHOUT them, the count would be a member record in a
+ * shape no real node writes (the rd vms-1ac rule) -- and WITHHELD, the 0 made
+ * a booting real VAX take this node for a clusterless one and propose forming
+ * a SECOND cluster with it (lab lab64b: a partition). So the count goes to a
+ * foreign peer exactly when this node holds every member-state field, and the
+ * fields go with it (join_build_params); to a peer running this
+ * implementation it goes as before.
  */
+static int join_member_state(const struct cnxman_join *j,
+			     struct vms_cm_member_state *ms)
+{
+	const struct vms_club *club;
+
+	if (j->cl == NULL)
+		return 0;
+	club = &j->cl->club;
+	if (!club->ftime_valid || !club->last_xition_valid ||
+	    !club->joined_valid)
+		return 0;
+	ms->ftime = club->ftime;
+	ms->last_xition = club->last_xition_vms;
+	ms->joined = club->joined_vms;
+	ms->last_epoch = club->last_xition_epoch;
+	return 1;
+}
+
 static uint16_t join_members_for(const struct cnxman_join *j,
 				 const struct vms_csb *csb)
 {
 	uint32_t n;
 
-	if (csb == NULL || !csb->peer_is_ours || !join_node_already_member(j))
+	struct vms_cm_member_state ms;
+
+	if (csb == NULL || !join_node_already_member(j))
+		return 0u;
+	if (!csb->peer_is_ours && !join_member_state(j, &ms))
 		return 0u;
 	n = j->cl->club.cluster_nodes;
 	return (uint16_t)(n > 0xffffu ? 0xffffu : n);
@@ -741,11 +766,29 @@ static vms_codec_status_t join_build_params(struct cnxman_join *j,
 	if (j->cl != NULL)
 		votes = j->cl->params.votes;
 
+	struct vms_cm_member_state ms;
+	vms_codec_status_t st;
+	uint16_t members;
+
 	join_own_params(j, &own);
-	return vms_cm_params_build(votes, join_members_for(j, csb),
-				   join_own_lockdirwt(j), &own,
-				   j->scratch, (uint32_t)sizeof(j->scratch),
-				   NULL);
+	members = join_members_for(j, csb);
+	st = vms_cm_params_build(votes, members, join_own_lockdirwt(j), &own,
+				 j->scratch, (uint32_t)sizeof(j->scratch),
+				 NULL);
+	/* rd vms-d52c: a member count goes out with the member state, never
+	 * alone -- to every peer, so OVMX and VAX hear the same record. */
+	if (st == VMS_CODEC_OK && members != 0u && join_member_state(j, &ms))
+		st = vms_cm_params_member_put(j->scratch,
+					      (uint32_t)sizeof(j->scratch), &ms);
+	/* ...and its quorum and QDSKVOTES, from the executive's own SYSGEN
+	 * (a real VAX echoes the QDSKVOTES into every open it sends us). No
+	 * EXPECTED_VOTES held: the two words stay 0 and that is counted. */
+	if (st == VMS_CODEC_OK && j->cl != NULL &&
+	    vms_cm_params_quorum_put(j->scratch, (uint32_t)sizeof(j->scratch),
+				     j->cl->params.expected_votes,
+				     j->cl->params.qdskvotes) != VMS_CODEC_OK)
+		j->node_params_omitted++;
+	return st;
 }
 
 static void join_send_params(struct cnxman_join *j)
@@ -2538,6 +2581,7 @@ static enum cnxman_join_rx join_h_commit_any(struct cnxman_join *j,
 	}
 	join_retarget(j, c, e->from_csb);
 	j->tr_class = (uint8_t)VMS_CM_CLASS_FORM;
+	j->cl->club.own_tr_class = (uint8_t)VMS_CM_CLASS_FORM;
 	j->formations_joined++;
 	join_log(j, "%CNXMAN, a cluster member proposed forming a cluster with "
 		    "this node as a founding member");
@@ -2589,9 +2633,10 @@ static enum cnxman_join_rx join_h_commit_any(struct cnxman_join *j,
  * body is the request's own bytes except TWO facts about THIS node, and both
  * are read back from real executive state at the moment of the answer:
  *
- *   body[17]     `j->tr_class`      -- written in join_h_tr_open() from a REAL
- *                                      op-0x08/0x09/0x0d open this node was
- *                                      sent, never composed;
+ *   body[17]     the CLUB's         -- the class of the latest REAL open this
+ *                own_tr_class          node received (join_h_tr_open) or sent
+ *                                      as coordinator (coord_open_transition),
+ *                                      never composed (rd vms-6ec);
  *   body[12:16]  the CLUB's epoch   -- the epoch this node is really at, which
  *   body[20:24]                        is NOT the coordinator's (the recipe
  *                                      correction in vms_cm_relay_response_
@@ -2607,8 +2652,14 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 					const struct join_ev *e)
 {
 	vms_codec_status_t st;
+	/* rd vms-6ec: the class of this node's LATEST transition, sent or
+	 * received. The CLUB holds it, because a node that only ever
+	 * coordinated (a founder) never received an open, so j->tr_class alone
+	 * left it with nothing to answer, and the relay stalled the admission. */
+	uint8_t cls = (j->cl != NULL && j->cl->club.own_tr_class != 0u)
+		    ? j->cl->club.own_tr_class : j->tr_class;
 
-	if (j->tr_class == 0u) {
+	if (cls == 0u) {
 		j->relays_no_class++;
 		join_log(j, "%CNXMAN, a system was relayed to this node before "
 			    "it held a transition class: nothing grounded to "
@@ -2620,7 +2671,7 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	st = vms_cm_relay_response_build(e->body, e->len, j->tr_class,
+	st = vms_cm_relay_response_build(e->body, e->len, cls,
 					 j->cl->club.epoch, j->scratch,
 					 (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
@@ -2629,6 +2680,29 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 	if (join_emit_reply(j, e) == 0)
 		j->echoes_sent++;
 	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * ...AND A MEMBER WHOSE JOIN NEVER RAN ANSWERS IT TOO (rd vms-6ec).
+ *
+ * A node that founded the cluster is a member, but its join FSM never drove
+ * an admission: on every newly discovered system it withholds its op-0x02
+ * (join_withhold_admission) and stays in ADVERTISE. Lab DC2: OVMXA founded and
+ * admitted OVMXB. When real VAX2 asked OVMXB, OVMXB relayed it to OVMXA, and
+ * the relay hit an empty ADVERTISE cell (CNXTRACE: ev=RX_TR_RELAY
+ * detail=EMPTY-CELL). VAX2 was never admitted. In ADVERTISE the relay is
+ * answered exactly as a sitting member answers it, but only when this node
+ * really is a committed member. A node still asking to be admitted is not a
+ * member, and it confirms nothing on the cluster's behalf.
+ */
+static enum cnxman_join_rx join_h_relay_if_member(struct cnxman_join *j,
+						  const struct join_ev *e)
+{
+	if (!join_node_already_member(j)) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	return join_h_relay(j, e);
 }
 
 /*
@@ -2934,6 +3008,9 @@ static int join_rdev_start(struct cnxman_join *j, const struct join_ev *e,
 	return 0;
 }
 
+static void join_lnm_pulled(struct cnxman_join *j, struct cnxman_rdev *r);
+static void join_lnm_db_pulled(struct cnxman_join *j);
+
 void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 			  uint32_t offset, uint32_t len,
 			  uint32_t bytes_remaining)
@@ -2946,12 +3023,25 @@ void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 	(void)offset;
 	if (j == NULL || !join_rdev_ops_ok(j))
 		return;
+	/* rd vms-94a: the database push lands in its own buffer. */
+	if (j->lnm_db_state == 2u && name != 0u && name == j->lnm_db_name) {
+		if (bytes_remaining == len)
+			join_lnm_db_pulled(j);
+		return;
+	}
 	r = join_rdev_by_name(j, name);
 	if (r == NULL || r->state != (uint8_t)CNXMAN_RDEV_PULLING)
 		return;
 	/* The down-counter includes this frame: equal means the last one. */
 	if (bytes_remaining != len)
 		return;
+
+	/* rd vms-94a: a clusterwide logical-name record. */
+	if (r->flavor == (uint8_t)CNXMAN_RDEV_FL_LNM) {
+		join_lnm_pulled(j, r);
+		join_rdev_free(j, r);
+		return;
+	}
 
 	/* rd vms-db1: a kind-5 record is read and answered 4; nothing is
 	 * written back (3,069 of 3,069 real pulls). */
@@ -3027,6 +3117,258 @@ void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name)
 			j->rdev_mount_normal++;
 	}
 	join_rdev_free(j, r);
+}
+
+/* ==========================================================================
+ * rd vms-94a: a member's clusterwide logical-name operation (cat 0x0b op 0x04).
+ * Pull the record (every real recipient does), apply it to this node's
+ * executive tables, and only then answer 0x8b/0x04. A record this node cannot
+ * decode or apply is refused, counted and NOT answered: an acknowledgement
+ * would tell the member this node holds a name it does not.
+ * ========================================================================== */
+
+static int join_lnm_answer(struct cnxman_join *j, struct cnxman_rdev *r)
+{
+	struct vms_csb *csb;
+
+	csb = (j->cl == NULL || r->from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)r->from_csb);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid != r->conid) {
+		j->send_failures++;
+		j->replies_unaddressed++;
+		return -1;
+	}
+	if (vms_cm_lnm_answer_build(r->req, VMS_CM_BODY_LEN, j->scratch,
+				    (uint32_t)sizeof(j->scratch), NULL) !=
+	    VMS_CODEC_OK)
+		return -1;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
+	if (j->jops->send_msg(j->jops->ctx, r->conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	return 0;
+}
+
+static void join_lnm_pulled(struct cnxman_join *j, struct cnxman_rdev *r)
+{
+	uint32_t st;
+
+	if (vms_cm_lnm_rec_parse(r->rec, r->desc.len, &j->lnm_op) !=
+	    VMS_CODEC_OK) {
+		j->lnm_refused++;
+		join_log(j, "%CNXMAN, a clusterwide logical name operation "
+			    "was not answered: its record is not one this "
+			    "node can decode");
+		return;
+	}
+	st = j->jops->lnm_apply(j->jops->ctx, &j->lnm_op);
+	if ((st & 1u) == 0u) {
+		j->lnm_refused++;
+		join_log(j, "%CNXMAN, a clusterwide logical name operation "
+			    "was not answered: this node's executive did not "
+			    "apply it");
+		return;
+	}
+	if (join_lnm_answer(j, r) == 0)
+		j->lnm_applied++;
+}
+
+/* ---- rd vms-94a: the startup database pull ---------------------------- */
+
+int cnxman_join_lnm_db_request(struct cnxman_join *j, int32_t csb_index,
+			       uint32_t own_csid)
+{
+	struct vms_csb *csb;
+	uint32_t written = 0;
+
+	if (j == NULL || j->jops == NULL || j->jops->send_msg == NULL ||
+	    j->lnm_db_state != 0u || own_csid == 0u)
+		return -1;
+	csb = (j->cl == NULL || csb_index < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)csb_index);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u ||
+	    !csb->csid_valid) {
+		j->lnm_db_refused++;
+		return -1;
+	}
+	if (vms_cm_lnm_dbreq_build(own_csid, j->scratch,
+				   (uint32_t)sizeof(j->scratch), &written) !=
+	    VMS_CODEC_OK)
+		return -1;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_REQUEST);
+	if (j->jops->send_msg(j->jops->ctx, csb->cdt_conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	join_bcopy(j->lnm_db_req, j->scratch, VMS_CM_BODY_LEN);
+	j->lnm_db_csb = csb_index;
+	j->lnm_db_conid = csb->cdt_conid;
+	j->lnm_db_state = 1u;
+	j->lnm_db_requests++;
+	return 0;
+}
+
+/* The member's 0x0b/0x06: pull the database it names. */
+static void join_lnm_db_push(struct cnxman_join *j, const uint8_t *body,
+			     uint32_t len, int32_t from_csb)
+{
+	struct vms_cm_xfer_desc d;
+	struct vms_csb *csb;
+
+	csb = (j->cl == NULL || from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)from_csb);
+	if (j->lnm_db_state != 1u || from_csb != j->lnm_db_csb ||
+	    csb == NULL || csb->cdt_conid != j->lnm_db_conid ||
+	    !join_rdev_ops_ok(j) ||
+	    vms_cm_lnm_desc_parse(body, len, &d) != VMS_CODEC_OK ||
+	    d.conid != csb->cdt_conid || d.len > (uint32_t)VMS_CM_LNM_DB_MAX ||
+	    d.len < (uint32_t)VMS_CM_LNM_DB_HDR) {
+		/* Unasked for, from another member, or not the measured
+		 * shape: refused, and never answered. */
+		j->lnm_db_refused++;
+		return;
+	}
+	join_bcopy(j->lnm_db_req, body, VMS_CM_BODY_LEN);
+	if (j->jops->blk_register(j->jops->ctx, j->lnm_db_buf, d.len,
+				  &j->lnm_db_name) != 0 ||
+	    j->lnm_db_name == 0u) {
+		j->lnm_db_refused++;
+		return;
+	}
+	if (j->jops->blk_request(j->jops->ctx, csb->cdt_conid, d.conid,
+				 d.name, j->lnm_db_name, d.len) != 0) {
+		(void)j->jops->blk_release(j->jops->ctx, j->lnm_db_name);
+		j->lnm_db_name = 0u;
+		j->lnm_db_refused++;
+		return;
+	}
+	j->lnm_db_len = d.len;
+	j->lnm_db_state = 2u;
+}
+
+/* The whole database is here: apply every record, then answer 0x8b/0x04. */
+static void join_lnm_db_pulled(struct cnxman_join *j)
+{
+	const uint8_t *rec;
+	uint32_t cursor = 0, rec_len = 0, n = 0, st;
+	vms_codec_status_t cs;
+	struct vms_csb *csb;
+
+	(void)j->jops->blk_release(j->jops->ctx, j->lnm_db_name);
+	j->lnm_db_name = 0u;
+	j->lnm_db_state = 3u;
+	for (;;) {
+		cs = vms_cm_lnm_db_next(j->lnm_db_buf, j->lnm_db_len, &cursor,
+					&rec, &rec_len);
+		if (cs == VMS_CODEC_E_RANGE)
+			break;
+		if (cs != VMS_CODEC_OK ||
+		    vms_cm_lnm_rec_parse(rec, rec_len, &j->lnm_op) !=
+		    VMS_CODEC_OK) {
+			j->lnm_db_refused++;
+			join_log(j, "%CNXMAN, the clusterwide logical name "
+				    "database was not answered: a record in it "
+				    "is not one this node can decode");
+			return;
+		}
+		/* each record of the database, in the member's order */
+		st = j->jops->lnm_apply(j->jops->ctx, &j->lnm_op);
+		if ((st & 1u) == 0u) {
+			j->lnm_db_refused++;
+			join_log(j, "%CNXMAN, the clusterwide logical name "
+				    "database was not answered: this node's "
+				    "executive did not apply a record of it");
+			return;
+		}
+		n++;
+	}
+	if (n != vms_cm_lnm_db_count(j->lnm_db_buf, j->lnm_db_len)) {
+		j->lnm_db_refused++;
+		return;   /* the container's own count disagrees: unanswered */
+	}
+	j->lnm_db_records += n;
+	csb = (j->cl == NULL || j->lnm_db_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)j->lnm_db_csb);
+	if (csb == NULL || csb->cdt_conid != j->lnm_db_conid ||
+	    vms_cm_lnm_answer_build(j->lnm_db_req, VMS_CM_BODY_LEN,
+				    j->scratch, (uint32_t)sizeof(j->scratch),
+				    NULL) != VMS_CODEC_OK)
+		return;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
+	if (j->jops->send_msg(j->jops->ctx, j->lnm_db_conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0)
+		j->send_failures++;
+}
+
+int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
+		       uint32_t len, int32_t from_csb)
+{
+	struct vms_cm_xfer_desc d;
+	struct vms_csb *csb;
+	struct cnxman_rdev *r;
+
+	if (j == NULL || body == NULL || len < 10u)
+		return 0;
+	/* The member's answer to our database request: it only says the
+	 * push follows. */
+	if (body[VMS_OFB_CM_CATEGORY] == (uint8_t)(VMS_CM_CAT_0B | 0x80u) &&
+	    body[VMS_OFB_CM_OPCODE] == (uint8_t)VMS_CM_OP_0B_DBREQ)
+		return 1;
+	if (body[VMS_OFB_CM_CATEGORY] == (uint8_t)VMS_CM_CAT_0B &&
+	    body[VMS_OFB_CM_OPCODE] == (uint8_t)VMS_CM_OP_0B_DBPUSH) {
+		if (len >= VMS_CM_BODY_LEN)
+			join_lnm_db_push(j, body, len, from_csb);
+		return 1;
+	}
+	if (body[VMS_OFB_CM_CATEGORY] != (uint8_t)VMS_CM_CAT_0B ||
+	    body[VMS_OFB_CM_OPCODE] != (uint8_t)VMS_CM_OP_0B_LNM)
+		return 0;
+	if (!join_rdev_ops_ok(j) || j->jops->lnm_apply == NULL ||
+	    vms_cm_lnm_desc_parse(body, len, &d) != VMS_CODEC_OK ||
+	    d.len > (uint32_t)CNXMAN_RDEV_BUF) {
+		j->lnm_refused++;
+		return 1;
+	}
+	csb = (j->cl == NULL || from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)from_csb);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u ||
+	    d.conid != csb->cdt_conid) {
+		/* +0 must be OUR Con.ID on that connection, as for a close. */
+		j->rdev_conid_mismatch++;
+		j->lnm_refused++;
+		return 1;
+	}
+	r = join_rdev_slot(j);
+	if (r == NULL) {
+		j->lnm_refused++;
+		return 1;
+	}
+	join_bzero(r, (uint32_t)sizeof(*r));
+	r->flavor = (uint8_t)CNXMAN_RDEV_FL_LNM;
+	r->from_csb = from_csb;
+	r->conid = csb->cdt_conid;
+	r->desc = d;
+	r->started_ms = join_now_ms(j);
+	join_bcopy(r->req, body, VMS_CM_BODY_LEN);
+	if (j->jops->blk_register(j->jops->ctx, r->rec, d.len,
+				  &r->local_name) != 0 ||
+	    r->local_name == 0u) {
+		join_bzero(r, (uint32_t)sizeof(*r));
+		j->lnm_refused++;
+		return 1;
+	}
+	if (j->jops->blk_request(j->jops->ctx, r->conid, d.conid, d.name,
+				 r->local_name, d.len) != 0) {
+		join_rdev_free(j, r);
+		j->lnm_refused++;
+		return 1;
+	}
+	r->state = (uint8_t)CNXMAN_RDEV_PULLING;
+	j->lnm_started++;
+	return 1;
 }
 
 /* A connection went away: its requests can no longer be answered. */
@@ -3189,8 +3531,11 @@ static enum cnxman_join_rx join_h_tr_open(struct cnxman_join *j,
 {
 	struct vms_cm_open o;
 
-	if (vms_cm_open_parse(e->body, e->len, &o) == VMS_CODEC_OK)
+	if (vms_cm_open_parse(e->body, e->len, &o) == VMS_CODEC_OK) {
 		j->tr_class = o.cls;
+		if (j->cl != NULL)
+			j->cl->club.own_tr_class = o.cls;
+	}
 	return join_forward(j, e);
 }
 
@@ -4555,6 +4900,8 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_MSCP_END]     = join_h_mscp_end,
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
+		/* A founder is a member that sits here (rd vms-6ec). */
+		[CNXMAN_EV_RX_TR_RELAY]  = join_h_relay_if_member,
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,

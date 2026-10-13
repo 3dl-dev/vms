@@ -486,6 +486,9 @@ void cnxman_envelope_stamp(const struct vms_csb *csb,
  *      legitimately repeats a lower number and must not walk the ack back.
  */
 void cnxman_csb_dialogue_sent(struct vms_csb *csb);
+/* rd vms-cd8: hand back the number of a body that was refused before it left
+ * (vms_cnxman.c cnxman_cm_send). Only the number handed out LAST. */
+void cnxman_csb_dialogue_unsent(struct vms_csb *csb);
 void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg);
 
 /*

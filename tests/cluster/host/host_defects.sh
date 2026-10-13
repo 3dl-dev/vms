@@ -241,7 +241,16 @@ barrier-stalled-ignores-new-go
 join-reply-to-the-join-target
 join-k10-close-withheld
 join-k5-close-withheld
-csb-0b01-answer-ignores-join-order"
+csb-0b01-answer-ignores-join-order
+guard-ignores-category-0b
+join-lnm-answered-unapplied
+join-lnm-db-not-applied
+pe-blk-frame-unringed
+coord-own-class-unrecorded
+advertise-relay-empty-cell
+engine-dir-remove-never-posted
+codec-dir-remove-no-hash
+cnxman-dir-remove-opens-txn"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -814,6 +823,7 @@ EOF
         why)          echo "every block frame leaves with the message opcode 0x02 the sequenced stamp writes, so a real VMS port reads a REQUEST DATA or SEND DATA as an SCS message with a garbage envelope -- a frame class no real node ever sent (1,217,539 of 1,217,539 opcode-0x02 frames carry the SCS format word).";;
         require_fail) cat <<'EOF'
 *** a REQUEST DATA carries opcode 0x08 (2,759/2,759) ***
+opcode 0x08 on the first send
 *** every earlier one is 0x0c (39 + 2,758 real) ***
 *** the last answer frame is 0x0d ***
   and it is 0x0d
@@ -1056,6 +1066,77 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
 the relay is answered, on the member's new connection
+*** the relay is answered, so the admission can go on ***
+body[17] is the class this node drove, as a real VAX coordinator's answer carries
+*** the founder answers the relay from [ADVERTISE] ***
+EOF
+                      ;;
+        esac;;
+
+    engine-dir-remove-never-posted)
+        case "$_f" in
+        facility)     echo "a master that frees a resource removes its entry at the remote directory node (rd vms-e09)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_dir_remove_fill() never fills a removal, so a freed mastered resource leaves its directory entry behind. That is lab DC1b: VAX1 kept naming OVMXA as master of F11B\$sOVMXSYS, sent OVMXB there with an 0xf8, and OVMXA had nothing to serve.";;
+        require_fail) hd_lines <<'EOF'
+*** freeing the mastered resource posts something ***
+EOF
+                      ;;
+        esac;;
+    codec-dir-remove-no-hash)
+        case "$_f" in
+        facility)     echo "the directory-entry removal carries the directory hash the lookup carried (rd vms-e09, R1)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_dir_remove_build() leaves body[128:132] zero, so the directory node is sent a removal for an entry it cannot find, and the real entry stays.";;
+        require_fail) hd_lines <<'EOF'
+*** every R1 byte equals the real removal's, every other byte is a zero OVMX wrote ***
+EOF
+                      ;;
+        esac;;
+    cnxman-dir-remove-opens-txn)
+        case "$_f" in
+        facility)     echo "a directory-entry removal is a notification: its envelope opens no transaction (rd vms-e09, R3)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_dlm_send() originates a removal as a REQUEST, minting a transaction a real directory node never answers -- 8106 real removals carry body[4:8] = 0.";;
+        require_fail) hd_lines <<'EOF'
+a directory-entry removal opens no transaction
+EOF
+                      ;;
+        esac;;
+
+    guard-ignores-category-0b)
+        case "$_f" in
+        facility)     echo "the emit guard's view of what the peer has sent includes its category-0x0b messages (rd vms-cd8)";;
+        targets)      echo "kernel-core/vms_cluster_emit_guard.c";;
+        suites_red)   echo "test_pe_emit_guard";;
+        isolation)    echo "isolated";;
+        why)          echo "guard_category_is_cm() no longer counts category 0x0b, so after a peer's clusterwide logical-name messages this node's next frame acking them is refused as ack-unbacked. In lab94ag that refusal left a send-msg# hole and VAX1 took a fatal CNXMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+*** acking the peer's 0x0b/0x06 (its send 4) goes out ***
+  nothing refused
+EOF
+                      ;;
+        esac;;
+
+    pe-blk-frame-unringed)
+        case "$_f" in
+        facility)     echo "a block-transfer frame that fits a ring slot is held for go-back-N (rd vms-c1d), so a lost REQUEST DATA is sent again instead of leaving a sequence hole";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "blk_stamp_and_send() never takes a ring entry again, so every block frame goes out unringed: a REQUEST DATA lost on the wire (lab52dfb: sent to a VAX's old DECnet station address) leaves a hole the peer never moves past, and the circuit breaks on TIMVCFAIL.";;
+        require_fail) hd_lines <<'EOF'
+*** and it holds a ring entry ***
+counted ringed
+not unringed
+*** it went out again ***
+  marked as a retransmission (0x7b)
 EOF
                       ;;
         esac;;
@@ -1094,6 +1175,63 @@ then the cat-0x86 goes
   with state 5, a settled member's answer
   counted
   counted refused
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-db-not-applied)
+        case "$_f" in
+        facility)     echo "the startup database pull (rd vms-94a): every record a member pushes is applied to this node's executive before the push is answered";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_db_pulled() stops handing the pushed records to the executive and answers anyway, so a late joiner tells the member it took the cluster's logical names while holding none of them.";;
+        require_fail) hd_lines <<'EOF'
+*** the last chunk applies all 10 records ***
+  10 records counted
+  tables first, parents before children, then the names, in the member's order
+then the answer goes
+  0x8b/0x04, as every real answer to a push
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-answered-unapplied)
+        case "$_f" in
+        facility)     echo "the 0x8b/0x04 answer to a member's clusterwide logical-name operation (rd vms-94a): sent only after this node's executive applied it";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_pulled() no longer checks the status the executive returned, so an operation the executive refused (no such table, arena full) is acknowledged anyway: the member is told this node holds a logical name it does not.";;
+        require_fail) hd_lines <<'EOF'
+*** an operation the executive refused is NOT answered ***
+  counted refused
+EOF
+                      ;;
+        esac;;
+
+    advertise-relay-empty-cell)
+        case "$_f" in
+        facility)     echo "a founder whose join sits in ADVERTISE answers a coordinator's op-0x12 relay as a member (rd vms-6ec)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "The ADVERTISE row loses its RX_TR_RELAY cell, so the relay lands in an empty cell. That is the lab DC2 stall: real VAX2 asked OVMXB, OVMXB relayed it to the founder OVMXA, OVMXA answered nothing, and VAX2 was never admitted.";;
+        require_fail) hd_lines <<'EOF'
+*** the founder answers the relay from [ADVERTISE] ***
+EOF
+                      ;;
+        esac;;
+
+    coord-own-class-unrecorded)
+        case "$_f" in
+        facility)     echo "a coordinator records the class it drives as this node's own transition class, which its answer to another coordinator's op-0x12 relay reports (rd vms-6ec)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_open_transition() no longer writes club.own_tr_class, so a founder that only ever coordinated holds no class and answers no relay: in lab DC2 real VAX2 asked OVMXB, OVMXB relayed it to the founder OVMXA, OVMXA answered nothing, and VAX2 was never admitted.";;
+        require_fail) hd_lines <<'EOF'
+*** driving an addition makes 0x02 this node's class ***
 EOF
                       ;;
         esac;;
@@ -1360,13 +1498,13 @@ EOF
 
     join-member-count-to-foreign)
         case "$_f" in
-        facility)     echo "a member's count goes only to a peer running this implementation (rd vms-e88; the rd vms-1ac rule -- member-only bytes OVMX does not ground are symmetric between two OVMX nodes and a bugcheck risk in front of a VAX)";;
+        facility)     echo "a member's count goes to a foreign peer only WITH the grounded member state (rd vms-e88, rd vms-d52c; the rd vms-1ac rule -- a count beside zero member-only fields is a record in a shape no real node writes)";;
         targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
-        why)          echo "join_members_for() drops the peer_is_ours test, so a foreign connection manager is sent a member-form count beside the zero member-only fields OVMX cannot ground: a record in a shape no real node writes.";;
+        why)          echo "join_members_for() drops the member-state test, so a foreign connection manager is sent a member-form count while this node holds no formation/transition/membership time to send beside it: a record in a shape no real node writes.";;
         require_fail) hd_lines <<'EOF'
-a foreign connection manager still hears 0
+a foreign connection manager hears 0 while this node holds no member state to send beside the count
 and nothing new goes to the foreign one
 EOF
         ;;
@@ -2464,7 +2602,7 @@ apply_edit() {
     join-member-count-to-foreign)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
-        sed -i 's|	if (csb == NULL \|\| !csb->peer_is_ours \|\| !join_node_already_member(j))|	if (csb == NULL \|\| !join_node_already_member(j)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
+        sed -i 's|	if (!csb->peer_is_ours \&\& !join_member_state(j, \&ms))|	if (0 \&\& !csb->peer_is_ours \&\& !join_member_state(j, \&ms)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
 
     join-asks-a-system-in-no-cluster)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
@@ -2592,6 +2730,24 @@ apply_edit() {
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
 
+    engine-dir-remove-never-posted)
+        # `if (dir == 0 || dir == vms_local_csid)` is unique in this file.
+        sed -i 's/^    if (dir == 0 || dir == vms_local_csid)$/    if (1 || dir == 0 || dir == vms_local_csid) \/\* NEGCTL engine-dir-remove-never-posted \*\//' "$_file";;
+    codec-dir-remove-no-hash)
+        # `vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);` is unique in this file.
+        sed -i 's|^	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);$|	(void)id->hash; /* NEGCTL codec-dir-remove-no-hash */|' "$_file";;
+    cnxman-dir-remove-opens-txn)
+        # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
+        sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;
+
+    guard-ignores-category-0b)
+        # `	case 0x0bu:` is unique in this file.
+        sed -i 's|^	case 0x0bu:$|	case 0x7fu: /* NEGCTL guard-ignores-category-0b */|' "$_file";;
+
+    pe-blk-frame-unringed)
+        # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
+        sed -i 's|if (op != 0u \&\& total <= PE_VC_FRAME_MAX)|if (0 \&\& op != 0u \&\& total <= PE_VC_FRAME_MAX) /* NEGCTL pe-blk-frame-unringed */|' "$_file";;
+
     join-k5-close-withheld)
         # `d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&` is unique in the file.
         sed -i 's|d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) \&\&|0) \&\& /* NEGCTL join-k5-close-withheld */|' "$_file";;
@@ -2608,6 +2764,23 @@ apply_edit() {
         # pattern, so a second apply matches nothing and cmd_apply reports
         # BROKEN FIXTURE.
         sed -i 's|\trc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);|\trc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,\n\t\t\t       VMS_CM_BODY_LEN); /* NEGCTL join-reply-to-the-join-target: every answer leaves on the join target'"'"'s connection, whoever asked */|' "$_file";;
+
+    join-lnm-db-not-applied)
+        # The comment line above the database apply is unique in this file.
+        sed -i 's|		/\* each record of the database, in the member.s order \*/|		st = 1u; break; /* NEGCTL join-lnm-db-not-applied */|' "$_file";;
+
+    join-lnm-answered-unapplied)
+        # `if ((st & 1u) == 0u) {` is unique in this file.
+        sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
+
+    advertise-relay-empty-cell)
+        # Inside join_h_relay_if_member() only: its member gate always refuses,
+        # which is the empty cell's behaviour with the handler still referenced.
+        sed -i '/^static enum cnxman_join_rx join_h_relay_if_member(/,/^}/ s|if (!join_node_already_member(j)) {|if (1) { /* NEGCTL advertise-relay-empty-cell */|' "$_file";;
+
+    coord-own-class-unrecorded)
+        # `c->cl->club.own_tr_class = tr_class;` is unique in this file.
+        sed -i 's|^	c->cl->club.own_tr_class = tr_class;$|	(void)tr_class; /* NEGCTL coord-own-class-unrecorded */|' "$_file";;
 
     csb-0b01-answer-ignores-join-order)
         # `requester->admitted_after_local != 0u,` is unique in this file.

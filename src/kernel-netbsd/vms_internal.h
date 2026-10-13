@@ -1020,6 +1020,7 @@ void vms_lnm_forget_device(const char *devnam);
 /* rd vms-94a: the clusterwide tables (vms_lnm.c). Each applies one $CRELNT,
  * $CRELNM or $DELLNM a cluster member propagated, and returns its VMS status. */
 int vms_lnm_cluster_init(void);
+uint32_t vms_lnm_cluster_other_members(void);   /* vms_devtab.c */
 uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
                                 uint32_t attr, uint8_t acmode, uint32_t promsk);
 uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,

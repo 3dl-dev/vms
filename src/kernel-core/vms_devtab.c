@@ -2812,6 +2812,17 @@ struct vms_cluster *vms_cluster_node(void)
     return &vms_cluster_node_singleton;
 }
 
+/* rd vms-94a: how many OTHER systems share this node's cluster, read from the
+ * CLUB's committed member count (0 when this node is in no cluster). */
+uint32_t vms_lnm_cluster_other_members(void)
+{
+    const struct vms_cluster *cl = &vms_cluster_node_singleton;
+
+    if (cl->state != VMS_CLUSTER_MEMBER || cl->club.cluster_nodes < 2u)
+        return 0u;
+    return cl->club.cluster_nodes - 1u;
+}
+
 /*
  * The three CLUSTER_DIAG_PORT row structs (vms_ioctl.h / vms_lock_nb.h) are
  * BYTE-IDENTICAL duplicates of vms_cluster_snapshot.h's vms_pe_view /

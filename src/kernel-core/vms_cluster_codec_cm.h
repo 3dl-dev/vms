@@ -1632,7 +1632,53 @@ vms_codec_status_t vms_cm_lnm_desc_parse(const uint8_t *req_body,
 vms_codec_status_t vms_cm_lnm_rec_parse(const uint8_t *rec, uint32_t len,
 					struct vms_cm_lnm_op *out);
 
-/* The 0x8b/0x04 answer: the request's txn/token and category|0x80 / op,
+/*
+ * THE STARTUP DATABASE PULL (rd vms-94a). A node that has just joined asks ONE
+ * older member for the whole clusterwide logical-name database with a cat-0x0b
+ * op-0x05. The member answers 0x8b/0x05 (the echo with body[36:40] = 1), then
+ * sends a cat-0x0b op-0x06 naming a buffer, laid out like op 0x04's. The node
+ * REQUEST DATAs that buffer (one or more DATA frames, 0x0c then 0x0d) and
+ * answers 0x8b/0x04.
+ *
+ * THE REQUEST, measured on 12 of 12 real ones (lnm1, arm A, arm B and four
+ * rm380 runs): body[12:14] is the requester's own CSID high word and
+ * body[14:16] its low word (VAX2 csid 00010002 sends 01 00 02 00), and
+ * body[32:36] is 0x000091e8 in every one. Every other byte varies between
+ * requests as leftover buffer contents does, and is sent as zero.
+ *
+ * THE DATABASE (dbpush.py) is a 20-byte header {u16 length, u16 function 5,
+ * u32 1, u32 1, u32 record count, u32 0x00010001}, followed by that many
+ * records, each the op-0x04 record form with its own u16 length. Tables come
+ * first, parents before children, then the names. In lnm1, VAX3's 2000-byte
+ * push held the 7 tables and the 3 names VAX1 held at that moment (OVMXT1 =
+ * "B", OVMXT4 concealed, OVMXTEST_LONGNAME_2), each decoded equal to its
+ * command.
+ *
+ * VMS_CM_LNM_DB_MAX is 0x91e8 (37352) bytes, the value every real request
+ * carries. OVMX's pull buffer is that size, so a database that large fits
+ * whatever the field means.
+ */
+#define VMS_CM_OP_0B_DBREQ      0x05u
+#define VMS_CM_OP_0B_DBPUSH     0x06u
+#define VMS_OFB_CM_DBREQ_CSID   12u
+#define VMS_CM_LNM_FN_DB        5u
+#define VMS_CM_LNM_DB_HDR       20u
+#define VMS_CM_LNM_DB_MAX       0x91e8u
+
+/* The 0x0b/0x05 request this node sends. own_csid must be the CSID the
+ * cluster assigned this node. */
+vms_codec_status_t vms_cm_lnm_dbreq_build(uint32_t own_csid, uint8_t *out_body,
+					  uint32_t cap, uint32_t *written);
+
+/* Walk a pulled database. *cursor starts at 0. Returns VMS_CODEC_OK with
+ * the next record, VMS_CODEC_E_RANGE at the end, and anything else for a
+ * container this file does not recognise (nothing past it may be applied). */
+vms_codec_status_t vms_cm_lnm_db_next(const uint8_t *db, uint32_t len,
+				      uint32_t *cursor, const uint8_t **rec,
+				      uint32_t *rec_len);
+uint32_t vms_cm_lnm_db_count(const uint8_t *db, uint32_t len);
+
+/* The 0x8b/0x04 answer: the request's txn/token and category|0x80, op 0x04,
  * zero elsewhere. STAMP with is_response=1. */
 vms_codec_status_t vms_cm_lnm_answer_build(const uint8_t *req_body,
 					   uint32_t req_len,

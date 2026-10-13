@@ -1417,6 +1417,10 @@ static const struct vms_wire_allow_entry g_cm_allow_rows[] = {
 
 	/* cat 0x0b op 0x04: a clusterwide logical-name operation, answered
 	 * after the record is pulled and applied (rd vms-94a). */
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_0B, VMS_CM_OP_0B_DBPUSH,
+	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_LNM_ANSWER,
+	  "tests/lab/captures/vms-94a-cwlnm-oracle-20261013: the database push "
+	  "a member sends after a 0x0b/0x05, pulled, applied, answered 0x8b/0x04" },
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_0B, VMS_CM_OP_0B_LNM,
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_LNM_ANSWER,
 	  "tests/lab/captures/vms-94a-cwlnm-oracle-20261013: pulled, applied, "
@@ -1904,7 +1908,10 @@ static int lnm_desc(const uint8_t *r, uint32_t len, uint32_t base,
 		return 0;
 	if (!lnm_off(base, lnm_u32(r, o + 4u), 1u, len, &so))
 		return 0;
-	return lnm_str(r, len, so, lnm_u32(r, o), s);
+	/* A VMS string descriptor: u16 length, u8 type, u8 class, u32
+	 * pointer. A propagated operation carries type/class 0; the startup
+	 * database push carries 0x0e (text) -- only the length is read. */
+	return lnm_str(r, len, so, lnm_u16(r, o), s);
 }
 
 /* A longword value argument at B-relative `ptr`. */
@@ -2051,8 +2058,77 @@ vms_codec_status_t vms_cm_lnm_answer_build(const uint8_t *req_body,
 		out_body[i] = req_body[i];          /* txn + token */
 	out_body[VMS_OFB_CM_CATEGORY] =
 		vms_wire_response_category(req_env.category);
-	out_body[VMS_OFB_CM_OPCODE] = req_env.opcode;
+	/* 0x04 for the op-0x04 operation AND for the op-0x06 database push:
+	 * every real answer to either is 0x8b/0x04 (vms-94a captures). */
+	out_body[VMS_OFB_CM_OPCODE] = (uint8_t)VMS_CM_OP_0B_LNM;
 	if (written != (uint32_t *)0)
 		*written = VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_lnm_dbreq_build(uint32_t own_csid, uint8_t *out_body,
+					  uint32_t cap, uint32_t *written)
+{
+	uint32_t i;
+
+	if (out_body == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	if (own_csid == 0u)
+		return VMS_CODEC_E_INVAL;   /* never a CSID this node does not hold */
+	for (i = 0; i < VMS_CM_BODY_LEN; i++)
+		out_body[i] = 0u;
+	out_body[VMS_OFB_CM_CATEGORY] = (uint8_t)VMS_CM_CAT_0B;
+	out_body[VMS_OFB_CM_OPCODE] = (uint8_t)VMS_CM_OP_0B_DBREQ;
+	/* body[12:14] the CSID's high word, body[14:16] its low word. */
+	out_body[VMS_OFB_CM_DBREQ_CSID + 0u] = (uint8_t)(own_csid >> 16);
+	out_body[VMS_OFB_CM_DBREQ_CSID + 1u] = (uint8_t)(own_csid >> 24);
+	out_body[VMS_OFB_CM_DBREQ_CSID + 2u] = (uint8_t)own_csid;
+	out_body[VMS_OFB_CM_DBREQ_CSID + 3u] = (uint8_t)(own_csid >> 8);
+	out_body[VMS_OFB_CM_LNM_LEN + 0u] = (uint8_t)(VMS_CM_LNM_DB_MAX & 0xffu);
+	out_body[VMS_OFB_CM_LNM_LEN + 1u] =
+		(uint8_t)((VMS_CM_LNM_DB_MAX >> 8) & 0xffu);
+	if (written != (uint32_t *)0)
+		*written = VMS_CM_BODY_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_cm_lnm_db_next(const uint8_t *db, uint32_t len,
+				      uint32_t *cursor, const uint8_t **rec,
+				      uint32_t *rec_len)
+{
+	uint32_t o, n;
+
+	if (db == (const uint8_t *)0 || cursor == (uint32_t *)0 ||
+	    rec == (const uint8_t **)0 || rec_len == (uint32_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_CM_LNM_DB_HDR)
+		return VMS_CODEC_E_SHORT;
+	if (*cursor == 0u) {
+		/* The container states its own length and function 5. */
+		if (lnm_u16(db, 0) != len ||
+		    lnm_u16(db, 2) != VMS_CM_LNM_FN_DB)
+			return VMS_CODEC_E_CLASS;
+		*cursor = VMS_CM_LNM_DB_HDR;
+	}
+	o = *cursor;
+	if (o == len)
+		return VMS_CODEC_E_RANGE;            /* the end: no more records */
+	if (o > len || len - o < 12u)
+		return VMS_CODEC_E_CLASS;
+	n = lnm_u16(db, o);
+	if (n < 12u || n > len - o)
+		return VMS_CODEC_E_CLASS;
+	*rec = db + o;
+	*rec_len = n;
+	*cursor = o + n;
+	return VMS_CODEC_OK;
+}
+
+uint32_t vms_cm_lnm_db_count(const uint8_t *db, uint32_t len)
+{
+	if (db == (const uint8_t *)0 || len < VMS_CM_LNM_DB_HDR)
+		return 0u;
+	return lnm_u32(db, 12);
 }

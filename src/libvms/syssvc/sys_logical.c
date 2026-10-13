@@ -71,6 +71,10 @@ enum lnm_tab {
     TAB_PDIR, TAB_SDIR                              /* the two directories  */
 };
 
+/* rd vms-94a: a clusterwide table is TAB_CL + its executive id. */
+#define TAB_CL 0x1000
+static int tab_is_cluster(int t) { return t >= TAB_CL; }
+
 static uint32_t tab_exec_id(int t)
 {
     switch (t) {
@@ -78,7 +82,10 @@ static uint32_t tab_exec_id(int t)
     case TAB_JOB:   return VMS_LNM_TBL_JOB;
     case TAB_GROUP: return VMS_LNM_TBL_GROUP;
     case TAB_SYS:   return VMS_LNM_TBL_SYSTEM;
-    default:        return 0;
+    default:
+        if (tab_is_cluster(t))
+            return VMS_LNM_TBL_CLUSTER_OF((uint32_t)(t - TAB_CL));
+        return 0;
     }
 }
 
@@ -99,7 +106,12 @@ static void tab_name(int t, char *out, size_t outsz)
         (void)vms_kif_lnm_scope_key(VMS_LNM_TBL_GROUP, &key);
         snprintf(out, outsz, "LNM$GROUP_%06o", (unsigned)key);
         break;
-    default: out[0] = '\0'; break;
+    default:
+        out[0] = '\0';
+        if (tab_is_cluster(t))
+            (void)vms_kif_lnm_cluster_name((uint32_t)(t - TAB_CL), out,
+                                           (uint32_t)outsz);
+        break;
     }
 }
 
@@ -108,7 +120,8 @@ static void tab_name(int t, char *out, size_t outsz)
  * LNM$SYSTEM name reports %X10400, a LNM$PROCESS one %X400). */
 static uint32_t tab_attr(int t)
 {
-    return (t == TAB_JOB || t == TAB_GROUP || t == TAB_SYS || t == TAB_SDIR)
+    return (t == TAB_JOB || t == TAB_GROUP || t == TAB_SYS || t == TAB_SDIR ||
+            tab_is_cluster(t))
                ? LNM$M_SHAREABLE : 0;
 }
 
@@ -142,6 +155,18 @@ static int resolve_tables(const char *t, int out[4])
     if (!strcmp(t, "LNM$FILE_DEV") || !strcmp(t, "LNM$DCL_LOGICAL")) {
         out[0] = TAB_PROC; out[1] = TAB_JOB; out[2] = TAB_GROUP; out[3] = TAB_SYS;
         return 4;
+    }
+    /* rd vms-94a: the clusterwide tables, as the executive holds them. */
+    {
+        uint32_t w = 0;
+        const char *ct = !strcmp(t, "LNM$SYSCLUSTER") ? "LNM$SYSCLUSTER_TABLE"
+                       : !strcmp(t, "LNM$CLUSTER")    ? "LNM$CLUSTER_TABLE"
+                       : t;
+
+        if (vms_kif_lnm_cluster_table(ct, &w)) {
+            out[0] = TAB_CL + (int)VMS_LNM_TBL_CLKEY(w);
+            return 1;
+        }
     }
     if (!strcmp(t, "LNM$PROCESS_DIRECTORY")) { out[0] = TAB_PDIR; return 1; }
     if (!strcmp(t, "LNM$SYSTEM_DIRECTORY")) { out[0] = TAB_SDIR; return 1; }

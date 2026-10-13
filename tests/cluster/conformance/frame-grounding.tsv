@@ -89,3 +89,14 @@ cm_lnm_ans	*	76	4	copied	any:echo	txn/token: the requester's own (every real 0x8
 cm_lnm_ans	*	80	1	const	const:8b	category 0x0b | 0x80, the response (vms-94a-cwlnm-oracle, every answer)
 cm_lnm_ans	*	81	1	const	const:4	op 0x04 (every real answer to an op-0x04)
 cm_lnm_ans	*	82	122	const	const:0	zero: two real answers are zero past the header (rm380 137.965, both recipients); the rest carry only buffer residue
+# ---- cat 0x0b op 0x05: this node asks a member for the clusterwide logical-name database (rd vms-94a) ----
+cm_lnm_dbreq	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+cm_lnm_dbreq	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_lnm_dbreq	*	76	4	minted	any:envelope	txn/token: minted for a REQUEST by cnxman_envelope_originate (E85), as every origination
+cm_lnm_dbreq	*	80	1	const	const:b	category 0x0b (12/12 real requests)
+cm_lnm_dbreq	*	81	1	const	const:5	op 0x05 (12/12)
+cm_lnm_dbreq	*	82	2	const	const:0	zero in 12/12 real requests
+cm_lnm_dbreq	*	84	4	derived	any:csid	the requester's own CSID, high word then low word (12/12: VAX2 csid 00010002 sends 01 00 02 00); test_cnxman_join pins it from this node's CSID
+cm_lnm_dbreq	*	88	16	const	const:0	body[16:32]: leftover buffer contents in real requests (varies request to request), sent as zero
+cm_lnm_dbreq	*	104	4	const	const:91e8	body[32:36] = 0x000091e8 in 12 of 12 real requests
+cm_lnm_dbreq	*	108	96	const	const:0	body[36:132]: zero in 11 of 12 real requests, leftover contents in the twelfth; sent as zero

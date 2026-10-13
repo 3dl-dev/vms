@@ -1975,6 +1975,44 @@ static int cnxman_0b01_rx(struct vms_cnxman *cn,
 	return 1;
 }
 
+/*
+ * rd vms-94a: THE STARTUP DATABASE PULL. A real V7.3 that has just become a
+ * member asks ONE member that was there before it for the clusterwide
+ * logical-name database. In every real capture that member is the one with
+ * the lowest SCSSYSTEMID among the older members (lnm1, arm A, arm B, rm380:
+ * 12 of 12; arm B rules out "the founder" and "the lowest CSID"). That
+ * choice is INFERRED, and this node makes the same one. Only members that
+ * predate this node qualify, read off the CSB (admitted_after_local == 0),
+ * and never another OpenVMX node, which holds no database to push. A
+ * founder has no older member, so it never asks.
+ */
+static void cnxman_lnm_db_maybe_pull(struct vms_cnxman *cn)
+{
+	struct vms_club *club = &cn->cl->club;
+	struct vms_csb *local = cnxman_club_local(club), *best = NULL;
+	uint32_t i;
+
+	if (cn->cl->state != VMS_CLUSTER_MEMBER || cn->join.lnm_db_state != 0u ||
+	    local == NULL || !local->csid_valid)
+		return;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = &club->csb[i];
+
+		if (!c->in_use || c == local || !c->csid_valid ||
+		    c->cdt_conid == 0u || c->peer_is_ours ||
+		    c->admitted_after_local || !cnxman_csb_is_member(c) ||
+		    !c->sysid_valid)
+			continue;
+		if (best == NULL || c->sysid < best->sysid)
+			best = c;
+	}
+	if (best == NULL)
+		return;
+	(void)cnxman_join_lnm_db_request(&cn->join,
+				(int32_t)cnxman_club_csb_index(club, best),
+				local->csid);
+}
+
 static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			   const uint8_t *body, uint32_t len)
 {
@@ -3283,6 +3321,9 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * any other. Idempotent per (peer, connection).
 		 */
 		cnxman_join_advertise_peers(&cn->join);
+		/* rd vms-94a: a node that joined late pulls the clusterwide
+		 * logical-name database once. */
+		cnxman_lnm_db_maybe_pull(cn);
 		/*
 		 * THE SAME BEFORE/AFTER BRACKET cnxman_vc_message() TAKES ROUND A
 		 * DISPATCH, taken here for exactly the reason the quorum comment

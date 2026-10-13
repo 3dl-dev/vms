@@ -14,6 +14,10 @@
 
 static struct vms_lnm_arena *A;
 
+/* The executive's other cluster members (vms_devtab.c on a real build). */
+static uint32_t g_others;
+uint32_t vms_lnm_cluster_other_members(void) { return g_others; }
+
 static const struct vms_lnm_entry *find(uint32_t table, uint32_t key,
 					const char *name, uint8_t mode)
 {
@@ -154,6 +158,66 @@ int main(void)
 	ct_check(find(VMS_LNM_TBL_CLUSTER, ct, "OVMXT6", 2) != NULL,
 		 "  and OVMX_CTAB's name is untouched");
 	ct_check(A->generation % 2u == 0u, "the arena is not mid-write");
+
+	/* LOCAL $CRELNM/$DELLNM through the define/delete ioctls (rd vms-94a). */
+	{
+		struct vms_proc p;
+		struct vms_lnm_def_args d;
+		struct vms_lnm_del_args x;
+
+		memset(&p, 0, sizeof(p));
+		p.vms_pid = 0x20400010u;
+		p.cur_privs = VMS_PRV_M_SYSNAM;
+		memset(&d, 0, sizeof(d));
+		d.table = VMS_LNM_TBL_CLUSTER_OF(sys);
+		d.acmode = 2;
+		d.num_equiv = 1;
+		strcpy(d.name, "OVMX_LOCAL");
+		d.name_length = 10;
+		set_eq(0, "HERE", 0);
+		d.equiv[0] = eq[0];
+		g_others = 0;
+		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
+			 d.status == SS__NORMAL,
+			 "alone: a local DEFINE/TABLE=LNM$SYSCLUSTER is made");
+		ct_check(find(VMS_LNM_TBL_CLUSTER, sys, "OVMX_LOCAL", 2) != NULL,
+			 "  and the executive holds it in LNM$SYSCLUSTER_TABLE");
+
+		g_others = 2;
+		d.status = 0;
+		strcpy(d.name, "OVMX_SHARED");
+		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
+			 d.status == SS__UNSUPPORTED,
+			 "*** with other members: refused SS$_UNSUPPORTED, "
+			 "never made unannounced ***");
+		ct_check(find(VMS_LNM_TBL_CLUSTER, sys, "OVMX_SHARED", 2) == NULL,
+			 "  and nothing was written");
+
+		memset(&x, 0, sizeof(x));
+		x.table = VMS_LNM_TBL_CLUSTER_OF(sys);
+		x.acmode = 2;
+		strcpy(x.name, "OVMX_LOCAL");
+		ct_check(vms_ioctl_lnm_delete(&p, (unsigned long)&x) == 0 &&
+			 x.status == SS__UNSUPPORTED,
+			 "  a DEASSIGN likewise");
+		g_others = 0;
+		ct_check(vms_ioctl_lnm_delete(&p, (unsigned long)&x) == 0 &&
+			 x.status == SS__NORMAL &&
+			 find(VMS_LNM_TBL_CLUSTER, sys, "OVMX_LOCAL", 2) == NULL,
+			 "alone: the DEASSIGN removes it");
+
+		p.cur_privs = 0;
+		d.status = 0;
+		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
+			 d.status == SS__NOPRIV,
+			 "without SYSNAM or SYSPRV: SS$_NOPRIV, as LNM$SYSTEM");
+		p.cur_privs = VMS_PRV_M_SYSNAM;
+		d.table = VMS_LNM_TBL_CLUSTER_OF(999u);
+		d.status = 0;
+		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
+			 d.status == SS__BADPARAM,
+			 "a clusterwide table id this node does not hold: refused");
+	}
 
 	vms_lnm_cleanup();
 	return ct_summary("test_lnm_cluster");

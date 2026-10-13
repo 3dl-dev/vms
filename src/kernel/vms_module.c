@@ -2407,6 +2407,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_native_page0(proc, arg);
     case VMS_IOCTL_POWER:            /* rd vms-137e */
         return vms_ioctl_power(proc, arg);
+    case VMS_IOCTL_NETCFG:           /* rd vms-137e */
+        return vms_ioctl_netcfg(proc, arg);
     case VMS_IOCTL_SETPRV:
         return vms_ioctl_setprv(proc, arg);
     case VMS_IOCTL_CHKPRIV:

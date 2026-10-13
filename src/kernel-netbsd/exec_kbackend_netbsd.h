@@ -469,6 +469,15 @@ extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
 /* exec_power_off (rd vms-137e): the kernel's own halt + power-down. */
 static __inline void exec_power_off(void) { kern_reboot(RB_HALT | RB_POWERDOWN, NULL); }
 
+/* exec_netcfg (rd vms-137e): not yet on this substrate -- an honest
+ * SS$_UNSUPPORTED to the caller, never a pretend success. */
+static inline int
+exec_netcfg(uint32_t req, unsigned long uptr)
+{
+	(void)req; (void)uptr;
+	return -EOPNOTSUPP;
+}
+
 /* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): set the
  * current process's real/effective/saved uid and gid to `id`, no groups. The
  * credential swap is NetBSD's own (proc_crmod_enter/leave, kauth(9)). */

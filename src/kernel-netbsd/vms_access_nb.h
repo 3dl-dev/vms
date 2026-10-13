@@ -179,5 +179,19 @@ struct vms_native_page0_args {
 #define VMS_IOCTL_KFE            _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB0, struct vms_kfe_args)
 #define VMS_IOCTL_NATIVE_PAGE0   _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB2, struct vms_native_page0_args)
 #define VMS_IOCTL_POWER          _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB3, struct vms_power_args)
+struct vms_netcfg_args {
+	uint32_t req;
+	uint32_t status;
+	uint64_t uptr;
+	int32_t  err;
+	uint32_t reserved;
+};
+#define VMS_NETCFG_SET_IFADDR    1
+#define VMS_NETCFG_SET_IFNETMASK 2
+#define VMS_NETCFG_SET_IFFLAGS   3
+#define VMS_NETCFG_GET_IFFLAGS   4
+#define VMS_NETCFG_ADD_ROUTE     5
+#define VMS_NETCFG_DEL_ROUTE     6
+#define VMS_IOCTL_NETCFG         _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB4, struct vms_netcfg_args)
 
 #endif /* _VMS_ACCESS_NB_H */

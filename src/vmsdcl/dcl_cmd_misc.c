@@ -24,6 +24,9 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <net/if.h>
+#if defined(__linux__)
+#include <net/route.h>   /* struct rtentry (SET ROUTE, rd vms-137e) */
+#endif
 #include <arpa/inet.h>
 #include <limits.h>
 /* NOTE: no <mntent.h>. The mount table is parsed by hand from /proc/mounts with
@@ -2097,7 +2100,7 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
 
 /*
  * TCPIP SET INTERFACE ifname /HOST=ip /NETWORK_MASK=mask
- * Configure a network interface (requires root/NET_ADMIN).
+ * Configure a network interface (SYSPRV or BYPASS; applied by the executive).
  */
 static int cmd_tcpip_set_interface(struct dcl_command *cmd)
 {
@@ -2139,59 +2142,56 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* Check for root/NET_ADMIN privilege */
-    if (geteuid() != 0) {
-        printf("%%TCPIP-W-PRIVREQ, operation requires NET_ADMIN privilege\n");
-        /* Still persist to config file */
-    } else {
-        /* Apply with ioctl */
-        int sock = socket(AF_INET, SOCK_DGRAM, 0);
-        if (sock >= 0) {
-            struct ifreq ifr;
-            memset(&ifr, 0, sizeof(ifr));
-            strncpy(ifr.ifr_name, linux_if, IFNAMSIZ - 1);
+    /* Apply through the executive (rd vms-137e): network configuration is a
+     * privileged operation -- SYSPRV or BYPASS on this process -- and the
+     * executive performs it as the kernel; no OVMX process holds the
+     * substrate's CAP_NET_ADMIN. Each request is the substrate's own
+     * struct ifreq. Without the privilege the setting is only persisted. */
+    {
+        struct ifreq ifr;
+        int err = 0;
+        uint32_t st;
 
-            /* Set IP address */
-            struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-            addr->sin_family = AF_INET;
-            inet_pton(AF_INET, host_ip, &addr->sin_addr);
-            if (ioctl(sock, SIOCSIFADDR, &ifr) < 0) {
-                printf("%%TCPIP-W-IOERR, failed to set address: %s\n",
-                       strerror(errno));
-            }
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, linux_if, IFNAMSIZ - 1);
+        struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
+        addr->sin_family = AF_INET;
+        inet_pton(AF_INET, host_ip, &addr->sin_addr);
+        st = vms_kif_netcfg(VMS_NETCFG_SET_IFADDR, &ifr, &err);
+        if (st == SS$_NOPRIV) {
+            printf("%%TCPIP-W-PRIVREQ, operation requires SYSPRV or BYPASS privilege\n");
+        } else if (st == SS$_NOSUCHDEV) {
+            printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the interface cannot be configured\n");
+        } else if (st == SS$_UNSUPPORTED) {
+            printf("%%TCPIP-W-NOTAPPLIED, interface address not applied (not supported on this system)\n");
+        } else {
+            if (!(st & 1))
+                printf("%%TCPIP-W-IOERR, failed to set address: %s\n", strerror(err));
 
-            /* Set netmask if provided. ifr_netmask is a Linux-only ifreq union
-             * member; the OVMX TCP/IP engine is the Linux substrate (vms-67f).
-             * On netbsd-vax the live SIOCSIFNETMASK apply is skipped -- the
-             * netmask is still persisted to TCPIP$INTERFACE.DAT below. */
-#if defined(__linux__)
+            /* Netmask: ifr_netmask is the same union slot as ifr_addr. */
             if (netmask) {
-                struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
+                struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_addr;
+                memset(mask, 0, sizeof(*mask));
                 mask->sin_family = AF_INET;
                 inet_pton(AF_INET, netmask, &mask->sin_addr);
-                if (ioctl(sock, SIOCSIFNETMASK, &ifr) < 0) {
-                    printf("%%TCPIP-W-IOERR, failed to set netmask: %s\n",
-                           strerror(errno));
-                }
+                if (!(vms_kif_netcfg(VMS_NETCFG_SET_IFNETMASK, &ifr, &err) & 1))
+                    printf("%%TCPIP-W-IOERR, failed to set netmask: %s\n", strerror(err));
             }
 
             /* Bring the interface UP (idempotent). An address without IFF_UP does
              * not receive packets -- SE0 showed State=Down and inbound daytime got
              * no reply (rd vms-21b) -- so SET INTERFACE must enable it, exactly as
              * the config engine's tcpip_cfg_apply_iface_addr does
-             * (src/vmstcpip/mgmt/tcpip_config.h). Re-init ifr with just the name,
-             * read current flags, OR in IFF_UP|IFF_RUNNING, write them back. */
+             * (src/vmstcpip/mgmt/tcpip_config.h). Read the current flags, OR in
+             * IFF_UP|IFF_RUNNING, write them back. */
             memset(&ifr, 0, sizeof(ifr));
             strncpy(ifr.ifr_name, linux_if, IFNAMSIZ - 1);
-            if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+            if (vms_kif_netcfg(VMS_NETCFG_GET_IFFLAGS, &ifr, &err) & 1) {
                 ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
-                if (ioctl(sock, SIOCSIFFLAGS, &ifr) < 0)
+                if (!(vms_kif_netcfg(VMS_NETCFG_SET_IFFLAGS, &ifr, &err) & 1))
                     printf("%%TCPIP-W-IOERR, failed to bring interface up: %s\n",
-                           strerror(errno));
+                           strerror(err));
             }
-#endif
-
-            close(sock);
         }
     }
 
@@ -2271,7 +2271,7 @@ static int cmd_tcpip_show_configuration(struct dcl_command *cmd)
 /*
  * TCPIP SET ROUTE /GATEWAY=ip /DEFAULT
  *   or  /DESTINATION=dest /GATEWAY=gw /NETWORK_MASK=mask
- * Configure a network route (requires root/NET_ADMIN).
+ * Configure a network route (SYSPRV or BYPASS; applied by the executive).
  */
 static int cmd_tcpip_set_route(struct dcl_command *cmd)
 {
@@ -2301,48 +2301,57 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* Apply the route to the LIVE routing table. This requires NET_ADMIN; without
+    /* Apply the route to the LIVE routing table. This requires privilege; without
      * it the route is only recorded (persisted below) and never applied, so we
      * must NOT later claim it was added (INV-6). `applied` tracks whether the
      * live routing table actually changed. */
-    int privileged = (geteuid() == 0);
+    /* Apply through the executive (rd vms-137e): SYSPRV or BYPASS on this
+     * process; the executive performs it as the kernel. "Replace" semantics, as
+     * the old `ip route replace`: delete any route to the same destination,
+     * then add. The request is the substrate's own struct rtentry. */
+    int privileged = 1;
     int applied = 0;
-    if (!privileged) {
-        printf("%%TCPIP-W-PRIVREQ, operation requires NET_ADMIN privilege\n");
-        /* route NOT applied to the live table; only persisted below */
-    } else {
-        /* Use ip route replace. Do NOT swallow ip's diagnostic (no 2>/dev/null)
-         * and do NOT discard its exit status: a failed apply must be reported,
-         * not papered over as success. */
-        char route_cmd[512];
-        if (is_default) {
-            snprintf(route_cmd, sizeof(route_cmd),
-                     "ip route replace default via %s", gateway);
-        } else {
-            if (netmask) {
-                /* Convert dotted netmask to CIDR prefix length */
-                struct in_addr mask_addr;
-                inet_pton(AF_INET, netmask, &mask_addr);
-                uint32_t mask_val = ntohl(mask_addr.s_addr);
-                int prefix = 0;
-                while (mask_val & 0x80000000) {
-                    prefix++;
-                    mask_val <<= 1;
-                }
-                snprintf(route_cmd, sizeof(route_cmd),
-                         "ip route replace %s/%d via %s",
-                         destination, prefix, gateway);
-            } else {
-                snprintf(route_cmd, sizeof(route_cmd),
-                         "ip route replace %s via %s",
-                         destination, gateway);
-            }
+    const char *why = "";
+    {
+        uint32_t st = SS$_UNSUPPORTED;
+        int err = 0;
+#if defined(__linux__)
+        struct rtentry rt;
+        struct sockaddr_in *dst = (struct sockaddr_in *)&rt.rt_dst;
+        struct sockaddr_in *gw = (struct sockaddr_in *)&rt.rt_gateway;
+        struct sockaddr_in *msk = (struct sockaddr_in *)&rt.rt_genmask;
+
+        memset(&rt, 0, sizeof(rt));
+        dst->sin_family = gw->sin_family = msk->sin_family = AF_INET;
+        if (!is_default) {
+            inet_pton(AF_INET, destination, &dst->sin_addr);
+            if (netmask)
+                inet_pton(AF_INET, netmask, &msk->sin_addr);
+            else
+                msk->sin_addr.s_addr = 0xFFFFFFFFu;     /* a host route */
         }
-        int rc = system(route_cmd);
-        if (rc != 0)
-            printf("%%TCPIP-E-ROUTEERR, could not add route (ip route replace failed, status %d)\n", rc);
-        else
+        inet_pton(AF_INET, gateway, &gw->sin_addr);
+        rt.rt_flags = RTF_UP | RTF_GATEWAY |
+                      ((!is_default && !netmask) ? RTF_HOST : 0);
+        (void)vms_kif_netcfg(VMS_NETCFG_DEL_ROUTE, &rt, NULL);   /* replace */
+        st = vms_kif_netcfg(VMS_NETCFG_ADD_ROUTE, &rt, &err);
+#endif
+        if (st & 1) {
             applied = 1;
+        } else if (st == SS$_NOPRIV || st == SS$_UNSUPPORTED || st == SS$_NOSUCHDEV) {
+            privileged = 0;
+            if (st == SS$_NOPRIV) {
+                why = "requires SYSPRV or BYPASS";
+                printf("%%TCPIP-W-PRIVREQ, operation requires SYSPRV or BYPASS privilege\n");
+            } else if (st == SS$_NOSUCHDEV) {
+                why = "no executive";
+                printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the route cannot be applied\n");
+            } else {
+                why = "not supported on this system";
+            }
+        } else {
+            printf("%%TCPIP-E-ROUTEERR, could not add route: %s\n", strerror(err));
+        }
     }
 
     /* PERSIST (unless /REAPPLY): the recorded route to TCPIP$ROUTE.DAT via RMS
@@ -2375,13 +2384,13 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         if (rt_recorded)
             printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT "
                    "(reapplied at boot) but not applied to the live routing table "
-                   "now (requires NET_ADMIN)\n");
+                   "now (%s)\n", why);
         else if (reapply)
-            printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN); "
-                   "not recorded (/REAPPLY)\n");
+            printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s); "
+                   "not recorded (/REAPPLY)\n", why);
         else
-            printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN) and "
-                   "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n");
+            printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s) and "
+                   "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n", why);
         return SS$_NOPRIV;
     }
     return SS$_ABORT;                   /* privileged, but the substrate apply failed */

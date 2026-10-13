@@ -1189,6 +1189,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_KFE:            /* rd vms-7c64: the known-file list */
 	case VMS_IOCTL_NATIVE_PAGE0:   /* rd vms-b869: CMKRNL, once, activator only */
 	case VMS_IOCTL_POWER:          /* rd vms-137e */
+	case VMS_IOCTL_NETCFG:         /* rd vms-137e */
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1221,6 +1222,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_native_page0(proc, (unsigned long)uarg);  break;
 		case VMS_IOCTL_POWER:
 			r = vms_ioctl_power(proc, (unsigned long)uarg);         break;
+		case VMS_IOCTL_NETCFG:
+			r = vms_ioctl_netcfg(proc, (unsigned long)uarg);        break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

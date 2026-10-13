@@ -245,6 +245,19 @@
  *        power the system off (rd vms-137e); does not return. Linux:
  *        kernel_power_off. NetBSD: kern_reboot(RB_HALT|RB_POWERDOWN).
  *
+ *   int  exec_netcfg(uint32_t req, unsigned long uptr)
+ *        perform the network-configuration request VMS_NETCFG_* whose substrate
+ *        structure is at `uptr` in the CALLER's memory, as the kernel (rd
+ *        vms-137e; the caller's VMS privilege is checked first). 0 or -errno;
+ *        -EOPNOTSUPP where the substrate has no such request. Linux: the AF_INET
+ *        ioctl (SIOCSIFADDR/SIOCSIFNETMASK/SIOC[GS]IFFLAGS/SIOC{ADD,DEL}RT) on
+ *        a kernel socket under the kernel's credentials. NetBSD: -EOPNOTSUPP.
+ *
+ *   int  exec_socket_bind_reserved(exec_socket_t s, uint16_t family,
+ *                                  uint16_t port_be, uint32_t addr_be)
+ *        exec_socket_bind for a reserved port (< 1024), as the kernel, once the
+ *        caller's VMS privilege allowed it (rd vms-137e).
+ *
  *   int  exec_become_substrate_id(uint32_t id)
  *        make `id` the CURRENT task's real/effective/saved uid and gid, with
  *        no supplementary groups and no capabilities (rd vms-ac48). Done by the

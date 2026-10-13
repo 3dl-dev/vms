@@ -791,3 +791,56 @@ long vms_ioctl_power(struct vms_proc *proc, unsigned long arg)
         return -EFAULT;
     return 0;
 }
+
+
+/*
+ * vms_ioctl_netcfg - VMS_IOCTL_NETCFG (rd vms-137e): TCP/IP's SET INTERFACE and
+ * SET ROUTE, applied by the executive for a caller whose OWN PCB has SYSPRV or
+ * BYPASS enabled. TCP/IP Services reserves network configuration to a
+ * privileged user; OVMX processes hold no substrate capability (nothing runs as
+ * substrate root), so the executive performs the substrate request as the
+ * kernel (exec_netcfg). The request itself is the caller's substrate structure,
+ * read by the substrate's own network stack; only the requests below exist.
+ */
+/* exec_netcfg's substrate backends switch on these values. */
+_Static_assert(VMS_NETCFG_SET_IFADDR == 1 && VMS_NETCFG_SET_IFNETMASK == 2 &&
+               VMS_NETCFG_SET_IFFLAGS == 3 && VMS_NETCFG_GET_IFFLAGS == 4 &&
+               VMS_NETCFG_ADD_ROUTE == 5 && VMS_NETCFG_DEL_ROUTE == 6,
+               "VMS_NETCFG_* renumbered: exec_netcfg maps them by value");
+
+long vms_ioctl_netcfg(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_netcfg_args args;
+    uint64_t privs;
+    int rc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.err = 0;
+    exec_lock(&proc->mode_lock);
+    privs = proc->cur_privs;
+    exec_unlock(&proc->mode_lock);
+    /* NEGCTL-ANCHORED (netcfg-privilege-unchecked) */
+    if ((privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS)) == 0) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    if (args.req < VMS_NETCFG_SET_IFADDR || args.req > VMS_NETCFG_DEL_ROUTE ||
+        args.uptr == 0) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    rc = exec_netcfg(args.req, (unsigned long)args.uptr);
+    if (rc == -EOPNOTSUPP)
+        args.status = SS__UNSUPPORTED;
+    else if (rc != 0) {
+        args.status = SS__ABORT;
+        args.err = -rc;
+    } else
+        args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}

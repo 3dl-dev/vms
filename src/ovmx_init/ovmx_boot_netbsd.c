@@ -654,10 +654,15 @@ void ovmx_boot_power_off(void)
     /* Only reached without privilege to power off; the caller then _exit()s. */
 }
 
-#endif /* __NetBSD__ */
+void ovmx_boot_note_threads(char *buf, size_t bufsz)
+{
+    (void)buf; (void)bufsz;
+}
 
 void ovmx_boot_stop_console_log_bridge(void)
 {
     /* NetBSD credentials are per process: the klog reader leaves root with
      * PID 1 (rd vms-137e). Nothing to stop. */
 }
+
+#endif /* __NetBSD__ */

@@ -50,6 +50,7 @@
 #include <sys/mount.h>
 #include <sys/syscall.h>
 #include <sys/reboot.h>
+#include <dirent.h>
 
 void ovmx_boot_announce_syskrnl(const char *banner)
 {
@@ -362,4 +363,31 @@ void ovmx_boot_power_off(void)
 void ovmx_boot_stop_console_log_bridge(void)
 {
     opcom_kmsg_stop();
+}
+
+void ovmx_boot_note_threads(char *buf, size_t bufsz)
+{
+    DIR *d = opendir("/proc/self/task");
+    struct dirent *e;
+
+    if (!d)
+        return;
+    while ((e = readdir(d)) != NULL) {
+        char path[64], name[32] = "?";
+        size_t used = strlen(buf);
+        FILE *f;
+
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof path, "/proc/self/task/%s/comm", e->d_name);
+        f = fopen(path, "r");
+        if (f) {
+            if (fgets(name, sizeof name, f))
+                name[strcspn(name, "\n")] = '\0';
+            fclose(f);
+        }
+        if (used + 1 < bufsz)
+            snprintf(buf + used, bufsz - used, " %s:%s", e->d_name, name);
+    }
+    closedir(d);
 }

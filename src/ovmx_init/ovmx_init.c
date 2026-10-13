@@ -2124,11 +2124,20 @@ int main(void)
      */
     ovmx_boot_stop_console_log_bridge();
     {
-        uint32_t subst = 0;
-        if (!(vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst) & 1) || subst == 0 ||
-            !(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1) ||
-            getuid() != (uid_t)subst || geteuid() != (uid_t)subst)
-            ovmx_exec_halt("PID 1 could not leave substrate root", "rd vms-137e");
+        uint32_t subst = 0, gst, bst = 0;
+        gst = vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst);
+        if ((gst & 1) && subst != 0)
+            bst = vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL);
+        if (!(gst & 1) || subst == 0 || !(bst & 1) ||
+            getuid() != (uid_t)subst || geteuid() != (uid_t)subst) {
+            /* Name why: the GET/BECOME statuses, and the threads still alive
+             * in PID 1 (BECOME refuses a process that has any but one). */
+            char why[256];
+            snprintf(why, sizeof why, "get %%X%08X uid %u become %%X%08X; threads:",
+                     (unsigned)gst, (unsigned)subst, (unsigned)bst);
+            ovmx_boot_note_threads(why, sizeof why);
+            ovmx_exec_halt("PID 1 could not leave substrate root", why);
+        }
     }
 
     /* Step 4: the boot banner already printed (vms-1fb) -- back in

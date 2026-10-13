@@ -75,6 +75,7 @@
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
+#include <linux/sockios.h>        /* SIOCSIFADDR ... SIOCADDRT (exec_netcfg, vms-137e) */
 #include <net/net_namespace.h>    /* init_net */
 #include <linux/if_arp.h>         /* ARPHRD_ETHER */
 /* vms-d61 (seqlock barriers + userspace-publishable arena) backing headers. */
@@ -284,6 +285,42 @@ static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMI
 
 /* exec_power_off (rd vms-137e): the kernel's own power-off. */
 static inline void exec_power_off(void) { kernel_power_off(); }
+
+/* exec_netcfg (exec_kbackend.h section 5, rd vms-137e): the AF_INET network-
+ * configuration ioctl on a kernel socket, under the kernel's credentials (the
+ * caller holds no CAP_NET_ADMIN). `uptr` is the caller's own struct ifreq /
+ * struct rtentry; inet_ioctl reads (and for GET, writes) it in the caller's
+ * memory, as a userspace ioctl would. */
+static inline int exec_netcfg(uint32_t req, unsigned long uptr)
+{
+	struct socket *sock;
+	struct cred *kcred;
+	const struct cred *old;
+	unsigned int cmd;
+	int rc;
+
+	switch (req) {
+	case 1: /* VMS_NETCFG_SET_IFADDR */    cmd = SIOCSIFADDR;    break;
+	case 2: /* VMS_NETCFG_SET_IFNETMASK */ cmd = SIOCSIFNETMASK; break;
+	case 3: /* VMS_NETCFG_SET_IFFLAGS */   cmd = SIOCSIFFLAGS;   break;
+	case 4: /* VMS_NETCFG_GET_IFFLAGS */   cmd = SIOCGIFFLAGS;   break;
+	case 5: /* VMS_NETCFG_ADD_ROUTE */     cmd = SIOCADDRT;      break;
+	case 6: /* VMS_NETCFG_DEL_ROUTE */     cmd = SIOCDELRT;      break;
+	default:                       return -EINVAL;
+	}
+	kcred = prepare_kernel_cred(&init_task);
+	if (!kcred)
+		return -ENOMEM;
+	old = override_creds(kcred);
+	rc = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, 0, &sock);
+	if (rc == 0) {
+		rc = sock->ops->ioctl(sock, cmd, uptr);
+		sock_release(sock);
+	}
+	revert_creds(old);
+	put_cred(kcred);
+	return rc;
+}
 
 /* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): make
  * `id` the CURRENT task's real/effective/saved/fs uid and gid, with no
@@ -1095,6 +1132,25 @@ static inline int exec_socket_bind(exec_socket_t s, uint16_t family,
 	sa.sin_port = port_be;              /* network byte order, straight through */
 	sa.sin_addr.s_addr = addr_be;
 	return kernel_bind(s->sock, (struct sockaddr *)&sa, sizeof(sa));
+}
+
+/* exec_socket_bind_reserved (rd vms-137e): a port below 1024, which the
+ * substrate reserves to CAP_NET_BIND_SERVICE, bound as the kernel once the
+ * executive has checked the caller's VMS privilege (vms_ioctl_bg_bind). */
+static inline int exec_socket_bind_reserved(exec_socket_t s, uint16_t family,
+					    uint16_t port_be, uint32_t addr_be)
+{
+	struct cred *kcred = prepare_kernel_cred(&init_task);
+	const struct cred *old;
+	int rc;
+
+	if (!kcred)
+		return -ENOMEM;
+	old = override_creds(kcred);
+	rc = exec_socket_bind(s, family, port_be, addr_be);
+	revert_creds(old);
+	put_cred(kcred);
+	return rc;
 }
 
 static inline int exec_socket_listen(exec_socket_t s, int backlog)

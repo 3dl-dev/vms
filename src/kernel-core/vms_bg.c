@@ -302,7 +302,33 @@ long vms_ioctl_bg_bind(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    rc = exec_socket_bind(sock, args.sin_family, args.sin_port, args.sin_addr);
+    /*
+     * A RESERVED PORT (below 1024) is a privileged bind, as in TCP/IP Services:
+     * the caller's OWN PCB must have SYSPRV, BYPASS or OPER enabled (rd
+     * vms-137e). The executive then binds it as the kernel -- the substrate
+     * reserves those ports to CAP_NET_BIND_SERVICE, which no OVMX process
+     * holds. Any other port binds under the caller's own identity.
+     */
+    {
+        uint16_t port = ntohs(args.sin_port);   /* sin_port is network order */
+
+        if (port != 0 && port < 1024) {
+            uint64_t privs;
+
+            exec_lock(&proc->mode_lock);
+            privs = proc->cur_privs;
+            exec_unlock(&proc->mode_lock);
+            /* NEGCTL-ANCHORED (bg-bind-reserved-port-unchecked) */
+            if ((privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS | VMS_PRV_M_OPER)) == 0) {
+                args.status = SS__NOPRIV;
+                goto out;
+            }
+            rc = exec_socket_bind_reserved(sock, args.sin_family, args.sin_port,
+                                           args.sin_addr);
+        } else {
+            rc = exec_socket_bind(sock, args.sin_family, args.sin_port, args.sin_addr);
+        }
+    }
     if (rc) {
         args.status = SS__ABORT;
         goto out;

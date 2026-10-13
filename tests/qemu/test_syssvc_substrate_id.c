@@ -128,31 +128,33 @@ int main(void)
           "a fork running under that uid that registers on its own takes the same UIC from the executive");
 
     /* Powering the system off is the executive's, for CMKRNL only (rd
-     * vms-137e): an ordinary process (uid 100, registered without it) is
-     * refused SS$_NOPRIV. Only the refusal is exercised -- a grant would end
+     * vms-137e): an ordinary process the suite creates without it is refused
+     * SS$_NOPRIV. Only the refusal is exercised -- a grant would end
      * this run. */
     {
         int q[2];
         uint32_t pst = 0;
         if (pipe(q) == 0) {
-            pid_t c = fork();
+            struct vms_procinfo self;
+            memset(&self, 0, sizeof self);
+            (void)vms_kif_getjpi_self(&self);
+            /* An ordinary process this suite creates ([100,100], TMPMBX and
+             * NETMBX only), as $CREPRC with a UIC does (rd vms-2a5). */
+            pid_t c = ovmx_fork_detached_st(self.username, (100u << 16) | 100u,
+                                            VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, NULL);
             if (c == 0) {
                 close(q[0]);
                 uint32_t r = 0;
                 struct vms_procinfo me;
-                if (setgid(100) == 0 && setuid(100) == 0 &&
-                    vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
-                    /* Ask only when this process really lacks CMKRNL: a
-                     * defect elsewhere that hands it CMKRNL (an image-
-                     * privilege one, say) must turn this check red, not
-                     * power the guest off under every later suite. */
-                    memset(&me, 0, sizeof me);
-                    if ((vms_kif_getjpi_self(&me) & 1) &&
-                        !(me.cur_privs & VMS_PRV_M_CMKRNL))
-                        r = vms_kif_power_off();
-                    else
-                        r = 0xFFFFFFFFu;    /* held CMKRNL: not asked */
-                }
+                /* Ask only when this process really lacks CMKRNL: a defect
+                 * elsewhere that hands it CMKRNL (an image-privilege one,
+                 * say) must turn this check red, not power the guest off
+                 * under every later suite. */
+                memset(&me, 0, sizeof me);
+                if ((vms_kif_getjpi_self(&me) & 1) && !(me.cur_privs & VMS_PRV_M_CMKRNL))
+                    r = vms_kif_power_off();
+                else
+                    r = 0xFFFFFFFFu;    /* held CMKRNL, or no row: not asked */
                 (void)!write(q[1], &r, sizeof r);
                 _exit(0);
             }

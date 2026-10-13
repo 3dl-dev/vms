@@ -552,8 +552,11 @@ class NetBSDConsole(object):
 # that calls a service as `<creator> <tool> args`, a subprocess the daemon
 # creates. Stop it before modunload: it holds /dev/vms open.
 # ---------------------------------------------------------------------------
-CREATOR_SOCK = "/tmp/vmscreator.sock"
+CREATOR_SOCK = "/tmp/vmscreator.sock"   # vmscreator's default: no -s needed
 CREATOR_LOG = "/tmp/vmscreator.log"
+# A short name for the client: each tool line carries it, and a console
+# command over the tty's input-line limit is cut off (its end marker with it).
+CREATOR_LINK = "/tmp/vc"
 
 
 def creator_start_cmd(creator):
@@ -562,7 +565,8 @@ def creator_start_cmd(creator):
     Safe to re-issue (a retried command whose marker was lost): the daemon
     makes this boot's one ESTABLISH_SYSTEM -- the executive refuses a second
     until the module is reloaded -- so a running daemon is never restarted."""
-    return ("if pgrep -x vmscreator >/dev/null && grep -q 'VMSCREATOR READY' %(l)s 2>/dev/null; "
+    return ("ln -sf %(c)s %(k)s; "
+            "if pgrep -x vmscreator >/dev/null && grep -q 'VMSCREATOR READY' %(l)s 2>/dev/null; "
             "then echo CREATOR=OK; else "
             "rm -f %(s)s %(l)s; "
             "(%(c)s -d %(s)s >%(l)s 2>&1 &); i=0; "
@@ -570,12 +574,13 @@ def creator_start_cmd(creator):
             "do sleep 1; i=$((i+1)); done; "
             "grep -q 'VMSCREATOR READY' %(l)s && echo CREATOR=OK "
             "|| { cat %(l)s; echo CREATOR=FAIL; }; fi"
-            % {"c": creator, "s": CREATOR_SOCK, "l": CREATOR_LOG})
+            % {"c": creator, "s": CREATOR_SOCK, "l": CREATOR_LOG, "k": CREATOR_LINK})
 
 
 CREATOR_STOP_CMD = "pkill -x vmscreator 2>/dev/null; sleep 1; true"
 
 
 def created(creator, tool):
-    """The command line that runs `tool` as a VMS process the creator makes."""
-    return "%s -s %s %s" % (creator, CREATOR_SOCK, tool)
+    """The command line that runs `tool` as a VMS process the creator makes
+    (through CREATOR_LINK, which creator_start_cmd points at `creator`)."""
+    return "%s %s" % (CREATOR_LINK, tool)

@@ -2516,6 +2516,49 @@ uint32_t vms_kif_native_page0(void)
 }
 
 /*
+ * vms_kif_power_off - ask the executive to power the system off
+ * (VMS_IOCTL_POWER, rd vms-137e). CMKRNL on this process's PCB; does not
+ * return when granted. Otherwise the executive's refusal.
+ */
+uint32_t vms_kif_power_off(void)
+{
+    struct vms_power_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.op = VMS_POWER_OP_OFF;
+    KIF_CALL(VMS_IOCTL_POWER, &args);
+    return args.status;
+}
+
+/*
+ * vms_kif_netcfg - apply a network-configuration request through the executive
+ * (VMS_IOCTL_NETCFG, rd vms-137e): `req` is VMS_NETCFG_*, `subst_req` the
+ * substrate's own request structure (Linux: struct ifreq / struct rtentry).
+ * SYSPRV or BYPASS on this process's PCB. *err gets the substrate errno when
+ * the status is SS$_ABORT (NULL OK).
+ */
+uint32_t vms_kif_netcfg(uint32_t req, void *subst_req, int *err)
+{
+    struct vms_netcfg_args args;
+
+    if (err)
+        *err = 0;
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.req = req;
+    args.uptr = (uint64_t)(uintptr_t)subst_req;
+    KIF_CALL(VMS_IOCTL_NETCFG, &args);
+    if (err)
+        *err = args.err;
+    return args.status;
+}
+
+/*
  * vms_kif_p1_protect - NOT an ioctl. See the header comment for why:
  * this wraps a real mprotect(2) on the caller's own address space, the
  * enforced half of the design's critical-P1 mechanism, and it has no

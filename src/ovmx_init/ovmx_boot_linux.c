@@ -50,6 +50,8 @@
 #include <sys/mount.h>
 #include <sys/syscall.h>
 #include <sys/reboot.h>
+#include <dirent.h>
+#include <time.h>
 
 void ovmx_boot_announce_syskrnl(const char *banner)
 {
@@ -337,12 +339,82 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
      * only the executive, acting as the kernel, creates files in it. */
     if (mkdir(VMS_KFE_DIR, 0711) != 0 && errno != EEXIST)
         return -1;
+    /* The per-process private staging root (rd vms-137e): sticky and writable
+     * by every uid, not listable, so a process under its executive-given
+     * unprivileged uid makes its own 0700 directory there. chmod after mkdir:
+     * the umask must not strip the bits. */
+    if (mkdir(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0 && errno != EEXIST)
+        return -1;
+    if (chmod(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0)
+        return -1;
     return 0;
 }
 
 void ovmx_boot_power_off(void)
 {
     sync();
+    /* Not substrate root (rd vms-137e): the executive powers off for a caller
+     * holding CMKRNL. */
+    if (geteuid() != 0)
+        (void)vms_kif_power_off();
     reboot(RB_POWER_OFF);
     /* Only reached without CAP_SYS_BOOT; the caller then _exit()s. */
+}
+
+/* The number of threads in this process (/proc/self/task), or -1. */
+static int self_thread_count(void)
+{
+    DIR *d = opendir("/proc/self/task");
+    struct dirent *e;
+    int n = 0;
+
+    if (!d)
+        return -1;
+    while ((e = readdir(d)) != NULL)
+        if (e->d_name[0] != '.')
+            n++;
+    closedir(d);
+    return n;
+}
+
+void ovmx_boot_stop_console_log_bridge(void)
+{
+    opcom_kmsg_stop();
+    /* pthread_join returns once the reader has cleared its tid, a moment
+     * before the kernel removes the exiting thread from this thread group --
+     * and the executive changes identity only for a single-threaded process
+     * (rd vms-137e: PID 1 was refused with the reader's tid still listed).
+     * Wait for that removal itself, the condition BECOME tests, bounded at
+     * 5 s; a thread that never goes is reported by PID 1's halt. */
+    for (int i = 0; i < 500 && self_thread_count() > 1; i++) {
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+}
+
+void ovmx_boot_note_threads(char *buf, size_t bufsz)
+{
+    DIR *d = opendir("/proc/self/task");
+    struct dirent *e;
+
+    if (!d)
+        return;
+    while ((e = readdir(d)) != NULL) {
+        char path[300], name[32] = "?";
+        size_t used = strlen(buf);
+        FILE *f;
+
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof path, "/proc/self/task/%s/comm", e->d_name);
+        f = fopen(path, "r");
+        if (f) {
+            if (fgets(name, sizeof name, f))
+                name[strcspn(name, "\n")] = '\0';
+            fclose(f);
+        }
+        if (used + 1 < bufsz)
+            snprintf(buf + used, bufsz - used, " %s:%s", e->d_name, name);
+    }
+    closedir(d);
 }

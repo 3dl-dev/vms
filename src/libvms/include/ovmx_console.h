@@ -40,9 +40,19 @@
 #define OVMX_CONSOLE_DEVICE      "OPA0:"
 #endif
 
-/* The Linux device that backs OPA0:. The ONE home for this substrate path;
- * every layer that needs it takes it from here, never a fresh literal. */
+/* The substrate device node that backs OPA0:. The ONE home for this substrate
+ * path; every layer that needs it takes it from here, never a fresh literal.
+ * PROVISION hands it to the startup identity before leaving substrate root
+ * (rd vms-137e), so it must be a node whose owner can change. Linux: /dev is
+ * a devtmpfs, /dev/console itself. NetBSD: /dev lives on the root file
+ * system, which a VAX boots read-only, so PID 1 makes a node for the same
+ * device in the boot tmpfs (OVMX_BOOT_STAGE_DIR "/console",
+ * ovmx_boot_prepare_stage_dir in src/ovmx_init/ovmx_boot_netbsd.c). */
+#if defined(__NetBSD__)
+#define OVMX_CONSOLE_LINUX_PATH  "/run/ovmx-boot/console"
+#else
 #define OVMX_CONSOLE_LINUX_PATH  "/dev/console"
+#endif
 
 /*
  * If `name' is a VMS console-terminal device name (TT:/TT0:/OPA0:/_OPA0:,

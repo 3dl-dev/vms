@@ -117,8 +117,8 @@ static int run_as_nonroot(void)
      * mimics for this rig. The session cannot create it itself (the root-owned
      * shared parent is not writable by a non-root uid -- the whole point). */
     char user_dir[512], user_dest[512], probe[512];
-    snprintf(user_dir, sizeof(user_dir), "%s/%u", OVMX_BOOT_STAGE_DIR,
-             (unsigned)getuid());
+    if (!ovmx_boot_stage_user_dir(user_dir, sizeof(user_dir), (unsigned long)getuid()))
+        user_dir[0] = '\0';      /* the shared layout helper (rd vms-137e: u/<uid>) */
     snprintf(user_dest, sizeof(user_dest), "%s/TESTIMG.EXE", user_dir);
     snprintf(probe, sizeof(probe), "%s/PROBE.EXE", user_dir);
 

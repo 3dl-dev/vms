@@ -114,8 +114,8 @@ negctl() { local seg="$1" present="$2" desc="$3"
 # line when its item lands; never add one without an item (epic vms-8e6).
 # Measured 2026-10-10 on X86_64, Alpha and VAX (the same two everywhere):
 substrate_root_known=(
-  "* init # vms-137e (STARTUP, PID 1: drop after the minimal executive bootstrap)"
-  "* JOB_CONTROL.EXE # vms-137e (pre-login session creator; LOGINOUT setuid is vms-ac48)"
+  # Empty since vms-137e: STARTUP (PID 1) and the processes startup creates
+  # leave substrate root. A new entry needs the rd item that removes it.
 )
 
 # rootaudit_check <console segment of RUN SYS$SYSTEM:ROOTAUDIT> -- the vms-251b

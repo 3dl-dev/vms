@@ -136,4 +136,7 @@ void opcom_kmsg_seed_operator_log(void (*emit)(const char *line));
 void opcom_kmsg_seed_operator_log_from(const char *path,
                                        void (*emit)(const char *line));
 
+/* End the /dev/kmsg reader thread and wait for it (rd vms-137e). */
+void opcom_kmsg_stop(void);
+
 #endif /* OVMX_OPCOM_KMSG_H */

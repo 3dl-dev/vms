@@ -355,13 +355,19 @@ export const isQuiet = (R) => !Object.keys(R.substrate_noise || {}).length;
 // cluster reads CN=3 on every console, and still hang in its own startup and
 // never offer Username: -- measured when Node C boots after an OVMX node and
 // asks it to serve its system-disk closes (rd vms-db1). A visitor sees a dead
-// console. So the run passes only if EVERY node, the real VAX included, offers
-// Username: and then, logged in, a DCL `$`.
+// console. So the run passes only if EVERY node is usable: each OVMX node
+// offers Username: and then, logged in with the login the site publishes, a
+// DCL `$`; the real VAX offers Username: -- which is the proof its startup
+// completed, exactly what vms-db1/vms-52d break. The gate never logs in to the
+// real VAX: its password is not published and is not needed for that proof.
 //
 // The gate still types nothing until the cluster has formed (the membership
 // claim stays "with nobody touching a console"); after CN=3 it does what a
 // visitor does: strikes RETURN on a console that has not offered Username:,
-// and logs in where it has.
+// and logs in on the OVMX nodes where they have.
+//
+// The nodes the gate logs in to. The real VAX (VAXC) is not one of them.
+export const LOGIN_NODES = ['OVMXA', 'OVMXB'];
 export const USERNAME = /Username:/;
 export const AUTH_FAIL = /User authorization failure/i;
 
@@ -404,34 +410,45 @@ export function observeLogin(R, who, el) {
 // user name and password. Nothing is typed before the cluster formed.
 export function loginAction(R, who) {
   if (!R.cn3) return null;
+  if (!LOGIN_NODES.includes(who)) {
+    // The real VAX: wake its console until it offers Username:, then stop.
+    return (R.username_at || {})[who] === undefined ? 'wake' : null;
+  }
   if ((R.dcl_at || {})[who] !== undefined || (R.login_failed || {})[who]) return null;
   if ((R.login_sent || {})[who] !== undefined) return null;
   if ((R.username_at || {})[who] === undefined) return 'wake';
   return USERNAME.test(lastLineOf((R.transcript || {})[who])) ? 'login' : 'wake';
 }
 
-// Every node showed a logged-in DCL prompt within the bound (seconds since the
-// first click; Infinity = no bound beyond the run's own length).
-export const allAtDcl = (R, boundS = Infinity) =>
-  NODES.every((w) => (R.dcl_at || {})[w] !== undefined && R.dcl_at[w] <= boundS);
+// When a node became usable (seconds since the first click), or undefined: an
+// OVMX node at its logged-in DCL prompt, the real VAX at Username:.
+export const readyAt = (R, w) =>
+  LOGIN_NODES.includes(w) ? (R.dcl_at || {})[w] : (R.username_at || {})[w];
+
+// Every node usable within the bound (Infinity = no bound beyond the run's own
+// length).
+export const allReady = (R, boundS = Infinity) =>
+  NODES.every((w) => readyAt(R, w) !== undefined && readyAt(R, w) <= boundS);
 
 // The run's pass bar: the cluster formed, the console a visitor reads shows the
-// VMS personality only, AND every node -- the real VAX included -- reached
-// Username: and a logged-in DCL prompt within the bound. Membership alone has
+// VMS personality only, AND every node is usable within the bound: each OVMX
+// node at a logged-in DCL prompt, the real VAX at Username:. Membership alone has
 // not been the bar since V0.7-6 (quiet), nor since V0.7-9 (rd vms-db1: a real
 // VAX that is a member and never offers Username: is a dead demo).
 export const isPass = (R, boundS = R.login_bound_s ?? Infinity) =>
-  !!R.cn3 && isQuiet(R) && allAtDcl(R, boundS);
+  !!R.cn3 && isQuiet(R) && allReady(R, boundS);
 
-// Why a clustered run did not reach DCL everywhere, in observed terms.
+// Why a clustered run did not have every node usable, in observed terms.
 function loginWhy(R, boundS) {
   const why = [];
   for (const w of NODES) {
     const u = (R.username_at || {})[w], d = (R.dcl_at || {})[w];
+    const login = LOGIN_NODES.includes(w);
     if ((R.login_failed || {})[w]) why.push(`${w} refused the login (User authorization failure)`);
     else if (u === undefined) why.push(`${w} never offered Username: (last line ${JSON.stringify(lastLineOf((R.transcript || {})[w]))})`);
-    else if (d === undefined) why.push(`${w} offered Username: at t=${u}s but never showed a DCL $ after login`);
-    else if (d > boundS) why.push(`${w} reached DCL at t=${d}s, past the ${boundS}s bound`);
+    else if (login && d === undefined) why.push(`${w} offered Username: at t=${u}s but never showed a DCL $ after login`);
+    else if (login && d > boundS) why.push(`${w} reached DCL at t=${d}s, past the ${boundS}s bound`);
+    else if (!login && u > boundS) why.push(`${w} offered Username: at t=${u}s, past the ${boundS}s bound`);
   }
   return why.join('; ');
 }
@@ -451,7 +468,7 @@ export function verdictOf(R) {
   if (R.cn3) {
     if (!isQuiet(R)) return `CN=3 but NOT QUIET: ${noiseWhy(R)}`;
     const boundS = R.login_bound_s ?? Infinity;
-    return allAtDcl(R, boundS) ? 'CN=3' : `CN=3 but NOT EVERY NODE AT DCL: ${loginWhy(R, boundS)}`;
+    return allReady(R, boundS) ? 'CN=3' : `CN=3 but NOT EVERY NODE USABLE: ${loginWhy(R, boundS)}`;
   }
   const why = [];
   for (const w of NODES.slice(0, 2)) {

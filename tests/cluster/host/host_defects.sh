@@ -252,7 +252,8 @@ engine-dir-remove-never-posted
 codec-dir-remove-no-hash
 cnxman-dir-remove-opens-txn
 barrier-merge-runs-steps
-coord-merge-waits-for-steps"
+coord-merge-waits-for-steps
+coord-0b05-read-as-record-ack"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1244,6 +1245,21 @@ EOF2
                       ;;
         esac;;
 
+    coord-0b05-read-as-record-ack)
+        case "$_f" in
+        facility)     echo "the coordinator takes only CONFIG (0x81) answers as transition acknowledgements (rd vms-6e3 residual)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_event_of_response() stops checking the category, so a member's 0x8b/0x05 logical-name database answer reads as an 0x81/0x05 membership-record ack: logged 'no edge' when idle (lab r6e3a, 0.9 s after each OVMX admission) and counted as a record answer while the coordinator waits in RECORDS.";;
+        require_fail) hd_lines <<'EOF2'
+*** idle: handed on, not consumed ***
+  and no 'no edge' event is counted
+*** RECORDS: a 0x8b/0x05 is not counted as a record answer ***
+EOF2
+                      ;;
+        esac;;
+
     advertise-relay-empty-cell)
         case "$_f" in
         facility)     echo "a founder whose join sits in ADVERTISE answers a coordinator's op-0x12 relay as a member (rd vms-6ec)";;
@@ -2146,6 +2162,7 @@ no open goes out after a rejection
 the rejection is counted
 and the transition is abandoned
 and said
+  and the open still waits for the real answers
 EOF
                       ;;
         esac;;
@@ -2806,6 +2823,10 @@ apply_edit() {
     join-lnm-answered-unapplied)
         # `if ((st & 1u) == 0u) {` is unique in this file.
         sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
+
+    coord-0b05-read-as-record-ack)
+        # The category gate in coord_event_of_response() is unique in this file.
+        sed -i 's|	if (m->env.category != vms_wire_response_category(VMS_CM_CAT_CONFIG))|	if (0 \&\& m->env.category != vms_wire_response_category(VMS_CM_CAT_CONFIG)) /* NEGCTL coord-0b05-read-as-record-ack */|' "$_file";;
 
     advertise-relay-empty-cell)
         # Inside join_h_relay_if_member() only: its member gate always refuses,

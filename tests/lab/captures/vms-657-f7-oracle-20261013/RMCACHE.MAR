@@ -1,0 +1,51 @@
+ .TITLE RMCACHE
+; RMCACHE "<n><name>" -- rd vms-657 run 3, the CACHED-MASTER requester.
+;   n    = thousands of rounds (digit 1-9)
+;   name = root resource name (system-wide)
+; Takes the root at NL and HOLDS it for the whole run, so this node keeps a
+; resource block naming the master. Then each round takes a SECOND lock on the
+; root at CR and releases it: that request goes to the master this node has
+; cached, with no directory lookup -- the request that, while the tree is
+; moving, can reach the FORMER master. Prints nothing; the wire is the record.
+ $LCKDEF
+ $SSDEF
+ .PSECT DAT,WRT,NOEXE,LONG
+HLKSB: .BLKB 24
+LKSB: .BLKB 24
+CMDBUF: .BLKB 100
+CMDDSC: .WORD 100
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS CMDBUF
+CMDLEN: .WORD 0
+ .WORD 0
+RESDSC: .WORD 0
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS 0
+ .PSECT COD,EXE,NOWRT
+ .ENTRY RMCACHE,^M<R2,R3,R4,R5,R6,R7,R8>
+ PUSHAW CMDLEN
+ PUSHL #0
+ PUSHAB CMDDSC
+ CALLS #3,G^LIB$GET_FOREIGN
+ MOVZBL CMDBUF,R8
+ SUBL2 #^A/0/,R8
+ MULL2 #1000,R8
+ MOVZWL CMDLEN,R1
+ SUBL2 #1,R1
+ MOVW R1,RESDSC
+ MOVAB CMDBUF+1,RESDSC+4
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_NLMODE,LKSB=HLKSB,-
+  FLAGS=#LCK$M_SYSTEM,RESNAM=RESDSC
+ BLBC R0,90$
+10$: $ENQW_S EFN=#1,LKMODE=#LCK$K_CRMODE,LKSB=LKSB,-
+  FLAGS=#LCK$M_SYSTEM,RESNAM=RESDSC
+ BLBC R0,90$
+ $DEQ_S LKID=LKSB+4
+ BLBC R0,90$
+ SOBGTR R8,10$
+ $DEQ_S LKID=HLKSB+4
+ MOVL #SS$_NORMAL,R0
+90$: RET
+ .END RMCACHE

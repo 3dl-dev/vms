@@ -72,3 +72,34 @@ activity grows to 3000 rounds (RMHOLD with a third digit). F1, F2 and F3 stand.
 - **Node mapping:** all three nodes advertise the same model text, so MODEL frames cannot tell
   them apart. Nodes are mapped from the SCSNODE name in each source MAC's SCS START/STACK
   frames.
+
+## Run 2 (pod labf7b, 2026-10-13 17:05–17:20): F1 NOT observed; the tree moved
+
+Run as registered above: steps 1–3, then step 4. Full capture on the lab PVC at
+`/lab/run-oracle/f7r2.pcap`. `f7r2-f7root.pcap` here holds 40 HELLOs plus every F7ROOT frame
+from capture-relative 597–602 s. Counts are from `f7count.py`; nodes were mapped from the
+HELLO SCSNODE at abs 41.
+
+- **F7ROOT moved VAX1 -> VAX2 at capture-relative 599.24 s, during steps 1–3, with VAX1's
+  RMHOLD still holding the root.** VAX1 -> VAX2 sent 02/0e, 0f, 10, 12, 13, then
+  VAX2 -> VAX1 sent 02/14. This is the RA2 sequence. With mode B (3000 rounds) the master's
+  own lock did not keep the tree. RA3 had seen it kept for 30 s with 300 rounds.
+- **0 answers with body[34] = 0xf7.** VAX3 made 12,000 F7ROOT lookups to the directory
+  node VAX2 before step 4 (76,292 by the end). 7000 were answered 0xf8 naming VAX1, and VAX3
+  then sent each of those 7000 requests to VAX1. VAX3's last request to VAX1 left at
+  599.136 s, 103 ms before the remaster. After the move, the directory named the new master,
+  and no request went to VAX1. Step 4 (VAX1's holder stopped at 17:16:46) changed nothing:
+  the tree had already gone.
+- **Why this arm cannot produce 0xf7.** A requester that does a fresh directory lookup every
+  round is told the current master. The directory changes in the same exchange as the
+  remaster, so a stale master is never named.
+
+**Amendment for run 3, registered before it runs.** The request has to come from a node that
+already knows the master and does not look it up again.
+- VAX3 holds F7ROOT at NL for the whole run (its RSB keeps master = VAX1).
+- In a loop, VAX3 takes and releases a second CR lock on F7ROOT. That request goes straight
+  to the master VAX3 has cached, with no lookup.
+- The tree has to move repeatedly to give enough races. VAX1 and VAX2 alternate mode-B
+  activity (each run once, then the other), so the master moves back and forth.
+- F1: at least one 0xf7 from the former master to VAX3 for F7ROOT. F2 and F3 are unchanged.
+- Run 3 is the derivation set; runs 4+ are held out. Pass threshold as registered above.

@@ -33,6 +33,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 #define UNPRIV_GID 100
@@ -73,7 +74,7 @@ static int copy_file(const char *from, const char *to)
 /* Run `path mode [arg]` as [100,100] and return its exit code. */
 static int run_unpriv(const char *path, const char *mode, const char *arg)
 {
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_unprivileged(UNPRIV_GID, UNPRIV_UID);
     if (pid == 0) {
         if (setgid(UNPRIV_GID) != 0 || setuid(UNPRIV_UID) != 0)
             _exit(3);

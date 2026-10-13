@@ -38,6 +38,7 @@
 #include "clidef.h"
 #include "starlet.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
 
@@ -81,14 +82,14 @@ static int leader_first_completion(uint32_t efn)
 {
     int up[2], go[2];
     if (pipe(up) != 0 || pipe(go) != 0) return -1;
-    pid_t lp = fork();
+    pid_t lp = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (lp < 0) return -1;
     if (lp == 0) {
         close(up[0]); close(go[1]);
         /* Its OWN /dev/vms (not the creator's shared one) and its own PCB. */
         vms_kif_close();
         uint32_t me = 0;
-        if (vms_kif_open() < 0 || !(vms_kif_register(&me) & 1)) me = 0;
+        if (vms_kif_open() < 0 || !(ovmx_test_self(&me) & 1)) me = 0;
         (void)write(up[1], &me, sizeof me);
         char c;
         (void)read(go[0], &c, 1);
@@ -202,13 +203,13 @@ static int noexec_image_completion(uint32_t efn, uint32_t *after_jpi)
     int up[2], go[2];
     *after_jpi = 0;
     if (pipe(up) != 0 || pipe(go) != 0) return -1;
-    pid_t lp = fork();
+    pid_t lp = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (lp < 0) return -1;
     if (lp == 0) {
         close(up[0]); close(go[1]);
         vms_kif_close();
         uint32_t me = 0;
-        if (vms_kif_open() < 0 || !(vms_kif_register(&me) & 1)) me = 0;
+        if (vms_kif_open() < 0 || !(ovmx_test_self(&me) & 1)) me = 0;
         (void)write(up[1], &me, sizeof me);
         char c;
         (void)read(go[0], &c, 1);
@@ -252,13 +253,13 @@ static int gone_child_arm(uint32_t efn)
 {
     int up[2];
     if (pipe(up) != 0) return -1;
-    pid_t lp = fork();
+    pid_t lp = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (lp < 0) return -1;
     if (lp == 0) {
         close(up[0]);
         vms_kif_close();
         uint32_t me = 0;
-        if (vms_kif_open() < 0 || !(vms_kif_register(&me) & 1)) me = 0;
+        if (vms_kif_open() < 0 || !(ovmx_test_self(&me) & 1)) me = 0;
         (void)write(up[1], &me, sizeof me);
         _exit(0);
     }
@@ -306,7 +307,7 @@ int main(int argc, char **argv)
     if (!mgr) { printf("  SKIP: no lnm manager\n"); return EXIT_SKIP; }
     CHECK(lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", "/bin", 0, LNM_MODE_SUPER) & 1,
           "define SYS$SYSTEM -> /bin (stage DCL.EXE for lib$spawn)");
-    if (!(vms_kif_open() >= 0 && (vms_kif_register(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
+    if (!(vms_kif_open() >= 0 && (ovmx_test_self(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
 
     {
         char self[256];

@@ -65,6 +65,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors for CREATE */
 
@@ -260,7 +261,7 @@ int main(int argc, char **argv)
     /* Launch N workers. Each re-execs itself, inheriting ready[1] (write) and
      * go[0] (read); the parent keeps ready[0] (read) and go[1] (write). */
     for (w = 0; w < N_WORKERS; w++) {
-        pid_t pid = fork();
+        pid_t pid = ovmx_fork_subprocess();
         if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
         if (pid == 0) {
             char sidx[16], swr[16], srd[16];

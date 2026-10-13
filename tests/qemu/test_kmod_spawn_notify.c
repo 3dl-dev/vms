@@ -42,6 +42,8 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL   1u
 
@@ -84,14 +86,17 @@ static void on_alarm(int sig)
     _exit(3);
 }
 
-/* Register the calling task and return its assigned VMS PID, or 0 on error. */
+/* The calling process's VMS PID, from the row its creator made (the harness
+ * boot task for the suite, the suite for its subprocesses -- rd vms-2a5:
+ * nothing registers itself), or 0 on error. */
 static uint32_t do_register(int fd)
 {
-    struct vms_register_args reg;
+    struct vms_getjpi_args reg;
     memset(&reg, 0, sizeof(reg));
-    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) != 0 || reg.status != SS_NORMAL)
+    reg.select = VMS_JPI_SEL_SELF;
+    if (ioctl(fd, VMS_IOCTL_GETJPI, &reg) != 0 || reg.status != SS_NORMAL)
         return 0;
-    return reg.vms_pid;
+    return reg.info.vms_pid;
 }
 
 /* SETEXIT(cond) on the calling process. Returns 0 on success. */
@@ -187,7 +192,7 @@ int main(void)
         if (pipe(c2p) != 0 || pipe(p2c) != 0) {
             CHECK(0, "pipe() for arm-before-exit test");
         } else {
-            pid_t kid = fork();
+            pid_t kid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
             if (kid == 0) {
                 /* CHILD (process A): register, hand its VMS PID to the parent,
                  * wait until the parent has ARMED, then record its exit. */
@@ -242,7 +247,7 @@ int main(void)
         if (pipe(c2p) != 0 || pipe(p2c) != 0) {
             CHECK(0, "pipe() for arm-after-exit test");
         } else {
-            pid_t kid = fork();
+            pid_t kid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
             if (kid == 0) {
                 /* CHILD (process A): register, record its exit FIRST, then block
                  * (keeping its PCB alive) until the parent has armed + read. */
@@ -305,7 +310,7 @@ int main(void)
         if (pipe(c2p) != 0) {
             CHECK(0, "pipe() for arm-then-SIGKILL test");
         } else {
-            pid_t kid = fork();
+            pid_t kid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
             if (kid == 0) {
                 /* CHILD (process A): register, hand its VMS PID to the parent,
                  * then block FOREVER -- it must be KILLED, never $EXIT. */

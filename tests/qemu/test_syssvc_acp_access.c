@@ -85,6 +85,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -400,7 +401,7 @@ int main(int argc, char **argv)
      *         refused SS$_NOPRIV opening the very file the parent just opened - */
     if (pipe(b2a) < 0) {
         printf("  FAIL: pipe() failed\n");
-    } else if ((pid = fork()) < 0) {
+    } else if ((pid = ovmx_fork_unprivileged(UNPRIV_GID, UNPRIV_UID)) < 0) {
         printf("  FAIL: fork() failed\n");
     } else if (pid == 0) {
         char wfd[16];
@@ -491,7 +492,7 @@ int main(int argc, char **argv)
             pid_t cpid;
             if (pipe(p2) < 0) {
                 check(0, "pipe() for the protection child");
-            } else if ((cpid = fork()) < 0) {
+            } else if ((cpid = ovmx_fork_unprivileged(UNPRIV_GID, UNPRIV_UID)) < 0) {
                 check(0, "fork() for the protection child");
             } else if (cpid == 0) {
                 char wfd[16], did[16];

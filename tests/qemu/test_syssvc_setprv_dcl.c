@@ -62,6 +62,7 @@
 #include "starlet.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -125,7 +126,9 @@ static int run_dcl_creds(const char *script, char *out, size_t outsz,
 
     fflush(NULL);
 
-    pid_t pid = fork();
+    /* DCL is a process this suite creates (rd vms-2a5): unprivileged in
+     * UIC [C_GID,C_UID] when the credentials drop, else a subprocess. */
+    pid_t pid = drop_creds ? ovmx_fork_unprivileged(C_GID, C_UID) : ovmx_fork_subprocess();
     if (pid < 0) return -1;
 
     if (pid == 0) {
@@ -135,8 +138,8 @@ static int run_dcl_creds(const char *script, char *out, size_t outsz,
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
         if (drop_creds) {
-            /* Drop group then user, BEFORE exec, so DCL.EXE's first
-             * vms_kif_* call registers under the dropped credentials. */
+            /* Drop group then user, BEFORE exec, so DCL.EXE runs under the
+             * dropped substrate credentials too. */
             if (setgid(C_GID) != 0 || setuid(C_UID) != 0) {
                 printf("SETUP_FAIL dropcreds\n");
                 fflush(stdout);

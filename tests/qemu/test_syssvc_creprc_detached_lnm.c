@@ -49,6 +49,7 @@
 #include "prcdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"
 
 #define EXIT_SKIP   77

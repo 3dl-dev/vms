@@ -158,6 +158,9 @@ RUN KVER=$(cat /tmp/kver) && \
 # status of the LAST iteration -- so a suite that stops compiling would be
 # silently absent from the initramfs while the image build stayed green.
 COPY tests/qemu/test_*.c /src/tests/qemu/
+# The suites' service-calling children are subprocesses the executive makes
+# (rd vms-3fa / vms-2a5): the shared helper they include.
+COPY tests/qemu/ovmx_test_fork.h /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \

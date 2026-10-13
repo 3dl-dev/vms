@@ -72,6 +72,7 @@
 #include "iosbdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -320,7 +321,7 @@ int main(int argc, char **argv)
         printf("  FAIL: pipe() failed\n"); return 1;
     }
 
-    pid_t pa = fork();
+    pid_t pa = ovmx_fork_subprocess();
     if (pa < 0) { printf("  FAIL: fork A failed\n"); return 1; }
     if (pa == 0) {
         close(c2a[1]); close(a2c[0]);
@@ -328,7 +329,7 @@ int main(int argc, char **argv)
         _exit(process_a(c2a[0], a2c[1]));
     }
 
-    pid_t pb = fork();
+    pid_t pb = ovmx_fork_subprocess();
     if (pb < 0) { printf("  FAIL: fork B failed\n"); return 1; }
     if (pb == 0) {
         close(p2c[1]); close(c2p[0]);
@@ -417,7 +418,7 @@ teardown1:
     /* ---- SCENARIO 2: a $WAKE preceding $HIBER falls straight through ---- */
     int done[2];
     if (pipe(done) < 0) { printf("  FAIL: pipe() failed\n"); goto out; }
-    pid_t ps = fork();
+    pid_t ps = ovmx_fork_subprocess();
     if (ps < 0) { printf("  FAIL: fork stickywake failed\n"); goto out; }
     if (ps == 0) { close(done[0]); _exit(process_stickywake(done[1])); }
     close(done[1]);

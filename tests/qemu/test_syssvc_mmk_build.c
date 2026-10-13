@@ -108,6 +108,7 @@
 #include "rmsdef.h"
 #include "rms/rms.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors for IO$_CREATE */
 #include "sysvol_stage.h" /* SYSVOL_UNIT + the shared VDA300: mount/write-over-ACP/
@@ -535,7 +536,7 @@ static int contains(const char *hay, long haylen, const char *needle)
  */
 static int activate_image(const char *exepath)
 {
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) return -1;
     if (pid == 0) {
         int devnull = open("/dev/null", O_RDWR);
@@ -592,7 +593,7 @@ static long calibrate_tcc_ms(const char *tcc, const char *tccinc, const char *co
 
     long long t0 = now_ms();
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) { rmdir(workdir); return -1; }
     if (pid == 0) {
         if (chdir(workdir) != 0) _exit(120);
@@ -813,7 +814,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     int outpipe[2];
     if (pipe(outpipe) < 0) return;
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) { close(outpipe[0]); close(outpipe[1]); return; }
     if (pid == 0) {
         /* Lead our own process group so a wedged MMK (no marker -> $HIBER
@@ -1090,7 +1091,7 @@ int main(int argc, char **argv)
      */
     {
         uint32_t vpid = 0;
-        (void)vms_kif_register(&vpid);               /* this suite is the job root */
+        (void)ovmx_test_self(&vpid);               /* this suite is the job root */
         static const char tab[] = "LNM$JOB", nam[] = "SYS$SYSDEVICE", val[] = SYSVOL_UNIT;
         struct dsc$descriptor_s td = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)tab };
         struct dsc$descriptor_s nd = { sizeof nam - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)nam };

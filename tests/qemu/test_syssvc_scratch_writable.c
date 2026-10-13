@@ -81,6 +81,7 @@
 #include <sys/stat.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "ovmx_layout.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
@@ -138,7 +139,7 @@ static int try_create_as(const char *vms_device, const char *name,
     }
 
     fflush(NULL);  /* vms-cdb: flush before fork, see test_syssvc_authorize.c */
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_unprivileged(uic_group, uic_member);
     if (pid < 0) {
         close(pipefd[0]); close(pipefd[1]);
         snprintf(detail, detail_sz, "fork() failed: %s", strerror(errno));

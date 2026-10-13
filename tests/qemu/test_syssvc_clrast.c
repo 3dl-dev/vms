@@ -13,6 +13,7 @@
 #include "starlet.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 static int pass, fail;
@@ -40,7 +41,7 @@ int main(void)
 {
     printf("=== test_syssvc_clrast ===\n");
     if (vms_kif_open() < 0) { printf("  SKIP: no /dev/vms\n"); return EXIT_SKIP; }
-    if (!(vms_kif_register(NULL) & 1)) { printf("  FAIL: register\n"); return 1; }
+    if (!(ovmx_test_self(NULL) & 1)) { printf("  FAIL: register\n"); return 1; }
 
     /* control: no $CLRAST */
     ran_two = two_ran_before_one_returned_mark = 0; use_clrast = 0;

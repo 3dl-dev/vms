@@ -62,6 +62,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -140,7 +141,7 @@ static int run_dcl_streams(const char *cmdline, char *out, size_t outsz,
         return -1;
     }
 
-    pid = fork();
+    pid = ovmx_fork_subprocess();
     if (pid == 0) {
         dup2(sfd, 0);
         dup2(cfd, want_stderr ? 2 : 1);
@@ -362,7 +363,7 @@ int main(void)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();
     if (child == 0) {
         /*
          * PROCESS A. A distinct Linux process, therefore a distinct process

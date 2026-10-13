@@ -126,7 +126,7 @@ int main(void)
         int p2[2];
         uint32_t st = 0;
         if (pipe(p2) == 0) {
-            pid_t sib = fork();
+            pid_t sib = ovmx_fork_subprocess();
             if (sib == 0) {
                 /* A sibling of `c`, not its parent. */
                 close(p2[0]);

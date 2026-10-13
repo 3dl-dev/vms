@@ -53,6 +53,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vmsfs_ondisk.h"
 
 #define EXIT_SKIP 77
@@ -84,7 +85,7 @@ static const char *init_path(void)
  */
 static int run_init(char *const argv[])
 {
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0)
         return -1;
     if (pid == 0) {

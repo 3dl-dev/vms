@@ -73,6 +73,7 @@
 #include "iosbdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -292,7 +293,7 @@ int main(int argc, char **argv)
     int a2b[2], b2a[2];
     if (pipe(a2b) < 0 || pipe(b2a) < 0) { printf("  FAIL: pipe() failed\n"); return 1; }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
     if (pid == 0) {
         /* Child = process A. Re-exec so it is a genuinely separate image with

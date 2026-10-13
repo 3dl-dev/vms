@@ -41,6 +41,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL       1
 #define SS_BADPARAM     20
@@ -121,8 +122,8 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register(&self_vms_pid) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(&self_vms_pid) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         return -1;
     }
     return 0;
@@ -146,7 +147,7 @@ static int process_a(int wfd, int rfd)
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
-    if (vms_kif_register(&rep.own_vms_pid) != SS_NORMAL) {
+    if (ovmx_test_self(&rep.own_vms_pid) != SS_NORMAL) {
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
@@ -385,7 +386,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (child < 0) {
         printf("  FAIL: fork()\n");
         return 1;

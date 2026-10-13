@@ -56,6 +56,7 @@
 #include "ssdef.h"
 #include "lnmdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "rms.h"
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors (sysvol_stage.h) */
 #include "sysvol_stage.h" /* shared VDA300: mount / write-over-ACP /
@@ -235,7 +236,7 @@ int main(void)
     snprintf(a_count, sizeof(a_count), "%d", COUNT_A);
     snprintf(b_count, sizeof(b_count), "%d", COUNT_B);
 
-    pid_t pid_a = fork();
+    pid_t pid_a = ovmx_fork_subprocess();
     if (pid_a < 0) { printf("  FAIL: fork() for instance A\n"); return 1; }
     if (pid_a == 0) {
         char *argv[] = { (char *)EVACWL_IMAGE, a_count, NULL };
@@ -283,7 +284,7 @@ int main(void)
     CHECK(a_still_running,
           "instance A still HOLDS EVAC$WORKLOAD when B starts (so B's $ENQW genuinely queues)");
 
-    pid_t pid_b = fork();
+    pid_t pid_b = ovmx_fork_subprocess();
     if (pid_b < 0) { printf("  FAIL: fork() for instance B\n"); kill(pid_a, SIGKILL); return 1; }
     if (pid_b == 0) {
         char *argv[] = { (char *)EVACWL_IMAGE, (char *)"standby", b_count, NULL };

@@ -44,6 +44,7 @@
 
 #include "vms_ioctl.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /* SS$_ status codes (matching the kernel module, src/kernel/vms_internal.h). */
 #define SS_NORMAL     1
@@ -82,7 +83,7 @@ int main(void)
         printf("=== test_kmod_rundown: 0 passed, 1 failed ===\n");
         return 1;
     }
-    if (vms_kif_register(&my_vms_pid) != SS_NORMAL) {
+    if (ovmx_test_self(&my_vms_pid) != SS_NORMAL) {
         printf("  FAIL: cannot register with the executive\n");
         printf("=== test_kmod_rundown: 0 passed, 1 failed ===\n");
         return 1;

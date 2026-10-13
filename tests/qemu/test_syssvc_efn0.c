@@ -20,6 +20,7 @@
 #include "ssdef.h"
 #include "efndef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 static int pass, fail;
@@ -39,7 +40,7 @@ int main(void)
 {
     printf("=== test_syssvc_efn0 ===\n");
     if (vms_kif_open() < 0) { printf("  SKIP: no /dev/vms\n"); return EXIT_SKIP; }
-    if (!(vms_kif_register(NULL) & 1)) { printf("  FAIL: register\n"); return 1; }
+    if (!(ovmx_test_self(NULL) & 1)) { printf("  FAIL: register\n"); return 1; }
 
     /* $ENQW with efn 0 sets EF 0 */
     struct lksb_caller lksb;

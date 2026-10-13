@@ -41,6 +41,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define SS_NORMAL       1
 #define SS_BADPARAM     20
@@ -79,8 +80,8 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register(NULL) != SS_NORMAL) {
-        printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
+    if (ovmx_test_self(NULL) != SS_NORMAL) {
+        printf("  FAIL: this process has no row its creator made\n");
         return -1;
     }
     return 0;
@@ -109,7 +110,7 @@ static int process_a(int wfd, int gfd)
 
     memset(&rep, 0, sizeof(rep));
 
-    if (vms_kif_open() < 0 || vms_kif_register(NULL) != SS_NORMAL) {
+    if (vms_kif_open() < 0 || ovmx_test_self(NULL) != SS_NORMAL) {
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
@@ -118,9 +119,8 @@ static int process_a(int wfd, int gfd)
                                             &exec_chan, &rep.unit,
                                             rep.devnam, sizeof(rep.devnam));
 
-    /* Creating a PERMANENT mailbox needs PRMMBX, which this test process
-     * (default privileges only -- see vms_module.c's VMS_DEFAULT_PRIVS)
-     * does not hold. No side effect: on refusal the executive creates
+    /* Creating a PERMANENT mailbox needs PRMMBX, which this process
+     * (created with the default privileges only) does not hold. No side effect: on refusal the executive creates
      * nothing (vms_mbx.c checks privilege before allocating anything). */
     rep.perm_status = vms_kif_mbx_create(1 /* permanent */, 0, 0,
                                           &perm_chan, NULL, NULL, 0);
@@ -206,7 +206,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    pid_t child = fork();
+    /* A is a process this suite creates with only the default privileges
+     * (TMPMBX|NETMBX) in the suite's own UIC (rd vms-2a5): the PRMMBX probe
+     * below needs a creator that lacks PRMMBX, which the suite (SYSTEM) holds. */
+    struct vms_procinfo me_;
+    memset(&me_, 0, sizeof(me_));
+    (void)vms_kif_getjpi_self(&me_);
+    pid_t child = ovmx_fork_detached_st(me_.username, me_.uic,
+                                        VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, NULL);
     if (child < 0) {
         printf("  FAIL: fork()\n");
         return 1;

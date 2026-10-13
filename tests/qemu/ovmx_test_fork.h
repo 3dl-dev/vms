@@ -29,7 +29,7 @@
 
 #include "vms_kif.h"
 
-static inline pid_t ovmx_fork_subprocess_st(uint32_t *status)
+static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
 {
     int hold[2];
     if (pipe(hold) != 0) {
@@ -53,7 +53,7 @@ static inline pid_t ovmx_fork_subprocess_st(uint32_t *status)
         if (status) *status = 0x124;
         return -1;
     }
-    uint32_t st = vms_kif_creprc_pcb((uint32_t)c, VMS_CREPRC_PCB_SUBPROCESS, 0, 0, 0, 0);
+    uint32_t st = vms_kif_creprc_pcb((uint32_t)c, kind, 0, 0, 0, 0);
     ssize_t w;
     do { w = write(hold[1], (st & 1) ? "g" : "x", 1); } while (w < 0 && errno == EINTR);
     close(hold[1]);
@@ -66,9 +66,24 @@ static inline pid_t ovmx_fork_subprocess_st(uint32_t *status)
     return c;
 }
 
+static inline pid_t ovmx_fork_subprocess_st(uint32_t *status)
+{
+    return ovmx_fork_kind_st(VMS_CREPRC_PCB_SUBPROCESS, status);
+}
+
 static inline pid_t ovmx_fork_subprocess(void)
 {
     return ovmx_fork_subprocess_st(0);
+}
+
+/*
+ * ovmx_fork_continue - DCL's image-task shape (VMS_CREPRC_PCB_CONTINUE, rd
+ * vms-e50): the child is the SAME VMS process as the suite -- its VMS PID,
+ * job and identity -- with a row of its own the executive made before it ran.
+ */
+static inline pid_t ovmx_fork_continue(void)
+{
+    return ovmx_fork_kind_st(VMS_CREPRC_PCB_CONTINUE, 0);
 }
 
 /*
@@ -134,6 +149,22 @@ static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint6
         (void)prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0);
     if (status) *status = st;
     return (st & 1) ? (pid_t)gpid : -1;
+}
+
+/*
+ * ovmx_test_self - this process's own VMS PID, from the row its creator made
+ * (the harness boot task, or the suite that forked it through
+ * ovmx_fork_subprocess). Replaces the explicit VMS_IOCTL_REGISTER a suite used
+ * to issue for itself (rd vms-2a5): a process does not enter the executive's
+ * table on its own; it is already there, or it is not a VMS process.
+ */
+static inline uint32_t ovmx_test_self(uint32_t *vms_pid)
+{
+    struct vms_procinfo me;
+    uint32_t st = vms_kif_getjpi_self(&me);
+    if (vms_pid)
+        *vms_pid = (st & 1) ? me.vms_pid : 0;
+    return st;
 }
 
 #endif /* OVMX_TEST_FORK_H */

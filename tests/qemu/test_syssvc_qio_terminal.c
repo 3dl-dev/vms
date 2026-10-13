@@ -83,6 +83,7 @@
 #include "iodef.h"
 #include "iosbdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -114,7 +115,7 @@ static int bootstrap(const char *who)
         printf("  FAIL: %s: cannot open /dev/vms\n", who);
         return -1;
     }
-    uint32_t st = vms_kif_register(NULL);
+    uint32_t st = ovmx_test_self(NULL);
     if (!(st & 1)) {
         printf("  FAIL: %s: vms_kif_register status=%u\n", who, st);
         return -1;
@@ -183,7 +184,7 @@ static int read_via_fresh_child(struct child_msg *out)
         return 0;
     }
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         printf("  FAIL: fork() for reader child\n");
         close(p[0]); close(p[1]);

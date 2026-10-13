@@ -281,8 +281,8 @@ fi
 # ESTABLISH_SYSTEM), runs as a process the executive CREATED: ovmx_boot_task
 # becomes SYSTEM once and makes each suite a DETACHED process with SYSTEM's
 # identity, its own job (VMS_IOCTL_CREPRC_PCB for the held task, then exec), as
-# $CREPRC does on a booted system -- no suite registers itself. test_kmod_* still run directly: they drive the
-# registration ioctls themselves, which vms-2a5 retires.
+# $CREPRC does on a booted system -- no suite registers itself, test_kmod_*
+# included (rd vms-2a5: registration by ioctl is going away).
 # With NO executive (/dev/vms absent -- the gate's own negative control) there
 # are no VMS processes to create: suites run directly, so their device-absent
 # branches prove they skip honestly (77). That is not a fallback: a suite that
@@ -416,7 +416,10 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     # (procnam's SHOW SYSTEM, setname's holder); one hung suite then hid the
     # rest. Healthy suites finish in seconds, the whole pristine run in ~250 s.
     rm -f /tmp/.suite_timed_out
-    case "$name" in test_kmod_*) via_boot=0 ;; *) via_boot=1 ;; esac
+    # test_kmod_bind and test_kmod_ident test registration itself (kif_bind,
+    # the registration-derived identity), so they still run directly until
+    # vms-2a5 removes registration and turns them into refusal tests.
+    case "$name" in test_kmod_bind|test_kmod_ident) via_boot=0 ;; *) via_boot=1 ;; esac
     [ "$NO_EXEC" = 1 ] && via_boot=0
     PCB_ST=
     if [ "$via_boot" = 1 ]; then

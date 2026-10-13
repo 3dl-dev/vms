@@ -36,6 +36,7 @@
 #include <sys/wait.h>
 #include "vms_ioctl.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /* SS$_ status codes (matching kernel module) */
 #define SS_NORMAL   1
@@ -67,7 +68,7 @@ struct child_report {
 static int child_main(int wfd)
 {
     struct child_report r;
-    struct vms_register_args reg;
+    struct vms_getjpi_args reg;
     struct vms_priv_args pv;
     struct vms_getmode_args gm;
     int fd;
@@ -88,9 +89,11 @@ static int child_main(int wfd)
     if (fd < 0)
         _exit(73);
 
+    /* This process's row was made by the suite before it ran (an unprivileged
+     * detached process, rd vms-2a5): read it back, nothing registers. */
     memset(&reg, 0, sizeof(reg));
-    reg.vms_pid = (uint32_t)getpid();
-    if (ioctl(fd, VMS_IOCTL_REGISTER, &reg) != 0)
+    reg.select = VMS_JPI_SEL_SELF;
+    if (ioctl(fd, VMS_IOCTL_GETJPI, &reg) != 0)
         _exit(74);
     r.registered = reg.status;
 
@@ -136,7 +139,7 @@ static int child_main(int wfd)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b: line-buffer stdout so a still-buffered write cannot splice into a child process output */
-    struct vms_register_args reg;
+    struct vms_getjpi_args reg;
     struct vms_getmode_args gm;
     struct vms_priv_args pv;
     struct child_report cr;
@@ -154,10 +157,12 @@ int main(void)
     }
 
     /* ---- the PRIVILEGED half ---- */
+    /* The suite is a process the executive created: SYSTEM, made by the
+     * harness boot task (rd vms-2a5). Nothing registers. */
     memset(&reg, 0, sizeof(reg));
-    reg.vms_pid = (uint32_t)getpid();
-    CHECK(ioctl(fd, VMS_IOCTL_REGISTER, &reg) == 0 && reg.status == SS_NORMAL,
-          "register process");
+    reg.select = VMS_JPI_SEL_SELF;
+    CHECK(ioctl(fd, VMS_IOCTL_GETJPI, &reg) == 0 && reg.status == SS_NORMAL,
+          "the suite has the row its creator made");
 
     memset(&gm, 0, sizeof(gm));
     /* negctl: getmode-buffer-not-written */
@@ -168,7 +173,7 @@ int main(void)
     pv.mask = VMS_PRV_M_CMKRNL;
     ioctl(fd, VMS_IOCTL_CHKPRIV, &pv);
     CHECK(pv.status == SS_NORMAL,
-          "a CAP_SYS_ADMIN process is DERIVED CMKRNL, not granted it on request");
+          "the suite holds CMKRNL by its VMS identity (SYSTEM, from its creator)");
 
     /* CONVERTED (vms-290): was raw ioctl(fd, VMS_IOCTL_SETMODE, &sm). */
     uint32_t setmode_st = vms_kif_setmode(PSL_C_KERNEL);
@@ -218,7 +223,12 @@ int main(void)
         return 1;
     }
 
-    child = fork();
+    /* The unprivileged half is a VMS process this suite creates DETACHED with
+     * the suite's user name and UIC but none of its privileges beyond TMPMBX
+     * (rd vms-2a5: the executive makes its row; it does not register itself).
+     * It also drops its substrate credentials below, so neither identity can
+     * lend it CMKRNL. */
+    child = ovmx_fork_detached_st(reg.info.username, reg.info.uic, VMS_PRV_M_TMPMBX, NULL);
     if (child < 0) {
         printf("  FAIL: fork()\n");
         printf("=== test_kmod_access: %d passed, %d failed ===\n", pass, fail + 1);
@@ -243,7 +253,7 @@ int main(void)
     waitpid(child, NULL, 0);
 
     CHECK(cr.registered == SS_NORMAL,
-          "an unprivileged process may register with the executive");
+          "an unprivileged process its creator made reads its own row");
     CHECK(cr.chkpriv_cmkrnl == SS_NOPRIV,
           "an unprivileged process is NOT derived CMKRNL");
     /* negctl: access-mode-escalation */

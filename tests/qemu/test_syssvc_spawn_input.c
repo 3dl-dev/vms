@@ -32,6 +32,7 @@
 #include "starlet.h"
 #include "rms_textfile.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
 
@@ -64,7 +65,7 @@ int main(void)
     if (!mgr) { printf("  SKIP: no lnm manager\n"); return EXIT_SKIP; }
     CHECK(lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM", "/bin", 0, LNM_MODE_SUPER) & 1,
           "define SYS$SYSTEM -> /bin (stage DCL.EXE for lib$spawn)");
-    if (!(vms_kif_open() >= 0 && (vms_kif_register(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
+    if (!(vms_kif_open() >= 0 && (ovmx_test_self(NULL) & 1))) { printf("  FAIL: register\n"); return 1; }
 
     CHECK((vms_kif_acp_mount(ODS2_UNIT) & 1), "VDA0: mounted executive-global for the ACP");
 

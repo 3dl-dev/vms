@@ -43,16 +43,14 @@ int main(void) {
         return 1;
     }
 
-    /* Register */
-    struct vms_register_args reg = {0};
-    reg.vms_pid = (uint32_t)getpid();
-    /* NO init_privs (vms-2b8): VMS_IOCTL_REGISTER no longer carries a
-     * privilege mask. It used to, and this line asked for all 64 bits --
-     * a process declaring its own privileges, which is the honor system
-     * that item removed. The executive now DERIVES the mask from the
-     * task's real credentials, and nothing below needs a privilege. */
-    ioctl(fd, VMS_IOCTL_REGISTER, &reg);
-    CHECK(reg.status == SS_NORMAL, "register");
+    /* This process is one the executive created (the harness boot task or its
+     * creator made its row, rd vms-2a5): it is already in the process table, so
+     * nothing registers -- $GETJPI reads the row back. */
+    struct vms_getjpi_args reg;
+    memset(&reg, 0, sizeof(reg));
+    reg.select = VMS_JPI_SEL_SELF;
+    ioctl(fd, VMS_IOCTL_GETJPI, &reg);
+    CHECK(reg.status == SS_NORMAL, "this suite has the row its creator made");
 
     /* 1. ENQ NL lock on "TESTRES1" */
     struct vms_enq_args enq = {0};

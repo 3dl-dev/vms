@@ -53,6 +53,7 @@
 
 #include "vms_ioctl.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /* SS$_ status codes (matching kernel module / vms_errno.h). */
 #define SS_NORMAL   1
@@ -154,7 +155,7 @@ static int door_child(int wfd, door_fn door)
     if (vms_kif_open() < 0)
         _exit(73);
 
-    if (vms_kif_register(&vms_pid) != SS_NORMAL)
+    if (ovmx_test_self(&vms_pid) != SS_NORMAL)
         _exit(74);
     r.registered = SS_NORMAL;
 
@@ -178,7 +179,15 @@ static int run_door(door_fn door, struct door_report *out)
         fail++;
         return 0;
     }
-    child = fork();
+    /* The door child is an UNPRIVILEGED VMS process this suite creates
+     * detached: the suite's user name and UIC, TMPMBX only (rd vms-2a5: the
+     * executive makes its row; it no longer derives one from a setuid). */
+    {
+        struct vms_procinfo me;
+        memset(&me, 0, sizeof(me));
+        (void)vms_kif_getjpi_self(&me);
+        child = ovmx_fork_detached_st(me.username, me.uic, VMS_PRV_M_TMPMBX, NULL);
+    }
     if (child < 0) {
         printf("  FAIL: fork()\n");
         fail++;
@@ -222,7 +231,7 @@ int main(void)
     }
 
     memset(&reg, 0, sizeof(reg));
-    CHECK(vms_kif_register(&reg.vms_pid) == SS_NORMAL, "register process");
+    CHECK(ovmx_test_self(&reg.vms_pid) == SS_NORMAL, "register process");
 
     /* ---- (1) THE CONTROLLED TRANSITION CHANGES CURRENT MODE, OBSERVABLY ---- */
 

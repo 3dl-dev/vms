@@ -43,6 +43,7 @@
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 #include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
+#include "vms_dlm_adopt.h"    /* the REMASTER ADOPTION seam (rd vms-14fd)      */
 #include "vms_dlm_quorum.h"   /* the QUORUM GATE on the grant decision (FC-P8.1) */
 #include "vms_dlm_hash.h"     /* the VMS resource-name hash, for a resource no
                                * frame has named yet (rd vms-b5b0). Pure
@@ -165,6 +166,52 @@ static struct vms_quorum_ops vms_quorum_gate_ops;
 static exec_lock_t vms_quorum_gate_lock;
 
 /* ================================================================
+ * REMASTER ADOPTION state (rd vms-14fd) -- the functions are further down,
+ * beside the master-side serve they extend; the state lives here with the
+ * engine's other globals, and vms_lock_init/vms_lock_cleanup own its lifetime.
+ * ================================================================ */
+/*
+ * One OPEN adoption. The transaction exists so a tree is adopted WHOLE or not
+ * at all: `gen` stamps every LKB it installs, which is what lets
+ * vms_lock_dlm_adopt_abort release exactly those and nothing else.
+ *
+ * `prev_master_csid` is what the root resource block said before this node
+ * claimed it, read at open time -- an abort puts it back rather than leaving
+ * this node asserting mastery of a tree it no longer holds.
+ */
+struct dlm_adoption {
+    exec_list_node_t          link;
+    struct vms_lock_resource *root;             /* holds one reference */
+    uint32_t                  gen;              /* never 0 */
+    uint32_t                  old_master_csid;
+    uint32_t                  prev_master_csid;
+    uint32_t                  n_locks;
+    uint8_t                   aborting;
+};
+
+/*
+ * THE OPEN ADOPTIONS. A list and not an array: a real shutdown remaster moves
+ * hundreds of trees and they interleave on the wire (278 trees in lab run
+ * ci6-evac-16), so a fixed bound would be a limit the protocol does not have.
+ *
+ * LOCK ORDER: vms_dlm_adopt_lock_g -> vms_res_hash_lock / vms_lock_id_lock ->
+ * res->lock. Nothing outside the entry points below takes the adoption lock,
+ * and none of them takes it while holding a resource lock, so the order cannot
+ * invert. NOTHING THAT MAY SLEEP RUNS UNDER IT -- exec_lock is a spinlock on
+ * Linux, so every allocation (the adoption record, the LKB, a resource block)
+ * happens before it is taken, exactly as resource_find_or_create_key does with
+ * the resource hash lock.
+ */
+static exec_list_head_t vms_dlm_adoptions;
+static exec_lock_t      vms_dlm_adopt_lock_g;
+static uint32_t         vms_dlm_adopt_next_gen;
+static uint32_t         vms_dlm_adoptions_opened_n;
+static uint32_t         vms_dlm_adoptions_completed_n;
+static uint32_t         vms_dlm_adoptions_refused_n;
+static uint32_t         vms_dlm_adopt_unreported_n;
+
+
+/* ================================================================
  * Cluster membership does NOT live here (FC-P3.9)
  * ================================================================
  *
@@ -186,8 +233,18 @@ int vms_lock_init(void)
     exec_lock_init(&vms_res_hash_lock);
     exec_lock_init(&vms_dlm_req_ops_lock);
     exec_lock_init(&vms_quorum_gate_lock);
+    exec_lock_init(&vms_dlm_adopt_lock_g);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
+    /* The REMASTER ADOPTIONS (rd vms-14fd). A fresh engine has none open and
+     * has adopted nothing: the counters are "since this executive started",
+     * so they start here and not at their first use. */
+    exec_list_head_init(&vms_dlm_adoptions);
+    vms_dlm_adopt_next_gen = 0u;
+    vms_dlm_adoptions_opened_n = 0u;
+    vms_dlm_adoptions_completed_n = 0u;
+    vms_dlm_adoptions_refused_n = 0u;
+    vms_dlm_adopt_unreported_n = 0u;
     vms_prev_local_csid = 0u;   /* a fresh engine has had no other identity */
     return 0;
 }
@@ -411,9 +468,29 @@ void vms_lock_cleanup(void)
     vms_res_blocks = 0;
     exec_unlock(&vms_res_hash_lock);
 
+    /*
+     * ANY REMASTER ADOPTION STILL OPEN (rd vms-14fd). The locks it installed
+     * were freed with every other lock above; what is left is the transaction
+     * record and the reference it holds on the root resource -- and that
+     * resource block is already gone, so the record is simply freed. An
+     * executive shutting down tells nobody it adopted anything: there is no
+     * 0x14, and there is no cluster left to send one to.
+     */
+    {
+        struct dlm_adoption *a, *atmp;
+
+        exec_lock(&vms_dlm_adopt_lock_g);
+        exec_list_for_each_entry_safe(a, atmp, &vms_dlm_adoptions, link) {
+            exec_list_del(&a->link);
+            exec_free(a);
+        }
+        exec_unlock(&vms_dlm_adopt_lock_g);
+    }
+
     /* Tear down the runtime-initialized locks (a no-op on Linux; a real
      * mutex_destroy on NetBSD -- paired with the exec_lock_init in
      * vms_lock_init). */
+    exec_lock_destroy(&vms_dlm_adopt_lock_g);
     exec_lock_destroy(&vms_dlm_req_ops_lock);
     exec_lock_destroy(&vms_quorum_gate_lock);
     exec_lock_destroy(&vms_res_hash_lock);
@@ -3379,9 +3456,14 @@ static void dlm_master_result_deq(uint32_t status,
 static uint32_t dlm_master_op_to_xnode(uint32_t op)
 {
     switch (op) {
-    case VMS_DLM_MREQ_CONVERT:  /* the engine's ENQ path serves a convert's
-                                 * cross-node form; the wire opcode is the
-                                 * arm's business, not the engine's */
+    case VMS_DLM_MREQ_CONVERT:
+        /* A convert names an EXISTING LOCK, so it has an engine op of its own
+         * (rd vms-14fd). It used to be collapsed onto the ENQ path, which
+         * resolves by NAME at the top of the tree and therefore could not
+         * convert a SUB-RESOURCE lock -- it minted a second lock on a second,
+         * root-level resource instead. The convert op falls back to the ENQ
+         * path by itself when the handle names no lock of ours. */
+        return VMS_DLM_OP_CONVERT;
     case VMS_DLM_MREQ_ENQ:
         return VMS_DLM_OP_ENQ;
     case VMS_DLM_MREQ_DEQ:
@@ -3473,6 +3555,681 @@ uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lki
     exec_unlock(&res->lock);
     lock_put(lock);
     return SS__NORMAL;
+}
+
+/* ================================================================
+ * REMASTER ADOPTION (rd vms-14fd) -- the contract is vms_dlm_adopt.h
+ * ================================================================
+ *
+ * WHAT IS BUILT HERE, IN ONE SENTENCE: when the cluster hands this node a lock
+ * tree, the engine ends up HOLDING it -- a real RSB per resource, a real LKB
+ * per remote holder's lock, each stamped with the holder's identity -- so that
+ * the handle this node answers a 0x12 record with is a handle it MINTED, and
+ * the holder's next request on that lock is served by the shipping master path.
+ *
+ * WHAT IS NOT BUILT HERE: any op-0x14. See the header's INV-6 note -- two of
+ * its cells are ungrounded, and a minted field has crashed two real lab peers.
+ */
+
+/* A refusal is a COUNTED fact, not a silence: every honest decline below comes
+ * through here so the diagnostic and the behaviour cannot drift apart. Never
+ * called with the adoption lock held. */
+static uint32_t dlm_adopt_refuse(uint32_t status)
+{
+    exec_lock(&vms_dlm_adopt_lock_g);
+    vms_dlm_adoptions_refused_n++;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return status;
+}
+
+/* The tree's identity must be COMPLETE. "Which resource of that name" has no
+ * honest default (rd vms-b5b0): guessing it adopts somebody else's tree. */
+static int dlm_adopt_tree_ok(const struct vms_dlm_adopt_tree *t)
+{
+    if (t == NULL || t->resnam[0] == '\0' || !t->ident_valid)
+        return 0;
+    if (t->old_master_csid == 0u)
+        return 0;   /* a hand-over from nobody is not a hand-over */
+    return 1;
+}
+
+/* The res_key for a tree's ROOT resource: parentless, by definition. */
+static struct res_key dlm_adopt_root_key(const struct vms_dlm_adopt_tree *t)
+{
+    struct res_key k;
+
+    k.name = t->resnam;
+    k.parent = NULL;
+    k.group = t->res_group;
+    k.mode = t->res_mode;
+    return k;
+}
+
+/* The open adoption of this tree, or NULL. Caller holds vms_dlm_adopt_lock_g.
+ * Matched on the ROOT RESOURCE's full identity: the only thing that names a
+ * tree. */
+static struct dlm_adoption *dlm_adopt_find_locked(const struct vms_dlm_adopt_tree *t)
+{
+    struct dlm_adoption *a;
+
+    exec_list_for_each_entry(a, &vms_dlm_adoptions, link) {
+        struct vms_lock_resource *r = a->root;
+
+        if (r->res_group == t->res_group && r->res_mode == t->res_mode &&
+            strncmp(r->name, t->resnam, sizeof(r->name)) == 0)
+            return a;
+    }
+    return NULL;
+}
+
+/* The open adoption with this generation, or NULL. Caller holds the lock. */
+static struct dlm_adoption *dlm_adopt_find_gen_locked(uint32_t gen)
+{
+    struct dlm_adoption *a;
+
+    exec_list_for_each_entry(a, &vms_dlm_adoptions, link)
+        if (a->gen == gen)
+            return a;
+    return NULL;
+}
+
+/* The next generation number. Never 0: 0 on an LKB means "no adoption
+ * installed this", which is true of every other lock in the database. */
+static uint32_t dlm_adopt_next_gen_locked(void)
+{
+    if (++vms_dlm_adopt_next_gen == 0u)
+        vms_dlm_adopt_next_gen = 1u;
+    return vms_dlm_adopt_next_gen;
+}
+
+uint32_t vms_lock_dlm_adopt_open(const struct vms_dlm_adopt_tree *t)
+{
+    struct dlm_adoption *a;
+    struct vms_lock_resource *res;
+    struct res_key k;
+
+    if (!dlm_adopt_tree_ok(t))
+        return dlm_adopt_refuse(SS__BADPARAM);
+    /*
+     * A NODE THAT DOES NOT KNOW WHO IT IS MAY NOT ASSERT MASTERY. vms_local_csid
+     * is the cluster's own assignment (vms_dlm_master.h §1b); unassigned, every
+     * LKB this adoption created would carry a placeholder identity.
+     */
+    if (vms_local_csid == 0u)
+        return dlm_adopt_refuse(SS__UNSUPPORTED);
+    /* Condition 4 (rd vms-c27): no delivery proc, no master-side locks. */
+    if (dlm_delivery_proc_get() == NULL)
+        return dlm_adopt_refuse(SS__UNSUPPORTED);
+
+    a = exec_zalloc(sizeof(*a));           /* may sleep: before the lock */
+    if (a == NULL)
+        return dlm_adopt_refuse(SS__INSFMEM);
+
+    k = dlm_adopt_root_key(t);
+    res = resource_find_or_create_key(&k); /* may sleep; +1 reference */
+    if (res == NULL) {
+        exec_free(a);
+        return dlm_adopt_refuse(SS__INSFMEM);
+    }
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    if (dlm_adopt_find_locked(t) != NULL) {
+        /* A second hand-over of a tree already being adopted. Taking it would
+         * open a transaction whose abort could undo the first one's locks. */
+        exec_unlock(&vms_dlm_adopt_lock_g);
+        resource_release(res);
+        exec_free(a);
+        return dlm_adopt_refuse(SS__UNSUPPORTED);
+    }
+    a->root = res;
+    a->gen = dlm_adopt_next_gen_locked();
+    a->old_master_csid = t->old_master_csid;
+
+    exec_lock(&res->lock);
+    a->prev_master_csid = res->master_csid;
+    res->master_csid = vms_local_csid;   /* this node masters it now */
+    res->dir_valid = 0;                  /* the routing question is settled */
+    exec_unlock(&res->lock);
+
+    exec_list_add_tail(&a->link, &vms_dlm_adoptions);
+    vms_dlm_adoptions_opened_n++;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return SS__NORMAL;
+}
+
+/* One 0x12 record this executive can act on at all. A zero holder CSID or a
+ * zero holder handle names a lock nothing can be tagged with; an all-NL record
+ * is not a lock a remaster carries. Refused, never defaulted. */
+static int dlm_adopt_rec_ok(const struct vms_dlm_adopt_lock_rec *r)
+{
+    if (r == NULL || r->resnam[0] == '\0' || !r->ident_valid)
+        return 0;
+    if (r->holder_csid == 0u || r->holder_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    if (r->granted_mode > LCK_K_EXMODE || r->requested_mode > LCK_K_EXMODE)
+        return 0;
+    if (r->granted_mode == LCK_K_NLMODE && r->requested_mode == LCK_K_NLMODE)
+        return 0;
+    return 1;
+}
+
+/* A root record must be about THE TREE THAT WAS HANDED OVER. A root record
+ * naming another resource would adopt a second tree inside this transaction --
+ * and an abort would then release locks of a tree nobody handed us. */
+static int dlm_adopt_rec_is_the_root(const struct vms_dlm_adopt_tree *t,
+                                     const struct vms_dlm_adopt_lock_rec *r)
+{
+    return r->res_group == t->res_group && r->res_mode == t->res_mode &&
+           strncmp(r->resnam, t->resnam, sizeof(t->resnam)) == 0;
+}
+
+/*
+ * THE PARENT RESOURCE a sub-record's lock belongs under, LOOKED UP and not
+ * trusted (rd vms-14fd). The record names body[40:44], the parent's NEW-MASTER
+ * handle -- a value this engine itself minted and answered in the 82/01 for the
+ * parent record. So it must name a lock that
+ *
+ *   exists here, is not a proxy, was installed by THIS adoption (adopt_gen),
+ *   and is held for the SAME holder,
+ *
+ * or the record is refused. Those four checks are the difference between
+ * building the holder's real tree and letting a frame field choose which
+ * resource this node creates a lock under.
+ *
+ * Returns the parent LOCK, WITH ITS REFERENCE STILL HELD, or NULL. The caller
+ * must lock_put() it only AFTER resource_find_or_create_key has taken its own
+ * reference on the parent resource -- exactly the discipline vms_enq_core_ex's
+ * sublock path follows, and for the same reason: a borrowed `->resource`
+ * pointer is only valid while something holds the lock that owns it.
+ */
+static struct vms_lock_entry *dlm_adopt_parent_lock(uint32_t gen,
+                                                    const struct vms_dlm_adopt_lock_rec *r)
+{
+    struct vms_lock_entry *plock = lock_find_by_id(r->parent_master_lkid);
+
+    if (plock == NULL)
+        return NULL;
+    if (plock->proxy || plock->adopt_gen != gen ||
+        plock->req_csid != r->holder_csid || plock->resource == NULL) {
+        lock_put(plock);
+        return NULL;
+    }
+    return plock;
+}
+
+/*
+ * A RETRANSMITTED RECORD (D-DLM-5, the same idempotency the master's ENQ path
+ * has). The holder re-sends its 0x12 when it has not seen the 82/01; minting a
+ * second LKB would double the tree and give the holder two handles for one
+ * lock. Caller holds res->lock. Returns the existing lock, or NULL.
+ */
+static struct vms_lock_entry *dlm_adopt_dup_locked(struct vms_lock_resource *res,
+                                                   const struct vms_dlm_adopt_lock_rec *r)
+{
+    struct vms_lock_entry *l;
+
+    exec_list_for_each_entry(l, &res->granted, res_granted) {
+        if (!l->proxy && l->req_csid == r->holder_csid &&
+            l->req_lkid == r->holder_lkid)
+            return l;
+    }
+    return NULL;
+}
+
+/*
+ * ALLOCATE the master-side LKB for one adopted lock and fill it from the
+ * record. Nothing is linked yet, and nothing here may run under a spinlock:
+ * both exec_zalloc and exec_cv_init may sleep on a substrate.
+ *
+ * The mode, the holder's identity and the holder's own handle are the holder's
+ * REAL values, carried in the 0x12 record it built from its own lock database
+ * -- the same provenance vms_lock_dlm_xnode_rebuild relies on.
+ */
+static struct vms_lock_entry *dlm_adopt_alloc_lkb(const struct vms_dlm_adopt_lock_rec *r,
+                                                  uint32_t gen, uint32_t parent_lkid,
+                                                  struct vms_proc *proc)
+{
+    struct vms_lock_entry *lock = exec_zalloc(sizeof(*lock));
+
+    if (lock == NULL)
+        return NULL;
+    lock->refcount = 1;
+    lock->granted_mode = r->granted_mode;
+    lock->requested_mode = r->requested_mode;
+    lock->proc = proc;
+    lock->waiting = 0;
+    lock->grant_state = SS__NORMAL;      /* granted -- and granted before us */
+    lock->acmode = PSL_C_KERNEL;         /* condition 1: never proc->current_mode */
+    lock->req_csid = r->holder_csid;     /* condition 2: held FOR this system */
+    lock->req_lkid = r->holder_lkid;     /* the holder's OWN handle */
+    lock->parent_id = parent_lkid;       /* OUR handle for its parent, or 0 */
+    lock->adopt_gen = gen;
+    /*
+     * THE HOLDER'S OWN COPY OF THE VALUE BLOCK, when its record carried one.
+     * It is what the holder read at its grant, so it is what this LKB holds;
+     * $GETLKI on the master's copy then reports the block that exists rather
+     * than sixteen zeros. A record with none leaves this zero -- the holder
+     * did not tell us its copy, and inventing one is the placeholder INV-6
+     * forbids (the RESOURCE's block is left alone for the same reason, in
+     * dlm_adopt_link_lkb).
+     */
+    if (r->valblk_present)
+        memcpy(lock->valblk, r->valblk, LCK_VALBLK_SIZE);
+    exec_cv_init(&lock->wait_wq);
+    return lock;
+}
+
+/*
+ * LINK the prepared LKB into the database: a fresh lock id, the delivery proc's
+ * lock list, and the resource's GRANTED queue.
+ *
+ * Reconstructed DIRECTLY onto res->granted, exactly as
+ * vms_lock_dlm_xnode_rebuild does and for the same reason: re-running the
+ * enqueue core would re-DERIVE a grant against this node's (empty) queues
+ * instead of preserving the grant the holder REALLY HOLDS right now.
+ */
+static void dlm_adopt_link_lkb(struct vms_lock_resource *res,
+                               struct vms_lock_entry *lock,
+                               const struct vms_dlm_adopt_lock_rec *r)
+{
+    struct vms_proc *proc = lock->proc;
+
+    lock->resource = res;
+    lock_insert_id(lock);                /* a fresh lkid THIS engine minted */
+
+    exec_lock(&proc->lock_list_lock);
+    exec_list_add_tail(&lock->proc_list, &proc->locks);
+    proc->lock_count++;
+    exec_unlock(&proc->lock_list_lock);
+
+    exec_lock(&res->lock);
+    res->master_csid = vms_local_csid;   /* every resource in the tree */
+    /*
+     * THE VALUE BLOCK, ONLY WHEN THE RECORD CARRIED ONE. Absent means the
+     * resource's own block is LEFT ALONE: sixteen zeros written over a real
+     * block destroys data and calls it an adoption (INV-6).
+     */
+    if (r->valblk_present)
+        memcpy(res->valblk, r->valblk, LCK_VALBLK_SIZE);
+    exec_list_add_tail(&lock->res_granted, &res->granted);
+    exec_unlock(&res->lock);
+}
+
+/*
+ * THE 82/01 ANSWER'S FIELDS, READ BACK OFF WHAT NOW EXISTS -- not copied from
+ * the record and not carried down from the code above. That is what makes
+ * body[20:24] an executive read rather than a counter put on the wire.
+ */
+static void dlm_adopt_fill_result(struct vms_lock_entry *lock,
+                                  struct vms_lock_resource *res,
+                                  uint8_t duplicate,
+                                  struct vms_dlm_adopt_lock_result *out)
+{
+    int i;
+
+    memset(out, 0, sizeof(*out));
+    exec_lock(&res->lock);
+    out->master_lkid  = lock->lkid;
+    out->holder_lkid  = lock->req_lkid;
+    out->granted_mode = (uint8_t)lock->granted_mode;
+    memcpy(out->valblk, res->valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    out->duplicate = duplicate;
+    for (i = 0; i < LCK_VALBLK_SIZE; i++)
+        if (out->valblk[i]) { out->valblk_present = 1u; break; }
+    /* A resource with no block says so and carries none: sixteen zeros
+     * presented as an LVB is the placeholder INV-6 forbids. */
+    if (!out->valblk_present)
+        memset(out->valblk, 0, LCK_VALBLK_SIZE);
+}
+
+/* Is this adoption still open and still ours to add to? Caller holds the lock.
+ * Checked AGAIN after the allocations above, because they may sleep and the
+ * 0x13 (or an abort) can have closed the transaction in between. */
+static struct dlm_adoption *dlm_adopt_still_open_locked(uint32_t gen)
+{
+    struct dlm_adoption *a = dlm_adopt_find_gen_locked(gen);
+
+    return (a != NULL && !a->aborting) ? a : NULL;
+}
+
+/* Snapshot the open adoption of `t`: its generation, or 0 when there is none to
+ * add to. A 0x12 outside an open adoption creates NO lock state -- a record for
+ * a tree nobody handed us is a record this node has no authority over. */
+static uint32_t dlm_adopt_gen_of(const struct vms_dlm_adopt_tree *t)
+{
+    struct dlm_adoption *a;
+    uint32_t gen = 0u;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    a = dlm_adopt_find_locked(t);
+    if (a != NULL && !a->aborting)
+        gen = a->gen;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return gen;
+}
+
+uint32_t vms_lock_dlm_adopt_lock(const struct vms_dlm_adopt_tree *t,
+                                 const struct vms_dlm_adopt_lock_rec *r,
+                                 struct vms_dlm_adopt_lock_result *out)
+{
+    struct dlm_adoption *a;
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock, *dup, *plock = NULL;
+    struct vms_proc *proc;
+    struct res_key k;
+    uint32_t gen, parent_lkid = 0u;
+
+    if (out == NULL)
+        return SS__BADPARAM;
+    memset(out, 0, sizeof(*out));
+    if (!dlm_adopt_tree_ok(t) || !dlm_adopt_rec_ok(r))
+        return dlm_adopt_refuse(SS__BADPARAM);
+
+    proc = dlm_delivery_proc_get();
+    if (proc == NULL)
+        return dlm_adopt_refuse(SS__UNSUPPORTED);
+
+    gen = dlm_adopt_gen_of(t);
+    if (gen == 0u)
+        return dlm_adopt_refuse(SS__IVLOCKID);
+
+    if (r->parent_master_lkid == VMS_DLM_LKID_UNSET) {
+        if (!dlm_adopt_rec_is_the_root(t, r))
+            return dlm_adopt_refuse(SS__BADPARAM);
+    } else {
+        plock = dlm_adopt_parent_lock(gen, r);
+        if (plock == NULL)
+            return dlm_adopt_refuse(SS__IVLOCKID);
+        parent_lkid = plock->lkid;
+    }
+
+    k.name = r->resnam;
+    /* NULL parent for the root record: a tree, not a flat set of same-named
+     * roots. The parent lock's reference is still held, so k.parent cannot be
+     * freed under resource_find_or_create_key. */
+    k.parent = plock ? plock->resource : (struct vms_lock_resource *)0;
+    k.group = r->res_group;
+    k.mode = r->res_mode;
+    res = resource_find_or_create_key(&k);     /* may sleep; +1 reference */
+    if (plock != NULL)
+        lock_put(plock);
+    if (res == NULL)
+        return dlm_adopt_refuse(SS__INSFMEM);
+
+    lock = dlm_adopt_alloc_lkb(r, gen, parent_lkid, proc);  /* may sleep */
+    if (lock == NULL) {
+        resource_release(res);
+        return dlm_adopt_refuse(SS__INSFMEM);
+    }
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    a = dlm_adopt_still_open_locked(gen);
+    if (a == NULL) {
+        exec_unlock(&vms_dlm_adopt_lock_g);
+        lock_entry_free(lock);
+        resource_release(res);
+        return dlm_adopt_refuse(SS__IVLOCKID);
+    }
+    /* The retransmit check is made HERE, under the resource lock and the
+     * adoption lock, so two copies of one record cannot both install. */
+    exec_lock(&res->lock);
+    dup = dlm_adopt_dup_locked(res, r);
+    exec_unlock(&res->lock);
+    if (dup != NULL) {
+        dlm_adopt_fill_result(dup, res, 1u, out);
+        exec_unlock(&vms_dlm_adopt_lock_g);
+        lock_entry_free(lock);
+        resource_release(res);
+        return SS__NORMAL;
+    }
+    dlm_adopt_link_lkb(res, lock, r);
+    a->n_locks++;
+    dlm_adopt_fill_result(lock, res, 0u, out);
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    /* The resource reference taken above is now held BY the lock, exactly as
+     * the enqueue path holds it; it goes back when the lock is released. */
+    return SS__NORMAL;
+}
+
+/*
+ * THE END OF THE RECORDS (the 0x13). The transaction closes and its locks
+ * become ordinary master-side locks: adopt_gen is cleared, so nothing can undo
+ * them as a group any more -- the only things that release them now are their
+ * holder's own $DEQ and its departure from the cluster (rd vms-4d3).
+ */
+static void dlm_adopt_clear_gen(uint32_t gen)
+{
+    struct vms_lock_resource *res;
+    int bkt;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *l;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->granted, res_granted)
+            if (l->adopt_gen == gen)
+                l->adopt_gen = 0u;
+        exec_list_for_each_entry(l, &res->waiting, res_waiting)
+            if (l->adopt_gen == gen)
+                l->adopt_gen = 0u;
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+}
+
+uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
+                                uint32_t *n_locks)
+{
+    struct dlm_adoption *a;
+    struct vms_lock_resource *root;
+    uint32_t gen, n;
+
+    if (n_locks != NULL)
+        *n_locks = 0u;
+    if (!dlm_adopt_tree_ok(t))
+        return dlm_adopt_refuse(SS__BADPARAM);
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    a = dlm_adopt_find_locked(t);
+    if (a == NULL || a->aborting) {
+        exec_unlock(&vms_dlm_adopt_lock_g);
+        return dlm_adopt_refuse(SS__IVLOCKID);
+    }
+    gen = a->gen;
+    n = a->n_locks;
+    root = a->root;
+    exec_list_del(&a->link);
+    vms_dlm_adoptions_completed_n++;
+    /*
+     * AND THE OLD MASTER IS NOT TOLD (INV-6). The op-0x14 that tells it has two
+     * ungrounded cells (vms_dlm_adopt.h), so this node sends nothing and COUNTS
+     * the fact. When a controlled arm names body[20:24] and body[28:40], this
+     * is the counter that stops climbing.
+     */
+    vms_dlm_adopt_unreported_n++;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+
+    dlm_adopt_clear_gen(gen);
+    resource_release(root);
+    exec_free(a);
+    if (n_locks != NULL)
+        *n_locks = n;
+    return SS__NORMAL;
+}
+
+/*
+ * THE FIRST LOCK AN ADOPTION INSTALLED, named by what a release needs. A
+ * snapshot, for the reason dlm_find_lock_of_csid states: the release itself
+ * must run with no lock of ours held.
+ */
+static int dlm_adopt_find_lock_of_gen(uint32_t gen, uint32_t *master_lkid,
+                                      uint32_t *req_lkid, uint32_t *csid)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *l;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->granted, res_granted) {
+            if (l->proxy || l->adopt_gen != gen)
+                continue;
+            *master_lkid = l->lkid;
+            *req_lkid = l->req_lkid;
+            *csid = l->req_csid;
+            found = 1;
+            break;
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+/* Release everything this adoption installed, through the ONE real release
+ * path -- exactly as vms_lock_dlm_release_csid_locks does, so the
+ * authorization (the LKB's own req_csid tag), the LVB rules and
+ * try_grant_waiters are the shipping ones and not a second copy. */
+static uint32_t dlm_adopt_release_gen(uint32_t gen)
+{
+    uint32_t n = 0u;
+
+    for (;;) {
+        struct vms_dlm_master_request req;
+        struct vms_dlm_master_result out;
+        uint32_t master_lkid = 0u, req_lkid = 0u, csid = 0u;
+
+        if (!dlm_adopt_find_lock_of_gen(gen, &master_lkid, &req_lkid, &csid))
+            break;
+        memset(&req, 0, sizeof(req));
+        req.op = VMS_DLM_MREQ_DEQ;
+        req.req_csid = csid;
+        req.req_lkid = req_lkid;
+        req.master_lkid = master_lkid;
+        if (vms_lock_dlm_master_serve(&req, &out) != SS__NORMAL ||
+            out.outcome != (uint8_t)VMS_DLM_MASTER_RELEASED)
+            break;   /* stop rather than spin; nothing further is claimed */
+        n++;
+    }
+    return n;
+}
+
+uint32_t vms_lock_dlm_adopt_abort(const struct vms_dlm_adopt_tree *t,
+                                  uint32_t *n_undone)
+{
+    struct dlm_adoption *a;
+    struct vms_lock_resource *root;
+    uint32_t gen, prev, n;
+
+    if (n_undone != NULL)
+        *n_undone = 0u;
+    if (!dlm_adopt_tree_ok(t))
+        return dlm_adopt_refuse(SS__BADPARAM);
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    a = dlm_adopt_find_locked(t);
+    if (a == NULL || a->aborting) {
+        exec_unlock(&vms_dlm_adopt_lock_g);
+        return dlm_adopt_refuse(SS__IVLOCKID);
+    }
+    /* Marked, then the lock is dropped: the release below re-enters the whole
+     * engine and may not run under the adoption lock. `aborting` is what keeps
+     * a concurrent record out while it does. */
+    a->aborting = 1u;
+    gen = a->gen;
+    prev = a->prev_master_csid;
+    root = a->root;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+
+    n = dlm_adopt_release_gen(gen);
+
+    /*
+     * GIVE THE MASTERY BACK -- but only if the undo really left nothing.
+     * Asserting ourselves master of a tree whose locks we have just released
+     * is the fabrication this path exists to avoid; asserting we DON'T master
+     * a tree whose root we still hold a lock in would be the mirror of it. So
+     * the restore is conditional on the root's own queues being empty, read at
+     * the moment of the restore.
+     */
+    exec_lock(&root->lock);
+    if (exec_list_empty(&root->granted) && exec_list_empty(&root->waiting)) {
+        root->master_csid = prev;
+        root->dir_valid = 0;
+    }
+    exec_unlock(&root->lock);
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    exec_list_del(&a->link);
+    exec_unlock(&vms_dlm_adopt_lock_g);
+
+    resource_release(root);
+    exec_free(a);
+    if (n_undone != NULL)
+        *n_undone = n;
+    return SS__NORMAL;
+}
+
+int vms_lock_dlm_adopt_is_open(const struct vms_dlm_adopt_tree *t)
+{
+    int open;
+
+    if (!dlm_adopt_tree_ok(t))
+        return 0;
+    exec_lock(&vms_dlm_adopt_lock_g);
+    open = dlm_adopt_find_locked(t) != NULL;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return open;
+}
+
+int vms_lock_dlm_adopt_installed(const struct vms_dlm_adopt_tree *t)
+{
+    struct dlm_adoption *a;
+    int n = -1;
+
+    if (!dlm_adopt_tree_ok(t))
+        return -1;
+    exec_lock(&vms_dlm_adopt_lock_g);
+    a = dlm_adopt_find_locked(t);
+    if (a != NULL)
+        n = (int)a->n_locks;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return n;
+}
+
+static uint32_t dlm_adopt_counter_read(const uint32_t *p)
+{
+    uint32_t v;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    v = *p;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return v;
+}
+
+uint32_t vms_lock_dlm_adoptions_opened(void)
+{
+    return dlm_adopt_counter_read(&vms_dlm_adoptions_opened_n);
+}
+
+uint32_t vms_lock_dlm_adoptions_completed(void)
+{
+    return dlm_adopt_counter_read(&vms_dlm_adoptions_completed_n);
+}
+
+uint32_t vms_lock_dlm_adoptions_refused(void)
+{
+    return dlm_adopt_counter_read(&vms_dlm_adoptions_refused_n);
+}
+
+uint32_t vms_lock_dlm_adopt_unreported(void)
+{
+    return dlm_adopt_counter_read(&vms_dlm_adopt_unreported_n);
 }
 
 /* ================================================================
@@ -5678,6 +6435,279 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
 }
 
 /*
+ * THE INBOUND $ENQ, master side -- lifted out of the dispatch switch verbatim
+ * (rd vms-14fd) so that the CONVERT op below can fall back to it without a
+ * duplicate copy. Nothing in it changed: it is the same request-by-NAME path
+ * the switch has always run for cat-0x02 op-0x01.
+ */
+static uint32_t dlm_xnode_enq(struct vms_proc *proc,
+                              struct vms_dlm_xnode_args *req)
+{
+    struct vms_enq_args a;
+    struct dlm_xnode_enq_out xn;
+    int dup_queued = 0;
+
+    /* A request that names a resource must actually name one. */
+    if (req->resnam[0] == '\0')
+        return SS__BADPARAM;
+
+    /*
+     * RETRANSMIT FIRST (D-DLM-5). A re-send of a request this master is
+     * already serving gets the SAME handle and the SAME answer -- it never
+     * mints a second lock. This is what stops the re-request storm.
+     */
+    if (vms_lock_dlm_xnode_enq_idempotent(req, &dup_queued)) {
+        req->queued = dup_queued ? 1u : 0u;
+        return dup_queued ? (uint32_t)VMS_DLM_STS_QUEUED : SS__NORMAL;
+    }
+
+    /*
+     * Marshal the decoded cross-node $ENQ into the single-node lock manager
+     * on this (the mastering) node, in CROSS-NODE mode (xn): the lock is held
+     * FOR the remote requester's cluster identity (owner_csid), local deadlock
+     * detection is skipped (distributed, rung 7), and a blocked request is
+     * QUEUED -- not declined. NOQUEUE is honored from the wire flags; so is
+     * VALBLK (the lock value block read crossing, rd vms-eeb -- see below);
+     * LCK_M_SYNC is not (it must never block the delivery thread).
+     */
+    memset(&a, 0, sizeof(a));
+    a.lkmode = req->lkmode;
+    a.flags = req->flags & (LCK_M_NOQUEUE | LCK_M_VALBLK);
+    memcpy(a.resnam, req->resnam, sizeof(a.resnam));
+    a.resnam[sizeof(a.resnam) - 1] = '\0';
+    a.owner_csid = req->req_csid;   /* held FOR the remote requester */
+    /*
+     * LVB READ crossing (rd vms-eeb, rung H9). Carry the requester's inbound
+     * value block into the single-node core: with LCK_M_VALBLK set and a zero
+     * inbound block, vms_enq_core_ex's grant path READS the master's current
+     * res->valblk back into a.valblk. That read-back is copied into the reply
+     * below, so the GRANT the master sends over SCS carries its LVB to the
+     * requester -- "node B reads the master's updated LVB on a cross-node
+     * $ENQ", the mirror of vms-d81's write crossing.
+     */
+    memcpy(a.valblk, req->valblk, sizeof(a.valblk));
+
+    memset(&xn, 0, sizeof(xn));
+    xn.req_lkid = req->req_lkid;    /* stamp the master lock with the
+                                     * requester's own handle (H5) */
+    /* WHICH resource of that name the requester means: the identity its
+     * own frame carried (rd vms-b5b0). Never the delivery process's. */
+    xn.res_group = req->res_group;
+    xn.res_mode = req->res_mode;
+    /* The cross-node serve never sets LCK_M_SYNC (it must not block the
+     * delivery thread), so there is no wait here to interrupt and the
+     * core's return is 0 by construction (rd vms-f87). */
+    (void)vms_enq_core_ex(proc, &a, &xn);
+
+    /*
+     * NOT THE MASTER -- the directory REDIRECT (rd vms-b96). The request
+     * reached a node that does not master the tree. Two answers, both read
+     * out of the resource block at the moment of the answer and neither
+     * carried in from the request (INV-6):
+     *
+     *   VMS_DLM_STS_REDIRECT  we hold the tree's master, so master_csid IS
+     *                         that node -- Davis p. 6-31 outcome 2, "the
+     *                         master is X". The requester re-addresses, and
+     *                         its own redirect budget bounds the exchange.
+     *   SS$_UNSUPPORTED       we hold none, so we name nobody: master_csid 0.
+     *
+     * Either way nothing was granted, nothing was queued and this node holds
+     * NO lock for the request, so master_lkid stays unset rather than echoing
+     * a handle with no object behind it (the fc8540ae INVLOCKID rule). In
+     * particular master_csid is NOT set to this node below: saying "I am the
+     * master" about a tree this node does not master is the fabrication the
+     * whole redirect exists to stop.
+     */
+    if (xn.not_master) {
+        req->master_csid = xn.redirect_csid;
+        req->master_lkid = VMS_DLM_LKID_UNSET;
+        req->queued = 0;
+        return a.status;
+    }
+
+    /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
+     * contention outputs. On a NOQUEUE decline a.lkid is 0. */
+    req->master_lkid = a.lkid;
+    /* Return the master's current value block to the requester (rd vms-eeb).
+     * The GRANT reply builder in scsd copies this into the wire frame. */
+    memcpy(req->valblk, a.valblk, sizeof(req->valblk));
+    req->master_csid = vms_local_csid; /* this node mastered the request */
+    req->queued = xn.queued ? 1u : 0u;
+    req->blocking_csid = xn.blocking_csid;
+    req->blocking_master_lkid = xn.blocking_master_lkid;
+    req->blocking_req_lkid = xn.blocking_req_lkid; /* H6 BLKAST target handle */
+
+    /* A queued request is a REAL lock on the waiting queue, not a grant. */
+    if (xn.queued)
+        return VMS_DLM_STS_QUEUED;
+    return a.status;
+}
+
+/*
+ * THE LOCK AN INBOUND CONVERT NAMES, and the right to convert it (rd vms-14fd).
+ *
+ * A cat-0x02 op-0x07 identifies an EXISTING lock by the handle THIS node
+ * minted; the only lock it may convert is a master-side lock this node really
+ * holds FOR the sending system, with the sender's own handle. Takes a
+ * reference on success. The four refusals are the same shape
+ * vms_lock_dlm_xnode_deq applies to a release, and for the same reason: a
+ * proxy LKB, a local lock, or another system's lock is not the caller's to
+ * change.
+ */
+static struct vms_lock_entry *dlm_xnode_convert_target(const struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_entry *lock;
+
+    if (req->master_lkid == VMS_DLM_LKID_UNSET)
+        return NULL;
+    lock = lock_find_by_id(req->master_lkid);   /* takes a reference */
+    if (lock == NULL)
+        return NULL;
+    if (lock->proxy || lock->resource == NULL || lock->req_csid == 0u ||
+        lock->req_csid != req->req_csid ||
+        (req->req_lkid != 0u && lock->req_lkid != req->req_lkid)) {
+        lock_put(lock);
+        return NULL;
+    }
+    return lock;
+}
+
+/* The cross-node holder that BLOCKS this conversion, if any -- the same "first
+ * blocking remote holder" scope the ENQ path uses (vms-904c), read off the
+ * granted queue. Caller holds res->lock. */
+static void dlm_xnode_convert_blocker(struct vms_lock_resource *res,
+                                      const struct vms_lock_entry *self,
+                                      uint32_t want,
+                                      struct vms_dlm_xnode_args *req)
+{
+    struct vms_lock_entry *g;
+
+    exec_list_for_each_entry(g, &res->granted, res_granted) {
+        if (g == self || g->req_csid == 0u)
+            continue;
+        if (compat[want][g->granted_mode])
+            continue;
+        req->blocking_csid = g->req_csid;
+        req->blocking_master_lkid = g->lkid;
+        req->blocking_req_lkid = g->req_lkid;
+        return;
+    }
+}
+
+/*
+ * THE VALUE BLOCK ON A CROSS-NODE CONVERSION (rd vms-a3d, the same rule
+ * vms_ioctl_convert applies locally). A holder at PW or EX converting to the
+ * same or a LOWER mode with LCK$M_VALBLK WRITES its block to the resource;
+ * every other conversion READS the resource's block and writes nothing. A read
+ * that wrote would overwrite a real block with the reader's empty one.
+ * Caller holds res->lock.
+ */
+static void dlm_xnode_convert_valblk(struct vms_lock_resource *res,
+                                     struct vms_lock_entry *lock,
+                                     const struct vms_dlm_xnode_args *req)
+{
+    if (!(req->flags & LCK_M_VALBLK))
+        return;
+    if (lock->granted_mode >= LCK_K_PWMODE && req->lkmode <= lock->granted_mode)
+        memcpy(res->valblk, req->valblk, LCK_VALBLK_SIZE);
+    memcpy(lock->valblk, res->valblk, LCK_VALBLK_SIZE);
+}
+
+/*
+ * vms_lock_dlm_xnode_convert - A REMOTE HOLDER CONVERTS A LOCK THIS NODE
+ * MASTERS (rd vms-14fd).
+ *
+ * WHY THIS EXISTS AND WHY IT IS NOT THE ENQ PATH. A convert was routed through
+ * the inbound $ENQ path, which resolves its resource BY NAME at the top of the
+ * tree. That is right for a root lock and WRONG for a sub-resource lock, which
+ * is exactly what a remastered tree is full of: the by-name lookup cannot see a
+ * parent, so it found (or created) a second, root-level resource of the
+ * sub-resource's name and minted a SECOND lock on it. The holder would then
+ * hold two handles for one lock and its conversion would not have happened --
+ * and on a down-convert the waiters behind the real lock would never be
+ * granted. A convert names a LOCK; this converts THAT lock, on ITS OWN
+ * resource block, parent and all.
+ *
+ * Semantics are vms_ioctl_convert's, minus the two things a cross-node request
+ * must not have: no LOCAL deadlock check (two locks held for two cluster
+ * identities share the delivery proc, so the single-node detector would
+ * false-positive -- the same exemption the inbound ENQ path takes) and no
+ * synchronous wait (it must never block the delivery thread).
+ *
+ * `*handled` is 0 when the request names no lock of ours, and then the caller
+ * runs the by-name path exactly as before -- a real VAX may convert a lock this
+ * node does not hold, and that is not this function's case.
+ */
+static uint32_t vms_lock_dlm_xnode_convert(struct vms_dlm_xnode_args *req,
+                                           int *handled)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint32_t status;
+    int hang, stalled;
+
+    *handled = 0;
+    if (req->lkmode > LCK_K_EXMODE)
+        return SS__BADPARAM;
+    lock = dlm_xnode_convert_target(req);
+    if (lock == NULL)
+        return SS__IVLOCKID;
+    *handled = 1;
+
+    res = lock->resource;
+    /* Asked before res->lock, for the reason vms_enq_core_ex states: the
+     * answer belongs to the connection manager, not to this resource. */
+    hang = quorum_hang_active();
+
+    exec_lock(&res->lock);
+    if (lock->waiting) {
+        /* A conversion is already outstanding on this lock. VMS answers the
+         * second one SS$_CANCELGRANT rather than queueing two. */
+        exec_unlock(&res->lock);
+        lock_put(lock);
+        return SS__CANCELGRANT;
+    }
+
+    /* A quorum hang stalls an UP-conversion and only an up-conversion: giving
+     * strength BACK must always be possible (FC-P8.1, as vms_ioctl_convert). */
+    stalled = (hang && req->lkmode > lock->granted_mode);
+    dlm_xnode_convert_valblk(res, lock, req);
+
+    if (!stalled && lock_compatible(res, req->lkmode, lock)) {
+        lock->granted_mode = req->lkmode;
+        lock->requested_mode = req->lkmode;
+        /* A DOWN-conversion frees strength: whoever was waiting behind this
+         * holder may now be granted, and that is the whole point of the
+         * evacuation path. */
+        try_grant_waiters(res);
+        req->queued = 0;
+        status = SS__NORMAL;
+    } else if (!stalled && (req->flags & LCK_M_NOQUEUE)) {
+        status = SS__NOTQUEUED;
+    } else {
+        lock->requested_mode = req->lkmode;
+        lock->waiting = 1;
+        lock->quorum_stall = (uint8_t)(stalled ? 1 : 0);
+        lock->grant_state = 0;
+        exec_list_del(&lock->res_granted);
+        exec_list_add_tail(&lock->res_waiting, &res->waiting);
+        notify_blocking_asts(res, lock);
+        dlm_xnode_convert_blocker(res, lock, req->lkmode, req);
+        req->queued = 1;
+        status = (uint32_t)VMS_DLM_STS_QUEUED;
+    }
+    /* The handle does not change across a conversion: it is the SAME lock, and
+     * saying otherwise is how a holder loses track of what it holds. */
+    req->master_lkid = lock->lkid;
+    req->master_csid = vms_local_csid;
+    memcpy(req->valblk, res->valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return status;
+}
+
+
+/*
  * vms_lock_dlm_xnode_dispatch - the cross-node DLM RECEIVE handler
  * (vms-94c transport; DLM epic vms-7fa).
  *
@@ -5762,105 +6792,24 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
     req->blkast_delivered = 0;    /* H6: 1 only when a BLKAST receive fires an AST */
 
     switch (req->op) {
-    case VMS_DLM_OP_ENQ: {
-        struct vms_enq_args a;
-        struct dlm_xnode_enq_out xn;
-        int dup_queued = 0;
-
-        /* A request that names a resource must actually name one. */
-        if (req->resnam[0] == '\0')
-            return SS__BADPARAM;
-
+    case VMS_DLM_OP_ENQ:
+        return dlm_xnode_enq(proc, req);
+    case VMS_DLM_OP_CONVERT: {
         /*
-         * RETRANSMIT FIRST (D-DLM-5). A re-send of a request this master is
-         * already serving gets the SAME handle and the SAME answer -- it never
-         * mints a second lock. This is what stops the re-request storm.
+         * A REMOTE HOLDER CONVERTS A LOCK THIS NODE MASTERS (rd vms-14fd).
+         * Converted IN PLACE when the handle names a lock this node really
+         * holds for the sender -- which is the only way a SUB-RESOURCE lock
+         * (every remastered tree is full of them) can be converted at all, see
+         * vms_lock_dlm_xnode_convert. When it names none, the by-name path
+         * runs exactly as it always has: a real VAX may convert a lock this
+         * node does not hold, and the ENQ path is the honest answer to that.
          */
-        if (vms_lock_dlm_xnode_enq_idempotent(req, &dup_queued)) {
-            req->queued = dup_queued ? 1u : 0u;
-            return dup_queued ? (uint32_t)VMS_DLM_STS_QUEUED : SS__NORMAL;
-        }
+        int handled = 0;
+        uint32_t st = vms_lock_dlm_xnode_convert(req, &handled);
 
-        /*
-         * Marshal the decoded cross-node $ENQ into the single-node lock manager
-         * on this (the mastering) node, in CROSS-NODE mode (xn): the lock is held
-         * FOR the remote requester's cluster identity (owner_csid), local deadlock
-         * detection is skipped (distributed, rung 7), and a blocked request is
-         * QUEUED -- not declined. NOQUEUE is honored from the wire flags; so is
-         * VALBLK (the lock value block read crossing, rd vms-eeb -- see below);
-         * LCK_M_SYNC is not (it must never block the delivery thread).
-         */
-        memset(&a, 0, sizeof(a));
-        a.lkmode = req->lkmode;
-        a.flags = req->flags & (LCK_M_NOQUEUE | LCK_M_VALBLK);
-        memcpy(a.resnam, req->resnam, sizeof(a.resnam));
-        a.resnam[sizeof(a.resnam) - 1] = '\0';
-        a.owner_csid = req->req_csid;   /* held FOR the remote requester */
-        /*
-         * LVB READ crossing (rd vms-eeb, rung H9). Carry the requester's inbound
-         * value block into the single-node core: with LCK_M_VALBLK set and a zero
-         * inbound block, vms_enq_core_ex's grant path READS the master's current
-         * res->valblk back into a.valblk. That read-back is copied into the reply
-         * below, so the GRANT the master sends over SCS carries its LVB to the
-         * requester -- "node B reads the master's updated LVB on a cross-node
-         * $ENQ", the mirror of vms-d81's write crossing.
-         */
-        memcpy(a.valblk, req->valblk, sizeof(a.valblk));
-
-        memset(&xn, 0, sizeof(xn));
-        xn.req_lkid = req->req_lkid;    /* stamp the master lock with the
-                                         * requester's own handle (H5) */
-        /* WHICH resource of that name the requester means: the identity its
-         * own frame carried (rd vms-b5b0). Never the delivery process's. */
-        xn.res_group = req->res_group;
-        xn.res_mode = req->res_mode;
-        /* The cross-node serve never sets LCK_M_SYNC (it must not block the
-         * delivery thread), so there is no wait here to interrupt and the
-         * core's return is 0 by construction (rd vms-f87). */
-        (void)vms_enq_core_ex(proc, &a, &xn);
-
-        /*
-         * NOT THE MASTER -- the directory REDIRECT (rd vms-b96). The request
-         * reached a node that does not master the tree. Two answers, both read
-         * out of the resource block at the moment of the answer and neither
-         * carried in from the request (INV-6):
-         *
-         *   VMS_DLM_STS_REDIRECT  we hold the tree's master, so master_csid IS
-         *                         that node -- Davis p. 6-31 outcome 2, "the
-         *                         master is X". The requester re-addresses, and
-         *                         its own redirect budget bounds the exchange.
-         *   SS$_UNSUPPORTED       we hold none, so we name nobody: master_csid 0.
-         *
-         * Either way nothing was granted, nothing was queued and this node holds
-         * NO lock for the request, so master_lkid stays unset rather than echoing
-         * a handle with no object behind it (the fc8540ae INVLOCKID rule). In
-         * particular master_csid is NOT set to this node below: saying "I am the
-         * master" about a tree this node does not master is the fabrication the
-         * whole redirect exists to stop.
-         */
-        if (xn.not_master) {
-            req->master_csid = xn.redirect_csid;
-            req->master_lkid = VMS_DLM_LKID_UNSET;
-            req->queued = 0;
-            return a.status;
-        }
-
-        /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
-         * contention outputs. On a NOQUEUE decline a.lkid is 0. */
-        req->master_lkid = a.lkid;
-        /* Return the master's current value block to the requester (rd vms-eeb).
-         * The GRANT reply builder in scsd copies this into the wire frame. */
-        memcpy(req->valblk, a.valblk, sizeof(req->valblk));
-        req->master_csid = vms_local_csid; /* this node mastered the request */
-        req->queued = xn.queued ? 1u : 0u;
-        req->blocking_csid = xn.blocking_csid;
-        req->blocking_master_lkid = xn.blocking_master_lkid;
-        req->blocking_req_lkid = xn.blocking_req_lkid; /* H6 BLKAST target handle */
-
-        /* A queued request is a REAL lock on the waiting queue, not a grant. */
-        if (xn.queued)
-            return VMS_DLM_STS_QUEUED;
-        return a.status;
+        if (handled)
+            return st;
+        return dlm_xnode_enq(proc, req);
     }
     case VMS_DLM_OP_DEQ:
         /*

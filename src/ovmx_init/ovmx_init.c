@@ -1779,6 +1779,26 @@ static void run_startup(void)
                        "the system process has no authorized identity");
 
     /*
+     * THE SYSTEM PROCESS'S IDENTITY, ONCE (rd vms-a2c, design note 3.1's
+     * bootstrap exception). VMS system initialization creates the system
+     * process; nothing later asks to become SYSTEM. So the boot task makes
+     * the executive's one ESTABLISH_SYSTEM call here, before it creates
+     * anything, and every process after it gets its identity from its
+     * creator: PROVISION (and the STARTUP DCL it becomes) as this task's
+     * subprocess, JOB_CONTROL and the other RUN/DETACHED processes from
+     * STARTUP, each login session from JOB_CONTROL. The executive refuses a
+     * second call. A refusal here leaves the system with no identity at all,
+     * so it halts the boot.
+     */
+    uint32_t est = vms_kif_establish_system();
+    if (!(est & 1)) {
+        char why[96];
+        snprintf(why, sizeof why, "the executive refused the system identity (status %08X)",
+                 (unsigned)est);
+        ovmx_exec_halt(why, "the boot task could not become SYSTEM");
+    }
+
+    /*
      * PID 1's SIGCHLD handler reaps ANY child (waitpid(-1, WNOHANG)) -- it is
      * init, and orphans are reparented to it. Left enabled here it races this
      * wait: PROVISION's SIGCHLD interrupts waitpid(pid), the handler reaps

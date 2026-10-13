@@ -104,6 +104,16 @@ static int guard_category_is_cm(uint8_t category)
 	case VMS_CM_CAT_DLM:
 	case VMS_CM_CAT_ACK:
 	case VMS_CM_CAT_MEMBERSHIP:
+	/*
+	 * rd vms-cd8: category 0x0b (the clusterwide logical-name service,
+	 * rd vms-52d/vms-94a) rides the same VMS$VAXcluster dialogue and
+	 * numbers its messages in the same send-msg# stream. A peer's 0x0b
+	 * frames left out of the high-water mark made this node's next frame
+	 * look as if it acked messages never sent (lab94ag: VAX1's 8b/05 and
+	 * 0b/06 were send 3 and 4, the guard held 2, and a DLM frame acking 4
+	 * was refused).
+	 */
+	case 0x0bu:
 		return 1;
 	default:
 		return 0;

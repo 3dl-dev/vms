@@ -135,20 +135,23 @@ struct probe_result {
  * binary $UAFDEF record off the mounted platter via RMS-over-ACP rather than a
  * /vms POSIX passthrough (vms-586). SYS$SYSDEVICE is a DEVICE unit, not a Linux
  * directory, so the resolution never touches vmsfs_to_linux_path().
+ * They go in LNM$JOB, which the probes (subprocesses of this suite, so in its
+ * job) share; a subprocess starts with no LNM$PROCESS names of its creator's
+ * (rd vms-2a5).
  */
 static void seed_system_logicals(lnm_manager_t *mgr)
 {
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
     static const char *sysroot[] = {
         "SYS$SYSDEVICE:[SYS0.]",
         "SYS$SYSDEVICE:[SYS0.SYSCOMMON.]"
     };
-    lnm_create_multi(mgr, LNM_PROCESS_TABLE, "SYS$SYSROOT", sysroot, 2,
+    lnm_create_multi(mgr, LNM_JOB_TABLE, "SYS$SYSROOT", sysroot, 2,
                      LNM_ATTR_CONCEALED, LNM_MODE_EXEC);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
-    lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSTEM",  "SYS$SYSROOT:[SYSEXE]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$MANAGER", "SYS$SYSROOT:[SYSMGR]", 0, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_JOB_TABLE, "SYS$LIBRARY", "SYS$SYSROOT:[SYSLIB]", 0, LNM_MODE_EXEC);
 }
 
 /*

@@ -21,6 +21,7 @@
 #define OVMX_TEST_FORK_H
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -85,6 +86,45 @@ static inline pid_t ovmx_fork_subprocess(void)
 }
 
 /*
+ * ovmx_fork_login - a LOGIN process (rd vms-a2c): a subprocess its creator
+ * made for LOGINOUT (VMS_CREPRC_PCB_F_LOGIN). Only such a process may stamp an
+ * identity with SETIDENT, and only until its second image activation (the
+ * image after LOGINOUT). A suite whose child plays LOGINOUT's part -- stamps an
+ * authenticated identity -- makes the child here.
+ */
+static inline pid_t ovmx_fork_login(void)
+{
+    return ovmx_fork_kind_st(VMS_CREPRC_PCB_SUBPROCESS | VMS_CREPRC_PCB_F_LOGIN, 0);
+}
+
+/*
+ * ovmx_become_login - make the rest of the CALLER's run a login process: fork
+ * one, which returns here and carries on; the original waits for it and exits
+ * with its status, so the harness sees one suite. For a suite whose own main
+ * line stamps identities (it plays LOGINOUT). No executive: nothing to do.
+ */
+static inline void ovmx_become_login(void)
+{
+    int ws = 0;
+    pid_t c;
+
+    if (vms_kif_open() < 0)
+        return;
+    fflush(NULL);
+    c = ovmx_fork_login();
+    if (c == 0)
+        return;
+    if (c < 0) {
+        printf("  FAIL: the executive did not create this suite's login process\n");
+        fflush(NULL);
+        _exit(1);
+    }
+    while (waitpid(c, &ws, 0) < 0 && errno == EINTR)
+        ;
+    _exit(WIFEXITED(ws) ? WEXITSTATUS(ws) : 1);
+}
+
+/*
  * ovmx_fork_continue - DCL's image-task shape (VMS_CREPRC_PCB_CONTINUE, rd
  * vms-e50): the child is the SAME VMS process as the suite -- its VMS PID,
  * job and identity -- with a row of its own the executive made before it ran.
@@ -105,8 +145,9 @@ static inline pid_t ovmx_fork_continue(void)
  * nothing else's orphans are.
  * Returns 0 in the new process, its substrate pid in the caller, -1 on refusal.
  */
-static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint64_t privs,
-                                          uint32_t *status)
+static inline pid_t ovmx_fork_detached_flags_st(const char *uname, uint32_t uic,
+                                                uint64_t privs, uint32_t extra,
+                                                uint32_t *status)
 {
     int gp[2], hold[2];
     int was_reaper = 0;
@@ -149,7 +190,7 @@ static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint6
     close(gp[0]);
     uint32_t st = 0x124;
     if (r == (ssize_t)sizeof gpid && gpid > 0)
-        st = vms_kif_creprc_pcb((uint32_t)gpid, VMS_CREPRC_PCB_DETACHED, uname, uic, privs, 0);
+        st = vms_kif_creprc_pcb((uint32_t)gpid, VMS_CREPRC_PCB_DETACHED | extra, uname, uic, privs, 0);
     ssize_t w;
     do { w = write(hold[1], (st & 1) ? "gg" : "xx", 2); } while (w < 0 && errno == EINTR);
     close(hold[1]);
@@ -161,6 +202,12 @@ static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint6
         (void)prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0);
     if (status) *status = st;
     return (st & 1) ? (pid_t)gpid : -1;
+}
+
+static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint64_t privs,
+                                          uint32_t *status)
+{
+    return ovmx_fork_detached_flags_st(uname, uic, privs, 0, status);
 }
 
 /*
@@ -179,6 +226,19 @@ static inline pid_t ovmx_fork_unprivileged(uint32_t gid, uint32_t uid)
     (void)vms_kif_getjpi_self(&me);
     return ovmx_fork_detached_st(me.username, ((gid & 0xFFFFu) << 16) | (uid & 0xFFFFu),
                                  VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, 0);
+}
+
+/* ovmx_fork_unprivileged, as a LOGIN process (rd vms-a2c): for a child whose
+ * test is an unprivileged process's attempt to stamp an identity, so the
+ * refusal it meets is the privilege rule's and not the login rule's. */
+static inline pid_t ovmx_fork_unprivileged_login(uint32_t gid, uint32_t uid)
+{
+    struct vms_procinfo me;
+    memset(&me, 0, sizeof(me));
+    (void)vms_kif_getjpi_self(&me);
+    return ovmx_fork_detached_flags_st(me.username, ((gid & 0xFFFFu) << 16) | (uid & 0xFFFFu),
+                                       VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX,
+                                       VMS_CREPRC_PCB_F_LOGIN, 0);
 }
 
 /*

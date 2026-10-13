@@ -68,19 +68,23 @@ uint32_t vms_kif_creprc_ticket(const char *username, uint32_t uic,
 uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid);
 
 /* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
- * back, from any process). The caller must already hold SETPRV to
- * establish an identity that is not a weakening of its own -- so this
- * is LOGINOUT's call, made after SYSUAF authentication, and it is a
- * one-way drop for anyone else. SS$_NOPRIV if the caller may not.
+ * back, from any process). The caller must hold CMKRNL enabled AND be a
+ * process being logged in -- created by CREPRC_PCB with
+ * VMS_CREPRC_PCB_F_LOGIN, until the image after LOGINOUT is activated
+ * (rd vms-a2c) -- so this is LOGINOUT's call, made after SYSUAF
+ * authentication. SS$_NOPRIV for anyone else.
  *
  * uic is (group << 16) | member. authorized_privs is the SYSUAF
  * uaf$q_priv quadword; the executive sets current privileges equal to
  * it (an OVMX design choice -- see vms_ioctl.h).
  *
- * WIRED (vms-2b8): tools/vms_login.c (LOGINOUT) calls this after SYSUAF
- * authentication -- an arbitrary authenticated user, which is exactly what
- * this call is for. src/vmsdcl/dcl_main.c and dcl_cmd_show.c read the row
- * back through vms_kif_getjpi_self() instead of the environment.
+ * LOGINOUT (tools/vms_login.c) stamps through vms_kif_setident_quota()
+ * below, identity and quota in one call. This identity-only form is on the
+ * released vector; with SETIDENT confined to the login window the product
+ * has no identity-only caller left ($CREPRC hands a subprocess its identity
+ * in CREPRC_PCB instead).
+ * OVMX-UNWIRED: vms_kif_setident (vms-2a5) -- a released-vector entry point
+ * kept for images linked against it; only test suites call it.
  *
  * src/ovmx_provision/ovmx_provision.c (PROVISION.EXE) used to call this
  * too, for the fixed SYSTEM identity system startup runs under -- moved to

@@ -1,0 +1,30 @@
+# setident-outside-login -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process identity stamp (VMS_IOCTL_SETIDENT, vms_ioctl_setident in kernel-core/vms_proctab.c) -- only a process being logged in (CREPRC_PCB with VMS_CREPRC_PCB_F_LOGIN, until the image after LOGINOUT) may stamp, as only LOGINOUT writes the PCB identity on VMS";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_setident_cmkrnl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_setident no longer checks the login window: any process holding CMKRNL -- a subprocess, DCL after login, a server -- can stamp a new user name, UIC and privileges onto itself long after LOGINOUT has run. Gone after apply.";;
+        require_fail) cat <<'EOF'
+outside a login, stamping an identity is refused SS$_NOPRIV even with CMKRNL
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the refused stamp left the subprocess's row unchanged
+EOF
+                      ;;
+        knock_on_why)  echo "the stamp the executive should have refused is the one that changed the row.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (proc->login_images == 0) {$|    if (0) { /* NEGCTL setident-outside-login */|' "$_file"
+    :
+}

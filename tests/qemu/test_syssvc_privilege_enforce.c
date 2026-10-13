@@ -41,6 +41,7 @@
 #include "brkdef.h"
 #include "prcdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -161,6 +162,9 @@ int main(void)
         printf("=== test_syssvc_privilege_enforce: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
     }
+    /* This suite stamps its own identity below, which only a login process
+     * may (rd vms-a2c): run the rest as one. */
+    ovmx_become_login();
 
     st = vms_kif_acp_mount(SYSVOL_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$MOUNT of the generated system-disk " SYSVOL_UNIT);

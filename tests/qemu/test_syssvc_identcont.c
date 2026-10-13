@@ -191,6 +191,10 @@ int main(void)
         return EXIT_SKIP;
     }
 
+    /* This suite stamps its own identity below, which only a login process
+     * may (rd vms-a2c): run the rest as one. */
+    ovmx_become_login();
+
     /* vms-739: mount the SYSUAF sysvol OURSELVES; do not free-ride on a
      * co-resident ACP suite's mount. Without VDA300: mounted + SYS$SYSDEVICE
      * composed onto it, the admitted SYSPRV session's ovmx_sysuaf_enum returns

@@ -624,6 +624,9 @@ int main(void)
         printf("=== test_kmod_ident: 0 passed, 1 failed ===\n");
         return 1;
     }
+    /* Process A stamps its own identity (section 4), which only a login
+     * process may (rd vms-a2c): A's run is one. */
+    ovmx_become_login();
     if (ovmx_test_self(&reg_vms_pid) != SS_NORMAL) {
         printf("  FAIL: this process has no row its creator made\n");
         printf("=== test_kmod_ident: 0 passed, 1 failed ===\n");
@@ -711,7 +714,7 @@ int main(void)
      *     cross-group rule below is unprovable without a row that is
      *     genuinely somewhere else.
      * ---------------------------------------------------------------- */
-    dchild = ovmx_fork_subprocess();   /* D: a subprocess of A (rd vms-2a5) */
+    dchild = ovmx_fork_login();   /* D: a subprocess of A (rd vms-2a5) */
     if (dchild < 0) {
         printf("  FAIL: fork()\n");
         return 1;
@@ -764,7 +767,7 @@ int main(void)
     }
 
     /* B: an unprivileged process A creates in UIC [300,1001] (rd vms-2a5). */
-    child = ovmx_fork_detached_st(B_NAME, B_UIC, VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, NULL);
+    child = ovmx_fork_detached_flags_st(B_NAME, B_UIC, VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, VMS_CREPRC_PCB_F_LOGIN, NULL);
     if (child < 0) {
         printf("  FAIL: fork()\n");
         return 1;

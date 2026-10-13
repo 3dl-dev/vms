@@ -531,6 +531,20 @@ void vms_proc_image_privs(struct vms_proc *proc, uint64_t img_privs)
     exec_unlock(&proc->mode_lock);
 }
 
+/* Every image activation in `proc` (both substrates' exec hooks): a LOGIN
+ * process's SETIDENT window counts down (rd vms-a2c: the task becoming
+ * LOGINOUT, then LOGINOUT's image; the image after it may not stamp an
+ * identity), then the installed-image privileges change as above. */
+void vms_proc_image_activated(struct vms_proc *proc, uint64_t img_privs)
+{
+    exec_lock(&proc->mode_lock);
+    if (proc->login_images)
+        proc->login_images--;
+    exec_unlock(&proc->mode_lock);
+    if (img_privs || proc->image_privs)
+        vms_proc_image_privs(proc, img_privs);
+}
+
 /* The executive's copy of an installed image (rd vms-220, Baron's ruling on
  * vms-96e7): VMS_KFE_DIR/<gen>-<NAME>. Only [A-Za-z0-9$_.-] of the name is kept. */
 static uint32_t vms_kfe_gen;

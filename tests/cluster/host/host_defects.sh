@@ -818,6 +818,7 @@ EOF
         why)          echo "every block frame leaves with the message opcode 0x02 the sequenced stamp writes, so a real VMS port reads a REQUEST DATA or SEND DATA as an SCS message with a garbage envelope -- a frame class no real node ever sent (1,217,539 of 1,217,539 opcode-0x02 frames carry the SCS format word).";;
         require_fail) cat <<'EOF'
 *** a REQUEST DATA carries opcode 0x08 (2,759/2,759) ***
+opcode 0x08 on the first send
 *** every earlier one is 0x0c (39 + 2,758 real) ***
 *** the last answer frame is 0x0d ***
   and it is 0x0d

@@ -179,4 +179,18 @@ diff <(sed -n '/^## Features\|^## Fixes/,$p' "$OUT_V5") <(sed -n '/^## Features\
 grep -qF "V0.5 notes: correct the headline" "$OUT_V5C" \
     && fail "a commit after the V0.5 tag leaked into the V0.5 notes"
 echo "PASS: a correction to a published release's highlights, made after its tag, is in the regenerated notes (commit list unchanged)"
+
+# --- 7. check_release_notes.py: notes generated from the TAG pass; notes that
+# miss a commit the tag ships (generated from an earlier commit, as V0.7-9's
+# cut-branch notes missed #1683/#1684) fail, as does an extra one.
+CHK="$(dirname "$GEN")/check_release_notes.py"
+python3 "$CHK" --repo-root "$REPO" --tag V0.5 --notes "$OUT_V5" >/dev/null 2>&1 \
+    || fail "check_release_notes rejected notes generated from the V0.5 tag itself"
+grep -v -- "^- release: cut V0.5" "$OUT_V5" > "$WORK/notes-V0.5-short.md"
+python3 "$CHK" --repo-root "$REPO" --tag V0.5 --notes "$WORK/notes-V0.5-short.md" >/dev/null 2>&1 \
+    && fail "check_release_notes passed notes that omit a commit V0.5 ships"
+{ cat "$OUT_V5"; echo "- a commit V0.5 does not ship"; } > "$WORK/notes-V0.5-extra.md"
+python3 "$CHK" --repo-root "$REPO" --tag V0.5 --notes "$WORK/notes-V0.5-extra.md" >/dev/null 2>&1 \
+    && fail "check_release_notes passed notes that list a commit V0.5 does not ship"
+echo "PASS: check_release_notes accepts notes from the tag and rejects a missing or an extra commit"
 exit 0

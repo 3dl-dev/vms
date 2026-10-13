@@ -127,6 +127,16 @@ jobs:
             --out-dir "${{ github.workspace }}/dist/release-cut"
           [ -n "${KEYFILE:-}" ] && rm -f "$KEYFILE" || true
 
+      # The notes list exactly what the TAG ships (V0.7-9: notes generated from
+      # the cut-branch commit missed two PRs the merge queue folded into the
+      # tagged commit). cut-release.sh generated them with --ref <tag>; this
+      # proves the commit list == git log <previous tag>..<tag> before anything
+      # is published.
+      - name: Release notes list exactly what the tag ships
+        run: |
+          python3 tools/check_release_notes.py --tag "${{ steps.tag.outputs.tag }}" \
+            --notes "$(ls "${{ github.workspace }}"/dist/release-cut/RELEASE-NOTES-*.md | head -1)"
+
       # Publish artifacts + generated notes. --no-record-notes: committing the
       # in-tree notes record is a source change for a PR, not something a
       # tag-triggered publish should push back to the branch. The publisher

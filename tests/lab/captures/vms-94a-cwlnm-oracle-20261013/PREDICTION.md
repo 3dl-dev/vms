@@ -131,3 +131,31 @@ joins (EXPECTED_VOTES 3). Then VAX1 continues with the golden parameters.
   the first VAX to join sent none. If it does send one, OVMX has no answer for it yet, and L1
   fails on a startup hang.
 - L4: as D4.
+
+## DC1 result (pod labdemo1, artifacts run 38364208322, lab/int-94c e64baabb8)
+
+VAX1 did not boot conversationally. The pod's entrypoint booted it straight from the golden
+parameters, and it formed alone ("proposing formation of a VAXcluster").
+
+- D1 **held**. VAX1 formed and finished startup.
+- D2 **held**. OVMXA sent 0b/05 to VAX1 (its send 96), and VAX1 answered 8b/05 and pushed
+  0b/06; OVMXA pulled it and answered 8b/04. OVMXB did the same (send 97 → 8b/04 send 98).
+  `dc1-cwlnm.pcap` has the 12 frames.
+- D3 **held**. SHOW CLUSTER on OVMXB lists OVMXB, OVMXA and VAX1, all MEMBER. VAX1's console
+  shows it proposed and completed the addition of OVMXA and then of OVMXB. Pressing Return
+  after the run got `VAX/VMS V7.3 node VAX1` and `Username:`. Nobody logged in.
+- D4 **held for the VAX, failed between the OVMX nodes**.
+  - VAX side: no request from or to VAX1 was left unanswered. Neither OVMX→VAX1 dialogue
+    skips a send-msg# (391 and 372 messages). 0 bugchecks.
+  - OVMX side: OVMXB sent OVMXA five cat-0x02 (DLM) op-0x01 requests (sends 3 to 7, 2 s
+    apart, during OVMXB's join). OVMXA answered none of them (`dc1-ovmx-ovmx-dlm.pcap`).
+    Tracked as its own item.
+
+## DC2 amendment (registered before DC2 runs)
+
+The pod cannot hold VAX1 at `SYSBOOT>`, because its entrypoint boots VAX1 straight away. So in
+DC2:
+- VAX1 is halted at `sim>` (^E) before it reaches SYSINIT, and is not used again.
+- Node C is VAX2 (root SYS1, golden parameters), booted by `oracle_stage.sh node vax2` after
+  OVMXA has founded and OVMXB has joined.
+- L1 to L4 stand as registered, with VAX2 in place of VAX1.

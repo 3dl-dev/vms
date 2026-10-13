@@ -133,4 +133,27 @@ grep -qF "feat: delta feature between V0.3 and V0.4" "$OUT_V4" \
     || fail "notes for V0.4 do not list the feature commit between V0.3 and V0.4"
 
 echo "PASS: gen_release_notes.py's sort_key() ranks two uppercase-V release tags without raising"
+
+# --- 5. Highlights: docs/release-highlights/<version>.md AS OF --ref leads the
+# notes, verbatim, after the generated header; a version without one gets none.
+grep -q "^## Highlights" "$OUT_V4" \
+    && fail "notes for V0.4 carry a Highlights section with no highlights file"
+mkdir -p docs/release-highlights
+printf '## Highlights\n\nA headline for V0.5.\n\n## Known open items\n\n- one thing\n' \
+    > docs/release-highlights/V0.5.md
+echo e > e.txt
+id_header "V0.5"
+git add -A && git commit -q -m "release: cut V0.5"
+git tag V0.5
+OUT_V5="$WORK/notes-V0.5.md"
+python3 "$GEN" --repo-root "$REPO" --ref V0.5 --out "$OUT_V5" 2>"$WORK/gen-v5.err" \
+    || { cat "$WORK/gen-v5.err" >&2; fail "gen_release_notes.py exited nonzero for --ref V0.5"; }
+grep -qF "A headline for V0.5." "$OUT_V5" \
+    || fail "the V0.5 highlights file is not in the V0.5 notes:\n$(cat "$OUT_V5")"
+grep -qF -- "- one thing" "$OUT_V5" || fail "the V0.5 known open items are not in the notes"
+hl=$(grep -n "^## Highlights" "$OUT_V5" | cut -d: -f1)
+ft=$(grep -n "^## Features\|^## Fixes" "$OUT_V5" | head -1 | cut -d: -f1)
+[ -n "$hl" ] && [ -n "$ft" ] && [ "$hl" -lt "$ft" ] \
+    || fail "the highlights do not lead the generated sections"
+echo "PASS: gen_release_notes.py leads with docs/release-highlights/<version>.md when the cut has one"
 exit 0
